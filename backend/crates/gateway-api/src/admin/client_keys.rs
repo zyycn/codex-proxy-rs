@@ -1,4 +1,4 @@
-//! Client API Key 管理 wire contract。
+//! Client API Key 管理 wire contract
 
 use crate::auth::SessionState;
 
@@ -51,7 +51,7 @@ fn parse_budget(
         .transpose()
 }
 
-/// Client Key 列表查询。
+/// Client Key 列表查询
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListClientKeysQuery {
@@ -63,7 +63,7 @@ pub struct ListClientKeysQuery {
 }
 
 impl ListClientKeysQuery {
-    /// 校验 wire 边界并直接构造管理用例查询。
+    /// 校验 wire 边界并直接构造管理用例查询
     pub fn into_command(self) -> Result<ClientKeyListQuery, WireValidationError> {
         if self
             .cursor
@@ -103,7 +103,7 @@ impl ListClientKeysQuery {
     }
 }
 
-/// Client Key 数据库排序字段。
+/// Client Key 数据库排序字段
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ClientKeySortField {
@@ -113,7 +113,7 @@ pub enum ClientKeySortField {
     LastUsedAt,
 }
 
-/// Client Key 数据库排序方向。
+/// Client Key 数据库排序方向
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ClientKeySortDirection {
@@ -121,7 +121,7 @@ pub enum ClientKeySortDirection {
     Desc,
 }
 
-/// 已校验且会写入自描述游标的排序组合。
+/// 已校验且会写入自描述游标的排序组合
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientKeySort {
@@ -147,7 +147,7 @@ impl ClientKeySort {
     }
 }
 
-/// 创建 Client Key 请求。
+/// 创建 Client Key 请求
 #[derive(Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateClientKeyRequest {
@@ -176,7 +176,7 @@ impl fmt::Debug for CreateClientKeyRequest {
 }
 
 impl CreateClientKeyRequest {
-    /// 校验 wire 边界并直接构造管理用例命令。
+    /// 校验 wire 边界并直接构造管理用例命令
     pub fn into_command(self) -> Result<CreateClientKey, WireValidationError> {
         validate_required_text(&self.name, "name")?;
         validate_optional_text(self.label.as_deref(), "label")?;
@@ -212,7 +212,7 @@ impl CreateClientKeyRequest {
     }
 }
 
-/// 更新 Client Key 请求。
+/// 更新 Client Key 请求
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateClientKeyRequest {
@@ -233,7 +233,7 @@ pub struct UpdateClientKeyRequest {
 }
 
 impl UpdateClientKeyRequest {
-    /// 校验 wire 边界并直接构造管理用例命令。
+    /// 校验 wire 边界并直接构造管理用例命令
     pub fn into_command(self) -> Result<UpdateClientKey, WireValidationError> {
         validate_required_text(&self.id, "id")?;
         validate_required_text(&self.name, "name")?;
@@ -262,7 +262,7 @@ impl UpdateClientKeyRequest {
     }
 }
 
-/// 重置指定周期已用金额的请求。
+/// 重置指定周期已用金额的请求
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResetClientKeyBudgetRequest {
@@ -292,14 +292,14 @@ impl ResetClientKeyBudgetRequest {
     }
 }
 
-/// 只携带 ID 的 Client Key mutation 请求。
+/// 只携带 ID 的 Client Key mutation 请求
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientKeyMutationRequest {
     id: String,
 }
 
-/// 读取一次完整 Key 的 ID query。
+/// 读取一次完整 Key 的 ID query
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClientKeyIdQuery {
@@ -318,7 +318,7 @@ impl ClientKeyIdQuery {
 }
 
 impl ClientKeyMutationRequest {
-    /// 校验请求并取出 ID。
+    /// 校验请求并取出 ID
     pub fn into_id(self) -> Result<String, WireValidationError> {
         validate_required_text(&self.id, "id")?;
         Ok(self.id)
@@ -329,14 +329,14 @@ impl ClientKeyMutationRequest {
     }
 }
 
-/// 不含完整 Key 的管理端安全视图。
+/// 不含完整 Key 的管理端安全视图
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientKeyView {
     provider_request_profile_overrides: ProviderRequestProfileOverrides,
-    /// 固定兼容字段；值始终从 provider_request_profile_overrides 派生。
+    /// 固定兼容字段；值始终从 provider_request_profile_overrides 派生
     openai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
-    /// 固定兼容字段；值始终从 provider_request_profile_overrides 派生。
+    /// 固定兼容字段；值始终从 provider_request_profile_overrides 派生
     xai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
     id: String,
     name: String,
@@ -443,7 +443,7 @@ impl From<(ClientKeyRecord, crate::time::TimePresenter)> for ClientKeyView {
     }
 }
 
-/// Client Key 列表响应数据。
+/// Client Key 列表响应数据
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientKeyListData {
@@ -453,7 +453,7 @@ pub struct ClientKeyListData {
 }
 
 impl ClientKeyListData {
-    /// 构造 Client Key 列表响应。
+    /// 构造 Client Key 列表响应
     #[must_use]
     pub fn new(items: Vec<ClientKeyView>, next_cursor: Option<String>, total: u64) -> Self {
         Self {
@@ -488,7 +488,7 @@ impl TryFrom<(ClientKeyPage, crate::time::TimePresenter)> for ClientKeyListData 
     }
 }
 
-/// Client Key 创建响应；完整值只允许出现在本次序列化结果中。
+/// Client Key 创建响应；完整值只允许出现在本次序列化结果中
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatedClientKeyData {
@@ -498,7 +498,7 @@ pub struct CreatedClientKeyData {
 }
 
 impl CreatedClientKeyData {
-    /// 构造一次性创建响应。
+    /// 构造一次性创建响应
     #[must_use]
     pub fn new(id: String, prefix: String, plaintext_key: String) -> Self {
         Self {
@@ -530,7 +530,7 @@ impl fmt::Debug for CreatedClientKeyData {
     }
 }
 
-/// 仅由显式 reveal 返回一次的完整明文 Key。
+/// 仅由显式 reveal 返回一次的完整明文 Key
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RevealedClientKeyData {
@@ -564,7 +564,7 @@ impl fmt::Debug for RevealedClientKeyData {
     }
 }
 
-/// Client Key mutation 响应数据。
+/// Client Key mutation 响应数据
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MutatedClientKeyData {
@@ -572,7 +572,7 @@ pub struct MutatedClientKeyData {
 }
 
 impl MutatedClientKeyData {
-    /// 构造 mutation 响应。
+    /// 构造 mutation 响应
     #[must_use]
     pub fn new(id: String) -> Self {
         Self { id }
@@ -585,7 +585,7 @@ impl From<ClientKeyMutation> for MutatedClientKeyData {
     }
 }
 
-/// 解码后的 Client Key 游标字段。
+/// 解码后的 Client Key 游标字段
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyCursorData {
     pub sort: ClientKeySort,
@@ -593,7 +593,7 @@ pub struct ClientKeyCursorData {
     pub id: String,
 }
 
-/// 游标中与排序字段严格对应的最后一行值。
+/// 游标中与排序字段严格对应的最后一行值
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum ClientKeyCursorValue {
@@ -611,7 +611,7 @@ struct CursorWire {
     id: String,
 }
 
-/// 把 owner 游标编码为不透明 wire 值。
+/// 把 owner 游标编码为不透明 wire 值
 pub fn encode_client_key_cursor(
     cursor: &ClientKeyCursorData,
 ) -> Result<String, WireValidationError> {
@@ -625,7 +625,7 @@ pub fn encode_client_key_cursor(
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// 解码并严格校验 Client Key 游标。
+/// 解码并严格校验 Client Key 游标
 pub fn decode_client_key_cursor(encoded: &str) -> Result<ClientKeyCursorData, WireValidationError> {
     if encoded.is_empty() || encoded.len() > MAX_CURSOR_BYTES {
         return Err(WireValidationError::new("cursor"));
@@ -872,7 +872,7 @@ fn validate_optional_text(
     Ok(())
 }
 
-/// 构造固定 GET/POST 且 ID 仅位于 query/body 的 Client API Key 路由。
+/// 构造固定 GET/POST 且 ID 仅位于 query/body 的 Client API Key 路由
 pub fn router<S>() -> Router<S>
 where
     S: SessionState + Clone + Send + Sync + 'static,
@@ -1098,7 +1098,7 @@ fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
     map_admin_service_error(error)
 }
 
-// 省略表示不修改，null 表示恢复跟随通用设置。
+// 省略表示不修改，null 表示恢复跟随通用设置
 fn deserialize_profile_override<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Option<serde_json::Map<String, serde_json::Value>>>, D::Error> {

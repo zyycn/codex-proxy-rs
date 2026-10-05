@@ -1,4 +1,4 @@
-//! Provider 管理能力交换的中立 Command 与 Result。
+//! Provider 管理能力交换的中立 Command 与 Result
 
 use std::{fmt, pin::Pin};
 
@@ -22,7 +22,7 @@ use super::{
     },
 };
 
-/// Provider-owned JSON；公共层只搬运且 Debug 不输出值。
+/// Provider-owned JSON；公共层只搬运且 Debug 不输出值
 #[derive(Clone, PartialEq)]
 pub struct ProviderDocument(OpaqueProviderData);
 
@@ -32,7 +32,7 @@ impl ProviderDocument {
         Self(data)
     }
 
-    /// 仅具体 Provider 可以解释内部字段。
+    /// 仅具体 Provider 可以解释内部字段
     #[must_use]
     pub const fn expose_to_provider(&self) -> &OpaqueProviderData {
         &self.0
@@ -50,14 +50,14 @@ impl fmt::Debug for ProviderDocument {
     }
 }
 
-/// Provider credential 详情。
+/// Provider credential 详情
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialDetails {
     pub config_revision: Revision,
     pub credential: AccountRecord,
 }
 
-/// Provider 正式文档批量导入命令。
+/// Provider 正式文档批量导入命令
 pub struct ImportCredentials {
     pub outbound_proxy_id: Option<String>,
     pub settings: Option<AccountImportSettings>,
@@ -75,14 +75,14 @@ impl fmt::Debug for ImportCredentials {
     }
 }
 
-/// 批量导入提交结果。
+/// 批量导入提交结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialImportResult {
     pub config_revision: Revision,
     pub credential_ids: Vec<ProviderAccountId>,
 }
 
-/// Provider 解析导入文档时只接收不透明文档，不接触 revision 或审计上下文。
+/// Provider 解析导入文档时只接收不透明文档，不接触 revision 或审计上下文
 pub struct PrepareCredentialImport {
     pub default_outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub document: ProviderDocument,
@@ -97,7 +97,7 @@ impl fmt::Debug for PrepareCredentialImport {
     }
 }
 
-/// Provider 已验证、可由 Store 原子创建的一份 credential。
+/// Provider 已验证、可由 Store 原子创建的一份 credential
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCredentialCreate {
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
@@ -119,14 +119,14 @@ pub struct PreparedCredentialCreate {
     pub credential_observed_at: DateTime<Utc>,
 }
 
-/// Provider 对一份导入文档的完整验证结果。
+/// Provider 对一份导入文档的完整验证结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCredentialImport {
     pub provider_kind: ProviderKind,
     pub credentials: Vec<PreparedCredentialCreate>,
 }
 
-/// Admin 交给 Store 的导入事务命令。
+/// Admin 交给 Store 的导入事务命令
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredentialImportCommit {
     pub outbound_proxy: Option<super::proxies::ImportProxyBinding>,
@@ -134,7 +134,7 @@ pub struct CredentialImportCommit {
     pub prepared: PreparedCredentialImport,
 }
 
-/// OAuth pending owner 的中立身份；不编码具体 Provider 的 Redis key 或 JSON。
+/// OAuth pending owner 的中立身份；不编码具体 Provider 的 Redis key 或 JSON
 #[derive(Clone, PartialEq, Eq)]
 pub enum AuthorizationOwner {
     AdminSession { admin_user_id: String },
@@ -148,7 +148,7 @@ impl fmt::Debug for AuthorizationOwner {
     }
 }
 
-/// Provider 写入 pending payload 与 Redis owner binding 所需的全部中立字段。
+/// Provider 写入 pending payload 与 Redis owner binding 所需的全部中立字段
 #[derive(Clone, PartialEq, Eq)]
 pub struct AuthorizationOwnerBinding {
     owner: AuthorizationOwner,
@@ -193,17 +193,17 @@ impl fmt::Debug for AuthorizationOwnerBinding {
     }
 }
 
-/// OAuth 完成时应创建新账号还是 CAS 更新既有 credential。
+/// OAuth 完成时应创建新账号还是 CAS 更新既有 credential
 ///
 /// 重新授权只绑定稳定的账号身份：credential revision 由服务端在临近写入时读取，
-/// 长流程期间的后台刷新不得让恢复操作失效。
+/// 长流程期间的后台刷新不得让恢复操作失效
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthorizationMutationTarget {
     Create { name: String },
     Reauthorize { account_id: ProviderAccountId },
 }
 
-/// 必须完整进入 Provider opaque pending payload、并在 complete 后原样恢复的事务信封。
+/// 必须完整进入 Provider opaque pending payload、并在 complete 后原样恢复的事务信封
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingAuthorizationMutation {
     provider_kind: ProviderKind,
@@ -269,7 +269,7 @@ impl PendingAuthorizationMutation {
 }
 
 impl PendingAuthorizationMutation {
-    /// 编码 v1 中立事务字段；版本号的位置和 Provider 私有外层文档由 adapter 保持。
+    /// 编码 v1 中立事务字段；版本号的位置和 Provider 私有外层文档由 adapter 保持
     #[must_use]
     pub fn to_storage_v1(&self) -> Map<String, Value> {
         let target = match &self.target {
@@ -311,11 +311,11 @@ impl PendingAuthorizationMutation {
         document
     }
 
-    /// 恢复 adapter 已确认版本为 v1 的中立事务字段。
+    /// 恢复 adapter 已确认版本为 v1 的中立事务字段
     ///
     /// # Errors
     ///
-    /// 文档字段、Provider kind 或账号身份非法时返回错误，不携带原始 pending 内容。
+    /// 文档字段、Provider kind 或账号身份非法时返回错误，不携带原始 pending 内容
     pub fn from_storage_v1(value: Value) -> Result<Self, AdminError> {
         let invalid = || AdminError::invalid("invalid pending authorization mutation");
         let document: StoredAuthorizationMutationV1 =
@@ -385,7 +385,7 @@ enum StoredAuthorizationOwnerV1 {
     System,
 }
 
-/// Provider 授权请求。
+/// Provider 授权请求
 #[derive(Debug, Clone, PartialEq)]
 pub struct StartAuthorization {
     pub context: MutationContext,
@@ -394,7 +394,7 @@ pub struct StartAuthorization {
     pub outbound_proxy: Option<super::proxies::AccountProxySelection>,
 }
 
-/// OAuth 流程启动结果。
+/// OAuth 流程启动结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizationStarted {
     pub flow_id: String,
@@ -402,35 +402,37 @@ pub struct AuthorizationStarted {
     pub expires_at: DateTime<Utc>,
 }
 
-/// refresh/rotate/reauthorize 的 lease 或 completion 生命周期。
+/// refresh/rotate/reauthorize 的 lease 或 completion 生命周期
 ///
-/// 该 guard 不可 Clone。Admin 只能在 Store CAS 与审计事务成功后调用 `finish`；失败路径直接
-/// drop，使 Provider 可以释放 lease 或执行补偿。
+/// 该 guard 不可 Clone
+/// Admin 只能在 Store CAS 与审计事务成功后调用 `finish`；失败路径直接
+/// drop，使 Provider 可以释放 lease 或执行补偿
 pub trait CredentialCommitGuard: Send + 'static {
     fn finish(self: Box<Self>);
 }
 
-/// OAuth pending claim 在 Store 事务结果确定后执行的显式结算动作。
+/// OAuth pending claim 在 Store 事务结果确定后执行的显式结算动作
 ///
 /// OAuth provider 必须在 credential 准备阶段持有 claim：Store 提交成功后消费 flow，提交或
-/// 校验失败后释放 flow。异步结算不能依赖 `Drop`，否则请求提前返回会让同一授权流无谓地
-/// 进入短暂的不可重试状态。
+/// 校验失败后释放 flow
+/// 异步结算不能依赖 `Drop`，否则请求提前返回会让同一授权流无谓地
+/// 进入短暂的不可重试状态
 #[async_trait]
 pub trait AuthorizationCommitGuard: Send + 'static {
-    /// Store 已提交 OAuth credential 后消费对应的一次性 flow。
+    /// Store 已提交 OAuth credential 后消费对应的一次性 flow
     async fn commit(self: Box<Self>) -> Result<(), AdminError>;
 
-    /// Store 未提交 OAuth credential 时释放 claim，允许同一 flow 重试。
+    /// Store 未提交 OAuth credential 时释放 claim，允许同一 flow 重试
     async fn abort(self: Box<Self>) -> Result<(), AdminError>;
 }
 
-/// OAuth complete 后由 Provider 返回的准备结果；Store 仍是唯一提交者。
+/// OAuth complete 后由 Provider 返回的准备结果；Store 仍是唯一提交者
 pub enum PreparedAuthorizationCredential {
     Create(Box<PreparedCredentialCreate>),
     Reauthorize(Box<PreparedCredentialRotation>),
 }
 
-/// Provider 从 opaque pending payload 恢复的信封与已验证 credential 必须一起返回。
+/// Provider 从 opaque pending payload 恢复的信封与已验证 credential 必须一起返回
 pub struct PreparedAuthorizationCommit {
     pub pending: PendingAuthorizationMutation,
     pub credential: PreparedAuthorizationCredential,
@@ -447,14 +449,14 @@ impl fmt::Debug for PreparedAuthorizationCommit {
     }
 }
 
-/// Store 可持久化的 OAuth credential facts，不携带 Provider guard。
+/// Store 可持久化的 OAuth credential facts，不携带 Provider guard
 #[derive(Debug, Clone, PartialEq)]
 pub enum AuthorizationCredentialCommit {
     Create(Box<PreparedCredentialCreate>),
     Reauthorize(Box<PreparedCredentialRotationFacts>),
 }
 
-/// Admin 交给 Store 的 OAuth 原子事务命令。
+/// Admin 交给 Store 的 OAuth 原子事务命令
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuthorizationCommit {
     pub key: AuthorizationReceiptKey,
@@ -463,7 +465,7 @@ pub struct AuthorizationCommit {
     pub credential: AuthorizationCredentialCommit,
 }
 
-/// 回执以 Provider、授权流和管理员身份绑定；不持久化原始 flow 或回调材料。
+/// 回执以 Provider、授权流和管理员身份绑定；不持久化原始 flow 或回调材料
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AuthorizationReceiptKey {
     provider_kind: ProviderKind,
@@ -531,10 +533,10 @@ pub struct AuthorizationCommitResult {
     pub newly_committed: bool,
 }
 
-/// OAuth 准备结果拆解后的 Store 命令与两个结算 guard。
+/// OAuth 准备结果拆解后的 Store 命令与两个结算 guard
 ///
 /// Store 成功时先结束 credential guard，再消费 OAuth claim；失败时丢弃 credential guard 并
-/// 释放 OAuth claim，使同一授权流可以重试。
+/// 释放 OAuth claim，使同一授权流可以重试
 pub(crate) struct AuthorizationCommitSettlement {
     pub(crate) command: AuthorizationCommit,
     pub(crate) credential_guard: Option<Box<dyn CredentialCommitGuard>>,
@@ -554,7 +556,7 @@ impl PreparedAuthorizationCommit {
         }
     }
 
-    /// 让 OAuth claim 覆盖准备完成到 Store 事务结算之间的全部窗口。
+    /// 让 OAuth claim 覆盖准备完成到 Store 事务结算之间的全部窗口
     #[must_use]
     pub fn with_authorization_guard(mut self, guard: Box<dyn AuthorizationCommitGuard>) -> Self {
         self.authorization_guard = Some(guard);
@@ -599,7 +601,7 @@ impl PreparedAuthorizationCommit {
     }
 }
 
-/// 完成 Provider OAuth 流程。
+/// 完成 Provider OAuth 流程
 #[derive(Clone, PartialEq, Eq)]
 pub struct CompleteAuthorization {
     pub settings: Option<AccountImportSettings>,
@@ -619,14 +621,14 @@ impl fmt::Debug for CompleteAuthorization {
     }
 }
 
-/// Credential 生命周期写操作。
+/// Credential 生命周期写操作
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialMutation {
     pub context: MutationContext,
     pub account_id: ProviderAccountId,
 }
 
-/// Credential 写入提交结果。
+/// Credential 写入提交结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialMutationResult {
     pub config_revision: Revision,
@@ -634,28 +636,28 @@ pub struct CredentialMutationResult {
     pub credential_revision: Option<Revision>,
 }
 
-/// 同一 Provider 管理范围内的 credential 批量删除。
+/// 同一 Provider 管理范围内的 credential 批量删除
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialDeletion {
     pub context: MutationContext,
     pub account_ids: Vec<ProviderAccountId>,
 }
 
-/// Credential 批量删除提交结果。
+/// Credential 批量删除提交结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialDeletionResult {
     pub config_revision: Revision,
     pub account_ids: Vec<ProviderAccountId>,
 }
 
-/// Provider-owned token 轮换命令。
+/// Provider-owned token 轮换命令
 pub struct RotateCredential {
     pub mutation: CredentialMutation,
     pub provider_material: ProviderDocument,
     pub settings: Option<super::accounts::UpdateAccount>,
 }
 
-/// Provider 校验手工轮换材料时所需的非事务输入。
+/// Provider 校验手工轮换材料时所需的非事务输入
 pub struct PrepareCredentialRotation {
     pub account: AccountRecord,
     pub provider_material: ProviderDocument,
@@ -671,7 +673,7 @@ impl fmt::Debug for PrepareCredentialRotation {
     }
 }
 
-/// Provider 已验证、可由 Store 以 credential revision CAS 原子提交的轮换 facts。
+/// Provider 已验证、可由 Store 以 credential revision CAS 原子提交的轮换 facts
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCredentialRotationFacts {
     pub account_id: ProviderAccountId,
@@ -681,9 +683,9 @@ pub struct PreparedCredentialRotationFacts {
     pub name: String,
     pub email: Option<String>,
     pub plan_type: Option<String>,
-    /// Token 刷新保留提交时的资料，不以准备阶段的副本覆盖新套餐。
+    /// Token 刷新保留提交时的资料，不以准备阶段的副本覆盖新套餐
     pub preserve_profile: bool,
-    /// 连接配置变更保留当前凭据健康状态与错误事实。
+    /// 连接配置变更保留当前凭据健康状态与错误事实
     pub preserve_credential_state: bool,
     pub provider_material: ProviderDocument,
     pub has_refresh_token: bool,
@@ -691,7 +693,7 @@ pub struct PreparedCredentialRotationFacts {
     pub next_refresh_at: Option<DateTime<Utc>>,
 }
 
-/// Provider 返回的轮换准备结果；guard 必须覆盖后续 Store CAS 与审计事务。
+/// Provider 返回的轮换准备结果；guard 必须覆盖后续 Store CAS 与审计事务
 pub struct PreparedCredentialRotation {
     facts: PreparedCredentialRotationFacts,
     guard: Box<dyn CredentialCommitGuard>,
@@ -706,7 +708,7 @@ impl PreparedCredentialRotation {
         Self { facts, guard }
     }
 
-    /// 仅修改连接配置时，不把配置更新视为凭据恢复成功。
+    /// 仅修改连接配置时，不把配置更新视为凭据恢复成功
     #[must_use]
     pub fn preserving_credential_state(mut self) -> Self {
         self.facts.preserve_credential_state = true;
@@ -739,7 +741,7 @@ impl fmt::Debug for PreparedCredentialRotation {
     }
 }
 
-/// Admin 交给 Store 的轮换或 refresh 事务命令。
+/// Admin 交给 Store 的轮换或 refresh 事务命令
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredentialRotationCommit {
     pub prepared: PreparedCredentialRotationFacts,
@@ -757,16 +759,16 @@ impl fmt::Debug for RotateCredential {
     }
 }
 
-/// 通用账号用量能否可靠归属到一个 Provider quota 窗口。
+/// 通用账号用量能否可靠归属到一个 Provider quota 窗口
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaLocalUsageAttribution {
-    /// 窗口覆盖账号的全部请求，可按账号与时间范围聚合。
+    /// 窗口覆盖账号的全部请求，可按账号与时间范围聚合
     AccountWide,
-    /// 窗口需要 Provider / 模型级归属，通用账号聚合不可用。
+    /// 窗口需要 Provider / 模型级归属，通用账号聚合不可用
     Unavailable,
 }
 
-/// Provider quota bucket 中窗口的官方位置语义。
+/// Provider quota bucket 中窗口的官方位置语义
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderQuotaWindowRole {
     Primary,
@@ -785,7 +787,7 @@ impl ProviderQuotaWindowRole {
     }
 }
 
-/// 一个 Provider quota 窗口的公共投影。
+/// 一个 Provider quota 窗口的公共投影
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderQuotaWindow {
     pub key: String,
@@ -803,14 +805,14 @@ pub struct ProviderQuotaWindow {
     pub provider_data: Option<ProviderDocument>,
 }
 
-/// 账号用量统计周期，按周优先、月次之选择；短期限流窗口不参与统计面板。
+/// 账号用量统计周期，按周优先、月次之选择；短期限流窗口不参与统计面板
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AccountUsagePeriod {
     Weekly,
     Monthly,
 }
 
-/// Provider 解释 quota 所需的公共请求事实。
+/// Provider 解释 quota 所需的公共请求事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderQuotaRequest {
     pub account_id: ProviderAccountId,
@@ -818,21 +820,21 @@ pub struct ProviderQuotaRequest {
     pub rolling_usage: Option<AccountUsage>,
 }
 
-/// Provider 已解析的 quota 结果及其不透明差异字段。
+/// Provider 已解析的 quota 结果及其不透明差异字段
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderQuota {
-    /// 上游额度响应明确提供的套餐，可用于补全账号展示。
+    /// 上游额度响应明确提供的套餐，可用于补全账号展示
     pub plan_type: Option<String>,
     pub observed_at: Option<DateTime<Utc>>,
     pub refresh_token_expires_at: Option<DateTime<Utc>>,
     pub windows: Vec<ProviderQuotaWindow>,
     pub credits: Option<ProviderQuotaCredits>,
-    /// 展示用快照级触顶事实（顶层或任一窗口触顶）；不参与账号五态派生。
+    /// 展示用快照级触顶事实（顶层或任一窗口触顶）；不参与账号五态派生
     pub limit_reached: bool,
     pub provider_data: Option<ProviderDocument>,
 }
 
-/// 上游点数余额的展示事实，保留原始十进制文本以避免精度损失。
+/// 上游点数余额的展示事实，保留原始十进制文本以避免精度损失
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderQuotaCredits {
     pub has_credits: bool,
@@ -840,7 +842,7 @@ pub struct ProviderQuotaCredits {
     pub balance: Option<String>,
 }
 
-/// 空值和 `unknown` 代表未提供套餐；新的套餐标识仍按明确值保留。
+/// 空值和 `unknown` 代表未提供套餐；新的套餐标识仍按明确值保留
 pub(crate) fn explicit_plan_type(value: Option<&str>) -> Option<&str> {
     value.filter(|value| {
         let value = value.trim();
@@ -848,7 +850,7 @@ pub(crate) fn explicit_plan_type(value: Option<&str>) -> Option<&str> {
     })
 }
 
-/// 按需查询的订阅周期，不参与额度或账号可用性判断。
+/// 按需查询的订阅周期，不参与额度或账号可用性判断
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderSubscription {
     pub starts_at: Option<DateTime<Utc>>,
@@ -859,14 +861,14 @@ pub struct ProviderSubscription {
     pub observed_at: DateTime<Utc>,
 }
 
-/// 按需汇聚的个人信息；资料查询失败不丢弃可用的订阅结果。
+/// 按需汇聚的个人信息；资料查询失败不丢弃可用的订阅结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountPersonalInfo {
     pub profile: Result<ProviderProfileStatistics, AdminError>,
     pub subscription: Option<ProviderSubscription>,
 }
 
-/// Provider 官方个人资料中的累计摘要。
+/// Provider 官方个人资料中的累计摘要
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderProfileStatisticsSummary {
     pub total_text_tokens: Option<u64>,
@@ -876,14 +878,14 @@ pub struct ProviderProfileStatisticsSummary {
     pub longest_streak_days: Option<u64>,
 }
 
-/// Provider 官方个人资料中的单日 Token bucket。
+/// Provider 官方个人资料中的单日 Token bucket
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderProfileDailyUsage {
     pub date: NaiveDate,
     pub tokens: u64,
 }
 
-/// Provider 官方个人资料中的插件或 Skill 调用排行。
+/// Provider 官方个人资料中的插件或 Skill 调用排行
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderProfileInvocation {
     pub invocation_type: String,
@@ -894,7 +896,7 @@ pub struct ProviderProfileInvocation {
     pub usage_count: Option<u64>,
 }
 
-/// Provider 官方个人资料中的活动洞察。
+/// Provider 官方个人资料中的活动洞察
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderProfileActivityInsights {
     pub fast_mode_percent: Option<f64>,
@@ -906,7 +908,7 @@ pub struct ProviderProfileActivityInsights {
     pub invocations: Option<Vec<ProviderProfileInvocation>>,
 }
 
-/// Provider 已解释的官方个人资料统计。
+/// Provider 已解释的官方个人资料统计
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderProfileStatistics {
     pub display_name: Option<String>,
@@ -918,16 +920,16 @@ pub struct ProviderProfileStatistics {
     pub activity_insights: ProviderProfileActivityInsights,
 }
 
-/// Provider 头像正文的中立字节流；公共层不解释 MIME，也不限制总字节数。
+/// Provider 头像正文的中立字节流；公共层不解释 MIME，也不限制总字节数
 pub type ProviderProfileAvatarStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, ProviderProfileAvatarStreamError>> + Send + 'static>>;
 
-/// Provider 头像流在响应开始后的通用失败，不携带上游 URL 或正文。
+/// Provider 头像流在响应开始后的通用失败，不携带上游 URL 或正文
 #[derive(Debug, thiserror::Error)]
 #[error("provider profile avatar stream failed")]
 pub struct ProviderProfileAvatarStreamError;
 
-/// Provider 已校验并打开的官方头像响应。
+/// Provider 已校验并打开的官方头像响应
 pub struct ProviderProfileAvatar {
     pub content_type: Option<String>,
     pub content_length: Option<u64>,
@@ -947,7 +949,7 @@ impl fmt::Debug for ProviderProfileAvatar {
     }
 }
 
-/// Provider 返回的一张安全主动额度重置卡。
+/// Provider 返回的一张安全主动额度重置卡
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderResetCredit {
     pub id: String,
@@ -957,14 +959,14 @@ pub struct ProviderResetCredit {
     pub reset_type: Option<String>,
 }
 
-/// Provider 主动额度重置卡列表。
+/// Provider 主动额度重置卡列表
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderResetCredits {
     pub available_count: u64,
     pub credits: Vec<ProviderResetCredit>,
 }
 
-/// 一次主动额度重置卡消费命令。
+/// 一次主动额度重置卡消费命令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsumeProviderResetCredit {
     pub account_id: ProviderAccountId,
@@ -972,7 +974,7 @@ pub struct ConsumeProviderResetCredit {
     pub redeem_request_id: Uuid,
 }
 
-/// Provider 返回的主动额度重置卡消费结果。
+/// Provider 返回的主动额度重置卡消费结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderResetCreditResult {
     pub code: String,
@@ -980,17 +982,18 @@ pub struct ProviderResetCreditResult {
 }
 
 impl ProviderQuota {
-    /// 保留账号已有的套餐子类型，仅在缺失时使用上游额度快照补全。
+    /// 保留账号已有的套餐子类型，仅在缺失时使用上游额度快照补全
     pub(crate) fn fill_missing_plan_type(&self, account_plan_type: &mut Option<String>) {
         if explicit_plan_type(account_plan_type.as_deref()).is_none() {
             *account_plan_type = explicit_plan_type(self.plan_type.as_deref()).map(str::to_owned);
         }
     }
 
-    /// 选择账号用量统计的周/月窗口，同时返回展示所需的周期事实。
+    /// 选择账号用量统计的周/月窗口，同时返回展示所需的周期事实
     ///
     /// 只使用边界完整、可归属到整个账号的窗口；周优先于月，同周期保持
-    /// Provider 投影顺序。没有符合条件的窗口时不回退到短期或历史累计。
+    /// Provider 投影顺序
+    /// 没有符合条件的窗口时不回退到短期或历史累计
     #[must_use]
     pub fn usage_window(&self) -> Option<(&ProviderQuotaWindow, AccountUsagePeriod)> {
         self.usage_windows()
@@ -998,7 +1001,7 @@ impl ProviderQuota {
             .min_by_key(|(_, period)| *period)
     }
 
-    /// 统计与预测共用窗口归属规则，避免把模型专属桶或短期限流当作账号容量。
+    /// 统计与预测共用窗口归属规则，避免把模型专属桶或短期限流当作账号容量
     pub(crate) fn usage_windows(
         &self,
     ) -> impl Iterator<Item = (&ProviderQuotaWindow, AccountUsagePeriod)> {
@@ -1020,11 +1023,12 @@ impl ProviderQuota {
         })
     }
 
-    /// 返回 Dashboard 使用的代表性额度比例。
+    /// 返回 Dashboard 使用的代表性额度比例
     ///
     /// 优先使用覆盖账号全部请求的窗口；同一归属范围内再依次使用短周期、周、月
-    /// 和其它窗口，同一优先级取较高的已用比例。这里只解释跨 Provider 共享的窗口
-    /// 语义，绝不读取 Provider 私有 JSON。
+    /// 和其它窗口，同一优先级取较高的已用比例
+    /// 这里只解释跨 Provider 共享的窗口
+    /// 语义，绝不读取 Provider 私有 JSON
     #[must_use]
     pub fn representative_used_percent(&self) -> Option<f64> {
         if self.limit_reached {
@@ -1034,7 +1038,7 @@ impl ProviderQuota {
             .map(|(_, used_percent)| used_percent)
     }
 
-    /// 选择 Dashboard 展示的真实窗口；没有百分比时仍保留 Provider 的滚动窗口语义。
+    /// 选择 Dashboard 展示的真实窗口；没有百分比时仍保留 Provider 的滚动窗口语义
     #[must_use]
     pub fn representative_window(&self) -> Option<&ProviderQuotaWindow> {
         self.representative_used_window()
@@ -1048,10 +1052,10 @@ impl ProviderQuota {
             })
     }
 
-    /// 将已确认的账号级额度耗尽事实投影到展示窗口。
+    /// 将已确认的账号级额度耗尽事实投影到展示窗口
     ///
     /// Provider 已指出具体触顶窗口时只归一化这些窗口；否则归一化 Dashboard
-    /// 同样会选择的代表窗口，避免把多个独立额度窗口全部伪造成已用尽。
+    /// 同样会选择的代表窗口，避免把多个独立额度窗口全部伪造成已用尽
     pub fn apply_limit_reached_display(&mut self) {
         if !self.limit_reached {
             return;
@@ -1131,21 +1135,21 @@ fn is_week_window(seconds: u64) -> bool {
     seconds > 0 && seconds.abs_diff(WEEK_SECONDS) <= WEEK_SECONDS / 20
 }
 
-/// Provider 实时模型目录的一项。
+/// Provider 实时模型目录的一项
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModel {
     pub id: UpstreamModelId,
     pub name: String,
 }
 
-/// Provider 实时模型目录。
+/// Provider 实时模型目录
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModels {
     pub models: Vec<ProviderModel>,
     pub observed_at: Option<DateTime<Utc>>,
 }
 
-/// Provider 原生模型目录正文；wire 语义由对应 Provider 拥有，公共层只搬运不解释字段。
+/// Provider 原生模型目录正文；wire 语义由对应 Provider 拥有，公共层只搬运不解释字段
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModelCatalogDocument {
     pub document: RawJsonPayload,
@@ -1153,7 +1157,7 @@ pub struct ProviderModelCatalogDocument {
     pub observed_at: DateTime<Utc>,
 }
 
-/// 插件账号回调的服务端过滤条件；Provider 缺省时跨全部已注册类型分页。
+/// 插件账号回调的服务端过滤条件；Provider 缺省时跨全部已注册类型分页
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginAccountListQuery {
     pub provider_kind: Option<ProviderKind>,
@@ -1167,7 +1171,7 @@ pub struct PluginAccountPage {
     pub next_cursor: Option<ProviderAccountId>,
 }
 
-/// 原始凭据与当前账号 revision 的同一读取结果。
+/// 原始凭据与当前账号 revision 的同一读取结果
 #[derive(Clone, PartialEq)]
 pub struct PluginAccountCredential {
     pub account: AccountRecord,
@@ -1184,7 +1188,7 @@ impl fmt::Debug for PluginAccountCredential {
     }
 }
 
-/// Runtime 已完成 wire 校验、Admin 仍需绑定当前账号和 revision 的 prepared facts。
+/// Runtime 已完成 wire 校验、Admin 仍需绑定当前账号和 revision 的 prepared facts
 #[derive(Debug, Clone, PartialEq)]
 pub enum PreparedPluginAccountSave {
     Create(PreparedCredentialCreate),
@@ -1201,20 +1205,20 @@ pub struct PluginAccountSaveResult {
     pub credential_revision: Revision,
 }
 
-/// Provider 执行 refresh 时所需的当前公共账号事实。
+/// Provider 执行 refresh 时所需的当前公共账号事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrepareCredentialRefresh {
     pub account: AccountRecord,
 }
 
-/// Provider 敏感导出结果。
+/// Provider 敏感导出结果
 pub struct ProviderExport {
     pub provider_kind: ProviderKind,
     pub account_ids: Vec<ProviderAccountId>,
     pub document: ProviderDocument,
 }
 
-/// Store 为 Provider 导出序列化准备的最小输入；material 对公共层保持不透明。
+/// Store 为 Provider 导出序列化准备的最小输入；material 对公共层保持不透明
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderExportCredentialInput {
     pub account: AccountRecord,
@@ -1232,20 +1236,20 @@ impl fmt::Debug for ProviderExport {
     }
 }
 
-/// 统一账号目录的一行完整结果。
+/// 统一账号目录的一行完整结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
     pub account: AccountRecord,
     pub capacity: super::accounts::AccountCapacity,
     pub capabilities: super::accounts::ProviderAccountCapabilities,
-    /// Provider 提供的套餐展示名称；未识别到套餐时为空。
+    /// Provider 提供的套餐展示名称；未识别到套餐时为空
     pub plan_type_display: Option<String>,
     pub projection: gateway_core::account::AccountStatusProjection,
     pub usage: Option<super::accounts::AccountUsage>,
     pub quota: ProviderQuota,
 }
 
-/// 统一账号目录页。
+/// 统一账号目录页
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryPage {
     pub config_revision: Revision,
@@ -1254,14 +1258,14 @@ pub struct AccountDirectoryPage {
     pub summary: AccountSummary,
 }
 
-/// 凭据刷新提交后的完整账号结果。
+/// 凭据刷新提交后的完整账号结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountRefreshResult {
     pub config_revision: Revision,
     pub account: AccountDirectoryItem,
 }
 
-/// 多 Provider 导出文档集合。
+/// 多 Provider 导出文档集合
 pub struct AccountExportBundle {
     pub exported_at: DateTime<Utc>,
     pub documents: Vec<ProviderExport>,

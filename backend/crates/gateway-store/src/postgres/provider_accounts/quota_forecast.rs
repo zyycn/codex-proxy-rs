@@ -1,4 +1,4 @@
-//! 预测只读采样：先聚合数值、再读取有界的 Provider 文档，不扫描模型排行维度。
+//! 预测只读采样：先聚合数值、再读取有界的 Provider 文档，不扫描模型排行维度
 
 use gateway_admin::model::quota_forecast_sampling::{
     MAX_FORECAST_HISTORY_POINTS, QuotaForecastHistory, QuotaForecastHistoryPoint,
@@ -70,8 +70,9 @@ pub(super) async fn load_history(
 
 fn history_sql() -> String {
     let completed_usage = completed_usage_fact_predicate("mr");
-    // 一个语句共享 MVCC 快照。用 RANGE 帧让相同完成时间的点拥有相同累计值，
-    // 避免并发请求的任意行顺序制造不同分子；未完成请求只进入待决计数。
+    // 一个语句共享 MVCC 快照
+    // 用 RANGE 帧让相同完成时间的点拥有相同累计值，
+    // 避免并发请求的任意行顺序制造不同分子；未完成请求只进入待决计数
     format!(
         "with scoped as materialized (
             select mr.id, mr.started_at, mr.completed_at,

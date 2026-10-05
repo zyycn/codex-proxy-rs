@@ -1,19 +1,21 @@
-mod service;
-pub use service::{ServiceCall, ServiceNext, ServiceResponse, TypedServiceCall};
+//! 插件中间件的请求与响应视图，以及各调用边界的类型化接口
+
 mod body;
 mod call;
-pub use call::{MiddlewareCall, MiddlewareResult};
 mod http;
+mod plugin;
+mod service;
 mod websocket;
+
+pub use body::{MiddlewareBody, MiddlewareBodySender};
+pub use call::{MiddlewareCall, MiddlewareResult};
+pub use http::{HttpBody, HttpCall, HttpFrame, HttpNext, HttpRequest, HttpResponse};
+pub use plugin::MiddlewarePlugin;
+pub use service::{ServiceCall, ServiceNext, ServiceResponse, TypedServiceCall};
 pub use websocket::{
     WebSocketCall, WebSocketDirection, WebSocketKind, WebSocketMessage, WebSocketNext,
     WebSocketPayload, WebSocketSender, WebSocketSession,
 };
-mod plugin;
-pub use http::{HttpBody, HttpCall, HttpFrame, HttpNext, HttpRequest, HttpResponse};
-
-pub use body::{MiddlewareBody, MiddlewareBodySender};
-pub use plugin::MiddlewarePlugin;
 
 use crate::{
     CallContext, ErrorCode, PluginFault, Stage,
@@ -26,10 +28,10 @@ use crate::{
 
 use super::session::{CallCancellation, CallReply, HostClient, PluginCall, SessionError};
 
-/// 作者可读取并修改的一次中间件请求。
+/// 作者可读取并修改的一次中间件请求
 ///
 /// 直接修改公开的 `head`/`body` 会由 [`MiddlewareNext::run`] 与原始输入比较；
-/// `replace_body` 还可明确表达“替换为空正文”。
+/// `replace_body` 还可明确表达“替换为空正文”
 pub struct MiddlewareRequest {
     pub head: MiddlewareRequestHead,
     pub body: Vec<u8>,
@@ -43,7 +45,7 @@ pub struct MiddlewareRequest {
 }
 
 impl MiddlewareRequest {
-    /// 仅 request 阶段可声明转换；须同时替换正文并负责响应还原。
+    /// 仅 request 阶段可声明转换；须同时替换正文并负责响应还原
     pub fn declare_capabilities(
         &mut self,
         declaration: crate::call::middleware::CapabilityDeclaration,
@@ -51,13 +53,13 @@ impl MiddlewareRequest {
         self.capabilities = Some(declaration);
     }
 
-    /// 明确替换请求正文；空 Vec 也表示 replace-empty，而不是保留原正文。
+    /// 明确替换请求正文；空 Vec 也表示 replace-empty，而不是保留原正文
     pub fn replace_body(&mut self, body: Vec<u8>) {
         self.body = body;
         self.body_replaced = true;
     }
 
-    /// 删除原始集合中同名的全部 header。
+    /// 删除原始集合中同名的全部 header
     pub fn remove_header(&mut self, name: impl Into<String>) {
         let name = name.into();
         self.head
@@ -67,8 +69,8 @@ impl MiddlewareRequest {
             .push(MiddlewareHeaderMutation::Remove { name });
     }
 
-    /// 在原始集合之后追加一个 header，保留同名多值。
-    /// request 与 attempt 阶段的请求头会传入上游，不用于保存插件内部状态。
+    /// 在原始集合之后追加一个 header，保留同名多值
+    /// request 与 attempt 阶段的请求头会传入上游，不用于保存插件内部状态
     pub fn append_header(&mut self, name: impl Into<String>, value: Vec<u8>) {
         let name = name.into();
         self.head.headers.push(MiddlewareHeader {
@@ -159,14 +161,15 @@ fn finish_header_mutations(
     mutations
 }
 
-/// 绑定当前父调用的 single-use continuation。
+/// 绑定当前父调用的 single-use continuation
 pub struct MiddlewareNext {
     host: HostClient,
 }
 
 impl MiddlewareNext {
-    /// 消费 continuation 并进入链中下一层。Rust 所有权阻止安全代码重复调用；
-    /// Runtime 仍会拒绝恶意手写 RPC 的第二次调用。
+    /// 消费 continuation 并进入链中下一层
+    /// Rust 所有权阻止安全代码重复调用；
+    /// Runtime 仍会拒绝恶意手写 RPC 的第二次调用
     pub async fn run(self, request: MiddlewareRequest) -> Result<MiddlewareResponse, PluginFault> {
         let (request, payload) = request.into_next_parts();
         let reply = self
@@ -187,7 +190,7 @@ impl MiddlewareNext {
     }
 }
 
-/// 作者返回的响应；完整 next 响应头以增量方式修改，未改写的字节保持原样。
+/// 作者返回的响应；完整 next 响应头以增量方式修改，未改写的字节保持原样
 pub struct MiddlewareResponse {
     pub metadata: Option<Box<crate::call::model::facts::ProviderCallMetadata>>,
     pub protocol: String,
@@ -230,7 +233,7 @@ impl MiddlewareResponse {
         })
     }
 
-    /// 创建不调用 next 的短路响应。
+    /// 创建不调用 next 的短路响应
     #[must_use]
     pub fn direct(
         protocol: impl Into<String>,
@@ -270,7 +273,8 @@ impl MiddlewareResponse {
             .push(MiddlewareHeaderMutation::Append { name, value });
     }
 
-    /// 转为现有 RPC reply。即使正文 opaque 直通或为空也使用空 stream，确保单一 End。
+    /// 转为现有 RPC reply
+    /// 即使正文 opaque 直通或为空也使用空 stream，确保单一 End
     pub fn into_reply(self) -> Result<CallReply, PluginFault> {
         if self.protocol.is_empty() || !(100..=599).contains(&self.status) {
             return Err(invalid_input());
@@ -293,7 +297,7 @@ impl MiddlewareResponse {
     }
 }
 
-/// 交给中间件作者的一次真实调用。
+/// 交给中间件作者的一次真实调用
 pub struct RequestCall {
     pub context: CallContext,
     pub request: MiddlewareRequest,
@@ -303,7 +307,7 @@ pub struct RequestCall {
 }
 
 impl RequestCall {
-    /// 从 `middleware.handle` RPC 解码并交叉检查宿主签发的 mount/身份。
+    /// 从 `middleware.handle` RPC 解码并交叉检查宿主签发的 mount/身份
     pub fn try_from(call: PluginCall) -> Result<Self, PluginFault> {
         if call.method != HANDLE_METHOD {
             return Err(PluginFault::new(
@@ -355,7 +359,7 @@ fn invalid_input() -> PluginFault {
     PluginFault::new(ErrorCode::InvalidInput, "middleware input is invalid")
 }
 
-/// 不同公开边界提供类型化视图，注册与组合仍使用同一个 middleware 函数。
+/// 不同公开边界提供类型化视图，注册与组合仍使用同一个 middleware 函数
 pub trait MiddlewareInput: Sized + Send + 'static {
     type Output: MiddlewareOutput;
     fn accepts(stage: Stage) -> bool;

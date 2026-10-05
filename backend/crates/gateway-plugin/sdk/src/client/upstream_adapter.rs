@@ -1,4 +1,4 @@
-//! 已选账号的受管 WebSocket；连接归属与跨轮续接由宿主管理。
+//! 已选账号的受管 WebSocket；连接归属与跨轮续接由宿主管理
 
 use tokio::sync::{Mutex, OnceCell};
 
@@ -18,7 +18,7 @@ use crate::{
     },
 };
 
-/// 握手拒绝仍保留 HTTP 状态及正文，供适配器解析上游错误。
+/// 握手拒绝仍保留 HTTP 状态及正文，供适配器解析上游错误
 pub enum UpstreamWebSocketUpgrade {
     Connected {
         headers: Vec<(String, String)>,
@@ -31,10 +31,10 @@ pub enum UpstreamWebSocketUpgrade {
     },
 }
 
-/// 本次调用的连接入口；读写可同时进行，有先后依赖的发送须按顺序等待。
+/// 本次调用的连接入口；读写可同时进行，有先后依赖的发送须按顺序等待
 ///
-/// 结束调用时宿主关闭连接；只有成功终态携带连接内续接状态时才保留连接。
-/// 因此丢弃此对象不会提前关闭宿主尚待确认的续接连接。
+/// 结束调用时宿主关闭连接；只有成功终态携带连接内续接状态时才保留连接
+/// 因此丢弃此对象不会提前关闭宿主尚待确认的续接连接
 pub struct UpstreamWebSocket {
     host: HostClient,
     closed: OnceCell<()>,
@@ -42,10 +42,10 @@ pub struct UpstreamWebSocket {
 }
 
 impl HostClient {
-    /// 建立连接，续接时复用宿主恢复的同一连接。
+    /// 建立连接，续接时复用宿主恢复的同一连接
     ///
     /// # Errors
-    /// 目标、握手或续接归属无效时失败。
+    /// 目标、握手或续接归属无效时失败
     pub async fn upstream_websocket(
         &self,
         request: UpstreamWebSocketRequest,
@@ -75,10 +75,10 @@ impl HostClient {
 }
 
 impl UpstreamWebSocket {
-    /// 发送完整文本或二进制消息。
+    /// 发送完整文本或二进制消息
     ///
     /// # Errors
-    /// 连接关闭、消息无效、网络失败或期限到达时失败。
+    /// 连接关闭、消息无效、网络失败或期限到达时失败
     pub async fn send(&self, kind: WebSocketMessageKind, body: Vec<u8>) -> Result<(), PluginFault> {
         if self.closed.get().is_some() {
             return Err(PluginFault::new(
@@ -95,11 +95,11 @@ impl UpstreamWebSocket {
         .await
     }
 
-    /// 按需读取完整消息，EOF 后再次读取返回 None；Ping/Pong 由宿主处理。
-    /// 取消等待不丢弃消息；同时只允许一个读取者，发送和关闭不受读取等待阻塞。
+    /// 按需读取完整消息，EOF 后再次读取返回 None；Ping/Pong 由宿主处理
+    /// 取消等待不丢弃消息；同时只允许一个读取者，发送和关闭不受读取等待阻塞
     ///
     /// # Errors
-    /// 父调用结束、网络失败或期限到达时失败。
+    /// 父调用结束、网络失败或期限到达时失败
     pub async fn read(&self) -> Result<Option<(WebSocketMessageKind, Vec<u8>)>, PluginFault> {
         if self.closed.get().is_some() {
             return Ok(None);
@@ -135,10 +135,10 @@ impl UpstreamWebSocket {
         }
     }
 
-    /// 提前关闭并放弃连接内续接；并发关闭等待同一次回调，失败或取消后可重试。
+    /// 提前关闭并放弃连接内续接；并发关闭等待同一次回调，失败或取消后可重试
     ///
     /// # Errors
-    /// 父调用已结束或宿主拒绝释放时失败。
+    /// 父调用已结束或宿主拒绝释放时失败
     pub async fn close(&self) -> Result<(), PluginFault> {
         self.closed
             .get_or_try_init(|| async {
@@ -151,7 +151,7 @@ impl UpstreamWebSocket {
                 .await
             })
             .await?;
-        // 活跃读取由宿主关闭唤醒；不等待读锁，避免 close 与 read 互相等待。
+        // 活跃读取由宿主关闭唤醒；不等待读锁，避免 close 与 read 互相等待
         if let Ok(mut pending) = self.read.try_lock() {
             pending.clear();
         }

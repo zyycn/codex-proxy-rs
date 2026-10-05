@@ -1,11 +1,11 @@
-//! 完成连接、迁移与 hydration 的 Store 能力集合与启动屏障。
+//! 完成连接、迁移与 hydration 的 Store 能力集合与启动屏障
 
 use gateway_core::account::ProviderAccountStore;
 use gateway_core::provider_ports::ProviderCooldownPort;
 
 use super::*;
 
-/// 已完成连接、迁移与 hydration 的 Store 能力集合。
+/// 已完成连接、迁移与 hydration 的 Store 能力集合
 pub struct StoreBundle {
     admin_ports: AdminStorePorts,
     core_ports: CoreStorePorts,
@@ -53,7 +53,7 @@ impl StoreBundle {
         std::mem::take(&mut self.worker_contributions)
     }
 
-    /// 在插件命令真正执行前启动四个必要写泵；不注册任何后台业务 Worker。
+    /// 在插件命令真正执行前启动四个必要写泵；不注册任何后台业务 Worker
     pub fn start_command_line_writes(&mut self) -> Result<(), CommandStoreDrainError> {
         if self.command_drain.is_some() {
             return Err(CommandStoreDrainError);
@@ -63,7 +63,7 @@ impl StoreBundle {
         Ok(())
     }
 
-    /// 命令成功、失败或取消后有界排空账本、Key 使用与准入释放。
+    /// 命令成功、失败或取消后有界排空账本、Key 使用与准入释放
     pub async fn shutdown_command_line_writes(&mut self) -> Result<(), CommandStoreDrainError> {
         match self.command_drain.take() {
             Some(drain) => drain.shutdown().await,
@@ -79,17 +79,17 @@ enum StoreMode {
     CommandLine,
 }
 
-/// 在返回 Bundle 前完成全部 Store 启动屏障。
+/// 在返回 Bundle 前完成全部 Store 启动屏障
 pub async fn initialize(config: StoreConfig) -> StoreResult<StoreBundle> {
     connect(config, false, StoreMode::Runtime).await
 }
 
-/// CLI 命令使用同一有界写队列，但不贡献恢复、保留、leader 或维护 Worker。
+/// CLI 命令使用同一有界写队列，但不贡献恢复、保留、leader 或维护 Worker
 pub async fn initialize_command_line(config: StoreConfig) -> StoreResult<StoreBundle> {
     connect(config, false, StoreMode::CommandLine).await
 }
 
-/// 读取现有安装描述，不迁移数据库；该 Bundle 的 PostgreSQL 连接默认只读。
+/// 读取现有安装描述，不迁移数据库；该 Bundle 的 PostgreSQL 连接默认只读
 pub async fn initialize_read_only(config: StoreConfig) -> StoreResult<StoreBundle> {
     connect(config, true, StoreMode::Runtime).await
 }
@@ -205,7 +205,7 @@ async fn connect(
     let admissions: Arc<dyn gateway_core::engine::admission::ClientAdmissionPort> = Arc::new(
         redis::RedisClientAdmissionRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?,
     );
-    // Continuation affinity 是下一轮请求的路由事实，Core 必须直接等待 Redis 确认。
+    // Continuation affinity 是下一轮请求的路由事实，Core 必须直接等待 Redis 确认
     let continuation: Arc<dyn gateway_core::engine::continuation::NativeContinuationPort> =
         Arc::new(redis::RedisNativeContinuationRepository::new(
             redis_connection.clone(),
@@ -295,7 +295,7 @@ async fn connect(
     })
 }
 
-/// 构造备份控制面的仓储、导出器与对象存储适配器。
+/// 构造备份控制面的仓储、导出器与对象存储适配器
 pub(crate) fn backup_ports(
     pool: sqlx::PgPool,
     config: &StoreConfig,

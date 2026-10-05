@@ -1,3 +1,5 @@
+//! 验证账号删除后请求、尝试与运维事件仍保留各自历史快照
+
 use chrono::{DateTime, TimeDelta, Utc};
 use gateway_admin::ports::store::ObservabilityStore as _;
 use gateway_store::postgres::{

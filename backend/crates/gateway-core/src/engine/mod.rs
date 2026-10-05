@@ -1,4 +1,4 @@
-//! 模型请求生命周期、单行持久化 port 与 commit/send/cancellation 边界。
+//! 模型请求生命周期、单行持久化 port 与 commit/send/cancellation 边界
 
 pub mod admission;
 pub mod authentication;
@@ -16,6 +16,8 @@ pub mod probe;
 pub mod provider;
 pub mod response_control;
 pub mod upstream_adapter;
+
+use crate::lifecycle::{Deadline, LeaseGuard};
 
 pub use coordinator::{AttemptCoordinator, ResponseExecutionSession};
 
@@ -46,7 +48,7 @@ use crate::routing::{ConfigRevision, PublicModelId, UpstreamModelId};
 use crate::upstream::UpstreamSendState;
 use crate::validation::{IdentifierError, validate_text};
 
-/// `model_requests.id`。
+/// `model_requests.id`
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ModelRequestId(String);
 
@@ -69,7 +71,7 @@ impl fmt::Display for ModelRequestId {
     }
 }
 
-/// `model_requests.outcome`。
+/// `model_requests.outcome`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExecutionOutcome {
     Running,
@@ -92,22 +94,22 @@ impl ExecutionOutcome {
     }
 }
 
-/// Request-local attempt 的原因，不对应数据库表。
+/// Request-local attempt 的原因，不对应数据库表
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttemptTrigger {
     Initial,
     AccountRetry,
 }
 
-/// Provider 可为当前 attempt 选择的请求局部传输档位。
+/// Provider 可为当前 attempt 选择的请求局部传输档位
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum AttemptTransport {
-    /// 使用 Provider 的默认传输策略。
+    /// 使用 Provider 的默认传输策略
     #[default]
     Default,
-    /// 固定账号重试 Provider 的首选传输；序号由 Provider 的独立预算驱动。
+    /// 固定账号重试 Provider 的首选传输；序号由 Provider 的独立预算驱动
     Retry(NonZeroU32),
-    /// 使用 Provider 定义的备用传输。
+    /// 使用 Provider 定义的备用传输
     Fallback,
 }
 
@@ -121,10 +123,10 @@ impl AttemptTrigger {
     }
 }
 
-/// 单次 attempt 的账号选择与账号绑定状态事实。
+/// 单次 attempt 的账号选择与账号绑定状态事实
 ///
 /// `required_account` 用于管理端 connection test，或请求局部的同账号恢复 attempt；
-/// 一旦设置，Provider 在本 attempt 内不得换号或切换 target。
+/// 一旦设置，Provider 在本 attempt 内不得换号或切换 target
 #[derive(Debug, Clone, Default)]
 pub struct AccountAttemptContext {
     excluded_accounts: BTreeSet<ProviderAccountId>,
@@ -152,9 +154,9 @@ impl AccountAttemptContext {
         }
     }
 
-    /// 为管理端对固定账号的上游诊断创建上下文。
+    /// 为管理端对固定账号的上游诊断创建上下文
     ///
-    /// 诊断只绕过本地的被动可用性投影，不能换号，并继续受账号租约保护。
+    /// 诊断只绕过本地的被动可用性投影，不能换号，并继续受账号租约保护
     #[must_use]
     pub const fn diagnostic(
         excluded_accounts: BTreeSet<ProviderAccountId>,
@@ -171,7 +173,7 @@ impl AccountAttemptContext {
         }
     }
 
-    /// 附着普通请求认证时冻结的账号范围。
+    /// 附着普通请求认证时冻结的账号范围
     #[must_use]
     pub fn with_account_scope(
         mut self,
@@ -181,7 +183,7 @@ impl AccountAttemptContext {
         self
     }
 
-    /// 标记本请求已对即将选择的固定账号执行过一次凭据恢复。
+    /// 标记本请求已对即将选择的固定账号执行过一次凭据恢复
     #[must_use]
     pub const fn with_credential_recovery_attempted(mut self, attempted: bool) -> Self {
         self.credential_recovery_attempted = attempted;
@@ -208,7 +210,7 @@ impl AccountAttemptContext {
         self.credential_recovery_attempted
     }
 
-    /// 此尝试是否要由真实上游而非本地投影确认固定账号的可用性。
+    /// 此尝试是否要由真实上游而非本地投影确认固定账号的可用性
     #[must_use]
     pub const fn is_diagnostic_required_account(&self) -> bool {
         self.diagnostic_required_account
@@ -220,10 +222,10 @@ impl AccountAttemptContext {
     }
 }
 
-/// 请求中 Provider 账号绑定状态的唯一归属。
+/// 请求中 Provider 账号绑定状态的唯一归属
 ///
 /// `turn_state` 等 opaque 状态只能发送给创建它的 Provider 与账号；
-/// Core 在首次真实选号后冻结该事实，Provider 据此决定是否清理跨账号状态。
+/// Core 在首次真实选号后冻结该事实，Provider 据此决定是否清理跨账号状态
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountStateOwner {
     provider: ProviderKind,
@@ -257,21 +259,21 @@ impl ProviderAccountStateOwner {
     }
 }
 
-/// 当前 attempt 对 previous-response 的唯一处理方式。
+/// 当前 attempt 对 previous-response 的唯一处理方式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContinuationAttempt {
-    /// 没有 previous-response。
+    /// 没有 previous-response
     None,
-    /// 使用 Store 解析出的原生 handle 与账号绑定。
+    /// 使用 Store 解析出的原生 handle 与账号绑定
     Native,
-    /// 在原账号上执行 Provider 定义的恢复。
+    /// 在原账号上执行 Provider 定义的恢复
     ///
     /// 只有持有可携带 transcript 的 Provider 才能清除 native handle 后重放；
-    /// 只持有 opaque state 的 Provider 必须保留 continuation 依赖或返回客户端错误。
+    /// 只持有 opaque state 的 Provider 必须保留 continuation 依赖或返回客户端错误
     ReplayOwner,
-    /// 允许选择其他账号并执行 Provider 定义的恢复。
+    /// 允许选择其他账号并执行 Provider 定义的恢复
     ///
-    /// 该枚举本身不证明客户端 input 完整，也不授权 Provider 清除 previous-response。
+    /// 该枚举本身不证明客户端 input 完整，也不授权 Provider 清除 previous-response
     ReplayAny,
 }
 
@@ -287,7 +289,7 @@ impl ContinuationAttempt {
     }
 }
 
-/// Provider 每次执行可见的 request-local context。
+/// Provider 每次执行可见的 request-local context
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
     response_control: Option<response_control::ResponseControl>,
@@ -399,7 +401,7 @@ impl RequestAttemptContext {
         self
     }
 
-    /// 传递本次请求已经消耗的排队预算，不能在新 attempt 中重置。
+    /// 传递本次请求已经消耗的排队预算，不能在新 attempt 中重置
     #[must_use]
     pub fn with_concurrency_wait_budget(
         mut self,
@@ -409,28 +411,28 @@ impl RequestAttemptContext {
         self
     }
 
-    /// 传递请求内共享的连接恢复预算。
+    /// 传递请求内共享的连接恢复预算
     #[must_use]
     pub fn with_connection_budget(mut self, budget: connection::ConnectionBudget) -> Self {
         self.connection_budget = budget;
         self
     }
 
-    /// 覆盖本次请求的单调计时原点。
+    /// 覆盖本次请求的单调计时原点
     #[must_use]
     pub fn with_timing_started_at(mut self, timing_started_at: Instant) -> Self {
         self.timing_started_at = timing_started_at;
         self
     }
 
-    /// 附着与发布视图同代次的请求策略；诊断与无插件路径保持 `None`。
+    /// 附着与发布视图同代次的请求策略；诊断与无插件路径保持 `None`
     #[must_use]
     pub fn with_request_policy(mut self, policy: Option<policy::RequestPolicyContext>) -> Self {
         self.request_policy = policy;
         self
     }
 
-    /// 附着本次逻辑请求共享的外部副作用水位；不会传给 Provider 或插件 wire。
+    /// 附着本次逻辑请求共享的外部副作用水位；不会传给 Provider 或插件 wire
     #[must_use]
     pub fn with_execution_effects(
         mut self,
@@ -440,7 +442,7 @@ impl RequestAttemptContext {
         self
     }
 
-    /// 附着与路由快照同代次的 attempt 中间件及可信绑定事实。
+    /// 附着与路由快照同代次的 attempt 中间件及可信绑定事实
     #[must_use]
     pub fn with_middleware(
         mut self,
@@ -472,7 +474,7 @@ impl RequestAttemptContext {
         &self.client_api_key_ref
     }
 
-    /// 返回贯穿本次请求的单调计时原点。
+    /// 返回贯穿本次请求的单调计时原点
     #[must_use]
     pub const fn timing_started_at(&self) -> Instant {
         self.timing_started_at
@@ -509,12 +511,12 @@ impl RequestAttemptContext {
     }
 }
 
-/// Provider 每次执行可见的 request-local context。
+/// Provider 每次执行可见的 request-local context
 #[derive(Debug, Clone)]
 pub struct AttemptContext {
     request: RequestAttemptContext,
     attempt_index: NonZeroU32,
-    deadline: SystemTime,
+    deadline: Deadline,
     account_selection_policy: AccountSelectionPolicy,
     account: AccountAttemptContext,
     continuation: Option<ContinuationBinding>,
@@ -534,7 +536,7 @@ impl AttemptContext {
         self.request.requested_model.as_ref()
     }
 
-    /// 从本次请求冻结的发布代次选择上游适配器；不建立连接、不重新选号。
+    /// 从本次请求冻结的发布代次选择上游适配器；不建立连接、不重新选号
     pub fn upstream_adapter(
         &self,
         provider: &ProviderKind,
@@ -566,7 +568,7 @@ impl AttemptContext {
         &self.request.pricing
     }
 
-    /// 本次逻辑请求首次解析的 Provider 身份，换号及传输重试保持不变。
+    /// 本次逻辑请求首次解析的 Provider 身份，换号及传输重试保持不变
     #[must_use]
     pub const fn request_profile(&self) -> Option<&crate::account::OpaqueProviderData> {
         self.request.request_profile.as_ref()
@@ -582,17 +584,17 @@ impl AttemptContext {
         self.request.request_location.as_ref()
     }
 
-    /// 当前 attempt 的诊断关联；克隆后可传给后台 transport 任务。
+    /// 当前 attempt 的诊断关联；克隆后可传给后台 transport 任务
     #[must_use]
     pub fn trace(&self) -> crate::diagnostics::TraceContext {
         self.request.trace.attempt(self.attempt_index.get())
     }
 
     #[must_use]
-    pub const fn new(
+    pub fn new(
         request: RequestAttemptContext,
         attempt_index: NonZeroU32,
-        deadline: SystemTime,
+        deadline: impl Into<Deadline>,
         account_selection_policy: AccountSelectionPolicy,
         account: AccountAttemptContext,
         continuation: Option<ContinuationBinding>,
@@ -606,7 +608,7 @@ impl AttemptContext {
         Self {
             request,
             attempt_index,
-            deadline,
+            deadline: deadline.into(),
             account_selection_policy,
             account,
             continuation,
@@ -616,7 +618,7 @@ impl AttemptContext {
         }
     }
 
-    /// 覆盖本次 attempt 的 continuation 恢复方式。
+    /// 覆盖本次 attempt 的 continuation 恢复方式
     #[must_use]
     pub const fn with_continuation_attempt(
         mut self,
@@ -626,7 +628,7 @@ impl AttemptContext {
         self
     }
 
-    /// 覆盖本次 attempt 的 Provider 传输档位。
+    /// 覆盖本次 attempt 的 Provider 传输档位
     #[must_use]
     pub const fn with_transport(mut self, transport: AttemptTransport) -> Self {
         self.transport = transport;
@@ -638,19 +640,19 @@ impl AttemptContext {
         self.request.request_id()
     }
 
-    /// 返回隔离 Provider 会话与缓存身份的下游租户引用。
+    /// 返回隔离 Provider 会话与缓存身份的下游租户引用
     #[must_use]
     pub const fn client_api_key_ref(&self) -> &ClientApiKeyId {
         self.request.client_api_key_ref()
     }
 
-    /// 返回本次请求统一的单调计时原点。
+    /// 返回本次请求统一的单调计时原点
     #[must_use]
     pub const fn timing_started_at(&self) -> Instant {
         self.request.timing_started_at()
     }
 
-    /// 返回同一次请求冻结的插件策略上下文。
+    /// 返回同一次请求冻结的插件策略上下文
     #[must_use]
     pub const fn request_policy_context(&self) -> Option<&policy::RequestPolicyContext> {
         self.request.request_policy()
@@ -661,10 +663,10 @@ impl AttemptContext {
         self.request.extension_scope()
     }
 
-    /// 在已选账号并持有其 lease 后，以 owned terminal 执行本次 retry 的中间件链。
+    /// 在已选账号并持有其 lease 后，以 owned terminal 执行本次 retry 的中间件链
     ///
     /// terminal 返回的 stream 仍须保持 cold；中间件不能取得 credential、发送状态、
-    /// canonical usage/cost 或结算所有权。
+    /// canonical usage/cost 或结算所有权
     pub async fn execute_middleware(
         &self,
         operation: crate::operation::Operation,
@@ -710,11 +712,11 @@ impl AttemptContext {
     }
 
     #[must_use]
-    pub const fn deadline(&self) -> SystemTime {
+    pub const fn deadline(&self) -> Deadline {
         self.deadline
     }
 
-    /// 返回密钥准入、账号选择与重试共用的排队预算。
+    /// 返回密钥准入、账号选择与重试共用的排队预算
     #[must_use]
     pub const fn concurrency_wait_budget(&self) -> &crate::concurrency::ConcurrencyWaitBudget {
         &self.request.concurrency_wait_budget
@@ -730,7 +732,7 @@ impl AttemptContext {
         self.account.excluded_accounts()
     }
 
-    /// 管理端诊断或请求局部恢复 attempt 强制使用的唯一账号。
+    /// 管理端诊断或请求局部恢复 attempt 强制使用的唯一账号
     #[must_use]
     pub const fn required_account(&self) -> Option<&ProviderAccountId> {
         self.account.required_account()
@@ -741,19 +743,19 @@ impl AttemptContext {
         self.account.state_owner()
     }
 
-    /// 同一请求是否已经为当前固定账号执行过一次 OAuth 恢复。
+    /// 同一请求是否已经为当前固定账号执行过一次 OAuth 恢复
     #[must_use]
     pub const fn credential_recovery_attempted(&self) -> bool {
         self.account.credential_recovery_attempted()
     }
 
-    /// 管理端固定账号诊断会跳过本地可用性投影，保留全部租约约束。
+    /// 管理端固定账号诊断会跳过本地可用性投影，保留全部租约约束
     #[must_use]
     pub const fn is_diagnostic_required_account(&self) -> bool {
         self.account.is_diagnostic_required_account()
     }
 
-    /// 普通请求认证时冻结的账号范围；管理端诊断为 `None`。
+    /// 普通请求认证时冻结的账号范围；管理端诊断为 `None`
     #[must_use]
     pub const fn account_scope(&self) -> Option<&Arc<crate::account::scope::FrozenAccountScope>> {
         self.account.account_scope()
@@ -774,7 +776,7 @@ impl AttemptContext {
         &self.request.connection_budget
     }
 
-    /// 返回本次 attempt 的 Provider 传输档位。
+    /// 返回本次 attempt 的 Provider 传输档位
     #[must_use]
     pub const fn transport(&self) -> AttemptTransport {
         self.transport
@@ -785,7 +787,7 @@ impl AttemptContext {
         &self.cancellation
     }
 
-    /// 使用冻结策略选择账号；没有匹配策略时委托现有 `AccountSelector`。
+    /// 使用冻结策略选择账号；没有匹配策略时委托现有 `AccountSelector`
     pub async fn select_account<'a>(
         &self,
         provider: &ProviderKind,
@@ -804,7 +806,7 @@ impl AttemptContext {
     }
 }
 
-/// 创建唯一 `model_requests` 行所需的入口事实。
+/// 创建唯一 `model_requests` 行所需的入口事实
 #[derive(Debug, Clone)]
 pub struct NewModelRequest {
     pub id: ModelRequestId,
@@ -826,13 +828,14 @@ pub struct NewModelRequest {
     pub compact: bool,
     pub continuation: provider::ContinuationRequestObservation,
     pub image_generation_requested: bool,
-    /// Client Key 准入判定的完整耗时；内部探测不经过该阶段。
+    /// Client Key 准入判定的完整耗时；内部探测不经过该阶段
     pub admission_decision_ms: Option<u64>,
     pub started_at: SystemTime,
-    pub deadline_at: SystemTime,
+    /// 可选执行截止；Store 将其投影为可续期的异常回收期限
+    pub deadline_at: Deadline,
 }
 
-/// 每次真实上游发送前对同一 `model_requests` 行的更新。
+/// 每次真实上游发送前对同一 `model_requests` 行的更新
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttemptRecord {
     pub request_id: ModelRequestId,
@@ -844,14 +847,14 @@ pub struct AttemptRecord {
     pub upstream_model_id: Option<UpstreamModelId>,
     pub upstream_transport: String,
     pub http_version: Option<String>,
-    /// 本 attempt 从进入 Provider 选择器到持有账号 lease 的等待。
+    /// 本 attempt 从进入 Provider 选择器到持有账号 lease 的等待
     pub account_selection_wait_ms: Option<u64>,
-    /// 选择成功后（含当前请求）的请求级账号池容量快照。
+    /// 选择成功后（含当前请求）的请求级账号池容量快照
     pub capacity_used_slots: Option<u64>,
     pub capacity_total_slots: Option<u64>,
 }
 
-/// 需要解释换号的中间失败。
+/// 需要解释换号的中间失败
 #[derive(Debug)]
 pub struct IntermediateFailure {
     pub request_id: ModelRequestId,
@@ -866,7 +869,7 @@ pub struct IntermediateFailure {
     pub latency: Duration,
 }
 
-/// 已认证有效请求在执行会话建立前的拒绝；不伪造模型执行或上游 attempt。
+/// 已认证有效请求在执行会话建立前的拒绝；不伪造模型执行或上游 attempt
 #[derive(Debug)]
 pub struct EntryRejection {
     pub request_id: ModelRequestId,
@@ -875,7 +878,7 @@ pub struct EntryRejection {
     pub latency: Duration,
 }
 
-/// 不属于任何 `model_requests` 行的管理端账号探测失败。
+/// 不属于任何 `model_requests` 行的管理端账号探测失败
 #[derive(Debug)]
 pub struct ProbeFailure {
     pub provider_kind: ProviderKind,
@@ -885,7 +888,7 @@ pub struct ProbeFailure {
     pub latency: Duration,
 }
 
-/// `model_requests` 可用的毫秒级阶段耗时。
+/// `model_requests` 可用的毫秒级阶段耗时
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelRequestTimings {
     pub transport_decision_wait_ms: Option<u64>,
@@ -899,14 +902,14 @@ pub struct ModelRequestTimings {
     pub latency_ms: Option<u64>,
 }
 
-/// 终态失败的 Provider 结构化连接与 continuation 观测。
+/// 终态失败的 Provider 结构化连接与 continuation 观测
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelRequestFailureObservation {
     pub continuation_unavailable_reason: Option<String>,
     pub upstream_connection: Option<ProviderConnectionObservation>,
 }
 
-/// 单行模型请求的终态写回。
+/// 单行模型请求的终态写回
 #[derive(Debug)]
 pub struct ModelRequestFinalization {
     pub request_id: ModelRequestId,
@@ -924,13 +927,13 @@ pub struct ModelRequestFinalization {
     pub websocket_pool: Option<String>,
     pub service_tier: Option<String>,
     pub upstream_response_model: Option<String>,
-    /// Provider 已筛选的专有观测 JSON；Core 不解释字段。
+    /// Provider 已筛选的专有观测 JSON；Core 不解释字段
     pub provider_metadata_json: Option<String>,
-    /// 请求全程的有界诊断快照，跨 Provider 与重试保留。
+    /// 请求全程的有界诊断快照，跨 Provider 与重试保留
     pub diagnostic_trace_json: Option<String>,
     pub error: Option<GatewayError>,
     pub provider_error_code: Option<String>,
-    /// Provider 返回的原始错误正文或 WebSocket close/error frame。
+    /// Provider 返回的原始错误正文或 WebSocket close/error frame
     pub raw_upstream_error: Option<String>,
     pub failure_observation: ModelRequestFailureObservation,
     pub retry_after_ms: Option<u64>,
@@ -941,22 +944,31 @@ pub struct ModelRequestFinalization {
     pub completed_at: SystemTime,
 }
 
-/// 进程崩溃后按冻结 deadline 收敛的 running 请求数。
+/// 按过期恢复租约收敛的 running 请求数
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RecoveryReport {
     pub requests: u64,
 }
 
-/// `model_requests` 与必要 `ops_events` 的唯一 Core port。
+/// `model_requests` 与必要 `ops_events` 的唯一 Core port
 #[async_trait]
 pub trait ExecutionStore: Send + Sync {
+    /// 会话持有期间刷新异常回收期限，结束或 Drop 后停止；观测失败不取消执行
+    fn maintain_request(
+        &self,
+        _request_id: &ModelRequestId,
+        _deadline: Deadline,
+    ) -> Box<dyn LeaseGuard> {
+        Box::new(())
+    }
+
     async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError>;
     async fn record_attempt(&self, attempt: AttemptRecord) -> Result<(), StoreError>;
     /// 请求插入与首次 attempt 合并持久化；两者写同一行，支持合并写的
-    /// store 可覆写为单次往返，缩短首 token 前的关键路径。
+    /// store 可覆写为单次往返，缩短首 token 前的关键路径
     ///
     /// 覆写实现应保证原子性：默认的两步实现里第二步失败会留下一条
-    /// `running` 请求行，由 deadline 回收器收敛。
+    /// `running` 请求行，由 deadline 回收器收敛
     async fn create_model_request_with_attempt(
         &self,
         request: NewModelRequest,
@@ -985,12 +997,12 @@ pub trait ExecutionStore: Send + Sync {
         &self,
         failure: IntermediateFailure,
     ) -> Result<(), StoreError>;
-    /// 记录路由或准入拒绝；可恢复观测失败不改变客户端结果。
+    /// 记录路由或准入拒绝；可恢复观测失败不改变客户端结果
     async fn record_entry_rejection(&self, _rejection: EntryRejection) -> Result<(), StoreError> {
         Ok(())
     }
 
-    /// 记录不挂在 `model_requests` 上的账号探测失败；默认丢弃。
+    /// 记录不挂在 `model_requests` 上的账号探测失败；默认丢弃
     async fn record_probe_failure(&self, _failure: ProbeFailure) -> Result<(), StoreError> {
         Ok(())
     }
@@ -1002,7 +1014,7 @@ pub trait ExecutionStore: Send + Sync {
     async fn recover_expired(&self, now: SystemTime) -> Result<RecoveryReport, StoreError>;
 }
 
-/// 首事件能否交付客户端的持久化屏障。
+/// 首事件能否交付客户端的持久化屏障
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitRequirement {
     CommitBeforeDelivery,
@@ -1024,7 +1036,7 @@ impl CoordinatedEvent {
         }
     }
 
-    /// 将一批 provider 事件合并为单个提交单元；空批次是无效投递状态。
+    /// 将一批 provider 事件合并为单个提交单元；空批次是无效投递状态
     pub fn try_batch(
         events: Vec<ProviderEvent>,
         commit_requirement: CommitRequirement,
@@ -1048,7 +1060,7 @@ impl CoordinatedEvent {
         self.events
     }
 
-    /// 返回本批次中 Provider 交付的私有会话更新。
+    /// 返回本批次中 Provider 交付的私有会话更新
     #[must_use]
     pub fn session_update(&self) -> Option<&ProviderSessionState> {
         self.events.iter().find_map(ProviderEvent::session_update)
@@ -1085,7 +1097,7 @@ pub enum EngineError {
     InvalidDeliveryState,
 }
 
-/// Engine 只组合 Store 与 Provider Registry；重试算法完全位于 coordinator。
+/// Engine 只组合 Store 与 Provider Registry；重试算法完全位于 coordinator
 pub struct GatewayEngine<S: ?Sized> {
     store: Arc<S>,
     providers: provider::ProviderRegistry,

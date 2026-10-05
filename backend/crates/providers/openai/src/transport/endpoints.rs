@@ -1,3 +1,5 @@
+//! Codex 上游端点常量、基础地址校验与请求 URL 构造
+
 /// `/codex/responses`
 pub const CODEX_RESPONSES_PATH: &str = "/codex/responses";
 /// `/codex/images/generations`
@@ -6,19 +8,21 @@ pub const CODEX_IMAGE_GENERATIONS_PATH: &str = "/codex/images/generations";
 pub const CODEX_IMAGE_EDITS_PATH: &str = "/codex/images/edits";
 /// `/codex/alpha/search`
 pub const CODEX_ALPHA_SEARCH_PATH: &str = "/codex/alpha/search";
+/// `/codex/realtime/calls`；语音通话 SDP 引导端点。
+pub const CODEX_REALTIME_CALLS_PATH: &str = "/codex/realtime/calls";
 /// `/api/codex/usage`
 pub const CODEX_USAGE_API_PATH: &str = "/api/codex/usage";
 /// `/wham/usage`
 pub const WHAM_USAGE_PATH: &str = "/wham/usage";
-/// Codex Desktop 当前账号个人资料与累计统计。
+/// Codex Desktop 当前账号个人资料与累计统计
 pub const WHAM_PROFILE_STATISTICS_PATH: &str = "/wham/profiles/me";
-/// Codex Desktop 主动额度重置卡列表。
+/// Codex Desktop 主动额度重置卡列表
 pub const WHAM_RATE_LIMIT_RESET_CREDITS_PATH: &str = "/wham/rate-limit-reset-credits";
-/// Codex Desktop 主动消费额度重置卡。
+/// Codex Desktop 主动消费额度重置卡
 pub const WHAM_RATE_LIMIT_RESET_CREDITS_CONSUME_PATH: &str =
     "/wham/rate-limit-reset-credits/consume";
 
-/// 拼接完整 endpoint URL。
+/// 拼接完整 endpoint URL
 pub fn endpoint_url(base_url: &str, endpoint_path: &str) -> String {
     format!(
         "{}/{}",
@@ -27,7 +31,7 @@ pub fn endpoint_url(base_url: &str, endpoint_path: &str) -> String {
     )
 }
 
-/// 上游启动配置与账号地址共用同一校验，HTTP 仅允许本机联调。
+/// 上游启动配置与账号地址共用同一校验，HTTP 仅允许本机联调
 pub(crate) fn valid_upstream_base_url(value: &str) -> bool {
     let Ok(url) = url::Url::parse(value) else {
         return false;
@@ -45,12 +49,12 @@ pub(crate) fn valid_upstream_base_url(value: &str) -> bool {
         && url.fragment().is_none()
 }
 
-/// 返回与 base path 对应的唯一 usage endpoint。
+/// 返回与 base path 对应的唯一 usage endpoint
 pub fn usage_endpoint_url(base_url: &str) -> String {
     account_endpoint_url(base_url, "usage")
 }
 
-/// Core backend-client 的两个官方路径风格，供所有账号接口共用。
+/// Core backend-client 的两个官方路径风格，供所有账号接口共用
 pub fn account_endpoint_url(base_url: &str, resource: &str) -> String {
     let prefix = if has_backend_api_base_path(base_url) {
         "wham"

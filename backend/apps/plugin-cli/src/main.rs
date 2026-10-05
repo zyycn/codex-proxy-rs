@@ -1,3 +1,5 @@
+//! 插件打包命令行，校验输入资源并生成带摘要的平台归档
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},

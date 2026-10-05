@@ -1,3 +1,5 @@
+//! 验证安装状态恢复、外部文件变化与回滚备份校验
+
 use super::*;
 
 #[tokio::test]
@@ -14,7 +16,7 @@ async fn manual_image_replacement_should_clear_pending_state_and_invalid_backup(
         .await;
     let service = fixture.service(&server);
     assert!(complete_update(&service, TARGET_VERSION).await.need_restart);
-    // 模拟重建镜像：数据卷保留，应用文件和容器内备份被重新替换。
+    // 模拟重建镜像：数据卷保留，应用文件和容器内备份被重新替换
     fixture.write_executable("manually-installed-binary");
     fs::remove_file(fixture.root.path().join("codex-proxy-rs.backup"))
         .expect("remove image backup");

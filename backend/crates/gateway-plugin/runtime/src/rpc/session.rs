@@ -1,3 +1,5 @@
+//! 插件 RPC 会话的调用登记、超时取消、故障传播与关闭管理
+
 use std::{
     collections::BTreeMap,
     sync::{
@@ -21,7 +23,7 @@ use super::dispatch;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RpcLimits {
-    /// 受管回调与观察队列的缓冲预算，不是请求正文或 IPC 消息总量上限。
+    /// 受管回调与观察队列的缓冲预算，不是请求正文或 IPC 消息总量上限
     pub maximum_buffered_body_bytes: usize,
     pub maximum_calls: usize,
     pub maximum_callbacks: usize,
@@ -106,21 +108,21 @@ impl Drop for RpcSessionLifecycle {
     }
 }
 
-/// 不派生 Debug，防止原始请求、凭据或模型输出进入宿主诊断。
+/// 不派生 Debug，防止原始请求、凭据或模型输出进入宿主诊断
 pub struct RpcReply {
     pub result: serde_json::Value,
     pub payload: Vec<u8>,
 }
 
-/// 具体回调在领域适配器校验账号、出站与执行身份；上下文只取自宿主在途调用表。
+/// 具体回调在领域适配器校验账号、出站与执行身份；上下文只取自宿主在途调用表
 pub trait CallbackHandler: Send + Sync {
-    /// 在 Call 可见之前建立资源范围；不得执行 I/O 或调用 RPC。
+    /// 在 Call 可见之前建立资源范围；不得执行 I/O 或调用 RPC
     fn begin(&self, _context: &CallContext) {}
 
-    /// 调用结束或取消时立即撤销其句柄；实现必须幂等且不能阻塞。
+    /// 调用结束或取消时立即撤销其句柄；实现必须幂等且不能阻塞
     fn finish(&self, _context: &CallContext) {}
 
-    /// 首个流式结果已到达；资源仍绑定原调用并在终态统一回收。
+    /// 首个流式结果已到达；资源仍绑定原调用并在终态统一回收
     fn streaming(&self, _context: &CallContext) {}
 
     fn call(
@@ -144,7 +146,7 @@ pub struct RpcSession {
 }
 
 impl RpcSession {
-    /// 只用于已确认来自插件的合同错误，不接收业务错误或原始响应内容。
+    /// 只用于已确认来自插件的合同错误，不接收业务错误或原始响应内容
     pub(crate) fn invalid_response(&self, stage: Stage) -> RpcError {
         let error = RpcError::InvalidResponse(stage);
         self.shared.fail(error.clone());
@@ -313,7 +315,7 @@ impl Shared {
 
     pub fn release_stream_credit(&self, id: u64, bytes: u32) -> Result<(), RpcError> {
         let mut state = self.state();
-        // 完成后仍可消费已排队数据，无须再给已关闭的流发信用。
+        // 完成后仍可消费已排队数据，无须再给已关闭的流发信用
         let Some(call) = state.calls.get_mut(&id) else {
             return Ok(());
         };
@@ -357,7 +359,7 @@ impl Shared {
         true
     }
 
-    /// 先撤销调用权限，再等待对端确认；只有无响应对端才终止整个 incarnation。
+    /// 先撤销调用权限，再等待对端确认；只有无响应对端才终止整个 incarnation
     pub fn cancel(self: &Arc<Self>, id: u64, error: RpcError) {
         let mut state = self.state();
         let Some(call) = state.calls.get_mut(&id) else {
@@ -414,7 +416,7 @@ impl Shared {
             .get_mut(&parent_id)
             .filter(|call| call.cancellation.is_none())
         {
-            // 已完成回调的句柄不继续占用请求预算。
+            // 已完成回调的句柄不继续占用请求预算
             call.callbacks.retain(|handle| !handle.is_finished());
             call.callbacks.push(callback);
             true
@@ -533,8 +535,8 @@ impl RpcSession {
                         ..
                     },
                 ) => {
-                    // Unix 并发 fork 可能短暂继承解包时的写句柄（rust-lang/rust#114554）。
-                    // 仅重试尚未执行的文件忙错误，并与握手共享启动期限。
+                    // Unix 并发 fork 可能短暂继承解包时的写句柄（rust-lang/rust#114554）
+                    // 仅重试尚未执行的文件忙错误，并与握手共享启动期限
                     let retry_at = tokio::time::Instant::now() + Duration::from_millis(10);
                     if retry_at >= deadline {
                         return Err(RpcError::Start(error));
@@ -579,7 +581,7 @@ impl RpcSession {
         .and_then(|result| result);
         if let Err(error) = ready {
             if let Some(lifecycle) = &lifecycle {
-                // 只有 Ready 之后的存活才可复位预算；长时间卡在握手不等于稳定运行。
+                // 只有 Ready 之后的存活才可复位预算；长时间卡在握手不等于稳定运行
                 lifecycle.fail(Duration::ZERO);
             }
             process.stop();
@@ -622,7 +624,7 @@ impl RpcSession {
                 tracing::warn!(instance_id, exit = ?reason, "插件进程意外停止");
             }
             monitor.fail(RpcError::Closed);
-            // 等进程退出后再回收其文件，避免 Windows 上删除正在执行的制品。
+            // 等进程退出后再回收其文件，避免 Windows 上删除正在执行的制品
             drop(package);
         });
         Ok(Self {
@@ -647,7 +649,7 @@ impl RpcSession {
             .is_none()
     }
 
-    /// 仅返回稳定分类与固定文案，绝不展开插件 fault、stderr 或请求内容。
+    /// 仅返回稳定分类与固定文案，绝不展开插件 fault、stderr 或请求内容
     pub(crate) fn diagnostic(&self) -> RpcSessionDiagnostic {
         let state = self
             .shared
@@ -700,7 +702,7 @@ impl RpcSession {
 
     #[must_use]
     pub fn context(&self, stage: gateway_plugin_sdk::Stage, timeout: Duration) -> CallContext {
-        // 宿主生成的上下文受本会话预算约束；固定注册期限不能使较小的总预算无法启动。
+        // 宿主生成的上下文受本会话预算约束；固定注册期限不能使较小的总预算无法启动
         let timeout = timeout.min(self.limits.maximum_call_timeout);
         CallContext {
             call_id: 0,
@@ -782,7 +784,7 @@ impl RpcSession {
     ) -> Result<CompletedCall, RpcError> {
         let deadline = self.call_deadline(method, &context)?;
         // FIFO 锁同时拥有 ID 与 data 入队顺序；Call/初始 Credit 入队后必须立即释放，
-        // 不能把插件回复或重入回调纳入串行区，也不能为等待锁重置调用期限。
+        // 不能把插件回复或重入回调纳入串行区，也不能为等待锁重置调用期限
         let mut next_call = tokio::time::timeout_at(deadline, self.next_call.lock())
             .await
             .map_err(|_| RpcError::Timeout)?;
@@ -799,7 +801,7 @@ impl RpcSession {
             },
             payload,
         };
-        // 本地元数据错误不能进入写队列并关闭整个会话。
+        // 本地元数据错误不能进入写队列并关闭整个会话
         validate_frame(&frame).map_err(|_| RpcError::Context)?;
         let started = self.begin_call(context, deadline, stream)?;
         let mut guard = CallGuard {
@@ -810,7 +812,7 @@ impl RpcSession {
         let sent = tokio::time::timeout_at(started.deadline, async {
             self.data.send(frame).await.map_err(|_| RpcError::Closed)?;
             if let Some((bytes, frames)) = credit {
-                // 初始信用跟在 Call 后走同一有序队列，不能被控制队列提前发送。
+                // 初始信用跟在 Call 后走同一有序队列，不能被控制队列提前发送
                 self.data
                     .send(Frame::control(Message::Credit {
                         id: started.id,
@@ -929,14 +931,14 @@ impl RpcSession {
             .is_err()
         {
             self.shared.fail(RpcError::Closed);
-            // 强制停止没有第二段宽限；退出和回调析构是返回前必须确认的事实。
+            // 强制停止没有第二段宽限；退出和回调析构是返回前必须确认的事实
             self.settle_shutdown().await;
         }
     }
 
     async fn settle_shutdown(&self) {
         self.shared.process.exited().await;
-        // 不等待监控任务调度；先撤销父调用并中止其回调，再确认回调 future 已析构。
+        // 不等待监控任务调度；先撤销父调用并中止其回调，再确认回调 future 已析构
         self.shared.fail(RpcError::Closed);
         self.shared
             .wait_for_callbacks(self.limits.maximum_callbacks)

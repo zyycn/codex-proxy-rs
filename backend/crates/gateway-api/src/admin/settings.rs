@@ -1,4 +1,4 @@
-//! Runtime settings、旧设置页聚合投影与明文 Admin API Key wire。
+//! Runtime settings、旧设置页聚合投影与明文 Admin API Key wire
 
 use crate::auth::SessionState;
 
@@ -27,22 +27,22 @@ use super::{
     WireValidationError, wire::map_admin_service_error,
 };
 
-/// 客户端模型到上游模型的全局精确映射。
+/// 客户端模型到上游模型的全局精确映射
 pub type ModelMappings = BTreeMap<String, String>;
 pub type ProviderRequestProfiles = BTreeMap<String, serde_json::Map<String, serde_json::Value>>;
 pub type ProviderRequestProfileUpdates =
     BTreeMap<String, Option<serde_json::Map<String, serde_json::Value>>>;
 
-/// 运行配置投影与设置页字段的聚合响应。
+/// 运行配置投影与设置页字段的聚合响应
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
     pub config_revision: u64,
     pub smart_scheduling_defaults: gateway_core::account::SmartSchedulingConfig,
     pub provider_request_profiles: ProviderRequestProfiles,
-    /// 固定兼容字段；值始终从 provider_request_profiles 派生。
+    /// 固定兼容字段；值始终从 provider_request_profiles 派生
     pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
-    /// 固定兼容字段；值始终从 provider_request_profiles 派生。
+    /// 固定兼容字段；值始终从 provider_request_profiles 派生
     pub xai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -77,17 +77,17 @@ pub struct RuntimeSettingsView {
     pub updated_at_display: String,
 }
 
-/// 原子替换全局运行参数的请求。
+/// 原子替换全局运行参数的请求
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
     pub config_revision: u64,
     #[serde(default)]
     pub provider_request_profiles: ProviderRequestProfileUpdates,
-    /// 兼容既有 wire；与泛化字段冲突时拒绝整个请求。
+    /// 兼容既有 wire；与泛化字段冲突时拒绝整个请求
     #[serde(default, deserialize_with = "deserialize_profile_update")]
     pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
-    /// 兼容既有 wire；与泛化字段冲突时拒绝整个请求。
+    /// 兼容既有 wire；与泛化字段冲突时拒绝整个请求
     #[serde(default, deserialize_with = "deserialize_profile_update")]
     pub xai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub request_location_enabled: bool,
@@ -122,7 +122,7 @@ pub struct UpdateRuntimeSettingsRequest {
 }
 
 impl UpdateRuntimeSettingsRequest {
-    /// 校验公共运行参数。
+    /// 校验公共运行参数
     pub fn validate(&self) -> Result<(), WireValidationError> {
         self.request_location
             .validate()
@@ -313,14 +313,14 @@ impl From<(RuntimeSettings, crate::time::TimePresenter)> for RuntimeSettingsView
     }
 }
 
-/// 管理 API Key 状态；状态读取不回显完整值。
+/// 管理 API Key 状态；状态读取不回显完整值
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminApiKeyStatus {
     pub exists: bool,
 }
 
-/// 管理 API Key 重新生成响应。
+/// 管理 API Key 重新生成响应
 #[derive(Serialize)]
 pub struct RegeneratedAdminApiKey {
     pub key: String,
@@ -335,7 +335,7 @@ impl fmt::Debug for RegeneratedAdminApiKey {
     }
 }
 
-/// 管理 API Key 删除响应。
+/// 管理 API Key 删除响应
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct DeletedAdminApiKey {
     pub message: &'static str,
@@ -414,7 +414,7 @@ impl Default for DeletedAdminApiKey {
     }
 }
 
-/// 构造固定 GET/POST 设置路由。
+/// 构造固定 GET/POST 设置路由
 pub fn router<S>() -> Router<S>
 where
     S: SessionState + Clone + Send + Sync + 'static,
@@ -757,7 +757,7 @@ fn validate_optional_client_version(
     Ok(())
 }
 
-/// 探测模型为可选自由文本：非空、去首尾空白后不变、无控制字符且不超过 128 字节。
+/// 探测模型为可选自由文本：非空、去首尾空白后不变、无控制字符且不超过 128 字节
 fn validate_optional_probe_model(
     value: Option<&str>,
     field: &'static str,
@@ -835,7 +835,7 @@ fn normalize_request_profile_updates(
     Ok(normalized)
 }
 
-// 字段省略时保留已有配置；显式 null 不能清空唯一的通用默认。
+// 字段省略时保留已有配置；显式 null 不能清空唯一的通用默认
 fn deserialize_profile_update<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, D::Error> {

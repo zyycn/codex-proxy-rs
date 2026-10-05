@@ -1,3 +1,5 @@
+//! 插件分发测试入口，以及共用下载环境与摘要辅助
+
 mod github;
 mod http;
 mod lifecycle;

@@ -1,3 +1,5 @@
+//! 插件 WebSocket 中间件的消息、载荷与会话收发接口
+
 use super::super::session::{CallCancellation, CallReply, HostClient, PluginCall, SessionError};
 use super::{MiddlewareInput, MiddlewareOutput, invalid_input};
 use crate::client::{HostReply, read::PendingRead};
@@ -10,7 +12,7 @@ use crate::{
 };
 pub use wire::{Direction as WebSocketDirection, Kind as WebSocketKind};
 
-/// 原始消息正文按需读取；直接传给 next 或返回时不读取、不复制。
+/// 原始消息正文按需读取；直接传给 next 或返回时不读取、不复制
 pub struct WebSocketPayload {
     source: wire::Payload,
     bytes: Vec<u8>,
@@ -68,7 +70,7 @@ impl WebSocketPayload {
             Ok(Some(reply.payload))
         }
     }
-    /// 不再需要正文时释放句柄；会话结束也会回收所有未释放资源。
+    /// 不再需要正文时释放句柄；会话结束也会回收所有未释放资源
     pub async fn close(&mut self) -> Result<(), PluginFault> {
         if let wire::Payload::Handle { handle } = &self.source {
             let host = self.host.as_ref().ok_or_else(invalid_input)?;
@@ -92,7 +94,7 @@ impl WebSocketPayload {
         self.read.clear();
         Ok(())
     }
-    /// 收集大小由插件决定；透传不需要调用此方法。
+    /// 收集大小由插件决定；透传不需要调用此方法
     pub async fn collect(mut self) -> Result<Vec<u8>, PluginFault> {
         let mut bytes = Vec::new();
         while let Some(chunk) = self.read().await? {
@@ -132,7 +134,7 @@ impl WebSocketMessage {
         })
     }
     fn into_wire(self) -> Result<(wire::Message, Vec<u8>), PluginFault> {
-        // 尚在读取的消息不能直接归还句柄，否则宿主稍后返回的数据会被丢弃。
+        // 尚在读取的消息不能直接归还句柄，否则宿主稍后返回的数据会被丢弃
         if self.payload.read.is_pending() {
             return Err(PluginFault::new(
                 ErrorCode::InvalidInput,
@@ -183,7 +185,7 @@ impl WebSocketSender {
     pub(crate) fn new(host: HostClient) -> Self {
         Self { host }
     }
-    /// 在当前连接直接发送消息并等待实际写入，不伪装成默认协议的输出。
+    /// 在当前连接直接发送消息并等待实际写入，不伪装成默认协议的输出
     pub async fn send(&self, message: WebSocketMessage) -> Result<(), PluginFault> {
         let (head, bytes) = message.into_wire()?;
         let reply = self
@@ -255,7 +257,7 @@ impl MiddlewareOutput for Option<WebSocketMessage> {
     }
 }
 
-/// 由 HTTP 中间件接管的连接；接收权独占，发送端可以复制后并发使用。
+/// 由 HTTP 中间件接管的连接；接收权独占，发送端可以复制后并发使用
 pub struct WebSocketSession {
     pub sender: WebSocketSender,
     pub cancellation: CallCancellation,

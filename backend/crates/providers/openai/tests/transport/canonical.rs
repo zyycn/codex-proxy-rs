@@ -1,3 +1,5 @@
+//! 验证 Codex SSE 转换保留协议事件并提取模型和用量事实
+
 use gateway_core::event::{ContentKind, FinishReason, GatewayEvent, ProviderEvent};
 
 use provider_openai::transport::canonical::{
@@ -154,8 +156,8 @@ fn raw_sse_passthrough_should_keep_original_bytes_alongside_canonical_facts() {
 #[test]
 fn websocket_raw_passthrough_should_preserve_upstream_number_bytes() {
     // OpenAI 线路透明代理：WebSocket 上游帧经 reducer→SSE→decoder(raw 透传) 后，
-    // data 段必须与上游原文逐字节一致，不得经 serde 往返改写数值/精度。
-    // `1e3` 若被重序列化会变成 `1000.0`——用它作为字节改写的探针。
+    // data 段必须与上游原文逐字节一致，不得经 serde 往返改写数值/精度
+    // `1e3` 若被重序列化会变成 `1000.0`——用它作为字节改写的探针
     let upstream = r#"{"type":"response.created","response":{"id":"resp_ws_raw","model":"gpt-test","x_precision":1e3}}"#;
     let frame = websocket_event_to_sse_frame(upstream)
         .expect("client-visible WS event yields an SSE frame");

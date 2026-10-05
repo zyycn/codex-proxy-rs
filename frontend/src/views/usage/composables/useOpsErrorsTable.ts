@@ -1,8 +1,7 @@
 import type { Ref } from 'vue'
 import type { UsageTimeRangeParams } from './useUsageTimeRange'
-import { watchDebounced } from '@vueuse/core'
 
-import { computed, onScopeDispose, shallowRef, watch } from 'vue'
+import { computed, shallowRef, watch } from 'vue'
 import { getOpsErrors } from '@/api'
 import { useStablePagedQuery } from '@/composables/useStablePagedQuery'
 import { withMinimumDuration } from '@/utils/operation'
@@ -18,7 +17,6 @@ export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
   const refreshing = shallowRef(false)
   const searchQuery = shallowRef('')
   const search = computed(() => searchQuery.value.trim() || undefined)
-  let disposed = false
   // 时间、平台和搜索共同构成分页快照，避免翻页混入另一组筛选结果。
   let tableParams = snapshot()
 
@@ -62,8 +60,6 @@ export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
 
   function reloadLatest() {
     tableParams = snapshot()
-    // 筛选失败不能继续展示上一范围的数据，错误态由面板单独呈现。
-    query.items.value = []
     return query.reloadFromStart()
   }
 
@@ -79,14 +75,13 @@ export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
     }
   }
 
-  watchDebounced(
-    search,
-    () => {
-      if (!disposed && options.active.value && tableParams.search !== search.value)
+  watch(search, (_value, _previous, onCleanup) => {
+    const timer = setTimeout(() => {
+      if (options.active.value && tableParams.search !== search.value)
         void reloadLatest()
-    },
-    { debounce: 250 },
-  )
+    }, 250)
+    onCleanup(() => clearTimeout(timer))
+  })
 
   watch([options.timeRangeParams, options.provider, options.active], () => {
     if (options.active.value)
@@ -94,8 +89,6 @@ export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
     else
       query.invalidate()
   }, { immediate: true })
-
-  onScopeDispose(() => disposed = true)
 
   return {
     loading: query.loading,

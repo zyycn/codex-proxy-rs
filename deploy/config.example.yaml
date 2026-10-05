@@ -76,8 +76,15 @@ openai:
   # 数据驻留约束；省略或 null 不指定地域约束，与管理端客户端身份无关。
   residency: us
 
-# Compose 凭据桥接区；密码仍只维护在 store 中。
+# Compose 启动桥接区；密码仍只维护在 store 中。
 services:
+  app-runtime:
+    environment:
+      # 默认空值；小内存机器可改为下列值，更积极回收空闲内存，但可能增加 CPU 开销。
+      # 'glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072'
+      # 由 Compose 在进程启动前传入，修改后需重建应用容器，详见 deploy/README.md#小内存优化。
+      GLIBC_TUNABLES: ''
+
   postgres-credentials:
     environment:
       POSTGRES_PASSWORD: *postgres_password

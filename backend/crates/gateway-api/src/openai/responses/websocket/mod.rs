@@ -1,4 +1,4 @@
-//! OpenAI Responses WebSocket 的升级、连接与串行 session 编排。
+//! OpenAI Responses WebSocket 的升级、连接与串行 session 编排
 
 pub mod connection;
 mod forward;
@@ -55,7 +55,7 @@ pub use protocol::{ResponseCreateFrameError, decode_response_create_with_context
 const TEXT_FRAMES_ONLY: &str = "Responses WebSocket accepts text frames only";
 const CONNECTION_LIMIT_CLOSE_REASON: &str = "Responses websocket connection limit reached";
 
-/// 将已认证的 `GET /v1/responses` 升级为 Responses WebSocket。
+/// 将已认证的 `GET /v1/responses` 升级为 Responses WebSocket
 pub(crate) async fn responses_websocket(
     State(state): State<ApiState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -86,14 +86,14 @@ pub(crate) async fn responses_websocket(
     )
 }
 
-/// 已鉴权 Responses WebSocket 升级边界。
+/// 已鉴权 Responses WebSocket 升级边界
 #[derive(Clone)]
 pub(crate) struct ResponsesWebSocketAdapter {
     service: OpenAiService,
 }
 
 impl ResponsesWebSocketAdapter {
-    /// 绑定应用提供的唯一 OpenAI 客户端服务端口。
+    /// 绑定应用提供的唯一 OpenAI 客户端服务端口
     #[must_use]
     pub const fn new(service: OpenAiService) -> Self {
         Self { service }
@@ -137,8 +137,8 @@ impl ResponsesWebSocketAdapter {
         };
         let origin = crate::middleware::current();
         websocket
-            // 覆盖 axum/tungstenite 的私有 64 MiB message 与 16 MiB frame 默认值。
-            // Responses JSON 的协议可接受性由上游决定，代理不另设 wire 长度上限。
+            // 覆盖 axum/tungstenite 的私有 64 MiB message 与 16 MiB frame 默认值
+            // Responses JSON 的协议可接受性由上游决定，代理不另设 wire 长度上限
             .max_message_size(usize::MAX)
             .max_frame_size(usize::MAX)
             .on_upgrade(move |socket| async move {
@@ -238,7 +238,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
                 continue;
             }
         };
-        // deadline 与 Text 可能同时就绪；在任何上游执行开始前再次封住该竞争窗口。
+        // deadline 与 Text 可能同时就绪；在任何上游执行开始前再次封住该竞争窗口
         if connection.is_expired() {
             trace_rejected_request(
                 &correlation_id,
@@ -252,7 +252,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
         }
         let execution = service.execution();
         let preparation = async {
-            // 握手的显式改写可继承，Key 策略与宿主设置仍在每轮执行前刷新。
+            // 握手的显式改写可继承，Key 策略与宿主设置仍在每轮执行前刷新
             let mut client = client.clone();
             if let Some(settings) = client.request_settings() {
                 let current = execution.request_settings().ok_or_else(|| {
@@ -396,7 +396,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
     connection.log_summary(request_count);
 }
 
-// 尚未建立模型请求的拒绝也保留原文入口，用返回给客户端的 correlation ID 检索。
+// 尚未建立模型请求的拒绝也保留原文入口，用返回给客户端的 correlation ID 检索
 fn trace_rejected_request(
     correlation_id: &str,
     connection_id: &str,

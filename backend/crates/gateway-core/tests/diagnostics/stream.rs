@@ -1,3 +1,5 @@
+//! 验证 SSE 诊断流跨分块重组、超限恢复与未完成流识别
+
 use gateway_core::diagnostics::{StreamCapture, StreamFormat, TraceContext, body_fingerprint};
 
 #[test]
@@ -12,7 +14,7 @@ fn sse_capture_reassembles_every_chunk_boundary_and_preserves_unknown_events() {
         let snapshot = trace.snapshot().unwrap();
         let events = snapshot["events"].as_array().unwrap();
         assert_eq!(events.len(), 3, "boundary {boundary}");
-        // 未知 SSE 名称和伪装成头部的 JSON 仍有摘要，但不能获得协议字段的明文权限。
+        // 未知 SSE 名称和伪装成头部的 JSON 仍有摘要，但不能获得协议字段的明文权限
         assert_eq!(
             events[0]["data"]["eventType"],
             body_fingerprint(b"future.metadata")

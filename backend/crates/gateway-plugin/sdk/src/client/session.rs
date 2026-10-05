@@ -1,3 +1,5 @@
+//! 插件侧双向 RPC 会话的握手、调用分派、流控与取消生命周期
+
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     future::Future,
@@ -25,10 +27,10 @@ const MAXIMUM_STREAM_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 const MAXIMUM_CONCURRENCY: usize = 256;
 const MAXIMUM_BUFFERED_STREAM_CHUNKS: usize = 65_536;
 
-/// 插件侧会话的内存、并发与期限边界。
+/// 插件侧会话的内存、并发与期限边界
 #[derive(Debug, Clone, Copy)]
 pub struct SessionConfig {
-    /// 单个业务流分块的预算，不限制普通调用正文的总长度。
+    /// 单个业务流分块的预算，不限制普通调用正文的总长度
     pub maximum_stream_chunk_bytes: usize,
     pub maximum_calls: usize,
     pub maximum_callbacks: usize,
@@ -40,7 +42,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            // 流分块还需匹配宿主授予的信用窗口。
+            // 流分块还需匹配宿主授予的信用窗口
             maximum_stream_chunk_bytes: 1024 * 1024,
             maximum_calls: 32,
             maximum_callbacks: 32,
@@ -70,7 +72,7 @@ impl SessionConfig {
     }
 }
 
-/// 插件侧传输和会话错误。
+/// 插件侧传输和会话错误
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("plugin session configuration is invalid")]
@@ -96,7 +98,7 @@ pub enum SessionError {
 }
 
 impl SessionError {
-    /// 将本地会话失败收敛为可返回宿主的稳定插件错误。
+    /// 将本地会话失败收敛为可返回宿主的稳定插件错误
     #[must_use]
     pub fn into_plugin_fault(self) -> PluginFault {
         match self {
@@ -114,7 +116,7 @@ impl SessionError {
     }
 }
 
-/// 一次宿主调用的可克隆取消信号。
+/// 一次宿主调用的可克隆取消信号
 #[derive(Clone)]
 pub struct CallCancellation {
     receiver: watch::Receiver<bool>,
@@ -154,13 +156,13 @@ impl CancellationSource {
     }
 }
 
-/// 宿主回调的成功结果；不实现 `Debug`，避免载荷进入普通诊断。
+/// 宿主回调的成功结果；不实现 `Debug`，避免载荷进入普通诊断
 pub struct HostReply {
     pub result: Value,
     pub payload: Vec<u8>,
 }
 
-/// 绑定父调用、期限和取消信号的宿主回调客户端。
+/// 绑定父调用、期限和取消信号的宿主回调客户端
 #[derive(Clone)]
 pub struct HostClient {
     parent_id: u64,
@@ -183,11 +185,11 @@ impl HostClient {
         }
     }
 
-    /// 发起一次与父调用关联的宿主回调。
+    /// 发起一次与父调用关联的宿主回调
     ///
     /// # Errors
     ///
-    /// 方法或帧无效、容量耗尽、父调用取消、期限到达、连接关闭或宿主返回错误时失败。
+    /// 方法或帧无效、容量耗尽、父调用取消、期限到达、连接关闭或宿主返回错误时失败
     pub async fn call(
         &self,
         method: impl Into<String>,
@@ -239,7 +241,7 @@ impl HostClient {
     }
 }
 
-/// 交给插件业务处理器的一次宿主调用；不实现 `Debug`，避免敏感载荷泄露。
+/// 交给插件业务处理器的一次宿主调用；不实现 `Debug`，避免敏感载荷泄露
 pub struct PluginCall {
     pub method: String,
     pub context: CallContext,
@@ -249,24 +251,27 @@ pub struct PluginCall {
     pub cancellation: CallCancellation,
 }
 
-/// 插件业务调用 future。
+/// 插件业务调用 future
 pub type CallFuture<'a> = Pin<Box<dyn Future<Output = Result<CallReply, PluginFault>> + Send + 'a>>;
 
-/// 插件只实现业务调用；会话负责握手、关联、流控、取消和关闭。
+/// 插件只实现业务调用；会话负责握手、关联、流控、取消和关闭
 pub trait PluginHandler: Send + Sync + 'static {
     fn call(&self, call: PluginCall) -> CallFuture<'_>;
 
-    /// 取消时释放只属于该调用的临时业务状态。实现必须幂等、快速且不得执行阻塞 I/O。
+    /// 取消时释放只属于该调用的临时业务状态
+    /// 实现必须幂等、快速且不得执行阻塞 I/O
     fn cancel(&self, _context: &CallContext) {}
 
-    /// 会话停止接收新调用时触发。实现必须幂等、快速且不得执行阻塞 I/O。
+    /// 会话停止接收新调用时触发
+    /// 实现必须幂等、快速且不得执行阻塞 I/O
     fn quiesce(&self) {}
 
-    /// 会话关闭时释放插件自有临时状态。实现必须幂等、快速且不得执行阻塞 I/O。
+    /// 会话关闭时释放插件自有临时状态
+    /// 实现必须幂等、快速且不得执行阻塞 I/O
     fn shutdown(&self) {}
 }
 
-/// 一次业务成功结果；`stream` 存在时 SDK 自动产生单一流终态。
+/// 一次业务成功结果；`stream` 存在时 SDK 自动产生单一流终态
 pub struct CallReply {
     result: Value,
     payload: Vec<u8>,
@@ -306,14 +311,14 @@ pub trait PullResponseStream: Send {
     fn next(&mut self) -> PullResponseFuture<'_>;
 }
 
-/// SDK 管理 sequence、Credit 和终态的响应流。
+/// SDK 管理 sequence、Credit 和终态的响应流
 pub struct ResponseStream {
     source: StreamSource,
     declared_capacity: usize,
 }
 
 impl ResponseStream {
-    /// 从已完成业务校验的有限分块构造流；SDK 会在发送 `Result` 前预检全部分块。
+    /// 从已完成业务校验的有限分块构造流；SDK 会在发送 `Result` 前预检全部分块
     #[must_use]
     pub fn from_chunks(chunks: Vec<Vec<u8>>) -> Self {
         let declared_capacity = chunks.len().max(1);
@@ -323,7 +328,7 @@ impl ResponseStream {
         }
     }
 
-    /// 创建由生产者驱动的有界流队列。
+    /// 创建由生产者驱动的有界流队列
     #[must_use]
     pub fn channel(capacity: NonZeroUsize) -> (StreamSender, Self) {
         let (sender, receiver) = mpsc::channel(capacity.get());
@@ -336,7 +341,7 @@ impl ResponseStream {
         )
     }
 
-    /// 按消费进度拉取下一帧；返回 None 表示完成，丢弃流会丢弃生产者。
+    /// 按消费进度拉取下一帧；返回 None 表示完成，丢弃流会丢弃生产者
     pub fn pull(source: Box<dyn PullResponseStream>) -> Self {
         Self {
             source: StreamSource::Pull(source),
@@ -372,14 +377,14 @@ impl ResponseStream {
     }
 }
 
-/// 动态响应流的有界生产端；最后一个 sender 被释放表示成功终态。
+/// 动态响应流的有界生产端；最后一个 sender 被释放表示成功终态
 #[derive(Clone)]
 pub struct StreamSender {
     sender: mpsc::Sender<Result<Vec<u8>, PluginFault>>,
 }
 
 impl StreamSender {
-    /// 排队一个业务分块；实际线协议流控由会话完成。
+    /// 排队一个业务分块；实际线协议流控由会话完成
     pub async fn send(&self, payload: Vec<u8>) -> Result<(), SessionError> {
         self.sender
             .send(Ok(payload))
@@ -387,7 +392,7 @@ impl StreamSender {
             .map_err(|_| SessionError::Closed)
     }
 
-    /// 以业务错误结束动态流。
+    /// 以业务错误结束动态流
     pub async fn fail(&self, fault: PluginFault) -> Result<(), SessionError> {
         self.sender
             .send(Err(fault))
@@ -396,7 +401,7 @@ impl StreamSender {
     }
 }
 
-/// 已读取并校验 Hello、尚未向宿主发送 Ready 的插件会话。
+/// 已读取并校验 Hello、尚未向宿主发送 Ready 的插件会话
 pub struct PluginSession<R, W> {
     reader: R,
     writer: W,
@@ -409,11 +414,12 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    /// 读取并校验宿主握手。业务处理器可以在 `run` 前读取不可变 Handshake 构造注册描述。
+    /// 读取并校验宿主握手
+    /// 业务处理器可以在 `run` 前读取不可变 Handshake 构造注册描述
     ///
     /// # Errors
     ///
-    /// 配置无效、握手超时、传输关闭或 Hello 不符合协议时失败。
+    /// 配置无效、握手超时、传输关闭或 Hello 不符合协议时失败
     pub async fn accept(
         mut reader: R,
         writer: W,
@@ -448,11 +454,11 @@ where
         &self.handshake
     }
 
-    /// 发送 Ready 并持续处理调用、回调、流控、取消与关闭。
+    /// 发送 Ready 并持续处理调用、回调、流控、取消与关闭
     ///
     /// # Errors
     ///
-    /// 帧损坏、协议违规、处理器异常停止或传输关闭时失败。
+    /// 帧损坏、协议违规、处理器异常停止或传输关闭时失败
     pub async fn run<H>(mut self, handler: H) -> Result<(), SessionError>
     where
         H: PluginHandler,
@@ -833,7 +839,7 @@ struct SessionDriver {
 impl SessionDriver {
     async fn drive<R: AsyncRead + Unpin>(&mut self, mut reader: R) -> Result<(), SessionError> {
         loop {
-            // read_exact 不是取消安全的；完成通知可以穿插处理，但必须保留同一个半帧读取 future。
+            // read_exact 不是取消安全的；完成通知可以穿插处理，但必须保留同一个半帧读取 future
             let incoming = read_frame(&mut reader);
             tokio::pin!(incoming);
             let frame = loop {
@@ -884,8 +890,9 @@ impl SessionDriver {
                     return Err(SessionError::Protocol);
                 }
                 // End/Cancelled 已进入同一 FIFO 后，宿主先前为已消费分块排队的
-                // Credit 仍可能稍晚抵达。此时调用资源已经回收，忽略迟到信用即可；
-                // 未来或回调 ID 仍按协议错误处理。
+                // Credit 仍可能稍晚抵达
+                // 此时调用资源已经回收，忽略迟到信用即可；
+                // 未来或回调 ID 仍按协议错误处理
                 if let Some(active) = self.active.get(&id) {
                     active.credits.grant(bytes, frames)?;
                 }
@@ -1325,7 +1332,7 @@ impl CreditWindow {
         state.maximum_bytes = state.maximum_bytes.max(state.bytes);
         drop(state);
         // 每个调用只有一个顺序消费 Credit 的任务；notify_one 会保留许可，避免
-        // grant 恰好发生在状态检查和等待注册之间时丢失唤醒。
+        // grant 恰好发生在状态检查和等待注册之间时丢失唤醒
         self.changed.notify_one();
         Ok(())
     }

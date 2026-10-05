@@ -1,4 +1,4 @@
-//! `ProviderAccountStore` 的 Codex 行转换；本文件不含 SQL。
+//! `ProviderAccountStore` 的 Codex 行转换；本文件不含 SQL
 
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -33,10 +33,10 @@ impl CodexCredentialRepository {
         &self.store
     }
 
-    /// 持久化成功 RT exchange 的 token，同时保留既有账号身份投影。
+    /// 持久化成功 RT exchange 的 token，同时保留既有账号身份投影
     ///
     /// Refresh endpoint 已经是这次 AT/RT 轮换的授权边界；这里仅以 revision
-    /// CAS 保护并发写入，不重新验证新 access token 的身份声明。
+    /// CAS 保护并发写入，不重新验证新 access token 的身份声明
     pub async fn rotate_refreshed_oauth_secret(
         &self,
         account: &ProviderAccount,
@@ -49,7 +49,7 @@ impl CodexCredentialRepository {
             .load_credential(account.id(), account.revision())
             .await?;
         // load_credential 已校验凭据版本；套餐与额度可在 RT exchange 期间更新，
-        // 这些运行时事实变化不能使已成功轮换的 token 丢失。
+        // 这些运行时事实变化不能使已成功轮换的 token 丢失
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)?;
         let oauth = data
             .oauth_mut()
@@ -84,7 +84,7 @@ impl CodexCredentialRepository {
         cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 
-    /// 以相同 credential 原子推进刷新退避及本次上游错误事实。
+    /// 以相同 credential 原子推进刷新退避及本次上游错误事实
     pub async fn defer_refresh(
         &self,
         account: &ProviderAccount,
@@ -226,7 +226,7 @@ impl CodexCredentialRepository {
         .await
     }
 
-    /// 写入凭据事实及其稳定错误原因；额度事实不经过此入口。
+    /// 写入凭据事实及其稳定错误原因；额度事实不经过此入口
     pub async fn apply_state_with_reason(
         &self,
         account: &ProviderAccount,
@@ -302,7 +302,7 @@ impl From<CodexCredentialDataError> for CredentialRepositoryError {
     }
 }
 
-/// OAuth 未取得用户身份时保留未验证状态；通用账号层不解释认证类型。
+/// OAuth 未取得用户身份时保留未验证状态；通用账号层不解释认证类型
 fn oauth_account_state(account: &ProviderAccount, observed: CredentialState) -> CredentialState {
     if account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_OAUTH
         && account.upstream_user_id().is_none()

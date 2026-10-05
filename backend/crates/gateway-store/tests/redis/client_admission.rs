@@ -1,3 +1,5 @@
+//! 验证 Redis 准入的参数边界、并发容量与租约恢复
+
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -35,6 +37,111 @@ fn client_admission_restore_rejects_duplicate_request_ids() {
         running_requests: Vec::new(),
     };
     assert!(recovery.validate().is_err());
+}
+
+#[tokio::test]
+async fn maintained_admission_survives_initial_ttl_without_consuming_rpm() {
+    use gateway_core::{
+        engine::{ModelRequestId, admission::ClientAdmissionPort},
+        lifecycle::CancellationToken,
+        policy::ClientApiKeyId,
+    };
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let first = admission_request("req_long", "key-long", Duration::from_secs(1));
+    assert_eq!(
+        repository.admit_client_request(&first).await.unwrap(),
+        ClientAdmissionDecision::Granted
+    );
+    let cancellation = CancellationToken::new();
+    let renewal = repository.maintain(
+        &ClientApiKeyId::new("key-long").unwrap(),
+        &ModelRequestId::new("req_long").unwrap(),
+        Default::default(),
+        cancellation.clone(),
+    );
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    assert!(!cancellation.is_cancelled());
+    let keys = namespace_keys(&mut connection, &namespace).await;
+    assert_eq!(
+        zcard(&mut connection, key_with_suffix(&keys, ":requests")).await,
+        1
+    );
+    let mut next = admission_request("request-next", "key-long", Duration::from_secs(1));
+    next.limits.max_concurrency = 1;
+    assert_eq!(
+        repository.admit_client_request(&next).await.unwrap(),
+        ClientAdmissionDecision::Rejected(ClientAdmissionRejection::ConcurrencyLimited)
+    );
+    drop(renewal);
+    repository
+        .release_client_request("key-long", "req_long")
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.admit_client_request(&next).await.unwrap(),
+        ClientAdmissionDecision::Granted
+    );
+    delete_namespace_keys(&mut connection, &namespace).await;
+}
+
+#[tokio::test]
+async fn explicit_deadline_releases_capacity_without_becoming_cancellation() {
+    use gateway_core::{
+        engine::{ModelRequestId, admission::ClientAdmissionPort},
+        lifecycle::CancellationToken,
+        policy::ClientApiKeyId,
+    };
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let first = admission_request("req_timed", "key-timed", Duration::from_secs(1));
+    assert_eq!(
+        repository.admit_client_request(&first).await.unwrap(),
+        ClientAdmissionDecision::Granted
+    );
+    let cancellation = CancellationToken::new();
+    let renewal = repository.maintain(
+        &ClientApiKeyId::new("key-timed").unwrap(),
+        &ModelRequestId::new("req_timed").unwrap(),
+        (std::time::SystemTime::now() + Duration::from_millis(300)).into(),
+        cancellation.clone(),
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!cancellation.is_cancelled());
+    let mut next = admission_request("req_next", "key-timed", Duration::from_secs(1));
+    next.limits.max_concurrency = 1;
+    assert_eq!(
+        repository.admit_client_request(&next).await.unwrap(),
+        ClientAdmissionDecision::Granted
+    );
+    drop(renewal);
+    delete_namespace_keys(&mut connection, &namespace).await;
+}
+
+#[tokio::test]
+async fn maintaining_missing_admission_cancels_without_recreating_it() {
+    use gateway_core::{
+        engine::{ModelRequestId, admission::ClientAdmissionPort},
+        lifecycle::CancellationToken,
+        policy::ClientApiKeyId,
+    };
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let cancellation = CancellationToken::new();
+    let renewal = repository.maintain(
+        &ClientApiKeyId::new("key-lost").unwrap(),
+        &ModelRequestId::new("req_lost").unwrap(),
+        Default::default(),
+        cancellation.clone(),
+    );
+    tokio::time::timeout(Duration::from_secs(2), cancellation.cancelled())
+        .await
+        .expect("lost admission cancels the request");
+    assert!(namespace_keys(&mut connection, &namespace).await.is_empty());
+    drop(renewal);
 }
 
 #[tokio::test]

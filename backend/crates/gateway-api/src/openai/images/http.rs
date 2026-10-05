@@ -1,4 +1,4 @@
-//! Codex Images 非流式 HTTP adapter。
+//! Codex Images 非流式 HTTP adapter
 
 use std::net::SocketAddr;
 
@@ -28,7 +28,7 @@ use crate::openai::{
 const OPENAI_PROTOCOL: &str = "openai";
 const IMAGE_TURN_ID_CONTEXT_KEY: &str = "image_turn_id";
 
-/// `POST /v1/images/generations`。
+/// `POST /v1/images/generations`
 pub(crate) async fn image_generations(
     State(state): State<ApiState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -46,7 +46,7 @@ pub(crate) async fn image_generations(
     .await
 }
 
-/// `POST /v1/images/edits`。
+/// `POST /v1/images/edits`
 pub(crate) async fn image_edits(
     State(state): State<ApiState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,

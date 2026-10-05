@@ -1,3 +1,5 @@
+//! 验证管理观测查询的时间范围、健康投影与运行态聚合
+
 use std::{
     str::FromStr as _,
     sync::{
@@ -15,12 +17,13 @@ use gateway_admin::{
     model::{
         MutationContext, PageSize, Revision,
         observability::{
-            AccountPoolMetrics, AttemptMetrics, CostCoverage, CurrencyCost, DashboardObservation,
-            DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
-            DiagnosticsObservation, Granularity, HealthStatus, LatencyPercentiles, OpsErrorPage,
-            OpsErrorQuery, PercentileMilliseconds, RequestMetricPoint, RequestMetrics, TimeRange,
-            TrendKind, UsageBilling, UsageCalculatedBillingFact, UsageDetail, UsageFilter,
-            UsageListRecord, UsageOverview, UsagePage, UsageQuery,
+            AccountPoolMetrics, AttemptMetrics, CostCoverage, CurrencyCost, DashboardAccountUsage,
+            DashboardObservation, DashboardRuntimeSlots, DiagnosticDimension,
+            DiagnosticObservation, DiagnosticsObservation, Granularity, HealthStatus,
+            LatencyPercentiles, OpsErrorPage, OpsErrorQuery, PercentileMilliseconds,
+            RequestMetricPoint, RequestMetrics, TimeRange, TrendKind, UsageBilling,
+            UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageListRecord, UsageOverview,
+            UsagePage, UsageQuery,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -719,6 +722,65 @@ async fn usage_insights_should_reject_partial_costs_when_billing_stream_fails() 
     );
 }
 
+#[tokio::test]
+async fn dashboard_should_preserve_provider_plan_names() {
+    let now = Utc::now();
+    let range = observation_range(now);
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    let plans = [("prolite", "ProLite"), ("pro", "Pro"), ("promax", "ProMax")];
+    *store.account_usage.lock().unwrap() = plans
+        .iter()
+        .map(|(plan, _)| DashboardAccountUsage {
+            account_id: format!("account-{plan}"),
+            provider_kind: "openai".to_owned(),
+            authentication_kind: "oauth".to_owned(),
+            name: (*plan).to_owned(),
+            email: None,
+            plan_type: Some((*plan).to_owned()),
+            plan_type_display: None,
+            request_count: 0,
+            success_count: 0,
+            input_tokens: None,
+            output_tokens: None,
+            cached_tokens: None,
+            cache_write_tokens: None,
+            reasoning_tokens: None,
+            image_input_tokens: None,
+            image_output_tokens: None,
+            image_request_count: 0,
+            image_request_failed_count: 0,
+            total_tokens: None,
+            cost_coverage: CostCoverage::default(),
+            costs: Vec::new(),
+            last_used_at: None,
+            request_buckets: Vec::new(),
+            quota_used_percent: None,
+            quota_window: None,
+            models: Vec::new(),
+        })
+        .collect();
+    let provider =
+        super::accounts::FakeProviderAdmin::new("openai", Arc::new(Mutex::new(Vec::new())));
+    let services = super::AdminHarness::new()
+        .observability(store)
+        .settings(Arc::new(FixtureSettingsStore {
+            max_concurrent_per_account: 1,
+        }))
+        .provider(provider)
+        .build()
+        .await;
+    let result = services
+        .observability()
+        .dashboard_summary(range, TrendKind::Usage)
+        .await
+        .unwrap();
+    assert_eq!(result.observation.account_usage.len(), plans.len());
+    for (account, (raw, display)) in result.observation.account_usage.iter().zip(plans) {
+        assert_eq!(account.plan_type.as_deref(), Some(raw));
+        assert_eq!(account.plan_type_display.as_deref(), Some(display));
+    }
+}
+
 struct FixtureObservabilityStore {
     trend: Mutex<Vec<RequestMetricPoint>>,
     overview: Mutex<UsageOverview>,
@@ -729,6 +791,7 @@ struct FixtureObservabilityStore {
     summary_observed_at: Mutex<Option<DateTime<Utc>>>,
     slots_observed_at: Mutex<Option<DateTime<Utc>>>,
     usage_records: Mutex<Vec<UsageListRecord>>,
+    account_usage: Mutex<Vec<DashboardAccountUsage>>,
     dashboard_delay: Mutex<StdDuration>,
     dashboard_summary_calls: AtomicUsize,
 }
@@ -750,6 +813,7 @@ impl FixtureObservabilityStore {
             summary_observed_at: Mutex::new(None),
             slots_observed_at: Mutex::new(None),
             usage_records: Mutex::new(Vec::new()),
+            account_usage: Mutex::new(Vec::new()),
             dashboard_delay: Mutex::new(StdDuration::ZERO),
             dashboard_summary_calls: AtomicUsize::new(0),
         }
@@ -822,7 +886,7 @@ impl ObservabilityStore for FixtureObservabilityStore {
             totals: Default::default(),
             provider_accounts: AccountPoolMetrics::default(),
             trend: self.trend.lock().expect("trend").clone(),
-            account_usage: Vec::new(),
+            account_usage: self.account_usage.lock().expect("account usage").clone(),
             recent_requests: Vec::new(),
         })
     }

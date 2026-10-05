@@ -1,3 +1,5 @@
+//! 将插件包校验适配为制品元数据、图标与兼容性查询端口
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,7 +69,7 @@ impl PluginPackageInspector for PackageInspector {
             .map_err(|_| AdminError::unavailable("插件包校验繁忙，请稍后重试"))?;
         let limits = self.limits;
         tokio::task::spawn_blocking(move || {
-            // blocking 任务取消后仍可能运行，容量引用由任务持有直到真正结束。
+            // blocking 任务取消后仍可能运行，容量引用由任务持有直到真正结束
             let _permit = permit;
             let package = ValidatedPackage::read(archive, expected_sha256.as_deref(), limits)
                 .map_err(inspection_error)?;

@@ -1,4 +1,4 @@
-//! Codex 非流式 JSON 上游透明传输。
+//! Codex 非流式 JSON 上游透明传输
 
 use std::time::Instant;
 
@@ -19,7 +19,7 @@ use super::{
 };
 
 impl CodexBackendClient {
-    /// 向固定 Provider 端点发送一次原始 JSON；请求与成功响应正文均不经过 serde。
+    /// 向固定 Provider 端点发送一次原始 JSON；请求与成功响应正文均不经过 serde
     pub(crate) async fn post_raw_json(
         &self,
         endpoint_path: &'static str,
@@ -27,7 +27,7 @@ impl CodexBackendClient {
         image_turn_id: Option<&str>,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendJsonResponse> {
-        // Provider 端点以 Codex 路径标识；API Key 在自己的 API 前缀下使用对应相对路径。
+        // Provider 端点以 Codex 路径标识；API Key 在自己的 API 前缀下使用对应相对路径
         let endpoint_path = if self.protocol == super::client::OpenAiUpstreamProtocol::ResponsesApi
         {
             endpoint_path

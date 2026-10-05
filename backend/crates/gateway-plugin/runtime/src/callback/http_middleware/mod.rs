@@ -1,4 +1,4 @@
-//! HTTP 边界只搬运类型化请求、响应与正文资源；业务默认实现仍由 API 持有。
+//! HTTP 边界只搬运类型化请求、响应与正文资源；业务默认实现仍由 API 持有
 
 pub(crate) mod resources;
 mod websocket;
@@ -107,7 +107,7 @@ impl Invocation {
         request: wire::Request,
         payload: Vec<u8>,
     ) -> Result<RpcReply, PluginFault> {
-        // 先校验完整 HTTP 值，再消费唯一续体；请求 extensions（包括连接升级）原样搬运。
+        // 先校验完整 HTTP 值，再消费唯一续体；请求 extensions（包括连接升级）原样搬运
         let method = request.method.parse().map_err(|_| invalid())?;
         let uri = request.uri.parse().map_err(|_| invalid())?;
         let headers = headers(request.headers)?;

@@ -3,7 +3,8 @@ import type { PluginArtifactMetadata, PluginCapabilityBinding, PluginInstance } 
 import { BaseScrollbar } from '@codex-proxy/ui'
 import { ChevronDown } from '@lucide/vue'
 import { computed } from 'vue'
-import { PLUGIN_OBSERVER_EVENT_LABELS, PLUGIN_REQUEST_STAGES, pluginCapabilityForContribution, pluginCapabilityLabel } from '../utils/model'
+import { PLUGIN_OBSERVER_EVENT_LABELS, PLUGIN_REQUEST_STAGES } from '../constants'
+import { pluginCapabilityForContribution, pluginCapabilityLabel } from '../utils/model'
 
 const props = defineProps<{
   instance: Pick<PluginInstance, 'name' | 'bindings'> & { id?: string }

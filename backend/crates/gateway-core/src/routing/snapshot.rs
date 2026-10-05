@@ -1,4 +1,4 @@
-//! RuntimeSnapshot 事实、编译、原子发布与版本收敛规则。
+//! RuntimeSnapshot 事实、编译、原子发布与版本收敛规则
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
@@ -26,7 +26,7 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 
 type ModelCatalogAccounts = BTreeMap<ProviderKind, BTreeMap<String, BTreeSet<ProviderAccountId>>>;
 
-/// Store 读取到的一个启用 Client API Key 策略事实。
+/// Store 读取到的一个启用 Client API Key 策略事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotClientPolicyFacts {
     request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
@@ -63,7 +63,7 @@ impl SnapshotClientPolicyFacts {
     }
 }
 
-/// Store 读取到的账号分组事实。
+/// Store 读取到的账号分组事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAccountGroupFacts {
     fast_mode: FastMode,
@@ -90,7 +90,7 @@ impl SnapshotAccountGroupFacts {
     }
 }
 
-/// Store 读取到的账号及其固有 Provider 事实。
+/// Store 读取到的账号及其固有 Provider 事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotProviderAccountFacts {
     account_id: ProviderAccountId,
@@ -117,7 +117,7 @@ impl SnapshotProviderAccountFacts {
     }
 }
 
-/// Store 读取到的一条分组成员关系。
+/// Store 读取到的一条分组成员关系
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAccountGroupMemberFacts {
     group_id: AccountGroupId,
@@ -134,7 +134,7 @@ impl SnapshotAccountGroupMemberFacts {
     }
 }
 
-/// 一次一致性读取产生的全部 RuntimeSnapshot 持久事实。
+/// 一次一致性读取产生的全部 RuntimeSnapshot 持久事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotFacts {
     config_revision: ConfigRevision,
@@ -179,7 +179,7 @@ impl SnapshotFacts {
     }
 }
 
-/// 不泄漏持久化实现细节的 Snapshot store 错误。
+/// 不泄漏持久化实现细节的 Snapshot store 错误
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("runtime snapshot store is unavailable")]
 pub struct SnapshotStoreError;
@@ -191,14 +191,14 @@ impl SnapshotStoreError {
     }
 }
 
-/// RuntimeSnapshot 持久事实的数据库中立端口。
+/// RuntimeSnapshot 持久事实的数据库中立端口
 pub trait SnapshotStorePort: Send + Sync {
     fn load_snapshot_facts(&self) -> BoxFuture<'_, Result<SnapshotFacts, SnapshotStoreError>>;
 
     fn current_config_revision(&self) -> BoxFuture<'_, Result<ConfigRevision, SnapshotStoreError>>;
 }
 
-/// 快照未发布时可安全记录的稳定错误。
+/// 快照未发布时可安全记录的稳定错误
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum RuntimeSnapshotCompileError {
     #[error("runtime extensions could not be prepared")]
@@ -215,7 +215,7 @@ pub enum RuntimeSnapshotCompileError {
     CatalogChanged,
 }
 
-/// Store 一致性事实与 Provider 实时目录的唯一快照编译器。
+/// Store 一致性事实与 Provider 实时目录的唯一快照编译器
 #[derive(Clone)]
 pub struct RuntimeSnapshotCompiler {
     store: Arc<dyn SnapshotStorePort>,
@@ -255,12 +255,12 @@ impl RuntimeSnapshotCompiler {
         self.catalogs.catalog_generations()
     }
 
-    /// 读取一个 revision，并为已注册 Provider 查询实时模型目录。
+    /// 读取一个 revision，并为已注册 Provider 查询实时模型目录
     pub async fn compile(&self) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
         self.compile_inner(None).await
     }
 
-    /// 配置提交复用同一扩展集合的已发布目录，目录留待对账刷新。
+    /// 配置提交复用同一扩展集合的已发布目录，目录留待对账刷新
     pub(crate) async fn compile_with_cached_catalog(
         &self,
         previous: &RuntimeSnapshot,
@@ -272,7 +272,7 @@ impl RuntimeSnapshotCompiler {
         &self,
         previous: Option<&RuntimeSnapshot>,
     ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
-        // 同一配置 revision 的重试复用扩展候选，保留插件策略的发布一致性。
+        // 同一配置 revision 的重试复用扩展候选，保留插件策略的发布一致性
         let mut prepared_extensions: Option<(
             ConfigRevision,
             crate::runtime::extensions::ExtensionSetReference,
@@ -349,7 +349,7 @@ async fn compile_runtime_snapshot(
     provider_kinds: Vec<ProviderKind>,
     previous: Option<&RuntimeSnapshot>,
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
-    // 只有成功取得的完整目录能证明模型缺项；发现型目录和查询失败均交由上游验证。
+    // 只有成功取得的完整目录能证明模型缺项；发现型目录和查询失败均交由上游验证
     let mut provider_models = Vec::new();
     let mut catalog_accounts = BTreeMap::new();
     let mut exhaustive_provider_catalogs = BTreeSet::new();
@@ -419,7 +419,7 @@ async fn compile_runtime_snapshot(
     for account in facts.provider_accounts {
         let provider_kind = ProviderKind::new(account.provider_kind)
             .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
-        // 账号归属独立于当前执行器集合；Provider 撤下后仍保留账号和分组，路由只选已注册执行器。
+        // 账号归属独立于当前执行器集合；Provider 撤下后仍保留账号和分组，路由只选已注册执行器
         if accounts
             .insert(
                 account.account_id.clone(),
@@ -473,7 +473,7 @@ async fn compile_runtime_snapshot(
                 let group = groups
                     .get(&group_id)
                     .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
-                // 禁用分组仅影响选号；Key 仍绑定其 Fast 策略。
+                // 禁用分组仅影响选号；Key 仍绑定其 Fast 策略
                 fast_mode = fast_mode.merge(group.fast_mode);
                 bound_groups.push(RoutingGroupSnapshot::new(
                     group.id.clone(),
@@ -520,7 +520,7 @@ async fn compile_runtime_snapshot(
     })
 }
 
-/// 数据面使用的不可变配置快照。
+/// 数据面使用的不可变配置快照
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
     settings: Arc<CompiledSettings>,
@@ -538,7 +538,7 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
-    /// 设置事实与编译结果共享快照寿命，读取时不从执行策略反向拼装。
+    /// 设置事实与编译结果共享快照寿命，读取时不从执行策略反向拼装
     #[must_use]
     pub fn settings(&self) -> &SettingsValues {
         &self.settings.values
@@ -554,7 +554,7 @@ impl RuntimeSnapshot {
         self.with_settings(values).map(Arc::new)
     }
 
-    /// 只替换设置及其编译结果，目录、发布代次和身份事实共享原快照。
+    /// 只替换设置及其编译结果，目录、发布代次和身份事实共享原快照
     pub fn with_settings(
         &self,
         values: &SettingsValues,
@@ -642,7 +642,7 @@ impl RuntimeSnapshot {
         self.settings.client_queue_policy
     }
 
-    /// 校验 Provider、实时模型目录和 Client API Key，并构建快照。
+    /// 校验 Provider、实时模型目录和 Client API Key，并构建快照
     pub fn new(
         revision: ConfigRevision,
         values: SettingsValues,
@@ -771,7 +771,7 @@ impl RuntimeSnapshot {
         self.revision
     }
 
-    /// 返回目录发现模型与设置映射的并集，仅用于公开模型展示。
+    /// 返回目录发现模型与设置映射的并集，仅用于公开模型展示
     #[must_use]
     pub fn public_models_for_provider(&self, provider: &ProviderKind) -> Vec<PublicModelId> {
         if !self.providers.contains(provider) {
@@ -801,7 +801,7 @@ impl RuntimeSnapshot {
         models.into_iter().collect()
     }
 
-    /// 返回 Provider 已明确声明画像的公开模型；没有画像时不猜测 Provider 语义。
+    /// 返回 Provider 已明确声明画像的公开模型；没有画像时不猜测 Provider 语义
     #[must_use]
     pub fn public_model_profiles_for_provider(
         &self,
@@ -852,7 +852,7 @@ impl RuntimeSnapshot {
             .collect()
     }
 
-    /// 合并冻结账号范围内实际存在 Provider 的公开模型。
+    /// 合并冻结账号范围内实际存在 Provider 的公开模型
     #[must_use]
     pub fn public_models_for_scope(&self, scope: &FrozenAccountScope) -> Vec<PublicModelId> {
         scope
@@ -868,7 +868,7 @@ impl RuntimeSnapshot {
             .collect()
     }
 
-    /// 合并冻结账号范围内实际存在 Provider 的公开模型画像。
+    /// 合并冻结账号范围内实际存在 Provider 的公开模型画像
     #[must_use]
     pub fn public_model_profiles_for_scope(
         &self,
@@ -891,7 +891,7 @@ impl RuntimeSnapshot {
             .collect()
     }
 
-    /// 完整目录按映射后的模型判定；发现型或不可用目录不作为能力白名单。
+    /// 完整目录按映射后的模型判定；发现型或不可用目录不作为能力白名单
     #[must_use]
     pub fn contains_public_model_for_provider(
         &self,
@@ -983,7 +983,7 @@ impl RuntimeSnapshot {
         self.client_policies.get(id)
     }
 
-    /// 返回当前 Key 范围、本代次注册表与请求路由限制共同允许的 Provider。
+    /// 返回当前 Key 范围、本代次注册表与请求路由限制共同允许的 Provider
     #[must_use]
     pub fn available_providers(
         &self,
@@ -1020,7 +1020,7 @@ impl RuntimeSnapshot {
         self.plan_inner(public_model, operation, account_scope, context, true)
     }
 
-    /// 管理探测已固定目标账号，不使用数据面 Key 的账号模型政策裁决探测资格。
+    /// 管理探测已固定目标账号，不使用数据面 Key 的账号模型政策裁决探测资格
     pub(crate) fn plan_diagnostic(
         &self,
         public_model: &PublicModelId,
@@ -1087,7 +1087,7 @@ impl RuntimeSnapshot {
                 UpstreamModelId::from_client_wire(mapped_model)
             }
             .map_err(|_| RoutingError::InvalidIdentifier)?;
-            // 强制 Provider 路由也不能扩大 Key 授权；管理诊断的目标账号由探测入口固定。
+            // 强制 Provider 路由也不能扩大 Key 授权；管理诊断的目标账号由探测入口固定
             if enforce_account_model_policy
                 && !account_scope.allows_provider_model(provider, upstream_model.as_str())
             {
@@ -1121,7 +1121,7 @@ impl RuntimeSnapshot {
         }
 
         if candidates.is_empty() {
-            // 模型存在性必须包含被请求路由限制排除的 Provider；目录未知时不能断言模型不存在。
+            // 模型存在性必须包含被请求路由限制排除的 Provider；目录未知时不能断言模型不存在
             let mut scoped_providers = providers.intersection(&self.providers).peekable();
             if scoped_providers.peek().is_some()
                 && scoped_providers.all(|provider| {
@@ -1152,10 +1152,11 @@ impl RuntimeSnapshot {
         })
     }
 
-    /// 为 Provider 自有端点冻结请求计划。
+    /// 为 Provider 自有端点冻结请求计划
     ///
-    /// 端点 adapter 已经确定 Provider。非模型 HTTP 端点不读取文本模型目录；Token
-    /// 计数端点仍必须匹配冻结账号范围及该模型声明的计数能力。
+    /// 端点 adapter 已经确定 Provider
+    /// 非模型 HTTP 端点不读取文本模型目录；Token
+    /// 计数端点仍必须匹配冻结账号范围及该模型声明的计数能力
     pub fn plan_provider_endpoint(
         &self,
         provider: &ProviderKind,
@@ -1180,8 +1181,13 @@ impl RuntimeSnapshot {
                 provider: provider.as_str().to_owned(),
             });
         }
-        let model_binding_valid =
-            matches!(operation.kind(), OperationKind::CountTokens) == upstream_model.is_some();
+        // CountTokens 必须绑定目标模型；其余端点可选携带上游模型——Provider 原生
+        // 端点（如 live 语音）借此让账号模型权限参与路由检查。
+        let model_binding_valid = if matches!(operation.kind(), OperationKind::CountTokens) {
+            upstream_model.is_some()
+        } else {
+            true
+        };
         let model_capable = upstream_model.is_none_or(|model| {
             match self
                 .provider_models

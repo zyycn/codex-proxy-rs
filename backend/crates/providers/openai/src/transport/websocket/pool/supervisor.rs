@@ -1,4 +1,4 @@
-//! WebSocket 连接池维护、驱逐与关闭监督。
+//! WebSocket 连接池维护、驱逐与关闭监督
 
 use std::sync::{
     Arc,
@@ -15,7 +15,7 @@ use super::state::{
 };
 
 impl CodexWebSocketPool {
-    /// 驱逐指定账号的全部 slot，取消 opening，并阻止 busy 连接回收到池中。
+    /// 驱逐指定账号的全部 slot，取消 opening，并阻止 busy 连接回收到池中
     pub async fn evict_account(&self, account_id: &str) {
         let mut idle_connections = Vec::new();
         {
@@ -44,7 +44,7 @@ impl CodexWebSocketPool {
         close_pooled_connections(idle_connections).await;
     }
 
-    /// 关闭连接池，取消受管任务、关闭 idle 连接，并让后续 acquire 直接绕过池。
+    /// 关闭连接池，取消受管任务、关闭 idle 连接，并让后续 acquire 直接绕过池
     pub async fn shutdown(&self) {
         self.tasks.close();
         self.shutdown.cancel();
@@ -71,11 +71,11 @@ impl CodexWebSocketPool {
         self.tasks.wait().await;
     }
 
-    /// 维护池 slot：清扫已死亡或超龄的 idle 连接，以及异常残留的 Busy reservation。
+    /// 维护池 slot：清扫已死亡或超龄的 idle 连接，以及异常残留的 Busy reservation
     ///
     /// 保活（ping/pong）与失活检测已下沉到每条连接的 pump 任务内部，此处不再做
     /// 同步 ping 探活，只负责把「后台已标记 closed」或「超过 max_age」的 idle
-    /// 连接从池中摘除并关闭，避免它们占用 slot。
+    /// 连接从池中摘除并关闭，避免它们占用 slot
     pub async fn maintain_idle_connections(&self) {
         let close = self.take_expired_slots().await;
         close_pooled_connections(close).await;
@@ -136,7 +136,7 @@ impl CodexWebSocketPool {
         }));
     }
 
-    /// 返回连接池是否已进入关闭状态。
+    /// 返回连接池是否已进入关闭状态
     pub async fn is_shutdown(&self) -> bool {
         self.lock_state().shutting_down
     }

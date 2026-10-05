@@ -1,3 +1,5 @@
+//! 验证插件路由和账号调度决策使用显式且严格的线协议值
+
 use gateway_plugin_sdk::call::policy::{
     AccountScheduleCandidate, AccountScheduleDecision, AccountScheduleRequest, ModelRouteDecision,
     ModelRouteRequest, PolicyHeader,

@@ -1,8 +1,10 @@
+//! 插件会话握手与单次调用上下文，绑定制品、配置及调用身份
+
 use serde::{Deserialize, Serialize};
 
 use crate::{Contributions, Stage};
 
-/// 一次会话绑定不可变制品与配置；重启必须使用新的 incarnation。
+/// 一次会话绑定不可变制品与配置；重启必须使用新的 incarnation
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Handshake {
@@ -30,7 +32,7 @@ impl std::fmt::Debug for Handshake {
     }
 }
 
-/// 仅携带安全关联信息；这些标识本身不是宿主资源的访问凭证。
+/// 仅携带安全关联信息；这些标识本身不是宿主资源的访问凭证
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CallContext {
@@ -40,7 +42,7 @@ pub struct CallContext {
     pub incarnation: String,
     pub stage: Stage,
     pub timeout_ms: u64,
-    /// 首个流式结果返回后由资源 owner 控制取消，不再沿用初始调用期限。
+    /// 首个流式结果返回后由资源 owner 控制取消，不再沿用初始调用期限
     pub resource_stream: bool,
     pub resource_scope_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

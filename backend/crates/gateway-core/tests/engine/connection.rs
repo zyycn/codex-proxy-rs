@@ -1,3 +1,5 @@
+//! 验证各传输共享建连恢复预算，且不限制成功建连后的执行
+
 use gateway_core::engine::connection::ConnectionBudget;
 
 #[test]

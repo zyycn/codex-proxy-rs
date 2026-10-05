@@ -1,3 +1,5 @@
+//! 插件管理请求的目标解析、身份授权与运行时分派
+
 use std::sync::Arc;
 
 use gateway_core::runtime::{RuntimeSnapshotHandle, extensions::ExtensionSetReference};
@@ -16,7 +18,7 @@ use crate::{
     ports::{plugin_management::PluginManagement, plugins::PluginStore},
 };
 
-/// 菜单来自发布视图；每次业务动作复核持久实例，旧页面不能继续使用已停用或换版的目标。
+/// 菜单来自发布视图；每次业务动作复核持久实例，旧页面不能继续使用已停用或换版的目标
 pub struct PluginManagementService {
     runtime: Arc<dyn PluginManagement>,
     store: Arc<dyn PluginStore>,
@@ -24,7 +26,7 @@ pub struct PluginManagementService {
 }
 
 impl PluginManagementService {
-    /// 页面发起模型请求前复核持久目标与当前发布代次；长响应可重复调用以收敛撤销。
+    /// 页面发起模型请求前复核持久目标与当前发布代次；长响应可重复调用以收敛撤销
     pub async fn validate_target(&self, target: &PluginManagementTarget) -> Result<(), AdminError> {
         let reference = self.authorize(target).await?;
         self.runtime.validate_target(&reference, target).await

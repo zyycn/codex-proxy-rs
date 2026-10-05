@@ -1,3 +1,5 @@
+//! 插件命令行参数定义校验、输入解析与帮助文本生成
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use gateway_admin::model::AdminError;
@@ -173,6 +175,6 @@ fn description(value: &str) -> bool {
 }
 
 fn invalid_argument() -> AdminError {
-    // 不回显用户参数；即使未声明 sensitive，参数也可能包含凭据。
+    // 不回显用户参数；即使未声明 sensitive，参数也可能包含凭据
     AdminError::invalid("插件命令参数未知、重复、缺值或类型不正确；请查看 --help")
 }

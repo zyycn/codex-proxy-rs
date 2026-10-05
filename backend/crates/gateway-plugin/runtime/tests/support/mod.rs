@@ -1,3 +1,5 @@
+//! 插件运行时测试共用的制品、实例与端口构造辅助
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write as _,
@@ -160,8 +162,8 @@ fn package_with_identity_and_state(
     };
     let manifest = serde_json::to_vec(&manifest).unwrap();
     let key = hex::encode(Sha256::digest(&manifest));
-    // nextest 的用例分属独立进程；清单含 worker 摘要，只共享不可变归档。
-    // 私有解包目录、会话、进程及 Store 仍由每个用例独立创建。
+    // nextest 的用例分属独立进程；清单含 worker 摘要，只共享不可变归档
+    // 私有解包目录、会话、进程及 Store 仍由每个用例独立创建
     let cache = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("plugin-packages-v1");
     std::fs::create_dir_all(&cache).unwrap();
     let path = cache.join(format!("{key}.tar.gz"));
@@ -182,7 +184,7 @@ fn package_with_identity_and_state(
         ("plugin.json".into(), manifest),
         ("bin/worker".into(), worker.to_vec()),
     ]));
-    // 原子发布避免构建中断后其他进程读到不完整的压缩包，文件锁随进程退出释放。
+    // 原子发布避免构建中断后其他进程读到不完整的压缩包，文件锁随进程退出释放
     let mut temporary = tempfile::NamedTempFile::new_in(cache).unwrap();
     temporary.write_all(&package).unwrap();
     temporary.persist(path).unwrap();

@@ -1,3 +1,5 @@
+//! 插件包校验、检查、兼容性与解压资源的公共入口
+
 mod cache;
 mod compatibility;
 mod icon;

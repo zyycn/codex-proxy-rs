@@ -3,10 +3,10 @@ import type { OutboundProxyAccount, OutboundProxyRecord } from '@/api'
 import { BaseConfirmModal, BaseIconButton, BaseInput, BaseModal, BaseTable, BaseTablePagination, defineTableColumns } from '@codex-proxy/ui'
 import { Search, Unlink } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
+import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
-import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
-import { stablePresetVisualToneClass } from '@/views/accounts/utils/visualTone'
+import { stablePresetVisualToneClass } from '@/utils/color'
 import { useProxyAccounts } from '../composables/useProxyAccounts'
 
 const props = defineProps<{

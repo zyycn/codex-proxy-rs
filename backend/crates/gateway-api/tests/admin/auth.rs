@@ -1,3 +1,5 @@
+//! 验证管理员认证请求脱敏、会话操作与审计失败处理
+
 use gateway_admin::model::auth::{LoginCommand, LoginError};
 use gateway_api::auth::LoginRequest;
 use serde_json::json;

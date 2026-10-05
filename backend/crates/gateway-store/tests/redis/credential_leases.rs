@@ -1,3 +1,5 @@
+//! 验证账号调度租约的容量、续租、失效与释放
+
 use std::time::Duration;
 
 use gateway_store::redis::{
@@ -29,6 +31,98 @@ fn only_account_scheduling_leases_allow_unlimited_concurrency() {
         request.scope = scope;
         assert!(request.validate().is_err());
     }
+}
+
+#[tokio::test]
+async fn maintained_scheduling_lease_survives_initial_ttl_and_releases_on_drop() {
+    let Some((repository, _, _)) = repository().await else {
+        return;
+    };
+    let mut request = scheduling_request("acct_long_request", "worker-long", 1, Duration::ZERO);
+    request.ttl = Duration::from_secs(1);
+    let lease = acquired(
+        repository
+            .try_acquire_bounded_lease(&request)
+            .await
+            .unwrap(),
+    );
+    let cancellation = gateway_core::lifecycle::CancellationToken::new();
+    let lease = lease
+        .maintain(Default::default(), cancellation.clone())
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    assert!(!cancellation.is_cancelled());
+    assert!(matches!(
+        repository
+            .try_acquire_bounded_lease(&request)
+            .await
+            .unwrap(),
+        CredentialBoundedLeaseAcquisition::Busy { .. }
+    ));
+    drop(lease);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let CredentialBoundedLeaseAcquisition::Acquired(replacement) = repository
+                .try_acquire_bounded_lease(&request)
+                .await
+                .unwrap()
+            {
+                replacement.release().await.unwrap();
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("dropped request releases its slot");
+}
+
+#[tokio::test]
+async fn maintained_scheduling_lease_does_not_resurrect_a_lost_slot() {
+    let Some((repository, _, _)) = repository().await else {
+        return;
+    };
+    let request = scheduling_request("acct_lost_request", "worker-lost", 1, Duration::ZERO);
+    let lease = acquired(
+        repository
+            .try_acquire_bounded_lease(&request)
+            .await
+            .unwrap(),
+    );
+    let grant = lease.grant().unwrap().clone();
+    let raw = CredentialLeaseRequest {
+        scope: request.scope,
+        resource_id: request.resource_id.clone(),
+        owner_id: request.owner_id.clone(),
+        ttl: request.ttl,
+    };
+    repository
+        .release_credential_lease(&raw, &grant)
+        .await
+        .unwrap();
+    let cancellation = gateway_core::lifecycle::CancellationToken::new();
+    let lease = lease
+        .maintain(Default::default(), cancellation.clone())
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), cancellation.cancelled())
+        .await
+        .expect("lost lease cancels the request");
+    let replacement = acquired(
+        repository
+            .try_acquire_bounded_lease(&request)
+            .await
+            .unwrap(),
+    );
+    drop(lease);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(matches!(
+        repository
+            .try_acquire_bounded_lease(&request)
+            .await
+            .unwrap(),
+        CredentialBoundedLeaseAcquisition::Busy { .. }
+    ));
+    replacement.release().await.unwrap();
 }
 
 #[tokio::test]

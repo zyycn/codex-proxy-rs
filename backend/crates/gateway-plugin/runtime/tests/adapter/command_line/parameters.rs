@@ -1,3 +1,5 @@
+//! 验证插件命令参数的类型、默认值、数值边界与非法声明拒绝
+
 use serde_json::{Value, json};
 
 #[tokio::test]

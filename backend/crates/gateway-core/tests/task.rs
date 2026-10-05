@@ -1,3 +1,5 @@
+//! 验证后台任务的调度时长、身份与租约配置约束
+
 use std::num::NonZeroU64;
 use std::time::Duration;
 

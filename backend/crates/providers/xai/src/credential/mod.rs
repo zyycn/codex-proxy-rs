@@ -1,4 +1,4 @@
-//! Grok Build OAuth credential 与运行时 selector。
+//! Grok Build OAuth credential 与运行时 selector
 
 mod authorization_code;
 mod catalog;

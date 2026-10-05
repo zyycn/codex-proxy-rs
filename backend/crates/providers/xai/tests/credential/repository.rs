@@ -1,3 +1,5 @@
+//! 验证 xAI 凭据仓储的请求身份约束与安全生命周期投影
+
 use std::sync::Arc;
 
 use gateway_core::account::ProviderAccountStore;

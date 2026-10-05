@@ -1,4 +1,4 @@
-//! OpenAI Responses HTTP 与 SSE adapter。
+//! OpenAI Responses HTTP 与 SSE adapter
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -55,12 +55,12 @@ use super::{
 const OPENAI_PROTOCOL: &str = "openai";
 const AUTHORIZATION_RECHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-/// 管理页面模型桥在等待首帧和交付响应期间复核不可变插件目标。
+/// 管理页面模型桥在等待首帧和交付响应期间复核不可变插件目标
 pub(crate) trait ResponseAuthorization: Send + Sync {
     fn authorize(&self) -> BoxFuture<'_, Result<(), GatewayError>>;
 }
 
-/// `POST /v1/responses`。
+/// `POST /v1/responses`
 pub(crate) async fn responses(
     State(state): State<ApiState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -104,7 +104,7 @@ pub(crate) async fn responses(
     .await
 }
 
-/// 两个 Responses 入口共享解码后的 HTTP 交付上下文，不携带认证策略。
+/// 两个 Responses 入口共享解码后的 HTTP 交付上下文，不携带认证策略
 pub(crate) struct ResponsesHttpRequest {
     pub peer_address: Option<SocketAddr>,
     pub ingress_id: Option<Extension<tower_http::request_id::RequestId>>,
@@ -140,7 +140,7 @@ pub(crate) async fn execute_prepared_responses(
     let started_request_id = Arc::new(OnceLock::new());
     let terminal_request_id = Arc::clone(&started_request_id);
     let mut middleware_headers = headers.clone();
-    // 中间件正文已经由入口按上限解压；传输编码和旧长度不能与改写后的正文混用。
+    // 中间件正文已经由入口按上限解压；传输编码和旧长度不能与改写后的正文混用
     middleware_headers.remove(CONTENT_ENCODING);
     middleware_headers.remove(CONTENT_LENGTH);
     let input = RequestInput {
@@ -363,7 +363,7 @@ impl MiddlewareBody for AuthorizedResponseBody {
     }
 }
 
-/// 从 socket 与标准转发头提取旧 Usage 页面使用的诊断事实。
+/// 从 socket 与标准转发头提取旧 Usage 页面使用的诊断事实
 pub(crate) fn request_client_context(
     headers: &HeaderMap,
     peer_address: Option<SocketAddr>,
@@ -503,7 +503,7 @@ async fn streaming_execution_middleware_response(
     ))
 }
 
-/// 直接驱动测试 session 的非流式交付；生产入口通过同一 MiddlewareResponse 路径。
+/// 直接驱动测试 session 的非流式交付；生产入口通过同一 MiddlewareResponse 路径
 pub async fn collect_execution_response(session: Box<dyn ExecutionSession>) -> Response {
     match buffered_execution_middleware_response(session, ResponseValidationFacts::default()).await
     {
@@ -512,7 +512,7 @@ pub async fn collect_execution_response(session: Box<dyn ExecutionSession>) -> R
     }
 }
 
-/// 直接驱动测试 session 的 SSE 交付；生产入口通过同一 MiddlewareResponse 路径。
+/// 直接驱动测试 session 的 SSE 交付；生产入口通过同一 MiddlewareResponse 路径
 pub async fn stream_execution_response(
     session: Box<dyn ExecutionSession>,
     connection_guard: Option<Box<dyn ConnectionGuard>>,
@@ -535,7 +535,7 @@ fn validated_middleware_response(
     streaming: bool,
 ) -> MiddlewareResponse {
     if !(200..300).contains(&response.status_code()) {
-        // 非成功响应沿用通用 SinglePayload 边界，不能套用成功 Responses 终态状态机。
+        // 非成功响应沿用通用 SinglePayload 边界，不能套用成功 Responses 终态状态机
         return response;
     }
     let (protocol, status, headers, body, envelope) = response.into_parts();
@@ -726,7 +726,7 @@ fn engine_error_response_with_headers(
                 .map(move |value| (name, value))
         })
         .collect::<Vec<_>>();
-    // 失败后仍须交付已采集的 turn state；只隔离 opening 身份，不丢弃会话状态。
+    // 失败后仍须交付已采集的 turn state；只隔离 opening 身份，不丢弃会话状态
     let mut response = apply_provider_response_headers(response, response_headers);
     response.headers_mut().remove("x-request-id");
     response.headers_mut().remove("x-oai-request-id");
@@ -837,7 +837,7 @@ impl StreamingExecutionBody {
         while self.pending.is_empty() && !self.output_finished {
             if self.awaiting_terminal_eof {
                 if !self.committed {
-                    // 终态 wire 不能在首字节前被中间件整批移除。
+                    // 终态 wire 不能在首字节前被中间件整批移除
                     return Err(MiddlewareError::InvalidState);
                 }
                 self.verify_terminal_eof().await?;
@@ -907,7 +907,7 @@ impl StreamingExecutionBody {
                 }
                 continue;
             }
-            // 已提交的流在确认 Core 终结后才交付成功终态，不能先输出 completed 再报结算失败。
+            // 已提交的流在确认 Core 终结后才交付成功终态，不能先输出 completed 再报结算失败
             if self.awaiting_terminal_eof && self.committed {
                 self.verify_terminal_eof().await?;
                 encoded.push_back(done_frame());

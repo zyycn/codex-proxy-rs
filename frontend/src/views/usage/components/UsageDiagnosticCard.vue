@@ -5,10 +5,8 @@ import { BaseCard, BaseEmpty, BaseSegmented, BaseTable, defineTableColumns } fro
 
 import { CornerDownRight } from '@lucide/vue'
 import { computed } from 'vue'
-import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/format'
-import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
-
-import { formatDuration, formatPercent, formatUsd } from '../utils/format'
+import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import { formatLocalizedCompactNumber as formatCompactNumber, formatDuration, formatPercent, formatUsd } from '@/utils/format'
 
 type Diagnostics = Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
 

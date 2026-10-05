@@ -1,3 +1,5 @@
+//! 将运行设置校验并编译为账号选择、并发排队与请求限制策略
+
 use std::time::Duration;
 
 use super::{InvalidSettings, SettingsValues};
@@ -7,7 +9,7 @@ use crate::{
     policy::{CodexClientMinVersions, CodexClientVersion},
 };
 
-// 持久快照和请求覆盖共用同一编译结果，避免参数校验与派生规则分叉。
+// 持久快照和请求覆盖共用同一编译结果，避免参数校验与派生规则分叉
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledSettings {
     pub(crate) values: SettingsValues,

@@ -1,3 +1,5 @@
+//! 验证请求级运维事件必须关联明确的执行尝试
+
 use chrono::Utc;
 use gateway_store::postgres::{OpsEvent, OpsEventLevel};
 

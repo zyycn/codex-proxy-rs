@@ -1,4 +1,4 @@
-//! 插件包校验与线协议适配；安装选择和制品接受事实由 Admin/Store 拥有。
+//! 插件包校验与线协议适配；安装选择和制品接受事实由 Admin/Store 拥有
 
 mod adapter;
 mod callback;

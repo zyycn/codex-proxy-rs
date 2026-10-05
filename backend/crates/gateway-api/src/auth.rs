@@ -1,4 +1,4 @@
-//! 控制面统一登录、会话恢复与退出；身份由认证用例返回。
+//! 控制面统一登录、会话恢复与退出；身份由认证用例返回
 
 use std::{fmt, net::SocketAddr};
 
@@ -21,7 +21,7 @@ use crate::{
     session_cookie,
 };
 
-/// 控制面 HTTP adapter 消费同一组用例；权限由各入口服务端校验。
+/// 控制面 HTTP adapter 消费同一组用例；权限由各入口服务端校验
 pub trait SessionState {
     fn admin_services(&self) -> &AdminServices;
 }

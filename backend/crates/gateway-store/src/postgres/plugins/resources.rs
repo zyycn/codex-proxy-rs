@@ -1,4 +1,4 @@
-//! 插件资源写入在同一事务中验证当前实例、访问域与资源归属。
+//! 插件资源写入在同一事务中验证当前实例、访问域与资源归属
 
 use super::super::{
     account_groups::insert_account_group_in_transaction,
@@ -268,7 +268,7 @@ impl PluginResourceStore for PgPluginStore {
         .await
         .map_err(|_| unavailable())?
         .ok_or_else(denied)?;
-        // 已删除账号自然不再需要加入；外键负责与并发账号删除保持一致。
+        // 已删除账号自然不再需要加入；外键负责与并发账号删除保持一致
         let added = sqlx::query(
             "insert into account_group_accounts(account_group_id,provider_account_id,created_at)
              select $1,id,now() from provider_accounts where id=any($2::text[])

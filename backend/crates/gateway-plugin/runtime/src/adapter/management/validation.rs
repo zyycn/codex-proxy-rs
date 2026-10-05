@@ -1,3 +1,5 @@
+//! 校验插件管理声明的路由路径与资源内容类型
+
 use std::collections::BTreeSet;
 
 use gateway_admin::model::AdminError;

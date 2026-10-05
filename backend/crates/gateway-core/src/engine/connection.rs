@@ -1,4 +1,4 @@
-//! 请求内共享的发送前连接预算；不投影账号或 Provider 健康状态。
+//! 请求内共享的发送前连接预算；不投影账号或 Provider 健康状态
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -13,7 +13,7 @@ struct State {
     completed: bool,
 }
 
-/// 换账号、换传输和内部重试共享同一预算；成功发送后的协议恢复不重置它。
+/// 换账号、换传输和内部重试共享同一预算；成功发送后的协议恢复不重置它
 #[derive(Debug, Clone)]
 pub struct ConnectionBudget {
     state: Arc<Mutex<State>>,
@@ -31,7 +31,7 @@ impl Default for ConnectionBudget {
 pub struct ConnectionBudgetExhausted;
 
 impl ConnectionBudget {
-    /// 绑定单调时钟；克隆预算继续共享状态和时钟，不依赖具体异步运行时。
+    /// 绑定单调时钟；克隆预算继续共享状态和时钟，不依赖具体异步运行时
     #[must_use]
     pub fn with_clock(now: fn() -> Instant) -> Self {
         Self {
@@ -40,8 +40,8 @@ impl ConnectionBudget {
         }
     }
 
-    /// 在可能建立连接前预约一次 opening；返回本次连接允许使用的剩余时间。
-    /// HTTP 连接池隐藏了是否冷建连，因此一次 HTTP opening 也计入次数上限。
+    /// 在可能建立连接前预约一次 opening；返回本次连接允许使用的剩余时间
+    /// HTTP 连接池隐藏了是否冷建连，因此一次 HTTP opening 也计入次数上限
     pub fn begin(&self) -> Result<Option<Duration>, ConnectionBudgetExhausted> {
         let mut state = self
             .state
@@ -60,7 +60,7 @@ impl ConnectionBudget {
         Ok(Some(remaining))
     }
 
-    /// 仅连接成功不足以清零；确认业务发送后退出新增的 NotSent 恢复策略。
+    /// 仅连接成功不足以清零；确认业务发送后退出新增的 NotSent 恢复策略
     pub fn complete(&self) {
         self.state
             .lock()
@@ -96,7 +96,7 @@ impl ConnectionBudget {
                 }))
     }
 
-    /// 首次建连后的等待也计入恢复窗口；不缩短已发送请求的生成时间。
+    /// 首次建连后的等待也计入恢复窗口；不缩短已发送请求的生成时间
     #[must_use]
     pub fn startup_remaining(&self) -> Option<Duration> {
         let state = self
@@ -111,7 +111,7 @@ impl ConnectionBudget {
         })
     }
 
-    /// 额外 attempt 最多三个；抖动由请求 ID 派生，重试不依赖运行时随机源。
+    /// 额外 attempt 最多三个；抖动由请求 ID 派生，重试不依赖运行时随机源
     #[must_use]
     pub fn retry_delay(&self, retries: u32, request_id: &str) -> Option<Duration> {
         if retries >= MAX_OPENINGS - 1 {

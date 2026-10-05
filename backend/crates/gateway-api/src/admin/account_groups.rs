@@ -1,4 +1,4 @@
-//! Account group HTTP wire and fixed routes.
+//! 账号分组管理的 HTTP 数据合同与固定路由
 
 use crate::auth::SessionState;
 
@@ -235,7 +235,7 @@ impl From<(AccountGroupMutation, crate::time::TimePresenter)> for AccountGroupMu
     }
 }
 
-/// Construct all fixed account-group management routes.
+/// 构造账号分组管理的固定路由
 pub fn router<S>() -> Router<S>
 where
     S: SessionState + Clone + Send + Sync + 'static,

@@ -3,8 +3,8 @@ import type { useAccountConnectionTest } from '../composables/useAccountConnecti
 
 import { BaseButton, BaseIconButton, BaseModal, BaseSelect } from '@codex-proxy/ui'
 import { RefreshCw } from '@lucide/vue'
+import AccountStatusBadge from './account-status-badge/index.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
-import AccountStatusBadge from './AccountStatusBadge/index.vue'
 
 type ConnectionTest = ReturnType<typeof useAccountConnectionTest>
 

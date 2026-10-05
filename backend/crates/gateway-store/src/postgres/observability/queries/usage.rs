@@ -1,4 +1,4 @@
-//! Usage 明细、诊断与过滤查询族。
+//! Usage 明细、诊断与过滤查询族
 
 use super::super::*;
 use serde_json::Value;

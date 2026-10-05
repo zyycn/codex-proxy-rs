@@ -1,7 +1,7 @@
-//! 快照/窗口解析、聚合、O(1) 滚动与调度信号。
+//! 快照/窗口解析、聚合、O(1) 滚动与调度信号
 //!
 //! Provider raw quota JSON 的唯一解析者：产出 [`CodexAccountQuotaSnapshot`]
-//! 供服务编排层消费；`limit_reached` 是快照级事实，不能只从子窗口反推。
+//! 供服务编排层消费；`limit_reached` 是快照级事实，不能只从子窗口反推
 
 use std::time::{Duration, SystemTime};
 
@@ -45,7 +45,7 @@ pub struct CodexQuotaWindow {
     key: String,
     source: String,
     account_wide: bool,
-    /// 上游提供的限流桶名称（`metered_feature`/`limit_name`/`limitId`）；用于非核心桶的展示前缀。
+    /// 上游提供的限流桶名称（`metered_feature`/`limit_name`/`limitId`）；用于非核心桶的展示前缀
     limit_name: Option<String>,
     kind: CodexQuotaWindowKind,
     role: CodexQuotaWindowRole,
@@ -66,7 +66,7 @@ impl CodexQuotaWindow {
         &self.source
     }
 
-    /// 该窗口是否覆盖账号全部 Codex 请求，可使用账号级本地用量聚合。
+    /// 该窗口是否覆盖账号全部 Codex 请求，可使用账号级本地用量聚合
     #[must_use]
     pub const fn is_account_wide(&self) -> bool {
         self.account_wide
@@ -102,7 +102,7 @@ impl CodexQuotaWindow {
         self.reset_at
     }
 
-    /// 该窗口是否已触顶（`limit_reached` 或 `used_percent >= 100`）。
+    /// 该窗口是否已触顶（`limit_reached` 或 `used_percent >= 100`）
     #[must_use]
     pub fn limit_reached(&self) -> bool {
         self.limit_reached || self.used_percent.is_some_and(|used| used >= 100.0)
@@ -138,13 +138,13 @@ impl CodexAccountQuotaSnapshot {
         self.observed_at
     }
 
-    /// 上游额度响应明确返回的套餐；缺失时不推断账号级别。
+    /// 上游额度响应明确返回的套餐；缺失时不推断账号级别
     #[must_use]
     pub fn plan_type(&self) -> Option<&str> {
         self.plan_type.as_deref()
     }
 
-    /// 点数只用于展示，不改变套餐限额或账号可用性。
+    /// 点数只用于展示，不改变套餐限额或账号可用性
     #[must_use]
     pub fn credits(&self) -> Option<&CreditsSnapshot> {
         self.credits.as_ref()
@@ -165,14 +165,14 @@ impl CodexAccountQuotaSnapshot {
         self.quota
     }
 
-    /// 将已持久化的规范化事实覆盖到 raw JSON 展示快照上。
+    /// 将已持久化的规范化事实覆盖到 raw JSON 展示快照上
     #[must_use]
     pub(crate) const fn with_quota_state(mut self, quota: QuotaState) -> Self {
         self.quota = quota;
         self
     }
 
-    /// 只更新展示与调度使用的最后成功查询时间，保留既有额度事实。
+    /// 只更新展示与调度使用的最后成功查询时间，保留既有额度事实
     #[must_use]
     pub(crate) const fn with_observed_at(mut self, observed_at: SystemTime) -> Self {
         self.observed_at = observed_at;
@@ -209,7 +209,7 @@ fn parse_codex_quota_object(
     for limit in canonical_rate_limits(object)? {
         aggregate.observe_rate_limit(limit.rate_limit)?;
     }
-    // credits / spend_control 只证明文档结构已识别，不参与账号级访问结论。
+    // credits / spend_control 只证明文档结构已识别，不参与账号级访问结论
     if let Some(spend_control) = object.get("spend_control") {
         aggregate.observe_metadata_object(spend_control, "reached")?;
     }
@@ -246,13 +246,13 @@ pub(crate) fn quota_snapshot_from_observation(
         &Value::Object(quota.expose_to_provider().clone()),
     )
     .ok()?;
-    // 归一化列是持久化权威事实；raw JSON 只负责 Provider 展示结构。
+    // 归一化列是持久化权威事实；raw JSON 只负责 Provider 展示结构
     snapshot.quota = observation.state;
     Some(snapshot)
 }
 
-/// 缓存定期重读持久化事实，额度窗口独立按 reset 到期。
-/// 正常账号依赖被动同步，空闲超过缓存 TTL 不能把尚未重置的额度抹成未知。
+/// 缓存定期重读持久化事实，额度窗口独立按 reset 到期
+/// 正常账号依赖被动同步，空闲超过缓存 TTL 不能把尚未重置的额度抹成未知
 pub(crate) fn quota_projection_ttl(snapshot: &CodexAccountQuotaSnapshot) -> Option<Duration> {
     let now = SystemTime::now();
     snapshot
@@ -260,7 +260,7 @@ pub(crate) fn quota_projection_ttl(snapshot: &CodexAccountQuotaSnapshot) -> Opti
         .iter()
         .filter_map(|window| quota_window_ttl(window, snapshot.observed_at(), now))
         .min()
-        // 新观测即使没有有效窗口，也要用“未知”替换此前缓存的排序信号。
+        // 新观测即使没有有效窗口，也要用“未知”替换此前缓存的排序信号
         .or_else(|| {
             QUOTA_SCHEDULING_TTL.checked_sub(
                 now.duration_since(snapshot.observed_at())
@@ -278,14 +278,14 @@ fn quota_window_ttl(
 ) -> Option<Duration> {
     let ttl = match window.reset_at() {
         Some(reset_at) => SystemTime::from(reset_at).duration_since(now).ok()?,
-        // 没有明确窗口边界时，不能无限延长旧观测的有效期。
+        // 没有明确窗口边界时，不能无限延长旧观测的有效期
         None => QUOTA_SCHEDULING_TTL
             .checked_sub(now.duration_since(observed_at).unwrap_or(Duration::ZERO))?,
     };
     (!ttl.is_zero()).then_some(ttl)
 }
 
-/// 从快照窗口派生容量排序事实；额度访问资格由 `QuotaState` 统一判断。
+/// 从快照窗口派生容量排序事实；额度访问资格由 `QuotaState` 统一判断
 pub(crate) fn scheduling_signals_from_snapshot(
     snapshot: &CodexAccountQuotaSnapshot,
 ) -> Option<AccountQuotaSignals> {
@@ -374,7 +374,7 @@ fn quota_source_order(source: &str) -> u8 {
     }
 }
 
-/// 默认 `codex` 桶是唯一可改变账号额度访问结论的 quota 响应字段。
+/// 默认 `codex` 桶是唯一可改变账号额度访问结论的 quota 响应字段
 fn authoritative_quota_state(
     usage: &Map<String, Value>,
     windows: &[CodexQuotaWindow],
@@ -439,7 +439,7 @@ fn authoritative_quota_state(
     Ok(QuotaState::observed_unknown(observed_at))
 }
 
-/// 一个规范化后的限流桶，source 是上游的稳定 limit_id。
+/// 一个规范化后的限流桶，source 是上游的稳定 limit_id
 struct CanonicalRateLimit<'a> {
     source: String,
     account_wide: bool,
@@ -534,8 +534,9 @@ fn parse_rate_limit_windows(
             .transpose()?;
         let limit_reached = optional_bool(window, "limit_reached")?.unwrap_or(false);
         let kind = quota_window_kind(window_seconds);
-        // primary/secondary 是协议槽位，不代表固定周期。窗口身份使用上游
-        // limit_id 和实际时长，5h/周/月分类只参与展示。
+        // primary/secondary 是协议槽位，不代表固定周期
+        // 窗口身份使用上游
+        // limit_id 和实际时长，5h/周/月分类只参与展示
         let key = match window_seconds {
             Some(seconds) => format!("{source}:{seconds}s"),
             None => format!("{source}:{name}"),
@@ -553,7 +554,7 @@ fn parse_rate_limit_windows(
             limit_reached,
         });
     }
-    // 同桶同周期无法仅凭时长区分，保留官方槽位，避免合并两个独立限制。
+    // 同桶同周期无法仅凭时长区分，保留官方槽位，避免合并两个独立限制
     if let [primary, secondary] = &mut output[start..]
         && primary.key == secondary.key
     {

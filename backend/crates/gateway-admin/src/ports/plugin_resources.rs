@@ -1,4 +1,4 @@
-//! 插件自有资源的管理入口与原子持久化端口。
+//! 插件自有资源的管理入口与原子持久化端口
 
 use super::store::AdminStoreResult;
 use crate::model::{

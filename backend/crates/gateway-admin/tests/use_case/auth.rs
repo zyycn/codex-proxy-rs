@@ -1,3 +1,5 @@
+//! 验证管理员认证、密码变更、会话绑定与限流行为
+
 use std::{collections::BTreeMap, sync::Mutex};
 
 use async_trait::async_trait;

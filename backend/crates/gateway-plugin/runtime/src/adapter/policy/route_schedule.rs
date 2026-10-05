@@ -1,3 +1,5 @@
+//! 插件模型路由与账号调度调用，以及请求事实的线协议投影
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};

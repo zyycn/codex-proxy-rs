@@ -1,3 +1,5 @@
+//! 验证上游诊断的容量错误分类、请求标识与响应事实提取
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use provider_openai::transport::CodexUpstreamDiagnostics;
 use provider_openai::transport::diagnostics::{
@@ -18,6 +20,27 @@ fn classify(status: u16, body: &str) -> CodexFailureCategory {
         CodexUpstreamSendPhase::AfterPayload,
     )
     .category()
+}
+
+#[test]
+fn flex_capacity_rejection_should_be_terminal_even_before_payload_send() {
+    for phase in [
+        CodexUpstreamSendPhase::BeforePayload,
+        CodexUpstreamSendPhase::AfterPayload,
+    ] {
+        let failure = CodexUpstreamFailure::from_response(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"type":"resource_unavailable","code":"flex_unavailable","message":"Flex capacity unavailable."}}"#,
+            Some(300),
+            &CodexUpstreamDiagnostics::default(),
+            None,
+            &[],
+            &[],
+            phase,
+        );
+        assert_eq!(failure.category(), CodexFailureCategory::FlexUnavailable);
+        assert!(!failure.replay_is_safe());
+    }
 }
 
 #[test]

@@ -1,3 +1,5 @@
+//! 插件管理页面资源读取、请求转发与响应解码
+
 mod callback;
 mod registration;
 mod validation;
@@ -114,7 +116,7 @@ impl ManagementEntry {
     }
 }
 
-// 管理 API 与公开回调共用类型和正文预算校验，完整响应头由 HTTP 入口解码。
+// 管理 API 与公开回调共用类型和正文预算校验，完整响应头由 HTTP 入口解码
 fn decode_response(
     reply: RpcReply,
     allowed_content_types: &[String],

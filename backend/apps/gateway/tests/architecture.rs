@@ -1,4 +1,4 @@
-//! docs/architecture.md 依赖 DAG 与生产源码纪律的 workspace 级机器校验。
+//! docs/architecture.md 依赖 DAG 与生产源码纪律的 workspace 级机器校验
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -8,7 +8,7 @@ use std::{
 
 use syn::{Item, visit::Visit};
 
-/// workspace 成员冻结清单;新增 crate 必须同步扩展本文件的依赖规则。
+/// workspace 成员冻结清单;新增 crate 必须同步扩展本文件的依赖规则
 pub(super) const WORKSPACE_MEMBERS: &[&str] = &[
     "apps/gateway",
     "apps/plugin-cli",
@@ -178,7 +178,7 @@ fn gateway_admin_stays_free_of_infrastructure_dependencies() {
     );
 }
 
-/// workspace 包名到冻结成员路径的映射。
+/// workspace 包名到冻结成员路径的映射
 const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
     ("codex-proxy-rs", "apps/gateway"),
     ("codex-proxy-plugin-cli", "apps/plugin-cli"),
@@ -194,7 +194,7 @@ const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
     ("provider-xai", "crates/providers/xai"),
 ];
 
-/// SDK 与 Adapter/provider 根门面的稳定合同模块；任何增减都必须同步完成边界审计。
+/// SDK 与 Adapter/provider 根门面的稳定合同模块；任何增减都必须同步完成边界审计
 const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
     ("crates/gateway-plugin/sdk", &["call", "client"]),
     ("crates/gateway-plugin/runtime", &[]),
@@ -224,13 +224,13 @@ const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
     ("crates/providers/xai", &["credential", "transport"]),
 ];
 
-/// 不对应单一生产模块、而是校验 crate/workspace 整体契约的根级测试场景。
+/// 不对应单一生产模块、而是校验 crate/workspace 整体契约的根级测试场景
 const ROOT_TEST_SCENARIOS: &[(&str, &[&str])] = &[
     ("apps/gateway", &["architecture"]),
     ("crates/gateway-api", &["architecture"]),
 ];
 
-/// 冻结的 workspace 内部运行时依赖边；新增/删除任何边都必须同步本表。
+/// 冻结的 workspace 内部运行时依赖边；新增/删除任何边都必须同步本表
 const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
     ("codex-proxy-plugin-cli", "gateway-plugin-sdk"),
     ("codex-proxy-rs", "gateway-admin"),
@@ -475,7 +475,7 @@ fn integration_tests_mirror_production_module_tree() {
     }
 }
 
-/// Rust 子进程 fixture 是 Cargo 的独立 crate 根，不能要求它由测试模块再次声明。
+/// Rust 子进程 fixture 是 Cargo 的独立 crate 根，不能要求它由测试模块再次声明
 fn test_source_roots() -> BTreeMap<PathBuf, Vec<String>> {
     let metadata = cargo_metadata_json();
     let mut roots = BTreeMap::<PathBuf, Vec<String>>::new();
@@ -529,7 +529,7 @@ fn root_test_scenario_allowed(member: &str, module: &Path) -> bool {
 
 fn assert_module_tree(root: &Path, crate_roots: &[&str]) {
     let files = super::rust_files(root);
-    // 同一父模块的所有子文件复用一次语法解析，计数仍保留重复声明检查。
+    // 同一父模块的所有子文件复用一次语法解析，计数仍保留重复声明检查
     let mut declarations = BTreeMap::<PathBuf, BTreeMap<String, usize>>::new();
     for relative in &files {
         if crate_roots
@@ -649,7 +649,7 @@ fn cargo_metadata_json() -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("parse cargo metadata")
 }
 
-/// 提取成员 `[dependencies]` 段内声明的依赖名;段落以下一个 `[` 表头结束。
+/// 提取成员 `[dependencies]` 段内声明的依赖名;段落以下一个 `[` 表头结束
 fn dependency_names(member: &str) -> Vec<String> {
     let manifest = fs::read_to_string(backend_root().join(member).join("Cargo.toml"))
         .expect("read member manifest");

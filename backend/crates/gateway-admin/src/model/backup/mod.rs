@@ -1,8 +1,10 @@
-//! S3 备份领域模型、状态机与稳定错误。
+//! S3 备份领域模型、状态机与稳定错误
 //!
-//! 领域类型只携带事实，不承载基础设施细节。Secret 使用 [`secrecy::SecretString`]，
-//! 全流程不实现 `Serialize`，避免被错误地写入 wire 或日志。管理员身份等审计事实
-//! 只存在于 `admin_audit_events`，本模型不重复保存。
+//! 领域类型只携带事实，不承载基础设施细节
+//! Secret 使用 [`secrecy::SecretString`]，
+//! 全流程不实现 `Serialize`，避免被错误地写入 wire 或日志
+//! 管理员身份等审计事实
+//! 只存在于 `admin_audit_events`，本模型不重复保存
 
 use std::fmt;
 
@@ -12,7 +14,7 @@ use uuid::Uuid;
 
 use super::PageSize;
 
-/// 备份触发来源。
+/// 备份触发来源
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackupTriggerKind {
     Manual,
@@ -20,7 +22,7 @@ pub enum BackupTriggerKind {
 }
 
 impl BackupTriggerKind {
-    /// 稳定持久化值。
+    /// 稳定持久化值
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -29,7 +31,7 @@ impl BackupTriggerKind {
         }
     }
 
-    /// 解析持久化值。
+    /// 解析持久化值
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
@@ -46,11 +48,11 @@ impl fmt::Display for BackupTriggerKind {
     }
 }
 
-/// 备份任务状态机（六状态）。
+/// 备份任务状态机（六状态）
 ///
 /// 迁移 `backup_records_lifecycle_ck` 与字段空值语义共同定义合法持久化行；
-/// [`Self::allows_transition_to`] 只约束领域内的显式状态迁移，两层都必须满足。
-/// 删除成功后记录行被硬删除，因此不存在 `deleted` 终态。
+/// [`Self::allows_transition_to`] 只约束领域内的显式状态迁移，两层都必须满足
+/// 删除成功后记录行被硬删除，因此不存在 `deleted` 终态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BackupStatus {
     Queued,
@@ -62,7 +64,7 @@ pub enum BackupStatus {
 }
 
 impl BackupStatus {
-    /// 稳定持久化值。
+    /// 稳定持久化值
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -75,7 +77,7 @@ impl BackupStatus {
         }
     }
 
-    /// 解析持久化值。
+    /// 解析持久化值
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
@@ -89,19 +91,19 @@ impl BackupStatus {
         }
     }
 
-    /// 该状态是否消耗全局活跃名额。
+    /// 该状态是否消耗全局活跃名额
     #[must_use]
     pub const fn is_active(self) -> bool {
         matches!(self, Self::Queued | Self::Dumping | Self::Uploading)
     }
 
-    /// 该状态是否允许进入删除流程。
+    /// 该状态是否允许进入删除流程
     #[must_use]
     pub const fn can_be_deleted(self) -> bool {
         matches!(self, Self::Completed | Self::Failed)
     }
 
-    /// 领域内允许的显式迁移。
+    /// 领域内允许的显式迁移
     #[must_use]
     pub fn allows_transition_to(self, target: BackupStatus) -> bool {
         matches!(
@@ -124,7 +126,7 @@ impl fmt::Display for BackupStatus {
     }
 }
 
-/// 已通过领域状态机校验的显式迁移。
+/// 已通过领域状态机校验的显式迁移
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackupStatusTransition {
     from: BackupStatus,
@@ -132,26 +134,26 @@ pub struct BackupStatusTransition {
 }
 
 impl BackupStatusTransition {
-    /// 校验并构造显式迁移；非法状态边返回 `None`。
+    /// 校验并构造显式迁移；非法状态边返回 `None`
     #[must_use]
     pub fn try_new(from: BackupStatus, to: BackupStatus) -> Option<Self> {
         from.allows_transition_to(to).then_some(Self { from, to })
     }
 
-    /// 迁移要求的当前状态。
+    /// 迁移要求的当前状态
     #[must_use]
     pub const fn from(self) -> BackupStatus {
         self.from
     }
 
-    /// 迁移完成后的目标状态。
+    /// 迁移完成后的目标状态
     #[must_use]
     pub const fn to(self) -> BackupStatus {
         self.to
     }
 }
 
-/// S3 存储配置更新命令；`secret_access_key` 为 `None` 表示保留旧值。
+/// S3 存储配置更新命令；`secret_access_key` 为 `None` 表示保留旧值
 #[derive(Clone)]
 pub struct UpdateBackupStorageCommand {
     pub endpoint: String,
@@ -178,7 +180,7 @@ impl fmt::Debug for UpdateBackupStorageCommand {
     }
 }
 
-/// 调度配置更新命令。
+/// 调度配置更新命令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateBackupScheduleCommand {
     pub schedule_enabled: bool,
@@ -187,9 +189,9 @@ pub struct UpdateBackupScheduleCommand {
     pub retention_count: u32,
 }
 
-/// 完整保存的备份设置（含 Secret）。
+/// 完整保存的备份设置（含 Secret）
 ///
-/// 只从仓储读取；不实现 `Serialize`，防止 Secret 进入 wire 或日志。
+/// 只从仓储读取；不实现 `Serialize`，防止 Secret 进入 wire 或日志
 #[derive(Clone)]
 pub struct BackupSettings {
     pub storage_revision: u64,
@@ -202,7 +204,7 @@ pub struct BackupSettings {
     pub force_path_style: bool,
     pub schedule_enabled: bool,
     pub cron_expression: Option<String>,
-    /// 记录持久化游标采用的时区，由服务端维护，不是独立部署设置。
+    /// 记录持久化游标采用的时区，由服务端维护，不是独立部署设置
     pub schedule_timezone: Option<String>,
     pub retention_days: u32,
     pub retention_count: u32,
@@ -236,7 +238,7 @@ impl fmt::Debug for BackupSettings {
 }
 
 impl BackupSettings {
-    /// S3 存储配置是否完整（bucket/region/密钥/前缀齐全）。
+    /// S3 存储配置是否完整（bucket/region/密钥/前缀齐全）
     #[must_use]
     pub fn storage_configured(&self) -> bool {
         self.endpoint.is_some()
@@ -247,14 +249,14 @@ impl BackupSettings {
             && self.prefix.is_some()
     }
 
-    /// 探测是否已对当前 revision 成功；`last_verified_at` 非空即表示当前配置已通过探针。
+    /// 探测是否已对当前 revision 成功；`last_verified_at` 非空即表示当前配置已通过探针
     #[must_use]
     pub fn storage_verified(&self) -> bool {
         self.last_verified_at.is_some()
     }
 }
 
-/// 已经校验并可用于对象存储操作的存储配置快照。
+/// 已经校验并可用于对象存储操作的存储配置快照
 #[derive(Clone)]
 pub struct BackupStorageConfig {
     pub storage_revision: u64,
@@ -284,7 +286,7 @@ impl fmt::Debug for BackupStorageConfig {
 }
 
 impl BackupStorageConfig {
-    /// 从完整设置推导对象存储配置；设置不完整时返回 `None`。
+    /// 从完整设置推导对象存储配置；设置不完整时返回 `None`
     #[must_use]
     pub fn from_settings(settings: &BackupSettings) -> Option<Self> {
         Some(Self {
@@ -300,7 +302,7 @@ impl BackupStorageConfig {
     }
 }
 
-/// 一条备份记录。
+/// 一条备份记录
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupRecord {
     pub id: String,
@@ -315,13 +317,13 @@ pub struct BackupRecord {
     pub error_message: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
-    /// 创建时确定的过期时间；手工和计划备份均可设置，到期自动清理。
+    /// 创建时确定的过期时间；手工和计划备份均可设置，到期自动清理
     pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-/// 备份记录分页查询。
+/// 备份记录分页查询
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupRecordListQuery {
     pub page: u32,
@@ -330,7 +332,7 @@ pub struct BackupRecordListQuery {
     pub trigger: Option<BackupTriggerKind>,
 }
 
-/// 备份记录分页结果。
+/// 备份记录分页结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupRecordPage {
     pub items: Vec<BackupRecord>,
@@ -340,7 +342,7 @@ pub struct BackupRecordPage {
 }
 
 impl BackupRecordPage {
-    /// 计算总页数；空集合视为一页。
+    /// 计算总页数；空集合视为一页
     #[must_use]
     pub fn total_pages(&self) -> u32 {
         let size = u64::from(self.page_size.get());
@@ -352,7 +354,7 @@ impl BackupRecordPage {
     }
 }
 
-/// 创建备份任务的持久化数据；id 与对象 key 由领域生成。
+/// 创建备份任务的持久化数据；id 与对象 key 由领域生成
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupRecordSeed {
     pub id: String,
@@ -362,7 +364,7 @@ pub struct BackupRecordSeed {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-/// 连接测试结果；只携带稳定阶段与脱敏消息。
+/// 连接测试结果；只携带稳定阶段与脱敏消息
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionTestResult {
     pub ok: bool,
@@ -371,7 +373,7 @@ pub struct ConnectionTestResult {
     pub message: String,
 }
 
-/// 对象存储探测阶段。
+/// 对象存储探测阶段
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionTestStage {
     PutObject,
@@ -381,7 +383,7 @@ pub enum ConnectionTestStage {
 }
 
 impl ConnectionTestStage {
-    /// 稳定 wire 值。
+    /// 稳定 wire 值
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -393,10 +395,10 @@ impl ConnectionTestStage {
     }
 }
 
-/// 上传到对象存储并期望远端校验的归档 metadata。
+/// 上传到对象存储并期望远端校验的归档 metadata
 ///
 /// `size_bytes` 在上传时不写入 metadata，但 `HeadObject` 会返回远端大小，
-/// 用于与本地归档校验一致。
+/// 用于与本地归档校验一致
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupObjectMetadata {
     pub backup_id: String,
@@ -406,7 +408,7 @@ pub struct BackupObjectMetadata {
 }
 
 impl BackupObjectMetadata {
-    /// 构造上传 metadata。
+    /// 构造上传 metadata
     #[must_use]
     pub const fn new(
         backup_id: String,
@@ -423,7 +425,7 @@ impl BackupObjectMetadata {
     }
 }
 
-/// 短时下载地址结果。
+/// 短时下载地址结果
 #[derive(Clone, PartialEq, Eq)]
 pub struct DownloadUrlResult {
     pub url: String,
@@ -442,10 +444,11 @@ impl fmt::Debug for DownloadUrlResult {
     }
 }
 
-/// 备份基础设施错误：只携带稳定错误码与脱敏消息。
+/// 备份基础设施错误：只携带稳定错误码与脱敏消息
 ///
 /// 该类型不构成第二套 kind 枚举；`gateway-admin` 边界统一映射为既有
-/// `AdminErrorKind`。稳定 `error_code` 同时用于任务记录、日志与 UI。
+/// `AdminErrorKind`
+/// 稳定 `error_code` 同时用于任务记录、日志与 UI
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct BackupError {
@@ -454,32 +457,32 @@ pub struct BackupError {
 }
 
 impl BackupError {
-    /// 构造基础设施错误。
+    /// 构造基础设施错误
     #[must_use]
     pub const fn new(code: &'static str, message: String) -> Self {
         Self { code, message }
     }
 
-    /// 稳定错误码，例如 `backup.s3_auth_failed`。
+    /// 稳定错误码，例如 `backup.s3_auth_failed`
     #[must_use]
     pub const fn code(&self) -> &'static str {
         self.code
     }
 
-    /// 脱敏后的可操作消息。
+    /// 脱敏后的可操作消息
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 }
 
-/// 构造稳定错误码常量。
+/// 构造稳定错误码常量
 pub mod code;
 
-/// 构建对象 key：`{prefix}/YYYY/MM/DD/codex-proxy-rs_{UTC seconds}_{backup id}.dump`。
+/// 构建对象 key：`{prefix}/YYYY/MM/DD/codex-proxy-rs_{UTC seconds}_{backup id}.dump`
 ///
 /// 规范化规则：prefix 不得为空、不得以前导 `/` 开头、不得包含 `..`、反斜杠或控制字符；
-/// 输出统一使用 `/` 分隔且不含空段。
+/// 输出统一使用 `/` 分隔且不含空段
 pub fn build_object_key(
     prefix: &str,
     backup_id: &str,
@@ -496,22 +499,22 @@ pub fn build_object_key(
     ))
 }
 
-/// 下载文件名：`codex-proxy-rs_{短 id}.dump`，与对象 key 的文件名一致。
+/// 下载文件名：`codex-proxy-rs_{短 id}.dump`，与对象 key 的文件名一致
 #[must_use]
 pub fn build_download_file_name(backup_id: &str) -> String {
     format!("codex-proxy-rs_{}.dump", short_backup_id(backup_id))
 }
 
-/// 截取备份 id 的可读短标识：去掉 `backup_` 前缀，最多保留 8 位 hex。
+/// 截取备份 id 的可读短标识：去掉 `backup_` 前缀，最多保留 8 位 hex
 #[must_use]
 fn short_backup_id(backup_id: &str) -> String {
     let hex = backup_id.strip_prefix("backup_").unwrap_or(backup_id);
     hex.get(..8).unwrap_or(hex).to_owned()
 }
 
-/// 规范化并校验对象 prefix。
+/// 规范化并校验对象 prefix
 ///
-/// 返回去掉尾部 `/` 的规范 prefix；空串、前导 `/`、`..` 段、反斜杠和控制字符均拒绝。
+/// 返回去掉尾部 `/` 的规范 prefix；空串、前导 `/`、`..` 段、反斜杠和控制字符均拒绝
 pub fn normalize_prefix(prefix: &str) -> Result<String, BackupError> {
     if prefix.is_empty() || prefix.starts_with('/') {
         return Err(BackupError::new(
@@ -534,13 +537,13 @@ pub fn normalize_prefix(prefix: &str) -> Result<String, BackupError> {
     Ok(prefix.trim_end_matches('/').to_owned())
 }
 
-/// 生成新的备份记录 id。
+/// 生成新的备份记录 id
 #[must_use]
 pub fn new_backup_id() -> String {
     format!("backup_{}", Uuid::now_v7().simple())
 }
 
-/// 从触发类型与计划时间构造可持久化 seed；id 与对象 key 一次生成保持一致。
+/// 从触发类型与计划时间构造可持久化 seed；id 与对象 key 一次生成保持一致
 pub fn build_backup_seed(
     trigger_kind: BackupTriggerKind,
     scheduled_at: Option<DateTime<Utc>>,

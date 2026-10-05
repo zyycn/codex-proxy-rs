@@ -1,4 +1,4 @@
-//! Runtime settings 与明文管理员 API Key 的语义模型。
+//! Runtime settings 与明文管理员 API Key 的语义模型
 
 use std::{collections::BTreeMap, fmt};
 
@@ -8,21 +8,21 @@ use gateway_core::routing::{ProviderKind, PublicModelId, UpstreamModelId};
 
 use super::Revision;
 
-/// 客户端模型到上游模型的全局精确映射。
+/// 客户端模型到上游模型的全局精确映射
 pub type ModelMappings = BTreeMap<PublicModelId, UpstreamModelId>;
 
-/// Provider-owned 请求画像选择；Provider ID 是唯一命名空间。
+/// Provider-owned 请求画像选择；Provider ID 是唯一命名空间
 pub type ProviderRequestProfiles =
     BTreeMap<ProviderKind, gateway_core::account::OpaqueProviderData>;
 
-/// Provider-owned 请求画像的部分更新；`None` 只表示显式删除该 Provider 的历史选择。
+/// Provider-owned 请求画像的部分更新；`None` 只表示显式删除该 Provider 的历史选择
 pub type ProviderRequestProfileUpdates =
     BTreeMap<ProviderKind, Option<gateway_core::account::OpaqueProviderData>>;
 
-/// 账号调度策略；由 Core 拥有稳定值与 wire 映射。
+/// 账号调度策略；由 Core 拥有稳定值与 wire 映射
 pub use gateway_core::account::RotationStrategy;
 
-/// 完整运行设置事实。
+/// 完整运行设置事实
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSettings {
@@ -60,13 +60,13 @@ pub struct RuntimeSettings {
     pub updated_at: DateTime<Utc>,
 }
 
-/// 原子替换运行设置的命令。
+/// 原子替换运行设置的命令
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplaceRuntimeSettings {
-    /// 读取设置时的版本；与写入在同一事务内比较，防止覆盖并发更新。
+    /// 读取设置时的版本；与写入在同一事务内比较，防止覆盖并发更新
     pub expected_revision: Revision,
-    /// 只覆盖提交的 Provider；未提交项保留当前持久值。
+    /// 只覆盖提交的 Provider；未提交项保留当前持久值
     pub request_profile_updates: ProviderRequestProfileUpdates,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -99,7 +99,7 @@ pub struct ReplaceRuntimeSettings {
     pub account_warmup_model: Option<String>,
 }
 
-/// 明文管理员 API Key；按产品约束明文落库，但禁止 Debug 泄漏。
+/// 明文管理员 API Key；按产品约束明文落库，但禁止 Debug 泄漏
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct AdminApiKey(String);
@@ -115,7 +115,7 @@ impl AdminApiKey {
         &self.0
     }
 
-    /// 仅供显式 regenerate 响应读取一次。
+    /// 仅供显式 regenerate 响应读取一次
     #[must_use]
     pub fn expose_for_response(&self) -> &str {
         &self.0
@@ -128,7 +128,7 @@ impl fmt::Debug for AdminApiKey {
     }
 }
 
-/// 管理员 API Key 更新结果。
+/// 管理员 API Key 更新结果
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminApiKeyMutation {
@@ -136,7 +136,7 @@ pub struct AdminApiKeyMutation {
     pub exists: bool,
 }
 
-/// 新管理员 API Key 的一次性返回结果。
+/// 新管理员 API Key 的一次性返回结果
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegeneratedAdminApiKey {

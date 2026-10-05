@@ -1,3 +1,5 @@
+//! 验证管理审计意图保留操作身份，并按提交结果选择审计分类
+
 use gateway_admin::model::{
     MutationActor, MutationContext,
     audit::{MutationAuditIntent, MutationAuditOperation},

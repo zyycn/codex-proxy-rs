@@ -1,5 +1,5 @@
-//! 基础事实查询与主动额度刷新。
-//! 响应忽略未知字段，以兼容宿主新增事实；查询仍严格校验字段。
+//! 基础事实查询与主动额度刷新
+//! 响应忽略未知字段，以兼容宿主新增事实；查询仍严格校验字段
 
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +14,7 @@ pub struct ClientKeyFactsQuery {
     pub client_key_id: String,
 }
 
-/// 当前显式分组绑定；空列表不是单账号范围，不包含密钥或凭据。
+/// 当前显式分组绑定；空列表不是单账号范围，不包含密钥或凭据
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientKeyFacts {
     pub schema_version: u32,
@@ -55,7 +55,7 @@ pub struct QuotaFactsQuery {
     pub account_id: String,
 }
 
-/// Provider 已有快照的必要投影；空观测时间表示没有可用样本，不代表额度为零。
+/// Provider 已有快照的必要投影；空观测时间表示没有可用样本，不代表额度为零
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QuotaFacts {
     pub schema_version: u32,
@@ -68,7 +68,7 @@ pub struct QuotaFacts {
 pub struct QuotaWindowFacts {
     pub key: String,
     pub window_seconds: Option<u64>,
-    /// 百分比而非 0～1 比率；未知值为 null。
+    /// 百分比而非 0～1 比率；未知值为 null
     pub used_percent: Option<f64>,
     pub reset_at_ms: Option<i64>,
 }

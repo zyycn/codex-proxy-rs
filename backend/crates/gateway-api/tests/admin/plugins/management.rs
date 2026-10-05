@@ -1,3 +1,5 @@
+//! 插件管理页面模型调用的认证、执行与响应交付测试
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -727,7 +729,7 @@ async fn public_callback_rejects_head_missing_duplicate_state_and_body_before_di
         ("GET", "state=one&state=two", "", StatusCode::BAD_REQUEST),
         ("GET", "state=one&%73tate=two", "", StatusCode::BAD_REQUEST),
         ("GET", "state=one", "body", StatusCode::BAD_REQUEST),
-        // 合法 GET 没有管理 Cookie 仍进入服务；当前测试未发布视图，返回 503 而不是 401。
+        // 合法 GET 没有管理 Cookie 仍进入服务；当前测试未发布视图，返回 503 而不是 401
         ("GET", "state=one", "", StatusCode::SERVICE_UNAVAILABLE),
     ] {
         let response = crate::openai::api_router_with_admin_and_execution(

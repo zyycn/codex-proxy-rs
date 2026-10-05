@@ -1,11 +1,8 @@
-import type { getApiKeys } from '@/api'
+import type { ApiKey } from '@/api'
+
 import { defineTableColumns } from '@codex-proxy/ui'
 
-type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number] & {
-  createdAtDisplay: string
-}
-
-export const apiKeyColumns = defineTableColumns<ApiKeyRow>([
+export const apiKeyColumns = defineTableColumns<ApiKey>([
   { key: 'selection', kind: 'selection' },
   { key: 'identity', label: '名称', kind: 'identity', size: '2xl', sortable: 'name' },
   { key: 'prefix', label: '密钥前缀', kind: 'mono', size: '2xl' },

@@ -1,4 +1,4 @@
-//! 统一账号目录与原生 Provider 分派。
+//! 统一账号目录与原生 Provider 分派
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -49,7 +49,7 @@ use super::{
 
 const CONNECTION_TEST_INPUT: &str = "Reply with exactly OK.";
 
-/// 统一账号页消费的服务。
+/// 统一账号页消费的服务
 #[async_trait]
 pub trait AccountsService: Send + Sync {
     async fn list(&self, query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError>;
@@ -279,7 +279,7 @@ impl DefaultAccountsService {
         accounts: &[AccountPageItem],
     ) -> Result<BTreeMap<String, AccountUsage>, AdminError> {
         let now = Utc::now();
-        // API Key 没有套餐周期；本地累计直接查询账号创建后仍保留的请求记录。
+        // API Key 没有套餐周期；本地累计直接查询账号创建后仍保留的请求记录
         let windows = accounts
             .iter()
             .filter(|item| item.account.authentication_kind == "api_key")
@@ -333,7 +333,7 @@ impl DefaultAccountsService {
             .await
         {
             Ok(quota) => quota,
-            // 凭据更新后的账号投影不要求 Provider 提供额度；显式刷新仍须支持该操作。
+            // 凭据更新后的账号投影不要求 Provider 提供额度；显式刷新仍须支持该操作
             Err(error)
                 if !refresh_quota
                     && error.kind()
@@ -403,7 +403,7 @@ impl AccountsService for DefaultAccountsService {
             .iter()
             .map(|item| item.account.id.clone())
             .collect::<Vec<_>>();
-        // 只读取当前页的租约占用；观测失败不能把账号误报为空闲或拖垮目录。
+        // 只读取当前页的租约占用；观测失败不能把账号误报为空闲或拖垮目录
         let in_flight = if ids.is_empty() {
             None
         } else {
@@ -429,7 +429,7 @@ impl AccountsService for DefaultAccountsService {
             let account_id = ProviderAccountId::new(account.id.clone())
                 .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))?;
             // 单个账号的 quota 投影失败（Provider 未注册或 quota 读取失败）不拖垮整页：
-            // 该账号降级为空额度投影，其余账号与页面状态照常返回。
+            // 该账号降级为空额度投影，其余账号与页面状态照常返回
             let provider = match providers.require(&account.provider_kind) {
                 Ok(provider) => provider,
                 Err(error) => {
@@ -536,7 +536,7 @@ impl AccountsService for DefaultAccountsService {
         }) {
             return Err(AdminError::invalid("账号导出列表包含重复 ID"));
         }
-        // 混选时先确认全部 Provider 已注册，拒绝路径不读取任何一组明文凭据。
+        // 混选时先确认全部 Provider 已注册，拒绝路径不读取任何一组明文凭据
         let export_groups = grouped
             .into_iter()
             .map(|(provider_kind, ids)| {
@@ -615,7 +615,7 @@ impl AccountsService for DefaultAccountsService {
                 .map_err(|error| map_store_error(error, "provider account recovery"))?
                 .config_revision
         } else {
-            // 停用只表示不参与调度，重新启用不能抹除已观测的额度、凭据或冷却事实。
+            // 停用只表示不参与调度，重新启用不能抹除已观测的额度、凭据或冷却事实
             self.accounts
                 .batch_update_accounts(
                     BatchUpdateAccounts {
@@ -774,7 +774,7 @@ impl AccountsService for DefaultAccountsService {
             let Some((window, _)) = quota_forecast_source_window(&quota, period) else {
                 continue;
             };
-            // 缺少一个周期时两个结果会复用同一窗口，只查询一次历史快照。
+            // 缺少一个周期时两个结果会复用同一窗口，只查询一次历史快照
             if !selected_keys.insert(window.key.as_str()) {
                 continue;
             }
@@ -814,8 +814,8 @@ impl AccountsService for DefaultAccountsService {
                     .as_deref()
                     .zip(fact.plan_type.as_deref())
                     .is_some_and(|(current, previous)| current.eq_ignore_ascii_case(previous));
-                // 仅容纳已观测到的秒级量化抖动，不用宽时间容差合并实际重置。
-                // 不匹配的段截断基线；之后的有效观测可以重新积累。
+                // 仅容纳已观测到的秒级量化抖动，不用宽时间容差合并实际重置
+                // 不匹配的段截断基线；之后的有效观测可以重新积累
                 if !same_plan || (fact.reset_at - reset_at).abs() > Duration::seconds(2) {
                     points.clear();
                     interrupted = true;
@@ -853,7 +853,7 @@ impl AccountsService for DefaultAccountsService {
         account_id: &ProviderAccountId,
     ) -> Result<AccountPersonalInfo, AdminError> {
         let (initial, provider) = self.provider_for_account(account_id).await?;
-        // 两项读取相互独立；不因其中一项失败而取消另一项，也不触发凭据或额度刷新。
+        // 两项读取相互独立；不因其中一项失败而取消另一项，也不触发凭据或额度刷新
         let (profile, subscription) = futures::join!(
             provider.profile_statistics(account_id),
             provider.subscription(account_id),
@@ -865,7 +865,7 @@ impl AccountsService for DefaultAccountsService {
             .ok()
             .flatten();
 
-        // 汇聚等待期间发生重新授权、换绑或删除时，不返回混合身份的数据。
+        // 汇聚等待期间发生重新授权、换绑或删除时，不返回混合身份的数据
         let current = self.load_account(account_id).await?;
         if current.account.provider_kind != initial.account.provider_kind
             || current.account.credential_revision != initial.account.credential_revision
@@ -921,7 +921,7 @@ impl AccountsService for DefaultAccountsService {
     ) -> Result<ProviderResetCreditResult, AdminError> {
         let account_id = command.account_id.clone();
         // 覆盖 credential refresh + 同键重试的完整账号级临界区，避免 401 两次调用
-        // 之间插入另一笔不可逆消费。
+        // 之间插入另一笔不可逆消费
         let lock = self.reset_credit_lock(&account_id).await;
         let _guard = lock.lock().await;
         let (_, provider) = self.provider_for_account(&account_id).await?;
@@ -1049,7 +1049,7 @@ fn map_reset_credits_error_after_refresh(
     map_provider_error(error, "provider reset credits")
 }
 
-/// 账号目录中单个账号 quota 读取失败时使用的空额度投影。
+/// 账号目录中单个账号 quota 读取失败时使用的空额度投影
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
         credits: None,
@@ -1073,7 +1073,7 @@ fn quota_usage_window(
     let seconds = i64::try_from(window.window_seconds?).ok()?;
     let start = reset_at.checked_sub_signed(Duration::try_seconds(seconds)?)?;
     let range = TimeRange::new(start, reset_at).ok()?;
-    // 上游百分比以该 reset 边界定义；以当前时间回推会让本地 Token 属于另一窗口。
+    // 上游百分比以该 reset 边界定义；以当前时间回推会让本地 Token 属于另一窗口
     Some(AccountUsageWindowQuery {
         account_id: account_id.to_owned(),
         key: window.key.clone(),

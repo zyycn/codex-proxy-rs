@@ -1,4 +1,4 @@
-//! PostgreSQL owner for provider-neutral account groups and memberships.
+//! 跨 Provider 账号分组及成员关系的 PostgreSQL 持久化
 
 use gateway_admin::model::audit::MutationAuditOperation;
 use std::{collections::BTreeMap, str::FromStr as _};
@@ -37,7 +37,7 @@ use super::{
 
 const ENTITY: &str = "account group";
 
-/// Account group store with transactional revision and audit ownership.
+/// 在同一事务中维护版本与审计的账号分组存储
 #[derive(Clone)]
 pub struct PgAccountGroupRepository {
     timezone: gateway_core::time::DeploymentTimeZone,
@@ -538,7 +538,7 @@ async fn group_costs(
     }
     let completed_usage = completed_usage_fact_predicate("mr");
     // 用量按实际完成请求的账号统计：账号属于多个分组时计入每个所属分组，
-    // 不再按 Client Key 绑定分组快照归属，避免多分组 Key 的费用重复出现在未承接请求的分组上。
+    // 不再按 Client Key 绑定分组快照归属，避免多分组 Key 的费用重复出现在未承接请求的分组上
     let statement = format!(
         "with requested_groups(group_id) as (
            select unnest($1::text[])
@@ -561,7 +561,7 @@ async fn group_costs(
          where settings.id = 1
          group by requested_groups.group_id"
     );
-    // 动态片段仅为共享的固定 usage-fact predicate；group IDs 仍使用 bind。
+    // 动态片段仅为共享的固定 usage-fact predicate；group IDs 仍使用 bind
     let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
         .bind(group_ids)
         .bind(
@@ -682,7 +682,7 @@ fn unavailable(message: &'static str) -> StoreError {
     postgres_unavailable(message)
 }
 
-/// 原生管理与插件自有分组共用字段校验和写入规则。
+/// 原生管理与插件自有分组共用字段校验和写入规则
 pub(crate) async fn insert_account_group_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     command: &NewAccountGroup,

@@ -1,3 +1,5 @@
+//! 受管 HTTP 客户端，约束出站网络、请求时限与响应读取
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -78,7 +80,7 @@ impl HttpError {
         self.kind
     }
 
-    /// 固定诊断分类，不包含网址、请求头、正文或底层错误中的凭据。
+    /// 固定诊断分类，不包含网址、请求头、正文或底层错误中的凭据
     pub const fn reason(&self) -> &'static str {
         self.reason
     }
@@ -146,7 +148,7 @@ impl HttpClient {
             .http1_max_buf_size(64 * 1024)
             .retry_canceled_requests(false)
             .build(connector);
-        // 淘汰缓存不影响已借出的 Client 或在途 body。
+        // 淘汰缓存不影响已借出的 Client 或在途 body
         if clients.len() >= 64 {
             clients.clear();
         }
@@ -165,7 +167,7 @@ impl HttpClient {
             .await
     }
 
-    /// 为同一代理端点上的不同管理身份隔离连接池；scope 不得包含 secret。
+    /// 为同一代理端点上的不同管理身份隔离连接池；scope 不得包含 secret
     pub async fn open_scoped(
         &self,
         request: HttpRequest,
@@ -266,7 +268,7 @@ impl HttpClient {
         if url.scheme() == "http"
             && let Some(proxy) = proxy.filter(|proxy| proxy.expose_url().starts_with("http"))
         {
-            // 正向代理接收数字地址的绝对 URI；Host 保留原始域名，禁止代理再次解析目标。
+            // 正向代理接收数字地址的绝对 URI；Host 保留原始域名，禁止代理再次解析目标
             let authority = uri
                 .authority()
                 .ok_or_else(|| HttpError::invalid("host"))?
@@ -380,7 +382,7 @@ impl HttpBody {
             return Err(HttpError::sent("read size"));
         }
         loop {
-            // 已缓冲的数据和就绪帧也受同一期限约束，慢读者不能无限续用 HTTP 资源。
+            // 已缓冲的数据和就绪帧也受同一期限约束，慢读者不能无限续用 HTTP 资源
             if Instant::now() >= self.deadline {
                 return Err(HttpError::sent("response deadline").with_kind(HttpErrorKind::Timeout));
             }

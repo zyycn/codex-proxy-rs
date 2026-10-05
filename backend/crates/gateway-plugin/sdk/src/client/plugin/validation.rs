@@ -1,3 +1,5 @@
+//! 校验插件清单中的能力声明与实际注册处理器是否一致
+
 use std::collections::BTreeMap;
 
 use crate::{Capability as C, Manifest};

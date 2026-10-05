@@ -1,4 +1,4 @@
-//! 通过生产辅助请求 transport 观察出口 cache 的真实连接生命周期。
+//! 通过生产辅助请求 transport 观察出口 cache 的真实连接生命周期
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

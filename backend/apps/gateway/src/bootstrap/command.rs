@@ -1,4 +1,4 @@
-//! 插件帮助只读启动；命令仅组装命令平面和必要写泵。
+//! 插件帮助只读启动；命令仅组装命令平面和必要写泵
 
 use super::{
     BootstrapError, GatewayConfig,
@@ -6,7 +6,7 @@ use super::{
     startup::{Environment, Mode, Providers},
 };
 
-/// 这里只接收插件命名空间内的参数，不转交宿主配置或其他启动 secret。
+/// 这里只接收插件命名空间内的参数，不转交宿主配置或其他启动 secret
 pub struct PluginCommand {
     pub instance_id: Option<String>,
     pub name: Option<String>,

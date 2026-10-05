@@ -1,4 +1,4 @@
-//! 通用公开服务回调；操作目录与类型校验由业务服务登记。
+//! 通用公开服务回调；操作目录与类型校验由业务服务登记
 
 use super::{CallbackScope, MiddlewareCallback, invalid};
 use crate::RpcReply;

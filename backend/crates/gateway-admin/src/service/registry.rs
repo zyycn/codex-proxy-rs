@@ -1,4 +1,4 @@
-//! 公开操作登记在所属服务；注册表只校验类型和分派，不实现业务。
+//! 公开操作登记在所属服务；注册表只校验类型和分派，不实现业务
 
 use crate::model::AdminError;
 use futures::future::BoxFuture;
@@ -21,7 +21,7 @@ impl Registry {
         }
     }
 
-    /// 网关与命令行复用同一组设置服务；注册不会执行读取或写入。
+    /// 网关与命令行复用同一组设置服务；注册不会执行读取或写入
     pub fn register_settings(
         &mut self,
         service: &Arc<dyn crate::SettingsService>,

@@ -1,3 +1,5 @@
+//! 验证执行记录端口的请求、尝试、恢复租约与快照持久化
+
 use std::time::{Duration as StdDuration, SystemTime};
 
 use chrono::{DateTime, Duration, Utc};
@@ -66,6 +68,57 @@ fn model_request_rejects_mismatched_client_key_live_id() {
         deadline_at: started_at + Duration::seconds(30),
     };
     assert!(request.validate().is_err());
+}
+
+#[tokio::test]
+async fn request_recovery_lease_is_renewed_and_abandoned_requests_are_recovered() {
+    let Some(database) = TestDatabase::create("request_renewal").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut request = accepted_request("req_long_running");
+    request.started_at = SystemTime::now() - StdDuration::from_secs(601);
+    request.deadline_at = Default::default();
+    store.create_model_request(request.clone()).await.unwrap();
+    let initial: DateTime<Utc> = sqlx::query_scalar("update model_requests set deadline_at = now() + interval '1 second' where id = $1 returning deadline_at")
+        .bind(request.id.as_str()).fetch_one(&database.pool).await.unwrap();
+    let renewal = store.maintain_request(&request.id, request.deadline_at);
+    let renewed: DateTime<Utc> = tokio::time::timeout(StdDuration::from_secs(2), async {
+        loop {
+            let at: DateTime<Utc> =
+                sqlx::query_scalar("select deadline_at from model_requests where id = $1")
+                    .bind(request.id.as_str())
+                    .fetch_one(&database.pool)
+                    .await
+                    .unwrap();
+            if at > initial + Duration::seconds(500) {
+                break at;
+            }
+            tokio::time::sleep(StdDuration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("live request refreshes recovery lease");
+    assert_eq!(
+        store
+            .recover_expired(initial.into())
+            .await
+            .unwrap()
+            .requests,
+        0
+    );
+    drop(renewal);
+    assert_eq!(
+        store
+            .recover_expired(renewed.into())
+            .await
+            .unwrap()
+            .requests,
+        1
+    );
+    let row = stored_row(&database.pool, request.id.as_str()).await;
+    assert_eq!(row["error_kind"], "process_interrupted");
+    database.close().await;
 }
 
 #[tokio::test]
@@ -163,7 +216,7 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         (1, "not_sent", "openai", "running", None, None)
     );
 
-    // 后续 attempt 沿用常规 CAS 递增路径；已持久化的 sent 水位不被重试重置。
+    // 后续 attempt 沿用常规 CAS 递增路径；已持久化的 sent 水位不被重试重置
     repository
         .mark_upstream_send_state(
             "req_merged",
@@ -701,7 +754,7 @@ async fn clock_rollback_preserves_terminal_outcomes_and_errors_after_recovery() 
         }
         assert_eq!(
             store
-                .recover_expired(request.deadline_at)
+                .recover_expired(request.deadline_at.at().unwrap())
                 .await
                 .expect("recovery leaves finalized request intact")
                 .requests,
@@ -730,7 +783,7 @@ async fn zero_attempt_finalization_preserves_real_error_after_clock_rollback() {
         .expect("finalize zero attempt after clock rollback");
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().unwrap())
             .await
             .expect("recovery preserves real early failure")
             .requests,
@@ -1402,7 +1455,7 @@ async fn diagnostic_trace_is_finalized_atomically_and_available_for_failed_reque
     database.close().await;
 }
 
-// 只构造已接纳的入口事实；未选择账号、未出站，也没有上游用量。
+// 只构造已接纳的入口事实；未选择账号、未出站，也没有上游用量
 pub(super) fn accepted_request(id: &str) -> CoreNewModelRequest {
     let started_at = SystemTime::from(
         DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
@@ -1430,14 +1483,14 @@ pub(super) fn accepted_request(id: &str) -> CoreNewModelRequest {
         image_generation_requested: false,
         admission_decision_ms: Some(2),
         started_at,
-        deadline_at: started_at + StdDuration::from_secs(30),
+        deadline_at: (started_at + StdDuration::from_secs(30)).into(),
     }
 }
 
 pub(super) fn early_failure(request: &CoreNewModelRequest) -> CoreModelRequestFinalization {
     let trace = TraceContext::new(request.id.as_str());
     trace.record("request.started", json!({"operation": "generate"}));
-    // trace 的 index 是预备阶段关联，不证明已经拿到账号、建流或实际发送。
+    // trace 的 index 是预备阶段关联，不证明已经拿到账号、建流或实际发送
     let preparation = trace.attempt(1);
     preparation.record(
         "attempt.started",
@@ -1499,7 +1552,7 @@ async fn stored_row(pool: &PgPool, request_id: &str) -> Value {
 fn zero_attempt_range(request: &CoreNewModelRequest) -> ObservabilityRange {
     ObservabilityRange::new(
         DateTime::from(request.started_at - StdDuration::from_secs(60)),
-        DateTime::from(request.deadline_at + StdDuration::from_secs(60)),
+        DateTime::from(request.deadline_at.at().unwrap() + StdDuration::from_secs(60)),
     )
     .expect("observation range")
 }
@@ -1624,7 +1677,7 @@ async fn zero_attempt_failure_is_queryable_without_fabricating_upstream_facts() 
     assert_eq!(error.upstream_request_id, None);
     assert_eq!(error.raw_upstream_error, None);
 
-    // 路由入口不等于已选择 Provider；没有平台事实时不能被平台/attempt 筛选命中。
+    // 路由入口不等于已选择 Provider；没有平台事实时不能被平台/attempt 筛选命中
     for filter in [
         OpsErrorFilter {
             provider_kind: Some("openai".to_owned()),
@@ -1772,7 +1825,7 @@ async fn zero_attempt_duplicate_create_and_finalization_never_overwrite_terminal
     );
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().unwrap())
             .await
             .expect("recover")
             .requests,
@@ -1804,7 +1857,7 @@ async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
     let request = accepted_request("req_zero_attempt_recovery");
     let mut active = request.clone();
     active.id = ModelRequestId::new("req_zero_attempt_still_running").expect("request id");
-    active.deadline_at += StdDuration::from_secs(30);
+    active.deadline_at = (active.deadline_at.at().unwrap() + StdDuration::from_secs(30)).into();
     store
         .create_model_request(request.clone())
         .await
@@ -1815,7 +1868,7 @@ async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
         .expect("create active request");
     assert_eq!(
         store
-            .recover_expired(request.deadline_at - StdDuration::from_micros(1))
+            .recover_expired(request.deadline_at.at().unwrap() - StdDuration::from_micros(1))
             .await
             .expect("before deadline")
             .requests,
@@ -1823,7 +1876,7 @@ async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
     );
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().unwrap())
             .await
             .expect("at deadline")
             .requests,
@@ -1832,7 +1885,7 @@ async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
     let recovered = stored_row(&database.pool, request.id.as_str()).await;
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().unwrap())
             .await
             .expect("repeat recovery")
             .requests,
@@ -1861,7 +1914,7 @@ async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
     );
     assert_eq!(
         detail.request.completed_at,
-        Some(DateTime::from(request.deadline_at))
+        Some(DateTime::from(request.deadline_at.at().unwrap()))
     );
     assert_eq!(detail.request.attempt_count, 0);
     assert_eq!(detail.request.upstream_send_state, "not_sent");

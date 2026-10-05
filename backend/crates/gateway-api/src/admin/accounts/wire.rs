@@ -1,4 +1,4 @@
-//! 账号管理请求、响应与查询 wire contract。
+//! 账号管理请求、响应与查询 wire contract
 
 use super::*;
 
@@ -44,7 +44,7 @@ pub(super) fn proxy_selection(
     }
 }
 
-/// 账号列表查询参数。
+/// 账号列表查询参数
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListQuery {
@@ -152,7 +152,7 @@ impl BatchUpdateAccountsRequest {
 }
 
 impl ListQuery {
-    /// 解析并校验全部 wire 字段，生成 Admin 查询命令。
+    /// 解析并校验全部 wire 字段，生成 Admin 查询命令
     pub fn validate(self) -> Result<AccountListQuery, WireValidationError> {
         let page = self.page.unwrap_or(1);
         if page == 0 {
@@ -241,7 +241,7 @@ fn parse_sort_direction(value: &str) -> Option<SortDirection> {
     }
 }
 
-/// 账号列表响应数据。
+/// 账号列表响应数据
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountPageData {
@@ -250,7 +250,7 @@ pub struct AccountPageData {
     pub summary: AccountSummaryView,
 }
 
-/// 账号概览计数。
+/// 账号概览计数
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountSummaryView {
@@ -262,7 +262,7 @@ pub struct AccountSummaryView {
     pub error: u64,
 }
 
-/// 一条安全账号视图。
+/// 一条安全账号视图
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
@@ -279,14 +279,14 @@ pub struct AccountView {
     pub user_id: Option<String>,
     pub label: Option<String>,
     pub plan_type: Option<String>,
-    /// 后端生成的套餐展示名称；缺失套餐时为“未知套餐”。
+    /// 后端生成的套餐展示名称；缺失套餐时为“未知套餐”
     pub plan_type_display: String,
     pub authentication_kind: String,
     pub has_refresh_token: bool,
     pub status: String,
-    /// `status == "error"` 时的具体原因；其余状态为 `null`。
+    /// `status == "error"` 时的具体原因；其余状态为 `null`
     pub error_reason: Option<String>,
-    /// 最近一次失败的上游错误描述；仅错误状态存在。
+    /// 最近一次失败的上游错误描述；仅错误状态存在
     pub error_message: Option<String>,
     pub enabled: bool,
     pub concurrency_limit: Option<u32>,
@@ -339,7 +339,7 @@ impl From<gateway_admin::model::accounts::ProviderAccountCapabilities> for Accou
     }
 }
 
-/// 容量估算仅供管理端展示；金额不是订阅账单或可消费余额。
+/// 容量估算仅供管理端展示；金额不是订阅账单或可消费余额
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaForecastData {
@@ -387,13 +387,13 @@ pub struct AccountGroupRefView {
     pub enabled: bool,
 }
 
-/// Provider quota 安全视图。
+/// Provider quota 安全视图
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaView {
     pub refreshed_at_display: String,
     pub limit_reached: bool,
-    /// 冷却到期或可开始恢复探测的时间；非限流中为 `null`。
+    /// 冷却到期或可开始恢复探测的时间；非限流中为 `null`
     pub rate_limited_until: Option<String>,
     pub rate_limit_recovery_display: Option<String>,
     pub rate_limit_reason: Option<String>,
@@ -402,7 +402,7 @@ pub struct AccountQuotaView {
     pub credits: Option<AccountQuotaCreditsView>,
 }
 
-/// 上游点数安全视图，不透出额度响应中的其他 Provider 字段。
+/// 上游点数安全视图，不透出额度响应中的其他 Provider 字段
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaCreditsView {
@@ -411,7 +411,7 @@ pub struct AccountQuotaCreditsView {
     pub balance: Option<String>,
 }
 
-/// 一个 quota 时间窗口。
+/// 一个 quota 时间窗口
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaWindowView {
@@ -431,7 +431,7 @@ pub struct AccountQuotaWindowView {
     pub reset_at_display: String,
 }
 
-/// 账号观测用量。
+/// 账号观测用量
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageView {
@@ -471,7 +471,7 @@ pub struct AccountUsageView {
     pub models: Vec<ModelUsageView>,
 }
 
-/// 凭据在单个上游模型上的观测用量。
+/// 凭据在单个上游模型上的观测用量
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelUsageView {
@@ -508,7 +508,7 @@ pub struct ModelUsageView {
     pub last_used_at_full_display: Option<String>,
 }
 
-/// 单一货币的可查询成本。
+/// 单一货币的可查询成本
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrencyCostView {
@@ -517,7 +517,7 @@ pub struct CurrencyCostView {
     pub estimated_amount_display: String,
 }
 
-/// 账号详情类 GET 的固定 ID query。
+/// 账号详情类 GET 的固定 ID query
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountIdQuery {
@@ -535,7 +535,7 @@ impl AccountIdQuery {
     }
 }
 
-/// 头像 GET 的固定 query；`version` 只参与浏览器缓存键，不进入上游请求。
+/// 头像 GET 的固定 query；`version` 只参与浏览器缓存键，不进入上游请求
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountProfileAvatarQuery {
@@ -562,7 +562,7 @@ impl AccountProfileAvatarQuery {
     }
 }
 
-/// 敏感导出的固定 query；IDs 使用逗号分隔，禁止隐式导出全部账号。
+/// 敏感导出的固定 query；IDs 使用逗号分隔，禁止隐式导出全部账号
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountExportQuery {
@@ -602,7 +602,7 @@ impl AccountExportQuery {
     }
 }
 
-/// 账号运行期动作。
+/// 账号运行期动作
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountActionRequest {
@@ -620,7 +620,8 @@ impl AccountActionRequest {
     }
 }
 
-/// 主动额度重置卡消费请求。幂等键由 UI 生成并在不确定重试时复用，与官方一致。
+/// 主动额度重置卡消费请求
+/// 幂等键由 UI 生成并在不确定重试时复用，与官方一致
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountResetCreditConsumeRequest {
@@ -662,7 +663,7 @@ impl AccountResetCreditConsumeRequest {
     }
 }
 
-/// 手工 OAuth 刷新会变更持久 credential。
+/// 手工 OAuth 刷新会变更持久 credential
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountRefreshRequest {
@@ -680,7 +681,7 @@ impl AccountRefreshRequest {
     }
 }
 
-/// 连接测试 query；测试仍经唯一 Core/Provider 模型请求路径执行。
+/// 连接测试 query；测试仍经唯一 Core/Provider 模型请求路径执行
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountTestQuery {
@@ -720,7 +721,7 @@ pub struct AccountModelsData {
     pub models: Vec<AccountModelView>,
 }
 
-/// 账号模型目录文件；`catalog` 直接作为 Codex `model_catalog_json` 的文件正文落盘。
+/// 账号模型目录文件；`catalog` 直接作为 Codex `model_catalog_json` 的文件正文落盘
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountModelCatalogData {
@@ -729,14 +730,14 @@ pub struct AccountModelCatalogData {
     pub catalog: Value,
 }
 
-/// Provider 未给出 Codex 原生目录正文；该结果不能作为客户端目录文件返回。
+/// Provider 未给出 Codex 原生目录正文；该结果不能作为客户端目录文件返回
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnsupportedModelCatalogDocument;
 
 impl TryFrom<ProviderModelCatalogDocument> for AccountModelCatalogData {
     type Error = UnsupportedModelCatalogDocument;
 
-    /// 目录正文由 Provider 按官方 wire 组装；这里只解析一次用于 JSON 响应，不改写字段。
+    /// 目录正文由 Provider 按官方 wire 组装；这里只解析一次用于 JSON 响应，不改写字段
     fn try_from(result: ProviderModelCatalogDocument) -> Result<Self, Self::Error> {
         if result.document.protocol() != "codex" {
             return Err(UnsupportedModelCatalogDocument);
@@ -770,7 +771,7 @@ pub struct AccountDetailData {
     pub credential_configuration: Option<serde_json::Value>,
 }
 
-/// 个人资料、累计统计与订阅的统一响应。
+/// 个人资料、累计统计与订阅的统一响应
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountPersonalInfoData {
@@ -798,7 +799,7 @@ impl From<(AccountPersonalInfo, crate::time::TimePresenter)> for AccountPersonal
     }
 }
 
-/// 按需读取的订阅安全字段，不暴露原始上游响应。
+/// 按需读取的订阅安全字段，不暴露原始上游响应
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountSubscriptionData {
@@ -832,7 +833,7 @@ impl From<(ProviderSubscription, crate::time::TimePresenter)> for AccountSubscri
     }
 }
 
-/// Provider 官方个人资料统计响应。
+/// Provider 官方个人资料统计响应
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountProfileStatisticsData {
@@ -958,7 +959,7 @@ fn profile_invocation_view(invocation: ProviderProfileInvocation) -> AccountProf
     }
 }
 
-/// 主动额度重置卡列表响应。
+/// 主动额度重置卡列表响应
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountResetCreditsData {
@@ -966,7 +967,7 @@ pub struct AccountResetCreditsData {
     pub credits: Vec<AccountResetCreditView>,
 }
 
-/// 一张安全主动额度重置卡视图。
+/// 一张安全主动额度重置卡视图
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountResetCreditView {
@@ -978,7 +979,7 @@ pub struct AccountResetCreditView {
     pub reset_type: Option<String>,
 }
 
-/// 主动额度重置卡消费响应。
+/// 主动额度重置卡消费响应
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountResetCreditResultData {
@@ -1025,7 +1026,7 @@ impl From<(ProviderResetCreditResult, crate::time::TimePresenter)>
     }
 }
 
-/// Provider-owned 明文导出文档；Debug 永远不输出内部 JSON。
+/// Provider-owned 明文导出文档；Debug 永远不输出内部 JSON
 #[derive(Serialize)]
 #[serde(transparent)]
 pub struct AccountExportData(Value);

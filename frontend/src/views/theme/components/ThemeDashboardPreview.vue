@@ -6,7 +6,7 @@ import DashboardContent from '@/views/dashboard/components/DashboardContent.vue'
 import {
   dashboardSnapshotView,
   dashboardTrendView,
-} from '@/views/dashboard/composables/useDashboard'
+} from '@/views/dashboard/presenter'
 
 import { themeDashboardSummary } from '../fixtures/dashboard'
 

@@ -1,3 +1,5 @@
+//! 验证系统升级、回滚与重启命令向宿主端口传递确认参数
+
 use std::sync::Mutex;
 
 use async_trait::async_trait;

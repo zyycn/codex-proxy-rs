@@ -1,3 +1,5 @@
+//! 验证 GitHub 发行查询的凭据、缓存合并与固定制品下载
+
 use gateway_admin::{
     model::{
         AdminErrorKind,

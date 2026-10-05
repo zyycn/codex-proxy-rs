@@ -1,3 +1,5 @@
+//! 编译插件绑定范围，并匹配身份、Provider、模型与调用场景
+
 use std::collections::BTreeSet;
 
 use gateway_admin::model::{AdminError, plugins::instances::PluginCapabilityBinding};
@@ -11,10 +13,10 @@ use gateway_core::{
     routing::{AccountGroupId, PublicModelId},
 };
 
-/// 由 Admin 已冻结引用编译出的通用请求绑定范围。
+/// 由 Admin 已冻结引用编译出的通用请求绑定范围
 ///
 /// 组条件采用“任一命中”；同一 Key 可以同时属于多个组，因此不同组集合不能单独证明两个
-/// 调度绑定互斥。
+/// 调度绑定互斥
 #[derive(Default)]
 pub(crate) struct BindingScope {
     client_keys: BTreeSet<ClientApiKeyId>,
@@ -100,7 +102,7 @@ impl BindingScope {
     }
 
     pub(crate) fn matches_route(&self, input: &ModelRouteInput) -> bool {
-        // Router 执行时 Provider 尚未产生；带 Provider 条件的绑定在编译时拒绝。
+        // Router 执行时 Provider 尚未产生；带 Provider 条件的绑定在编译时拒绝
         !self.has_provider_condition()
             && self.matches_identity(input.client_key_id(), input.account_group_ids())
             && self.matches_model(Some(input.requested_model().as_str()))
@@ -124,7 +126,7 @@ impl BindingScope {
             && self.matches_model(model)
     }
 
-    /// 保守判断两个范围能否同时匹配；只有 Key、Provider 或模型的明确不交集可证明互斥。
+    /// 保守判断两个范围能否同时匹配；只有 Key、Provider 或模型的明确不交集可证明互斥
     pub(crate) fn overlaps(&self, other: &Self) -> bool {
         !disjoint_when_both_constrained(&self.client_keys, &other.client_keys)
             && !disjoint_when_both_constrained(&self.providers, &other.providers)

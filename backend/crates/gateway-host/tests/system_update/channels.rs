@@ -1,3 +1,5 @@
+//! 验证更新通道选择、发行候选缓存与并发查询结果隔离
+
 use super::*;
 use gateway_admin::model::system::SystemUpdateChannel::{Alpha, Beta, Experimental, Rc, Stable};
 

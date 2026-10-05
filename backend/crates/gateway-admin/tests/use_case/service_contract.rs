@@ -1,4 +1,4 @@
-//! 从宿主类型和操作声明生成独立 SDK 合同；普通测试阻止两侧声明漂移。
+//! 从宿主类型和操作声明生成独立 SDK 合同；普通测试阻止两侧声明漂移
 
 use std::{collections::BTreeMap, path::Path};
 
@@ -18,7 +18,7 @@ impl Parse for Operation {
         let method = input.parse()?;
         input.parse::<syn::Token![,]>()?;
         let arguments = input.parse()?;
-        // 后续模式和参数表达式只属于宿主调用，不进入线协议。
+        // 后续模式和参数表达式只属于宿主调用，不进入线协议
         input.parse::<syn::Token![,]>()?;
         let _ = syn::Pat::parse_single(input)?;
         while !input.is_empty() {
@@ -39,7 +39,7 @@ fn source(root: &Path, path: &str) -> syn::File {
     syn::parse_file(&std::fs::read_to_string(root.join(path)).unwrap()).unwrap()
 }
 
-// SDK 保留 wire 值，不依赖宿主的领域构造器、时区库或价格校验实现。
+// SDK 保留 wire 值，不依赖宿主的领域构造器、时区库或价格校验实现
 struct WireTypes;
 impl VisitMut for WireTypes {
     fn visit_type_mut(&mut self, ty: &mut Type) {
@@ -59,6 +59,7 @@ impl VisitMut for WireTypes {
                 "DateTime" | "Tz" | "TokenPrice" | "AdminApiKey" => parse_quote!(String),
                 "OpaqueProviderData" => parse_quote!(serde_json::Map<String, serde_json::Value>),
                 _ => Type::Path(syn::TypePath {
+                    attrs: std::mem::take(&mut path.attrs),
                     qself: None,
                     path: last.into(),
                 }),
@@ -260,6 +261,10 @@ fn sdk_settings_contract_matches_host_declarations() {
         _ => quote!(#field: settings.#field),
     });
     let generated = quote! {
+        //! 宿主设置服务的操作标识与请求、响应数据合同
+        //!
+        //! 从宿主设置类型与 service/settings.rs 生成；更新命令见 SDK 维护说明
+
         use super::Operation;
         use serde::{Deserialize, Serialize};
         use std::{collections::{BTreeMap, BTreeSet}, num::NonZeroU64};
@@ -280,7 +285,7 @@ fn sdk_settings_contract_matches_host_declarations() {
     let output = root.join("../gateway-plugin/sdk/src/call/services/settings.rs");
     let expected = prettyplease::unparse(&syn::parse2::<syn::File>(generated).unwrap());
     if std::env::var_os("CPR_UPDATE_SERVICE_CONTRACT").is_some() {
-        std::fs::write(&output, format!("// 从宿主设置类型与 service/settings.rs 生成；更新命令见 SDK 维护说明。\n{expected}")).unwrap();
+        std::fs::write(&output, &expected).unwrap();
     }
     let actual = syn::parse_file(&std::fs::read_to_string(output).unwrap()).unwrap();
     assert!(

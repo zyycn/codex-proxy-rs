@@ -1,3 +1,5 @@
+//! 验证订阅查询的账号绑定、安全投影与未知状态保留
+
 use super::{CodexBackendClient, CodexRequestContext, test_wire_profile};
 use serde_json::json;
 use std::time::Duration;

@@ -1,3 +1,5 @@
+//! 验证系统升级 HTTP 接口的确认参数、异步状态与事件流
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

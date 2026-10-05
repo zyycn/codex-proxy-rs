@@ -36,9 +36,9 @@ chrono-tz = "0.10"
 tokio = { version = "1.52", features = ["rt", "time", "macros", "sync"] }
 
 [dev-dependencies]
-prettyplease = "0.2"
+prettyplease = "0.3"
 quote = "1"
-syn = { version = "2", features = ["full", "visit-mut"] }
+syn = { version = "3", features = ["full", "visit-mut"] }
 tempfile = "3"
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt", "test-util"] }
 

@@ -1,8 +1,8 @@
-//! 管理设置页使用的 Codex 客户端下载信息。
+//! 管理设置页使用的 Codex 客户端下载信息
 
 use chrono::{DateTime, Utc};
 
-/// Windows 安装包架构。
+/// Windows 安装包架构
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ClientArchitecture {
     X64,
@@ -19,7 +19,7 @@ impl ClientArchitecture {
     }
 }
 
-/// 下载地址的可信来源。
+/// 下载地址的可信来源
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientDownloadSource {
     MicrosoftStore,
@@ -36,7 +36,7 @@ impl ClientDownloadSource {
     }
 }
 
-/// 一个已经过 Host 校验、可以直接交给浏览器下载的安装包。
+/// 一个已经过 Host 校验、可以直接交给浏览器下载的安装包
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientDownloadPackage {
     pub architecture: ClientArchitecture,
@@ -48,7 +48,7 @@ pub struct ClientDownloadPackage {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-/// Codex Desktop Windows 下载解析结果。
+/// Codex Desktop Windows 下载解析结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexDesktopWindowsDownloads {
     pub resolved_at: DateTime<Utc>,

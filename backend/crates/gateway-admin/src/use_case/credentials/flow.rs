@@ -1,4 +1,4 @@
-//! 已冻结 Provider 的凭据工作流；Admin 保持事务、审计与发布的唯一所有权。
+//! 已冻结 Provider 的凭据工作流；Admin 保持事务、审计与发布的唯一所有权
 
 use std::sync::Arc;
 

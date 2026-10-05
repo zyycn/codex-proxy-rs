@@ -1,13 +1,13 @@
-//! 查询 wire 类型、校验与领域命令映射。
+//! 查询 wire 类型、校验与领域命令映射
 
 use super::*;
 
-/// 观测列表默认页大小。
+/// 观测列表默认页大小
 pub const DEFAULT_PAGE_SIZE: u16 = 50;
-/// 观测列表允许的最大页大小。
+/// 观测列表允许的最大页大小
 pub const MAX_PAGE_SIZE: u16 = 100;
 
-/// Dashboard 查询参数。
+/// Dashboard 查询参数
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DashboardQuery {
@@ -19,13 +19,13 @@ pub struct DashboardQuery {
 }
 
 impl DashboardQuery {
-    /// 解析 dashboard 趋势类型。
+    /// 解析 dashboard 趋势类型
     pub fn trend_kind(&self) -> Result<TrendKind, WireValidationError> {
         TrendKind::parse(self.kind.as_deref())
     }
 }
 
-/// 逻辑请求列表、汇总和洞察查询参数。
+/// 逻辑请求列表、汇总和洞察查询参数
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageQuery {
@@ -52,7 +52,7 @@ pub struct UsageQuery {
 }
 
 impl UsageQuery {
-    /// 校验 Element Plus 风格的页码分页字段。
+    /// 校验 Element Plus 风格的页码分页字段
     pub fn validate_pagination(&self) -> Result<(u32, u16), WireValidationError> {
         let current_page = self.current_page.unwrap_or(1);
         if current_page == 0 {
@@ -66,7 +66,7 @@ impl UsageQuery {
     }
 }
 
-/// 详情查询参数。
+/// 详情查询参数
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DetailQuery {
@@ -74,13 +74,13 @@ pub struct DetailQuery {
 }
 
 impl DetailQuery {
-    /// 校验详情 ID，错误不回显输入值。
+    /// 校验详情 ID，错误不回显输入值
     pub fn validate(&self) -> Result<(), WireValidationError> {
         require_text(&self.id, "id")
     }
 }
 
-/// 诊断聚合查询参数。
+/// 诊断聚合查询参数
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagnosticsQuery {
@@ -96,13 +96,13 @@ pub struct DiagnosticsQuery {
 }
 
 impl DiagnosticsQuery {
-    /// 解析诊断维度。
+    /// 解析诊断维度
     pub fn dimension(&self) -> Result<DiagnosticDimension, WireValidationError> {
         DiagnosticDimension::parse(self.dimension.as_deref())
     }
 }
 
-/// 运维错误查询参数。
+/// 运维错误查询参数
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpsQuery {
@@ -129,7 +129,7 @@ pub struct OpsQuery {
 }
 
 impl OpsQuery {
-    /// 校验 Element Plus 风格的页码分页字段。
+    /// 校验 Element Plus 风格的页码分页字段
     pub fn validate_pagination(&self) -> Result<(u32, u16), WireValidationError> {
         let current_page = self.current_page.unwrap_or(1);
         if current_page == 0 {
@@ -143,7 +143,7 @@ impl OpsQuery {
     }
 }
 
-/// Dashboard 趋势类型。
+/// Dashboard 趋势类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TrendKind {
@@ -153,7 +153,7 @@ pub enum TrendKind {
 }
 
 impl TrendKind {
-    /// 从 query 值解析趋势类型。
+    /// 从 query 值解析趋势类型
     pub fn parse(value: Option<&str>) -> Result<Self, WireValidationError> {
         match trimmed(value) {
             None | Some("usage") => Ok(Self::Usage),
@@ -164,7 +164,7 @@ impl TrendKind {
     }
 }
 
-/// 诊断聚合维度。
+/// 诊断聚合维度
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticDimension {
     Model,
@@ -177,7 +177,7 @@ pub enum DiagnosticDimension {
 }
 
 impl DiagnosticDimension {
-    /// 从 query 值解析诊断维度。
+    /// 从 query 值解析诊断维度
     pub fn parse(value: Option<&str>) -> Result<Self, WireValidationError> {
         match trimmed(value) {
             None | Some("model") => Ok(Self::Model),
@@ -191,7 +191,7 @@ impl DiagnosticDimension {
         }
     }
 
-    /// 返回终态响应中的稳定维度名称。
+    /// 返回终态响应中的稳定维度名称
     #[must_use]
     pub const fn display_name(self) -> &'static str {
         match self {
@@ -206,7 +206,7 @@ impl DiagnosticDimension {
     }
 }
 
-/// 解析 RFC3339 时间；错误不回显原始值。
+/// 解析 RFC3339 时间；错误不回显原始值
 pub fn parse_datetime(value: Option<&str>) -> Result<Option<DateTime<Utc>>, WireValidationError> {
     let Some(value) = trimmed(value) else {
         return Ok(None);
@@ -216,7 +216,7 @@ pub fn parse_datetime(value: Option<&str>) -> Result<Option<DateTime<Utc>>, Wire
         .map_err(|_| WireValidationError::new("timeRange"))
 }
 
-/// 解析 HTTP 状态码。
+/// 解析 HTTP 状态码
 pub fn parse_status(value: Option<i64>) -> Result<Option<u16>, WireValidationError> {
     value
         .map(|value| {
@@ -228,7 +228,7 @@ pub fn parse_status(value: Option<i64>) -> Result<Option<u16>, WireValidationErr
         .transpose()
 }
 
-/// 解析尝试序号。
+/// 解析尝试序号
 pub fn parse_attempt_index(value: Option<i64>) -> Result<Option<u32>, WireValidationError> {
     value
         .map(|value| {

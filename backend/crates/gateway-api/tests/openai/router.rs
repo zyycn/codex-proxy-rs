@@ -1,3 +1,5 @@
+//! 验证 OpenAI 路由暴露范围、请求体限制与跨域行为
+
 use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header::AUTHORIZATION},
@@ -174,8 +176,8 @@ async fn responses_body_should_accept_payload_above_the_removed_private_limit() 
         .await
         .expect("route request above the removed limit");
 
-    // The handler sees the body and rejects the missing credentials. A restored body limit
-    // would return 413 before authentication runs.
+    // 请求进入处理器后应因缺少凭据而被拒绝
+    // 若提前施加正文大小限制，则会在认证前返回 413
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 

@@ -1,3 +1,5 @@
+//! 验证 Provider 注册唯一性与模型能力目录查询
+
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;

@@ -1,3 +1,5 @@
+//! 验证异步读取在取消和背压后保留尚未交付的分块与消息
+
 use super::session;
 use gateway_plugin_sdk::{
     ErrorCode, Frame, Message, Stage,
@@ -110,7 +112,7 @@ async fn verify_cancelled_read(method: &str) {
     let first = callback_id(&mut host, read).await;
     signals.cancel.notify_one();
     signals.dropped.notified().await;
-    // 已取消的读取随后成功，下一次 read 应恢复同一读取结果。
+    // 已取消的读取随后成功，下一次 read 应恢复同一读取结果
     reply(&mut host, first, data.clone(), b"first").await;
     signals.resume.notify_one();
     let next = session::receive(&mut host).await;

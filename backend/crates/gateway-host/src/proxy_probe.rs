@@ -1,4 +1,4 @@
-//! 使用与 Provider 请求一致的显式代理协议，执行有超时和响应大小限制的出口测试。
+//! 使用与 Provider 请求一致的显式代理协议，执行有超时和响应大小限制的出口测试
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -33,7 +33,7 @@ type ProxyClientBuilder =
 
 impl Default for HttpProxyProbe {
     fn default() -> Self {
-        // 分别向 IPv4 和 IPv6 专用端点并发探测，以获取真实的双栈出口地址。
+        // 分别向 IPv4 和 IPv6 专用端点并发探测，以获取真实的双栈出口地址
         Self::new_dual(
             "https://api.ipify.org?format=json",
             "https://api6.ipify.org?format=json",
@@ -63,7 +63,7 @@ impl HttpProxyProbe {
         }
     }
 
-    /// 由组合根注入与 Provider 请求一致的证书信任策略。
+    /// 由组合根注入与 Provider 请求一致的证书信任策略
     #[must_use]
     pub fn with_client_builder<E>(
         mut self,
@@ -248,7 +248,7 @@ impl HttpProxyProbe {
 }
 
 impl HttpProxyProbe {
-    /// 显式注入地理位置服务地址，便于部署适配与隔离网络验证。
+    /// 显式注入地理位置服务地址，便于部署适配与隔离网络验证
     #[must_use]
     pub fn with_location_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.location_endpoint = endpoint.into();
@@ -260,8 +260,8 @@ impl HttpProxyProbe {
         proxy: &OutboundProxy,
         ip: IpAddr,
     ) -> Result<RequestLocation, &'static str> {
-        // 出口 IP 已由代理探测确认；按这个固定 IP 从服务端查询位置，避免代理出口屏蔽位置服务。
-        // 部署环境无法直连位置服务时仍尝试原代理路径。
+        // 出口 IP 已由代理探测确认；按这个固定 IP 从服务端查询位置，避免代理出口屏蔽位置服务
+        // 部署环境无法直连位置服务时仍尝试原代理路径
         match self.lookup_location(ip, None).await {
             Ok(location) => Ok(location),
             Err(direct_error) => self
@@ -291,7 +291,7 @@ impl HttpProxyProbe {
                 .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| "代理地址不合法")?);
         }
         let client = (self.build_client)(builder)?;
-        // 查询已检测到的具体出口，不能再次查询“我的 IP”，轮换代理可能换到另一个出口。
+        // 查询已检测到的具体出口，不能再次查询“我的 IP”，轮换代理可能换到另一个出口
         let url = format!("{}/{ip}", self.location_endpoint.trim_end_matches('/'));
         let mut response = client
             .get(url)

@@ -1,4 +1,4 @@
-//! Client API Key 的 Redis RPM/并发原子准入与热状态恢复。
+//! Client API Key 的 Redis RPM/并发原子准入与热状态恢复
 
 use std::{collections::HashSet, time::Duration};
 
@@ -16,6 +16,19 @@ use redis::{Script, aio::ConnectionManager};
 use crate::{StoreError, StoreResult, redis_unavailable, require_nonempty};
 
 use super::{MAX_REDIS_EXACT_INTEGER, namespace, resource_fingerprint};
+
+// 只刷新既有并发成员，不写 RPM 窗口，也不复活已过期或已释放的租约
+const RENEW_SCRIPT: &str = r#"
+local clock = redis.call('TIME')
+local now_ms = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
+local expires = tonumber(redis.call('ZSCORE', KEYS[1], ARGV[1]) or '0')
+if expires <= now_ms then return 0 end
+local ttl = tonumber(ARGV[2])
+redis.call('ZADD', KEYS[1], 'XX', now_ms + ttl, ARGV[1])
+local current = redis.call('PTTL', KEYS[1])
+if current < ttl + 60000 then redis.call('PEXPIRE', KEYS[1], ttl + 60000) end
+return 1
+"#;
 
 const ADMIT_SCRIPT: &str = r#"
 local clock = redis.call('TIME')
@@ -374,6 +387,39 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
 }
 
 impl ClientAdmissionPort for RedisClientAdmissionRepository {
+    fn maintain(
+        &self,
+        key: &gateway_core::policy::ClientApiKeyId,
+        request: &gateway_core::engine::ModelRequestId,
+        deadline: gateway_core::lifecycle::Deadline,
+        cancellation: gateway_core::lifecycle::CancellationToken,
+    ) -> Box<dyn gateway_core::lifecycle::LeaseGuard> {
+        let repository = self.clone();
+        let key = key.as_str().to_owned();
+        let request = request.as_str().to_owned();
+        Box::new(crate::lease_renewal::LeaseRenewal::spawn(
+            deadline,
+            Some(cancellation),
+            move |ttl| {
+                let repository = repository.clone();
+                let key = key.clone();
+                let request = request.clone();
+                Box::pin(async move {
+                    let keys = repository.keys(&key)?;
+                    let mut connection = repository.connection.clone();
+                    let renewed = Script::new(RENEW_SCRIPT)
+                        .key(&keys[0])
+                        .arg(request)
+                        .arg(redis_duration_millis(ttl)?)
+                        .invoke_async::<i64>(&mut connection)
+                        .await
+                        .map_err(|_| redis_unavailable("renew client request"))?;
+                    Ok(renewed == 1)
+                })
+            },
+        ))
+    }
+
     fn abandon(
         &self,
         key: &gateway_core::policy::ClientApiKeyId,

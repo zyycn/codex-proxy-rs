@@ -1,4 +1,4 @@
-//! 管理端权限校验与请求审计上下文。
+//! 管理端权限校验与请求审计上下文
 
 use axum::{
     extract::FromRequestParts,
@@ -13,7 +13,7 @@ use super::{AdminError, wire::map_admin_service_error};
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 
-/// 已通过管理员会话或部署级管理 API Key 鉴权的请求。
+/// 已通过管理员会话或部署级管理 API Key 鉴权的请求
 pub struct AdminAuth {
     context: AdminRequestContext,
 }
@@ -32,7 +32,7 @@ where
     type Rejection = AdminError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        // 仅内部 Dispatcher 写入此上下文；普通客户端 headers 无法声明插件身份。
+        // 仅内部 Dispatcher 写入此上下文；普通客户端 headers 无法声明插件身份
         if let Some(context) = parts.extensions.get::<AdminRequestContext>() {
             return Ok(Self {
                 context: context.clone(),
@@ -50,8 +50,8 @@ where
 }
 
 /// request-id 层按配置的 header 名注入，同时写入与名字无关的扩展；
-/// 优先读扩展，使自定义 header 名不会让管理请求失去请求上下文。
-/// header 回退覆盖未装配该层的调用方。
+/// 优先读扩展，使自定义 header 名不会让管理请求失去请求上下文
+/// header 回退覆盖未装配该层的调用方
 fn admin_request_id(parts: &Parts) -> Option<String> {
     parts
         .extensions

@@ -1,3 +1,5 @@
+//! 独立搜索 HTTP 接口的请求传递、鉴权与响应交付测试
+
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 

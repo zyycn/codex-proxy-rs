@@ -1,3 +1,5 @@
+//! 宿主网络测试使用的固定 DNS、本地服务器与请求观测辅助
+
 use std::{
     io,
     net::{IpAddr, SocketAddr},
@@ -174,7 +176,7 @@ async fn serve_http2(
 ) -> io::Result<()> {
     let service =
         hyper::service::service_fn(move |request: http::Request<hyper::body::Incoming>| {
-            // 模拟 nginx 1.24：URI 已携带 :authority，额外的 Host 仍按重复头拒绝。
+            // 模拟 nginx 1.24：URI 已携带 :authority，额外的 Host 仍按重复头拒绝
             let status = if request.headers().contains_key(http::header::HOST) {
                 400
             } else {

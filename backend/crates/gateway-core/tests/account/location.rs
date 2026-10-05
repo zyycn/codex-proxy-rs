@@ -1,3 +1,5 @@
+//! 验证账号代理位置的规范化、字段约束与代理变更后的清理
+
 use gateway_core::account::{InvalidRequestLocation, RequestLocation};
 use serde_json::json;
 

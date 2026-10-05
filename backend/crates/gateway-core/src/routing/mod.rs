@@ -1,4 +1,4 @@
-//! Provider、模型目录、精确模型映射与请求级候选计划。
+//! Provider、模型目录、精确模型映射与请求级候选计划
 
 mod catalog;
 pub mod snapshot;
@@ -26,7 +26,11 @@ use crate::validation::{IdentifierError, RoutingError, validate_text};
 
 const MAX_REQUEST_ATTEMPTS: u32 = 32;
 
-/// 客户端请求中的模型名称。
+/// 单请求内允许的换号次数上限，选中账号与上一 attempt 不同的路由 attempt 记一次
+/// 初始账号和同账号重试不计入换号次数，所有尝试仍受总路由预算限制
+pub(crate) const MAX_ACCOUNT_ROTATION_ATTEMPTS: u32 = 3;
+
+/// 客户端请求中的模型名称
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 #[serde(transparent)]
 pub struct PublicModelId(String);
@@ -45,14 +49,14 @@ impl PublicModelId {
         Ok(Self(value))
     }
 
-    /// 从客户端 OpenAI wire 读取模型名。
+    /// 从客户端 OpenAI wire 读取模型名
     ///
     /// 该值只作为路由查询键；具体模型字符串能否被上游接受由 Provider 决定，
-    /// 因而不能把内部标识长度或控制字符规则当作入站 schema gate。
+    /// 因而不能把内部标识长度或控制字符规则当作入站 schema gate
     ///
     /// # Errors
     ///
-    /// 空模型名无法参与路由时返回错误。
+    /// 空模型名无法参与路由时返回错误
     pub fn from_client_wire(value: impl Into<String>) -> Result<Self, IdentifierError> {
         let value = value.into();
         if value.is_empty() {
@@ -73,7 +77,7 @@ impl fmt::Display for PublicModelId {
     }
 }
 
-/// Provider 实际接收的模型名称。
+/// Provider 实际接收的模型名称
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 #[serde(transparent)]
 pub struct UpstreamModelId(String);
@@ -92,10 +96,10 @@ impl UpstreamModelId {
         Ok(Self(value))
     }
 
-    /// 从未命中显式映射的客户端模型名构造同名上游模型。
+    /// 从未命中显式映射的客户端模型名构造同名上游模型
     ///
     /// 目录和配置仍使用 [`Self::new`] 的内部标识约束；客户端 wire 只要求非空，
-    /// 具体模型字符串是否可用由绑定 Provider 决定。
+    /// 具体模型字符串是否可用由绑定 Provider 决定
     pub fn from_client_wire(value: impl Into<String>) -> Result<Self, IdentifierError> {
         let value = value.into();
         if value.is_empty() {
@@ -116,7 +120,7 @@ impl fmt::Display for UpstreamModelId {
     }
 }
 
-/// `runtime_settings.config_revision`。
+/// `runtime_settings.config_revision`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConfigRevision(NonZeroU64);
 
@@ -133,7 +137,7 @@ impl ConfigRevision {
     }
 }
 
-/// Provider 实时目录报告的能力支持等级。
+/// Provider 实时目录报告的能力支持等级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SupportLevel {
     Native,
@@ -142,7 +146,7 @@ pub enum SupportLevel {
     Unknown,
 }
 
-/// Provider 实时模型目录中的能力事实；不落 PostgreSQL。
+/// Provider 实时模型目录中的能力事实；不落 PostgreSQL
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelCapabilities {
     operations: BTreeSet<OperationKind>,
@@ -151,9 +155,9 @@ pub struct ModelCapabilities {
     upstream_validates_features: bool,
 }
 
-/// Provider 为客户端模型目录提供的展示与交互能力。
+/// Provider 为客户端模型目录提供的展示与交互能力
 ///
-/// 该值不参与路由，也不把任一 Provider 的 wire 类型带入 Core。
+/// 该值不参与路由，也不把任一 Provider 的 wire 类型带入 Core
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelPresentation {
     display_name: Option<String>,
@@ -172,7 +176,7 @@ pub struct ModelPresentation {
     hidden: bool,
 }
 
-/// Provider 声明给 Codex 客户端的服务档位。
+/// Provider 声明给 Codex 客户端的服务档位
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelServiceTier {
     id: String,
@@ -250,7 +254,7 @@ impl ModelPresentation {
         self
     }
 
-    /// 目录声明的可覆盖上限；客户端本地 context window 覆盖会被它钳制。
+    /// 目录声明的可覆盖上限；客户端本地 context window 覆盖会被它钳制
     #[must_use]
     pub const fn with_max_context_window_tokens(
         mut self,
@@ -374,7 +378,7 @@ impl ModelPresentation {
     }
 }
 
-/// 一个公开模型及其 Provider 编译后的客户端画像。
+/// 一个公开模型及其 Provider 编译后的客户端画像
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicModelProfile {
     model: PublicModelId,
@@ -418,7 +422,7 @@ impl ModelCapabilities {
         self
     }
 
-    /// 将请求形态 feature 的最终合法性判断交给上游 wire API。
+    /// 将请求形态 feature 的最终合法性判断交给上游 wire API
     #[must_use]
     pub const fn with_upstream_feature_validation(mut self) -> Self {
         self.upstream_validates_features = true;
@@ -464,7 +468,7 @@ impl ModelCapabilities {
     }
 }
 
-/// 一个 Provider 实时发现的上游模型能力。
+/// 一个 Provider 实时发现的上游模型能力
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModel {
     provider: ProviderKind,
@@ -510,15 +514,15 @@ impl ProviderModel {
     }
 }
 
-/// 本次请求选择 Provider 时使用的动态过滤事实。
+/// 本次请求选择 Provider 时使用的动态过滤事实
 #[derive(Debug, Clone, Default)]
 pub struct RoutingContext {
-    /// 管理端 connection test 显式限制的 Provider；普通请求留空。
+    /// 管理端 connection test 显式限制的 Provider；普通请求留空
     pub required_provider: Option<ProviderKind>,
     pub blocked_providers: BTreeSet<ProviderKind>,
 }
 
-/// 已绑定 Provider 的请求候选；模型端点携带真实上游模型，原生端点不虚构模型。
+/// 已绑定 Provider 的请求候选；模型端点携带真实上游模型，原生端点不虚构模型
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCandidate {
     provider: ProviderKind,
@@ -529,7 +533,7 @@ pub struct ProviderCandidate {
 }
 
 impl ProviderCandidate {
-    /// 与路由计划冻结的上游模型目录，重试时不读取新的目录代次。
+    /// 与路由计划冻结的上游模型目录，重试时不读取新的目录代次
     #[must_use]
     pub const fn model_presentation(&self) -> Option<&ModelPresentation> {
         self.model_presentation.as_ref()
@@ -556,7 +560,7 @@ impl ProviderCandidate {
     }
 }
 
-/// 一次请求冻结的 Provider 尝试顺序。
+/// 一次请求冻结的 Provider 尝试顺序
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
     pricing: Arc<crate::metering::PricingOverrides>,
@@ -580,7 +584,7 @@ impl RoutingPlan {
         self.account_scope.fast_mode()
     }
 
-    /// 本次请求冻结的全局位置，重试时沿用同一份配置。
+    /// 本次请求冻结的全局位置，重试时沿用同一份配置
     #[must_use]
     pub const fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request_location.as_ref()

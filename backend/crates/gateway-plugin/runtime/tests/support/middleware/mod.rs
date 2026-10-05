@@ -1,3 +1,5 @@
+//! 中间件测试插件子进程入口及异常退出清理辅助
+
 mod http_resources;
 
 use gateway_plugin_sdk::{
@@ -182,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     if call.is::<settings::Load>() {
                         let call = call.into_typed::<settings::Load>()?;
-                        // 同一插件再次读取服务不会递归调用自身；回调仍经过宿主服务端口。
+                        // 同一插件再次读取服务不会递归调用自身；回调仍经过宿主服务端口
                         let nested = call.host.service::<settings::Load>(()).await.unwrap();
                         let mut output = call.next.run(()).await.unwrap();
                         assert_eq!(output.config_revision, nested.config_revision);
@@ -358,7 +360,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if index == 0 {
                                     sender.send(WebSocketMessage::new(WebSocketKind::Text, b"ready".to_vec())).await?;
                                 }
-                                // 模拟模型任务先完成导致 select 丢弃 receive；下一次等待必须继续取同一条消息。
+                                // 模拟模型任务先完成导致 select 丢弃 receive；下一次等待必须继续取同一条消息
                             }
                             if let Some(message) = session.receive().await? { sender.send(message).await?; }
                             for index in 0..32 {
@@ -499,7 +501,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             if mode == "inspect" && !call.request.body.is_empty() {
-                // 读取和解析只能作用于副本，不能把解析结果写回未改写的正文。
+                // 读取和解析只能作用于副本，不能把解析结果写回未改写的正文
                 assert!(serde_json::from_slice::<serde_json::Value>(&call.request.body).is_ok());
             }
             if mode == "rejected" {
@@ -545,7 +547,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         format!("{}\n", serde_json::to_string(&response.metadata).unwrap()),
                     )
                     .unwrap();
-                    // 修改快照不能替换原执行的账号或费用。
+                    // 修改快照不能替换原执行的账号或费用
                     response.metadata.as_mut().unwrap().provider_account_id =
                         "changed-snapshot".into();
                     response.body = response.body.with_facts()?.map_frames(move |mut frame| {

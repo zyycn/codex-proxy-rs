@@ -1,3 +1,5 @@
+//! 验证 WebSocket 各轮次刷新身份与设置时保留握手中间件覆盖
+
 use super::*;
 use bytes::Bytes;
 use gateway_core::{
@@ -104,7 +106,7 @@ impl MiddlewarePlan for Plan {
         request: MiddlewareRequest,
         next: MiddlewareNext,
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
-        // 统一计划延续到连接内的模型调用，没有模型绑定时直接委托。
+        // 统一计划延续到连接内的模型调用，没有模型绑定时直接委托
         next.run(request)
     }
 }
@@ -266,7 +268,7 @@ async fn rewrite_upgrade_and_control_active_response_keep_http_context_until_con
     );
     let (trace, mut socket, server) =
         start_active_response_with_middleware(Some(frozen), "/custom/websocket").await;
-    // 升级后的默认会话仍持有入口上下文；101 正文结束不再提前取消它。
+    // 升级后的默认会话仍持有入口上下文；101 正文结束不再提前取消它
     assert!(
         !plan
             .http_cancellation
@@ -352,7 +354,7 @@ async fn input_plugin_runs_while_a_real_socket_write_is_blocked() {
     let (trace, mut socket, server) =
         start_active_response_with_middleware(Some(frozen), "/custom/websocket").await;
     trace.release_terminal.notify_one();
-    // 客户端不读取 64 MiB 输出，真实 TCP 写入将受接收窗口背压。
+    // 客户端不读取 64 MiB 输出，真实 TCP 写入将受接收窗口背压
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!trace.finalized.load(Ordering::SeqCst));
     socket

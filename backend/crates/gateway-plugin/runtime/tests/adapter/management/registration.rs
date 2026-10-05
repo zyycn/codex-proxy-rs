@@ -1,3 +1,5 @@
+//! 验证插件管理注册拒绝未声明资源、非法路由与缺失授权
+
 use gateway_admin::ports::plugins::PluginPreparation;
 use serde_json::json;
 

@@ -1,4 +1,4 @@
-//! Codex HTTP/SSE 上游客户端、请求头构造、TLS 与自定义 CA。
+//! Codex HTTP/SSE 上游客户端、请求头构造、TLS 与自定义 CA
 
 use std::{
     collections::HashMap,
@@ -10,7 +10,6 @@ use std::{
 
 use crate::transport::profile::CodexWireProfileState;
 use bytes::Bytes;
-use chrono::{DateTime, NaiveDateTime, Utc};
 use futures::{Stream, StreamExt};
 use gateway_core::engine::middleware::MiddlewareHeader;
 use gateway_protocol::openai::{
@@ -49,7 +48,7 @@ const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
 type ReqwestClientCacheKey = (Option<String>, String, Duration);
 type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
 
-/// 构建复用连接池的 Codex HTTP 客户端。
+/// 构建复用连接池的 Codex HTTP 客户端
 pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
     build_account_http_client("", None)
 }
@@ -82,7 +81,7 @@ pub(super) fn build_account_http_client_with_timeout(
         return Ok(client.clone());
     }
 
-    // 连接池与 TCP、HTTP/2 保活沿用官方 Core 的 reqwest 默认值。
+    // 连接池与 TCP、HTTP/2 保活沿用官方 Core 的 reqwest 默认值
     let mut builder = Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -121,7 +120,7 @@ fn egress_key(account_id: &str, proxy: Option<&gateway_core::account::OutboundPr
 // 错误类型
 // ---------------------------------------------------------------------------
 
-/// 当前 Responses 请求最终失败时可原样返回给客户端的上游 HTTP 响应。
+/// 当前 Responses 请求最终失败时可原样返回给客户端的上游 HTTP 响应
 #[derive(Clone, PartialEq, Eq)]
 pub struct CodexClientVisibleUpstreamResponse {
     status: u16,
@@ -193,18 +192,18 @@ impl fmt::Debug for CodexClientVisibleUpstreamResponse {
     }
 }
 
-/// Codex 上游 HTTP 客户端错误。
+/// Codex 上游 HTTP 客户端错误
 #[derive(Error)]
 pub enum CodexClientError {
     #[error("connection recovery budget exhausted")]
     ConnectionBudgetExhausted,
-    /// Reqwest 传输失败。
+    /// Reqwest 传输失败
     #[error("http transport error: {0}")]
     Http(#[from] reqwest::Error),
-    /// 非流式 JSON 请求的 Reqwest 传输失败。
+    /// 非流式 JSON 请求的 Reqwest 传输失败
     #[error("HTTP JSON transport error: {0}")]
     HttpJson(#[source] reqwest::Error),
-    /// 已收到错误响应头，但未能读取完整正文；不能作为可透传的 HTTP 原响应。
+    /// 已收到错误响应头，但未能读取完整正文；不能作为可透传的 HTTP 原响应
     #[error("upstream error response body read failed for status {status}")]
     ErrorBodyRead {
         #[source]
@@ -214,62 +213,62 @@ pub enum CodexClientError {
         transport: CodexBackendTransport,
         transport_metrics: Box<CodexTransportMetrics>,
     },
-    /// 自定义 CA 构建失败。
+    /// 自定义 CA 构建失败
     #[error("custom CA transport error: {0}")]
     CustomCa(#[from] CustomCaError),
-    /// 请求头名字无效。
+    /// 请求头名字无效
     #[error("invalid request header name: {0}")]
     InvalidHeaderName(#[from] reqwest::header::InvalidHeaderName),
-    /// 请求头值无效。
+    /// 请求头值无效
     #[error("invalid request header value: {0}")]
     InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
-    /// 中间件业务头试图覆盖 Provider 已构造的受管头。
-    /// SSE 响应解析失败。
+    /// 中间件业务头试图覆盖 Provider 已构造的受管头
+    /// SSE 响应解析失败
     #[error("invalid upstream SSE response: {0}")]
     InvalidSse(#[from] SseError),
-    /// 模型目录不是一个完整、安全的官方快照。
+    /// 模型目录不是一个完整、安全的官方快照
     #[error("invalid Codex model catalog: {0}")]
     ModelCatalog(#[from] super::catalog::CodexModelCatalogError),
-    /// HTTP/SSE 上游在空闲窗口内没有发送任何数据。
+    /// HTTP/SSE 上游在空闲窗口内没有发送任何数据
     #[error("upstream HTTP/SSE stream idle for {timeout:?}")]
     StreamIdleTimeout {
-        /// 相邻数据块允许的最大空闲时间。
+        /// 相邻数据块允许的最大空闲时间
         timeout: Duration,
     },
-    /// WebSocket 请求编码失败。
+    /// WebSocket 请求编码失败
     #[error("failed to encode websocket request: {0}")]
     WebSocketEncode(#[source] serde_json::Error),
-    /// 上游请求体 JSON 序列化失败。
+    /// 上游请求体 JSON 序列化失败
     #[error("failed to encode upstream request body: {0}")]
     RequestBodyEncode(#[source] serde_json::Error),
-    /// 上游请求体 zstd 压缩失败。
+    /// 上游请求体 zstd 压缩失败
     #[error("failed to compress upstream request body: {0}")]
     RequestCompression(#[source] std::io::Error),
-    /// WebSocket 请求失败。
+    /// WebSocket 请求失败
     #[error("websocket request failed: {0}")]
     WebSocket(#[from] CodexWebSocketExchangeError),
-    /// 上游返回非成功响应。
+    /// 上游返回非成功响应
     #[error("upstream returned status {status}")]
     Upstream {
-        /// 上游状态码。
+        /// 上游状态码
         status: StatusCode,
-        /// 上游错误体。
+        /// 上游错误体
         body: String,
-        /// 仅供当前 Responses 请求最终失败时原样返回的响应。
+        /// 仅供当前 Responses 请求最终失败时原样返回的响应
         client_response: Option<Box<CodexClientVisibleUpstreamResponse>>,
-        /// 推导出的重试秒数。
+        /// 推导出的重试秒数
         retry_after_seconds: Option<u64>,
-        /// 上游诊断元数据。
+        /// 上游诊断元数据
         diagnostics: Box<CodexUpstreamDiagnostics>,
-        /// 上游透传的 `set-cookie` 列表。
+        /// 上游透传的 `set-cookie` 列表
         set_cookie_headers: Vec<String>,
-        /// 上游错误响应携带的限流头。
+        /// 上游错误响应携带的限流头
         rate_limit_headers: Vec<(String, String)>,
-        /// 实际收到该上游响应的 transport。
+        /// 实际收到该上游响应的 transport
         transport: CodexBackendTransport,
-        /// 错误响应前已经确认的 transport 与 HTTP 阶段事实。
+        /// 错误响应前已经确认的 transport 与 HTTP 阶段事实
         transport_metrics: Box<CodexTransportMetrics>,
-        /// 上游拒绝发生时业务 payload 的发送阶段。
+        /// 上游拒绝发生时业务 payload 的发送阶段
         send_phase: CodexUpstreamSendPhase,
     },
 }
@@ -334,7 +333,7 @@ impl fmt::Debug for CodexClientError {
 }
 
 impl CodexClientError {
-    /// 返回错误实际发生的 transport；请求编码等本地错误没有 transport。
+    /// 返回错误实际发生的 transport；请求编码等本地错误没有 transport
     pub fn transport(&self) -> Option<CodexBackendTransport> {
         match self {
             Self::Http(_)
@@ -400,10 +399,10 @@ impl CodexClientError {
     }
 }
 
-/// Codex 客户端结果类型。
+/// Codex 客户端结果类型
 pub type CodexClientResult<T> = Result<T, CodexClientError>;
 
-/// Codex SSE 字节流。
+/// Codex SSE 字节流
 pub type CodexBackendSseStream =
     Pin<Box<dyn Stream<Item = CodexClientResult<Bytes>> + Send + 'static>>;
 
@@ -411,7 +410,7 @@ pub type CodexBackendSseStream =
 // 请求上下文与响应类型
 // ---------------------------------------------------------------------------
 
-/// 账号亲和决策传给 transport 的不可变遥测快照。
+/// 账号亲和决策传给 transport 的不可变遥测快照
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CodexAccountSelectionTelemetry<'a> {
     affinity_hit: bool,
@@ -455,44 +454,44 @@ impl<'a> CodexAccountSelectionTelemetry<'a> {
     }
 }
 
-/// 单次 Codex 上游请求的上下文。
+/// 单次 Codex 上游请求的上下文
 #[derive(Clone, Copy)]
 pub struct CodexRequestContext<'a> {
-    /// 显式传递的请求诊断上下文，跨连接任务共享。
+    /// 显式传递的请求诊断上下文，跨连接任务共享
     pub trace: Option<&'a gateway_core::diagnostics::TraceContext>,
-    /// Provider 已构造并脱敏持有的完整 Authorization 值。
+    /// Provider 已构造并脱敏持有的完整 Authorization 值
     pub authorization: &'a str,
-    /// ChatGPT 账号 ID。
+    /// ChatGPT 账号 ID
     pub account_id: Option<&'a str>,
-    /// 代理请求 ID。
+    /// 代理请求 ID
     pub request_id: &'a str,
-    /// 当前账号同一 turn 内的 opaque sticky-routing 状态。
+    /// 当前账号同一 turn 内的 opaque sticky-routing 状态
     pub turn_state: Option<&'a str>,
-    /// 客户端 turn metadata；其中 installation ID 已按当前账号处理。
+    /// 客户端 turn metadata；其中 installation ID 已按当前账号处理
     pub turn_metadata: Option<&'a str>,
-    /// x-codex-beta-features 头值。
+    /// x-codex-beta-features 头值
     pub beta_features: Option<&'a str>,
-    /// x-responsesapi-include-timing-metrics 头值。
+    /// x-responsesapi-include-timing-metrics 头值
     pub include_timing_metrics: Option<&'a str>,
-    /// 下游 `version` 扩展头；存在时上游值由 Desktop 版本画像统一生成。
+    /// 下游 `version` 扩展头；存在时上游值由 Desktop 版本画像统一生成
     pub version: Option<&'a str>,
-    /// 客户端 window ID。
+    /// 客户端 window ID
     pub codex_window_id: Option<&'a str>,
-    /// 客户端 parent thread ID。
+    /// 客户端 parent thread ID
     pub parent_thread_id: Option<&'a str>,
-    /// cookie 头。
+    /// cookie 头
     pub cookie_header: Option<&'a str>,
-    /// 当前账号稳定派生的 installation ID。
+    /// 当前账号稳定派生的 installation ID
     pub installation_id: Option<&'a str>,
-    /// 客户端 session ID。
+    /// 客户端 session ID
     pub session_id: Option<&'a str>,
-    /// 客户端 thread ID。
+    /// 客户端 thread ID
     pub thread_id: Option<&'a str>,
-    /// 客户端逻辑 request ID；缺失时使用代理请求 ID。
+    /// 客户端逻辑 request ID；缺失时使用代理请求 ID
     pub client_request_id: Option<&'a str>,
-    /// 客户端 turn ID。
+    /// 客户端 turn ID
     pub turn_id: Option<&'a str>,
-    /// 账号亲和选择结果；仅用于结构化遥测，不参与 transport 决策。
+    /// 账号亲和选择结果；仅用于结构化遥测，不参与 transport 决策
     pub account_selection: CodexAccountSelectionTelemetry<'a>,
 }
 
@@ -552,18 +551,18 @@ impl fmt::Debug for CodexRequestContext<'_> {
     }
 }
 
-/// Codex Responses 实际使用的上游传输。
+/// Codex Responses 实际使用的上游传输
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexBackendTransport {
-    /// HTTP SSE 传输。
+    /// HTTP SSE 传输
     HttpSse,
-    /// 非流式 HTTP JSON 传输。
+    /// 非流式 HTTP JSON 传输
     HttpJson,
-    /// WebSocket 传输。
+    /// WebSocket 传输
     WebSocket,
 }
 
-/// transport owner 最终做出的稳定决策。
+/// transport owner 最终做出的稳定决策
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexTransportDecision {
     HttpRequired,
@@ -593,7 +592,7 @@ impl CodexTransportDecision {
     }
 }
 
-/// transport 决策与握手阶段观测值。
+/// transport 决策与握手阶段观测值
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CodexTransportMetrics {
     pub decision: Option<CodexTransportDecision>,
@@ -604,55 +603,55 @@ pub struct CodexTransportMetrics {
     pub http_version: Option<String>,
 }
 
-/// 响应头之后在 live 流中采集的结构化限流更新。
+/// 响应头之后在 live 流中采集的结构化限流更新
 pub type CodexRateLimitUpdates = CodexWebSocketRateLimitUpdates;
 
-/// 响应头之后在 live 流中采集的请求级 metadata 更新。
+/// 响应头之后在 live 流中采集的请求级 metadata 更新
 pub type CodexResponseMetadataUpdates = CodexWebSocketResponseMetadataUpdates;
 
-/// Codex Responses 上游 live SSE 响应。
+/// Codex Responses 上游 live SSE 响应
 pub struct CodexBackendStreamingResponse {
-    /// 上游 SSE 字节流。
+    /// 上游 SSE 字节流
     pub body: CodexBackendSseStream,
-    /// 实际使用的上游传输。
+    /// 实际使用的上游传输
     pub transport: CodexBackendTransport,
-    /// WebSocket 响应所绑定的连接；HTTP transport 为 `None`。
+    /// WebSocket 响应所绑定的连接；HTTP transport 为 `None`
     pub websocket_connection_id: Option<Uuid>,
-    /// 响应头或 metadata 事件里最先确认的 turn state。
+    /// 响应头或 metadata 事件里最先确认的 turn state
     pub turn_state: Option<String>,
-    /// 上游透传的 `set-cookie` 列表。
+    /// 上游透传的 `set-cookie` 列表
     pub set_cookie_headers: Vec<String>,
-    /// 上游透传的限流头。
+    /// 上游透传的限流头
     pub rate_limit_headers: Vec<(String, String)>,
-    /// live stream 期间捕获的结构化限流更新。
+    /// live stream 期间捕获的结构化限流更新
     pub rate_limit_updates: Option<CodexRateLimitUpdates>,
-    /// live stream 期间捕获的请求级 metadata 更新。
+    /// live stream 期间捕获的请求级 metadata 更新
     pub response_metadata_updates: Option<CodexResponseMetadataUpdates>,
-    /// WebSocket 连接池决策。
+    /// WebSocket 连接池决策
     pub websocket_pool_decision: Option<WebSocketPoolDecision>,
-    /// 上游诊断元数据。
+    /// 上游诊断元数据
     pub diagnostics: CodexUpstreamDiagnostics,
-    /// 安全响应元数据。
+    /// 安全响应元数据
     pub response_metadata: CodexResponseMetadata,
-    /// 传输选择与低延迟阶段耗时。
+    /// 传输选择与低延迟阶段耗时
     pub transport_metrics: CodexTransportMetrics,
-    /// terminal completed 后是否由池中 WebSocket 保留 connection-local continuation。
+    /// terminal completed 后是否由池中 WebSocket 保留 connection-local continuation
     pub connection_local_continuation: bool,
 }
 
-/// Codex 上游非流式 JSON 响应。
+/// Codex 上游非流式 JSON 响应
 pub struct CodexBackendJsonResponse {
-    /// 未经解析或重编码的完整响应正文。
+    /// 未经解析或重编码的完整响应正文
     pub body: Bytes,
-    /// 上游透传的 `set-cookie` 列表。
+    /// 上游透传的 `set-cookie` 列表
     pub set_cookie_headers: Vec<String>,
-    /// 上游透传的限流头。
+    /// 上游透传的限流头
     pub rate_limit_headers: Vec<(String, String)>,
-    /// 上游诊断元数据。
+    /// 上游诊断元数据
     pub diagnostics: CodexUpstreamDiagnostics,
-    /// 已筛选、可交给客户端的响应头。
+    /// 已筛选、可交给客户端的响应头
     pub response_metadata: CodexResponseMetadata,
-    /// HTTP 阶段耗时与版本。
+    /// HTTP 阶段耗时与版本
     pub transport_metrics: CodexTransportMetrics,
 }
 
@@ -675,7 +674,7 @@ impl OpenAiUpstreamProtocol {
     }
 }
 
-/// Codex HTTP/SSE 上游客户端。
+/// Codex HTTP/SSE 上游客户端
 #[derive(Clone)]
 pub struct CodexBackendClient {
     pub(super) timezone: gateway_core::time::DeploymentTimeZone,
@@ -736,7 +735,7 @@ impl CodexBackendClient {
         if remaining >= UPSTREAM_CONNECT_TIMEOUT {
             return Ok(self.client.clone());
         }
-        // 按整秒向下取整限制缓存种类；不足一秒不缓存新的 client 配置。
+        // 按整秒向下取整限制缓存种类；不足一秒不缓存新的 client 配置
         let timeout = Duration::from_secs(remaining.as_secs());
         if timeout.is_zero() {
             return Err(CodexClientError::ConnectionBudgetExhausted);
@@ -748,14 +747,14 @@ impl CodexBackendClient {
         )?)
     }
 
-    /// 覆盖官方账号接口基址，用于隔离上游联调与协议测试。
+    /// 覆盖官方账号接口基址，用于隔离上游联调与协议测试
     #[must_use]
     pub fn with_official_base_url(mut self, official_base_url: impl Into<String>) -> Self {
         self.official_base_url = official_base_url.into().trim_end_matches('/').to_string();
         self
     }
 
-    /// 自定义账号路由明确不存在时才回退一次；调用方继续解释最后一次响应。
+    /// 自定义账号路由明确不存在时才回退一次；调用方继续解释最后一次响应
     pub(super) async fn send_account_request(
         &self,
         request: reqwest::RequestBuilder,
@@ -772,7 +771,7 @@ impl CodexBackendClient {
             "custom account endpoint returned 404; falling back to official endpoint"
         );
         drop(response);
-        // 消费可能已在回退端完成，传输失败不能被先前的 404 覆盖。
+        // 消费可能已在回退端完成，传输失败不能被先前的 404 覆盖
         fallback.send().await.map_err(CodexClientError::HttpJson)
     }
 
@@ -818,7 +817,7 @@ impl CodexBackendClient {
     }
 }
 
-/// 已完成账号级 opening 准备、但尚未发送 payload 的 transport。
+/// 已完成账号级 opening 准备、但尚未发送 payload 的 transport
 pub(crate) struct PreparedResponseTransport {
     pub(super) requirement: TransportRequirement,
     pub(super) route: PreparedResponseRoute,
@@ -882,31 +881,8 @@ pub(super) fn retry_after_seconds(headers: &HeaderMap, body: Option<&str>) -> Op
     headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
-        .and_then(parse_retry_after)
+        .and_then(gateway_protocol::openai::parse_retry_after_seconds)
         .or_else(|| body.and_then(retry_after_seconds_from_body))
-}
-
-/// 解析 RFC 7231 `Retry-After` 值：delay-seconds 或 HTTP-date，统一换算为剩余秒数。
-pub(super) fn parse_retry_after(value: &str) -> Option<u64> {
-    let value = value.trim();
-    if let Ok(seconds) = value.parse::<u64>() {
-        return (seconds > 0).then_some(seconds);
-    }
-    let remaining = parse_http_date(value)?.signed_duration_since(Utc::now());
-    u64::try_from(remaining.num_seconds())
-        .ok()
-        .filter(|seconds| *seconds > 0)
-}
-
-/// IMF-fixdate 优先；RFC 7231 要求接收方兼容过时的 RFC 850 与 asctime 形式。
-fn parse_http_date(value: &str) -> Option<DateTime<Utc>> {
-    if let Ok(date) = DateTime::parse_from_rfc2822(value) {
-        return Some(date.with_timezone(&Utc));
-    }
-    ["%A, %d-%b-%y %H:%M:%S GMT", "%a %b %e %H:%M:%S %Y"]
-        .iter()
-        .find_map(|format| NaiveDateTime::parse_from_str(value, format).ok())
-        .map(|date| date.and_utc())
 }
 
 pub(super) fn truncate_for_error(body: &str) -> String {
@@ -978,7 +954,7 @@ pub(super) async fn read_error_response_body(
 
 pub(super) fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponsesRequest {
     let mut request = request.clone();
-    // 上游通过流式事件执行，下游仍按客户端原来的偏好返回响应。
+    // 上游通过流式事件执行，下游仍按客户端原来的偏好返回响应
     if !request.stream() {
         request
             .body_mut()

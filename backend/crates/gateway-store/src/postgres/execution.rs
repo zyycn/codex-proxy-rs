@@ -1,4 +1,4 @@
-//! 单行 `model_requests` 生命周期与最终 usage/cost 的 PostgreSQL owner。
+//! 单行 `model_requests` 生命周期与最终 usage/cost 的 PostgreSQL owner
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -388,7 +388,7 @@ pub struct ModelRequestRecoveryReport {
 #[async_trait]
 pub trait ModelRequestRepository: Send + Sync {
     async fn insert_model_request(&self, request: NewModelRequest) -> StoreResult<()>;
-    /// 请求行与首次 attempt 列一次插入；`attempt.attempt_count` 必须为 1。
+    /// 请求行与首次 attempt 列一次插入；`attempt.attempt_count` 必须为 1
     async fn insert_model_request_with_first_attempt(
         &self,
         request: NewModelRequest,
@@ -592,7 +592,7 @@ impl ModelRequestRepository for PgExecutionStore {
         attempt.validate()?;
         // upstream_send_state 是请求级单调水位（sent > ambiguous > not_sent），
         // 由 mark/finalize 抬升；开启新 attempt 不得把已持久化的 sent 重置回
-        // not_sent——崩溃恢复的终态写回会原样继承本列。
+        // not_sent——崩溃恢复的终态写回会原样继承本列
         let count = sqlx::query_scalar::<_, i32>(
             "update model_requests
              set provider_kind = $2,
@@ -717,7 +717,7 @@ impl ModelRequestRepository for PgExecutionStore {
         finalization: ModelRequestFinalization,
     ) -> StoreResult<bool> {
         finalization.validate()?;
-        // 墙上时间可能回拨；终态必须可落盘，实际耗时仍保留 Core 的单调时钟观测。
+        // 墙上时间可能回拨；终态必须可落盘，实际耗时仍保留 Core 的单调时钟观测
         let finalized = sqlx::query_scalar::<_, i64>(
             "with finalized as (
              update model_requests
@@ -971,6 +971,47 @@ impl ModelRequestRepository for PgExecutionStore {
 
 #[async_trait]
 impl ExecutionStore for PgExecutionStore {
+    fn maintain_request(
+        &self,
+        request_id: &ModelRequestId,
+        deadline: gateway_core::lifecycle::Deadline,
+    ) -> Box<dyn gateway_core::lifecycle::LeaseGuard> {
+        let pool = self.pool.clone();
+        let request_id = request_id.as_str().to_owned();
+        Box::new(crate::lease_renewal::LeaseRenewal::spawn(
+            deadline,
+            // 请求记录为 best-effort 观测，续期失败不能取消客户端执行
+            None,
+            move |ttl| {
+                let pool = pool.clone();
+                let request_id = request_id.clone();
+                Box::pin(async move {
+                    let ttl_ms = i64::try_from(ttl.as_millis()).map_err(|_| {
+                        crate::StoreError::InvalidData {
+                            entity: "model request",
+                            message: "lease TTL is invalid".to_owned(),
+                        }
+                    })?;
+                    // 首次观测可能尚在队列中；缺行不创建记录，已终结行不改写
+                    sqlx::query_scalar::<_, bool>(
+                        "with renewed as (
+                           update model_requests set deadline_at = now() + $2 * interval '1 millisecond'
+                           where id = $1 and outcome = 'running' and deadline_at > now()
+                           returning id
+                         )
+                         select exists(select 1 from renewed)
+                           or not exists(select 1 from model_requests where id = $1 and outcome = 'running')",
+                    )
+                    .bind(&request_id)
+                    .bind(ttl_ms)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|_| postgres_unavailable("renew model request recovery lease"))
+                })
+            },
+        ))
+    }
+
     async fn create_model_request(
         &self,
         request: CoreNewModelRequest,
@@ -998,7 +1039,7 @@ impl ExecutionStore for PgExecutionStore {
         request: CoreNewModelRequest,
         attempt: CoreAttemptRecord,
     ) -> Result<(), CoreStoreError> {
-        // 合并写只对首次 attempt 成立（插入即带 attempt 列）；其余走基础两步。
+        // 合并写只对首次 attempt 成立（插入即带 attempt 列）；其余走基础两步
         if attempt.attempt_count.get() != 1 {
             self.create_model_request(request).await?;
             return self.record_attempt(attempt).await;
@@ -1136,7 +1177,7 @@ impl ExecutionStore for PgExecutionStore {
                     .and_then(|delay| u64::try_from(delay.as_millis()).ok()),
                 upstream_request_id: None,
                 latency_ms: u64::try_from(rejection.latency.as_millis()).ok(),
-                // 入口尚无 model_requests 行，关联 ID 放在安全消息中，不能伪造外键。
+                // 入口尚无 model_requests 行，关联 ID 放在安全消息中，不能伪造外键
                 message: serde_json::json!({
                     "requestId": rejection.request_id.as_str(),
                     "clientKeyId": rejection.client_key_id.as_str(),
@@ -1435,7 +1476,7 @@ fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
         image_generation_requested: request.image_generation_requested,
         admission_decision_ms: request.admission_decision_ms,
         started_at: DateTime::<Utc>::from(request.started_at),
-        deadline_at: DateTime::<Utc>::from(request.deadline_at),
+        deadline_at: DateTime::<Utc>::from(request.deadline_at.lease_deadline()),
     }
 }
 

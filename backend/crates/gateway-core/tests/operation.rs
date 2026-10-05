@@ -1,3 +1,5 @@
+//! 验证生成请求保留不透明正文，并按协议解析能力与转换边界
+
 use bytes::Bytes;
 use gateway_core::operation::{
     Feature, GenerateRequest, ImageRequest, ImageRequestKind, Operation, OperationKind,

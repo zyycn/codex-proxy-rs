@@ -1,3 +1,5 @@
+//! 编译插件请求策略与中间件绑定，组合为请求级执行计划
+
 mod http;
 mod middleware;
 mod retry;
@@ -197,7 +199,7 @@ pub(crate) fn compile_entries(
         .collect()
 }
 
-/// 已保存绑定的阶段是宿主合同；进程不可用时仍保留相同范围和故障策略。
+/// 已保存绑定的阶段是宿主合同；进程不可用时仍保留相同范围和故障策略
 pub(crate) fn unavailable_entries(
     instance: &PluginInstance,
 ) -> Result<Vec<PolicyEntry>, AdminError> {
@@ -358,7 +360,7 @@ impl PluginRequestPolicyPlan {
                 &right.instance_id,
             ))
         });
-        // 发布时固定各挂载位置的有序候选，消息处理不再扫描其他边界的绑定。
+        // 发布时固定各挂载位置的有序候选，消息处理不再扫描其他边界的绑定
         let mut by_mount = BTreeMap::<_, Vec<_>>::new();
         for entry in middleware {
             by_mount

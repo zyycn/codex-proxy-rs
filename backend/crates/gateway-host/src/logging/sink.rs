@@ -1,4 +1,4 @@
-//! 有界文件日志队列：拥堵时背压，正常退出时排空；写入失败显式影响健康状态。
+//! 有界文件日志队列：拥堵时背压，正常退出时排空；写入失败显式影响健康状态
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -133,15 +133,15 @@ impl Write for FileLogSink {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        // Files are unbuffered. The guard is the lifecycle owner of queue drain and sync.
+        // 文件不额外缓冲，由守卫负责队列排空与同步的生命周期
         Ok(())
     }
 }
 
 impl Drop for FileLogGuard {
     fn drop(&mut self) {
-        // Shutdown follows every accepted record. Unlike a timed guard, joining cannot
-        // silently abandon queued log records during a normal process shutdown.
+        // 关闭指令排在所有已接收记录之后
+        // 等待线程退出，确保正常关闭时不会因超时而丢弃队列中的日志
         let _ = self.sender.send(Command::Shutdown);
         if self
             .worker

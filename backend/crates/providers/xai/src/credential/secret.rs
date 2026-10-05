@@ -1,19 +1,21 @@
+//! xAI 敏感字符串的脱敏展示、内存清理与恒定时间比较
+
 use std::fmt;
 
 use zeroize::Zeroizing;
 
-/// 内存中的 secret；debug 输出恒为脱敏，缓冲区在 drop 时清零。
+/// 内存中的 secret；debug 输出恒为脱敏，缓冲区在 drop 时清零
 #[derive(Clone)]
 pub struct SecretValue(Zeroizing<String>);
 
 impl SecretValue {
-    /// 包装持有所有权的 secret 值。
+    /// 包装持有所有权的 secret 值
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
         Self(Zeroizing::new(value.into()))
     }
 
-    /// 仅在明确的协议或 transport 边界暴露 secret。
+    /// 仅在明确的协议或 transport 边界暴露 secret
     #[must_use]
     pub fn expose(&self) -> &str {
         self.0.as_str()

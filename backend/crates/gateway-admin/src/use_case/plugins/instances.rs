@@ -1,3 +1,5 @@
+//! 插件实例的配置、停用、删除与私有状态迁移编排
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use gateway_core::{policy::ClientApiKeyId, routing::AccountGroupId};
@@ -24,10 +26,10 @@ pub(super) struct PackageStatus {
 }
 
 impl PluginsService {
-    /// 只校验固定包体，不启动插件；停用实例也需区分兼容性提醒与加载错误。
+    /// 只校验固定包体，不启动插件；停用实例也需区分兼容性提醒与加载错误
     async fn package_status(&self, digest: &str) -> Result<PackageStatus, AdminError> {
-        // 运行宿主和摘要固定，缓存纯静态结论，避免管理页轮询反复解包。
-        // 只缓存有限数量的确定结果，暂时性错误仍可重试。
+        // 运行宿主和摘要固定，缓存纯静态结论，避免管理页轮询反复解包
+        // 只缓存有限数量的确定结果，暂时性错误仍可重试
         let mut cache = self.compatibility.lock().await;
         if let Some(warning) = cache.get(digest) {
             return Ok(warning.clone());
@@ -382,7 +384,7 @@ impl PluginsService {
         self.preparation
             .activate_state(&prepared, &result.instance)
             .await?;
-        // prepared 的强引用跨过提交与唯一发布入口，防止候选在被读取之前回收。
+        // prepared 的强引用跨过提交与唯一发布入口，防止候选在被读取之前回收
         publish_committed(self.snapshots.as_ref(), result.config_revision).await?;
         drop(prepared);
         Ok(result)
@@ -399,7 +401,7 @@ impl PluginsService {
     ) -> Result<PluginInstanceMutation, AdminError> {
         let previous_state = self.preparation.validate(previous.clone()).await?;
         let original_revision = snapshot.config_revision;
-        // 即使最终保持停用，迁移也必须由目标制品的受控候选执行。
+        // 即使最终保持停用，迁移也必须由目标制品的受控候选执行
         let mut migration_instance = target.clone();
         migration_instance.enabled = true;
         snapshot.config_revision = migration_instance.revision;
@@ -671,7 +673,7 @@ impl PluginsService {
         Ok(revision)
     }
 
-    /// 紧急管理修复不要求损坏插件成功准备；提交后沿用现有发布与暂停合同。
+    /// 紧急管理修复不要求损坏插件成功准备；提交后沿用现有发布与暂停合同
     pub async fn disable_instance(
         &self,
         id: &str,

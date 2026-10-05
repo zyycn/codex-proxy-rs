@@ -1,3 +1,5 @@
+//! 验证 Provider 额度窗口投影与待提交凭据变更的数据合同
+
 use gateway_admin::model::provider_credentials::{
     AccountUsagePeriod, AuthorizationMutationTarget, AuthorizationOwnerBinding,
     PendingAuthorizationMutation, ProviderQuota, ProviderQuotaWindow, ProviderQuotaWindowRole,

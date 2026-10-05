@@ -1,4 +1,4 @@
-//! 会话身份、租户隔离与缓存路由。
+//! 会话身份、租户隔离与缓存路由
 
 use super::*;
 
@@ -62,8 +62,9 @@ pub(super) fn sanitize_account_identity(body: &mut Map<String, Value>) {
 
 pub(super) fn sanitize_client_metadata(body: &mut Map<String, Value>) {
     // Codex 的 client_metadata 是本地 transport envelope，可能包含工作目录、仓库地址、
-    // installation/session 标识。会话亲和信息已在调用本函数前提取，整个 envelope 都不能
-    // 越过 Grok Build 边界。
+    // installation/session 标识
+    // 会话亲和信息已在调用本函数前提取，整个 envelope 都不能
+    // 越过 Grok Build 边界
     body.remove("client_metadata");
     body.remove("metadata");
 }
@@ -88,7 +89,7 @@ pub(super) fn enable_grok_prompt_cache_route(
             tools.push(json_object([("type", Value::String((*tool).to_owned()))]));
             response.mark_injected_cache_tool(tool);
         }
-        // 无客户端工具时以 none 选中缓存路由，同时不授予搜索能力。
+        // 无客户端工具时以 none 选中缓存路由，同时不授予搜索能力
         body.insert("tool_choice".to_owned(), Value::String("none".to_owned()));
     } else if !has_tool_type(tools, "x_search") {
         tools.push(json_object([(

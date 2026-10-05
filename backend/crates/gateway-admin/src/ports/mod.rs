@@ -1,4 +1,4 @@
-//! 管理用例依赖的外部能力端口。
+//! 管理用例依赖的外部能力端口
 
 pub mod backup;
 pub mod client_distribution;

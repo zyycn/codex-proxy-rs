@@ -1,9 +1,10 @@
-//! 诊断内容的统一筛选边界。未知键名与值只保留有界结构和摘要。
+//! 诊断内容的统一筛选边界
+//! 未知键名与值只保留有界结构和摘要
 
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-/// 原始字节的长度与 SHA-256，不复制或保留正文。
+/// 原始字节的长度与 SHA-256，不复制或保留正文
 #[must_use]
 pub fn body_fingerprint(bytes: &[u8]) -> Value {
     json!({"bytes": bytes.len(), "sha256": fingerprint_hex(bytes)})
@@ -23,13 +24,13 @@ fn fingerprint_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// 仅保留有限协议骨架；任意 JSON（包括 headers 和 metadata）不能声明自己可信。
+/// 仅保留有限协议骨架；任意 JSON（包括 headers 和 metadata）不能声明自己可信
 #[must_use]
 pub fn diagnostic_json(value: &Value) -> Value {
     capture(value, "", Context::Protocol, 0, &mut 96)
 }
 
-/// 只有 transport 的上游 metadata / error 帧顶层才是受控头部边界。
+/// 只有 transport 的上游 metadata / error 帧顶层才是受控头部边界
 pub(super) fn diagnostic_event_json(value: &Value, stage: &str) -> Value {
     let context = if stage == "upstream.event"
         && value.get("headers").is_some_and(Value::is_object)
@@ -87,7 +88,7 @@ fn capture(value: &Value, key: &str, context: Context, depth: usize, budget: &mu
             "length": items.len(),
             "sample": items.iter().take(4)
                 .map(|item| {
-                    // 受控头值只接受一层字符串数组；畸形嵌套不能继承头部放行规则。
+                    // 受控头值只接受一层字符串数组；畸形嵌套不能继承头部放行规则
                     let context = if matches!(context, Context::HeaderValue) && !item.is_string() {
                         Context::Opaque
                     } else {
@@ -169,7 +170,7 @@ fn protocol_value(key: &str, value: &str) -> bool {
     }
 }
 
-/// 请求/响应头保持多值；安全 trace ID 原样保存，未知值只保存摘要。
+/// 请求/响应头保持多值；安全 trace ID 原样保存，未知值只保存摘要
 #[must_use]
 pub fn diagnostic_headers<'a>(headers: impl IntoIterator<Item = (&'a str, &'a str)>) -> Value {
     let mut result = Map::new();
@@ -248,7 +249,7 @@ pub(super) fn diagnostic_event_type(value: &str) -> Value {
     }
 }
 
-/// 这里只决定诊断可明文展示的阶段，不校验协议；未知事件仍采集摘要，不能按字符形状放行。
+/// 这里只决定诊断可明文展示的阶段，不校验协议；未知事件仍采集摘要，不能按字符形状放行
 fn known_event_type(value: &str) -> bool {
     matches!(
         value,

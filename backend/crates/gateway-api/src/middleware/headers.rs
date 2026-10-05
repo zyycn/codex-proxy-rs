@@ -1,10 +1,10 @@
-//! HTTP HeaderMap 与插件边界值的无损转换。
+//! HTTP HeaderMap 与插件边界值的无损转换
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use bytes::Bytes;
 use gateway_core::engine::middleware::{MiddlewareError, MiddlewareHeader};
 
-/// 完整保留多值与非 UTF-8 header，Runtime 只转换 wire 编码。
+/// 完整保留多值与非 UTF-8 header，Runtime 只转换 wire 编码
 pub(crate) fn encode_headers(headers: &HeaderMap) -> Vec<MiddlewareHeader> {
     headers
         .iter()

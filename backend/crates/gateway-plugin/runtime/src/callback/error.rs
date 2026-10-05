@@ -1,4 +1,4 @@
-//! 插件错误保留业务分类与原始详情；诊断日志仍由各 owner 单独生成。
+//! 插件错误保留业务分类与原始详情；诊断日志仍由各 owner 单独生成
 
 use gateway_core::{
     engine::{EngineError, execution::gateway_error_from_engine, middleware::MiddlewareError},

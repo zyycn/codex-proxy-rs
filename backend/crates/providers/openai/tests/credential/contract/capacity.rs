@@ -1,3 +1,5 @@
+//! 验证 OpenAI 选号容量、亲和排队与硬性不可用后的切换
+
 use futures::{FutureExt, future::BoxFuture};
 use gateway_core::account::AccountRuntimeSignals;
 use gateway_core::concurrency::{ConcurrencyQueuePolicy, QueueRejection};
@@ -185,7 +187,7 @@ async fn affinity_queue_full_and_timeout_preserve_binding_despite_free_fallback(
     };
     let mut head = Box::pin(selector.select(&request));
     assert!(head.as_mut().now_or_never().is_none());
-    // 槽位已空，但新请求不能越过旧等待者，也不能转而抢占另一账号。
+    // 槽位已空，但新请求不能越过旧等待者，也不能转而抢占另一账号
     leases.busy_accounts.lock().unwrap().clear();
     let rejected = selector
         .select(&SelectCodexCredential {

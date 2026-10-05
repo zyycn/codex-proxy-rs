@@ -1,4 +1,4 @@
-//! Codex WebSocket 连接池。
+//! Codex WebSocket 连接池
 
 mod lease;
 mod state;
@@ -36,11 +36,11 @@ const DEFAULT_MAX_CONNECTING: usize = 16;
 const DEFAULT_MAX_AGE: Duration = Duration::from_mins(55);
 const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(25);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(25);
-// 心跳也覆盖正在生成的连接，给短时链路停顿留出恢复余量。
+// 心跳也覆盖正在生成的连接，给短时链路停顿留出恢复余量
 const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// WebSocket 连接池。
+/// WebSocket 连接池
 #[derive(Clone)]
 pub struct CodexWebSocketPool {
     inner: Arc<Mutex<WebSocketPoolState>>,
@@ -57,24 +57,24 @@ impl Default for CodexWebSocketPool {
     }
 }
 
-/// WebSocket 连接池配置。
+/// WebSocket 连接池配置
 #[derive(Debug, Clone, Copy)]
 pub struct CodexWebSocketPoolConfig {
-    /// 是否启用连接池。
+    /// 是否启用连接池
     pub enabled: bool,
-    /// 单个 socket 的最大生命周期。
+    /// 单个 socket 的最大生命周期
     pub max_age: Duration,
-    /// 所有账号合计允许并发执行的 opening 数。
+    /// 所有账号合计允许并发执行的 opening 数
     pub max_connecting: usize,
-    /// 后台维护间隔；`None` 表示不启动后台任务。
+    /// 后台维护间隔；`None` 表示不启动后台任务
     pub maintenance_interval: Option<Duration>,
-    /// 池化连接的探活 ping 间隔（包括正在生成的连接）；`None` 表示不主动 ping。
+    /// 池化连接的探活 ping 间隔（包括正在生成的连接）；`None` 表示不主动 ping
     pub ping_interval: Option<Duration>,
-    /// 发送 ping 后等待任意入站帧的超时时间；零值表示不校验 Pong deadline。
+    /// 发送 ping 后等待任意入站帧的超时时间；零值表示不校验 Pong deadline
     pub ping_timeout: Duration,
-    /// idle socket 无活动多久后视为失活。
+    /// idle socket 无活动多久后视为失活
     pub liveness_timeout: Option<Duration>,
-    /// 等待下一条上游消息的空闲超时；`None` 或零值使用默认 300 秒。
+    /// 等待下一条上游消息的空闲超时；`None` 或零值使用默认 300 秒
     pub stream_idle_timeout: Option<Duration>,
 }
 
@@ -88,7 +88,7 @@ impl Default for CodexWebSocketPoolConfig {
             ping_interval: Some(DEFAULT_PING_INTERVAL),
             ping_timeout: DEFAULT_PING_TIMEOUT,
             // idle 连接不设失活截断：靠 ping/pong 保活，只在 max_age（55 分钟）
-            // 或 ping 失败时关闭，维持跨轮可复用连接。
+            // 或 ping 失败时关闭，维持跨轮可复用连接
             liveness_timeout: None,
             stream_idle_timeout: Some(DEFAULT_STREAM_IDLE_TIMEOUT),
         }
@@ -96,7 +96,7 @@ impl Default for CodexWebSocketPoolConfig {
 }
 
 impl CodexWebSocketPoolConfig {
-    /// pump 后台任务的保活策略：从连接池配置派生出 ping/pong 与 liveness 策略。
+    /// pump 后台任务的保活策略：从连接池配置派生出 ping/pong 与 liveness 策略
     pub(crate) fn keepalive(&self) -> PumpKeepalive {
         PumpKeepalive {
             ping_interval: self.ping_interval,
@@ -107,7 +107,7 @@ impl CodexWebSocketPoolConfig {
 }
 
 impl CodexWebSocketPool {
-    /// 构造不限制累计 slot 数的连接池策略和状态。
+    /// 构造不限制累计 slot 数的连接池策略和状态
     pub fn new(max_age: Duration) -> Self {
         Self::with_config(CodexWebSocketPoolConfig {
             max_age,
@@ -118,7 +118,7 @@ impl CodexWebSocketPool {
         })
     }
 
-    /// 使用完整配置构造连接池。
+    /// 使用完整配置构造连接池
     pub fn with_config(config: CodexWebSocketPoolConfig) -> Self {
         let pool = Self {
             inner: Arc::new(Mutex::new(WebSocketPoolState::default())),
@@ -132,17 +132,17 @@ impl CodexWebSocketPool {
         pool
     }
 
-    /// pump 后台任务的保活策略（供建连时传入）。
+    /// pump 后台任务的保活策略（供建连时传入）
     pub(crate) fn keepalive(&self) -> PumpKeepalive {
         self.config.keepalive()
     }
 
-    /// 等待下一条上游消息的空闲超时；`None` 或零值使用默认 300 秒。
+    /// 等待下一条上游消息的空闲超时；`None` 或零值使用默认 300 秒
     pub(crate) fn stream_idle_timeout(&self) -> Option<Duration> {
         self.config.stream_idle_timeout
     }
 
-    /// 注册由连接池生命周期托管的 opening 任务。
+    /// 注册由连接池生命周期托管的 opening 任务
     pub(crate) fn spawn_connect_task(&self, future: impl Future<Output = ()> + Send + 'static) {
         drop(self.tasks.spawn(future));
     }
@@ -195,7 +195,7 @@ impl CodexWebSocketPool {
                         return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
                     };
                     // 零成本探活：后台 pump 已实时感知连接死亡（RST/Close/EOF/失活），
-                    // 复用前只需读取 is_closed 标志，避免复用到静默死连接后卡到超时。
+                    // 复用前只需读取 is_closed 标志，避免复用到静默死连接后卡到超时
                     let expired = connection.created_at.elapsed() >= self.config.max_age;
                     let closed = connection.websocket.is_closed();
                     if !expired && !closed {

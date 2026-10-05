@@ -1,3 +1,5 @@
+//! 将中间件处理函数适配为可注册的插件处理器
+
 use std::future::Future;
 
 use crate::{
@@ -10,11 +12,12 @@ use super::{
     MiddlewareInput, MiddlewareOutput, RequestCall,
 };
 
-/// 单个中间件插件的作者入口；自动注册并将 RPC 分派到类型化业务函数。
+/// 单个中间件插件的作者入口；自动注册并将 RPC 分派到类型化业务函数
 ///
-/// 传入作者清单的完整能力列表，不从宿主握手照抄未实现的能力。此入口仅承载
-/// 一个 middleware 处理器；复合插件仍使用 [`PluginHandler`]，不能虚报其他能力。
-/// 会话和生命周期分别由既有 SDK 会话与宿主负责，不在此建立第二套状态。
+/// 传入作者清单的完整能力列表，不从宿主握手照抄未实现的能力
+/// 此入口仅承载
+/// 一个 middleware 处理器；复合插件仍使用 [`PluginHandler`]，不能虚报其他能力
+/// 会话和生命周期分别由既有 SDK 会话与宿主负责，不在此建立第二套状态
 ///
 /// # Examples
 ///
@@ -34,7 +37,7 @@ use super::{
 ///     request.append_header("x-team", b"research".to_vec());
 ///     next.run(request).await
 /// })?;
-/// // 将 plugin 交给 PluginSession::run；请求头修改直接作用于当前调用。
+/// // 将 plugin 交给 PluginSession::run；请求头修改直接作用于当前调用
 /// # Ok::<(), gateway_plugin_sdk::client::SessionError>(())
 /// ```
 pub struct MiddlewarePlugin<F, C = RequestCall> {
@@ -49,12 +52,12 @@ where
     F: Fn(C) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<C::Output, PluginFault>> + Send + 'static,
 {
-    /// 绑定清单中唯一的中间件声明与业务处理函数。
+    /// 绑定清单中唯一的中间件声明与业务处理函数
     ///
     /// # Errors
     ///
-    /// 空声明、其他能力、重复能力、不支持的能力版本或挂载阶段返回配置错误。
-    /// 包格式与资源生命周期由宿主校验；入口不根据处理器代码推断清单。
+    /// 空声明、其他能力、重复能力、不支持的能力版本或挂载阶段返回配置错误
+    /// 包格式与资源生命周期由宿主校验；入口不根据处理器代码推断清单
     pub fn new(contributes: &Contributions, handler: F) -> Result<Self, SessionError> {
         let Some(declaration) = contributes.get(&Capability::Middleware) else {
             return Err(SessionError::Configuration);

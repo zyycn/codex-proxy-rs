@@ -1,3 +1,5 @@
+//! 系统升级与回滚前的插件兼容性检查及确认版本校验
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use crate::model::system::{SystemIncompatiblePlugin, SystemRestartPlan};
@@ -19,7 +21,7 @@ use crate::{
 
 use super::plugins::official::{update_compatibility, validate_update_release};
 
-/// 只读取启用实例及其固定包体，检查目标宿主合同；不准备或执行插件。
+/// 只读取启用实例及其固定包体，检查目标宿主合同；不准备或执行插件
 pub(crate) struct PluginSystemUpdatePreflight {
     store: Arc<dyn PluginStore>,
     inspector: Arc<dyn PluginPackageInspector>,
@@ -42,7 +44,7 @@ impl SystemUpdatePreflight for PluginSystemUpdatePreflight {
     ) -> Result<Revision, SystemOperationError> {
         let target_version = candidate.target_version.trim_start_matches('v');
         semver::Version::parse(target_version).map_err(|_| invalid("目标网关版本不合法"))?;
-        // 下载阶段只校验发行身份；插件兼容性在用户点击重启时检查并确认。
+        // 下载阶段只校验发行身份；插件兼容性在用户点击重启时检查并确认
         validate_update_release(candidate.release_manifest.as_ref(), target_version)
             .map_err(|_| invalid("目标发行清单不合法或版本不匹配"))?;
         Ok(self
@@ -133,7 +135,7 @@ impl PluginSystemUpdatePreflight {
             )
             .map_err(|_| invalid("目标发行清单不合法或版本不匹配"))?;
         }
-        // 未知目标合同不能证明兼容，列出风险供确认，不改写插件启用配置。
+        // 未知目标合同不能证明兼容，列出风险供确认，不改写插件启用配置
         let host = candidate.as_ref().and_then(|item| {
             update_compatibility(
                 &item.release_manifest,

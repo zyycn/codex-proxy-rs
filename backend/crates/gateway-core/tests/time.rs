@@ -1,3 +1,5 @@
+//! 验证部署时区的日历边界、夏令时歧义与无效时间处理
+
 use chrono::{DateTime, NaiveDate, Utc};
 use gateway_core::time::DeploymentTimeZone;
 

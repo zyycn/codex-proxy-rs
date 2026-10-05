@@ -1,3 +1,5 @@
+//! 验证账号资料、头像与订阅查询的绑定、缓存及失败处理
+
 use std::sync::Arc;
 
 use chrono::{TimeZone as _, Utc};

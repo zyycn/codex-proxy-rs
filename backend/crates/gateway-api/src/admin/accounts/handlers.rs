@@ -1,10 +1,10 @@
-//! 账号管理路由与 HTTP handler 编排。
+//! 账号管理路由与 HTTP handler 编排
 
 use crate::auth::SessionState;
 
 use super::*;
 
-/// 构造统一账号管理路由。
+/// 构造统一账号管理路由
 pub fn router<S>() -> Router<S>
 where
     S: SessionState + Clone + Send + Sync + 'static,
@@ -434,7 +434,7 @@ where
     Ok(profile_avatar_response(avatar))
 }
 
-/// 将 Provider 头像流投影为受保护的同源 HTTP 响应。
+/// 将 Provider 头像流投影为受保护的同源 HTTP 响应
 #[must_use]
 pub fn profile_avatar_response(avatar: ProviderProfileAvatar) -> Response {
     let ProviderProfileAvatar {

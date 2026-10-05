@@ -1,4 +1,4 @@
-//! 数据面执行用例：认证、准入、路由、continuation 与会话生命周期。
+//! 数据面执行用例：认证、准入、路由、continuation 与会话生命周期
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -57,7 +57,7 @@ use crate::engine::{
 use crate::error::{GatewayError, GatewayErrorKind, StoreError};
 use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
 use crate::identity::ProviderKind;
-use crate::lifecycle::CancellationToken;
+use crate::lifecycle::{CancellationToken, Deadline, LeaseGuard, REQUEST_LEASE_TTL};
 use crate::operation::{Operation, ProviderSessionState};
 use crate::policy::{ClientApiKeyId, ClientPolicy};
 use crate::provider_ports::{ProviderSessionAffinityPort, ProviderStoreErrorKind};
@@ -68,7 +68,7 @@ use crate::routing::{
 use crate::runtime::{RuntimeSnapshotHandle, RuntimeSnapshotPublisher};
 use crate::settings::RequestSettings;
 
-const MODEL_REQUEST_DEADLINE: Duration = Duration::from_secs(10 * 60);
+const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const COORDINATION_TIMEOUT: Duration = Duration::from_millis(100);
 const MAX_NESTED_EXECUTIONS: usize = 16;
 const MAX_CONCURRENT_NESTED_EXECUTIONS: usize = 4;
@@ -95,7 +95,7 @@ impl ClientTransport {
     }
 }
 
-/// API 解码后交给 Core 的稳定请求元数据。
+/// API 解码后交给 Core 的稳定请求元数据
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionRequestMetadata {
     pub protocol: String,
@@ -116,11 +116,10 @@ pub struct AuthenticatedClient {
 }
 
 impl AuthenticatedClient {
-    fn execution_timeout(&self) -> Duration {
+    fn execution_timeout(&self) -> Option<Duration> {
         self.settings
             .as_ref()
             .and_then(|settings| settings.execution_timeout(self.policy.key_id()))
-            .unwrap_or(MODEL_REQUEST_DEADLINE)
     }
 
     #[must_use]
@@ -128,7 +127,7 @@ impl AuthenticatedClient {
         self.settings.as_ref()
     }
 
-    /// 后续仍须重新认证；这里只更新下一次认证使用的冻结配置。
+    /// 后续仍须重新认证；这里只更新下一次认证使用的冻结配置
     #[must_use]
     pub fn with_request_settings(mut self, settings: RequestSettings) -> Self {
         self.settings = Some(settings);
@@ -173,17 +172,17 @@ pub struct StartExecution {
     pub metadata: ExecutionRequestMetadata,
 }
 
-/// 入口中间件开始前冻结的根请求身份与生命周期。
+/// 入口中间件开始前冻结的根请求身份与生命周期
 ///
 /// 中间件短路时本值直接释放；调用 `next` 后必须原样交回
-/// [`ExecutionService::start_prepared`]，不能重新认证为另一个 Key。
+/// [`ExecutionService::start_prepared`]，不能重新认证为另一个 Key
 pub struct PreparedRootExecution {
     extension_scope: ExtensionCallScope,
     response_control: super::response_control::ResponseControl,
     client: AuthenticatedClient,
     request_id: ModelRequestId,
     started_at: SystemTime,
-    deadline_at: SystemTime,
+    deadline_at: Deadline,
     cancellation: CancellationToken,
     execution_effects: Arc<ExecutionEffects>,
     execution_effects_baseline: usize,
@@ -198,15 +197,13 @@ impl PreparedRootExecution {
             .unwrap_or_else(|| RequestSettings::new(self.client.snapshot.clone()))
             .with_execution(
                 &self.client.policy,
-                duration_ms(
-                    self.deadline_at
-                        .duration_since(self.started_at)
-                        .unwrap_or_default(),
-                ),
+                self.deadline_at
+                    .at()
+                    .map(|at| duration_ms(at.duration_since(self.started_at).unwrap_or_default())),
             )
     }
 
-    /// 入口延续发起实例集合；保留已经交给调用方的取消句柄。
+    /// 入口延续发起实例集合；保留已经交给调用方的取消句柄
     #[must_use]
     pub fn with_extension_scope(mut self, scope: ExtensionCallScope) -> Self {
         self.extension_scope = scope;
@@ -218,7 +215,7 @@ impl PreparedRootExecution {
         self.extension_scope.clone()
     }
 
-    /// 设置已经在改写时完成编译；此处只将同一份结果应用到冻结身份和生命周期。
+    /// 设置已经在改写时完成编译；此处只将同一份结果应用到冻结身份和生命周期
     pub fn apply_settings(&mut self, settings: &RequestSettings) -> Result<(), GatewayError> {
         let deadline = settings
             .execution_deadline(self.client.policy.key_id(), self.started_at)
@@ -242,8 +239,7 @@ impl PreparedRootExecution {
 
     fn new(client: AuthenticatedClient) -> Result<Self, GatewayError> {
         let started_at = SystemTime::now();
-        let deadline_at = started_at
-            .checked_add(client.execution_timeout())
+        let deadline_at = Deadline::from_timeout(started_at, client.execution_timeout())
             .ok_or_else(|| {
                 GatewayError::new(GatewayErrorKind::Internal, "system clock is invalid")
             })?;
@@ -278,7 +274,7 @@ impl PreparedRootExecution {
     }
 
     #[must_use]
-    pub const fn deadline_at(&self) -> SystemTime {
+    pub const fn deadline_at(&self) -> Deadline {
         self.deadline_at
     }
 
@@ -287,7 +283,7 @@ impl PreparedRootExecution {
         self.cancellation.clone()
     }
 
-    /// 以冻结的入口身份补齐 Runtime-only binding 事实；调用位置事实由 API/Core 提供。
+    /// 以冻结的入口身份补齐 Runtime-only binding 事实；调用位置事实由 API/Core 提供
     #[must_use]
     pub fn middleware_context(
         &self,
@@ -318,18 +314,18 @@ impl PreparedRootExecution {
     }
 }
 
-/// 入口中间件调用 `next` 后交给 Core 的已解码执行输入。
+/// 入口中间件调用 `next` 后交给 Core 的已解码执行输入
 pub struct PreparedExecutionRequest {
     pub public_model: PublicModelId,
     pub operation: Operation,
     pub metadata: ExecutionRequestMetadata,
 }
 
-/// 启动一个由协议 adapter 明确绑定到 Provider 自有端点的请求。
+/// 启动一个由协议 adapter 明确绑定到 Provider 自有端点的请求
 pub struct StartProviderExecution {
     pub client: AuthenticatedClient,
     pub provider: ProviderKind,
-    /// Provider 自有模型端点可固定上游模型；非模型端点保持 `None`。
+    /// Provider 自有模型端点可固定上游模型；非模型端点保持 `None`
     pub upstream_model: Option<UpstreamModelId>,
     pub operation: Operation,
     pub metadata: ExecutionRequestMetadata,
@@ -369,7 +365,7 @@ struct PendingStartExecution {
 struct AuthorizedExecution {
     response_control: Option<super::response_control::ResponseControl>,
     account_scope: Arc<FrozenAccountScope>,
-    deadline_at: SystemTime,
+    deadline_at: Deadline,
     cancellation: CancellationToken,
     extension_scope: ExtensionCallScope,
     required_provider: Option<ProviderKind>,
@@ -479,7 +475,7 @@ impl Drop for NestedExecutionPermit {
 struct ActiveRequestAuthority {
     client: AuthenticatedClient,
     account_scope: Arc<FrozenAccountScope>,
-    deadline_at: SystemTime,
+    deadline_at: Deadline,
     cancellation: CancellationToken,
     extension_scope: ExtensionCallScope,
     graph: Arc<NestedExecutionGraph>,
@@ -493,9 +489,9 @@ struct ActiveRequestLease {
     authority: Arc<ActiveRequestAuthority>,
 }
 
-/// 管理页或 CLI 一次调用持有的显式模型执行身份。
+/// 管理页或 CLI 一次调用持有的显式模型执行身份
 ///
-/// 结构不暴露 Key 明文；Runtime 只能把它原样交回 Core 发起模型请求。
+/// 结构不暴露 Key 明文；Runtime 只能把它原样交回 Core 发起模型请求
 #[derive(Clone)]
 pub struct BoundModelExecutionContext {
     authority: Arc<BoundModelExecutionAuthority>,
@@ -586,16 +582,16 @@ pub trait ExecutionSession: Send {
         &mut self,
         client_status_code: u16,
     ) -> BoxFuture<'_, Result<(), EngineError>>;
-    /// 执行已终结且结算、准入释放均已返回，协议层才可以放弃清理责任。
-    /// 结算失败仍由 Store 保留费用重试，释放失败仍按租约 TTL 收敛。
+    /// 执行已终结且结算、准入释放均已返回，协议层才可以放弃清理责任
+    /// 结算失败仍由 Store 保留费用重试，释放失败仍按租约 TTL 收敛
     fn is_finalized(&self) -> bool;
     fn cancel(&self);
-    /// 将会话交给宿主持续驱动清理；取消请求事件的等待不会丢弃已开始的结算。
+    /// 将会话交给宿主持续驱动清理；取消请求事件的等待不会丢弃已开始的结算
     fn detach_finalize(self: Box<Self>) -> BoxFuture<'static, ()>;
 }
 
 pub trait ExecutionService: Send + Sync {
-    /// 未就绪时管理与健康接口仍可运行，模型认证按既有路径报告不可用。
+    /// 未就绪时管理与健康接口仍可运行，模型认证按既有路径报告不可用
     fn request_settings(&self) -> Option<RequestSettings> {
         None
     }
@@ -615,7 +611,7 @@ pub trait ExecutionService: Send + Sync {
             self.authenticate(plaintext.expose_for_auth())
         })
     }
-    /// 只验证入口认证信封，不记录 Key 使用事实或执行推理准入。
+    /// 只验证入口认证信封，不记录 Key 使用事实或执行推理准入
     fn verify_request(
         &self,
         _request: ClientAuthenticationRequest,
@@ -633,7 +629,7 @@ pub trait ExecutionService: Send + Sync {
     }
     fn contains_public_model(&self, client: &AuthenticatedClient, model: &PublicModelId) -> bool;
 
-    /// 重新鉴权并冻结本次根请求身份、请求 ID、deadline 与取消域。
+    /// 重新鉴权并冻结本次根请求身份、请求 ID、deadline 与取消域
     fn prepare_execution(
         &self,
         client: AuthenticatedClient,
@@ -641,8 +637,8 @@ pub trait ExecutionService: Send + Sync {
         Box::pin(async move { PreparedRootExecution::new(client) })
     }
 
-    /// 由已经验证管理会话与插件 models 域的宿主入口选择 Key。
-    /// 不向页面提供明文，也不跳过普通请求的扩展、准入和计量。
+    /// 由已经验证管理会话与插件 models 域的宿主入口选择 Key
+    /// 不向页面提供明文，也不跳过普通请求的扩展、准入和计量
     fn prepare_plugin_execution(
         &self,
         _client_key_id: &ClientApiKeyId,
@@ -655,7 +651,7 @@ pub trait ExecutionService: Send + Sync {
         })
     }
 
-    /// 为已经通过 `verify_request` 的只读入口建立中间件生命周期，不重复写 Key 使用事实。
+    /// 为已经通过 `verify_request` 的只读入口建立中间件生命周期，不重复写 Key 使用事实
     fn prepare_verified_execution(
         &self,
         client: AuthenticatedClient,
@@ -663,12 +659,12 @@ pub trait ExecutionService: Send + Sync {
         PreparedRootExecution::new(client)
     }
 
-    /// 解析与准备阶段冻结的发布代次一致的中间件计划。
+    /// 解析与准备阶段冻结的发布代次一致的中间件计划
     fn middleware_plan(&self, _prepared: &PreparedRootExecution) -> Option<FrozenMiddlewarePlan> {
         None
     }
 
-    /// 消费一次已准备身份并进入原有 Core 路由、准入、attempt 与结算路径。
+    /// 消费一次已准备身份并进入原有 Core 路由、准入、attempt 与结算路径
     fn start_prepared(
         &self,
         prepared: PreparedRootExecution,
@@ -685,7 +681,7 @@ pub trait ExecutionService: Send + Sync {
         })
     }
 
-    /// 消费一次已准备身份，并进入 Provider 自有端点的原有准入与结算路径。
+    /// 消费一次已准备身份，并进入 Provider 自有端点的原有准入与结算路径
     fn start_prepared_provider_endpoint(
         &self,
         prepared: PreparedRootExecution,
@@ -714,11 +710,17 @@ pub trait ExecutionService: Send + Sync {
         &self,
         request: StartProviderExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>>;
+
+    /// 返回 Provider 注册表中首个声明 Live sideband 能力的网关。
+    /// `None` 表示当前组合不含语音 sideband；协议 adapter 据此回退到稳定 501。
+    fn live_gateway(&self) -> Option<Arc<dyn crate::live::LiveGateway>> {
+        None
+    }
 }
 
-/// 只验证 Client API Key 并返回稳定 Key ID，不产生请求使用事实。
+/// 只验证 Client API Key 并返回稳定 Key ID，不产生请求使用事实
 ///
-/// 管理侧登录等非数据面场景必须使用该端口，避免把认证本身误记为一次 Key 使用。
+/// 管理侧登录等非数据面场景必须使用该端口，避免把认证本身误记为一次 Key 使用
 pub trait ClientKeyVerifier: Send + Sync {
     fn verify_client_key(
         &self,
@@ -726,16 +728,16 @@ pub trait ClientKeyVerifier: Send + Sync {
     ) -> Result<ClientApiKeyId, ClientAuthenticationError>;
 }
 
-/// 成功认证后的 API Key 使用事实接收器。
+/// 成功认证后的 API Key 使用事实接收器
 ///
-/// 认证仍是同步快照读取；实现必须自行异步、去重地持久化，不得阻塞客户端请求。
+/// 认证仍是同步快照读取；实现必须自行异步、去重地持久化，不得阻塞客户端请求
 pub trait ClientApiKeyUsageSink: Send + Sync {
     fn record_used(&self, key_id: &ClientApiKeyId);
 }
 
 pub struct DefaultExecutionService {
     snapshots: RuntimeSnapshotHandle,
-    /// probe 自身走 transient store，探测失败仍写入持久 store 的 ops_events。
+    /// probe 自身走 transient store，探测失败仍写入持久 store 的 ops_events
     observations: Arc<dyn ExecutionStore>,
     providers: ProviderRegistry,
     admissions: Arc<dyn ClientAdmissionPort>,
@@ -823,7 +825,7 @@ impl DefaultExecutionService {
         self
     }
 
-    /// CLI command-plane 没有后台订阅；每次绑定显式身份前主动编译最新事实。
+    /// CLI command-plane 没有后台订阅；每次绑定显式身份前主动编译最新事实
     #[must_use]
     pub fn with_snapshot_refresh(mut self, refresh: Arc<RuntimeSnapshotPublisher>) -> Self {
         self.snapshot_refresh = Some(refresh);
@@ -958,7 +960,7 @@ impl DefaultExecutionService {
         &self,
         mut client: AuthenticatedClient,
     ) -> Result<PreparedRootExecution, GatewayError> {
-        // 长连接每次执行都重新鉴权并冻结当前策略，确保限额和授权变更对新请求生效。
+        // 长连接每次执行都重新鉴权并冻结当前策略，确保限额和授权变更对新请求生效
         let expected_key_id = client.policy.key_id().clone();
         let authentication = client.authentication.clone().ok_or_else(|| {
             GatewayError::new(
@@ -1047,12 +1049,7 @@ impl DefaultExecutionService {
                 "parent request was cancelled",
             ));
         }
-        if authorization
-            .deadline_at
-            .duration_since(SystemTime::now())
-            .unwrap_or_default()
-            .is_zero()
-        {
+        if authorization.deadline_at.is_elapsed() {
             return Err(GatewayError::new(
                 GatewayErrorKind::Timeout,
                 "request deadline elapsed",
@@ -1090,7 +1087,8 @@ impl DefaultExecutionService {
             )
         });
         // 路由插件可以调用 host.model/host.affinity；仅这条扩展路径必须在首次 RPC
-        // 前取得父 Key 准入。无策略的原生路由仍保持“先路由、后准入”的既有顺序。
+        // 前取得父 Key 准入
+        // 无策略的原生路由仍保持“先路由、后准入”的既有顺序
         let mut start_guard = None;
         let request_observation = self.request_observers.as_ref().and_then(|observers| {
             let generation = request.client.snapshot.extensions()?.clone();
@@ -1351,6 +1349,7 @@ impl DefaultExecutionService {
                     &request.client,
                     request_id,
                     authorization.deadline_at,
+                    authorization.cancellation.clone(),
                     &concurrency_wait_budget,
                 )
                 .await?;
@@ -1374,7 +1373,7 @@ impl DefaultExecutionService {
                     client: request.client.clone(),
                     account_scope: Arc::clone(&authorization.account_scope),
                     deadline_at: authorization.deadline_at,
-                    // 回收嵌套调用权限只取消子作用域，父请求仍需完成响应流终态加工。
+                    // 回收嵌套调用权限只取消子作用域，父请求仍需完成响应流终态加工
                     cancellation: authorization.cancellation.child_token(),
                     extension_scope: authorization.extension_scope.clone(),
                     graph: Arc::clone(graph),
@@ -1561,12 +1560,7 @@ impl DefaultExecutionService {
                 "parent request was cancelled",
             ));
         }
-        if authority
-            .deadline_at
-            .duration_since(SystemTime::now())
-            .unwrap_or_default()
-            .is_zero()
-        {
+        if authority.deadline_at.is_elapsed() {
             return Err(GatewayError::new(
                 GatewayErrorKind::Timeout,
                 "parent request deadline elapsed",
@@ -1613,7 +1607,7 @@ impl DefaultExecutionService {
         )?;
         let nested_permit = parent.graph.acquire()?;
         // Core.start 之后的路由/Provider 可以继续调用外部系统；在进入子执行前即按
-        // 可能已出站记水位，不能让父 attempt 随后的 `not_sent` 触发重放。
+        // 可能已出站记水位，不能让父 attempt 随后的 `not_sent` 触发重放
         parent.graph.effects.observe();
         let execution_effects_baseline = parent.graph.effects.epoch();
         metadata.endpoint = "host.model".to_owned();
@@ -1753,8 +1747,7 @@ impl DefaultExecutionService {
             ));
         }
         let now = SystemTime::now();
-        let deadline_at = now
-            .checked_add(authority.client.execution_timeout())
+        let deadline_at = Deadline::from_timeout(now, authority.client.execution_timeout())
             .ok_or_else(|| {
                 GatewayError::new(GatewayErrorKind::Internal, "system clock is invalid")
             })?;
@@ -1764,8 +1757,8 @@ impl DefaultExecutionService {
             account.as_ref(),
             None,
         )?;
-        // 连接承载多个独立执行；递归预算和副作用只在本次执行的子调用图内共享。
-        // 父连接的取消仍通过 authority 传播，不能因新建执行丢失扩展调用链。
+        // 连接承载多个独立执行；递归预算和副作用只在本次执行的子调用图内共享
+        // 父连接的取消仍通过 authority 传播，不能因新建执行丢失扩展调用链
         let graph = Arc::new(NestedExecutionGraph::new(Arc::new(
             ExecutionEffects::default(),
         )));
@@ -1863,30 +1856,31 @@ impl DefaultExecutionService {
         &self,
         client: &AuthenticatedClient,
         request_id: &ModelRequestId,
-        deadline_at: SystemTime,
+        deadline_at: Deadline,
+        cancellation: CancellationToken,
         budget: &ConcurrencyWaitBudget,
     ) -> Result<AdmissionLease, GatewayError> {
         let policy = client.snapshot.client_queue_policy();
         let limits = client.policy.limits();
         let key = client.policy.key_id();
-        let mut waiting = CapacityWait::new(&self.admission_waiting, policy, deadline_at, budget);
+        let mut waiting =
+            CapacityWait::new(&self.admission_waiting, policy, deadline_at.at(), budget);
         let mut admission = AdmissionLease {
             port: Arc::clone(&self.admissions),
             client_api_key_id: key.clone(),
             model_request_id: request_id.clone(),
             armed: false,
+            renewal: None,
         };
         loop {
-            let remaining = deadline_at
-                .duration_since(SystemTime::now())
-                .unwrap_or_default();
+            let remaining = deadline_at.bounded(REQUEST_LEASE_TTL);
             if remaining.is_zero() {
                 return Err(GatewayError::new(
                     GatewayErrorKind::Timeout,
                     "request deadline elapsed",
                 ));
             }
-            // 在发送原子准入之前接管取消清理，覆盖 Redis 已取得租约但返回尚未被观察的窗口。
+            // 在发送原子准入之前接管取消清理，覆盖 Redis 已取得租约但返回尚未被观察的窗口
             admission.armed = true;
             let acquire = self
                 .admissions
@@ -1898,14 +1892,22 @@ impl DefaultExecutionService {
                     limits,
                 })
                 .fuse();
-            let timeout = Delay::new(remaining).fuse();
-            pin_mut!(acquire, timeout);
+            let timeout = deadline_at.wait().fuse();
+            let cancelled = cancellation.cancelled().fuse();
+            pin_mut!(acquire, timeout, cancelled);
             let decision = select_biased! {
+                () = cancelled => return Err(GatewayError::new(GatewayErrorKind::Cancelled, "request admission was cancelled")),
                 result = acquire => result.map_err(|_| GatewayError::new(GatewayErrorKind::NoAvailableProvider, "request admission is temporarily unavailable"))?,
                 _ = timeout => return Err(GatewayError::new(GatewayErrorKind::Timeout, "request deadline elapsed")),
             };
             match decision {
                 ClientAdmissionDecision::Granted => {
+                    admission.renewal = Some(self.admissions.maintain(
+                        key,
+                        request_id,
+                        deadline_at,
+                        cancellation.clone(),
+                    ));
                     if !waiting.elapsed().is_zero() {
                         tracing::info!(
                             request_id = request_id.as_str(),
@@ -1974,11 +1976,9 @@ impl DefaultExecutionService {
             .plan_diagnostic(&public_model, &operation, &routing_context)
             .map_err(map_routing_error)?;
         let started_at = SystemTime::now();
-        let deadline_at = started_at
-            .checked_add(MODEL_REQUEST_DEADLINE)
-            .ok_or_else(|| {
-                GatewayError::new(GatewayErrorKind::Internal, "system clock is invalid")
-            })?;
+        let deadline_at = started_at.checked_add(DIAGNOSTIC_TIMEOUT).ok_or_else(|| {
+            GatewayError::new(GatewayErrorKind::Internal, "system clock is invalid")
+        })?;
         let request_id = new_request_id()?;
         let actor = ClientApiKeyId::new("admin_connection_test")
             .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "invalid admin actor"))?;
@@ -2004,7 +2004,7 @@ impl DefaultExecutionService {
             image_generation_requested: false,
             admission_decision_ms: None,
             started_at,
-            deadline_at,
+            deadline_at: deadline_at.into(),
         };
         let providers = self.providers.clone();
         let transient: Arc<dyn ExecutionStore> = Arc::new(TransientExecutionStore);
@@ -2053,7 +2053,7 @@ impl DefaultExecutionService {
         })
     }
 
-    /// 探测失败先记录脱敏分类事实，再把请求局部的原始上游响应交给认证管理端。
+    /// 探测失败先记录脱敏分类事实，再把请求局部的原始上游响应交给认证管理端
     async fn observe_probe_failure(
         &self,
         observed: &ProbeObservation,
@@ -2246,7 +2246,7 @@ impl ExecutionService for DefaultExecutionService {
                     }
                     continue;
                 };
-                // 保留上游顺序；映射只选择完整的目标对象，不能跨账号/模型混拼字段。
+                // 保留上游顺序；映射只选择完整的目标对象，不能跨账号/模型混拼字段
                 let by_id = models
                     .iter()
                     .map(|entry| (entry.model.as_str(), entry))
@@ -2261,7 +2261,7 @@ impl ExecutionService for DefaultExecutionService {
                     };
                     let model = PublicModelId::new(entry.model.as_str().to_owned())
                         .map_err(|_| ProviderCatalogUnavailable)?;
-                    // 原生目录可能比路由快照更新，不能向客户端公布当前已知不可路由的模型。
+                    // 原生目录可能比路由快照更新，不能向客户端公布当前已知不可路由的模型
                     if !client
                         .snapshot
                         .contains_public_model_for_provider(&model, kind)
@@ -2378,6 +2378,12 @@ impl ExecutionService for DefaultExecutionService {
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async move { self.start_provider_endpoint_inner(request).await })
     }
+
+    fn live_gateway(&self) -> Option<Arc<dyn crate::live::LiveGateway>> {
+        self.providers
+            .iter()
+            .find_map(|provider| provider.live_gateway())
+    }
 }
 
 impl NestedModelExecutionPort for DefaultExecutionService {
@@ -2390,7 +2396,7 @@ impl NestedModelExecutionPort for DefaultExecutionService {
         Box::pin(async move {
             let authority = &context.authority;
             let cancellation = authority.cancellation.cancelled().fuse();
-            let timeout = Delay::new(MODEL_REQUEST_DEADLINE).fuse();
+            let timeout = Delay::new(DIAGNOSTIC_TIMEOUT).fuse();
             let catalog = self
                 .client_model_catalog(&authority.client, &protocol, &client_version)
                 .fuse();
@@ -2462,6 +2468,7 @@ impl AccountProbe for DefaultExecutionService {
 }
 
 struct AdmissionLease {
+    renewal: Option<Box<dyn LeaseGuard>>,
     armed: bool,
     port: Arc<dyn ClientAdmissionPort>,
     client_api_key_id: ClientApiKeyId,
@@ -2476,6 +2483,7 @@ async fn settle_budget(port: &dyn ClientBudgetPort, charge: ClientBudgetCharge) 
 
 impl AdmissionLease {
     async fn release(mut self) {
+        self.renewal.take();
         if let Err(error) = self
             .port
             .release(&self.client_api_key_id, &self.model_request_id)
@@ -2489,6 +2497,7 @@ impl AdmissionLease {
 
 impl Drop for AdmissionLease {
     fn drop(&mut self) {
+        self.renewal.take();
         if self.armed {
             self.port
                 .abandon(&self.client_api_key_id, &self.model_request_id);
@@ -2579,8 +2588,9 @@ impl DefaultExecutionSession {
             }
             let budget = self.budget.take();
             let charge = self.core.budget_charge();
-            // 在首次 await 前把完整清理责任留在会话内。事件等待被取消后，后续 poll
-            // 或 detach 继续同一个 future，既不丢失费用，也不重启已完成的结算。
+            // 在首次 await 前把完整清理责任留在会话内
+            // 事件等待被取消后，后续 poll
+            // 或 detach 继续同一个 future，既不丢失费用，也不重启已完成的结算
             self.cleanup = Some(Box::pin(async move {
                 if let Some(budget) = budget {
                     settle_budget(budget.as_ref(), charge).await;

@@ -1,3 +1,5 @@
+//! 插件实例配置、版本变更与私有状态迁移的用例测试
+
 use std::{
     collections::BTreeMap,
     sync::{
@@ -880,7 +882,7 @@ async fn configuration_retry_reuses_creation_id_and_rejects_changed_draft() {
     let request = || {
         let mut value = input();
         value.creation_id = Some(creation_id.into());
-        // 此用例验证创建重试，使用不需要私有状态迁移的固定版本。
+        // 此用例验证创建重试，使用不需要私有状态迁移的固定版本
         value.artifact_sha256 = OLD_ARTIFACT.into();
         value.enabled = false;
         value

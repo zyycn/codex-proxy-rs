@@ -1,4 +1,4 @@
-//! Dashboard 与趋势查询族。
+//! Dashboard 与趋势查询族
 
 use super::super::*;
 
@@ -9,7 +9,7 @@ pub(crate) async fn request_metrics(
 ) -> StoreResult<RequestMetrics> {
     filter.validate()?;
     // 结果计数覆盖范围内全部请求（成功率/失败率的分母分子）；用量、缓存、
-    // 延迟与成本聚合仅统计用量事实（已完整交付客户端的成功响应）。
+    // 延迟与成本聚合仅统计用量事实（已完整交付客户端的成功响应）
     let fact = completed_usage_fact_predicate("mr");
     let mut query = QueryBuilder::<Postgres>::new(format!(
         "select count(*)::bigint as request_count,
@@ -105,7 +105,7 @@ pub(crate) async fn request_metrics(
 
 pub(crate) async fn dashboard_totals(pool: &PgPool) -> StoreResult<DashboardTotals> {
     // 卡片脚注的“总计”覆盖全部历史；只聚合页面实际展示的字段，避免重复计算
-    // 当前区间指标所需的延迟分位数。
+    // 当前区间指标所需的延迟分位数
     let fact = completed_usage_fact_predicate("mr");
     let mut query = QueryBuilder::<Postgres>::new(format!(
         "select count(*)::bigint as request_count,
@@ -159,7 +159,7 @@ async fn request_metric_series_inner(
     filter.validate()?;
     let granularity = granularity_for(range);
     // 与 request_metrics 同一契约：结果计数覆盖全部请求，用量/延迟/成本
-    // 聚合仅统计用量事实。
+    // 聚合仅统计用量事实
     let fact = completed_usage_fact_predicate("mr");
     let mut query = QueryBuilder::<Postgres>::new("select ");
     push_metric_bucket(&mut query, range, granularity, timezone)?;
@@ -318,7 +318,7 @@ pub(crate) fn calculated_usage_billing_facts(
         );
         push_completed_usage_fact_filter(&mut query, "mr");
         push_usage_filter(&mut query, &filter, "mr");
-        // 费用逐条累加与行顺序无关，避免全量物化和不必要的数据库排序。
+        // 费用逐条累加与行顺序无关，避免全量物化和不必要的数据库排序
         let mut rows = query.build().fetch(pool);
         while let Some(row) = rows.try_next().await
             .map_err(|_| postgres_unavailable("load calculated usage billing facts"))?
@@ -372,8 +372,9 @@ pub(crate) async fn attempt_metrics(
 ) -> StoreResult<AttemptMetrics> {
     filter.validate()?;
     let completed_usage = completed_usage_fact_predicate("mr");
-    // PERF: `model_requests` 包含宽请求元数据。这里只物化两个聚合族会复用的列，
-    // 避免生产基数下 `mr.*` 与多次标量子查询把 CTE 反复写入临时文件。
+    // PERF: `model_requests` 包含宽请求元数据
+    // 这里只物化两个聚合族会复用的列，
+    // 避免生产基数下 `mr.*` 与多次标量子查询把 CTE 反复写入临时文件
     let mut query = QueryBuilder::<Postgres>::new(format!(
         "with selected_requests as materialized (
            select mr.id, mr.attempt_count, mr.outcome, mr.error_kind,
@@ -516,7 +517,7 @@ pub(crate) async fn provider_observations(
     filter: &UsageRecordFilter,
 ) -> StoreResult<Vec<ProviderObservation>> {
     let fact = completed_usage_fact_predicate("mr");
-    // 请求、attempt 与失败覆盖执行审计；token 只累计完整交付的用量事实。
+    // 请求、attempt 与失败覆盖执行审计；token 只累计完整交付的用量事实
     let mut query = QueryBuilder::<Postgres>::new(format!(
         "select coalesce(mr.provider_kind, 'unrouted') as provider_kind,
                 count(*)::bigint as request_count,
@@ -679,7 +680,7 @@ pub(crate) fn fill_metric_gaps(
     Ok(result)
 }
 
-// 将同一组 UTC 日界交给请求、费用和空桶补齐，避免数据库另用一套时区规则。
+// 将同一组 UTC 日界交给请求、费用和空桶补齐，避免数据库另用一套时区规则
 fn push_metric_bucket(
     query: &mut QueryBuilder<Postgres>,
     range: ObservabilityRange,

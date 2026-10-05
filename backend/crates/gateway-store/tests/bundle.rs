@@ -1,3 +1,5 @@
+//! 验证只读检查 Bundle 不执行迁移且拒绝业务写入
+
 use gateway_core::{
     account::{
         CredentialRevision, NewProviderAccount, PlaintextCredential, ProviderAccount,

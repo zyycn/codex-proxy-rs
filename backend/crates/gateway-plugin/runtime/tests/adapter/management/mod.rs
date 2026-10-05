@@ -1,3 +1,5 @@
+//! 验证插件管理调用的身份持有、版本绑定与权限撤销
+
 mod callback;
 mod registration;
 
@@ -448,7 +450,7 @@ async fn management_resources_and_raw_calls_are_version_bound_and_revocation_rem
         .save_instance(instance, snapshot.config_revision, &mutation())
         .await
         .unwrap();
-    // 模拟持久撤销已提交但旧发布视图仍存在；页面与资源都不能继续使用旧权限。
+    // 模拟持久撤销已提交但旧发布视图仍存在；页面与资源都不能继续使用旧权限
     assert!(service.views().await.unwrap().is_empty());
     assert!(service.handle(target, request()).await.is_err());
     assert!(

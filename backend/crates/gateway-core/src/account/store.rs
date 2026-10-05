@@ -1,4 +1,4 @@
-//! Provider 账号持久化端口。
+//! Provider 账号持久化端口
 
 use async_trait::async_trait;
 
@@ -12,7 +12,7 @@ use super::{
     QuotaObservationTouch, QuotaWriteOutcome,
 };
 
-/// `provider_accounts` 的数据库中立端口。
+/// `provider_accounts` 的数据库中立端口
 #[async_trait]
 pub trait ProviderAccountStore: Send + Sync {
     async fn create_account(&self, account: NewProviderAccount) -> Result<(), StoreError>;
@@ -29,7 +29,7 @@ pub trait ProviderAccountStore: Send + Sync {
         provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, StoreError>;
 
-    /// 一次有界查询返回账号事实和 revision-fenced 明文 credential。
+    /// 一次有界查询返回账号事实和 revision-fenced 明文 credential
     async fn list_refresh_candidates(
         &self,
         query: ProviderRefreshQuery,
@@ -41,10 +41,10 @@ pub trait ProviderAccountStore: Send + Sync {
         expected_revision: CredentialRevision,
     ) -> Result<LoadedCredential, StoreError>;
 
-    /// 读取账号当前 credential 及其 revision，不做任何版本比对。
+    /// 读取账号当前 credential 及其 revision，不做任何版本比对
     ///
     /// 管理写入必须在临近 CAS 时用它取 fence，而不是携带调用方持有的旧 revision：
-    /// 后台刷新随时会推进 revision，用陈旧快照会把正常的恢复操作误判为冲突。
+    /// 后台刷新随时会推进 revision，用陈旧快照会把正常的恢复操作误判为冲突
     async fn load_current_credential(
         &self,
         account: &ProviderAccountId,

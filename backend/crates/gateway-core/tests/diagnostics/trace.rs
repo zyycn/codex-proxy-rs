@@ -1,3 +1,5 @@
+//! 验证有界调用追踪保留关键事件并持续执行脱敏规则
+
 use std::{
     fmt::Write as _,
     sync::{Arc, Mutex},
@@ -284,7 +286,7 @@ fn size_gaps_and_truncated_events_do_not_reintroduce_user_content() {
 
 #[test]
 fn ordinary_trace_logs_and_serialized_snapshots_share_the_sanitized_capture_boundary() {
-    // tracing 的 callsite 缓存是进程级的；隔离并行测试的注册，不修改生产日志或全局 subscriber。
+    // tracing 的 callsite 缓存是进程级的；隔离并行测试的注册，不修改生产日志或全局 subscriber
     const CHILD: &str = "GATEWAY_CORE_DIAGNOSTICS_LOG_TEST";
     if std::env::var_os(CHILD).is_none() {
         let thread = std::thread::current();
@@ -301,7 +303,7 @@ fn ordinary_trace_logs_and_serialized_snapshots_share_the_sanitized_capture_boun
         );
         return;
     }
-    // 仅捕获本线程的普通 trace 事件，不打开 request_dump，也不读写真实日志文件。
+    // 仅捕获本线程的普通 trace 事件，不打开 request_dump，也不读写真实日志文件
     let logs = Arc::new(Mutex::new(Vec::new()));
     let snapshot = tracing::subscriber::with_default(TraceLog(Arc::clone(&logs)), || {
         let trace = TraceContext::new("req_feedback");
@@ -326,7 +328,7 @@ fn ordinary_trace_logs_and_serialized_snapshots_share_the_sanitized_capture_boun
         assert_eq!(snapshot["wireFrames"], 0);
         snapshot
     });
-    // API / 反馈导出使用的是这个 Value 的序列化结果，而不只是 Debug 表示。
+    // API / 反馈导出使用的是这个 Value 的序列化结果，而不只是 Debug 表示
     let exported = String::from_utf8(serde_json::to_vec(&snapshot).unwrap()).unwrap();
     assert!(!exported.contains("PRIVATE_"), "{exported}");
     let logs = logs.lock().unwrap();

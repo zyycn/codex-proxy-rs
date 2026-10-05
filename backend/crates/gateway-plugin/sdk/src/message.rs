@@ -1,10 +1,12 @@
+//! 插件双向 RPC 控制消息、流消息与二进制载荷帧的线协议定义
+
 use serde::{Deserialize, Serialize};
 
 use crate::{CallContext, Handshake, PluginFault};
 
 pub const PROTOCOL_VERSION: u32 = 2;
 
-/// 元数据与二进制载荷分开，流分块不经过 JSON/base64。
+/// 元数据与二进制载荷分开，流分块不经过 JSON/base64
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Message {
@@ -66,7 +68,7 @@ pub struct Frame {
 
 impl std::fmt::Debug for Message {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // 配置、调用参数和结果都可能包含凭据；诊断仅暴露消息类别及关联 ID。
+        // 配置、调用参数和结果都可能包含凭据；诊断仅暴露消息类别及关联 ID
         let (kind, id) = match self {
             Self::Hello { .. } => ("Hello", None),
             Self::Ready { .. } => ("Ready", None),

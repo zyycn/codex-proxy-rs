@@ -1,3 +1,5 @@
+//! 按 Provider 分派凭据管理服务，组合授权与导入流程
+
 mod flow;
 
 use std::sync::Arc;
@@ -11,7 +13,7 @@ use crate::{
 
 pub use flow::ProviderCredentials;
 
-/// 所有 Provider 共用凭据用例；每次操作从已发布目录冻结自己的管理实现。
+/// 所有 Provider 共用凭据用例；每次操作从已发布目录冻结自己的管理实现
 pub struct CredentialsService {
     providers: ProviderAdminRegistry,
     accounts: Arc<dyn AccountStore>,

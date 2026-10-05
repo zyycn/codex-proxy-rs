@@ -1,22 +1,28 @@
 import type { Ref } from 'vue'
-import type { PluginActionContext } from './usePluginActions'
+import type { PluginRefreshContext } from '../utils/actions'
 import type { CreatePluginSourceCredentialRequest, PluginSourceCredential } from '@/api'
 import { toast } from '@codex-proxy/ui'
 import { shallowRef } from 'vue'
 import { createPluginSourceCredential, deletePluginSourceCredential } from '@/api'
+import { useAsyncAction } from '@/composables/useAsyncAction'
+import { notifyPluginError } from '../utils/actions'
 
-interface CredentialContext extends PluginActionContext {
+interface CredentialContext extends PluginRefreshContext {
   credentials: Ref<PluginSourceCredential[]>
 }
 
-export function usePluginCredentials({ credentials, refresh, notifyError, runAction }: CredentialContext) {
-  const savingCredential = shallowRef(false)
+export function usePluginCredentials({ credentials, refresh }: CredentialContext) {
+  const action = useAsyncAction({
+    errorText: false,
+    onError: error => notifyPluginError('下载认证保存失败', error),
+  })
+  const savingCredential = action.loading
   const showCredentialDelete = shallowRef(false)
   const pendingCredential = shallowRef<PluginSourceCredential | null>(null)
-  const busyDistributionId = shallowRef('')
+  const busyCredentialId = shallowRef('')
 
   async function saveCredential(request: CreatePluginSourceCredentialRequest) {
-    const result = await runAction(savingCredential, '下载认证保存失败', () => createPluginSourceCredential(request, { silent: true }))
+    const result = await action.run(() => createPluginSourceCredential(request, { silent: true }))
     if (!result)
       return null
     credentials.value = [...credentials.value, result]
@@ -30,9 +36,9 @@ export function usePluginCredentials({ credentials, refresh, notifyError, runAct
 
   async function confirmCredentialDelete() {
     const credential = pendingCredential.value
-    if (!credential || busyDistributionId.value)
+    if (!credential || busyCredentialId.value)
       return
-    busyDistributionId.value = credential.id
+    busyCredentialId.value = credential.id
     try {
       await deletePluginSourceCredential({ id: credential.id }, { silent: true })
       showCredentialDelete.value = false
@@ -40,12 +46,12 @@ export function usePluginCredentials({ credentials, refresh, notifyError, runAct
       await refresh(true)
     }
     catch (error) {
-      notifyError('来源凭据删除失败', error)
+      notifyPluginError('来源凭据删除失败', error)
     }
     finally {
-      busyDistributionId.value = ''
+      busyCredentialId.value = ''
     }
   }
 
-  return { savingCredential, showCredentialDelete, pendingCredential, busyDistributionId, saveCredential, requestCredentialDelete, confirmCredentialDelete }
+  return { savingCredential, showCredentialDelete, pendingCredential, busyCredentialId, saveCredential, requestCredentialDelete, confirmCredentialDelete }
 }

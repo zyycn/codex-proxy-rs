@@ -69,14 +69,12 @@ export function useKeyUsage() {
     queryGeneration += 1
     rangeEnd.value = Date.now()
     overview.value = undefined
-    records.items.value = []
     void loadOverview()
     void records.reloadFromStart()
   }, { immediate: true })
 
   watch(kind, () => {
     queryGeneration += 1
-    records.items.value = []
     void records.reloadFromStart()
   })
 

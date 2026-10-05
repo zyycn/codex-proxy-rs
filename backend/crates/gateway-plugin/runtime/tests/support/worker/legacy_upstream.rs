@@ -1,9 +1,11 @@
+//! 为测试子进程严格解码上游适配器 v1 的请求元数据
+
 use gateway_plugin_sdk::call::upstream_adapter::{
     BuiltinProvider, UpstreamAdapterRequest, UpstreamContinuation,
 };
 use serde::Deserialize;
 
-// 固定 v1 的严格解码器，不能用新版 DTO 的宽松解析掩盖旧插件加载失败。
+// 固定 v1 的严格解码器，不能用新版 DTO 的宽松解析掩盖旧插件加载失败
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {

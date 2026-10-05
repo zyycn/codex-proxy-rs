@@ -1,4 +1,6 @@
-use std::{sync::Arc, time::SystemTime};
+//! 执行插件上游适配调用，管理事件流、续接状态与调用生命周期
+
+use std::sync::Arc;
 
 use futures::stream;
 use gateway_core::{
@@ -64,7 +66,7 @@ pub(super) fn execute(
         decoder: EventDecoder::default(),
         ended: false,
     };
-    // try_unfold 首次 poll 才运行闭包；Core 在此前登记 attempt 并持有账号租约。
+    // try_unfold 首次 poll 才运行闭包；Core 在此前登记 attempt 并持有账号租约
     Box::pin(stream::try_unfold(state, |mut state| async move {
         if state.ended {
             return Ok(None);
@@ -112,7 +114,7 @@ impl Execution {
                 EventDecodeError::Upstream(error) => error,
             })?;
         if self.decoder.completed {
-            // 先确认 RPC 正常终结，再发布唯一 Completed；否则 Core 不会继续 poll 尾部错误。
+            // 先确认 RPC 正常终结，再发布唯一 Completed；否则 Core 不会继续 poll 尾部错误
             let terminal = async {
                 let tail = tokio::select! {
                     biased;
@@ -127,7 +129,7 @@ impl Execution {
                 attach_continuation(&self.adapter, &self.invocation, active, &mut decoded).await
             }.await;
             if let Err(error) = terminal {
-                // 尾部故障不得交付成功 wire，但已经解析的计量事实仍归 Core 结算。
+                // 尾部故障不得交付成功 wire，但已经解析的计量事实仍归 Core 结算
                 let metering = decoded
                     .event
                     .canonical_facts()
@@ -166,11 +168,7 @@ impl Execution {
         let timeout = invocation
             .context
             .deadline()
-            .duration_since(SystemTime::now())
-            .map_err(|_| {
-                ProviderError::new(ProviderErrorKind::Timeout, UpstreamSendState::NotSent)
-            })?
-            .min(self.adapter.session.maximum_call_timeout());
+            .bounded(self.adapter.session.maximum_call_timeout());
         if timeout.is_zero() || invocation.context.cancellation().is_cancelled() {
             return Err(ProviderError::new(
                 ProviderErrorKind::Cancelled,

@@ -1,3 +1,5 @@
+//! 验证真实插件 HTTP 中间件的请求改写、流式转换与短路响应
+
 mod dispatch;
 mod websocket;
 
@@ -229,7 +231,7 @@ async fn transformed_http_body_respects_a_smaller_host_credit_window() {
         .unwrap();
     let next = compose(Vec::new(), |_: core::Request| {
         Box::pin(async {
-            // 单个源帧大于窗口，HTTP 转换应按可用信用拆分，而不要求业务更改源帧大小。
+            // 单个源帧大于窗口，HTTP 转换应按可用信用拆分，而不要求业务更改源帧大小
             Ok(core::Response::new(
                 http_body_util::Full::new(Bytes::from(vec![b'a'; 65536]))
                     .map_err(|never| match never {})
@@ -470,7 +472,7 @@ async fn dropping_or_cancelling_a_response_releases_its_active_upload() {
     }
 }
 
-/// 显式以 release 运行，避免把调试构建或进程启动时间计入请求开销。
+/// 显式以 release 运行，避免把调试构建或进程启动时间计入请求开销
 #[cfg(not(debug_assertions))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "run with --release --ignored --nocapture for the HTTP middleware baseline"]

@@ -1,3 +1,5 @@
+//! 验证自定义 WebSocket 升级、双向收发与取消后的资源回收
+
 use super::*;
 use futures::{SinkExt as _, StreamExt as _};
 use tokio_tungstenite::{

@@ -1,3 +1,5 @@
+//! 验证插件上游适配复用原生账号、保留槽位与凭据更新
+
 use super::*;
 use gateway_core::account::AccountRuntimeSignals;
 use gateway_core::account::FastMode;
@@ -261,7 +263,7 @@ async fn selected_adapter_connection(
 
 #[tokio::test]
 async fn guardian_reservation_survives_upstream_adapters_and_metadata_precedence() {
-    // 上限 2、已有 1 个在途请求：预留启用时只有 Guardian 能继续取得租约。
+    // 上限 2、已有 1 个在途请求：预留启用时只有 Guardian 能继续取得租约
     for (subagent, turn_kind, reserved, allowed) in [
         (Some("guardian"), None, 1, true),
         (None, Some("guardian"), 1, true),
@@ -378,7 +380,7 @@ async fn upstream_adapter_reloads_rotated_credentials_and_proxy_without_acceptin
     let before = store.account(account_id).unwrap();
     assert_eq!(old.outbound_proxy(), Some(&old_proxy));
 
-    // 使用原生刷新成功后的 CAS 入口；适配器不能复制令牌或缓存第二份账号代理。
+    // 使用原生刷新成功后的 CAS 入口；适配器不能复制令牌或缓存第二份账号代理
     let revision = store
         .repository()
         .rotate_refreshed_oauth_secret(
@@ -419,7 +421,7 @@ async fn upstream_adapter_reloads_rotated_credentials_and_proxy_without_acceptin
         );
     }
 
-    // 旧请求的 401 不能使已轮换凭据失效，未发送失败也不能污染账号状态。
+    // 旧请求的 401 不能使已轮换凭据失效，未发送失败也不能污染账号状态
     for (connection, send_state) in [
         (&old, UpstreamSendState::Sent),
         (&current, UpstreamSendState::NotSent),

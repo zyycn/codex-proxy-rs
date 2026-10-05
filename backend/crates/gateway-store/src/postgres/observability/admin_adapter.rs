@@ -1,4 +1,4 @@
-//! Pg 观测 adapter：实现 `ObservabilityRepository` 与 `AdminObservabilityStore`。
+//! Pg 观测 adapter：实现 `ObservabilityRepository` 与 `AdminObservabilityStore`
 
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use gateway_admin::ports::store::UsageCalculatedBillingStream;
@@ -43,7 +43,7 @@ impl PgObservabilityRepository {
         self
     }
 
-    /// 从账号事实和当前冷却一次性派生 Dashboard 五态；不在 SQL 中复制状态机。
+    /// 从账号事实和当前冷却一次性派生 Dashboard 五态；不在 SQL 中复制状态机
     async fn account_status_snapshot(
         &self,
         observed_at: DateTime<Utc>,
@@ -89,10 +89,10 @@ impl PgObservabilityRepository {
     }
 }
 
-/// `gateway-admin` 观测端口的 PostgreSQL adapter。
+/// `gateway-admin` 观测端口的 PostgreSQL adapter
 ///
 /// SQL 查询与内部投影继续由 [`PgObservabilityRepository`] 唯一拥有；本类型只负责
-/// Admin UTC 领域模型与持久化投影之间的无格式化转换。
+/// Admin UTC 领域模型与持久化投影之间的无格式化转换
 #[derive(Clone)]
 pub struct PgAdminObservabilityStore {
     repository: PgObservabilityRepository,
@@ -139,7 +139,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
             current_page: 1,
             page_size: ObservabilityPageSize::new(10)?,
         };
-        // 每条 SQL 独立取一个全局观测槽位，避免整包预留造成队头阻塞。
+        // 每条 SQL 独立取一个全局观测槽位，避免整包预留造成队头阻塞
         let (totals, (provider_accounts, _)) = futures::try_join!(
             self.query_budget.run(
                 "load dashboard lifetime totals",

@@ -1,3 +1,5 @@
+//! 验证额度预测采样的去重、回退处理与近期窗口选择
+
 use chrono::{DateTime, Duration, Utc};
 use gateway_admin::model::quota_forecast_sampling::{
     QuotaForecastMethod, QuotaForecastPoint, QuotaForecastSample, QuotaForecastUsage,

@@ -1,3 +1,5 @@
+//! 插件私有状态回调的访问授权、数据校验与存储调用
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, RwLock},

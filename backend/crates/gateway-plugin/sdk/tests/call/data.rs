@@ -1,3 +1,5 @@
+//! 验证插件事实查询兼容新增响应字段并拒绝无效已知值
+
 use gateway_plugin_sdk::call::data::{
     AccountFactsPage, AccountFactsQuery, ClientKeyFacts, ClientKeyFactsQuery, QuotaFacts,
     QuotaFactsQuery,

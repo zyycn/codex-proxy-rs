@@ -1,11 +1,13 @@
+//! 验证各端点共用当前客户端画像并保留显式驻留配置
+
 use super::*;
 use provider_openai::transport::build_reqwest_client;
 use provider_openai::transport::profile::CodexResidency;
 use uuid::Uuid;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
 
-/// 官方本机样本：模型请求带 Core version，backend-client 账号请求不带。
-/// 通过真实 HTTP 请求验证画像更新后每条路径取到同一制品中的正确字段。
+/// 官方本机样本：模型请求带 Core version，backend-client 账号请求不带
+/// 通过真实 HTTP 请求验证画像更新后每条路径取到同一制品中的正确字段
 #[tokio::test]
 async fn each_core_endpoint_uses_the_current_bundled_release() {
     let server = MockServer::start().await;

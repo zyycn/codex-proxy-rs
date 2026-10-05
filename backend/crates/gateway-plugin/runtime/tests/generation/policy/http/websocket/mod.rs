@@ -1,3 +1,5 @@
+//! 验证真实插件 WebSocket 升级、双向大帧与会话资源生命周期
+
 use super::*;
 use futures::FutureExt as _;
 use gateway_core::middleware::{http::upgrade, websocket as ws};
@@ -139,7 +141,7 @@ async fn session_model_and_network_callbacks_outlive_handshake_and_each_executio
     let reply: serde_json::Value = serde_json::from_slice(&reply.payload).unwrap();
     assert_eq!(reply["result"]["status"], 200);
     assert_eq!(reply["payload_bytes"], 13);
-    // 超过单个子调用图的 16 次预算，连接仍可承载新的独立执行。
+    // 超过单个子调用图的 16 次预算，连接仍可承载新的独立执行
     let mut requests = BTreeSet::new();
     for _ in 0..18 {
         send.send(call(serde_json::json!({"method":"host.model.execute","params":{

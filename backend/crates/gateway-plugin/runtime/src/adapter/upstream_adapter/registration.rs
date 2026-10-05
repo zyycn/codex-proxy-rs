@@ -1,3 +1,5 @@
+//! 校验并准备插件上游适配声明与能力绑定
+
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use gateway_admin::model::{

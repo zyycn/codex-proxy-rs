@@ -1,3 +1,5 @@
+//! 验证插件受管 HTTP 与 WebSocket 客户端的读取、关闭和取消行为
+
 use super::session::{HostPeer, receive, send_call, shutdown, start_session};
 use gateway_plugin_sdk::client::{CallFuture, CallReply, PluginCall, PluginHandler, write_frame};
 use gateway_plugin_sdk::{ErrorCode, Frame, Message};
@@ -331,7 +333,7 @@ async fn websocket_close_can_be_retried_after_cancelling_its_future() {
         vec![],
     )
     .await;
-    // 第一条关闭已发送，但等待其结果的 future 已取消；迟到回包不应中断重试。
+    // 第一条关闭已发送，但等待其结果的 future 已取消；迟到回包不应中断重试
     for _ in 0..2 {
         reply_callback(
             &mut host,

@@ -1,3 +1,5 @@
+//! 插件集成测试使用的原生 Provider 与执行事件替身
+
 use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
@@ -127,7 +129,7 @@ impl Provider for NativeProvider {
     }
 }
 
-// 仅测试 Core / Runtime / Store 组合；真实 Provider 的凭据解释由各自合同测试验证。
+// 仅测试 Core / Runtime / Store 组合；真实 Provider 的凭据解释由各自合同测试验证
 struct FixtureConnection(ProviderAccountId);
 
 impl gateway_core::engine::upstream_adapter::UpstreamAccountConnection for FixtureConnection {

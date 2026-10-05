@@ -1,4 +1,4 @@
-//! 真实子进程协议对端；只依赖公开 SDK，Cargo 为集成测试构建此辅助二进制。
+//! 真实子进程协议对端；只依赖公开 SDK，Cargo 为集成测试构建此辅助二进制
 
 mod legacy_upstream;
 
@@ -962,9 +962,9 @@ impl Peer {
                     .await;
                     let mut mapped = Vec::with_capacity(14 + source.len());
                     mapped.extend_from_slice(b"GMB1");
-                    mapped.push(1); // Only: 一个输出消费完整源 frame。
+                    mapped.push(1); // Only: 一个输出消费完整源 frame
                     mapped.extend_from_slice(&read.source_id.to_be_bytes());
-                    mapped.push(0); // mapped frame 的 terminal 由 Runtime 从源事实恢复。
+                    mapped.push(0); // mapped frame 的 terminal 由 Runtime 从源事实恢复
                     mapped.extend_from_slice(&source);
                     let credits = self.streams.lock().await.get(&id).unwrap().clone();
                     credits.take(mapped.len() as u64).await;
@@ -1207,7 +1207,7 @@ impl Peer {
                 } else {
                     "host.log".into()
                 };
-                // 分配与入队保持同一顺序，避免并发回调制造不合法 ID 序列。
+                // 分配与入队保持同一顺序，避免并发回调制造不合法 ID 序列
                 let mut callbacks = self.callbacks.lock().await;
                 let callback = self.next_callback.fetch_add(2, Ordering::Relaxed);
                 callbacks.insert(
@@ -1371,10 +1371,10 @@ async fn main() {
                     "malformed_truncated_frame" | "malformed_frame_length"
                 ) {
                     let bytes: &[u8] = if method == "malformed_truncated_frame" {
-                        // 声明 16 字节元数据，却只写入一个字节后退出。
+                        // 声明 16 字节元数据，却只写入一个字节后退出
                         &[0, 0, 0, 16, 0, 0, 0, 0, b'{']
                     } else {
-                        // 元数据长度超过公开的 64 KiB 上限，读取端必须在分配前拒绝。
+                        // 元数据长度超过公开的 64 KiB 上限，读取端必须在分配前拒绝
                         &[0, 1, 0, 1, 0, 0, 0, 0]
                     };
                     let mut output = tokio::io::stdout();
@@ -1481,7 +1481,7 @@ impl Peer {
         } else {
             UpstreamAdapterRequest::decode(&payload).unwrap()
         };
-        // 假凭据用于检测宿主是否把已选账号令牌放入了插件输入。
+        // 假凭据用于检测宿主是否把已选账号令牌放入了插件输入
         assert!(!String::from_utf8_lossy(&payload).contains("fixture-native-token"));
         self.append_observation_marker("upstream_marker", &json!({"key":request.client_key_id,"account":request.account_id,"continuation":request.continuation}));
         self.send(

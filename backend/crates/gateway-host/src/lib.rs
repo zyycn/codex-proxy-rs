@@ -1,4 +1,4 @@
-//! 网关进程与操作系统能力：配置发现、日志、任务、自更新与 serve/drain。
+//! 网关进程与操作系统能力：配置发现、日志、任务、自更新与 serve/drain
 
 pub mod client_distribution;
 mod command_line;
@@ -35,7 +35,7 @@ use self::serve::{ConnectionTracker, serve_router};
 use self::system_update::ProcessSystemOperations;
 use self::workers::WorkerSupervisor;
 
-/// Host 初始化的能力集；字段全部私有，不暴露内部监督器或进程状态。
+/// Host 初始化的能力集；字段全部私有，不暴露内部监督器或进程状态
 pub struct HostBundle {
     config: HostConfig,
     log_guard: LogGuard,
@@ -48,7 +48,7 @@ pub struct HostBundle {
     command_signal: Option<command_line::SignalGuard>,
 }
 
-/// 在启动其他包之前初始化进程级能力。
+/// 在启动其他包之前初始化进程级能力
 pub async fn initialize(config: HostConfig) -> Result<HostBundle, HostError> {
     let official_plugins = Arc::new(official_plugins::FileOfficialPluginRelease::new(
         config
@@ -78,7 +78,7 @@ pub async fn initialize(config: HostConfig) -> Result<HostBundle, HostError> {
     })
 }
 
-/// CLI 的 stdout/stderr 属于命令结果；宿主诊断只保留已配置的文件日志。
+/// CLI 的 stdout/stderr 属于命令结果；宿主诊断只保留已配置的文件日志
 pub async fn initialize_command_line(mut config: HostConfig) -> Result<HostBundle, HostError> {
     config.logging.stdout = false;
     let mut host = initialize(config).await?;
@@ -87,7 +87,7 @@ pub async fn initialize_command_line(mut config: HostConfig) -> Result<HostBundl
 }
 
 impl HostBundle {
-    /// 向启动控制台报告一个组装阶段已就绪。
+    /// 向启动控制台报告一个组装阶段已就绪
     pub fn report_startup_ready(&self, service: &'static str) {
         tracing::info!(target: "gateway_startup", service, "服务启动正常");
     }
@@ -103,18 +103,18 @@ impl HostBundle {
     }
 
     #[must_use]
-    /// 返回惰性下载解析能力；网络请求只会在管理 API 调用时发生。
+    /// 返回惰性下载解析能力；网络请求只会在管理 API 调用时发生
     pub fn client_distribution_resolver(&self) -> Arc<dyn ClientDistributionResolver> {
         self.client_distribution.clone()
     }
 
-    /// 返回与当前可执行文件一同部署的只读官方插件发行目录。
+    /// 返回与当前可执行文件一同部署的只读官方插件发行目录
     #[must_use]
     pub fn official_plugin_release_files(&self) -> Arc<dyn OfficialPluginReleaseFiles> {
         self.official_plugins.clone()
     }
 
-    /// 身份来自构建脚本写入二进制的常量，不采信运行时配置或环境覆盖。
+    /// 身份来自构建脚本写入二进制的常量，不采信运行时配置或环境覆盖
     #[must_use]
     pub fn official_plugin_release_identity(
         &self,
@@ -141,7 +141,7 @@ impl HostBundle {
         self.connections.clone()
     }
 
-    /// 报告文件日志写入或归档失败，避免将缺失日志误报为完整。
+    /// 报告文件日志写入或归档失败，避免将缺失日志误报为完整
     #[must_use]
     pub fn logging_health_probe(&self) -> Arc<dyn HealthProbe> {
         self.log_guard.health_probe()
@@ -161,7 +161,7 @@ impl HostBundle {
         Ok(())
     }
 
-    /// 进程唯一阻塞点；返回前完成 HTTP drain 与 worker join。
+    /// 进程唯一阻塞点；返回前完成 HTTP drain 与 worker join
     pub async fn serve(self, router: Router) -> Result<(), HostError> {
         let result = serve_router(
             router,

@@ -1,6 +1,6 @@
 import { computed, shallowRef } from 'vue'
 
-export type UsageTimeRange = 'today' | '7d' | '30d'
+type UsageTimeRange = 'today' | '7d' | '30d'
 export interface UsageTimeRangeParams {
   period: UsageTimeRange
   asOf: number

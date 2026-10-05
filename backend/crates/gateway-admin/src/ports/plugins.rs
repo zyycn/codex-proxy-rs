@@ -1,3 +1,5 @@
+//! 插件准备、分发、持久化与私有状态生命周期的外部能力端口
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
@@ -26,10 +28,10 @@ use crate::model::{
 };
 use gateway_core::runtime::extensions::ExtensionSetReference;
 
-/// Admin 准备完整候选并保活到提交后的发布结束；进程状态不能代替持久启用状态。
+/// Admin 准备完整候选并保活到提交后的发布结束；进程状态不能代替持久启用状态
 #[async_trait]
 pub trait PluginPreparation: PluginRuntimeDiagnostics + PluginStateLifecycle {
-    /// 静态判断业务配置是否完整，不启动进程；不完整的安装保留为待配置。
+    /// 静态判断业务配置是否完整，不启动进程；不完整的安装保留为待配置
     async fn configuration_ready(
         &self,
         instance: PluginInstance,
@@ -39,14 +41,14 @@ pub trait PluginPreparation: PluginRuntimeDiagnostics + PluginStateLifecycle {
         &self,
         instance: PluginInstance,
     ) -> Result<PluginStateConfiguration, AdminError>;
-    /// 本次修改的实例 revision 必须等于候选 config_revision，准备失败时拒绝提交；历史故障可隔离。
+    /// 本次修改的实例 revision 必须等于候选 config_revision，准备失败时拒绝提交；历史故障可隔离
     async fn prepare(
         &self,
         snapshot: PluginInstanceSnapshot,
     ) -> Result<ExtensionSetReference, AdminError>;
 }
 
-/// 运行诊断独立于发布准备；没有进程事实时显式返回 None。
+/// 运行诊断独立于发布准备；没有进程事实时显式返回 None
 #[async_trait]
 pub trait PluginRuntimeDiagnostics: Send + Sync {
     async fn runtime_diagnostics(
@@ -57,7 +59,7 @@ pub trait PluginRuntimeDiagnostics: Send + Sync {
     ) -> Option<BTreeMap<String, PluginInstanceRuntime>>;
 }
 
-/// 发布实现必须显式承担状态激活、排空和迁移，不能以缺省成功跳过生命周期。
+/// 发布实现必须显式承担状态激活、排空和迁移，不能以缺省成功跳过生命周期
 #[async_trait]
 pub trait PluginStateLifecycle: Send + Sync {
     async fn activate_state(
@@ -103,7 +105,7 @@ impl PluginStateStoreError {
 
 pub type PluginStateStoreResult<T> = Result<T, PluginStateStoreError>;
 
-/// 私有状态的窄端口；不暴露 SQL、连接或跨命名空间事务。
+/// 私有状态的窄端口；不暴露 SQL、连接或跨命名空间事务
 #[async_trait]
 pub trait PluginStateStore: Send + Sync {
     async fn load_owner(
@@ -151,7 +153,7 @@ pub trait PluginStateStore: Send + Sync {
     async fn abort_transition(&self, transition_id: &str) -> PluginStateStoreResult<()>;
 }
 
-/// Host 拥有联网、重定向、凭据作用域、限流与有界下载，不解释插件包。
+/// Host 拥有联网、重定向、凭据作用域、限流与有界下载，不解释插件包
 #[async_trait]
 pub trait PluginDistribution: Send + Sync {
     fn validate_source(&self, source: &PluginUpdateSource) -> Result<(), AdminError>;
@@ -170,10 +172,10 @@ pub trait PluginDistribution: Send + Sync {
     ) -> Result<DownloadedPlugin, AdminError>;
 }
 
-/// Runtime 只解释插件包格式；安装事务与来源选择归 Admin。
+/// Runtime 只解释插件包格式；安装事务与来源选择归 Admin
 #[async_trait]
 pub trait PluginPackageInspector: Send + Sync {
-    /// 可解析但版本范围未经宿主承诺的诊断，不决定启动资格。
+    /// 可解析但版本范围未经宿主承诺的诊断，不决定启动资格
     async fn compatibility_warning(
         &self,
         _archive: Arc<[u8]>,
@@ -182,7 +184,7 @@ pub trait PluginPackageInspector: Send + Sync {
         Ok(None)
     }
 
-    /// 按当前宿主的弃用计划提示旧接口，不改变安装和运行资格。
+    /// 按当前宿主的弃用计划提示旧接口，不改变安装和运行资格
     fn api_deprecations(
         &self,
         _metadata: &crate::model::plugins::PluginArtifactMetadata,
@@ -196,7 +198,7 @@ pub trait PluginPackageInspector: Send + Sync {
         expected_sha256: Option<String>,
     ) -> Result<InspectedPluginArtifact, AdminError>;
 
-    /// 从已安装且摘要匹配的制品中读取可展示的静态图标，不启动插件实例。
+    /// 从已安装且摘要匹配的制品中读取可展示的静态图标，不启动插件实例
     async fn icon(
         &self,
         _archive: Arc<[u8]>,
@@ -206,7 +208,7 @@ pub trait PluginPackageInspector: Send + Sync {
         Err(AdminError::unavailable("插件图标读取不可用"))
     }
 
-    /// 只读取已校验包的静态宿主要求；不得准备或启动插件进程。
+    /// 只读取已校验包的静态宿主要求；不得准备或启动插件进程
     async fn compatibility(
         &self,
         _archive: Arc<[u8]>,
@@ -218,13 +220,13 @@ pub trait PluginPackageInspector: Send + Sync {
 
 #[async_trait]
 pub trait PluginStore: Send + Sync {
-    /// 只复核精确管理目标的启用、接受事实和版本，不读取实例配置或密钥。
+    /// 只复核精确管理目标的启用、接受事实和版本，不读取实例配置或密钥
     async fn management_target_is_current(
         &self,
         target: &crate::model::plugins::management::PluginManagementTarget,
     ) -> AdminStoreResult<bool>;
     async fn load_instances(&self) -> AdminStoreResult<PluginInstanceSnapshot>;
-    /// 读取对应制品最近一次启用时提交的配置，密钥始终留在服务端。
+    /// 读取对应制品最近一次启用时提交的配置，密钥始终留在服务端
     async fn load_version_configuration(
         &self,
         _id: &str,
@@ -232,11 +234,11 @@ pub trait PluginStore: Send + Sync {
     ) -> AdminStoreResult<Option<PluginVersionConfiguration>> {
         Ok(None)
     }
-    /// 只返回有可恢复配置的制品摘要，不读取敏感值。
+    /// 只返回有可恢复配置的制品摘要，不读取敏感值
     async fn configuration_versions(&self, _id: &str) -> AdminStoreResult<Vec<String>> {
         Ok(Vec::new())
     }
-    /// 在单个事务中停用确认快照中的实例，保留配置、密钥及私有状态。
+    /// 在单个事务中停用确认快照中的实例，保留配置、密钥及私有状态
     async fn disable_instances(
         &self,
         _ids: &[String],
@@ -272,7 +274,7 @@ pub trait PluginStore: Send + Sync {
         self.save_instance(instance, expected_revision, context)
             .await
     }
-    /// 保存目标并停用明确确认的配置，必须共享事务和配置版本检查。
+    /// 保存目标并停用明确确认的配置，必须共享事务和配置版本检查
     async fn save_instance_replacing(
         &self,
         instance: PluginInstance,
@@ -324,13 +326,13 @@ pub trait PluginStore: Send + Sync {
         source: PluginSource,
         context: &MutationContext,
     ) -> AdminStoreResult<PluginArtifactMutation>;
-    /// 确认信任并安装精确摘要的制品；安装事实不随实例设置变化。
+    /// 确认信任并安装精确摘要的制品；安装事实不随实例设置变化
     async fn accept_artifact(
         &self,
         digest: &str,
         context: &MutationContext,
     ) -> AdminStoreResult<PluginArtifactMutation>;
-    /// 删除制品及其无引用下载凭据，最后一个版本同时删除来源规则，清理与审计必须原子提交。
+    /// 删除制品及其无引用下载凭据，最后一个版本同时删除来源规则，清理与审计必须原子提交
     async fn delete_artifact(
         &self,
         digest: &str,

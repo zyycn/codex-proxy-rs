@@ -1,4 +1,4 @@
-//! 可组合的类型化作者入口，注册事实始终来自同一份规范化清单。
+//! 可组合的类型化作者入口，注册事实始终来自同一份规范化清单
 
 pub mod methods;
 mod typed;
@@ -23,7 +23,7 @@ pub use typed::{Empty, Method, TypedCall, TypedReply};
 
 type Handler = Arc<dyn Fn(PluginCall) -> CallFuture<'static> + Send + Sync>;
 
-/// 作者配置错误只包含方法与能力标识，不输出清单中的敏感业务数据。
+/// 作者配置错误只包含方法与能力标识，不输出清单中的敏感业务数据
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorError {
     #[error("plugin author manifest is invalid: {0}")]
@@ -34,27 +34,28 @@ pub enum AuthorError {
     MissingMethod(&'static str),
 }
 
-/// 从作者清单组合处理器；不手写 `plugin.register` 或复制宿主握手的能力。
+/// 从作者清单组合处理器；不手写 `plugin.register` 或复制宿主握手的能力
 pub struct PluginBuilder {
     manifest: Manifest,
     handlers: BTreeMap<&'static str, Handler>,
 }
 
 impl PluginBuilder {
-    /// 读取与 `cpr-plugin package --manifest` 相同的作者清单。
+    /// 读取与 `cpr-plugin package --manifest` 相同的作者清单
     ///
     /// # Errors
     ///
-    /// 作者清单无效、含构建元数据或未显式选择中间件阶段时失败。
+    /// 作者清单无效、含构建元数据或未显式选择中间件阶段时失败
     pub fn from_json(source: &[u8]) -> Result<Self, AuthorError> {
         Self::from_manifest(Manifest::from_author_slice(source)?)
     }
 
-    /// 使用已经规范化的清单。通常优先使用 `from_json(include_bytes!(...))`。
+    /// 使用已经规范化的清单
+    /// 通常优先使用 `from_json(include_bytes!(...))`
     ///
     /// # Errors
     ///
-    /// 清单校验失败时返回错误。
+    /// 清单校验失败时返回错误
     pub fn from_manifest(manifest: Manifest) -> Result<Self, AuthorError> {
         manifest.validate()?;
         Ok(Self {
@@ -63,11 +64,11 @@ impl PluginBuilder {
         })
     }
 
-    /// 注册 SDK 定义的类型化方法，参数／载荷编码由方法合同决定。
+    /// 注册 SDK 定义的类型化方法，参数／载荷编码由方法合同决定
     ///
     /// # Errors
     ///
-    /// 重复注册或对应能力未在作者清单声明时失败。
+    /// 重复注册或对应能力未在作者清单声明时失败
     pub fn on<P, R, F, Fut>(mut self, method: Method<P, R>, handler: F) -> Result<Self, AuthorError>
     where
         P: Send + 'static,
@@ -105,11 +106,11 @@ impl PluginBuilder {
         Ok(self)
     }
 
-    /// 组合洋葱中间件，沿用 single-use next 与惰性正文，不建立另一套流式机制。
+    /// 组合洋葱中间件，沿用 single-use next 与惰性正文，不建立另一套流式机制
     ///
     /// # Errors
     ///
-    /// 未声明中间件或重复注册时失败。
+    /// 未声明中间件或重复注册时失败
     pub fn middleware<C, F, Fut>(mut self, handler: F) -> Result<Self, AuthorError>
     where
         C: MiddlewareInput,
@@ -142,11 +143,11 @@ impl PluginBuilder {
         Ok(self)
     }
 
-    /// 冻结模型别名目录；目标校验与发布由宿主负责。
+    /// 冻结模型别名目录；目标校验与发布由宿主负责
     ///
     /// # Errors
     ///
-    /// 未声明模型目录能力或重复注册时失败。
+    /// 未声明模型目录能力或重复注册时失败
     pub fn model_catalog(
         self,
         registration: crate::call::catalog::ModelCatalogRegistration,
@@ -157,11 +158,11 @@ impl PluginBuilder {
         })
     }
 
-    /// 冻结管理页面／路由描述并绑定类型化业务函数。
+    /// 冻结管理页面／路由描述并绑定类型化业务函数
     ///
     /// # Errors
     ///
-    /// 未声明管理能力或重复注册时失败。
+    /// 未声明管理能力或重复注册时失败
     pub fn management<F, Fut>(
         self,
         registration: ManagementRegistration,
@@ -178,11 +179,11 @@ impl PluginBuilder {
         .on(methods::MANAGEMENT_HANDLE, handler)
     }
 
-    /// 冻结命令帮助并绑定类型化命令执行函数。
+    /// 冻结命令帮助并绑定类型化命令执行函数
     ///
     /// # Errors
     ///
-    /// 未声明命令行能力或重复注册时失败。
+    /// 未声明命令行能力或重复注册时失败
     pub fn command_line<F, Fut>(
         self,
         registration: CommandRegistration,
@@ -199,11 +200,11 @@ impl PluginBuilder {
         .on(methods::COMMAND_LINE_EXECUTE, handler)
     }
 
-    /// 检查声明与实际处理器后生成可交给 `PluginSession::run` 的插件。
+    /// 检查声明与实际处理器后生成可交给 `PluginSession::run` 的插件
     ///
     /// # Errors
     ///
-    /// 声明缺少处理器时失败。
+    /// 声明缺少处理器时失败
     pub fn build(self) -> Result<ComposedPlugin, AuthorError> {
         validation::validate(&self.manifest, &self.handlers)?;
         Ok(ComposedPlugin {
@@ -223,7 +224,7 @@ impl PluginBuilder {
     }
 }
 
-/// 已校验的业务处理器集合；会话仍负责取消、回调和流控。
+/// 已校验的业务处理器集合；会话仍负责取消、回调和流控
 pub struct ComposedPlugin {
     registration: Registration,
     handlers: BTreeMap<&'static str, Handler>,

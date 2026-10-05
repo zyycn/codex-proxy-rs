@@ -1,4 +1,4 @@
-//! 管理与自助页面共用的时间展示投影。
+//! 管理与自助页面共用的时间展示投影
 
 use chrono::{DateTime, Utc};
 use gateway_core::time::DeploymentTimeZone;

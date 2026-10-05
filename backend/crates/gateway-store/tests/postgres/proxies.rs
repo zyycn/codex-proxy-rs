@@ -1,3 +1,5 @@
+//! 验证代理位置、账号绑定、分页查询与事务锁释放
+
 use gateway_admin::{
     model::{
         MutationActor, MutationContext, PageSize,
@@ -373,7 +375,7 @@ async fn proxy_accounts_paginate_thousands_of_accounts_and_search_without_loadin
         .await
         .unwrap()
         .record;
-    // 相同名称验证稳定排序；账号仅写入隔离测试数据库，不接触真实账号池。
+    // 相同名称验证稳定排序；账号仅写入隔离测试数据库，不接触真实账号池
     sqlx::query(
         "insert into provider_accounts
         (id, provider_kind, name, email, authentication_kind, provider_credentials_json,
@@ -500,7 +502,7 @@ async fn rejected_import_reservations_release_proxy_lock_before_returning() {
     let store = PgProxyRepository::new(database.pool.clone());
     let id = "proxy_missing";
 
-    // 读取不存在的代理失败后，应立即允许其他事务取得同一资源的独占锁。
+    // 读取不存在的代理失败后，应立即允许其他事务取得同一资源的独占锁
     for _ in 0..64 {
         let error = store.reserve_import(id).await.err().unwrap();
         assert_eq!(error.kind(), AdminStoreErrorKind::NotFound);
@@ -545,7 +547,7 @@ async fn stale_proxy_test_releases_lock_before_next_update() {
         .unwrap()
         .record;
 
-    // 暂停连接归还时的后台清理，确保锁由返回错误前的显式回滚释放。
+    // 暂停连接归还时的后台清理，确保锁由返回错误前的显式回滚释放
     let release_gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
     let rejected_pool = database
         .pool
@@ -668,7 +670,7 @@ async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are
             .is_err()
     );
 
-    // 模拟上游已轮换的新凭据；持有保护时，另一个连接仍能完成导入事务。
+    // 模拟上游已轮换的新凭据；持有保护时，另一个连接仍能完成导入事务
     let mut candidate = account("acct_reserved_import", "reserved-import-user");
     candidate.outbound_proxy = Some(reservation.binding.proxy.clone());
     let repository = PgProviderAccountRepository::new(database.pool.clone());
@@ -966,7 +968,7 @@ async fn migration_backfills_shared_proxies_without_changing_credentials() {
     let Some(database) = TestDatabase::create_through("proxy_backfill", 4).await else {
         return;
     };
-    // 从真实旧 schema 正向升级，不拆卸最新结构，避免遗漏后续增加的引用约束。
+    // 从真实旧 schema 正向升级，不拆卸最新结构，避免遗漏后续增加的引用约束
     for id in ["acct_one", "acct_two", "acct_direct"] {
         let proxy_url = (id != "acct_direct").then_some("http://user:secret@127.0.0.1:8080/");
         sqlx::query(

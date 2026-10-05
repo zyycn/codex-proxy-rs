@@ -1,4 +1,4 @@
-//! 终态配置表的一致性 `RuntimeSnapshot` 输入读取。
+//! 终态配置表的一致性 `RuntimeSnapshot` 输入读取
 
 use std::collections::BTreeMap;
 

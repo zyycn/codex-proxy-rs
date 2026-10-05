@@ -1,3 +1,5 @@
+//! 验证插件私有状态迁移的顺序、配额与代次资源回收
+
 use std::collections::BTreeMap;
 
 use gateway_admin::{
@@ -408,7 +410,7 @@ async fn failed_multi_namespace_promotion_restores_cleaned_source_generations() 
         .err()
         .unwrap();
     assert_eq!(error.kind(), AdminStoreErrorKind::Conflict);
-    // cache 已走过清理步骤，settings 未完成导致整笔事务回滚，旧身份和两份数据仍有效。
+    // cache 已走过清理步骤，settings 未完成导致整笔事务回滚，旧身份和两份数据仍有效
     for namespace in ["cache", "settings"] {
         assert_eq!(
             store
@@ -523,7 +525,7 @@ async fn state_cas_quota_and_fence_are_independent_from_global_revision() {
         .unwrap()
         .unwrap();
 
-    // 无关制品安装会推进全局配置 revision，但不能撤销实例自己的状态 fence。
+    // 无关制品安装会推进全局配置 revision，但不能撤销实例自己的状态 fence
     let unrelated = install_version(&store, 'b', "2.0.0").await;
     let first = store
         .put(
@@ -637,7 +639,7 @@ async fn state_cas_quota_and_fence_are_independent_from_global_revision() {
         "配额收紧不能让已有记录超过单值上限"
     );
 
-    // 同一实例的配置提交会轮换 fence；旧进程即使仍持有 owner 也不能继续写。
+    // 同一实例的配置提交会轮换 fence；旧进程即使仍持有 owner 也不能继续写
     let rebound = store
         .save_instance_with_state(
             saved.instance.clone(),

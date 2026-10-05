@@ -17,6 +17,7 @@ base64 = "0.23.0"
 bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 chrono-tz = { version = "0.10", features = ["serde"] }
+event-listener = "5.4.2"
 futures = "0.3.32"
 http = "1.5.0"
 http-body = "1.0.1"
@@ -30,6 +31,9 @@ thiserror = "2.0.18"
 tracing = "0.1.44"
 uuid = { version = "1.23.3", features = ["v7"] }
 url = "2.5.8"
+
+[dev-dependencies]
+allocation-counter = "0.8.1"
 
 [lints]
 workspace = true

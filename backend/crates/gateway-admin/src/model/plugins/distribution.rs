@@ -1,3 +1,5 @@
+//! 插件分发来源、下载凭据、发行查询与远程安装的数据合同
+
 use std::{fmt, sync::Arc};
 
 use chrono::{DateTime, Utc};
@@ -17,7 +19,7 @@ pub enum PluginUpdateSource {
     Github { repository: String },
 }
 
-/// 检查策略只决定查询目标，任何策略都不会自动安装或切换运行实例。
+/// 检查策略只决定查询目标，任何策略都不会自动安装或切换运行实例
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PluginUpdatePolicy {
@@ -85,7 +87,7 @@ impl fmt::Debug for PluginDistributionEgress {
 #[serde(rename_all = "camelCase")]
 pub struct PluginUpdateCheck {
     pub binding: PluginSourceBinding,
-    /// Release 元数据不是已校验的插件包，不据此声明平台或 SDK 兼容。
+    /// Release 元数据不是已校验的插件包，不据此声明平台或 SDK 兼容
     pub release: PluginRelease,
 }
 
@@ -109,7 +111,7 @@ pub enum DownloadPurpose {
     Artifact,
 }
 
-/// 授权目标以完整 origin 和路径段边界匹配；摘要、名称和列表均不包含 secret。
+/// 授权目标以完整 origin 和路径段边界匹配；摘要、名称和列表均不包含 secret
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceCredentialInfo {
@@ -174,7 +176,7 @@ pub struct PluginRelease {
     pub expires_at: DateTime<Utc>,
 }
 
-/// 下载意图不承载凭据；引用在 Admin 中解析后只交给 Host 的本次调用。
+/// 下载意图不承载凭据；引用在 Admin 中解析后只交给 Host 的本次调用
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RemotePluginLocation {
@@ -200,7 +202,7 @@ pub struct RemotePluginVerify {
     pub credential_ids: Vec<String>,
     #[serde(default)]
     pub outbound_proxy_id: Option<String>,
-    /// 更新已有插件时锁定身份；首次安装从包内清单读取。
+    /// 更新已有插件时锁定身份；首次安装从包内清单读取
     pub expected_plugin_id: Option<String>,
 }
 
@@ -222,7 +224,7 @@ pub struct DownloadedPlugin {
     pub source: PluginSource,
 }
 
-/// 只读包校验结果，不代表实例配置、授权或私有状态已完成运行时准备。
+/// 只读包校验结果，不代表实例配置、授权或私有状态已完成运行时准备
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifiedPluginArtifact {

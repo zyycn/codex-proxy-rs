@@ -1,4 +1,4 @@
-//! `gateway-admin` 账号端口的 PostgreSQL adapter。
+//! `gateway-admin` 账号端口的 PostgreSQL adapter
 
 use gateway_admin::model::audit::MutationAuditOperation;
 use std::collections::BTreeMap;
@@ -23,9 +23,9 @@ fn account_capacity(
     }
 }
 
-/// Admin 账号用例所需的公共账号、留存观测与 revision 事务能力。
+/// Admin 账号用例所需的公共账号、留存观测与 revision 事务能力
 ///
-/// 三个 PostgreSQL adapter 都保持私有，调用方只能取得 [`AccountStore`] 暴露的领域能力。
+/// 三个 PostgreSQL adapter 都保持私有，调用方只能取得 [`AccountStore`] 暴露的领域能力
 #[derive(Clone)]
 pub struct PgAdminAccountStore {
     pub(super) pool: PgPool,
@@ -706,7 +706,7 @@ impl AccountStore for PgAdminAccountStore {
         })?;
         let result =
             async {
-                // 与管理写入采用相同锁顺序；锁住默认值后再检查账号最新设置，避免把旧快照写回。
+                // 与管理写入采用相同锁顺序；锁住默认值后再检查账号最新设置，避免把旧快照写回
                 let default_limit: i64 = sqlx::query_scalar(
                 "select max_concurrent_per_account from runtime_settings where id = 1 for update"
             ).fetch_one(&mut *transaction).await

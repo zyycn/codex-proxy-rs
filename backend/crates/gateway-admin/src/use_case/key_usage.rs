@@ -1,4 +1,4 @@
-//! Key 自助查询从统一会话或只读 Key 校验取得范围，复用现有观测和额度账本。
+//! Key 自助查询从统一会话或只读 Key 校验取得范围，复用现有观测和额度账本
 
 use std::sync::Arc;
 
@@ -31,10 +31,10 @@ use super::{map_store_error, observability::health_timeline_at};
 
 #[async_trait]
 pub trait KeyUsageService: Send + Sync {
-    /// 验证 Key 并只读查询当前额度，不记录 Key 使用或执行推理准入。
+    /// 验证 Key 并只读查询当前额度，不记录 Key 使用或执行推理准入
     async fn budget(&self, plaintext: &str) -> Result<Option<ClientBudgetStatus>, AdminError>;
 
-    /// 使用 Core 已认证的宿主身份查询额度，不接收插件自报的 Key ID。
+    /// 使用 Core 已认证的宿主身份查询额度，不接收插件自报的 Key ID
     async fn budget_for_client(
         &self,
         id: &ClientApiKeyId,
@@ -155,7 +155,7 @@ impl KeyUsageService for DefaultKeyUsageService {
         let Some(id) = self.key_id(session_id).await? else {
             return Ok(None);
         };
-        // 明文只按服务端会话绑定的 Key 读取，禁用或删除后不再提供配置。
+        // 明文只按服务端会话绑定的 Key 读取，禁用或删除后不再提供配置
         self.keys
             .reveal_client_key(&id)
             .await
@@ -182,7 +182,7 @@ impl KeyUsageService for DefaultKeyUsageService {
         };
         let filter = usage_filter(&id, query.model);
         let now = query.range.end;
-        // 健康条始终展示部署时区今日，不随历史范围或模型筛选改变。
+        // 健康条始终展示部署时区今日，不随历史范围或模型筛选改变
         let today = TimeRange {
             start: self
                 .timezone

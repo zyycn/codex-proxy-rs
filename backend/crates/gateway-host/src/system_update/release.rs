@@ -1,4 +1,4 @@
-//! GitHub Release 发现、缓存、版本比较与下载信任边界。
+//! GitHub Release 发现、缓存、版本比较与下载信任边界
 
 use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -92,7 +92,7 @@ impl ReleaseCache {
                     |release| detail_from_release(config, release, channel),
                 );
                 let mut entry = self.entry.lock().await;
-                // 较慢的旧请求不能覆盖或清除新检查的结果，包括切走再切回同一通道。
+                // 较慢的旧请求不能覆盖或清除新检查的结果，包括切走再切回同一通道
                 if self.request_sequence.load(Ordering::Relaxed) == sequence {
                     *entry = Some(CachedRelease {
                         key,
@@ -103,7 +103,7 @@ impl ReleaseCache {
                 Ok(detail)
             }
             Err(error) => {
-                // 强制检查失败后清掉旧结果，避免后续版本查询再次显示旧的更新标记。
+                // 强制检查失败后清掉旧结果，避免后续版本查询再次显示旧的更新标记
                 let mut entry = self.entry.lock().await;
                 if self.request_sequence.load(Ordering::Relaxed) == sequence
                     && entry.as_ref().is_some_and(|cached| cached.key == key)
@@ -126,7 +126,7 @@ impl ReleaseCache {
     }
 }
 
-/// 优先返回可升级的最高版本，没有候选时保留当前版本的发布信息。
+/// 优先返回可升级的最高版本，没有候选时保留当前版本的发布信息
 pub(crate) async fn fetch_latest(
     api_base: &str,
     repository: &str,
@@ -144,7 +144,7 @@ pub(crate) async fn fetch_latest(
         .build()
         .map_err(|error| upstream(format!("failed to create release client: {error}")))?;
 
-    // 所有发行线先过滤再排序，避免更高大版本或其他实验遮住仍可安装的更新。
+    // 所有发行线先过滤再排序，避免更高大版本或其他实验遮住仍可安装的更新
     let mut latest: Option<(semver::Version, GitHubRelease)> = None;
     let mut page = 1;
     loop {
@@ -275,7 +275,7 @@ pub(crate) fn select_archive<'a>(
         })
 }
 
-/// 校验 GitHub Release 资产 URL 及其重定向目标是否位于受信任边界内。
+/// 校验 GitHub Release 资产 URL 及其重定向目标是否位于受信任边界内
 pub fn validate_download_url(raw: &str, api_base: &str) -> Result<(), OperationError> {
     let url = reqwest::Url::parse(raw)
         .map_err(|error| invalid(format!("invalid download URL: {error}")))?;
@@ -380,7 +380,7 @@ pub(crate) fn version_channel(version: &str) -> Option<UpdateChannel> {
     channel_for_version(&version)
 }
 
-/// 检查更新与执行更新共用同一规则；构建元数据不构成更新。
+/// 检查更新与执行更新共用同一规则；构建元数据不构成更新
 fn update_target_allowed(
     current: &semver::Version,
     target: &semver::Version,

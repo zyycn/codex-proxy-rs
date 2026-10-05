@@ -1,4 +1,4 @@
-//! Explicit account egress with redirects and business retries disabled.
+//! xAI 显式账号出口传输，禁用自动重定向与业务重试
 
 use gateway_core::diagnostics::{StreamCapture, StreamFormat, TraceContext};
 use std::fmt;
@@ -67,31 +67,31 @@ tokio::task_local! {
     static REQUEST_DNS_OBSERVER: Arc<RequestDnsObserver>;
 }
 
-/// 构建严格 reqwest transport 失败。
+/// 构建严格 reqwest transport 失败
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum GrokReqwestTransportBuildError {
-    /// Reqwest TLS/client 初始化失败。
+    /// Reqwest TLS/client 初始化失败
     #[error("Grok reqwest transport initialization failed")]
     ClientInitialization,
 }
 
-/// 固定官方 host 的 DNS 解析路径；只有系统结果全部为公网地址时才直接使用。
+/// 固定官方 host 的 DNS 解析路径；只有系统结果全部为公网地址时才直接使用
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrokDnsResolutionPlan {
-    /// 使用系统 resolver 返回的全部公网地址。
+    /// 使用系统 resolver 返回的全部公网地址
     System,
-    /// 系统解析失败、为空或包含非公网地址，改用固定 bootstrap 的可信 DoH。
+    /// 系统解析失败、为空或包含非公网地址，改用固定 bootstrap 的可信 DoH
     TrustedDoh,
 }
 
-/// xAI 官方 host 的 DNS rebinding 防护策略。
+/// xAI 官方 host 的 DNS rebinding 防护策略
 #[derive(Debug, Clone, Copy)]
 pub struct GrokDnsResolutionPolicy {
     allowed_host: &'static str,
 }
 
 impl GrokDnsResolutionPolicy {
-    /// OAuth、JWKS 与 user-info 官方 host 策略。
+    /// OAuth、JWKS 与 user-info 官方 host 策略
     #[must_use]
     pub const fn official_oauth() -> Self {
         Self {
@@ -99,7 +99,7 @@ impl GrokDnsResolutionPolicy {
         }
     }
 
-    /// 推理与模型目录官方 host 策略。
+    /// 推理与模型目录官方 host 策略
     #[must_use]
     pub const fn official_inference() -> Self {
         Self {
@@ -107,11 +107,11 @@ impl GrokDnsResolutionPolicy {
         }
     }
 
-    /// 决定系统解析结果可直接使用还是必须走可信 DoH。
+    /// 决定系统解析结果可直接使用还是必须走可信 DoH
     ///
     /// # Errors
     ///
-    /// 请求 host 不等于本策略固定的官方 host 时拒绝，且不会触发 fallback。
+    /// 请求 host 不等于本策略固定的官方 host 时拒绝，且不会触发 fallback
     pub fn plan_system_resolution(
         self,
         requested_host: &str,
@@ -127,11 +127,11 @@ impl GrokDnsResolutionPolicy {
         )
     }
 
-    /// 验证可信 DoH 返回的整个地址集合；任一非公网地址会拒绝全部结果。
+    /// 验证可信 DoH 返回的整个地址集合；任一非公网地址会拒绝全部结果
     ///
     /// # Errors
     ///
-    /// Host 不匹配、结果为空或任一地址非公网时拒绝。
+    /// Host 不匹配、结果为空或任一地址非公网时拒绝
     pub fn validate_trusted_doh_resolution(
         self,
         requested_host: &str,
@@ -158,12 +158,12 @@ impl GrokDnsResolutionPolicy {
     }
 }
 
-/// DNS policy 低基数错误；不保留请求 host、地址或 resolver 正文。
+/// DNS policy 低基数错误；不保留请求 host、地址或 resolver 正文
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("Grok official DNS resolution was rejected")]
 pub struct GrokDnsResolutionError;
 
-/// HTTP client 构造与端点校验合为一个可注入的安全边界。
+/// HTTP client 构造与端点校验合为一个可注入的安全边界
 pub trait GrokEndpointPolicy: fmt::Debug + Send + Sync {
     fn build_oauth_client(
         &self,
@@ -236,18 +236,19 @@ impl GrokEndpointPolicy for OfficialGrokEndpointPolicy {
     }
 }
 
-/// 官方 OAuth HTTP transport。只允许 `auth.x.ai:443`。
+/// 官方 OAuth HTTP transport
+/// 只允许 `auth.x.ai:443`
 pub struct ReqwestOAuthTransport {
     clients: EgressCache<Option<OutboundProxy>, Client>,
     endpoint_policy: Arc<dyn GrokEndpointPolicy>,
 }
 
 impl ReqwestOAuthTransport {
-    /// 使用系统原生根证书构建生产 transport。
+    /// 使用系统原生根证书构建生产 transport
     ///
     /// # Errors
     ///
-    /// TLS client 初始化失败时返回错误。
+    /// TLS client 初始化失败时返回错误
     pub fn new(
         endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
@@ -318,7 +319,7 @@ impl OAuthHttpTransport for ReqwestOAuthTransport {
     }
 }
 
-/// 官方 Grok Responses HTTP SSE transport。
+/// 官方 Grok Responses HTTP SSE transport
 pub struct ReqwestGrokInferenceTransport {
     clients: EgressCache<GrokSessionBinding, Client>,
     unbound_client: Mutex<Option<Client>>,
@@ -326,14 +327,14 @@ pub struct ReqwestGrokInferenceTransport {
 }
 
 impl ReqwestGrokInferenceTransport {
-    /// 单个进程缓存的账号隔离推理连接池上限。
+    /// 单个进程缓存的账号隔离推理连接池上限
     pub const MAX_CACHED_ACCOUNT_CLIENTS: usize = MAX_CACHED_EGRESS_STATES;
 
-    /// 构建只允许官方 CLI proxy 的生产 transport。
+    /// 构建只允许官方 CLI proxy 的生产 transport
     ///
     /// # Errors
     ///
-    /// TLS client 初始化失败时返回错误。
+    /// TLS client 初始化失败时返回错误
     pub fn new(
         endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
@@ -453,7 +454,7 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
                                 .is_some_and(|total| total <= MAX_INFERENCE_BODY_BYTES) =>
                         {
                             *observed += chunk.len();
-                            // Bytes 直传，长流不再逐 chunk 复制到 Vec。
+                            // Bytes 直传，长流不再逐 chunk 复制到 Vec
                             Ok(chunk)
                         }
                         Ok(_) => Err(GrokInferenceTransportError::new(
@@ -518,18 +519,18 @@ fn inference_transport_metrics(
     metrics
 }
 
-/// 官方 Grok CLI proxy 模型目录 GET transport。
+/// 官方 Grok CLI proxy 模型目录 GET transport
 pub struct ReqwestGrokModelCatalogTransport {
     clients: EgressCache<Option<OutboundProxy>, Client>,
     endpoint_policy: Arc<dyn GrokEndpointPolicy>,
 }
 
 impl ReqwestGrokModelCatalogTransport {
-    /// 构建只允许官方 CLI proxy `/v1/models` 的生产 transport。
+    /// 构建只允许官方 CLI proxy `/v1/models` 的生产 transport
     ///
     /// # Errors
     ///
-    /// TLS client 初始化失败时返回错误。
+    /// TLS client 初始化失败时返回错误
     pub fn new(
         endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
@@ -684,7 +685,7 @@ fn build_official_client(
     proxy: Option<&OutboundProxy>,
 ) -> Result<Client, GrokReqwestTransportBuildError> {
     let mut builder = Client::builder()
-        // 工作区可能同时启用 native-tls；与官方 Grok CLI 一样显式固定 rustls，避免握手画像漂移。
+        // 工作区可能同时启用 native-tls；与官方 Grok CLI 一样显式固定 rustls，避免握手画像漂移
         .use_rustls_tls()
         .redirect(Policy::none())
         .no_proxy()
@@ -699,7 +700,7 @@ fn build_official_client(
         .https_only(true);
     if let Some(proxy) = proxy {
         // 保留 reqwest 的代理解析语义（socks5 本地解析、socks5h 远端解析）；
-        // 只允许官方 host 的直连 resolver 不能用于解析代理端点。
+        // 只允许官方 host 的直连 resolver 不能用于解析代理端点
         builder = builder.proxy(
             reqwest::Proxy::all(proxy.expose_url())
                 .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)?,
@@ -1142,7 +1143,7 @@ struct InferenceErrorMetadata {
     code: Option<String>,
     error_type: Option<String>,
     message: Option<String>,
-    // 仅结构化 JSON 的 message 可进入客户端协议；纯文本正文只参与内部分类。
+    // 仅结构化 JSON 的 message 可进入客户端协议；纯文本正文只参与内部分类
     client_message: Option<String>,
 }
 

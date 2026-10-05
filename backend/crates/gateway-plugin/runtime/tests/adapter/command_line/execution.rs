@@ -1,3 +1,5 @@
+//! 验证插件命令复用宿主身份、计量、账号事务与审计边界
+
 use gateway_core::policy::{ClientApiKeyId, RateLimits};
 use gateway_plugin_runtime::PluginCommandError;
 use serde_json::json;

@@ -1,3 +1,5 @@
+//! Key 用量查询测试共用的请求、费用与错误记录样本
+
 use crate::{admin::AdminTestFixture, support::key_fixture};
 use chrono::{Duration, Utc};
 use gateway_admin::model::{

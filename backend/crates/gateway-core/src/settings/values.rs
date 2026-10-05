@@ -1,8 +1,10 @@
+//! 请求可覆盖的运行设置值，以及共享配置的不可变构造接口
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use crate::identity::ProviderKind;
 
-/// 请求可覆盖的运行设置事实；编译产物不能反向改写本值。
+/// 请求可覆盖的运行设置事实；编译产物不能反向改写本值
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsValues {

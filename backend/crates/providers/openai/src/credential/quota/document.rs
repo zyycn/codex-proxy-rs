@@ -1,4 +1,4 @@
-//! OpenAI quota 文档的规范化 map 与上游 `/usage` 输入适配。
+//! OpenAI quota 文档的规范化 map 与上游 `/usage` 输入适配
 
 use std::collections::BTreeMap;
 
@@ -8,14 +8,14 @@ use serde_json::{Map, Value};
 pub(super) const DEFAULT_CODEX_LIMIT_ID: &str = "codex";
 pub(super) const RATE_LIMITS_BY_LIMIT_ID: &str = "rate_limits_by_limit_id";
 
-/// 官方新协议的多桶视图：每个 `limit_id` 对应一个独立快照。
+/// 官方新协议的多桶视图：每个 `limit_id` 对应一个独立快照
 #[derive(Debug, Default)]
 pub(super) struct RateLimitSnapshotsByLimitId {
     snapshots: BTreeMap<String, Map<String, Value>>,
 }
 
 impl RateLimitSnapshotsByLimitId {
-    /// 接收上游 `/usage` 形状或已经规范化的 map；输出始终只保留 map。
+    /// 接收上游 `/usage` 形状或已经规范化的 map；输出始终只保留 map
     pub(super) fn take_from_document(quota: &mut Map<String, Value>) -> Self {
         let mut result = Self::default();
 
@@ -77,7 +77,7 @@ impl RateLimitSnapshotsByLimitId {
                 Value::String(limit_name.to_owned()),
             );
         }
-        // map 协议中一个 ID 只能有一个快照；规范化 map 与顶层账号桶优先。
+        // map 协议中一个 ID 只能有一个快照；规范化 map 与顶层账号桶优先
         self.snapshots.entry(limit_id).or_insert(snapshot);
     }
 
@@ -104,11 +104,12 @@ impl RateLimitSnapshotsByLimitId {
         self.snapshots.insert(limit_id.to_owned(), snapshot);
     }
 
-    /// 把 wire 观察解析到稳定 `limit_id`。
+    /// 把 wire 观察解析到稳定 `limit_id`
     ///
     /// WebSocket 的 `additional_rate_limits` 可能只返回可读名称；这时只接受
-    /// `/usage` 或 HTTP headers 已建立的唯一名称映射。无法唯一解析就不落库，
-    /// 避免凭名称猜 ID 或污染默认 `codex` 桶。
+    /// `/usage` 或 HTTP headers 已建立的唯一名称映射
+    /// 无法唯一解析就不落库，
+    /// 避免凭名称猜 ID 或污染默认 `codex` 桶
     pub(super) fn resolve_limit_id(&self, details: &RateLimitDetails) -> Option<String> {
         if details.key_source == RateLimitKeySource::LimitId {
             return normalize_limit_id(&details.limit_id);

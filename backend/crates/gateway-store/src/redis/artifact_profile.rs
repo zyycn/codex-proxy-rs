@@ -1,4 +1,4 @@
-//! Provider 官方制品画像的单键 Redis cache。
+//! Provider 官方制品画像的单键 Redis cache
 
 use std::time::{Duration, SystemTime};
 
@@ -35,7 +35,7 @@ redis.call('PEXPIRE', KEYS[1], ARGV[4])
 return 1
 "#;
 
-/// 每个 Provider 的各制品使用独立覆盖写 key；TTL 负责进程长期停机后的最终清理。
+/// 每个 Provider 的各制品使用独立覆盖写 key；TTL 负责进程长期停机后的最终清理
 #[derive(Clone)]
 pub struct RedisProviderArtifactProfileRepository {
     connection: ConnectionManager,

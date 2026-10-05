@@ -1,3 +1,5 @@
+//! 验证账号选择诊断保留选择依据，并限制候选记录数量
+
 use gateway_core::account::{AccountSelector, RotationStrategy};
 use gateway_core::diagnostics::TraceContext;
 use serde_json::json;
@@ -47,7 +49,7 @@ fn selection_trace_should_bound_candidates_and_preserve_the_selected_account() {
         .collect::<Vec<_>>();
     candidates.push(candidate("acct_best", 0, Some(10_000)));
     let trace = TraceContext::new("req_many_candidates");
-    // 选号位于首部保留区之外，也应在长流的常规事件淘汰后保留。
+    // 选号位于首部保留区之外，也应在长流的常规事件淘汰后保留
     for _ in 0..10 {
         trace.record("test.event", json!({}));
     }

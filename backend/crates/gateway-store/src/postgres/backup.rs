@@ -1,7 +1,8 @@
-//! `backup_settings` 与 `backup_records` 的 PostgreSQL owner。
+//! `backup_settings` 与 `backup_records` 的 PostgreSQL owner
 //!
-//! 实现 `gateway-admin::ports::backup::BackupRepository`。本模块只执行事务与
-//! 条件更新，不决定保留策略或状态机语义。
+//! 实现 `gateway-admin::ports::backup::BackupRepository`
+//! 本模块只执行事务与
+//! 条件更新，不决定保留策略或状态机语义
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -26,17 +27,17 @@ use crate::{
     },
 };
 
-/// `backup_records` 的最大分页大小。
+/// `backup_records` 的最大分页大小
 const BACKUP_PAGE_LIMIT: u32 = 200;
 
-/// 备份任务/配置仓储。
+/// 备份任务/配置仓储
 #[derive(Clone)]
 pub struct PgBackupRepository {
     pool: PgPool,
 }
 
 impl PgBackupRepository {
-    /// 包装连接池。
+    /// 包装连接池
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -280,7 +281,7 @@ impl BackupRepository for PgBackupRepository {
             .begin()
             .await
             .map_err(|_| store_unavailable("begin scheduled insert"))?;
-        // 先锁定并核对计划，防止配置变更后仍排入旧计划任务。
+        // 先锁定并核对计划，防止配置变更后仍排入旧计划任务
         let advanced = sqlx::query(
             "update backup_settings set next_run_at = $1
              where id = 1 and schedule_enabled and cron_expression = $2
@@ -302,7 +303,7 @@ impl BackupRepository for PgBackupRepository {
                 .map_err(|_| store_unavailable("rollback stale schedule"))?;
             return Ok(false);
         }
-        // 唯一约束冲突只跳过本次任务；保存点避免连带撤销游标推进。
+        // 唯一约束冲突只跳过本次任务；保存点避免连带撤销游标推进
         let mut insertion = transaction
             .begin()
             .await
@@ -629,14 +630,14 @@ impl BackupRepository for PgBackupRepository {
     }
 }
 
-/// Store 内部 Revision → Admin Revision 转换。
+/// Store 内部 Revision → Admin Revision 转换
 fn admin_revision(revision: crate::Revision) -> AdminStoreResult<AdminRevision> {
     AdminRevision::new(revision.get()).map_err(|_| {
         AdminStoreError::new(AdminStoreErrorKind::Invalid, "revision", "zero revision")
     })
 }
 
-/// 锁定并读取单例配置行。
+/// 锁定并读取单例配置行
 async fn lock_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> AdminStoreResult<BackupSettings> {
@@ -686,7 +687,7 @@ async fn load_backup_settings(pool: &PgPool) -> AdminStoreResult<BackupSettings>
     .ok_or_else(|| store_not_found("backup settings"))
 }
 
-/// 插入 queued 记录；返回记录或唯一约束冲突。
+/// 插入 queued 记录；返回记录或唯一约束冲突
 async fn insert_queued_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     seed: &BackupRecordSeed,
@@ -710,7 +711,7 @@ async fn insert_queued_in_transaction(
     backup_record_from_row(&row)
 }
 
-/// 把唯一约束冲突映射为活跃任务/计划冲突。
+/// 把唯一约束冲突映射为活跃任务/计划冲突
 fn map_insert_error(error: sqlx::Error) -> AdminStoreError {
     match &error {
         sqlx::Error::Database(database_error)
@@ -743,7 +744,7 @@ fn is_active_or_scheduled_conflict(error: &AdminStoreError) -> bool {
     error.kind() == AdminStoreErrorKind::Conflict
 }
 
-/// 已有记录时锁定存储身份：endpoint/region/bucket/path-style 不允许变化。
+/// 已有记录时锁定存储身份：endpoint/region/bucket/path-style 不允许变化
 async fn ensure_storage_identity_stable(
     current: &BackupSettings,
     command: &UpdateBackupStorageCommand,
@@ -806,7 +807,7 @@ fn storage_changed_fields(
     fields
 }
 
-/// 在同事务追加审计事件；`revision` 为空时不写 config_revision。
+/// 在同事务追加审计事件；`revision` 为空时不写 config_revision
 async fn append_audit_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     mut event: AdminAuditEvent,
@@ -897,7 +898,7 @@ fn backup_settings_from_row(row: &sqlx::postgres::PgRow) -> AdminStoreResult<Bac
     })
 }
 
-/// sqlx 解码错误统一映射为备份 InvalidData。
+/// sqlx 解码错误统一映射为备份 InvalidData
 fn decode<T>(result: Result<T, sqlx::Error>) -> AdminStoreResult<T> {
     result.map_err(|_| {
         AdminStoreError::new(
@@ -908,7 +909,7 @@ fn decode<T>(result: Result<T, sqlx::Error>) -> AdminStoreResult<T> {
     })
 }
 
-/// StoreError → AdminStoreError 的显式映射。
+/// StoreError → AdminStoreError 的显式映射
 fn map_admin_error(error: StoreError) -> AdminStoreError {
     match error {
         StoreError::Unavailable { .. } => AdminStoreError::new(

@@ -1,3 +1,5 @@
+//! 验证 Client Key 准入、限额、凭据保护与客户端版本策略
+
 use std::sync::Arc;
 
 use gateway_core::policy::{

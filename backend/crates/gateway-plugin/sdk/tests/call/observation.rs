@@ -1,3 +1,5 @@
+//! 验证观察事件保留已知事实、未知值与独立二进制载荷
+
 use gateway_plugin_sdk::{
     SendState,
     call::observation::{

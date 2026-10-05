@@ -1,4 +1,4 @@
-//! Grok Build CLI Responses provider 边界。
+//! Grok Build CLI Responses provider 边界
 
 pub(crate) mod canonical;
 pub(crate) mod catalog;
@@ -111,9 +111,8 @@ pub(crate) fn classify_grok_quota_failure(
     let code = code.map(str::to_ascii_lowercase);
     let error_type = error_type.map(str::to_ascii_lowercase);
     let message = message.map(str::to_ascii_lowercase);
-    // `code` and `type` are stable upstream fields. Do not let a conflicting
-    // human-readable message override them; use the message only as a
-    // fallback or to refine a confirmed free-usage signal's rolling window.
+    // `code` 与 `type` 是稳定的上游字段，冲突的可读消息不能覆盖它们
+    // 消息仅用于回退判断，或细化已确认免费额度信号的滚动窗口
     let structured_signal = code
         .as_deref()
         .and_then(classify_quota_signal)
@@ -156,7 +155,7 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
 }
 
 /// 把 message 中的 UUID 替换为占位符，控制字符归一为空格，
-/// 使文本满足客户端可见错误的约束且不携带可定位账号的标识。
+/// 使文本满足客户端可见错误的约束且不携带可定位账号的标识
 fn scrub_account_fingerprints(message: &str) -> String {
     let bytes = message.as_bytes();
     let mut scrubbed = String::with_capacity(message.len());

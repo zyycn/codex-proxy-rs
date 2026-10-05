@@ -1,3 +1,5 @@
+//! 验证 WebSocket 请求逐帧保留来源头部并接受协议样本
+
 use axum::http::{HeaderMap, HeaderValue};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_api::openai::responses::{OpenAiRequestHeaders, decode_response_create_with_context};
@@ -24,7 +26,7 @@ fn response_create_should_carry_source_headers_to_provider_on_every_frame() {
     headers.append("x-openai-future-mode", HeaderValue::from_static("second"));
     let request_headers = OpenAiRequestHeaders::from_headers(&headers);
 
-    // 连接级头随每一帧传给 Provider，由相同的出站边界处理来源适配。
+    // 连接级头随每一帧传给 Provider，由相同的出站边界处理来源适配
     for input in ["hello", "continue"] {
         let decoded = decode_response_create_with_context(
             &json!({"type": "response.create", "model": "smart-code", "input": input}).to_string(),
@@ -52,7 +54,7 @@ fn response_create_should_carry_source_headers_to_provider_on_every_frame() {
 
 #[test]
 fn latest_official_codex_response_create_fixture_decodes_unchanged() {
-    // Audited against openai/codex main 94cbbddafc1776d5e377bca1b05932c697e82238.
+    // 已对照 openai/codex 提交 94cbbddafc1776d5e377bca1b05932c697e82238 核验
     let decoded = decode_response_create(
         &json!({
             "type": "response.create",

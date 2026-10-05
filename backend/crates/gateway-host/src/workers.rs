@@ -1,4 +1,4 @@
-//! Core 任务计划的唯一运行时：注册校验、lease、退避、健康与关闭。
+//! Core 任务计划的唯一运行时：注册校验、lease、退避、健康与关闭
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::AssertUnwindSafe;
@@ -19,7 +19,7 @@ use gateway_core::task::{
 };
 use tokio::task::JoinHandle;
 
-/// 进程内所有后台任务的唯一监督器。
+/// 进程内所有后台任务的唯一监督器
 pub struct WorkerSupervisor {
     cancellation: CancellationToken,
     health: Arc<WorkerHealthRegistry>,
@@ -43,7 +43,7 @@ impl WorkerSupervisor {
         self.health.clone()
     }
 
-    /// 校验完整计划并且仅启动一次。
+    /// 校验完整计划并且仅启动一次
     pub fn start(
         &self,
         plan: Vec<WorkerContribution>,
@@ -109,8 +109,9 @@ impl WorkerSupervisor {
     }
 
     /// 先协作取消；所有任务共享同一绝对截止点，逾期任务被 abort，
-    /// lease 依赖 TTL 兜底。每个句柄恰好 join 一次：已在截止点前退出的
-    /// 不会被二次 poll，逾期的在 abort 后等待其真正终止。
+    /// lease 依赖 TTL 兜底
+    /// 每个句柄恰好 join 一次：已在截止点前退出的
+    /// 不会被二次 poll，逾期的在 abort 后等待其真正终止
     pub async fn shutdown(&self, timeout: Duration) {
         self.cancellation.cancel();
         let handles = std::mem::take(&mut *lock_unpoisoned(&self.handles));

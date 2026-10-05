@@ -1,3 +1,5 @@
+//! 验证插件事实查询与额度刷新回调的参数和能力边界
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

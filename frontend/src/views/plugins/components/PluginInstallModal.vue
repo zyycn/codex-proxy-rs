@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { PluginUpdateSelection } from '../composables/usePluginUpdateCheck'
-import type { PluginInstallSelection } from '../utils/model'
+import type { PluginInstallMode, PluginInstallSelection } from '../utils/model'
 import type {
   CreatePluginSourceCredentialRequest,
   PluginArtifact,
@@ -25,8 +25,6 @@ import PluginAssetPicker from './PluginAssetPicker.vue'
 import PluginDownloadAuthentication from './PluginDownloadAuthentication.vue'
 import PluginHelpPopover from './PluginHelpPopover.vue'
 import PluginSourceProxyField from './PluginSourceProxyField.vue'
-
-export type PluginInstallMode = 'upload' | 'url' | 'github'
 
 const props = defineProps<{
   mode: PluginInstallMode

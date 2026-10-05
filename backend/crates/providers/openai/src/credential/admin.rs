@@ -1,7 +1,7 @@
-//! Codex Admin 输入的 Provider-owned 验证与明文 command preparation。
+//! Codex Admin 输入的 Provider-owned 验证与明文 command preparation
 //!
 //! 本模块不读写 Store；应用层负责把已验证的 Core command 映射到
-//! 持久层的原子配置 revision + audit 事务。
+//! 持久层的原子配置 revision + audit 事务
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -49,10 +49,11 @@ pub struct ImportCodexOAuthCredential {
     pub enabled: bool,
 }
 
-/// OAuth credential 的最小创建输入。
+/// OAuth credential 的最小创建输入
 ///
 /// OAuth metadata 来自 ID token/access token 的本地 payload 解析；PAT metadata
-/// 来自 auth whoami 验证。两者均不从导入文档信任身份字段。
+/// 来自 auth whoami 验证
+/// 两者均不从导入文档信任身份字段
 pub(crate) struct UnresolvedCodexOAuthCredential {
     pub(crate) account_id: String,
     pub(crate) name: String,
@@ -94,7 +95,7 @@ impl std::fmt::Debug for ImportCodexOAuthCredential {
     }
 }
 
-/// Provider-owned 文档归一后的唯一 Core 写入批次。
+/// Provider-owned 文档归一后的唯一 Core 写入批次
 pub struct PreparedCodexAccountImport {
     accounts: Vec<NewProviderAccount>,
 }
@@ -169,9 +170,9 @@ impl fmt::Debug for ParsedCodexImportAccount {
     }
 }
 
-/// Store 公共行事实与 Core 明文 credential 的导出输入。
+/// Store 公共行事实与 Core 明文 credential 的导出输入
 ///
-/// 时间必须由 App 从 `provider_accounts` 原行机械传入；Provider 不伪造时间。
+/// 时间必须由 App 从 `provider_accounts` 原行机械传入；Provider 不伪造时间
 pub struct ExportManagedCodexCredential {
     pub current: LoadedCredential,
     pub added_at: DateTime<Utc>,
@@ -190,7 +191,7 @@ impl fmt::Debug for ExportManagedCodexCredential {
     }
 }
 
-/// CPR canonical 账号导出文档；只允许显式序列化，Debug 永不输出 credential secret。
+/// CPR canonical 账号导出文档；只允许显式序列化，Debug 永不输出 credential secret
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexCprExportDocument {
@@ -271,7 +272,7 @@ struct CodexCprOAuthExportAccount {
     access_token_expires_at: Option<String>,
 }
 
-/// App 已从 Store 读取的当前账号、revision 与明文 Provider JSON。
+/// App 已从 Store 读取的当前账号、revision 与明文 Provider JSON
 pub struct RotateManagedCodexCredential {
     pub current: LoadedCredential,
     pub secret: CodexOAuthSecret,
@@ -291,7 +292,7 @@ impl std::fmt::Debug for RotateManagedCodexCredential {
     }
 }
 
-/// Provider 验证后的 rotation；App 只做 Core -> Store command 的机械映射。
+/// Provider 验证后的 rotation；App 只做 Core -> Store command 的机械映射
 pub struct PreparedCodexCredentialRotation {
     pub profile: ProviderAccountUpdate,
     pub credential: CredentialCasUpdate,
@@ -320,7 +321,7 @@ impl std::fmt::Debug for PreparedCodexCredentialRotation {
 }
 
 impl PreparedCodexCredentialRotation {
-    /// 将 command 与 lease 一起交给 App；App 必须让返回的 guard 活到 CAS 提交结束。
+    /// 将 command 与 lease 一起交给 App；App 必须让返回的 guard 活到 CAS 提交结束
     #[must_use]
     pub fn into_parts(
         self,
@@ -339,7 +340,7 @@ impl PreparedCodexCredentialRotation {
     }
 }
 
-/// 手工刷新从 token exchange 到数据库 CAS 完成期间持有的 Redis lease。
+/// 手工刷新从 token exchange 到数据库 CAS 完成期间持有的 Redis lease
 pub struct PreparedCodexCredentialRotationGuard(Option<ProviderRefreshGuards>);
 
 impl fmt::Debug for PreparedCodexCredentialRotationGuard {
@@ -403,7 +404,7 @@ impl CodexCredentialAdminError {
     }
 }
 
-/// 无状态的 Codex Admin command preparer。
+/// 无状态的 Codex Admin command preparer
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CodexCredentialAdmin;
 
@@ -590,9 +591,9 @@ impl CodexCredentialAdmin {
         })
     }
 
-    /// 为已取得 OAuth access token、但资料尚未补全的账号创建最小记录。
+    /// 为已取得 OAuth access token、但资料尚未补全的账号创建最小记录
     ///
-    /// 接受调用方已取得的身份投影；本方法不发起 usage/profile 请求。
+    /// 接受调用方已取得的身份投影；本方法不发起 usage/profile 请求
     pub(crate) fn prepare_unresolved_oauth(
         &self,
         input: UnresolvedCodexOAuthCredential,
@@ -651,7 +652,7 @@ impl CodexCredentialAdmin {
         })
     }
 
-    /// 严格输出可被 CPR 导入逻辑直接读取的 canonical 文档。
+    /// 严格输出可被 CPR 导入逻辑直接读取的 canonical 文档
     pub fn format_cpr_export(
         &self,
         items: Vec<ExportManagedCodexCredential>,
@@ -734,10 +735,10 @@ impl CodexCredentialAdmin {
         self.prepare_oauth_rotation(input, false)
     }
 
-    /// 构建一次成功 RT exchange 的 CAS 写入，保留已存账号身份资料。
+    /// 构建一次成功 RT exchange 的 CAS 写入，保留已存账号身份资料
     ///
     /// Refresh endpoint 已经完成本次 token 交换的授权；这里不对新 access
-    /// token 重新执行身份验证。
+    /// token 重新执行身份验证
     pub(crate) fn prepare_refreshed_oauth_rotation(
         &self,
         current: LoadedCredential,
@@ -857,7 +858,7 @@ impl CodexCredentialAdmin {
     }
 }
 
-/// 有状态的 Codex 手工刷新边界；消费调用方刚读取的当前 credential 并准备 CAS。
+/// 有状态的 Codex 手工刷新边界；消费调用方刚读取的当前 credential 并准备 CAS
 pub struct CodexCredentialAdminService {
     refresher: Arc<dyn TokenRefresher>,
     personal_access_token_client: Option<Arc<OpenAiTokenClient>>,
@@ -894,14 +895,14 @@ impl CodexCredentialAdminService {
         }
     }
 
-    /// 在生产组装时复用 OAuth auth client，为 at- 导入启用上游身份验证。
+    /// 在生产组装时复用 OAuth auth client，为 at- 导入启用上游身份验证
     #[must_use]
     pub fn with_personal_access_token_client(mut self, client: Arc<OpenAiTokenClient>) -> Self {
         self.personal_access_token_client = Some(client);
         self
     }
 
-    /// 官方 RT exchange；结果由 App 在同一 revision/audit 事务中提交。
+    /// 官方 RT exchange；结果由 App 在同一 revision/audit 事务中提交
     pub async fn manual_refresh(
         &self,
         current: LoadedCredential,
@@ -988,7 +989,7 @@ impl CodexCredentialAdminService {
             &secret,
         );
         // 正常预刷新由 worker 读取当时的 runtime policy 动态判断；这里仅清除
-        // 之前瞬态失败留下的 retry-not-before。
+        // 之前瞬态失败留下的 retry-not-before
         let next_refresh_at = None;
         let mut prepared = CodexCredentialAdmin.prepare_refreshed_oauth_rotation(
             current,
@@ -1003,11 +1004,11 @@ impl CodexCredentialAdminService {
         Ok(prepared)
     }
 
-    /// 归一导入 OAuth 凭据到唯一 `NewProviderAccount` 写入路径。
+    /// 归一导入 OAuth 凭据到唯一 `NewProviderAccount` 写入路径
     ///
     /// OAuth 导入先取得 access token（直接提供或 RT exchange），再按官方
-    /// `parse_chatgpt_jwt_claims` 从 ID token/access token 本地投影账号资料。
-    /// at- PAT 使用 whoami 取得身份，并丢弃不适用的 RT、ID token 和刷新计划。
+    /// `parse_chatgpt_jwt_claims` 从 ID token/access token 本地投影账号资料
+    /// at- PAT 使用 whoami 取得身份，并丢弃不适用的 RT、ID token 和刷新计划
     pub async fn prepare_import_document(
         &self,
         payload: Value,
@@ -1084,7 +1085,7 @@ impl CodexCredentialAdminService {
                 access_token_expires_at = None;
                 metadata
             } else {
-                // 普通 OAuth 仍按 ID token、access token 的顺序投影，不调用 whoami。
+                // 普通 OAuth 仍按 ID token、access token 的顺序投影，不调用 whoami
                 let id_metadata = secret
                     .id_token
                     .as_ref()
@@ -1168,7 +1169,7 @@ impl CodexCredentialAdminService {
         let access_token_expires_at = parse_access_token_expiration(&access_token);
         let secret = CodexOAuthSecret {
             access_token: SecretString::from(access_token),
-            // RT 未轮换时仍保留导入提供的 RT，保证本次补全不会丢失后续刷新能力。
+            // RT 未轮换时仍保留导入提供的 RT，保证本次补全不会丢失后续刷新能力
             refresh_token: tokens
                 .refresh_token
                 .map(SecretString::from)
@@ -1234,7 +1235,7 @@ fn map_refresh_failure(error: RefreshFailure) -> CodexCredentialAdminError {
         }
         RefreshFailure::RetryableTransport { .. } => CodexCredentialAdminError::RefreshUnavailable,
         // Worker 的 Transport 分类还承担 401 退避；管理提示只按已收到的响应事实细分，
-        // 不改变后台刷新策略，也不把明确失败响应误报为租约冲突或执行结果未知。
+        // 不改变后台刷新策略，也不把明确失败响应误报为租约冲突或执行结果未知
         RefreshFailure::Transport { message, upstream } => match upstream {
             Some(upstream) => CodexCredentialAdminError::RefreshUpstream {
                 status: upstream.status(),
@@ -1358,7 +1359,7 @@ fn import_proxy(
     }
     let text = |field| proxy.get(field).and_then(Value::as_str).ok_or_else(invalid);
     let scheme = text("protocol")?;
-    // sub2api resolves SOCKS targets at the proxy.
+    // sub2api 的 SOCKS 目标地址由代理解析
     let scheme = if scheme == "socks5" {
         "socks5h"
     } else {
@@ -1491,14 +1492,14 @@ fn parse_api_key_import(value: &Value) -> Result<ApiKeyCredentialData, CodexCred
         if !crate::transport::valid_upstream_base_url(&base_url) {
             return Err(CodexCredentialAdminError::InvalidInput);
         }
-        // sub2api 接受服务根、版本前缀或完整 Responses 端点；仅在导入边界归一化。
+        // sub2api 接受服务根、版本前缀或完整 Responses 端点；仅在导入边界归一化
         base_url = base_url.trim_end_matches('/').to_owned();
         if let Some(prefix) = base_url.strip_suffix("/responses") {
             base_url = prefix.to_owned();
         } else if !sub2api_version_suffix(&base_url) {
             base_url.push_str("/v1");
         }
-        // 不静默丢失会改变协议、身份请求头或模型映射的外部设置。
+        // 不静默丢失会改变协议、身份请求头或模型映射的外部设置
         for field in [
             "model_mapping",
             "compact_model_mapping",

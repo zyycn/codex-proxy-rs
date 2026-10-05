@@ -1,3 +1,5 @@
+//! 图像生成与编辑 HTTP 接口的请求传递和响应交付测试
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},

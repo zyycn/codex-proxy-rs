@@ -1,3 +1,5 @@
+//! 插件中间件回调的调用状态、后续处理委托与资源回收
+
 mod body;
 mod headers;
 
@@ -572,7 +574,7 @@ impl MiddlewareInvocation {
             }
             MiddlewareResponseBody::Empty => {
                 // 调用过 next 后不能靠关闭下游流伪装成已完成；需要丢弃正文时也必须
-                // 通过 preserving mapper 拉取到底，才能保留计量、终态和取消合同。
+                // 通过 preserving mapper 拉取到底，才能保留计量、终态和取消合同
                 if downstream.is_some() {
                     return Err(MiddlewareError::InvalidState);
                 }
@@ -664,7 +666,7 @@ fn validate_status(status: u16) -> Result<(), PluginFault> {
 
 const fn framing_for_response(transport: ClientTransport, status: u16) -> MiddlewareFraming {
     match transport {
-        // WebSocket 的失败也作为 JSON 消息交付，不使用 HTTP 错误正文的字节流边界。
+        // WebSocket 的失败也作为 JSON 消息交付，不使用 HTTP 错误正文的字节流边界
         ClientTransport::WebSocket => MiddlewareFraming::JsonDocument,
         _ if status < 200 || status >= 300 => MiddlewareFraming::RawBytes,
         ClientTransport::HttpSse => MiddlewareFraming::SseEvent,

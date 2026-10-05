@@ -1,3 +1,5 @@
+//! 插件实例的版本切换与回滚计划，以及目标版本配置合并
+
 use super::{
     PluginsService,
     artifacts::{configuration_defaults, default_bindings},
@@ -69,7 +71,7 @@ impl PluginsService {
             secrets: Some(saved.secrets),
             bindings: saved.bindings,
         };
-        // 沿用同一份快照的 CAS 和状态迁移流程，不能在检查目标后重新读取并覆盖并发配置。
+        // 沿用同一份快照的 CAS 和状态迁移流程，不能在检查目标后重新读取并覆盖并发配置
         self.configure_from_snapshot(snapshot, Some(existing), configuration, context)
             .await
     }
@@ -187,7 +189,7 @@ impl PluginsService {
             secrets: Some(configuration.secrets),
             bindings: configuration.bindings,
         };
-        // 同一次读取的 CAS 覆盖草稿计算、准备与提交，不能覆盖并发设置。
+        // 同一次读取的 CAS 覆盖草稿计算、准备与提交，不能覆盖并发设置
         self.configure_from_snapshot(snapshot, Some(existing), request, context)
             .await
     }
@@ -223,7 +225,7 @@ impl PluginsService {
             return Ok((saved, true));
         }
         let mut configuration = instance.configuration.clone();
-        // 只补充缺失的默认值，保留显式值及未知字段，让不兼容项由校验反馈给用户。
+        // 只补充缺失的默认值，保留显式值及未知字段，让不兼容项由校验反馈给用户
         merge_missing_defaults(&mut configuration, configuration_defaults(&target.metadata));
         Ok((
             PluginVersionConfiguration {
@@ -242,7 +244,7 @@ fn version_bindings(
     target: &PluginArtifactMetadata,
 ) -> Vec<crate::model::plugins::instances::PluginCapabilityBinding> {
     let mut bindings = default_bindings(target);
-    // 已关闭的既有能力继续关闭，新声明能力才采用包默认值。
+    // 已关闭的既有能力继续关闭，新声明能力才采用包默认值
     bindings.retain(|binding| {
         let capability = target
             .contributes

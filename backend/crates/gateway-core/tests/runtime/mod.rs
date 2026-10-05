@@ -1,3 +1,5 @@
+//! 验证运行时快照发布、版本对账与并发更新行为
+
 use std::collections::BTreeMap;
 mod extensions;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -253,7 +255,7 @@ fn committed_account_change_should_preempt_inflight_catalog_reconciliation() {
             Arc::new(TestSnapshotSubscriptions::default()),
         );
 
-        // 首次提交复用目录，随后对账停在慢 Provider 查询；下一次提交仍须及时撤权。
+        // 首次提交复用目录，随后对账停在慢 Provider 查询；下一次提交仍须及时撤权
         *store.facts.lock().expect("facts lock") = Ok(scoped_facts(10, true));
         *store.current_revision.lock().expect("revision lock") = Ok(revision(10));
         publisher.publish_committed(revision(10)).await;
@@ -382,7 +384,7 @@ fn overlapping_refreshes_should_not_restore_revoked_account_scope() {
         );
         let other_publisher = publisher.clone();
 
-        // 旧刷新已读完 revision 10 的完整事实，停在目录查询；不用 sleep 碰调度概率。
+        // 旧刷新已读完 revision 10 的完整事实，停在目录查询；不用 sleep 碰调度概率
         let mut old = Box::pin(publisher.refresh());
         assert!(futures::poll!(old.as_mut()).is_pending());
         assert_eq!(catalog.queries.load(Ordering::SeqCst), 1);
@@ -511,7 +513,7 @@ fn subscription_refresh_should_wait_for_inflight_compile_and_reload_authoritativ
         let mut old = Box::pin(publisher.refresh());
         assert!(futures::poll!(old.as_mut()).is_pending());
         *store.facts.lock().expect("facts lock") = Ok(scoped_facts(11, false));
-        // 通知只是提示，即使版本过期也要在取得发布权后重新读取 Store。
+        // 通知只是提示，即使版本过期也要在取得发布权后重新读取 Store
         notifications
             .unbounded_send(Ok(revision(3)))
             .expect("notify");
@@ -549,7 +551,7 @@ fn reconciliation_should_fail_closed_on_persisted_revision_rollback_and_recover(
         task.run_cycle(context.clone()).await.expect("recover");
         assert_eq!(handle.revision(), Some(revision(7)));
 
-        // 有效的持久回退也必须发布，不能用 revision 数值单调性掩盖竞争。
+        // 有效的持久回退也必须发布，不能用 revision 数值单调性掩盖竞争
         *store.facts.lock().expect("facts lock") = Ok(facts(6, 6));
         *store.current_revision.lock().expect("revision lock") = Ok(revision(6));
         task.run_cycle(context).await.expect("publish rollback");

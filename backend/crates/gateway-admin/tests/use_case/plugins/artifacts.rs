@@ -1,3 +1,5 @@
+//! 插件制品安装、接受、默认实例与发布行为的用例测试
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},

@@ -1,4 +1,4 @@
-//! 查询 wire 校验的固定合同测试。
+//! 查询 wire 校验的固定合同测试
 
 use gateway_api::admin::observability::{
     DashboardQuery, DiagnosticDimension, DiagnosticsQuery, OpsQuery, TrendKind, UsageQuery,

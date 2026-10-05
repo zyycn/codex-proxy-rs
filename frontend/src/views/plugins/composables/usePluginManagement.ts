@@ -16,8 +16,8 @@ import {
   getPluginUpdateSources,
 } from '@/api'
 import { usePluginViewsStore } from '@/stores/modules/plugin-views'
+import { notifyPluginError } from '../utils/actions'
 import { currentPluginInstance, groupInstalledPlugins } from '../utils/catalog'
-import { usePluginActions } from './usePluginActions'
 import { usePluginArtifactActions } from './usePluginArtifactActions'
 import { usePluginCredentials } from './usePluginCredentials'
 import { usePluginInstallation } from './usePluginInstallation'
@@ -43,9 +43,6 @@ export function usePluginManagement() {
 
   let refreshController: AbortController | undefined
 
-  const actions = usePluginActions(refresh)
-  const { notifyError, runAction } = actions
-
   async function refresh(silent = false, suppressErrors = false) {
     refreshController?.abort()
     const controller = new AbortController()
@@ -54,7 +51,7 @@ export function usePluginManagement() {
       loading.value = true
     try {
       const options = { signal: controller.signal, silent: true }
-      const extensionRequest = extensionDirectory.refresh(silent)
+      const extensionRequest = extensionDirectory.refresh(true)
         .then(items => ({ ok: true as const, items }))
         .catch((error: unknown) => ({ ok: false as const, error }))
       const [artifactItems, instanceItems, sourceItems, credentialItems, extensionResult] = await Promise.all([
@@ -71,11 +68,11 @@ export function usePluginManagement() {
       sources.value = sourceItems
       credentials.value = credentialItems
       if (!extensionResult.ok && !suppressErrors)
-        notifyError('插件扩展页加载失败', extensionResult.error)
+        notifyPluginError('插件扩展页加载失败', extensionResult.error)
     }
     catch (error) {
       if (refreshController === controller && !suppressErrors)
-        notifyError('插件数据加载失败', error)
+        notifyPluginError('插件数据加载失败', error)
     }
     finally {
       if (refreshController === controller) {
@@ -85,20 +82,20 @@ export function usePluginManagement() {
     }
   }
 
-  const artifactActions = usePluginArtifactActions(actions)
-  const credentialActions = usePluginCredentials({ ...actions, credentials })
+  const artifactActions = usePluginArtifactActions({ refresh })
+  const credentialActions = usePluginCredentials({ refresh, credentials })
   function showConfigurations() {
     detailSection.value = 'configurations'
     showDetail.value = true
   }
   const instanceActions = usePluginInstances({
-    ...actions,
+    refresh,
     artifacts,
     onEdit: pluginId => selectedPluginId.value = pluginId,
     onSaved: showConfigurations,
   })
   const versionActions = usePluginVersions({
-    ...actions,
+    refresh,
     catalog,
     instances,
     busyInstanceId: instanceActions.busyInstanceId,
@@ -110,14 +107,12 @@ export function usePluginManagement() {
   })
 
   const installation = usePluginInstallation({
-    runAction,
-    notifyError,
     onInstalled,
     onSourceSaved: (source) => {
       sources.value = [...sources.value.filter(value => value.pluginId !== source.pluginId), source]
     },
   })
-  const updateCheck = usePluginUpdateCheck(credentials, notifyError)
+  const updateCheck = usePluginUpdateCheck(credentials)
 
   async function upgradeCheckedPlugin(selection: PluginUpdateSelection) {
     if (await installation.installUpdate(selection))
@@ -160,7 +155,7 @@ export function usePluginManagement() {
   }
 
   onMounted(() => void refresh())
-  const uninstall = usePluginUninstall(() => refresh(true), notifyError)
+  const uninstall = usePluginUninstall(() => refresh(true))
   let pollTimer: ReturnType<typeof setTimeout> | undefined
   let disposed = false
   function schedulePoll() {

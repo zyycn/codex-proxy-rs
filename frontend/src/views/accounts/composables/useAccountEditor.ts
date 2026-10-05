@@ -1,4 +1,4 @@
-import type { AccountModelAccess, ApiKeyConfiguration, getAccounts } from '@/api'
+import type { Account, AccountModelAccess, ApiKeyConfiguration } from '@/api'
 
 import { toast } from '@codex-proxy/ui'
 import { ref, shallowRef, watch } from 'vue'
@@ -9,15 +9,13 @@ import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 import { apiKeyAccountError, emptyApiKeyAccountForm, isOpenAiApiKeyAccount, isOpenAiOAuthAccount, parseApiKeyConfiguration } from '../utils/upstreamApiKey'
 
-type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
-
 export function useAccountEditor(options: {
   reloadAccounts: () => Promise<unknown>
   reloadGroups: () => Promise<unknown>
 }) {
   const showEditModal = shallowRef(false)
   // 保存后列表可能因筛选移除该账号，编辑窗口的退场仍需保留原账号内容。
-  const editingAccount = shallowRef<AccountRow | null>(null)
+  const editingAccount = shallowRef<Account | null>(null)
   const notes = shallowRef('')
   const schedulingEnabled = shallowRef(true)
   const concurrencyLimit = shallowRef('')
@@ -66,7 +64,7 @@ export function useAccountEditor(options: {
     }
   }
 
-  function open(account: AccountRow) {
+  function open(account: Account) {
     configurationRequest.invalidate()
     editingAccount.value = account
     notes.value = account.notes ?? ''

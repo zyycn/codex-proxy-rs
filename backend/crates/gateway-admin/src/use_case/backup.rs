@@ -1,4 +1,4 @@
-//! 备份配置、手动创建、下载与删除用例。
+//! 备份配置、手动创建、下载与删除用例
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,10 +26,10 @@ use crate::ports::{
 
 use super::map_store_error;
 
-/// 默认下载地址有效期。
+/// 默认下载地址有效期
 const DOWNLOAD_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// API 消费的备份管理服务。
+/// API 消费的备份管理服务
 #[async_trait]
 pub trait BackupService: Send + Sync {
     async fn load_settings(&self) -> Result<BackupSettings, AdminError>;
@@ -359,7 +359,7 @@ impl DefaultBackupService {
     }
 }
 
-/// 校验存储配置；空串视为非法，Secret 缺省表示保留旧值。
+/// 校验存储配置；空串视为非法，Secret 缺省表示保留旧值
 fn validate_storage(command: &UpdateBackupStorageCommand) -> Result<(), AdminError> {
     validate_endpoint(&command.endpoint)?;
     validate_nonempty("region", &command.region)?;
@@ -409,7 +409,7 @@ fn validate_length(field: &str, value: &str, max: usize) -> Result<(), AdminErro
     Ok(())
 }
 
-/// 备份基础设施错误到既有 `AdminErrorKind` 的唯一边界映射。
+/// 备份基础设施错误到既有 `AdminErrorKind` 的唯一边界映射
 fn map_backup_error(error: BackupError) -> AdminError {
     match error.code() {
         code::INVALID_CONFIG | code::INVALID_CRON => {

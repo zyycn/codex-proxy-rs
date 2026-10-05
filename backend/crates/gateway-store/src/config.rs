@@ -1,4 +1,4 @@
-//! Store 启动配置、环境变量解析与校验。
+//! Store 启动配置、环境变量解析与校验
 
 use std::{
     path::{Path, PathBuf},
@@ -17,7 +17,7 @@ pub(crate) const POSTGRES_IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_se
 pub(crate) const POSTGRES_HEALTH_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(450);
 pub(crate) const POSTGRES_HEALTH_RETRY_DELAY: Duration = Duration::from_millis(50);
 
-/// Store 自己拥有并校验的启动配置。
+/// Store 自己拥有并校验的启动配置
 #[derive(Clone, Deserialize)]
 pub struct StoreConfig {
     #[serde(skip)]
@@ -30,7 +30,7 @@ pub struct StoreConfig {
     backup_staging_dir: PathBuf,
 }
 
-/// PostgreSQL 连接池预算；acquire 超时决定池耗尽时快速失败而非排队积压。
+/// PostgreSQL 连接池预算；acquire 超时决定池耗尽时快速失败而非排队积压
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct StorePoolConfig {
@@ -60,7 +60,7 @@ impl StorePoolConfig {
         Ok(())
     }
 
-    /// 管理观测查询可并发占用的连接数；始终为数据面保留约 20% 的池容量。
+    /// 管理观测查询可并发占用的连接数；始终为数据面保留约 20% 的池容量
     #[must_use]
     pub const fn observability_max_connections(self) -> u32 {
         self.max_connections - self.max_connections.div_ceil(5)
@@ -122,7 +122,7 @@ impl StoreConfig {
         self.redis.connection_url("redis")
     }
 
-    /// 返回由统一运行数据根目录派生的备份暂存目录。
+    /// 返回由统一运行数据根目录派生的备份暂存目录
     #[must_use]
     pub fn backup_staging_dir(&self) -> &Path {
         &self.backup_staging_dir

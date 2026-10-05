@@ -1,3 +1,5 @@
+//! 验证日志压缩、轮转与重启后按日期保留完整记录
+
 use super::*;
 use std::time::SystemTime;
 
@@ -11,7 +13,7 @@ fn retention_preserves_complete_dates_across_compression_rotation_and_restart() 
             true,
             || {
                 let payload = "x".repeat(1024 * 1024);
-                // 三条记录已跨过 1 MiB 轮转边界；保留日期的 25 个分段由下方单独构造。
+                // 三条记录已跨过 1 MiB 轮转边界；保留日期的 25 个分段由下方单独构造
                 for sequence in 0..ROTATION_RECORDS {
                     tracing::info!(target: REQUEST_DUMP_LOG_TARGET, sequence, payload, "retention record");
                     tracing::info!(target: APPLICATION_LOG_TARGET, sequence, payload, "retention record");
@@ -44,7 +46,7 @@ fn retention_preserves_complete_dates_across_compression_rotation_and_restart() 
         let path = directory.path().join(format!("{prefix}{old_date}.log"));
         seed_log(&path, old_date, "expired date\n");
         expired.push(path);
-        // 时区切换或恢复的文件按较近写入日期保护整个分段组。
+        // 时区切换或恢复的文件按较近写入日期保护整个分段组
         let restored_date = old_date - chrono::Days::new(1);
         for segment in 0..=1 {
             let path = directory
@@ -60,7 +62,7 @@ fn retention_preserves_complete_dates_across_compression_rotation_and_restart() 
     }
     let unrelated = directory.path().join("unmanaged.log");
     fs::write(&unrelated, "unmanaged\n").unwrap();
-    // A crash before archive publication leaves the original and possibly a partial temporary file.
+    // 归档发布前崩溃会留下原文件，也可能留下未完成的临时文件
     fs::write(
         retained[0].with_extension("log.gz.tmp"),
         "unfinished archive",

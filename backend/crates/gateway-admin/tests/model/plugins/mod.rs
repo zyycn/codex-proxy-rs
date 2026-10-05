@@ -1,3 +1,5 @@
+//! 验证插件元数据兼容新增字段，同时保留已知字段的类型约束
+
 use gateway_admin::model::plugins::PluginArtifactMetadata;
 use serde_json::{Value, json};
 

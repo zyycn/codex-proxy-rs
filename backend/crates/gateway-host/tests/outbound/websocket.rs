@@ -1,3 +1,5 @@
+//! 验证受管 WebSocket 的消息收发、关闭、超时与代理隔离
+
 use std::time::Duration;
 
 use futures::{SinkExt as _, StreamExt as _};

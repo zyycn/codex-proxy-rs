@@ -1,4 +1,4 @@
-//! 公开服务中间件；Operation 关联输入输出类型，无需逐操作增加 hook。
+//! 公开服务中间件；Operation 关联输入输出类型，无需逐操作增加 hook
 
 use super::{MiddlewareInput, MiddlewareOutput, invalid_input};
 use crate::client::session::{CallCancellation, CallReply, HostClient, PluginCall};
@@ -42,7 +42,7 @@ pub struct ServiceNext<O: Operation> {
 pub struct ServiceResponse(wire::Response);
 
 impl ServiceCall {
-    /// 不消费调用即可匹配其公开合同，再取得类型化视图。
+    /// 不消费调用即可匹配其公开合同，再取得类型化视图
     #[must_use]
     pub fn is<O: Operation>(&self) -> bool {
         self.operation == O::NAME

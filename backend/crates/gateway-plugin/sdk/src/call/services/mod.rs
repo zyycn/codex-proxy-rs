@@ -1,4 +1,4 @@
-//! 公开服务的类型化操作合同；名称用于分派，不承担授权。
+//! 公开服务的类型化操作合同；名称用于分派，不承担授权
 
 pub mod settings;
 
@@ -37,7 +37,7 @@ impl std::error::Error for ServiceError {}
 
 pub type Response = Result<serde_json::Value, ServiceError>;
 
-/// 洋葱层保留父子调用标识；input 由 Operation 对应的类型解释。
+/// 洋葱层保留父子调用标识；input 由 Operation 对应的类型解释
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Call {

@@ -15,7 +15,7 @@ interface StorageForm {
 }
 
 defineProps<{
-  loading: boolean
+  disabled: boolean
   saving: boolean
   testing: boolean
   verified: boolean
@@ -42,6 +42,10 @@ function toggleAccessKeyVisible(): void {
 function toggleSecretVisible(): void {
   secretVisible.value = !secretVisible.value
 }
+
+function updateStorage<Key extends keyof StorageForm>(key: Key, value: StorageForm[Key]) {
+  storage.value = { ...storage.value, [key]: value }
+}
 </script>
 
 <template>
@@ -65,7 +69,7 @@ function toggleSecretVisible(): void {
         <BaseButton
           variant="secondary"
           :loading="testing"
-          :disabled="loading"
+          :disabled="disabled"
           :title="verified ? '已通过连接测试' : '尚未通过连接测试'"
           @click="emit('test')"
         >
@@ -75,7 +79,7 @@ function toggleSecretVisible(): void {
           </template>
           {{ testing ? '测试中...' : '测试连接' }}
         </BaseButton>
-        <BaseButton variant="primary" :loading="saving" :disabled="loading" @click="emit('save')">
+        <BaseButton variant="primary" :loading="saving" :disabled="disabled" @click="emit('save')">
           <template #icon>
             <Save class="size-4" />
           </template>
@@ -88,9 +92,10 @@ function toggleSecretVisible(): void {
       <BaseForm class="max-w-6xl @min-[640px]:grid-cols-2">
         <BaseFormItem label="端点地址" description="S3 兼容服务的 HTTPS 地址">
           <BaseInput
-            v-model="storage.endpoint"
+            :model-value="storage.endpoint" :disabled="disabled"
             aria-label="端点地址"
             placeholder="https://<account_id>.r2.cloudflarestorage.com"
+            @update:model-value="updateStorage('endpoint', $event)"
           >
             <template #prefix>
               <DatabaseZap class="size-4" />
@@ -99,23 +104,24 @@ function toggleSecretVisible(): void {
         </BaseFormItem>
 
         <BaseFormItem label="区域" description="R2 使用固定值 auto，其它服务按提供方填写">
-          <BaseInput v-model="storage.region" aria-label="区域" />
+          <BaseInput :model-value="storage.region" :disabled="disabled" aria-label="区域" @update:model-value="updateStorage('region', $event)" />
         </BaseFormItem>
 
         <BaseFormItem label="存储桶" description="私有存储桶名称">
-          <BaseInput v-model="storage.bucket" aria-label="存储桶" />
+          <BaseInput :model-value="storage.bucket" :disabled="disabled" aria-label="存储桶" @update:model-value="updateStorage('bucket', $event)" />
         </BaseFormItem>
 
         <BaseFormItem label="对象键前缀" description="备份对象的存储路径前缀，不影响已有备份">
-          <BaseInput v-model="storage.prefix" aria-label="对象键前缀" />
+          <BaseInput :model-value="storage.prefix" :disabled="disabled" aria-label="对象键前缀" @update:model-value="updateStorage('prefix', $event)" />
         </BaseFormItem>
 
         <BaseFormItem label="Access Key ID" description="对象存储专用凭据">
           <BaseInput
-            v-model="storage.accessKeyId"
+            :model-value="storage.accessKeyId" :disabled="disabled"
             aria-label="Access Key ID"
             :type="accessKeyInputType"
             autocomplete="off"
+            @update:model-value="updateStorage('accessKeyId', $event)"
           >
             <template #suffix>
               <BaseIconButton
@@ -134,10 +140,11 @@ function toggleSecretVisible(): void {
 
         <BaseFormItem label="Secret Access Key" description="对象存储专用 Secret">
           <BaseInput
-            v-model="storage.secretAccessKey"
+            :model-value="storage.secretAccessKey" :disabled="disabled"
             aria-label="Secret Access Key"
             :type="secretInputType"
             autocomplete="new-password"
+            @update:model-value="updateStorage('secretAccessKey', $event)"
           >
             <template #suffix>
               <BaseIconButton
@@ -155,7 +162,7 @@ function toggleSecretVisible(): void {
         </BaseFormItem>
 
         <div class="col-span-2 flex items-center gap-4 @max-[640px]:col-span-1">
-          <BaseCheckbox v-model="storage.forcePathStyle" label="强制路径式访问" show-label />
+          <BaseCheckbox :model-value="storage.forcePathStyle" :disabled="disabled" label="强制路径式访问" show-label @update:model-value="updateStorage('forcePathStyle', $event)" />
         </div>
       </BaseForm>
     </div>

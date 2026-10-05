@@ -1,4 +1,4 @@
-//! Responses WebSocket endpoint、opening handshake 与首帧发送。
+//! Responses WebSocket endpoint、opening handshake 与首帧发送
 
 use std::time::Duration;
 
@@ -21,10 +21,8 @@ use crate::{
         responses::CodexResponsesRequest, websocket::websocket_response_create_payload_text,
     },
     transport::{
-        client::{CodexClientVisibleUpstreamResponse, parse_retry_after},
-        diagnostics::CodexUpstreamSendPhase,
-        endpoints::CODEX_RESPONSES_PATH,
-        response_meta, tls,
+        client::CodexClientVisibleUpstreamResponse, diagnostics::CodexUpstreamSendPhase,
+        endpoints::CODEX_RESPONSES_PATH, response_meta, tls,
     },
 };
 
@@ -40,7 +38,7 @@ const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 impl CodexWebSocketConnection {
-    /// 构造 Responses WebSocket 连接描述。
+    /// 构造 Responses WebSocket 连接描述
     pub fn responses(
         base_url: &str,
         websocket_key: &str,
@@ -70,7 +68,7 @@ impl CodexWebSocketConnection {
         }
     }
 
-    /// 构造 Responses WebSocket opening 与首个 `response.create` 文本帧。
+    /// 构造 Responses WebSocket opening 与首个 `response.create` 文本帧
     pub fn responses_create_request(
         base_url: &str,
         websocket_key: &str,
@@ -106,7 +104,7 @@ impl CodexWebSocketConnection {
     }
 }
 
-/// 将 Codex backend base URL 转换为 Responses WebSocket endpoint。
+/// 将 Codex backend base URL 转换为 Responses WebSocket endpoint
 pub fn responses_websocket_endpoint(base_url: &str) -> String {
     let endpoint = format!("{}{}", base_url.trim_end_matches('/'), CODEX_RESPONSES_PATH);
     if let Some(rest) = endpoint.strip_prefix("https://") {
@@ -116,6 +114,13 @@ pub fn responses_websocket_endpoint(base_url: &str) -> String {
     } else {
         endpoint
     }
+}
+
+/// Live sideband 复用同一条拨号路径；不计入请求连接预算。
+pub(super) async fn connect_sideband_websocket(
+    connection: &CodexWebSocketConnection,
+) -> Result<(RawWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
+    connect_websocket(connection, false).await
 }
 
 pub(super) async fn connect_pumped_websocket(
@@ -191,7 +196,7 @@ async fn connect_websocket(
             crate::transport::connection::acquire().await
         }
         .map_err(tungstenite::Error::Io)?;
-        // Preserve the native direct handshake; explicit egress never inherits a global proxy.
+        // 保留原生直连握手，显式出口不继承全局代理
         if connection.outbound_proxy.is_none()
             && matches!(
                 tungstenite::proxy::ProxyConfig::from_env(request.uri()),
@@ -277,7 +282,7 @@ async fn dial_account(
     } else {
         MaybeTlsStream::Plain(tcp)
     };
-    // The pinned tungstenite fork sends domains remotely for both SOCKS schemes.
+    // 固定的 tungstenite 分支对两种 SOCKS 协议均把域名交给代理解析
     let target = if proxy_url.scheme() == "socks5" {
         lookup_host((dns_host.as_str(), port))
             .await?
@@ -290,9 +295,9 @@ async fn dial_account(
     } else {
         host.to_owned()
     };
-    // 依赖分两次写入 SOCKS 方法协商，再显式 flush；部分代理会提前拒绝半包。
-    // 仅在代理握手期间合并写入，不缓冲读取，也不改变后续 TLS/WS 的发送方式。
-    // 这只是兼容措施，不能保证网络层不再拆分 TCP 数据。
+    // 依赖分两次写入 SOCKS 方法协商，再显式 flush；部分代理会提前拒绝半包
+    // 仅在代理握手期间合并写入，不缓冲读取，也不改变后续 TLS/WS 的发送方式
+    // 这只是兼容措施，不能保证网络层不再拆分 TCP 数据
     tokio_tungstenite::proxy::connect_via_proxy(BufWriter::new(stream), &config, &target, port)
         .await
         .map(BufWriter::into_inner)
@@ -302,7 +307,7 @@ async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tun
     use hyper_util::client::legacy::connect::HttpConnector;
     use tower_service::Service;
 
-    // Reuse Hyper's DNS and Happy Eyeballs connector for explicit direct/proxy endpoints.
+    // 显式直连和代理端点复用 Hyper 的 DNS 与 Happy Eyeballs 连接器
     let authority = host.parse::<std::net::IpAddr>().map_or_else(
         |_| format!("{host}:{port}"),
         |ip| std::net::SocketAddr::new(ip, port).to_string(),
@@ -341,7 +346,7 @@ fn websocket_config() -> WebSocketConfig {
 
     let mut config = WebSocketConfig::default();
     // 上游 Responses 事件属于 Codex 协议数据，不能沿用 tungstenite 的私有
-    // 64 MiB message / 16 MiB frame 默认限制提前中断本可继续的响应。
+    // 64 MiB message / 16 MiB frame 默认限制提前中断本可继续的响应
     config.max_message_size = None;
     config.max_frame_size = None;
     config.extensions = extensions;
@@ -364,7 +369,7 @@ fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSo
         .headers()
         .get("retry-after")
         .and_then(|value| value.to_str().ok())
-        .and_then(parse_retry_after)
+        .and_then(gateway_protocol::openai::parse_retry_after_seconds)
         .or_else(|| events::retry_after_seconds_from_body(&body));
     CodexWebSocketExchangeError::upstream(
         status_code,

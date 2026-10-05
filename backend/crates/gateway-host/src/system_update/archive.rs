@@ -1,4 +1,4 @@
-//! Release tar.gz 安全解包与制品归一化。
+//! Release tar.gz 安全解包与制品归一化
 
 use std::collections::BTreeSet;
 use std::fs;

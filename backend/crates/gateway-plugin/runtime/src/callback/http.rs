@@ -1,3 +1,5 @@
+//! 插件受管 HTTP 回调的请求解码、执行分派与错误映射
+
 use std::sync::Arc;
 
 use gateway_core::upstream::UpstreamSendState;
@@ -8,7 +10,7 @@ use serde::de::DeserializeOwned;
 use super::{CallResources, CallbackScope, HttpStream, denied, invalid};
 use crate::RpcReply;
 
-/// 回调的公共网络外层；账号鉴权只装饰请求，发送、读流和回收共用同一终端。
+/// 回调的公共网络外层；账号鉴权只装饰请求，发送、读流和回收共用同一终端
 pub(super) struct HttpCallbacks<'a> {
     pub(super) client: &'a HttpClient,
     pub(super) network: &'a NetworkPolicy,

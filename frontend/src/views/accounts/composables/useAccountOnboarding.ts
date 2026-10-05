@@ -1,24 +1,21 @@
-import type { AccountImportTask, getAccounts } from '@/api'
+import type { Account, AccountImportTask } from '@/api'
 import { toast } from '@codex-proxy/ui'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { createAccountImportTask, importAccounts } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { errorMessage, generateRequestId } from '@/utils/operation'
 import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
-import { accountCreateProvider, accountCreateSourceKey, accountImportSettings, accountProxyError, emptyAccountCreateForm } from '../components/AccountCreateModal/model'
-import { accountImportModes } from '../components/AccountCreateModal/presenter'
+import { accountCreateProvider, accountCreateSourceKey, accountImportModes, accountImportSettings, accountProxyError, emptyAccountCreateForm } from '../utils/accountCreate'
 import { accountImportDocuments, MAX_ACCOUNT_IMPORT_COUNT, mixedImportDocuments } from '../utils/accountImport'
 import { apiKeyAccountError, emptyApiKeyAccountForm } from '../utils/upstreamApiKey'
 import { useAccountAuthorization } from './useAccountAuthorization'
-
-type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
 export function useAccountOnboarding(options: {
   reload: () => Promise<unknown>
   onImportTaskCreated: (task: AccountImportTask) => void
 }) {
   const createModalOpen = shallowRef(false)
-  const reauthorizingAccount = shallowRef<AccountRow | null>(null)
+  const reauthorizingAccount = shallowRef<Account | null>(null)
   const creatingAccountAction = useAsyncAction()
   const createForm = ref(emptyAccountCreateForm())
   const authorization = useAccountAuthorization(() => finishCreate(reauthorizingAccount.value ? '账号重新授权成功' : '账号已添加'))
@@ -133,7 +130,7 @@ export function useAccountOnboarding(options: {
     showCreateModal.value = true
   }
 
-  function openReauthorizeAccount(account: AccountRow) {
+  function openReauthorizeAccount(account: Account) {
     if (isSupportedProvider(account.provider) && account.authenticationKind !== 'oauth')
       return
     authorization.reset()

@@ -1,7 +1,7 @@
-//! 备份设置、计划、手动创建、记录、下载与删除路由。
+//! 备份设置、计划、手动创建、记录、下载与删除路由
 
 //!
-//! 路径统一位于 `/api/admin/settings/backups/*`，内部由独立 `BackupService` 承担业务。
+//! 路径统一位于 `/api/admin/settings/backups/*`，内部由独立 `BackupService` 承担业务
 
 use crate::auth::SessionState;
 
@@ -25,7 +25,7 @@ use super::{
     PageMeta, wire::map_admin_service_error,
 };
 
-/// 备份设置视图；`secretAccessKey` 返回已保存的明文凭据，由前端掩码显示。
+/// 备份设置视图；`secretAccessKey` 返回已保存的明文凭据，由前端掩码显示
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupSettingsView {
@@ -85,7 +85,7 @@ impl From<(BackupSettings, crate::time::TimePresenter)> for BackupSettingsView {
     }
 }
 
-/// 更新 S3 存储配置请求；`secretAccessKey` 缺省表示保留旧值。
+/// 更新 S3 存储配置请求；`secretAccessKey` 缺省表示保留旧值
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateBackupStorageRequest {
@@ -99,7 +99,7 @@ pub struct UpdateBackupStorageRequest {
     pub force_path_style: bool,
 }
 
-/// 更新调度配置请求。
+/// 更新调度配置请求
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateBackupScheduleRequest {
@@ -109,7 +109,7 @@ pub struct UpdateBackupScheduleRequest {
     pub retention_count: u32,
 }
 
-/// 备份记录 wire 视图。
+/// 备份记录 wire 视图
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRecordView {
@@ -170,7 +170,7 @@ impl From<(BackupRecord, crate::time::TimePresenter)> for BackupRecordView {
     }
 }
 
-/// 记录列表查询参数。
+/// 记录列表查询参数
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRecordsQuery {
@@ -180,14 +180,14 @@ pub struct BackupRecordsQuery {
     pub trigger: Option<String>,
 }
 
-/// 下载地址请求。
+/// 下载地址请求
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BackupIdRequest {
     pub backup_id: String,
 }
 
-/// 下载地址响应。
+/// 下载地址响应
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadUrlView {
@@ -206,7 +206,7 @@ impl From<gateway_admin::model::backup::DownloadUrlResult> for DownloadUrlView {
     }
 }
 
-/// 连接测试响应。
+/// 连接测试响应
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionTestView {
@@ -227,7 +227,7 @@ impl From<ConnectionTestResult> for ConnectionTestView {
     }
 }
 
-/// 构造固定 GET/POST 备份路由。
+/// 构造固定 GET/POST 备份路由
 pub fn router<S>() -> Router<S>
 where
     S: SessionState + Clone + Send + Sync + 'static,
@@ -441,7 +441,7 @@ where
     ))
 }
 
-/// 创建备份请求；`expiresInDays` 为 0 或缺省表示不设置过期时间。
+/// 创建备份请求；`expiresInDays` 为 0 或缺省表示不设置过期时间
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateBackupRequest {

@@ -1,4 +1,4 @@
-//! xAI 对中立 [`ProviderAccountStore`] 的明文 OAuth adapter。
+//! xAI 对中立 [`ProviderAccountStore`] 的明文 OAuth adapter
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -33,7 +33,7 @@ const MAX_REASON_BYTES: usize = 2_048;
 const MAX_SECRET_BYTES: usize = 64 * 1_024;
 const MAX_IMPORT_BATCH: usize = 200;
 
-/// 已跨过官方 OAuth/OIDC 验证边界、等待转为 Core 创建命令的账号。
+/// 已跨过官方 OAuth/OIDC 验证边界、等待转为 Core 创建命令的账号
 pub struct VerifiedGrokAccount {
     pub account_id: ProviderAccountId,
     pub name: String,
@@ -62,7 +62,7 @@ impl std::fmt::Debug for VerifiedGrokAccount {
     }
 }
 
-/// Provider-owned OAuth 账号明文导出；Debug 永不展开凭据。
+/// Provider-owned OAuth 账号明文导出；Debug 永不展开凭据
 pub struct GrokAccountExport(Value);
 
 impl GrokAccountExport {
@@ -89,7 +89,7 @@ impl std::fmt::Debug for GrokAccountExport {
     }
 }
 
-/// 已从明文 Provider JSON 完整验证的 xAI account。
+/// 已从明文 Provider JSON 完整验证的 xAI account
 pub(crate) struct LoadedGrokCredential {
     pub(crate) account: ProviderAccount,
     pub(crate) access_token: SecretValue,
@@ -99,7 +99,7 @@ pub(crate) struct LoadedGrokCredential {
     pub(crate) refresh_token_expires_at: Option<DateTime<Utc>>,
 }
 
-/// 管理端可读取的 xAI credential 生命周期事实；不包含任何 OAuth secret。
+/// 管理端可读取的 xAI credential 生命周期事实；不包含任何 OAuth secret
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrokCredentialLifecycle {
     account_id: ProviderAccountId,
@@ -138,12 +138,12 @@ impl std::fmt::Debug for LoadedGrokCredential {
     }
 }
 
-/// 无状态的 xAI Admin command preparer；不读写持久层。
+/// 无状态的 xAI Admin command preparer；不读写持久层
 #[derive(Debug, Default, Clone, Copy)]
 pub struct GrokCredentialAdmin;
 
 impl GrokCredentialAdmin {
-    /// 验证官方 OAuth account 并生成一次性 Core 创建命令。
+    /// 验证官方 OAuth account 并生成一次性 Core 创建命令
     pub fn prepare_import(
         &self,
         input: &CreateGrokCredential,
@@ -182,7 +182,7 @@ impl GrokCredentialAdmin {
         })
     }
 
-    /// 把已验证 token 的 Provider 生命周期事实一次性投影为 Core 创建命令。
+    /// 把已验证 token 的 Provider 生命周期事实一次性投影为 Core 创建命令
     pub fn prepare_verified_account(
         &self,
         input: &VerifiedGrokAccount,
@@ -223,7 +223,7 @@ impl GrokCredentialAdmin {
         })
     }
 
-    /// 将 Store 读取的 xAI 明文账号导出为规范 OAuth account bundle v1。
+    /// 将 Store 读取的 xAI 明文账号导出为规范 OAuth account bundle v1
     pub fn export_oauth_bundle(
         &self,
         accounts: &[LoadedCredential],
@@ -302,7 +302,7 @@ impl GrokCredentialAdmin {
         })))
     }
 
-    /// 验证身份不可重绑并生成完整 profile + credential CAS 命令。
+    /// 验证身份不可重绑并生成完整 profile + credential CAS 命令
     pub fn prepare_rotation(
         &self,
         input: &RotateManagedGrokCredential,
@@ -319,7 +319,7 @@ impl GrokCredentialAdmin {
     }
 }
 
-/// Provider 层只验证 xAI wire，并通过 Core port 持久化；这里没有 SQL 或加密。
+/// Provider 层只验证 xAI wire，并通过 Core port 持久化；这里没有 SQL 或加密
 #[derive(Clone)]
 pub struct GrokCredentialRepository {
     store: Arc<dyn ProviderAccountStore>,
@@ -340,7 +340,7 @@ impl GrokCredentialRepository {
         Self { store }
     }
 
-    /// 按 id 读取账号事实，不做 enabled 过滤；诊断选择用它回补停用账号候选。
+    /// 按 id 读取账号事实，不做 enabled 过滤；诊断选择用它回补停用账号候选
     pub(crate) async fn account_by_id(
         &self,
         account_id: &ProviderAccountId,
@@ -361,7 +361,7 @@ impl GrokCredentialRepository {
             .map_err(map_store_error)
     }
 
-    /// 读取不含 secret 的生命周期投影；Provider 仍是明文 credential JSON 的唯一解析者。
+    /// 读取不含 secret 的生命周期投影；Provider 仍是明文 credential JSON 的唯一解析者
     pub async fn read_lifecycle(
         &self,
         account_id: &ProviderAccountId,
@@ -374,7 +374,7 @@ impl GrokCredentialRepository {
         })
     }
 
-    /// Runtime refresh 用 credential revision CAS 原子轮换 OAuth token pair。
+    /// Runtime refresh 用 credential revision CAS 原子轮换 OAuth token pair
     pub(crate) async fn rotate_oauth_credential(
         &self,
         input: &RotateGrokCredential,
@@ -407,7 +407,7 @@ impl GrokCredentialRepository {
         })
     }
 
-    /// 临时失败时只推进持久刷新时刻，不改变 OAuth material 或账号可用性。
+    /// 临时失败时只推进持久刷新时刻，不改变 OAuth material 或账号可用性
     pub(crate) async fn defer_refresh(
         &self,
         account_id: &ProviderAccountId,
@@ -449,7 +449,7 @@ impl GrokCredentialRepository {
         }
     }
 
-    /// 用同一 credential revision fence 更新可用性。
+    /// 用同一 credential revision fence 更新可用性
     pub async fn update_state(
         &self,
         input: &UpdateGrokCredentialState,
@@ -483,7 +483,7 @@ impl GrokCredentialRepository {
             .map_err(map_store_error)
     }
 
-    /// 读取并完整校验一个 revision 对应的明文 OAuth credential。
+    /// 读取并完整校验一个 revision 对应的明文 OAuth credential
     pub(crate) async fn load(
         &self,
         account_id: &ProviderAccountId,
@@ -497,7 +497,7 @@ impl GrokCredentialRepository {
         loaded_from_core(loaded)
     }
 
-    /// 读取 xAI Provider 的全部账号；credential 逐行按 revision fence 加载。
+    /// 读取 xAI Provider 的全部账号；credential 逐行按 revision fence 加载
     pub(crate) async fn list_loaded_for_provider(
         &self,
     ) -> Result<Vec<LoadedGrokCredential>, GrokCredentialRepositoryError> {
@@ -885,7 +885,7 @@ fn to_system_time(value: DateTime<Utc>) -> SystemTime {
     value.into()
 }
 
-/// xAI Provider account adapter 的脱敏错误。
+/// xAI Provider account adapter 的脱敏错误
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum GrokCredentialRepositoryError {
     #[error("invalid xAI credential input: {0}")]

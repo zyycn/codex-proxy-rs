@@ -1,9 +1,9 @@
-//! Codex quota 服务编排：权威额度事实、展示投影、主动/被动同步与 429 冷却。
+//! Codex quota 服务编排：权威额度事实、展示投影、主动/被动同步与 429 冷却
 //!
-//! - [`document`]：上游 `/usage` 输入到多桶 map 的单向规范化。
-//! - [`snapshot`]：快照/窗口解析、聚合、O(1) 滚动与调度信号。
-//! - [`evidence`]：额度接口错误到凭据/额度事实的分类。
-//! - [`recovery`]：各额度窗口独立的恢复基准与访问结论。
+//! - [`document`]：上游 `/usage` 输入到多桶 map 的单向规范化
+//! - [`snapshot`]：快照/窗口解析、聚合、O(1) 滚动与调度信号
+//! - [`evidence`]：额度接口错误到凭据/额度事实的分类
+//! - [`recovery`]：各额度窗口独立的恢复基准与访问结论
 
 mod document;
 pub(crate) mod evidence;
@@ -65,19 +65,23 @@ pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const QUOTA_RESET_GRACE: Duration = Duration::from_secs(2 * 60);
-/// 首次 OAuth 异步观察失败时，由既有 quota worker 兜底重试的单轮上限。
+/// 首次 OAuth 异步观察失败时，由既有 quota worker 兜底重试的单轮上限
+/// 随机启动延迟已把候选摊到多轮，该上限仅作单轮安全边界
 const INITIAL_QUOTA_SYNC_BATCH: usize = 100;
-// 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动。
+/// 新账号首查（含失败重排）随机启动延迟的上限；摊开导入批量的 /usage 突发
+/// 导入即时可见额度由导入流程的每账号后台读取负责，worker 只兜底失败者
+const INITIAL_QUOTA_SYNC_MAX_START_DELAY: Duration = Duration::from_secs(10 * 60);
+// 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动
 const QUOTA_FETCH_5XX_MAX_RETRIES: u32 = 2;
 const QUOTA_FETCH_5XX_BASE_DELAY: Duration = Duration::from_secs(1);
 const WARMUP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const WARMUP_STREAM_MAX_BYTES: usize = 256 * 1024;
 
-/// OpenAI Provider 主动额度刷新的调度策略。
+/// OpenAI Provider 主动额度刷新的调度策略
 ///
-/// 正常账号依赖请求响应的被动额度同步；周期 worker 仅复核已耗尽账号。
+/// 正常账号依赖请求响应的被动额度同步；周期 worker 仅复核已耗尽账号
 /// 该策略保留模型目录的周期刷新频率；额度到期检查使用独立的短周期，
-/// 避免到达 reset 后还要等待完整的目录刷新周期。
+/// 避免到达 reset 后还要等待完整的目录刷新周期
 #[derive(Debug, Clone, Copy)]
 pub struct CodexQuotaRefreshPolicy {
     interval: Duration,
@@ -136,7 +140,7 @@ fn observe_warmup_events(events: Vec<SseEvent>, terminal: &mut WarmupTerminal) {
             .or(event.event.as_deref());
         match kind {
             Some("response.completed") => {
-                // 只有明确完成的响应才算预热成功；失败事件即使随后出现完成帧也优先。
+                // 只有明确完成的响应才算预热成功；失败事件即使随后出现完成帧也优先
                 if *terminal != WarmupTerminal::Failed {
                     *terminal = if parsed.is_some()
                         && parsed
@@ -204,14 +208,14 @@ pub enum CodexCredentialQuotaError {
     #[error("Codex quota upstream query failed: {detail}")]
     Upstream {
         detail: String,
-        /// 上游 HTTP 状态码；传输失败等无响应场景为 `None`。
+        /// 上游 HTTP 状态码；传输失败等无响应场景为 `None`
         status: Option<u16>,
-        /// 有界错误码，供内部诊断和已知码映射使用，不直接拼入公开提示。
+        /// 有界错误码，供内部诊断和已知码映射使用，不直接拼入公开提示
         code: Option<String>,
     },
 }
 
-/// 主动额度重置卡查询/消费失败。
+/// 主动额度重置卡查询/消费失败
 #[derive(Error)]
 pub enum CodexResetCreditsError {
     #[error("Codex reset-credit credential data is invalid")]
@@ -267,7 +271,7 @@ impl From<gateway_core::error::StoreError> for CodexCredentialQuotaError {
     }
 }
 
-/// 客户端错误携带的 HTTP 状态码；传输失败等为 `None`。
+/// 客户端错误携带的 HTTP 状态码；传输失败等为 `None`
 fn upstream_error_status(error: &CodexClientError) -> Option<u16> {
     match error {
         CodexClientError::Upstream { status, .. } => Some(status.as_u16()),
@@ -275,9 +279,9 @@ fn upstream_error_status(error: &CodexClientError) -> Option<u16> {
     }
 }
 
-/// 从上游错误体提取稳定错误码：优先 `/error/code`，其次 `/code`。
+/// 从上游错误体提取稳定错误码：优先 `/error/code`，其次 `/code`
 ///
-/// 只接受有界的 ASCII 标识，避免把自由文本作为错误码写入诊断。
+/// 只接受有界的 ASCII 标识，避免把自由文本作为错误码写入诊断
 fn upstream_error_code(error: &CodexClientError) -> Option<String> {
     let CodexClientError::Upstream { body, .. } = error else {
         return None;
@@ -308,13 +312,19 @@ pub struct CodexCredentialQuotaService {
     cooldowns: Arc<dyn ProviderCooldownPort>,
     leases: Arc<dyn ProviderLeasePort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
-    /// 冻结策略的短 TTL 缓存：失败路径热读，避免每个容量错误都查询设置。
+    /// 冻结策略的短 TTL 缓存：失败路径热读，避免每个容量错误都查询设置
     freeze_policy_cache: Mutex<Option<(ProviderFreezePolicy, Instant)>>,
     scheduling: CodexQuotaSchedulingProjection,
     reset_consume_locks: Mutex<HashMap<ProviderAccountId, Arc<Mutex<()>>>>,
+    /// 首查随机延迟采样器；测试注入固定值获得确定性节奏。
+    initial_sync_delays: CodexInitialSyncDelays,
 }
 
-/// 冻结策略缓存活跃期；过期后下一次容量错误重新读取运行时设置。
+/// 首查随机延迟采样器：每次调用为一个账号返回独立随机延迟
+#[doc(hidden)]
+pub type CodexInitialSyncDelays = Arc<dyn Fn() -> Duration + Send + Sync>;
+
+/// 冻结策略缓存活跃期；过期后下一次容量错误重新读取运行时设置
 const FREEZE_POLICY_CACHE_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,6 +344,7 @@ struct CodexQuotaProjectionState {
     next_version: u64,
     entries: BTreeMap<ProviderAccountId, CodexQuotaSchedulingEntry>,
     last_periodic_refresh_at: BTreeMap<ProviderAccountId, CodexQuotaRefreshAttempt>,
+    initial_refresh_not_before: BTreeMap<ProviderAccountId, Instant>,
 }
 
 struct CodexQuotaRefreshAttempt {
@@ -392,6 +403,7 @@ impl CodexQuotaSchedulingProjection {
         for account_id in account_ids {
             state.entries.remove(account_id);
             state.last_periodic_refresh_at.remove(account_id);
+            state.initial_refresh_not_before.remove(account_id);
         }
     }
 
@@ -536,9 +548,9 @@ impl CodexQuotaSchedulingProjection {
             .last_periodic_refresh_at
             .retain(|account_id, _| candidate_ids.contains(account_id));
 
-        // 已耗尽账号首次立即复核，之后每 30 分钟复核，以发现官方提前重置。
-        // reset + 2 分钟额外触发一次复核，给上游重置留出传播时间。
-        // 正常账号仅在非零用量窗口经过宽限期后参与，未更新时复用周期节流。
+        // 已耗尽账号首次立即复核，之后每 30 分钟复核，以发现官方提前重置
+        // reset + 2 分钟额外触发一次复核，给上游重置留出传播时间
+        // 正常账号仅在非零用量窗口经过宽限期后参与，未更新时复用周期节流
         let mut reserved = Vec::new();
         for (account, target_reset) in candidates {
             if !periodic_quota_refresh_due(&state, account.id(), target_reset, now, refreshed_at) {
@@ -555,6 +567,77 @@ impl CodexQuotaSchedulingProjection {
         }
         reserved
     }
+
+    /// 为尚无 quota 快照的账号分配随机首查时点，并返回本轮已到期的候选。
+    ///
+    /// `quota_observed_at` 为空代表首次异步观察尚未成功；不另建同步状态表。
+    /// 首次进入候选的账号抽一次随机启动延迟记为到期时刻，避免新导入账号池
+    /// 在 worker 唤醒边界形成批量 `/usage` 突发；到期时刻跨轮保留，零延迟
+    /// （含随机源退化）时保持首轮即查的旧行为。单轮数量仍受
+    /// `INITIAL_QUOTA_SYNC_BATCH` 上限约束。
+    fn reserve_initial_refreshes(
+        &self,
+        accounts: &[ProviderAccount],
+        observed_ids: &BTreeSet<ProviderAccountId>,
+        now: SystemTime,
+        draw_start_delay: &dyn Fn() -> Duration,
+    ) -> Vec<ProviderAccount> {
+        let candidates = accounts
+            .iter()
+            .filter(|account| {
+                !observed_ids.contains(account.id()) && eligible_initial_quota_sync(account, now)
+            })
+            .collect::<Vec<_>>();
+        let candidate_ids = candidates
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<BTreeSet<_>>();
+        let monotonic_now = Instant::now();
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // 已产生快照或离开候选集的账号不再保留首查状态。
+        state
+            .initial_refresh_not_before
+            .retain(|account_id, _| candidate_ids.contains(account_id));
+        candidates
+            .into_iter()
+            .filter(|account| {
+                let due_at = state
+                    .initial_refresh_not_before
+                    .entry(account.id().clone())
+                    .or_insert_with(|| monotonic_now + draw_start_delay());
+                *due_at <= monotonic_now
+            })
+            .take(INITIAL_QUOTA_SYNC_BATCH)
+            .cloned()
+            .collect()
+    }
+
+    /// 首查尝试后仍无快照的账号重抽随机延迟，避免失败账号回到固定 30s 重试节奏。
+    ///
+    /// 重排同时随机化每轮的候选集合，避免持续失败时按账号顺序只重试同一批。
+    fn defer_failed_initial_refreshes(
+        &self,
+        account_ids: &BTreeSet<ProviderAccountId>,
+        draw_start_delay: &dyn Fn() -> Duration,
+    ) {
+        if account_ids.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for account_id in account_ids {
+            // 账号是否仍在首查路径由下一轮 reserve 按候选集剪枝，这里无需区分。
+            state
+                .initial_refresh_not_before
+                .insert(account_id.clone(), now + draw_start_delay());
+        }
+    }
 }
 
 fn quota_refresh_candidate(
@@ -569,7 +652,7 @@ fn quota_refresh_candidate(
         let reset_at = account.quota().reset_at();
         return Some((account, reset_at));
     }
-    // 正常账号首次进入周期候选也要等待宽限期，不能由“无刷新历史”绕过。
+    // 正常账号首次进入周期候选也要等待宽限期，不能由“无刷新历史”绕过
     let snapshot = snapshot?;
     let expired_window_reset = snapshot
         .windows()
@@ -603,7 +686,7 @@ fn periodic_quota_refresh_due(
                 >= PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL
                 || reset_at
                     .and_then(|reset| reset.checked_add(QUOTA_RESET_GRACE))
-                    // 已在该边界之后复核过时回到周期重试，避免过期 reset 每轮触发。
+                    // 已在该边界之后复核过时回到周期重试，避免过期 reset 每轮触发
                     .is_some_and(|due_at| last.wall_at < due_at && due_at <= now)
         })
 }
@@ -649,10 +732,24 @@ impl CodexCredentialQuotaService {
             freeze_policy_cache: Mutex::new(None),
             scheduling: CodexQuotaSchedulingProjection::default(),
             reset_consume_locks: Mutex::new(HashMap::new()),
+            initial_sync_delays: Arc::new(|| {
+                crate::jitter::uniform_delay(
+                    crate::jitter::random_u64(),
+                    INITIAL_QUOTA_SYNC_MAX_START_DELAY,
+                )
+            }),
         }
     }
 
-    /// 读取容量熔断策略（带短 TTL 缓存）；读取失败退化为关闭，熔断不得放大失败。
+    /// 注入首查随机延迟采样器（测试用确定性节奏）；生产默认均匀
+    /// `[0, INITIAL_QUOTA_SYNC_MAX_START_DELAY)`，零延迟等价旧行为
+    #[doc(hidden)]
+    pub fn with_initial_sync_delays(mut self, delays: CodexInitialSyncDelays) -> Self {
+        self.initial_sync_delays = delays;
+        self
+    }
+
+    /// 读取容量熔断策略（带短 TTL 缓存）；读取失败退化为关闭，熔断不得放大失败
     async fn freeze_policy(&self) -> ProviderFreezePolicy {
         {
             let cache = self.freeze_policy_cache.lock().await;
@@ -675,8 +772,9 @@ impl CodexCredentialQuotaService {
     }
 
     /// 容量熔断入口：滑动窗口内累计容量类失败，达到阈值即写入带
-    /// `CapacityFreeze` 类别的账号级冷却。调度侧立即屏蔽该账号，恢复由
-    /// freeze-recovery worker 处理；本路径只依赖 Redis 可丢失事实。
+    /// `CapacityFreeze` 类别的账号级冷却
+    /// 调度侧立即屏蔽该账号，恢复由
+    /// freeze-recovery worker 处理；本路径只依赖 Redis 可丢失事实
     pub async fn apply_capacity_failure(&self, account: &ProviderAccount, observed_at: SystemTime) {
         let policy = self.freeze_policy().await;
         if !policy.enabled() {
@@ -727,7 +825,7 @@ impl CodexCredentialQuotaService {
             .unwrap_or(0)
     }
 
-    /// 查询当前账号由 Codex Desktop 暴露的主动额度重置卡。
+    /// 查询当前账号由 Codex Desktop 暴露的主动额度重置卡
     pub async fn list_reset_credits(
         &self,
         account_id: &ProviderAccountId,
@@ -753,7 +851,8 @@ impl CodexCredentialQuotaService {
             .map_err(|error| map_reset_credit_attempt_error(error, false))
     }
 
-    /// 消费一张主动额度重置卡。相同账号在本进程内串行，且不做传输重试。
+    /// 消费一张主动额度重置卡
+    /// 相同账号在本进程内串行，且不做传输重试
     pub async fn consume_reset_credit(
         &self,
         account_id: &ProviderAccountId,
@@ -817,7 +916,7 @@ impl CodexCredentialQuotaService {
         Ok(account)
     }
 
-    /// 真实推理错误只更新额度访问事实，不伪造 Provider JSON 或展示百分比。
+    /// 真实推理错误只更新额度访问事实，不伪造 Provider JSON 或展示百分比
     pub(crate) async fn record_confirmed_exhaustion(
         &self,
         account: &ProviderAccount,
@@ -839,14 +938,14 @@ impl CodexCredentialQuotaService {
         Ok(())
     }
 
-    /// 成功推理是额度可访问的权威证据，同时解除账号级 429 冷却。
+    /// 成功推理是额度可访问的权威证据，同时解除账号级 429 冷却
     pub async fn record_successful_inference(
         &self,
         account: &ProviderAccount,
         observed_at: SystemTime,
     ) -> Result<(), CodexCredentialQuotaError> {
         // 已经发出的并发请求可能晚于耗尽事实成功返回；真实成功仍是独立的
-        // Allowed 权威证据，但调度不会为了试探恢复而放行耗尽账号。
+        // Allowed 权威证据，但调度不会为了试探恢复而放行耗尽账号
         if account.quota().access() == QuotaAccessState::Exhausted {
             let outcome = self
                 .store
@@ -869,7 +968,7 @@ impl CodexCredentialQuotaService {
         Ok(())
     }
 
-    /// 批量预热请求级额度投影；持久层或 Provider JSON 异常只退化为未知额度。
+    /// 批量预热请求级额度投影；持久层或 Provider JSON 异常只退化为未知额度
     pub async fn prepare_scheduling(&self, accounts: &[ProviderAccount]) {
         if self.scheduling.hydration_targets(accounts).is_empty() {
             return;
@@ -921,7 +1020,7 @@ impl CodexCredentialQuotaService {
         self.synchronize_at(SystemTime::now()).await
     }
 
-    /// 按本轮调度时刻选择到期账号；实际 HTTP 观察与落库仍使用发生时刻。
+    /// 按本轮调度时刻选择到期账号；实际 HTTP 观察与落库仍使用发生时刻
     pub async fn synchronize_at(
         &self,
         now: SystemTime,
@@ -947,7 +1046,15 @@ impl CodexCredentialQuotaService {
             .into_iter()
             .map(|observation| observation.account_id)
             .collect::<BTreeSet<_>>();
-        let initial = Self::initial_quota_sync_accounts(&accounts, &observed_ids, now);
+        let initial = self.scheduling.reserve_initial_refreshes(
+            &accounts,
+            &observed_ids,
+            now,
+            self.initial_sync_delays.as_ref(),
+        );
+        // 本轮首查后仍无快照的账号需要重排随机延迟。
+        let mut pending_initial: BTreeSet<ProviderAccountId> =
+            initial.iter().map(|account| account.id().clone()).collect();
         let periodic =
             self.scheduling
                 .reserve_periodic_refreshes(accounts, &observed_snapshots, now);
@@ -972,17 +1079,22 @@ impl CodexCredentialQuotaService {
             let observed_at = SystemTime::now();
             match self.fetch_usage(&client, &account).await {
                 Ok(FetchedCodexQuota { account, value }) => {
-                    // 单账号解析或落库失败只影响该账号；其余账号继续同步。
-                    if let Err(error) = self
+                    // 单账号解析或落库失败只影响该账号；其余账号继续同步
+                    match self
                         .apply_fetched_quota(&account, &value, observed_at, &mut summary)
                         .await
                     {
-                        summary.transient += 1;
-                        tracing::warn!(
-                            account_id = %account.id(),
-                            error = %error,
-                            "OpenAI quota synchronization skipped one account"
-                        );
+                        Ok(()) => {
+                            pending_initial.remove(account.id());
+                        }
+                        Err(error) => {
+                            summary.transient += 1;
+                            tracing::warn!(
+                                account_id = %account.id(),
+                                error = %error,
+                                "OpenAI quota synchronization skipped one account"
+                            );
+                        }
                     }
                 }
                 Err(CodexQuotaFetchError::InvalidCredential) => {
@@ -1023,6 +1135,9 @@ impl CodexCredentialQuotaService {
                 }
             }
         }
+        // 首查失败或未能落库的账号重排随机延迟；已成功落库的账号由快照事实自然退出首查路径。
+        self.scheduling
+            .defer_failed_initial_refreshes(&pending_initial, self.initial_sync_delays.as_ref());
         Ok(summary)
     }
 
@@ -1031,7 +1146,7 @@ impl CodexCredentialQuotaService {
         &self.runtime_policy
     }
 
-    /// 批量预激活 OAuth 账号的 5h 配额滑动窗口。
+    /// 批量预激活 OAuth 账号的 5h 配额滑动窗口
     pub async fn execute_warmup(
         &self,
         model: &str,
@@ -1147,7 +1262,7 @@ impl CodexCredentialQuotaService {
                 None,
             );
 
-            // HTTP 200 只确认响应头；必须消费 SSE 直到终态才能确认预热结果和额度事件。
+            // HTTP 200 只确认响应头；必须消费 SSE 直到终态才能确认预热结果和额度事件
             let attempt = tokio::time::timeout(WARMUP_REQUEST_TIMEOUT, async {
                 let mut response = client_for_account
                     .create_response_stream_http_sse(&upstream_request, context)
@@ -1165,7 +1280,7 @@ impl CodexCredentialQuotaService {
                 Ok(Ok((terminal, headers, rate_limit_updates))) => {
                     match terminal {
                         Ok(()) => {
-                            // 被动额度同步会把成功请求的窗口事实标为可用，失败流不能复用该结论。
+                            // 被动额度同步会把成功请求的窗口事实标为可用，失败流不能复用该结论
                             if !headers.is_empty()
                                 && let Err(error) =
                                     self.synchronize_passive_headers(&account, &headers).await
@@ -1218,23 +1333,7 @@ impl CodexCredentialQuotaService {
         Ok(summary)
     }
 
-    /// `quota_observed_at` 为空代表首次异步观察尚未成功；不另建同步状态表。
-    fn initial_quota_sync_accounts(
-        accounts: &[ProviderAccount],
-        observed_ids: &BTreeSet<ProviderAccountId>,
-        now: SystemTime,
-    ) -> Vec<ProviderAccount> {
-        accounts
-            .iter()
-            .filter(|account| {
-                !observed_ids.contains(account.id()) && eligible_initial_quota_sync(account, now)
-            })
-            .take(INITIAL_QUOTA_SYNC_BATCH)
-            .cloned()
-            .collect()
-    }
-
-    /// 解析并 revision-fenced 落库单账号的 Provider quota JSON。
+    /// 解析并 revision-fenced 落库单账号的 Provider quota JSON
     async fn apply_fetched_quota(
         &self,
         account: &ProviderAccount,
@@ -1291,7 +1390,7 @@ impl CodexCredentialQuotaService {
         Ok(())
     }
 
-    /// 把正常推理响应携带的限流事实合并进 Provider 原始 quota JSON。
+    /// 把正常推理响应携带的限流事实合并进 Provider 原始 quota JSON
     pub async fn synchronize_passive_headers(
         &self,
         account: &ProviderAccount,
@@ -1304,7 +1403,7 @@ impl CodexCredentialQuotaService {
             .await
     }
 
-    /// 把一次推理响应中采集的结构化限流观察合并后单次落库。
+    /// 把一次推理响应中采集的结构化限流观察合并后单次落库
     pub async fn synchronize_passive_rate_limits(
         &self,
         account: &ProviderAccount,
@@ -1334,7 +1433,7 @@ impl CodexCredentialQuotaService {
         let existing = existing
             .map(|observation| observation.quota.into_inner())
             .unwrap_or_default();
-        // 只用本次响应明确携带的套餐更新账号，不能把合并前的旧快照重新当作新证据。
+        // 只用本次响应明确携带的套餐更新账号，不能把合并前的旧快照重新当作新证据
         let observed_plan = rate_limits
             .iter()
             .rev()
@@ -1346,7 +1445,7 @@ impl CodexCredentialQuotaService {
             .next();
         let plan_type = observed_account_plan(account.plan_type(), observed_plan);
         // 套餐、credits 等元数据可以更新，但没有额度窗口事实时必须保留旧观察时刻，
-        // 也不能借旧快照重新推导 quota state。
+        // 也不能借旧快照重新推导 quota state
         if !has_quota_facts {
             let Some(state) = existing_state else {
                 return Ok(false);
@@ -1372,7 +1471,7 @@ impl CodexCredentialQuotaService {
             observed_at,
             &Value::Object(quota.clone()),
         )?;
-        // 这些 headers 来自一次成功推理，访问结论优先于可能滞后的百分比。
+        // 这些 headers 来自一次成功推理，访问结论优先于可能滞后的百分比
         let state = QuotaState::allowed(observed_at);
         let outcome = self
             .store
@@ -1392,10 +1491,10 @@ impl CodexCredentialQuotaService {
         Ok(true)
     }
 
-    /// 真实 429 的单一事实入口：写入 Redis 临时限流冷却（`until = now + retry_after`）。
+    /// 真实 429 的单一事实入口：写入 Redis 临时限流冷却（`until = now + retry_after`）
     /// 凭据与额度主窗口（额度重置时间）都不改变——临时限流是独立维度，
-    /// 到期由 Redis key 过期自动解除，不污染配额耗尽状态。
-    /// 已有更晚的冷却不会被缩短（put_if_later）。
+    /// 到期由 Redis key 过期自动解除，不污染配额耗尽状态
+    /// 已有更晚的冷却不会被缩短（put_if_later）
     pub async fn apply_rate_limit_429(
         &self,
         account: &ProviderAccount,
@@ -1418,7 +1517,7 @@ impl CodexCredentialQuotaService {
         Ok(())
     }
 
-    /// 读取有效的账号冷却事实；等待恢复探测的冻结到期后仍有效。
+    /// 读取有效的账号冷却事实；等待恢复探测的冻结到期后仍有效
     pub async fn cooldown(
         &self,
         account_id: &ProviderAccountId,
@@ -1435,7 +1534,7 @@ impl CodexCredentialQuotaService {
         Ok(state.is_active(SystemTime::now()).then_some(state))
     }
 
-    /// 读取单账号最后一次落库的 Provider quota，并由 Codex 域解析展示窗口。
+    /// 读取单账号最后一次落库的 Provider quota，并由 Codex 域解析展示窗口
     pub async fn read_account(
         &self,
         account_id: &ProviderAccountId,
@@ -1486,7 +1585,7 @@ impl CodexCredentialQuotaService {
         Ok(Some(snapshot))
     }
 
-    /// 只刷新指定账号，revision-fenced 写入动态 Provider JSON 后返回解析快照。
+    /// 只刷新指定账号，revision-fenced 写入动态 Provider JSON 后返回解析快照
     pub async fn refresh_account(
         &self,
         account_id: &ProviderAccountId,
@@ -1495,7 +1594,7 @@ impl CodexCredentialQuotaService {
             .await
     }
 
-    /// 真实限额失败后的异步刷新只补齐展示快照，不允许 usage 快照撤销已确认的失败状态。
+    /// 真实限额失败后的异步刷新只补齐展示快照，不允许 usage 快照撤销已确认的失败状态
     pub(crate) async fn refresh_account_after_failure(
         &self,
         account_id: &ProviderAccountId,
@@ -1763,8 +1862,9 @@ fn map_reset_credit_client_error(error: CodexClientError, consume: bool) -> Code
             ..
         } => {
             // 2xx 后发生的解码/响应体上限错误使用 synthetic 502 表示，但额度卡
-            // 可能已经消费。只有 transport 记录的真实非成功状态与错误状态一致时，
-            // 才能把它当作确定的上游拒绝并允许前端清除 pending 幂等键。
+            // 可能已经消费
+            // 只有 transport 记录的真实非成功状态与错误状态一致时，
+            // 才能把它当作确定的上游拒绝并允许前端清除 pending 幂等键
             if consume && !reset_credit_response_was_explicit_rejection(status, &diagnostics) {
                 CodexResetCreditsError::ConsumeResultUnknown
             } else {
@@ -1810,9 +1910,9 @@ async fn fetch_usage_once(
         .map_err(CodexQuotaFetchAttemptError::Upstream)
 }
 
-/// 对 5xx 上游拒绝做有限次指数退避重试（1s/2s），吞掉瞬时抖动。
+/// 对 5xx 上游拒绝做有限次指数退避重试（1s/2s），吞掉瞬时抖动
 ///
-/// 4xx（含 402/429）不重试：它们已经走额度状态转换，重试只会放大上游负载。
+/// 4xx（含 402/429）不重试：它们已经走额度状态转换，重试只会放大上游负载
 async fn fetch_usage_with_5xx_retry(
     client: &CodexBackendClient,
     prepared: &PreparedCodexRuntimeCredential,
@@ -1843,13 +1943,13 @@ async fn fetch_usage_with_5xx_retry(
     }
 }
 
-/// 上游额度可确认套餐变更；同族泛化值不能丢弃 JWT 已给出的具体 SKU。
+/// 上游额度可确认套餐变更；同族泛化值不能丢弃 JWT 已给出的具体 SKU
 fn observed_account_plan(current: Option<&str>, observed: Option<&str>) -> Option<String> {
     let plan = observed?.trim().to_ascii_lowercase();
     if plan.is_empty() || plan == "unknown" {
         return None;
     }
-    // 套餐族沿用官方 codex_protocol::account::PlanType 的分类。
+    // 套餐族沿用官方 codex_protocol::account::PlanType 的分类
     let current = current.unwrap_or_default().trim().to_ascii_lowercase();
     let generalized = matches!(
         (plan.as_str(), current.as_str()),
@@ -1869,8 +1969,9 @@ fn eligible_periodic_quota_refresh(account: &ProviderAccount, now: SystemTime) -
 }
 
 fn eligible_initial_quota_sync(account: &ProviderAccount, now: SystemTime) -> bool {
-    // 首次观察只兜底刚入库、尚无 quota 快照的账号。已耗尽等运行时状态必须由
-    // periodic 路径处理，才能保留同一账号的最小复核间隔。
+    // 首次观察只兜底刚入库、尚无 quota 快照的账号
+    // 已耗尽等运行时状态必须由
+    // periodic 路径处理，才能保留同一账号的最小复核间隔
     account.credential_state() == CredentialState::Ready
         && eligible_periodic_quota_refresh(account, now)
 }
@@ -1890,8 +1991,8 @@ fn merge_passive_quota(
         let default_is_named_alias = default_limit_is_named_alias(rate_limits);
         let mut resolved_limit_ids = BTreeMap::new();
         for (wire_limit_id, details) in &rate_limits.limits {
-            // HTTP 与 WebSocket 都可能把活动具名桶镜像为默认 `codex` 窗口。
-            // 同一 wire 观察里存在相同具名事实时丢弃镜像，不触碰 core 桶。
+            // HTTP 与 WebSocket 都可能把活动具名桶镜像为默认 `codex` 窗口
+            // 同一 wire 观察里存在相同具名事实时丢弃镜像，不触碰 core 桶
             if wire_limit_id == DEFAULT_CODEX_LIMIT_ID && default_is_named_alias {
                 continue;
             }
@@ -1950,7 +2051,7 @@ fn merge_passive_metadata(quota: &mut Map<String, Value>, rate_limits: &ParsedRa
         if let Some(balance) = credits.balance.as_ref() {
             value.insert("balance".to_owned(), Value::String(balance.clone()));
         } else {
-            // 点数对象明确更新但未提供余额时，不能把旧余额继续作为当前余额展示。
+            // 点数对象明确更新但未提供余额时，不能把旧余额继续作为当前余额展示
             value.remove("balance");
         }
         quota.insert("credits".to_owned(), Value::Object(value));
@@ -1970,14 +2071,17 @@ fn default_limit_is_named_alias(rate_limits: &ParsedRateLimits) -> bool {
     })
 }
 
-/// 丢弃 core 限额中上游给出的无事实 `secondary_window` 占位。
+/// 丢弃 core 限额中上游给出的无事实 `secondary_window` 占位
 ///
 /// 生产响应头可能携带 `used_percent=0`、零时长和空 reset 的占位，`/usage` 也会
-/// 返回 `secondary_window: null`。正常被动同步保留该响应事实，Admin 展示会将其
+/// 返回 `secondary_window: null`
+/// 正常被动同步保留该响应事实，Admin 展示会将其
 /// 隐藏；但主动 `/usage` 刷新或 402 确认投影会把一个存在但无事实的字段写成
-/// 100%，从而显示并不存在的“次级额度”。因此这些非被动写入口在落库前移除
-/// 无事实值。带 reset、时长、正用量、触顶、未知或非法字段的次级窗口均完全按
-/// 原有额度逻辑保留。
+/// 100%，从而显示并不存在的“次级额度”
+/// 因此这些非被动写入口在落库前移除
+/// 无事实值
+/// 带 reset、时长、正用量、触顶、未知或非法字段的次级窗口均完全按
+/// 原有额度逻辑保留
 fn normalize_quota_window_placeholders(mut quota: Map<String, Value>) -> Map<String, Value> {
     quota = canonicalize_rate_limit_document(quota);
     if let Some(rate_limit) = quota
@@ -2014,7 +2118,7 @@ fn secondary_window_is_placeholder(window: &Map<String, Value>) -> bool {
 }
 
 fn passive_rate_limit_snapshot(details: &RateLimitDetails) -> Option<Map<String, Value>> {
-    // 响应头的窗口属于同一次上游观测；跨响应合并会制造不存在的额度窗口。
+    // 响应头的窗口属于同一次上游观测；跨响应合并会制造不存在的额度窗口
     let mut snapshot = Map::new();
     if let Some(allowed) = details.allowed {
         snapshot.insert("allowed".to_owned(), Value::Bool(allowed));

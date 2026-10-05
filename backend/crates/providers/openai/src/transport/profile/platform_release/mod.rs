@@ -1,4 +1,4 @@
-//! Windows / Linux Desktop 按平台和架构独立核验、缓存配套版本。
+//! Windows / Linux Desktop 按平台和架构独立核验、缓存配套版本
 
 use super::selection::{
     ClientKind, ClientPlatform, ClientProfileSelection, ClientRelease, VersionMode, object,
@@ -214,7 +214,7 @@ impl PlatformDesktopReleaseService {
             return Err("官方 Desktop 发布低于当前版本或同构建版本不一致".to_owned());
         }
         let verified_at = Utc::now();
-        // 核验时间属于缓存信封，避免同构建重复检查被判定为不同制品。
+        // 核验时间属于缓存信封，避免同构建重复检查被判定为不同制品
         artifact.release.verified_at = None;
         let payload =
             object(&serde_json::to_value(&artifact).map_err(|_| "Desktop 发布序列化失败")?)
@@ -280,8 +280,8 @@ fn sequence(target: DesktopTarget, release: &ClientRelease) -> io::Result<u64> {
 }
 
 fn baseline_artifacts() -> BTreeMap<DesktopTarget, VerifiedArtifact> {
-    // 2026-09-18 分别读取四个官方安装包，版本元组与 ETag 均来自同一个包。
-    // 离线可直接选择自动模式；ETag 变化后必须重新核验，不能延用另一平台的版本。
+    // 2026-09-18 分别读取四个官方安装包，版本元组与 ETag 均来自同一个包
+    // 离线可直接选择自动模式；ETag 变化后必须重新核验，不能延用另一平台的版本
     let identities = [
         (774_919_598, "\"0x8DF141FFDF86290\""),
         (771_727_321, "\"0x8DF14202C49201F\""),

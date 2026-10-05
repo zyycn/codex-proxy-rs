@@ -1,4 +1,4 @@
-//! 管理账号目录的数据库分页 read model。
+//! 管理账号目录的数据库分页 read model
 
 use super::*;
 
@@ -147,7 +147,7 @@ pub(crate) async fn load_admin_account_page(
            left join outbound_proxies p on p.id = a.outbound_proxy_id
           order by page.page_position"
     );
-    // 动态片段只来自上面的封闭排序枚举与固定 usage predicate；所有请求值仍使用 bind。
+    // 动态片段只来自上面的封闭排序枚举与固定 usage predicate；所有请求值仍使用 bind
     let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
         .bind(active_rate_limited_ids)
         .bind(now)

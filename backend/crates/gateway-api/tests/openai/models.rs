@@ -1,3 +1,5 @@
+//! 模型列表、详情与客户端原生目录接口的投影及访问校验测试
+
 use std::sync::{Arc, Mutex};
 
 use axum::{

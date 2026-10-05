@@ -1,3 +1,5 @@
+//! 验证代理端点的协议限制、凭据脱敏与非法配置拒绝
+
 use gateway_core::account::OutboundProxy;
 
 #[test]

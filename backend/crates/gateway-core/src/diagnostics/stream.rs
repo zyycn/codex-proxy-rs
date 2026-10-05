@@ -1,4 +1,4 @@
-//! 仅用于观测的有界流分帧；超过限额时明确记缺口，不影响实际协议解析。
+//! 仅用于观测的有界流分帧；超过限额时明确记缺口，不影响实际协议解析
 
 use serde_json::json;
 
@@ -12,7 +12,7 @@ pub enum StreamFormat {
     JsonLines,
 }
 
-/// 同一 exchange 持有一个 observer，跨 HTTP chunk 拼接完整事件。
+/// 同一 exchange 持有一个 observer，跨 HTTP chunk 拼接完整事件
 pub struct StreamCapture {
     trace: TraceContext,
     format: StreamFormat,

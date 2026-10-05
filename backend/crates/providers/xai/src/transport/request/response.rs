@@ -1,4 +1,4 @@
-//! Grok Build 输出恢复为 OpenAI Responses wire 所需的状态。
+//! Grok Build 输出恢复为 OpenAI Responses wire 所需的状态
 
 use super::*;
 
@@ -454,7 +454,7 @@ impl GrokResponseTransform {
     }
 
     fn rewrite_response_value(&self, value: &mut Value) -> Result<(), GrokRequestEncodeError> {
-        // 只转换协议中的输出条目，避免把 metadata、schema 或工具业务结果当成调用。
+        // 只转换协议中的输出条目，避免把 metadata、schema 或工具业务结果当成调用
         if let Some(item) = value.get_mut("item").and_then(Value::as_object_mut)
             && string_field(item, "type") == "function_call"
         {
@@ -762,7 +762,7 @@ pub(super) fn custom_tool_stream_payload(
     Value::Object(result)
 }
 
-/// item ID 随工具类型转换，call_id 始终保留原始配对语义。
+/// item ID 随工具类型转换，call_id 始终保留原始配对语义
 pub(super) fn retype_tool_item_id(item: &mut Map<String, Value>, field: &str, kind: &str) {
     let prefix = match kind {
         "function_call" => "fc_",

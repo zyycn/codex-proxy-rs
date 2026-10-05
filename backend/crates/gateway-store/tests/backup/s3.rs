@@ -1,3 +1,5 @@
+//! 验证 S3 上传完整发送超过异步文件默认缓冲区的分块
+
 use std::io;
 
 use chrono::Utc;

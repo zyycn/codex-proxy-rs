@@ -1,4 +1,4 @@
-//! 请求身份冻结、单次 next 与调用代次保活；HTTP 编码在 http 子模块中完成。
+//! 请求身份冻结、单次 next 与调用代次保活；HTTP 编码在 http 子模块中完成
 
 use crate::middleware::headers::{decode_headers, encode_headers};
 
@@ -48,7 +48,7 @@ impl RequestInput {
     }
 }
 
-/// 已鉴权只读查询共用入口；不重新鉴权、计量或创建 Provider attempt。
+/// 已鉴权只读查询共用入口；不重新鉴权、计量或创建 Provider attempt
 pub(crate) async fn query_response<F, Fut>(
     execution: Arc<dyn ExecutionService>,
     client: AuthenticatedClient,
@@ -161,7 +161,7 @@ struct RequestLifetime {
 
 impl Drop for RequestLifetime {
     fn drop(&mut self) {
-        // 包括还在 next 中等待、客户端断开和提前关流；不启动第二份账本终结逻辑。
+        // 包括还在 next 中等待、客户端断开和提前关流；不启动第二份账本终结逻辑
         self.cancellation.cancel();
     }
 }
@@ -200,7 +200,7 @@ impl MiddlewareBody for RequestBody {
     }
 }
 
-/// 终点重新解码插件改写的请求；冻结认证身份不从这些 header 再次取得。
+/// 终点重新解码插件改写的请求；冻结认证身份不从这些 header 再次取得
 pub(crate) fn request_parts(
     request: MiddlewareRequest,
 ) -> Result<(String, HeaderMap, Bytes), MiddlewareError> {

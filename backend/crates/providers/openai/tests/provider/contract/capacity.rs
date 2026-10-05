@@ -1,3 +1,5 @@
+//! 验证 OpenAI 请求等待账号容量与 Guardian 预留槽位
+
 use futures::FutureExt;
 use gateway_core::account::AccountRuntimeSignals;
 use gateway_core::concurrency::ConcurrencyQueuePolicy;
@@ -88,7 +90,7 @@ async fn queued_session_sends_only_after_capacity_recovers_while_a_new_child_can
     ));
     assert!(waiting.as_mut().now_or_never().is_none());
 
-    // 子线程还没有自己的绑定，父账号只是默认偏好，不能被强制挤进父账号队列。
+    // 子线程还没有自己的绑定，父账号只是默认偏好，不能被强制挤进父账号队列
     let mut child = provider
         .execute(
             planned_request("openai", operation("capacity-child")),
@@ -182,7 +184,7 @@ async fn guardian_requests_can_use_the_reserved_slot_that_normal_requests_cannot
         .expect(3)
         .mount(&server)
         .await;
-    // 默认账号上限为 2、预留 1：普通请求只能使用 1 个名额，Guardian 可以用满 2 个。
+    // 默认账号上限为 2、预留 1：普通请求只能使用 1 个名额，Guardian 可以用满 2 个
     let provider = provider_with_affinity_and_base_url_and_leases(
         &store,
         Arc::new(MemorySessionAffinity::default()),
@@ -252,7 +254,7 @@ async fn guardian_requests_can_use_the_reserved_slot_that_normal_requests_cannot
     assert_eq!(limits(&leases), [1, 2]);
     drop(guardian);
 
-    // 同一个 Provider 的新请求读取关闭后的策略，不需要重新初始化选择器。
+    // 同一个 Provider 的新请求读取关闭后的策略，不需要重新初始化选择器
     let mut unreserved = provider
         .execute(
             planned_request("openai", subagent_operation(None)),

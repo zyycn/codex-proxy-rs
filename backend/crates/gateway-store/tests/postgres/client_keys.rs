@@ -1,3 +1,5 @@
+//! 验证 Client Key 持久化的唯一性、原值保留与搜索脱敏
+
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use chrono::{TimeZone as _, Utc};

@@ -1,4 +1,4 @@
-//! Codex Responses SSE 到核心 canonical event 的单一解码边界。
+//! Codex Responses SSE 到核心 canonical event 的单一解码边界
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -30,10 +30,10 @@ use super::usage::{
 
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
 
-/// 单 attempt 的增量 Responses decoder。
+/// 单 attempt 的增量 Responses decoder
 ///
-/// 上游 wire 是客户端可见的事实来源；canonical facts 只用于观测、亲和和计费。
-/// 因而未知或形状变化的 JSON event 只能放弃 canonical 投影，不能截断 wire 流。
+/// 上游 wire 是客户端可见的事实来源；canonical facts 只用于观测、亲和和计费
+/// 因而未知或形状变化的 JSON event 只能放弃 canonical 投影，不能截断 wire 流
 pub struct CodexCanonicalDecoder {
     pricing: Option<gateway_core::metering::ModelPriceOverride>,
     decoder: SseEventDecoder,
@@ -56,13 +56,13 @@ pub struct CodexCanonicalDecoder {
     raw_sse_passthrough: bool,
 }
 
-/// 上游 Responses 事件的两类失败：协议损坏，或上游明确报告业务失败。
+/// 上游 Responses 事件的两类失败：协议损坏，或上游明确报告业务失败
 #[derive(Error)]
 pub enum CodexCanonicalError {
-    /// SSE/JSON 违反了已知协议不变量。
+    /// SSE/JSON 违反了已知协议不变量
     #[error("invalid Codex Responses event")]
     Protocol(#[source] ProviderError),
-    /// 上游在成功建立流后发送了明确的失败事件。
+    /// 上游在成功建立流后发送了明确的失败事件
     #[error("Codex upstream reported a failed response")]
     Upstream(Box<ResponsesSseFailure>),
 }
@@ -82,18 +82,18 @@ impl From<ProviderError> for CodexCanonicalError {
     }
 }
 
-/// 单次增量解码的有序结果。
+/// 单次增量解码的有序结果
 ///
 /// 上游失败不是解析异常：它与失败前已经产生的事件一起返回，Provider 因而可以
-/// 先保留真实输出，再把类型化失败交给 Core 收敛。
+/// 先保留真实输出，再把类型化失败交给 Core 收敛
 pub enum CodexCanonicalOutcome {
-    /// 本批次只包含正常事件。
+    /// 本批次只包含正常事件
     Events(Vec<ProviderEvent>),
-    /// 本批次在若干正常事件后到达失败边界。
+    /// 本批次在若干正常事件后到达失败边界
     Failed(CodexCanonicalFailure),
 }
 
-/// `response.failed` 或协议错误发生时的单一 typed outcome。
+/// `response.failed` 或协议错误发生时的单一 typed outcome
 pub struct CodexCanonicalFailure {
     events: Vec<ProviderEvent>,
     error: CodexCanonicalError,
@@ -112,17 +112,17 @@ impl fmt::Debug for CodexCanonicalFailure {
 }
 
 impl CodexCanonicalFailure {
-    /// 失败前按上游顺序产生的事件。
+    /// 失败前按上游顺序产生的事件
     pub fn events(&self) -> &[ProviderEvent] {
         &self.events
     }
 
-    /// 类型化失败；其 Debug/Display 不包含上游正文。
+    /// 类型化失败；其 Debug/Display 不包含上游正文
     pub const fn error(&self) -> &CodexCanonicalError {
         &self.error
     }
 
-    /// 失败前是否已经出现客户端可消费的真实输出。
+    /// 失败前是否已经出现客户端可消费的真实输出
     pub const fn semantic_output_seen(&self) -> bool {
         self.semantic_output_seen
     }
@@ -142,7 +142,7 @@ impl CodexCanonicalDecoder {
         self
     }
 
-    /// 使用路由后最终发往上游的请求模型计价，并在响应缺少模型时用于 canonical 兜底。
+    /// 使用路由后最终发往上游的请求模型计价，并在响应缺少模型时用于 canonical 兜底
     pub fn new(upstream_model: impl Into<String>) -> Self {
         Self {
             decoder: SseEventDecoder::default(),
@@ -167,23 +167,23 @@ impl CodexCanonicalDecoder {
         }
     }
 
-    /// 让 HTTP SSE 上游帧以原始字节随 wire event 向下游传递。
+    /// 让 HTTP SSE 上游帧以原始字节随 wire event 向下游传递
     ///
-    /// JSON 投影仍只供 canonical facts、计费与亲和旁路读取；不会用于重建 SSE。
+    /// JSON 投影仍只供 canonical facts、计费与亲和旁路读取；不会用于重建 SSE
     #[must_use]
     pub fn with_raw_sse_passthrough(mut self) -> Self {
         self.raw_sse_passthrough = true;
         self
     }
 
-    /// 使用最终发送给上游的请求档位估算费用，不由响应回显覆盖。
+    /// 使用最终发送给上游的请求档位估算费用，不由响应回显覆盖
     #[must_use]
     pub fn with_requested_service_tier(mut self, service_tier: Option<&str>) -> Self {
         self.requested_service_tier = normalize_service_tier(service_tier);
         self
     }
 
-    /// 记录请求工具类型，用于区分标准与预览 Web Search 的按次价格。
+    /// 记录请求工具类型，用于区分标准与预览 Web Search 的按次价格
     #[must_use]
     pub fn with_request_tool_pricing(mut self, model: &str, tools: Option<&[Value]>) -> Self {
         self.web_search_pricing = web_search_pricing(model, tools);
@@ -226,36 +226,36 @@ impl CodexCanonicalDecoder {
         self.decode(events)
     }
 
-    /// 取走最近一次解码中由原始 Responses 事件观察到的计时语义。
+    /// 取走最近一次解码中由原始 Responses 事件观察到的计时语义
     ///
     /// 这份事实独立于 canonical 投影：未知的未来事件仍可保留 wire 透明转发，
-    /// 同时让 Provider 正确记录首个可消费输出的时延。
+    /// 同时让 Provider 正确记录首个可消费输出的时延
     #[must_use]
     pub fn take_timing_signals(&mut self) -> ResponseEventSignals {
         std::mem::take(&mut self.timing_signals)
     }
 
-    /// 返回本 attempt 的上游响应回显档位，仅供诊断，不作为本地计费依据。
+    /// 返回本 attempt 的上游响应回显档位，仅供诊断，不作为本地计费依据
     #[must_use]
     pub fn response_service_tier(&self) -> Option<&str> {
         self.response_service_tier.as_deref()
     }
 
-    /// 真实 HTTP 响应头提供初始报告；流内请求级报告可覆盖它。
+    /// 真实 HTTP 响应头提供初始报告；流内请求级报告可覆盖它
     #[must_use]
     pub fn with_reported_model(mut self, model: Option<&str>) -> Self {
         self.reported_model = model.and_then(observed_model_name).map(str::to_owned);
         self
     }
 
-    /// 接收 transport 已解析的内部 metadata 报告，内部帧无需交付客户端。
+    /// 接收 transport 已解析的内部 metadata 报告，内部帧无需交付客户端
     pub(crate) fn observe_reported_model(&mut self, model: &str) {
         if let Some(model) = observed_model_name(model) {
             self.reported_model = Some(model.to_owned());
         }
     }
 
-    /// 官方服务端报告优先；缺少报告时仅使用正文明确声明，不使用请求兜底值。
+    /// 官方服务端报告优先；缺少报告时仅使用正文明确声明，不使用请求兜底值
     #[must_use]
     pub fn response_model(&self) -> Option<&str> {
         self.reported_model
@@ -323,8 +323,8 @@ impl CodexCanonicalDecoder {
             .as_deref()
             .or_else(|| value.get("type").and_then(Value::as_str));
         if event_type == Some("codex.rate_limits") {
-            // HTTP transport has already projected this control frame into local quota facts.
-            // It must not become client output or start first-output timing.
+            // HTTP 传输已将此控制帧投影为本地额度事实
+            // 此帧不能成为客户端输出，也不能启动首个输出计时
             return Ok(());
         }
         self.observe_response_service_tier(&value);
@@ -342,8 +342,9 @@ impl CodexCanonicalDecoder {
             );
             let mut canonical = Vec::new();
             if !self.started {
-                // 失败首帧可能是唯一携带 response_id 的上游事实。身份投影只做
-                // 最佳努力：缺少 response/id 时仍必须保留原 typed failure。
+                // 失败首帧可能是唯一携带 response_id 的上游事实
+                // 身份投影只做
+                // 最佳努力：缺少 response/id 时仍必须保留原 typed failure
                 let _ = self.start(&value, &mut canonical);
             }
             if let Some(wire) = Self::wire_for_event(event, value, raw_sse_frame) {
@@ -392,10 +393,10 @@ impl CodexCanonicalDecoder {
         self.response_service_tier = Some(service_tier);
     }
 
-    /// 构造下发的 wire event。
+    /// 构造下发的 wire event
     ///
     /// raw 帧存在时原始字节原样透传；解析出的 event/id 只作旁路元数据，不能
-    /// 反过来决定客户端事件是否可交付。
+    /// 反过来决定客户端事件是否可交付
     fn wire_for_event(
         event: SseEvent,
         value: Value,
@@ -487,7 +488,7 @@ impl CodexCanonicalDecoder {
         output: &mut Vec<GatewayEvent>,
     ) -> Result<(), ProviderError> {
         if self.started {
-            // `response.in_progress` 是 created 后的结构事件，不重复发 Started。
+            // `response.in_progress` 是 created 后的结构事件，不重复发 Started
             return Ok(());
         }
         let response = response_object(value).ok_or_else(protocol_error_marker)?;
@@ -905,7 +906,7 @@ impl CodexCanonicalDecoder {
             .filter(|model| !model.is_empty())
             .unwrap_or(&self.upstream_model)
             .to_owned();
-        // 按最终发送的模型与档位估算，响应回显仅作观测，不改变本地计价口径。
+        // 按最终发送的模型与档位估算，响应回显仅作观测，不改变本地计价口径
         let service_tier = self.requested_service_tier.as_deref();
         let tool_calls = billable_tool_calls(response);
         if let Some(breakdown) = usage
@@ -1063,7 +1064,7 @@ fn billable_tool_calls(response: &Value) -> Option<(u64, u64)> {
             {
                 file = file.checked_add(1)?;
             }
-            // 这些输出没有独立的 OpenAI 工具调用费。
+            // 这些输出没有独立的 OpenAI 工具调用费
             "message"
             | "reasoning"
             | "function_call"
@@ -1076,7 +1077,7 @@ fn billable_tool_calls(response: &Value) -> Option<(u64, u64)> {
             | "mcp_approval_request"
             | "compaction" => {}
             // 容器会话、生图及未知工具需要额外计费事实，不能把 token 小计
-            // 当作完整费用。
+            // 当作完整费用
             _ => return None,
         }
     }

@@ -1,3 +1,5 @@
+//! 插件集成测试的专用存储环境、账号与 Client Key 数据准备
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
@@ -646,7 +648,7 @@ impl Environment {
     }
 
     async fn create_with_store_mode(command_line: bool) -> Option<Self> {
-        // 插件专用服务优先；CI 的标准测试服务同样通过随机 schema 隔离数据库。
+        // 插件专用服务优先；CI 的标准测试服务同样通过随机 schema 隔离数据库
         let (database, redis) = if let Ok(database) = std::env::var("CPR_PLUGIN_TEST_DATABASE_URL")
         {
             (
@@ -696,7 +698,7 @@ impl Environment {
         } else {
             gateway_store::initialize(config).await.unwrap()
         };
-        // 迁移可能已创建默认行；该场景只测租约释放，明确关闭相邻请求的间隔限制。
+        // 迁移可能已创建默认行；该场景只测租约释放，明确关闭相邻请求的间隔限制
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!("insert into {schema}.runtime_settings(id, config_revision, request_interval_ms, updated_at) values (1,1,0,now()) on conflict (id) do update set request_interval_ms=0")))
             .execute(&admin).await.unwrap();
         Some(Self {

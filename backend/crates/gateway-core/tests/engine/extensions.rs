@@ -1,3 +1,5 @@
+//! 执行测试共用的扩展代次引用与就绪租约替身
+
 use std::sync::Arc;
 
 use gateway_core::runtime::extensions::{ExtensionSetId, ExtensionSetLease, ExtensionSetReference};

@@ -1,3 +1,5 @@
+//! 验证插件认证的身份映射、回退条件与发布后的权限撤销
+
 use gateway_admin::model::client_keys::SetClientKeyEnabled;
 use gateway_core::{
     engine::{authentication::ClientAuthenticationRequest, execution::ClientAuthenticationError},

@@ -1,3 +1,5 @@
+//! 校验插件实例配置、敏感字段与能力绑定，生成安全的配置错误
+
 use std::collections::BTreeSet;
 
 use gateway_admin::model::{
@@ -106,7 +108,7 @@ fn prepare_configuration(
         return Err(AdminError::invalid("普通配置不能包含声明的敏感字段"));
     }
     let configuration = serde_json::Value::Object(configuration);
-    // 禁用网络与文件解析，配置 schema 只能引用包内同一 JSON 文档。
+    // 禁用网络与文件解析，配置 schema 只能引用包内同一 JSON 文档
     let schema = jsonschema::options()
         .offline()
         .with_pattern_options(jsonschema::PatternOptions::fancy_regex().backtrack_limit(20_000))
@@ -114,7 +116,7 @@ fn prepare_configuration(
         .map_err(|_| AdminError::invalid("插件配置 schema 无效或引用外部资源"))?;
     let mut ready = true;
     for error in schema.iter_errors(&configuration) {
-        // 待配置只代表缺少必填值，不能借停用保存类型错误或非法配置。
+        // 待配置只代表缺少必填值，不能借停用保存类型错误或非法配置
         if matches!(
             error.kind(),
             jsonschema::error::ValidationErrorKind::Required { .. }
@@ -130,7 +132,7 @@ fn prepare_configuration(
 fn configuration_error(error: &jsonschema::ValidationError<'_>) -> AdminError {
     use jsonschema::error::ValidationErrorKind;
 
-    // 校验库的 Display 会包含原值，敏感配置也参与校验，只返回字段路径和静态原因。
+    // 校验库的 Display 会包含原值，敏感配置也参与校验，只返回字段路径和静态原因
     let mut path = error.instance_path().to_string();
     let reason = match error.kind() {
         ValidationErrorKind::AdditionalProperties { unexpected } => {

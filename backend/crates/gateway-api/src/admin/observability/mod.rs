@@ -1,4 +1,4 @@
-//! Dashboard、用量与诊断查询的 wire 映射和固定路由。
+//! Dashboard、用量与诊断查询的 wire 映射和固定路由
 
 use std::collections::BTreeMap;
 

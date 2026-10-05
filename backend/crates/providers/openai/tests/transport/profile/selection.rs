@@ -1,3 +1,5 @@
+//! 验证客户端画像预设、版本模式与请求冻结行为
+
 use gateway_core::account::OpaqueProviderData;
 use provider_openai::transport::profile::selection::{
     CliEntry, ClientKind, ClientPlatform, ClientProfileSelection, VersionMode,
@@ -102,12 +104,50 @@ fn invalid_headers_and_mixed_version_modes_are_rejected() {
         json!({"versionMode":"fixed", "codexVersion":"latest"}),
         json!({"client":"desktop", "versionMode":"fixed", "codexVersion":"0.153.4", "desktopVersion":"1.preview", "desktopBuild":"8109"}),
         json!({"client":"desktop", "versionMode":"fixed", "codexVersion":"0.153.4", "desktopVersion":"26.901.51231", "desktopBuild":"build"}),
+        json!({"versionLag":0}),
+        json!({"versionLag":11}),
+        json!({"versionLag":-1}),
+        json!({"versionLag":1.5}),
+        json!({"versionMode":"fixed", "codexVersion":"0.120.0", "versionLag":1}),
         json!({"extraHeader":"secret"}),
     ] {
         let mut fields = baseline.as_object().unwrap().clone();
         fields.extend(patch.as_object().unwrap().clone());
         assert!(ClientProfileSelection::parse(&OpaqueProviderData::new(fields)).is_err());
     }
+}
+
+#[test]
+fn version_lag_round_trips_and_falls_back_to_the_oldest_observed_release() {
+    let state = CodexWireProfileState::new(super::wire_profile());
+    let baseline = json!({"client":"cli", "platform":"linux", "versionMode":"latest"});
+    let parse = |fields: serde_json::Map<String, serde_json::Value>| {
+        ClientProfileSelection::parse(&OpaqueProviderData::new(fields)).unwrap()
+    };
+    let mut fields = baseline.as_object().unwrap().clone();
+    fields.insert("versionLag".to_owned(), json!(null));
+    assert_eq!(parse(fields).version_lag, None);
+
+    let mut fields = baseline.as_object().unwrap().clone();
+    fields.insert("versionLag".to_owned(), json!(10));
+    let lagged = parse(fields);
+    assert_eq!(lagged.version_lag, Some(10));
+    // 观察历史只有启动种子时，最大档位回退到最旧已核验版本而不是失败。
+    let latest = parse(baseline.as_object().unwrap().clone())
+        .resolve(&state)
+        .unwrap();
+    assert_eq!(
+        lagged.resolve(&state).unwrap().codex_version,
+        latest.codex_version
+    );
+
+    let preview = state
+        .preview_selection(&lagged.document().unwrap())
+        .unwrap();
+    assert_eq!(preview.expose_to_provider()["versionLag"], 10);
+    assert_eq!(preview.expose_to_provider()["versionSource"], "official");
+    let options = state.selection_options().unwrap();
+    assert_eq!(options.expose_to_provider()["maxVersionLag"], 10);
 }
 
 #[test]

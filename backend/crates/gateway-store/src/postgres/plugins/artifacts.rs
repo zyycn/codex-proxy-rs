@@ -1,3 +1,5 @@
+//! 插件制品的 PostgreSQL 存储，以及实例、来源和凭据端口的统一适配
+
 use async_trait::async_trait;
 use gateway_admin::model::audit::MutationAuditOperation;
 use gateway_admin::model::plugins::distribution::{SourceCredential, SourceCredentialInfo};
@@ -233,8 +235,9 @@ impl PluginStore for PgPluginStore {
         .map_err(|_| unavailable())?
         {
             let artifact = decode(&row)?;
-            // 当前允许来源已由 bind 校验。同一包换用已授权的下载入口时保留首次出处，
-            // 但不能借重复安装把自定义包提升为内置包，或反向改写内置包的信任身份。
+            // 当前允许来源已由 bind 校验
+            // 同一包换用已授权的下载入口时保留首次出处，
+            // 但不能借重复安装把自定义包提升为内置包，或反向改写内置包的信任身份
             let same_trust_origin = matches!(&artifact.source, PluginSource::Builtin { .. })
                 == matches!(&source, PluginSource::Builtin { .. });
             if artifact.metadata != metadata || !same_trust_origin {
@@ -349,7 +352,7 @@ impl PluginStore for PgPluginStore {
         let revision = bump_config_revision_in_transaction(&mut transaction)
             .await
             .map_err(|error| admin_store_error("plugin", error))?;
-        // 制品删除会级联移除下载引用，先固定本次涉及的凭据，不能清扫无关的未使用凭据。
+        // 制品删除会级联移除下载引用，先固定本次涉及的凭据，不能清扫无关的未使用凭据
         let credential_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
             "select credential_id from plugin_artifact_credentials where artifact_sha256=$1",
         )

@@ -1,3 +1,5 @@
+//! 验证 Worker 注册、任务组合、禁用原因与监督生命周期
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::pending;
 use std::num::NonZeroU64;
@@ -632,7 +634,7 @@ async fn shutdown_timeout_aborts_uncooperative_task_and_drops_guard() {
 #[tokio::test]
 async fn shutdown_timeout_must_not_rejoin_workers_that_already_exited() {
     // 挂死任务放在 join 顺序最末的 kind（Retention），保证超时触发时
-    // 排在它前面的合作任务句柄都已被 join 过一次。
+    // 排在它前面的合作任务句柄都已被 join 过一次
     let hung = HungTask {
         entered: Arc::new(AtomicBool::new(false)),
         notification: Arc::new(Notify::new()),

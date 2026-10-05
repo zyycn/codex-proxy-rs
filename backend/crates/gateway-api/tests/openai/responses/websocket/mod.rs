@@ -1,3 +1,5 @@
+//! Responses WebSocket 测试入口，以及请求帧与轮次元数据解析测试
+
 mod connection;
 mod forward;
 mod interrupt;
@@ -685,7 +687,7 @@ async fn websocket_response_metadata_should_preserve_ordinary_headers_without_bl
         .and_then(Value::as_object)
         .expect("response metadata headers");
     assert_eq!(headers.get("x-future-header"), Some(&json!("future-value")));
-    // 官方 metadata 是 string map，同名多值只能保持既有的后值覆盖语义。
+    // 官方 metadata 是 string map，同名多值只能保持既有的后值覆盖语义
     assert_eq!(headers.get("x-future-multi"), Some(&json!("second")));
     assert_eq!(headers.get("x-request-id"), Some(&json!("req_upstream")));
     assert_eq!(
@@ -1165,7 +1167,7 @@ async fn websocket_disconnect_during_core_settlement_finishes_charge_before_rele
     assert_eq!(ports.releases.load(Ordering::SeqCst), 0);
 
     // 等到生产连接 guard 释放，保证 forward 的 select 已因断连取消 next_event；
-    // 在此之前不能打开结算屏障，否则只会验证正常完成而错过取消窗口。
+    // 在此之前不能打开结算屏障，否则只会验证正常完成而错过取消窗口
     socket.close(None).await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), lifecycle.closed.notified())
         .await
@@ -1214,7 +1216,7 @@ async fn get_responses_should_route_to_the_websocket_upgrade_boundary() {
         .expect("route WebSocket upgrade request");
 
     // oneshot 请求不携带升级状态;426 证明 GET /v1/responses 进入的是
-    // WebSocketUpgrade 边界而不是普通 HTTP handler。
+    // WebSocketUpgrade 边界而不是普通 HTTP handler
     assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
 }
 
@@ -1227,7 +1229,7 @@ async fn websocket_upgradability_should_be_checked_before_authentication() {
         .expect("route unauthenticated upgrade request");
 
     // 升级能力在 extractor 阶段先于 handler 内的 API Key 认证被校验,
-    // 无效凭据得到的仍是升级失败而不是 401。
+    // 无效凭据得到的仍是升级失败而不是 401
     assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
 }
 

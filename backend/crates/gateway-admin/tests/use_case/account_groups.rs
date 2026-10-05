@@ -1,3 +1,5 @@
+//! 验证账号分组分页查询的运行态补充与可用容量聚合
+
 use std::{
     collections::BTreeMap,
     str::FromStr as _,

@@ -1,4 +1,4 @@
-//! 插件注册只回传规范化的能力声明。
+//! 插件注册只回传规范化的能力声明
 
 use serde::{Deserialize, Serialize};
 

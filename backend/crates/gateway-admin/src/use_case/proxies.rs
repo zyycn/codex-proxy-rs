@@ -1,3 +1,5 @@
+//! 账号出站代理的管理、账号解绑与连通性测试用例
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -59,7 +61,7 @@ pub trait ProxiesService: Send + Sync {
         detect_location: bool,
         context: &MutationContext,
     ) -> Result<ProxyRecord, AdminError>;
-    /// 探测未保存的连接地址，不写入代理记录或修改账号绑定。
+    /// 探测未保存的连接地址，不写入代理记录或修改账号绑定
     async fn probe(
         &self,
         proxy: &OutboundProxy,
@@ -140,7 +142,7 @@ impl ProxiesService for DefaultProxiesService {
             .map_err(|error| map_store_error(error, "proxy"))?;
         page.items = stream::iter(page.items)
             .map(|mut account| async {
-                // 与账号目录一致，缺失套餐时读取已有额度快照；限制并发且不触发上游刷新。
+                // 与账号目录一致，缺失套餐时读取已有额度快照；限制并发且不触发上游刷新
                 let mut cached_quota = None;
                 if explicit_plan_type(account.plan_type.as_deref()).is_none()
                     && let Ok(kind) = ProviderKind::new(account.provider_kind.clone())
@@ -216,7 +218,7 @@ impl ProxiesService for DefaultProxiesService {
             .map(|location| location.map(|value| value.normalized()).transpose())
             .transpose()
             .map_err(|_| AdminError::invalid("代理位置不合法"))?;
-        // 只在开启自动模式或连接地址变化时检测，普通编辑不刷新已识别位置。
+        // 只在开启自动模式或连接地址变化时检测，普通编辑不刷新已识别位置
         command.test = None;
         if command.auto_location.is_some() || command.proxy.is_some() {
             let current = self
@@ -287,7 +289,7 @@ impl ProxiesService for DefaultProxiesService {
         if record.revision != revision {
             return Err(AdminError::conflict("代理已被修改，请刷新后重新测试"));
         }
-        // 手动解析只为本次测试请求位置，不改变自动跟随的持久配置。
+        // 手动解析只为本次测试请求位置，不改变自动跟随的持久配置
         let result = self
             .probe
             .test(&record.proxy, record.auto_location || detect_location)

@@ -1,25 +1,24 @@
 <script setup lang="ts">
-import type { getApiKeys } from '@/api'
+import type { ApiKey } from '@/api'
+
 import { BaseIconButton, BaseMenuItem, BasePopover } from '@codex-proxy/ui'
 
 import { MoreHorizontal, Pencil, Power, RotateCcw, Terminal, Trash2, Upload } from '@lucide/vue'
 
-type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
-
 defineProps<{
-  apiKey: ApiKeyRow
+  apiKey: ApiKey
   deleting: boolean
   updatingStatus: boolean
   revealing: boolean
 }>()
 
 const emit = defineEmits<{
-  use: [apiKey: ApiKeyRow]
-  importCcs: [apiKey: ApiKeyRow]
-  toggle: [apiKey: ApiKeyRow]
-  delete: [apiKey: ApiKeyRow]
-  edit: [apiKey: ApiKeyRow]
-  resetBudget: [apiKey: ApiKeyRow]
+  use: [apiKey: ApiKey]
+  importCcs: [apiKey: ApiKey]
+  toggle: [apiKey: ApiKey]
+  delete: [apiKey: ApiKey]
+  edit: [apiKey: ApiKey]
+  resetBudget: [apiKey: ApiKey]
 }>()
 </script>
 

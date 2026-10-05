@@ -1,4 +1,4 @@
-//! AttemptContext 驱动的 Codex 账号选择与 Redis lease port。
+//! AttemptContext 驱动的 Codex 账号选择与 Redis lease port
 
 use std::collections::HashMap;
 use std::fmt;
@@ -47,30 +47,30 @@ const MAX_ACCOUNT_SNAPSHOT_RETRIES: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexAccountFailure {
-    /// Access token 已被上游明确判定为过期或失效。
+    /// Access token 已被上游明确判定为过期或失效
     CredentialExpired,
-    /// 账号需要完成身份验证后才能继续使用。
+    /// 账号需要完成身份验证后才能继续使用
     IdentityVerificationRequired,
-    /// 账号、workspace 或 organization 已被封禁或停用。
+    /// 账号、workspace 或 organization 已被封禁或停用
     Banned,
-    /// 账号信用额度已耗尽。
+    /// 账号信用额度已耗尽
     QuotaExhausted,
-    /// 当前用量窗口已耗尽；到重置时间后可自动恢复。
+    /// 当前用量窗口已耗尽；到重置时间后可自动恢复
     UsageLimitExhausted {
-        /// 上游返回的窗口绝对重置时刻。
+        /// 上游返回的窗口绝对重置时刻
         reset_at: Option<SystemTime>,
     },
-    /// 账号触发临时用量限制。
+    /// 账号触发临时用量限制
     RateLimited {
-        /// 上游明确返回的最短冷却时长。
+        /// 上游明确返回的最短冷却时长
         retry_after: Option<Duration>,
     },
-    /// Cloudflare challenge 要求账号进入递增冷却。
+    /// Cloudflare challenge 要求账号进入递增冷却
     CloudflareChallenge {
-        /// 上游明确返回的最短冷却时长。
+        /// 上游明确返回的最短冷却时长
         retry_after: Option<Duration>,
     },
-    /// Cloudflare 对当前上游路径返回空 404。
+    /// Cloudflare 对当前上游路径返回空 404
     CloudflarePathBlocked,
 }
 
@@ -98,15 +98,20 @@ pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
     pub request_url: &'a Url,
     pub attempt: &'a AttemptContext,
     pub session_affinity: Option<&'a CodexSessionAffinity>,
+    /// 本端点的上游模型；提供后按账号模型权限过滤候选（如 live 语音）。
+    pub upstream_model: Option<&'a str>,
+    /// 本端点只接受 OAuth 凭据时排除 API Key 账号，避免混合池选中后必然失败。
+    pub requires_oauth: bool,
 }
 
 struct CredentialSelectionInput<'a> {
     requires_websocket: bool,
+    requires_oauth: bool,
     request_url: &'a Url,
     attempt: &'a AttemptContext,
     session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
     session_affinity_observation: Option<&'a CodexSessionAffinity>,
-    /// Codex Guardian 自动审批请求；仅在配置了预留名额时获得预留与队列优先。
+    /// Codex Guardian 自动审批请求；仅在配置了预留名额时获得预留与队列优先
     guardian: bool,
 }
 
@@ -265,7 +270,7 @@ struct AffinityTelemetry {
 
 impl CodexCredentialSelector {
     #[must_use]
-    // 选择器显式持有各能力边界，避免把 Provider 私有服务重新包装成通用容器。
+    // 选择器显式持有各能力边界，避免把 Provider 私有服务重新包装成通用容器
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         provider_kind: ProviderKind,
@@ -297,6 +302,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             requires_websocket: false,
+            requires_oauth: false,
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
@@ -317,6 +323,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             requires_websocket,
+            requires_oauth: false,
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
@@ -331,10 +338,10 @@ impl CodexCredentialSelector {
         .await
     }
 
-    /// 中间件完成请求改写后，用真实 OpenAI 会话事实复验已持有的租约。
+    /// 中间件完成请求改写后，用真实 OpenAI 会话事实复验已持有的租约
     ///
     /// 此处只复用既有亲和与 cyber-policy 端口，不再次选号；冲突必须在发送前失败，
-    /// 避免同一 attempt 持有旧租约时重入账号选择。
+    /// 避免同一 attempt 持有旧租约时重入账号选择
     pub(crate) async fn validate_translated_selection(
         &self,
         lease: &mut CodexCredentialLease,
@@ -367,23 +374,27 @@ impl CodexCredentialSelector {
         Ok(())
     }
 
-    /// 为不属于 Responses 文本模型目录的 Provider 原生端点选择账号。
+    /// 为不属于 Responses 文本模型目录的 Provider 原生端点选择账号
     ///
     /// 账号范围、健康度、配额、并发租约、cookie 与认证准备仍走同一套选择链路；
-    /// 原生端点没有 Responses 模型，不套用管理员配置的文本模型权限。
+    /// 原生端点默认没有 Responses 模型，不套用管理员配置的文本模型权限。
+    /// 端点有明确上游模型（如 live 语音）时通过 `upstream_model` 让账号
+    /// 模型权限参与候选过滤；`requires_oauth` 限定本端点支持的认证类型。
     pub(crate) async fn select_for_provider_endpoint(
         &self,
         request: &SelectCodexProviderEndpointCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             requires_websocket: false,
+            requires_oauth: request.requires_oauth,
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity.map(CodexSessionAffinity::key),
             session_affinity_observation: request.session_affinity,
             guardian: false,
         };
-        self.select_inner(&input, None, None).await
+        self.select_inner(&input, None, request.upstream_model)
+            .await
     }
 
     async fn select_inner(
@@ -393,7 +404,7 @@ impl CodexCredentialSelector {
         upstream_model: Option<&str>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let queue_policy = request.attempt.account_selection_policy().queue_policy();
-        // 预留名额只对普通请求生效；Guardian 可用满全部名额，并在账号队列中排在普通请求之前。
+        // 预留名额只对普通请求生效；Guardian 可用满全部名额，并在账号队列中排在普通请求之前
         let reserve = request
             .attempt
             .account_selection_policy()
@@ -403,7 +414,7 @@ impl CodexCredentialSelector {
         let mut waiting = CapacityWait::new(
             &self.waiting,
             queue_policy,
-            request.attempt.deadline(),
+            request.attempt.deadline().at(),
             request.attempt.concurrency_wait_budget(),
         )
         .with_priority(if prioritized {
@@ -438,7 +449,7 @@ impl CodexCredentialSelector {
             let diagnostic = request.attempt.is_diagnostic_required_account();
             let mut accounts = self.repository.list_for_provider().await?;
             // store 侧常规调度列表不包含停用账号；管理端诊断要对固定账号执行真实上游
-            // 验证，先补回 required 账号，再统一检查认证类型和传输能力。
+            // 验证，先补回 required 账号，再统一检查认证类型和传输能力
             if diagnostic
                 && let Some(required) = request.attempt.required_account()
                 && !accounts.iter().any(|account| account.id() == required)
@@ -461,6 +472,8 @@ impl CodexCredentialSelector {
                                 .attempt
                                 .account_scope()
                                 .is_some_and(|scope| scope.allows(account.id())))
+                        && (!request.requires_oauth
+                            || account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH)
                         && (diagnostic
                             || upstream_model.is_none_or(|upstream_model| {
                                 let allowed =
@@ -489,7 +502,7 @@ impl CodexCredentialSelector {
                             )?;
                             continue 'capacity;
                         }
-                        // 非固定账号的损坏凭据不能阻断其余账号的传输资格检查。
+                        // 非固定账号的损坏凭据不能阻断其余账号的传输资格检查
                         Err(CredentialRepositoryError::InvalidCredentialData)
                             if pinned_account.is_none() =>
                         {
@@ -595,7 +608,7 @@ impl CodexCredentialSelector {
             {
                 affinity.escape(AffinityEscapeReason::PinnedAccount);
             }
-            // 根绑定只提供默认偏好，不能作为子线程 CAS 的旧值，也不能跳过子线程首绑。
+            // 根绑定只提供默认偏好，不能作为子线程 CAS 的旧值，也不能跳过子线程首绑
             let mut observed_affinity_account = if affinity.inherited {
                 None
             } else {
@@ -637,7 +650,7 @@ impl CodexCredentialSelector {
                         && wait_candidates.contains(account_id)
                 });
                 if let Some(preferred) = preferred_wait {
-                    // 原绑定仍合格时只等待它；并发、请求间隔与已有队列均不应造成临时换号。
+                    // 原绑定仍合格时只等待它；并发、请求间隔与已有队列均不应造成临时换号
                     wait_candidates.retain(|account_id| account_id == preferred);
                 }
                 let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
@@ -662,7 +675,7 @@ impl CodexCredentialSelector {
                         return Err(CredentialSelectionError::PolicyUnavailable);
                     }
                 };
-                // 可等待集合使用原始排除集；这里的 Excluded 只可能来自本轮租约争用或队列让位。
+                // 可等待集合使用原始排除集；这里的 Excluded 只可能来自本轮租约争用或队列让位
                 let selection = selection.filter(|selection| {
                     preferred_wait.is_none()
                         || selection.is_policy_choice()
@@ -702,8 +715,8 @@ impl CodexCredentialSelector {
                             })?;
                         continue 'capacity;
                     }
-                    // 只判断本次账号范围；空池、认证失效和租约失败不能伪装成额度耗尽。
-                    // 使用最初的排除集合，避免本轮临时跳过的繁忙账号丢失其可恢复语义。
+                    // 只判断本次账号范围；空池、认证失效和租约失败不能伪装成额度耗尽
+                    // 使用最初的排除集合，避免本轮临时跳过的繁忙账号丢失其可恢复语义
                     let mut statuses = candidates
                         .iter()
                         .filter(|candidate| !base_excluded.contains(candidate.account.id()))
@@ -733,8 +746,8 @@ impl CodexCredentialSelector {
                     .find(|candidate| candidate.account.id() == selected.account.id())
                     .map(|candidate| candidate.account.clone())
                     .ok_or(CredentialSelectionError::InvalidCredential)?;
-                // 额度观测等并发更新会使整个账号快照失效，必须重新选号并校验资格。
-                // 在占用租约和请求间隔前完成校验，避免重读被自己的异步释放挡住。
+                // 额度观测等并发更新会使整个账号快照失效，必须重新选号并校验资格
+                // 在占用租约和请求间隔前完成校验，避免重读被自己的异步释放挡住
                 let runtime = match self.repository.load_runtime_credential(&account).await {
                     Ok(runtime) => runtime,
                     Err(CredentialRepositoryError::RevisionConflict) => {
@@ -743,7 +756,7 @@ impl CodexCredentialSelector {
                     }
                     Err(error) => return Err(error.into()),
                 };
-                // 凭据重读和插件选号都可能挂起，取得租约前再次让位于新队首。
+                // 凭据重读和插件选号都可能挂起，取得租约前再次让位于新队首
                 if !waiting.can_try(account.id()) {
                     excluded.insert(account.id().clone());
                     continue;
@@ -759,7 +772,8 @@ impl CodexCredentialSelector {
                             context.concurrency_limit(&account),
                             policy.request_interval(),
                             request.attempt.deadline(),
-                        ),
+                        )
+                        .with_cancellation(request.attempt.cancellation().clone()),
                     ))
                     .await?
                 {
@@ -780,7 +794,7 @@ impl CodexCredentialSelector {
                             None
                         };
                         // 原生 continuation/required account 比亲和绑定更严格；它可以
-                        // 使用 owner 账号，但不能把已经迁移的会话拉回旧号。
+                        // 使用 owner 账号，但不能把已经迁移的会话拉回旧号
                         if pinned_account.is_none()
                             && let Some(effective_account) = initial_affinity_claim
                             && &effective_account != account.id()
@@ -851,8 +865,8 @@ impl CodexCredentialSelector {
                             && observed_affinity_account.as_ref() == Some(account.id())
                             && let Some(key) = request.session_affinity_key
                         {
-                            // 命中即续期，避免长请求或客户端取消导致活跃会话提前过期。
-                            // CAS 防止并行请求把已经迁移的绑定改回旧账号。
+                            // 命中即续期，避免长请求或客户端取消导致活跃会话提前过期
+                            // CAS 防止并行请求把已经迁移的绑定改回旧账号
                             self.update_session_affinity(key, account.id(), account.id())
                                 .await;
                         }
@@ -1145,7 +1159,7 @@ impl CodexCredentialSelector {
                 )
                 .await
                 .map_err(|_| CredentialSelectionError::Store),
-            // 429：临时限流只写运行时冷却，不改变凭据或额度事实。
+            // 429：临时限流只写运行时冷却，不改变凭据或额度事实
             CodexAccountFailure::RateLimited { retry_after } => {
                 self.quota
                     .apply_rate_limit_429(account, retry_after, now)
@@ -1153,7 +1167,7 @@ impl CodexCredentialSelector {
                     .map_err(|_| CredentialSelectionError::Store)?;
                 Ok(())
             }
-            // Cloudflare 挑战：内存退避表（记录风险计数），不写账号事实。
+            // Cloudflare 挑战：内存退避表（记录风险计数），不写账号事实
             CodexAccountFailure::CloudflareChallenge { retry_after } => {
                 let delay = self.cloudflare_challenge_delay(account.id(), now, retry_after);
                 let recovery = now
@@ -1162,7 +1176,7 @@ impl CodexCredentialSelector {
                 self.apply_cookie_recovery(account, recovery).await?;
                 Ok(())
             }
-            // Cloudflare 路径被封：连续超阈值才置 Invalid；否则内存退避。
+            // Cloudflare 路径被封：连续超阈值才置 Invalid；否则内存退避
             CodexAccountFailure::CloudflarePathBlocked => {
                 let blocked = self.record_cloudflare_path_block(account.id(), now);
                 if blocked >= CLOUDFLARE_PATH_BLOCK_THRESHOLD {
@@ -1557,7 +1571,7 @@ impl CodexCredentialLease {
         self.cyber_policy_scope.as_ref()
     }
 
-    /// 禁用账号的管理端诊断必须只返回真实上游结果，不能回写账号侧状态。
+    /// 禁用账号的管理端诊断必须只返回真实上游结果，不能回写账号侧状态
     #[must_use]
     pub(crate) const fn allows_account_state_mutation(&self) -> bool {
         self.allows_account_state_mutation
@@ -1586,7 +1600,7 @@ impl CodexCredentialLease {
         self.capacity
     }
 
-    /// 成功反馈只能从选择时观察到的绑定迁移，避免迟到请求覆盖较新 winner。
+    /// 成功反馈只能从选择时观察到的绑定迁移，避免迟到请求覆盖较新 winner
     #[must_use]
     pub(crate) const fn affinity_expected_account_id(&self) -> &ProviderAccountId {
         &self.affinity_expected_account_id

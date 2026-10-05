@@ -1,3 +1,5 @@
+//! 验证账号分组 HTTP 接口的请求校验、权限与响应合同
+
 use axum::{
     Router,
     body::{Body, to_bytes},

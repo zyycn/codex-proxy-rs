@@ -1,3 +1,5 @@
+//! 验证路由快照编译的模型别名、版本一致性与请求事实冻结
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

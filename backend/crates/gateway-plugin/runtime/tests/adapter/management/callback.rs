@@ -1,3 +1,5 @@
+//! 验证插件授权回调状态的一次性消费、身份绑定与过期拒绝
+
 use gateway_admin::{
     PluginManagementService,
     model::{

@@ -1,3 +1,5 @@
+//! 插件中间件正文的读取、转换、发送与宿主句柄回收
+
 use std::{collections::VecDeque, num::NonZeroUsize};
 
 use crate::{
@@ -19,7 +21,7 @@ use crate::client::read::PendingRead;
 const MAXIMUM_MAPPED_FRAMES_PER_SOURCE: usize = 64;
 const MAXIMUM_MAPPED_BYTES_PER_SOURCE: usize = 8 * 1024 * 1024;
 
-/// 惰性正文的一次完整 frame。
+/// 惰性正文的一次完整 frame
 pub struct MiddlewareBody {
     source: MiddlewareBodySource,
 }
@@ -48,7 +50,7 @@ impl MiddlewareBody {
         }
     }
 
-    /// 从已编码完整 frame 构造有界插件输出流。
+    /// 从已编码完整 frame 构造有界插件输出流
     #[must_use]
     pub fn from_frames(framing: MiddlewareBodyFraming, frames: Vec<MiddlewareBodyFrame>) -> Self {
         Self {
@@ -64,7 +66,7 @@ impl MiddlewareBody {
         }
     }
 
-    /// 创建插件生产的有界正文流。
+    /// 创建插件生产的有界正文流
     #[must_use]
     pub fn channel(
         framing: MiddlewareBodyFraming,
@@ -88,9 +90,10 @@ impl MiddlewareBody {
         }
     }
 
-    /// 拉取下一完整 frame。调用后该 opaque handle 不能再作为未读直通返回。
-    /// 只读观察并原样交付时使用 [`Self::inspect_frames`]，由 SDK 保留源帧。
-    /// 取消等待后可继续同一次读取，包括尚未完成的事实快照读取。
+    /// 拉取下一完整 frame
+    /// 调用后该 opaque handle 不能再作为未读直通返回
+    /// 只读观察并原样交付时使用 [`Self::inspect_frames`]，由 SDK 保留源帧
+    /// 取消等待后可继续同一次读取，包括尚未完成的事实快照读取
     pub async fn read(&mut self) -> Result<Option<MiddlewareBodyFrame>, PluginFault> {
         let MiddlewareBodySource::Host {
             body,
@@ -116,8 +119,8 @@ impl MiddlewareBody {
         Ok(frame)
     }
 
-    /// 在读取或映射每个源帧时取得完整宿主事实，普通透传不产生额外快照开销。
-    /// 必须在 `map_frames` / `inspect_frames` 前调用。
+    /// 在读取或映射每个源帧时取得完整宿主事实，普通透传不产生额外快照开销
+    /// 必须在 `map_frames` / `inspect_frames` 前调用
     pub fn with_facts(mut self) -> Result<Self, PluginFault> {
         match &mut self.source {
             MiddlewareBodySource::Host { include_facts, .. } => *include_facts = true,
@@ -127,7 +130,8 @@ impl MiddlewareBody {
         Ok(self)
     }
 
-    /// 提前关闭宿主正文句柄。父调用取消或结束也会由 Runtime 兜底回收。
+    /// 提前关闭宿主正文句柄
+    /// 父调用取消或结束也会由 Runtime 兜底回收
     pub async fn close(&mut self) -> Result<(), PluginFault> {
         let MiddlewareBodySource::Host { body, host, .. } = &self.source else {
             self.source = MiddlewareBodySource::Empty;
@@ -153,14 +157,14 @@ impl MiddlewareBody {
         Ok(())
     }
 
-    /// 按下游 Credit 只读观察完整 frame，并原样交付其字节、顺序和源终态。
+    /// 按下游 Credit 只读观察完整 frame，并原样交付其字节、顺序和源终态
     ///
-    /// 不预读或重编码正文；闭包只取得借用，不能改写正在交付的帧。
-    /// 与映射共用取消和背压边界，观察工作应保持有界。
+    /// 不预读或重编码正文；闭包只取得借用，不能改写正在交付的帧
+    /// 与映射共用取消和背压边界，观察工作应保持有界
     ///
     /// # Errors
     ///
-    /// 正文来自插件自建流时返回错误；空正文直接保留。
+    /// 正文来自插件自建流时返回错误；空正文直接保留
     pub fn inspect_frames<F>(self, mut inspect: F) -> Result<Self, PluginFault>
     where
         F: FnMut(&MiddlewareBodyFrame) + Send + 'static,
@@ -171,10 +175,11 @@ impl MiddlewareBody {
         })
     }
 
-    /// 按下游 Credit 惰性拉取并映射完整 frame；闭包可在单次调用内持有状态。
+    /// 按下游 Credit 惰性拉取并映射完整 frame；闭包可在单次调用内持有状态
     ///
-    /// 每个输入可生成零个、一个或多个输出。SDK 不预读或另起后台任务；Runtime
-    /// 继续复核 frame 大小、源终态与输出终态的一致性。
+    /// 每个输入可生成零个、一个或多个输出
+    /// SDK 不预读或另起后台任务；Runtime
+    /// 继续复核 frame 大小、源终态与输出终态的一致性
     pub fn map_frames<F>(self, transform: F) -> Result<Self, PluginFault>
     where
         F: FnMut(MiddlewareBodyFrame) -> Result<Vec<MiddlewareBodyFrame>, PluginFault>
@@ -399,7 +404,7 @@ where
     }
 }
 
-/// 插件输出正文的有界生产端；每个发送项必须是完整 frame。
+/// 插件输出正文的有界生产端；每个发送项必须是完整 frame
 #[derive(Clone)]
 pub struct MiddlewareBodySender {
     sender: StreamSender,

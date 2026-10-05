@@ -1,4 +1,4 @@
-//! BackupService 用例测试：通过 AdminHarness 注入 fake 备份端口构造真实服务。
+//! BackupService 用例测试：通过 AdminHarness 注入 fake 备份端口构造真实服务
 
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ async fn backup_service_creates_downloads_and_deletes_with_audit() {
         .build()
         .await;
 
-    // 创建手动备份 → queued + 审计。
+    // 创建手动备份 → queued + 审计
     let created = services
         .backups()
         .create_backup(&system_context(), None)
@@ -43,7 +43,7 @@ async fn backup_service_creates_downloads_and_deletes_with_audit() {
             .any(|action| action == "backup.created")
     );
 
-    // 下载地址要求 completed 记录。
+    // 下载地址要求 completed 记录
     repository.force_status(&created.id, BackupStatus::Completed);
     let download = services
         .backups()
@@ -57,7 +57,7 @@ async fn backup_service_creates_downloads_and_deletes_with_audit() {
             .any(|action| action == "backup.download_url_created")
     );
 
-    // 删除 → deleting + 审计。
+    // 删除 → deleting + 审计
     let deleting = services
         .backups()
         .delete_backup(&system_context(), &created.id)
@@ -94,7 +94,7 @@ async fn backup_service_rejects_download_of_non_completed_record() {
         .await
         .expect("create backup");
 
-    // queued 记录不能创建下载地址。
+    // queued 记录不能创建下载地址
     let error = services
         .backups()
         .download_url(&system_context(), &created.id)

@@ -1,3 +1,5 @@
+//! 校验官方发行清单与平台制品，并编排插件发行导入
+
 use std::{collections::BTreeSet, path::Path};
 
 use serde::Deserialize;
@@ -74,9 +76,9 @@ struct Platform {
 }
 
 impl PluginsService {
-    /// 从与宿主发行物同信任边界的封口清单导入官方包。
+    /// 从与宿主发行物同信任边界的封口清单导入官方包
     ///
-    /// 所有清单项和包体会先完成静态校验，再进入与上传/远程安装相同的持久化用例。
+    /// 所有清单项和包体会先完成静态校验，再进入与上传/远程安装相同的持久化用例
     pub async fn import_official_release(
         &self,
         files: &dyn OfficialPluginReleaseFiles,
@@ -104,7 +106,7 @@ impl PluginsService {
             .ok_or_else(|| AdminError::invalid("当前平台不支持官方插件发行物"))?;
         let mut validated = Vec::with_capacity(plugins.len());
 
-        // 先完成整份清单的静态检查；持久化故障后的已提交前缀由下次启动幂等补齐。
+        // 先完成整份清单的静态检查；持久化故障后的已提交前缀由下次启动幂等补齐
         for plugin in plugins {
             let artifact = select_artifact(&plugin, platform)?;
             let archive = files
@@ -189,7 +191,7 @@ pub(crate) fn validate_update_release(
 fn parse_host_compatibility(
     mut value: serde_json::Value,
 ) -> Result<PluginHostCompatibility, AdminError> {
-    // 旧更新器要求 v1 与空权限字段，运行兼容性仍由清单、协议和能力版本表达。
+    // 旧更新器要求 v1 与空权限字段，运行兼容性仍由清单、协议和能力版本表达
     if value.get("schema_version") == Some(&serde_json::json!(1))
         && value.get("permissions") == Some(&serde_json::json!([]))
     {

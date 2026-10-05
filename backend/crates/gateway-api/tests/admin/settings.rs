@@ -1,3 +1,5 @@
+//! 验证运行设置接口的输入校验、完整投影与持久化结果
+
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -557,7 +559,7 @@ async fn admin_auth_should_accept_a_configured_request_id_header_name() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     // 部署把 api.request_id_header 改名后，注入的 header 不再叫 x-request-id；
-    // 管理请求仍须拿到请求上下文，而不是退化为 500。
+    // 管理请求仍须拿到请求上下文，而不是退化为 500
     let custom = HeaderName::from_static("x-trace-id");
     let app = app(fixture.state()).layer(SetRequestIdLayer::new(custom, MakeRequestUuid));
     let unlabelled = Request::builder()
@@ -655,7 +657,7 @@ async fn request_location_should_reject_invalid_or_missing_fields_without_replac
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let original = update_body()["requestLocation"].clone();
-    // JSON 结构或时区解析失败由 Axum 返回 422，业务校验失败返回 400。
+    // JSON 结构或时区解析失败由 Axum 返回 422，业务校验失败返回 400
     let mut invalid = vec![
         (Value::Null, StatusCode::UNPROCESSABLE_ENTITY),
         (json!({}), StatusCode::UNPROCESSABLE_ENTITY),
@@ -1033,7 +1035,7 @@ async fn pricing_rejects_invalid_edits_and_tampered_sync_without_writes() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{scenario}");
     }
-    // JSON 合同错误沿用 AdminJson 的 422，业务校验错误为 400。
+    // JSON 合同错误沿用 AdminJson 的 422，业务校验错误为 400
     let response = app
         .clone()
         .oneshot(request(

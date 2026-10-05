@@ -1,4 +1,4 @@
-//! OpenAI 模型目录 HTTP adapter。
+//! OpenAI 模型目录 HTTP adapter
 
 use axum::{
     Json,
@@ -31,7 +31,8 @@ pub(crate) struct ModelsQuery {
     client_version: Option<String>,
 }
 
-/// `GET /v1/models`。Codex 携带 `client_version` 时返回其专用目录合同。
+/// `GET /v1/models`
+/// Codex 携带 `client_version` 时返回其专用目录合同
 pub(crate) async fn models(
     State(state): State<ApiState>,
     Query(query): Query<ModelsQuery>,
@@ -93,7 +94,7 @@ async fn models_response(
                     let mut value: Value =
                         serde_json::from_slice(payload.body()).map_err(|_| ())?;
                     let object = value.as_object_mut().ok_or(())?;
-                    // 别名只改变请求标识，能力、提示词、顺序等仍由上游目录决定。
+                    // 别名只改变请求标识，能力、提示词、顺序等仍由上游目录决定
                     object.insert("slug".to_owned(), Value::String(model.as_str().to_owned()));
                     Ok(value)
                 }
@@ -104,7 +105,7 @@ async fn models_response(
         };
         return (
             StatusCode::OK,
-            // 目录经过账号选择/别名/多 Provider 聚合，不能借用上游 ETag 表示改写后的正文。
+            // 目录经过账号选择/别名/多 Provider 聚合，不能借用上游 ETag 表示改写后的正文
             [("cache-control", "private, no-store")],
             Json(json!({
                 "models": models,
@@ -138,7 +139,7 @@ fn catalog_unavailable_response() -> Response {
     .into_response()
 }
 
-/// `GET /v1/models/{model_id}`。
+/// `GET /v1/models/{model_id}`
 pub(crate) async fn model_detail(
     State(state): State<ApiState>,
     headers: HeaderMap,

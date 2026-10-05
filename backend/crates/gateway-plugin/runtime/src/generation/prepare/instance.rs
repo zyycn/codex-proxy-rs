@@ -1,3 +1,5 @@
+//! 准备单个插件实例的进程、RPC 会话与能力贡献
+
 use super::{
     AdminError, Arc, Duration, Handshake, PluginCallbackPorts, PluginCallbacks, PluginInstance,
     PluginPrivateState, PluginRuntime, PluginStateStoreErrorKind, PreparedContributions,

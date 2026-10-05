@@ -1,4 +1,4 @@
-//! 受限制的 Release 下载、重定向信任链和 SHA-256 校验。
+//! 受限制的 Release 下载、重定向信任链和 SHA-256 校验
 
 use std::fs;
 use std::io::{Read, Write};

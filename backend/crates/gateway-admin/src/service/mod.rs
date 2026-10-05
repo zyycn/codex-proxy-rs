@@ -1,4 +1,4 @@
-//! 主动服务调用的统一组合入口；普通业务方法由所属 HTTP 或执行边界包裹。
+//! 主动服务调用的统一组合入口；普通业务方法由所属 HTTP 或执行边界包裹
 
 mod registry;
 mod settings;
@@ -19,7 +19,7 @@ use crate::model::{AdminError, AdminErrorKind};
 
 pub type PlanSource = Arc<dyn Fn() -> Option<FrozenMiddlewarePlan> + Send + Sync>;
 
-/// 空计划也是快照，只有未解析的外部入口才读取当前发布集合。
+/// 空计划也是快照，只有未解析的外部入口才读取当前发布集合
 #[derive(Clone, Default)]
 pub enum Plan {
     #[default]
@@ -27,7 +27,7 @@ pub enum Plan {
     Frozen(Option<FrozenMiddlewarePlan>),
 }
 
-/// 非服务入口也有父调用身份和取消信号；发布计划在首次进入公开服务时解析。
+/// 非服务入口也有父调用身份和取消信号；发布计划在首次进入公开服务时解析
 #[derive(Clone)]
 pub struct Origin {
     pub request_id: String,
@@ -51,7 +51,7 @@ impl From<Context> for Origin {
 
 tokio::task_local! { static CURRENT: Origin; }
 
-/// task local 随 future poll 进入/退出，不泄漏给并行任务。
+/// task local 随 future poll 进入/退出，不泄漏给并行任务
 pub async fn scope<T>(context: impl Into<Origin>, future: impl Future<Output = T>) -> T {
     CURRENT.scope(context.into(), future).await
 }

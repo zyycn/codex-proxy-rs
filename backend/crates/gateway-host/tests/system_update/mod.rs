@@ -1,3 +1,5 @@
+//! 系统更新测试入口，以及重启准备和操作互斥测试
+
 mod channels;
 mod installation;
 
@@ -234,7 +236,7 @@ async fn restart_should_use_startup_path_after_running_executable_is_renamed() {
     const CHILD_ENV: &str = "CPR_TEST_RESTART_RENAMED_EXECUTABLE_CHILD";
     let executable = std::env::current_exe().expect("test executable");
     if std::env::var_os(CHILD_ENV).is_none() {
-        // 用例只移动目录项，不修改旧程序内容；同盘硬链接避免复制整个调试二进制。
+        // 用例只移动目录项，不修改旧程序内容；同盘硬链接避免复制整个调试二进制
         let directory =
             tempfile::tempdir_in(executable.parent().unwrap()).expect("isolated test directory");
         let child = directory.path().join("restart-test");
@@ -257,7 +259,7 @@ async fn restart_should_use_startup_path_after_running_executable_is_renamed() {
         return;
     }
     if executable.file_name() == Some(std::ffi::OsStr::new("codex-proxy-rs.backup")) {
-        // 误启动旧程序时留下可观察结果并退出，避免旧副本再次发起重启。
+        // 误启动旧程序时留下可观察结果并退出，避免旧副本再次发起重启
         fs::write(
             executable
                 .parent()
@@ -303,7 +305,7 @@ async fn restart_should_use_startup_path_after_running_executable_is_renamed() {
 async fn restart_should_conflict_while_another_system_operation_is_running() {
     let fixture = Fixture::new();
     // 裸 TCP 监听不回包：update 持有操作锁后停在 release 拉取阶段，accept
-    // 信号保证断言时锁一定已被占用。
+    // 信号保证断言时锁一定已被占用
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("release listener");
@@ -1757,7 +1759,7 @@ async fn accepted_update_should_survive_a_lost_http_response() {
                     .await
                     .expect("accepted");
                 accepted.notify_one();
-                // 模拟受理响应丢失，客户端断开会取消此 HTTP handler。
+                // 模拟受理响应丢失，客户端断开会取消此 HTTP handler
                 std::future::pending::<String>().await
             }
         }),
@@ -1851,7 +1853,7 @@ async fn host_shutdown_should_finish_an_accepted_update_and_release_its_lock() {
         cancellation.clone(),
         fixture.config(&format!("{}/repos", upstream.uri())),
     );
-    // 在后台任务第一次 poll 之前触发关闭，覆盖受理后的生命周期交接。
+    // 在后台任务第一次 poll 之前触发关闭，覆盖受理后的生命周期交接
     service
         .perform_test_update(Some(TARGET_VERSION.to_owned()))
         .await

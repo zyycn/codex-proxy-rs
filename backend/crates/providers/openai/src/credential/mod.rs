@@ -1,4 +1,4 @@
-//! Codex credential 领域导出。
+//! Codex credential 领域导出
 
 mod admin;
 mod affinity;
@@ -51,8 +51,9 @@ pub use profile_statistics::{
 };
 pub use quota::{
     CodexAccountQuotaSnapshot, CodexCredentialQuotaError, CodexCredentialQuotaService,
-    CodexQuotaFact, CodexQuotaRefreshPolicy, CodexQuotaSyncSummary, CodexQuotaWindow,
-    CodexQuotaWindowKind, CodexQuotaWindowRole, CodexResetCreditsError, parse_codex_quota_usage,
+    CodexInitialSyncDelays, CodexQuotaFact, CodexQuotaRefreshPolicy, CodexQuotaSyncSummary,
+    CodexQuotaWindow, CodexQuotaWindowKind, CodexQuotaWindowRole, CodexResetCreditsError,
+    parse_codex_quota_usage,
 };
 pub use refresh::{
     CodexCredentialRefreshError, CodexCredentialRefreshOutcome, CodexCredentialRefreshService,

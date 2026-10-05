@@ -1,3 +1,5 @@
+//! 验证顶层配置加载、路径解析、显式覆盖与敏感字段脱敏
+
 use std::{fs, process::Command};
 
 use codex_proxy_rs::bootstrap::GatewayConfig;
@@ -27,7 +29,7 @@ fn config_loader_should_resolve_paths_relative_to_config_file() {
 fn config_loader_should_share_resolved_assets_with_system_update() {
     const CHILD_ENV: &str = "CPR_TEST_UPDATE_ASSETS_CHILD";
     let Ok(case) = std::env::var(CHILD_ENV) else {
-        // 使用子进程覆盖无环境变量、Docker 路径和相对路径，避免污染并行测试。
+        // 使用子进程覆盖无环境变量、Docker 路径和相对路径，避免污染并行测试
         for (case, web_dist) in [
             ("binary", None),
             ("docker", Some("/app/web/dist")),
@@ -379,7 +381,7 @@ fn valid_config() -> String {
 }
 
 fn valid_config_document() -> serde_json::Value {
-    // 按字段修改样例，避免注释或排版变化让测试输入悄悄失效；JSON 仍可由 YAML 文件入口加载。
+    // 按字段修改样例，避免注释或排版变化让测试输入悄悄失效；JSON 仍可由 YAML 文件入口加载
     config::Config::builder()
         .add_source(config::File::from_str(
             &valid_config(),

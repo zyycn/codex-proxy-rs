@@ -1,3 +1,5 @@
+//! API 测试共用的应用组装、认证请求与服务替身
+
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{Arc, atomic::Ordering},

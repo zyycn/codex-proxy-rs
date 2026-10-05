@@ -1,4 +1,4 @@
-//! 多边界插件只注册一次处理器，按类型选择当前调用视图。
+//! 多边界插件只注册一次处理器，按类型选择当前调用视图
 use super::super::session::{CallReply, PluginCall};
 use super::{
     HttpCall, HttpResponse, MiddlewareInput, MiddlewareOutput, MiddlewareResponse, RequestCall,
@@ -28,7 +28,7 @@ impl MiddlewareCall {
             Self::Request(call) => &call.context,
         }
     }
-    /// 原样进入下游，供当前处理器不感兴趣的调用复用。
+    /// 原样进入下游，供当前处理器不感兴趣的调用复用
     pub async fn forward(self) -> Result<MiddlewareResult, PluginFault> {
         match self {
             Self::Service(call) => call.forward().await.map(MiddlewareResult::Service),

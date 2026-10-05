@@ -1,3 +1,5 @@
+//! 插件 HTTP 中间件的类型化请求、响应、正文流与后续调用接口
+
 use std::{collections::VecDeque, future::Future, pin::Pin};
 
 use super::super::session::{
@@ -14,7 +16,7 @@ use crate::{
     client::{HostReply, read::PendingRead},
 };
 
-/// HTTP 数据帧与 trailers 分开表达；结束由流完成表示，不插入协议正文。
+/// HTTP 数据帧与 trailers 分开表达；结束由流完成表示，不插入协议正文
 pub enum HttpFrame {
     Data(Vec<u8>),
     Trailers(Vec<MiddlewareHeader>),
@@ -38,7 +40,7 @@ impl HttpFrame {
     }
 }
 
-/// HTTP 正文惰性读取；透传直接返还句柄，完整收集由插件自行决定。
+/// HTTP 正文惰性读取；透传直接返还句柄，完整收集由插件自行决定
 pub struct HttpBody(Source);
 
 type Producer = Pin<Box<dyn Future<Output = Result<(), PluginFault>> + Send>>;
@@ -158,7 +160,7 @@ impl HttpBody {
             Some(headers) if reply.payload.is_empty() => Ok(Some(HttpFrame::Trailers(headers))),
             Some(_) => Err(invalid_input()),
             None => {
-                // 读取可能早于初始 Credit 发出；返回路径仍须遵守实际窗口，并为帧标记留一字节。
+                // 读取可能早于初始 Credit 发出；返回路径仍须遵守实际窗口，并为帧标记留一字节
                 let maximum = host.maximum_stream_chunk_bytes().saturating_sub(1);
                 if maximum == 0 {
                     return Err(invalid_input());
@@ -196,7 +198,8 @@ impl HttpBody {
         Ok(())
     }
 
-    /// 按输出背压逐帧转换；None 丢弃一帧。需要展开时可使用自定义 ResponseStream。
+    /// 按输出背压逐帧转换；None 丢弃一帧
+    /// 需要展开时可使用自定义 ResponseStream
     pub fn map_frames<F>(self, transform: F) -> Self
     where
         F: FnMut(HttpFrame) -> Result<Option<HttpFrame>, PluginFault> + Send + 'static,
@@ -328,7 +331,7 @@ async fn write_body(
         .await
     {
         Ok(reply) if reply.result == serde_json::json!({}) && reply.payload.is_empty() => Ok(true),
-        // 下游允许在读取完整请求前返回，例如拒绝认证或直接响应。
+        // 下游允许在读取完整请求前返回，例如拒绝认证或直接响应
         Err(SessionError::Remote(fault)) if fault.code == crate::ErrorCode::Conflict => Ok(false),
         Err(error) => Err(error.into_plugin_fault()),
         _ => Err(invalid_input()),
@@ -379,7 +382,7 @@ impl HttpNext {
 }
 
 impl HostClient {
-    /// 主动调用宿主相对路径，经过完整 HTTP 洋葱链并继承父调用的取消与防递归上下文。
+    /// 主动调用宿主相对路径，经过完整 HTTP 洋葱链并继承父调用的取消与防递归上下文
     pub async fn dispatch_http(&self, request: HttpRequest) -> Result<HttpResponse, PluginFault> {
         send_request(self, wire::DISPATCH_METHOD, request).await
     }
@@ -517,7 +520,7 @@ impl PullResponseStream for SessionTask {
 }
 
 impl HttpCall {
-    /// 在当前 HTTP 返回路径选择握手；处理函数随真实连接运行，完成或失败时回收连接。
+    /// 在当前 HTTP 返回路径选择握手；处理函数随真实连接运行，完成或失败时回收连接
     pub async fn upgrade<F, Fut>(
         self,
         protocols: Vec<String>,

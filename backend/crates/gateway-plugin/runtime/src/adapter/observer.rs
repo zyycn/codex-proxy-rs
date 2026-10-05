@@ -1,3 +1,5 @@
+//! 编译插件观察订阅，投影请求事实并调度有界事件通知
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},

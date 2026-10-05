@@ -1,3 +1,5 @@
+//! Provider 账号存储测试入口，以及凭据与额度端口测试
+
 use std::{
     collections::BTreeMap,
     num::NonZeroU32,
@@ -491,7 +493,7 @@ async fn quota_plan_changes_survive_inflight_background_and_manual_token_refresh
     assert_eq!(upgraded.revision(), original.revision());
     assert_eq!(current_revision(&database.pool).await, config_revision);
 
-    // 刷新在额度更新前已准备好旧资料，CAS 提交仍须保留数据库中的新套餐。
+    // 刷新在额度更新前已准备好旧资料，CAS 提交仍须保留数据库中的新套餐
     let refresh = CredentialCasUpdate::new(
         id.clone(),
         original.revision(),
@@ -2821,7 +2823,7 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
         })
         .await
         .expect("import exhausted account");
-    // 模拟应用与数据库的微小时钟偏差，轮换不能把更新时间倒退到已有额度观测之前。
+    // 模拟应用与数据库的微小时钟偏差，轮换不能把更新时间倒退到已有额度观测之前
     let observed_at = SystemTime::now() + Duration::from_secs(3);
     repository
         .apply_quota_access(QuotaAccessChange {
@@ -2988,7 +2990,7 @@ async fn core_refresh_cas_updates_credentials_after_scheduling_is_disabled() {
     .unwrap()
     .preserving_profile()
     .with_account_state(CredentialState::Ready, SystemTime::now(), None, None);
-    // 模拟刷新在途时停用调度；提交新凭据不能重新启用账号，也不能丢弃刷新结果。
+    // 模拟刷新在途时停用调度；提交新凭据不能重新启用账号，也不能丢弃刷新结果
     repository.set_enabled(&account_id, false).await.unwrap();
     assert!(matches!(
         repository
@@ -3604,7 +3606,7 @@ async fn adaptive_concurrency_handles_unlimited_and_latest_locked_settings_witho
                 .await
                 .expect("atomic adaptation")
         });
-        // 管理员持有设置锁时提交新的账号事实，worker 必须依据提交后的值判断。
+        // 管理员持有设置锁时提交新的账号事实，worker 必须依据提交后的值判断
         sqlx::query("update provider_accounts set enabled = $2, concurrency_limit = $3, weight = 7, notes = 'administrator edit' where id = $1")
             .bind(id.as_str()).bind(enabled).bind(account_limit).execute(&mut *admin).await.expect("concurrent admin edit");
         admin.commit().await.expect("commit admin edit");

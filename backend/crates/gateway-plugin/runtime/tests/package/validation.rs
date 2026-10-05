@@ -1,3 +1,5 @@
+//! 验证插件归档摘要、资源清单、解压限制与图标绑定
+
 use std::collections::BTreeMap;
 
 use gateway_admin::{

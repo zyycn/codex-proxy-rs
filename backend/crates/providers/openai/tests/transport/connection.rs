@@ -1,4 +1,4 @@
-//! 在独立测试进程中验证共享建连准入，避免其他网络测试占用全局名额。
+//! 在独立测试进程中验证共享建连准入，避免其他网络测试占用全局名额
 
 use super::*;
 use gateway_core::account::OutboundProxy;
@@ -40,7 +40,7 @@ async fn cold_connection_admission_bounds_queue_and_releases_cancelled_work() {
                 .0,
         );
     }
-    // 128 条 CONNECT 握手保持挂起；1024 个等待者之外的一次请求应立即拒绝。
+    // 128 条 CONNECT 握手保持挂起；1024 个等待者之外的一次请求应立即拒绝
     for _ in 0..1025 {
         tasks.push(spawn(client.clone(), completed.clone()));
     }
@@ -121,7 +121,7 @@ async fn cold_connection_admission_bounds_queue_and_releases_cancelled_work() {
     for task in tasks {
         let _ = task.await;
     }
-    // 同时取消活动与排队请求后，新请求仍能取得名额。
+    // 同时取消活动与排队请求后，新请求仍能取得名额
     let fresh = spawn(client, completed);
     let _socket = timeout(Duration::from_secs(3), listener.accept())
         .await

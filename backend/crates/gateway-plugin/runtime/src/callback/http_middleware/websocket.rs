@@ -1,4 +1,4 @@
-//! 握手消费当前 HTTP 续体；收发继续使用同一调用的受管消息资源。
+//! 握手消费当前 HTTP 续体；收发继续使用同一调用的受管消息资源
 
 use super::*;
 use crate::callback::websocket_middleware::Invocation as Messages;

@@ -1,3 +1,5 @@
+//! 验证设置服务调用、Provider 参数校验与价格管理行为
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
@@ -58,7 +60,7 @@ async fn explicit_service_calls_freeze_empty_plan_and_cancel_before_entering_ter
             )
             .await
             .unwrap();
-        // 内部 pricing 不再单独进入插件链；显式调用只解析一次发布集合。
+        // 内部 pricing 不再单独进入插件链；显式调用只解析一次发布集合
         assert_eq!(resolutions.load(Ordering::SeqCst), expected);
     }
     store.updated.lock().unwrap().take();

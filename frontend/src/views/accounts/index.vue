@@ -3,22 +3,22 @@ import { BaseCard, BaseCheckbox, BaseConfirmModal, BasePageHeader, BaseTable, Ba
 
 import { ChevronDown } from '@lucide/vue'
 import { ref } from 'vue'
+import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
+import AccountCreateModal from './components/account-create-modal/index.vue'
+import AccountImportTasks from './components/account-import-tasks/index.vue'
+import AccountQuotaPanel from './components/account-quota-panel/index.vue'
+import AccountQuotaSummaryCell from './components/account-quota-summary-cell/index.vue'
+import AccountStatusBadge from './components/account-status-badge/index.vue'
 import AccountBatchEditModal from './components/AccountBatchEditModal.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
-import AccountCreateModal from './components/AccountCreateModal/index.vue'
 import AccountEditModal from './components/AccountEditModal.vue'
 import AccountFilters from './components/AccountFilters.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
-import AccountImportTasks from './components/AccountImportTasks/index.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
-import AccountPlanBadge from './components/AccountPlanBadge.vue'
-import AccountQuotaPanel from './components/AccountQuotaPanel/index.vue'
-import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell/index.vue'
-import AccountStatusBadge from './components/AccountStatusBadge/index.vue'
 import AccountTableActions from './components/AccountTableActions.vue'
 import AccountUsagePanel from './components/AccountUsagePanel.vue'
 import { useAccountBatchEditor } from './composables/useAccountBatchEditor'
@@ -28,7 +28,7 @@ import { useAccountImportTasks } from './composables/useAccountImportTasks'
 import { useAccountMutations } from './composables/useAccountMutations'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
-import { accountColumns, derivedAccountStatus } from './constants'
+import { accountColumns } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
 const { visibleColumns, columnOptions, setColumnVisible, setColumnOrder, resetColumns } = useTableColumns(accountColumns, 'accounts')
@@ -294,7 +294,7 @@ const {
 
             <template #status="{ row }">
               <AccountStatusBadge
-                :status="derivedAccountStatus(row)"
+                :status="row.status"
                 :error-reason="row.errorReason"
                 :error-message="row.errorMessage"
                 :rate-limit-recovery-display="row.quota.rateLimitRecoveryDisplay"

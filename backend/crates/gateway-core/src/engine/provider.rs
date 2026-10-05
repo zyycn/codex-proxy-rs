@@ -1,4 +1,4 @@
-//! 原生 Provider 的执行边界。
+//! 原生 Provider 的执行边界
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
@@ -35,11 +35,11 @@ use crate::routing::{
 use crate::upstream::OpaqueUpstreamValue;
 use crate::upstream::{UpstreamSendState, UpstreamTransport};
 
-/// Box 只出现在 Provider Registry 的统一 event envelope 边界。
+/// Box 只出现在 Provider Registry 的统一 event envelope 边界
 pub type EventStream =
     Pin<Box<dyn Stream<Item = Result<ProviderEvent, ProviderError>> + Send + 'static>>;
 
-/// Provider 选定单个 credential 后返回的事实。
+/// Provider 选定单个 credential 后返回的事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCallMetadata {
     provider: ProviderKind,
@@ -50,7 +50,7 @@ pub struct ProviderCallMetadata {
     selection_observation: Option<ProviderSelectionObservation>,
 }
 
-/// Provider 账号选择阶段输出的中立运行压力事实。
+/// Provider 账号选择阶段输出的中立运行压力事实
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderSelectionObservation {
     account_selection_wait_ms: u64,
@@ -81,7 +81,7 @@ impl ProviderSelectionObservation {
 }
 
 impl ProviderCallMetadata {
-    /// 创建一次调用的不可变事实。
+    /// 创建一次调用的不可变事实
     #[must_use]
     pub const fn new(
         provider: ProviderKind,
@@ -99,7 +99,7 @@ impl ProviderCallMetadata {
         }
     }
 
-    /// 创建一次不声明模型的 Provider 原生端点调用事实。
+    /// 创建一次不声明模型的 Provider 原生端点调用事实
     #[must_use]
     pub const fn for_provider_endpoint(
         provider: ProviderKind,
@@ -116,14 +116,14 @@ impl ProviderCallMetadata {
         }
     }
 
-    /// 设置 adapter 已分类为非 bearer 的 request ID。
+    /// 设置 adapter 已分类为非 bearer 的 request ID
     #[must_use]
     pub fn with_upstream_request_id(mut self, request_id: OpaqueUpstreamValue) -> Self {
         self.upstream_request_id = Some(request_id);
         self
     }
 
-    /// 附加 Provider 选择账号时测得的等待与容量快照。
+    /// 附加 Provider 选择账号时测得的等待与容量快照
     #[must_use]
     pub const fn with_selection_observation(
         mut self,
@@ -133,31 +133,31 @@ impl ProviderCallMetadata {
         self
     }
 
-    /// 返回 Provider。
+    /// 返回 Provider
     #[must_use]
     pub const fn provider(&self) -> &ProviderKind {
         &self.provider
     }
 
-    /// 返回实际模型；Provider 原生端点没有模型事实。
+    /// 返回实际模型；Provider 原生端点没有模型事实
     #[must_use]
     pub const fn upstream_model(&self) -> Option<&UpstreamModelId> {
         self.upstream_model.as_ref()
     }
 
-    /// 返回 live Provider account ID。
+    /// 返回 live Provider account ID
     #[must_use]
     pub const fn provider_account_id(&self) -> &ProviderAccountId {
         &self.provider_account_id
     }
 
-    /// 返回安全上游 request ID。
+    /// 返回安全上游 request ID
     #[must_use]
     pub const fn upstream_request_id(&self) -> Option<&OpaqueUpstreamValue> {
         self.upstream_request_id.as_ref()
     }
 
-    /// 返回 transport。
+    /// 返回 transport
     #[must_use]
     pub const fn transport(&self) -> &UpstreamTransport {
         &self.transport
@@ -168,7 +168,7 @@ impl ProviderCallMetadata {
         self.selection_observation
     }
 
-    /// 确认 metadata 没有替换请求计划中冻结的 Provider 候选。
+    /// 确认 metadata 没有替换请求计划中冻结的 Provider 候选
     #[must_use]
     pub fn confirms(&self, candidate: &ProviderCandidate) -> bool {
         candidate.provider() == &self.provider
@@ -176,30 +176,32 @@ impl ProviderCallMetadata {
     }
 }
 
-/// Provider 自己持有的 credential/concurrency 租约。
+/// Provider 自己持有的 credential/concurrency 租约
 ///
-/// 句柄必须通过 `Drop` 释放资源。Core 不读取 credential，也不为 lease 定义
-/// 平台无关字段。
+/// 句柄必须通过 `Drop` 释放资源
+/// Core 不读取 credential，也不为 lease 定义
+/// 平台无关字段
 pub trait ResourceLease: Send + Sync + 'static {}
 
 impl<T> ResourceLease for T where T: Send + Sync + 'static {}
 
-/// Provider 原生响应格式到统一响应格式的有状态转换边界。
+/// Provider 原生响应格式到统一响应格式的有状态转换边界
 ///
-/// Core 只负责调用顺序、格式与终态约束，不解释协议正文。实现必须由一次
-/// [`ProviderStream`] 独占，不能在并发请求间共享可变转换状态。
+/// Core 只负责调用顺序、格式与终态约束，不解释协议正文
+/// 实现必须由一次
+/// [`ProviderStream`] 独占，不能在并发请求间共享可变转换状态
 pub trait NativeResponseTranslator: Send + 'static {
-    /// 转换前协议格式。
+    /// 转换前协议格式
     fn source_protocol(&self) -> &str;
 
-    /// 转换后协议格式。
+    /// 转换后协议格式
     fn target_protocol(&self) -> &str;
 
-    /// 把一个原生响应事件转换为零至多个统一响应事件。
+    /// 把一个原生响应事件转换为零至多个统一响应事件
     ///
     /// # Errors
     ///
-    /// 原生协议事件无效或转换状态不一致时返回已发送的 Provider 错误。
+    /// 原生协议事件无效或转换状态不一致时返回已发送的 Provider 错误
     fn translate(
         &mut self,
         event: &crate::event::ProtocolWireEvent,
@@ -208,10 +210,11 @@ pub trait NativeResponseTranslator: Send + 'static {
 
 const MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT: usize = 64;
 
-/// Metadata、canonical event stream 与 owned lease 的统一返回值。
+/// Metadata、canonical event stream 与 owned lease 的统一返回值
 ///
 /// 底层 stream 必须是 cold stream：在第一次 poll 前不得发送请求级 handshake
-/// 或业务 payload。这样 Coordinator 可以先持久化 attempt，再越过发送屏障。
+/// 或业务 payload
+/// 这样 Coordinator 可以先持久化 attempt，再越过发送屏障
 pub struct ProviderStream {
     metadata: ProviderCallMetadata,
     events: EventStream,
@@ -279,7 +282,7 @@ impl ProviderStreamAccountFeedback {
     fn report_failure(&mut self, error: &ProviderError) {
         if self.reported
             // `Ambiguous` 仍须关闭重放边界，但不能证明失败由账号造成；将它计入
-            // 账号评分会把传输不确定性错误归因给账号。
+            // 账号评分会把传输不确定性错误归因给账号
             || error.send_state() != UpstreamSendState::Sent
             || matches!(
                 error.kind(),
@@ -313,7 +316,7 @@ impl ProviderStreamAccountFeedback {
 }
 
 impl ProviderStream {
-    /// 组装一次、且仅一次可见上游调用。
+    /// 组装一次、且仅一次可见上游调用
     #[must_use]
     pub fn new<S>(metadata: ProviderCallMetadata, events: S, lease: impl ResourceLease) -> Self
     where
@@ -331,14 +334,14 @@ impl ProviderStream {
         }
     }
 
-    /// 让公共 stream 边界统一回灌账号成功率与首个有效输出延迟。
+    /// 让公共 stream 边界统一回灌账号成功率与首个有效输出延迟
     #[must_use]
     pub fn with_account_feedback(mut self, stats: Arc<AccountFeedbackStats>) -> Self {
         self.set_account_feedback(stats, score_all_confirmed_failures);
         self
     }
 
-    /// 使用 Provider 定义的闭集判断回灌账号成功率与首个有效输出延迟。
+    /// 使用 Provider 定义的闭集判断回灌账号成功率与首个有效输出延迟
     #[must_use]
     pub fn with_filtered_account_feedback(
         mut self,
@@ -349,7 +352,7 @@ impl ProviderStream {
         self
     }
 
-    /// 在原生响应加工的两个策略阶段之间安装 Provider 自有转换器。
+    /// 在原生响应加工的两个策略阶段之间安装 Provider 自有转换器
     #[must_use]
     pub fn with_native_response_translator(
         mut self,
@@ -359,12 +362,12 @@ impl ProviderStream {
         self
     }
 
-    /// 在 Core 已记录原始事实且完成 `BeforeTranslation` 后执行原生转换。
+    /// 在 Core 已记录原始事实且完成 `BeforeTranslation` 后执行原生转换
     ///
     /// # Errors
     ///
     /// source/target 格式不一致、单事件展开越界、终态被丢弃或 Provider 转换失败时
-    /// 返回错误。
+    /// 返回错误
     pub fn translate_native_response(
         &mut self,
         mut event: ProviderEvent,
@@ -391,8 +394,9 @@ impl ProviderStream {
         }
         let Some(last) = translated.pop() else {
             // wire 转换器可以吞掉纯协议结构事件，但不能连带丢失 Core 已经
-            // 识别出的 usage 等 canonical facts。facts-only 封套仍需交给
-            // 客户端 adapter；没有 facts 时才是真正的零输出。
+            // 识别出的 usage 等 canonical facts
+            // facts-only 封套仍需交给
+            // 客户端 adapter；没有 facts 时才是真正的零输出
             event.replace_wire(None);
             return Ok(event
                 .has_canonical_facts()
@@ -401,7 +405,7 @@ impl ProviderStream {
                 .collect());
         };
         // 一对多时把 canonical/observation/session 信封放到最后一个 wire；这样
-        // `Completed` 不会在同一源事件的前置输出交付前提前终结 Coordinator。
+        // `Completed` 不会在同一源事件的前置输出交付前提前终结 Coordinator
         let mut events = translated
             .into_iter()
             .map(|wire| {
@@ -433,7 +437,7 @@ impl ProviderStream {
         });
     }
 
-    /// 返回调用事实。
+    /// 返回调用事实
     #[must_use]
     pub const fn metadata(&self) -> &ProviderCallMetadata {
         &self.metadata
@@ -447,7 +451,7 @@ impl ProviderStream {
     }
 }
 
-/// Attempt 中间件消费一次后建立 cold Provider stream 的 owned terminal。
+/// Attempt 中间件消费一次后建立 cold Provider stream 的 owned terminal
 pub type ProviderMiddlewareTerminal = Box<
     dyn FnOnce(
             Operation,
@@ -634,7 +638,7 @@ fn encode_sse_wire_event(wire: &ProtocolWireEvent) -> Result<Bytes, ProviderErro
     Ok(Bytes::from(encoded))
 }
 
-/// 执行每次 retry 都重新建立的 attempt 中间件链。
+/// 执行每次 retry 都重新建立的 attempt 中间件链
 pub async fn execute_attempt_middleware(
     plan: Option<&crate::engine::middleware::FrozenMiddlewarePlan>,
     context: MiddlewareContext,
@@ -685,8 +689,8 @@ fn middleware_frame_to_provider_event(
 ) -> Result<ProviderEvent, ProviderError> {
     let transformed = frame.transformed();
     let (bytes, framing, _, mut envelope) = frame.into_provider_parts();
-    // 透传不能把已解析的事件降格成 raw bytes，否则 Responses 会丢失终态和 WS 帧。
-    // 同时核对正文，避免进程内中间件漏标 transformed 时忽略了实际改写。
+    // 透传不能把已解析的事件降格成 raw bytes，否则 Responses 会丢失终态和 WS 帧
+    // 同时核对正文，避免进程内中间件漏标 transformed 时忽略了实际改写
     if let Some(event) = envelope.as_ref()
         && let Some(wire) = event
             .wire_event()
@@ -805,7 +809,7 @@ impl Stream for ProviderStream {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(Ok(event))) => {
                 // 纯 wire 流的 facts 仍只是旁路观测；一旦交付 canonical-only
-                // 事件，就必须校验完整事实序列，不能漏掉带 wire 的开始或终态。
+                // 事件，就必须校验完整事实序列，不能漏掉带 wire 的开始或终态
                 this.strict_canonical_seen |=
                     event.wire_event().is_none() && !event.canonical_facts().is_empty();
                 for fact in event.canonical_facts() {
@@ -869,19 +873,19 @@ impl Stream for ProviderStream {
     }
 }
 
-/// 传给 Provider 的单候选请求。
+/// 传给 Provider 的单候选请求
 #[derive(Clone)]
 pub struct ProviderRequest {
     operation: Operation,
     candidate: ProviderCandidate,
 }
 
-/// Provider 对公共观测表可解释的请求语义；未知字段保持空值。
+/// Provider 对公共观测表可解释的请求语义；未知字段保持空值
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderRequestObservation {
-    /// 独立 Provider 端点声明的请求模型，仅用于观测，不参与文本模型目录路由。
+    /// 独立 Provider 端点声明的请求模型，仅用于观测，不参与文本模型目录路由
     pub requested_model: Option<PublicModelId>,
-    /// 客户端原始请求中的推理强度。
+    /// 客户端原始请求中的推理强度
     pub reasoning_effort: Option<String>,
     pub reasoning_preset: Option<String>,
     pub request_kind: Option<String>,
@@ -890,7 +894,7 @@ pub struct ProviderRequestObservation {
     pub continuation: ContinuationRequestObservation,
 }
 
-/// 仅用于恢复事件关联的客户端作用域不透明请求事实。
+/// 仅用于恢复事件关联的客户端作用域不透明请求事实
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContinuationRequestObservation {
     pub affinity_hash: Option<String>,
@@ -899,7 +903,7 @@ pub struct ContinuationRequestObservation {
 }
 
 impl ProviderRequest {
-    /// 绑定 operation 与请求计划中冻结的 Provider 候选。
+    /// 绑定 operation 与请求计划中冻结的 Provider 候选
     #[must_use]
     pub const fn new(operation: Operation, candidate: ProviderCandidate) -> Self {
         Self {
@@ -908,13 +912,13 @@ impl ProviderRequest {
         }
     }
 
-    /// 返回业务 operation。
+    /// 返回业务 operation
     #[must_use]
     pub const fn operation(&self) -> &Operation {
         &self.operation
     }
 
-    /// 返回冻结 Provider 候选。
+    /// 返回冻结 Provider 候选
     #[must_use]
     pub const fn candidate(&self) -> &ProviderCandidate {
         &self.candidate
@@ -932,14 +936,15 @@ impl fmt::Debug for ProviderRequest {
     }
 }
 
-/// Provider 热路径唯一接口。
+/// Provider 热路径唯一接口
 ///
-/// 每次 `execute` 只能选择一个 credential 并准备一次可见上游调用。实现不得
+/// 每次 `execute` 只能选择一个 credential 并准备一次可见上游调用
+/// 实现不得
 /// 在内部轮换 credential 或隐藏业务 retry；失败后由 Attempt Coordinator 使用
-/// 新的 attempt 再次调用。
+/// 新的 attempt 再次调用
 #[async_trait]
 pub trait Provider: Send + Sync {
-    /// 从已冻结的配置解析请求身份；只读取本地发布资料，不执行网络请求。
+    /// 从已冻结的配置解析请求身份；只读取本地发布资料，不执行网络请求
     fn resolve_request_profile(
         &self,
         configuration: &crate::account::OpaqueProviderData,
@@ -947,25 +952,25 @@ pub trait Provider: Send + Sync {
         Ok(configuration.clone())
     }
 
-    /// 没有持久选择时返回 Provider 的已准备默认画像；结果仍由 Core 按请求冻结。
+    /// 没有持久选择时返回 Provider 的已准备默认画像；结果仍由 Core 按请求冻结
     fn default_request_profile(
         &self,
     ) -> Result<Option<crate::account::OpaqueProviderData>, ProviderError> {
         Ok(None)
     }
 
-    /// 返回实例生命周期内稳定的注册名称。
+    /// 返回实例生命周期内稳定的注册名称
     fn name(&self) -> &str;
 
-    /// 返回当前进程已经成功发布的目录代次。
+    /// 返回当前进程已经成功发布的目录代次
     fn catalog_generation(&self) -> ProviderCatalogGeneration;
 
-    /// 发现型目录不用于提前拒绝上游可能支持的新模型或别名。
+    /// 发现型目录不用于提前拒绝上游可能支持的新模型或别名
     fn model_catalog_is_exhaustive(&self) -> bool {
         true
     }
 
-    /// 解释 Provider 差异化观测字段；不参与路由和传输。
+    /// 解释 Provider 差异化观测字段；不参与路由和传输
     fn request_observation(
         &self,
         _operation: &Operation,
@@ -974,17 +979,17 @@ pub trait Provider: Send + Sync {
         ProviderRequestObservation::default()
     }
 
-    /// 查询当前 Provider 的实时模型目录，并由 Provider 自己编译能力事实。
+    /// 查询当前 Provider 的实时模型目录，并由 Provider 自己编译能力事实
     ///
     /// # Errors
     ///
-    /// 目录 transport、认证或 Provider 协议失败时返回稳定错误。
+    /// 目录 transport、认证或 Provider 协议失败时返回稳定错误
     async fn query_model_capabilities(
         &self,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError>;
 
-    /// 读取当前客户端协议的原生目录，必须限定到认证时冻结的账号范围。
-    /// `None` 表示不提供该协议的原生目录；读取失败不能伪装成不支持。
+    /// 读取当前客户端协议的原生目录，必须限定到认证时冻结的账号范围
+    /// `None` 表示不提供该协议的原生目录；读取失败不能伪装成不支持
     async fn query_client_model_catalog(
         &self,
         _scope: &crate::account::scope::FrozenAccountScope,
@@ -997,45 +1002,52 @@ pub trait Provider: Send + Sync {
         Ok(None)
     }
 
-    /// 选择一个未被排除的资源并返回 cold [`ProviderStream`]。
+    /// 选择一个未被排除的资源并返回 cold [`ProviderStream`]
     ///
     /// 返回成功、返回错误或准备 future 被取消前，均不得发送本次请求的上游握手或业务
-    /// 载荷，也不得启动可独立完成这些发送的后台任务。发送只在返回的流被 poll 后发生，
-    /// 保证 Core 能在真实出站前校验账号范围并登记 attempt。
+    /// 载荷，也不得启动可独立完成这些发送的后台任务
+    /// 发送只在返回的流被 poll 后发生，
+    /// 保证 Core 能在真实出站前校验账号范围并登记 attempt
     ///
     /// # Errors
     ///
     /// 没有可用资源、请求无效或准备失败时返回 `NotSent` 错误；
-    /// 可能已发送的失败必须通过 stream 返回，不得降级发送事实。
+    /// 可能已发送的失败必须通过 stream 返回，不得降级发送事实
     async fn execute(
         self: Arc<Self>,
         request: ProviderRequest,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError>;
+
+    /// 返回 Provider 的 Live sideband 能力；不支持的 Provider 返回 `None`。
+    /// 实现必须只暴露已钉住账号的受限拨号，不得泄露凭据或放宽账号范围。
+    fn live_gateway(&self) -> Option<Arc<dyn crate::live::LiveGateway>> {
+        None
+    }
 }
 
-/// Provider Registry 构建错误。
+/// Provider Registry 构建错误
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RegistryError {
-    /// Provider 名称无效。
+    /// Provider 名称无效
     #[error("invalid provider registry name")]
     InvalidName,
-    /// Provider 重复注册。
+    /// Provider 重复注册
     #[error("provider `{provider}` is already registered")]
     Duplicate {
-        /// Provider 名称。
+        /// Provider 名称
         provider: String,
     },
 }
 
-/// 唯一保存 `Arc<dyn Provider>` 的异构注册表。
+/// 唯一保存 `Arc<dyn Provider>` 的异构注册表
 #[derive(Default)]
 pub struct ProviderRegistryBuilder {
     providers: BTreeMap<ProviderKind, Arc<dyn Provider>>,
 }
 
 impl ProviderRegistryBuilder {
-    /// 创建空 builder。
+    /// 创建空 builder
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -1043,11 +1055,11 @@ impl ProviderRegistryBuilder {
         }
     }
 
-    /// 注册 Provider。
+    /// 注册 Provider
     ///
     /// # Errors
     ///
-    /// 名称无效或重复时返回错误。
+    /// 名称无效或重复时返回错误
     pub fn register(&mut self, provider: Arc<dyn Provider>) -> Result<(), RegistryError> {
         let kind = ProviderKind::new(provider.name()).map_err(|_| RegistryError::InvalidName)?;
         if self.providers.contains_key(&kind) {
@@ -1059,7 +1071,7 @@ impl ProviderRegistryBuilder {
         Ok(())
     }
 
-    /// 冻结注册表。
+    /// 冻结注册表
     #[must_use]
     pub fn build(self) -> ProviderRegistry {
         ProviderRegistry {
@@ -1068,14 +1080,14 @@ impl ProviderRegistryBuilder {
     }
 }
 
-/// 固定内置 Provider 的不可变注册表。
+/// 固定内置 Provider 的不可变注册表
 #[derive(Clone, Default)]
 pub struct ProviderRegistry {
     pub(super) providers: Arc<BTreeMap<ProviderKind, Arc<dyn Provider>>>,
 }
 
 impl ProviderRegistry {
-    /// 从一组异构 Provider 构造冻结注册表。
+    /// 从一组异构 Provider 构造冻结注册表
     pub fn new(
         providers: impl IntoIterator<Item = Arc<dyn Provider>>,
     ) -> Result<Self, RegistryError> {
@@ -1086,13 +1098,13 @@ impl ProviderRegistry {
         Ok(builder.build())
     }
 
-    /// 创建 builder。
+    /// 创建 builder
     #[must_use]
     pub const fn builder() -> ProviderRegistryBuilder {
         ProviderRegistryBuilder::new()
     }
 
-    /// 按 Provider 名称查询 adapter。
+    /// 按 Provider 名称查询 adapter
     #[must_use]
     pub fn get(&self, provider: &ProviderKind) -> Option<&Arc<dyn Provider>> {
         self.providers.get(provider)
@@ -1112,22 +1124,27 @@ impl ProviderRegistry {
             })
     }
 
-    /// 判断 Provider 是否已注册。
+    /// 判断 Provider 是否已注册
     #[must_use]
     pub fn contains(&self, provider: &ProviderKind) -> bool {
         self.providers.contains_key(provider)
     }
 
-    /// 返回注册数量。
+    /// 返回注册数量
     #[must_use]
     pub fn len(&self) -> usize {
         self.providers.len()
     }
 
-    /// 判断注册表是否为空。
+    /// 判断注册表是否为空
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
+    }
+
+    /// 按注册顺序遍历 adapter；仅用于能力发现类查询。
+    pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn Provider>> {
+        self.providers.values()
     }
 }
 

@@ -1,9 +1,9 @@
-//! 路由前 HTTP 视图；复用 middleware.handle、next 与正文资源调用。
+//! 路由前 HTTP 视图；复用 middleware.handle、next 与正文资源调用
 
 use super::MiddlewareHeader;
 use serde::{Deserialize, Serialize};
 
-/// 正文句柄消费一次；Bytes 使用当前 RPC 的 binary payload，Stream 使用响应流。
+/// 正文句柄消费一次；Bytes 使用当前 RPC 的 binary payload，Stream 使用响应流
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Body {
@@ -16,13 +16,13 @@ pub enum Body {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// 认证与解压前的运行设置；null 表示主动调用继承宿主或父调用基线。
+    /// 认证与解压前的运行设置；null 表示主动调用继承宿主或父调用基线
     pub settings: serde_json::Value,
     pub method: String,
     pub uri: String,
     pub version: Version,
     pub headers: Vec<MiddlewareHeader>,
-    /// 缺省超时由宿主形成基线；None 显式取消本次 HTTP 处理期限。
+    /// 缺省超时由宿主形成基线；None 显式取消本次 HTTP 处理期限
     pub timeout_ms: Option<u64>,
     pub body: Body,
 }
@@ -34,9 +34,9 @@ pub struct Response {
     pub version: Version,
     pub headers: Vec<MiddlewareHeader>,
     pub body: Body,
-    /// 返还 next 的原响应时保留该关联，使宿主继续持有传输扩展和资源。
+    /// 返还 next 的原响应时保留该关联，使宿主继续持有传输扩展和资源
     pub response: Option<String>,
-    /// 响应流承载会话处理的完成与错误，不承载 HTTP 正文。
+    /// 响应流承载会话处理的完成与错误，不承载 HTTP 正文
     pub session: bool,
 }
 
@@ -64,7 +64,7 @@ pub struct Call {
     pub request: Request,
 }
 
-/// 数据在 binary payload，trailers 保留多值 header；EOF 不携带正文或 trailers。
+/// 数据在 binary payload，trailers 保留多值 header；EOF 不携带正文或 trailers
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BodyRead {

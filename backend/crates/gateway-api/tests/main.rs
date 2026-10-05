@@ -1,3 +1,5 @@
+//! API 层测试入口，以及静态页面资源解析与服务测试
+
 mod admin;
 mod architecture;
 mod auth;

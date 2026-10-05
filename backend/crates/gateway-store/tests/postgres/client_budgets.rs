@@ -1,3 +1,5 @@
+//! 验证 Key 预算重置、在途结算、时间窗口与审计事务
+
 use std::{collections::BTreeMap, time::SystemTime};
 
 use chrono::{DateTime, Utc};
@@ -124,7 +126,7 @@ async fn manual_reset_clears_selected_windows_and_preserves_policy_and_history()
                 .then_some(before.weekly_resets_at)
                 .flatten()
         );
-        // 同一费用重试既不重复扣额，也不能重新开启已重置的窗口。
+        // 同一费用重试既不重复扣额，也不能重新开启已重置的窗口
         store.settle(billed).await.unwrap();
         assert_eq!(status(&database, key).await, after);
         assert_eq!(
@@ -173,7 +175,7 @@ async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
             .await
             .unwrap();
         let reset = status(&database, key).await;
-        // 重置前完成的迟到费用保留历史，但不能开启窗口或重新扣入所选周期。
+        // 重置前完成的迟到费用保留历史，但不能开启窗口或重新扣入所选周期
         store.settle(delayed).await.unwrap();
         let delayed = status(&database, key).await;
         assert_eq!(delayed.daily_resets_at, reset.daily_resets_at);
@@ -207,7 +209,7 @@ async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
             );
             assert_ne!(restarted.weekly_resets_at, before.weekly_resets_at);
         }
-        // 开启窗口后仍保留重置边界，另一笔重置前的迟到费用也不能重新扣额。
+        // 开启窗口后仍保留重置边界，另一笔重置前的迟到费用也不能重新扣额
         store.settle(old).await.unwrap();
         let after_old = status(&database, key).await;
         assert_eq!(after_old.daily_resets_at, restarted.daily_resets_at);
@@ -268,7 +270,7 @@ async fn manual_reset_excludes_old_completions_but_counts_inflight_requests_afte
         .unwrap();
     let delayed = charge("key", "delayed", "0.3");
     let reset_context = context();
-    // 无论迟到结算还是重置先取得锁，重置前完成的费用都不应重新进入日额度。
+    // 无论迟到结算还是重置先取得锁，重置前完成的费用都不应重新进入日额度
     let (reset, settled) = tokio::join!(
         admin.reset_client_key_budget(
             ResetClientKeyBudget {
@@ -434,7 +436,7 @@ async fn budgets_settle_exactly_once_and_enforce_each_threshold_across_store_ins
     let second = PgClientBudgetStore::new(database.pool.clone());
     for (key, prefix, amount) in [("day", "d", "0.1"), ("week", "w", "0.1")] {
         for _ in 0..3 {
-            // 已准入请求可完成并超过限额，不预占估算费用。
+            // 已准入请求可完成并超过限额，不预占估算费用
             first.admit(key_id(key)).await.unwrap();
         }
         for index in 0..3 {
@@ -524,7 +526,7 @@ async fn zero_cost_and_interrupted_requests_never_block_limited_keys() {
     let store = PgClientBudgetStore::new(database.pool.clone());
     store.admit(key_id("key")).await.unwrap();
     store.settle(charge("key", "no-cost", "0")).await.unwrap();
-    // 模拟准入后进程退出，没有费用可结算；重启后仍应允许同一 Key 使用。
+    // 模拟准入后进程退出，没有费用可结算；重启后仍应允许同一 Key 使用
     store.admit(key_id("key")).await.unwrap();
     let restarted = PgClientBudgetStore::new(database.pool.clone());
     restarted.admit(key_id("key")).await.unwrap();
@@ -556,7 +558,7 @@ async fn transient_settlement_failure_rolls_back_and_retries_exact_cost_before_a
     seed(&database, "key", "1", "5").await;
     let store = PgClientBudgetStore::new(database.pool.clone());
     store.admit(key_id("key")).await.unwrap();
-    // 在费用事件插入后让窗口写入失败，验证整个事务回滚。
+    // 在费用事件插入后让窗口写入失败，验证整个事务回滚
     sqlx::raw_sql(
         "create function reject_budget_update() returns trigger language plpgsql as $$
         begin
@@ -874,7 +876,7 @@ async fn plugin_reset_revalidates_current_revision_without_changing_the_ledger()
             .kind(),
         AdminStoreErrorKind::NotFound
     );
-    // 验证拒绝后的事务和锁已释放，当前身份仍可正常执行。
+    // 验证拒绝后的事务和锁已释放，当前身份仍可正常执行
     store
         .reset_client_key_budget(
             ResetClientKeyBudget {
@@ -927,7 +929,7 @@ async fn plugin_reset_rolls_back_with_audit_and_serializes_with_late_settlement(
         .await
         .unwrap();
     let mutation = context();
-    // 完成时间在重置前，无论谁先拿到行锁，周用量都不能被迟到结算重新扣回。
+    // 完成时间在重置前，无论谁先拿到行锁，周用量都不能被迟到结算重新扣回
     let delayed = charge("key", "delayed", "1");
     let (reset, settlement) = tokio::join!(
         store.reset_client_key_budget(
@@ -1071,7 +1073,7 @@ async fn plugin_budget_limits_revalidate_authority_and_rollback_with_audit() {
     seed(&database, "key", "10", "20").await;
     let store = PgAdminClientKeyStore::new(database.pool.clone());
     let before = status(&database, "key").await;
-    // 读取和配置赋值都不能开启未使用 Key 的窗口。
+    // 读取和配置赋值都不能开启未使用 Key 的窗口
     assert_eq!(before.daily_resets_at, None);
     let mut stale_owner = owner.clone();
     stale_owner.revision = Revision::new(owner.revision.get() + 1).unwrap();

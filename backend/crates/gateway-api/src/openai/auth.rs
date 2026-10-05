@@ -1,4 +1,4 @@
-//! OpenAI 客户端协议的 Bearer API key 认证。
+//! OpenAI 客户端协议的 Bearer API key 认证
 
 use axum::{
     http::{HeaderMap, header::AUTHORIZATION},
@@ -17,22 +17,22 @@ use super::{
     service::OpenAiService,
 };
 
-/// Client API key 鉴权失败原因。
+/// Client API key 鉴权失败原因
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientApiKeyAuthError {
-    /// 缺失 Authorization 头。
+    /// 缺失 Authorization 头
     MissingAuthorization,
-    /// Authorization 头不是合法的 Bearer token。
+    /// Authorization 头不是合法的 Bearer token
     MalformedAuthorization,
-    /// Bearer token 不是 client API key 格式。
+    /// Bearer token 不是 client API key 格式
     InvalidKeyFormat,
-    /// Key 不存在、已禁用或 wire 格式无效。
+    /// Key 不存在、已禁用或 wire 格式无效
     InvalidKey,
-    /// RuntimeSnapshot 一致性保护暂停接收新请求。
+    /// RuntimeSnapshot 一致性保护暂停接收新请求
     RuntimeUnavailable,
 }
 
-/// Client API Key 或最低版本准入失败。
+/// Client API Key 或最低版本准入失败
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientAccessError {
     Authentication(ClientApiKeyAuthError),
@@ -51,7 +51,7 @@ impl From<ClientVersionRejection> for ClientAccessError {
     }
 }
 
-/// 从有界请求头中识别出的客户端及其可选合法版本。
+/// 从有界请求头中识别出的客户端及其可选合法版本
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentifiedCodexClient {
     kind: CodexClientKind,
@@ -71,7 +71,7 @@ impl IdentifiedCodexClient {
 }
 
 impl ClientApiKeyAuthError {
-    /// 返回可用于日志和指标的稳定失败原因。
+    /// 返回可用于日志和指标的稳定失败原因
     #[must_use]
     pub const fn reason(self) -> &'static str {
         match self {
@@ -84,11 +84,11 @@ impl ClientApiKeyAuthError {
     }
 }
 
-/// 从请求头提取 Bearer Client API key。
+/// 从请求头提取 Bearer Client API key
 ///
 /// # Errors
 ///
-/// Header 缺失、Bearer 语法错误或 Key 不能作为 HTTP Bearer 值时返回稳定错误。
+/// Header 缺失、Bearer 语法错误或 Key 不能作为 HTTP Bearer 值时返回稳定错误
 pub fn bearer_client_api_key(headers: &HeaderMap) -> Result<&str, ClientApiKeyAuthError> {
     let raw = headers
         .get(AUTHORIZATION)
@@ -123,7 +123,7 @@ pub(crate) async fn authenticate_client(
     Ok(client)
 }
 
-/// 复用数据面入口认证计划，但不记录 Key 使用事实或执行推理准入。
+/// 复用数据面入口认证计划，但不记录 Key 使用事实或执行推理准入
 pub(crate) async fn verify_client(
     service: &OpenAiService,
     headers: &HeaderMap,
@@ -170,7 +170,7 @@ pub(crate) fn client_access_error_response(error: ClientAccessError) -> Response
     }
 }
 
-/// Desktop 优先于内嵌 CLI/Core；未知客户端及未提供应用版本的手机远程客户端返回 `None`。
+/// Desktop 优先于内嵌 CLI/Core；未知客户端及未提供应用版本的手机远程客户端返回 `None`
 #[must_use]
 pub fn identify_codex_client(headers: &HeaderMap) -> Option<IdentifiedCodexClient> {
     const MAXIMUM_HEADER_LENGTH: usize = 4096;
@@ -182,8 +182,8 @@ pub fn identify_codex_client(headers: &HeaderMap) -> Option<IdentifiedCodexClien
     if is_desktop {
         let explicit_version = bounded_ascii_header(headers, "version", MAXIMUM_HEADER_LENGTH);
         let user_agent_version = user_agent.and_then(desktop_version_from_user_agent);
-        // 手机远程初始化会覆盖进程级 UA 后缀，保留的 Desktop/Core 前缀不代表应用版本。
-        // 仅缺失版本信息时免于门禁；已提供的版本即使非法，也继续按 Desktop 校验。
+        // 手机远程初始化会覆盖进程级 UA 后缀，保留的 Desktop/Core 前缀不代表应用版本
+        // 仅缺失版本信息时免于门禁；已提供的版本即使非法，也继续按 Desktop 校验
         if !headers.contains_key("version")
             && user_agent_version.is_none()
             && headers
@@ -243,7 +243,7 @@ fn bounded_ascii_header<'a>(
 fn desktop_version_from_user_agent(user_agent: &str) -> Option<&str> {
     let marker = "Codex Desktop;";
     let start = find_ascii_case_insensitive(user_agent, marker)? + marker.len();
-    // 空候选也代表已提供应用版本，不能被手机远程的缺失版本规则放行。
+    // 空候选也代表已提供应用版本，不能被手机远程的缺失版本规则放行
     user_agent[start..]
         .trim_start()
         .split([')', ' ', ';', ','])

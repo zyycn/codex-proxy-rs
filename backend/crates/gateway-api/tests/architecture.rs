@@ -1,3 +1,5 @@
+//! 检查 API 层依赖、源码与测试模块边界，以及管理路由约定
+
 use std::{fs, path::Path};
 
 #[test]
@@ -77,6 +79,9 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/openai/error.rs",
         "src/openai/images/http.rs",
         "src/openai/images/mod.rs",
+        "src/openai/live/http.rs",
+        "src/openai/live/mod.rs",
+        "src/openai/live/websocket.rs",
         "src/openai/mod.rs",
         "src/openai/models.rs",
         "src/openai/endpoint.rs",
@@ -154,6 +159,8 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/openai/responses/websocket/interrupt.rs",
         "tests/openai/responses/websocket/mod.rs",
         "tests/openai/responses/websocket/protocol.rs",
+        "tests/openai/live/mod.rs",
+        "tests/openai/live/websocket.rs",
         "tests/openai/router.rs",
         "tests/openai/search/mod.rs",
         "tests/openai/usage.rs",

@@ -1,4 +1,4 @@
-//! WebSocket opening 与 payload 审计输出。
+//! WebSocket opening 与 payload 审计输出
 
 use std::{
     io,
@@ -17,12 +17,12 @@ use gateway_core::time::DeploymentTimeZone;
 use super::model::CodexWebSocketConnection;
 
 const REDACTED_HEADER_VALUE: &str = "<redacted>";
-/// WebSocket audit artifact 输出目录环境变量。
+/// WebSocket audit artifact 输出目录环境变量
 pub const WS_AUDIT_DIR_ENV: &str = "CODEX_PROXY_WS_AUDIT_DIR";
 
 static WS_AUDIT_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 
-/// 返回进程级审计输出目录；未配置时调用方应整体跳过 artifact 构造。
+/// 返回进程级审计输出目录；未配置时调用方应整体跳过 artifact 构造
 pub fn websocket_audit_dir() -> Option<&'static Path> {
     WS_AUDIT_DIR
         .get_or_init(|| {
@@ -33,7 +33,7 @@ pub fn websocket_audit_dir() -> Option<&'static Path> {
         .as_deref()
 }
 
-/// 显式写入 WebSocket audit artifact。
+/// 显式写入 WebSocket audit artifact
 pub async fn write_websocket_audit_artifact_for_dir(
     dir: Option<&Path>,
     artifact: &WebSocketAuditArtifact,
@@ -50,7 +50,7 @@ pub async fn write_websocket_audit_artifact_for_dir(
     Ok(Some(path))
 }
 
-/// 按环境变量配置写入 WebSocket audit artifact。
+/// 按环境变量配置写入 WebSocket audit artifact
 pub async fn write_websocket_audit_artifact_from_env(
     artifact: &WebSocketAuditArtifact,
     timezone: DeploymentTimeZone,
@@ -59,7 +59,7 @@ pub async fn write_websocket_audit_artifact_from_env(
 }
 
 impl CodexWebSocketConnection {
-    /// 生成打开握手审计快照。
+    /// 生成打开握手审计快照
     pub fn opening_audit_snapshot(&self) -> OpeningAuditSnapshot {
         OpeningAuditSnapshot {
             request_line: request_line_for_endpoint(&self.endpoint),

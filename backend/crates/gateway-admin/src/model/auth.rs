@@ -1,30 +1,30 @@
-//! 控制面认证、统一会话和管理员安全审计事实。
+//! 控制面认证、统一会话和管理员安全审计事实
 
 use chrono::{DateTime, Utc};
 use gateway_core::{engine::execution::ClientAuthenticationError, policy::ClientApiKeyId};
 
 use super::{MutationActor, MutationContext, Revision};
 
-/// 会话审计使用的稳定管理员标识。
+/// 会话审计使用的稳定管理员标识
 #[must_use]
 pub fn admin_session_actor_ref(admin_user_id: &str) -> String {
     format!("admin:{admin_user_id}")
 }
 
-/// 已认证的管理主体。
+/// 已认证的管理主体
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdminPrincipal {
     Session {
         admin_user_id: String,
     },
     ApiKey,
-    /// 安装者完整信任的插件；身份仅由内部 HTTP 分派端口签发。
+    /// 安装者完整信任的插件；身份仅由内部 HTTP 分派端口签发
     Plugin {
         instance_id: String,
     },
 }
 
-/// 传给管理用例的安全请求上下文。
+/// 传给管理用例的安全请求上下文
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminRequestContext {
     pub principal: AdminPrincipal,
@@ -48,7 +48,7 @@ impl AdminRequestContext {
     }
 }
 
-/// 登录方式只决定凭据验证流程，不能直接授予会话权限。
+/// 登录方式只决定凭据验证流程，不能直接授予会话权限
 #[derive(Clone, PartialEq, Eq)]
 pub enum LoginCommand {
     Admin {
@@ -76,7 +76,7 @@ impl std::fmt::Debug for LoginCommand {
     }
 }
 
-/// 登录成功后返回的会话事实。
+/// 登录成功后返回的会话事实
 #[derive(Clone, PartialEq, Eq)]
 pub struct LoginResult {
     pub session_id: String,
@@ -93,7 +93,7 @@ impl std::fmt::Debug for LoginResult {
     }
 }
 
-/// 登录状态机可被 API 精确映射的失败类型。
+/// 登录状态机可被 API 精确映射的失败类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum LoginError {
     #[error("invalid login credentials")]
@@ -114,7 +114,7 @@ impl From<ClientAuthenticationError> for LoginError {
     }
 }
 
-/// 服务端已验证的身份绑定，不保存密码或原始 API Key。
+/// 服务端已验证的身份绑定，不保存密码或原始 API Key
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionSubject {
     Admin {
@@ -126,7 +126,7 @@ pub enum SessionSubject {
     },
 }
 
-/// 仅已登录管理员可以修改自己的密码。
+/// 仅已登录管理员可以修改自己的密码
 pub struct ChangePassword {
     pub current_password: String,
     pub new_password: String,
@@ -138,14 +138,14 @@ impl std::fmt::Debug for ChangePassword {
     }
 }
 
-/// 两种登录方式共用的固定有效期会话。
+/// 两种登录方式共用的固定有效期会话
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthSession {
     pub subject: SessionSubject,
     pub expires_at: DateTime<Utc>,
 }
 
-/// 安全审计事件类型。
+/// 安全审计事件类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditActorKind {
     AdminSession,
@@ -154,7 +154,7 @@ pub enum AuditActorKind {
     Anonymous,
 }
 
-/// 管理写操作留下的最小审计事实。
+/// 管理写操作留下的最小审计事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminAuditEvent {
     pub id: String,

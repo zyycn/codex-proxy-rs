@@ -1,4 +1,4 @@
-//! xAI inference/compaction 流执行与终态校验。
+//! xAI inference/compaction 流执行与终态校验
 
 use super::*;
 
@@ -44,7 +44,7 @@ fn append_middleware_grok_headers(
         }
         let value = std::str::from_utf8(header.value())
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
-        // 插件可写任意字段，值不进入 Debug；transport 仍读取完整原值。
+        // 插件可写任意字段，值不进入 Debug；transport 仍读取完整原值
         target.push(crate::transport::GrokHeader::sensitive(
             header.name().to_owned(),
             crate::SecretValue::new(value),
@@ -65,7 +65,7 @@ pub(super) async fn next_grok_chunk(
     upstream_model: &UpstreamModelId,
     context: &AttemptContext,
 ) -> Result<Option<bytes::Bytes>, ProviderError> {
-    let Some(stream_deadline) = remaining(context.deadline()) else {
+    if context.deadline().is_elapsed() {
         return Err(provider_error(
             ProviderErrorKind::Timeout,
             UpstreamSendState::Sent,
@@ -78,7 +78,7 @@ pub(super) async fn next_grok_chunk(
             ProviderErrorKind::Cancelled,
             UpstreamSendState::Sent,
         )),
-        _ = tokio::time::sleep(stream_deadline) => Err(provider_error(
+        _ = context.deadline().wait() => Err(provider_error(
             ProviderErrorKind::Timeout,
             UpstreamSendState::Sent,
         )),
@@ -141,7 +141,7 @@ pub(super) fn cold_compaction_http_sse_stream(
                 body,
                 session.binding().clone(),
             ).with_trace(context.trace());
-            let Some(handshake_deadline) = remaining(context.deadline()) else {
+            if context.deadline().is_elapsed() {
                 Err(mark_transient_compaction_failure(provider_error(
                     ProviderErrorKind::Timeout,
                     UpstreamSendState::NotSent,
@@ -152,7 +152,7 @@ pub(super) fn cold_compaction_http_sse_stream(
             let boundary = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => InferenceBoundary::Cancelled,
-                _ = tokio::time::sleep(handshake_deadline) => InferenceBoundary::Deadline,
+                _ = context.deadline().wait() => InferenceBoundary::Deadline,
                 response = transport.execute(inference_request) => InferenceBoundary::Response(response),
             };
             match boundary {
@@ -442,7 +442,7 @@ pub(super) fn cold_http_sse_stream(
                 body,
                 session.binding().clone(),
             ).with_trace(context.trace());
-            let Some(handshake_deadline) = remaining(context.deadline()) else {
+            if context.deadline().is_elapsed() {
                 Err(provider_error(
                     ProviderErrorKind::Timeout,
                     UpstreamSendState::NotSent,
@@ -452,7 +452,7 @@ pub(super) fn cold_http_sse_stream(
             let boundary = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => InferenceBoundary::Cancelled,
-                _ = tokio::time::sleep(handshake_deadline) => InferenceBoundary::Deadline,
+                _ = context.deadline().wait() => InferenceBoundary::Deadline,
                 response = transport.execute(inference_request) => InferenceBoundary::Response(response),
             };
             match boundary {
@@ -507,7 +507,7 @@ pub(super) fn cold_http_sse_stream(
         let mut decoder = GrokCanonicalDecoder::for_request(upstream_model.as_str(), &request)
             .with_pricing(context.pricing().get("xai").and_then(|p| p.get(upstream_model.as_str())).cloned());
         loop {
-            let Some(stream_deadline) = remaining(context.deadline()) else {
+            if context.deadline().is_elapsed() {
                 Err(provider_error(
                     ProviderErrorKind::Timeout,
                     UpstreamSendState::Sent,
@@ -520,7 +520,7 @@ pub(super) fn cold_http_sse_stream(
                     ProviderErrorKind::Cancelled,
                     UpstreamSendState::Sent,
                 )),
-                _ = tokio::time::sleep(stream_deadline) => Err(provider_error(
+                _ = context.deadline().wait() => Err(provider_error(
                     ProviderErrorKind::Timeout,
                     UpstreamSendState::Sent,
                 )),
@@ -560,7 +560,7 @@ pub(super) fn cold_http_sse_stream(
                 }
             };
             // 首个非前导输出事件（结构帧也算）即上报携带 first_token_ms 的观测，
-            // 供 Core 覆盖会话级兜底值。
+            // 供 Core 覆盖会话级兜底值
             if decoder.take_output_start() && first_token_ms.is_none() {
                 first_token_ms = Some(
                     u64::try_from(output_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -636,7 +636,7 @@ pub(super) fn cold_http_sse_stream(
             .iter()
             .flat_map(ProviderEvent::canonical_facts)
             .any(|event| matches!(event, GatewayEvent::Completed(_)));
-        // 尾部 finish 补全缓冲中的首个输出帧时，同样上报首字。
+        // 尾部 finish 补全缓冲中的首个输出帧时，同样上报首字
         if decoder.take_output_start() && first_token_ms.is_none() {
             first_token_ms = Some(
                 u64::try_from(output_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),

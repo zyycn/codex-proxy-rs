@@ -2,7 +2,7 @@ import { isRecord } from '@/utils/data'
 import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
 
 export const MAX_ACCOUNT_IMPORT_COUNT = 200
-export interface AccountImportDocument {
+interface AccountImportDocument {
   provider: string
   document: Record<string, unknown>
 }

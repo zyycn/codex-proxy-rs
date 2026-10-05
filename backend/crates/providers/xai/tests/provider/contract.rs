@@ -1,3 +1,5 @@
+//! 验证 xAI 原生执行的协议转换、账号选择与交付状态隔离
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1691,7 +1693,7 @@ async fn execute_successfully(provider: &Arc<GrokBuildProvider>, operation: Oper
     assert!(events.iter().all(Result::is_ok));
 }
 
-/// 与 Postgres 调度列表一致：常规选择不返回停用账号，只有诊断能取回。
+/// 与 Postgres 调度列表一致：常规选择不返回停用账号，只有诊断能取回
 struct DiagnosticLeasePort;
 
 impl ProviderLeasePort for DiagnosticLeasePort {

@@ -1,3 +1,5 @@
+//! 账号管理用例测试及共享 Provider、存储替身
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -303,7 +305,12 @@ impl ProviderAdmin for FakeProviderAdmin {
     }
 
     fn plan_type_display(&self, plan_type: &str) -> String {
-        format!("{} display: {plan_type}", self.kind)
+        match plan_type {
+            "prolite" => "ProLite".to_owned(),
+            "pro" => "Pro".to_owned(),
+            "promax" => "ProMax".to_owned(),
+            _ => format!("{} display: {plan_type}", self.kind),
+        }
     }
 
     async fn account_unavailable(&self, _: &ProviderAccountId) {
@@ -726,7 +733,7 @@ impl AccountStore for FakeAccountStore {
         _: AccountRuntimeSnapshot,
     ) -> AdminStoreResult<Option<AccountPageItem>> {
         self.record("store.load_account");
-        // probe 后的账号状态覆盖只对同一 id 生效；其余按账号列表查询。
+        // probe 后的账号状态覆盖只对同一 id 生效；其余按账号列表查询
         let account = self
             .account_after_probe
             .lock()
@@ -1477,7 +1484,7 @@ async fn plugin_account_reads_resolve_the_authoritative_provider_from_the_accoun
     let events = events();
     let store = FakeAccountStore::new("xai", events.clone());
     // 读取端口不能让调用方提供或伪造 Provider；注册表中即使只有另一 Provider，
-    // 也必须按 Store 中该 account ID 的权威事实返回。
+    // 也必须按 Store 中该 account ID 的权威事实返回
     let registered_provider = FakeProviderAdmin::new("openai", events.clone());
     let access = gateway_admin::initialize_plugin_accounts(
         ProviderAdminRegistry::new([registered_provider as Arc<dyn ProviderAdmin>]).unwrap(),
@@ -1909,7 +1916,7 @@ async fn accounts_list_should_return_complete_directory_semantics() {
         ),
         (
             Some("  self_serve_business_prolite  "),
-            Some("OpenaiDisplaySelfServeBusinessProlite"),
+            Some("openai display: self_serve_business_prolite"),
         )
     );
 
@@ -1929,25 +1936,33 @@ async fn accounts_list_should_return_complete_directory_semantics() {
 #[tokio::test]
 async fn accounts_should_fill_missing_plan_from_quota_without_overriding_known_subtypes() {
     for (stored_plan, quota_plan, expected, expected_display) in [
-        (None, Some("free"), Some("free"), Some("OpenaiDisplayFree")),
+        (
+            None,
+            Some("free"),
+            Some("free"),
+            Some("openai display: free"),
+        ),
         (
             Some("  "),
             Some("free"),
             Some("free"),
-            Some("OpenaiDisplayFree"),
+            Some("openai display: free"),
         ),
         (
             Some("unknown"),
             Some("free"),
             Some("free"),
-            Some("OpenaiDisplayFree"),
+            Some("openai display: free"),
         ),
         (
             Some("self_serve_business_prolite"),
             Some("team"),
             Some("self_serve_business_prolite"),
-            Some("OpenaiDisplaySelfServeBusinessProlite"),
+            Some("openai display: self_serve_business_prolite"),
         ),
+        (Some("prolite"), None, Some("prolite"), Some("ProLite")),
+        (Some("pro"), None, Some("pro"), Some("Pro")),
+        (Some("promax"), None, Some("promax"), Some("ProMax")),
         (None, None, None, None),
     ] {
         let provider = FakeProviderAdmin::new("openai", events());
@@ -2097,7 +2112,7 @@ async fn accounts_list_should_prefer_credential_error_over_quota_exhaustion() {
 
 #[tokio::test]
 async fn accounts_list_should_map_unknown_credential_to_error_not_normal() {
-    // Unknown 不可调度，Admin 不得显示为 normal。
+    // Unknown 不可调度，Admin 不得显示为 normal
     let provider = FakeProviderAdmin::new("openai", events());
     let mut account = account_record("openai");
     account.credential_state = CredentialState::Unknown;
@@ -2244,7 +2259,7 @@ async fn quota_forecast_reads_raw_snapshot_and_limits_usage_to_observation_time(
             used_percent: Some(20.0),
             reset_at: Some(reset),
             limit_reached: true,
-            // Provider 自带的统计不保证与快照同一时间，预测必须重新采样。
+            // Provider 自带的统计不保证与快照同一时间，预测必须重新采样
             local_usage: Some(quota_local_usage("acct_test", 999_999)),
             provider_data: None,
         }],
@@ -2456,7 +2471,7 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
             .unwrap()
             .contains("不连续")
     );
-    // 新额度段已有足够观测后恢复预测，但总量不能带回重置前的累计用量。
+    // 新额度段已有足够观测后恢复预测，但总量不能带回重置前的累计用量
     let mut first = make_point(1, 5.0, 1_750, 0);
     first.completed_at = now - TimeDelta::minutes(45);
     first.started_at = first.completed_at - TimeDelta::seconds(10);
@@ -2581,7 +2596,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
         .as_ref()
         .expect("quota window local usage");
     assert_eq!(usage.total_tokens, Some(4_330_000));
-    // 短期额度条保留自己的本地用量，但不作为周/月统计面板的回退。
+    // 短期额度条保留自己的本地用量，但不作为周/月统计面板的回退
     assert!(item.usage.is_none());
 
     let queries = store.quota_window_queries();

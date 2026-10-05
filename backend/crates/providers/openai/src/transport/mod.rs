@@ -1,9 +1,10 @@
-//! Codex HTTP/SSE/WebSocket 上游 transport。
+//! Codex HTTP/SSE/WebSocket 上游 transport
 
 pub mod canonical;
 pub mod catalog;
 pub mod client;
 mod client_json;
+mod client_live;
 mod client_sse;
 pub(crate) mod connection;
 pub mod diagnostics;
@@ -39,12 +40,13 @@ pub use self::{
         CodexResponseMetadataUpdates, CodexTransportDecision, CodexTransportMetrics,
         build_reqwest_client,
     },
+    client_live::CodexLiveCallResponse,
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{
         CODEX_ALPHA_SEARCH_PATH, CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH,
-        CODEX_RESPONSES_PATH, CODEX_USAGE_API_PATH, WHAM_PROFILE_STATISTICS_PATH,
-        WHAM_RATE_LIMIT_RESET_CREDITS_CONSUME_PATH, WHAM_RATE_LIMIT_RESET_CREDITS_PATH,
-        WHAM_USAGE_PATH, endpoint_url, usage_endpoint_url,
+        CODEX_REALTIME_CALLS_PATH, CODEX_RESPONSES_PATH, CODEX_USAGE_API_PATH,
+        WHAM_PROFILE_STATISTICS_PATH, WHAM_RATE_LIMIT_RESET_CREDITS_CONSUME_PATH,
+        WHAM_RATE_LIMIT_RESET_CREDITS_PATH, WHAM_USAGE_PATH, endpoint_url, usage_endpoint_url,
     },
     headers::build_codex_model_headers,
     profile_avatar::{

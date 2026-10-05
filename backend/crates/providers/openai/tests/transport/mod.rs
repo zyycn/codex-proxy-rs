@@ -1,3 +1,5 @@
+//! OpenAI 上游 HTTP、SSE、WebSocket 与客户端画像的测试入口
+
 use std::{
     process::Command,
     sync::{
@@ -106,11 +108,12 @@ pub(crate) async fn accept_codex_test_websocket(
     .await
 }
 
-pub(crate) async fn accept_codex_test_websocket_with<F>(
-    stream: TcpStream,
+pub(crate) async fn accept_codex_test_websocket_with<S, F>(
+    stream: S,
     callback: F,
-) -> tokio_tungstenite::WebSocketStream<TcpStream>
+) -> tokio_tungstenite::WebSocketStream<S>
 where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     F: FnOnce(&WebSocketRequest, &mut WebSocketResponse) + Unpin,
 {
     accept_hdr_async_with_config(

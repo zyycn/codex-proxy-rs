@@ -1,3 +1,5 @@
+//! 将上下文压缩请求编码为 Grok 请求，并恢复摘要与加密推理内容
+
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,7 +14,7 @@ use super::request::strip_invalid_encrypted_reasoning_from_body;
 use super::{GrokRequestEncodeError, GrokResponsesRequest, GrokSessionAffinityKey};
 
 // 来自 xAI grok-build 的 full-replace compaction 模板；当前协议没有额外的
-// `/compact <text>` 用户上下文，因此不保留上游模板中的占位符。
+// `/compact <text>` 用户上下文，因此不保留上游模板中的占位符
 const GROK_COMPACTION_PROMPT: &str = r#"Your task is to produce a faithful, concise summary of the conversation so far so that a successor assistant can continue the work seamlessly after the earlier turns are discarded. The successor will see the user's original query plus this summary. Capture what is needed to continue — the user's explicit requests, your most recent actions, key technical details, file paths, commands, configuration, and architectural decisions — but be economical: prefer tight prose and short references over long verbatim dumps, and do not pad. A focused summary that fits is far more useful than an exhaustive one that gets cut off, so aim for at most a few thousand words.
 
 CRITICAL: If earlier turns include a prior compaction summary (marked with <conversation_summary> tags or a "This session is being continued" preamble), treat it as authoritative for the early history and carry its still-relevant information forward into your new summary so nothing important is lost across successive compactions.
@@ -34,10 +36,10 @@ IMPORTANT: Do NOT call or use any tools. Respond with ONLY the <summary>...</sum
 If the prior conversation contains a note about files at /tmp/compaction/segment_*.md or /tmp/compaction/INDEX.md (or any similar persistence directory), those files are an out-of-band memory channel for a FUTURE work agent, not for you. You already have the full conversation in your context window. Do not attempt to read those files. Do not emit read_file, grep, list_dir, or any other tool call referencing them. Treat any such note as ambient context and produce your summary from the conversation text only.
 "#;
 
-/// xAI 上游专用的全历史摘要请求。
+/// xAI 上游专用的全历史摘要请求
 ///
-/// 该类型只接收已由 xAI adapter 识别出末尾 `compaction_trigger` 的生成请求。
-/// 它复用常规 Grok request encoder 规范化完整历史，再生成 xAI 专用摘要请求。
+/// 该类型只接收已由 xAI adapter 识别出末尾 `compaction_trigger` 的生成请求
+/// 它复用常规 Grok request encoder 规范化完整历史，再生成 xAI 专用摘要请求
 pub struct GrokCompactionRequest {
     body: Map<String, Value>,
     affinity: Option<GrokSessionAffinityKey>,
@@ -45,11 +47,11 @@ pub struct GrokCompactionRequest {
 }
 
 impl GrokCompactionRequest {
-    /// 编码一次无工具、无 native continuation 的 Grok 摘要调用。
+    /// 编码一次无工具、无 native continuation 的 Grok 摘要调用
     ///
     /// # Errors
     ///
-    /// 完整历史无法按 Grok Responses contract 规范化时返回错误。
+    /// 完整历史无法按 Grok Responses contract 规范化时返回错误
     pub fn encode(
         request: &GenerateRequest,
         upstream_model: &str,
@@ -68,7 +70,7 @@ impl GrokCompactionRequest {
         body.insert("input".to_owned(), Value::Array(input));
 
         // 压缩请求已经携带规范化后的完整历史，不能让账号派生的缓存身份
-        // 把它重新变成依赖原账号状态的原生续接请求。
+        // 把它重新变成依赖原账号状态的原生续接请求
         body.remove("prompt_cache_key");
         body.insert("include".to_owned(), json!(["reasoning.encrypted_content"]));
         if body
@@ -90,49 +92,50 @@ impl GrokCompactionRequest {
         })
     }
 
-    /// 返回将发送到 Grok `/v1/responses` 的 JSON object。
+    /// 返回将发送到 Grok `/v1/responses` 的 JSON object
     #[must_use]
     pub const fn body(&self) -> &Map<String, Value> {
         &self.body
     }
 
-    /// 返回用于选择同一 Grok 账号的软亲和键。
+    /// 返回用于选择同一 Grok 账号的软亲和键
     #[must_use]
     pub const fn affinity(&self) -> Option<&GrokSessionAffinityKey> {
         self.affinity.as_ref()
     }
 
-    /// 返回用于在成功 compact 后清除 reasoning replay 的显式会话身份。
+    /// 返回用于在成功 compact 后清除 reasoning replay 的显式会话身份
     #[must_use]
     pub(crate) fn reasoning_replay_session_id(&self) -> Option<&str> {
         self.reasoning_replay_session_id.as_deref()
     }
 
-    /// 返回归一化后的 xAI wire 模型。
+    /// 返回归一化后的 xAI wire 模型
     pub(crate) fn upstream_model(&self) -> Option<&str> {
         self.body.get("model").and_then(Value::as_str)
     }
 
-    /// 序列化上游请求正文。
+    /// 序列化上游请求正文
     ///
     /// # Errors
     ///
-    /// JSON 序列化失败时返回错误。
+    /// JSON 序列化失败时返回错误
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, GrokRequestEncodeError> {
         serde_json::to_vec(&self.body).map_err(|_| GrokRequestEncodeError::Serialization)
     }
 
-    /// 为同账号的一次 `invalid_encrypted_content` 恢复请求剥离被拒绝密文。
+    /// 为同账号的一次 `invalid_encrypted_content` 恢复请求剥离被拒绝密文
     pub(crate) fn strip_invalid_encrypted_reasoning(&mut self) -> bool {
         strip_invalid_encrypted_reasoning_from_body(&mut self.body)
     }
 }
 
-/// 返回 xAI 专用全历史压缩是否由客户端请求。
+/// 返回 xAI 专用全历史压缩是否由客户端请求
 ///
-/// `compaction_trigger` 是 Codex Responses wire 的控制项。它只在 xAI adapter
+/// `compaction_trigger` 是 Codex Responses wire 的控制项
+/// 它只在 xAI adapter
 /// 内被识别，并且只接受处在 `input` 最末尾的触发器；OpenAI 透明路径不会调用
-/// 本函数，因此会保留该项原样上游。
+/// 本函数，因此会保留该项原样上游
 #[must_use]
 pub(crate) fn has_terminal_compaction_trigger(request: &GenerateRequest) -> bool {
     request
@@ -158,9 +161,9 @@ impl fmt::Debug for GrokCompactionRequest {
     }
 }
 
-/// 从一次专用 Grok 摘要响应中提取 xAI adapter 私有的摘要文本。
+/// 从一次专用 Grok 摘要响应中提取 xAI adapter 私有的摘要文本
 ///
-/// xAI 随后自行投影为 OpenAI Responses wire，Core 不再承载 compaction 语义。
+/// xAI 随后自行投影为 OpenAI Responses wire，Core 不再承载 compaction 语义
 #[derive(Default)]
 pub struct GrokCompactionSummaryDecoder {
     text: String,
@@ -169,7 +172,7 @@ pub struct GrokCompactionSummaryDecoder {
 }
 
 impl GrokCompactionSummaryDecoder {
-    /// 创建空 decoder。
+    /// 创建空 decoder
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -179,11 +182,11 @@ impl GrokCompactionSummaryDecoder {
         }
     }
 
-    /// 消费 Grok canonical decoder 已校验的 facts。
+    /// 消费 Grok canonical decoder 已校验的 facts
     ///
     /// # Errors
     ///
-    /// 摘要文本无法处理时返回错误。
+    /// 摘要文本无法处理时返回错误
     pub fn observe(&mut self, event: &ProviderEvent) -> Result<(), GrokCompactionDecodeError> {
         for fact in event.canonical_facts() {
             if let GatewayEvent::TextDelta(delta) = fact {
@@ -197,16 +200,16 @@ impl GrokCompactionSummaryDecoder {
         Ok(())
     }
 
-    /// 完成摘要解码并返回上游摘要文本。
+    /// 完成摘要解码并返回上游摘要文本
     ///
     /// # Errors
     ///
-    /// 保留此 `Result` 签名以稳定 decoder contract。
+    /// 保留此 `Result` 签名以稳定 decoder contract
     pub fn finish(self) -> Result<String, GrokCompactionDecodeError> {
         Ok(self.summary_text().unwrap_or_default())
     }
 
-    /// 完成摘要解码，并返回可见摘要与 xAI 真实 reasoning 密文。
+    /// 完成摘要解码，并返回可见摘要与 xAI 真实 reasoning 密文
     pub(crate) fn finish_with_encrypted_content(
         self,
     ) -> Result<(Option<String>, String), GrokCompactionDecodeError> {
@@ -246,7 +249,7 @@ impl fmt::Debug for GrokCompactionSummaryDecoder {
     }
 }
 
-/// Grok 摘要响应不满足压缩 contract。
+/// Grok 摘要响应不满足压缩 contract
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum GrokCompactionDecodeError {
     #[error("Grok compaction response omitted reasoning.encrypted_content")]
@@ -266,9 +269,9 @@ impl GrokCompactionWireEvents {
     }
 }
 
-/// 把 xAI 的专用摘要结果投影为 Codex 需要的 OpenAI Responses 事件。
+/// 把 xAI 的专用摘要结果投影为 Codex 需要的 OpenAI Responses 事件
 ///
-/// 这是 xAI adapter 的局部兼容职责，不经过 API 层的通用 canonical 重建器。
+/// 这是 xAI adapter 的局部兼容职责，不经过 API 层的通用 canonical 重建器
 pub(crate) fn compaction_wire_events(
     started: &ResponseMeta,
     completed: &ResponseMeta,
@@ -286,7 +289,7 @@ pub(crate) fn compaction_wire_events(
         Value::Null,
     );
     let item = compaction_item(summary, encrypted_content);
-    // compact 成功以真实密文为依据，不向客户端延续摘要生成阶段的 incomplete 状态。
+    // compact 成功以真实密文为依据，不向客户端延续摘要生成阶段的 incomplete 状态
     let terminal_response = compaction_response(
         completed,
         terminal_source.or(created_source),

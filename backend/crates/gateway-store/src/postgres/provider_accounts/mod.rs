@@ -1,4 +1,4 @@
-//! 明文 `provider_accounts` 与凭证 revision CAS 的唯一 PostgreSQL owner。
+//! 明文 `provider_accounts` 与凭证 revision CAS 的唯一 PostgreSQL owner
 
 use std::{collections::BTreeSet, fmt, str::FromStr};
 

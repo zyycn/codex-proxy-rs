@@ -1,3 +1,5 @@
+//! xAI 测试共用的客户端画像、目录服务与本地端点策略
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::num::NonZeroU32;
@@ -343,7 +345,7 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
         if self.fail_provider_listing.load(Ordering::SeqCst) {
             return Err(invalid());
         }
-        // 与 Postgres 实现的调度列表语义一致：停用账号不进入常规候选。
+        // 与 Postgres 实现的调度列表语义一致：停用账号不进入常规候选
         Ok(lock(&self.accounts)
             .values()
             .filter(|stored| stored.account.provider() == provider && stored.account.enabled())

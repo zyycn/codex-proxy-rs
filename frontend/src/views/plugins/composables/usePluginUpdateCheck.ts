@@ -4,6 +4,7 @@ import type { PluginArtifact, PluginInstance, PluginRelease, PluginSourceCredent
 import { isEqual } from 'es-toolkit'
 import { onScopeDispose, shallowRef, watch } from 'vue'
 import { checkPluginUpdate, getPluginUpdateSources, queryPluginRelease, verifyRemotePlugin } from '@/api'
+import { notifyPluginError } from '../utils/actions'
 import { currentPluginInstance } from '../utils/catalog'
 import { selectPluginReleaseAsset } from '../utils/updates'
 
@@ -16,7 +17,7 @@ export interface PluginUpdateSelection {
   instance?: PluginInstance
 }
 
-export function usePluginUpdateCheck(credentials: Ref<PluginSourceCredential[]>, notifyError: (title: string, error: unknown) => void) {
+export function usePluginUpdateCheck(credentials: Ref<PluginSourceCredential[]>) {
   const open = shallowRef(false)
   const checking = shallowRef(false)
   const plugin = shallowRef<InstalledPlugin | null>(null)
@@ -84,7 +85,7 @@ export function usePluginUpdateCheck(credentials: Ref<PluginSourceCredential[]>,
     catch (error) {
       if (controller === current) {
         open.value = false
-        notifyError('检查更新失败', error)
+        notifyPluginError('检查更新失败', error)
       }
     }
     finally {

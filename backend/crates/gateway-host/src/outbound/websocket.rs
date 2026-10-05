@@ -1,3 +1,5 @@
+//! 受管 WebSocket 的握手、消息收发、超时与连接关闭
+
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -23,7 +25,7 @@ const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 type Socket = WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>;
 
-/// 读写分别串行，允许等待输出时发送控制消息；关闭会唤醒在途操作并释放容量。
+/// 读写分别串行，允许等待输出时发送控制消息；关闭会唤醒在途操作并释放容量
 pub struct ManagedWebSocket {
     writer: Mutex<Option<(SplitSink<Socket, Message>, OwnedSemaphorePermit)>>,
     reader: Mutex<Option<SplitStream<Socket>>>,
@@ -43,7 +45,7 @@ pub struct WebSocketResponse {
 }
 
 impl HttpClient {
-    /// 使用与 HTTP 相同的 DNS、代理、证书和容量边界执行 HTTP/1.1 Upgrade。
+    /// 使用与 HTTP 相同的 DNS、代理、证书和容量边界执行 HTTP/1.1 Upgrade
     pub async fn open_websocket(
         &self,
         request: HttpRequest,
@@ -201,7 +203,7 @@ impl ManagedWebSocket {
         *self.closed.borrow()
     }
 
-    /// 先取消在途读写，再释放两端；返回时连接与容量均已回收。
+    /// 先取消在途读写，再释放两端；返回时连接与容量均已回收
     pub async fn close(&self) {
         self.closed.send_replace(true);
         let mut writer = self.writer.lock().await;

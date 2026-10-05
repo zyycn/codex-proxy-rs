@@ -1,3 +1,5 @@
+//! 从 OpenAI 事件与响应头提取模型、用量、额度和重试等待事实
+
 use std::{collections::BTreeMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
@@ -5,7 +7,7 @@ use serde_json::Value;
 
 use super::sse::{SseError, parse_sse_events};
 
-/// 单次 Responses 流明确声明的模型；终态优先，缺失时不使用请求模型补齐。
+/// 单次 Responses 流明确声明的模型；终态优先，缺失时不使用请求模型补齐
 #[derive(Debug, Default)]
 pub struct ResponseModelObservation {
     model: Option<String>,
@@ -13,7 +15,7 @@ pub struct ResponseModelObservation {
 }
 
 impl ResponseModelObservation {
-    /// 从原始事件读取响应模型，避免工具转换或 canonical 兜底改写观测事实。
+    /// 从原始事件读取响应模型，避免工具转换或 canonical 兜底改写观测事实
     pub fn observe(&mut self, event_type: Option<&str>, value: &Value) {
         let terminal = matches!(
             event_type,
@@ -40,14 +42,14 @@ impl ResponseModelObservation {
         self.terminal = terminal;
     }
 
-    /// 返回原始响应声明，未声明时保持未知。
+    /// 返回原始响应声明，未声明时保持未知
     #[must_use]
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
     }
 }
 
-/// 规范化可展示的上游模型名，非法值不影响响应交付。
+/// 规范化可展示的上游模型名，非法值不影响响应交付
 #[must_use]
 pub fn observed_model_name(value: &str) -> Option<&str> {
     let value = value.trim();
@@ -55,31 +57,31 @@ pub fn observed_model_name(value: &str) -> Option<&str> {
         .then_some(value)
 }
 
-/// 从 Codex/OpenAI usage 结构中提取出的标准化 token 用量。
+/// 从 Codex/OpenAI usage 结构中提取出的标准化 token 用量
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
-    /// 输入 token 数。
+    /// 输入 token 数
     pub input_tokens: u64,
-    /// 输出 token 数。
+    /// 输出 token 数
     pub output_tokens: u64,
-    /// 命中缓存的输入 token 数。
+    /// 命中缓存的输入 token 数
     pub cached_tokens: u64,
-    /// 写入 prompt cache 的输入 token 数。
+    /// 写入 prompt cache 的输入 token 数
     pub cache_write_tokens: u64,
-    /// 输出 token 中的 reasoning token 数。
+    /// 输出 token 中的 reasoning token 数
     pub reasoning_tokens: u64,
-    /// 图片工具输入 token 数。
+    /// 图片工具输入 token 数
     pub image_input_tokens: u64,
-    /// 图片工具输出 token 数。
+    /// 图片工具输出 token 数
     pub image_output_tokens: u64,
-    /// 主模型总 token 数，不包含图片工具 token。
+    /// 主模型总 token 数，不包含图片工具 token
     pub total_tokens: u64,
 }
 
-/// 从单个 JSON 响应体中提取用量。
+/// 从单个 JSON 响应体中提取用量
 ///
-/// 该函数同时支持 Codex usage 结构和 OpenAI usage 结构。
+/// 该函数同时支持 Codex usage 结构和 OpenAI usage 结构
 pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
     let usage = body.get("usage").unwrap_or(body);
     if !usage.is_object() {
@@ -149,9 +151,9 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
     })
 }
 
-/// 校验计价所需的 token 字段，拒绝缺失、非法、溢出或不一致的数值。
+/// 校验计价所需的 token 字段，拒绝缺失、非法、溢出或不一致的数值
 ///
-/// 用量提取允许缺失字段补零；计价必须额外确认这些零值有明确的上游事实。
+/// 用量提取允许缺失字段补零；计价必须额外确认这些零值有明确的上游事实
 #[must_use]
 pub fn billable_usage_is_complete(response: &Value, usage: TokenUsage) -> bool {
     let Some(raw) = response.get("usage").filter(|value| value.is_object()) else {
@@ -197,14 +199,14 @@ pub fn billable_usage_is_complete(response: &Value, usage: TokenUsage) -> bool {
             .is_none_or(|value| value.as_u64() == total)
 }
 
-/// 从完整 SSE 文本中提取最终可见用量。
+/// 从完整 SSE 文本中提取最终可见用量
 ///
 /// 如果存在 `response.completed` 的 usage，则优先返回它；否则回退到最后一条
-/// 可见 usage 事件。
+/// 可见 usage 事件
 ///
 /// # Errors
 ///
-/// 当输入不是合法 SSE 流时，返回 [`SseError`]。
+/// 当输入不是合法 SSE 流时，返回 [`SseError`]
 pub fn extract_sse_usage(body: &str) -> Result<Option<TokenUsage>, SseError> {
     let events = parse_sse_events(body)?;
     let mut fallback_usage: Option<TokenUsage> = None;
@@ -231,22 +233,24 @@ pub fn extract_sse_usage(body: &str) -> Result<Option<TokenUsage>, SseError> {
     Ok(fallback_usage)
 }
 
-/// 从上游错误响应体中提取 retry-after 秒数。
+/// 从上游错误响应体中提取 retry-after 秒数
 ///
 /// 支持结构化的 `resets_in_seconds` / `resets_at`，也支持官方错误消息里的
-/// `try again in 11.054s` / `try again in 28ms` 文本。
+/// `try again in 11.054s` / `try again in 28ms` 文本
 pub fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
     let value = serde_json::from_str::<Value>(body).ok()?;
     retry_after_seconds_from_value(&value)
 }
 
-/// 从已解析的上游错误事件中提取重试秒数，不做业务错误分类。
+/// 从已解析的上游错误事件中提取重试秒数，不做业务错误分类
 pub fn retry_after_seconds_from_value(value: &Value) -> Option<u64> {
     let error = value
         .pointer("/response/error")
         .or_else(|| value.get("error"))
         .unwrap_or(value);
-    retry_after_seconds_field(error)
+    retry_after_seconds_header(error)
+        .or_else(|| retry_after_seconds_header(value))
+        .or_else(|| retry_after_seconds_field(error))
         .or_else(|| {
             error
                 .get("resets_in_seconds")
@@ -255,7 +259,6 @@ pub fn retry_after_seconds_from_value(value: &Value) -> Option<u64> {
         })
         .or_else(|| retry_after_seconds_from_resets_at(error))
         .or_else(|| retry_after_seconds_field(value))
-        .or_else(|| retry_after_seconds_header(value))
         .or_else(|| retry_after_seconds_from_rate_limit_message(error))
 }
 
@@ -278,7 +281,7 @@ fn retry_after_seconds_header(value: &Value) -> Option<u64> {
         .and_then(|headers| {
             headers.iter().find_map(|(name, value)| {
                 if name.eq_ignore_ascii_case("retry-after") {
-                    json_value_as_positive_u64(value)
+                    json_value_as_retry_after_seconds(value)
                 } else {
                     None
                 }
@@ -286,58 +289,57 @@ fn retry_after_seconds_header(value: &Value) -> Option<u64> {
         })
 }
 
-fn json_value_as_positive_u64(value: &Value) -> Option<u64> {
-    let seconds = match value {
-        Value::Number(value) => value.as_u64()?,
-        Value::String(value) => value.trim().parse::<u64>().ok()?,
-        Value::Array(values) => values.first().and_then(json_value_as_positive_u64)?,
-        Value::Null | Value::Bool(_) | Value::Object(_) => return None,
-    };
-    (seconds > 0).then_some(seconds)
+fn json_value_as_retry_after_seconds(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(value) => value.as_u64(),
+        Value::String(value) => super::headers::parse_retry_after_seconds(value),
+        Value::Array(values) => values.first().and_then(json_value_as_retry_after_seconds),
+        Value::Null | Value::Bool(_) | Value::Object(_) => None,
+    }
 }
 
-/// 标准化的单个限流窗口。
+/// 标准化的单个限流窗口
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RateLimitWindow {
-    /// 已使用百分比。
+    /// 已使用百分比
     pub used_percent: f64,
-    /// 窗口分钟数。
+    /// 窗口分钟数
     pub window_minutes: Option<u64>,
-    /// 重置时间戳。
+    /// 重置时间戳
     pub reset_at: Option<i64>,
 }
 
-/// 限流项键的来源。
+/// 限流项键的来源
 ///
 /// HTTP headers 和事件里的 `metered_limit_name` 提供稳定 `limit_id`；
 /// WebSocket `additional_rate_limits` 在部分协议版本里只以可读名称为 map key，
-/// 此时必须由持久化层用既有名称元数据解析，不能把名称误当成稳定 ID。
+/// 此时必须由持久化层用既有名称元数据解析，不能把名称误当成稳定 ID
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RateLimitKeySource {
     LimitId,
     LimitName,
 }
 
-/// 单个计量项的限流信息。
+/// 单个计量项的限流信息
 #[derive(Debug, Clone, PartialEq)]
 pub struct RateLimitDetails {
-    /// 稳定的计量项 ID。
+    /// 稳定的计量项 ID
     pub limit_id: String,
-    /// [`limit_id`](Self::limit_id) 是稳定 ID，还是名称生成的临时解析键。
+    /// [`limit_id`](Self::limit_id) 是稳定 ID，还是名称生成的临时解析键
     pub key_source: RateLimitKeySource,
-    /// 上游提供的可读名称。
+    /// 上游提供的可读名称
     pub limit_name: Option<String>,
-    /// 当前请求是否被允许。
+    /// 当前请求是否被允许
     pub allowed: Option<bool>,
-    /// 当前窗口是否已经触顶。
+    /// 当前窗口是否已经触顶
     pub limit_reached: Option<bool>,
-    /// 主限流窗口。
+    /// 主限流窗口
     pub primary: Option<RateLimitWindow>,
-    /// 次级限流窗口。
+    /// 次级限流窗口
     pub secondary: Option<RateLimitWindow>,
 }
 
-/// 上游账户的 credits 快照。
+/// 上游账户的 credits 快照
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreditsSnapshot {
     pub has_credits: bool,
@@ -345,12 +347,12 @@ pub struct CreditsSnapshot {
     pub balance: Option<String>,
 }
 
-/// 从 header 或内部事件中解析出的完整限流状态。
+/// 从 header 或内部事件中解析出的完整限流状态
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedRateLimits {
-    /// 以标准化 limit ID 为键的全部计量项。
+    /// 以标准化 limit ID 为键的全部计量项
     pub limits: BTreeMap<String, RateLimitDetails>,
-    /// 当前响应对应的计量项 ID。
+    /// 当前响应对应的计量项 ID
     pub active_limit: Option<String>,
     pub credits: Option<CreditsSnapshot>,
     pub plan_type: Option<String>,
@@ -358,7 +360,7 @@ pub struct ParsedRateLimits {
     pub rate_limit_reached_type: Option<String>,
 }
 
-/// 从响应头对中解析限流信息。
+/// 从响应头对中解析限流信息
 pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRateLimits> {
     let mut normalized = BTreeMap::new();
     for (name, value) in headers {
@@ -408,7 +410,7 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
     })
 }
 
-/// 判断响应头是否属于可被动同步的限流领域。
+/// 判断响应头是否属于可被动同步的限流领域
 pub fn is_rate_limit_header_name(name: &str) -> bool {
     let normalized = name.to_ascii_lowercase();
     normalized == "retry-after"
@@ -427,10 +429,10 @@ pub fn is_rate_limit_header_name(name: &str) -> bool {
         || rate_limit_id_from_header_name(&normalized).is_some()
 }
 
-/// 判断响应头是否为仅供代理本地观测的 Codex 额度信号。
+/// 判断响应头是否为仅供代理本地观测的 Codex 额度信号
 ///
-/// 这类头会让下游官方 Codex 客户端显示账户额度提示，因此不能穿过账号隔离边界。
-/// 通用限流头（例如 `retry-after`）和非额度的 Codex 头仍允许下发。
+/// 这类头会让下游官方 Codex 客户端显示账户额度提示，因此不能穿过账号隔离边界
+/// 通用限流头（例如 `retry-after`）和非额度的 Codex 头仍允许下发
 pub fn is_codex_quota_header_name(name: &str) -> bool {
     let normalized = name.trim().to_ascii_lowercase();
     matches!(
@@ -447,7 +449,7 @@ pub fn is_codex_quota_header_name(name: &str) -> bool {
         .is_some_and(|limit_id| limit_id == "codex" || limit_id.starts_with("codex_"))
 }
 
-/// 从内部 `codex.rate_limits` 事件中解析限流信息。
+/// 从内部 `codex.rate_limits` 事件中解析限流信息
 pub fn parse_rate_limits_event(value: &Value) -> Option<ParsedRateLimits> {
     if value.get("type").and_then(Value::as_str) != Some("codex.rate_limits") {
         return None;
@@ -479,7 +481,8 @@ pub fn parse_rate_limits_event(value: &Value) -> Option<ParsedRateLimits> {
         .unwrap_or_default();
 
     // 当前 WebSocket 协议会把活动具名桶同时镜像到顶层 `rate_limits`，但不附
-    // `metered_limit_name`。只要 additional 中存在相同事实，顶层就不是 core 桶。
+    // `metered_limit_name`
+    // 只要 additional 中存在相同事实，顶层就不是 core 桶
     let default_is_additional_alias =
         explicit_limit_id.is_none() && !matching_additional_ids.is_empty();
     if let Some(details) = default_details
@@ -524,14 +527,14 @@ pub fn parse_rate_limits_event(value: &Value) -> Option<ParsedRateLimits> {
     })
 }
 
-/// 从原始 JSON 文本中解析内部 `codex.rate_limits` 事件。
+/// 从原始 JSON 文本中解析内部 `codex.rate_limits` 事件
 pub fn parse_rate_limits_event_raw(raw: &str) -> Option<ParsedRateLimits> {
     serde_json::from_str::<Value>(raw)
         .ok()
         .and_then(|value| parse_rate_limits_event(&value))
 }
 
-/// 将限流状态转换回内部传输头键值对。
+/// 将限流状态转换回内部传输头键值对
 pub fn rate_limits_to_header_pairs(rate_limits: &ParsedRateLimits) -> Vec<(String, String)> {
     let mut headers = Vec::new();
     if let Some(active_limit) = &rate_limits.active_limit {
@@ -766,7 +769,7 @@ fn parse_credits_from_lookup(headers: &BTreeMap<String, &str>) -> Option<Credits
     })
 }
 
-/// 从额度查询或流式事件中提取同一份点数事实，缺失字段不推断为零余额。
+/// 从额度查询或流式事件中提取同一份点数事实，缺失字段不推断为零余额
 pub fn parse_credits_from_object(value: &Value) -> Option<CreditsSnapshot> {
     Some(CreditsSnapshot {
         has_credits: value.get("has_credits")?.as_bool()?,

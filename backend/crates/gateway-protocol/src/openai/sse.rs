@@ -1,28 +1,29 @@
-//! SSE 事件解析与编码。
+//! SSE 事件解析与编码
 
 use std::fmt;
 
 use serde_json::{Value, json};
 use thiserror::Error;
 
-/// 单条 SSE 事件。
+/// 单条 SSE 事件
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SseEvent {
-    /// 事件名。
+    /// 事件名
     pub event: Option<String>,
-    /// 数据体。
+    /// 数据体
     pub data: String,
-    /// 可选 ID。
+    /// 可选 ID
     pub id: Option<String>,
-    /// 可选 retry。
+    /// 可选 retry
     pub retry: Option<u64>,
 }
 
-/// 保留原始字节与旁路解析结果的 SSE wire 片段。
+/// 保留原始字节与旁路解析结果的 SSE wire 片段
 ///
-/// 通常一个片段就是完整 SSE 帧。单帧超过旁路观测预算时会拆成多个原始片段，
+/// 通常一个片段就是完整 SSE 帧
+/// 单帧超过旁路观测预算时会拆成多个原始片段，
 /// 此时 `events` 为空；透明 transport 必须按顺序交付 `raw`，不能从 `events`
-/// 反向重建或否决原始数据。
+/// 反向重建或否决原始数据
 #[derive(Clone, PartialEq, Eq)]
 pub struct SseFrame {
     raw: Vec<u8>,
@@ -34,19 +35,19 @@ impl SseFrame {
         Self { raw, events }
     }
 
-    /// 返回未经改写的完整 SSE 帧字节。
+    /// 返回未经改写的完整 SSE 帧字节
     #[must_use]
     pub fn raw(&self) -> &[u8] {
         &self.raw
     }
 
-    /// 返回从同一原始帧旁路解析出的事件。
+    /// 返回从同一原始帧旁路解析出的事件
     #[must_use]
     pub fn events(&self) -> &[SseEvent] {
         &self.events
     }
 
-    /// 拆出原始帧与旁路解析事件。
+    /// 拆出原始帧与旁路解析事件
     #[must_use]
     pub fn into_parts(self) -> (Vec<u8>, Vec<SseEvent>) {
         (self.raw, self.events)
@@ -63,23 +64,24 @@ impl fmt::Debug for SseFrame {
     }
 }
 
-/// 单事件旁路解析缓冲上限。
+/// 单事件旁路解析缓冲上限
 pub const MAX_SSE_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 
-/// SSE 流结束标记帧。
+/// SSE 流结束标记帧
 pub const DONE_SSE_FRAME: &str = "data: [DONE]\n\n";
 
-/// 用于处理任意分块边界的增量 SSE 解码器。
+/// 用于处理任意分块边界的增量 SSE 解码器
 #[derive(Debug)]
 pub struct SseEventDecoder {
     pending: Vec<u8>,
-    /// `pending` 中已确认不含帧分隔符的前缀长度。新数据到达时从该边界
-    /// 回退分隔符最大跨界宽度继续扫描，大帧跨多个 chunk 不会被反复重扫。
+    /// `pending` 中已确认不含帧分隔符的前缀长度
+    /// 新数据到达时从该边界
+    /// 回退分隔符最大跨界宽度继续扫描，大帧跨多个 chunk 不会被反复重扫
     scanned: usize,
     /// 超大未完成帧已开始直接交付；在遇到帧分隔符前只保留跨 chunk 扫描尾部，
-    /// 不再尝试解析该帧。
+    /// 不再尝试解析该帧
     opaque_frame: bool,
-    /// 只有整个 SSE 流的第一条物理行允许携带 UTF-8 BOM。
+    /// 只有整个 SSE 流的第一条物理行允许携带 UTF-8 BOM
     stream_start: bool,
 }
 
@@ -95,9 +97,9 @@ impl Default for SseEventDecoder {
 }
 
 impl SseEventDecoder {
-    /// 返回从 `consumed` 起的下一个完整帧结束位置（含分隔符），并推进扫描边界。
+    /// 返回从 `consumed` 起的下一个完整帧结束位置（含分隔符），并推进扫描边界
     fn next_frame_end(&mut self, consumed: usize) -> Option<usize> {
-        // `\r\n\r\n` 分隔符可能跨 chunk 边界，扫描起点回退 3 字节。
+        // `\r\n\r\n` 分隔符可能跨 chunk 边界，扫描起点回退 3 字节
         let from = self.scanned.saturating_sub(3).max(consumed);
         match sse_frame_separator_bytes(&self.pending[from..]) {
             Some((position, separator_len)) => {
@@ -119,7 +121,7 @@ impl SseEventDecoder {
         }
     }
 
-    /// 追加一个字节块并返回其中已经完整的事件。
+    /// 追加一个字节块并返回其中已经完整的事件
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseEvent>, SseError> {
         self.pending.extend_from_slice(chunk);
         let mut events = Vec::new();
@@ -142,11 +144,12 @@ impl SseEventDecoder {
         Ok(events)
     }
 
-    /// 追加一个字节块，保留每个完整 SSE 帧的原始字节及其旁路解析结果。
+    /// 追加一个字节块，保留每个完整 SSE 帧的原始字节及其旁路解析结果
     ///
     /// 与 [`Self::push`] 相比，此方法仅应由需要原样转发的 transport 使用；普通
-    /// 解析路径无需为原始帧额外分配内存。旁路解析失败时仍保留原始帧，并以空
-    /// event 列表表示不可观测，避免观测失败截断客户端字节流。
+    /// 解析路径无需为原始帧额外分配内存
+    /// 旁路解析失败时仍保留原始帧，并以空
+    /// event 列表表示不可观测，避免观测失败截断客户端字节流
     pub fn push_frames(&mut self, chunk: &[u8]) -> Vec<SseFrame> {
         self.pending.extend_from_slice(chunk);
         let mut frames = Vec::new();
@@ -179,7 +182,7 @@ impl SseEventDecoder {
         frames
     }
 
-    /// 流结束时解析尚未带空行分隔符的最后一帧。
+    /// 流结束时解析尚未带空行分隔符的最后一帧
     pub fn finish(&mut self) -> Result<Vec<SseEvent>, SseError> {
         self.scanned = 0;
         if self.pending.is_empty() {
@@ -193,9 +196,9 @@ impl SseEventDecoder {
         Ok(events)
     }
 
-    /// 在流结束时返回未带空行分隔符的最后一帧及其旁路解析结果。
+    /// 在流结束时返回未带空行分隔符的最后一帧及其旁路解析结果
     ///
-    /// 与 [`Self::push_frames`] 一致，旁路解析失败不会丢弃原始帧。
+    /// 与 [`Self::push_frames`] 一致，旁路解析失败不会丢弃原始帧
     pub fn finish_frames(&mut self) -> Vec<SseFrame> {
         self.scanned = 0;
         if self.pending.is_empty() {
@@ -216,7 +219,7 @@ impl SseEventDecoder {
         vec![SseFrame::new(raw, events)]
     }
 
-    /// 继续透明交付一个已超出观测预算的帧，并在分隔符后恢复普通解析。
+    /// 继续透明交付一个已超出观测预算的帧，并在分隔符后恢复普通解析
     fn finish_opaque_frame(&mut self, frames: &mut Vec<SseFrame>) -> bool {
         let Some((position, separator_len)) = sse_frame_separator_bytes(&self.pending) else {
             return false;
@@ -231,7 +234,7 @@ impl SseEventDecoder {
         true
     }
 
-    /// 仅保留分隔符可能跨 chunk 的最大前缀宽度，其余原始字节立即释放给下游。
+    /// 仅保留分隔符可能跨 chunk 的最大前缀宽度，其余原始字节立即释放给下游
     fn flush_opaque_prefix(&mut self, frames: &mut Vec<SseFrame>) {
         const SEPARATOR_CROSS_CHUNK_BYTES: usize = 3;
         let emit_len = self
@@ -249,12 +252,12 @@ impl SseEventDecoder {
     }
 }
 
-/// 编码 OpenAI Responses `response.failed` SSE 事件。
+/// 编码 OpenAI Responses `response.failed` SSE 事件
 pub fn response_failed_sse_event(error_type: &str, code: &str, message: &str) -> String {
     response_failed_sse_event_with_id(None, error_type, code, message)
 }
 
-/// 使用指定 response id 编码 OpenAI Responses `response.failed` SSE 事件。
+/// 使用指定 response id 编码 OpenAI Responses `response.failed` SSE 事件
 pub fn response_failed_sse_event_with_id(
     response_id: Option<&str>,
     error_type: &str,
@@ -265,7 +268,7 @@ pub fn response_failed_sse_event_with_id(
     encode_sse_event("response.failed", &data.to_string())
 }
 
-/// 构造 OpenAI Responses `response.failed` 的 JSON 数据。
+/// 构造 OpenAI Responses `response.failed` 的 JSON 数据
 pub fn response_failed_sse_data_with_id(
     response_id: Option<&str>,
     error_type: &str,
@@ -289,10 +292,11 @@ pub fn response_failed_sse_data_with_id(
     })
 }
 
-/// 将携带嵌套错误的上游事件投影为 OpenAI Responses `response.failed` 数据。
+/// 将携带嵌套错误的上游事件投影为 OpenAI Responses `response.failed` 数据
 ///
-/// 该投影供客户端 SSE 兼容转换使用。原始错误对象和事件级元数据保持不透明；
-/// 已有 response 快照只更新失败终态字段。
+/// 该投影供客户端 SSE 兼容转换使用
+/// 原始错误对象和事件级元数据保持不透明；
+/// 已有 response 快照只更新失败终态字段
 pub fn response_failed_sse_data_from_error_event(
     response: Option<&Value>,
     response_id: Option<&str>,
@@ -333,12 +337,12 @@ fn response_id_or_generated(response_id: Option<&str>) -> String {
         )
 }
 
-/// 返回下一个完整 SSE 帧结束位置（含分隔符）。
+/// 返回下一个完整 SSE 帧结束位置（含分隔符）
 pub fn sse_frame_end(bytes: &[u8]) -> Option<usize> {
     sse_frame_separator_bytes(bytes).map(|(position, separator_len)| position + separator_len)
 }
 
-/// 判断完整 SSE 帧是否是单个 `[DONE]` 控制帧。
+/// 判断完整 SSE 帧是否是单个 `[DONE]` 控制帧
 #[must_use]
 pub fn sse_frame_is_done(frame: &str) -> bool {
     let mut data = frame.lines().filter_map(|raw_line| {
@@ -349,19 +353,19 @@ pub fn sse_frame_is_done(frame: &str) -> bool {
     matches!((data.next(), data.next()), (Some("[DONE]"), None))
 }
 
-/// SSE 解析错误。
+/// SSE 解析错误
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SseError {
-    /// retry 字段不是合法整数。
+    /// retry 字段不是合法整数
     #[error("invalid SSE retry value: {0}")]
     InvalidRetry(String),
-    /// 单个事件缓冲超过上限。
+    /// 单个事件缓冲超过上限
     #[error("SSE buffer exceeded {max_bytes} bytes — aborting stream")]
     BufferExceeded {
-        /// 上限字节数。
+        /// 上限字节数
         max_bytes: usize,
     },
-    /// 解析错误。
+    /// 解析错误
     #[error("SSE parse error: {0}")]
     ParseError(String),
 }
@@ -408,7 +412,7 @@ impl EventBuilder {
     }
 }
 
-/// 解析 SSE 事件流。
+/// 解析 SSE 事件流
 pub fn parse_sse_events(input: &str) -> Result<Vec<SseEvent>, SseError> {
     parse_sse_events_inner(input, true)
 }
@@ -468,12 +472,12 @@ fn parse_sse_events_inner(input: &str, strip_leading_bom: bool) -> Result<Vec<Ss
     Ok(events)
 }
 
-/// 编码单条 SSE 事件。
+/// 编码单条 SSE 事件
 pub fn encode_sse_event(event: &str, data: &str) -> String {
     encode_sse_event_with_metadata(event, data, None, None)
 }
 
-/// 编码一条完整的 SSE 事件并保留上游 `id` 与 `retry` 元数据。
+/// 编码一条完整的 SSE 事件并保留上游 `id` 与 `retry` 元数据
 pub fn encode_sse_event_with_metadata(
     event: &str,
     data: &str,

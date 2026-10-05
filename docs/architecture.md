@@ -6,7 +6,7 @@
 
 | 阅读目标 | 章节 |
 | --- | --- |
-| 了解模块与插件边界 | [运行拓扑](#2-运行拓扑)、[Workspace](#3-workspace-边界)、[插件扩展](#31-插件扩展) |
+| 了解模块与插件边界 | [运行拓扑](#2-运行拓扑)、[Workspace](#3-workspace-边界)、[插件扩展](#31-插件扩展)、[前端职责](#34-前端模块职责) |
 | 跟踪一次请求 | [请求生命周期](#4-数据面请求生命周期)、[协议边界](#5-provider-与协议边界)、[路由与结算](#6-路由账号范围与-continuation) |
 | 修改配置与持久化 | [控制面](#7-控制面与-revision)、[状态所有权](#8-状态所有权) |
 | 维护运行行为 | [凭据与额度](#9-credential额度与主动重置)、[观测与任务](#10-观测与后台任务)、[生命周期](#11-生命周期安全与恢复) |
@@ -251,7 +251,7 @@ HTTP 字段见 [插件 API](api.md#12-插件管理)，更新与数据恢复见 [
 | `policy` | Client API Key 准入、原始 Key 设置与客户端版本策略；只使用账号范围、Provider 身份和基础校验 |
 | `metering` | 标准化 Usage、金额、费用估算与费用明细；不表示账号或开票系统 |
 | `upstream` | 跨 Engine、Event、Error 与 Provider 共用的 transport 名称、发送状态和不透明上游值 |
-| `lifecycle` | 取消信号、连接注册与 drain 合同 |
+| `lifecycle` | 取消信号、可选执行截止与租约生命周期、连接注册与 drain 合同 |
 | `engine` | attempt、发送/提交屏障、执行编排和持久化调用时序 |
 | `routing` | 冻结路由事实、请求计划、Provider 只读目录合同以及运行时快照的表示与编译 |
 | `runtime` | 当前快照的发布、读取、revision 订阅与周期对账任务 |
@@ -290,6 +290,31 @@ WS 路由提示属于握手，连接复用时不重发；档位变化不重建�
 Provider 本地估算按当前 attempt 实际发送的上游模型查价，响应声明的模型只作观测；费用明细复用同一口径。
 Client Key 费用账本独立累计各次 attempt 的实际费用，不能因请求重试而清空已产生的费用或未知计费状态
 
+### 3.4 前端模块职责
+
+`frontend/src` 持有应用状态和业务交互，基础组件与主题算法由 `@codex-proxy/ui` 提供：
+
+| 入口 | 职责 |
+| --- | --- |
+| `api/modules/`、`api/request.ts` | HTTP 合同、统一请求与错误处理；业务页面不重复解释响应信封 |
+| `stores/modules/`、`router/`、`plugins/` | 应用级登录与界面状态、路由和初始化；服务端数据的权威仍在后端 |
+| `views/<页面>/index.vue`、`views/<页面>/components/` | 页面组合与局部交互；复杂组件按职责拆成目录入口和相邻模块 |
+| `views/<页面>/composables/` | 页面查询、轮询、表单及操作生命周期 |
+| `presenter.ts`、页面 `utils/` | 纯展示投影或该页面拥有的业务转换，不启动请求 |
+| `components/usage/`、`components/account/` | 跨页面复用的用量、健康时间线、套餐和额度窗口展示 |
+| `composables/` | 请求取消与过期结果隔离、分页、选择、异步动作、目录加载等共享机制 |
+| `utils/` | 按用途分开的数据解析、数字与时长格式化、位置校验、客户端配置、插件导航及颜色工具 |
+
+概览的数据请求和刷新由 `useDashboard` 持有，`views/dashboard/presenter.ts` 生成展示模型。
+Key 创建与编辑共用 `useApiKeyEditor` 和 `ApiKeyFormModal`，创建结果与密钥使用弹窗各自管理明文生命周期。
+用量表格的列、展示投影及健康时间线规则集中在 `components/usage/shared/`，管理页面与 Key 用量页共用展示，
+各自的查询仍使用对应身份允许的 API
+
+`useRequestState` 管理取消、请求序号与失效结果；分页按接口合同分别复用 `usePagedQuery` 或 `useStablePagedQuery`。
+`useAsyncAction` 的 `loading` 是动作进行状态，调用方直接使用；接口错误由请求层提示，本地操作错误按动作配置处理。
+可由草稿与保存快照比较得到的修改状态使用派生值，不另维护同步标志。
+展示字段和业务资格沿用后端事实，数字与持续时长可以在前端格式化，日期与时区合同见 [API 页面时间](api.md#页面时间合同)
+
 ## 4. 数据面请求生命周期
 
 ```mermaid
@@ -317,6 +342,10 @@ sequenceDiagram
 候选顺序和调度策略。
 运行中的请求始终使用该快照，不拼接不同版本的配置，也不在热路径查询分组关系
 
+模型请求默认不限制总执行时长；插件显式设置的总时限从请求开始计时，Provider 的传输空闲超时独立生效。
+Client Key 并发占用、账号调度槽位与请求恢复记录使用可续期租约，不把租约 TTL 当作总执行预算。
+会话结束或 Drop 后停止续期；Redis 并发租约丢失或无法在有效期内续期时取消请求，避免失去并发约束后继续执行
+
 智能调度配置由 Core 定义和校验，Store 随运行设置及配置 revision 原子保存，快照编译器将其纳入
 `AccountSelectionPolicy`。内置选号与诊断复用同一评分函数，近似最优容差随参与立即选号的五项系数总和缩放。
 额度重置复用 Provider 的有效重置时间投影，未知或已过期时间不加分。排队系数不影响立即选号的分数和容差，
@@ -343,6 +372,10 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/
   重试与提交边界。具体错误合同见 [数据面接口](api.md#3-openai-数据面与模型目录)
 - Provider 可将明确容量拒绝标记为有界同账号退避，Core 在既有安全重放边界内执行，按账号维护请求内
   预算，耗尽后复用普通换号路径。该退避消耗总路由预算，与 WS 传输恢复、OAuth 刷新及账号额度冷却分开
+- 换号有独立的请求内预算：选中账号与上一 attempt 不同的路由 attempt 至多 3 次，跨 Provider 候选
+  推进与 continuation 排除重放同样受限；预算耗尽后不再换号，以最后一个原始上游错误终态。同账号重试
+  与总路由预算不受影响
+- Provider 显式标记的终止拒绝禁止自动重试与传输回退，优先于未发送状态和安全重放证明
 - 跨 Provider 只在账号范围和能力都允许，且请求尚未到达上游或已被证明可安全重放时发生
 - 可恢复观测写入失败不能替换已经确定的客户端协议结果
 
@@ -480,7 +513,7 @@ Provider 管理适配在仍持有结构化失败事实时选择静态 `public_me
 连接测试的 `gateway` / `provider` / `upstream` 来源以及 `not_sent` / `sent` / `ambiguous` 发送状态由 Core 在
 仍持有完整执行错误时一次判定；Vue 只能根据稳定字段生成摘要，不能匹配英文错误句子反推来源
 
-Vue 普通管理请求的错误提示由 `api/request.ts` 响应拦截器统一负责：优先展示安全信封的 `message`，
+Vue 普通管理请求的错误提示由 `api/request.ts` 请求封装统一负责：优先展示安全信封的 `message`，
 缺失或空白时才使用请求层的 HTTP、网络或超时兜底；成功业务码为 `200`，HTTP 成功但业务码失败也会拒绝。
 规范化异常保留 `status`、`code`、`requestId` 与 `kind`。页面和 `useAsyncAction` 不重复弹出接口错误；
 查询可以保留失败状态与重试入口，本地校验、文件操作、SSE 诊断和成功响应中的业务结果仍归各自 owner
@@ -557,7 +590,7 @@ Core 的 `concurrency` 拥有中立的有界等待位置、优先级与同级 FI
 Provider 等待重试仍在同一次未发送准备阶段重新读取账号资格、容量、目录和冷却，不增加 attempt；
 Key 的 RPM 在成功准入时才计数，金额限制在入队前及成功准入后检查。
 账号并发与本地请求间隔可有限等待，权限、额度和上游冷却不能作为可等待容量。
-密钥准入、账号选择与后续重试共享请求级等待预算，从首次入队开始计时，同时受请求整体截止时刻约束。
+密钥准入、账号选择与后续重试共享请求级等待预算，从首次入队开始计时；显式设置请求总时限时也受其约束。
 切换等待层、账号或 Provider 不重置等待时限；没有发生排队时不启动该计时，也不据此中断已开始的上游生成。
 队列满/超时属于本地容量拒绝，不作为上游限流反馈或 Provider 故障熔断证据
 
@@ -645,9 +678,9 @@ HTTP validation
 ```
 
 会改变路由快照或安全配置的 mutation 在同一 PostgreSQL 事务中提交业务事实、推进内部
-`config_revision` 并写入脱敏审计。`configRevision` 不作为客户端写入的乐观并发前置条件；
-少数账号/分组响应返回它用于标识已提交的配置。插件配置等资源另有 `revision` / `expectedRevision` 检查，
-不能与全局配置版本混用
+`config_revision` 并写入脱敏审计。账号、分组等响应中的 `configRevision` 表示已提交配置，
+不构成所有写入的统一前置条件。运行设置整体替换必须携带读取版本，Store 在同一事务比较后才提交，
+防止覆盖并发修改；插件、代理等资源使用各自的 `revision` / `expectedRevision`，不能与全局版本混用
 
 额度、cooldown、目录 generation、请求统计和自动 credential refresh 属于运行时观测，不推进全局
 revision；credential 轮换只推进账号自己的 `credential_revision`。Redis 通知用于缩短收敛延迟，
@@ -690,6 +723,9 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
 - OpenAI 支持 OAuth、AT/RT、PAT 和上游 API Key。OAuth 身份来自官方 JWT claims，PAT 经官方身份接口验证，
   不信任导入文档顶层身份字段。RT-only 导入先换取 AT；AT-only、PAT 与 API Key 不参加 OAuth 自动续期。
   输入形态和适用操作见 [账号能力与导入](api.md#账号能力导入与-oauth)
+- OAuth 自动续期按运行时设置的提前量触发，默认 300 秒对齐官方客户端 exp 前 5 分钟的刷新窗口。
+  每个账号的有效提前量在 [margin, 2×margin] 内由账号 ID 派生稳定错峰偏移，减少同一时刻
+  到期账号的集中刷新；恢复窗口内的强制刷新不受偏移影响
 - xAI 使用 OAuth session；API Key 不是受支持的账号 credential。刷新额度时同步查询官方实时订阅，
   只把套餐事实写入现有 quota JSON。明确无付费订阅的个人账号显示 Free；查询失败、缺失字段或
   团队身份不推断为 Free，订阅查询失败不影响额度观测
@@ -716,8 +752,8 @@ OpenAI 订阅周期属于按需个人信息，不是额度事实。Admin 账号�
 ### 额度预测
 
 账号容量预测属于 Admin 的只读派生规则，不参与 quota 权威状态、调度或金额结算。Store 通过专用采样端口
-在同一 SQL 快照内返回截至观测时间的累计数值及有界历史 Provider 文档；原生 Provider 复用协议解析器解释
-文档，插件由 Runtime 本地解释 SDK 声明的版本化额度观测，不在历史查询中调用插件进程。观测通过 Core 原有
+在同一 SQL 快照内返回截至观测时间的累计数值及有界历史 Provider 文档；对应 Provider 复用协议解析器解释
+文档，不在历史查询中刷新上游额度。观测通过 Core 原有
 请求结算持久化，账号关联由实际执行上下文确定，窗口身份与归属必须匹配当前额度窗口。Admin 按中立的额度
 事实选择近期进度段预测剩余量，再加本周期已记录用量形成周期总量。
 周期以额度重置为边界，重置后累计与样本重新开始。该采样不改变全站完整交付用量口径，不创建第二份
@@ -738,6 +774,9 @@ OpenAI 订阅周期属于按需个人信息，不是额度事实。Admin 账号�
 请求观测通过有界进程内队列异步投影到 PostgreSQL。队列满、Store 暂不可用或进程退出超时时，允许丢失
 可恢复观测并累计指标，但不允许改变客户端响应。Usage 详情中的 attempt 因此是 best-effort，并通过
 `attemptsComplete: false` 明示不完整性
+
+`model_requests.deadline_at` 是异常回收租约的到期时间，运行会话持续刷新，且不超过显式执行截止。
+进程退出后停止刷新，Worker 按过期租约收敛遗留的 running 记录；该观测续期失败不取消客户端执行
 
 模型执行以 `model_requests.id` 标识，上游身份由 `upstream_request_id` 保存。
 API 输出模型执行与上游请求的关联信息，具体响应头规则见 [数据面接口](api.md#3-openai-数据面与模型目录)。
@@ -885,9 +924,6 @@ RUST_MIN_STACK=16777216 cargo +1.97.0 test --manifest-path backend/Cargo.toml --
 插件 Runtime 的真实子进程与持久化测试使用 `CPR_PLUGIN_TEST_DATABASE_URL` 和
 `CPR_PLUGIN_TEST_REDIS_URL` 指向专用实例；未提供插件专用变量时复用 `CPR_TEST_DATABASE_URL` 与 `CPR_TEST_REDIS_URL`。
 密码及隔离要求与上述 Store 测试一致，CI 缺少服务配置时直接失败。
-设置 `CPR_PLUGIN_TEST_LIVE_HTTP=1` 会额外请求 GitHub 公共 HTTPS API，验证受管出站链路；这不代表模型推理验收。
-若测试环境使用 Fake-IP 或私网 DNS，需通过 `CPR_PLUGIN_TEST_LIVE_NETWORK_RANGES` 显式提供逗号分隔的
-CIDR 授权。该选项只用于真实网络测试，默认为空，不改变生产网络策略或其他测试的授权
 
 测试归档缓存在 Cargo 测试临时目录的 `plugin-packages-v1/`，按含 worker 摘要的清单跨进程复用；
 每项测试独立校验、解包并创建会话、子进程与 Store，缓存不承载可变运行状态

@@ -1,3 +1,5 @@
+//! 验证凭据状态与目录缓存保持 Provider 中立的键和值合同
+
 use chrono::Utc;
 use gateway_store::{
     Revision,

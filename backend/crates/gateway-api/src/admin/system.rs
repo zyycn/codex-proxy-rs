@@ -1,7 +1,7 @@
-//! 系统管理接口的查询与请求 wire contract。
+//! 系统管理接口的查询与请求 wire contract
 
 //!
-//! 这里不依赖更新服务或进程控制；应用层通过窄端口提供系统操作事实。
+//! 这里不依赖更新服务或进程控制；应用层通过窄端口提供系统操作事实
 
 use crate::auth::SessionState;
 
@@ -30,7 +30,7 @@ use super::{
     wire::map_admin_service_error,
 };
 
-/// 更新详情查询参数。
+/// 更新详情查询参数
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateDetailQuery {
@@ -44,14 +44,14 @@ impl UpdateDetailQuery {
         self.channel
     }
 
-    /// 是否强制从发布源刷新。
+    /// 是否强制从发布源刷新
     #[must_use]
     pub fn refresh(&self) -> bool {
         self.refresh.unwrap_or(false)
     }
 }
 
-/// 执行更新请求。
+/// 执行更新请求
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRequest {
@@ -60,7 +60,7 @@ pub struct UpdateRequest {
 }
 
 impl UpdateRequest {
-    /// 取出确认的目标版本原值，由更新领域负责版本规范化和校验。
+    /// 取出确认的目标版本原值，由更新领域负责版本规范化和校验
     #[must_use]
     pub fn into_target_version(self) -> String {
         self.target_version
@@ -237,7 +237,7 @@ struct SystemUpdateEventView {
     at_display: String,
 }
 
-/// 构造固定 GET/POST 系统管理路由。
+/// 构造固定 GET/POST 系统管理路由
 pub fn router<S>() -> Router<S>
 where
     S: SessionState + Clone + Send + Sync + 'static,

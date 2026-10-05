@@ -1,3 +1,5 @@
+//! 校验并解码插件上游事件，转换为宿主执行事件与错误
+
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -78,7 +80,7 @@ impl EventDecoder {
             if tier.is_empty() || tier.len() > 64 || tier.chars().any(char::is_control) {
                 return Err(invalid(sent).into());
             }
-            // 上游可能在完成时才把 auto 解析为实际档位；与原生观测一样保留最新值。
+            // 上游可能在完成时才把 auto 解析为实际档位；与原生观测一样保留最新值
             self.service_tier = Some(tier);
         }
         let mut facts = Vec::new();

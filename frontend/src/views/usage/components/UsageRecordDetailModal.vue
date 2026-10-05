@@ -1,35 +1,31 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
-import type { UsageViewModel } from '../utils/records'
+import type { UsageRecordDetail } from '@/api'
 
 import { BaseButton, BaseModal, BaseTable, defineTableColumns } from '@codex-proxy/ui'
 import { computed } from 'vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { chartTooltipStyle } from '@/components/charts/tooltip'
-import { useChartPalette } from '@/composables/useChartPalette'
-import { displayValue, fieldLabelClass, fieldValueBaseClass, fieldValueClass } from '../utils/detail'
-import { formatDuration } from '../utils/format'
 import {
   usageAccountText,
-  usageBilling,
   usageBillingText,
   usageClientIp,
   usageLatencyDetails,
   usageModelDisplay,
   usageReasoningEffort,
-  usageTokenDetails,
   usageTransportType,
   usageUserAgent,
-  visibleRequestText,
-  visibleResponseText,
-} from '../utils/records'
+} from '@/components/usage/shared/presenter'
+import { useChartPalette } from '@/composables/useChartPalette'
+import { formatDuration } from '@/utils/format'
+import { displayValue, fieldLabelClass, fieldValueBaseClass, fieldValueClass, visibleRequestText, visibleResponseText } from '../utils/detail'
 import RequestDiagnosticsPanel from './RequestDiagnosticsPanel.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 import UsageDetailFieldGrid from './UsageDetailFieldGrid.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
 const props = defineProps<{
-  record: UsageViewModel | null
+  record: UsageRecordDetail | null
 }>()
 
 const open = defineModel<boolean>({ default: false })
@@ -41,8 +37,8 @@ const responseText = computed(() => props.record ? visibleResponseText(props.rec
 const modelDisplay = computed(() => props.record
   ? usageModelDisplay(props.record)
   : { primary: '—', secondary: '' })
-const tokenDetails = computed(() => props.record ? usageTokenDetails(props.record) : null)
-const billing = computed(() => props.record ? usageBilling(props.record) : null)
+const tokenDetails = computed(() => props.record ? props.record.tokenDetails : null)
+const billing = computed(() => props.record ? props.record.billing : null)
 const latencyDetails = computed(() => props.record ? usageLatencyDetails(props.record) : null)
 
 const panelClass = 'min-w-0 rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5'
@@ -468,11 +464,11 @@ const tokenDonutOption = computed<EChartsOption>(() => {
         </div>
       </section>
 
-      <section v-if="record.providerMetadata" class="min-h-0" :class="[panelClass]">
+      <section v-if="record.metadata" class="min-h-0" :class="[panelClass]">
         <UsageDetailCodePanel
           title="元数据"
           max-height="min(32dvh, 340px)"
-          :content="JSON.stringify(record.providerMetadata, null, 2)"
+          :content="JSON.stringify(record.metadata, null, 2)"
         />
       </section>
     </div>

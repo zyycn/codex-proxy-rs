@@ -1,3 +1,5 @@
+//! Responses HTTP 流式交付、错误、取消与计量边界测试
+
 use std::collections::VecDeque;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
@@ -610,7 +612,7 @@ async fn compressed_http_requests_should_preserve_execution_context_without_tran
         let (response, observed) =
             http_request_with_body("openai", compressed.into(), headers, None).await;
         // 捕获执行器在解码成功后主动返回 500；正文和业务头应与未压缩请求一致，
-        // 压缩编码及长度不能泄漏到已解压正文的上游协议上下文。
+        // 压缩编码及长度不能泄漏到已解压正文的上游协议上下文
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(observed.as_ref(), Some(&expected), "{encoding}");
     }
@@ -728,7 +730,7 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
             operation_kind: OperationKind::Generate,
             input: Some(json!("hello")),
             client_metadata: None,
-            // 客户端 User-Agent 仅用于本地展示，不再透传给上游指纹上下文。
+            // 客户端 User-Agent 仅用于本地展示，不再透传给上游指纹上下文
             protocol_context: Some(json!({"opaque_request_headers": [
                 ["cf-connecting-ip", STANDARD.encode(b"198.51.100.1")],
                 ["x-real-ip", STANDARD.encode(b"198.51.100.2")],
@@ -2290,7 +2292,7 @@ async fn buffered_response_collects_completed_output_items_without_rewriting_str
         "future_terminal_field": {"keep": true}
     });
     let mut events = vec![provider_event_for_fact(started())];
-    // 完成顺序不决定输出顺序；相同完成项重传不能产生重复正文。
+    // 完成顺序不决定输出顺序；相同完成项重传不能产生重复正文
     for (index, item) in [(1, &tool), (0, &message), (0, &message)] {
         events.push(super::openai_wire_event(
             vec![],
@@ -3005,7 +3007,7 @@ async fn compressed_http_request_above_default_limit_should_reach_execution_afte
                     .unwrap();
             assert_eq!(error["error"]["code"], "request_too_large");
         } else {
-            // 捕获执行服务刻意返回 500；断言完整输入到达执行层，而不是只验证路由状态码。
+            // 捕获执行服务刻意返回 500；断言完整输入到达执行层，而不是只验证路由状态码
             let captured = observed
                 .lock()
                 .unwrap()

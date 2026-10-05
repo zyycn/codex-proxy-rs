@@ -1,3 +1,5 @@
+//! 验证协议消息的诊断输出不泄漏对端载荷与错误详情
+
 use gateway_plugin_sdk::{Frame, Message};
 
 #[test]

@@ -1,3 +1,5 @@
+//! 将插件管理声明编译为页面、路由与资源入口
+
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use gateway_admin::model::{

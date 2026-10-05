@@ -1,3 +1,5 @@
+//! 验证旧中间件的 Fast 设置适配与不兼容插件的实例故障隔离
+
 use super::*;
 use gateway_core::{policy::ClientPolicy, settings::RequestSettings};
 use serde_json::{Value, json};
@@ -39,7 +41,7 @@ async fn legacy_middleware_preserves_three_state_fast_and_projects_sources() {
                 true,
                 Default::default(),
             ),
-            60_000,
+            Some(60_000),
         );
         let mut seed = settings.execution_values().unwrap();
         seed.fast_mode = mode;
@@ -94,7 +96,10 @@ async fn legacy_middleware_preserves_three_state_fast_and_projects_sources() {
                     Box::pin(async move {
                         let settings = request.settings().unwrap();
                         assert_eq!(settings.execution_values().unwrap().fast_mode, expected);
-                        assert_eq!(settings.execution_values().unwrap().timeout_ms, 90_000);
+                        assert_eq!(
+                            settings.execution_values().unwrap().timeout_ms,
+                            Some(90_000)
+                        );
                         let sources = settings.inspect();
                         assert!(sources["execution"].get("disable_fast").is_none());
                         if mode == FastMode::Enabled && !write {

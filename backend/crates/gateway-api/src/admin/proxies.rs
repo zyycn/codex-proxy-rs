@@ -1,3 +1,5 @@
+//! 账号出站代理管理的 HTTP 请求校验、路由与展示投影
+
 use crate::auth::SessionState;
 
 use axum::{

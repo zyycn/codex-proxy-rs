@@ -1,4 +1,4 @@
-//! xAI 官方 OIDC token 的生产校验边界。
+//! xAI 官方 OIDC token 的生产校验边界
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -34,7 +34,7 @@ const MAX_SUBJECT_BYTES: usize = 512;
 const MAX_KEY_ID_BYTES: usize = 128;
 const MAX_AUDIENCES: usize = 16;
 
-/// 使用官方 JWKS 与 user-info endpoint 的严格生产 verifier。
+/// 使用官方 JWKS 与 user-info endpoint 的严格生产 verifier
 pub struct ReqwestOidcTokenVerifier {
     egress: crate::transport::egress::EgressCache<
         Option<gateway_core::account::OutboundProxy>,
@@ -51,11 +51,11 @@ struct OidcEgress {
 
 impl ReqwestOidcTokenVerifier {
     /// 构建 verifier；使用显式 endpoint policy 与 JWKS cache TTL，只允许访问
-    /// `auth.x.ai` 官方验证端点。
+    /// `auth.x.ai` 官方验证端点
     ///
     /// # Errors
     ///
-    /// HTTP client 初始化失败时返回 transport build error。
+    /// HTTP client 初始化失败时返回 transport build error
     pub fn new(
         endpoint_policy: Arc<dyn GrokEndpointPolicy>,
         cache_ttl: Duration,
@@ -258,7 +258,7 @@ impl ReqwestOidcTokenVerifier {
             return Err(VerificationFailure::Rejected);
         }
 
-        // 每个出口持锁获取，冷启动和轮换共用单飞；不同出口互不阻塞。
+        // 每个出口持锁获取，冷启动和轮换共用单飞；不同出口互不阻塞
         let mut cache = egress.jwks_cache.lock().await;
         let cache_is_fresh = cache.uri.as_ref() == Some(jwks_uri)
             && cache
@@ -269,7 +269,7 @@ impl ReqwestOidcTokenVerifier {
                 return key.decoding_key();
             }
 
-            // fresh cache 未命中 kid 时只强制刷新一次，以支持官方密钥轮换。
+            // fresh cache 未命中 kid 时只强制刷新一次，以支持官方密钥轮换
             let keys = self.fetch_jwks(jwks_uri, &egress.client).await?;
             cache.replace(jwks_uri.clone(), keys);
             return cache
@@ -279,7 +279,7 @@ impl ReqwestOidcTokenVerifier {
                 .decoding_key();
         }
 
-        // 过期缓存不会在网络或协议失败时作为 stale fallback 使用。
+        // 过期缓存不会在网络或协议失败时作为 stale fallback 使用
         let keys = self.fetch_jwks(jwks_uri, &egress.client).await?;
         cache.replace(jwks_uri.clone(), keys);
         cache
@@ -384,7 +384,7 @@ impl CachedJwk {
     }
 }
 
-// RFC 7517 要求忽略 JWKS 与 JWK 的未知成员；字段本身的强校验在 parse_jwks。
+// RFC 7517 要求忽略 JWKS 与 JWK 的未知成员；字段本身的强校验在 parse_jwks
 #[derive(Deserialize)]
 struct JwksWire {
     keys: Vec<JwkWire>,

@@ -1,3 +1,5 @@
+//! 验证 Grok 客户端画像的环境、版本模式与头部注入防护
+
 use gateway_core::account::OpaqueProviderData;
 use provider_xai::transport::client_profile::{GrokClientProfileSelection, VersionMode};
 use provider_xai::{XaiWireProfile, XaiWireProfileState};

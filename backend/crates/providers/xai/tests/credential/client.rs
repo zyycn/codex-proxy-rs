@@ -1,4 +1,4 @@
-//! transport 与验证端口的外置 fixture 驱动契约。
+//! transport 与验证端口的外置 fixture 驱动契约
 
 use std::collections::VecDeque;
 use std::future::ready;

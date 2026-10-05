@@ -1,3 +1,5 @@
+//! 验证原生续接记录的隔离、敏感键保护与有界索引清理
+
 use gateway_core::account::ProviderAccountId;
 use gateway_core::engine::continuation::{
     NativeContinuationPin, NativeContinuationPort, NativeContinuationScope,

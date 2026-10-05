@@ -1,3 +1,5 @@
+//! 验证中间件嵌套调用顺序、类型传递与短路后的资源释放
+
 use std::sync::{Arc, Mutex};
 
 use gateway_core::middleware::{Middleware, compose};

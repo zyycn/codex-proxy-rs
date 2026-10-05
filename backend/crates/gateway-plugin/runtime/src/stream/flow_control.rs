@@ -1,6 +1,8 @@
+//! 插件流的字节与帧数窗口校验、序号推进及信用归还
+
 use crate::RpcError;
 
-/// 字节与帧数一起授予，避免攻击者用大量单字节分块突破队列上限。
+/// 字节与帧数一起授予，避免攻击者用大量单字节分块突破队列上限
 pub(super) struct ReceiveWindow {
     bytes: u32,
     frames: u32,

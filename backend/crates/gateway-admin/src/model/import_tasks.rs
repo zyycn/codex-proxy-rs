@@ -1,4 +1,4 @@
-//! 进程内账号导入任务；只保存执行所需输入与可公开的结果。
+//! 进程内账号导入任务；只保存执行所需输入与可公开的结果
 
 use chrono::{DateTime, Utc};
 use gateway_core::{account::ProviderAccountId, routing::ProviderKind};
@@ -17,7 +17,7 @@ pub struct ImportTaskInput {
 #[derive(Debug)]
 pub struct SubmitImportTask {
     pub submission_id: Uuid,
-    /// API 对完整输入计算摘要；用于区分丢失响应后的重试与修改后的新提交。
+    /// API 对完整输入计算摘要；用于区分丢失响应后的重试与修改后的新提交
     pub fingerprint: [u8; 32],
     pub context: MutationContext,
     pub items: Vec<ImportTaskInput>,

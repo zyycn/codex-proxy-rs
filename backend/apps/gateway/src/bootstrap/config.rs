@@ -1,10 +1,12 @@
+//! 网关顶层配置的加载、路径解析与跨模块参数校验
+
 use gateway_host::{ConfigError, HostConfig, LoadableConfig};
 use serde::Deserialize;
 
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 
-/// 顶层配置只组合各包拥有的配置段，不解释任何业务字段。
-/// 各启动配置忽略未知字段，允许升级时保留旧配置；已知字段仍按类型和业务约束校验。
+/// 顶层配置只组合各包拥有的配置段，不解释任何业务字段
+/// 各启动配置忽略未知字段，允许升级时保留旧配置；已知字段仍按类型和业务约束校验
 #[derive(Debug, Deserialize)]
 pub struct GatewayConfig {
     schema_version: u32,

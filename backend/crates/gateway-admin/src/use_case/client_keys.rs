@@ -1,4 +1,4 @@
-//! Client API Key 管理用例。
+//! Client API Key 管理用例
 
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ use crate::{
 
 use super::{map_store_error, publish_committed};
 
-/// API 消费的 Client Key 管理服务。
+/// API 消费的 Client Key 管理服务
 #[async_trait]
 pub trait ClientKeyService: Send + Sync {
     async fn get(&self, id: &ClientApiKeyId) -> Result<ClientKeyRecord, AdminError>;
@@ -300,7 +300,7 @@ fn validate_cursor(query: &ClientKeyListQuery) -> Result<(), AdminError> {
     }
 }
 
-// 原生与插件创建共用相同的密钥生成规则。
+// 原生与插件创建共用相同的密钥生成规则
 pub(super) fn generate_key() -> String {
     let mut bytes = [0_u8; 32];
     OsRng.fill_bytes(&mut bytes);

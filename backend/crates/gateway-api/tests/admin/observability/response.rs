@@ -1,4 +1,4 @@
-//! 响应 DTO 与固定 wire 形状的合同测试。
+//! 响应 DTO 与固定 wire 形状的合同测试
 
 use chrono::Utc;
 use serde_json::json;
@@ -394,7 +394,7 @@ async fn zero_attempt_failure_detail_keeps_missing_upstream_facts_and_preparatio
     assert_eq!(data["requestId"], "req_early");
     assert_eq!(data["attemptCount"], 0);
     assert_eq!(data["attempts"], json!([]));
-    // 明细仍沿用全局 best-effort 合同，不从预备 trace 推断完整尝试列表。
+    // 明细仍沿用全局 best-effort 合同，不从预备 trace 推断完整尝试列表
     assert_eq!(data["attemptsComplete"], false);
     assert_eq!(data["trace"], trace);
     assert_eq!(data["logicalOutcome"], "failed");

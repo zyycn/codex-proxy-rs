@@ -1,3 +1,5 @@
+//! 验证 xAI OIDC 发现文档的来源、必要字段与签名算法限制
+
 use provider_xai::{DiscoveryDocument, FailureClass, GrokOAuthConfig, OAuthError};
 
 const VALID_DISCOVERY: &str = include_str!("fixtures/discovery.json");

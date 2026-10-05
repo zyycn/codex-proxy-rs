@@ -1,3 +1,5 @@
+//! 官方插件发行清单校验与平台制品导入的用例测试
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;

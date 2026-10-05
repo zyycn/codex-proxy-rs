@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountRow } from '../constants'
+import type { Account } from '@/api'
 
 import { BaseTable, defineTableColumns } from '@codex-proxy/ui'
 import { Sigma } from '@lucide/vue'
@@ -7,10 +7,10 @@ import { computed } from 'vue'
 import { modelSuccessRateTextClass } from '../constants'
 
 const props = defineProps<{
-  account: AccountRow
+  account: Account
 }>()
 
-type AccountModelUsage = AccountRow['usage']['models'][number]
+type AccountModelUsage = Account['usage']['models'][number]
 
 const totalBilling = computed(() => props.account.usage.costs.find(cost => cost.currency.toUpperCase() === 'USD'))
 const totalBillingDisplay = computed(() => totalBilling.value?.estimatedAmountDisplay ?? '—')

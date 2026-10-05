@@ -1,4 +1,4 @@
-//! 单次响应事实与请求终态扩展派发；重试丢弃时统一清理。
+//! 单次响应事实与请求终态扩展派发；重试丢弃时统一清理
 
 use std::{
     collections::BTreeMap,
@@ -27,7 +27,7 @@ use crate::{
     upstream::UpstreamSendState,
 };
 
-/// 一条 WebSocket 响应事件所属的实际上游 attempt 身份。
+/// 一条 WebSocket 响应事件所属的实际上游 attempt 身份
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebSocketResponseAttempt {
     provider: ProviderKind,
@@ -36,7 +36,7 @@ pub struct WebSocketResponseAttempt {
 }
 
 impl WebSocketResponseAttempt {
-    /// 固定一条响应事件所属的实际上游 attempt。
+    /// 固定一条响应事件所属的实际上游 attempt
     #[must_use]
     pub const fn new(
         provider: ProviderKind,
@@ -66,7 +66,7 @@ impl WebSocketResponseAttempt {
     }
 }
 
-/// 请求观察使用的冻结 Client Key 与账号组范围。
+/// 请求观察使用的冻结 Client Key 与账号组范围
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestObservationScope {
     client_key_id: ClientApiKeyId,
@@ -95,10 +95,10 @@ impl RequestObservationScope {
     }
 }
 
-/// 实际上游 WebSocket 响应事件的只读观察。
+/// 实际上游 WebSocket 响应事件的只读观察
 ///
 /// Key 与账号组只用于 Runtime 匹配冻结绑定，不得进入插件 wire；`wire` 保留策略加工前
-/// 的 Provider 原始事实，由 Runtime 再按正文读取授权投影。
+/// 的 Provider 原始事实，由 Runtime 再按正文读取授权投影
 #[derive(Clone, PartialEq)]
 pub struct WebSocketResponseObservation {
     event_id: String,
@@ -114,7 +114,7 @@ pub struct WebSocketResponseObservation {
 }
 
 impl WebSocketResponseObservation {
-    /// 创建一个已附加冻结 Key/组范围、尚未附加公开模型范围的实际上游事件。
+    /// 创建一个已附加冻结 Key/组范围、尚未附加公开模型范围的实际上游事件
     #[must_use]
     pub fn new(
         request_id: ModelRequestId,
@@ -226,7 +226,7 @@ impl WebSocketResponseObservation {
     }
 }
 
-/// 插件可观察的请求终态；拒绝表示请求没有进入 Provider 执行。
+/// 插件可观察的请求终态；拒绝表示请求没有进入 Provider 执行
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestObservationOutcome {
     Succeeded,
@@ -236,7 +236,7 @@ pub enum RequestObservationOutcome {
     Incomplete,
 }
 
-/// Core 在业务结果确定后产生的一次最终观察，不包含原始正文或凭据。
+/// Core 在业务结果确定后产生的一次最终观察，不包含原始正文或凭据
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestObservation {
     event_id: String,
@@ -265,7 +265,7 @@ pub struct RequestObservation {
 }
 
 impl RequestObservation {
-    /// 创建一个带冻结 Key/组范围、不带 Provider、模型、用量或错误详情的最终事实。
+    /// 创建一个带冻结 Key/组范围、不带 Provider、模型、用量或错误详情的最终事实
     #[must_use]
     pub fn new(
         request_id: ModelRequestId,
@@ -495,9 +495,9 @@ impl RequestObservation {
     }
 }
 
-/// 一个发布代次的不可变请求观察计划；实现必须自行保证派发有界且不阻塞业务结果。
+/// 一个发布代次的不可变请求观察计划；实现必须自行保证派发有界且不阻塞业务结果
 pub trait RequestObserverPlan: Send + Sync {
-    /// 旁路观察一条实际上游 WebSocket 事件；未启用观察时，默认实现不额外处理事件。
+    /// 旁路观察一条实际上游 WebSocket 事件；未启用观察时，默认实现不额外处理事件
     fn dispatch_websocket_response(
         &self,
         _generation: ExtensionSetReference,
@@ -505,23 +505,23 @@ pub trait RequestObserverPlan: Send + Sync {
     ) {
     }
 
-    /// `generation` 必须由后台工作持有到本次派发结束，避免旧代次提前排空。
+    /// `generation` 必须由后台工作持有到本次派发结束，避免旧代次提前排空
     fn dispatch(&self, generation: ExtensionSetReference, observation: RequestObservation);
 }
 
-/// 观察计划注册冲突；同一个集合 ID 不能被静默替换。
+/// 观察计划注册冲突；同一个集合 ID 不能被静默替换
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("request observer generation is already registered")]
 pub struct RequestObserverRegistrationError;
 
-/// 按发布集合解析计划的非拥有索引；旧代次由发布视图和在途派发保活。
+/// 按发布集合解析计划的非拥有索引；旧代次由发布视图和在途派发保活
 #[derive(Clone, Default)]
 pub struct RequestObserverExtensionIndex {
     sets: Arc<RwLock<BTreeMap<ExtensionSetId, Weak<dyn RequestObserverPlan>>>>,
 }
 
 impl RequestObserverExtensionIndex {
-    /// 注册候选代次；返回值必须由候选集合强持有。
+    /// 注册候选代次；返回值必须由候选集合强持有
     pub fn register(
         &self,
         id: ExtensionSetId,
@@ -539,7 +539,7 @@ impl RequestObserverExtensionIndex {
         Ok(plan)
     }
 
-    /// 只解析请求已经冻结的集合；缺少计划表示该代次没有观察绑定。
+    /// 只解析请求已经冻结的集合；缺少计划表示该代次没有观察绑定
     #[must_use]
     pub fn resolve(
         &self,
@@ -553,7 +553,7 @@ impl RequestObserverExtensionIndex {
     }
 }
 
-/// 同一请求的所有终结分支共享这个一次性派发状态。
+/// 同一请求的所有终结分支共享这个一次性派发状态
 #[derive(Clone)]
 pub(super) struct RequestObservationDispatch {
     state: Arc<RequestObservationDispatchState>,
@@ -849,7 +849,7 @@ fn observe_event_timing(timings: &mut ModelRequestTimings, event: &GatewayEvent,
             timings.first_token_ms.get_or_insert(elapsed_ms);
         }
         // `response.output_item.added` 会先投影一个空参数的 tool delta；它只是结构帧，
-        // 不能抢在真实工具参数之前成为首个可消费 token。
+        // 不能抢在真实工具参数之前成为首个可消费 token
         GatewayEvent::ToolCallDelta(delta) if !delta.arguments_delta.is_empty() => {
             timings.first_token_ms.get_or_insert(elapsed_ms);
         }

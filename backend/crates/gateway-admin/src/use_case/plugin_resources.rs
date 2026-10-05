@@ -1,3 +1,5 @@
+//! 插件自有分组、Key 与成员关系的写入及配置发布编排
+
 use crate::{
     model::{
         AdminError, MutationContext,

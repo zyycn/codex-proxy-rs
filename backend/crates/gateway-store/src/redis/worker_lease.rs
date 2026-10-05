@@ -1,4 +1,4 @@
-//! 多实例 worker leader lease 的 Redis 实现。
+//! 多实例 worker leader lease 的 Redis 实现
 
 use std::num::NonZeroU64;
 

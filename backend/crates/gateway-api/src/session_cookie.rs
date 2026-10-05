@@ -1,4 +1,4 @@
-//! 控制面会话 Cookie 的同源 HTTP / HTTPS 属性与解析。
+//! 控制面会话 Cookie 的同源 HTTP / HTTPS 属性与解析
 
 use axum::http::{HeaderMap, header::ORIGIN};
 use url::Url;
@@ -6,8 +6,9 @@ use url::Url;
 pub(crate) const NAME: &str = "cpr_session";
 
 pub(crate) fn attributes(headers: &HeaderMap) -> &'static str {
-    // HTTPS 反代回源 HTTP 不改变浏览器 Origin。只有单个、严格合法的 HTTP Origin
-    // 才允许省略 Secure；缺失、opaque 或非法来源继续 fail closed。
+    // HTTPS 反代回源 HTTP 不改变浏览器 Origin
+    // 只有单个、严格合法的 HTTP Origin
+    // 才允许省略 Secure；缺失、opaque 或非法来源继续 fail closed
     let http_origin = headers.get_all(ORIGIN).iter().count() == 1
         && headers
             .get(ORIGIN)

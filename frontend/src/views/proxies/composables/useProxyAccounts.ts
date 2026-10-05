@@ -1,5 +1,4 @@
 import { toast } from '@codex-proxy/ui'
-import { watchDebounced } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
 import { getProxyAccounts, removeProxyAccount } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
@@ -75,7 +74,12 @@ export function useProxyAccounts(options: {
     search.value = ''
     load()
   }, { immediate: true, flush: 'sync' })
-  watchDebounced(search, () => setPage(1), { debounce: 300 })
+  watch(search, (_value, _previous, onCleanup) => {
+    const timer = setTimeout(() => {
+      void setPage(1)
+    }, 300)
+    onCleanup(() => clearTimeout(timer))
+  })
 
   return {
     accounts: query.items,

@@ -1,3 +1,5 @@
+//! 插件管理用例的测试入口与共用端口替身
+
 use async_trait::async_trait;
 use gateway_admin::model::plugins::distribution::{
     DownloadedPlugin, GithubReleaseQuery, PluginRelease, RemotePluginLocation, SourceCredential,

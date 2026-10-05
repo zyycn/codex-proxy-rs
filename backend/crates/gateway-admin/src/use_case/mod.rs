@@ -1,4 +1,4 @@
-//! 管理控制面的用例实现。
+//! 管理控制面的用例实现
 
 pub mod account_groups;
 pub mod accounts;
@@ -113,7 +113,7 @@ async fn publish_credentials_and_observe_quota(
     provider.account_facts_changed(account_ids).await;
     publish_committed(snapshot, revision).await?;
 
-    // 凭据已经提交；额度只是可重建的观察，不能拖住管理请求或回滚提交结果。
+    // 凭据已经提交；额度只是可重建的观察，不能拖住管理请求或回滚提交结果
     let provider = provider.clone();
     let account_ids = account_ids.to_vec();
     let request_id = request_id.to_owned();
@@ -343,7 +343,7 @@ async fn commit_authorization(
             if let Some(guard) = authorization_guard
                 && let Err(error) = guard.commit().await
             {
-                // 账号与回执已经原子提交，Redis 清理失败不能把确定的成功改写为失败。
+                // 账号与回执已经原子提交，Redis 清理失败不能把确定的成功改写为失败
                 tracing::warn!(resource, settlement_error = %error, "authorization committed but pending cleanup failed");
             }
             Ok(result)

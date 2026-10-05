@@ -1,3 +1,5 @@
+//! 验证 xAI 选号边界、账号容量与失败冷却反馈
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -420,7 +422,7 @@ async fn account_scoped_cooldown_survives_credential_rotation() {
         CredentialCasOutcome::Updated(revision) if revision.get() == 2
     ));
 
-    // 账号级限流冷却跨凭据轮换保留：轮换后仍被冷却排除。
+    // 账号级限流冷却跨凭据轮换保留：轮换后仍被冷却排除
     assert!(matches!(
         fixture
             .selector
@@ -514,7 +516,7 @@ async fn payment_required_feedback_writes_short_account_cooldown_without_persist
         .await;
 
     // bare 402 无结构化 quota code：只写短期账号 runtime cooldown，
-    // 不持久化 QuotaExhausted（避免长期错误状态）。
+    // 不持久化 QuotaExhausted（避免长期错误状态）
     assert_eq!(
         fixture
             .store
@@ -562,7 +564,7 @@ async fn model_quota_feedback_writes_model_scoped_cooldown_without_blocking_othe
     assert_eq!(account.credential_state(), CredentialState::Ready);
     let minimum_until = SystemTime::now() + Duration::from_secs(9 * 60);
     let scope = ProviderCooldownScope::upstream_model(failed_model);
-    // model-scoped cooldown：目标模型被排除，账号级无 cooldown。
+    // model-scoped cooldown：目标模型被排除，账号级无 cooldown
     assert!(
         fixture
             .cooldowns
@@ -570,7 +572,7 @@ async fn model_quota_feedback_writes_model_scoped_cooldown_without_blocking_othe
             .is_some_and(|cooldown| cooldown.until() > minimum_until)
     );
     assert!(fixture.cooldowns.cooldown(&selected).is_none());
-    // 失败模型不可选（ModelCoolingDown 由 model-scoped cooldown 派生）。
+    // 失败模型不可选（ModelCoolingDown 由 model-scoped cooldown 派生）
     assert!(matches!(
         fixture
             .selector
@@ -580,7 +582,7 @@ async fn model_quota_feedback_writes_model_scoped_cooldown_without_blocking_othe
             retry_after: Some(_)
         })
     ));
-    // 另一模型不受 model cooldown 影响：同一账号在 grok-4.6 下仍可选。
+    // 另一模型不受 model cooldown 影响：同一账号在 grok-4.6 下仍可选
     let other_model = fixture
         .selector
         .select(fixture.request_for_model("grok-4.6", Some(selected.clone())))
@@ -956,7 +958,7 @@ async fn smart_strategy_never_reuses_quota_projection_after_credential_rotation(
         .await;
     fixture
         .seed_quota(
-            // 剩余 75% 低于旧观测的 95%，但高于观测失效后的未知额度中性值。
+            // 剩余 75% 低于旧观测的 95%，但高于观测失效后的未知额度中性值
             &account_id("zzz-current-known"),
             25.0,
             Duration::from_secs(600),
@@ -1035,7 +1037,7 @@ async fn quota_reset_strategy_uses_provider_reported_earliest_reset() {
 #[tokio::test]
 async fn bare_402_cooldown_expires_and_account_recovers_without_persisted_exhaustion() {
     // bare 402 只写短期 account cooldown，不持久化
-    // QuotaExhausted；退避到期后账号自动恢复可选。
+    // QuotaExhausted；退避到期后账号自动恢复可选
     let fixture = SelectorFixture::new(&["payment-recover", "available"]).await;
     let session = fixture
         .selector
@@ -1053,7 +1055,7 @@ async fn bare_402_cooldown_expires_and_account_recovers_without_persisted_exhaus
         )
         .await;
 
-    // 退避活跃期间该账号被排除，另一账号可选。
+    // 退避活跃期间该账号被排除，另一账号可选
     assert_eq!(
         fixture
             .store
@@ -1070,7 +1072,7 @@ async fn bare_402_cooldown_expires_and_account_recovers_without_persisted_exhaus
         .expect("another account available during cooldown");
     assert_ne!(next.account_id(), &selected);
 
-    // 等短 cooldown 到期。
+    // 等短 cooldown 到期
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     let recovered = fixture
         .selector
@@ -1160,7 +1162,7 @@ async fn smart_queue_weight_changes_the_selected_wait_queue_and_respects_require
             other => panic!("unexpected queue probe: {other:?}"),
         }
         drop((next, probe));
-        // 其他账号先空闲不能解除 required account 限制。
+        // 其他账号先空闲不能解除 required account 限制
         fixture
             .coordinator
             .signals

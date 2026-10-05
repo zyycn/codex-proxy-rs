@@ -1,3 +1,5 @@
+//! 验证历史清理仅按批次上限删除已过期记录
+
 use std::num::NonZeroU32;
 
 use chrono::{Duration as ChronoDuration, Utc};

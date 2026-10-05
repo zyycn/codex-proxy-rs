@@ -1,4 +1,4 @@
-//! 类型化业务方法目录；控制参数、敏感载荷、阶段与响应流在此固定。
+//! 类型化业务方法目录；控制参数、敏感载荷、阶段与响应流在此固定
 
 use crate::{
     Capability as C, Stage as S,
@@ -141,7 +141,7 @@ pub const STATE_MIGRATE: Method<host::StateMigrationRequest, host::StateMigratio
         encode_payload,
     );
 
-/// 启用、恢复、配置变化及周期补偿共用的幂等入口；通知不代表逐条事件。
+/// 启用、恢复、配置变化及周期补偿共用的幂等入口；通知不代表逐条事件
 pub const RECONCILE: Method<Empty, Empty> = Method::new(
     "plugin.reconcile",
     &[C::Maintenance],

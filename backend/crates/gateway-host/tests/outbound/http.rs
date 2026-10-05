@@ -1,3 +1,5 @@
+//! 验证受管 HTTP 的协议、网络约束、时限与正文资源回收
+
 use std::time::Duration;
 
 use gateway_core::{account::OutboundProxy, upstream::UpstreamSendState};
@@ -212,7 +214,7 @@ async fn buffered_body_cannot_extend_the_request_deadline() {
         response.body.read(1).await.unwrap().unwrap().as_ref(),
         &[42]
     );
-    // 上游已返回整块数据，插件延迟读取也不能绕过调用期限。
+    // 上游已返回整块数据，插件延迟读取也不能绕过调用期限
     tokio::time::sleep(Duration::from_millis(320)).await;
     let error = response.body.read(1).await.unwrap_err();
     assert_eq!(error.send_state, UpstreamSendState::Sent);
@@ -240,7 +242,7 @@ async fn cancelling_dns_releases_the_request_slot_without_starting_http() {
     let client = HttpClient::new()
         .unwrap()
         .with_resolver(Arc::new(PendingDns));
-    // 超过总并发容量，逐次取消仍不能积累占用。
+    // 超过总并发容量，逐次取消仍不能积累占用
     for _ in 0..129 {
         assert!(
             tokio::time::timeout(

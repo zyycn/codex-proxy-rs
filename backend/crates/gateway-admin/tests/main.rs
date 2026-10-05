@@ -1,3 +1,5 @@
+//! 管理控制面测试入口，以及通用分页、版本与查询值对象测试
+
 use std::str::FromStr as _;
 
 use chrono::{TimeDelta, Utc};

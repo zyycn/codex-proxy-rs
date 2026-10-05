@@ -1,3 +1,5 @@
+//! 验证历史保留窗口的有效范围与各类数据的独立配置
+
 use gateway_admin::model::retention::{RetentionPolicy, RetentionTarget};
 
 #[test]

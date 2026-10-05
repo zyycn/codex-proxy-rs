@@ -1,3 +1,5 @@
+//! 验证 Key 预算重置要求显式周期并拒绝额外权限字段
+
 use gateway_plugin_sdk::call::key_budgets::{BudgetPeriod, ResetKeyBudgetRequest};
 use serde_json::json;
 

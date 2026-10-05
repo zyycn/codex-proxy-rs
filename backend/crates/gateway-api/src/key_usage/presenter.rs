@@ -1,4 +1,4 @@
-//! 用量响应不含凭据；配置响应仅在显式读取时返回当前 Key 的名称与明文。
+//! 用量响应不含凭据；配置响应仅在显式读取时返回当前 Key 的名称与明文
 
 use chrono::{DateTime, Utc};
 use gateway_admin::model::{
@@ -24,7 +24,7 @@ pub(super) struct VersionView {
 }
 
 pub(super) fn version(version: SystemVersion) -> VersionView {
-    // 密钥用户仅查看构建标识，不暴露部署环境、更新状态或内部诊断。
+    // 密钥用户仅查看构建标识，不暴露部署环境、更新状态或内部诊断
     VersionView {
         version: version.version,
         git_sha: version.git_sha,
@@ -197,7 +197,7 @@ pub(super) struct RecordView {
     status_code: Option<u16>,
 }
 
-// Key 只查看自身请求的输出时间，不包含账号容量、调度等待等管理侧观测。
+// Key 只查看自身请求的输出时间，不包含账号容量、调度等待等管理侧观测
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OutputTimingView {
@@ -233,7 +233,7 @@ fn success_record(value: UsageListRecord, time: crate::time::TimePresenter) -> R
         client_ip: value.client_ip,
         user_agent: value.user_agent,
         status: "success",
-        // 成功记录不保存 HTTP 状态，不能用 200 伪造缺失的原始事实。
+        // 成功记录不保存 HTTP 状态，不能用 200 伪造缺失的原始事实
         status_code: None,
     }
 }

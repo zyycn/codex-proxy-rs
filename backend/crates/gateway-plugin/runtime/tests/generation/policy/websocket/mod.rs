@@ -1,3 +1,5 @@
+//! 验证真实插件 WebSocket 消息转发、改写与控制消息处理
+
 use super::*;
 use gateway_core::middleware::{compose, websocket as core};
 

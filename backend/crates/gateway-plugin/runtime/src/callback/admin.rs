@@ -1,4 +1,4 @@
-//! Admin 端口回调共享的审计上下文、结果编码与错误映射。
+//! Admin 端口回调共享的审计上下文、结果编码与错误映射
 
 use gateway_admin::model::{AdminError, AdminErrorKind, MutationActor, MutationContext};
 use gateway_plugin_sdk::{CallContext, ErrorCode, PluginFault};
@@ -8,7 +8,7 @@ use crate::RpcReply;
 pub(super) fn mutation_context(context: &CallContext) -> MutationContext {
     MutationContext {
         actor: MutationActor::System,
-        // 回调沿用宿主签发的调用上下文，插件不能自报审计身份。
+        // 回调沿用宿主签发的调用上下文，插件不能自报审计身份
         request_id: format!(
             "plugin:{}:scope:{}:call:{}",
             context.instance_id, context.resource_scope_id, context.call_id

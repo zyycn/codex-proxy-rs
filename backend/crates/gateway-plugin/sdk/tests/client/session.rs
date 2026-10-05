@@ -1,3 +1,5 @@
+//! 验证插件会话的二进制传输、帧长度限制与不完整消息拒绝
+
 use std::{
     future::pending,
     num::NonZeroUsize,
@@ -780,7 +782,7 @@ async fn completed_call_does_not_discard_a_partially_read_next_frame() {
     let payload_start = encoded.len() - next.payload.len();
     for split in [2, 6, 10, payload_start + 2] {
         tokio::time::timeout(Duration::from_secs(2), async {
-            // 单字节缓冲保证前缀已经进入读取 future，而不是仍滞留在传输队列。
+            // 单字节缓冲保证前缀已经进入读取 future，而不是仍滞留在传输队列
             let (mut host, task) = start_session_with_capacity(TestHandler::default(), 1).await;
             send_call(&mut host, 1, "slow", json!("first"), Vec::new()).await;
             host.writer.write_all(&encoded[..split]).await.unwrap();

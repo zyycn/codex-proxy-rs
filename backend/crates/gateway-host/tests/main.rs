@@ -1,3 +1,5 @@
+//! 宿主配置、网络、进程、日志与后台任务的测试入口
+
 mod client_distribution;
 mod config;
 mod logging;

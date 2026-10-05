@@ -1,4 +1,4 @@
-//! 管理写入的审计分类；适配器只能补充事务实际写入的字段与实体标识。
+//! 管理写入的审计分类；适配器只能补充事务实际写入的字段与实体标识
 
 use super::{
     MutationActor, MutationContext,
@@ -112,7 +112,7 @@ impl MutationAuditOperation {
     }
 }
 
-/// 分类与稳定实体标识共同组成审计意图，字段差异由同一提交事务补齐。
+/// 分类与稳定实体标识共同组成审计意图，字段差异由同一提交事务补齐
 #[derive(Debug, Clone, Copy)]
 pub struct MutationAuditIntent<'a> {
     pub operation: MutationAuditOperation,

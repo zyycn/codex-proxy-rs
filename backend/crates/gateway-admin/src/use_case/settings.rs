@@ -1,4 +1,4 @@
-//! Runtime settings 与管理员 API Key 用例。
+//! Runtime settings 与管理员 API Key 用例
 
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use crate::{
 
 use super::{map_store_error, publish_committed};
 
-/// API 消费的 Runtime settings 管理服务。
+/// API 消费的 Runtime settings 管理服务
 #[async_trait]
 pub trait SettingsService: Send + Sync {
     async fn preview_pricing_sync(

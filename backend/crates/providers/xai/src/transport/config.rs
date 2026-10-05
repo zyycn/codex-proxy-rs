@@ -1,4 +1,4 @@
-//! 固定的官方 Grok Build inference 配置。
+//! 固定的官方 Grok Build inference 配置
 
 pub const XAI_PROVIDER_NAME: &str = "xai";
 pub const GROK_CLI_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";

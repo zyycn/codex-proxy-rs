@@ -1,4 +1,4 @@
-//! OpenAI Provider 启动配置；客户端身份由管理端设置持久化。
+//! OpenAI Provider 启动配置；客户端身份由管理端设置持久化
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,16 +17,16 @@ use crate::{
     },
 };
 
-/// 本服务的流式请求默认重试次数。
+/// 本服务的流式请求默认重试次数
 pub const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
-/// 防止错误配置产生无界隐藏重放；与官方 Codex 的硬上限一致。
+/// 防止错误配置产生无界隐藏重放；与官方 Codex 的硬上限一致
 pub const MAX_STREAM_MAX_RETRIES: u64 = 100;
 
 const fn default_stream_max_retries() -> u64 {
     DEFAULT_STREAM_MAX_RETRIES
 }
 
-/// OpenAI Provider 唯一启动配置。
+/// OpenAI Provider 唯一启动配置
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct OpenAiConfig {
     #[serde(skip)]
@@ -54,7 +54,7 @@ impl OpenAiConfig {
         self
     }
 
-    /// 校验 Provider-owned 字段，并从统一运行数据目录定位会话身份密钥。
+    /// 校验 Provider-owned 字段，并从统一运行数据目录定位会话身份密钥
     pub fn resolve_and_validate(
         &mut self,
         runtime_data_dir: &Path,
@@ -100,7 +100,7 @@ impl OpenAiConfig {
         self.auth.refresh_enabled
     }
 
-    /// 返回经官方同款硬上限约束后的上游流重试预算。
+    /// 返回经官方同款硬上限约束后的上游流重试预算
     #[must_use]
     pub fn stream_max_retries(&self) -> u32 {
         u32::try_from(self.stream_max_retries.min(MAX_STREAM_MAX_RETRIES))
@@ -129,7 +129,7 @@ impl Default for OpenAiConfig {
     }
 }
 
-/// Codex 上游 API 的 Provider-owned 地址配置。
+/// Codex 上游 API 的 Provider-owned 地址配置
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct CodexApiConfig {
     pub base_url: String,
@@ -152,7 +152,7 @@ impl CodexApiConfig {
     }
 }
 
-/// Codex Responses WebSocket pool 的 Provider-owned 启动设置。
+/// Codex Responses WebSocket pool 的 Provider-owned 启动设置
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct CodexWebSocketPoolSettings {
     pub enabled: bool,
@@ -192,10 +192,10 @@ impl CodexWebSocketPoolSettings {
     }
 }
 
-/// OpenAI Provider 的额度刷新策略。
+/// OpenAI Provider 的额度刷新策略
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct CodexQuotaSettings {
-    /// 保留模型目录的刷新周期；额度独立每 30 秒检查周期复核和 reset 到期条件。
+    /// 保留模型目录的刷新周期；额度独立每 30 秒检查周期复核和 reset 到期条件
     pub refresh_interval_minutes: u64,
 }
 
@@ -224,7 +224,7 @@ impl CodexQuotaSettings {
     }
 }
 
-/// OpenAI OAuth 的 Provider-owned 运行开关和端点。
+/// OpenAI OAuth 的 Provider-owned 运行开关和端点
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct CodexAuthSettings {
     pub refresh_enabled: bool,

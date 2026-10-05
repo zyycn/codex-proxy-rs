@@ -1,3 +1,5 @@
+//! 插件更新来源、下载凭据与远程发行安装的 HTTP 接口
+
 use axum::{
     Router,
     extract::State,

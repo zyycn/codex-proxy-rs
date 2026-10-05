@@ -1,4 +1,4 @@
-//! 插件 Client Key 非秘密目录与受控预算管理端口。
+//! 插件 Client Key 非秘密目录与受控预算管理端口
 
 use async_trait::async_trait;
 use gateway_core::{engine::budget::ClientBudgetStatus, policy::ClientApiKeyId};

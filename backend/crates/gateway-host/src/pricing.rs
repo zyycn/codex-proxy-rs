@@ -1,4 +1,4 @@
-//! models.dev 的只读价目适配；固定地址、禁止跳转，不进入推理请求链路。
+//! models.dev 的只读价目适配；固定地址、禁止跳转，不进入推理请求链路
 
 use async_trait::async_trait;
 use gateway_admin::{
@@ -46,7 +46,7 @@ fn source_error() -> AdminError {
     AdminError::bad_gateway("无法读取 models.dev 价目，请稍后重试；现有价格未变更")
 }
 
-/// 只接受当前网关 Provider 的文本 Token 价格；不猜测缺失字段或模态换算。
+/// 只接受当前网关 Provider 的文本 Token 价格；不猜测缺失字段或模态换算
 pub fn decode_catalog(body: &[u8]) -> Result<PricingSyncPreview, AdminError> {
     let catalog: Value = serde_json::from_slice(body).map_err(|_| source_error())?;
     let mut result = PricingSyncPreview {
@@ -90,7 +90,7 @@ fn model_price(provider: &str, model: &Value) -> Option<ModelPriceOverride> {
         return None;
     }
     let cost = model.get("cost")?;
-    // 独立 reasoning/audio 价格无法用当前 Token 用量拆分，不能静默吞掉。
+    // 独立 reasoning/audio 价格无法用当前 Token 用量拆分，不能静默吞掉
     if ["reasoning", "input_audio", "output_audio"]
         .iter()
         .any(|key| cost.get(key).is_some())
@@ -130,7 +130,7 @@ fn rates(cost: &Value) -> Option<TokenPriceOverride> {
     Some(TokenPriceOverride {
         input,
         output: price("output")?,
-        // 没有缓存折扣的模型按普通输入价；不能把缺项解释成免费。
+        // 没有缓存折扣的模型按普通输入价；不能把缺项解释成免费
         cache_read: if cost.get("cache_read").is_some() {
             price("cache_read")?
         } else {

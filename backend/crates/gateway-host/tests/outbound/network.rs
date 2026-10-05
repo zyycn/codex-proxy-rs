@@ -1,3 +1,5 @@
+//! 验证 DNS 固定、地址范围校验与解析超时的发送状态
+
 use std::{
     net::SocketAddr,
     sync::{

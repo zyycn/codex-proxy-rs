@@ -1,3 +1,5 @@
+//! OpenAI 请求与响应中间件的改写、短路及交付行为测试
+
 use std::{
     collections::VecDeque,
     sync::{
@@ -18,7 +20,7 @@ use gateway_core::{
     runtime::extensions::{ExtensionSetId, ExtensionSetLease, ExtensionSetReference},
 };
 
-/// OpenAI API 入口共用的中间件夹具；授权和 RPC 由 Runtime 行为测试覆盖。
+/// OpenAI API 入口共用的中间件夹具；授权和 RPC 由 Runtime 行为测试覆盖
 #[derive(Debug, Default)]
 pub(super) struct RequestMiddleware {
     pub(super) endpoints: Mutex<Vec<String>>,

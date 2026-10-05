@@ -1,4 +1,4 @@
-//! Codex Responses WebSocket 传输。
+//! Codex Responses WebSocket 传输
 
 mod audit;
 mod breaker;
@@ -6,6 +6,7 @@ mod coordinator;
 mod error;
 mod exchange;
 mod handshake;
+mod live;
 mod model;
 mod pool;
 mod pump;
@@ -42,5 +43,6 @@ pub(crate) use self::{
         prepare_response_create_request_with_pool,
     },
     error::WEBSOCKET_CLOSE_MESSAGE_TOO_BIG,
+    live::{connect_live_sideband, into_live_relay},
     pool::DEFAULT_STREAM_IDLE_TIMEOUT,
 };

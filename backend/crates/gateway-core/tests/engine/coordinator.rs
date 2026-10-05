@@ -1,4 +1,4 @@
-//! 单行 `model_requests`、账号重试与下游提交屏障测试。
+//! 单行 `model_requests`、账号重试与下游提交屏障测试
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
@@ -279,7 +279,7 @@ enum Script {
         account_id: &'static str,
         items: Vec<Result<GatewayEvent, ProviderError>>,
     },
-    /// 产出 `items` 后永久悬挂的流；用于逼出会话级 deadline。
+    /// 产出 `items` 后永久悬挂的流；用于逼出会话级 deadline
     HangingStream {
         account_id: &'static str,
         items: Vec<Result<GatewayEvent, ProviderError>>,
@@ -293,6 +293,7 @@ enum Script {
 }
 
 struct ScriptedProvider {
+    provider_name: &'static str,
     profile_generation: AtomicUsize,
     default_profile_calls: AtomicUsize,
     default_profile: Mutex<Option<gateway_core::account::OpaqueProviderData>>,
@@ -312,7 +313,13 @@ impl Drop for TrackedLease {
 
 impl ScriptedProvider {
     fn new(scripts: Vec<Script>) -> Self {
+        Self::named("openai", scripts)
+    }
+
+    /// 双 Provider 计划需要第二个 Provider 实例扮演跨候选推进的目标。
+    fn named(provider_name: &'static str, scripts: Vec<Script>) -> Self {
         Self {
+            provider_name,
             profile_generation: AtomicUsize::new(1),
             default_profile_calls: AtomicUsize::new(0),
             default_profile: Mutex::new(None),
@@ -346,7 +353,7 @@ impl Provider for ScriptedProvider {
     }
 
     fn name(&self) -> &'static str {
-        "openai"
+        self.provider_name
     }
 
     fn catalog_generation(&self) -> ProviderCatalogGeneration {
@@ -369,7 +376,7 @@ impl Provider for ScriptedProvider {
             .expect("operations lock")
             .push(request.operation().clone());
         self.contexts.lock().expect("contexts lock").push(context);
-        // 模拟官方发布在每次上游尝试开始后推进，重试应继续使用首次解析版本。
+        // 模拟官方发布在每次上游尝试开始后推进，重试应继续使用首次解析版本
         self.profile_generation.fetch_add(1, Ordering::SeqCst);
         let script = self
             .scripts
@@ -720,6 +727,63 @@ fn plan_with_profiles(
         .expect("routing plan")
 }
 
+/// 双 Provider 路由计划：候选顺序为 openai、xai，不锁定 required_provider，
+/// 用于验证跨 Provider 候选推进受换号预算约束。
+fn dual_provider_plan(operation: &Operation) -> RoutingPlan {
+    let openai = ProviderKind::new("openai").expect("provider");
+    let xai = ProviderKind::new("xai").expect("provider");
+    let public_model = PublicModelId::new("gpt-5").expect("public model");
+    let capabilities = ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
+        .with_upstream_feature_validation();
+    let entries = [
+        (openai.clone(), "acct_openai_first"),
+        (openai.clone(), "acct_openai_second"),
+        (openai.clone(), "acct_openai_third"),
+        (openai.clone(), "acct_openai_fourth"),
+        (xai.clone(), "acct_xai_first"),
+    ]
+    .into_iter()
+    .map(|(provider, id)| {
+        (
+            ProviderAccountId::new(id).expect("account"),
+            RuntimeAccount::new(provider, BTreeSet::new()),
+        )
+    })
+    .collect();
+    let directory = Arc::new(RuntimeAccountDirectory::new(entries));
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).expect("config revision"),
+        gateway_core::settings::SettingsValues::new(2, 50, "smart", Default::default(), None, None),
+        vec![openai.clone(), xai.clone()],
+        vec![
+            ProviderModel::new(
+                openai,
+                UpstreamModelId::new("gpt-5").expect("upstream model"),
+                capabilities.clone(),
+            ),
+            ProviderModel::new(
+                xai,
+                UpstreamModelId::new("gpt-5").expect("upstream model"),
+                capabilities,
+            ),
+        ],
+        Vec::new(),
+    )
+    .expect("snapshot")
+    .with_account_directory(Arc::clone(&directory));
+    snapshot
+        .plan(
+            &public_model,
+            operation,
+            Arc::new(FrozenAccountScope::new(
+                directory,
+                ClientRoutingScope::all_accounts(),
+            )),
+            &RoutingContext::default(),
+        )
+        .expect("routing plan")
+}
+
 fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest {
     let client_key = ClientApiKeyId::new("key_client_1").expect("client key id");
     NewModelRequest {
@@ -744,7 +808,7 @@ fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest
         continuation: Default::default(),
         image_generation_requested: operation.image_generation_requested(),
         started_at: SystemTime::now(),
-        deadline_at: deadline,
+        deadline_at: deadline.into(),
     }
 }
 
@@ -807,6 +871,35 @@ fn terminal_non_idempotent_failure(
         gateway_core::engine::EngineError::Provider(_)
     ));
     (store, provider)
+}
+
+#[test]
+fn request_without_total_deadline_can_complete_after_ten_minutes() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![Script::Stream {
+        account_id: "acct_one",
+        items: complete_stream(Some(12)),
+    }]);
+    let mut request = model_request(&operation, SystemTime::now());
+    request.started_at = SystemTime::now() - Duration::from_secs(601);
+    request.deadline_at = gateway_core::lifecycle::Deadline::default();
+    let mut session = block_on(coordinator.start(
+        request,
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start long request");
+    block_on(session.collect_uncommitted()).expect("collect long response");
+    block_on(session.commit_downstream(Some(200))).expect("commit long response");
+    assert!(session.is_finalized());
+    assert_eq!(provider.contexts.lock().unwrap()[0].deadline().at(), None);
+    let state = store.state.lock().unwrap();
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+    assert_eq!(state.attempts.len(), 1);
 }
 
 #[test]
@@ -2628,7 +2721,7 @@ fn retryable_error_after_credential_recovery_switches_account_instead_of_termina
     assert_eq!(contexts.len(), 3);
     assert_eq!(contexts[1].required_account(), Some(&first));
     assert!(contexts[1].credential_recovery_attempted());
-    // recovery 钉账号只绑定 replay attempt；replay 上的 429 之后必须能换号。
+    // recovery 钉账号只绑定 replay attempt；replay 上的 429 之后必须能换号
     assert_eq!(contexts[2].required_account(), None);
     assert!(contexts[2].excluded_accounts().contains(&first));
     let state = store.state.lock().expect("store lock");
@@ -2731,7 +2824,7 @@ fn rate_limited_account_exhaustion_survives_a_later_empty_selection() {
     assert_eq!(state.attempts.len(), 1);
     assert_eq!(state.intermediate_failures, 1);
     assert_eq!(state.finalizations.len(), 1);
-    // attempt-1 已把 sent 落库；attempt-2 空选路终态不得降级回 not_sent。
+    // attempt-1 已把 sent 落库；attempt-2 空选路终态不得降级回 not_sent
     assert_eq!(state.finalizations[0].send_state, UpstreamSendState::Sent);
     assert_eq!(state.finalizations[0].upstream_status_code, Some(429));
     assert_eq!(
@@ -3413,6 +3506,124 @@ fn transient_rejection() -> ProviderError {
         Duration::ZERO,
         Duration::ZERO,
     )
+}
+
+#[test]
+fn server_retry_advice_should_override_local_backoff_and_transport_fallback() {
+    let advised_delay = Duration::from_millis(120);
+    for rejection in [
+        transient_rejection().with_transient_retry(
+            NonZeroU32::MIN,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        ),
+        ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::NotSent)
+            .with_pre_delivery_transport_fallback(),
+    ] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let (coordinator, _, provider) = coordinator(vec![
+            Script::Stream {
+                account_id: "acct_first",
+                items: vec![Err(rejection.with_retry_after(advised_delay))],
+            },
+            Script::Stream {
+                account_id: "acct_first",
+                items: complete_stream(None),
+            },
+        ]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        let started = std::time::Instant::now();
+        let mut collection = Box::pin(session.collect_uncommitted());
+        assert!(block_on(async { futures::poll!(&mut collection) }).is_pending());
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+        block_on(collection).unwrap();
+        assert!(started.elapsed() >= advised_delay);
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(
+            contexts[1].required_account(),
+            Some(&ProviderAccountId::new("acct_first").unwrap())
+        );
+    }
+}
+
+#[test]
+fn zero_server_retry_advice_should_override_nonzero_local_backoff() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, _, _) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(transient_rejection()
+                .with_transient_retry(
+                    NonZeroU32::MIN,
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                )
+                .with_retry_after(Duration::ZERO))],
+        },
+        Script::Stream {
+            account_id: "acct_first",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    let mut collection = Box::pin(session.collect_uncommitted());
+    assert!(matches!(
+        block_on(async { futures::poll!(&mut collection) }),
+        std::task::Poll::Ready(Ok(_))
+    ));
+}
+
+#[test]
+fn terminal_rejection_should_prevent_not_sent_rotation_and_explicit_transport_recovery() {
+    for fallback in [false, true] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let mut error =
+            ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+                .with_replay_safe()
+                .with_retry_prohibited();
+        if fallback {
+            error = error.with_pre_delivery_transport_fallback();
+        }
+        assert!(error.stable_snapshot().retry_is_prohibited());
+        let (coordinator, _, provider) = coordinator(vec![Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(error)],
+        }]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        assert!(matches!(
+            block_on(session.collect_uncommitted()),
+            Err(EngineError::Provider(_))
+        ));
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    }
 }
 
 #[test]
@@ -4360,7 +4571,7 @@ fn interrupted_first_attempt_write_never_restarts_selection_or_creates_a_zero_at
             drop(next);
             assert_eq!(store.state.lock().unwrap().created, 1);
             assert_eq!(provider.released_leases.load(Ordering::SeqCst), 0);
-            // 首写属于可丢弃观测；丢失返回确认后不臆测入库成功，也不能退回零次重新创建。
+            // 首写属于可丢弃观测；丢失返回确认后不臆测入库成功，也不能退回零次重新创建
             assert!(release.send(()).is_err());
             if cancel {
                 session.cancel_and_finalize().await.unwrap();
@@ -4923,4 +5134,333 @@ fn connection_failure_after_a_replay_safe_rejection_keeps_existing_account_rotat
             .excluded_accounts()
             .contains(&ProviderAccountId::new("acct_second").unwrap())
     );
+}
+
+#[test]
+fn account_rotation_attempts_stop_at_the_independent_rotation_budget() {
+    // 四个账号依次交付前换号重试，第 4 次换号被独立预算拦下
+    // 不再重放到第 5 个账号，以最后账号上的原始上游错误终态
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::Sent,
+            )
+            .with_pre_delivery_retry())],
+        },
+        Script::Stream {
+            account_id: "acct_second",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_other",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_tool",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_replay_safe())],
+        },
+        // 预算内不应触达第 5 个账号，保留成功脚本以暴露超限重放
+        Script::Stream {
+            account_id: "acct_wrong",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    let error = block_on(session.collect_uncommitted())
+        .expect_err("rotation budget must stop the fifth account");
+    let gateway_core::engine::EngineError::Provider(error) = error else {
+        panic!("expected provider error")
+    };
+    assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
+    assert_eq!(error.upstream_status(), Some(429));
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 4, "the fifth account must not be replayed");
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.attempts.len(), 4);
+    assert_eq!(state.intermediate_failures, 3);
+    assert_eq!(state.finalizations.len(), 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
+    assert_eq!(state.finalizations[0].attempt_count, 4);
+    assert_eq!(state.finalizations[0].upstream_status_code, Some(429));
+}
+
+#[test]
+fn same_account_retries_do_not_consume_the_account_rotation_budget() {
+    // 同账号瞬态退避不消耗换号预算，三轮瞬态预算耗尽后仍允许换号
+    // 第四个账号成功完成请求，验证 3 次换号预算未被同账号重试占用
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let mut scripts = (0..4)
+        .map(|_| Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(transient_rejection())],
+        })
+        .collect::<Vec<_>>();
+    scripts.extend((0..4).map(|_| Script::Stream {
+        account_id: "acct_second",
+        items: vec![Err(transient_rejection())],
+    }));
+    scripts.extend((0..4).map(|_| Script::Stream {
+        account_id: "acct_other",
+        items: vec![Err(transient_rejection())],
+    }));
+    scripts.push(Script::Stream {
+        account_id: "acct_tool",
+        items: complete_stream(None),
+    });
+    let (coordinator, store, provider) = coordinator(scripts);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    block_on(session.collect_uncommitted()).expect("fourth account succeeds");
+    block_on(session.commit_downstream(Some(200))).expect("commit");
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 13);
+    let first = ProviderAccountId::new("acct_first").expect("account");
+    let second = ProviderAccountId::new("acct_second").expect("account");
+    let third = ProviderAccountId::new("acct_other").expect("account");
+    // 每个账号的 3 次同账号退避都钉选原账号，只有预算耗尽后的失败换号。
+    for context in &contexts[1..4] {
+        assert_eq!(context.required_account(), Some(&first));
+    }
+    for context in &contexts[5..8] {
+        assert_eq!(context.required_account(), Some(&second));
+    }
+    for context in &contexts[9..12] {
+        assert_eq!(context.required_account(), Some(&third));
+    }
+    assert_eq!(contexts[4].required_account(), None);
+    assert!(contexts[4].excluded_accounts().contains(&first));
+    assert_eq!(contexts[8].required_account(), None);
+    assert!(contexts[8].excluded_accounts().contains(&first));
+    assert!(contexts[8].excluded_accounts().contains(&second));
+    assert_eq!(contexts[12].required_account(), None);
+    assert!(contexts[12].excluded_accounts().contains(&first));
+    assert!(contexts[12].excluded_accounts().contains(&second));
+    assert!(contexts[12].excluded_accounts().contains(&third));
+    assert_eq!(
+        store.state.lock().expect("store").finalizations[0].attempt_count,
+        13
+    );
+}
+
+#[test]
+fn continuation_replay_rotation_stops_at_the_account_rotation_budget() {
+    // native → replay owner → replay any 的排除臂也受换号预算约束：
+    // 第三次换号后不再排除当前账号续写换号，以原始上游错误终态
+    let Operation::Generate(generate) = generate_operation() else {
+        panic!("generate operation");
+    };
+    let mut payload = Map::new();
+    payload.insert("transcript".to_owned(), Value::Array(Vec::new()));
+    let operation = Operation::Generate(generate.with_provider_session_state(
+        ProviderSessionState::new("openai", payload).expect("provider session state"),
+    ));
+    let route_plan = plan(&operation);
+    let (coordinator, _, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_one",
+            items: vec![
+                Ok(GatewayEvent::Started(ResponseMeta::new(
+                    "response-native",
+                    "gpt-5",
+                ))),
+                Err(
+                    ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+                        .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+                        .with_continuation_recovery_disposition(
+                            ContinuationRecoveryDisposition::ProviderReplayAllowed,
+                        )
+                        .with_replay_safe(),
+                ),
+            ],
+        },
+        Script::Stream {
+            account_id: "acct_two",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::NotSent,
+            )
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_tool",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_other",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_wrong",
+            items: complete_stream(None),
+        },
+    ]);
+    let continuation = NativeContinuationPin::new(
+        PreviousResponseId::new("previous-secret-id"),
+        PreviousResponseId::new("provider-native-id"),
+        ClientApiKeyId::new("key_client_1").expect("client key"),
+        ProviderKind::new("openai").expect("provider"),
+        ProviderAccountId::new("acct_one").expect("account"),
+    );
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        Some(ContinuationBinding::Pinned(continuation)),
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    let error = block_on(session.collect_uncommitted())
+        .expect_err("rotation budget must stop continuation replay");
+    let gateway_core::engine::EngineError::Provider(error) = error else {
+        panic!("expected provider error")
+    };
+    assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 4, "the fifth account must not be replayed");
+    assert_eq!(
+        contexts[2].continuation_attempt(),
+        ContinuationAttempt::ReplayAny
+    );
+    assert_eq!(
+        contexts[3].continuation_attempt(),
+        ContinuationAttempt::ReplayAny
+    );
+}
+
+#[test]
+fn provider_candidate_advance_stops_at_the_account_rotation_budget() {
+    // openai 上第三次换号耗尽预算后，空选路不再推进到 xai
+    // 沿用容量失败的原有终态语义，返回最后一个可重试上游错误
+    let operation = generate_operation();
+    let route_plan = dual_provider_plan(&operation);
+    let store = Arc::new(FakeStore::default());
+    let openai = Arc::new(ScriptedProvider::new(vec![
+        Script::Stream {
+            account_id: "acct_openai_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::NotSent,
+            )
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_openai_second",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::NotSent,
+            )
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_openai_third",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::NotSent,
+            )
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_openai_fourth",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::UpstreamCapacityUnavailable,
+                UpstreamSendState::NotSent,
+            )
+            .with_replay_safe()
+            .with_transient_retry(
+                NonZeroU32::new(3).expect("retry budget"),
+                Duration::ZERO,
+                Duration::ZERO,
+            ))],
+        },
+        Script::Error(ProviderError::new(
+            ProviderErrorKind::NoEligibleAccount,
+            UpstreamSendState::NotSent,
+        )),
+    ]));
+    let xai = Arc::new(ScriptedProvider::named(
+        "xai",
+        vec![Script::Stream {
+            account_id: "acct_xai_first",
+            items: complete_stream(None),
+        }],
+    ));
+    let mut registry = ProviderRegistry::builder();
+    registry.register(openai.clone()).expect("register openai");
+    registry.register(xai.clone()).expect("register xai");
+    let engine = GatewayEngine::new(store.clone(), registry.build());
+    let coordinator = AttemptCoordinator::new(engine);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    let error = block_on(session.collect_uncommitted())
+        .expect_err("candidate advance must stop at the rotation budget");
+    let gateway_core::engine::EngineError::Provider(error) = error else {
+        panic!("expected provider error")
+    };
+    assert_eq!(error.kind(), ProviderErrorKind::UpstreamCapacityUnavailable);
+    assert_eq!(
+        openai.contexts.lock().expect("contexts lock").len(),
+        5,
+        "the fourth stream failure and the empty selection still run"
+    );
+    assert!(
+        xai.contexts.lock().expect("contexts lock").is_empty(),
+        "the rotation budget must block the provider candidate advance"
+    );
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.attempts.len(), 4);
+    assert_eq!(state.finalizations.len(), 1);
+    assert_eq!(state.finalizations[0].attempt_count, 4);
 }

@@ -1,4 +1,4 @@
-//! 嵌套模型执行；只驱动 Core 会话，不拥有路由、重试或计费规则。
+//! 嵌套模型执行；只驱动 Core 会话，不拥有路由、重试或计费规则
 
 use std::sync::{Arc, OnceLock, Weak};
 
@@ -254,7 +254,7 @@ impl PluginModels {
             .await
             .map_err(super::error::gateway)?;
         // 调用持有身份直到 RPC 结束，流式执行不会因单次 callback 返回而提前取消；
-        // 同一 Key 复用身份快照，每次执行由 Core 创建独立调用图。
+        // 同一 Key 复用身份快照，每次执行由 Core 创建独立调用图
         bindings.insert(client_key_id, bound.clone());
         Ok(bound)
     }
@@ -584,7 +584,7 @@ impl ModelStream {
                         }
                     };
                     if events == 0 {
-                        // 空批次仍需释放待交付屏障，已经提交的空批次直接继续拉取。
+                        // 空批次仍需释放待交付屏障，已经提交的空批次直接继续拉取
                         if commit {
                             let result = state
                                 .session

@@ -1,17 +1,20 @@
+//! 解析 Codex 请求的会话身份、轮次元数据与多代理模式语义
+
 use serde_json::{Map, Value};
 
 const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
 const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
 const PROACTIVE_MULTI_AGENT_MODE_PREFIX: &str = "Proactive multi-agent delegation is active.";
 
-/// 各 Codex 端点共用的显式根会话身份。连接边界的 session_id 优先，
-/// 正文及官方 metadata 只做回退；不从 turn、window 或请求内容猜测归属。
+/// 各 Codex 端点共用的显式根会话身份
+/// 连接边界的 session_id 优先，
+/// 正文及官方 metadata 只做回退；不从 turn、window 或请求内容猜测归属
 #[must_use]
 pub fn codex_session_id(body: &Map<String, Value>, context: &Map<String, Value>) -> Option<String> {
     codex_identity_field(body, context, "session_id")
 }
 
-/// 各 Codex 端点共用的显式线程身份，与根会话采用相同的来源优先级。
+/// 各 Codex 端点共用的显式线程身份，与根会话采用相同的来源优先级
 #[must_use]
 pub fn codex_thread_id(body: &Map<String, Value>, context: &Map<String, Value>) -> Option<String> {
     codex_identity_field(body, context, "thread_id")
@@ -39,22 +42,22 @@ fn codex_identity_field(
         })
 }
 
-/// 从 OpenAI Responses 请求中提取的稳定 Codex 请求语义。
+/// 从 OpenAI Responses 请求中提取的稳定 Codex 请求语义
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CodexResponsesRequestSemantics {
-    /// 客户端原始选择的推理强度。
+    /// 客户端原始选择的推理强度
     pub reasoning_effort: Option<String>,
-    /// Codex turn metadata 中的请求类型。
+    /// Codex turn metadata 中的请求类型
     pub request_kind: Option<String>,
-    /// Codex turn metadata 中的子代理类型。
+    /// Codex turn metadata 中的子代理类型
     pub subagent_kind: Option<String>,
-    /// 网关侧派生出的推理预设。
+    /// 网关侧派生出的推理预设
     pub reasoning_preset: Option<&'static str>,
-    /// 请求是否为 Codex 压缩请求。
+    /// 请求是否为 Codex 压缩请求
     pub compact: bool,
 }
 
-/// 从 Responses body 与非 wire 协议上下文中提取 Codex 语义。
+/// 从 Responses body 与非 wire 协议上下文中提取 Codex 语义
 #[must_use]
 pub fn codex_responses_request_semantics(
     body: &Map<String, Value>,
@@ -66,7 +69,7 @@ pub fn codex_responses_request_semantics(
     )
 }
 
-/// 调用方已解析权威 turn metadata 时，从 Responses body 中提取 Codex 语义。
+/// 调用方已解析权威 turn metadata 时，从 Responses body 中提取 Codex 语义
 #[must_use]
 pub fn codex_responses_request_semantics_with_turn_metadata(
     body: &Map<String, Value>,
@@ -75,8 +78,12 @@ pub fn codex_responses_request_semantics_with_turn_metadata(
     let reasoning_effort = body
         .get("reasoning")
         .and_then(Value::as_object)
-        .and_then(|reasoning| non_empty_string(reasoning.get("effort")))
-        .map(ToOwned::to_owned);
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(|effort| {
+            non_empty_string(Some(effort))
+                .map(ToOwned::to_owned)
+                .or_else(|| effort.as_u64().map(|value| value.to_string()))
+        });
     let parsed_turn_metadata = turn_metadata
         .or_else(|| request_turn_metadata(body))
         .and_then(|value| serde_json::from_str::<Value>(value).ok());

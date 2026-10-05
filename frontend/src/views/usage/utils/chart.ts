@@ -2,7 +2,7 @@ import type { LineSeriesOption } from 'echarts'
 import type { useChartPalette } from '@/composables/useChartPalette'
 import { sampleGapBridgeSeries } from '@/components/charts/timeSeriesGap'
 import { chartTooltipStyle } from '@/components/charts/tooltip'
-import { escapeTooltip } from './format'
+import { formatLocalizedCompactNumber } from '@/utils/format'
 
 type UsageChartPalette = ReturnType<typeof useChartPalette>['palette']['value']
 type UsageAreaStrength = 'strong' | 'subtle'
@@ -19,7 +19,7 @@ const areaAlpha: Record<UsageAreaStrength, readonly [string, string]> = {
   subtle: ['18', '02'],
 }
 
-export function usageLineSeries(
+function usageLineSeries(
   name: string,
   data: Array<number | null | undefined>,
   color: string,
@@ -168,4 +168,28 @@ export function usageLegend(theme: UsageChartPalette, data: string[]) {
   }
 }
 
-export { tooltipIndex, tooltipRows } from '@/components/charts/tooltip'
+export function formatDurationAxis(value: number) {
+  if (!Number.isFinite(value))
+    return '—'
+  if (value < 1_000)
+    return `${Math.round(value)}ms`
+  return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}s`
+}
+
+export function formatUsdAxis(value: number) {
+  const safeValue = Number.isFinite(value) ? value : 0
+  if (Math.abs(safeValue) >= 1_000)
+    return `$${formatLocalizedCompactNumber(safeValue)}`
+  if (Math.abs(safeValue) < 0.01 && safeValue !== 0)
+    return `$${safeValue.toFixed(3)}`
+  return `$${safeValue.toFixed(safeValue < 1 ? 2 : 1)}`
+}
+
+function escapeTooltip(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('\'', '&#39;')
+}

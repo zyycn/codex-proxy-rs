@@ -1,3 +1,5 @@
+//! 验证智能调度权重、软亲和与容量约束的组合行为
+
 use gateway_core::account::{
     AccountSelector, PreferredAccountSelection, RotationStrategy, SmartSchedulingConfig,
 };
@@ -143,7 +145,7 @@ fn queue_weight_balances_live_pressure_and_health_only_when_enabled_for_smart() 
             expects_shortest,
             "{strategy:?}, {queue_weight}"
         );
-        // 新请求不能绕过已经选定的队列，取消请求同步归还位置。
+        // 新请求不能绕过已经选定的队列，取消请求同步归还位置
         let newcomer = CapacityWait::new(
             &queue,
             policy,
@@ -186,7 +188,7 @@ fn queue_weight_does_not_widen_immediate_selection_tolerance() {
     context.policy = context.policy.with_smart_scheduling(
         SmartSchedulingConfig::new([0.0, 0.0, 0.0, 0.0, 0.0, 1.0], false).unwrap(),
     );
-    // 仅开启排队系数时，立即可用的同权重账号按既有游标轮换。
+    // 仅开启排队系数时，立即可用的同权重账号按既有游标轮换
     assert_eq!(
         AccountSelector
             .select(&candidates, &context)
@@ -249,7 +251,7 @@ fn proportional_coefficients_preserve_near_best_rotation_and_diagnostics() {
         candidate_with_concurrency("acct_b", 0, 100),
         candidate_with_concurrency("acct_c", 0, 100),
     ];
-    // 默认额度权重 0.8 下，9375 正好位于容差边界，9374 刚好超出。
+    // 默认额度权重 0.8 下，9375 正好位于容差边界，9374 刚好超出
     for (candidate, quota) in candidates.iter_mut().zip([10_000, 9_375, 9_374]) {
         candidate.signals.quota_remaining_rank = Some(quota);
     }

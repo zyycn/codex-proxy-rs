@@ -27,6 +27,7 @@ hex = "0.4.3"
 # hyper 受 workspace 的 SOCKS IPv6 修复补丁约束，保留补丁要求的兼容版本。
 # 升级前须重复采样 ClientHello，核对算法、扩展集合及排序约束、key_share 与 ALPN。
 aws-lc-rs = "=1.18.1"
+h2 = "=0.4.19"
 hyper = { version = "=1.11.1", default-features = false }
 hyper-rustls = "=0.27.7"
 hyper-util = { version = "0.1.20", features = ["client-legacy", "http1", "tokio"] }

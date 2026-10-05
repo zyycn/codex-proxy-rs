@@ -1,3 +1,5 @@
+//! 验证历史清理的轮转、批次预算、时长限制与取消行为
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_admin::{

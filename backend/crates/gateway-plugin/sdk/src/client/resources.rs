@@ -1,12 +1,14 @@
+//! 插件创建自有分组、Key 与修改成员关系的类型化宿主客户端
+
 use crate::{PluginFault, call::resources};
 
 use super::{HostClient, payload_call};
 
 impl HostClient {
-    /// 幂等创建或读取本实例分组，不覆盖管理员修改的现有属性。
+    /// 幂等创建或读取本实例分组，不覆盖管理员修改的现有属性
     ///
     /// # Errors
-    /// 实例版本或输入不合法，或者宿主写入失败时返回错误。
+    /// 实例版本或输入不合法，或者宿主写入失败时返回错误
     pub async fn ensure_group(
         &self,
         request: resources::GroupEnsureRequest,
@@ -14,10 +16,10 @@ impl HostClient {
         payload_call(self, resources::GROUP_ENSURE, request).await
     }
 
-    /// 增量修改本实例分组的成员；保留账号在其他分组中的成员关系。
+    /// 增量修改本实例分组的成员；保留账号在其他分组中的成员关系
     ///
     /// # Errors
-    /// 实例版本、资源归属或输入不合法，或者宿主写入失败时返回错误。
+    /// 实例版本、资源归属或输入不合法，或者宿主写入失败时返回错误
     pub async fn change_group_members(
         &self,
         request: resources::GroupMembersChange,
@@ -25,10 +27,10 @@ impl HostClient {
         payload_call(self, resources::GROUP_MEMBERS, request).await
     }
 
-    /// 幂等创建或读取仅绑定本实例分组的 Key；不返回密钥明文。
+    /// 幂等创建或读取仅绑定本实例分组的 Key；不返回密钥明文
     ///
     /// # Errors
-    /// 实例版本、资源归属或输入不合法，或者宿主写入失败时返回错误。
+    /// 实例版本、资源归属或输入不合法，或者宿主写入失败时返回错误
     pub async fn ensure_key(
         &self,
         request: resources::KeyEnsureRequest,

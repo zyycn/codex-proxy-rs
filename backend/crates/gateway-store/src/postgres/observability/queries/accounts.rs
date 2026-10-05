@@ -1,4 +1,4 @@
-//! Provider 账号用量查询族。
+//! Provider 账号用量查询族
 
 use super::super::*;
 

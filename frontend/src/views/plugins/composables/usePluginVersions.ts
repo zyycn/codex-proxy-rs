@@ -1,15 +1,16 @@
 import type { Ref } from 'vue'
+import type { PluginRefreshContext } from '../utils/actions'
 import type { InstalledPlugin } from '../utils/catalog'
-import type { PluginActionContext } from './usePluginActions'
 import type { PluginArtifact, PluginInstance, PluginRollbackPlan, PluginVersionPlan } from '@/api'
 import { toast } from '@codex-proxy/ui'
 import { onScopeDispose, shallowRef, watch } from 'vue'
 import { getPluginRollbackPlan, getPluginVersionPlan, rollbackPluginInstance, switchPluginVersion } from '@/api'
 import { ApiError } from '@/api/request'
 import { errorMessage } from '@/utils/operation'
+import { notifyPluginError } from '../utils/actions'
 import { currentPluginInstance } from '../utils/catalog'
 
-interface VersionContext extends Pick<PluginActionContext, 'refresh' | 'notifyError'> {
+interface VersionContext extends PluginRefreshContext {
   catalog: Ref<InstalledPlugin[]>
   instances: Ref<PluginInstance[]>
   busyInstanceId: Ref<string>
@@ -17,7 +18,7 @@ interface VersionContext extends Pick<PluginActionContext, 'refresh' | 'notifyEr
   onConfigurationRequired: (instance: PluginInstance, artifact: PluginArtifact, plan: PluginVersionPlan, error: string) => void
 }
 
-export function usePluginVersions({ catalog, instances, busyInstanceId, refresh, notifyError, onApplied, onConfigurationRequired }: VersionContext) {
+export function usePluginVersions({ catalog, instances, busyInstanceId, refresh, onApplied, onConfigurationRequired }: VersionContext) {
   const showRollback = shallowRef(false)
   const rollbackInstance = shallowRef<PluginInstance | null>(null)
   const rollbackPlan = shallowRef<PluginRollbackPlan | null>(null)
@@ -67,11 +68,11 @@ export function usePluginVersions({ catalog, instances, busyInstanceId, refresh,
           onConfigurationRequired(current, artifact, plan, errorMessage(error, '请调整不兼容的设置后重试'))
         }
         catch (planError) {
-          notifyError('版本设置加载失败', planError)
+          notifyPluginError('版本设置加载失败', planError)
         }
       }
       else {
-        notifyError('版本切换失败', error)
+        notifyPluginError('版本切换失败', error)
       }
     }
     finally {
@@ -94,7 +95,7 @@ export function usePluginVersions({ catalog, instances, busyInstanceId, refresh,
     }
     catch (error) {
       if (rollbackController === controller)
-        notifyError('回退版本加载失败', error)
+        notifyPluginError('回退版本加载失败', error)
     }
     finally {
       if (rollbackController === controller) {
@@ -118,7 +119,7 @@ export function usePluginVersions({ catalog, instances, busyInstanceId, refresh,
       await refresh(true)
     }
     catch (error) {
-      notifyError('插件版本回退失败', error)
+      notifyPluginError('插件版本回退失败', error)
     }
     finally {
       busyInstanceId.value = ''

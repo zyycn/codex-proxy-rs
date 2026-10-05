@@ -1,3 +1,5 @@
+//! 验证插件可读取执行事实而不替换或重复原始执行
+
 use super::*;
 use futures::StreamExt;
 use gateway_core::{

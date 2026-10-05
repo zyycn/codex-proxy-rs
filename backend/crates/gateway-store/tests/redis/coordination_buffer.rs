@@ -1,3 +1,5 @@
+//! 验证 Redis 协调写入队列的有界丢弃、刷写与容量释放顺序
+
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};

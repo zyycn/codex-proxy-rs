@@ -1,3 +1,5 @@
+//! 验证 SSE 编解码的多行数据、分块、BOM 与控制字段处理
+
 use gateway_protocol::openai::sse::{
     DONE_SSE_FRAME, MAX_SSE_EVENT_BUFFER_BYTES, SseError, SseEvent, SseEventDecoder,
     encode_sse_event, encode_sse_event_with_metadata, parse_sse_events,
@@ -155,7 +157,7 @@ fn incremental_decoder_should_decode_across_arbitrary_chunk_boundaries() {
 
 #[test]
 fn incremental_decoder_should_find_separators_split_at_every_byte_boundary() {
-    // CRLF 分隔符按单字节到达时必须仍被识别；帧内容跨任意多次 push 不丢失。
+    // CRLF 分隔符按单字节到达时必须仍被识别；帧内容跨任意多次 push 不丢失
     let body = b"event: one\r\ndata: first\r\n\r\nevent: two\ndata: second\n\ndata: third\r\n\r\n";
     let mut decoder = SseEventDecoder::default();
     let mut events = Vec::new();

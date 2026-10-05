@@ -1,4 +1,4 @@
-//! xAI OAuth account 的实时模型目录与可重建 TTL cache 边界。
+//! xAI OAuth account 的实时模型目录与可重建 TTL cache 边界
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -31,10 +31,10 @@ const MAX_CATALOG_FETCH_ATTEMPTS: usize = 3;
 const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 
-/// Grok Build Free 额度的滚动观察窗口。
+/// Grok Build Free 额度的滚动观察窗口
 pub const GROK_FREE_ROLLING_WINDOW_SECONDS: u64 = 86_400;
 
-/// xAI Provider 从动态 billing JSON 解析出的旧账号页安全投影。
+/// xAI Provider 从动态 billing JSON 解析出的旧账号页安全投影
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrokBillingPresentation {
     plan_type: Option<String>,
@@ -49,7 +49,7 @@ pub struct GrokBillingPresentation {
     prepaid_balance_cents: Option<i64>,
 }
 
-/// xAI credits 当前周期的官方语义。
+/// xAI credits 当前周期的官方语义
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrokQuotaPeriodKind {
     Weekly,
@@ -68,7 +68,7 @@ impl GrokBillingPresentation {
         self.used_percent
     }
 
-    /// 返回 billing 是否包含可直接用于账号额度展示的付费事实。
+    /// 返回 billing 是否包含可直接用于账号额度展示的付费事实
     #[must_use]
     pub fn has_authoritative_quota(&self) -> bool {
         self.used_percent.is_some()
@@ -147,7 +147,7 @@ impl GrokBillingPresentation {
     }
 }
 
-/// 一个账号最近一次 xAI billing 观察结果。
+/// 一个账号最近一次 xAI billing 观察结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrokQuotaSnapshot {
     account_id: ProviderAccountId,
@@ -192,7 +192,7 @@ pub enum GrokQuotaError {
     Store,
 }
 
-/// 官方 Grok Build billing 同步与 Provider-owned quota JSON 解析服务。
+/// 官方 Grok Build billing 同步与 Provider-owned quota JSON 解析服务
 #[derive(Clone)]
 pub struct GrokCredentialQuotaService {
     repository: GrokCredentialRepository,
@@ -388,7 +388,7 @@ impl GrokCredentialQuotaService {
         }
     }
 
-    /// 批量预热请求级额度投影；持久层或 Provider JSON 异常只退化为未知额度。
+    /// 批量预热请求级额度投影；持久层或 Provider JSON 异常只退化为未知额度
     pub async fn prepare_scheduling(&self, accounts: &[ProviderAccount]) {
         if self.scheduling.hydration_targets(accounts).is_empty() {
             return;
@@ -436,7 +436,7 @@ impl GrokCredentialQuotaService {
         self.scheduling.invalidate(account_ids);
     }
 
-    /// 立即刷新一个账号的动态 billing document，并以 credential revision CAS 写回。
+    /// 立即刷新一个账号的动态 billing document，并以 credential revision CAS 写回
     pub async fn refresh_account(
         &self,
         account_id: &ProviderAccountId,
@@ -461,7 +461,7 @@ impl GrokCredentialQuotaService {
             .await
             .map_err(|_| GrokQuotaError::Upstream)?;
         let mut document = billing.into_document();
-        // 订阅查询失败不影响已取得的额度，也不能据此写入免费套餐。
+        // 订阅查询失败不影响已取得的额度，也不能据此写入免费套餐
         match self.client.fetch_subscription(&session).await {
             Ok(Some(plan_type)) => {
                 document.insert(
@@ -498,7 +498,7 @@ impl GrokCredentialQuotaService {
         Ok(snapshot)
     }
 
-    /// 读取并重新验证 Store 中的 Provider-owned quota JSON。
+    /// 读取并重新验证 Store 中的 Provider-owned quota JSON
     pub async fn read_account(
         &self,
         account_id: &ProviderAccountId,
@@ -534,7 +534,7 @@ impl fmt::Debug for GrokCredentialQuotaService {
     }
 }
 
-/// 官方 `/v1/models` 形成的一个 account 完整模型集合。
+/// 官方 `/v1/models` 形成的一个 account 完整模型集合
 #[derive(Clone, PartialEq, Eq)]
 pub struct GrokCredentialCatalogSeed {
     etag: Option<String>,
@@ -605,12 +605,12 @@ impl fmt::Debug for GrokCredentialCatalogSeed {
     }
 }
 
-/// xAI 以套餐划分的模型目录作用域。
+/// xAI 以套餐划分的模型目录作用域
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GrokCatalogScope(ProviderCatalogScope);
 
 impl GrokCatalogScope {
-    /// 从账号已验证的套餐事实构造目录作用域。
+    /// 从账号已验证的套餐事实构造目录作用域
     pub fn for_account(account: &ProviderAccount) -> Result<Self, GrokCatalogCacheError> {
         let plan = account
             .plan_type()
@@ -623,14 +623,14 @@ impl GrokCatalogScope {
             .map_err(|_| GrokCatalogCacheError::InvalidData)
     }
 
-    /// 返回稳定的 Provider-owned 作用域。
+    /// 返回稳定的 Provider-owned 作用域
     #[must_use]
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
 }
 
-/// Redis/内存 TTL cache 中的一条可重建套餐 catalog。
+/// Redis/内存 TTL cache 中的一条可重建套餐 catalog
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrokPlanCatalog {
     scope: GrokCatalogScope,
@@ -668,7 +668,7 @@ impl GrokPlanCatalog {
     }
 }
 
-/// Provider-owned catalog cache；实现只能保存可重建 TTL 数据。
+/// Provider-owned catalog cache；实现只能保存可重建 TTL 数据
 #[async_trait]
 pub trait GrokCredentialCatalogCache: Send + Sync {
     async fn replace(&self, catalog: GrokPlanCatalog) -> Result<(), GrokCatalogCacheError>;
@@ -685,7 +685,7 @@ pub trait GrokCredentialCatalogCache: Send + Sync {
     ) -> Result<Option<bool>, GrokCatalogCacheError>;
 }
 
-/// xAI 负责解释 catalog 文档，Store 只保存 opaque JSON。
+/// xAI 负责解释 catalog 文档，Store 只保存 opaque JSON
 pub struct GrokCatalogCache {
     port: Arc<dyn ProviderCatalogCachePort>,
     provider_kind: ProviderKind,
@@ -809,7 +809,7 @@ impl GrokCredentialCatalogCache for GrokCatalogCache {
         else {
             return Ok(None);
         };
-        // cache 只保存可重建 TTL 数据：损坏条目按 miss 丢弃，由调用方实时重建。
+        // cache 只保存可重建 TTL 数据：损坏条目按 miss 丢弃，由调用方实时重建
         match Self::decode(scope, document) {
             Ok(catalog) => Ok(Some(catalog)),
             Err(_) => {
@@ -901,7 +901,7 @@ impl GrokCredentialCatalogService {
         ProviderCatalogGeneration::new(published.generation)
     }
 
-    /// 优先读取套餐目录 cache；缺失时才用当前账号所属套餐的有限候选集实时填充。
+    /// 优先读取套餐目录 cache；缺失时才用当前账号所属套餐的有限候选集实时填充
     pub async fn cached_or_refresh_account_catalog(
         &self,
         account: &ProviderAccount,
@@ -919,7 +919,7 @@ impl GrokCredentialCatalogService {
         self.refresh_account_catalog(account.id()).await
     }
 
-    /// 实时刷新指定账号所属套餐的模型集合，并覆盖可重建 cache。
+    /// 实时刷新指定账号所属套餐的模型集合，并覆盖可重建 cache
     pub async fn refresh_account_catalog(
         &self,
         account_id: &ProviderAccountId,
@@ -931,7 +931,7 @@ impl GrokCredentialCatalogService {
             .map_err(|_| GrokCredentialCatalogError::Store)?;
         let mut groups = match catalog_candidates_by_scope(candidates) {
             Ok(groups) => groups,
-            // 全部候选都被调度列表过滤时按空组处理，让下方目标账号补回继续生效。
+            // 全部候选都被调度列表过滤时按空组处理，让下方目标账号补回继续生效
             Err(GrokCredentialCatalogError::NoEligibleCredential) => BTreeMap::new(),
             Err(error) => return Err(error),
         };
@@ -946,8 +946,9 @@ impl GrokCredentialCatalogService {
             Some(scope) => scope,
             None => {
                 // 常规调度列表不含停用账号；管理端按账号查询模型要对停用账号返回
-                // 真实上游结果。按同一 revision 加载账号与凭据，避免并发更新套餐时
-                // 把新凭据的目录写入旧套餐 cache。
+                // 真实上游结果
+                // 按同一 revision 加载账号与凭据，避免并发更新套餐时
+                // 把新凭据的目录写入旧套餐 cache
                 let account = self
                     .repository
                     .account_by_id(account_id)
@@ -990,7 +991,7 @@ impl GrokCredentialCatalogService {
         self.refresh_scope_catalog(scope, candidates).await
     }
 
-    /// 读取当前账号所属套餐的目录 cache，不触发上游请求。
+    /// 读取当前账号所属套餐的目录 cache，不触发上游请求
     pub async fn read_account_catalog(
         &self,
         account: &ProviderAccount,
@@ -1003,7 +1004,7 @@ impl GrokCredentialCatalogService {
             .map_err(|_| GrokCredentialCatalogError::Cache)
     }
 
-    /// Provider Registry 构建 RuntimeSnapshot 时使用的实时能力目录。
+    /// Provider Registry 构建 RuntimeSnapshot 时使用的实时能力目录
     pub async fn query_models(&self) -> Result<Vec<GrokCatalogModel>, GrokCredentialCatalogError> {
         self.fetch_and_cache().await
     }
@@ -1018,7 +1019,7 @@ impl GrokCredentialCatalogService {
             .filter(eligible_catalog_candidate)
             .collect::<Vec<_>>();
         let groups = catalog_candidates_by_scope(candidates)?;
-        // 单个套餐失败只跳过该套餐，不阻断其他套餐的目录同步。
+        // 单个套餐失败只跳过该套餐，不阻断其他套餐的目录同步
         let mut fetched = Vec::with_capacity(groups.len());
         let mut last_error = None;
         for (scope, candidates) in groups {
@@ -1052,7 +1053,7 @@ impl GrokCredentialCatalogService {
                 .await
                 .is_err()
             {
-                // cache 是可重建 TTL 数据，单套餐写入失败不阻断目录发布。
+                // cache 是可重建 TTL 数据，单套餐写入失败不阻断目录发布
                 tracing::warn!(
                     scope = scope.as_str(),
                     "failed to cache xAI plan catalog scope"
@@ -1319,8 +1320,9 @@ fn quota_scheduling_signals(billing: &GrokBillingPresentation) -> Option<Account
         .then(|| AccountQuotaSignals::new(reset_at, remaining_rank))
 }
 
-/// 把 xAI billing 文档归一化为访问结论。缺少正反证据时返回 Unknown，
-/// 由 `QuotaState::merge_observation` 保留既有已确认结论。
+/// 把 xAI billing 文档归一化为访问结论
+/// 缺少正反证据时返回 Unknown，
+/// 由 `QuotaState::merge_observation` 保留既有已确认结论
 fn quota_access_observation(
     billing: &GrokBillingPresentation,
     observed_at: SystemTime,

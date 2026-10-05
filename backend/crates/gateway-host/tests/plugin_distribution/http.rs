@@ -1,3 +1,5 @@
+//! 验证插件下载的凭据范围、内容摘要与安全错误输出
+
 use std::sync::Arc;
 
 use gateway_admin::{

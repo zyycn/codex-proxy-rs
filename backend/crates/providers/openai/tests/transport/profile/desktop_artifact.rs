@@ -1,3 +1,5 @@
+//! 验证 Desktop 制品内嵌 Core 版本扫描与 ZIP 目录约束
+
 use provider_openai::transport::profile::desktop_artifact::{
     CodexDesktopArtifactError, CoreVersionScanner, find_core_entry, parse_content_range,
 };

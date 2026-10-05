@@ -1,4 +1,4 @@
-//! 插件 Runtime 的组装与回调资源持有；服务和命令模式复用同一组管理端口。
+//! 插件 Runtime 的组装与回调资源持有；服务和命令模式复用同一组管理端口
 
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use gateway_plugin_runtime::PluginRuntime;
 
 use super::BootstrapError;
 
-// 必须在调用方仍持有 Core 和回调资源时异步关闭，不能先退出该作用域再清理。
+// 必须在调用方仍持有 Core 和回调资源时异步关闭，不能先退出该作用域再清理
 macro_rules! or_shutdown {
     ($runtime:expr, $result:expr) => {
         match $result {
@@ -31,7 +31,7 @@ macro_rules! or_shutdown {
 pub(super) use or_shutdown;
 
 pub(super) struct ManagementPorts {
-    // Runtime 保存 Weak；组合根持有这些 Arc，直到插件全部关闭。
+    // Runtime 保存 Weak；组合根持有这些 Arc，直到插件全部关闭
     pub(super) accounts: Arc<dyn PluginAccountAccess>,
     keys: Arc<dyn PluginClientKeyAccess>,
     resources: Arc<dyn PluginResourceAccess>,

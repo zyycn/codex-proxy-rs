@@ -1,3 +1,5 @@
+//! 插件宿主回调端口的组合、授权检查与方法分派
+
 mod accounts;
 mod admin;
 mod affinity;
@@ -118,7 +120,7 @@ impl CallResources {
         middleware.and_then(|middleware| middleware.request_settings())
     }
 
-    /// 建立受管流后，网络操作各自计时；连接空闲时间不消耗后续操作的预算。
+    /// 建立受管流后，网络操作各自计时；连接空闲时间不消耗后续操作的预算
     fn timeout(&self) -> Result<Duration, PluginFault> {
         let state = self
             .state
@@ -454,9 +456,10 @@ impl CallbackHandler for PluginCallbacks {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.closed = true;
-            // RPC End 可以先于消费者取完已入队的中间件正文到达。这里只撤销新的
+            // RPC End 可以先于消费者取完已入队的中间件正文到达
+            // 这里只撤销新的
             // callback 入口；正文包装器持有 invocation，最后一个 owner 释放时再关闭
-            // 下游，避免提前丢失尚未搬运的计量/终态信封。
+            // 下游，避免提前丢失尚未搬运的计量/终态信封
             state.middleware.take();
             for stream in state.streams.values() {
                 stream.close();

@@ -1,4 +1,4 @@
-//! Responses WebSocket 冷建连的 origin 级熔断器。
+//! Responses WebSocket 冷建连的 origin 级熔断器
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -16,7 +16,7 @@ const DEFAULT_FAILURE_THRESHOLD: usize = 3;
 const DEFAULT_FAILURE_WINDOW: Duration = Duration::from_secs(30);
 const DEFAULT_OPEN_DURATION: Duration = Duration::from_secs(30);
 
-/// origin 熔断策略。
+/// origin 熔断策略
 #[derive(Debug, Clone, Copy)]
 pub struct WebSocketOriginBreakerConfig {
     pub failure_threshold: usize,
@@ -34,14 +34,14 @@ impl Default for WebSocketOriginBreakerConfig {
     }
 }
 
-/// 冷建连是否获准进入 origin。
+/// 冷建连是否获准进入 origin
 pub enum WebSocketOriginBreakerDecision {
     Allowed(WebSocketOriginBreakerPermit),
     Open,
     HalfOpenBusy,
 }
 
-/// origin 级 WebSocket 快路径熔断器。
+/// origin 级 WebSocket 快路径熔断器
 #[derive(Clone)]
 pub struct WebSocketOriginBreaker {
     inner: Arc<Mutex<HashMap<String, CircuitState>>>,
@@ -65,7 +65,7 @@ impl WebSocketOriginBreaker {
         }
     }
 
-    /// 已有热 socket 不经过这里；本方法只裁决新的 WebSocket opening。
+    /// 已有热 socket 不经过这里；本方法只裁决新的 WebSocket opening
     pub fn try_acquire(&self, origin_key: &str) -> WebSocketOriginBreakerDecision {
         let now = Instant::now();
         let mut circuits = self
@@ -162,7 +162,7 @@ impl WebSocketOriginBreaker {
     }
 }
 
-/// 一次新的 WebSocket opening 许可；消费式完成保证 half-open 探针不会泄漏。
+/// 一次新的 WebSocket opening 许可；消费式完成保证 half-open 探针不会泄漏
 pub struct WebSocketOriginBreakerPermit {
     breaker: WebSocketOriginBreaker,
     origin_key: String,
@@ -182,7 +182,7 @@ impl WebSocketOriginBreakerPermit {
         }
     }
 
-    /// 创建可跨前台预算与后台 opening 生命周期共享的快路径观察器。
+    /// 创建可跨前台预算与后台 opening 生命周期共享的快路径观察器
     pub(crate) fn fast_path_reporter(&self) -> WebSocketOriginFastPathReporter {
         WebSocketOriginFastPathReporter {
             breaker: self.breaker.clone(),
@@ -209,7 +209,7 @@ impl WebSocketOriginBreakerPermit {
         self.armed = false;
     }
 
-    /// opening 因账号驱逐或服务关闭而取消，不污染 origin 可用性。
+    /// opening 因账号驱逐或服务关闭而取消，不污染 origin 可用性
     pub(crate) fn cancel(mut self) {
         self.breaker.cancel_probe(&self.origin_key, self.probe_id);
         self.armed = false;
@@ -230,7 +230,7 @@ impl Drop for WebSocketOriginBreakerPermit {
     }
 }
 
-/// 前台等待结束后仍可报告同一次后台 opening 错过快路径预算。
+/// 前台等待结束后仍可报告同一次后台 opening 错过快路径预算
 pub(crate) struct WebSocketOriginFastPathReporter {
     breaker: WebSocketOriginBreaker,
     origin_key: String,

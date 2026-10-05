@@ -1,4 +1,4 @@
-//! Provider 会话亲和性的可丢失 Redis 映射。
+//! Provider 会话亲和性的可丢失 Redis 映射
 
 use std::time::Duration;
 

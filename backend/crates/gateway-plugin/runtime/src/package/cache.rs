@@ -1,3 +1,5 @@
+//! 将已验证插件包解压到独立私有目录，并持有可执行资源
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -6,7 +8,7 @@ use std::{
 
 use super::{PackageError, ValidatedPackage};
 
-/// 每次准备创建独立私有目录；存储中的包体为权威，缓存不会被原地升级。
+/// 每次准备创建独立私有目录；存储中的包体为权威，缓存不会被原地升级
 pub struct PreparedPackage {
     directory: tempfile::TempDir,
     executable: PathBuf,

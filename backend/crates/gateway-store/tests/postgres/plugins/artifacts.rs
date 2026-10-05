@@ -1,3 +1,5 @@
+//! 验证插件制品身份、信任接受、迁移与安装幂等性
+
 use std::collections::BTreeMap;
 
 use gateway_admin::{
@@ -153,7 +155,7 @@ async fn trust_migration_removes_only_obsolete_metadata_fields() {
         ),
         ('d', serde_json::json!({})),
     ] {
-        // 每个制品使用独立平台，保留同一版本的平台不可变约束。
+        // 每个制品使用独立平台，保留同一版本的平台不可变约束
         let fixture = artifact(digest, &[&format!("test-{digest}")]);
         let installed = store
             .install_artifact(fixture.clone(), PluginSource::Upload, &context())
@@ -266,7 +268,9 @@ async fn plugin_migration_preserves_main_settings_and_accepts_new_installations(
         return;
     };
     initialize_revision(&database).await;
-    sqlx::query("update runtime_settings set max_concurrent_per_account=0 where id=1")
+    // 0022 会把仍为旧默认 3600 的 margin 收敛到 300；预设自定义值，
+    // 让本测试继续验证「所有已自定义设置都原样保留」。
+    sqlx::query("update runtime_settings set max_concurrent_per_account=0, refresh_margin_seconds=1800 where id=1")
         .execute(&database.pool)
         .await
         .unwrap();

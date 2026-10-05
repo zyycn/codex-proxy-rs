@@ -1,3 +1,5 @@
+//! 验证 Codex 上游地址拼接与额度端点路径
+
 use provider_openai::transport::{endpoint_url, usage_endpoint_url};
 
 #[test]

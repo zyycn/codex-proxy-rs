@@ -1,4 +1,4 @@
-//! 观测查询、趋势、费用覆盖与健康阈值规则。
+//! 观测查询、趋势、费用覆盖与健康阈值规则
 
 use std::{
     collections::{BTreeMap, HashMap, btree_map::Entry},
@@ -93,7 +93,7 @@ impl DashboardQueryCache {
     }
 }
 
-/// API 消费的观测控制面服务。
+/// API 消费的观测控制面服务
 #[async_trait]
 pub trait ObservabilityService: Send + Sync {
     async fn dashboard_summary(
@@ -799,7 +799,7 @@ impl DefaultObservabilityService {
     }
 
     /// 补充当前套餐展示名称，逐条尽力把可校验的总额升级为完整分解；单条脏数据（非法 Provider kind、
-    /// 不支持的来源或费用规则失败）只保留该条已存的总额，不影响整页返回。
+    /// 不支持的来源或费用规则失败）只保留该条已存的总额，不影响整页返回
     fn enrich_list_records(&self, records: &mut [crate::model::observability::UsageListRecord]) {
         for record in records {
             record.provider_account_plan_type_display =
@@ -870,7 +870,7 @@ impl DefaultObservabilityService {
     }
 }
 
-/// 按部署时区的自然日计算 15 分钟健康桶，桶数随夏令时变化。
+/// 按部署时区的自然日计算 15 分钟健康桶，桶数随夏令时变化
 pub(super) fn health_timeline_at(
     records: &[RequestMetricPoint],
     now: DateTime<Utc>,

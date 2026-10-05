@@ -10,12 +10,14 @@ import { usePageSelection } from '@/composables/usePageSelection'
 import ApiKeyActions from './components/ApiKeyActions.vue'
 import ApiKeyBudgetCell from './components/ApiKeyBudgetCell.vue'
 import ApiKeyBudgetResetModal from './components/ApiKeyBudgetResetModal.vue'
-import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
+import ApiKeyCreatedModal from './components/ApiKeyCreatedModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
+import ApiKeyFormModal from './components/ApiKeyFormModal.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
 import ApiKeyScopeCell from './components/ApiKeyScopeCell.vue'
 import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
+import { useApiKeyEditor } from './composables/useApiKeyEditor'
 import { useApiKeyMutations } from './composables/useApiKeyMutations'
 import { useApiKeysQuery } from './composables/useApiKeysQuery'
 import { useApiKeyUse } from './composables/useApiKeyUse'
@@ -48,54 +50,52 @@ const {
 } = useAccountGroupCatalog({ immediate: false })
 
 const {
-  showFormModal,
-  showDeleteModal,
-  showSingleDeleteModal,
-  showKeyModal,
-  showAllAccountsConfirm,
+  showUseKeyModal,
+  selectedUseKey,
+  showCreatedKeyModal,
   createdKey,
-  createdKeyName,
-  editingKey,
-  pendingDeleteKey,
-  deleteCount,
-  savingKey,
-  deletingKey,
-  batchDeleting,
-  updatingStatusKeyIds,
   revealingKeyIds,
+  openAiBaseUrl,
+  showCreatedKey,
+  clearCreatedKey,
+  copyToClipboard,
+  copyApiKey,
+  importCreatedKeyToCcs,
+  openUseKeyModal,
+  importToCcs,
+} = useApiKeyUse()
+
+const {
+  showFormModal,
+  showAllAccountsConfirm,
+  editingKey,
+  savingKey,
   form,
   openCreate,
   openEdit,
   clearCustomKey,
-  clearCreatedKey,
   requestSave,
   confirmAllAccountsScope,
+} = useApiKeyEditor({ reload: loadApiKeys, onCreated: showCreatedKey })
+
+const {
+  showDeleteModal,
+  showSingleDeleteModal,
+  pendingDeleteKey,
+  deleteCount,
+  deletingKey,
+  batchDeleting,
+  updatingStatusKeyIds,
   requestDeleteKey,
   handleDelete,
   handleBatchDelete,
   handleToggleStatus,
-  copyToClipboard,
-  revealPlaintextKey,
-  copyApiKey,
 } = useApiKeyMutations({ selectedIds, reload: loadApiKeys })
 
 const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll } = usePageSelection(
   apiKeys,
   selectedIds,
 )
-
-const {
-  showUseKeyModal,
-  selectedUseKey,
-  openAiBaseUrl,
-  importCreatedKeyToCcs,
-  openUseKeyModal,
-  importToCcs,
-} = useApiKeyUse({
-  createdKey,
-  createdKeyName,
-  revealPlaintextKey,
-})
 
 watch(
   showFormModal,
@@ -214,20 +214,23 @@ watch(
       </template>
     </BaseCard>
 
-    <ApiKeyCreateModal
+    <ApiKeyFormModal
       v-model="showFormModal"
-      v-model:created-open="showKeyModal"
       v-model:form="form"
       :groups="groups"
       :group-loading="loadingGroups"
       :editing="Boolean(editingKey)"
-      :created-key="createdKey"
       :saving="savingKey"
-      @copy="copyToClipboard"
       @save="requestSave"
-      @import-ccs="importCreatedKeyToCcs"
       @after-leave="clearCustomKey"
-      @created-after-leave="clearCreatedKey"
+    />
+
+    <ApiKeyCreatedModal
+      v-model="showCreatedKeyModal"
+      :created-key="createdKey"
+      @copy="copyToClipboard"
+      @import-ccs="importCreatedKeyToCcs"
+      @after-leave="clearCreatedKey"
     />
 
     <ApiKeyBudgetResetModal

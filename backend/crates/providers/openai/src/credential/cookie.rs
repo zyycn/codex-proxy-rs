@@ -1,3 +1,5 @@
+//! Codex Cookie 的接收、作用域校验、过期解析与回放限制
+
 use std::collections::HashSet;
 
 use chrono::{DateTime, TimeDelta, Utc};

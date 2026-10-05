@@ -1,3 +1,5 @@
+//! 验证发行查询取消、并发等待与限流到期后的资源释放
+
 use std::{
     sync::{
         Arc,
@@ -70,7 +72,7 @@ async fn cancelling_the_fetch_owner_releases_the_shared_slot_for_the_next_query(
             .query_release(query("example/plugins"), vec![], None)
             .await
     });
-    // 以来源确实收到请求为屏障，避免只取消尚未执行的任务而误报释放成功。
+    // 以来源确实收到请求为屏障，避免只取消尚未执行的任务而误报释放成功
     wait_for_requests(&server, 1).await;
     first.abort();
     assert!(first.await.unwrap_err().is_cancelled());
@@ -113,7 +115,7 @@ async fn cancelling_a_cache_waiter_does_not_cancel_or_poison_the_fetch_owner() {
     });
     wait_for_requests(&server, 1).await;
     let waiter = distribution.query_release(query("example/plugins"), vec![], None);
-    // timeout 会实际轮询等待者再取消；不会只中止一个未调度的 spawn。
+    // timeout 会实际轮询等待者再取消；不会只中止一个未调度的 spawn
     assert!(
         tokio::time::timeout(Duration::from_millis(25), waiter)
             .await
@@ -126,7 +128,7 @@ async fn cancelling_a_cache_waiter_does_not_cancel_or_poison_the_fetch_owner() {
         .unwrap();
     assert_eq!(first.tag, "v1.0.0");
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
-    // 等待者取消不影响持有者完成，也不阻止之后的显式查询刷新结果。
+    // 等待者取消不影响持有者完成，也不阻止之后的显式查询刷新结果
     let refreshed = distribution
         .query_release(query("example/plugins"), vec![], None)
         .await
@@ -234,7 +236,7 @@ async fn rate_limit_expiry_releases_the_identity_without_reusing_a_failure_cache
         .query_release(query("authorized/plugin"), vec![authorized], None)
         .await
         .unwrap();
-    // 同一查询另有失败缓存；改用尚未查询的仓库，只验证共享身份退避的真实到期。
+    // 同一查询另有失败缓存；改用尚未查询的仓库，只验证共享身份退避的真实到期
     tokio::time::sleep(Duration::from_millis(1100)).await;
     let recovered = distribution
         .query_release(query("recovered/plugin"), vec![], None)

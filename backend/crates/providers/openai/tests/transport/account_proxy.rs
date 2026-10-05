@@ -1,3 +1,5 @@
+//! 验证账号代理的协议支持、连接隔离与失败后禁止直连回退
+
 use super::*;
 use gateway_core::{
     account::{CredentialRevision, OutboundProxy, ProviderAccount, ProviderAccountId},
@@ -223,7 +225,7 @@ async fn socks_account_egress_preserves_dns_mode_auth_and_ipv6_for_sse_and_webso
             ("socks5h", "upstream.invalid"),
             ("socks5h", "[::1]"),
         ];
-        // reqwest's local resolver does not accept IPv6 literals; use socks5h for those.
+        // reqwest 本地解析器不接受 IPv6 字面量，此场景使用 socks5h
         if websocket {
             targets.push(("socks5", "[::1]"));
         }
@@ -341,7 +343,7 @@ async fn https_account_proxy_starts_tls_and_rejection_never_falls_back_to_direct
     }
 }
 
-// 以底层写入调用为边界模拟问题代理，避免将 TCP 单次读取误当成报文边界。
+// 以底层写入调用为边界模拟问题代理，避免将 TCP 单次读取误当成报文边界
 struct GreetingSensitiveProxy {
     greeting: Vec<u8>,
     replies: Cursor<Vec<u8>>,
@@ -376,7 +378,7 @@ impl AsyncRead for GreetingSensitiveProxy {
                 "proxy rejected partial method negotiation",
             )));
         }
-        // 回复逐字节交付，验证客户端不依赖响应的读取边界。
+        // 回复逐字节交付，验证客户端不依赖响应的读取边界
         if buf.remaining() > 0 {
             let mut byte = [0];
             let count = Read::read(&mut self.replies, &mut byte)?;
@@ -410,7 +412,7 @@ async fn socks_proxy_flush_contract_coalesces_greeting_without_losing_auth_or_co
     use tokio_tungstenite::proxy::connect_via_proxy;
     use tungstenite::proxy::ProxyConfig;
 
-    // 直接验证锁定依赖与握手写缓冲的合同；生产接线由已有账号代理集成测试覆盖。
+    // 直接验证锁定依赖与握手写缓冲的合同；生产接线由已有账号代理集成测试覆盖
     for scheme in ["socks5", "socks5h"] {
         for authenticated in [false, true] {
             let authentication = if authenticated { "user:pass@" } else { "" };

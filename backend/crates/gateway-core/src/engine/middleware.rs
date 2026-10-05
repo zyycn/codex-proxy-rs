@@ -1,14 +1,14 @@
-//! 数据面请求/响应的统一洋葱中间件端口。
+//! 数据面请求/响应的统一洋葱中间件端口
 //!
-//! 本模块只承载宿主内部组合合同。插件 RPC 如何表示 `next` 和正文句柄由
+//! 本模块只承载宿主内部组合合同
+//! 插件 RPC 如何表示 `next` 和正文句柄由
 //! Runtime/SDK 负责；身份、路由、账号租约、发送事实、重试、计量与结算仍由 Core
-//! 持有，不能通过本端口交给插件解释。
+//! 持有，不能通过本端口交给插件解释
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroU32;
 use std::sync::{Arc, RwLock, Weak};
-use std::time::SystemTime;
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -30,33 +30,33 @@ use crate::policy::ClientApiKeyId;
 use crate::runtime::extensions::{ExtensionSetId, ExtensionSetReference};
 use crate::settings::RequestSettings;
 
-/// 中间件在一次逻辑请求中的挂载位置。
+/// 中间件在一次逻辑请求中的挂载位置
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MiddlewareMount {
-    /// 所有 HTTP 接口的认证、路由和正文解析之前。
+    /// 所有 HTTP 接口的认证、路由和正文解析之前
     Http,
-    /// 下游 WebSocket 消息在默认解析和写入之前组合。
+    /// 下游 WebSocket 消息在默认解析和写入之前组合
     WebSocket,
-    /// 类型化公开服务在执行默认业务逻辑前组合。
+    /// 类型化公开服务在执行默认业务逻辑前组合
     Service,
-    /// 客户端请求外层；一次逻辑请求只执行一次。
+    /// 客户端请求外层；一次逻辑请求只执行一次
     Request,
-    /// 受管 Provider attempt 内层；每次真实 retry 都重新建立。
+    /// 受管 Provider attempt 内层；每次真实 retry 都重新建立
     Attempt,
 }
 
-/// 中间件正文块的宿主边界。
+/// 中间件正文块的宿主边界
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MiddlewareFraming {
-    /// 一个完整 JSON document。
+    /// 一个完整 JSON document
     JsonDocument,
-    /// 一个完整 SSE event，包含终止该事件的空行。
+    /// 一个完整 SSE event，包含终止该事件的空行
     SseEvent,
-    /// 不承诺 UTF-8 或消息边界的原始字节。
+    /// 不承诺 UTF-8 或消息边界的原始字节
     RawBytes,
 }
 
-/// 允许进入中间件合同的多值 HTTP 头。
+/// 允许进入中间件合同的多值 HTTP 头
 #[derive(Clone, PartialEq, Eq)]
 pub struct MiddlewareHeader {
     name: String,
@@ -98,7 +98,7 @@ impl fmt::Debug for MiddlewareHeader {
     }
 }
 
-/// 一次中间件调用可修改的请求事实。
+/// 一次中间件调用可修改的请求事实
 #[derive(Clone, PartialEq, Eq)]
 pub struct MiddlewareRequest {
     settings: Option<RequestSettings>,
@@ -110,7 +110,7 @@ pub struct MiddlewareRequest {
     capabilities: Option<MiddlewareCapabilityDeclaration>,
 }
 
-/// 只声明具体功能的责任归属，实际正文中的需求始终继续生效。
+/// 只声明具体功能的责任归属，实际正文中的需求始终继续生效
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MiddlewareCapabilityDeclaration {
     pub handled: BTreeSet<Feature>,
@@ -163,7 +163,7 @@ impl MiddlewareRequest {
         (self.protocol, self.headers, self.body)
     }
 
-    /// 保留链入口的语义来源；新增声明必须对应当前这一层实际消除的功能字段。
+    /// 保留链入口的语义来源；新增声明必须对应当前这一层实际消除的功能字段
     pub fn replace_parts(
         mut self,
         protocol: String,
@@ -198,7 +198,7 @@ impl MiddlewareRequest {
         Ok(self)
     }
 
-    /// API 在最终解码后应用；没有声明的透传路径不解析或重新编码正文。
+    /// API 在最终解码后应用；没有声明的透传路径不解析或重新编码正文
     pub fn apply_capabilities(&self, operation: Operation) -> Result<Operation, MiddlewareError> {
         let Some(declaration) = &self.capabilities else {
             return Ok(operation);
@@ -247,7 +247,7 @@ impl fmt::Debug for MiddlewareRequest {
     }
 }
 
-/// 中间件逐次拉取的完整正文边界。
+/// 中间件逐次拉取的完整正文边界
 pub struct MiddlewareFrame {
     bytes: Bytes,
     framing: MiddlewareFraming,
@@ -283,21 +283,21 @@ impl MiddlewareFrame {
         self.terminal
     }
 
-    /// 返回正文是否经过至少一个中间件的替换、展开或丢弃映射。
+    /// 返回正文是否经过至少一个中间件的替换、展开或丢弃映射
     ///
-    /// 插件可读取该事实；对快照的修改不改变宿主确认的来源。
+    /// 插件可读取该事实；对快照的修改不改变宿主确认的来源
     #[must_use]
     pub const fn transformed(&self) -> bool {
         self.transformed
     }
 
-    /// 返回来源事件的只读视图；读取不转移原结算和会话状态的所有权。
+    /// 返回来源事件的只读视图；读取不转移原结算和会话状态的所有权
     #[must_use]
     pub fn event(&self) -> Option<&ProviderEvent> {
         self.envelope.as_ref().map(MiddlewareFrameEnvelope::event)
     }
 
-    /// 继承宿主确认的改写事实；`false` 不能清除内层已经记录的改写。
+    /// 继承宿主确认的改写事实；`false` 不能清除内层已经记录的改写
     #[must_use]
     pub fn with_transformed(mut self, transformed: bool) -> Self {
         self.transformed |= transformed;
@@ -309,10 +309,11 @@ impl MiddlewareFrame {
         self.bytes
     }
 
-    /// 拆出插件可见正文与只能由宿主原样搬运的事实信封。
+    /// 拆出插件可见正文与只能由宿主原样搬运的事实信封
     ///
     /// Runtime 在一对多转换时必须把信封附到最后一个输出；这样 `Completed` 不会在
-    /// 前置输出交付前提前终结。读取快照不会转移信封的计量所有权。
+    /// 前置输出交付前提前终结
+    /// 读取快照不会转移信封的计量所有权
     #[must_use]
     pub fn into_parts(
         self,
@@ -325,7 +326,7 @@ impl MiddlewareFrame {
         (self.bytes, self.framing, self.terminal, self.envelope)
     }
 
-    /// 把宿主持有的事实信封附到改写后的最后一个输出。
+    /// 把宿主持有的事实信封附到改写后的最后一个输出
     #[must_use]
     pub fn with_envelope(mut self, envelope: MiddlewareFrameEnvelope) -> Self {
         self.envelope = Some(envelope);
@@ -373,9 +374,9 @@ impl fmt::Debug for MiddlewareFrame {
     }
 }
 
-/// 可读取完整事件、只能随正文移动一次的 Core 事实信封。
+/// 可读取完整事件、只能随正文移动一次的 Core 事实信封
 ///
-/// 该类型故意不实现 `Clone`，防止同一 usage/cost 在一对多响应中被复制。
+/// 该类型故意不实现 `Clone`，防止同一 usage/cost 在一对多响应中被复制
 pub struct MiddlewareFrameEnvelope {
     event: ProviderEvent,
 }
@@ -395,14 +396,16 @@ impl fmt::Debug for MiddlewareFrameEnvelope {
     }
 }
 
-/// 洋葱返回路径上的惰性正文。
+/// 洋葱返回路径上的惰性正文
 ///
-/// 实现必须让 `Drop` 与 [`Self::close`] 都回收底层流。请求 finalization 继续委托
-/// 原有 [`crate::engine::execution::ExecutionSession`]，本端口不建立第二套清理器。
+/// 实现必须让 `Drop` 与 [`Self::close`] 都回收底层流
+/// 请求 finalization 继续委托
+/// 原有 [`crate::engine::execution::ExecutionSession`]，本端口不建立第二套清理器
 pub trait MiddlewareBody: Send {
     fn next_frame(&mut self) -> BoxFuture<'_, Result<Option<MiddlewareFrame>, MiddlewareError>>;
 
-    /// 在最外层输出准备完成后提交原有 Core delivery barrier。中间件实现只能向内委托。
+    /// 在最外层输出准备完成后提交原有 Core delivery barrier
+    /// 中间件实现只能向内委托
     fn commit_downstream(
         &mut self,
         _client_status_code: Option<u16>,
@@ -410,7 +413,8 @@ pub trait MiddlewareBody: Send {
         Box::pin(async { Ok(()) })
     }
 
-    /// 首字节前失败时记录最终返回给客户端的状态。中间件实现只能向内委托。
+    /// 首字节前失败时记录最终返回给客户端的状态
+    /// 中间件实现只能向内委托
     fn record_client_status(
         &mut self,
         _client_status_code: u16,
@@ -418,7 +422,7 @@ pub trait MiddlewareBody: Send {
         Box::pin(async { Ok(()) })
     }
 
-    /// 没有调用 `next` 的短路正文视为无需 Core 结算；调用过 `next` 的包装器必须委托。
+    /// 没有调用 `next` 的短路正文视为无需 Core 结算；调用过 `next` 的包装器必须委托
     fn is_finalized(&self) -> bool {
         true
     }
@@ -426,7 +430,7 @@ pub trait MiddlewareBody: Send {
     fn close(self: Box<Self>) -> BoxFuture<'static, ()>;
 }
 
-/// `next` 或短路返回的响应头与惰性正文。
+/// `next` 或短路返回的响应头与惰性正文
 pub struct MiddlewareResponse {
     protocol: String,
     status_code: u16,
@@ -486,7 +490,7 @@ impl MiddlewareResponse {
         )
     }
 
-    /// 搬运宿主 terminal 的来源事实；读取快照不转移其所有权。
+    /// 搬运宿主 terminal 的来源事实；读取快照不转移其所有权
     #[must_use]
     pub fn with_envelope(mut self, envelope: MiddlewareResponseEnvelope) -> Self {
         self.envelope = Some(envelope);
@@ -512,7 +516,7 @@ impl fmt::Debug for MiddlewareResponse {
     }
 }
 
-/// Attempt terminal 的 Core 来源事实；中间件只能随响应原样搬运。
+/// Attempt terminal 的 Core 来源事实；中间件只能随响应原样搬运
 pub struct MiddlewareResponseEnvelope {
     metadata: ProviderCallMetadata,
 }
@@ -536,7 +540,7 @@ impl fmt::Debug for MiddlewareResponseEnvelope {
     }
 }
 
-/// Core 冻结的调用事实；完整业务身份可由插件读取。
+/// Core 冻结的调用事实；完整业务身份可由插件读取
 #[derive(Clone)]
 pub struct MiddlewareContext {
     plan: Option<FrozenMiddlewarePlan>,
@@ -552,7 +556,7 @@ pub struct MiddlewareContext {
     client_key_id: ClientApiKeyId,
     account_group_ids: Arc<[AccountGroupId]>,
     cancellation: CancellationToken,
-    deadline: SystemTime,
+    deadline: crate::lifecycle::Deadline,
     extension_scope: ExtensionCallScope,
     execution_effects: Option<Arc<ExecutionEffects>>,
 }
@@ -649,13 +653,13 @@ impl MiddlewareContext {
         self.account_id.as_ref()
     }
 
-    /// 返回冻结的业务归属，也用于匹配 binding。
+    /// 返回冻结的业务归属，也用于匹配 binding
     #[must_use]
     pub const fn client_key_id(&self) -> &ClientApiKeyId {
         &self.client_key_id
     }
 
-    /// 返回冻结的业务归属，也用于匹配 binding。
+    /// 返回冻结的业务归属，也用于匹配 binding
     #[must_use]
     pub fn account_group_ids(&self) -> &[AccountGroupId] {
         &self.account_group_ids
@@ -667,7 +671,7 @@ impl MiddlewareContext {
     }
 
     #[must_use]
-    pub const fn deadline(&self) -> SystemTime {
+    pub const fn deadline(&self) -> crate::lifecycle::Deadline {
         self.deadline
     }
 
@@ -676,14 +680,14 @@ impl MiddlewareContext {
         &self.extension_scope
     }
 
-    /// 只供受信 Runtime 记录本次中间件调用已经产生的外部副作用，不进入插件 wire。
+    /// 只供受信 Runtime 记录本次中间件调用已经产生的外部副作用，不进入插件 wire
     #[must_use]
     pub fn execution_effects(&self) -> Option<Arc<ExecutionEffects>> {
         self.execution_effects.as_ref().map(Arc::clone)
     }
 }
 
-/// 不含授权主体的调用位置与目标事实。
+/// 不含授权主体的调用位置与目标事实
 pub struct MiddlewareTarget {
     pub request_id: ModelRequestId,
     pub mount: MiddlewareMount,
@@ -696,12 +700,12 @@ pub struct MiddlewareTarget {
     pub account_id: Option<ProviderAccountId>,
 }
 
-/// 冻结的业务主体与生命周期；不用于裁剪插件权限。
+/// 冻结的业务主体与生命周期；不用于裁剪插件权限
 pub struct MiddlewareAuthority {
     pub client_key_id: ClientApiKeyId,
     pub account_group_ids: Arc<[AccountGroupId]>,
     pub cancellation: CancellationToken,
-    pub deadline: SystemTime,
+    pub deadline: crate::lifecycle::Deadline,
     pub extension_scope: ExtensionCallScope,
     pub execution_effects: Option<Arc<ExecutionEffects>>,
 }
@@ -724,12 +728,13 @@ impl fmt::Debug for MiddlewareContext {
     }
 }
 
-/// 中间件链调用错误。原有域错误保持原类型，不能被插件故障改写为“未发送”。
+/// 中间件链调用错误
+/// 原有域错误保持原类型，不能被插件故障改写为“未发送”
 #[derive(Debug)]
 pub enum MiddlewareError {
     Rejected,
     Fault,
-    /// 保留跨进程失败，供外层插件读取；客户端响应由协议 owner 决定。
+    /// 保留跨进程失败，供外层插件读取；客户端响应由协议 owner 决定
     Remote {
         source: Box<dyn std::error::Error + Send + Sync>,
         rejected: bool,
@@ -791,11 +796,11 @@ impl From<ProviderError> for MiddlewareError {
     }
 }
 
-/// 绑定当前调用且只能消费一次的宿主续体。
+/// 绑定当前调用且只能消费一次的宿主续体
 pub type MiddlewareNext =
     crate::middleware::Next<MiddlewareRequest, MiddlewareResponse, MiddlewareError>;
 
-/// 一个发布代次冻结的统一数据面中间件计划。
+/// 一个发布代次冻结的统一数据面中间件计划
 pub trait MiddlewarePlan: Send + Sync + fmt::Debug {
     fn has_service(&self) -> bool {
         false
@@ -825,7 +830,7 @@ pub trait MiddlewarePlan: Send + Sync + fmt::Debug {
         next.run(message)
     }
 
-    /// HTTP 入口在认证、路由与正文解析之前组合，无匹配时保留直接路径。
+    /// HTTP 入口在认证、路由与正文解析之前组合，无匹配时保留直接路径
     fn has_http(&self) -> bool {
         false
     }
@@ -847,7 +852,7 @@ pub trait MiddlewarePlan: Send + Sync + fmt::Debug {
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>>;
 }
 
-/// 调用期间同时保活发布代次与中间件计划。
+/// 调用期间同时保活发布代次与中间件计划
 #[derive(Clone)]
 pub struct FrozenMiddlewarePlan {
     plan: Arc<dyn MiddlewarePlan>,
@@ -927,12 +932,12 @@ impl fmt::Debug for FrozenMiddlewarePlan {
     }
 }
 
-/// 同一发布代次不能被静默替换。
+/// 同一发布代次不能被静默替换
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("middleware generation is already registered")]
 pub struct MiddlewareRegistrationError;
 
-/// 按请求冻结的发布集合解析中间件计划；索引不延长旧代次寿命。
+/// 按请求冻结的发布集合解析中间件计划；索引不延长旧代次寿命
 #[derive(Clone, Default)]
 pub struct MiddlewareExtensionIndex {
     sets: Arc<RwLock<BTreeMap<ExtensionSetId, Weak<dyn MiddlewarePlan>>>>,

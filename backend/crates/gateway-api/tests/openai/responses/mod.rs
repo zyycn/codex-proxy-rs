@@ -1,3 +1,5 @@
+//! Responses 接口测试入口，以及协议请求与事件构造辅助
+
 mod http;
 mod request;
 mod websocket;
@@ -407,7 +409,7 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         "chatgpt-project-id",
         "x-openai-account-routing-override",
         "x-openai-fedramp",
-        // 上游指纹由运行时画像统一生成，客户端不得覆盖。
+        // 上游指纹由运行时画像统一生成，客户端不得覆盖
         "user-agent",
         "originator",
         "version",
@@ -446,7 +448,7 @@ fn decoder_should_strip_http_transport_but_leave_source_headers_for_provider() {
         HeaderValue::from_static(r#"{"scheme":"https"}"#),
     );
     headers.insert("accept-encoding", HeaderValue::from_static("br, gzip"));
-    // 正文未压缩；入口现在消费 Content-Encoding，但仍不得向上游透传。
+    // 正文未压缩；入口现在消费 Content-Encoding，但仍不得向上游透传
     headers.insert("content-encoding", HeaderValue::from_static("identity"));
     headers.insert("x-openai-future-mode", HeaderValue::from_static("keep"));
 
@@ -573,7 +575,7 @@ fn downstream_client_headers_should_remain_opaque_without_losing_session_semanti
                 ]
             );
         }
-        // 解码不修改原始请求，CORS、鉴权和本地观测仍可读取原值。
+        // 解码不修改原始请求，CORS、鉴权和本地观测仍可读取原值
         assert_eq!(headers, original_headers);
     }
 }
@@ -837,9 +839,10 @@ fn transparent_encoder_should_use_identical_json_for_sse_and_websocket() {
 #[test]
 fn transparent_encoder_should_translate_error_wire_to_response_failed_for_websocket() {
     // codex 的 WS 端点只消费带 status 的包装错误帧；上游缺少 status 的裸
-    // `error` 帧会被静默忽略，客户端只能空等到 idle 超时。WS 边界与 SSE
+    // `error` 帧会被静默忽略，客户端只能空等到 idle 超时
+    // WS 边界与 SSE
     // 边界一致投影成 `response.failed`，codex 将其映射为可重试错误并立即
-    // 重试，而不是把失败原因拖到流 EOF。
+    // 重试，而不是把失败原因拖到流 EOF
     let response_id = "resp_ws_error";
     let started = openai_wire_event(
         Vec::new(),
@@ -875,7 +878,7 @@ fn transparent_encoder_should_translate_error_wire_to_response_failed_for_websoc
     assert_eq!(payload["response"]["status"], "failed");
     assert_eq!(payload["response"]["error"]["code"], "server_error");
 
-    // 与 SSE 边界投影到同一份 data 负载，两条客户端通道行为一致。
+    // 与 SSE 边界投影到同一份 data 负载，两条客户端通道行为一致
     let mut sse_encoder = OpenAiResponsesEncoder::new();
     sse_encoder.push_sse(&started);
     let frames = sse_encoder.push_sse(&error);
@@ -893,7 +896,7 @@ fn transparent_encoder_should_translate_error_wire_to_response_failed_for_websoc
         .collect::<Vec<_>>();
     assert_eq!(sse_data, messages);
 
-    // 带非 2xx status 的包装错误帧是 codex 可直接消费的形状，必须原样透传。
+    // 带非 2xx status 的包装错误帧是 codex 可直接消费的形状，必须原样透传
     let mut passthrough_encoder = OpenAiResponsesEncoder::new();
     passthrough_encoder.push_websocket(&started);
     let wrapped = openai_wire_event(

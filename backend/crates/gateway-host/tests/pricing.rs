@@ -1,3 +1,5 @@
+//! 验证外部价格源的 Provider 选择、免费价格与无效文档拒绝
+
 use gateway_host::pricing::decode_catalog;
 use serde_json::json;
 

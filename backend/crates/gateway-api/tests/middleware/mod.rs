@@ -1,3 +1,5 @@
+//! HTTP 与 WebSocket 中间件测试入口及请求生命周期替身
+
 mod websocket;
 
 use std::{

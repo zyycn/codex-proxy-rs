@@ -1,4 +1,4 @@
-//! OpenAI 请求洋葱链与最终传输交付；不拥有 Provider 选择或计量事实。
+//! OpenAI 请求洋葱链与最终传输交付；不拥有 Provider 选择或计量事实
 
 mod http;
 mod request;

@@ -1,7 +1,7 @@
 import type { BaseTableSort } from '@codex-proxy/ui'
-import { watchDebounced } from '@vueuse/core'
+import type { ApiKey } from '@/api'
 
-import { computed, onMounted, shallowRef } from 'vue'
+import { computed, onMounted, shallowRef, watch } from 'vue'
 import { getApiKeys } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
 
@@ -11,11 +11,7 @@ export function useApiKeysQuery() {
   const page = shallowRef(1)
   const pageSize = shallowRef(20)
   const total = shallowRef(0)
-  const apiKeys = shallowRef<
-    Array<Awaited<ReturnType<typeof getApiKeys>>['items'][number] & {
-      createdAtDisplay: string
-    }>
-  >([])
+  const apiKeys = shallowRef<ApiKey[]>([])
   const request = useRequestState()
   const { loading } = request
   const cursors = new Map<number, string | undefined>([[1, undefined]])
@@ -50,9 +46,7 @@ export function useApiKeysQuery() {
   }
 
   function applyPage(result: Awaited<ReturnType<typeof getApiKeys>>, targetPage: number) {
-    apiKeys.value = result.items.map((item: (typeof result.items)[number]) => ({
-      ...item,
-    }))
+    apiKeys.value = result.items
     total.value = result.total
     page.value = targetPage
   }
@@ -120,13 +114,12 @@ export function useApiKeysQuery() {
     void reloadFromStart()
   }
 
-  watchDebounced(
-    searchQuery,
-    () => {
+  watch(searchQuery, (_value, _previous, onCleanup) => {
+    const timer = setTimeout(() => {
       void reloadFromStart()
-    },
-    { debounce: 250 },
-  )
+    }, 250)
+    onCleanup(() => clearTimeout(timer))
+  })
 
   onMounted(() => {
     void execute()

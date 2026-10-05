@@ -1,3 +1,5 @@
+//! 验证 OpenAI 各模型、服务档位与上下文区间的费用明细计算
+
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -32,7 +34,7 @@ fn billing_usage(
 
 #[test]
 fn astra_billing_should_preserve_components_across_tiers_and_context_boundary() {
-    // USD per million tokens, in order: input, cache read, cache write, output.
+    // 每百万 token 的美元价格，依次为输入、缓存读取、缓存写入与输出
     for (tier, input, expected, multiplier) in [
         (None, 272_000, ["10", "1", "12.5", "50"], 100),
         (None, 272_001, ["20", "2", "25", "75"], 100),
@@ -78,7 +80,7 @@ fn astra_billing_should_preserve_components_across_tiers_and_context_boundary() 
 
 #[test]
 fn new_gpt_6_models_should_use_published_prices_across_tiers_and_context_boundary() {
-    // 每档依次核对每百万 Token 的输入、缓存读取、缓存写入和输出价格。
+    // 每档依次核对每百万 Token 的输入、缓存读取、缓存写入和输出价格
     for (model, cases) in [
         (
             "gpt-6.1-sol",
@@ -308,7 +310,7 @@ async fn exact_limit_success_body_should_be_accepted() {
 
 #[test]
 fn billing_should_use_explicit_variant_prices_and_verified_snapshots() {
-    // 每个用例包含一个普通输入 token 和一个输出 token，金额单位为 USD ticks。
+    // 每个用例包含一个普通输入 token 和一个输出 token，金额单位为 USD ticks
     for (model, expected) in [
         ("gpt-5.6-cyber", 875_000),
         ("gpt-5.5-cyber", 875_000),
@@ -333,7 +335,7 @@ fn billing_should_use_explicit_variant_prices_and_verified_snapshots() {
 
 #[test]
 fn billing_should_not_price_shutdown_models_or_restore_them_through_aliases() {
-    // 官方关闭日期已过；同族仍在服务的基础型号不能为这些旧型号兜底。
+    // 官方关闭日期已过；同族仍在服务的基础型号不能为这些旧型号兜底
     for model in [
         "gpt-4-0314",
         " OpenAI/GPT-4-0314 ",
@@ -358,7 +360,7 @@ fn billing_should_not_price_shutdown_models_or_restore_them_through_aliases() {
 
 #[test]
 fn billing_should_keep_deprecated_models_before_their_shutdown_dates() {
-    // 截至 2026-09-13，这些型号尚未到官方关闭日期，仍按已公布单价计费。
+    // 截至 2026-09-13，这些型号尚未到官方关闭日期，仍按已公布单价计费
     for model in [
         "gpt-3.5-turbo-instruct",
         "gpt-3.5-turbo-1106",
@@ -644,7 +646,7 @@ async fn retry_after_http_date_should_be_converted_to_remaining_seconds() {
 }
 
 #[tokio::test]
-async fn retry_after_http_date_in_the_past_should_be_ignored() {
+async fn retry_after_http_date_in_the_past_should_preserve_zero_delay() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
@@ -672,7 +674,7 @@ async fn retry_after_http_date_in_the_past_should_be_ignored() {
     else {
         panic!("expected an upstream rate-limit error");
     };
-    assert_eq!(retry_after_seconds, None);
+    assert_eq!(retry_after_seconds, Some(0));
 }
 
 #[tokio::test]

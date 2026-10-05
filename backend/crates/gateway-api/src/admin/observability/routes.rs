@@ -1,4 +1,4 @@
-//! 固定 `/api/admin` 观测路由与 handler。
+//! 固定 `/api/admin` 观测路由与 handler
 
 use crate::auth::SessionState;
 
@@ -41,7 +41,7 @@ where
 {
     let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let kind = query.trend_kind().map_err(map_wire_error)?;
-    // 概览与独立趋势使用同一部署日界。
+    // 概览与独立趋势使用同一部署日界
     let range = dashboard_today_range(
         query.start_time.as_deref(),
         query.end_time.as_deref(),

@@ -1,4 +1,4 @@
-//! 原生 Provider 管理能力与启动时注册表。
+//! 原生 Provider 管理能力与启动时注册表
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -26,14 +26,14 @@ use crate::model::{
     quota_forecast_sampling::QuotaForecastObservation,
 };
 
-/// Provider 管理失败的稳定分类。
+/// Provider 管理失败的稳定分类
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderAdminErrorKind {
     Invalid,
     Unsupported,
     NotFound,
     Conflict,
-    /// Provider 已发起不可逆操作，但无法确认最终执行结果。
+    /// Provider 已发起不可逆操作，但无法确认最终执行结果
     Ambiguous,
     Unavailable,
     CredentialRefreshRequired,
@@ -41,11 +41,11 @@ pub enum ProviderAdminErrorKind {
     Internal,
 }
 
-/// 不携带 OAuth 请求材料的管理错误。
+/// 不携带 OAuth 请求材料的管理错误
 ///
-/// `message` 是 Provider 局部诊断，可能包含原始上游正文；通用管理用例不得自动把它作为公开文案。
-/// 只有明确拥有原始诊断合同的调用方才能读取，`Debug` 始终只记录是否存在。
-/// `public_message` 则是明确标记为可公开的静态提示，不允许携带动态上游材料。
+/// `message` 是 Provider 局部诊断，可能包含原始上游正文；通用管理用例不得自动把它作为公开文案
+/// 只有明确拥有原始诊断合同的调用方才能读取，`Debug` 始终只记录是否存在
+/// `public_message` 则是明确标记为可公开的静态提示，不允许携带动态上游材料
 #[derive(Clone, PartialEq, Eq, thiserror::Error)]
 #[error("provider admin operation failed: {kind:?}")]
 pub struct ProviderAdminError {
@@ -81,7 +81,7 @@ impl ProviderAdminError {
         self
     }
 
-    /// Provider 明确允许公开的静态提示；不得承载上游响应或凭据材料。
+    /// Provider 明确允许公开的静态提示；不得承载上游响应或凭据材料
     #[must_use]
     pub const fn with_public_message(mut self, message: &'static str) -> Self {
         self.public_message = Some(message);
@@ -104,20 +104,21 @@ impl ProviderAdminError {
     }
 }
 
-/// 一个具体 Provider 对管理控制面提供的解析、验证、上游交互与运行时资源回收能力。
+/// 一个具体 Provider 对管理控制面提供的解析、验证、上游交互与运行时资源回收能力
 ///
 /// 数据变更由 Provider 返回 prepared facts；config revision、审计与 PostgreSQL 事务
-/// 全部由 [`crate::ports::store::AccountStore`] 提交。运行时资源通知只在事务成功后发生。
+/// 全部由 [`crate::ports::store::AccountStore`] 提交
+/// 运行时资源通知只在事务成功后发生
 #[async_trait]
 pub trait ProviderAdmin: Send + Sync {
-    /// 只读内置价目；没有本地计价能力的 Provider 返回空目录。
+    /// 只读内置价目；没有本地计价能力的 Provider 返回空目录
     fn pricing_catalog(&self) -> crate::model::pricing::ProviderPricingCatalog {
         Default::default()
     }
 
     fn provider_kind(&self) -> &ProviderKind;
 
-    /// 只读取原生 Provider 能力及账号类型，不执行网络或数据库查询。
+    /// 只读取原生 Provider 能力及账号类型，不执行网络或数据库查询
     fn account_capabilities(
         &self,
         _account_id: &ProviderAccountId,
@@ -126,19 +127,19 @@ pub trait ProviderAdmin: Send + Sync {
         Default::default()
     }
 
-    /// 提供该 Provider 的可选客户端身份；通用管理层不解释内部字段。
+    /// 提供该 Provider 的可选客户端身份；通用管理层不解释内部字段
     fn client_profile_options(
         &self,
     ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
-    /// 没有持久选择时使用的 Provider 默认画像；只返回已准备的本地事实。
+    /// 没有持久选择时使用的 Provider 默认画像；只返回已准备的本地事实
     fn default_client_profile(&self) -> Option<gateway_core::account::OpaqueProviderData> {
         None
     }
 
-    /// 校验并投影客户端身份，结果不含认证或账号材料。
+    /// 校验并投影客户端身份，结果不含认证或账号材料
     fn preview_client_profile(
         &self,
         _configuration: &gateway_core::account::OpaqueProviderData,
@@ -146,31 +147,33 @@ pub trait ProviderAdmin: Send + Sync {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
-    /// 将原始套餐值投影为展示名称；默认保留未知 Provider 的原始名称。
+    /// 提供最终套餐展示名称；未覆盖时采用通用的大驼峰格式
     fn plan_type_display(&self, plan_type: &str) -> String {
-        plan_type.to_owned()
+        default_plan_type_display(plan_type)
     }
 
-    /// 账号已经由控制面提交为不可调度状态，释放 Provider 持有的账号级运行时资源。
+    /// 账号已经由控制面提交为不可调度状态，释放 Provider 持有的账号级运行时资源
     ///
-    /// 无账号级运行时资源的 Provider 不需要执行额外操作。该通知发生在 Store 事务
-    /// 成功之后，不参与事务成败，也不得恢复或改写已经提交的账号状态。
+    /// 无账号级运行时资源的 Provider 不需要执行额外操作
+    /// 该通知发生在 Store 事务
+    /// 成功之后，不参与事务成败，也不得恢复或改写已经提交的账号状态
     async fn account_unavailable(&self, account_id: &ProviderAccountId);
 
-    /// 账号资格事实已经由控制面提交，失效 Provider 持有的可重建派生状态。
+    /// 账号资格事实已经由控制面提交，失效 Provider 持有的可重建派生状态
     ///
     /// 该通知发生在 Store 事务成功之后、下一份 RuntimeSnapshot 编译之前；通知
-    /// 不参与已提交事务成败。没有账号派生状态的 Provider 可使用默认空实现。
+    /// 不参与已提交事务成败
+    /// 没有账号派生状态的 Provider 可使用默认空实现
     async fn account_facts_changed(&self, _account_ids: &[ProviderAccountId]) {}
 
-    /// 生成一次连接测试所需的 Provider-owned operation；Core 负责实际执行与落账。
+    /// 生成一次连接测试所需的 Provider-owned operation；Core 负责实际执行与落账
     async fn connection_test_operation(
         &self,
         upstream_model: &UpstreamModelId,
         input_text: &str,
     ) -> Result<Operation, ProviderAdminError>;
 
-    /// 返回该 Provider 实际持有的 Dashboard 上游身份画像。
+    /// 返回该 Provider 实际持有的 Dashboard 上游身份画像
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile>;
 
     fn configured_wire_profile(
@@ -180,8 +183,8 @@ pub trait ProviderAdmin: Send + Sync {
         self.dashboard_wire_profile()
     }
 
-    /// 使用 Provider-owned 价格规则恢复持久请求的逐项费用。
-    /// 未保存的长上下文计费标记不得从当前价格反推。
+    /// 使用 Provider-owned 价格规则恢复持久请求的逐项费用
+    /// 未保存的长上下文计费标记不得从当前价格反推
     fn calculated_billing(
         &self,
         input: &ProviderBillingInput,
@@ -212,7 +215,7 @@ pub trait ProviderAdmin: Send + Sync {
         command: PrepareCredentialRefresh,
     ) -> Result<PreparedCredentialRotation, ProviderAdminError>;
 
-    /// 可公开的账号连接设置；实现只能显式投影非敏感字段，不能返回凭据原文。
+    /// 可公开的账号连接设置；实现只能显式投影非敏感字段，不能返回凭据原文
     async fn account_configuration(
         &self,
         _account_id: &ProviderAccountId,
@@ -225,7 +228,7 @@ pub trait ProviderAdmin: Send + Sync {
         request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError>;
 
-    /// 历史观测的协议字段仅由具体 Provider 解释；不支持时保留累计估算。
+    /// 历史观测的协议字段仅由具体 Provider 解释；不支持时保留累计估算
     fn quota_forecast_observation(
         &self,
         _document: &ProviderDocument,
@@ -234,8 +237,8 @@ pub trait ProviderAdmin: Send + Sync {
         None
     }
 
-    /// 查询 Provider 官方个人资料统计；不支持该能力的 Provider 使用默认拒绝。
-    /// 只由个人信息显式查询，不在额度刷新或后台任务中预取。
+    /// 查询 Provider 官方个人资料统计；不支持该能力的 Provider 使用默认拒绝
+    /// 只由个人信息显式查询，不在额度刷新或后台任务中预取
     async fn subscription(
         &self,
         _account_id: &ProviderAccountId,
@@ -250,7 +253,7 @@ pub trait ProviderAdmin: Send + Sync {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
-    /// 打开 Provider 官方头像字节流；不支持该能力的 Provider 使用默认拒绝。
+    /// 打开 Provider 官方头像字节流；不支持该能力的 Provider 使用默认拒绝
     async fn profile_avatar(
         &self,
         _account_id: &ProviderAccountId,
@@ -258,7 +261,7 @@ pub trait ProviderAdmin: Send + Sync {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
-    /// 查询 Provider 主动额度重置卡；不支持该能力的 Provider 使用默认拒绝。
+    /// 查询 Provider 主动额度重置卡；不支持该能力的 Provider 使用默认拒绝
     async fn reset_credits(
         &self,
         _account_id: &ProviderAccountId,
@@ -266,7 +269,7 @@ pub trait ProviderAdmin: Send + Sync {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
-    /// 消费 Provider 主动额度重置卡；不支持该能力的 Provider 使用默认拒绝。
+    /// 消费 Provider 主动额度重置卡；不支持该能力的 Provider 使用默认拒绝
     async fn consume_reset_credit(
         &self,
         _command: ConsumeProviderResetCredit,
@@ -280,7 +283,7 @@ pub trait ProviderAdmin: Send + Sync {
         refresh: bool,
     ) -> Result<ProviderModels, ProviderAdminError>;
 
-    /// 导出该账号的 Provider 原生模型目录正文；不提供原生目录的 Provider 使用默认拒绝。
+    /// 导出该账号的 Provider 原生模型目录正文；不提供原生目录的 Provider 使用默认拒绝
     async fn model_catalog_document(
         &self,
         _account_id: &ProviderAccountId,
@@ -294,7 +297,7 @@ pub trait ProviderAdmin: Send + Sync {
     ) -> Result<ProviderExport, ProviderAdminError>;
 }
 
-/// 启动时注册原生 Provider，按 ProviderKind 查找管理能力。
+/// 启动时注册原生 Provider，按 ProviderKind 查找管理能力
 #[derive(Clone)]
 pub struct ProviderAdminRegistry {
     providers: Arc<BTreeMap<ProviderKind, Arc<dyn ProviderAdmin>>>,
@@ -308,11 +311,11 @@ impl ProviderAdminRegistry {
             .collect()
     }
 
-    /// 创建无重复 ProviderKind 的注册表。
+    /// 创建无重复 ProviderKind 的注册表
     ///
     /// # Errors
     ///
-    /// 重复注册同一 ProviderKind 时返回 Conflict。
+    /// 重复注册同一 ProviderKind 时返回 Conflict
     pub fn new(
         providers: impl IntoIterator<Item = Arc<dyn ProviderAdmin>>,
     ) -> Result<Self, ProviderAdminError> {
@@ -338,7 +341,7 @@ impl ProviderAdminRegistry {
             .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
-    /// 账号目录与关联列表共用套餐补全和展示规则，已知账号套餐优先于额度快照。
+    /// 账号目录与关联列表共用套餐补全和展示规则，已知账号套餐优先于额度快照
     pub(crate) fn resolve_account_plan(
         &self,
         provider_kind: &str,
@@ -351,7 +354,7 @@ impl ProviderAdminRegistry {
         self.plan_type_display(provider_kind, plan_type.as_deref())
     }
 
-    /// 账号页和 Dashboard 共用的大驼峰套餐展示名称，不修改原始套餐值。
+    /// 账号页和 Dashboard 共用 Provider 的最终展示名称，不改写官方拼写或原始套餐值
     pub(crate) fn plan_type_display(
         &self,
         provider_kind: &str,
@@ -361,15 +364,13 @@ impl ProviderAdminRegistry {
         let provider = ProviderKind::new(provider_kind.to_owned())
             .ok()
             .and_then(|kind| self.require(&kind).ok());
-        let display = provider.map_or_else(
-            || plan_type.to_owned(),
+        Some(provider.map_or_else(
+            || default_plan_type_display(plan_type),
             |provider| provider.plan_type_display(plan_type),
-        );
-        // 所有 Provider 及未知套餐统一排版，保留 Plus 后缀的含义。
-        Some(display.replace('+', " Plus ").to_upper_camel_case())
+        ))
     }
 
-    /// 返回所有已注册 Provider 的 Dashboard 上游身份画像。
+    /// 返回所有已注册 Provider 的 Dashboard 上游身份画像
     pub fn dashboard_wire_profiles(
         &self,
         configurations: &std::collections::BTreeMap<
@@ -386,7 +387,7 @@ impl ProviderAdminRegistry {
             .collect()
     }
 
-    /// 按平台计算请求费用。
+    /// 按平台计算请求费用
     pub fn calculated_billing(
         &self,
         provider_kind: &ProviderKind,
@@ -394,4 +395,8 @@ impl ProviderAdminRegistry {
     ) -> Result<Option<CalculatedBillingBreakdown>, ProviderAdminError> {
         self.require(provider_kind)?.calculated_billing(input)
     }
+}
+
+fn default_plan_type_display(plan_type: &str) -> String {
+    plan_type.replace('+', " Plus ").to_upper_camel_case()
 }

@@ -1,4 +1,4 @@
-//! 有期限的插件合同适配；旧字段只在此边界出现，不进入 Core 或持久化模型。
+//! 有期限的插件合同适配；旧字段只在此边界出现，不进入 Core 或持久化模型
 
 mod fast;
 
@@ -60,7 +60,7 @@ pub(crate) fn report(manifest: &Manifest, instance_id: &str) -> Result<(), Admin
             .iter()
             .map(|(capability, declaration)| (capability.identifier(), declaration.version)),
     )? {
-        // 只在实例加载时报告，不在每次请求或管理页轮询时重复记录。
+        // 只在实例加载时报告，不在每次请求或管理页轮询时重复记录
         tracing::warn!(
             instance_id,
             capability = warning.capability,

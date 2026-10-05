@@ -1,3 +1,5 @@
+//! 验证健康探针的对象安全接口与 Worker 身份投影
+
 use futures::future::BoxFuture;
 use gateway_core::health::{
     HealthProbe, HealthState, WorkerHealthKey, WorkerHealthSnapshot, WorkerHealthSource,

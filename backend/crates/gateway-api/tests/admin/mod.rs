@@ -1,3 +1,5 @@
+//! 管理控制面 HTTP 接口的测试入口
+
 mod plugins;
 use std::{
     collections::BTreeMap,

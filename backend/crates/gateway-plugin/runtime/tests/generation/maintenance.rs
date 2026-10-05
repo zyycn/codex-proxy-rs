@@ -1,3 +1,5 @@
+//! 验证插件维护任务的资源创建、重试及事务归属和幂等性
+
 use crate::support::environment::{Environment, mutation};
 use gateway_admin::{
     model::{
@@ -279,7 +281,7 @@ async fn published_reconciliation_provisions_retries_imports_and_restores_withou
     drop(resources);
     drop(core);
     drop(runtime);
-    // 离线新增账号后重新启动真实插件子进程；稳定资源键必须复用原分组与 Key。
+    // 离线新增账号后重新启动真实插件子进程；稳定资源键必须复用原分组与 Key
     let offline = environment.account(None).await;
     std::fs::write(&marker, "").unwrap();
     let (runtime, core, resources, stop, task) = start(&environment).await;

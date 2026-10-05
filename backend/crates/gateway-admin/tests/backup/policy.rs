@@ -1,4 +1,4 @@
-//! 备份调度与保留策略（backup/policy.rs）的纯逻辑测试。
+//! 备份调度与保留策略（backup/policy.rs）的纯逻辑测试
 
 use chrono::{Duration, TimeZone as _, Utc};
 
@@ -55,7 +55,7 @@ fn next_after_is_strictly_later() {
 #[test]
 fn last_firing_is_at_or_before() {
     let schedule = BackupSchedule::parse("0 2 * * *", "Asia/Shanghai".parse().unwrap()).unwrap();
-    // 北京时间 02:00 = 前一日 18:00 UTC。
+    // 北京时间 02:00 = 前一日 18:00 UTC
     let before = Utc.with_ymd_and_hms(2026, 8, 1, 17, 59, 0).unwrap();
     assert_eq!(
         schedule.last_firing_at_or_before(before).unwrap(),

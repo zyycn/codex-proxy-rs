@@ -1,3 +1,5 @@
+//! 验证 OpenAI 模型目录的账号和版本隔离、缓存合并与失效
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -39,7 +41,7 @@ impl Respond for ReplacingCatalogResponder {
     }
 }
 
-/// 按调用顺序为不同套餐 scope 返回不同的目录正文。
+/// 按调用顺序为不同套餐 scope 返回不同的目录正文
 struct SequencedCatalogResponder {
     calls: Arc<AtomicUsize>,
     bodies: [&'static [u8]; 2],
@@ -882,7 +884,7 @@ async fn api_key_client_catalog_negotiates_and_preserves_versioned_native_object
         .seed_api_key("acct_api", upstream.uri(), ResponsesTransport::Http)
         .await;
     let account = store.account("acct_api").expect("API account");
-    // 先填满普通 ID 目录，确保客户端不会把已有套餐缓存误当成原生元数据。
+    // 先填满普通 ID 目录，确保客户端不会把已有套餐缓存误当成原生元数据
     Mock::given(method("GET"))
         .and(path("/models"))
         .and(|request: &Request| request.url.query().is_none())
@@ -1379,8 +1381,8 @@ async fn slow_api_key_catalogs_share_a_deadline_and_preserve_healthy_catalogs() 
     })
     .await
     .expect("healthy API catalog completed and released a concurrency slot");
-    // 四个并发读取中，健康 API 目录完成后才会发出第四个慢请求，另有一次独立刷新。
-    // 只快进慢目录的共享期限，随后恢复实时时钟让 OAuth 冷请求完整通过真实 HTTP。
+    // 四个并发读取中，健康 API 目录完成后才会发出第四个慢请求，另有一次独立刷新
+    // 只快进慢目录的共享期限，随后恢复实时时钟让 OAuth 冷请求完整通过真实 HTTP
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(15)).await;
     tokio::time::resume();
@@ -1434,14 +1436,14 @@ async fn account_catalog_documents_keep_native_objects_of_the_account_plan() {
     assert_eq!(models.len(), 2);
     assert_eq!(models[0].request_model().as_str(), "gpt-pro");
     assert_eq!(models[1].request_model().as_str(), "gpt-shared");
-    // 导出的目录文件靠原生对象携带上下文窗口等元数据，正文必须原样保留。
+    // 导出的目录文件靠原生对象携带上下文窗口等元数据，正文必须原样保留
     assert_eq!(models[0].document().protocol(), "codex");
     let document: serde_json::Value =
         serde_json::from_slice(models[1].document().body()).expect("native document");
     assert_eq!(document["context_window"], 272_000);
     assert_eq!(document["display_name"], "Pro");
 
-    // 另一套餐的账号不能拿到别的套餐条目，否则客户端会列出自己用不了的模型。
+    // 另一套餐的账号不能拿到别的套餐条目，否则客户端会列出自己用不了的模型
     let (plus_models, _) = service
         .account_catalog_documents(&plus)
         .await

@@ -1,3 +1,5 @@
+//! 插件 RPC 帧的异步读写循环与入站消息分派
+
 use std::sync::Arc;
 
 use gateway_plugin_sdk::{
@@ -47,7 +49,7 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             shared.fail(RpcError::Closed);
             return;
         };
-        // 撤销尚未发送的调用时丢弃排队帧；已开始写入的 Call 必须先于 Cancel。
+        // 撤销尚未发送的调用时丢弃排队帧；已开始写入的 Call 必须先于 Cancel
         if let Message::Call { id, .. } = &frame.message {
             if !shared.mark_transmitted(*id) {
                 continue;
@@ -120,7 +122,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                         let response = Arc::clone(&shared);
                         let (ready, started) = oneshot::channel();
                         let task = tokio::spawn(async move {
-                            // 先把任务归属登记到父调用，再允许执行宿主操作。
+                            // 先把任务归属登记到父调用，再允许执行宿主操作
                             if started.await.is_err() {
                                 return;
                             }
@@ -135,7 +137,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                                 },
                                 Err(error) => Frame::control(Message::Error { id, error }),
                             };
-                            // 宿主回调的局部编码错误只能结束该调用，不能关闭共享写通道。
+                            // 宿主回调的局部编码错误只能结束该调用，不能关闭共享写通道
                             if validate_frame(&reply).is_err() {
                                 reply = Frame::control(Message::Error {
                                     id,

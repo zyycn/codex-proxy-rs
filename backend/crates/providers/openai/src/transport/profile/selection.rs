@@ -1,4 +1,4 @@
-//! 管理端选择的唯一解析入口；持久化配置与官方发布资料分别管理。
+//! 管理端选择的唯一解析入口；持久化配置与官方发布资料分别管理
 
 use chrono::{DateTime, Utc};
 use gateway_core::account::OpaqueProviderData;
@@ -14,7 +14,7 @@ pub enum ClientKind {
     Cli,
 }
 
-/// CLI 共用官方发布版本，但不同入口提供各自的客户端标识和 UA 后缀。
+/// CLI 共用官方发布版本，但不同入口提供各自的客户端标识和 UA 后缀
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CliEntry {
@@ -71,13 +71,18 @@ pub enum VersionMode {
     Fixed,
 }
 
-/// 空的可选字段表示使用对应预设参数；Key 覆盖始终是一份完整选择。
+/// `latest` 模式允许的最大滞后数量，同时限制发布历史的保留深度
+pub const MAX_VERSION_LAG: u32 = 10;
+
+/// 空的可选字段表示使用对应预设参数；Key 覆盖始终是一份完整选择
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientProfileSelection {
     pub client: ClientKind,
     pub platform: ClientPlatform,
     pub version_mode: VersionMode,
+    /// `latest` 模式可选：跟随官方发布但滞后 N 个已观察版本。
+    pub version_lag: Option<u32>,
     pub cli_entry: Option<CliEntry>,
     pub originator: Option<String>,
     pub os_type: Option<String>,
@@ -95,6 +100,7 @@ impl Default for ClientProfileSelection {
             client: ClientKind::Desktop,
             platform: ClientPlatform::Macos,
             version_mode: VersionMode::Latest,
+            version_lag: None,
             cli_entry: None,
             originator: None,
             os_type: None,
@@ -163,7 +169,19 @@ impl ClientProfileSelection {
             {
                 return Err(ClientProfileError::Invalid);
             }
+            // 滞后档位只对 latest 有意义；与 fixed 版本字段同样按混用拒绝。
+            VersionMode::Latest => {
+                if self
+                    .version_lag
+                    .is_some_and(|lag| !(1..=MAX_VERSION_LAG).contains(&lag))
+                {
+                    return Err(ClientProfileError::Invalid);
+                }
+            }
             VersionMode::Fixed => {
+                if self.version_lag.is_some() {
+                    return Err(ClientProfileError::Invalid);
+                }
                 let version = self
                     .codex_version
                     .as_deref()
@@ -188,7 +206,6 @@ impl ClientProfileSelection {
                     }
                 }
             }
-            VersionMode::Latest => {}
         }
         if self.client == ClientKind::Cli
             && (self.desktop_version.is_some() || self.desktop_build.is_some())
@@ -204,9 +221,23 @@ impl ClientProfileSelection {
     ) -> Result<CodexWireProfile, ClientProfileError> {
         self.validate()?;
         let release = match self.version_mode {
-            VersionMode::Latest => state
-                .client_release(self.client, self.platform, self.architecture())
-                .ok_or(ClientProfileError::ReleaseUnavailable)?,
+            VersionMode::Latest => {
+                let latest = state
+                    .client_release(self.client, self.platform, self.architecture())
+                    .ok_or(ClientProfileError::ReleaseUnavailable)?;
+                // 滞后档位取已观察发布序列的第 N 项；序列不足时回退最旧版本，
+                // 滞后配置不能在观察积累期变成请求失败。
+                self.version_lag
+                    .and_then(|lag| {
+                        state.lagged_client_release(
+                            self.client,
+                            self.platform,
+                            self.architecture(),
+                            lag,
+                        )
+                    })
+                    .unwrap_or(latest)
+            }
             VersionMode::Fixed => ClientRelease {
                 codex_version: self
                     .codex_version
@@ -244,8 +275,8 @@ impl ClientProfileSelection {
             verified_at: release.verified_at.unwrap_or(DateTime::UNIX_EPOCH),
         };
         if let Some(entry) = self.cli_entry {
-            // 入口后缀使用同一次解析得到的 Core 版本，避免每日更新后头部与后缀混用。
-            // originator 可单独覆盖；入口名与官方 clientInfo.name 的语义保持一致。
+            // 入口后缀使用同一次解析得到的 Core 版本，避免每日更新后头部与后缀混用
+            // originator 可单独覆盖；入口名与官方 clientInfo.name 的语义保持一致
             profile.exact_user_agent = Some(format!(
                 "{} ({}; {})",
                 profile.user_agent(),
@@ -257,7 +288,7 @@ impl ClientProfileSelection {
     }
 }
 
-/// 一个具体客户端制品的配套版本；自定义值不携带核验时间。
+/// 一个具体客户端制品的配套版本；自定义值不携带核验时间
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientRelease {
@@ -265,6 +296,15 @@ pub struct ClientRelease {
     pub desktop_version: Option<String>,
     pub desktop_build: Option<String>,
     pub verified_at: Option<DateTime<Utc>>,
+}
+
+impl ClientRelease {
+    /// 版本同一性判断，忽略核验时间；发布历史按版本元组判重。
+    pub(super) fn same_identity(&self, other: &ClientRelease) -> bool {
+        self.codex_version == other.codex_version
+            && self.desktop_version == other.desktop_version
+            && self.desktop_build == other.desktop_build
+    }
 }
 
 impl CodexWireProfileState {
@@ -297,6 +337,7 @@ impl CodexWireProfileState {
             "desktopBuild": (profile.client_kind == ClientKind::Desktop).then_some(&profile.desktop_build),
             "userAgent": profile.user_agent(),
             "versionSource": if selection.version_mode == VersionMode::Fixed { "custom" } else { "official" },
+            "versionLag": selection.version_lag,
             "verifiedAt": (profile.verified_at != DateTime::UNIX_EPOCH).then_some(profile.verified_at),
             "checkedAt": status.0,
             "error": status.1,
@@ -325,7 +366,7 @@ impl CodexWireProfileState {
                 }));
             }
         }
-        object(&json!({ "presets": presets }))
+        object(&json!({ "presets": presets, "maxVersionLag": MAX_VERSION_LAG }))
     }
 }
 

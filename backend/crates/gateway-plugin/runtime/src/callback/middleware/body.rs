@@ -1,3 +1,5 @@
+//! 插件中间件正文句柄的读取、交付事实与关闭生命周期
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -175,8 +177,8 @@ impl BodyResource {
     }
 
     pub(super) async fn read(&self, maximum: usize) -> Result<Option<BodyReadFrame>, PluginFault> {
-        // SDK 发出上一源的映射帧后即可请求下一源；消费者可能尚未处理排队帧。
-        // 等待归还而非报冲突，仍只保留一个源；父 RPC 的期限与取消约束等待。
+        // SDK 发出上一源的映射帧后即可请求下一源；消费者可能尚未处理排队帧
+        // 等待归还而非报冲突，仍只保留一个源；父 RPC 的期限与取消约束等待
         let mut state = loop {
             let released = self.source_released.notified();
             let state = self.state.lock().await;
@@ -210,7 +212,7 @@ impl BodyResource {
         };
         let transformed = frame.transformed();
         let (bytes, framing, terminal, envelope) = frame.into_parts();
-        // canonical-only 事件没有客户端正文，仍须保留并允许读取其完整事实。
+        // canonical-only 事件没有客户端正文，仍须保留并允许读取其完整事实
         let facts_only =
             framing == MiddlewareFraming::RawBytes && bytes.is_empty() && envelope.is_some();
         if (!facts_only && framing != self.expected_framing) || bytes.len() > maximum {

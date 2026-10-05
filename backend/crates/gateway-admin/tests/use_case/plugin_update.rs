@@ -1,3 +1,5 @@
+//! 插件参与系统升级与回滚的兼容性预检测试
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;

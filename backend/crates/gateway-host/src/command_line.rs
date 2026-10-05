@@ -1,4 +1,4 @@
-//! CLI 不进入 HTTP serve，也必须接收终止信号；资源退出时停止监听任务。
+//! CLI 不进入 HTTP serve，也必须接收终止信号；资源退出时停止监听任务
 
 use gateway_core::lifecycle::CancellationToken;
 

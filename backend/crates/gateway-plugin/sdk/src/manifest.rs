@@ -1,3 +1,5 @@
+//! 插件作者清单与平台包声明的解析、规范化及完整性校验
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -12,7 +14,7 @@ use serde_json::Value;
 
 use crate::{Capability, Contributions, PROTOCOL_VERSION, Stage};
 
-/// 当前插件清单格式版本。
+/// 当前插件清单格式版本
 pub const MANIFEST_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,7 +23,7 @@ pub enum RuntimeKind {
     TrustedProcess,
 }
 
-/// 插件展示图标；路径始终引用同一清单中声明的包资源。
+/// 插件展示图标；路径始终引用同一清单中声明的包资源
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PluginIcon {
@@ -29,7 +31,7 @@ pub enum PluginIcon {
     Themed(PluginIconVariants),
 }
 
-/// 为浅色与深色界面分别声明的插件图标。
+/// 为浅色与深色界面分别声明的插件图标
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginIconVariants {
@@ -37,7 +39,7 @@ pub struct PluginIconVariants {
     pub dark: String,
 }
 
-/// 宿主版本兼容范围。
+/// 宿主版本兼容范围
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Engines {
@@ -45,7 +47,7 @@ pub struct Engines {
     pub codex_proxy_rs: VersionReq,
 }
 
-/// 安装包的唯一目标平台。
+/// 安装包的唯一目标平台
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PackageTarget {
@@ -53,7 +55,7 @@ pub struct PackageTarget {
     pub architecture: String,
 }
 
-/// 构建生成的安装包元数据；作者源清单可以省略。
+/// 构建生成的安装包元数据；作者源清单可以省略
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Package {
@@ -62,7 +64,7 @@ pub struct Package {
     pub files: BTreeMap<String, String>,
 }
 
-/// 插件私有状态的单个命名空间声明；宿主仍会施加更严格的全局上限。
+/// 插件私有状态的单个命名空间声明；宿主仍会施加更严格的全局上限
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StateNamespace {
@@ -91,7 +93,8 @@ impl fmt::Debug for StateNamespace {
     }
 }
 
-/// 插件作者清单。`package` 缺省时表示尚未构建的源清单。
+/// 插件作者清单
+/// `package` 缺省时表示尚未构建的源清单
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Manifest {
@@ -138,11 +141,11 @@ pub enum ManifestError {
 }
 
 impl Manifest {
-    /// 读取作者清单并生成与 CLI、运行注册一致的完整声明。
+    /// 读取作者清单并生成与 CLI、运行注册一致的完整声明
     ///
     /// # Errors
     ///
-    /// JSON、版本、能力声明或安装包字段不符合作者合同时返回错误。
+    /// JSON、版本、能力声明或安装包字段不符合作者合同时返回错误
     pub fn from_author_slice(bytes: &[u8]) -> Result<Self, ManifestError> {
         let UniqueValue(source) =
             serde_json::from_slice(bytes).map_err(|_| ManifestError::Invalid)?;
@@ -152,11 +155,11 @@ impl Manifest {
         Ok(manifest)
     }
 
-    /// 作者清单允许省略扩展项 ID、能力版本和固定阶段，安装清单不隐式补全。
+    /// 作者清单允许省略扩展项 ID、能力版本和固定阶段，安装清单不隐式补全
     ///
     /// # Errors
     ///
-    /// 已含构建元数据、阶段与固定合同冲突或规范化后清单无效时返回错误。
+    /// 已含构建元数据、阶段与固定合同冲突或规范化后清单无效时返回错误
     pub fn normalize_author(&mut self) -> Result<(), ManifestError> {
         if self.package.is_some() {
             return Err(ManifestError::Invalid);
@@ -178,11 +181,11 @@ impl Manifest {
         self.validate()
     }
 
-    /// 派生并校验稳定插件 ID。
+    /// 派生并校验稳定插件 ID
     ///
     /// # Errors
     ///
-    /// 发布者、机器短名或派生后的完整 ID 不符合命名边界时返回错误。
+    /// 发布者、机器短名或派生后的完整 ID 不符合命名边界时返回错误
     pub fn plugin_id(&self) -> Result<String, ManifestError> {
         if !valid_plugin_segment(&self.publisher) || !valid_plugin_segment(&self.name) {
             return Err(ManifestError::Invalid);
@@ -194,11 +197,11 @@ impl Manifest {
         Ok(plugin_id)
     }
 
-    /// 校验源清单，并在 `package` 存在时同时执行严格安装包结构校验。
+    /// 校验源清单，并在 `package` 存在时同时执行严格安装包结构校验
     ///
     /// # Errors
     ///
-    /// 清单版本、身份、声明、路径、摘要、状态或安装包元数据不符合合同时返回错误。
+    /// 清单版本、身份、声明、路径、摘要、状态或安装包元数据不符合合同时返回错误
     pub fn validate(&self) -> Result<(), ManifestError> {
         self.validate_structure()?;
         if self.contributes.iter().any(|(capability, declaration)| {
@@ -211,7 +214,7 @@ impl Manifest {
         Ok(())
     }
 
-    /// 校验可解析的包结构；能力版本是否受支持由宿主另行诊断。
+    /// 校验可解析的包结构；能力版本是否受支持由宿主另行诊断
     pub fn validate_structure(&self) -> Result<(), ManifestError> {
         if self.manifest_version != MANIFEST_VERSION {
             return Err(ManifestError::Incompatible);
@@ -240,11 +243,11 @@ impl Manifest {
         Ok(())
     }
 
-    /// 返回与当前宿主及平台匹配的安装包元数据。
+    /// 返回与当前宿主及平台匹配的安装包元数据
     ///
     /// # Errors
     ///
-    /// 源清单尚无安装包、清单无效、宿主版本不匹配或目标平台不同时返回错误。
+    /// 源清单尚无安装包、清单无效、宿主版本不匹配或目标平台不同时返回错误
     pub fn package_for(
         &self,
         host: &Version,
@@ -258,7 +261,7 @@ impl Manifest {
         self.platform_package(os, architecture)
     }
 
-    /// 选择可执行的平台包，不把宿主版本范围或能力版本声明作为启动禁令。
+    /// 选择可执行的平台包，不把宿主版本范围或能力版本声明作为启动禁令
     pub fn package_for_platform(
         &self,
         os: &str,
@@ -406,7 +409,7 @@ impl Manifest {
         if package.protocol_version != PROTOCOL_VERSION {
             return Err(ManifestError::Incompatible);
         }
-        // semver 将全版本 `*` 表示为空 comparator；`1.*` 仍有明确的主版本边界。
+        // semver 将全版本 `*` 表示为空 comparator；`1.*` 仍有明确的主版本边界
         if self.engines.codex_proxy_rs.comparators.is_empty()
             || !platform_component(&package.target.os)
             || !platform_component(&package.target.architecture)
@@ -430,7 +433,7 @@ impl Manifest {
             {
                 return Err(ManifestError::Invalid);
             }
-            // 文件不能同时充当父目录，避免跨平台路径覆盖与解压顺序歧义。
+            // 文件不能同时充当父目录，避免跨平台路径覆盖与解压顺序歧义
             if path
                 .split('/')
                 .scan(String::new(), |parent, part| {
@@ -449,7 +452,7 @@ impl Manifest {
     }
 }
 
-/// `serde_json::Value` 默认保留重复对象键的最后一个值；作者清单不能让同一声明因解析入口而改变含义。
+/// `serde_json::Value` 默认保留重复对象键的最后一个值；作者清单不能让同一声明因解析入口而改变含义
 struct UniqueValue(Value);
 
 impl<'de> Deserialize<'de> for UniqueValue {
@@ -575,7 +578,7 @@ fn platform_component(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
 }
 
-/// 逐个检查原始路径段，不能让操作系统先规范化掉 `.`、空段或反斜线。
+/// 逐个检查原始路径段，不能让操作系统先规范化掉 `.`、空段或反斜线
 #[must_use]
 pub fn valid_package_path(path: &str) -> bool {
     !path.is_empty()

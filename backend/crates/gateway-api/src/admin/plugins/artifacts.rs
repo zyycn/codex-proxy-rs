@@ -1,3 +1,5 @@
+//! 插件制品列表、图标、上传验证与安装管理的 HTTP 接口
+
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -127,7 +129,7 @@ async fn icon<S: SessionState + Send + Sync>(
     headers.insert(header::CONTENT_TYPE, content_type);
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        // 图标只作为图片加载；SVG 可用内联样式与内嵌图片，但不能执行脚本或请求外部资源。
+        // 图标只作为图片加载；SVG 可用内联样式与内嵌图片，但不能执行脚本或请求外部资源
         HeaderValue::from_static("sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"),
     );
     headers.insert(

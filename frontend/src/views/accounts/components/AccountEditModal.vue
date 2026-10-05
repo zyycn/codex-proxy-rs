@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import type { AccountRow } from '../constants'
 import type { ApiKeyAccountForm } from '../utils/upstreamApiKey'
-import type { AccountGroup, AccountModelAccess } from '@/api'
+
+import type { Account, AccountGroup, AccountModelAccess } from '@/api'
 
 import { BaseButton, BaseFormItem, BaseModal, BaseSegmented, BaseTextarea } from '@codex-proxy/ui'
+import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { isOpenAiApiKeyAccount, isOpenAiOAuthAccount } from '../utils/upstreamApiKey'
 import AccountApiKeyFields from './AccountApiKeyFields.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
-import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
 defineProps<{
-  account: AccountRow | null
+  account: Account | null
   groups: AccountGroup[]
   groupsLoading: boolean
   saving: boolean

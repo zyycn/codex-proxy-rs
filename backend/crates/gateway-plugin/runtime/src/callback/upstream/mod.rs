@@ -1,3 +1,5 @@
+//! 插件受管上游请求与连接回调，跟踪发送状态并约束连接归属
+
 mod sessions;
 
 use std::{
@@ -89,7 +91,7 @@ impl ManagedUpstream {
 
     pub(crate) async fn retain_connection(&self) -> Result<String, PluginFault> {
         let (url, socket) = self.socket.lock().await.take().ok_or_else(denied)?;
-        // 旧调用仍在收发时不能把同一连接交给下一次执行。
+        // 旧调用仍在收发时不能把同一连接交给下一次执行
         let socket = match Arc::try_unwrap(socket) {
             Ok(socket) if !socket.is_closed() => socket,
             Ok(_) => return Err(denied()),
@@ -118,7 +120,7 @@ impl ManagedUpstream {
             return;
         }
         let mut socket = self.socket.lock().await;
-        // 关闭后的读取结果可能晚于下一次 open，不能移除新连接。
+        // 关闭后的读取结果可能晚于下一次 open，不能移除新连接
         if socket
             .as_ref()
             .is_some_and(|(_, current)| Arc::ptr_eq(current, connection))
@@ -142,7 +144,7 @@ impl ManagedUpstream {
                 "selected account authentication is unavailable",
             )
         })?;
-        // 账号设置先构成基线；插件同名输入替换默认值，多值头保持原顺序。
+        // 账号设置先构成基线；插件同名输入替换默认值，多值头保持原顺序
         let mut headers: Vec<_> = authorization
             .into_iter()
             .filter(|header| {
@@ -252,7 +254,7 @@ pub(super) async fn dispatch(
                     timeout()?,
                 )
                 .await;
-            // 握手也已向上游发送账号身份；失败不能伪装成未出站或跳过账号反馈。
+            // 握手也已向上游发送账号身份；失败不能伪装成未出站或跳过账号反馈
             attempt.finish(
                 response
                     .as_ref()

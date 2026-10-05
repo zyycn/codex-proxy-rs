@@ -1,9 +1,6 @@
-import type { AccountErrorReason, AccountStatus, getAccounts } from '@/api'
+import type { Account, AccountErrorReason, AccountQuotaWindow, AccountStatus } from '@/api'
 import { defineTableColumns } from '@codex-proxy/ui'
 import { formatProviderLabel } from '@/utils/providers'
-
-export type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
-export type AccountQuotaWindow = AccountRow['quota']['windows'][number]
 
 export interface AccountQuotaWindowEntry {
   key: string
@@ -17,7 +14,7 @@ const quotaGroupOrder = new Map([
   ['other', 2],
 ])
 
-export const accountColumns = defineTableColumns<AccountRow>([
+export const accountColumns = defineTableColumns<Account>([
   { key: 'expander', kind: 'expander', hideable: false },
   { key: 'selection', kind: 'selection', hideable: false },
   {
@@ -34,7 +31,7 @@ export const accountColumns = defineTableColumns<AccountRow>([
     kind: 'meta',
     size: 'md',
     align: 'center',
-    format: value => accountProviderLabel(typeof value === 'string' ? value : null),
+    format: value => formatProviderLabel(typeof value === 'string' ? value : null),
   },
   { key: 'status', label: '状态', kind: 'status', align: 'left', sortable: true },
   { key: 'planType', label: '订阅', kind: 'status', sortable: true },
@@ -90,14 +87,6 @@ export const errorReasonLabels: Record<AccountErrorReason, string> = {
   credential_expired: '凭据已过期',
   credential_invalid: '凭据无效',
   account_banned: '账号不可用或已被封禁',
-}
-
-/**
- * 后端已派生互斥状态（正常 / 配额耗尽 / 限流中 / 已停用 / 错误）；
- * 前端只渲染，不再独立派生。
- */
-export function derivedAccountStatus(row: AccountRow): AccountStatus {
-  return row.status
 }
 
 export function visibleSummaryQuotaWindows(windows: AccountQuotaWindow[]) {
@@ -197,10 +186,6 @@ function quotaLimitLabel(window: AccountQuotaWindow) {
   if (window.limitId === 'codex')
     return '通用额度'
   return window.limitName
-}
-
-function accountProviderLabel(value?: string | null) {
-  return formatProviderLabel(value)
 }
 
 function optionalAccountCell(value: unknown) {

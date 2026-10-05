@@ -1,3 +1,5 @@
+//! 验证插件发布准备的目录冻结、声明校验与运行时关闭
+
 use gateway_admin::{
     model::{
         Revision,
@@ -499,7 +501,7 @@ async fn restart_circuit_resets_after_a_stable_incarnation() {
         "startup_failures":[true,true,false,true,true],
         "exit_after_ready_signals":[null,null,exit],
     });
-    // 握手前失败的有效运行时间固定为零；不能用短 sleep 假定宿主一定及时观察到退出。
+    // 握手前失败的有效运行时间固定为零；不能用短 sleep 假定宿主一定及时观察到退出
     for _ in 0..2 {
         assert!(
             PluginPreparation::prepare(&runtime, snapshot.clone())
@@ -511,7 +513,7 @@ async fn restart_circuit_resets_after_a_stable_incarnation() {
         .await
         .expect("the third incarnation starts before the circuit opens");
     assert!(active.is_ready());
-    // 明确等到稳定窗口之后才允许第三个进程退出；调度变慢不会把短命进程误变为稳定进程。
+    // 明确等到稳定窗口之后才允许第三个进程退出；调度变慢不会把短命进程误变为稳定进程
     tokio::time::sleep(restart_circuit.stability_window).await;
     tokio::fs::write(exit, b"exit").await.unwrap();
     wait_until_unready(&active).await;
@@ -679,8 +681,8 @@ async fn restart_circuit_does_not_let_an_older_generation_clear_newer_failures()
         .await
         .expect("published generation");
     assert!(published.is_ready());
-    // 旧代次明确越过稳定窗口；新代次在握手前失败，运行时间固定为零。
-    // 不依赖 15 ms 退出与注册完成的竞速，也不让调度延迟重置新失败预算。
+    // 旧代次明确越过稳定窗口；新代次在握手前失败，运行时间固定为零
+    // 不依赖 15 ms 退出与注册完成的竞速，也不让调度延迟重置新失败预算
     tokio::time::sleep(restart_circuit.stability_window).await;
 
     let mut failed_candidate = None;

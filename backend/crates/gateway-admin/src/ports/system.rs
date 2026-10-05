@@ -1,4 +1,4 @@
-//! Host 为系统管理用例提供的进程与操作系统能力。
+//! Host 为系统管理用例提供的进程与操作系统能力
 
 use std::{pin::Pin, sync::Arc};
 
@@ -11,7 +11,7 @@ use crate::model::system::{
     SystemUpdateStatus, SystemVersion,
 };
 
-/// Host 已校验并解包的同一更新候选；字节只含发行清单，不含运行配置或凭据。
+/// Host 已校验并解包的同一更新候选；字节只含发行清单，不含运行配置或凭据
 #[derive(Clone)]
 pub struct SystemUpdateCandidate {
     pub target_version: String,
@@ -28,7 +28,7 @@ impl std::fmt::Debug for SystemUpdateCandidate {
     }
 }
 
-/// Host 系统操作失败类型。
+/// Host 系统操作失败类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SystemOperationErrorKind {
     Invalid,
@@ -37,7 +37,7 @@ pub enum SystemOperationErrorKind {
     Internal,
 }
 
-/// 不泄漏路径、命令行或发布凭据的系统操作错误。
+/// 不泄漏路径、命令行或发布凭据的系统操作错误
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("system operation failed: {message}")]
 pub struct SystemOperationError {
@@ -59,17 +59,17 @@ impl SystemOperationError {
         self.kind
     }
 
-    /// 返回 Host 已完成脱敏的客户端安全消息。
+    /// 返回 Host 已完成脱敏的客户端安全消息
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 }
 
-/// 每个订阅者独占的系统事件流。
+/// 每个订阅者独占的系统事件流
 pub type SystemUpdateEventStream = Pin<Box<dyn Stream<Item = SystemUpdateEvent> + Send + 'static>>;
 
-/// Admin 对启用实例和制品作兼容决策；Host 只负责候选下载、校验与文件交换。
+/// Admin 对启用实例和制品作兼容决策；Host 只负责候选下载、校验与文件交换
 #[async_trait]
 pub trait SystemUpdatePreflight: Send + Sync {
     async fn validate(
@@ -77,7 +77,7 @@ pub trait SystemUpdatePreflight: Send + Sync {
         candidate: SystemUpdateCandidate,
     ) -> Result<Revision, SystemOperationError>;
 
-    /// 回滚保持严格预检，不能把旧目标当成具有当前重启确认能力的版本。
+    /// 回滚保持严格预检，不能把旧目标当成具有当前重启确认能力的版本
     async fn validate_rollback(
         &self,
         candidate: SystemUpdateCandidate,
@@ -85,11 +85,11 @@ pub trait SystemUpdatePreflight: Send + Sync {
         self.validate(candidate).await
     }
 
-    /// 在文件交换临界点复核全局配置 CAS，不能用较早快照掩盖实例变更。
+    /// 在文件交换临界点复核全局配置 CAS，不能用较早快照掩盖实例变更
     async fn confirm_revision(&self, expected: Revision) -> Result<(), SystemOperationError>;
 }
 
-/// 重启临界区内复查候选，确认后停用不兼容插件，再允许进程退出。
+/// 重启临界区内复查候选，确认后停用不兼容插件，再允许进程退出
 #[async_trait]
 pub trait SystemRestartPreflight: Send + Sync {
     async fn prepare(
@@ -98,7 +98,7 @@ pub trait SystemRestartPreflight: Send + Sync {
     ) -> Result<(), SystemOperationError>;
 }
 
-/// 版本、自更新、回滚和重启能力；实现唯一归 gateway-host。
+/// 版本、自更新、回滚和重启能力；实现唯一归 gateway-host
 #[async_trait]
 pub trait SystemOperations: Send + Sync {
     async fn version(&self) -> Result<SystemVersion, SystemOperationError>;
@@ -125,7 +125,7 @@ pub trait SystemOperations: Send + Sync {
         preflight: Arc<dyn SystemUpdatePreflight>,
     ) -> Result<SystemOperationAccepted, SystemOperationError>;
 
-    /// 返回下一次启动实际使用的发行；源码运行没有封存发行清单。
+    /// 返回下一次启动实际使用的发行；源码运行没有封存发行清单
     async fn restart_candidate(
         &self,
     ) -> Result<Option<SystemUpdateCandidate>, SystemOperationError> {

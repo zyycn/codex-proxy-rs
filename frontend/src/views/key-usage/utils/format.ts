@@ -11,8 +11,3 @@ export function money(value: string | number | null, currency = 'USD') {
     maximumFractionDigits: 6,
   }).format(amount)
 }
-
-export function freshInput(input: number, cached: number, written: number) {
-  // 输入总量已经包含缓存读写，不把缓存再次计入消耗。
-  return Math.max(0, input - cached - written)
-}

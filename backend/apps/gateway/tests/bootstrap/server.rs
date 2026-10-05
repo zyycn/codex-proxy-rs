@@ -1,3 +1,5 @@
+//! 验证服务组装为 HTTPS 代理探测传递自定义 CA
+
 use std::{fs, process::Command};
 
 #[tokio::test]
@@ -19,7 +21,7 @@ async fn proxy_probe_should_use_provider_custom_ca_for_https_proxies() {
     let Ok(directory) = std::env::var(CHILD_ENV) else {
         let directory = tempfile::tempdir().unwrap();
         generate_proxy_test_certificates(directory.path());
-        // 使用子进程隔离环境变量，避免并行测试读取到临时 CA 配置。
+        // 使用子进程隔离环境变量，避免并行测试读取到临时 CA 配置
         for ca_env in ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"] {
             let mut child = Command::new(std::env::current_exe().unwrap());
             child

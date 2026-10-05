@@ -1,4 +1,4 @@
-//! Codex Desktop 当前账号个人资料与累计统计 HTTP contract。
+//! Codex Desktop 当前账号个人资料与累计统计 HTTP contract
 
 use chrono::NaiveDate;
 use gateway_protocol::openai::events::retry_after_seconds_from_body;
@@ -16,7 +16,7 @@ use super::{
     response_meta,
 };
 
-/// 单次 profile 响应允许保留和解析的最大字节数。
+/// 单次 profile 响应允许保留和解析的最大字节数
 pub const MAX_CODEX_PROFILE_STATISTICS_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

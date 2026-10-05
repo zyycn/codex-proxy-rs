@@ -1,3 +1,5 @@
+//! Responses WebSocket 连接生命周期与多轮请求边界测试
+
 mod middleware;
 
 use std::{
@@ -240,7 +242,7 @@ impl Stream for TestSocket {
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let event = self.incoming.poll_recv(context);
-        // 模拟 Axum transport 的自动 Pong；pump 不再重复实现协议层应答。
+        // 模拟 Axum transport 的自动 Pong；pump 不再重复实现协议层应答
         if let Poll::Ready(Some(Ok(Message::Ping(payload)))) = &event {
             self.written
                 .send(Message::Pong(payload.clone()))
@@ -604,7 +606,7 @@ async fn idle_connection_reaches_the_official_limit_without_starting_an_executio
     );
     assert_eq!(trace.starts.load(Ordering::Acquire), 0);
 
-    // 服务端已因生命周期到期关闭；不再向关闭中的连接写入。
+    // 服务端已因生命周期到期关闭；不再向关闭中的连接写入
     drop(socket);
     server.abort();
 }
@@ -1113,7 +1115,7 @@ async fn active_response_receives_heartbeats_during_two_hundred_seconds_of_silen
         let ClientMessage::Ping(payload) = message else {
             panic!("expected heartbeat while business stream is silent: {message:?}");
         };
-        // 与官方 WsStream 一样，在业务响应未完成时回复同 payload 的 Pong。
+        // 与官方 WsStream 一样，在业务响应未完成时回复同 payload 的 Pong
         socket
             .send(ClientMessage::Pong(payload))
             .await

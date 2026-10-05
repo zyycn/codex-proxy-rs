@@ -1,3 +1,5 @@
+//! 验证宿主兼容性声明与静态制品检查的协议版本约束
+
 use gateway_admin::{
     model::plugins::PluginHostCompatibility, ports::plugins::PluginPackageInspector as _,
 };

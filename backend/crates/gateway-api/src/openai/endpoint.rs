@@ -1,4 +1,4 @@
-//! OpenAI Provider 原生非流式 JSON 端点的公共交付边界。
+//! OpenAI Provider 原生非流式 JSON 端点的公共交付边界
 
 use std::net::IpAddr;
 
@@ -29,7 +29,7 @@ use super::{
     service::OpenAiService,
 };
 
-/// Provider 自有端点也先冻结身份，再通过统一请求链进入原有执行与结算路径。
+/// Provider 自有端点也先冻结身份，再通过统一请求链进入原有执行与结算路径
 pub(super) async fn provider_endpoint_response<F>(
     service: OpenAiService,
     client: AuthenticatedClient,
@@ -61,7 +61,9 @@ where
                 let operation = request.apply_capabilities(decode(body, &headers)?)?;
                 let started = match service
                     .start_prepared_provider_endpoint(
-                        prepared, operation, client_ip, user_agent, endpoint,
+                        prepared, operation,
+                        // 图像/搜索等原生端点没有对应的上游模型权限。
+                        None, client_ip, user_agent, endpoint,
                     )
                     .await
                 {
@@ -86,7 +88,7 @@ where
     }
 }
 
-/// 只收集正文，不提前 commit；外层完成响应变换与校验后才提交 Core。
+/// 只收集正文，不提前 commit；外层完成响应变换与校验后才提交 Core
 async fn collect_raw_json_response(
     started: StartedExecution,
 ) -> Result<MiddlewareResponse, MiddlewareError> {

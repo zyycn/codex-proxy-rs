@@ -1,3 +1,5 @@
+//! 验证结构事件缓冲、交付宽限与取消对重试边界的影响
+
 use gateway_core::diagnostics::TraceContext;
 use gateway_core::engine::provider::ProviderStream;
 use gateway_core::error::ProviderError;
@@ -82,7 +84,7 @@ async fn large_structural_events_preserve_overload_replay_past_the_old_grace_on_
     for websocket in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_provider_contract").await;
-        // #259 仅保留了事件长度；用合成配置回显复现尺寸，不依赖现场私有正文。
+        // #259 仅保留了事件长度；用合成配置回显复现尺寸，不依赖现场私有正文
         let created = structural_event("response.created", 38_781);
         let progress = structural_event("response.in_progress", 38_785);
         let failure = overload();
@@ -238,7 +240,7 @@ async fn immediate_release_preserves_wire_and_records_the_boundary_once() {
         create_account(&store, "acct_provider_contract").await;
         let (base_url, release, _, server) =
             paused_chunked_sse_server(body.clone(), String::new()).await;
-        // EOF 是另一种边界；其余场景必须在上游结束前立即释放。
+        // EOF 是另一种边界；其余场景必须在上游结束前立即释放
         let mut release = Some(release);
         if reason == "eof" {
             release.take().unwrap().send(()).unwrap();

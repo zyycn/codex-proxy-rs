@@ -1,3 +1,5 @@
+//! 组装插件运行时端口，准备并持有可发布的实例与能力集合
+
 mod instance;
 mod maintenance;
 
@@ -80,7 +82,7 @@ pub struct PluginRuntimeConfig {
     pub restart_circuit: PluginRestartCircuitConfig,
 }
 
-/// 只索引有主人的候选；当前代次仅由 Core 的发布视图持有。
+/// 只索引有主人的候选；当前代次仅由 Core 的发布视图持有
 pub struct PluginRuntime {
     service_ports: Arc<crate::callback::services::ServicePorts>,
     pub(super) store: Arc<dyn PluginStore>,
@@ -191,7 +193,7 @@ impl ExtensionSetLease for PreparedSet {
     }
 
     fn can_serve(&self) -> bool {
-        // 发布的是可用能力和故障绑定组成的完整计划；单个进程退出不能使原生转发失效。
+        // 发布的是可用能力和故障绑定组成的完整计划；单个进程退出不能使原生转发失效
         !self.shutting_down.load(Ordering::Acquire)
     }
 }
@@ -259,7 +261,7 @@ impl PluginRuntime {
         self
     }
 
-    /// API 完成组装后绑定唯一内部 HTTP 分派端口；不持有服务端强引用。
+    /// API 完成组装后绑定唯一内部 HTTP 分派端口；不持有服务端强引用
     pub fn bind_http(
         &self,
         dispatcher: &Arc<dyn gateway_core::middleware::http::Dispatcher>,
@@ -281,7 +283,7 @@ impl PluginRuntime {
         self.account_ports.bind(access)
     }
 
-    /// Key 目录与预算端口由 Admin 组合并保活，完整字段由对应公开合同返回。
+    /// Key 目录与预算端口由 Admin 组合并保活，完整字段由对应公开合同返回
     pub fn bind_client_key_ports(
         &self,
         access: &Arc<dyn PluginClientKeyAccess>,
@@ -289,7 +291,7 @@ impl PluginRuntime {
         self.client_key_ports.bind(access)
     }
 
-    /// Core 激活后一次性绑定嵌套执行与亲和查询端口；Runtime 仅保存 Weak，避免组合根强环。
+    /// Core 激活后一次性绑定嵌套执行与亲和查询端口；Runtime 仅保存 Weak，避免组合根强环
     pub fn bind_model_ports(
         &self,
         models: &Arc<dyn NestedModelExecutionPort>,
@@ -299,7 +301,7 @@ impl PluginRuntime {
         self.affinity_ports.bind(affinity)
     }
 
-    /// 调用方必须先停止接收 HTTP 与 Worker；这里拒绝新候选并等待全部插件 I/O 退出。
+    /// 调用方必须先停止接收 HTTP 与 Worker；这里拒绝新候选并等待全部插件 I/O 退出
     pub async fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
         let _shutdown = self.shutdown_lock.lock().await;
@@ -406,7 +408,7 @@ impl PluginRuntime {
             return Err(AdminError::invalid("最多配置 64 个插件实例"));
         }
         let fingerprint = fingerprint(&snapshot)?;
-        // 准备串行化与弱索引分锁；诊断和已发布请求不会等待外部 I/O。
+        // 准备串行化与弱索引分锁；诊断和已发布请求不会等待外部 I/O
         let _prepare = self.prepare_lock.lock().await;
         if self.shutting_down.load(Ordering::Acquire) {
             return Err(AdminError::unavailable("插件运行时正在关闭"));
@@ -440,7 +442,7 @@ impl PluginRuntime {
                 return Err(AdminError::invalid("插件实例 ID 重复"));
             }
             let result = tokio::time::timeout(
-                // 沿用准备阶段原有的 30 秒预算；打包校验与能力恢复也在预算内。
+                // 沿用准备阶段原有的 30 秒预算；打包校验与能力恢复也在预算内
                 Duration::from_secs(30),
                 self.prepare_instance(instance.clone(), snapshot.config_revision),
             )
@@ -450,8 +452,8 @@ impl PluginRuntime {
                 Ok(candidate) => contributions.append(candidate),
                 Err(error) if required_revision == Some(instance.revision) => return Err(error),
                 Err(error) => {
-                    // 目录没有拒绝请求用的 binding，不能在恢复失败时悄悄撤销仍启用的别名。
-                    // 不复制其他候选的注册结果；让发布事务保留调用方持有的旧有效快照。
+                    // 目录没有拒绝请求用的 binding，不能在恢复失败时悄悄撤销仍启用的别名
+                    // 不复制其他候选的注册结果；让发布事务保留调用方持有的旧有效快照
                     let has_retained_catalog = self
                         .prepared
                         .lock()
@@ -468,7 +470,7 @@ impl PluginRuntime {
                             "已启用的模型目录插件未就绪，请修复或停用后重试",
                         ));
                     }
-                    // 恢复失败只隔离该实例；绑定的拒绝策略仍保留，不能绕过认证或必需处理。
+                    // 恢复失败只隔离该实例；绑定的拒绝策略仍保留，不能绕过认证或必需处理
                     contributions
                         .policy_entries
                         .extend(crate::adapter::policy::unavailable_entries(instance)?);
@@ -574,7 +576,7 @@ impl PluginRuntime {
         Ok(ExtensionSetReference::new(set.id.clone(), set))
     }
 
-    /// CLI 复用同一候选准备与弱索引；读取帮助不会发布 Core 快照或执行命令。
+    /// CLI 复用同一候选准备与弱索引；读取帮助不会发布 Core 快照或执行命令
     pub async fn prepare_command_line(&self) -> Result<crate::PluginCommandSession, AdminError> {
         let snapshot = self
             .store
@@ -849,7 +851,7 @@ impl PluginPreparation for PluginRuntime {
         if instance.artifact_sha256 != metadata.sha256 {
             return Err(AdminError::invalid("插件配置与制品不匹配"));
         }
-        // 安装时已验证声明；只读列表不重新解包，也不占用安装与启用的校验配额。
+        // 安装时已验证声明；只读列表不重新解包，也不占用安装与启用的校验配额
         let schema = metadata.configuration_schema.clone();
         let secret_fields = metadata.secret_fields.iter().cloned().collect();
         tokio::task::spawn_blocking(move || {
@@ -1249,7 +1251,7 @@ fn instance_fingerprint(
         .map(|(name, value)| (name, value.expose_secret()))
         .collect();
     let mut value = serde_json::json!({"id":instance.id,"artifact":instance.artifact_sha256,"revision":instance.revision.get(),"trusted":instance.trusted_process,"configuration":instance.configuration,"secrets":secrets,"bindings":instance.bindings});
-    // JSONB 恢复可以改变对象键顺序，不能因此替换已经准备好的同一配置。
+    // JSONB 恢复可以改变对象键顺序，不能因此替换已经准备好的同一配置
     value.sort_all_objects();
     let bytes = serde_json::to_vec(&value).map_err(|_| AdminError::invalid("插件配置无法编码"))?;
     Ok(hex::encode(Sha256::digest(bytes)))

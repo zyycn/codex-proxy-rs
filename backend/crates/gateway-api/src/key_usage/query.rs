@@ -1,4 +1,4 @@
-//! 查询不接受 Key、账号或 Provider 范围；禁止未知字段穿透权限边界。
+//! 查询不接受 Key、账号或 Provider 范围；禁止未知字段穿透权限边界
 
 use axum::http::StatusCode;
 use chrono::Duration;

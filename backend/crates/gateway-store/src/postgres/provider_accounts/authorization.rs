@@ -1,4 +1,4 @@
-//! 完成回执与账号、审计共享提交边界；Redis claim 只负责上游准备阶段的互斥。
+//! 完成回执与账号、审计共享提交边界；Redis claim 只负责上游准备阶段的互斥
 
 use gateway_admin::model::provider_credentials::{
     AuthorizationCommitResult, AuthorizationMutationTarget, AuthorizationReceiptKey,
@@ -61,7 +61,7 @@ async fn commit_authorization_in_transaction(
     context: &MutationContext,
 ) -> AdminStoreResult<AuthorizationCommitResult> {
     let key = &command.key;
-    // 同一 flow 的竞争者先等待事务结果；Redis 租约过期不能造成第二次账号提交。
+    // 同一 flow 的竞争者先等待事务结果；Redis 租约过期不能造成第二次账号提交
     let lock = format!(
         "authorization:{}:{}",
         key.provider_kind(),
@@ -143,7 +143,7 @@ async fn commit_authorization_in_transaction(
             .bind(i64::try_from(result.config_revision.get()).map_err(|_| invalid_receipt())?)
             .bind(serde_json::to_value(accounts).map_err(|_| invalid_receipt())?)
             .execute(&mut **transaction).await.map_err(|_| unavailable_receipt())?;
-    // 保留期长于 OAuth pending 上限；每次提交有界回收，避免引入第二套维护任务。
+    // 保留期长于 OAuth pending 上限；每次提交有界回收，避免引入第二套维护任务
     sqlx::query("delete from authorization_receipts where ctid in (select ctid from authorization_receipts where expires_at <= now() order by expires_at limit 128 for update skip locked)")
             .execute(&mut **transaction).await.map_err(|_| unavailable_receipt())?;
     Ok(AuthorizationCommitResult {

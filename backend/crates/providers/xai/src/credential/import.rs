@@ -1,4 +1,4 @@
-//! 已有 Grok Build OAuth token 的安全归一化边界。
+//! 已有 Grok Build OAuth token 的安全归一化边界
 
 use std::collections::HashSet;
 use std::fmt;
@@ -28,7 +28,7 @@ const MAX_IMPORT_ACCOUNTS: usize = 200;
 const MAX_ACCOUNT_NAME_BYTES: usize = 512;
 const MAX_EMAIL_BYTES: usize = 2_048;
 
-/// 管理导入 adapter 归一化后的 OAuth 候选；所有秘密字段均从 `Debug` 隐去。
+/// 管理导入 adapter 归一化后的 OAuth 候选；所有秘密字段均从 `Debug` 隐去
 pub struct GrokOAuthImportCandidate {
     access_token: SecretValue,
     refresh_token: SecretValue,
@@ -41,7 +41,7 @@ pub struct GrokOAuthImportCandidate {
     access_token_expires_at: DateTime<Utc>,
 }
 
-/// 导入候选的三个 OAuth secret；该类型不实现 `Debug` 或序列化。
+/// 导入候选的三个 OAuth secret；该类型不实现 `Debug` 或序列化
 pub struct GrokOAuthImportTokens {
     access_token: SecretValue,
     refresh_token: SecretValue,
@@ -62,7 +62,7 @@ impl GrokOAuthImportTokens {
         }
     }
 
-    /// 构造不含 ID token 的导入；仅允许过期 AT 经 RT 刷新后走 user-info 验证。
+    /// 构造不含 ID token 的导入；仅允许过期 AT 经 RT 刷新后走 user-info 验证
     #[must_use]
     pub fn without_id_token(access_token: SecretValue, refresh_token: SecretValue) -> Self {
         Self {
@@ -73,7 +73,7 @@ impl GrokOAuthImportTokens {
     }
 }
 
-/// 导入候选的非身份 metadata；client 与 scope 仍按敏感材料处理，不实现 `Debug`。
+/// 导入候选的非身份 metadata；client 与 scope 仍按敏感材料处理，不实现 `Debug`
 pub struct GrokOAuthImportMetadata {
     token_type: String,
     client_id: String,
@@ -110,7 +110,7 @@ impl GrokOAuthImportMetadata {
     }
 }
 
-/// OAuth 账号文档中的一个 xAI account。
+/// OAuth 账号文档中的一个 xAI account
 pub struct GrokOAuthImportEntry {
     model_access: Option<gateway_core::account::AccountModelAccess>,
     name: String,
@@ -157,16 +157,16 @@ impl fmt::Debug for GrokOAuthImportEntry {
     }
 }
 
-/// Provider-owned xAI OAuth 账号导入。
+/// Provider-owned xAI OAuth 账号导入
 pub struct GrokOAuthImportDocument {
     entries: Vec<GrokOAuthImportEntry>,
 }
 
 impl GrokOAuthImportDocument {
-    /// 从外部 JSON 提取 xAI OAuth 认证字段。
+    /// 从外部 JSON 提取 xAI OAuth 认证字段
     ///
-    /// 独立代理 URL 随账号导入；其他展示 metadata 不参与认证。
-    /// 实际 token 仍须通过官方 refresh/user-info 验证；API Key 不能混入 OAuth 条目。
+    /// 独立代理 URL 随账号导入；其他展示 metadata 不参与认证
+    /// 实际 token 仍须通过官方 refresh/user-info 验证；API Key 不能混入 OAuth 条目
     pub fn parse_json(document: &[u8]) -> Result<Self, GrokOAuthImportError> {
         Self::parse_json_with_proxy(document, None)
     }
@@ -198,7 +198,7 @@ impl GrokOAuthImportDocument {
             }
         }
         // 同一 refresh token 的重复条目只保留首个：RT exchange 会作废旧
-        // grant，重复条目逐条交换会让先完成的轮换被后续条目作废。
+        // grant，重复条目逐条交换会让先完成的轮换被后续条目作废
         let mut seen_refresh_tokens = HashSet::new();
         entries.retain(|entry| {
             seen_refresh_tokens.insert(entry.candidate.refresh_token.expose().to_owned())
@@ -370,7 +370,7 @@ fn parse_source_expiry(value: &str) -> Option<DateTime<Utc>> {
 }
 
 impl GrokOAuthImportCandidate {
-    /// 构造尚未获得信任的导入候选。
+    /// 构造尚未获得信任的导入候选
     #[must_use]
     pub fn new(tokens: GrokOAuthImportTokens, metadata: GrokOAuthImportMetadata) -> Self {
         Self {
@@ -459,7 +459,7 @@ impl fmt::Debug for GrokOAuthImportCandidate {
     }
 }
 
-/// OAuth 导入失败；错误中只保留固定字段名与低基数原因。
+/// OAuth 导入失败；错误中只保留固定字段名与低基数原因
 #[derive(Debug, thiserror::Error)]
 pub enum GrokOAuthImportError {
     #[error("invalid imported OAuth field `{0}`")]

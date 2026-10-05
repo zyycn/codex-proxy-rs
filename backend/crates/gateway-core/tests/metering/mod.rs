@@ -1,3 +1,5 @@
+//! 计量测试入口，以及金额精度、用量与费用来源合同测试
+
 use std::str::FromStr;
 
 mod pricing;

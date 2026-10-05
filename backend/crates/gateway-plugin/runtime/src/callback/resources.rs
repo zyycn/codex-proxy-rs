@@ -1,3 +1,5 @@
+//! 将插件自有资源回调绑定到宿主管理端口与实例身份
+
 use super::{
     admin::{encode, map_admin_error, mutation_context},
     denied, invalid,

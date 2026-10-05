@@ -1,3 +1,5 @@
+//! 验证 xAI OAuth 重定向白名单与发现端点同源约束
+
 use provider_xai::{ConfigError, GrokOAuthConfig, RedirectUriAllowlist};
 
 #[test]

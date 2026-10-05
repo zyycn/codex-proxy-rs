@@ -1,3 +1,5 @@
+//! 验证文件日志队列排空与写入失败后的完整性状态
+
 use super::*;
 use gateway_core::health::HealthState;
 use std::time::Duration;

@@ -13,7 +13,7 @@ description: 开发、排查或打包 Codex Proxy RS 独立网关插件；仅改
 
 - 确认用途、工程位置、目标宿主版本与平台，沿用已有工程；位置无法推断时只补齐该信息，不把插件源码塞进宿主 workspace
 - 核对运行宿主、[SDK 版本](../../../backend/crates/gateway-plugin/sdk/Cargo.toml)、[宿主支持清单](../../../backend/crates/gateway-plugin/runtime/plugin-host-compatibility.json)及所用 CLI，清单、进程和能力版本分别判断
-- `contributes` 是能力，`permissions` 是访问域，`bindings` 是挂载与匹配范围；安装成功不等于功能生效，`trustedProcess` 也不是操作系统沙箱
+- `contributes` 声明处理器，`bindings` 选择挂载与匹配范围；安装成功不等于功能生效。当前清单拒绝 `permissions`，安装者完整信任插件，`trustedProcess` 不提供操作系统沙箱或访问域隔离，见[完整信任](../../../backend/crates/gateway-plugin/sdk/docs/manifest.md#完整信任)
 - 涉及 Codex 时按[参考仓库优先级](../cpr-dev-guide/SKILL.md#参考仓库的优先级)先查官方 Codex 源码，三方仓库仅作参考；宿主能力以目标版本的 SDK 为准
 
 ## 按当前步骤读取
@@ -33,7 +33,7 @@ description: 开发、排查或打包 Codex Proxy RS 独立网关插件；仅改
 
 ## 交付
 
-说明源码与产物位置、兼容范围、能力与权限、实际验证及缺口，只报告真正生成的安装包或完成的业务验证
+说明源码与产物位置、兼容范围、能力与绑定、实际验证及缺口，只报告真正生成的安装包或完成的业务验证
 
 修改源码不默认授权在目标实例安装启用、调用真实上游或发布，沿用用户当前授权判断后续动作
 

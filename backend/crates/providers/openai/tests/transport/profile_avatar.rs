@@ -1,3 +1,5 @@
+//! 验证头像请求的官方来源限制、认证边界与流式交付
+
 use futures::TryStreamExt as _;
 use provider_openai::transport::{
     CodexProfileAvatarFetchError, CodexRequestContext, fetch_profile_avatar,

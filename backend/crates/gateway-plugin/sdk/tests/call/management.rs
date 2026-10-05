@@ -1,3 +1,5 @@
+//! 验证插件管理与命令行合同的正文分离、类型及权限字段约束
+
 use gateway_plugin_sdk::call::management::{CommandRegistration, CommandResult, CommandValue};
 use serde_json::json;
 

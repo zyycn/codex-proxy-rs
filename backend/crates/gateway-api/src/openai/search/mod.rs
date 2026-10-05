@@ -1,4 +1,4 @@
-//! Codex standalone search HTTP adapter。
+//! Codex 独立搜索的 HTTP 接口适配
 
 mod http;
 

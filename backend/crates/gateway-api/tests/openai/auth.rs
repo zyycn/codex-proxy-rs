@@ -1,3 +1,5 @@
+//! 验证 OpenAI 入口的 Bearer 认证与插件可见认证信息边界
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

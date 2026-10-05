@@ -1,4 +1,7 @@
-// 从宿主设置类型与 service/settings.rs 生成；更新命令见 SDK 维护说明。
+//! 宿主设置服务的操作标识与请求、响应数据合同
+//!
+//! 从宿主设置类型与 service/settings.rs 生成；更新命令见 SDK 维护说明
+
 use super::Operation;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -51,9 +54,9 @@ pub struct RuntimeSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplaceRuntimeSettings {
-    /// 读取设置时的版本；与写入在同一事务内比较，防止覆盖并发更新。
+    /// 读取设置时的版本；与写入在同一事务内比较，防止覆盖并发更新
     pub expected_revision: Revision,
-    /// 只覆盖提交的 Provider；未提交项保留当前持久值。
+    /// 只覆盖提交的 Provider；未提交项保留当前持久值
     pub request_profile_updates: ProviderRequestProfileUpdates,
     pub request_location_enabled: bool,
     pub request_location: RequestLocation,

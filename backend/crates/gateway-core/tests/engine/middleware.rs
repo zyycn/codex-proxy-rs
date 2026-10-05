@@ -1,3 +1,5 @@
+//! 请求中间件的改写、交付状态与发布代次持有测试
+
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -148,7 +150,7 @@ fn context() -> MiddlewareContext {
             client_key_id: ClientApiKeyId::new("key_middleware").unwrap(),
             account_group_ids: Arc::<[AccountGroupId]>::from([]),
             cancellation: CancellationToken::new(),
-            deadline: SystemTime::now() + Duration::from_secs(5),
+            deadline: (SystemTime::now() + Duration::from_secs(5)).into(),
             extension_scope: ExtensionCallScope::default(),
             execution_effects: None,
         },
@@ -211,7 +213,7 @@ fn capability_declaration_preserves_original_semantics_and_recomputes_upstream_n
         serde_json::to_vec(&converted).unwrap()
     );
 
-    // 后续普通正文修改也不能删掉未承担的原始语义，或藏起实际新增的需求。
+    // 后续普通正文修改也不能删掉未承担的原始语义，或藏起实际新增的需求
     converted.as_object_mut().unwrap().remove("tools");
     converted["input"] = json!([{"type":"input_image","image_url":"synthetic"}]);
     let request = request

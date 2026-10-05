@@ -1,4 +1,4 @@
-//! 双工消息边界，不解析消息正文或第三方控制协议。
+//! 双工消息边界，不解析消息正文或第三方控制协议
 use crate::{
     engine::middleware::{MiddlewareError, MiddlewareHeader},
     lifecycle::CancellationToken,
@@ -26,11 +26,11 @@ pub struct Message {
     pub payload: Bytes,
 }
 
-/// 等待实际 transport 写入；与接收端分开持有，不在插件调用期间锁住 writer。
+/// 等待实际 transport 写入；与接收端分开持有，不在插件调用期间锁住 writer
 pub trait Sender: Send + Sync {
     fn send(&self, message: Message) -> BoxFuture<'_, Result<(), MiddlewareError>>;
 }
-/// 一个接收端和独立发送端；接收等待不能阻塞发送。
+/// 一个接收端和独立发送端；接收等待不能阻塞发送
 pub trait Session: Sender {
     fn receive(&self) -> BoxFuture<'_, Result<Option<Message>, MiddlewareError>>;
 }

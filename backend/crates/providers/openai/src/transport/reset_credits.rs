@@ -1,4 +1,4 @@
-//! Codex Desktop 主动额度重置卡 HTTP contract。
+//! Codex Desktop 主动额度重置卡 HTTP contract
 
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
@@ -16,13 +16,13 @@ use super::{
     response_meta,
 };
 
-/// 单次 reset-credit 响应允许保留和解析的最大字节数。
+/// 单次 reset-credit 响应允许保留和解析的最大字节数
 pub const MAX_CODEX_RESET_CREDITS_BODY_BYTES: usize = 1024 * 1024;
 const MAX_RESET_CREDITS: usize = 1024;
 const MAX_IDENTIFIER_BYTES: usize = 512;
 const MAX_TEXT_BYTES: usize = 2048;
 
-/// 上游返回的一张安全重置卡投影。
+/// 上游返回的一张安全重置卡投影
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexRateLimitResetCredit {
     pub id: String,
@@ -32,14 +32,15 @@ pub struct CodexRateLimitResetCredit {
     pub reset_type: Option<String>,
 }
 
-/// 上游重置卡列表。
+/// 上游重置卡列表
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexRateLimitResetCredits {
     pub available_count: u64,
     pub credits: Vec<CodexRateLimitResetCredit>,
 }
 
-/// 上游消费结果。`code` 的业务含义由调用方按官方状态机解释。
+/// 上游消费结果
+/// `code` 的业务含义由调用方按官方状态机解释
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexRateLimitResetCreditsConsumeResult {
     pub code: String,
@@ -80,7 +81,7 @@ struct ConsumeRequest<'a> {
 }
 
 impl CodexBackendClient {
-    /// 查询当前账号的 Codex Desktop 主动额度重置卡。
+    /// 查询当前账号的 Codex Desktop 主动额度重置卡
     pub async fn list_rate_limit_reset_credits(
         &self,
         context: CodexRequestContext<'_>,
@@ -112,9 +113,9 @@ impl CodexBackendClient {
         })
     }
 
-    /// 消费一张 Codex Desktop 主动额度重置卡。
+    /// 消费一张 Codex Desktop 主动额度重置卡
     ///
-    /// 仅自定义路由明确 404 时按原幂等键回退；传输失败由上层按不确定结果处理。
+    /// 仅自定义路由明确 404 时按原幂等键回退；传输失败由上层按不确定结果处理
     pub async fn consume_rate_limit_reset_credit(
         &self,
         context: CodexRequestContext<'_>,

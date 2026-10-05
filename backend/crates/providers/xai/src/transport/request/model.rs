@@ -1,4 +1,4 @@
-//! 当前 Responses 参数到 Grok 模型能力的转换。
+//! 当前 Responses 参数到 Grok 模型能力的转换
 
 use super::*;
 

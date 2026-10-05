@@ -1,10 +1,10 @@
-//! 路由、调度与重试调用的跨进程数据合同。
+//! 路由、调度与重试调用的跨进程数据合同
 
 use serde::{Deserialize, Serialize};
 
 use crate::SendState;
 
-/// `retry` 只继续宿主已选定的恢复路径，不能改账号、延迟或预算。
+/// `retry` 只继续宿主已选定的恢复路径，不能改账号、延迟或预算
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RetryAction {
@@ -12,7 +12,7 @@ pub enum RetryAction {
     Retry,
 }
 
-/// 重试输入只包含安全事实，不携带上游错误正文、凭据或请求内容。
+/// 重试输入只包含安全事实，不携带上游错误正文、凭据或请求内容
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RetryDecisionRequest {
@@ -36,7 +36,7 @@ pub enum RetryDecision {
     Retry,
 }
 
-/// 策略调用的完整 HTTP 头；值使用 base64 保留非 UTF-8 字节。
+/// 策略调用的完整 HTTP 头；值使用 base64 保留非 UTF-8 字节
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyHeader {
@@ -44,7 +44,7 @@ pub struct PolicyHeader {
     pub value_base64: String,
 }
 
-/// 模型路由调用；原始正文在 RPC 二进制载荷中独立传递。
+/// 模型路由调用；原始正文在 RPC 二进制载荷中独立传递
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelRouteRequest {
@@ -58,7 +58,7 @@ pub struct ModelRouteRequest {
     pub headers: Vec<PolicyHeader>,
 }
 
-/// 模型路由决定；宿主仍会复核目标、Key 权限和模型能力。
+/// 模型路由决定；宿主仍会复核目标、Key 权限和模型能力
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModelRouteDecision {
@@ -72,7 +72,7 @@ pub enum ModelRouteDecision {
     Reject,
 }
 
-/// 候选账号的即时调度指标；凭据和账号资料通过宿主账号接口读取。
+/// 候选账号的即时调度指标；凭据和账号资料通过宿主账号接口读取
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountScheduleCandidate {
@@ -92,7 +92,7 @@ pub struct AccountScheduleCandidate {
     pub first_output_latency_ms: Option<u64>,
 }
 
-/// 账号调度输入；候选账号及即时调度指标由宿主冻结。
+/// 账号调度输入；候选账号及即时调度指标由宿主冻结
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountScheduleRequest {
@@ -104,7 +104,7 @@ pub struct AccountScheduleRequest {
     pub candidates: Vec<AccountScheduleCandidate>,
 }
 
-/// 账号调度结果；账号租约始终由宿主在决定返回后取得。
+/// 账号调度结果；账号租约始终由宿主在决定返回后取得
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AccountScheduleDecision {

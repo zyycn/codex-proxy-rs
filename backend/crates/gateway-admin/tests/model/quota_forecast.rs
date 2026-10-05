@@ -1,3 +1,5 @@
+//! 验证额度预测的窗口选择、容量估算与无效样本边界
+
 use chrono::{DateTime, Duration, Utc};
 use gateway_admin::model::{
     accounts::{AccountCost, AccountUsage},
@@ -311,7 +313,7 @@ fn partial_costs_keep_estimates_from_known_amounts() {
 fn missing_tokens_and_costs_do_not_block_recorded_capacity_estimates() {
     let source = quota(vec![window("week", 7)]);
     let mut sample = samples(&source).remove(0);
-    // 完整请求之外混有缺少计量的成功请求，不把已有用量和费用一并作废。
+    // 完整请求之外混有缺少计量的成功请求，不把已有用量和费用一并作废
     sample.usage.request_count += 2;
     sample.usage.missing_token_count = 2;
     sample.usage.unavailable_cost_count = 2;

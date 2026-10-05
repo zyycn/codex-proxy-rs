@@ -1,3 +1,5 @@
+//! 插件下载凭据的加密持久化、读取与引用清理
+
 use gateway_admin::model::audit::MutationAuditOperation;
 use gateway_admin::{
     model::{
@@ -47,7 +49,7 @@ pub(super) async fn save(
     context: &MutationContext,
 ) -> AdminStoreResult<Revision> {
     let id = uuid::Uuid::parse_str(&credential.info.id).map_err(|_| unavailable())?;
-    // 只有持久化边界显式展开 secret，不给敏感领域类型实现通用 Serialize。
+    // 只有持久化边界显式展开 secret，不给敏感领域类型实现通用 Serialize
     let secret = match &credential.authentication {
         SourceAuthentication::Github { token } => {
             serde_json::json!({"kind":"github", "token":token.expose_secret()})
@@ -91,7 +93,7 @@ pub(super) async fn save(
     admin_revision(revision)
 }
 
-/// 只回收本次删除制品使用过且已无引用的凭据，保留其他插件共享的下载认证。
+/// 只回收本次删除制品使用过且已无引用的凭据，保留其他插件共享的下载认证
 pub(super) async fn delete_unused(
     tx: &mut Transaction<'_, Postgres>,
     ids: &[uuid::Uuid],

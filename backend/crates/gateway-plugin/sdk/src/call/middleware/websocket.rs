@@ -1,4 +1,4 @@
-//! 双工消息使用二进制 payload 或惰性句柄，避免强制 JSON/UTF-8 解码。
+//! 双工消息使用二进制 payload 或惰性句柄，避免强制 JSON/UTF-8 解码
 use super::MiddlewareHeader;
 use serde::{Deserialize, Serialize};
 pub const SEND_METHOD: &str = "host.middleware.send";

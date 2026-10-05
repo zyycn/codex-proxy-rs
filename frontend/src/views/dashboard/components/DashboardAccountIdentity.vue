@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView } from '../composables/useDashboard'
+import type { dashboardSnapshotView } from '../presenter'
 import { computed } from 'vue'
 
+import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import { stablePresetVisualToneClass } from '@/utils/color'
 import { authenticationIcon, formatAuthenticationLabel, formatProviderLabel, providerIcon } from '@/utils/providers'
-import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
-import { stablePresetVisualToneClass } from '@/views/accounts/utils/visualTone'
 
 type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
 type DashboardAccount = DashboardSnapshot['accountUsage'][number]

@@ -1,3 +1,5 @@
+//! 验证插件实例的精确授权、版本替换与配置和敏感值原子提交
+
 use std::collections::BTreeMap;
 
 use gateway_admin::{
@@ -73,7 +75,7 @@ async fn management_authorization_checks_exact_target_without_loading_secrets() 
         artifact_sha256: saved.instance.artifact_sha256.clone(),
         revision: saved.instance.revision.get(),
     };
-    // 故意留下不能解码为密钥映射的测试数据，授权查询不得读取或解释它。
+    // 故意留下不能解码为密钥映射的测试数据，授权查询不得读取或解释它
     sqlx::query("update plugin_instance_secrets set secrets_json=$2 where instance_id=$1")
         .bind(uuid::Uuid::parse_str(&target.instance_id).unwrap())
         .bind(serde_json::json!({"token": false}))

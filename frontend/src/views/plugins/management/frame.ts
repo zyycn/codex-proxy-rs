@@ -44,7 +44,7 @@ const JAVASCRIPT_CONTENT_TYPES = new Set([
   'text/javascript',
 ])
 
-export interface AssembledPluginPage {
+interface AssembledPluginPage {
   srcdoc: string
   revoke: () => void
 }

@@ -1,4 +1,4 @@
-//! 按 Key 串行检查限额，并幂等累计已取得的 USD 费用。
+//! 按 Key 串行检查限额，并幂等累计已取得的 USD 费用
 
 use gateway_admin::model::audit::MutationAuditOperation;
 use std::{collections::BTreeMap, sync::Mutex, time::Duration};
@@ -56,7 +56,7 @@ async fn reset_client_key_budget_in_transaction(
     command: &ResetClientKeyBudget,
     context: &MutationContext,
 ) -> StoreResult<()> {
-    // 与准入、结算共用 Key 行锁，重置边界必须在取得锁之后确定。
+    // 与准入、结算共用 Key 行锁，重置边界必须在取得锁之后确定
     let exists =
         sqlx::query_scalar::<_, String>("select id from client_api_keys where id = $1 for update")
             .bind(command.id.as_str())
@@ -78,7 +78,7 @@ async fn reset_client_key_budget_in_transaction(
         ClientKeyBudgetPeriod::Weekly | ClientKeyBudgetPeriod::All
     );
     let reset_at = Utc::now();
-    // 起止时间收拢到重置边界，窗口保持未开启，同时排除重置前完成的迟到费用。
+    // 起止时间收拢到重置边界，窗口保持未开启，同时排除重置前完成的迟到费用
     sqlx::query(
         "update client_key_budget_windows set
         daily_used_usd = case when $2 then 0 else daily_used_usd end,
@@ -148,7 +148,7 @@ impl PgClientBudgetStore {
     }
 
     async fn admit_inner(&self, key_id: ClientApiKeyId) -> Result<(), GatewayError> {
-        // 短暂存储故障后按原金额重试；进程退出丢失的费用不转成人工核账或阻断 Key。
+        // 短暂存储故障后按原金额重试；进程退出丢失的费用不转成人工核账或阻断 Key
         let retries = self
             .retry
             .lock()
@@ -240,7 +240,7 @@ impl PgClientBudgetStore {
 
     async fn settle_inner(&self, charge: &ClientBudgetCharge) -> Result<(), ClientBudgetError> {
         let mut tx = self.pool.begin().await.map_err(|_| ClientBudgetError)?;
-        // 与准入统一先锁 Key，再写窗口和费用，串行化同一 Key 的并发结算。
+        // 与准入统一先锁 Key，再写窗口和费用，串行化同一 Key 的并发结算
         let key = sqlx::query_scalar::<_, String>(
             "select id from client_api_keys where id = $1 for update",
         )
@@ -248,7 +248,7 @@ impl PgClientBudgetStore {
         .fetch_optional(&mut *tx)
         .await
         .map_err(|_| ClientBudgetError)?;
-        let Some(key) = key else { return Ok(()) }; // 删除 Key 时也会删除其费用记录。
+        let Some(key) = key else { return Ok(()) }; // 删除 Key 时也会删除其费用记录
         settle_in_transaction(&mut tx, &key, charge, self.timezone)
             .await
             .map_err(|_| ClientBudgetError)?;
@@ -263,7 +263,7 @@ async fn settle_in_transaction(
     timezone: gateway_core::time::DeploymentTimeZone,
 ) -> Result<(), sqlx::Error> {
     let completed_at = DateTime::<Utc>::from(charge.completed_at);
-    // 仅在请求结束时写入费用；请求 ID 冲突时不重复累计。
+    // 仅在请求结束时写入费用；请求 ID 冲突时不重复累计
     let changed = sqlx::query(
         "insert into client_key_charge_events (request_id, client_api_key_id, amount_usd, completed_at)
             values ($1, $2, $3::text::numeric, $4)
@@ -314,7 +314,7 @@ async fn advance_windows(
     used_at: DateTime<Utc>,
     timezone: gateway_core::time::DeploymentTimeZone,
 ) -> Result<(), sqlx::Error> {
-    // 已打开窗口不因部署时区变化清零；续接起点不能早于旧窗口末端或人工重置边界。
+    // 已打开窗口不因部署时区变化清零；续接起点不能早于旧窗口末端或人工重置边界
     let day = timezone
         .day_start(now)
         .ok_or_else(|| sqlx::Error::Protocol("invalid budget day".to_owned()))?;

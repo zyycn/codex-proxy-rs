@@ -1,3 +1,5 @@
+//! 受管出站请求的 DNS 解析、地址分类与网络范围校验
+
 use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
@@ -8,7 +10,7 @@ use ipnet::IpNet;
 
 use super::{HttpError, HttpErrorKind};
 
-/// 默认仅允许公网；额外地址段来自明确授权，不由请求或 DNS 回应扩大。
+/// 默认仅允许公网；额外地址段来自明确授权，不由请求或 DNS 回应扩大
 #[derive(Clone, Default)]
 pub struct NetworkPolicy {
     additional: Vec<IpNet>,
@@ -16,7 +18,7 @@ pub struct NetworkPolicy {
 }
 
 impl NetworkPolicy {
-    /// 完整信任的宿主调用方可以访问任意地址；仍使用相同的 DNS 与传输实现。
+    /// 完整信任的宿主调用方可以访问任意地址；仍使用相同的 DNS 与传输实现
     #[must_use]
     pub const fn unrestricted() -> Self {
         Self {
@@ -60,7 +62,7 @@ impl NetworkPolicy {
     }
 }
 
-/// DNS 只产出候选地址；连接层只使用通过授权检查的地址，不再次解析目标域名。
+/// DNS 只产出候选地址；连接层只使用通过授权检查的地址，不再次解析目标域名
 pub trait DnsResolver: Send + Sync {
     fn resolve(
         &self,
@@ -137,7 +139,7 @@ fn public_address(address: IpAddr) -> bool {
         }
         IpAddr::V6(ip) => {
             let segments = ip.segments();
-            // 只默认开放全球单播；隧道、文档与协议专用地址均需显式授予。
+            // 只默认开放全球单播；隧道、文档与协议专用地址均需显式授予
             segments[0] & 0xe000 == 0x2000
                 && !(segments[0] == 0x2001 && segments[1] < 0x0200)
                 && !(segments[0] == 0x2001 && segments[1] == 0x0db8)

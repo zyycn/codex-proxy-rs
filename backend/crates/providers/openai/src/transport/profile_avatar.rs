@@ -1,4 +1,4 @@
-//! Codex 官方个人资料头像的固定来源流式 transport。
+//! Codex 官方个人资料头像的固定来源流式 transport
 
 use std::{pin::Pin, time::Duration};
 
@@ -24,16 +24,16 @@ const AUTH0_AVATAR_PATH_PREFIX: &str = "/avatars/";
 const PROFILE_AVATAR_HEADERS_TIMEOUT: Duration = Duration::from_secs(15);
 const PROFILE_AVATAR_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 头像正文流；不累积完整正文，也不设置总字节数上限。
+/// 头像正文流；不累积完整正文，也不设置总字节数上限
 pub type CodexProfileAvatarStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, CodexProfileAvatarStreamError>> + Send + 'static>>;
 
-/// 响应开始后的头像流失败；不得携带带签名的上游 URL。
+/// 响应开始后的头像流失败；不得携带带签名的上游 URL
 #[derive(Debug, thiserror::Error)]
 #[error("Codex profile avatar stream failed")]
 pub struct CodexProfileAvatarStreamError;
 
-/// 已打开的官方头像响应；MIME 只透传，不做格式白名单判断。
+/// 已打开的官方头像响应；MIME 只透传，不做格式白名单判断
 pub struct CodexProfileAvatar {
     pub content_type: Option<String>,
     pub content_length: Option<u64>,
@@ -63,11 +63,11 @@ pub enum CodexProfileAvatarFetchError {
     TransportUnavailable,
 }
 
-/// 校验来源并构造头像请求；账号凭据仅用于 ChatGPT Estuary。
+/// 校验来源并构造头像请求；账号凭据仅用于 ChatGPT Estuary
 ///
 /// # Errors
 ///
-/// 来源不受支持或请求头无法编码时返回脱敏错误。
+/// 来源不受支持或请求头无法编码时返回脱敏错误
 pub fn build_profile_avatar_request(
     client: &Client,
     base_url: &str,
@@ -97,7 +97,7 @@ pub fn build_profile_avatar_request(
         }
         AUTH0_AVATAR_ORIGIN => {
             avatar_path(&source, AUTH0_AVATAR_PATH_PREFIX)?;
-            // Auth0 的默认头像是公开 CDN 资源，不能携带 ChatGPT 账号凭据。
+            // Auth0 的默认头像是公开 CDN 资源，不能携带 ChatGPT 账号凭据
             client
                 .get(source)
                 .header(USER_AGENT, profile.desktop_user_agent())
@@ -109,11 +109,11 @@ pub fn build_profile_avatar_request(
         .map_err(|_| CodexProfileAvatarFetchError::TransportUnavailable)
 }
 
-/// 打开已校验来源的头像字节流。
+/// 打开已校验来源的头像字节流
 ///
 /// # Errors
 ///
-/// 来源不受支持、请求失败或上游返回非成功状态时返回错误。
+/// 来源不受支持、请求失败或上游返回非成功状态时返回错误
 pub async fn fetch_profile_avatar(
     client: &Client,
     base_url: &str,

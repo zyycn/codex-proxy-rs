@@ -1,3 +1,5 @@
+//! 验证 OpenAI 配置默认值、路径派生与上游地址约束
+
 use std::path::Path;
 
 use provider_openai::config::{DEFAULT_STREAM_MAX_RETRIES, MAX_STREAM_MAX_RETRIES, OpenAiConfig};

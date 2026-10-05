@@ -1,3 +1,5 @@
+//! 账号出站代理管理、占用释放与探测结果的用例测试
+
 use async_trait::async_trait;
 use gateway_admin::{
     model::{MutationContext, Revision, proxies::*},
@@ -230,8 +232,8 @@ async fn linked_accounts_share_plan_resolution_and_only_read_cached_quota() {
         assert_eq!(
             result.items[0].plan_type_display.as_deref(),
             match expected {
-                Some("free") => Some("OpenaiDisplayFree"),
-                Some("plus") => Some("OpenaiDisplayPlus"),
+                Some("free") => Some("openai display: free"),
+                Some("plus") => Some("openai display: plus"),
                 _ => None,
             }
         );

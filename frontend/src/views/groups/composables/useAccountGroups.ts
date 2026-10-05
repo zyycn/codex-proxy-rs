@@ -1,7 +1,6 @@
 import type { AccountGroup, ApiKey, FastMode } from '@/api'
 import { normalizeRgbaHexColor, toast } from '@codex-proxy/ui'
 
-import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   createAccountGroup,
@@ -15,6 +14,7 @@ import {
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useIdSet } from '@/composables/useIdSet'
 import { usePagedQuery } from '@/composables/usePagedQuery'
+import { useRequestState } from '@/composables/useRequestState'
 import { errorMessage } from '@/utils/operation'
 import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../constants'
 
@@ -38,6 +38,7 @@ export function useAccountGroups() {
   const pendingDisableGroup = shallowRef<AccountGroup | null>(null)
   const deleteCount = shallowRef(0)
   const clientKeys = shallowRef<ApiKey[]>([])
+  const referenceKeysRequest = useRequestState()
   const form = ref<AccountGroupFormValue>(emptyForm())
   const savingAction = useAsyncAction()
   const deletingAction = useAsyncAction()
@@ -56,9 +57,7 @@ export function useAccountGroups() {
       }, options),
   })
 
-  const groups = computed(() => query.items.value.map(group => ({
-    ...group,
-  })))
+  const groups = query.items
   const pagination = computed(() => ({
     currentPage: query.page.value,
     pageSize: query.pageSize.value,
@@ -87,18 +86,26 @@ export function useAccountGroups() {
   }
 
   async function loadReferenceKeys() {
+    const requestId = referenceKeysRequest.start()
+    const requestOptions = { signal: referenceKeysRequest.signal }
     try {
       const items: ApiKey[] = []
       let cursor: string | undefined
       do {
-        const result = await getApiKeys({ limit: 200, cursor })
+        const result = await getApiKeys({ limit: 200, cursor }, requestOptions)
+        if (!referenceKeysRequest.isCurrent(requestId))
+          return
         items.push(...result.items)
         cursor = result.nextCursor ?? undefined
       } while (cursor)
       clientKeys.value = items
     }
     catch {
-      clientKeys.value = []
+      if (referenceKeysRequest.isCurrent(requestId))
+        clientKeys.value = []
+    }
+    finally {
+      referenceKeysRequest.finish(requestId)
     }
   }
 
@@ -257,10 +264,13 @@ export function useAccountGroups() {
     void query.execute()
   }
 
-  watchDebounced(searchQuery, () => {
-    query.page.value = 1
-    void query.execute()
-  }, { debounce: 250 })
+  watch(searchQuery, (_value, _previous, onCleanup) => {
+    const timer = setTimeout(() => {
+      query.page.value = 1
+      void query.execute()
+    }, 250)
+    onCleanup(() => clearTimeout(timer))
+  })
   watch(statusQuery, () => {
     query.page.value = 1
     void query.execute()

@@ -1,4 +1,4 @@
-//! 管理端账号目录的 HTTP 合同、凭据动作、路由处理与安全响应投影。
+//! 管理端账号目录的 HTTP 合同、凭据动作、路由处理与安全响应投影
 
 use std::{collections::BTreeSet, convert::Infallible, fmt};
 

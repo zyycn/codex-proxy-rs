@@ -1,3 +1,5 @@
+//! 验证混合中间件挂载保持独立顺序与各次调用的续接状态
+
 use super::*;
 use gateway_core::middleware::{compose, http, service, websocket};
 use http_body_util::BodyExt as _;

@@ -1,3 +1,5 @@
+//! 验证插件重试、模型路由与账号调度策略的顺序及宿主约束
+
 mod compatibility;
 mod facts;
 mod http;
@@ -694,7 +696,7 @@ fn middleware_context(transport: ClientTransport) -> MiddlewareContext {
             client_key_id: ClientApiKeyId::new("key-middleware").unwrap(),
             account_group_ids: Arc::<[AccountGroupId]>::from([]),
             cancellation: CancellationToken::new(),
-            deadline: SystemTime::now() + Duration::from_secs(5),
+            deadline: (SystemTime::now() + Duration::from_secs(5)).into(),
             extension_scope: ExtensionCallScope::default(),
             execution_effects: None,
         },
@@ -718,7 +720,7 @@ fn attempt_middleware_context(effects: Arc<ExecutionEffects>) -> MiddlewareConte
             client_key_id: ClientApiKeyId::new("key-middleware").unwrap(),
             account_group_ids: Arc::<[AccountGroupId]>::from([]),
             cancellation: CancellationToken::new(),
-            deadline: SystemTime::now() + Duration::from_secs(5),
+            deadline: (SystemTime::now() + Duration::from_secs(5)).into(),
             extension_scope: ExtensionCallScope::default(),
             execution_effects: Some(effects),
         },
@@ -1158,7 +1160,7 @@ async fn real_request_plugins_rewrite_settings_in_onion_order() {
             max_concurrency: 2,
             requests_per_minute: 10,
         },
-        timeout_ms: 60_000,
+        timeout_ms: Some(60_000),
     };
     let baseline_json = serde_json::to_value(&baseline).unwrap();
     let host_snapshot = gateway_core::routing::RuntimeSnapshot::new(
@@ -1203,7 +1205,7 @@ async fn real_request_plugins_rewrite_settings_in_onion_order() {
     let mut last = first.clone();
     last["runtime"]["model_mappings"] = serde_json::json!({"alias":"model-two"});
     last["timeout_ms"] = serde_json::json!(90_000);
-    // 显式写回宿主值也要记录覆盖，否则 Key 默认值会再次生效。
+    // 显式写回宿主值也要记录覆盖，否则 Key 默认值会再次生效
     last["runtime"]["request_profiles"] = serde_json::json!({"openai":{"identity":"host"}});
     let worker = std::fs::read(env!("CARGO_BIN_EXE_gateway-plugin-test-middleware")).unwrap();
     let package = crate::support::package_with_contributions(
@@ -1222,7 +1224,7 @@ async fn real_request_plugins_rewrite_settings_in_onion_order() {
     ], package).await;
     let generation = prepare(&runtime).await;
     let plan = runtime.middleware_registry().resolve(&generation).unwrap();
-    // 连续调用使用同一宿主基线，前一次插件改写不能泄漏到后一次。
+    // 连续调用使用同一宿主基线，前一次插件改写不能泄漏到后一次
     for _ in 0..2 {
         let expected: ExecutionSettings = serde_json::from_value(last.clone()).unwrap();
         let next = (Downstream {
@@ -1344,7 +1346,7 @@ async fn sdk_middleware_entry_registers_and_maps_a_real_process_response() {
     })
     .await
     .unwrap();
-    // 模拟慢消费者：SDK 可以继续发起读回调，但宿主不得预读第二个源。
+    // 模拟慢消费者：SDK 可以继续发起读回调，但宿主不得预读第二个源
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(reads.load(Ordering::Relaxed), 1);
     let frame = body.next_frame().await.unwrap().unwrap();
@@ -1365,7 +1367,7 @@ async fn sdk_middleware_entry_registers_and_maps_a_real_process_response() {
     })
     .await
     .unwrap();
-    // 尚未消费源帧就关闭，等待源归还的回调必须一起取消并释放下游正文。
+    // 尚未消费源帧就关闭，等待源归还的回调必须一起取消并释放下游正文
     reads.store(0, Ordering::Relaxed);
     let response = plan
         .handle(

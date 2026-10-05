@@ -1,3 +1,5 @@
+//! 验证插件上游适配的认证、续接、事件交付与计费边界
+
 use std::{
     num::NonZeroU32,
     sync::{
@@ -879,7 +881,7 @@ async fn adapter_reconfiguration_disable_and_rollback_keep_inflight_generation_a
     let restored = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(4).unwrap())
         .await
         .unwrap();
-    // 恢复同一配置仍是新代次，不能复活旧进程中的续接身份。
+    // 恢复同一配置仍是新代次，不能复活旧进程中的续接身份
     let error = execute(&restored, account.clone(), "key-one", Some(old_state))
         .next()
         .await

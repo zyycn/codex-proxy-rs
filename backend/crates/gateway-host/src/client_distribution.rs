@@ -1,4 +1,4 @@
-//! RG-Adguard Store 页面解析与官方 Codex Desktop 下载回退。
+//! RG-Adguard Store 页面解析与官方 Codex Desktop 下载回退
 
 use std::{collections::BTreeMap, time::Duration};
 
@@ -29,12 +29,12 @@ const OFFICIAL_X64_URL: &str = "https://persistent.oaistatic.com/codex-app-prod/
 const OFFICIAL_ARM64_URL: &str =
     "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-arm64.msix";
 
-/// 下载页请求或解析失败的稳定分类。
+/// 下载页请求或解析失败的稳定分类
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientDistributionResolutionErrorKind {
-    /// 上游请求不可用。
+    /// 上游请求不可用
     Unavailable,
-    /// 上游响应不满足受信合同。
+    /// 上游响应不满足受信合同
     InvalidResponse,
 }
 
@@ -174,11 +174,11 @@ impl ClientDistributionResolver for RgAdguardClientDistribution {
     }
 }
 
-/// 从 RG-Adguard HTML 中选择每个受支持架构的最新有效主包。
+/// 从 RG-Adguard HTML 中选择每个受支持架构的最新有效主包
 ///
 /// # Errors
 ///
-/// 页面没有任何满足包身份、下载地址和过期时间约束的结果时返回无效响应。
+/// 页面没有任何满足包身份、下载地址和过期时间约束的结果时返回无效响应
 pub fn parse_store_packages(
     html: &str,
     now: DateTime<Utc>,
@@ -357,7 +357,7 @@ fn official_fallback(now: DateTime<Utc>) -> CodexDesktopWindowsDownloads {
     }
 }
 
-/// 为动态结果中缺失的架构补齐 OpenAI 官方稳定包。
+/// 为动态结果中缺失的架构补齐 OpenAI 官方稳定包
 #[must_use]
 pub fn complete_with_official_fallback(
     packages: Vec<ClientDownloadPackage>,

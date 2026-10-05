@@ -1,3 +1,5 @@
+//! 插件制品的验证、接受、安装与删除，以及首次安装的默认实例配置
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -30,7 +32,7 @@ use crate::{
 
 use super::state::PluginStateService;
 
-/// 远程插件来源访问所需的传输与受管出站代理目录。
+/// 远程插件来源访问所需的传输与受管出站代理目录
 pub struct PluginDistributionPorts {
     pub(super) transport: Arc<dyn PluginDistribution>,
     pub(super) proxies: Arc<dyn ProxyStore>,
@@ -43,7 +45,7 @@ impl PluginDistributionPorts {
     }
 }
 
-/// 所有安装入口在取得完整包后进入同一校验与事务流程。
+/// 所有安装入口在取得完整包后进入同一校验与事务流程
 pub struct PluginsService {
     pub(super) store: Arc<dyn PluginStore>,
     pub(super) inspector: Arc<dyn PluginPackageInspector>,
@@ -118,7 +120,7 @@ impl PluginsService {
         })
     }
 
-    /// 管理上传固定为自定义来源；调用方不能借通用参数声明官方身份。
+    /// 管理上传固定为自定义来源；调用方不能借通用参数声明官方身份
     pub async fn install_upload(
         &self,
         archive: Arc<[u8]>,
@@ -135,7 +137,7 @@ impl PluginsService {
         self.complete_install(mutation, context).await
     }
 
-    /// 接受已导入但尚未安装的制品；官方发行导入也必须经过管理员的这一步。
+    /// 接受已导入但尚未安装的制品；官方发行导入也必须经过管理员的这一步
     pub async fn accept_artifact(
         &self,
         digest: &str,
@@ -185,7 +187,7 @@ impl PluginsService {
             .await?;
 
         // 其它管理员写入或同插件的并发安装可能推进全局 revision；稳定 creation ID
-        // 配合每轮重新读取，既不会复制默认实例，也不会覆盖先完成的另一个版本。
+        // 配合每轮重新读取，既不会复制默认实例，也不会覆盖先完成的另一个版本
         for _ in 0..3 {
             let snapshot = self
                 .store
@@ -311,7 +313,7 @@ fn default_instance_id(plugin_id: &str) -> String {
     let digest = hash.finalize();
     let mut bytes = [0_u8; 16];
     bytes.copy_from_slice(&digest[..16]);
-    // RFC 9562 UUIDv8 保留给应用自定义派生；variant 固定为 RFC 4122。
+    // RFC 9562 UUIDv8 保留给应用自定义派生；variant 固定为 RFC 4122
     bytes[6] = (bytes[6] & 0x0f) | 0x80;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     uuid::Uuid::from_bytes(bytes).to_string()

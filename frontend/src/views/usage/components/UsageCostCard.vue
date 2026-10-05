@@ -9,12 +9,12 @@ import {
   requestActivityByBucket,
   zeroInactiveValues,
 } from '@/components/charts/timeSeriesGap'
+import { tooltipIndex, tooltipRows } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
-import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/format'
+import { decimalDisplayNumber, formatLocalizedCompactNumber as formatCompactNumber, formatPercent, formatUsd } from '@/utils/format'
 
 import {
-  tooltipIndex,
-  tooltipRows,
+  formatUsdAxis,
   usageCategoryAxis,
   usageGapAwareLineSeries,
   usageLegend,
@@ -23,12 +23,6 @@ import {
   usageTooltipItem,
   usageValueAxis,
 } from '../utils/chart'
-import {
-  decimalDisplayNumber,
-  formatPercent,
-  formatUsd,
-  formatUsdAxis,
-} from '../utils/format'
 
 type Cost = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['cost']
 type Activity = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']['points']

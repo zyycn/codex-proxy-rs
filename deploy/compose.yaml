@@ -64,6 +64,9 @@ services:
     logging: *json-logging
 
   codex-proxy-rs:
+    extends:
+      file: config.yaml
+      service: app-runtime
     image: ${CPR_IMAGE:-ghcr.io/zyycn/codex-proxy-rs:latest}
     build:
       context: ..

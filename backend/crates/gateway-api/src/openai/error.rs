@@ -1,4 +1,4 @@
-//! OpenAI 客户端协议的稳定错误响应。
+//! OpenAI 客户端协议的稳定错误响应
 
 use axum::{
     Json,
@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use super::responses::ProtocolErrorBody;
 
-/// OpenAI 风格错误响应。
+/// OpenAI 风格错误响应
 pub fn openai_error_response(
     status: StatusCode,
     message: &str,
@@ -31,7 +31,7 @@ pub fn openai_error_response(
     }
 }
 
-/// Codex 将这两个容量码视为不可重试；仅在交付边界转换，内部仍保留真实上游事实。
+/// Codex 将这两个容量码视为不可重试；仅在交付边界转换，内部仍保留真实上游事实
 pub(super) fn client_error_code(code: &str) -> &str {
     match code {
         "server_is_overloaded" | "slow_down" => "server_error",
@@ -39,7 +39,7 @@ pub(super) fn client_error_code(code: &str) -> &str {
     }
 }
 
-/// 为 HTTP 错误或流内失败保留原有字段，仅投影客户端需要的重试信号。
+/// 为 HTTP 错误或流内失败保留原有字段，仅投影客户端需要的重试信号
 pub(super) fn capacity_error_for_client(data: &Value) -> Option<Value> {
     const CODE_PATHS: [&str; 2] = ["/error/code", "/response/error/code"];
     let capacity_code = |value: &Value| {
@@ -61,7 +61,7 @@ pub(super) fn capacity_error_for_client(data: &Value) -> Option<Value> {
             *code = Value::String("server_error".to_owned());
         }
     }
-    // WS 包装错误按 HTTP 状态分类；保留 400/429 会使客户端终止重试。
+    // WS 包装错误按 HTTP 状态分类；保留 400/429 会使客户端终止重试
     for field in ["status", "status_code"] {
         if let Some(status) = projected.get_mut(field)
             && status.is_number()
@@ -72,12 +72,12 @@ pub(super) fn capacity_error_for_client(data: &Value) -> Option<Value> {
     Some(projected)
 }
 
-/// 严格协议 decoder/encoder 返回的安全错误 body。
+/// 严格协议 decoder/encoder 返回的安全错误 body
 pub fn protocol_error_response(status: StatusCode, body: ProtocolErrorBody) -> Response {
     (status, Json(body.into_value())).into_response()
 }
 
-/// 下游 Client API Key 无效。
+/// 下游 Client API Key 无效
 pub fn missing_client_api_key_response() -> (StatusCode, Json<Value>) {
     openai_error_response(
         StatusCode::UNAUTHORIZED,
@@ -87,7 +87,7 @@ pub fn missing_client_api_key_response() -> (StatusCode, Json<Value>) {
     )
 }
 
-/// RuntimeSnapshot 当前不允许接收新的配置依赖请求。
+/// RuntimeSnapshot 当前不允许接收新的配置依赖请求
 pub fn runtime_unavailable_response() -> (StatusCode, Json<Value>) {
     openai_error_response(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -97,7 +97,7 @@ pub fn runtime_unavailable_response() -> (StatusCode, Json<Value>) {
     )
 }
 
-/// 已识别 Codex 客户端不满足最低版本要求。
+/// 已识别 Codex 客户端不满足最低版本要求
 pub fn client_version_rejection_response(
     rejection: &ClientVersionRejection,
 ) -> (StatusCode, Json<Value>) {
@@ -138,7 +138,7 @@ pub fn client_version_rejection_response(
     )
 }
 
-/// 对外模型不存在。
+/// 对外模型不存在
 pub fn model_not_found_response() -> (StatusCode, Json<Value>) {
     openai_error_response(
         StatusCode::NOT_FOUND,
@@ -148,7 +148,7 @@ pub fn model_not_found_response() -> (StatusCode, Json<Value>) {
     )
 }
 
-/// 将 core Engine 错误收敛为稳定 Gateway 分类。
+/// 将 core Engine 错误收敛为稳定 Gateway 分类
 #[must_use]
 pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
     match error {
@@ -178,7 +178,7 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
     }
 }
 
-/// Gateway 错误的 OpenAI HTTP 表达。
+/// Gateway 错误的 OpenAI HTTP 表达
 pub fn gateway_error_response(error: &GatewayError) -> Response {
     let (status, default_type, default_code) = gateway_error_contract(error.kind());
     let mut response = openai_error_response(
@@ -204,7 +204,7 @@ pub fn gateway_error_response(error: &GatewayError) -> Response {
     response
 }
 
-/// 在下游尚未提交时交付 Provider 的 HTTP 失败响应，并应用客户端容量恢复合同。
+/// 在下游尚未提交时交付 Provider 的 HTTP 失败响应，并应用客户端容量恢复合同
 pub fn engine_error_response(error: &EngineError) -> Response {
     let capacity_unavailable = matches!(error, EngineError::Provider(error)
         if error.kind() == ProviderErrorKind::UpstreamCapacityUnavailable);
@@ -251,7 +251,7 @@ pub fn engine_error_response(error: &EngineError) -> Response {
     if capacity_unavailable {
         *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
     }
-    // 正文未完整取得时不能透传残缺响应，但已确认的上游关联 ID 仍应交付。
+    // 正文未完整取得时不能透传残缺响应，但已确认的上游关联 ID 仍应交付
     if let EngineError::Provider(error) = error
         && let Some(request_id) = error.upstream_request_id()
         && let Ok(value) = HeaderValue::from_str(request_id.as_str())
@@ -261,7 +261,7 @@ pub fn engine_error_response(error: &EngineError) -> Response {
     response
 }
 
-/// Gateway 错误稳定映射，供 HTTP、SSE 和 WebSocket 共用。
+/// Gateway 错误稳定映射，供 HTTP、SSE 和 WebSocket 共用
 #[must_use]
 pub const fn gateway_error_contract(
     kind: GatewayErrorKind,

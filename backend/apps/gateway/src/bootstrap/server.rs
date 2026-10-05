@@ -1,4 +1,4 @@
-//! 服务模式完成全部组装后交给 Host 监听，并在请求和 Worker 排空后关闭插件。
+//! 服务模式完成全部组装后交给 Host 监听，并在请求和 Worker 排空后关闭插件
 
 use gateway_host::ConfigError;
 
@@ -8,7 +8,7 @@ use super::{
     startup::{Environment, Mode, Providers},
 };
 
-/// 按冻结顺序初始化全部 Bundle，并把进程阻塞权交给 Host。
+/// 按冻结顺序初始化全部 Bundle，并把进程阻塞权交给 Host
 pub async fn run() -> Result<(), BootstrapError> {
     let config = gateway_host::load_config::<GatewayConfig>()?;
     let environment = Environment::initialize(config.host, config.store, Mode::Server).await?;
@@ -126,7 +126,7 @@ pub async fn run() -> Result<(), BootstrapError> {
             if let Some(snapshot) = snapshot {
                 return middleware.resolve(snapshot.extensions()?);
             }
-            // 数据面未就绪时，管理与诊断路由仍可使用发布候选中的插件。
+            // 数据面未就绪时，管理与诊断路由仍可使用发布候选中的插件
             let diagnostic = snapshots.snapshot_for_diagnostics()?;
             middleware.resolve(diagnostic.extensions()?)
         }

@@ -1,3 +1,5 @@
+//! 验证 OpenAI 令牌刷新、凭据状态与失败反馈的持久化
+
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -383,6 +385,50 @@ async fn scheduled_refresh_uses_the_current_margin_without_persisting_a_normal_s
             .next_refresh_at()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn scheduled_refresh_staggers_accounts_sharing_the_same_expiry() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let refresher = SingleUseRefresher::new();
+    let service = refresh_service(&store, Arc::clone(&refresher), policy);
+    // margin=300s：寻找一个错峰偏移覆盖到 exp、一个未覆盖的账号，两者共享同一到期时刻。
+    let policy_value = refresh_policy(Duration::from_secs(5 * 60));
+    let mut covered = None;
+    let mut pending = None;
+    for index in 0..64 {
+        let candidate =
+            ProviderAccountId::new(format!("acct_stagger_{index}")).expect("valid account");
+        let stagger = policy_value.refresh_stagger(&candidate).as_secs();
+        if stagger >= 150 && covered.is_none() {
+            covered = Some(candidate.clone());
+        }
+        if stagger < 60 && pending.is_none() {
+            pending = Some(candidate);
+        }
+    }
+    let covered = covered.expect("an account covered by its stagger");
+    let pending = pending.expect("an account not yet covered by its stagger");
+    // exp = now+400s：covered 的有效提前量 ≥ 450s（到期）；pending 的 ≤ 360s，
+    // 即使种子与扫描之间存在秒级耗时也不会提前触发。
+    let expires_at = SystemTime::now()
+        .checked_add(Duration::from_secs(400))
+        .expect("test expiry");
+    seed_refreshable_account(&store, covered.as_str(), expires_at, None).await;
+    seed_refreshable_account(&store, pending.as_str(), expires_at, None).await;
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Refreshed { account_id, .. }] if account_id == covered.as_str()
+    ));
+    assert_eq!(refresher.calls(), 1);
+    // 未到错峰窗口的账号本轮零接触：不刷新、也不落退避计划。
+    let pending_account = store.account(pending.as_str()).expect("seeded account");
+    assert!(pending_account.next_refresh_at().is_none());
+    assert_eq!(pending_account.credential_state(), CredentialState::Ready);
 }
 
 #[tokio::test]
@@ -829,7 +875,7 @@ struct QuotaRejectionDuringRefresh {
 #[async_trait]
 impl TokenRefresher for QuotaRejectionDuringRefresh {
     async fn refresh(&self, _: &str) -> Result<TokenPair, RefreshFailure> {
-        // 模拟 RT 请求在途时，手动或周期额度查询先收到 401。
+        // 模拟 RT 请求在途时，手动或周期额度查询先收到 401
         if self.background_quota {
             assert_eq!(
                 self.quota

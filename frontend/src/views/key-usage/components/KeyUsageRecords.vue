@@ -3,11 +3,11 @@ import type { BaseTablePaginationState as Pagination } from '@codex-proxy/ui'
 import type { KeyUsageRecord, KeyUsageRecordKind } from '@/api/modules/key-usage'
 import { BaseCard, BaseSegmented, BaseTable, BaseTablePagination, defineTableColumns } from '@codex-proxy/ui'
 import { computed } from 'vue'
-import UsageBillingCell from '@/views/usage/components/UsageBillingCell.vue'
-import UsageClientIpCell from '@/views/usage/components/UsageClientIpCell.vue'
-import UsageLatencyCell from '@/views/usage/components/UsageLatencyCell.vue'
-import UsageTokenCell from '@/views/usage/components/UsageTokenCell.vue'
-import UsageTransportBadge from '@/views/usage/components/UsageTransportBadge.vue'
+import UsageBillingCell from '@/components/usage/UsageBillingCell.vue'
+import UsageClientIpCell from '@/components/usage/UsageClientIpCell.vue'
+import UsageLatencyCell from '@/components/usage/UsageLatencyCell.vue'
+import UsageTokenCell from '@/components/usage/UsageTokenCell.vue'
+import UsageTransportBadge from '@/components/usage/UsageTransportBadge.vue'
 
 defineProps<{ rows: KeyUsageRecord[], pagination: Pagination, loading: boolean, error: string, stale: boolean }>()
 defineEmits<{ pageChange: [page: number], pageSizeChange: [size: number] }>()

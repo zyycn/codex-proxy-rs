@@ -1,4 +1,4 @@
-//! WebSocket aggregate/stream 共用事件归约器。
+//! WebSocket aggregate/stream 共用事件归约器
 
 use gateway_protocol::openai::events;
 use serde_json::Value;
@@ -43,7 +43,7 @@ pub(super) fn reduce_websocket_event(
     continuation: &mut WebSocketContinuationState,
 ) -> Result<ReducedWebSocketEvent, CodexWebSocketExchangeError> {
     // 每帧只解析一次 JSON，后续提取全部复用同一 Value；
-    // 不可解析的帧不承载可路由的事件类型，忽略。
+    // 不可解析的帧不承载可路由的事件类型，忽略
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
         return Ok(ReducedWebSocketEvent {
             created_response_id: None,

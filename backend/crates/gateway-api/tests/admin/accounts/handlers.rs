@@ -1,3 +1,5 @@
+//! 验证账号管理接口的身份要求、查询校验与服务调用边界
+
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
@@ -171,7 +173,7 @@ async fn connection_update_requires_admin_and_validates_before_calling_the_servi
     for (authenticated, transport, oauth, expected) in [
         (false, "http", false, StatusCode::UNAUTHORIZED),
         (true, "invalid", false, StatusCode::BAD_REQUEST),
-        // 夹具没有凭据 Store，合法输入必须进入服务，不能按普通设置静默保存。
+        // 夹具没有凭据 Store，合法输入必须进入服务，不能按普通设置静默保存
         (true, "http", false, StatusCode::SERVICE_UNAVAILABLE),
         (true, "http", true, StatusCode::SERVICE_UNAVAILABLE),
     ] {
@@ -214,7 +216,7 @@ async fn personal_info_requires_admin_and_a_valid_account_query() {
             true,
             StatusCode::BAD_REQUEST,
         ),
-        // 此夹具未提供账号 Store，合法查询应透传服务不可用，而非绕过查询。
+        // 此夹具未提供账号 Store，合法查询应透传服务不可用，而非绕过查询
         (
             "?accountId=acct_test",
             true,

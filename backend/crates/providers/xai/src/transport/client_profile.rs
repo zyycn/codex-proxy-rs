@@ -1,4 +1,4 @@
-//! Grok CLI 管理配置与请求级身份解析；发布版本与用户选择分别维护。
+//! Grok CLI 管理配置与请求级身份解析；发布版本与用户选择分别维护
 
 use gateway_core::account::OpaqueProviderData;
 use serde::{Deserialize, Serialize};

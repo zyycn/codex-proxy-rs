@@ -1,4 +1,4 @@
-//! `PgBackupRepository` 的真实 PostgreSQL 集成测试。
+//! `PgBackupRepository` 的真实 PostgreSQL 集成测试
 
 use chrono::Utc;
 use secrecy::SecretString;
@@ -254,7 +254,7 @@ async fn active_task_unique_index_blocks_second_queued() {
         .expect_err("second queued must conflict");
     assert_eq!(error.kind(), AdminStoreErrorKind::Conflict);
 
-    // 第一个任务完成释放名额后，第二个可以插入。
+    // 第一个任务完成释放名额后，第二个可以插入
     let claimed = repository
         .claim_next_queued(Utc::now())
         .await
@@ -352,7 +352,7 @@ async fn storage_identity_is_locked_once_records_exist() {
         command.endpoint = "https://two.example.com".to_owned();
         command
     };
-    // 尚无记录时允许切换 endpoint。
+    // 尚无记录时允许切换 endpoint
     repository
         .update_storage_settings(changed_endpoint, &context())
         .await
@@ -369,7 +369,7 @@ async fn storage_identity_is_locked_once_records_exist() {
         .expect_err("endpoint change must be rejected with records");
     assert_eq!(locked.kind(), AdminStoreErrorKind::Conflict);
 
-    // 只轮换凭据与修改 prefix 仍然允许。
+    // 只轮换凭据与修改 prefix 仍然允许
     let rotation = {
         let mut command = storage_command("https://two.example.com");
         command.access_key_id = "new-ak".to_owned();
@@ -392,7 +392,7 @@ async fn schedule_update_persists_cursor_and_clears_on_disable() {
     };
     let repository = PgBackupRepository::new(db.pool.clone());
 
-    // 启用计划前必须先配置存储并通过连接测试（DB 约束要求）。
+    // 启用计划前必须先配置存储并通过连接测试（DB 约束要求）
     repository
         .update_storage_settings(storage_command("https://one.example.com"), &context())
         .await

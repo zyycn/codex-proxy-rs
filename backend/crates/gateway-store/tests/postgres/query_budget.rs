@@ -1,3 +1,5 @@
+//! 验证数据库查询预算的容量、排队超时与流释放
+
 use std::time::Duration;
 
 use futures::{StreamExt, TryStreamExt, stream};
@@ -34,7 +36,7 @@ async fn query_stream_holds_budget_until_completion_error_or_drop() {
                 Err(StoreError::InvalidData { .. }) => {}
                 other => panic!("unexpected stream result: {other:?}"),
             }
-            // The finished stream may remain alive; its connection slot must already be free.
+            // 已结束的流可以继续存活，但其连接槽位必须已经释放
             budget
                 .run("after terminal", async { Ok(()) })
                 .await

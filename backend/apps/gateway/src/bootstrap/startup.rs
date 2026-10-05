@@ -1,4 +1,4 @@
-//! 启动模式共享的基础设施与 Provider 组装，不启动 HTTP 或 Worker。
+//! 启动模式共享的基础设施与 Provider 组装，不启动 HTTP 或 Worker
 
 use std::{path::PathBuf, sync::Arc};
 

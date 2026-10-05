@@ -1,24 +1,30 @@
 import type { Ref } from 'vue'
-import type { PluginActionContext } from './usePluginActions'
+import type { PluginRefreshContext } from '../utils/actions'
 import type { ConfigurePluginInstanceRequest, PluginArtifact, PluginInstance, PluginVersionPlan } from '@/api'
 import { toast } from '@codex-proxy/ui'
 import { shallowRef } from 'vue'
 import { deletePluginInstance, disablePluginInstance, getPluginArtifacts, getPluginInstances, updatePluginInstance } from '@/api'
+import { useAsyncAction } from '@/composables/useAsyncAction'
+import { notifyPluginError } from '../utils/actions'
 import { configurationStatus } from '../utils/catalog'
 
-interface InstanceContext extends PluginActionContext {
+interface InstanceContext extends PluginRefreshContext {
   artifacts: Ref<PluginArtifact[]>
   onEdit: (pluginId: string) => void
   onSaved: () => void
 }
 
-export function usePluginInstances({ artifacts, refresh, notifyError, runAction, onEdit, onSaved }: InstanceContext) {
+export function usePluginInstances({ artifacts, refresh, onEdit, onSaved }: InstanceContext) {
   const configurationArtifact = shallowRef<PluginArtifact | null>(null)
   const showInstance = shallowRef(false)
   const configurationDraft = shallowRef<PluginVersionPlan | null>(null)
   const configurationError = shallowRef('')
   const editingInstance = shallowRef<PluginInstance | null>(null)
-  const savingInstance = shallowRef(false)
+  const action = useAsyncAction({
+    errorText: false,
+    onError: error => notifyPluginError('插件配置保存失败', error),
+  })
+  const savingInstance = action.loading
   const pendingEnable = shallowRef<{
     request: ConfigurePluginInstanceRequest
     instanceId?: string
@@ -46,16 +52,16 @@ export function usePluginInstances({ artifacts, refresh, notifyError, runAction,
     if (!instance)
       return
     const input = { ...request, expectedRevision: configurationDraft.value?.instanceRevision ?? instance.revision }
-    const result = await runAction(savingInstance, '插件配置保存失败', async () => {
+    const result = await action.run(async () => {
       if (request.enabled) {
-        const pending = await prepareInstanceEnable(input, instance?.id)
+        const pending = await prepareInstanceEnable(input, instance.id)
         if (pending.replacements.length) {
           pendingEnable.value = pending
           showEnableConfirmation.value = true
           return true
         }
       }
-      await persistInstance(input, instance?.id)
+      await persistInstance(input, instance.id)
       return true
     })
     if (!result)
@@ -89,7 +95,7 @@ export function usePluginInstances({ artifacts, refresh, notifyError, runAction,
       openEditInstance(instance)
       return
     }
-    const result = await runAction(savingInstance, '启用配置加载失败', async () => {
+    const result = await action.run(async () => {
       // 不传 secrets，沿用已保存密钥，不读取或回填明文。
       const pending = await prepareInstanceEnable({
         expectedRevision: instance.revision,
@@ -107,7 +113,7 @@ export function usePluginInstances({ artifacts, refresh, notifyError, runAction,
         await persistInstance(pending.request, instance.id)
       }
       return true
-    })
+    }, { onError: error => notifyPluginError('启用配置加载失败', error) })
     if (!result)
       await refresh(true, true)
   }
@@ -116,13 +122,13 @@ export function usePluginInstances({ artifacts, refresh, notifyError, runAction,
     const pending = pendingEnable.value
     if (!showEnableConfirmation.value || !pending || savingInstance.value)
       return
-    const result = await runAction(savingInstance, '配置启用失败', async () => {
+    const result = await action.run(async () => {
       await persistInstance({
         ...pending.request,
         replaceInstances: pending.replacements.map(instance => ({ id: instance.id, expectedRevision: instance.revision })),
       }, pending.instanceId)
       return true
-    })
+    }, { onError: error => notifyPluginError('配置启用失败', error) })
     // 失败后保留编辑草稿或已保存配置，再次提交需重新读取并确认停用范围。
     showEnableConfirmation.value = false
     if (!result)
@@ -150,7 +156,7 @@ export function usePluginInstances({ artifacts, refresh, notifyError, runAction,
       await refresh(true)
     }
     catch (error) {
-      notifyError('插件停用失败', error)
+      notifyPluginError('插件停用失败', error)
     }
     finally {
       busyInstanceId.value = ''
@@ -174,7 +180,7 @@ export function usePluginInstances({ artifacts, refresh, notifyError, runAction,
       await refresh(true)
     }
     catch (error) {
-      notifyError('插件实例删除失败', error)
+      notifyPluginError('插件实例删除失败', error)
     }
     finally {
       busyInstanceId.value = ''

@@ -1,3 +1,5 @@
+//! 验证 Codex 授权参数、安装身份与令牌交换合同
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -146,7 +148,7 @@ fn reauthorization_mutation(
 
 fn id_token(payload: serde_json::Value) -> String {
     let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("payload JSON"));
-    // 官方逻辑只读取 payload；header/signature 不参与本地 metadata 解析。
+    // 官方逻辑只读取 payload；header/signature 不参与本地 metadata 解析
     format!("unverified-header.{payload}.unverified-signature")
 }
 
@@ -192,7 +194,7 @@ async fn complete(
             owner_ref: "test-owner".to_owned(),
             flow_id: started.flow_id,
             callback_url: SecretString::from(format!(
-                "http://localhost:1455/auth/callback?code=code-from-browser&state={state}"
+                "http://127.0.0.1:1455/auth/callback?code=code-from-browser&state={state}"
             )),
         })
         .await?;
@@ -297,7 +299,7 @@ async fn authorize_url_matches_the_official_desktop_parameter_contract() {
     );
     assert_eq!(
         parameters.get("redirect_uri").map(String::as_str),
-        Some("http://localhost:1455/auth/callback")
+        Some("http://127.0.0.1:1455/auth/callback")
     );
     assert_eq!(
         parameters.get("scope").map(String::as_str),

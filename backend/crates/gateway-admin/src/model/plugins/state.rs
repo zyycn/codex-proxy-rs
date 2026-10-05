@@ -1,10 +1,12 @@
+//! 插件私有状态的归属、代次隔离与迁移数据合同
+
 use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Serialize};
 
 use crate::model::Revision;
 
-/// 已由 Runtime 校验的命名空间 schema 与配额事实。
+/// 已由 Runtime 校验的命名空间 schema 与配额事实
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginStateSchema {
@@ -42,7 +44,7 @@ pub struct PluginStateConfiguration {
     pub namespaces: Vec<PluginStateSchema>,
 }
 
-/// 与实例保存同事务提交的状态配置；transition 只引用已完成的 staging 数据。
+/// 与实例保存同事务提交的状态配置；transition 只引用已完成的 staging 数据
 #[derive(Clone, Default)]
 pub struct PluginStateCommit {
     pub configuration: PluginStateConfiguration,
@@ -57,7 +59,8 @@ pub struct PluginStateOwnerRequest {
     pub configuration: PluginStateConfiguration,
 }
 
-/// Store 签发的实例私有状态 fence。插件协议中从不传输这些字段。
+/// Store 签发的实例私有状态 fence
+/// 插件协议中从不传输这些字段
 #[derive(Clone)]
 pub struct PluginStateOwner {
     instance_id: String,
@@ -136,7 +139,7 @@ impl PluginStateNamespaceOwner {
     }
 }
 
-/// 私有值可能含插件自己的敏感状态，故意不实现 `Debug`。
+/// 私有值可能含插件自己的敏感状态，故意不实现 `Debug`
 #[derive(Clone)]
 pub struct PluginStateRecord {
     pub key: String,
@@ -149,7 +152,7 @@ pub struct PutPluginState {
     pub namespace: String,
     pub key: String,
     pub value: serde_json::Value,
-    /// `None` 是 create-only；已有记录必须提交精确版本。
+    /// `None` 是 create-only；已有记录必须提交精确版本
     pub expected_version: Option<u64>,
 }
 
@@ -188,7 +191,7 @@ pub struct ApplyPluginStateMigration {
     pub transition_id: String,
     pub namespace: String,
     pub cursor: Option<String>,
-    /// Runtime 刚读取的有序源键；Store 会在写入前重新读取并逐项比对。
+    /// Runtime 刚读取的有序源键；Store 会在写入前重新读取并逐项比对
     pub expected_keys: Vec<String>,
     pub changes: Vec<PluginStateMigrationChange>,
 }

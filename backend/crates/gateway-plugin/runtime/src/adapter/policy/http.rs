@@ -1,3 +1,5 @@
+//! 将宿主 HTTP 调用接入插件中间件，并管理正文与回调作用域
+
 use std::sync::Arc;
 
 use futures::stream;
@@ -130,7 +132,7 @@ pub(super) async fn invoke(
         })).boxed_unsync();
         Some(body)
     } else {
-        // 返回句柄时不拉取正文，仍消费唯一 End，释放本次 RPC 槽位。
+        // 返回句柄时不拉取正文，仍消费唯一 End，释放本次 RPC 槽位
         if stream
             .next()
             .await

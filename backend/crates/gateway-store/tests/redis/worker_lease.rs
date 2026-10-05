@@ -1,4 +1,4 @@
-//! Worker leader lease 通过 StoreBundle 的中立能力进行集成验证。
+//! Worker leader lease 通过 StoreBundle 的中立能力进行集成验证
 
 use std::collections::BTreeSet;
 use std::str::FromStr;

@@ -1,3 +1,5 @@
+//! 插件管理 HTTP 测试入口，以及制品、实例与权限合同测试
+
 use async_trait::async_trait;
 use gateway_admin::model::plugins::distribution::{
     DownloadedPlugin, GithubReleaseQuery, PluginRelease, RemotePluginLocation, SourceCredential,
@@ -522,7 +524,7 @@ async fn plugin_mutations_require_admin_and_validate_json_on_static_post_routes(
             assert_eq!(
                 response.status(),
                 if authenticated {
-                    // 字段缺失沿用 AdminJson 的结构校验合同。
+                    // 字段缺失沿用 AdminJson 的结构校验合同
                     StatusCode::UNPROCESSABLE_ENTITY
                 } else {
                     StatusCode::UNAUTHORIZED

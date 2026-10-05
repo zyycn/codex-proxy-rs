@@ -1,4 +1,4 @@
-//! 统一请求/响应中间件的跨进程数据合同。
+//! 统一请求/响应中间件的跨进程数据合同
 
 pub mod http;
 pub mod websocket;
@@ -13,7 +13,7 @@ pub const BODY_CLOSE_METHOD: &str = "host.middleware.body_close";
 
 const BODY_FRAME_PREFIX: [u8; 4] = *b"GMB1";
 
-/// 中间件在逻辑请求外层或单次 Provider attempt 内层执行。
+/// 中间件在逻辑请求外层或单次 Provider attempt 内层执行
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MiddlewareMount {
@@ -21,7 +21,7 @@ pub enum MiddlewareMount {
     Attempt,
 }
 
-/// 客户端交付形态；它不授予插件访问底层 HTTP 或 WebSocket 连接。
+/// 客户端交付形态；它不授予插件访问底层 HTTP 或 WebSocket 连接
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MiddlewareTransport {
@@ -31,7 +31,8 @@ pub enum MiddlewareTransport {
     Internal,
 }
 
-/// 正文读取边界。结构化正文只按完整文档或完整 SSE 事件交付。
+/// 正文读取边界
+/// 结构化正文只按完整文档或完整 SSE 事件交付
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MiddlewareBodyFraming {
@@ -40,9 +41,9 @@ pub enum MiddlewareBodyFraming {
     RawBytes,
 }
 
-/// 一个保留顺序与重复项的 HTTP header。
+/// 一个保留顺序与重复项的 HTTP header
 ///
-/// Header 值可能包含不适合日志的客户端数据，因此故意不实现 `Debug`。
+/// Header 值可能包含不适合日志的客户端数据，因此故意不实现 `Debug`
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareHeader {
@@ -50,9 +51,9 @@ pub struct MiddlewareHeader {
     pub value: Vec<u8>,
 }
 
-/// 对宿主保存的原始 header 集合做增量修改；未列出的项保持原样。
+/// 对宿主保存的原始 header 集合做增量修改；未列出的项保持原样
 ///
-/// Header 值可能包含不适合日志的客户端数据，因此故意不实现 `Debug`。
+/// Header 值可能包含不适合日志的客户端数据，因此故意不实现 `Debug`
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MiddlewareHeaderMutation {
@@ -60,12 +61,13 @@ pub enum MiddlewareHeaderMutation {
     Append { name: String, value: Vec<u8> },
 }
 
-/// `middleware.handle` 的请求头。完整正文位于 RPC binary payload。
+/// `middleware.handle` 的请求头
+/// 完整正文位于 RPC binary payload
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareRequestHead {
     pub settings_sources: serde_json::Value,
-    /// 当前请求的完整有效执行设置；尚未建立可改写设置的边界使用 null。
+    /// 当前请求的完整有效执行设置；尚未建立可改写设置的边界使用 null
     #[serde(default)]
     pub settings: serde_json::Value,
     pub request_id: String,
@@ -88,7 +90,7 @@ pub struct MiddlewareRequestHead {
     pub headers: Vec<MiddlewareHeader>,
 }
 
-/// 调用 next 时如何处理宿主保存的原始请求正文。
+/// 调用 next 时如何处理宿主保存的原始请求正文
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MiddlewareRequestBody {
@@ -96,7 +98,7 @@ pub enum MiddlewareRequestBody {
     Replace,
 }
 
-/// 可声明的请求功能；原生续接始终由宿主与 Provider 管理，不能由声明豁免。
+/// 可声明的请求功能；原生续接始终由宿主与 Provider 管理，不能由声明豁免
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestFeature {
@@ -106,7 +108,7 @@ pub enum RequestFeature {
     JsonSchema,
 }
 
-/// 插件承担的功能转换与额外上游需求，均不覆盖正文推导的事实。
+/// 插件承担的功能转换与额外上游需求，均不覆盖正文推导的事实
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityDeclaration {
@@ -114,11 +116,12 @@ pub struct CapabilityDeclaration {
     pub required: Vec<RequestFeature>,
 }
 
-/// 单次 `host.middleware.next` 调用。`Replace` 的完整正文位于 binary payload。
+/// 单次 `host.middleware.next` 调用
+/// `Replace` 的完整正文位于 binary payload
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareNextRequest {
-    /// None 保留原设置；Some 是完整替换，字段删除必须符合对应设置类型。
+    /// None 保留原设置；Some 是完整替换，字段删除必须符合对应设置类型
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,7 +133,7 @@ pub struct MiddlewareNextRequest {
     pub capabilities: Option<CapabilityDeclaration>,
 }
 
-/// 受父调用约束的不透明响应正文句柄。
+/// 受父调用约束的不透明响应正文句柄
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareBodyHandle {
@@ -138,11 +141,12 @@ pub struct MiddlewareBodyHandle {
     pub framing: MiddlewareBodyFraming,
 }
 
-/// `host.middleware.next` 返回的响应头。正文必须通过句柄惰性读取或原样返还。
+/// `host.middleware.next` 返回的响应头
+/// 正文必须通过句柄惰性读取或原样返还
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareNextResponse {
-    /// 绑定本次 next 结果的宿主响应身份；只能在当前父调用内返还。
+    /// 绑定本次 next 结果的宿主响应身份；只能在当前父调用内返还
     pub response: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Box<super::model::facts::ProviderCallMetadata>>,
@@ -154,7 +158,7 @@ pub struct MiddlewareNextResponse {
     pub body: Option<MiddlewareBodyHandle>,
 }
 
-/// 最终正文来源；`PassThrough` 直接转交下游正文，不触发读取。
+/// 最终正文来源；`PassThrough` 直接转交下游正文，不触发读取
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MiddlewareResponseBody {
@@ -163,17 +167,17 @@ pub enum MiddlewareResponseBody {
     Stream { framing: MiddlewareBodyFraming },
 }
 
-/// `middleware.handle` 的最终响应头；插件输出流仍使用既有 RPC Stream/Credit/End。
+/// `middleware.handle` 的最终响应头；插件输出流仍使用既有 RPC Stream/Credit/End
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareResponseHead {
-    /// `Some` 表示基于本层 next 返回的原响应；`None` 表示中间件短路响应。
+    /// `Some` 表示基于本层 next 返回的原响应；`None` 表示中间件短路响应
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<String>,
-    /// 缺省时保留原响应协议；短路响应必须填写。
+    /// 缺省时保留原响应协议；短路响应必须填写
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol: Option<String>,
-    /// 缺省时保留原状态；短路响应必须填写。
+    /// 缺省时保留原状态；短路响应必须填写
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
     #[serde(default)]
@@ -188,7 +192,7 @@ pub struct MiddlewareBodyRead {
     pub maximum_bytes: u32,
 }
 
-/// 读取当前源 frame 的宿主事实，不消费或复制原结算所有权。
+/// 读取当前源 frame 的宿主事实，不消费或复制原结算所有权
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareBodyFacts {
@@ -202,12 +206,12 @@ pub struct MiddlewareBodyFactsResult {
     pub present: bool,
 }
 
-/// `eof` 只在空 payload 时成立；结构化 frame 不拆成任意网络分块。
+/// `eof` 只在空 payload 时成立；结构化 frame 不拆成任意网络分块
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareBodyReadResult {
     pub framing: MiddlewareBodyFraming,
-    /// Runtime 为每个输入 frame 分配的非零单调标识；EOF 时必须为零。
+    /// Runtime 为每个输入 frame 分配的非零单调标识；EOF 时必须为零
     pub source_id: u64,
     pub eof: bool,
     pub terminal: bool,
@@ -223,7 +227,7 @@ pub struct MiddlewareBodyClose {
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareBodyCloseResult {}
 
-/// 一个输出 frame 与其来源的 wire disposition。
+/// 一个输出 frame 与其来源的 wire disposition
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MiddlewareBodyDisposition {
@@ -235,10 +239,10 @@ pub enum MiddlewareBodyDisposition {
     Drop = 5,
 }
 
-/// 插件替换正文流中的一个完整 frame；正文不进入 JSON metadata。
+/// 插件替换正文流中的一个完整 frame；正文不进入 JSON metadata
 #[derive(Clone, PartialEq)]
 pub struct MiddlewareBodyFrame {
-    /// 按需读取的来源快照，不进入插件返回的正文编码。
+    /// 按需读取的来源快照，不进入插件返回的正文编码
     pub facts: Option<Box<super::model::ExecutionEvent>>,
     pub payload: Vec<u8>,
     pub terminal: bool,
@@ -290,7 +294,7 @@ impl MiddlewareBodyFrame {
         }
         self.source_id = source_id;
         self.disposition = disposition;
-        // Mapped frame 的终态只由 Runtime 保存的源 frame 派生。
+        // Mapped frame 的终态只由 Runtime 保存的源 frame 派生
         self.terminal = false;
         Ok(self)
     }
@@ -305,7 +309,7 @@ impl MiddlewareBodyFrame {
         self.disposition
     }
 
-    /// 将 frame 元数据与原始正文编码到一个 RPC stream chunk。
+    /// 将 frame 元数据与原始正文编码到一个 RPC stream chunk
     #[must_use]
     pub fn encode(self) -> Vec<u8> {
         let mut encoded = Vec::with_capacity(14 + self.payload.len());
@@ -317,11 +321,11 @@ impl MiddlewareBodyFrame {
         encoded
     }
 
-    /// 解码一个完整的中间件正文 frame。
+    /// 解码一个完整的中间件正文 frame
     ///
     /// # Errors
     ///
-    /// 魔数或 flags 无效时返回错误。
+    /// 魔数或 flags 无效时返回错误
     pub fn decode(bytes: &[u8]) -> Result<Self, MiddlewareBodyFrameError> {
         if bytes.len() < 14 || bytes[..4] != BODY_FRAME_PREFIX || bytes[13] > 1 {
             return Err(MiddlewareBodyFrameError);

@@ -1,8 +1,10 @@
+//! 插件管理页面、静态资源、请求与授权回调的数据合同
+
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-/// 页面和业务调用绑定同一实例版本；制品摘要单独作为不可变资源身份。
+/// 页面和业务调用绑定同一实例版本；制品摘要单独作为不可变资源身份
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginManagementTarget {
@@ -37,7 +39,7 @@ pub struct StartPluginManagementCallback {
     pub ttl_seconds: u32,
 }
 
-/// state 是短期一次性秘密，只交给发起登录的管理员，不进入 Debug 或日志。
+/// state 是短期一次性秘密，只交给发起登录的管理员，不进入 Debug 或日志
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginManagementCallbackTicket {
@@ -72,7 +74,7 @@ pub struct PluginManagementResource {
     pub public: bool,
 }
 
-/// 原始正文可能含业务数据，不能派生内容型 Debug 或写入诊断日志。
+/// 原始正文可能含业务数据，不能派生内容型 Debug 或写入诊断日志
 pub struct PluginManagementRequest {
     pub method: String,
     pub path: String,

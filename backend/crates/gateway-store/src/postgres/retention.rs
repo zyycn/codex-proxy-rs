@@ -1,4 +1,4 @@
-//! PostgreSQL 保留期投影与单批删除适配器。
+//! PostgreSQL 保留期投影与单批删除适配器
 
 use crate::{admin_store_error, postgres_unavailable};
 use async_trait::async_trait;

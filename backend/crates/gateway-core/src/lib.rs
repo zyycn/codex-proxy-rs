@@ -1,7 +1,8 @@
-//! 多平台 AI 网关的数据面核心。
+//! 多平台 AI 网关的数据面核心
 //!
-//! 本 crate 只描述协议与 Provider 无关的业务语义。HTTP、数据库、Redis、
-//! 具体客户端协议和具体 Provider 都通过外层 adapter 接入。
+//! 本 crate 只描述协议与 Provider 无关的业务语义
+//! HTTP、数据库、Redis、
+//! 具体客户端协议和具体 Provider 都通过外层 adapter 接入
 
 pub mod account;
 pub mod concurrency;
@@ -12,6 +13,7 @@ pub mod event;
 pub mod health;
 pub mod identity;
 pub mod lifecycle;
+pub mod live;
 pub mod metering;
 pub mod middleware;
 pub mod operation;
@@ -47,7 +49,7 @@ use runtime::{
 };
 use task::{WorkerContribution, WorkerDefinitionError};
 
-/// Store 提供给数据面 Core 的封闭能力集合。
+/// Store 提供给数据面 Core 的封闭能力集合
 #[derive(Clone)]
 pub struct CoreStorePorts {
     execution: Arc<dyn ExecutionStore>,
@@ -117,7 +119,7 @@ pub struct CoreBundle {
     worker_contributions: Vec<WorkerContribution>,
 }
 
-/// 已构造但尚未恢复准入或发现 Provider 目录的数据面启动对象。
+/// 已构造但尚未恢复准入或发现 Provider 目录的数据面启动对象
 pub struct CoreStartup {
     ports: CoreStorePorts,
     providers: ProviderRegistry,
@@ -139,7 +141,7 @@ impl CoreStartup {
         self.control.snapshot_control()
     }
 
-    /// 绑定组合根依赖后执行 fail-closed 准入恢复与首次目录发现。
+    /// 绑定组合根依赖后执行 fail-closed 准入恢复与首次目录发现
     pub async fn activate(self) -> Result<CoreBundle, CoreError> {
         restore_client_admission_startup(
             self.ports.execution.as_ref(),
@@ -266,7 +268,7 @@ impl CoreBundle {
     }
 }
 
-/// 首个快照与准入恢复均为监听前 fail-closed 屏障。
+/// 首个快照与准入恢复均为监听前 fail-closed 屏障
 pub async fn initialize(
     ports: CoreStorePorts,
     providers: ProviderRegistry,
@@ -289,7 +291,7 @@ pub async fn initialize(
     .await
 }
 
-/// 构造 Core 与快照发布能力；首次 Provider 目录发现延迟到 [`CoreStartup::activate`]。
+/// 构造 Core 与快照发布能力；首次 Provider 目录发现延迟到 [`CoreStartup::activate`]
 #[must_use]
 pub fn prepare(
     ports: CoreStorePorts,
@@ -312,13 +314,13 @@ pub fn prepare(
     }
 }
 
-/// 管理命令只持有快照读写能力，不恢复数据面准入，也不启动执行/结算 Worker。
+/// 管理命令只持有快照读写能力，不恢复数据面准入，也不启动执行/结算 Worker
 pub struct CoreControlPlaneBundle {
     snapshots: RuntimeSnapshotHandle,
     publisher: Arc<RuntimeSnapshotPublisher>,
 }
 
-/// CLI/组合根可先绑定回调端口，再激活首次目录发现。
+/// CLI/组合根可先绑定回调端口，再激活首次目录发现
 pub struct CoreControlPlaneStartup {
     snapshots: RuntimeSnapshotHandle,
     publisher: Arc<RuntimeSnapshotPublisher>,
@@ -338,7 +340,7 @@ impl CoreControlPlaneStartup {
     pub async fn activate(self) -> Result<CoreControlPlaneBundle, CoreError> {
         match self.publisher.refresh().await {
             Ok(_) => {}
-            // 故障插件不能封锁管理修复入口；没有可用快照时数据面仍拒绝新请求。
+            // 故障插件不能封锁管理修复入口；没有可用快照时数据面仍拒绝新请求
             Err(
                 routing::snapshot::RuntimeSnapshotCompileError::ExtensionsUnavailable
                 | routing::snapshot::RuntimeSnapshotCompileError::InvalidExtensionModels,
@@ -365,7 +367,7 @@ impl CoreControlPlaneBundle {
 }
 
 /// CLI 命令按需拥有嵌套模型执行与会话亲和查询端口，但不恢复网关启动时的准入租约，
-/// 也不产生任何后台 Worker 定义。
+/// 也不产生任何后台 Worker 定义
 pub struct CoreCommandPlaneStartup {
     ports: CoreStorePorts,
     providers: ProviderRegistry,
@@ -438,7 +440,7 @@ impl CoreCommandPlaneBundle {
     }
 }
 
-/// 为单次 CLI 命令构造当前快照与窄执行端口；激活时不恢复全局准入状态。
+/// 为单次 CLI 命令构造当前快照与窄执行端口；激活时不恢复全局准入状态
 #[must_use]
 pub fn prepare_command_plane(
     ports: CoreStorePorts,
@@ -469,7 +471,7 @@ pub async fn initialize_control_plane(
         .await
 }
 
-/// 仅构造管理命令所需快照能力，不恢复准入、不发现目录且不启动 Worker。
+/// 仅构造管理命令所需快照能力，不恢复准入、不发现目录且不启动 Worker
 #[must_use]
 pub fn prepare_control_plane(
     ports: CoreStorePorts,

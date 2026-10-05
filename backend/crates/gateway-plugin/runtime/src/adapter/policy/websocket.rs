@@ -1,3 +1,5 @@
+//! 将宿主 WebSocket 调用接入插件中间件，并管理消息与回调作用域
+
 use std::sync::Arc;
 
 use super::MiddlewareEntry;

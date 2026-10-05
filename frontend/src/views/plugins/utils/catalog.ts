@@ -54,15 +54,6 @@ export function pluginStatus(plugin: InstalledPlugin): PluginCatalogStatus {
   return instance ? configurationStatus(instance) : 'unconfigured'
 }
 
-export const PLUGIN_STATUS_LABELS: Record<PluginCatalogStatus, string> = {
-  unaccepted: '待安装',
-  unconfigured: '待配置',
-  enabled: '已启用',
-  disabled: '已停用',
-  pending: '等待生效',
-  failed: '异常',
-}
-
 export function pluginStatusType(status: PluginCatalogStatus) {
   if (status === 'enabled')
     return 'success' as const

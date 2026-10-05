@@ -1,3 +1,5 @@
+//! 验证宿主回调的状态、账号、模型与二进制载荷合同
+
 use gateway_plugin_sdk::call::host::{
     AffinityLookupRequest, AuthCredential, AuthListRequest, AuthSaveRequest, LogLevel, LogRequest,
     LogResult, ModelEventBatch, ModelExecuteRequest, ModelOperation, StateDeleteRequest,

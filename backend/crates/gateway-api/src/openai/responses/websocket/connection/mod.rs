@@ -1,4 +1,4 @@
-//! 下游客户端 WebSocket 的单 owner pump 与有界收发边界。
+//! 下游客户端 WebSocket 的单 owner pump 与有界收发边界
 
 mod middleware;
 
@@ -32,7 +32,7 @@ const DOWNSTREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CONNECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 const DOWNSTREAM_PING_INTERVAL: Duration = Duration::from_secs(25);
 
-/// WebSocket pump 的写入与生命周期预算。
+/// WebSocket pump 的写入与生命周期预算
 #[derive(Clone, Copy)]
 pub struct ConnectionConfig {
     write_timeout: Duration,
@@ -40,14 +40,14 @@ pub struct ConnectionConfig {
 }
 
 impl ConnectionConfig {
-    /// 生产环境固定预算。
+    /// 生产环境固定预算
     pub const PRODUCTION: Self = Self {
         write_timeout: DOWNSTREAM_WRITE_TIMEOUT,
         max_age: CONNECTION_MAX_AGE,
     };
 }
 
-/// 业务层可观察的客户端输入；Ping/Pong 始终由 pump 消费。
+/// 业务层可观察的客户端输入；Ping/Pong 始终由 pump 消费
 pub enum ConnectionEvent {
     Text(String),
     Binary,
@@ -55,7 +55,7 @@ pub enum ConnectionEvent {
     Exited(PumpExitReason),
 }
 
-/// 接收队列与活动期间暂存的请求共用容量；移动帧不释放它占用的名额。
+/// 接收队列与活动期间暂存的请求共用容量；移动帧不释放它占用的名额
 pub(super) struct PendingConnectionEvent {
     pub(super) event: ConnectionEvent,
     _permit: Option<OwnedSemaphorePermit>,
@@ -70,7 +70,7 @@ impl PendingConnectionEvent {
     }
 }
 
-/// 下游写入阶段；名称刻意使用 write，而不是暗示客户端已消费的 delivery。
+/// 下游写入阶段；名称刻意使用 write，而不是暗示客户端已消费的 delivery
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FramePhase {
     Metadata,
@@ -110,7 +110,7 @@ impl FramePhase {
     }
 }
 
-/// 一次下游写入的请求归属与协议阶段。
+/// 一次下游写入的请求归属与协议阶段
 #[derive(Clone)]
 pub struct WriteContext {
     request_id: Option<Arc<str>>,
@@ -118,7 +118,7 @@ pub struct WriteContext {
 }
 
 impl WriteContext {
-    /// 创建归属于某个请求的写入上下文。
+    /// 创建归属于某个请求的写入上下文
     #[must_use]
     pub fn request(request_id: &Arc<str>, phase: FramePhase) -> Self {
         Self {
@@ -127,7 +127,7 @@ impl WriteContext {
         }
     }
 
-    /// 创建连接级写入上下文。
+    /// 创建连接级写入上下文
     #[must_use]
     pub const fn connection(phase: FramePhase) -> Self {
         Self {
@@ -137,7 +137,7 @@ impl WriteContext {
     }
 }
 
-/// WebSocket pump 停止的稳定原因。
+/// WebSocket pump 停止的稳定原因
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PumpExitReason {
     ClientClose,
@@ -173,7 +173,7 @@ impl PumpExitReason {
     }
 }
 
-/// 下游 WebSocket 写入失败。
+/// 下游 WebSocket 写入失败
 #[derive(Debug, Error)]
 pub enum ConnectionWriteError {
     #[error("downstream WebSocket pump is closed")]
@@ -184,7 +184,7 @@ pub enum ConnectionWriteError {
     Transport { message: String },
 }
 
-/// 只有实际 transport 写入才记为 Written；插件丢弃消息不伪造写入成功。
+/// 只有实际 transport 写入才记为 Written；插件丢弃消息不伪造写入成功
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WriteOutcome {
     Written,
@@ -237,7 +237,7 @@ impl ConnectionStats {
     }
 }
 
-/// 协调层持有的单 owner WebSocket 连接句柄。
+/// 协调层持有的单 owner WebSocket 连接句柄
 pub struct ResponsesWebSocketConnection {
     connection_id: Arc<str>,
     opened_at: Instant,
@@ -274,7 +274,7 @@ impl ResponsesWebSocketConnection {
         &self.connection_id
     }
 
-    /// 返回连接是否已经达到生命周期上限。
+    /// 返回连接是否已经达到生命周期上限
     #[must_use]
     pub fn is_expired(&self) -> bool {
         self.expired.load(Ordering::Acquire)
@@ -284,7 +284,7 @@ impl ResponsesWebSocketConnection {
         self.opened_at.elapsed()
     }
 
-    /// 等待下一个需要业务层处理的客户端事件。
+    /// 等待下一个需要业务层处理的客户端事件
     pub async fn next_event(&mut self) -> Option<ConnectionEvent> {
         if self.exit_reason.is_none() {
             match self.exited.try_recv() {
@@ -306,7 +306,7 @@ impl ResponsesWebSocketConnection {
         self.next_active_event().await.map(|event| event.event)
     }
 
-    /// 活动响应期间只消费新到的帧，已排队的下一轮请求继续保持串行。
+    /// 活动响应期间只消费新到的帧，已排队的下一轮请求继续保持串行
     pub(super) async fn next_active_event(&mut self) -> Option<PendingConnectionEvent> {
         if let Some(reason) = self.exit_reason {
             return Some(PendingConnectionEvent::exited(reason));
@@ -334,7 +334,7 @@ impl ResponsesWebSocketConnection {
         self.deferred.push_back(event);
     }
 
-    /// 等待连接退出，不消费留给后续串行请求的业务帧。
+    /// 等待连接退出，不消费留给后续串行请求的业务帧
     pub async fn wait_for_exit(&mut self) -> PumpExitReason {
         if let Some(reason) = self.exit_reason {
             return reason;
@@ -346,11 +346,11 @@ impl ResponsesWebSocketConnection {
         reason
     }
 
-    /// 串行写入文本帧，并等待 pump 确认 transport 写入结果。
+    /// 串行写入文本帧，并等待 pump 确认 transport 写入结果
     ///
     /// # Errors
     ///
-    /// pump 已关闭、写入超时或 transport 失败时返回稳定错误。
+    /// pump 已关闭、写入超时或 transport 失败时返回稳定错误
     pub async fn send_text(
         &mut self,
         payload: String,
@@ -524,7 +524,7 @@ impl Drop for ResponsesWebSocketConnection {
     }
 }
 
-/// 为自动处理 Ping/Pong 的 WebSocket transport 启动单 owner pump。
+/// 为自动处理 Ping/Pong 的 WebSocket transport 启动单 owner pump
 pub fn spawn_connection<S, E>(
     socket: S,
     connection_id: Arc<str>,
@@ -624,7 +624,7 @@ async fn run_pump<S, E>(
     let (writer, mut reader) = socket.split();
     let writer = Arc::new(middleware::Writer::new(writer, context.clone()));
     let sender: Arc<dyn contract::Sender> = writer.clone();
-    // 同一个受管任务同时驱动两侧；等待写入不能阻塞入站控制、关闭或取消。
+    // 同一个受管任务同时驱动两侧；等待写入不能阻塞入站控制、关闭或取消
     let reason = tokio::select! {
         biased;
         reason = read_connection(&mut reader, &incoming, sender.clone(), &context) => reason,
@@ -667,7 +667,7 @@ where
             () = &mut deadline, if !deadline_elapsed => {
                 deadline_elapsed = true;
                 context.expired.store(true, Ordering::Release);
-                // 到期只阻止下一轮，当前响应仍由协调层按原有合同收尾。
+                // 到期只阻止下一轮，当前响应仍由协调层按原有合同收尾
                 match emit_incoming(incoming, &event_slots, ConnectionEvent::Expired) {
                     Ok(()) | Err(PumpExitReason::InboundOverload) => {}
                     Err(reason) => return reason,
@@ -687,7 +687,7 @@ where
                     Some(Ok(Message::Text(payload))) => Some(ConnectionEvent::Text(payload.to_string())),
                     Some(Ok(Message::Binary(_))) => Some(ConnectionEvent::Binary),
                     Some(Ok(Message::Ping(_))) => {
-                        // Axum/tungstenite 在继续读取时自动刷新 Pong，不能再手工发送一份。
+                        // Axum/tungstenite 在继续读取时自动刷新 Pong，不能再手工发送一份
                         context.stats.ping_received_count.fetch_add(1, Ordering::Relaxed);
                         None
                     }

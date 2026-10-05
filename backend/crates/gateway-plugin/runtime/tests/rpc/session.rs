@@ -1,3 +1,5 @@
+//! 验证真实插件 RPC 会话的启动重试、并发调用、关闭与资源回收
+
 use std::{
     sync::{
         Arc, Condvar, Mutex, Weak,
@@ -510,7 +512,7 @@ async fn concurrent_calls_keep_their_wire_ids_monotonic() {
     }
     ready.wait().await;
     entered.await;
-    // 旧实现会在 begin 前分配后续 ID；等其他线程进入该窗口后再释放首调用。
+    // 旧实现会在 begin 前分配后续 ID；等其他线程进入该窗口后再释放首调用
     tokio::time::sleep(Duration::from_millis(20)).await;
     callbacks.release();
     for call in calls {
@@ -750,7 +752,7 @@ async fn slow_stream_consumer_backpressures_the_child_without_blocking_control_c
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    // 消费者停止读取时对端会耗尽窗口；另一个请求仍能通过独立读写循环完成。
+    // 消费者停止读取时对端会耗尽窗口；另一个请求仍能通过独立读写循环完成
     let echo = session
         .call(
             "echo",

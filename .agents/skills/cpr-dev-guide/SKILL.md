@@ -19,7 +19,7 @@ description: Codex Proxy RS 仓库的开发、修复、排障、代码审查和�
 | 开发、排障、代码审查 | [问题与方案依据](../../../CONTRIBUTING.md#问题与方案依据)，需要定位代码时按 AGENTS 的 CodeGraph 约定执行 |
 | 模块或调用链变更 | [Workspace 边界](../../../docs/architecture.md#3-workspace-边界)及所属模块章节，不通读整份架构 |
 | Rust 开发或审查 | `$rust-best-practices`、所属模块、[后端自审](../../../docs/architecture.md#后端自审)，验证时读[命令](../../../docs/architecture.md#验证命令) |
-| 页面开发 | `$frontend-design`、[文案与信息层级](../../../docs/theme.md#界面文案与信息层级)、[界面验证](../../../CONTRIBUTING.md#界面验证)；修改已有页面前留存截图，主题算法仅在涉及时读取 |
+| 页面开发 | `$frontend-design`、[前端职责](../../../docs/architecture.md#34-前端模块职责)、[文案与信息层级](../../../docs/theme.md#界面文案与信息层级)、[界面验证](../../../CONTRIBUTING.md#界面验证)；修改已有页面前留存截图，主题算法仅在涉及时读取 |
 | 接口、部署或迁移 | 分别定位 [API](../../../docs/api.md)、[部署](../../../deploy/README.md)、[迁移](../../../backend/migrations/README.md)的对应章节 |
 | SDK、Runtime、宿主扩展或独立插件 | [插件职责边界](references/plugin-boundaries.md)；只有创作、排查独立网关插件时使用 [cpr-plugin-dev](../cpr-plugin-dev/SKILL.md) |
 | 修改或审查文档 | [文档检查](references/documentation.md)及目标章节，不默认读取代码开发、页面验收或发布流程 |
@@ -39,6 +39,12 @@ description: Codex Proxy RS 仓库的开发、修复、排障、代码审查和�
 2. 自审完整差异，处理本次引入的职责越界、重复规则、冗余状态与无依据分支；仅审查时报告，不自行修复
 3. 按变更范围读取[验证](../../../CONTRIBUTING.md#验证)，区分通过、失败、跳过与未执行；提交时补读[提交约定](../../../CONTRIBUTING.md#项目约定)
 4. 交付说明实际结果与验证缺口；页面证据和后端生命周期检查按上表执行，不把构建通过当作行为验收
+
+## 后端注释
+
+- 每个 Rust 文件顶层使用简短的中文 `//!` 注释说明文件职责，覆盖生产源码、测试与构建脚本；测试文件说明测试范围或辅助用途，生成文件同步维护生成器
+- 注释不使用中文或英文句号，多句说明按语义分行；保留 URL、版本号、标识符和代码示例中有语义的点号
+- 文件说明聚焦当前功能与职责边界，局部注释解释原因和约束，避免复述代码或记录修改经过
 
 ## 文档硬约束
 

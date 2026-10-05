@@ -1,3 +1,5 @@
+//! WebSocket 传输测试入口，以及帧压缩、请求准备与审计测试
+
 use super::*;
 use provider_openai::transport::{
     protocol::websocket::{OpeningAuditSnapshot, WebSocketAuditArtifact},
@@ -370,7 +372,7 @@ async fn websocket_exchange_should_accept_upstream_frame_above_removed_private_l
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        // Do not negotiate compression: the wire frame itself must exceed the former limit.
+        // 禁用压缩协商，确保实际传输帧足够大以覆盖大小限制场景
         let mut websocket =
             accept_codex_test_websocket_with(stream, |_request, _response| {}).await;
         let _message = websocket.next().await.unwrap().unwrap();
@@ -855,7 +857,7 @@ async fn websocket_execute_response_create_request_should_forward_typed_events_w
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
-        // 透明代理：缺官方必需字段的 delta 事件不再被丢弃，原样转发。
+        // 透明代理：缺官方必需字段的 delta 事件不再被丢弃，原样转发
         websocket
             .send(Message::Text(
                 json!({
@@ -1845,8 +1847,9 @@ async fn codex_backend_client_stream_should_preserve_burst_during_downstream_bac
         let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         let (mut sink, mut source) = websocket.split();
-        // 服务端持续读取控制帧，让 tungstenite 正常回 Pong。若客户端在本地入站背压
-        // 期间仍执行 Pong deadline，它仍会因为暂时读不到已返回的 Pong 而误杀连接。
+        // 服务端持续读取控制帧，让 tungstenite 正常回 Pong
+        // 若客户端在本地入站背压
+        // 期间仍执行 Pong deadline，它仍会因为暂时读不到已返回的 Pong 而误杀连接
         let control_frames = tokio::spawn(async move {
             while let Some(message) = source.next().await {
                 match message.unwrap() {
@@ -2321,7 +2324,7 @@ async fn diagnostics_capture_metadata_and_unknown_events_before_normal_close() {
         metadata["data"]["metadata"]["headers"]["x-request-id"],
         "upstream-metadata-request"
     );
-    // 未知事件名可能来自用户内容；仍记录事件，但按默认诊断合同仅保留摘要。
+    // 未知事件名可能来自用户内容；仍记录事件，但按默认诊断合同仅保留摘要
     let unknown_event = gateway_core::diagnostics::body_fingerprint(b"future.metadata");
     assert!(
         events

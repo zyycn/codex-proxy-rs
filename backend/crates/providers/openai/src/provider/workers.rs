@@ -1,4 +1,4 @@
-//! OpenAI Provider 向 Host 贡献的后台 worker。
+//! OpenAI Provider 向 Host 贡献的后台 worker
 
 use super::*;
 use crate::transport::profile::cli_release::CliReleaseService;
@@ -39,6 +39,7 @@ pub(crate) fn worker_contributions(
         WorkerId::try_new(WorkerKind::QuotaCatalogHealth, DESKTOP_RELEASE_WORKER_OWNER)?;
     let cli_release_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, "openai-cli-release")?;
     let warmup_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, WARMUP_WORKER_OWNER)?;
+    let catalog_interval = quota_refresh_policy.interval();
     let mut contributions = Vec::new();
     if oauth_refresh_enabled {
         contributions.push(WorkerContribution::Registration(scheduled_registration(
@@ -79,9 +80,10 @@ pub(crate) fn worker_contributions(
         )?),
         WorkerContribution::Registration(scheduled_registration(
             catalog_id,
-            quota_refresh_policy.interval(),
+            catalog_interval,
             Box::new(OpenAiCatalogTask {
                 catalog: Arc::clone(&catalog),
+                interval: catalog_interval,
             }),
         )?),
         WorkerContribution::Registration(WorkerRegistration::try_new(
@@ -207,6 +209,8 @@ pub(super) struct OpenAiQuotaTask {
 
 pub(super) struct OpenAiCatalogTask {
     catalog: Arc<CodexCredentialCatalogService>,
+    /// 配置的目录刷新周期；用于成功周期尾部的随机抖动。
+    interval: Duration,
 }
 
 pub(super) struct OpenAiCatalogEtagTask {
@@ -228,7 +232,7 @@ impl ScheduledTask for OpenAiDesktopReleaseTask {
             };
             if let Err(error) = result {
                 // 上游检查失败已经作为 Provider 观察事实保存；本周期本身正常完成，
-                // 避免 Host 的短退避持续请求固定官方 appcast。
+                // 避免 Host 的短退避持续请求固定官方 appcast
                 tracing::warn!(error = %error, "OpenAI Desktop release check failed");
             }
             Ok(())
@@ -273,7 +277,7 @@ impl ScheduledTask for OpenAiCatalogTask {
             if context.cancellation().is_cancelled() {
                 return Ok(());
             }
-            match self.catalog.refresh_catalogs().await {
+            let result = match self.catalog.refresh_catalogs().await {
                 Ok(_) | Err(CodexCredentialCatalogError::NoEligibleCredential) => Ok(()),
                 Err(error) => {
                     tracing::warn!(error = %error, "OpenAI model catalog refresh failed");
@@ -281,7 +285,21 @@ impl ScheduledTask for OpenAiCatalogTask {
                         "OpenAI model catalog synchronization failed",
                     ))
                 }
+            };
+            // 成功周期尾部追加 [0, 20%) 单侧随机抖动，打破固定周期轮询特征；
+            // 放在周期尾部避免延迟冷启动首轮刷新，失败路径交给宿主退避不叠加。
+            // 抖动期间 leader lease 由宿主监督循环并发续租，不会超时。
+            if result.is_ok() {
+                let jitter = crate::jitter::catalog_refresh_jitter(
+                    crate::jitter::random_u64(),
+                    self.interval,
+                );
+                tokio::select! {
+                    () = context.cancellation().cancelled() => {},
+                    () = tokio::time::sleep(jitter) => {},
+                }
             }
+            result
         })
     }
 }
@@ -376,7 +394,7 @@ impl ScheduledTask for OpenAiWarmupTask {
             use chrono::Timelike as _;
             let now = chrono::Utc::now();
             let local_now = self.timezone.local(now);
-            // 回拨产生的第二个相同时刻不能再次执行。
+            // 回拨产生的第二个相同时刻不能再次执行
             if self
                 .timezone
                 .resolve_local(local_now.naive_local())

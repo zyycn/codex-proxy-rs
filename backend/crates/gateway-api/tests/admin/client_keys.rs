@@ -1,3 +1,5 @@
+//! 验证 Client Key 管理接口的预算、密钥输入与查询合同
+
 use chrono::{DateTime, TimeZone as _, Utc};
 use gateway_api::admin::client_keys::{
     self, ClientKeyCursorData, ClientKeyCursorValue, ClientKeyListData, ClientKeyMutationRequest,

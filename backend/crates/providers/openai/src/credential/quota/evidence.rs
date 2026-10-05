@@ -1,4 +1,4 @@
-//! 额度接口失败到规范化账号事实的唯一分类边界。
+//! 额度接口失败到规范化账号事实的唯一分类边界
 
 use gateway_core::account::{AccountErrorReason, CredentialState, QuotaEvidence};
 use reqwest::StatusCode;
@@ -15,8 +15,9 @@ pub(crate) enum QuotaEndpointFailure {
     Exhausted(QuotaEvidence),
 }
 
-/// 额度 endpoint 只有明确 402 能改变账号事实。401/403、429、5xx 与传输失败
-/// 均不足以判断凭据或账号状态，留给 OAuth 与真实推理请求确认。
+/// 额度 endpoint 只有明确 402 能改变账号事实
+/// 401/403、429、5xx 与传输失败
+/// 均不足以判断凭据或账号状态，留给 OAuth 与真实推理请求确认
 pub(crate) fn classify_quota_endpoint_failure(
     error: &CodexClientError,
 ) -> Option<QuotaEndpointFailure> {

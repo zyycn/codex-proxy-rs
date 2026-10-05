@@ -1,10 +1,3 @@
-export function parseTimestamp(value: string | number | Date | null | undefined): number | null {
-  if (value === null || value === undefined)
-    return null
-  const timestamp = new Date(value).getTime()
-  return Number.isFinite(timestamp) ? timestamp : null
-}
-
 const integerFormatter = new Intl.NumberFormat('zh-CN')
 
 const localizedCompactFormatter = new Intl.NumberFormat('zh-CN', {
@@ -43,4 +36,45 @@ export function formatCompactNumber(value: number) {
   }
 
   return formatInteger(normalized)
+}
+
+const percentFormatter = new Intl.NumberFormat('zh-CN', {
+  style: 'percent',
+  maximumFractionDigits: 1,
+})
+
+export function formatPercent(value?: number | null) {
+  return value == null || !Number.isFinite(value) ? '—' : percentFormatter.format(value)
+}
+
+export function formatDuration(value?: number | null) {
+  if (value == null || !Number.isFinite(value) || value < 0)
+    return '—'
+  if (value < 1_000)
+    return `${Math.round(value)} ms`
+  if (value < 60_000) {
+    const seconds = value / 1_000
+    return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.0+$|(?<=\.\d)0$/, '')} s`
+  }
+  return `${(value / 60_000).toFixed(1).replace(/\.0$/, '')} min`
+}
+
+export function decimalDisplayNumber(value?: string | number | null) {
+  if (value == null)
+    return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+export function formatUsd(value?: string | number | null, precise = false) {
+  const parsed = decimalDisplayNumber(value)
+  if (parsed == null)
+    return '—'
+  const fractionDigits = precise || (Math.abs(parsed) > 0 && Math.abs(parsed) < 0.01) ? 4 : 2
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(parsed)
 }

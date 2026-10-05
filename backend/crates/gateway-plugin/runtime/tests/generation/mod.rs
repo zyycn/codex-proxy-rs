@@ -1,3 +1,5 @@
+//! 插件发布代次、能力执行与生命周期的集成测试入口
+
 mod authentication;
 mod configuration;
 mod data;

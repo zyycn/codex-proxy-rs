@@ -1,3 +1,5 @@
+//! 验证插件服务中间件的组合、错误恢复、事务与取消边界
+
 use crate::support::environment::{Environment, mutation};
 use gateway_admin::model::{AdminErrorKind, settings::ReplaceRuntimeSettings};
 use serde_json::json;
@@ -59,7 +61,7 @@ async fn explicit_service_dispatch_composes_once_and_preserves_native_transactio
     let typed: gateway_plugin_sdk::call::services::settings::RuntimeSettings =
         serde_json::from_value(through_registry).unwrap();
     assert_eq!(typed.request_interval_ms, 4321);
-    // 返回层改写不是持久化写入；原 owner 保留真实配置事实。
+    // 返回层改写不是持久化写入；原 owner 保留真实配置事实
     assert_eq!(
         environment
             .store
@@ -119,7 +121,7 @@ async fn explicit_service_dispatch_composes_once_and_preserves_native_transactio
     assert_eq!(error.kind, "conflict");
     assert!(!error.message.is_empty());
 
-    // 组合位于主动调用入口；内部 pricing 不重复进入插件链。
+    // 组合位于主动调用入口；内部 pricing 不重复进入插件链
     let error = services
         .public_services()
         .call(

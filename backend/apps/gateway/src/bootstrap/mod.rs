@@ -1,4 +1,4 @@
-//! 网关唯一组合根：按启动模式连接各 Bundle。
+//! 网关唯一组合根：按启动模式连接各 Bundle
 
 mod command;
 mod config;
@@ -10,7 +10,7 @@ pub use command::{PluginCommand, plugin_command};
 pub use config::GatewayConfig;
 pub use server::run;
 
-/// 组合根只保留包级错误分类，不展开内部实现或敏感配置。
+/// 组合根只保留包级错误分类，不展开内部实现或敏感配置
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapError {
     #[error(transparent)]

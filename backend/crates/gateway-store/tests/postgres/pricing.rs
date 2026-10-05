@@ -1,3 +1,5 @@
+//! 验证并发价格变更与同步保留其他模型、人工覆盖和冻结快照
+
 use gateway_admin::model::{
     MutationActor, MutationContext,
     pricing::{PricingChange, UpdatePricing},

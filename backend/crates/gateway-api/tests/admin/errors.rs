@@ -1,3 +1,5 @@
+//! 验证管理接口的错误封装、状态码与输入信息脱敏
+
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -454,7 +456,7 @@ mod provider {
             (Kind::Internal, 500, 50001, "服务内部错误"),
         ] {
             let error = ProviderAdminError::new(kind).with_message("private-provider-diagnostics");
-            // 即使 Provider 错标了公开文案，未知内部异常仍不得通过 500 信封下发。
+            // 即使 Provider 错标了公开文案，未知内部异常仍不得通过 500 信封下发
             *fixture.provider_error.lock().unwrap() = Some(if kind == Kind::Internal {
                 error.with_public_message("internal-detail-must-stay-hidden")
             } else {

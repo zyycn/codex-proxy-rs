@@ -1,4 +1,4 @@
-//! HTTP 正文与响应部件共享同一调用资源池；next 与主动分派复用句柄和背压。
+//! HTTP 正文与响应部件共享同一调用资源池；next 与主动分派复用句柄和背压
 use super::*;
 use bytes::Bytes;
 use futures::StreamExt as _;
@@ -45,7 +45,7 @@ struct PipeReader {
 
 impl Drop for PipeReader {
     fn drop(&mut self) {
-        // 下游可以提前返回；消费端退出即归还管道名额，并唤醒仍在背压中等待的写入。
+        // 下游可以提前返回；消费端退出即归还管道名额，并唤醒仍在背压中等待的写入
         self.cancellation.cancel();
         if let Some(resources) = self.resources.upgrade() {
             resources
@@ -248,7 +248,7 @@ impl Resources {
                 state.body.as_mut().ok_or_else(unavailable)?.frame().await
             };
             if !matches!(&frame, Some(Ok(_))) {
-                // EOF 和读取失败均结束读取所有权；原响应部件仍可随替换后的正文返回。
+                // EOF 和读取失败均结束读取所有权；原响应部件仍可随替换后的正文返回
                 state.body.take();
                 self.entries
                     .lock()

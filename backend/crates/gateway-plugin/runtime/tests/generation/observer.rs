@@ -1,3 +1,5 @@
+//! 验证插件观察计划的范围、顺序、去重与有界异步通知
+
 use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};
 
 use gateway_admin::{
@@ -211,7 +213,7 @@ async fn wait_for_lines(path: &std::path::Path, count: usize) -> Vec<serde_json:
         loop {
             let lines = std::fs::read_to_string(path)
                 .unwrap_or_default()
-                // 子进程先追加 JSON 再写换行；只解析已经提交完整行的记录。
+                // 子进程先追加 JSON 再写换行；只解析已经提交完整行的记录
                 .split_inclusive('\n')
                 .filter(|line| line.ends_with('\n'))
                 .map(|line| serde_json::from_str(line).unwrap())

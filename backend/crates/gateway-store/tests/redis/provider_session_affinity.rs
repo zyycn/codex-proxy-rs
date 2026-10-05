@@ -1,3 +1,5 @@
+//! 验证会话亲和记录的原子认领、条件替换、有效期与清理
+
 use std::time::Duration;
 
 use gateway_core::account::ProviderAccountId;

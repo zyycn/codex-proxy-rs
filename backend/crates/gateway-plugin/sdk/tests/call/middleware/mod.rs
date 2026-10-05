@@ -1,3 +1,5 @@
+//! 验证中间件挂载、正文模式、增量头部与二进制帧的线协议合同
+
 use gateway_plugin_sdk::{
     Capability, Stage,
     call::middleware::{

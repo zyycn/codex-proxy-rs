@@ -1,3 +1,5 @@
+//! 验证 PKCE S256 挑战值符合 RFC 7636 样本
+
 use provider_xai::Pkce;
 
 #[test]

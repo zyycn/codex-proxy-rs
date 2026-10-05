@@ -1,7 +1,7 @@
-//! `pg_dump` 子进程与本地暂存适配器。
+//! `pg_dump` 子进程与本地暂存适配器
 //!
-//! 数据库密码只通过 `PGPASSWORD` 环境变量传给子进程，绝不进入命令行参数或日志。
-//! 导出以有界内存流式写入暂存文件并计算 SHA-256；取消时终止子进程并清理部分文件。
+//! 数据库密码只通过 `PGPASSWORD` 环境变量传给子进程，绝不进入命令行参数或日志
+//! 导出以有界内存流式写入暂存文件并计算 SHA-256；取消时终止子进程并清理部分文件
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -16,17 +16,17 @@ use gateway_admin::ports::backup::{DatabaseDumpPort, DumpArtifact, DumpRequest, 
 
 use super::staging::StagingArea;
 
-/// `pg_dump` 导出适配器。
+/// `pg_dump` 导出适配器
 pub struct PgDumpAdapter {
     staging: Arc<StagingArea>,
-    /// 不含密码的 PostgreSQL URL，用于 `--dbname`。
+    /// 不含密码的 PostgreSQL URL，用于 `--dbname`
     database_url: String,
-    /// 数据库密码，仅通过 `PGPASSWORD` 注入。
+    /// 数据库密码，仅通过 `PGPASSWORD` 注入
     database_password: String,
 }
 
 impl PgDumpAdapter {
-    /// 组合暂存区与数据库连接事实。
+    /// 组合暂存区与数据库连接事实
     #[must_use]
     pub fn new(
         staging: Arc<StagingArea>,
@@ -169,7 +169,7 @@ impl DatabaseDumpPort for PgDumpAdapter {
     }
 }
 
-/// 以有界内存读取文件并计算 SHA-256。
+/// 以有界内存读取文件并计算 SHA-256
 async fn hash_file(path: &std::path::Path) -> Result<String, BackupError> {
     let mut file = tokio::fs::File::open(path)
         .await

@@ -1,6 +1,6 @@
-//! Codex Desktop 上游请求画像。
+//! Codex Desktop 上游请求画像
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -28,10 +28,10 @@ pub mod selection;
 
 use selection::{ClientKind, ClientPlatform, ClientRelease};
 
-/// Codex Desktop 官方 appcast 地址。
+/// Codex Desktop 官方 appcast 地址
 pub const CODEX_DESKTOP_APPCAST_URL: &str =
     "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
-/// 官方发布元数据检查周期。
+/// 官方发布元数据检查周期
 pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -39,45 +39,45 @@ const MAX_APPCAST_BYTES: usize = 1024 * 1024;
 const ARTIFACT_PROFILE_CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const ARTIFACT_PROFILE_SCHEMA_VERSION: u64 = 1;
 
-/// 与官方 managed residency requirement 相同的可选请求约束。
+/// 与官方 managed residency requirement 相同的可选请求约束
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CodexResidency {
     Us,
 }
 
-/// 保留已有配置类型入口；位置规则由出口领域统一维护。
+/// 保留已有配置类型入口；位置规则由出口领域统一维护
 pub use gateway_core::account::RequestLocation as CodexRequestLocation;
 
-/// Codex 上游请求身份快照。
+/// Codex 上游请求身份快照
 ///
-/// 预设按官方配套版本生成 UA；自定义身份保留完整 UA 及其配套请求头。
-/// 官方制品核验只更新独立的基线与预设资料，不改写已冻结的请求身份。
+/// 预设按官方配套版本生成 UA；自定义身份保留完整 UA 及其配套请求头
+/// 官方制品核验只更新独立的基线与预设资料，不改写已冻结的请求身份
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexWireProfile {
     pub client_kind: ClientKind,
-    /// `originator` 请求头及 User-Agent 产品名。
+    /// `originator` 请求头及 User-Agent 产品名
     pub originator: String,
-    /// Core 版本，用于模型请求的 version 和 client_version。
+    /// Core 版本，用于模型请求的 version 和 client_version
     pub codex_version: String,
-    /// Desktop 应用版本，用于 app-server `clientInfo.version` 对应的 UA 后缀。
+    /// Desktop 应用版本，用于 app-server `clientInfo.version` 对应的 UA 后缀
     pub desktop_version: String,
-    /// Desktop 制品构建号，仅用于发布对齐诊断。
+    /// Desktop 制品构建号，仅用于发布对齐诊断
     pub desktop_build: String,
-    /// Codex Core UA 中的目标操作系统类型。
+    /// Codex Core UA 中的目标操作系统类型
     pub os_type: String,
-    /// Codex Core UA 中的目标操作系统版本。
+    /// Codex Core UA 中的目标操作系统版本
     pub os_version: String,
-    /// Codex Core UA 中的目标架构。
+    /// Codex Core UA 中的目标架构
     pub arch: String,
-    /// Codex Core UA 中的终端标记。
+    /// Codex Core UA 中的终端标记
     pub terminal: String,
-    /// 入口专属或自定义的完整值；存在时不得用默认预设重新拼接。
+    /// 入口专属或自定义的完整值；存在时不得用默认预设重新拼接
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exact_user_agent: Option<String>,
-    /// 未配置时不发送 residency 头；不随制品版本更新而改变。
+    /// 未配置时不发送 residency 头；不随制品版本更新而改变
     pub residency: Option<CodexResidency>,
-    /// 版本元组最后一次经制品核验的时间；不表示 TLS 传输已重新核验。
+    /// 版本元组最后一次经制品核验的时间；不表示 TLS 传输已重新核验
     pub verified_at: DateTime<Utc>,
 }
 
@@ -95,14 +95,14 @@ impl Default for CodexWireProfile {
             terminal: "unknown".to_owned(),
             exact_user_agent: None,
             residency: None,
-            // 制品核验于 2026-09-06T03:26:12.084Z；进程启动不构成重新核验。
+            // 制品核验于 2026-09-06T03:26:12.084Z；进程启动不构成重新核验
             verified_at: DateTime::UNIX_EPOCH + chrono::Duration::milliseconds(1_788_665_172_084),
         }
     }
 }
 
 impl CodexWireProfile {
-    /// 原样返回已解析的完整 UA；默认预设按 bundled Core app-server 格式生成。
+    /// 原样返回已解析的完整 UA；默认预设按 bundled Core app-server 格式生成
     pub fn user_agent(&self) -> String {
         if let Some(user_agent) = &self.exact_user_agent {
             return user_agent.clone();
@@ -131,11 +131,12 @@ impl CodexWireProfile {
         )
     }
 
-    /// 按 Codex Desktop 暴露的稳定桌面 surface 格式构造 User-Agent。
+    /// 按 Codex Desktop 暴露的稳定桌面 surface 格式构造 User-Agent
     ///
     /// Electron 网络栈会为 renderer 请求附加运行时 User-Agent；非 Electron transport
-    /// 使用同一官方包中 `getDesktopUserAgent` 的稳定格式。它与 bundled Core 请求使用的
-    /// 复合 User-Agent 是两个独立 surface。
+    /// 使用同一官方包中 `getDesktopUserAgent` 的稳定格式
+    /// 它与 bundled Core 请求使用的
+    /// 复合 User-Agent 是两个独立 surface
     #[must_use]
     pub fn desktop_user_agent(&self) -> String {
         format!(
@@ -145,7 +146,7 @@ impl CodexWireProfile {
     }
 }
 
-/// 跨 Codex 上游请求共享的运行时请求画像。
+/// 跨 Codex 上游请求共享的运行时请求画像
 #[derive(Debug, Clone)]
 pub struct CodexWireProfileState {
     profile: Arc<RwLock<CodexWireProfile>>,
@@ -154,26 +155,60 @@ pub struct CodexWireProfileState {
 
 type ClientReleases = BTreeMap<(ClientKind, ClientPlatform, String), ClientReleaseObservation>;
 
+/// 每渠道保留的发布观察深度：当前版本加上全部滞后档位。
+const RELEASE_HISTORY_CAPACITY: usize = selection::MAX_VERSION_LAG as usize + 1;
+
 #[derive(Debug, Clone, Default)]
 struct ClientReleaseObservation {
     release: Option<ClientRelease>,
+    /// 本渠道倒序观察到的发布序列（含当前版本），仅进程内存；重启后从种子与缓存重新积累。
+    history: VecDeque<ClientRelease>,
     checked_at: Option<DateTime<Utc>>,
     error: Option<String>,
 }
 
+/// 观察到的发布进入历史：同版本刷新队首，新版本压入队首；超出深度丢弃最旧一项。
+fn observe_release(history: &mut VecDeque<ClientRelease>, release: ClientRelease) {
+    if history
+        .front()
+        .is_some_and(|front| front.same_identity(&release))
+    {
+        history[0] = release;
+    } else {
+        history.push_front(release);
+    }
+    while history.len() > RELEASE_HISTORY_CAPACITY {
+        history.pop_back();
+    }
+}
+
 impl CodexWireProfileState {
-    /// 从启动画像创建运行时状态。
+    /// 从启动画像创建运行时状态
     pub fn new(profile: CodexWireProfile) -> Self {
         let state = Self {
             profile: Arc::new(RwLock::new(profile)),
             releases: Arc::default(),
         };
+        // macOS arm64 的当前发布来自初始画像（默认快照或恢复缓存）；补齐观察表项，
+        // 让滞后档位在首次 appcast 检查前也有历史可解析。
+        let initial = state.snapshot();
+        state.seed_client_release(
+            ClientKind::Desktop,
+            ClientPlatform::Macos,
+            "arm64",
+            ClientRelease {
+                codex_version: initial.codex_version,
+                desktop_version: Some(initial.desktop_version),
+                desktop_build: Some(initial.desktop_build),
+                verified_at: Some(initial.verified_at),
+            },
+        );
         cli_release::seed_releases(&state);
         platform_release::seed_releases(&state);
         state
     }
 
-    /// 返回当前画像的独立快照，避免持锁执行网络请求。
+    /// 返回当前画像的独立快照，避免持锁执行网络请求
     pub fn snapshot(&self) -> CodexWireProfile {
         self.profile
             .read()
@@ -181,7 +216,7 @@ impl CodexWireProfileState {
             .clone()
     }
 
-    /// 原子发布同一 Desktop ZIP 中核验出的完整版本元组。
+    /// 原子发布同一 Desktop ZIP 中核验出的完整版本元组
     pub fn update_bundled_release(&self, release: &CodexBundledReleaseProfile) {
         let mut profile = self
             .profile
@@ -215,6 +250,29 @@ impl CodexWireProfileState {
             .and_then(|state| state.release.clone())
     }
 
+    /// 按滞后档位解析发布：取观察历史的第 `lag` 项，历史不足时回退最旧一项。
+    ///
+    /// 滞后档位不引入新的失败模式：历史缺失时调用方回退到当前发布。
+    pub fn lagged_client_release(
+        &self,
+        client: ClientKind,
+        platform: ClientPlatform,
+        arch: &str,
+        lag: u32,
+    ) -> Option<ClientRelease> {
+        self.releases
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(client, platform, arch.to_owned()))
+            .and_then(|state| {
+                state
+                    .history
+                    .get(lag as usize)
+                    .or_else(|| state.history.back())
+                    .cloned()
+            })
+    }
+
     pub fn client_release_status(
         &self,
         client: ClientKind,
@@ -237,12 +295,16 @@ impl CodexWireProfileState {
         arch: &str,
         release: ClientRelease,
     ) {
-        self.releases
+        let mut states = self
+            .releases
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = states
             .entry((client, platform, arch.to_owned()))
-            .or_default()
-            .release = Some(release);
+            .or_default();
+        // 种子与缓存恢复同样构成观察：更晚恢复的版本会排在种子之前，形成启动历史。
+        observe_release(&mut state.history, release.clone());
+        state.release = Some(release);
     }
 
     pub(crate) fn record_client_release(
@@ -262,15 +324,17 @@ impl CodexWireProfileState {
         state.checked_at = Some(Utc::now());
         match result {
             Ok(release) => {
-                state.release = Some(release);
+                state.release = Some(release.clone());
                 state.error = None;
+                observe_release(&mut state.history, release);
             }
+            // 失败观察只更新状态，不改动发布历史。
             Err(error) => state.error = Some(error),
         }
     }
 }
 
-/// 同一个官方 Desktop ZIP 中核验出的原子版本元组。
+/// 同一个官方 Desktop ZIP 中核验出的原子版本元组
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexBundledReleaseProfile {
     pub codex_version: String,
@@ -402,7 +466,7 @@ fn decode_artifact_profile(
     Ok(decoded)
 }
 
-/// 官方 appcast 中按顺序出现的首个完整 Desktop 制品。
+/// 官方 appcast 中按顺序出现的首个完整 Desktop 制品
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexDesktopRelease {
     pub version: String,
@@ -415,7 +479,7 @@ pub struct CodexDesktopRelease {
     pub signature_present: bool,
 }
 
-/// 最近一次官方 Desktop 制品检查结果。
+/// 最近一次官方 Desktop 制品检查结果
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CodexDesktopReleaseSnapshot {
     pub checked_at: Option<DateTime<Utc>>,
@@ -423,7 +487,7 @@ pub struct CodexDesktopReleaseSnapshot {
     pub last_error: Option<String>,
 }
 
-/// Provider 内共享的 appcast 观察状态。
+/// Provider 内共享的 appcast 观察状态
 #[derive(Debug, Clone, Default)]
 pub struct CodexDesktopReleaseStatus {
     snapshot: Arc<RwLock<CodexDesktopReleaseSnapshot>>,
@@ -459,7 +523,8 @@ impl CodexDesktopReleaseStatus {
     }
 }
 
-/// Desktop appcast 获取边界。生产实现固定访问官方 HTTPS，测试实现只替换此边界。
+/// Desktop appcast 获取边界
+/// 生产实现固定访问官方 HTTPS，测试实现只替换此边界
 pub trait CodexDesktopReleaseTransport: Send + Sync {
     fn fetch(&self) -> BoxFuture<'_, Result<CodexDesktopRelease, CodexDesktopReleaseError>>;
 
@@ -469,7 +534,7 @@ pub trait CodexDesktopReleaseTransport: Send + Sync {
     ) -> BoxFuture<'a, Result<String, CodexDesktopReleaseError>>;
 }
 
-/// 固定访问官方 Desktop appcast 的生产 transport。
+/// 固定访问官方 Desktop appcast 的生产 transport
 #[derive(Clone)]
 pub struct OfficialCodexDesktopReleaseTransport {
     client: Client,
@@ -477,7 +542,7 @@ pub struct OfficialCodexDesktopReleaseTransport {
 }
 
 impl OfficialCodexDesktopReleaseTransport {
-    /// 构造禁用环境代理和 redirect 的官方 HTTPS transport。
+    /// 构造禁用环境代理和 redirect 的官方 HTTPS transport
     pub fn new() -> Result<Self, CodexDesktopReleaseError> {
         let endpoint = Url::parse(CODEX_DESKTOP_APPCAST_URL)
             .map_err(|_| CodexDesktopReleaseError::InvalidEndpoint)?;
@@ -546,7 +611,7 @@ impl CodexDesktopReleaseTransport for OfficialCodexDesktopReleaseTransport {
     }
 }
 
-/// 拉取 appcast 并原子发布请求画像的 Provider 服务。
+/// 拉取 appcast 并原子发布请求画像的 Provider 服务
 #[derive(Clone)]
 pub struct CodexDesktopReleaseService {
     transport: Arc<dyn CodexDesktopReleaseTransport>,
@@ -557,7 +622,7 @@ pub struct CodexDesktopReleaseService {
 }
 
 impl CodexDesktopReleaseService {
-    /// 从正式 transport seam 构造服务；生产组装只注入官方 transport。
+    /// 从正式 transport seam 构造服务；生产组装只注入官方 transport
     #[must_use]
     pub fn new(
         profile: CodexWireProfileState,
@@ -567,6 +632,20 @@ impl CodexDesktopReleaseService {
     ) -> Self {
         if let Some(verified) = verified.as_ref() {
             profile.update_bundled_release(verified);
+            // 缓存恢复与 CLI/平台渠道一样构成发布观察：只更新画像字段会让恢复版本
+            // 在首次检查发现新版时被跳过，滞后档位落回启动种子。这里补写进
+            // releases 历史，使「启动种子 → 恢复版本 → 新发现版本」形成完整序列。
+            profile.seed_client_release(
+                ClientKind::Desktop,
+                ClientPlatform::Macos,
+                "arm64",
+                ClientRelease {
+                    codex_version: verified.codex_version.clone(),
+                    desktop_version: Some(verified.desktop_version.clone()),
+                    desktop_build: Some(verified.desktop_build.clone()),
+                    verified_at: Some(verified.verified_at),
+                },
+            );
         }
         Self {
             transport,
@@ -582,7 +661,7 @@ impl CodexDesktopReleaseService {
         self.status.clone()
     }
 
-    /// 执行一次有界检查；失败只更新观察状态，不修改上一份成功画像。
+    /// 执行一次有界检查；失败只更新观察状态，不修改上一份成功画像
     pub async fn refresh(&self) -> Result<CodexDesktopRelease, CodexDesktopReleaseError> {
         let checked_at = Utc::now();
         let result = self.refresh_inner(checked_at).await;
@@ -701,7 +780,7 @@ fn parse_build_sequence(value: &str) -> Result<u64, CodexDesktopReleaseError> {
         .ok_or(CodexDesktopReleaseError::InvalidBuild)
 }
 
-/// 解析 appcast 中按顺序出现的首个完整发布项。
+/// 解析 appcast 中按顺序出现的首个完整发布项
 pub fn parse_desktop_release(xml: &str) -> Result<CodexDesktopRelease, CodexDesktopReleaseError> {
     let document = Document::parse(xml).map_err(|_| CodexDesktopReleaseError::InvalidDocument)?;
     for item in document
@@ -792,7 +871,7 @@ fn numeric_dotted_version(value: &str) -> bool {
     valid >= 2 && valid == value.split('.').count()
 }
 
-/// Desktop appcast 的稳定、无响应正文错误分类。
+/// Desktop appcast 的稳定、无响应正文错误分类
 #[derive(Debug, thiserror::Error)]
 pub enum CodexDesktopReleaseError {
     #[error("Codex Desktop appcast client initialization failed")]

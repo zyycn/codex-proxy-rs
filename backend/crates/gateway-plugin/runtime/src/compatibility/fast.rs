@@ -1,3 +1,5 @@
+//! 在旧插件合同边界投影 Fast 设置并保留宿主三态语义
+
 use gateway_core::{
     account::FastMode,
     settings::{ExecutionSettings, RequestSettings},
@@ -60,7 +62,7 @@ impl FastSettings {
                 .and_then(|value| value.as_bool())
                 .ok_or_else(invalid)?;
             let current = current.execution_values().ok_or_else(invalid)?.fast_mode;
-            // 原样回传 false 不能把三态的 enabled 降为 default，只有实际变化才覆盖。
+            // 原样回传 false 不能把三态的 enabled 降为 default，只有实际变化才覆盖
             let mode = if next == (current == FastMode::Disabled) {
                 current
             } else if next {

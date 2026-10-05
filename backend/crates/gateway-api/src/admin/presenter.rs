@@ -1,11 +1,11 @@
-//! Admin API 的展示层辅助：数值格式化。
+//! Admin API 的展示层辅助：数值格式化
 //!
 //! 当前 wire 仍保留 display 字段；统一由本模块提供，避免 accounts/observability
-//! 各自维护格式化规则。
+//! 各自维护格式化规则
 
 use gateway_core::metering::Decimal;
 
-/// 千分位格式化。
+/// 千分位格式化
 #[must_use]
 pub fn format_number(value: u64) -> String {
     let text = value.to_string();
@@ -19,7 +19,7 @@ pub fn format_number(value: u64) -> String {
     output.chars().rev().collect()
 }
 
-/// 紧凑格式化：≥1000 时用 K/M/B/T/P 后缀，否则千分位。
+/// 紧凑格式化：≥1000 时用 K/M/B/T/P 后缀，否则千分位
 #[must_use]
 pub fn format_compact_number(value: u64) -> String {
     if value < 1_000 {
@@ -40,7 +40,8 @@ pub fn format_compact_number(value: u64) -> String {
     format_number(value)
 }
 
-/// 货币展示格式化。USD 常规金额保留两位，小于 1 美元时最多保留四位。
+/// 货币展示格式化
+/// USD 常规金额保留两位，小于 1 美元时最多保留四位
 #[must_use]
 pub fn format_decimal_currency(amount: &str, currency: &str) -> String {
     if currency != "USD" {

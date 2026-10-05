@@ -5,7 +5,7 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, shallowRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePluginViewsStore } from '@/stores/modules/plugin-views'
-import { pluginPageLocation } from '../utils/navigation'
+import { pluginPageLocation } from '@/utils/plugin'
 import PluginManagementFrame from './PluginManagementFrame.vue'
 import PluginPageLoading from './PluginPageLoading.vue'
 

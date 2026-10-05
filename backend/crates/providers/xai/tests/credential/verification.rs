@@ -1,3 +1,5 @@
+//! 验证令牌验证证据的诊断输出隐藏已验证主体
+
 use provider_xai::{VerificationEvidence, VerificationMethod};
 
 #[test]

@@ -1,3 +1,5 @@
+//! 验证 Grok 推理端点限定为配置的官方 CLI 来源
+
 use provider_xai::GROK_CLI_BASE_URL;
 use provider_xai::transport::GROK_RESPONSES_URL;
 

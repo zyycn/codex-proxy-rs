@@ -1,4 +1,4 @@
-//! 后台导入任务的有界请求与安全结果投影。
+//! 后台导入任务的有界请求与安全结果投影
 
 use axum::extract::DefaultBodyLimit;
 use gateway_admin::model::import_tasks::{

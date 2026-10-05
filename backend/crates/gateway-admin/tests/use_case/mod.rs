@@ -1,3 +1,5 @@
+//! 管理控制面各服务用例的测试入口
+
 mod account_groups;
 mod accounts;
 mod auth;

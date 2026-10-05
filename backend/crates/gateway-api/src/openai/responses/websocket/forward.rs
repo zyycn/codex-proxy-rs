@@ -1,4 +1,4 @@
-//! Responses WebSocket 洋葱响应体与串行 transport 交付。
+//! Responses WebSocket 洋葱响应体与串行 transport 交付
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -97,7 +97,7 @@ pub(super) async fn execution_response(
                 .iter()
                 .map(|header| MiddlewareHeader::new(header.name(), header.value().clone()))
                 .collect();
-            // 失败也要保留会话到洋葱链返回，否则释放会话会取消仍在等待 next 的插件。
+            // 失败也要保留会话到洋葱链返回，否则释放会话会取消仍在等待 next 的插件
             return Ok(pending_execution_response(
                 "openai".to_owned(),
                 status,
@@ -279,7 +279,7 @@ pub(super) async fn forward_response(
 
 fn detach_body(body: Box<dyn MiddlewareBody>) {
     // 客户端已离线时不能让连接 handler 等待可能仍在结算的请求；close future
-    // 继续持有唯一正文和执行守卫，保证已启动的费用与租约清理不会被取消。
+    // 继续持有唯一正文和执行守卫，保证已启动的费用与租约清理不会被取消
     drop(tokio::spawn(body.close()));
 }
 
@@ -303,7 +303,7 @@ async fn next_body_input(
     response_control: &ResponseControl,
     request_id: &Arc<str>,
 ) -> BodyInput {
-    // 处理控制帧时继续持有同一个读取 future，不能取消正在加工正文的中间件。
+    // 处理控制帧时继续持有同一个读取 future，不能取消正在加工正文的中间件
     let frame = body.next_frame();
     tokio::pin!(frame);
     loop {
@@ -329,7 +329,7 @@ async fn next_body_input(
                         }
                     }
                     ConnectionEvent::Expired => {
-                        // 允许当前响应收尾，外层仍会在下一轮准入前关闭过期连接。
+                        // 允许当前响应收尾，外层仍会在下一轮准入前关闭过期连接
                     }
                     ConnectionEvent::Binary => {
                         connection.defer(event);

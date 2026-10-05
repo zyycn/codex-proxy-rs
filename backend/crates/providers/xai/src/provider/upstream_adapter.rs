@@ -1,4 +1,4 @@
-//! xAI 已选 OAuth 会话的受管连接；插件不读取令牌或重新选号。
+//! xAI 已选 OAuth 会话的受管连接；插件不读取令牌或重新选号
 
 use super::*;
 use gateway_core::{
@@ -57,7 +57,7 @@ impl GrokBuildProvider {
         let mutation = session.allows_account_state_mutation();
         let stream = ProviderStream::new(metadata, events, session);
         Ok(if mutation {
-            // 插件协议或 RPC 故障不能降低原生账号评分；只接纳已解析的上游拒绝事实。
+            // 插件协议或 RPC 故障不能降低原生账号评分；只接纳已解析的上游拒绝事实
             stream.with_filtered_account_feedback(Arc::clone(&self.account_feedback), |error| {
                 error.client_visible_upstream_error().is_some()
             })

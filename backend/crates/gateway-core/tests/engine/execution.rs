@@ -1,3 +1,5 @@
+//! 执行服务的准入、预算、请求记录与终结行为测试
+
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
@@ -132,6 +134,47 @@ fn request(service: &DefaultExecutionService, transport: ClientTransport) -> Sta
             previous_response_id: None,
         },
     }
+}
+
+#[test]
+fn default_request_has_no_total_deadline_and_explicit_timeout_can_be_cleared() {
+    block_on(async {
+        let service = service(Arc::default(), Arc::default());
+        let client = request(&service, ClientTransport::HttpSse).client;
+        let mut prepared = service.prepare_execution(client).await.unwrap();
+        assert_eq!(prepared.deadline_at().at(), None);
+        let baseline = prepared.request_settings();
+        let mut values = baseline.execution_values().unwrap();
+        assert_eq!(values.timeout_ms, None);
+        values.timeout_ms = Some(1_800_000);
+        let limited = baseline
+            .replace_execution(&values, "timeout-plugin")
+            .unwrap();
+        prepared.apply_settings(&limited).unwrap();
+        assert_eq!(
+            prepared.deadline_at().at().unwrap(),
+            prepared.started_at() + Duration::from_secs(1_800)
+        );
+        values.timeout_ms = None;
+        prepared
+            .apply_settings(
+                &limited
+                    .replace_execution(&values, "timeout-plugin")
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(prepared.deadline_at().at(), None);
+        values.timeout_ms = Some(0);
+        prepared
+            .apply_settings(
+                &limited
+                    .replace_execution(&values, "timeout-plugin")
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(prepared.deadline_at().at(), Some(prepared.started_at()));
+        assert!(prepared.deadline_at().is_elapsed());
+    });
 }
 
 #[test]
@@ -684,7 +727,7 @@ fn detached_early_failure_resumes_cancelled_store_write_and_settles_once_for_all
                     store.finalizes.load(Ordering::SeqCst),
                     usize::from(!suspend_create)
                 );
-                // receiver 已从 Store 替身取走；只有延续原 future 才能继续接收此信号。
+                // receiver 已从 Store 替身取走；只有延续原 future 才能继续接收此信号
                 complete_write
                     .send(())
                     .expect("detached cleanup retains the original store write");
@@ -2795,7 +2838,7 @@ fn settlement_failure_keeps_provider_error_and_releases_concurrency_once() {
             ));
             assert!(started.session.is_finalized());
             started.session.detach_finalize().await;
-            // Store 端口已接管精确费用后，结算错误不能改写 Provider 错误或触发第二次结算。
+            // Store 端口已接管精确费用后，结算错误不能改写 Provider 错误或触发第二次结算
             assert_cleanup_completed(&admissions, &budget, &started.request_id);
         }
     });
@@ -3944,7 +3987,7 @@ impl Provider for QueuedAccountProvider {
                 max_waiting: 1,
                 timeout: Duration::from_secs(5),
             },
-            context.deadline(),
+            context.deadline().at(),
             context.concurrency_wait_budget(),
         );
         loop {
@@ -4287,6 +4330,8 @@ fn request_settings_recompute_routing_and_admission_without_changing_sibling_or_
         assert_eq!(
             modified
                 .deadline_at()
+                .at()
+                .unwrap()
                 .duration_since(modified.started_at())
                 .unwrap(),
             Duration::from_secs(120)
@@ -4733,7 +4778,7 @@ fn child_settings_recompute_key_scope_without_inheriting_parent_defaults() {
         let mut values = previous.clone();
         values.fast_mode = FastMode::Default;
         values.client_limits = RateLimits::unlimited();
-        values.timeout_ms = 90_000;
+        values.timeout_ms = Some(90_000);
         let mut runtime = serde_json::to_value(&values.runtime).unwrap();
         runtime["model_mappings"] = json!({"child-alias":"model"});
         values.runtime = serde_json::from_value(runtime).unwrap();
@@ -4741,8 +4786,14 @@ fn child_settings_recompute_key_scope_without_inheriting_parent_defaults() {
             .replace_execution(&values, "settings-plugin")
             .unwrap();
         for (token, expected_limit, expected_fast, expected_timeout, profile) in [
-            ("sk_parent", 0, FastMode::Default, 90, "parent-default"),
-            ("sk_child", 9, FastMode::Disabled, 600, "child-default"),
+            (
+                "sk_parent",
+                0,
+                FastMode::Default,
+                Some(90_000),
+                "parent-default",
+            ),
+            ("sk_child", 9, FastMode::Disabled, None, "child-default"),
         ] {
             let request = ClientAuthenticationRequest::bearer(token)
                 .unwrap()
@@ -4760,7 +4811,7 @@ fn child_settings_recompute_key_scope_without_inheriting_parent_defaults() {
             );
             assert_eq!(actual.client_limits.max_concurrency, expected_limit);
             assert_eq!(actual.fast_mode, expected_fast);
-            assert_eq!(actual.timeout_ms, expected_timeout * 1000);
+            assert_eq!(actual.timeout_ms, expected_timeout);
             let facts = serde_json::to_value(actual.runtime).unwrap();
             assert_eq!(facts["request_profiles"]["openai"]["identity"], profile);
             assert_eq!(facts["model_mappings"]["child-alias"], "model");

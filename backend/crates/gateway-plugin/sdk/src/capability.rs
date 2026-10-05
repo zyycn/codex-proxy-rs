@@ -1,8 +1,10 @@
+//! 插件能力、调用阶段、失败策略与贡献声明的线协议定义
+
 use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-/// 能力描述插件提供的处理器，不承担宿主资源授权。
+/// 能力描述插件提供的处理器，不承担宿主资源授权
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -20,7 +22,7 @@ pub enum Capability {
 }
 
 impl Capability {
-    /// SDK 能描述的行为合同版本；具体宿主可以只开放其中一部分。
+    /// SDK 能描述的行为合同版本；具体宿主可以只开放其中一部分
     #[must_use]
     pub const fn contract_versions(self) -> &'static [u32] {
         match self {
@@ -38,7 +40,7 @@ impl Capability {
         }
     }
 
-    /// 稳定能力标识；默认扩展项 ID 由它派生，不受显示名称影响。
+    /// 稳定能力标识；默认扩展项 ID 由它派生，不受显示名称影响
     #[must_use]
     pub const fn identifier(self) -> &'static str {
         match self {
@@ -56,7 +58,7 @@ impl Capability {
         }
     }
 
-    /// 固定调用阶段；只有中间件需要作者显式选择挂载边界。
+    /// 固定调用阶段；只有中间件需要作者显式选择挂载边界
     #[must_use]
     pub const fn fixed_stages(self) -> &'static [Stage] {
         match self {
@@ -75,7 +77,7 @@ impl Capability {
     }
 }
 
-/// 调用阶段描述当前处理器位置，不限定插件访问宿主资源。
+/// 调用阶段描述当前处理器位置，不限定插件访问宿主资源
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
@@ -91,14 +93,14 @@ pub enum Stage {
     WebSocket,
     Request,
     Attempt,
-    /// Core 登记已选账号的 attempt 后才启动的受管上游执行。
+    /// Core 登记已选账号的 attempt 后才启动的受管上游执行
     Upstream,
     Observation,
     Management,
     CommandLine,
-    /// 未登录客户端触发的插件管理调用。
+    /// 未登录客户端触发的插件管理调用
     PublicManagement,
-    /// 宿主针对已发布实例签发的幂等维护调用。
+    /// 宿主针对已发布实例签发的幂等维护调用
     Maintenance,
 }
 
@@ -129,7 +131,7 @@ const fn default_capability_version() -> u32 {
     1
 }
 
-/// 插件按能力标识索引的扩展项声明；每种能力至多声明一个处理器。
+/// 插件按能力标识索引的扩展项声明；每种能力至多声明一个处理器
 pub type Contributions = BTreeMap<Capability, ContributionDeclaration>;
 
 pub(crate) fn deserialize_contributions<'de, D>(deserializer: D) -> Result<Contributions, D::Error>

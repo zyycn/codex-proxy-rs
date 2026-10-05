@@ -8,10 +8,10 @@
 从仓库根目录安装到本地工具目录：
 
 ```bash
-cargo install --locked --path backend/apps/plugin-cli --root /path/to/local-tools
+cargo +1.97.0 install --locked --path backend/apps/plugin-cli --root /path/to/local-tools
 ```
 
-将 `/path/to/local-tools/bin` 加入 `PATH`，或使用可执行文件的完整路径
+将 `/path/to/local-tools/bin` 加入 `PATH`，或使用可执行文件的完整路径；工具链与宿主 [验证命令](../../../docs/architecture.md#验证命令)一致
 
 ## 打包
 
@@ -48,6 +48,6 @@ CLI 与 SDK 的 `Manifest::from_author_slice`、`PluginBuilder::from_json` 共�
 Rust 包名为 `codex-proxy-plugin-cli`，位于宿主的 `backend` workspace，共享工具链、锁文件和检查规则；内部仅依赖 `gateway-plugin-sdk`
 
 ```bash
-cargo run --manifest-path backend/Cargo.toml -p codex-proxy-plugin-cli -- package --help
+cargo +1.97.0 run --manifest-path backend/Cargo.toml -p codex-proxy-plugin-cli --locked -- package --help
 RUST_MIN_STACK=16777216 cargo +1.97.0 test --manifest-path backend/Cargo.toml -p codex-proxy-plugin-cli --locked
 ```

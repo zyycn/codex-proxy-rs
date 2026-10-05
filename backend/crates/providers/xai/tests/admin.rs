@@ -1,3 +1,5 @@
+//! 验证 xAI 管理能力、账号清理与后台目录任务的组装和错误处理
+
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
@@ -117,7 +119,7 @@ async fn account_unavailable_clears_real_selector_cooldowns_only_for_deleted_acc
             (),
         )
         .unwrap();
-        // cooldown 必须来自生产 selector 对真实反馈类型的处理，不能由 mock 手工伪造。
+        // cooldown 必须来自生产 selector 对真实反馈类型的处理，不能由 mock 手工伪造
         selector
             .record_failure(
                 &session,
@@ -1104,7 +1106,7 @@ mod errors {
             }
             seed_input(&store, &input).await.unwrap();
             if expired {
-                // 新导入不接受已过期凭据；等待合法存入的短期凭据自然过期，验证历史账号刷新。
+                // 新导入不接受已过期凭据；等待合法存入的短期凭据自然过期，验证历史账号刷新
                 let remaining = input.account.refresh_token_expires_at.unwrap() - Utc::now();
                 tokio::time::sleep(
                     remaining.to_std().unwrap_or_default() + Duration::from_millis(10),
@@ -1152,7 +1154,7 @@ mod errors {
         let store = MemoryProviderAccountStore::shared();
         let input = create_input("refresh_busy", "synthetic-subject");
         seed_input(&store, &input).await.unwrap();
-        // 账号使用出站代理时不提前准备直连 discovery；占用失败不得触发任何代理请求。
+        // 账号使用出站代理时不提前准备直连 discovery；占用失败不得触发任何代理请求
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let proxy =

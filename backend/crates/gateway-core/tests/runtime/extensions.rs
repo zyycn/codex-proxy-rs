@@ -1,3 +1,5 @@
+//! 验证扩展发布代次的在途引用保留与故障隔离
+
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},

@@ -1,8 +1,8 @@
-//! 工具 JSON Schema 校验与参数数值归一化。
+//! 工具 JSON Schema 校验与参数数值归一化
 
 use super::*;
 
-/// 仅移除参数根节点的 null 分支，保持嵌套 schema 的业务语义。
+/// 仅移除参数根节点的 null 分支，保持嵌套 schema 的业务语义
 pub(super) fn normalize_function_parameters_root(
     value: &Value,
 ) -> Result<Option<Value>, GrokRequestEncodeError> {

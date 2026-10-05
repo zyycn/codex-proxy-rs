@@ -1,4 +1,4 @@
-//! 路由外层只适配 HTTP 值和正文，不解释插件协议或业务策略。
+//! 路由外层只适配 HTTP 值和正文，不解释插件协议或业务策略
 
 pub(crate) mod headers;
 pub(crate) mod websocket;
@@ -112,7 +112,7 @@ pub(crate) fn wrap(
     request_id_header: HeaderName,
     settings: SettingsSource,
 ) -> Router {
-    // Axum 的 route layer 在匹配后运行；外层 fallback service 才能让改写后的 URI 重新匹配内层路由。
+    // Axum 的 route layer 在匹配后运行；外层 fallback service 才能让改写后的 URI 重新匹配内层路由
     Router::new().fallback_service(tower::service_fn(move |mut request: Request<Body>| {
         let router = router.clone();
         let inherited = request.extensions().get::<contract::Context>().is_some();

@@ -1,4 +1,4 @@
-//! Admin 领域结果到安全 HTTP wire 的展示投影。
+//! Admin 领域结果到安全 HTTP wire 的展示投影
 
 use super::*;
 use gateway_admin::model::quota_forecast::{AccountQuotaForecast, AccountQuotaForecastReport};

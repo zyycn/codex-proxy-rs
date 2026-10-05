@@ -1,3 +1,5 @@
+//! 将插件上游适配贡献编译为可按请求选择的执行计划
+
 mod event;
 mod execution;
 mod registration;

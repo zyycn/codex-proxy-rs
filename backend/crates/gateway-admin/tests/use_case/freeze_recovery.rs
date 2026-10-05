@@ -1,4 +1,4 @@
-//! 容量熔断冻结恢复编排回归：到期探测、失败顺延与自适应并发下调。
+//! 容量熔断冻结恢复编排回归：到期探测、失败顺延与自适应并发下调
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -123,7 +123,7 @@ fn store_unavailable() -> AdminStoreError {
     )
 }
 
-/// 记录解冻/顺延调用的运行态 fake；冻结与峰值证据由测试预置。
+/// 记录解冻/顺延调用的运行态 fake；冻结与峰值证据由测试预置
 struct FreezeRuntimeStore {
     freezes: BTreeMap<String, AccountFreeze>,
     peaks: BTreeMap<String, u32>,
@@ -367,7 +367,7 @@ async fn adaptive_concurrency_lowers_limit_to_observed_peak() {
 
     run_cycle(&task).await;
 
-    // 峰值 4 × 0.8 = 3（不低于下限 2），低于全局默认 5，应下调到 3。
+    // 峰值 4 × 0.8 = 3（不低于下限 2），低于全局默认 5，应下调到 3
     assert_eq!(
         *store.lowered_limits.lock().expect("lowered limits"),
         vec![("acct_test".to_owned(), 3)]
@@ -392,11 +392,11 @@ async fn adaptive_concurrency_never_raises_limit() {
 
     run_cycle(&task).await;
 
-    // 峰值 40 的目标 32 高于全局默认 5；只降不升，不下发任何更新。
+    // 峰值 40 的目标 32 高于全局默认 5；只降不升，不下发任何更新
     assert!(store.update_commands().is_empty());
 }
 
-/// 到期时间还早（超过探测提前量）的冻结不发起探测。
+/// 到期时间还早（超过探测提前量）的冻结不发起探测
 #[tokio::test]
 async fn probe_skips_freezes_far_from_expiry() {
     let runtime = FreezeRuntimeStore::new(
@@ -416,7 +416,7 @@ async fn probe_skips_freezes_far_from_expiry() {
     assert!(runtime.extended().is_empty());
 }
 
-/// 停用账号不参与探测恢复；并发下调同样跳过。
+/// 停用账号不参与探测恢复；并发下调同样跳过
 #[tokio::test]
 async fn disabled_accounts_are_skipped() {
     let runtime = FreezeRuntimeStore::new(

@@ -1,3 +1,5 @@
+//! 验证运行时快照读取当前 Key 策略并保护密钥诊断输出
+
 use gateway_core::policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits};
 use gateway_store::postgres::{
     ClientApiKeySnapshot, PgRuntimeSnapshotRepository, RuntimeSnapshotRepository,

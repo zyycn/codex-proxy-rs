@@ -1,3 +1,5 @@
+//! 验证执行错误到 OpenAI 状态码、错误正文与重试提示的映射
+
 use axum::{body::to_bytes, http::StatusCode};
 use gateway_core::engine::EngineError;
 use gateway_core::error::{

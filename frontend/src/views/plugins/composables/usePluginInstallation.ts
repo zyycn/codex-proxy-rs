@@ -1,30 +1,32 @@
-import type { Ref } from 'vue'
-import type { PluginInstallMode } from '../components/PluginInstallModal.vue'
 import type { InstalledPlugin } from '../utils/catalog'
-import type { PluginInstallSelection } from '../utils/model'
+import type { PluginInstallMode, PluginInstallSelection } from '../utils/model'
 import type { PluginUpdateSelection } from './usePluginUpdateCheck'
 import type { PluginArtifact, PluginArtifactMutationResponse, PluginInstance, PluginRelease, PluginUpdateSourceBinding, QueryPluginReleaseRequest, VerifiedPluginArtifact } from '@/api'
 import { toast } from '@codex-proxy/ui'
 import { isEqual } from 'es-toolkit'
 import { onScopeDispose, shallowRef, watch } from 'vue'
 import { acceptPluginArtifact, getPluginUpdateSources, installRemotePlugin, queryPluginRelease, updatePluginSource, uploadPluginArtifact, verifyRemotePlugin, verifyUploadedPlugin } from '@/api'
+import { useAsyncAction } from '@/composables/useAsyncAction'
+import { notifyPluginError } from '../utils/actions'
 import { pluginInstallSelectionKey } from '../utils/model'
 
 interface InstallationContext {
-  runAction: <T>(flag: Ref<boolean>, title: string, task: () => Promise<T>) => Promise<T | undefined>
-  notifyError: (title: string, error: unknown) => void
   onInstalled: (result: PluginArtifactMutationResponse, switchTarget?: PluginInstance) => Promise<void>
   onSourceSaved: (source: PluginUpdateSourceBinding) => void
 }
 
-export function usePluginInstallation({ runAction, notifyError, onInstalled, onSourceSaved }: InstallationContext) {
+export function usePluginInstallation({ onInstalled, onSourceSaved }: InstallationContext) {
   const showInstall = shallowRef(false)
   const installMode = shallowRef<PluginInstallMode>('upload')
   const updateSource = shallowRef<PluginUpdateSourceBinding | null>(null)
   const updateSelection = shallowRef<PluginUpdateSelection | null>(null)
   const acceptanceArtifact = shallowRef<PluginArtifact | null>(null)
   const release = shallowRef<PluginRelease | null>(null)
-  const installing = shallowRef(false)
+  const action = useAsyncAction({
+    errorText: false,
+    onError: error => notifyPluginError('插件安装失败', error),
+  })
+  const installing = action.loading
   const queryingRelease = shallowRef(false)
   const verifyingArtifact = shallowRef(false)
   const verifiedArtifact = shallowRef<{ requestKey: string | File, artifact: VerifiedPluginArtifact } | null>(null)
@@ -81,7 +83,7 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
     const previous = updateSource.value
     if (!previous || previous.pluginId !== source.pluginId)
       return false
-    const result = await runAction(installing, '安装来源保存失败', async () => {
+    const result = await action.run(async () => {
       const current = (await getPluginUpdateSources({ silent: true })).find(value => value.pluginId === source.pluginId)
       if (!isEqual(current, previous))
         throw new Error('安装来源已变更，请关闭后重新打开')
@@ -89,7 +91,7 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
       updateSource.value = source
       onSourceSaved(source)
       return true
-    })
+    }, { onError: error => notifyPluginError('安装来源保存失败', error) })
     return result === true
   }
 
@@ -113,7 +115,7 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
     }
     catch (error) {
       if (releaseController === controller)
-        notifyError('GitHub Release 查询失败', error)
+        notifyPluginError('GitHub Release 查询失败', error)
     }
     finally {
       if (releaseController === controller) {
@@ -129,7 +131,7 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
       toast.warning('请先校验当前选择的插件包')
       return
     }
-    const result = await runAction(installing, '插件安装失败', async () => {
+    const result = await action.run(async () => {
       const { pluginId, version, sha256 } = verified.artifact.metadata
       if (request instanceof File) {
         return uploadPluginArtifact(request, sha256, { silent: true })
@@ -155,7 +157,7 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
     const { artifact, request, instance, binding } = selection
     if (!artifact || !request || !instance)
       return false
-    const completed = await runAction(installing, '插件升级失败', async () => {
+    const completed = await action.run(async () => {
       const latest = (await getPluginUpdateSources({ silent: true })).find(value => value.pluginId === binding.pluginId)
       if (!isEqual(binding, latest))
         throw new Error('安装来源已变更，请重新检查更新')
@@ -170,7 +172,7 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
       // 使用检查时的实例 revision，避免下载期间的设置变更被升级覆盖。
       await onInstalled(result, instance)
       return true
-    })
+    }, { onError: error => notifyPluginError('插件升级失败', error) })
     return completed === true
   }
 
@@ -179,7 +181,7 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
       toast.warning('请选择待安装的插件版本')
       return
     }
-    const result = await runAction(installing, '插件安装失败', () => acceptPluginArtifact({ sha256: artifact.metadata.sha256 }, { silent: true }))
+    const result = await action.run(() => acceptPluginArtifact({ sha256: artifact.metadata.sha256 }, { silent: true }))
     if (!result)
       return
     showInstall.value = false
@@ -211,7 +213,7 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
     }
     catch (error) {
       if (verificationController === controller)
-        notifyError('插件包校验失败', error)
+        notifyPluginError('插件包校验失败', error)
     }
     finally {
       if (verificationController === controller) {

@@ -1,3 +1,5 @@
+//! 验证网关基础命令无需加载配置，并拒绝非法或多余参数
+
 use std::{fs, process::Command};
 
 #[test]

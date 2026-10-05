@@ -1,4 +1,4 @@
-//! OpenAI 管理边界：Provider preparation 与 Redis OAuth pending 适配。
+//! OpenAI 管理边界：Provider preparation 与 Redis OAuth pending 适配
 
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -72,7 +72,7 @@ use crate::transport::{
 const PROVIDER_NAME: &str = "openai";
 const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 3;
 
-/// OpenAI 对终态 Admin port 的唯一实现。
+/// OpenAI 对终态 Admin port 的唯一实现
 pub(crate) struct OpenAiAdminProvider {
     provider_kind: ProviderKind,
     profile: CodexWireProfileState,
@@ -207,21 +207,22 @@ impl ProviderAdmin for OpenAiAdminProvider {
     }
 
     fn plan_type_display(&self, plan_type: &str) -> String {
-        // 与官方 Desktop 的套餐名称映射一致；原始子类型继续由 plan_type 保留。
+        // Pro 系列按套餐类型区分展示，其他套餐遵循官方 KnownPlan::display_name
+        // 只映射展示名称，原始套餐值与未知套餐保持不变
         match plan_type.to_ascii_lowercase().as_str() {
-            "free" | "free_workspace" | "guest" => "Free",
+            "free" => "Free",
             "go" => "Go",
             "plus" => "Plus",
-            "pro" | "prolite" => "Pro",
-            "team" | "self_serve_business_prolite" | "self_serve_business_usage_based" => {
-                "Business"
-            }
-            "business"
-            | "ent26"
-            | "enterprise_cbp_automation"
-            | "enterprise_cbp_usage_based"
-            | "enterprise"
-            | "hc" => "Enterprise",
+            "pro" => "Pro",
+            "prolite" => "ProLite",
+            "promax" => "ProMax",
+            "team" => "Team",
+            "self_serve_business_prolite" => "Self Serve Business ProLite",
+            "self_serve_business_usage_based" => "Self Serve Business Usage Based",
+            "business" => "Business",
+            "ent26" | "enterprise" | "hc" => "Enterprise",
+            "enterprise_cbp_automation" => "Enterprise (Automation)",
+            "enterprise_cbp_usage_based" => "Enterprise CBP Usage Based",
             "edu" | "education" => "Edu",
             "edu_plus" => "Edu Plus",
             "edu_pro" => "Edu Pro",
@@ -391,7 +392,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             return Ok(None);
         }
         Ok(Some(CalculatedBillingBreakdown {
-            // 历史总额只能核对费用拆分，不能证明当时保存过长上下文标记。
+            // 历史总额只能核对费用拆分，不能证明当时保存过长上下文标记
             long_context_billing_applied: false,
             image: None,
             custom_multiplier_bps: breakdown.custom_multiplier_bps(),
@@ -855,7 +856,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             .await
             .map_err(map_catalog_error)?;
         // 只有 Codex 原生对象带齐推理强度、上下文窗口等元数据；API 目录只有模型 ID，
-        // 拼出来的文件不满足 Codex `model_catalog_json` 的加载要求，这里直接拒绝而不降格。
+        // 拼出来的文件不满足 Codex `model_catalog_json` 的加载要求，这里直接拒绝而不降格
         let mut entries = Vec::with_capacity(models.len());
         for model in &models {
             if model.document().protocol() != "codex" {
@@ -1168,7 +1169,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
         })
         .collect();
     // 快照级 limit_reached 只看滚动后的窗口触顶：顶层标记是观测事实，不能
-    // 在窗口全部过期后继续维持限流。
+    // 在窗口全部过期后继续维持限流
     let limit_reached = quota_windows_limit_reached(&windows);
     ProviderQuota {
         plan_type: snapshot.plan_type().map(str::to_owned),
@@ -1267,9 +1268,9 @@ fn project_reset_credit(
     }
 }
 
-/// `secondary_window` 有时只是上游的空占位：没有时长、重置时间，也没有用量。
+/// `secondary_window` 有时只是上游的空占位：没有时长、重置时间，也没有用量
 /// 它不能被可靠翻译成 5 小时或周额度，因此不应占用账号面板；带有实际事实的
-/// 次级窗口（时长、重置、非零用量或触顶）仍完整保留。
+/// 次级窗口（时长、重置、非零用量或触顶）仍完整保留
 fn should_project_quota_window(window: &CodexQuotaWindow) -> bool {
     window.role() != CodexQuotaWindowRole::Secondary
         || window.window_seconds().is_some()
@@ -1298,7 +1299,7 @@ const fn quota_role(role: CodexQuotaWindowRole) -> ProviderQuotaWindowRole {
     }
 }
 
-/// 按窗口时长显示汉化额度名；额度桶名称通过独立字段投影。
+/// 按窗口时长显示汉化额度名；额度桶名称通过独立字段投影
 fn codex_quota_window_label(
     kind: CodexQuotaWindowKind,
     role: CodexQuotaWindowRole,
@@ -1315,7 +1316,7 @@ fn codex_quota_window_label(
 fn custom_quota_window_label(window_seconds: Option<u64>, role: CodexQuotaWindowRole) -> String {
     let Some(seconds) = window_seconds.filter(|seconds| *seconds > 0) else {
         // 与官方客户端一致：没有时长时不臆测为 5 小时或周额度；保留
-        // primary/secondary 语义，让用户知道这是上游未标明时长的独立窗口。
+        // primary/secondary 语义，让用户知道这是上游未标明时长的独立窗口
         return match role {
             CodexQuotaWindowRole::Primary => "主额度".to_owned(),
             CodexQuotaWindowRole::Secondary => "次级额度".to_owned(),
@@ -1331,7 +1332,7 @@ fn custom_quota_window_label(window_seconds: Option<u64>, role: CodexQuotaWindow
     }
 }
 
-/// 将 Provider-owned PKCE/OIDC 状态保存到 Store 提供的 Redis 原子端口。
+/// 将 Provider-owned PKCE/OIDC 状态保存到 Store 提供的 Redis 原子端口
 pub(crate) struct OpenAiOAuthPendingStore {
     port: Arc<dyn OAuthPendingFlowPort>,
     provider_kind: ProviderKind,
@@ -1698,12 +1699,12 @@ fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdmin
 }
 
 fn refresh_rejection_message(code: Option<&str>) -> Option<&'static str> {
-    // 与官方 Codex 的失败原因对齐；只解释管理提示，不改动 Worker 的终态/退避判定。
+    // 与官方 Codex 的失败原因对齐；只解释管理提示，不改动 Worker 的终态/退避判定
     match code.map(str::to_ascii_lowercase).as_deref() {
         Some("refresh_token_expired") => Some("刷新令牌已过期，请重新授权"),
         Some("refresh_token_reused") => Some("刷新令牌已被使用，请重新授权"),
         Some("refresh_token_invalidated") => Some("刷新令牌已被撤销，请重新授权"),
-        // token_expired 也用于 RT 校验失败，不据此断言具体到期原因。
+        // token_expired 也用于 RT 校验失败，不据此断言具体到期原因
         Some("token_expired") => Some("刷新令牌不可用，请重新授权"),
         Some("invalid_grant") => Some("刷新令牌无效或已失效，请重新授权"),
         _ => None,
@@ -1823,7 +1824,7 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
             detail,
         } => {
             // 公开文案只解释已知状态和错误码；原始上游材料留在内部诊断，
-            // 额度查询拒绝不作为凭据失效证据，也不写入账号的凭据错误字段。
+            // 额度查询拒绝不作为凭据失效证据，也不写入账号的凭据错误字段
             let (kind, public_message) = match (status, code.as_deref()) {
                 (Some(401), Some("token_revoked")) => (
                     Kind::BadGateway,

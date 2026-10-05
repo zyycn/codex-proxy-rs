@@ -1,4 +1,4 @@
-//! 设置服务的唯一公开操作声明；SDK 操作和数据合同由对应合同测试生成。
+//! 设置服务的唯一公开操作声明；SDK 操作和数据合同由对应合同测试生成
 
 use crate::{
     SettingsService,
@@ -14,7 +14,7 @@ pub(super) fn register(
     registry: &mut super::Registry,
     service: &Arc<dyn SettingsService>,
 ) -> Result<(), AdminError> {
-    // 声明保留 SDK 类型名和原生参数转换，分派名称由业务方法名直接派生。
+    // 声明保留 SDK 类型名和原生参数转换，分派名称由业务方法名直接派生
     macro_rules! register {
         ($sdk:ident, $method:ident, $input:ty, $pattern:pat $(, $argument:expr)* $(,)?) => {{
             let service = service.clone();

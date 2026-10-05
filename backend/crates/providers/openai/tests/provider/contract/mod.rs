@@ -1,3 +1,5 @@
+//! OpenAI 执行合同测试入口，以及协议转换与发送前校验测试
+
 mod account_isolation;
 mod capacity;
 mod precommit;
@@ -682,7 +684,7 @@ async fn selected_proxy_location_overrides_global_and_reloads_without_mutating_c
             .mount(proxy)
             .await;
     }
-    // 目标不可解析；收到请求证明使用的是账号代理，而非测试机默认出口。
+    // 目标不可解析；收到请求证明使用的是账号代理，而非测试机默认出口
     let provider = provider_with_base_url(&store, "http://upstream.invalid".to_owned());
     let original = json!({"model":"gpt-5.4", "input":[
         {"role":"user", "content":[{"type":"input_text", "text":"<environment_context><timezone>UTC</timezone></environment_context>"}], "internal_chat_message_metadata_passthrough":{"content_item_kinds":["environments.environment_context"], "create_time":1789293131.822}},
@@ -740,7 +742,7 @@ async fn replay_compatibility_should_remove_only_reasoning_status_on_both_transp
     }
     for websocket in [false, true] {
         let actual = capture_replay_compatibility_request(input.clone(), false, websocket).await;
-        // 比较序列化结果，同时保护未修改字段的顺序。
+        // 比较序列化结果，同时保护未修改字段的顺序
         assert_eq!(actual["input"].to_string(), expected.to_string());
     }
 }
@@ -1020,7 +1022,10 @@ fn provider_with_affinity(
     provider_with_affinity_and_base_url(store, session_affinity, OFFICIAL_CODEX_BASE_URL.to_owned())
 }
 
-fn provider_with_base_url(store: &Arc<MemoryAccountStore>, base_url: String) -> Arc<CodexProvider> {
+pub(super) fn provider_with_base_url(
+    store: &Arc<MemoryAccountStore>,
+    base_url: String,
+) -> Arc<CodexProvider> {
     provider_with_base_url_and_retry_budget(
         store,
         base_url,
@@ -1165,7 +1170,7 @@ fn provider_and_quota_with_runtime_ports(
     (Arc::new(provider), quota, websocket_pool)
 }
 
-async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
+pub(super) async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
     create_account_with_enabled(store, id, true).await;
 }
 
@@ -1485,7 +1490,7 @@ impl ExtensionSetLease for TestExtensionLease {
     }
 }
 
-fn context_with_middleware(
+pub(super) fn context_with_middleware(
     request_id: &str,
     plan: Arc<dyn MiddlewarePlan>,
     fast_mode: FastMode,
@@ -1520,7 +1525,7 @@ fn context_with_middleware(
     )
 }
 
-fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
+pub(super) fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
     context_with_fast_policy(request_id, cancellation, FastMode::Default)
 }
 
@@ -1815,18 +1820,30 @@ async fn capture_turn_state_request(
     }
     if let Some(client_turn_state) = client_turn_state {
         protocol_context.insert("turn_state".to_owned(), json!(client_turn_state));
+        protocol_context.insert(
+            "opaque_request_headers".to_owned(),
+            json!([["x-codex-turn-state", STANDARD.encode(client_turn_state)]]),
+        );
+    }
+    let mut body = Map::from_iter([
+        ("model".to_owned(), json!("gpt-5.4")),
+        ("input".to_owned(), json!("current input")),
+        ("client_metadata".to_owned(), json!({"custom":"preserved"})),
+    ]);
+    if let Some(state) = client_turn_state {
+        for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+            body.insert(key.to_owned(), json!(state));
+            body["client_metadata"]
+                .as_object_mut()
+                .unwrap()
+                .insert(key.to_owned(), json!(state));
+        }
     }
     let operation = Operation::Generate(
         GenerateRequest::from_protocol_payload(
-            ProtocolPayload::json_object(
-                "openai",
-                Map::from_iter([
-                    ("model".to_owned(), json!("gpt-5.4")),
-                    ("input".to_owned(), json!("current input")),
-                ]),
-            )
-            .expect("OpenAI payload")
-            .with_context(protocol_context),
+            ProtocolPayload::json_object("openai", body)
+                .expect("OpenAI payload")
+                .with_context(protocol_context),
         )
         .with_provider_session_state(
             ProviderSessionState::new("openai", session_state).expect("provider session state"),
@@ -2361,7 +2378,7 @@ async fn api_websocket_precheck_and_selection_share_the_snapshot_retry_budget() 
                 count <= 6,
                 "both credential checks must share one retry budget"
             );
-            // 第 1、4 次在传输预检冲突，第 3、6 次在最终候选校验冲突。
+            // 第 1、4 次在传输预检冲突，第 3、6 次在最终候选校验冲突
             if matches!(count, 1 | 3 | 4 | 6) {
                 let account = store.account(id.as_str()).expect("account");
                 let observed_at = account
@@ -2444,7 +2461,7 @@ async fn exhausted_account_pool_returns_usage_limit_before_http_or_websocket_net
         create_account(&store, id).await;
         exhaust_account_quota(&store, id).await;
     }
-    // 范围外的可用账号不能掩盖当前 Client Key 的额度耗尽。
+    // 范围外的可用账号不能掩盖当前 Client Key 的额度耗尽
     create_account(&store, "acct_outside_scope").await;
     let server = MockServer::start().await;
     let provider = provider_with_base_url(&store, server.uri());
@@ -2788,7 +2805,7 @@ async fn image_usage_should_preserve_unknown_fields_and_explicit_zero_counts() {
 
 #[tokio::test]
 async fn image_prices_should_use_modality_rates_and_precede_delivery() {
-    // First case is the real gpt-image-2 response verified on 2026-09-08.
+    // 首个用例使用 2026-09-08 核验的真实 gpt-image-2 响应
     let cases = [
         (18, 0, 229, None, 69_600_000_u128),
         (17, 1457, 1372, None, 529_010_000),
@@ -3148,7 +3165,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         AccountWeight::new(100).expect("weight"),
     );
 
-    // 官方 Search 正文的 id 与 Responses 的 session-id 是同一个根身份。
+    // 官方 Search 正文的 id 与 Responses 的 session-id 是同一个根身份
     let search = Operation::Search(StandaloneSearchRequest::from_raw_json(
         RawJsonPayload::new(
             "openai",
@@ -3190,7 +3207,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     }
     drop(same);
 
-    // 仍由旧租约流程报告繁忙并换号，亲和不绕过并发限制。
+    // 仍由旧租约流程报告繁忙并换号，亲和不绕过并发限制
     leases
         .busy_accounts
         .lock()
@@ -3212,7 +3229,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         .await
         .expect("first event")
         .expect("successful JSON response");
-    drop(fallback); // 只消费一个事件也必须完成绑定迁移。
+    drop(fallback); // 只消费一个事件也必须完成绑定迁移
     leases.busy_accounts.lock().expect("busy accounts").clear();
     store.set_scheduling(
         first_account.as_str(),
@@ -3664,7 +3681,7 @@ async fn repeated_message_too_big_closes_keep_session_on_websocket() {
         assert!(!format!("{error:?}").contains("message too big"));
         assert!(!error.to_string().contains("message too big"));
         // 上游 close 1009 是 RFC 6455 "message too big"：必须归因为请求自身问题，
-        // 而不是 provider 传输故障（否则会被熔断器和换号逻辑误伤其他请求）。
+        // 而不是 provider 传输故障（否则会被熔断器和换号逻辑误伤其他请求）
         assert_eq!(error.kind(), ProviderErrorKind::MessageTooBig);
         assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
         assert!(
@@ -3948,7 +3965,7 @@ async fn abrupt_websocket_disconnect_preserves_diagnosis_and_ambiguous_send_stat
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
         websocket.next().await.unwrap().unwrap();
-        // The peer disappears after receiving the payload, without sending a Close frame.
+        // 对端收到载荷后直接断开，不发送 Close 帧
     });
     let operation = Operation::Generate(generate_with_persisted_session_context(
         ACCOUNT_ID,
@@ -4001,7 +4018,7 @@ async fn websocket_midstream_error_frame_surfaces_upstream_message_after_deliver
             .await
             .expect("WebSocket request")
             .expect("valid WebSocket request");
-        // 真实生产观察：OpenAI 在流已开始后发送带原话的 `error` 帧再断连。
+        // 真实生产观察：OpenAI 在流已开始后发送带原话的 `error` 帧再断连
         websocket
             .send(Message::Text(
                 json!({
@@ -4042,7 +4059,7 @@ async fn websocket_midstream_error_frame_surfaces_upstream_message_after_deliver
             ))
             .await
             .expect("send error frame");
-        // 不发送任何终止事件，直接断开，模拟上游发完错误帧后的真实行为。
+        // 不发送任何终止事件，直接断开，模拟上游发完错误帧后的真实行为
     });
 
     let provider = provider_with_base_url(&store, base_url);
@@ -4067,13 +4084,13 @@ async fn websocket_midstream_error_frame_surfaces_upstream_message_after_deliver
         ProviderErrorKind::UpstreamCapacityUnavailable
     );
     assert_eq!(failure.send_state(), UpstreamSendState::Sent);
-    // 交给 Core 的失败必须保留上游原话：客户端只能靠它知道失败原因。
+    // 交给 Core 的失败必须保留上游原话：客户端只能靠它知道失败原因
     let visible = failure
         .client_visible_upstream_error()
         .expect("overload frame must carry a client-visible upstream error");
     assert_eq!(visible.code(), Some("server_is_overloaded"));
     assert_eq!(visible.message(), OVERLOAD_MESSAGE);
-    // 原始错误帧必须随失败一起交给交付边界（SSE 侧据此翻译成 response.failed）。
+    // 原始错误帧必须随失败一起交给交付边界（SSE 侧据此翻译成 response.failed）
     let atomic = failure.take_atomic_client_events();
     let error_frame = atomic
         .iter()
@@ -4210,7 +4227,7 @@ async fn websocket_pong_timeout_diagnosis_survives_ambiguous_send_wrapping() {
             }
             std::assert_matches!(websocket.next().await.unwrap().unwrap(), Message::Ping(_));
             ping_seen_tx.send(()).unwrap();
-            // 停止 poll，避免 tungstenite 自动回 Pong，复现本地保活超时。
+            // 停止 poll，避免 tungstenite 自动回 Pong，复现本地保活超时
             futures::future::pending::<()>().await;
         });
         let operation = Operation::Generate(generate_with_persisted_session_context(
@@ -5572,7 +5589,7 @@ async fn websocket_opening_account_rejection_keeps_replay_safe_without_transport
         let (mut opening, _) = listener.accept().await.unwrap();
         let request = capture_http_request(&mut opening).await;
         assert!(String::from_utf8_lossy(&request).starts_with("GET /codex/responses"));
-        // 额度耗尽拒绝通常携带小时级的 retry-after；同账号重试注定再次命中。
+        // 额度耗尽拒绝通常携带小时级的 retry-after；同账号重试注定再次命中
         let body = r#"{"error":{"message":"You have reached your usage limit.","type":"rate_limit_error"}}"#;
         opening
             .write_all(
@@ -5611,7 +5628,7 @@ async fn websocket_opening_account_rejection_keeps_replay_safe_without_transport
         "before-payload rejection is replay safe"
     );
     // 回放安全的账号级拒绝必须把换号决策留给 Core，不得钉死同账号传输重试
-    // （旧行为会携带小时级 retry-after 的同账号重试标记，请求必然超时）。
+    // （旧行为会携带小时级 retry-after 的同账号重试标记，请求必然超时）
     assert_eq!(error.pre_delivery_retry(), None);
 }
 
@@ -6206,7 +6223,7 @@ async fn websocket_account_scoping_preserves_ascii_turn_metadata_and_unicode_inp
         }).to_string().into())).await.expect("complete response");
         body
     });
-    // 官方 Codex 在工作区包含 Unicode 时也保持内嵌 turn metadata 为 ASCII。
+    // 官方 Codex 在工作区包含 Unicode 时也保持内嵌 turn metadata 为 ASCII
     let raw = r#"{"installation_id":"client-installation","workspaces":{"C:\\Users\\\u9879\u76ee\\\ud83d\ude80":{"label":"caf\u00e9","literal":"\\u4e2d","quoted":"\"line\n"}}}"#;
     let input = json!([{"role": "user", "content": "中文正文 🚀"}]);
     let payload = ProtocolPayload::json_object(
@@ -6530,6 +6547,11 @@ async fn matching_turn_id_should_prefer_an_explicit_client_echo_over_saved_provi
         captured_header_values(&request, "x-codex-turn-state"),
         vec![b"client-turn-state".to_vec()]
     );
+    let body = captured_request_body(&request);
+    for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+        assert_eq!(body[key], "client-turn-state");
+        assert_eq!(body["client_metadata"][key], "client-turn-state");
+    }
 }
 
 #[tokio::test]
@@ -6541,12 +6563,17 @@ async fn new_or_unidentified_turn_should_not_restore_previous_turn_state() {
             Some("turn-new"),
             Some("stale-client-turn-state"),
         ),
-        ("req_unidentified_turn_state", None, Some("turn-new"), None),
+        (
+            "req_unidentified_turn_state",
+            None,
+            Some("turn-new"),
+            Some("stale-client-turn-state"),
+        ),
         (
             "req_missing_current_turn_state",
             Some("turn-old"),
             None,
-            None,
+            Some("stale-client-turn-state"),
         ),
     ] {
         let request = capture_turn_state_request(
@@ -6557,6 +6584,16 @@ async fn new_or_unidentified_turn_should_not_restore_previous_turn_state() {
         )
         .await;
         assert!(captured_header_values(&request, "x-codex-turn-state").is_empty());
+        let body = captured_request_body(&request);
+        for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+            assert!(body.get(key).is_none(), "stale body state: {key}");
+            assert!(
+                body["client_metadata"].get(key).is_none(),
+                "stale metadata state: {key}"
+            );
+        }
+        assert_eq!(body["input"][0]["content"][0]["text"], "current input");
+        assert_eq!(body["client_metadata"]["custom"], "preserved");
     }
 }
 
@@ -6681,7 +6718,7 @@ async fn account_selection_log_should_include_affinity_observation_fields() {
         .with_writer(captured.clone())
         .finish();
     // 该 integration test binary 没有其他 subscriber；全局安装可避免并行测试切换
-    // thread-local dispatcher 时重建 tracing callsite interest 所产生的竞争。
+    // thread-local dispatcher 时重建 tracing callsite interest 所产生的竞争
     tracing::subscriber::set_global_default(subscriber)
         .expect("install affinity observation log subscriber");
 
@@ -7234,7 +7271,7 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
     );
     drop(child);
 
-    // 租约层报告 A 已满；既有子线程和首次出现的子线程都能独立选择 B。
+    // 租约层报告 A 已满；既有子线程和首次出现的子线程都能独立选择 B
     leases
         .busy_accounts
         .lock()
@@ -7949,10 +7986,10 @@ async fn official_usage_limit_failure_persists_fact_without_fabricating_usage() 
         .and(path("/api/codex/usage"))
         .and(header("authorization", format!("Bearer at-{account_id}")))
         // 失败后的补查只更新观察时间，即使响应满足恢复条件，
-        // 也不能覆盖本次推理刚确认的耗尽；恢复由独立的主动刷新判断。
+        // 也不能覆盖本次推理刚确认的耗尽；恢复由独立的主动刷新判断
         .respond_with(
             ResponseTemplate::new(200)
-                // 验证后台 usage 同步不能把原始的额度错误响应拖到查询完成之后。
+                // 验证后台 usage 同步不能把原始的额度错误响应拖到查询完成之后
                 .set_delay(Duration::from_millis(750))
                 .set_body_json(json!({
                     "rate_limit": {
@@ -8151,10 +8188,11 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
             assert_eq!(error.kind(), ProviderErrorKind::UpstreamCapacityUnavailable);
             assert_eq!(error.upstream_status(), Some(status));
             assert!(error.replay_is_safe());
+            assert_eq!(error.retry_after(), Some(Duration::from_secs(129600)));
             assert!(
                 matches!(error.pre_delivery_retry(), Some(PreDeliveryRetry::SameAccountTransientRetry {
                 max_retries, initial_delay, max_delay,
-            }) if max_retries.get() == 3 && initial_delay == Duration::from_secs(8) && max_delay == Duration::from_secs(8))
+            }) if max_retries.get() == 3 && initial_delay == Duration::from_millis(500) && max_delay == Duration::from_secs(8))
             );
             assert!(provider_openai::openai_failure_affects_account_score(
                 &error
@@ -8175,6 +8213,68 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
             assert_eq!(account.quota().access(), QuotaAccessState::Unknown);
             assert_eq!(account.credential_state(), CredentialState::Ready);
         }
+    }
+}
+
+#[tokio::test]
+async fn flex_http_and_websocket_opening_rejections_should_not_retry_or_cool_down_accounts() {
+    use gateway_core::provider_ports::ProviderCooldownPort as _;
+    for use_websocket in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let account_id = "acct_provider_contract";
+        create_account(&store, account_id).await;
+        let cooldowns = Arc::new(MemoryCooldownPort::new());
+        let server = MockServer::start().await;
+        let body = json!({"error":{"type":"resource_unavailable","code":"flex_unavailable","message":"Flex capacity unavailable."}});
+        Mock::given(method(if use_websocket { "GET" } else { "POST" }))
+            .and(path("/codex/responses"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "300")
+                    .set_body_json(&body),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let operation = if use_websocket {
+            generate_operation()
+        } else {
+            http_generate_operation()
+        };
+        let (provider, _) =
+            provider_with_capacity_tracking(&store, server.uri(), Arc::clone(&cooldowns));
+        let mut stream = provider
+            .execute(
+                planned_request("openai", operation),
+                context("req_flex", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        let error = loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("expected Flex failure"),
+            }
+        };
+        assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+        assert_eq!(
+            error.upstream_code().map(|code| code.as_str()),
+            Some("flex_unavailable")
+        );
+        assert!(!error.replay_is_safe());
+        assert!(error.pre_delivery_retry().is_none());
+        assert!(error.retry_is_prohibited());
+        assert!(!provider_openai::openai_failure_affects_account_score(
+            &error
+        ));
+        let response = error.client_visible_upstream_response().unwrap();
+        assert_eq!(response.status(), 429);
+        assert_eq!(response.body().as_ref(), body.to_string().as_bytes());
+        let account = store.account(account_id).unwrap();
+        assert_eq!(account.credential_state(), CredentialState::Ready);
+        assert_eq!(account.quota().access(), QuotaAccessState::Unknown);
+        assert!(cooldowns.read(account.id()).await.unwrap().is_none());
     }
 }
 
@@ -8265,7 +8365,7 @@ async fn capacity_feedback_only_counts_overload_rejections_and_excludes_diagnost
                     .await;
                 let (provider, _) =
                     provider_with_capacity_tracking(&store, server.uri(), Arc::clone(&cooldowns));
-                // 同时验证窗口证据已过期与尚未过期：探测不能重建峰值，也不能改写原计数。
+                // 同时验证窗口证据已过期与尚未过期：探测不能重建峰值，也不能改写原计数
                 for existing_evidence in [None, Some((4, 20))] {
                     if let Some((count, peak)) = existing_evidence {
                         for _ in 0..count {
@@ -8357,7 +8457,7 @@ async fn local_websocket_connection_cancellation_does_not_supply_capacity_eviden
         .expect("opening deadline")
         .expect("opening");
     read_http_request(&mut opening).await;
-    // 复现账号更新驱逐正在建连的连接，未收到任何上游容量拒绝。
+    // 复现账号更新驱逐正在建连的连接，未收到任何上游容量拒绝
     pool.evict_account(account_id).await;
     let error = timeout(Duration::from_secs(5), attempt)
         .await
@@ -8429,6 +8529,12 @@ async fn capacity_feedback_in_stream_only_counts_explicit_overload() {
                     true,
                 ),
                 (
+                    "flex_unavailable",
+                    "Flex capacity unavailable.",
+                    ProviderErrorKind::Unavailable,
+                    false,
+                ),
+                (
                     "invalid_prompt",
                     "Invalid prompt: we've limited access to this content for safety reasons.",
                     ProviderErrorKind::InvalidRequest,
@@ -8455,7 +8561,7 @@ async fn capacity_feedback_in_stream_only_counts_explicit_overload() {
             create_account(&store, "acct_provider_contract").await;
             let account = store.account("acct_provider_contract").expect("account");
             let cooldowns = Arc::new(MemoryCooldownPort::new());
-            // 距离冻结阈值只差一次，验证非容量错误不会把可调度账号推入冷却。
+            // 距离冻结阈值只差一次，验证非容量错误不会把可调度账号推入冷却
             for _ in 0..11 {
                 cooldowns
                     .record_capacity_failure(account.id(), Duration::from_secs(600), 20)
@@ -9715,20 +9821,21 @@ fn endpoint_observation_should_read_models_without_rewriting_or_requiring_a_cata
 #[test]
 fn request_observation_preserves_the_raw_reasoning_effort() {
     let store = Arc::new(MemoryAccountStore::default());
-    let payload = ProtocolPayload::json_object(
-        "openai",
-        Map::from_iter([("reasoning".to_owned(), json!({"effort": "future-value"}))]),
-    )
-    .expect("protocol payload");
-    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
-
-    let client_key_id = ClientApiKeyId::new("key_openai_observation").expect("client key");
-    let observation = provider(&store).request_observation(&operation, &client_key_id);
-
-    assert_eq!(
-        observation.reasoning_effort.as_deref(),
-        Some("future-value")
-    );
+    for (effort, expected) in [
+        (json!("future-value"), "future-value"),
+        (json!(64), "64"),
+        (json!(0), "0"),
+    ] {
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([("reasoning".to_owned(), json!({"effort":effort}))]),
+        )
+        .unwrap();
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+        let client_key_id = ClientApiKeyId::new("key_openai_observation").unwrap();
+        let observation = provider(&store).request_observation(&operation, &client_key_id);
+        assert_eq!(observation.reasoning_effort.as_deref(), Some(expected));
+    }
 }
 
 #[test]
@@ -10679,7 +10786,7 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
                 provider_openai::credential::ResponsesTransport::Http,
             )
             .await;
-        // 后台发现不协商客户端版本；客户端目录独立请求并按实际版本缓存。
+        // 后台发现不协商客户端版本；客户端目录独立请求并按实际版本缓存
         for query in [None, Some("client_version=1.0.0")] {
             Mock::given(method("GET"))
                 .and(path(format!("{prefix}/models")))
@@ -11415,7 +11522,7 @@ async fn quota_continuation_full_client_replay_selects_another_account() {
         QuotaAccessState::Exhausted
     );
     create_account(&store, "acct_affinity_switch_b").await;
-    // 客户端重建完整历史，保留同一会话标识；选号必须跳过刚刚耗尽的原账号。
+    // 客户端重建完整历史，保留同一会话标识；选号必须跳过刚刚耗尽的原账号
     let replay = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object("openai", json!({"model":"gpt-5.4","session_id":"quota-replay","thread_id":"turn","input":full_input}).as_object().unwrap().clone()).unwrap(),
     ));
@@ -11456,7 +11563,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         let (socket, _) = listener.accept().await.unwrap();
         let mut websocket =
             crate::transport::accept_codex_test_websocket_with(socket, |request, response| {
-                // 提示头只在首次握手发送；后续档位由各自 response.create 正文指定。
+                // 提示头只在首次握手发送；后续档位由各自 response.create 正文指定
                 assert_eq!(
                     request.headers()["x-codex-routing-hint"],
                     "model=gpt-5.4;tier=default"
@@ -11532,7 +11639,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
             GenerateRequest::from_protocol_payload(
                 ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
                     .unwrap()
-                    // 与客户端 WebSocket 一致，首轮也禁止按快路径预算降级到 HTTP。
+                    // 与客户端 WebSocket 一致，首轮也禁止按快路径预算降级到 HTTP
                     .with_context(Map::from_iter([
                         ("use_websocket".to_owned(), json!(true)),
                         (
@@ -12000,7 +12107,7 @@ async fn stalled_proxy_connections_share_thirty_seconds_instead_of_resetting_tim
         .await
         .expect("proxy accepted the real socket")
         .unwrap();
-    // 先确认真实连接已建立，再推进共享预算与 transport 的同一单调时钟。
+    // 先确认真实连接已建立，再推进共享预算与 transport 的同一单调时钟
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(29)).await;
     execution.await.unwrap();
@@ -12013,7 +12120,7 @@ async fn stalled_proxy_connections_share_thirty_seconds_instead_of_resetting_tim
 pub(crate) async fn assert_local_connection_capacity_is_not_an_upstream_failure() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
-    // 显式出口使 Provider 使用生产建连层，而不是测试注入的裸 reqwest client。
+    // 显式出口使 Provider 使用生产建连层，而不是测试注入的裸 reqwest client
     store.set_egress(
         "acct_provider_contract",
         Some(gateway_core::account::OutboundProxy::parse("http://127.0.0.1:9").unwrap()),
@@ -12224,8 +12331,8 @@ async fn capture_grok_request(
         .as_object()
         .expect("request object")
         .clone();
-    // 每次测试创建不同账号，账号绑定的安装标识由独立身份合同覆盖。
-    // 这里只比较下游兼容对业务正文的影响。
+    // 每次测试创建不同账号，账号绑定的安装标识由独立身份合同覆盖
+    // 这里只比较下游兼容对业务正文的影响
     sent.remove("client_metadata");
     sent
 }
@@ -12357,7 +12464,7 @@ async fn public_catalog_filters_each_api_account_before_union_without_gating_inf
             let model = PublicModelId::new(id).unwrap();
             assert!(!snapshot.contains_public_model_for_scope(&model, &scope));
         }
-        // 目录来源只决定展示，发现型目录仍允许把请求交给政策合规的上游判断。
+        // 目录来源只决定展示，发现型目录仍允许把请求交给政策合规的上游判断
         for id in ["kimi-k2.5", "kimi-public", "not-yet-discovered"] {
             let model = PublicModelId::new(id).unwrap();
             assert_eq!(

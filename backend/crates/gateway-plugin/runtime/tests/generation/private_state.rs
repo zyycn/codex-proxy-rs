@@ -1,3 +1,5 @@
+//! 验证插件观察回调的类型化状态读写与命名空间约束
+
 use std::{
     collections::BTreeMap,
     sync::{

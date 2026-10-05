@@ -1,4 +1,4 @@
-//! CLI duration 使用精确十进制纳秒，不经浮点转换或平台宽度截断。
+//! CLI duration 使用精确十进制纳秒，不经浮点转换或平台宽度截断
 
 pub(super) fn parse(value: &str) -> Option<i64> {
     let (negative, mut remaining) = match value.as_bytes().first()? {

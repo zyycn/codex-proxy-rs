@@ -1,4 +1,4 @@
-//! Provider 会话亲和读取；只查询既有记录，不推导或写入亲和事实。
+//! Provider 会话亲和读取；只查询既有记录，不推导或写入亲和事实
 
 use std::sync::{Arc, OnceLock, Weak};
 

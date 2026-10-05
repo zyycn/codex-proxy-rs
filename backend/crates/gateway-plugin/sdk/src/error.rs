@@ -1,3 +1,5 @@
+//! 插件线协议错误码、上游发送状态与安全错误对象
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,7 +18,7 @@ pub enum ErrorCode {
     Conflict,
 }
 
-/// 发送事实由宿主取单调上界，不能由插件降回未发送。
+/// 发送事实由宿主取单调上界，不能由插件降回未发送
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SendState {
@@ -33,7 +35,7 @@ pub struct PluginFault {
     pub send_state: SendState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_status: Option<u16>,
-    /// 原始边界错误详情；按合同完整传递，不作为诊断日志输出。
+    /// 原始边界错误详情；按合同完整传递，不作为诊断日志输出
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<serde_json::Value>,
 }

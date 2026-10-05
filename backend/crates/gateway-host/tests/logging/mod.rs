@@ -1,3 +1,5 @@
+//! 日志测试入口，以及输出开关、关闭日志与部署时区测试
+
 use std::env;
 use std::fs;
 use std::io::Read;

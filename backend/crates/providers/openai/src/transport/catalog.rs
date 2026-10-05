@@ -1,4 +1,4 @@
-//! Codex 官方模型目录 wire 与安全快照。
+//! Codex 官方模型目录 wire 与安全快照
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use super::client::OpenAiUpstreamProtocol;
 
-/// 单次 Codex 模型目录响应允许的最大字节数。
+/// 单次 Codex 模型目录响应允许的最大字节数
 pub const MAX_CODEX_MODEL_CATALOG_BYTES: usize = 1024 * 1024;
 
 const MAX_CATALOG_MODELS: usize = 2_048;
@@ -20,14 +20,14 @@ const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
 const MAX_SERVICE_TIER_ID_BYTES: usize = 64;
 const MAX_ETAG_BYTES: usize = 256;
 
-/// 上游目录对一项能力给出的明确证据。
+/// 上游目录对一项能力给出的明确证据
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum CodexCatalogCapabilityEvidence {
-    /// 上游明确声明原生支持。
+    /// 上游明确声明原生支持
     DeclaredNative,
-    /// 上游明确声明不支持。
+    /// 上游明确声明不支持
     DeclaredUnsupported,
-    /// 上游没有提供可依赖的声明。
+    /// 上游没有提供可依赖的声明
     #[default]
     Unknown,
 }
@@ -42,7 +42,7 @@ impl CodexCatalogCapabilityEvidence {
     }
 }
 
-/// Codex 目录中允许进入控制面的能力证据。
+/// Codex 目录中允许进入控制面的能力证据
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CodexCatalogCapabilities {
     responses_api: CodexCatalogCapabilityEvidence,
@@ -57,62 +57,62 @@ pub struct CodexCatalogCapabilities {
 }
 
 impl CodexCatalogCapabilities {
-    /// 返回 Responses API 支持证据。
+    /// 返回 Responses API 支持证据
     #[must_use]
     pub const fn responses_api(&self) -> CodexCatalogCapabilityEvidence {
         self.responses_api
     }
 
-    /// 返回 reasoning 支持证据。
+    /// 返回 reasoning 支持证据
     #[must_use]
     pub const fn reasoning(&self) -> CodexCatalogCapabilityEvidence {
         self.reasoning
     }
 
-    /// 返回并行工具调用支持证据。
+    /// 返回并行工具调用支持证据
     #[must_use]
     pub const fn parallel_tool_calls(&self) -> CodexCatalogCapabilityEvidence {
         self.parallel_tool_calls
     }
 
-    /// 返回文本输入支持证据。
+    /// 返回文本输入支持证据
     #[must_use]
     pub const fn text_input(&self) -> CodexCatalogCapabilityEvidence {
         self.text_input
     }
 
-    /// 返回图片输入支持证据。
+    /// 返回图片输入支持证据
     #[must_use]
     pub const fn image_input(&self) -> CodexCatalogCapabilityEvidence {
         self.image_input
     }
 
-    /// 返回原图 detail 支持证据。
+    /// 返回原图 detail 支持证据
     #[must_use]
     pub const fn image_detail_original(&self) -> CodexCatalogCapabilityEvidence {
         self.image_detail_original
     }
 
-    /// 返回 Web search 支持证据。
+    /// 返回 Web search 支持证据
     #[must_use]
     pub const fn web_search(&self) -> CodexCatalogCapabilityEvidence {
         self.web_search
     }
 
-    /// 返回 verbosity 支持证据。
+    /// 返回 verbosity 支持证据
     #[must_use]
     pub const fn verbosity(&self) -> CodexCatalogCapabilityEvidence {
         self.verbosity
     }
 
-    /// 返回上游明确列出的 reasoning effort。
+    /// 返回上游明确列出的 reasoning effort
     #[must_use]
     pub fn reasoning_efforts(&self) -> &[String] {
         &self.reasoning_efforts
     }
 }
 
-/// Codex 目录中明确声明的模型限制。
+/// Codex 目录中明确声明的模型限制
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CodexCatalogLimits {
     context_window_tokens: Option<NonZeroU64>,
@@ -120,20 +120,20 @@ pub struct CodexCatalogLimits {
 }
 
 impl CodexCatalogLimits {
-    /// 返回正常上下文窗口；缺失表示未知。
+    /// 返回正常上下文窗口；缺失表示未知
     #[must_use]
     pub const fn context_window_tokens(&self) -> Option<NonZeroU64> {
         self.context_window_tokens
     }
 
-    /// 返回上游允许覆盖到的最大上下文窗口；缺失表示未知。
+    /// 返回上游允许覆盖到的最大上下文窗口；缺失表示未知
     #[must_use]
     pub const fn max_context_window_tokens(&self) -> Option<NonZeroU64> {
         self.max_context_window_tokens
     }
 }
 
-/// Codex 目录中允许持久化的原始元数据白名单。
+/// Codex 目录中允许持久化的原始元数据白名单
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CodexCatalogMetadata {
     description: Option<String>,
@@ -143,47 +143,47 @@ pub struct CodexCatalogMetadata {
 }
 
 impl CodexCatalogMetadata {
-    /// 返回安全的模型说明。
+    /// 返回安全的模型说明
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
 
-    /// 返回上游排序优先级。
+    /// 返回上游排序优先级
     #[must_use]
     pub const fn priority(&self) -> Option<i32> {
         self.priority
     }
 
-    /// 返回上游 picker 可见性。
+    /// 返回上游 picker 可见性
     #[must_use]
     pub const fn visibility(&self) -> Option<CodexCatalogVisibility> {
         self.visibility
     }
 
-    /// 返回上游明确声明的服务档位；缺失时为空，不根据模型名补齐。
+    /// 返回上游明确声明的服务档位；缺失时为空，不根据模型名补齐
     #[must_use]
     pub fn service_tiers(&self) -> &[ModelServiceTier] {
         &self.service_tiers
     }
 }
 
-/// Codex 官方 picker 可见性。
+/// Codex 官方 picker 可见性
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CodexCatalogVisibility {
-    /// 正常列出。
+    /// 正常列出
     List,
-    /// 对普通 picker 隐藏。
+    /// 对普通 picker 隐藏
     Hide,
-    /// 不进入 picker。
+    /// 不进入 picker
     None,
-    /// 上游新增的可见性值；保留模型条目但不作本地可见性判断。
+    /// 上游新增的可见性值；保留模型条目但不作本地可见性判断
     #[serde(other)]
     Unknown,
 }
 
-/// 一个已完整校验的 Codex 真实模型。
+/// 一个已完整校验的 Codex 真实模型
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexCatalogModel {
     document: RawJsonPayload,
@@ -195,44 +195,44 @@ pub struct CodexCatalogModel {
 }
 
 impl CodexCatalogModel {
-    /// 完整原生对象只用于客户端目录，不写入控制面画像或日志。
+    /// 完整原生对象只用于客户端目录，不写入控制面画像或日志
     #[must_use]
     pub const fn document(&self) -> &RawJsonPayload {
         &self.document
     }
 
-    /// 返回实际写入上游请求的模型 slug。
+    /// 返回实际写入上游请求的模型 slug
     #[must_use]
     pub const fn request_model(&self) -> &UpstreamModelId {
         &self.request_model
     }
 
-    /// 返回上游展示名。
+    /// 返回上游展示名
     #[must_use]
     pub fn display_name(&self) -> &str {
         &self.display_name
     }
 
-    /// 返回能力证据。
+    /// 返回能力证据
     #[must_use]
     pub const fn capabilities(&self) -> &CodexCatalogCapabilities {
         &self.capabilities
     }
 
-    /// 返回明确限制。
+    /// 返回明确限制
     #[must_use]
     pub const fn limits(&self) -> &CodexCatalogLimits {
         &self.limits
     }
 
-    /// 返回白名单元数据。
+    /// 返回白名单元数据
     #[must_use]
     pub const fn metadata(&self) -> &CodexCatalogMetadata {
         &self.metadata
     }
 }
 
-/// 一次完整成功的 Codex 远端模型快照。
+/// 一次完整成功的 Codex 远端模型快照
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexModelCatalogSnapshot {
     models: Vec<CodexCatalogModel>,
@@ -240,50 +240,50 @@ pub struct CodexModelCatalogSnapshot {
 }
 
 impl CodexModelCatalogSnapshot {
-    /// 返回本轮全部模型。
+    /// 返回本轮全部模型
     #[must_use]
     pub fn models(&self) -> &[CodexCatalogModel] {
         &self.models
     }
 
-    /// 返回经过语法和长度白名单校验的 HTTP ETag。
+    /// 返回经过语法和长度白名单校验的 HTTP ETag
     #[must_use]
     pub fn etag(&self) -> Option<&str> {
         self.etag.as_deref()
     }
 }
 
-/// Codex 模型目录不满足完整快照约束。
+/// Codex 模型目录不满足完整快照约束
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CodexModelCatalogError {
-    /// 响应超过硬上限。
+    /// 响应超过硬上限
     #[error("Codex model catalog response exceeds the byte limit")]
     ResponseTooLarge,
-    /// 顶层不是唯一受支持的 `{models:[...]}` wire。
+    /// 顶层不是唯一受支持的 `{models:[...]}` wire
     #[error("Codex model catalog response violates the official wire contract")]
     InvalidWire,
-    /// 目录没有任何模型。
+    /// 目录没有任何模型
     #[error("Codex model catalog snapshot is empty")]
     EmptySnapshot,
-    /// 目录模型数量超过安全上限。
+    /// 目录模型数量超过安全上限
     #[error("Codex model catalog contains too many models")]
     TooManyModels,
-    /// 实际请求模型 slug 不合法。
+    /// 实际请求模型 slug 不合法
     #[error("Codex model catalog contains an invalid request model slug")]
     InvalidModelSlug,
-    /// 同一实际请求模型重复出现。
+    /// 同一实际请求模型重复出现
     #[error("Codex model catalog contains a duplicate request model slug")]
     DuplicateModelSlug,
-    /// 展示或白名单元数据不合法。
+    /// 展示或白名单元数据不合法
     #[error("Codex model catalog contains invalid public metadata")]
     InvalidMetadata,
-    /// 模型限制不是明确的正整数。
+    /// 模型限制不是明确的正整数
     #[error("Codex model catalog contains invalid model limits")]
     InvalidLimits,
-    /// 能力声明不合法或自相矛盾。
+    /// 能力声明不合法或自相矛盾
     #[error("Codex model catalog contains invalid capability evidence")]
     InvalidCapabilities,
-    /// ETag 不属于允许持久化的安全格式。
+    /// ETag 不属于允许持久化的安全格式
     #[error("Codex model catalog ETag is invalid")]
     InvalidEtag,
 }
@@ -334,11 +334,11 @@ enum CodexInputModalityWire {
     Unknown,
 }
 
-/// 解析唯一受支持的 Codex 官方完整快照。
+/// 解析唯一受支持的 Codex 官方完整快照
 ///
 /// # Errors
 ///
-/// 任一条目、重复 slug 或 ETag 不合法时整轮失败；未知字段保留在原生正文中。
+/// 任一条目、重复 slug 或 ETag 不合法时整轮失败；未知字段保留在原生正文中
 pub fn parse_codex_model_catalog(
     body: &[u8],
     etag: Option<&str>,
@@ -402,7 +402,7 @@ fn normalize_model(
     document: RawJsonPayload,
     protocol: OpenAiUpstreamProtocol,
 ) -> Result<CodexCatalogModel, CodexModelCatalogError> {
-    // 协商为 Codex 对象不改变 Responses API 的模型 ID 合同，命名空间和微调模型仍有效。
+    // 协商为 Codex 对象不改变 Responses API 的模型 ID 合同，命名空间和微调模型仍有效
     if wire.slug.trim() != wire.slug
         || (protocol == OpenAiUpstreamProtocol::Codex && !valid_model_slug(&wire.slug))
     {
@@ -414,7 +414,7 @@ fn normalize_model(
     if let Some(description) = wire.description.as_deref() {
         validate_public_text(description, MAX_DESCRIPTION_BYTES, true)?;
     }
-    // name 供客户端生成命令，id 才是请求选档值；不能从命令名推导或改写 id。
+    // name 供客户端生成命令，id 才是请求选档值；不能从命令名推导或改写 id
     let service_tiers = wire
         .service_tiers
         .into_iter()
@@ -601,7 +601,7 @@ fn validate_etag(value: &str) -> Result<String, CodexModelCatalogError> {
     Ok(value.to_owned())
 }
 
-/// 标准 API 模型 ID 遵循核心 ID 合同，不套用 Codex slug 语法或推断原生画像。
+/// 标准 API 模型 ID 遵循核心 ID 合同，不套用 Codex slug 语法或推断原生画像
 pub(crate) fn parse_api_model_catalog(
     body: &[u8],
     etag: Option<&str>,
@@ -620,7 +620,7 @@ pub(crate) fn parse_api_model_catalog(
     }
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| CodexModelCatalogError::InvalidWire)?;
-    // 部分 Responses 上游按客户端版本返回完整 Codex 目录；不能降格为只有 ID 的画像。
+    // 部分 Responses 上游按客户端版本返回完整 Codex 目录；不能降格为只有 ID 的画像
     if value.get("models").is_some() {
         return parse_native_model_catalog(body, etag, OpenAiUpstreamProtocol::ResponsesApi);
     }

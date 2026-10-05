@@ -1,3 +1,5 @@
+//! 验证并发等待队列的容量、顺序、优先级、超时与取消回收
+
 use std::time::{Duration, Instant, SystemTime};
 
 use futures::{FutureExt, executor::block_on};
@@ -121,7 +123,7 @@ fn new_layers_and_retries_cannot_restart_a_requests_wait_budget() {
         key_wait.wait(&["key"]).await.unwrap();
         drop(key_wait);
 
-        // 第一层已取得重试机会，后续准备跨过总时限后不能在账号层重新排队。
+        // 第一层已取得重试机会，后续准备跨过总时限后不能在账号层重新排队
         futures_timer::Delay::new(policy.timeout).await;
         let next_attempt_budget = budget.clone();
         let mut account_wait =
@@ -132,7 +134,7 @@ fn new_layers_and_retries_cannot_restart_a_requests_wait_budget() {
         );
         assert!(!accounts.has_waiters(&"account"));
 
-        // 另一个请求仍有完整预算，不能受上一请求超时影响。
+        // 另一个请求仍有完整预算，不能受上一请求超时影响
         let independent_budget = ConcurrencyWaitBudget::default();
         let mut independent =
             CapacityWait::new(&accounts, policy, request_deadline, &independent_budget);
@@ -176,7 +178,7 @@ fn custom_priority_reads_live_counts_and_preserves_limits_and_fifo() {
         assert_eq!(observed, [("a", 1), ("b", 0)]);
         assert_eq!(*tail.key(), "a");
         assert!(tail.turn().now_or_never().is_none());
-        // 满队列不参与评分，不能因偏好而突破上限。
+        // 满队列不参与评分，不能因偏好而突破上限
         let fallback = queue
             .enqueue_with_priority(&["a", "b"], 2, deadline, |key, count| {
                 assert_eq!((*key, count), ("b", 0));
@@ -250,11 +252,11 @@ fn high_priority_waiters_go_ahead_of_normal_waiters_and_keep_fifo_among_themselv
         let first_budget = ConcurrencyWaitBudget::default();
         let mut first_high = CapacityWait::new(&queue, policy, request_deadline, &first_budget)
             .with_priority(WaitPriority::High);
-        // 只有普通等待者时，高优先级请求可以直接尝试租约，普通请求仍须排队。
+        // 只有普通等待者时，高优先级请求可以直接尝试租约，普通请求仍须排队
         assert!(first_high.can_try(&"a"));
         assert!(!normal.can_try(&"a"));
 
-        // 普通等待者已占满单队列上限，高优先级仍可入队并直接成为队首。
+        // 普通等待者已占满单队列上限，高优先级仍可入队并直接成为队首
         first_high.wait(&["a"]).await.unwrap();
         let second_budget = ConcurrencyWaitBudget::default();
         let mut second_high = CapacityWait::new(&queue, policy, request_deadline, &second_budget)
@@ -288,7 +290,7 @@ fn displaced_normal_head_yields_its_lease_attempt_until_high_priority_waiters_le
         normal.wait(&["account"]).await.unwrap();
         assert!(normal.can_try(&"account"));
 
-        // 普通队首已经开始重读容量，尚未取得租约时被高优先级请求插队。
+        // 普通队首已经开始重读容量，尚未取得租约时被高优先级请求插队
         let mut high = CapacityWait::new(&queue, policy, deadline, &high_budget)
             .with_priority(WaitPriority::High);
         high.wait(&["account"]).await.unwrap();
@@ -296,7 +298,7 @@ fn displaced_normal_head_yields_its_lease_attempt_until_high_priority_waiters_le
         assert!(high.can_try(&"account"));
         assert!(normal.wait(&["account"]).now_or_never().is_none());
 
-        // 审批取消也必须恢复原队首的资格，不能丢失其等待位置。
+        // 审批取消也必须恢复原队首的资格，不能丢失其等待位置
         drop(high);
         normal.wait(&["account"]).await.unwrap();
         assert!(normal.can_try(&"account"));

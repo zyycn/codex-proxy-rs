@@ -1,3 +1,5 @@
+//! 账号领域测试入口，以及候选账号与调度输入构造辅助
+
 mod location;
 mod model_access;
 mod proxy;
@@ -1107,7 +1109,7 @@ fn reserved_concurrency_only_blocks_requests_that_cannot_use_the_reserved_slots(
         .capacity_snapshot(&candidates, &normal)
         .unwrap();
     assert_eq!((capacity.used_slots(), capacity.total_slots()), (4, 4));
-    // 预留造成的暂满仍是可等待的容量约束，不能被当成不可用账号。
+    // 预留造成的暂满仍是可等待的容量约束，不能被当成不可用账号
     assert_eq!(
         AccountSelector.wait_candidates(&candidates, &normal).len(),
         1
@@ -1125,7 +1127,7 @@ fn reserved_concurrency_only_blocks_requests_that_cannot_use_the_reserved_slots(
     let full = [candidate_with_concurrency("acct_reserved", 5, 5)];
     assert!(AccountSelector.select(&full, &prioritized).is_none());
 
-    // 预留不能让普通请求失去全部名额，也不改变不限并发。
+    // 预留不能让普通请求失去全部名额，也不改变不限并发
     let mut oversized = context(RotationStrategy::Smart);
     oversized.reserved_concurrency = 10;
     assert_eq!(oversized.concurrency_limit(&candidates[0].account).get(), 1);

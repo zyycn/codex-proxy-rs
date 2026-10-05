@@ -18,9 +18,8 @@ const props = withDefaults(
 )
 
 const chartElement = useTemplateRef<HTMLElement>('chart')
-const chartOption = shallowRef<EChartsOption>(props.option)
 const chart = shallowRef<EChartsType>()
-const pendingInitElement = shallowRef<HTMLElement>()
+let pendingInitElement: HTMLElement | undefined
 
 const style = computed(() => ({
   height: `${props.height}px`,
@@ -34,13 +33,13 @@ function ensureChart(element: HTMLElement) {
   if (chart.value || !elementHasSize(element))
     return
   chart.value = init(element, undefined, { renderer: 'canvas' })
-  applyOption(chartOption.value)
+  applyOption(props.option)
 }
 
 const { pause: pausePendingInit, resume: resumePendingInit } = useRafFn(
   () => {
-    const element = pendingInitElement.value
-    pendingInitElement.value = undefined
+    const element = pendingInitElement
+    pendingInitElement = undefined
     if (element) {
       ensureChart(element)
     }
@@ -49,12 +48,12 @@ const { pause: pausePendingInit, resume: resumePendingInit } = useRafFn(
 )
 
 function cancelPendingInit() {
-  pendingInitElement.value = undefined
+  pendingInitElement = undefined
   pausePendingInit()
 }
 
 function scheduleInit(element: HTMLElement) {
-  pendingInitElement.value = element
+  pendingInitElement = element
   resumePendingInit()
 }
 
@@ -77,7 +76,6 @@ function dispose() {
 watch(
   () => props.option,
   (option) => {
-    chartOption.value = option
     if (chart.value) {
       applyOption(option)
       return

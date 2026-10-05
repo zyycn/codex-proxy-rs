@@ -1,3 +1,5 @@
+//! 插件管理授权回调的临时状态签发、绑定校验与调用分派
+
 use std::time::Duration;
 
 use chrono::Utc;
@@ -53,7 +55,7 @@ impl ManagementEntry {
         }
         let flow = uuid::Uuid::new_v4().simple().to_string();
         let mut owner = Sha256::new();
-        // state 中的 owner 为随机且不可反查管理员的摘要；实际身份仅来自已验证的 Admin 上下文。
+        // state 中的 owner 为随机且不可反查管理员的摘要；实际身份仅来自已验证的 Admin 上下文
         owner.update(uuid::Uuid::new_v4().as_bytes());
         match &context.principal {
             AdminPrincipal::Session { admin_user_id } => {
@@ -144,7 +146,7 @@ impl ManagementEntry {
             OAuthPendingClaimOutcome::Claimed(payload) => payload,
             _ => return Err(invalid_state()),
         };
-        // 在任何插件执行之前消耗 state；崩溃或响应丢失不得重放登录回调。
+        // 在任何插件执行之前消耗 state；崩溃或响应丢失不得重放登录回调
         if store
             .consume_claim(&namespace, &flow, &owner, &claim)
             .await

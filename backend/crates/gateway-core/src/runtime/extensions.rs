@@ -1,4 +1,4 @@
-//! 可发布能力集合的中立身份、静态目录与保活合同；不解释包格式、进程或管理配置。
+//! 可发布能力集合的中立身份、静态目录与保活合同；不解释包格式、进程或管理配置
 
 use std::{fmt, sync::Arc};
 
@@ -28,23 +28,23 @@ impl ExtensionSetId {
     }
 }
 
-/// 发布视图及在途请求持有引用；准备器只能用非拥有索引查找代次。
+/// 发布视图及在途请求持有引用；准备器只能用非拥有索引查找代次
 pub trait ExtensionSetLease: Send + Sync {
     fn is_ready(&self) -> bool;
 
-    /// 与发布集合一起冻结的上游适配计划，不能在请求中解析为新代次。
+    /// 与发布集合一起冻结的上游适配计划，不能在请求中解析为新代次
     fn upstream_adapters(
         &self,
     ) -> Option<Arc<dyn crate::engine::upstream_adapter::UpstreamAdapterPlan>> {
         None
     }
 
-    /// 与集合一起冻结的目录事实，读取不调用插件进程。
+    /// 与集合一起冻结的目录事实，读取不调用插件进程
     fn model_aliases(&self) -> &[ContributedModelAlias] {
         &[]
     }
 
-    /// 局部故障已有请求级处理计划时，集合仍可提供服务。
+    /// 局部故障已有请求级处理计划时，集合仍可提供服务
     fn can_serve(&self) -> bool {
         self.is_ready()
     }
@@ -102,7 +102,7 @@ impl fmt::Debug for ExtensionSetReference {
 #[error("extension preparation is unavailable")]
 pub struct ExtensionPreparationError;
 
-/// 准备阶段读取与请求快照相同的持久 revision；不得自行发布当前代次。
+/// 准备阶段读取与请求快照相同的持久 revision；不得自行发布当前代次
 pub trait ExtensionPreparationPort: Send + Sync {
     fn prepare(
         &self,

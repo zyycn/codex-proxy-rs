@@ -1,3 +1,5 @@
+//! 验证 xAI 令牌轮换、账号出口更新与刷新状态处理
+
 use std::collections::{BTreeMap, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -35,7 +37,7 @@ const OAUTH_BACKOFF_ATTEMPTS: u32 = 5;
 
 #[tokio::test]
 async fn refreshed_catalog_uses_committed_account_exit_including_proxy_changes() {
-    // 0: 保留 A；1: 刷新在途时 A→B；2: 刷新在途时 A→直连。
+    // 0: 保留 A；1: 刷新在途时 A→B；2: 刷新在途时 A→直连
     for selected_exit in 0..3 {
         let (proxy_a, capture_a) = rejecting_account_proxy().await;
         let (proxy_b, capture_b) = rejecting_account_proxy().await;
@@ -122,7 +124,7 @@ impl GrokCredentialRefresher for SwitchingProxyRefresher {
         proxy: Option<&OutboundProxy>,
     ) -> Result<GrokRefreshTokens, GrokRefreshFailure> {
         assert_eq!(proxy, Some(&self.initial_proxy));
-        // 精确合成网络刷新已开始、credential CAS 尚未提交的出口修改。
+        // 精确合成网络刷新已开始、credential CAS 尚未提交的出口修改
         self.store
             .set_outbound_proxy(&self.account_id, self.current_proxy.clone());
         assert_eq!(
@@ -156,8 +158,8 @@ impl GrokEndpointPolicy for CatalogExitPolicy {
         timeout: Option<Duration>,
         proxy: Option<&OutboundProxy>,
     ) -> Result<reqwest::Client, GrokReqwestTransportBuildError> {
-        // “直连”也终止于本地 sink，旧实现漏代理时不会触达真实上游。
-        // 显式代理分支仍使用生产构造器及官方 HTTPS/CONNECT 目标。
+        // “直连”也终止于本地 sink，旧实现漏代理时不会触达真实上游
+        // 显式代理分支仍使用生产构造器及官方 HTTPS/CONNECT 目标
         OfficialGrokEndpointPolicy
             .build_inference_client(timeout, Some(proxy.unwrap_or(&self.direct_sink)))
     }
@@ -326,7 +328,7 @@ async fn fixture(
     fixture_many([input], responses, lease_available).await
 }
 
-/// 真实累加连续失败计数的测试 double，用于断言退避的指数增长与成功清零。
+/// 真实累加连续失败计数的测试 double，用于断言退避的指数增长与成功清零
 #[derive(Default)]
 struct CountingCredentialState {
     counts: Mutex<BTreeMap<String, u32>>,
@@ -487,7 +489,7 @@ async fn fixture_many_with_state_and_runtime_policy(
     (store, repository, refresher, service)
 }
 
-/// 用 store 的 CAS 把 next_refresh_at 复位到过去，使已退避到未来的账号再次到期。
+/// 用 store 的 CAS 把 next_refresh_at 复位到过去，使已退避到未来的账号再次到期
 async fn force_due(store: &MemoryProviderAccountStore, id: &ProviderAccountId) {
     let account = store.account(id).expect("account to reset");
     let credential = store.credential(id).expect("credential to reset");
@@ -1008,7 +1010,7 @@ async fn refresh_backoff_grows_exponentially_across_attempts() {
         .expect("second delay is in the future");
     assert_eq!(counting.count(&id), 2);
 
-    // base=5s、factor=3：第二次（attempt=2）应比第一次（attempt=1）显著更久。
+    // base=5s、factor=3：第二次（attempt=2）应比第一次（attempt=1）显著更久
     assert!(
         second_delay > first_delay * 2,
         "second backoff {second_delay:?} should grow well beyond first {first_delay:?}"

@@ -1,4 +1,4 @@
-//! 可复用的账号出口配置，以及脱敏后的连通性测试结果。
+//! 可复用的账号出口配置，以及脱敏后的连通性测试结果
 
 use chrono::{DateTime, Utc};
 use gateway_core::account::{OutboundProxy, RequestLocation};
@@ -39,7 +39,7 @@ pub struct ProxyAccountRef {
     pub enabled: bool,
 }
 
-/// 按代理查询关联账号，分页与搜索均在存储层执行。
+/// 按代理查询关联账号，分页与搜索均在存储层执行
 #[derive(Debug, Clone)]
 pub struct ProxyAccountListQuery {
     pub proxy_id: String,
@@ -94,7 +94,7 @@ pub struct ProxyPage {
 #[derive(Debug, Clone)]
 pub struct NewProxy {
     pub auto_location: bool,
-    /// 由管理用例探测，随配置原子保存，不接受 HTTP 调用方提供结果。
+    /// 由管理用例探测，随配置原子保存，不接受 HTTP 调用方提供结果
     pub test: Option<ProxyTestResult>,
     pub location: Option<gateway_core::account::RequestLocation>,
     pub name: String,
@@ -105,7 +105,7 @@ pub struct NewProxy {
 pub struct UpdateProxy {
     pub auto_location: Option<bool>,
     pub test: Option<ProxyTestResult>,
-    /// 外层为空保留配置，内层为空恢复全局继承。
+    /// 外层为空保留配置，内层为空恢复全局继承
     pub location: Option<Option<gateway_core::account::RequestLocation>>,
     pub id: String,
     pub revision: Revision,
@@ -119,7 +119,7 @@ pub struct ProxyMutation {
     pub record: ProxyRecord,
 }
 
-/// 检测失败与连通性分开，双栈冲突不得继续应用旧位置。
+/// 检测失败与连通性分开，双栈冲突不得继续应用旧位置
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum ProxyLocationDetection {
@@ -155,7 +155,7 @@ impl ProxyRecord {
         }
     }
 
-    /// 未知出口可暂用上次成功结果，已知出口变化或时区冲突必须撤销旧覆盖。
+    /// 未知出口可暂用上次成功结果，已知出口变化或时区冲突必须撤销旧覆盖
     #[must_use]
     pub fn detected_location_after_test(
         &self,

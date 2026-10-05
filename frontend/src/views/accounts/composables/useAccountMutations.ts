@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import type { AccountImportTask, getAccounts } from '@/api'
+import type { Account, AccountImportTask } from '@/api'
 import type { RequestOptions } from '@/api/request'
 import { toast } from '@codex-proxy/ui'
 import { computed, ref, shallowReactive, watch } from 'vue'
@@ -20,14 +20,12 @@ import { isSupportedProvider } from '@/utils/providers'
 
 import { useAccountOnboarding } from './useAccountOnboarding'
 
-type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
-
 export function useAccountMutations(options: {
-  accounts: Ref<AccountRow[]>
+  accounts: Ref<Account[]>
   selectedIds: Ref<Set<string>>
   onImportTaskCreated: (task: AccountImportTask) => void
   reload: () => Promise<unknown>
-  replaceAccount: (account: AccountRow) => Promise<boolean>
+  replaceAccount: (account: Account) => Promise<boolean>
 }) {
   const loadAccounts = options.reload
   const { downloadJson } = useDownload()
@@ -35,10 +33,10 @@ export function useAccountMutations(options: {
     reload: loadAccounts,
     onImportTaskCreated: options.onImportTaskCreated,
   })
-  const selectedAccountsById = shallowReactive(new Map<string, AccountRow>())
+  const selectedAccountsById = shallowReactive(new Map<string, Account>())
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
-  const pendingDeleteAccount = ref<AccountRow | null>(null)
+  const pendingDeleteAccount = ref<Account | null>(null)
   const deleteCount = ref(0)
   const recoveringAccounts = useIdSet<string>()
   const refreshingAccounts = useIdSet<string>()
@@ -88,7 +86,7 @@ export function useAccountMutations(options: {
     { immediate: true, flush: 'sync' },
   )
 
-  function requestDeleteAccount(account: AccountRow) {
+  function requestDeleteAccount(account: Account) {
     pendingDeleteAccount.value = account
     showSingleDeleteModal.value = true
   }
@@ -173,7 +171,7 @@ export function useAccountMutations(options: {
     )
   }
 
-  async function handleDownloadModelCatalog(account: AccountRow) {
+  async function handleDownloadModelCatalog(account: Account) {
     await downloadingCatalogAccounts.run(account.id, async () => {
       try {
         const result = await getAccountModelCatalog({ accountId: account.id })
@@ -209,7 +207,7 @@ export function useAccountMutations(options: {
     })
   }
 
-  async function handleToggleScheduling(account: AccountRow) {
+  async function handleToggleScheduling(account: Account) {
     await togglingSchedulingAccounts.run(account.id, async () => {
       try {
         await batchUpdateAccounts({ accountIds: [account.id], enabled: !account.enabled })
@@ -278,7 +276,7 @@ export function useAccountMutations(options: {
     return accounts
   }
 
-  async function deleteAccountBatch(accounts: AccountRow[], options?: RequestOptions) {
+  async function deleteAccountBatch(accounts: Account[], options?: RequestOptions) {
     const account = accounts[0]
     if (!account)
       return
@@ -291,8 +289,8 @@ export function useAccountMutations(options: {
       throw new Error(`不支持的 Provider：${account.provider}`)
   }
 
-  function accountDeletionGroups(accounts: AccountRow[]) {
-    const groups = new Map<string, AccountRow[]>()
+  function accountDeletionGroups(accounts: Account[]) {
+    const groups = new Map<string, Account[]>()
     for (const account of accounts) {
       const key = account.provider
       const group = groups.get(key)

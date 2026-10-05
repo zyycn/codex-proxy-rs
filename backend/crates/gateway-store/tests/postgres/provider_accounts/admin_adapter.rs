@@ -1,3 +1,5 @@
+//! 验证管理账号查询的容量投影、分页筛选与授权提交
+
 use super::*;
 
 #[tokio::test]
@@ -185,7 +187,7 @@ async fn plugin_account_provider_filter_is_optional_and_applied_before_cursor_pa
         Some("acct_plugin_b")
     );
 
-    // 未指定 Provider 时按全局账号 ID 跨 Provider 分页，Provider 归属来自持久记录。
+    // 未指定 Provider 时按全局账号 ID 跨 Provider 分页，Provider 归属来自持久记录
     let all = store
         .list_plugin_accounts(PluginAccountListQuery {
             provider_kind: None,

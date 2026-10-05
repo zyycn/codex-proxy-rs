@@ -1,3 +1,5 @@
+//! 验证真实插件日志的调用关联、输入校验、脱敏与数量限制
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Condvar, Mutex},
@@ -27,7 +29,7 @@ struct Gate {
 
 impl Gate {
     fn wait(&self) {
-        // 测试回归为同步阻塞时也能自行退出，不能把测试运行器永久挂住。
+        // 测试回归为同步阻塞时也能自行退出，不能把测试运行器永久挂住
         let (mut released, _) = self
             .changed
             .wait_timeout_while(
@@ -271,7 +273,7 @@ async fn real_worker_logs_are_correlated_sanitized_validated_and_bounded() {
         "log_method":"plugin.register", "log_entries":[{"params":{"event":"fixture.blocked"},"repeat":32}],
         "log_marker":blocked_marker,
     });
-    // 日志后端停住时，注册的业务结果和父调用结束仍须及时完成。
+    // 日志后端停住时，注册的业务结果和父调用结束仍须及时完成
     let blocked_generation = tokio::time::timeout(
         Duration::from_secs(10),
         PluginPreparation::prepare(&runtime, blocked),

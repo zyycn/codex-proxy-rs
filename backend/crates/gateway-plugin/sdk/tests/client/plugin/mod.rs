@@ -1,3 +1,5 @@
+//! 验证类型化插件处理器的组合注册、分派与能力声明一致性
+
 use std::{
     collections::BTreeMap,
     sync::{

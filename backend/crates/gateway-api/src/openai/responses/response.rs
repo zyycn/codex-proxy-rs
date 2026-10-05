@@ -1,4 +1,4 @@
-//! Provider OpenAI Responses wire 到客户端 transport 的透明转发边界。
+//! Provider OpenAI Responses wire 到客户端 transport 的透明转发边界
 
 use std::collections::BTreeMap;
 
@@ -14,11 +14,12 @@ use crate::openai::error::capacity_error_for_client;
 
 const OPENAI_PROTOCOL: &str = "openai";
 
-/// OpenAI Responses wire 的转发器。
+/// OpenAI Responses wire 的转发器
 ///
-/// OpenAI Provider 与 xAI adapter 都必须交付 OpenAI wire。wire 是客户端交付
+/// OpenAI Provider 与 xAI adapter 都必须交付 OpenAI wire
+/// wire 是客户端交付
 /// 与终态判断的事实来源；canonical facts 只在 wire 暂未携带 ID 时提供旁路观测，
-/// 不得反过来拒绝或改写上游事件；客户端错误兼容投影只发生在编码出口。
+/// 不得反过来拒绝或改写上游事件；客户端错误兼容投影只发生在编码出口
 #[derive(Debug, Default)]
 pub struct OpenAiResponsesEncoder {
     response_id: Option<String>,
@@ -28,7 +29,7 @@ pub struct OpenAiResponsesEncoder {
 }
 
 impl OpenAiResponsesEncoder {
-    /// 创建响应 wire 转发器。
+    /// 创建响应 wire 转发器
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -39,7 +40,7 @@ impl OpenAiResponsesEncoder {
         }
     }
 
-    /// 消费一个 Provider event，并返回 SSE frames。
+    /// 消费一个 Provider event，并返回 SSE frames
     pub fn push_sse(&mut self, event: &ProviderEvent) -> Vec<Bytes> {
         self.observe_canonical_identity(event);
         let Some(wire) = openai_wire(event) else {
@@ -48,8 +49,8 @@ impl OpenAiResponsesEncoder {
         self.observe_wire(wire);
         let projected = client_failure_payload(wire);
         let data = projected.as_ref().unwrap_or_else(|| wire.data());
-        // 当前 Codex 不消费 Responses `error` event，会在 EOF 时丢失失败原因。
-        // 在客户端 SSE 边界统一投影成它能识别的 `response.failed`。
+        // 当前 Codex 不消费 Responses `error` event，会在 EOF 时丢失失败原因
+        // 在客户端 SSE 边界统一投影成它能识别的 `response.failed`
         if effective_event_type(wire) == Some("error")
             && let Some(data) = response_failed_sse_data_from_error_event(
                 self.response_snapshot.as_ref(),
@@ -77,7 +78,7 @@ impl OpenAiResponsesEncoder {
         ))]
     }
 
-    /// 消费一个 Provider event，并返回 WebSocket JSON messages。
+    /// 消费一个 Provider event，并返回 WebSocket JSON messages
     pub fn push_websocket(&mut self, event: &ProviderEvent) -> Vec<String> {
         self.observe_canonical_identity(event);
         let Some(wire) = openai_wire(event).filter(|wire| wire.has_json_data()) else {
@@ -88,9 +89,11 @@ impl OpenAiResponsesEncoder {
         let data = projected.as_ref().unwrap_or_else(|| wire.data());
         // WS 客户端只对它无法消费的裸 `error` 帧做投影：codex 的 WS 端点
         // 会静默忽略缺少 status 且不含内置可重试错误码的 `error` 帧，客户
-        // 端只能空等到 idle 超时。投影成 `response.failed`（消息 JSON 自带
-        // type 字段），让 codex 按错误码处理。可消费形状（带非 2xx status
-        // 或特殊错误码）保留 envelope，容量码已由共享客户端投影处理。
+        // 端只能空等到 idle 超时
+        // 投影成 `response.failed`（消息 JSON 自带
+        // type 字段），让 codex 按错误码处理
+        // 可消费形状（带非 2xx status
+        // 或特殊错误码）保留 envelope，容量码已由共享客户端投影处理
         if effective_event_type(wire) == Some("error")
             && !ws_client_consumable_error(data)
             && let Some(data) = response_failed_sse_data_from_error_event(
@@ -104,29 +107,29 @@ impl OpenAiResponsesEncoder {
         vec![data.to_string()]
     }
 
-    /// 返回是否已经看到客户端可见的 wire 终态。
+    /// 返回是否已经看到客户端可见的 wire 终态
     #[must_use]
     pub fn is_completed(&self) -> bool {
         self.wire_terminal.is_some()
     }
 
-    /// 返回是否已把 Provider 原生失败 event 交付给客户端。
+    /// 返回是否已把 Provider 原生失败 event 交付给客户端
     #[must_use]
     pub const fn has_wire_failure(&self) -> bool {
         self.wire_failure
     }
 
-    /// 返回 Core 已观察到的客户端可见 Provider 原生响应 ID。
+    /// 返回 Core 已观察到的客户端可见 Provider 原生响应 ID
     #[must_use]
     pub fn response_id(&self) -> Option<&str> {
         self.response_id.as_deref()
     }
 
-    /// 校验完整响应并返回原生终态 response object。
+    /// 校验完整响应并返回原生终态 response object
     ///
     /// # Errors
     ///
-    /// 缺少可转换为非流式响应的 wire 终态时返回错误。
+    /// 缺少可转换为非流式响应的 wire 终态时返回错误
     pub fn finish(self) -> Result<Value, ResponseEncodeError> {
         self.wire_terminal
             .ok_or(ResponseEncodeError::MissingWireTerminal)
@@ -168,7 +171,7 @@ impl OpenAiResponsesEncoder {
     }
 }
 
-/// 仅在非流式出口聚合同一响应的完成项，不让流式转发常驻保存输出内容。
+/// 仅在非流式出口聚合同一响应的完成项，不让流式转发常驻保存输出内容
 pub(super) fn collect_response(events: &[ProviderEvent]) -> Result<Value, ResponseEncodeError> {
     let mut encoder = OpenAiResponsesEncoder::new();
     let mut response_id = None;
@@ -203,8 +206,8 @@ pub(super) fn collect_response(events: &[ProviderEvent]) -> Result<Value, Respon
     let Some(object) = response.as_object_mut() else {
         return Ok(response);
     };
-    // Codex 可只在 output_item.done 交付内容，终态仅保留身份和 usage。
-    // 有内容的终态仍是完整快照，不与 earlier done 或 canonical 增量拼接。
+    // Codex 可只在 output_item.done 交付内容，终态仅保留身份和 usage
+    // 有内容的终态仍是完整快照，不与 earlier done 或 canonical 增量拼接
     if object
         .get("output")
         .is_some_and(|output| !output.as_array().is_some_and(Vec::is_empty))
@@ -256,12 +259,13 @@ fn client_failure_payload(wire: &ProtocolWireEvent) -> Option<Value> {
     }
 }
 
-/// 判断 WS 上游的 `error` 帧是否已经是客户端可直接消费的形状。
+/// 判断 WS 上游的 `error` 帧是否已经是客户端可直接消费的形状
 ///
 /// codex 的 WS 端点只消费两类 `error` 帧：带非 2xx HTTP status 的包装错误，
 /// 以及连接数上限 / previous_response_not_found 这类内置可重试错误码；其余
-/// 帧（包括 status 为 2xx 的矛盾形状）会被静默忽略。可消费的帧原样透传，
-/// 不可消费的才在 WS 边界投影成 `response.failed`。
+/// 帧（包括 status 为 2xx 的矛盾形状）会被静默忽略
+/// 可消费的帧原样透传，
+/// 不可消费的才在 WS 边界投影成 `response.failed`
 fn ws_client_consumable_error(data: &Value) -> bool {
     if data
         .get("error")

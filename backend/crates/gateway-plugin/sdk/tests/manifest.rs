@@ -1,3 +1,5 @@
+//! 验证插件清单的默认值、路径安全、平台与能力版本约束
+
 use gateway_plugin_sdk::{
     Capability, ContributionDeclaration, Engines, Handshake, MANIFEST_VERSION, Manifest,
     ManifestError, PROTOCOL_VERSION, Package, PackageTarget, PluginIcon, PluginIconVariants, Stage,

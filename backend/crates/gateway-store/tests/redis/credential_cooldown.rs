@@ -1,3 +1,5 @@
+//! 验证账号冷却缓存的版本隔离、期限延长与到期清理
+
 use std::time::{Duration as StdDuration, SystemTime};
 
 use chrono::{DateTime, Duration, Utc};
@@ -427,7 +429,7 @@ async fn stale_probe_cannot_recreate_manual_recovery_or_clear_or_extend_new_free
             .expect("read")
             .is_none()
     );
-    // 同凭据版本、相同截止时间的新冻结仍必须视为不同代次。
+    // 同凭据版本、相同截止时间的新冻结仍必须视为不同代次
     repository
         .cache_credential_cooldown(&frozen)
         .await

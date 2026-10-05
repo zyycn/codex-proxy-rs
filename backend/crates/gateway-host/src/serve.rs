@@ -1,4 +1,4 @@
-//! HTTP 监听、OS signal、原子连接注册与优雅 drain。
+//! HTTP 监听、OS signal、原子连接注册与优雅 drain
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -13,7 +13,7 @@ const DRAINING_BIT: usize = 1usize << (usize::BITS - 1);
 const ACTIVE_MASK: usize = !DRAINING_BIT;
 
 /// 自重启交接没有显式握手：替换进程按 CPR_RESTART_DELAY_MS 估算等待，
-/// 可能在旧进程释放监听端口前尝试绑定，因此对 AddrInUse 保留有限重试窗口。
+/// 可能在旧进程释放监听端口前尝试绑定，因此对 AddrInUse 保留有限重试窗口
 const BIND_RETRY_WINDOW: Duration = Duration::from_secs(10);
 const BIND_RETRY_MAX_DELAY: Duration = Duration::from_secs(1);
 
@@ -54,7 +54,7 @@ impl ConnectionTracker {
                 tokio::pin!(notified);
                 // notify_waiters 不保存许可：必须先 enable 注册等待者，再读
                 // 活跃计数；否则最后一个 guard 在读数与首次 poll 之间 drop
-                // 时唤醒丢失，只能等满整个超时。
+                // 时唤醒丢失，只能等满整个超时
                 notified.as_mut().enable();
                 if self.state.value.load(Ordering::Acquire) & ACTIVE_MASK == 0 {
                     return;
@@ -114,7 +114,7 @@ impl Drop for ActiveConnection {
 }
 
 /// 绑定失败即进程退出、服务彻底离线，因此 AddrInUse（典型为自重启交接
-/// 时旧进程尚未关闭 listener）在窗口内指数退避重试；其他错误立即上抛。
+/// 时旧进程尚未关闭 listener）在窗口内指数退避重试；其他错误立即上抛
 pub async fn bind_listener(address: &str) -> std::io::Result<tokio::net::TcpListener> {
     let deadline = tokio::time::Instant::now() + BIND_RETRY_WINDOW;
     let mut delay = Duration::from_millis(100);
@@ -154,9 +154,10 @@ pub(crate) async fn serve_router(
         shutdown_connections.begin_draining();
     };
     // axum 的优雅关闭会无限等待存量连接结束，而 SSE 等长响应体不观察
-    // 取消信号：慢客户端可以把关闭拖住直到被 SIGKILL。整个 drain（axum
+    // 取消信号：慢客户端可以把关闭拖住直到被 SIGKILL
+    // 整个 drain（axum
     // 优雅关闭 + 游离 guard 等待）共享同一个从取消信号起算的绝对截止点，
-    // 逾期即放弃等待，存量连接随进程退出终止。
+    // 逾期即放弃等待，存量连接随进程退出终止
     let drain_deadline_at = Arc::new(OnceLock::new());
     let drain_deadline = {
         let cancellation = cancellation.clone();

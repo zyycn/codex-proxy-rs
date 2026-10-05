@@ -1,3 +1,5 @@
+//! 验证敏感字符串的诊断脱敏与恒定时间比较结果
+
 use provider_xai::SecretValue;
 
 #[test]

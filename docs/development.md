@@ -7,6 +7,7 @@
 | 任务 | 入口 |
 | --- | --- |
 | 修改宿主前后端 | [环境与依赖](#环境与依赖) → [启动宿主](#启动宿主) |
+| 定位模块与共享实现 | [源码入口](#源码入口) |
 | 同时修改 UI 或插件 | [源码联调](#源码联调) → [启动与检查](#启动与检查) |
 | 验证本地 SDK | [本地 SDK 验证](#本地-sdk-验证) |
 | 提交跨仓库改动 | [编辑与提交](#编辑与提交) |
@@ -16,6 +17,9 @@
 需要 Node.js 24、pnpm、[Rust 工具链](architecture.md#验证命令)、PostgreSQL 和 Redis
 
 各前端的 `packageManager` 固定 pnpm 版本，宿主 CI 和 Docker 从 `frontend/package.json` 读取
+
+Rust 工具链声明位于 `backend/rust-toolchain.toml`，从仓库根目录运行 Cargo 时显式选择该工具链；
+`--manifest-path` 只选择 manifest，不切换 rustup 按当前目录选定的工具链
 
 ```bash
 git clone https://github.com/zyycn/codex-proxy-rs.git
@@ -37,7 +41,7 @@ pnpm --dir frontend install --frozen-lockfile
 
 ```bash
 docker compose -f deploy/compose.yaml up -d postgres redis
-cargo run --manifest-path backend/Cargo.toml -p codex-proxy-rs
+cargo +1.97.0 run --manifest-path backend/Cargo.toml -p codex-proxy-rs --locked
 ```
 
 后端从当前目录向上查找 `deploy/config.yaml`，本机运行时数据库与 Redis 地址应指向可访问的本机端口
@@ -53,6 +57,11 @@ pnpm --dir frontend dev
 后端代理由 `frontend/vite.config.ts` 配置，验证 WebSocket 时直接连接后端
 
 前后端检查见 [贡献与审查](../CONTRIBUTING.md#验证)，数据库集成测试使用[专用测试库](../backend/migrations/README.md#本地测试库)
+
+## 源码入口
+
+后端职责和依赖方向见 [Workspace 边界](architecture.md#3-workspace-边界)，页面与共享逻辑见 [前端模块职责](architecture.md#34-前端模块职责)。
+先按所属模块定位，再跟踪请求、状态与展示的调用关系
 
 ## 源码联调
 
@@ -119,7 +128,7 @@ pnpm --dir modules/plugins/examples/workbench/frontend build:source
   cp -R modules/plugins/examples/workbench/backend/{src,tests} "$cpr_sdk_check_dir/backend/"
   cp modules/plugins/examples/workbench/plugin.json "$cpr_sdk_check_dir/"
   RUST_MIN_STACK=16777216 CARGO_TARGET_DIR="$PWD/backend/target/plugin-development" \
-    cargo test --manifest-path "$cpr_sdk_check_dir/backend/Cargo.toml" \
+    cargo +1.97.0 test --manifest-path "$cpr_sdk_check_dir/backend/Cargo.toml" \
     --config "patch.\"https://github.com/zyycn/codex-proxy-rs.git\".gateway-plugin-sdk.path=\"$PWD/backend/crates/gateway-plugin/sdk\""
 )
 ```

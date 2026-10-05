@@ -1,4 +1,4 @@
-//! Pg 账号 repository：Core/Admin 端口实现与 admin 事务。
+//! Pg 账号 repository：Core/Admin 端口实现与 admin 事务
 
 use super::*;
 
@@ -808,7 +808,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     let upstream_user_id = replacement_identity.map(ProviderAccountIdentity::upstream_user_id);
     let upstream_account_id =
         replacement_identity.and_then(ProviderAccountIdentity::upstream_account_id);
-    // 事务时间可能早于应用写入的额度观测，保留既有时间下界，避免轮换破坏时间约束。
+    // 事务时间可能早于应用写入的额度观测，保留既有时间下界，避免轮换破坏时间约束
     let next = sqlx::query_scalar::<_, i64>(
         "update provider_accounts
          set name = case when $14 then name else $4 end,
@@ -1035,7 +1035,7 @@ pub(crate) async fn finish_admin_transaction<T>(
     }
 }
 
-// 授权回执与账号写入需要共享事务；常规导入、刷新和轮换复用同一写入合同。
+// 授权回执与账号写入需要共享事务；常规导入、刷新和轮换复用同一写入合同
 pub(super) async fn import_provider_accounts_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     command: ImportProviderAccounts,
@@ -1132,7 +1132,7 @@ pub(super) async fn rotate_provider_account_admin_in_transaction(
         &command.credential,
     )
     .await?;
-    // 凭据 CAS、普通设置和审计共享事务，任何设置失败都回滚凭据更新。
+    // 凭据 CAS、普通设置和审计共享事务，任何设置失败都回滚凭据更新
     if let Some(settings) = &command.settings {
         let ids = std::slice::from_ref(&settings.account_id);
         update_provider_accounts_scheduling_in_transaction(

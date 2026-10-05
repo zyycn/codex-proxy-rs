@@ -1,3 +1,5 @@
+//! xAI 授权码流程的状态生成、回调校验与待授权状态恢复
+
 use std::fmt;
 
 use base64::Engine as _;
@@ -14,7 +16,7 @@ use crate::{
 
 const MAX_CALLBACK_VALUE_BYTES: usize = 64 * 1024;
 
-/// 已解析的回调；code 与 state 在 debug 输出中保持脱敏。
+/// 已解析的回调；code 与 state 在 debug 输出中保持脱敏
 pub struct AuthorizationCallback {
     code: Option<SecretValue>,
     state: Option<SecretValue>,
@@ -22,13 +24,13 @@ pub struct AuthorizationCallback {
 }
 
 impl AuthorizationCallback {
-    /// 解析 OAuth 回调 query，并拒绝重复的安全敏感参数。
-    /// 服务端原始描述文本一律丢弃。
+    /// 解析 OAuth 回调 query，并拒绝重复的安全敏感参数
+    /// 服务端原始描述文本一律丢弃
     ///
     /// # Errors
     ///
     /// `code`、`state` 或 `error` 键重复出现时返回
-    /// [`CallbackRejection::DuplicateParameter`]。
+    /// [`CallbackRejection::DuplicateParameter`]
     pub fn parse(query: &str) -> Result<Self, CallbackRejection> {
         let mut code = None;
         let mut state = None;
@@ -72,7 +74,7 @@ impl fmt::Debug for AuthorizationCallback {
     }
 }
 
-/// 等待一次回调的 Authorization Code + PKCE 状态。
+/// 等待一次回调的 Authorization Code + PKCE 状态
 pub struct PendingAuthorization {
     authorization_url: Url,
     redirect_uri: AllowedRedirectUri,
@@ -122,17 +124,17 @@ impl PendingAuthorization {
         })
     }
 
-    /// 返回管理员需在官方 issuer 打开的 URL。
+    /// 返回管理员需在官方 issuer 打开的 URL
     #[must_use]
     pub fn authorization_url(&self) -> &Url {
         &self.authorization_url
     }
 
-    /// 将 server-only PKCE 状态编码为待加密载荷；调用方必须在离开内存前加密。
+    /// 将 server-only PKCE 状态编码为待加密载荷；调用方必须在离开内存前加密
     ///
     /// # Errors
     ///
-    /// 内部状态无法序列化时 fail closed。
+    /// 内部状态无法序列化时 fail closed
     pub fn into_server_state(self) -> Result<SecretValue, OAuthError> {
         let wire = PendingAuthorizationWire {
             schema_version: 1,
@@ -147,11 +149,11 @@ impl PendingAuthorization {
             .map_err(|_| pending_state_error())
     }
 
-    /// 从已经通过服务端 envelope 认证的载荷恢复一次性 PKCE 状态。
+    /// 从已经通过服务端 envelope 认证的载荷恢复一次性 PKCE 状态
     ///
     /// # Errors
     ///
-    /// 版本、URL 或 secret 形态不满足固定官方协议时拒绝恢复。
+    /// 版本、URL 或 secret 形态不满足固定官方协议时拒绝恢复
     pub fn from_server_state(
         config: &GrokOAuthConfig,
         state: &SecretValue,
@@ -180,11 +182,11 @@ impl PendingAuthorization {
         })
     }
 
-    /// 消费一次性流程并校验必需的回调 state。
+    /// 消费一次性流程并校验必需的回调 state
     ///
     /// # Errors
     ///
-    /// state 缺失或不匹配、provider 拒绝、code 缺失时返回回调拒绝错误。
+    /// state 缺失或不匹配、provider 拒绝、code 缺失时返回回调拒绝错误
     pub fn accept_callback(
         self,
         callback: AuthorizationCallback,
@@ -200,14 +202,14 @@ impl PendingAuthorization {
         self.accept_code(code)
     }
 
-    /// 消费一次性流程，并接受管理员粘贴的完整回调 URL、回调 query 或裸授权码。
+    /// 消费一次性流程，并接受管理员粘贴的完整回调 URL、回调 query 或裸授权码
     ///
-    /// 完整 URL 仍须精确匹配本流程的 redirect URI；query 输入仍须回传正确 state。
-    /// 裸授权码依赖已经绑定 owner 的一次性 flow 与 PKCE verifier，不降低 token 交换约束。
+    /// 完整 URL 仍须精确匹配本流程的 redirect URI；query 输入仍须回传正确 state
+    /// 裸授权码依赖已经绑定 owner 的一次性 flow 与 PKCE verifier，不降低 token 交换约束
     ///
     /// # Errors
     ///
-    /// URL、state 或授权码不满足当前一次性流程约束时返回回调拒绝错误。
+    /// URL、state 或授权码不满足当前一次性流程约束时返回回调拒绝错误
     pub fn accept_authorization_input(
         self,
         input: &str,
@@ -300,7 +302,7 @@ impl fmt::Debug for PendingAuthorization {
     }
 }
 
-/// 已通过 state 校验、可用于一次 token 交换的授权 grant。
+/// 已通过 state 校验、可用于一次 token 交换的授权 grant
 pub struct AuthorizationCodeGrant {
     code: SecretValue,
     redirect_uri: AllowedRedirectUri,

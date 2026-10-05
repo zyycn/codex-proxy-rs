@@ -1,3 +1,5 @@
+//! 验证 Responses WebSocket 中断向当前执行传递并释放相关资源
+
 use super::*;
 use gateway_core::engine::response_control::{ResponseControl, ResponseInterruptError};
 

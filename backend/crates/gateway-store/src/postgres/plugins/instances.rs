@@ -1,3 +1,5 @@
+//! 插件实例配置与版本的事务写入、绑定校验和发布状态读取
+
 use gateway_admin::model::audit::MutationAuditOperation;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -254,7 +256,7 @@ async fn save_inner(
     let mut tx = pool.begin().await.map_err(|_| unavailable())?;
     check_revision(&mut tx, expected).await?;
     validate_artifact_acceptance(&mut tx, &instance).await?;
-    // 停用是损坏配置的恢复路径，必须原样保留绑定；再次启用时才要求引用仍存在。
+    // 停用是损坏配置的恢复路径，必须原样保留绑定；再次启用时才要求引用仍存在
     if instance.enabled {
         validate_binding_references(&mut tx, &instance).await?;
     }
@@ -272,14 +274,14 @@ async fn save_inner(
         .collect();
     sqlx::query("insert into plugin_instance_secrets(instance_id,secrets_json) values ($1,$2) on conflict (instance_id) do update set secrets_json=excluded.secrets_json")
         .bind(id).bind(sqlx::types::Json(secrets)).execute(&mut *tx).await.map_err(|_| unavailable())?;
-    // 与当前配置及状态一同提交，准备失败或事务冲突不能污染恢复点。
-    // 停用草稿可能缺少必填参数，不能覆盖此版本最近的启用配置。
+    // 与当前配置及状态一同提交，准备失败或事务冲突不能污染恢复点
+    // 停用草稿可能缺少必填参数，不能覆盖此版本最近的启用配置
     if instance.enabled {
         sqlx::query("insert into plugin_version_configurations (instance_id,artifact_sha256,configuration_json,secrets_json,bindings_json) select i.id,i.artifact_sha256,i.configuration_json,s.secrets_json,i.bindings_json from plugin_instances i join plugin_instance_secrets s on s.instance_id=i.id where i.id=$1 on conflict (instance_id,artifact_sha256) do update set configuration_json=excluded.configuration_json,secrets_json=excluded.secrets_json,bindings_json=excluded.bindings_json")
             .bind(id).execute(&mut *tx).await.map_err(|_| unavailable())?;
     }
     let committed_revision = admin_revision(revision)?;
-    // 旧配置与新配置共享事务，任一版本检查或状态提交失败都不留下半次切换。
+    // 旧配置与新配置共享事务，任一版本检查或状态提交失败都不留下半次切换
     for replacement in replacements {
         let previous_id = uuid::Uuid::parse_str(&replacement.id).map_err(|_| conflict())?;
         if previous_id == id || !instance.enabled {
@@ -400,7 +402,7 @@ fn revision_from_i64(value: i64) -> AdminStoreResult<Revision> {
     Revision::new(u64::try_from(value).map_err(|_| unavailable())?).map_err(|_| unavailable())
 }
 
-/// 所有停用共享全局 CAS 和审计事务，不能留下只停用一部分插件的状态。
+/// 所有停用共享全局 CAS 和审计事务，不能留下只停用一部分插件的状态
 pub(super) async fn disable(
     pool: &PgPool,
     ids: &[String],

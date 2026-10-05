@@ -1,3 +1,5 @@
+//! 账号管理 HTTP 测试入口，以及订阅、资料与筛选投影测试
+
 mod handlers;
 mod import_tasks;
 mod presenter;

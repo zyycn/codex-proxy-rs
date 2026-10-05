@@ -1,3 +1,5 @@
+//! 插件管理 HTTP 路由的组合入口与共用请求类型
+
 mod artifacts;
 mod distribution;
 mod instances;

@@ -1,4 +1,4 @@
-//! xAI 管理边界：Provider preparation 与 Redis OAuth pending 适配。
+//! xAI 管理边界：Provider preparation 与 Redis OAuth pending 适配
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -396,7 +396,7 @@ impl ProviderAdmin for XaiAdminProvider {
     }
 
     async fn account_unavailable(&self, account_id: &ProviderAccountId) {
-        // 删除/禁用账号：清除该账号全部 account/model scoped cooldown key。
+        // 删除/禁用账号：清除该账号全部 account/model scoped cooldown key
         let _ = self.cooldowns.clear_all(account_id).await;
     }
 
@@ -468,7 +468,7 @@ impl ProviderAdmin for XaiAdminProvider {
             return Ok(None);
         }
         Ok(Some(CalculatedBillingBreakdown {
-            // 历史总额只能核对费用拆分，不能证明当时保存过长上下文标记。
+            // 历史总额只能核对费用拆分，不能证明当时保存过长上下文标记
             long_context_billing_applied: false,
             image: None,
             custom_multiplier_bps: breakdown.custom_multiplier_bps(),
@@ -505,11 +505,12 @@ impl ProviderAdmin for XaiAdminProvider {
         let mut subjects = BTreeSet::new();
         let mut credentials = Vec::new();
         // 逐条目独立成败：verify 会真实轮换 RT，后续条目的任何失败都不得
-        // 丢弃已轮换成功的凭据（旧 RT 已被上游作废，丢弃即不可逆报废）。
-        // 失败条目跳过；仅当没有任何条目成功时返回首个失败。响应只携带
+        // 丢弃已轮换成功的凭据（旧 RT 已被上游作废，丢弃即不可逆报废）
+        // 失败条目跳过；仅当没有任何条目成功时返回首个失败
+        // 响应只携带
         // 成功计数，每个被跳过的条目在此逐条留日志——尤其 verify 成功后
         // 才失败/被去重的条目，其源文件里的 RT 已被轮换作废，运维只能从
-        // 日志得知需要重新授权。
+        // 日志得知需要重新授权
         let mut first_failure: Option<ProviderAdminError> = None;
         for entry in document.into_entries() {
             let model_access = entry.model_access().cloned();
@@ -538,7 +539,7 @@ impl ProviderAdmin for XaiAdminProvider {
                 }
             };
             // 同一账号的另一份 grant：账号已由更早条目入册，本条目跳过；
-            // 本条目若经历了 refresh，其源文件 RT 已作废。
+            // 本条目若经历了 refresh，其源文件 RT 已作废
             if !subjects.insert(tokens.evidence().subject().to_owned()) {
                 tracing::warn!(
                     target: "xai_admin",

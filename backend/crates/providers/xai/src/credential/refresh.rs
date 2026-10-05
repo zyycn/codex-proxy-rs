@@ -1,4 +1,4 @@
-//! xAI OAuth refresh state machine；并发由 lease、写回由 credential revision CAS 保证。
+//! xAI OAuth refresh state machine；并发由 lease、写回由 credential revision CAS 保证
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -39,13 +39,13 @@ const MAX_REFRESH_EXCLUSIONS: usize = 400;
 const PROVIDER_NAME: &str = "xai";
 const MAX_SECRET_BYTES: usize = 64 * 1_024;
 const DISCOVERY_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(5);
-/// 连续失败计数窗口；静默满窗后计数过期归零。
+/// 连续失败计数窗口；静默满窗后计数过期归零
 const REFRESH_BACKOFF_WINDOW: Duration = Duration::from_secs(30 * 60);
-/// 窗口内先执行五次指数退避，再进入固定恢复周期。
+/// 窗口内先执行五次指数退避，再进入固定恢复周期
 const REFRESH_BACKOFF_MAX_ATTEMPTS: u32 = 5;
-/// 耗尽指数退避后的 OAuth 恢复周期。
+/// 耗尽指数退避后的 OAuth 恢复周期
 const REFRESH_RECOVERY_DELAY: Duration = Duration::from_secs(10 * 60);
-/// 过期 AT 仍允许 RT 恢复的最长窗口。
+/// 过期 AT 仍允许 RT 恢复的最长窗口
 const REFRESH_RECOVERY_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 
 fn refresh_recovery_deadline(access_token_expires_at: Option<SystemTime>) -> Option<SystemTime> {
@@ -79,7 +79,7 @@ fn bounded_refresh_retry_at(
     bounded
 }
 
-/// 一个到期且已按 revision 读取明文 RT 的 xAI account。
+/// 一个到期且已按 revision 读取明文 RT 的 xAI account
 pub struct DueGrokCredential {
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
@@ -307,14 +307,14 @@ pub enum GrokCredentialRefreshOutcome {
     },
 }
 
-/// 一次 401 后的同账号 OAuth 恢复结论。
+/// 一次 401 后的同账号 OAuth 恢复结论
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrokCredentialRecoveryOutcome {
-    /// AT/RT 已由 CAS 刷新，或并发刷新已先完成。
+    /// AT/RT 已由 CAS 刷新，或并发刷新已先完成
     Recovered,
-    /// RT 或账号已被权威判定为不可恢复。
+    /// RT 或账号已被权威判定为不可恢复
     Rejected,
-    /// 临时错误或 lease 竞争，本次不改变账号认证状态。
+    /// 临时错误或 lease 竞争，本次不改变账号认证状态
     Unavailable,
 }
 
@@ -420,7 +420,7 @@ impl GrokCredentialRefreshService {
         self.refresh_one_with_policy(credential, policy).await
     }
 
-    /// 手工刷新一次原子读取的当前 credential；只返回 Provider 验证后的 CAS command，不写 Store。
+    /// 手工刷新一次原子读取的当前 credential；只返回 Provider 验证后的 CAS command，不写 Store
     pub async fn prepare_manual_refresh(
         &self,
         current: LoadedCredential,
@@ -544,7 +544,7 @@ impl GrokCredentialRefreshService {
             {
                 return Err(GrokCredentialRefreshError::Preparation);
             }
-            // A failed direct discovery must not prevent accounts on other exits from refreshing.
+            // 直连发现失败不能阻止其他出口上的账号刷新
             credentials.retain(|credential| {
                 if credential.outbound_proxy.is_some() {
                     return true;
@@ -752,7 +752,7 @@ impl GrokCredentialRefreshService {
         };
 
         // 凭据提交后重新读取账号事实；刷新期间切换出口不会改变 credential CAS，
-        // 但后续目录请求必须使用已提交的当前出口，不能复用旧的 token-only 请求。
+        // 但后续目录请求必须使用已提交的当前出口，不能复用旧的 token-only 请求
         let _ = self.catalog.refresh_account_catalog(&account_id).await;
         let _ = self
             .credential_state

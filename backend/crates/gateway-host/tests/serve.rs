@@ -1,3 +1,5 @@
+//! 验证宿主服务关闭时的连接排空、超时与并发唤醒
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,7 +54,8 @@ async fn wait_until_idle_should_wake_when_last_guard_drops_after_first_poll() {
 async fn wait_until_idle_should_observe_guard_drop_racing_the_idle_check() {
     // 回归约束：notified 必须在读取活跃计数前完成注册（enable），否则最后
     // 一个 guard 在计数检查与首次 poll 之间 drop 时唤醒丢失，只能等满整个
-    // 超时。多线程反复交错，任何一次丢唤醒都会撞上 2s 超时并触发断言。
+    // 超时
+    // 多线程反复交错，任何一次丢唤醒都会撞上 2s 超时并触发断言
     for _ in 0..256 {
         let tracker = Arc::new(ConnectionTracker::new(CancellationToken::new()));
         let guard = tracker.try_register().expect("register connection");

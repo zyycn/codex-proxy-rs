@@ -1,3 +1,5 @@
+//! 验证执行错误的敏感信息脱敏、稳定快照与请求局部数据边界
+
 use bytes::Bytes;
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, GatewayError, OpaqueUpstreamValue,

@@ -1,3 +1,5 @@
+//! 编译插件上游目标与路径约束，解析受管请求目标
+
 use std::collections::BTreeMap;
 
 use gateway_admin::model::AdminError;

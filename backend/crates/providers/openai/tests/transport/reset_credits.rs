@@ -1,3 +1,5 @@
+//! 验证额度重置卡查询和消费的请求合同与禁止重放边界
+
 use chrono::{TimeZone as _, Utc};
 use provider_openai::credential::CodexResetCreditsError;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};

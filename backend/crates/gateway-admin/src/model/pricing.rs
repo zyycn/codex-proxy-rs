@@ -1,4 +1,4 @@
-//! 全局模型定价的管理合同。
+//! 全局模型定价的管理合同
 
 use gateway_core::metering::{ModelPriceOverride, PricingOverrides};
 use std::collections::{BTreeMap, BTreeSet};

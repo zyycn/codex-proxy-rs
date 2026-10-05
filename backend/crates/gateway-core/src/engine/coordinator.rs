@@ -1,4 +1,4 @@
-//! 唯一的账号重试、发送与下游 commit barrier owner。
+//! 唯一的账号重试、发送与下游 commit barrier owner
 
 use crate::concurrency::ConcurrencyWaitBudget;
 use crate::diagnostics::TraceContext;
@@ -32,7 +32,7 @@ use crate::error::{
 use crate::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
 };
-use crate::lifecycle::CancellationToken;
+use crate::lifecycle::{CancellationToken, Deadline, LeaseGuard};
 use crate::metering::Decimal;
 use crate::operation::{Operation, ProviderSessionState};
 use crate::routing::RoutingPlan;
@@ -40,7 +40,7 @@ use futures::future::{BoxFuture, Fuse};
 use futures::{FutureExt, StreamExt, pin_mut, select_biased};
 use futures_timer::Delay;
 
-/// Request 级协调器；不会创建或写入 `request_attempts`。
+/// Request 级协调器；不会创建或写入 `request_attempts`
 pub struct AttemptCoordinator<S: ?Sized> {
     engine: Arc<GatewayEngine<S>>,
 }
@@ -172,11 +172,11 @@ where
         }
     }
 
-    /// 接纳请求并返回由 Core 完整拥有 retry/commit 的流式会话。
+    /// 接纳请求并返回由 Core 完整拥有 retry/commit 的流式会话
     ///
     /// # Errors
     ///
-    /// 取消、已过 deadline 或 continuation 与路由不匹配时返回稳定错误。
+    /// 取消、已过 deadline 或 continuation 与路由不匹配时返回稳定错误
     pub async fn start(
         &self,
         request: NewModelRequest,
@@ -217,9 +217,9 @@ where
         .await
     }
 
-    /// 对固定账号执行诊断请求。
+    /// 对固定账号执行诊断请求
     ///
-    /// 仅跳过该账号的本地可用性投影；账号租约、并发和请求间隔仍必须满足。
+    /// 仅跳过该账号的本地可用性投影；账号租约、并发和请求间隔仍必须满足
     pub async fn start_diagnostic(
         &self,
         request: NewModelRequest,
@@ -309,12 +309,8 @@ where
             budget_attempt_already_counted: false,
             trace,
             deadline,
-            deadline_timer: Delay::new(
-                deadline
-                    .duration_since(SystemTime::now())
-                    .unwrap_or(Duration::ZERO),
-            )
-            .fuse(),
+            deadline_timer: deadline.wait().fuse(),
+            lease: Some(self.engine.store.maintain_request(&request.id, deadline)),
             requested_model: request.requested_model.clone(),
             pending_request: Some(request),
             request_persisted: false,
@@ -338,6 +334,8 @@ where
             attempts: 0,
             websocket_observation_sequence: 0,
             routing_attempts: 0,
+            last_attempt_account: None,
+            account_rotations: 0,
             candidate_index,
             excluded_accounts: BTreeSet::new(),
             credential_recovery_attempted_accounts: BTreeSet::new(),
@@ -364,7 +362,7 @@ where
             session.finish_interruption(&EngineError::Cancelled).await?;
             return Err(EngineError::Cancelled);
         }
-        if SystemTime::now() >= deadline {
+        if deadline.is_elapsed() {
             session.finish_interruption(&EngineError::Deadline).await?;
             return Err(EngineError::Deadline);
         }
@@ -413,10 +411,10 @@ struct PendingAttemptRetry {
     transport_recovery: bool,
 }
 
-/// API 可逐事件消费的 Core 执行会话。
+/// API 可逐事件消费的 Core 执行会话
 ///
 /// API 只能提交下游 delivery 边界；账号重试、断流终结与
-/// `model_requests` 写回均留在本类型内。
+/// `model_requests` 写回均留在本类型内
 pub struct ResponseExecutionSession<S: ?Sized> {
     engine: Arc<GatewayEngine<S>>,
     request_id: ModelRequestId,
@@ -429,9 +427,10 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     budget_prior_attempts_usd: Decimal,
     budget_attempt_already_counted: bool,
     trace: TraceContext,
-    deadline: SystemTime,
-    /// 会话级 deadline 计时器；deadline 固定，帧循环内复用而非逐事件新建。
-    deadline_timer: Fuse<Delay>,
+    deadline: Deadline,
+    lease: Option<Box<dyn LeaseGuard>>,
+    /// 会话级 deadline 计时器；deadline 固定，帧循环内复用而非逐事件新建
+    deadline_timer: Fuse<BoxFuture<'static, ()>>,
     pending_request: Option<NewModelRequest>,
     requested_model: Option<crate::routing::PublicModelId>,
     request_persisted: bool,
@@ -452,27 +451,36 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     continuation_attempt: ContinuationAttempt,
     account_state_owner: Option<ProviderAccountStateOwner>,
     cancellation: CancellationToken,
-    /// 所有实际上游 attempt 数；包含同账号传输重试，作为持久化序号。
+    /// 所有实际上游 attempt 数；包含同账号传输重试，作为持久化序号
     attempts: u32,
-    /// WebSocket 观察序列在同一逻辑请求内按实际上游 wire 单调递增。
+    /// WebSocket 观察序列在同一逻辑请求内按实际上游 wire 单调递增
     websocket_observation_sequence: u64,
-    /// 路由预算只统计正常选号/账号恢复，不被 Provider-owned 传输预算消耗。
+    /// 路由预算只统计正常选号/账号恢复，不被 Provider-owned 传输预算消耗
     routing_attempts: u32,
+    /// 上一 attempt 实际选中的账号；与选号成功的 attempt 一一同步更新。
+    /// 旧 CurrentAttempt 在丢弃时被 drop、excluded_accounts 无序、持久化记录异步
+    /// best-effort，都不能还原「上一账号」，因此由本字段单独记账。
+    last_attempt_account: Option<crate::account::ProviderAccountId>,
+    /// 已发生的换号次数：选中账号与上一 attempt 不同的路由 attempt 计一次。
+    /// 首个 attempt 不计；同账号钉选重试（瞬态退避、传输恢复、凭据恢复重放、
+    /// continuation 精确重连）不消耗。预算耗尽后所有必然换号的重试门关闭，
+    /// 换号深度由 [`crate::routing::MAX_ACCOUNT_ROTATION_ATTEMPTS`] 封顶。
+    account_rotations: u32,
     candidate_index: usize,
     excluded_accounts: BTreeSet<crate::account::ProviderAccountId>,
     credential_recovery_attempted_accounts: BTreeSet<crate::account::ProviderAccountId>,
     /// 凭据恢复后的一次性同账号钉选；只约束紧随其后的 replay attempt，
-    /// attempt 建立时即被消费，后续可重试错误仍可换号消耗剩余重试预算。
-    /// 与 `required_account`（外部指定、贯穿整个请求）语义不同，不可合并。
+    /// attempt 建立时即被消费，后续可重试错误仍可换号消耗剩余重试预算
+    /// 与 `required_account`（外部指定、贯穿整个请求）语义不同，不可合并
     recovery_account: Option<crate::account::ProviderAccountId>,
-    /// 提交前同账号退避/传输恢复共用的等待与钉选状态；业务重试消耗路由预算。
+    /// 提交前同账号退避/传输恢复共用的等待与钉选状态；业务重试消耗路由预算
     pending_retry: Option<PendingAttemptRetry>,
-    /// 请求内按账号累计的瞬时拒绝重试次数，不能跨请求污染账号健康状态。
+    /// 请求内按账号累计的瞬时拒绝重试次数，不能跨请求污染账号健康状态
     transient_retry_counts: BTreeMap<crate::account::ProviderAccountId, u32>,
-    /// 只在首次进入对应 Provider 时解析，避免后台发布更新改变同一请求的重试身份。
+    /// 只在首次进入对应 Provider 时解析，避免后台发布更新改变同一请求的重试身份
     request_profiles: BTreeMap<crate::identity::ProviderKind, crate::account::OpaqueProviderData>,
     current: Option<CurrentAttempt>,
-    /// 请求级发送状态水位；跨 attempt 单调不降，终态写回不得低于此档。
+    /// 请求级发送状态水位；跨 attempt 单调不降，终态写回不得低于此档
     send_state_watermark: UpstreamSendState,
     downstream_committed_at: Option<SystemTime>,
     client_status_code: Option<u16>,
@@ -481,12 +489,12 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     finalization: Option<RequestFinalization>,
     finalized_at: Option<SystemTime>,
     image_generation_requested: bool,
-    /// 最近一次为无感恢复而被丢弃的原始上游错误；只在后续空选路时成为终态。
+    /// 最近一次为无感恢复而被丢弃的原始上游错误；只在后续空选路时成为终态
     last_retryable_failure: Option<ProviderError>,
-    /// 与 `last_retryable_failure` 同属一个 attempt 的原始失败批次。
+    /// 与 `last_retryable_failure` 同属一个 attempt 的原始失败批次
     last_retryable_failure_events: Vec<ProviderEvent>,
     last_observed_provider: Option<crate::identity::ProviderKind>,
-    /// 原子失败批次已交给协议层、但尚待下游提交后收敛的原 Provider 错误。
+    /// 原子失败批次已交给协议层、但尚待下游提交后收敛的原 Provider 错误
     pending_terminal_failure: Option<PendingTerminalFailure>,
 }
 
@@ -504,22 +512,22 @@ impl<S: ?Sized> ResponseExecutionSession<S>
 where
     S: ExecutionStore + 'static,
 {
-    /// 首次驱动前接入密钥准入使用的预算，所有账号尝试随后共享它。
+    /// 首次驱动前接入密钥准入使用的预算，所有账号尝试随后共享它
     pub(crate) fn with_concurrency_wait_budget(mut self, budget: ConcurrencyWaitBudget) -> Self {
         self.concurrency_wait_budget = budget;
         self
     }
 
-    /// 当前请求共享的诊断上下文。
+    /// 当前请求共享的诊断上下文
     pub fn trace(&self) -> TraceContext {
         self.trace.clone()
     }
 
-    /// 读取下一条 canonical event；首条未提交事件会携带 commit 要求。
+    /// 读取下一条 canonical event；首条未提交事件会携带 commit 要求
     ///
     /// # Errors
     ///
-    /// 未提交上一条首事件、Provider 失败、取消或超时时返回错误；观测写入失败只记录告警。
+    /// 未提交上一条首事件、Provider 失败、取消或超时时返回错误；观测写入失败只记录告警
     pub async fn next_event(&mut self) -> Result<Option<CoordinatedEvent>, EngineError> {
         self.resume_finalization().await;
         if self.delivery_pending {
@@ -570,11 +578,11 @@ where
         }
     }
 
-    /// 非流式协议可在任何下游提交前收集一个完整、可丢弃重试的结果。
+    /// 非流式协议可在任何下游提交前收集一个完整、可丢弃重试的结果
     ///
     /// # Errors
     ///
-    /// 会话已提交、已有待提交结果或执行失败时返回错误。
+    /// 会话已提交、已有待提交结果或执行失败时返回错误
     pub async fn collect_uncommitted(&mut self) -> Result<Vec<ProviderEvent>, EngineError> {
         self.resume_finalization().await;
         if self.downstream_committed_at.is_some() || self.delivery_pending {
@@ -607,11 +615,11 @@ where
         }
     }
 
-    /// 在协议 adapter 真正写出首字节前记录下游不可撤回边界。
+    /// 在协议 adapter 真正写出首字节前记录下游不可撤回边界
     ///
     /// # Errors
     ///
-    /// 没有待提交结果或重复提交时返回错误；观测 Store 失败只记服务端告警。
+    /// 没有待提交结果或重复提交时返回错误；观测 Store 失败只记服务端告警
     pub async fn commit_downstream(
         &mut self,
         client_status_code: Option<u16>,
@@ -645,8 +653,8 @@ where
         Ok(())
     }
 
-    /// 仅当 HTTP 流插件明确丢弃了整个尚未提交的非终态批次时释放交付屏障。
-    /// 原始 Provider facts 已经观察，不回滚计量，也不把丢弃误记为客户端 commit。
+    /// 仅当 HTTP 流插件明确丢弃了整个尚未提交的非终态批次时释放交付屏障
+    /// 原始 Provider facts 已经观察，不回滚计量，也不把丢弃误记为客户端 commit
     pub fn discard_pending_delivery(&mut self) -> Result<(), EngineError> {
         if !self.delivery_pending
             || self.downstream_committed_at.is_some()
@@ -659,11 +667,11 @@ where
         Ok(())
     }
 
-    /// 在 HTTP adapter 已确定首字节前错误响应后补写最终状态。
+    /// 在 HTTP adapter 已确定首字节前错误响应后补写最终状态
     ///
     /// # Errors
     ///
-    /// 状态已经写入时返回错误；观测 Store 失败只记服务端告警。
+    /// 状态已经写入时返回错误；观测 Store 失败只记服务端告警
     pub async fn record_client_status(
         &mut self,
         client_status_code: u16,
@@ -692,7 +700,7 @@ where
 
     #[must_use]
     pub fn budget_charge(&self) -> super::budget::ClientBudgetCharge {
-        // 超出数据库可表示范围时保留最大金额，避免溢出后误记为零。
+        // 超出数据库可表示范围时保留最大金额，避免溢出后误记为零
         let amount_usd = self
             .budget_prior_attempts_usd
             .checked_add(self.budget_attempt_usd())
@@ -709,8 +717,8 @@ where
         if self.budget_attempt_already_counted {
             return Decimal::ZERO;
         }
-        // Key 只累计已取得的 USD 费用；缺少费用的请求按零结算。
-        // 发送状态仍用于判断重放是否安全并保留在诊断中，不能据此推断存在欠费。
+        // Key 只累计已取得的 USD 费用；缺少费用的请求按零结算
+        // 发送状态仍用于判断重放是否安全并保留在诊断中，不能据此推断存在欠费
         self.observation
             .cost
             .total()
@@ -719,7 +727,7 @@ where
             .unwrap_or(Decimal::ZERO)
     }
 
-    /// 返回最终选中 attempt 已公开给协议层的安全响应头。
+    /// 返回最终选中 attempt 已公开给协议层的安全响应头
     #[must_use]
     pub fn response_headers(&self) -> &[ProviderResponseHeader] {
         self.current
@@ -729,7 +737,7 @@ where
             .unwrap_or_default()
     }
 
-    /// 返回最终选中 attempt 观察到的上游 HTTP 状态码。
+    /// 返回最终选中 attempt 观察到的上游 HTTP 状态码
     #[must_use]
     pub fn response_status_code(&self) -> Option<u16> {
         self.current
@@ -738,9 +746,9 @@ where
             .and_then(ProviderResponseObservation::status_code)
     }
 
-    /// 将已完成响应的账号事实与 Provider 私有状态封装为可丢失的亲和记录。
+    /// 将已完成响应的账号事实与 Provider 私有状态封装为可丢失的亲和记录
     ///
-    /// Core 不读取 `state` 内容；Provider 将在后续同账号 continuation 时自行解释。
+    /// Core 不读取 `state` 内容；Provider 将在后续同账号 continuation 时自行解释
     #[must_use]
     pub fn native_continuation_pin(
         &self,
@@ -777,14 +785,14 @@ where
         )
     }
 
-    /// 请求取消；实际终态在下一次会话 poll 时由 Core 持久化。
+    /// 请求取消；实际终态在下一次会话 poll 时由 Core 持久化
     pub fn cancel(&self) {
         self.cancellation.cancel();
     }
 
-    /// 丢弃尚未提交的 delivery，并收敛为取消终态；已有终态写入继续保留原结果。
+    /// 丢弃尚未提交的 delivery，并收敛为取消终态；已有终态写入继续保留原结果
     ///
-    /// 观测写入失败只记录告警，不改变取消结果。
+    /// 观测写入失败只记录告警，不改变取消结果
     pub async fn cancel_and_finalize(&mut self) -> Result<(), EngineError> {
         self.cancellation.cancel();
         self.resume_finalization().await;
@@ -833,8 +841,8 @@ where
                 }
                 PollBoundary::Deadline => {
                     // 会话 deadline 是网关自身的请求预算，不是上游超时；
-                    // 真正的上游超时会作为流错误进入 `handle_stream_error` 记账。
-                    // 这里不写 provider 失败，避免把本地预算到期归因为上游故障。
+                    // 真正的上游超时会作为流错误进入 `handle_stream_error` 记账
+                    // 这里不写 provider 失败，避免把本地预算到期归因为上游故障
                     self.finish_interruption(&EngineError::Deadline).await?;
                     return Err(EngineError::Deadline);
                 }
@@ -961,7 +969,7 @@ where
             .and_then(NonZeroU32::new)
             .ok_or(EngineError::EmptyRoutingPlan)?;
         // 请求局部恢复钉选在此被一次性消费，只绑定本次 replay attempt；
-        // 外部 required_account 每次 attempt 都重新生效。
+        // 外部 required_account 每次 attempt 都重新生效
         let (pinned_account, attempt_transport) = if let Some(recovery) = pending_retry {
             (Some(recovery.account), recovery.transport)
         } else {
@@ -1086,7 +1094,7 @@ where
                 return Err(EngineError::Cancelled);
             }
             ProviderBoundary::Deadline => {
-                // 网关预算到期是本请求的终态，不推定候选 Provider 不可用。
+                // 网关预算到期是本请求的终态，不推定候选 Provider 不可用
                 self.finish_interruption(&EngineError::Deadline).await?;
                 return Err(EngineError::Deadline);
             }
@@ -1112,6 +1120,9 @@ where
                             self.continuation_attempt,
                             ContinuationAttempt::None | ContinuationAttempt::ReplayAny
                         )
+                        // 跨 Provider 候选推进必然换号（账号行按 Provider 隔离），
+                        // 预算耗尽后不再推进，交回容量类失败的原有终态语义。
+                        && self.account_rotations < crate::routing::MAX_ACCOUNT_ROTATION_ATTEMPTS
                         && self.advance_provider_candidate();
                     let retryable = self
                         .apply_retry_policy(super::policy::RetryFacts {
@@ -1278,6 +1289,18 @@ where
             .await?;
             return Err(EngineError::ContinuationPinMismatch);
         }
+        // 换号预算按实际选中账号记账：与上一 attempt 选中账号不同即消耗一次。决策门
+        // （重试分类、候选推进、continuation 排除臂）已拦截预算耗尽后的必然换号，
+        // 这里是统一事实源，覆盖 Provider 自主换号（如 replay owner 重放）等路径；
+        // 首 attempt 与同账号钉选重试不计数。
+        if self.last_attempt_account.as_ref() != Some(metadata.provider_account_id())
+            && self
+                .last_attempt_account
+                .replace(metadata.provider_account_id().clone())
+                .is_some()
+        {
+            self.account_rotations = self.account_rotations.saturating_add(1);
+        }
         if self.account_state_owner.is_none() {
             self.account_state_owner = Some(ProviderAccountStateOwner::new(
                 metadata.provider().clone(),
@@ -1299,7 +1322,7 @@ where
             capacity_used_slots: capacity.map(|snapshot| snapshot.used_slots()),
             capacity_total_slots: capacity.map(|snapshot| snapshot.total_slots()),
         };
-        // 合法冷流在可取消的观测写入前归会话所有，首写等待中断也不能退回零次或重新选号。
+        // 合法冷流在可取消的观测写入前归会话所有，首写等待中断也不能退回零次或重新选号
         self.attempts = next_attempt.get();
         if !is_transport_recovery {
             self.routing_attempts = self.routing_attempts.saturating_add(1);
@@ -1408,13 +1431,13 @@ where
         current.response_observation = Some(observation);
     }
 
-    /// 失败可重试时要求丢弃本 attempt；预算耗尽时可返回最后一批原始失败事件。
+    /// 失败可重试时要求丢弃本 attempt；预算耗尽时可返回最后一批原始失败事件
     async fn handle_stream_error(
         &mut self,
         mut error: ProviderError,
     ) -> Result<StreamErrorOutcome, EngineError> {
         // 原始 wire 只活在 request-local 决策状态；clone、attempt 记录与持久化终态
-        // 均只接触已剥离的稳定错误字段。
+        // 均只接触已剥离的稳定错误字段
         record_trace_error(&self.trace.attempt(self.attempts), &error);
         let mut atomic_client_events = error.take_atomic_client_events();
         let current = self.current.take().ok_or(EngineError::NoActiveAttempt)?;
@@ -1429,15 +1452,16 @@ where
         }
         self.record_provider_failure(current.metadata.provider().clone());
         // attempt_send_state 是本 attempt 自身的发送事实；共享 effect 单独作为
-        // 一票否决的重试门。持久化与终态用请求级水位，不能把早先 Provider attempt
-        // 的 sent 传染给当前 attempt，但任何已观测外部副作用都必须阻止重放。
+        // 一票否决的重试门
+        // 持久化与终态用请求级水位，不能把早先 Provider attempt
+        // 的 sent 传染给当前 attempt，但任何已观测外部副作用都必须阻止重放
         let attempt_send_state = if current.send_observed {
             UpstreamSendState::Sent
         } else {
             error.send_state()
         };
         if attempt_send_state != UpstreamSendState::NotSent {
-            // 已发送的容量拒绝、凭据恢复沿用原策略，不再受首次建连窗口限制。
+            // 已发送的容量拒绝、凭据恢复沿用原策略，不再受首次建连窗口限制
             self.connection_budget.complete();
         }
         let execution_effect_observed = self.execution_effect_observed();
@@ -1471,7 +1495,7 @@ where
                 Some(crate::error::PreDeliveryRetry::AccountRotation)
             )
             && self.routing_attempts < self.plan.max_attempts().get();
-        // 只有尚未发送的逻辑请求进入新增策略；已有发送后安全恢复保持原有路由规则。
+        // 只有尚未发送的逻辑请求进入新增策略；已有发送后安全恢复保持原有路由规则
         let connection_retry_requested = self.current_send_state() == UpstreamSendState::NotSent
             && matches!(
                 error.pre_delivery_retry(),
@@ -1512,7 +1536,10 @@ where
                     && !self.delivery_pending
                     && attempt_send_state != UpstreamSendState::Ambiguous =>
             {
-                Some((AttemptTransport::Fallback, Duration::ZERO))
+                Some((
+                    AttemptTransport::Fallback,
+                    error.retry_after().unwrap_or_default(),
+                ))
             }
             _ => None,
         };
@@ -1538,7 +1565,10 @@ where
                     .or_default();
                 if *retries < max_retries.get() {
                     let multiplier = 1_u32.checked_shl(*retries).unwrap_or(u32::MAX);
-                    let delay = initial_delay.saturating_mul(multiplier).min(max_delay);
+                    // 服务器建议优先于本地退避，不能被本地上限缩短或再次指数放大
+                    let delay = error
+                        .retry_after()
+                        .unwrap_or_else(|| initial_delay.saturating_mul(multiplier).min(max_delay));
                     *retries = retries.saturating_add(1);
                     Some(delay)
                 } else {
@@ -1557,11 +1587,22 @@ where
             && !self
                 .credential_recovery_attempted_accounts
                 .contains(current.metadata.provider_account_id());
-        let retryable = continuation_retry
-            || same_account_retry
-            || ordinary_retry
-            || account_rotation_retry
-            || transport_recovery.is_some();
+        // 排除当前账号的重选必然换号：ordinary 重选与显式 AccountRotation 标记都落入
+        // 同一排除分支。换号预算只在这里消耗；同账号分支（瞬态退避、传输恢复、
+        // 凭据恢复重放、continuation 精确重连）不消耗。不能直接把预算门写进
+        // ordinary_retry：它是同账号瞬态退避的前置条件，会被连带误伤
+        let rotation_retry = !continuation_retry
+            && !same_account_retry
+            && transient_retry.is_none()
+            && transport_recovery.is_none()
+            && (ordinary_retry || account_rotation_retry)
+            && self.account_rotations < crate::routing::MAX_ACCOUNT_ROTATION_ATTEMPTS;
+        let retryable = !error.retry_is_prohibited()
+            && (continuation_retry
+                || same_account_retry
+                || transient_retry.is_some()
+                || transport_recovery.is_some()
+                || rotation_retry);
 
         let retryable = match self
             .apply_retry_policy(super::policy::RetryFacts {
@@ -1597,6 +1638,7 @@ where
             "sameAccountRetry": same_account_retry, "accountRotationRetry": account_rotation_retry,
             "ordinaryRetry": ordinary_retry, "transportRecovery": transport_recovery.is_some(),
             "transientRetry": transient_retry.is_some(),
+            "rotationRetry": rotation_retry, "accountRotations": self.account_rotations,
             "connectionRetry": connection_retry_requested,
             "connectionRetries": self.connection_retries,
             "connectionBudgetRemainingMs": self.connection_budget.remaining().map(duration_ms),
@@ -1612,14 +1654,14 @@ where
                 }
             }
             // 原始 wire/HTTP response 由 request-local 所有权保留到下一次 attempt
-            // 成功，或最终空选路时返回客户端；持久化只取得稳定事实快照。
+            // 成功，或最终空选路时返回客户端；持久化只取得稳定事实快照
             let persistence_error = self.request_persisted.then(|| error.stable_snapshot());
             if same_account_retry {
                 let account = current.metadata.provider_account_id().clone();
                 self.credential_recovery_attempted_accounts
                     .insert(account.clone());
                 // 只钉住紧随其后的 replay attempt；replay 再遇可重试错误时，
-                // ordinary/continuation 重试门不受影响，仍可换号。
+                // ordinary/continuation 重试门不受影响，仍可换号
                 self.recovery_account = Some(account);
             } else if let Some(delay) = transient_retry {
                 self.pending_retry = Some(PendingAttemptRetry {
@@ -1696,10 +1738,7 @@ where
         let Some(policy) = self.request_policy.clone() else {
             return Ok(facts.retry_allowed);
         };
-        facts.remaining_deadline = self
-            .deadline
-            .duration_since(SystemTime::now())
-            .unwrap_or_default();
+        facts.remaining_deadline = self.deadline.remaining().unwrap_or(Duration::MAX);
         facts.retry_allowed &= !facts.remaining_deadline.is_zero()
             && !self.cancellation.is_cancelled()
             && !self.execution_effect_observed();
@@ -1716,12 +1755,12 @@ where
                 decision = decision => Ok(decision),
             }
         }?;
-        // 策略只收窄宿主已允许的恢复，返回后仍复核期限和外部副作用。
+        // 策略只收窄宿主已允许的恢复，返回后仍复核期限和外部副作用
         Ok(allowed
             && decision != super::policy::RetryDecision::Stop
             && !self.execution_effect_observed()
             && !self.cancellation.is_cancelled()
-            && SystemTime::now() < self.deadline)
+            && !self.deadline.is_elapsed())
     }
 
     fn observe_atomic_terminal_events(&mut self, events: &mut [ProviderEvent]) {
@@ -1797,6 +1836,13 @@ where
             {
                 return false;
             }
+            // 两个排除臂都必然换号；预算耗尽后不再排除当前账号做跨账号续写重放，
+            // 落回不可重试路径以原始上游错误终态。
+            ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny
+                if self.account_rotations >= crate::routing::MAX_ACCOUNT_ROTATION_ATTEMPTS =>
+            {
+                return false;
+            }
             ContinuationAttempt::ReplayOwner => {
                 self.continuation_attempt = ContinuationAttempt::ReplayAny;
                 self.excluded_accounts
@@ -1811,11 +1857,12 @@ where
         true
     }
 
-    /// 原生续写的原账号在本地调度阶段已不可用时，交给 Provider 执行跨账号恢复。
+    /// 原生续写的原账号在本地调度阶段已不可用时，交给 Provider 执行跨账号恢复
     ///
-    /// 这不是强制 Smart：下一次 attempt 仍使用请求配置的调度策略。只有网关持有
+    /// 这不是强制 Smart：下一次 attempt 仍使用请求配置的调度策略
+    /// 只有网关持有
     /// 对应 Provider 的会话状态时才进入恢复；是否保留 native handle、执行 probe
-    /// 或使用完整 transcript，由 Provider 自己的协议边界决定。
+    /// 或使用完整 transcript，由 Provider 自己的协议边界决定
     fn prepare_unavailable_native_continuation_replay(&mut self, error: &ProviderError) -> bool {
         if self.account_selection.required_account().is_some()
             || self.continuation_attempt != ContinuationAttempt::Native
@@ -1843,6 +1890,11 @@ where
         {
             return false;
         }
+        // Native 期间所有 attempt 都在 pin 账号上，到这里预算必未耗尽；
+        // 与其余换号路径保持同一预算门，防止状态机演化后破坏换号上限。
+        if self.account_rotations >= crate::routing::MAX_ACCOUNT_ROTATION_ATTEMPTS {
+            return false;
+        }
 
         self.continuation_attempt = ContinuationAttempt::ReplayAny;
         self.excluded_accounts.insert(pin.account().clone());
@@ -1850,7 +1902,7 @@ where
     }
 
     fn reset_uncommitted_observations(&mut self) {
-        // 响应观测按尝试隔离；被丢弃尝试中已取得的费用仍计入 Key。
+        // 响应观测按尝试隔离；被丢弃尝试中已取得的费用仍计入 Key
         self.budget_prior_attempts_usd = self
             .budget_prior_attempts_usd
             .checked_add(self.budget_attempt_usd())
@@ -2105,7 +2157,7 @@ where
             )
         });
         let mut persisted = self.request_persisted;
-        // 首次合并写失败后不能以零 attempt 补行；建流前也只有确定未发送的请求可按零次收敛。
+        // 首次合并写失败后不能以零 attempt 补行；建流前也只有确定未发送的请求可按零次收敛
         let request = if !persisted
             && finalization.attempt_count == 0
             && finalization.send_state == UpstreamSendState::NotSent
@@ -2116,7 +2168,7 @@ where
         };
         let store = Arc::clone(self.engine.store());
         let request_id = self.request_id.clone();
-        // 终态写入由会话持有；取消事件等待只暂停同一个 future，不重建请求或覆盖原失败。
+        // 终态写入由会话持有；取消事件等待只暂停同一个 future，不重建请求或覆盖原失败
         self.finalization = Some(RequestFinalization::Pending(Box::pin(async move {
             if let Some(request) = request {
                 persisted = best_effort_store_write(
@@ -2147,6 +2199,7 @@ where
         if let Some(RequestFinalization::Pending(write)) = self.finalization.as_mut() {
             self.request_persisted = write.await;
             self.finalization = Some(RequestFinalization::Complete);
+            self.lease.take();
         }
     }
 
@@ -2223,7 +2276,7 @@ where
     }
 
     /// 抬升并返回请求级发送水位；attempt 间切换（`current` 被取走）后，
-    /// 后续终态沿用已达到的最高档，不会把已落库的 `sent` 写回 `not_sent`。
+    /// 后续终态沿用已达到的最高档，不会把已落库的 `sent` 写回 `not_sent`
     fn raise_send_watermark(&mut self, observed: UpstreamSendState) -> UpstreamSendState {
         let observed = escalate_send_state(self.current_send_state(), observed);
         self.send_state_watermark = observed;
@@ -2310,10 +2363,10 @@ enum PollBoundary {
 async fn poll_stream_item(
     stream: &mut ProviderStream,
     cancellation: CancellationToken,
-    deadline: SystemTime,
-    mut deadline_timer: &mut Fuse<Delay>,
+    deadline: Deadline,
+    mut deadline_timer: &mut Fuse<BoxFuture<'static, ()>>,
 ) -> PollBoundary {
-    if SystemTime::now() >= deadline {
+    if deadline.is_elapsed() {
         return PollBoundary::Deadline;
     }
     let next = stream.next().fuse();
@@ -2341,14 +2394,14 @@ enum RetryDelayBoundary {
 async fn poll_retry_delay(
     delay: Duration,
     cancellation: CancellationToken,
-    deadline: SystemTime,
+    deadline: Deadline,
 ) -> RetryDelayBoundary {
-    let Ok(remaining) = deadline.duration_since(SystemTime::now()) else {
+    if deadline.is_elapsed() {
         return RetryDelayBoundary::Deadline;
-    };
+    }
     let retry_delay = Delay::new(delay).fuse();
     let cancelled = cancellation.cancelled().fuse();
-    let timeout = Delay::new(remaining).fuse();
+    let timeout = deadline.wait().fuse();
     pin_mut!(retry_delay, cancelled, timeout);
     select_biased! {
         _ = cancelled => RetryDelayBoundary::Cancelled,
@@ -2362,14 +2415,14 @@ async fn poll_provider(
     request: ProviderRequest,
     context: AttemptContext,
     cancellation: CancellationToken,
-    deadline: SystemTime,
+    deadline: Deadline,
 ) -> ProviderBoundary {
-    let Ok(remaining) = deadline.duration_since(SystemTime::now()) else {
+    if deadline.is_elapsed() {
         return ProviderBoundary::Deadline;
-    };
+    }
     let execution = provider.execute(request, context).fuse();
     let cancelled = cancellation.cancelled().fuse();
-    let timeout = Delay::new(remaining).fuse();
+    let timeout = deadline.wait().fuse();
     pin_mut!(execution, cancelled, timeout);
     select_biased! {
         _ = cancelled => ProviderBoundary::Cancelled,
@@ -2421,8 +2474,8 @@ fn provider_proved_replay_safe(error: &ProviderError) -> bool {
         || (error.send_state() != UpstreamSendState::Ambiguous && error.replay_is_safe())
 }
 
-/// 发送状态合并档位：`Sent` > `Ambiguous` > `NotSent`。
-/// 只要任一 attempt 达到过高档，请求整体就不允许回落到低档。
+/// 发送状态合并档位：`Sent` > `Ambiguous` > `NotSent`
+/// 只要任一 attempt 达到过高档，请求整体就不允许回落到低档
 const fn escalate_send_state(a: UpstreamSendState, b: UpstreamSendState) -> UpstreamSendState {
     match (a, b) {
         (UpstreamSendState::Sent, _) | (_, UpstreamSendState::Sent) => UpstreamSendState::Sent,

@@ -1,4 +1,4 @@
-//! `runtime_settings` 单例与 config revision 的 PostgreSQL owner。
+//! `runtime_settings` 单例与 config revision 的 PostgreSQL owner
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -292,7 +292,7 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
             let slot = timezone.resolve_local(slot).ok_or_else(|| {
                 ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, "resolve warmup slot")
             })?;
-            // 执行游标只向前推进；设置保存不覆盖它，领取也不发布新的配置版本。
+            // 执行游标只向前推进；设置保存不覆盖它，领取也不发布新的配置版本
             let claimed = sqlx::query(
                 "update runtime_settings set account_warmup_cursor = $1
                  where id = 1 and (account_warmup_cursor is null or account_warmup_cursor < $1)",
@@ -340,7 +340,7 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
     > {
         Box::pin(async move {
             // 单条语句共享一个 MVCC 快照：先核对候选 revision，再只投影配置对象；
-            // Client Key 明文与其它策略字段不会进入插件准备边界。
+            // Client Key 明文与其它策略字段不会进入插件准备边界
             let rows = sqlx::query_as::<_, (i64, Option<sqlx::types::Json<serde_json::Value>>)>(
                 "select settings.config_revision, profiles.profile
                  from runtime_settings settings
@@ -591,7 +591,7 @@ pub(crate) async fn bump_config_revision_in_transaction(
     Revision::new(u64::try_from(next).map_err(|_| invalid_numeric())?)
 }
 
-/// 更新 admin_api_key 字段，config revision 由调用方 bump。
+/// 更新 admin_api_key 字段，config revision 由调用方 bump
 pub(crate) async fn update_admin_api_key_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     admin_api_key: Option<String>,

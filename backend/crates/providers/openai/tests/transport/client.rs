@@ -1,3 +1,5 @@
+//! 验证 OpenAI 客户端请求上下文与上游错误的诊断脱敏
+
 use provider_openai::transport::CodexUpstreamSendPhase;
 use provider_openai::transport::{CodexBackendTransport, CodexClientError, CodexRequestContext};
 

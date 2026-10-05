@@ -1,4 +1,5 @@
-//! 宿主确认的执行事实快照。读取快照不会取得原执行的计费或资源所有权。
+//! 宿主确认的执行事实快照
+//! 读取快照不会取得原执行的计费或资源所有权
 
 use serde::{Deserialize, Serialize};
 
@@ -77,7 +78,7 @@ pub struct ResponseObservation {
     pub upstream_response_model: Option<String>,
     pub timings: RequestTimings,
     pub client_headers: Vec<MiddlewareHeader>,
-    /// Provider 已产生的完整观测 JSON 文本，保留原始表示。
+    /// Provider 已产生的完整观测 JSON 文本，保留原始表示
     pub provider_metadata: Option<String>,
 }
 

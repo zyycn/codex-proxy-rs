@@ -1,4 +1,4 @@
-//! Codex AT/RT 刷新状态机；Redis lease + ProviderAccountStore CAS，无 SQL。
+//! Codex AT/RT 刷新状态机；Redis lease + ProviderAccountStore CAS，无 SQL
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
@@ -27,13 +27,13 @@ use super::types::{CodexOAuthSecret, parse_access_token_expiration};
 
 const PROVIDER_NAME: &str = "openai";
 const MAX_REFRESH_BATCH: u32 = 1_000;
-/// 连续失败计数窗口；每次瞬态失败刷新该 TTL，静默满窗后计数过期归零。
+/// 连续失败计数窗口；每次瞬态失败刷新该 TTL，静默满窗后计数过期归零
 const REFRESH_BACKOFF_WINDOW: Duration = Duration::from_secs(30 * 60);
-/// 窗口内先执行五次指数退避，再进入固定恢复周期。
+/// 窗口内先执行五次指数退避，再进入固定恢复周期
 const REFRESH_BACKOFF_MAX_ATTEMPTS: u32 = 5;
-/// 耗尽指数退避后的 OAuth 恢复周期。
+/// 耗尽指数退避后的 OAuth 恢复周期
 const REFRESH_RECOVERY_DELAY: Duration = Duration::from_secs(10 * 60);
-/// 过期 AT 仍允许 RT 恢复的最长窗口。
+/// 过期 AT 仍允许 RT 恢复的最长窗口
 const REFRESH_RECOVERY_WINDOW: Duration = Duration::from_secs(2 * 60 * 60);
 
 pub(crate) fn refresh_recovery_deadline(
@@ -366,7 +366,7 @@ impl CodexCredentialRefreshService {
             }
             Err(RefreshFailure::Transport { message, upstream }) => {
                 // 上游瞬态（401/429/5xx/超时/畸形响应等）保留现有凭据、
-                // 记录最近一次失败并推进有界退避。
+                // 记录最近一次失败并推进有界退避
                 if self
                     .defer_refresh(
                         &due.account,
@@ -397,9 +397,12 @@ impl CodexCredentialRefreshService {
             .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
         let limit = NonZeroU32::new(MAX_REFRESH_BATCH)
             .ok_or(CredentialRepositoryError::InvalidCredentialData)?;
+        // 查询窗口按错峰上界（2×margin）放宽，先取回候选超集，
+        // 再在内存中按账号稳定偏移收窄；存储层谓词保持通用窗口语义。
         let query = ProviderRefreshQuery::new(
             provider,
-            now.checked_add(policy.margin()).unwrap_or(now),
+            now.checked_add(policy.staggered_refresh_bound())
+                .unwrap_or(now),
             now.checked_sub(REFRESH_RECOVERY_WINDOW)
                 .unwrap_or(SystemTime::UNIX_EPOCH),
             now,
@@ -410,6 +413,18 @@ impl CodexCredentialRefreshService {
         let mut due = Vec::with_capacity(candidates.len());
         let mut failures = Vec::new();
         for loaded in candidates {
+            // 按账号稳定错峰偏移收窄到本轮真正到期的账号，避免同批到期账号
+            // 同一轮齐刷；已过期账号 remaining 为负、偏移判定恒真，恢复窗口
+            // 的强制刷新不受错峰影响。无到期时间的账号不会成为候选。
+            if !loaded
+                .account
+                .access_token_expires_at()
+                .is_some_and(|expires_at| {
+                    policy.is_refresh_due_staggered(loaded.account.id(), expires_at, now)
+                })
+            {
+                continue;
+            }
             let account_id = loaded.account.id().to_string();
             match self.repository.decode_runtime_credential(&loaded) {
                 Ok(runtime)
@@ -475,7 +490,7 @@ impl CodexCredentialRefreshService {
                 .map(ExposeSecret::expose_secret),
         );
         // 成功轮换清掉仅用于失败退避的 retry-not-before；正常预刷新窗口由
-        // worker 结合当前 runtime policy 动态判断，不写入账号时间字段。
+        // worker 结合当前 runtime policy 动态判断，不写入账号时间字段
         let next_refresh_at = None;
         let result = self
             .repository
@@ -488,7 +503,7 @@ impl CodexCredentialRefreshService {
             .await;
         match result {
             Ok(revision) => {
-                // 凭据完整成功轮换后清零连续失败计数，退避窗口重新从 base 起步。
+                // 凭据完整成功轮换后清零连续失败计数，退避窗口重新从 base 起步
                 let _ = self
                     .credential_state
                     .clear_refresh_backoff(due.account.id())

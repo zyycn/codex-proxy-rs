@@ -2,7 +2,8 @@
 import type { PluginArtifact, PluginInstance } from '@/api'
 import { BaseIconButton, BaseTag } from '@codex-proxy/ui'
 import { Play, Power, Settings2, Trash2 } from '@lucide/vue'
-import { configurationStatus, PLUGIN_STATUS_LABELS, pluginStatusType } from '../utils/catalog'
+import { PLUGIN_STATUS_LABELS } from '../constants'
+import { configurationStatus, pluginStatusType } from '../utils/catalog'
 import { artifactForInstance } from '../utils/model'
 import PluginStatusNotice from './PluginStatusNotice.vue'
 

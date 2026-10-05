@@ -1,3 +1,5 @@
+//! 验证 Grok 客户端默认身份、架构规范化与发行版本刷新
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 

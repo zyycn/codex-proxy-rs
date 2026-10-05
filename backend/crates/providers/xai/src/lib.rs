@@ -1,4 +1,4 @@
-//! 官方 Grok Build OAuth Provider 边界。
+//! 官方 Grok Build OAuth Provider 边界
 
 mod admin;
 pub mod credential;
@@ -80,14 +80,14 @@ pub use transport::{
     parse_grok_model_catalog,
 };
 
-/// xAI 初始化后交给组装根的最小能力集。
+/// xAI 初始化后交给组装根的最小能力集
 pub struct ProviderBundle {
     core_provider: Arc<dyn Provider>,
     admin_provider: Arc<dyn ProviderAdmin>,
     worker_contributions: Vec<WorkerContribution>,
 }
 
-/// 构造 xAI 数据面、管理面准备器与 Provider-owned 后台任务。
+/// 构造 xAI 数据面、管理面准备器与 Provider-owned 后台任务
 pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, XaiInitializeError> {
     let profile = XaiWireProfileState::new(XaiWireProfile::default());
     let oauth_config = GrokOAuthConfig::official().map_err(XaiInitializeError::Config)?;
@@ -231,13 +231,13 @@ impl ProviderBundle {
         Arc::clone(&self.admin_provider)
     }
 
-    /// 一次性移交 Host 任务计划，防止同一 owner 被重复注册。
+    /// 一次性移交 Host 任务计划，防止同一 owner 被重复注册
     pub fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
         std::mem::take(&mut self.worker_contributions)
     }
 }
 
-/// xAI 初始化失败的脱敏分类。
+/// xAI 初始化失败的脱敏分类
 #[derive(Debug, thiserror::Error)]
 pub enum XaiInitializeError {
     #[error(transparent)]

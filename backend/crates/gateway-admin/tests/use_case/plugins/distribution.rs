@@ -1,3 +1,5 @@
+//! 插件分发来源、凭据与远程制品安装的用例测试
+
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;

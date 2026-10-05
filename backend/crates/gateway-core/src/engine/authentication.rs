@@ -1,4 +1,4 @@
-//! 数据面入口认证计划；插件只产生 principal，Core 解析既有 Client Key 策略。
+//! 数据面入口认证计划；插件只产生 principal，Core 解析既有 Client Key 策略
 
 use std::{
     collections::BTreeMap,
@@ -15,7 +15,7 @@ use crate::{
 
 pub const MAXIMUM_AUTHORIZATION_BYTES: usize = 8 * 1024;
 
-/// API 从数据面 Authorization 头构造的有界认证信封。
+/// API 从数据面 Authorization 头构造的有界认证信封
 #[derive(Clone, PartialEq, Eq)]
 pub struct ClientAuthenticationRequest {
     settings: Option<crate::settings::RequestSettings>,
@@ -39,7 +39,7 @@ impl ClientAuthenticationRequest {
         self.settings.take()
     }
 
-    /// 创建入口认证信封；HTTP 语法与缺失头仍由 API owner 负责。
+    /// 创建入口认证信封；HTTP 语法与缺失头仍由 API owner 负责
     pub fn new(authorization: impl Into<String>) -> Result<Self, ClientAuthenticationRequestError> {
         let authorization = authorization.into();
         if authorization.is_empty()
@@ -61,7 +61,7 @@ impl ClientAuthenticationRequest {
         })
     }
 
-    /// 原生调用方显式构造 Bearer 信封；仍经过同一长度与字符校验。
+    /// 原生调用方显式构造 Bearer 信封；仍经过同一长度与字符校验
     pub fn bearer(plaintext: &str) -> Result<Self, ClientAuthenticationRequestError> {
         Self::new(format!("Bearer {plaintext}"))
     }
@@ -90,7 +90,7 @@ impl fmt::Debug for ClientAuthenticationRequest {
 #[error("client authorization is invalid")]
 pub struct ClientAuthenticationRequestError;
 
-/// 插件认证结果不携带宿主执行身份。
+/// 插件认证结果不携带宿主执行身份
 #[derive(Clone, PartialEq, Eq)]
 pub enum FrontendAuthenticationDecision {
     Authenticated { principal: String },
@@ -115,17 +115,17 @@ impl fmt::Debug for FrontendAuthenticationDecision {
 #[error("frontend authentication provider is unavailable")]
 pub struct FrontendAuthenticationError;
 
-/// 一个发布代次中唯一的入口认证计划。
+/// 一个发布代次中唯一的入口认证计划
 pub trait FrontendAuthenticationPlan: Send + Sync {
     fn authenticate<'a>(
         &'a self,
         request: &'a ClientAuthenticationRequest,
     ) -> BoxFuture<'a, Result<FrontendAuthenticationDecision, FrontendAuthenticationError>>;
 
-    /// 映射由管理员配置冻结，插件结果不能选择 Key ID。
+    /// 映射由管理员配置冻结，插件结果不能选择 Key ID
     fn client_key_id(&self, principal: &str) -> Option<ClientApiKeyId>;
 
-    /// 独占计划不允许 `NotMatched` 回退原生 Bearer。
+    /// 独占计划不允许 `NotMatched` 回退原生 Bearer
     fn exclusive(&self) -> bool;
 }
 
@@ -133,7 +133,7 @@ pub trait FrontendAuthenticationPlan: Send + Sync {
 #[error("frontend authentication generation is already registered")]
 pub struct FrontendAuthenticationRegistrationError;
 
-/// 按已发布集合解析的非拥有索引；旧代次由快照和在途调用保活。
+/// 按已发布集合解析的非拥有索引；旧代次由快照和在途调用保活
 #[derive(Clone, Default)]
 pub struct FrontendAuthenticationExtensionIndex {
     sets: Arc<RwLock<BTreeMap<ExtensionSetId, Weak<dyn FrontendAuthenticationPlan>>>>,

@@ -1,4 +1,4 @@
-//! 请求级插件路由与账号调度计划；Core 保留目标、资格和租约复核。
+//! 请求级插件路由与账号调度计划；Core 保留目标、资格和租约复核
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,7 +23,7 @@ use crate::{
     runtime::extensions::{ExtensionSetId, ExtensionSetReference},
 };
 
-/// 模型路由插件的一次输入；正文仍保存在 `operation` 中，由 Runtime 按权限投影。
+/// 模型路由插件的一次输入；正文仍保存在 `operation` 中，由 Runtime 按权限投影
 #[derive(Clone)]
 pub struct ModelRouteInput {
     request_id: super::ModelRequestId,
@@ -77,7 +77,7 @@ impl ModelRouteInput {
         &self.available_providers
     }
 
-    /// 只供受信 Runtime 记录本次策略调用已经产生的外部副作用，不进入插件 wire。
+    /// 只供受信 Runtime 记录本次策略调用已经产生的外部副作用，不进入插件 wire
     #[must_use]
     pub fn execution_effects(&self) -> Arc<ExecutionEffects> {
         Arc::clone(&self.execution_effects)
@@ -98,7 +98,7 @@ impl fmt::Debug for ModelRouteInput {
     }
 }
 
-/// 模型路由结果；Runtime 区分未处理、明确拒绝和调用故障。
+/// 模型路由结果；Runtime 区分未处理、明确拒绝和调用故障
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelRouteDecision {
     Unhandled,
@@ -109,7 +109,7 @@ pub enum ModelRouteDecision {
     Reject,
 }
 
-/// 账号调度插件可见的单个候选事实，不包含凭据或账号资料。
+/// 账号调度插件可见的单个候选事实，不包含凭据或账号资料
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountScheduleCandidate {
     account_id: ProviderAccountId,
@@ -170,7 +170,7 @@ impl AccountScheduleCandidate {
     }
 }
 
-/// 账号调度输入；Key 与账号组仅用于 Runtime 匹配绑定，不发送给插件。
+/// 账号调度输入；Key 与账号组仅用于 Runtime 匹配绑定，不发送给插件
 #[derive(Debug, Clone)]
 pub struct AccountScheduleInput {
     request_id: super::ModelRequestId,
@@ -230,14 +230,14 @@ impl AccountScheduleInput {
         &self.candidates
     }
 
-    /// 只供受信 Runtime 记录本次策略调用已经产生的外部副作用，不进入插件 wire。
+    /// 只供受信 Runtime 记录本次策略调用已经产生的外部副作用，不进入插件 wire
     #[must_use]
     pub fn execution_effects(&self) -> Arc<ExecutionEffects> {
         Arc::clone(&self.execution_effects)
     }
 }
 
-/// 账号调度结果；插件选中的账号仍须通过 Core 资格复核并取得 Provider 租约。
+/// 账号调度结果；插件选中的账号仍须通过 Core 资格复核并取得 Provider 租约
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountScheduleDecision {
     Pick(ProviderAccountId),
@@ -245,7 +245,7 @@ pub enum AccountScheduleDecision {
     Reject,
 }
 
-/// 重试策略只能收窄宿主决定；不能自行创造恢复路径。
+/// 重试策略只能收窄宿主决定；不能自行创造恢复路径
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryDecision {
     Delegate,
@@ -253,7 +253,7 @@ pub enum RetryDecision {
     Retry,
 }
 
-/// 协调器计算的安全失败事实；无凭据、原始错误或请求正文。
+/// 协调器计算的安全失败事实；无凭据、原始错误或请求正文
 #[derive(Debug, Clone)]
 pub struct RetryFacts {
     pub attempt_index: NonZeroU32,
@@ -276,12 +276,12 @@ pub struct RetryInput {
     pub facts: RetryFacts,
 }
 
-/// 策略调用失败不携带插件原始消息，避免跨层泄漏不可信诊断。
+/// 策略调用失败不携带插件原始消息，避免跨层泄漏不可信诊断
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("request policy call failed")]
 pub struct RequestPolicyFault;
 
-/// Provider 选择器需要区分明确拒绝、策略故障和等待期间过期的选择。
+/// Provider 选择器需要区分明确拒绝、策略故障和等待期间过期的选择
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AccountPolicyError {
     #[error("account scheduling policy rejected the request")]
@@ -292,7 +292,7 @@ pub enum AccountPolicyError {
     StaleCandidate,
 }
 
-/// 一个发布代次的不可变请求策略计划。
+/// 一个发布代次的不可变请求策略计划
 pub trait RequestPolicyPlan: Send + Sync + fmt::Debug {
     fn retry_decision(
         &self,
@@ -312,7 +312,7 @@ pub trait RequestPolicyPlan: Send + Sync + fmt::Debug {
     ) -> BoxFuture<'static, Result<AccountScheduleDecision, RequestPolicyFault>>;
 }
 
-/// 同一次请求冻结的策略计划和授权身份；完整集合引用保活所有 RPC 会话。
+/// 同一次请求冻结的策略计划和授权身份；完整集合引用保活所有 RPC 会话
 #[derive(Clone)]
 pub struct RequestPolicyContext {
     plan: Arc<dyn RequestPolicyPlan>,
@@ -376,7 +376,7 @@ impl RequestPolicyContext {
         }
     }
 
-    /// 附着父子调用图；计划必须跳过集合中的实例，防止直接或间接重入。
+    /// 附着父子调用图；计划必须跳过集合中的实例，防止直接或间接重入
     #[must_use]
     pub fn with_extension_scope(mut self, extension_scope: ExtensionCallScope) -> Self {
         self.extension_scope = extension_scope;
@@ -414,7 +414,7 @@ impl RequestPolicyContext {
             .await
     }
 
-    /// 硬绑定已在候选资格中收窄；插件先决定，委托时再采用内置亲和与排序。
+    /// 硬绑定已在候选资格中收窄；插件先决定，委托时再采用内置亲和与排序
     pub async fn select_account<'a>(
         &self,
         attempt_index: NonZeroU32,
@@ -457,7 +457,7 @@ impl RequestPolicyContext {
             .await
             .map_err(|_| AccountPolicyError::Fault)?;
         // 插件调用可能消耗显著时间；无论插件选择还是委托，均用返回时刻重新执行
-        // 同一资格判断，不能让调用前尚未过期的候选在调用后被内置策略选中。
+        // 同一资格判断，不能让调用前尚未过期的候选在调用后被内置策略选中
         let mut current = context.clone();
         current.now = SystemTime::now();
         match decision {
@@ -482,12 +482,12 @@ impl RequestPolicyContext {
     }
 }
 
-/// 策略计划注册冲突；同一代次不能被静默替换。
+/// 策略计划注册冲突；同一代次不能被静默替换
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("request policy generation is already registered")]
 pub struct RequestPolicyRegistrationError;
 
-/// 按发布集合解析策略计划的非拥有索引。
+/// 按发布集合解析策略计划的非拥有索引
 #[derive(Clone, Default)]
 pub struct RequestPolicyExtensionIndex {
     sets: Arc<RwLock<BTreeMap<ExtensionSetId, Weak<dyn RequestPolicyPlan>>>>,

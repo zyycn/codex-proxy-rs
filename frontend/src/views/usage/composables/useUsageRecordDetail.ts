@@ -1,16 +1,15 @@
-import type { UsageDisplayRecord, UsageViewModel } from '../utils/records'
+import type { UsageListRecord, UsageRecordDetail } from '@/api'
 import { shallowRef } from 'vue'
 import { getUsageRecordDetail } from '@/api'
-import { normalizeUsageRecord } from '../utils/records'
 
 export function useUsageRecordDetail() {
   const showDetailModal = shallowRef(false)
-  const selectedUsageRecord = shallowRef<UsageViewModel | null>(null)
+  const selectedUsageRecord = shallowRef<UsageRecordDetail | null>(null)
 
-  async function handleViewDetail(record: UsageDisplayRecord) {
+  async function handleViewDetail(record: UsageListRecord) {
     try {
       const detail = await getUsageRecordDetail({ id: record.id })
-      selectedUsageRecord.value = normalizeUsageRecord(detail)
+      selectedUsageRecord.value = detail
       showDetailModal.value = true
     }
     catch {}

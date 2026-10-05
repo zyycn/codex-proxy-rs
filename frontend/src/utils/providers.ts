@@ -2,26 +2,23 @@ import type { Component } from 'vue'
 import { Key, LinkAlt, Openai, Xai } from '@boxicons/vue'
 import { Fingerprint, Plug } from '@lucide/vue'
 
-export const PROVIDER_DISPLAY_NAMES = {
+const PROVIDER_DISPLAY_NAMES = {
   openai: 'OpenAI',
   xai: 'xAI',
 } as const
 
 export const PROVIDER_IDS = Object.keys(PROVIDER_DISPLAY_NAMES) as Array<keyof typeof PROVIDER_DISPLAY_NAMES>
 
-export type SupportedProvider = keyof typeof PROVIDER_DISPLAY_NAMES
+type SupportedProvider = keyof typeof PROVIDER_DISPLAY_NAMES
 
 export function isSupportedProvider(value: unknown): value is SupportedProvider {
   return typeof value === 'string' && Object.hasOwn(PROVIDER_DISPLAY_NAMES, value)
 }
 
-export function providerDisplayName(value?: string | null) {
-  return isSupportedProvider(value) ? PROVIDER_DISPLAY_NAMES[value] : undefined
-}
-
 export function formatProviderLabel(value?: string | null, fallback = '—') {
   const normalized = value?.trim()
-  return providerDisplayName(normalized?.toLowerCase()) ?? (normalized || fallback)
+  const provider = normalized?.toLowerCase()
+  return isSupportedProvider(provider) ? PROVIDER_DISPLAY_NAMES[provider] : (normalized || fallback)
 }
 
 export function providerIcon(value: string): Component {

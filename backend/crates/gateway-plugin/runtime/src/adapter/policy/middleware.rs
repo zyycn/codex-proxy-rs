@@ -1,6 +1,8 @@
+//! 插件中间件链的执行、失败回退与响应正文生命周期管理
+
 use std::{
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use bytes::Bytes;
@@ -31,7 +33,7 @@ use super::{MiddlewareEntry, PluginRequestPolicyPlan};
 const MAXIMUM_MAPPED_FRAMES_PER_SOURCE: usize = 64;
 const MAXIMUM_MAPPED_BYTES_PER_SOURCE: usize = 8 * 1024 * 1024;
 
-// 协议适配只提供选择条件与单层调用；顺序、上下文捕获和续体拼接共用这一个入口。
+// 协议适配只提供选择条件与单层调用；顺序、上下文捕获和续体拼接共用这一个入口
 type Invoke<Context, Input, Output, Error> = fn(
     Arc<MiddlewareEntry>,
     Context,
@@ -187,11 +189,7 @@ async fn invoke_middleware(
             Err(MiddlewareError::Fault)
         };
     };
-    let remaining = context
-        .deadline()
-        .duration_since(SystemTime::now())
-        .map_err(|_| MiddlewareError::Fault)?
-        .min(maximum_timeout);
+    let remaining = context.deadline().bounded(maximum_timeout);
     if remaining.is_zero() || context.cancellation().is_cancelled() {
         return Err(MiddlewareError::Fault);
     }
@@ -605,7 +603,7 @@ impl MiddlewareBody for PluginMiddlewareBody {
                     continue;
                 }
                 let mut frame = frame.ok_or_else(invalid)?;
-                // 只有宿主来源事件本就没有 wire 时，空 payload 才是事实帧。
+                // 只有宿主来源事件本就没有 wire 时，空 payload 才是事实帧
                 let facts_only = frame.bytes().is_empty()
                     && frame
                         .event()
@@ -687,7 +685,7 @@ fn validate_terminal_end(
     downstream_error: &Mutex<Option<MiddlewareError>>,
 ) -> Result<(), MiddlewareError> {
     // 只有插件在终帧后继续输出才属于状态无效；RPC 传输失败保持为调用故障，
-    // 两条失败路径都不能覆盖已经记录的下游域错误。
+    // 两条失败路径都不能覆盖已经记录的下游域错误
     match terminal {
         Ok(None) => Ok(()),
         Ok(Some(_)) => Err(take_error(downstream_error).unwrap_or(MiddlewareError::InvalidState)),

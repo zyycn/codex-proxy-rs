@@ -1,3 +1,5 @@
+//! 验证 OAuth HTTP 请求的诊断输出隐藏敏感表单值
+
 use url::Url;
 
 use provider_xai::{FormField, HttpHeader, OAuthHttpRequest, SecretValue};

@@ -1,4 +1,4 @@
-//! `admin_users` 与 `admin_audit_events` 的唯一 PostgreSQL owner。
+//! `admin_users` 与 `admin_audit_events` 的唯一 PostgreSQL owner
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

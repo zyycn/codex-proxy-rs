@@ -1,4 +1,4 @@
-//! `provider_accounts` row 模型、解码与校验。
+//! `provider_accounts` row 模型、解码与校验
 
 use super::*;
 use gateway_core::routing::AccountGroupId;
@@ -9,8 +9,9 @@ pub(crate) const QUOTA_MAX_BYTES: usize = 128 * 1024;
 pub(crate) const MAX_ADMIN_IMPORT_BATCH: usize = 200;
 pub(crate) const ADMIN_USAGE_CHUNK_SIZE: usize = 200;
 
-/// 四种窗口投影通过一组 `GROUPING SETS` 从同一批匹配请求派生。`grouping_* = 1`
-/// 表示对应维度未参与该行聚合，调用方据此区分窗口、模型与成本行。
+/// 四种窗口投影通过一组 `GROUPING SETS` 从同一批匹配请求派生
+/// `grouping_* = 1`
+/// 表示对应维度未参与该行聚合，调用方据此区分窗口、模型与成本行
 pub(crate) fn account_usage_by_windows_sql() -> String {
     let completed_usage = completed_usage_fact_predicate("mr");
     format!(
@@ -247,7 +248,7 @@ pub struct ImportProviderAccounts {
 pub struct ProviderAccountAdminImport {
     pub config_revision: Revision,
     pub account_ids: Vec<String>,
-    /// 与导入同一事务返回的最终凭据版本，避免提交后再查到另一轮写入。
+    /// 与导入同一事务返回的最终凭据版本，避免提交后再查到另一轮写入
     pub credential_revisions: std::collections::BTreeMap<String, Revision>,
 }
 

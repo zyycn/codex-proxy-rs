@@ -1,3 +1,5 @@
+//! 将宿主执行、会话、费用与观测事实投影为插件线协议值
+
 use gateway_core::{
     engine::provider::ProviderCallMetadata,
     event::{
@@ -233,7 +235,7 @@ fn project_fact(event: GatewayEvent) -> Option<Result<CanonicalEvent, PluginFaul
                 total_tokens: usage.total_tokens,
             },
         },
-        // 费用随 host 快照完整开放，结算仍由原执行完成。
+        // 费用随 host 快照完整开放，结算仍由原执行完成
         GatewayEvent::CalculatedCost(_) | GatewayEvent::ProviderCost(_) => return None,
         GatewayEvent::Completed(meta) => CanonicalEvent::Completed {
             id: meta.response_id().to_owned(),

@@ -1,7 +1,8 @@
-//! 后台任务、leader lease 与运行计划的中立契约。
+//! 后台任务、leader lease 与运行计划的中立契约
 //!
-//! 本模块不执行任务，也不启动异步运行时。各业务 owner 只返回
-//! [`WorkerContribution`]，由 Host 负责监督、续租、重启与关闭。
+//! 本模块不执行任务，也不启动异步运行时
+//! 各业务 owner 只返回
+//! [`WorkerContribution`]，由 Host 负责监督、续租、重启与关闭
 
 use std::fmt;
 use std::num::NonZeroU64;
@@ -11,7 +12,7 @@ use futures::future::BoxFuture;
 
 use crate::lifecycle::CancellationToken;
 
-/// 冻结架构中的全部后台任务类别。
+/// 冻结架构中的全部后台任务类别
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WorkerKind {
     OAuthRefresh,
@@ -63,7 +64,7 @@ impl fmt::Display for WorkerKind {
     }
 }
 
-/// 一个后台任务的稳定身份；同类任务可由多个 owner 各自贡献。
+/// 一个后台任务的稳定身份；同类任务可由多个 owner 各自贡献
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WorkerId {
     kind: WorkerKind,
@@ -71,10 +72,10 @@ pub struct WorkerId {
 }
 
 impl WorkerId {
-    /// 从任务类别和可用于持久化 key 的 owner 创建身份。
+    /// 从任务类别和可用于持久化 key 的 owner 创建身份
     ///
     /// owner 长度为 1..=64，必须以小写 ASCII 字母或数字开头，
-    /// 其余字符仅允许小写 ASCII 字母、数字、`-`、`_` 和 `.`。
+    /// 其余字符仅允许小写 ASCII 字母、数字、`-`、`_` 和 `.`
     pub fn try_new(
         kind: WorkerKind,
         owner: impl Into<String>,
@@ -103,7 +104,7 @@ impl fmt::Display for WorkerId {
     }
 }
 
-/// 正整数 fencing token；零值无法被构造。
+/// 正整数 fencing token；零值无法被构造
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WorkerFencingToken(NonZeroU64);
 
@@ -125,7 +126,7 @@ impl From<NonZeroU64> for WorkerFencingToken {
     }
 }
 
-/// 一个周期任务的完整监督时序。
+/// 一个周期任务的完整监督时序
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerSchedule {
     interval: Duration,
@@ -136,10 +137,10 @@ pub struct WorkerSchedule {
 }
 
 impl WorkerSchedule {
-    /// 构造已校验的时序。
+    /// 构造已校验的时序
     ///
     /// 所有时长必须大于零；最大退避不得小于初始退避；
-    /// lease 续租间隔必须严格小于 lease TTL。
+    /// lease 续租间隔必须严格小于 lease TTL
     pub fn try_new(
         interval: Duration,
         initial_backoff: Duration,
@@ -192,7 +193,7 @@ impl WorkerSchedule {
     }
 }
 
-/// 长驻任务退出或 panic 后的 Host 重启策略。
+/// 长驻任务退出或 panic 后的 Host 重启策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DaemonRestartPolicy {
     initial_backoff: Duration,
@@ -227,7 +228,7 @@ impl DaemonRestartPolicy {
     }
 }
 
-/// 一次 leader lease 申请。
+/// 一次 leader lease 申请
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerLeaseRequest {
     worker: WorkerId,
@@ -253,10 +254,10 @@ impl WorkerLeaseRequest {
     }
 }
 
-/// 已获取 lease 的可续租句柄。
+/// 已获取 lease 的可续租句柄
 ///
 /// Host 在正常路径必须显式 `await` [`Self::release`]；异常退出只依赖
-/// Redis TTL 兜底，实现不得在 `Drop` 中启动异步任务。
+/// Redis TTL 兜底，实现不得在 `Drop` 中启动异步任务
 pub trait WorkerLeaderLeaseGuard: Send + Sync {
     fn fencing_token(&self) -> WorkerFencingToken;
 
@@ -265,7 +266,7 @@ pub trait WorkerLeaderLeaseGuard: Send + Sync {
     fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), WorkerLeaseError>>;
 }
 
-/// Leader lease 的稳定获取结果。
+/// Leader lease 的稳定获取结果
 pub enum WorkerLeaseAcquisition {
     Acquired(Box<dyn WorkerLeaderLeaseGuard>),
     Busy { retry_after: Option<Duration> },
@@ -283,7 +284,7 @@ impl fmt::Debug for WorkerLeaseAcquisition {
     }
 }
 
-/// 多实例 worker leader lease 的中立端口。
+/// 多实例 worker leader lease 的中立端口
 pub trait WorkerLeaderLeasePort: Send + Sync {
     fn try_acquire(
         &self,
@@ -291,7 +292,7 @@ pub trait WorkerLeaderLeasePort: Send + Sync {
     ) -> BoxFuture<'_, Result<WorkerLeaseAcquisition, WorkerLeaseError>>;
 }
 
-/// 周期任务收到的单周期上下文。
+/// 周期任务收到的单周期上下文
 #[derive(Debug, Clone)]
 pub struct WorkerCycleContext {
     worker: WorkerId,
@@ -329,19 +330,19 @@ impl WorkerCycleContext {
     }
 }
 
-/// 由 Host 周期调用的短生命任务。
+/// 由 Host 周期调用的短生命任务
 pub trait ScheduledTask: Send + Sync {
     fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>>;
 }
 
-/// 长驻任务。
+/// 长驻任务
 ///
-/// 实现负责连接级重连退避；Host 负责任务退出或 panic 后的重启退避。
+/// 实现负责连接级重连退避；Host 负责任务退出或 panic 后的重启退避
 pub trait DaemonTask: Send + Sync {
     fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>>;
 }
 
-/// Host 可执行的两种任务形态，无法组合出“守护任务 + 周期调度”等非法状态。
+/// Host 可执行的两种任务形态，无法组合出“守护任务 + 周期调度”等非法状态
 pub enum WorkerRunnable {
     Scheduled {
         schedule: WorkerSchedule,
@@ -374,7 +375,7 @@ impl fmt::Debug for WorkerRunnable {
     }
 }
 
-/// 一个 owner 交给 Host 的任务注册。
+/// 一个 owner 交给 Host 的任务注册
 #[derive(Debug)]
 pub struct WorkerRegistration {
     pub id: WorkerId,
@@ -388,7 +389,7 @@ impl WorkerRegistration {
         Ok(registration)
     }
 
-    /// 校验公开字段构造出的注册是否保持身份与 lease 时序一致。
+    /// 校验公开字段构造出的注册是否保持身份与 lease 时序一致
     pub fn validate(&self) -> Result<(), WorkerDefinitionError> {
         let WorkerRunnable::Scheduled {
             schedule,
@@ -408,7 +409,7 @@ impl WorkerRegistration {
     }
 }
 
-/// Final DB 明确没有相应持久化状态时允许的禁用原因。
+/// Final DB 明确没有相应持久化状态时允许的禁用原因
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WorkerDisabledReason {
     NoBufferedOpsEvents,
@@ -436,7 +437,7 @@ impl fmt::Display for WorkerDisabledReason {
     }
 }
 
-/// 各包对 Host 计划的一项贡献。
+/// 各包对 Host 计划的一项贡献
 #[derive(Debug)]
 pub enum WorkerContribution {
     Registration(WorkerRegistration),
@@ -464,7 +465,7 @@ impl WorkerContribution {
     }
 }
 
-/// 任务定义在交给 Host 前的稳定校验错误。
+/// 任务定义在交给 Host 前的稳定校验错误
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum WorkerDefinitionError {
     #[error("worker owner is invalid")]
@@ -483,7 +484,7 @@ pub enum WorkerDefinitionError {
     DisabledReasonMismatch,
 }
 
-/// 不暴露基础设施原文或 lease resource 的错误。
+/// 不暴露基础设施原文或 lease resource 的错误
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct WorkerLeaseError {
@@ -504,7 +505,7 @@ impl WorkerLeaseError {
     }
 }
 
-/// 不暴露 Provider 原文或存储细节的后台任务错误。
+/// 不暴露 Provider 原文或存储细节的后台任务错误
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct WorkerTaskError {

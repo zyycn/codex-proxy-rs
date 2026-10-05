@@ -1,3 +1,5 @@
+//! 验证插件信任、配置 schema、敏感字段与贡献绑定约束
+
 use gateway_admin::{
     model::plugins::instances::{PluginCapabilityBinding, PluginFailurePolicy},
     ports::plugins::PluginPreparation,
@@ -9,7 +11,7 @@ async fn readiness_uses_validated_metadata_without_loading_the_archive() {
     let (_cache, store, runtime) = super::setup().await;
     let mut instance = store.snapshot.lock().unwrap().instances[0].clone();
     let mut metadata = store.artifacts[&instance.artifact_sha256].metadata.clone();
-    // Store 中没有这个摘要；只读校验只能消费传入的声明，不能退回整包加载。
+    // Store 中没有这个摘要；只读校验只能消费传入的声明，不能退回整包加载
     metadata.sha256 = "0".repeat(64);
     instance.artifact_sha256 = metadata.sha256.clone();
     metadata.configuration_schema = serde_json::json!({

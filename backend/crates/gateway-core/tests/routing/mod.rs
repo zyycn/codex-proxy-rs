@@ -1,3 +1,5 @@
+//! 路由领域测试入口，以及版本、账号范围与 Key 策略约束测试
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -589,8 +591,10 @@ fn token_count_endpoint_should_require_exact_model_capability_and_scope() {
 }
 
 #[test]
-fn provider_http_endpoint_should_be_provider_scoped_without_a_model_binding() {
-    let snapshot = snapshot();
+fn provider_http_endpoint_should_carry_the_model_into_account_permissions() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    use gateway_core::error::RoutingError;
+
     let provider = ProviderKind::new("openai").expect("provider");
     let operation = Operation::ProviderHttp(
         ProviderHttpRequest::new(
@@ -602,29 +606,52 @@ fn provider_http_endpoint_should_be_provider_scoped_without_a_model_binding() {
         )
         .expect("provider HTTP operation"),
     );
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).expect("revision"),
+        settings(),
+        vec![provider.clone()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("snapshot")
+    .with_account_directory(account_directory());
+    let model = UpstreamModelId::new("gpt-live-1-codex").expect("model");
     let plan = snapshot
         .plan_provider_endpoint(
             &provider,
-            None,
+            Some(&model),
             &operation,
             snapshot.all_account_scope(),
             &RoutingContext::default(),
         )
-        .expect("provider endpoint");
+        .expect("provider endpoint with a permitted model");
     assert_eq!(plan.candidates()[0].provider(), &provider);
-    assert_eq!(plan.candidates()[0].upstream_model(), None);
-    assert!(
-        snapshot
-            .plan_provider_endpoint(
-                &provider,
-                Some(&UpstreamModelId::new("gpt-5.5").expect("model")),
-                &operation,
-                snapshot.all_account_scope(),
-                &RoutingContext::default(),
+    assert_eq!(plan.candidates()[0].upstream_model(), Some(&model));
+    // 账号范围整体禁止该模型时在路由层拒绝，而不是交给未授权账号服务。
+    let denied_directory = Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+        ProviderAccountId::new("acct_openai").expect("account"),
+        RuntimeAccount::new(provider.clone(), BTreeSet::new()).with_model_access(
+            AccountModelAccess::new(
+                AccountModelAccessMode::Denylist,
+                vec!["gpt-live-1-codex".to_owned()],
             )
-            .is_err(),
-        "raw provider HTTP cannot smuggle a model binding"
-    );
+            .expect("model access"),
+        ),
+    )])));
+    let denied_scope = Arc::new(FrozenAccountScope::new(
+        denied_directory,
+        ClientRoutingScope::all_accounts(),
+    ));
+    assert!(matches!(
+        snapshot.plan_provider_endpoint(
+            &provider,
+            Some(&model),
+            &operation,
+            denied_scope,
+            &RoutingContext::default(),
+        ),
+        Err(RoutingError::NoCapableProviderEndpoint { .. })
+    ));
 }
 
 #[test]

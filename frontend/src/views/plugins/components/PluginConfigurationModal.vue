@@ -2,8 +2,9 @@
 import type { ConfigurePluginInstanceRequest, PluginArtifact, PluginInstance, PluginVersionPlan } from '@/api'
 import { BaseButton, BaseModal, BaseSegmented, toast } from '@codex-proxy/ui'
 import { Blocks, Save, Settings2, ShieldCheck } from '@lucide/vue'
+import { cloneDeep } from 'es-toolkit'
 import { computed, nextTick, ref, shallowRef, useTemplateRef, watch } from 'vue'
-import { cloneJsonValue, pluginContributionForCapability, pluginRequestBindingEntries } from '../utils/model'
+import { pluginRequestBindingEntries } from '../utils/model'
 import PluginBindingEditor from './PluginBindingEditor.vue'
 import PluginConfigurationFields from './PluginConfigurationFields.vue'
 import PluginFrontendAuthenticationEditor from './PluginFrontendAuthenticationEditor.vue'
@@ -29,12 +30,12 @@ const configurationFields = useTemplateRef<{ focusInvalid: () => Promise<unknown
 const authenticationEditor = useTemplateRef<{ validationError: string }>('authenticationEditor')
 const existingSecretFields = computed(() => props.draft?.secretFields ?? props.instance?.secretFields ?? [])
 const versionChanged = computed(() => Boolean(props.instance && props.artifact && props.instance.artifactSha256 !== props.artifact.metadata.sha256))
-const authenticationContribution = computed(() => props.artifact && pluginContributionForCapability(props.artifact.metadata, 'frontend_authentication'))
+const authenticationContribution = computed(() => props.artifact && props.artifact.metadata.contributes.frontend_authentication)
 const authenticationBinding = computed({
   get: () => bindings.value.find(binding => binding.contribution === authenticationContribution.value?.id) ?? null,
   set: (binding) => {
     const others = bindings.value.filter(value => value.contribution !== authenticationContribution.value?.id)
-    bindings.value = binding ? [...others, cloneJsonValue(binding)] : others
+    bindings.value = binding ? [...others, cloneDeep(binding)] : others
   },
 })
 const hasRequestBindings = computed(() => props.artifact && pluginRequestBindingEntries(props.artifact.metadata).length > 0)
@@ -80,11 +81,11 @@ async function submit() {
     name: instance.name,
     artifactSha256: artifact.metadata.sha256,
     enabled: instance.enabled || (!versionChanged.value && instance.configurationRequired),
-    configuration: cloneJsonValue(configuration.value),
-    bindings: cloneJsonValue(bindings.value),
+    configuration: cloneDeep(configuration.value),
+    bindings: cloneDeep(bindings.value),
   }
   if (secretMode.value !== 'preserve')
-    input.secrets = secretMode.value === 'clear' ? {} : cloneJsonValue(secretValues.value)
+    input.secrets = secretMode.value === 'clear' ? {} : cloneDeep(secretValues.value)
   emit('save', input)
 }
 
@@ -92,8 +93,8 @@ watch(open, async (value) => {
   if (!value)
     return
   secretValues.value = {}
-  configuration.value = cloneJsonValue(props.draft?.configuration ?? props.instance?.configuration ?? {})
-  bindings.value = cloneJsonValue(props.draft?.bindings ?? props.instance?.bindings ?? [])
+  configuration.value = cloneDeep(props.draft?.configuration ?? props.instance?.configuration ?? {})
+  bindings.value = cloneDeep(props.draft?.bindings ?? props.instance?.bindings ?? [])
   secretMode.value = existingSecretFields.value.length ? 'preserve' : 'replace'
   configurationValid.value = true
   authenticationValid.value = true

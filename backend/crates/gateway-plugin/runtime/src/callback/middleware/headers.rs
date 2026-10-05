@@ -1,3 +1,5 @@
+//! 校验插件请求头与响应头，并应用显式头部修改
+
 use bytes::Bytes;
 use gateway_core::engine::middleware::MiddlewareHeader;
 use gateway_plugin_sdk::{
@@ -16,7 +18,7 @@ pub(super) fn apply_header_mutations(
     headers: &mut Vec<MiddlewareHeader>,
     mutations: &[MiddlewareHeaderMutation],
 ) -> Result<(), PluginFault> {
-    // SDK 的完整替换会先删除原始集合，再追加新的集合。
+    // SDK 的完整替换会先删除原始集合，再追加新的集合
     if mutations.len() > MAX_HEADERS * 2 {
         return Err(invalid());
     }
@@ -39,7 +41,7 @@ pub(super) fn apply_header_mutations(
     validate_headers(headers)
 }
 
-/// 保留完整 header 集合，只检查传输格式与资源大小。
+/// 保留完整 header 集合，只检查传输格式与资源大小
 pub(super) fn validate_headers(headers: &[MiddlewareHeader]) -> Result<(), PluginFault> {
     if headers.len() > MAX_HEADERS {
         return Err(invalid());

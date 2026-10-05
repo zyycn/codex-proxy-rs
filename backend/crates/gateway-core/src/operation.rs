@@ -1,8 +1,9 @@
-//! 协议无关的业务 operation。
+//! 协议无关的业务 operation
 //!
-//! 这里只保留网关需要解释、路由或结算的稳定语义。协议 adapter 无法写入
+//! 这里只保留网关需要解释、路由或结算的稳定语义
+//! 协议 adapter 无法写入
 //! wire body 与连接级事实随 [`ProtocolPayload`] 或 [`RawJsonPayload`] 不透明传递，
-//! 由对应 Provider 自己解释。
+//! 由对应 Provider 自己解释
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -14,24 +15,24 @@ use serde_json::{Map, Value};
 
 use crate::validation::{OperationError, validate_text};
 
-/// 网关支持的稳定 operation 分类。
+/// 网关支持的稳定 operation 分类
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum OperationKind {
-    /// 文本、多模态和工具生成。
+    /// 文本、多模态和工具生成
     Generate,
-    /// 图像生成。
+    /// 图像生成
     GenerateImage,
-    /// Provider 原生 standalone search。
+    /// Provider 原生 standalone search
     Search,
-    /// 使用目标模型的真实 tokenizer 计数，不允许 Core 估算。
+    /// 使用目标模型的真实 tokenizer 计数，不允许 Core 估算
     CountTokens,
-    /// Provider 声明并映射到固定上游目标的账号认证 HTTP 操作。
+    /// Provider 声明并映射到固定上游目标的账号认证 HTTP 操作
     ProviderHttp,
 }
 
 impl OperationKind {
-    /// 返回注册表和持久化使用的稳定名称。
+    /// 返回注册表和持久化使用的稳定名称
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -44,23 +45,23 @@ impl OperationKind {
     }
 }
 
-/// Router 理解的稳定能力。
+/// Router 理解的稳定能力
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Feature {
-    /// Tool calling。
+    /// Tool calling
     Tools,
-    /// 图像输入。
+    /// 图像输入
     Vision,
-    /// 推理控制或推理输出。
+    /// 推理控制或推理输出
     Reasoning,
-    /// JSON Schema 输出。
+    /// JSON Schema 输出
     JsonSchema,
-    /// Provider 原生延续。
+    /// Provider 原生延续
     NativeContinuation,
 }
 
-/// 从 operation 推导出的请求能力约束。
+/// 从 operation 推导出的请求能力约束
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityRequirements {
     operation: OperationKind,
@@ -69,7 +70,7 @@ pub struct CapabilityRequirements {
 }
 
 impl CapabilityRequirements {
-    /// 创建仅要求 operation 的能力约束。
+    /// 创建仅要求 operation 的能力约束
     #[must_use]
     pub fn new(operation: OperationKind) -> Self {
         Self {
@@ -79,43 +80,43 @@ impl CapabilityRequirements {
         }
     }
 
-    /// 增加稳定能力要求。
+    /// 增加稳定能力要求
     #[must_use]
     pub fn require(mut self, feature: Feature) -> Self {
         self.features.insert(feature);
         self
     }
 
-    /// 设置请求的最大输出 token 数。
+    /// 设置请求的最大输出 token 数
     #[must_use]
     pub const fn with_requested_output_tokens(mut self, tokens: Option<u64>) -> Self {
         self.requested_output_tokens = tokens;
         self
     }
 
-    /// 返回 operation 分类。
+    /// 返回 operation 分类
     #[must_use]
     pub const fn operation(&self) -> OperationKind {
         self.operation
     }
 
-    /// 返回全部稳定能力要求。
+    /// 返回全部稳定能力要求
     #[must_use]
     pub fn features(&self) -> &BTreeSet<Feature> {
         &self.features
     }
 
-    /// 返回请求的最大输出 token 数。
+    /// 返回请求的最大输出 token 数
     #[must_use]
     pub const fn requested_output_tokens(&self) -> Option<u64> {
         self.requested_output_tokens
     }
 }
 
-/// 同一客户端连接内由 Provider 生成并解释的不透明会话状态。
+/// 同一客户端连接内由 Provider 生成并解释的不透明会话状态
 ///
 /// Core 只在重试和路由过程中保持该值；协议层只能把 Provider 返回的状态原样带入
-/// 下一轮，不能读取或改写正文。
+/// 下一轮，不能读取或改写正文
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderSessionState {
     provider: String,
@@ -124,7 +125,7 @@ pub struct ProviderSessionState {
     extension_owner: Option<Box<ExtensionSessionOwner>>,
 }
 
-/// 受管扩展会话的宿主归属，不能把插件私有状态交给原生 Provider 解码。
+/// 受管扩展会话的宿主归属，不能把插件私有状态交给原生 Provider 解码
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExtensionSessionOwner {
@@ -137,11 +138,11 @@ pub struct ExtensionSessionOwner {
 }
 
 impl ProviderSessionState {
-    /// 创建 Provider 私有会话状态。
+    /// 创建 Provider 私有会话状态
     ///
     /// # Errors
     ///
-    /// Provider 名称无效时返回错误。
+    /// Provider 名称无效时返回错误
     pub fn new(
         provider: impl Into<String>,
         payload: Map<String, Value>,
@@ -189,10 +190,11 @@ impl fmt::Debug for ProviderSessionState {
     }
 }
 
-/// 客户端协议交给 Provider 的不透明 JSON object。
+/// 客户端协议交给 Provider 的不透明 JSON object
 ///
-/// Core 只负责在路由和重试过程中保持该值，不读取或改写正文。协议 adapter
-/// 与对应 Provider 共同拥有其语义。
+/// Core 只负责在路由和重试过程中保持该值，不读取或改写正文
+/// 协议 adapter
+/// 与对应 Provider 共同拥有其语义
 #[derive(Clone, PartialEq)]
 pub struct ProtocolPayload {
     protocol: String,
@@ -201,11 +203,11 @@ pub struct ProtocolPayload {
 }
 
 impl ProtocolPayload {
-    /// 创建协议不透明正文。
+    /// 创建协议不透明正文
     ///
     /// # Errors
     ///
-    /// 协议名称为空、过长或含控制字符时返回错误。
+    /// 协议名称为空、过长或含控制字符时返回错误
     pub fn json_object(
         protocol: impl Into<String>,
         body: Map<String, Value>,
@@ -221,28 +223,28 @@ impl ProtocolPayload {
         })
     }
 
-    /// 返回协议名称。
+    /// 返回协议名称
     #[must_use]
     pub fn protocol(&self) -> &str {
         &self.protocol
     }
 
-    /// 返回仅供对应 Provider 解释的 JSON object。
+    /// 返回仅供对应 Provider 解释的 JSON object
     #[must_use]
     pub const fn body(&self) -> &Map<String, Value> {
         &self.body
     }
 
-    /// 附着不写入 wire body 的协议连接上下文。
+    /// 附着不写入 wire body 的协议连接上下文
     ///
-    /// Core 只保留该值；对应 Provider 可以读取已知键，未知键必须忽略。
+    /// Core 只保留该值；对应 Provider 可以读取已知键，未知键必须忽略
     #[must_use]
     pub fn with_context(mut self, context: Map<String, Value>) -> Self {
         self.context = context;
         self
     }
 
-    /// 返回仅供对应 Provider 解释的非 wire 上下文。
+    /// 返回仅供对应 Provider 解释的非 wire 上下文
     #[must_use]
     pub const fn context(&self) -> &Map<String, Value> {
         &self.context
@@ -260,10 +262,10 @@ impl fmt::Debug for ProtocolPayload {
     }
 }
 
-/// 协议 adapter 与 Provider 之间不透明传递的 JSON 正文。
+/// 协议 adapter 与 Provider 之间不透明传递的 JSON 正文
 ///
 /// Core 保留字节与非 wire 上下文，不验证、解析或改写正文；
-/// 请求载荷与原生模型目录均由协议 adapter 和对应 Provider 共同拥有语义。
+/// 请求载荷与原生模型目录均由协议 adapter 和对应 Provider 共同拥有语义
 #[derive(Clone, PartialEq, Eq)]
 pub struct RawJsonPayload {
     protocol: String,
@@ -273,11 +275,11 @@ pub struct RawJsonPayload {
 }
 
 impl RawJsonPayload {
-    /// 创建不透明的协议 JSON 正文。
+    /// 创建不透明的协议 JSON 正文
     ///
     /// # Errors
     ///
-    /// 协议名称为空、过长或含控制字符时返回错误。
+    /// 协议名称为空、过长或含控制字符时返回错误
     pub fn new(protocol: impl Into<String>, body: Bytes) -> Result<Self, OperationError> {
         let protocol = protocol.into();
         validate_text(&protocol, 64, true, None).map_err(|_| OperationError::EmptyField {
@@ -291,26 +293,26 @@ impl RawJsonPayload {
         })
     }
 
-    /// 返回协议名称。
+    /// 返回协议名称
     #[must_use]
     pub fn protocol(&self) -> &str {
         &self.protocol
     }
 
-    /// 返回协议正文的 JSON 字节。
+    /// 返回协议正文的 JSON 字节
     #[must_use]
     pub const fn body(&self) -> &Bytes {
         &self.body
     }
 
-    /// 附着不写入 wire body 的协议连接上下文。
+    /// 附着不写入 wire body 的协议连接上下文
     #[must_use]
     pub fn with_context(mut self, context: Map<String, Value>) -> Self {
         self.context = context;
         self
     }
 
-    /// 返回仅供对应 Provider 解释的非 wire 上下文。
+    /// 返回仅供对应 Provider 解释的非 wire 上下文
     #[must_use]
     pub const fn context(&self) -> &Map<String, Value> {
         &self.context
@@ -328,10 +330,11 @@ impl fmt::Debug for RawJsonPayload {
     }
 }
 
-/// Provider HTTP 端点使用的不透明字节正文。
+/// Provider HTTP 端点使用的不透明字节正文
 ///
-/// 与 [`RawJsonPayload`] 不同，这里不要求正文是 JSON。Core 只保留字节和
-/// 非 wire 上下文，最终 origin、路径与账号认证仍由 Provider 决定。
+/// 与 [`RawJsonPayload`] 不同，这里不要求正文是 JSON
+/// Core 只保留字节和
+/// 非 wire 上下文，最终 origin、路径与账号认证仍由 Provider 决定
 #[derive(Clone, PartialEq, Eq)]
 pub struct RawHttpPayload {
     protocol: String,
@@ -341,11 +344,11 @@ pub struct RawHttpPayload {
 }
 
 impl RawHttpPayload {
-    /// 创建不透明 HTTP 正文。
+    /// 创建不透明 HTTP 正文
     ///
     /// # Errors
     ///
-    /// 协议名称为空、过长或含控制字符时返回错误。
+    /// 协议名称为空、过长或含控制字符时返回错误
     pub fn new(protocol: impl Into<String>, body: Bytes) -> Result<Self, OperationError> {
         let protocol = protocol.into();
         validate_text(&protocol, 64, true, None).map_err(|_| OperationError::EmptyField {
@@ -392,7 +395,7 @@ impl fmt::Debug for RawHttpPayload {
     }
 }
 
-/// 通用生成请求。
+/// 通用生成请求
 #[derive(Clone, PartialEq)]
 pub struct GenerateRequest {
     payload: Arc<GeneratePayload>,
@@ -407,10 +410,10 @@ struct GeneratePayload {
 }
 
 impl GenerateRequest {
-    /// 创建携带协议不透明正文的生成请求。
+    /// 创建携带协议不透明正文的生成请求
     ///
     /// 完整请求只以原始 wire object 保存；Core 仅局部只读已知字段以推导路由能力，
-    /// Provider 负责解释与转换正文。
+    /// Provider 负责解释与转换正文
     #[must_use]
     pub fn from_protocol_payload(protocol_payload: ProtocolPayload) -> Self {
         Self {
@@ -423,14 +426,15 @@ impl GenerateRequest {
         }
     }
 
-    /// 写回原生 Provider 编码结果，保留已准入的能力、连接上下文和会话状态。
+    /// 写回原生 Provider 编码结果，保留已准入的能力、连接上下文和会话状态
     ///
     /// 原生编码不消耗中间件的一次跨协议改写额度：可以保留协议名，也可以在一次
-    /// 中间件改写后编码到 Provider wire。调用方仍须验证保护字段没有被改动。
+    /// 中间件改写后编码到 Provider wire
+    /// 调用方仍须验证保护字段没有被改动
     ///
     /// # Errors
     ///
-    /// 目标协议名无效时返回错误。
+    /// 目标协议名无效时返回错误
     pub fn with_native_encoded_body(
         mut self,
         protocol: impl Into<String>,
@@ -445,19 +449,19 @@ impl GenerateRequest {
         Ok(self)
     }
 
-    /// 附着同一客户端连接上一轮由 Provider 返回的不透明状态。
+    /// 附着同一客户端连接上一轮由 Provider 返回的不透明状态
     #[must_use]
     pub fn with_provider_session_state(mut self, state: ProviderSessionState) -> Self {
         self.set_provider_session_state(state);
         self
     }
 
-    /// 原地附着会话状态；payload 独占时不复制正文。
+    /// 原地附着会话状态；payload 独占时不复制正文
     pub fn set_provider_session_state(&mut self, state: ProviderSessionState) {
         Arc::make_mut(&mut self.payload).provider_session_state = Some(state);
     }
 
-    /// 返回最大输出 token 数。
+    /// 返回最大输出 token 数
     #[must_use]
     pub fn max_output_tokens(&self) -> Option<u64> {
         self.body()
@@ -466,7 +470,7 @@ impl GenerateRequest {
             .filter(|tokens| *tokens > 0)
     }
 
-    /// 返回客户端提供的 prompt cache 路由键。
+    /// 返回客户端提供的 prompt cache 路由键
     #[must_use]
     pub fn prompt_cache_key(&self) -> Option<&str> {
         self.body()
@@ -475,7 +479,7 @@ impl GenerateRequest {
             .filter(|key| !key.trim().is_empty())
     }
 
-    /// 返回原始请求是否要求 Provider 原生 continuation。
+    /// 返回原始请求是否要求 Provider 原生 continuation
     #[must_use]
     pub fn native_continuation_requested(&self) -> bool {
         self.body()
@@ -484,7 +488,7 @@ impl GenerateRequest {
             .is_some()
     }
 
-    /// 返回客户端是否请求了图片生成工具。
+    /// 返回客户端是否请求了图片生成工具
     #[must_use]
     pub fn image_generation_requested(&self) -> bool {
         self.body()
@@ -497,7 +501,7 @@ impl GenerateRequest {
             })
     }
 
-    /// 返回指定 Provider 的连接内会话状态。
+    /// 返回指定 Provider 的连接内会话状态
     #[must_use]
     pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
         self.payload
@@ -506,7 +510,7 @@ impl GenerateRequest {
             .filter(|state| state.provider() == provider)
     }
 
-    /// 返回协议不透明正文。
+    /// 返回协议不透明正文
     #[must_use]
     pub fn protocol_payload(&self) -> &ProtocolPayload {
         &self.payload.protocol_payload
@@ -593,16 +597,16 @@ fn contains_type(value: Option<&Value>, expected: &str) -> bool {
     }
 }
 
-/// 图像 API 的稳定端点语义。
+/// 图像 API 的稳定端点语义
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageRequestKind {
-    /// 从文本生成图像。
+    /// 从文本生成图像
     Generation,
-    /// 使用输入图像执行编辑。
+    /// 使用输入图像执行编辑
     Edit,
 }
 
-/// 图像生成或编辑请求。
+/// 图像生成或编辑请求
 #[derive(Clone, PartialEq)]
 pub struct ImageRequest {
     kind: ImageRequestKind,
@@ -610,19 +614,19 @@ pub struct ImageRequest {
 }
 
 impl ImageRequest {
-    /// 创建携带原始协议 JSON 正文的图像请求。
+    /// 创建携带原始协议 JSON 正文的图像请求
     #[must_use]
     pub const fn from_raw_json(kind: ImageRequestKind, payload: RawJsonPayload) -> Self {
         Self { kind, payload }
     }
 
-    /// 返回图像 API 端点语义。
+    /// 返回图像 API 端点语义
     #[must_use]
     pub const fn kind(&self) -> ImageRequestKind {
         self.kind
     }
 
-    /// 返回未经重编码的协议 JSON 正文。
+    /// 返回未经重编码的协议 JSON 正文
     #[must_use]
     pub const fn payload(&self) -> &RawJsonPayload {
         &self.payload
@@ -639,20 +643,20 @@ impl fmt::Debug for ImageRequest {
     }
 }
 
-/// Provider 原生 standalone search 请求。
+/// Provider 原生 standalone search 请求
 #[derive(Clone, PartialEq, Eq)]
 pub struct StandaloneSearchRequest {
     payload: RawJsonPayload,
 }
 
 impl StandaloneSearchRequest {
-    /// 创建携带原始协议 JSON 正文的 standalone search 请求。
+    /// 创建携带原始协议 JSON 正文的 standalone search 请求
     #[must_use]
     pub const fn from_raw_json(payload: RawJsonPayload) -> Self {
         Self { payload }
     }
 
-    /// 返回未经重编码的协议 JSON 正文。
+    /// 返回未经重编码的协议 JSON 正文
     #[must_use]
     pub const fn payload(&self) -> &RawJsonPayload {
         &self.payload
@@ -668,7 +672,7 @@ impl fmt::Debug for StandaloneSearchRequest {
     }
 }
 
-/// 使用目标模型的 Provider 原生 Token 计数请求。
+/// 使用目标模型的 Provider 原生 Token 计数请求
 #[derive(Clone, PartialEq, Eq)]
 pub struct TokenCountRequest {
     payload: RawJsonPayload,
@@ -695,7 +699,7 @@ impl fmt::Debug for TokenCountRequest {
     }
 }
 
-/// API 可公开的 Provider HTTP method 集合；不自动包含 `HEAD` 或任意 method。
+/// API 可公开的 Provider HTTP method 集合；不自动包含 `HEAD` 或任意 method
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ProviderHttpMethod {
     Get,
@@ -712,7 +716,7 @@ impl ProviderHttpMethod {
     }
 }
 
-/// 已由 API 解析的单个 HTTP header；值不会出现在 `Debug`。
+/// 已由 API 解析的单个 HTTP header；值不会出现在 `Debug`
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProviderHttpHeader {
     name: String,
@@ -749,7 +753,7 @@ impl fmt::Debug for ProviderHttpHeader {
     }
 }
 
-/// Provider 显式声明的账号认证 HTTP 操作。
+/// Provider 显式声明的账号认证 HTTP 操作
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProviderHttpRequest {
     endpoint: String,
@@ -762,7 +766,7 @@ pub struct ProviderHttpRequest {
 impl ProviderHttpRequest {
     /// # Errors
     ///
-    /// endpoint 不是安全符号名，query 或 headers 超过边界时返回错误。
+    /// endpoint 不是安全符号名，query 或 headers 超过边界时返回错误
     pub fn new(
         endpoint: impl Into<String>,
         method: ProviderHttpMethod,
@@ -856,19 +860,19 @@ impl fmt::Debug for ProviderHttpRequest {
     }
 }
 
-/// 网关内部业务请求；不包含任何客户端 wire 或 Provider SDK 类型。
+/// 网关内部业务请求；不包含任何客户端 wire 或 Provider SDK 类型
 #[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Operation {
-    /// 生成。
+    /// 生成
     Generate(GenerateRequest),
-    /// 图像生成。
+    /// 图像生成
     GenerateImage(ImageRequest),
-    /// Provider 原生 standalone search。
+    /// Provider 原生 standalone search
     Search(StandaloneSearchRequest),
-    /// 使用目标模型进行真实 Token 计数。
+    /// 使用目标模型进行真实 Token 计数
     CountTokens(TokenCountRequest),
-    /// Provider 显式登记的账号认证 HTTP 操作。
+    /// Provider 显式登记的账号认证 HTTP 操作
     ProviderHttp(ProviderHttpRequest),
 }
 
@@ -886,11 +890,11 @@ impl Operation {
         Ok(Self::Generate(request))
     }
 
-    /// 把协议正文编码为中间件可见的原始字节；不包含非 wire context 或会话状态。
+    /// 把协议正文编码为中间件可见的原始字节；不包含非 wire context 或会话状态
     ///
     /// # Errors
     ///
-    /// 生成请求的 JSON object 无法编码时返回错误。
+    /// 生成请求的 JSON object 无法编码时返回错误
     pub fn middleware_body(&self) -> Result<Bytes, OperationError> {
         match self {
             Self::Generate(request) => serde_json::to_vec(request.protocol_payload().body())
@@ -905,14 +909,14 @@ impl Operation {
         }
     }
 
-    /// 写回中间件返回的协议与正文，同时保留宿主持有的非 wire context。
+    /// 写回中间件返回的协议与正文，同时保留宿主持有的非 wire context
     ///
     /// 同协议是正文替换；跨协议只能使用既有 direct-once 转换边界，不能借中间件
-    /// 绕过重复转换保护。
+    /// 绕过重复转换保护
     ///
     /// # Errors
     ///
-    /// 协议名或正文无效，或请求已经发生过一次跨协议转换时返回错误。
+    /// 协议名或正文无效，或请求已经发生过一次跨协议转换时返回错误
     pub fn replace_middleware_wire(
         self,
         protocol: impl Into<String>,
@@ -933,11 +937,12 @@ impl Operation {
     }
 
     /// 替换协议正文和非 wire 上下文，同时保留 operation 类别、Provider 会话状态与
-    /// 原协议名称。`body=None` 表示只改上下文，避免无加工路径重新编码正文。
+    /// 原协议名称
+    /// `body=None` 表示只改上下文，避免无加工路径重新编码正文
     ///
     /// # Errors
     ///
-    /// Generate 的替换正文不是 JSON object 时返回错误；原始 JSON 端点继续按字节保存。
+    /// Generate 的替换正文不是 JSON object 时返回错误；原始 JSON 端点继续按字节保存
     pub fn replace_protocol_wire(
         self,
         body: Option<Bytes>,
@@ -947,12 +952,13 @@ impl Operation {
     }
 
     /// 替换 Provider HTTP 正文、非 wire 上下文和已解析 headers，同时保持 endpoint、
-    /// method 与 query 不变。headers 继续由 [`ProviderHttpRequest::new`] 统一验证；
-    /// Core 不解析插件传输使用的 base64 表示。
+    /// method 与 query 不变
+    /// headers 继续由 [`ProviderHttpRequest::new`] 统一验证；
+    /// Core 不解析插件传输使用的 base64 表示
     ///
     /// # Errors
     ///
-    /// 当前 operation 不是 Provider HTTP，或替换后的 headers 超出请求边界时返回错误。
+    /// 当前 operation 不是 Provider HTTP，或替换后的 headers 超出请求边界时返回错误
     pub fn replace_provider_http_wire(
         self,
         body: Option<Bytes>,
@@ -981,11 +987,12 @@ impl Operation {
     }
 
     /// 把一次已选择的协议转换结果写回 operation，同时保留非 wire 上下文和
-    /// Provider 会话状态。该方法只验证公共载荷形状，不解释目标协议字段。
+    /// Provider 会话状态
+    /// 该方法只验证公共载荷形状，不解释目标协议字段
     ///
     /// # Errors
     ///
-    /// 目标协议名无效，或 Generate 的目标正文不是 JSON object 时返回错误。
+    /// 目标协议名无效，或 Generate 的目标正文不是 JSON object 时返回错误
     pub fn translate_protocol_wire(
         self,
         target_protocol: impl Into<String>,
@@ -1110,7 +1117,7 @@ impl Operation {
         }
     }
 
-    /// 返回协议 adapter 持有的不透明格式标识。
+    /// 返回协议 adapter 持有的不透明格式标识
     #[must_use]
     pub fn protocol(&self) -> &str {
         match self {
@@ -1122,7 +1129,7 @@ impl Operation {
         }
     }
 
-    /// 附着协议连接持有的 Provider 私有状态；非生成 operation 保持不变。
+    /// 附着协议连接持有的 Provider 私有状态；非生成 operation 保持不变
     #[must_use]
     pub fn with_provider_session_state(self, state: ProviderSessionState) -> Self {
         match self {
@@ -1131,14 +1138,14 @@ impl Operation {
         }
     }
 
-    /// 原地附着 Provider 私有状态；payload 独占时不复制正文。
+    /// 原地附着 Provider 私有状态；payload 独占时不复制正文
     pub fn set_provider_session_state(&mut self, state: ProviderSessionState) {
         if let Self::Generate(request) = self {
             request.set_provider_session_state(state);
         }
     }
 
-    /// 返回稳定 operation 分类。
+    /// 返回稳定 operation 分类
     #[must_use]
     pub const fn kind(&self) -> OperationKind {
         match self {
@@ -1150,7 +1157,7 @@ impl Operation {
         }
     }
 
-    /// 推导 Router 使用的能力要求。
+    /// 推导 Router 使用的能力要求
     #[must_use]
     pub fn capability_requirements(&self) -> CapabilityRequirements {
         match self {
@@ -1162,7 +1169,7 @@ impl Operation {
         }
     }
 
-    /// 返回该 operation 是否代表一次图片生成请求。
+    /// 返回该 operation 是否代表一次图片生成请求
     #[must_use]
     pub fn image_generation_requested(&self) -> bool {
         match self {
@@ -1172,7 +1179,7 @@ impl Operation {
         }
     }
 
-    /// 返回当前 Provider 的连接内私有状态。
+    /// 返回当前 Provider 的连接内私有状态
     #[must_use]
     pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
         match self {

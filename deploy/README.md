@@ -8,7 +8,7 @@
 | --- | --- |
 | 安装与启动 | [手动安装](#手动安装) · [启动](#启动) · [公网访问](#公网访问) |
 | 接入客户端 | [客户端配置](#客户端配置) · [登录与生图排查](#登录与生图排查) |
-| 日常运维 | [运行设置](#启动后的运行设置) · [持久化与日志](#持久化与备份) · [请求排查](#请求错误排查) · [密码轮换](#密码语义) |
+| 日常运维 | [运行设置](#启动后的运行设置) · [小内存优化](#小内存优化) · [持久化与日志](#持久化与备份) · [请求排查](#请求错误排查) · [密码轮换](#密码语义) |
 | 更新与恢复 | [镜像升级](#镜像升级与源码构建) · [在线更新](#管理端在线更新) · [备份与恢复](#备份与恢复) · [优雅关停](#优雅关停) |
 | 运行源码 | [开发与源码联调](../docs/development.md) |
 
@@ -18,12 +18,13 @@
 
 | 位置 | 内容 | 修改方式 |
 | --- | --- | --- |
-| `deploy/config.yaml` | 监听、数据库/Redis 连接、部署凭据、时区与日志等启动配置 | 从模板创建，已有部署合并修改，不覆盖原文件 |
+| `deploy/config.yaml` | 监听、数据库/Redis 连接、部署凭据、时区、日志与可选内存分配策略等启动配置 | 从模板创建，已有部署合并修改，不覆盖原文件 |
 | `deploy/compose.yaml` | 镜像、容器网络、端口、挂载与资源限制 | 调整 Compose 并重建受影响容器 |
 | PostgreSQL | 账号、Key、运行设置、上游身份、插件配置等业务数据 | 管理端或管理 API |
 | 浏览器本地 | 主题和界面偏好 | 当前浏览器的主题设置 |
 
-项目不使用 `.env` 配置文件。Compose 环境变量用于容器地址、镜像选择和构建发布。
+项目不使用 `.env` 配置文件。Compose 环境变量用于容器地址、镜像选择和构建发布；
+可选的内存分配策略由 `config.yaml` 的 `services.app-runtime` 桥接到应用容器。
 配置加载会忽略未知字段，并在启动控制台提示字段名；不输出对应值。缺少必填字段时会指出缺项并停止启动，
 已知字段的类型和取值仍需合法；可选字段省略时使用默认值
 
@@ -50,6 +51,44 @@ host:
 切换时区保留已打开限额窗口的 UTC 边界与用量，到期后按新时区续接；不会因重启立即清零。
 备份调度从切换后的当前时刻计算未来执行点，不补跑旧时区漏过的任务，已入队任务保持原状态。
 夏令时中不存在的预热或 Cron 时刻跳过，重复时刻只选较早一次。日志日期与保留规则见[日志与保留窗口](#日志与保留窗口)
+
+### 小内存优化
+
+Linux/glibc 部署可选择更积极地归还请求结束后的空闲内存，适合内存紧张且请求后 RSS 长时间偏高的机器。
+该选项默认关闭，官方 Linux 镜像支持；更频繁的映射与回收可能增加 CPU 开销，应结合实际负载观察
+
+在 `deploy/config.yaml` 的 `services.app-runtime.environment` 中设置 `GLIBC_TUNABLES`，空字符串表示不启用额外调优：
+
+```yaml
+services:
+  app-runtime:
+    environment:
+      GLIBC_TUNABLES: 'glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072'
+```
+
+已有部署使用当前 Compose 模板时，需将 `config.example.yaml` 的 `app-runtime` 段合并到现有 `services` 下，保留 PostgreSQL 和 Redis 的桥接配置。
+即使不开启优化，也保留该段并将值设为 `''`；Compose 从这里取得参数，无需在 `compose.yaml` 重复填写
+
+校验并重建应用容器使配置生效；`docker compose restart` 不会更新容器环境变量：
+
+```bash
+docker compose -f deploy/compose.yaml config --quiet
+docker compose -f deploy/compose.yaml up -d --no-build --no-deps --force-recreate codex-proxy-rs
+```
+
+此配置将 glibc 的 mmap 与 trim 阈值固定为 128 KiB，关闭对应的动态阈值调整。
+如已有 `GLIBC_TUNABLES`，用冒号合并这两个参数，避免重复同名项；同时检查是否另设了 `MALLOC_MMAP_THRESHOLD_` 或 `MALLOC_TRIM_THRESHOLD_`，统一在一处维护。
+参数含义见 [glibc 文档](https://sourceware.org/glibc/manual/latest/html_node/Memory-Allocation-Tunables.html)
+
+关闭时删除这两个参数；没有其他 tunable 时将值恢复为 `''`，然后再次重建应用容器。
+`services` 是 Compose 桥接区，直接运行二进制不会读取这一段。Linux/glibc 二进制部署需由启动器在进程启动前设置同一环境变量，例如：
+
+```bash
+GLIBC_TUNABLES=glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072 ./codex-proxy-rs
+```
+
+该变量由 glibc 在进程启动时读取，不支持管理端热更新。
+它不设置内存上限，不释放仍被请求或连接持有的缓冲，也不处理容器文件缓存；观察时分别比较进程 RSS、cgroup 的 `anon` 与 `file`
 
 ## 部署结构
 
@@ -213,6 +252,10 @@ HTTP 传输不加密，公网部署仍建议使用 HTTPS。
 流式响应在首个上游事件提交后，每 15 秒无输出会发送一次 SSE 注释保活，
 并设置 `X-Accel-Buffering: no` 和 `Cache-Control: no-cache, no-transform`。
 反向代理仍需允许这些响应头生效；首个事件到达前的等待也需要足够的读取超时
+
+网关默认不限制模型请求的总执行时长。OpenAI 上游流默认有 300 秒空闲超时，持续收到数据不会因总时长超过 600 秒而中断。
+`api.request_timeout_seconds` 默认 `null`，只控制 HTTP 路由返回响应前的等待，不是流式正文或 WebSocket 每轮执行的总时限。
+排队、插件显式执行期限与客户端断开的边界见 [请求期限](../docs/api.md#请求期限)
 
 OpenAI 上游池化 WebSocket 默认每 25 秒发送一次 Ping，发出后允许等待 30 秒；
 收到 Pong 或其他入站帧即解除本次心跳截止，持续无响应则以 `pong_timeout` 关闭连接。
@@ -474,6 +517,7 @@ OAuth 恢复开关为 `host.logging.oauth_recovery`，默认关闭，与普通�
 | --- | --- |
 | `config.yaml` 含 `openai.wire_profile.location` | 该字段会被忽略，可删除；如需继续覆盖请求位置，将值填入管理端全局请求位置并开启开关，数据库初始化不会自动导入 |
 | `config.yaml` 含 `host.logging.file.max_files` | 该字段会被忽略，可删除；日志按 `retention_days` 保留，`max_file_size_mb` 只控制分片大小 |
+| 使用带 `app-runtime` 继承的 Compose，现有 `config.yaml` 缺少对应段 | 合并模板中的 `services.app-runtime`，保留原凭据桥接；不开启内存优化时将 `GLIBC_TUNABLES` 设为 `''`，见 [小内存优化](#小内存优化) |
 | 使用旧管理员认证接口或 Cookie | 改用 `/api/auth/*` 并重新登录；会话合同见 [认证 API](../docs/api.md#4-浏览器认证) |
 
 更新部署文件后，从安装目录拉取目标版本镜像并重建应用容器：

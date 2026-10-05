@@ -1,4 +1,4 @@
-//! 插件写入与实例发布共用控制面锁，避免一个事务混用不同配置版本。
+//! 插件写入与实例发布共用控制面锁，避免一个事务混用不同配置版本
 
 use gateway_admin::{
     model::plugin_resources::PluginResourceOwner,
@@ -27,7 +27,7 @@ pub(in crate::postgres) async fn begin_plugin_mutation<'a>(
     owner: &PluginResourceOwner,
 ) -> AdminStoreResult<Transaction<'a, Postgres>> {
     let mut tx = pool.begin().await.map_err(|_| mutation_unavailable())?;
-    // 与全部管理写入保持相同锁顺序；无变化的对账只锁定，不递增 revision。
+    // 与全部管理写入保持相同锁顺序；无变化的对账只锁定，不递增 revision
     sqlx::query("select config_revision from runtime_settings where id=1 for update")
         .execute(&mut *tx)
         .await

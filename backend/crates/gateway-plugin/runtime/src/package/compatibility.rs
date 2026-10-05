@@ -1,3 +1,5 @@
+//! 读取宿主插件兼容性声明，并校验清单所需协议与能力版本
+
 use std::sync::OnceLock;
 
 use gateway_admin::model::{
@@ -15,7 +17,7 @@ pub(crate) fn host_compatibility() -> Result<&'static PluginHostCompatibility, A
             let compatibility =
                 serde_json::from_str::<PluginHostCompatibility>(HOST_COMPATIBILITY_JSON)
                     .map_err(|_| ())?;
-            // 发行声明可以是 SDK 合同的子集，但不能声称支持当前二进制无法解释的合同。
+            // 发行声明可以是 SDK 合同的子集，但不能声称支持当前二进制无法解释的合同
             let known_contracts = compatibility
                 .manifest_schema_versions
                 .iter()

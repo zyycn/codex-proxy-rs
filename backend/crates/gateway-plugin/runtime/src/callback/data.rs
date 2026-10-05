@@ -1,3 +1,5 @@
+//! 插件非秘密账号、Key 与额度事实查询的宿主回调
+
 use std::sync::Arc;
 
 use gateway_admin::model::{PageSize, provider_credentials::PluginAccountListQuery};

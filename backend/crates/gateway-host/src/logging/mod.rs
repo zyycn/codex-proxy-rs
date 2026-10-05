@@ -1,4 +1,4 @@
-//! 进程结构化日志与按日期/大小轮转的文件 writer。
+//! 进程结构化日志与按日期/大小轮转的文件 writer
 
 use std::env;
 use std::io;
@@ -17,18 +17,18 @@ mod writer;
 use sink::{FileLogGuard, FileLogSink, LogHealth};
 use writer::RotatingLogWriter;
 
-// 文件前缀统一为 codex-proxy-rs-<kebab-case 类别>；专用 tracing target 使用 snake_case。
+// 文件前缀统一为 codex-proxy-rs-<kebab-case 类别>；专用 tracing target 使用 snake_case
 const APPLICATION_LOG_FILE_PREFIX: &str = "codex-proxy-rs-application";
 
-/// 内部分类标识；由 host.logging.oauth_recovery 控制是否写入独立文件。
+/// 内部分类标识；由 host.logging.oauth_recovery 控制是否写入独立文件
 const OAUTH_RECOVERY_LOG_TARGET: &str = "oauth_recovery";
 const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "codex-proxy-rs-oauth-recovery";
 
-/// 请求转储含完整凭据与正文，只允许在显式开启时写入独立文件。
+/// 请求转储含完整凭据与正文，只允许在显式开启时写入独立文件
 const REQUEST_DUMP_LOG_TARGET: &str = "request_dump";
 const REQUEST_DUMP_LOG_FILE_PREFIX: &str = "codex-proxy-rs-request-dump";
 
-/// 文件日志在正常退出时排空队列并等待落盘；控制台日志单独持有守卫。
+/// 文件日志在正常退出时排空队列并等待落盘；控制台日志单独持有守卫
 pub struct LogGuard {
     _stdout: Vec<WorkerGuard>,
     _files: Vec<FileLogGuard>,
@@ -47,7 +47,7 @@ pub enum LogError {
     SizeOverflow,
 }
 
-/// 初始化日志；文件按完整日期留存，不以分片数量淘汰窗口内记录。
+/// 初始化日志；文件按完整日期留存，不以分片数量淘汰窗口内记录
 pub fn initialize_logging(
     config: &LoggingConfig,
     timezone: gateway_core::time::DeploymentTimeZone,

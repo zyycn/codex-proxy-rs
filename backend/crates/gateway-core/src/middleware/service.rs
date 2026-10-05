@@ -1,11 +1,11 @@
-//! 公开服务的跨进程组合边界；原生调用仍使用所属领域的输入输出类型。
+//! 公开服务的跨进程组合边界；原生调用仍使用所属领域的输入输出类型
 
 use crate::{
     engine::{extensions::ExtensionCallScope, middleware::FrozenMiddlewarePlan},
     lifecycle::CancellationToken,
 };
 
-/// 值只在进入插件链时编码；操作的领域校验与副作用由终端所属服务执行。
+/// 值只在进入插件链时编码；操作的领域校验与副作用由终端所属服务执行
 pub type Value = serde_json::Value;
 pub type Next = super::Next<Value, Value, Error>;
 
@@ -38,7 +38,7 @@ impl Error {
     }
 }
 
-/// 子服务继承同一发布计划及取消信号；防递归集合不承担字段或权限过滤。
+/// 子服务继承同一发布计划及取消信号；防递归集合不承担字段或权限过滤
 #[derive(Clone, Debug)]
 pub struct Context {
     pub operation: &'static str,

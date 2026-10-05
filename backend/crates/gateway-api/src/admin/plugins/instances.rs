@@ -1,3 +1,5 @@
+//! 插件实例配置、运行状态、版本切换与回滚的 HTTP 接口
+
 use axum::{
     Router,
     extract::{Query, State},

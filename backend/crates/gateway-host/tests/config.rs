@@ -1,3 +1,5 @@
+//! 验证宿主配置默认值、资源路径与系统更新参数解析
+
 use std::path::PathBuf;
 
 use gateway_host::config::{FileLoggingConfig, HostConfig, ListenConfig, LoggingConfig};

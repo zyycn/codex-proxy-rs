@@ -1,3 +1,5 @@
+//! 验证 OpenAI 事件的模型、用量、额度与重试信息提取
+
 use gateway_protocol::openai::events::{
     RateLimitKeySource, RateLimitWindow, TokenUsage, billable_usage_is_complete, extract_sse_usage,
     extract_usage, is_codex_quota_header_name, is_rate_limit_header_name, parse_rate_limit_headers,
@@ -460,6 +462,44 @@ fn retry_after_should_not_infer_retry_from_unrelated_error_message() {
 #[test]
 fn retry_after_should_reject_malformed_json() {
     assert_eq!(retry_after_seconds_from_body("not-json"), None);
+}
+
+#[test]
+fn retry_after_should_prioritize_nested_headers_over_other_advice() {
+    for header in [json!(30), json!("30"), json!(["30"])] {
+        for wrap_response in [false, true] {
+            let error = json!({
+                "code": "rate_limit_exceeded", "message": "Try again in 2s",
+                "retry_after_seconds": 10, "headers": {"ReTrY-AfTeR": header}
+            });
+            let body = if wrap_response {
+                json!({"type":"response.failed", "response":{"error":error}, "headers":{"retry-after":"20"}})
+            } else {
+                json!({"type":"error", "error":error, "headers":{"retry-after":"20"}})
+            };
+            assert_eq!(retry_after_seconds_from_body(&body.to_string()), Some(30));
+        }
+    }
+}
+
+#[test]
+fn retry_after_should_keep_zero_advice_and_fall_back_only_for_invalid_headers() {
+    for (header, expected) in [
+        (json!("0"), 0),
+        (json!(0), 0),
+        (json!("Sun, 06 Nov 1994 08:49:37 GMT"), 0),
+        (json!("invalid"), 2),
+        (json!({"seconds":30}), 2),
+    ] {
+        let body = json!({"type":"response.failed", "response":{"error":{
+            "code":"rate_limit_exceeded", "message":"Try again in 2s",
+            "headers":{"Retry-After":header}
+        }}});
+        assert_eq!(
+            retry_after_seconds_from_body(&body.to_string()),
+            Some(expected)
+        );
+    }
 }
 
 #[test]

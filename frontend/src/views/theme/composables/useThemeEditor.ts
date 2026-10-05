@@ -24,7 +24,7 @@ import { storeToRefs } from 'pinia'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { useThemeStore } from '@/stores/modules/theme'
 
-export type ThemeEditorScope = 'global' | 'component'
+type ThemeEditorScope = 'global' | 'component'
 export type ThemeEditorGlobalCategory = 'color' | 'size' | 'style'
 export type ThemeEditorPreview = 'page' | 'components'
 export type ThemeEditorComponent
@@ -153,13 +153,13 @@ export function useThemeEditor() {
   function setComponentNumber(key: ComponentNumberKey, value: number) {
     if (!Number.isFinite(value))
       return
-    setCustomization(normalizeThemeCustomization({
+    setCustomization({
       ...draft.value.customization,
       component: {
         ...(draft.value.customization.component ?? {}),
         [key]: value,
       },
-    }))
+    })
   }
 
   function resetComponentNumber(key: ComponentNumberKey) {
@@ -172,13 +172,13 @@ export function useThemeEditor() {
   }
 
   function setTokenOverride(name: ThemeTokenName, value: string) {
-    setCustomization(normalizeThemeCustomization({
+    setCustomization({
       ...draft.value.customization,
       tokenOverrides: {
         ...(draft.value.customization.tokenOverrides ?? {}),
         [name]: value,
       },
-    }))
+    })
   }
 
   function resetTokenOverride(name: ThemeTokenName) {
@@ -218,13 +218,13 @@ export function useThemeEditor() {
   }
 
   function updateSeed(patch: Partial<ThemeSeedOverrides>) {
-    setCustomization(normalizeThemeCustomization({
+    setCustomization({
       ...draft.value.customization,
       seed: {
         ...(draft.value.customization.seed ?? {}),
         ...patch,
       },
-    }))
+    })
   }
 
   function setCustomization(customization: ThemeCustomization) {

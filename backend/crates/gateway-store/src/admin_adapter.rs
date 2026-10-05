@@ -1,4 +1,4 @@
-//! Admin 认证与设置 adapter。
+//! Admin 认证与设置 adapter
 
 use super::*;
 use gateway_admin::model::audit::MutationAuditOperation;

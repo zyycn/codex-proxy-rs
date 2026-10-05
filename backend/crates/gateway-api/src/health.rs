@@ -1,4 +1,4 @@
-//! `/healthz` 对 Core、Store 与 Host 关键 worker 健康事实的聚合。
+//! `/healthz` 对 Core、Store 与 Host 关键 worker 健康事实的聚合
 
 use std::sync::Arc;
 use std::time::Duration;

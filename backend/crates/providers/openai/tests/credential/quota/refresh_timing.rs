@@ -1,4 +1,4 @@
-//! 通过 quota 服务验证周期复核与 reset 宽限期，不依赖内部调度状态。
+//! 通过 quota 服务验证周期复核与 reset 宽限期，不依赖内部调度状态
 
 use std::time::Duration;
 
@@ -25,7 +25,7 @@ async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window
     let account = store.account("acct_quota_timing").expect("account");
     let server = MockServer::start().await;
     let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
-    // 显式推进调度时刻，真实 HTTP 与落库路径仍完整执行。
+    // 显式推进调度时刻，真实 HTTP 与落库路径仍完整执行
     let short_reset = now
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
@@ -88,7 +88,7 @@ async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window
         .expect("next scan before weekly grace deadline");
     assert_eq!(server.received_requests().await.expect("requests").len(), 1);
 
-    // 周窗口的到期复核仍未恢复时，也不能每轮扫描重复请求。
+    // 周窗口的到期复核仍未恢复时，也不能每轮扫描重复请求
     now = reset_grace(week_reset);
     assert_eq!(
         service
@@ -192,7 +192,7 @@ async fn allowed_account_with_expired_window_synchronizes_at_reset_grace() {
         "正常账号首次复核也必须等待 reset 宽限期"
     );
 
-    // 当到达 reset + 120s 宽限期后，账号虽然处于 allowed 状态，但包含已到期的非零用量窗口，被调度主动同步。
+    // 当到达 reset + 120s 宽限期后，账号虽然处于 allowed 状态，但包含已到期的非零用量窗口，被调度主动同步
     mount_usage(&server, usage(0, short_reset + 18_000)).await;
     now = reset_grace(short_reset);
 

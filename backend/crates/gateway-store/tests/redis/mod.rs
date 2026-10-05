@@ -1,3 +1,5 @@
+//! Redis 协调、缓存、会话与租约适配器的测试入口
+
 mod artifact_profile;
 mod auth;
 mod client_admission;

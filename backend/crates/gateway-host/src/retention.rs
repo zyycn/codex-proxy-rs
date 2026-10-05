@@ -1,4 +1,4 @@
-//! 保留期任务的调度、单轮预算、取消与日志；删除事务由 Store 端口负责。
+//! 保留期任务的调度、单轮预算、取消与日志；删除事务由 Store 端口负责
 
 use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
@@ -30,7 +30,7 @@ impl Default for RetentionCycleBudget {
 }
 
 pub fn worker(store: Arc<dyn RetentionStore>) -> Result<WorkerContribution, WorkerDefinitionError> {
-    // 保持稳定的租约身份，滚动升级期间仍与已有进程互斥。
+    // 保持稳定的租约身份，滚动升级期间仍与已有进程互斥
     let id = WorkerId::try_new(WorkerKind::Retention, "postgres")?;
     let schedule = WorkerSchedule::try_new(
         Duration::from_secs(60 * 60),

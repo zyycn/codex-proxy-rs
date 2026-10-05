@@ -1,4 +1,4 @@
-//! OpenAI 当前账号个人资料统计与官方头像查询编排。
+//! OpenAI 当前账号个人资料统计与官方头像查询编排
 
 use std::{
     collections::HashMap,
@@ -130,7 +130,7 @@ impl CodexCredentialProfileService {
         }
     }
 
-    /// 订阅只按需读取；不缓存、不刷新凭据，也不更新额度状态。
+    /// 订阅只按需读取；不缓存、不刷新凭据，也不更新额度状态
     pub async fn subscription(
         &self,
         account_id: &ProviderAccountId,
@@ -158,7 +158,7 @@ impl CodexCredentialProfileService {
             &upstream_account_id,
         )
         .await;
-        // 请求期间重新授权、换绑或删除账号时，丢弃旧身份的结果。
+        // 请求期间重新授权、换绑或删除账号时，丢弃旧身份的结果
         let current = self
             .repository
             .store()
@@ -203,7 +203,7 @@ impl CodexCredentialProfileService {
         Ok(statistics)
     }
 
-    /// URL 缓存不缓存认证；每次下载都重新读取所属账号当前的 token。
+    /// URL 缓存不缓存认证；每次下载都重新读取所属账号当前的 token
     async fn account_authentication(
         &self,
         account_id: &ProviderAccountId,

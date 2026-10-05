@@ -10,7 +10,7 @@ import { useUiStore } from '@/stores/modules/ui'
 
 import AppSidebar from './components/AppSidebar.vue'
 import FloatingSidebarToggle from './components/FloatingSidebarToggle.vue'
-import SystemUpdateModal from './components/SystemUpdateModal/index.vue'
+import SystemUpdateModal from './components/system-update-modal/index.vue'
 
 const uiStore = useUiStore()
 const systemUpdateStore = useSystemUpdateStore()

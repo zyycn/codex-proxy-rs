@@ -1,4 +1,4 @@
-//! OpenAI Responses 请求到官方 Grok Build wire 的转换边界。
+//! OpenAI Responses 请求到官方 Grok Build wire 的转换边界
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -27,11 +27,11 @@ use schema::*;
 use tools::*;
 
 /// Grok CLI 在历史条目上注入、Grok Build 无法反序列化的内部键；只在已知
-/// 注入位置剥离，避免误伤工具 schema 或输出中恰好同名的键。
+/// 注入位置剥离，避免误伤工具 schema 或输出中恰好同名的键
 const GROK_INTERNAL_HISTORY_KEYS: &[&str] =
     &["phase", "internal_chat_message_metadata_passthrough"];
 
-/// 保留客户端 OpenAI Responses object 的 xAI 上游请求。
+/// 保留客户端 OpenAI Responses object 的 xAI 上游请求
 pub struct GrokResponsesRequest {
     body: Map<String, Value>,
     session_id: Option<String>,
@@ -41,24 +41,24 @@ pub struct GrokResponsesRequest {
 }
 
 impl GrokResponsesRequest {
-    /// 返回发送到 `/v1/responses` 的 JSON object。
+    /// 返回发送到 `/v1/responses` 的 JSON object
     #[must_use]
     pub const fn body(&self) -> &Map<String, Value> {
         &self.body
     }
 
-    /// 返回按下游租户隔离后的稳定 Grok 会话 UUID。
+    /// 返回按下游租户隔离后的稳定 Grok 会话 UUID
     #[must_use]
     pub fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
     }
 
-    /// 返回只有显式会话身份才启用的 reasoning replay scope。
+    /// 返回只有显式会话身份才启用的 reasoning replay scope
     pub(crate) fn reasoning_replay_session_id(&self) -> Option<&str> {
         self.reasoning_replay_session_id.as_deref()
     }
 
-    /// 返回归一化后的 xAI wire 模型。
+    /// 返回归一化后的 xAI wire 模型
     pub(crate) fn upstream_model(&self) -> Option<&str> {
         self.body.get("model").and_then(Value::as_str)
     }
@@ -75,7 +75,7 @@ impl GrokResponsesRequest {
         self.body.get("input").and_then(Value::as_array).cloned()
     }
 
-    /// 返回与会话一致、额外绑定模型的账号亲和键。
+    /// 返回与会话一致、额外绑定模型的账号亲和键
     #[must_use]
     pub const fn affinity(&self) -> Option<&GrokSessionAffinityKey> {
         self.affinity.as_ref()
@@ -119,10 +119,10 @@ impl GrokResponsesRequest {
         Ok(())
     }
 
-    /// 为同账号的一次 xAI `invalid_encrypted_content` 恢复请求移除被拒绝的密文。
+    /// 为同账号的一次 xAI `invalid_encrypted_content` 恢复请求移除被拒绝的密文
     ///
     /// 只在至少一个 reasoning item 含非空密文时改写；可读 summary/content、ID 与
-    /// 其他历史保持不变，剥离后只剩 `type` 的空壳一并删除。
+    /// 其他历史保持不变，剥离后只剩 `type` 的空壳一并删除
     pub(crate) fn strip_invalid_encrypted_reasoning(&mut self) -> bool {
         strip_invalid_encrypted_reasoning_from_body(&mut self.body)
     }
@@ -206,8 +206,8 @@ impl GrokResponsesRequest {
             consume_terminal_compaction_trigger(&mut body)?;
         }
         let upstream_model = resolve_grok_text_responses_model_id(upstream_model);
-        // 这些字段属于 Codex/OpenAI 侧请求控制，不是 xAI 上游协议字段。
-        // OpenAI 透明路径会保留未知字段；这里只在 xAI adapter 内做最小剥离。
+        // 这些字段属于 Codex/OpenAI 侧请求控制，不是 xAI 上游协议字段
+        // OpenAI 透明路径会保留未知字段；这里只在 xAI adapter 内做最小剥离
         body.remove("provider_options");
         body.remove("service_tier");
         let session_seed = explicit_session_seed(request, &body);
@@ -316,19 +316,19 @@ impl fmt::Debug for GrokResponsesRequest {
     }
 }
 
-/// Generate 到 Responses 的编码错误，不保留 option 与 prompt 值。
+/// Generate 到 Responses 的编码错误，不保留 option 与 prompt 值
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum GrokRequestEncodeError {
-    /// 数据面只接受 OpenAI adapter 保留的原始 Responses object。
+    /// 数据面只接受 OpenAI adapter 保留的原始 Responses object
     #[error("Grok Build request is missing its OpenAI protocol payload")]
     InvalidProtocolPayload,
-    /// JSON 序列化意外失败。
+    /// JSON 序列化意外失败
     #[error("Grok Build request serialization failed")]
     Serialization,
-    /// Responses 兼容字段无法安全归一化。
+    /// Responses 兼容字段无法安全归一化
     #[error("Grok Build request normalization failed")]
     InvalidRequestNormalization,
-    /// 请求中的具体字段无法安全转换为 Grok Build 接受的形态。
+    /// 请求中的具体字段无法安全转换为 Grok Build 接受的形态
     #[error("Grok Build request field `{field}` could not be normalized safely")]
     InvalidRequestField { field: &'static str },
 }

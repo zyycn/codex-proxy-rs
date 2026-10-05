@@ -1,4 +1,4 @@
-//! 版本、安全自更新、回滚与进程重启的 Host-owned 实现。
+//! 版本、安全自更新、回滚与进程重启的 Host-owned 实现
 
 mod archive;
 mod download;
@@ -56,7 +56,7 @@ const MAX_OFFICIAL_PLUGIN_MANIFEST_SIZE: u64 = 256 * 1024;
 
 type OperationError = SystemOperationError;
 
-/// 系统更新与重启配置；所有字段只由 Host 解释。
+/// 系统更新与重启配置；所有字段只由 Host 解释
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SystemUpdateConfig {
@@ -68,7 +68,7 @@ pub struct SystemUpdateConfig {
     pub update_repository: Option<String>,
     pub github_api_base: String,
     pub executable_path: Option<PathBuf>,
-    /// 未显式指定时，由组合根传入 API 实际使用的静态资源目录。
+    /// 未显式指定时，由组合根传入 API 实际使用的静态资源目录
     pub web_dist_dir: Option<PathBuf>,
     pub update_state_file: PathBuf,
     pub update_lock_file: PathBuf,
@@ -228,7 +228,7 @@ impl SystemUpdateConfig {
     }
 }
 
-/// gateway-admin 消费的真实进程/文件系统操作实现。
+/// gateway-admin 消费的真实进程/文件系统操作实现
 #[derive(Clone)]
 pub struct ProcessSystemOperations {
     cancellation: CancellationToken,
@@ -243,7 +243,7 @@ impl ProcessSystemOperations {
     #[must_use]
     pub fn new(cancellation: CancellationToken, mut config: SystemUpdateConfig) -> Self {
         // 组合根在接收请求前固定安装路径和发行文件；旧程序重命名后，
-        // current_exe 可能指向备份，后续更新、回滚和重启不能再反查运行文件。
+        // current_exe 可能指向备份，后续更新、回滚和重启不能再反查运行文件
         let running_files = Arc::new(config.executable_path().and_then(|executable| {
             config.executable_path = Some(executable);
             ReleaseFiles::installed(&config)
@@ -302,7 +302,7 @@ impl ProcessSystemOperations {
             target_version: target.clone(),
         };
         let service = self.clone();
-        // 任务持有互斥锁和落盘守卫，HTTP 断开不会取消更新；Host 关闭仍会收敛终态。
+        // 任务持有互斥锁和落盘守卫，HTTP 断开不会取消更新；Host 关闭仍会收敛终态
         drop(tokio::spawn(async move {
             let _operation_lock = operation_lock;
             let result = tokio::select! {
@@ -701,7 +701,7 @@ impl SystemOperations for ProcessSystemOperations {
         preflight: Arc<dyn SystemRestartPreflight>,
     ) -> Result<SystemOperationAccepted, OperationError> {
         // 与 update/rollback 互斥：更新替换文件期间触发自重启会让新进程
-        // 载入半成品产物。
+        // 载入半成品产物
         let _operation = self
             .operation_lock
             .try_lock()

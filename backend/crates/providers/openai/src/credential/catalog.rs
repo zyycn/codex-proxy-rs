@@ -1,4 +1,4 @@
-//! Codex 账号 entitlement 的进程内快照，以及套餐级 Redis 模型目录 cache。
+//! Codex 账号 entitlement 的进程内快照，以及套餐级 Redis 模型目录 cache
 
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::fmt;
@@ -36,12 +36,12 @@ const MODEL_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CONCURRENT_API_CATALOGS: usize = 4;
 const CLIENT_CATALOG_ERROR_TTL: Duration = Duration::from_secs(5);
 
-/// OpenAI 以套餐划分的模型目录作用域。
+/// OpenAI 以套餐划分的模型目录作用域
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CodexCatalogScope(ProviderCatalogScope);
 
 impl CodexCatalogScope {
-    /// 从账号已验证的套餐事实构造目录作用域。
+    /// 从账号已验证的套餐事实构造目录作用域
     pub fn for_account(account: &ProviderAccount) -> Result<Self, CodexCredentialCatalogError> {
         if account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_API_KEY {
             return ProviderCatalogScope::new(format!(
@@ -63,14 +63,14 @@ impl CodexCatalogScope {
             .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)
     }
 
-    /// 返回稳定的 Provider-owned 作用域。
+    /// 返回稳定的 Provider-owned 作用域
     #[must_use]
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
 }
 
-/// Redis TTL cache 中一条可重建的套餐模型目录。
+/// Redis TTL cache 中一条可重建的套餐模型目录
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodexPlanCatalog {
     scope: CodexCatalogScope,
@@ -143,7 +143,7 @@ impl CodexCredentialCatalogSnapshot {
             .map(|catalog| catalog.models.as_slice()))
     }
 
-    /// 将 Provider 私有目录作用域投影为模型来源账号，供 Core 结合冻结政策过滤。
+    /// 将 Provider 私有目录作用域投影为模型来源账号，供 Core 结合冻结政策过滤
     #[must_use]
     pub fn model_catalog_accounts(&self) -> BTreeMap<&str, BTreeSet<ProviderAccountId>> {
         let mut accounts = BTreeMap::<&str, BTreeSet<ProviderAccountId>>::new();
@@ -213,7 +213,7 @@ struct ClientCatalogKey {
 type ClientCatalogResult = Result<Vec<ProviderModelDescriptor>, CodexCredentialCatalogError>;
 
 struct CachedClientCatalog {
-    // 负缓存从请求结束计时，不能让一次慢失败耗尽后续请求的退避窗口。
+    // 负缓存从请求结束计时，不能让一次慢失败耗尽后续请求的退避窗口
     completed_at: Instant,
     result: ClientCatalogResult,
 }
@@ -288,9 +288,9 @@ impl CodexCredentialCatalogService {
         }
     }
 
-    /// OAuth 目录使用 Key 范围内排序稳定的首个成功账号；API Key 聚合按完整对象优先稳定选源。
-    /// 客户端原生对象不复用套餐级画像。
-    /// 同一账号/凭据版本/客户端版本的并发读取合并；原生正文仅保留在有界进程缓存。
+    /// OAuth 目录使用 Key 范围内排序稳定的首个成功账号；API Key 聚合按完整对象优先稳定选源
+    /// 客户端原生对象不复用套餐级画像
+    /// 同一账号/凭据版本/客户端版本的并发读取合并；原生正文仅保留在有界进程缓存
     pub async fn client_model_catalog(
         &self,
         scope: &FrozenAccountScope,
@@ -327,7 +327,7 @@ impl CodexCredentialCatalogService {
                 }
             })
             .buffer_unordered(MAX_CONCURRENT_API_CATALOGS);
-        // 所有 API 账号共享等待预算；慢上游不能逐个耗尽超时或阻塞 OAuth 目录。
+        // 所有 API 账号共享等待预算；慢上游不能逐个耗尽超时或阻塞 OAuth 目录
         let deadline = Instant::now() + MODEL_CATALOG_TIMEOUT;
         while let Ok(Some((account, result))) =
             tokio::time::timeout_at(deadline, catalogs.next()).await
@@ -338,7 +338,7 @@ impl CodexCredentialCatalogService {
             }
         }
         drop(catalogs);
-        // 完整对象优先于普通 ID；同类目录按账号顺序选来源，并保留上游条目顺序。
+        // 完整对象优先于普通 ID；同类目录按账号顺序选来源，并保留上游条目顺序
         let (native, adapted): (Vec<_>, Vec<_>) = api_catalogs
             .into_values()
             .flatten()
@@ -405,7 +405,7 @@ impl CodexCredentialCatalogService {
             if let Some(entry) = cache.iter().find(|entry| entry.key == key) {
                 Arc::clone(&entry.value)
             } else {
-                // 不驱逐正在读取的目录，避免并发请求绕过缓存容量限制制造额外出站。
+                // 不驱逐正在读取的目录，避免并发请求绕过缓存容量限制制造额外出站
                 if cache.len() >= MAX_CLIENT_CATALOGS {
                     let Some(index) = cache.iter().position(|entry| entry.value.initialized())
                     else {
@@ -424,7 +424,7 @@ impl CodexCredentialCatalogService {
         };
         let result = value
             .get_or_init(|| async {
-                // 冻结画像，确保实际请求与缓存身份一致；不传递客户端 Bearer 给上游。
+                // 冻结画像，确保实际请求与缓存身份一致；不传递客户端 Bearer 给上游
                 let client = CodexBackendClient::new(
                     self.http.clone(),
                     self.base_url.clone(),
@@ -483,7 +483,7 @@ impl CodexCredentialCatalogService {
             .cloned())
     }
 
-    /// 读取账号当前已验证套餐的模型 entitlement；不触发网络。
+    /// 读取账号当前已验证套餐的模型 entitlement；不触发网络
     pub fn cached_account_models(
         &self,
         account: &ProviderAccount,
@@ -496,7 +496,7 @@ impl CodexCredentialCatalogService {
             .map(|models| models.map(<[String]>::to_vec))
     }
 
-    /// 优先读取套餐目录 cache；缺失时才用当前账号所属套餐的有限候选集实时填充。
+    /// 优先读取套餐目录 cache；缺失时才用当前账号所属套餐的有限候选集实时填充
     pub async fn cached_or_refresh_account_catalog(
         &self,
         account: &ProviderAccount,
@@ -508,7 +508,7 @@ impl CodexCredentialCatalogService {
         self.refresh_account_catalog(account.id()).await
     }
 
-    /// 实时刷新指定账号所属套餐的模型集合，并覆盖可重建 Redis cache。
+    /// 实时刷新指定账号所属套餐的模型集合，并覆盖可重建 Redis cache
     pub async fn refresh_account_catalog(
         &self,
         account_id: &ProviderAccountId,
@@ -525,12 +525,12 @@ impl CodexCredentialCatalogService {
         let mut candidates =
             match catalog_candidates_by_scope(self.repository.list_for_provider().await?) {
                 Ok(mut groups) => groups.remove(&scope).unwrap_or_default(),
-                // 全部账号都被调度列表过滤时按空候选处理，让下方目标账号补回继续生效。
+                // 全部账号都被调度列表过滤时按空候选处理，让下方目标账号补回继续生效
                 Err(CodexCredentialCatalogError::NoEligibleCredential) => Vec::new(),
                 Err(error) => return Err(error),
             };
         // 常规调度列表不含停用账号；管理端按账号查询模型要对停用账号返回真实上游
-        // 结果，这里把不在候选里的目标账号本身补回，仍按优先顺序先试目标账号。
+        // 结果，这里把不在候选里的目标账号本身补回，仍按优先顺序先试目标账号
         if !candidates
             .iter()
             .any(|candidate| candidate.id() == account_id)
@@ -558,11 +558,11 @@ impl CodexCredentialCatalogService {
         Ok(catalog)
     }
 
-    /// 读取目标账号的原生目录条目；供管理端按账号导出目录文件使用。
+    /// 读取目标账号的原生目录条目；供管理端按账号导出目录文件使用
     ///
     /// 按账号直接请求上游，避免进程快照的跨套餐同名模型合并替换目标账号的原生对象；
-    /// 停用账号也不在常规快照候选中，仍允许管理员显式导出。
-    /// 返回顺序沿用上游目录顺序，条目内容保持上游原样，不做别名改写或字段裁剪。
+    /// 停用账号也不在常规快照候选中，仍允许管理员显式导出
+    /// 返回顺序沿用上游目录顺序，条目内容保持上游原样，不做别名改写或字段裁剪
     pub async fn account_catalog_documents(
         &self,
         account: &ProviderAccount,
@@ -579,7 +579,7 @@ impl CodexCredentialCatalogService {
         Ok((fetched.models, SystemTime::now()))
     }
 
-    /// 读取当前账号所属套餐的目录 cache，不触发上游请求。
+    /// 读取当前账号所属套餐的目录 cache，不触发上游请求
     pub async fn read_account_catalog(
         &self,
         account: &ProviderAccount,
@@ -639,7 +639,7 @@ impl CodexCredentialCatalogService {
                         entry.insert(model.clone());
                     }
                     Entry::Occupied(mut entry) => {
-                        // 原生目录含完整能力证据，同名 API ID 不能覆盖它，也不能跨来源拼字段。
+                        // 原生目录含完整能力证据，同名 API ID 不能覆盖它，也不能跨来源拼字段
                         if model.document().protocol() == "codex"
                             && entry.get().document().protocol() != "codex"
                         {
@@ -792,7 +792,7 @@ impl CodexCredentialCatalogService {
         Ok(())
     }
 
-    /// 记录普通 Responses 响应声明的目录版本；相同版本只触发一次。
+    /// 记录普通 Responses 响应声明的目录版本；相同版本只触发一次
     pub fn observe_response_etag(&self, etag: &str) -> Result<bool, CodexCredentialCatalogError> {
         validate_response_etag(etag)?;
         let changed = {
@@ -817,7 +817,7 @@ impl CodexCredentialCatalogService {
         Ok(changed)
     }
 
-    /// 等待并认领一次需要强制刷新的 Provider 目录。
+    /// 等待并认领一次需要强制刷新的 Provider 目录
     pub async fn wait_for_etag_refresh(&self) {
         loop {
             if self.begin_pending_etag_refresh() {
@@ -827,17 +827,17 @@ impl CodexCredentialCatalogService {
         }
     }
 
-    /// 立即刷新所有套餐目录，但不接管 ETag daemon 已认领的刷新状态。
+    /// 立即刷新所有套餐目录，但不接管 ETag daemon 已认领的刷新状态
     ///
     /// 周期 worker 与 ETag daemon 可以同时请求目录；只有后者可以完成
-    /// `inflight` ETag 的状态转换，避免周期刷新错误地确认另一个请求的版本。
+    /// `inflight` ETag 的状态转换，避免周期刷新错误地确认另一个请求的版本
     pub async fn refresh_catalogs(
         &self,
     ) -> Result<CodexCredentialCatalogSnapshot, CodexCredentialCatalogError> {
         self.refresh_inner().await
     }
 
-    /// 忽略当前 cache，按已认领的 ETag 变化强制生成一份完整新快照。
+    /// 忽略当前 cache，按已认领的 ETag 变化强制生成一份完整新快照
     pub async fn refresh(
         &self,
     ) -> Result<CodexCredentialCatalogSnapshot, CodexCredentialCatalogError> {

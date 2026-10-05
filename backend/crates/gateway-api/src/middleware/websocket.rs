@@ -1,4 +1,4 @@
-//! 服务器握手与双工传输；自定义协议及多轮执行由接管会话的插件编排。
+//! 服务器握手与双工传输；自定义协议及多轮执行由接管会话的插件编排
 
 use std::sync::Arc;
 
@@ -86,7 +86,7 @@ impl upgrade::WebSocketUpgrade for Upgrade {
     }
 }
 
-/// 原生协议与插件接管会话共用消息链；调用取消不等待插件释放 transport 锁。
+/// 原生协议与插件接管会话共用消息链；调用取消不等待插件释放 transport 锁
 pub(crate) async fn transform(
     context: core::Context,
     message: core::Message,
@@ -152,7 +152,7 @@ impl core::Session for Session {
                     return Ok(None);
                 };
                 let message = into_core(message);
-                // transport 锁只保护一次读取；插件可以在收包处理中主动发送。
+                // transport 锁只保护一次读取；插件可以在收包处理中主动发送
                 if let Some(message) = self.transform(message, core::Direction::Incoming).await? {
                     return Ok(Some(message));
                 }

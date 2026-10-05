@@ -1,6 +1,6 @@
-//! 管理控制面所需的持久化能力。
+//! 管理控制面所需的持久化能力
 //!
-//! 端口按业务资源拆分，方法使用领域模型，不暴露连接池、事务或 Redis client。
+//! 端口按业务资源拆分，方法使用领域模型，不暴露连接池、事务或 Redis client
 
 use std::{collections::BTreeMap, net::IpAddr, sync::Arc, time::Duration};
 
@@ -40,7 +40,7 @@ use crate::model::{
     settings::{AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RuntimeSettings},
 };
 
-/// 管理端可判定的持久化失败类型。
+/// 管理端可判定的持久化失败类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdminStoreErrorKind {
     Invalid,
@@ -51,7 +51,7 @@ pub enum AdminStoreErrorKind {
     Unavailable,
 }
 
-/// 隐藏数据库实现细节的持久化错误。
+/// 隐藏数据库实现细节的持久化错误
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{resource} store operation failed: {message}")]
 pub struct AdminStoreError {
@@ -87,10 +87,10 @@ impl AdminStoreError {
 
 pub type AdminStoreResult<T> = Result<T, AdminStoreError>;
 
-/// 账号目录与公共账号写操作。
+/// 账号目录与公共账号写操作
 #[async_trait]
 pub trait AccountStore: Send + Sync {
-    /// 插件回调按授权 Provider/账号在数据库过滤后做稳定 cursor 分页。
+    /// 插件回调按授权 Provider/账号在数据库过滤后做稳定 cursor 分页
     async fn list_plugin_accounts(
         &self,
         query: PluginAccountListQuery,
@@ -119,7 +119,7 @@ pub trait AccountStore: Send + Sync {
         windows: &[AccountUsageWindowQuery],
     ) -> AdminStoreResult<Vec<AccountUsageWindowResult>>;
 
-    /// 从同一数据库语句取得截止快照的累计用量和有界历史观测。
+    /// 从同一数据库语句取得截止快照的累计用量和有界历史观测
     async fn load_quota_forecast_history(
         &self,
         window: &AccountUsageWindowQuery,
@@ -131,7 +131,7 @@ pub trait AccountStore: Send + Sync {
         account_id: &gateway_core::account::ProviderAccountId,
     ) -> AdminStoreResult<Option<CredentialDetails>>;
 
-    /// 插件按全局账号 ID 读取时，由数据库记录提供权威 Provider 归属。
+    /// 插件按全局账号 ID 读取时，由数据库记录提供权威 Provider 归属
     async fn credential_details_by_id(
         &self,
         account_id: &gateway_core::account::ProviderAccountId,
@@ -143,7 +143,7 @@ pub trait AccountStore: Send + Sync {
         account_ids: &[gateway_core::account::ProviderAccountId],
     ) -> AdminStoreResult<Vec<ProviderExportCredentialInput>>;
 
-    /// 插件凭据读取只接收账号 ID，不接受调用方另行声明 Provider。
+    /// 插件凭据读取只接收账号 ID，不接受调用方另行声明 Provider
     async fn load_credential_for_plugin(
         &self,
         account_id: &gateway_core::account::ProviderAccountId,
@@ -161,7 +161,7 @@ pub trait AccountStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<crate::model::provider_credentials::AuthorizationCommitResult>;
 
-    /// 已提交的授权结果独立于 Redis 临时状态；只有原管理员身份可读。
+    /// 已提交的授权结果独立于 Redis 临时状态；只有原管理员身份可读
     async fn authorization_receipt(
         &self,
         key: &crate::model::provider_credentials::AuthorizationReceiptKey,
@@ -185,7 +185,7 @@ pub trait AccountStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<AccountUpdateResult>;
 
-    /// 在事务内按最新启用状态、账号上限和全局默认值判断，只降低并发上限。
+    /// 在事务内按最新启用状态、账号上限和全局默认值判断，只降低并发上限
     async fn lower_concurrency_limit(
         &self,
         account_id: &gateway_core::account::ProviderAccountId,
@@ -218,7 +218,7 @@ pub trait AccountStore: Send + Sync {
     ) -> AdminStoreResult<()>;
 }
 
-/// 可丢失账号运行态的管理读端口；跨存储编排由 Admin application service 拥有。
+/// 可丢失账号运行态的管理读端口；跨存储编排由 Admin application service 拥有
 #[async_trait]
 pub trait AccountRuntimeStore: Send + Sync {
     async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot>;
@@ -228,18 +228,18 @@ pub trait AccountRuntimeStore: Send + Sync {
         account_ids: &[String],
     ) -> AdminStoreResult<AccountRuntimeSnapshot>;
 
-    /// 容量熔断自动冻结中的账号与其冻结截止时间；429 临时限流不包含在内。
+    /// 容量熔断自动冻结中的账号与其冻结截止时间；429 临时限流不包含在内
     async fn active_freezes(
         &self,
     ) -> AdminStoreResult<BTreeMap<String, crate::model::accounts::AccountFreeze>>;
 
-    /// 读取容量失败窗口内观测到的在途并发峰值（自适应并发下调的证据）。
+    /// 读取容量失败窗口内观测到的在途并发峰值（自适应并发下调的证据）
     async fn capacity_peaks(
         &self,
         account_ids: &[String],
     ) -> AdminStoreResult<BTreeMap<String, u32>>;
 
-    /// 仅当冻结快照仍匹配时解除或顺延；旧探测不得覆盖手动恢复或新一轮冻结。
+    /// 仅当冻结快照仍匹配时解除或顺延；旧探测不得覆盖手动恢复或新一轮冻结
     async fn finish_freeze(
         &self,
         account_id: &str,
@@ -248,12 +248,12 @@ pub trait AccountRuntimeStore: Send + Sync {
     ) -> AdminStoreResult<bool>;
 }
 
-/// 控制面凭据、统一会话、登录限流与管理员安全审计。
+/// 控制面凭据、统一会话、登录限流与管理员安全审计
 #[async_trait]
 pub trait AuthStore: Send + Sync {
     async fn load_password_hash(&self, admin_user_id: &str) -> AdminStoreResult<Option<String>>;
 
-    /// 密码更新与审计必须在同一事务提交；旧哈希不匹配时不写入。
+    /// 密码更新与审计必须在同一事务提交；旧哈希不匹配时不写入
     async fn change_password(
         &self,
         admin_user_id: &str,
@@ -281,7 +281,7 @@ pub trait AuthStore: Send + Sync {
         id: &gateway_core::policy::ClientApiKeyId,
     ) -> AdminStoreResult<bool>;
 
-    /// 原子消费来源桶与全局桶的一次登录尝试；被拒绝时返回建议重试间隔。
+    /// 原子消费来源桶与全局桶的一次登录尝试；被拒绝时返回建议重试间隔
     async fn consume_login_attempt(
         &self,
         source_ip: IpAddr,
@@ -293,10 +293,10 @@ pub trait AuthStore: Send + Sync {
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()>;
 }
 
-/// Client API Key 资料读取与管理写入。
+/// Client API Key 资料读取与管理写入
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
-    /// 按已验证的 ID 读取资料，不读取完整明文 Key。
+    /// 按已验证的 ID 读取资料，不读取完整明文 Key
     async fn get_client_key(
         &self,
         id: &gateway_core::policy::ClientApiKeyId,
@@ -333,7 +333,7 @@ pub trait ClientKeyStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<Revision>;
 
-    /// 局部更新预算上限，保留其他策略和账本；无变化时不产生配置版本或审计。
+    /// 局部更新预算上限，保留其他策略和账本；无变化时不产生配置版本或审计
     async fn update_client_key_budget_limits(
         &self,
         command: UpdateClientKeyBudgetLimits,
@@ -341,7 +341,7 @@ pub trait ClientKeyStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<Option<Revision>>;
 
-    /// 仅修改运行时账本并原子记录审计，不推进配置版本。
+    /// 仅修改运行时账本并原子记录审计，不推进配置版本
     async fn reset_client_key_budget(
         &self,
         command: ResetClientKeyBudget,
@@ -350,7 +350,7 @@ pub trait ClientKeyStore: Send + Sync {
     ) -> AdminStoreResult<()>;
 }
 
-/// Provider-neutral account group management transactions.
+/// 跨 Provider 的账号分组管理事务
 #[async_trait]
 pub trait AccountGroupStore: Send + Sync {
     async fn list_account_groups(
@@ -388,24 +388,24 @@ pub trait AccountGroupStore: Send + Sync {
     ) -> AdminStoreResult<AccountGroupMutation>;
 }
 
-/// 逐条读取的已计算费用事实；消费结束或丢弃时释放查询资源。
+/// 逐条读取的已计算费用事实；消费结束或丢弃时释放查询资源
 pub type UsageCalculatedBillingStream<'a> =
     BoxStream<'a, AdminStoreResult<UsageCalculatedBillingFact>>;
 
-/// 用量、趋势、诊断与运维错误的只读能力。
+/// 用量、趋势、诊断与运维错误的只读能力
 #[async_trait]
 pub trait ObservabilityStore: Send + Sync {
-    /// 返回历史统计区间和指定观测时刻下的实时账号状态。
+    /// 返回历史统计区间和指定观测时刻下的实时账号状态
     async fn dashboard_summary(
         &self,
         range: TimeRange,
         observed_at: DateTime<Utc>,
     ) -> AdminStoreResult<DashboardObservation>;
 
-    /// 返回 Dashboard 可选的实时槽位事实。
+    /// 返回 Dashboard 可选的实时槽位事实
     ///
     /// 该状态来自可丢失的运行时存储；无实现或运行时存储不可用时返回 `None`，不影响
-    /// 持久观测数据的读取。
+    /// 持久观测数据的读取
     async fn dashboard_runtime_slots(
         &self,
         _observed_at: DateTime<Utc>,
@@ -421,8 +421,8 @@ pub trait ObservabilityStore: Send + Sync {
         filter: UsageFilter,
     ) -> AdminStoreResult<Vec<RequestMetricPoint>>;
 
-    /// 流式返回可由 Provider 重新校验的已计算费用事实，不保证顺序。
-    /// 查询及解码错误由流返回；调用方应逐条聚合，避免收集整个区间。
+    /// 流式返回可由 Provider 重新校验的已计算费用事实，不保证顺序
+    /// 查询及解码错误由流返回；调用方应逐条聚合，避免收集整个区间
     fn usage_calculated_billing_facts(
         &self,
         range: TimeRange,
@@ -449,7 +449,7 @@ pub trait ObservabilityStore: Send + Sync {
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage>;
 }
 
-/// Runtime settings 与管理员 API Key 写入。
+/// Runtime settings 与管理员 API Key 写入
 #[async_trait]
 pub trait SettingsStore: Send + Sync {
     async fn load_pricing(&self) -> AdminStoreResult<crate::model::pricing::StoredPricing>;
@@ -486,7 +486,7 @@ pub trait SettingsStore: Send + Sync {
     ) -> AdminStoreResult<AdminApiKeyMutation>;
 }
 
-/// 账号目录、运行态与分组所需的 Store 能力集合。
+/// 账号目录、运行态与分组所需的 Store 能力集合
 #[derive(Clone)]
 pub struct AdminAccountStorePorts {
     accounts: Arc<dyn AccountStore>,
@@ -512,9 +512,10 @@ impl AdminAccountStorePorts {
     }
 }
 
-/// 管理用例所需能力的封闭集合。
+/// 管理用例所需能力的封闭集合
 ///
-/// 字段保持私有，每个 getter 只交出一种明确能力。该类型不提供通用拆包入口。
+/// 字段保持私有，每个 getter 只交出一种明确能力
+/// 该类型不提供通用拆包入口
 #[derive(Clone)]
 pub struct AdminStorePorts {
     accounts: AdminAccountStorePorts,

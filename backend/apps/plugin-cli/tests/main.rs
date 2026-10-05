@@ -1,3 +1,5 @@
+//! 插件打包命令行的参数、归档校验与输出行为测试
+
 use std::{
     collections::BTreeMap,
     fs::{self, File},
