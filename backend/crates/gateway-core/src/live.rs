@@ -10,6 +10,7 @@ use std::fmt;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 
+use crate::account::scope::FrozenAccountScope;
 use crate::policy::ClientApiKeyId;
 
 /// sideband 中继在客户端与上游 WebSocket 之间搬运的帧。
@@ -57,6 +58,8 @@ pub enum LiveSidebandStyle {
 pub struct LiveSidebandRequest<'a> {
     pub call_id: &'a str,
     pub client_api_key_id: &'a ClientApiKeyId,
+    /// 本次认证冻结的账号范围与模型政策，重连也必须重新校验
+    pub account_scope: &'a FrozenAccountScope,
     pub style: LiveSidebandStyle,
     pub protocol_headers: Vec<(String, String)>,
     /// 客户端 offer 的 `Sec-WebSocket-Protocol`，原样透传给上游。
@@ -160,7 +163,7 @@ pub enum LiveGatewayErrorKind {
     CallNotFound,
     /// 该 call 已有 sideband 加入。
     CallBusy,
-    /// 调用方不是创建该 call 的 API Key。
+    /// 调用方不是创建该 call 的 API Key，或固定账号不在当前授权范围
     OwnerMismatch,
     /// call id 不满足上游标识约束。
     InvalidCallId,

@@ -1,3 +1,5 @@
+//! API 依赖边界、源码与测试目录约束
+
 use std::{fs, path::Path};
 
 #[test]
@@ -150,6 +152,7 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/openai/responses/websocket/mod.rs",
         "tests/openai/responses/websocket/protocol.rs",
         "tests/openai/live/mod.rs",
+        "tests/openai/live/websocket.rs",
         "tests/openai/router.rs",
         "tests/openai/search/mod.rs",
         "tests/openai/usage.rs",

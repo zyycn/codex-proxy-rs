@@ -1,3 +1,5 @@
+//! Provider 执行、传输和恢复契约的集成验证
+
 mod account_isolation;
 mod capacity;
 mod response_interrupt;
@@ -1005,7 +1007,10 @@ fn provider_with_affinity(
     provider_with_affinity_and_base_url(store, session_affinity, OFFICIAL_CODEX_BASE_URL.to_owned())
 }
 
-fn provider_with_base_url(store: &Arc<MemoryAccountStore>, base_url: String) -> Arc<CodexProvider> {
+pub(super) fn provider_with_base_url(
+    store: &Arc<MemoryAccountStore>,
+    base_url: String,
+) -> Arc<CodexProvider> {
     provider_with_base_url_and_retry_budget(
         store,
         base_url,
@@ -1150,7 +1155,7 @@ fn provider_and_quota_with_runtime_ports(
     (Arc::new(provider), quota, websocket_pool)
 }
 
-async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
+pub(super) async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
     create_account_with_enabled(store, id, true).await;
 }
 
@@ -1456,7 +1461,7 @@ impl ExtensionSetLease for TestExtensionLease {
     }
 }
 
-fn context_with_middleware(
+pub(super) fn context_with_middleware(
     request_id: &str,
     plan: Arc<dyn MiddlewarePlan>,
     disable_fast: bool,
@@ -1491,7 +1496,7 @@ fn context_with_middleware(
     )
 }
 
-fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
+pub(super) fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
     context_with_fast_policy(request_id, cancellation, false)
 }
 

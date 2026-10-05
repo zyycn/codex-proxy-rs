@@ -1,3 +1,7 @@
+//! Live HTTP 入参与鉴权验证
+
+mod websocket;
+
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -24,6 +28,7 @@ const LIVE_KEY: &str = "sk_live_test";
 #[derive(Clone, Default)]
 struct LiveCapture {
     captured: Arc<Mutex<Option<StartProviderExecution>>>,
+    gateway: Option<Arc<dyn gateway_core::live::LiveGateway>>,
 }
 
 impl LiveCapture {
@@ -38,6 +43,10 @@ impl LiveCapture {
 }
 
 impl ExecutionService for LiveCapture {
+    fn live_gateway(&self) -> Option<Arc<dyn gateway_core::live::LiveGateway>> {
+        self.gateway.clone()
+    }
+
     fn authenticate(
         &self,
         plaintext: &str,

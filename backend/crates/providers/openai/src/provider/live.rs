@@ -8,9 +8,10 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use gateway_core::account::scope::FrozenAccountScope;
 use gateway_core::engine::provider::{ProviderSelectionObservation, ProviderStream};
 use gateway_core::error::{ProviderError, ProviderErrorKind};
 use gateway_core::event::{
@@ -25,7 +26,6 @@ use gateway_core::operation::{ProviderHttpMethod, ProviderHttpRequest};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use secrecy::ExposeSecret;
-use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
 
@@ -69,7 +69,7 @@ impl LiveClaimError {
         match self {
             Self::Missing => "codex live call not found",
             Self::Busy => "codex live call already has a sideband connection",
-            Self::OwnerMismatch => "codex live call belongs to another API key",
+            Self::OwnerMismatch => "codex live call is outside the current API key scope",
             Self::Invalid => "invalid codex live call id",
         }
     }
@@ -77,8 +77,9 @@ impl LiveClaimError {
 
 struct LiveRegistryEntry {
     account_id: gateway_core::account::ProviderAccountId,
+    upstream_model: UpstreamModelId,
     client_api_key_id: ClientApiKeyId,
-    expires_at: Option<SystemTime>,
+    expires_at: Instant,
     claimed: bool,
 }
 
@@ -92,10 +93,8 @@ pub(crate) struct CodexLiveRegistry {
 }
 
 impl CodexLiveRegistry {
-    fn sweep_expired(entries: &mut HashMap<String, LiveRegistryEntry>, now: SystemTime) {
-        entries.retain(|_, entry| {
-            entry.claimed || entry.expires_at.is_none_or(|expires_at| expires_at > now)
-        });
+    fn sweep_expired(entries: &mut HashMap<String, LiveRegistryEntry>, now: Instant) {
+        entries.retain(|_, entry| entry.claimed || entry.expires_at > now);
     }
 
     /// 登记成功创建的通话；call id 非法时忽略。
@@ -104,18 +103,20 @@ impl CodexLiveRegistry {
         call_id: &str,
         account_id: gateway_core::account::ProviderAccountId,
         client_api_key_id: ClientApiKeyId,
+        upstream_model: UpstreamModelId,
     ) {
         if !is_valid_call_id(call_id) {
             return;
         }
         let mut entries = self.entries.lock().expect("codex live registry poisoned");
-        Self::sweep_expired(&mut entries, SystemTime::now());
+        Self::sweep_expired(&mut entries, Instant::now());
         entries.insert(
             call_id.to_owned(),
             LiveRegistryEntry {
                 account_id,
+                upstream_model,
                 client_api_key_id,
-                expires_at: Some(SystemTime::now() + LIVE_SESSION_TTL),
+                expires_at: Instant::now() + LIVE_SESSION_TTL,
                 claimed: false,
             },
         );
@@ -130,25 +131,27 @@ impl CodexLiveRegistry {
         &self,
         call_id: &str,
         client_api_key_id: &ClientApiKeyId,
+        account_scope: &FrozenAccountScope,
     ) -> Result<gateway_core::account::ProviderAccountId, LiveClaimError> {
         if !is_valid_call_id(call_id) {
             return Err(LiveClaimError::Invalid);
         }
         let mut entries = self.entries.lock().expect("codex live registry poisoned");
-        Self::sweep_expired(&mut entries, SystemTime::now());
+        Self::sweep_expired(&mut entries, Instant::now());
         let Some(entry) = entries.get_mut(call_id) else {
             return Err(LiveClaimError::Missing);
         };
         if entry.claimed {
             return Err(LiveClaimError::Busy);
         }
-        if &entry.client_api_key_id != client_api_key_id {
+        if &entry.client_api_key_id != client_api_key_id
+            || !account_scope.allows_model(&entry.account_id, entry.upstream_model.as_str())
+        {
             return Err(LiveClaimError::OwnerMismatch);
         }
         entry.claimed = true;
         // 认领期间暂停过期；guard 释放时恢复计时。guard 覆盖全部退出路径，
         // 不存在认领后无法回收的窗口。
-        entry.expires_at = Some(SystemTime::now() + LIVE_SESSION_TTL);
         Ok(entry.account_id.clone())
     }
 
@@ -157,7 +160,7 @@ impl CodexLiveRegistry {
         let mut entries = self.entries.lock().expect("codex live registry poisoned");
         if let Some(entry) = entries.get_mut(call_id) {
             entry.claimed = false;
-            entry.expires_at = Some(SystemTime::now() + LIVE_SESSION_TTL);
+            entry.expires_at = Instant::now() + LIVE_SESSION_TTL;
         }
     }
 
@@ -177,8 +180,8 @@ impl CodexLiveRegistry {
             return Err(LiveClaimError::Invalid);
         }
         let mut entries = self.entries.lock().expect("codex live registry poisoned");
-        Self::sweep_expired(&mut entries, SystemTime::now());
-        let Some(entry) = entries.get_mut(call_id) else {
+        Self::sweep_expired(&mut entries, Instant::now());
+        let Some(entry) = entries.get(call_id) else {
             return Err(LiveClaimError::Missing);
         };
         if &entry.client_api_key_id != client_api_key_id {
@@ -229,6 +232,12 @@ impl CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         }
+        let upstream_model = upstream_model.cloned().ok_or_else(|| {
+            provider_error(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+            )
+        })?;
         let selection_started_at = Instant::now();
         let lease = self
             .selector
@@ -236,7 +245,7 @@ impl CodexProvider {
                 request_url: &self.live_calls_url,
                 attempt: &context,
                 session_affinity: None,
-                upstream_model: upstream_model.map(UpstreamModelId::as_str),
+                upstream_model: Some(upstream_model.as_str()),
                 // realtime calls 端点绑定 ChatGPT OAuth 身份；在候选阶段就排除
                 // API Key 账号，避免混合账号池选中不支持语音的账号后必然失败。
                 requires_oauth: true,
@@ -263,7 +272,7 @@ impl CodexProvider {
             .execute_middleware(
                 operation,
                 provider_kind,
-                None,
+                Some(upstream_model.as_str().to_owned()),
                 account_id,
                 Box::new(move |operation, middleware_headers| {
                     Box::pin(async move {
@@ -271,6 +280,7 @@ impl CodexProvider {
                             .execute_selected_live_call(
                                 terminal_context,
                                 operation,
+                                upstream_model,
                                 middleware_headers,
                                 lease,
                                 account_selection_wait_ms,
@@ -286,6 +296,7 @@ impl CodexProvider {
         self: Arc<Self>,
         context: AttemptContext,
         operation: Operation,
+        upstream_model: UpstreamModelId,
         middleware_headers: Vec<MiddlewareHeader>,
         lease: Arc<CodexCredentialLease>,
         account_selection_wait_ms: u64,
@@ -299,8 +310,9 @@ impl CodexProvider {
         let allows_account_state_mutation = lease.allows_account_state_mutation();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
-        let metadata = ProviderCallMetadata::for_provider_endpoint(
+        let metadata = ProviderCallMetadata::new(
             provider_kind,
+            upstream_model.clone(),
             lease.account_id().clone(),
             UpstreamTransport::new(HTTP_JSON_TRANSPORT).map_err(|_| {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
@@ -327,7 +339,6 @@ impl CodexProvider {
                 )
             })
             .collect::<Vec<_>>();
-        let requested_model = live_requested_model(request.payload().body());
         let events = cold_live_call_stream(ColdLiveCall {
             client: self
                 .client_for_request(&context)?
@@ -342,7 +353,7 @@ impl CodexProvider {
             endpoint_query: request.query().map(str::to_owned),
             content_type,
             protocol_headers,
-            requested_model,
+            upstream_model,
             body: request.payload().body().clone(),
             context,
             selector: Arc::clone(&self.selector),
@@ -368,7 +379,7 @@ struct ColdLiveCall {
     endpoint_query: Option<String>,
     content_type: Option<String>,
     protocol_headers: Vec<(String, String)>,
-    requested_model: Option<String>,
+    upstream_model: UpstreamModelId,
     body: Bytes,
     context: AttemptContext,
     selector: Arc<CodexCredentialSelector>,
@@ -376,22 +387,8 @@ struct ColdLiveCall {
     lease: Arc<CodexCredentialLease>,
 }
 
-/// 从标准化后的引导请求提取模型名；请求体恒为 `{"sdp": …, "session"?: …}` JSON。
-fn live_requested_model(body: &[u8]) -> Option<String> {
-    let payload = serde_json::from_slice::<Value>(body).ok()?;
-    let extract = |value: Option<&Value>| -> Option<String> {
-        value
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|model| !model.is_empty())
-            .map(str::to_owned)
-    };
-    extract(payload.pointer("/session/model")).or_else(|| extract(payload.get("model")))
-}
-
 fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
     Box::pin(async_stream::try_stream! {
-        let requested_model = request.requested_model.clone();
         let allows_account_state_mutation = request.lease.allows_account_state_mutation();
         let failure_context = OpenAiFailureContext {
             client: &request.client,
@@ -488,11 +485,12 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
                 &call_id,
                 active_account.id().clone(),
                 request.context.client_api_key_ref().clone(),
+                request.upstream_model.clone(),
             );
         } else {
             tracing::warn!(
                 request_id = %request_id,
-                model = requested_model.as_deref().unwrap_or_default(),
+                model = request.upstream_model.as_str(),
                 "codex live call response is missing a parseable Location header"
             );
         }
@@ -624,16 +622,6 @@ fn map_live_http_error(error: CodexClientError) -> LiveGatewayError {
     }
 }
 
-fn host_header(endpoint: &str) -> (String, String) {
-    let url = reqwest::Url::parse(endpoint).expect("live sideband endpoint is a valid URL");
-    let host = url.host_str().unwrap_or_default();
-    let authority = match url.port() {
-        Some(port) => format!("{host}:{port}"),
-        None => host.to_owned(),
-    };
-    ("host".to_owned(), authority)
-}
-
 impl LiveGateway for CodexLiveGateway {
     fn open_sideband<'a>(
         &'a self,
@@ -642,16 +630,25 @@ impl LiveGateway for CodexLiveGateway {
         Box::pin(async move {
             let account_id = self
                 .registry
-                .claim(request.call_id, request.client_api_key_id)
+                .claim(
+                    request.call_id,
+                    request.client_api_key_id,
+                    request.account_scope,
+                )
                 .map_err(|claim_error| {
                     LiveGatewayError::new(claim_error.kind(), claim_error.message())
                 })?;
             // 认领与 guard 构造之间没有 await 点，取消不会留下孤儿认领。
             let claim = LiveCallClaim::new(Arc::clone(&self.registry), request.call_id.to_owned());
             let (account, authorization) = self.load_pinned_credential(&account_id).await?;
+            if !account.enabled() {
+                return Err(LiveGatewayError::new(
+                    LiveGatewayErrorKind::OwnerMismatch,
+                    "codex live pinned account is disabled",
+                ));
+            }
             let endpoint = Self::sideband_endpoint(request.style, request.call_id);
-            let mut headers = vec![host_header(&endpoint)];
-            headers.push(("authorization".to_owned(), authorization));
+            let mut headers = vec![("authorization".to_owned(), authorization)];
             if let Some(account_id) = account.upstream_account_id() {
                 headers.push(("chatgpt-account-id".to_owned(), account_id.to_owned()));
             }

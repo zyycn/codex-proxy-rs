@@ -437,7 +437,8 @@ sideband 传输中断只释放占用，绑定保留至一小时过期，客户�
 限制：
 
 - 引导与 sideband 只使用 OAuth 凭据账号；API Key 类账号不在语音调度范围。
-- 每次引导与每次 sideband 都按当时可用账号独立决策；额度耗尽、冷却或账号范围不满足时按既有调度错误返回。
+- 引导按当前账号范围、模型政策、额度与冷却状态选取账号；sideband 固定使用创建通话的账号，每次连接重新检查当前授权范围、模型政策与账号启用状态，失权时返回 `403`，不会切换账号
+- 已连接的 sideband 不随权限变更自动断开；仍有效的创建方 Client Key 可调用 hangup 结束通话
 - 标准实时 WebSocket（`GET /v1/realtime?model=…`）、realtime client secrets、legacy sessions、
   transcription/translation 会话与 SIP 控制返回 `501 realtime_capability_not_supported`。
 

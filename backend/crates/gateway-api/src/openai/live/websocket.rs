@@ -4,6 +4,8 @@
 //! 本模块只做帧形态映射（Text/Binary 双向、Ping 本地应答、Close 投影），
 //! 不解释帧内容。
 
+use std::time::Duration;
+
 use axum::{
     extract::{
         State, WebSocketUpgrade,
@@ -28,6 +30,8 @@ use crate::{
         },
     },
 };
+
+const SIDEBAND_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) async fn sideband(
     State(state): State<ApiState>,
@@ -119,24 +123,28 @@ async fn open_sideband(
         Err(_) => return runtime_unavailable_response().into_response(),
     };
     let cancellation = service.lifecycle().cancellation();
-    let relay = match gateway
-        .open_sideband(LiveSidebandRequest {
-            call_id: &call_id,
-            client_api_key_id: client.policy().key_id(),
-            style,
-            protocol_headers: filter_protocol_headers(&headers)
-                .into_iter()
-                .map(|header| {
-                    (
-                        header.name().to_ascii_lowercase(),
-                        String::from_utf8_lossy(header.value()).into_owned(),
-                    )
-                })
-                .collect(),
-            subprotocols: offered_subprotocols(&headers),
-        })
-        .await
-    {
+    let opening = gateway.open_sideband(LiveSidebandRequest {
+        call_id: &call_id,
+        client_api_key_id: client.policy().key_id(),
+        account_scope: client.policy().account_scope(),
+        style,
+        protocol_headers: filter_protocol_headers(&headers)
+            .into_iter()
+            .map(|header| {
+                (
+                    header.name().to_ascii_lowercase(),
+                    String::from_utf8_lossy(header.value()).into_owned(),
+                )
+            })
+            .collect(),
+        subprotocols: offered_subprotocols(&headers),
+    });
+    let result = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return runtime_unavailable_response().into_response(),
+        result = opening => result,
+    };
+    let relay = match result {
         Ok(relay) => relay,
         Err(error) => {
             return super::http::live_gateway_error_response(LiveErrorShape::Realtime, &error);
@@ -189,11 +197,20 @@ async fn relay_sideband(
 ) {
     // guard 覆盖整个中继生命周期，drain 等待其释放。
     let _connection_guard = connection_guard;
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => {},
+        () = relay_frames(&mut client, &mut relay) => {},
+    }
+    // 写入或关闭被取消时直接丢弃传输端，避免清理再次阻塞 guard 释放
+    drop(relay);
+    drop(_connection_guard);
+}
+
+async fn relay_frames(client: &mut WebSocket, relay: &mut LiveRelay) {
     let mut close_forwarded = false;
     loop {
         tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => break,
             client_message = client.recv() => match client_message {
                 Some(Ok(message)) => {
                     match message {
@@ -224,8 +241,7 @@ async fn relay_sideband(
                                 code: frame.code,
                                 reason: frame.reason.to_string(),
                             });
-                            let _ = relay.send_frame(LiveFrame::Close(close)).await;
-                            let _ = relay.close(None).await;
+                            let _ = tokio::time::timeout(SIDEBAND_CLOSE_TIMEOUT, relay.close(close)).await;
                             return;
                         }
                     }
@@ -254,10 +270,10 @@ async fn relay_sideband(
                 }
                 Some(LiveFrame::Pong(_)) => {}
                 Some(LiveFrame::Close(close)) => {
-                    let _ = client.send(Message::Close(close.map(|close| CloseFrame {
+                    let _ = tokio::time::timeout(SIDEBAND_CLOSE_TIMEOUT, client.send(Message::Close(close.map(|close| CloseFrame {
                         code: close.code,
                         reason: close.reason.into(),
-                    }))).await;
+                    })))).await;
                     close_forwarded = true;
                     break;
                 }
@@ -267,15 +283,14 @@ async fn relay_sideband(
     }
     if !close_forwarded {
         // 异常中断按观测到的方向投影为正常关闭；原因不透出给客户端。
-        let _ = client
-            .send(Message::Close(Some(CloseFrame {
+        let _ = tokio::time::timeout(
+            SIDEBAND_CLOSE_TIMEOUT,
+            client.send(Message::Close(Some(CloseFrame {
                 code: 1000,
                 reason: "".into(),
-            })))
-            .await;
+            }))),
+        )
+        .await;
     }
-    // 先归还 call 认领（随 relay 丢弃），再释放连接计数。
-    let _ = relay.close(None).await;
-    drop(relay);
-    drop(_connection_guard);
+    let _ = tokio::time::timeout(SIDEBAND_CLOSE_TIMEOUT, relay.close(None)).await;
 }

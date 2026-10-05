@@ -25,13 +25,28 @@ pub(crate) struct CodexLiveSideband {
 
 /// 以给定 endpoint 与业务头拨号 sideband 上游。
 ///
-/// `business_headers` 需已包含 Host、认证、账号与客户端协议头；子协议
+/// `business_headers` 包含认证、账号与客户端协议头；标准握手字段由本层生成，子协议
 /// offer 由调用方以 `sec-websocket-protocol` 头显式携带。
 pub(crate) async fn connect_live_sideband(
     endpoint: String,
-    business_headers: Vec<(String, String)>,
+    mut business_headers: Vec<(String, String)>,
     outbound_proxy: Option<gateway_core::account::OutboundProxy>,
 ) -> Result<CodexLiveSideband, CodexWebSocketExchangeError> {
+    use tungstenite::client::IntoClientRequest;
+
+    // 业务头不包含 RFC 6455 握手字段，由底层客户端生成本次连接的随机 key
+    let request = endpoint.as_str().into_client_request()?;
+    for (name, value) in request.headers() {
+        if !business_headers
+            .iter()
+            .any(|(header, _)| header.eq_ignore_ascii_case(name.as_str()))
+        {
+            business_headers.push((
+                name.to_string(),
+                String::from_utf8_lossy(value.as_bytes()).into_owned(),
+            ));
+        }
+    }
     let connection = CodexWebSocketConnection {
         endpoint,
         headers: business_headers,

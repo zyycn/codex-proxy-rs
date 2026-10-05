@@ -1,3 +1,5 @@
+//! OpenAI Bundle 装配与管理能力契约验证
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
@@ -1544,6 +1546,21 @@ fn initialized_account_scope(account_id: &str) -> Arc<FrozenAccountScope> {
         )]))),
         ClientRoutingScope::all_accounts(),
     ))
+}
+
+pub(crate) async fn initialized_test_provider(
+    accounts: Arc<MemoryAccountStore>,
+    base_url: String,
+) -> Arc<dyn gateway_core::engine::provider::Provider> {
+    let mut config = valid_config();
+    config.config.api.base_url = base_url;
+    provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(accounts, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("initialized provider")
+    .core_provider()
 }
 
 fn provider_ports() -> ProviderStorePorts {
