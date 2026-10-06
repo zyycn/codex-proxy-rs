@@ -87,6 +87,21 @@ impl MemoryAccountStore {
         stored.credential = CodexCredentialCodec::encode_complete(data).unwrap();
     }
 
+    pub(crate) fn set_websocket_max_age(&self, id: &str, max_age: u64) {
+        use provider_openai::credential::{CodexCredentialCodec, CodexCredentialData};
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .unwrap();
+        let mut data = CodexCredentialCodec::decode_complete(&stored.credential).unwrap();
+        let max_age = std::num::NonZeroU64::new(max_age);
+        match &mut data {
+            CodexCredentialData::OAuth(data) => data.websocket_max_age_ms = max_age,
+            CodexCredentialData::ApiKey(data) => data.websocket_max_age_ms = max_age,
+        }
+        stored.credential = CodexCredentialCodec::encode_complete(data).unwrap();
+    }
+
     pub(crate) async fn seed_api_key(
         &self,
         id: &str,
@@ -101,6 +116,7 @@ impl MemoryAccountStore {
                     base_url,
                     api_key: "sk-api-test-only".to_owned(),
                     transport,
+                    websocket_max_age_ms: None,
                 },
             ),
         )

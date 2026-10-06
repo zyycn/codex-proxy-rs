@@ -791,6 +791,7 @@ async fn scheduled_refresh_preserves_the_stored_token_set_when_rotation_fields_a
         account_id,
         provider_openai::credential::ResponsesTransport::Http,
     );
+    store.set_websocket_max_age(account_id, 30_001);
     service.refresh_due().await.expect("refresh cycle");
 
     let account = store.account(account_id).expect("refreshed account");
@@ -800,6 +801,10 @@ async fn scheduled_refresh_preserves_the_stored_token_set_when_rotation_fields_a
         .await
         .expect("refreshed credential");
     let runtime = CodexCredentialCodec::decode(&loaded.credential).expect("runtime credential");
+    assert_eq!(
+        runtime.websocket_max_age_ms.map(std::num::NonZeroU64::get),
+        Some(30_001)
+    );
     assert_eq!(
         runtime.transport,
         provider_openai::credential::ResponsesTransport::Http
@@ -817,6 +822,47 @@ async fn scheduled_refresh_preserves_the_stored_token_set_when_rotation_fields_a
             .map(SecretString::expose_secret),
         Some(expected_refresh_token.as_str())
     );
+}
+
+#[tokio::test]
+async fn scheduled_refresh_preserves_websocket_max_age_after_token_rotation() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let refresher = SingleUseRefresher::new();
+    let service = refresh_service(
+        &store,
+        Arc::clone(&refresher),
+        MutableRuntimePolicy::new(Duration::from_secs(300)),
+    );
+    let account_id = "acct_ws_age_refresh";
+    seed_refreshable_account(
+        &store,
+        account_id,
+        SystemTime::now() + Duration::from_secs(120),
+        None,
+    )
+    .await;
+    store.set_websocket_max_age(account_id, 30_001);
+    service.refresh_due().await.unwrap();
+    let account = store.account(account_id).unwrap();
+    let loaded = store
+        .load_credential(account.id(), account.revision())
+        .await
+        .unwrap();
+    let runtime = CodexCredentialCodec::decode(&loaded.credential).unwrap();
+    assert_eq!(
+        runtime.websocket_max_age_ms.map(std::num::NonZeroU64::get),
+        Some(30_001)
+    );
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .unwrap()
+            .access_token
+            .expose_secret(),
+        "refreshed-access-token"
+    );
+    assert_eq!(refresher.calls(), 1);
 }
 
 #[tokio::test]

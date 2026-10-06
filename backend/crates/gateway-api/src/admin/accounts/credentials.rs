@@ -259,13 +259,18 @@ impl UpdateAccountRequest {
     }
 }
 
-/// 编辑 OpenAI 账号的连接设置；OAuth 仅接受传输方式
+/// 编辑 OpenAI 账号的连接设置；OAuth 接受传输方式与可选 WS 复用寿命
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountConnectionUpdateRequest {
     pub base_url: Option<String>,
     pub transport: String,
     pub api_key: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::wire::deserialize_optional_nullable_limit"
+    )]
+    pub websocket_max_age_ms: Option<Option<u64>>,
 }
 
 impl AccountConnectionUpdateRequest {
@@ -275,6 +280,9 @@ impl AccountConnectionUpdateRequest {
         }
         if !matches!(self.transport.as_str(), "http" | "prefer_websocket") {
             return Err(WireValidationError::new("connection.transport"));
+        }
+        if self.websocket_max_age_ms == Some(Some(0)) {
+            return Err(WireValidationError::new("connection.websocketMaxAgeMs"));
         }
         if self.api_key.as_ref().is_some_and(|key| {
             key.is_empty()
@@ -294,6 +302,12 @@ impl AccountConnectionUpdateRequest {
         }
         if let Some(key) = self.api_key {
             material.insert("api_key".to_owned(), Value::String(key));
+        }
+        if let Some(max_age) = self.websocket_max_age_ms {
+            material.insert(
+                "websocket_max_age_ms".to_owned(),
+                serde_json::json!(max_age),
+            );
         }
         ProviderDocument::new(OpaqueProviderData::new(material))
     }

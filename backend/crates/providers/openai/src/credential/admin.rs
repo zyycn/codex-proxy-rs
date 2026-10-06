@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -140,6 +141,7 @@ struct ParsedOAuthAuthentication {
     access_token: Option<String>,
     refresh_token: Option<String>,
     id_token: Option<String>,
+    websocket_max_age_ms: Option<NonZeroU64>,
 }
 
 impl fmt::Debug for ParsedOAuthAuthentication {
@@ -241,6 +243,11 @@ struct CodexCprExportCommon {
     updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     outbound_proxy_url: Option<String>,
+    #[serde(
+        rename = "websocket_max_age_ms",
+        skip_serializing_if = "Option::is_none"
+    )]
+    websocket_max_age_ms: Option<NonZeroU64>,
 }
 
 #[derive(Serialize)]
@@ -456,7 +463,10 @@ impl CodexCredentialAdmin {
             base_url: String,
             transport: ResponsesTransport,
             api_key: Option<String>,
+            #[serde(default)]
+            websocket_max_age_ms: Option<std::num::NonZeroU64>,
         }
+        let update_websocket_max_age = material.get("websocket_max_age_ms").is_some();
         let rotation: Rotation = serde_json::from_value(material)
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
         let CodexCredentialData::ApiKey(mut data) =
@@ -467,6 +477,9 @@ impl CodexCredentialAdmin {
         };
         data.base_url = rotation.base_url;
         data.transport = rotation.transport;
+        if update_websocket_max_age {
+            data.websocket_max_age_ms = rotation.websocket_max_age_ms;
+        }
         if let Some(api_key) = rotation.api_key {
             data.api_key = api_key;
         }
@@ -506,14 +519,21 @@ impl CodexCredentialAdmin {
         #[serde(deny_unknown_fields)]
         struct Connection {
             transport: ResponsesTransport,
+            #[serde(default)]
+            websocket_max_age_ms: Option<std::num::NonZeroU64>,
         }
+        let update_websocket_max_age = material.get("websocket_max_age_ms").is_some();
         let connection: Connection = serde_json::from_value(material)
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
-        data.oauth_mut()
-            .ok_or(CodexCredentialAdminError::InvalidCredential)?
-            .transport = connection.transport;
+        let oauth = data
+            .oauth_mut()
+            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+        oauth.transport = connection.transport;
+        if update_websocket_max_age {
+            oauth.websocket_max_age_ms = connection.websocket_max_age_ms;
+        }
         let credential = CodexCredentialCodec::encode_complete(data)
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
         let profile = ProviderAccountUpdate {
@@ -686,6 +706,10 @@ impl CodexCredentialAdmin {
                 outbound_proxy_url: account
                     .outbound_proxy()
                     .map(|proxy| proxy.expose_url().to_owned()),
+                websocket_max_age_ms: match &data {
+                    CodexCredentialData::OAuth(data) => data.websocket_max_age_ms,
+                    CodexCredentialData::ApiKey(data) => data.websocket_max_age_ms,
+                },
             };
             let exported = match data {
                 CodexCredentialData::ApiKey(data) => {
@@ -1120,7 +1144,7 @@ impl CodexCredentialAdminService {
                         .or(access_metadata.chatgpt_account_id),
                 }
             };
-            let prepared =
+            let mut prepared =
                 CodexCredentialAdmin.prepare_unresolved_oauth(UnresolvedCodexOAuthCredential {
                     account_id,
                     name: candidate
@@ -1137,6 +1161,15 @@ impl CodexCredentialAdminService {
                     next_refresh_at: None,
                     enabled: true,
                 })?;
+            if let Some(max_age) = authentication.websocket_max_age_ms {
+                let mut data = CodexCredentialCodec::decode_complete(&prepared.credential)
+                    .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+                data.oauth_mut()
+                    .ok_or(CodexCredentialAdminError::InvalidCredential)?
+                    .websocket_max_age_ms = Some(max_age);
+                prepared.credential = CodexCredentialCodec::encode_complete(data)
+                    .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+            }
             accounts.push(NewProviderAccount {
                 model_access: candidate.model_access,
                 account: prepared
@@ -1442,6 +1475,9 @@ fn parse_oauth_import_tokens(
         access_token,
         refresh_token,
         id_token,
+        websocket_max_age_ms: parse_import_websocket_max_age(
+            value.get("credentials").unwrap_or(value),
+        )?,
     })
 }
 
@@ -1547,11 +1583,23 @@ fn parse_api_key_import(value: &Value) -> Result<ApiKeyCredentialData, CodexCred
             .transpose()
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?
             .unwrap_or_default(),
+        websocket_max_age_ms: parse_import_websocket_max_age(credentials)?,
     };
     if !data.validate() {
         return Err(CodexCredentialAdminError::InvalidCredential);
     }
     Ok(data)
+}
+
+fn parse_import_websocket_max_age(
+    value: &Value,
+) -> Result<Option<NonZeroU64>, CodexCredentialAdminError> {
+    value
+        .get("websocket_max_age_ms")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .map_err(|_| CodexCredentialAdminError::InvalidInput)
+        .map(Option::flatten)
 }
 
 fn external_option_enabled(value: &Value) -> bool {

@@ -204,6 +204,43 @@ async fn connection_update_requires_admin_and_validates_before_calling_the_servi
 }
 
 #[tokio::test]
+async fn websocket_max_age_connection_update_validates_at_the_http_boundary() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (value, expected) in [
+        (serde_json::json!(null), StatusCode::SERVICE_UNAVAILABLE),
+        (serde_json::json!(30_001), StatusCode::SERVICE_UNAVAILABLE),
+        (serde_json::json!(0), StatusCode::BAD_REQUEST),
+        (serde_json::json!(-1), StatusCode::UNPROCESSABLE_ENTITY),
+        (serde_json::json!(1.5), StatusCode::UNPROCESSABLE_ENTITY),
+        (serde_json::json!("30000"), StatusCode::UNPROCESSABLE_ENTITY),
+        (serde_json::json!(true), StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        let input = serde_json::json!({
+            "accountId":"acct_age", "enabled":true, "concurrencyLimit":null, "weight":1, "groupIds":[],
+            "connection":{"transport":"prefer_websocket", "websocketMaxAgeMs":value}
+        });
+        let response = admin::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/accounts/update")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, "cpr_session=valid-session")
+                    .header("x-request-id", "req_websocket_max_age_update")
+                    .body(Body::from(input.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 夹具没有凭据 Store，合法字段应进入服务并返回不可用，非法值在调用前拒绝
+        assert_eq!(response.status(), expected, "websocketMaxAgeMs={value}");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
+}
+
+#[tokio::test]
 async fn personal_info_requires_admin_and_a_valid_account_query() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");

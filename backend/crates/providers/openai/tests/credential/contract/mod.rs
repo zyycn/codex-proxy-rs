@@ -2274,3 +2274,33 @@ fn legacy_oauth_defaults_to_websocket_and_reimport_preserves_http() {
         ResponsesTransport::Http
     );
 }
+
+#[test]
+fn credential_identity_reimport_preserves_omitted_websocket_max_age_for_both_kinds() {
+    use gateway_core::account::PlaintextCredential;
+    for existing in [
+        json!({"schema_version":1, "installation_id":"00000000-0000-4000-8000-000000000001", "access_token":"synthetic-old-access", "cookies":[], "websocket_max_age_ms":30_001}),
+        json!({"schema_version":1, "installation_id":"00000000-0000-4000-8000-000000000001", "base_url":"https://example.invalid/v1", "api_key":"synthetic-key", "websocket_max_age_ms":30_001}),
+    ] {
+        let mut incoming = existing.as_object().unwrap().clone();
+        incoming.remove("websocket_max_age_ms");
+        incoming.insert(
+            "installation_id".to_owned(),
+            json!("00000000-0000-4000-8000-000000000002"),
+        );
+        let preserved = CodexCredentialCodec::preserve_installation_id(
+            &PlaintextCredential::new(incoming),
+            &PlaintextCredential::new(existing.as_object().unwrap().clone()),
+        )
+        .unwrap();
+        let runtime = CodexCredentialCodec::decode(&preserved).unwrap();
+        assert_eq!(
+            runtime.websocket_max_age_ms.map(std::num::NonZeroU64::get),
+            Some(30_001)
+        );
+        assert_eq!(
+            runtime.installation_id,
+            "00000000-0000-4000-8000-000000000001"
+        );
+    }
+}

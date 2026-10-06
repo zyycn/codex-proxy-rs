@@ -453,6 +453,68 @@ async fn repeated_reauthorization_derives_the_same_surface_id_for_one_account() 
 }
 
 #[tokio::test]
+async fn reauthorization_preserves_websocket_max_age_on_the_current_credential() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_ws_age_reauth".to_owned(),
+            name: "WS age reauthorization".to_owned(),
+            secret: secret("synthetic-reauth-access"),
+            verified_account: account_profile("synthetic-reauth-user"),
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .await;
+    store.set_websocket_max_age("acct_ws_age_reauth", 30_001);
+    let service = CodexOAuthAdminService::new(
+        Arc::new(PendingStore::default()),
+        Arc::new(Exchanger {
+            id_token: id_token(serde_json::json!({"email":"test@example.invalid"})),
+        }),
+        store,
+        CodexCredentialAdmin,
+        profile(),
+    );
+    let started = service
+        .start_authorization(StartCodexOAuthAuthorization {
+            mutation: reauthorization_mutation(
+                ProviderAccountId::new("acct_ws_age_reauth").unwrap(),
+                "req_age_reauth",
+            ),
+        })
+        .await
+        .unwrap();
+    let outer = Url::parse(&started.authorization_url).unwrap();
+    let inner = outer
+        .query_pairs()
+        .find_map(|(key, value)| (key == "authorize_url").then(|| value.into_owned()))
+        .unwrap();
+    let inner = Url::parse(&inner).unwrap();
+    let state = inner
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .unwrap();
+    let completed = service
+        .complete_authorization(CompleteCodexOAuthAuthorization {
+            owner_ref: "test-owner".to_owned(),
+            flow_id: started.flow_id,
+            callback_url: SecretString::from(format!(
+                "http://127.0.0.1:1455/auth/callback?code=synthetic-code&state={state}"
+            )),
+        })
+        .await
+        .unwrap();
+    let CompletedCodexOAuthCredential::Reauthorize(rotation) = completed.credential else {
+        panic!("reauthorization should prepare a rotation")
+    };
+    let runtime = CodexCredentialCodec::decode(rotation.credential.credential()).unwrap();
+    assert_eq!(
+        runtime.websocket_max_age_ms.map(std::num::NonZeroU64::get),
+        Some(30_001)
+    );
+}
+
+#[tokio::test]
 async fn first_exchange_persists_the_installation_id_without_reusing_it_as_the_surface_id() {
     let (credential, pending_installation_id, surface_stable_id) = complete(id_token(
         serde_json::json!({ "email": "identity@example.com" }),

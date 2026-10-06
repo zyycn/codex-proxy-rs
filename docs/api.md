@@ -912,12 +912,22 @@ sub2api 的 `credentials.model_mapping` 不转换为本项目的账号模型限�
 
 `connection.transport` 支持 `http`、`prefer_websocket`。省略 `connection` 时只更新账号设置；
 省略 `connection.apiKey` 保留当前密钥，空字符串无效。
-OpenAI OAuth 账号只接受 `connection: { transport }`，不接受 `baseUrl`、`apiKey` 或 OAuth token。
+OpenAI OAuth 账号接受 `connection: { transport, websocketMaxAgeMs? }`，不接受 `baseUrl`、`apiKey` 或 OAuth token。
 连接设置不能修改账号 ID、Provider 或认证类型，也不接受通用凭据文档。
 凭据与设置在同一事务中保存，任一校验或持久化失败均不落库。
 `GET /api/admin/accounts/detail` 对 API Key 账号额外返回 `credentialConfiguration: { base_url, transport }`；
 OAuth 账号返回 `credentialConfiguration: { transport }`。响应不回显密钥或 token；不适用的账号省略该字段。
 更新会推进凭据 revision 并失效目录与连接；旧版本会话不可静默续接到新上游
+
+OpenAI OAuth 和 API Key 账号均可设置 `connection.websocketMaxAgeMs`，取值为正整数毫秒，
+省略保留当前值，`null` 清除账号覆盖，0、负数和非整数无效。
+配置后详情的 `credentialConfiguration` 包含 `websocket_max_age_ms`，未配置时省略该键。
+原生 credential、CPR 导出和 API Key 文件导入使用同名 snake_case 字段，凭据刷新与重新授权保留现有覆盖
+
+未设置时沿用全局 `openai.ws_pool.max_age_ms`，有效上限取全局与账号值的较小值。
+复用前、响应完成后和空闲维护时回收超龄连接，不因寿命限制中断正在进行的响应。
+连接内续接状态随连接回收失效，客户端按既有 `previous_response_not_found` 合同恢复完整历史，
+网关不会因此自动重放请求。该设置不能延长出站代理的物理连接寿命
 
 OAuth start 使用：
 

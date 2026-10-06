@@ -146,7 +146,14 @@ pub(crate) async fn prepare_response_create_request_with_pool(
         | WebSocketContinuationRequirement::Persisted { .. }
         | WebSocketContinuationRequirement::ExternalUnknown { .. } => None,
     };
-    match pool.acquire(&key, required_response_id).await {
+    match pool
+        .acquire(
+            &key,
+            required_response_id,
+            request.connection().websocket_max_age_limit,
+        )
+        .await
+    {
         WebSocketPoolAcquire::Reused { connection, lease } => {
             if let WebSocketContinuationRequirement::ConnectionLocal { response_id } =
                 request.continuation()
@@ -487,6 +494,7 @@ async fn connect_websocket_connection(
             metadata: websocket_connection_metadata(&response),
             continuation: WebSocketContinuationState::default(),
             created_at: tokio::time::Instant::now(),
+            websocket_max_age_limit: connection.websocket_max_age_limit,
         },
         started_at.elapsed(),
     ))
@@ -597,6 +605,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         metadata,
         continuation,
         created_at,
+        websocket_max_age_limit,
     } = connection;
     trace.record("upstream.connection", serde_json::json!({
         "connectionId": websocket.connection_id().to_string(), "reused": reused,
@@ -632,6 +641,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         lease,
         created_at,
         continuation,
+        websocket_max_age_limit,
     });
     let mut exchange = stream_websocket_response(
         websocket,

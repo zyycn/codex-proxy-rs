@@ -721,6 +721,45 @@ mod actions {
     }
 
     #[test]
+    fn websocket_max_age_wire_preserves_omission_null_and_positive_milliseconds() {
+        let base = json!({
+            "accountId":"acct_age", "enabled":true, "concurrencyLimit":null, "weight":1, "groupIds":[],
+            "connection":{"transport":"prefer_websocket"}
+        });
+        let omitted: UpdateAccountRequest = serde_json::from_value(base.clone()).unwrap();
+        omitted.validate().unwrap();
+        assert_eq!(omitted.connection.unwrap().websocket_max_age_ms, None);
+        for (value, expected) in [
+            (json!(null), Some(None)),
+            (json!(30_001), Some(Some(30_001))),
+        ] {
+            let mut body = base.clone();
+            body["connection"]["websocketMaxAgeMs"] = value;
+            let update: UpdateAccountRequest = serde_json::from_value(body).unwrap();
+            update.validate().unwrap();
+            assert_eq!(update.connection.unwrap().websocket_max_age_ms, expected);
+        }
+    }
+
+    #[test]
+    fn websocket_max_age_wire_rejects_zero_negative_fractional_and_non_numeric_values() {
+        let base = json!({
+            "accountId":"acct_age", "enabled":true, "concurrencyLimit":null, "weight":1, "groupIds":[],
+            "connection":{"transport":"prefer_websocket", "websocketMaxAgeMs":0}
+        });
+        let zero: UpdateAccountRequest = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(
+            zero.validate().unwrap_err().field(),
+            "connection.websocketMaxAgeMs"
+        );
+        for value in [json!(-1), json!(1.5), json!("30000"), json!(true)] {
+            let mut body = base.clone();
+            body["connection"]["websocketMaxAgeMs"] = value;
+            assert!(serde_json::from_value::<UpdateAccountRequest>(body).is_err());
+        }
+    }
+
+    #[test]
     fn credential_recovery_requests_should_not_accept_client_revision_fences() {
         let authorization: StartAccountAuthorizationRequest = serde_json::from_value(json!({
             "provider": "openai",

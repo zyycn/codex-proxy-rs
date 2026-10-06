@@ -904,6 +904,9 @@ impl CodexProvider {
                 location,
             );
         }
+        upstream_request.websocket_max_age_limit = lease
+            .websocket_max_age_ms()
+            .map(|age| Duration::from_millis(age.get()));
         let requirement = transport_requirement(&upstream_request);
         let http_only = lease.transport() == crate::credential::ResponsesTransport::Http;
         if http_only && requirement.requires_websocket() {

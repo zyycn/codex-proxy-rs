@@ -1,6 +1,6 @@
 //! Responses WebSocket 请求与续接模型
 
-use std::fmt;
+use std::{fmt, time::Duration};
 
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, TransportRequirement, transport_requirement,
@@ -11,11 +11,12 @@ use crate::transport::protocol::responses::{
 pub struct CodexWebSocketConnection {
     pub(crate) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(crate) outbound_proxy: Option<gateway_core::account::OutboundProxy>,
+    pub(crate) websocket_max_age_limit: Option<Duration>,
     pub(super) endpoint: String,
     pub(super) headers: Vec<(String, String)>,
 }
 
-// 请求预算不是连接身份；连接池复用不能由请求局部状态决定
+// 请求预算和复用寿命不是连接身份；寿命更新应收紧已有连接而非另开池通道
 impl PartialEq for CodexWebSocketConnection {
     fn eq(&self, other: &Self) -> bool {
         self.endpoint == other.endpoint
@@ -127,6 +128,7 @@ impl CodexWebSocketConnection {
             headers,
             outbound_proxy: None,
             connection_budget: None,
+            websocket_max_age_limit: None,
         }
     }
 

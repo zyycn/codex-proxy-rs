@@ -7,7 +7,8 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useRequestState } from '@/composables/useRequestState'
 import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
-import { apiKeyAccountError, emptyApiKeyAccountForm, isOpenAiApiKeyAccount, isOpenAiOAuthAccount, parseApiKeyConfiguration } from '../utils/upstreamApiKey'
+import { apiKeyAccountError, emptyApiKeyAccountForm, isOpenAiApiKeyAccount, isOpenAiOAuthAccount, parseApiKeyConfiguration, parseOpenAiConnectionConfiguration } from '../utils/upstreamApiKey'
+import { parseWebsocketMaxAgeSeconds, websocketMaxAgeSeconds } from '../utils/websocketAge'
 
 export function useAccountEditor(options: {
   reloadAccounts: () => Promise<unknown>
@@ -32,7 +33,8 @@ export function useAccountEditor(options: {
   const configurationReady = shallowRef(false)
   const savedConfiguration = shallowRef<ApiKeyConfiguration>()
   const oauthTransport = shallowRef<ApiKeyConfiguration['transport']>('prefer_websocket')
-  const savedOAuthTransport = shallowRef<ApiKeyConfiguration['transport']>('prefer_websocket')
+  const oauthWebsocketMaxAgeSeconds = shallowRef('')
+  const savedOAuthConfiguration = shallowRef<Omit<ApiKeyConfiguration, 'base_url'>>()
 
   async function loadConfiguration(accountId: string) {
     const requestId = configurationRequest.start()
@@ -41,18 +43,24 @@ export function useAccountEditor(options: {
       if (!configurationRequest.isCurrent(requestId))
         return
       if (isOpenAiOAuthAccount(detail.account)) {
-        const transport = detail.credentialConfiguration?.transport
-        if (transport !== 'http' && transport !== 'prefer_websocket')
+        const configuration = parseOpenAiConnectionConfiguration(detail.credentialConfiguration)
+        if (!configuration)
           throw new Error('该账号没有 OAuth 上游设置')
-        oauthTransport.value = transport
-        savedOAuthTransport.value = transport
+        oauthTransport.value = configuration.transport
+        oauthWebsocketMaxAgeSeconds.value = websocketMaxAgeSeconds(configuration.websocket_max_age_ms)
+        savedOAuthConfiguration.value = configuration
         configurationReady.value = true
         return
       }
       const configuration = parseApiKeyConfiguration(detail.credentialConfiguration)
       if (!configuration)
         throw new Error('该账号没有 API Key 上游设置')
-      apiKey.value = { ...emptyApiKeyAccountForm(), ...configuration }
+      apiKey.value = {
+        ...emptyApiKeyAccountForm(),
+        base_url: configuration.base_url,
+        transport: configuration.transport,
+        websocketMaxAgeSeconds: websocketMaxAgeSeconds(configuration.websocket_max_age_ms),
+      }
       savedConfiguration.value = configuration
       configurationReady.value = true
     }
@@ -77,7 +85,8 @@ export function useAccountEditor(options: {
     selectedGroupIds.value = account.groups.map(group => group.id)
     apiKey.value = emptyApiKeyAccountForm()
     oauthTransport.value = 'prefer_websocket'
-    savedOAuthTransport.value = 'prefer_websocket'
+    oauthWebsocketMaxAgeSeconds.value = ''
+    savedOAuthConfiguration.value = undefined
     savedConfiguration.value = undefined
     configurationReady.value = false
     showEditModal.value = true
@@ -100,6 +109,16 @@ export function useAccountEditor(options: {
         return
       }
     }
+    const savedAge = isApiKey ? savedConfiguration.value?.websocket_max_age_ms : savedOAuthConfiguration.value?.websocket_max_age_ms
+    const usesWebsocket = isApiKey ? apiKey.value.transport === 'prefer_websocket' : oauthTransport.value === 'prefer_websocket'
+    const age = configurationReady.value && usesWebsocket
+      ? parseWebsocketMaxAgeSeconds(isApiKey ? apiKey.value.websocketMaxAgeSeconds : oauthWebsocketMaxAgeSeconds.value)
+      : { valid: true as const, value: savedAge ?? null }
+    if (!age.valid) {
+      toast.warning(age.message)
+      return
+    }
+    const ageChanged = age.value !== (savedAge ?? null)
     const modelError = accountModelAccessError(modelAccess.value)
     if (modelError) {
       toast.warning(modelError)
@@ -130,13 +149,19 @@ export function useAccountEditor(options: {
         apiKey.value.apiKey !== ''
         || apiKey.value.base_url.trim() !== savedConfiguration.value?.base_url
         || apiKey.value.transport !== savedConfiguration.value?.transport
+        || ageChanged
       )
       await updateAccount({
         ...settings,
         connection: connectionChanged
-          ? { baseUrl: apiKey.value.base_url.trim(), transport: apiKey.value.transport, apiKey: apiKey.value.apiKey || undefined }
-          : isOAuth && configurationReady.value && oauthTransport.value !== savedOAuthTransport.value
-            ? { transport: oauthTransport.value }
+          ? {
+              baseUrl: apiKey.value.base_url.trim(),
+              transport: apiKey.value.transport,
+              apiKey: apiKey.value.apiKey || undefined,
+              websocketMaxAgeMs: ageChanged ? age.value : undefined,
+            }
+          : isOAuth && configurationReady.value && (oauthTransport.value !== savedOAuthConfiguration.value?.transport || ageChanged)
+            ? { transport: oauthTransport.value, websocketMaxAgeMs: ageChanged ? age.value : undefined }
             : undefined,
       })
       showEditModal.value = false
@@ -154,11 +179,14 @@ export function useAccountEditor(options: {
     configurationRequest.invalidate()
     apiKey.value = emptyApiKeyAccountForm()
     savedConfiguration.value = undefined
+    oauthWebsocketMaxAgeSeconds.value = ''
+    savedOAuthConfiguration.value = undefined
   }
 
   return {
     apiKey,
     oauthTransport,
+    oauthWebsocketMaxAgeSeconds,
     configurationLoading,
     configurationReady,
     showEditModal,

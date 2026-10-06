@@ -8,6 +8,7 @@ import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
 import { accountCreateProvider, accountCreateSourceKey, accountImportModes, accountImportSettings, accountProxyError, emptyAccountCreateForm } from '../utils/accountCreate'
 import { accountImportDocuments, MAX_ACCOUNT_IMPORT_COUNT, mixedImportDocuments } from '../utils/accountImport'
 import { apiKeyAccountError, emptyApiKeyAccountForm } from '../utils/upstreamApiKey'
+import { parseWebsocketMaxAgeSeconds } from '../utils/websocketAge'
 import { useAccountAuthorization } from './useAccountAuthorization'
 
 export function useAccountOnboarding(options: {
@@ -69,11 +70,22 @@ export function useAccountOnboarding(options: {
         const error = apiKeyAccountError(form.apiKey)
         if (error)
           throw new Error(error)
+        const age = parseWebsocketMaxAgeSeconds(form.apiKey.transport === 'prefer_websocket' ? form.apiKey.websocketMaxAgeSeconds : '')
+        if (!age.valid)
+          throw new Error(age.message)
         await importAccounts({
           provider: 'openai',
           settings,
           outboundProxyId,
-          data: { provider: 'openai', authentication_kind: 'api_key', name: form.apiKey.name.trim(), base_url: form.apiKey.base_url.trim(), api_key: form.apiKey.apiKey, transport: form.apiKey.transport },
+          data: {
+            provider: 'openai',
+            authentication_kind: 'api_key',
+            name: form.apiKey.name.trim(),
+            base_url: form.apiKey.base_url.trim(),
+            api_key: form.apiKey.apiKey,
+            transport: form.apiKey.transport,
+            websocket_max_age_ms: age.value ?? undefined,
+          },
         })
         await finishCreate('API Key 账号已添加')
         return

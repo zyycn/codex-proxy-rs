@@ -16,6 +16,8 @@ pub struct ApiKeyConfiguration {
     pub base_url: String,
     #[serde(default)]
     pub transport: ResponsesTransport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_max_age_ms: Option<std::num::NonZeroU64>,
 }
 
 impl ApiKeyConfiguration {
@@ -35,6 +37,8 @@ pub struct ApiKeyCredentialData {
     pub base_url: String,
     #[serde(default)]
     pub transport: ResponsesTransport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_max_age_ms: Option<std::num::NonZeroU64>,
 }
 
 impl ApiKeyCredentialData {
@@ -42,6 +46,7 @@ impl ApiKeyCredentialData {
         ApiKeyConfiguration {
             base_url: self.base_url.clone(),
             transport: self.transport,
+            websocket_max_age_ms: self.websocket_max_age_ms,
         }
     }
 

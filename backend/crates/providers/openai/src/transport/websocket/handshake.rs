@@ -65,6 +65,7 @@ impl CodexWebSocketConnection {
             headers,
             outbound_proxy: None,
             connection_budget: None,
+            websocket_max_age_limit: None,
         }
     }
 

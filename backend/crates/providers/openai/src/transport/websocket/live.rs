@@ -52,6 +52,7 @@ pub(crate) async fn connect_live_sideband(
         headers: business_headers,
         outbound_proxy,
         connection_budget: None,
+        websocket_max_age_limit: None,
     };
     let (stream, response) = connect_sideband_websocket(&connection).await?;
     let subprotocol = response

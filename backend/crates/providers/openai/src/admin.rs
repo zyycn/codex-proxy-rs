@@ -634,7 +634,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
                     .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?
             }
             crate::credential::CodexCredentialData::OAuth(data) => {
-                serde_json::json!({"transport": data.transport})
+                let mut configuration = serde_json::json!({"transport": data.transport});
+                if let Some(max_age) = data.websocket_max_age_ms {
+                    configuration["websocket_max_age_ms"] = serde_json::json!(max_age);
+                }
+                configuration
             }
         };
         let object = value

@@ -8,6 +8,7 @@ mod response_interrupt;
 mod session_binding;
 mod timing;
 mod upstream_adapter;
+mod websocket_age;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};

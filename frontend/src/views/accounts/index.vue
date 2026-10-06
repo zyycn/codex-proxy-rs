@@ -171,6 +171,7 @@ const {
 const {
   apiKey: editingApiKey,
   oauthTransport: editingOAuthTransport,
+  oauthWebsocketMaxAgeSeconds: editingOAuthWebsocketMaxAgeSeconds,
   configurationLoading,
   configurationReady,
   showEditModal,
@@ -420,6 +421,7 @@ const {
       v-model="showEditModal"
       v-model:api-key="editingApiKey"
       v-model:oauth-transport="editingOAuthTransport"
+      v-model:oauth-websocket-max-age-seconds="editingOAuthWebsocketMaxAgeSeconds"
       v-model:notes="editingNotes"
       v-model:enabled="schedulingEnabled"
       v-model:concurrency-limit="editingConcurrencyLimit"

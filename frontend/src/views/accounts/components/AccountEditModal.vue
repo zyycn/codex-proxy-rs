@@ -10,6 +10,7 @@ import { isOpenAiApiKeyAccount, isOpenAiOAuthAccount } from '../utils/upstreamAp
 import AccountApiKeyFields from './AccountApiKeyFields.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
+import AccountWebsocketAgeField from './AccountWebsocketAgeField.vue'
 
 defineProps<{
   account: Account | null
@@ -27,6 +28,7 @@ const emit = defineEmits<{
 const open = defineModel<boolean>({ required: true })
 const apiKey = defineModel<ApiKeyAccountForm>('apiKey', { required: true })
 const oauthTransport = defineModel<ApiKeyAccountForm['transport']>('oauthTransport', { required: true })
+const oauthWebsocketMaxAgeSeconds = defineModel<string>('oauthWebsocketMaxAgeSeconds', { required: true })
 const transportOptions = [
   { label: 'WS', value: 'prefer_websocket' },
   { label: 'SSE', value: 'http' },
@@ -71,10 +73,16 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
           正在读取上游设置…
         </p>
         <p v-else-if="!configurationReady" role="alert" class="m-0 text-cp-sm text-cp-error">
-          传输方式读取失败，其他设置仍可保存
+          上游设置读取失败，其他设置仍可保存
         </p>
         <BaseSegmented v-else v-model="oauthTransport" label="上游传输方式" :options="transportOptions" :disabled="saving" />
       </BaseFormItem>
+
+      <AccountWebsocketAgeField
+        v-if="isOpenAiOAuthAccount(account) && configurationReady && oauthTransport === 'prefer_websocket'"
+        v-model="oauthWebsocketMaxAgeSeconds"
+        :disabled="saving"
+      />
 
       <section v-if="isOpenAiApiKeyAccount(account)" class="grid gap-4">
         <h3 class="m-0 text-cp font-heavy text-cp-text">

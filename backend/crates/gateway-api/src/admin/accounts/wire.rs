@@ -92,7 +92,7 @@ impl From<AccountsUpdateResult> for BatchUpdatedAccountsData {
     }
 }
 
-fn deserialize_optional_nullable_limit<'de, D: serde::Deserializer<'de>>(
+pub(super) fn deserialize_optional_nullable_limit<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Option<u64>>, D::Error> {
     Option::<u64>::deserialize(deserializer).map(Some)

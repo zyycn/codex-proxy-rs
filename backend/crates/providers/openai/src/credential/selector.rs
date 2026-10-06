@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -965,6 +966,7 @@ impl CodexCredentialSelector {
                         return Ok(CodexCredentialLease {
                             installation_id: runtime.installation_id,
                             transport: runtime.transport,
+                            websocket_max_age_ms: runtime.websocket_max_age_ms,
                             account,
                             authentication: runtime.authentication,
                             cookies,
@@ -1552,6 +1554,7 @@ impl fmt::Debug for CodexCredentialSelector {
 
 pub struct CodexCredentialLease {
     transport: super::ResponsesTransport,
+    websocket_max_age_ms: Option<NonZeroU64>,
     account: ProviderAccount,
     authentication: CodexRuntimeAuthentication,
     cookies: Vec<RuntimeCodexCookie>,
@@ -1568,6 +1571,10 @@ pub struct CodexCredentialLease {
 impl CodexCredentialLease {
     pub(crate) const fn transport(&self) -> super::ResponsesTransport {
         self.transport
+    }
+
+    pub(crate) const fn websocket_max_age_ms(&self) -> Option<NonZeroU64> {
+        self.websocket_max_age_ms
     }
 
     #[must_use]

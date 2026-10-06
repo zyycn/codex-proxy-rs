@@ -151,6 +151,7 @@ impl CodexWebSocketPool {
         &self,
         key: &CodexWebSocketPoolKey,
         required_response_id: Option<&str>,
+        websocket_max_age_limit: Option<Duration>,
     ) -> WebSocketPoolAcquire {
         self.spawn_maintenance_task();
         let mut connections_to_close = Vec::new();
@@ -190,13 +191,16 @@ impl CodexWebSocketPool {
                     });
                 }
                 Some(WebSocketPoolSlot::Idle { .. }) => {
-                    let Some(WebSocketPoolSlot::Idle { connection, .. }) = state.slots.remove(&key)
+                    let Some(WebSocketPoolSlot::Idle { mut connection, .. }) =
+                        state.slots.remove(&key)
                     else {
                         return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
                     };
                     // 零成本探活：后台 pump 已实时感知连接死亡（RST/Close/EOF/失活），
                     // 复用前只需读取 is_closed 标志，避免复用到静默死连接后卡到超时
-                    let expired = connection.created_at.elapsed() >= self.config.max_age;
+                    connection.tighten_max_age_limit(websocket_max_age_limit);
+                    let expired =
+                        connection.is_expired(tokio::time::Instant::now(), self.config.max_age);
                     let closed = connection.websocket.is_closed();
                     if !expired && !closed {
                         let lease = WebSocketPoolLease::reserve(
@@ -277,9 +281,9 @@ impl CodexWebSocketPool {
         let mut connection = Some(connection);
         {
             let mut state = self.lock_state();
-            let expired = connection
-                .as_ref()
-                .is_some_and(|connection| connection.created_at.elapsed() >= self.config.max_age);
+            let expired = connection.as_ref().is_some_and(|connection| {
+                connection.is_expired(tokio::time::Instant::now(), self.config.max_age)
+            });
             let owns_reservation = matches!(
                 state.slots.get(key),
                 Some(WebSocketPoolSlot::Busy(reservation))

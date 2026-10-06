@@ -18,6 +18,7 @@ const MAX_COOKIES: usize = 128;
 /// 已解析且只在 Provider 内可见的认证材料
 pub struct CodexRuntimeCredential {
     pub transport: super::ResponsesTransport,
+    pub websocket_max_age_ms: Option<std::num::NonZeroU64>,
     pub authentication: CodexRuntimeAuthentication,
     pub principal: Option<CodexCredentialPrincipal>,
     pub installation_id: String,
@@ -124,6 +125,7 @@ impl CodexCredentialCodec {
         Self::encode_complete(CodexCredentialData::OAuth(CodexOAuthCredentialData {
             schema_version: CODEX_CREDENTIAL_SCHEMA_VERSION,
             transport: super::ResponsesTransport::oauth_default(),
+            websocket_max_age_ms: None,
             principal,
             installation_id,
             access_token: secret.access_token.expose_secret().to_owned(),
@@ -174,9 +176,9 @@ impl CodexCredentialCodec {
         let data = serde_json::from_value::<CodexCredentialData>(value)
             .map_err(|_| CodexCredentialDataError::Invalid)?;
         validate(&data)?;
-        let transport = match &data {
-            CodexCredentialData::OAuth(data) => data.transport,
-            CodexCredentialData::ApiKey(data) => data.transport,
+        let (transport, websocket_max_age_ms) = match &data {
+            CodexCredentialData::OAuth(data) => (data.transport, data.websocket_max_age_ms),
+            CodexCredentialData::ApiKey(data) => (data.transport, data.websocket_max_age_ms),
         };
         let (authentication, principal, installation_id, cookies, oauth_client_id, oauth_scope) =
             match data {
@@ -206,6 +208,7 @@ impl CodexCredentialCodec {
             };
         Ok(CodexRuntimeCredential {
             transport,
+            websocket_max_age_ms,
             authentication,
             principal,
             installation_id,
@@ -246,9 +249,13 @@ impl CodexCredentialCodec {
             (CodexCredentialData::OAuth(incoming), CodexCredentialData::OAuth(existing)) => {
                 incoming.installation_id = existing.installation_id;
                 incoming.transport = existing.transport;
+                incoming.websocket_max_age_ms = existing.websocket_max_age_ms;
             }
             (CodexCredentialData::ApiKey(incoming), CodexCredentialData::ApiKey(existing)) => {
                 incoming.installation_id = existing.installation_id;
+                incoming.websocket_max_age_ms = incoming
+                    .websocket_max_age_ms
+                    .or(existing.websocket_max_age_ms);
             }
             _ => return Err(CodexCredentialDataError::Invalid),
         }

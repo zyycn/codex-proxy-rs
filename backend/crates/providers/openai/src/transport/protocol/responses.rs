@@ -1,6 +1,7 @@
 //! Codex Responses 请求、传输要求、事件信号与流式错误的协议解析
 
 use std::fmt;
+use std::time::Duration;
 
 use gateway_core::account::FastMode;
 use gateway_protocol::openai::{
@@ -67,6 +68,8 @@ pub struct CodexResponsesRequest {
     pub use_websocket: bool,
     /// 是否强制 HTTP SSE
     pub force_http_sse: bool,
+    /// 选定账号冻结的连接复用寿命，不从客户端正文读取或发送上游
+    pub(crate) websocket_max_age_limit: Option<Duration>,
     /// turn state 透传头
     pub turn_state: Option<String>,
     /// turn metadata 透传头
@@ -518,6 +521,7 @@ impl CodexResponsesRequest {
             client_api_key_id: None,
             use_websocket: false,
             force_http_sse: false,
+            websocket_max_age_limit: None,
             turn_state: None,
             turn_metadata: None,
             beta_features: None,

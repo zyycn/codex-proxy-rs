@@ -290,6 +290,7 @@ impl CodexBackendClient {
         .map_err(CodexClientError::WebSocketEncode)?;
         websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
         websocket_create.connection.connection_budget = self.connection_budget.clone();
+        websocket_create.connection.websocket_max_age_limit = request.websocket_max_age_limit;
         context.trace.cloned().unwrap_or_default().headers(
             "upstream.request.headers",
             serde_json::json!({"transport": "websocket", "phase": "prepared_opening"}),

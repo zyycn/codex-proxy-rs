@@ -319,6 +319,9 @@ pub struct CodexOAuthCredentialData {
         skip_serializing_if = "ResponsesTransport::is_oauth_default"
     )]
     pub transport: ResponsesTransport,
+    /// 本账号可选的 WebSocket 复用寿命；缺省不扩展旧凭据 JSON
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_max_age_ms: Option<std::num::NonZeroU64>,
     pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<CodexCredentialPrincipal>,

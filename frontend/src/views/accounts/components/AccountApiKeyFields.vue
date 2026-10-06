@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ApiKeyAccountForm } from '../utils/upstreamApiKey'
 import { BaseFormItem, BaseInput, BaseSegmented } from '@codex-proxy/ui'
+import AccountWebsocketAgeField from './AccountWebsocketAgeField.vue'
 
 defineProps<{ disabled?: boolean, editing?: boolean }>()
 const form = defineModel<ApiKeyAccountForm>({ required: true })
@@ -27,5 +28,6 @@ const transportOptions = [
     <BaseFormItem label="传输方式">
       <BaseSegmented v-model="form.transport" label="传输方式" :options="transportOptions" :disabled="disabled" title="WS 优先需要上游支持 Responses WebSocket" />
     </BaseFormItem>
+    <AccountWebsocketAgeField v-if="form.transport === 'prefer_websocket'" v-model="form.websocketMaxAgeSeconds" :disabled="disabled" />
   </div>
 </template>

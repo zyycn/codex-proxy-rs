@@ -42,6 +42,7 @@ fn account_profile_debug_redacts_identity_fields() {
 fn plaintext_provider_schema_round_trips_dynamic_cookie_data() {
     let data = CodexCredentialData::OAuth(CodexOAuthCredentialData {
         transport: provider_openai::credential::ResponsesTransport::PreferWebsocket,
+        websocket_max_age_ms: None,
         schema_version: 1,
         principal: Some(CodexCredentialPrincipal {
             oauth_subject: "subject-private".to_owned(),
@@ -90,4 +91,77 @@ fn provider_schema_rejects_unknown_public_layer_fields() {
         }))
         .is_err()
     );
+}
+
+#[test]
+fn provider_schema_accepts_account_websocket_max_age_override() {
+    let value = serde_json::json!({
+        "schema_version": 1,
+        "installation_id": "00000000-0000-4000-8000-000000000001",
+        "access_token": "test-access-token",
+        "cookies": [],
+        "websocket_max_age_ms": 180_000
+    });
+    let data = serde_json::from_value::<CodexCredentialData>(value)
+        .expect("an account may configure a positive WebSocket reuse age");
+    assert_eq!(
+        serde_json::to_value(data).unwrap()["websocket_max_age_ms"],
+        180_000
+    );
+}
+
+#[test]
+fn provider_schema_rejects_zero_websocket_max_age_override() {
+    let value = serde_json::json!({
+        "schema_version": 1,
+        "installation_id": "00000000-0000-4000-8000-000000000001",
+        "access_token": "test-access-token",
+        "cookies": [],
+        "websocket_max_age_ms": 0
+    });
+    assert!(serde_json::from_value::<CodexCredentialData>(value).is_err());
+}
+
+#[test]
+fn provider_schema_websocket_max_age_is_optional_and_positive_for_both_authentication_kinds() {
+    for value in [
+        serde_json::json!({
+            "schema_version": 1,
+            "installation_id": "00000000-0000-4000-8000-000000000001",
+            "access_token": "synthetic-access-token",
+            "cookies": []
+        }),
+        serde_json::json!({
+            "schema_version": 1,
+            "installation_id": "00000000-0000-4000-8000-000000000001",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "synthetic-api-key"
+        }),
+    ] {
+        let data: CodexCredentialData = serde_json::from_value(value.clone()).unwrap();
+        assert!(
+            serde_json::to_value(data)
+                .unwrap()
+                .get("websocket_max_age_ms")
+                .is_none()
+        );
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("30000"),
+            serde_json::json!(true),
+        ] {
+            let mut invalid_value = value.clone();
+            invalid_value["websocket_max_age_ms"] = invalid;
+            assert!(serde_json::from_value::<CodexCredentialData>(invalid_value).is_err());
+        }
+        let mut configured = value;
+        configured["websocket_max_age_ms"] = serde_json::json!(30_001);
+        let data: CodexCredentialData = serde_json::from_value(configured).unwrap();
+        assert_eq!(
+            serde_json::to_value(data).unwrap()["websocket_max_age_ms"],
+            30_001
+        );
+    }
 }

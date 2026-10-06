@@ -171,6 +171,26 @@ pub(crate) struct PooledWebSocketConnection {
     pub(crate) metadata: CodexWebSocketConnectionMetadata,
     pub(crate) continuation: WebSocketContinuationState,
     pub(crate) created_at: Instant,
+    pub(crate) websocket_max_age_limit: Option<Duration>,
+}
+
+impl PooledWebSocketConnection {
+    pub(super) fn tighten_max_age_limit(&mut self, limit: Option<Duration>) {
+        if let Some(limit) = limit {
+            // 已确定的物理连接寿命只能收紧，账号取消或提高覆盖不延长旧连接
+            self.websocket_max_age_limit = Some(
+                self.websocket_max_age_limit
+                    .map_or(limit, |current| current.min(limit)),
+            );
+        }
+    }
+
+    pub(super) fn is_expired(&self, now: Instant, global_max_age: Duration) -> bool {
+        let effective_max_age = self
+            .websocket_max_age_limit
+            .map_or(global_max_age, |limit| limit.min(global_max_age));
+        now.duration_since(self.created_at) >= effective_max_age
+    }
 }
 
 /// 只随具体 WebSocket 生命周期存在的续接状态
@@ -237,7 +257,7 @@ pub(super) fn should_close_idle_connection(
     now: Instant,
     max_age: Duration,
 ) -> bool {
-    connection.websocket.is_closed() || now.duration_since(connection.created_at) >= max_age
+    connection.websocket.is_closed() || connection.is_expired(now, max_age)
 }
 
 fn short_sha256<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {

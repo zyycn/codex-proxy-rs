@@ -2739,6 +2739,264 @@ async fn oauth_transport_settings_preserve_tokens_refresh_schedule_and_health() 
     );
 }
 
+#[tokio::test]
+async fn oauth_websocket_max_age_updates_preserve_omitted_and_clear_null() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_oauth_ws_age".to_owned(),
+            name: "OAuth WS age".to_owned(),
+            secret: secret("test-oauth-ws-age"),
+            verified_account: profile("chatgpt-oauth-ws-age"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    store.set_websocket_max_age("acct_oauth_ws_age", 180_000);
+    let account = store.account("acct_oauth_ws_age").unwrap();
+    let current = store.load_current_credential(account.id()).await.unwrap();
+    let bundle = provider_openai::initialize(
+        valid_config().config,
+        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    let admin = bundle.admin_provider();
+    let configuration = admin
+        .account_configuration(account.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        configuration.expose_to_provider().expose_to_provider(),
+        serde_json::json!({"transport":"prefer_websocket","websocket_max_age_ms":180_000})
+            .as_object()
+            .unwrap()
+    );
+    for (material, expected_age) in [
+        (json!({"transport":"http"}), Some(180_000)),
+        (
+            json!({"transport":"http","websocket_max_age_ms":null}),
+            None,
+        ),
+        (
+            json!({"transport":"http","websocket_max_age_ms":60_000}),
+            Some(60_000),
+        ),
+    ] {
+        let prepared = admin
+            .prepare_rotation(PrepareCredentialRotation {
+                account: account_record(&account),
+                provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                    material.as_object().unwrap().clone(),
+                )),
+            })
+            .await
+            .unwrap();
+        let mut expected = current.credential.expose_to_provider().clone();
+        expected.insert("transport".to_owned(), json!("http"));
+        if let Some(age) = expected_age {
+            expected.insert("websocket_max_age_ms".to_owned(), json!(age));
+        } else {
+            expected.remove("websocket_max_age_ms");
+        }
+        assert_eq!(
+            prepared
+                .facts()
+                .provider_material
+                .expose_to_provider()
+                .expose_to_provider(),
+            &expected,
+        );
+        assert!(prepared.facts().preserve_profile && prepared.facts().preserve_credential_state);
+    }
+    for invalid in [0, -1] {
+        let error = admin
+            .prepare_rotation(PrepareCredentialRotation {
+                account: account_record(&account),
+                provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                    json!({"transport":"prefer_websocket","websocket_max_age_ms":invalid})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                )),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ProviderAdminErrorKind::Invalid);
+    }
+}
+
+#[tokio::test]
+async fn api_key_websocket_max_age_updates_preserve_omitted_and_clear_null() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key(
+            "acct_key_ws_age",
+            "https://first.example/v1".to_owned(),
+            provider_openai::credential::ResponsesTransport::PreferWebsocket,
+        )
+        .await;
+    store.set_websocket_max_age("acct_key_ws_age", 180_000);
+    let account = store.account("acct_key_ws_age").unwrap();
+    let current = store.load_current_credential(account.id()).await.unwrap();
+    let bundle = provider_openai::initialize(
+        valid_config().config,
+        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    let admin = bundle.admin_provider();
+    let configuration = admin
+        .account_configuration(account.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(configuration.expose_to_provider().expose_to_provider(), json!({
+        "base_url":"https://first.example/v1", "transport":"prefer_websocket", "websocket_max_age_ms":180_000
+    }).as_object().unwrap());
+    for (material, expected_age) in [
+        (
+            json!({"base_url":"https://second.example/v1","transport":"prefer_websocket"}),
+            Some(180_000),
+        ),
+        (
+            json!({"base_url":"https://second.example/v1","transport":"prefer_websocket","websocket_max_age_ms":null}),
+            None,
+        ),
+    ] {
+        let prepared = admin
+            .prepare_rotation(PrepareCredentialRotation {
+                account: account_record(&account),
+                provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                    material.as_object().unwrap().clone(),
+                )),
+            })
+            .await
+            .unwrap();
+        let mut expected = current.credential.expose_to_provider().clone();
+        expected.insert("base_url".to_owned(), json!("https://second.example/v1"));
+        if let Some(age) = expected_age {
+            expected.insert("websocket_max_age_ms".to_owned(), json!(age));
+        } else {
+            expected.remove("websocket_max_age_ms");
+        }
+        assert_eq!(
+            prepared
+                .facts()
+                .provider_material
+                .expose_to_provider()
+                .expose_to_provider(),
+            &expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn oauth_websocket_max_age_survives_cpr_export_import_roundtrip() {
+    assert_websocket_max_age_export_import(false).await;
+}
+
+#[tokio::test]
+async fn api_key_websocket_max_age_survives_cpr_export_import_roundtrip() {
+    assert_websocket_max_age_export_import(true).await;
+}
+
+#[tokio::test]
+async fn websocket_max_age_import_rejects_non_positive_or_non_integer_values_for_both_kinds() {
+    let bundle = provider_openai::initialize(valid_config().config, provider_ports())
+        .await
+        .unwrap();
+    for document in [
+        json!({"accessToken":"synthetic-import-access"}),
+        json!({"authentication_kind":"api_key", "base_url":"https://example.invalid/v1", "api_key":"synthetic-import-key"}),
+    ] {
+        for invalid in [json!(0), json!(-1), json!(1.5), json!("30000"), json!(true)] {
+            let mut document = document.clone();
+            document["websocket_max_age_ms"] = invalid;
+            let error = bundle
+                .admin_provider()
+                .prepare_import(PrepareCredentialImport {
+                    default_outbound_proxy: None,
+                    document: ProviderDocument::new(OpaqueProviderData::new(
+                        document.as_object().unwrap().clone(),
+                    )),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), ProviderAdminErrorKind::Invalid);
+        }
+    }
+}
+
+async fn assert_websocket_max_age_export_import(api_key: bool) {
+    let store = Arc::new(MemoryAccountStore::default());
+    if api_key {
+        store
+            .seed_api_key(
+                "acct_ws_age_export",
+                "https://example.invalid/v1".to_owned(),
+                provider_openai::credential::ResponsesTransport::PreferWebsocket,
+            )
+            .await;
+    } else {
+        store
+            .seed_oauth_credential(ImportCodexOAuthCredential {
+                account_id: "acct_ws_age_export".to_owned(),
+                name: "WS age export".to_owned(),
+                secret: secret("synthetic-export-access"),
+                verified_account: profile("synthetic-export-user"),
+                next_refresh_at: None,
+                enabled: true,
+            })
+            .await;
+    }
+    store.set_websocket_max_age("acct_ws_age_export", 30_001);
+    let account = store.account("acct_ws_age_export").unwrap();
+    let current = store.load_current_credential(account.id()).await.unwrap();
+    let bundle = provider_openai::initialize(
+        valid_config().config,
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    let exported = bundle
+        .admin_provider()
+        .export_credentials(vec![ProviderExportCredentialInput {
+            account: account_record(&account),
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                current.credential.into_inner(),
+            )),
+        }])
+        .await
+        .unwrap();
+    let document = exported.document.expose_to_provider().expose_to_provider();
+    assert_eq!(document["accounts"][0]["websocket_max_age_ms"], 30_001);
+    let destination = provider_openai::initialize(valid_config().config, provider_ports())
+        .await
+        .unwrap();
+    let imported = destination
+        .admin_provider()
+        .prepare_import(PrepareCredentialImport {
+            default_outbound_proxy: None,
+            document: ProviderDocument::new(OpaqueProviderData::new(document.clone())),
+        })
+        .await
+        .unwrap();
+    assert_eq!(imported.credentials.len(), 1);
+    assert_eq!(
+        imported.credentials[0]
+            .provider_material
+            .expose_to_provider()
+            .expose_to_provider()["websocket_max_age_ms"],
+        30_001
+    );
+    assert_eq!(
+        imported.credentials[0].authentication_kind,
+        if api_key { "api_key" } else { "oauth" }
+    );
+}
+
 #[derive(Default)]
 struct RecordingDiagnostics(std::sync::Mutex<Vec<gateway_core::diagnostics::OperationalFailure>>);
 #[async_trait::async_trait]
