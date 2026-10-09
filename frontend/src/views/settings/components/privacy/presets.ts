@@ -37,7 +37,7 @@ export function newRule(): PrivacyRule {
 
 export const presets: { name: string, values: Partial<PrivacyRule> }[] = [
   { name: '工作区仓库地址脱敏', values: { scope: 'turn_metadata', selector: '$.workspaces.*.associated_remote_urls.*', action: 'regex_replace', pattern: '(?s)^.+$', replacement: '[REDACTED]' } },
-  { name: '工作区用户名替换', values: { scope: 'turn_metadata', selector: '$.workspaces', action: 'rename_key', pattern: String.raw`(?i)^((?:[a-z]:)?[/\\](?:home|users)[/\\])[^/\\]+`, replacement: '${1}user' } },
+  { name: '工作区用户名替换', values: { scope: 'turn_metadata', selector: '$.workspaces', action: 'rename_key', pattern: String.raw`(?i)^((?:[a-z]:)?[/\\](?:home|users)[/\\])[^/\\]+`, replacement: `\${1}user` } },
   { name: '移除工作区提交标识', values: { scope: 'turn_metadata', selector: '$.workspaces.*.latest_git_commit_hash', action: 'remove_field', pattern: null } },
   // Desktop Git 的这些字段可能为 null，按字段移除，避免正则因类型不匹配撤销整条规则
   // remotes 本身也可能为 null，预设处理整个远端集合，单个地址仍可从常用字段选择
