@@ -8,7 +8,7 @@ pub(super) fn endpoint_requested_model(
     if payload.protocol() != PROVIDER_NAME {
         return None;
     }
-    // 只读取 model，避免把编辑请求中的整张图片复制到观测数据
+    // 选号与观测共用模型提取，跳过编辑请求中的图片且不改写原始正文
     #[derive(Deserialize)]
     struct RequestModel {
         model: Option<Value>,

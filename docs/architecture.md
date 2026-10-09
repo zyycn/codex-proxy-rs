@@ -384,8 +384,9 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别客户端，Cor
 
 Responses 按模型目录编译候选；全局模型映射是精确映射，未命中时模型名原样交给候选 Provider。
 Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
-的账号范围确实包含 OpenAI 账号时生成单一 OpenAI 候选。Images 不要求模型字段；Search body 中的模型
-及其他字段保持原始 bytes 并由上游解释
+的账号范围确实包含 OpenAI 账号时生成单一 OpenAI 候选。Images 的图片模型由 Provider 从正文旁路
+提取，用于账号模型政策检查，并在中间件改写后复验当前租约账号；不要求图片模型进入文本目录。
+Search body 中的模型及其他字段保持原始 bytes 并由上游解释
 
 ## 5. Provider 与协议边界
 
@@ -486,6 +487,9 @@ client，OIDC 的 JWKS 缓存与单飞归属对应出口状态。自动刷新提
 管理端导出的 Codex 配置使用代理 Bearer 密钥，并声明服务端托管账号认证。
 客户端据此开放原生生图工具，图片生成和编辑由 Images 路由处理。
 这只解决客户端能力识别；模型能力、客户端限制和上游账号的实际生图权限仍分别检查
+
+OpenAI Provider 将 OAuth 套餐资格作为 Images 选号条件，复用账号持久事实，
+在获取租约前与冻结的模型黑白名单共同过滤候选；亲和与重试沿用同一资格检查
 
 `X-OpenAI-Actor-Authorization` 是客户端能力标记，不是账号凭据。API 解码和 OpenAI Provider
 都过滤该 header，网关继续校验 Client Key，上游认证由服务端账号产生。

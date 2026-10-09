@@ -68,7 +68,9 @@ pub use selector::{
     CodexAccountFailure, CodexCredentialLease, CodexCredentialSelector, CredentialSelectionError,
     SelectCodexCredential,
 };
-pub(crate) use selector::{CodexCyberPolicyScope, SelectCodexProviderEndpointCredential};
+pub(crate) use selector::{
+    CodexCyberPolicyScope, CodexSelectionModel, SelectCodexProviderEndpointCredential,
+};
 pub use types::{
     CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile, CodexCookie, CodexCookieCaptureOutcome,
     CodexCredentialData, CodexCredentialPrincipal, CodexOAuthCredentialData, CodexOAuthSecret,

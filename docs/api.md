@@ -408,9 +408,13 @@ OpenAI 上游错误 envelope 和允许下发的 opaque header 值也不由 canon
 `response.metadata` 的业务内容继续交付，仅其中的响应头沿用凭据、账号身份和逐跳头隔离规则。
 未改写的 WebSocket 文本不依赖 JSON 旁路解析成功；插件改写后的响应仍复核必要关联，原始 SSE 心跳
 和无法提取事实的未改写内容不构成协议失败。
-Images 请求不读取或重建 JSON，也不要求或映射模型字段；
-它固定使用 OpenAI Provider，
-只在原始字节之外完成账号选择、鉴权头替换和端点路由，成功与非容量失败响应正文保持原始字节。
+Images 固定使用 OpenAI Provider，不重建正文或映射模型字段；Provider 从原始 JSON 旁路提取图片模型，
+按[账号模型限制](#账号模型限制)选号，并复核插件改写后的模型。账号选择、鉴权头替换和端点路由
+不改变请求正文，成功与非容量失败响应正文保持原始字节。
+
+Images 排除已知为 Free 套餐的 OAuth 账号；套餐缺失或未知时不推断为 Free，API Key 账号不套用该套餐规则。
+其余账号仍需满足模型限制、额度等调度条件，实际生图权限由上游决定
+
 `/v1/alpha/search` 使用相同的 OpenAI Provider 原生端点边界：body（包括 `model`）不解析、不映射，
 `x-codex-turn-metadata` 在移除客户端账号身份并按当前 lease 重写 installation ID 后转发；上游账号
 Authorization、Cookie、account ID、originator 和 User-Agent 均由代理安全重建。
@@ -717,9 +721,11 @@ Pro 使用 `all` 时也能参与 luna 调度。套餐名称不自动生成或修
 批量接口的调度、分组、模型与代理字段均可省略；省略的字段保持各账号原值。
 提供 `groupIds` 时替换完整分组集合，提供 `concurrencyLimit: null` 时恢复继承运行参数
 
-限制适用于 Responses HTTP、WebSocket 及其带压缩触发的请求选号，包括重试、亲和和换号；没有合规账号时沿用
+限制适用于 Responses HTTP、WebSocket 及其带压缩触发的请求，以及 Images 生图与编辑选号，包括重试、亲和和换号；没有合规账号时沿用
 无可用账号错误，不会回退到被禁止的账号。已开始请求使用冻结的政策，新请求使用已发布的新配置。
-Images、独立 Search 及管理员连接测试不受该文本模型限制；连接测试成功只证明指定账号的上游能力。
+Images 按请求正文的图片模型 ID 检查，不依赖文本模型目录；可手动添加目录未列出的图片模型 ID。
+图片模型缺失、重复或无法识别时，仅使用模型政策为 `all` 的账号，不推测上游默认模型。
+独立 Search 及管理员连接测试不受该模型限制；连接测试成功只证明指定账号的上游能力。
 普通 `/v1/models` 和单模型查询将已发现的 OpenAI 模型关联到来源账号，至少一个来源账号在当前 Key 范围内且政策允许时才展示；
 同 Provider 中未发现该模型的 `all` 账号不会使它进入列表。原生目录保留已有来源选择和完整模型对象
 

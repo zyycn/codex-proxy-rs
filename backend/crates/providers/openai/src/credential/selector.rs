@@ -7,11 +7,13 @@ use std::time::{Duration, SystemTime};
 
 use gateway_core::error::ErrorSource;
 
+use gateway_core::account::scope::FrozenAccountScope;
 use gateway_core::account::{
     AccountAffinity, AccountCandidate, AccountCapacitySnapshot, AccountEligibilityPolicy,
-    AccountErrorReason, AccountFeedbackStats, AccountRuntimeSignals, AccountSchedulingBlocker,
-    AccountSelectionContext, AccountSelectionPolicy, AccountSelector, AccountStatus,
-    CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId, QuotaEvidence,
+    AccountErrorReason, AccountFeedbackStats, AccountModelAccessMode, AccountRuntimeSignals,
+    AccountSchedulingBlocker, AccountSelectionContext, AccountSelectionPolicy, AccountSelector,
+    AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId,
+    QuotaEvidence,
 };
 use gateway_core::concurrency::{CapacityWait, ConcurrencyWaitQueue, QueueRejection, WaitPriority};
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, policy::AccountPolicyError};
@@ -101,10 +103,51 @@ pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
     pub request_url: &'a Url,
     pub attempt: &'a AttemptContext,
     pub session_affinity: Option<&'a CodexSessionAffinity>,
-    /// 本端点的上游模型；提供后按账号模型权限过滤候选（如 live 语音）。
-    pub upstream_model: Option<&'a str>,
+    pub model: CodexSelectionModel<'a>,
     /// 本端点只接受 OAuth 凭据时排除 API Key 账号，避免混合池选中后必然失败。
     pub requires_oauth: bool,
+}
+
+/// 选号使用的模型类别，区分图片资格与不涉及模型的端点
+#[derive(Clone, Copy)]
+pub(crate) enum CodexSelectionModel<'a> {
+    NotApplicable,
+    Requested(&'a str),
+    Image(Option<&'a str>),
+}
+
+impl<'a> CodexSelectionModel<'a> {
+    pub(crate) const fn model(self) -> Option<&'a str> {
+        match self {
+            Self::NotApplicable => None,
+            Self::Requested(model) => Some(model),
+            Self::Image(model) => model,
+        }
+    }
+
+    pub(crate) fn allows_account(self, account: &ProviderAccount) -> bool {
+        // 官方 Codex 的 image_generation_available 排除 Free，API Key 不套用 ChatGPT 套餐
+        // https://github.com/openai/codex/commit/0a0a9b6c8f
+        !(matches!(self, Self::Image(_))
+            && account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
+            && account
+                .plan_type()
+                .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("free")))
+    }
+
+    pub(crate) fn allows(self, scope: &FrozenAccountScope, account: &ProviderAccountId) -> bool {
+        match self {
+            Self::NotApplicable => scope.allows(account),
+            Self::Requested(model) | Self::Image(Some(model)) => scope.allows_model(account, model),
+            // 缺失、重复或不可解析的图片模型不能绕过黑白名单；不猜上游默认值
+            Self::Image(None) => {
+                scope.allows(account)
+                    && scope.directory().account(account).is_some_and(|account| {
+                        account.model_access().mode() == AccountModelAccessMode::All
+                    })
+            }
+        }
+    }
 }
 
 struct CredentialSelectionInput<'a> {
@@ -304,8 +347,12 @@ impl CodexCredentialSelector {
             session_affinity_observation: None,
             guardian: false,
         };
-        self.select_inner(&input, None, Some(request.upstream_model))
-            .await
+        self.select_inner(
+            &input,
+            None,
+            CodexSelectionModel::Requested(request.upstream_model),
+        )
+        .await
     }
 
     pub(crate) async fn select_with_cyber_policy(
@@ -328,7 +375,7 @@ impl CodexCredentialSelector {
         self.select_inner(
             &input,
             cyber_policy_session_key,
-            Some(request.upstream_model),
+            CodexSelectionModel::Requested(request.upstream_model),
         )
         .await
     }
@@ -385,9 +432,8 @@ impl CodexCredentialSelector {
     /// 为不属于 Responses 文本模型目录的 Provider 原生端点选择账号
     ///
     /// 账号范围、健康度、配额、并发租约、cookie 与认证准备仍走同一套选择链路；
-    /// 原生端点默认没有 Responses 模型，不套用管理员配置的文本模型权限。
-    /// 端点有明确上游模型（如 live 语音）时通过 `upstream_model` 让账号
-    /// 模型权限参与候选过滤；`requires_oauth` 限定本端点支持的认证类型。
+    /// Images 与 live 语音按实际请求模型执行账号权限，不依赖文本模型目录
+    /// `requires_oauth` 限定本端点支持的认证类型
     pub(crate) async fn select_for_provider_endpoint(
         &self,
         request: &SelectCodexProviderEndpointCredential<'_>,
@@ -401,15 +447,14 @@ impl CodexCredentialSelector {
             session_affinity_observation: request.session_affinity,
             guardian: false,
         };
-        self.select_inner(&input, None, request.upstream_model)
-            .await
+        self.select_inner(&input, None, request.model).await
     }
 
     async fn select_inner(
         &self,
         request: &CredentialSelectionInput<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
-        upstream_model: Option<&str>,
+        model: CodexSelectionModel<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let follow_only = !request.attempt.is_diagnostic_required_account()
             && request
@@ -423,7 +468,7 @@ impl CodexCredentialSelector {
         let result = tokio::select! {
             biased;
             () = request.attempt.cancellation().cancelled() => Err(CredentialSelectionError::Cancelled),
-            result = self.select_inner_loop(request, cyber_policy_session_key, upstream_model, follow_only) => result,
+            result = self.select_inner_loop(request, cyber_policy_session_key, model, follow_only) => result,
         };
         result.map_err(|error| {
             if follow_only
@@ -446,7 +491,7 @@ impl CodexCredentialSelector {
         &self,
         request: &CredentialSelectionInput<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
-        upstream_model: Option<&str>,
+        model: CodexSelectionModel<'_>,
         follow_only: bool,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let diagnostic = request.attempt.is_diagnostic_required_account();
@@ -561,17 +606,17 @@ impl CodexCredentialSelector {
                                 .is_some_and(|scope| scope.allows(account.id())))
                         && (!request.requires_oauth
                             || account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH)
-                        && (diagnostic
-                            || upstream_model.is_none_or(|upstream_model| {
-                                let allowed =
-                                    request.attempt.account_scope().is_some_and(|scope| {
-                                        scope.allows_model(account.id(), upstream_model)
-                                    });
-                                if !allowed {
-                                    model_access_rejected += 1;
-                                }
-                                allowed
-                            }))
+                        && model.allows_account(account)
+                        && (diagnostic || {
+                            let allowed = request
+                                .attempt
+                                .account_scope()
+                                .is_some_and(|scope| model.allows(scope, account.id()));
+                            if !allowed {
+                                model_access_rejected += 1;
+                            }
+                            allowed
+                        })
                 })
                 .collect::<Vec<_>>();
             let mut eligible = Vec::with_capacity(accounts.len());
@@ -742,7 +787,7 @@ impl CodexCredentialSelector {
                 }
                 let selection = match request
                     .attempt
-                    .select_account(&self.provider_kind, upstream_model, &candidates, &context)
+                    .select_account(&self.provider_kind, model.model(), &candidates, &context)
                     .await
                 {
                     Ok(selection) => selection,

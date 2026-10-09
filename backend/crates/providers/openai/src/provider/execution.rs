@@ -3,6 +3,7 @@
 use gateway_core::metering::{CalculatedCost, Usage};
 
 use super::*;
+use crate::credential::CodexSelectionModel;
 use gateway_core::operation::RawJsonPayload;
 
 impl CodexProvider {
@@ -150,6 +151,15 @@ impl CodexProvider {
         context: AttemptContext,
         request: RawJsonEndpointRequest,
     ) -> Result<ProviderStream, ProviderError> {
+        let requested_model = match &request.operation {
+            Operation::GenerateImage(image) => endpoint_requested_model(image.payload()),
+            _ => None,
+        };
+        let model = if matches!(&request.operation, Operation::GenerateImage(_)) {
+            CodexSelectionModel::Image(requested_model.as_ref().map(|model| model.as_str()))
+        } else {
+            CodexSelectionModel::NotApplicable
+        };
         let selection_started_at = Instant::now();
         let lease = self
             .selector
@@ -157,8 +167,7 @@ impl CodexProvider {
                 request_url: &request.response_origin,
                 attempt: &context,
                 session_affinity: request.session_affinity.as_ref(),
-                // 图像/搜索端点没有对应的上游模型权限，也不限定认证类型。
-                upstream_model: None,
+                model,
                 requires_oauth: false,
             })
             .await
@@ -175,7 +184,7 @@ impl CodexProvider {
             .execute_middleware(
                 operation,
                 provider_kind,
-                None,
+                requested_model.map(|model| model.as_str().to_owned()),
                 account_id,
                 Box::new(move |operation, middleware_headers| {
                     Box::pin(async move {
@@ -206,6 +215,23 @@ impl CodexProvider {
     ) -> Result<ProviderStream, ProviderError> {
         let affinity = match &operation {
             Operation::GenerateImage(image) => {
+                let model = endpoint_requested_model(image.payload());
+                let selection =
+                    CodexSelectionModel::Image(model.as_ref().map(|model| model.as_str()));
+                // 中间件可改写正文，最终图片模型必须仍被当前租约账号允许
+                // 校验先于亲和变更和发送，不能在持有租约时重新选号
+                if !selection.allows_account(lease.account())
+                    || (!context.is_diagnostic_required_account()
+                        && !context
+                            .account_scope()
+                            .is_some_and(|scope| selection.allows(scope, lease.account_id())))
+                {
+                    return Err(provider_error(
+                        ProviderErrorKind::NoEligibleAccount,
+                        UpstreamSendState::NotSent,
+                    )
+                    .with_retry_prohibited());
+                }
                 self.image_session_affinity(image.payload(), &middleware_headers, &context)
                     .await?
             }
