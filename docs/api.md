@@ -887,7 +887,8 @@ API Key 账号使用以下独立凭据形态：
 
 `base_url` 是 API 前缀，追加 `responses`、`models`、`images/generations`、`images/edits` 或 `alpha/search`，
 不会自动补 `/v1`；支持根路径和自定义前缀。
-地址仅允许 HTTPS，HTTP 只允许本机回环；拒绝 URL 中的认证信息、查询串和 fragment。
+地址支持 HTTP 和 HTTPS，包括内网 IP 与容器名，拒绝 URL 中的认证信息、查询串和 fragment。
+HTTP 会明文传输 API Key 和请求内容，仅用于可信网络。
 `transport` 可省略（默认 `http`）或设为 `prefer_websocket`。API Key 使用 Bearer 认证与普通 JSON，
 不携带 OAuth Cookie 或 ChatGPT 身份。上游模型列表使用标准 `/models` 格式，按账号和凭据版本隔离；
 目录用于模型发现，不作为能力白名单，未列出的模型仍交由上游判断。

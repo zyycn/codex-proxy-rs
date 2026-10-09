@@ -22,7 +22,7 @@ impl ApiKeyConfiguration {
     pub(crate) fn validate(&self) -> bool {
         self.base_url.len() <= 2048
             && !self.base_url.chars().any(char::is_control)
-            && crate::transport::valid_upstream_base_url(&self.base_url)
+            && crate::transport::parse_upstream_base_url(&self.base_url).is_some()
     }
 }
 

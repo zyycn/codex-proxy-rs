@@ -145,7 +145,16 @@ impl Default for CodexApiConfig {
 
 impl CodexApiConfig {
     fn validate(&self) -> Result<(), OpenAiConfigError> {
-        if !crate::transport::valid_upstream_base_url(&self.base_url) {
+        let url = crate::transport::parse_upstream_base_url(&self.base_url)
+            .ok_or(OpenAiConfigError::InvalidField("openai.api.base_url"))?;
+        // OAuth 启动地址的 HTTP 例外仅用于本机联调，不沿用 API Key 中转账号的传输选择
+        let loopback = match url.host() {
+            Some(url::Host::Domain("localhost")) => true,
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            _ => false,
+        };
+        if url.scheme() == "http" && !loopback {
             return Err(OpenAiConfigError::InvalidField("openai.api.base_url"));
         }
         Ok(())

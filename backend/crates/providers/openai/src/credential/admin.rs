@@ -1484,7 +1484,7 @@ fn parse_api_key_import(value: &Value) -> Result<ApiKeyCredentialData, CodexCred
         .or_else(|| external.then(|| "https://api.openai.com/v1".to_owned()))
         .ok_or(CodexCredentialAdminError::InvalidInput)?;
     if external {
-        if !crate::transport::valid_upstream_base_url(&base_url) {
+        if crate::transport::parse_upstream_base_url(&base_url).is_none() {
             return Err(CodexCredentialAdminError::InvalidInput);
         }
         // sub2api 接受服务根、版本前缀或完整 Responses 端点；仅在导入边界归一化
