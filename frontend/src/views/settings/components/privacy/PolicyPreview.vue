@@ -29,11 +29,8 @@ async function test() {
 </script>
 
 <template>
-  <BaseModal v-model="open" title="测试规则" size="lg">
+  <BaseModal v-model="open" title="测试规则" description="按草稿顺序执行已启用的规则，样本仅用于本次测试" size="lg">
     <div class="grid gap-3">
-      <p class="m-0 text-cp-sm text-cp-text-secondary">
-        按草稿顺序执行已启用的规则，样本仅用于本次测试
-      </p>
       <div class="grid min-w-0 gap-3 sm:grid-cols-2">
         <BaseFormItem label="请求样本">
           <BaseTextarea v-model="sample" aria-label="请求样本" placeholder="粘贴包含 body、headers、turnMetadata 的请求 JSON" resize="none" maxlength="262144" size="sm" class="font-mono [&_textarea]:block [&_textarea]:h-64" spellcheck="false" />
