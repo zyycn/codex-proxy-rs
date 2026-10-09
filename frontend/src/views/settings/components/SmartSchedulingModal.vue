@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { SmartSchedulingConfig } from '@/api'
-import { BaseButton, BaseFormItem, BaseInput, BaseModal, BasePopover, BaseSwitch } from '@codex-proxy/ui'
+import { BaseButton, BaseFormItem, BaseIconButton, BaseInput, BaseModal, BasePopover, BaseSwitch } from '@codex-proxy/ui'
 import { CircleAlert, CircleHelp } from '@lucide/vue'
 import { computed, reactive, shallowRef, useId, watch } from 'vue'
 
@@ -75,9 +75,9 @@ function confirm() {
                 {{ field.label }}
                 <BasePopover trigger="hover-click" placement="top-start">
                   <template #trigger="{ open: helpOpen }">
-                    <button type="button" class="inline-flex size-6 cursor-pointer items-center justify-center rounded-cp-sm border-0 bg-transparent p-0 text-cp-text-tertiary outline-none hover:text-cp-text focus-visible:ring-2 focus-visible:ring-cp-control-outline" :aria-label="`${field.label}说明`" :aria-expanded="helpOpen">
+                    <BaseIconButton :label="`${field.label}说明`" :title="undefined" :aria-expanded="helpOpen" class="size-6! hover:bg-transparent! active:bg-transparent!">
                       <CircleHelp class="size-3.5" />
-                    </button>
+                    </BaseIconButton>
                   </template>
                   <p class="m-0 max-w-64 px-3 py-2 text-cp-sm leading-relaxed">{{ field.help }}</p>
                 </BasePopover>
@@ -96,9 +96,9 @@ function confirm() {
             回切行为
             <BasePopover trigger="hover-click" placement="top-start">
               <template #trigger="{ open: helpOpen }">
-                <button type="button" class="inline-flex size-6 cursor-pointer items-center justify-center rounded-cp-sm border-0 bg-transparent p-0 text-cp-text-tertiary outline-none hover:text-cp-text focus-visible:ring-2 focus-visible:ring-cp-control-outline" aria-label="回切行为说明" :aria-expanded="helpOpen">
+                <BaseIconButton label="回切行为说明" :title="undefined" :aria-expanded="helpOpen" class="size-6! hover:bg-transparent! active:bg-transparent!">
                   <CircleAlert class="size-3.5" />
-                </button>
+                </BaseIconButton>
               </template>
               <p class="m-0 max-w-72 px-3 py-2 text-cp-sm leading-relaxed">
                 高权重账号恢复可用后，后续允许重新选号的请求优先回切<br>原生续写仍绑定原账号，同权重账号保留已有会话亲和

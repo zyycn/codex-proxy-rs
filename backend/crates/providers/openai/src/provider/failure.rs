@@ -890,6 +890,13 @@ pub(super) fn map_client_error(
     let connect_retry = !local_connection_capacity
         && matches!(&error, CodexClientError::Http(error) if transient_http_connect(error));
     let mut failure = match &error {
+        CodexClientError::Privacy(_) => MappedProviderFailure::plain(
+            provider_error(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+            )
+            .with_retry_prohibited(),
+        ),
         CodexClientError::ConnectionBudgetExhausted => MappedProviderFailure::plain(
             provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent)
                 .with_connection_retry(gateway_core::engine::AttemptTransport::Fallback),
@@ -1114,6 +1121,11 @@ fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
             "decode",
             "invalid_sse",
             "OpenAI HTTP returned an invalid Responses event stream".to_owned(),
+        ),
+        CodexClientError::Privacy(error) => (
+            "prepare",
+            "privacy_policy_rejected",
+            format!("Privacy rule {}: {}", error.rule_index + 1, error.reason),
         ),
         CodexClientError::InvalidHeaderName(_) => (
             "prepare",

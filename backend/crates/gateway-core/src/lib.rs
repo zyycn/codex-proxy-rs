@@ -472,7 +472,8 @@ pub fn prepare_control_plane(
     providers: ProviderRegistry,
     extensions: Option<Arc<dyn routing::extensions::ExtensionPreparationPort>>,
 ) -> CoreControlPlaneStartup {
-    let mut compiler = RuntimeSnapshotCompiler::new(ports.snapshots, Arc::new(providers));
+    let mut compiler = RuntimeSnapshotCompiler::new(ports.snapshots, Arc::new(providers.clone()))
+        .with_privacy_compiler(Arc::new(providers));
     if let Some(extensions) = extensions {
         compiler = compiler.with_extensions(extensions);
     }

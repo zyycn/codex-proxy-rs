@@ -7,6 +7,7 @@ mod image_account_eligibility;
 mod image_model_access;
 mod passthrough;
 mod precommit;
+mod privacy;
 mod response_interrupt;
 mod session_binding;
 mod timing;

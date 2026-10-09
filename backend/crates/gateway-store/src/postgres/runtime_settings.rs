@@ -150,7 +150,7 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
 
 pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-            "select provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled,
+            "select provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled, codex_privacy_policy_json,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
@@ -328,7 +328,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-        "select provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled,
+        "select provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled, codex_privacy_policy_json,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
@@ -412,6 +412,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      openai_account_affinity = $32,
                      max_account_rotations = $33,
                      openai_session_affinity_ttl_hours = $34,
+                     codex_privacy_policy_json = $35,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -461,6 +462,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.values.openai_account_affinity.as_str())
     .bind(i64::from(update.values.max_account_rotations))
     .bind(i64::from(update.values.openai_session_affinity_ttl_hours))
+    .bind(sqlx::types::Json(&update.values.codex_privacy_policy))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("update runtime settings in transaction", source))?
@@ -523,6 +525,8 @@ struct RuntimeSettingsRow {
     request_interval_ms: i64,
     smart_scheduling_json: sqlx::types::Json<gateway_core::account::SmartSchedulingConfig>,
     rotation_strategy: String,
+    codex_privacy_policy_json:
+        sqlx::types::Json<gateway_core::settings::privacy::CodexPrivacyPolicy>,
     request_location_enabled: bool,
     request_location_json: sqlx::types::Json<gateway_core::account::RequestLocation>,
     model_mappings_json: sqlx::types::Json<BTreeMap<String, String>>,
@@ -579,6 +583,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
             max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
             request_interval_ms: to_u64(row.request_interval_ms)?,
             smart_scheduling: row.smart_scheduling_json.0,
+            codex_privacy_policy: row.codex_privacy_policy_json.0,
             request_location_enabled: row.request_location_enabled,
             request_location: row
                 .request_location_json

@@ -1,9 +1,11 @@
 import type { RequestOptions } from '../../request'
+import type { CodexPrivacyPolicy } from './privacy'
 import type { ClientProfileSelection, ProviderRequestProfiles, ProviderRequestProfileUpdates, XaiClientProfileSelection } from './profiles'
 import request from '../../request'
 
 export * from './backups'
 export * from './pricing'
+export * from './privacy'
 export * from './system'
 
 export interface RequestLocation {
@@ -35,6 +37,7 @@ export interface RuntimeSettings {
   openaiClientProfile: ClientProfileSelection | null
   xaiClientProfile: XaiClientProfileSelection | null
 
+  codexPrivacyPolicy: CodexPrivacyPolicy
   requestLocationEnabled: boolean
   requestLocation: RequestLocation
   modelMappings: Record<string, string>

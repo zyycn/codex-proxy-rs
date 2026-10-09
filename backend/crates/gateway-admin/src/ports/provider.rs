@@ -130,6 +130,32 @@ struct ProviderAdminDiagnostic {
 /// 运行时资源通知只在事务成功后发生
 #[async_trait]
 pub trait ProviderAdmin: Send + Sync {
+    fn compile_privacy_policy(
+        &self,
+        _policy: &gateway_core::settings::privacy::CodexPrivacyPolicy,
+    ) -> Result<
+        Arc<dyn gateway_core::settings::privacy::CompiledPrivacyPolicy>,
+        gateway_core::settings::privacy::PrivacyError,
+    > {
+        Err(gateway_core::settings::privacy::PrivacyError {
+            rule_index: 0,
+            reason: "Provider 不支持隐私策略",
+        })
+    }
+
+    fn preview_privacy_policy(
+        &self,
+        _request: gateway_core::settings::privacy::PrivacyPreviewRequest,
+    ) -> Result<
+        gateway_core::settings::privacy::PrivacyPreviewResult,
+        gateway_core::settings::privacy::PrivacyError,
+    > {
+        Err(gateway_core::settings::privacy::PrivacyError {
+            rule_index: 0,
+            reason: "Provider 不支持隐私策略",
+        })
+    }
+
     /// 只读内置价目；没有本地计价能力的 Provider 返回空目录
     fn pricing_catalog(&self) -> crate::model::pricing::ProviderPricingCatalog {
         Default::default()

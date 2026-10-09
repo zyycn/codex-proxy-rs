@@ -36,6 +36,7 @@ pub type ProviderRequestProfileUpdates =
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsFields {
+    pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub refresh_margin_seconds: u64,
@@ -282,6 +283,10 @@ where
         .route(
             "/api/admin/settings/client-profiles/{provider}/preview",
             post(preview_client_profile::<S>),
+        )
+        .route(
+            "/api/admin/settings/privacy/preview",
+            post(preview_privacy::<S>),
         )
         .route("/api/admin/settings/update", post(update_settings::<S>))
         .route(
@@ -719,6 +724,7 @@ impl RuntimeSettingsFields {
         self,
     ) -> Result<gateway_admin::model::settings::RuntimeSettingsValues, WireValidationError> {
         let values = gateway_admin::model::settings::RuntimeSettingsValues {
+            codex_privacy_policy: self.codex_privacy_policy,
             request_location_enabled: self.request_location_enabled,
             request_location: self
                 .request_location
@@ -767,6 +773,7 @@ impl RuntimeSettingsFields {
 impl From<gateway_admin::model::settings::RuntimeSettingsValues> for RuntimeSettingsFields {
     fn from(settings: gateway_admin::model::settings::RuntimeSettingsValues) -> Self {
         crate::admin::settings::RuntimeSettingsFields {
+            codex_privacy_policy: settings.codex_privacy_policy,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
             refresh_margin_seconds: settings.refresh_margin_seconds,
@@ -836,4 +843,24 @@ fn settings_validation_error(field: &'static str) -> WireValidationError {
         "usage_retention_days" => "usageRetentionDays",
         _ => "settings",
     })
+}
+
+async fn preview_privacy<S>(
+    State(state): State<S>,
+    _auth: AdminAuth,
+    AdminJson(request): AdminJson<gateway_core::settings::privacy::PrivacyPreviewRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .settings()
+        .preview_privacy_policy(request)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
 }

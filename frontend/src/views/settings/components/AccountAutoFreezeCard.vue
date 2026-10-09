@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BaseCard, BaseCheckbox, BaseForm, BaseFormItem, BaseInput, BasePopover, BaseSwitch } from '@codex-proxy/ui'
+import { BaseCard, BaseCheckbox, BaseForm, BaseFormItem, BaseIconButton, BaseInput, BasePopover, BaseSwitch } from '@codex-proxy/ui'
 
 import { Activity, CircleAlert, Gauge, Snowflake, Timer } from '@lucide/vue'
 import { useId } from 'vue'
@@ -125,15 +125,15 @@ const adaptiveConcurrencyHintId = useId()
         />
         <BasePopover class="-my-1" trigger="hover-click" placement="top-start" :hover-delay="240">
           <template #trigger="{ open }">
-            <button
-              type="button"
-              class="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-cp-sm border-0 bg-transparent p-0 text-cp-text-tertiary outline-none transition-colors hover:text-cp-text focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
-              aria-label="自适应并发下调说明"
+            <BaseIconButton
+              label="自适应并发下调说明"
+              :title="undefined"
+              class="size-6! hover:bg-transparent! active:bg-transparent!"
               :aria-expanded="open"
               :aria-describedby="open ? adaptiveConcurrencyHintId : undefined"
             >
               <CircleAlert class="size-3.5" aria-hidden="true" />
-            </button>
+            </BaseIconButton>
           </template>
           <p :id="adaptiveConcurrencyHintId" role="tooltip" class="m-0 max-w-72 px-3 py-2 text-cp-sm leading-relaxed text-cp-text-secondary">
             修改账号并发上限，恢复后不自动调高

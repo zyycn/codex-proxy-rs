@@ -18,6 +18,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             ("grok-latest".to_owned(), "grok-4.5".to_owned()),
         ]),
         values: gateway_admin::model::settings::RuntimeSettingsValues {
+            codex_privacy_policy: Default::default(),
             request_location_enabled: false,
             request_location: Default::default(),
             refresh_margin_seconds,
@@ -56,6 +57,59 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
 fn runtime_settings_keep_account_rotation_global() {
     let settings = settings_with_margin(3_600);
     assert!(settings.validate().is_ok());
+}
+
+#[tokio::test]
+async fn privacy_policy_upgrade_defaults_off_and_round_trips_in_snapshot() {
+    use gateway_core::settings::privacy::*;
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create_through("privacy_policy", 25).await else {
+        return;
+    };
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        before.values.codex_privacy_policy,
+        CodexPrivacyPolicy::default()
+    );
+    let mut update = settings_with_margin(300);
+    update.values.codex_privacy_policy = CodexPrivacyPolicy {
+        enabled: true,
+        on_error: PrivacyFailureMode::RejectRequest,
+        rules: vec![PrivacyRule {
+            id: "remove-auth".into(),
+            name: "配置者控制".into(),
+            enabled: true,
+            scope: PrivacyScope::RequestHeader,
+            selector: "authorization".into(),
+            action: PrivacyAction::RemoveField,
+            pattern: None,
+            replacement: String::new(),
+            value: serde_json::Value::Null,
+            replace_all: true,
+            case_insensitive: false,
+            multi_line: false,
+        }],
+    };
+    let expected = update.values.codex_privacy_policy.clone();
+    repository.update_runtime_settings(update).await.unwrap();
+    let after = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(after.values.codex_privacy_policy, expected);
+    assert!(after.config_revision > before.config_revision);
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(snapshot.settings).unwrap()["codex_privacy_policy"],
+        serde_json::to_value(expected).unwrap()
+    );
+    assert_eq!(
+        before.values.codex_privacy_policy,
+        CodexPrivacyPolicy::default()
+    );
+    database.close().await;
 }
 
 #[tokio::test]
@@ -1187,9 +1241,15 @@ async fn preferred_affinity_migration_defaults_to_strict_and_preserves_saved_mod
             .await
             .unwrap();
         let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
-        let mut update = settings_with_margin(3600);
-        update.values.openai_account_affinity = mode;
-        repository.update_runtime_settings(update).await.unwrap();
+        // 升级前只写当时已有列，现行 Repository 依赖完整迁移后的 schema
+        sqlx::query("update runtime_settings set openai_account_affinity = $1, config_revision = config_revision + 1, updated_at = now() where id = 1")
+            .bind(match mode {
+                AccountAffinity::Relaxed => "relaxed",
+                _ => "strict",
+            })
+            .execute(&database.pool)
+            .await
+            .unwrap();
         super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
         assert_eq!(
             repository

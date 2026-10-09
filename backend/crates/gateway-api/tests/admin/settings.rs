@@ -40,6 +40,7 @@ async fn response_json(response: axum::response::Response) -> Value {
 fn update_body() -> Value {
     json!({
         "configRevision": 7,
+        "codexPrivacyPolicy": {"enabled":false,"onError":"skip_rule","rules":[]},
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
         "modelMappings": {
@@ -76,6 +77,63 @@ fn update_body() -> Value {
         "accountWarmupScheduleTime": "08:00",
         "accountWarmupModel": null
     })
+}
+
+#[tokio::test]
+async fn privacy_save_requires_provider_validation_and_preview_requires_admin_auth() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let mut body = update_body();
+    let policy = json!({"enabled":true,"onError":"reject_request","rules":[{
+        "id":"auth","name":"自定义认证头","enabled":true,"scope":"request_header",
+        "selector":"authorization","action":"remove_field","pattern":null,
+        "replacement":"","value":null,"replaceAll":true,"caseInsensitive":false,"multiLine":false
+    }]});
+    body["codexPrivacyPolicy"] = policy.clone();
+    let response = app(fixture.state())
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(body),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    assert_eq!(
+        response_json(response).await["data"]["codexPrivacyPolicy"],
+        json!({"enabled":false,"onError":"skip_rule","rules":[]})
+    );
+    let response = app(fixture.state())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/admin/settings/privacy/preview")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"policy":policy,"body":{},"headers":{},"turnMetadata":null}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn privacy_policy_is_required_and_rejects_unknown_contract_fields() {
+    let mut missing = update_body();
+    missing
+        .as_object_mut()
+        .unwrap()
+        .remove("codexPrivacyPolicy");
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(missing).is_err());
+    let mut unknown = update_body();
+    unknown["codexPrivacyPolicy"]["protectedFields"] = json!([]);
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(unknown).is_err());
 }
 
 #[tokio::test]
@@ -223,6 +281,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             .single()
             .expect("timestamp"),
         values: gateway_admin::model::settings::RuntimeSettingsValues {
+            codex_privacy_policy: Default::default(),
             request_location_enabled: false,
             request_location: Default::default(),
             refresh_margin_seconds: 1800,
@@ -268,6 +327,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "providerRequestProfiles": {},
             "openaiClientProfile": null,
             "xaiClientProfile": null,
+        "codexPrivacyPolicy": {"enabled":false,"onError":"skip_rule","rules":[]},
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
             "modelMappings": {
@@ -348,6 +408,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
             .expect("fixture rotation strategy"),
         updated_at: chrono::Utc::now(),
         values: gateway_admin::model::settings::RuntimeSettingsValues {
+            codex_privacy_policy: Default::default(),
             request_location_enabled: false,
             request_location: Default::default(),
             refresh_margin_seconds: request.values.refresh_margin_seconds,

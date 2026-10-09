@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountAffinity } from '@/api'
-import { BaseCard, BaseForm, BaseFormItem, BaseInput, BasePopover, BaseSegmented } from '@codex-proxy/ui'
+import { BaseCard, BaseForm, BaseFormItem, BaseIconButton, BaseInput, BasePopover, BaseSegmented } from '@codex-proxy/ui'
 import { CircleAlert } from '@lucide/vue'
 
 const props = defineProps<{ disabled: boolean }>()
@@ -17,9 +17,9 @@ const affinityOptions = [{ label: '宽松', value: 'relaxed' }, { label: '优先
         <template #label-extra>
           <BasePopover class="-my-1" trigger="hover-click" placement="top-start">
             <template #trigger="{ open }">
-              <button type="button" aria-label="账号亲和说明" :aria-expanded="open" class="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-cp-sm border-0 bg-transparent p-0 text-cp-text-tertiary outline-none transition-colors hover:text-cp-text focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none">
+              <BaseIconButton label="账号亲和说明" :title="undefined" :aria-expanded="open" class="size-6! hover:bg-transparent! active:bg-transparent!">
                 <CircleAlert class="size-3.5" aria-hidden="true" />
-              </button>
+              </BaseIconButton>
             </template>
             <div class="max-w-72 space-y-2 px-3 py-2 text-cp-sm leading-relaxed text-cp-text-secondary">
               <p>宽松：会话内请求直接按调度策略选号，不优先主账号</p>

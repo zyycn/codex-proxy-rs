@@ -219,6 +219,7 @@ pub enum RuntimeSnapshotCompileError {
 #[derive(Clone)]
 pub struct RuntimeSnapshotCompiler {
     store: Arc<dyn SnapshotStorePort>,
+    privacy_compiler: Option<Arc<dyn crate::settings::privacy::PrivacyPolicyCompiler>>,
     catalogs: Arc<dyn ProviderCatalogPort>,
     extensions: Option<Arc<dyn crate::routing::extensions::ExtensionPreparationPort>>,
 }
@@ -231,6 +232,7 @@ impl RuntimeSnapshotCompiler {
     ) -> Self {
         Self {
             store,
+            privacy_compiler: None,
             catalogs,
             extensions: None,
         }
@@ -242,6 +244,15 @@ impl RuntimeSnapshotCompiler {
         extensions: Arc<dyn crate::routing::extensions::ExtensionPreparationPort>,
     ) -> Self {
         self.extensions = Some(extensions);
+        self
+    }
+
+    #[must_use]
+    pub fn with_privacy_compiler(
+        mut self,
+        compiler: Arc<dyn crate::settings::privacy::PrivacyPolicyCompiler>,
+    ) -> Self {
+        self.privacy_compiler = Some(compiler);
         self
     }
 
@@ -314,8 +325,14 @@ impl RuntimeSnapshotCompiler {
             let cached = previous.filter(|previous| {
                 previous.extensions().map(|set| set.id()) == extensions.as_ref().map(|set| set.id())
             });
-            let snapshot =
-                compile_runtime_snapshot(facts, catalogs.as_ref(), provider_kinds, cached).await?;
+            let snapshot = compile_runtime_snapshot(
+                facts,
+                catalogs.as_ref(),
+                provider_kinds,
+                cached,
+                self.privacy_compiler.clone(),
+            )
+            .await?;
             let observed_generations = catalogs.catalog_generations();
             if catalog_generations == observed_generations {
                 if extensions.is_some()
@@ -348,6 +365,7 @@ async fn compile_runtime_snapshot(
     catalogs: &dyn ProviderCatalogPort,
     provider_kinds: Vec<ProviderKind>,
     previous: Option<&RuntimeSnapshot>,
+    privacy_compiler: Option<Arc<dyn crate::settings::privacy::PrivacyPolicyCompiler>>,
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
     // 只有成功取得的完整目录能证明模型缺项；发现型目录和查询失败均交由上游验证
     let mut provider_models = Vec::new();
@@ -504,12 +522,13 @@ async fn compile_runtime_snapshot(
         ));
     }
 
-    RuntimeSnapshot::new(
+    RuntimeSnapshot::new_with_privacy_compiler(
         facts.config_revision,
         facts.settings,
         provider_kinds,
         provider_models,
         client_policies,
+        privacy_compiler,
     )
     .map_err(|_| RuntimeSnapshotCompileError::InvalidData)
     .map(|snapshot| {
@@ -524,6 +543,7 @@ async fn compile_runtime_snapshot(
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
     settings: Arc<CompiledSettings>,
+    privacy_compiler: Option<Arc<dyn crate::settings::privacy::PrivacyPolicyCompiler>>,
     extensions: Option<crate::routing::extensions::ExtensionSetReference>,
     revision: ConfigRevision,
     providers: Arc<BTreeSet<ProviderKind>>,
@@ -559,8 +579,12 @@ impl RuntimeSnapshot {
         &self,
         values: &SettingsValues,
     ) -> Result<Self, RuntimeSnapshotCompileError> {
-        let settings = CompiledSettings::new(values.clone())
-            .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
+        let settings = CompiledSettings::new(
+            values.clone(),
+            self.privacy_compiler.as_deref(),
+            Some(&self.settings),
+        )
+        .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
         Ok(Self {
             settings: Arc::new(settings),
             ..self.clone()
@@ -650,6 +674,24 @@ impl RuntimeSnapshot {
         provider_models: Vec<ProviderModel>,
         client_policies: Vec<ClientPolicy>,
     ) -> Result<Self, RoutingError> {
+        Self::new_with_privacy_compiler(
+            revision,
+            values,
+            providers,
+            provider_models,
+            client_policies,
+            None,
+        )
+    }
+
+    pub fn new_with_privacy_compiler(
+        revision: ConfigRevision,
+        values: SettingsValues,
+        providers: Vec<ProviderKind>,
+        provider_models: Vec<ProviderModel>,
+        client_policies: Vec<ClientPolicy>,
+        privacy_compiler: Option<Arc<dyn crate::settings::privacy::PrivacyPolicyCompiler>>,
+    ) -> Result<Self, RoutingError> {
         let mut provider_set = BTreeSet::new();
         for provider in providers {
             if !provider_set.insert(provider.clone()) {
@@ -709,9 +751,11 @@ impl RuntimeSnapshot {
         }
         client_policy_map.retain(|_, policy| policy.enabled());
 
-        let settings = CompiledSettings::new(values).map_err(|_| RoutingError::InvalidSettings)?;
+        let settings = CompiledSettings::new(values, privacy_compiler.as_deref(), None)
+            .map_err(|_| RoutingError::InvalidSettings)?;
         Ok(Self {
             settings: Arc::new(settings),
+            privacy_compiler,
             extensions: None,
             revision,
             providers: Arc::new(provider_set),
@@ -1143,6 +1187,7 @@ impl RuntimeSnapshot {
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),
+            privacy: self.settings.privacy.clone(),
             account_selection_policy: self.settings.account_selection_policy,
             operation: operation.kind(),
             max_attempts: NonZeroU32::new(super::MAX_REQUEST_ATTEMPTS)
@@ -1223,6 +1268,7 @@ impl RuntimeSnapshot {
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),
+            privacy: self.settings.privacy.clone(),
             account_selection_policy: self.settings.account_selection_policy,
             operation: operation.kind(),
             max_attempts: NonZeroU32::new(super::MAX_REQUEST_ATTEMPTS)

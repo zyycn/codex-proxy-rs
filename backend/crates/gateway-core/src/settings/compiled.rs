@@ -13,6 +13,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledSettings {
     pub(crate) values: SettingsValues,
+    pub(crate) privacy: Option<std::sync::Arc<dyn super::privacy::CompiledPrivacyPolicy>>,
     pub(crate) account_selection_policy: AccountSelectionPolicy,
     pub(crate) client_queue_policy: ConcurrencyQueuePolicy,
     pub(crate) responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
@@ -21,7 +22,34 @@ pub(crate) struct CompiledSettings {
 }
 
 impl CompiledSettings {
-    pub(crate) fn new(settings: SettingsValues) -> Result<Self, InvalidSettings> {
+    pub(crate) fn new(
+        settings: SettingsValues,
+        compiler: Option<&dyn super::privacy::PrivacyPolicyCompiler>,
+        previous: Option<&Self>,
+    ) -> Result<Self, InvalidSettings> {
+        let privacy = if let Some(previous) = previous.filter(|previous| {
+            previous.values.codex_privacy_policy == settings.codex_privacy_policy
+        }) {
+            previous.privacy.clone()
+        } else if settings.codex_privacy_policy == super::privacy::CodexPrivacyPolicy::default() {
+            None
+        } else {
+            Some(
+                compiler
+                    .ok_or(InvalidSettings)?
+                    .compile(&settings.codex_privacy_policy)
+                    .map_err(|_| InvalidSettings)?,
+            )
+        };
+        // 关闭或没有启用规则时不进入出站管线，保留原始 JSON 字节和重复键语义
+        let privacy = privacy.filter(|_| {
+            settings.codex_privacy_policy.enabled
+                && settings
+                    .codex_privacy_policy
+                    .rules
+                    .iter()
+                    .any(|rule| rule.enabled)
+        });
         super::validate_request_limits(
             settings.max_waiting_per_key,
             settings.max_waiting_per_account,
@@ -79,6 +107,7 @@ impl CompiledSettings {
             min_codex_client_versions,
             request_location,
             values: settings,
+            privacy,
         })
     }
 }

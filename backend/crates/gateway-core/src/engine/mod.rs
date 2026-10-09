@@ -287,6 +287,7 @@ pub struct RequestAttemptContext {
     request_profile: Option<crate::account::OpaqueProviderData>,
     fast_mode: FastMode,
     request_location: Option<crate::account::RequestLocation>,
+    privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
     request_id: ModelRequestId,
     client_api_key_ref: ClientApiKeyId,
     timing_started_at: Instant,
@@ -351,6 +352,15 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
+    pub fn with_privacy(
+        mut self,
+        privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
+    ) -> Self {
+        self.privacy = privacy;
+        self
+    }
+
+    #[must_use]
     pub fn with_request_location(
         mut self,
         location: Option<crate::account::RequestLocation>,
@@ -369,6 +379,7 @@ impl RequestAttemptContext {
             pricing: Arc::default(),
             fast_mode: FastMode::Default,
             request_location: None,
+            privacy: None,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
             concurrency_wait_budget: crate::concurrency::ConcurrencyWaitBudget::default(),
@@ -567,6 +578,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn fast_mode(&self) -> FastMode {
         self.request.fast_mode
+    }
+
+    #[must_use]
+    pub fn privacy(&self) -> Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>> {
+        self.request.privacy.clone()
     }
 
     #[must_use]

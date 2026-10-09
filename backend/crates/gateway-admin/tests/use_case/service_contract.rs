@@ -57,6 +57,7 @@ impl VisitMut for WireTypes {
             let last = path.path.segments.last().unwrap().clone();
             *ty = match last.ident.to_string().as_str() {
                 "DateTime" | "Tz" | "TokenPrice" | "AdminApiKey" => parse_quote!(String),
+                "Value" => parse_quote!(serde_json::Value),
                 "OpaqueProviderData" => parse_quote!(serde_json::Map<String, serde_json::Value>),
                 _ => Type::Path(syn::TypePath {
                     attrs: std::mem::take(&mut path.attrs),
@@ -79,6 +80,10 @@ fn contract_type(mut item: Item, name: &str) -> Item {
                     | "ReplaceRuntimeSettings"
                     | "AdminApiKeyMutation"
                     | "RegeneratedAdminApiKey"
+                    | "CodexPrivacyPolicy"
+                    | "PrivacyRule"
+                    | "PrivacyPreviewRequest"
+                    | "PrivacyPreviewResult"
             );
             (
                 &mut item.attrs,
@@ -107,6 +112,13 @@ fn contract_type(mut item: Item, name: &str) -> Item {
             field.vis = parse_quote!(pub);
         }
     }
+    if let Item::Enum(item) = &mut item {
+        for variant in &mut item.variants {
+            variant
+                .attrs
+                .retain(|attr| !attr.path().is_ident("default"));
+        }
+    }
     WireTypes.visit_item_mut(&mut item);
     item
 }
@@ -117,6 +129,19 @@ fn sdk_settings_contract_matches_host_declarations() {
     let mut types = Vec::new();
     let mut replacement_fields = Vec::new();
     for (path, names) in [
+        (
+            "../gateway-core/src/settings/privacy.rs",
+            &[
+                "CodexPrivacyPolicy",
+                "PrivacyFailureMode",
+                "PrivacyScope",
+                "PrivacyAction",
+                "PrivacyRule",
+                "PrivacyRuleOutcome",
+                "PrivacyPreviewRequest",
+                "PrivacyPreviewResult",
+            ][..],
+        ),
         (
             "src/model/settings.rs",
             &[

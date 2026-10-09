@@ -563,6 +563,7 @@ impl ProviderCandidate {
 pub struct RoutingPlan {
     pricing: Arc<crate::metering::PricingOverrides>,
     request_location: Option<crate::account::RequestLocation>,
+    privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     operation: OperationKind,
@@ -580,6 +581,12 @@ impl RoutingPlan {
     #[must_use]
     pub fn fast_mode(&self) -> FastMode {
         self.account_scope.fast_mode()
+    }
+
+    /// 本次请求冻结的已编译规则，重试不读取新的全局策略
+    #[must_use]
+    pub fn privacy(&self) -> Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>> {
+        self.privacy.clone()
     }
 
     /// 本次请求冻结的全局位置，重试时沿用同一份配置

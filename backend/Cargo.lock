@@ -3289,6 +3289,7 @@ dependencies = [
  "native-tls",
  "openssl",
  "openssl-sys",
+ "regex",
  "reqwest",
  "roxmltree",
  "rustls",

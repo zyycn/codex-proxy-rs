@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BaseCard, BaseForm, BaseFormItem, BaseInput } from '@codex-proxy/ui'
+import { BaseCard, BaseForm, BaseFormItem, BaseIconButton, BaseInput } from '@codex-proxy/ui'
 
 import { CircleHelp, MonitorUp, TerminalSquare } from '@lucide/vue'
 
@@ -31,14 +31,14 @@ const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required:
     <template #title>
       <span class="inline-flex items-center gap-1.5">
         <span>客户端版本限制</span>
-        <button
-          type="button"
-          class="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-cp-sm border-0 bg-transparent p-0 text-cp-text-tertiary outline-none transition-colors hover:text-cp-text focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
-          aria-label="查看安装与升级说明"
+        <BaseIconButton
+          label="查看安装与升级说明"
+          :title="undefined"
+          class="size-6! hover:bg-transparent! active:bg-transparent!"
           @click="emit('help')"
         >
           <CircleHelp class="size-3.5" aria-hidden="true" />
-        </button>
+        </BaseIconButton>
       </span>
     </template>
 

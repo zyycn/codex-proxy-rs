@@ -10,6 +10,7 @@ use crate::identity::ProviderKind;
 pub struct SettingsValues {
     pub(crate) pricing: Arc<crate::metering::PricingOverrides>,
     pub(crate) request_profiles: Arc<BTreeMap<ProviderKind, crate::account::OpaqueProviderData>>,
+    pub(crate) codex_privacy_policy: super::privacy::CodexPrivacyPolicy,
     pub(crate) request_location_enabled: bool,
     pub(crate) request_location: crate::account::RequestLocation,
     pub(crate) max_concurrent_per_account: u32,
@@ -30,6 +31,12 @@ pub struct SettingsValues {
 }
 
 impl SettingsValues {
+    #[must_use]
+    pub fn with_codex_privacy_policy(mut self, policy: super::privacy::CodexPrivacyPolicy) -> Self {
+        self.codex_privacy_policy = policy;
+        self
+    }
+
     #[must_use]
     pub const fn with_openai_session_affinity_ttl_hours(mut self, hours: u32) -> Self {
         self.openai_session_affinity_ttl_hours = hours;
@@ -131,6 +138,7 @@ impl SettingsValues {
         Self {
             request_profiles: Arc::default(),
             pricing: Arc::default(),
+            codex_privacy_policy: Default::default(),
             request_location_enabled: false,
             request_location: crate::account::RequestLocation::default(),
             max_concurrent_per_account,

@@ -128,10 +128,12 @@ function submit() {
     <template #footer>
       <BasePopover v-model="helpOpen" class="mr-auto self-center" placement="top-start" trigger="hover-click">
         <template #trigger>
-          <button type="button" class="inline-flex h-cp-control cursor-pointer items-center gap-1.5 rounded-cp-sm border-0 bg-transparent p-0 text-cp-sm text-cp-text-tertiary outline-none transition-colors hover:text-cp-primary-text focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none" :aria-expanded="helpOpen" :aria-controls="helpOpen ? helpId : undefined">
-            <Info class="size-3.5" aria-hidden="true" />
+          <BaseButton variant="ghost" :aria-expanded="helpOpen" :aria-controls="helpOpen ? helpId : undefined">
+            <template #icon>
+              <Info class="size-3.5" aria-hidden="true" />
+            </template>
             计价说明
-          </button>
+          </BaseButton>
         </template>
         <div :id="helpId" class="grid w-72 gap-2 p-3 text-cp-xs leading-relaxed text-cp-text-secondary">
           <p class="m-0">

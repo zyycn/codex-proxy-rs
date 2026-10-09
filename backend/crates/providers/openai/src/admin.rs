@@ -164,6 +164,26 @@ impl OpenAiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for OpenAiAdminProvider {
+    fn compile_privacy_policy(
+        &self,
+        policy: &gateway_core::settings::privacy::CodexPrivacyPolicy,
+    ) -> Result<
+        Arc<dyn gateway_core::settings::privacy::CompiledPrivacyPolicy>,
+        gateway_core::settings::privacy::PrivacyError,
+    > {
+        crate::transport::privacy::compile(policy)
+    }
+
+    fn preview_privacy_policy(
+        &self,
+        request: gateway_core::settings::privacy::PrivacyPreviewRequest,
+    ) -> Result<
+        gateway_core::settings::privacy::PrivacyPreviewResult,
+        gateway_core::settings::privacy::PrivacyError,
+    > {
+        crate::transport::privacy::preview(request)
+    }
+
     fn account_capabilities(
         &self,
         _account_id: &ProviderAccountId,

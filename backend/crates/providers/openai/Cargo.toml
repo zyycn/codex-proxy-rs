@@ -35,6 +35,7 @@ hyper-util = { version = "0.1.20", features = ["client-legacy", "http1", "tokio"
 # vendored OpenSSL 固定 Linux 发布版的 TLS 画像，且不启用压缩特性。
 native-tls = "=0.2.14"
 reqwest = { version = "=0.12.28", features = ["json", "stream", "cookies", "rustls-tls-native-roots", "socks"] }
+regex = "1.13.0"
 roxmltree = "0.21.1"
 semver = "1.0.27"
 # 与官方 rustls 路径一致：aws-lc 支持 P-521，优先提供 X25519MLKEM768。

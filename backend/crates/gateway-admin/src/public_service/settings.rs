@@ -26,6 +26,13 @@ pub(super) fn register(
     }
     register!(Load, load, (), ());
     register!(
+        PreviewPrivacyPolicy,
+        preview_privacy_policy,
+        gateway_core::settings::privacy::PrivacyPreviewRequest,
+        request,
+        request
+    );
+    register!(
         Replace,
         replace,
         (MutationContext, ReplaceRuntimeSettings),

@@ -22,6 +22,13 @@ use super::{map_store_error, publish_committed};
 /// API 消费的 Runtime settings 管理服务
 #[async_trait]
 pub trait SettingsService: Send + Sync {
+    async fn preview_privacy_policy(
+        &self,
+        _request: gateway_core::settings::privacy::PrivacyPreviewRequest,
+    ) -> Result<gateway_core::settings::privacy::PrivacyPreviewResult, AdminError> {
+        Err(AdminError::invalid("隐私预览不可用"))
+    }
+
     async fn preview_pricing_sync(
         &self,
     ) -> Result<crate::model::pricing::PricingSyncPreview, AdminError>;
@@ -117,6 +124,21 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
 
 #[async_trait]
 impl SettingsService for DefaultSettingsService {
+    async fn preview_privacy_policy(
+        &self,
+        request: gateway_core::settings::privacy::PrivacyPreviewRequest,
+    ) -> Result<gateway_core::settings::privacy::PrivacyPreviewResult, AdminError> {
+        self.profile_provider("openai")?
+            .preview_privacy_policy(request)
+            .map_err(|error| {
+                AdminError::invalid(format!(
+                    "第 {} 条规则：{}",
+                    error.rule_index + 1,
+                    error.reason
+                ))
+            })
+    }
+
     async fn preview_pricing_sync(
         &self,
     ) -> Result<crate::model::pricing::PricingSyncPreview, AdminError> {
@@ -342,6 +364,17 @@ impl SettingsService for DefaultSettingsService {
         mut command: ReplaceRuntimeSettings,
     ) -> Result<RuntimeSettings, AdminError> {
         validate_settings(&command)?;
+        if command.values.codex_privacy_policy != Default::default() {
+            self.profile_provider("openai")?
+                .compile_privacy_policy(&command.values.codex_privacy_policy)
+                .map_err(|error| {
+                    AdminError::invalid(format!(
+                        "第 {} 条规则：{}",
+                        error.rule_index + 1,
+                        error.reason
+                    ))
+                })?;
+        }
         if command
             .request_profile_updates
             .values()

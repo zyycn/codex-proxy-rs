@@ -16,7 +16,7 @@ use super::{
 };
 
 impl CodexBackendClient {
-    /// 向固定 Provider 端点发送一次原始 JSON；请求与成功响应正文均不经过 serde
+    /// 向固定 Provider 端点发送 JSON，仅启用隐私规则时解码请求正文
     pub(crate) async fn post_raw_json(
         &self,
         endpoint_path: &'static str,
@@ -49,6 +49,21 @@ impl CodexBackendClient {
             context.turn_metadata,
         );
         self.append_middleware_headers(&mut headers)?;
+        let body = if self.privacy.is_some() {
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&body).map_err(CodexClientError::RequestBodyEncode)?;
+            let original = value.clone();
+            self.apply_privacy(&mut value, &mut headers)?;
+            if value == original {
+                body
+            } else {
+                bytes::Bytes::from(
+                    serde_json::to_vec(&value).map_err(CodexClientError::RequestBodyEncode)?,
+                )
+            }
+        } else {
+            body
+        };
 
         let trace = context
             .trace
