@@ -850,6 +850,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         &mut failure,
                         WebSocketRecoveryContext {
                             policy,
+                            replay_boundary: ReplayBoundary::BeforeSemanticOutput,
                             requirement: request_transport_requirement,
                             retry_count: websocket_retry_count,
                             max_retries: stream_max_retries,
@@ -964,7 +965,6 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Sent))?;
                 return;
             };
-            let replay_grace_deadline = pre_commit_events.replay_grace_deadline();
             let next = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => Err(MappedProviderFailure::plain(provider_error(
@@ -975,9 +975,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     ProviderErrorKind::Timeout,
                     UpstreamSendState::Sent,
                 ))),
-                _ = wait_for_replay_grace(replay_grace_deadline) => Ok(PreCommitPoll::GraceElapsed),
                 chunk = body.next() => match chunk {
-                    Some(Ok(chunk)) => Ok(PreCommitPoll::Upstream(Some(chunk))),
+                    Some(Ok(chunk)) => Ok(Some(chunk)),
                     Some(Err(error)) => {
                         log_client_upstream_error(
                             UpstreamErrorLogContext::new(
@@ -989,17 +988,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         );
                         Err(map_stream_error(error))
                     }
-                    None => Ok(PreCommitPoll::Upstream(None)),
+                    None => Ok(None),
                 },
             };
             let next = match next {
-                Ok(PreCommitPoll::Upstream(next)) => next,
-                Ok(PreCommitPoll::GraceElapsed) => {
-                    for event in pre_commit_events.commit_pending(PreCommitReleaseReason::GraceTimeout) {
-                        yield event;
-                    }
-                    continue;
-                }
+                Ok(next) => next,
                 Err(mut failure) => {
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
                     let rate_limits_changed = if updates.is_empty() {
@@ -1023,15 +1016,12 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     };
                     if failure.websocket_transport_retryable
                         && response_transport == CodexBackendTransport::WebSocket
-                        && (matches!(
-                            failure.error.send_state(),
-                            UpstreamSendState::Sent | UpstreamSendState::Ambiguous
-                        ) || !pre_commit_events.is_committed())
                     {
                         apply_websocket_recovery_policy(
                             &mut failure,
                             WebSocketRecoveryContext {
                                 policy: WebSocketFailurePolicy::Budgeted,
+                                replay_boundary: ReplayBoundary::from_semantic_output(pre_commit_events.is_committed()),
                                 requirement: request_transport_requirement,
                                 retry_count: websocket_retry_count,
                                 max_retries: stream_max_retries,

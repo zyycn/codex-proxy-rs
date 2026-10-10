@@ -381,6 +381,10 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别客户端，Cor
   重试与提交边界。具体错误合同见 [数据面接口](api.md#3-openai-数据面与模型目录)
 - Provider 可将明确容量拒绝标记为有界同账号退避，Core 在既有安全重放边界内执行，按账号维护请求内
   预算，耗尽后复用普通换号路径。该退避消耗总路由预算，与 WS 传输恢复、OAuth 刷新及账号额度冷却分开
+- OpenAI 的结构事件由 Provider 保留到有效输出或终态，不按等待时长或累计体积提前交付。
+  交付前的 WS 传输错误可请求有界同账号尽力恢复，即使发送结果不明也保留此恢复意图；
+  发送事实与安全重放证明不因此改写。Provider 限定传输次数与续接范围，Core 保持原账号并检查
+  取消、deadline、已观测外部副作用及下游交付边界
 - 换号预算从运行设置冻结到请求计划，选中账号与上一 attempt 不同时计数；首次选号、同账号重试和
   选号阶段过滤候选不消耗预算。跨 Provider 候选推进与 continuation 排除重放同样受限，预算耗尽后
   以最后一个原始上游错误终态；总路由尝试仍最多 32 次
@@ -642,7 +646,7 @@ Continuation 受原请求的 Client Key、账号范围、Provider 和发送/交�
   已知为 connection-local 的原生续接进入重放阶段时，在选号前返回 `ClientReplayRequired`，不认领或迁移会话绑定。
   正常 native 续接仍由连接池核对原连接及 response ID 是否可用
 - xAI 使用客户端提交的完整历史作为重放输入
-- scope 外账号、跨 Key 复用或不明确发送结果均 fail closed
+- scope 外账号与跨 Key 复用均拒绝；发送结果不明时，仅接受 Provider 明确给出的有界传输恢复意图
 
 OpenAI Provider 解释官方逻辑 `session_id` 与 `thread_id`，按 Client Key 隔离账号绑定，
 不将缓存路由键或请求内容推断为账号身份。账号亲和模式随请求策略冻结：

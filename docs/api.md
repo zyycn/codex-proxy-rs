@@ -342,7 +342,7 @@ OAuth 的大 connection-local WS 续接，以及 HTTP `store=false` 成功后标
 的 WS 增量，均在发送前返回 `status: 400 / previous_response_not_found`。客户端应清除旧 ID，
 携带完整历史及工具调用／输出重试。官方 Codex 支持重连 WS 后完整重发，也可能按自身重试预算
 切到 HTTP；其他客户端需要自行实现此合同。代理不缓存 transcript，不把增量输入当作独立新链，
-不自动重放发送结果不确定的请求；HTTP 链后续步骤可能增加一次恢复信号、重连及全量上传
+连接内续接失去原连接时仍需客户端恢复；HTTP 链后续步骤可能增加一次恢复信号、重连及全量上传
 
 已建立模型执行的 Responses、Images 和 Search HTTP 响应按以下规则返回关联 ID：
 `x-gateway-request-id` 为模型执行 ID；`x-request-id` 保留有效上游值，只有上游
@@ -434,6 +434,16 @@ xAI 的 `reasoning.effort` 接受 `none / minimal / low / medium / high / xhigh 
 同名时使用内部别名，并在返回工具调用时还原客户端名称。搜索工具顶层的 `allowed_domains` 不受支持，返回请求错误
 
 #### 容量拒绝与重试
+
+OpenAI Responses 的 `response.created`、`response.in_progress` 等前导事件保留到首次有效文本、
+推理、工具活动或终态再交付，SSE 与 WebSocket 使用相同边界。前导缓冲不另设等待时长或累计体积上限，
+等待沿用[请求期限](#请求期限)与传输超时配置。WebSocket 独立 Ping 保活；
+HTTP 在首个业务事件前保留状态码和响应头，SSE 注释保活从提交响应后开始
+
+WebSocket 在交付有效输出前断线或超时，可按 `stream_max_retries` 做同账号、有退避的尽力重试
+（默认最多 5 次），耗尽后仅在请求允许时改用 HTTP。已发送或发送结果不明不单独阻止这项恢复；
+次数限制不保证上游只执行一次，诊断保留原始发送状态。精确连接续接、显式终止拒绝、已观测的
+外部副作用和下游提交仍限制恢复；取消与请求截止时间随时终止等待
 
 OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足错误时，代理在允许安全重放且
 尚未交付输出的前提下，先做最多 3 次同账号重试，再通过现有调度换号。没有有效服务器建议时，
@@ -1911,9 +1921,8 @@ WebSocket 握手默认请求专项计时，客户端显式提供的开关保留�
 请求与错误事件各自的状态、attempt、时间线阶段、计时和上述失败分类。
 `provider.precommit.released` 事件的 `precommitRelease` 保留 `reason / prefetchedBytes / waitMs`，
 分别表示 Provider 释放缓存的原因、累计预取字节数和等待毫秒数，不等同于下游已提交。
-当前释放原因为 `semantic_output / terminal / grace_timeout / eof`，导出也接受历史记录中的 `byte_limit`。
-累计字节数只用于诊断，不触发缓存释放；数值只允许非负安全整数，
-缺失或未通过校验的字段为 `null`；其他事件的 `precommitRelease` 为 `null`
+当前释放原因为 `semantic_output / terminal / eof`，导出也接受历史记录中的 `grace_timeout / byte_limit`。
+数值只允许非负安全整数，缺失或未通过校验的字段为 `null`；其他事件的 `precommitRelease` 为 `null`
 
 诊断包不自动导出 message/raw error、任意 metadata、其他 trace event data、请求响应正文和头部。
 `availability` 与 `omitted` 明示未采集、不完整或主动省略的内容，`null` 不代表没有发生错误。

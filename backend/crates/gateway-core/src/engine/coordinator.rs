@@ -1511,6 +1511,8 @@ where
                 error.pre_delivery_retry(),
                 Some(crate::error::PreDeliveryRetry::SameAccountConnectionRetry { .. })
             );
+        // Provider 的有界同账号传输恢复是尽力重试策略，不要求把 Sent/Ambiguous
+        // 改写成安全证明；外部副作用、取消、预算与下游提交仍由 Core 拦截
         let transport_recovery = match error.pre_delivery_retry() {
             Some(crate::error::PreDeliveryRetry::SameAccountConnectionRetry { transport })
                 if !execution_effect_observed
@@ -1534,8 +1536,7 @@ where
             }) if !execution_effect_observed
                 && !self.connection_budget.exhausted()
                 && self.downstream_committed_at.is_none()
-                && !self.delivery_pending
-                && attempt_send_state != UpstreamSendState::Ambiguous =>
+                && !self.delivery_pending =>
             {
                 Some((AttemptTransport::Retry(retry_index), delay))
             }
@@ -1543,8 +1544,7 @@ where
                 if !execution_effect_observed
                     && !self.connection_budget.exhausted()
                     && self.downstream_committed_at.is_none()
-                    && !self.delivery_pending
-                    && attempt_send_state != UpstreamSendState::Ambiguous =>
+                    && !self.delivery_pending =>
             {
                 Some((
                     AttemptTransport::Fallback,

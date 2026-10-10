@@ -4220,7 +4220,9 @@ async fn abrupt_websocket_disconnect_preserves_diagnosis_and_ambiguous_send_stat
     assert_eq!(error.kind(), ProviderErrorKind::Transport);
     assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
     assert!(!error.replay_is_safe());
-    assert_eq!(error.pre_delivery_retry(), None);
+    assert!(
+        matches!(error.pre_delivery_retry(), Some(PreDeliveryRetry::SameAccountTransportRetry { retry_index, .. }) if retry_index.get() == 1)
+    );
     assert_eq!(
         error.diagnostic().map(|diagnostic| diagnostic.as_str()),
         Some(
@@ -4729,7 +4731,9 @@ async fn ambiguous_websocket_close_reconnects_and_retains_native_continuation() 
 
     assert!(saw_websocket_observation);
     assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
-    assert_eq!(error.pre_delivery_retry(), None);
+    assert!(
+        matches!(error.pre_delivery_retry(), Some(PreDeliveryRetry::SameAccountTransportRetry { retry_index, .. }) if retry_index.get() == 1)
+    );
     assert!(error.upstream_code().is_none());
     let close: Value = serde_json::from_str(error.raw_upstream_error().unwrap().as_str()).unwrap();
     assert_eq!(close["type"], "websocket.close");
@@ -4945,7 +4949,17 @@ async fn repeated_websocket_failures_exhaust_budget_then_use_http_and_report_htt
             }
         };
         assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
-        assert_eq!(error.pre_delivery_retry(), None);
+        if index < 2 {
+            assert!(matches!(
+                error.pre_delivery_retry(),
+                Some(PreDeliveryRetry::SameAccountTransportRetry { .. })
+            ));
+        } else {
+            assert_eq!(
+                error.pre_delivery_retry(),
+                Some(PreDeliveryRetry::SameAccountTransportFallback)
+            );
+        }
         assert!(!error.replay_is_safe());
     }
     for index in 0..2 {
@@ -5950,7 +5964,7 @@ async fn websocket_turn_state_metadata_is_exposed_through_response_observation()
 }
 
 #[tokio::test]
-async fn websocket_turn_state_metadata_close_does_not_authorize_replay() {
+async fn websocket_metadata_close_requests_bounded_retry_without_claiming_replay_safety() {
     const ACCOUNT_ID: &str = "acct_websocket_metadata_close";
     const TURN_STATE: &str = "turn-state-before-close";
 
@@ -6032,7 +6046,9 @@ async fn websocket_turn_state_metadata_close_does_not_authorize_replay() {
     assert!(session_update.is_none());
     assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
     assert!(!error.replay_is_safe());
-    assert_eq!(error.pre_delivery_retry(), None);
+    assert!(
+        matches!(error.pre_delivery_retry(), Some(PreDeliveryRetry::SameAccountTransportRetry { retry_index, .. }) if retry_index.get() == 1)
+    );
     assert!(error.upstream_code().is_none());
     let close: Value = serde_json::from_str(error.raw_upstream_error().unwrap().as_str()).unwrap();
     assert_eq!(close["type"], "websocket.close");
@@ -9059,7 +9075,7 @@ async fn ordinary_request_should_hold_created_until_later_failure_can_rotate() {
 }
 
 #[tokio::test]
-async fn ordinary_request_should_bound_structural_event_replay_grace() {
+async fn ordinary_request_should_hold_structural_events_until_upstream_finishes() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_bounded_replay_grace").await;
     let (base_url, release, _first_chunk_sent, server) = paused_chunked_sse_server(
@@ -9079,29 +9095,24 @@ async fn ordinary_request_should_bound_structural_event_replay_grace() {
         .await
         .expect("prepare provider stream");
 
-    let first_event = timeout(Duration::from_secs(4), async {
-        loop {
-            let event = stream
-                .next()
-                .await
-                .expect("provider stream must stay open")
-                .expect("provider event");
-            if event.has_client_event() {
-                return event;
+    assert!(
+        timeout(Duration::from_secs(3), async {
+            while let Some(event) = stream.next().await {
+                assert!(!event.expect("provider event").has_client_event());
             }
-        }
-    })
-    .await
-    .expect("response.created must be released after the bounded grace period");
-
-    assert_eq!(
-        first_event.wire_event().and_then(|wire| wire.event_type()),
-        Some("response.created")
+        })
+        .await
+        .is_err()
     );
     release.send(()).expect("finish upstream response");
-    while let Some(event) = stream.next().await {
-        event.expect("clean upstream EOF");
-    }
+    let events = stream.collect::<Vec<_>>().await;
+    assert!(events.iter().any(|event| {
+        event
+            .as_ref()
+            .unwrap()
+            .wire_event()
+            .is_some_and(|wire| wire.event_type() == Some("response.created"))
+    }));
     server.await.expect("chunked SSE server");
 }
 
@@ -9593,7 +9604,7 @@ async fn exact_websocket_busy_then_replay_scope_relaxation_is_rejected_before_se
 }
 
 #[tokio::test]
-async fn continuation_prefetch_over_128_kib_should_wait_for_grace_without_protocol_failure() {
+async fn continuation_prefetch_over_128_kib_stays_buffered_until_eof_without_protocol_failure() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_prefetch_limit").await;
     let padding = "x".repeat(128 * 1024);
@@ -9638,11 +9649,17 @@ async fn continuation_prefetch_over_128_kib_should_wait_for_grace_without_protoc
             timeout(Duration::from_secs(1), next_visible.as_mut())
                 .await
                 .is_err(),
-            "large structural events must remain buffered during the grace period"
+            "large structural events must remain buffered before semantic output"
         );
-        timeout(Duration::from_secs(3), next_visible)
+        assert!(
+            timeout(Duration::from_secs(3), next_visible.as_mut())
+                .await
+                .is_err()
+        );
+        release.send(()).expect("finish upstream response");
+        timeout(Duration::from_secs(1), next_visible)
             .await
-            .expect("grace expiry must release buffered wire")
+            .expect("EOF releases original wire")
     };
 
     assert_eq!(
@@ -9655,7 +9672,6 @@ async fn continuation_prefetch_over_128_kib_should_wait_for_grace_without_protoc
         .raw_sse_frame()
         .unwrap()
         .to_vec();
-    release.send(()).expect("finish upstream response");
     while let Some(event) = stream.next().await {
         if let Some(frame) = event
             .expect("clean upstream EOF cannot become a protocol failure")
@@ -11671,7 +11687,7 @@ async fn quota_continuation_stream_rejection_only_projects_before_delivery() {
 }
 
 #[tokio::test]
-async fn quota_continuation_after_structural_commit_preserves_original_failure() {
+async fn late_quota_continuation_rejection_requires_client_replay_before_output() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let original = json!({"type":"response.failed","response":{"id":"resp_quota","error":{"code":"usage_limit_reached","message":"limit reached"}}});
@@ -11687,16 +11703,15 @@ async fn quota_continuation_after_structural_commit_preserves_original_failure()
         )
         .await
         .unwrap();
-    timeout(Duration::from_secs(3), async {
-        while let Some(event) = stream.next().await {
-            if event.unwrap().has_client_event() {
-                return;
+    assert!(
+        timeout(Duration::from_secs(3), async {
+            while let Some(event) = stream.next().await {
+                assert!(!event.unwrap().has_client_event());
             }
-        }
-        panic!("expected grace commit");
-    })
-    .await
-    .expect("bounded grace");
+        })
+        .await
+        .is_err()
+    );
     release.send(()).unwrap();
     let mut delivered_failure = false;
     let error = loop {
@@ -11710,9 +11725,9 @@ async fn quota_continuation_after_structural_commit_preserves_original_failure()
             None => panic!("expected failure"),
         }
     };
-    assert!(delivered_failure);
-    assert!(!error.replay_is_safe());
-    assert_ne!(
+    assert!(!delivered_failure);
+    assert!(error.replay_is_safe());
+    assert_eq!(
         error.continuation_recovery_disposition(),
         Some(ContinuationRecoveryDisposition::ClientReplayRequired)
     );

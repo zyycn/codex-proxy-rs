@@ -69,28 +69,14 @@ impl MappedProviderFailure {
     }
 }
 
-pub(super) enum PreCommitPoll<T> {
-    Upstream(T),
-    GraceElapsed,
-}
-
-pub(super) async fn wait_for_replay_grace(deadline: Option<Instant>) {
-    if let Some(deadline) = deadline {
-        tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-    } else {
-        std::future::pending::<()>().await;
-    }
-}
-
 /// 提交边界前的上游事件预取
 ///
-/// 结构事件保留到宽限期结束、语义输出、终态或 EOF，再提交已缓存 wire
-/// 大段配置回显不应提前结束无感换号窗口，原始 chunk 字节数只用于诊断
+/// 结构事件保留到语义输出、终态或 EOF，再提交已缓存 wire
 /// 一旦提交，后续事件不再具备无痕重放资格
 pub(super) struct PreCommitClientEvents {
     pending: Vec<ProviderEvent>,
     prefetched_bytes: usize,
-    replay_grace_started_at: Option<Instant>,
+    started_at: tokio::time::Instant,
     committed: bool,
     trace: TraceContext,
 }
@@ -100,16 +86,15 @@ pub(super) struct PreCommitClientEvents {
 pub(super) enum PreCommitReleaseReason {
     SemanticOutput,
     Terminal,
-    GraceTimeout,
     Eof,
 }
 
 impl PreCommitClientEvents {
-    pub(super) const fn new(trace: TraceContext) -> Self {
+    pub(super) fn new(trace: TraceContext) -> Self {
         Self {
             pending: Vec::new(),
             prefetched_bytes: 0,
-            replay_grace_started_at: None,
+            started_at: tokio::time::Instant::now(),
             committed: false,
             trace,
         }
@@ -130,16 +115,12 @@ impl PreCommitClientEvents {
         if self.committed {
             return incoming;
         }
-        let starts_replay_grace = incoming.iter().any(ProviderEvent::has_client_event);
         self.pending.extend(incoming);
         if timing_signals.semantic_output {
             return self.commit_pending(PreCommitReleaseReason::SemanticOutput);
         }
         if completed {
             return self.commit_pending(PreCommitReleaseReason::Terminal);
-        }
-        if starts_replay_grace && self.replay_grace_started_at.is_none() {
-            self.replay_grace_started_at = Some(Instant::now());
         }
         Vec::new()
     }
@@ -170,13 +151,7 @@ impl PreCommitClientEvents {
     pub(super) fn take_for_failure(&mut self, incoming: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
         self.pending.extend(incoming);
         self.prefetched_bytes = 0;
-        self.replay_grace_started_at = None;
         std::mem::take(&mut self.pending)
-    }
-
-    pub(super) fn replay_grace_deadline(&self) -> Option<Instant> {
-        self.replay_grace_started_at
-            .and_then(|started| started.checked_add(STREAM_REPLAY_GRACE))
     }
 
     pub(super) const fn is_committed(&self) -> bool {
@@ -186,15 +161,17 @@ impl PreCommitClientEvents {
     pub(super) fn commit_pending(&mut self, reason: PreCommitReleaseReason) -> Vec<ProviderEvent> {
         // Provider 只记录释放缓存的原因；实际下游提交仍由 Core 记录和裁决
         if self.trace.is_enabled() {
-            self.trace.record("provider.precommit.released", json!({
-                "reason": reason,
-                "prefetchedBytes": self.prefetched_bytes,
-                "waitMs": self.replay_grace_started_at.map_or(0, |started| started.elapsed().as_millis()),
-            }));
+            self.trace.record(
+                "provider.precommit.released",
+                json!({
+                    "reason": reason,
+                    "prefetchedBytes": self.prefetched_bytes,
+                    "waitMs": self.started_at.elapsed().as_millis(),
+                }),
+            );
         }
         self.committed = true;
         self.prefetched_bytes = 0;
-        self.replay_grace_started_at = None;
         std::mem::take(&mut self.pending)
     }
 }
@@ -484,6 +461,7 @@ pub(super) enum WebSocketFailurePolicy {
 
 pub(super) struct WebSocketRecoveryContext<'a> {
     pub(super) policy: WebSocketFailurePolicy,
+    pub(super) replay_boundary: ReplayBoundary,
     pub(super) requirement: TransportRequirement,
     pub(super) retry_count: u32,
     pub(super) max_retries: u32,
@@ -576,34 +554,10 @@ pub(super) fn apply_websocket_recovery_policy(
                 .session_transport_recovery
                 .record_websocket_failure(key, context.max_retries)
         });
-    let send_state = failure.error.send_state();
-    let post_send = matches!(
-        send_state,
-        UpstreamSendState::Sent | UpstreamSendState::Ambiguous
-    );
-    if send_state == UpstreamSendState::Ambiguous || (post_send && !failure.error.replay_is_safe())
-    {
-        tracing::warn!(
-            request_id = context.request_id,
-            attempt_index = context.attempt_index,
-            account_id = context.account_id,
-            websocket_failure_kind = failure.error.kind().as_str(),
-            websocket_failure_code = failure
-                .error
-                .diagnostic()
-                .and_then(ProviderDiagnostic::code)
-                .unwrap_or(""),
-            upstream_send_state = ?send_state,
-            transport_requirement = context.requirement.as_str(),
-            continuation_recovery_action = "client_replay_required",
-            session_http_fallback = session_budget_exhausted,
-            session_affinity_present = context.session_transport_key.is_some(),
-            session_transport_key_hash = context.session_transport_key_hash.unwrap_or(""),
-            "OpenAI upstream WebSocket failed after payload send; proxy replay was suppressed"
-        );
+    // 已交付响应只影响后续请求的会话传输选择，不能重放当前请求
+    if matches!(context.replay_boundary, ReplayBoundary::AfterSemanticOutput) {
         return;
     }
-
     if matches!(
         context.requirement,
         TransportRequirement::ExactWebSocketContinuation | TransportRequirement::HttpRequired
@@ -611,6 +565,8 @@ pub(super) fn apply_websocket_recovery_policy(
         return;
     }
 
+    // 有效输出前，已发送或结果不明也允许按预算尽力恢复
+    // 保留发送事实和 replay_is_safe 原值，重试意图不能伪装成上游未执行的证明
     // 传输恢复必须保持原账号可调度；最终 HTTP attempt 若仍失败，再按真实 HTTP
     // 结果更新账号健康度，避免中间 WS 错误把同账号钉选提前冷却掉
     failure.account_failure = None;
@@ -643,6 +599,8 @@ pub(super) fn apply_websocket_recovery_policy(
             websocket_retry_count = retry_index.get(),
             websocket_max_retries = context.max_retries,
             websocket_retry_delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+            upstream_send_state = ?failure.error.send_state(),
+            replay_proved_safe = failure.error.replay_is_safe(),
             transport_requirement = context.requirement.as_str(),
             "OpenAI upstream WebSocket failed; retrying the same account"
         );

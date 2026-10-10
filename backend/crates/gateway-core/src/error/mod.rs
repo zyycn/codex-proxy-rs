@@ -135,6 +135,7 @@ pub enum PreDeliveryRetry {
         max_delay: Duration,
     },
     /// 固定本次账号，并按 Provider 给出的序号重试当前传输
+    /// 可用于发送结果不明确时的有界尽力恢复，不等于上游未执行的证明
     SameAccountTransportRetry {
         /// Provider-owned 传输重试序号，从 1 开始
         retry_index: NonZeroU32,
@@ -630,8 +631,8 @@ impl ProviderError {
 
     /// 允许 Core 在首个客户端事件前固定原账号并改用 Provider 备用传输
     ///
-    /// 与普通换号恢复相同，Core 仍会拒绝 continuation、指定账号、预算耗尽或
-    /// 下游已提交后的隐藏重放
+    /// Provider 必须确认备用传输满足当前 continuation scope 并限制恢复次数
+    /// Core 保持原账号，拒绝预算耗尽、外部副作用或下游已提交后的隐藏重放
     #[must_use]
     pub fn with_pre_delivery_transport_fallback(mut self) -> Self {
         self.set_pre_delivery_transport_fallback();
@@ -647,6 +648,7 @@ impl ProviderError {
     ///
     /// 重试预算和退避策略由 Provider 所属协议定义；Core 只负责同账号钉选、
     /// deadline/取消边界以及下游 commit barrier
+    /// 该意图允许发送结果不明确时尽力恢复，但不修改发送事实或安全重放证明
     #[must_use]
     pub fn with_pre_delivery_transport_retry(
         mut self,

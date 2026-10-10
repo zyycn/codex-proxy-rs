@@ -3493,7 +3493,7 @@ fn ambiguous_pre_delivery_retry_marker_does_not_rotate_account() {
 }
 
 #[test]
-fn ambiguous_transport_retry_is_rejected_even_with_provider_session_state() {
+fn ambiguous_transport_retry_keeps_the_account_without_claiming_replay_safety() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let checkpoint = ProviderSessionState::new(
@@ -3513,7 +3513,6 @@ fn ambiguous_transport_retry_is_rejected_even_with_provider_session_state() {
                 Ok(checkpoint_event),
                 Err(
                     ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
-                        .with_replay_safe()
                         .with_pre_delivery_transport_retry(retry_index, Duration::ZERO),
                 ),
             ],
@@ -3533,14 +3532,25 @@ fn ambiguous_transport_retry_is_rejected_even_with_provider_session_state() {
         CancellationToken::new(),
     ))
     .expect("start execution");
-    let error =
-        block_on(session.collect_uncommitted()).expect_err("ambiguous send cannot be replayed");
-    assert!(matches!(error, EngineError::Provider(_)));
-    assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 1);
+    block_on(session.collect_uncommitted()).expect("bounded transport recovery succeeds");
+    block_on(session.commit_downstream(Some(200))).expect("commit winning response");
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 2);
+    assert_eq!(
+        contexts[1].transport(),
+        AttemptTransport::Retry(retry_index)
+    );
+    assert_eq!(
+        contexts[1].required_account(),
+        Some(&ProviderAccountId::new("acct_first").unwrap())
+    );
+    assert!(contexts[1].excluded_accounts().is_empty());
     let state = store.state.lock().expect("store lock");
-    assert_eq!(state.intermediate_failures, 0);
-    assert_eq!(state.finalizations[0].attempt_count, 1);
-    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].attempt_count, 2);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+    assert!(state.send_states.contains(&UpstreamSendState::Ambiguous));
+    assert_eq!(state.finalizations[0].send_state, UpstreamSendState::Sent);
 }
 
 #[test]
