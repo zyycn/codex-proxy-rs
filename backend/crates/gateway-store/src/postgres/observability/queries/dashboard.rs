@@ -10,7 +10,7 @@ pub(crate) async fn request_metrics(
     filter.validate()?;
     // 结果计数覆盖范围内全部请求（成功率/失败率的分母分子）；用量、缓存、
     // 延迟与成本聚合仅统计用量事实（已完整交付客户端的成功响应）
-    let fact = completed_usage_fact_predicate("mr");
+    let fact = "mr.is_completed_usage";
     let mut query = QueryBuilder::<Postgres>::new(format!(
         "select count(*)::bigint as request_count,
                 count(*) filter (where outcome = 'succeeded')::bigint as success_count,
@@ -87,14 +87,9 @@ pub(crate) async fn request_metrics(
                 round(percentile_cont(0.95) within group (
                   order by capacity_used_slots::double precision
                     / nullif(capacity_total_slots, 0)
-                ) * 10000)::bigint as capacity_utilization_p95_basis_points
-         from model_request_observations mr where mr.started_at >= "
+                ) * 10000)::bigint as capacity_utilization_p95_basis_points "
     ));
-    query.push_bind(range.start);
-    query.push(" and mr.started_at < ");
-    query.push_bind(range.end);
-    push_unrecovered_request_filter(&mut query, "mr");
-    push_usage_filter(&mut query, filter, "mr");
+    push_request_metrics_source(&mut query, range, filter);
     let row = query
         .build()
         .fetch_one(pool)
@@ -162,7 +157,7 @@ async fn request_metric_series_inner(
     filter.validate()?;
     // 与 request_metrics 同一契约：结果计数覆盖全部请求，用量/延迟/成本
     // 聚合仅统计用量事实
-    let fact = completed_usage_fact_predicate("mr");
+    let fact = "mr.is_completed_usage";
     let mut query = QueryBuilder::<Postgres>::new("select ");
     push_metric_bucket(&mut query, range, granularity, timezone)?;
     query.push(format!(
@@ -248,14 +243,9 @@ async fn request_metric_series_inner(
                 count(*) filter (where {fact} and cost_source = 'calculated')::bigint
                   as calculated_count,
                 count(*) filter (where {fact} and cost_source = 'unavailable')::bigint
-                  as unavailable_count
-         from model_request_observations mr where mr.started_at >= "
+                  as unavailable_count "
     ));
-    query.push_bind(range.start);
-    query.push(" and mr.started_at < ");
-    query.push_bind(range.end);
-    push_unrecovered_request_filter(&mut query, "mr");
-    push_usage_filter(&mut query, filter, "mr");
+    push_request_metrics_source(&mut query, range, filter);
     query.push(" group by bucket_start order by bucket_start");
     let rows = query
         .build()
@@ -287,6 +277,32 @@ async fn request_metric_series_inner(
         }
     }
     fill_metric_gaps(range, granularity, points, timezone)
+}
+
+fn push_request_metrics_source(
+    query: &mut QueryBuilder<Postgres>,
+    range: ObservabilityRange,
+    filter: &UsageRecordFilter,
+) {
+    let fact = completed_usage_fact_predicate("mr");
+    // 先筛选再投影计时与用量口径，供多个聚合复用；屏障只属于计时统计查询
+    // 显式保留聚合需要的列，避免宽 JSON、快照与诊断轨迹进入中间结果
+    query.push(format!(
+        "from (select mr.started_at, mr.outcome, mr.client_status_code,
+                      mr.input_tokens, mr.output_tokens, mr.cached_tokens,
+                      mr.cache_write_tokens, mr.reasoning_tokens, mr.total_tokens,
+                      mr.first_token_ms, mr.latency_ms, mr.admission_decision_ms,
+                      mr.account_selection_wait_ms, mr.upstream_response_ms,
+                      mr.capacity_used_slots, mr.capacity_total_slots, mr.cost_source,
+                      ({fact}) as is_completed_usage
+                 from model_request_observations mr where mr.started_at >= "
+    ));
+    query.push_bind(range.start);
+    query.push(" and mr.started_at < ");
+    query.push_bind(range.end);
+    push_unrecovered_request_filter(query, "mr");
+    push_usage_filter(query, filter, "mr");
+    query.push(" offset 0) mr");
 }
 
 pub(crate) fn calculated_usage_billing_facts(

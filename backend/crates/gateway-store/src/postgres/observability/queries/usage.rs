@@ -411,8 +411,9 @@ pub(crate) async fn usage_diagnostics(
     push_unrecovered_request_filter(&mut statement, "mr");
     push_diagnostic_dimension_filter(&mut statement, dimension);
     push_usage_filter(&mut statement, filter, "mr");
+    // 仅在筛选后的诊断投影保留屏障，让均值与分位数复用同一次计时提取
     statement.push(
-        "), aggregated as (
+        " offset 0), aggregated as (
            select dimension_name, cost_currency,
                   grouping(cost_currency)::integer as currency_grouping,
                   count(*)::bigint as request_count,
