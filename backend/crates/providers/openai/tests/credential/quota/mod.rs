@@ -489,6 +489,37 @@ async fn quota_refresh_synchronizes_plan_changes_without_losing_subtypes() {
 }
 
 #[tokio::test]
+async fn passive_quota_observation_preserves_account_egress() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_passive_quota_egress";
+    create_account(&store, account_id).await;
+    let proxy = gateway_core::account::OutboundProxy::parse("http://127.0.0.1:8080").unwrap();
+    let location = serde_json::from_value::<gateway_core::account::RequestLocation>(json!({
+        "country": "US", "region": "New York", "city": "New York",
+        "timezone": "America/New_York"
+    }))
+    .unwrap();
+    store.set_egress(account_id, Some(proxy.clone()), Some(location.clone()));
+    let account = store.account(account_id).unwrap();
+    let observation = parse_rate_limits_event(&json!({
+        "type": "codex.rate_limits",
+        "plan_type": "pro",
+        "rate_limits": {"primary": {"used_percent": 5, "window_minutes": 300, "reset_at": 1900000000}}
+    }))
+    .unwrap();
+
+    quota_service(&store)
+        .synchronize_passive_rate_limits(&account, &[observation])
+        .await
+        .unwrap();
+
+    let updated = store.account(account_id).unwrap();
+    assert!(store.quota_json(account_id).is_some());
+    assert_eq!(updated.outbound_proxy(), Some(&proxy));
+    assert_eq!(updated.request_location(), Some(&location));
+}
+
+#[tokio::test]
 async fn passive_plan_observations_update_account_without_replaying_stale_plan() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_passive_plan").await;

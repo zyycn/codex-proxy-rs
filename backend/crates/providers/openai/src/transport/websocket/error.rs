@@ -44,6 +44,9 @@ pub enum CodexWebSocketExchangeError {
     /// 同一精确会话的单飞建连失败
     #[error("shared websocket connection attempt failed before payload send")]
     SharedConnectFailed,
+    /// 连接已关闭或 pump 已退出，业务帧尚未交给底层发送
+    #[error("websocket connection closed before payload send started")]
+    SendNotStarted,
     /// payload 已可能送达上游，禁止自动重放到其他 transport 或账号
     #[error("websocket failed after payload send; replay outcome is ambiguous: {message}")]
     PostSendAmbiguous {

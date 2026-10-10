@@ -2,7 +2,7 @@
 //!
 //! 每条上游 WebSocket 连接都由一个后台 pump 任务独占：
 //! - 持续读取 socket：一旦观察到 `Close` / EOF / 传输错误，立即把连接标记为 `closed`
-//! - 自动回应上游 `Ping`，并按 `ping_interval` 主动 `Ping`；收到任意入站帧即解除本次心跳 deadline
+//! - 自动回应上游 `Ping`，并按 `ping_interval` 主动 `Ping`；收到非关闭入站帧即解除本次心跳 deadline
 //! - 可选 `liveness_timeout`：长时间无任何入站活动时判定连接失活并退出
 //!
 //! 因此空闲连接的“死没死”在后台被实时感知；复用方只需零成本读取 [`PumpedWebSocket::is_closed`]，
@@ -31,7 +31,7 @@ use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 use super::{
-    CodexWebSocketCloseError,
+    CodexWebSocketCloseError, CodexWebSocketExchangeError,
     control::{PumpCommand, PumpControl, SharedMessages, send_message},
 };
 
@@ -342,8 +342,11 @@ impl PumpedWebSocket {
         }
     }
 
-    /// 通过 pump 发送一帧，返回底层 `send` 的结果
-    pub(crate) async fn send(&self, message: Message) -> Result<(), tungstenite::Error> {
+    /// 通过 pump 发送一帧，区分未开始发送与底层传输失败
+    pub(crate) async fn send(&self, message: Message) -> Result<(), CodexWebSocketExchangeError> {
+        if self.is_closed() {
+            return Err(CodexWebSocketExchangeError::SendNotStarted);
+        }
         send_message(&self.tx_command, message).await
     }
 
@@ -457,13 +460,12 @@ async fn pump_loop(
                     }
                     // 背压期间无法读取 socket，不能把这段本地下游阻塞误算成上游静默
                     last_activity = Instant::now();
-                    record_activity(&lifecycle, last_activity);
                 }
                 command = rx_command.recv() => {
                     let Some(command) = command else {
                         break 'pump PumpExitReason::CommandChannelClosed;
                     };
-                    if let Some(reason) = handle_command(&mut inner, command).await {
+                    if let Some(reason) = handle_command(&mut inner, command, closed.load(Ordering::Acquire)).await {
                         break 'pump reason;
                     }
                 }
@@ -478,7 +480,7 @@ async fn pump_loop(
                 let Some(command) = command else {
                     break 'pump PumpExitReason::CommandChannelClosed;
                 };
-                if let Some(reason) = handle_command(&mut inner, command).await {
+                if let Some(reason) = handle_command(&mut inner, command, closed.load(Ordering::Acquire)).await {
                     break 'pump reason;
                 }
             }
@@ -486,9 +488,12 @@ async fn pump_loop(
                 match message {
                     None => break 'pump PumpExitReason::UpstreamEof,
                     Some(Ok(message)) => {
-                        last_activity = Instant::now();
-                        record_activity(&lifecycle, last_activity);
-                        observe_inbound(connection_id, &mut pending_ping, &message);
+                        // Close 是终止信号，不能刷新链路健康时间或抹掉关闭前的静默时长
+                        if !matches!(message, Message::Close(_)) {
+                            last_activity = Instant::now();
+                            record_activity(&lifecycle, last_activity);
+                            observe_inbound(connection_id, &mut pending_ping, &message);
+                        }
                         match message {
                             Message::Ping(payload) => {
                                 if let Err(error) = inner.send(Message::Pong(payload)).await {
@@ -511,6 +516,9 @@ async fn pump_loop(
                                     }),
                                     _ => None,
                                 };
+                                if let Some(reason) = &terminal_reason {
+                                    record_closed(&closed, &lifecycle, reason);
+                                }
                                 if let Some(reason) = enqueue_inbound(
                                     &tx_message,
                                     &mut pending_inbound,
@@ -531,6 +539,7 @@ async fn pump_loop(
                             message: err.to_string(),
                             metric_reason: transport_metric_reason(&err),
                         };
+                        record_closed(&closed, &lifecycle, &terminal_reason);
                         if let Some(reason) = enqueue_inbound(
                             &tx_message,
                             &mut pending_inbound,
@@ -571,15 +580,17 @@ async fn pump_loop(
         }
     };
 
-    closed.store(true, Ordering::Release);
+    record_closed(&closed, &lifecycle, &reason);
+    // 排队命令尚未进入底层发送，关闭握手前即回绝，避免调用方等待或误判为已发送
+    rx_command.close();
+    while let Ok(PumpCommand::Send { ack, .. }) = rx_command.try_recv() {
+        let _ = ack.send(Err(CodexWebSocketExchangeError::SendNotStarted));
+    }
     let observation = {
-        let closed_at = Instant::now();
-        let mut lifecycle = lifecycle
+        let lifecycle = lifecycle
             .lock()
             .expect("WebSocket pump lifecycle lock poisoned");
-        lifecycle.closed_at = Some(closed_at);
-        lifecycle.exit_reason = Some(reason.clone());
-        lifecycle.observation(connection_id, closed_at)
+        lifecycle.observation(connection_id, Instant::now())
     };
     log_pump_exit(
         connection_id,
@@ -620,15 +631,27 @@ fn enqueue_inbound(
     }
 }
 
-async fn handle_command(inner: &mut RawWsStream, command: PumpCommand) -> Option<PumpExitReason> {
+async fn handle_command(
+    inner: &mut RawWsStream,
+    command: PumpCommand,
+    closed: bool,
+) -> Option<PumpExitReason> {
     let PumpCommand::Send { message, ack } = command;
+    // 发送超时或取消后，尚在队列里的业务帧不应继续打到上游
+    if ack.is_closed() {
+        return None;
+    }
+    if closed {
+        let _ = ack.send(Err(CodexWebSocketExchangeError::SendNotStarted));
+        return None;
+    }
     let is_close = matches!(message, Message::Close(_));
     let result = inner.send(message).await;
     let transport_error = result
         .as_ref()
         .err()
         .map(|error| (error.to_string(), transport_metric_reason(error)));
-    let _ = ack.send(result);
+    let _ = ack.send(result.map_err(CodexWebSocketExchangeError::Transport));
     match transport_error {
         Some((message, metric_reason)) => Some(PumpExitReason::OutboundTransportError {
             message,
@@ -660,6 +683,22 @@ fn record_activity(lifecycle: &Mutex<PumpLifecycleState>, observed_at: Instant) 
         .lock()
         .expect("WebSocket pump lifecycle lock poisoned")
         .last_activity = observed_at;
+}
+
+fn record_closed(
+    closed: &AtomicBool,
+    lifecycle: &Mutex<PumpLifecycleState>,
+    reason: &PumpExitReason,
+) {
+    let mut lifecycle = lifecycle
+        .lock()
+        .expect("WebSocket pump lifecycle lock poisoned");
+    // 先记录已观察到的终止事实，再通知复用方；入站背压不能延迟连接失效
+    if lifecycle.closed_at.is_none() {
+        lifecycle.closed_at = Some(Instant::now());
+        lifecycle.exit_reason = Some(reason.clone());
+    }
+    closed.store(true, Ordering::Release);
 }
 
 pub(crate) fn transport_metric_reason(error: &tungstenite::Error) -> &'static str {

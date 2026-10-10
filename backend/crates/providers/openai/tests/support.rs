@@ -665,6 +665,8 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
     )
     .with_scheduling(current.concurrency_limit(), current.weight())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
+    .with_outbound_proxy(current.outbound_proxy().cloned())
+    .with_request_location(current.request_location().cloned())
 }
 
 #[derive(Default)]

@@ -9,12 +9,14 @@ use gateway_core::engine::response_control::{
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{self, Message};
 
+use super::CodexWebSocketExchangeError;
+
 pub(super) const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 pub(super) enum PumpCommand {
     Send {
         message: Message,
-        ack: oneshot::Sender<Result<(), tungstenite::Error>>,
+        ack: oneshot::Sender<Result<(), CodexWebSocketExchangeError>>,
     },
 }
 
@@ -28,15 +30,16 @@ pub(super) struct PumpControl {
 pub(super) async fn send_message(
     commands: &mpsc::Sender<PumpCommand>,
     message: Message,
-) -> Result<(), tungstenite::Error> {
+) -> Result<(), CodexWebSocketExchangeError> {
     let (ack, rx_ack) = oneshot::channel();
     commands
         .send(PumpCommand::Send { message, ack })
         .await
-        .map_err(|_| tungstenite::Error::ConnectionClosed)?;
+        .map_err(|_| CodexWebSocketExchangeError::SendNotStarted)?;
+    // 回执丢失不能证明未发送，只有 pump 明确拒绝的命令才允许按 NotSent 恢复
     rx_ack
         .await
-        .unwrap_or(Err(tungstenite::Error::ConnectionClosed))
+        .unwrap_or_else(|_| Err(tungstenite::Error::ConnectionClosed.into()))
 }
 
 #[async_trait]

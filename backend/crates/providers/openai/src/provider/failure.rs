@@ -1229,6 +1229,7 @@ fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnost
         CodexWebSocketExchangeError::OriginHalfOpenBusy => ("connect", "origin_half_open_busy"),
         CodexWebSocketExchangeError::InvalidRequest(_) => ("prepare", "invalid_request"),
         CodexWebSocketExchangeError::SendTimeout { .. } => ("send", "send_timeout"),
+        CodexWebSocketExchangeError::SendNotStarted => ("send", "send_not_started"),
         CodexWebSocketExchangeError::ReceiveIdleTimeout { .. } => {
             ("receive", "receive_idle_timeout")
         }
@@ -1310,6 +1311,9 @@ fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> Provider
         }
         CodexWebSocketExchangeError::SharedConnectFailed => {
             "OpenAI shared WebSocket connection failed before payload send".to_owned()
+        }
+        CodexWebSocketExchangeError::SendNotStarted => {
+            "OpenAI WebSocket connection closed before payload send started".to_owned()
         }
         CodexWebSocketExchangeError::SendTimeout { timeout } => {
             format!("OpenAI WebSocket payload send timed out after {timeout:?}")
@@ -1630,6 +1634,7 @@ pub(super) fn websocket_send_state(error: &CodexWebSocketExchangeError) -> Upstr
         | CodexWebSocketExchangeError::OriginCircuitOpen
         | CodexWebSocketExchangeError::OriginHalfOpenBusy
         | CodexWebSocketExchangeError::SharedConnectFailed
+        | CodexWebSocketExchangeError::SendNotStarted
         | CodexWebSocketExchangeError::ContinuationUnavailable { .. } => UpstreamSendState::NotSent,
         CodexWebSocketExchangeError::Upstream(_)
         | CodexWebSocketExchangeError::ConnectionLimitReached(_)
@@ -1667,6 +1672,7 @@ pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> Provi
         CodexWebSocketExchangeError::Upstream(_) => ProviderErrorKind::Unavailable,
         CodexWebSocketExchangeError::ConnectionLimitReached(_) => ProviderErrorKind::RateLimited,
         CodexWebSocketExchangeError::Transport(_)
+        | CodexWebSocketExchangeError::SendNotStarted
         | CodexWebSocketExchangeError::Connect(_)
         | CodexWebSocketExchangeError::StreamEndedBeforeTerminal { .. }
         | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. } => {
