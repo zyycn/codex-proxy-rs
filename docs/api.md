@@ -313,11 +313,14 @@ Responses WebSocket 接受文本消息，`response.create` 在同一连接串行
 留在有界接收队列中，待当前响应完成终结和写出后再逐条校验、准入与执行，不因请求提前到达而断开。
 接收队列容量为 32 个事件，超载仍关闭连接；Ping/Pong、客户端关闭和服务关闭不等待队列中的请求执行
 
-其余文本消息原样发送到当前执行绑定的原上游 WebSocket，包括
-`response.interrupt` 和未知类型；类型、响应 ID、模式及扩展字段由上游校验。
-控制帧不重新选号、不创建推理 attempt，也不合并重复消息。响应结束后原连接仍可接收控制帧并返回上游事件；
-下一轮执行使用新绑定的控制入口。尚未建立原连接、原连接已失效、实际走 HTTP 或 Provider 未提供控制通道时返回 `400`，
-不能通过控制帧新建上游连接
+其余文本消息发送到当前执行绑定的上游 WebSocket，未知类型、模式和扩展字段由上游校验。
+`response.interrupt` 的 `discard_partial_items` 模式若指向当前逻辑请求已交付的响应 ID，
+网关会保留中断意图；重试交付新的 `response.created` 后，以新 ID 转发中断，避免换号空档丢失控制消息。
+跨账号缺少原连接上下文时，仍通过恢复错误要求客户端完整重放
+
+控制帧不重新选号、不创建推理 attempt。响应结束后原连接仍可接收控制帧并返回上游事件；
+下一轮执行使用新绑定的控制入口。除上述重试期间保留中断的情况外，尚未建立原连接、原连接已失效、
+实际走 HTTP 或 Provider 未提供控制通道时返回 `400`，不能通过控制帧新建上游连接
 
 中断后继续转发上游事件与终态；只有 `response.incomplete` 的 `incomplete_details.reason` 为
 `interrupted` 时，才按官方中断语义保留原连接续接能力。部分输出是否被丢弃以上游终态为准。
@@ -435,10 +438,14 @@ xAI 的 `reasoning.effort` 接受 `none / minimal / low / medium / high / xhigh 
 
 #### 容量拒绝与重试
 
-OpenAI Responses 的 `response.created`、`response.in_progress` 等前导事件保留到首次有效文本、
-推理、工具活动或终态再交付，SSE 与 WebSocket 使用相同边界。前导缓冲不另设等待时长或累计体积上限，
-等待沿用[请求期限](#请求期限)与传输超时配置。WebSocket 独立 Ping 保活；
-HTTP 在首个业务事件前保留状态码和响应头，SSE 注释保活从提交响应后开始
+原生 Responses Lite WebSocket 在未启用中间件链时，及时交付无输出的 `response.created`、
+`response.in_progress` 及 `codex.response.metadata`、`codex.rate_limits` 元数据，
+让客户端取得中断所需的响应 ID。交付这些前导事件后仍可按已有安全条件重试，
+客户端可能收到下一次尝试的新 `response.created`；交付实际输出或终态后不再透明重放
+
+其他 WebSocket 与 HTTP/SSE 的前导事件保留到首次有效文本、推理、工具活动或终态再交付。
+前导缓冲不另设等待时长或累计体积上限，等待沿用[请求期限](#请求期限)与传输超时配置。
+WebSocket 独立 Ping 保活；HTTP 在首个业务事件前保留状态码和响应头，SSE 注释保活从提交响应后开始
 
 WebSocket 在交付有效输出前断线或超时，可按 `stream_max_retries` 做同账号、有退避的尽力重试
 （默认最多 5 次），耗尽后仅在请求允许时改用 HTTP。已发送或发送结果不明不单独阻止这项恢复；

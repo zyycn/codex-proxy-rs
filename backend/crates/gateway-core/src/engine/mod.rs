@@ -559,6 +559,14 @@ impl AttemptContext {
         self.request.client_transport
     }
 
+    /// 原生双向通道可提前交付可替换前导事件；中间件可能改变其输出语义
+    #[must_use]
+    pub fn allows_replayable_prelude(&self) -> bool {
+        self.client_transport() == execution::ClientTransport::WebSocket
+            && self.request.middleware.is_none()
+            && self.response_control().is_some()
+    }
+
     #[must_use]
     pub fn response_control(&self) -> Option<&response_control::ResponseControl> {
         self.request.response_control.as_ref()

@@ -954,7 +954,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             .with_requested_service_tier(request.service_tier())
             .with_request_tool_pricing(upstream_model.as_str(), request.tools())
             .with_raw_sse_passthrough();
-        let mut pre_commit_events = PreCommitClientEvents::new(trace);
+        let mut pre_commit_events = PreCommitClientEvents::new(trace).with_replayable_prelude(
+            websocket_transport
+                && request.responses_lite.as_deref() == Some("true")
+                && context.allows_replayable_prelude(),
+        );
         loop {
             if context.deadline().is_elapsed() {
                 if allows_account_state_mutation {

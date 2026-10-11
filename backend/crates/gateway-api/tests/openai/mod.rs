@@ -284,11 +284,24 @@ fn snapshot_with_client_key(
     provider_name: &str,
     client_key_id: &str,
 ) -> RuntimeSnapshot {
+    snapshot_with_accounts(plaintext, provider_name, client_key_id, &["acct_api_test"])
+}
+
+fn snapshot_with_accounts(
+    plaintext: &str,
+    provider_name: &str,
+    client_key_id: &str,
+    accounts: &[&str],
+) -> RuntimeSnapshot {
     let provider = ProviderKind::new(provider_name).expect("provider");
-    let account_directory = Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
-        ProviderAccountId::new("acct_api_test").expect("account ID"),
-        RuntimeAccount::new(provider.clone(), BTreeSet::new()),
-    )])));
+    let account_directory = Arc::new(RuntimeAccountDirectory::new(BTreeMap::from_iter(
+        accounts.iter().map(|id| {
+            (
+                ProviderAccountId::new(*id).expect("account ID"),
+                RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+            )
+        }),
+    )));
     let capabilities = ModelCapabilities::new(
         BTreeSet::from([gateway_core::operation::OperationKind::Generate]),
         Some(16_000),

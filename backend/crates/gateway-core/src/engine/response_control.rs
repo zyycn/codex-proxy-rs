@@ -24,6 +24,25 @@ pub struct ResponseControl {
     target: Arc<Mutex<Option<Weak<dyn ResponseControlTransport>>>>,
 }
 
+/// 某次已交付响应所属的弱连接快照，重绑后不能把旧消息发送到新连接
+#[derive(Clone)]
+pub struct ResponseControlBinding(Weak<dyn ResponseControlTransport>);
+
+impl ResponseControlBinding {
+    #[must_use]
+    pub fn same_binding(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+
+    pub async fn send(&self, payload: &str) -> Result<(), ResponseControlUnavailable> {
+        self.0
+            .upgrade()
+            .ok_or(ResponseControlUnavailable)?
+            .send(payload)
+            .await
+    }
+}
+
 impl fmt::Debug for ResponseControl {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ResponseControl([REDACTED])")
@@ -31,6 +50,17 @@ impl fmt::Debug for ResponseControl {
 }
 
 impl ResponseControl {
+    /// 仅保存弱引用，不延长旧 attempt 的连接生命周期
+    #[must_use]
+    pub fn binding(&self) -> Option<ResponseControlBinding> {
+        self.target
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .cloned()
+            .map(ResponseControlBinding)
+    }
+
     /// Provider 在请求成功写入上游后绑定；连接 owner 持有强引用并负责撤销
     pub fn bind(&self, transport: &Arc<dyn ResponseControlTransport>) {
         *self

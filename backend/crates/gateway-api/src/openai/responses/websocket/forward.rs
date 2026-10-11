@@ -150,10 +150,12 @@ pub(super) async fn forward_response(
             ProviderResponseHeader::new(name, value)
         })
         .collect::<Vec<_>>();
+    let mut interrupt = super::interrupt::ResponseInterrupt::default();
     let first = match next_body_input(
         connection,
         body.as_mut(),
         response_control,
+        &mut interrupt,
         &request_id,
         false,
     )
@@ -207,6 +209,7 @@ pub(super) async fn forward_response(
                     connection,
                     body.as_mut(),
                     response_control,
+                    &mut interrupt,
                     &request_id,
                     terminal_seen,
                 )
@@ -274,11 +277,24 @@ pub(super) async fn forward_response(
             (true, true) => FramePhase::Terminal,
             (true, false) => FramePhase::Data,
         };
+        let created_id = super::interrupt::ResponseInterrupt::created_id(&message);
         match connection
             .send_text(message, WriteContext::request(&request_id, phase))
             .await
         {
-            Ok(super::connection::WriteOutcome::Written) => first_frame_written = true,
+            Ok(super::connection::WriteOutcome::Written) => {
+                first_frame_written = true;
+                if let Some(id) = created_id {
+                    interrupt.observe_created(id, response_control);
+                    tokio::select! {
+                        _ = connection.wait_for_exit() => {
+                            detach_body(body);
+                            return ForwardOutcome::Disconnect;
+                        }
+                        () = interrupt.forward_pending(response_control) => {}
+                    }
+                }
+            }
             Ok(super::connection::WriteOutcome::Suppressed) => {}
             Err(_) => {
                 detach_body(body);
@@ -315,6 +331,7 @@ async fn next_body_input(
     connection: &mut ResponsesWebSocketConnection,
     body: &mut dyn MiddlewareBody,
     response_control: &ResponseControl,
+    interrupt: &mut super::interrupt::ResponseInterrupt,
     request_id: &Arc<str>,
     terminal_seen: bool,
 ) -> BodyInput {
@@ -329,6 +346,13 @@ async fn next_body_input(
                     ConnectionEvent::Text(payload) => {
                         if is_response_create(payload) {
                             connection.defer(event);
+                            continue;
+                        }
+                        if !terminal_seen && interrupt.retain(payload) {
+                            tokio::select! {
+                                _ = connection.wait_for_exit() => return BodyInput::Disconnect,
+                                () = interrupt.forward_pending(response_control) => {}
+                            }
                             continue;
                         }
                         if send_control(connection, response_control, payload, request_id).await == ForwardOutcome::Disconnect {

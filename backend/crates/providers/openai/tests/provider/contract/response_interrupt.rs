@@ -352,3 +352,185 @@ async fn response_controls_use_the_original_socket_through_terminal_and_revoke_o
         Err(ResponseControlUnavailable)
     );
 }
+
+fn lite_operation() -> Operation {
+    Operation::Generate(
+        GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "openai",
+                Map::from_iter([
+                    ("model".to_owned(), json!("gpt-5.4")),
+                    ("input".to_owned(), json!("hello")),
+                    ("store".to_owned(), json!(false)),
+                    ("session_id".to_owned(), json!("lite-session")),
+                ]),
+            )
+            .unwrap()
+            .with_context(Map::from_iter([
+                (
+                    "downstream_websocket_connection_id".to_owned(),
+                    json!("ws_lite"),
+                ),
+                ("responses_lite".to_owned(), json!("true")),
+            ])),
+        )
+        .with_provider_session_state(
+            ProviderSessionState::new(
+                "openai",
+                Map::from_iter([
+                    ("account_id".to_owned(), json!("acct_provider_contract")),
+                    ("conversation_id".to_owned(), json!("lite-conversation")),
+                    ("continuation_scope".to_owned(), json!("persisted")),
+                ]),
+            )
+            .unwrap(),
+        ),
+    )
+}
+
+fn lite_context(control: ResponseControl) -> AttemptContext {
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_lite").unwrap(),
+            ClientApiKeyId::new("key_openai_contract").unwrap(),
+        )
+        .with_response_control(Some(control))
+        .with_middleware(
+            None,
+            Arc::from([]),
+            "/v1/responses".to_owned(),
+            ClientTransport::WebSocket,
+        ),
+        NonZeroU32::new(1).unwrap(),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    )
+}
+
+#[tokio::test]
+async fn lite_created_is_delivered_before_output_and_interrupt_completes_it() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_codex_test_websocket(socket).await;
+        next_json(&mut ws).await;
+        ws.send(Message::Text(
+            json!({"type":"codex.response.metadata","model":"gpt-5.4"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(json!({"type":"response.created","response":{"id":"resp_lite","model":"gpt-5.4","status":"in_progress","output":[]}}).to_string().into())).await.unwrap();
+        let interrupt = next_json(&mut ws).await;
+        assert_eq!(interrupt["response_id"], "resp_lite");
+        assert_eq!(interrupt["type"], "response.interrupt");
+        ws.send(Message::Text(json!({"type":"response.incomplete","response":{"id":"resp_lite","model":"gpt-5.4","status":"incomplete","output":[],"incomplete_details":{"reason":"interrupted"}}}).to_string().into())).await.unwrap();
+    });
+    let control = ResponseControl::default();
+    let mut stream = provider_with_base_url(&store, base_url)
+        .execute(
+            planned_request("openai", lite_operation()),
+            lite_context(control.clone()),
+        )
+        .await
+        .unwrap();
+    let metadata = timeout(
+        Duration::from_secs(3),
+        super::precommit::next_client_event(&mut stream),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        metadata.wire_event().unwrap().event_type(),
+        Some("codex.response.metadata")
+    );
+    assert!(metadata.is_replayable_prelude());
+    let created = timeout(
+        Duration::from_secs(3),
+        super::precommit::next_client_event(&mut stream),
+    )
+    .await
+    .expect("created cannot wait for output");
+    assert_eq!(
+        created.wire_event().unwrap().event_type(),
+        Some("response.created")
+    );
+    assert!(created.is_replayable_prelude());
+    control.send(&json!({"type":"response.interrupt","response_id":"resp_lite","mode":"discard_partial_items"}).to_string()).await.unwrap();
+    let terminal = timeout(
+        Duration::from_secs(3),
+        super::precommit::next_client_event(&mut stream),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        terminal.wire_event().unwrap().event_type(),
+        Some("response.incomplete")
+    );
+    assert!(!terminal.is_replayable_prelude());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn lite_prelude_preserves_overload_and_connection_limit_recovery() {
+    for connection_limit in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let (release, released) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = accept_codex_test_websocket(socket).await;
+            next_json(&mut ws).await;
+            ws.send(Message::Text(json!({"type":"response.created","response":{"id":"resp_lite","model":"gpt-5.4","status":"in_progress","output":[]}}).to_string().into())).await.unwrap();
+            released.await.unwrap();
+            let error = if connection_limit {
+                json!({"type":"error","status":400,"error":{"type":"invalid_request_error","code":"websocket_connection_limit_reached","message":"expired"}})
+            } else {
+                json!({"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"busy"}})
+            };
+            ws.send(Message::Text(error.to_string().into()))
+                .await
+                .unwrap();
+        });
+        let mut stream = provider_with_base_url_and_retry_budget(&store, base_url, 1)
+            .execute(
+                planned_request("openai", lite_operation()),
+                lite_context(ResponseControl::default()),
+            )
+            .await
+            .unwrap();
+        let created = timeout(
+            Duration::from_secs(3),
+            super::precommit::next_client_event(&mut stream),
+        )
+        .await
+        .unwrap();
+        assert!(created.is_replayable_prelude());
+        release.send(()).unwrap();
+        let (_, error) = timeout(
+            Duration::from_secs(3),
+            super::precommit::stream_failure(&mut stream),
+        )
+        .await
+        .unwrap();
+        assert!(error.replay_is_safe(), "{error:?}");
+        assert_eq!(error.send_state(), UpstreamSendState::Sent);
+        if connection_limit {
+            assert!(matches!(
+                error.pre_delivery_retry(),
+                Some(PreDeliveryRetry::SameAccountTransportRetry { .. })
+            ));
+        }
+        server.await.unwrap();
+    }
+}

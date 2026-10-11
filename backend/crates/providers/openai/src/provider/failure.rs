@@ -71,13 +71,14 @@ impl MappedProviderFailure {
 
 /// 提交边界前的上游事件预取
 ///
-/// 结构事件保留到语义输出、终态或 EOF，再提交已缓存 wire
-/// 一旦提交，后续事件不再具备无痕重放资格
+/// 结构事件保留到语义输出、终态或 EOF；原生 Lite 双向通道可提前释放已知前导事件
+/// committed 只表示重放窗口已结束，不等同于首次 wire 已交付
 pub(super) struct PreCommitClientEvents {
     pending: Vec<ProviderEvent>,
     prefetched_bytes: usize,
     started_at: tokio::time::Instant,
     committed: bool,
+    replayable_prelude: bool,
     trace: TraceContext,
 }
 
@@ -96,8 +97,14 @@ impl PreCommitClientEvents {
             prefetched_bytes: 0,
             started_at: tokio::time::Instant::now(),
             committed: false,
+            replayable_prelude: false,
             trace,
         }
+    }
+
+    pub(super) fn with_replayable_prelude(mut self, enabled: bool) -> Self {
+        self.replayable_prelude = enabled;
+        self
     }
 
     pub(super) fn observe_chunk(&mut self, bytes: usize) {
@@ -122,6 +129,14 @@ impl PreCommitClientEvents {
         if completed {
             return self.commit_pending(PreCommitReleaseReason::Terminal);
         }
+        if self.replayable_prelude && self.pending.iter().all(is_replaceable_prelude) {
+            // 仅释放已知前导事件，不把实际下游交付误当成语义输出
+            self.prefetched_bytes = 0;
+            return std::mem::take(&mut self.pending)
+                .into_iter()
+                .map(ProviderEvent::with_replayable_prelude)
+                .collect();
+        }
         Vec::new()
     }
 
@@ -131,12 +146,11 @@ impl PreCommitClientEvents {
         timing_signals: ResponseEventSignals,
         completed: bool,
     ) -> Vec<ProviderEvent> {
-        let events = self.stage(incoming, timing_signals, completed);
-        if self.committed {
-            events
-        } else {
-            self.commit_pending(PreCommitReleaseReason::Eof)
+        let mut events = self.stage(incoming, timing_signals, completed);
+        if !self.committed {
+            events.extend(self.commit_pending(PreCommitReleaseReason::Eof));
         }
+        events
     }
 
     pub(super) fn commit(&mut self, incoming: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
@@ -174,6 +188,19 @@ impl PreCommitClientEvents {
         self.prefetched_bytes = 0;
         std::mem::take(&mut self.pending)
     }
+}
+
+fn is_replaceable_prelude(event: &ProviderEvent) -> bool {
+    event
+        .wire_event()
+        .is_some_and(|wire| match wire.event_type() {
+            Some("codex.response.metadata" | "codex.rate_limits") => true,
+            Some("response.created" | "response.in_progress") => wire
+                .data()
+                .pointer("/response/output")
+                .is_none_or(|output| output.as_array().is_some_and(Vec::is_empty)),
+            _ => false,
+        })
 }
 
 #[derive(Clone, Copy)]
@@ -713,9 +740,8 @@ pub(super) fn quota_continuation_replay_error(
         "code": detail.code(),
         "type": detail.error_type(),
     }});
-    // 未交付的 response.created 与额度错误帧必须一起丢弃，否则原错误帧会
-    // 覆盖恢复投影
-    // 该拒绝发生在语义输出和 commit 之前，不能带走已交付事件
+    // 丢弃仍未交付的前导与额度错误帧，避免原错误覆盖客户端恢复投影
+    // 已交付的 Lite 前导不在此批次内，语义输出后的失败不进入此分支
     drop(error.take_atomic_client_events());
     error
         .with_continuation_failure(ContinuationFailure::HistoryUnavailable)

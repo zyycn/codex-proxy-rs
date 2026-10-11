@@ -66,3 +66,28 @@ fn replacing_or_clearing_a_binding_does_not_share_control_between_executions() {
         );
     });
 }
+
+#[test]
+fn captured_binding_never_redirects_old_control_to_a_replacement() {
+    block_on(async {
+        let control = ResponseControl::default();
+        let old = Arc::new(Transport::default());
+        let old_owner: Arc<dyn ResponseControlTransport> = old.clone();
+        control.bind(&old_owner);
+        let binding = control.binding().unwrap();
+        let new = Arc::new(Transport::default());
+        let new_owner: Arc<dyn ResponseControlTransport> = new.clone();
+        control.bind(&new_owner);
+        assert!(!binding.same_binding(&control.binding().unwrap()));
+        binding.send("old ID").await.unwrap();
+        assert_eq!(*old.0.lock().unwrap(), ["old ID"]);
+        assert!(new.0.lock().unwrap().is_empty());
+        drop(old_owner);
+        drop(old);
+        assert_eq!(
+            binding.send("expired ID").await,
+            Err(ResponseControlUnavailable)
+        );
+        assert!(new.0.lock().unwrap().is_empty());
+    });
+}

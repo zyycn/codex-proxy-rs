@@ -62,6 +62,9 @@ impl ResponseControlTransport for ControlTransport {
 #[derive(Default)]
 struct InterruptProvider {
     calls: AtomicUsize,
+    fail_first: bool,
+    retry_started: tokio::sync::Notify,
+    retry_release: tokio::sync::Notify,
     transport: Mutex<Option<Arc<ControlTransport>>>,
     complete: tokio::sync::Notify,
     initial_messages: Mutex<std::collections::VecDeque<ProtocolWireEvent>>,
@@ -87,6 +90,15 @@ impl Provider for InterruptProvider {
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
         let number = self.calls.fetch_add(1, Ordering::SeqCst);
+        if number == 1 && self.fail_first {
+            self.retry_started.notify_one();
+            self.retry_release.notified().await;
+            assert!(
+                context
+                    .excluded_accounts()
+                    .contains(&ProviderAccountId::new("acct_api_test").unwrap())
+            );
+        }
         let id = format!("resp_interrupt_{number}");
         let transport = Arc::new(ControlTransport::new(id));
         let owner: Arc<dyn ResponseControlTransport> = transport.clone();
@@ -96,7 +108,12 @@ impl Provider for InterruptProvider {
         let metadata = ProviderCallMetadata::new(
             candidate.provider().clone(),
             candidate.upstream_model().unwrap().clone(),
-            ProviderAccountId::new("acct_api_test").unwrap(),
+            ProviderAccountId::new(if self.fail_first && number > 0 {
+                "acct_api_retry"
+            } else {
+                "acct_api_test"
+            })
+            .unwrap(),
             UpstreamTransport::new("websocket").unwrap(),
         );
         let body = futures::stream::unfold(
@@ -109,6 +126,18 @@ impl Provider for InterruptProvider {
                 };
                 if let Some(wire) = pending {
                     return Some((Ok(ProviderEvent::wire(wire)), (phase, transport, provider)));
+                }
+                if phase == 1 && provider.fail_first && transport.id == "resp_interrupt_0" {
+                    provider.complete.notified().await;
+                    transport.active.store(false, Ordering::SeqCst);
+                    return Some((
+                        Err(ProviderError::new(
+                            gateway_core::error::ProviderErrorKind::QuotaExhausted,
+                            UpstreamSendState::Sent,
+                        )
+                        .with_replay_safe()),
+                        (2, transport, provider),
+                    ));
                 }
                 let (wire, events, next_phase) = match phase {
                     0 => (
@@ -144,10 +173,13 @@ impl Provider for InterruptProvider {
                     _ => return None,
                 };
                 let event_type = wire["type"].as_str().unwrap().to_owned();
-                let event = ProviderEvent::canonical_with_wire(
+                let mut event = ProviderEvent::canonical_with_wire(
                     events,
                     ProtocolWireEvent::json("openai", Some(event_type), wire).unwrap(),
                 );
+                if phase == 0 && provider.fail_first {
+                    event = event.with_replayable_prelude();
+                }
                 Some((Ok(event), (next_phase, transport, provider)))
             },
         );
@@ -233,7 +265,16 @@ async fn connect(
     admissions: Arc<InterruptAdmissions>,
 ) -> (TestSocket, Server) {
     let execution = Arc::new(DefaultExecutionService::new(
-        RuntimeSnapshotHandle::new(snapshot("sk_ws_interrupt", "openai")),
+        RuntimeSnapshotHandle::new(if provider.fail_first {
+            crate::openai::snapshot_with_accounts(
+                "sk_ws_interrupt",
+                "openai",
+                "key_api_test",
+                &["acct_api_test", "acct_api_retry"],
+            )
+        } else {
+            snapshot("sk_ws_interrupt", "openai")
+        }),
         Arc::new(SettlementPorts::default()),
         ProviderRegistry::new([provider as Arc<dyn Provider>]).unwrap(),
         admissions,
@@ -447,4 +488,94 @@ async fn active_websocket_delivery_preserves_unparsed_messages_and_business_meta
     }
     provider.complete.notify_one();
     assert_eq!(next(&mut socket).await["type"], "response.completed");
+}
+
+#[tokio::test]
+async fn prelude_retry_retains_interrupt_during_account_switch() {
+    for interrupt_before_new_created in [true, false] {
+        let provider = Arc::new(InterruptProvider {
+            fail_first: true,
+            ..Default::default()
+        });
+        let admissions = Arc::new(InterruptAdmissions::default());
+        let (mut socket, _server) = connect(provider.clone(), admissions.clone()).await;
+        send(
+            &mut socket,
+            json!({"type":"response.create","model":"model-a","input":"hello"}),
+        )
+        .await;
+        assert_eq!(
+            next(&mut socket).await["response"]["id"],
+            "resp_interrupt_0"
+        );
+        let old = provider.transport.lock().unwrap().clone().unwrap();
+        provider.complete.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), provider.retry_started.notified())
+            .await
+            .unwrap();
+        if interrupt_before_new_created {
+            send(
+                &mut socket,
+                interrupt("resp_interrupt_0", "discard_partial_items"),
+            )
+            .await;
+            // 等待服务端处理控制帧，随后才允许新 attempt 建立连接
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while old.requests.lock().unwrap().is_empty() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        provider.retry_release.notify_one();
+        assert_eq!(
+            next(&mut socket).await["response"]["id"],
+            "resp_interrupt_1"
+        );
+        if !interrupt_before_new_created {
+            // 迟到的旧 ID 也应作用于当前逻辑响应
+            send(
+                &mut socket,
+                interrupt("resp_interrupt_0", "discard_partial_items"),
+            )
+            .await;
+        }
+        let terminal = next(&mut socket).await;
+        assert_eq!(terminal["type"], "response.incomplete");
+        assert_eq!(terminal["response"]["id"], "resp_interrupt_1");
+        let current = provider.transport.lock().unwrap().clone().unwrap();
+        let requests = current.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&requests[0]).unwrap(),
+            interrupt("resp_interrupt_1", "discard_partial_items")
+        );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        socket.close(None).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn semantic_delivery_blocks_retry_even_after_a_replayable_prelude() {
+    let provider = Arc::new(InterruptProvider {
+        fail_first: true,
+        ..Default::default()
+    });
+    provider.initial_messages.lock().unwrap().push_back(ProtocolWireEvent::json(
+        "openai", Some("response.output_text.delta".to_owned()),
+        json!({"type":"response.output_text.delta","delta":"visible","output_index":0,"content_index":0}),
+    ).unwrap());
+    let (mut socket, _server) = connect(provider.clone(), Arc::default()).await;
+    send(
+        &mut socket,
+        json!({"type":"response.create","model":"model-a","input":"hello"}),
+    )
+    .await;
+    assert_eq!(next(&mut socket).await["type"], "response.created");
+    assert_eq!(next(&mut socket).await["delta"], "visible");
+    provider.complete.notify_one();
+    assert_eq!(next(&mut socket).await["type"], "error");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    socket.close(None).await.unwrap();
 }

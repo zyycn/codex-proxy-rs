@@ -59,7 +59,7 @@ fn releases(trace: &TraceContext) -> Vec<Value> {
         .collect()
 }
 
-async fn next_client_event(stream: &mut ProviderStream) -> ProviderEvent {
+pub(super) async fn next_client_event(stream: &mut ProviderStream) -> ProviderEvent {
     loop {
         let event = stream.next().await.unwrap().unwrap();
         if event.has_client_event() {
@@ -68,7 +68,9 @@ async fn next_client_event(stream: &mut ProviderStream) -> ProviderEvent {
     }
 }
 
-async fn stream_failure(stream: &mut ProviderStream) -> (Vec<ProviderEvent>, ProviderError) {
+pub(super) async fn stream_failure(
+    stream: &mut ProviderStream,
+) -> (Vec<ProviderEvent>, ProviderError) {
     let mut events = Vec::new();
     loop {
         match stream.next().await.expect("upstream failure") {

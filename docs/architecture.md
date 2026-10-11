@@ -376,13 +376,17 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别客户端，Cor
 - 一个客户端请求对应一条 `model_requests`；attempt 是请求内事实，不建立第二张权威表
 - Provider 的一次 `execute` 只选择一个 credential 并返回一个冷流；换号、重试和 fallback 由 Core 决定
 - `not_sent`、`sent`、`ambiguous` 是单调的上游发送边界；结果不明确时不能假定上游未收到请求
-- downstream commit 是不可撤回的交付承诺。commit 后禁止换号、重试和 fallback
+- downstream commit 记录不可撤回的首次交付；实际输出交付后禁止换号、重试和 fallback
+  原生 Responses Lite WebSocket 可提前交付 Provider 明确标记的可替换前导事件；Core 单独维护重放屏障，
+  仍检查错误分类、续接归属、发送状态、副作用及预算。中间件链不启用此前导例外
 - API 在最终错误编码出口投影客户端恢复信号；该投影不修改 Provider 上游事实，也不改变 Core 的
   重试与提交边界。具体错误合同见 [数据面接口](api.md#3-openai-数据面与模型目录)
 - Provider 可将明确容量拒绝标记为有界同账号退避，Core 在既有安全重放边界内执行，按账号维护请求内
   预算，耗尽后复用普通换号路径。该退避消耗总路由预算，与 WS 传输恢复、OAuth 刷新及账号额度冷却分开
-- OpenAI 的结构事件由 Provider 保留到有效输出或终态，不按等待时长或累计体积提前交付。
-  交付前的 WS 传输错误可请求有界同账号尽力恢复，即使发送结果不明也保留此恢复意图；
+- OpenAI Provider 在原生 Responses Lite WebSocket 上及时交付无输出的 `response.created` 和
+  `response.in_progress` 及已知 Codex 响应元数据；其他结构事件及 HTTP/SSE 保留到有效输出或终态，
+  不按等待时长或累计体积提前交付。
+  有效输出交付前的 WS 传输错误可请求有界同账号尽力恢复，即使发送结果不明也保留此恢复意图；
   发送事实与安全重放证明不因此改写。Provider 限定传输次数与续接范围，Core 保持原账号并检查
   取消、deadline、已观测外部副作用及下游交付边界
 - 换号预算从运行设置冻结到请求计划，选中账号与上一 attempt 不同时计数；首次选号、同账号重试和
@@ -639,7 +643,7 @@ Continuation 受原请求的 Client Key、账号范围、Provider 和发送/交�
 - OpenAI Provider 的 OAuth 大包传输预检在发送前执行，新链可选择 HTTP；大 connection-local
   续接和 HTTP `store=false` 后不可原生续写的 WS 增量返回 `ClientReplayRequired`，由客户端重发
   完整历史。体积测量复用 WS 编码结构，Provider session state 仍只携带元数据，不保存 transcript
-- OpenAI 在交付前收到可安全重放的明确额度拒绝时，先隔离账号，再投影 `ClientReplayRequired`；
+- OpenAI 在有效输出交付前收到可安全重放的明确额度拒绝时，先隔离账号，再投影 `ClientReplayRequired`；
   丢弃未交付的原错误帧，由客户端提交完整历史开启新链，不把原增量输入交给其他账号。
   真实错误分类、状态码、发送状态和上游诊断保持不变，客户端合同见 [Responses API](api.md#3-openai-数据面与模型目录)
 - OpenAI 按 native → replay owner → replay any 推进，并保留官方 `previous_response_id` 语义；

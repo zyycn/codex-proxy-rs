@@ -488,7 +488,25 @@ impl CodexBackendClient {
                 )
                 .await
                 .map_err(websocket_exchange_error_to_client_error)?;
-                if requirement.allows_connection_restart() {
+                if requirement.allows_connection_restart()
+                    && request.responses_lite.as_deref() == Some("true")
+                    && request.downstream_websocket_connection_id.is_some()
+                {
+                    // Lite 客户端需先拿到响应 ID 才能中断；连接级拒绝仍沿用原有分类
+                    let mut boundary_reached = false;
+                    exchange.body = Box::pin(exchange.body.map(move |frame| {
+                        let frame = frame?;
+                        if !boundary_reached && !is_websocket_lifecycle_prelude(&frame) {
+                            boundary_reached = true;
+                            if let Some(failure) = websocket_connection_limit_failure(&frame) {
+                                return Err(CodexWebSocketExchangeError::ConnectionLimitReached(
+                                    Box::new(failure),
+                                ));
+                            }
+                        }
+                        Ok(frame)
+                    }));
+                } else if requirement.allows_connection_restart() {
                     match await_websocket_delivery_boundary(&mut exchange).await {
                         Ok(DeliveryBoundary::Ready) => {}
                         Ok(DeliveryBoundary::ConnectionLimitReached(failure)) => {
@@ -507,7 +525,12 @@ impl CodexBackendClient {
                     body: Box::pin(
                         exchange
                             .body
-                            .map_err(post_send_ambiguous)
+                            .map_err(|error| match error {
+                                error @ CodexWebSocketExchangeError::ConnectionLimitReached(_) => {
+                                    error
+                                }
+                                error => post_send_ambiguous(error),
+                            })
                             .map_err(websocket_exchange_error_to_client_error),
                     ),
                     transport: CodexBackendTransport::WebSocket,
