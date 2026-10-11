@@ -71,7 +71,7 @@ impl MappedProviderFailure {
 
 /// 提交边界前的上游事件预取
 ///
-/// 结构事件保留到语义输出、终态或 EOF；原生 Lite 双向通道可提前释放已知前导事件
+/// 原生 Lite 双向通道立即交付正常事件，其他通道保留到语义输出、终态或 EOF
 /// committed 只表示重放窗口已结束，不等同于首次 wire 已交付
 pub(super) struct PreCommitClientEvents {
     pending: Vec<ProviderEvent>,
@@ -86,6 +86,7 @@ pub(super) struct PreCommitClientEvents {
 #[serde(rename_all = "snake_case")]
 pub(super) enum PreCommitReleaseReason {
     SemanticOutput,
+    NonReplayableEvent,
     Terminal,
     Eof,
 }
@@ -129,8 +130,11 @@ impl PreCommitClientEvents {
         if completed {
             return self.commit_pending(PreCommitReleaseReason::Terminal);
         }
-        if self.replayable_prelude && self.pending.iter().all(is_replaceable_prelude) {
-            // 仅释放已知前导事件，不把实际下游交付误当成语义输出
+        if self.replayable_prelude {
+            // 未确认可重放的事件也立即交付，但后续前导不能重新开启重试窗口
+            if !self.pending.iter().all(is_replaceable_prelude) {
+                return self.commit_pending(PreCommitReleaseReason::NonReplayableEvent);
+            }
             self.prefetched_bytes = 0;
             return std::mem::take(&mut self.pending)
                 .into_iter()

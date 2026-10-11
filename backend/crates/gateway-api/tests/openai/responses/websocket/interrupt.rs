@@ -557,25 +557,34 @@ async fn prelude_retry_retains_interrupt_during_account_switch() {
 }
 
 #[tokio::test]
-async fn semantic_delivery_blocks_retry_even_after_a_replayable_prelude() {
-    let provider = Arc::new(InterruptProvider {
-        fail_first: true,
-        ..Default::default()
-    });
-    provider.initial_messages.lock().unwrap().push_back(ProtocolWireEvent::json(
-        "openai", Some("response.output_text.delta".to_owned()),
+async fn non_replayable_delivery_blocks_retry_even_after_a_replayable_prelude() {
+    for event in [
         json!({"type":"response.output_text.delta","delta":"visible","output_index":0,"content_index":0}),
-    ).unwrap());
-    let (mut socket, _server) = connect(provider.clone(), Arc::default()).await;
-    send(
-        &mut socket,
-        json!({"type":"response.create","model":"model-a","input":"hello"}),
-    )
-    .await;
-    assert_eq!(next(&mut socket).await["type"], "response.created");
-    assert_eq!(next(&mut socket).await["delta"], "visible");
-    provider.complete.notify_one();
-    assert_eq!(next(&mut socket).await["type"], "error");
-    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
-    socket.close(None).await.unwrap();
+        json!({"type":"response.future_progress","marker":"preserved"}),
+    ] {
+        let provider = Arc::new(InterruptProvider {
+            fail_first: true,
+            ..Default::default()
+        });
+        provider.initial_messages.lock().unwrap().push_back(
+            ProtocolWireEvent::json(
+                "openai",
+                Some(event["type"].as_str().unwrap().to_owned()),
+                event.clone(),
+            )
+            .unwrap(),
+        );
+        let (mut socket, _server) = connect(provider.clone(), Arc::default()).await;
+        send(
+            &mut socket,
+            json!({"type":"response.create","model":"model-a","input":"hello"}),
+        )
+        .await;
+        assert_eq!(next(&mut socket).await["type"], "response.created");
+        assert_eq!(next(&mut socket).await, event);
+        provider.complete.notify_one();
+        assert_eq!(next(&mut socket).await["type"], "error");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        socket.close(None).await.unwrap();
+    }
 }

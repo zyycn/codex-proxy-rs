@@ -376,16 +376,16 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别客户端，Cor
 - 一个客户端请求对应一条 `model_requests`；attempt 是请求内事实，不建立第二张权威表
 - Provider 的一次 `execute` 只选择一个 credential 并返回一个冷流；换号、重试和 fallback 由 Core 决定
 - `not_sent`、`sent`、`ambiguous` 是单调的上游发送边界；结果不明确时不能假定上游未收到请求
-- downstream commit 记录不可撤回的首次交付；实际输出交付后禁止换号、重试和 fallback
-  原生 Responses Lite WebSocket 可提前交付 Provider 明确标记的可替换前导事件；Core 单独维护重放屏障，
+- downstream commit 记录不可撤回的首次交付；不可重放事件交付后禁止换号、重试和 fallback
+  原生 Responses Lite WebSocket 及时交付正常事件，仅 Provider 明确标记的可替换前导保留重试资格；Core 单独维护重放屏障，
   仍检查错误分类、续接归属、发送状态、副作用及预算。中间件链不启用此前导例外
 - API 在最终错误编码出口投影客户端恢复信号；该投影不修改 Provider 上游事实，也不改变 Core 的
   重试与提交边界。具体错误合同见 [数据面接口](api.md#3-openai-数据面与模型目录)
 - Provider 可将明确容量拒绝标记为有界同账号退避，Core 在既有安全重放边界内执行，按账号维护请求内
   预算，耗尽后复用普通换号路径。该退避消耗总路由预算，与 WS 传输恢复、OAuth 刷新及账号额度冷却分开
-- OpenAI Provider 在原生 Responses Lite WebSocket 上及时交付无输出的 `response.created` 和
-  `response.in_progress` 及已知 Codex 响应元数据；其他结构事件及 HTTP/SSE 保留到有效输出或终态，
-  不按等待时长或累计体积提前交付。
+- OpenAI Provider 在原生 Responses Lite WebSocket 上不等待后续事件再交付正常帧；
+  未知事件立即交付并结束重放窗口。其他 WebSocket 及 HTTP/SSE 保留到有效输出或终态，
+  不按等待时长或累计体积提前交付，中间件链沿用缓冲策略。
   有效输出交付前的 WS 传输错误可请求有界同账号尽力恢复，即使发送结果不明也保留此恢复意图；
   发送事实与安全重放证明不因此改写。Provider 限定传输次数与续接范围，Core 保持原账号并检查
   取消、deadline、已观测外部副作用及下游交付边界

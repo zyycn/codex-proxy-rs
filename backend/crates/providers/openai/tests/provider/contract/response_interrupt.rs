@@ -534,3 +534,126 @@ async fn lite_prelude_preserves_overload_and_connection_limit_recovery() {
         server.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn lite_unknown_event_does_not_delay_created_or_interrupt() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let unknown = json!({"type":"response.future_progress","marker":"preserved"});
+    let upstream_unknown = unknown.clone();
+    let (release, released) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_codex_test_websocket(socket).await;
+        next_json(&mut ws).await;
+        ws.send(Message::Text(upstream_unknown.to_string().into()))
+            .await
+            .unwrap();
+        // 客户端已收到未知事件后才创建响应，避免终态或后续事件替测试释放缓冲
+        released.await.unwrap();
+        ws.send(Message::Text(json!({"type":"response.created","response":{"id":"resp_unknown","model":"gpt-5.4","status":"in_progress","output":[]}}).to_string().into())).await.unwrap();
+        let interrupt = next_json(&mut ws).await;
+        assert_eq!(interrupt["response_id"], "resp_unknown");
+        assert_eq!(interrupt["type"], "response.interrupt");
+        ws.send(Message::Text(json!({"type":"response.incomplete","response":{"id":"resp_unknown","model":"gpt-5.4","status":"incomplete","output":[],"incomplete_details":{"reason":"interrupted"}}}).to_string().into())).await.unwrap();
+    });
+    let control = ResponseControl::default();
+    let mut stream = provider_with_base_url(&store, base_url)
+        .execute(
+            planned_request("openai", lite_operation()),
+            lite_context(control.clone()),
+        )
+        .await
+        .unwrap();
+    let event = timeout(
+        Duration::from_secs(3),
+        super::precommit::next_client_event(&mut stream),
+    )
+    .await
+    .expect("unknown event cannot wait for created");
+    assert_eq!(event.wire_event().unwrap().data(), &unknown);
+    assert!(!event.is_replayable_prelude());
+    release.send(()).unwrap();
+    let created = timeout(
+        Duration::from_secs(3),
+        super::precommit::next_client_event(&mut stream),
+    )
+    .await
+    .expect("created cannot wait for output");
+    assert_eq!(
+        created.wire_event().unwrap().data()["response"]["id"],
+        "resp_unknown"
+    );
+    assert!(!created.is_replayable_prelude());
+    control.send(&json!({"type":"response.interrupt","response_id":"resp_unknown","mode":"discard_partial_items"}).to_string()).await.unwrap();
+    let terminal = timeout(
+        Duration::from_secs(3),
+        super::precommit::next_client_event(&mut stream),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        terminal.wire_event().unwrap().event_type(),
+        Some("response.incomplete")
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn lite_unknown_delivery_closes_recovery_before_later_preludes() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let (release, released) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_codex_test_websocket(socket).await;
+        next_json(&mut ws).await;
+        for event in [
+            json!({"type":"response.created","response":{"id":"resp_unknown","model":"gpt-5.4","status":"in_progress","output":[]}}),
+            json!({"type":"response.future_progress","marker":"preserved"}),
+            json!({"type":"response.in_progress","response":{"id":"resp_unknown","output":[]}}),
+        ] {
+            ws.send(Message::Text(event.to_string().into()))
+                .await
+                .unwrap();
+        }
+        released.await.unwrap();
+        ws.send(Message::Text(json!({"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"busy"}}).to_string().into())).await.unwrap();
+    });
+    let mut stream = provider_with_base_url_and_retry_budget(&store, base_url, 1)
+        .execute(
+            planned_request("openai", lite_operation()),
+            lite_context(ResponseControl::default()),
+        )
+        .await
+        .unwrap();
+    for (event_type, replayable) in [
+        ("response.created", true),
+        ("response.future_progress", false),
+        ("response.in_progress", false),
+    ] {
+        let event = timeout(
+            Duration::from_secs(3),
+            super::precommit::next_client_event(&mut stream),
+        )
+        .await
+        .expect("normal events cannot wait for an error or output");
+        assert_eq!(event.wire_event().unwrap().event_type(), Some(event_type));
+        assert_eq!(event.is_replayable_prelude(), replayable);
+    }
+    release.send(()).unwrap();
+    let (_, error) = timeout(
+        Duration::from_secs(3),
+        super::precommit::stream_failure(&mut stream),
+    )
+    .await
+    .unwrap();
+    assert!(!error.replay_is_safe(), "{error:?}");
+    assert!(error.pre_delivery_retry().is_none());
+    assert_eq!(error.send_state(), UpstreamSendState::Sent);
+    server.await.unwrap();
+}

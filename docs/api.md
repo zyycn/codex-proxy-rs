@@ -438,10 +438,12 @@ xAI 的 `reasoning.effort` 接受 `none / minimal / low / medium / high / xhigh 
 
 #### 容量拒绝与重试
 
-原生 Responses Lite WebSocket 在未启用中间件链时，及时交付无输出的 `response.created`、
-`response.in_progress` 及 `codex.response.metadata`、`codex.rate_limits` 元数据，
-让客户端取得中断所需的响应 ID。交付这些前导事件后仍可按已有安全条件重试，
-客户端可能收到下一次尝试的新 `response.created`；交付实际输出或终态后不再透明重放
+原生 Responses Lite WebSocket 在未启用中间件链时，按顺序及时交付正常事件，
+让客户端取得中断所需的响应 ID。无输出的 `response.created`、`response.in_progress`
+及 `codex.response.metadata`、`codex.rate_limits` 元数据交付后仍可按已有安全条件重试，
+客户端可能收到下一次尝试的新 `response.created`。
+其他事件也立即交付，但会关闭透明重试窗口，后续前导事件不再恢复重试资格；
+错误事件先按既有重试规则处理，无法重试时交付错误
 
 其他 WebSocket 与 HTTP/SSE 的前导事件保留到首次有效文本、推理、工具活动或终态再交付。
 前导缓冲不另设等待时长或累计体积上限，等待沿用[请求期限](#请求期限)与传输超时配置。
