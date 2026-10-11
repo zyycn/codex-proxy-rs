@@ -11,8 +11,8 @@ import UsagePerformanceCard from './UsagePerformanceCard.vue'
 
 withDefaults(
   defineProps<{
-    overview: Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>
-    diagnostics: Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
+    overview: Omit<Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>, 'analytics'>
+    diagnostics: Omit<Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>, 'analytics'>
     loading?: boolean
   }>(),
   {

@@ -89,7 +89,7 @@ impl CostSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewModelRequest {
     pub id: String,
-    pub client_api_key_id: Option<String>,
+    pub client_api_key_name_snapshot: Option<String>,
     pub client_api_key_ref: String,
     pub config_revision: u64,
     pub routing_scope: String,
@@ -111,7 +111,7 @@ pub struct NewModelRequest {
     pub image_generation_requested: bool,
     pub admission_decision_ms: Option<u64>,
     pub started_at: DateTime<Utc>,
-    pub deadline_at: DateTime<Utc>,
+    pub lease_expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -137,17 +137,10 @@ impl NewModelRequest {
             &self.routing_group_refs,
             &self.routing_group_names_snapshot,
         )?;
-        if self.config_revision == 0 || self.started_at > self.deadline_at {
+        if self.config_revision == 0 || self.started_at > self.lease_expires_at {
             return Err(invalid(
                 "revision and deadline violate the frozen constraints",
             ));
-        }
-        if self
-            .client_api_key_id
-            .as_ref()
-            .is_some_and(|id| id != &self.client_api_key_ref)
-        {
-            return Err(invalid("live client key ID must equal its historical ref"));
         }
         self.continuation.validate()?;
         Ok(())
@@ -183,7 +176,7 @@ pub struct ModelRequestAttemptStart {
     pub model_request_id: String,
     pub attempt_count: u32,
     pub provider_kind: String,
-    pub provider_account_id: Option<String>,
+    pub account_snapshot: Option<gateway_core::account::AccountHistorySnapshot>,
     pub provider_account_ref: Option<String>,
     pub upstream_model_id: Option<String>,
     pub upstream_transport: String,
@@ -212,15 +205,6 @@ impl ModelRequestAttemptStart {
             (None, None) => {}
             (Some(used), Some(total)) if total > 0 && used <= total => {}
             _ => return Err(invalid("capacity snapshot is invalid")),
-        }
-        if self
-            .provider_account_id
-            .as_ref()
-            .is_some_and(|id| Some(id) != self.provider_account_ref.as_ref())
-        {
-            return Err(invalid(
-                "live provider account ID must equal its historical ref",
-            ));
         }
         Ok(())
     }
@@ -427,21 +411,24 @@ impl ModelRequestRepository for PgExecutionStore {
         request.validate()?;
         let observation = RequestObservation::initial(&request)?;
         sqlx::query(
-            "insert into model_requests (
-               id, client_api_key_id, client_api_key_ref, operation, client_transport,
-               requested_model_id, image_generation_requested, started_at, deadline_at,
-               continuation_affinity_hash, continuation_requested, request_kind, request_observation_json
-             ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+            "with inserted as (
+               insert into model_requests (
+                 id, client_api_key_ref, operation, client_transport,
+                 requested_model_id, image_generation_requested, started_at,
+                 continuation_affinity_hash, continuation_requested, request_kind, request_observation_json
+               ) values ($1, $2, $3, $4, $5, $6, $7, $9, $10, $11, $12)
+               returning id
+             ) insert into model_request_leases (request_id, lease_expires_at)
+               select id, $8 from inserted",
         )
         .bind(request.id)
-        .bind(request.client_api_key_id)
         .bind(request.client_api_key_ref)
         .bind(request.operation)
         .bind(request.client_transport)
         .bind(request.requested_model_id)
         .bind(request.image_generation_requested)
         .bind(request.started_at)
-        .bind(request.deadline_at)
+        .bind(request.lease_expires_at)
         .bind(request.continuation.affinity_hash)
         .bind(request.continuation.requested)
         .bind(request.request_kind)
@@ -464,40 +451,39 @@ impl ModelRequestRepository for PgExecutionStore {
         }
         let observation = RequestObservation::initial(&request)?;
         sqlx::query(
-            "insert into model_requests (
-               id, client_api_key_id, client_api_key_ref, operation, client_transport,
-               requested_model_id, image_generation_requested, started_at, deadline_at,
-               continuation_affinity_hash, continuation_requested, request_kind, request_observation_json,
-               provider_kind, provider_account_id, provider_account_ref, upstream_model_id,
-               upstream_transport, attempt_count, upstream_send_state
-             ) select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-               $13::jsonb || jsonb_build_object(
-                 'account', jsonb_strip_nulls(jsonb_build_object(
-                   'name', account.name, 'email', account.email,
-                   'authenticationKind', account.authentication_kind)),
-                 'transport', jsonb_strip_nulls(jsonb_build_object('httpVersion', $19::text)),
-                 'scheduling', ($13::jsonb -> 'scheduling') || jsonb_strip_nulls(jsonb_build_object(
-                   'accountSelectionWaitMs', $20::bigint,
-                   'capacityUsedSlots', $21::bigint, 'capacityTotalSlots', $22::bigint))),
-               $14, $15, $16, $17, $18, 1, 'not_sent'
-             from (values (true)) as seed(present)
-             left join provider_accounts account on account.id = $15",
+            "with inserted as (
+               insert into model_requests (
+                 id, client_api_key_ref, operation, client_transport,
+                 requested_model_id, image_generation_requested, started_at,
+                 continuation_affinity_hash, continuation_requested, request_kind, request_observation_json,
+                 provider_kind, provider_account_ref, upstream_model_id,
+                 upstream_transport, attempt_count, upstream_send_state
+               ) select $1, $2, $3, $4, $5, $6, $7, $9, $10, $11,
+                 $12::jsonb || jsonb_build_object(
+                   'account', coalesce($14::jsonb, '{}'::jsonb),
+                   'transport', jsonb_strip_nulls(jsonb_build_object('httpVersion', $18::text)),
+                   'scheduling', ($12::jsonb -> 'scheduling') || jsonb_strip_nulls(jsonb_build_object(
+                     'accountSelectionWaitMs', $19::bigint,
+                     'capacityUsedSlots', $20::bigint, 'capacityTotalSlots', $21::bigint))),
+                 $13, $15, $16, $17, 1, 'not_sent'
+               returning id
+             ) insert into model_request_leases (request_id, lease_expires_at)
+               select id, $8 from inserted",
         )
         .bind(request.id)
-        .bind(request.client_api_key_id)
         .bind(request.client_api_key_ref)
         .bind(request.operation)
         .bind(request.client_transport)
         .bind(request.requested_model_id)
         .bind(request.image_generation_requested)
         .bind(request.started_at)
-        .bind(request.deadline_at)
+        .bind(request.lease_expires_at)
         .bind(request.continuation.affinity_hash)
         .bind(request.continuation.requested)
         .bind(request.request_kind)
         .bind(observation)
         .bind(attempt.provider_kind)
-        .bind(attempt.provider_account_id)
+        .bind(attempt.account_snapshot.map(sqlx::types::Json))
         .bind(attempt.provider_account_ref)
         .bind(attempt.upstream_model_id)
         .bind(attempt.upstream_transport)
@@ -531,31 +517,35 @@ impl ModelRequestRepository for PgExecutionStore {
         // 由 mark/finalize 抬升；开启新 attempt 不得把已持久化的 sent 重置回
         // not_sent——崩溃恢复的终态写回会原样继承本列
         let count = sqlx::query_scalar::<_, i32>(
-            "update model_requests
+            "with observed as materialized (
+               select id,
+                 (request_observation_json #>> '{scheduling,accountSelectionWaitMs}')::bigint as selection_wait_ms,
+                 (request_observation_json #>> '{scheduling,capacityUsedSlots}')::bigint as used_slots,
+                 (request_observation_json #>> '{scheduling,capacityTotalSlots}')::bigint as total_slots
+               from model_requests where id = $1 for update
+             ) update model_requests
              set provider_kind = $2,
-                 provider_account_id = $3,
                  provider_account_ref = $4,
                  upstream_model_id = $5,
                  upstream_transport = $6,
                  attempt_count = $8,
                  request_observation_json = request_observation_json || jsonb_build_object(
-                   'account', coalesce((select jsonb_strip_nulls(jsonb_build_object(
-                     'name', name, 'email', email, 'authenticationKind', authentication_kind))
-                     from provider_accounts where id = $3), '{}'::jsonb),
+                   'account', coalesce($3::jsonb, '{}'::jsonb),
                    'transport', jsonb_strip_nulls(jsonb_build_object('httpVersion', $7::text)),
                    'scheduling', coalesce(request_observation_json -> 'scheduling', '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
                      'accountSelectionWaitMs', case when $9::bigint is null
-                       then (request_observation_json #>> '{scheduling,accountSelectionWaitMs}')::bigint
-                       else coalesce((request_observation_json #>> '{scheduling,accountSelectionWaitMs}')::bigint, 0) + $9 end,
-                     'capacityUsedSlots', coalesce($10::bigint, (request_observation_json #>> '{scheduling,capacityUsedSlots}')::bigint),
-                     'capacityTotalSlots', coalesce($11::bigint, (request_observation_json #>> '{scheduling,capacityTotalSlots}')::bigint))))
-             where id = $1 and outcome = 'running' and downstream_committed_at is null
+                       then observed.selection_wait_ms
+                       else coalesce(observed.selection_wait_ms, 0) + $9 end,
+                     'capacityUsedSlots', coalesce($10::bigint, observed.used_slots),
+                     'capacityTotalSlots', coalesce($11::bigint, observed.total_slots))))
+             from observed
+             where model_requests.id = observed.id and outcome = 'running' and downstream_committed_at is null
                and $8 = attempt_count + 1
              returning attempt_count",
         )
         .bind(&attempt.model_request_id)
         .bind(attempt.provider_kind)
-        .bind(attempt.provider_account_id)
+        .bind(attempt.account_snapshot.map(sqlx::types::Json))
         .bind(attempt.provider_account_ref)
         .bind(attempt.upstream_model_id)
         .bind(attempt.upstream_transport)
@@ -664,7 +654,7 @@ impl ModelRequestRepository for PgExecutionStore {
                  client_status_code = coalesce(client_status_code, $6), upstream_status_code = $7,
                  client_response_id = $8, upstream_request_id = $9, upstream_response_id = $10,
                  error_kind = $11, input_tokens = $12, output_tokens = $13,
-                 cached_tokens = $14, cache_write_tokens = $15, reasoning_tokens = $16,
+                 cached_input_tokens = $14, cache_write_input_tokens = $15, reasoning_output_tokens = $16,
                  image_input_tokens = $17, image_output_tokens = $18, total_tokens = $19,
                  image_generation_succeeded = $20, cost_source = $21,
                  cost_amount = $22::numeric, cost_currency = $23,
@@ -771,9 +761,9 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(finalization.error_kind)
         .bind(optional_i64(finalization.usage.input_tokens, "input_tokens")?)
         .bind(optional_i64(finalization.usage.output_tokens, "output_tokens")?)
-        .bind(optional_i64(finalization.usage.cached_tokens, "cached_tokens")?)
-        .bind(optional_i64(finalization.usage.cache_write_tokens, "cache_write_tokens")?)
-        .bind(optional_i64(finalization.usage.reasoning_tokens, "reasoning_tokens")?)
+        .bind(optional_i64(finalization.usage.cached_input_tokens, "cached_input_tokens")?)
+        .bind(optional_i64(finalization.usage.cache_write_input_tokens, "cache_write_input_tokens")?)
+        .bind(optional_i64(finalization.usage.reasoning_output_tokens, "reasoning_output_tokens")?)
         .bind(optional_i64(finalization.usage.image_input_tokens, "image_input_tokens")?)
         .bind(optional_i64(finalization.usage.image_output_tokens, "image_output_tokens")?)
         .bind(optional_i64(finalization.usage.total_tokens, "total_tokens")?)
@@ -800,15 +790,29 @@ impl ModelRequestRepository for PgExecutionStore {
         now: DateTime<Utc>,
     ) -> StoreResult<ModelRequestRecoveryReport> {
         let result = sqlx::query(
-            "update model_requests
+            "with candidates as materialized (
+               select request.id from model_requests request
+               left join model_request_leases lease on lease.request_id = request.id
+               where request.outcome = 'running'
+                 and coalesce(lease.lease_expires_at, request.recovery_lease_expires_at, request.started_at) <= $1
+               order by request.id for update of request skip locked
+             ), expired as materialized (
+               select candidate.id from candidates candidate
+               left join lateral (
+                 select lease_expires_at from model_request_leases
+                 where request_id = candidate.id for update
+               ) lease on true
+               where lease.lease_expires_at is null or lease.lease_expires_at <= $1
+             ) update model_requests
              set outcome = 'incomplete', error_kind = 'process_interrupted',
                  request_observation_json = request_observation_json || jsonb_build_object('error',
-                   jsonb_build_object('message', 'request did not reach a terminal state')),
+                   jsonb_build_object('message', case when exists (select 1 from model_request_leases where request_id = model_requests.id)
+                     then 'request did not reach a terminal state' else 'request recovery lease is missing' end)),
                  image_generation_succeeded = case
                    when image_generation_requested then false else null
                  end,
-                 completed_at = $1
-             where outcome = 'running' and deadline_at <= $1",
+                 completed_at = greatest($1, started_at)
+             where outcome = 'running' and id in (select id from expired)",
         )
         .bind(now)
         .execute(&self.pool)
@@ -847,9 +851,9 @@ impl ExecutionStore for PgExecutionStore {
                     // 首次观测可能尚在队列中；缺行不创建记录，已终结行不改写
                     sqlx::query_scalar::<_, bool>(
                         "with renewed as (
-                           update model_requests set deadline_at = now() + $2 * interval '1 millisecond'
-                           where id = $1 and outcome = 'running' and deadline_at > now()
-                           returning id
+                           update model_request_leases set lease_expires_at = now() + $2 * interval '1 millisecond'
+                           where request_id = $1 and lease_expires_at > now()
+                           returning request_id
                          )
                          select exists(select 1 from renewed)
                            or not exists(select 1 from model_requests where id = $1 and outcome = 'running')",
@@ -968,7 +972,7 @@ impl ExecutionStore for PgExecutionStore {
                 component: "routing".to_owned(),
                 operation: failure.trigger.as_str().to_owned(),
                 provider_kind: Some(failure.provider_kind.as_str().to_owned()),
-                provider_account_id: failure.account_id.as_ref().map(|id| id.as_str().to_owned()),
+                account_snapshot: failure.account_snapshot,
                 provider_account_ref: failure.account_id.as_ref().map(|id| id.as_str().to_owned()),
                 upstream_model_id: failure
                     .upstream_model_id
@@ -1015,7 +1019,7 @@ impl ExecutionStore for PgExecutionStore {
                 component: "request_entry".to_owned(),
                 operation: "reject".to_owned(),
                 provider_kind: None,
-                provider_account_id: None,
+                account_snapshot: None,
                 provider_account_ref: None,
                 upstream_model_id: None,
                 failure_kind: error.kind().as_str().to_owned(),
@@ -1064,7 +1068,7 @@ impl ExecutionStore for PgExecutionStore {
                 component: "account_probe".to_owned(),
                 operation: "connection_test".to_owned(),
                 provider_kind: Some(failure.provider_kind.as_str().to_owned()),
-                provider_account_id: Some(failure.account_id.as_str().to_owned()),
+                account_snapshot: None,
                 provider_account_ref: Some(failure.account_id.as_str().to_owned()),
                 upstream_model_id: Some(failure.upstream_model_id.as_str().to_owned()),
                 failure_kind: error.kind().as_str().to_owned(),
@@ -1266,10 +1270,7 @@ fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
         routing_snapshot_row(&request.routing);
     NewModelRequest {
         id: request.id.as_str().to_owned(),
-        client_api_key_id: request
-            .client_api_key_id
-            .as_ref()
-            .map(|id| id.as_str().to_owned()),
+        client_api_key_name_snapshot: request.client_api_key_name_snapshot,
         client_api_key_ref: request.client_api_key_ref.as_str().to_owned(),
         config_revision: request.config_revision.get(),
         routing_scope,
@@ -1297,7 +1298,7 @@ fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
         image_generation_requested: request.image_generation_requested,
         admission_decision_ms: request.admission_decision_ms,
         started_at: DateTime::<Utc>::from(request.started_at),
-        deadline_at: DateTime::<Utc>::from(request.deadline_at.lease_deadline()),
+        lease_expires_at: DateTime::<Utc>::from(request.deadline_at.lease_deadline()),
     }
 }
 
@@ -1348,10 +1349,7 @@ fn attempt_start_row(attempt: CoreAttemptRecord) -> ModelRequestAttemptStart {
         model_request_id: attempt.request_id.as_str().to_owned(),
         attempt_count: attempt.attempt_count.get(),
         provider_kind: attempt.provider_kind.as_str().to_owned(),
-        provider_account_id: attempt
-            .provider_account_id
-            .as_ref()
-            .map(|id| id.as_str().to_owned()),
+        account_snapshot: attempt.account_snapshot,
         provider_account_ref: attempt
             .provider_account_ref
             .as_ref()
@@ -1451,7 +1449,7 @@ impl gateway_core::diagnostics::OperationalDiagnostics for PgExecutionStore {
             component: failure.component.to_owned(),
             operation: failure.operation.to_owned(),
             provider_kind: failure.provider_kind.map(|kind| kind.as_str().to_owned()),
-            provider_account_id: failure.account_id.as_ref().map(|id| id.as_str().to_owned()),
+            account_snapshot: failure.account_snapshot,
             provider_account_ref: failure.account_id.map(|id| id.as_str().to_owned()),
             upstream_model_id: None,
             failure_kind: failure.kind.to_owned(),

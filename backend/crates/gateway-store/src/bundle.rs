@@ -17,6 +17,7 @@ pub struct StoreBundle {
     worker_contributions: Vec<WorkerContribution>,
     command_writers: Option<CommandStoreWriters>,
     command_drain: Option<CommandStoreDrain>,
+    analytics: postgres::PgRequestAnalyticsRepository,
 }
 
 impl StoreBundle {
@@ -53,6 +54,14 @@ impl StoreBundle {
     #[must_use]
     pub fn health_probes(&self) -> Vec<Arc<dyn HealthProbe>> {
         self.health_probes.clone()
+    }
+
+    /// Provider 计价规则在应用组装阶段注入，Store 只负责持久化投影
+    pub fn request_analytics_worker(
+        &self,
+        projector: Arc<dyn gateway_admin::ports::store::UsageBillingProjector>,
+    ) -> StoreResult<WorkerContribution> {
+        request_analytics_worker(self.analytics.clone().with_billing_projector(projector))
     }
 
     pub fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
@@ -188,7 +197,7 @@ async fn connect(
                 pool.clone(),
                 Some(credential_leases.clone()),
                 Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
-                observability_query_budget,
+                observability_query_budget.clone(),
             )
             .with_timezone(config.timezone),
         ),
@@ -291,7 +300,9 @@ async fn connect(
             }),
         ),
     };
+    let analytics = postgres::PgRequestAnalyticsRepository::new(pool, observability_query_budget);
     Ok(StoreBundle {
+        analytics,
         diagnostics,
         admin_ports,
         core_ports,

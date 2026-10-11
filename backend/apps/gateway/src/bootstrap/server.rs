@@ -56,6 +56,12 @@ pub async fn run() -> Result<(), BootstrapError> {
         plugin_runtime,
         gateway_host::plugin_distribution::HttpPluginDistribution::new(plugin_http)
     ));
+    let analytics_worker = or_shutdown!(
+        plugin_runtime,
+        store.request_analytics_worker(std::sync::Arc::new(
+            gateway_admin::ProviderUsageBillingProjector::new(providers.admin.clone()),
+        ))
+    );
     let mut admin = or_shutdown!(
         plugin_runtime,
         gateway_admin::initialize_with_plugin_accounts(
@@ -142,6 +148,7 @@ pub async fn run() -> Result<(), BootstrapError> {
     );
 
     let mut plan = store.take_worker_contributions();
+    plan.push(analytics_worker);
     plan.push(or_shutdown!(
         plugin_runtime,
         gateway_host::retention::worker(store.retention())

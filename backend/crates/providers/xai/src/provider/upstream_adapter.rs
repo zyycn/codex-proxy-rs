@@ -37,6 +37,7 @@ impl GrokBuildProvider {
             session.account_id().clone(),
             UpstreamTransport::new(adapter.transport()).map_err(|_| protocol_not_sent())?,
         )
+        .with_account_snapshot(session.account_snapshot().cloned())
         .with_selection_observation(ProviderSelectionObservation::new(
             selected.account_selection_wait_ms,
             session.capacity_snapshot(),
@@ -103,8 +104,8 @@ impl UpstreamAccountConnection for SelectedConnection {
             self.model.as_str(),
             usage.input_tokens?,
             usage.output_tokens?,
-            usage.cached_tokens.unwrap_or(0),
-            usage.cache_write_tokens.unwrap_or(0),
+            usage.cached_input_tokens.unwrap_or(0),
+            usage.cache_write_input_tokens.unwrap_or(0),
             tier,
             self.context
                 .pricing()

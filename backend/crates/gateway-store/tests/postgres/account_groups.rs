@@ -528,9 +528,9 @@ async fn seed_group_cost_snapshot(
         .collect();
     sqlx::query(
         "insert into model_requests (
-           id, client_api_key_ref, operation, client_transport, requested_model_id, provider_kind, provider_account_id, provider_account_ref, upstream_model_id, upstream_transport, attempt_count, upstream_send_state, downstream_committed_at, outcome, client_status_code, upstream_status_code, total_tokens, cost_source, cost_amount, cost_currency, started_at, deadline_at, completed_at, request_observation_json
+           id, client_api_key_ref, operation, client_transport, requested_model_id, provider_kind, provider_account_ref, upstream_model_id, upstream_transport, attempt_count, upstream_send_state, downstream_committed_at, outcome, client_status_code, upstream_status_code, total_tokens, cost_source, cost_amount, cost_currency, started_at, recovery_lease_expires_at, completed_at, request_observation_json
          ) values (
-           $1, 'key-group-history', 'responses', 'http_sse', 'gpt-group', 'openai', $2, $2, 'gpt-group', 'http_sse', 1, 'sent', now(), 'succeeded', 200, 200, 10, 'provider_reported', $4::numeric, 'USD', now() - interval '1 minute', now() + interval '5 minutes', now(),
+           $1, 'key-group-history', 'responses', 'http_sse', 'gpt-group', 'openai', $2, 'gpt-group', 'http_sse', 1, 'sent', now(), 'succeeded', 200, 200, 10, 'provider_reported', $4::numeric, 'USD', now() - interval '1 minute', now() + interval '5 minutes', now(),
            jsonb_strip_nulls(jsonb_build_object(
            'request', jsonb_build_object(
              'configRevision', 1,

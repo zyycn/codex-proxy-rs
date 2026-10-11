@@ -1,4 +1,5 @@
 import type { RequestOptions } from '../request'
+import type { AnalyticsMetadata } from './analytics'
 import type { DashboardHealthTimeline } from './dashboard'
 import type { UsageBilling, UsageLatencyDetails, UsageTokenDetails } from './usage'
 import request from '../request'
@@ -17,9 +18,9 @@ export interface KeyUsageMetrics {
   requests: number
   inputTokens: number
   outputTokens: number
-  cachedTokens: number
-  cacheWriteTokens: number
-  reasoningTokens: number
+  cachedInputTokens: number
+  cacheWriteInputTokens: number
+  reasoningOutputTokens: number
   totalTokens: number
   costUsd: string | null
   costIncomplete: boolean
@@ -47,6 +48,7 @@ export interface KeyUsageTrendPoint extends KeyUsageMetrics {
 }
 
 export interface KeyUsageOverview {
+  analytics: AnalyticsMetadata
   asOf: string
   asOfDisplay: string
   startTime: string

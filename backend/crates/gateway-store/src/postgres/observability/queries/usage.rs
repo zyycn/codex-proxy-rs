@@ -11,6 +11,12 @@ pub(crate) fn push_usage_filter(
     filter: &UsageRecordFilter,
     alias: &str,
 ) {
+    if !filter.routing_group_refs.is_empty() {
+        query
+            .push(format!(" and {alias}.routing_group_refs && "))
+            .push_bind(filter.routing_group_refs.clone())
+            .push("::text[]");
+    }
     if let Some(value) = &filter.client_api_key_ref {
         query.push(format!(" and {alias}.client_api_key_ref = "));
         query.push_bind(value.clone());
@@ -95,22 +101,13 @@ pub(crate) fn push_usage_filter(
             query.push_bind(pattern.clone());
         }
         query.push(" escape '\\'");
-        push_client_key_name_search(query, &format!("{alias}.client_api_key_ref"), pattern);
+
+        query
+            .push(format!(" or {alias}.client_api_key_name_snapshot ilike "))
+            .push_bind(pattern)
+            .push(" escape '\\'");
         query.push(")");
     }
-}
-
-pub(crate) fn push_client_key_name_search(
-    query: &mut QueryBuilder<Postgres>,
-    key_ref: &str,
-    pattern: String,
-) {
-    query.push(format!(
-        " or exists (select 1 from client_api_keys searched_client_key
-         where searched_client_key.id = {key_ref} and searched_client_key.name ilike "
-    ));
-    query.push_bind(pattern);
-    query.push(" escape '\\')");
 }
 
 pub(crate) fn literal_prefix_pattern(value: &str) -> String {
@@ -124,17 +121,17 @@ pub(crate) fn literal_prefix_pattern(value: &str) -> String {
 }
 
 pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
-    "select mr.id, client_key.name as client_api_key_name, mr.endpoint, mr.client_transport, mr.requested_model_id,
+    "select mr.id, mr.client_api_key_name_snapshot as client_api_key_name, mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.provider_kind, mr.provider_account_ref,
             mr.provider_account_name_snapshot as provider_account_name,
             mr.provider_account_email_snapshot as provider_account_email,
-            account.notes as provider_account_notes,
-            account.plan_type as provider_account_plan_type,
+            mr.provider_account_notes_snapshot as provider_account_notes,
+            mr.provider_account_plan_type_snapshot as provider_account_plan_type,
             mr.provider_account_authentication_kind_snapshot
               as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.upstream_response_model, mr.service_tier,
-            mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.cache_write_tokens,
-            mr.reasoning_tokens, mr.image_input_tokens, mr.image_output_tokens,
+            mr.input_tokens, mr.output_tokens, mr.cached_input_tokens, mr.cache_write_input_tokens,
+            mr.reasoning_output_tokens, mr.image_input_tokens, mr.image_output_tokens,
             mr.total_tokens, mr.billing_snapshot_json, mr.cost_source, mr.cost_amount::text, mr.cost_currency,
             mr.transport_decision_wait_ms, mr.connect_ms, mr.headers_ms,
             mr.first_event_ms, mr.first_reasoning_ms, mr.first_text_ms, mr.first_token_ms,
@@ -144,9 +141,7 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             host(mr.client_ip) as client_ip, mr.user_agent,
             mr.reasoning_effort, mr.reasoning_preset, mr.subagent_kind, mr.compact,
             mr.started_at
-     from model_request_observations mr
-     left join client_api_keys client_key on client_key.id = mr.client_api_key_ref
-     left join provider_accounts account on account.id = mr.provider_account_ref";
+     from model_request_observations mr";
 
 pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
     "select mr.id, mr.client_api_key_ref, mr.config_revision,
@@ -164,8 +159,8 @@ pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
             mr.outcome, mr.client_status_code, mr.upstream_status_code,
             mr.client_response_id, mr.upstream_request_id, mr.upstream_response_id,
             mr.error_kind, mr.provider_error_code, mr.error_message, mr.retry_after_ms,
-            mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.cache_write_tokens,
-            mr.reasoning_tokens, mr.image_input_tokens, mr.image_output_tokens,
+            mr.input_tokens, mr.output_tokens, mr.cached_input_tokens, mr.cache_write_input_tokens,
+            mr.reasoning_output_tokens, mr.image_input_tokens, mr.image_output_tokens,
             mr.total_tokens, mr.billing_snapshot_json, mr.cost_source, mr.cost_amount::text,
             mr.cost_currency, mr.transport_decision_wait_ms, mr.connect_ms, mr.headers_ms,
             mr.first_event_ms, mr.first_reasoning_ms, mr.first_text_ms, mr.first_token_ms,
@@ -175,7 +170,7 @@ pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
             host(mr.client_ip) as client_ip,
             mr.user_agent, mr.reasoning_effort, mr.reasoning_preset, mr.request_kind,
             mr.subagent_kind, mr.compact, mr.image_generation_requested,
-            mr.image_generation_succeeded, mr.started_at, mr.deadline_at, mr.completed_at
+            mr.image_generation_succeeded, mr.started_at, mr.effective_recovery_lease_expires_at as deadline_at, mr.completed_at
      from model_request_observations mr";
 
 pub(crate) async fn list_usage_records(
@@ -183,8 +178,13 @@ pub(crate) async fn list_usage_records(
     query: UsageRecordQuery,
 ) -> StoreResult<UsageRecordPage> {
     query.filter.validate()?;
-    let total = count_usage_records(pool, query.range, &query.filter).await?;
-    let items = list_usage_record_items(pool, &query).await?;
+    let mut transaction = analytics::begin_snapshot(pool).await?;
+    let total = count_usage_records(&mut *transaction, query.range, &query.filter).await?;
+    let items = list_usage_record_items(&mut *transaction, &query).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| postgres_unavailable("complete usage page snapshot", error))?;
     Ok(UsageRecordPage {
         items,
         current_page: query.current_page,
@@ -193,13 +193,15 @@ pub(crate) async fn list_usage_records(
     })
 }
 
-pub(crate) async fn list_usage_record_items(
-    pool: &PgPool,
+pub(crate) async fn list_usage_record_items<'e, E: sqlx::Executor<'e, Database = Postgres>>(
+    executor: E,
     query: &UsageRecordQuery,
 ) -> StoreResult<Vec<UsageListRecord>> {
     query.filter.validate()?;
     let offset = observability_page_offset(query.current_page, query.page_size)?;
-    let mut statement = QueryBuilder::<Postgres>::new(USAGE_LIST_RECORD_SELECT);
+    let mut statement = QueryBuilder::<Postgres>::new(
+        "with candidate_page as materialized (select mr.id, mr.started_at from model_request_observations mr",
+    );
     statement.push(" where mr.started_at >= ");
     statement.push_bind(query.range.start);
     statement.push(" and mr.started_at < ");
@@ -210,9 +212,14 @@ pub(crate) async fn list_usage_record_items(
     statement.push_bind(i64::from(query.page_size.get()));
     statement.push(" offset ");
     statement.push_bind(offset);
+    statement.push(") ");
+    statement.push(USAGE_LIST_RECORD_SELECT);
+    statement.push(
+        " join candidate_page page on page.id = mr.id order by page.started_at desc, page.id desc",
+    );
     let rows = statement
         .build()
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await
         .map_err(|source| postgres_unavailable("list usage records", source))?;
     let items = rows
@@ -222,8 +229,8 @@ pub(crate) async fn list_usage_record_items(
     Ok(items)
 }
 
-pub(crate) async fn count_usage_records(
-    pool: &PgPool,
+pub(crate) async fn count_usage_records<'e, E: sqlx::Executor<'e, Database = Postgres>>(
+    executor: E,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<u64> {
@@ -237,7 +244,7 @@ pub(crate) async fn count_usage_records(
     push_usage_filter(&mut statement, filter, "mr");
     let total = statement
         .build_query_scalar::<i64>()
-        .fetch_one(pool)
+        .fetch_one(executor)
         .await
         .map_err(|source| postgres_unavailable("count usage records", source))?;
     to_u64(total)
@@ -335,9 +342,9 @@ pub(crate) fn intermediate_attempt_from_row(
         message: get(row, "message")?,
         input_tokens: None,
         output_tokens: None,
-        cached_tokens: None,
-        cache_write_tokens: None,
-        reasoning_tokens: None,
+        cached_input_tokens: None,
+        cache_write_input_tokens: None,
+        reasoning_output_tokens: None,
         total_tokens: None,
         cost_source: None,
         cost_amount: None,
@@ -372,268 +379,14 @@ pub(crate) fn final_attempt_from_request(request: &UsageRecord) -> UsageAttemptO
         message: request.error_message.clone(),
         input_tokens: request.input_tokens,
         output_tokens: request.output_tokens,
-        cached_tokens: request.cached_tokens,
-        cache_write_tokens: request.cache_write_tokens,
-        reasoning_tokens: request.reasoning_tokens,
+        cached_input_tokens: request.cached_input_tokens,
+        cache_write_input_tokens: request.cache_write_input_tokens,
+        reasoning_output_tokens: request.reasoning_output_tokens,
         total_tokens: request.total_tokens,
         cost_source: Some(request.cost_source.clone()),
         cost_amount: request.cost_amount.clone(),
         cost_currency: request.cost_currency.clone(),
         occurred_at: request.completed_at.unwrap_or(request.started_at),
-    }
-}
-
-pub(crate) async fn usage_diagnostics(
-    pool: &PgPool,
-    range: ObservabilityRange,
-    filter: &UsageRecordFilter,
-    dimension: DiagnosticDimension,
-    limit: u16,
-) -> StoreResult<DiagnosticsObservation> {
-    filter.validate()?;
-    let limit = ObservabilityPageSize::new(limit)
-        .map_err(|_| invalid("invalid diagnostic limit"))?
-        .get();
-    let dimension_sql = diagnostic_dimension_sql(dimension);
-    let completed_usage = completed_usage_fact_predicate("mr");
-    let mut statement = QueryBuilder::<Postgres>::new("with matched as (select ");
-    statement.push(dimension_sql);
-    statement.push(format!(
-        " as dimension_name, mr.outcome, mr.attempt_count, mr.total_tokens,
-                mr.latency_ms, mr.first_token_ms, mr.cost_source, mr.cost_amount,
-                mr.cost_currency, mr.downstream_committed_at, mr.client_transport,
-                mr.client_status_code, ({completed_usage}) as is_completed_usage
-         from model_request_observations mr where mr.started_at >= ",
-    ));
-    statement.push_bind(range.start);
-    statement.push(" and mr.started_at < ");
-    statement.push_bind(range.end);
-    push_unrecovered_request_filter(&mut statement, "mr");
-    push_diagnostic_dimension_filter(&mut statement, dimension);
-    push_usage_filter(&mut statement, filter, "mr");
-    // 仅在筛选后的诊断投影保留屏障，让均值与分位数复用同一次计时提取
-    statement.push(
-        " offset 0), aggregated as (
-           select dimension_name, cost_currency,
-                  grouping(cost_currency)::integer as currency_grouping,
-                  count(*)::bigint as request_count,
-                  count(*) filter (where outcome = 'succeeded')::bigint as success_count,
-                  count(*) filter (where outcome = 'failed')::bigint as failure_count,
-                  coalesce(sum(attempt_count), 0)::bigint as attempt_count,
-                  coalesce(sum(total_tokens) filter (where is_completed_usage), 0)::bigint
-                    as total_tokens,
-                  round(avg(latency_ms) filter (where is_completed_usage))::bigint
-                    as average_latency_ms,
-                  round(percentile_cont(0.95) within group (order by latency_ms)
-                    filter (where is_completed_usage))::bigint
-                    as latency_p95_ms,
-                  round(percentile_cont(0.95) within group (order by first_token_ms)
-                    filter (where is_completed_usage))::bigint
-                    as first_token_p95_ms,
-                  count(*) filter (where outcome in ('cancelled', 'incomplete'))::bigint
-                    as non_completion_count,
-                  coalesce(sum(greatest(attempt_count - 1, 0)), 0)::bigint as retry_count,
-                  count(*) filter (where attempt_count > 1)::bigint as retried_request_count,
-                  count(*) filter (
-                    where is_completed_usage and cost_source = 'provider_reported'
-                  )::bigint
-                    as provider_reported_count,
-                  count(*) filter (
-                    where is_completed_usage and cost_source = 'calculated'
-                  )::bigint
-                    as calculated_count,
-                  count(*) filter (
-                    where is_completed_usage and cost_source = 'unavailable'
-                  )::bigint
-                    as unavailable_count,
-                  sum(cost_amount) filter (
-                    where is_completed_usage
-                  )::text as amount
-             from matched
-            group by dimension_name, grouping sets ((), (cost_currency))
-         ), selected_dimensions as (
-           select dimension_name,
-                  sum(request_count) over ()::bigint as total_request_count,
-                  row_number() over (order by request_count desc, dimension_name)
-                    as sort_position
-             from aggregated
-            where currency_grouping = 1
-            order by request_count desc, dimension_name limit ",
-    );
-    statement.push_bind(i64::from(limit));
-    statement.push(
-        ")
-         select aggregated.*, selected.total_request_count,
-                account.provider_kind as account_provider_kind, account.plan_type as account_plan_type
-           from aggregated
-           join selected_dimensions selected using (dimension_name)
-           left join provider_accounts account on account.id = aggregated.dimension_name and ",
-    );
-    statement.push_bind(dimension == DiagnosticDimension::Account);
-    statement
-        .push(" order by selected.sort_position, currency_grouping desc, cost_currency nulls last");
-    let rows = statement
-        .build()
-        .fetch_all(pool)
-        .await
-        .map_err(|source| postgres_unavailable("load usage diagnostics", source))?;
-    let total_request_count = rows
-        .first()
-        .map(|row| unsigned(row, "total_request_count"))
-        .transpose()?
-        .unwrap_or_default();
-    let mut observations = Vec::with_capacity(usize::from(limit));
-    let mut costs = HashMap::<String, Vec<CurrencyCostTotal>>::new();
-    for row in &rows {
-        match get::<i32>(row, "currency_grouping")? {
-            1 => observations.push(DiagnosticObservation {
-                key: get(row, "dimension_name")?,
-                name: get(row, "dimension_name")?,
-                account_provider_kind: get(row, "account_provider_kind")?,
-                account_plan_type: get(row, "account_plan_type")?,
-                request_count: unsigned(row, "request_count")?,
-                success_count: unsigned(row, "success_count")?,
-                failure_count: unsigned(row, "failure_count")?,
-                attempt_count: unsigned(row, "attempt_count")?,
-                total_tokens: unsigned(row, "total_tokens")?,
-                average_latency_ms: optional_unsigned(row, "average_latency_ms")?,
-                latency_p95_ms: optional_unsigned(row, "latency_p95_ms")?,
-                first_token_p95_ms: optional_unsigned(row, "first_token_p95_ms")?,
-                non_completion_count: unsigned(row, "non_completion_count")?,
-                retry_count: unsigned(row, "retry_count")?,
-                retried_request_count: unsigned(row, "retried_request_count")?,
-                cost_coverage: coverage_from_row(row)?,
-                costs: Vec::new(),
-            }),
-            0 if get::<Option<String>>(row, "cost_currency")?.is_some()
-                && get::<Option<String>>(row, "amount")?.is_some() =>
-            {
-                costs
-                    .entry(get(row, "dimension_name")?)
-                    .or_default()
-                    .push(cost_from_row(row)?);
-            }
-            0 => {}
-            _ => {
-                return Err(crate::StoreError::Unavailable {
-                    backend: crate::StoreBackend::PostgreSql,
-                    message: "decode usage diagnostic grouping".to_owned(),
-                    source: None,
-                });
-            }
-        }
-    }
-    let mut display_names = match dimension {
-        DiagnosticDimension::Account => {
-            diagnostic_account_display_names(
-                pool,
-                &observations
-                    .iter()
-                    .map(|item| item.key.clone())
-                    .collect::<Vec<_>>(),
-            )
-            .await?
-        }
-        DiagnosticDimension::ApiKey => {
-            diagnostic_api_key_display_names(
-                pool,
-                &observations
-                    .iter()
-                    .map(|item| item.key.clone())
-                    .collect::<Vec<_>>(),
-            )
-            .await?
-        }
-        _ => HashMap::new(),
-    };
-    for observation in &mut observations {
-        if let Some(name) = display_names.remove(&observation.key) {
-            observation.name = name;
-        }
-        observation.costs = costs.remove(&observation.key).unwrap_or_default();
-    }
-    Ok(DiagnosticsObservation {
-        total_request_count,
-        items: observations,
-    })
-}
-
-pub(crate) async fn diagnostic_account_display_names(
-    pool: &PgPool,
-    account_ids: &[String],
-) -> StoreResult<HashMap<String, String>> {
-    if account_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let rows = sqlx::query(
-        "select requested.account_id as provider_account_ref,
-                coalesce(
-                  (
-                    select request.provider_account_email_snapshot
-                    from model_request_observations request
-                    where request.provider_account_ref = requested.account_id
-                      and request.provider_account_email_snapshot is not null
-                    order by request.started_at desc, request.id desc
-                    limit 1
-                  ),
-                  (
-                    select request.provider_account_name_snapshot
-                    from model_request_observations request
-                    where request.provider_account_ref = requested.account_id
-                      and request.provider_account_name_snapshot is not null
-                    order by request.started_at desc, request.id desc
-                    limit 1
-                  ),
-                  requested.account_id
-                ) as display_name
-         from unnest($1::text[]) as requested(account_id)",
-    )
-    .bind(account_ids)
-    .fetch_all(pool)
-    .await
-    .map_err(|source| postgres_unavailable("load diagnostic account display names", source))?;
-    let mut display_names = HashMap::with_capacity(rows.len());
-    for row in rows {
-        display_names.insert(
-            get(&row, "provider_account_ref")?,
-            get(&row, "display_name")?,
-        );
-    }
-    Ok(display_names)
-}
-
-pub(crate) async fn diagnostic_api_key_display_names(
-    pool: &PgPool,
-    key_ids: &[String],
-) -> StoreResult<HashMap<String, String>> {
-    if key_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let rows = sqlx::query("select id, name from client_api_keys where id = any($1::text[])")
-        .bind(key_ids)
-        .fetch_all(pool)
-        .await
-        .map_err(|source| postgres_unavailable("load diagnostic api key display names", source))?;
-    let mut display_names = HashMap::with_capacity(rows.len());
-    for row in rows {
-        display_names.insert(get(&row, "id")?, get(&row, "name")?);
-    }
-    Ok(display_names)
-}
-
-pub(crate) fn diagnostic_dimension_sql(dimension: DiagnosticDimension) -> &'static str {
-    match dimension {
-        DiagnosticDimension::Provider => "coalesce(mr.provider_kind, 'unrouted')",
-        DiagnosticDimension::Model => MODEL_DIAGNOSTIC_DIMENSION_SQL,
-        DiagnosticDimension::Account => "coalesce(mr.provider_account_ref, 'unrouted')",
-        DiagnosticDimension::ApiKey => "mr.client_api_key_ref",
-        DiagnosticDimension::Transport => {
-            "coalesce(mr.upstream_transport, mr.client_transport, 'unknown')"
-        }
-        DiagnosticDimension::Failure => "coalesce(mr.error_kind, 'none')",
-        DiagnosticDimension::Status => {
-            "coalesce(mr.upstream_status_code, mr.client_status_code)::text"
-        }
     }
 }
 

@@ -4,12 +4,10 @@ use std::{
     collections::{BTreeMap, HashMap, btree_map::Entry},
     str::FromStr,
     sync::Arc,
-    time::{Duration as StdDuration, Instant},
 };
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use futures::TryStreamExt;
 use gateway_core::{account::ProviderAccountId, routing::ProviderKind};
 
 use crate::{
@@ -21,16 +19,16 @@ use crate::{
             DiagnosticDimension, DiagnosticsItem, DiagnosticsResult, Granularity, HealthStatus,
             HealthTimeline, HealthTimelinePoint, OpsErrorPage, OpsErrorQuery, ProviderBillingInput,
             RequestMetricPoint, RequestMetrics, TimeRange, Trend, TrendKind, TrendPoint,
-            TrendSummary, UsageBilling, UsageCalculatedBillingFact, UsageDetail, UsageFilter,
-            UsageInsights, UsageInsightsCost, UsageInsightsCostPoint, UsageInsightsHealth,
-            UsageInsightsHealthPoint, UsageInsightsPerformance, UsageInsightsPerformancePoint,
-            UsageOverview, UsagePage, UsageQuery, UsageSummary,
+            TrendSummary, UsageBilling, UsageBillingProjection, UsageCalculatedBillingFact,
+            UsageDetail, UsageFilter, UsageInsights, UsageInsightsCost, UsageInsightsCostPoint,
+            UsageInsightsHealth, UsageInsightsHealthPoint, UsageInsightsPerformance,
+            UsageInsightsPerformancePoint, UsageOverview, UsagePage, UsageQuery, UsageSummary,
         },
         provider_credentials::ProviderQuotaRequest,
     },
     ports::{
         provider::{ProviderAdminErrorKind, ProviderAdminRegistry},
-        store::{AccountStore, ObservabilityStore, SettingsStore, UsageCalculatedBillingStream},
+        store::{AccountStore, ObservabilityStore, SettingsStore, UsageBillingProjector},
     },
 };
 
@@ -40,58 +38,8 @@ const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_MIN_SAMPLE_SIZE: u64 = 10;
 const HEALTH_TIMELINE_UNAVAILABLE_FAILURE_THRESHOLD: u64 = 3;
 const HEALTH_TIMELINE_STABLE_RELIABILITY: f64 = 99.0;
-const DASHBOARD_QUERY_BUCKET_SECONDS: i64 = 2;
-const DASHBOARD_QUERY_CACHE_RETENTION: StdDuration = StdDuration::from_secs(2);
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct DashboardQueryKey {
-    start: DateTime<Utc>,
-    end_bucket: i64,
-}
-
-impl DashboardQueryKey {
-    fn new(range: TimeRange) -> Self {
-        Self {
-            start: range.start,
-            end_bucket: range
-                .end
-                .timestamp()
-                .div_euclid(DASHBOARD_QUERY_BUCKET_SECONDS),
-        }
-    }
-}
-
-struct DashboardQueryEntry {
-    created_at: Instant,
-    result: Arc<tokio::sync::OnceCell<Result<DashboardResult, AdminError>>>,
-}
-
-#[derive(Default)]
-struct DashboardQueryCache {
-    entries: tokio::sync::Mutex<HashMap<DashboardQueryKey, DashboardQueryEntry>>,
-}
-
-impl DashboardQueryCache {
-    async fn result_cell(
-        &self,
-        key: DashboardQueryKey,
-    ) -> Arc<tokio::sync::OnceCell<Result<DashboardResult, AdminError>>> {
-        let now = Instant::now();
-        let mut entries = self.entries.lock().await;
-        entries.retain(|_, entry| {
-            now.duration_since(entry.created_at) < DASHBOARD_QUERY_CACHE_RETENTION
-        });
-        Arc::clone(
-            &entries
-                .entry(key)
-                .or_insert_with(|| DashboardQueryEntry {
-                    created_at: now,
-                    result: Arc::new(tokio::sync::OnceCell::new()),
-                })
-                .result,
-        )
-    }
-}
+mod store_cache;
+pub(crate) use store_cache::CachedObservabilityStore;
 
 /// API 消费的观测控制面服务
 #[async_trait]
@@ -130,7 +78,6 @@ pub(crate) struct DefaultObservabilityService {
     accounts: Arc<dyn AccountStore>,
     settings: Arc<dyn SettingsStore>,
     providers: ProviderAdminRegistry,
-    dashboard_queries: DashboardQueryCache,
 }
 
 impl DefaultObservabilityService {
@@ -148,7 +95,6 @@ impl DefaultObservabilityService {
             accounts,
             settings,
             providers,
-            dashboard_queries: DashboardQueryCache::default(),
         }
     }
 
@@ -185,7 +131,7 @@ impl DefaultObservabilityService {
         let yesterday = dashboard_period_metrics(&observation.trend, yesterday_start, today_start);
         let total_billing_usd = observation.totals.billing_usd.clone();
         let total_cached_token_rate = rate_or_zero(
-            observation.totals.cached_tokens,
+            observation.totals.cached_input_tokens,
             observation.totals.input_tokens,
         );
         let (first_token_latency_sum_ms, first_token_latency_count) = observation
@@ -199,7 +145,11 @@ impl DefaultObservabilityService {
             });
         let average_first_token_latency_ms =
             average(first_token_latency_sum_ms, first_token_latency_count);
-        let trend = trend(TrendKind::Usage, observation.trend.clone())?;
+        let trend = trend(
+            TrendKind::Usage,
+            observation.trend.clone(),
+            observation.analytics.clone(),
+        )?;
         let health_timeline =
             health_timeline_at(&observation.trend, observation.range.end, self.timezone)?;
         let wire_profiles = self
@@ -247,15 +197,12 @@ impl ObservabilityService for DefaultObservabilityService {
         range: TimeRange,
         kind: TrendKind,
     ) -> Result<DashboardResult, AdminError> {
-        let cell = self
-            .dashboard_queries
-            .result_cell(DashboardQueryKey::new(range))
-            .await;
-        let mut result = cell
-            .get_or_init(|| self.load_dashboard_summary(range))
-            .await
-            .clone()?;
-        result.trend = trend(kind, result.observation.trend.clone())?;
+        let mut result = self.load_dashboard_summary(range).await?;
+        result.trend = trend(
+            kind,
+            result.observation.trend.clone(),
+            result.observation.analytics.clone(),
+        )?;
         Ok(result)
     }
 
@@ -264,12 +211,16 @@ impl ObservabilityService for DefaultObservabilityService {
         range: TimeRange,
         kind: TrendKind,
     ) -> Result<Trend, AdminError> {
-        let points = self
+        let observation = self
             .store
-            .dashboard_trend(range, Granularity::for_range(range))
+            .usage_insights_observation(
+                range,
+                UsageFilter::default(),
+                Granularity::for_range(range),
+            )
             .await
             .map_err(|error| map_store_error(error, "dashboard trend"))?;
-        trend(kind, points)
+        trend(kind, observation.trend, observation.overview.analytics)
     }
 
     async fn usage_records(&self, query: UsageQuery) -> Result<UsagePage, AdminError> {
@@ -321,21 +272,22 @@ impl ObservabilityService for DefaultObservabilityService {
         filter: UsageFilter,
     ) -> Result<UsageInsights, AdminError> {
         let granularity = Granularity::for_range(range);
-        let aggregates = async {
-            futures::try_join!(
-                self.store.usage_summary(range, filter.clone()),
-                self.store.usage_trend(range, filter.clone(), granularity),
-            )
-            .map_err(|error| map_store_error(error, "usage insights"))
-        };
-        let ((overview, trend), standard_costs) = futures::try_join!(
-            aggregates,
-            recover_standard_costs(
-                &self.providers,
-                self.store
-                    .usage_calculated_billing_facts(range, filter.clone(), granularity),
-            ),
-        )?;
+        let observation = self
+            .store
+            .usage_insights_observation(range, filter, granularity)
+            .await
+            .map_err(|error| map_store_error(error, "usage insights"))?;
+        let mut standard_costs = UsageCostScenarios::default();
+        for point in observation.costs {
+            if let Some(amount) = point.standard_amount {
+                standard_costs.standard.add(point.bucket_start, amount)?;
+            }
+            if let Some(amount) = point.no_cache_amount {
+                standard_costs.no_cache.add(point.bucket_start, amount)?;
+            }
+        }
+        let overview = observation.overview;
+        let trend = observation.trend;
         build_usage_insights(overview, trend, standard_costs)
     }
 
@@ -389,7 +341,11 @@ impl ObservabilityService for DefaultObservabilityService {
                 }
             })
             .collect::<Vec<_>>();
-        Ok(DiagnosticsResult { dimension, items })
+        Ok(DiagnosticsResult {
+            analytics: observation.analytics,
+            dimension,
+            items,
+        })
     }
 
     async fn ops_errors(&self, query: OpsErrorQuery) -> Result<OpsErrorPage, AdminError> {
@@ -533,14 +489,14 @@ fn build_usage_insights(
         tier_premium,
         tokens_per_request: rate_or_zero(requests.total_tokens, requests.request_count),
         cost_per_successful_request,
-        cached_token_rate: rate_or_zero(requests.cached_tokens, requests.input_tokens),
+        cached_token_rate: rate_or_zero(requests.cached_input_tokens, requests.input_tokens),
         cache_hit_request_rate: ratio(
             requests.cache_hit_request_count,
             requests.cache_eligible_request_count,
         ),
         input_tokens: requests.input_tokens,
         output_tokens: requests.output_tokens,
-        cached_tokens: requests.cached_tokens,
+        cached_input_tokens: requests.cached_input_tokens,
         total_tokens: requests.total_tokens,
         points: trend
             .iter()
@@ -548,7 +504,7 @@ fn build_usage_insights(
                 bucket_start: point.bucket_start,
                 input_tokens: point.metrics.input_tokens,
                 output_tokens: point.metrics.output_tokens,
-                cached_tokens: point.metrics.cached_tokens,
+                cached_input_tokens: point.metrics.cached_input_tokens,
                 total_tokens: point.metrics.total_tokens,
                 estimated_cost: usd_cost(&point.costs),
                 standard_cost: standard_costs_by_bucket.get(&point.bucket_start).cloned(),
@@ -558,7 +514,7 @@ fn build_usage_insights(
                     usd_cost(&point.costs).as_ref(),
                 ),
                 cached_token_rate: rate_or_zero(
-                    point.metrics.cached_tokens,
+                    point.metrics.cached_input_tokens,
                     point.metrics.input_tokens,
                 ),
                 cache_hit_request_rate: ratio(
@@ -571,6 +527,7 @@ fn build_usage_insights(
         coverage: overview.attempts.cost_coverage.clone(),
     };
     Ok(UsageInsights {
+        analytics: overview.analytics,
         granularity,
         health,
         performance,
@@ -620,58 +577,65 @@ struct UsageCostScenarios {
     no_cache: ScenarioCosts,
 }
 
-async fn recover_standard_costs(
-    providers: &ProviderAdminRegistry,
-    mut facts: UsageCalculatedBillingStream<'_>,
-) -> Result<UsageCostScenarios, AdminError> {
-    let mut scenarios = UsageCostScenarios::default();
-    while let Some(mut fact) = facts
-        .try_next()
-        .await
-        .map_err(|error| map_store_error(error, "usage billing facts"))?
-    {
+/// 在后台投影时恢复费用场景，查询不再逐请求读取计费快照
+pub struct ProviderUsageBillingProjector {
+    providers: ProviderAdminRegistry,
+}
+
+impl ProviderUsageBillingProjector {
+    #[must_use]
+    pub fn new(providers: ProviderAdminRegistry) -> Self {
+        Self { providers }
+    }
+}
+
+impl UsageBillingProjector for ProviderUsageBillingProjector {
+    fn project(
+        &self,
+        fact: &UsageCalculatedBillingFact,
+    ) -> Result<UsageBillingProjection, AdminError> {
         let Ok(provider_kind) = ProviderKind::new(fact.provider_kind.clone()) else {
-            continue;
+            return Ok(UsageBillingProjection::default());
         };
         let input = ProviderBillingInput {
             upstream_model_id: fact.upstream_model_id.clone(),
             service_tier: fact.service_tier.clone(),
             input_tokens: fact.input_tokens,
             output_tokens: fact.output_tokens,
-            cached_tokens: fact.cached_tokens,
-            cache_write_tokens: fact.cache_write_tokens,
+            cached_input_tokens: fact.cached_input_tokens,
+            cache_write_input_tokens: fact.cache_write_input_tokens,
             total: fact.total.clone(),
         };
         let breakdown = match fact
             .breakdown
-            .take()
-            .filter(|b| b.total_amount == input.total)
+            .as_ref()
+            .filter(|breakdown| breakdown.total_amount == input.total)
+            .cloned()
             .map_or_else(
-                || providers.calculated_billing(&provider_kind, &input),
-                |b| Ok(Some(b)),
+                || self.providers.calculated_billing(&provider_kind, &input),
+                |breakdown| Ok(Some(breakdown)),
             ) {
             Ok(breakdown) => breakdown,
-            Err(error) if error.kind() == ProviderAdminErrorKind::Unsupported => continue,
+            Err(error) if error.kind() == ProviderAdminErrorKind::Unsupported => {
+                return Ok(UsageBillingProjection::default());
+            }
             Err(error) => return Err(map_provider_error(error, "usage billing")),
         };
         let Some(breakdown) = breakdown else {
-            continue;
+            return Ok(UsageBillingProjection::default());
         };
         if !breakdown
             .standard_amount
             .currency
             .eq_ignore_ascii_case("USD")
         {
-            continue;
+            return Ok(UsageBillingProjection::default());
         }
-        scenarios
-            .standard
-            .add(fact.bucket_start, breakdown.standard_amount.amount.clone())?;
-        if let Some(no_cache_cost) = no_cache_cost(&fact, &breakdown) {
-            scenarios.no_cache.add(fact.bucket_start, no_cache_cost)?;
-        }
+        Ok(UsageBillingProjection {
+            standard_amount: Some(breakdown.standard_amount.amount.clone()),
+            no_cache_amount: no_cache_cost(fact, &breakdown),
+        })
     }
-    Ok(scenarios)
 }
 
 fn no_cache_cost(
@@ -682,19 +646,21 @@ fn no_cache_cost(
     let input_tokens = fact
         .input_tokens?
         .checked_sub(image.map_or(0, |i| i.input_tokens))?;
-    let cached_tokens = fact
-        .cached_tokens
+    let cached_input_tokens = fact
+        .cached_input_tokens
         .unwrap_or_default()
-        .checked_sub(image.map_or(0, |i| i.cached_tokens))?
+        .checked_sub(image.map_or(0, |i| i.cached_input_tokens))?
         .min(input_tokens);
-    let cache_write_tokens = fact
-        .cache_write_tokens
+    let cache_write_input_tokens = fact
+        .cache_write_input_tokens
         .unwrap_or_default()
-        .min(input_tokens.saturating_sub(cached_tokens));
+        .min(input_tokens.saturating_sub(cached_input_tokens));
     let input_rate = decimal(&breakdown.input_price_per_million.amount)?;
     let replaced_input_amount = input_rate
         .scaled()
-        .checked_mul(u128::from(cached_tokens.saturating_add(cache_write_tokens)))?
+        .checked_mul(u128::from(
+            cached_input_tokens.saturating_add(cache_write_input_tokens),
+        ))?
         .checked_div(1_000_000)?;
     let mut total = decimal(&breakdown.total_amount.amount)?
         .scaled()
@@ -704,7 +670,7 @@ fn no_cache_cost(
     if let Some(image) = image {
         let image_no_cache = decimal(&image.input_price_per_million.amount)?
             .scaled()
-            .checked_mul(u128::from(image.cached_tokens))?
+            .checked_mul(u128::from(image.cached_input_tokens))?
             .checked_div(1_000_000)?;
         total = total
             .checked_sub(decimal(&image.cache_read_amount.amount)?.scaled())?
@@ -829,8 +795,8 @@ impl DefaultObservabilityService {
                 service_tier: record.service_tier.clone(),
                 input_tokens: record.input_tokens,
                 output_tokens: record.output_tokens,
-                cached_tokens: record.cached_tokens,
-                cache_write_tokens: record.cache_write_tokens,
+                cached_input_tokens: record.cached_input_tokens,
+                cache_write_input_tokens: record.cache_write_input_tokens,
                 total: total.clone(),
             };
             if let Ok(Some(breakdown)) = self.providers.calculated_billing(&provider_kind, &input) {
@@ -861,8 +827,8 @@ impl DefaultObservabilityService {
                 service_tier: record.service_tier.clone(),
                 input_tokens: record.input_tokens,
                 output_tokens: record.output_tokens,
-                cached_tokens: record.cached_tokens,
-                cache_write_tokens: record.cache_write_tokens,
+                cached_input_tokens: record.cached_input_tokens,
+                cache_write_input_tokens: record.cache_write_input_tokens,
                 total: total.clone(),
             };
             if let Ok(Some(breakdown)) = self.providers.calculated_billing(&provider_kind, &input) {
@@ -951,7 +917,11 @@ pub(super) fn health_timeline_at(
     })
 }
 
-fn trend(kind: TrendKind, points: Vec<RequestMetricPoint>) -> Result<Trend, AdminError> {
+fn trend(
+    kind: TrendKind,
+    points: Vec<RequestMetricPoint>,
+    analytics: crate::model::analytics::AnalyticsMetadata,
+) -> Result<Trend, AdminError> {
     let mut metrics = RequestMetrics::default();
     let mut coverage = CostCoverage::default();
     let mut costs = BTreeMap::<String, DecimalAmount>::new();
@@ -1007,13 +977,14 @@ fn trend(kind: TrendKind, points: Vec<RequestMetricPoint>) -> Result<Trend, Admi
         .filter_map(|point| point.metrics.output_throughput_p50)
         .min();
     Ok(Trend {
+        analytics,
         kind,
         points: points.into_iter().map(trend_point).collect(),
         summary: TrendSummary {
             request_count: metrics.request_count,
             input_tokens: metrics.input_tokens,
             output_tokens: metrics.output_tokens,
-            cached_tokens: metrics.cached_tokens,
+            cached_input_tokens: metrics.cached_input_tokens,
             total_tokens: metrics.total_tokens,
             service_failure_count,
             average_latency_ms,
@@ -1044,7 +1015,10 @@ fn trend_point(point: RequestMetricPoint) -> TrendPoint {
             point.metrics.first_token_latency_sum_ms,
             point.metrics.first_token_latency_count,
         ),
-        cached_token_rate: rate_or_zero(point.metrics.cached_tokens, point.metrics.input_tokens),
+        cached_token_rate: rate_or_zero(
+            point.metrics.cached_input_tokens,
+            point.metrics.input_tokens,
+        ),
         cache_hit_request_rate: ratio(
             point.metrics.cache_hit_request_count,
             point.metrics.cache_eligible_request_count,
@@ -1070,11 +1044,13 @@ fn dashboard_period_metrics(
         result.request_count = result.request_count.saturating_add(metrics.request_count);
         result.input_tokens = result.input_tokens.saturating_add(metrics.input_tokens);
         result.output_tokens = result.output_tokens.saturating_add(metrics.output_tokens);
-        result.cached_tokens = result.cached_tokens.saturating_add(metrics.cached_tokens);
+        result.cached_input_tokens = result
+            .cached_input_tokens
+            .saturating_add(metrics.cached_input_tokens);
         result.total_tokens = result.total_tokens.saturating_add(metrics.total_tokens);
     }
-    result.cached_token_rate = rate_or_zero(result.cached_tokens, result.input_tokens);
-    result.observed_cached_token_rate = ratio(result.cached_tokens, result.input_tokens);
+    result.cached_token_rate = rate_or_zero(result.cached_input_tokens, result.input_tokens);
+    result.observed_cached_token_rate = ratio(result.cached_input_tokens, result.input_tokens);
     result
 }
 
@@ -1091,13 +1067,15 @@ fn add_request_metrics(total: &mut RequestMetrics, value: &RequestMetrics) {
         .saturating_add(value.caller_error_count);
     total.input_tokens = total.input_tokens.saturating_add(value.input_tokens);
     total.output_tokens = total.output_tokens.saturating_add(value.output_tokens);
-    total.cached_tokens = total.cached_tokens.saturating_add(value.cached_tokens);
-    total.cache_write_tokens = total
-        .cache_write_tokens
-        .saturating_add(value.cache_write_tokens);
-    total.reasoning_tokens = total
-        .reasoning_tokens
-        .saturating_add(value.reasoning_tokens);
+    total.cached_input_tokens = total
+        .cached_input_tokens
+        .saturating_add(value.cached_input_tokens);
+    total.cache_write_input_tokens = total
+        .cache_write_input_tokens
+        .saturating_add(value.cache_write_input_tokens);
+    total.reasoning_output_tokens = total
+        .reasoning_output_tokens
+        .saturating_add(value.reasoning_output_tokens);
     total.total_tokens = total.total_tokens.saturating_add(value.total_tokens);
     total.first_token_latency_sum_ms = total
         .first_token_latency_sum_ms

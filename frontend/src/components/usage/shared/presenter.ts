@@ -29,7 +29,7 @@ export function usageFreshInputTokens(input: number, cached: number, written: nu
 export function usageTokenDetails(details: UsageTokenDetails): UsageTokenDetails {
   const inputTokens = details.inputTokens === null
     ? null
-    : usageFreshInputTokens(details.inputTokens, details.cachedTokens ?? 0, details.cacheWriteTokens ?? 0)
+    : usageFreshInputTokens(details.inputTokens, details.cachedInputTokens ?? 0, details.cacheWriteInputTokens ?? 0)
 
   return {
     ...details,

@@ -968,7 +968,7 @@ impl CodexCredentialAdminService {
             Err(error) => {
                 super::diagnostics::record_refresh_failure(
                     self.diagnostics.as_ref(),
-                    &account_id,
+                    &current.account,
                     "manual_refresh",
                     &error,
                 )

@@ -192,10 +192,12 @@ impl KeyUsageService for DefaultKeyUsageService {
                 .ok_or_else(|| AdminError::internal("时间超出支持范围"))?,
             end: now,
         };
-        let (overview, trend, health_points) = futures::try_join!(
-            self.observations.usage_summary(query.range, filter.clone()),
-            self.observations
-                .usage_trend(query.range, filter, Granularity::for_range(query.range)),
+        let (observation, health_points) = futures::try_join!(
+            self.observations.usage_insights_observation(
+                query.range,
+                filter,
+                Granularity::for_range(query.range)
+            ),
             self.observations.usage_trend(
                 today,
                 usage_filter(&id, None),
@@ -205,8 +207,8 @@ impl KeyUsageService for DefaultKeyUsageService {
         .map_err(|error| map_store_error(error, "key usage overview"))?;
         Ok(Some(KeyUsageOverview {
             key,
-            overview,
-            trend,
+            overview: observation.overview,
+            trend: observation.trend,
             health_timeline: health_timeline_at(&health_points, now, self.timezone)?,
         }))
     }

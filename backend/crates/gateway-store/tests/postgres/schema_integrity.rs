@@ -58,6 +58,29 @@ async fn seed_legacy_request(pool: &sqlx::PgPool) {
 async fn seed_request(pool: &sqlx::PgPool) {
     sqlx::query(
         "insert into model_requests (
+           id, client_api_key_ref, operation, client_transport, started_at, recovery_lease_expires_at, outcome, completed_at, request_observation_json
+         ) values (
+           'req_integrity', 'deleted_key', 'responses', 'http_sse', now(), now() + interval '1 hour', 'failed', now(),
+           jsonb_strip_nulls(jsonb_build_object(
+           'request', jsonb_build_object(
+             'configRevision', 1,
+             'protocol', 'openai',
+             'endpoint', '/v1/responses',
+             'compact', false),
+           'routing', jsonb_build_object(
+             'scope', 'all',
+             'groupRefs', '{}'::text[],
+             'groupNamesSnapshot', '[]'::jsonb)))
+         )",
+    )
+    .execute(pool)
+    .await
+    .expect("seed request without optional facts");
+}
+
+async fn seed_request_at_27(pool: &sqlx::PgPool) {
+    sqlx::query(
+        "insert into model_requests (
            id, client_api_key_ref, operation, client_transport, started_at, deadline_at, outcome, completed_at, request_observation_json
          ) values (
            'req_integrity', 'deleted_key', 'responses', 'http_sse', now(), now() + interval '1 hour', 'failed', now(),
@@ -166,38 +189,36 @@ async fn request_fact_groups_reject_partial_writes_and_accept_complete_observati
 }
 
 #[tokio::test]
-async fn account_snapshots_are_required_before_live_foreign_keys_can_be_cleared() {
+async fn historical_references_are_validated_without_live_foreign_keys() {
     let Some(db) = TestDatabase::create("account_fact_refs").await else {
         return;
     };
     seed_request(&db.pool).await;
-    sqlx::query(
-        "insert into provider_accounts (id, provider_kind, name, authentication_kind,
-           provider_credentials_json, has_refresh_token, credential_observed_at, created_at, updated_at)
-         values ('acct_integrity', 'openai', 'test', 'oauth', '{}', false, now(), now(), now())",
-    ).execute(&db.pool).await.expect("seed account");
-    let error = sqlx::query("update model_requests set provider_account_id = 'acct_integrity'")
+    let error = sqlx::query("update model_requests set provider_account_ref = ''")
         .execute(&db.pool)
         .await
-        .expect_err("request requires snapshot ref");
+        .expect_err("empty historical reference must fail");
     assert_check_rejected(&error);
-    let error = sqlx::query(
-        "insert into ops_events (id, level, component, operation, provider_account_id,
-           failure_kind, message, created_at)
-         values ('ops_missing_ref', 'error', 'probe', 'probe', 'acct_integrity', 'timeout', 'test', now())",
-    ).execute(&db.pool).await.expect_err("event requires snapshot ref");
+    let error = sqlx::query("insert into ops_events (id, level, component, operation, provider_account_ref, failure_kind, message, created_at)
+        values ('ops_empty_ref', 'error', 'probe', 'probe', '', 'timeout', 'test', now())")
+        .execute(&db.pool).await.expect_err("empty event reference must fail");
     assert_check_rejected(&error);
-    sqlx::query(
-        "update model_requests set provider_account_id = 'acct_integrity', provider_account_ref = 'acct_integrity'",
-    ).execute(&db.pool).await.expect("write complete account reference");
-    sqlx::query("delete from provider_accounts where id = 'acct_integrity'")
+    sqlx::query("update model_requests set provider_account_ref = 'already_deleted_account'")
         .execute(&db.pool)
         .await
-        .expect("delete live account through narrowed FK index");
-    let refs: (Option<String>, String) = sqlx::query_as(
-        "select provider_account_id, provider_account_ref from model_requests where id = 'req_integrity'",
-    ).fetch_one(&db.pool).await.expect("read retained snapshot");
-    assert_eq!(refs, (None, "acct_integrity".to_owned()));
+        .expect("history does not require a live account");
+    let references: String = sqlx::query_scalar(
+        "select provider_account_ref from model_requests where id = 'req_integrity'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(references, "already_deleted_account");
+    let live_columns: i64 = sqlx::query_scalar("select count(*) from information_schema.columns where table_schema = current_schema()
+        and ((table_name = 'model_requests' and column_name in ('client_api_key_id','provider_account_id'))
+          or (table_name = 'ops_events' and column_name = 'provider_account_id'))")
+        .fetch_one(&db.pool).await.unwrap();
+    assert_eq!(live_columns, 0);
     db.close().await;
 }
 
@@ -298,7 +319,7 @@ async fn request_observation_migration_preserves_every_historical_field() {
             .fetch_all(&db.pool)
             .await
             .unwrap();
-    super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+    super::TEST_MIGRATOR.run_to(27, &db.pool).await.unwrap();
     let after: Vec<serde_json::Value> = sqlx::query_scalar(
         "select to_jsonb(mr) - 'request_observation_json' - 'upstream_response_ms' - 'upstream_api_overhead_ms' - 'upstream_engine_ms' - 'upstream_engine_iapi_ttft_ms' - 'upstream_engine_service_ttft_ms' - 'upstream_engine_iapi_tbt_ms' - 'upstream_engine_service_tbt_ms'
          from model_request_observations mr order by id",
@@ -414,14 +435,14 @@ async fn observation_validation_upgrade_preserves_history_and_rejects_invalid_wr
     let Some(db) = TestDatabase::create_through("observation_validation_upgrade", 27).await else {
         return;
     };
-    seed_request(&db.pool).await;
+    seed_request_at_27(&db.pool).await;
     let before: serde_json::Value =
         sqlx::query_scalar("select to_jsonb(mr) from model_requests mr")
             .fetch_one(&db.pool)
             .await
             .unwrap();
 
-    super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+    super::TEST_MIGRATOR.run_to(28, &db.pool).await.unwrap();
     let after: serde_json::Value = sqlx::query_scalar("select to_jsonb(mr) from model_requests mr")
         .fetch_one(&db.pool)
         .await
@@ -483,8 +504,28 @@ async fn unchanged_observations_do_not_repeat_full_document_validation() {
         .execute(&db.pool)
         .await
         .unwrap();
+    sqlx::query("create sequence observation_business_calls")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let business_definition: String = sqlx::query_scalar(
+        "select pg_get_functiondef('check_model_request_observation()'::regprocedure)",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    let business_instrumented = business_definition.replacen(
+        "begin\n",
+        "begin\n  perform nextval('observation_business_calls');\n",
+        1,
+    );
+    assert_ne!(business_definition, business_instrumented);
+    sqlx::raw_sql(sqlx::AssertSqlSafe(business_instrumented))
+        .execute(&db.pool)
+        .await
+        .unwrap();
     seed_request(&db.pool).await;
-    sqlx::query("update model_requests set deadline_at = deadline_at + interval '1 second'")
+    sqlx::query("update model_requests set recovery_lease_expires_at = recovery_lease_expires_at + interval '1 second'")
         .execute(&db.pool)
         .await
         .unwrap();
@@ -497,6 +538,15 @@ async fn unchanged_observations_do_not_repeat_full_document_validation() {
         .await
         .unwrap();
     assert_eq!(calls, 1, "only the initial insert needs full validation");
+    let business_calls: i64 =
+        sqlx::query_scalar("select last_value from observation_business_calls")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        business_calls, 1,
+        "unrelated updates must not enter business JSON validation"
+    );
 
     sqlx::query(
         "update model_requests set request_observation_json = jsonb_set(
@@ -536,10 +586,122 @@ async fn observation_validation_checks_the_final_row_after_before_triggers() {
     .await
     .unwrap();
     let error =
-        sqlx::query("update model_requests set deadline_at = deadline_at + interval '1 second'")
+        sqlx::query("update model_requests set recovery_lease_expires_at = recovery_lease_expires_at + interval '1 second'")
             .execute(&db.pool)
             .await
             .expect_err("indirect JSON changes must not bypass validation");
     assert_check_rejected(&error);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn conditional_business_validation_preserves_each_constraint_and_cross_column_updates() {
+    let Some(db) = TestDatabase::create_through("observation_dependencies", 28).await else {
+        return;
+    };
+    seed_request_at_27(&db.pool).await;
+    let cases = [
+        (
+            "model_requests_upstream_duration_ck",
+            "request_observation_json = request_observation_json || '{\"timings\":{\"upstream\":{\"responseMs\":0}}}'::jsonb",
+        ),
+        ("model_requests_revision_attempt_ck", "attempt_count = -1"),
+        ("model_requests_status_ck", "client_status_code = 99"),
+        (
+            "model_requests_websocket_pool_ck",
+            "request_observation_json = request_observation_json || '{\"transport\":{\"websocketPool\":\"invalid\"}}'::jsonb",
+        ),
+        (
+            "model_requests_routing_group_names_ck",
+            "request_observation_json = jsonb_set(request_observation_json, '{routing,scope}', '\"invalid\"')",
+        ),
+        (
+            "model_requests_routing_group_names_ck",
+            "request_observation_json = request_observation_json || '{\"routing\":{\"scope\":\"groups\",\"groupRefs\":[\"group\"],\"groupNamesSnapshot\":[]}}'::jsonb",
+        ),
+        (
+            "model_requests_latency_ck",
+            "request_observation_json = request_observation_json || '{\"timings\":{\"local\":{\"latencyMs\":1,\"firstTokenMs\":2}}}'::jsonb",
+        ),
+        (
+            "model_requests_runtime_pressure_ck",
+            "request_observation_json = request_observation_json || '{\"scheduling\":{\"capacityUsedSlots\":3,\"capacityTotalSlots\":2}}'::jsonb",
+        ),
+        (
+            "model_requests_continuation_hashes_ck",
+            "continuation_affinity_hash = 'invalid'",
+        ),
+        (
+            "model_requests_continuation_reason_ck",
+            "request_observation_json = request_observation_json || '{\"continuation\":{\"unavailableReason\":\"invalid reason\"}}'::jsonb",
+        ),
+        (
+            "model_requests_upstream_connection_ck",
+            "request_observation_json = request_observation_json || '{\"transport\":{\"connection\":{\"id\":\"connection\",\"exitReason\":\"closed\",\"ageMs\":1,\"idleMs\":2}}}'::jsonb",
+        ),
+        ("model_requests_recovery_ck", "recovery_attempt_count = -1"),
+        (
+            "model_requests_fact_completeness_ck",
+            "cost_source = 'calculated', cost_amount = 1",
+        ),
+    ];
+    for version in [28, 29] {
+        super::TEST_MIGRATOR
+            .run_to(version, &db.pool)
+            .await
+            .unwrap();
+        for (constraint, assignment) in cases {
+            let error = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "update model_requests set {assignment} where id = 'req_integrity'"
+            )))
+            .execute(&db.pool)
+            .await
+            .expect_err("invalid final row must fail");
+            assert_check_rejected(&error);
+            assert_eq!(
+                error.as_database_error().unwrap().constraint(),
+                Some(constraint),
+                "migration {version}: {assignment}"
+            );
+        }
+    }
+    sqlx::query("update model_requests set continuation_requested = true, request_observation_json = request_observation_json || jsonb_build_object('continuation', jsonb_build_object('previousResponseIdHash', repeat('a',64)))")
+        .execute(&db.pool).await.unwrap();
+    let error = sqlx::query("update model_requests set continuation_requested = false")
+        .execute(&db.pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.as_database_error().unwrap().constraint(),
+        Some("model_requests_continuation_hashes_ck")
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn lease_migration_moves_running_expiry_and_preserves_terminal_expiry() {
+    let Some(db) = TestDatabase::create_through("lease_upgrade", 30).await else {
+        return;
+    };
+    seed_request_at_27(&db.pool).await;
+    sqlx::query("insert into model_requests (id, client_api_key_ref, operation, client_transport, started_at, deadline_at, request_observation_json)
+        select 'running_upgrade', client_api_key_ref, operation, client_transport, started_at, deadline_at, request_observation_json from model_requests where id = 'req_integrity'")
+        .execute(&db.pool).await.unwrap();
+    let expiry: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("select deadline_at from model_requests where id = 'running_upgrade'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    super::TEST_MIGRATOR.run_to(31, &db.pool).await.unwrap();
+    let running: (Option<chrono::DateTime<chrono::Utc>>, chrono::DateTime<chrono::Utc>) = sqlx::query_as("select request.recovery_lease_expires_at, lease.lease_expires_at from model_requests request join model_request_leases lease on lease.request_id = request.id where request.id = 'running_upgrade'")
+        .fetch_one(&db.pool).await.unwrap();
+    assert_eq!(running, (None, expiry));
+    let terminal: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+        "select recovery_lease_expires_at from model_requests where id = 'req_integrity'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(terminal, expiry);
     db.close().await;
 }

@@ -1,4 +1,4 @@
-//! Redis 丢失后从 `model_requests` 恢复客户端准入热状态
+//! Redis 丢失后从历史请求与有效运行租约恢复客户端准入热状态
 
 use std::collections::BTreeMap;
 
@@ -27,7 +27,7 @@ pub struct ClientAdmissionRecentRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientAdmissionRunningRequest {
     pub model_request_id: String,
-    pub deadline_at: DateTime<Utc>,
+    pub lease_expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,18 +63,21 @@ impl ClientAdmissionRecoveryRepository for PgClientAdmissionRecoveryRepository {
         &self,
         window_started_at: DateTime<Utc>,
     ) -> StoreResult<Vec<ClientAdmissionRecovery>> {
-        let rows = sqlx::query_as::<_, (String, String, DateTime<Utc>, DateTime<Utc>, String)>(
-            "select client_api_key_ref, id, started_at, deadline_at, outcome
-             from model_requests
-             where started_at >= $1 or outcome = 'running'
-             order by client_api_key_ref, started_at, id",
-        )
-        .bind(window_started_at)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|source| postgres_unavailable("load client admission recovery", source))?;
+        let rows =
+            sqlx::query_as::<_, (String, String, DateTime<Utc>, Option<DateTime<Utc>>, String)>(
+                "select request.client_api_key_ref, request.id, request.started_at,
+                    lease.lease_expires_at, request.outcome
+             from model_requests request
+             left join model_request_leases lease on lease.request_id = request.id
+             where request.started_at >= $1 or request.outcome = 'running'
+             order by request.client_api_key_ref, request.started_at, request.id",
+            )
+            .bind(window_started_at)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|source| postgres_unavailable("load client admission recovery", source))?;
         let mut recoveries = BTreeMap::<String, ClientAdmissionRecovery>::new();
-        for (client_api_key_ref, model_request_id, started_at, deadline_at, outcome) in rows {
+        for (client_api_key_ref, model_request_id, started_at, lease_expires_at, outcome) in rows {
             let recovery = recoveries
                 .entry(client_api_key_ref.clone())
                 .or_insert_with(|| ClientAdmissionRecovery {
@@ -88,12 +91,15 @@ impl ClientAdmissionRecoveryRepository for PgClientAdmissionRecoveryRepository {
                     started_at,
                 });
             }
-            if outcome == "running" {
+            // 缺失租约的遗留行由请求恢复 Worker 收敛，不伪造仍占用准入容量的期限
+            if outcome == "running"
+                && let Some(lease_expires_at) = lease_expires_at
+            {
                 recovery
                     .running_requests
                     .push(ClientAdmissionRunningRequest {
                         model_request_id,
-                        deadline_at,
+                        lease_expires_at,
                     });
             }
         }
@@ -133,7 +139,7 @@ impl ClientAdmissionRecoveryPort for PgClientAdmissionRecoveryRepository {
                             Ok(RunningAdmissionFact {
                                 model_request_id: ModelRequestId::new(request.model_request_id)
                                     .map_err(|source| ClientAdmissionError(Some(source.into())))?,
-                                expires_at: request.deadline_at.into(),
+                                expires_at: request.lease_expires_at.into(),
                             })
                         })
                         .collect::<Result<Vec<_>, ClientAdmissionError>>()?;

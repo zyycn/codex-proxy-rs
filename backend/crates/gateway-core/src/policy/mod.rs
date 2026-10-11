@@ -119,6 +119,7 @@ pub struct ClientSettings {
 /// 从 `client_api_keys` 冻结的公开准入事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientPolicy {
+    name_snapshot: Option<String>,
     defaults: Arc<ClientSettings>,
     key_id: ClientApiKeyId,
     plaintext_key: PlaintextClientApiKey,
@@ -163,6 +164,7 @@ impl ClientPolicy {
         limits: RateLimits,
     ) -> Self {
         Self {
+            name_snapshot: None,
             defaults: Arc::new(ClientSettings {
                 request_profiles: account_scope.request_profiles().clone(),
                 fast_mode: account_scope.fast_mode(),
@@ -174,6 +176,17 @@ impl ClientPolicy {
             enabled,
             limits,
         }
+    }
+
+    #[must_use]
+    pub fn with_name_snapshot(mut self, name: Option<String>) -> Self {
+        self.name_snapshot = name;
+        self
+    }
+
+    #[must_use]
+    pub fn name_snapshot(&self) -> Option<&str> {
+        self.name_snapshot.as_deref()
     }
 
     #[must_use]

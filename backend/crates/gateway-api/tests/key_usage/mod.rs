@@ -181,6 +181,7 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
             "summary",
             "trend",
             "healthTimeline",
+            "analytics",
         ],
     );
     assert_fields(
@@ -203,8 +204,8 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
     assert_eq!(data["key"]["dailyUsedUsd"], "0.640001");
     assert_eq!(data["key"]["maxConcurrency"], 0);
     assert_eq!(data["summary"]["totalTokens"], 1100);
-    assert_eq!(data["summary"]["reasoningTokens"], 40);
-    assert_eq!(data["trend"][0]["reasoningTokens"], 40);
+    assert_eq!(data["summary"]["reasoningOutputTokens"], 40);
+    assert_eq!(data["trend"][0]["reasoningOutputTokens"], 40);
     assert_eq!(data["summary"]["costUsd"], "0.123456");
     assert_eq!(data["summary"]["costIncomplete"], true);
     assert_eq!(data["trend"][0]["bucketSeconds"], 900);
@@ -300,7 +301,7 @@ async fn records_keep_pagination_and_hide_admin_and_upstream_data() {
         assert!(!data.to_string().contains("private-sentinel"));
         if kind == "success" {
             assert_eq!(record["billing"]["totalAmountDisplay"], "$0.1235");
-            assert_eq!(record["tokenDetails"]["reasoningTokens"], 40);
+            assert_eq!(record["tokenDetails"]["reasoningOutputTokens"], 40);
             assert_eq!(record["tokenDetails"]["totalTokens"], 1100);
             assert_eq!(record["firstTokenLatencyMs"], 210);
             assert_fields(
@@ -430,6 +431,7 @@ async fn empty_usage_has_zero_cost_but_unknown_pricing_stays_unknown() {
         {
             let mut data = fixture.observations.lock().unwrap();
             let summary = data.summary.as_mut().unwrap();
+            summary.analytics.generation += 1;
             summary.requests = RequestMetrics {
                 request_count: requests,
                 ..Default::default()

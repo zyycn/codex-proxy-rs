@@ -165,9 +165,9 @@ impl EventDecoder {
                     let usage = Usage {
                         input_tokens: usage.input_tokens,
                         output_tokens: usage.output_tokens,
-                        cached_tokens: usage.cached_tokens,
-                        cache_write_tokens: usage.cache_write_tokens,
-                        reasoning_tokens: usage.reasoning_tokens,
+                        cached_input_tokens: usage.cached_tokens,
+                        cache_write_input_tokens: usage.cache_write_tokens,
+                        reasoning_output_tokens: usage.reasoning_tokens,
                         image_input_tokens: usage.image_input_tokens,
                         image_output_tokens: usage.image_output_tokens,
                         total_tokens: usage.total_tokens,

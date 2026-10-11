@@ -860,7 +860,7 @@ fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest
     NewModelRequest {
         admission_decision_ms: None,
         id: ModelRequestId::new("req_core_1").expect("request id"),
-        client_api_key_id: Some(client_key.clone()),
+        client_api_key_name_snapshot: None,
         client_api_key_ref: client_key,
         config_revision: ConfigRevision::new(1).expect("config revision"),
         routing: AccountRoutingSnapshot::all(),

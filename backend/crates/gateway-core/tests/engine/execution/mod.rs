@@ -579,10 +579,7 @@ fn assert_early_failure_recorded(
     let request = &requests[0];
     assert_eq!(request.id, *request_id);
     assert_eq!(request.client_api_key_ref.as_str(), "key_start_test");
-    assert_eq!(
-        request.client_api_key_id.as_ref(),
-        Some(&request.client_api_key_ref)
-    );
+    assert_eq!(request.client_api_key_name_snapshot, None);
     assert_eq!(request.protocol, "openai");
     assert_eq!(request.endpoint, "/v1/responses");
     assert_eq!(request.client_transport, transport.as_str());

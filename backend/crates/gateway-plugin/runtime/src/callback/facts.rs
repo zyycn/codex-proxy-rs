@@ -86,7 +86,7 @@ fn breakdown(value: &CalculatedCostBreakdown) -> facts::CostBreakdown {
         long_context_billing_applied: value.long_context_billing_applied(),
         image: value.image().map(|value| facts::ImageCostBreakdown {
             input_tokens: value.input_tokens,
-            cached_tokens: value.cached_tokens,
+            cached_tokens: value.cached_input_tokens,
             input_amount: money(value.input_amount),
             cache_read_amount: money(value.cache_read_amount),
             input_price_per_million: money(value.input_price_per_million),
@@ -234,9 +234,9 @@ fn project_fact(event: GatewayEvent) -> Option<Result<CanonicalEvent, PluginFaul
             usage: WireUsage {
                 input_tokens: usage.input_tokens,
                 output_tokens: usage.output_tokens,
-                cached_tokens: usage.cached_tokens,
-                cache_write_tokens: usage.cache_write_tokens,
-                reasoning_tokens: usage.reasoning_tokens,
+                cached_tokens: usage.cached_input_tokens,
+                cache_write_tokens: usage.cache_write_input_tokens,
+                reasoning_tokens: usage.reasoning_output_tokens,
                 image_input_tokens: usage.image_input_tokens,
                 image_output_tokens: usage.image_output_tokens,
                 total_tokens: usage.total_tokens,

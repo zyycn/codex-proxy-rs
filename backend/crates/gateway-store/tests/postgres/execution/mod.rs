@@ -1,9 +1,10 @@
 //! 验证执行记录端口的请求、尝试、恢复租约与快照持久化
 
+mod source_governance;
+
 use std::time::{Duration as StdDuration, SystemTime};
 
 use chrono::{DateTime, Duration, Utc};
-use futures::TryStreamExt as _;
 use gateway_admin::{
     model::observability as admin_observability, ports::store::ObservabilityStore as _,
 };
@@ -32,13 +33,13 @@ use sqlx::PgPool;
 use super::{TestDatabase, admin_observability_store, observability_repository};
 
 #[test]
-fn model_request_rejects_mismatched_client_key_live_id() {
+fn model_request_rejects_empty_historical_client_key_ref() {
     let started_at = Utc::now();
     let request = NewModelRequest {
         admission_decision_ms: None,
         id: "request-1".to_owned(),
-        client_api_key_id: Some("key-live".to_owned()),
-        client_api_key_ref: "key-history".to_owned(),
+        client_api_key_name_snapshot: None,
+        client_api_key_ref: String::new(),
         config_revision: 1,
         protocol: "openai".to_owned(),
         operation: "responses".to_owned(),
@@ -58,7 +59,7 @@ fn model_request_rejects_mismatched_client_key_live_id() {
         continuation: Default::default(),
         image_generation_requested: false,
         started_at,
-        deadline_at: started_at + Duration::seconds(30),
+        lease_expires_at: started_at + Duration::seconds(30),
     };
     assert!(request.validate().is_err());
 }
@@ -73,17 +74,18 @@ async fn request_recovery_lease_is_renewed_and_abandoned_requests_are_recovered(
     request.started_at = SystemTime::now() - StdDuration::from_secs(601);
     request.deadline_at = Default::default();
     store.create_model_request(request.clone()).await.unwrap();
-    let initial: DateTime<Utc> = sqlx::query_scalar("update model_requests set deadline_at = now() + interval '1 second' where id = $1 returning deadline_at")
+    let initial: DateTime<Utc> = sqlx::query_scalar("update model_request_leases set lease_expires_at = now() + interval '1 second' where request_id = $1 returning lease_expires_at")
         .bind(request.id.as_str()).fetch_one(&database.pool).await.unwrap();
     let renewal = store.maintain_request(&request.id, request.deadline_at);
     let renewed: DateTime<Utc> = tokio::time::timeout(StdDuration::from_secs(2), async {
         loop {
-            let at: DateTime<Utc> =
-                sqlx::query_scalar("select deadline_at from model_requests where id = $1")
-                    .bind(request.id.as_str())
-                    .fetch_one(&database.pool)
-                    .await
-                    .unwrap();
+            let at: DateTime<Utc> = sqlx::query_scalar(
+                "select lease_expires_at from model_request_leases where request_id = $1",
+            )
+            .bind(request.id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
             if at > initial + Duration::seconds(500) {
                 break at;
             }
@@ -140,7 +142,7 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
     let request = NewModelRequest {
         admission_decision_ms: None,
         id: "req_merged".to_owned(),
-        client_api_key_id: None,
+        client_api_key_name_snapshot: None,
         client_api_key_ref: "key_merged".to_owned(),
         config_revision: 1,
         protocol: "openai".to_owned(),
@@ -161,7 +163,7 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         continuation: Default::default(),
         image_generation_requested: false,
         started_at,
-        deadline_at: started_at + Duration::seconds(30),
+        lease_expires_at: started_at + Duration::seconds(30),
     };
     let attempt = ModelRequestAttemptStart {
         account_selection_wait_ms: None,
@@ -170,7 +172,7 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         model_request_id: "req_merged".to_owned(),
         attempt_count: 1,
         provider_kind: "openai".to_owned(),
-        provider_account_id: Some("acct_merged".to_owned()),
+        account_snapshot: None,
         provider_account_ref: Some("acct_merged".to_owned()),
         upstream_model_id: None,
         upstream_transport: "http_json".to_owned(),
@@ -225,7 +227,7 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
             model_request_id: "req_merged".to_owned(),
             attempt_count: 2,
             provider_kind: "openai".to_owned(),
-            provider_account_id: Some("acct_merged".to_owned()),
+            account_snapshot: None,
             provider_account_ref: Some("acct_merged".to_owned()),
             upstream_model_id: None,
             upstream_transport: "http_json".to_owned(),
@@ -255,7 +257,7 @@ async fn model_request_persists_group_routing_snapshot_without_live_group_foreig
         .insert_model_request(NewModelRequest {
             admission_decision_ms: None,
             id: "req_group_history".to_owned(),
-            client_api_key_id: None,
+            client_api_key_name_snapshot: None,
             client_api_key_ref: "key_group_history".to_owned(),
             config_revision: 7,
             routing_scope: "groups".to_owned(),
@@ -279,7 +281,7 @@ async fn model_request_persists_group_routing_snapshot_without_live_group_foreig
             continuation: Default::default(),
             image_generation_requested: false,
             started_at,
-            deadline_at: started_at + Duration::seconds(30),
+            lease_expires_at: started_at + Duration::seconds(30),
         })
         .await
         .expect("insert grouped request history");
@@ -625,7 +627,7 @@ async fn expired_image_request_should_be_recovered_as_failed() {
         "update model_requests
          set image_generation_requested = true,
              started_at = now() - interval '2 seconds',
-             deadline_at = now() - interval '1 second'
+             recovery_lease_expires_at = now() - interval '1 second'
          where id = 'req_expired_image'",
     )
     .execute(&database.pool)
@@ -710,7 +712,7 @@ async fn clock_rollback_preserves_terminal_outcomes_and_errors_after_recovery() 
                 model_request_id: id.clone(),
                 attempt_count: 1,
                 provider_kind: "openai".to_owned(),
-                provider_account_id: None,
+                account_snapshot: None,
                 provider_account_ref: Some("acct_clock_rollback".to_owned()),
                 upstream_model_id: Some("coding".to_owned()),
                 upstream_transport: "websocket".to_owned(),
@@ -1300,7 +1302,7 @@ async fn seed_continuation_failure(
            outcome = 'failed',
            error_kind = 'continuation_recovery_required',
            started_at = $4 - interval '1 second',
-           deadline_at = $4,
+           recovery_lease_expires_at = $4,
            completed_at = $4,
            request_observation_json = jsonb_strip_nulls(request_observation_json || jsonb_build_object(
            'continuation', coalesce(request_observation_json #> '{continuation}', '{}'::jsonb) || jsonb_build_object(
@@ -1330,7 +1332,7 @@ async fn seed_recovery_request(
         "update model_requests
             set client_api_key_ref = 'key_continuation', client_transport = 'websocket',
                 continuation_affinity_hash = $2, continuation_requested = false,
-                started_at = $3, deadline_at = $3 + interval '1 minute'
+                started_at = $3, recovery_lease_expires_at = $3 + interval '1 minute'
           where id = $1",
     )
     .bind(id)
@@ -1361,7 +1363,7 @@ async fn seed_websocket_transport_failure(
            outcome = 'failed',
            error_kind = 'upstream_unavailable',
            started_at = $3 - interval '1 second',
-           deadline_at = $3,
+           recovery_lease_expires_at = $3,
            completed_at = $3,
            request_observation_json = jsonb_strip_nulls(request_observation_json || jsonb_build_object(
            'error', coalesce(request_observation_json #> '{error}', '{}'::jsonb) || jsonb_build_object(
@@ -1390,7 +1392,7 @@ async fn seed_transport_recovery_request(
             set client_api_key_ref = 'key_transport_recovery',
                 client_transport = 'http_sse',
                 continuation_affinity_hash = $2,
-                started_at = $3, deadline_at = $3 + interval '1 minute'
+                started_at = $3, recovery_lease_expires_at = $3 + interval '1 minute'
           where id = $1",
     )
     .bind(id)
@@ -1404,7 +1406,7 @@ async fn seed_transport_recovery_request(
 async fn seed_running_request(pool: &sqlx::PgPool, id: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
         "insert into model_requests (
-           id, client_api_key_ref, operation, client_transport, requested_model_id, provider_kind, provider_account_ref, cost_source, started_at, deadline_at, request_observation_json
+           id, client_api_key_ref, operation, client_transport, requested_model_id, provider_kind, provider_account_ref, cost_source, started_at, recovery_lease_expires_at, request_observation_json
          ) values (
            $1, 'key_status', 'generate', 'http_json', 'status-model', 'openai', 'acct_status', 'unavailable', now(), now() + interval '1 minute',
            jsonb_strip_nulls(jsonb_build_object(
@@ -1485,7 +1487,7 @@ pub(super) fn accepted_request(id: &str) -> CoreNewModelRequest {
     );
     CoreNewModelRequest {
         id: ModelRequestId::new(id).expect("request id"),
-        client_api_key_id: None,
+        client_api_key_name_snapshot: None,
         client_api_key_ref: ClientApiKeyId::new("key_zero_attempt").expect("client key ref"),
         config_revision: ConfigRevision::new(1).expect("revision"),
         routing: AccountRoutingSnapshot::all(),
@@ -1629,7 +1631,6 @@ async fn zero_attempt_failure_is_queryable_without_fabricating_upstream_facts() 
     let row = stored_row(&database.pool, request.id.as_str()).await;
     for field in [
         "provider_kind",
-        "provider_account_id",
         "provider_account_ref",
         "provider_account_name_snapshot",
         "provider_account_email_snapshot",
@@ -1993,6 +1994,7 @@ async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates
         .await
         .expect("finalize success control");
     let repository = observability_repository(&database.pool);
+    super::drain_analytics(&database.pool).await;
     let before = repository
         .usage_summary(zero_attempt_range(&request), UsageRecordFilter::default())
         .await
@@ -2006,6 +2008,7 @@ async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates
     ExecutionStore::finalize_model_request(&store, early_failure(&request))
         .await
         .expect("finalize failure");
+    super::drain_analytics(&database.pool).await;
     let after = repository
         .usage_summary(zero_attempt_range(&request), UsageRecordFilter::default())
         .await
@@ -2036,7 +2039,22 @@ async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates
         )
         .await
         .expect("successful aggregation unchanged");
-    assert_eq!(successes, before);
+    assert_eq!(successes.range, before.range);
+    assert_eq!(successes.requests, before.requests);
+    assert_eq!(successes.attempts, before.attempts);
+    assert_eq!(successes.providers, before.providers);
+    assert_eq!(
+        successes.analytics.schema_version,
+        before.analytics.schema_version
+    );
+    assert_eq!(
+        successes.analytics.histogram_version,
+        before.analytics.histogram_version
+    );
+    assert!(successes.analytics.generation >= before.analytics.generation);
+    assert!(successes.analytics.generated_at >= before.analytics.generated_at);
+    assert!(successes.analytics.coverage_start.is_some());
+    assert!(successes.analytics.coverage_end >= before.analytics.coverage_end);
     let filter = UsageRecordFilter {
         request_id: Some(request.id.as_str().to_owned()),
         ..Default::default()
@@ -2061,16 +2079,21 @@ async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates
         .expect("successful usage list excludes failure");
     assert_eq!(page.total, 0);
     assert!(page.items.is_empty());
-    let billing: Vec<_> = repository
-        .usage_calculated_billing_facts(
+    super::drain_analytics(&database.pool).await;
+    let insights = repository
+        .usage_insights_observation(
             zero_attempt_range(&request),
             filter,
             admin_observability::Granularity::FifteenMinutes,
         )
-        .try_collect()
         .await
-        .expect("billing facts");
-    assert!(billing.is_empty());
+        .expect("billing projection");
+    assert!(
+        insights
+            .costs
+            .iter()
+            .all(|point| { point.standard_amount.is_none() && point.no_cache_amount.is_none() })
+    );
     let charges: i64 = sqlx::query_scalar("select count(*) from client_key_charge_events")
         .fetch_one(&database.pool)
         .await
@@ -2124,9 +2147,9 @@ async fn shared_core_usage_and_timings_preserve_fields_and_reject_invalid_phases
     finalization.usage = Usage {
         input_tokens: Some(101),
         output_tokens: Some(22),
-        cached_tokens: Some(33),
-        cache_write_tokens: Some(44),
-        reasoning_tokens: Some(5),
+        cached_input_tokens: Some(33),
+        cache_write_input_tokens: Some(44),
+        reasoning_output_tokens: Some(5),
         image_input_tokens: Some(6),
         image_output_tokens: Some(7),
         total_tokens: Some(123),
@@ -2156,9 +2179,9 @@ async fn shared_core_usage_and_timings_preserve_fields_and_reject_invalid_phases
     for (field, expected) in [
         ("input_tokens", 101),
         ("output_tokens", 22),
-        ("cached_tokens", 33),
-        ("cache_write_tokens", 44),
-        ("reasoning_tokens", 5),
+        ("cached_input_tokens", 33),
+        ("cache_write_input_tokens", 44),
+        ("reasoning_output_tokens", 5),
         ("image_input_tokens", 6),
         ("image_output_tokens", 7),
         ("total_tokens", 123),
@@ -2231,7 +2254,7 @@ async fn concurrent_retry_updates_keep_request_context_and_clear_previous_transp
         model_request_id: request.id.as_str().to_owned(),
         attempt_count: 1,
         provider_kind: "openai".to_owned(),
-        provider_account_id: None,
+        account_snapshot: None,
         provider_account_ref: Some("deleted_account".to_owned()),
         upstream_model_id: Some("model".to_owned()),
         upstream_transport: "http_sse".to_owned(),

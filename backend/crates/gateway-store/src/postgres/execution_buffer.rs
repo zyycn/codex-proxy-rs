@@ -790,6 +790,7 @@ impl ExecutionObservationWrite {
                     .map(|model| model.as_str()),
                 failure.upstream_request_id.as_deref(),
             ])
+            .saturating_add(account_snapshot_bytes(failure.account_snapshot.as_ref()))
             .saturating_add(provider_error_bytes(&failure.error)),
             Self::EntryRejection(rejection) => text_bytes([
                 Some(rejection.request_id.as_str()),
@@ -808,16 +809,16 @@ impl ExecutionObservationWrite {
                 Some(failure.upstream_model_id.as_str()),
             ])
             .saturating_add(provider_error_bytes(&failure.error)),
-            Self::OperationalFailure(failure) => {
-                size_of::<OperationalFailure>().saturating_add(text_bytes([
+            Self::OperationalFailure(failure) => size_of::<OperationalFailure>()
+                .saturating_add(account_snapshot_bytes(failure.account_snapshot.as_ref()))
+                .saturating_add(text_bytes([
                     Some(failure.message.as_str()),
                     failure.correlation_id.as_deref(),
                     failure.provider_kind.as_ref().map(|kind| kind.as_str()),
                     failure.account_id.as_ref().map(|id| id.as_str()),
                     failure.upstream_code.as_ref().map(|code| code.as_str()),
                     failure.details.as_ref().map(|details| details.as_str()),
-                ]))
-            }
+                ])),
             Self::Finalize(finalization) => {
                 let error_bytes = finalization.error.as_ref().map_or(0, |error| {
                     text_bytes([
@@ -897,10 +898,7 @@ impl ExecutionObservationWrite {
 fn new_request_bytes(request: &NewModelRequest) -> usize {
     size_of::<NewModelRequest>().saturating_add(text_bytes([
         Some(request.id.as_str()),
-        request
-            .client_api_key_id
-            .as_ref()
-            .map(|value| value.as_str()),
+        request.client_api_key_name_snapshot.as_deref(),
         Some(request.client_api_key_ref.as_str()),
         Some(request.protocol.as_str()),
         Some(request.endpoint.as_str()),
@@ -915,24 +913,36 @@ fn new_request_bytes(request: &NewModelRequest) -> usize {
 }
 
 fn attempt_bytes(attempt: &AttemptRecord) -> usize {
-    size_of::<AttemptRecord>().saturating_add(text_bytes([
-        Some(attempt.request_id.as_str()),
-        Some(attempt.provider_kind.as_str()),
-        attempt
-            .provider_account_id
-            .as_ref()
-            .map(|value| value.as_str()),
-        attempt
-            .provider_account_ref
-            .as_ref()
-            .map(|value| value.as_str()),
-        attempt
-            .upstream_model_id
-            .as_ref()
-            .map(|model| model.as_str()),
-        Some(attempt.upstream_transport.as_str()),
-        attempt.http_version.as_deref(),
-    ]))
+    size_of::<AttemptRecord>()
+        .saturating_add(account_snapshot_bytes(attempt.account_snapshot.as_ref()))
+        .saturating_add(text_bytes([
+            Some(attempt.request_id.as_str()),
+            Some(attempt.provider_kind.as_str()),
+            attempt
+                .provider_account_ref
+                .as_ref()
+                .map(|value| value.as_str()),
+            attempt
+                .upstream_model_id
+                .as_ref()
+                .map(|model| model.as_str()),
+            Some(attempt.upstream_transport.as_str()),
+            attempt.http_version.as_deref(),
+        ]))
+}
+
+fn account_snapshot_bytes(
+    snapshot: Option<&gateway_core::account::AccountHistorySnapshot>,
+) -> usize {
+    snapshot.map_or(0, |snapshot| {
+        text_bytes([
+            Some(snapshot.name.as_str()),
+            snapshot.email.as_deref(),
+            Some(snapshot.authentication_kind.as_str()),
+            snapshot.plan_type_snapshot.as_deref(),
+            snapshot.notes_snapshot.as_deref(),
+        ])
+    })
 }
 
 fn provider_error_bytes(error: &ProviderError) -> usize {

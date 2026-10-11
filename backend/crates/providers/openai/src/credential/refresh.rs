@@ -229,15 +229,18 @@ impl CodexCredentialRefreshService {
         outcomes.reserve(due.len());
         let refreshed = stream::iter(due.into_iter().map(|credential| async move {
             let account_id = credential.account.id().to_string();
+            let snapshot =
+                gateway_core::account::AccountHistorySnapshot::from_account(&credential.account);
             (
                 account_id,
                 self.refresh_one_with_policy(credential, policy).await,
+                snapshot,
             )
         }))
         .buffer_unordered(policy.concurrency().get() as usize)
         .collect::<Vec<_>>()
         .await;
-        for (account_id, result) in refreshed {
+        for (account_id, result, snapshot) in refreshed {
             match result {
                 Ok(outcome) => outcomes.push(outcome),
                 Err(error) => {
@@ -248,6 +251,7 @@ impl CodexCredentialRefreshService {
                         "OpenAI OAuth refresh attempt failed",
                     );
                     failure.account_id = ProviderAccountId::new(account_id.clone()).ok();
+                    failure.account_snapshot = Some(snapshot);
                     failure.details = gateway_core::error::ErrorDetails::capture(
                         Some(&ErrorSource::new(error)),
                         None,
@@ -309,7 +313,7 @@ impl CodexCredentialRefreshService {
         if let Err(failure) = &refresh_result {
             super::diagnostics::record_refresh_failure(
                 self.diagnostics.as_ref(),
-                due.account.id(),
+                &due.account,
                 "scheduled_refresh",
                 failure,
             )

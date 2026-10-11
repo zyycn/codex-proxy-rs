@@ -1,20 +1,21 @@
 import type { RequestOptions } from '../request'
+import type { AnalyticsMetadata } from './analytics'
 import request from '../request'
 
 export interface UsageTokenDetails {
   inputTokens: number | null
   outputTokens: number | null
-  cachedTokens: number | null
-  cacheWriteTokens: number | null
-  reasoningTokens: number | null
+  cachedInputTokens: number | null
+  cacheWriteInputTokens: number | null
+  reasoningOutputTokens: number | null
   imageInputTokens: number | null
   imageOutputTokens: number | null
   totalTokens: number | null
   inputTokensDisplay: string
   outputTokensDisplay: string
-  cachedTokensDisplay: string
-  cacheWriteTokensDisplay: string
-  reasoningTokensDisplay: string
+  cachedInputTokensDisplay: string
+  cacheWriteInputTokensDisplay: string
+  reasoningOutputTokensDisplay: string
   imageInputTokensDisplay: string
   imageOutputTokensDisplay: string
   totalTokensDisplay: string
@@ -148,9 +149,9 @@ export interface UsageRecord {
   latencyMs: number | null
   inputTokens: number | null
   outputTokens: number | null
-  cachedTokens: number | null
-  cacheWriteTokens: number | null
-  reasoningTokens: number | null
+  cachedInputTokens: number | null
+  cacheWriteInputTokens: number | null
+  reasoningOutputTokens: number | null
   imageInputTokens: number | null
   imageOutputTokens: number | null
   message: string
@@ -191,7 +192,7 @@ export interface UsageAttempt {
   estimatedCostCurrency: string | null
   inputTokens: number | null
   outputTokens: number | null
-  cachedTokens: number | null
+  cachedInputTokens: number | null
   totalTokens: number | null
   firstTokenMs: number | null
   latencyMs: number | null
@@ -332,11 +333,12 @@ export interface OpsErrorsResponse {
 }
 
 export interface UsageSummaryResponse {
+  analytics: AnalyticsMetadata
   totalRequests: string
   inputTokens: string
   outputTokens: string
-  cachedTokens: string
-  cacheWriteTokens: string
+  cachedInputTokens: string
+  cacheWriteInputTokens: string
   totalTokens: string
   averageLatencyMs: string
 }
@@ -416,7 +418,7 @@ export interface UsageOverviewCostPoint {
   label: string
   inputTokens: number
   outputTokens: number
-  cachedTokens: number
+  cachedInputTokens: number
   totalTokens: number
   estimatedCost: string | null
   standardCost: string | null
@@ -439,13 +441,14 @@ export interface UsageOverviewCost {
   cacheHitRequestRate: number | null
   inputTokens: number
   outputTokens: number
-  cachedTokens: number
+  cachedInputTokens: number
   totalTokens: number
   points: UsageOverviewCostPoint[]
   coverage: UsageCostCoverage
 }
 
 export interface UsageInsightsOverviewResponse {
+  analytics: AnalyticsMetadata
   granularity: string
   health: UsageOverviewHealth
   performance: UsageOverviewPerformance
@@ -475,6 +478,7 @@ export interface UsageDiagnosticItem {
 }
 
 export interface UsageDiagnosticsResponse {
+  analytics: AnalyticsMetadata
   dimension: string
   items: UsageDiagnosticItem[]
 }

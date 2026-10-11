@@ -27,7 +27,7 @@ hex = "0.4.3"
 redis = { version = "1.3.0", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
 secrecy = "0.10"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
+serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order", "raw_value"] }
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "json", "macros", "migrate", "uuid"] }
 thiserror = "2.0.18"

@@ -5,6 +5,10 @@ use std::{num::NonZeroU16, str::FromStr};
 use chrono::{DateTime, TimeDelta, Utc};
 
 use super::AdminModelError;
+pub use super::analytics::{
+    AnalyticsMetadata, AnalyticsState, UsageBillingProjection, UsageInsightsObservation,
+    UsageProjectedCostPoint,
+};
 
 /// 观测记录查询的页大小，由 HTTP、管理用例和存储端口共同使用
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +52,7 @@ impl CalendarPeriod {
 }
 
 /// 外部观测查询的 UTC 时间范围
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TimeRange {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
@@ -89,7 +93,7 @@ impl TimeRange {
 }
 
 /// 请求结果状态
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RequestOutcome {
     Running,
     Succeeded,
@@ -100,7 +104,7 @@ pub enum RequestOutcome {
 }
 
 /// 未知但有界的请求结果值；私有字段禁止绕过 [`RequestOutcome::new`] 构造
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OtherRequestOutcome(String);
 
 impl RequestOutcome {
@@ -151,8 +155,9 @@ impl OtherRequestOutcome {
 }
 
 /// 用量记录过滤条件
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct UsageFilter {
+    pub routing_group_refs: Vec<String>,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_account_ref: Option<String>,
@@ -178,7 +183,7 @@ pub struct UsageQuery {
 }
 
 /// Admin 确定概览的数量、趋势粒度及最近请求筛选，Store 只执行该选择
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DashboardQuery {
     pub range: TimeRange,
     pub granularity: Granularity,
@@ -206,6 +211,7 @@ impl DashboardQuery {
 /// 运维错误过滤条件
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OpsErrorFilter {
+    pub routing_group_refs: Vec<String>,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_kind: Option<String>,
@@ -230,7 +236,7 @@ pub struct OpsErrorQuery {
 }
 
 /// 用量诊断维度
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiagnosticDimension {
     Provider,
     Model,
@@ -363,8 +369,8 @@ pub struct ProviderBillingInput {
     pub service_tier: Option<String>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
     pub total: CurrencyCost,
 }
 
@@ -380,8 +386,8 @@ pub struct UsageCalculatedBillingFact {
     pub service_tier: Option<String>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
     pub total: CurrencyCost,
 }
 
@@ -408,7 +414,7 @@ pub struct CalculatedBillingBreakdown {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageBillingBreakdown {
     pub input_tokens: u64,
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     pub input_amount: CurrencyCost,
     pub cache_read_amount: CurrencyCost,
     pub input_price_per_million: CurrencyCost,
@@ -454,9 +460,9 @@ pub struct RequestMetrics {
     pub caller_error_count: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cached_tokens: u64,
-    pub cache_write_tokens: u64,
-    pub reasoning_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub cache_write_input_tokens: u64,
+    pub reasoning_output_tokens: u64,
     pub total_tokens: u64,
     pub first_token_latency_sum_ms: u64,
     pub first_token_latency_count: u64,
@@ -496,7 +502,7 @@ pub struct AttemptMetrics {
 }
 
 /// 时间序列粒度
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Granularity {
     FifteenMinutes,
     Hour,
@@ -556,9 +562,9 @@ pub struct AccountModelUsage {
     pub success_count: u64,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     pub image_request_count: u64,
@@ -591,9 +597,9 @@ pub struct DashboardAccountUsage {
     pub success_count: u64,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     pub image_request_count: u64,
@@ -628,7 +634,7 @@ pub struct DashboardRuntimeSlots {
 pub struct DashboardTotals {
     pub request_count: u64,
     pub input_tokens: u64,
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     pub total_tokens: u64,
     pub billing_usd: Option<DecimalAmount>,
 }
@@ -636,6 +642,7 @@ pub struct DashboardTotals {
 /// 仪表盘所需的当前区间事实及全历史累计
 #[derive(Debug, Clone, PartialEq)]
 pub struct DashboardObservation {
+    pub analytics: AnalyticsMetadata,
     pub range: TimeRange,
     pub totals: DashboardTotals,
     pub provider_accounts: AccountPoolMetrics,
@@ -657,9 +664,9 @@ pub struct UsageListRecord {
     pub provider_account_ref: Option<String>,
     pub provider_account_name: Option<String>,
     pub provider_account_email: Option<String>,
-    /// 账号当前备注，按内部账号 ID 关联，不属于请求历史快照
+    /// 请求选号时冻结的账号备注，未采集时保持未知
     pub provider_account_notes: Option<String>,
-    /// 账号当前套餐，不属于请求历史快照
+    /// 请求选号时冻结的账号套餐
     pub provider_account_plan_type: Option<String>,
     pub provider_account_plan_type_display: Option<String>,
     pub provider_account_authentication_kind: Option<String>,
@@ -669,9 +676,9 @@ pub struct UsageListRecord {
     pub service_tier: Option<String>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
@@ -750,9 +757,9 @@ pub struct UsageRecord {
     pub retry_after_ms: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
@@ -830,9 +837,9 @@ pub struct UsageAttempt {
     pub message: Option<String>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
     pub cost_source: Option<String>,
     pub cost_amount: Option<DecimalAmount>,
@@ -862,6 +869,7 @@ pub struct ProviderObservation {
 /// 用量总览
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageOverview {
+    pub analytics: AnalyticsMetadata,
     pub range: TimeRange,
     pub requests: RequestMetrics,
     pub attempts: AttemptMetrics,
@@ -878,6 +886,7 @@ pub struct UsageSummary {
 /// 诊断聚合结果，分母包含截取展示项之前的全部匹配请求
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiagnosticsObservation {
+    pub analytics: AnalyticsMetadata,
     pub total_request_count: u64,
     pub items: Vec<DiagnosticObservation>,
 }
@@ -1001,7 +1010,7 @@ pub struct TrendSummary {
     pub request_count: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     pub total_tokens: u64,
     pub service_failure_count: u64,
     pub average_latency_ms: Option<u64>,
@@ -1019,6 +1028,7 @@ pub struct TrendSummary {
 /// 趋势结果；API 再决定图表标签与数字格式
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trend {
+    pub analytics: AnalyticsMetadata,
     pub kind: TrendKind,
     pub points: Vec<TrendPoint>,
     pub summary: TrendSummary,
@@ -1134,7 +1144,7 @@ pub struct DashboardPeriodMetrics {
     pub request_count: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     pub total_tokens: u64,
     pub cached_token_rate: f64,
     pub observed_cached_token_rate: Option<f64>,
@@ -1224,7 +1234,7 @@ pub struct UsageInsightsCostPoint {
     pub bucket_start: DateTime<Utc>,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     pub total_tokens: u64,
     pub estimated_cost: Option<DecimalAmount>,
     pub standard_cost: Option<DecimalAmount>,
@@ -1249,7 +1259,7 @@ pub struct UsageInsightsCost {
     pub cache_hit_request_rate: Option<f64>,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     pub total_tokens: u64,
     pub points: Vec<UsageInsightsCostPoint>,
     pub costs: Vec<CurrencyCost>,
@@ -1259,6 +1269,7 @@ pub struct UsageInsightsCost {
 /// 用量洞察的完整用例结果；API 只负责标签、时区与字符串格式化
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageInsights {
+    pub analytics: AnalyticsMetadata,
     pub granularity: Granularity,
     pub health: UsageInsightsHealth,
     pub performance: UsageInsightsPerformance,
@@ -1294,6 +1305,7 @@ pub struct DiagnosticsItem {
 /// 诊断结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiagnosticsResult {
+    pub analytics: AnalyticsMetadata,
     pub dimension: DiagnosticDimension,
     pub items: Vec<DiagnosticsItem>,
 }

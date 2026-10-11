@@ -33,6 +33,7 @@ const {
   loading,
   error,
   analyticsLoading,
+  analyticsError,
   records,
   summary,
   insights,
@@ -70,13 +71,18 @@ watch(timeRange, () => {
       </template>
     </ZPageHeader>
 
-    <UsageSummaryCards :summary="summary" />
-    <UsageInsightsGrid
-      v-model:diagnostic-dimension="diagnosticDimension"
-      :overview="insights.overview"
-      :diagnostics="insights.diagnostics"
-      :loading="analyticsLoading"
-    />
+    <p v-if="analyticsError" class="mt-4 text-cp-sm text-cp-warning-text" role="alert">
+      统计暂不可用，请稍后重试
+    </p>
+    <template v-else>
+      <UsageSummaryCards :summary="summary" />
+      <UsageInsightsGrid
+        v-model:diagnostic-dimension="diagnosticDimension"
+        :overview="insights.overview"
+        :diagnostics="insights.diagnostics"
+        :loading="analyticsLoading"
+      />
+    </template>
 
     <ZCard
       class="mt-5 flex flex-col"

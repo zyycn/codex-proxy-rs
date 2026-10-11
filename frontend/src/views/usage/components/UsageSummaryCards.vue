@@ -6,7 +6,7 @@ import { Activity, Database, FileText, Timer } from '@lucide/vue'
 import { computed } from 'vue'
 
 const props = defineProps<{
-  summary: Awaited<ReturnType<typeof getUsageRecordSummary>>
+  summary: Omit<Awaited<ReturnType<typeof getUsageRecordSummary>>, 'analytics'>
 }>()
 
 function averageLatencyDisplay(value: string) {
@@ -34,7 +34,7 @@ const items = computed(() => [
     key: 'cached',
     label: '缓存 Token',
     icon: Database,
-    value: props.summary.cachedTokens,
+    value: props.summary.cachedInputTokens,
     detail: '缓存读取命中',
     tone: 'bg-cp-orange-container text-cp-orange-on-container',
   },

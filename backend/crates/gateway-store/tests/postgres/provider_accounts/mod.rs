@@ -931,6 +931,7 @@ async fn terminal_admin_usage_chunks_large_selections_and_preserves_exact_costs(
     let mut account_ids = vec!["acct_usage_exact".to_owned()];
     account_ids.extend((0..200).map(|index| format!("missing_account_{index}")));
 
+    super::drain_analytics(&database.pool).await;
     let usage = admin_account_store(&database.pool)
         .load_account_usage(
             TimeRange {
@@ -3185,9 +3186,9 @@ async fn seed_model_request(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "insert into model_requests (
-           id, client_api_key_ref, operation, client_transport, requested_model_id, provider_kind, provider_account_id, provider_account_ref, upstream_model_id, upstream_transport, attempt_count, upstream_send_state, downstream_committed_at, outcome, client_status_code, upstream_status_code, input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens, total_tokens, cost_source, cost_amount, cost_currency, started_at, deadline_at, completed_at, request_observation_json
+           id, client_api_key_ref, operation, client_transport, requested_model_id, provider_kind, provider_account_ref, upstream_model_id, upstream_transport, attempt_count, upstream_send_state, downstream_committed_at, outcome, client_status_code, upstream_status_code, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, reasoning_output_tokens, total_tokens, cost_source, cost_amount, cost_currency, started_at, recovery_lease_expires_at, completed_at, request_observation_json
          ) values (
-           $1, 'key-provider-account-test', 'responses', 'http_sse', $4, $3, $2, $2, $4, 'http_sse', 1, 'sent', $7 + interval '1 second', 'succeeded', 200, 200, $5, 0, 0, 0, 0, $5, 'provider_reported', $6::numeric, 'USD', $7, $7 + interval '5 minutes', $7 + interval '1 second',
+           $1, 'key-provider-account-test', 'responses', 'http_sse', $4, $3, $2, $4, 'http_sse', 1, 'sent', $7 + interval '1 second', 'succeeded', 200, 200, $5, 0, 0, 0, 0, $5, 'provider_reported', $6::numeric, 'USD', $7, $7 + interval '5 minutes', $7 + interval '1 second',
            jsonb_strip_nulls(jsonb_build_object(
            'request', jsonb_build_object(
              'configRevision', 1,

@@ -56,7 +56,7 @@ const emptyCards: DashboardSummaryResponse['cards'] = {
     todayHitRateValue: null,
     yesterdayHitRateValue: null,
     totalHitRate: '—',
-    totalCachedTokens: '0',
+    totalCachedInputTokens: '0',
     averageFirstTokenLatencyMs: '—',
   },
 }
@@ -84,6 +84,7 @@ const emptyCapacityInfo = {
 export function dashboardSnapshotView(summary: DashboardSummaryResponse | null) {
   const trendPoints = summary?.trend.points ?? []
   return {
+    analytics: summary?.analytics ?? null,
     metrics: metricCards(summary?.cards ?? emptyCards, trendPoints),
     healthTimeline: summary?.healthTimeline ?? emptyHealthTimeline,
     accountUsage: (summary?.accountUsage ?? []),
@@ -204,7 +205,7 @@ function metricCards(
       ),
       details: [
         { label: '总缓存命中', value: cache.totalHitRate, tone: 'warning' },
-        { label: '总缓存', value: cache.totalCachedTokens, tone: 'warning' },
+        { label: '总缓存', value: cache.totalCachedInputTokens, tone: 'warning' },
       ],
     },
   ]
@@ -241,13 +242,13 @@ function aggregateUsageTrend(points: DashboardTrendPoint[]) {
     const errorsValue = sum(group, point => point.errorsValue)
     const inputTokensValue = sum(group, point => point.inputTokensValue)
     const outputTokensValue = sum(group, point => point.outputTokensValue)
-    const cachedTokensValue = Math.min(
+    const cachedInputTokensValue = Math.min(
       inputTokensValue,
-      sum(group, point => point.cachedTokensValue),
+      sum(group, point => point.cachedInputTokensValue),
     )
-    const uncachedInputTokensValue = inputTokensValue - cachedTokensValue
+    const uncachedInputTokensValue = inputTokensValue - cachedInputTokensValue
     const effectiveTokensValue = uncachedInputTokensValue + outputTokensValue
-    const cacheHitRateValue = inputTokensValue ? cachedTokensValue / inputTokensValue : 0
+    const cacheHitRateValue = inputTokensValue ? cachedInputTokensValue / inputTokensValue : 0
     const successRateValue = requestsValue
       ? ((requestsValue - errorsValue) / requestsValue) * 100
       : 0
@@ -260,8 +261,8 @@ function aggregateUsageTrend(points: DashboardTrendPoint[]) {
       inputTokensValue,
       outputTokens: formatCompactNumber(outputTokensValue),
       outputTokensValue,
-      cachedTokens: formatCompactNumber(cachedTokensValue),
-      cachedTokensValue,
+      cachedInputTokens: formatCompactNumber(cachedInputTokensValue),
+      cachedInputTokensValue,
       uncachedInputTokens: formatCompactNumber(uncachedInputTokensValue),
       uncachedInputTokensValue,
       effectiveTokens: formatCompactNumber(effectiveTokensValue),
@@ -284,9 +285,9 @@ function sum(points: DashboardTrendPoint[], selector: (point: DashboardTrendPoin
 function usageTrendSummary(points: ReturnType<typeof aggregateUsageTrend>) {
   const inputTokens = points.reduce((total, point) => total + point.inputTokensValue, 0)
   const outputTokens = points.reduce((total, point) => total + point.outputTokensValue, 0)
-  const cachedTokens = Math.min(
+  const cachedInputTokens = Math.min(
     inputTokens,
-    points.reduce((total, point) => total + point.cachedTokensValue, 0),
+    points.reduce((total, point) => total + point.cachedInputTokensValue, 0),
   )
 
   return [
@@ -304,7 +305,7 @@ function usageTrendSummary(points: ReturnType<typeof aggregateUsageTrend>) {
     },
     {
       label: '缓存',
-      value: formatCompactNumber(cachedTokens),
+      value: formatCompactNumber(cachedInputTokens),
       tone: 'normal',
       colorVar: '--cp-color-text-tertiary',
     },

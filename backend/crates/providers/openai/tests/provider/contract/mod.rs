@@ -2866,7 +2866,7 @@ async fn image_endpoints_should_report_usage_before_delivering_the_unchanged_bod
     let expected = Usage {
         input_tokens: Some(1474),
         output_tokens: Some(1372),
-        cached_tokens: Some(100),
+        cached_input_tokens: Some(100),
         image_input_tokens: Some(1457),
         image_output_tokens: Some(1372),
         total_tokens: Some(2846),
@@ -2931,7 +2931,7 @@ async fn image_usage_should_preserve_unknown_fields_and_explicit_zero_counts() {
                 input_tokens: Some(0),
                 output_tokens: Some(0),
                 total_tokens: Some(0),
-                cached_tokens: Some(0),
+                cached_input_tokens: Some(0),
                 image_input_tokens: Some(0),
                 image_output_tokens: Some(0),
                 ..Usage::default()

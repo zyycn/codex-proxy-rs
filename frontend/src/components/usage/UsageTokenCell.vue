@@ -15,9 +15,9 @@ const tokenDetails = computed(() => usageTokenDetails(props.record.tokenDetails)
 const tokenItems = computed(() => [
   { label: '输入 Token', value: tokenDetails.value.inputTokensDisplay },
   { label: '输出 Token', value: tokenDetails.value.outputTokensDisplay },
-  { label: '缓存读取 Token', value: tokenDetails.value.cachedTokensDisplay },
-  { label: '缓存写入 Token', value: tokenDetails.value.cacheWriteTokensDisplay },
-  { label: '推理 Token', value: tokenDetails.value.reasoningTokensDisplay },
+  { label: '缓存读取 Token', value: tokenDetails.value.cachedInputTokensDisplay },
+  { label: '缓存写入 Token', value: tokenDetails.value.cacheWriteInputTokensDisplay },
+  { label: '推理 Token', value: tokenDetails.value.reasoningOutputTokensDisplay },
 ])
 </script>
 
@@ -36,7 +36,7 @@ const tokenItems = computed(() => [
       </span>
       <span class="col-span-2 inline-flex items-center justify-end gap-1 text-cp-info-text">
         <Archive class="size-3" />
-        {{ tokenDetails.cachedTokensDisplay }}
+        {{ tokenDetails.cachedInputTokensDisplay }}
       </span>
     </div>
 

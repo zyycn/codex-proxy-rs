@@ -117,9 +117,15 @@ pub fn grok_billing_breakdown(
     model: &str,
     input_tokens: u64,
     output_tokens: u64,
-    cached_tokens: u64,
+    cached_input_tokens: u64,
 ) -> Option<CalculatedCostBreakdown> {
-    grok_billing_breakdown_with_tier(model, input_tokens, output_tokens, cached_tokens, None)
+    grok_billing_breakdown_with_tier(
+        model,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        None,
+    )
 }
 
 /// 按响应确认的实际档位计算 xAI Token 费用；未知档位不估算
@@ -128,14 +134,14 @@ pub fn grok_billing_breakdown_with_tier(
     model: &str,
     input_tokens: u64,
     output_tokens: u64,
-    cached_tokens: u64,
+    cached_input_tokens: u64,
     service_tier: Option<&str>,
 ) -> Option<CalculatedCostBreakdown> {
     grok_billing_breakdown_with_override(
         model,
         input_tokens,
         output_tokens,
-        cached_tokens,
+        cached_input_tokens,
         0,
         service_tier,
         None,
@@ -147,8 +153,8 @@ pub fn grok_billing_breakdown_with_override(
     model: &str,
     input_tokens: u64,
     output_tokens: u64,
-    cached_tokens: u64,
-    cache_write_tokens: u64,
+    cached_input_tokens: u64,
+    cache_write_input_tokens: u64,
     service_tier: Option<&str>,
     custom: Option<&gateway_core::metering::ModelPriceOverride>,
 ) -> Option<CalculatedCostBreakdown> {
@@ -185,7 +191,7 @@ pub fn grok_billing_breakdown_with_override(
     } else {
         standard
     };
-    if cached_tokens.checked_add(cache_write_tokens)? > input_tokens {
+    if cached_input_tokens.checked_add(cache_write_input_tokens)? > input_tokens {
         return None;
     }
     let standard_write = custom
@@ -199,27 +205,25 @@ pub fn grok_billing_breakdown_with_override(
     let selected_write = custom
         .and_then(|p| p.bands.get(selected_band))
         .map(|p| p.cache_write.ticks_per_token());
-    let uncached_tokens =
-        input_tokens
-            .checked_sub(cached_tokens)?
-            .checked_sub(if selected_write.is_some() {
-                cache_write_tokens
-            } else {
-                0
-            })?;
-    let standard_input_tokens =
-        input_tokens
-            .checked_sub(cached_tokens)?
-            .checked_sub(if standard_write.is_some() {
-                cache_write_tokens
-            } else {
-                0
-            })?;
+    let uncached_tokens = input_tokens.checked_sub(cached_input_tokens)?.checked_sub(
+        if selected_write.is_some() {
+            cache_write_input_tokens
+        } else {
+            0
+        },
+    )?;
+    let standard_input_tokens = input_tokens.checked_sub(cached_input_tokens)?.checked_sub(
+        if standard_write.is_some() {
+            cache_write_input_tokens
+        } else {
+            0
+        },
+    )?;
     let cache_write_amount_ticks =
-        u128::from(cache_write_tokens).checked_mul(selected_write.unwrap_or_default())?;
+        u128::from(cache_write_input_tokens).checked_mul(selected_write.unwrap_or_default())?;
     let input_amount_ticks = u128::from(uncached_tokens).checked_mul(rates.input_ticks)?;
     let cache_read_amount_ticks =
-        u128::from(cached_tokens).checked_mul(rates.cached_input_ticks)?;
+        u128::from(cached_input_tokens).checked_mul(rates.cached_input_ticks)?;
     let output_amount_ticks = u128::from(output_tokens).checked_mul(rates.output_ticks)?;
     let selected_amount_ticks = input_amount_ticks
         .checked_add(cache_read_amount_ticks)?
@@ -227,9 +231,9 @@ pub fn grok_billing_breakdown_with_override(
         .checked_add(output_amount_ticks)?;
     let standard_amount_ticks = u128::from(standard_input_tokens)
         .checked_mul(standard.input_ticks)?
-        .checked_add(u128::from(cached_tokens).checked_mul(standard.cached_input_ticks)?)?
+        .checked_add(u128::from(cached_input_tokens).checked_mul(standard.cached_input_ticks)?)?
         .checked_add(
-            u128::from(cache_write_tokens).checked_mul(standard_write.unwrap_or_default())?,
+            u128::from(cache_write_input_tokens).checked_mul(standard_write.unwrap_or_default())?,
         )?
         .checked_add(u128::from(output_tokens).checked_mul(standard.output_ticks)?)?;
     let multiplier_percent = if standard_amount_ticks == 0 {
@@ -1027,9 +1031,9 @@ fn core_usage(usage: TokenUsage) -> Usage {
     let mut normalized = Usage::new();
     normalized.input_tokens = Some(usage.input_tokens);
     normalized.output_tokens = Some(usage.output_tokens);
-    normalized.cached_tokens = Some(usage.cached_tokens);
-    normalized.cache_write_tokens = Some(usage.cache_write_tokens);
-    normalized.reasoning_tokens = Some(usage.reasoning_tokens);
+    normalized.cached_input_tokens = Some(usage.cached_input_tokens);
+    normalized.cache_write_input_tokens = Some(usage.cache_write_input_tokens);
+    normalized.reasoning_output_tokens = Some(usage.reasoning_output_tokens);
     normalized.image_input_tokens = Some(usage.image_input_tokens);
     normalized.image_output_tokens = Some(usage.image_output_tokens);
     normalized.total_tokens = Some(usage.total_tokens);
@@ -1101,8 +1105,8 @@ fn calculated_cost(
         model,
         usage.input_tokens,
         usage.output_tokens,
-        usage.cached_tokens,
-        usage.cache_write_tokens,
+        usage.cached_input_tokens,
+        usage.cache_write_input_tokens,
         service_tier,
         pricing,
     )?;

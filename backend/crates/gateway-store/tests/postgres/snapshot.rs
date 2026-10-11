@@ -10,6 +10,7 @@ use super::TestDatabase;
 #[test]
 fn snapshot_client_policy_contains_only_common_limits() {
     let policy = ClientApiKeySnapshot {
+        name_snapshot: None,
         request_profiles: Default::default(),
         id: ClientApiKeyId::new("key-1").expect("client key ID"),
         plaintext_key: PlaintextClientApiKey::new("sk_snapshot_secret").expect("plaintext key"),
@@ -44,6 +45,10 @@ async fn runtime_snapshot_loads_enabled_plaintext_key_without_debug_exposure() {
         .await
         .expect("load runtime snapshot");
     assert_eq!(snapshot.client_api_keys.len(), 1);
+    assert_eq!(
+        snapshot.client_api_keys[0].name_snapshot.as_deref(),
+        Some("snapshot")
+    );
     assert!(snapshot.client_api_keys[0].group_ids.is_empty());
     assert_eq!(
         snapshot.client_api_keys[0].plaintext_key.expose_for_auth(),

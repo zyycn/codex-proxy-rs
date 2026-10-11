@@ -807,7 +807,7 @@ impl DefaultExecutionService {
         }
         let new_request = NewModelRequest {
             id: request_id.clone(),
-            client_api_key_id: Some(client.policy.key_id().clone()),
+            client_api_key_name_snapshot: client.policy.name_snapshot().map(str::to_owned),
             client_api_key_ref: client.policy.key_id().clone(),
             config_revision: plan.config_revision(),
             routing: authorization.account_scope.routing_snapshot(),
@@ -1347,7 +1347,7 @@ impl DefaultExecutionService {
             .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "invalid admin actor"))?;
         let new_request = NewModelRequest {
             id: request_id,
-            client_api_key_id: None,
+            client_api_key_name_snapshot: None,
             client_api_key_ref: actor,
             config_revision: plan.config_revision(),
             routing: crate::routing::AccountRoutingSnapshot::all(),

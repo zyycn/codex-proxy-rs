@@ -48,8 +48,8 @@ pub(super) async fn fixture() -> AdminTestFixture {
         failure_count: 1,
         input_tokens: 1000,
         output_tokens: 100,
-        cached_tokens: 900,
-        reasoning_tokens: 40,
+        cached_input_tokens: 900,
+        reasoning_output_tokens: 40,
         total_tokens: 1100,
         ..Default::default()
     };
@@ -65,6 +65,7 @@ pub(super) async fn fixture() -> AdminTestFixture {
     {
         let mut observations = fixture.observations.lock().unwrap();
         observations.summary = Some(UsageOverview {
+            analytics: Default::default(),
             range: TimeRange {
                 start: now - Duration::hours(1),
                 end: now,
@@ -111,9 +112,9 @@ fn usage_record() -> UsageListRecord {
         service_tier: Some("private-sentinel".to_owned()),
         input_tokens: Some(1000),
         output_tokens: Some(100),
-        cached_tokens: Some(900),
-        cache_write_tokens: Some(0),
-        reasoning_tokens: Some(40),
+        cached_input_tokens: Some(900),
+        cache_write_input_tokens: Some(0),
+        reasoning_output_tokens: Some(40),
         image_input_tokens: None,
         image_output_tokens: None,
         total_tokens: Some(1100),

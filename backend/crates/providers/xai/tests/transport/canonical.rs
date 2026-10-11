@@ -73,14 +73,14 @@ fn response_model_observation_preserves_raw_model_and_missing_values() {
 fn terminal_cost_events(
     model: &str,
     input_tokens: u64,
-    cached_tokens: u64,
+    cached_input_tokens: u64,
     output_tokens: u64,
     provider_cost_ticks: Option<u64>,
 ) -> Vec<GatewayEvent> {
     terminal_cost_events_with_pricing(
         model,
         input_tokens,
-        cached_tokens,
+        cached_input_tokens,
         output_tokens,
         provider_cost_ticks,
         None,
@@ -90,7 +90,7 @@ fn terminal_cost_events(
 fn terminal_cost_events_with_pricing(
     model: &str,
     input_tokens: u64,
-    cached_tokens: u64,
+    cached_input_tokens: u64,
     output_tokens: u64,
     provider_cost_ticks: Option<u64>,
     pricing: Option<gateway_core::metering::ModelPriceOverride>,
@@ -103,12 +103,12 @@ fn terminal_cost_events_with_pricing(
             "event: response.created\n",
             "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_cost\",\"model\":{model:?}}}}}\n\n",
             "event: response.completed\n",
-            "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_cost\",\"model\":{model:?},\"status\":\"completed\",\"usage\":{{\"input_tokens\":{input_tokens},\"output_tokens\":{output_tokens},\"input_tokens_details\":{{\"cached_tokens\":{cached_tokens},\"cache_write_tokens\":0}}{provider_cost}}}}}}}\n\n",
+            "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_cost\",\"model\":{model:?},\"status\":\"completed\",\"usage\":{{\"input_tokens\":{input_tokens},\"output_tokens\":{output_tokens},\"input_tokens_details\":{{\"cached_tokens\":{cached_input_tokens},\"cache_write_tokens\":0}}{provider_cost}}}}}}}\n\n",
         ),
         model = model,
         input_tokens = input_tokens,
         output_tokens = output_tokens,
-        cached_tokens = cached_tokens,
+        cached_input_tokens = cached_input_tokens,
         provider_cost = provider_cost,
     );
     GrokCanonicalDecoder::new(model)

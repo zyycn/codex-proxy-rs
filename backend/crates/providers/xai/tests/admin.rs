@@ -323,8 +323,8 @@ async fn xai_admin_provider_validates_known_billing_breakdown() {
             service_tier: None,
             input_tokens: Some(100),
             output_tokens: Some(10),
-            cached_tokens: Some(25),
-            cache_write_tokens: Some(0),
+            cached_input_tokens: Some(25),
+            cache_write_input_tokens: Some(0),
             total: CurrencyCost {
                 currency: "USD".to_owned(),
                 amount: "0.0002175".parse().expect("amount"),
@@ -343,8 +343,8 @@ async fn xai_admin_provider_validates_known_billing_breakdown() {
             service_tier: Some("priority".to_owned()),
             input_tokens: Some(100),
             output_tokens: Some(10),
-            cached_tokens: Some(20),
-            cache_write_tokens: Some(0),
+            cached_input_tokens: Some(20),
+            cache_write_input_tokens: Some(0),
             total: CurrencyCost {
                 currency: "USD".to_owned(),
                 amount: "0.00046".parse().expect("amount"),
@@ -370,8 +370,8 @@ async fn xai_legacy_billing_should_not_infer_long_context_flag() {
             service_tier: None,
             input_tokens: Some(200_000),
             output_tokens: Some(0),
-            cached_tokens: Some(0),
-            cache_write_tokens: Some(0),
+            cached_input_tokens: Some(0),
+            cache_write_input_tokens: Some(0),
             total: CurrencyCost {
                 currency: "USD".to_owned(),
                 amount: "0.8".parse().expect("stored total"),

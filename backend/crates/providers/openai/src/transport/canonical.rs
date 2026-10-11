@@ -1109,9 +1109,9 @@ fn core_usage(usage: TokenUsage) -> Usage {
     let mut normalized = Usage::new();
     normalized.input_tokens = Some(usage.input_tokens);
     normalized.output_tokens = Some(usage.output_tokens);
-    normalized.cached_tokens = Some(usage.cached_tokens);
-    normalized.cache_write_tokens = Some(usage.cache_write_tokens);
-    normalized.reasoning_tokens = Some(usage.reasoning_tokens);
+    normalized.cached_input_tokens = Some(usage.cached_input_tokens);
+    normalized.cache_write_input_tokens = Some(usage.cache_write_input_tokens);
+    normalized.reasoning_output_tokens = Some(usage.reasoning_output_tokens);
     normalized.image_input_tokens = Some(usage.image_input_tokens);
     normalized.image_output_tokens = Some(usage.image_output_tokens);
     normalized.total_tokens = Some(usage.total_tokens);

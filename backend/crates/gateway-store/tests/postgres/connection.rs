@@ -243,6 +243,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "client_api_keys",
             "client_key_budget_windows",
             "client_key_charge_events",
+            "model_request_leases",
             "model_request_observations",
             "model_requests",
             "ops_events",
@@ -260,6 +261,12 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "plugin_update_sources",
             "plugin_version_configurations",
             "provider_accounts",
+            "request_analytics_15m",
+            "request_analytics_build_state",
+            "request_analytics_facts",
+            "request_analytics_hourly",
+            "request_analytics_pending_buckets",
+            "request_analytics_pending_requests",
             "runtime_settings",
         ]
     );

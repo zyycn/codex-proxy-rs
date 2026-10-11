@@ -8,7 +8,7 @@ import { computed } from 'vue'
 import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
 import { formatLocalizedCompactNumber as formatCompactNumber, formatDuration, formatPercent, formatUsd } from '@/utils/format'
 
-type Diagnostics = Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
+type Diagnostics = Omit<Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>, 'analytics'>
 
 const props = withDefaults(
   defineProps<{

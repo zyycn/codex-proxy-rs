@@ -37,14 +37,26 @@ async fn completed_usage_projections_should_accept_statusless_websocket_but_reje
     store
         .insert_model_request_with_first_attempt(
             websocket_request,
-            attempt("req_statusless_websocket", 1, "acct_statusless_transport"),
+            attempt(
+                &database.pool,
+                "req_statusless_websocket",
+                1,
+                "acct_statusless_transport",
+            )
+            .await,
         )
         .await
         .expect("insert statusless WebSocket request");
     store
         .insert_model_request_with_first_attempt(
             new_request("req_statusless_http", started_at),
-            attempt("req_statusless_http", 1, "acct_statusless_transport"),
+            attempt(
+                &database.pool,
+                "req_statusless_http",
+                1,
+                "acct_statusless_transport",
+            )
+            .await,
         )
         .await
         .expect("insert statusless HTTP request");
@@ -68,6 +80,7 @@ async fn completed_usage_projections_should_accept_statusless_websocket_but_reje
         (1, vec!["req_statusless_websocket"])
     );
 
+    super::drain_analytics(&database.pool).await;
     let overview = repository
         .usage_summary(range_around(started_at), UsageRecordFilter::default())
         .await
@@ -109,6 +122,7 @@ async fn completed_usage_projections_should_accept_statusless_websocket_but_reje
         (1, Some(10), 1, 1, "1.25"),
     );
 
+    super::drain_analytics(&database.pool).await;
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -153,16 +167,30 @@ async fn request_snapshots_should_survive_account_deletion() {
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_a", started_at),
-            attempt("req_snap_a", 1, "acct_snap_a"),
+            attempt(&database.pool, "req_snap_a", 1, "acct_snap_a").await,
         )
         .await
         .expect("insert request with first attempt");
     finalize_request(&database.pool, "req_snap_a", started_at).await;
 
+    let before: (String, String) =
+        sqlx::query_as("select ctid::text, xmin::text from model_requests where id = 'req_snap_a'")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
     sqlx::query("delete from provider_accounts where id = 'acct_snap_a'")
         .execute(&database.pool)
         .await
         .expect("delete provider account");
+    let after: (String, String) =
+        sqlx::query_as("select ctid::text, xmin::text from model_requests where id = 'req_snap_a'")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        after, before,
+        "deleting configuration must not rewrite history"
+    );
 
     let repository = observability_repository(&database.pool);
     let page = repository
@@ -240,7 +268,7 @@ async fn attempts_should_keep_their_own_account_snapshots() {
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_ab", started_at),
-            attempt("req_snap_ab", 1, "acct_snap_a"),
+            attempt(&database.pool, "req_snap_ab", 1, "acct_snap_a").await,
         )
         .await
         .expect("insert first attempt");
@@ -253,7 +281,7 @@ async fn attempts_should_keep_their_own_account_snapshots() {
             component: "routing".to_owned(),
             operation: "fallback".to_owned(),
             provider_kind: Some("openai".to_owned()),
-            provider_account_id: Some("acct_snap_a".to_owned()),
+            account_snapshot: Some(account_snapshot(&database.pool, "acct_snap_a").await),
             provider_account_ref: Some("acct_snap_a".to_owned()),
             upstream_model_id: Some("upstream-a".to_owned()),
             failure_kind: "rate_limited".to_owned(),
@@ -272,7 +300,7 @@ async fn attempts_should_keep_their_own_account_snapshots() {
         .await
         .expect("append intermediate failure");
     store
-        .begin_model_request_attempt(attempt("req_snap_ab", 2, "acct_snap_b"))
+        .begin_model_request_attempt(attempt(&database.pool, "req_snap_ab", 2, "acct_snap_b").await)
         .await
         .expect("begin second attempt");
     finalize_request(&database.pool, "req_snap_ab", started_at).await;
@@ -359,7 +387,7 @@ async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deleti
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_error", started_at),
-            attempt("req_snap_error", 1, "acct_snap_a"),
+            attempt(&database.pool, "req_snap_error", 1, "acct_snap_a").await,
         )
         .await
         .expect("insert failed request");
@@ -390,7 +418,7 @@ async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deleti
             component: "account_probe".to_owned(),
             operation: "connection_test".to_owned(),
             provider_kind: Some("xai".to_owned()),
-            provider_account_id: Some("acct_snap_c".to_owned()),
+            account_snapshot: Some(account_snapshot(&database.pool, "acct_snap_c").await),
             provider_account_ref: Some("acct_snap_c".to_owned()),
             upstream_model_id: Some("grok-test".to_owned()),
             failure_kind: "auth_failed".to_owned(),
@@ -500,7 +528,7 @@ async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_a", started_at),
-            attempt("req_snap_a", 1, "acct_snap_a"),
+            attempt(&database.pool, "req_snap_a", 1, "acct_snap_a").await,
         )
         .await
         .expect("insert account a request");
@@ -508,7 +536,7 @@ async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_b", started_at + chrono::Duration::seconds(1)),
-            attempt("req_snap_b", 1, "acct_snap_b"),
+            attempt(&database.pool, "req_snap_b", 1, "acct_snap_b").await,
         )
         .await
         .expect("insert account b request");
@@ -520,6 +548,7 @@ async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
         .expect("delete provider accounts");
 
     let repository = observability_repository(&database.pool);
+    super::drain_analytics(&database.pool).await;
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -567,7 +596,7 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_c", started_at),
-            attempt("req_snap_c", 1, "acct_snap_c"),
+            attempt(&database.pool, "req_snap_c", 1, "acct_snap_c").await,
         )
         .await
         .expect("insert account c request");
@@ -582,7 +611,7 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
                 model_request_id: "req_snap_legacy".to_owned(),
                 attempt_count: 1,
                 provider_kind: "openai".to_owned(),
-                provider_account_id: None,
+                account_snapshot: None,
                 provider_account_ref: Some("acct_legacy_deleted".to_owned()),
                 upstream_model_id: Some("legacy-model".to_owned()),
                 upstream_transport: "http_sse".to_owned(),
@@ -594,6 +623,7 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
     finalize_request(&database.pool, "req_snap_legacy", started_at).await;
 
     let repository = observability_repository(&database.pool);
+    super::drain_analytics(&database.pool).await;
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -618,7 +648,7 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
 }
 
 #[tokio::test]
-async fn diagnostics_should_prefer_the_latest_non_null_email_snapshot() {
+async fn diagnostics_should_use_only_the_latest_historical_snapshot() {
     let Some(database) = TestDatabase::create("snapshot_diagnostics_latest_email").await else {
         return;
     };
@@ -636,7 +666,13 @@ async fn diagnostics_should_prefer_the_latest_non_null_email_snapshot() {
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snapshot_history_old", started_at),
-            attempt("req_snapshot_history_old", 1, "acct_snapshot_history"),
+            attempt(
+                &database.pool,
+                "req_snapshot_history_old",
+                1,
+                "acct_snapshot_history",
+            )
+            .await,
         )
         .await
         .expect("insert older account snapshot");
@@ -655,12 +691,19 @@ async fn diagnostics_should_prefer_the_latest_non_null_email_snapshot() {
                 "req_snapshot_history_new",
                 started_at + chrono::Duration::seconds(1),
             ),
-            attempt("req_snapshot_history_new", 1, "acct_snapshot_history"),
+            attempt(
+                &database.pool,
+                "req_snapshot_history_new",
+                1,
+                "acct_snapshot_history",
+            )
+            .await,
         )
         .await
         .expect("insert newer account snapshot");
     finalize_request(&database.pool, "req_snapshot_history_new", started_at).await;
 
+    super::drain_analytics(&database.pool).await;
     let diagnostics = observability_repository(&database.pool)
         .usage_diagnostics(
             range_around(started_at),
@@ -674,7 +717,22 @@ async fn diagnostics_should_prefer_the_latest_non_null_email_snapshot() {
 
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "acct_snapshot_history");
-    assert_eq!(diagnostics[0].name, "history@example.invalid");
+    assert_eq!(diagnostics[0].name, "Newer Name");
+    // 最新快照缺失时保留稳定引用，不再让更早快照覆盖最新请求的未知值
+    sqlx::query("update model_requests set request_observation_json=request_observation_json #- '{account,name}' #- '{account,email}' where id='req_snapshot_history_new'")
+        .execute(&database.pool).await.expect("clear latest account snapshot");
+    super::drain_analytics(&database.pool).await;
+    let missing = observability_repository(&database.pool)
+        .usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Account,
+            100,
+        )
+        .await
+        .expect("unknown latest snapshot remains unknown")
+        .items;
+    assert_eq!(missing[0].name, "acct_snapshot_history");
     assert_eq!(diagnostics[0].request_count, 2);
     database.close().await;
 }
@@ -698,7 +756,7 @@ async fn failure_diagnostics_should_only_include_errored_requests() {
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_ok", started_at),
-            attempt("req_snap_ok", 1, "acct_snap_a"),
+            attempt(&database.pool, "req_snap_ok", 1, "acct_snap_a").await,
         )
         .await
         .expect("insert healthy request");
@@ -706,7 +764,7 @@ async fn failure_diagnostics_should_only_include_errored_requests() {
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_err", started_at + chrono::Duration::seconds(1)),
-            attempt("req_snap_err", 1, "acct_snap_a"),
+            attempt(&database.pool, "req_snap_err", 1, "acct_snap_a").await,
         )
         .await
         .expect("insert errored request");
@@ -729,6 +787,7 @@ async fn failure_diagnostics_should_only_include_errored_requests() {
     .expect("mark request failed");
 
     let repository = observability_repository(&database.pool);
+    super::drain_analytics(&database.pool).await;
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -767,7 +826,7 @@ async fn model_diagnostics_should_exclude_provider_endpoints_without_a_model() {
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_model", started_at),
-            attempt("req_snap_model", 1, "acct_snap_a"),
+            attempt(&database.pool, "req_snap_model", 1, "acct_snap_a").await,
         )
         .await
         .expect("insert model request");
@@ -781,7 +840,13 @@ async fn model_diagnostics_should_exclude_provider_endpoints_without_a_model() {
     search_request.endpoint = "/v1/alpha/search".to_owned();
     search_request.client_transport = "http_json".to_owned();
     search_request.requested_model_id = None;
-    let mut search_attempt = attempt("req_snap_provider_endpoint", 1, "acct_snap_a");
+    let mut search_attempt = attempt(
+        &database.pool,
+        "req_snap_provider_endpoint",
+        1,
+        "acct_snap_a",
+    )
+    .await;
     search_attempt.upstream_model_id = None;
     search_attempt.upstream_transport = "http_json".to_owned();
     store
@@ -795,6 +860,7 @@ async fn model_diagnostics_should_exclude_provider_endpoints_without_a_model() {
     )
     .await;
 
+    super::drain_analytics(&database.pool).await;
     let diagnostics = observability_repository(&database.pool)
         .usage_diagnostics(
             range_around(started_at),
@@ -834,7 +900,7 @@ async fn tokenless_provider_endpoints_should_remain_in_health_but_not_usage_reco
     search_request.endpoint = "/v1/alpha/search".to_owned();
     search_request.client_transport = "http_json".to_owned();
     search_request.requested_model_id = None;
-    let mut search_attempt = attempt("req_snap_search", 1, "acct_snap_a");
+    let mut search_attempt = attempt(&database.pool, "req_snap_search", 1, "acct_snap_a").await;
     search_attempt.upstream_model_id = None;
     search_attempt.upstream_transport = "http_json".to_owned();
     store
@@ -848,6 +914,7 @@ async fn tokenless_provider_endpoints_should_remain_in_health_but_not_usage_reco
         .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
         .await
         .expect("list usage records");
+    super::drain_analytics(&database.pool).await;
     let overview = repository
         .usage_summary(range_around(started_at), UsageRecordFilter::default())
         .await
@@ -875,7 +942,7 @@ async fn diagnostics_should_keep_filtered_totals_before_limiting_groups() {
     let store = PgExecutionStore::new(database.pool.clone());
     for index in 0..201 {
         let id = format!("req_total_{index:03}");
-        let mut first_attempt = attempt(&id, 1, "acct_totals");
+        let mut first_attempt = attempt(&database.pool, &id, 1, "acct_totals").await;
         first_attempt.upstream_model_id = Some(format!("model_{:03}", index % 200));
         store
             .insert_model_request_with_first_attempt(new_request(&id, now), first_attempt)
@@ -891,6 +958,7 @@ async fn diagnostics_should_keep_filtered_totals_before_limiting_groups() {
     .await
     .expect("set currency groups");
     let repository = observability_repository(&database.pool);
+    super::drain_analytics(&database.pool).await;
     let result = repository
         .usage_diagnostics(
             range_around(now),
@@ -917,6 +985,7 @@ async fn diagnostics_should_keep_filtered_totals_before_limiting_groups() {
         ("model_000", 2)
     );
 
+    super::drain_analytics(&database.pool).await;
     let filtered = repository
         .usage_diagnostics(
             range_around(now),
@@ -930,6 +999,7 @@ async fn diagnostics_should_keep_filtered_totals_before_limiting_groups() {
         .await
         .expect("filtered denominator");
     assert_eq!((filtered.total_request_count, filtered.items.len()), (2, 1));
+    super::drain_analytics(&database.pool).await;
     let empty = repository
         .usage_diagnostics(
             range_around(now),
@@ -964,7 +1034,7 @@ async fn diagnostics_should_distinguish_retry_attempts_from_retried_requests() {
         store
             .insert_model_request_with_first_attempt(
                 new_request(&id, now),
-                attempt(&id, 1, "acct_retries"),
+                attempt(&database.pool, &id, 1, "acct_retries").await,
             )
             .await
             .expect("insert retry request");
@@ -976,6 +1046,7 @@ async fn diagnostics_should_distinguish_retry_attempts_from_retried_requests() {
             .await
             .expect("set attempts");
     }
+    super::drain_analytics(&database.pool).await;
     let result = super::admin_observability_store(&database.pool)
         .usage_diagnostics(
             admin_observability::TimeRange::new(
@@ -1001,7 +1072,7 @@ async fn diagnostics_should_distinguish_retry_attempts_from_retried_requests() {
 }
 
 #[tokio::test]
-async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
+async fn api_key_diagnostics_preserve_historical_key_name_after_deletion() {
     let Some(database) = TestDatabase::create("snapshot_api_key_dimension").await else {
         return;
     };
@@ -1010,7 +1081,7 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
     let store = PgExecutionStore::new(database.pool.clone());
     for id in ["req_key_a", "req_key_b"] {
         let mut request = new_request(id, started_at);
-        request.client_api_key_id = Some("key_diag".to_owned());
+        request.client_api_key_name_snapshot = Some("My Key".to_owned());
         request.client_api_key_ref = "key_diag".to_owned();
         let attempt = ModelRequestAttemptStart {
             account_selection_wait_ms: None,
@@ -1019,7 +1090,7 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             model_request_id: id.to_owned(),
             attempt_count: 1,
             provider_kind: "openai".to_owned(),
-            provider_account_id: None,
+            account_snapshot: None,
             provider_account_ref: Some("acct_key".to_owned()),
             upstream_model_id: Some("upstream-model".to_owned()),
             upstream_transport: "http_sse".to_owned(),
@@ -1047,7 +1118,8 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
         .expect("set request b latency");
 
     let repository = observability_repository(&database.pool);
-    let diagnostics = repository
+    super::drain_analytics(&database.pool).await;
+    let result = repository
         .usage_diagnostics(
             range_around(started_at),
             UsageRecordFilter::default(),
@@ -1055,18 +1127,28 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             100,
         )
         .await
-        .expect("api key diagnostics")
-        .items;
+        .expect("api key diagnostics");
+    let diagnostics = result.items;
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "key_diag");
     assert_eq!(diagnostics[0].name, "My Key");
     assert_eq!(diagnostics[0].request_count, 2);
-    assert_eq!(diagnostics[0].latency_p95_ms, Some(1950));
+    if result.analytics.percentiles_approximate {
+        // 直方图沿连续样本秩插值，与精确 P95 的误差受对数桶宽约束
+        assert!(
+            diagnostics[0]
+                .latency_p95_ms
+                .is_some_and(|value| value.abs_diff(1950) <= 59)
+        );
+    } else {
+        assert_eq!(diagnostics[0].latency_p95_ms, Some(1950));
+    }
 
     sqlx::query("delete from client_api_keys where id = 'key_diag'")
         .execute(&database.pool)
         .await
         .expect("delete api key");
+    super::drain_analytics(&database.pool).await;
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -1079,7 +1161,7 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
         .items;
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "key_diag");
-    assert_eq!(diagnostics[0].name, "key_diag");
+    assert_eq!(diagnostics[0].name, "My Key");
 
     database.close().await;
 }
@@ -1103,7 +1185,7 @@ async fn renaming_account_should_not_rewrite_historical_snapshots() {
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_a", started_at),
-            attempt("req_snap_a", 1, "acct_snap_a"),
+            attempt(&database.pool, "req_snap_a", 1, "acct_snap_a").await,
         )
         .await
         .expect("insert request with original snapshot");
@@ -1142,7 +1224,7 @@ fn new_request(id: &str, started_at: DateTime<Utc>) -> NewModelRequest {
     NewModelRequest {
         admission_decision_ms: None,
         id: id.to_owned(),
-        client_api_key_id: None,
+        client_api_key_name_snapshot: None,
         client_api_key_ref: "key_snapshot".to_owned(),
         config_revision: 1,
         protocol: "openai".to_owned(),
@@ -1163,11 +1245,16 @@ fn new_request(id: &str, started_at: DateTime<Utc>) -> NewModelRequest {
         continuation: Default::default(),
         image_generation_requested: false,
         started_at,
-        deadline_at: started_at + chrono::Duration::seconds(30),
+        lease_expires_at: started_at + chrono::Duration::seconds(30),
     }
 }
 
-fn attempt(id: &str, count: u32, account_id: &str) -> ModelRequestAttemptStart {
+async fn attempt(
+    pool: &sqlx::PgPool,
+    id: &str,
+    count: u32,
+    account_id: &str,
+) -> ModelRequestAttemptStart {
     ModelRequestAttemptStart {
         account_selection_wait_ms: None,
         capacity_used_slots: None,
@@ -1175,11 +1262,27 @@ fn attempt(id: &str, count: u32, account_id: &str) -> ModelRequestAttemptStart {
         model_request_id: id.to_owned(),
         attempt_count: count,
         provider_kind: "openai".to_owned(),
-        provider_account_id: Some(account_id.to_owned()),
+        account_snapshot: Some(account_snapshot(pool, account_id).await),
         provider_account_ref: Some(account_id.to_owned()),
         upstream_model_id: Some("upstream-model".to_owned()),
         upstream_transport: "http_sse".to_owned(),
         http_version: None,
+    }
+}
+
+async fn account_snapshot(
+    pool: &sqlx::PgPool,
+    id: &str,
+) -> gateway_core::account::AccountHistorySnapshot {
+    let (name, email, authentication_kind, plan_type_snapshot, notes_snapshot) = sqlx::query_as::<_, (String, Option<String>, String, Option<String>, Option<String>)>(
+        "select name, email, authentication_kind, plan_type, notes from provider_accounts where id = $1",
+    ).bind(id).fetch_one(pool).await.unwrap();
+    gateway_core::account::AccountHistorySnapshot {
+        name,
+        email,
+        authentication_kind,
+        plan_type_snapshot,
+        notes_snapshot,
     }
 }
 
@@ -1290,4 +1393,57 @@ async fn seed_api_key(pool: &PgPool, id: &str, name: &str, now: DateTime<Utc>) {
     .execute(pool)
     .await
     .expect("seed api key");
+}
+
+#[tokio::test]
+async fn queued_history_keeps_frozen_identity_after_configuration_deletion() {
+    let Some(database) = TestDatabase::create("queued_history_delete").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_account(
+        &database.pool,
+        "queued_account",
+        "Original Account",
+        Some("old@example.invalid"),
+        "oauth",
+        started_at,
+    )
+    .await;
+    seed_api_key(&database.pool, "queued_key", "Original Key", started_at).await;
+    sqlx::query("update provider_accounts set plan_type = 'pro', notes = 'Original note' where id = 'queued_account'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let mut request = new_request("queued_history", started_at);
+    request.client_api_key_ref = "queued_key".to_owned();
+    request.client_api_key_name_snapshot = Some("Original Key".to_owned());
+    let first_attempt = attempt(&database.pool, "queued_history", 1, "queued_account").await;
+    sqlx::query("delete from provider_accounts where id = 'queued_account'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    sqlx::query("delete from client_api_keys where id = 'queued_key'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    PgExecutionStore::new(database.pool.clone())
+        .insert_model_request_with_first_attempt(request, first_attempt)
+        .await
+        .unwrap();
+    let historical: (String, String, String, String, String, String) = sqlx::query_as(
+        "select client_api_key_ref, client_api_key_name_snapshot, provider_account_ref, provider_account_name_snapshot, provider_account_plan_type_snapshot, provider_account_notes_snapshot from model_request_observations where id = 'queued_history'",
+    ).fetch_one(&database.pool).await.unwrap();
+    assert_eq!(
+        historical,
+        (
+            "queued_key".to_owned(),
+            "Original Key".to_owned(),
+            "queued_account".to_owned(),
+            "Original Account".to_owned(),
+            "pro".to_owned(),
+            "Original note".to_owned()
+        )
+    );
+    database.close().await;
 }

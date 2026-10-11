@@ -7,6 +7,8 @@ const {
   refreshing,
   activeTrendKind,
   metrics,
+  analytics,
+  analyticsError,
   trendPoints,
   trendSummary,
   trendLoading,
@@ -31,6 +33,8 @@ const {
     :refreshing="refreshing"
     :last-refreshed-at="lastRefreshedAt"
     :metrics="metrics"
+    :analytics="analytics"
+    :analytics-error="analyticsError"
     :trend-points="trendPoints"
     :trend-summary="trendSummary"
     :trend-loading="trendLoading"

@@ -9,7 +9,7 @@ import { money } from '../utils/format'
 import { keyUsageTokenMetrics, keyUsageTokenValue } from '../utils/metrics'
 
 const props = defineProps<{ summary: KeyUsageMetrics }>()
-const hitRate = computed(() => props.summary.inputTokens > 0 ? props.summary.cachedTokens / props.summary.inputTokens * 100 : null)
+const hitRate = computed(() => props.summary.inputTokens > 0 ? props.summary.cachedInputTokens / props.summary.inputTokens * 100 : null)
 const metrics = computed(() => [
   ...keyUsageTokenMetrics.map(metric => ({ ...metric, value: keyUsageTokenValue(props.summary, metric.key), percentage: false })),
   { label: '缓存命中率', value: hitRate.value, icon: Gauge, tone: 'text-cp-success-text', percentage: true },

@@ -13,7 +13,8 @@ use futures::{Stream, StreamExt, future::BoxFuture};
 use thiserror::Error;
 
 use crate::account::{
-    AccountAttemptFeedback, AccountCapacitySnapshot, AccountFeedbackStats, ProviderAccountId,
+    AccountAttemptFeedback, AccountCapacitySnapshot, AccountFeedbackStats, AccountHistorySnapshot,
+    ProviderAccountId,
 };
 use crate::engine::AttemptContext;
 use crate::engine::execution::ClientTransport;
@@ -39,7 +40,7 @@ use crate::upstream::{UpstreamSendState, UpstreamTransport};
 pub type EventStream =
     Pin<Box<dyn Stream<Item = Result<ProviderEvent, ProviderError>> + Send + 'static>>;
 
-/// Provider 选定单个 credential 后返回的事实
+/// Provider 选定单个 credential 后返回的调用事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCallMetadata {
     provider: ProviderKind,
@@ -48,6 +49,7 @@ pub struct ProviderCallMetadata {
     upstream_request_id: Option<OpaqueUpstreamValue>,
     transport: UpstreamTransport,
     selection_observation: Option<ProviderSelectionObservation>,
+    account_snapshot: Option<AccountHistorySnapshot>,
 }
 
 /// Provider 账号选择阶段输出的中立运行压力事实
@@ -96,6 +98,7 @@ impl ProviderCallMetadata {
             upstream_request_id: None,
             transport,
             selection_observation: None,
+            account_snapshot: None,
         }
     }
 
@@ -113,7 +116,19 @@ impl ProviderCallMetadata {
             upstream_request_id: None,
             transport,
             selection_observation: None,
+            account_snapshot: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_account_snapshot(mut self, snapshot: Option<AccountHistorySnapshot>) -> Self {
+        self.account_snapshot = snapshot;
+        self
+    }
+
+    #[must_use]
+    pub const fn account_snapshot(&self) -> Option<&AccountHistorySnapshot> {
+        self.account_snapshot.as_ref()
     }
 
     /// 设置 adapter 已分类为非 bearer 的 request ID

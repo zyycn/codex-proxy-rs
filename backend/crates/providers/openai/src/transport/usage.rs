@@ -25,8 +25,8 @@ const FILE_SEARCH_CALL_TICKS: u128 = 25_000_000;
 pub struct OpenAiBillingUsage {
     input_tokens: u64,
     output_tokens: u64,
-    cached_tokens: u64,
-    cache_write_tokens: u64,
+    cached_input_tokens: u64,
+    cache_write_input_tokens: u64,
     image_input_tokens: u64,
     image_output_tokens: u64,
     web_search_calls: u64,
@@ -40,14 +40,14 @@ impl OpenAiBillingUsage {
     pub const fn new(
         input_tokens: u64,
         output_tokens: u64,
-        cached_tokens: u64,
-        cache_write_tokens: u64,
+        cached_input_tokens: u64,
+        cache_write_input_tokens: u64,
     ) -> Self {
         Self {
             input_tokens,
             output_tokens,
-            cached_tokens,
-            cache_write_tokens,
+            cached_input_tokens,
+            cache_write_input_tokens,
             image_input_tokens: 0,
             image_output_tokens: 0,
             web_search_calls: 0,
@@ -77,8 +77,8 @@ impl From<TokenUsage> for OpenAiBillingUsage {
         Self {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
-            cached_tokens: usage.cached_tokens,
-            cache_write_tokens: usage.cache_write_tokens,
+            cached_input_tokens: usage.cached_input_tokens,
+            cache_write_input_tokens: usage.cache_write_input_tokens,
             image_input_tokens: usage.image_input_tokens,
             image_output_tokens: usage.image_output_tokens,
             web_search_calls: 0,
@@ -535,7 +535,10 @@ fn openai_billing_breakdown_with_context(
     long_context: bool,
     custom: Option<&gateway_core::metering::ModelPriceOverride>,
 ) -> Option<CalculatedCostBreakdown> {
-    if usage.cached_tokens.checked_add(usage.cache_write_tokens)? > usage.input_tokens
+    if usage
+        .cached_input_tokens
+        .checked_add(usage.cache_write_input_tokens)?
+        > usage.input_tokens
         || usage.image_input_tokens > 0
         || usage.image_output_tokens > 0
     {
@@ -556,16 +559,16 @@ fn openai_billing_breakdown_with_context(
         cache_write_percent,
         usage.input_tokens,
         usage.output_tokens,
-        usage.cached_tokens,
-        usage.cache_write_tokens,
+        usage.cached_input_tokens,
+        usage.cache_write_input_tokens,
     )?;
     let mut selected = token_amounts(
         selected_rates,
         cache_write_percent,
         usage.input_tokens,
         usage.output_tokens,
-        usage.cached_tokens,
-        usage.cache_write_tokens,
+        usage.cached_input_tokens,
+        usage.cache_write_input_tokens,
     )?;
     standard.total_ticks = standard.total_ticks.checked_add(tool_ticks)?;
     selected.total_ticks = selected.total_ticks.checked_add(tool_ticks)?;
@@ -819,7 +822,7 @@ pub(crate) fn image_calculated_cost(
     )
     .with_image(gateway_core::metering::ImageCostBreakdown {
         input_tokens: image_input,
-        cached_tokens: cached_image,
+        cached_input_tokens: cached_image,
         input_amount: usd_money(image.input_ticks)?,
         cache_read_amount: usd_money(image.cache_read_ticks)?,
         input_price_per_million: usd_price_per_million(image_rates.input_ticks)?,
@@ -904,20 +907,20 @@ fn token_amounts(
     cache_write_percent: u32,
     input_tokens: u64,
     output_tokens: u64,
-    cached_tokens: u64,
-    cache_write_tokens: u64,
+    cached_input_tokens: u64,
+    cache_write_input_tokens: u64,
 ) -> Option<TokenAmounts> {
-    if cached_tokens.checked_add(cache_write_tokens)? > input_tokens {
+    if cached_input_tokens.checked_add(cache_write_input_tokens)? > input_tokens {
         return None;
     }
     let billed_cache_read = if rates.explicit_cache || rates.cache_read_ticks > 0 {
-        cached_tokens
+        cached_input_tokens
     } else {
         0
     };
     let cache_write_rate = cache_write_rate(rates, cache_write_percent)?;
     let billed_cache_write = if rates.explicit_cache || cache_write_rate > 0 {
-        cache_write_tokens
+        cache_write_input_tokens
     } else {
         0
     };

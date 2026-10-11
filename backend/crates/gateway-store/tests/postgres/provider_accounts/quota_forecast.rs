@@ -70,6 +70,7 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
     assert_eq!(history.points.len(), 1);
     assert_eq!(history.points[0].usage, history.usage);
 
+    super::super::drain_analytics(&database.pool).await;
     let repository = super::super::observability_repository(&database.pool);
     let range = ObservabilityRange::new(start, end).unwrap();
     let account_usage = repository

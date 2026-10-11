@@ -368,6 +368,9 @@ impl GrokAccountSessionSelector {
                         gateway_core::error::ErrorSource::new(source),
                     ))
                 })?
+                .with_account_snapshot(gateway_core::account::AccountHistorySnapshot::from_account(
+                    &loaded.account,
+                ))
                 .with_capacity_snapshot(
                     capacity.map(AccountCapacitySnapshot::with_acquired_request),
                 );

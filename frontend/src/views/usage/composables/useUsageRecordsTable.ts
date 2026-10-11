@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { UsageTimeRangeParams } from './useUsageTimeRange'
+import type { AnalyticsMetadata } from '@/api/modules/analytics'
 
 import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import {
@@ -18,6 +19,7 @@ interface UseUsageRecordsTableOptions {
 }
 
 type UsageLoadScope = 'all' | 'table'
+type LoadingAnalytics<T> = Omit<T, 'analytics'> & { analytics: AnalyticsMetadata | null }
 
 interface UsageLoadOptions {
   scope?: UsageLoadScope
@@ -26,6 +28,7 @@ interface UsageLoadOptions {
 
 export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const analyticsLoading = shallowRef(true)
+  const analyticsError = shallowRef(false)
   const summary = shallowRef(emptySummary())
   const insights = shallowRef(emptyInsights())
   const searchQuery = shallowRef('')
@@ -90,6 +93,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     const requestOptions = { signal: analyticsController.signal }
     const dimension = diagnosticDimension.value
     analyticsLoading.value = !background
+    analyticsError.value = false
     try {
       const [nextSummary, overview, diagnostics] = await Promise.all([
         getUsageRecordSummary(globalParams, requestOptions),
@@ -111,7 +115,10 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
             : insights.value.diagnostics,
       }
     }
-    catch {}
+    catch {
+      if (requestId === analyticsRequestId)
+        analyticsError.value = true
+    }
     finally {
       if (requestId === analyticsRequestId) {
         analyticsLoading.value = false
@@ -219,6 +226,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     loading,
     error,
     analyticsLoading,
+    analyticsError,
     records,
     summary,
     insights,
@@ -232,12 +240,13 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 }
 
 function emptySummary() {
-  const summary: Awaited<ReturnType<typeof getUsageRecordSummary>> = {
+  const summary: LoadingAnalytics<Awaited<ReturnType<typeof getUsageRecordSummary>>> = {
+    analytics: null,
     totalRequests: '0',
     inputTokens: '0',
     outputTokens: '0',
-    cachedTokens: '0',
-    cacheWriteTokens: '0',
+    cachedInputTokens: '0',
+    cacheWriteInputTokens: '0',
     totalTokens: '0',
     averageLatencyMs: '0 ms',
   }
@@ -252,7 +261,8 @@ function emptyInsights() {
 }
 
 function emptyOverview() {
-  const overview: Awaited<ReturnType<typeof getUsageRecordInsightsOverview>> = {
+  const overview: LoadingAnalytics<Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>> = {
+    analytics: null,
     granularity: '1d',
     health: {
       totalRequests: 0,
@@ -303,7 +313,7 @@ function emptyOverview() {
       cacheHitRequestRate: 0,
       inputTokens: 0,
       outputTokens: 0,
-      cachedTokens: 0,
+      cachedInputTokens: 0,
       totalTokens: 0,
       points: [],
       coverage: { known: 0, partial: 0, unknown: 0, notBillable: 0 },
@@ -313,7 +323,8 @@ function emptyOverview() {
 }
 
 function emptyDiagnostics() {
-  const diagnostics: Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>> = {
+  const diagnostics: LoadingAnalytics<Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>> = {
+    analytics: null,
     dimension: 'model',
     items: [],
   }

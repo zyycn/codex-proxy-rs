@@ -12,13 +12,8 @@ use super::super::{AdminTestFixture, AdminTestState};
 #[tokio::test]
 async fn account_cooldown_returns_an_instant_and_server_formatted_recovery() {
     use chrono::{DateTime, Duration, Utc};
-    use gateway_admin::model::{
-        Revision,
-        accounts::{AccountCapacity, AccountPageItem, AccountRecord},
-    };
     use gateway_core::account::{
         AccountCooldown, AccountCooldownKind, AccountStatusFacts, CredentialState, QuotaState,
-        resolve_account_status,
     };
 
     for zone in ["Asia/Shanghai", "UTC", "Asia/Kathmandu", "America/New_York"] {
@@ -65,41 +60,7 @@ async fn account_cooldown_returns_an_instant_and_server_formatted_recovery() {
                 last_error_reason: None,
                 last_error_message: None,
             };
-            *fixture.account.lock().unwrap() = Some(AccountPageItem {
-                account: AccountRecord {
-                    id: "acct_cooldown".to_owned(),
-                    provider_kind: gateway_core::routing::ProviderKind::new("openai").unwrap(),
-                    groups: Vec::new(),
-                    name: "synthetic cooldown account".to_owned(),
-                    notes: None,
-                    email: None,
-                    upstream_user_id: None,
-                    upstream_account_id: None,
-                    plan_type: None,
-                    authentication_kind: "oauth".to_owned(),
-                    credential_revision: Revision::new(1).unwrap(),
-                    has_refresh_token: true,
-                    access_token_expires_at: None,
-                    next_refresh_at: None,
-                    enabled: true,
-                    concurrency_limit: None,
-                    weight: Default::default(),
-                    model_access: Default::default(),
-                    outbound_proxy: None,
-                    credential_state: facts.credential_state,
-                    credential_observed_at: now,
-                    quota: facts.quota,
-                    last_error_reason: None,
-                    last_error_message: None,
-                    created_at: now,
-                    updated_at: now,
-                },
-                capacity: AccountCapacity {
-                    used_slots: None,
-                    total_slots: None,
-                },
-                projection: resolve_account_status(&facts, now.into()),
-            });
+            *fixture.account.lock().unwrap() = Some(account_page_item(facts, now, "oauth"));
             let response = admin::accounts::router::<AdminTestState>()
                 .with_state(fixture.state())
                 .oneshot(
@@ -134,6 +95,132 @@ async fn account_cooldown_returns_an_instant_and_server_formatted_recovery() {
                     assert!(quota["rateLimitRecoveryDisplay"].is_null());
                 }
             }
+        }
+    }
+}
+
+fn account_page_item(
+    facts: gateway_core::account::AccountStatusFacts,
+    now: chrono::DateTime<chrono::Utc>,
+    authentication_kind: &str,
+) -> gateway_admin::model::accounts::AccountPageItem {
+    use gateway_admin::model::{
+        Revision,
+        accounts::{AccountCapacity, AccountPageItem, AccountRecord},
+    };
+    use gateway_core::account::resolve_account_status;
+
+    AccountPageItem {
+        account: AccountRecord {
+            id: "acct_cooldown".to_owned(),
+            provider_kind: gateway_core::routing::ProviderKind::new("openai").unwrap(),
+            groups: Vec::new(),
+            name: "synthetic cooldown account".to_owned(),
+            notes: None,
+            email: None,
+            upstream_user_id: None,
+            upstream_account_id: None,
+            plan_type: None,
+            authentication_kind: authentication_kind.to_owned(),
+            credential_revision: Revision::new(1).unwrap(),
+            has_refresh_token: authentication_kind == "oauth",
+            access_token_expires_at: None,
+            next_refresh_at: None,
+            enabled: true,
+            concurrency_limit: None,
+            weight: Default::default(),
+            model_access: Default::default(),
+            outbound_proxy: None,
+            credential_state: facts.credential_state,
+            credential_observed_at: now,
+            quota: facts.quota,
+            last_error_reason: None,
+            last_error_message: None,
+            created_at: now,
+            updated_at: now,
+        },
+        capacity: AccountCapacity {
+            used_slots: None,
+            total_slots: None,
+        },
+        projection: resolve_account_status(&facts, now.into()),
+    }
+}
+
+#[tokio::test]
+async fn account_usage_returns_distinct_cache_read_and_write_tokens_without_aliases() {
+    use chrono::Utc;
+    use gateway_admin::model::accounts::AccountUsage;
+    use gateway_core::account::{AccountStatusFacts, CredentialState, QuotaState};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let now = Utc::now();
+    let facts = AccountStatusFacts {
+        enabled: true,
+        credential_state: CredentialState::Ready,
+        access_token_expires_at: None,
+        quota: QuotaState::unknown(),
+        cooldown: None,
+        last_error_reason: None,
+        last_error_message: None,
+    };
+    *fixture.account.lock().unwrap() = Some(account_page_item(facts, now, "api_key"));
+    for (read, write) in [(Some(13), Some(7)), (None, None)] {
+        *fixture.account_usage.lock().unwrap() = vec![AccountUsage {
+            account_id: "acct_cooldown".to_owned(),
+            request_count: 1,
+            success_count: 1,
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            cached_input_tokens: read,
+            cache_write_input_tokens: write,
+            reasoning_output_tokens: Some(3),
+            image_input_tokens: None,
+            image_output_tokens: None,
+            image_request_count: 0,
+            image_request_failed_count: 0,
+            total_tokens: Some(120),
+            cost_coverage: Default::default(),
+            costs: Vec::new(),
+            last_used_at: Some(now),
+            request_buckets: Vec::new(),
+            models: Vec::new(),
+        }];
+        let response = admin::accounts::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/accounts")
+                    .header("x-request-id", "req_account_usage_contract")
+                    .header(header::COOKIE, "cpr_session=valid-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 32768).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, StatusCode::OK, "{value}");
+        let usage = &value["data"]["items"][0]["usage"];
+        assert_eq!(usage["cachedInputTokens"], serde_json::json!(read));
+        assert_eq!(usage["cacheWriteInputTokens"], serde_json::json!(write));
+        assert_eq!(
+            usage["cachedInputTokensDisplay"],
+            if read.is_some() { "13" } else { "—" }
+        );
+        assert_eq!(
+            usage["cacheWriteInputTokensDisplay"],
+            if write.is_some() { "7" } else { "—" }
+        );
+        for alias in [
+            "createdTokens",
+            "createdTokensDisplay",
+            "readTokens",
+            "readTokensDisplay",
+        ] {
+            assert!(usage.get(alias).is_none(), "obsolete token alias: {alias}");
         }
     }
 }

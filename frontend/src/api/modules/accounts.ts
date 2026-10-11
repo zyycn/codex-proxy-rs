@@ -62,8 +62,8 @@ export interface AccountModelUsage {
   inputTokensDisplay: string
   outputTokens: number | null
   outputTokensDisplay: string
-  cachedTokens: number | null
-  cachedTokensDisplay: string
+  cachedInputTokens: number | null
+  cachedInputTokensDisplay: string
   imageInputTokens: number | null
   imageInputTokensDisplay: string
   imageOutputTokens: number | null
@@ -94,10 +94,10 @@ export interface AccountUsage {
   inputTokensDisplay: string
   outputTokens: number | null
   outputTokensDisplay: string
-  cachedTokens: number | null
-  cachedTokensDisplay: string
-  reasoningTokens: number | null
-  reasoningTokensDisplay: string
+  cachedInputTokens: number | null
+  cachedInputTokensDisplay: string
+  reasoningOutputTokens: number | null
+  reasoningOutputTokensDisplay: string
   imageInputTokens: number | null
   imageInputTokensDisplay: string
   imageOutputTokens: number | null
@@ -108,10 +108,8 @@ export interface AccountUsage {
   imageRequestFailedCountDisplay: string
   totalTokens: number | null
   totalTokensDisplay: string
-  createdTokens: number | null
-  createdTokensDisplay: string
-  readTokens: number | null
-  readTokensDisplay: string
+  cacheWriteInputTokens: number | null
+  cacheWriteInputTokensDisplay: string
   lastUsedAt: string | null
   lastUsedAtDisplay: string
   lastUsedAtFullDisplay: string | null

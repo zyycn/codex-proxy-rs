@@ -59,6 +59,9 @@ impl CodexProvider {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
             })?,
         )
+        .with_account_snapshot(Some(
+            gateway_core::account::AccountHistorySnapshot::from_account(lease.account()),
+        ))
         .with_selection_observation(ProviderSelectionObservation::new(
             account_selection_wait_ms,
             lease.capacity_snapshot(),
@@ -131,8 +134,8 @@ impl UpstreamAccountConnection for SelectedConnection {
         let usage = gateway_protocol::openai::events::TokenUsage {
             input_tokens: usage.input_tokens?,
             output_tokens: usage.output_tokens?,
-            cached_tokens: usage.cached_tokens.unwrap_or(0),
-            cache_write_tokens: usage.cache_write_tokens.unwrap_or(0),
+            cached_input_tokens: usage.cached_input_tokens.unwrap_or(0),
+            cache_write_input_tokens: usage.cache_write_input_tokens.unwrap_or(0),
             image_input_tokens: usage.image_input_tokens.unwrap_or(0),
             image_output_tokens: usage.image_output_tokens.unwrap_or(0),
             ..Default::default()

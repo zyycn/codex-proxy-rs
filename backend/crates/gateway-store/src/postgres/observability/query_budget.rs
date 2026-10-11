@@ -6,7 +6,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures::{Stream, TryStreamExt, stream::BoxStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{StoreBackend, StoreError, StoreResult};
@@ -39,7 +38,7 @@ impl ObservabilityQueryBudget {
         })
     }
 
-    /// 在共享管理观测预算内执行一条 PostgreSQL 查询
+    /// 在共享槽位与十秒执行预算内完成整个观测操作
     ///
     /// # Errors
     ///
@@ -49,44 +48,13 @@ impl ObservabilityQueryBudget {
         F: Future<Output = StoreResult<T>>,
     {
         let _slot = self.acquire(operation).await?;
-        query.await
-    }
-
-    /// 将槽位持有到查询流消费结束、报错或被丢弃，而不是仅持有到流创建完成
-    pub fn run_stream<'a, T, S>(
-        &'a self,
-        operation: &'static str,
-        query: S,
-    ) -> BoxStream<'a, StoreResult<T>>
-    where
-        T: Send + 'a,
-        S: Stream<Item = StoreResult<T>> + Send + 'a,
-    {
-        Box::pin(async_stream::stream! {
-            let mut query = Box::pin(query);
-            let slot = match self.acquire(operation).await {
-                Ok(slot) => slot,
-                Err(error) => {
-                    drop(query);
-                    yield Err(error);
-                    return;
-                }
-            };
-            loop {
-                match query.try_next().await {
-                    Ok(Some(item)) => yield Ok(item),
-                    Ok(None) => break,
-                    Err(error) => {
-                        // 返回错误后调用方可能不再 poll，但仍保留流对象
-                        // 必须在交付错误之前释放数据库流和预算
-                        drop(query);
-                        drop(slot);
-                        yield Err(error);
-                        return;
-                    }
-                }
-            }
-        })
+        tokio::time::timeout(Duration::from_secs(10), query)
+            .await
+            .map_err(|source| StoreError::Unavailable {
+                backend: StoreBackend::PostgreSql,
+                message: "observability PostgreSQL execution budget is exhausted".to_owned(),
+                source: Some(gateway_core::error::ErrorSource::new(source)),
+            })?
     }
 
     async fn acquire(&self, operation: &'static str) -> StoreResult<OwnedSemaphorePermit> {

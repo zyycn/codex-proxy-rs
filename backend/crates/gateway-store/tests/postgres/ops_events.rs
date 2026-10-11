@@ -13,7 +13,7 @@ fn request_scoped_ops_event_requires_attempt_index() {
         component: "routing".to_owned(),
         operation: "fallback".to_owned(),
         provider_kind: None,
-        provider_account_id: None,
+        account_snapshot: None,
         provider_account_ref: None,
         upstream_model_id: None,
         failure_kind: "timeout".to_owned(),

@@ -315,3 +315,77 @@ impl HealthProbe for RedisHealthProbe {
         })
     }
 }
+
+/// 每轮有界推进队列和历史回填；取消时丢弃未提交事务，待下轮重新领取
+pub(crate) fn request_analytics_worker(
+    repository: postgres::PgRequestAnalyticsRepository,
+) -> StoreResult<WorkerContribution> {
+    let id = WorkerId::try_new(WorkerKind::RequestAnalytics, "postgres")
+        .map_err(worker_definition_error)?;
+    Ok(WorkerContribution::Registration(scheduled_worker(
+        id,
+        Duration::from_secs(5),
+        Box::new(RequestAnalyticsTask { repository }),
+    )?))
+}
+
+struct RequestAnalyticsTask {
+    repository: postgres::PgRequestAnalyticsRepository,
+}
+
+impl ScheduledTask for RequestAnalyticsTask {
+    fn run_cycle(
+        &self,
+        context: WorkerCycleContext,
+    ) -> futures::future::BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            tokio::select! {
+                () = context.cancellation().cancelled() => Ok(()),
+                result = run_request_analytics_cycle(&self.repository) => result.map(|_| ()).map_err(|source| {
+                    WorkerTaskError::safe("request analytics maintenance failed").with_source(source)
+                }),
+            }
+        })
+    }
+}
+
+/// 生产与隔离压测共用的单周期推进预算；各批独立提交并归还观测槽位
+pub async fn run_request_analytics_cycle(
+    repository: &postgres::PgRequestAnalyticsRepository,
+) -> StoreResult<postgres::AnalyticsMaintenance> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut total = postgres::AnalyticsMaintenance::default();
+    loop {
+        let result = match tokio::time::timeout_at(deadline, repository.maintain(1_000)).await {
+            Ok(result) => result?,
+            Err(source) => {
+                if total.projected_requests == 0
+                    && total.backfilled_requests == 0
+                    && total.rebuilt_buckets == 0
+                    && total.advanced_buckets == 0
+                    && !total.reset_progress
+                {
+                    return Err(StoreError::Unavailable {
+                        backend: StoreBackend::PostgreSql,
+                        message: "request analytics cycle timed out without progress".to_owned(),
+                        source: Some(gateway_core::error::ErrorSource::new(source)),
+                    });
+                }
+                return Ok(total);
+            }
+        };
+        let idle = result.projected_requests == 0
+            && result.backfilled_requests == 0
+            && result.rebuilt_buckets == 0
+            && result.advanced_buckets == 0
+            && !result.reset_progress;
+        total.projected_requests += result.projected_requests;
+        total.backfilled_requests += result.backfilled_requests;
+        total.rebuilt_buckets += result.rebuilt_buckets;
+        total.advanced_buckets += result.advanced_buckets;
+        total.reset_progress |= result.reset_progress;
+        if idle || tokio::time::Instant::now() >= deadline {
+            return Ok(total);
+        }
+    }
+}

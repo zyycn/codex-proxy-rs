@@ -58,9 +58,9 @@ pub(crate) fn request_metrics_view(metrics: &domain::RequestMetrics) -> RequestM
         caller_error_count: metrics.caller_error_count,
         input_tokens: metrics.input_tokens,
         output_tokens: metrics.output_tokens,
-        cached_tokens: metrics.cached_tokens,
-        cache_write_tokens: metrics.cache_write_tokens,
-        reasoning_tokens: metrics.reasoning_tokens,
+        cached_input_tokens: metrics.cached_input_tokens,
+        cache_write_input_tokens: metrics.cache_write_input_tokens,
+        reasoning_output_tokens: metrics.reasoning_output_tokens,
         total_tokens: metrics.total_tokens,
     }
 }
@@ -103,9 +103,9 @@ pub(crate) fn token_details(record: &domain::UsageRecord) -> TokenDetailsView {
     TokenDetailsView {
         input_tokens: record.input_tokens,
         output_tokens: record.output_tokens,
-        cached_tokens: record.cached_tokens,
-        cache_write_tokens: record.cache_write_tokens,
-        reasoning_tokens: record.reasoning_tokens,
+        cached_input_tokens: record.cached_input_tokens,
+        cache_write_input_tokens: record.cache_write_input_tokens,
+        reasoning_output_tokens: record.reasoning_output_tokens,
         image_input_tokens: record.image_input_tokens,
         image_output_tokens: record.image_output_tokens,
         total_tokens: record.total_tokens,
@@ -115,14 +115,14 @@ pub(crate) fn token_details(record: &domain::UsageRecord) -> TokenDetailsView {
         output_tokens_display: record
             .output_tokens
             .map_or_else(|| "-".to_owned(), format_number),
-        cached_tokens_display: record
-            .cached_tokens
+        cached_input_tokens_display: record
+            .cached_input_tokens
             .map_or_else(|| "-".to_owned(), format_compact_number),
-        cache_write_tokens_display: record
-            .cache_write_tokens
+        cache_write_input_tokens_display: record
+            .cache_write_input_tokens
             .map_or_else(|| "-".to_owned(), format_compact_number),
-        reasoning_tokens_display: record
-            .reasoning_tokens
+        reasoning_output_tokens_display: record
+            .reasoning_output_tokens
             .map_or_else(|| "-".to_owned(), format_number),
         image_input_tokens_display: record
             .image_input_tokens
@@ -140,9 +140,9 @@ pub(crate) fn usage_list_token_details(record: &domain::UsageListRecord) -> Toke
     TokenDetailsView {
         input_tokens: record.input_tokens,
         output_tokens: record.output_tokens,
-        cached_tokens: record.cached_tokens,
-        cache_write_tokens: record.cache_write_tokens,
-        reasoning_tokens: record.reasoning_tokens,
+        cached_input_tokens: record.cached_input_tokens,
+        cache_write_input_tokens: record.cache_write_input_tokens,
+        reasoning_output_tokens: record.reasoning_output_tokens,
         image_input_tokens: record.image_input_tokens,
         image_output_tokens: record.image_output_tokens,
         total_tokens: record.total_tokens,
@@ -152,14 +152,14 @@ pub(crate) fn usage_list_token_details(record: &domain::UsageListRecord) -> Toke
         output_tokens_display: record
             .output_tokens
             .map_or_else(|| "-".to_owned(), format_number),
-        cached_tokens_display: record
-            .cached_tokens
+        cached_input_tokens_display: record
+            .cached_input_tokens
             .map_or_else(|| "-".to_owned(), format_compact_number),
-        cache_write_tokens_display: record
-            .cache_write_tokens
+        cache_write_input_tokens_display: record
+            .cache_write_input_tokens
             .map_or_else(|| "-".to_owned(), format_compact_number),
-        reasoning_tokens_display: record
-            .reasoning_tokens
+        reasoning_output_tokens_display: record
+            .reasoning_output_tokens
             .map_or_else(|| "-".to_owned(), format_number),
         image_input_tokens_display: record
             .image_input_tokens
@@ -430,9 +430,9 @@ pub(crate) fn usage_record_view(
         latency_ms: record.latency_ms,
         input_tokens: record.input_tokens,
         output_tokens: record.output_tokens,
-        cached_tokens: record.cached_tokens,
-        cache_write_tokens: record.cache_write_tokens,
-        reasoning_tokens: record.reasoning_tokens,
+        cached_input_tokens: record.cached_input_tokens,
+        cache_write_input_tokens: record.cache_write_input_tokens,
+        reasoning_output_tokens: record.reasoning_output_tokens,
         image_input_tokens: record.image_input_tokens,
         image_output_tokens: record.image_output_tokens,
         message,
@@ -526,7 +526,7 @@ pub(crate) fn usage_attempt_view(attempt: domain::UsageAttempt) -> UsageAttemptV
         estimated_cost_currency: attempt.cost_currency,
         input_tokens: attempt.input_tokens,
         output_tokens: attempt.output_tokens,
-        cached_tokens: attempt.cached_tokens,
+        cached_input_tokens: attempt.cached_input_tokens,
         total_tokens: attempt.total_tokens,
         first_token_ms: None,
         latency_ms: attempt.latency_ms,
@@ -683,8 +683,8 @@ pub(crate) fn trend_point_view(
         input_tokens_value: point.metrics.input_tokens,
         output_tokens: format_compact_number(point.metrics.output_tokens),
         output_tokens_value: point.metrics.output_tokens,
-        cached_tokens: format_compact_number(point.metrics.cached_tokens),
-        cached_tokens_value: point.metrics.cached_tokens,
+        cached_input_tokens: format_compact_number(point.metrics.cached_input_tokens),
+        cached_input_tokens_value: point.metrics.cached_input_tokens,
         cache_hit_rate_value: point.cached_token_rate,
         tokens_value: point.metrics.total_tokens,
         errors: format_compact_number(point.service_failure_count),
@@ -749,7 +749,7 @@ pub(crate) fn trend_summary_view(
             },
             TrendSummaryView {
                 label: "缓存".to_owned(),
-                value: format_compact_number(summary.cached_tokens),
+                value: format_compact_number(summary.cached_input_tokens),
                 ratio: None,
             },
         ],
@@ -800,6 +800,7 @@ pub(crate) fn trend_view(
     time: crate::time::TimePresenter,
 ) -> TrendData {
     TrendData {
+        analytics: analytics_view(trend.analytics, time),
         kind,
         summary: trend_summary_view(kind, &trend.summary),
         points: trend
@@ -913,6 +914,7 @@ pub(crate) fn dashboard_view(
         rotation_strategy,
     } = result;
     let domain::DashboardObservation {
+        analytics,
         runtime_slots: _,
         range,
         totals,
@@ -982,6 +984,7 @@ pub(crate) fn dashboard_view(
         .saturating_sub(provider_accounts.normal);
 
     DashboardDataView {
+        analytics: analytics_view(analytics, time),
         as_of: range.end,
         as_of_display: time.datetime(&range.end),
         cards: DashboardCardsView {
@@ -1013,7 +1016,7 @@ pub(crate) fn dashboard_view(
                 today_hit_rate_value: today.observed_cached_token_rate,
                 yesterday_hit_rate_value: yesterday.observed_cached_token_rate,
                 total_hit_rate: display_rate(total_cached_token_rate),
-                total_cached_tokens: format_compact_number(totals.cached_tokens),
+                total_cached_input_tokens: format_compact_number(totals.cached_input_tokens),
                 average_first_token_latency_ms: display_duration(average_first_token_latency_ms),
             },
         },
@@ -1046,14 +1049,18 @@ pub(crate) fn dashboard_view(
     }
 }
 
-pub(crate) fn usage_summary_view(summary: domain::UsageSummary) -> UsageSummaryView {
+pub(crate) fn usage_summary_view(
+    summary: domain::UsageSummary,
+    time: crate::time::TimePresenter,
+) -> UsageSummaryView {
     let overview = summary.overview;
     UsageSummaryView {
+        analytics: analytics_view(overview.analytics, time),
         total_requests: format_compact_number(overview.requests.request_count),
         input_tokens: format_compact_number(overview.requests.input_tokens),
         output_tokens: format_compact_number(overview.requests.output_tokens),
-        cached_tokens: format_compact_number(overview.requests.cached_tokens),
-        cache_write_tokens: format_compact_number(overview.requests.cache_write_tokens),
+        cached_input_tokens: format_compact_number(overview.requests.cached_input_tokens),
+        cache_write_input_tokens: format_compact_number(overview.requests.cache_write_input_tokens),
         total_tokens: format_compact_number(overview.requests.total_tokens),
         average_latency_ms: display_duration(summary.average_latency_ms),
         logical_requests: request_metrics_view(&overview.requests),
@@ -1139,7 +1146,7 @@ pub(crate) fn usage_insights_view(
             label: time.label(point.bucket_start, "%m-%d %H:%M"),
             input_tokens: point.input_tokens,
             output_tokens: point.output_tokens,
-            cached_tokens: point.cached_tokens,
+            cached_input_tokens: point.cached_input_tokens,
             total_tokens: point.total_tokens,
             estimated_cost: point.estimated_cost.as_ref().map(ToString::to_string),
             standard_cost: point.standard_cost.as_ref().map(ToString::to_string),
@@ -1150,6 +1157,7 @@ pub(crate) fn usage_insights_view(
         })
         .collect();
     UsageInsightsOverviewView {
+        analytics: analytics_view(insights.analytics, time),
         granularity: granularity_name(insights.granularity).to_owned(),
         health: OverviewHealthView {
             total_requests: insights.health.total_requests,
@@ -1270,7 +1278,7 @@ pub(crate) fn usage_insights_view(
             cache_hit_request_rate: insights.cost.cache_hit_request_rate,
             input_tokens: insights.cost.input_tokens,
             output_tokens: insights.cost.output_tokens,
-            cached_tokens: insights.cost.cached_tokens,
+            cached_input_tokens: insights.cost.cached_input_tokens,
             total_tokens: insights.cost.total_tokens,
             points: cost_points,
             costs: cost_views(&insights.cost.costs),
@@ -1302,8 +1310,10 @@ pub(crate) fn granularity_name(granularity: domain::Granularity) -> &'static str
 pub(crate) fn diagnostics_view(
     result: domain::DiagnosticsResult,
     dimension: DiagnosticDimension,
+    time: crate::time::TimePresenter,
 ) -> DiagnosticsView {
     DiagnosticsView {
+        analytics: analytics_view(result.analytics, time),
         dimension: dimension.display_name().to_owned(),
         items: result
             .items
@@ -1355,4 +1365,23 @@ pub(crate) fn map_wire_error(error: WireValidationError) -> AdminError {
 
 pub(crate) fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
     map_admin_service_error(error)
+}
+
+pub(crate) fn analytics_view(
+    metadata: domain::AnalyticsMetadata,
+    time: crate::time::TimePresenter,
+) -> AnalyticsView {
+    AnalyticsView {
+        coverage_start: metadata.coverage_start,
+        coverage_start_display: metadata.coverage_start.map(|value| time.datetime(&value)),
+        coverage_end: metadata.coverage_end,
+        coverage_end_display: metadata.coverage_end.map(|value| time.datetime(&value)),
+        generated_at: metadata.generated_at,
+        generated_at_display: time.datetime(&metadata.generated_at),
+        lag_seconds: metadata.lag_seconds,
+        state: metadata.state.as_str().to_owned(),
+        percentiles_approximate: metadata.percentiles_approximate,
+        schema_version: metadata.schema_version,
+        histogram_version: metadata.histogram_version,
+    }
 }

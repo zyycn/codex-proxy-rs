@@ -464,8 +464,8 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
             service_tier: None,
             input_tokens: Some(1_000_000),
             output_tokens: Some(0),
-            cached_tokens: Some(0),
-            cache_write_tokens: Some(0),
+            cached_input_tokens: Some(0),
+            cache_write_input_tokens: Some(0),
             total: CurrencyCost {
                 currency: "USD".to_owned(),
                 amount: "2.5".parse().expect("amount"),
@@ -482,8 +482,8 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
             service_tier: Some("priority".to_owned()),
             input_tokens: Some(1_000_000),
             output_tokens: Some(0),
-            cached_tokens: Some(0),
-            cache_write_tokens: Some(0),
+            cached_input_tokens: Some(0),
+            cache_write_input_tokens: Some(0),
             total: CurrencyCost {
                 currency: "USD".to_owned(),
                 amount: "4.25".parse().expect("fast amount"),
@@ -510,8 +510,8 @@ async fn openai_legacy_billing_should_not_infer_long_context_flag() {
             service_tier: None,
             input_tokens: Some(300_000),
             output_tokens: Some(0),
-            cached_tokens: Some(0),
-            cache_write_tokens: Some(0),
+            cached_input_tokens: Some(0),
+            cache_write_input_tokens: Some(0),
             total: CurrencyCost {
                 currency: "USD".to_owned(),
                 amount: "1.5".parse().expect("stored total"),

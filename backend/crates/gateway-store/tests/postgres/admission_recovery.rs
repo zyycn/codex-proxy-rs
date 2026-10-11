@@ -49,6 +49,18 @@ async fn recovery_loads_precise_window_and_running_request_facts() {
         "running",
     )
     .await;
+    seed_request(
+        &database.pool,
+        "old-missing-lease",
+        now - Duration::seconds(121),
+        now + Duration::seconds(50),
+        "running",
+    )
+    .await;
+    sqlx::query("delete from model_request_leases where request_id = 'old-missing-lease'")
+        .execute(&database.pool)
+        .await
+        .expect("remove missing lease fixture");
 
     let repository = PgClientAdmissionRecoveryRepository::new(database.pool.clone());
     let actual = repository
@@ -70,11 +82,11 @@ async fn recovery_loads_precise_window_and_running_request_facts() {
         running_requests: vec![
             ClientAdmissionRunningRequest {
                 model_request_id: "old-running".to_owned(),
-                deadline_at: now + Duration::seconds(30),
+                lease_expires_at: now + Duration::seconds(30),
             },
             ClientAdmissionRunningRequest {
                 model_request_id: "recent-running".to_owned(),
-                deadline_at: now + Duration::seconds(40),
+                lease_expires_at: now + Duration::seconds(40),
             },
         ],
     }];
@@ -87,13 +99,13 @@ async fn seed_request(
     pool: &PgPool,
     id: &str,
     started_at: DateTime<Utc>,
-    deadline_at: DateTime<Utc>,
+    lease_expires_at: DateTime<Utc>,
     outcome: &str,
 ) {
     let completed_at = (outcome != "running").then_some(started_at + Duration::seconds(1));
     sqlx::query(
         "insert into model_requests (
-           id, client_api_key_ref, operation, client_transport, requested_model_id, outcome, started_at, deadline_at, completed_at, request_observation_json
+           id, client_api_key_ref, operation, client_transport, requested_model_id, outcome, started_at, recovery_lease_expires_at, completed_at, request_observation_json
          ) values (
            $1, 'key-recovery', 'responses', 'http_sse', 'coding', $2, $3, $4, $5,
            jsonb_strip_nulls(jsonb_build_object(
@@ -111,9 +123,19 @@ async fn seed_request(
     .bind(id)
     .bind(outcome)
     .bind(started_at)
-    .bind(deadline_at)
+    .bind((outcome != "running").then_some(lease_expires_at))
     .bind(completed_at)
     .execute(pool)
     .await
     .expect("seed model request recovery fact");
+    if outcome == "running" {
+        sqlx::query(
+            "insert into model_request_leases (request_id, lease_expires_at) values ($1, $2)",
+        )
+        .bind(id)
+        .bind(lease_expires_at)
+        .execute(pool)
+        .await
+        .expect("seed running lease");
+    }
 }

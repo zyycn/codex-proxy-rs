@@ -17,6 +17,7 @@ pub(crate) fn store_range(
 
 pub(crate) fn store_usage_filter(filter: admin_observability::UsageFilter) -> UsageRecordFilter {
     UsageRecordFilter {
+        routing_group_refs: filter.routing_group_refs,
         client_api_key_ref: filter.client_api_key_ref,
         request_id: filter.request_id,
         provider_account_ref: filter.provider_account_ref,
@@ -63,6 +64,7 @@ pub(crate) fn admin_dashboard_observation(
     observation: DashboardObservation,
 ) -> admin_observability::DashboardObservation {
     let DashboardObservation {
+        analytics,
         range,
         totals,
         provider_accounts,
@@ -72,6 +74,7 @@ pub(crate) fn admin_dashboard_observation(
         recent_requests,
     } = observation;
     admin_observability::DashboardObservation {
+        analytics,
         range: admin_range(range),
         totals,
         provider_accounts,
@@ -136,9 +139,9 @@ pub(crate) fn admin_dashboard_account_usage(
         success_count: usage.success_count,
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
-        cached_tokens: usage.cached_tokens,
-        cache_write_tokens: usage.cache_write_tokens,
-        reasoning_tokens: usage.reasoning_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        cache_write_input_tokens: usage.cache_write_input_tokens,
+        reasoning_output_tokens: usage.reasoning_output_tokens,
         image_input_tokens: usage.image_input_tokens,
         image_output_tokens: usage.image_output_tokens,
         image_request_count: usage.image_request_count,
@@ -167,9 +170,9 @@ pub(crate) fn admin_account_model_usage(
         success_count: usage.success_count,
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
-        cached_tokens: usage.cached_tokens,
-        cache_write_tokens: usage.cache_write_tokens,
-        reasoning_tokens: usage.reasoning_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        cache_write_input_tokens: usage.cache_write_input_tokens,
+        reasoning_output_tokens: usage.reasoning_output_tokens,
         image_input_tokens: usage.image_input_tokens,
         image_output_tokens: usage.image_output_tokens,
         image_request_count: usage.image_request_count,
@@ -207,8 +210,8 @@ pub(crate) fn admin_calculated_usage_billing_fact(
         service_tier: fact.service_tier,
         input_tokens: fact.input_tokens,
         output_tokens: fact.output_tokens,
-        cached_tokens: fact.cached_tokens,
-        cache_write_tokens: fact.cache_write_tokens,
+        cached_input_tokens: fact.cached_input_tokens,
+        cache_write_input_tokens: fact.cache_write_input_tokens,
         total: fact.total,
     }
 }
@@ -241,6 +244,7 @@ pub(crate) fn request_outcome(outcome: &str) -> StoreResult<admin_observability:
 
 pub(crate) fn admin_usage_overview(overview: UsageOverview) -> admin_observability::UsageOverview {
     admin_observability::UsageOverview {
+        analytics: overview.analytics,
         range: admin_range(overview.range),
         requests: overview.requests,
         attempts: admin_attempt_metrics(overview.attempts),
@@ -252,6 +256,7 @@ pub(crate) fn admin_diagnostics_observation(
     observation: DiagnosticsObservation,
 ) -> admin_observability::DiagnosticsObservation {
     admin_observability::DiagnosticsObservation {
+        analytics: observation.analytics,
         total_request_count: observation.total_request_count,
         items: observation
             .items
@@ -318,9 +323,9 @@ pub(crate) fn usage_list_record_from_row(
         service_tier: get(row, "service_tier")?,
         input_tokens: optional_unsigned(row, "input_tokens")?,
         output_tokens: optional_unsigned(row, "output_tokens")?,
-        cached_tokens: optional_unsigned(row, "cached_tokens")?,
-        cache_write_tokens: optional_unsigned(row, "cache_write_tokens")?,
-        reasoning_tokens: optional_unsigned(row, "reasoning_tokens")?,
+        cached_input_tokens: optional_unsigned(row, "cached_input_tokens")?,
+        cache_write_input_tokens: optional_unsigned(row, "cache_write_input_tokens")?,
+        reasoning_output_tokens: optional_unsigned(row, "reasoning_output_tokens")?,
         image_input_tokens: optional_unsigned(row, "image_input_tokens")?,
         image_output_tokens: optional_unsigned(row, "image_output_tokens")?,
         total_tokens: optional_unsigned(row, "total_tokens")?,
@@ -414,9 +419,9 @@ pub(crate) fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<
         retry_after_ms: optional_unsigned(row, "retry_after_ms")?,
         input_tokens: optional_unsigned(row, "input_tokens")?,
         output_tokens: optional_unsigned(row, "output_tokens")?,
-        cached_tokens: optional_unsigned(row, "cached_tokens")?,
-        cache_write_tokens: optional_unsigned(row, "cache_write_tokens")?,
-        reasoning_tokens: optional_unsigned(row, "reasoning_tokens")?,
+        cached_input_tokens: optional_unsigned(row, "cached_input_tokens")?,
+        cache_write_input_tokens: optional_unsigned(row, "cache_write_input_tokens")?,
+        reasoning_output_tokens: optional_unsigned(row, "reasoning_output_tokens")?,
         image_input_tokens: optional_unsigned(row, "image_input_tokens")?,
         image_output_tokens: optional_unsigned(row, "image_output_tokens")?,
         total_tokens: optional_unsigned(row, "total_tokens")?,
@@ -536,8 +541,8 @@ pub(crate) fn calculated_usage_billing_fact_from_row(
         service_tier: get(row, "service_tier")?,
         input_tokens: optional_unsigned(row, "input_tokens")?,
         output_tokens: optional_unsigned(row, "output_tokens")?,
-        cached_tokens: optional_unsigned(row, "cached_tokens")?,
-        cache_write_tokens: optional_unsigned(row, "cache_write_tokens")?,
+        cached_input_tokens: optional_unsigned(row, "cached_input_tokens")?,
+        cache_write_input_tokens: optional_unsigned(row, "cache_write_input_tokens")?,
         total: cost_from_row(row)?,
     })
 }

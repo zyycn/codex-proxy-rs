@@ -25,6 +25,17 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
         .dashboard_observation
         .lock()
         .expect("dashboard observation") = Some(DashboardObservation {
+        analytics: gateway_admin::model::observability::AnalyticsMetadata {
+            coverage_start: Some(now - Duration::hours(1)),
+            coverage_end: Some(now),
+            generated_at: now,
+            lag_seconds: 12,
+            state: gateway_admin::model::observability::AnalyticsState::Lagging,
+            percentiles_approximate: true,
+            schema_version: 1,
+            histogram_version: 1,
+            generation: 42,
+        },
         runtime_slots: None,
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
         totals: Default::default(),
@@ -59,6 +70,14 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
         .expect("dashboard response body");
     let value: serde_json::Value = serde_json::from_slice(&body).expect("dashboard response JSON");
     assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["data"]["analytics"]["state"], "lagging");
+    assert_eq!(value["data"]["analytics"]["lagSeconds"], 12);
+    assert_eq!(value["data"]["analytics"]["percentilesApproximate"], true);
+    assert_eq!(value["data"]["analytics"]["schemaVersion"], 1);
+    assert_eq!(value["data"]["analytics"]["histogramVersion"], 1);
+    assert!(value["data"]["analytics"]["coverageStart"].is_string());
+    assert!(value["data"]["analytics"]["generatedAtDisplay"].is_string());
+    assert!(value["data"]["analytics"].get("generation").is_none());
 
     assert_eq!(
         (
@@ -108,12 +127,13 @@ async fn dashboard_summary_should_use_lifetime_totals_for_card_footers() {
         .dashboard_observation
         .lock()
         .expect("dashboard observation") = Some(DashboardObservation {
+        analytics: Default::default(),
         runtime_slots: None,
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
         totals: DashboardTotals {
             request_count: 42,
             input_tokens: 800,
-            cached_tokens: 200,
+            cached_input_tokens: 200,
             total_tokens: 840,
             billing_usd: None,
         },
@@ -141,13 +161,21 @@ async fn dashboard_summary_should_use_lifetime_totals_for_card_footers() {
         .expect("dashboard response body");
     let value: serde_json::Value = serde_json::from_slice(&body).expect("dashboard response JSON");
     assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(
+        value["data"]["analytics"]["coverageStartDisplay"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        value["data"]["analytics"]["coverageEndDisplay"],
+        serde_json::Value::Null
+    );
 
     assert_eq!(
         (
             &value["data"]["cards"]["traffic"]["totalRequests"],
             &value["data"]["cards"]["tokens"]["totalTokens"],
             &value["data"]["cards"]["cache"]["totalHitRate"],
-            &value["data"]["cards"]["cache"]["totalCachedTokens"],
+            &value["data"]["cards"]["cache"]["totalCachedInputTokens"],
         ),
         (
             &serde_json::json!("42"),
@@ -180,6 +208,7 @@ async fn dashboard_summary_should_default_to_current_deployment_day() {
         .dashboard_observation
         .lock()
         .expect("dashboard observation") = Some(DashboardObservation {
+        analytics: Default::default(),
         runtime_slots: None,
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
         totals: Default::default(),
@@ -282,9 +311,9 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
                 message: Some("limited".to_owned()),
                 input_tokens: None,
                 output_tokens: None,
-                cached_tokens: None,
-                cache_write_tokens: None,
-                reasoning_tokens: None,
+                cached_input_tokens: None,
+                cache_write_input_tokens: None,
+                reasoning_output_tokens: None,
                 total_tokens: None,
                 cost_source: Some("unavailable".to_owned()),
                 cost_amount: None,
@@ -401,9 +430,9 @@ async fn zero_attempt_failure_detail_keeps_missing_upstream_facts_and_preparatio
     record.error_message = Some("no upstream account is available".to_owned());
     record.input_tokens = None;
     record.output_tokens = None;
-    record.cached_tokens = None;
-    record.cache_write_tokens = None;
-    record.reasoning_tokens = None;
+    record.cached_input_tokens = None;
+    record.cache_write_input_tokens = None;
+    record.reasoning_output_tokens = None;
     record.image_input_tokens = None;
     record.image_output_tokens = None;
     record.total_tokens = None;
@@ -617,6 +646,7 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     *fixture.diagnostics.lock().expect("diagnostics") = DiagnosticsObservation {
+        analytics: Default::default(),
         total_request_count: 4,
         items: vec![DiagnosticObservation {
             key: "acct_diag".to_owned(),
@@ -726,9 +756,9 @@ fn usage_record_with_account(
         retry_after_ms: None,
         input_tokens: Some(1),
         output_tokens: Some(1),
-        cached_tokens: Some(0),
-        cache_write_tokens: Some(0),
-        reasoning_tokens: Some(0),
+        cached_input_tokens: Some(0),
+        cache_write_input_tokens: Some(0),
+        reasoning_output_tokens: Some(0),
         image_input_tokens: Some(0),
         image_output_tokens: Some(0),
         total_tokens: Some(2),
@@ -847,9 +877,9 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             service_tier: Some("default".to_owned()),
             input_tokens: Some(1),
             output_tokens: Some(1),
-            cached_tokens: Some(0),
-            cache_write_tokens: Some(0),
-            reasoning_tokens: Some(0),
+            cached_input_tokens: Some(0),
+            cache_write_input_tokens: Some(0),
+            reasoning_output_tokens: Some(0),
             image_input_tokens: Some(31),
             image_output_tokens: Some(9),
             total_tokens: Some(2),
@@ -1101,6 +1131,12 @@ async fn calendar_queries_and_display_follow_deployment_timezone_with_one_anchor
         let fixture = AdminTestFixture::with_timezone(timezone).await;
         fixture.auth.insert_session("valid-session");
         *fixture.dashboard_observation.lock().unwrap() = Some(DashboardObservation {
+            analytics: gateway_admin::model::observability::AnalyticsMetadata {
+                coverage_start: Some(range.start),
+                coverage_end: Some(end),
+                generated_at: end,
+                ..Default::default()
+            },
             runtime_slots: None,
             range,
             totals: Default::default(),
@@ -1142,6 +1178,15 @@ async fn calendar_queries_and_display_follow_deployment_timezone_with_one_anchor
         assert_eq!(queried.end, end);
         assert_eq!(value["data"]["asOf"], anchor);
         assert_eq!(value["data"]["asOfDisplay"], display);
+        let analytics = &value["data"]["analytics"];
+        assert_eq!(analytics["coverageStart"], start);
+        assert_eq!(analytics["coverageEnd"], anchor);
+        assert_eq!(
+            analytics["coverageStartDisplay"],
+            format!("{} 00:00:00", &display[..10])
+        );
+        assert_eq!(analytics["coverageEndDisplay"], display);
+        assert_eq!(analytics["generatedAtDisplay"], display);
         let points = value["data"]["healthTimeline"]["points"]
             .as_array()
             .unwrap();
@@ -1197,4 +1242,53 @@ async fn calendar_query_rejects_an_anchor_outside_the_local_calendar() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(fixture.dashboard_summary_range.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn request_and_ops_queries_should_forward_deleted_group_id_sets() {
+    use crate::admin::{AdminTestFixture, AdminTestState};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let router = observability::router::<AdminTestState>().with_state(fixture.state());
+    for path in ["/api/admin/usage/records", "/api/admin/operations/errors"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "{path}?routingGroupRefs=deleted-b,deleted-a,deleted-b"
+                    ))
+                    .header(header::COOKIE, "cpr_session=valid-session")
+                    .header("x-request-id", "req_group_filter")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{path}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    let observations = fixture.observations.lock().unwrap();
+    assert_eq!(
+        observations.records[0].filter.routing_group_refs,
+        ["deleted-a", "deleted-b"]
+    );
+    assert_eq!(
+        observations.errors[0].filter.routing_group_refs,
+        ["deleted-a", "deleted-b"]
+    );
 }

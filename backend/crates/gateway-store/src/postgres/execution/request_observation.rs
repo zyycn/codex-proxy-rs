@@ -1,7 +1,7 @@
 //! 请求观测 JSON 的类型化编码，只拥有持久化分组，不决定业务状态
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::value::RawValue;
 
 use super::{ModelRequestFinalization, NewModelRequest, StoreResult, invalid};
 
@@ -30,6 +30,8 @@ pub(super) struct RequestObservation {
 #[serde(rename_all = "camelCase")]
 struct RequestContext {
     config_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_api_key_name_snapshot: Option<String>,
     protocol: String,
     endpoint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -169,10 +171,14 @@ struct ContinuationObservation {
 }
 
 impl RequestObservation {
-    pub(super) fn initial(request: &NewModelRequest) -> StoreResult<sqlx::types::Json<Value>> {
+    pub(super) fn initial(
+        request: &NewModelRequest,
+    ) -> StoreResult<sqlx::types::Json<Box<RawValue>>> {
+        validate_integers([Some(request.config_revision), request.admission_decision_ms])?;
         let observation = Self {
             request: Some(RequestContext {
                 config_revision: request.config_revision,
+                client_api_key_name_snapshot: request.client_api_key_name_snapshot.clone(),
                 protocol: request.protocol.clone(),
                 endpoint: request.endpoint.clone(),
                 client_ip: request.client_ip.clone(),
@@ -205,8 +211,23 @@ impl RequestObservation {
 
     pub(super) fn finalized(
         value: &ModelRequestFinalization,
-    ) -> StoreResult<sqlx::types::Json<Value>> {
+    ) -> StoreResult<sqlx::types::Json<Box<RawValue>>> {
         let timings = &value.timings;
+        validate_integers([
+            timings.transport_decision_wait_ms,
+            timings.connect_ms,
+            timings.headers_ms,
+            timings.first_event_ms,
+            timings.first_reasoning_ms,
+            timings.first_text_ms,
+            timings.first_token_ms,
+            timings.latency_ms,
+            timings.provider_processing_ms,
+            timings.upstream_response_ms,
+            value.upstream_connection_age_ms,
+            value.upstream_connection_idle_ms,
+            value.retry_after_ms,
+        ])?;
         // serde_json 会把非有限浮点数写成 null，先拒绝以免把非法指标伪装成缺失
         for value in [
             timings.upstream_api_overhead_ms,
@@ -278,44 +299,29 @@ impl RequestObservation {
         observation.encode()
     }
 
-    fn encode(self) -> StoreResult<sqlx::types::Json<Value>> {
-        let value = serde_json::to_value(self)
+    fn encode(self) -> StoreResult<sqlx::types::Json<Box<RawValue>>> {
+        // 类型化事实只编码一次，SQLx 复用原始 JSON 文本，避免 Value 树与第二次长度序列化
+        let text = serde_json::to_string(&self)
             .map_err(|source| invalid("encode request observation").with_source(source))?;
-        validate_numbers(&value)?;
-        if value.to_string().len() > 1024 * 1024 {
+        if text.len() > 1024 * 1024 {
             return Err(invalid("request observation exceed 1 MiB"));
         }
-        Ok(sqlx::types::Json(value))
+        RawValue::from_string(text)
+            .map(sqlx::types::Json)
+            .map_err(|source| invalid("encode request observation").with_source(source))
     }
 }
 
 // 整数指标保持 bigint 边界，官方专项计时允许毫秒小数
-fn validate_numbers(value: &Value) -> StoreResult<()> {
-    match value {
-        Value::Number(value) => {
-            let valid = match value.as_u64() {
-                Some(integer) => integer <= i64::MAX as u64,
-                None => value
-                    .as_f64()
-                    .is_some_and(|value| value >= 0.0 && value < i64::MAX as f64),
-            };
-            if !valid {
-                return Err(invalid(
-                    "request observation number exceeds supported range",
-                ));
-            }
-        }
-        Value::Object(values) => {
-            for value in values.values() {
-                validate_numbers(value)?;
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                validate_numbers(value)?;
-            }
-        }
-        _ => {}
+fn validate_integers(values: impl IntoIterator<Item = Option<u64>>) -> StoreResult<()> {
+    if values
+        .into_iter()
+        .flatten()
+        .any(|value| value > i64::MAX as u64)
+    {
+        return Err(invalid(
+            "request observation number exceeds supported range",
+        ));
     }
     Ok(())
 }

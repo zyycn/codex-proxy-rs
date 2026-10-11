@@ -750,12 +750,40 @@ const fn status_projection(status: AccountStatus) -> AccountStatusProjection {
     }
 }
 
+/// 选中账号时冻结的历史展示事实，不包含凭据与运行状态
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountHistorySnapshot {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    pub authentication_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_type_snapshot: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes_snapshot: Option<String>,
+}
+
+impl AccountHistorySnapshot {
+    #[must_use]
+    pub fn from_account(account: &crate::account::ProviderAccount) -> Self {
+        Self {
+            name: account.name().to_owned(),
+            email: account.email().map(str::to_owned),
+            authentication_kind: account.authentication_kind().to_owned(),
+            plan_type_snapshot: account.plan_type().map(str::to_owned),
+            notes_snapshot: account.notes().map(str::to_owned),
+        }
+    }
+}
+
 /// 账号持久事实；代理认证信息只通过显式 secret accessor 读取
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccount {
     id: ProviderAccountId,
     provider: ProviderKind,
     name: String,
+    notes: Option<String>,
     email: Option<String>,
     upstream_user_id: Option<String>,
     upstream_account_id: Option<String>,
@@ -793,6 +821,7 @@ impl ProviderAccount {
             id,
             provider,
             name,
+            notes: None,
             email: None,
             upstream_user_id,
             upstream_account_id: None,
@@ -813,6 +842,17 @@ impl ProviderAccount {
             outbound_proxy: None,
             request_location: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_notes(mut self, notes: Option<String>) -> Self {
+        self.notes = notes;
+        self
+    }
+
+    #[must_use]
+    pub fn notes(&self) -> Option<&str> {
+        self.notes.as_deref()
     }
 
     #[must_use]

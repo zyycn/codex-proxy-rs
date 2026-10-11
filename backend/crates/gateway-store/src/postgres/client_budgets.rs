@@ -346,6 +346,7 @@ async fn advance_windows(
     let weekly_end = timezone
         .days_after(now, 7)
         .ok_or_else(|| sqlx::Error::Protocol("invalid budget week end".to_owned()))?;
+    // Key 行锁仍串行化准入和结算；未滚动的窗口无需产生新元组与 WAL
     sqlx::query("insert into client_key_budget_windows
         (client_api_key_id, daily_start, daily_end, weekly_start, weekly_end)
         select $1, $4, $5, $4, $6
@@ -355,7 +356,9 @@ async fn advance_windows(
             daily_used_usd = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then 0 else client_key_budget_windows.daily_used_usd end,
             weekly_start = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then greatest(excluded.weekly_start, client_key_budget_windows.weekly_end, client_key_budget_windows.weekly_start) else client_key_budget_windows.weekly_start end,
             weekly_end = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then excluded.weekly_end else client_key_budget_windows.weekly_end end,
-            weekly_used_usd = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then 0 else client_key_budget_windows.weekly_used_usd end")
+            weekly_used_usd = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then 0 else client_key_budget_windows.weekly_used_usd end
+        where (client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3)
+            or (client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3)")
         .bind(key).bind(now).bind(used_at).bind(day).bind(daily_end).bind(weekly_end).execute(&mut **tx).await?;
     Ok(())
 }

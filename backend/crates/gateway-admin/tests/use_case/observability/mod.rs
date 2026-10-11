@@ -17,13 +17,13 @@ use gateway_admin::{
     model::{
         MutationContext, Revision,
         observability::{
-            AccountPoolMetrics, AttemptMetrics, CostCoverage, CurrencyCost, DashboardAccountUsage,
-            DashboardObservation, DashboardQuery, DashboardRuntimeSlots, DiagnosticDimension,
-            DiagnosticObservation, DiagnosticsObservation, Granularity, HealthStatus,
-            LatencyPercentiles, ObservabilityPageSize, OpsErrorPage, OpsErrorQuery,
+            AccountPoolMetrics, AnalyticsState, AttemptMetrics, CostCoverage, CurrencyCost,
+            DashboardAccountUsage, DashboardObservation, DashboardQuery, DashboardRuntimeSlots,
+            DiagnosticDimension, DiagnosticObservation, DiagnosticsObservation, Granularity,
+            HealthStatus, LatencyPercentiles, ObservabilityPageSize, OpsErrorPage, OpsErrorQuery,
             PercentileMilliseconds, RequestMetricPoint, RequestMetrics, TimeRange, TrendKind,
-            UsageBilling, UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageListRecord,
-            UsageOverview, UsagePage, UsageQuery,
+            UsageBilling, UsageDetail, UsageFilter, UsageInsightsObservation, UsageListRecord,
+            UsageOverview, UsagePage, UsageProjectedCostPoint, UsageQuery,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -300,7 +300,7 @@ async fn dashboard_summary_should_observe_current_accounts_for_a_historical_rang
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_coalesce_concurrent_requests_in_one_short_window() {
+async fn dashboard_summary_should_keep_distinct_exact_ranges_in_one_short_window() {
     let end_bucket = Utc::now().timestamp().div_euclid(2) * 2;
     let first_end = DateTime::from_timestamp(end_bucket, 100_000_000).expect("first end");
     let second_end = DateTime::from_timestamp(end_bucket, 900_000_000).expect("second end");
@@ -330,7 +330,7 @@ async fn dashboard_summary_should_coalesce_concurrent_requests_in_one_short_wind
 
     first.expect("first dashboard summary");
     second.expect("second dashboard summary");
-    assert_eq!(store.dashboard_summary_calls(), 1);
+    assert_eq!(store.dashboard_summary_calls(), 2);
 }
 
 #[tokio::test]
@@ -403,6 +403,7 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
         ..RequestMetrics::default()
     };
     store.replace_overview(UsageOverview {
+        analytics: Default::default(),
         range,
         requests: metrics.clone(),
         attempts: AttemptMetrics {
@@ -431,23 +432,13 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
                 .expect("bucket USD cost"),
         }],
     }]);
-    store.replace_calculated_billing_facts(vec![UsageCalculatedBillingFact {
-        breakdown: None,
+    store.replace_projected_costs(vec![UsageProjectedCostPoint {
         bucket_start: quarter_hour_start(now),
-        provider_kind: "openai".to_owned(),
-        upstream_model_id: "gpt-5.5".to_owned(),
-        service_tier: None,
-        input_tokens: Some(800),
-        output_tokens: Some(200),
-        cached_tokens: Some(0),
-        cache_write_tokens: Some(0),
-        total: CurrencyCost {
-            currency: "USD".to_owned(),
-            amount: gateway_admin::model::observability::DecimalAmount::from_str("1.25")
-                .expect("calculated total"),
-        },
+        standard_amount: Some("1".parse().expect("standard cost")),
+        no_cache_amount: Some("1.25".parse().expect("no-cache cost")),
     }]);
     store.replace_diagnostics(DiagnosticsObservation {
+        analytics: Default::default(),
         total_request_count: 4,
         items: vec![diagnostic("openai", 3), diagnostic("xai", 1)],
     });
@@ -543,6 +534,7 @@ async fn diagnostics_should_preserve_request_order_when_a_small_sample_fails() {
     failure.success_count = 0;
     failure.failure_count = 1;
     store.replace_diagnostics(DiagnosticsObservation {
+        analytics: Default::default(),
         total_request_count: 101,
         items: vec![success, failure],
     });
@@ -566,6 +558,7 @@ async fn diagnostics_should_use_the_total_before_truncating_groups() {
     let range = observation_range(Utc::now());
     let store = Arc::new(FixtureObservabilityStore::new(range));
     store.replace_diagnostics(DiagnosticsObservation {
+        analytics: Default::default(),
         total_request_count: 200,
         items: (0..100)
             .map(|index| diagnostic(&format!("model-{index}"), 1))
@@ -591,6 +584,7 @@ async fn diagnostics_should_count_each_retried_request_once() {
     item.retry_count = 6;
     item.retried_request_count = 2;
     store.replace_diagnostics(DiagnosticsObservation {
+        analytics: Default::default(),
         total_request_count: 8,
         items: vec![item],
     });
@@ -691,26 +685,16 @@ async fn usage_records_should_enrich_provider_reported_totals_when_pricing_match
 }
 
 #[tokio::test]
-async fn usage_insights_should_reject_partial_costs_when_billing_stream_fails() {
+async fn usage_insights_should_reject_partial_costs_when_insights_fail() {
     let now = Utc::now();
     let range = observation_range(now);
     let store = Arc::new(FixtureObservabilityStore::new(range));
-    store.replace_calculated_billing_facts(vec![UsageCalculatedBillingFact {
-        breakdown: None,
+    store.replace_projected_costs(vec![UsageProjectedCostPoint {
         bucket_start: quarter_hour_start(now),
-        provider_kind: "openai".to_owned(),
-        upstream_model_id: "gpt-5.5".to_owned(),
-        service_tier: None,
-        input_tokens: Some(800),
-        output_tokens: Some(200),
-        cached_tokens: Some(0),
-        cache_write_tokens: Some(0),
-        total: CurrencyCost {
-            currency: "USD".to_owned(),
-            amount: "1.25".parse().expect("cost"),
-        },
+        standard_amount: Some("1".parse().expect("standard cost")),
+        no_cache_amount: Some("1.25".parse().expect("no-cache cost")),
     }]);
-    store.billing_stream_fails.store(true, Ordering::SeqCst);
+    store.insights_fail.store(true, Ordering::SeqCst);
     let services = observability_services_with_calculated_billing(store).await;
     assert!(
         services
@@ -741,9 +725,9 @@ async fn dashboard_should_preserve_provider_plan_names() {
             success_count: 0,
             input_tokens: None,
             output_tokens: None,
-            cached_tokens: None,
-            cache_write_tokens: None,
-            reasoning_tokens: None,
+            cached_input_tokens: None,
+            cache_write_input_tokens: None,
+            reasoning_output_tokens: None,
             image_input_tokens: None,
             image_output_tokens: None,
             image_request_count: 0,
@@ -783,8 +767,9 @@ async fn dashboard_should_preserve_provider_plan_names() {
 struct FixtureObservabilityStore {
     trend: Mutex<Vec<RequestMetricPoint>>,
     overview: Mutex<UsageOverview>,
-    calculated_billing_facts: Mutex<Vec<UsageCalculatedBillingFact>>,
-    billing_stream_fails: AtomicBool,
+    projected_costs: Mutex<Vec<UsageProjectedCostPoint>>,
+    insights_fail: AtomicBool,
+    summary_fail: AtomicBool,
     diagnostics: Mutex<DiagnosticsObservation>,
     runtime_slots: Mutex<Option<DashboardRuntimeSlots>>,
     summary_observed_at: Mutex<Option<DateTime<Utc>>>,
@@ -794,6 +779,7 @@ struct FixtureObservabilityStore {
     account_usage: Mutex<Vec<DashboardAccountUsage>>,
     dashboard_delay: Mutex<StdDuration>,
     dashboard_summary_calls: AtomicUsize,
+    usage_summary_filters: Mutex<Vec<UsageFilter>>,
 }
 
 impl FixtureObservabilityStore {
@@ -801,13 +787,15 @@ impl FixtureObservabilityStore {
         Self {
             trend: Mutex::new(Vec::new()),
             overview: Mutex::new(UsageOverview {
+                analytics: Default::default(),
                 range,
                 requests: RequestMetrics::default(),
                 attempts: AttemptMetrics::default(),
                 providers: Vec::new(),
             }),
-            calculated_billing_facts: Mutex::new(Vec::new()),
-            billing_stream_fails: AtomicBool::new(false),
+            projected_costs: Mutex::new(Vec::new()),
+            insights_fail: AtomicBool::new(false),
+            summary_fail: AtomicBool::new(false),
             diagnostics: Mutex::new(DiagnosticsObservation::default()),
             runtime_slots: Mutex::new(None),
             summary_observed_at: Mutex::new(None),
@@ -817,6 +805,7 @@ impl FixtureObservabilityStore {
             account_usage: Mutex::new(Vec::new()),
             dashboard_delay: Mutex::new(StdDuration::ZERO),
             dashboard_summary_calls: AtomicUsize::new(0),
+            usage_summary_filters: Mutex::new(Vec::new()),
         }
     }
 
@@ -836,11 +825,8 @@ impl FixtureObservabilityStore {
         *self.overview.lock().expect("overview") = overview;
     }
 
-    fn replace_calculated_billing_facts(&self, facts: Vec<UsageCalculatedBillingFact>) {
-        *self
-            .calculated_billing_facts
-            .lock()
-            .expect("calculated billing facts") = facts;
+    fn replace_projected_costs(&self, facts: Vec<UsageProjectedCostPoint>) {
+        *self.projected_costs.lock().expect("projected costs") = facts;
     }
 
     fn replace_diagnostics(&self, diagnostics: DiagnosticsObservation) {
@@ -874,6 +860,7 @@ impl ObservabilityStore for FixtureObservabilityStore {
             tokio::time::sleep(dashboard_delay).await;
         }
         Ok(DashboardObservation {
+            analytics: self.overview.lock().expect("overview").analytics.clone(),
             range: query.range,
             totals: Default::default(),
             provider_accounts: AccountPoolMetrics::default(),
@@ -902,25 +889,29 @@ impl ObservabilityStore for FixtureObservabilityStore {
         Ok(self.trend.lock().expect("trend").clone())
     }
 
-    fn usage_calculated_billing_facts(
+    async fn analytics_cache_generation(&self) -> AdminStoreResult<u64> {
+        Ok(self.overview.lock().expect("overview").analytics.generation)
+    }
+
+    async fn usage_insights_observation(
         &self,
         _: TimeRange,
         _: UsageFilter,
         granularity: Granularity,
-    ) -> gateway_admin::ports::store::UsageCalculatedBillingStream<'_> {
+    ) -> AdminStoreResult<UsageInsightsObservation> {
         self.usage_granularities.lock().unwrap().push(granularity);
-        let facts = self
-            .calculated_billing_facts
-            .lock()
-            .expect("calculated billing facts")
-            .clone();
-        let error = self
-            .billing_stream_fails
-            .load(Ordering::SeqCst)
-            .then(|| Err(super::unavailable("billing stream failed")));
-        Box::pin(futures::stream::iter(
-            facts.into_iter().map(Ok).chain(error),
-        ))
+        if self.insights_fail.load(Ordering::SeqCst) {
+            return Err(super::unavailable("projection read failed"));
+        }
+        Ok(UsageInsightsObservation {
+            overview: self.overview.lock().expect("overview").clone(),
+            trend: self.trend.lock().expect("trend").clone(),
+            costs: self
+                .projected_costs
+                .lock()
+                .expect("projected costs")
+                .clone(),
+        })
     }
 
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {
@@ -938,8 +929,26 @@ impl ObservabilityStore for FixtureObservabilityStore {
         Err(super::unavailable("usage detail"))
     }
 
-    async fn usage_summary(&self, _: TimeRange, _: UsageFilter) -> AdminStoreResult<UsageOverview> {
-        Ok(self.overview.lock().expect("overview").clone())
+    async fn usage_summary(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+    ) -> AdminStoreResult<UsageOverview> {
+        self.usage_summary_filters
+            .lock()
+            .expect("summary filters")
+            .push(filter);
+        let delay = *self.dashboard_delay.lock().expect("query delay");
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        if self.summary_fail.load(Ordering::SeqCst) {
+            return Err(super::unavailable("projection summary failed"));
+        }
+        Ok(UsageOverview {
+            range,
+            ..self.overview.lock().expect("overview").clone()
+        })
     }
 
     async fn usage_diagnostics(
@@ -1114,9 +1123,9 @@ fn total_record(
         service_tier: None,
         input_tokens: Some(800),
         output_tokens: Some(200),
-        cached_tokens: Some(0),
-        cache_write_tokens: Some(0),
-        reasoning_tokens: Some(0),
+        cached_input_tokens: Some(0),
+        cache_write_input_tokens: Some(0),
+        reasoning_output_tokens: Some(0),
         image_input_tokens: None,
         image_output_tokens: None,
         total_tokens: Some(1_000),
@@ -1229,9 +1238,204 @@ async fn admin_selects_dashboard_defaults_and_matching_usage_buckets_at_range_bo
             .usage_insights(range, UsageFilter::default())
             .await
             .unwrap();
-        assert_eq!(
-            *store.usage_granularities.lock().unwrap(),
-            vec![expected, expected]
+        assert_eq!(*store.usage_granularities.lock().unwrap(), vec![expected]);
+    }
+}
+
+#[tokio::test]
+async fn usage_summary_cache_should_coalesce_identical_queries_and_invalidate_deleted_generation() {
+    let range = observation_range(Utc::now());
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    store.set_dashboard_delay(StdDuration::from_millis(20));
+    let services = observability_services(store.clone()).await;
+    let service = services.observability();
+    let filter = UsageFilter {
+        client_api_key_ref: Some("deleted-key".to_owned()),
+        ..Default::default()
+    };
+    let (first, second) = tokio::join!(
+        service.usage_summary(range, filter.clone()),
+        service.usage_summary(range, filter.clone()),
+    );
+    first.expect("first summary");
+    second.expect("coalesced summary");
+    assert_eq!(store.usage_summary_filters.lock().unwrap().len(), 1);
+    {
+        let mut overview = store.overview.lock().unwrap();
+        overview.analytics.generation = 1;
+        overview.requests.request_count = 7;
+    }
+    let refreshed = service
+        .usage_summary(range, filter)
+        .await
+        .expect("generation refresh");
+    assert_eq!(refreshed.overview.analytics.generation, 1);
+    assert_eq!(refreshed.overview.requests.request_count, 7);
+    assert_eq!(store.usage_summary_filters.lock().unwrap().len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn usage_summary_cache_should_coalesce_when_generation_advances_during_the_first_load() {
+    let range = observation_range(Utc::now());
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    store.set_dashboard_delay(StdDuration::from_millis(20));
+    let services = observability_services(store.clone()).await;
+    let service = services.observability();
+    let (first, second, ()) = tokio::join!(
+        service.usage_summary(range, UsageFilter::default()),
+        service.usage_summary(range, UsageFilter::default()),
+        async {
+            tokio::time::sleep(StdDuration::from_millis(5)).await;
+            store.overview.lock().unwrap().analytics.generation = 1;
+        },
+    );
+    assert_eq!(
+        first.expect("first summary").overview.analytics.generation,
+        1
+    );
+    assert_eq!(
+        second
+            .expect("coalesced summary")
+            .overview
+            .analytics
+            .generation,
+        1
+    );
+    assert_eq!(store.usage_summary_filters.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn usage_summary_cache_should_isolate_key_identity_and_normalize_group_sets() {
+    let range = observation_range(Utc::now());
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    let services = observability_services(store.clone()).await;
+    let service = services.observability();
+    for (key, groups) in [
+        ("key-a", vec!["deleted-b", "deleted-a", "deleted-b"]),
+        ("key-a", vec!["deleted-a", "deleted-b"]),
+        ("key-b", vec!["deleted-a", "deleted-b"]),
+        ("key-a", vec!["deleted-a"]),
+    ] {
+        service
+            .usage_summary(
+                range,
+                UsageFilter {
+                    client_api_key_ref: Some(key.to_owned()),
+                    routing_group_refs: groups.into_iter().map(str::to_owned).collect(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("isolated summary");
+    }
+    let calls = store.usage_summary_filters.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].routing_group_refs, ["deleted-a", "deleted-b"]);
+    assert_eq!(calls[1].client_api_key_ref.as_deref(), Some("key-b"));
+    assert_eq!(calls[2].routing_group_refs, ["deleted-a"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn usage_summary_cache_should_bound_waiting_after_failed_refresh_and_allow_recovery() {
+    let range = observation_range(Utc::now());
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    store.set_dashboard_delay(StdDuration::from_secs(7));
+    store.summary_fail.store(true, Ordering::SeqCst);
+    let services = observability_services(store.clone()).await;
+    let service = services.observability();
+    let started = tokio::time::Instant::now();
+    let (first, second, third, fourth) = tokio::join!(
+        service.usage_summary(range, UsageFilter::default()),
+        service.usage_summary(range, UsageFilter::default()),
+        service.usage_summary(range, UsageFilter::default()),
+        service.usage_summary(range, UsageFilter::default()),
+    );
+    assert!(first.is_err() && second.is_err() && third.is_err() && fourth.is_err());
+    assert!(
+        started.elapsed() <= StdDuration::from_secs(10),
+        "同键失败不能使后续请求逐个等待完整数据库超时: {:?}",
+        started.elapsed()
+    );
+
+    store.summary_fail.store(false, Ordering::SeqCst);
+    store.set_dashboard_delay(StdDuration::ZERO);
+    service
+        .usage_summary(range, UsageFilter::default())
+        .await
+        .expect("cancelled cache refresh releases its slot for recovery");
+}
+
+#[tokio::test(start_paused = true)]
+async fn insights_cache_should_bound_stale_lifetime_without_renewing_failed_refreshes() {
+    let range = observation_range(Utc::now());
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    {
+        let mut overview = store.overview.lock().unwrap();
+        overview.analytics.state = AnalyticsState::Ready;
+        overview.analytics.generated_at = Utc::now();
+        overview.analytics.lag_seconds = 7;
+        overview.requests.request_count = 19;
+    }
+    let services = observability_services(store.clone()).await;
+    let service = services.observability();
+    service
+        .usage_insights(range, UsageFilter::default())
+        .await
+        .unwrap();
+    store.insights_fail.store(true, Ordering::SeqCst);
+    tokio::time::advance(StdDuration::from_secs(16)).await;
+    let stale = service
+        .usage_insights(range, UsageFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(stale.analytics.state, AnalyticsState::Stale);
+    assert!(stale.analytics.lag_seconds >= 7);
+    assert_eq!(stale.health.total_requests, 19);
+    tokio::time::advance(StdDuration::from_secs(45)).await;
+    assert!(
+        service
+            .usage_insights(range, UsageFilter::default())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn insights_cache_should_reject_deleted_building_and_old_generation_times() {
+    for reason in ["deleted", "building", "generated-too-long-ago"] {
+        let range = observation_range(Utc::now());
+        let store = Arc::new(FixtureObservabilityStore::new(range));
+        {
+            let mut overview = store.overview.lock().unwrap();
+            overview.analytics.state = if reason == "building" {
+                AnalyticsState::Building
+            } else {
+                AnalyticsState::Ready
+            };
+            overview.analytics.generated_at = Utc::now()
+                - Duration::seconds(if reason == "generated-too-long-ago" {
+                    61
+                } else {
+                    0
+                });
+        }
+        let services = observability_services(store.clone()).await;
+        let service = services.observability();
+        service
+            .usage_insights(range, UsageFilter::default())
+            .await
+            .unwrap();
+        store.insights_fail.store(true, Ordering::SeqCst);
+        if reason == "deleted" {
+            store.overview.lock().unwrap().analytics.generation += 1;
+        }
+        tokio::time::advance(StdDuration::from_secs(16)).await;
+        assert!(
+            service
+                .usage_insights(range, UsageFilter::default())
+                .await
+                .is_err(),
+            "{reason}"
         );
     }
 }

@@ -49,6 +49,7 @@ pub(super) fn config(secret: ClientKeySecret) -> ConfigView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct OverviewView {
+    analytics: crate::admin::observability::AnalyticsView,
     as_of: DateTime<Utc>,
     as_of_display: String,
     start_time: DateTime<Utc>,
@@ -82,9 +83,9 @@ struct MetricsView {
     requests: u64,
     input_tokens: u64,
     output_tokens: u64,
-    cached_tokens: u64,
-    cache_write_tokens: u64,
-    reasoning_tokens: u64,
+    cached_input_tokens: u64,
+    cache_write_input_tokens: u64,
+    reasoning_output_tokens: u64,
     total_tokens: u64,
     cost_usd: Option<String>,
     cost_incomplete: bool,
@@ -95,9 +96,9 @@ fn metrics(value: &RequestMetrics, costs: &[CurrencyCost], coverage: &CostCovera
         requests: value.request_count,
         input_tokens: value.input_tokens,
         output_tokens: value.output_tokens,
-        cached_tokens: value.cached_tokens,
-        cache_write_tokens: value.cache_write_tokens,
-        reasoning_tokens: value.reasoning_tokens,
+        cached_input_tokens: value.cached_input_tokens,
+        cache_write_input_tokens: value.cache_write_input_tokens,
+        reasoning_output_tokens: value.reasoning_output_tokens,
         total_tokens: value.total_tokens,
         cost_usd: costs
             .iter()
@@ -121,6 +122,10 @@ struct TrendPointView {
 pub(super) fn overview(value: KeyUsageOverview, time: crate::time::TimePresenter) -> OverviewView {
     let key = value.key;
     OverviewView {
+        analytics: crate::admin::observability::analytics_view(
+            value.overview.analytics.clone(),
+            time,
+        ),
         as_of: value.overview.range.end,
         as_of_display: time.time(&value.overview.range.end),
         start_time: value.overview.range.start,

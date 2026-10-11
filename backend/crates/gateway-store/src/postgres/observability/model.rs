@@ -39,6 +39,7 @@ pub(crate) fn observability_page_offset(
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UsageRecordFilter {
+    pub routing_group_refs: Vec<String>,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_account_ref: Option<String>,
@@ -75,6 +76,7 @@ impl UsageRecordFilter {
         ] {
             validate_optional_text(value, MAX_FILTER_BYTES, field)?;
         }
+        validate_account_ids_if_present(&self.routing_group_refs)?;
         validate_optional_text(self.search.as_deref(), MAX_SEARCH_BYTES, "search filter")?;
         if self
             .status_code
@@ -103,6 +105,14 @@ pub struct UsageRecordQuery {
 pub use gateway_admin::model::observability::OpsErrorFilter;
 
 pub(crate) fn validate_ops_error_filter(filter: &OpsErrorFilter) -> StoreResult<()> {
+    if filter.routing_group_refs.len() > 32
+        || filter.routing_group_refs.iter().any(|value| {
+            value.is_empty() || value.len() > 128 || value.chars().any(char::is_control)
+        })
+    {
+        return Err(invalid("invalid routing group filter"));
+    }
+
     for (value, field) in [
         (
             filter.client_api_key_ref.as_deref(),
@@ -198,8 +208,8 @@ pub struct CalculatedUsageBillingFact {
     pub service_tier: Option<String>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
     pub total: CurrencyCostTotal,
 }
 
@@ -219,9 +229,9 @@ pub struct ProviderAccountUsageObservation {
     pub success_count: u64,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     pub image_request_count: u64,
@@ -241,9 +251,9 @@ pub struct ProviderAccountModelUsageObservation {
     pub success_count: u64,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     pub image_request_count: u64,
@@ -311,6 +321,7 @@ pub use gateway_admin::model::observability::DashboardTotals;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DashboardObservation {
+    pub analytics: admin_observability::AnalyticsMetadata,
     pub range: ObservabilityRange,
     pub totals: DashboardTotals,
     pub provider_accounts: ProviderAccountMetrics,
@@ -335,6 +346,7 @@ pub use gateway_admin::model::observability::ProviderObservation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageOverview {
+    pub analytics: admin_observability::AnalyticsMetadata,
     pub range: ObservabilityRange,
     pub requests: RequestMetrics,
     pub attempts: AttemptMetrics,
@@ -343,6 +355,7 @@ pub struct UsageOverview {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiagnosticsObservation {
+    pub analytics: admin_observability::AnalyticsMetadata,
     pub total_request_count: u64,
     pub items: Vec<DiagnosticObservation>,
 }
@@ -371,3 +384,10 @@ pub struct DiagnosticObservation {
 pub use gateway_admin::model::observability::OpsError as OpsErrorRecord;
 
 pub use gateway_admin::model::observability::OpsErrorPage;
+
+fn validate_account_ids_if_present(ids: &[String]) -> StoreResult<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    validate_account_ids(ids)
+}

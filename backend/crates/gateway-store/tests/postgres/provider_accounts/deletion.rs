@@ -9,10 +9,10 @@ use super::{
 async fn seed_history(pool: &sqlx::PgPool, account_id: &str, count: i32) {
     sqlx::query(
         "insert into model_requests (
-           id, client_api_key_ref, provider_account_id, provider_account_ref, provider_kind,
-           operation, client_transport, started_at, deadline_at, outcome, completed_at,
+           id, client_api_key_ref, provider_account_ref, provider_kind,
+           operation, client_transport, started_at, recovery_lease_expires_at, outcome, completed_at,
            input_tokens, output_tokens, total_tokens, request_observation_json
-         ) select $1 || '_' || n, 'historical_key', $1, $1, 'openai', 'responses', 'http_sse',
+         ) select $1 || '_' || n, 'historical_key', $1, 'openai', 'responses', 'http_sse',
            now(), now() + interval '1 hour', 'failed', now(), 10, 5, 15,
            jsonb_build_object(
              'request', jsonb_build_object('configRevision', 1, 'protocol', 'openai',
@@ -43,8 +43,8 @@ async fn bulk_account_deletion_preserves_large_history_and_commits_one_revision_
             .unwrap();
         seed_history(&db.pool, id, count).await;
     }
-    // 保存全部历史字段，只允许本次删除解除选中账号的实时外键引用
-    sqlx::query("create table history_before as select * from model_requests")
+    // 配置删除不触碰任何历史字段与物理行版本
+    sqlx::query("create table history_before as select id, ctid::text as tuple_id, xmin::text as tuple_version, to_jsonb(r) as facts from model_requests r")
         .execute(&db.pool)
         .await
         .unwrap();
@@ -66,10 +66,9 @@ async fn bulk_account_deletion_preserves_large_history_and_commits_one_revision_
     assert_eq!(account_count(&db.pool, "keep").await, 1);
     let changed_history: i64 = sqlx::query_scalar(
         "select count(*) from history_before b full join model_requests r using (id)
-         where (to_jsonb(b) - 'provider_account_id') is distinct from
-               (to_jsonb(r) - 'provider_account_id')
-            or r.provider_account_id is distinct from
-               case when b.provider_account_id = 'keep' then 'keep' else null end",
+         where b.facts is distinct from to_jsonb(r)
+            or b.tuple_id is distinct from r.ctid::text
+            or b.tuple_version is distinct from r.xmin::text",
     )
     .fetch_one(&db.pool)
     .await
@@ -110,7 +109,7 @@ async fn invalid_bulk_deletion_rolls_back_accounts_history_revision_and_audit() 
     assert_eq!(account_count(&db.pool, "keep").await, 1);
     assert_eq!(current_revision(&db.pool).await, before_revision);
     let retained: i64 = sqlx::query_scalar(
-        "select count(*) from model_requests where provider_account_id = 'keep'",
+        "select count(*) from model_requests where provider_account_ref = 'keep'",
     )
     .fetch_one(&db.pool)
     .await

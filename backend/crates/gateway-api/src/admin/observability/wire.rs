@@ -18,17 +18,17 @@ pub struct PageData<T> {
 pub struct TokenDetailsView {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
     pub input_tokens_display: String,
     pub output_tokens_display: String,
-    pub cached_tokens_display: String,
-    pub cache_write_tokens_display: String,
-    pub reasoning_tokens_display: String,
+    pub cached_input_tokens_display: String,
+    pub cache_write_input_tokens_display: String,
+    pub reasoning_output_tokens_display: String,
     pub image_input_tokens_display: String,
     pub image_output_tokens_display: String,
     pub total_tokens_display: String,
@@ -162,9 +162,9 @@ pub struct UsageRecordView {
     pub latency_ms: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     pub message: String,
@@ -258,7 +258,7 @@ pub struct UsageAttemptView {
     pub estimated_cost_currency: Option<String>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
     pub first_token_ms: Option<u64>,
     pub latency_ms: Option<u64>,
@@ -288,6 +288,7 @@ pub struct UsageRecordDetailView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrendData {
+    pub analytics: AnalyticsView,
     pub kind: TrendKind,
     pub points: Vec<TrendPointView>,
     pub summary: Vec<TrendSummaryView>,
@@ -306,8 +307,8 @@ pub struct TrendPointView {
     pub input_tokens_value: u64,
     pub output_tokens: String,
     pub output_tokens_value: u64,
-    pub cached_tokens: String,
-    pub cached_tokens_value: u64,
+    pub cached_input_tokens: String,
+    pub cached_input_tokens_value: u64,
     pub cache_hit_rate_value: f64,
     pub tokens_value: u64,
     pub errors: String,
@@ -388,7 +389,7 @@ pub struct DashboardCacheCardView {
     pub today_hit_rate_value: Option<f64>,
     pub yesterday_hit_rate_value: Option<f64>,
     pub total_hit_rate: String,
-    pub total_cached_tokens: String,
+    pub total_cached_input_tokens: String,
     pub average_first_token_latency_ms: String,
 }
 
@@ -446,9 +447,9 @@ pub struct RequestMetricsView {
     pub caller_error_count: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cached_tokens: u64,
-    pub cache_write_tokens: u64,
-    pub reasoning_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub cache_write_input_tokens: u64,
+    pub reasoning_output_tokens: u64,
     pub total_tokens: u64,
 }
 
@@ -575,6 +576,7 @@ impl From<domain::DesktopReleaseStatus> for DashboardDesktopReleaseStatusView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardDataView {
+    pub analytics: AnalyticsView,
     pub as_of: DateTime<Utc>,
     pub as_of_display: String,
     pub cards: DashboardCardsView,
@@ -592,11 +594,12 @@ pub struct DashboardDataView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageSummaryView {
+    pub analytics: AnalyticsView,
     pub total_requests: String,
     pub input_tokens: String,
     pub output_tokens: String,
-    pub cached_tokens: String,
-    pub cache_write_tokens: String,
+    pub cached_input_tokens: String,
+    pub cache_write_input_tokens: String,
     pub total_tokens: String,
     pub average_latency_ms: String,
     pub logical_requests: RequestMetricsView,
@@ -693,7 +696,7 @@ pub struct OverviewCostPointView {
     pub label: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     pub total_tokens: u64,
     pub estimated_cost: Option<String>,
     pub standard_cost: Option<String>,
@@ -719,7 +722,7 @@ pub struct OverviewCostView {
     pub cache_hit_request_rate: Option<f64>,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     pub total_tokens: u64,
     pub points: Vec<OverviewCostPointView>,
     pub costs: Vec<CostView>,
@@ -741,6 +744,7 @@ pub struct ProviderOverviewView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageInsightsOverviewView {
+    pub analytics: AnalyticsView,
     pub granularity: String,
     pub health: OverviewHealthView,
     pub performance: OverviewPerformanceView,
@@ -778,6 +782,7 @@ pub struct DiagnosticItemView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsView {
+    pub analytics: AnalyticsView,
     pub dimension: String,
     pub items: Vec<DiagnosticItemView>,
 }
@@ -851,4 +856,21 @@ pub struct OpsErrorMetadataView {
     pub recovery_attempt_count: u32,
     pub recovery_retry_delay_ms: Option<u64>,
     pub recovery_total_latency_ms: Option<u64>,
+}
+
+/// 统计覆盖、新鲜度与近似口径，时间文案使用部署时区
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsView {
+    pub coverage_start: Option<DateTime<Utc>>,
+    pub coverage_start_display: Option<String>,
+    pub coverage_end: Option<DateTime<Utc>>,
+    pub coverage_end_display: Option<String>,
+    pub generated_at: DateTime<Utc>,
+    pub generated_at_display: String,
+    pub lag_seconds: u64,
+    pub state: String,
+    pub percentiles_approximate: bool,
+    pub schema_version: u32,
+    pub histogram_version: u32,
 }

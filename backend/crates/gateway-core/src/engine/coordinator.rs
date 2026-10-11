@@ -1316,11 +1316,11 @@ where
             ));
         }
         let attempt_record = AttemptRecord {
+            account_snapshot: metadata.account_snapshot().cloned(),
             request_id: self.request_id.clone(),
             attempt_count: next_attempt,
             trigger,
             provider_kind: metadata.provider().clone(),
-            provider_account_id: Some(metadata.provider_account_id().clone()),
             provider_account_ref: Some(metadata.provider_account_id().clone()),
             upstream_model_id: metadata.upstream_model().cloned(),
             upstream_transport: metadata.transport().as_str().to_owned(),
@@ -1701,6 +1701,7 @@ where
                     self.engine
                         .store()
                         .record_intermediate_failure(IntermediateFailure {
+                            account_snapshot: current.metadata.account_snapshot().cloned(),
                             request_id: self.request_id.clone(),
                             attempt_index: current.index,
                             trigger: current.trigger,

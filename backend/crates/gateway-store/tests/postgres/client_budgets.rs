@@ -77,6 +77,107 @@ fn context() -> MutationContext {
 }
 
 #[tokio::test]
+async fn open_budget_windows_only_write_for_new_charges() {
+    let Some(database) = TestDatabase::create("budget_window_writes").await else {
+        return;
+    };
+    sqlx::raw_sql(
+        "create table budget_window_writes (operation text not null);
+        create function record_budget_window_write() returns trigger language plpgsql as $$
+        begin
+            insert into budget_window_writes (operation) values (tg_op);
+            return new;
+        end $$;
+        create trigger record_budget_window_write after insert or update
+            on client_key_budget_windows for each row
+            execute function record_budget_window_write();",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let first = PgClientBudgetStore::new(database.pool.clone());
+    let second = PgClientBudgetStore::new(database.pool.clone());
+    for (key, limit) in [("unlimited", "0"), ("limited", "10")] {
+        seed(&database, key, limit, limit).await;
+        first.admit(key_id(key)).await.unwrap();
+        for _ in 0..4 {
+            let (a, b) = tokio::join!(first.admit(key_id(key)), second.admit(key_id(key)));
+            a.unwrap();
+            b.unwrap();
+        }
+        let billed = charge(key, key, "0.25");
+        let (a, b) = tokio::join!(first.settle(billed.clone()), second.settle(billed));
+        a.unwrap();
+        b.unwrap();
+        let budget = status(&database, key).await;
+        assert_eq!(budget.daily_used_usd.canonical(), "0.25");
+        assert_eq!(budget.weekly_used_usd.canonical(), "0.25");
+    }
+    let writes: (i64, i64) = sqlx::query_as(
+        "select count(*) filter (where operation = 'INSERT'),
+            count(*) filter (where operation = 'UPDATE') from budget_window_writes",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        writes,
+        (2, 2),
+        "only creation and amount accumulation write rows"
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn indexed_charge_cleanup_keeps_other_keys_and_rolls_back_with_key_deletion() {
+    let Some(database) = TestDatabase::create("budget_key_cleanup").await else {
+        return;
+    };
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    for key in ["deleted", "retained"] {
+        seed(&database, key, "0", "0").await;
+        store.settle(charge(key, key, "1.25")).await.unwrap();
+    }
+    let mut tx = database.pool.begin().await.unwrap();
+    sqlx::query("delete from client_api_keys where id = 'deleted'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let remaining: Vec<String> = sqlx::query_scalar(
+        "select client_api_key_id from client_key_charge_events order by client_api_key_id",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(remaining, ["retained"]);
+    tx.rollback().await.unwrap();
+    let restored: i64 = sqlx::query_scalar("select count(*) from client_key_charge_events")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(restored, 2);
+    sqlx::query("delete from client_api_keys where id = 'deleted'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        status(&database, "retained")
+            .await
+            .daily_used_usd
+            .canonical(),
+        "1.25"
+    );
+    let remaining: Vec<String> = sqlx::query_scalar(
+        "select client_api_key_id from client_key_charge_events order by client_api_key_id",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, ["retained"]);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn unopened_future_budget_windows_do_not_report_usage_or_reset_times() {
     let Some(database) = TestDatabase::create("budget_unopened_future").await else {
         return;

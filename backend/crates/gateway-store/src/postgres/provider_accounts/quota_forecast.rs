@@ -43,7 +43,7 @@ pub(super) async fn load_history(
             tokens: window_usage_count(row, "tokens")?,
             input_tokens: window_usage_count(row, "input_tokens")?,
             output_tokens: window_usage_count(row, "output_tokens")?,
-            cached_tokens: window_usage_count(row, "cached_tokens")?,
+            cached_input_tokens: window_usage_count(row, "cached_input_tokens")?,
             missing_token_count: window_usage_count(row, "missing_token_count")?,
             known_cost_count: window_usage_count(row, "known_cost_count")?,
             unavailable_cost_count: window_usage_count(row, "unavailable_cost_count")?,
@@ -79,7 +79,7 @@ fn history_sql() -> String {
                    mr.completed_at <= $3 and mr.outcome <> 'running' as settled,
                    coalesce(({completed_usage}), false) as included,
                    mr.provider_observation_json is not null as has_document,
-                   mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.total_tokens,
+                   mr.input_tokens, mr.output_tokens, mr.cached_input_tokens, mr.total_tokens,
                    mr.cost_amount, mr.cost_currency,
                    coalesce(mr.cost_source in ('calculated', 'provider_reported')
                      and mr.cost_amount is not null and mr.cost_currency = 'USD', false) as known_cost
@@ -93,7 +93,7 @@ fn history_sql() -> String {
                   coalesce(input_tokens, 0) + coalesce(output_tokens, 0)) else 0 end as tokens,
                 case when included and settled then coalesce(input_tokens, 0) else 0 end as inputs,
                 case when included and settled then coalesce(output_tokens, 0) else 0 end as outputs,
-                case when included and settled then coalesce(cached_tokens, 0) else 0 end as cached,
+                case when included and settled then coalesce(cached_input_tokens, 0) else 0 end as cached,
                 (included and settled and total_tokens is null
                   and (input_tokens is null or output_tokens is null))::integer as missing_tokens,
                 (included and settled and known_cost)::integer as known_costs,
@@ -109,7 +109,7 @@ fn history_sql() -> String {
                 sum(tokens) over w as tokens,
                 sum(inputs) over w as input_tokens,
                 sum(outputs) over w as output_tokens,
-                sum(cached) over w as cached_tokens,
+                sum(cached) over w as cached_input_tokens,
                 sum(missing_tokens) over w as missing_token_count,
                 sum(known_costs) over w as known_cost_count,
                 sum(missing_costs) over w as unavailable_cost_count,
@@ -123,7 +123,7 @@ fn history_sql() -> String {
         )
         select false as is_total, s.started_at, s.completed_at,
             s.request_count::bigint, s.tokens::bigint, s.input_tokens::bigint,
-            s.output_tokens::bigint, s.cached_tokens::bigint, s.missing_token_count::bigint,
+            s.output_tokens::bigint, s.cached_input_tokens::bigint, s.missing_token_count::bigint,
             s.known_cost_count::bigint, s.unavailable_cost_count::bigint,
             s.usd::double precision, s.excluded_request_count::bigint,
             0::bigint as pending_count, mr.provider_observation_json as document

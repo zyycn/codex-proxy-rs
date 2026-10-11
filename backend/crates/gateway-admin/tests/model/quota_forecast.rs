@@ -32,9 +32,9 @@ fn window(key: &str, days: u64) -> ProviderQuotaWindow {
             success_count: 10,
             input_tokens: Some(900),
             output_tokens: Some(100),
-            cached_tokens: Some(800),
-            cache_write_tokens: None,
-            reasoning_tokens: None,
+            cached_input_tokens: Some(800),
+            cache_write_input_tokens: None,
+            reasoning_output_tokens: None,
             image_input_tokens: None,
             image_output_tokens: None,
             image_request_count: 0,
@@ -84,7 +84,7 @@ fn samples(quota: &ProviderQuota) -> Vec<QuotaForecastSample> {
                 tokens: usage.total_tokens.unwrap_or(0),
                 input_tokens: usage.input_tokens.unwrap_or(0),
                 output_tokens: usage.output_tokens.unwrap_or(0),
-                cached_tokens: usage.cached_tokens.unwrap_or(0),
+                cached_input_tokens: usage.cached_input_tokens.unwrap_or(0),
                 missing_token_count: u64::from(usage.total_tokens.is_none()),
                 known_cost_count: if usd.is_some() {
                     usage.cost_coverage.known_count()

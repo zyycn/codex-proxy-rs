@@ -1,7 +1,5 @@
 //! Pg 观测查询与 Admin 观测端口适配
 
-use futures::{StreamExt, TryStreamExt, stream::BoxStream};
-use gateway_admin::ports::store::UsageCalculatedBillingStream;
 use gateway_core::provider_ports::ProviderCooldownPort;
 use std::sync::Arc;
 
@@ -171,7 +169,6 @@ impl PgObservabilityRepository {
         observed_at: DateTime<Utc>,
     ) -> StoreResult<DashboardObservation> {
         let range = store_range(query.range)?;
-        let filter = UsageRecordFilter::default();
         let account_usage_query = ProviderAccountUsageQuery::recent(range, query.account_limit)?
             .with_hourly_request_buckets()?;
         let recent_query = UsageRecordQuery {
@@ -181,36 +178,39 @@ impl PgObservabilityRepository {
             page_size: ObservabilityPageSize::new(query.recent_request_limit)
                 .map_err(|_| invalid("invalid dashboard page size"))?,
         };
-        // 每条 SQL 独立取一个全局观测槽位，避免整包预留造成队头阻塞
-        let (totals, (provider_accounts, normal_accounts)) = futures::try_join!(
-            self.query_budget.run(
-                "load dashboard lifetime totals",
-                dashboard_totals(&self.pool)
-            ),
-            self.account_status_snapshot(observed_at),
-        )?;
-        let (trend, account_usage, recent_requests, runtime_slots) = futures::try_join!(
-            self.query_budget.run(
-                "load dashboard request trend",
-                dashboard_request_metric_series(
-                    &self.pool,
-                    range,
-                    &filter,
-                    query.granularity,
-                    self.timezone
-                ),
-            ),
-            self.query_budget.run(
-                "load dashboard account usage",
-                provider_account_usage(&self.pool, account_usage_query),
-            ),
-            self.query_budget
-                .run("load dashboard recent requests", async {
-                    list_usage_record_items(&self.pool, &recent_query).await
-                }),
-            self.dashboard_runtime_slots(&normal_accounts),
-        )?;
+        let (totals, trend, analytics, account_usage) = self
+            .query_budget
+            .run("load dashboard analytics", async {
+                let mut snapshot = analytics::AnalyticsSnapshot::new(&self.pool).await?;
+                let totals = snapshot.totals().await?;
+                let trend = snapshot
+                    .trend(
+                        range,
+                        &UsageRecordFilter::default(),
+                        query.granularity,
+                        self.timezone,
+                        false,
+                    )
+                    .await?;
+                let account_usage =
+                    provider_account_usage(&mut snapshot.tx, account_usage_query).await?;
+                let metadata = snapshot.metadata();
+                snapshot.finish().await?;
+                Ok((totals, trend, metadata, account_usage))
+            })
+            .await?;
+        let (provider_accounts, normal_accounts) =
+            self.account_status_snapshot(observed_at).await?;
+        let recent_requests = self
+            .query_budget
+            .run(
+                "load dashboard recent requests",
+                list_usage_record_items(&self.pool, &recent_query),
+            )
+            .await?;
+        let runtime_slots = self.dashboard_runtime_slots(&normal_accounts).await?;
         Ok(DashboardObservation {
+            analytics,
             range,
             totals,
             provider_accounts,
@@ -227,16 +227,20 @@ impl PgObservabilityRepository {
         granularity: admin_observability::Granularity,
     ) -> StoreResult<Vec<RequestMetricPoint>> {
         self.query_budget
-            .run(
-                "load dashboard request trend",
-                dashboard_request_metric_series(
-                    &self.pool,
-                    range,
-                    &UsageRecordFilter::default(),
-                    granularity,
-                    self.timezone,
-                ),
-            )
+            .run("load dashboard analytics trend", async {
+                let mut snapshot = analytics::AnalyticsSnapshot::new(&self.pool).await?;
+                let points = snapshot
+                    .trend(
+                        range,
+                        &UsageRecordFilter::default(),
+                        granularity,
+                        self.timezone,
+                        false,
+                    )
+                    .await?;
+                snapshot.finish().await?;
+                Ok(points)
+            })
             .await
     }
 
@@ -247,23 +251,42 @@ impl PgObservabilityRepository {
         granularity: admin_observability::Granularity,
     ) -> StoreResult<Vec<RequestMetricPoint>> {
         self.query_budget
-            .run(
-                "load usage request trend",
-                request_metric_series(&self.pool, range, &filter, granularity, self.timezone),
-            )
+            .run("load analytics trend", async {
+                let mut snapshot = analytics::AnalyticsSnapshot::new(&self.pool).await?;
+                let points = snapshot
+                    .trend(range, &filter, granularity, self.timezone, true)
+                    .await?;
+                snapshot.finish().await?;
+                Ok(points)
+            })
             .await
     }
 
-    pub fn usage_calculated_billing_facts(
+    pub async fn usage_insights_observation(
         &self,
         range: ObservabilityRange,
         filter: UsageRecordFilter,
         granularity: admin_observability::Granularity,
-    ) -> BoxStream<'_, StoreResult<CalculatedUsageBillingFact>> {
-        self.query_budget.run_stream(
-            "load calculated usage billing facts",
-            calculated_usage_billing_facts(&self.pool, range, filter, granularity, self.timezone),
-        )
+    ) -> StoreResult<admin_observability::UsageInsightsObservation> {
+        self.query_budget
+            .run("load usage insights snapshot", async {
+                let mut snapshot = analytics::AnalyticsSnapshot::new(&self.pool).await?;
+                let mut overview = snapshot.overview(range, &filter).await?;
+                let trend = snapshot
+                    .trend(range, &filter, granularity, self.timezone, true)
+                    .await?;
+                let costs = snapshot
+                    .projected_costs(range, &filter, granularity, self.timezone)
+                    .await?;
+                overview.analytics = snapshot.metadata();
+                snapshot.finish().await?;
+                Ok(admin_observability::UsageInsightsObservation {
+                    overview: admin_usage_overview(overview),
+                    trend: trend.into_iter().map(admin_request_metric_point).collect(),
+                    costs,
+                })
+            })
+            .await
     }
 
     pub async fn provider_account_usage(
@@ -271,10 +294,16 @@ impl PgObservabilityRepository {
         query: ProviderAccountUsageQuery,
     ) -> StoreResult<Vec<ProviderAccountUsageObservation>> {
         self.query_budget
-            .run(
-                "load provider account usage",
-                provider_account_usage(&self.pool, query),
-            )
+            .run("load provider account usage", async {
+                let mut snapshot = analytics::AnalyticsSnapshot::new(&self.pool).await?;
+                snapshot.require_visible(Some(query.range)).await?;
+                if let Some(range) = query.request_bucket_range {
+                    snapshot.require_visible(Some(range)).await?;
+                }
+                let usage = provider_account_usage(&mut snapshot.tx, query).await?;
+                snapshot.finish().await?;
+                Ok(usage)
+            })
             .await
     }
 
@@ -301,34 +330,14 @@ impl PgObservabilityRepository {
         range: ObservabilityRange,
         filter: UsageRecordFilter,
     ) -> StoreResult<UsageOverview> {
-        filter.validate()?;
-        let requests = self
-            .query_budget
-            .run(
-                "load usage request metrics",
-                request_metrics(&self.pool, range, &filter),
-            )
-            .await?;
-        let attempts = self
-            .query_budget
-            .run(
-                "load usage attempt metrics",
-                attempt_metrics(&self.pool, range, &filter),
-            )
-            .await?;
-        let providers = self
-            .query_budget
-            .run(
-                "load usage provider observations",
-                provider_observations(&self.pool, range, &filter),
-            )
-            .await?;
-        Ok(UsageOverview {
-            range,
-            requests,
-            attempts,
-            providers,
-        })
+        self.query_budget
+            .run("load usage analytics", async {
+                let mut snapshot = analytics::AnalyticsSnapshot::new(&self.pool).await?;
+                let overview = snapshot.overview(range, &filter).await?;
+                snapshot.finish().await?;
+                Ok(overview)
+            })
+            .await
     }
 
     pub async fn usage_diagnostics(
@@ -339,10 +348,14 @@ impl PgObservabilityRepository {
         limit: u16,
     ) -> StoreResult<DiagnosticsObservation> {
         self.query_budget
-            .run(
-                "load usage diagnostics",
-                usage_diagnostics(&self.pool, range, &filter, dimension, limit),
-            )
+            .run("load analytics diagnostics", async {
+                let mut snapshot = analytics::AnalyticsSnapshot::new(&self.pool).await?;
+                let observation = snapshot
+                    .diagnostics(range, &filter, dimension, limit)
+                    .await?;
+                snapshot.finish().await?;
+                Ok(observation)
+            })
             .await
     }
 
@@ -355,6 +368,22 @@ impl PgObservabilityRepository {
 
 #[async_trait]
 impl AdminObservabilityStore for PgAdminObservabilityStore {
+    async fn analytics_cache_generation(&self) -> AdminStoreResult<u64> {
+        self.repository
+            .query_budget
+            .run("read analytics cache generation", async {
+                let generation: i64 = sqlx::query_scalar(
+                    "select generation from request_analytics_build_state where singleton",
+                )
+                .fetch_one(&self.repository.pool)
+                .await
+                .map_err(|error| postgres_unavailable("read analytics cache generation", error))?;
+                u64::try_from(generation).map_err(|_| invalid("invalid analytics generation"))
+            })
+            .await
+            .map_err(observability_error)
+    }
+
     async fn dashboard_summary(
         &self,
         query: admin_observability::DashboardQuery,
@@ -406,25 +435,20 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
             .collect())
     }
 
-    fn usage_calculated_billing_facts(
+    async fn usage_insights_observation(
         &self,
         range: admin_observability::TimeRange,
         filter: admin_observability::UsageFilter,
         granularity: admin_observability::Granularity,
-    ) -> UsageCalculatedBillingStream<'_> {
-        let range = match store_range(range) {
-            Ok(range) => range,
-            Err(error) => {
-                return Box::pin(futures::stream::once(async {
-                    Err(observability_error(error))
-                }));
-            }
-        };
+    ) -> AdminStoreResult<admin_observability::UsageInsightsObservation> {
         self.repository
-            .usage_calculated_billing_facts(range, store_usage_filter(filter), granularity)
+            .usage_insights_observation(
+                store_range(range).map_err(observability_error)?,
+                store_usage_filter(filter),
+                granularity,
+            )
+            .await
             .map_err(observability_error)
-            .map_ok(admin_calculated_usage_billing_fact)
-            .boxed()
     }
 
     async fn list_usage_records(

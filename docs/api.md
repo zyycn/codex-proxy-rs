@@ -1815,15 +1815,14 @@ request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可�
 `requestShare` 的分母为该维度筛选后、截取前的全部请求数；`failureClass` 只在带错误类型的请求内计算占比
 `retryCount` 为额外执行尝试次数之和，`retryRate` 为发生过重试的请求数占该组请求数的比例，同一请求多次重试只计一次
 
-账号维度诊断项、使用记录列表和错误排查列表的 `accountPlanType` / `accountPlanTypeDisplay` 返回账号当前订阅及展示名称，
-按各记录的内部账号 ID 关联；订阅未知或账号已删除时为 `null`，不作为请求发生时的订阅快照
+历史记录中的 `accountPlanType` / `accountPlanTypeDisplay`、`accountNotes` 和 `clientApiKeyName`
+来自请求当时采集的套餐、备注和 Key 名称快照；未采集时为 `null`，不使用当前配置补齐。
+账号、Key 与分组改名或删除不改变历史展示。稳定 ID 保留关联能力，同一 ID 的不同名称仍可一起查询和统计，
+不包含密钥原文
 
-管理端请求列表及 Dashboard 最近请求中的 `accountNotes` 为账号当前备注，按内部账号 ID 关联。
-备注不写入请求历史快照；无备注或账号已删除时返回 `null`，修改备注不改变历史请求的账号归属
-
-`/api/admin/usage/records` 与 `/api/admin/operations/errors` 的记录返回 `clientApiKeyName`，为关联 Key 的当前名称
-
-Key 已删除或未关联时为 `null`，不影响记录返回，不包含密钥原文
+账号与 Key 诊断按稳定 ID 归组，名称变化不拆成多个统计实体。组标签取保留记录中最近一次请求的快照，
+按 `startedAt`、请求 ID 倒序确定；账号在该条快照内依次使用邮箱、名称、稳定 ID，Key 使用该条名称或稳定 ID。
+标签不代表当前配置，也不使用更早记录的非空值覆盖最近一次请求中缺失的快照
 
 运维错误记录的 `errorDetails` 为受控诊断文本，无详情时为 `null`。
 错误来源快照以 JSON 文本保存：`causes.messages` 按外层到内层排列本地原因，`causes.truncated`
@@ -1841,12 +1840,30 @@ OpenAI 优先采用服务端 `openai-model` / `x-openai-model` 报告（流内�
 
 请求记录列表的 `search` 使用字面量前缀匹配，支持请求 ID、Client Key ID / 名称、
 账号 ID、账号邮箱与名称、请求 / 上游模型 ID、上游请求 ID。密钥名称不区分大小写，其他字段区分大小写。
-密钥名称按当前密钥记录检索，改名后使用新名称，删除后仍可按 Client Key ID 查询历史记录。
-账号邮箱与名称按请求记录的历史快照检索，
-不随当前账号修改或删除而改变；`%`、`_` 和 `\` 均按普通字符处理，不作为搜索通配符
+密钥名称、账号邮箱与名称按请求记录的历史快照检索，不随当前配置修改或删除而改变；
+`%`、`_` 和 `\` 均按普通字符处理，不作为搜索通配符
 
 请求记录按模型执行 ID 或上游 ID 查询；只有入口 ID 时需结合时间与入口日志定位。
 请求记录和错误列表支持按密钥名称搜索，不支持密钥值或可见前缀搜索
+
+`routingGroupRefs` 接受逗号分隔的稳定分组 ID，最多 32 项，同组去重、多个组按 OR 匹配，
+同一请求命中多个组仍只计一次。历史筛选不要求分组当前仍存在，也不使用当前成员关系改写请求归属
+
+### 统计新鲜度与覆盖
+
+聚合响应中的 `analytics` 返回 `coverageStart`、`coverageEnd`、`generatedAt`、
+对应的 `coverageStartDisplay`、`coverageEndDisplay`、`generatedAtDisplay`，以及 `lagSeconds`、
+`state`、`percentilesApproximate`、`schemaVersion` 和 `histogramVersion`。展示时间按部署
+`host.timezone` 生成，缺失的覆盖时间及其展示字段均为 `null`。覆盖范围描述已构建的历史事实，
+生成时间描述本次结果的读取时间，不能视为实时承诺
+
+`state` 为 `ready`、`building`、`lagging` 或 `stale`。历史回填中，已连续覆盖的近期范围可返回
+`building`；查询跨越尚未覆盖的历史、全历史总计尚未构建时返回 `503`。完成回填后，有待处理源变更时
+标记 `lagging`，有限时间内回退缓存结果时标记 `stale`。删除尚未收敛、查询预算不足或依赖不可用时，
+接口也可返回 `503`，不会用空数组或零值表示不可用的统计
+
+请求数、Token 和金额按事实累计；`percentilesApproximate: true` 表示分位数来自带版本的直方图估计。
+分页列表与详情读取源记录，可能先于聚合结果反映最新完成或恢复状态
 
 ### 记录范围与统计口径
 
@@ -1861,6 +1878,10 @@ OpenAI 优先采用服务端 `openai-model` / `x-openai-model` 报告（流内�
 `requestKind: "prewarm"`，不进入用量列表、账号用量或额度预测的 Token / 费用覆盖统计，但仍可按
 请求 ID 读取审计详情，响应中的额度观测仍可用于预测配对。此分类以实际 `generate` 字段为准，
 不能仅凭客户端的同名 metadata 或输出 Token 为零排除普通推理；其他 Provider 不套用该规则
+
+规范化用量字段 `cachedInputTokens`、`cacheWriteInputTokens` 与 `reasoningOutputTokens` 分别表示
+缓存命中的输入 Token、缓存写入的输入 Token 和推理输出 Token。它们保留上游的包含关系，
+不额外叠加到 `inputTokens`、`outputTokens` 或 `totalTokens`；原始上游响应协议字段保持各自协议名称
 
 `latencyMs` 从模型执行会话开始计到终结，包含账号选择、重试及流交付等待，不包含此前的入口解析、路由和准入。
 `firstTokenLatencyMs` 与它使用同一计时起点，首字边界由 Provider 协议定义。

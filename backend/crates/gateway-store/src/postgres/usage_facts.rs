@@ -35,9 +35,9 @@ fn usage_evidence_predicate(alias: &str) -> String {
          or {alias}.image_generation_requested
          or {alias}.input_tokens is not null
          or {alias}.output_tokens is not null
-         or {alias}.cached_tokens is not null
-         or {alias}.cache_write_tokens is not null
-         or {alias}.reasoning_tokens is not null
+         or {alias}.cached_input_tokens is not null
+         or {alias}.cache_write_input_tokens is not null
+         or {alias}.reasoning_output_tokens is not null
          or {alias}.image_input_tokens is not null
          or {alias}.image_output_tokens is not null
          or {alias}.total_tokens is not null

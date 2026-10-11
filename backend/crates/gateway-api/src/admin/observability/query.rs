@@ -29,6 +29,7 @@ impl DashboardQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageQuery {
+    pub routing_group_refs: Option<String>,
     pub current_page: Option<u32>,
     pub page_size: Option<u16>,
     pub kind: Option<String>,
@@ -76,6 +77,7 @@ impl DetailQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagnosticsQuery {
+    pub routing_group_refs: Option<String>,
     pub dimension: Option<String>,
     pub period: Option<String>,
     pub as_of: Option<i64>,
@@ -98,6 +100,7 @@ impl DiagnosticsQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpsQuery {
+    pub routing_group_refs: Option<String>,
     pub current_page: Option<u32>,
     pub page_size: Option<u16>,
     pub kind: Option<String>,
@@ -298,6 +301,7 @@ pub(crate) fn usage_filter(query: &UsageQuery) -> Result<domain::UsageFilter, Wi
         })
     });
     Ok(domain::UsageFilter {
+        routing_group_refs: routing_group_refs(query.routing_group_refs.as_deref())?,
         client_api_key_ref: non_empty(query.client_api_key_id.clone()),
         request_id: non_empty(query.request_id.clone()),
         provider_account_ref: non_empty(query.account_id.clone()),
@@ -357,6 +361,7 @@ pub(crate) fn ops_command(
             timezone,
         )?,
         filter: domain::OpsErrorFilter {
+            routing_group_refs: routing_group_refs(query.routing_group_refs.as_deref())?,
             client_api_key_ref: non_empty(query.client_api_key_id.clone()),
             request_id: non_empty(query.request_id.clone()),
             provider_kind: non_empty(query.provider.clone()),
@@ -394,4 +399,26 @@ fn validate_pagination(
         return Err(WireValidationError::new("pageSize"));
     }
     Ok((current_page, page_size))
+}
+
+/// 逗号分隔的稳定分组身份按集合归一化，不要求分组当前仍存在
+pub(crate) fn routing_group_refs(value: Option<&str>) -> Result<Vec<String>, WireValidationError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let mut refs = Vec::new();
+    for item in value.split(',') {
+        let item = item.trim();
+        if item.is_empty()
+            || item.len() > 128
+            || item.chars().any(char::is_control)
+            || refs.len() >= 32
+        {
+            return Err(WireValidationError::new("routingGroupRefs"));
+        }
+        refs.push(item.to_owned());
+    }
+    refs.sort();
+    refs.dedup();
+    Ok(refs)
 }

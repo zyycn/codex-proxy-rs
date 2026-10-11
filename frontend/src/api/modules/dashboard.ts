@@ -1,5 +1,6 @@
 import type { RequestOptions } from '../request'
 import type { AccountQuotaWindow } from './accounts'
+import type { AnalyticsMetadata } from './analytics'
 import type { UsageListRecord } from './usage'
 import request from '../request'
 
@@ -18,8 +19,8 @@ export interface DashboardTrendPoint {
   inputTokensValue: number
   outputTokens: string
   outputTokensValue: number
-  cachedTokens: string
-  cachedTokensValue: number
+  cachedInputTokens: string
+  cachedInputTokensValue: number
   cacheHitRateValue: number
   tokensValue: number
   errors: string
@@ -48,6 +49,7 @@ export interface DashboardTrendSummaryItem {
 }
 
 export interface DashboardTrendResponse {
+  analytics: AnalyticsMetadata
   kind: DashboardTrendKind
   points: DashboardTrendPoint[]
   summary: DashboardTrendSummaryItem[]
@@ -80,7 +82,7 @@ export interface DashboardCards {
     todayHitRateValue: number | null
     yesterdayHitRateValue: number | null
     totalHitRate: string
-    totalCachedTokens: string
+    totalCachedInputTokens: string
     averageFirstTokenLatencyMs: string
   }
 }
@@ -175,6 +177,7 @@ export interface DashboardCapacityInfo {
 }
 
 export interface DashboardSummaryResponse {
+  analytics: AnalyticsMetadata
   asOf: string
   asOfDisplay: string
   cards: DashboardCards

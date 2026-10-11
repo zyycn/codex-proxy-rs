@@ -24,12 +24,14 @@ use super::{
 };
 
 mod admin_adapter;
+mod analytics;
 mod mapping;
 mod model;
 mod queries;
 mod query_budget;
 
 pub use admin_adapter::*;
+pub use analytics::{AnalyticsMaintenance, AnalyticsStatus, PgRequestAnalyticsRepository};
 pub(crate) use mapping::*;
 pub use model::*;
 pub(crate) use queries::*;

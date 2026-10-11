@@ -3,7 +3,7 @@
 use super::super::*;
 
 pub(crate) async fn provider_account_usage(
-    pool: &PgPool,
+    connection: &mut sqlx::PgConnection,
     query: ProviderAccountUsageQuery,
 ) -> StoreResult<Vec<ProviderAccountUsageObservation>> {
     if let Some(account_ids) = &query.account_ids {
@@ -13,18 +13,33 @@ pub(crate) async fn provider_account_usage(
         return Err(invalid("account usage limit must be between 1 and 200"));
     }
 
+    // 账号卡片先确定有限候选，避免为只展示二十个账号聚合整个历史范围
     let mut statement = QueryBuilder::<Postgres>::new(
-        "with matched as (
+        "with candidate_accounts as materialized (select pa.* from provider_accounts pa",
+    );
+    if let Some(account_ids) = &query.account_ids {
+        statement
+            .push(" where pa.id=any(")
+            .push_bind(account_ids.clone())
+            .push("::text[])");
+    } else {
+        statement.push(" join lateral (select mr.started_at from request_analytics_facts mr where mr.provider_account_ref=pa.id and mr.started_at >= ").push_bind(query.range.start)
+            .push(" and mr.started_at < ").push_bind(query.range.end);
+        push_completed_usage_fact_filter(&mut statement, "mr");
+        statement.push(" order by mr.started_at desc,mr.id desc limit 1) latest on true order by latest.started_at desc,pa.name,pa.id limit ").push_bind(i64::from(query.limit));
+    }
+    statement.push(
+        "), matched as materialized (
            select pa.id, pa.provider_kind, pa.authentication_kind, pa.name, pa.email,
                   pa.plan_type, mr.id as request_id,
                   coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
                   mr.cost_currency, mr.outcome, mr.input_tokens, mr.output_tokens,
-                  mr.cached_tokens, mr.cache_write_tokens, mr.reasoning_tokens,
+                  mr.cached_input_tokens, mr.cache_write_input_tokens, mr.reasoning_output_tokens,
                   mr.image_input_tokens, mr.image_output_tokens,
                   mr.image_generation_succeeded, mr.total_tokens, mr.cost_source,
                   mr.cost_amount, mr.started_at
-             from provider_accounts pa
-             left join model_requests mr
+             from candidate_accounts pa
+             left join request_analytics_facts mr
                on mr.provider_account_ref = pa.id and mr.started_at >= ",
     );
     statement.push_bind(query.range.start);
@@ -37,7 +52,7 @@ pub(crate) async fn provider_account_usage(
         statement.push("::text[])");
     }
     statement.push(
-        "), aggregated as (
+        " limit 100001), aggregated as (
            select id, provider_kind, authentication_kind, name, email, plan_type,
                   model, cost_currency,
                   grouping(model)::integer as model_grouping,
@@ -47,9 +62,9 @@ pub(crate) async fn provider_account_usage(
                     as success_count,
                   sum(input_tokens)::bigint as input_tokens,
                   sum(output_tokens)::bigint as output_tokens,
-                  sum(cached_tokens)::bigint as cached_tokens,
-                  sum(cache_write_tokens)::bigint as cache_write_tokens,
-                  sum(reasoning_tokens)::bigint as reasoning_tokens,
+                  sum(cached_input_tokens)::bigint as cached_input_tokens,
+                  sum(cache_write_input_tokens)::bigint as cache_write_input_tokens,
+                  sum(reasoning_output_tokens)::bigint as reasoning_output_tokens,
                   sum(image_input_tokens)::bigint as image_input_tokens,
                   sum(image_output_tokens)::bigint as image_output_tokens,
                   count(request_id) filter (where image_generation_succeeded is true)::bigint
@@ -82,7 +97,7 @@ pub(crate) async fn provider_account_usage(
     statement.push_bind(i64::from(query.limit));
     statement.push(
         ")
-         select aggregated.*
+         select aggregated.*, (select count(*) from matched)::bigint as matched_count
            from aggregated
            join selected_accounts selected using (id)
           order by selected.sort_position, model_grouping desc, currency_grouping desc,
@@ -90,9 +105,18 @@ pub(crate) async fn provider_account_usage(
     );
     let rows = statement
         .build()
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await
         .map_err(|source| postgres_unavailable("load provider account usage", source))?;
+    if let Some(row) = rows.first()
+        && unsigned(row, "matched_count")? > 100_000
+    {
+        return Err(crate::StoreError::Unavailable {
+            backend: crate::StoreBackend::PostgreSql,
+            message: "account analytics fact row budget exceeded".to_owned(),
+            source: None,
+        });
+    }
 
     let mut observations = Vec::with_capacity(usize::from(query.limit));
     let mut costs = HashMap::<String, Vec<CurrencyCostTotal>>::new();
@@ -142,7 +166,7 @@ pub(crate) async fn provider_account_usage(
         .map(|item| item.account_id.clone())
         .collect::<Vec<_>>();
     let mut request_buckets = if let Some(range) = query.request_bucket_range {
-        provider_account_request_buckets(pool, range, &account_ids).await?
+        provider_account_request_buckets(connection, range, &account_ids).await?
     } else {
         HashMap::new()
     };
@@ -168,7 +192,7 @@ pub(crate) async fn provider_account_usage(
 }
 
 pub(crate) async fn provider_account_request_buckets(
-    pool: &PgPool,
+    connection: &mut sqlx::PgConnection,
     range: ObservabilityRange,
     account_ids: &[String],
 ) -> StoreResult<HashMap<String, Vec<ProviderAccountRequestBucket>>> {
@@ -177,7 +201,7 @@ pub(crate) async fn provider_account_request_buckets(
         "select provider_account_ref,
                 floor(extract(epoch from (started_at - $1)) / 3600)::bigint as bucket_index,
                 count(*)::bigint as request_count
-         from model_requests mr
+         from request_analytics_facts mr
          where mr.provider_account_ref = any($2::text[])
            and mr.started_at >= $1 and mr.started_at < $3
            and {completed_usage}
@@ -188,7 +212,7 @@ pub(crate) async fn provider_account_request_buckets(
         .bind(range.start)
         .bind(account_ids)
         .bind(range.end)
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await
         .map_err(|source| postgres_unavailable("load provider account request timeline", source))?;
 
@@ -233,9 +257,9 @@ fn provider_account_model_from_row(
         success_count: unsigned(row, "success_count")?,
         input_tokens: optional_unsigned(row, "input_tokens")?,
         output_tokens: optional_unsigned(row, "output_tokens")?,
-        cached_tokens: optional_unsigned(row, "cached_tokens")?,
-        cache_write_tokens: optional_unsigned(row, "cache_write_tokens")?,
-        reasoning_tokens: optional_unsigned(row, "reasoning_tokens")?,
+        cached_input_tokens: optional_unsigned(row, "cached_input_tokens")?,
+        cache_write_input_tokens: optional_unsigned(row, "cache_write_input_tokens")?,
+        reasoning_output_tokens: optional_unsigned(row, "reasoning_output_tokens")?,
         image_input_tokens: optional_unsigned(row, "image_input_tokens")?,
         image_output_tokens: optional_unsigned(row, "image_output_tokens")?,
         image_request_count: unsigned(row, "image_request_count")?,
@@ -261,9 +285,9 @@ pub(crate) fn provider_account_from_row(
         success_count: unsigned(row, "success_count")?,
         input_tokens: optional_unsigned(row, "input_tokens")?,
         output_tokens: optional_unsigned(row, "output_tokens")?,
-        cached_tokens: optional_unsigned(row, "cached_tokens")?,
-        cache_write_tokens: optional_unsigned(row, "cache_write_tokens")?,
-        reasoning_tokens: optional_unsigned(row, "reasoning_tokens")?,
+        cached_input_tokens: optional_unsigned(row, "cached_input_tokens")?,
+        cache_write_input_tokens: optional_unsigned(row, "cache_write_input_tokens")?,
+        reasoning_output_tokens: optional_unsigned(row, "reasoning_output_tokens")?,
         image_input_tokens: optional_unsigned(row, "image_input_tokens")?,
         image_output_tokens: optional_unsigned(row, "image_output_tokens")?,
         image_request_count: unsigned(row, "image_request_count")?,

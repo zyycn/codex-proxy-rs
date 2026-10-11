@@ -112,6 +112,7 @@ pub(super) struct AdminTestFixture {
     pub dashboard_summary_range: Arc<Mutex<Option<TimeRange>>>,
     pub provider_error: Arc<Mutex<Option<ProviderAdminError>>>,
     pub account: Arc<Mutex<Option<AccountPageItem>>>,
+    pub account_usage: Arc<Mutex<Vec<AccountUsage>>>,
 }
 
 impl AdminTestFixture {
@@ -154,6 +155,7 @@ impl AdminTestFixture {
         let dashboard_summary_range = Arc::new(Mutex::new(None));
         let provider_error = Arc::new(Mutex::new(None));
         let account = Arc::new(Mutex::new(None));
+        let account_usage = Arc::new(Mutex::new(Vec::new()));
         let unused = Arc::new(UnusedStore {
             observations: observations.clone(),
             usage_records: Arc::clone(&usage_records),
@@ -163,6 +165,7 @@ impl AdminTestFixture {
             dashboard_observation: Arc::clone(&dashboard_observation),
             dashboard_summary_range: Arc::clone(&dashboard_summary_range),
             account: Arc::clone(&account),
+            account_usage: Arc::clone(&account_usage),
         });
         let plugin_ports = Arc::new(plugins::TestPluginPorts::default());
         let published_snapshot = gateway_core::runtime::RuntimeSnapshotHandle::default();
@@ -232,6 +235,7 @@ impl AdminTestFixture {
             dashboard_summary_range,
             provider_error,
             account,
+            account_usage,
         }
     }
 
@@ -1100,6 +1104,7 @@ struct UnusedStore {
     dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
     dashboard_summary_range: Arc<Mutex<Option<TimeRange>>>,
     account: Arc<Mutex<Option<AccountPageItem>>>,
+    account_usage: Arc<Mutex<Vec<AccountUsage>>>,
 }
 
 struct UnusedClientKeyVerifier;
@@ -1161,18 +1166,41 @@ impl AccountStore for UnusedStore {
     async fn load_account_usage(
         &self,
         _: TimeRange,
-        _: &[String],
+        account_ids: &[String],
     ) -> AdminStoreResult<Vec<AccountUsage>> {
         if self.account.lock().expect("account").is_some() {
-            return Ok(Vec::new());
+            return Ok(self
+                .account_usage
+                .lock()
+                .expect("account usage")
+                .iter()
+                .filter(|usage| account_ids.contains(&usage.account_id))
+                .cloned()
+                .collect());
         }
         Err(unavailable("account usage"))
     }
 
     async fn load_account_usage_by_windows(
         &self,
-        _: &[AccountUsageWindowQuery],
+        windows: &[AccountUsageWindowQuery],
     ) -> AdminStoreResult<Vec<AccountUsageWindowResult>> {
+        if self.account.lock().expect("account").is_some() {
+            let usage = self.account_usage.lock().expect("account usage");
+            return Ok(windows
+                .iter()
+                .filter_map(|window| {
+                    usage
+                        .iter()
+                        .find(|usage| usage.account_id == window.account_id)
+                        .map(|usage| AccountUsageWindowResult {
+                            account_id: window.account_id.clone(),
+                            key: window.key.clone(),
+                            usage: usage.clone(),
+                        })
+                })
+                .collect());
+        }
         Err(unavailable("account quota window usage"))
     }
 
@@ -1381,15 +1409,39 @@ impl ObservabilityStore for UnusedStore {
         data.trend.clone().ok_or_else(|| unavailable("usage trend"))
     }
 
-    fn usage_calculated_billing_facts(
+    async fn analytics_cache_generation(&self) -> AdminStoreResult<u64> {
+        Ok(self
+            .observations
+            .lock()
+            .expect("observations")
+            .summary
+            .as_ref()
+            .map_or(0, |summary| summary.analytics.generation))
+    }
+
+    async fn usage_insights_observation(
         &self,
-        _: TimeRange,
-        _: UsageFilter,
+        range: TimeRange,
+        filter: UsageFilter,
         _: Granularity,
-    ) -> gateway_admin::ports::store::UsageCalculatedBillingStream<'_> {
-        Box::pin(futures::stream::once(async {
-            Err(unavailable("usage billing facts"))
-        }))
+    ) -> AdminStoreResult<gateway_admin::model::observability::UsageInsightsObservation> {
+        let mut data = self.observations.lock().expect("observations");
+        data.summaries.push((range, filter.clone()));
+        data.trends.push((range, filter));
+        Ok(
+            gateway_admin::model::observability::UsageInsightsObservation {
+                overview: data
+                    .summary
+                    .clone()
+                    .map(|summary| UsageOverview { range, ..summary })
+                    .ok_or_else(|| unavailable("usage summary"))?,
+                trend: data
+                    .trend
+                    .clone()
+                    .ok_or_else(|| unavailable("usage trend"))?,
+                costs: Vec::new(),
+            },
+        )
     }
 
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {

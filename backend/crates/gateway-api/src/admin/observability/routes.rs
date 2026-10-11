@@ -160,7 +160,10 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(usage_summary_view(result)),
+        AdminEnvelope::ok(usage_summary_view(
+            result,
+            crate::time::TimePresenter::new(state.admin_services().timezone()),
+        )),
     ))
 }
 
@@ -212,6 +215,8 @@ where
     )
     .map_err(map_wire_error)?;
     let filter = domain::UsageFilter {
+        routing_group_refs: routing_group_refs(query.routing_group_refs.as_deref())
+            .map_err(map_wire_error)?,
         provider_kind: non_empty(query.provider),
         model: non_empty(query.model),
         status_code: parse_status(query.status_code).map_err(map_wire_error)?,
@@ -226,7 +231,11 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(diagnostics_view(result, dimension)),
+        AdminEnvelope::ok(diagnostics_view(
+            result,
+            dimension,
+            crate::time::TimePresenter::new(state.admin_services().timezone()),
+        )),
     ))
 }
 

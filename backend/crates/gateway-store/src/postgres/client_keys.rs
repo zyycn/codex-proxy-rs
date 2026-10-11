@@ -54,6 +54,7 @@ const CLIENT_API_KEY_LAST_USED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientApiKeySnapshot {
+    pub name_snapshot: Option<String>,
     pub request_profiles: std::collections::BTreeMap<
         gateway_core::routing::ProviderKind,
         gateway_core::account::OpaqueProviderData,
@@ -73,6 +74,7 @@ impl ClientApiKeySnapshot {
         requests_per_minute: i64,
     ) -> StoreResult<Self> {
         Ok(Self {
+            name_snapshot: None,
             request_profiles: std::collections::BTreeMap::new(),
             id: ClientApiKeyId::new(id)
                 .map_err(|source| invalid("persisted key ID is invalid").with_source(source))?,

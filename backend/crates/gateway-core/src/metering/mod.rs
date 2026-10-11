@@ -194,9 +194,9 @@ impl Money {
 pub struct Usage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
-    pub reasoning_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     /// Provider/协议报告的独立事实，不从其他列相加推导
@@ -209,9 +209,9 @@ impl Usage {
         Self {
             input_tokens: None,
             output_tokens: None,
-            cached_tokens: None,
-            cache_write_tokens: None,
-            reasoning_tokens: None,
+            cached_input_tokens: None,
+            cache_write_input_tokens: None,
+            reasoning_output_tokens: None,
             image_input_tokens: None,
             image_output_tokens: None,
             total_tokens: None,
@@ -226,14 +226,14 @@ impl Usage {
         if newer.output_tokens.is_some() {
             self.output_tokens = newer.output_tokens;
         }
-        if newer.cached_tokens.is_some() {
-            self.cached_tokens = newer.cached_tokens;
+        if newer.cached_input_tokens.is_some() {
+            self.cached_input_tokens = newer.cached_input_tokens;
         }
-        if newer.cache_write_tokens.is_some() {
-            self.cache_write_tokens = newer.cache_write_tokens;
+        if newer.cache_write_input_tokens.is_some() {
+            self.cache_write_input_tokens = newer.cache_write_input_tokens;
         }
-        if newer.reasoning_tokens.is_some() {
-            self.reasoning_tokens = newer.reasoning_tokens;
+        if newer.reasoning_output_tokens.is_some() {
+            self.reasoning_output_tokens = newer.reasoning_output_tokens;
         }
         if newer.image_input_tokens.is_some() {
             self.image_input_tokens = newer.image_input_tokens;
@@ -332,7 +332,7 @@ pub struct CalculatedCostBreakdown {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageCostBreakdown {
     pub input_tokens: u64,
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     pub input_amount: Money,
     pub cache_read_amount: Money,
     pub input_price_per_million: Money,

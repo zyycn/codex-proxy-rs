@@ -66,7 +66,7 @@ export function useRequestTrendChart(options: {
         || (point.latencyP95Ms ?? 0) > 0
         || (point.outputThroughputP50 ?? 0) > 0
         || point.tokensValue > 0
-        || point.cachedTokensValue > 0,
+        || point.cachedInputTokensValue > 0,
     ),
   )
 
@@ -193,7 +193,7 @@ export function useRequestTrendChart(options: {
         tooltipItem('输出', point?.outputTokens, trendColor('输出', '--cp-color-green-solid', '#12B981')),
         tooltipItem(
           '缓存',
-          point?.cachedTokens,
+          point?.cachedInputTokens,
           trendColor('缓存', '--cp-color-text-tertiary', '#94A3B8'),
         ),
         tooltipItem(
@@ -223,7 +223,7 @@ export function useRequestTrendChart(options: {
       if (name === '输出')
         return point?.outputTokens ?? value
       if (name === '缓存')
-        return point?.cachedTokens ?? value
+        return point?.cachedInputTokens ?? value
     }
     if (activeKind.value === 'latency') {
       if (name === '首字 P95')
@@ -248,7 +248,7 @@ export function useRequestTrendChart(options: {
       const inputColor = trendColor('输入', '--cp-color-blue-solid', '#5983F4')
       const outputColor = trendColor('输出', '--cp-color-green-solid', '#12B981')
       return [
-        lineSeries('缓存', seriesValues('cachedTokensValue'), cacheColor, {
+        lineSeries('缓存', seriesValues('cachedInputTokensValue'), cacheColor, {
           area: true,
           areaStartAlpha: '30',
           areaEndAlpha: '08',

@@ -12,6 +12,7 @@ export function useDashboard() {
   const trend = shallowRef<DashboardTrendResponse | null>(null)
   const trendLoading = shallowRef(false)
   const trendError = shallowRef('')
+  const analyticsError = shallowRef('')
   const loading = shallowRef(false)
   const refreshing = shallowRef(false)
   const lastRefreshedAt = shallowRef('')
@@ -21,6 +22,7 @@ export function useDashboard() {
   let summaryController: AbortController | undefined
   let trendController: AbortController | undefined
 
+  const analytics = computed(() => snapshot.value.analytics)
   const metrics = computed(() => snapshot.value.metrics)
   const healthTimeline = computed(() => snapshot.value.healthTimeline)
   const accountUsage = computed(() => snapshot.value.accountUsage)
@@ -113,6 +115,7 @@ export function useDashboard() {
         return
       rangeAsOf = asOf
       snapshot.value = dashboardSnapshotView(summary)
+      analyticsError.value = ''
       lastRefreshedAt.value = summary.asOfDisplay
       if (isCurrentTrendRequest(requestId, trendKind)) {
         trend.value = summary.trend
@@ -124,6 +127,8 @@ export function useDashboard() {
       }
     }
     catch (error: unknown) {
+      if (!disposed)
+        analyticsError.value = errorMessage(error)
       if (!silent && isCurrentTrendRequest(requestId, trendKind))
         trendError.value = errorMessage(error)
       throw error
@@ -160,6 +165,8 @@ export function useDashboard() {
     activeTrendKind,
     lastRefreshedAt,
     metrics,
+    analytics,
+    analyticsError,
     trendPoints,
     trendSummary,
     trendLoading,

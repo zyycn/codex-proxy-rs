@@ -458,7 +458,7 @@ impl ProviderAdmin for XaiAdminProvider {
             &input.upstream_model_id,
             input_tokens,
             output_tokens,
-            input.cached_tokens.unwrap_or_default(),
+            input.cached_input_tokens.unwrap_or_default(),
             input.service_tier.as_deref(),
         ) else {
             return Ok(None);
@@ -1119,6 +1119,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         account.access_token_expires_at.map(SystemTime::from),
     )
     .with_outbound_proxy(account.outbound_proxy.clone())
+    .with_notes(account.notes.clone())
     .with_profile(
         account.email.clone(),
         account.upstream_account_id.clone(),

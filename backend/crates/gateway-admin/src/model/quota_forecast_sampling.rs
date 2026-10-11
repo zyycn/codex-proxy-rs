@@ -15,7 +15,7 @@ pub struct QuotaForecastUsage {
     pub tokens: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     pub missing_token_count: u64,
     pub known_cost_count: u64,
     pub unavailable_cost_count: u64,
@@ -35,7 +35,9 @@ impl QuotaForecastUsage {
             tokens: self.tokens.checked_sub(baseline.tokens)?,
             input_tokens: self.input_tokens.checked_sub(baseline.input_tokens)?,
             output_tokens: self.output_tokens.checked_sub(baseline.output_tokens)?,
-            cached_tokens: self.cached_tokens.checked_sub(baseline.cached_tokens)?,
+            cached_input_tokens: self
+                .cached_input_tokens
+                .checked_sub(baseline.cached_input_tokens)?,
             missing_token_count: self
                 .missing_token_count
                 .checked_sub(baseline.missing_token_count)?,

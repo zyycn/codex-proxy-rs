@@ -66,11 +66,11 @@ pub struct TokenUsage {
     /// 输出 token 数
     pub output_tokens: u64,
     /// 命中缓存的输入 token 数
-    pub cached_tokens: u64,
+    pub cached_input_tokens: u64,
     /// 写入 prompt cache 的输入 token 数
-    pub cache_write_tokens: u64,
+    pub cache_write_input_tokens: u64,
     /// 输出 token 中的 reasoning token 数
-    pub reasoning_tokens: u64,
+    pub reasoning_output_tokens: u64,
     /// 图片工具输入 token 数
     pub image_input_tokens: u64,
     /// 图片工具输出 token 数
@@ -94,18 +94,19 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
     let output_tokens = number_field(usage, "output_tokens")
         .or_else(|| number_field(usage, "completion_tokens"))
         .unwrap_or_default();
-    let cached_tokens = nested_number_field(usage, &["input_tokens_details", "cached_tokens"])
-        .or_else(|| nested_number_field(usage, &["prompt_tokens_details", "cached_tokens"]))
-        .or_else(|| number_field(usage, "cached_tokens"))
-        .unwrap_or_default();
-    let cache_write_tokens =
+    let cached_input_tokens =
+        nested_number_field(usage, &["input_tokens_details", "cached_tokens"])
+            .or_else(|| nested_number_field(usage, &["prompt_tokens_details", "cached_tokens"]))
+            .or_else(|| number_field(usage, "cached_tokens"))
+            .unwrap_or_default();
+    let cache_write_input_tokens =
         nested_number_field(usage, &["input_tokens_details", "cache_write_tokens"])
             .or_else(|| {
                 nested_number_field(usage, &["prompt_tokens_details", "cache_write_tokens"])
             })
             .or_else(|| number_field(usage, "cache_write_tokens"))
             .unwrap_or_default();
-    let reasoning_tokens =
+    let reasoning_output_tokens =
         nested_number_field(usage, &["output_tokens_details", "reasoning_tokens"])
             .or_else(|| {
                 nested_number_field(usage, &["completion_tokens_details", "reasoning_tokens"])
@@ -142,9 +143,9 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
     has_usage.then_some(TokenUsage {
         input_tokens,
         output_tokens,
-        cached_tokens,
-        cache_write_tokens,
-        reasoning_tokens,
+        cached_input_tokens,
+        cache_write_input_tokens,
+        reasoning_output_tokens,
         image_input_tokens,
         image_output_tokens,
         total_tokens,
@@ -187,11 +188,11 @@ pub fn billable_usage_is_complete(response: &Value, usage: TokenUsage) -> bool {
 
     input == Some(usage.input_tokens)
         && output == Some(usage.output_tokens)
-        && cached == Some(usage.cached_tokens)
-        && written == Some(usage.cache_write_tokens)
+        && cached == Some(usage.cached_input_tokens)
+        && written == Some(usage.cache_write_input_tokens)
         && usage
-            .cached_tokens
-            .checked_add(usage.cache_write_tokens)
+            .cached_input_tokens
+            .checked_add(usage.cache_write_input_tokens)
             .is_some_and(|cached| cached <= usage.input_tokens)
         && total == Some(usage.total_tokens)
         && raw

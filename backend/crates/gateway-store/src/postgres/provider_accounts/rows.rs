@@ -24,8 +24,8 @@ pub(crate) fn account_usage_by_windows_sql() -> String {
                 requested.window_key,
                 mr.id as request_id,
                 coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
-                mr.outcome, mr.input_tokens, mr.output_tokens, mr.cached_tokens,
-                mr.cache_write_tokens, mr.reasoning_tokens,
+                mr.outcome, mr.input_tokens, mr.output_tokens, mr.cached_input_tokens,
+                mr.cache_write_input_tokens, mr.reasoning_output_tokens,
                 mr.image_input_tokens, mr.image_output_tokens,
                 mr.image_generation_succeeded, mr.total_tokens,
                 mr.cost_source, mr.cost_amount, mr.cost_currency, mr.started_at
@@ -46,9 +46,9 @@ pub(crate) fn account_usage_by_windows_sql() -> String {
             count(request_id) filter (where outcome = 'succeeded')::bigint as success_count,
             sum(input_tokens)::bigint as input_tokens,
             sum(output_tokens)::bigint as output_tokens,
-            sum(cached_tokens)::bigint as cached_tokens,
-            sum(cache_write_tokens)::bigint as cache_write_tokens,
-            sum(reasoning_tokens)::bigint as reasoning_tokens,
+            sum(cached_input_tokens)::bigint as cached_input_tokens,
+            sum(cache_write_input_tokens)::bigint as cache_write_input_tokens,
+            sum(reasoning_output_tokens)::bigint as reasoning_output_tokens,
             sum(image_input_tokens)::bigint as image_input_tokens,
             sum(image_output_tokens)::bigint as image_output_tokens,
             count(request_id) filter (where image_generation_succeeded is true)::bigint
@@ -479,6 +479,7 @@ pub(crate) fn core_account_from_summary(
         revision,
         summary.access_token_expires_at.map(Into::into),
     )
+    .with_notes(summary.notes)
     .with_profile(
         summary.email,
         summary.upstream_account_id,

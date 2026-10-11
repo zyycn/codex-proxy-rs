@@ -29,6 +29,7 @@ type ModelCatalogAccounts = BTreeMap<ProviderKind, BTreeMap<String, BTreeSet<Pro
 /// Store 读取到的一个启用 Client API Key 策略事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotClientPolicyFacts {
+    name_snapshot: Option<String>,
     request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
     key_id: ClientApiKeyId,
     plaintext_key: PlaintextClientApiKey,
@@ -37,6 +38,12 @@ pub struct SnapshotClientPolicyFacts {
 }
 
 impl SnapshotClientPolicyFacts {
+    #[must_use]
+    pub fn with_name_snapshot(mut self, name: Option<String>) -> Self {
+        self.name_snapshot = name;
+        self
+    }
+
     #[must_use]
     pub fn with_request_profiles(
         mut self,
@@ -55,6 +62,7 @@ impl SnapshotClientPolicyFacts {
     ) -> Self {
         Self {
             key_id,
+            name_snapshot: None,
             request_profiles: BTreeMap::new(),
             plaintext_key,
             group_ids,
@@ -509,17 +517,20 @@ async fn compile_runtime_snapshot(
                     .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?,
             )
         };
-        client_policies.push(ClientPolicy::new(
-            policy.key_id,
-            policy.plaintext_key,
-            Arc::new(
-                account_scope
-                    .with_fast_mode(fast_mode)
-                    .with_request_profiles(policy.request_profiles),
-            ),
-            true,
-            policy.limits,
-        ));
+        client_policies.push(
+            ClientPolicy::new(
+                policy.key_id,
+                policy.plaintext_key,
+                Arc::new(
+                    account_scope
+                        .with_fast_mode(fast_mode)
+                        .with_request_profiles(policy.request_profiles),
+                ),
+                true,
+                policy.limits,
+            )
+            .with_name_snapshot(policy.name_snapshot),
+        );
     }
 
     RuntimeSnapshot::new_with_privacy_compiler(

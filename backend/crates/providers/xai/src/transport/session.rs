@@ -99,6 +99,7 @@ impl<T> GrokSessionLeaseGuard for T where T: Send + Sync + 'static {}
 
 /// 一个选中的 OAuth 会话及其持有的活跃 lease
 pub struct SelectedGrokSession {
+    account_snapshot: Option<gateway_core::account::AccountHistorySnapshot>,
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
     access_token: SecretValue,
@@ -134,6 +135,7 @@ impl SelectedGrokSession {
             return Err(GrokSessionDataError::InvalidSecretValue);
         }
         Ok(Self {
+            account_snapshot: None,
             account_id,
             credential_revision,
             access_token,
@@ -160,6 +162,20 @@ impl SelectedGrokSession {
     ) -> Self {
         self.capacity = capacity;
         self
+    }
+
+    #[must_use]
+    pub(crate) fn with_account_snapshot(
+        mut self,
+        snapshot: gateway_core::account::AccountHistorySnapshot,
+    ) -> Self {
+        self.account_snapshot = Some(snapshot);
+        self
+    }
+
+    #[must_use]
+    pub const fn account_snapshot(&self) -> Option<&gateway_core::account::AccountHistorySnapshot> {
+        self.account_snapshot.as_ref()
     }
 
     /// 返回选中的账号 ID

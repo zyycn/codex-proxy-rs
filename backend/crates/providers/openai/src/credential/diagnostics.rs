@@ -2,7 +2,7 @@
 
 use super::token_client::RefreshFailure;
 use gateway_core::{
-    account::ProviderAccountId,
+    account::ProviderAccount,
     diagnostics::{OperationalDiagnostics, OperationalFailure},
     error::{ErrorDetails, ErrorSource, OpaqueUpstreamValue, RawUpstreamError},
     identity::ProviderKind,
@@ -10,10 +10,11 @@ use gateway_core::{
 
 pub(crate) async fn record_refresh_failure(
     diagnostics: &dyn OperationalDiagnostics,
-    account_id: &ProviderAccountId,
+    account: &ProviderAccount,
     operation: &'static str,
     error: &RefreshFailure,
 ) {
+    let account_id = account.id();
     let upstream = error.upstream();
     let mut failure = OperationalFailure::new(
         "oauth",
@@ -23,6 +24,9 @@ pub(crate) async fn record_refresh_failure(
     );
     failure.provider_kind = Some(ProviderKind::new("openai").expect("static provider"));
     failure.account_id = Some(account_id.clone());
+    failure.account_snapshot = Some(gateway_core::account::AccountHistorySnapshot::from_account(
+        account,
+    ));
     failure.upstream_status = upstream.map(|value| value.status());
     failure.upstream_code = upstream
         .and_then(|value| value.code())

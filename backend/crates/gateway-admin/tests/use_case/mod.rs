@@ -772,15 +772,17 @@ impl ObservabilityStore for UnavailableStore {
         Err(unavailable("usage trend"))
     }
 
-    fn usage_calculated_billing_facts(
+    async fn analytics_cache_generation(&self) -> AdminStoreResult<u64> {
+        Err(unavailable("analytics generation"))
+    }
+
+    async fn usage_insights_observation(
         &self,
         _: TimeRange,
         _: UsageFilter,
         _: Granularity,
-    ) -> gateway_admin::ports::store::UsageCalculatedBillingStream<'_> {
-        Box::pin(futures::stream::once(async {
-            Err(unavailable("usage billing facts"))
-        }))
+    ) -> AdminStoreResult<gateway_admin::model::observability::UsageInsightsObservation> {
+        Err(unavailable("usage insights"))
     }
 
     async fn list_usage_records(&self, _: UsageQuery) -> AdminStoreResult<UsagePage> {

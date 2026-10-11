@@ -484,10 +484,10 @@ mod response {
             input_tokens_display: "-".to_owned(),
             output_tokens: None,
             output_tokens_display: "-".to_owned(),
-            cached_tokens: None,
-            cached_tokens_display: "-".to_owned(),
-            reasoning_tokens: None,
-            reasoning_tokens_display: "-".to_owned(),
+            cached_input_tokens: None,
+            cached_input_tokens_display: "-".to_owned(),
+            reasoning_output_tokens: None,
+            reasoning_output_tokens_display: "-".to_owned(),
             image_input_tokens: None,
             image_input_tokens_display: "-".to_owned(),
             image_output_tokens: None,
@@ -498,10 +498,8 @@ mod response {
             image_request_failed_count_display: "-".to_owned(),
             total_tokens: None,
             total_tokens_display: "-".to_owned(),
-            created_tokens: None,
-            created_tokens_display: "-".to_owned(),
-            read_tokens: None,
-            read_tokens_display: "-".to_owned(),
+            cache_write_input_tokens: None,
+            cache_write_input_tokens_display: "-".to_owned(),
             last_used_at: None,
             last_used_at_full_display: None,
             last_used_at_display: "-".to_owned(),
@@ -516,9 +514,9 @@ mod response {
         assert_eq!(value["windowLabelDisplay"], "周/月额度窗口");
         assert!(value["inputTokens"].is_null());
         assert!(value["totalTokens"].is_null());
-        assert!(value["reasoningTokens"].is_null());
-        assert_eq!(value["reasoningTokensDisplay"], "-");
-        assert_eq!(value["createdTokensDisplay"], "-");
+        assert!(value["reasoningOutputTokens"].is_null());
+        assert_eq!(value["reasoningOutputTokensDisplay"], "-");
+        assert_eq!(value["cacheWriteInputTokensDisplay"], "-");
     }
 
     #[test]

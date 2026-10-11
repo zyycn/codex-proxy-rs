@@ -20,7 +20,7 @@ pub(crate) fn encode_billing_snapshot(
         "version": 1,
         "longContextBillingApplied": b.long_context_billing_applied(),
         "image": b.image().map(|image| serde_json::json!({
-            "inputTokens": image.input_tokens, "cachedTokens": image.cached_tokens,
+            "inputTokens": image.input_tokens, "cachedTokens": image.cached_input_tokens,
             "input": image.input_amount.amount().canonical(),
             "cacheRead": image.cache_read_amount.amount().canonical(),
             "inputPrice": image.input_price_per_million.amount().canonical(),
@@ -74,7 +74,7 @@ pub(crate) fn decode_billing_snapshot(
                 };
                 Some(gateway_admin::model::observability::ImageBillingBreakdown {
                     input_tokens: image.get("inputTokens")?.as_u64()?,
-                    cached_tokens: image.get("cachedTokens")?.as_u64()?,
+                    cached_input_tokens: image.get("cachedTokens")?.as_u64()?,
                     input_amount: amount("input")?,
                     cache_read_amount: amount("cacheRead")?,
                     input_price_per_million: amount("inputPrice")?,

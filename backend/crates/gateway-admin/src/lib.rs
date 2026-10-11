@@ -35,7 +35,7 @@ pub use use_case::{
     client_keys::ClientKeyService,
     credentials::{CredentialsService, ProviderCredentials},
     import_tasks::ImportTasksService,
-    observability::ObservabilityService,
+    observability::{ObservabilityService, ProviderUsageBillingProjector},
     proxies::ProxiesService,
     settings::SettingsService,
     system::SystemService,
@@ -441,11 +441,14 @@ async fn initialize_inner(
         plugin_inspector.clone(),
     ));
     let system = Arc::new(DefaultSystemService::new(system, system_preflight));
+    let observations: Arc<dyn ports::store::ObservabilityStore> = Arc::new(
+        use_case::observability::CachedObservabilityStore::new(store.observability()),
+    );
     let key_usage = Arc::new(use_case::key_usage::DefaultKeyUsageService::new(
         auth.clone(),
         client_key_verifier,
         store.client_keys(),
-        store.observability(),
+        observations.clone(),
         system.clone(),
         timezone,
     ));
@@ -506,7 +509,7 @@ async fn initialize_inner(
         )),
         client_distribution: Arc::new(DefaultClientDistributionService::new(client_distribution)),
         observability: Arc::new(DefaultObservabilityService::new(
-            store.observability(),
+            observations.clone(),
             store.accounts(),
             store.settings(),
             registry.clone(),

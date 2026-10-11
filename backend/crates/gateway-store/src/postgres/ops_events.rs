@@ -33,7 +33,7 @@ pub struct OpsEvent {
     pub component: String,
     pub operation: String,
     pub provider_kind: Option<String>,
-    pub provider_account_id: Option<String>,
+    pub account_snapshot: Option<gateway_core::account::AccountHistorySnapshot>,
     pub provider_account_ref: Option<String>,
     pub upstream_model_id: Option<String>,
     pub failure_kind: String,
@@ -78,15 +78,6 @@ impl OpsEvent {
         {
             return Err(invalid("upstream_send_state is invalid"));
         }
-        if self
-            .provider_account_id
-            .as_ref()
-            .is_some_and(|id| Some(id) != self.provider_account_ref.as_ref())
-        {
-            return Err(invalid(
-                "live provider account ID must equal its historical ref",
-            ));
-        }
         Ok(())
     }
 }
@@ -115,17 +106,17 @@ impl OpsEventRepository for PgOpsEventRepository {
         sqlx::query(
             "insert into ops_events (
                id, model_request_id, attempt_index, level, component, operation,
-               provider_kind, provider_account_id, provider_account_ref, upstream_model_id,
+               provider_kind, provider_account_ref, upstream_model_id,
                provider_account_name_snapshot, provider_account_email_snapshot,
-               provider_account_authentication_kind_snapshot,
+               provider_account_authentication_kind_snapshot, provider_account_plan_type_snapshot,
                failure_kind, upstream_send_state, status_code, provider_error_code, retry_after_ms,
                upstream_request_id, latency_ms, message, error_details,
                created_at
              ) values (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-               (select name from provider_accounts where id = $8),
-               (select email from provider_accounts where id = $8),
-               (select authentication_kind from provider_accounts where id = $8),
+               $1, $2, $3, $4, $5, $6, $7, $9, $10,
+               $8::jsonb ->> 'name',
+               $8::jsonb ->> 'email',
+               $8::jsonb ->> 'authenticationKind', $8::jsonb ->> 'planTypeSnapshot',
                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
              )",
         )
@@ -142,7 +133,7 @@ impl OpsEventRepository for PgOpsEventRepository {
         .bind(event.component)
         .bind(event.operation)
         .bind(event.provider_kind)
-        .bind(event.provider_account_id)
+        .bind(event.account_snapshot.map(sqlx::types::Json))
         .bind(event.provider_account_ref)
         .bind(event.upstream_model_id)
         .bind(event.failure_kind)

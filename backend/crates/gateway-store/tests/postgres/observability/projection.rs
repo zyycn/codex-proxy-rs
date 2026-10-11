@@ -10,9 +10,9 @@ async fn projection_upgrade_preserves_observation_values() {
     let Some(db) = TestDatabase::create_through("observation_projection_upgrade", 26).await else {
         return;
     };
-    seed_observability_facts(&db.pool, Utc::now())
-        .await
-        .unwrap();
+    // 此测试固定覆盖 26 → 27 的冻结视图合同，不依赖最新版本的写入夹具
+    sqlx::query("insert into model_requests(id,client_api_key_ref,operation,client_transport,outcome,client_status_code,started_at,deadline_at,completed_at,request_observation_json) values('req_observe_success','historical_key','responses','http_sse','succeeded',200,now()-interval '1 hour',now(),now(),'{\"request\":{\"configRevision\":1,\"protocol\":\"openai\",\"endpoint\":\"/v1/responses\",\"compact\":false},\"routing\":{\"scope\":\"all\",\"groupRefs\":[],\"groupNamesSnapshot\":[]},\"timings\":{\"local\":{\"latencyMs\":800}}}'::jsonb)")
+        .execute(&db.pool).await.unwrap();
     sqlx::query(
         "update model_requests
             set request_observation_json = jsonb_set(request_observation_json,
@@ -28,7 +28,10 @@ async fn projection_upgrade_preserves_observation_values() {
             .await
             .unwrap();
 
-    super::super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+    super::super::TEST_MIGRATOR
+        .run_to(27, &db.pool)
+        .await
+        .unwrap();
 
     let after: Vec<Value> =
         sqlx::query_scalar("select to_jsonb(mr) from model_request_observations mr order by id")
@@ -59,10 +62,11 @@ async fn plain_observation_aggregates_can_use_a_covering_index() {
         .await
         .unwrap();
     let mut transaction = db.pool.begin().await.unwrap();
+    // 视图通过请求 ID 关联运行态租约，覆盖索引包含关联键但不包含观测 JSON
     // 小夹具只验证覆盖索引路径可达，不把耗时阈值或生产规划器成本固定在测试中
     sqlx::raw_sql(
         "create index observation_plain_cover_idx on model_requests (started_at)
-           include (input_tokens, cost_amount) where recovered_at is null;
+           include (id, input_tokens, cost_amount) where recovered_at is null;
          set local enable_seqscan = off",
     )
     .execute(&mut *transaction)
