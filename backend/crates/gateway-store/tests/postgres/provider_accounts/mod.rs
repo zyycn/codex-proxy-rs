@@ -8,6 +8,7 @@ use std::{
 
 mod admin_adapter;
 mod authorization;
+mod deletion;
 mod quota_forecast;
 mod timestamps;
 

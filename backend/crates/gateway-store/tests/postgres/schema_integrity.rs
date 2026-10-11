@@ -408,3 +408,138 @@ async fn request_observation_reject_malformed_documents_and_keep_upstream_clock_
     assert_eq!(metrics, (2.450638, 0.0, None));
     db.close().await;
 }
+
+#[tokio::test]
+async fn observation_validation_upgrade_preserves_history_and_rejects_invalid_writes() {
+    let Some(db) = TestDatabase::create_through("observation_validation_upgrade", 27).await else {
+        return;
+    };
+    seed_request(&db.pool).await;
+    let before: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(mr) from model_requests mr")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+
+    super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+    let after: serde_json::Value = sqlx::query_scalar("select to_jsonb(mr) from model_requests mr")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+
+    for statement in [
+        "insert into model_requests (
+           id, client_api_key_ref, operation, client_transport, started_at, deadline_at,
+           outcome, completed_at, request_observation_json
+         ) select 'invalid_insert', client_api_key_ref, operation, client_transport,
+           started_at, deadline_at, outcome, completed_at,
+           request_observation_json || '{\"unknown\":true}'::jsonb from model_requests",
+        "update model_requests set request_observation_json =
+           request_observation_json || '{\"unknown\":true}'::jsonb",
+    ] {
+        let error = sqlx::query(sqlx::AssertSqlSafe(statement))
+            .execute(&db.pool)
+            .await
+            .expect_err("invalid observations must still fail immediately");
+        assert_check_rejected(&error);
+        assert_eq!(
+            error.as_database_error().unwrap().constraint(),
+            Some("model_requests_observation_shape_ck")
+        );
+    }
+    let rows: Vec<serde_json::Value> =
+        sqlx::query_scalar("select to_jsonb(mr) from model_requests mr")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, vec![before]);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn unchanged_observations_do_not_repeat_full_document_validation() {
+    let Some(db) = TestDatabase::create("observation_validation_cost").await else {
+        return;
+    };
+    // 统计原校验器调用次数，避免性能回归断言依赖 CI 机器的运行速度
+    sqlx::query("create sequence observation_validation_calls")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let definition: String = sqlx::query_scalar(
+        "select pg_get_functiondef('model_request_observation_valid(jsonb)'::regprocedure)",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    let instrumented = definition.replacen(
+        "begin\n",
+        "begin\n  perform nextval('observation_validation_calls');\n",
+        1,
+    );
+    assert_ne!(instrumented, definition);
+    sqlx::raw_sql(sqlx::AssertSqlSafe(instrumented))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    seed_request(&db.pool).await;
+    sqlx::query("update model_requests set deadline_at = deadline_at + interval '1 second'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("update model_requests set request_observation_json = request_observation_json")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let calls: i64 = sqlx::query_scalar("select last_value from observation_validation_calls")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(calls, 1, "only the initial insert needs full validation");
+
+    sqlx::query(
+        "update model_requests set request_observation_json = jsonb_set(
+           request_observation_json, '{request,userAgent}', '\"changed\"'::jsonb)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let calls: i64 = sqlx::query_scalar("select last_value from observation_validation_calls")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls, 2,
+        "changed observations must run the original validator"
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn observation_validation_checks_the_final_row_after_before_triggers() {
+    let Some(db) = TestDatabase::create("observation_validation_final_row").await else {
+        return;
+    };
+    seed_request(&db.pool).await;
+    sqlx::raw_sql(
+        "create function change_observation_before_update() returns trigger language plpgsql as $$
+         begin
+           new.request_observation_json := new.request_observation_json || '{\"unknown\":true}'::jsonb;
+           return new;
+         end;
+         $$;
+         create trigger change_observation_before_update before update on model_requests
+           for each row execute function change_observation_before_update();",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let error =
+        sqlx::query("update model_requests set deadline_at = deadline_at + interval '1 second'")
+            .execute(&db.pool)
+            .await
+            .expect_err("indirect JSON changes must not bypass validation");
+    assert_check_rejected(&error);
+    db.close().await;
+}
