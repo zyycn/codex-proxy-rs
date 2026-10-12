@@ -5,13 +5,12 @@ use std::sync::Arc;
 use tokio::{
     io::AsyncWrite,
     sync::{OwnedSemaphorePermit, Semaphore, mpsc},
-    time::Instant,
 };
 
 use crate::Frame;
 
 use super::super::frame::{validate_frame, write_frame};
-use super::{CallCancellation, SessionError, lifecycle::wait_deadline};
+use super::{CallCancellation, CallDeadline, SessionError};
 
 pub(super) struct Output {
     pub(super) sender: mpsc::Sender<Outbound>,
@@ -46,13 +45,13 @@ impl Output {
     pub(super) async fn send_data_until(
         &self,
         frame: Frame,
-        deadline: Option<Instant>,
+        deadline: &CallDeadline,
         cancellation: &CallCancellation,
     ) -> Result<(), SessionError> {
         tokio::select! {
             biased;
             () = cancellation.cancelled() => Err(SessionError::Cancelled),
-            () = wait_deadline(deadline) => Err(SessionError::Timeout),
+            () = deadline.wait() => Err(SessionError::Timeout),
             result = self.send_data(frame) => result,
         }
     }

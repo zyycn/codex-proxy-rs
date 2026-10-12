@@ -1,6 +1,7 @@
 //! 插件会话测试入口与双工传输、处理器和宿主回调夹具
 
 mod credit;
+mod deadline;
 mod driver;
 mod lifecycle;
 mod registry;

@@ -2,9 +2,7 @@
 
 use std::sync::Mutex;
 
-use tokio::time::Instant;
-
-use super::{CallCancellation, SessionError, lifecycle::wait_deadline};
+use super::{CallCancellation, CallDeadline, SessionError};
 
 #[derive(Default)]
 pub(super) struct CreditWindow {
@@ -53,7 +51,7 @@ impl CreditWindow {
 
     pub(super) async fn initial_window(
         &self,
-        deadline: Option<Instant>,
+        deadline: &CallDeadline,
         cancellation: &CallCancellation,
     ) -> Result<u64, SessionError> {
         loop {
@@ -70,7 +68,7 @@ impl CreditWindow {
             tokio::select! {
                 biased;
                 () = cancellation.cancelled() => return Err(SessionError::Cancelled),
-                () = wait_deadline(deadline) => return Err(SessionError::Timeout),
+                () = deadline.wait() => return Err(SessionError::Timeout),
                 () = changed => {}
             }
         }
@@ -79,7 +77,7 @@ impl CreditWindow {
     pub(super) async fn take(
         &self,
         bytes: u64,
-        deadline: Option<Instant>,
+        deadline: &CallDeadline,
         cancellation: &CallCancellation,
     ) -> Result<(), SessionError> {
         loop {
@@ -101,7 +99,7 @@ impl CreditWindow {
             tokio::select! {
                 biased;
                 () = cancellation.cancelled() => return Err(SessionError::Cancelled),
-                () = wait_deadline(deadline) => return Err(SessionError::Timeout),
+                () = deadline.wait() => return Err(SessionError::Timeout),
                 () = changed => {}
             }
         }

@@ -3,6 +3,7 @@
 mod call;
 mod config;
 mod credit;
+mod deadline;
 mod driver;
 mod error;
 mod lifecycle;
@@ -12,6 +13,7 @@ mod stream;
 
 pub use call::{CallFuture, CallReply, PluginCall, PluginHandler};
 pub use config::SessionConfig;
+pub use deadline::{CallDeadline, CallDeadlinePause};
 pub use driver::PluginSession;
 pub use error::SessionError;
 pub use lifecycle::CallCancellation;
