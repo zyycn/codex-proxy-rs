@@ -14,6 +14,40 @@ use gateway_api::openai::error::{
 };
 
 #[tokio::test]
+async fn ordinary_upstream_rejections_preserve_status_body_and_client_retry_advice() {
+    use bytes::Bytes;
+    use gateway_core::error::ClientVisibleUpstreamResponse;
+    use gateway_core::event::ProviderResponseHeader;
+
+    let body = Bytes::from_static(br#"{ "error":{"code":"Vendor.Future.v2","type":"server_error","message":"original failure","future":9007199254740993} }"#);
+    for status in [400, 409, 500, 503, 504] {
+        let error = EngineError::Provider(
+            ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+                .with_retry_prohibited()
+                .with_client_visible_upstream_response(
+                    ClientVisibleUpstreamResponse::new(
+                        status,
+                        Some(b"application/problem+json".to_vec()),
+                        body.clone(),
+                    )
+                    .with_headers(vec![ProviderResponseHeader::new(
+                        "retry-after",
+                        Bytes::from_static(b"17"),
+                    )]),
+                ),
+        );
+        let response = engine_error_response(&error);
+        assert_eq!(response.status().as_u16(), status);
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/problem+json"
+        );
+        assert_eq!(response.headers()["retry-after"], "17");
+        assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), body);
+    }
+}
+
+#[tokio::test]
 async fn capacity_errors_offer_client_retry_without_changing_upstream_facts() {
     use bytes::Bytes;
     use gateway_core::error::ClientVisibleUpstreamResponse;

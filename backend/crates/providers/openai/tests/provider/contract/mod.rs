@@ -8,6 +8,7 @@ mod image_model_access;
 mod passthrough;
 mod precommit;
 mod privacy;
+mod recovery;
 mod response_interrupt;
 mod session_binding;
 mod timing;

@@ -515,21 +515,6 @@ pub(super) fn websocket_client_failure_policy(
         } if *status == reqwest::StatusCode::UPGRADE_REQUIRED => {
             Some(WebSocketFailurePolicy::ImmediateFallback)
         }
-        CodexClientError::Upstream {
-            status,
-            transport: CodexBackendTransport::WebSocket,
-            ..
-        } if status.is_server_error()
-            || matches!(
-                *status,
-                reqwest::StatusCode::REQUEST_TIMEOUT
-                    | reqwest::StatusCode::CONFLICT
-                    | reqwest::StatusCode::TOO_EARLY
-                    | reqwest::StatusCode::TOO_MANY_REQUESTS
-            ) =>
-        {
-            Some(WebSocketFailurePolicy::Budgeted)
-        }
         CodexClientError::WebSocket(error)
             if !matches!(
                 error.classified(),
@@ -549,7 +534,7 @@ pub(super) fn apply_websocket_recovery_policy(
     failure: &mut MappedProviderFailure,
     context: WebSocketRecoveryContext<'_>,
 ) {
-    // Flex 拒绝即使发生在 WS opening 阶段也必须直达客户端，不能转换成传输回退
+    // 未匹配网关恢复规则的上游拒绝直达客户端，不能转换成传输重试或污染会话回退状态
     if failure.error.retry_is_prohibited() {
         return;
     }
@@ -1432,7 +1417,13 @@ pub(super) fn map_upstream_failure(
         provider_error_kind(category)
     };
     let mut error = provider_error(error_kind, send_state);
-    if category == CodexFailureCategory::FlexUnavailable {
+    let replay_safe = failure.replay_is_safe() || cyber_policy_failure;
+    // WS opening 的 426 是明确的传输切换信号；普通拒绝不能仅凭 NotSent 触发换号
+    let upgrade_required = failure.send_phase == CodexUpstreamSendPhase::BeforePayload
+        && failure.status == Some(reqwest::StatusCode::UPGRADE_REQUIRED);
+    if category == CodexFailureCategory::FlexUnavailable
+        || (!replay_safe && continuation_failure.is_none() && !upgrade_required)
+    {
         error = error.with_retry_prohibited();
     }
     error = error.with_raw_upstream_error(RawUpstreamError::new(failure.raw_body.clone()));
@@ -1463,9 +1454,7 @@ pub(super) fn map_upstream_failure(
     if let Some(status) = failure.status {
         error = error.with_status(status.as_u16());
     }
-    if replay_boundary.permits_provider_proof()
-        && (failure.replay_is_safe() || cyber_policy_failure)
-    {
+    if replay_boundary.permits_provider_proof() && replay_safe {
         error = error.with_replay_safe();
     }
     if let Some(continuation_failure) = continuation_failure {
@@ -1691,14 +1680,20 @@ pub(super) fn provider_error(
     ProviderError::new(kind, send_state)
 }
 
-/// 只恢复明确未发送的 HTTP 建连失败；已知 TLS/配置错误不反复尝试同一路径
+/// 只恢复明确未发送的 HTTP 建连失败；TLS 协议、证书及配置错误不反复尝试同一路径
 fn transient_http_connect(error: &reqwest::Error) -> bool {
     if !error.is_connect() || error.is_builder() {
         return false;
     }
     let mut source = std::error::Error::source(error);
     while let Some(cause) = source {
-        if cause.is::<native_tls::Error>() || cause.is::<rustls::Error>() {
+        // native-tls 的 source() 不暴露 OpenSSL 错误本体，无底层 cause 的握手 EOF 需精确匹配文本
+        // 仅在类型化 native TLS 错误且 HTTP 尚未发送时放行，其他 TLS 错误仍不重试
+        if cause
+            .downcast_ref::<native_tls::Error>()
+            .is_some_and(|error| error.to_string() != "unexpected EOF")
+            || cause.is::<rustls::Error>()
+        {
             return false;
         }
         if let Some(io) = cause.downcast_ref::<std::io::Error>()

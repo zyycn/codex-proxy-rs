@@ -375,7 +375,11 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别客户端，Cor
 
 - 一个客户端请求对应一条 `model_requests`；attempt 是请求内事实，不建立第二张权威表
 - Provider 的一次 `execute` 只选择一个 credential 并返回一个冷流；换号、重试和 fallback 由 Core 决定
+- OpenAI 的自动恢复限于明确识别的账号、容量、续接和传输场景；普通上游拒绝保留响应与重试提示，
+  交由客户端决策。WS opening 尚未发送业务 payload 也不扩大该恢复范围，明确的 `426` 仍允许 HTTP 回退
 - `not_sent`、`sent`、`ambiguous` 是单调的上游发送边界；结果不明确时不能假定上游未收到请求
+- HTTP 明确未发送的瞬时建连失败（含 TLS 握手 EOF）共享最多 4 次 opening、30 秒的请求内预算；
+  证书、TLS 协议及配置错误不进入同账号建连恢复，取消和执行 deadline 优先终止等待
 - downstream commit 记录不可撤回的首次交付；不可重放事件交付后禁止换号、重试和 fallback
   原生 Responses Lite WebSocket 及时交付正常事件，仅 Provider 明确标记的可替换前导保留重试资格；Core 单独维护重放屏障，
   仍检查错误分类、续接归属、发送状态、副作用及预算。中间件链不启用此前导例外

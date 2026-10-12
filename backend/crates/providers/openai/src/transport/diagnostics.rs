@@ -180,16 +180,11 @@ impl CodexUpstreamFailure {
         self.category
     }
 
-    /// 返回该拒绝是否允许换号重放
+    /// 只有明确识别的账号或容量拒绝才允许网关重放，普通上游错误交给客户端
     #[must_use]
     pub const fn replay_is_safe(&self) -> bool {
-        if matches!(self.category, CodexFailureCategory::FlexUnavailable) {
-            return false;
-        }
-        match self.send_phase {
-            CodexUpstreamSendPhase::BeforePayload => true,
-            CodexUpstreamSendPhase::Ambiguous => false,
-            CodexUpstreamSendPhase::AfterPayload => matches!(
+        !matches!(self.send_phase, CodexUpstreamSendPhase::Ambiguous)
+            && matches!(
                 self.category,
                 CodexFailureCategory::ModelUnsupported
                     | CodexFailureCategory::CredentialExpired
@@ -201,8 +196,7 @@ impl CodexUpstreamFailure {
                     | CodexFailureCategory::CloudflareChallenge
                     | CodexFailureCategory::CloudflarePathBlocked
                     | CodexFailureCategory::CapacityUnavailable
-            ),
-        }
+            )
     }
 
     pub(crate) fn upstream_code(&self) -> Option<&str> {
