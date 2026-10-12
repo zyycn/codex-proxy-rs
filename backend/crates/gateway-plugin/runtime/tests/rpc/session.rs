@@ -97,7 +97,7 @@ impl CallbackHandler for BlockingCallbacks {
 }
 
 impl CallbackHandler for LifecycleCallbacks {
-    fn begin(&self, _context: &CallContext) {
+    fn begin(&self, _context: &CallContext, _deadline: &gateway_plugin_sdk::client::CallDeadline) {
         self.begun.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -122,7 +122,7 @@ impl CallbackHandler for LifecycleCallbacks {
 }
 
 impl CallbackHandler for GatedFirstBegin {
-    fn begin(&self, context: &CallContext) {
+    fn begin(&self, context: &CallContext, _deadline: &gateway_plugin_sdk::client::CallDeadline) {
         if context.call_id == 1 {
             self.entered.notify_one();
             let released = self.released.lock().unwrap();
@@ -862,6 +862,56 @@ async fn acknowledged_timeout_does_not_interrupt_another_call() {
     let (first, second) = tokio::join!(first, second);
     assert!(matches!(first, Err(RpcError::Timeout)));
     assert_eq!(second.unwrap().result, json!("survived"));
+    assert!(session.is_ready());
+    session.shutdown(Duration::from_secs(1)).await;
+}
+
+struct SlowNextCallbacks;
+
+impl CallbackHandler for SlowNextCallbacks {
+    fn call(
+        &self,
+        _context: CallContext,
+        method: String,
+        params: serde_json::Value,
+        payload: Vec<u8>,
+    ) -> BoxFuture<'static, Result<RpcReply, PluginFault>> {
+        Box::pin(async move {
+            assert_eq!(method, gateway_plugin_sdk::call::middleware::NEXT_METHOD);
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            Ok(RpcReply {
+                result: params,
+                payload,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn managed_next_suspends_only_its_parent_and_not_a_concurrent_call() {
+    let (_cache, session) = session(Arc::new(SlowNextCallbacks)).await;
+    let delegated = session.call(
+        "callback_method",
+        session.context(Stage::Request, Duration::from_millis(200)),
+        json!({"method": gateway_plugin_sdk::call::middleware::NEXT_METHOD}),
+        Vec::new(),
+    );
+    let hanging = session.call(
+        "hang",
+        session.context(Stage::Request, Duration::from_millis(100)),
+        json!({}),
+        Vec::new(),
+    );
+    let (delegated, hanging) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(delegated, hanging)
+    })
+    .await
+    .unwrap();
+    assert!(
+        delegated.is_ok(),
+        "host waiting for next must outlive its processing budget"
+    );
+    assert!(matches!(hanging, Err(RpcError::Timeout)));
     assert!(session.is_ready());
     session.shutdown(Duration::from_secs(1)).await;
 }

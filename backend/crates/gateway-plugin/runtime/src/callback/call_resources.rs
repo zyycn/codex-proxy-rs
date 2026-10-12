@@ -3,16 +3,15 @@
 use super::{CallbackScope, MiddlewareCallback, denied, http_middleware, model};
 use gateway_core::lifecycle::CancellationToken;
 use gateway_host::outbound::HttpBody;
-use gateway_plugin_sdk::{CallContext, ErrorCode, PluginFault};
+use gateway_plugin_sdk::{CallContext, ErrorCode, PluginFault, client::CallDeadline};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::time::Instant;
 
 pub(super) struct CallResources {
-    pub(super) deadline: Instant,
+    pub(super) deadline: CallDeadline,
     operation_timeout: Duration,
     pub(super) cancellation: CancellationToken,
     pub(super) scope: Arc<CallbackScope>,
@@ -26,11 +25,12 @@ pub(super) struct CallResources {
 impl CallResources {
     pub(super) fn new(
         context: &CallContext,
+        deadline: &CallDeadline,
         scope: Arc<CallbackScope>,
         middleware: Option<Arc<dyn MiddlewareCallback>>,
     ) -> Self {
         Self {
-            deadline: Instant::now() + Duration::from_millis(context.timeout_ms),
+            deadline: deadline.clone(),
             operation_timeout: Duration::from_millis(context.timeout_ms),
             cancellation: CancellationToken::new(),
             scope,
@@ -44,13 +44,6 @@ impl CallResources {
                 ..CallState::default()
             }),
         }
-    }
-
-    pub(super) fn set_streaming(&self, streaming: bool) {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .resource_stream = streaming;
     }
 
     pub(super) fn close(&self) {
@@ -94,20 +87,20 @@ impl CallResources {
         if state.closed {
             return Err(denied());
         }
-        if state.resource_stream {
-            return Ok(self.operation_timeout);
+        let remaining = self.deadline.remaining().unwrap_or(self.operation_timeout);
+        if remaining.is_zero() {
+            return Err(PluginFault::new(
+                ErrorCode::Timeout,
+                "callback deadline elapsed",
+            ));
         }
-        self.deadline
-            .checked_duration_since(Instant::now())
-            .filter(|timeout| !timeout.is_zero())
-            .ok_or_else(|| PluginFault::new(ErrorCode::Timeout, "callback deadline elapsed"))
+        Ok(remaining)
     }
 }
 
 #[derive(Default)]
 pub(super) struct CallState {
     pub(super) closed: bool,
-    pub(super) resource_stream: bool,
     pub(super) middleware: Option<Arc<dyn MiddlewareCallback>>,
     pub(super) streams: BTreeMap<String, Arc<HttpStream>>,
     pub(super) model_streams: BTreeMap<String, Arc<model::ModelStream>>,

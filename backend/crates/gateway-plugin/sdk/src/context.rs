@@ -41,6 +41,7 @@ pub struct CallContext {
     pub generation: u64,
     pub incarnation: String,
     pub stage: Stage,
+    /// 插件处理预算；等待宿主 middleware next 时暂停，请求总期限由宿主单独执行
     pub timeout_ms: u64,
     /// 首个流式结果返回后由资源 owner 控制取消，不再沿用初始调用期限
     pub resource_stream: bool,

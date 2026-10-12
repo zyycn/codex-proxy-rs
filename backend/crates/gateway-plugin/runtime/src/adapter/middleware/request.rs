@@ -48,8 +48,10 @@ pub(super) async fn invoke(
             Err(MiddlewareError::Fault)
         };
     };
-    let remaining = context.deadline().bounded(maximum_timeout);
-    if remaining.is_zero() || context.cancellation().is_cancelled() {
+    if maximum_timeout.is_zero()
+        || context.deadline().is_elapsed()
+        || context.cancellation().is_cancelled()
+    {
         return Err(MiddlewareError::Fault);
     }
     let invocation = MiddlewareInvocation::new(&context, request, next, entry.instance_id.clone());
@@ -65,7 +67,7 @@ pub(super) async fn invoke(
             MiddlewareMount::Request => Stage::Request,
             MiddlewareMount::Attempt => Stage::Attempt,
         },
-        remaining,
+        maximum_timeout,
     );
     call_context.request_id = Some(context.request_id().as_str().to_owned());
     call_context.attempt_id = context
@@ -129,6 +131,10 @@ pub(super) async fn invoke(
     let stream = tokio::select! {
         biased;
         () = context.cancellation().cancelled() => return Err(MiddlewareError::Fault),
+        () = context.deadline().wait() => return Err(gateway_core::error::GatewayError::new(
+            gateway_core::error::GatewayErrorKind::Timeout,
+            "request deadline elapsed",
+        ).into()),
         result = invocation_ports.session.call_stream(
             HANDLE_METHOD,
             call_context,

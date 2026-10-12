@@ -6,13 +6,13 @@ use std::{
 };
 
 use serde_json::Value;
-use tokio::{sync::oneshot, time::Instant};
+use tokio::sync::oneshot;
 
-use crate::{Frame, Message};
+use crate::{Frame, Message, call::middleware::NEXT_METHOD};
 
 use super::super::frame::validate_frame;
 use super::{
-    CallCancellation, SessionError, credit::CreditWindow, lifecycle::callback_deadline,
+    CallCancellation, CallDeadline, CallDeadlinePause, SessionError, credit::CreditWindow,
     output::Output,
 };
 
@@ -26,7 +26,7 @@ pub struct HostReply {
 #[derive(Clone)]
 pub struct HostClient {
     pub(super) parent_id: u64,
-    pub(super) deadline: tokio::sync::watch::Receiver<Option<Instant>>,
+    pub(super) deadline: CallDeadline,
     pub(super) cancellation: CallCancellation,
     pub(super) callbacks: Arc<CallbackRegistry>,
     pub(super) output: Output,
@@ -60,7 +60,13 @@ impl HostClient {
         if method.is_empty() || method.len() > 128 {
             return Err(SessionError::Protocol);
         }
-        let ordered = self.callbacks.order.lock().await;
+        let ordered = tokio::select! {
+            biased;
+            () = self.cancellation.cancelled() => return Err(SessionError::Cancelled),
+            () = self.deadline.wait() => return Err(SessionError::Timeout),
+            ordered = self.callbacks.order.lock() => ordered,
+        };
+        let managed_next = method == NEXT_METHOD;
         let (id, received) = self.callbacks.begin(self.parent_id)?;
         let frame = Frame {
             message: Message::Callback {
@@ -78,12 +84,15 @@ impl HostClient {
         let sent = tokio::select! {
             biased;
             () = self.cancellation.cancelled() => Err(SessionError::Cancelled),
-            () = callback_deadline(self.deadline.clone()) => Err(SessionError::Timeout),
+            () = self.deadline.wait() => Err(SessionError::Timeout),
             result = self.output.send_data(frame) => result,
         };
         if let Err(error) = sent {
             self.callbacks.retire(id);
             return Err(error);
+        }
+        if managed_next {
+            self.callbacks.pause_next(id, &self.deadline);
         }
         drop(ordered);
         tokio::select! {
@@ -92,7 +101,7 @@ impl HostClient {
                 self.callbacks.retire(id);
                 Err(SessionError::Cancelled)
             }
-            () = callback_deadline(self.deadline.clone()) => {
+            () = self.deadline.wait() => {
                 self.callbacks.retire(id);
                 Err(SessionError::Timeout)
             }
@@ -117,6 +126,7 @@ struct CallbackState {
 
 struct PendingCallback {
     parent_id: u64,
+    pause: Option<CallDeadlinePause>,
     result: oneshot::Sender<Result<HostReply, SessionError>>,
 }
 
@@ -149,10 +159,25 @@ impl CallbackRegistry {
         let id = state.next_id;
         state.next_id = state.next_id.checked_add(2).ok_or(SessionError::Capacity)?;
         let (result, received) = oneshot::channel();
-        state
-            .pending
-            .insert(id, PendingCallback { parent_id, result });
+        state.pending.insert(
+            id,
+            PendingCallback {
+                parent_id,
+                result,
+                pause: None,
+            },
+        );
         Ok((id, received))
+    }
+
+    fn pause_next(&self, id: u64, deadline: &CallDeadline) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(pending) = state.pending.get_mut(&id) {
+            pending.pause = deadline.pause();
+        }
     }
 
     pub(super) fn resolve(&self, frame: Frame) -> Result<(), SessionError> {
@@ -174,7 +199,7 @@ impl CallbackRegistry {
                 return Err(SessionError::Protocol);
             }
         };
-        let Some(pending) = pending else {
+        let Some(mut pending) = pending else {
             return Ok(());
         };
         let result = match frame.message {
@@ -187,6 +212,8 @@ impl CallbackRegistry {
             }
             _ => return Err(SessionError::Protocol),
         };
+        // 收到宿主结果就恢复预算，不依赖插件再次轮询 next future
+        pending.pause.take();
         let _ = pending.result.send(result);
         Ok(())
     }

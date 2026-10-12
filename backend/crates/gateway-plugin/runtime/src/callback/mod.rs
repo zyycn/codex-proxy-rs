@@ -30,8 +30,7 @@ use futures::future::BoxFuture;
 use gateway_admin::model::AdminError;
 use gateway_core::{account::OutboundProxy, lifecycle::CancellationToken};
 use gateway_host::outbound::{HttpClient, NetworkPolicy};
-use gateway_plugin_sdk::{CallContext, ErrorCode, PluginFault};
-use tokio::time::Instant;
+use gateway_plugin_sdk::{CallContext, ErrorCode, PluginFault, client::CallDeadline};
 
 use crate::{CallbackHandler, RpcReply};
 pub(crate) use accounts::PluginAccountPortSlot;
@@ -329,7 +328,7 @@ impl PluginCallbacks {
 }
 
 impl CallbackHandler for PluginCallbacks {
-    fn begin(&self, context: &CallContext) {
+    fn begin(&self, context: &CallContext, deadline: &CallDeadline) {
         let scope = self
             .scopes
             .lock()
@@ -347,19 +346,8 @@ impl CallbackHandler for PluginCallbacks {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(
                 context.call_id,
-                Arc::new(CallResources::new(context, scope, middleware)),
+                Arc::new(CallResources::new(context, deadline, scope, middleware)),
             );
-    }
-
-    fn streaming(&self, context: &CallContext) {
-        if let Some(call) = self
-            .calls
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&context.call_id)
-        {
-            call.set_streaming(context.resource_stream);
-        }
     }
 
     fn finish(&self, context: &CallContext) {
@@ -406,7 +394,7 @@ impl CallbackHandler for PluginCallbacks {
                     .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if state.closed || (!state.resource_stream && Instant::now() >= call.deadline) {
+                if state.closed || call.deadline.is_elapsed() {
                     return Err(denied());
                 }
                 if method == "host.log" {

@@ -13,7 +13,7 @@ use futures::future::BoxFuture;
 use gateway_host::process::{ProcessControl, ProcessSpec, ProcessStartError, ProcessSupervisor};
 use gateway_plugin_sdk::{
     CallContext, Frame, Handshake, Message, PROTOCOL_VERSION, PluginFault, Stage,
-    client::{read_frame, validate_frame, write_frame},
+    client::{CallDeadline, CallDeadlinePause, read_frame, validate_frame, write_frame},
 };
 use tokio::sync::{Mutex as AsyncMutex, Semaphore, mpsc, oneshot, watch};
 
@@ -155,7 +155,7 @@ pub struct RpcReply {
 /// 具体回调在领域适配器校验账号、出站与执行身份；上下文只取自宿主在途调用表
 pub trait CallbackHandler: Send + Sync {
     /// 在 Call 可见之前建立资源范围；不得执行 I/O 或调用 RPC
-    fn begin(&self, _context: &CallContext) {}
+    fn begin(&self, _context: &CallContext, _deadline: &CallDeadline) {}
 
     /// 调用结束或取消时立即撤销其句柄；实现必须幂等且不能阻塞
     fn finish(&self, _context: &CallContext) {}
@@ -224,6 +224,7 @@ struct State {
 }
 
 struct PendingCall {
+    deadline: CallDeadline,
     handler: Arc<dyn CallbackHandler>,
     transmitted: bool,
     cancellation: Option<RpcError>,
@@ -293,7 +294,14 @@ impl Shared {
         if call.cancellation.is_some() {
             return Ok(());
         }
+        if matches!(&result, Err(RpcError::Remote(fault)) if fault.code == gateway_plugin_sdk::ErrorCode::Timeout)
+        {
+            log_timeout(&call.context, "plugin", "initial_reply", "remote_timeout");
+        }
         if call.stream.is_some() && result.is_ok() {
+            if call.context.resource_stream {
+                call.deadline.clear();
+            }
             let initial = call.result.take().ok_or(RpcError::Protocol(None))?;
             call.handler.streaming(&call.context);
             let _ = initial.send(result);
@@ -375,6 +383,14 @@ impl Shared {
             .map(|call| call.context.clone())
     }
 
+    pub fn pause_next(&self, id: u64) -> Option<CallDeadlinePause> {
+        self.state()
+            .calls
+            .get(&id)
+            .filter(|call| call.cancellation.is_none())
+            .and_then(|call| call.deadline.pause())
+    }
+
     pub fn is_cancelling(&self, id: u64) -> bool {
         self.state()
             .calls
@@ -402,6 +418,18 @@ impl Shared {
         };
         if call.cancellation.is_some() {
             return;
+        }
+        if matches!(error, RpcError::Timeout) {
+            log_timeout(
+                &call.context,
+                "runtime",
+                if call.result.is_some() {
+                    "initial_reply"
+                } else {
+                    "response_stream"
+                },
+                "processing_budget_exhausted",
+            );
         }
         if !call.transmitted {
             if let Some(call) = state.calls.remove(&id) {
@@ -759,10 +787,12 @@ impl RpcSession {
         if state.calls.len() >= self.limits.maximum_calls {
             return Err(RpcError::Capacity);
         }
-        self.callbacks.begin(&context);
+        let deadline = CallDeadline::new(deadline);
+        self.callbacks.begin(&context, &deadline);
         state.calls.insert(
             id,
             PendingCall {
+                deadline: deadline.clone(),
                 handler: self.callbacks.clone(),
                 transmitted: false,
                 cancellation: None,
@@ -817,7 +847,7 @@ impl RpcSession {
             id: started.id,
             armed: true,
         };
-        let sent = tokio::time::timeout_at(started.deadline, async {
+        let send = async {
             self.data
                 .send(frame)
                 .await
@@ -834,8 +864,12 @@ impl RpcSession {
                     .map_err(|_| RpcError::Closed(None))?;
             }
             Ok::<(), RpcError>(())
-        })
-        .await;
+        };
+        let sent = tokio::select! {
+            biased;
+            () = started.deadline.wait() => Err(()),
+            result = send => Ok(result),
+        };
         drop(next_call);
         match sent {
             Ok(Ok(())) => {}
@@ -850,7 +884,11 @@ impl RpcSession {
                 return Err(RpcError::Timeout);
             }
         }
-        let result = tokio::time::timeout_at(started.deadline, started.received).await;
+        let result = tokio::select! {
+            biased;
+            () = started.deadline.wait() => Err(()),
+            result = started.received => Ok(result),
+        };
         let reply = match result {
             Ok(Ok(result)) => {
                 guard.armed = false;
@@ -900,7 +938,6 @@ impl RpcSession {
         let bytes = self.limits.maximum_buffered_body_bytes.min(256 * 1024) as u32;
         let frames = 32;
         let (stream, chunks, terminal) = StreamIngress::new(bytes, frames);
-        let resource_stream = context.resource_stream;
         let completed = self
             .send_call(
                 method,
@@ -915,7 +952,7 @@ impl RpcSession {
             initial: completed.reply,
             chunks,
             terminal: Some(terminal),
-            deadline: (!resource_stream).then_some(completed.deadline),
+            deadline: completed.deadline,
             id: completed.id,
             shared: Arc::clone(&self.shared),
             _slot: slot,
@@ -980,12 +1017,33 @@ impl Drop for CallGuard {
 
 struct StartedCall {
     id: u64,
-    deadline: tokio::time::Instant,
+    deadline: CallDeadline,
     received: oneshot::Receiver<Result<RpcReply, RpcError>>,
 }
 
 struct CompletedCall {
     id: u64,
-    deadline: tokio::time::Instant,
+    deadline: CallDeadline,
     reply: RpcReply,
+}
+
+fn log_timeout(
+    context: &CallContext,
+    owner: &'static str,
+    phase: &'static str,
+    reason: &'static str,
+) {
+    tracing::warn!(
+        event = "plugin.rpc.timeout",
+        owner,
+        phase,
+        instance_id = context.instance_id,
+        call_id = context.call_id,
+        request_id = context.request_id,
+        attempt_id = context.attempt_id,
+        stage = ?context.stage,
+        budget_ms = context.timeout_ms,
+        reason,
+        "插件 RPC 调用超时"
+    );
 }

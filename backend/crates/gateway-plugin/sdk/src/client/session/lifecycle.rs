@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tokio::{sync::watch, time::Instant};
+use tokio::sync::watch;
 
 use crate::CallContext;
 
@@ -93,24 +93,5 @@ impl LifecycleHooks {
 
     pub(super) fn shutdown(&self) {
         let _ = self.events.try_send(LifecycleEvent::Shutdown);
-    }
-}
-
-pub(super) async fn wait_deadline(deadline: Option<Instant>) {
-    match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
-        None => std::future::pending().await,
-    }
-}
-
-pub(super) async fn callback_deadline(mut deadline: tokio::sync::watch::Receiver<Option<Instant>>) {
-    loop {
-        let current = *deadline.borrow_and_update();
-        tokio::select! {
-            () = wait_deadline(current) => return,
-            changed = deadline.changed() => {
-                if changed.is_err() { return wait_deadline(current).await; }
-            }
-        }
     }
 }

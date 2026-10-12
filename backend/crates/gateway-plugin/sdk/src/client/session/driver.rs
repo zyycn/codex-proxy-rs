@@ -16,9 +16,10 @@ use crate::{
 
 use super::super::frame::{read_frame, validate_frame, write_frame};
 use super::{
-    CallCancellation, HostClient, PluginCall, PluginHandler, SessionConfig, SessionError,
+    CallCancellation, CallDeadline, HostClient, PluginCall, PluginHandler, SessionConfig,
+    SessionError,
     credit::CreditWindow,
-    lifecycle::{CancellationSource, LifecycleHooks, wait_deadline},
+    lifecycle::{CancellationSource, LifecycleHooks},
     output::{Output, writer_loop},
     registry::CallbackRegistry,
     stream::validate_stream_chunk,
@@ -340,13 +341,12 @@ impl SessionDriver {
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(context.timeout_ms))
             .ok_or(SessionError::Protocol)?;
-        let deadline = Some(deadline);
-        let (deadline_source, callback_deadline) = tokio::sync::watch::channel(deadline);
+        let deadline = CallDeadline::new(deadline);
         let credits = Arc::new(CreditWindow::default());
         let (cancellation, cancellation_signal) = CancellationSource::new();
         let host = HostClient {
             parent_id: id,
-            deadline: callback_deadline,
+            deadline: deadline.clone(),
             cancellation: cancellation_signal.clone(),
             callbacks: Arc::clone(&self.callbacks),
             output: self.output.clone(),
@@ -379,7 +379,6 @@ impl SessionDriver {
                 output,
                 lifecycle,
                 deadline,
-                deadline_source,
                 maximum_stream_chunk_bytes,
                 maximum_chunks,
             )
@@ -453,8 +452,7 @@ async fn run_call(
     credits: Arc<CreditWindow>,
     output: Output,
     lifecycle: LifecycleHooks,
-    deadline: Option<Instant>,
-    deadline_source: tokio::sync::watch::Sender<Option<Instant>>,
+    deadline: CallDeadline,
     maximum_stream_chunk_bytes: usize,
     maximum_chunks: usize,
 ) -> Result<(), SessionError> {
@@ -463,7 +461,7 @@ async fn run_call(
     let response = tokio::select! {
         biased;
         () = cancellation.cancelled() => return Ok(()),
-        () = wait_deadline(deadline) => {
+        () = deadline.wait() => {
             lifecycle.cancel(context.clone());
             output.send_control(fault_frame(
                 id,
@@ -481,7 +479,7 @@ async fn run_call(
                 bounded_fault_frame(id, error),
                 &context,
                 &lifecycle,
-                deadline,
+                &deadline,
                 &cancellation,
             )
             .await?;
@@ -511,13 +509,13 @@ async fn run_call(
             initial,
             &context,
             &lifecycle,
-            deadline,
+            &deadline,
             &cancellation,
         )
         .await?;
         return Ok(());
     };
-    let window_bytes = match credits.initial_window(deadline, &cancellation).await {
+    let window_bytes = match credits.initial_window(&deadline, &cancellation).await {
         Ok(window) => window,
         Err(SessionError::Timeout) => {
             lifecycle.cancel(context.clone());
@@ -541,25 +539,22 @@ async fn run_call(
         initial,
         &context,
         &lifecycle,
-        deadline,
+        &deadline,
         &cancellation,
     )
     .await?
     {
         return Ok(());
     }
-    let deadline = if context.resource_stream {
-        None
-    } else {
-        deadline
-    };
-    deadline_source.send_replace(deadline);
+    if context.resource_stream {
+        deadline.clear();
+    }
     let mut sequence = 0_u64;
     loop {
         let item = tokio::select! {
             biased;
             () = cancellation.cancelled() => return Ok(()),
-            () = wait_deadline(deadline) => {
+            () = deadline.wait() => {
                 lifecycle.cancel(context.clone());
                 output.send_control(end_frame(
                     id,
@@ -587,7 +582,7 @@ async fn run_call(
             return Ok(());
         }
         match credits
-            .take(payload.len() as u64, deadline, &cancellation)
+            .take(payload.len() as u64, &deadline, &cancellation)
             .await
         {
             Ok(()) => {}
@@ -615,7 +610,7 @@ async fn run_call(
             id,
             &context,
             &lifecycle,
-            deadline,
+            &deadline,
             &cancellation,
         )
         .await?
@@ -631,7 +626,7 @@ async fn send_initial(
     frame: Frame,
     context: &CallContext,
     lifecycle: &LifecycleHooks,
-    deadline: Option<Instant>,
+    deadline: &CallDeadline,
     cancellation: &CallCancellation,
 ) -> Result<bool, SessionError> {
     match output.send_data_until(frame, deadline, cancellation).await {
@@ -655,7 +650,7 @@ async fn send_stream_data(
     id: u64,
     context: &CallContext,
     lifecycle: &LifecycleHooks,
-    deadline: Option<Instant>,
+    deadline: &CallDeadline,
     cancellation: &CallCancellation,
 ) -> Result<bool, SessionError> {
     match output.send_data_until(frame, deadline, cancellation).await {

@@ -681,6 +681,16 @@ impl Downstream {
 }
 
 fn middleware_context(transport: ClientTransport) -> MiddlewareContext {
+    middleware_context_with_deadline(
+        transport,
+        (SystemTime::now() + Duration::from_secs(5)).into(),
+    )
+}
+
+fn middleware_context_with_deadline(
+    transport: ClientTransport,
+    deadline: gateway_core::lifecycle::Deadline,
+) -> MiddlewareContext {
     MiddlewareContext::new(
         MiddlewareTarget {
             request_id: ModelRequestId::new("req_middleware").unwrap(),
@@ -697,7 +707,7 @@ fn middleware_context(transport: ClientTransport) -> MiddlewareContext {
             client_key_id: ClientApiKeyId::new("key-middleware").unwrap(),
             account_group_ids: Arc::<[AccountGroupId]>::from([]),
             cancellation: CancellationToken::new(),
-            deadline: (SystemTime::now() + Duration::from_secs(5)).into(),
+            deadline,
             extension_scope: ExtensionCallScope::default(),
             execution_effects: None,
         },
