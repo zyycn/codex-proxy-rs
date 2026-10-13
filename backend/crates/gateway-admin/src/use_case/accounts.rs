@@ -824,6 +824,8 @@ impl AccountsService for DefaultAccountsService {
                 points.push(QuotaForecastPoint {
                     observed_at: point.completed_at,
                     used_percent: fact.used_percent,
+                    reset_at: fact.reset_at,
+                    limit_reached: fact.limit_reached,
                     usage: point.usage,
                 });
             }
@@ -833,6 +835,8 @@ impl AccountsService for DefaultAccountsService {
                 QuotaForecastPoint {
                     observed_at: observed,
                     used_percent: percent,
+                    reset_at,
+                    limit_reached: window.limit_reached,
                     usage: history.usage,
                 },
                 points,

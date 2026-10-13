@@ -13,6 +13,8 @@ pub use model_access::{
 };
 mod proxy;
 pub use proxy::{InvalidOutboundProxy, OutboundProxy};
+mod quota_recovery;
+pub use quota_recovery::{QuotaWindowRecovery, quota_window_recovery};
 pub mod scope;
 mod selection;
 mod smart_scheduling;

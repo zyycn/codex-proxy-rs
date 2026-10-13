@@ -14,6 +14,8 @@ fn point(minute: i64, percent: f64, tokens: u64) -> QuotaForecastPoint {
     QuotaForecastPoint {
         observed_at: time(minute),
         used_percent: percent,
+        reset_at: time(1440),
+        limit_reached: percent >= 100.0,
         usage: QuotaForecastUsage {
             request_count: minute as u64,
             tokens,
@@ -73,14 +75,14 @@ fn snapshot_at_a_block_boundary_keeps_only_three_recent_blocks() {
 }
 
 #[test]
-fn large_percentage_reversal_restarts_sampling_without_crossing_old_consumption() {
+fn large_percentage_reversal_restarts_only_sampling_without_crossing_old_consumption() {
     let sample = select(
         vec![point(1, 40.0, 100), point(2, 50.0, 200), point(3, 1.0, 210)],
         point(4, 8.0, 280),
     );
     assert_eq!(sample.baseline_percent, 1.0);
     assert_eq!(sample.usage.tokens, 70);
-    assert_eq!(sample.cycle_usage.tokens, 70);
+    assert_eq!(sample.cycle_usage.tokens, 280);
     assert_eq!(sample.sampled_percent, 7.0);
     assert!(!sample.discontinuous);
     let waiting = select(
@@ -88,6 +90,17 @@ fn large_percentage_reversal_restarts_sampling_without_crossing_old_consumption(
         point(3, 2.0, 210),
     );
     assert!(waiting.discontinuous);
+}
+
+#[test]
+fn same_window_reversal_preserves_all_recorded_cycle_usage() {
+    let current = point(3, 35.0, 140);
+    let recorded = current.usage.clone();
+    let sample = select(vec![point(1, 32.0, 100), point(2, 30.0, 120)], current);
+    assert_eq!(sample.cycle_usage, recorded);
+    assert_eq!(sample.usage.tokens, 20);
+    assert!((sample.usage.usd - 0.02).abs() < 1e-10);
+    assert!(!sample.discontinuous);
 }
 
 #[test]
@@ -137,6 +150,54 @@ fn exhausted_history_is_retained_to_detect_a_reset_with_an_unchanged_deadline() 
     assert_eq!(sample.usage.tokens, 100);
     assert_eq!(sample.sampled_percent, 10.0);
     assert!(!sample.discontinuous);
+}
+
+#[test]
+fn a_single_non_exhausted_observation_does_not_restart_cycle_usage() {
+    let sample = select(vec![point(1, 100.0, 10_000)], point(2, 0.0, 10_000));
+    assert_eq!(sample.cycle_usage.tokens, 10_000);
+    assert!(sample.discontinuous);
+}
+
+#[test]
+fn observations_at_the_same_time_do_not_confirm_recovery_twice() {
+    let sample = select(
+        vec![
+            point(1, 100.0, 10_000),
+            point(2, 0.0, 10_000),
+            point(2, 5.0, 10_000),
+        ],
+        point(3, 100.0, 10_100),
+    );
+    assert_eq!(sample.cycle_usage.tokens, 10_100);
+}
+
+#[test]
+fn renewed_exhaustion_discards_the_previous_recovery_candidate() {
+    let sample = select(
+        vec![
+            point(1, 100.0, 10_000),
+            point(2, 0.0, 10_000),
+            point(3, 100.0, 10_100),
+            point(4, 0.0, 10_100),
+        ],
+        point(5, 10.0, 10_200),
+    );
+    assert_eq!(sample.cycle_usage.tokens, 100);
+    assert_eq!(sample.usage.tokens, 100);
+    assert!(!sample.discontinuous);
+}
+
+#[test]
+fn a_rolled_reset_restarts_at_the_low_usage_observation() {
+    let mut current = point(3, 5.0, 10_100);
+    current.reset_at += Duration::days(1);
+    let sample = select(
+        vec![point(1, 100.0, 10_000), point(2, 20.0, 10_050)],
+        current,
+    );
+    assert_eq!(sample.cycle_usage.tokens, 0);
+    assert!(sample.discontinuous);
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! 预测专用的配对采样；不改变完整交付用量或费用账本的统计口径
 
 use chrono::{DateTime, Utc};
+use gateway_core::account::{QuotaWindowRecovery, quota_window_recovery};
 
 use super::provider_credentials::ProviderDocument;
 
@@ -75,6 +76,7 @@ pub struct QuotaForecastHistory {
 pub struct QuotaForecastObservation {
     pub used_percent: f64,
     pub reset_at: DateTime<Utc>,
+    pub limit_reached: bool,
     pub plan_type: Option<String>,
 }
 
@@ -82,6 +84,8 @@ pub struct QuotaForecastObservation {
 pub struct QuotaForecastPoint {
     pub observed_at: DateTime<Utc>,
     pub used_percent: f64,
+    pub reset_at: DateTime<Utc>,
+    pub limit_reached: bool,
     pub usage: QuotaForecastUsage,
 }
 
@@ -145,20 +149,54 @@ pub fn select_forecast_sample(
     let mut cycle_baseline = interrupted.then(|| &history[0]);
     let mut anchors: Vec<&QuotaForecastPoint> = Vec::new();
     let mut high_water: Option<&QuotaForecastPoint> = None;
+    let mut last_observed_at = None;
+    let mut exhausted_reset = None;
+    let mut recovery_candidate: Option<&QuotaForecastPoint> = None;
     for point in &history {
-        if let Some(previous) = high_water {
-            if point.observed_at <= previous.observed_at {
+        if last_observed_at.is_some_and(|previous| point.observed_at <= previous) {
+            continue;
+        }
+        last_observed_at = Some(point.observed_at);
+        if let Some(reset_at) = exhausted_reset {
+            // 普通回落只中断采样；累计重开须满足已耗尽窗口的共用恢复证据
+            match quota_window_recovery(
+                Some(std::time::SystemTime::from(reset_at)),
+                Some(point.reset_at.into()),
+                Some(point.used_percent),
+                point.limit_reached,
+                recovery_candidate.is_some(),
+            ) {
+                QuotaWindowRecovery::Recovered => {
+                    let baseline = recovery_candidate
+                        .filter(|_| point.reset_at <= reset_at)
+                        .unwrap_or(point);
+                    cycle_baseline = Some(baseline);
+                    anchors.retain(|anchor| anchor.observed_at >= baseline.observed_at);
+                    exhausted_reset = None;
+                    recovery_candidate = None;
+                    sample.discontinuous = true;
+                }
+                QuotaWindowRecovery::Candidate => {
+                    recovery_candidate = Some(point);
+                    sample.discontinuous = true;
+                }
+                QuotaWindowRecovery::Pending => {
+                    recovery_candidate = None;
+                }
+            }
+        }
+        if point.limit_reached && exhausted_reset.is_none() {
+            exhausted_reset = Some(point.reset_at);
+        }
+        if let Some(previous) = high_water
+            && point.used_percent < previous.used_percent
+        {
+            // 一个百分点内的回落可能是量化/并发乱序；更大的回落不能跨越
+            if previous.used_percent - point.used_percent <= 1.0 {
                 continue;
             }
-            if point.used_percent < previous.used_percent {
-                // 一个百分点内的回落可能是量化/并发乱序；更大的回落不能跨越
-                if previous.used_percent - point.used_percent <= 1.0 {
-                    continue;
-                }
-                sample.discontinuous = true;
-                anchors.clear();
-                cycle_baseline = Some(point);
-            }
+            sample.discontinuous = true;
+            anchors.clear();
         }
         high_water = Some(point);
         if anchors

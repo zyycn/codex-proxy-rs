@@ -523,6 +523,7 @@ impl ProviderAdmin for FakeProviderAdmin {
         Some(
             gateway_admin::model::quota_forecast_sampling::QuotaForecastObservation {
                 used_percent: fields.get("percent")?.as_f64()?,
+                limit_reached: fields.get("percent")?.as_f64()? >= 100.0,
                 reset_at: fields.get("reset")?.as_str()?.parse().ok()?,
                 plan_type: fields.get("plan")?.as_str().map(str::to_owned),
             },
@@ -2397,6 +2398,83 @@ async fn quota_forecast_only_queries_the_two_selected_source_windows() {
         report.forecasts[1].source.as_ref().unwrap().label,
         "window-1"
     );
+}
+
+#[tokio::test]
+async fn quota_forecast_same_window_reversal_keeps_recorded_usage_in_the_report() {
+    use gateway_admin::model::quota_forecast_sampling::QuotaForecastHistoryPoint;
+
+    let now = Utc::now();
+    let observed = now - TimeDelta::minutes(1);
+    let reset = now + TimeDelta::days(1);
+    let provider = FakeProviderAdmin::new("openai", events());
+    provider.set_quota(ProviderQuota {
+        plan_type: Some("pro".to_owned()),
+        observed_at: Some(observed),
+        windows: vec![ProviderQuotaWindow {
+            key: "week".to_owned(),
+            group: "shortTerm".to_owned(),
+            label: "周额度".to_owned(),
+            limit_id: None,
+            limit_name: None,
+            role: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
+            window_seconds: Some(604_800),
+            used_percent: Some(35.0),
+            reset_at: Some(reset),
+            limit_reached: false,
+            local_usage: None,
+            provider_data: None,
+        }],
+        ..empty_quota()
+    });
+    let mut account = account_record("openai");
+    account.created_at = now - TimeDelta::hours(1);
+    let store = FakeAccountStore::with_account(account, events());
+    let usage = |requests, tokens| QuotaForecastUsage {
+        request_count: requests,
+        tokens,
+        input_tokens: tokens,
+        known_cost_count: requests,
+        usd: tokens as f64 / 1_000.0,
+        ..Default::default()
+    };
+    *store.quota_forecast_history.lock().unwrap() = QuotaForecastHistory {
+        points: [(3, 32.0, 100), (2, 30.0, 120)]
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, (minutes, percent, tokens))| QuotaForecastHistoryPoint {
+                    started_at: now - TimeDelta::minutes(5),
+                    completed_at: now - TimeDelta::minutes(minutes),
+                    usage: usage(index as u64 + 1, tokens),
+                    provider_observation: ProviderDocument::new(OpaqueProviderData::new(
+                        serde_json::json!({
+                            "percent": percent, "reset": reset.to_rfc3339(), "plan": "pro",
+                        })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                    )),
+                },
+            )
+            .collect(),
+        usage: usage(3, 140),
+        pending_request_count: 0,
+    };
+    let services = accounts_service(provider, store).await;
+    let result = services
+        .accounts()
+        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
+        .await
+        .unwrap();
+    let forecast = &result.forecasts[0];
+    let source = forecast.source.as_ref().unwrap();
+    assert_eq!(source.tokens, Some(140));
+    assert!((source.usd.unwrap() - 0.14).abs() < 1e-10);
+    assert_eq!(forecast.estimated_tokens, Some(400));
+    assert!((forecast.estimated_usd.unwrap() - 0.4).abs() < 1e-10);
+    assert!(forecast.unavailable_reason.is_none());
 }
 
 #[tokio::test]

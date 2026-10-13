@@ -4,14 +4,15 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use gateway_core::account::{QuotaEvidence, QuotaState};
+use gateway_core::account::{
+    QuotaEvidence, QuotaState, QuotaWindowRecovery, quota_window_recovery,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::{CodexAccountQuotaSnapshot, CodexCredentialQuotaError, CodexQuotaWindow};
+use super::{CodexAccountQuotaSnapshot, CodexCredentialQuotaError};
 
 pub(super) const RECOVERY_FIELD: &str = "_quota_recovery";
-const RESET_RECOVERY_MAX_USED_PERCENT: f64 = 10.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct QuotaRecovery {
@@ -74,28 +75,23 @@ impl QuotaRecovery {
         for window in refreshed.windows().iter().filter(|w| w.is_account_wide()) {
             let key = window.key();
             if let Some(previous_reset) = self.pending.get(key).copied() {
-                if window_reset_recovered(window, previous_reset) {
-                    self.pending.remove(key);
-                    continue;
-                }
-                if previous_reset.is_none() {
-                    // 首次观测到该窗口只锚定 reset 基线，不构成解除证据
-                    self.pending.insert(key.to_owned(), window.reset_at());
-                    continue;
-                }
-                // 同一窗口内用量回落（reset 不滚动）时"reset 前进"永远不会
-                // 成立，滑动窗口的正常用量也长期高于低用量阈值；以上游连续
-                // 两次观测都报告未触顶为解除证据
-                // 单次观测无法排除耗尽后
-                // 立刻拉到的旧快照（reset 未滚动、用量尚未触顶）
-                let rolled_forward = window
-                    .reset_at()
-                    .is_some_and(|current| Some(current) > previous_reset);
-                if !rolled_forward && !window.limit_reached() {
-                    if self.candidates.contains_key(key) {
+                match quota_window_recovery(
+                    previous_reset.map(SystemTime::from),
+                    window.reset_at().map(SystemTime::from),
+                    window.used_percent(),
+                    window.limit_reached(),
+                    self.candidates.contains_key(key),
+                ) {
+                    QuotaWindowRecovery::Recovered => {
                         self.pending.remove(key);
-                    } else {
+                    }
+                    QuotaWindowRecovery::Candidate => {
                         candidates.insert(key.to_owned(), ());
+                    }
+                    QuotaWindowRecovery::Pending => {
+                        if previous_reset.is_none() {
+                            self.pending.insert(key.to_owned(), window.reset_at());
+                        }
                     }
                 }
             } else if window.limit_reached() {
@@ -109,21 +105,6 @@ impl QuotaRecovery {
 
 fn exhaustion_time(state: QuotaState) -> i64 {
     DateTime::<Utc>::from(state.observed_at().unwrap_or(SystemTime::UNIX_EPOCH)).timestamp_micros()
-}
-
-fn window_reset_recovered(window: &CodexQuotaWindow, previous: Option<DateTime<Utc>>) -> bool {
-    // reset 必须前进：防止耗尽后立刻拉到的旧快照（reset 未滚动）误解锁
-    if !previous
-        .zip(window.reset_at())
-        .is_some_and(|(previous, current)| current > previous)
-    {
-        return false;
-    }
-    // reset 前进说明已进入新窗口，新窗口用量应接近零；高用量说明 reset 基线
-    // 不可信（例如滑动窗口），保持锁定，等待"同窗口用量回落"的连续观测解除
-    window
-        .used_percent()
-        .is_some_and(|used| used < RESET_RECOVERY_MAX_USED_PERCENT)
 }
 
 /// 统一手动刷新和 worker 的恢复规则

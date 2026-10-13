@@ -272,8 +272,18 @@ async fn quota_forecast_observation_reuses_protocol_parser_and_keeps_window_iden
         .quota_forecast_observation(&document, &window)
         .unwrap();
     assert_eq!(observed.used_percent, 32.5);
+    assert!(!observed.limit_reached);
     assert_eq!(observed.plan_type.as_deref(), Some("pro"));
     assert_eq!(observed.reset_at.timestamp(), 1_789_805_447);
+    let mut exhausted = document.expose_to_provider().expose_to_provider().clone();
+    exhausted.get_mut("rateLimitHeaders").unwrap()[0][1] = json!("100");
+    let exhausted = ProviderDocument::new(OpaqueProviderData::new(exhausted));
+    assert!(
+        provider
+            .quota_forecast_observation(&exhausted, &window)
+            .unwrap()
+            .limit_reached
+    );
     window.role = Some(ProviderQuotaWindowRole::Secondary);
     assert!(
         provider
