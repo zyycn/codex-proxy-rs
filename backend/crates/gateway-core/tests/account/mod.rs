@@ -3,7 +3,6 @@
 mod location;
 mod model_access;
 mod proxy;
-mod quota_recovery;
 mod selection;
 mod selection_diagnostics;
 mod smart_scheduling;

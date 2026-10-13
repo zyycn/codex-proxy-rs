@@ -728,7 +728,6 @@ impl ProviderAdmin for OpenAiAdminProvider {
         Some(QuotaForecastObservation {
             used_percent: observed.used_percent,
             reset_at: DateTime::<Utc>::from_timestamp(observed.reset_at?, 0)?,
-            limit_reached: observed.used_percent >= 100.0,
             plan_type: parsed.plan_type,
         })
     }
