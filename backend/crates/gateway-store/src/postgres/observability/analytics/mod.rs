@@ -1,7 +1,12 @@
 //! 请求观测的持久化投影、可重建汇总与受预算约束的读取
 
+pub(crate) mod accounts;
+mod aggregate;
 mod buckets;
+mod counts;
+mod forecast;
 mod histogram;
+mod incremental;
 mod metrics;
 mod query;
 mod reset;
@@ -11,15 +16,15 @@ pub(crate) use query::*;
 pub use worker::{AnalyticsMaintenance, AnalyticsStatus, PgRequestAnalyticsRepository};
 
 use super::*;
-use metrics::MetricState;
+pub(crate) use metrics::MetricState;
 
 const SCHEMA_VERSION: i32 = 1;
 const HISTOGRAM_VERSION: i32 = histogram::HISTOGRAM_VERSION;
-const MAX_FACT_ROWS: usize = 100_000;
 
 pub(super) async fn begin_snapshot(
-    connection: &mut PgConnection,
+    connection: &mut ObservabilityConnection,
 ) -> StoreResult<sqlx::Transaction<'_, Postgres>> {
+    let query_timeout = connection.query_timeout();
     let mut transaction = connection
         .begin()
         .await
@@ -28,7 +33,8 @@ pub(super) async fn begin_snapshot(
         .execute(&mut *transaction)
         .await
         .map_err(|error| postgres_unavailable("isolate analytics snapshot", error))?;
-    sqlx::query("set local statement_timeout = '10s'")
+    sqlx::query("select set_config('statement_timeout',$1,true)")
+        .bind(format!("{}ms", query_timeout.as_millis()))
         .execute(&mut *transaction)
         .await
         .map_err(|error| postgres_unavailable("set analytics query deadline", error))?;

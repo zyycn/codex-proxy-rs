@@ -17,12 +17,20 @@ use crate::{StoreBackend, StoreError, StoreResult, postgres_unavailable};
 pub struct ObservabilityQueryBudget {
     slots: Arc<Semaphore>,
     wait_timeout: Duration,
+    query_timeout: Duration,
 }
 
 /// 观测名额与实际 PostgreSQL 连接共同存活，取消后仍覆盖协议收尾和事务回滚
 pub struct ObservabilityConnection {
     connection: PoolConnection<Postgres>,
     permit: Option<OwnedSemaphorePermit>,
+    query_timeout: Duration,
+}
+
+impl ObservabilityConnection {
+    pub(crate) const fn query_timeout(&self) -> Duration {
+        self.query_timeout
+    }
 }
 
 impl Deref for ObservabilityConnection {
@@ -53,12 +61,22 @@ impl Drop for ObservabilityConnection {
 
 impl ObservabilityQueryBudget {
     /// 预算表示观测类 SQL 最多可同时占用的连接数
-    pub fn try_new(max_connections: u32, wait_timeout: Duration) -> StoreResult<Self> {
-        if max_connections == 0 || wait_timeout.is_zero() {
+    pub fn try_new(
+        max_connections: u32,
+        wait_timeout: Duration,
+        query_timeout: Duration,
+    ) -> StoreResult<Self> {
+        if max_connections == 0
+            || wait_timeout.is_zero()
+            || query_timeout.is_zero()
+            || query_timeout.as_millis() > i32::MAX as u128
+        {
             return Err(StoreError::InvalidData {
                 source: None,
                 entity: "observability query budget",
-                message: "requires a positive connection count and wait timeout".to_owned(),
+                message:
+                    "requires positive connection and timeout budgets within PostgreSQL limits"
+                        .to_owned(),
             });
         }
         let permits = usize::try_from(max_connections).map_err(|_| StoreError::InvalidData {
@@ -69,10 +87,16 @@ impl ObservabilityQueryBudget {
         Ok(Self {
             slots: Arc::new(Semaphore::new(permits)),
             wait_timeout,
+            query_timeout,
         })
     }
 
-    /// 在共享槽位与十秒执行预算内完成整个观测操作
+    #[must_use]
+    pub const fn query_timeout(&self) -> Duration {
+        self.query_timeout
+    }
+
+    /// 在共享槽位与观测总预算内完成排队、连接获取和整个存储操作
     ///
     /// # Errors
     ///
@@ -87,14 +111,15 @@ impl ObservabilityQueryBudget {
         F: FnOnce(ObservabilityConnection) -> Q,
         Q: Future<Output = StoreResult<T>>,
     {
-        let permit = self.acquire(operation).await?;
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(self.query_timeout, async {
+            let permit = self.acquire(operation).await?;
             let connection = pool.acquire().await.map_err(|source| {
                 postgres_unavailable("acquire observability connection", source)
             })?;
             query(ObservabilityConnection {
                 connection,
                 permit: Some(permit),
+                query_timeout: self.query_timeout,
             })
             .await
         })

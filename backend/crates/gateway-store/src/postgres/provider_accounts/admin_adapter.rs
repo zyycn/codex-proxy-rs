@@ -102,109 +102,17 @@ impl PgAdminAccountStore {
             ObservabilityRange::new(window.range.start, window.range.end)
                 .map_err(|error| admin_store_error(ENTITY, error))?;
         }
-        let keys = windows
-            .iter()
-            .map(|window| window.key.clone())
-            .collect::<Vec<_>>();
-        let starts = windows
-            .iter()
-            .map(|window| window.range.start)
-            .collect::<Vec<_>>();
-        let ends = windows
-            .iter()
-            .map(|window| window.range.end)
-            .collect::<Vec<_>>();
-        let account_ids = windows
-            .iter()
-            .map(|window| window.account_id.clone())
-            .collect::<Vec<_>>();
-        let rows = self
-            .query_budget
+        self.query_budget
             .run(
                 &self.pool,
                 "load account usage windows",
                 |mut connection| async move {
-                    sqlx::query(sqlx::AssertSqlSafe(account_usage_by_windows_sql()))
-                        .bind(account_ids)
-                        .bind(keys)
-                        .bind(starts)
-                        .bind(ends)
-                        .fetch_all(&mut *connection)
+                    crate::postgres::observability::account_usage_windows(&mut connection, windows)
                         .await
-                        .map_err(|source| {
-                            postgres_unavailable("load provider account quota window usage", source)
-                        })
                 },
             )
             .await
-            .map_err(|error| admin_store_error(ENTITY, error))?;
-        let mut usage_rows = Vec::with_capacity(windows.len());
-        let mut costs_by_window = BTreeMap::<(String, String), Vec<AccountCost>>::new();
-        let mut model_costs = BTreeMap::<(String, String, String), Vec<AccountCost>>::new();
-        let mut models_by_window = BTreeMap::<(String, String), Vec<AccountModelUsage>>::new();
-        for row in &rows {
-            let model_grouping = window_usage_value::<i32>(row, "model_grouping")?;
-            let currency_grouping = window_usage_value::<i32>(row, "currency_grouping")?;
-            match (model_grouping, currency_grouping) {
-                (1, 1) => usage_rows.push(row),
-                (1, 0) if window_usage_value::<Option<String>>(row, "cost_currency")?.is_some() => {
-                    let (key, cost) = admin_account_usage_window_cost(row)?;
-                    costs_by_window.entry(key).or_default().push(cost);
-                }
-                (0, 1) if window_usage_value::<Option<String>>(row, "model")?.is_some() => {
-                    let ((account_id, window_key, _), usage) =
-                        admin_account_usage_window_model(row)?;
-                    models_by_window
-                        .entry((account_id, window_key))
-                        .or_default()
-                        .push(usage);
-                }
-                (0, 0)
-                    if window_usage_value::<Option<String>>(row, "model")?.is_some()
-                        && window_usage_value::<Option<String>>(row, "cost_currency")?
-                            .is_some() =>
-                {
-                    let (key, cost) = admin_account_usage_window_model_cost(row)?;
-                    model_costs.entry(key).or_default().push(cost);
-                }
-                (0 | 1, 0 | 1) => {}
-                _ => {
-                    return Err(AdminStoreError::new(
-                        AdminStoreErrorKind::Unavailable,
-                        ENTITY,
-                        "account usage window query returned an invalid grouping marker",
-                    ));
-                }
-            }
-        }
-        let mut results = usage_rows
-            .into_iter()
-            .map(admin_account_usage_window)
-            .collect::<AdminStoreResult<Vec<_>>>()?;
-        for result in &mut results {
-            result.usage.costs = costs_by_window
-                .remove(&(result.account_id.clone(), result.key.clone()))
-                .unwrap_or_default();
-            result.usage.models = models_by_window
-                .remove(&(result.account_id.clone(), result.key.clone()))
-                .unwrap_or_default();
-            for model in &mut result.usage.models {
-                model.costs = model_costs
-                    .remove(&(
-                        result.account_id.clone(),
-                        result.key.clone(),
-                        model.model.clone(),
-                    ))
-                    .unwrap_or_default();
-            }
-            result.usage.models.sort_by(|left, right| {
-                right
-                    .request_count
-                    .cmp(&left.request_count)
-                    .then_with(|| left.model.cmp(&right.model))
-            });
-        }
-        Ok(results)
+            .map_err(|error| admin_store_error(ENTITY, error))
     }
 
     async fn required_scope(
@@ -376,8 +284,14 @@ impl AccountStore for PgAdminAccountStore {
             .filter(|(_, cooldown)| cooldown.is_active(now_system_time))
             .map(|(account_id, _)| account_id.clone())
             .collect::<Vec<_>>();
-        let page =
-            load_admin_account_page(&self.pool, &query, now, active_rate_limited_ids).await?;
+        let page = load_admin_account_page(
+            &self.pool,
+            &self.query_budget,
+            &query,
+            now,
+            active_rate_limited_ids,
+        )
+        .await?;
         let item_ids = page
             .accounts
             .iter()

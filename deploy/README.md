@@ -28,6 +28,10 @@
 配置加载会忽略未知字段，并在启动控制台提示字段名；不输出对应值。缺少必填字段时会指出缺项并停止启动，
 已知字段的类型和取值仍需合法；可选字段省略时使用默认值
 
+`store.pool.observability_timeout_seconds` 默认 120 秒，控制观测查询与统计 Worker 的操作预算，
+缓存等待和统计事务的 SQL 时限沿用该配置。修改后重启应用；连接排队仍受
+`store.pool.acquire_timeout_seconds` 约束，模型请求时限由 `api.request_timeout_seconds` 单独控制
+
 后端从当前目录向上查找 `deploy/config.yaml`，相对数据、日志和静态资源路径以该文件所在目录解析
 
 Compose 通过环境变量将监听和数据库地址设为容器内地址，并指定镜像中的静态资源目录
@@ -559,6 +563,10 @@ docker compose -f deploy/compose.yaml up -d --no-build --wait
 ```
 
 升级后通过管理端版本接口或容器 image digest 确认运行实例的版本和 revision
+
+管理端请求默认等待 120 秒。直接构建前端时可通过进程环境 `VITE_API_TIMEOUT_MS` 指定毫秒数，
+例如 `VITE_API_TIMEOUT_MS=180000 pnpm --dir frontend build`，取值须为正整数。
+该值在构建时写入静态资源，修改后需要重新构建和部署前端。单个请求显式指定的时限仍优先
 
 构建元数据通过一次性进程环境传入：
 

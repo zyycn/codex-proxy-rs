@@ -11,12 +11,6 @@ pub(crate) fn push_usage_filter(
     filter: &UsageRecordFilter,
     alias: &str,
 ) {
-    if !filter.routing_group_refs.is_empty() {
-        query
-            .push(format!(" and {alias}.routing_group_refs && "))
-            .push_bind(filter.routing_group_refs.clone())
-            .push("::text[]");
-    }
     if let Some(value) = &filter.client_api_key_ref {
         query.push(format!(" and {alias}.client_api_key_ref = "));
         query.push_bind(value.clone());
@@ -86,16 +80,14 @@ pub(crate) fn push_usage_filter(
     }
     if let Some(value) = &filter.search {
         let pattern = literal_prefix_pattern(value);
-        query.push(format!(" and ({alias}.id like "));
+        query.push(format!(" and ({alias}.requested_model_id like "));
         query.push_bind(pattern.clone());
         for column in [
+            "upstream_model_id",
             "client_api_key_ref",
             "provider_account_ref",
             "provider_account_email_snapshot",
             "provider_account_name_snapshot",
-            "requested_model_id",
-            "upstream_model_id",
-            "upstream_request_id",
         ] {
             query.push(format!(" escape '\\' or {alias}.{column} like "));
             query.push_bind(pattern.clone());
@@ -174,29 +166,50 @@ pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
      from model_request_observations mr";
 
 pub(crate) async fn list_usage_records(
-    connection: &mut PgConnection,
+    connection: &mut ObservabilityConnection,
     query: UsageRecordQuery,
 ) -> StoreResult<UsageRecordPage> {
     query.filter.validate()?;
-    let mut transaction = analytics::begin_snapshot(connection).await?;
+    let mut snapshot = AnalyticsSnapshot::new_for_accounts(connection).await?;
     // 第一页未填满时，当前快照中的行数已是精确总数，无需再次扫描计数
     let (total, items) = if query.current_page == 1 {
-        let items = list_usage_record_items(&mut *transaction, &query, None).await?;
+        let items = list_usage_record_items(&mut *snapshot.tx, &query, None).await?;
         let total = if items.len() < usize::from(query.page_size.get()) {
             items.len() as u64
+        } else if let Some(counts) = snapshot
+            .completed_request_counts(query.range, &query.filter)
+            .await?
+        {
+            counts.values().try_fold(0_u64, |sum, count| {
+                sum.checked_add(*count)
+                    .ok_or_else(|| invalid("usage count overflows u64"))
+            })?
         } else {
-            count_usage_records(&mut *transaction, query.range, &query.filter).await?
+            count_usage_records(&mut *snapshot.tx, query.range, &query.filter).await?
         };
         (total, items)
     } else {
-        let total = count_usage_records(&mut *transaction, query.range, &query.filter).await?;
-        let items = list_usage_record_items(&mut *transaction, &query, Some(total)).await?;
+        let (total, page) = if let Some(counts) = snapshot
+            .completed_request_counts(query.range, &query.filter)
+            .await?
+        {
+            time_page_from_segments(
+                counts.into_iter().rev(),
+                query.range,
+                observability_page_offset(query.current_page, query.page_size)?,
+                query.page_size,
+                TimeDelta::minutes(15),
+            )?
+        } else {
+            usage_time_page(&mut snapshot.tx, &query).await?
+        };
+        let items = match page {
+            Some(page) => list_usage_record_items_at(&mut *snapshot.tx, &query, page).await?,
+            None => Vec::new(),
+        };
         (total, items)
     };
-    transaction
-        .commit()
-        .await
-        .map_err(|error| postgres_unavailable("complete usage page snapshot", error))?;
+    snapshot.finish().await?;
     Ok(UsageRecordPage {
         items,
         current_page: query.current_page,
@@ -210,11 +223,24 @@ pub(crate) async fn list_usage_record_items<'e, E: sqlx::Executor<'e, Database =
     query: &UsageRecordQuery,
     total: Option<u64>,
 ) -> StoreResult<Vec<UsageListRecord>> {
+    let page = TimePage {
+        range: query.range,
+        offset: observability_page_offset(query.current_page, query.page_size)?,
+        total,
+    };
+    list_usage_record_items_at(executor, query, page).await
+}
+
+async fn list_usage_record_items_at<'e, E: sqlx::Executor<'e, Database = Postgres>>(
+    executor: E,
+    query: &UsageRecordQuery,
+    page: TimePage,
+) -> StoreResult<Vec<UsageListRecord>> {
     query.filter.validate()?;
-    let mut offset = observability_page_offset(query.current_page, query.page_size)?;
+    let mut offset = page.offset;
     let mut limit = i64::from(query.page_size.get());
     let mut ascending = false;
-    if let Some(total) = total {
+    if let Some(total) = page.total {
         let total = i64::try_from(total).map_err(|_| invalid("usage count overflows i64"))?;
         if offset >= total {
             return Ok(Vec::new());
@@ -231,9 +257,9 @@ pub(crate) async fn list_usage_record_items<'e, E: sqlx::Executor<'e, Database =
         "with candidate_page as materialized (select mr.id, mr.started_at from model_request_observations mr",
     );
     statement.push(" where mr.started_at >= ");
-    statement.push_bind(query.range.start);
+    statement.push_bind(page.range.start);
     statement.push(" and mr.started_at < ");
-    statement.push_bind(query.range.end);
+    statement.push_bind(page.range.end);
     push_completed_usage_fact_filter(&mut statement, "mr");
     push_usage_filter(&mut statement, &query.filter, "mr");
     statement.push(if ascending {
@@ -259,6 +285,93 @@ pub(crate) async fn list_usage_record_items<'e, E: sqlx::Executor<'e, Database =
         .map(usage_list_record_from_row)
         .collect::<StoreResult<Vec<_>>>()?;
     Ok(items)
+}
+
+// 页码保持全局精确排名，实际明细读取只落在覆盖该页的时间区间
+pub(crate) struct TimePage {
+    pub(crate) range: ObservabilityRange,
+    pub(crate) offset: i64,
+    pub(crate) total: Option<u64>,
+}
+
+pub(crate) fn time_page_from_counts(
+    rows: &[sqlx::postgres::PgRow],
+    range: ObservabilityRange,
+    offset: i64,
+    page_size: ObservabilityPageSize,
+) -> StoreResult<(u64, Option<TimePage>)> {
+    let counts = rows
+        .iter()
+        .map(|row| {
+            Ok((
+                get(row, "bucket_start")?,
+                to_u64(get(row, "request_count")?)?,
+            ))
+        })
+        .collect::<StoreResult<Vec<_>>>()?;
+    time_page_from_segments(counts, range, offset, page_size, TimeDelta::minutes(1))
+}
+
+fn time_page_from_segments(
+    counts: impl IntoIterator<Item = (DateTime<Utc>, u64)>,
+    range: ObservabilityRange,
+    offset: i64,
+    page_size: ObservabilityPageSize,
+    width: TimeDelta,
+) -> StoreResult<(u64, Option<TimePage>)> {
+    let offset = u64::try_from(offset).map_err(|_| invalid("negative page offset"))?;
+    let end = offset
+        .checked_add(u64::from(page_size.get()))
+        .ok_or_else(|| invalid("page range overflows u64"))?;
+    let mut total = 0_u64;
+    let mut page = None;
+    let mut selected_count = 0_u64;
+    for (bucket, count) in counts {
+        let next = total
+            .checked_add(count)
+            .ok_or_else(|| invalid("request count overflows u64"))?;
+        if next > offset && total < end {
+            let selected = page.get_or_insert_with(|| TimePage {
+                range: ObservabilityRange {
+                    start: bucket.max(range.start),
+                    end: (bucket + width).min(range.end),
+                },
+                offset: (offset - total) as i64,
+                total: None,
+            });
+            selected.range.start = bucket.max(range.start);
+            selected_count += count;
+        }
+        total = next;
+    }
+    if let Some(page) = &mut page {
+        page.total = Some(selected_count);
+    }
+    Ok((total, page))
+}
+
+async fn usage_time_page(
+    connection: &mut PgConnection,
+    query: &UsageRecordQuery,
+) -> StoreResult<(u64, Option<TimePage>)> {
+    let offset = observability_page_offset(query.current_page, query.page_size)?;
+    let mut statement = QueryBuilder::<Postgres>::new(
+        "select date_bin(interval '1 minute', mr.started_at, timestamptz 'epoch') as bucket_start,
+                count(*)::bigint as request_count
+         from model_request_observations mr where mr.started_at >= ",
+    );
+    statement.push_bind(query.range.start);
+    statement.push(" and mr.started_at < ");
+    statement.push_bind(query.range.end);
+    push_completed_usage_fact_filter(&mut statement, "mr");
+    push_usage_filter(&mut statement, &query.filter, "mr");
+    statement.push(" group by bucket_start order by bucket_start desc");
+    let rows = statement
+        .build()
+        .fetch_all(connection)
+        .await
+        .map_err(|source| postgres_unavailable("locate usage page", source))?;
+    time_page_from_counts(&rows, query.range, offset, query.page_size)
 }
 
 pub(crate) async fn count_usage_records<'e, E: sqlx::Executor<'e, Database = Postgres>>(

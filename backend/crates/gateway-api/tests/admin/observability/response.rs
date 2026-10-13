@@ -1245,7 +1245,7 @@ async fn calendar_query_rejects_an_anchor_outside_the_local_calendar() {
 }
 
 #[tokio::test]
-async fn request_and_ops_queries_should_forward_deleted_group_id_sets() {
+async fn observability_queries_reject_group_filters_and_analytics_search() {
     use crate::admin::{AdminTestFixture, AdminTestState};
     use axum::{
         body::Body,
@@ -1256,39 +1256,50 @@ async fn request_and_ops_queries_should_forward_deleted_group_id_sets() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let router = observability::router::<AdminTestState>().with_state(fixture.state());
-    for path in ["/api/admin/usage/records", "/api/admin/operations/errors"] {
+    for (path, parameter) in [
+        ("/api/admin/usage/records", "routingGroupRefs=group-a"),
+        ("/api/admin/operations/errors", "routingGroupRefs=group-a"),
+        (
+            "/api/admin/usage/records/summary",
+            "routingGroupRefs=group-a",
+        ),
+        (
+            "/api/admin/usage/insights/overview",
+            "routingGroupRefs=group-a",
+        ),
+        (
+            "/api/admin/usage/insights/diagnostics",
+            "routingGroupRefs=group-a",
+        ),
+        ("/api/admin/usage/records/summary", "search=request-prefix"),
+        (
+            "/api/admin/usage/insights/overview",
+            "search=request-prefix",
+        ),
+        (
+            "/api/admin/usage/insights/diagnostics",
+            "search=request-prefix",
+        ),
+    ] {
         let response = router
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!(
-                        "{path}?routingGroupRefs=deleted-b,deleted-a,deleted-b"
-                    ))
+                    .uri(format!("{path}?{parameter}"))
                     .header(header::COOKIE, "cpr_session=valid-session")
-                    .header("x-request-id", "req_group_filter")
+                    .header("x-request-id", "req_rejected_observability_filter")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        let status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
         assert_eq!(
-            status,
-            StatusCode::OK,
-            "{path}: {}",
-            String::from_utf8_lossy(&body)
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{path}?{parameter}"
         );
     }
     let observations = fixture.observations.lock().unwrap();
-    assert_eq!(
-        observations.records[0].filter.routing_group_refs,
-        ["deleted-a", "deleted-b"]
-    );
-    assert_eq!(
-        observations.errors[0].filter.routing_group_refs,
-        ["deleted-a", "deleted-b"]
-    );
+    assert!(observations.records.is_empty());
+    assert!(observations.errors.is_empty());
 }

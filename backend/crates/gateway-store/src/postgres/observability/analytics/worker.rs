@@ -83,11 +83,11 @@ impl PgRequestAnalyticsRepository {
                 return Ok(AnalyticsMaintenance { reset_progress: true, ..Default::default() });
             }
             let mut result = AnalyticsMaintenance::default();
-            let rows = sqlx::query("select request_id, change_version, oldest_pending_at, previous_bucket from request_analytics_pending_requests order by oldest_pending_at, request_id limit $1")
+            let rows = sqlx::query("select request_id, change_version from request_analytics_pending_requests order by oldest_pending_at, request_id limit $1")
                 .bind(i64::from(batch_size)).fetch_all(&mut *transaction).await.map_err(|error| postgres_unavailable("load analytics request queue", error))?;
             let mut jobs = Vec::with_capacity(rows.len());
             for row in rows {
-                jobs.push(ProjectionJob { id: get(&row,"request_id")?, version: get(&row,"change_version")?, pending_at: get(&row,"oldest_pending_at")?, previous_bucket: get(&row,"previous_bucket")? });
+                jobs.push(ProjectionJob { id: get(&row,"request_id")?, version: get(&row,"change_version")? });
             }
             self.project_batch(&mut transaction, &jobs).await?;
             result.projected_requests = jobs.len() as u64;
@@ -138,53 +138,36 @@ impl PgRequestAnalyticsRepository {
         }
         let ids = jobs.iter().map(|job| job.id.clone()).collect::<Vec<_>>();
         let versions = jobs.iter().map(|job| job.version).collect::<Vec<_>>();
-        let pending = jobs
-            .iter()
-            .map(|job| (job.id.as_str(), job.pending_at))
-            .collect::<HashMap<_, _>>();
-        let mut buckets = BTreeMap::<DateTime<Utc>, DateTime<Utc>>::new();
-        let mut affect = |id: &str, start: DateTime<Utc>| -> StoreResult<()> {
-            let pending_at = pending
-                .get(id)
-                .copied()
-                .ok_or_else(|| invalid("analytics job disappeared"))?;
-            let bucket = bucket_for(start, 900)?;
-            buckets
-                .entry(bucket)
-                .and_modify(|old| *old = (*old).min(pending_at))
-                .or_insert(pending_at);
-            Ok(())
-        };
-        let rows = sqlx::query(
-            "delete from request_analytics_facts where id=any($1::text[]) returning id,started_at",
-        )
+        let previous = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "{} where mr.id=any($1::text[])",
+            fact_select()
+        )))
         .bind(&ids)
         .fetch_all(&mut **tx)
         .await
-        .map_err(|error| postgres_unavailable("replace analytics facts", error))?;
-        for row in rows {
-            affect(&get::<String>(&row, "id")?, get(&row, "started_at")?)?;
-        }
-        let rows = sqlx::query(PROJECT_REQUEST)
+        .map_err(|error| postgres_unavailable("read previous analytics contributions", error))?;
+        sqlx::query("delete from request_analytics_facts where id=any($1::text[])")
+            .bind(&ids)
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| postgres_unavailable("replace analytics facts", error))?;
+        sqlx::query(PROJECT_REQUEST)
             .bind(&ids)
             .bind(versions)
-            .fetch_all(&mut **tx)
+            .execute(&mut **tx)
             .await
             .map_err(|error| postgres_unavailable("project analytics facts", error))?;
-        for row in rows {
-            affect(&get::<String>(&row, "id")?, get(&row, "started_at")?)?;
-        }
-        for job in jobs {
-            if let Some(bucket) = job.previous_bucket {
-                affect(&job.id, bucket)?;
-            }
-        }
         self.project_billing_batch(tx, &ids).await?;
-        if !buckets.is_empty() {
-            let (starts, times): (Vec<_>, Vec<_>) = buckets.into_iter().unzip();
-            sqlx::query("insert into request_analytics_pending_buckets(bucket_start,oldest_pending_at) select * from unnest($1::timestamptz[],$2::timestamptz[]) on conflict(bucket_start) do update set change_version=nextval('request_analytics_change_version'),oldest_pending_at=least(request_analytics_pending_buckets.oldest_pending_at,excluded.oldest_pending_at)")
-                .bind(starts).bind(times).execute(&mut **tx).await.map_err(|error| postgres_unavailable("enqueue analytics buckets",error))?;
-        }
+        let current = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "{} where mr.id=any($1::text[])",
+            fact_select()
+        )))
+        .bind(&ids)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|error| postgres_unavailable("read current analytics contributions", error))?;
+        // 事实、已发布汇总与构建前缀在同一事务中撤销和添加，重试不会重复计数
+        super::incremental::update_summaries(tx, &previous, &current).await?;
         Ok(())
     }
 
@@ -199,7 +182,7 @@ impl PgRequestAnalyticsRepository {
             return Ok(0);
         }
         let mut query = QueryBuilder::<Postgres>::new(
-            "select id,started_at,nextval('request_analytics_change_version') as version from model_requests",
+            "select id,started_at,nextval('request_analytics_change_version') as version,exists(select 1 from request_analytics_facts f where f.id=model_requests.id) as projected from model_requests",
         );
         // 首批与后续批次使用两种明确的计划，避免可空游标的 OR 使通用计划退化为全索引过滤
         if let Some(start) = get::<Option<DateTime<Utc>>>(&state, "backfill_cursor_started_at")? {
@@ -222,11 +205,12 @@ impl PgRequestAnalyticsRepository {
             .map_err(|error| postgres_unavailable("read analytics backfill batch", error))?;
         let mut jobs = Vec::with_capacity(rows.len());
         for row in &rows {
+            if get::<bool>(row, "projected")? {
+                continue;
+            }
             jobs.push(ProjectionJob {
                 id: get(row, "id")?,
                 version: get(row, "version")?,
-                pending_at: Utc::now(),
-                previous_bucket: None,
             });
         }
         self.project_batch(tx, &jobs).await?;
@@ -312,49 +296,68 @@ async fn read_status(
     })
 }
 
+// 投影与极值重算共用同一维度顺序，避免两条路径对集合身份作不同解释
+pub(super) const COLLECTION_COLUMNS: &[(&str, &[&str])] = &[
+    ("global", &[]),
+    (
+        "provider_model",
+        &["provider_kind", "requested_model_id", "upstream_model_id"],
+    ),
+    ("account", &["provider_account_ref"]),
+    ("key", &["client_api_key_ref"]),
+    (
+        "account_model",
+        &[
+            "provider_account_ref",
+            "provider_kind",
+            "requested_model_id",
+            "upstream_model_id",
+        ],
+    ),
+    (
+        "key_model",
+        &[
+            "client_api_key_ref",
+            "provider_kind",
+            "requested_model_id",
+            "upstream_model_id",
+        ],
+    ),
+    ("operation", &["operation"]),
+    ("transport", &["client_transport", "upstream_transport"]),
+    ("status", &["client_status_code", "upstream_status_code"]),
+    ("failure", &["error_kind"]),
+];
+
 pub(super) fn collections(
     row: &sqlx::postgres::PgRow,
 ) -> StoreResult<Vec<(&'static str, Vec<String>)>> {
-    let text =
-        |name| -> StoreResult<String> { Ok(get::<Option<String>>(row, name)?.unwrap_or_default()) };
-    let status = |name| -> StoreResult<String> {
-        Ok(get::<Option<i32>>(row, name)?
-            .map(|value| value.to_string())
-            .unwrap_or_default())
-    };
-    Ok(vec![
-        ("global", vec![]),
-        (
-            "provider_model",
-            vec![
-                text("provider_kind")?,
-                text("requested_model_id")?,
-                text("upstream_model_id")?,
-            ],
-        ),
-        ("account", vec![text("provider_account_ref")?]),
-        ("key", vec![text("client_api_key_ref")?]),
-        ("operation", vec![text("operation")?]),
-        (
-            "transport",
-            vec![text("client_transport")?, text("upstream_transport")?],
-        ),
-        (
-            "status",
-            vec![
-                status("client_status_code")?,
-                status("upstream_status_code")?,
-            ],
-        ),
-        ("failure", vec![text("error_kind")?]),
-    ])
+    let mut result = vec![(forecast::COLLECTION, forecast::dimensions(row)?)];
+    // 预测保留原始完成状态，包括被恢复的请求；其他统计继续排除恢复记录
+    if get::<Option<DateTime<Utc>>>(row, "recovered_at")?.is_some() {
+        return Ok(result);
+    }
+    for &(collection, columns) in COLLECTION_COLUMNS {
+        let dimensions = columns
+            .iter()
+            .map(|column| {
+                if matches!(*column, "client_status_code" | "upstream_status_code") {
+                    Ok(get::<Option<i32>>(row, column)?
+                        .map(|value| value.to_string())
+                        .unwrap_or_default())
+                } else {
+                    Ok(get::<Option<String>>(row, column)?.unwrap_or_default())
+                }
+            })
+            .collect::<StoreResult<Vec<_>>>()?;
+        result.push((collection, dimensions));
+    }
+    Ok(result)
 }
 
 struct ProjectionJob {
     id: String,
     version: i64,
-    pending_at: DateTime<Utc>,
-    previous_bucket: Option<DateTime<Utc>>,
 }
 
 async fn publish_generation(

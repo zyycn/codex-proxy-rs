@@ -11,6 +11,7 @@ mod authorization;
 mod deletion;
 mod quota_forecast;
 mod timestamps;
+mod usage_projection;
 
 use chrono::{TimeDelta, Utc};
 use gateway_admin::{

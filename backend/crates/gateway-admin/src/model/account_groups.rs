@@ -66,7 +66,7 @@ pub struct AccountGroupCapacity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupUsage {
     pub today_usd: DecimalAmount,
-    /// 当前 usage retention 窗口内、按请求发生时 routing group 快照归属的累计成本
+    /// 当前 usage retention 窗口内、当前组成员实际完成请求的累计成本
     pub retained_total_usd: DecimalAmount,
 }
 

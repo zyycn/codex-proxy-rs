@@ -18,7 +18,7 @@ const search = defineModel<string>('search', { required: true })
 <template>
   <div class="flex w-full items-center gap-3" role="group" aria-label="使用记录筛选与操作">
     <div class="min-w-0 flex-1 sm:w-96 sm:flex-none">
-      <ZInput v-model="search" placeholder="请求、密钥名称、账号或模型" aria-label="搜索使用记录：请求、密钥名称、账号或模型" class="w-full">
+      <ZInput v-model="search" placeholder="密钥名称、账号或模型" aria-label="搜索使用记录：密钥名称、账号或模型" class="w-full">
         <template #prefix>
           <Search class="size-4.5 text-cp-text-tertiary" />
         </template>

@@ -151,7 +151,7 @@ where
         state.admin_services().timezone(),
     )
     .map_err(map_wire_error)?;
-    let filter = usage_filter(&query).map_err(map_wire_error)?;
+    let filter = analytics_filter(&query).map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .observability()
@@ -184,7 +184,7 @@ where
         state.admin_services().timezone(),
     )
     .map_err(map_wire_error)?;
-    let filter = usage_filter(&query).map_err(map_wire_error)?;
+    let filter = analytics_filter(&query).map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .observability()
@@ -215,12 +215,9 @@ where
     )
     .map_err(map_wire_error)?;
     let filter = domain::UsageFilter {
-        routing_group_refs: routing_group_refs(query.routing_group_refs.as_deref())
-            .map_err(map_wire_error)?,
         provider_kind: non_empty(query.provider),
         model: non_empty(query.model),
         status_code: parse_status(query.status_code).map_err(map_wire_error)?,
-        search: non_empty(query.search),
         ..domain::UsageFilter::default()
     };
     let result = state

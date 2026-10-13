@@ -490,7 +490,6 @@ interface UsageRangeQuery {
   provider?: string
   model?: string
   statusCode?: number
-  search?: string
 }
 
 interface PageQuery {
@@ -498,7 +497,7 @@ interface PageQuery {
   pageSize: number
 }
 
-type UsagePageQuery = UsageRangeQuery & PageQuery
+type UsagePageQuery = UsageRangeQuery & PageQuery & { search?: string }
 
 type OpsErrorPageQuery = UsagePageQuery
 

@@ -432,6 +432,9 @@ pub trait UsageBillingProjector: Send + Sync {
 /// 用量、趋势、诊断与运维错误的只读能力
 #[async_trait]
 pub trait ObservabilityStore: Send + Sync {
+    /// 读取实现声明的总预算，缓存等待沿用同一配置，避免外层提前截断
+    fn query_timeout(&self) -> std::time::Duration;
+
     /// 缓存必须与删除和后台投影提交的版本一致
     async fn analytics_cache_generation(&self) -> AdminStoreResult<u64>;
 

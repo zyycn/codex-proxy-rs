@@ -197,7 +197,7 @@ impl PgObservabilityRepository {
                         )
                         .await?;
                     let account_usage =
-                        provider_account_usage(&mut snapshot.tx, account_usage_query).await?;
+                        provider_account_usage(&mut snapshot, account_usage_query).await?;
                     let metadata = snapshot.metadata();
                     snapshot.finish().await?;
                     Ok((totals, trend, metadata, account_usage))
@@ -290,12 +290,8 @@ impl PgObservabilityRepository {
                 "load usage insights snapshot",
                 |mut connection| async move {
                     let mut snapshot = analytics::AnalyticsSnapshot::new(&mut connection).await?;
-                    let mut overview = snapshot.overview(range, &filter).await?;
-                    let trend = snapshot
-                        .trend(range, &filter, granularity, self.timezone, true)
-                        .await?;
-                    let costs = snapshot
-                        .projected_costs(range, &filter, granularity, self.timezone)
+                    let (mut overview, trend, costs) = snapshot
+                        .insights(range, &filter, granularity, self.timezone)
                         .await?;
                     overview.analytics = snapshot.metadata();
                     snapshot.finish().await?;
@@ -318,12 +314,9 @@ impl PgObservabilityRepository {
                 &self.pool,
                 "load provider account usage",
                 |mut connection| async move {
-                    let mut snapshot = analytics::AnalyticsSnapshot::new(&mut connection).await?;
-                    snapshot.require_visible(Some(query.range)).await?;
-                    if let Some(range) = query.request_bucket_range {
-                        snapshot.require_visible(Some(range)).await?;
-                    }
-                    let usage = provider_account_usage(&mut snapshot.tx, query).await?;
+                    let mut snapshot =
+                        analytics::AnalyticsSnapshot::new_for_accounts(&mut connection).await?;
+                    let usage = provider_account_usage(&mut snapshot, query).await?;
                     snapshot.finish().await?;
                     Ok(usage)
                 },
@@ -407,6 +400,10 @@ impl PgObservabilityRepository {
 
 #[async_trait]
 impl AdminObservabilityStore for PgAdminObservabilityStore {
+    fn query_timeout(&self) -> std::time::Duration {
+        self.repository.query_budget.query_timeout()
+    }
+
     async fn analytics_cache_generation(&self) -> AdminStoreResult<u64> {
         self.repository
             .query_budget

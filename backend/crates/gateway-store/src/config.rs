@@ -36,6 +36,7 @@ pub struct StoreConfig {
 pub struct StorePoolConfig {
     pub max_connections: u32,
     pub acquire_timeout_seconds: u64,
+    pub observability_timeout_seconds: u64,
 }
 
 impl Default for StorePoolConfig {
@@ -43,6 +44,7 @@ impl Default for StorePoolConfig {
         Self {
             max_connections: 20,
             acquire_timeout_seconds: 5,
+            observability_timeout_seconds: 120,
         }
     }
 }
@@ -58,7 +60,20 @@ impl StorePoolConfig {
                         .to_owned(),
             });
         }
+        if self.observability_timeout_seconds == 0
+            || self.observability_timeout().as_millis() > i32::MAX as u128
+        {
+            return Err(StoreError::InvalidData {
+                source: None,
+                entity: "store config",
+                message: "pool.observability_timeout_seconds must be positive and fit PostgreSQL statement_timeout".to_owned(),
+            });
+        }
         Ok(())
+    }
+
+    pub(crate) const fn observability_timeout(self) -> Duration {
+        Duration::from_secs(self.observability_timeout_seconds)
     }
 
     /// 管理观测查询可并发占用的连接数；始终为数据面保留约 20% 的池容量

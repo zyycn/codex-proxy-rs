@@ -22,6 +22,212 @@ pub(super) async fn seed(pool: &sqlx::PgPool, id: &str, start: DateTime<Utc>, gr
 }
 
 #[tokio::test]
+async fn provider_counts_match_for_rollups_boundaries_and_filtered_facts() {
+    let Some(database) = TestDatabase::create("analytics_provider_counts").await else {
+        return;
+    };
+    let start = DateTime::parse_from_rfc3339("2026-09-01T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    for id in [
+        "provider_counts_ok",
+        "provider_counts_fail",
+        "provider_counts_unrouted",
+    ] {
+        seed(&database.pool, id, start + TimeDelta::minutes(5), &[]).await;
+    }
+    sqlx::query("update model_requests set provider_kind='openai',provider_account_ref='account_provider_counts',upstream_transport='http',attempt_count=case when id='provider_counts_ok' then 2 else 1 end where id in ('provider_counts_ok','provider_counts_fail')")
+        .execute(&database.pool).await.unwrap();
+    sqlx::query("update model_requests set outcome='failed',client_status_code=502,downstream_committed_at=null where id='provider_counts_fail'")
+        .execute(&database.pool).await.unwrap();
+    drain_analytics(&database.pool).await;
+    let repo = observability_repository(&database.pool);
+    let full = ObservabilityRange::new(start, start + TimeDelta::hours(1)).unwrap();
+    let edge =
+        ObservabilityRange::new(start + TimeDelta::minutes(4), start + TimeDelta::minutes(6))
+            .unwrap();
+    // 同一批请求分别走完整桶、首尾事实与筛选回退，供应商计数不能随读取路径变化
+    for (range, filter) in [
+        (full, UsageRecordFilter::default()),
+        (edge, UsageRecordFilter::default()),
+        (
+            full,
+            UsageRecordFilter {
+                search: Some("model_".to_owned()),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let summary = repo.usage_summary(range, filter.clone()).await.unwrap();
+        assert_eq!(summary.requests.request_count, 3);
+        let providers = summary
+            .providers
+            .into_iter()
+            .map(|provider| {
+                (
+                    provider.provider_kind,
+                    (
+                        provider.request_count,
+                        provider.attempt_count,
+                        provider.failure_count,
+                        provider.total_tokens,
+                    ),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            providers,
+            std::collections::BTreeMap::from([
+                ("openai".to_owned(), (2, 3, 1, 120)),
+                ("unrouted".to_owned(), (1, 0, 0, 120)),
+            ])
+        );
+        let diagnostic = repo
+            .usage_diagnostics(range, filter, DiagnosticDimension::Provider, 100)
+            .await
+            .unwrap();
+        assert_eq!(diagnostic.total_request_count, 3);
+        let openai = diagnostic
+            .items
+            .iter()
+            .find(|item| item.key == "openai")
+            .unwrap();
+        assert_eq!(
+            (
+                openai.request_count,
+                openai.success_count,
+                openai.failure_count,
+                openai.attempt_count,
+                openai.total_tokens
+            ),
+            (2, 1, 1, 3, 120)
+        );
+        assert_eq!(openai.average_latency_ms, Some(100));
+        // 汇总桶沿用直方图近似值，诊断与完整指标读取必须给出相同分位数
+        assert_eq!(
+            openai.latency_p95_ms,
+            summary
+                .requests
+                .latency_percentiles
+                .p95_ms
+                .map(|value| value.as_f64().round() as u64)
+        );
+        assert_eq!(
+            openai.first_token_p95_ms,
+            summary
+                .requests
+                .first_token_latency_percentiles
+                .p95_ms
+                .map(|value| value.as_f64().round() as u64)
+        );
+        assert_eq!(openai.retry_count, 1);
+        assert_eq!(openai.retried_request_count, 1);
+        assert_eq!(openai.non_completion_count, 0);
+        assert_eq!(openai.cost_coverage.unavailable_count, 1);
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn insights_share_bucket_states_without_merging_exact_percentiles() {
+    let Some(database) = TestDatabase::create("analytics_shared_insights").await else {
+        return;
+    };
+    let start = DateTime::parse_from_rfc3339("2026-09-01T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    for (index, latency) in [10_i64, 1000, 2000, 3000].into_iter().enumerate() {
+        let id = format!("insights_{index}");
+        let minute = if index == 0 { 1 } else { 16 };
+        seed(
+            &database.pool,
+            &id,
+            start + TimeDelta::minutes(minute),
+            &["insights_group"],
+        )
+        .await;
+        sqlx::query("update model_requests set request_observation_json=jsonb_set(request_observation_json,'{timings,local}',jsonb_build_object('latencyMs',$2::bigint,'firstTokenMs',5)) where id=$1")
+            .bind(id).bind(latency).execute(&database.pool).await.unwrap();
+    }
+    drain_analytics(&database.pool).await;
+    let repo = observability_repository(&database.pool);
+    let range = ObservabilityRange::new(start, start + TimeDelta::hours(1)).unwrap();
+    for filter in [
+        UsageRecordFilter::default(),
+        UsageRecordFilter {
+            search: Some("model_".to_owned()),
+            ..Default::default()
+        },
+    ] {
+        let expected = repo.usage_summary(range, filter.clone()).await.unwrap();
+        if filter.search.is_some() {
+            assert_eq!(
+                expected
+                    .requests
+                    .latency_percentiles
+                    .p50_ms
+                    .unwrap()
+                    .as_f64(),
+                1500.0
+            );
+        }
+        for granularity in [
+            gateway_admin::model::observability::Granularity::FifteenMinutes,
+            gateway_admin::model::observability::Granularity::Hour,
+        ] {
+            let observation = repo
+                .usage_insights_observation(range, filter.clone(), granularity)
+                .await
+                .unwrap();
+            assert_eq!(observation.overview.requests, expected.requests);
+            assert_eq!(observation.overview.providers, expected.providers);
+            assert_eq!(
+                observation.overview.analytics.percentiles_approximate,
+                expected.analytics.percentiles_approximate
+            );
+            assert_eq!(
+                observation
+                    .trend
+                    .iter()
+                    .map(|point| point.metrics.request_count)
+                    .sum::<u64>(),
+                4
+            );
+            assert!(observation.costs.iter().all(|point| point.standard_amount.is_none() && point.no_cache_amount.is_none()));
+        }
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn prefix_search_ignores_request_ids_and_matches_snapshot_names() {
+    let Some(database) = TestDatabase::create("analytics_search_prefix").await else {
+        return;
+    };
+    let start = Utc::now() - TimeDelta::hours(1);
+    for id in ["literal_1", "literalX1", "snapshot_only"] {
+        seed(&database.pool, id, start, &[]).await;
+    }
+    sqlx::query("update model_requests set request_observation_json=jsonb_set(request_observation_json,'{request,clientApiKeyNameSnapshot}','\"literal_name\"'::jsonb) where id='snapshot_only'")
+        .execute(&database.pool).await.unwrap();
+    drain_analytics(&database.pool).await;
+    let result = observability_repository(&database.pool)
+        .usage_summary(
+            ObservabilityRange::new(start - TimeDelta::seconds(1), start + TimeDelta::seconds(1))
+                .unwrap(),
+            UsageRecordFilter {
+                search: Some("literal_".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.requests.request_count, 1);
+    assert_eq!(result.requests.total_tokens, 120);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn opaque_identifiers_preserve_long_values_and_response_or_counts_each_request_once() {
     let Some(database) = TestDatabase::create("analytics_opaque_identifiers").await else {
         return;
@@ -169,7 +375,7 @@ async fn rolled_back_source_changes_and_late_commits_do_not_lose_queue_work() {
 }
 
 #[tokio::test]
-async fn group_or_filter_counts_each_historical_request_once_and_rebuilds_dirty_buckets() {
+async fn dirty_buckets_replace_each_historical_request_contribution_once() {
     let Some(database) = TestDatabase::create("analytics_groups").await else {
         return;
     };
@@ -194,13 +400,8 @@ async fn group_or_filter_counts_each_historical_request_once_and_rebuilds_dirty_
     let repo = observability_repository(&database.pool);
     let range = ObservabilityRange::new(start - TimeDelta::minutes(1), start + TimeDelta::hours(2))
         .unwrap();
-    let filter = UsageRecordFilter {
-        routing_group_refs: vec!["group_a".into(), "group_b".into()],
-        ..Default::default()
-    };
-    let result = repo.usage_summary(range, filter).await.unwrap();
+    let result = repo.usage_summary(range, Default::default()).await.unwrap();
     assert_eq!(result.requests.request_count, 2);
-    assert!(!result.analytics.percentiles_approximate);
     // 已投影但桶待重建时整个桶用事实替换，不能叠加旧桶贡献
     sqlx::query("update request_analytics_facts set total_tokens=333 where id='req_group_a'")
         .execute(&database.pool)
@@ -453,6 +654,9 @@ async fn interrupted_quarters_restart_changed_versions_and_publish_one_consisten
         .execute(&database.pool)
         .await
         .unwrap();
+    // 独立重建请求改变版本，验证旧前缀废弃后仍可恢复，普通源变更不再重启整桶
+    sqlx::query("update request_analytics_pending_buckets set change_version=nextval('request_analytics_change_version')")
+        .execute(&database.pool).await.unwrap();
     drop(worker);
     let worker =
         PgRequestAnalyticsRepository::new(database.pool.clone(), observability_query_budget());
@@ -487,6 +691,8 @@ async fn source_updates_do_not_wait_for_blocked_bucket_rebuild() {
         .execute(&database.pool)
         .await
         .unwrap();
+    sqlx::query("insert into request_analytics_pending_buckets(bucket_start,oldest_pending_at) values(date_bin(interval '15 minutes',$1::timestamptz,timestamptz '2000-01-01 UTC'),now())")
+        .bind(start).execute(&database.pool).await.unwrap();
     let mut blocker = sqlx::PgConnection::connect_with(&database.pool.connect_options())
         .await
         .unwrap();
@@ -677,7 +883,7 @@ async fn clean_aligned_statistics_do_not_access_facts_and_dirty_edges_are_disjoi
         .execute(&mut *transaction)
         .await
         .unwrap();
-    let plan:serde_json::Value=sqlx::query_scalar("explain (analyze,buffers,format json) select fact.id from unnest($1::timestamptz[],$2::timestamptz[]) span(start_at,end_at) cross join lateral (select mr.id from request_analytics_facts mr where mr.started_at>=span.start_at and mr.started_at<span.end_at limit 100001) fact limit 100001")
+    let plan:serde_json::Value=sqlx::query_scalar("explain (analyze,buffers,format json) select fact.id from unnest($1::timestamptz[],$2::timestamptz[]) span(start_at,end_at) cross join lateral (select mr.id from request_analytics_facts mr where mr.started_at>=span.start_at and mr.started_at<span.end_at offset 0) fact")
         .bind(vec![start+TimeDelta::minutes(5),start+TimeDelta::minutes(15)]).bind(vec![start+TimeDelta::minutes(15),start+TimeDelta::minutes(30)])
         .fetch_one(&mut *transaction).await.unwrap();
     let plan = plan.to_string();
@@ -728,7 +934,7 @@ async fn persisted_histograms_merge_long_tails_and_distinguish_empty_from_zero()
         .usage_summary(
             range,
             UsageRecordFilter {
-                routing_group_refs: vec!["hist_group".into()],
+                search: Some("model_".to_owned()),
                 ..Default::default()
             },
         )
@@ -1298,5 +1504,130 @@ async fn daily_rank_counts_follow_rebuilds_rollbacks_deletions_and_dirty_days() 
         .unwrap();
     assert_eq!(dirty.total_request_count, 2);
     assert_eq!(dirty.items[0].request_count, 2);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn combined_filters_and_dirty_edges_aggregate_over_one_hundred_thousand_facts() {
+    let Some(database) = TestDatabase::create("analytics_sql_fact_aggregation").await else {
+        return;
+    };
+    let start = DateTime::parse_from_rfc3339("2026-09-01T10:01:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    seed(
+        &database.pool,
+        "aggregate_template",
+        start,
+        &["group_a", "group_b"],
+    )
+    .await;
+    drain_analytics(&database.pool).await;
+    // 派生事实扩充隔离查询的容量边界，请求模型和上游模型同时命中也只能计入一次
+    sqlx::query("insert into request_analytics_facts select cloned.* from request_analytics_facts facts cross join generate_series(1,100005) n cross join lateral jsonb_populate_record(null::request_analytics_facts,to_jsonb(facts)||jsonb_build_object('id','aggregate_'||n::text,'upstream_model_id','model_a','latency_ms',n%97,'first_token_ms',n%31,'cost_currency','USD','cost_amount',0.0000000001,'cost_source','provider_reported')) cloned where facts.id='aggregate_template'")
+        .execute(&database.pool).await.unwrap();
+    let range = ObservabilityRange::new(
+        start - TimeDelta::minutes(1),
+        start + TimeDelta::minutes(59),
+    )
+    .unwrap();
+    let filter = UsageRecordFilter {
+        transport: Some("http_sse".to_owned()),
+        model: Some("model_a".to_owned()),
+        ..Default::default()
+    };
+    let repo = observability_repository(&database.pool);
+    let result = repo.usage_summary(range, filter).await.unwrap();
+    let expected: (i64, i64, f64, String) = sqlx::query_as("select count(*),sum(total_tokens)::bigint,percentile_cont(0.95) within group(order by latency_ms),trim_scale(sum(cost_amount))::text from request_analytics_facts where started_at >= $1 and started_at < $2")
+        .bind(range.start).bind(range.end).fetch_one(&database.pool).await.unwrap();
+    assert_eq!(result.requests.request_count, expected.0 as u64);
+    assert_eq!(result.requests.total_tokens, expected.1 as u64);
+    assert_eq!(
+        result.requests.latency_percentiles.p95_ms.unwrap().as_f64(),
+        expected.2
+    );
+    assert!(!result.analytics.percentiles_approximate);
+    // 同一个热点桶处于重建阶段时，不得使用旧汇总或只读取前十万条
+    sqlx::query("insert into request_analytics_pending_buckets(bucket_start,oldest_pending_at) values(date_bin(interval '15 minutes',$1::timestamptz,timestamptz '2000-01-01 UTC'),now())")
+        .bind(start).execute(&database.pool).await.unwrap();
+    let dirty = repo.usage_summary(range, Default::default()).await.unwrap();
+    assert_eq!(dirty.requests.request_count, expected.0 as u64);
+    assert_eq!(dirty.requests.total_tokens, expected.1 as u64);
+    assert_eq!(dirty.requests.latency_count, expected.0 as u64);
+    assert!(dirty.analytics.percentiles_approximate);
+    let ranked = repo
+        .usage_diagnostics(range, Default::default(), DiagnosticDimension::ApiKey, 1)
+        .await
+        .unwrap();
+    assert_eq!(ranked.total_request_count, expected.0 as u64);
+    assert_eq!(ranked.items[0].request_count, expected.0 as u64);
+    assert_eq!(ranked.items[0].costs[0].amount.to_string(), expected.3);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn high_cardinality_summary_merges_all_rows_before_returning_model_groups() {
+    let Some(database) = TestDatabase::create("analytics_sql_summary_aggregation").await else {
+        return;
+    };
+    drain_analytics(&database.pool).await;
+    let start = DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let versions: (i32,i32) = sqlx::query_as("select schema_version,histogram_version from request_analytics_build_state where singleton=true")
+        .fetch_one(&database.pool).await.unwrap();
+    // 150 个模型乘以 744 小时超过旧汇总行上限，输出仍只有 150 个模型组
+    sqlx::query("insert into request_analytics_hourly(bucket_start,collection,dimensions,outcome,schema_version,histogram_version,counts,costs,distributions) select $1::timestamptz+hour*interval '1 hour','provider_model',array['openai','model_'||lpad(model::text,3,'0'),'model_'||lpad(model::text,3,'0')],'succeeded',$2,$3,jsonb_build_object('request_count',model,'total_tokens',model*120),jsonb_build_object('USD',(model::numeric*0.0000000001)::text),'{}' from generate_series(0,743) hour cross join generate_series(1,150) model")
+        .bind(start).bind(versions.0).bind(versions.1).execute(&database.pool).await.unwrap();
+    let result = observability_repository(&database.pool)
+        .usage_diagnostics(
+            ObservabilityRange::new(start, start + TimeDelta::days(31)).unwrap(),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Model,
+            2,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.total_request_count, 744 * 150 * 151 / 2);
+    assert_eq!(result.items.len(), 2);
+    assert_eq!(result.items[0].key, "model_150");
+    assert_eq!(result.items[0].request_count, 744 * 150);
+    assert_eq!(result.items[0].total_tokens, 744 * 150 * 120);
+    assert_eq!(result.items[0].costs[0].amount.to_string(), "0.00001116");
+    database.close().await;
+}
+
+#[tokio::test]
+async fn sql_edge_histograms_match_persisted_power_of_two_boundaries() {
+    let Some(database) = TestDatabase::create("analytics_sql_histogram_boundaries").await else {
+        return;
+    };
+    let start = DateTime::parse_from_rfc3339("2026-09-01T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    for (index, value) in [0_i64, 1, 2, 4, 8, 16, 31, 32, 33, 64, 128, 1024, 1_048_576]
+        .into_iter()
+        .enumerate()
+    {
+        let id = format!("sql_hist_{index}");
+        seed(
+            &database.pool,
+            &id,
+            start + TimeDelta::seconds(index as i64),
+            &[],
+        )
+        .await;
+        sqlx::query("update model_requests set request_observation_json=jsonb_set(request_observation_json,'{timings,local}',jsonb_build_object('latencyMs',$2::bigint,'firstTokenMs',0)) where id=$1")
+            .bind(id).bind(value).execute(&database.pool).await.unwrap();
+    }
+    drain_analytics(&database.pool).await;
+    let repo = observability_repository(&database.pool);
+    let range = ObservabilityRange::new(start, start + TimeDelta::hours(1)).unwrap();
+    let persisted = repo.usage_summary(range, Default::default()).await.unwrap();
+    sqlx::query("insert into request_analytics_pending_buckets(bucket_start,oldest_pending_at) values($1,now())")
+        .bind(start).execute(&database.pool).await.unwrap();
+    let edge = repo.usage_summary(range, Default::default()).await.unwrap();
+    assert_eq!(edge.requests, persisted.requests);
+    assert_eq!(edge.attempts, persisted.attempts);
     database.close().await;
 }

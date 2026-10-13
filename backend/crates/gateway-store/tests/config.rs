@@ -27,6 +27,7 @@ fn store_pool_config_ignores_unknown_options_and_keeps_connection_pool_limits() 
     assert_eq!(pool, StorePoolConfig::default());
     assert_eq!(pool.max_connections, 20);
     assert_eq!(pool.acquire_timeout_seconds, 5);
+    assert_eq!(pool.observability_timeout_seconds, 120);
     assert_eq!(pool.observability_max_connections(), 16);
     assert_eq!(
         StorePoolConfig {
@@ -86,4 +87,25 @@ fn valid_config() -> StoreConfig {
         },
     }))
     .expect("test Store configuration")
+}
+
+#[test]
+fn store_config_accepts_custom_observability_timeout_and_rejects_invalid_values() {
+    let root = tempfile::tempdir().unwrap();
+    for seconds in [1_u64, 47, 180] {
+        let pool: StorePoolConfig = serde_json::from_value(serde_json::json!({
+            "observability_timeout_seconds": seconds,
+        }))
+        .unwrap();
+        assert_eq!(pool.observability_timeout_seconds, seconds);
+    }
+    for seconds in [0_u64, u64::MAX] {
+        let mut config: serde_json::Value = serde_json::json!({
+            "database": { "url": "postgres://codex_proxy@127.0.0.1:5432/codex_proxy", "password": PASSWORD },
+            "redis": { "url": "redis://127.0.0.1:6379/", "password": PASSWORD },
+        });
+        config["pool"] = serde_json::json!({"observability_timeout_seconds": seconds});
+        let mut config: StoreConfig = serde_json::from_value(config).unwrap();
+        assert!(config.resolve_and_validate(root.path()).is_err());
+    }
 }

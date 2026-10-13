@@ -1,5 +1,6 @@
 //! 观测存储测试入口，以及查询范围、过滤与端口合同测试
 
+mod analytics;
 mod projection;
 
 use std::{
@@ -441,7 +442,6 @@ async fn usage_list_and_diagnostics_preserve_account_snapshots_by_id() {
         .list_usage_records(admin_observability::UsageQuery {
             range,
             filter: admin_observability::UsageFilter {
-                routing_group_refs: Vec::new(),
                 provider_account_ref: Some("acct_team".to_owned()),
                 ..admin_observability::UsageFilter::default()
             },
@@ -504,7 +504,7 @@ async fn usage_search_should_match_literal_prefix_instead_of_substring() {
         .list_usage_records(UsageRecordQuery {
             range,
             filter: UsageRecordFilter {
-                search: Some("observe_success".to_owned()),
+                search: Some("rimary".to_owned()),
                 ..UsageRecordFilter::default()
             },
             current_page: 1,
@@ -514,6 +514,51 @@ async fn usage_search_should_match_literal_prefix_instead_of_substring() {
         .expect("usage substring search");
 
     assert_eq!(page.total, 0);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn usage_search_should_ignore_request_ids_and_preserve_exact_filters() {
+    let Some(database) = TestDatabase::create("usage_search_without_request_ids").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+
+    for search in [
+        "req_observe",
+        "req_observe_success",
+        "upstream_req",
+        "upstream_req_success",
+    ] {
+        assert_usage_search_ids(&database.pool, range, search, &[]).await;
+    }
+    for filter in [
+        UsageRecordFilter {
+            request_id: Some("req_observe_success".to_owned()),
+            ..Default::default()
+        },
+        UsageRecordFilter {
+            upstream_request_id: Some("upstream_req_success".to_owned()),
+            ..Default::default()
+        },
+    ] {
+        let page = observability_repository(&database.pool)
+            .list_usage_records(UsageRecordQuery {
+                range,
+                filter,
+                current_page: 1,
+                page_size: ObservabilityPageSize::new(10).expect("page size"),
+            })
+            .await
+            .expect("exact request identity filter");
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, "req_observe_success");
+    }
     database.close().await;
 }
 
@@ -1687,7 +1732,6 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
         .list_usage_records(admin_observability::UsageQuery {
             range,
             filter: admin_observability::UsageFilter {
-                routing_group_refs: Vec::new(),
                 client_api_key_ref: Some("key_observe".to_owned()),
                 request_id: Some("req_observe_success".to_owned()),
                 provider_account_ref: Some("acct_observe".to_owned()),
@@ -1700,7 +1744,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 attempt_index: Some(1),
                 response_id: Some("resp_observe_success".to_owned()),
                 upstream_request_id: Some("upstream_req_success".to_owned()),
-                search: Some("req_observe_success".to_owned()),
+                search: Some("upstream-model".to_owned()),
             },
             current_page: 1,
             page_size: ObservabilityPageSize::new(10).expect("page size"),
@@ -1716,7 +1760,6 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
         .list_usage_records(admin_observability::UsageQuery {
             range,
             filter: admin_observability::UsageFilter {
-                routing_group_refs: Vec::new(),
                 outcome: Some(
                     admin_observability::RequestOutcome::new("provider_future_state")
                         .expect("bounded other outcome"),

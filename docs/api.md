@@ -1248,8 +1248,8 @@ HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造�
 `capacity.totalSlots` 为 `number | null`：`null` 表示可用成员中存在继承无限并发的账号，`0` 表示没有可用槽位。
 分组容量只统计普通池，`capacity.usedSlots` 返回其实际在途数；Redis 不可用时为 `null`
 
-分组费用按请求执行时实际服务账号的分组快照归属，不按 Client Key 绑定的分组分摊。
-账号属于多个组时，各组均包含该请求费用；之后调整账号分组不重写历史归属
+分组费用按当前组成员实际完成请求的费用汇总，不按 Client Key 绑定的分组分摊。
+账号属于多个组时，各组均包含该账号的请求费用；调整账号分组后，留存窗口内费用随当前成员关系重新汇总
 
 ## 7. Client Key
 
@@ -1830,8 +1830,11 @@ Dashboard 的 `accountUsage[]` 由后端提供 `usageWindow`、`metricLabel`、`
 Dashboard 默认 `period=today`，用量、诊断和错误查询默认 `period=7d`，范围参数遵循[页面时间合同](#页面时间合同)。
 Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚点
 
-用量查询可组合页码/游标、时间范围、Provider、Client Key、账号、模型、route、transport、状态码、
-request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、
+请求明细列表可组合页码、时间范围、Provider、Client Key、账号、模型、route、transport、状态码、
+request/response/upstream ID、outcome 与搜索文本。`search` 仅供明细及错误列表使用；
+汇总、洞察和诊断不接受搜索参数，管理观测接口不接受路由分组筛选。页面搜索不改变顶部统计范围
+
+诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。诊断按请求量降序返回最多 100 项，
 同请求量按维度标识稳定排列
 
@@ -1863,13 +1866,13 @@ OpenAI 优先采用服务端 `openai-model` / `x-openai-model` 报告（流内�
 缺少终态声明时保留首次声明。这些值仅表示上游报告，不作为模型真实性证明，也不参与路由、
 聚合或本地计价模型选择。没有保存上游模型报告的记录保持未知
 
-请求记录列表的 `search` 使用字面量前缀匹配，支持请求 ID、Client Key ID / 名称、
-账号 ID、账号邮箱与名称、请求 / 上游模型 ID、上游请求 ID。密钥名称不区分大小写，其他字段区分大小写。
-密钥名称按当前密钥记录检索，改名后使用新名称，删除后仍可按 Client Key ID 查询历史记录。
-账号邮箱与名称按请求记录的历史快照检索，
-不随当前账号修改或删除而改变；`%`、`_` 和 `\` 均按普通字符处理，不作为搜索通配符
+请求记录列表的 `search` 使用字面量前缀匹配，支持 Client Key ID / 名称、
+账号 ID、账号邮箱与名称、请求 / 上游模型 ID。密钥名称不区分大小写，其他字段区分大小写。
+密钥名称、账号邮箱与名称按请求记录的历史快照检索，
+不随当前密钥或账号修改、删除而改变；`%`、`_` 和 `\` 均按普通字符处理，不作为搜索通配符
 
-请求记录按模型执行 ID 或上游 ID 查询；只有入口 ID 时需结合时间与入口日志定位。
+请求记录的 `requestId`、`upstreamRequestId` 参数按模型执行 ID 或上游 ID 精确查询；
+搜索框不匹配请求 ID，只有入口 ID 时需结合时间与入口日志定位。
 请求记录和错误列表支持按密钥名称搜索，不支持密钥值或可见前缀搜索
 
 ### 记录范围与统计口径

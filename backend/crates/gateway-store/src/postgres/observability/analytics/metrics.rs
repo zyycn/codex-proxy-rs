@@ -5,13 +5,25 @@ use super::histogram::Histogram;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 
+pub(super) const TOKEN_METRICS: [&str; 8] = [
+    "input_tokens",
+    "output_tokens",
+    "cached_input_tokens",
+    "cache_write_input_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+    "image_input_tokens",
+    "image_output_tokens",
+];
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(super) struct MetricState {
-    counts: BTreeMap<String, u64>,
-    distributions: BTreeMap<String, Histogram>,
-    costs: BTreeMap<String, String>,
+pub(crate) struct MetricState {
+    pub(super) counts: BTreeMap<String, u64>,
+    pub(super) distributions: BTreeMap<String, Histogram>,
+    pub(super) costs: BTreeMap<String, String>,
+    pub(super) last_used_at: Option<DateTime<Utc>>,
     #[serde(skip)]
-    exact_samples: Option<BTreeMap<String, Vec<f64>>>,
+    exact_percentiles: Option<BTreeMap<String, Vec<Option<f64>>>>,
 }
 
 impl MetricState {
@@ -25,8 +37,22 @@ impl MetricState {
                 "distributions",
             )?
             .0,
-            exact_samples: None,
+            last_used_at: get(row, "last_used_at")?,
+            exact_percentiles: None,
         })
+    }
+    pub(super) fn decode_aggregate(row: &PgRow, exact: bool) -> StoreResult<Self> {
+        let mut state = Self::decode(row)?;
+        if exact {
+            state.exact_percentiles = Some(
+                get::<sqlx::types::Json<BTreeMap<String, Vec<Option<f64>>>>>(
+                    row,
+                    "exact_percentiles",
+                )?
+                .0,
+            );
+        }
+        Ok(state)
     }
     pub fn encode(&self) -> StoreResult<(serde_json::Value, serde_json::Value, serde_json::Value)> {
         Ok((
@@ -38,17 +64,24 @@ impl MetricState {
                 .map_err(|error| postgres_unavailable("encode analytics histograms", error))?,
         ))
     }
-    pub fn exact() -> Self {
-        Self {
-            exact_samples: Some(BTreeMap::new()),
-            ..Self::default()
-        }
-    }
     pub fn count(&self, name: &str) -> u64 {
         self.counts.get(name).copied().unwrap_or_default()
     }
-    fn increment(&mut self, name: &str, amount: u64) -> StoreResult<()> {
-        let count = self.counts.entry(name.to_owned()).or_default();
+    pub fn optional_count(&self, name: &str) -> Option<u64> {
+        (self.count(&format!("{name}_known_count")) > 0).then(|| self.count(name))
+    }
+    pub fn last_used_at(&self) -> Option<DateTime<Utc>> {
+        self.last_used_at
+    }
+    pub(super) fn has_exact_percentiles(&self) -> bool {
+        self.exact_percentiles.is_some()
+    }
+    pub(super) fn increment(&mut self, name: &str, amount: u64) -> StoreResult<()> {
+        // 合并同一分组时键通常已经存在，避免每条事实都为已有指标分配字符串
+        let count = match self.counts.get_mut(name) {
+            Some(count) => count,
+            None => self.counts.entry(name.to_owned()).or_default(),
+        };
         *count = count
             .checked_add(amount)
             .ok_or_else(|| invalid("analytics counter overflow"))?;
@@ -60,13 +93,10 @@ impl MetricState {
                 .entry(name.to_owned())
                 .or_default()
                 .add(sample)?;
-            if let Some(samples) = &mut self.exact_samples {
-                samples.entry(name.to_owned()).or_default().push(sample);
-            }
         }
         Ok(())
     }
-    fn add_cost(&mut self, currency: &str, amount: &str) -> StoreResult<()> {
+    pub(super) fn add_cost(&mut self, currency: &str, amount: &str) -> StoreResult<()> {
         let amount: DecimalAmount = amount
             .parse()
             .map_err(|_| invalid("analytics invalid cost"))?;
@@ -83,19 +113,28 @@ impl MetricState {
         Ok(())
     }
     pub fn merge(&mut self, other: &Self) -> StoreResult<()> {
+        // 精确分位数只属于数据库已经完成分组的结果，不能把分位数再平均或合并
+        if self.count("request_count") > 0
+            && other.count("request_count") > 0
+            && (self.exact_percentiles.is_some() || other.exact_percentiles.is_some())
+        {
+            return Err(invalid(
+                "cannot merge finalized exact analytics percentiles",
+            ));
+        }
+        if self.count("request_count") == 0 {
+            self.exact_percentiles.clone_from(&other.exact_percentiles);
+        }
+        self.last_used_at = self.last_used_at.max(other.last_used_at);
         for (name, count) in &other.counts {
             self.increment(name, *count)?;
         }
         for (name, distribution) in &other.distributions {
-            self.distributions
-                .entry(name.clone())
-                .or_default()
-                .merge(distribution)?;
-        }
-        if let (Some(ours), Some(theirs)) = (&mut self.exact_samples, &other.exact_samples) {
-            for (name, samples) in theirs {
-                ours.entry(name.clone()).or_default().extend(samples);
-            }
+            let stored = match self.distributions.get_mut(name) {
+                Some(stored) => stored,
+                None => self.distributions.entry(name.clone()).or_default(),
+            };
+            stored.merge(distribution)?;
         }
         for (currency, amount) in &other.costs {
             self.add_cost(currency, amount)?;
@@ -185,18 +224,31 @@ impl MetricState {
             self.sample("capacity", Some(used as f64 / total as f64 * 10_000.0))?;
         }
         if completed {
-            for name in [
-                "input_tokens",
-                "output_tokens",
-                "cached_input_tokens",
-                "cache_write_input_tokens",
-                "reasoning_output_tokens",
-                "total_tokens",
-                "image_input_tokens",
-                "image_output_tokens",
+            self.increment("completed_request_count", 1)?;
+            self.last_used_at = self.last_used_at.max(Some(get(row, "started_at")?));
+            for (value, name) in [
+                (Some(true), "image_request_count"),
+                (Some(false), "image_request_failed_count"),
             ] {
-                self.increment(name, optional_unsigned(row, name)?.unwrap_or_default())?;
+                if get::<Option<bool>>(row, "image_generation_succeeded")? == value {
+                    self.increment(name, 1)?;
+                }
             }
+            for name in TOKEN_METRICS {
+                if let Some(value) = optional_unsigned(row, name)? {
+                    self.increment(name, value)?;
+                    self.increment(&format!("{name}_known_count"), 1)?;
+                }
+            }
+            self.increment(
+                "window_total_tokens",
+                optional_unsigned(row, "total_tokens")?.unwrap_or(
+                    optional_unsigned(row, "input_tokens")?
+                        .unwrap_or_default()
+                        .checked_add(optional_unsigned(row, "output_tokens")?.unwrap_or_default())
+                        .ok_or_else(|| invalid("analytics token overflow"))?,
+                ),
+            )?;
             if get::<Option<i64>>(row, "input_tokens")?.is_some() {
                 self.increment("cache_eligible_request_count", 1)?;
                 if optional_unsigned(row, "cached_input_tokens")?.is_some_and(|value| value > 0) {
@@ -245,13 +297,11 @@ impl MetricState {
         self.distributions.get(name).cloned().unwrap_or_default()
     }
     pub fn percentile(&self, name: &str, fraction: f64) -> Option<f64> {
-        if let Some(samples) = &self.exact_samples {
-            let mut samples = samples.get(name)?.clone();
-            samples.sort_by(f64::total_cmp);
-            let rank = samples.len().saturating_sub(1) as f64 * fraction;
-            let a = *samples.get(rank.floor() as usize)?;
-            let b = *samples.get(rank.ceil() as usize)?;
-            return Some(a + (b - a) * rank.fract());
+        if let Some(percentiles) = &self.exact_percentiles {
+            let index = [0.1, 0.5, 0.9, 0.95, 0.99]
+                .iter()
+                .position(|value| (*value - fraction).abs() < f64::EPSILON)?;
+            return percentiles.get(name)?.get(index).copied().flatten();
         }
         self.histogram(name).percentile(fraction)
     }

@@ -157,7 +157,6 @@ impl OtherRequestOutcome {
 /// 用量记录过滤条件
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct UsageFilter {
-    pub routing_group_refs: Vec<String>,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_account_ref: Option<String>,
@@ -211,7 +210,6 @@ impl DashboardQuery {
 /// 运维错误过滤条件
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OpsErrorFilter {
-    pub routing_group_refs: Vec<String>,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_kind: Option<String>,

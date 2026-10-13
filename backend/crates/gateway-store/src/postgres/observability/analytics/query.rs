@@ -5,7 +5,7 @@ use futures::TryStreamExt;
 
 pub(crate) struct AnalyticsSnapshot<'a> {
     pub tx: sqlx::Transaction<'a, Postgres>,
-    status: AnalyticsStatus,
+    pub(super) status: AnalyticsStatus,
     approximate: bool,
 }
 
@@ -13,10 +13,25 @@ struct ReadSelection<'a> {
     distributions: bool,
     costs: bool,
     keys: Option<&'a [String]>,
+    counters: Option<&'a [&'a str]>,
+    distribution_names: Option<&'a [&'a str]>,
 }
 
 impl<'a> AnalyticsSnapshot<'a> {
-    pub async fn new(connection: &'a mut PgConnection) -> StoreResult<Self> {
+    pub async fn new(connection: &'a mut ObservabilityConnection) -> StoreResult<Self> {
+        Self::begin(connection, true).await
+    }
+
+    pub(crate) async fn new_for_accounts(
+        connection: &'a mut ObservabilityConnection,
+    ) -> StoreResult<Self> {
+        Self::begin(connection, false).await
+    }
+
+    async fn begin(
+        connection: &'a mut ObservabilityConnection,
+        require_current_schema: bool,
+    ) -> StoreResult<Self> {
         let mut tx = begin_snapshot(connection).await?;
         // 时间跨度和分组选择性差异很大，通用计划会把长区间误估成短区间
         // 仅当前只读事务使用实际参数规划，不改变连接池后续事务的计划策略
@@ -25,8 +40,9 @@ impl<'a> AnalyticsSnapshot<'a> {
             .await
             .map_err(|error| postgres_unavailable("plan analytics with actual bounds", error))?;
         let status = worker::query_status(&mut tx).await?;
-        if status.schema_version != SCHEMA_VERSION as u32
-            || status.histogram_version != HISTOGRAM_VERSION as u32
+        if require_current_schema
+            && (status.schema_version != SCHEMA_VERSION as u32
+                || status.histogram_version != HISTOGRAM_VERSION as u32)
         {
             return Err(unavailable(
                 "request analytics is building; retry after the background projection completes",
@@ -163,14 +179,35 @@ impl<'a> AnalyticsSnapshot<'a> {
             .load(range, filter, None, None, Default::default(), true)
             .await?;
         let state = merge_states(states.into_values())?;
+        self.overview_from_state(range, filter, state).await
+    }
+
+    async fn overview_from_state(
+        &mut self,
+        range: ObservabilityRange,
+        filter: &UsageRecordFilter,
+        state: MetricState,
+    ) -> StoreResult<UsageOverview> {
+        // Provider 列表只消费计数，不重复合并费用与分布
         let provider_states = self
-            .load(
+            .load_selected(
                 range,
                 filter,
                 Some(DiagnosticDimension::Provider),
                 None,
                 Default::default(),
-                false,
+                ReadSelection {
+                    distributions: false,
+                    costs: false,
+                    keys: None,
+                    counters: Some(&[
+                        "request_count",
+                        "attempt_count",
+                        "failure_count",
+                        "total_tokens",
+                    ]),
+                    distribution_names: None,
+                },
             )
             .await?;
         let mut providers = provider_states
@@ -216,47 +253,48 @@ impl<'a> AnalyticsSnapshot<'a> {
                     distributions: true,
                     costs: include_costs,
                     keys: None,
+                    counters: None,
+                    distribution_names: None,
                 },
             )
             .await?;
-        let mut points = BTreeMap::new();
-        for ((bucket, _), state) in states {
-            points.insert(
-                bucket,
-                RequestMetricPoint {
-                    bucket_start: bucket,
-                    granularity,
-                    metrics: state.request_metrics()?,
-                    cost_coverage: state.coverage(),
-                    costs: if include_costs {
-                        state.costs()?
-                    } else {
-                        Vec::new()
-                    },
-                },
-            );
-        }
-        fill_metric_gaps(range, granularity, points, timezone)
+        metric_points(range, granularity, timezone, &states, include_costs)
     }
 
-    pub async fn projected_costs(
+    pub async fn insights(
         &mut self,
         range: ObservabilityRange,
         filter: &UsageRecordFilter,
         granularity: ObservationGranularity,
         timezone: gateway_core::time::DeploymentTimeZone,
-    ) -> StoreResult<Vec<admin_observability::UsageProjectedCostPoint>> {
-        self.load(range, filter, None, Some(granularity), timezone, false)
-            .await?
-            .into_iter()
+    ) -> StoreResult<(
+        UsageOverview,
+        Vec<RequestMetricPoint>,
+        Vec<admin_observability::UsageProjectedCostPoint>,
+    )> {
+        let states = self
+            .load(range, filter, None, Some(granularity), timezone, true)
+            .await?;
+        let trend = metric_points(range, granularity, timezone, &states, true)?;
+        let costs = states
+            .iter()
             .map(|((bucket_start, _), state)| {
                 Ok(admin_observability::UsageProjectedCostPoint {
-                    bucket_start,
+                    bucket_start: *bucket_start,
                     standard_amount: state.projected_cost("standard_usd")?,
                     no_cache_amount: state.projected_cost("no_cache_usd")?,
                 })
             })
-            .collect()
+            .collect::<StoreResult<Vec<_>>>()?;
+        // 趋势已包含可合并的完整指标和情景费用，概览直接复用同一份状态
+        // 精确分位数不可跨桶合并，明细回退时仍按完整区间单独计算概览
+        let overview = if states.values().any(MetricState::has_exact_percentiles) {
+            self.overview(range, filter).await?
+        } else {
+            self.overview_from_state(range, filter, merge_states(states.into_values())?)
+                .await?
+        };
+        Ok((overview, trend, costs))
     }
 
     pub async fn diagnostics(
@@ -273,8 +311,10 @@ impl<'a> AnalyticsSnapshot<'a> {
         let ranked = if matches!(
             dimension,
             DiagnosticDimension::Account | DiagnosticDimension::ApiKey
-        ) && collection_for(filter, Some(dimension)).is_some()
-        {
+        ) && matches!(
+            collection_for(filter, Some(dimension)),
+            Some("account" | "key")
+        ) {
             Some(
                 self.diagnostic_top_keys(range, filter, dimension, limit)
                     .await?,
@@ -294,6 +334,22 @@ impl<'a> AnalyticsSnapshot<'a> {
                     distributions: true,
                     costs: true,
                     keys: selected_keys,
+                    counters: Some(&[
+                        "request_count",
+                        "success_count",
+                        "failure_count",
+                        "attempt_count",
+                        "total_tokens",
+                        "latency_ms_sum",
+                        "cancelled_count",
+                        "incomplete_count",
+                        "retry_count",
+                        "retried_request_count",
+                        "provider_reported_count",
+                        "calculated_count",
+                        "unavailable_count",
+                    ]),
+                    distribution_names: Some(&["latency_ms", "first_token_ms"]),
                 },
             )
             .await?;
@@ -415,16 +471,18 @@ impl<'a> AnalyticsSnapshot<'a> {
             .collect::<Vec<_>>();
         let mut query = QueryBuilder::<Postgres>::new("with edge_facts as materialized (");
         if starts.is_empty() {
-            query.push("select null::text as key where false");
+            query.push("select null::text as key,0::bigint as request_count where false");
         } else {
-            query.push("select edge.key from unnest(").push_bind(starts).push("::timestamptz[],").push_bind(ends).push("::timestamptz[]) span(start_at,end_at) cross join lateral (select ")
-                .push(format!("coalesce(mr.{column},'') as key from request_analytics_facts mr where mr.started_at >= span.start_at and mr.started_at < span.end_at"));
+            query.push("select edge.key,sum(edge.request_count)::bigint as request_count from unnest(").push_bind(starts).push("::timestamptz[],").push_bind(ends).push("::timestamptz[]) span(start_at,end_at) cross join lateral (select ")
+                .push(format!("coalesce(mr.{column},'') as key,count(*)::bigint as request_count from request_analytics_facts mr where mr.started_at >= span.start_at and mr.started_at < span.end_at"));
             push_unrecovered_request_filter(&mut query, "mr");
             push_analytics_filter(&mut query, filter, "mr");
             push_diagnostic_dimension_filter(&mut query, dimension);
-            query.push(" limit 100001) edge limit 100001");
+            query.push(format!(
+                " group by coalesce(mr.{column},'')) edge group by edge.key"
+            ));
         }
-        query.push("), contributions as (select key,count(*)::bigint as request_count from edge_facts group by key");
+        query.push("), contributions as (select key,request_count from edge_facts");
         for (table, column, seconds, buckets) in [
             ("request_analytics_daily_counts", "dimension", 86400, days),
             ("request_analytics_hourly", "dimensions[1]", 3600, hours),
@@ -446,7 +504,7 @@ impl<'a> AnalyticsSnapshot<'a> {
             }
             query.push(format!(" group by {column}"));
         }
-        query.push("), grouped as (select key,sum(request_count)::bigint as request_count from contributions group by key) select key,request_count,sum(request_count) over()::bigint as total_request_count,(select count(*) from edge_facts)::bigint as edge_count from grouped order by request_count desc,");
+        query.push("), grouped as (select key,sum(request_count)::bigint as request_count from contributions group by key) select key,request_count,sum(request_count) over()::bigint as total_request_count from grouped order by request_count desc,");
         if dimension == DiagnosticDimension::Account {
             query.push("coalesce(nullif(key,''),'unrouted')");
         } else {
@@ -458,12 +516,6 @@ impl<'a> AnalyticsSnapshot<'a> {
             .fetch_all(&mut *self.tx)
             .await
             .map_err(|error| postgres_unavailable("rank full-range analytics groups", error))?;
-        if rows.first().is_some_and(|row| {
-            row.try_get::<i64, _>("edge_count")
-                .is_ok_and(|count| count > MAX_FACT_ROWS as i64)
-        }) {
-            return Err(unavailable("analytics fact row budget exceeded"));
-        }
         let total = rows
             .first()
             .map(|row| unsigned(row, "total_request_count"))
@@ -476,18 +528,15 @@ impl<'a> AnalyticsSnapshot<'a> {
         Ok((total, keys))
     }
 
-    async fn summary_buckets(
+    pub(super) async fn summary_buckets(
         &mut self,
         range: ObservabilityRange,
         use_hourly: bool,
     ) -> StoreResult<(Vec<DateTime<Utc>>, Vec<DateTime<Utc>>)> {
         // 先按时间确定互斥的完整桶，空的十五分钟集合不读取汇总表
-        let rows = sqlx::query("with quarters as materialized (select q.bucket_start,date_bin(interval '1 hour',q.bucket_start,timestamptz '2000-01-01 UTC') as hour_start from generate_series(date_bin(interval '15 minutes',$1::timestamptz,timestamptz '2000-01-01 UTC'),$2::timestamptz-interval '15 minutes',interval '15 minutes') q(bucket_start) where q.bucket_start >= $1 and not exists(select 1 from request_analytics_pending_buckets p where p.bucket_start=q.bucket_start)), hours as (select hour_start from quarters where $3 group by hour_start having count(*)=4) select q.bucket_start,h.hour_start from quarters q left join hours h on h.hour_start=q.hour_start order by q.bucket_start limit 100001")
+        let rows = sqlx::query("with quarters as materialized (select q.bucket_start,date_bin(interval '1 hour',q.bucket_start,timestamptz '2000-01-01 UTC') as hour_start from generate_series(date_bin(interval '15 minutes',$1::timestamptz,timestamptz '2000-01-01 UTC'),$2::timestamptz-interval '15 minutes',interval '15 minutes') q(bucket_start) where q.bucket_start >= $1 and not exists(select 1 from request_analytics_pending_buckets p where p.bucket_start=q.bucket_start)), hours as (select hour_start from quarters where $3 group by hour_start having count(*)=4) select q.bucket_start,h.hour_start from quarters q left join hours h on h.hour_start=q.hour_start order by q.bucket_start")
             .bind(range.start).bind(range.end).bind(use_hourly)
             .fetch_all(&mut *self.tx).await.map_err(|error|postgres_unavailable("select disjoint analytics buckets",error))?;
-        if rows.len() > MAX_FACT_ROWS {
-            return Err(unavailable("analytics time bucket budget exceeded"));
-        }
         let mut hours = Vec::new();
         let mut quarters = Vec::new();
         for row in rows {
@@ -502,7 +551,7 @@ impl<'a> AnalyticsSnapshot<'a> {
         Ok((hours, quarters))
     }
 
-    async fn uncovered_spans(
+    pub(super) async fn uncovered_spans(
         &mut self,
         range: ObservabilityRange,
     ) -> StoreResult<Vec<(DateTime<Utc>, DateTime<Utc>)>> {
@@ -522,11 +571,8 @@ impl<'a> AnalyticsSnapshot<'a> {
             spans.push((right_start, range.end));
         }
         if complete_start < complete_end {
-            let dirty:Vec<DateTime<Utc>>=sqlx::query_scalar("select bucket_start from request_analytics_pending_buckets where bucket_start >= $1 and bucket_start < $2 order by bucket_start limit 100001")
+            let dirty:Vec<DateTime<Utc>>=sqlx::query_scalar("select bucket_start from request_analytics_pending_buckets where bucket_start >= $1 and bucket_start < $2 order by bucket_start")
                 .bind(complete_start).bind(complete_end).fetch_all(&mut *self.tx).await.map_err(|error|postgres_unavailable("plan bounded analytics fact spans",error))?;
-            if dirty.len() > MAX_FACT_ROWS {
-                return Err(unavailable("analytics dirty interval budget exceeded"));
-            }
             spans.extend(
                 dirty
                     .into_iter()
@@ -534,7 +580,17 @@ impl<'a> AnalyticsSnapshot<'a> {
             );
         }
         spans.sort_unstable();
-        Ok(spans)
+        let mut merged: Vec<(DateTime<Utc>, DateTime<Utc>)> = Vec::new();
+        for (start, end) in spans {
+            if let Some(previous) = merged.last_mut()
+                && previous.1 == start
+            {
+                previous.1 = end;
+            } else {
+                merged.push((start, end));
+            }
+        }
+        Ok(merged)
     }
 
     async fn load(
@@ -556,6 +612,8 @@ impl<'a> AnalyticsSnapshot<'a> {
                 distributions: read_distributions,
                 costs: true,
                 keys: None,
+                counters: None,
+                distribution_names: None,
             },
         )
         .await
@@ -574,6 +632,8 @@ impl<'a> AnalyticsSnapshot<'a> {
             distributions: read_distributions,
             costs: read_costs,
             keys: selected_keys,
+            counters,
+            distribution_names,
         } = selection;
         filter.validate()?;
         self.require_visible(Some(range)).await?;
@@ -610,90 +670,63 @@ impl<'a> AnalyticsSnapshot<'a> {
                 if buckets.is_empty() {
                     continue;
                 }
-                let (dimension_filter, either_filter, either_positions) = match collection {
-                    "provider_model" => {
-                        (filter.provider_kind.clone(), filter.model.clone(), (2, 3))
-                    }
-                    "account" => (filter.provider_account_ref.clone(), None, (1, 2)),
-                    "key" => (filter.client_api_key_ref.clone(), None, (1, 2)),
-                    "operation" => (filter.operation.clone(), None, (1, 2)),
-                    "transport" => (None, filter.transport.clone(), (1, 2)),
-                    "status" => (
-                        None,
-                        filter.status_code.map(|value| value.to_string()),
-                        (1, 2),
-                    ),
-                    _ => (None, None, (1, 2)),
+                let mut query =
+                    QueryBuilder::<Postgres>::new("with matching as not materialized (select ");
+                aggregate::push_output_bucket(
+                    &mut query,
+                    "bucket_start",
+                    range,
+                    granularity,
+                    boundaries.as_deref(),
+                );
+                let name = aggregate::summary_dimension_sql(collection, dimension);
+                let costs = if read_costs {
+                    "costs"
+                } else {
+                    "'{}'::jsonb as costs"
                 };
                 let distributions = if read_distributions {
                     "distributions"
                 } else {
                     "'{}'::jsonb as distributions"
                 };
-                let costs = if read_costs {
-                    "costs"
-                } else {
-                    "'{}'::jsonb as costs"
-                };
-                let provider_counts = dimension == Some(DiagnosticDimension::Provider)
-                    && granularity.is_none()
-                    && !read_distributions;
-                let mut query = QueryBuilder::<Postgres>::new(if provider_counts {
-                    "select min(bucket_start) as bucket_start, array[dimensions[1]] as dimensions, ''::text as outcome, jsonb_build_object('request_count',sum((counts->>'request_count')::bigint),'attempt_count',sum((counts->>'attempt_count')::bigint),'failure_count',sum(coalesce((counts->>'failure_count')::bigint,0)),'total_tokens',sum(coalesce((counts->>'total_tokens')::bigint,0))) as counts, '{}'::jsonb as costs, '{}'::jsonb as distributions from ("
-                } else {
-                    ""
-                });
-                query.push(format!("select bucket_start, dimensions, outcome, counts, {costs}, {distributions} from {table} a where collection="))
+                query.push(format!(" as output_bucket,{name} as name,counts,{costs},{distributions},last_used_at from {table} a where collection="))
                     .push_bind(collection).push(" and schema_version=").push_bind(SCHEMA_VERSION)
                     .push(" and histogram_version=").push_bind(HISTOGRAM_VERSION);
                 push_summary_buckets(&mut query, &buckets, seconds);
-                // 可选筛选仅在有值时生成谓词，保留维度与时间索引的选择空间
-                if let Some(outcome) = &filter.outcome {
-                    query.push(" and outcome=").push_bind(outcome);
-                }
-                if let Some(value) = dimension_filter {
-                    query.push(" and dimensions[1]=").push_bind(value);
-                }
-                if let Some(value) = either_filter {
-                    query
-                        .push(format!(" and (dimensions[{}]=", either_positions.0))
-                        .push_bind(value.clone())
-                        .push(format!(" or dimensions[{}]=", either_positions.1))
-                        .push_bind(value)
-                        .push(")");
-                }
+                push_collection_filter(&mut query, collection, filter);
                 if let Some(keys) = selected_keys {
                     query
                         .push(" and dimensions[1]=any(")
                         .push_bind(keys)
                         .push(")");
                 }
-                if provider_counts {
-                    query.push(") matching group by dimensions[1]");
+                if matches!(
+                    dimension,
+                    Some(
+                        DiagnosticDimension::Model
+                            | DiagnosticDimension::Status
+                            | DiagnosticDimension::Failure
+                    )
+                ) {
+                    query.push(format!(" and ({name})<>''"));
                 }
-                query.push(" limit 100001");
+                query.push(")");
+                aggregate::push_summary_aggregation(
+                    &mut query,
+                    read_distributions,
+                    read_costs,
+                    counters,
+                    distribution_names,
+                );
                 let mut rows = query.build().fetch(&mut *self.tx);
-                let mut count = 0;
                 while let Some(row) = rows
                     .try_next()
                     .await
-                    .map_err(|error| postgres_unavailable("read analytics summaries", error))?
+                    .map_err(|error| postgres_unavailable("merge analytics summaries", error))?
                 {
-                    count += 1;
-                    if count > MAX_FACT_ROWS {
-                        return Err(unavailable("analytics aggregate row budget exceeded"));
-                    }
-                    let dimensions: Vec<String> = get(&row, "dimensions")?;
-                    let name = dimension_name(collection, &dimensions, dimension);
-                    let Some(name) = name else {
-                        continue;
-                    };
-                    let bucket = output_bucket(
-                        get(&row, "bucket_start")?,
-                        range,
-                        granularity,
-                        boundaries.as_deref(),
-                    )?;
+                    let bucket = get(&row, "bucket_start")?;
+                    let name = get(&row, "name")?;
                     let state = MetricState::decode(&row)?;
                     result.entry((bucket, name)).or_default().merge(&state)?;
                 }
@@ -707,28 +740,42 @@ impl<'a> AnalyticsSnapshot<'a> {
         if spans.is_empty() {
             return Ok(result);
         }
-        // 单段直接绑定边界，让优化器看见真实跨度，避免把三十天误估成小范围 BitmapAnd
+        // 单段直接绑定边界，多个互斥区间用索引读取，所有统计都在数据库内完成
         let single_span = spans.len() == 1;
-        let mut query = if single_span {
-            let mut query = QueryBuilder::<Postgres>::new(fact_select());
+        let mut query = QueryBuilder::<Postgres>::new("with matching as not materialized (");
+        if !single_span {
+            let (starts, ends): (Vec<_>, Vec<_>) = spans.iter().copied().unzip();
             query
-                .push(" where mr.started_at >= ")
-                .push_bind(spans[0].0)
-                .push(" and mr.started_at < ")
-                .push_bind(spans[0].1);
-            query
-        } else {
-            let (starts, ends): (Vec<_>, Vec<_>) = spans.into_iter().unzip();
-            let mut query = QueryBuilder::<Postgres>::new("select fact.* from unnest(");
-            query
+                .push("select fact.* from unnest(")
                 .push_bind(starts)
                 .push("::timestamptz[],")
                 .push_bind(ends)
-                .push("::timestamptz[]) span(start_at,end_at) cross join lateral (")
-                .push(fact_select())
-                .push(" where mr.started_at >= span.start_at and mr.started_at < span.end_at");
+                .push("::timestamptz[]) span(start_at,end_at) cross join lateral (");
+        }
+        query.push(format!(
+            "select mr.*,coalesce(({}),false) as is_completed_usage,",
+            completed_usage_fact_predicate("mr")
+        ));
+        aggregate::push_output_bucket(
+            &mut query,
+            "mr.started_at",
+            range,
+            granularity,
+            boundaries.as_deref(),
+        );
+        query.push(format!(
+            " as output_bucket,{} as name from request_analytics_facts mr where ",
+            aggregate::fact_dimension_sql(dimension)
+        ));
+        if single_span {
             query
-        };
+                .push("mr.started_at >= ")
+                .push_bind(spans[0].0)
+                .push(" and mr.started_at < ")
+                .push_bind(spans[0].1);
+        } else {
+            query.push("mr.started_at >= span.start_at and mr.started_at < span.end_at");
+        }
         push_unrecovered_request_filter(&mut query, "mr");
         push_analytics_filter(&mut query, filter, "mr");
         if let Some(dimension) = dimension {
@@ -749,42 +796,40 @@ impl<'a> AnalyticsSnapshot<'a> {
             }
             query.push(")");
         }
-        query.push(" limit 100001");
         if !single_span {
-            query.push(") fact limit 100001");
+            // 保留逐区间的参数化索引扫描，避免展开 LATERAL 后全表读取再过滤
+            // OFFSET 0 不限制返回行数
+            query.push(" offset 0) fact");
         }
+        query.push(")");
+        let exact = selected.is_none();
+        aggregate::push_fact_aggregation_selected(
+            &mut query,
+            exact,
+            read_costs,
+            read_distributions,
+            counters,
+            distribution_names,
+        );
         let mut rows = query.build().fetch(&mut *self.tx);
-        let mut count = 0;
         while let Some(row) = rows
             .try_next()
             .await
-            .map_err(|error| postgres_unavailable("read bounded analytics facts", error))?
+            .map_err(|error| postgres_unavailable("aggregate analytics facts", error))?
         {
-            count += 1;
-            if count > MAX_FACT_ROWS {
-                return Err(unavailable("analytics fact row budget exceeded"));
+            let key = (get(&row, "bucket_start")?, get(&row, "name")?);
+            let state = MetricState::decode_aggregate(&row, exact)?;
+            if exact {
+                result.insert(key, state);
+            } else {
+                result.entry(key).or_default().merge(&state)?;
             }
-            let bucket = output_bucket(
-                get(&row, "started_at")?,
-                range,
-                granularity,
-                boundaries.as_deref(),
-            )?;
-            let name = fact_dimension(&row, dimension)?;
-            let state = result.entry((bucket, name)).or_insert_with(|| {
-                if selected.is_some() {
-                    MetricState::default()
-                } else {
-                    MetricState::exact()
-                }
-            });
-            state.add_row(&row)?;
         }
         Ok(result)
     }
 }
 
-fn push_summary_buckets(
+pub(super) fn push_summary_buckets(
     query: &mut QueryBuilder<Postgres>,
     buckets: &[DateTime<Utc>],
     seconds: i64,
@@ -810,6 +855,33 @@ fn push_summary_buckets(
     }
 }
 
+fn metric_points(
+    range: ObservabilityRange,
+    granularity: ObservationGranularity,
+    timezone: gateway_core::time::DeploymentTimeZone,
+    states: &BTreeMap<(DateTime<Utc>, String), MetricState>,
+    include_costs: bool,
+) -> StoreResult<Vec<RequestMetricPoint>> {
+    let mut points = BTreeMap::new();
+    for ((bucket, _), state) in states {
+        points.insert(
+            *bucket,
+            RequestMetricPoint {
+                bucket_start: *bucket,
+                granularity,
+                metrics: state.request_metrics()?,
+                cost_coverage: state.coverage(),
+                costs: if include_costs {
+                    state.costs()?
+                } else {
+                    Vec::new()
+                },
+            },
+        );
+    }
+    fill_metric_gaps(range, granularity, points, timezone)
+}
+
 fn merge_states(states: impl Iterator<Item = MetricState>) -> StoreResult<MetricState> {
     let mut result: Option<MetricState> = None;
     for state in states {
@@ -822,28 +894,7 @@ fn merge_states(states: impl Iterator<Item = MetricState>) -> StoreResult<Metric
     Ok(result.unwrap_or_default())
 }
 
-fn output_bucket(
-    time: DateTime<Utc>,
-    range: ObservabilityRange,
-    granularity: Option<ObservationGranularity>,
-    boundaries: Option<&[DateTime<Utc>]>,
-) -> StoreResult<DateTime<Utc>> {
-    match granularity {
-        None => Ok(range.start),
-        Some(ObservationGranularity::Day) => boundaries
-            .and_then(|values| {
-                values
-                    .iter()
-                    .rev()
-                    .find(|boundary| **boundary <= time)
-                    .copied()
-            })
-            .ok_or_else(|| invalid("missing analytics calendar boundary")),
-        Some(granularity) => bucket_for(time, granularity.seconds()),
-    }
-}
-
-fn collection_for(
+pub(super) fn collection_for(
     filter: &UsageRecordFilter,
     dimension: Option<DiagnosticDimension>,
 ) -> Option<&'static str> {
@@ -852,7 +903,6 @@ fn collection_for(
         || filter.response_id.is_some()
         || filter.upstream_request_id.is_some()
         || filter.search.is_some()
-        || !filter.routing_group_refs.is_empty()
     {
         return None;
     }
@@ -885,83 +935,16 @@ fn collection_for(
             DiagnosticDimension::Status => "status",
         });
     }
-    if required.len() > 1 {
+    if required.len() == 2 && required.contains("provider_model") && required.contains("account") {
+        Some("account_model")
+    } else if required.len() == 2 && required.contains("provider_model") && required.contains("key")
+    {
+        Some("key_model")
+    } else if required.len() > 1 {
         None
     } else {
         Some(required.first().copied().unwrap_or("global"))
     }
-}
-
-fn dimension_name(
-    collection: &str,
-    values: &[String],
-    dimension: Option<DiagnosticDimension>,
-) -> Option<String> {
-    let Some(dimension) = dimension else {
-        return Some(String::new());
-    };
-    let value = |index| values.get(index).cloned().unwrap_or_default();
-    let coalesce = |preferred: usize, fallback: usize| {
-        let v = value(preferred);
-        if v.is_empty() { value(fallback) } else { v }
-    };
-    let name = match dimension {
-        DiagnosticDimension::Provider if collection == "provider_model" => {
-            let v = value(0);
-            if v.is_empty() {
-                "unrouted".to_owned()
-            } else {
-                v
-            }
-        }
-        DiagnosticDimension::Model => coalesce(2, 1),
-        DiagnosticDimension::Account => {
-            let v = value(0);
-            if v.is_empty() {
-                "unrouted".to_owned()
-            } else {
-                v
-            }
-        }
-        DiagnosticDimension::Transport => {
-            let v = coalesce(1, 0);
-            if v.is_empty() {
-                "unknown".to_owned()
-            } else {
-                v
-            }
-        }
-        DiagnosticDimension::Status => coalesce(1, 0),
-        _ => value(0),
-    };
-    if name.is_empty()
-        && matches!(
-            dimension,
-            DiagnosticDimension::Model | DiagnosticDimension::Status | DiagnosticDimension::Failure
-        )
-    {
-        None
-    } else {
-        Some(name)
-    }
-}
-
-fn fact_dimension(
-    row: &sqlx::postgres::PgRow,
-    dimension: Option<DiagnosticDimension>,
-) -> StoreResult<String> {
-    let Some(dimension) = dimension else {
-        return Ok(String::new());
-    };
-    let collection = collection_for(&UsageRecordFilter::default(), Some(dimension))
-        .ok_or_else(|| invalid("missing analytics dimension"))?;
-    let dimensions = worker::collections(row)?
-        .into_iter()
-        .find(|(name, _)| *name == collection)
-        .map(|(_, values)| values)
-        .ok_or_else(|| invalid("missing analytics dimension"))?;
-    dimension_name(collection, &dimensions, Some(dimension))
-        .ok_or_else(|| invalid("unexpected empty analytics dimension"))
 }
 
 pub(crate) fn push_analytics_filter(
@@ -980,5 +963,55 @@ pub(crate) fn push_analytics_filter(
         };
         push_usage_filter(query, &text, "searched");
         query.push(")");
+    }
+}
+
+pub(super) fn push_collection_filter(
+    query: &mut QueryBuilder<Postgres>,
+    collection: &str,
+    filter: &UsageRecordFilter,
+) {
+    let (dimension_filter, either_filter, either_positions) = match collection {
+        "provider_model" => (filter.provider_kind.clone(), filter.model.clone(), (2, 3)),
+        "account_model" => (
+            filter.provider_account_ref.clone(),
+            filter.model.clone(),
+            (3, 4),
+        ),
+        "key_model" => (
+            filter.client_api_key_ref.clone(),
+            filter.model.clone(),
+            (3, 4),
+        ),
+        "account" => (filter.provider_account_ref.clone(), None, (1, 2)),
+        "key" => (filter.client_api_key_ref.clone(), None, (1, 2)),
+        "operation" => (filter.operation.clone(), None, (1, 2)),
+        "transport" => (None, filter.transport.clone(), (1, 2)),
+        "status" => (
+            None,
+            filter.status_code.map(|value| value.to_string()),
+            (1, 2),
+        ),
+        _ => (None, None, (1, 2)),
+    };
+    // 可选筛选仅在有值时生成谓词，保留维度与时间索引的选择空间
+    if let Some(outcome) = &filter.outcome {
+        query.push(" and outcome=").push_bind(outcome);
+    }
+    if let Some(value) = dimension_filter {
+        query.push(" and dimensions[1]=").push_bind(value);
+    }
+    if matches!(collection, "account_model" | "key_model")
+        && let Some(provider) = &filter.provider_kind
+    {
+        query.push(" and dimensions[2]=").push_bind(provider);
+    }
+    if let Some(value) = either_filter {
+        query
+            .push(format!(" and (dimensions[{}]=", either_positions.0))
+            .push_bind(value.clone())
+            .push(format!(" or dimensions[{}]=", either_positions.1))
+            .push_bind(value)
+            .push(")");
     }
 }

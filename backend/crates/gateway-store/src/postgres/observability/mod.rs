@@ -31,6 +31,10 @@ mod queries;
 mod query_budget;
 
 pub use admin_adapter::*;
+pub(crate) use analytics::AnalyticsSnapshot;
+pub(crate) use analytics::accounts::{
+    account_group_usage, account_usage_sort_values, account_usage_windows,
+};
 pub use analytics::{AnalyticsMaintenance, AnalyticsStatus, PgRequestAnalyticsRepository};
 pub(crate) use mapping::*;
 pub use model::*;

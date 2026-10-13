@@ -747,6 +747,10 @@ impl ClientKeyStore for UnavailableStore {
 
 #[async_trait]
 impl ObservabilityStore for UnavailableStore {
+    fn query_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(10)
+    }
+
     async fn dashboard_summary(
         &self,
         _: DashboardQuery,

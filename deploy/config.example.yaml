@@ -53,6 +53,7 @@ store:
   # pool:
   #   max_connections: 20
   #   acquire_timeout_seconds: 5
+  #   observability_timeout_seconds: 120 # 观测操作保护时限，不是性能目标
 
 admin:
   # 不活动期限与从登录起计算的最长有效期，单位为分钟

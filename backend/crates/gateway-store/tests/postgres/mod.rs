@@ -49,7 +49,7 @@ pub(super) struct TestDatabase {
 }
 
 pub(super) fn observability_query_budget() -> ObservabilityQueryBudget {
-    ObservabilityQueryBudget::try_new(4, Duration::from_secs(1))
+    ObservabilityQueryBudget::try_new(4, Duration::from_secs(1), Duration::from_secs(10))
         .expect("valid test observability query budget")
 }
 

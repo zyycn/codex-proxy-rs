@@ -1,6 +1,6 @@
 //! 明文 `provider_accounts` 与凭证 revision CAS 的唯一 PostgreSQL owner
 
-use std::{collections::BTreeSet, fmt, str::FromStr};
+use std::{collections::BTreeSet, fmt};
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -9,17 +9,14 @@ use gateway_admin::{
         MutationContext, Revision as AdminRevision,
         account_groups::AccountGroupRef,
         accounts::{
-            AccountCost, AccountGroupFilter, AccountImportSettings,
-            AccountListQuery as AdminAccountListQuery, AccountModelUsage, AccountPage,
-            AccountPageItem, AccountRecord, AccountSort as AdminAccountSort,
+            AccountGroupFilter, AccountImportSettings, AccountListQuery as AdminAccountListQuery,
+            AccountPage, AccountPageItem, AccountRecord, AccountSort as AdminAccountSort,
             AccountSortField as AdminAccountSortField, AccountSummary, AccountUpdateResult,
             AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
             BatchUpdateAccounts, DeleteAccounts, SortDirection as AdminSortDirection,
             UpdateAccount,
         },
-        observability::{
-            CostCoverage as AdminCostCoverage, DecimalAmount as AdminDecimalAmount, TimeRange,
-        },
+        observability::TimeRange,
         provider_credentials::{
             AuthorizationCommit, AuthorizationCredentialCommit, CredentialDetails,
             CredentialImportCommit, CredentialImportResult, CredentialMutationResult,
@@ -54,7 +51,6 @@ use super::{
     AdminAuditEvent, ControlPlaneRepository, ObservabilityRange, PgControlPlaneRepository,
     PgObservabilityRepository, ProviderAccountUsageObservation, ProviderAccountUsageQuery,
     append_admin_audit_event_in_transaction, bump_config_revision_in_transaction,
-    completed_usage_fact_predicate,
 };
 
 mod admin_adapter;

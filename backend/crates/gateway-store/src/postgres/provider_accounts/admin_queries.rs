@@ -12,6 +12,7 @@ pub(crate) struct AdminAccountPageRows {
 
 pub(crate) async fn load_admin_account_page(
     pool: &PgPool,
+    budget: &crate::postgres::ObservabilityQueryBudget,
     query: &AdminAccountListQuery,
     now: DateTime<Utc>,
     active_rate_limited_ids: Vec<String>,
@@ -35,35 +36,20 @@ pub(crate) async fn load_admin_account_page(
     let page_size = i64::from(query.page_size.get());
     let offset = i64::from(query.page - 1).saturating_mul(page_size);
     let order_by = admin_account_order(query.sort);
-    let usage_join = query.sort.is_some_and(|sort| {
+    let needs_usage = query.sort.is_some_and(|sort| {
         matches!(
             sort.field,
             AdminAccountSortField::Usage | AdminAccountSortField::LastUsedAt
         )
     });
-    let completed_usage = completed_usage_fact_predicate("mr");
-    let usage_join = if usage_join {
-        format!(
-            "left join (
-               select mr.provider_account_ref,
-                      coalesce(sum(coalesce(
-                        mr.total_tokens,
-                        coalesce(mr.input_tokens, 0) + coalesce(mr.output_tokens, 0)
-                      )), 0)::bigint as total_tokens,
-                      max(mr.started_at) as last_used_at
-                 from model_requests mr
-                where mr.started_at >= $2 - make_interval(days => settings.usage_retention_days::int)
-                  and mr.started_at < $2
-                  and {completed_usage}
-                group by mr.provider_account_ref
-             ) usage on usage.provider_account_ref = a.id"
-        )
+    let usage_join = if needs_usage {
+        "left join usage_values usage on usage.provider_account_ref = a.id"
     } else {
-        String::new()
+        ""
     };
 
     let statement = format!(
-        "with account_statuses as (
+        "with usage_values as (select * from unnest($10::text[],$11::bigint[],$12::timestamptz[]) as usage(provider_account_ref,total_tokens,last_used_at)), account_statuses as (
            select a.id, a.provider_kind,
                   case
                     when not a.enabled then 'disabled'
@@ -150,25 +136,45 @@ pub(crate) async fn load_admin_account_page(
            left join outbound_proxies p on p.id = a.outbound_proxy_id
           order by page.page_position"
     );
-    // 动态片段只来自上面的封闭排序枚举与固定 usage predicate；所有请求值仍使用 bind
-    let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
-        .bind(active_rate_limited_ids)
-        .bind(now)
-        .bind(provider_kind)
-        .bind(search_prefix)
-        .bind(status)
-        .bind(group_mode)
-        .bind(group_id)
-        .bind(page_size)
-        .bind(offset)
-        .fetch_all(pool)
+    // 排序事实与本页总数共享同一快照，避免一次查询混入不同源版本
+    let rows = budget
+        .run(
+            pool,
+            "load admin account page",
+            |mut connection| async move {
+                let mut snapshot =
+                    crate::postgres::observability::AnalyticsSnapshot::new_for_accounts(
+                        &mut connection,
+                    )
+                    .await?;
+                let (usage_ids, usage_tokens, usage_latest) = if needs_usage {
+                    crate::postgres::observability::account_usage_sort_values(&mut snapshot, now)
+                        .await?
+                } else {
+                    (Vec::new(), Vec::new(), Vec::new())
+                };
+                let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
+                    .bind(active_rate_limited_ids)
+                    .bind(now)
+                    .bind(provider_kind)
+                    .bind(search_prefix)
+                    .bind(status)
+                    .bind(group_mode)
+                    .bind(group_id)
+                    .bind(page_size)
+                    .bind(offset)
+                    .bind(usage_ids)
+                    .bind(usage_tokens)
+                    .bind(usage_latest)
+                    .fetch_all(&mut *snapshot.tx)
+                    .await
+                    .map_err(|source| postgres_unavailable("load admin account page", source))?;
+                snapshot.finish().await?;
+                Ok(rows)
+            },
+        )
         .await
-        .map_err(|source| {
-            admin_store_error(
-                ENTITY,
-                postgres_unavailable("load admin account page", source),
-            )
-        })?;
+        .map_err(|error| admin_store_error(ENTITY, error))?;
     let metadata = rows.first().ok_or_else(|| {
         AdminStoreError::new(
             AdminStoreErrorKind::Unavailable,

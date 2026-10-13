@@ -19,7 +19,10 @@ async fn test_pool() -> Option<PgPool> {
 
 #[test]
 fn query_budget_rejects_an_empty_budget() {
-    assert!(ObservabilityQueryBudget::try_new(0, Duration::from_secs(1)).is_err());
+    assert!(
+        ObservabilityQueryBudget::try_new(0, Duration::from_secs(1), Duration::from_secs(10))
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -27,7 +30,9 @@ async fn running_query_deadline_releases_the_slot() {
     let Some(pool) = test_pool().await else {
         return;
     };
-    let budget = ObservabilityQueryBudget::try_new(1, Duration::from_millis(10)).unwrap();
+    let budget =
+        ObservabilityQueryBudget::try_new(1, Duration::from_millis(10), Duration::from_millis(250))
+            .unwrap();
     let error = budget
         .run(&pool, "never completes", |connection| async move {
             let result = std::future::pending::<Result<(), StoreError>>().await;
@@ -47,12 +52,76 @@ async fn running_query_deadline_releases_the_slot() {
 }
 
 #[tokio::test]
+async fn queued_time_is_included_in_the_operation_deadline() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let budget =
+        ObservabilityQueryBudget::try_new(1, Duration::from_secs(2), Duration::from_secs(2))
+            .unwrap();
+    let (occupied_tx, occupied_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let occupied_budget = budget.clone();
+    let occupied_pool = pool.clone();
+    let occupied = tokio::spawn(async move {
+        occupied_budget
+            .run(
+                &occupied_pool,
+                "hold before queued deadline",
+                |connection| async move {
+                    occupied_tx.send(()).unwrap();
+                    release_rx.await.unwrap();
+                    drop(connection);
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+    });
+    occupied_rx.await.unwrap();
+    let started = tokio::time::Instant::now();
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2) / 5).await;
+        release_tx.send(()).unwrap();
+    });
+    let error = budget
+        .run(
+            &pool,
+            "queued operation deadline",
+            |connection| async move {
+                let result = std::future::pending::<Result<(), StoreError>>().await;
+                drop(connection);
+                result
+            },
+        )
+        .await
+        .expect_err("queue and execution share one deadline");
+    assert!(
+        matches!(error, StoreError::Unavailable { message, .. } if message.contains("execution budget"))
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2) + Duration::from_millis(200),
+        "acquiring a slot must not restart the operation budget"
+    );
+    release.await.unwrap();
+    occupied.await.unwrap();
+    budget
+        .run(&pool, "after queued timeout", |_connection| async {
+            Ok(())
+        })
+        .await
+        .unwrap();
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn query_budget_times_out_without_exceeding_its_connection_limit() {
     let Some(pool) = test_pool().await else {
         return;
     };
-    let budget = ObservabilityQueryBudget::try_new(4, Duration::from_millis(10))
-        .expect("valid query budget");
+    let budget =
+        ObservabilityQueryBudget::try_new(4, Duration::from_millis(10), Duration::from_secs(10))
+            .expect("valid query budget");
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let mut releases = Vec::new();
     let mut occupied = Vec::new();
@@ -110,7 +179,8 @@ async fn queued_query_runs_after_one_slot_is_released() {
         return;
     };
     let budget =
-        ObservabilityQueryBudget::try_new(4, Duration::from_secs(1)).expect("valid query budget");
+        ObservabilityQueryBudget::try_new(4, Duration::from_secs(1), Duration::from_secs(10))
+            .expect("valid query budget");
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let mut releases = Vec::new();
     let mut occupied = Vec::new();
@@ -183,7 +253,9 @@ async fn operation_timeout_keeps_the_slot_until_the_database_query_finishes() {
     let Some(pool) = test_pool().await else {
         return;
     };
-    let budget = ObservabilityQueryBudget::try_new(1, Duration::from_millis(100)).unwrap();
+    let budget =
+        ObservabilityQueryBudget::try_new(1, Duration::from_millis(100), Duration::from_secs(2))
+            .unwrap();
     let (pid_tx, pid_rx) = oneshot::channel();
     let error = budget
         .run(
@@ -196,15 +268,18 @@ async fn operation_timeout_keeps_the_slot_until_the_database_query_finishes() {
                     .map_err(database_error)?;
                 pid_tx.send(pid).unwrap();
                 let mut tx = connection.begin().await.map_err(database_error)?;
-                sqlx::query("set local statement_timeout = '10s'")
+                sqlx::query("select set_config('statement_timeout',$1,true)")
+                    .bind(format!("{}ms", Duration::from_secs(2).as_millis()))
                     .execute(&mut *tx)
                     .await
                     .map_err(database_error)?;
-                sqlx::query("select pg_sleep(6)")
+                sqlx::query("select pg_sleep($1)")
+                    .bind(Duration::from_secs(2).as_secs_f64() * 0.6)
                     .execute(&mut *tx)
                     .await
                     .map_err(database_error)?;
-                sqlx::query("select pg_sleep(9)")
+                sqlx::query("select pg_sleep($1)")
+                    .bind(Duration::from_secs(2).as_secs_f64() * 0.9)
                     .execute(&mut *tx)
                     .await
                     .map_err(database_error)?;
@@ -271,7 +346,9 @@ async fn dropping_an_operation_keeps_the_slot_through_database_rollback() {
     let Some(pool) = test_pool().await else {
         return;
     };
-    let budget = ObservabilityQueryBudget::try_new(1, Duration::from_millis(100)).unwrap();
+    let budget =
+        ObservabilityQueryBudget::try_new(1, Duration::from_millis(100), Duration::from_secs(10))
+            .unwrap();
     let running_pool = pool.clone();
     let running_budget = budget.clone();
     let (pid_tx, pid_rx) = oneshot::channel();

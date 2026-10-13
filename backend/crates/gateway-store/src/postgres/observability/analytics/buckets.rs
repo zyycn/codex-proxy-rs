@@ -49,13 +49,13 @@ pub(super) async fn rebuild_bucket_batch(
         0
     };
     if !same_version {
-        // 处理中事实发生变化时清掉未发布的部分状态，不能把新旧快照增量相加
+        // 显式重建版本变化时清掉旧前缀，普通事实变化由增量维护更新前缀
         sqlx::query("update request_analytics_pending_buckets set build_version=change_version,build_phase=0,build_started_at=null,build_id=null,build_collection=null,build_dimensions=null,build_outcome=null where bucket_start=$1")
             .bind(bucket).execute(&mut **tx).await.map_err(|error|postgres_unavailable("restart changed analytics bucket",error))?;
     }
     let hour = bucket_for(bucket, 3600)?;
     if phase < 2 {
-        // 小时分段期间不改写其输入；源事实仍可投影，版本变化使小时任务先退回等待
+        // 小时分段期间暂停其他 quarter 的完整重建，普通增量同步修正已扫描前缀
         let owned:bool=sqlx::query_scalar("select exists(select 1 from request_analytics_pending_buckets where bucket_start >= $1 and bucket_start < $1+interval '1 hour' and bucket_start <> $2 and build_phase >= 3)")
             .bind(hour).bind(bucket).fetch_one(&mut **tx).await.map_err(|error|postgres_unavailable("claim analytics hour stage",error))?;
         if owned {
@@ -119,8 +119,9 @@ pub(super) async fn rebuild_bucket_batch(
     let limit = i64::from(batch_size) + 1;
     let mut groups = GroupStates::new();
     if phase == 1 {
+        // 增量前缀判断使用 Rust 字节序，SQL 游标必须使用同一排序规则
         let statement = format!(
-            "{} where mr.started_at >= $1 and mr.started_at < $1+interval '15 minutes' and mr.recovered_at is null and (mr.started_at,mr.id)>($2,$3) order by mr.started_at,mr.id limit $4",
+            "{} where mr.started_at >= $1 and mr.started_at < $1+interval '15 minutes' and (mr.started_at,mr.id collate \"C\")>($2,$3) order by mr.started_at,mr.id collate \"C\" limit $4",
             fact_select()
         );
         let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
@@ -139,11 +140,16 @@ pub(super) async fn rebuild_bucket_batch(
             let outcome: String = get(fact, "outcome")?;
             let mut state = MetricState::default();
             state.add_row(fact)?;
+            let forecast = forecast::state(fact)?;
             for (collection, dimensions) in collections(fact)? {
                 groups
                     .entry((collection.to_owned(), dimensions, outcome.clone()))
                     .or_default()
-                    .merge(&state)?;
+                    .merge(if collection == forecast::COLLECTION {
+                        &forecast
+                    } else {
+                        &state
+                    })?;
             }
         }
         merge_staged_groups(tx, "request_analytics_15m", bucket, groups).await?;
@@ -155,7 +161,7 @@ pub(super) async fn rebuild_bucket_batch(
                 .bind(bucket).bind(get::<DateTime<Utc>>(last,"started_at")?).bind(get::<String>(last,"id")?).execute(&mut **tx).await.map_err(|error|postgres_unavailable("save analytics fact cursor",error))?;
         }
     } else if phase == 4 {
-        let rows=sqlx::query("select bucket_start,collection,dimensions,outcome,counts,costs,distributions from request_analytics_15m where bucket_start >= $1 and bucket_start < $1+interval '1 hour' and schema_version=$2 and histogram_version=$3 and (bucket_start,collection,dimensions,outcome)>($4,$5,$6,$7) order by bucket_start,collection,dimensions,outcome limit $8")
+        let rows=sqlx::query("select bucket_start,collection,dimensions,outcome,counts,costs,distributions,last_used_at from request_analytics_15m where bucket_start >= $1 and bucket_start < $1+interval '1 hour' and schema_version=$2 and histogram_version=$3 and (bucket_start,collection collate \"C\",dimensions collate \"C\",outcome collate \"C\")>($4,$5,$6,$7) order by bucket_start,collection collate \"C\",dimensions collate \"C\",outcome collate \"C\" limit $8")
             .bind(hour).bind(SCHEMA_VERSION).bind(HISTOGRAM_VERSION).bind(get::<Option<DateTime<Utc>>>(&row,"build_started_at")?.unwrap_or(hour-TimeDelta::microseconds(1)))
             .bind(get::<Option<String>>(&row,"build_collection")?.unwrap_or_default()).bind(get::<Option<Vec<String>>>(&row,"build_dimensions")?.unwrap_or_default()).bind(get::<Option<String>>(&row,"build_outcome")?.unwrap_or_default()).bind(limit)
             .fetch_all(&mut **tx).await.map_err(|error|postgres_unavailable("read analytics hour segment",error))?;
@@ -198,7 +204,7 @@ async fn merge_staged_groups(
     }
     let keys=groups.keys().map(|(collection,dimensions,outcome)|serde_json::json!({"collection":collection,"dimensions":dimensions,"outcome":outcome})).collect::<Vec<_>>();
     let statement = format!(
-        "select stored.collection,stored.dimensions,stored.outcome,stored.counts,stored.costs,stored.distributions from {table} stored join jsonb_to_recordset($2::jsonb) requested(collection text,dimensions text[],outcome text) using(collection,dimensions,outcome) where bucket_start=$1"
+        "select stored.collection,stored.dimensions,stored.outcome,stored.counts,stored.costs,stored.distributions,stored.last_used_at from {table} stored join jsonb_to_recordset($2::jsonb) requested(collection text,dimensions text[],outcome text) using(collection,dimensions,outcome) where bucket_start=$1"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
         .bind(bucket)
@@ -220,37 +226,64 @@ async fn merge_staged_groups(
     write_groups(tx, table, bucket, groups).await
 }
 
-async fn write_groups(
+pub(super) async fn write_groups(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     table: &str,
     bucket: DateTime<Utc>,
     groups: GroupStates,
 ) -> StoreResult<()> {
-    if groups.is_empty() {
-        return Ok(());
-    }
-    let mut statement = QueryBuilder::<Postgres>::new(format!(
-        "insert into {table}(bucket_start,collection,dimensions,outcome,schema_version,histogram_version,counts,costs,distributions) "
-    ));
-    let rows = groups
-        .into_iter()
-        .map(|((collection, dimensions, outcome), state)| {
-            let (counts, costs, distributions) = state.encode()?;
-            Ok((
+    write_bucket_groups(tx, table, [(bucket, groups)]).await
+}
+
+pub(super) async fn write_bucket_groups(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    table: &str,
+    buckets: impl IntoIterator<Item = (DateTime<Utc>, GroupStates)>,
+) -> StoreResult<()> {
+    let mut groups = buckets.into_iter().flat_map(|(bucket, groups)| {
+        groups
+            .into_iter()
+            .map(move |(key, state)| (bucket, key, state))
+    });
+    loop {
+        // 跨桶合并 SQL 往返，但编码缓冲只保留当前批次，避免回填将所有状态展开为 JSON
+        let rows = groups
+            .by_ref()
+            .take(1000)
+            .map(|(bucket, (collection, dimensions, outcome), state)| {
+                let (counts, costs, distributions) = state.encode()?;
+                Ok((
+                    bucket,
+                    collection,
+                    dimensions,
+                    outcome,
+                    counts,
+                    costs,
+                    distributions,
+                    state.last_used_at(),
+                ))
+            })
+            .collect::<StoreResult<Vec<_>>>()?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut statement = QueryBuilder::<Postgres>::new(format!(
+            "insert into {table}(bucket_start,collection,dimensions,outcome,schema_version,histogram_version,counts,costs,distributions,last_used_at) "
+        ));
+        // 十个绑定参数限制单语句批量，避免高基数时间桶越过 PostgreSQL 参数上限
+        statement.push_values(
+            &rows,
+            |mut row,
+             (
+                bucket,
                 collection,
                 dimensions,
                 outcome,
                 counts,
                 costs,
                 distributions,
-            ))
-        })
-        .collect::<StoreResult<Vec<_>>>()?;
-    // 九个绑定参数限制单语句批量，避免高基数时间桶越过 PostgreSQL 参数上限
-    for chunk in rows.chunks(1000) {
-        statement.push_values(
-            chunk,
-            |mut row, (collection, dimensions, outcome, counts, costs, distributions)| {
+                last_used_at,
+            )| {
                 row.push_bind(bucket)
                     .push_bind(collection)
                     .push_bind(dimensions)
@@ -259,16 +292,15 @@ async fn write_groups(
                     .push_bind(HISTOGRAM_VERSION)
                     .push_bind(counts)
                     .push_bind(costs)
-                    .push_bind(distributions);
+                    .push_bind(distributions)
+                    .push_bind(last_used_at);
             },
         );
-        statement.push(" on conflict(bucket_start,collection,dimensions,outcome) do update set counts=excluded.counts,costs=excluded.costs,distributions=excluded.distributions,schema_version=excluded.schema_version,histogram_version=excluded.histogram_version");
+        statement.push(" on conflict(bucket_start,collection,dimensions,outcome) do update set counts=excluded.counts,costs=excluded.costs,distributions=excluded.distributions,last_used_at=excluded.last_used_at,schema_version=excluded.schema_version,histogram_version=excluded.histogram_version");
         statement
             .build()
             .execute(&mut **tx)
             .await
             .map_err(|error| postgres_unavailable("write analytics bucket", error))?;
-        statement.reset();
     }
-    Ok(())
 }

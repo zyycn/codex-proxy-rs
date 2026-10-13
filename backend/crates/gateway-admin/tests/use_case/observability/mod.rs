@@ -945,6 +945,10 @@ impl FixtureObservabilityStore {
 
 #[async_trait]
 impl ObservabilityStore for FixtureObservabilityStore {
+    fn query_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(10)
+    }
+
     async fn dashboard_summary(
         &self,
         query: DashboardQuery,
@@ -1406,23 +1410,23 @@ async fn usage_summary_cache_should_coalesce_when_generation_advances_during_the
 }
 
 #[tokio::test]
-async fn usage_summary_cache_should_isolate_key_identity_and_normalize_group_sets() {
+async fn usage_summary_cache_should_isolate_key_identity_and_filters() {
     let range = observation_range(Utc::now());
     let store = Arc::new(FixtureObservabilityStore::new(range));
     let services = observability_services(store.clone()).await;
     let service = services.observability();
-    for (key, groups) in [
-        ("key-a", vec!["deleted-b", "deleted-a", "deleted-b"]),
-        ("key-a", vec!["deleted-a", "deleted-b"]),
-        ("key-b", vec!["deleted-a", "deleted-b"]),
-        ("key-a", vec!["deleted-a"]),
+    for (key, model) in [
+        ("key-a", None),
+        ("key-a", None),
+        ("key-b", None),
+        ("key-a", Some("model-a")),
     ] {
         service
             .usage_summary(
                 range,
                 UsageFilter {
                     client_api_key_ref: Some(key.to_owned()),
-                    routing_group_refs: groups.into_iter().map(str::to_owned).collect(),
+                    model: model.map(str::to_owned),
                     ..Default::default()
                 },
             )
@@ -1431,16 +1435,16 @@ async fn usage_summary_cache_should_isolate_key_identity_and_normalize_group_set
     }
     let calls = store.usage_summary_filters.lock().unwrap();
     assert_eq!(calls.len(), 3);
-    assert_eq!(calls[0].routing_group_refs, ["deleted-a", "deleted-b"]);
+    assert_eq!(calls[0].client_api_key_ref.as_deref(), Some("key-a"));
     assert_eq!(calls[1].client_api_key_ref.as_deref(), Some("key-b"));
-    assert_eq!(calls[2].routing_group_refs, ["deleted-a"]);
+    assert_eq!(calls[2].model.as_deref(), Some("model-a"));
 }
 
 #[tokio::test(start_paused = true)]
 async fn usage_summary_cache_should_bound_waiting_after_failed_refresh_and_allow_recovery() {
     let range = observation_range(Utc::now());
     let store = Arc::new(FixtureObservabilityStore::new(range));
-    store.set_dashboard_delay(StdDuration::from_secs(7));
+    store.set_dashboard_delay(store.query_timeout().mul_f64(0.7));
     store.summary_fail.store(true, Ordering::SeqCst);
     let services = observability_services(store.clone()).await;
     let service = services.observability();
@@ -1453,7 +1457,7 @@ async fn usage_summary_cache_should_bound_waiting_after_failed_refresh_and_allow
     );
     assert!(first.is_err() && second.is_err() && third.is_err() && fourth.is_err());
     assert!(
-        started.elapsed() <= StdDuration::from_secs(10),
+        started.elapsed() <= store.query_timeout(),
         "同键失败不能使后续请求逐个等待完整数据库超时: {:?}",
         started.elapsed()
     );

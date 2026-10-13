@@ -12,7 +12,6 @@ use tokio::{sync::Mutex, time::Instant};
 const CAPACITY: usize = 64;
 const TTL: Duration = Duration::from_secs(15);
 const MAX_STALE: Duration = Duration::from_secs(60);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 type Slot<T> = Arc<Mutex<Option<Cached<T>>>>;
 struct Cached<T> {
@@ -72,7 +71,7 @@ impl<K: Eq + Hash, T: AnalyticsValue> Cache<K, T> {
     {
         // 刷新失败后的同键等待也计入预算，避免串行重试把延迟放大为队列长度倍数
         tokio::time::timeout(
-            REQUEST_TIMEOUT,
+            store.query_timeout(),
             self.get_within_budget(key, store, ttl, load),
         )
         .await
@@ -174,12 +173,6 @@ fn with_age<T: AnalyticsValue>(mut value: T, stale: bool) -> T {
     value
 }
 
-fn normalized(mut filter: UsageFilter) -> UsageFilter {
-    filter.routing_group_refs.sort_unstable();
-    filter.routing_group_refs.dedup();
-    filter
-}
-
 type UsageKey = (TimeRange, UsageFilter);
 pub(crate) struct CachedObservabilityStore {
     inner: Arc<dyn ObservabilityStore>,
@@ -202,6 +195,10 @@ impl CachedObservabilityStore {
 
 #[async_trait]
 impl ObservabilityStore for CachedObservabilityStore {
+    fn query_timeout(&self) -> Duration {
+        self.inner.query_timeout()
+    }
+
     async fn analytics_cache_generation(&self) -> AdminStoreResult<u64> {
         self.inner.analytics_cache_generation().await
     }
@@ -241,7 +238,6 @@ impl ObservabilityStore for CachedObservabilityStore {
         filter: UsageFilter,
         granularity: Granularity,
     ) -> AdminStoreResult<UsageInsightsObservation> {
-        let filter = normalized(filter);
         self.insights
             .get(
                 ((range, filter.clone()), granularity),
@@ -259,7 +255,6 @@ impl ObservabilityStore for CachedObservabilityStore {
         range: TimeRange,
         filter: UsageFilter,
     ) -> AdminStoreResult<UsageOverview> {
-        let filter = normalized(filter);
         self.summaries
             .get((range, filter.clone()), self.inner.as_ref(), TTL, || {
                 self.inner.usage_summary(range, filter)
@@ -273,7 +268,6 @@ impl ObservabilityStore for CachedObservabilityStore {
         dimension: DiagnosticDimension,
         limit: u16,
     ) -> AdminStoreResult<DiagnosticsObservation> {
-        let filter = normalized(filter);
         self.diagnostics
             .get(
                 ((range, filter.clone()), dimension, limit),

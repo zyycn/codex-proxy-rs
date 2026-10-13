@@ -14,8 +14,8 @@ pub(super) struct Histogram {
     pub sum: f64,
     pub minimum: Option<f64>,
     pub maximum: Option<f64>,
-    zero: u64,
-    bins: BTreeMap<i32, u64>,
+    pub(super) zero: u64,
+    pub(super) bins: BTreeMap<i32, u64>,
 }
 
 impl Histogram {

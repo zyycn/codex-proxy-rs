@@ -39,7 +39,6 @@ pub(crate) fn observability_page_offset(
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UsageRecordFilter {
-    pub routing_group_refs: Vec<String>,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_account_ref: Option<String>,
@@ -76,7 +75,6 @@ impl UsageRecordFilter {
         ] {
             validate_optional_text(value, MAX_FILTER_BYTES, field)?;
         }
-        validate_account_ids_if_present(&self.routing_group_refs)?;
         validate_optional_text(self.search.as_deref(), MAX_SEARCH_BYTES, "search filter")?;
         if self
             .status_code
@@ -105,14 +103,6 @@ pub struct UsageRecordQuery {
 pub use gateway_admin::model::observability::OpsErrorFilter;
 
 pub(crate) fn validate_ops_error_filter(filter: &OpsErrorFilter) -> StoreResult<()> {
-    if filter.routing_group_refs.len() > 32
-        || filter.routing_group_refs.iter().any(|value| {
-            value.is_empty() || value.len() > 128 || value.chars().any(char::is_control)
-        })
-    {
-        return Err(invalid("invalid routing group filter"));
-    }
-
     for (value, field) in [
         (
             filter.client_api_key_ref.as_deref(),
@@ -384,10 +374,3 @@ pub struct DiagnosticObservation {
 pub use gateway_admin::model::observability::OpsError as OpsErrorRecord;
 
 pub use gateway_admin::model::observability::OpsErrorPage;
-
-fn validate_account_ids_if_present(ids: &[String]) -> StoreResult<()> {
-    if ids.is_empty() {
-        return Ok(());
-    }
-    validate_account_ids(ids)
-}
