@@ -331,6 +331,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         return call.host.dispatch_http(call.request).await;
                     }
+                    if mode == "session-error" || mode == "session-cancelled" {
+                        use gateway_plugin_sdk::{ErrorCode, PluginFault};
+                        let code = if mode == "session-error" {
+                            ErrorCode::PermissionDenied
+                        } else {
+                            ErrorCode::Cancelled
+                        };
+                        return call
+                            .upgrade(vec!["test-session".into()], move |_session| async move {
+                                Err(PluginFault::new(
+                                    code,
+                                    "private-plugin-error-must-not-be-logged",
+                                ))
+                            })
+                            .await;
+                    }
                     if mode == "callbacks" {
                         let host = call.host.clone();
                         return call.upgrade(vec!["test-session".into()], |mut session| async move {

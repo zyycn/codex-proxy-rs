@@ -87,16 +87,16 @@ pub(super) async fn invoke(
             let _binding = _binding;
             tokio::select! {
                 biased;
-                () = context.cancellation.cancelled() => Err(MiddlewareError::Fault),
+                () = context.cancellation.cancelled() => Err(core::upgrade::SessionError::Cancelled),
                 result = async {
                     invocation.session_ready().await?;
                     match stream.next().await {
                         Ok(None) => Ok(()),
                         Ok(Some(_)) => {
-                            session.invalid_response(Stage::Http);
-                            Err(MiddlewareError::InvalidState)
+                            let error = session.invalid_response(Stage::Http);
+                            Err(session_error(error, &entry.instance_id))
                         }
-                        Err(error) => Err(crate::callback::error::rpc_middleware(error)),
+                        Err(error) => Err(session_error(error, &entry.instance_id)),
                     }
                 } => result,
             }
@@ -142,4 +142,33 @@ pub(super) async fn invoke(
         .complete(response, payload, body)
         .await
         .map_err(|_| invalid())
+}
+
+fn session_error(error: crate::RpcError, instance_id: &str) -> core::upgrade::SessionError {
+    use core::upgrade::SessionError;
+    use gateway_plugin_sdk::ErrorCode;
+
+    let kind = match &error {
+        crate::RpcError::Cancelled => return SessionError::Cancelled,
+        // 本地期限已经按调用关联记录，终态消费不能再记同一次超时
+        crate::RpcError::Timeout => return SessionError::Reported,
+        crate::RpcError::Remote(fault) => match fault.code {
+            ErrorCode::Cancelled => return SessionError::Cancelled,
+            ErrorCode::Unsupported => "unsupported",
+            ErrorCode::Rejected => "rejected",
+            ErrorCode::InvalidInput => "invalid_input",
+            ErrorCode::PermissionDenied => "permission_denied",
+            ErrorCode::Upstream => "upstream",
+            ErrorCode::Fault => "fault",
+            ErrorCode::Timeout => "timeout",
+            ErrorCode::Uncertain => "uncertain",
+            ErrorCode::Capacity => "capacity",
+            ErrorCode::Conflict => "conflict",
+        },
+        _ => error.diagnostic().0,
+    };
+    SessionError::Failed {
+        kind,
+        plugin_instance_id: Some(instance_id.to_owned()),
+    }
 }

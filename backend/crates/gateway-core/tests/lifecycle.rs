@@ -322,3 +322,25 @@ fn connection_lifecycle_contract_is_object_safe() {
 
     assert!(!object.is_draining());
 }
+
+#[test]
+fn cancellation_reason_survives_cleanup_and_propagates_only_to_descendants() {
+    use gateway_core::lifecycle::{CancellationReason, LeaseFailure, RequestLeaseKind};
+    let parent = CancellationToken::new();
+    let child = parent.child_token();
+    let descendant = child.child_token();
+    let reason = CancellationReason::Lease {
+        kind: RequestLeaseKind::Credential,
+        failure: LeaseFailure::Lost,
+    };
+    child.cancel_with_reason(reason);
+    child.cancel();
+    descendant.cancel();
+    assert_eq!(parent.reason(), None);
+    assert_eq!(child.reason(), Some(reason));
+    assert_eq!(descendant.reason(), Some(reason));
+    let requested = CancellationToken::new();
+    requested.cancel();
+    requested.cancel_with_reason(reason);
+    assert_eq!(requested.reason(), Some(CancellationReason::Requested));
+}

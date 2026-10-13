@@ -491,11 +491,13 @@ impl BackupTask {
             )
             .await
         {
-            let _ = store.delete_object(&config, &record.object_key).await;
-            self.fail_task(
+            self.fail_uploaded_task(
                 record,
-                error.code(),
-                format!("上传到对象存储失败：{}", error.message()),
+                &config,
+                BackupError::new(
+                    error.code(),
+                    format!("上传到对象存储失败：{}", error.message()),
+                ),
             )
             .await?;
             return Ok(());
@@ -533,16 +535,19 @@ impl BackupTask {
                     sha256_matches,
                     "备份远端对象校验不一致"
                 );
-                let _ = store.delete_object(&config, &record.object_key).await;
-                self.fail_task(
+                self.fail_uploaded_task(
                     record,
-                    code::REMOTE_VERIFICATION_FAILED,
-                    match (size_matches, sha256_matches) {
-                        (false, true) => "远端对象大小不一致",
-                        (true, false) => "远端对象 sha256 校验值不一致",
-                        (false, false) => "远端对象大小和 sha256 校验值均不一致",
-                        (true, true) => "远端对象校验状态异常",
-                    },
+                    &config,
+                    BackupError::new(
+                        code::REMOTE_VERIFICATION_FAILED,
+                        match (size_matches, sha256_matches) {
+                            (false, true) => "远端对象大小不一致",
+                            (true, false) => "远端对象 sha256 校验值不一致",
+                            (false, false) => "远端对象大小和 sha256 校验值均不一致",
+                            (true, true) => "远端对象校验状态异常",
+                        }
+                        .to_owned(),
+                    ),
                 )
                 .await?;
             }
@@ -556,16 +561,36 @@ impl BackupTask {
                 .await?;
             }
             Err(error) => {
-                let _ = store.delete_object(&config, &record.object_key).await;
-                self.fail_task(
+                self.fail_uploaded_task(
                     record,
-                    error.code(),
-                    format!("远端对象校验失败：{}", error.message()),
+                    &config,
+                    BackupError::new(
+                        error.code(),
+                        format!("远端对象校验失败：{}", error.message()),
+                    ),
                 )
                 .await?;
             }
         }
         Ok(())
+    }
+
+    /// 清理失败并入原终态，后续清理沿用备份记录的到期策略
+    async fn fail_uploaded_task(
+        &self,
+        record: &BackupRecord,
+        config: &BackupStorageConfig,
+        mut error: BackupError,
+    ) -> Result<(), WorkerTaskError> {
+        if let Err(cleanup) = self
+            .object_store
+            .delete_object(config, &record.object_key)
+            .await
+        {
+            error =
+                error.with_cleanup_failure("DeleteObject", &cleanup, record.expires_at.is_some());
+        }
+        self.fail_task(record, error.code(), error.message()).await
     }
 
     /// 把活跃任务写入失败终态并清理暂存

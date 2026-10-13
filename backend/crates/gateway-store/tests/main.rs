@@ -3,9 +3,12 @@
 mod backup;
 mod bundle;
 mod config;
+mod lease_renewal;
 mod postgres;
 mod redis;
 mod support;
+
+use gateway_store::StoreResult;
 
 #[derive(Default)]
 struct RecordingDiagnostics(std::sync::Mutex<Vec<gateway_core::diagnostics::OperationalFailure>>);

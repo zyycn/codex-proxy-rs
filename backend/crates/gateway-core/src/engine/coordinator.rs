@@ -2057,7 +2057,13 @@ where
         let (outcome, gateway_error) = match error {
             EngineError::Cancelled => (
                 ExecutionOutcome::Cancelled,
-                GatewayError::new(GatewayErrorKind::Cancelled, "request was cancelled"),
+                GatewayError::new(
+                    GatewayErrorKind::Cancelled,
+                    self.cancellation
+                        .reason()
+                        .unwrap_or(crate::lifecycle::CancellationReason::Requested)
+                        .message(),
+                ),
             ),
             EngineError::Deadline => (
                 if self.response_commit.committed_at().is_some() {

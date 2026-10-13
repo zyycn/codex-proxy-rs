@@ -347,3 +347,65 @@ async fn dropping_an_uncommitted_upgrade_or_cancelling_a_session_reclaims_its_so
         runtime.shutdown().await;
     }
 }
+
+#[tokio::test]
+async fn upgraded_plugin_business_failure_reaches_terminal_owner_with_safe_classification() {
+    for mode in ["session-error", "session-cancelled"] {
+        let (_cache, runtime, generation, plan) = http_plugin(mode).await;
+        let (_send, incoming) = tokio::sync::mpsc::channel(1);
+        let (outgoing, _receive) = tokio::sync::mpsc::channel(1);
+        let transport = Arc::new(Transport {
+            incoming: tokio::sync::Mutex::new(incoming),
+            outgoing,
+            dropped: Arc::default(),
+        });
+        let mut request = ::http::Request::builder()
+            .uri("/custom/session")
+            .body(core::empty_body())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(Arc::new(Upgrade(transport)) as Arc<dyn upgrade::WebSocketUpgrade>);
+        let mut response = plan
+            .handle_http(
+                core::Context {
+                    plugin_instance_id: None,
+                    request_id: "session-failure".into(),
+                    call_id: "http-call".into(),
+                    parent_call_id: None,
+                    extensions: Default::default(),
+                    plan: Some(plan.clone()),
+                    cancellation: CancellationToken::new(),
+                },
+                request,
+                compose(Vec::new(), |_| {
+                    Box::pin(async { panic!("session owns its response") })
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 101);
+        let task = response
+            .extensions_mut()
+            .remove::<upgrade::Upgraded>()
+            .unwrap()
+            .take_task()
+            .unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap_err();
+        if mode == "session-error" {
+            assert!(
+                matches!(error, upgrade::SessionError::Failed { kind: "permission_denied", plugin_instance_id: Some(ref id) } if id == "http-plugin")
+            );
+        } else {
+            assert!(matches!(error, upgrade::SessionError::Cancelled));
+        }
+        assert!(!format!("{error:?}").contains("private-plugin-error"));
+        drop(response);
+        drop(plan);
+        drop(generation);
+        runtime.shutdown().await;
+    }
+}

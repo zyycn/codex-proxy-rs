@@ -399,7 +399,10 @@ impl ClientAdmissionPort for RedisClientAdmissionRepository {
         let request = request.as_str().to_owned();
         Box::new(crate::lease_renewal::LeaseRenewal::spawn(
             deadline,
-            Some(cancellation),
+            Some((
+                cancellation,
+                gateway_core::lifecycle::RequestLeaseKind::ClientAdmission,
+            )),
             move |ttl| {
                 let repository = repository.clone();
                 let key = key.clone();

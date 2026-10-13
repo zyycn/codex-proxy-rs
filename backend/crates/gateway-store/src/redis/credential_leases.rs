@@ -260,8 +260,13 @@ impl CredentialLeaseGuard {
                 entity: "credential lease",
                 message: "lease has already been released".to_owned(),
             })?;
-        let renewal =
-            crate::lease_renewal::LeaseRenewal::spawn(deadline, Some(cancellation), move |ttl| {
+        let renewal = crate::lease_renewal::LeaseRenewal::spawn(
+            deadline,
+            Some((
+                cancellation,
+                gateway_core::lifecycle::RequestLeaseKind::Credential,
+            )),
+            move |ttl| {
                 let repository = repository.clone();
                 let mut lease_request = lease_request.clone();
                 lease_request.ttl = ttl;
@@ -272,7 +277,8 @@ impl CredentialLeaseGuard {
                         .await
                         .map(|grant| grant.is_some())
                 })
-            });
+            },
+        );
         Ok(RenewingSchedulingLease {
             _renewal: renewal,
             _guard: self,

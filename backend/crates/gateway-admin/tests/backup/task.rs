@@ -324,3 +324,58 @@ async fn completed_recovery_removes_staging_for_dumping_and_uploading_tasks() {
         );
     }
 }
+
+#[tokio::test]
+async fn manual_backup_preserves_primary_and_final_delete_failures() {
+    for (upload_fails, expiring) in [(false, false), (true, false), (false, true)] {
+        let repository = Arc::new(FakeBackupRepository::new(configured_settings()));
+        let dump = Arc::new(FakeDumpPort::new());
+        let store = FakeObjectStore::new().fail_delete(code::S3_PERMISSION_DENIED);
+        let store = Arc::new(if upload_fails {
+            store.fail_upload(code::S3_UPLOAD_FAILED, "上传失败")
+        } else {
+            store.fail_head(code::REMOTE_VERIFICATION_FAILED)
+        });
+        let seed = BackupRecordSeed {
+            id: backup_id("cleanup-failure"),
+            trigger_kind: BackupTriggerKind::Manual,
+            scheduled_at: None,
+            object_key: "codex/cleanup-failure.dump".into(),
+            expires_at: expiring.then(|| Utc::now() + Duration::hours(1)),
+        };
+        repository.insert_backup_record(seed.clone()).await.unwrap();
+        let task = BackupTask::new(repository.clone(), dump.clone(), store.clone());
+        task.run_cycle(&CancellationToken::new()).await.unwrap();
+        let records = repository.all_records();
+        let record = &records[0];
+        assert_eq!(record.status, BackupStatus::Failed);
+        assert_eq!(
+            record.error_code.as_deref(),
+            Some(if upload_fails {
+                code::S3_UPLOAD_FAILED
+            } else {
+                code::REMOTE_VERIFICATION_FAILED
+            })
+        );
+        let message = record.error_message.as_deref().unwrap();
+        assert!(message.contains(if upload_fails {
+            "上传失败"
+        } else {
+            "HEAD failed"
+        }));
+        assert!(message.contains("DeleteObject"));
+        assert!(message.contains(code::S3_PERMISSION_DENIED));
+        assert!(message.contains(if expiring {
+            "等待备份到期清理"
+        } else {
+            "未安排自动重试"
+        }));
+        assert_eq!(store.object(&seed.object_key).is_some(), !upload_fails);
+        assert!(dump.inspect_staging(&seed.id).await.unwrap().is_none());
+        task.run_cycle(&CancellationToken::new()).await.unwrap();
+        assert_eq!(
+            repository.all_records()[0].error_message,
+            record.error_message
+        );
+    }
+}

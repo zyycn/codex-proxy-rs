@@ -192,7 +192,15 @@ impl BackupObjectStorePort for S3ObjectStoreAdapter {
             }
         }
 
-        let _ = best_effort_delete(&client, config, &probe_key).await;
+        if let Err(error) = client
+            .delete_object()
+            .bucket(&config.bucket)
+            .key(&probe_key)
+            .send()
+            .await
+        {
+            return Ok(failed(ConnectionTestStage::DeleteObject, &error));
+        }
         Ok(ConnectionTestResult {
             ok: true,
             stage: ConnectionTestStage::DeleteObject.as_str(),
@@ -246,24 +254,24 @@ impl BackupObjectStorePort for S3ObjectStoreAdapter {
                 Err(BackupError::new(code::CANCELLED, "上传已取消".to_owned()))
             }
         };
-        if let Err(error) = &outcome {
-            let _ = client
+        if let Err(error) = outcome {
+            let cleanup = client
                 .abort_multipart_upload()
                 .bucket(&config.bucket)
                 .key(&request.object_key)
                 .upload_id(&upload_id)
                 .send()
                 .await;
-            if error.code() != code::CANCELLED {
-                let _ = client
-                    .delete_object()
-                    .bucket(&config.bucket)
-                    .key(&request.object_key)
-                    .send()
-                    .await;
-            }
+            return Err(match cleanup {
+                Ok(_) => error,
+                Err(cleanup) => error.with_cleanup_failure(
+                    "AbortMultipartUpload",
+                    &map_s3_error(cleanup),
+                    false,
+                ),
+            });
         }
-        outcome
+        Ok(())
     }
 
     async fn head_object(

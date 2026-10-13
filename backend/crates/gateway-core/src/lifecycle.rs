@@ -1,16 +1,69 @@
 //! 请求与连接的截止、租约、取消和 drain 契约
 
 use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use event_listener::Event;
 use futures::future::{BoxFuture, pending};
 use futures_timer::Delay;
 
+/// 参与业务并发约束的请求租约类别，观测续期不属于此合同
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestLeaseKind {
+    ClientAdmission,
+    Credential,
+}
+
+/// 续期最终结束的原因，不包含可恢复的中间失败
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseFailure {
+    Lost,
+    RenewalTimedOut,
+    Expired,
+}
+
+/// 只携带稳定原因，不保存凭据、Redis key 或任意基础设施错误文本
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancellationReason {
+    Requested,
+    Lease {
+        kind: RequestLeaseKind,
+        failure: LeaseFailure,
+    },
+}
+
+impl CancellationReason {
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::Requested => "request was cancelled",
+            Self::Lease {
+                kind: RequestLeaseKind::ClientAdmission,
+                failure,
+            } => match failure {
+                LeaseFailure::Lost => "request was cancelled: client admission lease was lost",
+                LeaseFailure::RenewalTimedOut => {
+                    "request was cancelled: client admission lease renewal timed out"
+                }
+                LeaseFailure::Expired => "request was cancelled: client admission lease expired",
+            },
+            Self::Lease {
+                kind: RequestLeaseKind::Credential,
+                failure,
+            } => match failure {
+                LeaseFailure::Lost => "request was cancelled: credential lease was lost",
+                LeaseFailure::RenewalTimedOut => {
+                    "request was cancelled: credential lease renewal timed out"
+                }
+                LeaseFailure::Expired => "request was cancelled: credential lease expired",
+            },
+        }
+    }
+}
+
 struct CancellationState {
-    cancelled: AtomicBool,
+    reason: OnceLock<CancellationReason>,
     event: Event,
 }
 
@@ -41,7 +94,7 @@ impl CancellationToken {
     pub fn new() -> Self {
         Self {
             state: Arc::new(CancellationState {
-                cancelled: AtomicBool::new(false),
+                reason: OnceLock::new(),
                 event: Event::new(),
             }),
             ancestors: Arc::from([]),
@@ -56,7 +109,7 @@ impl CancellationToken {
             .collect::<Vec<_>>();
         Self {
             state: Arc::new(CancellationState {
-                cancelled: AtomicBool::new(false),
+                reason: OnceLock::new(),
                 event: Event::new(),
             }),
             ancestors: ancestors.into(),
@@ -64,19 +117,29 @@ impl CancellationToken {
     }
 
     pub fn cancel(&self) {
-        if self.state.cancelled.swap(true, Ordering::AcqRel) {
+        self.cancel_with_reason(CancellationReason::Requested);
+    }
+
+    /// 首次取消确定原因，后续资源回收不覆盖已观察到的取消事实
+    pub fn cancel_with_reason(&self, reason: CancellationReason) {
+        if self.is_cancelled() || self.state.reason.set(reason).is_err() {
             return;
         }
         self.state.event.notify(usize::MAX);
     }
 
     #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.state.cancelled.load(Ordering::Acquire)
-            || self
-                .ancestors
+    pub fn reason(&self) -> Option<CancellationReason> {
+        self.state.reason.get().copied().or_else(|| {
+            self.ancestors
                 .iter()
-                .any(|state| state.cancelled.load(Ordering::Acquire))
+                .find_map(|state| state.reason.get().copied())
+        })
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.reason().is_some()
     }
 
     pub async fn cancelled(&self) {
@@ -92,13 +155,13 @@ impl CancellationToken {
 
 fn wait_for_state(state: Arc<CancellationState>) -> BoxFuture<'static, ()> {
     Box::pin(async move {
-        if state.cancelled.load(Ordering::Acquire) {
+        if state.reason.get().is_some() {
             return;
         }
         // listener 随等待 future 丢弃而注销，避免 select 败选分支在自身及祖先状态中积累
         let listener = state.event.listen();
         // 注册后复查，覆盖取消发生在首次检查与注册之间的竞态
-        if state.cancelled.load(Ordering::Acquire) {
+        if state.reason.get().is_some() {
             return;
         }
         listener.await;

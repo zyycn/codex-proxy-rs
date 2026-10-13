@@ -53,6 +53,7 @@ use serde_json::{Map, Value, json};
 
 #[derive(Debug, Clone, PartialEq)]
 struct FinalState {
+    error_message: Option<String>,
     error_kind: Option<GatewayErrorKind>,
     diagnostic_trace_json: Option<String>,
     outcome: ExecutionOutcome,
@@ -228,6 +229,10 @@ impl ExecutionStore for FakeStore {
             .expect("store lock")
             .finalizations
             .push(FinalState {
+                error_message: finalization
+                    .error
+                    .as_ref()
+                    .map(|error| error.safe_message().to_owned()),
                 error_kind: finalization.error.as_ref().map(|error| error.kind()),
                 diagnostic_trace_json: finalization.diagnostic_trace_json,
                 outcome: finalization.outcome,
@@ -5994,4 +5999,41 @@ fn transport_keepalive_cannot_change_an_already_finalized_failure_to_http_200() 
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
     assert!(!state.finalizations[0].committed);
     assert_eq!(state.recorded_statuses, vec![504]);
+}
+
+#[test]
+fn lease_cancellation_is_preserved_in_the_single_request_terminal() {
+    use gateway_core::lifecycle::{CancellationReason, LeaseFailure, RequestLeaseKind};
+    block_on(async {
+        let operation = generate_operation();
+        let (coordinator, store, _) = coordinator(vec![Script::Pending]);
+        let cancellation = CancellationToken::new();
+        let mut session = coordinator
+            .start(
+                model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+                operation.clone(),
+                plan(&operation),
+                None,
+                None,
+                cancellation.clone(),
+            )
+            .await
+            .unwrap();
+        let reason = CancellationReason::Lease {
+            kind: RequestLeaseKind::ClientAdmission,
+            failure: LeaseFailure::RenewalTimedOut,
+        };
+        let mut next = Box::pin(session.next_event());
+        assert!(futures::poll!(next.as_mut()).is_pending());
+        cancellation.cancel_with_reason(reason);
+        assert!(matches!(next.await, Err(EngineError::Cancelled)));
+        session.cancel_and_finalize().await.unwrap();
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.finalizations.len(), 1);
+        assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Cancelled);
+        assert_eq!(
+            state.finalizations[0].error_message.as_deref(),
+            Some(reason.message())
+        );
+    });
 }

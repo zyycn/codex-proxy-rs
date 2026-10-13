@@ -536,6 +536,9 @@ impl DatabaseDumpPort for FakeDumpPort {
 pub(crate) struct FakeObjectStore {
     pub(crate) objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     upload_error: Option<BackupError>,
+    head_error: Option<BackupError>,
+    delete_error: Option<BackupError>,
+    connection_error: Option<BackupError>,
 }
 
 impl FakeObjectStore {
@@ -543,12 +546,30 @@ impl FakeObjectStore {
         Self {
             objects: Mutex::new(std::collections::HashMap::new()),
             upload_error: None,
+            head_error: None,
+            delete_error: None,
+            connection_error: None,
         }
     }
 
     /// 让上传返回指定的脱敏 S3 错误
     pub(crate) fn fail_upload(mut self, code: &'static str, message: impl Into<String>) -> Self {
         self.upload_error = Some(BackupError::new(code, message.into()));
+        self
+    }
+
+    pub(crate) fn fail_head(mut self, code: &'static str) -> Self {
+        self.head_error = Some(BackupError::new(code, "HEAD failed".into()));
+        self
+    }
+
+    pub(crate) fn fail_delete(mut self, code: &'static str) -> Self {
+        self.delete_error = Some(BackupError::new(code, "DELETE failed".into()));
+        self
+    }
+
+    pub(crate) fn fail_connection(mut self, code: &'static str) -> Self {
+        self.connection_error = Some(BackupError::new(code, "DELETE failed".into()));
         self
     }
 
@@ -563,6 +584,14 @@ impl BackupObjectStorePort for FakeObjectStore {
         &self,
         _config: &BackupStorageConfig,
     ) -> Result<ConnectionTestResult, gateway_admin::model::backup::BackupError> {
+        if let Some(error) = &self.connection_error {
+            return Ok(ConnectionTestResult {
+                ok: false,
+                stage: "deleteObject",
+                code: Some(error.code()),
+                message: error.message().into(),
+            });
+        }
         Ok(ConnectionTestResult {
             ok: true,
             stage: "deleteObject",
@@ -597,6 +626,9 @@ impl BackupObjectStorePort for FakeObjectStore {
         _config: &BackupStorageConfig,
         object_key: &str,
     ) -> Result<Option<BackupObjectMetadata>, gateway_admin::model::backup::BackupError> {
+        if let Some(error) = &self.head_error {
+            return Err(error.clone());
+        }
         let Some(content) = self.object(object_key) else {
             return Ok(None);
         };
@@ -613,6 +645,9 @@ impl BackupObjectStorePort for FakeObjectStore {
         _config: &BackupStorageConfig,
         object_key: &str,
     ) -> Result<(), gateway_admin::model::backup::BackupError> {
+        if let Some(error) = &self.delete_error {
+            return Err(error.clone());
+        }
         self.objects.lock().expect("objects").remove(object_key);
         Ok(())
     }

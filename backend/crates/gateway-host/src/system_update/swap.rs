@@ -245,18 +245,7 @@ fn swap_file(current: &Path, backup: &Path) -> io::Result<()> {
     if swap.exists() {
         fs::remove_file(&swap)?;
     }
-    move_file(current, &swap)?;
-    if let Err(error) = move_file(backup, current) {
-        let _ = move_file(&swap, current);
-        return Err(error);
-    }
-    if let Err(error) = move_file(&swap, backup) {
-        let _ = move_file(current, &swap);
-        let _ = move_file(backup, current);
-        let _ = move_file(&swap, backup);
-        return Err(error);
-    }
-    Ok(())
+    super::swap_paths::swap_paths(current, backup, &swap, move_file)
 }
 
 fn swap_dir(current: &Path, backup: &Path) -> io::Result<()> {
@@ -270,18 +259,7 @@ fn swap_dir(current: &Path, backup: &Path) -> io::Result<()> {
     if swap.exists() {
         remove_dir_all(&swap)?;
     }
-    move_dir(current, &swap)?;
-    if let Err(error) = move_dir(backup, current) {
-        let _ = move_dir(&swap, current);
-        return Err(error);
-    }
-    if let Err(error) = move_dir(&swap, backup) {
-        let _ = move_dir(current, &swap);
-        let _ = move_dir(backup, current);
-        let _ = move_dir(&swap, backup);
-        return Err(error);
-    }
-    Ok(())
+    super::swap_paths::swap_paths(current, backup, &swap, move_dir)
 }
 
 fn restore_dir(current: &Path, backup: &Path) -> io::Result<()> {

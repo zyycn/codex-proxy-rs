@@ -7,6 +7,7 @@ mod installation;
 mod operations;
 mod release;
 mod state;
+mod swap_paths;
 
 use std::fs;
 use std::path::PathBuf;

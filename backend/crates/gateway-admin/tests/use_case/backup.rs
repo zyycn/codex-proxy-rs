@@ -102,3 +102,51 @@ async fn backup_service_rejects_download_of_non_completed_record() {
         .expect_err("non-completed record must be rejected");
     assert_eq!(error.kind(), gateway_admin::model::AdminErrorKind::Conflict);
 }
+
+#[tokio::test]
+async fn failed_delete_probe_does_not_refresh_verification() {
+    use gateway_admin::{model::backup::code, ports::backup::BackupRepository as _};
+    for succeeds in [false, true] {
+        let mut settings = configured_settings();
+        settings.last_verified_at = None;
+        let repository = Arc::new(FakeBackupRepository::new(settings));
+        let auth = Arc::new(FakeAuthStore::new());
+        let store = FakeObjectStore::new();
+        let store = if succeeds {
+            store
+        } else {
+            store.fail_connection(code::S3_PERMISSION_DENIED)
+        };
+        let services = AdminHarness::new()
+            .auth(auth.clone())
+            .backup(BackupStorePorts::new(
+                repository.clone(),
+                Arc::new(FakeDumpPort::new()),
+                Arc::new(store),
+            ))
+            .build()
+            .await;
+        let result = services
+            .backups()
+            .test_connection(&system_context())
+            .await
+            .unwrap();
+        assert_eq!(result.ok, succeeds);
+        assert_eq!(
+            repository
+                .load_settings()
+                .await
+                .unwrap()
+                .last_verified_at
+                .is_some(),
+            succeeds
+        );
+        assert_eq!(
+            auth.audit_actions()
+                .iter()
+                .filter(|action| action.as_str() == "backup.s3_connection_tested")
+                .count(),
+            1
+        );
+    }
+}

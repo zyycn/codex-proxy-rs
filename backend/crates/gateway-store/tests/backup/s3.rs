@@ -102,9 +102,6 @@ async fn a_failed_part_stops_other_pending_parts_before_upload_returns() {
     let (mut abort, request, _) = accept_request(&probe.listener).await;
     assert!(request.starts_with("DELETE ") && request.contains("uploadId="));
     respond(&mut abort, &xml_response("")).await;
-    let (mut delete, request, _) = accept_request(&probe.listener).await;
-    assert!(request.starts_with("DELETE ") && !request.contains("uploadId="));
-    respond(&mut delete, &xml_response("")).await;
     let error = tokio::time::timeout(Duration::from_secs(3), probe.upload)
         .await
         .expect("failed upload returns without waiting for the other part")
@@ -358,4 +355,104 @@ fn xml_response(body: &str) -> String {
         "HTTP/1.1 200 OK\r\ncontent-type: application/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     )
+}
+
+#[tokio::test]
+async fn connection_probe_requires_successful_final_delete() {
+    for delete_allowed in [true, false] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let storage = BackupStorageConfig {
+            storage_revision: 1,
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            region: "auto".into(),
+            bucket: "backup-bucket".into(),
+            access_key_id: "test-access-key".into(),
+            secret_access_key: SecretString::from("test-secret-key"),
+            prefix: "backups".into(),
+            force_path_style: true,
+        };
+        let probe =
+            tokio::spawn(
+                async move { S3ObjectStoreAdapter::new().test_connection(&storage).await },
+            );
+        let (mut put, request, body) = accept_request(&listener).await;
+        assert!(request.starts_with("PUT "));
+        respond(&mut put, &xml_response("")).await;
+        let (mut head, request, _) = accept_request(&listener).await;
+        assert!(request.starts_with("HEAD "));
+        respond(&mut head, "HTTP/1.1 200 OK\r\ncontent-length: 64\r\nx-amz-meta-probe: backup-connection-test\r\nconnection: close\r\n\r\n").await;
+        let (mut get, request, _) = accept_request(&listener).await;
+        assert!(request.starts_with("GET "));
+        get.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+        get.write_all(&body).await.unwrap();
+        get.shutdown().await.unwrap();
+        let (mut delete, request, _) = accept_request(&listener).await;
+        assert!(request.starts_with("DELETE "));
+        respond(
+            &mut delete,
+            &if delete_allowed {
+                xml_response("")
+            } else {
+                error_response("403 Forbidden", "AccessDenied")
+            },
+        )
+        .await;
+        let result = tokio::time::timeout(Duration::from_secs(3), probe)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.ok, delete_allowed);
+        assert_eq!(result.stage, "deleteObject");
+        assert_eq!(
+            result.code,
+            (!delete_allowed).then_some(code::S3_PERMISSION_DENIED)
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_multipart_retains_abort_failure_without_changing_primary_code() {
+    for cancelled in [false, true] {
+        let probe = start_upload(MULTIPART_SIZE).await;
+        let (mut part, request, _) = accept_request(&probe.listener).await;
+        assert!(request.starts_with("PUT "));
+        if cancelled {
+            probe.cancellation.cancel();
+        } else {
+            respond(&mut part, &error_response("403 Forbidden", "AccessDenied")).await;
+        }
+        let (mut abort, request, _) = accept_request(&probe.listener).await;
+        assert!(request.starts_with("DELETE ") && request.contains("uploadId="));
+        respond(&mut abort, &error_response("403 Forbidden", "AccessDenied")).await;
+        let error = tokio::time::timeout(Duration::from_secs(3), probe.upload)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            if cancelled {
+                code::CANCELLED
+            } else {
+                code::S3_PERMISSION_DENIED
+            }
+        );
+        if cancelled {
+            assert!(error.message().contains("上传已取消"));
+        }
+        assert!(error.message().contains("AbortMultipartUpload"));
+        assert!(error.message().contains(code::S3_PERMISSION_DENIED));
+        assert!(error.message().contains("未安排自动重试"));
+        assert!(!error.message().contains("probe-upload"));
+        assert!(!error.message().contains("probe error"));
+    }
 }

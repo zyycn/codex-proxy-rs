@@ -11,6 +11,7 @@ mod process;
 mod release;
 mod state;
 mod swap;
+mod swap_paths;
 
 pub use config::SystemUpdateConfig;
 pub use operations::ProcessSystemOperations;

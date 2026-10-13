@@ -474,6 +474,26 @@ impl BackupError {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    /// 清理失败附加到原始终态，不覆盖上传失败或主动取消的分类
+    #[must_use]
+    pub fn with_cleanup_failure(
+        mut self,
+        stage: &'static str,
+        error: &Self,
+        retry_on_expiration: bool,
+    ) -> Self {
+        let recovery = if retry_on_expiration {
+            "等待备份到期清理"
+        } else {
+            "未安排自动重试"
+        };
+        self.message.push_str(&format!(
+            "；清理阶段 {stage} 失败（{}），{recovery}",
+            error.code()
+        ));
+        self
+    }
 }
 
 /// 构造稳定错误码常量

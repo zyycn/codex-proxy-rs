@@ -1,5 +1,6 @@
 //! HTTP 与 WebSocket 中间件测试入口及请求生命周期替身
 
+mod session;
 mod websocket;
 
 use std::{
@@ -39,6 +40,9 @@ enum Mode {
         reject: bool,
         idle: bool,
         block_messages: bool,
+    },
+    SessionEnd {
+        kind: Option<&'static str>,
     },
     Service,
     Echo,
@@ -161,11 +165,41 @@ impl MiddlewarePlan for Plan {
                         session.send(Message { kind: Kind::Text, payload: Bytes::from_static(b"ready") }).await?;
                         let message = receive.await?.unwrap();
                         session.send(message).await?;
-                        session.send(Message { kind: Kind::Close { code: Some(1000) }, payload: Bytes::from_static(b"done") }).await
+                        session.send(Message { kind: Kind::Close { code: Some(1000) }, payload: Bytes::from_static(b"done") }).await.map_err(Into::into)
                     })));
                     if reject {
                         *response.status_mut() = StatusCode::FORBIDDEN;
                     }
+                    Ok(response)
+                }
+                Mode::SessionEnd { kind } => {
+                    let upgrade = request
+                        .extensions_mut()
+                        .remove::<Arc<dyn contract::upgrade::WebSocketUpgrade>>()
+                        .unwrap();
+                    let (parts, _) = request.into_parts();
+                    let (mut response, session) = upgrade.accept(parts, Vec::new()).await?;
+                    response
+                        .extensions_mut()
+                        .insert(contract::upgrade::Upgraded::new(
+                            StatusCode::SWITCHING_PROTOCOLS,
+                            Box::pin(async move {
+                                let _session = session.await.map_err(|_| MiddlewareError::Fault)?;
+                                match kind {
+                                    None => Ok(()),
+                                    Some("cancelled") => {
+                                        Err(contract::upgrade::SessionError::Cancelled)
+                                    }
+                                    Some("reported") => {
+                                        Err(contract::upgrade::SessionError::Reported)
+                                    }
+                                    Some(kind) => Err(contract::upgrade::SessionError::Failed {
+                                        kind,
+                                        plugin_instance_id: Some("plugin-fixture".into()),
+                                    }),
+                                }
+                            }),
+                        ));
                     Ok(response)
                 }
                 Mode::Rewrite => {
