@@ -1,18 +1,15 @@
 //! OpenAI 隐私规则的统一编译与执行，供设置预览和实际出站共享
 
 mod carrier;
+mod changes;
 mod rule;
 mod selector;
 
-use std::{
-    collections::BTreeSet,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeSet, sync::Arc};
 
 use gateway_core::settings::privacy::{
     CodexPrivacyPolicy, CompiledPrivacyPolicy, PrivacyError, PrivacyFailureMode,
-    PrivacyPreviewRequest, PrivacyPreviewResult, PrivacyRuleOutcome,
+    PrivacyPreviewRequest, PrivacyPreviewResult, PrivacyRuleOutcome, PrivacyScope,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
@@ -36,7 +33,6 @@ impl std::fmt::Debug for Policy {
 }
 
 struct Budget<'a> {
-    started: Instant,
     steps: usize,
     text_bytes: usize,
     cancelled: &'a dyn Fn() -> bool,
@@ -48,8 +44,8 @@ impl Budget<'_> {
         if (self.cancelled)() {
             return Err("请求已取消或超时");
         }
-        if self.steps > 10_000 || self.started.elapsed() > Duration::from_millis(100) {
-            return Err("规则执行预算超限");
+        if self.steps > 10_000 {
+            return Err("规则执行步数超限");
         }
         Ok(())
     }
@@ -105,11 +101,12 @@ impl CompiledPrivacyPolicy for Policy {
     ) -> Result<Vec<PrivacyRuleOutcome>, PrivacyError> {
         let mut outcomes = Vec::new();
         let mut budget = Budget {
-            started: Instant::now(),
             steps: 0,
             text_bytes: 0,
             cancelled,
         };
+        let mut body_size = None;
+        let mut contexts = carrier::ContextIndex::default();
         for (rule_index, rule) in self.rules.iter().enumerate() {
             let mut outcome = PrivacyRuleOutcome {
                 rule_id: rule.rule.id.clone(),
@@ -121,22 +118,30 @@ impl CompiledPrivacyPolicy for Policy {
                 // 一条规则的所有承载副本同成同败，失败不会留下部分改写
                 let result = (|| {
                     budget.step()?;
-                    check_size(body, MAX_REQUEST_BYTES)?;
-                    let mut next_body = body.clone();
+                    let original_size =
+                        *body_size.get_or_insert_with(|| encoded_size(body, MAX_REQUEST_BYTES));
+                    let original_size = original_size?;
                     let mut next_headers = headers.clone();
                     let mut next_metadata = turn_metadata.clone();
-                    let count = carrier::apply(
+                    let mut changes = changes::BodyChanges::new(original_size);
+                    let count = carrier::prepare(
                         rule,
-                        &mut next_body,
+                        body,
                         &mut next_headers,
                         &mut next_metadata,
+                        &mut changes,
+                        &mut contexts,
                         &mut budget,
                     )?;
-                    check_size(&next_body, MAX_REQUEST_BYTES)?;
+                    let next_size = changes.size()?;
                     budget.step()?;
-                    *body = next_body;
+                    changes.commit(body);
                     *headers = next_headers;
                     *turn_metadata = next_metadata;
+                    body_size = Some(Ok(next_size));
+                    if count > 0 && rule.rule.scope == PrivacyScope::RequestBody {
+                        contexts = carrier::ContextIndex::default();
+                    }
                     Ok(count)
                 })();
                 match result {
@@ -223,6 +228,10 @@ pub fn preview(request: PrivacyPreviewRequest) -> Result<PrivacyPreviewResult, P
 }
 
 fn check_size(value: &Value, limit: usize) -> Result<(), &'static str> {
+    encoded_size(value, limit).map(|_| ())
+}
+
+fn encoded_size(value: &Value, limit: usize) -> Result<usize, &'static str> {
     struct Counter(usize);
     impl std::io::Write for Counter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -236,7 +245,9 @@ fn check_size(value: &Value, limit: usize) -> Result<(), &'static str> {
             Ok(())
         }
     }
-    serde_json::to_writer(Counter(limit), value).map_err(|_| "请求或预览样本超出大小限制")
+    let mut counter = Counter(limit);
+    serde_json::to_writer(&mut counter, value).map_err(|_| "请求或预览样本超出大小限制")?;
+    Ok(limit - counter.0)
 }
 
 impl super::client::CodexBackendClient {

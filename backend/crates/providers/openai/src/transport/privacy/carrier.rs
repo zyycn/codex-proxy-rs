@@ -4,15 +4,17 @@ use gateway_core::settings::privacy::PrivacyScope;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;
 
-use super::{Budget, rule::CompiledRule};
+use super::{Budget, changes::BodyChanges, rule::CompiledRule};
 
 const METADATA_KEYS: &[&str] = &["turnMetadata", "turn_metadata", "x-codex-turn-metadata"];
 
-pub(super) fn apply(
+pub(super) fn prepare(
     rule: &CompiledRule,
-    body: &mut Value,
+    body: &Value,
     headers: &mut HeaderMap,
     turn_metadata: &mut Option<String>,
+    changes: &mut BodyChanges,
+    contexts: &mut ContextIndex,
     budget: &mut Budget<'_>,
 ) -> Result<usize, &'static str> {
     match rule.rule.scope {
@@ -30,16 +32,15 @@ pub(super) fn apply(
                     *value = HeaderValue::from_str(&raw).map_err(|_| "metadata 请求头编码无效")?;
                 }
             }
-            count += metadata_fields(rule, body, budget)?;
-            if let Some(client) = body.get_mut("client_metadata") {
-                count += metadata_fields(rule, client, budget)?;
-            }
+            count += metadata_fields(rule, body, changes, budget)?;
             Ok(count)
         }
         PrivacyScope::DesktopGitContext | PrivacyScope::EnvironmentText => {
-            contexts(rule, body, budget)
+            contexts.apply(rule, body, changes, budget)
         }
-        PrivacyScope::RequestBody => rule.apply(body, budget),
+        PrivacyScope::RequestBody => {
+            changes.stage(body, "", budget, |next, budget| rule.apply(next, budget))
+        }
         PrivacyScope::RequestHeader => {
             let name = reqwest::header::HeaderName::from_bytes(rule.rule.selector.as_bytes())
                 .map_err(|_| "请求头名称无效")?;
@@ -83,17 +84,22 @@ pub(super) fn apply(
 
 fn metadata_fields(
     rule: &CompiledRule,
-    object: &mut Value,
+    body: &Value,
+    changes: &mut BodyChanges,
     budget: &mut Budget<'_>,
 ) -> Result<usize, &'static str> {
     let mut count = 0;
-    for key in METADATA_KEYS {
-        if let Some(value) = object.get_mut(*key) {
-            match value {
-                Value::String(raw) => count += metadata(rule, raw, budget)?,
-                Value::Object(_) => count += rule.apply(value, budget)?,
-                _ => return Err("metadata 必须是 JSON 对象或编码后的字符串"),
+    for prefix in ["", "/client_metadata"] {
+        for key in METADATA_KEYS {
+            let path = format!("{prefix}/{key}");
+            if body.pointer(&path).is_none() {
+                continue;
             }
+            count += changes.stage(body, &path, budget, |next, budget| match next {
+                Value::String(raw) => metadata(rule, raw, budget),
+                Value::Object(_) => rule.apply(next, budget),
+                _ => Err("metadata 必须是 JSON 对象或编码后的字符串"),
+            })?;
         }
     }
     Ok(count)
@@ -121,74 +127,130 @@ fn metadata(
     Ok(count)
 }
 
-fn contexts(
-    rule: &CompiledRule,
-    body: &mut Value,
-    budget: &mut Budget<'_>,
-) -> Result<usize, &'static str> {
-    let Some(items) = body.get_mut("input").and_then(Value::as_array_mut) else {
-        return Ok(0);
-    };
-    let mut count = 0;
-    for item in items {
-        budget.step()?;
-        let role = item
-            .get("role")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
+#[derive(Default)]
+pub(super) struct ContextIndex {
+    desktop: Option<Vec<ContextTarget>>,
+    environment: Option<Vec<ContextTarget>>,
+}
+
+struct ContextTarget {
+    path: String,
+    open: &'static str,
+    close: &'static str,
+    identified: bool,
+}
+
+impl ContextIndex {
+    fn apply(
+        &mut self,
+        rule: &CompiledRule,
+        body: &Value,
+        changes: &mut BodyChanges,
+        budget: &mut Budget<'_>,
+    ) -> Result<usize, &'static str> {
         let desktop = rule.rule.scope == PrivacyScope::DesktopGitContext;
+        let targets = if desktop {
+            &mut self.desktop
+        } else {
+            &mut self.environment
+        };
+        if targets.is_none() {
+            *targets = Some(locate_contexts(body, desktop, budget)?);
+        }
+        let mut count = 0;
+        for target in targets.iter().flatten() {
+            budget.step()?;
+            // 先检查长度再复制，普通对话和工具输出不会进入事务副本
+            let text = body
+                .pointer(&target.path)
+                .and_then(Value::as_str)
+                .ok_or("上下文文本不存在")?;
+            let trimmed = text.trim();
+            let complete = trimmed.starts_with(target.open) && trimmed.ends_with(target.close);
+            if !complete {
+                if target.identified {
+                    return Err("已识别上下文不完整，可能已被截断");
+                }
+                continue;
+            }
+            budget.text(text)?;
+            count += changes.stage(body, &target.path, budget, |next, budget| {
+                let Value::String(text) = next else {
+                    return Err("上下文必须是文本");
+                };
+                if desktop {
+                    git(rule, text, budget)
+                } else {
+                    environment(rule, text, budget)
+                }
+            })?;
+        }
+        Ok(count)
+    }
+}
+
+fn locate_contexts(
+    body: &Value,
+    desktop: bool,
+    budget: &mut Budget<'_>,
+) -> Result<Vec<ContextTarget>, &'static str> {
+    let mut targets = Vec::new();
+    let Some(items) = body.get("input").and_then(Value::as_array) else {
+        return Ok(targets);
+    };
+    for (item_index, item) in items.iter().enumerate() {
+        budget.step()?;
+        let role = item.get("role").and_then(Value::as_str).unwrap_or("");
         if !(role == "user" || (!desktop && role == "developer")) {
             continue;
         }
-        let (kind, tag) = if desktop {
+        let (kind, open, close) = if desktop {
             (
                 "additional_content.codex_git_state",
-                "external_codex_git_state",
+                "<external_codex_git_state>",
+                "</external_codex_git_state>",
             )
         } else if role == "developer" {
             (
                 "additional_content.codex_apps_client_time_context",
-                "codex_apps_client_time_context",
+                "<codex_apps_client_time_context>",
+                "</codex_apps_client_time_context>",
             )
         } else {
-            ("environments.environment_context", "environment_context")
+            (
+                "environments.environment_context",
+                "<environment_context>",
+                "</environment_context>",
+            )
         };
-        let kinds = item
-            .pointer("/internal_chat_message_metadata_passthrough/content_item_kinds")
-            .cloned();
-        let Some(parts) = item.get_mut("content").and_then(Value::as_array_mut) else {
+        let kinds = item.pointer("/internal_chat_message_metadata_passthrough/content_item_kinds");
+        let Some(parts) = item.get("content").and_then(Value::as_array) else {
             continue;
         };
-        for (index, part) in parts.iter_mut().enumerate() {
-            if let Some(kinds) = &kinds
-                && kinds.get(index).and_then(Value::as_str) != Some(kind)
-            {
+        for (index, part) in parts.iter().enumerate() {
+            budget.step()?;
+            if kinds.is_some_and(|kinds| kinds.get(index).and_then(Value::as_str) != Some(kind)) {
                 continue;
             }
             if part.get("type").and_then(Value::as_str) != Some("input_text") {
                 continue;
             }
-            let Some(Value::String(text)) = part.get_mut("text") else {
+            let Some(text) = part.get("text").and_then(Value::as_str) else {
                 continue;
             };
-            let full = text.trim().starts_with(&format!("<{tag}>"))
-                && text.trim().ends_with(&format!("</{tag}>"));
-            if !full && kinds.is_none() {
+            let trimmed = text.trim();
+            if kinds.is_none() && !(trimmed.starts_with(open) && trimmed.ends_with(close)) {
                 continue;
             }
-            if !full {
-                return Err("已识别上下文不完整，可能已被截断");
-            }
-            budget.text(text)?;
-            count += if desktop {
-                git(rule, text, budget)?
-            } else {
-                environment(rule, text, budget)?
-            };
+            targets.push(ContextTarget {
+                path: format!("/input/{item_index}/content/{index}/text"),
+                open,
+                close,
+                identified: kinds.is_some(),
+            });
         }
     }
-    Ok(count)
+    Ok(targets)
 }
 
 fn git(

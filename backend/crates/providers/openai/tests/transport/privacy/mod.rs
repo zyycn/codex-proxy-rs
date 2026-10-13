@@ -1,5 +1,7 @@
 //! 隐私规则的多承载一致性、自由字段配置、条件删除与有界失败合同
 
+mod changes;
+
 use gateway_core::settings::privacy::*;
 use provider_openai::transport::privacy::{compile, preview};
 use serde_json::{Value, json};
@@ -291,7 +293,7 @@ fn privacy_validates_regex_paths_captures_and_execution_limits() {
     let error = policy
         .apply(&mut body, &mut Default::default(), &mut None, &|| false)
         .unwrap_err();
-    assert_eq!(error.reason, "规则执行预算超限");
+    assert_eq!(error.reason, "规则执行步数超限");
     assert_eq!(body, original);
     assert!(
         policy
