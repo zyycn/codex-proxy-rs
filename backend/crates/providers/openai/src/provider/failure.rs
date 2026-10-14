@@ -462,7 +462,7 @@ pub(super) fn apply_websocket_recovery_policy(
     if failure.error.retry_is_prohibited() {
         return;
     }
-    // 明确账号拒绝走已有换号路径，容量拒绝走请求内退避；两者都不消耗 WS 传输预算
+    // 明确账号拒绝走已有换号路径，业务瞬态失败走请求内退避，不消耗 WS 传输预算
     if failure.error.replay_is_safe()
         && (failure.account_failure.is_some()
             || matches!(
@@ -1326,6 +1326,7 @@ pub(super) fn map_upstream_failure(
 ) -> MappedProviderFailure {
     let category = failure.category();
     let capacity_unavailable = category == CodexFailureCategory::CapacityUnavailable;
+    let transient_retry = capacity_unavailable || failure.is_retryable_server_error();
     let cyber_policy_failure = failure
         .status
         .is_some_and(|status| status.is_client_error())
@@ -1392,7 +1393,7 @@ pub(super) fn map_upstream_failure(
     if let Some(retry_after) = failure.retry_after_seconds.map(Duration::from_secs) {
         error = error.with_retry_after(retry_after);
     }
-    if capacity_unavailable && error.replay_is_safe() {
+    if transient_retry && error.replay_is_safe() {
         let max_delay = Duration::from_secs(8);
         error = error.with_transient_retry(
             NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),

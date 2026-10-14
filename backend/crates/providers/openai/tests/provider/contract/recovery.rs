@@ -4,6 +4,149 @@ use super::precommit::stream_failure;
 use super::*;
 
 #[tokio::test]
+async fn server_error_503_stream_recovery_requires_no_semantic_output() {
+    for websocket in [false, true] {
+        for semantic_output in [false, true] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_provider_contract").await;
+            let failure = json!({"type":"error","status":503,"error":{"code":"server_error","type":"server_error","message":"You can retry your request."}});
+            let mut upstream_events = vec![
+                json!({"type":"codex.response.metadata","metadata":{}}),
+                json!({"type":"response.created","response":{"id":"resp_503","status":"in_progress","output":[]}}),
+                json!({"type":"response.in_progress","response":{"id":"resp_503","status":"in_progress","output":[]}}),
+            ];
+            if semantic_output {
+                upstream_events.push(json!({"type":"response.output_text.delta","response_id":"resp_503","item_id":"msg_503","output_index":0,"content_index":0,"delta":"hello"}));
+            }
+            upstream_events.push(failure.clone());
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                if websocket {
+                    let mut socket = accept_codex_test_websocket(socket).await;
+                    socket.next().await.unwrap().unwrap();
+                    for event in upstream_events {
+                        socket
+                            .send(Message::Text(event.to_string().into()))
+                            .await
+                            .unwrap();
+                    }
+                } else {
+                    read_http_request(&mut socket).await;
+                    let body = upstream_events
+                        .iter()
+                        .map(|event| {
+                            gateway_protocol::openai::sse::encode_sse_event(
+                                event["type"].as_str().unwrap(),
+                                &event.to_string(),
+                            )
+                        })
+                        .collect::<String>();
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                }
+            });
+            let operation = if websocket {
+                capacity_websocket_operation()
+            } else {
+                http_generate_operation()
+            };
+            let mut stream = provider_with_base_url(&store, base)
+                .execute(
+                    planned_request("openai", operation),
+                    context("req_server_error_503", CancellationToken::new()),
+                )
+                .await
+                .unwrap();
+            let (mut events, mut error) = stream_failure(&mut stream).await;
+            assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+            assert_eq!(error.upstream_status(), Some(503));
+            assert_eq!(error.send_state(), UpstreamSendState::Sent);
+            assert_eq!(error.replay_is_safe(), !semantic_output);
+            if semantic_output {
+                assert!(error.pre_delivery_retry().is_none());
+                assert!(
+                    events
+                        .iter()
+                        .any(|event| event.has_client_event() && !event.is_replayable_prelude())
+                );
+            } else {
+                assert!(!error.retry_is_prohibited());
+                assert!(
+                    matches!(error.pre_delivery_retry(), Some(PreDeliveryRetry::SameAccountTransientRetry { max_retries, initial_delay, max_delay })
+                    if max_retries.get() == 3 && initial_delay == Duration::from_millis(500) && max_delay == Duration::from_secs(8))
+                );
+                assert!(
+                    events
+                        .iter()
+                        .filter(|event| event.has_client_event())
+                        .all(|event| event.is_replayable_prelude())
+                );
+            }
+            assert_eq!(
+                serde_json::from_str::<Value>(error.raw_upstream_error().unwrap().as_str())
+                    .unwrap(),
+                failure
+            );
+            events.extend(error.take_atomic_client_events());
+            assert_eq!(
+                events.last().unwrap().wire_event().unwrap().data(),
+                &failure
+            );
+            let account = store.account("acct_provider_contract").unwrap();
+            assert_eq!(account.credential_state(), CredentialState::Ready);
+            assert_eq!(account.quota().access(), QuotaAccessState::Unknown);
+            server.await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn server_error_503_opening_rejections_request_bounded_retry_and_keep_response() {
+    for websocket in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        let server = MockServer::start().await;
+        let body =
+            r#"{ "error":{"code":"server_error","type":"server_error","message":"retry later"} }"#;
+        Mock::given(method(if websocket { "GET" } else { "POST" }))
+            .and(path("/codex/responses"))
+            .respond_with(
+                ResponseTemplate::new(503)
+                    .insert_header("retry-after", "17")
+                    .set_body_string(body),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let operation = if websocket {
+            capacity_websocket_operation()
+        } else {
+            http_generate_operation()
+        };
+        let mut stream = provider_with_base_url(&store, server.uri())
+            .execute(
+                planned_request("openai", operation),
+                context("req_server_error_opening", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        let (_, error) = stream_failure(&mut stream).await;
+        assert!(error.replay_is_safe());
+        assert!(!error.retry_is_prohibited());
+        assert!(matches!(
+            error.pre_delivery_retry(),
+            Some(PreDeliveryRetry::SameAccountTransientRetry { .. })
+        ));
+        assert_eq!(error.retry_after(), Some(Duration::from_secs(17)));
+        let response = error.client_visible_upstream_response().unwrap();
+        assert_eq!(response.status(), 503);
+        assert_eq!(response.body().as_ref(), body.as_bytes());
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
 async fn ordinary_http_and_websocket_opening_errors_remain_client_decisions() {
     for websocket in [false, true] {
         for status in [409, 500, 503, 504] {

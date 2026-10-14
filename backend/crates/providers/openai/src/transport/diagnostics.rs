@@ -180,23 +180,34 @@ impl CodexUpstreamFailure {
         self.category
     }
 
-    /// 只有明确识别的账号或容量拒绝才允许网关重放，普通上游错误交给客户端
+    /// 明确的 503 server_error 允许有界恢复，不把普通 5xx 当作容量或账号故障
+    pub(crate) fn is_retryable_server_error(&self) -> bool {
+        self.category == CodexFailureCategory::Unavailable
+            && self.status == Some(StatusCode::SERVICE_UNAVAILABLE)
+            && self
+                .code
+                .as_deref()
+                .is_some_and(|code| code.trim().eq_ignore_ascii_case("server_error"))
+    }
+
+    /// 只对明确识别的账号、容量拒绝或 503 server_error 提供重放资格
     #[must_use]
-    pub const fn replay_is_safe(&self) -> bool {
+    pub fn replay_is_safe(&self) -> bool {
         !matches!(self.send_phase, CodexUpstreamSendPhase::Ambiguous)
-            && matches!(
-                self.category,
-                CodexFailureCategory::ModelUnsupported
-                    | CodexFailureCategory::CredentialExpired
-                    | CodexFailureCategory::IdentityVerificationRequired
-                    | CodexFailureCategory::Banned
-                    | CodexFailureCategory::UsageLimitExhausted
-                    | CodexFailureCategory::RateLimited
-                    | CodexFailureCategory::QuotaExhausted
-                    | CodexFailureCategory::CloudflareChallenge
-                    | CodexFailureCategory::CloudflarePathBlocked
-                    | CodexFailureCategory::CapacityUnavailable
-            )
+            && (self.is_retryable_server_error()
+                || matches!(
+                    self.category,
+                    CodexFailureCategory::ModelUnsupported
+                        | CodexFailureCategory::CredentialExpired
+                        | CodexFailureCategory::IdentityVerificationRequired
+                        | CodexFailureCategory::Banned
+                        | CodexFailureCategory::UsageLimitExhausted
+                        | CodexFailureCategory::RateLimited
+                        | CodexFailureCategory::QuotaExhausted
+                        | CodexFailureCategory::CloudflareChallenge
+                        | CodexFailureCategory::CloudflarePathBlocked
+                        | CodexFailureCategory::CapacityUnavailable
+                ))
     }
 
     pub(crate) fn upstream_code(&self) -> Option<&str> {

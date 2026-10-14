@@ -1,4 +1,4 @@
-//! 验证上游诊断的容量错误分类、请求标识与响应事实提取
+//! 验证上游失败分类、重放资格、请求标识与响应事实提取
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use provider_openai::transport::CodexUpstreamDiagnostics;
@@ -40,6 +40,61 @@ fn flex_capacity_rejection_should_be_terminal_even_before_payload_send() {
         );
         assert_eq!(failure.category(), CodexFailureCategory::FlexUnavailable);
         assert!(!failure.replay_is_safe());
+    }
+}
+
+#[test]
+fn server_error_replay_requires_explicit_503_and_unambiguous_send() {
+    for (status, body, retryable) in [
+        (
+            503,
+            r#"{"error":{"code":"server_error","type":"server_error"}}"#,
+            true,
+        ),
+        (
+            500,
+            r#"{"error":{"code":"server_error","type":"server_error"}}"#,
+            false,
+        ),
+        (
+            504,
+            r#"{"error":{"code":"server_error","type":"server_error"}}"#,
+            false,
+        ),
+        (503, r#"{"error":{"type":"server_error"}}"#, false),
+        (
+            503,
+            r#"{"error":{"code":"Vendor.Future.v2","type":"server_error"}}"#,
+            false,
+        ),
+        (
+            503,
+            r#"{"error":{"code":"flex_unavailable","type":"server_error"}}"#,
+            false,
+        ),
+        (503, "server_error", false),
+    ] {
+        for phase in [
+            CodexUpstreamSendPhase::BeforePayload,
+            CodexUpstreamSendPhase::AfterPayload,
+            CodexUpstreamSendPhase::Ambiguous,
+        ] {
+            let failure = CodexUpstreamFailure::from_response(
+                reqwest::StatusCode::from_u16(status).unwrap(),
+                body,
+                None,
+                &CodexUpstreamDiagnostics::default(),
+                None,
+                &[],
+                &[],
+                phase,
+            );
+            assert_eq!(
+                failure.replay_is_safe(),
+                retryable && phase != CodexUpstreamSendPhase::Ambiguous,
+                "status={status}, body={body}, phase={phase:?}"
+            );
+        }
     }
 }
 
