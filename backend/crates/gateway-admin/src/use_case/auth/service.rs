@@ -1,93 +1,35 @@
-//! 控制面登录、会话恢复与身份校验的唯一 owner
+//! 管理员和 Key 的登录、退出、密码策略与会话访问
 
-use std::{net::IpAddr, sync::Arc, time::Duration as StdDuration};
+use std::{net::IpAddr, time::Duration as StdDuration};
 
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{Duration, Utc};
-use gateway_core::engine::execution::ClientKeyVerifier;
+use chrono::Utc;
 use rand_core::{OsRng, RngCore as _};
-use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq as _;
 use uuid::Uuid;
 
+use super::{
+    AuthService, DefaultAuthService, password_fingerprint,
+    session::{self, Credential, storage_id},
+};
 use crate::{
     model::{
         AdminError, AdminErrorKind,
         auth::{
             AdminAuditEvent, AuditActorKind, AuthSession, ChangePassword, LoginCommand, LoginError,
-            LoginResult, SessionSubject,
+            SessionGrant, SessionSubject,
         },
     },
-    ports::store::AuthStore,
+    use_case::map_store_error,
 };
 
-use super::map_store_error;
-
-/// 所有控制面接口消费同一个会话服务，权限由服务端身份决定
-#[async_trait]
-pub trait AuthService: Send + Sync {
-    async fn change_password(
-        &self,
-        session_id: Option<&str>,
-        command: ChangePassword,
-        source_ip: IpAddr,
-    ) -> Result<(), AdminError>;
-    async fn ensure_default_admin(&self, password: &str) -> Result<bool, AdminError>;
-    async fn session(&self, session_id: Option<&str>) -> Result<Option<AuthSession>, AdminError>;
-    async fn renew_session(
-        &self,
-        session_id: Option<&str>,
-    ) -> Result<Option<AuthSession>, AdminError>;
-    async fn resolve_admin_user_id(
-        &self,
-        session_id: Option<&str>,
-    ) -> Result<Option<String>, AdminError>;
-    async fn verify_admin_api_key(&self, key: &str) -> Result<bool, AdminError>;
-    async fn login(
-        &self,
-        command: LoginCommand,
-        source_ip: IpAddr,
-        previous_session_id: Option<&str>,
-    ) -> Result<LoginResult, LoginError>;
-    async fn logout(&self, session_id: &str) -> Result<(), AdminError>;
-}
-
-const MAX_SESSION_TTL_MINUTES: i64 = 366 * 24 * 60;
 const LOGIN_WINDOW: StdDuration = StdDuration::from_secs(60);
 const LOGIN_ATTEMPTS_PER_SOURCE: u32 = 10;
 const LOGIN_ATTEMPTS_GLOBAL: u32 = 200;
 
-pub(crate) struct DefaultAuthService {
-    default_admin_user_id: String,
-    admin_session_ttl: Duration,
-    admin_session_absolute_ttl: Duration,
-    key_session_ttl: Duration,
-    store: Arc<dyn AuthStore>,
-    verifier: Arc<dyn ClientKeyVerifier>,
-}
-
 impl DefaultAuthService {
-    #[must_use]
-    pub(crate) fn new(
-        default_admin_user_id: impl Into<String>,
-        admin_session_ttl_minutes: u64,
-        admin_session_absolute_ttl_minutes: u64,
-        key_session_ttl_minutes: u64,
-        store: Arc<dyn AuthStore>,
-        verifier: Arc<dyn ClientKeyVerifier>,
-    ) -> Self {
-        Self {
-            default_admin_user_id: default_admin_user_id.into(),
-            admin_session_ttl: session_ttl(admin_session_ttl_minutes),
-            admin_session_absolute_ttl: session_ttl(admin_session_absolute_ttl_minutes),
-            key_session_ttl: session_ttl(key_session_ttl_minutes),
-            store,
-            verifier,
-        }
-    }
-
     fn auth_audit(&self, action: &str, admin_user_id: &str) -> AdminAuditEvent {
         AdminAuditEvent {
             id: format!("audit_{}", Uuid::now_v7().simple()),
@@ -228,50 +170,23 @@ impl AuthService for DefaultAuthService {
     }
 
     async fn session(&self, session_id: Option<&str>) -> Result<Option<AuthSession>, AdminError> {
-        let Some(session_id) = session_id.filter(|value| !value.is_empty()) else {
+        let Some(raw) = session_id.filter(|value| !value.is_empty()) else {
             return Ok(None);
         };
-        let Some(session) = self
-            .store
-            .load_session(session_id)
-            .await
-            .map_err(|error| map_store_error(error, "authentication session"))?
-        else {
+        let Some(session) = self.load_live_session(storage_id(raw)).await? else {
             return Ok(None);
         };
-        if session.expires_at <= Utc::now()
-            || session
-                .absolute_expires_at
-                .is_some_and(|expiry| expiry <= Utc::now())
-        {
-            // Redis 的 TTL 负责过期清理，避免旧读取删除另一个请求刚续期的会话
+        if session.expires_at <= Utc::now() {
             return Ok(None);
         }
-        if let SessionSubject::Admin {
-            admin_user_id,
-            credential_fingerprint,
-        } = &session.subject
-        {
-            let password_hash = self
-                .store
-                .load_password_hash(admin_user_id)
-                .await
-                .map_err(|error| map_store_error(error, "administrator session"))?;
-            if password_hash
-                .is_none_or(|hash| password_fingerprint(&hash) != *credential_fingerprint)
-            {
-                let _ = self.store.delete_session(session_id).await;
+        if let Some(renewal) = &session.renewal {
+            let Some(credential) = Credential::parse(raw).filter(|value| !value.refresh) else {
+                return Ok(None);
+            };
+            if !credential.owns(renewal) {
                 return Ok(None);
             }
-        }
-        if let SessionSubject::Key { client_key_id } = &session.subject
-            && !self
-                .store
-                .client_key_enabled(client_key_id)
-                .await
-                .map_err(|error| map_store_error(error, "session key"))?
-        {
-            let _ = self.store.delete_session(session_id).await;
+        } else if Credential::parse(raw).is_some() {
             return Ok(None);
         }
         Ok(Some(session))
@@ -279,33 +194,25 @@ impl AuthService for DefaultAuthService {
 
     async fn renew_session(
         &self,
-        session_id: Option<&str>,
-    ) -> Result<Option<AuthSession>, AdminError> {
-        let Some(session_id) = session_id else {
-            return Ok(None);
-        };
-        let Some(session) = self.session(Some(session_id)).await? else {
-            return Ok(None);
-        };
-        // Key 与升级前的会话保留原有期限，不能凭续期获得新的最长登录窗口
-        let Some(absolute) = session
-            .absolute_expires_at
-            .filter(|_| matches!(session.subject, SessionSubject::Admin { .. }))
-        else {
-            return Ok(Some(session));
-        };
-        let now = Utc::now();
-        let expires_at = (now + self.admin_session_ttl).min(absolute);
-        let interval = (self.admin_session_ttl / 4).min(Duration::minutes(1));
-        if expires_at <= session.expires_at
-            || session.expires_at - now > self.admin_session_ttl - interval
-        {
-            return Ok(Some(session));
+        refresh_token: Option<&str>,
+        access_token: Option<&str>,
+    ) -> Result<Option<SessionGrant>, AdminError> {
+        if let Some(refresh) = refresh_token {
+            return self.refresh(refresh).await;
         }
-        self.store
-            .renew_session(session_id, &session, expires_at)
-            .await
-            .map_err(|error| map_store_error(error, "authentication session renewal"))
+        // Key 与升级前的单凭据仅返回仍有效的原会话，不授予新的续期能力
+        let Some(session) = self
+            .session(access_token)
+            .await?
+            .filter(|session| session.renewal.is_none())
+        else {
+            return Ok(None);
+        };
+        Ok(Some(SessionGrant {
+            session_id: access_token.unwrap_or_default().to_owned(),
+            refresh_token: None,
+            session,
+        }))
     }
 
     async fn resolve_admin_user_id(
@@ -346,7 +253,7 @@ impl AuthService for DefaultAuthService {
         command: LoginCommand,
         source_ip: IpAddr,
         previous_session_id: Option<&str>,
-    ) -> Result<LoginResult, LoginError> {
+    ) -> Result<SessionGrant, LoginError> {
         if let Some(retry_after) = self
             .store
             .consume_login_attempt(
@@ -370,14 +277,31 @@ impl AuthService for DefaultAuthService {
         let now = Utc::now();
         let absolute_expires_at = matches!(subject, SessionSubject::Admin { .. })
             .then_some(now + self.admin_session_absolute_ttl);
-        let session = AuthSession {
-            subject,
-            expires_at: (now + ttl).min(absolute_expires_at.unwrap_or(now + ttl)),
-            absolute_expires_at,
+        let refresh_expiry = (now + ttl).min(absolute_expires_at.unwrap_or(now + ttl));
+        let grant = if let Some(absolute) = absolute_expires_at {
+            session::issue(
+                subject,
+                (now + self.admin_access_ttl).min(refresh_expiry),
+                refresh_expiry,
+                absolute,
+            )
+            .map_err(|_| LoginError::Unavailable)?
+        } else {
+            SessionGrant {
+                session_id: random_session_token(),
+                refresh_token: None,
+                session: AuthSession {
+                    subject,
+                    expires_at: refresh_expiry,
+                    absolute_expires_at: None,
+                    renewal: None,
+                },
+            }
         };
-        let session_id = random_session_token();
+        let session_id = storage_id(&grant.session_id);
+        let session = &grant.session;
         self.store
-            .store_session(&session_id, &session)
+            .store_session(session_id, session)
             .await
             .map_err(|_| LoginError::Unavailable)?;
         if let SessionSubject::Admin { admin_user_id, .. } = &session.subject
@@ -387,26 +311,39 @@ impl AuthService for DefaultAuthService {
                 .await
                 .is_err()
         {
-            let _ = self.store.delete_session(&session_id).await;
+            let _ = self.store.delete_session(session_id).await;
             return Err(LoginError::Unavailable);
         }
         // 新身份验证成功后才撤销旧会话；撤销失败时不向浏览器提交新会话
         if let Some(previous) = previous_session_id.filter(|value| !value.is_empty())
             && self.logout(previous).await.is_err()
         {
-            let _ = self.store.delete_session(&session_id).await;
+            let _ = self.store.delete_session(session_id).await;
             return Err(LoginError::Unavailable);
         }
-        Ok(LoginResult {
-            session_id,
-            session,
-        })
+        Ok(grant)
     }
 
     async fn logout(&self, session_id: &str) -> Result<(), AdminError> {
+        let id = storage_id(session_id);
+        let Some(stored) = self
+            .store
+            .load_session(id)
+            .await
+            .map_err(|error| map_store_error(error, "authentication session"))?
+        else {
+            return Ok(());
+        };
+        if let Some(renewal) = &stored.renewal {
+            if !Credential::parse(session_id).is_some_and(|credential| credential.owns(renewal)) {
+                return Ok(());
+            }
+        } else if Credential::parse(session_id).is_some() {
+            return Ok(());
+        }
         let session = self
             .store
-            .delete_session(session_id)
+            .delete_session(id)
             .await
             .map_err(|error| map_store_error(error, "authentication session"))?;
         if let Some(AuthSession {
@@ -421,14 +358,6 @@ impl AuthService for DefaultAuthService {
         }
         Ok(())
     }
-}
-
-fn session_ttl(minutes: u64) -> Duration {
-    Duration::minutes(
-        i64::try_from(minutes)
-            .unwrap_or(MAX_SESSION_TTL_MINUTES)
-            .clamp(1, MAX_SESSION_TTL_MINUTES),
-    )
 }
 
 fn validate_new_password(password: &str) -> Result<(), AdminError> {
@@ -469,9 +398,4 @@ fn valid_admin_api_key_shape(value: &str) -> bool {
     value.len() == 70
         && value.starts_with("admin-")
         && value[6..].bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-// 指纹只绑定已加盐的密码哈希，不把密码或原始哈希复制到 Redis 会话
-fn password_fingerprint(password_hash: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(password_hash.as_bytes()))
 }

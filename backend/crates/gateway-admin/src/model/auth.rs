@@ -76,18 +76,23 @@ impl std::fmt::Debug for LoginCommand {
     }
 }
 
-/// 登录成功后返回的会话事实
+/// 登录或刷新后仅向当前浏览器交付的会话凭据
 #[derive(Clone, PartialEq, Eq)]
-pub struct LoginResult {
+pub struct SessionGrant {
     pub session_id: String,
+    pub refresh_token: Option<String>,
     pub session: AuthSession,
 }
 
-impl std::fmt::Debug for LoginResult {
+impl std::fmt::Debug for SessionGrant {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("LoginResult")
+            .debug_struct("SessionGrant")
             .field("session_id", &"[REDACTED]")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("session", &self.session)
             .finish()
     }
@@ -138,12 +143,41 @@ impl std::fmt::Debug for ChangePassword {
     }
 }
 
-/// 会话有效期与管理员续期上限；没有上限字段的旧会话保持固定有效期
+/// 访问有效期与逻辑会话；没有续期凭据的会话保持固定期限
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthSession {
     pub subject: SessionSubject,
     pub expires_at: DateTime<Utc>,
     pub absolute_expires_at: Option<DateTime<Utc>>,
+    pub renewal: Option<SessionRenewal>,
+}
+
+/// 长效登录的凭据摘要与续期窗口；访问到期不删除整段登录
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRenewal {
+    pub expires_at: DateTime<Utc>,
+    pub access_digest: [u8; 32],
+    pub refresh_digest: [u8; 32],
+    pub previous: Option<SessionRefreshReplay>,
+}
+
+/// 仅保存上一代摘要及派生盐；响应丢失时须持有上一代凭据才能重建同一响应
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRefreshReplay {
+    pub digest: [u8; 32],
+    pub salt: [u8; 32],
+    pub expires_at: DateTime<Utc>,
+}
+
+impl AuthSession {
+    #[must_use]
+    pub fn retained_until(&self) -> DateTime<Utc> {
+        self.renewal
+            .as_ref()
+            .map_or(self.expires_at, |renewal| renewal.expires_at)
+    }
 }
 
 /// 安全审计事件类型

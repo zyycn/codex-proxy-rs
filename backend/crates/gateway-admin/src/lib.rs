@@ -405,9 +405,7 @@ async fn initialize_inner(
     let registry = providers;
 
     let auth = Arc::new(DefaultAuthService::new(
-        config.default_username,
-        config.session_ttl_minutes,
-        config.session_absolute_ttl_minutes,
+        &config,
         client_config.session_ttl_minutes,
         store.auth(),
         client_key_verifier.clone(),

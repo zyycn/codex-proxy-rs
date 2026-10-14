@@ -321,6 +321,7 @@ impl MemoryAuthStore {
                     },
                     admin_user_id: "admin_1".to_owned(),
                 },
+                renewal: None,
                 absolute_expires_at: None,
                 expires_at: Utc::now() + Duration::hours(1),
             },
@@ -339,7 +340,7 @@ impl MemoryAuthStore {
         self.sessions
             .lock()
             .unwrap()
-            .get_mut(session_id)
+            .get_mut(session_id.split('.').nth(1).unwrap_or(session_id))
             .unwrap()
             .expires_at = expires_at;
     }
@@ -415,19 +416,24 @@ impl AuthStore for MemoryAuthStore {
         Ok(())
     }
 
-    async fn renew_session(
+    async fn compare_exchange_session(
         &self,
         session_id: &str,
         expected: &AuthSession,
-        expires_at: chrono::DateTime<chrono::Utc>,
+        replacement: Option<&AuthSession>,
     ) -> AdminStoreResult<Option<AuthSession>> {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(session) = sessions.get_mut(session_id) {
-            if session.expires_at <= chrono::Utc::now() {
+            if session.retained_until() <= chrono::Utc::now() {
                 return Ok(None);
             }
             if session == expected {
-                session.expires_at = expires_at;
+                if let Some(replacement) = replacement {
+                    *session = replacement.clone();
+                } else {
+                    sessions.remove(session_id);
+                    return Ok(None);
+                }
             }
             return Ok(Some(session.clone()));
         }

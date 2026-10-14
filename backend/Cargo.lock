@@ -1681,6 +1681,7 @@ dependencies = [
  "gateway-core",
  "heck",
  "hex",
+ "hkdf",
  "prettyplease",
  "quote",
  "rand_core 0.6.4",

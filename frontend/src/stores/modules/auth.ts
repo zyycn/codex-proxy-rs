@@ -19,7 +19,10 @@ export const useAuthStore = defineStore('auth', () => {
   function checkAuth(): Promise<boolean> {
     if (pendingCheck.value)
       return pendingCheck.value
-    const check = loadSession(getAuthStatus).finally(() => {
+    const check = loadSession(async () => {
+      const status = await getAuthStatus()
+      return status.authenticated ? status : refreshAuthSession()
+    }).finally(() => {
       if (pendingCheck.value === check)
         pendingCheck.value = undefined
     })

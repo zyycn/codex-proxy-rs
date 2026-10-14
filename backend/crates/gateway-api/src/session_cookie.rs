@@ -4,6 +4,7 @@ use axum::http::{HeaderMap, header::ORIGIN};
 use url::Url;
 
 pub(crate) const NAME: &str = "cpr_session";
+pub(crate) const REFRESH_NAME: &str = "cpr_refresh";
 
 pub(crate) fn attributes(headers: &HeaderMap) -> &'static str {
     // HTTPS 反代回源 HTTP 不改变浏览器 Origin
@@ -19,16 +20,24 @@ pub(crate) fn attributes(headers: &HeaderMap) -> &'static str {
                 })
             });
     if http_origin {
-        "Path=/; HttpOnly; SameSite=Lax"
+        "HttpOnly; SameSite=Lax"
     } else {
-        "Path=/; Secure; HttpOnly; SameSite=Lax"
+        "Secure; HttpOnly; SameSite=Lax"
     }
 }
 
 pub(crate) fn value(headers: &HeaderMap) -> Option<String> {
+    named_value(headers, NAME)
+}
+
+pub(crate) fn refresh_value(headers: &HeaderMap) -> Option<String> {
+    named_value(headers, REFRESH_NAME)
+}
+
+fn named_value(headers: &HeaderMap, name: &str) -> Option<String> {
     let cookie = headers.get("cookie")?.to_str().ok()?;
     cookie.split(';').find_map(|part| {
         let (candidate, value) = part.trim().split_once('=')?;
-        (candidate == NAME).then(|| value.to_owned())
+        (candidate == name && !value.is_empty()).then(|| value.to_owned())
     })
 }
