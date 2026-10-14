@@ -164,10 +164,8 @@ impl CodexCredentialQuotaService {
                 "service_tier".to_owned(),
                 Value::String("default".to_owned()),
             );
-            body.insert(
-                "reasoning".to_owned(),
-                serde_json::json!({"effort": "none"}),
-            );
+            // 目录里各模型的最低档都是 low，none 会收到上游 error 终态并让整次预热记为失败
+            body.insert("reasoning".to_owned(), serde_json::json!({"effort": "low"}));
             body.insert("text".to_owned(), serde_json::json!({"verbosity": "low"}));
 
             let upstream_request = CodexResponsesRequest::from_body(body);

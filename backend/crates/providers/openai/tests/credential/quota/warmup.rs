@@ -1,4 +1,4 @@
-//! 验证额度预热按 SSE 终态判定结果并跳过过期凭据
+//! 验证额度预热按 SSE 终态判定结果、请求档位并跳过过期凭据
 
 use super::*;
 
@@ -38,6 +38,43 @@ async fn warmup_consumes_completed_sse_and_persists_rate_limit_event() {
         Some("team")
     );
     assert!(store.quota_json("acct_warmup_completed").is_some());
+}
+
+#[tokio::test]
+async fn warmup_sends_the_lowest_reasoning_effort_supported_by_the_catalog() {
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_warmup_effort\",\"status\":\"completed\",\"output\":[]}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_warmup_effort").await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    let summary = service.execute_warmup("test-model").await.expect("warmup");
+
+    assert_eq!(summary.warmed_up, 1);
+    let requests = server.received_requests().await.expect("recorded requests");
+    let decoded =
+        zstd::stream::decode_all(requests[0].body.as_slice()).expect("zstd body should decode");
+    let body: serde_json::Value =
+        serde_json::from_slice(&decoded).expect("warmup body should be valid JSON");
+    // 上游按目录拒绝目录外的档位，none 曾让全部定时预热只留下 error 终态
+    assert_eq!(body["reasoning"]["effort"], "low");
 }
 
 #[tokio::test]
