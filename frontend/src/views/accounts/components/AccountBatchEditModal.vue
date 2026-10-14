@@ -10,7 +10,6 @@ defineProps<{
   groups: AccountGroupRef[]
   groupsLoading: boolean
   saving: boolean
-  hasChanges: boolean
 }>()
 
 const emit = defineEmits<{
@@ -59,7 +58,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
       <ZButton
         type="primary"
         :loading="saving"
-        :disabled="selectedCount === 0 || groupsLoading || !hasChanges"
+        :disabled="selectedCount === 0 || groupsLoading"
         @click="emit('save')"
       >
         保存更改

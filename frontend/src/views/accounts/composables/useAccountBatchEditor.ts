@@ -2,7 +2,7 @@ import type { Ref } from 'vue'
 import type { Account, AccountModelAccess } from '@/api'
 
 import { ZNotification } from '@codex-proxy/ui'
-import { computed, ref, shallowRef, watch } from 'vue'
+import { ref, shallowRef, watch } from 'vue'
 import { batchUpdateAccounts } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { accountModelAccessError } from '../utils/modelAccess'
@@ -17,24 +17,23 @@ export function useAccountBatchEditor(options: {
   const selectedAccountsById = new Map<string, Account>()
   const showBatchEditModal = shallowRef(false)
   const editingCount = shallowRef(0)
-  const schedulingEnabled = shallowRef(true)
+  const schedulingEnabled = shallowRef(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
-  const editedFields = ref(new Set<'enabled' | 'concurrencyLimit' | 'weight' | 'groupIds'>())
+  const editedFields = ref(new Set<'concurrencyLimit' | 'weight' | 'groupIds'>())
   const catalogAccountId = shallowRef<string>()
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
-  const hasChanges = computed(() => Boolean(modelAccess.value) || editedFields.value.size > 0 || proxyMode.value !== 'preserve')
 
-  // 未操作的字段保持每个账号原值，避免展开表单就覆盖混合设置。
-  watch([schedulingEnabled, concurrencyLimit, weight, selectedGroupIds], (values, previous) => {
+  // 调度按开关值统一更新，其他未操作字段保留每个账号原值
+  watch([concurrencyLimit, weight, selectedGroupIds], (values, previous) => {
     if (!showBatchEditModal.value || saving.value)
       return
-    const fields = ['enabled', 'concurrencyLimit', 'weight', 'groupIds'] as const
+    const fields = ['concurrencyLimit', 'weight', 'groupIds'] as const
     fields.forEach((field, index) => {
       if (values[index] !== previous[index])
         editedFields.value.add(field)
@@ -50,7 +49,7 @@ export function useAccountBatchEditor(options: {
     modelAccess.value = undefined
     editedFields.value.clear()
     catalogAccountId.value = accounts[0]?.id
-    schedulingEnabled.value = accounts.every(account => account.enabled)
+    schedulingEnabled.value = false
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
@@ -65,10 +64,6 @@ export function useAccountBatchEditor(options: {
     const modelError = accountModelAccessError(modelAccess.value)
     if (modelError) {
       ZNotification.warning({ message: modelError })
-      return
-    }
-    if (!hasChanges.value) {
-      ZNotification.warning({ message: '请选择需要更新的设置' })
       return
     }
     const scheduling = parseAccountSchedulingForm(editedFields.value.has('concurrencyLimit') ? concurrencyLimit.value : '', editedFields.value.has('weight') ? weight.value : '1')
@@ -87,7 +82,7 @@ export function useAccountBatchEditor(options: {
         accountIds,
         modelAccess: modelAccess.value,
         outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
-        enabled: editedFields.value.has('enabled') ? schedulingEnabled.value : undefined,
+        enabled: schedulingEnabled.value,
         concurrencyLimit: editedFields.value.has('concurrencyLimit') ? scheduling.values.concurrencyLimit : undefined,
         weight: editedFields.value.has('weight') ? scheduling.values.weight : undefined,
         groupIds: editedFields.value.has('groupIds') ? [...new Set(selectedGroupIds.value)] : undefined,
@@ -130,7 +125,6 @@ export function useAccountBatchEditor(options: {
     concurrencyLimit,
     weight,
     modelAccess,
-    hasChanges,
     catalogAccountId,
     proxyMode,
     proxyId,

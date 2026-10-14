@@ -422,6 +422,7 @@ onBeforeUnmount(() => {
 
     <ZScrollbar class="my-6 w-full flex-1">
       <div class="px-4">
+        <!-- 焦点环绘制在按钮内侧，避免被滚动区和折叠菜单裁切 -->
         <nav class="relative grid gap-3" :class="isCollapsed ? 'mx-auto w-11.5' : 'w-full'" aria-label="主导航">
           <span
             class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-cp bg-cp-menu-item-selected-bg transition-[transform,opacity] duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
@@ -436,7 +437,7 @@ onBeforeUnmount(() => {
             <div v-if="item.path === '/plugins'" class="relative z-10 grid min-w-0">
               <button
                 type="button"
-                class="inline-flex h-11.5 cursor-pointer items-center rounded-cp border-0 bg-transparent text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container"
+                class="inline-flex h-11.5 cursor-pointer items-center rounded-cp border-0 bg-transparent text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cp-control-outline"
                 :class="[
                   isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
                   isActive(item.path)
@@ -490,7 +491,7 @@ onBeforeUnmount(() => {
                     </span>
                     <button
                       type="button"
-                      class="relative inline-flex h-10 min-w-0 cursor-pointer items-center gap-2 rounded-cp border-0 bg-transparent px-3 text-left text-cp-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
+                      class="relative inline-flex h-10 min-w-0 cursor-pointer items-center gap-2 rounded-cp border-0 bg-transparent px-3 text-left text-cp-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cp-control-outline motion-reduce:transition-none"
                       :class="route.name === 'plugins'
                         ? 'font-emphasis text-cp-text'
                         : navFeedbackMuted ? 'font-semibold text-cp-text-secondary' : 'font-semibold text-cp-text-secondary hover:bg-cp-fill-quaternary hover:text-cp-text'"
@@ -504,7 +505,7 @@ onBeforeUnmount(() => {
                       v-for="view in pluginPageViews"
                       :key="view.target.instanceId"
                       type="button"
-                      class="relative inline-flex h-10 min-w-0 cursor-pointer items-center gap-2 rounded-cp border-0 bg-transparent px-3 text-left text-cp-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
+                      class="relative inline-flex h-10 min-w-0 cursor-pointer items-center gap-2 rounded-cp border-0 bg-transparent px-3 text-left text-cp-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cp-control-outline motion-reduce:transition-none"
                       :class="isPluginViewActive(view)
                         ? 'font-emphasis text-cp-text'
                         : navFeedbackMuted ? 'font-semibold text-cp-text-secondary' : 'font-semibold text-cp-text-secondary hover:bg-cp-fill-quaternary hover:text-cp-text'"
@@ -522,7 +523,7 @@ onBeforeUnmount(() => {
             <button
               v-else
               type="button"
-              class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-cp border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container"
+              class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-cp border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cp-control-outline"
               :class="[
                 isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
                 isActive(item.path)
