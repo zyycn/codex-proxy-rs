@@ -36,8 +36,8 @@ impl Default for RpcLimits {
     fn default() -> Self {
         Self {
             maximum_buffered_body_bytes: 1024 * 1024,
-            maximum_calls: 16,
-            maximum_callbacks: 16,
+            maximum_calls: 64,
+            maximum_callbacks: 64,
             handshake_timeout: Duration::from_secs(5),
             maximum_call_timeout: Duration::from_secs(120),
             maximum_stderr_bytes: 64 * 1024,

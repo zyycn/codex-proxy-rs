@@ -52,6 +52,10 @@ use gateway_plugin_sdk::client::{read_frame, write_frame};
 `PluginSession::accept/run` 和 `PluginHandler`。组合插件从作者清单建立类型化方法，SDK 自动生成
 `plugin.register`；作者不需要复制贡献项或手写方法名、阶段和敏感载荷编解码。
 会话管理握手、有界并发、父调用关联、回调、流信用、取消、排空与关闭。
+
+`SessionConfig.maximum_calls` 和 `maximum_callbacks` 默认均为 64，分别限制在途调用与待完成的宿主回调，
+`next` 等待也计入容量。实际并发同时受宿主对应预算约束；插件显式覆盖配置时需协调调用与回调容量
+
 `ResponseStream::channel` 提供有界流生产入口，`ResponseStream::pull` 按消费进度驱动生产者；`PluginCall` 的宿主客户端只代表当前父调用，
 不能把一个调用的资源误用到另一个调用。插件程序自行选择运行时和启动入口，不会启动网关。
 `SessionConfig.maximum_stream_chunk_bytes` 默认 1 MiB，只约束单个业务流分块；

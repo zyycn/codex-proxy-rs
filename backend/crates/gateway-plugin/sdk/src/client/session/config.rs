@@ -25,8 +25,8 @@ impl Default for SessionConfig {
         Self {
             // 流分块还需匹配宿主授予的信用窗口
             maximum_stream_chunk_bytes: 1024 * 1024,
-            maximum_calls: 32,
-            maximum_callbacks: 32,
+            maximum_calls: 64,
+            maximum_callbacks: 64,
             maximum_buffered_stream_chunks: 1_024,
             handshake_timeout: Duration::from_secs(5),
             maximum_call_timeout: Duration::from_secs(120),

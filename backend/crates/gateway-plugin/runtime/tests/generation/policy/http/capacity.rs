@@ -63,13 +63,14 @@ async fn http_delegate_does_not_replay_plugin_capacity_errors() {
 }
 
 async fn assert_saturated_policy(policy: PluginFailurePolicy) {
+    const CONCURRENT_CALLS: usize = 64;
     let limits = RpcLimits::default();
     let (cache, runtime, generation, plan) =
         http_plugin_with_policy("passthrough", limits, policy.clone()).await;
     let release = Arc::new(tokio::sync::Semaphore::new(0));
     let (started, mut entered) = tokio::sync::mpsc::unbounded_channel();
     let mut slow_calls = tokio::task::JoinSet::new();
-    for _ in 0..limits.maximum_calls {
+    for index in 0..CONCURRENT_CALLS {
         let plan = plan.clone();
         let release = release.clone();
         let started = started.clone();
@@ -90,7 +91,7 @@ async fn assert_saturated_policy(policy: PluginFailurePolicy) {
         });
         tokio::time::timeout(Duration::from_secs(5), entered.recv())
             .await
-            .unwrap()
+            .unwrap_or_else(|_| panic!("第 {} 个调用未能进入下游", index + 1))
             .unwrap();
     }
 
@@ -188,7 +189,7 @@ async fn assert_saturated_policy(policy: PluginFailurePolicy) {
         .is_err()
     );
 
-    release.add_permits(limits.maximum_calls);
+    release.add_permits(CONCURRENT_CALLS);
     while let Some(result) = slow_calls.join_next().await {
         let response = result.unwrap().unwrap();
         assert_eq!(response.headers()["x-http-plugin"], "active");

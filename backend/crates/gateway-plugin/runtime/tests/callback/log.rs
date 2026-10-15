@@ -99,6 +99,8 @@ impl tracing::Subscriber for Capture {
 
 #[tokio::test]
 async fn real_worker_logs_are_correlated_sanitized_validated_and_bounded() {
+    // 低于每秒日志上限，单独验证阻塞写入的槽位及跨代保留行为
+    const MAXIMUM_CALLBACKS: usize = 16;
     let capture = Capture::default();
     tracing::subscriber::set_global_default(capture.clone()).unwrap();
     let directory = tempfile::tempdir().unwrap();
@@ -155,7 +157,10 @@ async fn real_worker_logs_are_correlated_sanitized_validated_and_bounded() {
             cache_directory: directory.path().join("cache"),
             host_version: "1.0.0".parse().unwrap(),
             package_limits: PackageLimits::default(),
-            rpc_limits: RpcLimits::default(),
+            rpc_limits: RpcLimits {
+                maximum_callbacks: MAXIMUM_CALLBACKS,
+                ..RpcLimits::default()
+            },
             restart_circuit: Default::default(),
         },
         Arc::new(gateway_host::outbound::HttpClient::new().unwrap()),
@@ -270,7 +275,7 @@ async fn real_worker_logs_are_correlated_sanitized_validated_and_bounded() {
     blocked.config_revision = Revision::new(9).unwrap();
     blocked.instances[0].id = "log-blocked".into();
     blocked.instances[0].configuration = json!({
-        "log_method":"plugin.register", "log_entries":[{"params":{"event":"fixture.blocked"},"repeat":32}],
+        "log_method":"plugin.register", "log_entries":[{"params":{"event":"fixture.blocked"},"repeat":MAXIMUM_CALLBACKS * 2}],
         "log_marker":blocked_marker,
     });
     // 日志后端停住时，注册的业务结果和父调用结束仍须及时完成
@@ -288,7 +293,7 @@ async fn real_worker_logs_are_correlated_sanitized_validated_and_bounded() {
             .iter()
             .filter(|result| result["recorded"] == true)
             .count(),
-        RpcLimits::default().maximum_callbacks
+        MAXIMUM_CALLBACKS
     );
     assert!(
         blocked_results
