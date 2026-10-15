@@ -53,8 +53,10 @@ use gateway_plugin_sdk::client::{read_frame, write_frame};
 `plugin.register`；作者不需要复制贡献项或手写方法名、阶段和敏感载荷编解码。
 会话管理握手、有界并发、父调用关联、回调、流信用、取消、排空与关闭。
 
-`SessionConfig.maximum_calls` 和 `maximum_callbacks` 默认均为 64，分别限制在途调用与待完成的宿主回调，
-`next` 等待也计入容量。实际并发同时受宿主对应预算约束；插件显式覆盖配置时需协调调用与回调容量
+`SessionConfig.maximum_calls` 默认 256，限制包含下游等待和响应流在内的在途调用；`maximum_callbacks` 默认 64，
+限制普通宿主回调。`next` 使用独立回调预算，上限为 `maximum_calls`，不挤占普通回调容量。
+宿主负责执行与准入调度，等待与处理独立计时；默认预算与过载行为见[插件使用](../../../../docs/plugins.md#故障处理)。
+插件显式覆盖配置时需与宿主协调在途预算；较小的插件侧上限会提前拒绝新调用
 
 `ResponseStream::channel` 提供有界流生产入口，`ResponseStream::pull` 按消费进度驱动生产者；`PluginCall` 的宿主客户端只代表当前父调用，
 不能把一个调用的资源误用到另一个调用。插件程序自行选择运行时和启动入口，不会启动网关。

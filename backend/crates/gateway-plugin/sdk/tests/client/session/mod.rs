@@ -140,10 +140,15 @@ impl PluginHandler for TestHandler {
                     tokio::time::sleep(Duration::from_millis(80)).await;
                     Ok(CallReply::unary(call.params, call.payload))
                 }
-                "callback" => {
+                "callback" | "next_callback" => {
+                    let method = if call.method == "next_callback" {
+                        NEXT_METHOD
+                    } else {
+                        "host.log"
+                    };
                     let reply = call
                         .host
-                        .call("host.log", call.params, call.payload)
+                        .call(method, call.params, call.payload)
                         .await
                         .map_err(SessionError::into_plugin_fault)?;
                     Ok(CallReply::unary(reply.result, reply.payload))
@@ -249,22 +254,30 @@ async fn start_session_with_capacity<H: PluginHandler>(
     handler: H,
     capacity: usize,
 ) -> (HostPeer, JoinHandle<Result<(), SessionError>>) {
+    start_configured_session(
+        handler,
+        capacity,
+        SessionConfig {
+            maximum_stream_chunk_bytes: MAXIMUM_STREAM_CHUNK_BYTES,
+            maximum_calls: 4,
+            maximum_callbacks: 4,
+            maximum_buffered_stream_chunks: 16,
+            handshake_timeout: Duration::from_secs(1),
+            maximum_call_timeout: Duration::from_secs(2),
+        },
+    )
+    .await
+}
+
+async fn start_configured_session<H: PluginHandler>(
+    handler: H,
+    capacity: usize,
+    config: SessionConfig,
+) -> (HostPeer, JoinHandle<Result<(), SessionError>>) {
     let (host, plugin) = tokio::io::duplex(capacity);
     let (plugin_reader, plugin_writer) = tokio::io::split(plugin);
     let task = tokio::spawn(async move {
-        let session = PluginSession::accept(
-            plugin_reader,
-            plugin_writer,
-            SessionConfig {
-                maximum_stream_chunk_bytes: MAXIMUM_STREAM_CHUNK_BYTES,
-                maximum_calls: 4,
-                maximum_callbacks: 4,
-                maximum_buffered_stream_chunks: 16,
-                handshake_timeout: Duration::from_secs(1),
-                maximum_call_timeout: Duration::from_secs(2),
-            },
-        )
-        .await?;
+        let session = PluginSession::accept(plugin_reader, plugin_writer, config).await?;
         session.run(handler).await
     });
     let (mut reader, mut writer) = tokio::io::split(host);

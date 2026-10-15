@@ -17,7 +17,7 @@ use serde_json::json;
 use tokio::sync::{Barrier, Notify};
 
 #[derive(Default)]
-struct Callbacks {
+pub(super) struct Callbacks {
     called: AtomicUsize,
     nested: Mutex<Option<Weak<RpcSession>>>,
 }
@@ -29,8 +29,8 @@ struct BlockingCallbacks {
 }
 
 #[derive(Default)]
-struct LifecycleCallbacks {
-    begun: AtomicUsize,
+pub(super) struct LifecycleCallbacks {
+    pub(super) begun: AtomicUsize,
     finished: AtomicUsize,
 }
 
@@ -193,7 +193,7 @@ where
     (cache, Arc::new(session))
 }
 
-fn prepared_session() -> (
+pub(super) fn prepared_session() -> (
     tempfile::TempDir,
     Arc<gateway_plugin_runtime::PreparedPackage>,
     Handshake,

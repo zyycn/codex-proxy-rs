@@ -194,7 +194,10 @@ impl PluginRuntime {
             .map_err(|_| AdminError::internal("插件集合 ID 无效"))?;
         let observers = crate::adapter::observer::PluginObserverPlan::compile(
             observer_entries,
-            self.config.rpc_limits.maximum_calls,
+            self.config
+                .rpc_limits
+                .maximum_calls
+                .min(self.config.rpc_limits.maximum_executing_calls),
             self.config.rpc_limits.maximum_call_timeout,
             self.config.rpc_limits.maximum_buffered_body_bytes,
         )

@@ -1,7 +1,7 @@
-//! 验证默认容量承载 64 个慢调用，饱和时不跳过插件且释放后恢复
+//! 验证 next 等待不占执行名额，硬上限拒绝请求且不跳过插件
 
 use super::*;
-use gateway_plugin_runtime::RpcError;
+use gateway_core::error::GatewayErrorKind;
 
 fn context() -> core::Context {
     core::Context {
@@ -24,18 +24,32 @@ fn plugin_request() -> core::Request {
 }
 
 #[tokio::test]
-async fn http_default_capacity_runs_64_calls_without_skipping_delegate_plugin() {
-    assert_saturated_policy(PluginFailurePolicy::Delegate).await;
+async fn http_waiting_next_releases_execution_for_delegate_plugin() {
+    assert_capacity(PluginFailurePolicy::Delegate, RpcLimits::default(), false).await;
 }
 
 #[tokio::test]
-async fn http_default_capacity_runs_64_calls_without_skipping_reject_plugin() {
-    assert_saturated_policy(PluginFailurePolicy::Reject).await;
+async fn http_waiting_next_releases_execution_for_reject_plugin() {
+    assert_capacity(PluginFailurePolicy::Reject, RpcLimits::default(), false).await;
 }
 
-async fn assert_saturated_policy(policy: PluginFailurePolicy) {
+#[tokio::test]
+async fn http_in_flight_limit_never_delegates_and_recovers_after_cancellation() {
+    for policy in [PluginFailurePolicy::Delegate, PluginFailurePolicy::Reject] {
+        assert_capacity(
+            policy,
+            RpcLimits {
+                maximum_calls: 64,
+                ..Default::default()
+            },
+            true,
+        )
+        .await;
+    }
+}
+
+async fn assert_capacity(policy: PluginFailurePolicy, limits: RpcLimits, saturated: bool) {
     const CONCURRENT_CALLS: usize = 64;
-    let limits = RpcLimits::default();
     let (cache, runtime, generation, plan) =
         http_plugin_with_policy("passthrough", limits, policy).await;
     let release = Arc::new(tokio::sync::Semaphore::new(0));
@@ -75,39 +89,70 @@ async fn assert_saturated_policy(policy: PluginFailurePolicy) {
     ] {
         let request = ::http::Request::builder()
             .uri(uri)
+            .header("authorization", "Bearer fixture-secret")
             .body(core::empty_body())
             .unwrap();
-        let result = plan
-            .handle_http(
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            plan.handle_http(
                 context(),
                 request,
-                compose(Vec::new(), |_: core::Request| {
-                    panic!("容量耗尽时不得跳过插件执行下游")
+                compose(Vec::new(), move |request: core::Request| {
+                    assert!(!saturated, "容量耗尽时不得执行下游");
+                    assert_eq!(request.uri(), "/rewritten?encoded=%2F");
+                    Box::pin(async { Ok(core::Response::new(core::empty_body())) })
                 }),
-            )
-            .await;
-        assert!(matches!(result, Err(MiddlewareError::Remote { source, .. })
-            if matches!(source.downcast_ref::<RpcError>(), Some(RpcError::Capacity))));
+            ),
+        )
+        .await
+        .expect("下游等待不应阻塞其它请求");
+        if saturated {
+            assert!(matches!(result, Err(MiddlewareError::Gateway(error))
+                if error.kind() == GatewayErrorKind::MiddlewareCapacityUnavailable));
+        } else {
+            assert_eq!(result.unwrap().headers()["x-http-plugin"], "active");
+        }
     }
 
+    if saturated {
+        slow_calls.abort_all();
+        while let Some(result) = slow_calls.join_next().await {
+            assert!(matches!(result, Err(error) if error.is_cancelled()));
+        }
+    }
     release.add_permits(CONCURRENT_CALLS);
     while let Some(result) = slow_calls.join_next().await {
         let response = result.unwrap().unwrap();
         assert_eq!(response.headers()["x-http-plugin"], "active");
     }
-    let response = plan
-        .handle_http(
-            context(),
-            plugin_request(),
-            compose(Vec::new(), |request: core::Request| {
-                Box::pin(async move {
-                    assert_eq!(request.uri(), "/rewritten?encoded=%2F");
-                    Ok(core::Response::new(core::empty_body()))
-                })
-            }),
-        )
-        .await
-        .unwrap();
+    // 取消确认到达前仍持有在途名额，探测只允许遇到明确的暂时过载
+    let response = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let result = plan
+                .handle_http(
+                    context(),
+                    plugin_request(),
+                    compose(Vec::new(), |request: core::Request| {
+                        Box::pin(async move {
+                            assert_eq!(request.uri(), "/rewritten?encoded=%2F");
+                            Ok(core::Response::new(core::empty_body()))
+                        })
+                    }),
+                )
+                .await;
+            match result {
+                Ok(response) => break response,
+                Err(MiddlewareError::Gateway(error))
+                    if error.kind() == GatewayErrorKind::MiddlewareCapacityUnavailable =>
+                {
+                    tokio::task::yield_now().await
+                }
+                Err(error) => panic!("unexpected error: {error}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(response.headers()["x-http-plugin"], "active");
     drop(response);
     drop(plan);

@@ -62,7 +62,7 @@ pub struct RpcStream {
     pub(crate) deadline: CallDeadline,
     pub(crate) id: u64,
     pub(crate) shared: Arc<Shared>,
-    pub(crate) _slot: OwnedSemaphorePermit,
+    pub(crate) _slot: Arc<OwnedSemaphorePermit>,
     pub(crate) _session: Arc<RpcSession>,
 }
 

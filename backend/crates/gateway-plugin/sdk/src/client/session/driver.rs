@@ -91,6 +91,7 @@ where
             .config
             .maximum_calls
             .checked_add(self.config.maximum_callbacks)
+            .and_then(|capacity| capacity.checked_add(self.config.maximum_calls))
             .ok_or(SessionError::Configuration)?;
         let control_reserve = self
             .config
@@ -105,7 +106,10 @@ where
             sender: outbound,
             data_slots: Arc::new(Semaphore::new(data_capacity)),
         };
-        let callbacks = Arc::new(CallbackRegistry::new(self.config.maximum_callbacks));
+        let callbacks = Arc::new(CallbackRegistry::new(
+            self.config.maximum_callbacks,
+            self.config.maximum_calls,
+        ));
         let handler: Arc<dyn PluginHandler> = Arc::new(handler);
         let lifecycle = LifecycleHooks::new(Arc::clone(&handler), control_reserve)?;
         write_frame(

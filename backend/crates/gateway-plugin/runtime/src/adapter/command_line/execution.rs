@@ -139,7 +139,7 @@ fn rpc_failure(error: RpcError) -> &'static str {
         RpcError::Handshake(_) | RpcError::Protocol(_) | RpcError::InvalidResponse(..) => {
             "插件协议错误"
         }
-        RpcError::Capacity => "插件调用容量不足",
+        RpcError::Capacity | RpcError::Overloaded => "插件调用容量不足",
         RpcError::Context(_) => "调用上下文无效",
         RpcError::Remote(_) => "插件拒绝命令",
     }

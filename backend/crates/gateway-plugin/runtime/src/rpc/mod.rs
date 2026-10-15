@@ -1,5 +1,6 @@
 //! 插件双向 RPC 会话、调用结果与生命周期的公共入口
 
+mod admission;
 mod dispatch;
 mod session;
 

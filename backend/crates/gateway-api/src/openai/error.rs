@@ -279,6 +279,11 @@ pub const fn gateway_error_contract(
             "server_error",
             "provider_infrastructure_unavailable",
         ),
+        GatewayErrorKind::MiddlewareCapacityUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_error",
+            "middleware_capacity_unavailable",
+        ),
         GatewayErrorKind::ConcurrencyQueueFull => (
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limit_error",

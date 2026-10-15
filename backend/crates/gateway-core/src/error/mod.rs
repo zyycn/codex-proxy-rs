@@ -1067,6 +1067,8 @@ pub enum GatewayErrorKind {
     NoAvailableProvider,
     /// 符合条件的上游账号暂时没有调度容量
     AccountCapacityUnavailable,
+    /// 中间件在途资源或执行等待队列已满
+    MiddlewareCapacityUnavailable,
     ConcurrencyQueueFull,
     ConcurrencyQueueTimeout,
     /// Provider 的本地账号基础设施不可用
@@ -1098,6 +1100,7 @@ impl GatewayErrorKind {
             Self::ModelNotFound => "model_not_found",
             Self::NoAvailableProvider => "no_available_provider",
             Self::AccountCapacityUnavailable => "account_capacity_unavailable",
+            Self::MiddlewareCapacityUnavailable => "middleware_capacity_unavailable",
             Self::ConcurrencyQueueFull => "concurrency_queue_full",
             Self::ConcurrencyQueueTimeout => "concurrency_queue_timeout",
             Self::ProviderInfrastructureUnavailable => "provider_infrastructure_unavailable",

@@ -125,7 +125,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                     Err(RpcError::Protocol(None))
                 } else if let Some(context) = shared.context(parent_id) {
                     last_callback = id;
-                    if let Some(permit) = shared.try_callback_slot() {
+                    if let Some(permit) = shared.try_callback_slot(&method) {
                         let handler = Arc::clone(&callbacks);
                         let response = Arc::clone(&shared);
                         let (ready, started) = oneshot::channel();
@@ -138,6 +138,12 @@ async fn read_loop<R: AsyncRead + Unpin>(
                                 return;
                             }
                             let result = handler.call(context, method, params, frame.payload).await;
+                            if pause.is_some()
+                                && let Err(error) = response.resume_next(parent_id).await
+                            {
+                                response.cancel(parent_id, error);
+                                return;
+                            }
                             drop(pause);
                             let mut reply = match result {
                                 Ok(reply) => Frame {

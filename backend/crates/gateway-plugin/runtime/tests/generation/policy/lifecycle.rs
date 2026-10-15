@@ -327,3 +327,79 @@ async fn sdk_waiting_next_obeys_request_deadline_and_client_cancellation() {
         super::super::wait_until_empty(cache.path()).await;
     }
 }
+
+#[tokio::test]
+async fn request_middleware_never_delegates_when_total_in_flight_capacity_is_full() {
+    for policy in [PluginFailurePolicy::Delegate, PluginFailurePolicy::Reject] {
+        let package = crate::support::package_with_contributions(
+            crate::support::worker(),
+            Contributions::from([crate::support::contribution(
+                Capability::Middleware,
+                vec![Stage::Request],
+                vec!["openai".into()],
+                vec!["openai".into()],
+            )]),
+        );
+        let (cache, runtime) = setup_package_with_limits(
+            vec![InstanceFixture {
+                id: "busy-middleware",
+                configuration: serde_json::json!({}),
+                bindings: vec![binding(MIDDLEWARE_CONTRIBUTION, "request", 0, policy)],
+            }],
+            package,
+            RpcLimits {
+                maximum_calls: 1,
+                ..Default::default()
+            },
+        )
+        .await;
+        let generation = prepare(&runtime).await;
+        let plan = runtime
+            .execution_registry()
+            .middleware(&generation)
+            .unwrap();
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let first = tokio::spawn({
+            let plan = plan.clone();
+            async move {
+                plan.handle(
+                    middleware_context(ClientTransport::HttpJson),
+                    MiddlewareRequest::new(
+                        "openai",
+                        middleware_headers(),
+                        Bytes::from_static(b"{}"),
+                    ),
+                    gateway_core::middleware::compose(Vec::new(), move |_| {
+                        Box::pin(async move {
+                            entered.send(()).unwrap();
+                            std::future::pending().await
+                        })
+                    }),
+                )
+                .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(3), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        let result = plan
+            .handle(
+                middleware_context(ClientTransport::HttpJson),
+                MiddlewareRequest::new("openai", middleware_headers(), Bytes::from_static(b"{}")),
+                gateway_core::middleware::compose(Vec::new(), |_| {
+                    Box::pin(async { panic!("RPC 过载不能跳过请求中间件") })
+                }),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(MiddlewareError::Gateway(error)) if error.kind() == gateway_core::error::GatewayErrorKind::MiddlewareCapacityUnavailable)
+        );
+        first.abort();
+        assert!(matches!(first.await, Err(error) if error.is_cancelled()));
+        drop(plan);
+        drop(generation);
+        runtime.shutdown().await;
+        super::super::wait_until_empty(cache.path()).await;
+    }
+}

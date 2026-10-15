@@ -264,6 +264,18 @@ fn rate_limited_error_should_map_to_openai_retryable_status() {
 }
 
 #[test]
+fn middleware_capacity_is_service_unavailable() {
+    assert_eq!(
+        gateway_error_contract(GatewayErrorKind::MiddlewareCapacityUnavailable),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_error",
+            "middleware_capacity_unavailable"
+        ),
+    );
+}
+
+#[test]
 fn queue_rejections_keep_distinct_retryable_http_codes() {
     for (kind, code) in [
         (

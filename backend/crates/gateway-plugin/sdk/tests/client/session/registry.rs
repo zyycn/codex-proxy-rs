@@ -297,3 +297,57 @@ async fn typed_key_and_quota_calls_keep_payloads_and_do_not_retry_failures() {
         }
     }
 }
+
+#[tokio::test]
+async fn managed_next_does_not_consume_the_bounded_ordinary_callback_budget() {
+    let (mut host, task) = start_configured_session(
+        TestHandler::default(),
+        MAXIMUM_STREAM_CHUNK_BYTES * 2,
+        SessionConfig {
+            maximum_calls: 4,
+            maximum_callbacks: 1,
+            ..Default::default()
+        },
+    )
+    .await;
+    send_call(&mut host, 1, "next_callback", json!({}), Vec::new()).await;
+    let Message::Callback {
+        id: next,
+        parent_id: 1,
+        method,
+        ..
+    } = receive(&mut host).await.message
+    else {
+        panic!("expected next callback")
+    };
+    assert_eq!(method, NEXT_METHOD);
+    send_call(&mut host, 3, "callback", json!({}), Vec::new()).await;
+    let Message::Callback {
+        id: ordinary,
+        parent_id: 3,
+        method,
+        ..
+    } = receive(&mut host).await.message
+    else {
+        panic!("next must not occupy ordinary callback capacity")
+    };
+    assert_eq!(method, "host.log");
+    send_call(&mut host, 5, "callback", json!({}), Vec::new()).await;
+    assert!(
+        matches!(receive(&mut host).await.message, Message::Error { id: 5, error } if error.code == ErrorCode::Capacity)
+    );
+    for (callback, parent) in [(ordinary, 3), (next, 1)] {
+        send_control(
+            &mut host,
+            Message::Result {
+                id: callback,
+                result: json!({}),
+            },
+        )
+        .await;
+        assert!(
+            matches!(receive(&mut host).await.message, Message::Result { id, .. } if id == parent)
+        );
+    }
+    shutdown(&mut host, task).await;
+}

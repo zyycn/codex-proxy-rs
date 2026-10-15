@@ -35,6 +35,7 @@ use tower::ServiceExt as _;
 
 #[derive(Clone, Copy, Debug)]
 enum Mode {
+    Overloaded,
     Rewrite,
     Upgrade {
         reject: bool,
@@ -142,6 +143,12 @@ impl MiddlewarePlan for Plan {
         let mode = self.mode;
         Box::pin(async move {
             match mode {
+                Mode::Overloaded => Err(MiddlewareError::Gateway(
+                    gateway_core::error::GatewayError::new(
+                        gateway_core::error::GatewayErrorKind::MiddlewareCapacityUnavailable,
+                        "Request middleware is temporarily busy",
+                    ),
+                )),
                 Mode::Service => unreachable!("service-only plan bypasses HTTP layers"),
                 Mode::Upgrade { reject, idle, .. } => {
                     let upgrade = request
@@ -658,4 +665,26 @@ async fn plugin_http_dispatch_uses_host_identity_without_client_credentials() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn http_middleware_overload_is_an_explicit_503_before_native_routing() {
+    let (router, plan) = router(Mode::Overloaded, None).await;
+    for path in [
+        "/healthz",
+        "/assets/index.js",
+        "/api/settings",
+        "/v1/responses",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "middleware_capacity_unavailable");
+    }
+    assert_eq!(plan.calls.load(Ordering::Acquire), 4);
 }

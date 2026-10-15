@@ -221,6 +221,7 @@ async fn recover_rpc(
         RpcError::Remote(fault) if fault.code == ErrorCode::Rejected
     );
     let delegate_safe = !rejected
+        && !error.is_overloaded()
         && !matches!(
             &error,
             RpcError::Remote(fault) if fault.send_state != SendState::NotSent

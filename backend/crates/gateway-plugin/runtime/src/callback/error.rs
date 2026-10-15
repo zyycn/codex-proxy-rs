@@ -20,6 +20,7 @@ pub(super) fn gateway(error: GatewayError) -> PluginFault {
         GatewayErrorKind::Unauthorized => ErrorCode::PermissionDenied,
         GatewayErrorKind::PolicyDenied => ErrorCode::Rejected,
         GatewayErrorKind::AccountCapacityUnavailable
+        | GatewayErrorKind::MiddlewareCapacityUnavailable
         | GatewayErrorKind::ConcurrencyQueueFull
         | GatewayErrorKind::ConcurrencyQueueTimeout
         | GatewayErrorKind::RateLimited
@@ -142,13 +143,22 @@ pub(crate) fn rpc(error: &crate::RpcError) -> PluginFault {
         RpcError::Remote(fault) => return fault.clone(),
         RpcError::Timeout => ErrorCode::Timeout,
         RpcError::Cancelled => ErrorCode::Cancelled,
-        RpcError::Capacity => ErrorCode::Capacity,
+        RpcError::Capacity | RpcError::Overloaded => ErrorCode::Capacity,
         _ => ErrorCode::Fault,
     };
     PluginFault::new(code, error.to_string())
 }
 
 pub(crate) fn rpc_middleware(error: crate::RpcError) -> MiddlewareError {
+    if error.is_overloaded() {
+        return MiddlewareError::Gateway(
+            GatewayError::new(
+                GatewayErrorKind::MiddlewareCapacityUnavailable,
+                "Request middleware is temporarily busy",
+            )
+            .with_source(gateway_core::error::ErrorSource::new(error)),
+        );
+    }
     let rejected =
         matches!(&error, crate::RpcError::Remote(fault) if fault.code == ErrorCode::Rejected);
     MiddlewareError::Remote {
