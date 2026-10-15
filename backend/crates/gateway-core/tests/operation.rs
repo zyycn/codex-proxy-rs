@@ -110,68 +110,6 @@ fn middleware_protocol_change_keeps_source_capability_facts_without_interpreting
 }
 
 #[test]
-fn native_encoding_keeps_admission_context_and_session_after_optional_translation() {
-    let context = Map::from_iter([("conversation_id".to_owned(), json!("conversation"))]);
-    let session = ProviderSessionState::new(
-        "xai",
-        Map::from_iter([("session_id".to_owned(), json!("session"))]),
-    )
-    .unwrap();
-    let request = GenerateRequest::from_protocol_payload(
-        ProtocolPayload::json_object(
-            "openai",
-            json!({"input":"hello", "max_output_tokens":64, "reasoning":{"effort":"high"}})
-                .as_object()
-                .unwrap()
-                .clone(),
-        )
-        .unwrap()
-        .with_context(context.clone()),
-    )
-    .with_provider_session_state(session.clone());
-    let original = Operation::Generate(request.clone());
-    let translated = original
-        .clone()
-        .replace_middleware_wire("native-input", Bytes::from_static(br#"{"prompt":"hello"}"#))
-        .unwrap();
-    let Operation::Generate(translated) = translated else {
-        panic!("generate request");
-    };
-
-    for (request, target) in [(request, "openai"), (translated, "xai")] {
-        let body = Map::from_iter([("native_prompt".to_owned(), json!("encoded"))]);
-        let encoded = request
-            .with_native_encoded_body(target, body.clone())
-            .unwrap();
-        assert_eq!(encoded.protocol_payload().protocol(), target);
-        assert_eq!(encoded.protocol_payload().body(), &body);
-        assert_eq!(encoded.protocol_payload().context(), &context);
-        assert_eq!(encoded.provider_session_state("xai"), Some(&session));
-        let operation = Operation::Generate(encoded);
-        assert_eq!(
-            operation.capability_requirements(),
-            original.capability_requirements()
-        );
-        assert!(
-            operation
-                .replace_middleware_wire("another", Bytes::from_static(b"{}"))
-                .is_err()
-        );
-    }
-}
-
-#[test]
-fn native_encoding_rejects_invalid_protocol_names() {
-    for name in ["", "invalid\nprotocol"] {
-        assert!(
-            generate(json!({"input":"hello"}))
-                .with_native_encoded_body(name, Map::new())
-                .is_err()
-        );
-    }
-}
-
-#[test]
 fn middleware_processing_recomputes_requirements_but_protocol_change_is_direct_once() {
     let operation = Operation::Generate(generate(json!({
         "model":"gpt-test",
@@ -333,68 +271,6 @@ fn provider_http_should_reject_urls_controls_and_unbounded_headers() {
             payload(),
         )
         .is_err()
-    );
-}
-
-#[test]
-fn provider_http_wire_replacement_keeps_frozen_target_and_validates_typed_headers() {
-    let operation = Operation::ProviderHttp(
-        ProviderHttpRequest::new(
-            "inspect",
-            ProviderHttpMethod::Post,
-            Some("mode=stable".to_owned()),
-            vec![ProviderHttpHeader::new(
-                "x-original",
-                Bytes::from_static(b"old"),
-            )],
-            RawHttpPayload::new("provider-http", Bytes::from_static(b"old-body"))
-                .expect("provider HTTP payload"),
-        )
-        .expect("provider HTTP request"),
-    );
-    assert!(
-        operation
-            .clone()
-            .replace_provider_http_wire(
-                None,
-                Map::new(),
-                vec![ProviderHttpHeader::new(
-                    "x-invalid",
-                    Bytes::from_static(b"line\r\nbreak"),
-                )],
-            )
-            .is_err()
-    );
-    let replacement = operation
-        .replace_provider_http_wire(
-            Some(Bytes::from_static(&[0x00, 0xff, b'n', b'e', b'w'])),
-            Map::from_iter([("connection_fact".to_owned(), json!("kept"))]),
-            vec![
-                ProviderHttpHeader::new("x-repeat", Bytes::from_static(&[0xff, 0xfe])),
-                ProviderHttpHeader::new("x-repeat", Bytes::from_static(b"two")),
-            ],
-        )
-        .expect("typed Provider HTTP replacement");
-    let Operation::ProviderHttp(request) = replacement else {
-        panic!("operation kind changed")
-    };
-    assert_eq!(request.endpoint(), "inspect");
-    assert_eq!(request.method(), ProviderHttpMethod::Post);
-    assert_eq!(request.query(), Some("mode=stable"));
-    assert_eq!(
-        request.payload().body().as_ref(),
-        &[0x00, 0xff, b'n', b'e', b'w']
-    );
-    assert_eq!(request.payload().context()["connection_fact"], "kept");
-    assert_eq!(request.headers().len(), 2);
-    assert_eq!(request.headers()[0].value().as_ref(), &[0xff, 0xfe]);
-    assert_eq!(request.headers()[1].value().as_ref(), b"two");
-
-    let generate = Operation::Generate(generate(json!({"model":"gpt-test"})));
-    assert!(
-        generate
-            .replace_provider_http_wire(None, Map::new(), Vec::new())
-            .is_err()
     );
 }
 

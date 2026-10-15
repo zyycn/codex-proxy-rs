@@ -395,6 +395,19 @@ fn retry_after_should_read_string_reset_timestamp() {
 }
 
 #[test]
+fn retry_after_should_ignore_elapsed_reset_timestamps_and_keep_later_advice() {
+    for reset_at in [json!(1), json!("1")] {
+        let mut body = json!({
+            "error": {"type": "usage_limit_reached", "resets_at": reset_at}
+        });
+        assert_eq!(retry_after_seconds_from_body(&body.to_string()), None);
+
+        body["retry_after_seconds"] = json!(7);
+        assert_eq!(retry_after_seconds_from_body(&body.to_string()), Some(7));
+    }
+}
+
+#[test]
 fn retry_after_should_read_nested_error_delay() {
     let body = json!({
         "type": "error",

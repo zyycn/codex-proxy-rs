@@ -638,7 +638,8 @@ fn provider_event_to_middleware_frame(
 
 fn encode_sse_wire_event(wire: &ProtocolWireEvent) -> Result<Bytes, ProviderError> {
     let mut encoded = Vec::new();
-    if let Some(id) = wire.sse_id() {
+    // 源事件元数据保持不透明；仅编码可表示为单行 SSE 字段的值，避免生成额外帧
+    if let Some(id) = wire.sse_id().filter(|id| !id.contains(['\r', '\n', '\0'])) {
         encoded.extend_from_slice(b"id: ");
         encoded.extend_from_slice(id.as_bytes());
         encoded.push(b'\n');
@@ -646,7 +647,10 @@ fn encode_sse_wire_event(wire: &ProtocolWireEvent) -> Result<Bytes, ProviderErro
     if let Some(retry) = wire.sse_retry() {
         encoded.extend_from_slice(format!("retry: {retry}\n").as_bytes());
     }
-    if let Some(event_type) = wire.event_type() {
+    if let Some(event_type) = wire
+        .event_type()
+        .filter(|event_type| !event_type.is_empty() && !event_type.contains(['\r', '\n']))
+    {
         encoded.extend_from_slice(b"event: ");
         encoded.extend_from_slice(event_type.as_bytes());
         encoded.push(b'\n');

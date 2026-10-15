@@ -1,6 +1,7 @@
 //! 观测领域事实到管理页面的展示投影
 
 use super::*;
+use gateway_core::metering::Usage;
 
 pub(crate) fn display_duration(value: Option<u64>) -> String {
     let Some(value) = value.and_then(|value| i64::try_from(value).ok()) else {
@@ -100,7 +101,7 @@ pub(crate) fn attempt_metrics_view(metrics: &domain::AttemptMetrics) -> AttemptM
 }
 
 pub(crate) fn token_details(record: &domain::UsageRecord) -> TokenDetailsView {
-    TokenDetailsView {
+    token_details_view(&Usage {
         input_tokens: record.input_tokens,
         output_tokens: record.output_tokens,
         cached_input_tokens: record.cached_input_tokens,
@@ -109,35 +110,11 @@ pub(crate) fn token_details(record: &domain::UsageRecord) -> TokenDetailsView {
         image_input_tokens: record.image_input_tokens,
         image_output_tokens: record.image_output_tokens,
         total_tokens: record.total_tokens,
-        input_tokens_display: record
-            .input_tokens
-            .map_or_else(|| "-".to_owned(), format_number),
-        output_tokens_display: record
-            .output_tokens
-            .map_or_else(|| "-".to_owned(), format_number),
-        cached_input_tokens_display: record
-            .cached_input_tokens
-            .map_or_else(|| "-".to_owned(), format_compact_number),
-        cache_write_input_tokens_display: record
-            .cache_write_input_tokens
-            .map_or_else(|| "-".to_owned(), format_compact_number),
-        reasoning_output_tokens_display: record
-            .reasoning_output_tokens
-            .map_or_else(|| "-".to_owned(), format_number),
-        image_input_tokens_display: record
-            .image_input_tokens
-            .map_or_else(|| "-".to_owned(), format_number),
-        image_output_tokens_display: record
-            .image_output_tokens
-            .map_or_else(|| "-".to_owned(), format_number),
-        total_tokens_display: record
-            .total_tokens
-            .map_or_else(|| "-".to_owned(), format_number),
-    }
+    })
 }
 
 pub(crate) fn usage_list_token_details(record: &domain::UsageListRecord) -> TokenDetailsView {
-    TokenDetailsView {
+    token_details_view(&Usage {
         input_tokens: record.input_tokens,
         output_tokens: record.output_tokens,
         cached_input_tokens: record.cached_input_tokens,
@@ -146,28 +123,41 @@ pub(crate) fn usage_list_token_details(record: &domain::UsageListRecord) -> Toke
         image_input_tokens: record.image_input_tokens,
         image_output_tokens: record.image_output_tokens,
         total_tokens: record.total_tokens,
-        input_tokens_display: record
+    })
+}
+
+fn token_details_view(usage: &Usage) -> TokenDetailsView {
+    TokenDetailsView {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        cache_write_input_tokens: usage.cache_write_input_tokens,
+        reasoning_output_tokens: usage.reasoning_output_tokens,
+        image_input_tokens: usage.image_input_tokens,
+        image_output_tokens: usage.image_output_tokens,
+        total_tokens: usage.total_tokens,
+        input_tokens_display: usage
             .input_tokens
             .map_or_else(|| "-".to_owned(), format_number),
-        output_tokens_display: record
+        output_tokens_display: usage
             .output_tokens
             .map_or_else(|| "-".to_owned(), format_number),
-        cached_input_tokens_display: record
+        cached_input_tokens_display: usage
             .cached_input_tokens
             .map_or_else(|| "-".to_owned(), format_compact_number),
-        cache_write_input_tokens_display: record
+        cache_write_input_tokens_display: usage
             .cache_write_input_tokens
             .map_or_else(|| "-".to_owned(), format_compact_number),
-        reasoning_output_tokens_display: record
+        reasoning_output_tokens_display: usage
             .reasoning_output_tokens
             .map_or_else(|| "-".to_owned(), format_number),
-        image_input_tokens_display: record
+        image_input_tokens_display: usage
             .image_input_tokens
             .map_or_else(|| "-".to_owned(), format_number),
-        image_output_tokens_display: record
+        image_output_tokens_display: usage
             .image_output_tokens
             .map_or_else(|| "-".to_owned(), format_number),
-        total_tokens_display: record
+        total_tokens_display: usage
             .total_tokens
             .map_or_else(|| "-".to_owned(), format_number),
     }

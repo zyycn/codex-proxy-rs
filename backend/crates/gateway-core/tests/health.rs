@@ -1,23 +1,9 @@
-//! 验证健康探针的对象安全接口与 Worker 身份投影
+//! 验证 Worker 健康状态的身份投影
 
-use futures::future::BoxFuture;
 use gateway_core::health::{
-    HealthProbe, HealthState, WorkerHealthKey, WorkerHealthSnapshot, WorkerHealthSource,
-    WorkerRuntimeState,
+    WorkerHealthKey, WorkerHealthSnapshot, WorkerHealthSource, WorkerRuntimeState,
 };
 use gateway_core::task::{WorkerId, WorkerKind};
-
-struct HealthyProbe;
-
-impl HealthProbe for HealthyProbe {
-    fn name(&self) -> &'static str {
-        "test"
-    }
-
-    fn check(&self) -> BoxFuture<'_, HealthState> {
-        Box::pin(async { HealthState::Healthy })
-    }
-}
 
 struct SingleSnapshot;
 
@@ -36,13 +22,6 @@ impl WorkerHealthSource for SingleSnapshot {
             last_error: None,
         }]
     }
-}
-
-#[test]
-fn health_probe_contract_is_object_safe() {
-    let probe: &dyn HealthProbe = &HealthyProbe;
-
-    assert_eq!(probe.name(), "test");
 }
 
 #[test]

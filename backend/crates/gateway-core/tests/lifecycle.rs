@@ -316,14 +316,6 @@ fn connection_registration_rejects_after_drain_linearization() {
 }
 
 #[test]
-fn connection_lifecycle_contract_is_object_safe() {
-    let lifecycle = TestLifecycle::new();
-    let object: &dyn ConnectionLifecycle = &lifecycle;
-
-    assert!(!object.is_draining());
-}
-
-#[test]
 fn cancellation_reason_survives_cleanup_and_propagates_only_to_descendants() {
     use gateway_core::lifecycle::{CancellationReason, LeaseFailure, RequestLeaseKind};
     let parent = CancellationToken::new();

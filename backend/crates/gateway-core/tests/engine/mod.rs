@@ -8,7 +8,6 @@ mod execution;
 mod extensions;
 mod middleware;
 mod policy;
-mod probe;
 mod provider;
 mod response_control;
 

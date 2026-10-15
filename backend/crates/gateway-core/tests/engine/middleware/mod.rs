@@ -510,6 +510,84 @@ fn attempt_passthrough_preserves_parsed_wire_for_every_client_transport() {
 }
 
 #[test]
+fn attempt_sse_encoding_keeps_opaque_metadata_from_creating_extra_frames() {
+    #[derive(Debug)]
+    struct InspectingPlan {
+        expected: &'static str,
+    }
+
+    impl MiddlewarePlan for InspectingPlan {
+        fn handle(
+            &self,
+            _: MiddlewareContext,
+            request: MiddlewareRequest,
+            next: MiddlewareNext,
+        ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
+            let expected = self.expected;
+            Box::pin(async move {
+                let (protocol, status, headers, mut body, envelope) =
+                    next.run(request).await?.into_parts();
+                let frame = body.next_frame().await?.expect("provider event");
+                assert_eq!(frame.bytes().as_ref(), expected.as_bytes());
+                Ok(MiddlewareResponse::new(protocol, status, headers, body)
+                    .with_envelope(envelope.expect("provider metadata")))
+            })
+        }
+    }
+
+    futures::executor::block_on(async {
+        for (event_type, id, expected) in [
+            (
+                "future.event",
+                "event-1",
+                "id: event-1\nretry: 10\nevent: future.event\ndata: {\"value\":1}\n\n",
+            ),
+            (
+                "future.event\ndata: injected\n\n",
+                "event-1\r\ndata: injected\r\n\r\n",
+                "retry: 10\ndata: {\"value\":1}\n\n",
+            ),
+            ("", "event\0id", "retry: 10\ndata: {\"value\":1}\n\n"),
+        ] {
+            let plan = FrozenMiddlewarePlan::new(
+                Arc::new(InspectingPlan { expected }),
+                ExtensionSetReference::new(
+                    ExtensionSetId::new("sse-metadata".to_owned()).unwrap(),
+                    Arc::new(ReadyGeneration),
+                ),
+            );
+            let wire = ProtocolWireEvent::json_with_sse_metadata(
+                "openai",
+                Some(event_type.to_owned()),
+                json!({"value":1}),
+                Some(id.to_owned()),
+                Some(10),
+            )
+            .unwrap();
+            let terminal: ProviderMiddlewareTerminal = Box::new(move |_, _| {
+                Box::pin(async move {
+                    Ok(ProviderStream::new(
+                        empty_provider_stream().metadata().clone(),
+                        stream::iter([Ok(ProviderEvent::wire(wire))]),
+                        (),
+                    ))
+                })
+            });
+
+            execute_attempt_middleware(
+                Some(&plan),
+                context(),
+                operation(),
+                ClientTransport::HttpSse,
+                terminal,
+            )
+            .await
+            .unwrap();
+        }
+    });
+}
+
+#[test]
 fn attempt_middleware_preserves_multi_value_and_authentication_headers() {
     futures::executor::block_on(async {
         let allowed_calls = Arc::new(AtomicUsize::new(0));

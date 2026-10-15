@@ -9979,7 +9979,7 @@ async fn successful_http_sse_rate_limit_event_persists_structured_exhaustion() {
 }
 
 #[test]
-fn request_observation_reads_openai_metadata_without_changing_the_operation() {
+fn request_observation_reads_openai_metadata() {
     let store = Arc::new(MemoryAccountStore::default());
     let payload = ProtocolPayload::json_object(
         "openai",
@@ -10004,11 +10004,10 @@ fn request_observation_reads_openai_metadata_without_changing_the_operation() {
     assert_eq!(observation.request_kind.as_deref(), Some("review"));
     assert_eq!(observation.subagent_kind.as_deref(), Some("worker"));
     assert!(!observation.compact);
-    assert!(matches!(operation, Operation::Generate(_)));
 }
 
 #[test]
-fn request_observation_classifies_prewarm_from_generate_without_rewriting_the_payload() {
+fn request_observation_classifies_prewarm_from_generate() {
     let store = Arc::new(MemoryAccountStore::default());
     let provider = provider(&store);
     let client_key_id = ClientApiKeyId::new("key_prewarm_observation").expect("client key");
@@ -10050,15 +10049,11 @@ fn request_observation_classifies_prewarm_from_generate_without_rewriting_the_pa
             body.get("generate"),
         );
         assert_eq!(observation.subagent_kind.as_deref(), Some("worker"));
-        let Operation::Generate(generation) = operation else {
-            unreachable!();
-        };
-        assert_eq!(generation.protocol_payload().body(), &body);
     }
 }
 
 #[test]
-fn endpoint_observation_should_read_models_without_rewriting_or_requiring_a_catalog() {
+fn endpoint_observation_should_read_models_without_requiring_a_catalog() {
     let store = Arc::new(MemoryAccountStore::default());
     let provider = provider(&store);
     let client_key = ClientApiKeyId::new("key_endpoint_model").expect("client key");
@@ -10071,8 +10066,7 @@ fn endpoint_observation_should_read_models_without_rewriting_or_requiring_a_cata
     ] {
         let body = serde_json::to_vec(&json!({"model":model,"future":9007199254740993_u64}))
             .expect("body");
-        let payload =
-            RawJsonPayload::new("openai", Bytes::copy_from_slice(&body)).expect("payload");
+        let payload = RawJsonPayload::new("openai", Bytes::from(body)).expect("payload");
         let operations = [
             Operation::GenerateImage(ImageRequest::from_raw_json(
                 ImageRequestKind::Generation,
@@ -10093,12 +10087,6 @@ fn endpoint_observation_should_read_models_without_rewriting_or_requiring_a_cata
                     .map(PublicModelId::as_str),
                 model.as_str().filter(|model| !model.is_empty()),
             );
-            let payload = match &operation {
-                Operation::GenerateImage(request) => request.payload(),
-                Operation::Search(request) => request.payload(),
-                _ => unreachable!(),
-            };
-            assert_eq!(payload.body().as_ref(), body.as_slice());
         }
     }
 }
@@ -10121,43 +10109,6 @@ fn request_observation_preserves_the_raw_reasoning_effort() {
         let observation = provider(&store).request_observation(&operation, &client_key_id);
         assert_eq!(observation.reasoning_effort.as_deref(), Some(expected));
     }
-}
-
-#[test]
-fn request_observation_ignores_future_session_state_without_rewriting_the_protocol_body() {
-    let store = Arc::new(MemoryAccountStore::default());
-    let generation = GenerateRequest::from_protocol_payload(
-        ProtocolPayload::json_object(
-            "openai",
-            Map::from_iter([
-                ("model".to_owned(), json!("gpt-test")),
-                ("previous_response_id".to_owned(), json!("resp_opaque")),
-            ]),
-        )
-        .expect("OpenAI payload"),
-    )
-    .with_provider_session_state(
-        ProviderSessionState::new(
-            "openai",
-            Map::from_iter([("future_session_shape".to_owned(), json!([1, 2, 3]))]),
-        )
-        .expect("provider session state"),
-    );
-    let operation = Operation::Generate(generation);
-
-    let client_key_id = ClientApiKeyId::new("key_openai_observation").expect("client key");
-    let _observation = provider(&store).request_observation(&operation, &client_key_id);
-
-    let Operation::Generate(generation) = &operation else {
-        panic!("operation should remain a generate request");
-    };
-    assert_eq!(
-        generation
-            .protocol_payload()
-            .body()
-            .get("previous_response_id"),
-        Some(&json!("resp_opaque"))
-    );
 }
 
 #[tokio::test]

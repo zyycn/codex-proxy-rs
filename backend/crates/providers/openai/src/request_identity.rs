@@ -1,5 +1,7 @@
 //! 请求正文与最终头部的会话身份解释，供账号亲和与传输编码共用
 
+use std::borrow::Cow;
+
 use serde_json::{Map, Value};
 
 /// 只有能识别出的后代线程禁止迁移会话；没有身份的普通客户端沿用现有调度
@@ -64,13 +66,15 @@ pub(crate) fn account_session_with_headers(
     {
         return Some(session);
     }
-    let mut context = context.clone();
+    let mut context = Cow::Borrowed(context);
     for (name, field) in [
         ("session-id", "session_id"),
         ("x-codex-turn-metadata", "turn_metadata"),
     ] {
         if let Some(value) = header(name) {
-            context.insert(field.to_owned(), Value::String(value.to_owned()));
+            context
+                .to_mut()
+                .insert(field.to_owned(), Value::String(value.to_owned()));
         }
     }
     gateway_protocol::openai::codex_account_session_id(body, &context)

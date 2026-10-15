@@ -548,7 +548,7 @@ fn engine_store_error_should_collapse_to_safe_internal_error() {
 
     let projected = gateway_error_from_engine(&error);
     assert_eq!(projected.kind(), GatewayErrorKind::Internal);
-    assert_eq!(projected.safe_message(), "gateway execution failed");
+    assert_eq!(projected.safe_message(), "request execution failed");
 }
 #[test]
 fn openai_error_response_should_preserve_only_safe_contract_fields() {

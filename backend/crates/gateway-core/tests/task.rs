@@ -6,7 +6,7 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::task::{
-    DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerCycleContext, WorkerDefinitionError,
+    DaemonRestartPolicy, ScheduledTask, WorkerCycleContext, WorkerDefinitionError,
     WorkerFencingToken, WorkerId, WorkerKind, WorkerLeaseRequest, WorkerRegistration,
     WorkerRunnable, WorkerSchedule, WorkerTaskError,
 };
@@ -18,14 +18,6 @@ impl ScheduledTask for NoopScheduledTask {
         &self,
         _context: WorkerCycleContext,
     ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
-struct NoopDaemonTask;
-
-impl DaemonTask for NoopDaemonTask {
-    fn run(&self, _cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async { Ok(()) })
     }
 }
@@ -133,15 +125,6 @@ fn worker_cycle_context_preserves_optional_fencing_token() {
         WorkerCycleContext::new(worker_id("openai"), Some(token), CancellationToken::new());
 
     assert_eq!(context.fencing_token(), Some(token));
-}
-
-#[test]
-fn scheduled_and_daemon_tasks_are_object_safe() {
-    fn accept_scheduled(_task: &dyn ScheduledTask) {}
-    fn accept_daemon(_task: &dyn DaemonTask) {}
-
-    accept_scheduled(&NoopScheduledTask);
-    accept_daemon(&NoopDaemonTask);
 }
 
 fn worker_id(owner: &str) -> WorkerId {

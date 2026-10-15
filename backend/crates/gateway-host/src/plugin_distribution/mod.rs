@@ -39,7 +39,11 @@ pub struct HttpPluginDistribution {
 
 impl HttpPluginDistribution {
     pub fn new(http: Arc<HttpClient>) -> Result<Self, AdminError> {
-        Self::with_transport("https://api.github.com/", http, source_network()?)
+        Self::with_transport(
+            "https://api.github.com/",
+            http,
+            NetworkPolicy::unrestricted(),
+        )
     }
 
     /// 测试可注入受限网络；生产来源由管理员显式配置，因此保持既有内外网可达范围
@@ -171,10 +175,6 @@ impl PluginDistribution for HttpPluginDistribution {
         .await
         .map_err(|_| AdminError::bad_gateway("插件下载超时，请重试"))?
     }
-}
-
-fn source_network() -> Result<NetworkPolicy, AdminError> {
-    NetworkPolicy::new(&["0.0.0.0/0".into(), "::/0".into()]).map_err(|_| source_error())
 }
 
 fn credential_ids(credentials: &[SourceCredential]) -> Vec<String> {

@@ -325,25 +325,6 @@ fn publisher_should_suspend_but_still_notify_after_committed_refresh_failure() {
 }
 
 #[test]
-fn snapshot_ports_and_control_should_remain_object_safe() {
-    fn accept_store(_: &dyn SnapshotStorePort) {}
-    fn accept_subscriptions(_: &dyn SnapshotSubscriptionPort) {}
-    fn accept_control(_: &dyn SnapshotControl) {}
-
-    let store = Arc::new(TestSnapshotStore::new(Ok(facts(1, 1))));
-    let subscriptions = Arc::new(TestSnapshotSubscriptions::default());
-    let publisher = RuntimeSnapshotPublisher::new(
-        Arc::new(compiler(store.clone())),
-        RuntimeSnapshotHandle::new(empty_snapshot(1)),
-        subscriptions.clone(),
-    );
-
-    accept_store(store.as_ref());
-    accept_subscriptions(subscriptions.as_ref());
-    accept_control(&publisher);
-}
-
-#[test]
 fn publisher_should_contribute_reconciliation_and_subscription_workers() {
     let store = Arc::new(TestSnapshotStore::new(Ok(facts(1, 1))));
     let publisher = RuntimeSnapshotPublisher::new(

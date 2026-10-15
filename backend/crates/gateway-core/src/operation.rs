@@ -464,29 +464,6 @@ impl GenerateRequest {
         self.payload.client_turn.as_ref()
     }
 
-    /// 写回原生 Provider 编码结果，保留已准入的能力、连接上下文和会话状态
-    ///
-    /// 原生编码不消耗中间件的一次跨协议改写额度：可以保留协议名，也可以在一次
-    /// 中间件改写后编码到 Provider wire
-    /// 调用方仍须验证保护字段没有被改动
-    ///
-    /// # Errors
-    ///
-    /// 目标协议名无效时返回错误
-    pub fn with_native_encoded_body(
-        mut self,
-        protocol: impl Into<String>,
-        body: Map<String, Value>,
-    ) -> Result<Self, OperationError> {
-        let encoded = ProtocolPayload::json_object(protocol, body)?
-            .with_context(self.protocol_payload().context().clone());
-        let requirements = self.requirements();
-        let payload = Arc::make_mut(&mut self.payload);
-        payload.protocol_payload = encoded;
-        payload.source_requirements = Some(requirements);
-        Ok(self)
-    }
-
     /// 附着同一客户端连接上一轮由 Provider 返回的不透明状态
     #[must_use]
     pub fn with_provider_session_state(mut self, state: ProviderSessionState) -> Self {
@@ -987,41 +964,6 @@ impl Operation {
         context: Map<String, Value>,
     ) -> Result<Self, OperationError> {
         self.replace_protocol_wire_inner(None, body, context)
-    }
-
-    /// 替换 Provider HTTP 正文、非 wire 上下文和已解析 headers，同时保持 endpoint、
-    /// method 与 query 不变
-    /// headers 继续由 [`ProviderHttpRequest::new`] 统一验证；
-    /// Core 不解析插件传输使用的 base64 表示
-    ///
-    /// # Errors
-    ///
-    /// 当前 operation 不是 Provider HTTP，或替换后的 headers 超出请求边界时返回错误
-    pub fn replace_provider_http_wire(
-        self,
-        body: Option<Bytes>,
-        context: Map<String, Value>,
-        headers: Vec<ProviderHttpHeader>,
-    ) -> Result<Self, OperationError> {
-        let Self::ProviderHttp(request) = self else {
-            return Err(OperationError::EmptyField {
-                field: "provider_http_request",
-            });
-        };
-        let payload = request.payload;
-        ProviderHttpRequest::new(
-            request.endpoint,
-            request.method,
-            request.query,
-            headers,
-            RawHttpPayload {
-                protocol: payload.protocol,
-                body: body.unwrap_or(payload.body),
-                context,
-                translated: payload.translated,
-            },
-        )
-        .map(Self::ProviderHttp)
     }
 
     /// 把一次已选择的协议转换结果写回 operation，同时保留非 wire 上下文和

@@ -59,9 +59,16 @@ fn cargo_library_root_is_conventional_lib() {
 fn workspace_production_files_have_no_hidden_modules_or_test_hooks() {
     for member in architecture::WORKSPACE_MEMBERS {
         let root = architecture::backend_root().join(member).join("src");
-        for relative in rust_files(&root) {
+        let sources = rust_files(&root);
+        assert!(!sources.is_empty(), "{member} has no production sources");
+        for relative in sources {
             let path = root.join(relative);
             let source = fs::read_to_string(&path).expect("read production source");
+            assert!(
+                !source.contains("#[cfg(test)]"),
+                "{} hosts tests in production src",
+                path.display()
+            );
             assert!(
                 !source.contains("include!("),
                 "{} uses include!",

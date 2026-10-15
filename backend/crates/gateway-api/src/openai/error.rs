@@ -13,6 +13,8 @@ use gateway_core::{
 };
 use serde_json::{Value, json};
 
+pub use gateway_core::engine::execution::gateway_error_from_engine;
+
 use super::responses::ProtocolErrorBody;
 
 /// OpenAI 风格错误响应
@@ -146,39 +148,6 @@ pub fn model_not_found_response() -> (StatusCode, Json<Value>) {
         "invalid_request_error",
         "model_not_found",
     )
-}
-
-/// 将 core Engine 错误收敛为稳定 Gateway 分类
-#[must_use]
-pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
-    match error {
-        EngineError::Provider(error) => GatewayError::from_provider(error),
-        EngineError::Cancelled => {
-            GatewayError::new(GatewayErrorKind::Cancelled, "request was cancelled")
-        }
-        EngineError::Deadline => {
-            GatewayError::new(GatewayErrorKind::Timeout, "gateway request timed out")
-        }
-        EngineError::ProviderNotRegistered { .. } | EngineError::EmptyRoutingPlan => {
-            GatewayError::new(
-                GatewayErrorKind::NoAvailableProvider,
-                "no upstream provider is currently available for this request",
-            )
-        }
-        EngineError::Store(source) => {
-            GatewayError::new(GatewayErrorKind::Internal, "gateway execution failed")
-                .with_source(source.clone())
-        }
-        EngineError::ProviderMetadataMismatch
-        | EngineError::ContinuationPinMismatch
-        | EngineError::RequiredAccountMismatch
-        | EngineError::AccountOutsideClientScope
-        | EngineError::DownstreamCommitRequired
-        | EngineError::NoActiveAttempt
-        | EngineError::InvalidDeliveryState => {
-            GatewayError::new(GatewayErrorKind::Internal, "gateway execution failed")
-        }
-    }
 }
 
 /// Gateway 错误的 OpenAI HTTP 表达

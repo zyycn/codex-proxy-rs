@@ -599,7 +599,7 @@ fn retry_after_seconds_from_resets_at(error: &Value) -> Option<u64> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs();
-    (resets_at > now).then_some(resets_at - now)
+    (resets_at > now).then(|| resets_at - now)
 }
 
 fn positive_u64(value: &Value) -> Option<u64> {

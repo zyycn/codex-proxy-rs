@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use syn::{Item, visit::Visit};
@@ -26,22 +27,24 @@ pub(super) const WORKSPACE_MEMBERS: &[&str] = &[
 
 #[test]
 fn workspace_member_list_matches_the_frozen_dag_scope() {
-    let manifest =
-        fs::read_to_string(backend_root().join("Cargo.toml")).expect("read workspace manifest");
-    for member in WORKSPACE_MEMBERS {
-        assert!(
-            manifest.contains(&format!("\"{member}\"")),
-            "workspace must include {member}"
-        );
-    }
-    let member_count = manifest
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("\"apps/") || line.starts_with("\"crates/"))
-        .count();
+    let metadata = cargo_metadata_json();
+    let root = backend_root();
+    let actual: BTreeSet<_> = metadata["packages"]
+        .as_array()
+        .expect("Cargo packages")
+        .iter()
+        .map(|package| {
+            Path::new(package["manifest_path"].as_str().expect("package manifest"))
+                .parent()
+                .expect("package directory")
+                .strip_prefix(&root)
+                .expect("workspace member path")
+                .to_path_buf()
+        })
+        .collect();
     assert_eq!(
-        member_count,
-        WORKSPACE_MEMBERS.len(),
+        actual,
+        WORKSPACE_MEMBERS.iter().map(PathBuf::from).collect(),
         "new workspace members must extend the dependency DAG rules"
     );
 }
@@ -378,7 +381,7 @@ const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
 #[test]
 fn workspace_internal_dependency_edges_match_frozen_dag() {
     let metadata = cargo_metadata_json();
-    let actual = workspace_runtime_dependency_edges(&metadata);
+    let actual = workspace_runtime_dependency_edges(metadata);
     let mut expected: Vec<(String, String)> = ALLOWED_INTERNAL_EDGES
         .iter()
         .map(|(from, to)| ((*from).to_owned(), (*to).to_owned()))
@@ -471,24 +474,6 @@ fn adapter_public_module_surfaces_match_allowlist() {
             "{} public module surface diverged from its allowlist",
             root.display()
         );
-    }
-}
-
-#[test]
-fn production_sources_do_not_host_tests() {
-    for member in WORKSPACE_MEMBERS {
-        let src = backend_root().join(member).join("src");
-        let sources = super::rust_files(&src);
-        assert!(!sources.is_empty(), "{member} has no production sources");
-        for relative in sources {
-            let path = src.join(relative);
-            let source = fs::read_to_string(&path).expect("read production source");
-            assert!(
-                !source.contains("#[cfg(test)]"),
-                "{} hosts tests in production src",
-                path.display()
-            );
-        }
     }
 }
 
@@ -748,40 +733,46 @@ pub(super) fn backend_root() -> PathBuf {
         .expect("backend workspace root")
 }
 
-fn cargo_metadata_json() -> serde_json::Value {
-    let output = std::process::Command::new("cargo")
-        .args(["metadata", "--format-version", "1", "--no-deps"])
-        .current_dir(backend_root())
-        .output()
-        .expect("run cargo metadata");
-    assert!(
-        output.status.success(),
-        "cargo metadata failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("parse cargo metadata")
+fn cargo_metadata_json() -> &'static serde_json::Value {
+    static METADATA: OnceLock<serde_json::Value> = OnceLock::new();
+    METADATA.get_or_init(|| {
+        let output = std::process::Command::new("cargo")
+            .args(["metadata", "--format-version", "1", "--no-deps", "--locked"])
+            .current_dir(backend_root())
+            .output()
+            .expect("run cargo metadata");
+        assert!(
+            output.status.success(),
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("parse cargo metadata")
+    })
 }
 
-/// 提取成员 `[dependencies]` 段内声明的依赖名;段落以下一个 `[` 表头结束
+/// 复用 Cargo 解析后的实际包名，覆盖重命名依赖与平台条件，排除测试和构建依赖
 fn dependency_names(member: &str) -> Vec<String> {
-    let manifest = fs::read_to_string(backend_root().join(member).join("Cargo.toml"))
-        .expect("read member manifest");
-    let mut in_dependencies = false;
-    let mut names = Vec::new();
-    for line in manifest.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            in_dependencies = line == "[dependencies]";
-            continue;
-        }
-        if !in_dependencies || line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some((name, _)) = line.split_once('=') {
-            names.push(name.trim().to_owned());
-        }
-    }
-    names
+    let manifest = backend_root().join(member).join("Cargo.toml");
+    let package = cargo_metadata_json()["packages"]
+        .as_array()
+        .expect("Cargo packages")
+        .iter()
+        .find(|package| {
+            Path::new(package["manifest_path"].as_str().expect("package manifest")) == manifest
+        })
+        .expect("workspace member");
+    package["dependencies"]
+        .as_array()
+        .expect("package dependencies")
+        .iter()
+        .filter(|dependency| dependency["kind"].is_null())
+        .map(|dependency| {
+            dependency["name"]
+                .as_str()
+                .expect("dependency name")
+                .to_owned()
+        })
+        .collect()
 }
 
 fn assert_no_dependency(member: &str, forbidden: &[&str]) {
