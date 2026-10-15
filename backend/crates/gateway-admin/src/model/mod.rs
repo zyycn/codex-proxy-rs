@@ -24,6 +24,7 @@ pub mod quota_forecast_sampling;
 pub mod retention;
 pub mod settings;
 pub mod system;
+pub mod usage_data;
 
 /// 管理用例对外返回的稳定错误分类
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

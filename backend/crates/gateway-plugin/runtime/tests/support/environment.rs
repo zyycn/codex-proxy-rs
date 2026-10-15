@@ -720,6 +720,17 @@ impl Environment {
         self.admin.close().await;
     }
 
+    pub async fn audit_actor_refs(&self, action: &str) -> Vec<String> {
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "select actor_ref from {}.admin_audit_events where action=$1 order by created_at",
+            self.schema
+        )))
+        .bind(action)
+        .fetch_all(&self.admin)
+        .await
+        .unwrap()
+    }
+
     pub async fn audit_requests(&self, action: &str) -> Vec<String> {
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "select admin_request_id from {}.admin_audit_events where action = $1 order by created_at",

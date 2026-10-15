@@ -185,6 +185,7 @@ impl AdminTestFixture {
             plugin_ports.clone(),
             plugin_ports.clone(),
             plugin_ports.clone(),
+            plugin_ports.clone(),
         );
         let providers: Vec<Arc<dyn ProviderAdmin>> = vec![
             Arc::new(UnusedProvider::new("openai", Arc::clone(&provider_error))),

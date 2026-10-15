@@ -433,6 +433,33 @@ impl ProviderAdmin for OpenAiAdminProvider {
         }))
     }
 
+    fn evaluate_usage_pricing(
+        &self,
+        input: &gateway_admin::ports::provider::ProviderUsagePricingInput,
+        pricing: Option<&gateway_core::metering::ModelPriceOverride>,
+    ) -> Result<Option<gateway_core::metering::CalculatedCostBreakdown>, ProviderAdminError> {
+        let (Some(input_tokens), Some(output_tokens), Some(cached), Some(written)) = (
+            input.usage.input_tokens,
+            input.usage.output_tokens,
+            input.usage.cached_input_tokens,
+            input.usage.cache_write_input_tokens,
+        ) else {
+            return Ok(None);
+        };
+        if input.usage.image_input_tokens != Some(0) || input.usage.image_output_tokens != Some(0) {
+            return Ok(None);
+        }
+        let usage = OpenAiBillingUsage::new(input_tokens, output_tokens, cached, written);
+        Ok(
+            crate::transport::usage::openai_billing_breakdown_with_override(
+                &input.upstream_model_id,
+                usage,
+                input.service_tier.as_deref(),
+                pricing,
+            ),
+        )
+    }
+
     async fn prepare_import(
         &self,
         command: PrepareCredentialImport,

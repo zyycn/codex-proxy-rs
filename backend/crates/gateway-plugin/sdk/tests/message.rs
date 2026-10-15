@@ -23,6 +23,7 @@ fn diagnostics_do_not_render_peer_payloads_or_error_details() {
     assert!(!format!("{frame:?} {fault:?}").contains(secret));
 }
 
+#[cfg(feature = "io")]
 #[tokio::test]
 async fn malformed_frame_metadata_retains_the_native_json_location() {
     use std::error::Error as _;

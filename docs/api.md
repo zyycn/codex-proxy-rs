@@ -2106,6 +2106,8 @@ Host 关闭或任务取消会记录失败终态；状态查询会收敛无执行
 配置完整则启用，缺少必填项则保留为待配置。操作流程见 [插件使用](plugins.md)，开发合同见
 [SDK](../backend/crates/gateway-plugin/sdk/README.md)。不提供官方商店或第三方市场订阅接口
 
+插件通过类型化公开服务维护请求明细、聚合统计并试算费用，接口与数值合同见 [SDK 用量维护与计价](../backend/crates/gateway-plugin/sdk/docs/usage-data.md)。聚合参与原生总量与趋势，不增加请求明细列表条目
+
 ### 安装包与来源
 
 | 方法 | 路径 | 行为 |

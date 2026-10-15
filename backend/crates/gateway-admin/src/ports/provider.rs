@@ -26,6 +26,14 @@ use crate::model::{
     quota_forecast_sampling::QuotaForecastObservation,
 };
 
+/// 按原生 Token 口径计算的报价输入，额外费用由调用方处理
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderUsagePricingInput {
+    pub upstream_model_id: String,
+    pub service_tier: Option<String>,
+    pub usage: gateway_core::metering::Usage,
+}
+
 /// Provider 管理失败的稳定分类
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderAdminErrorKind {
@@ -159,6 +167,14 @@ pub trait ProviderAdmin: Send + Sync {
     /// 只读内置价目；没有本地计价能力的 Provider 返回空目录
     fn pricing_catalog(&self) -> crate::model::pricing::ProviderPricingCatalog {
         Default::default()
+    }
+
+    fn evaluate_usage_pricing(
+        &self,
+        _input: &ProviderUsagePricingInput,
+        _pricing: Option<&gateway_core::metering::ModelPriceOverride>,
+    ) -> Result<Option<gateway_core::metering::CalculatedCostBreakdown>, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
     fn provider_kind(&self) -> &ProviderKind;

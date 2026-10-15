@@ -39,6 +39,7 @@ pub use use_case::{
     proxies::ProxiesService,
     settings::SettingsService,
     system::SystemService,
+    usage_data::UsageDataService,
 };
 
 use model::AdminError;
@@ -217,6 +218,7 @@ pub struct AdminServices {
     client_distribution: Arc<dyn ClientDistributionService>,
     observability: Arc<dyn ObservabilityService>,
     settings: Arc<dyn SettingsService>,
+    usage_data: Arc<dyn UsageDataService>,
     system: Arc<dyn SystemService>,
     credentials: Arc<CredentialsService>,
     // Runtime 只持有 Weak，这个强引用保障账号端口与 Admin 服务同寿命
@@ -283,6 +285,11 @@ impl AdminServices {
     #[must_use]
     pub fn client_distribution(&self) -> &dyn ClientDistributionService {
         self.client_distribution.as_ref()
+    }
+
+    #[must_use]
+    pub fn usage_data(&self) -> &dyn UsageDataService {
+        self.usage_data.as_ref()
     }
 
     #[must_use]
@@ -467,8 +474,10 @@ async fn initialize_inner(
         registry.clone(),
         pricing_source,
     );
+    let usage_data = initialize_usage_data(store.usage_data(), store.settings(), registry.clone());
     let mut public_services = public_service::Registry::new(service_middleware);
     public_services.register_settings(&settings)?;
+    public_services.register_usage_data(&usage_data)?;
     let services = AdminServices {
         timezone,
         public_services: Arc::new(public_services),
@@ -514,6 +523,7 @@ async fn initialize_inner(
             timezone,
         )),
         settings,
+        usage_data,
         system,
         credentials,
         _plugin_accounts: plugin_accounts,
@@ -642,5 +652,17 @@ pub fn initialize_settings(
         snapshot,
         providers,
         pricing_source,
+    ))
+}
+
+/// HTTP、插件及 CLI 共用的用量领域用例，宿主提供已验证的调用主体
+#[must_use]
+pub fn initialize_usage_data(
+    store: Arc<dyn ports::usage_data::UsageDataStore>,
+    settings: Arc<dyn ports::store::SettingsStore>,
+    providers: ProviderAdminRegistry,
+) -> Arc<dyn UsageDataService> {
+    Arc::new(use_case::usage_data::DefaultUsageDataService::new(
+        store, settings, providers,
     ))
 }

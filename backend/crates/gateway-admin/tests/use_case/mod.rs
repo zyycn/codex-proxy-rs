@@ -15,6 +15,7 @@ mod plugins;
 mod proxies;
 mod settings;
 mod system;
+mod usage_data;
 
 use std::{
     str::FromStr,
@@ -271,6 +272,7 @@ impl AdminHarness {
                 self.settings,
                 self.backup,
                 self.plugin_store,
+                Arc::new(plugins::TestPluginPorts),
                 Arc::new(plugins::TestPluginPorts),
                 Arc::new(plugins::TestPluginPorts),
             ),

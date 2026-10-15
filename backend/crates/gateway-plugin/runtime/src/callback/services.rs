@@ -49,6 +49,7 @@ impl ServicePorts {
         context: &CallContext,
         scope: &CallbackScope,
         cancellation: gateway_core::lifecycle::CancellationToken,
+        actor: gateway_admin::model::usage_data::UsageActor,
         params: serde_json::Value,
         payload: &[u8],
     ) -> Result<RpcReply, PluginFault> {
@@ -84,7 +85,11 @@ impl ServicePorts {
                 gateway_admin::public_service::Plan::Frozen(Some(origin.plan.clone()))
             }),
         };
-        let result = gateway_admin::public_service::scope(parent, call).await;
+        let result = gateway_admin::public_service::scope_actor(
+            actor,
+            gateway_admin::public_service::scope(parent, call),
+        )
+        .await;
         encode(result)
     }
 }

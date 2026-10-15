@@ -3,6 +3,7 @@
 pub(crate) mod accounts;
 mod aggregate;
 mod buckets;
+mod contributions;
 mod counts;
 mod forecast;
 mod histogram;

@@ -14,3 +14,4 @@ pub mod proxy;
 pub mod retention;
 pub mod store;
 pub mod system;
+pub mod usage_data;

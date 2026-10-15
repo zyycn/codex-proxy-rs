@@ -403,6 +403,8 @@ restore_and_validate_response(response).await
 仅实现中间件时也可使用轻量的 `MiddlewarePlugin`；需要与管理或其他方法组合时使用
 `PluginBuilder`，两者复用相同的类型化调用与结果合同
 
+用量明细、聚合维护与费用试算使用 `call::services::usage`，输入输出和批量语义见 [用量维护与计价](usage-data.md)
+
 ### 扩展的组合边界
 
 请求处理沿 `request middleware → 原生选路与选号 → attempt middleware → 原生上游或 upstream_adapter` 推进，

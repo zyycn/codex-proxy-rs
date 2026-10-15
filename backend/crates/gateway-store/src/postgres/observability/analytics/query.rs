@@ -9,12 +9,13 @@ pub(crate) struct AnalyticsSnapshot<'a> {
     approximate: bool,
 }
 
-struct ReadSelection<'a> {
-    distributions: bool,
-    costs: bool,
-    keys: Option<&'a [String]>,
-    counters: Option<&'a [&'a str]>,
-    distribution_names: Option<&'a [&'a str]>,
+#[derive(Clone, Copy)]
+pub(super) struct ReadSelection<'a> {
+    pub(super) distributions: bool,
+    pub(super) costs: bool,
+    pub(super) keys: Option<&'a [String]>,
+    pub(super) counters: Option<&'a [&'a str]>,
+    pub(super) distribution_names: Option<&'a [&'a str]>,
 }
 
 impl<'a> AnalyticsSnapshot<'a> {
@@ -107,7 +108,7 @@ impl<'a> AnalyticsSnapshot<'a> {
 
     pub async fn totals(&mut self) -> StoreResult<DashboardTotals> {
         self.require_visible(None)?;
-        let bounds=sqlx::query("select (select started_at from request_analytics_facts order by started_at,id limit 1) as first_started_at,(select started_at from request_analytics_facts order by started_at desc,id desc limit 1) as last_started_at")
+        let bounds=sqlx::query("select least((select started_at from request_analytics_facts order by started_at,id limit 1),(select bucket_start from request_analytics_1h where collection='usage_contribution' order by bucket_start limit 1)) as first_started_at,greatest((select started_at from request_analytics_facts order by started_at desc,id desc limit 1),(select bucket_start from request_analytics_1h where collection='usage_contribution' order by bucket_start desc limit 1)) as last_started_at")
             .fetch_one(&mut *self.tx).await.map_err(|error|postgres_unavailable("read retained analytics bounds",error))?;
         let start =
             get::<Option<DateTime<Utc>>>(&bounds, "first_started_at")?.unwrap_or_else(Utc::now);
@@ -363,7 +364,10 @@ impl<'a> AnalyticsSnapshot<'a> {
                 first_token_p95_ms: state
                     .percentile("first_token_ms", 0.95)
                     .map(|value| value.round() as u64),
-                non_completion_count: metrics.cancelled_count + metrics.incomplete_count,
+                non_completion_count: metrics
+                    .cancelled_count
+                    .checked_add(metrics.incomplete_count)
+                    .ok_or_else(|| invalid("non-completion count overflow"))?,
                 retry_count: state.count("retry_count"),
                 retried_request_count: state.count("retried_request_count"),
                 cost_coverage: state.coverage(),
@@ -476,6 +480,21 @@ impl<'a> AnalyticsSnapshot<'a> {
                 query.push(format!(" and {column}=")).push_bind(reference);
             }
             query.push(format!(" group by {column}"));
+        }
+        if filter.outcome.is_none() {
+            // 贡献也在数据库内参与 TopN，避免有补录时退回加载全部账号或 Key
+            let index = if dimension == DiagnosticDimension::Account {
+                3
+            } else {
+                4
+            };
+            query.push(format!(" union all select dimensions[{index}] as key,coalesce((counts->>'request_count')::bigint,0) as request_count from request_analytics_1h where collection='usage_contribution' and dimensions[{index}]<>'' and bucket_start >= "))
+                .push_bind(range.start).push(" and bucket_start < ").push_bind(range.end);
+            if let Some(reference) = reference {
+                query
+                    .push(format!(" and dimensions[{index}]="))
+                    .push_bind(reference);
+            }
         }
         query.push("), grouped as (select key,sum(request_count)::bigint as request_count from contributions group by key) select key,request_count,sum(request_count) over()::bigint as total_request_count from grouped order by request_count desc,");
         if dimension == DiagnosticDimension::Account {
@@ -593,6 +612,34 @@ impl<'a> AnalyticsSnapshot<'a> {
     }
 
     async fn load_selected(
+        &mut self,
+        range: ObservabilityRange,
+        filter: &UsageRecordFilter,
+        dimension: Option<DiagnosticDimension>,
+        granularity: Option<ObservationGranularity>,
+        timezone: gateway_core::time::DeploymentTimeZone,
+        selection: ReadSelection<'_>,
+    ) -> StoreResult<BTreeMap<(DateTime<Utc>, String), MetricState>> {
+        let mut states = self
+            .load_native_selected(range, filter, dimension, granularity, timezone, selection)
+            .await?;
+        self.merge_contributions(
+            super::contributions::ContributionQuery {
+                range,
+                filter,
+                dimension,
+                granularity,
+                timezone,
+                account_models: None,
+                selection,
+            },
+            &mut states,
+        )
+        .await?;
+        Ok(states)
+    }
+
+    async fn load_native_selected(
         &mut self,
         range: ObservabilityRange,
         filter: &UsageRecordFilter,

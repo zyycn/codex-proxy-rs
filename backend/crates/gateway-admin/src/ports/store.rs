@@ -565,9 +565,15 @@ pub struct AdminStorePorts {
     plugins: Arc<dyn super::plugins::PluginStore>,
     plugin_state: Arc<dyn super::plugins::PluginStateStore>,
     plugin_resources: Arc<dyn super::plugin_resources::PluginResourceStore>,
+    usage_data: Arc<dyn super::usage_data::UsageDataStore>,
 }
 
 impl AdminStorePorts {
+    #[must_use]
+    pub fn usage_data(&self) -> Arc<dyn super::usage_data::UsageDataStore> {
+        self.usage_data.clone()
+    }
+
     #[must_use]
     pub fn plugin_resources(&self) -> Arc<dyn super::plugin_resources::PluginResourceStore> {
         self.plugin_resources.clone()
@@ -598,6 +604,7 @@ impl AdminStorePorts {
         plugins: Arc<dyn super::plugins::PluginStore>,
         plugin_state: Arc<dyn super::plugins::PluginStateStore>,
         plugin_resources: Arc<dyn super::plugin_resources::PluginResourceStore>,
+        usage_data: Arc<dyn super::usage_data::UsageDataStore>,
     ) -> Self {
         Self {
             accounts,
@@ -609,6 +616,7 @@ impl AdminStorePorts {
             plugins,
             plugin_state,
             plugin_resources,
+            usage_data,
         }
     }
 

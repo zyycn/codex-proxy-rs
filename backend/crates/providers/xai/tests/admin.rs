@@ -1385,3 +1385,26 @@ impl gateway_core::diagnostics::OperationalDiagnostics for RecordingDiagnostics 
         Ok(())
     }
 }
+
+#[tokio::test]
+async fn usage_quote_reuses_native_priority_prices() {
+    use gateway_admin::ports::provider::ProviderUsagePricingInput;
+    use gateway_core::metering::Usage;
+    let bundle = provider_xai::initialize(provider_ports()).await.unwrap();
+    let admin = bundle.admin_provider();
+    let input = ProviderUsagePricingInput {
+        upstream_model_id: "grok-4.5".into(),
+        service_tier: Some("priority".into()),
+        usage: Usage {
+            input_tokens: Some(100),
+            output_tokens: Some(10),
+            cached_input_tokens: Some(25),
+            cache_write_input_tokens: Some(0),
+            image_input_tokens: Some(0),
+            image_output_tokens: Some(0),
+            ..Default::default()
+        },
+    };
+    let price = admin.evaluate_usage_pricing(&input, None).unwrap().unwrap();
+    assert_eq!(price.total_amount().amount().canonical(), "0.000435");
+}

@@ -1,5 +1,7 @@
 //! 插件管理 HTTP 测试入口，以及制品、实例与权限合同测试
 
+mod usage_data;
+
 use async_trait::async_trait;
 use gateway_admin::model::plugins::distribution::{
     DownloadedPlugin, GithubReleaseQuery, PluginRelease, RemotePluginLocation, SourceCredential,

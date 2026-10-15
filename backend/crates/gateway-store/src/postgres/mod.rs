@@ -20,6 +20,7 @@ mod query_pattern;
 mod retention;
 mod runtime_settings;
 mod snapshot;
+mod usage_data;
 mod usage_facts;
 
 pub use account_groups::*;
@@ -44,6 +45,7 @@ use query_pattern::literal_prefix_pattern;
 pub use retention::*;
 pub use runtime_settings::*;
 pub use snapshot::*;
+pub use usage_data::PgUsageDataStore;
 pub(crate) use usage_facts::{
     completed_usage_fact_predicate, push_completed_usage_fact_filter,
     push_unrecovered_request_filter,

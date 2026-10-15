@@ -188,6 +188,22 @@ impl NativeAdmin {
 
 #[async_trait]
 impl ProviderAdmin for NativeAdmin {
+    fn evaluate_usage_pricing(
+        &self,
+        _: &gateway_admin::ports::provider::ProviderUsagePricingInput,
+        _: Option<&gateway_core::metering::ModelPriceOverride>,
+    ) -> Result<Option<gateway_core::metering::CalculatedCostBreakdown>, ProviderAdminError> {
+        use gateway_core::metering::*;
+        let zero = Money::new(Decimal::ZERO, CurrencyCode::new("USD").unwrap());
+        let total = Money::new("1.25".parse().unwrap(), CurrencyCode::new("USD").unwrap());
+        Ok(Some(CalculatedCostBreakdown::new(
+            CalculatedCostAmounts::new(total, zero, zero, zero, total, total),
+            CalculatedCostRates::new(total, zero, zero, zero),
+            None,
+            100,
+        )))
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.0
     }

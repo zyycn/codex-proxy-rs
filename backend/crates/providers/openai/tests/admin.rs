@@ -2776,3 +2776,40 @@ impl gateway_core::diagnostics::OperationalDiagnostics for RecordingDiagnostics 
         Ok(())
     }
 }
+
+#[tokio::test]
+async fn usage_quote_reuses_native_override_and_reports_incomplete_input() {
+    use gateway_admin::ports::provider::ProviderUsagePricingInput;
+    use gateway_core::metering::{ModelPriceOverride, Usage};
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .unwrap();
+    let admin = bundle.admin_provider();
+    let mut input = ProviderUsagePricingInput {
+        upstream_model_id: "gpt-6-sol".into(),
+        service_tier: None,
+        usage: Usage {
+            input_tokens: Some(1_000_000),
+            output_tokens: Some(100_000),
+            cached_input_tokens: Some(200_000),
+            cache_write_input_tokens: Some(0),
+            image_input_tokens: Some(0),
+            image_output_tokens: Some(0),
+            ..Default::default()
+        },
+    };
+    let custom:ModelPriceOverride=serde_json::from_value(json!({"multiplierBps":10000,"bands":{"standard":{"input":"2","output":"10","cacheRead":"0.5","cacheWrite":"2"},"long_standard":{"input":"2","output":"10","cacheRead":"0.5","cacheWrite":"2"}}})).unwrap();
+    let price = admin
+        .evaluate_usage_pricing(&input, Some(&custom))
+        .unwrap()
+        .unwrap();
+    assert_eq!(price.total_amount().amount().canonical(), "2.7");
+    input.usage.cached_input_tokens = None;
+    assert!(
+        admin
+            .evaluate_usage_pricing(&input, Some(&custom))
+            .unwrap()
+            .is_none()
+    );
+}

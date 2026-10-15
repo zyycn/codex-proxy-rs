@@ -81,6 +81,7 @@ impl PluginCallbackPorts {
 
 pub(crate) struct PluginCallbacks {
     services: Arc<services::ServicePorts>,
+    service_actor: gateway_admin::model::usage_data::UsageActor,
     accounts: Arc<accounts::PluginAccounts>,
     resources: Arc<resources::PluginResources>,
     data: Arc<data::PluginData>,
@@ -108,6 +109,11 @@ impl PluginCallbacks {
     ) -> Result<Self, AdminError> {
         Ok(Self {
             services: ports.services,
+            service_actor: gateway_admin::model::usage_data::UsageActor::Plugin {
+                publisher: manifest.publisher.clone(),
+                name: manifest.name.clone(),
+                instance_id: instance.id.clone(),
+            },
             resources: Arc::new(resources::PluginResources::new(instance, ports.resources)),
             data: Arc::new(data::PluginData::new(
                 ports.accounts.clone(),
@@ -386,6 +392,7 @@ impl CallbackHandler for PluginCallbacks {
         let models = self.models.clone();
         let affinity = self.affinity.clone();
         let services = self.services.clone();
+        let service_actor = self.service_actor.clone();
         Box::pin(async move {
             let call = call.ok_or_else(denied)?;
             let scope = &call.scope;
@@ -432,7 +439,14 @@ impl CallbackHandler for PluginCallbacks {
             }
             if method == gateway_plugin_sdk::call::services::CALL_METHOD {
                 return services
-                    .call(&context, scope, call.cancellation.clone(), params, &payload)
+                    .call(
+                        &context,
+                        scope,
+                        call.cancellation.clone(),
+                        service_actor,
+                        params,
+                        &payload,
+                    )
                     .await;
             }
             if is_private_state {

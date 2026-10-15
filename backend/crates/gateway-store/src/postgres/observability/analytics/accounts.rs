@@ -27,6 +27,58 @@ impl AnalyticsSnapshot<'_> {
         account_ids: &[String],
         by_model: bool,
     ) -> StoreResult<AccountStates> {
+        let native = self
+            .native_account_states(range, account_ids, by_model)
+            .await?;
+        let mut states = BTreeMap::new();
+        for (key, value) in native {
+            states.insert(
+                (
+                    range.start,
+                    serde_json::to_string(&key)
+                        .map_err(|_| invalid("encode aggregate account key"))?,
+                ),
+                value,
+            );
+        }
+        let filter = UsageRecordFilter::default();
+        self.merge_contributions(
+            super::contributions::ContributionQuery {
+                range,
+                filter: &filter,
+                dimension: None,
+                granularity: None,
+                timezone: Default::default(),
+                account_models: Some(by_model),
+                selection: super::query::ReadSelection {
+                    distributions: false,
+                    costs: true,
+                    keys: Some(account_ids),
+                    counters: None,
+                    distribution_names: None,
+                },
+            },
+            &mut states,
+        )
+        .await?;
+        states
+            .into_iter()
+            .map(|((_, key), value)| {
+                Ok((
+                    serde_json::from_str(&key)
+                        .map_err(|_| invalid("decode aggregate account key"))?,
+                    value,
+                ))
+            })
+            .collect()
+    }
+
+    async fn native_account_states(
+        &mut self,
+        range: ObservabilityRange,
+        account_ids: &[String],
+        by_model: bool,
+    ) -> StoreResult<AccountStates> {
         if account_ids.is_empty() {
             return Ok(BTreeMap::new());
         }

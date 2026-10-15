@@ -97,8 +97,14 @@ pub(super) async fn rebuild_bucket_batch(
             "request_analytics_1h"
         };
         let start = if phase == 0 { bucket } else { hour };
+        // 调用方贡献独立保存在小时表，完整小时查询不额外依赖十五分钟表
+        let retained = if phase == 3 {
+            " and collection<>'usage_contribution'"
+        } else {
+            ""
+        };
         let statement = format!(
-            "delete from {table} where ctid in (select ctid from {table} where bucket_start=$1 limit $2)"
+            "delete from {table} where ctid in (select ctid from {table} where bucket_start=$1{retained} limit $2)"
         );
         let removed = sqlx::query(sqlx::AssertSqlSafe(statement))
             .bind(start)

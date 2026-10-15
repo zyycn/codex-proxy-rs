@@ -57,14 +57,18 @@ pub(super) async fn reset_obsolete_batch(
         _ => return Err(invalid("invalid analytics reset phase")),
     };
     let mut query = QueryBuilder::<Postgres>::new(format!(
-        "with batch as materialized (select ctid,{keys} from {table}"
+        "with batch as materialized (select ctid,{keys} from {table} where true"
     ));
+    // 手工维护的统计贡献是输入数据，不属于可丢弃的请求投影
+    if phase == 3 {
+        query.push(" and collection<>'usage_contribution'");
+    }
     let cursor = get::<Option<sqlx::types::Json<ResetCursor>>>(&state, "reset_cursor")?;
     // LIMIT 只限制删除数量，主键下界才避免后续批次反复扫描已经清空的堆页
     match cursor.map(|cursor| cursor.0) {
         None => {}
         Some(ResetCursor::Fact { id }) if phase == 1 => {
-            query.push(" where id > ").push_bind(id);
+            query.push(" and id > ").push_bind(id);
         }
         Some(ResetCursor::Rollup {
             bucket_start,
@@ -73,7 +77,7 @@ pub(super) async fn reset_obsolete_batch(
             outcome,
         }) if phase == 2 || phase == 3 => {
             query
-                .push(" where (bucket_start,collection,dimensions,outcome) > (")
+                .push(" and (bucket_start,collection,dimensions,outcome) > (")
                 .push_bind(bucket_start)
                 .push(",")
                 .push_bind(collection)
@@ -84,7 +88,7 @@ pub(super) async fn reset_obsolete_batch(
                 .push(")");
         }
         Some(ResetCursor::Bucket { bucket_start }) if phase == 4 => {
-            query.push(" where bucket_start > ").push_bind(bucket_start);
+            query.push(" and bucket_start > ").push_bind(bucket_start);
         }
         Some(_) => return Err(invalid("analytics reset cursor does not match its phase")),
     }

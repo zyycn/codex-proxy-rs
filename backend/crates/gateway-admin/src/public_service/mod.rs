@@ -1,7 +1,10 @@
 //! 主动服务调用的统一组合入口；普通业务方法由所属 HTTP 或执行边界包裹
 
+mod actor;
 mod registry;
 mod settings;
+mod usage_data;
+pub use actor::scope_actor;
 pub use registry::Registry;
 
 use std::{future::Future, sync::Arc};

@@ -18,6 +18,7 @@ pub mod plugins;
 pub mod proxies;
 pub mod settings;
 pub mod system;
+pub mod usage_data;
 
 mod credential_mutation;
 mod error;

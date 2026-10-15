@@ -25,7 +25,7 @@ SDK 处于实验阶段；能力是否可用取决于宿主支持、清单声明�
 | `call::frontend_authentication` | 数据面认证信封、认证器标识与外部 principal 结果 |
 | `call::model` | 宿主模型调用的 canonical 事实、原生 wire 与有界事件编解码 |
 | `call::middleware` | HTTP、WebSocket 消息、公开服务、模型请求及 attempt 的洋葱调用、单次 next 与惰性正文合同 |
-| `call::services` | 公开服务的类型化操作、输入输出及错误合同 |
+| `call::services` | 公开服务的类型化操作、输入输出及错误合同；`usage` 提供[用量维护与计价](docs/usage-data.md) |
 | `call::upstream_adapter` | 内置 OpenAI / xAI 的[受管上游适配器](docs/upstream-adapters.md)注册、执行、出站与续接合同 |
 | `call::policy` | 模型路由、账号调度与重试决策合同 |
 | `call::catalog` | 固定 Provider 的模型别名注册合同 |
@@ -112,6 +112,8 @@ sequenceDiagram
 CPR_UPDATE_SERVICE_CONTRACT=1 RUST_MIN_STACK=16777216 cargo +1.97.0 test --manifest-path backend/Cargo.toml -p gateway-admin --test main sdk_settings_contract_matches_host_declarations --locked
 cargo +1.97.0 fmt --all --manifest-path backend/Cargo.toml
 ```
+
+用量服务合同由 Admin 与 SDK 分别持有，`sdk_wire_types_match_host_contracts` 检查数值、明细、聚合、查询和计价类型一致性；修改合同需同步两侧类型与 [使用说明](docs/usage-data.md)
 
 SDK 自身的验证命令：
 

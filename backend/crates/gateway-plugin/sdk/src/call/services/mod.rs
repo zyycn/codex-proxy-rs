@@ -1,6 +1,7 @@
 //! 公开服务的类型化操作合同；名称用于分派，不承担授权
 
 pub mod settings;
+pub mod usage;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
