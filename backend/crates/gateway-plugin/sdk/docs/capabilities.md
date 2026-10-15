@@ -295,7 +295,8 @@ request/response extensions 与连接升级状态。上传转换使用单帧有�
 `host.middleware.next` 与 `host.http.body_*` 复用当前调用的 HTTP 资源池；已消费的 next 或正文句柄不能再消费一次。
 读取 EOF 或转交正文会消费读取句柄；SDK 在 EOF 后继续读取返回 `None`，重复关闭不发起 RPC。
 `body.close().await` 只关闭正文，仍可替换正文并返回原响应；响应部件保留到返回响应或调用资源池释放。
-插件进程已经启动本次 HTTP 调用后，故障不会自动重放下游；无法启动且绑定为 `delegate` 时才直接委托
+绑定为 `delegate` 时，插件进程不可用或宿主无法预留 RPC 调用槽位，会直接委托原始 HTTP 请求，保留正文背压、headers 与 extensions。
+绑定为 `reject` 时仍拒绝请求；调用获准进入插件后，错误、超时或插件返回的容量不足都不会自动重放下游
 
 `HostClient::dispatch_http(HttpRequest)` 主动调用宿主相对路径，复用相同的路由、HTTP 洋葱链与惰性正文资源，不通过网络回环。
 `HttpCall.call_id` 和 `parent_call_id` 表达父子关系，`context.request_id` 保持同一请求关联；子调用沿已冻结的计划运行并跳过所有发起祖先实例，最多嵌套 4 层。

@@ -29,6 +29,30 @@ pub(super) async fn invoke(
             Err(MiddlewareError::Fault)
         };
     };
+    if context.cancellation.is_cancelled() {
+        return Err(MiddlewareError::Fault);
+    }
+    // 只对准入失败执行绑定回退；发送后的 Capacity 也可能是会话故障，不能重放请求
+    let reserved = match ports.session.reserve_stream_call() {
+        Ok(reserved) => reserved,
+        Err(error) => {
+            let delegate = entry.failure_policy == PluginFailurePolicy::Delegate;
+            tracing::warn!(
+                plugin_id = entry.plugin_id,
+                instance_id = entry.instance_id,
+                request_id = context.request_id,
+                call_id = context.call_id,
+                error_kind = error.diagnostic().0,
+                delegate,
+                "HTTP 插件调用未获准入，按绑定故障策略处理"
+            );
+            return if delegate {
+                next.run(request).await
+            } else {
+                Err(crate::callback::error::rpc_middleware(error))
+            };
+        }
+    };
     let settings_sources = request
         .extensions()
         .get::<core::Settings>()
@@ -58,7 +82,7 @@ pub(super) async fn invoke(
     let mut stream = tokio::select! {
         biased;
         () = context.cancellation.cancelled() => return Err(MiddlewareError::Fault),
-        result = ports.session.call_stream(HANDLE_METHOD, call, serde_json::to_value(wire::Call { settings_sources, request_id: context.request_id, call_id: context.call_id, parent_call_id: context.parent_call_id, request }).map_err(|_| MiddlewareError::InvalidState)?, Vec::new()) => result.map_err(crate::callback::error::rpc_middleware)?,
+        result = reserved.call(HANDLE_METHOD, call, serde_json::to_value(wire::Call { settings_sources, request_id: context.request_id, call_id: context.call_id, parent_call_id: context.parent_call_id, request }).map_err(|_| MiddlewareError::InvalidState)?, Vec::new()) => result.map_err(crate::callback::error::rpc_middleware)?,
     };
     let response: wire::Response = ports
         .session

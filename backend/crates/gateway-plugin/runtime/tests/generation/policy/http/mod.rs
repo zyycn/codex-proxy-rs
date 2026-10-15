@@ -1,5 +1,6 @@
 //! 验证真实插件 HTTP 中间件的请求改写、流式转换与短路响应
 
+mod capacity;
 mod dispatch;
 mod websocket;
 
@@ -28,6 +29,19 @@ async fn http_plugin_with_limits(
     ExtensionSetReference,
     gateway_core::engine::middleware::FrozenMiddlewarePlan,
 ) {
+    http_plugin_with_policy(mode, limits, PluginFailurePolicy::Reject).await
+}
+
+async fn http_plugin_with_policy(
+    mode: &str,
+    limits: RpcLimits,
+    failure_policy: PluginFailurePolicy,
+) -> (
+    tempfile::TempDir,
+    PluginRuntime,
+    ExtensionSetReference,
+    gateway_core::engine::middleware::FrozenMiddlewarePlan,
+) {
     let worker = std::fs::read(env!("CARGO_BIN_EXE_gateway-plugin-test-middleware")).unwrap();
     let package = crate::support::package_with_contributions(
         &worker,
@@ -42,12 +56,7 @@ async fn http_plugin_with_limits(
         vec![InstanceFixture {
             id: "http-plugin",
             configuration: serde_json::json!({"http":true,"mode":mode}),
-            bindings: vec![binding(
-                MIDDLEWARE_CONTRIBUTION,
-                "http",
-                0,
-                PluginFailurePolicy::Reject,
-            )],
+            bindings: vec![binding(MIDDLEWARE_CONTRIBUTION, "http", 0, failure_policy)],
         }],
         package,
         limits,
