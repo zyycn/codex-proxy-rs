@@ -24,7 +24,7 @@ impl RetentionPolicy {
         audit_days: u32,
     ) -> Result<(), &'static str> {
         for (valid, field) in [
-            (usage_days >= 31, "usage_retention_days"),
+            ((1..=31).contains(&usage_days), "usage_retention_days"),
             (ops_days > 0, "ops_event_retention_days"),
             (audit_days > 0, "audit_retention_days"),
         ] {
@@ -38,7 +38,7 @@ impl RetentionPolicy {
     pub fn try_new(usage_days: u32, ops_days: u32, audit_days: u32) -> Result<Self, AdminError> {
         if Self::validate_values(usage_days, ops_days, audit_days).is_err() {
             return Err(AdminError::invalid(
-                "请求保留期至少 31 天，事件与审计保留期必须为正数",
+                "请求保留期必须为 1～31 天，事件与审计保留期必须为正数",
             ));
         }
         Ok(Self {

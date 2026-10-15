@@ -295,8 +295,7 @@ async fn incremental_deletions_repair_extrema_last_usage_and_zero_currency_prese
             .await
             .unwrap();
     assert_eq!(costs, serde_json::json!({}));
-    sqlx::query("select enqueue_request_analytics('extrema_3',$1)")
-        .bind(hour() + TimeDelta::minutes(3))
+    sqlx::query("select enqueue_request_analytics('extrema_3')")
         .execute(&database.pool)
         .await
         .unwrap();

@@ -55,7 +55,7 @@ impl<'a> AnalyticsSnapshot<'a> {
         })
     }
 
-    pub async fn require_visible(&mut self, range: Option<ObservabilityRange>) -> StoreResult<()> {
+    pub fn require_visible(&self, range: Option<ObservabilityRange>) -> StoreResult<()> {
         if self.status.building
             && !range.is_some_and(|range| {
                 self.status
@@ -68,34 +68,7 @@ impl<'a> AnalyticsSnapshot<'a> {
                 "request analytics has not backfilled the complete requested range",
             ));
         }
-        // 未知旧桶与已知范围分开查，避免通用计划为 OR 选择扫描全部删除积压
-        // 时间移动和未 ACK 的投影会使队列旧桶偏离当前事实，删除可见性必须同时检查事实所在范围
-        let deletion_pending: bool = if let Some(range) = range {
-            let lower = range
-                .start
-                .checked_sub_signed(TimeDelta::minutes(15))
-                .ok_or_else(|| invalid("analytics deletion boundary overflow"))?;
-            let (intersects, any): (bool, bool) = sqlx::query_as("select exists(select 1 from request_analytics_pending_requests where deletion_pending and previous_bucket is null) or exists(select 1 from request_analytics_pending_requests where deletion_pending and previous_bucket > $1 and previous_bucket < $2), exists(select 1 from request_analytics_pending_requests where deletion_pending)")
-                .bind(lower).bind(range.end).fetch_one(&mut *self.tx).await
-                .map_err(|error|postgres_unavailable("check analytics deletion visibility",error))?;
-            if intersects || !any {
-                intersects
-            } else {
-                // 没有待删版本时不引用 facts，使完整干净桶保持只读汇总的路径
-                sqlx::query_scalar("select exists(select 1 from request_analytics_pending_requests p join request_analytics_facts f on f.id=p.request_id where p.deletion_pending and f.started_at >= $1 and f.started_at < $2)")
-                    .bind(range.start).bind(range.end).fetch_one(&mut *self.tx).await
-                    .map_err(|error|postgres_unavailable("check projected analytics deletion visibility",error))?
-            }
-        } else {
-            sqlx::query_scalar("select exists(select 1 from request_analytics_pending_requests where deletion_pending)")
-                .fetch_one(&mut *self.tx).await
-                .map_err(|error|postgres_unavailable("check analytics deletion visibility",error))?
-        };
-        if deletion_pending {
-            return Err(unavailable(
-                "request analytics is removing deleted source contributions in this range; retry after projection",
-            ));
-        }
+        // 源清理尚未投影时继续读取已发布事实，Worker 在同一事务撤销事实与汇总贡献
         Ok(())
     }
 
@@ -133,7 +106,7 @@ impl<'a> AnalyticsSnapshot<'a> {
     }
 
     pub async fn totals(&mut self) -> StoreResult<DashboardTotals> {
-        self.require_visible(None).await?;
+        self.require_visible(None)?;
         let bounds=sqlx::query("select (select started_at from request_analytics_facts order by started_at,id limit 1) as first_started_at,(select started_at from request_analytics_facts order by started_at desc,id desc limit 1) as last_started_at")
             .fetch_one(&mut *self.tx).await.map_err(|error|postgres_unavailable("read retained analytics bounds",error))?;
         let start =
@@ -440,7 +413,7 @@ impl<'a> AnalyticsSnapshot<'a> {
         limit: u16,
     ) -> StoreResult<(u64, Vec<String>)> {
         filter.validate()?;
-        self.require_visible(Some(range)).await?;
+        self.require_visible(Some(range))?;
         let (collection, column, reference) = if dimension == DiagnosticDimension::Account {
             (
                 "account",
@@ -636,7 +609,7 @@ impl<'a> AnalyticsSnapshot<'a> {
             distribution_names,
         } = selection;
         filter.validate()?;
-        self.require_visible(Some(range)).await?;
+        self.require_visible(Some(range))?;
         let selected = collection_for(filter, dimension);
         let boundaries = if granularity == Some(ObservationGranularity::Day) {
             Some(calendar_buckets(range, timezone)?)

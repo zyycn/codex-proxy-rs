@@ -62,7 +62,7 @@ fn update_body() -> Value {
         "smartScheduling": gateway_core::account::SmartSchedulingConfig::default(),
         "minCodexDesktopVersion": "26.825.6671",
         "minCodexCliVersion": "0.40.0",
-        "usageRetentionDays": 32,
+        "usageRetentionDays": 31,
         "opsEventRetentionDays": 31,
         "auditRetentionDays": 91,
         "accountAutoFreezeEnabled": true,
@@ -216,6 +216,56 @@ fn settings_request_should_reject_unknown_rotation_strategy() {
     assert_eq!(request.validate().unwrap_err().field(), "rotationStrategy");
 }
 
+#[tokio::test]
+async fn short_request_retention_round_trips_and_invalid_days_do_not_replace_it() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let mut body = update_body();
+    for days in [1, 3, 7, 15, 30, 31] {
+        body["usageRetentionDays"] = json!(days);
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved = response_json(response).await;
+        assert_eq!(saved["data"]["usageRetentionDays"], days);
+        body["configRevision"] = saved["data"]["configRevision"].clone();
+    }
+    for (days, expected_status) in [
+        (json!(0), StatusCode::BAD_REQUEST),
+        (json!(32), StatusCode::BAD_REQUEST),
+        (json!(u32::MAX), StatusCode::BAD_REQUEST),
+        (json!(-1), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!(1.5), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!(null), StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        body["usageRetentionDays"] = days;
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected_status);
+    }
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["data"]["usageRetentionDays"],
+        31
+    );
+}
+
 #[test]
 fn settings_request_accepts_unlimited_default_account_concurrency() {
     let mut body = update_body();
@@ -298,7 +348,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             smart_scheduling: gateway_core::account::SmartSchedulingConfig::default(),
             min_codex_desktop_version: Some("26.825.6671".to_owned()),
             min_codex_cli_version: Some("0.40.0".to_owned()),
-            usage_retention_days: 32,
+            usage_retention_days: 31,
             ops_event_retention_days: 31,
             audit_retention_days: 91,
             account_auto_freeze_enabled: true,
@@ -349,7 +399,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "smartSchedulingDefaults": gateway_core::account::SmartSchedulingConfig::default(),
             "minCodexDesktopVersion": "26.825.6671",
             "minCodexCliVersion": "0.40.0",
-            "usageRetentionDays": 32,
+            "usageRetentionDays": 31,
             "opsEventRetentionDays": 31,
             "auditRetentionDays": 91,
             "accountAutoFreezeEnabled": true,

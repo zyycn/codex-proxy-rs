@@ -13,6 +13,7 @@ import ClientProfileCard from './components/ClientProfileCard.vue'
 import ConcurrencyPolicyCard from './components/ConcurrencyPolicyCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import PrivacyPolicyCard from './components/privacy/PrivacyPolicyCard.vue'
+import RequestHistoryCard from './components/RequestHistoryCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import SettingsAccessSection from './components/SettingsAccessSection.vue'
@@ -24,7 +25,7 @@ import PricingSection from './pricing/index.vue'
 const route = useRoute()
 const router = useRouter()
 const sectionOptions = [
-  { label: '网关调度', value: 'runtime' },
+  { label: '运行设置', value: 'runtime' },
   { label: '上游配置', value: 'upstream' },
   { label: '模型定价', value: 'pricing' },
   { label: '安全与访问', value: 'access' },
@@ -69,6 +70,7 @@ const {
   maxWaitingPerAccountValue,
   concurrencyWaitTimeoutSecondsValue,
   responsesMaxDecompressedBodyMiBValue,
+  usageRetentionDaysValue,
   accountAutoFreezeThresholdValue,
   accountAutoFreezeWindowSecondsValue,
   accountAutoFreezeDurationSecondsValue,
@@ -92,7 +94,7 @@ watch(section, (value) => {
 
 <template>
   <div class="w-full" :class="section === 'pricing' ? 'flex h-[calc(100dvh-2rem)] flex-none! flex-col min-[961px]:h-[calc(100dvh-3rem)]' : undefined">
-    <ZPageHeader title="系统设置" description="管理网关调度、上游配置、模型定价、安全访问与数据备份" />
+    <ZPageHeader title="系统设置" description="配置网关调度、上游与定价，管理访问安全、历史保留与备份" />
 
     <div class="mt-4 flex min-h-cp-control shrink-0 flex-wrap items-center justify-between gap-3">
       <ZSegmented
@@ -181,6 +183,7 @@ watch(section, (value) => {
             v-model:schedule-time="form.accountWarmupScheduleTime"
             v-model:model="form.accountWarmupModel"
           />
+          <RequestHistoryCard v-model="usageRetentionDaysValue" />
         </template>
 
         <div v-if="visited.has('upstream')" v-show="section === 'upstream'" class="grid min-w-0 gap-5">

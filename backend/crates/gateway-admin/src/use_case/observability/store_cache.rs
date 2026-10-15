@@ -1,4 +1,4 @@
-//! 有界统计缓存：身份和完整筛选参与键，删除版本阻止旧数据复活
+//! 有界统计缓存：身份和完整筛选参与键，统计发布代次使旧快照失效
 
 use crate::model::observability::*;
 use crate::ports::store::{
@@ -121,7 +121,7 @@ impl<K: Eq + Hash, T: AnalyticsValue> Cache<K, T> {
         };
         // 同键刷新只执行一次；失败不会缓存成成功，也不延长旧结果寿命
         let mut cached = slot.lock().await;
-        // 等锁期间代次可能推进；取得同键锁后再核对，失败时也不能回用已删除事实
+        // 等锁期间代次可能推进；取得同键锁后再核对，失败时也不能回用已被新统计替代的快照
         let generation = store.analytics_cache_generation().await?;
         if let Some(entry) = cached.as_mut()
             && entry.value.metadata().generation == generation

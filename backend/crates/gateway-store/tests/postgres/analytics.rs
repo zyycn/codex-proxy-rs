@@ -300,8 +300,7 @@ async fn projection_replay_late_ops_and_deletion_preserve_exact_contributions() 
     let with_ops = repo.usage_summary(range, Default::default()).await.unwrap();
     assert_eq!(with_ops.attempts.failure_count, 1);
     assert_eq!(with_ops.attempts.rate_limited_count, 1);
-    sqlx::query("select enqueue_request_analytics('req_analytics_a',$1)")
-        .bind(start)
+    sqlx::query("select enqueue_request_analytics('req_analytics_a')")
         .execute(&database.pool)
         .await
         .unwrap();
@@ -317,9 +316,12 @@ async fn projection_replay_late_ops_and_deletion_preserve_exact_contributions() 
         .execute(&database.pool)
         .await
         .unwrap();
-    assert!(
-        repo.usage_summary(range, Default::default()).await.is_err(),
-        "deleted contributions cannot be returned as a new generation"
+    let pending = repo.usage_summary(range, Default::default()).await.unwrap();
+    assert_eq!(pending.requests.request_count, 1);
+    assert_eq!(pending.attempts.failure_count, 1);
+    assert_eq!(
+        pending.analytics.state,
+        gateway_admin::model::observability::AnalyticsState::Lagging
     );
     drain_analytics(&database.pool).await;
     let deleted = repo.usage_summary(range, Default::default()).await.unwrap();
@@ -450,10 +452,13 @@ async fn historical_deletion_does_not_block_disjoint_recent_statistics() {
         1
     );
     let history = ObservabilityRange::new(now - TimeDelta::days(30), now).unwrap();
-    assert!(
+    assert_eq!(
         repo.usage_summary(history, Default::default())
             .await
-            .is_err()
+            .unwrap()
+            .requests
+            .request_count,
+        2
     );
     drain_analytics(&database.pool).await;
     assert_eq!(
@@ -989,7 +994,7 @@ async fn persisted_histograms_merge_long_tails_and_distinguish_empty_from_zero()
 }
 
 #[tokio::test]
-async fn source_deletions_do_not_deadlock_with_worker_publication() {
+async fn source_deletions_do_not_block_worker_publication() {
     use sqlx::Connection;
     for backfill in [false, true] {
         let Some(database) = TestDatabase::create("analytics_delete_publication").await else {
@@ -1010,26 +1015,17 @@ async fn source_deletions_do_not_deadlock_with_worker_publication() {
         let mut source = sqlx::PgConnection::connect_with(&database.pool.connect_options())
             .await
             .unwrap();
-        let source_pid: i32 = sqlx::query_scalar("select pg_backend_pid()")
-            .fetch_one(&mut source)
-            .await
-            .unwrap();
         sqlx::raw_sql("begin;delete from model_requests where id='delete_a'")
             .execute(&mut source)
             .await
             .unwrap();
         let worker =
             PgRequestAnalyticsRepository::new(database.pool.clone(), observability_query_budget());
-        let running = tokio::spawn(async move { worker.maintain(10).await });
-        // 源事务先持有 generation，确认真实 Worker 到达发布或回填游标的锁等待
-        tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            loop {
-                let waiting: bool = sqlx::query_scalar("select exists(select 1 from pg_stat_activity where wait_event_type='Lock' and $1=any(pg_blocking_pids(pid)) and query like 'update request_analytics_build_state%')")
-                    .bind(source_pid).fetch_one(&database.pool).await.unwrap();
-                if waiting { break; }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        }).await.expect("worker reached build-state publication");
+        // 源删除只登记待处理版本，不持有统计发布行，Worker 可以独立完成发布
+        tokio::time::timeout(std::time::Duration::from_secs(2), worker.maintain(10))
+            .await
+            .expect("source deletion must not block analytics publication")
+            .unwrap();
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
             sqlx::query("delete from model_requests where id='delete_b'").execute(&mut source),
@@ -1038,8 +1034,6 @@ async fn source_deletions_do_not_deadlock_with_worker_publication() {
         .expect("source deletion cannot wait for worker ACK")
         .expect("source deletion cannot be a deadlock victim");
         sqlx::query("commit").execute(&mut source).await.unwrap();
-        // RR 事务允许因源提交而重试，但源请求删除不能承受死锁回滚
-        let _ = running.await.unwrap();
         drain_analytics(&database.pool).await;
         let remaining: i64 = sqlx::query_scalar("select count(*) from request_analytics_facts")
             .fetch_one(&database.pool)
@@ -1087,10 +1081,9 @@ async fn worker_skips_locked_versions_and_preserves_a_concurrent_source_deletion
             .execute(&mut source)
             .await
             .unwrap();
-        let pending: (i64, bool) = sqlx::query_as("select change_version,deletion_pending from request_analytics_pending_requests where request_id='locked_ack'")
+        let pending: i64 = sqlx::query_scalar("select change_version from request_analytics_pending_requests where request_id='locked_ack'")
             .fetch_one(&database.pool).await.expect("new source version cannot be acknowledged by old projection");
-        assert!(pending.0 > new_version);
-        assert!(pending.1);
+        assert!(pending > new_version);
         drain_analytics(&database.pool).await;
         assert_eq!(worker.status().await.unwrap().pending_requests, 0);
         let remaining: i64 = sqlx::query_scalar("select count(*) from request_analytics_facts")
@@ -1182,7 +1175,7 @@ async fn committed_queue_versions_skip_old_ack_and_replay_without_losing_contrib
 }
 
 #[tokio::test]
-async fn parent_cascades_invalidate_once_and_explicit_ops_mutations_keep_their_contribution() {
+async fn parent_cascades_and_ops_deletions_publish_statistics_asynchronously() {
     let Some(database) = TestDatabase::create("analytics_cascade_generation").await else {
         return;
     };
@@ -1206,18 +1199,20 @@ async fn parent_cascades_invalidate_once_and_explicit_ops_mutations_keep_their_c
         .await
         .unwrap();
     assert_eq!(
-        after,
-        before + 1,
-        "the parent statement owns cascade invalidation"
+        after, before,
+        "source cleanup keeps the published generation"
     );
-    drain_analytics(&database.pool).await;
-    sqlx::query("update ops_events set failure_kind='authentication',status_code=401 where id='event_ops_survivor'")
-        .execute(&database.pool).await.unwrap();
-    drain_analytics(&database.pool).await;
     let repo = observability_repository(&database.pool);
     let range =
         ObservabilityRange::new(start - TimeDelta::minutes(1), start + TimeDelta::minutes(5))
             .unwrap();
+    let published = repo.usage_summary(range, Default::default()).await.unwrap();
+    assert_eq!(published.requests.request_count, 3);
+    assert_eq!(published.attempts.failure_count, 3);
+    drain_analytics(&database.pool).await;
+    sqlx::query("update ops_events set failure_kind='authentication',status_code=401 where id='event_ops_survivor'")
+        .execute(&database.pool).await.unwrap();
+    drain_analytics(&database.pool).await;
     let changed = repo.usage_summary(range, Default::default()).await.unwrap();
     assert_eq!(changed.attempts.auth_failure_count, 1);
     assert_eq!(changed.attempts.rate_limited_count, 0);
@@ -1233,8 +1228,10 @@ async fn parent_cascades_invalidate_once_and_explicit_ops_mutations_keep_their_c
         .fetch_one(&database.pool)
         .await
         .unwrap();
-    assert_eq!(after, before + 1);
-    assert!(repo.usage_summary(range, Default::default()).await.is_err());
+    assert_eq!(after, before);
+    let pending = repo.usage_summary(range, Default::default()).await.unwrap();
+    assert_eq!(pending.requests.request_count, 1);
+    assert_eq!(pending.attempts.auth_failure_count, 1);
     drain_analytics(&database.pool).await;
     let deleted = repo.usage_summary(range, Default::default()).await.unwrap();
     assert_eq!(deleted.requests.request_count, 1);
@@ -1243,16 +1240,16 @@ async fn parent_cascades_invalidate_once_and_explicit_ops_mutations_keep_their_c
 }
 
 #[tokio::test]
-async fn source_move_then_delete_hides_the_still_projected_old_bucket() {
-    assert_moved_deletion_is_hidden(false).await;
+async fn source_move_then_delete_keeps_the_published_bucket_until_projection() {
+    assert_moved_deletion_converges(false).await;
 }
 
 #[tokio::test]
-async fn unacknowledged_move_then_delete_hides_the_current_fact_bucket() {
-    assert_moved_deletion_is_hidden(true).await;
+async fn unacknowledged_move_then_delete_keeps_the_published_bucket_until_projection() {
+    assert_moved_deletion_converges(true).await;
 }
 
-async fn assert_moved_deletion_is_hidden(project_without_ack: bool) {
+async fn assert_moved_deletion_converges(project_without_ack: bool) {
     let Some(database) = TestDatabase::create("analytics_moved_delete").await else {
         return;
     };
@@ -1269,7 +1266,7 @@ async fn assert_moved_deletion_is_hidden(project_without_ack: bool) {
     .await;
     drain_analytics(&database.pool).await;
     if project_without_ack {
-        // 第一条待处理版本记录 A，随后源时间移到 B，队列仍保留最早的桶
+        // 连续源变更仍只占一个队列位置，ACK 必须比较精确版本
         sqlx::query("update model_requests set total_tokens=240 where id='moved_delete'")
             .execute(&database.pool)
             .await
@@ -1295,11 +1292,8 @@ async fn assert_moved_deletion_is_hidden(project_without_ack: bool) {
     .fetch_one(&database.pool)
     .await
     .unwrap();
-    let previous: DateTime<Utc> = sqlx::query_scalar("select previous_bucket from request_analytics_pending_requests where request_id='moved_delete'")
-        .fetch_one(&database.pool).await.unwrap();
     let visible_bucket = if project_without_ack { moved } else { old };
     assert_eq!(projected, visible_bucket + TimeDelta::minutes(1));
-    assert_eq!(previous, if project_without_ack { old } else { moved });
     sqlx::query("delete from model_requests where id='moved_delete'")
         .execute(&database.pool)
         .await
@@ -1307,9 +1301,14 @@ async fn assert_moved_deletion_is_hidden(project_without_ack: bool) {
     let repo = observability_repository(&database.pool);
     let range =
         ObservabilityRange::new(visible_bucket, visible_bucket + TimeDelta::minutes(15)).unwrap();
-    assert!(
-        repo.usage_summary(range, Default::default()).await.is_err(),
-        "a source deletion must hide the actually projected bucket even when the queue remembers another bucket"
+    assert_eq!(
+        repo.usage_summary(range, Default::default())
+            .await
+            .unwrap()
+            .requests
+            .request_count,
+        1,
+        "published facts stay readable until their deletion is projected"
     );
     drain_analytics(&database.pool).await;
     for start in [old, moved] {
