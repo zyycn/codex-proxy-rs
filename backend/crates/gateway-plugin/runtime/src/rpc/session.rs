@@ -932,19 +932,31 @@ impl RpcSession {
         params: serde_json::Value,
         payload: Vec<u8>,
     ) -> Result<RpcStream, RpcError> {
-        self.reserve_stream_call()?
-            .call(method, context, params, payload)
-            .await
-    }
-
-    /// 在移交请求资源前预留槽位；此处失败保证尚未向插件发送本次调用
-    pub(crate) fn reserve_stream_call(self: &Arc<Self>) -> Result<ReservedStreamCall, RpcError> {
         let slot = Arc::clone(&self.slots)
             .try_acquire_owned()
             .map_err(|_| RpcError::Capacity)?;
-        Ok(ReservedStreamCall {
-            session: Arc::clone(self),
-            slot,
+        let bytes = self.limits.maximum_buffered_body_bytes.min(256 * 1024) as u32;
+        let frames = 32;
+        let (stream, chunks, terminal) = StreamIngress::new(bytes, frames);
+        let completed = self
+            .send_call(
+                method,
+                context,
+                params,
+                payload,
+                Some(stream),
+                Some((bytes, frames)),
+            )
+            .await?;
+        Ok(RpcStream {
+            initial: completed.reply,
+            chunks,
+            terminal: Some(terminal),
+            deadline: completed.deadline,
+            id: completed.id,
+            shared: Arc::clone(&self.shared),
+            _slot: slot,
+            _session: Arc::clone(self),
         })
     }
 
@@ -986,50 +998,6 @@ impl Drop for RpcSession {
     fn drop(&mut self) {
         self.shared.expect_stop();
         self.shared.fail(RpcError::Closed(None));
-    }
-}
-
-pub(crate) struct ReservedStreamCall {
-    session: Arc<RpcSession>,
-    slot: tokio::sync::OwnedSemaphorePermit,
-}
-
-impl ReservedStreamCall {
-    pub(crate) async fn call(
-        self,
-        method: &str,
-        context: CallContext,
-        params: serde_json::Value,
-        payload: Vec<u8>,
-    ) -> Result<RpcStream, RpcError> {
-        let bytes = self
-            .session
-            .limits
-            .maximum_buffered_body_bytes
-            .min(256 * 1024) as u32;
-        let frames = 32;
-        let (stream, chunks, terminal) = StreamIngress::new(bytes, frames);
-        let completed = self
-            .session
-            .send_call(
-                method,
-                context,
-                params,
-                payload,
-                Some(stream),
-                Some((bytes, frames)),
-            )
-            .await?;
-        Ok(RpcStream {
-            initial: completed.reply,
-            chunks,
-            terminal: Some(terminal),
-            deadline: completed.deadline,
-            id: completed.id,
-            shared: Arc::clone(&self.session.shared),
-            _slot: self.slot,
-            _session: self.session,
-        })
     }
 }
 

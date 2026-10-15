@@ -415,15 +415,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if mode == "identity" {
                         return call.next.run(call.request).await;
                     }
-                    if mode == "capacity_before_next" || mode == "capacity_after_next" {
-                        if mode == "capacity_after_next" {
-                            let _response = call.next.run(call.request).await?;
-                        }
-                        return Err(gateway_plugin_sdk::PluginFault::new(
-                            gateway_plugin_sdk::ErrorCode::Capacity,
-                            "HTTP fixture capacity exhausted",
-                        ));
-                    }
                     if mode == "short" {
                         return Ok(HttpResponse::new(
                             418,
