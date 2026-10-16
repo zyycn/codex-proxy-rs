@@ -50,7 +50,7 @@
 
 ## 扩展项简写
 
-作者声明可以省略 `id` 和固定阶段；普通能力的版本默认为 `1`，`middleware` 显式声明版本 `4`，`upstream_adapter` 显式声明版本 `2`：
+作者声明可以省略 `id` 和固定阶段；普通能力的版本默认为 `1`，`middleware` 显式声明版本 `4`，`scheduler` 和 `upstream_adapter` 显式声明版本 `2`：
 
 ```json
 {
