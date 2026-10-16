@@ -829,7 +829,7 @@ impl AttemptContext {
         provider: &ProviderKind,
         model: Option<&str>,
         candidates: &'a [AccountCandidate],
-        context: &AccountSelectionContext,
+        context: &mut AccountSelectionContext,
     ) -> Result<Option<AccountSelection<'a>>, policy::AccountPolicyError> {
         match self.request.request_policy() {
             Some(policy) => {

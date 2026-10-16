@@ -59,7 +59,7 @@ pub fn contribution_for_id(
             id: format!("{plugin_id}.{local_id}"),
             version: match capability {
                 Capability::Middleware => 4,
-                Capability::UpstreamAdapter => 2,
+                Capability::Scheduler | Capability::UpstreamAdapter => 2,
                 _ => 1,
             },
             stages,

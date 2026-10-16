@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 #[serde(into = "SmartSchedulingValues")]
 pub struct SmartSchedulingConfig {
     weights: [u8; 6],
-    prefer_higher_weight: bool,
 }
 
 impl<'de> Deserialize<'de> for SmartSchedulingConfig {
@@ -24,7 +23,6 @@ impl Default for SmartSchedulingConfig {
     fn default() -> Self {
         Self {
             weights: [10, 8, 10, 5, 0, 0],
-            prefer_higher_weight: false,
         }
     }
 }
@@ -39,10 +37,7 @@ pub enum SmartSchedulingConfigError {
 
 impl SmartSchedulingConfig {
     /// 顺序为负载、剩余额度、健康、首输出延迟、额度重置和排队压力
-    pub fn new(
-        weights: [f64; 6],
-        prefer_higher_weight: bool,
-    ) -> Result<Self, SmartSchedulingConfigError> {
+    pub fn new(weights: [f64; 6]) -> Result<Self, SmartSchedulingConfigError> {
         let mut tenths = [0; 6];
         for (index, field) in [
             "loadWeight",
@@ -67,20 +62,12 @@ impl SmartSchedulingConfig {
         if tenths == [0; 6] {
             return Err(SmartSchedulingConfigError::EmptyWeights);
         }
-        Ok(Self {
-            weights: tenths,
-            prefer_higher_weight,
-        })
+        Ok(Self { weights: tenths })
     }
 
     #[must_use]
     pub fn weights(self) -> [f64; 6] {
         self.weights.map(|weight| f64::from(weight) / 10.0)
-    }
-
-    #[must_use]
-    pub const fn prefer_higher_weight(self) -> bool {
-        self.prefer_higher_weight
     }
 
     pub(crate) fn score_tolerance(self) -> f64 {
@@ -105,24 +92,20 @@ struct SmartSchedulingValues {
     latency_weight: f64,
     reset_weight: f64,
     queue_weight: f64,
-    prefer_higher_weight: bool,
 }
 
 impl TryFrom<SmartSchedulingValues> for SmartSchedulingConfig {
     type Error = SmartSchedulingConfigError;
 
     fn try_from(value: SmartSchedulingValues) -> Result<Self, Self::Error> {
-        Self::new(
-            [
-                value.load_weight,
-                value.quota_weight,
-                value.health_weight,
-                value.latency_weight,
-                value.reset_weight,
-                value.queue_weight,
-            ],
-            value.prefer_higher_weight,
-        )
+        Self::new([
+            value.load_weight,
+            value.quota_weight,
+            value.health_weight,
+            value.latency_weight,
+            value.reset_weight,
+            value.queue_weight,
+        ])
     }
 }
 
@@ -143,7 +126,6 @@ impl From<SmartSchedulingConfig> for SmartSchedulingValues {
             latency_weight,
             reset_weight,
             queue_weight,
-            prefer_higher_weight: value.prefer_higher_weight,
         }
     }
 }

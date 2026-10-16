@@ -212,7 +212,6 @@ pub struct SmartSchedulingConfig {
     pub latency_weight: f64,
     pub reset_weight: f64,
     pub queue_weight: f64,
-    pub prefer_higher_weight: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

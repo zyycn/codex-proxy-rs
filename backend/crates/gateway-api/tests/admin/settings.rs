@@ -141,7 +141,7 @@ async fn smart_settings_round_trip_and_invalid_updates_leave_the_saved_value_int
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let mut body = update_body();
-    let custom = json!({"loadWeight": 2.0, "quotaWeight": 0.0, "healthWeight": 1.0, "latencyWeight": 0.5, "resetWeight": 1.2, "queueWeight": 2.3, "preferHigherWeight": true});
+    let custom = json!({"loadWeight": 2.0, "quotaWeight": 0.0, "healthWeight": 1.0, "latencyWeight": 0.5, "resetWeight": 1.2, "queueWeight": 2.3});
     body["smartScheduling"] = custom.clone();
     let response = app(fixture.state())
         .oneshot(request(
@@ -161,8 +161,8 @@ async fn smart_settings_round_trip_and_invalid_updates_leave_the_saved_value_int
     let mut invalid_values = vec![
         json!(null),
         json!({}),
-        json!({"loadWeight":0,"quotaWeight":0,"healthWeight":0,"latencyWeight":0,"resetWeight":0,"queueWeight":0,"preferHigherWeight":true}),
-        json!({"loadWeight":0.01,"quotaWeight":1,"healthWeight":1,"latencyWeight":1,"resetWeight":0,"queueWeight":0,"preferHigherWeight":false}),
+        json!({"loadWeight":0,"quotaWeight":0,"healthWeight":0,"latencyWeight":0,"resetWeight":0,"queueWeight":0}),
+        json!({"loadWeight":0.01,"quotaWeight":1,"healthWeight":1,"latencyWeight":1,"resetWeight":0,"queueWeight":0}),
     ];
     for field in ["resetWeight", "queueWeight"] {
         for value in [json!(-0.1), json!(10.1), json!(0.01), json!(null)] {

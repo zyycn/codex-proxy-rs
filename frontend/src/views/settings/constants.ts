@@ -2,7 +2,7 @@ export const rotationOptions = [
   {
     label: '智能调度（推荐）',
     value: 'smart',
-    description: '综合负载、剩余额度、健康和延迟评分，支持自定义偏好与权重回切',
+    description: '综合负载、剩余额度、健康和延迟评分，支持自定义评分偏好',
   },
 
   {

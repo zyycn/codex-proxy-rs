@@ -321,7 +321,7 @@ async fn queue_enabled_without_affinity_still_uses_a_free_account() {
 
 #[derive(Debug)]
 struct Scheduler {
-    explicit: bool,
+    decision: AccountScheduleDecision,
 }
 
 impl RequestPolicyPlan for Scheduler {
@@ -336,11 +336,7 @@ impl RequestPolicyPlan for Scheduler {
         &self,
         _: AccountScheduleInput,
     ) -> BoxFuture<'static, Result<AccountScheduleDecision, RequestPolicyFault>> {
-        let decision = if self.explicit {
-            AccountScheduleDecision::Pick(ProviderAccountId::new("acct_second").unwrap())
-        } else {
-            AccountScheduleDecision::Delegate
-        };
+        let decision = self.decision.clone();
         Box::pin(async move { Ok(decision) })
     }
 }
@@ -373,7 +369,15 @@ async fn affinity_wait_respects_explicit_policy_choices_but_not_delegated_fallba
                 timeout: Duration::from_secs(2),
             }),
             Some(RequestPolicyContext::new(
-                Arc::new(Scheduler { explicit }),
+                Arc::new(Scheduler {
+                    decision: if explicit {
+                        AccountScheduleDecision::Pick(
+                            ProviderAccountId::new("acct_second").unwrap(),
+                        )
+                    } else {
+                        AccountScheduleDecision::Delegate
+                    },
+                }),
                 ExtensionSetReference::new(
                     ExtensionSetId::new("capacity-test".into()).unwrap(),
                     Arc::new(ExtensionLease),
@@ -400,5 +404,216 @@ async fn affinity_wait_respects_explicit_policy_choices_but_not_delegated_fallba
             let selected = pending.await.unwrap();
             assert_eq!(selected.account_id().as_str(), "acct_first");
         }
+    }
+}
+
+fn filtered_policy(ids: &[&str]) -> RequestPolicyContext {
+    RequestPolicyContext::new(
+        Arc::new(Scheduler {
+            decision: AccountScheduleDecision::DelegateFiltered(
+                ids.iter()
+                    .map(|id| ProviderAccountId::new(*id).unwrap())
+                    .collect(),
+            ),
+        }),
+        ExtensionSetReference::new(
+            ExtensionSetId::new("filter-test".into()).unwrap(),
+            Arc::new(ExtensionLease),
+        ),
+        ModelRequestId::new("req_capacity_contract").unwrap(),
+        ClientApiKeyId::new("key_codex_contract").unwrap(),
+        vec![],
+    )
+}
+
+#[tokio::test]
+async fn filtering_affinity_covers_native_reselection_and_lease_contention() {
+    for blocker in ["none", "concurrency", "lease"] {
+        let store = Arc::new(MemoryAccountStore::default());
+        for id in ["acct_first", "acct_second", "acct_fallback"] {
+            create_account(&store, id, id);
+        }
+        store.set_scheduling("acct_second", None, AccountWeight::new(100).unwrap());
+        store.set_scheduling("acct_fallback", None, AccountWeight::new(10).unwrap());
+        let first = ProviderAccountId::new("acct_first").unwrap();
+        let second = ProviderAccountId::new("acct_second").unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        if blocker == "concurrency" {
+            leases
+                .signals
+                .lock()
+                .unwrap()
+                .insert(first.clone(), busy_signal(2));
+        } else if blocker == "lease" {
+            leases.busy_accounts.lock().unwrap().insert(second.clone());
+        }
+        let affinity = Arc::new(MemorySessionAffinity::default());
+        let key = bind_first(&affinity).await;
+        let selector = selector_with_affinity(&store, leases.clone(), affinity);
+        let request_attempt = capacity_attempt(
+            account_policy().with_queue(ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout: Duration::from_secs(2),
+            }),
+            Some(filtered_policy(&["acct_first"])),
+        );
+        let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+        let selected = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &url,
+                attempt: &request_attempt,
+                session_affinity_key: Some(&key),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            selected.account_id().as_str(),
+            if blocker == "lease" {
+                "acct_fallback"
+            } else {
+                "acct_second"
+            },
+            "{blocker}"
+        );
+        assert!(
+            leases
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|request| request.account_id() != &first)
+        );
+        assert!(
+            block_on(store.get_account(&first))
+                .unwrap()
+                .unwrap()
+                .enabled()
+        );
+    }
+}
+
+#[tokio::test]
+async fn filtered_waiting_never_leases_excluded_affinity_and_next_request_can_recover() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "test-first");
+    create_account(&store, "acct_second", "test-second");
+    store.set_scheduling("acct_first", None, AccountWeight::new(100).unwrap());
+    store.set_scheduling("acct_second", None, AccountWeight::new(10).unwrap());
+    let first = ProviderAccountId::new("acct_first").unwrap();
+    let second = ProviderAccountId::new("acct_second").unwrap();
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases
+        .signals
+        .lock()
+        .unwrap()
+        .insert(second.clone(), busy_signal(2));
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let key = bind_first(&affinity).await;
+    let selector = selector_with_affinity(&store, leases.clone(), affinity);
+    let policy = account_policy().with_queue(ConcurrencyQueuePolicy {
+        max_waiting: 1,
+        timeout: Duration::from_secs(2),
+    });
+    let filtered = capacity_attempt(policy, Some(filtered_policy(&["acct_first"])));
+    let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+    let request = SelectCodexCredential {
+        upstream_model: "gpt-5.4",
+        request_url: &url,
+        attempt: &filtered,
+        session_affinity_key: Some(&key),
+    };
+    let mut pending = Box::pin(selector.select(&request));
+    assert!(pending.as_mut().now_or_never().is_none());
+    assert!(leases.requests.lock().unwrap().is_empty());
+    leases.signals.lock().unwrap().clear();
+    let selected = pending.await.unwrap();
+    assert_eq!(selected.account_id(), &second);
+    drop(selected);
+    let recovered = capacity_attempt(policy, Some(filtered_policy(&[])));
+    let selected = selector
+        .select(&SelectCodexCredential {
+            attempt: &recovered,
+            ..request
+        })
+        .await
+        .unwrap();
+    // 当前会话保留已迁移的亲和，新会话可以重新选到恢复后的高权重账号
+    assert_eq!(selected.account_id(), &second);
+    drop(selected);
+    let selected = selector
+        .select(&SelectCodexCredential {
+            attempt: &recovered,
+            session_affinity_key: None,
+            ..request
+        })
+        .await
+        .unwrap();
+    assert_eq!(selected.account_id(), &first);
+}
+
+#[tokio::test]
+async fn all_filtered_is_terminal_before_queue_or_lease_even_for_native_pins() {
+    for pinned in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_first", "test-first");
+        create_account(&store, "acct_second", "test-second");
+        let first = ProviderAccountId::new("acct_first").unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases
+            .signals
+            .lock()
+            .unwrap()
+            .insert(first.clone(), busy_signal(2));
+        leases.signals.lock().unwrap().insert(
+            ProviderAccountId::new("acct_second").unwrap(),
+            busy_signal(2),
+        );
+        let selector = selector(&store, leases.clone());
+        let policy = filtered_policy(if pinned {
+            &["acct_first"]
+        } else {
+            &["acct_first", "acct_second"]
+        });
+        let request_attempt = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_capacity_contract").unwrap(),
+                ClientApiKeyId::new("key_codex_contract").unwrap(),
+            )
+            .with_request_policy(Some(policy)),
+            NonZeroU32::MIN,
+            SystemTime::now() + Duration::from_secs(5),
+            account_policy().with_queue(ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout: Duration::from_secs(2),
+            }),
+            AccountAttemptContext::new(BTreeSet::new(), None, None)
+                .with_account_scope(contract_account_scope()),
+            pinned.then(|| {
+                ContinuationBinding::Pinned(NativeContinuationPin::new(
+                    PreviousResponseId::new("client_response"),
+                    PreviousResponseId::new("upstream_response"),
+                    ClientApiKeyId::new("key_codex_contract").unwrap(),
+                    ProviderKind::new("openai").unwrap(),
+                    first,
+                ))
+            }),
+            CancellationToken::new(),
+        );
+        let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+        let result = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &url,
+                attempt: &request_attempt,
+                session_affinity_key: None,
+            })
+            .now_or_never()
+            .expect("filter rejection must not wait");
+        assert!(
+            matches!(result, Err(CredentialSelectionError::PolicyFiltered)),
+            "{result:?}"
+        );
+        assert!(leases.requests.lock().unwrap().is_empty());
     }
 }

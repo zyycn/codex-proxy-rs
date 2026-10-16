@@ -144,59 +144,46 @@ async fn smart_reselection_respects_native_and_required_account_boundaries() {
     let selector =
         selector_with_affinity(&store, Arc::new(TestLeaseCoordinator::default()), affinity);
     let request_url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
-    for enabled in [false, true] {
-        for binding in ["soft", "required", "native"] {
-            let continuation = (binding == "native").then(|| {
-                ContinuationBinding::Pinned(NativeContinuationPin::new(
-                    PreviousResponseId::new("client_response"),
-                    PreviousResponseId::new("upstream_response"),
-                    ClientApiKeyId::new("key_codex_contract").unwrap(),
-                    provider.clone(),
-                    original_id.clone(),
-                ))
-            });
-            let attempt = AttemptContext::new(
-                RequestAttemptContext::new(
-                    ModelRequestId::new("req_smart_scope").unwrap(),
-                    ClientApiKeyId::new("key_codex_contract").unwrap(),
-                ),
-                NonZeroU32::new(1).unwrap(),
-                SystemTime::now() + Duration::from_secs(30),
-                account_policy().with_smart_scheduling(
-                    gateway_core::account::SmartSchedulingConfig::new(
-                        [1.0, 0.8, 1.0, 0.5, 1.0, 1.0],
-                        enabled,
-                    )
+    for binding in ["soft", "required", "native"] {
+        let continuation = (binding == "native").then(|| {
+            ContinuationBinding::Pinned(NativeContinuationPin::new(
+                PreviousResponseId::new("client_response"),
+                PreviousResponseId::new("upstream_response"),
+                ClientApiKeyId::new("key_codex_contract").unwrap(),
+                provider.clone(),
+                original_id.clone(),
+            ))
+        });
+        let attempt = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_smart_scope").unwrap(),
+                ClientApiKeyId::new("key_codex_contract").unwrap(),
+            ),
+            NonZeroU32::new(1).unwrap(),
+            SystemTime::now() + Duration::from_secs(30),
+            account_policy().with_smart_scheduling(
+                gateway_core::account::SmartSchedulingConfig::new([1.0, 0.8, 1.0, 0.5, 1.0, 1.0])
                     .unwrap(),
-                ),
-                AccountAttemptContext::new(
-                    BTreeSet::new(),
-                    (binding == "required").then(|| original_id.clone()),
-                    None,
-                )
-                .with_account_scope(contract_account_scope()),
-                continuation,
-                CancellationToken::new(),
-            );
-            let selected = selector
-                .select(&SelectCodexCredential {
-                    upstream_model: "gpt-5.4",
-                    request_url: &request_url,
-                    attempt: &attempt,
-                    session_affinity_key: Some(&key),
-                })
-                .await
-                .unwrap();
-            assert_eq!(
-                selected.account_id().as_str(),
-                if enabled && binding == "soft" {
-                    "acct_primary"
-                } else {
-                    "acct_original"
-                },
-                "{binding}, switchback={enabled}"
-            );
-        }
+            ),
+            AccountAttemptContext::new(
+                BTreeSet::new(),
+                (binding == "required").then(|| original_id.clone()),
+                None,
+            )
+            .with_account_scope(contract_account_scope()),
+            continuation,
+            CancellationToken::new(),
+        );
+        let selected = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &request_url,
+                attempt: &attempt,
+                session_affinity_key: Some(&key),
+            })
+            .await
+            .unwrap();
+        assert_eq!(selected.account_id().as_str(), "acct_original", "{binding}");
     }
 }
 
@@ -1930,11 +1917,8 @@ fn queued_attempt(timeout: Duration) -> AttemptContext {
                 timeout,
             })
             .with_smart_scheduling(
-                gateway_core::account::SmartSchedulingConfig::new(
-                    [1.0, 0.8, 1.0, 0.5, 1.0, 1.0],
-                    false,
-                )
-                .unwrap(),
+                gateway_core::account::SmartSchedulingConfig::new([1.0, 0.8, 1.0, 0.5, 1.0, 1.0])
+                    .unwrap(),
             ),
         AccountAttemptContext::new(BTreeSet::new(), None, None)
             .with_account_scope(contract_account_scope()),
@@ -1983,10 +1967,14 @@ fn smart_queue_weight_changes_the_selected_wait_queue() {
                         timeout: Duration::from_secs(2),
                     })
                     .with_smart_scheduling(
-                        gateway_core::account::SmartSchedulingConfig::new(
-                            [0.0, 0.0, 1.0, 0.0, 0.0, queue_weight],
-                            false,
-                        )
+                        gateway_core::account::SmartSchedulingConfig::new([
+                            0.0,
+                            0.0,
+                            1.0,
+                            0.0,
+                            0.0,
+                            queue_weight,
+                        ])
                         .unwrap(),
                     ),
                 AccountAttemptContext::new(BTreeSet::new(), required, None)
@@ -2051,10 +2039,9 @@ fn smart_queue_keeps_native_and_required_account_pins_when_another_account_is_fr
                     timeout: Duration::from_secs(2),
                 })
                 .with_smart_scheduling(
-                    gateway_core::account::SmartSchedulingConfig::new(
-                        [1.0, 0.8, 1.0, 0.5, 10.0, 10.0],
-                        true,
-                    )
+                    gateway_core::account::SmartSchedulingConfig::new([
+                        1.0, 0.8, 1.0, 0.5, 10.0, 10.0,
+                    ])
                     .unwrap(),
                 ),
             AccountAttemptContext::new(BTreeSet::new(), (!native).then(|| original.clone()), None)

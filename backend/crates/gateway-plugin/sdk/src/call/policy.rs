@@ -77,6 +77,8 @@ pub enum ModelRouteDecision {
 #[serde(deny_unknown_fields)]
 pub struct AccountScheduleCandidate {
     pub account_id: String,
+    /// false 表示仅可等待，仍可被过滤，但不能作为本轮 Pick 的结果
+    pub available: bool,
     pub weight: u16,
     pub in_flight: u32,
     pub maximum_concurrency: u32,
@@ -108,7 +110,13 @@ pub struct AccountScheduleRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AccountScheduleDecision {
-    Pick { account_id: String },
+    Pick {
+        account_id: String,
+    },
     Delegate,
+    /// 只收窄本轮候选；参数与排除策略由插件拥有，宿主继续执行原生调度
+    DelegateFiltered {
+        exclude_account_ids: Vec<String>,
+    },
     Reject,
 }

@@ -304,7 +304,6 @@ where
                     "queueTimeoutMs": plan.account_selection_policy().queue_policy().timeout.as_millis(),
                     "sessionAffinityTtlMs": plan.account_selection_policy().openai_session_affinity_ttl().as_millis(),
                     "smartWeights": plan.account_selection_policy().smart_scheduling().weights(),
-                    "preferHigherWeight": plan.account_selection_policy().smart_scheduling().prefer_higher_weight(),
                 },
                 "requiredAccount": account_selection.required_account().map(|account| account.as_str()),
                 "hasMiddleware": middleware.is_some(),

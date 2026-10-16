@@ -510,6 +510,8 @@ pub struct AccountSelectionContext {
     pub policy: AccountSelectionPolicy,
     pub now: SystemTime,
     pub excluded_accounts: BTreeSet<ProviderAccountId>,
+    /// 租约争用或队列让位只阻止立即选号，不排除等待资格
+    pub busy_accounts: BTreeSet<ProviderAccountId>,
     pub preferred_account: Option<ProviderAccountId>,
     /// 优先账号可调度时，是否优先于其它账号的持久权重
     pub preferred_account_overrides_weight: bool,
@@ -602,7 +604,7 @@ impl<'a> AccountSelection<'a> {
 pub struct AccountSelector;
 
 impl AccountSelector {
-    /// 返回调度策略可见的全部合格候选；权重层授权由调用策略的宿主适配器裁剪
+    /// 策略同时约束立即选号与等待，候选保留仅因本地容量受阻的账号
     #[must_use]
     pub(crate) fn policy_candidates<'a>(
         &self,
@@ -611,7 +613,12 @@ impl AccountSelector {
     ) -> Vec<&'a AccountCandidate> {
         candidates
             .iter()
-            .filter(|candidate| self.scheduling_blocker(candidate, context).is_none())
+            .filter(|candidate| {
+                matches!(
+                    self.scheduling_blocker(candidate, context),
+                    None | Some(AccountSchedulingBlocker::ConcurrencyLimit)
+                )
+            })
             .collect()
     }
 
@@ -697,10 +704,7 @@ impl AccountSelector {
             .max()?;
         let (mut preferred, preferred_candidate) = self.preferred_decision(candidates, context);
         if let Some(candidate) = preferred_candidate {
-            // 权重回切只裁决内置策略的软亲和，插件显式选号按实际选择记录结果
-            let prefer_higher_weight = context.policy.strategy() == RotationStrategy::Smart
-                && context.policy.smart_scheduling().prefer_higher_weight();
-            if (!context.preferred_account_overrides_weight || prefer_higher_weight)
+            if !context.preferred_account_overrides_weight
                 && candidate.account.weight() < highest_weight
             {
                 preferred =
@@ -859,6 +863,9 @@ impl AccountSelector {
         }
         if context.excluded_accounts.contains(candidate.account.id()) {
             return Some(AccountSchedulingBlocker::Excluded);
+        }
+        if context.busy_accounts.contains(candidate.account.id()) {
+            return Some(AccountSchedulingBlocker::ConcurrencyLimit);
         }
         if context
             .concurrency_limit(&candidate.account)

@@ -438,3 +438,26 @@ fn contribution_declaration_uses_camel_case_description_fields() {
         })
     );
 }
+
+#[test]
+fn scheduler_requires_the_current_contract() {
+    let mut manifest = packaged_manifest();
+    manifest.contributes.clear();
+    manifest.contributes.insert(
+        Capability::Scheduler,
+        ContributionDeclaration {
+            id: "9acme.request-tags.scheduler".into(),
+            version: 2,
+            stages: vec![Stage::Scheduling],
+            input_formats: vec![],
+            output_formats: vec![],
+        },
+    );
+    assert!(manifest.validate().is_ok());
+    manifest
+        .contributes
+        .get_mut(&Capability::Scheduler)
+        .unwrap()
+        .version = 1;
+    assert_eq!(manifest.validate(), Err(ManifestError::Invalid));
+}

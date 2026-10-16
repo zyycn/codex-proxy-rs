@@ -26,7 +26,6 @@ export interface SmartSchedulingConfig {
   latencyWeight: number
   resetWeight: number
   queueWeight: number
-  preferHigherWeight: boolean
 }
 
 export interface RuntimeSettings {

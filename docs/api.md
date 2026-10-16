@@ -1560,8 +1560,7 @@ Guardian 以 `subagent_kind` 或 `client_metadata.x-openai-subagent` 值 `guardi
   "healthWeight": 1.0,
   "latencyWeight": 0.5,
   "resetWeight": 0.0,
-  "queueWeight": 0.0,
-  "preferHigherWeight": false
+  "queueWeight": 0.0
 }
 ```
 
@@ -1575,11 +1574,8 @@ Guardian 以 `subagent_kind` 或 `client_metadata.x-openai-subagent` 值 `guardi
 设为 `0` 时沿用最短队列规则；启用后结合其余五项评分选择队列。队列人数限于当前进程，只有开启账号排队才会生效，
 不影响已入队请求的位置、队内 FIFO、容量上限或等待超时。两项默认均为 `0`
 
-`preferHigherWeight` 默认关闭。开启后，更高权重账号恢复可用时，后续允许重新选号的请求优先回切；
-同权重且可用的会话亲和继续保留。OpenAI 优先模式沿用可用的会话主账号，不因权重回切而分流。
-没有可用亲和时，在最高可用权重层内按配置评分。
-原生续写账号绑定仍是硬约束，不因回切而主动换号或触发历史重放。配置随运行设置原子保存和发布，
-新请求使用新值，已开始请求及其重试沿用原快照，无需重启
+没有可用亲和时，在最高可用权重层内按配置评分。原生续写账号绑定仍是硬约束。
+配置随运行设置原子保存和发布，新请求使用新值，已开始请求及其重试沿用原快照，无需重启
 
 ### 模型定价
 

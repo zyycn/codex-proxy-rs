@@ -5,6 +5,7 @@ mod facts;
 mod http;
 mod lifecycle;
 mod mounts;
+mod scheduling;
 mod service;
 mod websocket;
 
@@ -556,6 +557,7 @@ fn selection_context() -> AccountSelectionContext {
         ),
         now: SystemTime::now(),
         excluded_accounts: BTreeSet::new(),
+        busy_accounts: Default::default(),
         preferred_account: None,
         preferred_account_overrides_weight: true,
         round_robin_cursor: 0,
@@ -582,14 +584,14 @@ async fn scheduler_cannot_pick_outside_the_host_projected_priority_tier() {
     let generation = prepare(&runtime).await;
     let context = policy_context(&runtime, generation.clone(), "req_schedule");
     let candidates = [candidate("acct_high", 100), candidate("acct_low", 10)];
-    let selection = selection_context();
+    let mut selection = selection_context();
     let selected = context
         .select_account(
             NonZeroU32::MIN,
             &ProviderKind::new("example").unwrap(),
             Some("upstream-a"),
             &candidates,
-            &selection,
+            &mut selection,
         )
         .await
         .unwrap()

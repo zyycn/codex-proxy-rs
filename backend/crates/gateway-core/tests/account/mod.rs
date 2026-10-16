@@ -102,6 +102,7 @@ fn context(strategy: RotationStrategy) -> AccountSelectionContext {
         policy: AccountSelectionPolicy::new(strategy, NonZeroU32::new(3).expect("positive")),
         now: SystemTime::now(),
         excluded_accounts: BTreeSet::new(),
+        busy_accounts: Default::default(),
         preferred_account: None,
         preferred_account_overrides_weight: false,
         round_robin_cursor: 0,

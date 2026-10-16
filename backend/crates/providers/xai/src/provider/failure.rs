@@ -450,6 +450,18 @@ fn selection_failure(error: &GrokSessionSelectorError) -> ProviderError {
                 UpstreamSendState::NotSent,
             );
         }
+        GrokSessionSelectorError::PolicyFiltered => {
+            return provider_error(
+                ProviderErrorKind::RequestPolicyDenied,
+                UpstreamSendState::NotSent,
+            )
+            .with_diagnostic(
+                gateway_core::error::ProviderDiagnostic::new(
+                    "account scheduling policy left no selectable account",
+                )
+                .with_classification("account_selection", "account_policy_filtered"),
+            );
+        }
         GrokSessionSelectorError::PolicyUnavailable => {
             return provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent);
         }

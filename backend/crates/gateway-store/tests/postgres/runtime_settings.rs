@@ -211,6 +211,11 @@ async fn privacy_steps_migration_preserves_rules_and_other_settings() {
             .await
             .unwrap();
     expected_row["codex_privacy_policy_json"] = expected.clone();
+    // 完整升级还会清理自动回切字段，其余运行设置必须原样保留
+    expected_row["smart_scheduling_json"]
+        .as_object_mut()
+        .unwrap()
+        .remove("preferHigherWeight");
 
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     let stored: serde_json::Value =
@@ -309,7 +314,7 @@ async fn smart_settings_upgrade_preserves_selection_and_publishes_custom_config(
     );
     let mut update = settings_with_margin(3600);
     update.values.smart_scheduling =
-        SmartSchedulingConfig::new([0.0, 2.0, 1.0, 0.5, 1.2, 2.3], true).unwrap();
+        SmartSchedulingConfig::new([0.0, 2.0, 1.0, 0.5, 1.2, 2.3]).unwrap();
     let expected = update.values.smart_scheduling;
     repository.update_runtime_settings(update).await.unwrap();
     let reloaded = repository.load_runtime_settings().await.unwrap();
@@ -1436,4 +1441,45 @@ async fn preferred_affinity_migration_defaults_to_strict_and_preserves_saved_mod
         );
         database.close().await;
     }
+}
+
+#[tokio::test]
+async fn removing_switchback_preserves_custom_weights_and_replaces_database_default() {
+    let Some(database) = TestDatabase::create_through("remove_switchback", 34).await else {
+        return;
+    };
+    let expected =
+        gateway_core::account::SmartSchedulingConfig::new([0.0, 2.0, 1.0, 0.5, 1.2, 2.3]).unwrap();
+    let mut legacy = serde_json::to_value(expected).unwrap();
+    legacy["preferHigherWeight"] = serde_json::json!(true);
+    sqlx::query("update runtime_settings set smart_scheduling_json = $1 where id = 1")
+        .bind(legacy)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    assert_eq!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .values
+            .smart_scheduling,
+        expected
+    );
+    sqlx::query("update runtime_settings set smart_scheduling_json = default where id = 1")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .values
+            .smart_scheduling,
+        gateway_core::account::SmartSchedulingConfig::default()
+    );
+    database.close().await;
 }

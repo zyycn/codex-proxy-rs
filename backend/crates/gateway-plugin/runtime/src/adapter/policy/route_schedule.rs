@@ -196,6 +196,7 @@ async fn schedule_with_entry(
             .iter()
             .map(|candidate| WireAccountScheduleCandidate {
                 account_id: candidate.account_id().as_str().to_owned(),
+                available: candidate.available(),
                 weight: candidate.weight(),
                 in_flight: candidate.in_flight(),
                 maximum_concurrency: candidate.maximum_concurrency(),
@@ -245,11 +246,27 @@ async fn schedule_with_entry(
     match decision {
         WireAccountScheduleDecision::Delegate => Ok(AccountScheduleDecision::Delegate),
         WireAccountScheduleDecision::Reject => Ok(AccountScheduleDecision::Reject),
+        WireAccountScheduleDecision::DelegateFiltered {
+            exclude_account_ids,
+        } => {
+            let candidate_ids = candidates
+                .iter()
+                .map(|candidate| candidate.account_id())
+                .collect::<std::collections::HashSet<_>>();
+            let excluded = exclude_account_ids
+                .into_iter()
+                .map(|id| {
+                    let id = ProviderAccountId::new(id).map_err(|_| ())?;
+                    candidate_ids.contains(&id).then_some(id).ok_or(())
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(AccountScheduleDecision::DelegateFiltered(excluded))
+        }
         WireAccountScheduleDecision::Pick { account_id } => {
             let account_id = ProviderAccountId::new(account_id).map_err(|_| ())?;
             if !candidates
                 .iter()
-                .any(|candidate| candidate.account_id() == &account_id)
+                .any(|candidate| candidate.account_id() == &account_id && candidate.available())
             {
                 return Err(());
             }

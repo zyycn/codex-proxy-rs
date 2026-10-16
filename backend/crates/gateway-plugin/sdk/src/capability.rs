@@ -28,7 +28,6 @@ impl Capability {
         match self {
             Self::Middleware => &[4],
             Self::FrontendAuthentication
-            | Self::Scheduler
             | Self::ModelRouter
             | Self::ModelCatalog
             | Self::RetryPolicy
@@ -36,7 +35,7 @@ impl Capability {
             | Self::CommandLine
             | Self::Management
             | Self::Maintenance => &[1],
-            Self::UpstreamAdapter => &[2],
+            Self::Scheduler | Self::UpstreamAdapter => &[2],
         }
     }
 

@@ -100,6 +100,7 @@ async fn old_weekly_quota_should_outweigh_one_in_flight_title_request() {
             ),
             now,
             excluded_accounts: BTreeSet::new(),
+            busy_accounts: Default::default(),
             preferred_account: None,
             preferred_account_overrides_weight: true,
             round_robin_cursor: cursor,

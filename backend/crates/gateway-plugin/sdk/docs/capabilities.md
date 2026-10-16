@@ -469,6 +469,24 @@ middleware 的 `next` 最多调用一次，重试与额外模型执行通过独�
 ### 路由、调度与观察
 
 `policy.route_model` 和 `policy.schedule_account` 只提出决定，宿主随后复核 Key 规则、模型能力、账号资格和租约。
+`scheduler` 必须声明 `version: 2`。`candidates` 已按 Key 范围、模型权限、账号状态和原生续写绑定收窄，
+同时包含暂时繁忙但可以等待的账号；`available` 表示本次可以立即尝试租约，不保证租约一定成功
+
+- `Pick { account_id }` 显式选号，只能指定 `available: true` 的候选
+- `Delegate` 将完整候选交给宿主现有调度
+- `DelegateFiltered { exclude_account_ids }` 排除列出的候选，再委托内置权重、Smart 评分和亲和选择；仅接受本次候选 ID，重复 ID 合并，空列表等同于 `Delegate`
+- `Reject` 明确拒绝请求
+
+过滤结果约束本次评估后的亲和重选、容量判断和等待队列。全部候选被排除，或严格跟随的会话账号被排除时，
+请求以 `account_policy_filtered` 结束，不回退到被排除账号或伪装成额度耗尽。租约争用、排队唤醒和后续请求重新评估策略，
+过滤结果不写入账号状态。插件决定自身阈值、恢复条件和配置含义；宿主只检查合同、候选边界并执行决定。
+插件设置使用自己的 `configurationSchema` 或管理页面，不向宿主智能调度弹窗注入字段。
+非法输出按绑定的既有故障策略处理，不自动修正插件业务规则
+
+```json
+{"decision":"delegate_filtered","exclude_account_ids":["acct_example"]}
+```
+
 `observer` v1 通过 `methods::OBSERVE` 接收 `call::observation::Event`，固定绑定 `observation/observe`。
 每条绑定以 `event` 选择 `request_completed` 或 `websocket_response`，可分别配置请求范围；同一实例每种事件至多一条绑定，两类绑定使用相同 `order`。
 事件选择只决定是否投递，不裁剪字段

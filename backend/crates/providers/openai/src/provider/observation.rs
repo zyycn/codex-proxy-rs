@@ -819,6 +819,7 @@ fn selection_failure(error: &CredentialSelectionError) -> ProviderError {
         CredentialSelectionError::Coordinator(_) => Some("account_coordinator_unavailable"),
         CredentialSelectionError::CookiePolicy(_) => Some("account_cookie_policy_rejected"),
         CredentialSelectionError::PolicyUnavailable => Some("account_policy_unavailable"),
+        CredentialSelectionError::PolicyFiltered => Some("account_policy_filtered"),
         _ => None,
     };
     // 这些变体只含固定文案，不格式化可能承载外部正文的其他错误
@@ -871,7 +872,7 @@ fn selection_failure(error: &CredentialSelectionError) -> ProviderError {
             ProviderErrorKind::ProviderInfrastructureUnavailable,
             UpstreamSendState::NotSent,
         ),
-        CredentialSelectionError::PolicyRejected => provider_error(
+        CredentialSelectionError::PolicyRejected | CredentialSelectionError::PolicyFiltered => provider_error(
             ProviderErrorKind::RequestPolicyDenied,
             UpstreamSendState::NotSent,
         ),

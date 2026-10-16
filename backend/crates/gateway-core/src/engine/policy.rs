@@ -113,6 +113,7 @@ pub enum ModelRouteDecision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountScheduleCandidate {
     account_id: ProviderAccountId,
+    available: bool,
     weight: u16,
     in_flight: u32,
     maximum_concurrency: u32,
@@ -124,6 +125,11 @@ pub struct AccountScheduleCandidate {
 }
 
 impl AccountScheduleCandidate {
+    #[must_use]
+    pub const fn available(&self) -> bool {
+        self.available
+    }
+
     #[must_use]
     pub const fn account_id(&self) -> &ProviderAccountId {
         &self.account_id
@@ -242,6 +248,7 @@ impl AccountScheduleInput {
 pub enum AccountScheduleDecision {
     Pick(ProviderAccountId),
     Delegate,
+    DelegateFiltered(BTreeSet<ProviderAccountId>),
     Reject,
 }
 
@@ -284,6 +291,8 @@ pub struct RequestPolicyFault;
 /// Provider 选择器需要区分明确拒绝、策略故障和等待期间过期的选择
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AccountPolicyError {
+    #[error("account scheduling policy left no selectable account")]
+    Filtered,
     #[error("account scheduling policy rejected the request")]
     Rejected,
     #[error("account scheduling policy failed")]
@@ -414,14 +423,14 @@ impl RequestPolicyContext {
             .await
     }
 
-    /// 硬绑定已在候选资格中收窄；插件先决定，委托时再采用内置亲和与排序
+    /// 插件只处理宿主候选；返回后的上下文保留过滤结果，供亲和重选和等待共用
     pub async fn select_account<'a>(
         &self,
         attempt_index: NonZeroU32,
         provider: &ProviderKind,
         model: Option<&str>,
         candidates: &'a [AccountCandidate],
-        context: &AccountSelectionContext,
+        context: &mut AccountSelectionContext,
     ) -> Result<Option<AccountSelection<'a>>, AccountPolicyError> {
         let eligible = AccountSelector.policy_candidates(candidates, context);
         if eligible.is_empty() {
@@ -431,6 +440,9 @@ impl RequestPolicyContext {
             .iter()
             .map(|candidate| AccountScheduleCandidate {
                 account_id: candidate.account.id().clone(),
+                available: AccountSelector
+                    .scheduling_blocker(candidate, context)
+                    .is_none(),
                 weight: candidate.account.weight().get(),
                 in_flight: candidate.signals.in_flight,
                 maximum_concurrency: context.concurrency_limit(&candidate.account).get(),
@@ -458,27 +470,47 @@ impl RequestPolicyContext {
             .map_err(|_| AccountPolicyError::Fault)?;
         // 插件调用可能消耗显著时间；无论插件选择还是委托，均用返回时刻重新执行
         // 同一资格判断，不能让调用前尚未过期的候选在调用后被内置策略选中
-        let mut current = context.clone();
-        current.now = SystemTime::now();
         match decision {
-            AccountScheduleDecision::Delegate => AccountSelector
-                .select(candidates, &current)
-                .map(Some)
-                .ok_or(AccountPolicyError::StaleCandidate),
-            AccountScheduleDecision::Reject => Err(AccountPolicyError::Rejected),
-            AccountScheduleDecision::Pick(account_id) => {
-                if !eligible
+            AccountScheduleDecision::Delegate => {}
+            AccountScheduleDecision::Reject => return Err(AccountPolicyError::Rejected),
+            AccountScheduleDecision::DelegateFiltered(excluded) => {
+                let candidate_ids = eligible
                     .iter()
-                    .any(|candidate| candidate.account.id() == &account_id)
+                    .map(|candidate| candidate.account.id())
+                    .collect::<std::collections::HashSet<_>>();
+                if excluded.iter().any(|id| !candidate_ids.contains(id)) {
+                    return Err(AccountPolicyError::Fault);
+                }
+                let all_filtered = eligible
+                    .iter()
+                    .all(|candidate| excluded.contains(candidate.account.id()));
+                context.excluded_accounts.extend(excluded);
+                if all_filtered {
+                    return Err(AccountPolicyError::Filtered);
+                }
+            }
+            AccountScheduleDecision::Pick(account_id) => {
+                if AccountSelector
+                    .select_policy_candidate(candidates, context, &account_id)
+                    .is_none()
                 {
                     return Err(AccountPolicyError::Fault);
                 }
-                AccountSelector
-                    .select_policy_candidate(candidates, &current, &account_id)
+                context.now = SystemTime::now();
+                return AccountSelector
+                    .select_policy_candidate(candidates, context, &account_id)
                     .map(Some)
-                    .ok_or(AccountPolicyError::StaleCandidate)
+                    .ok_or(AccountPolicyError::StaleCandidate);
             }
         }
+        context.now = SystemTime::now();
+        if AccountSelector
+            .policy_candidates(candidates, context)
+            .is_empty()
+        {
+            return Err(AccountPolicyError::StaleCandidate);
+        }
+        Ok(AccountSelector.select(candidates, context))
     }
 }
 

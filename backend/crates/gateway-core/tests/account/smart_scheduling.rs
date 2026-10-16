@@ -17,9 +17,9 @@ use super::{candidate_with_concurrency, context, weighted_candidate};
 fn reserved_pool_scoring_and_trace_use_its_capacity_instead_of_the_normal_limit() {
     let mut context = context(RotationStrategy::Smart);
     context.reserved_concurrency = 5;
-    context.policy = context.policy.with_smart_scheduling(
-        SmartSchedulingConfig::new([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], false).unwrap(),
-    );
+    context.policy = context
+        .policy
+        .with_smart_scheduling(SmartSchedulingConfig::new([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]).unwrap());
     let candidates = [
         candidate_with_concurrency("acct_large_normal", 2, 100),
         candidate_with_concurrency("acct_small_normal", 1, 1),
@@ -44,14 +44,14 @@ fn smart_config_rejects_invalid_weights_and_incomplete_wire_values() {
         for dimension in 0..6 {
             let mut weights = [1.0; 6];
             weights[dimension] = value;
-            assert!(SmartSchedulingConfig::new(weights, false).is_err());
+            assert!(SmartSchedulingConfig::new(weights).is_err());
         }
     }
-    assert!(SmartSchedulingConfig::new([0.0; 6], true).is_err());
+    assert!(SmartSchedulingConfig::new([0.0; 6]).is_err());
     for value in [json!({}), json!(null), json!({"loadWeight": 1.0})] {
         assert!(serde_json::from_value::<SmartSchedulingConfig>(value).is_err());
     }
-    let config = SmartSchedulingConfig::new([0.0, 0.1, 9.9, 10.0, 1.2, 2.3], true).unwrap();
+    let config = SmartSchedulingConfig::new([0.0, 0.1, 9.9, 10.0, 1.2, 2.3]).unwrap();
     let encoded = serde_json::to_value(config).unwrap();
     assert_eq!(
         serde_json::from_value::<SmartSchedulingConfig>(encoded).unwrap(),
@@ -62,9 +62,9 @@ fn smart_config_rejects_invalid_weights_and_incomplete_wire_values() {
 #[test]
 fn reset_weight_rewards_only_future_resets_and_preserves_capacity_checks() {
     let mut context = context(RotationStrategy::Smart);
-    context.policy = context.policy.with_smart_scheduling(
-        SmartSchedulingConfig::new([0.0, 0.0, 0.0, 0.0, 1.0, 0.0], false).unwrap(),
-    );
+    context.policy = context
+        .policy
+        .with_smart_scheduling(SmartSchedulingConfig::new([0.0, 0.0, 0.0, 0.0, 1.0, 0.0]).unwrap());
     let mut candidates = [
         candidate_with_concurrency("acct_unknown", 0, 2),
         candidate_with_concurrency("acct_past", 0, 2),
@@ -137,7 +137,7 @@ fn queue_weight_balances_live_pressure_and_health_only_when_enabled_for_smart() 
         candidates[1].signals.failure_rate_basis_points = Some(6000);
         let mut context = context(strategy);
         context.policy = context.policy.with_smart_scheduling(
-            SmartSchedulingConfig::new([0.0, 0.0, 1.0, 0.0, 0.0, queue_weight], false).unwrap(),
+            SmartSchedulingConfig::new([0.0, 0.0, 1.0, 0.0, 0.0, queue_weight]).unwrap(),
         );
         let queue = ConcurrencyWaitQueue::default();
         let head = queue
@@ -197,7 +197,7 @@ fn queue_weight_does_not_widen_immediate_selection_tolerance() {
     context.round_robin_cursor = 1;
     for queue_weight in [0.0, 10.0] {
         context.policy = context.policy.with_smart_scheduling(
-            SmartSchedulingConfig::new([0.0, 1.0, 0.0, 0.0, 0.0, queue_weight], false).unwrap(),
+            SmartSchedulingConfig::new([0.0, 1.0, 0.0, 0.0, 0.0, queue_weight]).unwrap(),
         );
         assert_eq!(
             AccountSelector
@@ -210,9 +210,9 @@ fn queue_weight_does_not_widen_immediate_selection_tolerance() {
             "acct_a"
         );
     }
-    context.policy = context.policy.with_smart_scheduling(
-        SmartSchedulingConfig::new([0.0, 0.0, 0.0, 0.0, 0.0, 1.0], false).unwrap(),
-    );
+    context.policy = context
+        .policy
+        .with_smart_scheduling(SmartSchedulingConfig::new([0.0, 0.0, 0.0, 0.0, 0.0, 1.0]).unwrap());
     // 仅开启排队系数时，立即可用的同权重账号按既有游标轮换
     assert_eq!(
         AccountSelector
@@ -244,7 +244,7 @@ fn each_smart_weight_controls_its_signal_without_relaxing_capacity() {
         let mut context = context(RotationStrategy::Smart);
         context.policy = context
             .policy
-            .with_smart_scheduling(SmartSchedulingConfig::new(weights, false).unwrap());
+            .with_smart_scheduling(SmartSchedulingConfig::new(weights).unwrap());
         let selected = AccountSelector.select(&candidates, &context).unwrap();
         assert_eq!(
             selected.candidate().account.id().as_str(),
@@ -283,8 +283,7 @@ fn proportional_coefficients_preserve_near_best_rotation_and_diagnostics() {
     for scale in [1.0, 2.0, 5.0] {
         let mut context = context(RotationStrategy::Smart);
         context.policy = context.policy.with_smart_scheduling(
-            SmartSchedulingConfig::new([scale, 0.8 * scale, scale, 0.5 * scale, 0.0, 0.0], false)
-                .unwrap(),
+            SmartSchedulingConfig::new([scale, 0.8 * scale, scale, 0.5 * scale, 0.0, 0.0]).unwrap(),
         );
         let mut ids = Vec::new();
         for cursor in 0..4 {
@@ -313,64 +312,40 @@ fn proportional_coefficients_preserve_near_best_rotation_and_diagnostics() {
 }
 
 #[test]
-fn switchback_is_opt_in_and_only_affects_smart_soft_affinity() {
-    let mut candidates = [
-        weighted_candidate("acct_affinity", 10, 0),
-        weighted_candidate("acct_primary", 100, 0),
-    ];
+fn higher_weight_recovery_preserves_usable_soft_affinity() {
     for strategy in [
         RotationStrategy::Smart,
         RotationStrategy::Sticky,
         RotationStrategy::RoundRobin,
         RotationStrategy::QuotaResetPriority,
     ] {
+        let mut candidates = [
+            weighted_candidate("acct_affinity", 10, 0),
+            weighted_candidate("acct_primary", 100, 3),
+        ];
         let mut context = context(strategy);
         context.preferred_account = Some(candidates[0].account.id().clone());
         context.preferred_account_overrides_weight = true;
-        for enabled in [false, true] {
-            context.policy = context.policy.with_smart_scheduling(
-                SmartSchedulingConfig::new([1.0, 0.8, 1.0, 0.5, 0.0, 0.0], enabled).unwrap(),
-            );
+        for primary_in_flight in [3, 0] {
+            candidates[1].signals.in_flight = primary_in_flight;
             let selected = AccountSelector.select(&candidates, &context).unwrap();
-            let should_switch = enabled && strategy == RotationStrategy::Smart;
             assert_eq!(
                 selected.candidate().account.id(),
-                candidates[usize::from(should_switch)].account.id()
+                candidates[0].account.id()
             );
+            assert_eq!(selected.preferred(), PreferredAccountSelection::Hit);
         }
+        context
+            .excluded_accounts
+            .insert(candidates[0].account.id().clone());
+        assert_eq!(
+            AccountSelector
+                .select(&candidates, &context)
+                .unwrap()
+                .candidate()
+                .account
+                .id(),
+            candidates[1].account.id()
+        );
     }
-    let mut context = context(RotationStrategy::Smart);
-    context.policy = context.policy.with_smart_scheduling(
-        SmartSchedulingConfig::new([1.0, 0.8, 1.0, 0.5, 0.0, 0.0], true).unwrap(),
-    );
-    context.preferred_account_overrides_weight = true;
-    context.preferred_account = Some(candidates[0].account.id().clone());
-    candidates[1].signals.in_flight = 3;
-    assert_eq!(
-        AccountSelector
-            .select(&candidates, &context)
-            .unwrap()
-            .preferred(),
-        PreferredAccountSelection::Hit
-    );
-    candidates[1].signals.in_flight = 0;
-    context
-        .excluded_accounts
-        .insert(candidates[1].account.id().clone());
-    assert_eq!(
-        AccountSelector
-            .select(&candidates, &context)
-            .unwrap()
-            .preferred(),
-        PreferredAccountSelection::Hit
-    );
-    context.excluded_accounts.clear();
-    candidates[0] = weighted_candidate("acct_affinity", 100, 2);
-    assert_eq!(
-        AccountSelector
-            .select(&candidates, &context)
-            .unwrap()
-            .preferred(),
-        PreferredAccountSelection::Hit
-    );
 }

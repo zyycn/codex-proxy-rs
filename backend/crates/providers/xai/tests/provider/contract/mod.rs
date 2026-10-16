@@ -1,6 +1,7 @@
 //! 验证 xAI 原生执行的协议转换、账号选择与交付状态隔离
 
 mod replay_tool_names;
+mod scheduling;
 mod timing;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

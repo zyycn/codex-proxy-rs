@@ -1966,10 +1966,11 @@ impl Provider for PolicySelectingProvider {
                 first_output_latency_ms: None,
             },
         }];
-        let selection = AccountSelectionContext {
+        let mut selection = AccountSelectionContext {
             policy: attempt.account_selection_policy(),
             now: SystemTime::now(),
             excluded_accounts: attempt.excluded_accounts().clone(),
+            busy_accounts: Default::default(),
             preferred_account: attempt.required_account().cloned(),
             preferred_account_overrides_weight: true,
             round_robin_cursor: 0,
@@ -1985,14 +1986,16 @@ impl Provider for PolicySelectingProvider {
                     .upstream_model()
                     .map(UpstreamModelId::as_str),
                 &candidates,
-                &selection,
+                &mut selection,
             )
             .await
         {
-            Err(AccountPolicyError::Rejected) => Err(ProviderError::new(
-                ProviderErrorKind::RequestPolicyDenied,
-                UpstreamSendState::NotSent,
-            )),
+            Err(AccountPolicyError::Rejected | AccountPolicyError::Filtered) => {
+                Err(ProviderError::new(
+                    ProviderErrorKind::RequestPolicyDenied,
+                    UpstreamSendState::NotSent,
+                ))
+            }
             Err(AccountPolicyError::Fault | AccountPolicyError::StaleCandidate) => Err(
                 ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent),
             ),

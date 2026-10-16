@@ -518,6 +518,9 @@ pub enum GrokSessionSelectorError {
     /// 插件调度策略明确拒绝本次请求
     #[error("account scheduling policy rejected the request")]
     PolicyRejected,
+    /// 插件排除了本轮全部候选，终止本次调度
+    #[error("account scheduling policy left no selectable account")]
+    PolicyFiltered,
     /// 插件调度策略调用失败且配置为拒绝
     #[error("account scheduling policy is unavailable")]
     PolicyUnavailable,

@@ -647,7 +647,7 @@ async fn child_queue_timeout_does_not_rebind_or_allow_provider_fallback() {
 
 #[derive(Debug)]
 struct SessionScheduler {
-    explicit: bool,
+    decision: gateway_core::engine::policy::AccountScheduleDecision,
 }
 impl gateway_core::engine::policy::RequestPolicyPlan for SessionScheduler {
     fn route_model(
@@ -672,18 +672,13 @@ impl gateway_core::engine::policy::RequestPolicyPlan for SessionScheduler {
             gateway_core::engine::policy::RequestPolicyFault,
         >,
     > {
-        use gateway_core::engine::policy::AccountScheduleDecision;
         assert!(
             input
                 .candidates()
                 .iter()
                 .any(|candidate| candidate.account_id().as_str() == "acct_subagent_b")
         );
-        let decision = if self.explicit {
-            AccountScheduleDecision::Pick(ProviderAccountId::new("acct_subagent_b").unwrap())
-        } else {
-            AccountScheduleDecision::Delegate
-        };
+        let decision = self.decision.clone();
         Box::pin(async move { Ok(decision) })
     }
 }
@@ -695,10 +690,16 @@ impl gateway_core::routing::extensions::ExtensionSetLease for SessionExtensionLe
 }
 
 #[tokio::test]
-async fn child_binding_only_constrains_builtin_scheduling_and_preserves_plugin_choices() {
+async fn child_binding_respects_filtered_delegation_and_explicit_plugin_choices() {
+    use gateway_core::account::AccountAffinity;
     use gateway_core::engine::policy::RequestPolicyContext;
     use gateway_core::routing::extensions::{ExtensionSetId, ExtensionSetReference};
-    for explicit in [false, true] {
+    for (choice, mode) in [
+        ("delegate", AccountAffinity::Strict),
+        ("pick", AccountAffinity::Strict),
+        ("filter", AccountAffinity::Strict),
+        ("filter", AccountAffinity::Preferred),
+    ] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_subagent_a").await;
         let affinity = Arc::new(MemorySessionAffinity::default());
@@ -729,7 +730,19 @@ async fn child_binding_only_constrains_builtin_scheduling_and_preserves_plugin_c
         let id = ModelRequestId::new("req_plugin_child").unwrap();
         let key = ClientApiKeyId::new("key_openai_contract").unwrap();
         let policy = RequestPolicyContext::new(
-            Arc::new(SessionScheduler { explicit }),
+            Arc::new(SessionScheduler {
+                decision: match choice {
+                    "pick" => gateway_core::engine::policy::AccountScheduleDecision::Pick(
+                        ProviderAccountId::new("acct_subagent_b").unwrap(),
+                    ),
+                    "filter" => {
+                        gateway_core::engine::policy::AccountScheduleDecision::DelegateFiltered(
+                            BTreeSet::from([ProviderAccountId::new("acct_subagent_a").unwrap()]),
+                        )
+                    }
+                    _ => gateway_core::engine::policy::AccountScheduleDecision::Delegate,
+                },
+            }),
             ExtensionSetReference::new(
                 ExtensionSetId::new("session-choice".into()).unwrap(),
                 Arc::new(SessionExtensionLease),
@@ -742,7 +755,7 @@ async fn child_binding_only_constrains_builtin_scheduling_and_preserves_plugin_c
             RequestAttemptContext::new(id, key).with_request_policy(Some(policy)),
             NonZeroU32::new(1).unwrap(),
             SystemTime::now() + Duration::from_secs(5),
-            account_policy(),
+            account_policy().with_openai_account_affinity(mode),
             AccountAttemptContext::new(BTreeSet::new(), None, None)
                 .with_account_scope(contract_account_scope()),
             None,
@@ -755,7 +768,18 @@ async fn child_binding_only_constrains_builtin_scheduling_and_preserves_plugin_c
             ),
             attempt,
         ));
-        if explicit {
+        if choice == "filter" && mode == AccountAffinity::Strict {
+            let error = timeout(Duration::from_secs(2), pending)
+                .await
+                .unwrap()
+                .err()
+                .expect("excluded child owner must be terminal");
+            assert_eq!(error.kind(), ProviderErrorKind::RequestPolicyDenied);
+            assert_eq!(
+                error.send_state(),
+                gateway_core::upstream::UpstreamSendState::NotSent
+            );
+        } else if choice == "pick" || choice == "filter" {
             let stream = timeout(Duration::from_secs(2), pending)
                 .await
                 .unwrap()
@@ -1062,7 +1086,7 @@ async fn relaxed_and_preferred_session_requests_apply_distinct_scheduling_polici
         );
         let policy = account_policy()
             .with_openai_account_affinity(mode)
-            .with_smart_scheduling(SmartSchedulingConfig::new([1.0; 6], true).unwrap())
+            .with_smart_scheduling(SmartSchedulingConfig::new([1.0; 6]).unwrap())
             .with_queue(ConcurrencyQueuePolicy {
                 max_waiting,
                 timeout: Duration::from_secs(1),

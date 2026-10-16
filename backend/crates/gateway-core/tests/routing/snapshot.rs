@@ -443,7 +443,7 @@ fn compiled_plans_keep_their_scheduling_config_after_a_new_snapshot_is_built() {
     use gateway_core::account::SmartSchedulingConfig;
     let configs = [
         SmartSchedulingConfig::default(),
-        SmartSchedulingConfig::new([0.0, 2.0, 1.0, 0.5, 1.2, 2.3], true).unwrap(),
+        SmartSchedulingConfig::new([0.0, 2.0, 1.0, 0.5, 1.2, 2.3]).unwrap(),
     ];
     let mut plans = Vec::new();
     for (index, config) in configs.into_iter().enumerate() {

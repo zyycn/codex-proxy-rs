@@ -45,6 +45,7 @@ fn route_and_scheduler_decisions_are_explicit_and_strict() {
         model: Some("gpt-5".into()),
         candidates: vec![AccountScheduleCandidate {
             account_id: "acct_candidate".into(),
+            available: true,
             weight: 10,
             in_flight: 1,
             maximum_concurrency: 4,
@@ -67,4 +68,24 @@ fn route_and_scheduler_decisions_are_explicit_and_strict() {
         .unwrap(),
         json!({"decision":"pick","account_id":"acct_candidate"})
     );
+}
+
+#[test]
+fn filtered_delegation_has_an_explicit_exclusion_list() {
+    let decision = AccountScheduleDecision::DelegateFiltered {
+        exclude_account_ids: vec!["acct_candidate".into()],
+    };
+    let wire = json!({"decision":"delegate_filtered","exclude_account_ids":["acct_candidate"]});
+    assert_eq!(serde_json::to_value(&decision).unwrap(), wire);
+    assert_eq!(
+        serde_json::from_value::<AccountScheduleDecision>(wire).unwrap(),
+        decision
+    );
+    for invalid in [
+        json!({"decision":"delegate_filtered"}),
+        json!({"decision":"delegate_filtered","exclude_account_ids":null}),
+        json!({"decision":"delegate_filtered","exclude_account_ids":[],"threshold":90}),
+    ] {
+        assert!(serde_json::from_value::<AccountScheduleDecision>(invalid).is_err());
+    }
 }

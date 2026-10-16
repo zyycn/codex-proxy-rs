@@ -239,6 +239,7 @@ impl GrokAccountSessionSelector {
                 policy: request.account_selection_policy(),
                 now: SystemTime::now(),
                 excluded_accounts: request.excluded_accounts().clone(),
+                busy_accounts: Default::default(),
                 preferred_account: request.required_account().cloned().or(affinity_account),
                 preferred_account_overrides_weight: false,
                 round_robin_cursor: scheduling.round_robin_cursor(),
@@ -246,19 +247,15 @@ impl GrokAccountSessionSelector {
                 account_scope: (!diagnostic).then(|| Arc::clone(request.account_scope())),
                 reserved_concurrency: 0,
             };
-            let wait_candidates = AccountSelector.wait_candidates(&candidates, &context);
-            let capacity_context = context.clone();
             for candidate in &candidates {
                 if !waiting.can_try(candidate.account.id()) {
-                    context
-                        .excluded_accounts
-                        .insert(candidate.account.id().clone());
+                    context.busy_accounts.insert(candidate.account.id().clone());
                 }
             }
             let mut capacity_denied = false;
             let mut retry_after = None;
             loop {
-                let capacity = AccountSelector.capacity_snapshot(&candidates, &capacity_context);
+                context.excluded_accounts = request.excluded_accounts().clone();
                 let selection = match request.request_policy() {
                     Some(policy) => {
                         policy
@@ -267,7 +264,7 @@ impl GrokAccountSessionSelector {
                                 &self.provider_kind,
                                 Some(request.upstream_model().as_str()),
                                 &candidates,
-                                &context,
+                                &mut context,
                             )
                             .await
                     }
@@ -276,6 +273,9 @@ impl GrokAccountSessionSelector {
                 let Some(selection) = (match selection {
                     Ok(selection) => selection,
                     Err(AccountPolicyError::StaleCandidate) => continue 'refresh,
+                    Err(AccountPolicyError::Filtered) => {
+                        return Err(GrokSessionSelectorError::PolicyFiltered);
+                    }
                     Err(AccountPolicyError::Rejected) => {
                         return Err(GrokSessionSelectorError::PolicyRejected);
                     }
@@ -285,6 +285,7 @@ impl GrokAccountSessionSelector {
                 }) else {
                     break;
                 };
+                let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
                 let selected = selection.candidate();
                 let selected_id = selected.account.id().clone();
                 let selected_revision = selected.account.revision();
@@ -318,7 +319,7 @@ impl GrokAccountSessionSelector {
                     } => {
                         capacity_denied = true;
                         retry_after = minimum_retry_after(retry_after, candidate_retry);
-                        candidates.retain(|candidate| candidate.account.id() != &selected_id);
+                        context.busy_accounts.insert(selected_id);
                         continue;
                     }
                 };
@@ -387,6 +388,7 @@ impl GrokAccountSessionSelector {
                 });
             }
 
+            let wait_candidates = AccountSelector.wait_candidates(&candidates, &context);
             if !diagnostic && queue_policy.max_waiting > 0 && !wait_candidates.is_empty() {
                 AccountSelector
                     .wait_for_capacity(&mut waiting, &wait_candidates, &candidates, &context)
