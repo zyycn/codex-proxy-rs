@@ -144,6 +144,7 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
     assert_eq!(account_usage[0].cost_coverage.unavailable_count, 0);
     let records = repository
         .list_usage_records(UsageRecordQuery {
+            status: Default::default(),
             range,
             filter: UsageRecordFilter::default(),
             current_page: 1,

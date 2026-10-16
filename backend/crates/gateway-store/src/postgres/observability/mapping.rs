@@ -41,6 +41,7 @@ pub(crate) fn store_usage_query(
     query: admin_observability::UsageQuery,
 ) -> AdminStoreResult<UsageRecordQuery> {
     Ok(UsageRecordQuery {
+        status: query.status,
         range: store_range(query.range).map_err(observability_error)?,
         filter: store_usage_filter(query.filter),
         current_page: query.current_page,
@@ -302,6 +303,8 @@ pub(crate) fn usage_list_record_from_row(
         cost_currency.as_deref(),
     )?;
     Ok(UsageListRecord {
+        outcome: admin_observability::RequestOutcome::new(get::<String>(row, "outcome")?)
+            .map_err(|_| invalid("invalid request outcome"))?,
         client_api_key_name: get(row, "client_api_key_name")?,
         billing,
         id: get(row, "id")?,

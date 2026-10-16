@@ -1890,6 +1890,12 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 request/response/upstream ID、outcome 与搜索文本。`search` 仅供明细及错误列表使用；
 汇总、洞察和诊断不接受搜索参数，管理观测接口不接受路由分组筛选。页面搜索不改变顶部统计范围
 
+请求列表的 `status` 可取 `success`、`error`、`all`，默认 `success`；未知值返回 `400`。
+`success` 沿用成功用量记录范围，`error` 包含最终 `failed`、`incomplete` 的请求，
+`all` 合并成功用量记录及全部非成功请求，包括执行中和已取消请求。每个请求只返回一行，
+重试中间错误不改变请求最终分类；`logicalOutcome` 保留真实结果。状态筛选只影响明细列表，
+不改变顶部统计，独立运维事件仍通过 `/api/admin/operations/errors` 查询
+
 诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。诊断按请求量降序返回最多 100 项，
 同请求量按维度标识稳定排列

@@ -801,6 +801,7 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         .lock()
         .expect("usage records")
         .push(UsageListRecord {
+            outcome: gateway_admin::model::observability::RequestOutcome::Succeeded,
             client_api_key_name: Some("Production".to_owned()),
             id: "request_endpoint".to_owned(),
             endpoint: "/v1/responses".to_owned(),
@@ -1305,5 +1306,64 @@ pub(super) fn ops_error_record() -> gateway_admin::model::observability::OpsErro
         recovery_total_latency_ms: None,
         occurred_at: Utc::now(),
         stable_sort_id: "model_request:req_err".to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn usage_status_query_accepts_three_modes_and_rejects_unknown_values() {
+    use crate::admin::{AdminTestFixture, AdminTestState};
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (status, expected) in [
+        ("success", StatusCode::OK),
+        ("error", StatusCode::OK),
+        ("all", StatusCode::OK),
+        ("failed", StatusCode::BAD_REQUEST),
+    ] {
+        let response = observability::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/admin/usage/records?status={status}"))
+                    .header(header::COOKIE, "cpr_session=valid-session")
+                    .header("x-request-id", "usage_status_fixture")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let actual = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(
+            actual,
+            expected,
+            "{status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        if expected == StatusCode::OK {
+            use gateway_admin::model::observability::UsageRecordStatus;
+            let status_value = match status {
+                "success" => UsageRecordStatus::Success,
+                "error" => UsageRecordStatus::Error,
+                _ => UsageRecordStatus::All,
+            };
+            assert_eq!(
+                fixture
+                    .observations
+                    .lock()
+                    .unwrap()
+                    .records
+                    .last()
+                    .unwrap()
+                    .status,
+                status_value
+            );
+        }
     }
 }

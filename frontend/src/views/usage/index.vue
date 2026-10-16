@@ -1,12 +1,12 @@
 <script setup lang="ts">
+import type { UsageRecordStatus } from '@/api'
 import { useTableColumns, ZCard, ZIconButton, ZPageHeader, ZPagination, ZSegmented, ZSelect, ZTableColumnSettings } from '@codex-proxy/ui'
 
-import { Eye } from '@lucide/vue'
-import { computed, shallowRef, watch } from 'vue'
+import { CloudRain, Eye, List, Sun } from '@lucide/vue'
+import { shallowRef, watch } from 'vue'
 import ProviderFilter from '@/components/ProviderFilter.vue'
 import { usageRecordColumns } from '@/components/usage/shared/columns'
 import UsageRecordsTable from '@/components/usage/UsageRecordsTable.vue'
-import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageFilters from './components/UsageFilters.vue'
 import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
 import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
@@ -16,11 +16,12 @@ import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
 import { useUsageTimeRange } from './composables/useUsageTimeRange'
 import { usageTimeRangeOptions } from './constants'
 
-const recordView = shallowRef('success')
+const recordView = shallowRef<UsageRecordStatus>('success')
 const { visibleColumns, columnOptions, setColumnVisible, setColumnOrder, resetColumns } = useTableColumns(usageRecordColumns, 'usage-records')
 const recordViewOptions = [
-  { label: '成功记录', value: 'success' },
-  { label: '错误排查', value: 'errors' },
+  { label: '成功', value: 'success', icon: Sun },
+  { label: '错误', value: 'error', icon: CloudRain },
+  { label: '全部', value: 'all', icon: List },
 ]
 const { timeRange, timeRangeParams, refreshTimeRangeEnd, latestTimeRangeParams }
   = useUsageTimeRange()
@@ -45,7 +46,7 @@ const {
 } = useUsageRecordsTable({
   timeRangeParams,
   latestTimeRangeParams,
-  active: computed(() => recordView.value === 'success'),
+  status: recordView,
 })
 
 const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail()
@@ -82,24 +83,20 @@ watch(timeRange, () => {
       class="mt-5 flex flex-col"
     >
       <template #header>
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-text">
-              请求明细
-            </h2>
-            <p
-              class="mt-1.75 mb-0 text-cp leading-[1.15] font-emphasis text-cp-text-secondary"
-            >
-              成功请求与失败请求明细
-            </p>
-          </div>
-          <ZSegmented v-model="recordView" aria-label="请求明细类型" :options="recordViewOptions" class="w-52" />
+        <div>
+          <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-text">
+            请求明细
+          </h2>
+          <p
+            class="mt-1.75 mb-0 text-cp leading-[1.15] font-emphasis text-cp-text-secondary"
+          >
+            成功请求与失败请求明细
+          </p>
         </div>
       </template>
 
       <template #body>
         <div
-          v-show="recordView === 'success'"
           class="grid min-h-130 min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"
         >
           <UsageFilters
@@ -109,6 +106,7 @@ watch(timeRange, () => {
             @refresh="refreshUsageRecords"
           >
             <template #actions>
+              <ZSegmented v-model="recordView" aria-label="请求明细类型" :options="recordViewOptions" display="icon" class="w-30 shrink-0" />
               <ZTableColumnSettings
                 :options="columnOptions"
                 @change="setColumnVisible"
@@ -124,7 +122,7 @@ watch(timeRange, () => {
               :columns="visibleColumns"
               :rows="records"
               :loading="loading"
-              :empty-text="error ? `加载失败：${error}` : '暂无使用记录'"
+              :empty-text="error ? `加载失败：${error}` : '所选条件下暂无请求记录'"
             >
               <template #actions="{ row }">
                 <div class="flex items-center justify-start">
@@ -145,15 +143,6 @@ watch(timeRange, () => {
               @size-change="handlePageSizeChange"
             />
           </div>
-        </div>
-
-        <div v-show="recordView === 'errors'" class="min-h-130 min-w-0 flex-1">
-          <OpsErrorPanel
-            :time-range-params="timeRangeParams"
-            :latest-time-range-params="latestTimeRangeParams"
-            :provider="providerQuery"
-            :active="recordView === 'errors'"
-          />
         </div>
       </template>
     </ZCard>

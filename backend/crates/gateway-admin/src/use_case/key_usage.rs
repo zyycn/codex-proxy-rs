@@ -225,6 +225,7 @@ impl KeyUsageService for DefaultKeyUsageService {
             KeyUsageRecordKind::Success => KeyUsageRecords::Success(
                 self.observations
                     .list_usage_records(UsageQuery {
+                        status: Default::default(),
                         range: query.usage.range,
                         filter: usage_filter(&id, query.usage.model),
                         current_page: query.current_page,

@@ -62,6 +62,7 @@ async fn projected_page_counts_correct_pending_moves_deletions_and_model_or() {
                 for current_page in [1, 3, 6, 8] {
                     let page = repository
                         .list_usage_records(UsageRecordQuery {
+                            status: Default::default(),
                             range,
                             filter: UsageRecordFilter {
                                 client_api_key_ref: Some("key_analytics".to_owned()),
@@ -125,6 +126,7 @@ async fn usage_pages_preserve_order_and_exact_totals_from_both_ends() {
         for page in 1..=5 {
             let result = repository
                 .list_usage_records(UsageRecordQuery {
+                    status: Default::default(),
                     range,
                     filter: UsageRecordFilter {
                         client_api_key_ref: key.map(str::to_owned),
@@ -190,6 +192,7 @@ async fn usage_pages_cross_minutes_and_keep_exact_counts_after_source_changes() 
         for current_page in 1..=6 {
             let page = repository
                 .list_usage_records(UsageRecordQuery {
+                    status: Default::default(),
                     range,
                     filter: UsageRecordFilter {
                         client_api_key_ref: Some("key_analytics".to_owned()),
@@ -278,5 +281,107 @@ async fn ops_pages_merge_sources_across_minutes_with_stable_ties() {
             "page={current_page}",
         );
     }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn request_status_pages_share_one_request_timeline() {
+    use gateway_admin::{
+        model::{diagnostics::DiagnosticTarget, observability::UsageRecordStatus},
+        ports::store::ObservabilityStore,
+    };
+
+    let Some(database) = TestDatabase::create("usage_status_pages").await else {
+        return;
+    };
+    let start = chrono::DateTime::parse_from_rfc3339("2026-09-01T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    // 同时刻请求按 ID 稳定排列；成功请求的中间错误不能额外占据列表行
+    for (id, outcome) in [
+        ("status_a", "succeeded"),
+        ("status_b", "failed"),
+        ("status_c", "incomplete"),
+        ("status_d", "cancelled"),
+        ("status_e", "running"),
+        ("status_f", "succeeded"),
+    ] {
+        seed(&database.pool, id, start, &[]).await;
+        sqlx::query("update model_requests set outcome=$2, provider_kind='openai', completed_at=case when $2='running' then null else completed_at end, input_tokens=case when $2='succeeded' then input_tokens else null end, output_tokens=case when $2='succeeded' then output_tokens else null end, total_tokens=case when $2='succeeded' then total_tokens else null end where id=$1")
+            .bind(id).bind(outcome).execute(&database.pool).await.unwrap();
+    }
+    sqlx::query(
+        "update model_requests set requested_model_id='model_status_b' where id='status_b'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    for id in ["event_a", "event_b"] {
+        sqlx::query("insert into ops_events(id,model_request_id,attempt_index,level,component,operation,failure_kind,message,created_at) values($1,'status_a',1,'error','provider','request','upstream','retry evidence',$2)")
+            .bind(id).bind(start).execute(&database.pool).await.unwrap();
+    }
+    sqlx::query("insert into ops_events(id,level,component,operation,failure_kind,message,created_at) values('standalone','error','system','refresh','upstream','standalone error',$1)").bind(start).execute(&database.pool).await.unwrap();
+    super::drain_analytics(&database.pool).await;
+    let repo = observability_repository(&database.pool);
+    let range =
+        ObservabilityRange::new(start - TimeDelta::minutes(1), start + TimeDelta::minutes(5))
+            .unwrap();
+    for (status, expected) in [
+        (UsageRecordStatus::Success, vec!["status_f", "status_a"]),
+        (UsageRecordStatus::Error, vec!["status_c", "status_b"]),
+        (
+            UsageRecordStatus::All,
+            vec![
+                "status_f", "status_e", "status_d", "status_c", "status_b", "status_a",
+            ],
+        ),
+    ] {
+        let mut actual = Vec::new();
+        for current_page in 1..=4 {
+            let page = repo
+                .list_usage_records(UsageRecordQuery {
+                    status,
+                    range,
+                    filter: UsageRecordFilter::default(),
+                    current_page,
+                    page_size: ObservabilityPageSize::new(2).unwrap(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(page.total, expected.len() as u64);
+            for item in page.items {
+                if matches!(
+                    item.outcome.as_str(),
+                    "failed" | "incomplete" | "running" | "cancelled"
+                ) {
+                    assert_eq!(item.total_tokens, None);
+                }
+                actual.push(item.id);
+            }
+        }
+        assert_eq!(actual, expected, "{status:?}");
+    }
+    let page = repo
+        .list_usage_records(UsageRecordQuery {
+            status: UsageRecordStatus::Error,
+            range,
+            filter: UsageRecordFilter {
+                search: Some("model_status_b".into()),
+                provider_kind: Some("openai".into()),
+                ..Default::default()
+            },
+            current_page: 1,
+            page_size: ObservabilityPageSize::new(10).unwrap(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].id, "status_b");
+    // 诊断包仍可按请求 ID 关联中间事件，不受列表时间范围或最终结果限制
+    let errors = super::admin_observability_store(&database.pool)
+        .diagnostic_errors(&DiagnosticTarget::Request("status_a".into()), 100)
+        .await
+        .unwrap();
+    assert_eq!(errors.len(), 2);
     database.close().await;
 }

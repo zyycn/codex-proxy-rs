@@ -172,9 +172,19 @@ pub struct UsageFilter {
     pub search: Option<String>,
 }
 
+/// 请求列表的结果筛选，不改变汇总和计量口径
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UsageRecordStatus {
+    #[default]
+    Success,
+    Error,
+    All,
+}
+
 /// 用量记录分页查询
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageQuery {
+    pub status: UsageRecordStatus,
     pub range: TimeRange,
     pub filter: UsageFilter,
     pub current_page: u32,
@@ -653,6 +663,7 @@ pub struct DashboardObservation {
 /// 使用记录表格的窄读模型
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageListRecord {
+    pub outcome: RequestOutcome,
     pub client_api_key_name: Option<String>,
     pub id: String,
     pub endpoint: String,
@@ -845,7 +856,7 @@ pub struct UsageAttempt {
     pub occurred_at: DateTime<Utc>,
 }
 
-/// 一条请求及其全部尝试
+/// 一条请求及其保留的尝试与诊断轨迹
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageDetail {
     pub trace: Option<serde_json::Value>,

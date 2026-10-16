@@ -81,7 +81,10 @@ export interface UsageRecordMetadata {
   [key: string]: unknown
 }
 
+export type UsageRecordStatus = 'success' | 'error' | 'all'
+
 export interface UsageListRecord {
+  logicalOutcome: string
   clientApiKeyName: string | null
   id: string
   provider: string | null
@@ -213,77 +216,6 @@ export type UsageRecordDetail = UsageRecord & {
 
 export interface UsageRecordsResponse {
   items: UsageListRecord[]
-  currentPage: number
-  pageSize: number
-  total: number
-}
-
-export interface OpsErrorMetadata {
-  source: string
-  component: string
-  attemptId: string | null
-  accountLabel: string | null
-  continuationAffinityHash: string | null
-  continuationPreviousResponseIdHash: string | null
-  continuationUnavailableReason: string | null
-  upstreamConnectionId: string | null
-  upstreamConnectionExitReason: string | null
-  upstreamConnectionAgeMs: number | null
-  upstreamConnectionIdleMs: number | null
-  recoveryRequestId: string | null
-  recoveredAt: string | null
-  recoveryAttemptCount: number
-  recoveryRetryDelayMs: number | null
-  recoveryTotalLatencyMs: number | null
-}
-
-export interface OpsError {
-  clientApiKeyName: string | null
-  id: string
-  requestId: string | null
-  clientApiKeyId: string | null
-  kind: string
-  operation: string
-  protocol: string | null
-  clientTransport: string | null
-  provider: string | null
-  authenticationKind: string | null
-  accountId: string | null
-  accountName: string | null
-  accountEmail: string | null
-  accountPlanType: string | null
-  accountPlanTypeDisplay: string | null
-  route: string
-  model: string | null
-  requestedModel: string | null
-  upstreamModel: string | null
-  serviceTier: string | null
-  clientStatusCode: number | null
-  upstreamStatusCode: number | null
-  transport: string | null
-  attemptIndex: number | null
-  failureClass: string
-  upstreamSendState: string | null
-  providerErrorCode: string | null
-  responseId: string | null
-  upstreamRequestId: string | null
-  latencyMs: number | null
-  clientIp: string | null
-  userAgent: string | null
-  reasoningEffort: string | null
-  reasoningPreset: string | null
-  requestKind: string | null
-  subagentKind: string | null
-  compact: boolean | null
-  message: string
-  errorDetails: string | null
-  metadata: OpsErrorMetadata
-  createdAt: string
-  createdAtDisplay: string
-}
-
-export interface OpsErrorsResponse {
-  items: OpsError[]
   currentPage: number
   pageSize: number
   total: number
@@ -454,9 +386,7 @@ interface PageQuery {
   pageSize: number
 }
 
-type UsagePageQuery = UsageRangeQuery & PageQuery & { search?: string }
-
-type OpsErrorPageQuery = UsagePageQuery
+type UsagePageQuery = UsageRangeQuery & PageQuery & { search?: string, status?: UsageRecordStatus }
 
 interface UsageDetailQuery {
   id: string
@@ -467,15 +397,6 @@ type UsageDiagnosticsQuery = UsageRangeQuery & { dimension: string }
 export function getUsageRecords(data: UsagePageQuery, options: RequestOptions = {}) {
   return request<UsageRecordsResponse>({
     url: '/api/admin/usage/records',
-    method: 'GET',
-    params: data,
-    ...options,
-  })
-}
-
-export function getOpsErrors(data: OpsErrorPageQuery, options: RequestOptions = {}) {
-  return request<OpsErrorsResponse>({
-    url: '/api/admin/operations/errors',
     method: 'GET',
     params: data,
     ...options,

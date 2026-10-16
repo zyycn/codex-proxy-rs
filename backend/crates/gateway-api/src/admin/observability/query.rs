@@ -29,6 +29,7 @@ impl DashboardQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageQuery {
+    pub status: Option<String>,
     pub current_page: Option<u32>,
     pub page_size: Option<u16>,
     pub kind: Option<String>,
@@ -330,6 +331,12 @@ pub(crate) fn usage_command(
     let page_size_value =
         DomainPageSize::new(page_size).map_err(|_| WireValidationError::new("pageSize"))?;
     Ok(domain::UsageQuery {
+        status: match query.status.as_deref() {
+            None | Some("success") => domain::UsageRecordStatus::Success,
+            Some("error") => domain::UsageRecordStatus::Error,
+            Some("all") => domain::UsageRecordStatus::All,
+            Some(_) => return Err(WireValidationError::new("status")),
+        },
         range: usage_range(
             query.start_time.as_deref(),
             query.end_time.as_deref(),
