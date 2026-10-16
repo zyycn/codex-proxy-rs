@@ -106,6 +106,7 @@ async fn create_route_should_create_an_empty_group() {
     assert_eq!(value["data"]["record"]["memberCount"], 0);
     assert_eq!(value["data"]["record"]["color"], "#A855F780");
     assert_eq!(value["data"]["record"]["fastMode"], "default");
+    assert_eq!(value["data"]["record"]["allowImageGeneration"], true);
     assert_eq!(value["data"]["configRevision"], 8);
 }
 
@@ -391,5 +392,42 @@ async fn fast_mode_rejects_invalid_values_and_creates_groups_in_each_mode() {
                 mode
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn image_generation_flag_round_trips_and_omitted_updates_preserve_it() {
+    let fixture = authenticated_fixture().await;
+    let created = request(router(&fixture), Method::POST, "/api/admin/account-groups/create", Some(json!({
+        "name":"No images", "description":null, "color":"#2563EBFF", "allowImageGeneration":false
+    })), true).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = response_json(created).await;
+    assert_eq!(created["data"]["record"]["allowImageGeneration"], false);
+    let id = created["data"]["id"].as_str().unwrap();
+    for (value, expected) in [
+        (None, false),
+        (Some(true), true),
+        (Some(false), false),
+        (None, false),
+    ] {
+        let mut body =
+            json!({"id":id,"name":"Image policy","description":null,"color":"#2563EBFF"});
+        if let Some(value) = value {
+            body["allowImageGeneration"] = json!(value);
+        }
+        let response = request(
+            router(&fixture),
+            Method::POST,
+            "/api/admin/account-groups/update",
+            Some(body),
+            true,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await["data"]["record"]["allowImageGeneration"],
+            expected
+        );
     }
 }

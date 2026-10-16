@@ -661,3 +661,97 @@ fn attempt_middleware_preserves_multi_value_and_authentication_headers() {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     });
 }
+
+#[derive(Debug)]
+struct AddingImageTool;
+
+impl MiddlewarePlan for AddingImageTool {
+    fn handle(
+        &self,
+        _: MiddlewareContext,
+        request: MiddlewareRequest,
+        next: MiddlewareNext,
+    ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
+        Box::pin(async move {
+            let (protocol, headers, body) = request.into_parts();
+            let mut body: Value = serde_json::from_slice(&body).unwrap();
+            body["tools"] = json!([{"type":"image_generation"}]);
+            next.run(MiddlewareRequest::new(
+                protocol,
+                headers,
+                serde_json::to_vec(&body).unwrap().into(),
+            ))
+            .await
+        })
+    }
+}
+
+#[test]
+fn attempt_middleware_cannot_add_image_generation_to_a_denied_scope() {
+    use gateway_core::account::{AccountSelectionPolicy, RotationStrategy};
+    use gateway_core::engine::{AccountAttemptContext, AttemptContext, RequestAttemptContext};
+    use gateway_core::error::ProviderErrorKind;
+    use gateway_core::routing::{ClientRoutingScope, FrozenAccountScope, RuntimeAccountDirectory};
+    use gateway_core::upstream::UpstreamSendState;
+
+    for allowed in [false, true] {
+        let scope = FrozenAccountScope::new(
+            Arc::new(RuntimeAccountDirectory::new(Default::default())),
+            ClientRoutingScope::all_accounts(),
+        )
+        .with_image_generation(allowed);
+        let request = RequestAttemptContext::new(
+            ModelRequestId::new("req_image_policy").unwrap(),
+            ClientApiKeyId::new("key_image_policy").unwrap(),
+        )
+        .with_middleware(
+            Some(FrozenMiddlewarePlan::new(
+                Arc::new(AddingImageTool),
+                ExtensionSetReference::new(
+                    ExtensionSetId::new("image-policy-test".to_owned()).unwrap(),
+                    Arc::new(ReadyGeneration),
+                ),
+            )),
+            Arc::from([]),
+            "/v1/responses".into(),
+            ClientTransport::HttpJson,
+        );
+        let attempt = AttemptContext::new(
+            request,
+            NonZeroU32::new(1).unwrap(),
+            SystemTime::now() + Duration::from_secs(5),
+            AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::new(1).unwrap()),
+            AccountAttemptContext::new(Default::default(), None, None)
+                .with_account_scope(Arc::new(scope)),
+            None,
+            CancellationToken::new(),
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let result = futures::executor::block_on(attempt.execute_middleware(
+            body_operation(&json!({"model":"gpt-test","input":"hello"})),
+            ProviderKind::new("openai").unwrap(),
+            Some("gpt-test".into()),
+            ProviderAccountId::new("acct_middleware").unwrap(),
+            Box::new(move |operation, _| {
+                Box::pin(async move {
+                    assert!(operation.image_generation_requested());
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Ok(empty_provider_stream())
+                })
+            }),
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), usize::from(allowed));
+        if allowed {
+            assert!(result.is_ok());
+        } else {
+            let error = match result {
+                Err(error) => error,
+                Ok(_) => panic!("image tool must be denied"),
+            };
+            assert_eq!(error.kind(), ProviderErrorKind::RequestPolicyDenied);
+            assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+            assert!(error.retry_is_prohibited());
+        }
+    }
+}

@@ -20,6 +20,7 @@ import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../constants'
 
 export interface AccountGroupFormValue {
   fastMode: FastMode
+  allowImageGeneration: boolean
   name: string
   description: string
   color: string
@@ -122,6 +123,7 @@ export function useAccountGroups() {
       description: group.description ?? '',
       color: group.color,
       fastMode: group.fastMode,
+      allowImageGeneration: group.allowImageGeneration,
     }
     showFormModal.value = true
   }
@@ -144,8 +146,9 @@ export function useAccountGroups() {
       const updating = Boolean(editingGroup.value)
       const description = form.value.description.trim() || null
       const fastMode = form.value.fastMode
+      const allowImageGeneration = form.value.allowImageGeneration
       if (editingGroup.value) {
-        await updateAccountGroup({ id: editingGroup.value.id, name, description, color, fastMode })
+        await updateAccountGroup({ id: editingGroup.value.id, name, description, color, fastMode, allowImageGeneration })
       }
       else {
         await createAccountGroup({
@@ -153,6 +156,7 @@ export function useAccountGroups() {
           description,
           color,
           fastMode,
+          allowImageGeneration,
         })
       }
       showFormModal.value = false
@@ -313,5 +317,5 @@ export function useAccountGroups() {
 }
 
 function emptyForm(): AccountGroupFormValue {
-  return { name: '', description: '', color: DEFAULT_ACCOUNT_GROUP_COLOR, fastMode: 'default' }
+  return { name: '', description: '', color: DEFAULT_ACCOUNT_GROUP_COLOR, fastMode: 'default', allowImageGeneration: true }
 }

@@ -74,6 +74,7 @@ impl SnapshotClientPolicyFacts {
 /// Store 读取到的账号分组事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAccountGroupFacts {
+    allow_image_generation: bool,
     fast_mode: FastMode,
     id: AccountGroupId,
     name: String,
@@ -81,6 +82,12 @@ pub struct SnapshotAccountGroupFacts {
 }
 
 impl SnapshotAccountGroupFacts {
+    #[must_use]
+    pub const fn with_image_generation(mut self, allowed: bool) -> Self {
+        self.allow_image_generation = allowed;
+        self
+    }
+
     #[must_use]
     pub const fn with_fast_mode(mut self, fast_mode: FastMode) -> Self {
         self.fast_mode = fast_mode;
@@ -93,6 +100,7 @@ impl SnapshotAccountGroupFacts {
             id,
             name,
             enabled,
+            allow_image_generation: true,
             fast_mode: FastMode::Default,
         }
     }
@@ -499,6 +507,7 @@ async fn compile_runtime_snapshot(
     let mut client_policies = Vec::with_capacity(facts.client_policies.len());
     for policy in facts.client_policies {
         let mut fast_mode = FastMode::Default;
+        let mut allow_image_generation = true;
         let account_scope = if policy.group_ids.is_empty() {
             FrozenAccountScope::new(
                 Arc::clone(&account_directory),
@@ -515,8 +524,9 @@ async fn compile_runtime_snapshot(
                 let group = groups
                     .get(&group_id)
                     .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
-                // 禁用分组仅影响选号；Key 仍绑定其 Fast 策略
+                // 停用只影响选号，仍绑定的分组继续贡献请求策略
                 fast_mode = fast_mode.merge(group.fast_mode);
+                allow_image_generation &= group.allow_image_generation;
                 bound_groups.push(RoutingGroupSnapshot::new(
                     group.id.clone(),
                     group.name.clone(),
@@ -539,6 +549,7 @@ async fn compile_runtime_snapshot(
                 policy.plaintext_key,
                 Arc::new(
                     account_scope
+                        .with_image_generation(allow_image_generation)
                         .with_fast_mode(fast_mode)
                         .with_request_profiles(policy.request_profiles),
                 ),

@@ -127,6 +127,7 @@ impl Environment {
             .account_groups()
             .create_account_group(
                 NewAccountGroup {
+                    allow_image_generation: true,
                     fast_mode: FastMode::Default,
                     id: id.clone(),
                     name: format!("fixture {}", id.as_str()),

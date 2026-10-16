@@ -303,6 +303,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                 "name".to_owned(),
                 "description".to_owned(),
                 "fast_mode".to_owned(),
+                "allow_image_generation".to_owned(),
             ],
         );
         let revision = self
@@ -335,6 +336,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                 "name".to_owned(),
                 "description".to_owned(),
                 "fast_mode".to_owned(),
+                "allow_image_generation".to_owned(),
             ],
         );
         let revision = self
@@ -342,7 +344,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                 Box::pin(async move {
                     let result = sqlx::query(
                         "update account_groups
-                 set name = $2, description = $3, color = $4, fast_mode = coalesce($5, fast_mode), updated_at = now()
+                 set name = $2, description = $3, color = $4, fast_mode = coalesce($5, fast_mode), allow_image_generation = coalesce($6, allow_image_generation), updated_at = now()
                  where id = $1",
                     )
                     .bind(command.id.as_str())
@@ -350,6 +352,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                     .bind(command.description)
                     .bind(command.color.as_str())
                     .bind(command.fast_mode.map(FastMode::as_str))
+                    .bind(command.allow_image_generation)
                     .execute(&mut **transaction)
                     .await
                     .map_err(|error| map_group_write_error(error, command.id.as_str()))?;
@@ -454,7 +457,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
 
 fn group_select() -> QueryBuilder<Postgres> {
     QueryBuilder::new(
-        "select g.id, g.name, g.description, g.color, g.enabled, g.fast_mode, g.created_at, g.updated_at,
+        "select g.id, g.name, g.description, g.color, g.enabled, g.fast_mode, g.allow_image_generation, g.created_at, g.updated_at,
                 coalesce(members.member_count, 0)::bigint as member_count,
                 coalesce(keys.client_key_count, 0)::bigint as client_key_count,
                 coalesce(members.provider_counts, '{}'::jsonb) as provider_counts
@@ -532,6 +535,9 @@ fn group_record(row: &sqlx::postgres::PgRow) -> StoreResult<AccountGroupRecord> 
     let provider_counts = serde_json::from_value::<BTreeMap<String, u64>>(provider_counts)
         .map_err(|source| invalid("invalid provider counts").with_source(source))?;
     Ok(AccountGroupRecord {
+        allow_image_generation: row
+            .try_get("allow_image_generation")
+            .map_err(|source| invalid("invalid image generation policy").with_source(source))?,
         fast_mode: FastMode::parse(
             row.try_get("fast_mode")
                 .map_err(|source| invalid("invalid fast_mode").with_source(source))?,
@@ -720,14 +726,15 @@ pub(crate) async fn insert_account_group_in_transaction(
         .map_err(|source| invalid("invalid account group fields").with_source(source))?;
     sqlx::query(
         "insert into account_groups
-         (id, name, description, color, fast_mode, enabled, created_at, updated_at)
-         values ($1, $2, $3, $4, $5, true, now(), now())",
+         (id, name, description, color, fast_mode, allow_image_generation, enabled, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, true, now(), now())",
     )
     .bind(command.id.as_str())
     .bind(&command.name)
     .bind(&command.description)
     .bind(command.color.as_str())
     .bind(command.fast_mode.as_str())
+    .bind(command.allow_image_generation)
     .execute(&mut **transaction)
     .await
     .map_err(|error| map_group_write_error(error, command.id.as_str()))?;

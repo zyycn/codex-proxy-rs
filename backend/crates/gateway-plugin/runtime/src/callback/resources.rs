@@ -73,6 +73,7 @@ impl PluginResources {
                         &self.owner,
                         request.resource_key,
                         CreateAccountGroup {
+                            allow_image_generation: true,
                             fast_mode: gateway_core::account::FastMode::Default,
                             name: request.name,
                             description: request.description,

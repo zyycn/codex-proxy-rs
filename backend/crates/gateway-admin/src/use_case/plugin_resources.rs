@@ -52,6 +52,7 @@ impl PluginResourceAccess for DefaultPluginResourceAccess {
                     owner,
                     resource_key,
                     NewAccountGroup {
+                        allow_image_generation: command.allow_image_generation,
                         id,
                         name: command.name,
                         description: command.description,

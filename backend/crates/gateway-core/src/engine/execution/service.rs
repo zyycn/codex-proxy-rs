@@ -400,6 +400,10 @@ impl DefaultExecutionService {
         started_at: SystemTime,
         request_id: Option<ModelRequestId>,
     ) -> Result<StartedExecution, GatewayError> {
+        crate::engine::image_generation::check_image_generation(
+            authorization.account_scope.allows_image_generation(),
+            &request.operation,
+        )?;
         let request_id = request_id.map_or_else(new_request_id, Ok)?;
         if authorization.cancellation.is_cancelled() {
             return Err(GatewayError::new(

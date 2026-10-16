@@ -9,6 +9,7 @@ pub mod continuation;
 pub mod coordinator;
 pub mod execution;
 pub mod extensions;
+mod image_generation;
 pub mod middleware;
 pub mod nested;
 pub mod observation;
@@ -37,7 +38,9 @@ use crate::account::{
     ProviderAccountId,
 };
 use crate::engine::continuation::{ContinuationBinding, NativeContinuationPin};
-use crate::error::{GatewayError, ProviderConnectionObservation, ProviderError, StoreError};
+use crate::error::{
+    GatewayError, ProviderConnectionObservation, ProviderError, ProviderErrorKind, StoreError,
+};
 use crate::event::ProviderEvent;
 use crate::identity::ProviderKind;
 use crate::lifecycle::CancellationToken;
@@ -688,6 +691,26 @@ impl AttemptContext {
         account_id: ProviderAccountId,
         terminal: provider::ProviderMiddlewareTerminal,
     ) -> Result<provider::ProviderStream, ProviderError> {
+        // 入口已校验原请求，此处复查中间件最终提交的 operation，每次重试均生效
+        let terminal: provider::ProviderMiddlewareTerminal = if self
+            .account_scope()
+            .is_some_and(|scope| !scope.allows_image_generation())
+        {
+            Box::new(move |operation, headers| {
+                Box::pin(async move {
+                    image_generation::check_image_generation(false, &operation).map_err(|_| {
+                        ProviderError::new(
+                            ProviderErrorKind::RequestPolicyDenied,
+                            UpstreamSendState::NotSent,
+                        )
+                        .with_retry_prohibited()
+                    })?;
+                    terminal(operation, headers).await
+                })
+            })
+        } else {
+            terminal
+        };
         let context = middleware::MiddlewareContext::new(
             middleware::MiddlewareTarget {
                 request_id: self.request.request_id.clone(),

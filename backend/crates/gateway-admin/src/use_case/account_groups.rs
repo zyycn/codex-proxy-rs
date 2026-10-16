@@ -160,6 +160,7 @@ impl AccountGroupService for DefaultAccountGroupService {
             self.store
                 .create_account_group(
                     NewAccountGroup {
+                        allow_image_generation: command.allow_image_generation,
                         id,
                         name: command.name,
                         description: command.description,

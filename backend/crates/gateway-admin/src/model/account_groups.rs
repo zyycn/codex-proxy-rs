@@ -100,6 +100,7 @@ pub struct AccountGroupListQuery {
 /// 完整账号分组摘要
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupRecord {
+    pub allow_image_generation: bool,
     pub fast_mode: FastMode,
     pub id: AccountGroupId,
     pub name: String,
@@ -139,6 +140,7 @@ pub struct AccountGroupOptionsPage {
 /// 创建账号分组
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateAccountGroup {
+    pub allow_image_generation: bool,
     pub fast_mode: FastMode,
     pub name: String,
     pub description: Option<String>,
@@ -148,6 +150,7 @@ pub struct CreateAccountGroup {
 /// 已生成稳定标识、可直接提交存储的创建命令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAccountGroup {
+    pub allow_image_generation: bool,
     pub fast_mode: FastMode,
     pub id: AccountGroupId,
     pub name: String,
@@ -158,6 +161,7 @@ pub struct NewAccountGroup {
 /// 更新账号分组的描述字段
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccountGroup {
+    pub allow_image_generation: Option<bool>,
     pub fast_mode: Option<FastMode>,
     pub id: AccountGroupId,
     pub name: String,

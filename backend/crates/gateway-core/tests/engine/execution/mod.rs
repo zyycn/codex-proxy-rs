@@ -3952,6 +3952,16 @@ fn start_snapshot_with_policy(
     limits: RateLimits,
     fast_mode: FastMode,
 ) -> RuntimeSnapshot {
+    start_snapshot_with_image_policy(revision, enabled, limits, fast_mode, true)
+}
+
+fn start_snapshot_with_image_policy(
+    revision: u64,
+    enabled: bool,
+    limits: RateLimits,
+    fast_mode: FastMode,
+    allow_image_generation: bool,
+) -> RuntimeSnapshot {
     let provider = ProviderKind::new("openai").expect("provider kind");
     let capabilities =
         ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000));
@@ -3971,7 +3981,8 @@ fn start_snapshot_with_policy(
                 account_scope(&provider, "acct_start")
                     .as_ref()
                     .clone()
-                    .with_fast_mode(fast_mode),
+                    .with_fast_mode(fast_mode)
+                    .with_image_generation(allow_image_generation),
             ),
             enabled,
             limits,
@@ -4893,5 +4904,78 @@ fn child_settings_recompute_key_scope_without_inheriting_parent_defaults() {
                 .unwrap()
                 .is_empty()
         );
+    });
+}
+
+#[test]
+fn image_policy_stays_frozen_for_prepared_requests_and_refreshes_for_the_next_turn() {
+    block_on(async {
+        let snapshot = |revision, allowed| {
+            start_snapshot_with_image_policy(
+                revision,
+                true,
+                RateLimits::unlimited(),
+                FastMode::Default,
+                allowed,
+            )
+        };
+        let snapshots = RuntimeSnapshotHandle::new(snapshot(1, false));
+        let admissions = Arc::new(Admissions::default());
+        let service = DefaultExecutionService::new(
+            snapshots.clone(),
+            Arc::new(TrackingExecutionStore::default()),
+            ProviderRegistry::default(),
+            admissions.clone(),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+            Arc::new(crate::RecordingDiagnostics::default()),
+        );
+        let client = service.authenticate("sk_start_test").unwrap();
+        let prepared = service.prepare_execution(client.clone()).await.unwrap();
+        // 关闭生图不影响文本请求的正常准入
+        let text = service
+            .start(request(&service, ClientTransport::HttpJson))
+            .await
+            .unwrap();
+        text.session.detach_finalize().await;
+        assert_eq!(admissions.limits.lock().unwrap().len(), 1);
+        snapshots.publish(snapshot(2, true));
+        assert!(
+            !prepared
+                .client()
+                .policy()
+                .account_scope()
+                .allows_image_generation()
+        );
+        let next = service.prepare_execution(client).await.unwrap();
+        assert!(
+            next.client()
+                .policy()
+                .account_scope()
+                .allows_image_generation()
+        );
+        let input = request(&service, ClientTransport::WebSocket);
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "openai",
+                json!({"model":"gpt-start","tools":[{"type":"image_generation"}]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap(),
+        ));
+        let result = service
+            .start_prepared(
+                prepared,
+                gateway_core::engine::execution::PreparedExecutionRequest {
+                    public_model: input.public_model,
+                    operation,
+                    metadata: input.metadata,
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(error) if error.kind() == GatewayErrorKind::PolicyDenied));
+        assert_eq!(admissions.limits.lock().unwrap().len(), 1);
     });
 }

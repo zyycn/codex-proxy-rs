@@ -403,6 +403,7 @@ pub struct GenerateRequest {
 
 #[derive(Clone, PartialEq)]
 struct GeneratePayload {
+    source_image_generation: bool,
     protocol_payload: ProtocolPayload,
     client_turn: Option<ClientTurn>,
     provider_session_state: Option<ProviderSessionState>,
@@ -445,6 +446,7 @@ impl GenerateRequest {
     pub fn from_protocol_payload(protocol_payload: ProtocolPayload) -> Self {
         Self {
             payload: Arc::new(GeneratePayload {
+                source_image_generation: false,
                 protocol_payload,
                 client_turn: None,
                 provider_session_state: None,
@@ -506,14 +508,9 @@ impl GenerateRequest {
     /// 返回客户端是否请求了图片生成工具
     #[must_use]
     pub fn image_generation_requested(&self) -> bool {
-        self.body()
-            .get("tools")
-            .and_then(Value::as_array)
-            .is_some_and(|tools| {
-                tools.iter().any(|tool| {
-                    tool.get("type").and_then(Value::as_str) == Some("image_generation")
-                })
-            })
+        self.payload.source_image_generation
+            || (self.protocol_payload().protocol() == "openai"
+                && requests_image_generation(self.body()))
     }
 
     /// 返回指定 Provider 的连接内会话状态
@@ -610,6 +607,35 @@ fn contains_type(value: Option<&Value>, expected: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// 原生工具声明授权上游生成图片，Codex 的被动 namespace 与图片输入不属于该权限
+fn requests_image_generation(body: &Map<String, Value>) -> bool {
+    contains_image_tool(body.get("tools"))
+        || body
+            .get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("additional_tools")
+                        && contains_image_tool(item.get("tools"))
+                })
+            })
+        || body.get("tool_choice").is_some_and(|choice| {
+            is_image_tool(choice)
+                || (choice.get("type").and_then(Value::as_str) == Some("allowed_tools")
+                    && contains_image_tool(choice.get("tools")))
+        })
+}
+
+fn contains_image_tool(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_array)
+        .is_some_and(|tools| tools.iter().any(is_image_tool))
+}
+
+fn is_image_tool(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("image_generation")
 }
 
 /// 图像 API 的稳定端点语义
@@ -1020,6 +1046,7 @@ impl Operation {
             Self::Generate(request) => {
                 let protocol_payload = request.protocol_payload();
                 let source_requirements = translating.then(|| request.requirements());
+                let source_image_generation = translating && request.image_generation_requested();
                 let body = match body {
                     Some(body) => {
                         serde_json::from_slice::<Map<String, Value>>(&body).map_err(|_| {
@@ -1038,6 +1065,8 @@ impl Operation {
                 };
                 let mut payload = (*request.payload).clone();
                 payload.protocol_payload = replacement;
+                // 跨协议转换不能抹去已识别的生图权限要求，也不解释目标私有协议
+                payload.source_image_generation |= source_image_generation;
                 if let Some(requirements) = source_requirements {
                     payload.source_requirements = Some(requirements);
                 }

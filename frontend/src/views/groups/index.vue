@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ZCard, ZCheckbox, ZConfirmDialog, ZPageHeader, ZPagination, ZTable } from '@codex-proxy/ui'
-import { Zap, ZapOff } from '@lucide/vue'
+import { ImageOff, Zap, ZapOff } from '@lucide/vue'
 import { usePageSelection } from '@/composables/usePageSelection'
 import AccountGroupActions from './components/AccountGroupActions.vue'
 import AccountGroupFilters from './components/AccountGroupFilters.vue'
@@ -112,6 +112,15 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
                   >
                     <Zap v-if="row.fastMode === 'enabled'" class="size-3" stroke-width="2.2" aria-hidden="true" />
                     <ZapOff v-else class="size-3" stroke-width="2.2" aria-hidden="true" />
+                  </span>
+                  <span
+                    v-if="!row.allowImageGeneration"
+                    class="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-cp-fill-tertiary text-cp-text-tertiary"
+                    title="生图已关闭"
+                    role="img"
+                    aria-label="生图已关闭"
+                  >
+                    <ImageOff class="size-3" stroke-width="2.2" aria-hidden="true" />
                   </span>
                 </div>
                 <span v-if="row.description" class="truncate text-cp-xs font-emphasis text-cp-text-quaternary">

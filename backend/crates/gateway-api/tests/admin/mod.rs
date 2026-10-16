@@ -711,6 +711,7 @@ impl MemoryAccountGroupStore {
             (
                 primary_id.clone(),
                 AccountGroupRecord {
+                    allow_image_generation: true,
                     fast_mode: FastMode::Default,
                     id: primary_id,
                     name: "Alpha routing".to_owned(),
@@ -733,6 +734,7 @@ impl MemoryAccountGroupStore {
             (
                 secondary_id.clone(),
                 AccountGroupRecord {
+                    allow_image_generation: true,
                     fast_mode: FastMode::Default,
                     id: secondary_id,
                     name: "Beta routing".to_owned(),
@@ -891,6 +893,7 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         let mut state = self.state.lock().expect("account groups");
         let now = Utc::now();
         let record = AccountGroupRecord {
+            allow_image_generation: command.allow_image_generation,
             fast_mode: command.fast_mode,
             id: command.id.clone(),
             name: command.name,
@@ -925,6 +928,9 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         record.color = command.color;
         if let Some(fast_mode) = command.fast_mode {
             record.fast_mode = fast_mode;
+        }
+        if let Some(allowed) = command.allow_image_generation {
+            record.allow_image_generation = allowed;
         }
         record.updated_at = Utc::now();
         mutation(&mut state, command.id, true)

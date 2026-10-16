@@ -28,6 +28,7 @@ export interface AccountGroupUsage {
 
 export interface AccountGroup extends AccountGroupRef {
   fastMode: FastMode
+  allowImageGeneration: boolean
   description: string | null
   memberCount: number
   providerCounts: Record<string, number>
@@ -75,6 +76,7 @@ interface AccountGroupListParams {
 
 interface AccountGroupCreateParam {
   fastMode?: FastMode
+  allowImageGeneration?: boolean
   name: string
   description: string | null
   color: string
@@ -82,6 +84,7 @@ interface AccountGroupCreateParam {
 
 interface AccountGroupUpdateParam {
   fastMode?: FastMode
+  allowImageGeneration?: boolean
   id: string
   name: string
   description: string | null

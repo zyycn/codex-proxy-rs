@@ -247,6 +247,7 @@ impl ClientRoutingScope {
 /// 一次认证随 RuntimeSnapshot 冻结的账号目录与 Key 权限
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrozenAccountScope {
+    allow_image_generation: bool,
     fast_mode: FastMode,
     request_profiles: BTreeMap<ProviderKind, super::OpaqueProviderData>,
     directory: Arc<RuntimeAccountDirectory>,
@@ -257,6 +258,18 @@ pub struct FrozenAccountScope {
 }
 
 impl FrozenAccountScope {
+    /// Key 绑定分组合并后的生图权限，与账号成员资格一同冻结
+    #[must_use]
+    pub const fn with_image_generation(mut self, allowed: bool) -> Self {
+        self.allow_image_generation = allowed;
+        self
+    }
+
+    #[must_use]
+    pub const fn allows_image_generation(&self) -> bool {
+        self.allow_image_generation
+    }
+
     /// 与 Key 授权范围一同冻结；具体字段只由对应 Provider 解释
     #[must_use]
     pub fn with_request_profiles(
@@ -296,6 +309,7 @@ impl FrozenAccountScope {
             ClientRoutingScope::Restricted { provider_kinds, .. } => Arc::clone(provider_kinds),
         };
         Self {
+            allow_image_generation: true,
             fast_mode: FastMode::Default,
             request_profiles: BTreeMap::new(),
             directory,

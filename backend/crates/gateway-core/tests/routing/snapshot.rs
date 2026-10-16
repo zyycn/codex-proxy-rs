@@ -1306,6 +1306,79 @@ fn fast_mode_merges_only_bound_groups_without_changing_account_scope() {
 }
 
 #[test]
+fn image_generation_merges_bound_groups_with_deny_precedence() {
+    use gateway_core::account::ProviderAccountId;
+    use gateway_core::routing::AccountGroupId;
+    for (allowed, other_allowed) in [(true, true), (true, false), (false, true), (false, false)] {
+        for group_enabled in [false, true] {
+            for bound in [false, true] {
+                let group_id = AccountGroupId::new("grp_00000000000000000000000000000001").unwrap();
+                let open_group_id =
+                    AccountGroupId::new("grp_00000000000000000000000000000002").unwrap();
+                let account_id = ProviderAccountId::new("acct_fast_policy").unwrap();
+                let facts = SnapshotFacts::new(
+                    revision(1),
+                    revision(1),
+                    SettingsValues::new(3, "smart", BTreeMap::new(), None, None),
+                    vec![SnapshotClientPolicyFacts::new(
+                        ClientApiKeyId::new("key_fast_policy").unwrap(),
+                        PlaintextClientApiKey::new("sk_fast_policy").unwrap(),
+                        if bound {
+                            vec![group_id.clone(), open_group_id.clone()]
+                        } else {
+                            Vec::new()
+                        },
+                        RateLimits::unlimited(),
+                    )],
+                    vec![
+                        SnapshotAccountGroupFacts::new(
+                            group_id.clone(),
+                            "Restricted".to_owned(),
+                            group_enabled,
+                        )
+                        .with_image_generation(allowed),
+                        SnapshotAccountGroupFacts::new(
+                            open_group_id.clone(),
+                            "Open".to_owned(),
+                            true,
+                        )
+                        .with_image_generation(other_allowed),
+                    ],
+                    vec![SnapshotProviderAccountFacts::new(
+                        account_id.clone(),
+                        "alpha",
+                    )],
+                    vec![
+                        SnapshotAccountGroupMemberFacts::new(group_id, account_id.clone()),
+                        SnapshotAccountGroupMemberFacts::new(open_group_id, account_id.clone()),
+                    ],
+                );
+                let snapshot = block_on(
+                    RuntimeSnapshotCompiler::new(
+                        Arc::new(TestSnapshotStore::new(Ok(facts))),
+                        Arc::new(TestCatalog::Unavailable),
+                    )
+                    .compile(),
+                )
+                .unwrap();
+                let scope = snapshot
+                    .client_policies()
+                    .next()
+                    .unwrap()
+                    .account_scope()
+                    .clone();
+                assert!(scope.allows(&account_id));
+                assert_eq!(
+                    scope.allows_image_generation(),
+                    !bound || (allowed && other_allowed),
+                    "allowed={allowed}, other={other_allowed}, enabled={group_enabled}, bound={bound}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn key_profiles_replace_whole_global_choice_and_previous_snapshot_stays_frozen() {
     use gateway_core::account::OpaqueProviderData;
     let provider = ProviderKind::new("alpha").unwrap();

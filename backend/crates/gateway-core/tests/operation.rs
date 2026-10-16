@@ -157,6 +157,55 @@ fn prompt_cache_and_image_generation_should_be_read_from_raw_body() {
 }
 
 #[test]
+fn image_generation_detection_distinguishes_tools_from_image_inputs_and_passive_namespaces() {
+    for body in [
+        json!({"tools":[{"type":"image_generation"}]}),
+        json!({"tool_choice":{"type":"image_generation"}}),
+        json!({"tool_choice":{"type":"allowed_tools","tools":[{"type":"image_generation"}]}}),
+        json!({"input":[{"type":"additional_tools","tools":[{"type":"image_generation"}]}]}),
+    ] {
+        assert!(
+            generate(body.clone()).image_generation_requested(),
+            "{body}"
+        );
+    }
+    for body in [
+        json!({"input":"Please generate an image"}),
+        json!({"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}]}),
+        json!({"tools":[{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]}]}),
+        json!({"tools":[{"type":"function","name":"image_generation"}]}),
+    ] {
+        assert!(
+            !generate(body.clone()).image_generation_requested(),
+            "{body}"
+        );
+    }
+    let private = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "private",
+            json!({"tools":[{"type":"image_generation"}]})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .unwrap(),
+    );
+    assert!(!private.image_generation_requested());
+}
+
+#[test]
+fn image_generation_fact_survives_cross_protocol_translation() {
+    let operation = Operation::Generate(generate(json!({"tools":[{"type":"image_generation"}]})));
+    let translated = operation
+        .replace_middleware_wire(
+            "openai_chat_completions",
+            Bytes::from_static(br#"{"model":"gpt-test","messages":[]}"#),
+        )
+        .unwrap();
+    assert!(translated.image_generation_requested());
+}
+
+#[test]
 fn protocol_payload_context_should_be_opaque_and_separate_from_wire_body() {
     let secret = "connection-only-value";
     let mut body = Map::new();

@@ -20,6 +20,7 @@ use std::{sync::Arc, time::Duration};
 
 fn group(name: &str) -> CreateAccountGroup {
     CreateAccountGroup {
+        allow_image_generation: true,
         name: name.into(),
         description: None,
         fast_mode: FastMode::Default,
