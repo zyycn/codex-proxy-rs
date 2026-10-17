@@ -75,7 +75,7 @@ fn package_with_icon(path: &str, content_type: &str, icon: Vec<u8>) -> std::sync
         "resources": resources,
         "icon": path,
         "package": {
-            "protocolVersion":2,
+            "protocolVersion": gateway_plugin_sdk::PROTOCOL_VERSION,
             "target": {
                 "os": std::env::consts::OS,
                 "architecture": std::env::consts::ARCH

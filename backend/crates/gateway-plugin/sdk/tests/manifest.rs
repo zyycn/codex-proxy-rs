@@ -121,8 +121,10 @@ fn installation_checks_protocol_engine_and_target() {
         manifest.package_for(&host, "windows", "aarch64"),
         Err(ManifestError::Platform)
     );
-    manifest.package.as_mut().unwrap().protocol_version = PROTOCOL_VERSION + 1;
-    assert_eq!(manifest.validate(), Err(ManifestError::Incompatible));
+    for protocol_version in [2, PROTOCOL_VERSION + 1] {
+        manifest.package.as_mut().unwrap().protocol_version = protocol_version;
+        assert_eq!(manifest.validate(), Err(ManifestError::Incompatible));
+    }
     manifest.package.as_mut().unwrap().protocol_version = PROTOCOL_VERSION;
     manifest.engines.codex_proxy_rs = "*".parse().unwrap();
     assert_eq!(manifest.validate(), Err(ManifestError::Invalid));

@@ -20,14 +20,14 @@ export function useAccountConcurrency(account: Ref<Account | null>, open: Ref<bo
   let timer: ReturnType<typeof setTimeout> | undefined
 
   const ticker = useIntervalFn(() => {
-    now.value = performance.now()
+    if (!request.error.value)
+      now.value = performance.now()
   }, 1000, { immediate: false })
   const entries = computed(() => (data.value?.entries ?? []).map(entry => ({
     ...entry,
     occupiedMs: entry.occupiedMs === null
       ? null
-      : entry.occupiedMs
-        + (request.error.value ? 0 : Math.max(0, now.value - receivedAt.value)),
+      : entry.occupiedMs + Math.max(0, now.value - receivedAt.value),
   })))
 
   function stop() {
@@ -40,7 +40,9 @@ export function useAccountConcurrency(account: Ref<Account | null>, open: Ref<bo
     clearTimeout(timer)
     if (!active.value || !account.value)
       return
-    const id = request.start()
+    // 失败状态与时长保持到新快照确认，重试开始不把旧数据重新当作实时结果
+    const id = request.start(true)
+    request.loading.value = true
     try {
       const result = await getAccountConcurrency({
         accountId: account.value.id,
@@ -55,6 +57,7 @@ export function useAccountConcurrency(account: Ref<Account | null>, open: Ref<bo
         return
       }
       data.value = result
+      request.error.value = ''
       receivedAt.value = performance.now()
       now.value = receivedAt.value
     }
@@ -78,8 +81,10 @@ export function useAccountConcurrency(account: Ref<Account | null>, open: Ref<bo
   watch([active, () => account.value?.id, page, pageSize], ([isActive, accountId], [, previousAccountId]) => {
     stop()
     // 同一账号保留已确认的页快照，切页、暂停轮询和弹窗退场都不提前清空内容
-    if (accountId !== previousAccountId)
+    if (accountId !== previousAccountId) {
       data.value = null
+      request.error.value = ''
+    }
     if (isActive) {
       ticker.resume()
       void refresh()
