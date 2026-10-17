@@ -118,6 +118,9 @@ fn client_authentication_request(
         .map_err(|_| ClientApiKeyAuthError::MalformedAuthorization)?;
     let request = ClientAuthenticationRequest::new(raw.to_owned())
         .map_err(|_| ClientApiKeyAuthError::MalformedAuthorization)?;
+    let request = request.with_request_context(
+        crate::middleware::current().and_then(|context| context.extensions.shared_request()),
+    );
     Ok(match crate::middleware::current_settings() {
         Some(settings) => request.with_settings(settings),
         None => request,

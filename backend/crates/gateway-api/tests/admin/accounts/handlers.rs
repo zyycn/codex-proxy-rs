@@ -372,3 +372,73 @@ async fn quota_forecast_requires_admin_and_valid_account_query() {
         assert!(value["message"].is_string());
     }
 }
+
+#[tokio::test]
+async fn concurrency_details_require_admin_validate_paging_and_report_lease_time() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    *fixture.account.lock().unwrap() = Some(account_page_item(
+        gateway_core::account::AccountStatusFacts {
+            enabled: true,
+            credential_state: gateway_core::account::CredentialState::Ready,
+            access_token_expires_at: None,
+            quota: gateway_core::account::QuotaState::unknown(),
+            cooldown: None,
+            last_error_reason: None,
+            last_error_message: None,
+        },
+        chrono::Utc::now(),
+        "api_key",
+    ));
+    let router = admin::accounts::router::<AdminTestState>().with_state(fixture.state());
+    for (authenticated, query, expected) in [
+        (false, "accountId=acct_cooldown", StatusCode::UNAUTHORIZED),
+        (
+            true,
+            "accountId=acct_cooldown&page=0",
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            true,
+            "accountId=acct_cooldown&pageSize=101",
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            true,
+            "accountId=acct_cooldown&page=4294967295&pageSize=100",
+            StatusCode::BAD_REQUEST,
+        ),
+        (true, "accountId=acct_missing", StatusCode::NOT_FOUND),
+        (
+            true,
+            "accountId=acct_cooldown&page=2&pageSize=20",
+            StatusCode::OK,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .uri(format!("/api/admin/accounts/concurrency?{query}"))
+            .header("x-request-id", "req_concurrency");
+        if authenticated {
+            request = request.header(header::COOKIE, "cpr_session=valid-session");
+        }
+        let response = router
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{query}");
+        if expected == StatusCode::OK {
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let body = to_bytes(response.into_body(), 8192).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["data"]["total"], 21);
+            assert_eq!(value["data"]["page"], 2);
+            assert_eq!(value["data"]["entries"][0]["occupiedMs"], 5000);
+            assert_eq!(value["data"]["entries"][0]["clientIp"], "2001:db8::376");
+            assert_eq!(
+                value["data"]["entries"][0]["startedAtDisplay"],
+                "2026-10-17 07:59:45"
+            );
+        }
+    }
+}

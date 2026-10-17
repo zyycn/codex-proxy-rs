@@ -304,6 +304,7 @@ impl GrokAccountSessionSelector {
                             ),
                             request.deadline(),
                         )
+                        .with_metadata(request.lease_metadata.clone())
                         .with_cancellation(request.cancellation().clone()),
                     ))
                     .await

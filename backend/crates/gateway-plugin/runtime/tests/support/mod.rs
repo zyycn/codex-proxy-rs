@@ -57,11 +57,7 @@ pub fn contribution_for_id(
         capability,
         ContributionDeclaration {
             id: format!("{plugin_id}.{local_id}"),
-            version: match capability {
-                Capability::Middleware => 4,
-                Capability::Scheduler | Capability::UpstreamAdapter => 2,
-                _ => 1,
-            },
+            version: capability.contract_versions()[0],
             stages,
             input_formats,
             output_formats,

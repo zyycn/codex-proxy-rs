@@ -4,9 +4,9 @@ mod error;
 pub use error::{ProviderStoreError, ProviderStoreErrorKind};
 mod lease;
 pub use lease::{
-    ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort,
-    ProviderLeaseRequest, ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest,
-    ProviderSchedulingLeaseRequest, ProviderSchedulingState,
+    ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeaseMetadata,
+    ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshCapacityRequest,
+    ProviderRefreshLeaseRequest, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
 };
 mod affinity;
 pub use affinity::{

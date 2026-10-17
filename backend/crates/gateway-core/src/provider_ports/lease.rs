@@ -47,9 +47,21 @@ impl ProviderSchedulingState {
     }
 }
 
+/// 并发占用关联的入口事实；不含密钥原文或请求正文
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderLeaseMetadata {
+    pub request_id: String,
+    pub client_key_id: ClientApiKeyId,
+    pub client_key_name: Option<String>,
+    pub model: Option<String>,
+    pub client_ip: Option<std::net::IpAddr>,
+    pub started_at: std::time::SystemTime,
+}
+
 /// 请求级账号 lease 的全部中立事实
 #[derive(Debug, Clone)]
 pub struct ProviderSchedulingLeaseRequest {
+    metadata: Option<std::sync::Arc<ProviderLeaseMetadata>>,
     provider_kind: ProviderKind,
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
@@ -69,6 +81,7 @@ impl ProviderSchedulingLeaseRequest {
         deadline: impl Into<crate::lifecycle::Deadline>,
     ) -> Self {
         Self {
+            metadata: None,
             provider_kind,
             account_id,
             credential_revision,
@@ -77,6 +90,20 @@ impl ProviderSchedulingLeaseRequest {
             deadline: deadline.into(),
             cancellation: crate::lifecycle::CancellationToken::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_metadata(
+        mut self,
+        metadata: Option<std::sync::Arc<ProviderLeaseMetadata>>,
+    ) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    #[must_use]
+    pub fn metadata(&self) -> Option<&ProviderLeaseMetadata> {
+        self.metadata.as_deref()
     }
 
     #[must_use]

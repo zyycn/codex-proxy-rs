@@ -13,6 +13,8 @@ const props = defineProps<{
   account: Account
 }>()
 
+const emit = defineEmits<{ showConcurrency: [] }>()
+
 const quotaWindows = computed(() => props.account.quota.windows)
 const visibleQuotaWindows = computed(() => visibleSummaryQuotaWindows(quotaWindows.value))
 const summaryEntries = computed(() => groupedAccountQuotaWindows(visibleQuotaWindows.value))
@@ -42,7 +44,7 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
       <div class="grid min-w-0 gap-1.5">
         <div class="flex min-w-0 items-start justify-between gap-2 leading-3">
           <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ account.usage.windowLabelDisplay }}</span>
-          <AccountCapacityIndicator :capacity="account.capacity" />
+          <AccountCapacityIndicator :capacity="account.capacity" @show-details="emit('showConcurrency')" />
         </div>
         <div class="h-1 w-full rounded-full bg-cp-success" title="上游额度未提供，绿色条不表示剩余额度" aria-hidden="true" />
       </div>
@@ -85,8 +87,8 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
             :show-percentage="false"
           />
           <AccountCapacityIndicator
-            :capacity="account.capacity"
-            class="z-1 col-start-2 row-start-1 self-start"
+            :capacity="account.capacity" class="z-1 col-start-2 row-start-1 self-start"
+            @show-details="emit('showConcurrency')"
           />
         </div>
         <span
@@ -98,6 +100,9 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
         </span>
       </div>
     </template>
-    <AccountUsageWindow v-else variant="compact" />
+    <div v-else class="grid gap-1.5">
+      <AccountCapacityIndicator class="justify-self-end" :capacity="account.capacity" @show-details="emit('showConcurrency')" />
+      <AccountUsageWindow variant="compact" />
+    </div>
   </div>
 </template>

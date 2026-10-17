@@ -13,6 +13,7 @@ use super::{Environment, install, registration};
 
 fn request() -> PluginManagementRequest {
     PluginManagementRequest {
+        request_context: None,
         headers: vec![gateway_core::engine::middleware::MiddlewareHeader::new(
             "cookie",
             "callback=fixture".into(),

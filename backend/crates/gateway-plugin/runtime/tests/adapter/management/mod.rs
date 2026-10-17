@@ -56,7 +56,7 @@ async fn install(environment: &Environment, config: Value) -> PluginInstance {
         "manifestVersion":2,"name":"example","displayName":"管理示例","publisher":"management","version":"1.0.0",
         "engines":{"codex-proxy-rs":">=1.0.0, <2.0.0"},"main":"bin/worker","author":"test","description":"管理测试","license":"MIT",
         "runtime":"trustedProcess","resources":{"ui/index.html":"text/html","ui/app.js":"text/javascript","ui/public.svg":"image/svg+xml"},
-        "contributes":{"management":{"id":"management.example.management","version":1,"stages":["management"],"inputFormats":[],"outputFormats":[]}},
+        "contributes":{"management":{"id":"management.example.management","version":2,"stages":["management"],"inputFormats":[],"outputFormats":[]}},
         "package":{"protocolVersion":gateway_plugin_sdk::PROTOCOL_VERSION,"target":{"os":std::env::consts::OS,"architecture":std::env::consts::ARCH},"files":digests},
     });
     files.insert("plugin.json".into(), serde_json::to_vec(&manifest).unwrap());
@@ -94,6 +94,7 @@ async fn install(environment: &Environment, config: Value) -> PluginInstance {
 
 fn request() -> PluginManagementRequest {
     PluginManagementRequest {
+        request_context: None,
         headers: Vec::new(),
         method: "POST".into(),
         path: "echo".into(),

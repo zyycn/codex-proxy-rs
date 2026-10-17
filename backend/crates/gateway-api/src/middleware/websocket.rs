@@ -72,6 +72,7 @@ impl upgrade::WebSocketUpgrade for Upgrade {
                 let reader_task = tokio::spawn(read_messages(reader, incoming, cancellation));
                 Ok(Arc::new(Session {
                     reader: tokio::sync::Mutex::new(received), reader_task: reader_task.abort_handle(), writer,
+                    extensions: context.extensions,
                     plan: context.plan, connection_id: context.request_id, headers,
                     cancellation: context.cancellation,
                 }) as Arc<dyn core::Session>)
@@ -108,6 +109,7 @@ pub(crate) async fn transform(
 }
 
 struct Session {
+    extensions: gateway_core::engine::extensions::ExtensionCallScope,
     reader: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Message>>,
     reader_task: tokio::task::AbortHandle,
     writer: Arc<Writer>,
@@ -125,6 +127,7 @@ impl Session {
     ) -> Result<Option<core::Message>, MiddlewareError> {
         transform(
             core::Context {
+                extensions: self.extensions.clone(),
                 plan: self.plan.clone(),
                 connection_id: self.connection_id.clone(),
                 direction,

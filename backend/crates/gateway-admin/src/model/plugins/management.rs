@@ -76,6 +76,7 @@ pub struct PluginManagementResource {
 
 /// 原始正文可能含业务数据，不能派生内容型 Debug 或写入诊断日志
 pub struct PluginManagementRequest {
+    pub request_context: Option<std::sync::Arc<gateway_core::engine::extensions::RequestContext>>,
     pub method: String,
     pub path: String,
     pub query: String,

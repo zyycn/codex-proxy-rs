@@ -294,3 +294,24 @@ pub enum AccountConnectionTestEvent {
 /// 每次连接测试独占的有限事件流
 pub type AccountConnectionTestEventStream =
     Pin<Box<dyn Stream<Item = AccountConnectionTestEvent> + Send + 'static>>;
+
+/// 单个账号普通并发池的实时租约明细，不关联请求历史
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountConcurrencyEntry {
+    pub lease_id: String,
+    pub request_id: Option<String>,
+    pub client_key_id: Option<String>,
+    pub client_key_name: Option<String>,
+    pub model: Option<String>,
+    pub client_ip: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub acquired_at: Option<DateTime<Utc>>,
+}
+
+/// 同一次 Redis 读取中的当前占用数和分页明细
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountConcurrencyPage {
+    pub entries: Vec<AccountConcurrencyEntry>,
+    pub total: u64,
+    pub observed_at: DateTime<Utc>,
+}

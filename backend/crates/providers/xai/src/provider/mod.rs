@@ -665,6 +665,7 @@ async fn select_grok_session(
         Arc::clone(candidate.account_scope()),
         context.client_api_key_ref().clone(),
     )
+    .with_lease_metadata(context.lease_metadata())
     .with_cancellation(context.cancellation().clone())
     .with_concurrency_wait_budget(context.concurrency_wait_budget().clone())
     .with_request_policy(

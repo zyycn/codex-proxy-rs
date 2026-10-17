@@ -734,3 +734,33 @@ export function setAccountResetCreditAutomation(data: AccountIdParam & { enabled
     ...options,
   })
 }
+
+export interface AccountConcurrencyEntry {
+  leaseId: string
+  requestId: string | null
+  clientKeyId: string | null
+  clientKeyName: string | null
+  model: string | null
+  clientIp: string | null
+  startedAt: string | null
+  startedAtDisplay: string | null
+  occupiedMs: number | null
+}
+
+export interface AccountConcurrencyPage {
+  accountId: string
+  entries: AccountConcurrencyEntry[]
+  total: number
+  page: number
+  pageSize: number
+  observedAt: string
+}
+
+export function getAccountConcurrency(data: { accountId: string, page: number, pageSize: number }, options: RequestOptions = {}) {
+  return request<AccountConcurrencyPage>({
+    url: '/api/admin/accounts/concurrency',
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}

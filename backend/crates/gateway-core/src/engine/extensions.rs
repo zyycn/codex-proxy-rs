@@ -1,4 +1,4 @@
-//! 执行扩展计划的弱引用索引、冻结解析与插件递归作用域
+//! 执行扩展计划的冻结解析、入口请求事实与插件调用作用域
 
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -10,9 +10,26 @@ use std::{collections::BTreeSet, sync::Arc};
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExtensionCallScope {
     instance_ids: Arc<BTreeSet<String>>,
+    request: Option<Arc<RequestContext>>,
 }
 
 impl ExtensionCallScope {
+    #[must_use]
+    pub fn with_request(mut self, request: Arc<RequestContext>) -> Self {
+        self.request = Some(request);
+        self
+    }
+
+    #[must_use]
+    pub fn request(&self) -> Option<&RequestContext> {
+        self.request.as_deref()
+    }
+
+    #[must_use]
+    pub fn shared_request(&self) -> Option<Arc<RequestContext>> {
+        self.request.clone()
+    }
+
     pub const MAXIMUM_DEPTH: usize = 4;
 
     #[must_use]
@@ -40,6 +57,7 @@ impl ExtensionCallScope {
         instance_ids.insert(instance_id);
         Some(Self {
             instance_ids: Arc::new(instance_ids),
+            request: self.request.clone(),
         })
     }
 }
@@ -120,5 +138,27 @@ impl ExecutionExtensionIndex {
             plan,
             generation.clone(),
         ))
+    }
+}
+
+/// 不可变入口快照；正文由所属中间件资源持有，不随每次扩展调用复制
+#[derive(Clone, PartialEq, Eq)]
+pub struct RequestContext {
+    pub method: String,
+    pub uri: String,
+    pub http_version: String,
+    pub headers: Vec<super::middleware::MiddlewareHeader>,
+    pub peer_addr: Option<std::net::SocketAddr>,
+    pub client_ip: Option<std::net::IpAddr>,
+}
+
+impl std::fmt::Debug for RequestContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // URI 查询与请求头可能包含凭据，不进入诊断日志
+        formatter
+            .debug_struct("RequestContext")
+            .field("method", &self.method)
+            .field("http_version", &self.http_version)
+            .finish_non_exhaustive()
     }
 }

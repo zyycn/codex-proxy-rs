@@ -332,6 +332,9 @@ where
     let (command_tx, command_rx) = mpsc::channel(OUTBOUND_COMMAND_BUFFER);
     let (incoming_tx, incoming_rx) = mpsc::channel(INBOUND_EVENT_BUFFER);
     let (exit_tx, exit_rx) = oneshot::channel();
+    let extensions = crate::middleware::current()
+        .map(|context| context.extensions)
+        .unwrap_or_default();
     let pump_task = tokio::spawn(run_pump(
         socket,
         command_rx,
@@ -345,6 +348,7 @@ where
         config,
         middleware,
         headers,
+        extensions,
     ));
     ResponsesWebSocketConnection {
         connection_id,

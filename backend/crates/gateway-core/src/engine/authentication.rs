@@ -18,12 +18,31 @@ pub const MAXIMUM_AUTHORIZATION_BYTES: usize = 8 * 1024;
 /// API 从数据面 Authorization 头构造的有界认证信封
 #[derive(Clone, PartialEq, Eq)]
 pub struct ClientAuthenticationRequest {
+    request_context: Option<Arc<super::extensions::RequestContext>>,
     settings: Option<crate::routing::request_settings::RequestSettings>,
     authorization: Arc<str>,
     native_bearer: Option<PlaintextClientApiKey>,
 }
 
 impl ClientAuthenticationRequest {
+    #[must_use]
+    pub fn with_request_context(
+        mut self,
+        request: Option<Arc<super::extensions::RequestContext>>,
+    ) -> Self {
+        self.request_context = request;
+        self
+    }
+    #[must_use]
+    pub fn request_context(&self) -> Option<&super::extensions::RequestContext> {
+        self.request_context.as_deref()
+    }
+
+    #[must_use]
+    pub fn shared_request_context(&self) -> Option<Arc<super::extensions::RequestContext>> {
+        self.request_context.clone()
+    }
+
     #[must_use]
     pub fn with_settings(
         mut self,
@@ -61,6 +80,7 @@ impl ClientAuthenticationRequest {
             .and_then(|value| PlaintextClientApiKey::new(value.to_owned()).ok());
         Ok(Self {
             settings: None,
+            request_context: None,
             authorization: authorization.into(),
             native_bearer,
         })

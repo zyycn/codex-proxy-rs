@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Capability::Middleware,
             ContributionDeclaration {
                 id: "test.example.middleware".into(),
-                version: 4,
+                version: 5,
                 stages: vec![
                     Stage::Http,
                     Stage::WebSocket,
@@ -55,6 +55,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 async move {
                     use std::io::Write as _;
                     let context = call.context().clone();
+                    let request = context.request.as_ref().expect("entry request snapshot");
+                    assert_eq!(request.method, "POST");
+                    assert_eq!(request.uri, "/v1/responses?fixture=1");
+                    assert_eq!(request.http_version, "HTTP/2.0");
+                    assert_eq!(request.peer_addr.as_deref(), Some("192.0.2.1:42000"));
+                    assert_eq!(request.client_ip.as_deref(), Some("203.0.113.7"));
+                    assert_eq!(request.headers.len(), 2);
+                    assert_eq!(request.headers[1].value, b"two");
                     let record = |phase| {
                         let mut file = std::fs::OpenOptions::new()
                             .create(true)
@@ -80,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             id: "test.example.middleware".into(),
             version: configuration["middleware_version"]
                 .as_u64()
-                .unwrap_or(4)
+                .unwrap_or(5)
                 .try_into()?,
             stages: vec![if configuration["service"] == true {
                 Stage::Service

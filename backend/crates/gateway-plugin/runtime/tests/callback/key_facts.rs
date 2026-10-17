@@ -83,6 +83,7 @@ async fn key_facts_read_current_database_groups_without_secrets() {
                 &generation,
                 &view.target,
                 PluginManagementRequest {
+                    request_context: None,
                     headers: Vec::new(),
                     method: "GET".into(),
                     path: "facts".into(),

@@ -73,6 +73,7 @@ async fn plugin_process_manages_native_budget_through_client_key_service() {
             .handle(
                 &view.target,
                 PluginManagementRequest {
+                    request_context: None,
                     headers: Vec::new(),
                     method: "POST".into(),
                     path: "reset".into(),
@@ -402,6 +403,7 @@ async fn losing_callback_reply_after_commit_keeps_budget_and_audit_without_repla
             .handle(
                 &view.target,
                 PluginManagementRequest {
+                    request_context: None,
                     headers: Vec::new(),
                     method: "POST".into(),
                     path: "reset".into(),

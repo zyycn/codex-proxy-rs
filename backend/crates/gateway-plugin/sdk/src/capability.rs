@@ -26,16 +26,14 @@ impl Capability {
     #[must_use]
     pub const fn contract_versions(self) -> &'static [u32] {
         match self {
-            Self::Middleware => &[4],
+            Self::Middleware => &[5],
             Self::FrontendAuthentication
             | Self::ModelRouter
-            | Self::ModelCatalog
             | Self::RetryPolicy
             | Self::Observer
-            | Self::CommandLine
-            | Self::Management
-            | Self::Maintenance => &[1],
-            Self::Scheduler | Self::UpstreamAdapter => &[2],
+            | Self::Management => &[2],
+            Self::Scheduler | Self::UpstreamAdapter => &[3],
+            Self::ModelCatalog | Self::CommandLine | Self::Maintenance => &[1],
         }
     }
 

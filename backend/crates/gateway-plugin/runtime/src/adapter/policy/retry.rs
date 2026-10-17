@@ -80,6 +80,7 @@ async fn call(
         allowed_actions,
     };
     let mut context = invocation.session.context(Stage::Retry, timeout);
+    context.request = crate::adapter::request_context(input.extension_scope.request());
     context.request_id = Some(request.request_id.clone());
     context.attempt_id = Some(format!("{}:{}", request.request_id, request.attempt_index));
     let reply = invocation

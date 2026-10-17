@@ -328,6 +328,17 @@ where
             deadline_timer: deadline.wait().fuse(),
             lease: Some(self.engine.store.maintain_request(&request.id, deadline)),
             requested_model: request.requested_model.clone(),
+            lease_metadata: Arc::new(crate::provider_ports::ProviderLeaseMetadata {
+                request_id: request.id.as_str().to_owned(),
+                client_key_id: request.client_api_key_ref.clone(),
+                client_key_name: request.client_api_key_name_snapshot.clone(),
+                model: request
+                    .requested_model
+                    .as_ref()
+                    .map(|model| model.as_str().to_owned()),
+                client_ip: request.client_ip,
+                started_at: request.started_at,
+            }),
             pending_request: Some(request),
             request_persisted: false,
             response_control,
@@ -469,6 +480,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     lease: Option<Box<dyn LeaseGuard>>,
     /// 会话级 deadline 计时器；deadline 固定，帧循环内复用而非逐事件新建
     deadline_timer: Fuse<BoxFuture<'static, ()>>,
+    lease_metadata: Arc<crate::provider_ports::ProviderLeaseMetadata>,
     pending_request: Option<NewModelRequest>,
     requested_model: Option<crate::routing::PublicModelId>,
     request_persisted: bool,
@@ -1103,6 +1115,7 @@ where
         }
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_lease_metadata(Arc::clone(&self.lease_metadata))
                 .with_response_control(self.response_control.clone())
                 .with_request_profile(self.request_profiles.get(candidate.provider()).cloned())
                 .with_fast_mode(self.plan.fast_mode())

@@ -200,9 +200,10 @@ impl FrontendAuthenticationPlan for PluginFrontendAuthenticationPlan {
                 .invocation
                 .as_ref()
                 .ok_or(FrontendAuthenticationError)?;
-            let context = session.context(Stage::Authentication, self.timeout);
+            let mut context = session.context(Stage::Authentication, self.timeout);
+            context.request = crate::adapter::request_context(request.request_context());
             let _scope = callbacks
-                .prepare_frontend_authentication(&context)
+                .prepare_frontend_authentication(&context, request.shared_request_context())
                 .map_err(|_| FrontendAuthenticationError)?;
             let input = FrontendAuthenticationRequest {
                 authorization: request.authorization().to_owned(),

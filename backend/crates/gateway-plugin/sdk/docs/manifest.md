@@ -50,15 +50,15 @@
 
 ## 扩展项简写
 
-作者声明可以省略 `id` 和固定阶段；普通能力的版本默认为 `1`，`middleware` 显式声明版本 `4`，`scheduler` 和 `upstream_adapter` 显式声明版本 `2`：
+作者声明可以省略 `id` 和固定阶段。版本字段省略时为 `1`，适用于 `model_catalog`、`command_line` 和 `maintenance`；其余能力显式声明当前版本：`middleware` 为 `5`，`scheduler` 和 `upstream_adapter` 为 `3`，认证、路由、重试、观察和管理能力为 `2`：
 
 ```json
 {
   "contributes": {
-    "management": {},
+    "management": { "version": 2 },
     "command_line": {},
     "middleware": {
-      "version": 4,
+      "version": 5,
       "stages": ["request"],
       "inputFormats": ["openai"],
       "outputFormats": ["openai"]

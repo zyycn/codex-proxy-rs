@@ -177,6 +177,8 @@ impl Execution {
             ));
         }
         let mut context = self.adapter.session.context(Stage::Upstream, timeout);
+        context.request =
+            crate::adapter::request_context(invocation.context.extension_scope().request());
         context.request_id = Some(invocation.context.request_id().as_str().to_owned());
         context.attempt_id = Some(format!(
             "{}:{}",

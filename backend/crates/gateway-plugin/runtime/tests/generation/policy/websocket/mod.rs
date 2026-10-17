@@ -55,6 +55,7 @@ async fn websocket_plugin(
 }
 fn context(direction: core::Direction, sender: Arc<Sender>) -> core::Context {
     core::Context {
+        extensions: Default::default(),
         plan: None,
         connection_id: "ws-fixture".into(),
         direction,

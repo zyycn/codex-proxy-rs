@@ -27,6 +27,7 @@ pub(super) async fn invoke(
     };
     let invocation = Invocation::new(next);
     let mut call = ports.session.context(Stage::Service, timeout);
+    call.request = crate::adapter::request_context(context.extensions.request());
     call.request_id = Some(context.request_id.clone());
     let _binding = ports
         .callbacks

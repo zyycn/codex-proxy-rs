@@ -12,6 +12,10 @@ where
     Router::new()
         .merge(super::import_tasks::router::<S>())
         .route("/api/admin/accounts", get(list_accounts::<S>))
+        .route(
+            "/api/admin/accounts/concurrency",
+            get(super::concurrency::list::<S>),
+        )
         .route("/api/admin/accounts/detail", get(account_detail::<S>))
         .route("/api/admin/accounts/export", get(export_accounts::<S>))
         .route("/api/admin/accounts/import", post(import_accounts::<S>))

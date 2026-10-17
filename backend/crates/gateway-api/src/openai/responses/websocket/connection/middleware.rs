@@ -100,6 +100,7 @@ pub(super) async fn transform(
     };
     crate::middleware::websocket::transform(
         core::Context {
+            extensions: context.extensions.clone(),
             plan: Some(plan.clone()),
             connection_id: context.connection_id.to_string(),
             direction,

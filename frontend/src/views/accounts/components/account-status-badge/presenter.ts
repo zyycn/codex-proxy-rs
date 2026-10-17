@@ -19,6 +19,7 @@ interface AccountStatusDisplayDefinition {
 
 interface AccountStatusStyle {
   text: string
+  dot: string
   badge: string
   icon: string
 }
@@ -54,26 +55,31 @@ interface AccountStatusPresentationInput {
 const statusStyles: Record<AccountStatusTone, AccountStatusStyle> = {
   success: {
     text: 'text-cp-success-text',
+    dot: 'bg-cp-success',
     badge: 'bg-cp-success-container text-cp-success-on-container',
     icon: 'bg-cp-success-container text-cp-success-on-container',
   },
   danger: {
     text: 'text-cp-error-text',
+    dot: 'bg-cp-error',
     badge: 'bg-cp-error-container text-cp-error-on-container',
     icon: 'bg-cp-error-container text-cp-error-on-container',
   },
   warning: {
     text: 'text-cp-warning-text',
+    dot: 'bg-cp-warning',
     badge: 'bg-cp-warning-container text-cp-warning-on-container',
     icon: 'bg-cp-warning-container text-cp-warning-on-container',
   },
   info: {
     text: 'text-cp-info-text',
+    dot: 'bg-cp-info',
     badge: 'bg-cp-info-container text-cp-info-on-container',
     icon: 'bg-cp-info-container text-cp-info-on-container',
   },
   normal: {
     text: 'text-cp-text-secondary',
+    dot: 'bg-cp-text-quaternary',
     badge: 'bg-cp-fill-quaternary text-cp-text-secondary',
     icon: 'bg-cp-fill-quaternary text-cp-text-secondary',
   },

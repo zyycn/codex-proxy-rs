@@ -36,6 +36,7 @@ pub(super) async fn invoke(
         .map_or(serde_json::Value::Null, |settings| settings.inspect());
     let (invocation, request) = Invocation::new(request, next, entry.instance_id.clone())?;
     let mut call = ports.session.context(Stage::Http, timeout);
+    call.request = crate::adapter::request_context(context.extensions.request());
     call.request_id = Some(context.request_id.clone());
     call.resource_stream = true;
     let _binding = ports

@@ -99,10 +99,11 @@ impl ManagementEntry {
         let mut context = self
             .session
             .context(Stage::Management, limits.maximum_call_timeout);
+        context.request = crate::adapter::request_context(request.request_context.as_deref());
         context.request_id = Some(request.request_id);
         let _scope = self
             .callbacks
-            .prepare_management(&context, None)
+            .prepare_management(&context, None, request.request_context)
             .map_err(|_| AdminError::invalid("插件管理回调范围无效"))?;
         let reply = self
             .session

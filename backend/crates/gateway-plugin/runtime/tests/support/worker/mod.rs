@@ -1405,6 +1405,12 @@ async fn main() {
                         .await
                         .insert(id, Arc::new(Credits::default()));
                 }
+                if method == "observer.observe" {
+                    peer.append_observation_marker(
+                        "request_context_marker",
+                        &json!({"request":context.request.as_deref()}),
+                    );
+                }
                 let peer = Arc::clone(&peer);
                 tasks.insert(
                     id,

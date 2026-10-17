@@ -210,6 +210,24 @@ impl MiddlewarePlan for Plan {
                     Ok(response)
                 }
                 Mode::Rewrite => {
+                    let facts = context
+                        .extensions
+                        .request()
+                        .expect("entry request snapshot");
+                    assert_eq!(facts.method, "POST");
+                    assert_eq!(facts.uri, "/unrecognized/client/path?raw=%2f%FF");
+                    assert_eq!(facts.http_version, "HTTP/1.1");
+                    assert_eq!(facts.peer_addr.unwrap().to_string(), "192.0.2.1:42000");
+                    assert_eq!(facts.client_ip.unwrap().to_string(), "203.0.113.7");
+                    assert_eq!(
+                        facts
+                            .headers
+                            .iter()
+                            .filter(|header| header.name() == "x-repeat")
+                            .count(),
+                        2
+                    );
+                    assert!(!format!("{facts:?}").contains("fixture-secret"));
                     assert_eq!(request.uri(), "/unrecognized/client/path?raw=%2f%FF");
                     assert_eq!(request.headers()["authorization"], "Bearer fixture-secret");
                     assert_eq!(request.headers().get_all("x-repeat").iter().count(), 2);
@@ -303,6 +321,10 @@ async fn rewrites_unknown_path_before_routing_without_reading_request_body() {
             Request::builder()
                 .method("POST")
                 .uri("/unrecognized/client/path?raw=%2f%FF")
+                .extension(axum::extract::ConnectInfo(
+                    "192.0.2.1:42000".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .header("x-forwarded-for", "203.0.113.7, 10.0.0.1")
                 .header("authorization", "Bearer fixture-secret")
                 .header("x-repeat", "one")
                 .header("x-repeat", "two")

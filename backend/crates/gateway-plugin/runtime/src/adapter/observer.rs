@@ -61,6 +61,7 @@ impl ObserverEntry {
     ) {
         let request_id = event.request_id();
         let mut context = self.session.context(Stage::Observation, timeout);
+        context.request = crate::adapter::request_context(extensions.request());
         context.request_id = Some(request_id.to_owned());
         let Ok(_scope) = self.callbacks.prepare_observation(&context, extensions) else {
             return;

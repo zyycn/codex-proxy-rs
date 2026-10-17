@@ -79,6 +79,19 @@ async fn mixed_mounts_keep_independent_order_and_fresh_continuations() {
         .middleware(&generation)
         .unwrap();
     assert!(plan.has_http() && plan.has_websocket() && plan.has_service());
+    let extensions = ExtensionCallScope::default().with_request(Arc::new(
+        gateway_core::engine::extensions::RequestContext {
+            method: "POST".into(),
+            uri: "/v1/responses?fixture=1".into(),
+            http_version: "HTTP/2.0".into(),
+            headers: vec![
+                MiddlewareHeader::new("x-repeat", Bytes::from_static(b"one")),
+                MiddlewareHeader::new("x-repeat", Bytes::from_static(b"two")),
+            ],
+            peer_addr: Some("192.0.2.1:42000".parse().unwrap()),
+            client_ip: Some("203.0.113.7".parse().unwrap()),
+        },
+    ));
     let mut expected = Vec::new();
     for direction in [
         websocket::Direction::Incoming,
@@ -91,7 +104,7 @@ async fn mixed_mounts_keep_independent_order_and_fresh_continuations() {
                     request_id: "request".into(),
                     call_id: "call".into(),
                     parent_call_id: None,
-                    extensions: Default::default(),
+                    extensions: extensions.clone(),
                     cancellation: CancellationToken::new(),
                     plan: Some(plan.clone()),
                 },
@@ -120,6 +133,7 @@ async fn mixed_mounts_keep_independent_order_and_fresh_continuations() {
         let message = plan
             .handle_websocket(
                 websocket::Context {
+                    extensions: extensions.clone(),
                     plan: Some(plan.clone()),
                     connection_id: "connection".into(),
                     direction,
@@ -151,7 +165,7 @@ async fn mixed_mounts_keep_independent_order_and_fresh_continuations() {
                 request_id: "request".into(),
                 call_id: "service".into(),
                 parent_call_id: None,
-                extensions: Default::default(),
+                extensions: extensions.clone(),
                 cancellation: CancellationToken::new(),
                 plan: plan.clone(),
             },

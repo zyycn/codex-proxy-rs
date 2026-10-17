@@ -1537,7 +1537,7 @@ impl CapabilitiesNext {
 
 #[tokio::test]
 async fn sdk_capability_declarations_require_request_stage() {
-    for (version, attempt) in [(4, false), (4, true)] {
+    for (version, attempt) in [(5, false), (5, true)] {
         let stage = if attempt {
             Stage::Attempt
         } else {

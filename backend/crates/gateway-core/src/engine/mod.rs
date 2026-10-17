@@ -286,6 +286,7 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    lease_metadata: Option<Arc<crate::provider_ports::ProviderLeaseMetadata>>,
     response_control: Option<response_control::ResponseControl>,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
@@ -310,6 +311,15 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub fn with_lease_metadata(
+        mut self,
+        metadata: Arc<crate::provider_ports::ProviderLeaseMetadata>,
+    ) -> Self {
+        self.lease_metadata = Some(metadata);
+        self
+    }
+
     #[must_use]
     pub fn with_requested_model(mut self, model: Option<PublicModelId>) -> Self {
         self.requested_model = model;
@@ -377,6 +387,7 @@ impl RequestAttemptContext {
     pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
             response_control: None,
+            lease_metadata: None,
             request_id,
             client_api_key_ref,
             request_profile: None,
@@ -531,6 +542,11 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    #[must_use]
+    pub fn lease_metadata(&self) -> Option<Arc<crate::provider_ports::ProviderLeaseMetadata>> {
+        self.request.lease_metadata.clone()
+    }
+
     #[must_use]
     pub fn execution_effects(&self) -> Option<Arc<nested::ExecutionEffects>> {
         self.request.execution_effects.as_ref().map(Arc::clone)

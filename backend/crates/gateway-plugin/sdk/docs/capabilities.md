@@ -44,6 +44,14 @@ session.run(plugin).await?;
 例如 CLI 参数、账号凭据和状态迁移批次使用二进制 JSON，管理 HTTP 正文保持原始字节。
 错误地把敏感载荷放进控制参数会在业务处理器运行前被拒绝
 
+## 请求上下文
+
+关联入口请求的调用通过 `call.context().request` 读取同一个入口快照，覆盖认证、所有中间件挂载、路由、调度、重试、上游适配、观察事件和管理 HTTP／公开回调。注册、维护、命令行等没有入口请求的调用为 `None`
+
+`RequestContext` 包含 `method`、`uri`（路径与查询串）、`http_version`、`headers`、`peer_addr` 和 `client_ip`。`headers` 保留重复项和原始字节；`peer_addr` 是直接连接对端的 IP 与端口，`client_ip` 是宿主按入口规则解析的来源 IP。插件可使用解析结果，也可结合地址和原始 headers 自行判断代理来源
+
+快照在中间件修改请求前捕获，内部派生调用沿用原入口；WebSocket 回调使用握手上下文。当前处理阶段的正文、消息和变换后请求继续从各能力参数或正文资源读取，不复制到快照。上下文可能包含认证头等敏感信息，应避免直接记录或输出
+
 ## 能力与方法
 
 Provider 固定为宿主内置的 OpenAI 与 xAI。宿主开放以下 11 类扩展能力，版本与声明规则见[扩展项简写](manifest.md#扩展项简写)：
@@ -227,7 +235,7 @@ SDK 不自动重试。超时或断连不能证明写入未提交；重试上限�
 
 ### 洋葱中间件
 
-`middleware.version: 4` 的所有挂载使用同一个 `ctx + next` 组合器。清单显式选择处理边界，绑定决定顺序；
+`middleware.version: 5` 的所有挂载使用同一个 `ctx + next` 组合器。清单显式选择处理边界，绑定决定顺序；
 不按 URL、消息类型或每个内部步骤增加处理器。仅处理一个边界可直接声明其调用类型；跨边界插件使用 `MiddlewareCall`
 在一个处理器内匹配类型化视图，不感兴趣的调用交给 `call.forward().await`
 
@@ -360,7 +368,7 @@ request 与 attempt 阶段通过 `append_header` 添加的请求头会进入上�
 OpenAI 与 xAI 的上游 headers 先由账号和画像生成，插件同名字段覆盖基线，同名多值按插件顺序保留；不存在按认证、Cookie 或会话名称划分的保护列表。
 实际账号租约、凭据版本与计费归属仍记录真实选中事实，不随插件修改 header 名称而伪造
 
-middleware v4 的 request 阶段 `request.head.settings` 是本次调用的有效设置对象，包含 `runtime`、`fast_mode`、`client_limits` 和 `timeout_ms`。
+middleware v5 的 request 阶段 `request.head.settings` 是本次调用的有效设置对象，包含 `runtime`、`fast_mode`、`client_limits` 和 `timeout_ms`。
 `fast_mode` 使用 `default`、`enabled`、`disabled` 三态，具体档位语义见[账号分组](../../../../../docs/api.md#6-账号分组)。
 `runtime` 使用宿主快照的设置字段，画像已合并 Client Key 设置；可以修改映射、画像、调度、位置及计价等执行参数。
 SDK 仅在对象改变时提交完整替换，`false`、`0`、空映射和合同允许的 `null` 不表示跳过；不做隐式深合并。
@@ -455,7 +463,7 @@ v1 是直接别名，动态选择可组合 `model_router`；实际路由仍须�
 
 ### 重试决策
 
-`retry_policy` v1 固定绑定 `retry` 阶段，故障策略只能为 `delegate`。使用 `methods::RETRY_DECISION` 处理 `RetryDecisionRequest`。
+`retry_policy` v2 固定绑定 `retry` 阶段，故障策略只能为 `delegate`。使用 `methods::RETRY_DECISION` 处理 `RetryDecisionRequest`。
 输入包含失败分类、必要状态码、发送状态、attempt 序号、Provider／上游模型、剩余路由次数和期限，以及 `allowed_actions`。
 不发送账号凭据、请求正文或上游错误转储。路由次数不等同于 Provider 自有传输恢复预算
 
@@ -482,7 +490,7 @@ middleware 的 `next` 最多调用一次，重试与额外模型执行通过独�
 ### 路由、调度与观察
 
 `policy.route_model` 和 `policy.schedule_account` 只提出决定，宿主随后复核 Key 规则、模型能力、账号资格和租约。
-`scheduler` 必须声明 `version: 2`。`candidates` 已按 Key 范围、模型权限、账号状态和原生续写绑定收窄，
+`scheduler` 必须声明 `version: 3`。`candidates` 已按 Key 范围、模型权限、账号状态和原生续写绑定收窄，
 同时包含暂时繁忙但可以等待的账号；`available` 表示本次可以立即尝试租约，不保证租约一定成功
 
 - `Pick { account_id }` 显式选号，只能指定 `available: true` 的候选
@@ -500,7 +508,7 @@ middleware 的 `next` 最多调用一次，重试与额外模型执行通过独�
 {"decision":"delegate_filtered","exclude_account_ids":["acct_example"]}
 ```
 
-`observer` v1 通过 `methods::OBSERVE` 接收 `call::observation::Event`，固定绑定 `observation/observe`。
+`observer` v2 通过 `methods::OBSERVE` 接收 `call::observation::Event`，固定绑定 `observation/observe`。
 每条绑定以 `event` 选择 `request_completed` 或 `websocket_response`，可分别配置请求范围；同一实例每种事件至多一条绑定，两类绑定使用相同 `order`。
 事件选择只决定是否投递，不裁剪字段
 

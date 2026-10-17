@@ -37,11 +37,13 @@ pub(super) async fn run_pump<S, E>(
     config: ConnectionConfig,
     middleware: Option<FrozenMiddlewarePlan>,
     headers: Arc<[MiddlewareHeader]>,
+    extensions: gateway_core::engine::extensions::ExtensionCallScope,
 ) where
     S: Stream<Item = Result<Message, E>> + Sink<Message, Error = E> + Unpin + Send + 'static,
     E: fmt::Display + Send + 'static,
 {
     let context = Arc::new(PumpContext {
+        extensions,
         connection_id,
         cancellation: cancellation.child_token(),
         opened_at,

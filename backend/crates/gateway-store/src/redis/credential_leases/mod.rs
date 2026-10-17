@@ -24,6 +24,8 @@ use crate::{Revision, StoreError, StoreResult, redis_unavailable, require_nonemp
 
 use super::{MAX_REDIS_EXACT_INTEGER, namespace, resource_fingerprint};
 
+mod details;
+
 const SIGNAL_TTL_MILLIS: u64 = 24 * 60 * 60 * 1_000;
 const OAUTH_REFRESH_LEASE_TTL: Duration = Duration::from_secs(5 * 60);
 const OAUTH_REFRESH_CAPACITY_RESOURCE: &str = "oauth-refresh-global";
@@ -68,6 +70,10 @@ local fence_ttl = redis.call('PTTL', KEYS[2])
 if fence_ttl < tonumber(ARGV[5]) then
   redis.call('PEXPIRE', KEYS[2], ARGV[5])
 end
+if ARGV[6] ~= '' then
+    redis.call('HSET', KEYS[4], 'facts', ARGV[6], 'acquired_at', tostring(now_ms))
+    redis.call('PEXPIRE', KEYS[4], ARGV[3])
+end
 return {1, tostring(fence), tostring(expires_at), '0'}
 "#;
 
@@ -87,11 +93,13 @@ local active_ttl = redis.call('PTTL', KEYS[1])
 if active_ttl < tonumber(ARGV[2]) then
   redis.call('PEXPIRE', KEYS[1], ARGV[2])
 end
+redis.call('PEXPIRE', KEYS[2], ARGV[2])
 return {1, tostring(expires_at)}
 "#;
 
 const RELEASE_SCRIPT: &str = r#"
 local removed = redis.call('ZREM', KEYS[1], ARGV[1])
+if removed == 1 then redis.call('DEL', KEYS[2]) end
 if redis.call('ZCARD', KEYS[1]) == 0 then
   redis.call('DEL', KEYS[1])
 end
@@ -359,6 +367,30 @@ pub struct RedisCredentialLeaseRepository {
 }
 
 impl RedisCredentialLeaseRepository {
+    pub async fn try_acquire_bounded_lease_with_metadata(
+        &self,
+        request: &CredentialBoundedLeaseRequest,
+        metadata: Option<&gateway_core::provider_ports::ProviderLeaseMetadata>,
+    ) -> StoreResult<CredentialBoundedLeaseAcquisition> {
+        request.validate()?;
+        let lease_request = request.lease_request();
+        let attempt = self
+            .acquire_with_limits(&lease_request, request.max_concurrent, metadata)
+            .await?;
+        match attempt.grant {
+            Some(grant) => Ok(CredentialBoundedLeaseAcquisition::Acquired(
+                CredentialLeaseGuard {
+                    repository: self.clone(),
+                    request: lease_request,
+                    grant: Some(grant),
+                },
+            )),
+            None => Ok(CredentialBoundedLeaseAcquisition::Busy {
+                retry_after: attempt.retry_after,
+            }),
+        }
+    }
+
     pub fn new(connection: ConnectionManager, key_namespace: &str) -> StoreResult<Self> {
         Ok(Self {
             connection,
@@ -447,6 +479,7 @@ impl RedisCredentialLeaseRepository {
         &self,
         request: &CredentialLeaseRequest,
         max_concurrent: u32,
+        metadata: Option<&gateway_core::provider_ports::ProviderLeaseMetadata>,
     ) -> StoreResult<LeaseAttempt> {
         request.validate()?;
         if max_concurrent == 0 && request.scope != CredentialLeaseScope::ProviderAccount {
@@ -457,17 +490,20 @@ impl RedisCredentialLeaseRepository {
         let owner = resource_fingerprint("credential lease owner", &request.owner_id)?;
         let ttl_millis = duration_millis(request.ttl)?;
         let signal_ttl = SIGNAL_TTL_MILLIS.max(ttl_millis);
+        let detail = details::encode(metadata)?;
         let mut connection = self.connection.clone();
         let (acquired, fence, expires_at, retry_after): (i64, String, String, String) =
             Script::new(ACQUIRE_SCRIPT)
                 .key(&keys[0])
                 .key(&keys[1])
                 .key(&keys[2])
+                .key(details::detail_key(&keys[0], &lease_id))
                 .arg(owner)
                 .arg(&lease_id)
                 .arg(ttl_millis)
                 .arg(max_concurrent)
                 .arg(signal_ttl)
+                .arg(detail)
                 .invoke_async(&mut connection)
                 .await
                 .map_err(|source| redis_unavailable("acquire credential lease", source))?;
@@ -619,13 +655,16 @@ impl RedisProviderLeaseCoordinator {
         }
         let acquisition = self
             .repository
-            .try_acquire_bounded_lease(&CredentialBoundedLeaseRequest {
-                scope: CredentialLeaseScope::scheduling(request.concurrency_pool()),
-                resource_id: request.account_id().as_str().to_owned(),
-                owner_id: self.owner_id("request"),
-                max_concurrent: request.max_concurrent().get(),
-                ttl,
-            })
+            .try_acquire_bounded_lease_with_metadata(
+                &CredentialBoundedLeaseRequest {
+                    scope: CredentialLeaseScope::scheduling(request.concurrency_pool()),
+                    resource_id: request.account_id().as_str().to_owned(),
+                    owner_id: self.owner_id("request"),
+                    max_concurrent: request.max_concurrent().get(),
+                    ttl,
+                },
+                request.metadata(),
+            )
             .await
             .map_err(|source| crate::provider_unavailable("acquire scheduling lease", source))?;
         Ok(match acquisition {
@@ -760,7 +799,7 @@ impl CredentialLeaseRepository for RedisCredentialLeaseRepository {
         &self,
         request: &CredentialLeaseRequest,
     ) -> StoreResult<Option<CredentialLeaseGrant>> {
-        self.acquire_with_limits(request, 1)
+        self.acquire_with_limits(request, 1, None)
             .await
             .map(|attempt| attempt.grant)
     }
@@ -776,6 +815,7 @@ impl CredentialLeaseRepository for RedisCredentialLeaseRepository {
         let mut connection = self.connection.clone();
         let (renewed, expires_at): (i64, String) = Script::new(RENEW_SCRIPT)
             .key(&keys[0])
+            .key(details::detail_key(&keys[0], &grant.lease_id))
             .arg(member)
             .arg(duration_millis(request.ttl)?)
             .invoke_async(&mut connection)
@@ -802,6 +842,7 @@ impl CredentialLeaseRepository for RedisCredentialLeaseRepository {
         let mut connection = self.connection.clone();
         let released = Script::new(RELEASE_SCRIPT)
             .key(&keys[0])
+            .key(details::detail_key(&keys[0], &grant.lease_id))
             .arg(member)
             .invoke_async::<i64>(&mut connection)
             .await
@@ -821,23 +862,8 @@ impl CredentialLeaseRepository for RedisCredentialLeaseRepository {
         &self,
         request: &CredentialBoundedLeaseRequest,
     ) -> StoreResult<CredentialBoundedLeaseAcquisition> {
-        request.validate()?;
-        let lease_request = request.lease_request();
-        let attempt = self
-            .acquire_with_limits(&lease_request, request.max_concurrent)
-            .await?;
-        match attempt.grant {
-            Some(grant) => Ok(CredentialBoundedLeaseAcquisition::Acquired(
-                CredentialLeaseGuard {
-                    repository: self.clone(),
-                    request: lease_request,
-                    grant: Some(grant),
-                },
-            )),
-            None => Ok(CredentialBoundedLeaseAcquisition::Busy {
-                retry_after: attempt.retry_after,
-            }),
-        }
+        self.try_acquire_bounded_lease_with_metadata(request, None)
+            .await
     }
 }
 

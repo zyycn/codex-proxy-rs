@@ -69,6 +69,7 @@ pub(super) async fn invoke(
         },
         maximum_timeout,
     );
+    call_context.request = crate::adapter::request_context(context.extension_scope().request());
     call_context.request_id = Some(context.request_id().as_str().to_owned());
     call_context.attempt_id = context
         .attempt_index()

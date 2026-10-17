@@ -3,16 +3,16 @@
   "manifest_schema_versions": [2],
   "protocol_versions": [2],
   "capabilities": [
-    { "capability": "frontend_authentication", "versions": [1] },
-    { "capability": "scheduler", "versions": [2] },
-    { "capability": "model_router", "versions": [1] },
+    { "capability": "frontend_authentication", "versions": [2] },
+    { "capability": "scheduler", "versions": [3] },
+    { "capability": "model_router", "versions": [2] },
     { "capability": "model_catalog", "versions": [1] },
-    { "capability": "retry_policy", "versions": [1] },
-    { "capability": "middleware", "versions": [4] },
-    { "capability": "upstream_adapter", "versions": [2] },
-    { "capability": "observer", "versions": [1] },
+    { "capability": "retry_policy", "versions": [2] },
+    { "capability": "middleware", "versions": [5] },
+    { "capability": "upstream_adapter", "versions": [3] },
+    { "capability": "observer", "versions": [2] },
     { "capability": "command_line", "versions": [1] },
-    { "capability": "management", "versions": [1] },
+    { "capability": "management", "versions": [2] },
     { "capability": "maintenance", "versions": [1] }
   ]
 }

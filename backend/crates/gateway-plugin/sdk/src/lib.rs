@@ -10,7 +10,7 @@ mod manifest;
 mod message;
 
 pub use capability::{Capability, ContributionDeclaration, Contributions, FailurePolicy, Stage};
-pub use context::{CallContext, Handshake};
+pub use context::{CallContext, Handshake, RequestContext};
 pub use error::{ErrorCode, PluginFault, SendState};
 pub use manifest::{
     Engines, MANIFEST_VERSION, Manifest, ManifestError, Package, PackageTarget, PluginIcon,

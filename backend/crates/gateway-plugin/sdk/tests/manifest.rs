@@ -23,7 +23,7 @@ fn source_manifest() -> Manifest {
         "contributes": {
             "middleware": {
                 "id": "9acme.request-tags.tagRequest",
-                "version": 4,
+                "version": 5,
                 "stages": ["request"],
                 "inputFormats": ["openai"],
                 "outputFormats": ["openai"]
@@ -96,8 +96,8 @@ fn author_manifest_fills_default_ids_versions_and_fixed_stages() {
         "main": "bin/worker",
         "runtime": "trustedProcess",
         "contributes": {
-            "middleware": {"version": 4, "stages": ["attempt"]},
-            "management": {}
+            "middleware": {"version": 5, "stages": ["attempt"]},
+            "management": {"version": 2}
         }
     });
     let manifest = Manifest::from_author_slice(&serde_json::to_vec(&source).unwrap()).unwrap();
@@ -105,10 +105,10 @@ fn author_manifest_fills_default_ids_versions_and_fixed_stages() {
     let management = &manifest.contributes[&Capability::Management];
 
     assert_eq!(middleware.id, "9acme.request-tags.middleware");
-    assert_eq!(middleware.version, 4);
+    assert_eq!(middleware.version, 5);
     assert_eq!(middleware.stages, [Stage::Attempt]);
     assert_eq!(management.id, "9acme.request-tags.management");
-    assert_eq!(management.version, 1);
+    assert_eq!(management.version, 2);
     assert_eq!(management.stages, [Stage::Management]);
 }
 
@@ -132,7 +132,7 @@ fn installation_checks_protocol_engine_and_target() {
 fn capability_contract_versions_are_checked_independently_of_rpc_version() {
     let mut manifest = packaged_manifest();
     assert!(manifest.validate().is_ok());
-    for version in [0, 1, 2, 3, 5, u32::MAX] {
+    for version in [0, 1, 2, 3, 4, 6, u32::MAX] {
         manifest
             .contributes
             .get_mut(&Capability::Middleware)
@@ -146,7 +146,7 @@ fn capability_contract_versions_are_checked_independently_of_rpc_version() {
         Capability::Management,
         ContributionDeclaration {
             id: "9acme.request-tags.management".into(),
-            version: 2,
+            version: 3,
             stages: vec![Stage::Management],
             input_formats: vec![],
             output_formats: vec![],
@@ -163,7 +163,7 @@ fn retired_upstream_contract_requires_an_author_upgrade() {
         Capability::UpstreamAdapter,
         ContributionDeclaration {
             id: "9acme.request-tags.upstream".into(),
-            version: 2,
+            version: 3,
             stages: vec![Stage::Upstream],
             input_formats: vec!["openai".into()],
             output_formats: vec!["openai".into()],
@@ -386,7 +386,7 @@ fn public_manifest_fields_use_only_the_v3_camel_case_shape() {
 #[test]
 fn contributes_rejects_duplicate_capability_keys_in_direct_json_parsing() {
     let declaration = r#"{
-        "id":"test.example.middleware","version":4,"stages":["request"],
+        "id":"test.example.middleware","version":5,"stages":["request"],
         "inputFormats":["openai"],"outputFormats":["openai"]
     }"#;
     let manifest = format!(
@@ -422,7 +422,7 @@ fn contributes_rejects_duplicate_capability_keys_in_direct_json_parsing() {
 fn contribution_declaration_uses_camel_case_description_fields() {
     let declaration = ContributionDeclaration {
         id: "test.example.middleware".into(),
-        version: 4,
+        version: 5,
         stages: vec![Stage::Request],
         input_formats: vec!["openai".into()],
         output_formats: vec!["openai".into()],
@@ -431,7 +431,7 @@ fn contribution_declaration_uses_camel_case_description_fields() {
         serde_json::to_value(declaration).unwrap(),
         json!({
             "id":"test.example.middleware",
-            "version":4,
+            "version":5,
             "stages":["request"],
             "inputFormats":["openai"],
             "outputFormats":["openai"]
@@ -447,7 +447,7 @@ fn scheduler_requires_the_current_contract() {
         Capability::Scheduler,
         ContributionDeclaration {
             id: "9acme.request-tags.scheduler".into(),
-            version: 2,
+            version: 3,
             stages: vec![Stage::Scheduling],
             input_formats: vec![],
             output_formats: vec![],

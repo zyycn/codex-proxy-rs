@@ -1,8 +1,10 @@
 //! OpenAI Responses HTTP 与 SSE adapter
 
+use crate::request_context::request_client_context;
+
 use std::collections::VecDeque;
 use std::future::Future;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -11,7 +13,7 @@ use axum::{
     extract::{Extension, State, connect_info::ConnectInfo},
     http::{
         HeaderMap, HeaderName, HeaderValue, StatusCode,
-        header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, USER_AGENT},
+        header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE},
     },
     response::Response,
 };
@@ -371,55 +373,6 @@ impl MiddlewareBody for AuthorizedResponseBody {
                 inner.close().await;
             }
         })
-    }
-}
-
-/// 从 socket 与标准转发头提取旧 Usage 页面使用的诊断事实
-pub(crate) fn request_client_context(
-    headers: &HeaderMap,
-    peer_address: Option<SocketAddr>,
-) -> (Option<IpAddr>, Option<String>) {
-    let client_ip = ["cf-connecting-ip", "x-real-ip"]
-        .into_iter()
-        .find_map(|name| header_ip(headers, name))
-        .or_else(|| forwarded_client_ip(headers))
-        .or_else(|| peer_address.map(|address| address.ip()));
-    let user_agent = headers
-        .get(USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    (client_ip, user_agent)
-}
-
-fn header_ip(headers: &HeaderMap, name: &str) -> Option<IpAddr> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .and_then(|value| value.parse().ok())
-}
-
-fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr> {
-    let addresses = headers
-        .get("x-forwarded-for")?
-        .to_str()
-        .ok()?
-        .split(',')
-        .filter_map(|value| value.trim().parse::<IpAddr>().ok())
-        .collect::<Vec<_>>();
-    addresses
-        .iter()
-        .copied()
-        .find(|address| !is_private_or_loopback(*address))
-        .or_else(|| addresses.first().copied())
-}
-
-const fn is_private_or_loopback(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => address.is_private() || address.is_loopback(),
-        IpAddr::V6(address) => address.is_unique_local() || address.is_loopback(),
     }
 }
 

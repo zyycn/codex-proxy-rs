@@ -233,11 +233,12 @@ impl PluginCallbacks {
         &self,
         context: &CallContext,
         proxy: Option<OutboundProxy>,
+        request: Option<Arc<gateway_core::engine::extensions::RequestContext>>,
     ) -> Result<Arc<CallbackScope>, PluginFault> {
         if !matches!(context.stage, gateway_plugin_sdk::Stage::Management) {
             return Err(denied());
         }
-        self.prepare_scope(context, proxy)
+        self.prepare_scope(context, proxy, request)
     }
 
     pub(crate) fn prepare_command_line(
@@ -247,12 +248,13 @@ impl PluginCallbacks {
         if context.stage != gateway_plugin_sdk::Stage::CommandLine {
             return Err(denied());
         }
-        self.prepare_scope(context, None)
+        self.prepare_scope(context, None, None)
     }
 
     pub(crate) fn prepare_frontend_authentication(
         &self,
         context: &CallContext,
+        request: Option<Arc<gateway_core::engine::extensions::RequestContext>>,
     ) -> Result<Arc<CallbackScope>, PluginFault> {
         if context.stage != gateway_plugin_sdk::Stage::Authentication
             || context.account_id.is_some()
@@ -261,7 +263,7 @@ impl PluginCallbacks {
         {
             return Err(denied());
         }
-        self.prepare_scope(context, None)
+        self.prepare_scope(context, None, request)
     }
 
     pub(crate) async fn save_command_account(
@@ -280,8 +282,13 @@ impl PluginCallbacks {
         &self,
         context: &CallContext,
         proxy: Option<OutboundProxy>,
+        request: Option<Arc<gateway_core::engine::extensions::RequestContext>>,
     ) -> Result<Arc<CallbackScope>, PluginFault> {
-        self.register_scope(context, CallbackScope::new(context, proxy))
+        let mut scope = CallbackScope::new(context, proxy);
+        if let Some(request) = request {
+            scope.extension_scope = scope.extension_scope.with_request(request);
+        }
+        self.register_scope(context, scope)
     }
 
     pub(crate) fn prepare_observation(

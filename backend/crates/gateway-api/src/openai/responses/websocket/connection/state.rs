@@ -64,6 +64,7 @@ impl ConnectionStats {
 }
 
 pub(super) struct PumpContext {
+    pub(super) extensions: gateway_core::engine::extensions::ExtensionCallScope,
     pub(super) middleware: Option<FrozenMiddlewarePlan>,
     pub(super) headers: Arc<[MiddlewareHeader]>,
     pub(super) connection_id: Arc<str>,

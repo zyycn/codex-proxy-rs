@@ -251,6 +251,8 @@ async fn callback<S: SessionState + Send + Sync>(
             &path.target(),
             &nonce,
             PluginManagementRequest {
+                request_context: crate::middleware::current()
+                    .and_then(|context| context.extensions.shared_request()),
                 method: "GET".into(),
                 path: path.path,
                 query,
@@ -323,6 +325,8 @@ async fn handle<S: SessionState + Send + Sync>(
         .handle(
             &target,
             PluginManagementRequest {
+                request_context: crate::middleware::current()
+                    .and_then(|context| context.extensions.shared_request()),
                 method,
                 path: path.path,
                 query,

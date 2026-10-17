@@ -34,6 +34,18 @@ impl RedisAdminAccountRuntimeStore {
 
 #[async_trait]
 impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
+    async fn account_concurrency(
+        &self,
+        account_id: &str,
+        offset: u64,
+        limit: u32,
+    ) -> AdminStoreResult<gateway_admin::model::accounts::AccountConcurrencyPage> {
+        self.leases
+            .account_concurrency(account_id, offset, limit)
+            .await
+            .map_err(|error| crate::admin_store_error("account concurrency", error))
+    }
+
     async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot> {
         self.cooldowns
             .active_cooldowns()

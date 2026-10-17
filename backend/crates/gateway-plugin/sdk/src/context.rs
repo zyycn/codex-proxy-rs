@@ -32,10 +32,14 @@ impl std::fmt::Debug for Handshake {
     }
 }
 
-/// 仅携带安全关联信息；这些标识本身不是宿主资源的访问凭证
+/// 调用身份与入口快照；上下文不构成宿主资源的访问凭证
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CallContext {
+    /// 入口请求不可变快照；无入口的定时、注册和命令行调用为空
+    // 帧编解码器将快照放入载荷前缀，避免大请求头占满控制元数据
+    #[serde(skip)]
+    pub request: Option<std::sync::Arc<RequestContext>>,
     pub call_id: u64,
     pub instance_id: String,
     pub generation: u64,
@@ -54,4 +58,26 @@ pub struct CallContext {
     pub account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_revision: Option<u64>,
+}
+
+/// 所有请求相关回调共用入口快照，保留重复请求头与非 UTF-8 字节
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestContext {
+    pub method: String,
+    pub uri: String,
+    pub http_version: String,
+    pub headers: Vec<crate::call::middleware::MiddlewareHeader>,
+    pub peer_addr: Option<String>,
+    pub client_ip: Option<String>,
+}
+
+impl std::fmt::Debug for RequestContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RequestContext")
+            .field("method", &self.method)
+            .field("http_version", &self.http_version)
+            .finish_non_exhaustive()
+    }
 }

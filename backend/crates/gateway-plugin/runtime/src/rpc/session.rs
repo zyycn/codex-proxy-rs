@@ -801,6 +801,7 @@ impl RpcSession {
         // 宿主生成的上下文受本会话预算约束；固定注册期限不能使较小的总预算无法启动
         let timeout = timeout.min(self.limits.maximum_call_timeout);
         CallContext {
+            request: None,
             call_id: 0,
             instance_id: self.handshake.instance_id.clone(),
             generation: self.handshake.generation,

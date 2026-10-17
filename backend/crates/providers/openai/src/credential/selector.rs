@@ -959,6 +959,7 @@ impl CodexCredentialSelector {
                             context.concurrency_limit(&account),
                             request.attempt.deadline(),
                         )
+                        .with_metadata(request.attempt.lease_metadata())
                         .with_concurrency_pool(concurrency_pool)
                         .with_cancellation(request.attempt.cancellation().clone()),
                     ))

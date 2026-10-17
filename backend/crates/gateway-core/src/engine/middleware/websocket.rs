@@ -37,6 +37,7 @@ pub trait Session: Sender {
 
 #[derive(Clone)]
 pub struct Context {
+    pub extensions: crate::engine::extensions::ExtensionCallScope,
     pub plan: Option<crate::engine::middleware::FrozenMiddlewarePlan>,
     pub connection_id: String,
     pub direction: Direction,

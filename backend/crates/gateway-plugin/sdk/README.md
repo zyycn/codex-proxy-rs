@@ -9,7 +9,7 @@ SDK 处于实验阶段；能力是否可用取决于宿主支持、清单声明�
 | SDK 包 | `0.1.0` | Rust 开发依赖，独立于网关版本 |
 | `manifestVersion` | `2` | 安装清单格式 |
 | `package.protocolVersion` | `2` | 宿主与插件的进程通信 |
-| `contributes.*.version` | 默认 `1`，`middleware` 为 `4`，`scheduler` / `upstream_adapter` 为 `2` | 单项能力合同，见[扩展项声明](docs/manifest.md#扩展项简写) |
+| `contributes.*.version` | `middleware` 为 `5`，`scheduler` / `upstream_adapter` 为 `3`，其余见声明 | 单项能力合同，见[扩展项声明](docs/manifest.md#扩展项简写) |
 
 开发顺序：编写[清单](docs/manifest.md) → 实现[能力处理器](docs/capabilities.md) → 用 [CLI](../../../apps/plugin-cli/README.md)
 打包 → [安装、配置与启用](../../../../docs/plugins.md)。完整可运行示例位于独立仓库
@@ -95,6 +95,8 @@ sequenceDiagram
 协议 v2 的帧头由大端 `u32` 元数据长度和大端 `u64` 正文长度组成，随后依次传输 JSON 元数据和原始二进制正文。
 元数据保留 64 KiB 上限；正文总量不由插件传输层额外限制。传输内部以 256 KiB 为单次 I/O 块，
 不逐块发起 RPC，也不要求插件配置与宿主同步。读取按进度扩展缓冲区；截断正文必须报错，不能作为完整消息交付
+
+`Call` 带入口快照时，元数据的 `request_context_bytes` 指定载荷前缀中 JSON 快照的字节数，其后仍为原始业务正文。SDK 帧读写器自动拆装并还原 `CallContext.request`，不拼接复制业务正文；无快照时省略该长度字段
 
 帧写入队列前先用 `validate_frame` 校验元数据，
 避免本地输入错误关闭共享传输。协议校验不会自动重试业务调用；部分读写中断后不能把当前位置当作新帧边界。
