@@ -100,12 +100,17 @@ async fn handle_image_request(
     .await
 }
 
-fn image_operation(
+async fn image_operation(
     body: Bytes,
-    headers: &HeaderMap,
+    mut headers: HeaderMap,
     kind: ImageRequestKind,
 ) -> Result<Operation, GatewayError> {
-    let mut context = OpenAiRequestHeaders::from_headers(headers).session_context();
+    let body = if kind == ImageRequestKind::Edit {
+        super::request::normalize_edit_body(body, &mut headers).await?
+    } else {
+        body
+    };
+    let mut context = OpenAiRequestHeaders::from_headers(&headers).session_context();
     if let Some(turn_id) = headers
         .get("x-codex-image-turn-id")
         .and_then(|value| value.to_str().ok())

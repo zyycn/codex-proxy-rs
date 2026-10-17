@@ -54,7 +54,7 @@ pub(crate) async fn standalone_search(
         },
         client_ip,
         user_agent,
-        search_operation,
+        async move |body, headers| search_operation(body, &headers),
     )
     .await
 }

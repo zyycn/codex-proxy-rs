@@ -197,12 +197,32 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
 | `POST` | `/v1/alpha/search` | Codex standalone web search；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/generations` | 通过 OpenAI Provider 发起图像生成；JSON 请求与响应正文原样转发 |
-| `POST` | `/v1/images/edits` | 通过 OpenAI Provider 发起图像编辑；JSON 请求与响应正文原样转发 |
+| `POST` | `/v1/images/edits` | 通过 OpenAI Provider 发起图像编辑；JSON 原样转发，multipart 上传转为原生 Images JSON |
 | `GET` | `/v1/models` | 返回当前 Client Key 账号范围内各 Provider 的可用公开模型并集；有两种响应形态，见下 |
 | `GET` | `/v1/models/{model_id}` | 返回 OpenAI 兼容的单模型详情 |
 | `POST` | `/v1/providers/{provider}/models/{model}/count_tokens` | 调用指定 Provider/model 声明的精确 Token 计数；请求和响应均为 JSON |
 | `GET` / `POST` | `/v1/providers/{provider}/http/{endpoint}` | 调用指定 Provider 预先声明的固定 HTTP 操作；不是任意 URL 代理 |
 | `GET` | `/v1/usage` | 查询当前 Client Key 的日与周额度，仅使用网关已结算的 USD 账本 |
+
+### Images 请求
+
+Images 使用原生非流式 JSON 端点，JSON 请求与响应正文原样转发。
+`/v1/images/edits` 还接受 `multipart/form-data`，将上传转换为原生 Images JSON 请求
+
+multipart 的 `image` 和 `image[]` 上传按出现顺序组成 `images` 数组，每项为
+`{"image_url":"data:image/...;base64,..."}`；`mask` 上传转换为同结构的单个对象。
+图片支持 PNG、JPEG、WebP，根据内容识别格式，原始文件字节直接编码，不缩放或重新编码
+
+| 表单字段 | JSON 类型 |
+| --- | --- |
+| `n`、`output_compression`、`partial_images` | JSON 数字，不经浮点数中转 |
+| `stream` | JSON 布尔值 `true` 或 `false`；转换不增加流式响应支持 |
+| 其余文本字段，包括未知字段 | 字符串，保留字段名、空白与原值 |
+
+未提供的参数保持缺省；除 `image` / `image[]` 聚合外，其余同名字段按出现顺序保留为重复 JSON 键，
+解释与校验交给上游。
+缺少图片、损坏的 multipart、无效的 UTF-8 或字段类型返回 `400`。
+需要为扩展字段指定其他 JSON 类型，或传入 `file_id` 等图片引用时，使用 JSON 请求
 
 ### Provider 自有操作
 

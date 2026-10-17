@@ -1,6 +1,6 @@
 //! OpenAI Provider 原生非流式 JSON 端点的公共交付边界
 
-use std::net::IpAddr;
+use std::{future::Future, net::IpAddr};
 
 use axum::{
     body::{Body, Bytes},
@@ -30,7 +30,7 @@ use super::{
 };
 
 /// Provider 自有端点也先冻结身份，再通过统一请求链进入原有执行与结算路径
-pub(super) async fn provider_endpoint_response<F>(
+pub(super) async fn provider_endpoint_response<F, Fut>(
     service: OpenAiService,
     client: AuthenticatedClient,
     input: RequestInput,
@@ -39,7 +39,8 @@ pub(super) async fn provider_endpoint_response<F>(
     decode: F,
 ) -> Response
 where
-    F: FnOnce(Bytes, &HeaderMap) -> Result<Operation, GatewayError> + Send + 'static,
+    F: FnOnce(Bytes, HeaderMap) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<Operation, GatewayError>> + Send,
 {
     let execution = service.execution();
     let prepared = match execution.prepare_execution(client).await {
@@ -58,7 +59,7 @@ where
                 if protocol != "openai" {
                     return Err(MiddlewareError::Rejected);
                 }
-                let operation = request.apply_capabilities(decode(body, &headers)?)?;
+                let operation = request.apply_capabilities(decode(body, headers).await?)?;
                 let started = match service
                     .start_prepared_provider_endpoint(
                         prepared, operation,

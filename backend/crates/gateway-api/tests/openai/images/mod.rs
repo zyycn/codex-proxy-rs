@@ -1,5 +1,7 @@
 //! 图像生成与编辑 HTTP 接口的请求传递和响应交付测试
 
+mod request;
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -260,7 +262,7 @@ impl ExecutionSession for ImageSession {
 }
 
 #[tokio::test]
-async fn image_routes_should_not_decode_bodies_and_should_preserve_both_directions() {
+async fn image_json_routes_should_preserve_both_directions_without_decoding() {
     let mut execution = ImageExecution::new();
     let middleware = Arc::new(crate::openai::middleware::RequestMiddleware {
         expected_operation: Some(OperationKind::GenerateImage),
@@ -281,12 +283,6 @@ async fn image_routes_should_not_decode_bodies_and_should_preserve_both_directio
             ImageRequestKind::Edit,
             "application/json",
             br#"{"model":"gpt-image-2","images":[{"image_url":"data:image/png;base64,AAEC"}],"prompt":"add fog","prompt":"duplicate stays raw"}"#.as_slice(),
-        ),
-        (
-            "/v1/images/edits",
-            ImageRequestKind::Edit,
-            "multipart/form-data; boundary=image-boundary",
-            b"--image-boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"image.png\"\r\nContent-Type: image/png\r\n\r\n\x89PNG\x00\xff\r\n--image-boundary--\r\n".as_slice(),
         ),
     ];
 
@@ -332,11 +328,7 @@ async fn image_routes_should_not_decode_bodies_and_should_preserve_both_directio
     assert_eq!(captured.len(), cases.len());
     assert_eq!(
         *middleware.endpoints.lock().unwrap(),
-        vec![
-            "/v1/images/generations",
-            "/v1/images/edits",
-            "/v1/images/edits"
-        ]
+        vec!["/v1/images/generations", "/v1/images/edits"]
     );
     for (captured, (endpoint, kind, _, body)) in captured.iter().zip(cases.iter()) {
         assert_eq!(captured.provider, "openai");
