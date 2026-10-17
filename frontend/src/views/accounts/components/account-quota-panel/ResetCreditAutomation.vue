@@ -83,7 +83,7 @@ watch(() => props.accountId, () => {
         </ZPopover>
       </div>
       <div class="flex items-center gap-3">
-        <ZButton size="small" variant="plain" aria-label="设置全局提前时间" @click="router.push('/settings#reset-credits')">
+        <ZButton size="small" variant="link" aria-label="设置全局提前时间" @click="router.push('/settings#reset-credits')">
           <template #icon>
             <Clock3 class="size-3.5 -translate-y-px" />
           </template>
