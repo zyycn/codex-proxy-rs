@@ -74,7 +74,8 @@ fn update_body() -> Value {
         "accountAutoFreezeAdaptiveConcurrency": true,
         "accountWarmupEnabled": false,
         "accountWarmupScheduleTime": "08:00",
-        "accountWarmupModel": null
+        "accountWarmupModel": null,
+        "resetCreditLeadMinutes": 10
     })
 }
 
@@ -408,6 +409,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
+            reset_credit_lead_minutes: 10,
         },
     };
 
@@ -459,6 +461,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
                 "accountWarmupEnabled": false,
                 "accountWarmupScheduleTime": "08:00",
                 "accountWarmupModel": null,
+                "resetCreditLeadMinutes": 10,
                 "updatedAt": "2026-08-02T10:30:00Z",
                 "updatedAtDisplay": "2026-08-02 18:30:00"
         })
@@ -535,6 +538,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
+            reset_credit_lead_minutes: 10,
         },
     };
 
@@ -1615,5 +1619,26 @@ async fn account_affinity_and_rotation_budget_round_trip_and_reject_invalid_valu
             .await
             .unwrap();
         assert_eq!(response.status(), expected_status, "{field}");
+    }
+}
+
+#[test]
+fn reset_credit_lead_minutes_requires_an_integer_within_one_day() {
+    for (value, valid) in [
+        (0, false),
+        (1, true),
+        (10, true),
+        (1440, true),
+        (1441, false),
+    ] {
+        let mut body = update_body();
+        body["resetCreditLeadMinutes"] = json!(value);
+        let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+        let result = request.validate();
+        if valid {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.unwrap_err().field(), "resetCreditLeadMinutes");
+        }
     }
 }

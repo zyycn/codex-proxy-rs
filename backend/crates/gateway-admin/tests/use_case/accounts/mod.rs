@@ -1,5 +1,7 @@
 //! 账号管理用例测试及共享 Provider、存储替身
 
+mod reset_credit_automation;
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -87,6 +89,11 @@ pub(super) struct FakeProviderAdmin {
     quota_refresh_account: Mutex<Option<(Arc<FakeAccountStore>, AccountRecord)>>,
     current_credential_revision: Mutex<Revision>,
     reset_credit_commands: Mutex<Vec<ConsumeProviderResetCredit>>,
+    reset_credits: Mutex<Vec<gateway_admin::model::provider_credentials::ProviderResetCredit>>,
+    reset_credit_failure: Mutex<Option<ProviderAdminErrorKind>>,
+    reset_credit_result: Mutex<String>,
+    reset_credit_query_started: tokio::sync::Notify,
+    reset_credit_query_gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     profile_result: Mutex<Result<ProviderProfileStatistics, ProviderAdminErrorKind>>,
     subscription_result: Mutex<Result<Option<ProviderSubscription>, ProviderAdminErrorKind>>,
     personal_info_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
@@ -112,6 +119,11 @@ impl FakeProviderAdmin {
             quota_refresh_account: Mutex::new(None),
             current_credential_revision: Mutex::new(revision(1)),
             reset_credit_commands: Mutex::new(Vec::new()),
+            reset_credits: Mutex::default(),
+            reset_credit_failure: Mutex::default(),
+            reset_credit_result: Mutex::new("reset".into()),
+            reset_credit_query_started: tokio::sync::Notify::new(),
+            reset_credit_query_gate: Mutex::new(None),
             profile_result: Mutex::new(Ok(empty_profile_statistics())),
             subscription_result: Mutex::new(Ok(None)),
             personal_info_barrier: Mutex::new(None),
@@ -498,6 +510,28 @@ impl ProviderAdmin for FakeProviderAdmin {
         Ok(self.quota.lock().expect("provider quota").clone())
     }
 
+    async fn reset_credits(
+        &self,
+        _: &ProviderAccountId,
+    ) -> Result<gateway_admin::model::provider_credentials::ProviderResetCredits, ProviderAdminError>
+    {
+        self.record("provider.reset_credits");
+        self.require_available()?;
+        self.reset_credit_query_started.notify_one();
+        let gate = self.reset_credit_query_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            let _ = gate.await;
+        }
+
+        let credits = self.reset_credits.lock().unwrap().clone();
+        Ok(
+            gateway_admin::model::provider_credentials::ProviderResetCredits {
+                available_count: credits.len() as u64,
+                credits,
+            },
+        )
+    }
+
     async fn consume_reset_credit(
         &self,
         command: ConsumeProviderResetCredit,
@@ -508,8 +542,11 @@ impl ProviderAdmin for FakeProviderAdmin {
             .expect("provider reset-credit commands")
             .push(command);
         self.require_available()?;
+        if let Some(kind) = self.reset_credit_failure.lock().unwrap().take() {
+            return Err(ProviderAdminError::new(kind));
+        }
         Ok(ProviderResetCreditResult {
-            code: "reset".to_owned(),
+            code: self.reset_credit_result.lock().unwrap().clone(),
             credit: None,
         })
     }
@@ -577,6 +614,9 @@ pub(super) struct FakeAccountStore {
     quota_window_queries: Mutex<Vec<AccountUsageWindowQuery>>,
     quota_forecast_history: Mutex<QuotaForecastHistory>,
     update_commands: Mutex<Vec<UpdateAccount>>,
+    automations: Mutex<
+        BTreeMap<String, gateway_admin::model::reset_credit_automation::ResetCreditAutomation>,
+    >,
     pub(super) lowered_limits: Mutex<Vec<(String, u32)>>,
 }
 
@@ -599,6 +639,7 @@ impl FakeAccountStore {
             quota_forecast_history: Mutex::new(QuotaForecastHistory::default()),
             update_commands: Mutex::new(Vec::new()),
             lowered_limits: Mutex::new(Vec::new()),
+            automations: Mutex::default(),
         })
     }
 
@@ -1145,6 +1186,7 @@ impl SettingsStore for StaticSettingsStore {
                 account_warmup_enabled: false,
                 account_warmup_schedule_time: "08:00".to_owned(),
                 account_warmup_model: None,
+                reset_credit_lead_minutes: 10,
             },
         })
     }
@@ -3665,5 +3707,55 @@ async fn account_capacity_should_batch_page_ids_and_distinguish_idle_from_unavai
                 assert_eq!(page.items[0].capacity.total_slots, Some(5));
             }
         }
+    }
+}
+
+#[async_trait]
+impl gateway_admin::ports::reset_credit_automation::ResetCreditAutomationStore
+    for FakeAccountStore
+{
+    async fn reset_credit_automation(
+        &self,
+        account_id: &str,
+    ) -> AdminStoreResult<
+        Option<gateway_admin::model::reset_credit_automation::ResetCreditAutomation>,
+    > {
+        Ok(self.automations.lock().unwrap().get(account_id).cloned())
+    }
+    async fn due_reset_credit_automations(
+        &self,
+        now: chrono::DateTime<Utc>,
+        limit: u32,
+    ) -> AdminStoreResult<Vec<String>> {
+        let records = self.automations.lock().unwrap();
+        let mut due = records
+            .values()
+            .filter(|r| r.enabled && r.next_run_at <= now)
+            .collect::<Vec<_>>();
+        due.sort_by_key(|r| r.next_run_at);
+        Ok(due
+            .into_iter()
+            .take(limit as usize)
+            .map(|r| r.account_id.clone())
+            .collect())
+    }
+    async fn save_reset_credit_automation(
+        &self,
+        record: &gateway_admin::model::reset_credit_automation::ResetCreditAutomation,
+        _: Option<&MutationContext>,
+    ) -> AdminStoreResult<u64> {
+        let mut records = self.automations.lock().unwrap();
+        if records.get(&record.account_id).map_or(0, |r| r.revision) != record.revision {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::Conflict,
+                "automation",
+                "stale revision",
+            ));
+        }
+        let mut next = record.clone();
+        next.revision += 1;
+        let revision = next.revision;
+        records.insert(next.account_id.clone(), next);
+        Ok(revision)
     }
 }

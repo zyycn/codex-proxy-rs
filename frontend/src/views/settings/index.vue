@@ -2,7 +2,7 @@
 import { ZButton, ZIconButton, ZPageHeader, ZSegmented, ZSelect } from '@codex-proxy/ui'
 
 import { Save, Undo2 } from '@lucide/vue'
-import { computed, reactive, shallowRef, watch } from 'vue'
+import { computed, nextTick, reactive, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AccountAffinityCard from './components/AccountAffinityCard.vue'
@@ -15,6 +15,7 @@ import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import PrivacyPolicyCard from './components/privacy/PrivacyPolicyCard.vue'
 import RequestHistoryCard from './components/RequestHistoryCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
+import ResetCreditCard from './components/ResetCreditCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import SettingsAccessSection from './components/SettingsAccessSection.vue'
 import TokenRefreshCard from './components/TokenRefreshCard.vue'
@@ -73,6 +74,7 @@ const {
   concurrencyWaitTimeoutSecondsValue,
   responsesMaxDecompressedBodyMiBValue,
   usageRetentionDaysValue,
+  resetCreditLeadMinutesValue,
   accountAutoFreezeThresholdValue,
   accountAutoFreezeWindowSecondsValue,
   accountAutoFreezeDurationSecondsValue,
@@ -82,6 +84,13 @@ const {
   saveSettings,
   loadSettings,
 } = useSettingsForm()
+
+watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => {
+  if (ready) {
+    await nextTick()
+    document.getElementById('reset-credits')?.scrollIntoView({ block: 'start' })
+  }
+}, { immediate: true })
 
 const disabled = computed(() => saving.value || loading.value || detectingLocation.value || !!error.value)
 
@@ -185,6 +194,7 @@ watch(section, (value) => {
             v-model:schedule-time="form.accountWarmupScheduleTime"
             v-model:model="form.accountWarmupModel"
           />
+          <ResetCreditCard v-model="resetCreditLeadMinutesValue" />
           <RequestHistoryCard v-model="usageRetentionDaysValue" />
         </template>
 

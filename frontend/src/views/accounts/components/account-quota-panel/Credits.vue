@@ -30,7 +30,7 @@ const hasBalance = computed(() => !props.credits?.unlimited && balanceDisplay.va
 </script>
 
 <template>
-  <div class="flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-cp bg-cp-fill-quaternary px-4 py-3.5" aria-label="额度点数">
+  <div class="flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-4 pb-4" aria-label="额度点数">
     <span class="text-cp-sm font-heavy text-cp-text">额度点数</span>
     <span class="flex min-w-0 items-baseline gap-1.5">
       <strong

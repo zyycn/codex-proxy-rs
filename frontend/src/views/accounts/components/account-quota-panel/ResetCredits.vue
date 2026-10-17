@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { Account, AccountResetCredit } from '@/api'
-import { ZButton, ZDialog, ZEmpty, ZIconButton } from '@codex-proxy/ui'
+import { ZButton, ZDialog, ZEmpty, ZIconButton, ZTag } from '@codex-proxy/ui'
 
 import { AlertTriangle, RefreshCw, TicketCheck } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import { useAccountResetCredits } from '../../composables/useAccountResetCredits'
 import AccountQuotaCredits from './Credits.vue'
+import ResetCreditAutomation from './ResetCreditAutomation.vue'
 import UsageLimits from './UsageLimits.vue'
 
 const props = defineProps<{
@@ -146,7 +147,12 @@ function handleRequestConsume(creditId: string) {
     </div>
 
     <div v-else class="grid gap-4">
-      <UsageLimits :windows="account.quota.windows" />
+      <section class="overflow-hidden rounded-cp bg-cp-fill-quaternary" aria-label="当前额度">
+        <UsageLimits :windows="account.quota.windows" />
+        <AccountQuotaCredits :credits="account.quota.credits" />
+      </section>
+
+      <ResetCreditAutomation v-if="account.capabilities.consumeResetCredit" :key="account.id" :account-id="account.id" />
 
       <section v-if="ambiguous" class="flex items-start gap-3 rounded-cp bg-cp-warning-container px-4 py-3.5" role="status">
         <AlertTriangle class="mt-0.5 size-4 shrink-0 text-cp-warning-on-container" />
@@ -163,21 +169,14 @@ function handleRequestConsume(creditId: string) {
         </ZButton>
       </section>
 
-      <section class="overflow-hidden rounded-cp bg-cp-fill-quaternary" aria-label="使用限额重置">
-        <div
-          class="flex items-center gap-3 pt-4 pr-3 pl-4"
-          :class="showCountOnlyAction ? 'pb-4' : 'pb-1'"
-        >
+      <section class="grid gap-3" aria-label="可用重置卡">
+        <div class="flex items-center gap-2">
           <h3 class="m-0 min-w-0 flex-1 text-cp-sm font-heavy text-cp-text">
-            使用限额重置
+            可用重置卡
           </h3>
-          <span
-            class="shrink-0 rounded-cp-sm px-2 py-1 text-cp-xs leading-none font-heavy tabular-nums"
-            :class="hasSnapshot && availableCount > 0 ? 'bg-cp-success-container text-cp-success-on-container' : 'bg-cp-fill-tertiary text-cp-text-secondary'"
-            role="status"
-          >
+          <ZTag size="small" :type="hasSnapshot && availableCount > 0 ? 'success' : 'default'" role="status">
             {{ countLabel }}
-          </span>
+          </ZTag>
           <ZIconButton
             size="small"
             aria-label="刷新主动重置卡"
@@ -195,23 +194,23 @@ function handleRequestConsume(creditId: string) {
         <div :aria-busy="loading || consuming">
           <p
             v-if="loadError"
-            class="mx-4 mt-0 mb-4 rounded-cp bg-cp-error-container px-4 py-3 text-cp-xs leading-normal font-emphasis text-cp-error-on-container"
+            class="m-0 rounded-cp bg-cp-error-container px-4 py-3 text-cp-xs leading-normal font-emphasis text-cp-error-on-container"
             role="status"
           >
             {{ loadError }}，请刷新重试
           </p>
           <p
             v-else-if="loading && !hasSnapshot"
-            class="m-0 px-4 pt-1 pb-4 text-cp-xs font-emphasis text-cp-text-secondary"
+            class="m-0 px-4 py-4 text-cp-xs font-emphasis text-cp-text-secondary"
             role="status"
           >
             正在查询可用重置次数…
           </p>
-          <ul v-else-if="creditItems.length" class="m-0 list-none px-0 pt-0 pb-1">
+          <ul v-else-if="creditItems.length" class="m-0 grid list-none gap-2 p-0">
             <li
               v-for="credit in creditItems"
               :key="credit.id"
-              class="flex items-center gap-4 px-4 py-3"
+              class="flex items-center gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5"
             >
               <div class="min-w-0 flex-1">
                 <p class="m-0 text-cp-sm leading-normal font-heavy wrap-anywhere text-cp-text">
@@ -238,13 +237,10 @@ function handleRequestConsume(creditId: string) {
             :icon="TicketCheck"
             size="small"
             surface="none"
-            title="当前没有可用重置次数"
-            description="可刷新列表，重新读取上游状态"
+            title="暂无可用重置卡"
           />
         </div>
       </section>
-
-      <AccountQuotaCredits :credits="account.quota.credits" />
     </div>
 
     <template v-if="confirmation || showCountOnlyAction" #footer>

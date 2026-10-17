@@ -37,6 +37,11 @@ where
             get(account_profile_avatar::<S>),
         )
         .route(
+            "/api/admin/accounts/reset-credits/automation",
+            get(account_reset_credit_automation::<S>)
+                .post(set_account_reset_credit_automation::<S>),
+        )
+        .route(
             "/api/admin/accounts/reset-credits",
             get(account_reset_credits::<S>).post(consume_account_reset_credit::<S>),
         )
@@ -624,4 +629,55 @@ where
             Ok(Event::default().data(data))
         });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+async fn account_reset_credit_automation<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<AccountIdQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
+    let result = state
+        .admin_services()
+        .accounts()
+        .reset_credit_automation_status(query.into_id().map_err(map_wire_error)?)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountResetCreditAutomationData::from((result, time))),
+    ))
+}
+
+async fn set_account_reset_credit_automation<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<AccountResetCreditAutomationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
+    let account_id = AccountIdQuery {
+        account_id: request.account_id,
+    }
+    .into_id()
+    .map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .set_reset_credit_automation(
+            &auth.context().mutation_context(),
+            account_id,
+            request.enabled,
+        )
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountResetCreditAutomationData::from((result, time))),
+    ))
 }

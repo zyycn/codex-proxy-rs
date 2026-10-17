@@ -30,11 +30,11 @@ const items = computed(() => orderedPanelQuotaWindows(props.windows)
 </script>
 
 <template>
-  <section class="overflow-hidden rounded-cp bg-cp-fill-quaternary" aria-label="使用限额">
+  <section class="grid gap-4 p-4" aria-label="使用限额">
     <div
       v-for="item in items"
       :key="item.key"
-      class="grid gap-3 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] sm:items-center sm:gap-5"
+      class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] sm:items-center sm:gap-5"
     >
       <div class="min-w-0">
         <h3 class="m-0 text-cp-sm font-heavy text-cp-text">
@@ -65,7 +65,7 @@ const items = computed(() => orderedPanelQuotaWindows(props.windows)
         </span>
       </div>
     </div>
-    <p v-if="items.length === 0" class="m-0 px-4 py-4 text-cp-sm font-emphasis text-cp-text-secondary">
+    <p v-if="items.length === 0" class="m-0 text-cp-sm font-emphasis text-cp-text-secondary">
       额度待观测
     </p>
   </section>

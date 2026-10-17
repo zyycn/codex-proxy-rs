@@ -646,6 +646,7 @@ impl SettingsStore for MemorySettingsStore {
                 account_warmup_enabled: false,
                 account_warmup_schedule_time: "08:00".to_owned(),
                 account_warmup_model: None,
+                reset_credit_lead_minutes: 10,
             },
         };
         *settings = updated.clone();
@@ -1789,6 +1790,7 @@ fn test_runtime_settings() -> RuntimeSettings {
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
+            reset_credit_lead_minutes: 10,
         },
     }
 }
@@ -1844,4 +1846,30 @@ fn unsupported_provider() -> ProviderAdminError {
 
 fn unavailable_system() -> SystemOperationError {
     SystemOperationError::new(SystemOperationErrorKind::Internal, "unused test operation")
+}
+
+#[async_trait]
+impl gateway_admin::ports::reset_credit_automation::ResetCreditAutomationStore for UnusedStore {
+    async fn reset_credit_automation(
+        &self,
+        _: &str,
+    ) -> AdminStoreResult<
+        Option<gateway_admin::model::reset_credit_automation::ResetCreditAutomation>,
+    > {
+        Ok(None)
+    }
+    async fn due_reset_credit_automations(
+        &self,
+        _: chrono::DateTime<chrono::Utc>,
+        _: u32,
+    ) -> AdminStoreResult<Vec<String>> {
+        Ok(Vec::new())
+    }
+    async fn save_reset_credit_automation(
+        &self,
+        _: &gateway_admin::model::reset_credit_automation::ResetCreditAutomation,
+        _: Option<&gateway_admin::model::MutationContext>,
+    ) -> AdminStoreResult<u64> {
+        Err(unavailable("reset-credit automation"))
+    }
 }

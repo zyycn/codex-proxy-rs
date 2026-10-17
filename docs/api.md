@@ -713,6 +713,8 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `GET` | `/api/admin/accounts/profile-avatar` | `accountId`、可选 `version` | 返回支持头像能力的 Provider 字节流，需要管理员会话；`version` 仅区分浏览器缓存 |
 | `GET` | `/api/admin/accounts/reset-credits` | `accountId` | 查询支持该能力的 Provider 重置卡，不读取本地库存 |
 | `POST` | `/api/admin/accounts/reset-credits` | `{ accountId, creditId?, redeemRequestId }` | 使用 UUIDv4 幂等键消费一张 Provider 重置卡 |
+| `GET` | `/api/admin/accounts/reset-credits/automation` | `accountId` | 读取自动使用开关与本地计划，不查询上游 |
+| `POST` | `/api/admin/accounts/reset-credits/automation` | `{ accountId, enabled }` | 设置账号自动使用开关，默认关闭 |
 | `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取该 Provider + 套餐的模型 cache，缺失时有限实时拉取 |
 | `GET` | `/api/admin/accounts/models/catalog` | `accountId` | 读取指定账号的完整 Codex 原生模型目录，返回 `{ modelCount, observedAt, catalog }` |
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖 cache |
@@ -1231,8 +1233,8 @@ revision 变化时丢弃结果
 
 ### 主动额度重置卡
 
-`GET /api/admin/accounts/reset-credits?accountId=...` 每次都查询对应 Provider；后端不把卡片列表写入
-PostgreSQL 或 Redis。当前由 OpenAI Provider 为 OAuth 账号提供，账号视图分别以 `resetCredits` 和
+`GET /api/admin/accounts/reset-credits?accountId=...` 每次都查询对应 Provider，不用本地计划代替库存。
+当前由 OpenAI Provider 为 OAuth 账号提供，账号视图分别以 `resetCredits` 和
 `consumeResetCredit` 表示查询和消费能力
 
 查询响应：
@@ -1271,6 +1273,19 @@ PostgreSQL 或 Redis。当前由 OpenAI Provider 为 OAuth 账号提供，账号
 不得因为消费成功直接改写本地 `resetAt` 或解除冻结。xAI 不支持该能力
 
 消费期间账号身份或凭据版本变化时返回结果未知，不将旧结果套用到新绑定账号
+
+自动使用通过 `/api/admin/accounts/reset-credits/automation` 按账号开启，默认关闭；账号本身停用时暂停执行。
+GET 和 POST 均返回 `enabled`、`leadMinutes`、`nextDiscoveryAtDisplay`、`nextConsumeAtDisplay`、`lastResult`，
+时间展示沿用部署时区，无计划时为 `null`。运行设置 `resetCreditLeadMinutes` 默认 10，范围 1～1440 分钟
+
+开启后在一分钟内错峰执行首次发现，此后按部署时区每天随机发现一次，普通发现失败也等待下一日。
+已知且有明确到期时间的可用卡片在提前窗口内错峰执行，消费前重新查询；已在其他地方使用或已到期的卡片
+会移出计划，查询失败不直接消费。上游返回 `already_redeemed` 后结束该次操作，不切换另一张卡重试。
+无卡片 ID 或到期时间时不自动消费；每天发现一次可能错过两次发现之间发放并到期的卡片
+
+`lastResult` 的 `pending` 表示消费结果待确认；重试沿用已持久化的幂等键，重启或关闭再开启也不换键。
+`expired_unknown` 表示未确认操作的卡片已经到期，停止重试；`reset`、`already_redeemed` 表示对应终态，
+`discovery_failed` 表示最近查询失败，`not_redeemed` 表示上游明确未完成消费。自动操作未决且对应卡片尚未到期时，手动消费返回 `409`
 
 ## 6. 账号分组
 
@@ -1453,6 +1468,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | [历史保留](#历史保留) | `usageRetentionDays`、`opsEventRetentionDays`、`auditRetentionDays` |
 | [账号自动冻结](#账号自动冻结) | `accountAutoFreezeEnabled`、`accountAutoFreezeThreshold`、`accountAutoFreezeWindowSeconds`、`accountAutoFreezeDurationSeconds`、`accountAutoFreezeProbeEnabled`、`accountAutoFreezeProbeModel`、`accountAutoFreezeAdaptiveConcurrency` |
 | [账号预热](#账号预热) | `accountWarmupEnabled`、`accountWarmupScheduleTime`、`accountWarmupModel` |
+| [主动额度重置卡](#主动额度重置卡) | `resetCreditLeadMinutes` |
 
 ### 历史保留
 

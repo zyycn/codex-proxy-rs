@@ -124,6 +124,7 @@ pub struct RuntimeSettings {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub reset_credit_lead_minutes: u32,
     pub request_profiles: ProviderRequestProfiles,
     pub config_revision: Revision,
     pub model_mappings: ModelMappings,
@@ -163,6 +164,7 @@ pub struct ReplaceRuntimeSettings {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub reset_credit_lead_minutes: u32,
     /// 读取设置时的版本；与写入在同一事务内比较，防止覆盖并发更新
     pub expected_revision: Revision,
     /// 只覆盖提交的 Provider；未提交项保留当前持久值
@@ -365,6 +367,7 @@ impl From<RuntimeSettings> for ReplaceRuntimeSettings {
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_schedule_time: settings.account_warmup_schedule_time,
             account_warmup_model: settings.account_warmup_model,
+            reset_credit_lead_minutes: settings.reset_credit_lead_minutes,
             expected_revision: settings.config_revision,
             request_profile_updates: settings
                 .request_profiles

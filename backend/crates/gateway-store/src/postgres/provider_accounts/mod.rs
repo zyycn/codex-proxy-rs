@@ -60,6 +60,7 @@ mod core_adapter;
 mod mapping;
 mod quota_forecast;
 mod repository;
+mod reset_credit_automation;
 mod rows;
 mod runtime;
 

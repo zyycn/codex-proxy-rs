@@ -48,6 +48,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
+            reset_credit_lead_minutes: 10,
         },
     }
 }
@@ -211,6 +212,7 @@ async fn privacy_steps_migration_preserves_rules_and_other_settings() {
             .await
             .unwrap();
     expected_row["codex_privacy_policy_json"] = expected.clone();
+    expected_row["reset_credit_lead_minutes"] = serde_json::json!(10);
     // 完整升级还会清理自动回切字段，其余运行设置必须原样保留
     expected_row["smart_scheduling_json"]
         .as_object_mut()

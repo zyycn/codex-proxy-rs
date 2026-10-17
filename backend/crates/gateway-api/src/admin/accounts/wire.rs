@@ -1192,3 +1192,49 @@ fn profile_activity_calendar(
         weeks,
     })
 }
+
+/// 账号自动使用临期重置卡开关
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountResetCreditAutomationRequest {
+    pub account_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountResetCreditAutomationData {
+    pub enabled: bool,
+    pub lead_minutes: u32,
+    pub next_discovery_at_display: Option<String>,
+    pub next_consume_at_display: Option<String>,
+    pub last_result: Option<String>,
+}
+
+impl
+    From<(
+        gateway_admin::model::reset_credit_automation::ResetCreditAutomationStatus,
+        crate::time::TimePresenter,
+    )> for AccountResetCreditAutomationData
+{
+    fn from(
+        (status, time): (
+            gateway_admin::model::reset_credit_automation::ResetCreditAutomationStatus,
+            crate::time::TimePresenter,
+        ),
+    ) -> Self {
+        Self {
+            enabled: status.enabled,
+            lead_minutes: status.lead_minutes,
+            next_discovery_at_display: status
+                .next_discovery_at
+                .as_ref()
+                .map(|value| time.datetime(value)),
+            next_consume_at_display: status
+                .next_consume_at
+                .as_ref()
+                .map(|value| time.datetime(value)),
+            last_result: status.last_result,
+        }
+    }
+}

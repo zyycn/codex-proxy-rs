@@ -21,6 +21,7 @@ pub mod freeze_recovery;
 pub mod model;
 pub mod ports;
 pub mod public_service;
+mod reset_credit_automation;
 mod use_case;
 pub use use_case::plugins::{PluginDistributionPorts, PluginManagementService, PluginsService};
 
@@ -423,6 +424,8 @@ async fn initialize_inner(
     let accounts = Arc::new(DefaultAccountsService::new(
         store.accounts(),
         store.account_runtime(),
+        store.settings(),
+        timezone,
         registry.clone(),
         snapshot.clone(),
         probe.clone(),
@@ -553,6 +556,33 @@ async fn initialize_inner(
     .map_err(|_| AdminError::internal("导入 Worker 注册信息不合法"))?;
     worker_contributions.push(WorkerContribution::Registration(registration));
     worker_contributions.extend(freeze_recovery_worker_contribution(freeze_recovery)?);
+    let id = WorkerId::try_new(WorkerKind::ResetCreditAutomation, "admin")
+        .map_err(|_| AdminError::internal("重置卡 Worker ID 不合法"))?;
+    let schedule = WorkerSchedule::try_new(
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+        Duration::from_secs(60),
+        Duration::from_secs(90),
+        Duration::from_secs(30),
+    )
+    .map_err(|_| AdminError::internal("重置卡 Worker 调度配置不合法"))?;
+    let lease = WorkerLeaseRequest::try_new(id.clone(), Duration::from_secs(90))
+        .map_err(|_| AdminError::internal("重置卡 Worker 租约配置不合法"))?;
+    worker_contributions.push(WorkerContribution::Registration(
+        WorkerRegistration::try_new(
+            id,
+            WorkerRunnable::Scheduled {
+                schedule,
+                lease: Some(lease),
+                task: Box::new(reset_credit_automation::ResetCreditAutomationTask {
+                    accounts,
+                    store: store.accounts(),
+                    settings: store.settings(),
+                }),
+            },
+        )
+        .map_err(|_| AdminError::internal("重置卡 Worker 注册失败"))?,
+    ));
     Ok(AdminBundle {
         services,
         worker_contributions,

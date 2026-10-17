@@ -66,6 +66,7 @@ pub struct RuntimeSettingsFields {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub reset_credit_lead_minutes: u32,
 }
 
 /// 运行配置投影与设置页字段的聚合响应
@@ -785,6 +786,7 @@ impl RuntimeSettingsFields {
             account_warmup_enabled: self.account_warmup_enabled,
             account_warmup_schedule_time: self.account_warmup_schedule_time,
             account_warmup_model: self.account_warmup_model,
+            reset_credit_lead_minutes: self.reset_credit_lead_minutes,
         };
         values.validate().map_err(settings_validation_error)?;
         Ok(values)
@@ -825,6 +827,7 @@ impl From<gateway_admin::model::settings::RuntimeSettingsValues> for RuntimeSett
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_schedule_time: settings.account_warmup_schedule_time,
             account_warmup_model: settings.account_warmup_model,
+            reset_credit_lead_minutes: settings.reset_credit_lead_minutes,
         }
     }
 }
@@ -840,6 +843,7 @@ fn settings_validation_error(field: &'static str) -> WireValidationError {
         "account_auto_freeze_window_seconds" => "accountAutoFreezeWindowSeconds",
         "account_warmup_enabled" => "accountWarmupEnabled",
         "account_warmup_model" => "accountWarmupModel",
+        "reset_credit_lead_minutes" => "resetCreditLeadMinutes",
         "account_warmup_schedule_time" => "accountWarmupScheduleTime",
         "audit_retention_days" => "auditRetentionDays",
         "concurrency_wait_timeout_seconds" => "concurrencyWaitTimeoutSeconds",

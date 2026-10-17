@@ -1162,3 +1162,31 @@ fn unavailable_system() -> SystemOperationError {
     )
 }
 mod service_contract;
+
+#[async_trait]
+impl gateway_admin::ports::reset_credit_automation::ResetCreditAutomationStore
+    for UnavailableStore
+{
+    async fn reset_credit_automation(
+        &self,
+        _: &str,
+    ) -> AdminStoreResult<
+        Option<gateway_admin::model::reset_credit_automation::ResetCreditAutomation>,
+    > {
+        Ok(None)
+    }
+    async fn due_reset_credit_automations(
+        &self,
+        _: chrono::DateTime<chrono::Utc>,
+        _: u32,
+    ) -> AdminStoreResult<Vec<String>> {
+        Ok(Vec::new())
+    }
+    async fn save_reset_credit_automation(
+        &self,
+        _: &gateway_admin::model::reset_credit_automation::ResetCreditAutomation,
+        _: Option<&gateway_admin::model::MutationContext>,
+    ) -> AdminStoreResult<u64> {
+        Err(unavailable("reset-credit automation"))
+    }
+}

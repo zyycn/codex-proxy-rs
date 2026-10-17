@@ -109,7 +109,9 @@ pub type AdminStoreResult<T> = Result<T, AdminStoreError>;
 
 /// 账号目录与公共账号写操作
 #[async_trait]
-pub trait AccountStore: Send + Sync {
+pub trait AccountStore:
+    super::reset_credit_automation::ResetCreditAutomationStore + Send + Sync
+{
     /// 插件回调按授权 Provider/账号在数据库过滤后做稳定 cursor 分页
     async fn list_plugin_accounts(
         &self,
