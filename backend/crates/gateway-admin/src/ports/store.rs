@@ -130,6 +130,8 @@ pub trait AccountStore:
         runtime: AccountRuntimeSnapshot,
     ) -> AdminStoreResult<Option<AccountPageItem>>;
 
+    async fn account_exists(&self, account_id: &str) -> AdminStoreResult<bool>;
+
     async fn load_account_usage(
         &self,
         range: TimeRange,

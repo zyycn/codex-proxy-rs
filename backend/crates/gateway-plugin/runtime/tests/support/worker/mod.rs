@@ -381,6 +381,18 @@ impl Peer {
     }
 
     async fn respond(&self, id: u64, method: String, params: Value, payload: Vec<u8>) {
+        if self.configuration["dispatch_on_method"].as_str() == Some(method.as_str()) {
+            self.callback(
+                id,
+                "host.http.dispatch",
+                json!({
+                    "settings":null,"method":"GET","uri":"/derived","version":"HTTP/1.1",
+                    "headers":[],"timeout_ms":1000,"body":{"kind":"empty"}
+                }),
+            )
+            .await
+            .unwrap();
+        }
         if self.configuration["invalid_response_method"].as_str() == Some(method.as_str()) {
             self.send(
                 Message::Result {

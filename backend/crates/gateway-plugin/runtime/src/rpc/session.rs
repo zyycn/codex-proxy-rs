@@ -13,7 +13,7 @@ use futures::future::BoxFuture;
 use gateway_host::process::{ProcessControl, ProcessSpec, ProcessStartError, ProcessSupervisor};
 use gateway_plugin_sdk::{
     CallContext, Frame, Handshake, Message, PROTOCOL_VERSION, PluginFault, Stage,
-    client::{CallDeadline, CallDeadlinePause, read_frame, validate_frame, write_frame},
+    client::{CallDeadline, CallDeadlinePause, EncodedFrame, read_frame, write_frame},
 };
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 
@@ -190,7 +190,7 @@ pub trait CallbackHandler: Send + Sync {
 pub struct RpcSession {
     shared: Arc<Shared>,
     handshake: Handshake,
-    data: mpsc::Sender<Frame>,
+    data: mpsc::Sender<EncodedFrame>,
     slots: Arc<Semaphore>,
     next_call: AsyncMutex<u64>,
     limits: RpcLimits,
@@ -227,7 +227,7 @@ pub(crate) struct Shared {
     started_at: Instant,
     expected_stop: AtomicBool,
     failure_observer: Option<Arc<dyn Fn(Duration) + Send + Sync>>,
-    pub control: mpsc::Sender<Frame>,
+    pub control: mpsc::Sender<EncodedFrame>,
     pub process: ProcessControl,
     pub stopped: watch::Sender<bool>,
     callback_slots: Arc<Semaphore>,
@@ -540,6 +540,10 @@ impl Shared {
     }
 
     pub fn send_control(&self, frame: Frame) {
+        let Ok(frame) = EncodedFrame::new(frame) else {
+            self.fail(RpcError::Protocol(None));
+            return;
+        };
         if self.control.try_send(frame).is_err() {
             self.fail(RpcError::Capacity);
         }
@@ -907,7 +911,7 @@ impl RpcSession {
             payload,
         };
         // 本地元数据错误不能进入写队列并关闭整个会话
-        validate_frame(&frame).map_err(|source| {
+        let frame = EncodedFrame::new(frame).map_err(|source| {
             RpcError::Context(Some(gateway_core::error::ErrorSource::new(source)))
         })?;
         let started = self.begin_call(context, deadline, stream, slot.clone(), execution)?;
@@ -924,11 +928,16 @@ impl RpcSession {
             if let Some((bytes, frames)) = credit {
                 // 初始信用跟在 Call 后走同一有序队列，不能被控制队列提前发送
                 self.data
-                    .send(Frame::control(Message::Credit {
-                        id: started.id,
-                        bytes,
-                        frames,
-                    }))
+                    .send(
+                        EncodedFrame::new(Frame::control(Message::Credit {
+                            id: started.id,
+                            bytes,
+                            frames,
+                        }))
+                        .map_err(|source| {
+                            RpcError::Context(Some(gateway_core::error::ErrorSource::new(source)))
+                        })?,
+                    )
                     .await
                     .map_err(|_| RpcError::Closed(None))?;
             }

@@ -14,7 +14,7 @@ mod upstream_adapter;
 use crate::{ErrorCode, PluginFault};
 use serde::{Serialize, de::DeserializeOwned};
 
-pub use frame::{read_frame, validate_frame, write_frame};
+pub use frame::{EncodedFrame, read_frame, validate_frame, write_frame};
 pub use http::{HostHttpBody, HostHttpResponse};
 pub use middleware::{
     HttpBody, HttpCall, HttpFrame, HttpNext, HttpRequest, HttpResponse, MiddlewareBody,

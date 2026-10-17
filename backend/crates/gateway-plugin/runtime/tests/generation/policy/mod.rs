@@ -229,6 +229,59 @@ fn operation() -> Operation {
 }
 
 #[tokio::test]
+async fn retry_callback_preserves_entry_snapshot_and_ancestor_scope() {
+    use crate::support::request_context::{Dispatcher, request};
+    use gateway_core::{
+        engine::policy::{RetryDecision, RetryFacts},
+        error::ProviderErrorKind,
+        upstream::UpstreamSendState,
+    };
+    let (_cache, runtime) = setup(vec![InstanceFixture {
+        id: "retry-source",
+        configuration: serde_json::json!({"dispatch_on_method":"policy.retry_decision", "retry_decision":{"decision":"stop"}}),
+        bindings: vec![binding("test.example.retryPolicy", "retry", 0, PluginFailurePolicy::Delegate)],
+    }]).await;
+    let dispatcher = Arc::new(Dispatcher::default());
+    let port: Arc<dyn gateway_core::engine::middleware::http::Dispatcher> = dispatcher.clone();
+    runtime.bind_http(&port).unwrap();
+    let request = request();
+    let extensions = ExtensionCallScope::default()
+        .with_request(request.clone())
+        .extending("ancestor".into())
+        .unwrap();
+    let context = policy_context(&runtime, prepare(&runtime).await, "req_retry_child")
+        .with_extension_scope(extensions);
+    assert_eq!(
+        context
+            .retry_decision(RetryFacts {
+                attempt_index: NonZeroU32::MIN,
+                provider: ProviderKind::new("openai").unwrap(),
+                model: Some("gpt-test".into()),
+                error_kind: ProviderErrorKind::RateLimited,
+                upstream_status: Some(429),
+                send_state: UpstreamSendState::NotSent,
+                remaining_routing_attempts: 1,
+                remaining_deadline: Duration::from_secs(3),
+                retry_allowed: true,
+            })
+            .await,
+        RetryDecision::Stop
+    );
+    {
+        let calls = dispatcher.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(Arc::ptr_eq(
+            &calls[0].extensions.shared_request().unwrap(),
+            &request
+        ));
+        assert!(calls[0].extensions.contains("ancestor"));
+        assert!(calls[0].extensions.contains("retry-source"));
+        assert_eq!(calls[0].request_id, "req_retry_child");
+    }
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn retry_policy_uses_ordered_delegation_and_rejects_disallowed_actions() {
     use gateway_core::{
         engine::policy::{RetryDecision, RetryFacts},

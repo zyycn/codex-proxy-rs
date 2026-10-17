@@ -1131,6 +1131,15 @@ impl ClientKeyVerifier for UnusedClientKeyVerifier {
 
 #[async_trait]
 impl AccountStore for UnusedStore {
+    async fn account_exists(&self, id: &str) -> AdminStoreResult<bool> {
+        Ok(self
+            .account
+            .lock()
+            .expect("account")
+            .as_ref()
+            .is_some_and(|account| account.account.id == id))
+    }
+
     async fn list_plugin_accounts(
         &self,
         _: gateway_admin::model::provider_credentials::PluginAccountListQuery,

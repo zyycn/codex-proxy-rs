@@ -225,6 +225,19 @@ impl PgAdminAccountStore {
 
 #[async_trait]
 impl AccountStore for PgAdminAccountStore {
+    async fn account_exists(&self, account_id: &str) -> AdminStoreResult<bool> {
+        sqlx::query_scalar("select exists(select 1 from provider_accounts where id = $1)")
+            .bind(account_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|source| {
+                admin_store_error(
+                    ENTITY,
+                    postgres_unavailable("check account existence", source),
+                )
+            })
+    }
+
     async fn list_plugin_accounts(
         &self,
         query: PluginAccountListQuery,

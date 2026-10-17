@@ -5,7 +5,7 @@ use std::sync::Arc;
 use gateway_plugin_sdk::{
     ErrorCode, Frame, Message, PluginFault,
     call::middleware::NEXT_METHOD,
-    client::{read_frame, validate_frame, write_frame},
+    client::{EncodedFrame, read_frame, validate_frame},
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -17,8 +17,8 @@ use super::session::{CallbackHandler, RpcError, RpcReply, Shared};
 pub(super) fn start<W, R>(
     writer: W,
     reader: R,
-    data: mpsc::Receiver<Frame>,
-    control: mpsc::Receiver<Frame>,
+    data: mpsc::Receiver<EncodedFrame>,
+    control: mpsc::Receiver<EncodedFrame>,
     shared: Arc<Shared>,
     callbacks: Arc<dyn CallbackHandler>,
 ) where
@@ -31,8 +31,8 @@ pub(super) fn start<W, R>(
 
 async fn write_loop<W: AsyncWrite + Unpin>(
     mut writer: W,
-    mut data: mpsc::Receiver<Frame>,
-    mut control: mpsc::Receiver<Frame>,
+    mut data: mpsc::Receiver<EncodedFrame>,
+    mut control: mpsc::Receiver<EncodedFrame>,
     shared: Arc<Shared>,
 ) {
     let mut stopped = shared.stopped.subscribe();
@@ -51,11 +51,11 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             return;
         };
         // 撤销尚未发送的调用时丢弃排队帧；已开始写入的 Call 必须先于 Cancel
-        if let Message::Call { id, .. } = &frame.message {
+        if let Message::Call { id, .. } = frame.message() {
             if !shared.mark_transmitted(*id) {
                 continue;
             }
-        } else if let Message::Credit { id, .. } = &frame.message
+        } else if let Message::Credit { id, .. } = frame.message()
             && shared.context(*id).is_none()
         {
             continue;
@@ -63,7 +63,7 @@ async fn write_loop<W: AsyncWrite + Unpin>(
         let written = tokio::select! {
             biased;
             _ = stopped.changed() => return,
-            result = write_frame(&mut writer, &frame) => result,
+            result = frame.write(&mut writer) => result,
         };
         if let Err(source) = written {
             shared.fail(RpcError::Closed(Some(

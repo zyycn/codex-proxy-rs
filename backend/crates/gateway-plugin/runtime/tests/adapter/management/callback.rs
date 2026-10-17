@@ -1,5 +1,6 @@
 //! 验证插件授权回调状态的一次性消费、身份绑定与过期拒绝
 
+use crate::support::request_context::{Dispatcher, request as entry_request};
 use gateway_admin::{
     PluginManagementService,
     model::{
@@ -8,12 +9,13 @@ use gateway_admin::{
     },
 };
 use serde_json::json;
+use std::sync::Arc;
 
 use super::{Environment, install, registration};
 
 fn request() -> PluginManagementRequest {
     PluginManagementRequest {
-        request_context: None,
+        request_context: Some(entry_request()),
         headers: vec![gateway_core::engine::middleware::MiddlewareHeader::new(
             "cookie",
             "callback=fixture".into(),
@@ -38,7 +40,7 @@ async fn public_login_callbacks_consume_bound_state_once_and_reject_wrong_owner_
     registration["callbacks"] = json!([{"path":"oauth","response_content_types":["text/plain"]}]);
     let first = install(
         &environment,
-        json!({"management_registration":registration}),
+        json!({"management_registration":registration,"dispatch_on_method":"management.callback"}),
     )
     .await;
     let second = install(
@@ -47,6 +49,9 @@ async fn public_login_callbacks_consume_bound_state_once_and_reject_wrong_owner_
     )
     .await;
     let (runtime, core) = environment.runtime().await;
+    let dispatcher = Arc::new(Dispatcher::default());
+    let port: Arc<dyn gateway_core::engine::middleware::http::Dispatcher> = dispatcher.clone();
+    runtime.bind_http(&port).unwrap();
     let service = PluginManagementService::new(
         runtime.clone(),
         environment.store.admin_ports().plugins(),
@@ -111,6 +116,16 @@ async fn public_login_callbacks_consume_bound_state_once_and_reject_wrong_owner_
     assert_eq!(usize::from(one.is_ok()) + usize::from(two.is_ok()), 1);
     let response = one.or(two).unwrap();
     assert_eq!(response.body.as_ref(), b"callback received");
+    {
+        let calls = dispatcher.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].extensions.request(),
+            Some(entry_request().as_ref())
+        );
+        assert!(calls[0].extensions.contains(&first.id));
+        assert_eq!(calls[0].request_id, "callback-test");
+    }
     assert_eq!(response.headers.len(), 1);
     assert_eq!(response.headers[0].name(), "cookie");
     assert_eq!(response.headers[0].value().as_ref(), b"callback=fixture");

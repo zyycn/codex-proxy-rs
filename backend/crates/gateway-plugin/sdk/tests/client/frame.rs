@@ -117,9 +117,13 @@ async fn request_context_uses_payload_prefix_without_consuming_metadata_budget_o
         payload: vec![42; 1024 * 1024],
     };
     gateway_plugin_sdk::client::validate_frame(&frame).unwrap();
+    let encoded = gateway_plugin_sdk::client::EncodedFrame::new(frame.clone()).unwrap();
     let next = Frame::control(Message::Cancel { id: 1 });
     let mut bytes = Vec::new();
-    write_frame(&mut bytes, &frame).await.unwrap();
+    encoded.write(&mut bytes).await.unwrap();
+    let mut direct = Vec::new();
+    write_frame(&mut direct, &frame).await.unwrap();
+    assert_eq!(bytes, direct);
     let metadata_length = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
     assert!(metadata_length < 1024);
     let metadata: serde_json::Value =

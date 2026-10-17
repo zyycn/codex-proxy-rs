@@ -170,6 +170,10 @@ impl ManagementEntry {
             .context(Stage::PublicManagement, limits.maximum_call_timeout);
         context.request = crate::adapter::request_context(request.request_context.as_deref());
         context.request_id = Some(request.request_id);
+        let _scope = self
+            .callbacks
+            .prepare_management(&context, None, request.request_context)
+            .map_err(|_| unavailable())?;
         let params = serde_json::to_value(ManagementRequest {
             method: request.method,
             path: request.path,

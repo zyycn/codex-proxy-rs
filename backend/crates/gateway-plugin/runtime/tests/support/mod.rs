@@ -14,6 +14,7 @@ use gateway_plugin_sdk::{
 use sha2::{Digest as _, Sha256};
 pub mod environment;
 pub mod native;
+pub mod request_context;
 pub mod store;
 
 pub const DEFAULT_PLUGIN_ID: &str = "test.example";

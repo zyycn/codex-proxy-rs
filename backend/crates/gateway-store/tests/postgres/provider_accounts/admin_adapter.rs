@@ -3,6 +3,26 @@
 use super::*;
 
 #[tokio::test]
+async fn account_existence_does_not_require_capacity_settings() {
+    let Some(database) = TestDatabase::create("account_existence").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_exists", "user-exists"))
+        .await
+        .unwrap();
+    sqlx::query("delete from runtime_settings")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let store = admin_account_store(&database.pool);
+    assert!(store.account_exists("acct_exists").await.unwrap());
+    assert!(!store.account_exists("acct_missing").await.unwrap());
+    database.close().await;
+}
+
+#[tokio::test]
 async fn account_capacity_should_resolve_limits_for_list_and_detail() {
     let Some(database) = TestDatabase::create("account_capacity").await else {
         return;

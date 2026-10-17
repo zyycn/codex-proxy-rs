@@ -28,6 +28,33 @@ fn is_zero(value: &usize) -> bool {
     *value == 0
 }
 
+/// 入队前完成编码；写泵复用已验证的字节，不重复序列化入口快照
+pub struct EncodedFrame {
+    frame: Frame,
+    metadata: Vec<u8>,
+    request: Vec<u8>,
+}
+
+impl EncodedFrame {
+    pub fn new(frame: Frame) -> Result<Self, FrameError> {
+        let (metadata, request) = encode_metadata(&frame)?;
+        Ok(Self {
+            frame,
+            metadata,
+            request,
+        })
+    }
+
+    #[must_use]
+    pub fn message(&self) -> &Message {
+        &self.frame.message
+    }
+
+    pub async fn write<W: AsyncWrite + Unpin>(&self, writer: &mut W) -> Result<(), FrameError> {
+        write_encoded(writer, &self.metadata, &self.request, &self.frame.payload).await
+    }
+}
+
 /// 读取完整消息；I/O 分块是传输细节，不限制业务正文总量
 pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Frame, FrameError> {
     let metadata_len = reader.read_u32().await? as usize;
@@ -78,20 +105,28 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(
     frame: &Frame,
 ) -> Result<(), FrameError> {
     let (metadata, request) = encode_metadata(frame)?;
+    write_encoded(writer, &metadata, &request, &frame.payload).await
+}
+
+async fn write_encoded<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    metadata: &[u8],
+    request: &[u8],
+    payload: &[u8],
+) -> Result<(), FrameError> {
     let metadata_len = u32::try_from(metadata.len()).map_err(|_| FrameError::Length)?;
-    let payload_len = frame
-        .payload
+    let payload_len = payload
         .len()
         .checked_add(request.len())
         .ok_or(FrameError::Length)?;
     let payload_len = u64::try_from(payload_len).map_err(|_| FrameError::Length)?;
     writer.write_u32(metadata_len).await?;
     writer.write_u64(payload_len).await?;
-    writer.write_all(&metadata).await?;
+    writer.write_all(metadata).await?;
     // 两段分别写入，避免为入口快照复制或拼接业务正文
     for chunk in request
         .chunks(IO_CHUNK_BYTES)
-        .chain(frame.payload.chunks(IO_CHUNK_BYTES))
+        .chain(payload.chunks(IO_CHUNK_BYTES))
     {
         writer.write_all(chunk).await?;
     }

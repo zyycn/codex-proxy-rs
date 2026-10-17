@@ -83,6 +83,10 @@ async fn call(
     context.request = crate::adapter::request_context(input.extension_scope.request());
     context.request_id = Some(request.request_id.clone());
     context.attempt_id = Some(format!("{}:{}", request.request_id, request.attempt_index));
+    let _scope = invocation
+        .callbacks
+        .prepare_extensions(&context, input.extension_scope.clone())
+        .map_err(|_| ())?;
     let reply = invocation
         .session
         .call(

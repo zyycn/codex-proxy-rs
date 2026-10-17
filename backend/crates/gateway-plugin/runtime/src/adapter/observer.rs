@@ -63,7 +63,7 @@ impl ObserverEntry {
         let mut context = self.session.context(Stage::Observation, timeout);
         context.request = crate::adapter::request_context(extensions.request());
         context.request_id = Some(request_id.to_owned());
-        let Ok(_scope) = self.callbacks.prepare_observation(&context, extensions) else {
+        let Ok(_scope) = self.callbacks.prepare_extensions(&context, extensions) else {
             return;
         };
         let Ok(params) = serde_json::to_value(&event) else {

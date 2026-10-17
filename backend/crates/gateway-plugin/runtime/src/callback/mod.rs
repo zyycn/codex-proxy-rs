@@ -235,7 +235,10 @@ impl PluginCallbacks {
         proxy: Option<OutboundProxy>,
         request: Option<Arc<gateway_core::engine::extensions::RequestContext>>,
     ) -> Result<Arc<CallbackScope>, PluginFault> {
-        if !matches!(context.stage, gateway_plugin_sdk::Stage::Management) {
+        if !matches!(
+            context.stage,
+            gateway_plugin_sdk::Stage::Management | gateway_plugin_sdk::Stage::PublicManagement
+        ) {
             return Err(denied());
         }
         self.prepare_scope(context, proxy, request)
@@ -291,7 +294,7 @@ impl PluginCallbacks {
         self.register_scope(context, scope)
     }
 
-    pub(crate) fn prepare_observation(
+    pub(crate) fn prepare_extensions(
         &self,
         context: &CallContext,
         extension_scope: gateway_core::engine::extensions::ExtensionCallScope,

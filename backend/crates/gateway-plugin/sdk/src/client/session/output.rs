@@ -9,7 +9,7 @@ use tokio::{
 
 use crate::Frame;
 
-use super::super::frame::{validate_frame, write_frame};
+use super::super::frame::EncodedFrame;
 use super::{CallCancellation, CallDeadline, SessionError};
 
 pub(super) struct Output {
@@ -28,7 +28,7 @@ impl Clone for Output {
 
 impl Output {
     pub(super) async fn send_data(&self, frame: Frame) -> Result<(), SessionError> {
-        validate_frame(&frame)?;
+        let frame = EncodedFrame::new(frame)?;
         let permit = Arc::clone(&self.data_slots)
             .acquire_owned()
             .await
@@ -57,7 +57,7 @@ impl Output {
     }
 
     pub(super) fn send_control(&self, frame: Frame) -> Result<(), SessionError> {
-        validate_frame(&frame)?;
+        let frame = EncodedFrame::new(frame)?;
         self.sender
             .try_send(Outbound {
                 frame,
@@ -68,7 +68,7 @@ impl Output {
 }
 
 pub(super) struct Outbound {
-    frame: Frame,
+    frame: EncodedFrame,
     _data_slot: Option<OwnedSemaphorePermit>,
 }
 
@@ -77,7 +77,7 @@ pub(super) async fn writer_loop<W: AsyncWrite + Unpin>(
     mut received: mpsc::Receiver<Outbound>,
 ) -> Result<(), SessionError> {
     while let Some(outbound) = received.recv().await {
-        write_frame(&mut writer, &outbound.frame).await?;
+        outbound.frame.write(&mut writer).await?;
     }
     Ok(())
 }

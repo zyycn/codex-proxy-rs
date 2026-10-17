@@ -430,12 +430,14 @@ impl AccountsService for DefaultAccountsService {
             .and_then(|page| page.checked_mul(page_size))
             .filter(|_| (1..=100).contains(&page_size))
             .ok_or_else(|| AdminError::invalid("并发明细分页参数无效"))?;
-        // 只验证账号存在，不加载配额、用量或请求历史
-        self.accounts
-            .load_account(account_id.as_str(), Default::default())
+        if !self
+            .accounts
+            .account_exists(account_id.as_str())
             .await
             .map_err(|error| map_store_error(error, "account concurrency"))?
-            .ok_or_else(|| AdminError::not_found("账号不存在"))?;
+        {
+            return Err(AdminError::not_found("账号不存在"));
+        }
         self.account_runtime
             .account_concurrency(account_id.as_str(), u64::from(offset), page_size)
             .await

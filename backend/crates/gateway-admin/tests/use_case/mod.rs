@@ -478,6 +478,10 @@ impl AccountGroupStore for UnavailableAccountGroupStore {
 
 #[async_trait]
 impl AccountStore for UnavailableStore {
+    async fn account_exists(&self, _: &str) -> AdminStoreResult<bool> {
+        Err(unavailable("account"))
+    }
+
     async fn list_plugin_accounts(
         &self,
         _: gateway_admin::model::provider_credentials::PluginAccountListQuery,
