@@ -2,7 +2,7 @@
 
 use chrono::DateTime;
 use gateway_core::account::OpaqueProviderData;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::selection::{
@@ -12,7 +12,34 @@ use super::{CodexWireProfile, CodexWireProfileState};
 
 /// 已解析的配置；没有 mode 的预设配置复用官方版本与平台合同
 #[derive(Debug, Clone)]
-pub struct RequestProfileSelection(ParsedSelection);
+pub struct RequestProfileSelection {
+    selection: ParsedSelection,
+    per_key_installation_id_enabled: Option<bool>,
+}
+
+/// 本次执行冻结的 UA 与 Key 配置事实；UA 改写不改变身份选择条件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ResolvedRequestProfile {
+    #[serde(flatten)]
+    pub(crate) profile: CodexWireProfile,
+    #[serde(default)]
+    pub(crate) independent_ua_configuration: bool,
+    #[serde(default)]
+    pub(crate) per_key_installation_id_enabled: bool,
+}
+
+impl ResolvedRequestProfile {
+    pub(crate) fn from_context(
+        context: &gateway_core::engine::AttemptContext,
+    ) -> Result<Option<Self>, serde_json::Error> {
+        context
+            .request_profile()
+            .map(|profile| {
+                serde_json::from_value(Value::Object(profile.expose_to_provider().clone()))
+            })
+            .transpose()
+    }
+}
 
 #[derive(Debug, Clone)]
 enum ParsedSelection {
@@ -34,47 +61,69 @@ enum SelectionDocument {
 
 impl RequestProfileSelection {
     pub fn preset(&self) -> Option<&ClientProfileSelection> {
-        match &self.0 {
+        match &self.selection {
             ParsedSelection::Preset(selection) => Some(selection),
             _ => None,
         }
     }
 
     pub fn version_mode(&self) -> VersionMode {
-        match &self.0 {
+        match &self.selection {
             ParsedSelection::Preset(selection) => selection.version_mode,
             ParsedSelection::Custom(_) => VersionMode::Fixed,
         }
     }
 
-    pub fn parse(document: &OpaqueProviderData) -> Result<Self, ClientProfileError> {
-        let fields = document.expose_to_provider();
-        if !fields.contains_key("mode") {
-            return ClientProfileSelection::parse(document)
-                .map(ParsedSelection::Preset)
-                .map(Self);
+    pub(crate) fn per_key_installation_id_enabled(&self) -> bool {
+        self.per_key_installation_id_enabled.unwrap_or(false)
+    }
+
+    pub(crate) fn parse_global(document: &OpaqueProviderData) -> Result<Self, ClientProfileError> {
+        if document
+            .expose_to_provider()
+            .contains_key("perKeyInstallationIdEnabled")
+        {
+            return Err(ClientProfileError::Invalid);
         }
-        let document = serde_json::from_value(Value::Object(fields.clone()))
-            .map_err(|_| ClientProfileError::Invalid)?;
-        let selection = match document {
-            SelectionDocument::Custom {
-                user_agent,
-                originator,
-                codex_version,
-            } => ParsedSelection::Custom(ExactIdentity::parse(
-                &user_agent,
-                originator.as_deref(),
-                codex_version.as_deref(),
-            )?),
+        Self::parse(document)
+    }
+
+    pub fn parse(document: &OpaqueProviderData) -> Result<Self, ClientProfileError> {
+        let mut fields = document.expose_to_provider().clone();
+        let per_key_installation_id_enabled = fields
+            .remove("perKeyInstallationIdEnabled")
+            .map(|value| value.as_bool().ok_or(ClientProfileError::Invalid))
+            .transpose()?;
+        let selection = if !fields.contains_key("mode") {
+            ParsedSelection::Preset(ClientProfileSelection::parse(&OpaqueProviderData::new(
+                fields,
+            ))?)
+        } else {
+            let document = serde_json::from_value(Value::Object(fields))
+                .map_err(|_| ClientProfileError::Invalid)?;
+            match document {
+                SelectionDocument::Custom {
+                    user_agent,
+                    originator,
+                    codex_version,
+                } => ParsedSelection::Custom(ExactIdentity::parse(
+                    &user_agent,
+                    originator.as_deref(),
+                    codex_version.as_deref(),
+                )?),
+            }
         };
-        Ok(Self(selection))
+        Ok(Self {
+            selection,
+            per_key_installation_id_enabled,
+        })
     }
 
     pub fn resolve(
         &self,
         state: &CodexWireProfileState,
     ) -> Result<CodexWireProfile, ClientProfileError> {
-        match &self.0 {
+        match &self.selection {
             ParsedSelection::Preset(selection) => selection.resolve(state),
             ParsedSelection::Custom(identity) => Ok(identity.profile(state)),
         }
@@ -84,10 +133,19 @@ impl RequestProfileSelection {
         &self,
         state: &CodexWireProfileState,
     ) -> Result<OpaqueProviderData, ClientProfileError> {
-        match &self.0 {
+        let mut preview = match &self.selection {
             ParsedSelection::Preset(selection) => state.preview_preset_selection(selection),
             ParsedSelection::Custom(identity) => identity.preview(state),
+        }?
+        .into_inner();
+        if let Some(enabled) = self.per_key_installation_id_enabled
+            && let Some(configuration) = preview
+                .get_mut("configuration")
+                .and_then(Value::as_object_mut)
+        {
+            configuration.insert("perKeyInstallationIdEnabled".to_owned(), json!(enabled));
         }
+        Ok(OpaqueProviderData::new(preview))
     }
 }
 

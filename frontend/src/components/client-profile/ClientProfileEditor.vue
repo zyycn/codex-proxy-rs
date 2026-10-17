@@ -4,7 +4,7 @@ import type {
   ClientProfilePreview,
   ClientProfileSelection,
 } from '@/api/modules/settings/profiles'
-import { ZButton, ZSegmented } from '@codex-proxy/ui'
+import { ZButton, ZSegmented, ZSwitch } from '@codex-proxy/ui'
 import { computed, onMounted, shallowRef, watch } from 'vue'
 import { getClientProfileOptions, previewClientProfile } from '@/api/modules/settings/profiles'
 import { errorMessage } from '@/utils/operation'
@@ -23,7 +23,6 @@ const loading = shallowRef(true)
 const loadError = shallowRef('')
 const previewError = shallowRef('')
 const previewing = shallowRef(false)
-const independentDraft = shallowRef<ClientProfileSelection>()
 const effective = computed(() => model.value ?? options.value?.globalConfiguration)
 const inherited = computed(() => props.allowInherit && model.value === null)
 const preset = computed(() => effective.value && !effective.value.mode ? effective.value : undefined)
@@ -36,13 +35,18 @@ const profileSource = computed({
   get: () => model.value === null ? 'global' : 'independent',
   set: (value: string) => {
     if (value === 'global') {
-      if (model.value)
-        independentDraft.value = { ...model.value }
       model.value = null
     }
-    else if (independentDraft.value ?? options.value?.globalConfiguration) {
-      model.value = { ...(independentDraft.value ?? options.value!.globalConfiguration) }
+    else if (options.value?.globalConfiguration) {
+      model.value = { ...options.value.globalConfiguration, perKeyInstallationIdEnabled: false }
     }
+  },
+})
+const perKeyInstallationIdEnabled = computed({
+  get: () => model.value?.perKeyInstallationIdEnabled ?? false,
+  set: (value: boolean) => {
+    if (model.value)
+      model.value = { ...model.value, perKeyInstallationIdEnabled: value }
   },
 })
 async function load() {
@@ -125,6 +129,17 @@ onMounted(() => load())
       :aria-busy="loading || undefined"
       @update:model-value="model = $event"
     />
+    <div v-if="allowInherit && !inherited" class="grid gap-1.5">
+      <ZSwitch
+        v-model="perKeyInstallationIdEnabled"
+        label="独立 installation id"
+        class="justify-self-start"
+        :disabled="disabled || loading"
+      />
+      <p class="m-0 text-cp-sm text-cp-text-secondary">
+        为此 Key 使用的每个账号分别保存 installation id
+      </p>
+    </div>
     <ClientProfilePreviewPanel
       v-if="inherited || !custom"
       :preview="preview"

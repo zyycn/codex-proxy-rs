@@ -6,6 +6,7 @@ mod cookies;
 mod error_details;
 mod image_account_eligibility;
 mod image_model_access;
+mod installation;
 mod model_account_eligibility;
 mod passthrough;
 mod precommit;
@@ -159,7 +160,7 @@ async fn invalid_request_profile_preserves_diagnostic_before_any_upstream_send()
         .clone(),
     );
     let error = provider
-        .resolve_request_profile(&configuration)
+        .resolve_request_profile(Some(&configuration), None)
         .unwrap_err();
     assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
@@ -173,6 +174,67 @@ async fn invalid_request_profile_preserves_diagnostic_before_any_upstream_send()
     assert!(!diagnostic.as_str().contains("PRIVATE_"));
     let gateway = gateway_core::error::GatewayError::from_provider(&snapshot);
     assert_eq!(gateway.diagnostic(), Some(diagnostic));
+}
+
+#[tokio::test]
+async fn installation_flags_follow_original_key_settings_across_effective_ua_rewrites() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let provider = provider_with_base_url(&store, "http://127.0.0.1:1".to_owned());
+    let selection = |enabled| {
+        OpaqueProviderData::new(
+            json!({
+                "mode":"custom", "userAgent":"codex-tui/0.156.1",
+                "perKeyInstallationIdEnabled":enabled,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+    };
+    let rewritten = OpaqueProviderData::new(
+        json!({"mode":"custom", "userAgent":"codex_exec/0.155.0"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    for (key_configuration, independent, enabled) in [
+        (None, false, false),
+        (Some(selection(false)), true, false),
+        (Some(selection(true)), true, true),
+    ] {
+        for effective in [None, Some(&rewritten), key_configuration.as_ref()] {
+            let resolved = provider
+                .resolve_request_profile(effective, key_configuration.as_ref())
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                resolved.expose_to_provider()["independent_ua_configuration"],
+                independent
+            );
+            assert_eq!(
+                resolved.expose_to_provider()["per_key_installation_id_enabled"],
+                enabled
+            );
+            if effective == Some(&rewritten) {
+                let profile: CodexWireProfile =
+                    serde_json::from_value(Value::Object(resolved.into_inner())).unwrap();
+                assert_eq!(profile.user_agent(), "codex_exec/0.155.0");
+            }
+        }
+    }
+    let injected = selection(true);
+    let resolved = provider
+        .resolve_request_profile(Some(&injected), None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resolved.expose_to_provider()["independent_ua_configuration"],
+        false
+    );
+    assert_eq!(
+        resolved.expose_to_provider()["per_key_installation_id_enabled"],
+        false
+    );
 }
 
 #[tokio::test]
@@ -1221,6 +1283,34 @@ fn provider_and_quota_with_runtime_ports(
     Arc<CodexCredentialQuotaService>,
     Arc<CodexWebSocketPool>,
 ) {
+    provider_and_quota_with_runtime_ports_and_installations(
+        store,
+        session_affinity,
+        base_url,
+        leases,
+        stream_max_retries,
+        cooldowns,
+        policy,
+        Arc::new(crate::support::MemoryClientInstallations::default()),
+    )
+}
+
+// 合同测试显式注入存储依赖，保留现有测试的默认装配入口
+#[expect(clippy::too_many_arguments)]
+fn provider_and_quota_with_runtime_ports_and_installations(
+    store: &Arc<MemoryAccountStore>,
+    session_affinity: Arc<MemorySessionAffinity>,
+    base_url: String,
+    leases: Arc<TestLeaseCoordinator>,
+    stream_max_retries: u32,
+    cooldowns: Arc<MemoryCooldownPort>,
+    policy: Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>,
+    installations: Arc<dyn gateway_core::provider_ports::ProviderClientInstallationPort>,
+) -> (
+    Arc<CodexProvider>,
+    Arc<CodexCredentialQuotaService>,
+    Arc<CodexWebSocketPool>,
+) {
     let profile = wire_profile();
     let http = reqwest::Client::builder()
         .no_proxy()
@@ -1247,6 +1337,7 @@ fn provider_and_quota_with_runtime_ports(
     let selector = Arc::new(CodexCredentialSelector::new(
         ProviderKind::new("openai").expect("provider"),
         store.repository(),
+        installations,
         leases,
         session_affinity,
         Arc::new(MemorySessionExclusions::default()),

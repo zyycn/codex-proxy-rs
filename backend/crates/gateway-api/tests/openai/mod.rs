@@ -304,6 +304,24 @@ fn snapshot_with_image_policy(
     accounts: &[&str],
     allow_image_generation: bool,
 ) -> RuntimeSnapshot {
+    snapshot_with_key_profiles(
+        plaintext,
+        provider_name,
+        client_key_id,
+        accounts,
+        allow_image_generation,
+        BTreeMap::new(),
+    )
+}
+
+fn snapshot_with_key_profiles(
+    plaintext: &str,
+    provider_name: &str,
+    client_key_id: &str,
+    accounts: &[&str],
+    allow_image_generation: bool,
+    profiles: BTreeMap<ProviderKind, gateway_core::account::OpaqueProviderData>,
+) -> RuntimeSnapshot {
     let provider = ProviderKind::new(provider_name).expect("provider");
     let account_directory = Arc::new(RuntimeAccountDirectory::new(BTreeMap::from_iter(
         accounts.iter().map(|id| {
@@ -339,7 +357,8 @@ fn snapshot_with_image_policy(
                     Arc::clone(&account_directory),
                     ClientRoutingScope::all_accounts(),
                 )
-                .with_image_generation(allow_image_generation),
+                .with_image_generation(allow_image_generation)
+                .with_request_profiles(profiles),
             ),
             true,
             RateLimits::unlimited(),

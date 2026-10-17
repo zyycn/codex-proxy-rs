@@ -517,7 +517,7 @@ pub(crate) fn scope_request_to_account(
             request.body_mut().remove(*key);
         }
     } else {
-        // 同账号的透传 turn metadata 也会覆盖重建的请求头，安装身份须同步改写
+        // 同账号的透传 turn metadata 也会覆盖重建的请求头，installation id 须同步改写
         for (name, value) in &mut request.passthrough_headers {
             if name == "x-codex-turn-metadata"
                 && let Ok(raw) = value.to_str()
@@ -569,7 +569,7 @@ pub(crate) fn scope_request_to_account(
                 metadata.remove("parent_response_id");
             }
             // 官方 Core 在 client_metadata 使用带 x-codex 前缀的键，
-            // turn metadata 内仍使用 installation_id；两处均取当前账号的安装身份
+            // turn metadata 内仍使用 installation_id；两处均取当前租约选定的 installation id
             metadata.insert(
                 "x-codex-installation-id".to_owned(),
                 Value::String(installation_id.to_owned()),
@@ -657,7 +657,7 @@ pub(crate) fn scope_turn_metadata(
         }
     }
     // Codex 的 turn metadata 同时承载于 HTTP header 与 WS client_metadata
-    // 改写安装 ID 后仍须保持官方 to_ascii_json_string 的编码合同；普通
+    // 改写 installation id 后仍须保持官方 to_ascii_json_string 的编码合同；普通
     // to_string 会把中文工作区路径还原成 UTF-8，触发上游 WS metadata 后 Close 1000
     serialize_ascii_turn_metadata(&Value::Object(metadata))
 }

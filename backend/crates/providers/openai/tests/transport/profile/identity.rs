@@ -142,3 +142,36 @@ fn old_configuration_and_old_frozen_profile_keep_their_existing_identity() {
         "official"
     );
 }
+
+#[test]
+fn key_installation_option_is_boolean_and_preserved_by_preview() {
+    let state = CodexWireProfileState::new(CodexWireProfile::default());
+    for mut configuration in [
+        json!({"mode":"custom", "userAgent":"codex-tui/0.156.1"}),
+        serde_json::to_value(ClientProfileSelection::default()).unwrap(),
+    ] {
+        let inherited = document(configuration.clone());
+        assert!(RequestProfileSelection::parse(&inherited).is_ok());
+        assert!(
+            state
+                .preview_selection(&inherited)
+                .unwrap()
+                .expose_to_provider()["configuration"]
+                .get("perKeyInstallationIdEnabled")
+                .is_none()
+        );
+        for enabled in [false, true] {
+            configuration["perKeyInstallationIdEnabled"] = json!(enabled);
+            let key = document(configuration.clone());
+            assert!(RequestProfileSelection::parse(&key).is_ok());
+            assert_eq!(
+                state.preview_selection(&key).unwrap().expose_to_provider()["configuration"]["perKeyInstallationIdEnabled"],
+                enabled,
+            );
+        }
+        for invalid in [json!(null), json!("true"), json!(1), json!({})] {
+            configuration["perKeyInstallationIdEnabled"] = invalid;
+            assert!(RequestProfileSelection::parse(&document(configuration.clone())).is_err());
+        }
+    }
+}

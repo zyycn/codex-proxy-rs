@@ -998,19 +998,14 @@ pub trait Provider: Send + Sync {
         })
     }
 
-    /// 从已冻结的配置解析请求身份；只读取本地发布资料，不执行网络请求
+    /// 请求画像与 Key 原始覆盖分别冻结；请求局部改写不得改变 Key 配置来源
+    /// 只读取本地发布资料，不执行网络请求
     fn resolve_request_profile(
         &self,
-        configuration: &crate::account::OpaqueProviderData,
-    ) -> Result<crate::account::OpaqueProviderData, ProviderError> {
-        Ok(configuration.clone())
-    }
-
-    /// 没有持久选择时返回 Provider 的已准备默认画像；结果仍由 Core 按请求冻结
-    fn default_request_profile(
-        &self,
+        configuration: Option<&crate::account::OpaqueProviderData>,
+        _key_configuration: Option<&crate::account::OpaqueProviderData>,
     ) -> Result<Option<crate::account::OpaqueProviderData>, ProviderError> {
-        Ok(None)
+        Ok(configuration.cloned())
     }
 
     /// 返回实例生命周期内稳定的注册名称

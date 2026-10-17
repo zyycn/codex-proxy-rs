@@ -1,6 +1,6 @@
 //! Codex Provider 测试用内存 ports；不依赖 SQL、Redis 或 secret 加密
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,12 +19,13 @@ use gateway_core::account::{
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
-    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
-    ProviderCooldownScope, ProviderFreezePolicy, ProviderLeaseAcquisition, ProviderLeasePort,
-    ProviderLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
-    ProviderSchedulingLeaseRequest, ProviderSchedulingState, ProviderScopedCooldown,
-    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionExclusionPort,
-    ProviderSessionExclusions, ProviderStoreError,
+    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderClientInstallationKey,
+    ProviderClientInstallationPort, ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope,
+    ProviderFreezePolicy, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderSchedulingLeaseRequest,
+    ProviderSchedulingState, ProviderScopedCooldown, ProviderSessionAffinityKey,
+    ProviderSessionAffinityPort, ProviderSessionExclusionPort, ProviderSessionExclusions,
+    ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::{
@@ -32,6 +33,41 @@ use provider_openai::credential::{
     ImportCodexOAuthCredential,
 };
 use secrecy::SecretString;
+
+#[derive(Default)]
+pub(crate) struct MemoryClientInstallations {
+    pub(crate) mappings: Mutex<HashMap<ProviderClientInstallationKey, uuid::Uuid>>,
+    pub(crate) reads: AtomicUsize,
+    pub(crate) inserts: AtomicUsize,
+}
+
+impl ProviderClientInstallationPort for MemoryClientInstallations {
+    fn read<'a>(
+        &'a self,
+        key: &'a ProviderClientInstallationKey,
+    ) -> BoxFuture<'a, Result<Option<uuid::Uuid>, ProviderStoreError>> {
+        Box::pin(async move {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Ok(self.mappings.lock().unwrap().get(key).copied())
+        })
+    }
+
+    fn get_or_insert<'a>(
+        &'a self,
+        key: &'a ProviderClientInstallationKey,
+        candidate: uuid::Uuid,
+    ) -> BoxFuture<'a, Result<uuid::Uuid, ProviderStoreError>> {
+        Box::pin(async move {
+            self.inserts.fetch_add(1, Ordering::SeqCst);
+            Ok(*self
+                .mappings
+                .lock()
+                .unwrap()
+                .entry(key.clone())
+                .or_insert(candidate))
+        })
+    }
+}
 
 #[derive(Clone)]
 struct StoredAccount {
@@ -676,7 +712,16 @@ pub(crate) struct TestLeaseCoordinator {
     pub(crate) busy_accounts: Mutex<BTreeSet<ProviderAccountId>>,
     pub(crate) signals: Mutex<BTreeMap<ProviderAccountId, AccountRuntimeSignals>>,
     pub(crate) reserved_signals: Mutex<BTreeMap<ProviderAccountId, AccountRuntimeSignals>>,
+    pub(crate) active: Arc<AtomicUsize>,
     round_robin_cursor: Mutex<u64>,
+}
+
+struct TestSchedulingGuard(Arc<AtomicUsize>);
+
+impl Drop for TestSchedulingGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl ProviderLeasePort for TestLeaseCoordinator {
@@ -748,7 +793,10 @@ impl ProviderLeasePort for TestLeaseCoordinator {
                     retry_after: Some(Duration::from_millis(25)),
                 })
             } else {
-                Ok(ProviderLeaseAcquisition::Acquired(Box::new(())))
+                self.active.fetch_add(1, Ordering::SeqCst);
+                Ok(ProviderLeaseAcquisition::Acquired(Box::new(
+                    TestSchedulingGuard(Arc::clone(&self.active)),
+                )))
             }
         })
     }

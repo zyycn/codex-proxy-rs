@@ -33,7 +33,7 @@ pub(super) fn is_managed_identity_header(name: &str) -> bool {
             // 工作区路由和合规属性属于认证账号，不能继承下游账号的值
             | "x-openai-account-routing-override"
             | "x-openai-fedramp"
-            // 安装身份由当前账号写入 client_metadata，不继承下游安装头
+            // installation id 由当前租约写入 client_metadata，不继承下游 installation id 头
             | "x-codex-installation-id"
             // 画像和设备证明须属于选定账号，不能由下游覆盖
             | "originator"

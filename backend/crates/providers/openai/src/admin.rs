@@ -222,6 +222,15 @@ impl ProviderAdmin for OpenAiAdminProvider {
             .map_err(map_client_profile_error)
     }
 
+    fn preview_global_client_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        crate::transport::profile::identity::RequestProfileSelection::parse_global(configuration)
+            .map_err(map_client_profile_error)?;
+        self.preview_client_profile(configuration)
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.provider_kind
     }

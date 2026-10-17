@@ -321,7 +321,7 @@ Codex/OAuth 上游的历史回填按字段形状兼容，不以 User-Agent 品�
 保持原有语义，可能包含客户端环境信息。
 环境正文中的工作区路径、shell 和文件权限信息不会因位置覆盖而隐藏。
 turn metadata 的 `workspaces` 也会保留仓库绝对路径、Git 远端地址、提交及工作区变更状态；
-安装身份和账号绑定字段的处理不提供这些信息的脱敏
+installation id 和账号绑定字段的处理不提供这些信息的脱敏
 
 `client_metadata.parent_response_id` 是 Guardian 的账号内响应引用，只有归属可信且仍为同一账号时保留；
 切号或归属未知时移除。`x-codex-guardian`、`guardian_credits_requested` 和序列化
@@ -1554,7 +1554,7 @@ JSON 路径支持 `$`、`.成员`、`["带特殊字符的键"]`、`[索引]`、`
 
 管理端提供「统一工作区信息」预设，生成一条含多个通用步骤的规则。
 预设统一路径中的用户名为 `user`，工作区路径键和环境工作目录保留实际目录名并改为 `/workspace/<项目名>`，
-保留实际仓库、提交、分支、工作区标识和会话关联信息。安装身份由账号隔离逻辑处理，
+保留实际仓库、提交、分支、工作区标识和会话关联信息。installation id 由账号隔离逻辑处理，
 UA、平台参数及自动 Git 上下文版本由 [OpenAI 上游客户端身份](#openai-上游客户端身份)管理。
 预设和自定义规则使用同一编辑器，步骤均可增删、修改和排序；调整预设不覆盖已保存的规则
 
@@ -1718,6 +1718,12 @@ models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI �
 兼容字段的更新语义见上节。初始化不读取 YAML 身份字段。
 该配置作用于 Client Key 的 OpenAI 模型请求与原生模型目录，适用于 HTTP/SSE、WebSocket、Images 和 Search。
 不改变 xAI、入站客户端版本门禁、账号认证或后台 Desktop 专属操作
+
+Key 的独立 OpenAI 配置可设置 `perKeyInstallationIdEnabled`，布尔值，默认 `false`，预设与自定义配置均支持
+该选项属于 Key 的 `providerRequestProfileOverrides.openai` 独立配置，全局配置不接受该字段
+开启后，为此 Key 使用的每个账号分别生成并保存 UUIDv4 installation id；关闭或继承全局配置时使用账号 installation id
+UA 改写不影响身份选择，修改独立 UA、关闭后重新开启及进程重启均复用已保存的 Key 与账号 installation id
+返回全局继承会删除整个独立配置，再次选择独立配置时开关默认为关闭；手动开启后复用原 installation id
 
 自定义配置使用 `{ "mode": "custom", "userAgent": "完整 UA" }`。
 已识别的 `Codex Desktop`、`codex-tui`、`codex_exec`、`codex_cli_rs` 前缀由后端解析 `originator` 和 Core `version`，

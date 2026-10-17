@@ -595,6 +595,67 @@ fn profile_override_distinguishes_omission_from_explicit_inheritance() {
 }
 
 #[test]
+fn installation_option_roundtrips_through_key_creation_editing_and_response() {
+    use gateway_core::{account::OpaqueProviderData, routing::ProviderKind};
+    let provider = ProviderKind::new("openai").unwrap();
+    let profile = json!({
+        "mode":"custom", "userAgent":"codex-tui/0.156.1", "perKeyInstallationIdEnabled":true,
+    });
+    let command = serde_json::from_value::<CreateClientKeyRequest>(json!({
+        "name":"profile", "groupIds":[], "maxConcurrency":0, "requestsPerMinute":0,
+        "providerRequestProfileOverrides":{"openai":profile},
+    }))
+    .unwrap()
+    .into_command()
+    .unwrap();
+    let expected = OpaqueProviderData::new(profile.as_object().unwrap().clone());
+    assert_eq!(
+        command.request_profile_overrides.get(&provider),
+        Some(&expected)
+    );
+    let now = Utc::now();
+    let view = ClientKeyView::from((
+        gateway_admin::model::client_keys::ClientKeyRecord {
+            request_profile_overrides: command.request_profile_overrides,
+            budget: Default::default(),
+            id: gateway_core::policy::ClientApiKeyId::new("key_profile").unwrap(),
+            name: command.name,
+            label: command.label,
+            groups: vec![],
+            provider_kinds: vec![provider.clone()],
+            prefix: "fixture".to_owned(),
+            enabled: true,
+            limits: command.limits,
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        },
+        gateway_api::TimePresenter::new(Default::default()),
+    ));
+    let response = serde_json::to_value(view).unwrap();
+    assert_eq!(
+        response["providerRequestProfileOverrides"]["openai"],
+        profile
+    );
+    assert_eq!(response["openaiClientProfileOverride"], profile);
+    let mut update = json!({
+        "id":"key_profile", "name":"renamed", "groupIds":[], "maxConcurrency":0,
+        "requestsPerMinute":0, "providerRequestProfileOverrides":response["providerRequestProfileOverrides"],
+    });
+    let decode = |value| {
+        serde_json::from_value::<UpdateClientKeyRequest>(value)
+            .unwrap()
+            .into_command()
+            .unwrap()
+            .request_profile_override_updates
+            .remove(&provider)
+    };
+    assert_eq!(decode(update.clone()), Some(Some(expected)));
+    update["providerRequestProfileOverrides"]["openai"] = json!(null);
+    assert_eq!(decode(update), Some(None));
+}
+
+#[test]
 fn xai_profile_override_distinguishes_omission_from_explicit_inheritance() {
     let mut payload = json!({"id":"key_profile", "name":"profile", "groupIds":[], "maxConcurrency":0, "requestsPerMinute":0});
     let decode = |body| {

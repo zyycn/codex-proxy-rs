@@ -271,22 +271,23 @@ impl CodexProvider {
         &self,
         context: &AttemptContext,
     ) -> Result<CodexBackendClient, ProviderError> {
-        let Some(profile) = context.request_profile() else {
+        let profile =
+            crate::transport::profile::identity::ResolvedRequestProfile::from_context(context)
+                .map_err(|error| {
+                    let diagnostic = ProviderDiagnostic::new(format!(
+                        "OpenAI request profile decoding failed: {:?}, line={}, column={}",
+                        error.classify(),
+                        error.line(),
+                        error.column(),
+                    ))
+                    .with_classification("prepare", "request_profile_decode_failed");
+                    provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+                        .with_diagnostic(diagnostic)
+                })?;
+        let Some(profile) = profile else {
             return Ok(self.client.clone());
         };
-        let profile = serde_json::from_value(Value::Object(profile.expose_to_provider().clone()))
-            .map_err(|error: serde_json::Error| {
-            let diagnostic = ProviderDiagnostic::new(format!(
-                "OpenAI request profile decoding failed: {:?}, line={}, column={}",
-                error.classify(),
-                error.line(),
-                error.column(),
-            ))
-            .with_classification("prepare", "request_profile_decode_failed");
-            provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
-                .with_diagnostic(diagnostic)
-        })?;
-        Ok(self.client.clone().with_request_profile(profile))
+        Ok(self.client.clone().with_request_profile(profile.profile))
     }
 
     // Provider 构造集中装配独立领域服务和透明传输依赖，拆分参数会模糊所有权
@@ -385,27 +386,43 @@ impl Provider for CodexProvider {
 
     fn resolve_request_profile(
         &self,
-        configuration: &gateway_core::account::OpaqueProviderData,
-    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderError> {
-        let selection =
-            crate::transport::profile::identity::RequestProfileSelection::parse(configuration)
-                .map_err(|error| {
-                    provider_error(
-                        ProviderErrorKind::InvalidRequest,
-                        UpstreamSendState::NotSent,
-                    )
-                    .with_diagnostic(profile_diagnostic(&error))
-                })?;
-        let profile = selection
-            .resolve(self.client.profile_state())
-            .map_err(|error| {
-                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-                    .with_diagnostic(profile_diagnostic(&error))
-            })?;
-        crate::transport::profile::selection::object(&profile).map_err(|error| {
-            provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+        configuration: Option<&gateway_core::account::OpaqueProviderData>,
+        key_configuration: Option<&gateway_core::account::OpaqueProviderData>,
+    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderError> {
+        use crate::transport::profile::identity::{
+            RequestProfileSelection, ResolvedRequestProfile,
+        };
+        let parse = |configuration| {
+            RequestProfileSelection::parse(configuration).map_err(|error| {
+                provider_error(
+                    ProviderErrorKind::InvalidRequest,
+                    UpstreamSendState::NotSent,
+                )
                 .with_diagnostic(profile_diagnostic(&error))
-        })
+            })
+        };
+        let key_selection = key_configuration.map(parse).transpose()?;
+        let profile = match configuration {
+            Some(configuration) => parse(configuration)?
+                .resolve(self.client.profile_state())
+                .map_err(|error| {
+                    provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+                        .with_diagnostic(profile_diagnostic(&error))
+                })?,
+            None => self.client.profile_state().snapshot(),
+        };
+        let resolved = ResolvedRequestProfile {
+            profile,
+            independent_ua_configuration: key_selection.is_some(),
+            per_key_installation_id_enabled: key_selection
+                .is_some_and(|selection| selection.per_key_installation_id_enabled()),
+        };
+        crate::transport::profile::selection::object(&resolved)
+            .map(Some)
+            .map_err(|error| {
+                provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+                    .with_diagnostic(profile_diagnostic(&error))
+            })
     }
 
     fn name(&self) -> &'static str {

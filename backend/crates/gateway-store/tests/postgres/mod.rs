@@ -21,6 +21,7 @@ mod analytics_reset;
 mod analytics_upgrade;
 mod backup;
 mod client_budgets;
+mod client_installations;
 mod client_keys;
 mod connection;
 mod control_plane;

@@ -2,8 +2,9 @@
 
 use super::{
     OAuthPendingFlowPort, ProviderArtifactProfileCachePort, ProviderCatalogCachePort,
-    ProviderCooldownPort, ProviderCredentialStatePort, ProviderLeasePort,
-    ProviderRuntimePolicyPort, ProviderSessionAffinityPort, ProviderSessionExclusionPort,
+    ProviderClientInstallationPort, ProviderCooldownPort, ProviderCredentialStatePort,
+    ProviderLeasePort, ProviderRuntimePolicyPort, ProviderSessionAffinityPort,
+    ProviderSessionExclusionPort,
 };
 use crate::account::{AccountFeedbackStats, ProviderAccountStore};
 use std::{fmt, sync::Arc};
@@ -12,6 +13,7 @@ use std::{fmt, sync::Arc};
 #[derive(Clone)]
 pub struct ProviderStorePorts {
     accounts: Arc<dyn ProviderAccountStore>,
+    client_installations: Arc<dyn ProviderClientInstallationPort>,
     leases: Arc<dyn ProviderLeasePort>,
     session_affinity: Arc<dyn ProviderSessionAffinityPort>,
     session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
@@ -31,6 +33,7 @@ impl ProviderStorePorts {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         accounts: Arc<dyn ProviderAccountStore>,
+        client_installations: Arc<dyn ProviderClientInstallationPort>,
         leases: Arc<dyn ProviderLeasePort>,
         session_affinity: Arc<dyn ProviderSessionAffinityPort>,
         session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
@@ -44,6 +47,7 @@ impl ProviderStorePorts {
     ) -> Self {
         Self {
             accounts,
+            client_installations,
             leases,
             session_affinity,
             session_exclusions,
@@ -66,6 +70,11 @@ impl ProviderStorePorts {
     #[must_use]
     pub fn accounts(&self) -> Arc<dyn ProviderAccountStore> {
         Arc::clone(&self.accounts)
+    }
+
+    #[must_use]
+    pub fn client_installations(&self) -> Arc<dyn ProviderClientInstallationPort> {
+        Arc::clone(&self.client_installations)
     }
 
     #[must_use]

@@ -1739,6 +1739,7 @@ fn provider_ports_with_catalog(
 ) -> ProviderStorePorts {
     ProviderStorePorts::new(
         accounts,
+        Arc::new(TestClientInstallations),
         Arc::new(TestLeaseCoordinator::default()),
         Arc::new(MemorySessionAffinity::default()),
         Arc::new(MemorySessionExclusions::default()),
@@ -1799,6 +1800,25 @@ fn valid_config() -> TestOpenAiConfig {
     TestOpenAiConfig {
         config,
         _runtime: runtime,
+    }
+}
+
+struct TestClientInstallations;
+
+impl gateway_core::provider_ports::ProviderClientInstallationPort for TestClientInstallations {
+    fn read<'a>(
+        &'a self,
+        _key: &'a gateway_core::provider_ports::ProviderClientInstallationKey,
+    ) -> BoxFuture<'a, Result<Option<uuid::Uuid>, ProviderStoreError>> {
+        panic!("account installation mode must not read client mappings")
+    }
+
+    fn get_or_insert<'a>(
+        &'a self,
+        _key: &'a gateway_core::provider_ports::ProviderClientInstallationKey,
+        _candidate: uuid::Uuid,
+    ) -> BoxFuture<'a, Result<uuid::Uuid, ProviderStoreError>> {
+        panic!("account installation mode must not create client mappings")
     }
 }
 
@@ -2542,6 +2562,7 @@ mod errors {
     fn refresh_ports(store: Arc<MemoryAccountStore>, busy: bool) -> ProviderStorePorts {
         ProviderStorePorts::new(
             store,
+            Arc::new(TestClientInstallations),
             Arc::new(RefreshLeases { busy }),
             Arc::new(MemorySessionAffinity::default()),
             Arc::new(MemorySessionExclusions::default()),
@@ -2812,4 +2833,36 @@ async fn usage_quote_reuses_native_override_and_reports_incomplete_input() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn installation_option_is_valid_only_for_independent_key_profiles() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .unwrap();
+    let provider = bundle.admin_provider();
+    for enabled in [false, true] {
+        let configuration = OpaqueProviderData::new(
+            json!({
+                "mode":"custom", "userAgent":"codex-tui/0.156.1",
+                "perKeyInstallationIdEnabled":enabled,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        assert_eq!(
+            provider
+                .preview_client_profile(&configuration)
+                .unwrap()
+                .expose_to_provider()["configuration"]["perKeyInstallationIdEnabled"],
+            enabled,
+        );
+        assert!(
+            provider
+                .preview_global_client_profile(&configuration)
+                .is_err()
+        );
+    }
 }

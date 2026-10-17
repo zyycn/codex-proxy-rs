@@ -18,15 +18,17 @@ use gateway_core::account::{
 use gateway_core::concurrency::{CapacityWait, ConcurrencyWaitQueue, QueueRejection, WaitPriority};
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, policy::AccountPolicyError};
 use gateway_core::provider_ports::{
-    ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort,
-    ProviderLeaseRequest, ProviderSchedulingLeaseRequest, ProviderSessionAffinityKey,
-    ProviderSessionAffinityPort, ProviderSessionBinding, ProviderSessionExclusionPort,
-    ProviderSessionExclusions, ProviderStoreError,
+    ProviderClientInstallationPort, ProviderConcurrencyPool, ProviderLeaseAcquisition,
+    ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
+    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionBinding,
+    ProviderSessionExclusionPort, ProviderSessionExclusions, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use secrecy::ExposeSecret;
 use thiserror::Error;
 use url::Url;
+
+use crate::installation::CodexInstallationResolver;
 
 use super::affinity::CodexSessionAffinity;
 use super::cookie::CodexCookiePolicy;
@@ -185,6 +187,7 @@ pub struct CodexCredentialSelector {
     reserved_waiting: ConcurrencyWaitQueue<ProviderAccountId>,
     provider_kind: ProviderKind,
     repository: CodexCredentialRepository,
+    installations: CodexInstallationResolver,
     leases: Arc<dyn ProviderLeasePort>,
     session_affinity: Arc<dyn ProviderSessionAffinityPort>,
     session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
@@ -322,6 +325,7 @@ impl CodexCredentialSelector {
     pub fn new(
         provider_kind: ProviderKind,
         repository: CodexCredentialRepository,
+        client_installations: Arc<dyn ProviderClientInstallationPort>,
         leases: Arc<dyn ProviderLeasePort>,
         session_affinity: Arc<dyn ProviderSessionAffinityPort>,
         session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
@@ -332,6 +336,7 @@ impl CodexCredentialSelector {
         Self {
             provider_kind,
             repository,
+            installations: CodexInstallationResolver::new(client_installations),
             leases,
             session_affinity,
             session_exclusions,
@@ -992,6 +997,19 @@ impl CodexCredentialSelector {
                         busy_accounts.insert(account.id().clone());
                     }
                     ProviderLeaseAcquisition::Acquired(guard) => {
+                        let installation_id = tokio::select! {
+                            biased;
+                            _ = request.attempt.cancellation().cancelled() => {
+                                return Err(CredentialSelectionError::Cancelled);
+                            }
+                            result = self.installations.resolve(
+                                request.attempt,
+                                account.id(),
+                                runtime.installation_id,
+                            ) => result.map_err(|source| {
+                                CredentialSelectionError::Store(ErrorSource::new(source))
+                            })?,
+                        };
                         if let Some(key) = binding_key
                             && !self
                                 .admit_session(
@@ -1060,7 +1078,7 @@ impl CodexCredentialSelector {
                             );
                         }
                         return Ok(CodexCredentialLease {
-                            installation_id: runtime.installation_id,
+                            installation_id,
                             transport: runtime.transport,
                             account,
                             authentication: runtime.authentication,

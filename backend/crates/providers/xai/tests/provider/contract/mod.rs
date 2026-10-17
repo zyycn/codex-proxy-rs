@@ -4354,7 +4354,8 @@ async fn configured_request_profile_reaches_inference_headers() {
         ..Default::default()
     };
     let resolved = provider
-        .resolve_request_profile(&selection.document().unwrap())
+        .resolve_request_profile(Some(&selection.document().unwrap()), None)
+        .unwrap()
         .unwrap();
     let context = AttemptContext::new(
         gateway_core::engine::RequestAttemptContext::new(

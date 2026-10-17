@@ -245,6 +245,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "model_request_leases",
             "model_request_observations",
             "model_requests",
+            "openai_client_installations",
             "ops_events",
             "outbound_proxies",
             "plugin_account_group_resources",

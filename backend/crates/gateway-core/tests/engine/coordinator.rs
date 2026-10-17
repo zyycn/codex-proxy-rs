@@ -776,24 +776,28 @@ impl ScriptedProvider {
 impl Provider for ScriptedProvider {
     fn resolve_request_profile(
         &self,
-        configuration: &gateway_core::account::OpaqueProviderData,
-    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderError> {
+        configuration: Option<&gateway_core::account::OpaqueProviderData>,
+        key_configuration: Option<&gateway_core::account::OpaqueProviderData>,
+    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderError> {
+        let Some(configuration) = configuration else {
+            self.default_profile_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(error) = self.default_profile_error.lock().unwrap().take() {
+                return Err(error);
+            }
+            return Ok(self.default_profile.lock().unwrap().clone());
+        };
         let mut fields = configuration.clone().into_inner();
+        if let Some(configuration) = key_configuration {
+            fields.insert(
+                "keyConfiguration".to_owned(),
+                json!(configuration.expose_to_provider()),
+            );
+        }
         fields.insert(
             "generation".to_owned(),
             json!(self.profile_generation.load(Ordering::SeqCst)),
         );
-        Ok(gateway_core::account::OpaqueProviderData::new(fields))
-    }
-
-    fn default_request_profile(
-        &self,
-    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderError> {
-        self.default_profile_calls.fetch_add(1, Ordering::SeqCst);
-        if let Some(error) = self.default_profile_error.lock().unwrap().take() {
-            return Err(error);
-        }
-        Ok(self.default_profile.lock().unwrap().clone())
+        Ok(Some(gateway_core::account::OpaqueProviderData::new(fields)))
     }
 
     fn name(&self) -> &'static str {
@@ -5799,6 +5803,151 @@ fn first_resolved_profile_is_frozen_across_account_retries() {
     let first = contexts[0].request_profile().unwrap();
     assert_eq!(first.expose_to_provider()["generation"], 1);
     assert_eq!(contexts[1].request_profile(), Some(first));
+}
+
+#[test]
+fn key_profile_source_survives_plugin_rewrites_rebase_key_reassignment_and_retries() {
+    use gateway_core::{
+        account::OpaqueProviderData,
+        policy::{ClientPolicy, PlaintextClientApiKey, RateLimits},
+        routing::request_settings::RequestSettings,
+    };
+    let operation = generate_operation();
+    let kind = ProviderKind::new("openai").unwrap();
+    let document = |selection, enabled| {
+        OpaqueProviderData::new(
+            json!({"selection":selection, "perKeyInstallationIdEnabled":enabled})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+    };
+    let parent_profile = document("parent", true);
+    let plugin_profile = document("plugin", false);
+    let directory = Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([
+        (
+            ProviderAccountId::new("acct_first").unwrap(),
+            RuntimeAccount::new(kind.clone(), BTreeSet::new()),
+        ),
+        (
+            ProviderAccountId::new("acct_second").unwrap(),
+            RuntimeAccount::new(kind.clone(), BTreeSet::new()),
+        ),
+    ])));
+    let key = |id, profile: Option<OpaqueProviderData>| {
+        ClientPolicy::new(
+            ClientApiKeyId::new(id).unwrap(),
+            PlaintextClientApiKey::new(format!("fixture-{id}")).unwrap(),
+            Arc::new(
+                FrozenAccountScope::new(directory.clone(), ClientRoutingScope::all_accounts())
+                    .with_request_profiles(
+                        profile
+                            .map(|profile| BTreeMap::from([(kind.clone(), profile)]))
+                            .unwrap_or_default(),
+                    ),
+            ),
+            true,
+            RateLimits::unlimited(),
+        )
+    };
+    let parent = key("key_parent", Some(parent_profile.clone()));
+    let snapshot = |revision| {
+        Arc::new(
+            RuntimeSnapshot::new(
+                ConfigRevision::new(revision).unwrap(),
+                gateway_core::settings::SettingsValues::new(
+                    3,
+                    "smart",
+                    BTreeMap::new(),
+                    None,
+                    None,
+                ),
+                vec![kind.clone()],
+                vec![ProviderModel::new(
+                    kind.clone(),
+                    UpstreamModelId::new("gpt-5").unwrap(),
+                    ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000)),
+                )],
+                vec![parent.clone()],
+            )
+            .unwrap()
+            .with_account_directory(directory.clone()),
+        )
+    };
+    let settings = RequestSettings::new(snapshot(1)).with_execution(&parent, None);
+    let mut values = settings.execution_values().unwrap();
+    values.runtime = values
+        .runtime
+        .with_request_profiles(BTreeMap::from([(kind.clone(), plugin_profile.clone())]));
+    let settings = settings.replace_execution(&values, "plugin").unwrap();
+    for (current, expected) in [
+        (parent.clone(), Some(parent_profile)),
+        (
+            key("key_child", Some(document("child", false))),
+            Some(document("child", false)),
+        ),
+        (key("key_inherited", None), None),
+    ] {
+        let settings = settings
+            .rebase(snapshot(2))
+            .unwrap()
+            .with_execution(&current, None);
+        let current = settings.apply_policy(current);
+        let route_plan = settings
+            .snapshot()
+            .plan(
+                &PublicModelId::new("gpt-5").unwrap(),
+                &operation,
+                current.account_scope().clone(),
+                &RoutingContext {
+                    required_provider: Some(kind.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let (coordinator, _, provider) = coordinator(vec![
+            Script::Stream {
+                account_id: "acct_first",
+                items: vec![Err(ProviderError::new(
+                    ProviderErrorKind::RateLimited,
+                    UpstreamSendState::Sent,
+                )
+                .with_status(429)
+                .with_replay_safe())],
+            },
+            Script::Stream {
+                account_id: "acct_second",
+                items: complete_stream(None),
+            },
+        ]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation.clone(),
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        block_on(session.collect_uncommitted()).unwrap();
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 2);
+        for context in contexts.iter() {
+            let resolved = context.request_profile().unwrap().expose_to_provider();
+            assert_eq!(
+                resolved["selection"],
+                plugin_profile.expose_to_provider()["selection"]
+            );
+            assert_eq!(
+                resolved.get("keyConfiguration"),
+                expected
+                    .as_ref()
+                    .map(|profile| json!(profile.expose_to_provider()))
+                    .as_ref()
+            );
+        }
+        assert_eq!(contexts[0].request_profile(), contexts[1].request_profile());
+    }
 }
 
 #[test]

@@ -78,6 +78,7 @@ async fn account_unavailable_clears_real_selector_cooldowns_only_for_deleted_acc
     let cooldowns = Arc::new(MemoryCooldownPort::default());
     let ports = ProviderStorePorts::new(
         store.clone(),
+        Arc::new(TestClientInstallations),
         Arc::new(TestLeases),
         Arc::new(TestSessionAffinity),
         Arc::new(TestSessionExclusions),
@@ -723,6 +724,7 @@ fn provider_ports_with_catalog(
 ) -> ProviderStorePorts {
     ProviderStorePorts::new(
         accounts,
+        Arc::new(TestClientInstallations),
         Arc::new(TestLeases),
         Arc::new(TestSessionAffinity),
         Arc::new(TestSessionExclusions),
@@ -812,6 +814,25 @@ impl ProviderLeasePort for TestLeases {
         _request: ProviderLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
         Box::pin(async { Ok(ProviderLeaseAcquisition::Acquired(Box::new(()))) })
+    }
+}
+
+struct TestClientInstallations;
+
+impl gateway_core::provider_ports::ProviderClientInstallationPort for TestClientInstallations {
+    fn read<'a>(
+        &'a self,
+        _key: &'a gateway_core::provider_ports::ProviderClientInstallationKey,
+    ) -> BoxFuture<'a, Result<Option<uuid::Uuid>, ProviderStoreError>> {
+        panic!("account installation mode must not read client mappings")
+    }
+
+    fn get_or_insert<'a>(
+        &'a self,
+        _key: &'a gateway_core::provider_ports::ProviderClientInstallationKey,
+        _candidate: uuid::Uuid,
+    ) -> BoxFuture<'a, Result<uuid::Uuid, ProviderStoreError>> {
+        panic!("account installation mode must not create client mappings")
     }
 }
 
@@ -1250,6 +1271,7 @@ mod errors {
         account.outbound_proxy = before.outbound_proxy().cloned();
         let ports = ProviderStorePorts::new(
             store.clone(),
+            Arc::new(TestClientInstallations),
             Arc::new(BusyRefreshLeases),
             Arc::new(TestSessionAffinity),
             Arc::new(TestSessionExclusions),

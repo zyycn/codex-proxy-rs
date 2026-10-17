@@ -154,9 +154,13 @@ impl GrokBuildProvider {
 impl Provider for GrokBuildProvider {
     fn resolve_request_profile(
         &self,
-        configuration: &gateway_core::account::OpaqueProviderData,
-    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderError> {
+        configuration: Option<&gateway_core::account::OpaqueProviderData>,
+        _key_configuration: Option<&gateway_core::account::OpaqueProviderData>,
+    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderError> {
         use crate::transport::client_profile::{GrokClientProfileSelection, object};
+        let Some(configuration) = configuration else {
+            return Ok(None);
+        };
         let profile = GrokClientProfileSelection::parse(configuration)
             .and_then(|selection| selection.resolve(&self.wire_profile))
             .and_then(|profile| object(&profile))
@@ -166,7 +170,7 @@ impl Provider for GrokBuildProvider {
                     UpstreamSendState::NotSent,
                 )
             })?;
-        Ok(profile)
+        Ok(Some(profile))
     }
 
     fn name(&self) -> &'static str {

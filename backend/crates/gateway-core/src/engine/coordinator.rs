@@ -1090,14 +1090,11 @@ where
                 provider: candidate.provider().as_str().to_owned(),
             })?;
         if !self.request_profiles.contains_key(candidate.provider()) {
-            let profile = match self
-                .plan
-                .account_scope()
-                .request_profile(candidate.provider())
-            {
-                Some(configuration) => provider.resolve_request_profile(configuration).map(Some),
-                None => provider.default_request_profile(),
-            };
+            let scope = self.plan.account_scope();
+            let profile = provider.resolve_request_profile(
+                scope.request_profile(candidate.provider()),
+                scope.key_request_profile(candidate.provider()),
+            );
             match profile {
                 Ok(Some(profile)) => {
                     self.request_profiles

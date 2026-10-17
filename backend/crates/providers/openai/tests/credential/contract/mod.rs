@@ -242,6 +242,7 @@ fn selector_with_runtime(
     CodexCredentialSelector::new(
         ProviderKind::new("openai").expect("provider"),
         store.repository(),
+        Arc::new(crate::support::MemoryClientInstallations::default()),
         leases,
         session_affinity,
         Arc::new(MemorySessionExclusions::default()),

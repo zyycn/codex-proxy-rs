@@ -1,4 +1,4 @@
-//! 验证 Codex 授权参数、安装身份与令牌交换合同
+//! 验证 Codex 授权参数、installation id 与令牌交换合同
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};

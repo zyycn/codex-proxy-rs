@@ -242,7 +242,32 @@ async fn turns_refresh_host_settings_and_key_identity_while_preserving_handshake
             Box::pin(async { Err(MiddlewareError::Rejected) })
         }
     }
-    let initial = crate::openai::snapshot("sk_ws_settings", "openai");
+    let key_snapshot = |enabled: Option<bool>| {
+        let profiles = enabled.map_or_else(Default::default, |enabled| {
+            std::collections::BTreeMap::from([(
+                gateway_core::identity::ProviderKind::new("openai").unwrap(),
+                gateway_core::account::OpaqueProviderData::new(
+                    json!({
+                        "mode": "custom",
+                        "userAgent": "codex_cli_rs/0.160.1 (Linux 6.8.0; x86_64) unknown",
+                        "perKeyInstallationIdEnabled": enabled,
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+            )])
+        });
+        crate::openai::snapshot_with_key_profiles(
+            "sk_ws_settings",
+            "openai",
+            "key_api_test",
+            &["acct_api_test"],
+            true,
+            profiles,
+        )
+    };
+    let initial = key_snapshot(Some(false));
     let snapshots = RuntimeSnapshotHandle::new(initial.clone());
     let execution = Arc::new(DefaultExecutionService::new(
         snapshots.clone(),
@@ -289,18 +314,21 @@ async fn turns_refresh_host_settings_and_key_identity_while_preserving_handshake
         .headers_mut()
         .insert(AUTHORIZATION, "Bearer sk_ws_settings".parse().unwrap());
     let (mut socket, _) = connect_async(request).await.unwrap();
-    for round in 0..3 {
+    for round in 0..5 {
         if round == 1 {
             let mut settings = serde_json::to_value(initial.settings()).unwrap();
             settings["max_account_rotations"] = json!(5);
             settings["responses_max_decompressed_body_bytes"] = json!(2048);
             snapshots.publish(
-                initial
-                    .clone()
+                key_snapshot(Some(true))
                     .with_settings(&serde_json::from_value(settings).unwrap())
                     .unwrap(),
             );
         } else if round == 2 {
+            snapshots.publish(key_snapshot(None));
+        } else if round == 3 {
+            snapshots.publish(key_snapshot(Some(false)));
+        } else if round == 4 {
             snapshots.publish(crate::openai::snapshot("sk_replaced", "openai"));
         }
         socket
@@ -323,7 +351,7 @@ async fn turns_refresh_host_settings_and_key_identity_while_preserving_handshake
         assert_eq!(event["type"], "error");
         assert_eq!(
             plan.0.lock().unwrap().len(),
-            (round + 1).min(2),
+            (round + 1).min(4),
             "revoked Key must not reach model middleware"
         );
     }
@@ -339,6 +367,18 @@ async fn turns_refresh_host_settings_and_key_identity_while_preserving_handshake
         );
         assert_eq!(observed[0]["runtime"]["max_account_rotations"], 0);
         assert_eq!(observed[1]["runtime"]["max_account_rotations"], 0);
+        for (round, enabled) in [(0, false), (1, true), (3, false)] {
+            assert_eq!(
+                observed[round]["runtime"]["request_profiles"]["openai"]["perKeyInstallationIdEnabled"],
+                enabled,
+                "each WebSocket execution must use the current key configuration"
+            );
+        }
+        assert!(
+            observed[2]["runtime"]["request_profiles"]
+                .get("openai")
+                .is_none()
+        );
     }
     socket.close(None).await.unwrap();
     server.abort();

@@ -250,6 +250,7 @@ pub struct FrozenAccountScope {
     allow_image_generation: bool,
     fast_mode: FastMode,
     request_profiles: BTreeMap<ProviderKind, super::OpaqueProviderData>,
+    key_request_profiles: BTreeMap<ProviderKind, super::OpaqueProviderData>,
     directory: Arc<RuntimeAccountDirectory>,
     client_scope: ClientRoutingScope,
     provider_kinds: Arc<BTreeSet<ProviderKind>>,
@@ -290,6 +291,24 @@ impl FrozenAccountScope {
         &self.request_profiles
     }
 
+    /// Key 原始覆盖保留配置来源，不能被请求局部的画像改写替换
+    #[must_use]
+    pub(crate) fn with_key_request_profiles(
+        mut self,
+        profiles: BTreeMap<ProviderKind, super::OpaqueProviderData>,
+    ) -> Self {
+        self.key_request_profiles = profiles;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn key_request_profile(
+        &self,
+        provider: &ProviderKind,
+    ) -> Option<&super::OpaqueProviderData> {
+        self.key_request_profiles.get(provider)
+    }
+
     /// Key 绑定分组的冻结 Fast 策略，与账号成员资格无关
     #[must_use]
     pub const fn with_fast_mode(mut self, fast_mode: FastMode) -> Self {
@@ -312,6 +331,7 @@ impl FrozenAccountScope {
             allow_image_generation: true,
             fast_mode: FastMode::Default,
             request_profiles: BTreeMap::new(),
+            key_request_profiles: BTreeMap::new(),
             directory,
             client_scope,
             provider_kinds,

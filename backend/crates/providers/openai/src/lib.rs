@@ -2,6 +2,7 @@
 
 mod admin;
 pub mod config;
+mod installation;
 mod jitter;
 mod provider;
 mod request_identity;
@@ -78,7 +79,7 @@ pub async fn initialize(
         .initialize_request_profile(&provider_kind, initial_profile)
         .await
         .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
-    transport::profile::identity::RequestProfileSelection::parse(&configured_profile)
+    transport::profile::identity::RequestProfileSelection::parse_global(&configured_profile)
         .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
     let credential_state = ports.credential_state();
     let profile =
@@ -167,6 +168,7 @@ pub async fn initialize(
     let selector = Arc::new(CodexCredentialSelector::new(
         provider_kind.clone(),
         repository.clone(),
+        ports.client_installations(),
         Arc::clone(&leases),
         session_affinity,
         session_exclusions,

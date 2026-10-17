@@ -2,6 +2,8 @@
 
 mod error;
 pub use error::{ProviderStoreError, ProviderStoreErrorKind};
+mod installation;
+pub use installation::{ProviderClientInstallationKey, ProviderClientInstallationPort};
 mod lease;
 pub use lease::{
     ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeaseMetadata,

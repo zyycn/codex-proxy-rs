@@ -405,7 +405,7 @@ impl SettingsService for DefaultSettingsService {
                 };
                 providers
                     .require(provider)
-                    .and_then(|provider| provider.preview_client_profile(profile))
+                    .and_then(|provider| provider.preview_global_client_profile(profile))
                     .map_err(|error| super::map_provider_error(error, "client profile"))?;
             }
         }

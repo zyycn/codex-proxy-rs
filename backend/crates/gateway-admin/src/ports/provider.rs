@@ -208,6 +208,14 @@ pub trait ProviderAdmin: Send + Sync {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
+    /// 校验全局画像；Provider 可拒绝只属于 Key 独立配置的选项
+    fn preview_global_client_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        self.preview_client_profile(configuration)
+    }
+
     /// 提供最终套餐展示名称；未覆盖时采用通用的大驼峰格式
     fn plan_type_display(&self, plan_type: &str) -> String {
         default_plan_type_display(plan_type)

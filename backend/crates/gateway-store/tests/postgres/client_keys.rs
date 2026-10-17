@@ -701,12 +701,15 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
         actor: MutationActor::System,
         request_id: "profile-test".to_owned(),
     };
-    let profile = OpaqueProviderData::new(
+    let xai_profile = OpaqueProviderData::new(
         serde_json::json!({"client":"cli","platform":"linux","versionMode":"latest"})
             .as_object()
             .unwrap()
             .clone(),
     );
+    let mut openai_document = xai_profile.expose_to_provider().clone();
+    openai_document.insert("perKeyInstallationIdEnabled".to_owned(), true.into());
+    let profile = OpaqueProviderData::new(openai_document);
     let id = ClientApiKeyId::new("key_profile").unwrap();
     let openai = gateway_core::routing::ProviderKind::new("openai").unwrap();
     let xai = gateway_core::routing::ProviderKind::new("xai").unwrap();
@@ -722,7 +725,7 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
                 plaintext: "synthetic-profile-test-key".to_owned(),
                 request_profile_overrides: BTreeMap::from([
                     (openai.clone(), profile.clone()),
-                    (xai.clone(), profile.clone()),
+                    (xai.clone(), xai_profile.clone()),
                 ]),
             },
             &context,
@@ -733,7 +736,10 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
         record.request_profile_overrides.get(&openai),
         Some(&profile)
     );
-    assert_eq!(record.request_profile_overrides.get(&xai), Some(&profile));
+    assert_eq!(
+        record.request_profile_overrides.get(&xai),
+        Some(&xai_profile)
+    );
     let update = |override_value: Option<Option<OpaqueProviderData>>| UpdateClientKey {
         id: id.clone(),
         name: "profile".to_owned(),
@@ -756,6 +762,29 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
     );
     assert_eq!(
         unchanged.request_profile_overrides.get(&xai),
+        Some(&xai_profile)
+    );
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot.client_api_keys[0].request_profiles.get(&openai),
+        Some(&profile)
+    );
+    assert_eq!(
+        snapshot.client_api_keys[0].request_profiles.get(&xai),
+        Some(&xai_profile)
+    );
+    let mut edited_document = profile.expose_to_provider().clone();
+    edited_document.insert("platform".to_owned(), "macos".into());
+    let profile = OpaqueProviderData::new(edited_document);
+    let (_, edited) = store
+        .update_client_key(update(Some(Some(profile.clone()))), &context)
+        .await
+        .unwrap();
+    assert_eq!(
+        edited.request_profile_overrides.get(&openai),
         Some(&profile)
     );
     let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
@@ -763,11 +792,7 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
         .await
         .unwrap();
     assert_eq!(
-        snapshot.client_api_keys[0].request_profiles.values().next(),
-        Some(&profile)
-    );
-    assert_eq!(
-        snapshot.client_api_keys[0].request_profiles.get(&xai),
+        snapshot.client_api_keys[0].request_profiles.get(&openai),
         Some(&profile)
     );
     let mut clear_xai = update(None);

@@ -271,6 +271,7 @@ async fn connect(
 
     let provider_ports = ProviderStorePorts::new(
         account_store,
+        Arc::new(postgres::PgClientInstallationRepository::new(pool.clone())),
         provider_leases,
         provider_session_affinity,
         Arc::new(redis::RedisProviderSessionExclusionRepository::new(

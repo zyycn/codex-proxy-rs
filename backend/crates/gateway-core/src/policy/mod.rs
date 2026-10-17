@@ -163,6 +163,12 @@ impl ClientPolicy {
         enabled: bool,
         limits: RateLimits,
     ) -> Self {
+        let account_scope = Arc::new(
+            account_scope
+                .as_ref()
+                .clone()
+                .with_key_request_profiles(account_scope.request_profiles().clone()),
+        );
         Self {
             name_snapshot: None,
             defaults: Arc::new(ClientSettings {

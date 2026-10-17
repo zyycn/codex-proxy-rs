@@ -6,6 +6,7 @@ export type ProviderRequestProfileUpdates = Record<string, ProviderRequestProfil
 
 export interface PresetClientProfileSelection {
   mode?: undefined
+  perKeyInstallationIdEnabled?: boolean
   client: 'desktop' | 'cli'
   platform: 'macos' | 'linux' | 'windows'
   versionMode: 'latest' | 'fixed'
@@ -23,6 +24,7 @@ export interface PresetClientProfileSelection {
 
 export interface CustomClientProfileSelection {
   mode: 'custom'
+  perKeyInstallationIdEnabled?: boolean
   userAgent: string
   originator?: string | null
   codexVersion?: string | null
