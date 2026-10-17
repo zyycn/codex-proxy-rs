@@ -1,10 +1,13 @@
-//! 账号出站代理端点与认证值，诊断及普通管理投影不暴露凭据
+//! 账号出站代理连接与容量配置，诊断及普通管理投影不暴露凭据
 
 use std::fmt;
 use url::Url;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct OutboundProxy(Url);
+pub struct OutboundProxy {
+    url: Url,
+    max_websocket_connections: u32,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("invalid outbound proxy; expected http, https, socks5 or socks5h URL with a host and port")]
@@ -25,17 +28,32 @@ impl OutboundProxy {
         {
             return Err(InvalidOutboundProxy);
         }
-        Ok(Self(url))
+        Ok(Self {
+            url,
+            max_websocket_connections: 0,
+        })
+    }
+
+    /// 此出口的上游 WebSocket 容量，零值表示不限制
+    #[must_use]
+    pub fn with_max_websocket_connections(mut self, limit: u32) -> Self {
+        self.max_websocket_connections = limit;
+        self
+    }
+
+    #[must_use]
+    pub const fn max_websocket_connections(&self) -> u32 {
+        self.max_websocket_connections
     }
 
     #[must_use]
     pub fn expose_url(&self) -> &str {
-        self.0.as_str()
+        self.url.as_str()
     }
 
     #[must_use]
     pub fn endpoint(&self) -> String {
-        let mut url = self.0.clone();
+        let mut url = self.url.clone();
         let _ = url.set_username("");
         let _ = url.set_password(None);
         url.to_string()

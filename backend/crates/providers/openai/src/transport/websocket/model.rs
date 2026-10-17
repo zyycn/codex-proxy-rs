@@ -15,12 +15,19 @@ pub struct CodexWebSocketConnection {
     pub(super) headers: Vec<(String, String)>,
 }
 
-// 请求预算不是连接身份；连接池复用不能由请求局部状态决定
+// 请求预算和代理额度不是连接身份，额度调整不能改变已有连接的复用合同
 impl PartialEq for CodexWebSocketConnection {
     fn eq(&self, other: &Self) -> bool {
         self.endpoint == other.endpoint
             && self.headers == other.headers
-            && self.outbound_proxy == other.outbound_proxy
+            && self
+                .outbound_proxy
+                .as_ref()
+                .map(gateway_core::account::OutboundProxy::expose_url)
+                == other
+                    .outbound_proxy
+                    .as_ref()
+                    .map(gateway_core::account::OutboundProxy::expose_url)
     }
 }
 impl Eq for CodexWebSocketConnection {}

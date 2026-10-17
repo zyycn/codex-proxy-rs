@@ -27,6 +27,7 @@ export interface OutboundProxyTest {
 }
 
 export interface OutboundProxyRecord {
+  maxWebsocketConnections: number
   enabled: boolean
   autoLocation: boolean
   detectedLocation: DetectedProxyLocation | null
@@ -104,7 +105,7 @@ export function getProxies(data: { page: number, pageSize: number, search?: stri
   })
 }
 
-export function createProxy(data: { name: string, proxyUrl: string, autoLocation?: boolean, location?: RequestLocation | null }[], options: RequestOptions = {}) {
+export function createProxy(data: { name: string, proxyUrl: string, maxWebsocketConnections?: number, autoLocation?: boolean, location?: RequestLocation | null }[], options: RequestOptions = {}) {
   return request<ProxyBatchResult<ProxyMutation>[]>({
     url: '/api/admin/proxies/create',
     timeout: 25000 * Math.max(1, data.length),
@@ -114,7 +115,7 @@ export function createProxy(data: { name: string, proxyUrl: string, autoLocation
   })
 }
 
-export function updateProxy(data: { id: string, revision: number, name: string, enabled?: boolean, proxyUrl?: string, autoLocation?: boolean, location?: RequestLocation | null }) {
+export function updateProxy(data: { id: string, revision: number, name: string, enabled?: boolean, maxWebsocketConnections?: number, proxyUrl?: string, autoLocation?: boolean, location?: RequestLocation | null }) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/update',
     timeout: 25000,

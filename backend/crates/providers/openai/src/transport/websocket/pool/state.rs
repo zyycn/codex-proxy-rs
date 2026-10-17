@@ -23,8 +23,9 @@ pub struct CodexWebSocketPoolKey {
     account_id: String,
     conversation_id: String,
     connection_profile: String,
-    downstream_connection_id: String,
+    pub(super) downstream_connection_id: String,
     egress_key: String,
+    pub(super) proxy_capacity_key: String,
 }
 
 impl CodexWebSocketPoolKey {
@@ -41,6 +42,7 @@ impl CodexWebSocketPoolKey {
             connection_profile: String::new(),
             downstream_connection_id: String::new(),
             egress_key: String::new(),
+            proxy_capacity_key: String::new(),
         }
     }
 
@@ -65,6 +67,14 @@ impl CodexWebSocketPoolKey {
 
     pub(crate) fn with_egress_key(mut self, key: &str) -> Self {
         self.egress_key = key.to_owned();
+        self
+    }
+
+    pub(crate) fn with_outbound_proxy(
+        mut self,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Self {
+        self.proxy_capacity_key = super::proxy_capacity_key(proxy);
         self
     }
 
@@ -192,6 +202,7 @@ impl WebSocketContinuationState {
 pub(super) enum WebSocketPoolSlot {
     Idle {
         connection: Box<PooledWebSocketConnection>,
+        idle_since: Instant,
     },
     Busy(WebSocketPoolReservation),
     Connecting(WebSocketPoolConnecting),
@@ -222,7 +233,7 @@ pub(super) struct WebSocketPoolReservation {
 }
 
 pub(super) async fn close_pooled_connection(connection: PooledWebSocketConnection) {
-    connection.websocket.close().await;
+    connection.websocket.close_and_wait().await;
 }
 
 pub(super) async fn close_pooled_connections(connections: Vec<PooledWebSocketConnection>) {

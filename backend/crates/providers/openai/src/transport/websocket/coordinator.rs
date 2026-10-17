@@ -113,7 +113,7 @@ impl PreparedWebSocket {
 /// 只建立或租用 WebSocket，不发送 payload
 pub(crate) async fn prepare_response_create_request_with_pool(
     request: &CodexWebSocketRequest,
-    pool: Option<(&CodexWebSocketPool, CodexWebSocketPoolKey)>,
+    pool: Option<(&CodexWebSocketPool, Option<CodexWebSocketPoolKey>)>,
     breaker: &WebSocketOriginBreaker,
     origin_key: &str,
     fast_path_budget: Option<Duration>,
@@ -121,7 +121,7 @@ pub(crate) async fn prepare_response_create_request_with_pool(
     fallback_stream_idle_timeout: Option<Duration>,
 ) -> Result<WebSocketFastPath<PreparedWebSocket>, CodexWebSocketExchangeError> {
     let decision_started_at = Instant::now();
-    let Some((pool, key)) = pool else {
+    let Some((pool, Some(key))) = pool else {
         if require_pool || !request.continuation().permits_fresh_connection() {
             return Err(continuation_unavailable(
                 PreviousResponseUnavailableReason::PoolUnavailable,
@@ -134,6 +134,7 @@ pub(crate) async fn prepare_response_create_request_with_pool(
             fast_path_budget,
             fallback_stream_idle_timeout,
             decision_started_at,
+            pool.map(|(pool, _)| pool),
         )
         .await;
     };
@@ -146,7 +147,14 @@ pub(crate) async fn prepare_response_create_request_with_pool(
         | WebSocketContinuationRequirement::Persisted { .. }
         | WebSocketContinuationRequirement::ExternalUnknown { .. } => None,
     };
-    match pool.acquire(&key, required_response_id).await {
+    match pool
+        .acquire(
+            &key,
+            required_response_id,
+            request.connection().outbound_proxy.as_ref(),
+        )
+        .await
+    {
         WebSocketPoolAcquire::Reused { connection, lease } => {
             if let WebSocketContinuationRequirement::ConnectionLocal { response_id } =
                 request.continuation()
@@ -218,7 +226,14 @@ async fn prepare_unpooled_websocket(
     fast_path_budget: Option<Duration>,
     stream_idle_timeout: Option<Duration>,
     decision_started_at: Instant,
+    capacity_pool: Option<&CodexWebSocketPool>,
 ) -> Result<WebSocketFastPath<PreparedWebSocket>, CodexWebSocketExchangeError> {
+    let proxy_permit = if let Some(pool) = capacity_pool {
+        pool.acquire_proxy_capacity(request.connection().outbound_proxy.as_ref(), None)
+            .await?
+    } else {
+        None
+    };
     let permit = acquire_breaker_permit(breaker, origin_key, fast_path_budget.is_some())?;
     let context = pump_log_context_from_connection(request.connection());
     let connected = connect_with_budget(
@@ -226,6 +241,7 @@ async fn prepare_unpooled_websocket(
         PumpKeepalive::disabled(),
         fast_path_budget,
         context,
+        proxy_permit,
     )
     .await;
     let connected = match connected {
@@ -323,10 +339,11 @@ impl PooledWebSocketConnectWaiter {
 fn start_pooled_websocket_connect(
     connection: CodexWebSocketConnection,
     pool: CodexWebSocketPool,
-    connect_lease: WebSocketPoolConnectLease,
+    mut connect_lease: WebSocketPoolConnectLease,
     permit: Option<WebSocketOriginBreakerPermit>,
     fast_path: bool,
 ) -> PooledWebSocketConnectWaiter {
+    let proxy_permit = connect_lease.take_proxy_permit();
     let task_key = connect_lease.key().clone();
     let started_at = connect_lease.started_at();
     let cancellation = connect_lease.cancellation_token();
@@ -355,7 +372,7 @@ fn start_pooled_websocket_connect(
                 );
                 return;
             }
-            result = connect_websocket_connection(&connection, keepalive, context, fast_path) => result,
+            result = connect_websocket_connection(&connection, keepalive, context, fast_path, proxy_permit) => result,
         };
         match finish_breaker_attempt(permit, connected) {
             Ok((connection, connect_elapsed)) => {
@@ -459,11 +476,18 @@ async fn connect_with_budget(
     keepalive: PumpKeepalive,
     fast_path_budget: Option<Duration>,
     context: PumpLogContext,
+    proxy_permit: Option<pool::ProxyConnectionPermit>,
 ) -> Result<WebSocketFastPath<(PooledWebSocketConnection, Duration)>, CodexWebSocketExchangeError> {
     match wait_for_fast_path(
         TokioInstant::now(),
         fast_path_budget,
-        connect_websocket_connection(connection, keepalive, context, fast_path_budget.is_some()),
+        connect_websocket_connection(
+            connection,
+            keepalive,
+            context,
+            fast_path_budget.is_some(),
+            proxy_permit,
+        ),
     )
     .await
     {
@@ -477,10 +501,11 @@ async fn connect_websocket_connection(
     keepalive: PumpKeepalive,
     context: PumpLogContext,
     fast_path: bool,
+    proxy_permit: Option<pool::ProxyConnectionPermit>,
 ) -> Result<(PooledWebSocketConnection, Duration), CodexWebSocketExchangeError> {
     let started_at = Instant::now();
     let (websocket, response) =
-        connect_pumped_websocket(connection, keepalive, context, fast_path).await?;
+        connect_pumped_websocket(connection, keepalive, context, fast_path, proxy_permit).await?;
     Ok((
         PooledWebSocketConnection {
             websocket,

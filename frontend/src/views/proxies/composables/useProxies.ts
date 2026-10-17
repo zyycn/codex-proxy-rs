@@ -24,6 +24,7 @@ export function useProxies() {
   const form = reactive({
     name: '',
     proxyUrl: '',
+    maxWebsocketConnections: '',
     customLocation: false,
     location: { country: '', region: '', city: '', timezone: '' },
   })
@@ -50,6 +51,7 @@ export function useProxies() {
     editing.value = proxy
     form.name = proxy?.name ?? ''
     form.proxyUrl = ''
+    form.maxWebsocketConnections = proxy?.maxWebsocketConnections ? String(proxy.maxWebsocketConnections) : ''
     formTestResult.value = null
     const currentLocation = proxy?.autoLocation ? proxy.detectedLocation?.location ?? proxy.location : proxy?.location
     form.customLocation = currentLocation != null
@@ -186,6 +188,11 @@ export function useProxies() {
       ZNotification.warning({ message: '请填写代理名称和连接地址' })
       return
     }
+    const maxWebsocketConnections = Number(form.maxWebsocketConnections)
+    if (!Number.isInteger(maxWebsocketConnections) || maxWebsocketConnections < 0 || maxWebsocketConnections > 4294967295) {
+      ZNotification.warning({ message: '连接上限须为 0 到 4294967295 之间的整数' })
+      return
+    }
     const location = form.customLocation ? normalizeRequestLocation(form.location) : null
     const locationError = location ? requestLocationError(location) : ''
     if (locationError) {
@@ -200,12 +207,14 @@ export function useProxies() {
             revision: editing.value.revision,
             name,
             autoLocation: false,
+            maxWebsocketConnections,
             proxyUrl: proxyUrl || undefined,
             location,
           })
         : createProxy([{
             name,
             autoLocation: false,
+            maxWebsocketConnections,
             proxyUrl,
             location,
           }]).then(results => proxyResultData(results[0])))

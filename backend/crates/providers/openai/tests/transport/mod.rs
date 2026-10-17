@@ -63,6 +63,7 @@ mod profile;
 mod profile_avatar;
 mod profile_contract;
 mod protocol;
+mod proxy_capacity;
 mod request;
 mod reset_credits;
 mod subscription;

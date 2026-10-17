@@ -164,6 +164,7 @@ watch(search, () => {
       v-model="showForm"
       v-model:name="form.name"
       v-model:proxy-url="form.proxyUrl"
+      v-model:max-websocket-connections="form.maxWebsocketConnections"
       v-model:custom-location="form.customLocation"
       v-model:location="form.location"
       :test-result="formTestResult"

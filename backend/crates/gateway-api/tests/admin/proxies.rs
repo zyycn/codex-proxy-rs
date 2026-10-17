@@ -213,7 +213,10 @@ impl ProxyStore for MemoryProxies {
         _: &MutationContext,
     ) -> AdminStoreResult<ProxyMutation> {
         let mut stored = self.0.lock().unwrap();
-        if stored.iter().any(|record| record.proxy == command.proxy) {
+        if stored
+            .iter()
+            .any(|record| record.proxy.expose_url() == command.proxy.expose_url())
+        {
             return Err(AdminStoreError::new(
                 AdminStoreErrorKind::Conflict,
                 "proxy",
@@ -274,15 +277,19 @@ impl ProxyStore for MemoryProxies {
             record.location = location;
         }
         if let Some(proxy) = command.proxy {
-            if record.proxy != proxy {
+            if record.proxy.expose_url() != proxy.expose_url() {
                 record.detected_location = None;
             }
-            record.proxy = proxy;
+            record.proxy =
+                proxy.with_max_websocket_connections(record.proxy.max_websocket_connections());
         }
         if let Some(result) = command.test {
             record.detected_location = record.detected_location_after_test(&result);
             record.last_test = Some(result);
             record.last_test_at = Some(Utc::now());
+        }
+        if let Some(limit) = command.max_websocket_connections {
+            record.proxy = record.proxy.clone().with_max_websocket_connections(limit);
         }
         record.revision = Revision::new(record.revision.get() + 1).unwrap();
         Ok(ProxyMutation {
@@ -932,4 +939,49 @@ async fn proxy_arrays_reject_invalid_shape_size_and_duplicate_test_ids_before_ex
     );
     let (_, listed) = request(&fixture, "/api/admin/proxies", None, true).await;
     assert_eq!(listed["data"]["page"]["total"], 0);
+}
+
+#[tokio::test]
+async fn proxy_websocket_capacity_round_trips_and_preserves_omitted_updates() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let (status, created) = request(&fixture, "/api/admin/proxies/create", Some(json!([
+        {"name":"Limited", "proxyUrl":"http://proxy.example:8080", "maxWebsocketConnections":24},
+        {"name":"Unlimited", "proxyUrl":"http://other.example:8080"}
+    ])), true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        created["data"][0]["data"]["record"]["maxWebsocketConnections"],
+        24
+    );
+    assert_eq!(
+        created["data"][1]["data"]["record"]["maxWebsocketConnections"],
+        0
+    );
+    for (revision, change, expected) in [(1, None, 24), (2, Some(12), 12), (3, Some(0), 0)] {
+        let mut body = json!({"id":"proxy_test", "revision":revision, "name":"Limited"});
+        if let Some(limit) = change {
+            body["maxWebsocketConnections"] = json!(limit);
+        }
+        let (status, updated) =
+            request(&fixture, "/api/admin/proxies/update", Some(body), true).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            updated["data"]["record"]["maxWebsocketConnections"],
+            expected
+        );
+        let (_, listed) = request(&fixture, "/api/admin/proxies", None, true).await;
+        assert_eq!(
+            listed["data"]["items"][0]["maxWebsocketConnections"],
+            expected
+        );
+        assert_eq!(listed["data"]["items"][1]["maxWebsocketConnections"], 0);
+    }
+    for invalid in [json!(-1), json!(1.5), json!(4294967296u64)] {
+        let (status, result) = request(&fixture, "/api/admin/proxies/create", Some(json!([
+            {"name":"Invalid", "proxyUrl":"http://invalid.example:8080", "maxWebsocketConnections":invalid}
+        ])), true).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(result["data"][0]["httpStatus"], 400);
+    }
 }

@@ -68,6 +68,7 @@ async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
     saved = proxies
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,
@@ -88,6 +89,7 @@ async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
     saved = proxies
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,
@@ -117,6 +119,7 @@ async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
         proxies
             .update(
                 UpdateProxy {
+                    max_websocket_connections: None,
                     enabled: None,
                     auto_location: None,
                     test: None,
@@ -135,6 +138,7 @@ async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
     proxies
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,
@@ -234,6 +238,7 @@ async fn disabled_proxy_projects_direct_while_preserving_bindings_and_credential
         saved = proxies
             .update(
                 UpdateProxy {
+                    max_websocket_connections: None,
                     enabled: Some(enabled),
                     auto_location: None,
                     test: None,
@@ -305,6 +310,7 @@ async fn disabled_proxy_projects_direct_while_preserving_bindings_and_credential
             proxies
                 .update(
                     UpdateProxy {
+                        max_websocket_connections: None,
                         enabled: Some(!enabled),
                         auto_location: None,
                         test: None,
@@ -774,6 +780,7 @@ async fn stale_proxy_test_releases_lock_before_next_update() {
     let update = store
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 id: saved.id.clone(),
                 revision: saved.revision,
@@ -811,7 +818,9 @@ async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are
                 test: None,
                 location: None,
                 name: "导入出口".to_owned(),
-                proxy: OutboundProxy::parse("http://127.0.0.1:8080").unwrap(),
+                proxy: OutboundProxy::parse("http://127.0.0.1:8080")
+                    .unwrap()
+                    .with_max_websocket_connections(24),
             },
             &context,
         )
@@ -834,6 +843,7 @@ async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are
         .unwrap();
     let reservation = store.reserve_import(&saved.id).await.unwrap();
     let replacement = UpdateProxy {
+        max_websocket_connections: None,
         enabled: None,
         auto_location: None,
         test: None,
@@ -1015,6 +1025,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let renamed = store
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,
@@ -1036,6 +1047,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let edited = store
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,
@@ -1358,6 +1370,7 @@ async fn automatic_proxy_location_projects_to_accounts_and_guards_refresh_result
     saved = proxies
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 id: saved.id.clone(),
                 revision: saved.revision,
@@ -1377,6 +1390,7 @@ async fn automatic_proxy_location_projects_to_accounts_and_guards_refresh_result
     saved = proxies
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 id: saved.id.clone(),
                 revision: saved.revision,
@@ -1404,6 +1418,7 @@ async fn automatic_proxy_location_projects_to_accounts_and_guards_refresh_result
     saved = proxies
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 id: saved.id.clone(),
                 revision: saved.revision,
@@ -1429,4 +1444,83 @@ async fn automatic_proxy_location_projects_to_accounts_and_guards_refresh_result
                 && account.revision() == credential_revision)
     );
     database.close().await;
+}
+
+#[tokio::test]
+async fn proxy_websocket_capacity_is_shared_by_bound_accounts_and_updates_without_rebinding() {
+    use gateway_core::account::ProviderAccountStore;
+    let Some(database) = TestDatabase::create("proxy_ws_capacity").await else {
+        return;
+    };
+    let proxies = PgProxyRepository::new(database.pool.clone());
+    let accounts = PgProviderAccountRepository::new(database.pool.clone());
+    let mut saved = proxies
+        .create(
+            NewProxy {
+                auto_location: false,
+                test: None,
+                location: None,
+                name: "Limited".to_owned(),
+                proxy: OutboundProxy::parse("http://127.0.0.1:18080")
+                    .unwrap()
+                    .with_max_websocket_connections(24),
+            },
+            &context(),
+        )
+        .await
+        .unwrap()
+        .record;
+    assert_eq!(saved.proxy.max_websocket_connections(), 24);
+    for id in ["acct_proxy_budget_a", "acct_proxy_budget_b"] {
+        let mut input = account(id, id);
+        input.outbound_proxy = Some(saved.proxy.clone());
+        accounts.insert_provider_account(input).await.unwrap();
+    }
+    let mut direct = account("acct_other_proxy", "Other");
+    direct.outbound_proxy = Some(OutboundProxy::parse("http://127.0.0.1:18081").unwrap());
+    accounts.insert_provider_account(direct).await.unwrap();
+    for (change, expected) in [(None, 24), (Some(8), 8), (Some(0), 0)] {
+        saved = proxies
+            .update(
+                UpdateProxy {
+                    max_websocket_connections: change,
+                    enabled: None,
+                    auto_location: None,
+                    test: None,
+                    location: None,
+                    id: saved.id.clone(),
+                    revision: saved.revision,
+                    name: saved.name.clone(),
+                    proxy: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap()
+            .record;
+        assert_eq!(saved.proxy.max_websocket_connections(), expected);
+        for id in ["acct_proxy_budget_a", "acct_proxy_budget_b"] {
+            let projected = accounts
+                .get_account(&ProviderAccountId::new(id).unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                projected
+                    .outbound_proxy()
+                    .unwrap()
+                    .max_websocket_connections(),
+                expected
+            );
+        }
+        let other = accounts
+            .get_account(&ProviderAccountId::new("acct_other_proxy").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            other.outbound_proxy().unwrap().max_websocket_connections(),
+            0
+        );
+    }
 }

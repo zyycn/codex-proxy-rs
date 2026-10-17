@@ -65,6 +65,7 @@ pub(crate) struct WebSocketPoolConnectLease {
     // slot 分配时即注册，封闭 acquire 与后台 task spawn 之间的 shutdown 竞态
     _task_registration: TaskTrackerToken,
     _connect_permit: OwnedSemaphorePermit,
+    proxy_permit: Option<super::ProxyConnectionPermit>,
     armed: bool,
 }
 
@@ -73,6 +74,7 @@ impl WebSocketPoolConnectLease {
         pool: CodexWebSocketPool,
         key: CodexWebSocketPoolKey,
         connect_permit: OwnedSemaphorePermit,
+        proxy_permit: Option<super::ProxyConnectionPermit>,
     ) -> Self {
         let (outcome, _) = watch::channel(WebSocketPoolConnectOutcome::Pending);
         let cancellation = pool.shutdown.child_token();
@@ -86,6 +88,7 @@ impl WebSocketPoolConnectLease {
             cancellation,
             _task_registration: task_registration,
             _connect_permit: connect_permit,
+            proxy_permit,
             armed: true,
         }
     }
@@ -96,6 +99,10 @@ impl WebSocketPoolConnectLease {
 
     pub(crate) fn key(&self) -> &CodexWebSocketPoolKey {
         &self.key
+    }
+
+    pub(crate) fn take_proxy_permit(&mut self) -> Option<super::ProxyConnectionPermit> {
+        self.proxy_permit.take()
     }
 
     pub(crate) fn cancellation_token(&self) -> CancellationToken {

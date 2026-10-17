@@ -28,6 +28,7 @@ const emit = defineEmits<{
 const open = defineModel<boolean>({ required: true })
 const name = defineModel<string>('name', { required: true })
 const proxyUrl = defineModel<string>('proxyUrl', { required: true })
+const maxWebsocketConnections = defineModel<string>('maxWebsocketConnections', { required: true })
 const customLocation = defineModel<boolean>('customLocation', { required: true })
 const location = defineModel<RequestLocation>('location', { required: true })
 const mode = shallowRef('single')
@@ -94,6 +95,9 @@ function clearForm() {
           aria-label="代理地址"
           placeholder="请输入代理地址"
         />
+      </ZFormItem>
+      <ZFormItem label="上游 WS 连接上限" description="使用此代理的账号共享连接额度">
+        <ZInput v-model="maxWebsocketConnections" aria-label="上游 WS 连接上限" placeholder="默认不限制" type="number" min="0" max="4294967295" step="1" :disabled="busy" />
       </ZFormItem>
       <div class="flex items-center justify-between gap-3">
         <ZSwitch v-model="customLocation" label="自定义时区位置" :disabled="busy" />

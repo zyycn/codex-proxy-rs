@@ -298,12 +298,19 @@ impl std::fmt::Debug for PumpedWebSocket {
     }
 }
 
+// 字段按声明顺序析构，先释放物理 socket，再归还代理名额
+struct PumpSocket {
+    stream: RawWsStream,
+    _proxy_permit: Option<super::pool::ProxyConnectionPermit>,
+}
+
 impl PumpedWebSocket {
     /// 用底层流启动一个 pump 任务并返回句柄
     pub(crate) fn new(
         inner: RawWsStream,
         keepalive: PumpKeepalive,
         context: PumpLogContext,
+        proxy_permit: Option<super::pool::ProxyConnectionPermit>,
     ) -> Self {
         let (tx_command, rx_command) = mpsc::channel::<PumpCommand>(PUMP_COMMAND_BUFFER);
         let (tx_message, rx_message) = mpsc::channel(PUMP_MESSAGE_BUFFER);
@@ -318,6 +325,10 @@ impl PumpedWebSocket {
             exit_reason: None,
         }));
         let lifecycle_for_task = Arc::clone(&lifecycle);
+        let inner = PumpSocket {
+            stream: inner,
+            _proxy_permit: proxy_permit,
+        };
         let pump = tokio::spawn(async move {
             pump_loop(
                 connection_id,
@@ -394,6 +405,15 @@ impl PumpedWebSocket {
             .observation(self.connection_id, Instant::now())
     }
 
+    pub(crate) async fn close_and_wait(mut self) {
+        self.close().await;
+        if let Some(pump) = self.pump.as_mut() {
+            // 沿用 Drop 的停止语义，并等待 socket 析构完成后再让容量等待者继续
+            pump.abort();
+            let _ = pump.await;
+        }
+    }
+
     /// 主动关闭连接（best-effort 发送 Close 帧）
     pub(crate) async fn close(&self) {
         if !self.is_closed() {
@@ -416,7 +436,7 @@ impl Drop for PumpedWebSocket {
 )]
 async fn pump_loop(
     connection_id: Uuid,
-    mut inner: RawWsStream,
+    mut inner: PumpSocket,
     mut rx_command: mpsc::Receiver<PumpCommand>,
     tx_message: mpsc::Sender<Result<Message, tungstenite::Error>>,
     keepalive: PumpKeepalive,
@@ -465,7 +485,7 @@ async fn pump_loop(
                     let Some(command) = command else {
                         break 'pump PumpExitReason::CommandChannelClosed;
                     };
-                    if let Some(reason) = handle_command(&mut inner, command, closed.load(Ordering::Acquire)).await {
+                    if let Some(reason) = handle_command(&mut inner.stream, command, closed.load(Ordering::Acquire)).await {
                         break 'pump reason;
                     }
                 }
@@ -480,11 +500,11 @@ async fn pump_loop(
                 let Some(command) = command else {
                     break 'pump PumpExitReason::CommandChannelClosed;
                 };
-                if let Some(reason) = handle_command(&mut inner, command, closed.load(Ordering::Acquire)).await {
+                if let Some(reason) = handle_command(&mut inner.stream, command, closed.load(Ordering::Acquire)).await {
                     break 'pump reason;
                 }
             }
-            message = inner.next() => {
+            message = inner.stream.next() => {
                 match message {
                     None => break 'pump PumpExitReason::UpstreamEof,
                     Some(Ok(message)) => {
@@ -496,7 +516,7 @@ async fn pump_loop(
                         }
                         match message {
                             Message::Ping(payload) => {
-                                if let Err(error) = inner.send(Message::Pong(payload)).await {
+                                if let Err(error) = inner.stream.send(Message::Pong(payload)).await {
                                     break 'pump PumpExitReason::KeepaliveTransportError {
                                         message: error.to_string(),
                                         metric_reason: transport_metric_reason(&error),
@@ -558,7 +578,7 @@ async fn pump_loop(
             _ = tick(&mut ping_ticker) => {
                 if pending_ping.is_none() {
                     match send_keepalive_ping(
-                        &mut inner,
+                        &mut inner.stream,
                         &mut ping_sequence,
                         ping_timeout,
                     ).await {
@@ -601,7 +621,7 @@ async fn pump_loop(
     );
 
     if reason.should_send_close() {
-        let _ = inner.send(Message::Close(None)).await;
+        let _ = inner.stream.send(Message::Close(None)).await;
     }
 }
 

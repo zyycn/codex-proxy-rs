@@ -129,9 +129,13 @@ pub(super) async fn connect_pumped_websocket(
     keepalive: PumpKeepalive,
     context: PumpLogContext,
     fast_path: bool,
+    proxy_permit: Option<super::pool::ProxyConnectionPermit>,
 ) -> Result<(PumpedWebSocket, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
     let (raw, response) = connect_websocket(connection, fast_path).await?;
-    Ok((PumpedWebSocket::new(raw, keepalive, context), response))
+    Ok((
+        PumpedWebSocket::new(raw, keepalive, context, proxy_permit),
+        response,
+    ))
 }
 
 pub(super) async fn send_websocket_request(

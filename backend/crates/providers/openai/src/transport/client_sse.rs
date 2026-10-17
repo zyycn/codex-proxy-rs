@@ -341,7 +341,7 @@ impl CodexBackendClient {
         let pool_key =
             self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
-        let pool = self.websocket_pool.as_deref().zip(pool_key);
+        let pool = self.websocket_pool.as_deref().map(|pool| (pool, pool_key));
         let fast_path_budget = match requirement {
             TransportRequirement::PersistedContinuation | TransportRequirement::NewChain => {
                 Some(WEBSOCKET_FAST_PATH_BUDGET)
@@ -552,6 +552,7 @@ impl CodexBackendClient {
             .or(request.previous_response_id())?;
         let mut key = CodexWebSocketPoolKey::new(&self.base_url, account_id, conversation_id)
             .with_egress_key(&self.egress_key)
+            .with_outbound_proxy(self.outbound_proxy.as_ref())
             .with_connection_profile(connection_profile);
         if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
             key = key.with_downstream_connection_id(connection_id);

@@ -1,16 +1,18 @@
 //! Codex WebSocket 连接池
 
+mod capacity;
 mod lease;
 mod state;
 mod supervisor;
 
 use std::{
+    collections::HashMap,
     future::Future,
-    sync::{Arc, Mutex, MutexGuard, atomic::AtomicBool},
+    sync::{Arc, Mutex, MutexGuard, Weak, atomic::AtomicBool},
     time::Duration,
 };
 
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
 
@@ -21,6 +23,8 @@ use self::state::{
 use super::pump::PumpKeepalive;
 use super::pump::WebSocketConnectionObservation;
 
+use self::capacity::ProxyCapacity;
+pub(crate) use self::capacity::{ProxyConnectionPermit, proxy_capacity_key};
 pub use self::state::CodexWebSocketPoolKey;
 pub(crate) use self::{
     lease::{
@@ -49,6 +53,8 @@ pub struct CodexWebSocketPool {
     shutdown: CancellationToken,
     connect_semaphore: Arc<Semaphore>,
     maintenance_started: Arc<AtomicBool>,
+    proxy_capacities: Arc<Mutex<HashMap<String, Weak<ProxyCapacity>>>>,
+    capacity_changed: Arc<Notify>,
 }
 
 impl Default for CodexWebSocketPool {
@@ -107,7 +113,7 @@ impl CodexWebSocketPoolConfig {
 }
 
 impl CodexWebSocketPool {
-    /// 构造不限制累计 slot 数的连接池策略和状态
+    /// 使用指定连接总寿命构造连接池，不启动定时保活与清理
     pub fn new(max_age: Duration) -> Self {
         Self::with_config(CodexWebSocketPoolConfig {
             max_age,
@@ -127,6 +133,8 @@ impl CodexWebSocketPool {
             shutdown: CancellationToken::new(),
             connect_semaphore: Arc::new(Semaphore::new(config.max_connecting)),
             maintenance_started: Arc::new(AtomicBool::new(false)),
+            proxy_capacities: Arc::default(),
+            capacity_changed: Arc::default(),
         };
         pool.spawn_maintenance_task();
         pool
@@ -151,121 +159,137 @@ impl CodexWebSocketPool {
         &self,
         key: &CodexWebSocketPoolKey,
         required_response_id: Option<&str>,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> WebSocketPoolAcquire {
         self.spawn_maintenance_task();
-        let mut connections_to_close = Vec::new();
-        let acquire = {
-            let mut state = self.lock_state();
-            let mut continuation_loss = None;
-            if !self.config.enabled || state.shutting_down {
-                return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled);
-            }
-            let key = if let Some(response_id) = required_response_id {
-                let Some(key) = state.slots.iter().find_map(|(candidate, slot)| {
-                    (candidate.same_logical_connection(key)
-                        && slot.latest_response_id() == Some(response_id))
-                    .then(|| candidate.clone())
-                }) else {
-                    return state
-                        .continuation_loss(key, response_id, tokio::time::Instant::now())
-                        .map_or(
-                            WebSocketPoolAcquire::Bypass(
-                                WebSocketPoolBypassReason::ContinuationNotFound,
-                            ),
-                            WebSocketPoolAcquire::ContinuationLost,
-                        );
+        let mut proxy_permit = None;
+        loop {
+            let mut connections_to_close = Vec::new();
+            let acquire = {
+                let mut state = self.lock_state();
+                let mut continuation_loss = None;
+                if !self.config.enabled || state.shutting_down {
+                    return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled);
+                }
+                let key = if let Some(response_id) = required_response_id {
+                    let Some(key) = state.slots.iter().find_map(|(candidate, slot)| {
+                        (candidate.same_logical_connection(key)
+                            && slot.latest_response_id() == Some(response_id))
+                        .then(|| candidate.clone())
+                    }) else {
+                        return state
+                            .continuation_loss(key, response_id, tokio::time::Instant::now())
+                            .map_or(
+                                WebSocketPoolAcquire::Bypass(
+                                    WebSocketPoolBypassReason::ContinuationNotFound,
+                                ),
+                                WebSocketPoolAcquire::ContinuationLost,
+                            );
+                    };
+                    key
+                } else {
+                    key.clone()
                 };
-                key
-            } else {
-                key.clone()
-            };
-            match state.slots.get(&key) {
-                Some(WebSocketPoolSlot::Busy(_)) => {
-                    return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
-                }
-                Some(WebSocketPoolSlot::Connecting(connecting)) => {
-                    return WebSocketPoolAcquire::Wait(WebSocketPoolConnectWaiter {
-                        receiver: connecting.outcome.subscribe(),
-                        started_at: connecting.started_at,
-                    });
-                }
-                Some(WebSocketPoolSlot::Idle { .. }) => {
-                    let Some(WebSocketPoolSlot::Idle { connection, .. }) = state.slots.remove(&key)
-                    else {
+                match state.slots.get(&key) {
+                    Some(WebSocketPoolSlot::Busy(_)) => {
                         return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
-                    };
-                    // 零成本探活：后台 pump 已实时感知连接死亡（RST/Close/EOF/失活），
-                    // 复用前只需读取 is_closed 标志，避免复用到静默死连接后卡到超时
-                    let expired = connection.created_at.elapsed() >= self.config.max_age;
-                    let closed = connection.websocket.is_closed();
-                    if !expired && !closed {
-                        let lease = WebSocketPoolLease::reserve(
-                            self.clone(),
-                            key.clone(),
+                    }
+                    Some(WebSocketPoolSlot::Connecting(connecting)) => {
+                        return WebSocketPoolAcquire::Wait(WebSocketPoolConnectWaiter {
+                            receiver: connecting.outcome.subscribe(),
+                            started_at: connecting.started_at,
+                        });
+                    }
+                    Some(WebSocketPoolSlot::Idle { .. }) => {
+                        let Some(WebSocketPoolSlot::Idle { connection, .. }) =
+                            state.slots.remove(&key)
+                        else {
+                            return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
+                        };
+                        // 零成本探活：后台 pump 已实时感知连接死亡（RST/Close/EOF/失活），
+                        // 复用前只需读取 is_closed 标志，避免复用到静默死连接后卡到超时
+                        let expired = connection.created_at.elapsed() >= self.config.max_age;
+                        let closed = connection.websocket.is_closed();
+                        if !expired && !closed {
+                            let lease = WebSocketPoolLease::reserve(
+                                self.clone(),
+                                key.clone(),
+                                connection.continuation.latest_response_id(),
+                            );
+                            state.slots.insert(
+                                key.clone(),
+                                WebSocketPoolSlot::Busy(lease.reservation.clone()),
+                            );
+                            return WebSocketPoolAcquire::Reused { connection, lease };
+                        }
+                        let observation = if expired && !closed {
+                            connection
+                                .websocket
+                                .observation()
+                                .with_exit_reason("max_age_expired")
+                        } else {
+                            connection.websocket.observation()
+                        };
+                        state.remember_continuation_loss(
+                            &key,
                             connection.continuation.latest_response_id(),
+                            observation.clone(),
+                            tokio::time::Instant::now(),
                         );
-                        state.slots.insert(
-                            key.clone(),
-                            WebSocketPoolSlot::Busy(lease.reservation.clone()),
-                        );
-                        return WebSocketPoolAcquire::Reused { connection, lease };
+                        connections_to_close.push(*connection);
+                        if required_response_id.is_some() {
+                            continuation_loss = Some(observation);
+                        }
                     }
-                    let observation = if expired && !closed {
-                        connection
-                            .websocket
-                            .observation()
-                            .with_exit_reason("max_age_expired")
-                    } else {
-                        connection.websocket.observation()
-                    };
-                    state.remember_continuation_loss(
-                        &key,
-                        connection.continuation.latest_response_id(),
-                        observation.clone(),
-                        tokio::time::Instant::now(),
-                    );
-                    connections_to_close.push(*connection);
-                    if required_response_id.is_some() {
-                        continuation_loss = Some(observation);
-                    }
+                    None => {}
                 }
-                None => {}
-            }
 
-            let acquire = if let Some(observation) = continuation_loss {
-                WebSocketPoolAcquire::ContinuationLost(observation)
-            } else if required_response_id.is_some() {
-                WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::ContinuationNotFound)
-            } else {
-                let connect_permit = self.connect_semaphore.clone().try_acquire_owned().ok();
-                match connect_permit {
-                    Some(connect_permit) => {
-                        let lease = WebSocketPoolConnectLease::reserve(
-                            self.clone(),
-                            key.clone(),
-                            connect_permit,
-                        );
-                        state.slots.insert(
-                            key,
-                            WebSocketPoolSlot::Connecting(WebSocketPoolConnecting {
-                                id: lease.id,
-                                started_at: lease.started_at,
-                                outcome: lease.outcome.clone(),
-                                cancellation: lease.cancellation.clone(),
-                            }),
-                        );
-                        WebSocketPoolAcquire::Connect(lease)
-                    }
-                    None => WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Cap),
-                }
+                let acquire = if let Some(observation) = continuation_loss {
+                    Some(WebSocketPoolAcquire::ContinuationLost(observation))
+                } else if required_response_id.is_some() {
+                    Some(WebSocketPoolAcquire::Bypass(
+                        WebSocketPoolBypassReason::ContinuationNotFound,
+                    ))
+                } else if proxy.is_some() && proxy_permit.is_none() {
+                    None
+                } else {
+                    let connect_permit = self.connect_semaphore.clone().try_acquire_owned().ok();
+                    Some(match connect_permit {
+                        Some(connect_permit) => {
+                            let lease = WebSocketPoolConnectLease::reserve(
+                                self.clone(),
+                                key.clone(),
+                                connect_permit,
+                                proxy_permit.take(),
+                            );
+                            state.slots.insert(
+                                key,
+                                WebSocketPoolSlot::Connecting(WebSocketPoolConnecting {
+                                    id: lease.id,
+                                    started_at: lease.started_at,
+                                    outcome: lease.outcome.clone(),
+                                    cancellation: lease.cancellation.clone(),
+                                }),
+                            );
+                            WebSocketPoolAcquire::Connect(lease)
+                        }
+                        None => WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Cap),
+                    })
+                };
+                drop(state);
+                acquire
             };
-            drop(state);
-            acquire
-        };
 
-        close_pooled_connections(connections_to_close).await;
+            close_pooled_connections(connections_to_close).await;
 
-        acquire
+            if let Some(acquire) = acquire {
+                return acquire;
+            }
+            match self.acquire_proxy_capacity(proxy, Some(key)).await {
+                Ok(permit) => proxy_permit = permit,
+                Err(_) => return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled),
+            }
+        }
     }
 
     async fn put_reserved(
@@ -303,6 +327,7 @@ impl CodexWebSocketPool {
                     key.clone(),
                     WebSocketPoolSlot::Idle {
                         connection: Box::new(connection),
+                        idle_since: tokio::time::Instant::now(),
                     },
                 );
             }
@@ -310,6 +335,7 @@ impl CodexWebSocketPool {
         if let Some(connection) = connection {
             close_pooled_connection(connection).await;
         }
+        self.capacity_changed.notify_waiters();
     }
 
     fn discard_reserved_now(&self, key: &CodexWebSocketPoolKey, reservation_id: Uuid) {

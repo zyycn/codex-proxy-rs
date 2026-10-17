@@ -51,6 +51,8 @@ struct RemoveAccountRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateRequest {
     #[serde(default)]
+    max_websocket_connections: u32,
+    #[serde(default)]
     auto_location: bool,
     location: Option<gateway_core::account::RequestLocation>,
     name: String,
@@ -60,6 +62,7 @@ struct CreateRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateRequest {
+    max_websocket_connections: Option<u32>,
     enabled: Option<bool>,
     auto_location: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_location_update")]
@@ -146,6 +149,7 @@ struct ProxyAccountView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProxyView {
+    max_websocket_connections: u32,
     enabled: bool,
     auto_location: bool,
     detected_location: Option<gateway_admin::model::proxies::DetectedProxyLocation>,
@@ -170,6 +174,7 @@ impl From<(ProxyRecord, crate::time::TimePresenter)> for ProxyView {
         let endpoint = record.proxy.endpoint();
         Self {
             auto_location: record.auto_location,
+            max_websocket_connections: record.proxy.max_websocket_connections(),
             enabled: record.enabled,
             detected_location: record.detected_location,
             location: record.location,
@@ -411,7 +416,7 @@ where
                 test: None,
                 location: request.location,
                 name: request.name,
-                proxy,
+                proxy: proxy.with_max_websocket_connections(request.max_websocket_connections),
             })
         })
         .collect();
@@ -472,6 +477,7 @@ where
         .proxies()
         .update(
             UpdateProxy {
+                max_websocket_connections: request.max_websocket_connections,
                 enabled: request.enabled,
                 auto_location: request.auto_location,
                 test: None,
