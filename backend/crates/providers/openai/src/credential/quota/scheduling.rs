@@ -1,6 +1,7 @@
 //! 请求级额度投影、首查与周期刷新排程
 
 use super::*;
+use tokio::time::Instant as TokioInstant;
 
 impl CodexCredentialQuotaService {
     /// 批量预热请求级额度投影；持久层或 Provider JSON 异常只退化为未知额度
@@ -67,7 +68,7 @@ struct CodexQuotaProjectionState {
 }
 
 struct CodexQuotaRefreshAttempt {
-    monotonic_at: Instant,
+    monotonic_at: TokioInstant,
     wall_at: SystemTime,
 }
 
@@ -230,7 +231,7 @@ impl CodexQuotaSchedulingProjection {
             .iter()
             .map(|(account, _)| account.id().clone())
             .collect::<BTreeSet<_>>();
-        let refreshed_at = Instant::now();
+        let refreshed_at = TokioInstant::now();
         let mut state = self
             .state
             .write()
@@ -239,12 +240,11 @@ impl CodexQuotaSchedulingProjection {
             .last_periodic_refresh_at
             .retain(|account_id, _| candidate_ids.contains(account_id));
 
-        // 已耗尽账号首次立即复核，之后每 30 分钟复核，以发现官方提前重置
-        // reset + 2 分钟额外触发一次复核，给上游重置留出传播时间
+        // 已耗尽账号到达 reset 后短周期复核，其余时间保留 30 分钟兜底
         // 正常账号仅在非零用量窗口经过宽限期后参与，未更新时复用周期节流
         let mut reserved = Vec::new();
         for (account, target_reset) in candidates {
-            if !periodic_quota_refresh_due(&state, account.id(), target_reset, now, refreshed_at) {
+            if !periodic_quota_refresh_due(&state, &account, target_reset, now, refreshed_at) {
                 continue;
             }
             state.last_periodic_refresh_at.insert(
@@ -364,22 +364,34 @@ fn quota_refresh_candidate(
 
 fn periodic_quota_refresh_due(
     state: &CodexQuotaProjectionState,
-    account_id: &ProviderAccountId,
+    account: &ProviderAccount,
     reset_at: Option<SystemTime>,
     now: SystemTime,
-    monotonic_now: Instant,
+    monotonic_now: TokioInstant,
 ) -> bool {
-    state
-        .last_periodic_refresh_at
-        .get(account_id)
-        .is_none_or(|last| {
-            monotonic_now.saturating_duration_since(last.monotonic_at)
-                >= PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL
-                || reset_at
-                    .and_then(|reset| reset.checked_add(QUOTA_RESET_GRACE))
-                    // 已在该边界之后复核过时回到周期重试，避免过期 reset 每轮触发
-                    .is_some_and(|due_at| last.wall_at < due_at && due_at <= now)
-        })
+    let mut interval = PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL;
+    let due_at = if account.quota().is_exhausted() {
+        if let Some(since_reset) = reset_at.and_then(|reset| now.duration_since(reset).ok()) {
+            // 上游边界附近可能仍返回旧额度，首次复核也保留传播余量
+            if since_reset < EXHAUSTED_QUOTA_RESET_GRACE {
+                return false;
+            }
+            interval = if since_reset < QUOTA_RESET_FAST_REFRESH_WINDOW {
+                QUOTA_RESET_FAST_REFRESH_INTERVAL
+            } else {
+                QUOTA_RESET_REFRESH_RETRY_INTERVAL
+            };
+        }
+        reset_at.and_then(|reset| reset.checked_add(EXHAUSTED_QUOTA_RESET_GRACE))
+    } else {
+        reset_at.and_then(|reset| reset.checked_add(QUOTA_RESET_GRACE))
+    };
+    let Some(last) = state.last_periodic_refresh_at.get(account.id()) else {
+        return true;
+    };
+    monotonic_now.saturating_duration_since(last.monotonic_at) >= interval
+        // 跨越 reset 宽限期的首轮复核不受旧间隔阻挡，之后按对应间隔节流
+        || due_at.is_some_and(|due_at| last.wall_at < due_at && due_at <= now)
 }
 
 fn insert_projection_entry(

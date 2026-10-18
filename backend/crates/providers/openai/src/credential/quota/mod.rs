@@ -73,6 +73,10 @@ const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const QUOTA_RESET_FAST_REFRESH_WINDOW: Duration = Duration::from_secs(5 * 60);
+const QUOTA_RESET_FAST_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const QUOTA_RESET_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const EXHAUSTED_QUOTA_RESET_GRACE: Duration = Duration::from_secs(10);
 const QUOTA_RESET_GRACE: Duration = Duration::from_secs(2 * 60);
 /// 首次 OAuth 异步观察失败时，由既有 quota worker 兜底重试的单轮上限
 /// 随机启动延迟已把候选摊到多轮，该上限仅作单轮安全边界

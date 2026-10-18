@@ -8422,6 +8422,82 @@ async fn official_usage_limit_failure_persists_fact_without_fabricating_usage() 
 }
 
 #[tokio::test]
+async fn usage_limit_failure_recovers_with_credits_without_replaying_the_failed_request() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_provider_contract";
+    create_account(&store, account_id).await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {
+                "allowed": false,
+                "limit_reached": true,
+                "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+            },
+            "credits": {"has_credits": true, "unlimited": false, "balance": "20"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {"type": "usage_limit_reached", "message": "usage limit reached", "resets_at": 1_900_000_000}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_usage_limit_credits", CancellationToken::new()),
+        )
+        .await
+        .expect("provider stream");
+    let failure = loop {
+        match stream.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("quota failure must reach the caller"),
+        }
+    };
+    assert_eq!(failure.kind(), ProviderErrorKind::QuotaExhausted);
+    assert!(
+        store
+            .account(account_id)
+            .expect("account")
+            .quota()
+            .is_exhausted()
+    );
+
+    timeout(Duration::from_secs(5), async {
+        while store
+            .account(account_id)
+            .expect("account")
+            .quota()
+            .is_exhausted()
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("credits restore access after background refresh");
+    assert!(stream.next().await.is_none());
+    let account = store.account(account_id).expect("recovered account");
+    assert_eq!(account.quota().access(), QuotaAccessState::Allowed);
+    assert_eq!(account.credential_state(), CredentialState::Ready);
+    let quota = store.quota_json(account_id).expect("persisted credits");
+    assert_eq!(quota.pointer("/credits/has_credits"), Some(&json!(true)));
+    assert_eq!(
+        quota.pointer("/rate_limits_by_limit_id/codex/primary_window/used_percent"),
+        Some(&json!(100))
+    );
+    assert!(quota.get("_quota_recovery").is_none());
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_retry() {
     for use_websocket in [false, true] {
         for status in [400, 429, 503] {

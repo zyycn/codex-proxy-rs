@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use gateway_core::account::{QuotaEvidence, QuotaState};
+use gateway_core::account::{QuotaAccessState, QuotaEvidence, QuotaState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -127,11 +127,8 @@ fn window_reset_recovered(window: &CodexQuotaWindow, previous: Option<DateTime<U
 }
 
 /// 统一手动刷新和 worker 的恢复规则
-/// 已耗尽窗口的解除有两条证据路径：
-/// reset 前进且用量低于低用量阈值（窗口已滚动），或同一窗口内连续两次观测
-/// 都未触顶（滑动窗口的用量回落，reset 不滚动）
-/// 后者防止账号被钉在旧
-/// reset 日期上；连续两次的要求排除耗尽后立刻拉到的旧快照
+/// 到期前仍要求窗口滚动且低用量，或同窗口连续两次未触顶
+/// 已记录的耗尽窗口全部到期后，允许新的明确放行观察解除，兼容用量百分比滞后
 pub(super) fn reconcile_refresh(
     current: QuotaState,
     refreshed: &mut CodexAccountQuotaSnapshot,
@@ -139,6 +136,11 @@ pub(super) fn reconcile_refresh(
     document: &mut Map<String, Value>,
 ) -> Result<QuotaState, CodexCredentialQuotaError> {
     document.remove(RECOVERY_FIELD);
+    if refreshed.credits_usable() {
+        // 点数独立于套餐窗口，恢复后不能继续携带已失效的窗口恢复进度
+        refreshed.recovery = None;
+        return Ok(QuotaState::allowed(refreshed.observed_at()));
+    }
     let state = if current.is_exhausted() {
         current
     } else {
@@ -155,7 +157,18 @@ pub(super) fn reconcile_refresh(
     if recovery.pending.is_empty() {
         recovery = QuotaRecovery::new(state, refreshed);
     }
-    if current.is_exhausted() && recovery.observe(refreshed) {
+    // 只信任本次耗尽之后的边界，防止再次拒绝后复用已经过期的 reset 反复解封
+    // 多个耗尽窗口必须全部到期，未知 reset 仍走原有恢复规则
+    let allowed_after_reset = refreshed.quota().access() == QuotaAccessState::Allowed
+        && !recovery.pending.is_empty()
+        && recovery.pending.values().all(|reset| {
+            reset.is_some_and(|reset| {
+                reset.timestamp_micros() > recovery.exhausted_at_micros
+                    && SystemTime::from(reset) <= refreshed.observed_at()
+            })
+        });
+    if current.is_exhausted() && (allowed_after_reset || recovery.observe(refreshed)) {
+        refreshed.recovery = None;
         return Ok(QuotaState::allowed(refreshed.observed_at()));
     }
     let reset_at = recovery

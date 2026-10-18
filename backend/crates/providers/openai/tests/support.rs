@@ -430,7 +430,7 @@ impl ProviderAccountStore for MemoryAccountStore {
 
     async fn compare_and_swap_quota(
         &self,
-        observation: QuotaObservation,
+        mut observation: QuotaObservation,
     ) -> Result<QuotaWriteOutcome, StoreError> {
         let mut accounts = self.accounts.lock().expect("account store lock");
         let stored = accounts
@@ -446,7 +446,18 @@ impl ProviderAccountStore for MemoryAccountStore {
         {
             return Ok(QuotaWriteOutcome::Conflict);
         }
-        let quota = observation.state;
+        // 与 PostgreSQL 一致，展示快照与访问事实分别按各自观察时间隔离
+        let current = stored.account.quota();
+        let quota = if observation
+            .state
+            .observed_at()
+            .is_some_and(|observed| current.observed_at().is_none_or(|time| time <= observed))
+        {
+            observation.state
+        } else {
+            current
+        };
+        observation.state = quota;
         let mut replacement = AccountRebuild::preserving(&stored.account).with_quota(quota);
         if let Some(plan_type) = &observation.plan_type {
             replacement.profile = Some((

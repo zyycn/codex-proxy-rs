@@ -1,4 +1,4 @@
-//! 通过 quota 服务验证周期复核与 reset 宽限期，不依赖内部调度状态
+//! 通过 quota 服务验证耗尽复核节奏、恢复与正常窗口宽限期
 
 use std::time::Duration;
 
@@ -17,8 +17,17 @@ fn reset_grace(reset: i64) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs((reset + 120) as u64)
 }
 
+async fn advance_clock(now: &mut SystemTime, seconds: u64) {
+    let duration = Duration::from_secs(seconds);
+    // 只在推进时暂停 Tokio 时钟，HTTP 请求期间保持真实计时
+    tokio::time::pause();
+    tokio::time::advance(duration).await;
+    tokio::time::resume();
+    *now += duration;
+}
+
 #[tokio::test]
-async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window() {
+async fn exhausted_reset_bypasses_periodic_throttle_and_rechecks_each_pending_window() {
     let mut now = SystemTime::now();
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_quota_timing").await;
@@ -30,8 +39,8 @@ async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
-        - 115;
-    let week_reset = short_reset + 3;
+        + 5;
+    let week_reset = short_reset + 30;
     let usage = |short_used, short_reset, week_used, week_reset| {
         json!({"rate_limit": {
             "allowed": false,
@@ -55,20 +64,28 @@ async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window
     let requests = server.received_requests().await.expect("requests").len();
 
     assert!(
-        now < reset_grace(short_reset),
-        "fixture must precede grace deadline"
+        now < SystemTime::UNIX_EPOCH + Duration::from_secs(short_reset as u64),
+        "fixture must precede reset"
     );
-    service
-        .synchronize_at(now)
-        .await
-        .expect("before grace deadline");
+    service.synchronize_at(now).await.expect("before reset");
     assert_eq!(
         server.received_requests().await.expect("requests").len(),
         requests
     );
 
     mount_usage(&server, usage(0, short_reset + 18_000, 100, week_reset)).await;
-    now = reset_grace(short_reset);
+    for delay in [0, 9] {
+        now = SystemTime::UNIX_EPOCH + Duration::from_secs(short_reset as u64 + delay);
+        service.synchronize_at(now).await.expect("reset grace");
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty()
+        );
+    }
+    now = SystemTime::UNIX_EPOCH + Duration::from_secs(short_reset as u64 + 10);
     let partial = service
         .synchronize_at(now)
         .await
@@ -85,11 +102,11 @@ async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window
     service
         .synchronize_at(now)
         .await
-        .expect("next scan before weekly grace deadline");
+        .expect("next scan before weekly reset");
     assert_eq!(server.received_requests().await.expect("requests").len(), 1);
 
     // 周窗口的到期复核仍未恢复时，也不能每轮扫描重复请求
-    now = reset_grace(week_reset);
+    now = SystemTime::UNIX_EPOCH + Duration::from_secs(week_reset as u64 + 10);
     assert_eq!(
         service
             .synchronize_at(now)
@@ -127,17 +144,137 @@ async fn periodic_checks_continue_when_reset_is_unknown_or_far_in_the_future() {
             .expect("seed exhaustion");
         mount_usage(&server, usage).await;
 
+        let mut now = SystemTime::now();
         assert_eq!(
             service
-                .synchronize()
+                .synchronize_at(now)
                 .await
                 .expect("periodic check")
                 .exhausted,
             1
         );
-        service.synchronize().await.expect("throttled repeat check");
+        advance_clock(&mut now, 29 * 60).await;
+        service
+            .synchronize_at(now)
+            .await
+            .expect("throttled repeat check");
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+        advance_clock(&mut now, 60).await;
+        service.synchronize_at(now).await.expect("periodic retry");
+        assert_eq!(server.received_requests().await.expect("requests").len(), 2);
     }
+}
+
+#[tokio::test]
+async fn exhausted_reset_refreshes_quickly_then_backs_off_and_recovers_from_usage() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_reset_retry").await;
+    let account = store.account("acct_reset_retry").expect("account");
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+    let reset = Utc::now().timestamp();
+    let mut now = SystemTime::UNIX_EPOCH + Duration::from_secs(reset as u64);
+    let usage = |allowed, used, reset| {
+        json!({"rate_limit": {
+            "allowed": allowed,
+            "primary_window": {"used_percent": used, "reset_at": reset}
+        }})
+    };
+    mount_usage(&server, usage(false, 100, reset)).await;
+    service
+        .refresh_account(account.id())
+        .await
+        .expect("seed exhaustion");
+    service
+        .synchronize_at(now)
+        .await
+        .expect("reset grace without periodic history");
+    advance_clock(&mut now, 9).await;
+    service
+        .synchronize_at(now)
+        .await
+        .expect("still in reset grace");
+    assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+    advance_clock(&mut now, 1).await;
+    service
+        .synchronize_at(now)
+        .await
+        .expect("initial reset check");
+    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
+
+    // 本次拒绝发生在 reset 之后，滞后的 allowed 不能复用旧边界解封
+    mount_usage(&server, usage(true, 100, reset)).await;
+    for (elapsed, requests) in [
+        (29, 0),
+        (1, 1),
+        (29, 1),
+        (1, 2),
+        (229, 3),
+        (1, 3),
+        (298, 3),
+        (1, 4),
+    ] {
+        advance_clock(&mut now, elapsed).await;
+        service.synchronize_at(now).await.expect("scheduled check");
+        assert_eq!(
+            server.received_requests().await.expect("requests").len(),
+            requests
+        );
+        assert!(
+            store
+                .account("acct_reset_retry")
+                .expect("account")
+                .quota()
+                .is_exhausted()
+        );
+    }
+
+    // 查询失败也占用一次尝试，避免网络故障时取消节流
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+    advance_clock(&mut now, 300).await;
+    assert_eq!(
+        service
+            .synchronize_at(now)
+            .await
+            .expect("failed check")
+            .transient,
+        1
+    );
+    advance_clock(&mut now, 299).await;
+    service
+        .synchronize_at(now)
+        .await
+        .expect("throttled failed check");
+    assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+
+    mount_usage(&server, usage(true, 0, reset + 18_000)).await;
+    advance_clock(&mut now, 1).await;
+    assert_eq!(
+        service
+            .synchronize_at(now)
+            .await
+            .expect("recovery check")
+            .updated,
+        1
+    );
+    assert!(
+        !store
+            .account("acct_reset_retry")
+            .expect("account")
+            .quota()
+            .is_exhausted()
+    );
+    advance_clock(&mut now, 300).await;
+    service
+        .synchronize_at(now)
+        .await
+        .expect("recovered account leaves retry schedule");
+    assert_eq!(server.received_requests().await.expect("requests").len(), 1);
 }
 
 #[tokio::test]

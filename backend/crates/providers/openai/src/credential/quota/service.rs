@@ -515,7 +515,7 @@ impl CodexCredentialQuotaService {
             .await
     }
 
-    /// 真实限额失败后的异步刷新只补齐展示快照，不允许 usage 快照撤销已确认的失败状态
+    /// 真实限额失败后的异步回读仅允许明确可用的点数恢复访问，套餐状态仍保留失败保护
     pub(crate) async fn refresh_account_after_failure(
         &self,
         account_id: &ProviderAccountId,
@@ -589,9 +589,10 @@ impl CodexCredentialQuotaService {
         } else {
             None
         };
-        if account.quota().is_exhausted()
-            && matches!(authority, QuotaRefreshAuthority::PreserveAccess)
-        {
+        // 失败后回读只允许明确可用的点数恢复访问，套餐 allowed 仍可能滞后
+        let observe_access =
+            matches!(authority, QuotaRefreshAuthority::ObserveAccess) || snapshot.credits_usable();
+        if account.quota().is_exhausted() && !observe_access {
             if self
                 .store
                 .touch_quota_observation(QuotaObservationTouch {
@@ -615,14 +616,15 @@ impl CodexCredentialQuotaService {
                     .with_observed_at(observed_at),
             });
         }
-        let state = match authority {
-            QuotaRefreshAuthority::ObserveAccess => reconcile_refresh(
+        let state = if observe_access {
+            reconcile_refresh(
                 account.quota(),
                 &mut snapshot,
                 previous.as_ref(),
                 &mut object,
-            )?,
-            QuotaRefreshAuthority::PreserveAccess => account.quota(),
+            )?
+        } else {
+            account.quota()
         };
         let snapshot = snapshot.with_quota_state(state);
         if self

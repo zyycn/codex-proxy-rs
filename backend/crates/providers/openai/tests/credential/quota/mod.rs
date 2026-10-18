@@ -1,10 +1,12 @@
 //! OpenAI 额度事实边界与展示快照回归
 
 mod capacity_freeze;
+mod credits;
 mod initial_sync;
 mod recovery;
 mod refresh_timing;
 mod reset_credits;
+mod reset_recovery;
 mod scheduling;
 mod slots;
 mod snapshot;
