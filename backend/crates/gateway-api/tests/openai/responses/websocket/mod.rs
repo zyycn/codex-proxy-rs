@@ -799,7 +799,7 @@ async fn websocket_failure_before_first_event_should_return_observed_metadata_th
 }
 
 #[tokio::test]
-async fn websocket_response_create_should_not_have_a_private_16_mib_frame_limit() {
+async fn large_websocket_response_create_frames_should_reach_execution() {
     let trace = Arc::new(AtomicFailureTrace::default());
     let execution = Arc::new(AtomicFailureExecution {
         client: authenticated_client("sk_ws_atomic"),
@@ -829,15 +829,14 @@ async fn websocket_response_create_should_not_have_a_private_16_mib_frame_limit(
     let payload = json!({
         "type": "response.create",
         "model": "model-a",
-        "input": "x".repeat(16 * 1024 * 1024 + 1),
+        "input": "x".repeat(17 * 1024 * 1024),
     })
     .to_string();
-    assert!(payload.len() > 16 * 1024 * 1024);
 
     socket
         .send(ClientMessage::Text(payload.into()))
         .await
-        .expect("send response.create above the former frame limit");
+        .expect("send large response.create frame");
 
     let mut saw_upstream_event = false;
     for _ in 0..3 {

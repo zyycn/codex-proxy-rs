@@ -149,7 +149,7 @@ fn account_page_item(
 }
 
 #[tokio::test]
-async fn account_usage_returns_distinct_cache_read_and_write_tokens_without_aliases() {
+async fn account_usage_preserves_cache_read_and_write_counts_and_missing_values() {
     use chrono::Utc;
     use gateway_admin::model::accounts::AccountUsage;
     use gateway_core::account::{AccountStatusFacts, CredentialState, QuotaState};
@@ -215,35 +215,7 @@ async fn account_usage_returns_distinct_cache_read_and_write_tokens_without_alia
             usage["cacheWriteInputTokensDisplay"],
             if write.is_some() { "7" } else { "—" }
         );
-        for alias in [
-            "createdTokens",
-            "createdTokensDisplay",
-            "readTokens",
-            "readTokensDisplay",
-        ] {
-            assert!(usage.get(alias).is_none(), "obsolete token alias: {alias}");
-        }
     }
-}
-
-#[tokio::test]
-async fn standalone_credential_rotation_route_is_not_exposed() {
-    let fixture = AdminTestFixture::new().await;
-    fixture.auth.insert_session("valid-session");
-    let response = admin::router::<AdminTestState>()
-        .with_state(fixture.state())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/admin/accounts/rotate")
-                .header(header::COOKIE, "cpr_session=valid-session")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from("{}"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

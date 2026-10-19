@@ -103,10 +103,24 @@ async fn middleware_preserves_three_state_fast_and_sources() {
                             Some(90_000)
                         );
                         let sources = settings.inspect();
-                        assert!(sources["execution"].get("disable_fast").is_none());
-                        if mode != FastMode::Default && mode == expected {
-                            assert_eq!(sources["execution"]["fast_mode"]["instance_id"], "seed");
+                        let fast_source = &sources["execution"]["fast_mode"];
+                        if mode == FastMode::Default && expected == FastMode::Default {
+                            assert!(fast_source.is_null());
+                        } else {
+                            assert_eq!(
+                                fast_source["instance_id"],
+                                if mode == expected {
+                                    "seed"
+                                } else {
+                                    "fast-settings"
+                                }
+                            );
+                            assert_eq!(fast_source["value"], expected.as_str());
                         }
+                        assert_eq!(
+                            sources["execution"]["timeout_ms"]["instance_id"],
+                            "fast-settings"
+                        );
                         next.run(request).await
                     })
                 }),

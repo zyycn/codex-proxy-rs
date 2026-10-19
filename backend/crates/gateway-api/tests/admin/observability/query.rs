@@ -7,7 +7,7 @@ use gateway_api::admin::observability::{
 use serde_json::json;
 
 #[test]
-fn dashboard_query_should_parse_terminal_trend_kinds() {
+fn dashboard_query_should_parse_error_trends() {
     let query: DashboardQuery = serde_json::from_value(json!({"kind": "errors"})).unwrap();
     assert_eq!(query.trend_kind().unwrap(), TrendKind::Errors);
 }
@@ -19,7 +19,7 @@ fn dashboard_query_should_reject_unknown_trend_kind() {
 }
 
 #[test]
-fn usage_query_should_accept_element_plus_pagination() {
+fn usage_query_should_accept_page_number_and_size() {
     let query: UsageQuery = serde_json::from_value(json!({
         "currentPage": 129,
         "pageSize": 10
@@ -29,30 +29,18 @@ fn usage_query_should_accept_element_plus_pagination() {
 }
 
 #[test]
-fn usage_query_should_reject_removed_total_toggle() {
-    assert!(serde_json::from_value::<UsageQuery>(json!({"includeTotal": true})).is_err());
+fn observability_queries_should_reject_unknown_fields() {
+    let query = json!({"unknownFilter": true});
+    assert!(serde_json::from_value::<DashboardQuery>(query.clone()).is_err());
+    assert!(serde_json::from_value::<UsageQuery>(query.clone()).is_err());
+    assert!(serde_json::from_value::<OpsQuery>(query.clone()).is_err());
+    assert!(serde_json::from_value::<DiagnosticsQuery>(query).is_err());
 }
 
 #[test]
-fn usage_query_should_reject_removed_cursor_contract() {
-    assert!(serde_json::from_value::<UsageQuery>(json!({"cursor": "opaque"})).is_err());
-}
-
-#[test]
-fn usage_query_should_reject_nonstandard_page_name() {
-    assert!(serde_json::from_value::<UsageQuery>(json!({"page": 1})).is_err());
-}
-
-#[test]
-fn ops_query_should_reject_page_size_above_terminal_limit() {
+fn ops_query_should_reject_page_size_above_maximum() {
     let query: OpsQuery = serde_json::from_value(json!({"pageSize": 101})).unwrap();
     assert_eq!(query.validate_pagination().unwrap_err().field(), "pageSize");
-}
-
-#[test]
-fn ops_query_should_reject_removed_filters() {
-    assert!(serde_json::from_value::<OpsQuery>(json!({"route": "/v1/responses"})).is_err());
-    assert!(serde_json::from_value::<OpsQuery>(json!({"failureClass": "rate_limited"})).is_err());
 }
 
 #[test]

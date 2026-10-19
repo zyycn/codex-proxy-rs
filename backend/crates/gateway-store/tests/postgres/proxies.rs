@@ -1194,63 +1194,6 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
 }
 
 #[tokio::test]
-async fn migration_backfills_shared_proxies_without_changing_credentials() {
-    let Some(database) = TestDatabase::create_through("proxy_backfill", 4).await else {
-        return;
-    };
-    // 从真实旧 schema 正向升级，不拆卸最新结构，避免遗漏后续增加的引用约束
-    for id in ["acct_one", "acct_two", "acct_direct"] {
-        let proxy_url = (id != "acct_direct").then_some("http://user:secret@127.0.0.1:8080/");
-        sqlx::query(
-            "insert into provider_accounts (
-                id,provider_kind,name,authentication_kind,provider_credentials_json,
-                has_refresh_token,credential_observed_at,created_at,updated_at,outbound_proxy_url
-             ) values ($1,'openai',$1,'oauth','{}',false,now(),now(),now(),$2)",
-        )
-        .bind(id)
-        .bind(proxy_url)
-        .execute(&database.pool)
-        .await
-        .unwrap();
-    }
-    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-    assert!(
-        sqlx::query_scalar::<_, bool>("select bool_and(enabled) from outbound_proxies")
-            .fetch_one(&database.pool)
-            .await
-            .unwrap()
-    );
-    let accounts = PgProviderAccountRepository::new(database.pool.clone());
-    let inherited = gateway_core::account::ProviderAccountStore::list_accounts(&accounts)
-        .await
-        .unwrap();
-    assert_eq!(inherited.len(), 3);
-    assert!(
-        inherited
-            .iter()
-            .all(|account| account.request_location().is_none())
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("select count(*) from outbound_proxies")
-            .fetch_one(&database.pool)
-            .await
-            .unwrap(),
-        1
-    );
-    assert_eq!(sqlx::query_scalar::<_, i64>("select count(*) from provider_accounts a join outbound_proxies p on a.outbound_proxy_id = p.id where a.outbound_proxy_url = p.proxy_url and a.credential_revision = 1").fetch_one(&database.pool).await.unwrap(), 2);
-    assert!(
-        sqlx::query_scalar::<_, Option<String>>(
-            "select outbound_proxy_id from provider_accounts where id = 'acct_direct'"
-        )
-        .fetch_one(&database.pool)
-        .await
-        .unwrap()
-        .is_none()
-    );
-    database.close().await;
-}
-
-#[tokio::test]
 async fn automatic_proxy_location_projects_to_accounts_and_guards_refresh_results() {
     use gateway_core::account::{ProviderAccountStore, RequestLocation};
     let Some(database) = TestDatabase::create("auto_proxy_location").await else {

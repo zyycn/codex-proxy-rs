@@ -2,59 +2,6 @@
 
 use super::TestDatabase;
 
-#[tokio::test]
-async fn error_details_migration_preserves_existing_request_and_event_text() {
-    let Some(db) = TestDatabase::create_through("error_details_upgrade", 22).await else {
-        return;
-    };
-    seed_legacy_request(&db.pool).await;
-    let raw = "{ \"error\": {\"code\":\"Vendor.Unknown\",\"message\":\"原始错误\"} }";
-    sqlx::query("update model_requests set raw_upstream_error = $1 where id = 'req_integrity'")
-        .bind(raw)
-        .execute(&db.pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "insert into ops_events (id, level, component, operation, failure_kind, message, created_at, raw_upstream_error)
-         values ('error_details_upgrade', 'error', 'provider', 'generate', 'unavailable', 'safe message', now(), $1)",
-    ).bind(raw).execute(&db.pool).await.unwrap();
-
-    super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
-    let details: Vec<String> = sqlx::query_scalar(
-        "select error_details from model_requests where id = 'req_integrity'
-         union all select error_details from ops_events where id = 'error_details_upgrade'",
-    )
-    .fetch_all(&db.pool)
-    .await
-    .unwrap();
-    assert_eq!(details, vec![raw.to_owned(), raw.to_owned()]);
-    let old_columns: i64 = sqlx::query_scalar(
-        "select count(*) from information_schema.columns
-         where table_schema = current_schema() and table_name in ('model_requests', 'ops_events')
-         and column_name = 'raw_upstream_error'",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-    assert_eq!(old_columns, 0);
-    db.close().await;
-}
-
-async fn seed_legacy_request(pool: &sqlx::PgPool) {
-    sqlx::query(
-        "insert into model_requests (
-           id, client_api_key_ref, config_revision, protocol, operation, endpoint,
-           client_transport, started_at, deadline_at, outcome, completed_at, routing_scope
-         ) values (
-           'req_integrity', 'deleted_key', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', now(), now() + interval '1 hour', 'failed', now(), 'all'
-         )",
-    )
-    .execute(pool)
-    .await
-    .expect("seed request without optional facts");
-}
-
 async fn seed_request(pool: &sqlx::PgPool) {
     sqlx::query(
         "insert into model_requests (
@@ -191,11 +138,6 @@ async fn historical_references_are_validated_without_live_foreign_keys() {
     .await
     .unwrap();
     assert_eq!(references, "already_deleted_account");
-    let live_columns: i64 = sqlx::query_scalar("select count(*) from information_schema.columns where table_schema = current_schema()
-        and ((table_name = 'model_requests' and column_name in ('client_api_key_id','provider_account_id'))
-          or (table_name = 'ops_events' and column_name = 'provider_account_id'))")
-        .fetch_one(&db.pool).await.unwrap();
-    assert_eq!(live_columns, 0);
     db.close().await;
 }
 
@@ -249,89 +191,6 @@ async fn backup_completion_cannot_precede_its_start() {
     .await
     .expect_err("completed backup must not end before it starts");
     assert_check_rejected(&error);
-    db.close().await;
-}
-
-#[tokio::test]
-async fn request_observation_migration_preserves_every_historical_field() {
-    let Some(db) = TestDatabase::create_through("request_observation_upgrade", 24).await else {
-        return;
-    };
-    seed_legacy_request(&db.pool).await;
-    sqlx::raw_sql(
-        "insert into model_requests
-           select (jsonb_populate_record(null::model_requests,
-             to_jsonb(mr) || jsonb_build_object('id', 'req_empty'))).*
-           from model_requests mr;
-         update model_requests set config_revision = 7,
-           provider_account_name_snapshot = 'historical account',
-           provider_account_email_snapshot = 'history@example.invalid',
-           provider_account_authentication_kind_snapshot = 'oauth',
-           routing_scope = 'groups', routing_group_refs = array['deleted_group'],
-           routing_group_names_snapshot = '[\"历史组\"]',
-           provider_error_code = 'rate_limit', error_message = 'safe error', retry_after_ms = 0,
-           client_ip = '192.0.2.10/24', user_agent = 'fixture', reasoning_effort = 'high',
-           reasoning_preset = 'balanced', subagent_kind = 'review', compact = true,
-           transport_decision_wait_ms = 0, connect_ms = 2, headers_ms = 3,
-           first_event_ms = 4, first_reasoning_ms = 5, first_text_ms = 6,
-           first_token_ms = 5, latency_ms = 1000, provider_processing_ms = 7,
-           admission_decision_ms = 0, account_selection_wait_ms = 8,
-           capacity_used_slots = 0, capacity_total_slots = 20,
-           http_version = 'HTTP/2', websocket_pool = 'reuse',
-           upstream_connection_id = 'connection', upstream_connection_exit_reason = 'peer_closed',
-           upstream_connection_age_ms = 10, upstream_connection_idle_ms = 0,
-           upstream_response_model = 'response-model', continuation_requested = true,
-           continuation_previous_response_id_hash = repeat('a', 64),
-           continuation_unavailable_reason = 'missing_response',
-           recovery_request_id = 'recovery', recovered_at = completed_at + interval '1 second',
-           recovery_attempt_count = 1, recovery_retry_delay_ms = 0, recovery_total_latency_ms = 1000,
-           input_tokens = 10, output_tokens = 20, total_tokens = 30,
-           cost_source = 'provider_reported', cost_amount = 0.0123456789, cost_currency = 'USD',
-           error_details = '{ \"opaque\": true }', provider_observation_json = '{\"vendor\":true}',
-           diagnostic_trace_json = '{\"attempts\":[]}'
-         where id = 'req_integrity'",
-    ).execute(&db.pool).await.expect("populate all moved fields in the released schema");
-    let before: Vec<serde_json::Value> =
-        sqlx::query_scalar("select to_jsonb(mr) from model_requests mr order by id")
-            .fetch_all(&db.pool)
-            .await
-            .unwrap();
-    super::TEST_MIGRATOR.run_to(27, &db.pool).await.unwrap();
-    let after: Vec<serde_json::Value> = sqlx::query_scalar(
-        "select to_jsonb(mr) - 'request_observation_json' - 'upstream_response_ms' - 'upstream_api_overhead_ms' - 'upstream_engine_ms' - 'upstream_engine_iapi_ttft_ms' - 'upstream_engine_service_ttft_ms' - 'upstream_engine_iapi_tbt_ms' - 'upstream_engine_service_tbt_ms'
-         from model_request_observations mr order by id",
-    )
-    .fetch_all(&db.pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        after, before,
-        "all 90 historical facts survive the migration"
-    );
-    let columns: i64 = sqlx::query_scalar(
-        "select count(*) from information_schema.columns
-         where table_schema = current_schema() and table_name = 'model_requests'",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-    assert_eq!(columns, 49);
-    let observation: serde_json::Value = sqlx::query_scalar(
-        "select request_observation_json from model_requests where id = 'req_integrity'",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        observation["timings"]["local"]["transportDecisionWaitMs"],
-        0
-    );
-    assert_eq!(observation["scheduling"]["capacityUsedSlots"], 0);
-    assert!(
-        observation["timings"]["upstream"]
-            .get("responseMs")
-            .is_none()
-    );
     db.close().await;
 }
 

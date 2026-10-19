@@ -132,52 +132,40 @@ fn installation_checks_protocol_engine_and_target() {
 
 #[test]
 fn capability_contract_versions_are_checked_independently_of_rpc_version() {
-    let mut manifest = packaged_manifest();
-    assert!(manifest.validate().is_ok());
-    for version in [0, 1, 2, 3, 4, 6, u32::MAX] {
-        manifest
-            .contributes
-            .get_mut(&Capability::Middleware)
-            .unwrap()
-            .version = version;
-        assert_eq!(manifest.validate(), Err(ManifestError::Invalid));
+    for (capability, stage, supported, needs_formats) in [
+        (Capability::Middleware, Stage::Request, 5, true),
+        (Capability::Management, Stage::Management, 2, false),
+        (Capability::UpstreamAdapter, Stage::Upstream, 3, true),
+        (Capability::Scheduler, Stage::Scheduling, 3, false),
+    ] {
+        for mut manifest in [source_manifest(), packaged_manifest()] {
+            let formats = if needs_formats {
+                vec!["openai".into()]
+            } else {
+                vec![]
+            };
+            manifest.contributes.clear();
+            manifest.contributes.insert(
+                capability,
+                ContributionDeclaration {
+                    id: "9acme.request-tags.contract".into(),
+                    version: supported,
+                    stages: vec![stage],
+                    input_formats: formats.clone(),
+                    output_formats: formats,
+                },
+            );
+            assert!(manifest.validate().is_ok(), "{capability:?} v{supported}");
+            for version in (0..supported).chain([supported + 1, u32::MAX]) {
+                manifest.contributes.get_mut(&capability).unwrap().version = version;
+                assert_eq!(
+                    manifest.validate(),
+                    Err(ManifestError::Invalid),
+                    "{capability:?} v{version}"
+                );
+            }
+        }
     }
-
-    manifest.contributes.clear();
-    manifest.contributes.insert(
-        Capability::Management,
-        ContributionDeclaration {
-            id: "9acme.request-tags.management".into(),
-            version: 3,
-            stages: vec![Stage::Management],
-            input_formats: vec![],
-            output_formats: vec![],
-        },
-    );
-    assert_eq!(manifest.validate(), Err(ManifestError::Invalid));
-}
-
-#[test]
-fn retired_upstream_contract_requires_an_author_upgrade() {
-    let mut manifest = source_manifest();
-    manifest.contributes.clear();
-    manifest.contributes.insert(
-        Capability::UpstreamAdapter,
-        ContributionDeclaration {
-            id: "9acme.request-tags.upstream".into(),
-            version: 3,
-            stages: vec![Stage::Upstream],
-            input_formats: vec!["openai".into()],
-            output_formats: vec!["openai".into()],
-        },
-    );
-    assert!(manifest.validate().is_ok());
-    manifest
-        .contributes
-        .get_mut(&Capability::UpstreamAdapter)
-        .unwrap()
-        .version = 1;
-    assert_eq!(manifest.validate(), Err(ManifestError::Invalid));
 }
 
 #[test]
@@ -371,18 +359,19 @@ fn state_namespaces_are_base_infrastructure_with_bounded_versions() {
 }
 
 #[test]
-fn public_manifest_fields_use_only_the_v3_camel_case_shape() {
-    let value = serde_json::to_value(source_manifest()).unwrap();
-    assert!(value.get("manifestVersion").is_some());
-    assert!(value.get("displayName").is_some());
-    assert!(value.get("configurationSchema").is_some());
-    assert!(value.get("schema_version").is_none());
+fn manifest_round_trips_public_fields_and_rejects_unknown_fields() {
+    let manifest = source_manifest();
+    let mut value = serde_json::to_value(&manifest).unwrap();
+    assert_eq!(value["manifestVersion"], MANIFEST_VERSION);
+    assert_eq!(value["displayName"], manifest.display_name);
+    assert_eq!(value["configurationSchema"], manifest.configuration_schema);
+    assert_eq!(
+        serde_json::from_value::<Manifest>(value.clone()).unwrap(),
+        manifest
+    );
 
-    let mut old = value;
-    old.as_object_mut()
-        .unwrap()
-        .insert("schema_version".into(), json!(3));
-    assert!(serde_json::from_value::<Manifest>(old).is_err());
+    value["unknownField"] = json!(true);
+    assert!(serde_json::from_value::<Manifest>(value).is_err());
 }
 
 #[test]
@@ -438,27 +427,4 @@ fn contribution_declaration_uses_camel_case_description_fields() {
             "outputFormats":["openai"]
         })
     );
-}
-
-#[test]
-fn scheduler_requires_the_current_contract() {
-    let mut manifest = packaged_manifest();
-    manifest.contributes.clear();
-    manifest.contributes.insert(
-        Capability::Scheduler,
-        ContributionDeclaration {
-            id: "9acme.request-tags.scheduler".into(),
-            version: 3,
-            stages: vec![Stage::Scheduling],
-            input_formats: vec![],
-            output_formats: vec![],
-        },
-    );
-    assert!(manifest.validate().is_ok());
-    manifest
-        .contributes
-        .get_mut(&Capability::Scheduler)
-        .unwrap()
-        .version = 1;
-    assert_eq!(manifest.validate(), Err(ManifestError::Invalid));
 }

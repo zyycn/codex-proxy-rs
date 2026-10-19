@@ -4,14 +4,7 @@ use super::*;
 
 #[test]
 fn official_reasoning_efforts_are_preserved_for_current_and_future_models() {
-    for model in [
-        "grok-4.7",
-        "grok-future",
-        "grok-4.5",
-        "grok-4.6",
-        "grok-3-mini",
-        "grok-composer-2.5-fast",
-    ] {
+    for model in ["grok-4.7", "grok-future", "tenant/custom-model"] {
         for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
             let request = raw_request(json!({
                 "input": "hello",

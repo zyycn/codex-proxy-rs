@@ -297,15 +297,15 @@ async fn unified_login_returns_server_identity_and_rotates_the_previous_session(
 }
 
 #[tokio::test]
-async fn login_rejects_legacy_type_without_replacing_the_current_session() {
+async fn login_rejects_missing_mode_and_unknown_fields_without_replacing_the_session() {
     let (app, _) = auth_app().await;
     let cookie =
         session_cookie(&login(&app, json!({"mode": "key", "apiKey": RAW_KEY}), None).await);
     for body in [
-        json!({"type": "key", "apiKey": RAW_KEY}),
-        json!({"type": "admin", "password": "strong-admin-password"}),
-        json!({"mode": "key", "type": "key", "apiKey": RAW_KEY}),
-        json!({"mode": "admin", "type": "admin", "password": "strong-admin-password"}),
+        json!({"apiKey": RAW_KEY}),
+        json!({"password": "strong-admin-password"}),
+        json!({"mode": "key", "unknownField": true, "apiKey": RAW_KEY}),
+        json!({"mode": "admin", "unknownField": true, "password": "strong-admin-password"}),
     ] {
         let response = login(&app, body, Some(&cookie)).await;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
@@ -458,26 +458,26 @@ async fn key_store_outage_is_unavailable_not_expired_or_authenticated() {
 }
 
 #[tokio::test]
-async fn removed_auth_routes_do_not_fall_back_to_spa_or_accept_old_cookies() {
+async fn unknown_auth_routes_return_json_not_found() {
     let (app, _) = auth_app().await;
-    for path in ["/api/admin/auth/login", "/api/auth/unknown"] {
-        let response = app
-            .clone()
-            .oneshot(empty_request(Method::GET, path))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(response_json(response).await["code"], 40401);
-    }
+    let response = app
+        .oneshot(empty_request(Method::GET, "/api/auth/unknown"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response_json(response).await["code"], 40401);
+}
+
+#[tokio::test]
+async fn session_authentication_requires_the_configured_cookie_name() {
+    let (app, _) = auth_app().await;
     let cookie =
         session_cookie(&login(&app, json!({"mode": "key", "apiKey": RAW_KEY}), None).await);
-    for old_name in ["cpr_admin_session", "cpr_client_session"] {
-        let old_cookie = cookie.replace("cpr_session", old_name);
-        assert_eq!(
-            response_json(get(&app, "/api/auth/status", &old_cookie).await).await["data"]["authenticated"],
-            false
-        );
-    }
+    let unrelated_cookie = cookie.replace("cpr_session", "unrelated_session");
+    assert_eq!(
+        response_json(get(&app, "/api/auth/status", &unrelated_cookie).await).await["data"]["authenticated"],
+        false
+    );
 }
 
 #[test]

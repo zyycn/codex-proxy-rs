@@ -181,7 +181,7 @@ fn privacy_policy_is_required_and_rejects_unknown_contract_fields() {
         .remove("codexPrivacyPolicy");
     assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(missing).is_err());
     let mut unknown = update_body();
-    unknown["codexPrivacyPolicy"]["protectedFields"] = json!([]);
+    unknown["codexPrivacyPolicy"]["unknownField"] = json!(true);
     assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(unknown).is_err());
 }
 
@@ -472,110 +472,6 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
 }
 
 #[test]
-fn settings_request_and_response_fields_should_stay_in_lockstep() {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    use gateway_admin::model::Revision;
-    use gateway_admin::model::settings::RuntimeSettings;
-    use gateway_api::admin::settings::RuntimeSettingsView;
-    use gateway_core::account::RotationStrategy;
-    use gateway_core::routing::{PublicModelId, UpstreamModelId};
-
-    let request: UpdateRuntimeSettingsRequest =
-        serde_json::from_value(update_body()).expect("decode settings");
-    request.validate().expect("fixture settings must validate");
-
-    let request_fields: BTreeSet<String> = update_body()
-        .as_object()
-        .expect("request body object")
-        .keys()
-        .cloned()
-        .collect();
-    let settings = RuntimeSettings {
-        request_profiles: Default::default(),
-        config_revision: Revision::new(7).expect("revision"),
-        model_mappings: request
-            .model_mappings
-            .iter()
-            .map(|(public, upstream)| {
-                Ok((
-                    PublicModelId::new(public.clone())?,
-                    UpstreamModelId::new(upstream.clone())?,
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>, gateway_core::error::IdentifierError>>()
-            .expect("valid model mappings"),
-        rotation_strategy: RotationStrategy::parse(&request.rotation_strategy)
-            .expect("fixture rotation strategy"),
-        updated_at: chrono::Utc::now(),
-        values: gateway_admin::model::settings::RuntimeSettingsValues {
-            codex_privacy_policy: Default::default(),
-            request_location_enabled: false,
-            request_location: Default::default(),
-            refresh_margin_seconds: request.values.refresh_margin_seconds,
-            refresh_concurrency: u32::try_from(request.values.refresh_concurrency).expect("u32"),
-            max_concurrent_per_account: u32::try_from(request.values.max_concurrent_per_account)
-                .expect("u32"),
-            max_waiting_per_key: 0,
-            max_waiting_per_account: 0,
-            concurrency_wait_timeout_seconds: 30,
-            openai_guardian_reserved_concurrency: 0,
-            openai_account_affinity: gateway_core::account::AccountAffinity::Relaxed,
-            max_account_rotations: 3,
-            openai_session_affinity_ttl_hours: 24,
-            responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
-            smart_scheduling: request.values.smart_scheduling,
-            min_codex_desktop_version: request.values.min_codex_desktop_version,
-            min_codex_cli_version: request.values.min_codex_cli_version,
-            usage_retention_days: u32::try_from(request.values.usage_retention_days).expect("u32"),
-            ops_event_retention_days: u32::try_from(request.values.ops_event_retention_days)
-                .expect("u32"),
-            audit_retention_days: u32::try_from(request.values.audit_retention_days).expect("u32"),
-            account_auto_freeze_enabled: true,
-            account_auto_freeze_threshold: 12,
-            account_auto_freeze_window_seconds: 600,
-            account_auto_freeze_duration_seconds: 7_200,
-            account_auto_freeze_probe_enabled: true,
-            account_auto_freeze_probe_model: None,
-            account_auto_freeze_adaptive_concurrency: true,
-            account_warmup_enabled: false,
-            account_warmup_schedule_time: "08:00".to_owned(),
-            account_warmup_model: None,
-            reset_credit_lead_minutes: 10,
-            reset_credit_max_weekly_remaining_percent: None,
-        },
-    };
-
-    let response_fields: BTreeSet<String> = serde_json::to_value(RuntimeSettingsView::from((
-        settings,
-        gateway_api::TimePresenter::new(Default::default()),
-    )))
-    .expect("serialize view")
-    .as_object()
-    .expect("view object")
-    .keys()
-    .cloned()
-    .collect();
-    let mut expected_fields = request_fields;
-    expected_fields.insert("providerRequestProfiles".to_owned());
-    expected_fields.insert("openaiClientProfile".to_owned());
-    expected_fields.insert("xaiClientProfile".to_owned());
-    expected_fields.insert("updatedAt".to_owned());
-    expected_fields.insert("updatedAtDisplay".to_owned());
-    expected_fields.insert("smartSchedulingDefaults".to_owned());
-
-    assert_eq!(response_fields, expected_fields);
-}
-
-#[test]
-fn settings_request_accepts_json_bytes_with_flattened_fields() {
-    serde_json::from_slice::<UpdateRuntimeSettingsRequest>(
-        &serde_json::to_vec(&update_body()).unwrap(),
-    )
-    .expect("settings JSON bytes must decode like the HTTP request body");
-}
-
-#[test]
 fn settings_service_contract_stays_flat_and_rejects_unknown_fields() {
     use gateway_admin::model::settings::{ReplaceRuntimeSettings, RuntimeSettings};
 
@@ -610,17 +506,9 @@ fn settings_service_contract_stays_flat_and_rejects_unknown_fields() {
 }
 
 #[test]
-fn settings_request_should_reject_unknown_revision_field() {
+fn settings_request_should_reject_unknown_fields() {
     let mut body = update_body();
-    body["expectedConfigRevision"] = json!(7);
-
-    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
-}
-
-#[test]
-fn settings_request_should_reject_removed_bucket_retention() {
-    let mut body = update_body();
-    body["bucketRetentionDays"] = json!(365);
+    body["unknownSetting"] = json!(true);
 
     assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
 }
@@ -960,36 +848,23 @@ fn decompression_setting_should_reject_invalid_values() {
 }
 
 #[tokio::test]
-async fn settings_reject_removed_global_fast_policy() {
+async fn settings_update_rejects_unknown_fields_without_writing() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let app = app(fixture.state());
     let initial = fixture.settings.settings.lock().unwrap().clone();
-    for value in [json!(true), json!(false), Value::Null] {
-        let mut body = update_body();
-        body["disableFast"] = value;
-        let response = app
-            .clone()
-            .oneshot(request(
-                Method::POST,
-                "/api/admin/settings/update",
-                Some(body),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(*fixture.settings.settings.lock().unwrap(), initial);
-    }
+    let mut body = update_body();
+    body["unknownSetting"] = json!(true);
     let response = app
-        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(body),
+        ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(
-        response_json(response).await["data"]
-            .get("disableFast")
-            .is_none()
-    );
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(*fixture.settings.settings.lock().unwrap(), initial);
 }
 
 #[test]

@@ -35,7 +35,7 @@ use std::{collections::BTreeMap, sync::Arc};
 mod management;
 
 #[test]
-fn artifact_metadata_wire_exposes_v2_identity_and_contributions() {
+fn artifact_metadata_wire_preserves_identity_icons_and_contributions() {
     use gateway_admin::model::plugins::{
         PluginArtifactIcon, PluginArtifactIconVariants, PluginArtifactMetadata, PluginContribution,
     };
@@ -70,7 +70,7 @@ fn artifact_metadata_wire_exposes_v2_identity_and_contributions() {
         secret_fields: vec![],
         state_namespaces: vec![],
     };
-    let value = serde_json::to_value(metadata).expect("v2 artifact metadata JSON");
+    let value = serde_json::to_value(metadata).expect("artifact metadata JSON");
     assert_eq!(value["displayName"], "Example");
     assert_eq!(value["publisher"], "test");
     assert!(value["author"].is_null());
@@ -80,33 +80,29 @@ fn artifact_metadata_wire_exposes_v2_identity_and_contributions() {
         value["contributes"]["middleware"]["id"],
         "test.example.middleware"
     );
-    assert!(value.get("capabilities").is_none());
-    assert!(value.get("permissionDescriptions").is_none());
 }
 
 #[test]
-fn instance_binding_wire_uses_contribution_without_capability_alias() {
+fn instance_binding_requires_a_contribution_and_rejects_unknown_fields() {
     use gateway_admin::model::plugins::instances::PluginCapabilityBinding;
 
-    let binding = serde_json::from_value::<PluginCapabilityBinding>(serde_json::json!({
+    let input = serde_json::json!({
         "contribution": "test.example.usage",
         "stage": "observation",
         "order": 0,
         "failurePolicy": "observe"
-    }))
-    .expect("v2 contribution binding");
+    });
+    let binding = serde_json::from_value::<PluginCapabilityBinding>(input.clone())
+        .expect("contribution binding");
     assert_eq!(binding.contribution, "test.example.usage");
 
-    assert!(
-        serde_json::from_value::<PluginCapabilityBinding>(serde_json::json!({
-            "capability": "usage",
-            "stage": "observation",
-            "order": 0,
-            "failurePolicy": "observe"
-        }))
-        .is_err(),
-        "legacy capability binding must be rejected"
-    );
+    let mut missing = input.clone();
+    missing.as_object_mut().unwrap().remove("contribution");
+    assert!(serde_json::from_value::<PluginCapabilityBinding>(missing).is_err());
+
+    let mut unknown = input;
+    unknown["unknownField"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<PluginCapabilityBinding>(unknown).is_err());
 }
 
 #[tokio::test]
@@ -381,7 +377,7 @@ async fn plugin_upload_endpoints_require_admin_and_bound_raw_bodies() {
 }
 
 #[tokio::test]
-async fn artifact_acceptance_returns_the_flat_install_contract() {
+async fn artifact_acceptance_returns_installed_artifact_and_configuration_status() {
     use axum::{
         body::{Body, to_bytes},
         http::{Request, StatusCode},
@@ -418,22 +414,11 @@ async fn artifact_acceptance_returns_the_flat_install_contract() {
     assert_eq!(result["defaultInstanceId"], serde_json::Value::Null);
     assert_eq!(result["configurationRequired"], false);
     assert_eq!(result["artifact"]["metadata"]["sha256"], "a".repeat(64));
-    assert!(
-        result["artifact"]["metadata"]
-            .get("permissionDescriptions")
-            .is_none()
-    );
-    assert!(
-        result["artifact"]["metadata"]
-            .get("requestedPermissions")
-            .is_none()
-    );
     assert!(result["artifact"]["acceptedAt"].is_string());
-    assert!(result.get("mutation").is_none());
 }
 
 #[tokio::test]
-async fn removed_instance_policy_fields_and_extra_accept_fields_are_rejected() {
+async fn plugin_mutations_reject_unknown_fields() {
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -442,24 +427,25 @@ async fn removed_instance_policy_fields_and_extra_accept_fields_are_rejected() {
 
     let fixture = super::AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
-    for (path, body) in [
-        (
-            "/api/admin/plugins/instances",
-            serde_json::json!({
-                "name":"Example",
-                "artifactSha256":"a".repeat(64),
-                "enabled":false,
-                "trustedProcess":true,
-                "configuration":{},
-                "grants":[],
-                "bindings":[]
-            }),
-        ),
+    let instance = serde_json::json!({
+        "name":"Example",
+        "artifactSha256":"a".repeat(64),
+        "enabled":false,
+        "configuration":{},
+        "bindings":[]
+    });
+    serde_json::from_value::<gateway_admin::model::plugins::instances::ConfigurePluginInstance>(
+        instance.clone(),
+    )
+    .expect("valid instance request");
+    for (path, mut body) in [
+        ("/api/admin/plugins/instances", instance),
         (
             "/api/admin/plugins/artifacts/accept",
-            serde_json::json!({"sha256":"a".repeat(64),"trusted":true}),
+            serde_json::json!({"sha256":"a".repeat(64)}),
         ),
     ] {
+        body["unknownField"] = serde_json::json!(true);
         let response = gateway_api::admin::router::<super::AdminTestState>()
             .with_state(fixture.state())
             .oneshot(

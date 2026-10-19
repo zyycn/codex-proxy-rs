@@ -248,9 +248,8 @@ mod profile_statistics {
             value["activityInsights"]["invocations"][0]["usageCount"],
             29
         );
-        assert!(value.get("cycle").is_none());
-        assert!(value.get("models").is_none());
-        assert!(value.get("estimatedCost").is_none());
+        assert_eq!(value["activityInsights"]["fastModePercent"], 0.0);
+        assert!(value["activityInsights"]["invocations"][0]["skillId"].is_null());
     }
 
     #[test]
@@ -375,7 +374,7 @@ mod batch_update {
         assert!(request.concurrency_limit.is_none());
         assert!(
             serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
-                "accountIds": ["acct_test"], "enabled": true, "legacy": true
+                "accountIds": ["acct_test"], "enabled": true, "unknownField": true
             }))
             .is_err()
         );
@@ -583,12 +582,12 @@ mod actions {
     }
 
     #[test]
-    fn account_actions_should_require_frozen_account_ids_and_reject_unknown_revision() {
+    fn account_actions_should_validate_account_ids_and_reject_unknown_fields() {
         let id: AccountIdQuery =
             serde_json::from_value(json!({ "accountId": "acct_1" })).expect("decode ID query");
         assert!(id.validate().is_ok());
         let action: AccountActionRequest =
-            serde_json::from_value(json!({ "accountId": "legacy-id" })).expect("decode action");
+            serde_json::from_value(json!({ "accountId": "invalid-id" })).expect("decode action");
         assert_eq!(action.validate().unwrap_err().field(), "accountId");
         let refresh: AccountRefreshRequest = serde_json::from_value(json!({
             "accountId": "acct_1"
@@ -598,7 +597,7 @@ mod actions {
         assert!(
             serde_json::from_value::<AccountRefreshRequest>(json!({
                 "accountId": "acct_1",
-                "expectedConfigRevision": 0
+                "unknownField": true
             }))
             .is_err()
         );
@@ -772,15 +771,14 @@ mod actions {
         assert_eq!(invalid.validate().unwrap_err().field(), "data");
         assert!(
             serde_json::from_value::<AccountImportRequest>(json!({
-                "provider": "openai",
-                "document": {}
+                "provider": "openai"
             }))
             .is_err()
         );
         assert!(
             serde_json::from_value::<AccountImportRequest>(json!({
                 "provider": "openai",
-                "expectedConfigRevision": 7,
+                "unknownField": true,
                 "data": {}
             }))
             .is_err()

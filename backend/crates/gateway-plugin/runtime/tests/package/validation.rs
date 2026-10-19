@@ -278,7 +278,7 @@ fn icon_content_must_fully_decode_match_its_type_and_fit_dimensions() {
 }
 
 #[test]
-fn obsolete_manifest_fields_are_rejected_without_aliases() {
+fn manifest_rejects_unknown_fields_before_package_validation() {
     let manifest = serde_json::json!({
         "manifestVersion":2,
         "name": "example",
@@ -290,7 +290,8 @@ fn obsolete_manifest_fields_are_rejected_without_aliases() {
         "engines": {"codex-proxy-rs": ">=1.0.0, <2.0.0"},
         "main": "bin/worker",
         "runtime": "trustedProcess",
-        "capabilities": [{"capability":"request_normalizer"}]
+        "contributes": {},
+        "unknownField": true
     });
     let archive = crate::support::archive(BTreeMap::from([(
         "plugin.json".to_owned(),

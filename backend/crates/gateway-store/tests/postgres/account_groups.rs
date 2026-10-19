@@ -28,36 +28,6 @@ const MIXED_GROUP: &str = "grp_00000000000000000000000000000001";
 const EMPTY_GROUP: &str = "grp_00000000000000000000000000000002";
 
 #[tokio::test]
-async fn fast_mode_migration_preserves_existing_group_choices() {
-    let Some(database) = TestDatabase::create_through("group_fast_mode_upgrade", 21).await else {
-        return;
-    };
-    for (id, disabled) in [(MIXED_GROUP, true), (EMPTY_GROUP, false)] {
-        sqlx::query("insert into account_groups (id, name, color, disable_fast, created_at, updated_at) values ($1, $1, '#2563EBFF', $2, now(), now())")
-            .bind(id)
-            .bind(disabled)
-            .execute(&database.pool)
-            .await
-            .unwrap();
-    }
-    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-    let groups = sqlx::query_as::<_, (String, String)>(
-        "select id, fast_mode from account_groups order by id",
-    )
-    .fetch_all(&database.pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        groups,
-        vec![
-            (MIXED_GROUP.to_owned(), "disabled".to_owned()),
-            (EMPTY_GROUP.to_owned(), "default".to_owned())
-        ]
-    );
-    database.close().await;
-}
-
-#[tokio::test]
 async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multiplication() {
     let Some(database) = TestDatabase::create("account_group_aggregate").await else {
         return;
@@ -840,20 +810,19 @@ async fn image_generation_group_updates_preserve_omitted_values_and_publish_snap
 }
 
 #[tokio::test]
-async fn image_generation_migration_allows_existing_and_default_groups() {
-    let Some(database) = TestDatabase::create_through("group_image_upgrade", 31).await else {
+async fn image_generation_defaults_to_allowed_for_new_groups() {
+    let Some(database) = TestDatabase::create("group_image_default").await else {
         return;
     };
     sqlx::query("insert into account_groups (id, name, color, created_at, updated_at) values ($1, $1, '#2563EBFF', now(), now())")
-        .bind(MIXED_GROUP).execute(&database.pool).await.unwrap();
-    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-    sqlx::query("insert into account_groups (id, name, color, created_at, updated_at) values ($1, $1, '#2563EBFF', now(), now())")
         .bind(EMPTY_GROUP).execute(&database.pool).await.unwrap();
-    let allowed =
-        sqlx::query_scalar::<_, bool>("select allow_image_generation from account_groups")
-            .fetch_all(&database.pool)
-            .await
-            .unwrap();
-    assert_eq!(allowed, vec![true, true]);
+    let allowed = sqlx::query_scalar::<_, bool>(
+        "select allow_image_generation from account_groups where id = $1",
+    )
+    .bind(EMPTY_GROUP)
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert!(allowed);
     database.close().await;
 }

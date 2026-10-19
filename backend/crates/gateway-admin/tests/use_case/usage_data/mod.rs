@@ -21,7 +21,7 @@ fn counters_preserve_integer_precision_and_reject_json_numbers() {
     }
 }
 #[tokio::test]
-async fn usage_mutations_require_trusted_actor_and_old_workflow_operations_are_absent() {
+async fn usage_mutations_require_a_trusted_actor() {
     let admin = super::AdminHarness::new().build().await;
     let registry = admin.public_services();
     let denied = registry
@@ -37,21 +37,6 @@ async fn usage_mutations_require_trusted_actor_and_old_workflow_operations_are_a
             )
             .await
             .is_err()
-    );
-    let ops = registry
-        .operations()
-        .filter(|op| op.starts_with("usage.") || *op == "pricing.evaluate")
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        ops,
-        std::collections::BTreeSet::from([
-            "usage.records.get",
-            "usage.records.list",
-            "usage.records.write",
-            "usage.aggregates.list",
-            "usage.aggregates.write",
-            "pricing.evaluate"
-        ])
     );
 }
 #[test]

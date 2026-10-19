@@ -365,8 +365,8 @@ async fn websocket_execute_response_create_request_should_collect_completed_sse(
 }
 
 #[tokio::test]
-async fn websocket_exchange_should_accept_upstream_frame_above_removed_private_limit() {
-    const REMOVED_FRAME_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+async fn websocket_exchange_should_deliver_large_upstream_frames() {
+    const LARGE_DELTA_BYTES: usize = 17 * 1024 * 1024;
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -376,14 +376,13 @@ async fn websocket_exchange_should_accept_upstream_frame_above_removed_private_l
         let mut websocket =
             accept_codex_test_websocket_with(stream, |_request, _response| {}).await;
         let _message = websocket.next().await.unwrap().unwrap();
-        let oversized_event = json!({
+        let large_event = json!({
             "type": "response.output_text.delta",
-            "delta": "x".repeat(REMOVED_FRAME_LIMIT_BYTES + 1),
+            "delta": "x".repeat(LARGE_DELTA_BYTES),
         })
         .to_string();
-        assert!(oversized_event.len() > REMOVED_FRAME_LIMIT_BYTES);
         websocket
-            .send(Message::Text(oversized_event.into()))
+            .send(Message::Text(large_event.into()))
             .await
             .unwrap();
         websocket
@@ -391,7 +390,7 @@ async fn websocket_exchange_should_accept_upstream_frame_above_removed_private_l
                 json!({
                     "type": "response.completed",
                     "response": {
-                        "id": "resp_after_oversized_frame",
+                        "id": "resp_after_large_frame",
                         "object": "response",
                         "output": [],
                         "usage": {
@@ -421,11 +420,11 @@ async fn websocket_exchange_should_accept_upstream_frame_above_removed_private_l
 
     let response = execute_response_create_request(&prepared)
         .await
-        .expect("upstream frame above the former private limit should remain forwardable");
+        .expect("large upstream frame should remain forwardable");
     server.await.unwrap();
 
-    assert!(response.body.len() > REMOVED_FRAME_LIMIT_BYTES);
-    assert!(response.body.contains("resp_after_oversized_frame"));
+    assert!(response.body.len() > LARGE_DELTA_BYTES);
+    assert!(response.body.contains("resp_after_large_frame"));
 }
 
 #[tokio::test]

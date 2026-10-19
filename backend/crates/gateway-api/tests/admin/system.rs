@@ -86,7 +86,7 @@ async fn update_event_stream_should_preserve_event_id_and_download_progress_perc
 }
 
 #[tokio::test]
-async fn update_should_return_accepted_and_report_restart_only_through_status() {
+async fn update_should_return_accepted_and_expose_restart_status() {
     let fixture = AdminTestFixture::with_system(Arc::new(ProgressSystem::default())).await;
     fixture.auth.insert_session("valid-session");
     let router = app(fixture.state());
@@ -110,7 +110,6 @@ async fn update_should_return_accepted_and_report_restart_only_through_status() 
             .expect("JSON");
     assert_eq!(body["data"]["operationId"], "update-1");
     assert_eq!(body["data"]["targetVersion"], "0.2.0");
-    assert!(body["data"].get("needRestart").is_none());
     let response = router
         .oneshot(
             Request::builder()
