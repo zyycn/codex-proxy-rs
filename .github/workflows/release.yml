@@ -57,7 +57,7 @@ jobs:
         run: ruby .github/scripts/toolchains.rb >> "$GITHUB_OUTPUT"
 
       - name: Upload sealed plugin assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-release-assets
           path: dist/plugin-release-assets
@@ -143,7 +143,7 @@ jobs:
           CPR_BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/
@@ -196,7 +196,7 @@ jobs:
           CPR_BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/
@@ -219,19 +219,19 @@ jobs:
           ref: ${{ needs.release-info.outputs.git_sha }}
 
       - name: Download frontend artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: frontend-dist
           path: dist/frontend
 
       - name: Download binary artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: codex-proxy-rs-*
           path: dist/binaries
 
       - name: Download sealed plugin assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: plugin-release-assets
           path: dist/plugin-release-assets
@@ -250,7 +250,7 @@ jobs:
           subject-path: dist/release/*
 
       - name: Upload release assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: dist/release
@@ -283,19 +283,19 @@ jobs:
           ref: ${{ needs.release-info.outputs.git_sha }}
 
       - name: Download frontend artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: frontend-dist
           path: dist/docker/web/dist
 
       - name: Download Docker binary artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/docker-artifacts/codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
 
       - name: Download sealed plugin assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: plugin-release-assets
           path: dist/plugin-release-assets
@@ -362,7 +362,7 @@ jobs:
           printf '%s\n' "$IMAGE_DIGEST" > "dist/digests/linux-${IMAGE_ARCH}.txt"
 
       - name: Upload verified image digest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-digest-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/digests/*.txt
@@ -390,13 +390,13 @@ jobs:
           ref: ${{ needs.release-info.outputs.git_sha }}
 
       - name: Download release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: dist/release
 
       - name: Download verified image digests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: image-digest-*
           path: dist/digests
