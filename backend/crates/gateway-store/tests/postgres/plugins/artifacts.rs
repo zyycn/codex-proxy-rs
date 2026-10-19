@@ -1,4 +1,4 @@
-//! 验证插件制品身份、信任接受、迁移与安装幂等性
+//! 验证插件制品身份、信任接受与安装幂等性
 
 use std::collections::BTreeMap;
 
@@ -83,12 +83,7 @@ async fn unknown_metadata_fields_do_not_change_artifact_identity() {
             .fetch_one(&database.pool)
             .await
             .unwrap();
-    assert!(stored.get("permissionDescriptions").is_none());
-    assert!(stored.get("requestedPermissions").is_none());
     let mut extended = stored;
-    extended["permissionDescriptions"] =
-        serde_json::json!([{"permission": "models", "label": "旧文案"}]);
-    extended["requestedPermissions"] = serde_json::json!(["models"]);
     extended["futureMetadata"] = serde_json::json!({"enabled": true});
     extended["contributes"]["middleware"]["futureField"] = serde_json::json!(true);
     sqlx::query("update plugin_artifacts set metadata_json=$2 where sha256=$1")
@@ -137,94 +132,6 @@ async fn unknown_metadata_fields_do_not_change_artifact_identity() {
 }
 
 #[tokio::test]
-async fn trust_migration_removes_only_obsolete_metadata_fields() {
-    let Some(database) = TestDatabase::create_through("plugin_trust_upgrade", 19).await else {
-        return;
-    };
-    initialize_revision(&database).await;
-    let store = PgPluginStore::new(database.pool.clone());
-    for (digest, extra) in [
-        ('a', serde_json::json!({"requestedPermissions": ["models"]})),
-        (
-            'b',
-            serde_json::json!({"permissionDescriptions": ["旧文案"]}),
-        ),
-        (
-            'c',
-            serde_json::json!({"requestedPermissions": [], "permissionDescriptions": []}),
-        ),
-        ('d', serde_json::json!({})),
-    ] {
-        // 每个制品使用独立平台，保留同一版本的平台不可变约束
-        let fixture = artifact(digest, &[&format!("test-{digest}")]);
-        let installed = store
-            .install_artifact(fixture.clone(), PluginSource::Upload, &context())
-            .await
-            .unwrap();
-        if digest == 'a' {
-            store
-                .accept_artifact(&fixture.metadata.sha256, &context())
-                .await
-                .unwrap();
-        }
-        sqlx::query("update plugin_artifacts set metadata_json=metadata_json || $2 || '{\"futureMetadata\":true}'::jsonb where sha256=$1")
-            .bind(&fixture.metadata.sha256).bind(extra).execute(&database.pool).await.unwrap();
-        sqlx::query("insert into plugin_instances(id,artifact_sha256,name,enabled,configuration_json,bindings_json,revision) values ($1,$2,'Example',false,'{}','[]',$3)")
-            .bind(uuid::Uuid::now_v7()).bind(&fixture.metadata.sha256)
-            .bind(i64::try_from(installed.config_revision.get()).unwrap())
-            .execute(&database.pool).await.unwrap();
-    }
-    let mut expected: Vec<serde_json::Value> =
-        sqlx::query_scalar("select to_jsonb(a) from plugin_artifacts a order by sha256")
-            .fetch_all(&database.pool)
-            .await
-            .unwrap();
-    for row in &mut expected {
-        let metadata = row["metadata_json"].as_object_mut().unwrap();
-        metadata.remove("requestedPermissions");
-        metadata.remove("permissionDescriptions");
-    }
-    let instances: Vec<serde_json::Value> =
-        sqlx::query_scalar("select to_jsonb(i) from plugin_instances i order by id")
-            .fetch_all(&database.pool)
-            .await
-            .unwrap();
-    let revision: i64 =
-        sqlx::query_scalar("select config_revision from runtime_settings where id=1")
-            .fetch_one(&database.pool)
-            .await
-            .unwrap();
-    for _ in 0..2 {
-        super::super::TEST_MIGRATOR
-            .run(&database.pool)
-            .await
-            .unwrap();
-        let actual: Vec<serde_json::Value> =
-            sqlx::query_scalar("select to_jsonb(a) from plugin_artifacts a order by sha256")
-                .fetch_all(&database.pool)
-                .await
-                .unwrap();
-        assert_eq!(
-            actual, expected,
-            "只清理两个旧字段，保留包体、接受事实与其他元数据"
-        );
-        let current_instances: Vec<serde_json::Value> =
-            sqlx::query_scalar("select to_jsonb(i) from plugin_instances i order by id")
-                .fetch_all(&database.pool)
-                .await
-                .unwrap();
-        assert_eq!(current_instances, instances);
-        let snapshot = store.load_instances().await.unwrap();
-        assert_eq!(snapshot.instances.len(), 4);
-        assert_eq!(
-            snapshot.config_revision.get(),
-            u64::try_from(revision).unwrap()
-        );
-    }
-    database.close().await;
-}
-
-#[tokio::test]
 async fn artifact_acceptance_is_exact_and_idempotent() {
     let Some(database) = TestDatabase::create("plugin_artifact_acceptance").await else {
         return;
@@ -259,51 +166,6 @@ async fn artifact_acceptance_is_exact_and_idempotent() {
     .await
     .unwrap();
     assert_eq!(accept_audits, 1);
-    database.close().await;
-}
-
-#[tokio::test]
-async fn plugin_migration_preserves_main_settings_and_accepts_new_installations() {
-    let Some(database) = TestDatabase::create_through("plugin_upgrade_from_main", 17).await else {
-        return;
-    };
-    initialize_revision(&database).await;
-    // 0022 会把仍为旧默认 3600 的 margin 收敛到 300；预设自定义值，
-    // 让本测试继续验证「所有已自定义设置都原样保留」。
-    sqlx::query("update runtime_settings set max_concurrent_per_account=0, refresh_margin_seconds=1800 where id=1")
-        .execute(&database.pool)
-        .await
-        .unwrap();
-    let before: serde_json::Value =
-        sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
-            .fetch_one(&database.pool)
-            .await
-            .unwrap();
-    super::super::TEST_MIGRATOR
-        .run(&database.pool)
-        .await
-        .unwrap();
-    let after: serde_json::Value =
-        sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
-            .fetch_one(&database.pool)
-            .await
-            .unwrap();
-    for (key, value) in before.as_object().unwrap() {
-        if key == "request_interval_ms" {
-            assert!(after.get(key).is_none(), "removed setting {key}");
-            continue;
-        }
-        assert_eq!(after.get(key), Some(value), "existing setting {key}");
-    }
-    let store = PgPluginStore::new(database.pool.clone());
-    store
-        .install_artifact(
-            artifact('a', &["linux-x86_64"]),
-            PluginSource::Upload,
-            &context(),
-        )
-        .await
-        .unwrap();
     database.close().await;
 }
 

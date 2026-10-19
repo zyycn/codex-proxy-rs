@@ -18,7 +18,6 @@ mod admission_recovery;
 mod analytics;
 mod analytics_buckets;
 mod analytics_reset;
-mod analytics_upgrade;
 mod backup;
 mod client_budgets;
 mod client_keys;
@@ -69,10 +68,6 @@ pub(super) fn admin_account_store(pool: &PgPool) -> PgAdminAccountStore {
 
 impl TestDatabase {
     pub(super) async fn create(label: &str) -> Option<Self> {
-        Self::create_through(label, i64::MAX).await
-    }
-
-    pub(super) async fn create_through(label: &str, migration_version: i64) -> Option<Self> {
         let database_url = crate::support::test_env("CPR_TEST_DATABASE_URL")?;
         let schema = format!("cpr_store_{label}_{}", Uuid::new_v4().simple());
         // 临时 schema 验证事务可见性与回滚，不模拟 PostgreSQL 掉电恢复
@@ -95,7 +90,7 @@ impl TestDatabase {
             .await
             .expect("connect isolated test schema");
         TEST_MIGRATOR
-            .run_to(migration_version, &pool)
+            .run(&pool)
             .await
             .expect("apply test migrations");
         Some(Self {

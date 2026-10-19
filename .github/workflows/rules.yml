@@ -33,14 +33,23 @@ jobs:
               ...params,
               per_page: 100,
             });
+            // 按 PR 作者识别官方机器人，维护者重开或编辑 PR 时仍使用同一判断
+            const isDependabot = pr.user.login === 'dependabot[bot]'
+              && pr.user.type === 'Bot'
+              && pr.head.repo?.full_name === `${owner}/${repo}`;
+            const isDependencyUpdate = file => isDependabot
+              && file.status === 'modified'
+              && (/^\.github\/workflows\/[^/]+\.ya?ml$/.test(file.filename)
+                || /^\.github\/actions\/.+\/(?:action\.ya?ml|Dockerfile)$/.test(file.filename));
             const isProtectedRule = path => typeof path === 'string'
               && (path === 'AGENTS.md' || path.endsWith('/AGENTS.md')
                 || path === 'CONTRIBUTING.md'
                 || path === '.agents/skills' || path.startsWith('.agents/skills/')
                 || path === '.github' || path.startsWith('.github/'));
 
-            // 同时检查重命名前后的路径，避免通过移走规则文件绕过检查。
-            if (!files.some(file => isProtectedRule(file.filename) || isProtectedRule(file.previous_filename))) {
+            // 依赖更新只豁免已有文件的修改，重命名前后的受保护路径仍参与检查
+            if (!files.some(file => !isDependencyUpdate(file)
+              && (isProtectedRule(file.filename) || isProtectedRule(file.previous_filename)))) {
               core.info('No protected contribution rule changes detected.');
               return;
             }

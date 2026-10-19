@@ -85,7 +85,9 @@ PR 不接受以下协作规则文件的新增、修改、删除或重命名：
 - `.agents/skills/` 中的所有文件，包括技能入口、引用文档、配置和脚本
 - `.github/` 中的所有文件，包括工作流、Actions、Issue／PR 模板和依赖更新配置
 
-调整这些文件时先提交 Issue 说明原因和建议，由维护者处理；[规则保护工作流](.github/workflows/rules.yml) 会提示并关闭包含此类变更的 PR。撤销相关变更后可以重新打开 PR，继续正常检查
+官方 `dependabot[bot]` 从本仓库分支发起的依赖更新可修改 `.github/workflows/` 中已有的 YAML 工作流，以及 `.github/actions/` 下已有的 `action.yml`、`action.yaml` 和 `Dockerfile`，继续执行正常审查与 CI；其他受保护文件以及新增、删除、重命名不在例外范围内
+
+除此之外，调整这些文件时先提交 Issue 说明原因和建议，由维护者处理；[规则保护工作流](.github/workflows/rules.yml) 会提示并关闭包含此类变更的 PR。撤销相关变更后可以重新打开 PR，继续正常检查
 
 源码变更遵守现有架构边界与迁移冻结规则，由对应 CI 检查执行；不额外设立整块业务目录的 PR 禁改清单。构建、测试和安全扫描复用现有工作流
 

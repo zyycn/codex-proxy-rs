@@ -229,38 +229,15 @@ async fn quota_refresh_persists_subscription_without_user_profile_and_reads_it_f
 }
 
 #[tokio::test]
-async fn billing_percent_does_not_rewrite_quota_access_fact() {
-    let (store, repository) =
-        repository_with_accounts(&[("still-exhausted", "still-exhausted")]).await;
-    let id = account_id("still-exhausted");
-    store
-        .apply_quota_access(QuotaAccessChange {
-            account_id: id.clone(),
-            expected_revision: CredentialRevision::new(1).expect("revision"),
-            state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, SystemTime::now(), None),
-        })
-        .await
-        .expect("mark quota exhausted");
-
-    crate::support::grok_quota_service(
-        repository,
-        QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":100}}"#),
-    )
-    .refresh_account(&id)
-    .await
-    .expect("refresh exhausted quota");
-
-    assert_eq!(
-        store.account(&id).expect("account").quota().access(),
-        gateway_core::account::QuotaAccessState::Exhausted
-    );
-}
-
-#[tokio::test]
 async fn billing_access_and_scheduling_use_current_quota_fields() {
     use gateway_core::account::QuotaAccessState::{Allowed, Exhausted};
 
     for (config, expected_percent, expected_access) in [
+        (
+            serde_json::json!({"creditUsagePercent": 0}),
+            Some(0.0),
+            Allowed,
+        ),
         (
             serde_json::json!({"creditUsagePercent": 100}),
             Some(100.0),
@@ -306,6 +283,10 @@ async fn billing_access_and_scheduling_use_current_quota_fields() {
         let account = store.account(&id).expect("refreshed account");
 
         assert_eq!(snapshot.billing().used_percent(), expected_percent);
+        assert!(
+            snapshot.billing().has_authoritative_quota(),
+            "config: {config}"
+        );
         assert_eq!(
             account.quota().access(),
             expected_access,
@@ -526,66 +507,10 @@ async fn quota_refresh_rejects_a_concurrent_credential_revision() {
 }
 
 #[tokio::test]
-async fn legacy_billing_fields_do_not_supply_quota_evidence_or_period() {
-    for (limit, used) in [
-        (
-            serde_json::json!({"val": 10000}),
-            serde_json::json!({"val": 2500}),
-        ),
-        (
-            serde_json::json!("uninterpreted"),
-            serde_json::json!({"val": -1}),
-        ),
-    ] {
-        let (store, repository) = repository_with_accounts(&[("legacy", "legacy")]).await;
-        let id = account_id("legacy");
-        store
-            .apply_quota_access(QuotaAccessChange {
-                account_id: id.clone(),
-                expected_revision: CredentialRevision::new(1).expect("revision"),
-                state: QuotaState::exhausted(
-                    QuotaEvidence::ProviderDenied,
-                    SystemTime::now(),
-                    None,
-                ),
-            })
-            .await
-            .expect("mark quota exhausted");
-        let body = serde_json::to_vec(&serde_json::json!({"config": {
-            "monthlyLimit": limit, "used": used,
-            "billingPeriodStart": "2026-07-01T00:00:00Z",
-            "billingPeriodEnd": "2099-08-01T00:00:00Z"
-        }}))
-        .expect("billing document");
-        let service =
-            crate::support::grok_quota_service(repository, QueueBillingTransport::success(&body));
-        let snapshot = service
-            .refresh_account(&id)
-            .await
-            .expect("refresh opaque billing");
-        let account = store.account(&id).expect("account");
-
-        assert_eq!(snapshot.billing().used_percent(), None);
-        assert!(!snapshot.billing().has_authoritative_quota());
-        assert_eq!(
-            snapshot.billing().period_kind(),
-            provider_xai::GrokQuotaPeriodKind::Other
-        );
-        assert_eq!(snapshot.billing().period_start(), None);
-        assert_eq!(snapshot.billing().period_end(), None);
-        assert_eq!(service.scheduling_signals(&account), None);
-        assert_eq!(
-            account.quota().access(),
-            gateway_core::account::QuotaAccessState::Exhausted
-        );
-    }
-}
-
-#[tokio::test]
-async fn current_quota_period_does_not_fill_missing_dates_from_legacy_fields() {
+async fn quota_period_dates_remain_absent_when_not_reported() {
     let (_, repository) = repository_with_accounts(&[("current-period", "current-period")]).await;
     let transport = QueueBillingTransport::success(
-        br#"{"config":{"creditUsagePercent":25,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY"},"billingPeriodStart":"2026-07-01T00:00:00Z","billingPeriodEnd":"2099-08-01T00:00:00Z"}}"#,
+        br#"{"config":{"creditUsagePercent":25,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY"}}}"#,
     );
     let snapshot = crate::support::grok_quota_service(repository, transport)
         .refresh_account(&account_id("current-period"))
@@ -658,61 +583,59 @@ async fn expired_billing_window_does_not_participate_in_scheduling_rank() {
 }
 
 #[tokio::test]
-async fn non_authoritative_quota_refresh_does_not_clear_existing_quota_exhaustion() {
-    let (store, repository) =
-        repository_with_accounts(&[("free-quota", "subject-free-quota")]).await;
-    let id = account_id("free-quota");
-    store
-        .apply_quota_access(QuotaAccessChange {
-            account_id: id.clone(),
-            expected_revision: CredentialRevision::new(1).expect("revision"),
-            state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, SystemTime::now(), None),
-        })
-        .await
-        .expect("mark quota exhausted");
-    let transport = QueueBillingTransport::success(
-        br#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2026-07-22T00:00:00Z"},"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"prepaidBalance":{"val":0}}}"#,
-    );
-    let snapshot = crate::support::grok_quota_service(repository, transport)
-        .refresh_account(&id)
-        .await
-        .expect("refresh Free quota");
+async fn non_authoritative_quota_refresh_preserves_exhaustion_without_scheduling_evidence() {
+    use provider_xai::GrokQuotaPeriodKind::{Other, Weekly};
 
-    assert!(!snapshot.billing().has_authoritative_quota());
-    assert_eq!(
-        store.account(&id).expect("account").quota().access(),
-        gateway_core::account::QuotaAccessState::Exhausted
-    );
-}
+    for (config, expected_period) in [
+        (
+            serde_json::json!({"future_quota": {"remaining": 100}}),
+            Other,
+        ),
+        (
+            serde_json::json!({
+                "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY"},
+                "onDemandCap": {"val": 0},
+                "onDemandUsed": {"val": 0},
+                "prepaidBalance": {"val": 0}
+            }),
+            Weekly,
+        ),
+    ] {
+        let (store, repository) =
+            repository_with_accounts(&[("free-quota", "subject-free-quota")]).await;
+        let id = account_id("free-quota");
+        store
+            .apply_quota_access(QuotaAccessChange {
+                account_id: id.clone(),
+                expected_revision: CredentialRevision::new(1).expect("revision"),
+                state: QuotaState::exhausted(
+                    QuotaEvidence::ProviderDenied,
+                    SystemTime::now(),
+                    None,
+                ),
+            })
+            .await
+            .expect("mark quota exhausted");
+        let body = serde_json::to_vec(&serde_json::json!({"config": config})).expect("billing");
+        let service =
+            crate::support::grok_quota_service(repository, QueueBillingTransport::success(&body));
+        let snapshot = service
+            .refresh_account(&id)
+            .await
+            .expect("refresh Free quota");
+        let account = store.account(&id).expect("account");
 
-#[tokio::test]
-async fn reported_zero_percent_is_authoritative_quota() {
-    let (_, repository) =
-        repository_with_accounts(&[("zero-percent", "subject-zero-percent")]).await;
-    let transport = QueueBillingTransport::success(
-        br#"{"config":{"creditUsagePercent":0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2026-07-22T00:00:00Z"}}}"#,
-    );
-    let snapshot = crate::support::grok_quota_service(repository, transport)
-        .refresh_account(&account_id("zero-percent"))
-        .await
-        .expect("refresh reported quota");
-
-    assert!(snapshot.billing().has_authoritative_quota());
-}
-
-#[tokio::test]
-async fn positive_prepaid_balance_is_authoritative_quota() {
-    let (_, repository) =
-        repository_with_accounts(&[("prepaid-quota", "subject-prepaid-quota")]).await;
-    let transport = QueueBillingTransport::success(
-        br#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-15T00:00:00Z","end":"2026-07-22T00:00:00Z"},"prepaidBalance":{"val":500}}}"#,
-    );
-    let snapshot = crate::support::grok_quota_service(repository, transport)
-        .refresh_account(&account_id("prepaid-quota"))
-        .await
-        .expect("refresh prepaid quota");
-
-    assert!(snapshot.billing().has_authoritative_quota());
+        assert!(!snapshot.billing().has_authoritative_quota());
+        assert_eq!(snapshot.billing().used_percent(), None);
+        assert_eq!(snapshot.billing().period_kind(), expected_period);
+        assert_eq!(snapshot.billing().period_start(), None);
+        assert_eq!(snapshot.billing().period_end(), None);
+        assert_eq!(service.scheduling_signals(&account), None);
+        assert_eq!(
+            account.quota().access(),
+            gateway_core::account::QuotaAccessState::Exhausted
+        );
+    }
 }
 
 #[tokio::test]

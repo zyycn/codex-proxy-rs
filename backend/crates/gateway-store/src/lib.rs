@@ -46,4 +46,4 @@ pub use bundle::*;
 pub use config::*;
 pub use value::*;
 pub(crate) use workers::*;
-pub use workers::{CommandStoreDrainError, PostgresHealthProbe, run_request_analytics_cycle};
+pub use workers::{CommandStoreDrainError, PostgresHealthProbe, RequestAnalyticsCycle};

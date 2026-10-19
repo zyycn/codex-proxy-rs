@@ -20,7 +20,7 @@ fn store_config_should_derive_backup_staging_from_runtime_data_dir() {
 }
 
 #[test]
-fn store_pool_config_ignores_unknown_options_and_keeps_connection_pool_limits() {
+fn store_pool_config_defaults_reserve_capacity_for_observability() {
     let pool: StorePoolConfig =
         serde_json::from_value(serde_json::json!({})).expect("default pool configuration");
 
@@ -36,13 +36,6 @@ fn store_pool_config_ignores_unknown_options_and_keeps_connection_pool_limits() 
         }
         .observability_max_connections(),
         40
-    );
-    assert_eq!(
-        serde_json::from_value::<StorePoolConfig>(serde_json::json!({
-            "statement_timeout_seconds": 60,
-        }))
-        .unwrap(),
-        pool,
     );
 }
 

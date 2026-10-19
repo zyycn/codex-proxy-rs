@@ -5,14 +5,6 @@ use std::path::Path;
 use provider_openai::config::{DEFAULT_STREAM_MAX_RETRIES, MAX_STREAM_MAX_RETRIES, OpenAiConfig};
 
 #[test]
-fn openai_config_ignores_removed_yaml_identity_fields() {
-    let config: OpenAiConfig = serde_json::from_value(serde_json::json!({
-        "wire_profile": {"originator": "legacy-client", "codex_version": "invalid", "residency": "us"}
-    })).unwrap();
-    assert_eq!(config, OpenAiConfig::default());
-}
-
-#[test]
 fn openai_config_keeps_residency_separate_from_client_identity() {
     use provider_openai::transport::profile::CodexResidency;
     let config: OpenAiConfig = serde_json::from_str(r#"{"residency":"us"}"#).unwrap();
@@ -97,10 +89,6 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
             "https://auth.openai.com/oauth/token",
             u32::try_from(DEFAULT_STREAM_MAX_RETRIES).expect("default retry budget fits u32"),
         )
-    );
-    assert_eq!(
-        provider_openai::transport::profile::CodexWireProfile::default().user_agent(),
-        "Codex Desktop/0.153.4 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.51231)"
     );
 }
 

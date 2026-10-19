@@ -119,24 +119,23 @@ fn raw_identity_rejects_injection_conflicting_headers_and_unknown_modes() {
 }
 
 #[test]
-fn old_configuration_and_old_frozen_profile_keep_their_existing_identity() {
+fn preset_identity_round_trip_preserves_request_headers_and_official_preview() {
     let state = CodexWireProfileState::new(CodexWireProfile::default());
-    let legacy = ClientProfileSelection::default();
-    let resolved = legacy.resolve(&state).unwrap();
+    let configuration = ClientProfileSelection::default().document().unwrap();
+    let resolved = RequestProfileSelection::parse(&configuration)
+        .unwrap()
+        .resolve(&state)
+        .unwrap();
+    let restored: CodexWireProfile =
+        serde_json::from_value(serde_json::to_value(&resolved).unwrap()).unwrap();
+
     assert_eq!(
-        RequestProfileSelection::parse(&legacy.document().unwrap())
-            .unwrap()
-            .resolve(&state)
-            .unwrap(),
-        resolved
+        build_codex_model_headers(&restored, "Bearer fixture", None).unwrap(),
+        build_codex_model_headers(&resolved, "Bearer fixture", None).unwrap()
     );
-    let old_document = serde_json::to_value(&resolved).unwrap();
-    assert!(old_document.get("exact_user_agent").is_none());
-    let restored: CodexWireProfile = serde_json::from_value(old_document).unwrap();
-    assert_eq!(restored.user_agent(), resolved.user_agent());
     assert_eq!(
         state
-            .preview_selection(&legacy.document().unwrap())
+            .preview_selection(&configuration)
             .unwrap()
             .expose_to_provider()["versionSource"],
         "official"

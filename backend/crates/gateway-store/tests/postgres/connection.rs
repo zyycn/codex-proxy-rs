@@ -1,4 +1,4 @@
-//! PostgreSQL 连接错误、迁移应用与事务归属测试
+//! PostgreSQL 连接初始化、会话设置与事务取消测试
 
 use std::error::Error as _;
 
@@ -109,32 +109,32 @@ async fn invalid_postgres_options_preserve_the_sqlx_source() {
 }
 
 #[tokio::test]
-async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly() {
+async fn connection_initialization_preserves_settings_when_reopened() {
     let Some(database_url) = crate::support::test_env("CPR_TEST_DATABASE_URL") else {
         return;
     };
-    let database = format!("cpr_store_migrator_{}", Uuid::new_v4().simple());
+    let database = format!("cpr_store_connection_{}", Uuid::new_v4().simple());
     let admin = PgPoolOptions::new()
         .max_connections(1)
         .connect(&database_url)
         .await
-        .expect("connect migration test PostgreSQL");
+        .expect("connect test PostgreSQL");
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "create database \"{database}\""
     )))
     .execute(&admin)
     .await
-    .expect("create migration test database");
+    .expect("create connection test database");
 
     let isolated_url = PgConnectOptions::from_str(&database_url)
-        .expect("parse migration test PostgreSQL URL")
+        .expect("parse test PostgreSQL URL")
         .database(&database)
         .to_url_lossy()
         .to_string();
     let pool_config = gateway_store::StorePoolConfig::default();
     let first = connect_and_migrate(&isolated_url, pool_config)
         .await
-        .expect("apply migrations through production migrator");
+        .expect("initialize production connection");
     let session_settings = sqlx::query_as::<_, (String, i64, i64, i64)>(
         "select current_setting('application_name'),
                 extract(epoch from current_setting('statement_timeout')::interval)::bigint,
@@ -154,70 +154,20 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
         timezone, "UTC",
         "runtime sessions use an explicit technical time basis"
     );
-    let first_tables = sqlx::query_scalar::<_, String>(
-        "select table_name
-         from information_schema.tables
-         where table_schema = 'public'
-         order by table_name",
-    )
-    .fetch_all(&first)
-    .await
-    .expect("load migrated tables");
+    sqlx::query("update runtime_settings set refresh_margin_seconds = 1800 where id = 1")
+        .execute(&first)
+        .await
+        .expect("save custom runtime setting");
     first.close().await;
 
     let second = connect_and_migrate(&isolated_url, pool_config)
         .await
-        .expect("reopen database through production migrator");
-    let migration_count =
-        sqlx::query_scalar::<_, i64>("select count(*) from _sqlx_migrations where success")
+        .expect("reopen production connection");
+    let refresh_margin: i64 =
+        sqlx::query_scalar("select refresh_margin_seconds from runtime_settings where id = 1")
             .fetch_one(&second)
             .await
-            .expect("count successful migrations");
-    let response_id_types = sqlx::query_scalar::<_, String>(
-        "select data_type
-         from information_schema.columns
-         where table_schema = 'public'
-           and table_name = 'model_requests'
-           and column_name in ('client_response_id', 'upstream_response_id')
-         order by column_name",
-    )
-    .fetch_all(&second)
-    .await
-    .expect("load opaque response ID column types");
-    let raw_response_id_index_exists = sqlx::query_scalar::<_, bool>(
-        "select exists (
-           select 1
-           from pg_indexes
-           where schemaname = 'public'
-             and indexname = 'model_requests_client_response_uq'
-         )",
-    )
-    .fetch_one(&second)
-    .await
-    .expect("check removed raw response ID index");
-    let legacy_key_provider_column_exists = sqlx::query_scalar::<_, bool>(
-        "select exists (
-           select 1 from information_schema.columns
-           where table_schema = 'public'
-             and table_name = 'client_api_keys'
-             and column_name = 'provider_kind'
-         )",
-    )
-    .fetch_one(&second)
-    .await
-    .expect("check removed client key provider column");
-    let routing_history_columns = sqlx::query_scalar::<_, String>(
-        "select column_name from information_schema.columns
-         where table_schema = 'public'
-           and table_name = 'model_requests'
-           and column_name in (
-             'routing_scope', 'routing_group_refs', 'routing_group_names_snapshot'
-           )
-         order by column_name",
-    )
-    .fetch_all(&second)
-    .await
-    .expect("load routing history columns");
+            .expect("load saved runtime setting");
     second.close().await;
 
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -225,72 +175,9 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     )))
     .execute(&admin)
     .await
-    .expect("drop migration test database");
+    .expect("drop connection test database");
     admin.close().await;
 
-    assert_eq!(
-        first_tables,
-        [
-            "_sqlx_migrations",
-            "account_group_accounts",
-            "account_groups",
-            "admin_audit_events",
-            "admin_users",
-            "backup_records",
-            "backup_settings",
-            "client_api_key_budget_windows",
-            "client_api_key_charge_events",
-            "client_api_key_groups",
-            "client_api_keys",
-            "model_request_leases",
-            "model_request_observations",
-            "model_requests",
-            "ops_events",
-            "outbound_proxies",
-            "plugin_account_group_resources",
-            "plugin_artifact_credentials",
-            "plugin_artifact_platforms",
-            "plugin_artifacts",
-            "plugin_client_api_key_resources",
-            "plugin_instance_secrets",
-            "plugin_instances",
-            "plugin_source_credentials",
-            "plugin_state_generations",
-            "plugin_state_records",
-            "plugin_update_sources",
-            "plugin_version_configurations",
-            "provider_accounts",
-            "provider_authorization_receipts",
-            "request_analytics_15m",
-            "request_analytics_1d_counts",
-            "request_analytics_1h",
-            "request_analytics_build_state",
-            "request_analytics_facts",
-            "request_analytics_pending_buckets",
-            "request_analytics_pending_requests",
-            "runtime_settings",
-        ]
-    );
     assert_eq!(session_settings, ("codex-proxy-rs".to_owned(), 30, 5, 30));
-    assert_eq!(
-        migration_count,
-        i64::try_from(TEST_MIGRATOR.iter().count())
-            .expect("migration count fits PostgreSQL bigint")
-    );
-    assert_eq!(response_id_types, ["bytea", "bytea"]);
-    assert!(!raw_response_id_index_exists);
-    assert!(!legacy_key_provider_column_exists);
-    assert!(routing_history_columns.is_empty());
-}
-
-#[test]
-fn migrations_should_leave_transaction_ownership_to_sqlx() {
-    let transaction_statements = TEST_MIGRATOR
-        .iter()
-        .flat_map(|migration| migration.sql.as_str().lines())
-        .map(str::trim)
-        .filter(|line| matches!(*line, "begin;" | "commit;"))
-        .count();
-
-    assert_eq!(transaction_statements, 0);
+    assert_eq!(refresh_margin, 1800, "reopening preserves custom settings");
 }

@@ -375,18 +375,17 @@ fn client_key_mutations_should_validate_text_limits_and_unknown_fields() {
     assert!(
         serde_json::from_value::<UpdateClientKeyRequest>(json!({
             "id": "key_1",
-            "expectedConfigRevision": 1,
             "name": "key",
             "groupIds": [],
             "maxConcurrency": 0,
             "requestsPerMinute": 0,
-            "tokensPerMinute": 0
+            "unknownField": true
         }))
         .is_err()
     );
     assert!(
         serde_json::from_value::<CreateClientKeyRequest>(json!({
-            "expectedConfigRevision": 7,
+            "unknownField": true,
             "name": "terminal key",
             "groupIds": [],
             "maxConcurrency": 2,
@@ -458,7 +457,6 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
     ));
     let list =
         serde_json::to_value(ClientKeyListData::new(vec![view], None, 1)).expect("serialize list");
-    assert!(list.get("configRevision").is_none());
     assert_eq!(list["total"], 1);
     assert_eq!(list["items"][0]["id"], "key_visible");
     assert_eq!(
@@ -468,12 +466,9 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
     assert_eq!(list["items"][0]["routingScope"], "all");
     assert_eq!(list["items"][0]["maxConcurrency"], 2);
     assert_eq!(list["items"][0]["requestsPerMinute"], 60);
-    assert!(list["items"][0].get("tokensPerMinute").is_none());
-    assert!(list["items"][0].get("policyJson").is_none());
     assert_eq!(list["items"][0]["dailyLimitUsd"], "0");
     assert_eq!(list["items"][0]["weeklyLimitUsd"], "0");
     assert_eq!(list["items"][0]["dailyUsedUsd"], "0");
-    assert!(list["items"][0].get("unresolvedRequests").is_none());
     assert_eq!(
         DateTime::parse_from_rfc3339(
             list["items"][0]["lastUsedAt"]

@@ -192,6 +192,8 @@ async fn apply_changes(
     }
     let mut buckets =
         BTreeMap::<DateTime<Utc>, BTreeMap<(String, Vec<String>, String), MetricState>>::new();
+    let mut empty_groups = Vec::new();
+    let mut rebuild = Vec::new();
     for (key, change) in changes {
         if change.previous.encode()? == change.current.encode()?
             && change.previous.last_used_at() == change.current.last_used_at()
@@ -202,27 +204,41 @@ async fn apply_changes(
         let needs_rebuild = subtract(&mut state, &change.previous, &change.current)?;
         state.merge(&change.current)?;
         if state.count("request_count") == 0 {
-            let statement = format!(
-                "delete from {table} where bucket_start=$1 and collection=$2 and dimensions=$3 and outcome=$4"
-            );
-            sqlx::query(sqlx::AssertSqlSafe(statement))
-                .bind(key.0)
-                .bind(&key.1)
-                .bind(&key.2)
-                .bind(&key.3)
-                .execute(&mut **tx)
-                .await
-                .map_err(|error| postgres_unavailable("remove empty analytics group", error))?;
+            empty_groups.push(serde_json::json!({
+                "bucket_start": key.0,
+                "collection": key.1,
+                "dimensions": key.2,
+                "outcome": key.3,
+            }));
         } else {
             // 预测状态只有可加计数和美元总额，零金额无需修复币种存在性
             if needs_rebuild && key.1 != forecast::COLLECTION {
-                state = rebuild_group(tx, hourly, progress, &key).await?;
+                rebuild.push(key);
+                continue;
             }
             buckets
                 .entry(key.0)
                 .or_default()
                 .insert((key.1, key.2, key.3), state);
         }
+    }
+    for (key, state) in rebuild_groups(tx, hourly, progress, rebuild).await? {
+        buckets
+            .entry(key.0)
+            .or_default()
+            .insert((key.1, key.2, key.3), state);
+    }
+    // 保留期缩短会同时清空大量分组，集合删除避免 SQL 往返随分组数放大
+    for groups in empty_groups.chunks(1_000) {
+        let statement = format!(
+            "delete from {table} a using jsonb_to_recordset($1::jsonb) k(bucket_start timestamptz,collection text,dimensions text[],outcome text)
+             where a.bucket_start=k.bucket_start and a.collection=k.collection and a.dimensions=k.dimensions and a.outcome=k.outcome"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(statement))
+            .bind(sqlx::types::Json(groups))
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| postgres_unavailable("remove empty analytics groups", error))?;
     }
     write_bucket_groups(tx, table, buckets).await
 }
@@ -311,61 +327,91 @@ pub(super) fn subtract(
     Ok(rebuild)
 }
 
-async fn rebuild_group(
+async fn rebuild_groups(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     hourly: bool,
     progress: &BTreeMap<DateTime<Utc>, Progress>,
-    key: &GroupKey,
-) -> StoreResult<MetricState> {
-    let mut end = key.0 + TimeDelta::seconds(if hourly { 3600 } else { 900 });
-    let mut cursor = None;
-    if hourly {
-        if let Some((_, owner)) = progress.range(key.0..end).find(|(_, p)| p.phase == 4)
-            && let Some(time) = owner.started_at
-        {
-            let candidate = (time, key.1.clone(), key.2.clone(), key.3.clone());
-            end = if owner.contains_quarter(&candidate) {
-                time + TimeDelta::minutes(15)
-            } else {
-                time
-            };
+    keys: Vec<GroupKey>,
+) -> StoreResult<BTreeMap<GroupKey, MetricState>> {
+    let mut by_collection = BTreeMap::<&str, Vec<&GroupKey>>::new();
+    for key in &keys {
+        by_collection.entry(&key.1).or_default().push(key);
+    }
+    let mut rebuilt = BTreeMap::new();
+    for (collection, keys) in by_collection {
+        let columns = worker::COLLECTION_COLUMNS
+            .iter()
+            .find_map(|(name, columns)| (*name == collection).then_some(*columns))
+            .ok_or_else(|| invalid("unknown incremental analytics collection"))?;
+        // 同类分组共用维度匹配和聚合 SQL，各组仍独立遵守已发布的构建前缀
+        for keys in keys.chunks(1_000) {
+            let mut input = Vec::with_capacity(keys.len());
+            for (index, key) in keys.iter().enumerate() {
+                let mut end = key.0 + TimeDelta::seconds(if hourly { 3600 } else { 900 });
+                let mut cursor = None;
+                if hourly {
+                    if let Some((_, owner)) = progress.range(key.0..end).find(|(_, p)| p.phase == 4)
+                        && let Some(time) = owner.started_at
+                    {
+                        let candidate = (time, key.1.clone(), key.2.clone(), key.3.clone());
+                        end = if owner.contains_quarter(&candidate) {
+                            time + TimeDelta::minutes(15)
+                        } else {
+                            time
+                        };
+                    }
+                } else if let Some(stage) = progress.get(&key.0)
+                    && stage.phase == 1
+                {
+                    cursor = stage.started_at.zip(stage.id.as_deref());
+                }
+                input.push(serde_json::json!({
+                    "bucket_start": key.0,
+                    "end_at": end,
+                    "cursor_time": cursor.map(|(time, _)| time),
+                    "cursor_id": cursor.map(|(_, id)| id),
+                    "dimensions": key.2,
+                    "outcome": key.3,
+                    "name": index.to_string(),
+                }));
+                rebuilt.insert((*key).clone(), MetricState::default());
+            }
+            // 等值桶键避免范围连接反复比较其他时间桶，范围和游标仍限定已发布前缀
+            let mut query = QueryBuilder::<Postgres>::new(
+                "with matching as materialized (select mr.*,k.bucket_start as output_bucket,k.name,coalesce((",
+            );
+            query.push(completed_usage_fact_predicate("mr"))
+                .push("),false) as is_completed_usage from jsonb_to_recordset(")
+                .push_bind(serde_json::Value::Array(input))
+                .push("::jsonb) k(bucket_start timestamptz,end_at timestamptz,cursor_time timestamptz,cursor_id text,dimensions text[],outcome text,name text)
+                    join request_analytics_facts mr on date_bin(make_interval(secs => ")
+                .push_bind(if hourly { 3600_f64 } else { 900_f64 })
+                .push("),mr.started_at,timestamptz '2000-01-01 UTC')=k.bucket_start
+                    and mr.started_at >= k.bucket_start and mr.started_at < k.end_at
+                    and mr.recovered_at is null and mr.outcome=k.outcome
+                    and (k.cursor_time is null or (mr.started_at,mr.id collate \"C\") <= (k.cursor_time,k.cursor_id collate \"C\"))");
+            for (index, column) in columns.iter().enumerate() {
+                query.push(format!(
+                    " and coalesce(mr.{column}::text,'')=k.dimensions[{}]",
+                    index + 1
+                ));
+            }
+            query.push(")");
+            aggregate::push_fact_aggregation(&mut query, false, true);
+            let rows = query.build().fetch_all(&mut **tx).await.map_err(|error| {
+                postgres_unavailable("rebuild changed analytics extrema", error)
+            })?;
+            for row in rows {
+                let name: String = get(&row, "name")?;
+                let index = name
+                    .parse::<usize>()
+                    .map_err(|_| invalid("invalid analytics rebuild group"))?;
+                let key = keys
+                    .get(index)
+                    .ok_or_else(|| invalid("unknown analytics rebuild group"))?;
+                rebuilt.insert((*key).clone(), MetricState::decode(&row)?);
+            }
         }
-    } else if let Some(stage) = progress.get(&key.0)
-        && stage.phase == 1
-    {
-        cursor = stage.started_at.zip(stage.id.as_deref());
     }
-    let mut query = QueryBuilder::<Postgres>::new("with matching as materialized (select mr.*,");
-    query.push_bind(key.0).push("::timestamptz as output_bucket,''::text as name,coalesce((")
-        .push(completed_usage_fact_predicate("mr")).push("),false) as is_completed_usage from request_analytics_facts mr where mr.started_at >= ")
-        .push_bind(key.0).push(" and mr.started_at < ").push_bind(end)
-        .push(" and mr.recovered_at is null and mr.outcome=").push_bind(&key.3);
-    if let Some((time, id)) = cursor {
-        query
-            .push(" and (mr.started_at,mr.id collate \"C\") <= (")
-            .push_bind(time)
-            .push(",")
-            .push_bind(id)
-            .push(")");
-    }
-    let columns = worker::COLLECTION_COLUMNS
-        .iter()
-        .find_map(|(collection, columns)| (*collection == key.1).then_some(*columns))
-        .ok_or_else(|| invalid("unknown incremental analytics collection"))?;
-    for (column, value) in columns.iter().zip(&key.2) {
-        query
-            .push(format!(" and coalesce(mr.{column}::text,'')="))
-            .push_bind(value);
-    }
-    query.push(")");
-    aggregate::push_fact_aggregation(&mut query, false, true);
-    let row = query
-        .build()
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(|error| postgres_unavailable("rebuild changed analytics extrema", error))?;
-    row.as_ref()
-        .map(MetricState::decode)
-        .transpose()
-        .map(Option::unwrap_or_default)
+    Ok(rebuilt)
 }

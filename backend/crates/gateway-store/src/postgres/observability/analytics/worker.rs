@@ -83,7 +83,17 @@ impl PgRequestAnalyticsRepository {
                 return Ok(AnalyticsMaintenance { reset_progress: true, ..Default::default() });
             }
             let mut result = AnalyticsMaintenance::default();
-            let rows = sqlx::query("select request_id, change_version from request_analytics_pending_requests order by oldest_pending_at, request_id limit $1")
+            // 历史删除可能一次排入大量旧任务，给仍存在的请求预留半批名额，避免实时统计饥饿
+            // 其余名额仍按最早入队消费，两类任务都能前进；同一快照内选版本，沿用精确版本 ACK
+            let rows = sqlx::query("with live as materialized (
+                select pending.request_id, pending.change_version from request_analytics_pending_requests pending
+                join model_requests source on source.id=pending.request_id
+                order by pending.oldest_pending_at, pending.request_id limit ($1::bigint / 2)
+            ), oldest as (
+                select pending.request_id, pending.change_version from request_analytics_pending_requests pending
+                where not exists (select 1 from live where live.request_id=pending.request_id)
+                order by pending.oldest_pending_at, pending.request_id limit ($1::bigint - (select count(*) from live))
+            ) select request_id, change_version from live union all select request_id, change_version from oldest")
                 .bind(i64::from(batch_size)).fetch_all(&mut *transaction).await.map_err(|error| postgres_unavailable("load analytics request queue", error))?;
             let mut jobs = Vec::with_capacity(rows.len());
             for row in rows {

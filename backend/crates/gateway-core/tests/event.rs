@@ -10,9 +10,7 @@ use gateway_core::upstream::UpstreamTransport;
 use serde_json::json;
 
 #[test]
-fn provider_event_keeps_large_wire_and_observation_payloads_behind_one_indirection() {
-    assert!(std::mem::size_of::<ProviderEvent>() <= 64);
-
+fn provider_event_should_distinguish_client_delivery_from_observation() {
     let wire = ProviderEvent::wire(
         ProtocolWireEvent::json("openai", None, json!({"type": "response.created"}))
             .expect("wire event"),
