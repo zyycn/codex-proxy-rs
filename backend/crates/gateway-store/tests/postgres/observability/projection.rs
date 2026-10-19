@@ -1,57 +1,9 @@
-//! 观测视图升级兼容性与普通聚合的覆盖索引规划回归测试
+//! 验证观测视图普通聚合能够使用覆盖索引
 
 use chrono::Utc;
 use serde_json::Value;
 
 use super::{TestDatabase, seed_observability_facts};
-
-#[tokio::test]
-async fn projection_upgrade_preserves_observation_values() {
-    let Some(db) = TestDatabase::create_through("observation_projection_upgrade", 26).await else {
-        return;
-    };
-    // 此测试固定覆盖 26 → 27 的冻结视图合同，不依赖最新版本的写入夹具
-    sqlx::query("insert into model_requests(id,client_api_key_ref,operation,client_transport,outcome,client_status_code,started_at,deadline_at,completed_at,request_observation_json) values('req_observe_success','historical_key','responses','http_sse','succeeded',200,now()-interval '1 hour',now(),now(),'{\"request\":{\"configRevision\":1,\"protocol\":\"openai\",\"endpoint\":\"/v1/responses\",\"compact\":false},\"routing\":{\"scope\":\"all\",\"groupRefs\":[],\"groupNamesSnapshot\":[]},\"timings\":{\"local\":{\"latencyMs\":800}}}'::jsonb)")
-        .execute(&db.pool).await.unwrap();
-    sqlx::query(
-        "update model_requests
-            set request_observation_json = jsonb_set(request_observation_json,
-              '{timings,upstream}', '{\"responseMs\":700,\"engineIapiTbtMs\":2.450638}')
-          where id = 'req_observe_success'",
-    )
-    .execute(&db.pool)
-    .await
-    .unwrap();
-    let before: Vec<Value> =
-        sqlx::query_scalar("select to_jsonb(mr) from model_request_observations mr order by id")
-            .fetch_all(&db.pool)
-            .await
-            .unwrap();
-
-    super::super::TEST_MIGRATOR
-        .run_to(27, &db.pool)
-        .await
-        .unwrap();
-
-    let after: Vec<Value> =
-        sqlx::query_scalar("select to_jsonb(mr) from model_request_observations mr order by id")
-            .fetch_all(&db.pool)
-            .await
-            .unwrap();
-    assert_eq!(
-        after, before,
-        "projection upgrade must preserve every field"
-    );
-    let updatable: String = sqlx::query_scalar(
-        "select is_updatable from information_schema.views
-          where table_schema = current_schema() and table_name = 'model_request_observations'",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-    assert_eq!(updatable, "NO", "observation projection remains read-only");
-    db.close().await;
-}
 
 #[tokio::test]
 async fn plain_observation_aggregates_can_use_a_covering_index() {

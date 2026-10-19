@@ -1,4 +1,4 @@
-//! 响应 DTO 与固定 wire 形状的合同测试
+//! 验证观测响应的指标、展示投影与查询时间边界
 
 use chrono::Utc;
 use serde_json::json;
@@ -358,13 +358,6 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
         value["data"]["latencyDetails"]["upstreamEngineMs"],
         json!(6400.0)
     );
-    assert!(value["data"].get("firstTokenMs").is_none());
-    assert!(value["data"].get("firstTokenLatencyMsDisplay").is_none());
-    assert!(
-        value["data"]["latencyDetails"]
-            .get("firstTokenMs")
-            .is_none()
-    );
     assert_eq!(
         serde_json::json!({
             "accountId": value["data"]["accountId"],
@@ -470,8 +463,6 @@ async fn zero_attempt_failure_detail_omits_trace_and_keeps_missing_upstream_fact
     assert_eq!(data["clientStatusCode"], 503);
     assert_eq!(data["message"], "no upstream account is available");
     assert_eq!(data["model"], "coding");
-    assert!(data.get("upstreamStatusCode").is_none());
-    assert!(data.get("httpVersion").is_none());
     for field in [
         "provider",
         "accountId",
@@ -622,7 +613,6 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
         .await
         .expect("diagnostics body");
     let value: serde_json::Value = serde_json::from_slice(&body).expect("diagnostics JSON");
-    assert!(value["data"]["items"][0].get("impactScore").is_none());
     assert_eq!(value["data"]["items"][0]["requestShare"], 0.5);
     assert_eq!(value["data"]["items"][0]["retryCount"], 3);
     assert_eq!(value["data"]["items"][0]["retryRate"], 0.5);

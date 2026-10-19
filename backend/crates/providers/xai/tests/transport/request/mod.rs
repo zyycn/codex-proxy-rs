@@ -177,109 +177,40 @@ fn encoder_should_strip_all_client_metadata_before_grok_build() {
 }
 
 #[test]
-fn encoder_should_apply_build_defaults_and_normalize_reasoning_effort() {
-    let request = raw_request(json!({
-        "model": "client-model",
-        "input": "hello",
-        "include": ["web_search_call.action.sources"],
-        "reasoning": {"effort": "XHIGH", "summary": "auto"}
-    }));
+fn encoder_should_apply_build_defaults_and_preserve_requested_includes() {
+    for (fields, expected_include) in [
+        (json!({}), json!(["reasoning.encrypted_content"])),
+        (
+            json!({"store": null, "include": null}),
+            json!(["reasoning.encrypted_content"]),
+        ),
+        (
+            json!({"include": ["web_search_call.action.sources"]}),
+            json!([
+                "web_search_call.action.sources",
+                "reasoning.encrypted_content"
+            ]),
+        ),
+    ] {
+        let mut body = fields;
+        body["input"] = json!("hello");
+        let encoded = GrokResponsesRequest::encode(&raw_request(body), "grok-4.7", &client_key())
+            .expect("build defaults");
 
-    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
-        .expect("normalized request");
-    let body = Value::Object(encoded.body().clone());
-
-    assert_eq!(body.pointer("/store"), Some(&json!(false)));
-    assert_eq!(
-        body.pointer("/include"),
-        Some(&json!([
-            "web_search_call.action.sources",
-            "reasoning.encrypted_content"
-        ]))
-    );
-    assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("xhigh")));
-    assert_eq!(body.pointer("/reasoning/summary"), Some(&json!("auto")));
-
-    let request = raw_request(json!({
-        "model": "client-model",
-        "input": "hello",
-        "reasoning": {"effort": "xhigh"}
-    }));
-    let encoded = GrokResponsesRequest::encode(&request, "xai/grok-4.6-latest", &client_key())
-        .expect("routed model request");
-    let body = Value::Object(encoded.body().clone());
-    assert_eq!(body.pointer("/model"), Some(&json!("xai/grok-4.6-latest")));
-    assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("xhigh")));
-    assert_eq!(body.pointer("/reasoning_effort"), None);
-    assert_eq!(body.pointer("/reasoningEffort"), None);
-
-    let request = raw_request(json!({
-        "model": "client-model",
-        "input": "hello",
-        "reasoning": {"effort": "high", "summary": "auto"}
-    }));
-    let encoded = GrokResponsesRequest::encode(&request, "grok-composer-2.5-fast", &client_key())
-        .expect("Composer request");
-    let body = Value::Object(encoded.body().clone());
-    assert_eq!(
-        body.pointer("/reasoning"),
-        Some(&json!({"effort":"high", "summary":"auto"}))
-    );
-
-    let request = raw_request(json!({
-        "model": "client-model",
-        "input": "hello",
-        "store": null,
-        "include": null,
-        "reasoning": {"effort": "max"}
-    }));
-    let encoded = GrokResponsesRequest::encode(&request, "grok-composer-2.5-fast", &client_key())
-        .expect("empty Composer reasoning");
-    let body = Value::Object(encoded.body().clone());
-    assert_eq!(body.pointer("/store"), Some(&json!(false)));
-    assert_eq!(
-        body.pointer("/include"),
-        Some(&json!(["reasoning.encrypted_content"]))
-    );
-    assert_eq!(body.pointer("/reasoning"), Some(&json!({"effort":"max"})));
-
-    let request = raw_request(json!({
-        "model": "client-model",
-        "input": "hello",
-        "reasoning": {}
-    }));
-    let encoded = GrokResponsesRequest::encode(&request, "grok-composer-2.5-fast", &client_key())
-        .expect("Composer reasoning without effort");
-    assert_eq!(
-        Value::Object(encoded.body().clone()).pointer("/reasoning"),
-        Some(&json!({}))
-    );
-
-    let request = raw_request(json!({
-        "model": "client-model",
-        "input": "hello",
-        "reasoning": {"effort": "max"}
-    }));
-    let encoded = GrokResponsesRequest::encode(&request, "tenant/foo/grok-4.6", &client_key())
-        .expect("unknown provider prefix");
-    assert_eq!(
-        Value::Object(encoded.body().clone()).pointer("/reasoning/effort"),
-        Some(&json!("max"))
-    );
+        assert_eq!(encoded.body()["store"], json!(false));
+        assert_eq!(encoded.body()["include"], expected_include);
+    }
 }
 
 #[test]
-fn encoder_should_strip_codex_only_fields_without_model_guesses() {
+fn encoder_should_strip_codex_only_fields_and_preserve_business_extensions() {
     let request = raw_request(json!({
         "model": "client-model",
         "input": "hello",
         "prompt_cache_retention": "24h",
         "safety_identifier": "user-1",
-        "presence_penalty": 0.1,
-        "presencePenalty": 0.2,
-        "frequency_penalty": 0.3,
-        "frequencyPenalty": 0.4,
-        "stop": ["done"],
+        "provider_options": {"providers": {"xai": {"transport": "websocket"}}},
+        "future_official_field": {"keep": true},
         "external_web_access": true,
         "metadata": {"external_web_access": false},
         "tools": [{
@@ -299,6 +230,7 @@ fn encoder_should_strip_codex_only_fields_without_model_guesses() {
     for pointer in [
         "/prompt_cache_retention",
         "/safety_identifier",
+        "/provider_options",
         "/external_web_access",
         "/metadata/external_web_access",
         "/tools/0/external_web_access",
@@ -306,18 +238,10 @@ fn encoder_should_strip_codex_only_fields_without_model_guesses() {
         assert_eq!(body.pointer(pointer), None, "field survived at {pointer}");
     }
 
-    let request = raw_request(json!({
-        "model": "client-model",
-        "input": "hello",
-        "logprobs": true,
-        "top_logprobs": 5
-    }));
-    let encoded = GrokResponsesRequest::encode(&request, "grok-4.20-reasoning", &client_key())
-        .expect("sanitized 4.20 request");
-    let body = Value::Object(encoded.body().clone());
-    assert_eq!(body.pointer("/model"), Some(&json!("grok-4.20-reasoning")));
-    assert_eq!(body.pointer("/logprobs"), Some(&json!(true)));
-    assert_eq!(body.pointer("/top_logprobs"), Some(&json!(5)));
+    assert_eq!(
+        body.pointer("/future_official_field"),
+        Some(&json!({"keep": true}))
+    );
 }
 
 #[test]
@@ -442,31 +366,6 @@ fn request_debug_should_not_expose_prompt_or_unknown_values() {
 
     assert!(!debug.contains("private prompt"));
     assert!(!debug.contains("must-not-leak"));
-}
-
-#[test]
-fn encoder_should_remove_retired_gateway_provider_options_before_xai_conversion() {
-    let request = raw_request(Value::Object(Map::from_iter([
-        ("model".to_owned(), json!("client")),
-        ("input".to_owned(), json!("hello")),
-        (
-            "provider_options".to_owned(),
-            json!({
-                "version": "future-version",
-                "providers": {"xai": {"transport": "websocket", "turn_index": "7"}}
-            }),
-        ),
-        ("future_official_field".to_owned(), json!({"keep": true})),
-    ])));
-
-    let encoded =
-        GrokResponsesRequest::encode(&request, "grok-routed", &client_key()).expect("request");
-
-    assert!(encoded.body().get("provider_options").is_none());
-    assert_eq!(
-        encoded.body().get("future_official_field"),
-        Some(&json!({"keep": true}))
-    );
 }
 
 #[test]

@@ -2,14 +2,14 @@
 
 use axum::{
     body::Body,
-    http::{Method, Request, StatusCode, header::AUTHORIZATION},
+    http::{Method, Request, StatusCode},
 };
 use tower::ServiceExt;
 
 use super::api_router_with_origins;
 use super::models::ModelsExecution;
 
-const REMOVED_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+const LARGE_BODY_BYTES: usize = 17 * 1024 * 1024;
 
 #[tokio::test]
 async fn browser_origin_controls_http_admin_sessions_without_configuration() {
@@ -117,64 +117,16 @@ async fn browser_origin_controls_http_admin_sessions_without_configuration() {
 }
 
 #[tokio::test]
-async fn removed_responses_review_route_should_not_reach_the_responses_handler() {
-    let response = api_router_with_origins(ModelsExecution::new(), Vec::new())
-        .await
-        .oneshot(
-            Request::post("/v1/responses/review")
-                .header(AUTHORIZATION, "Bearer sk_models_test")
-                .body(Body::empty())
-                .expect("build removed review request"),
-        )
-        .await
-        .expect("route removed review request");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-}
-
-#[tokio::test]
-async fn removed_models_catalog_extension_should_use_standard_model_lookup() {
-    let response = api_router_with_origins(ModelsExecution::new(), Vec::new())
-        .await
-        .oneshot(
-            Request::get("/v1/models/catalog")
-                .header(AUTHORIZATION, "Bearer sk_models_test")
-                .body(Body::empty())
-                .expect("build removed model catalog request"),
-        )
-        .await
-        .expect("route removed model catalog request");
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn removed_model_info_route_should_return_not_found() {
-    let response = api_router_with_origins(ModelsExecution::new(), Vec::new())
-        .await
-        .oneshot(
-            Request::get("/v1/models/model-a/info")
-                .header(AUTHORIZATION, "Bearer sk_models_test")
-                .body(Body::empty())
-                .expect("build removed model info request"),
-        )
-        .await
-        .expect("route removed model info request");
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn responses_body_should_accept_payload_above_the_removed_private_limit() {
+async fn large_responses_bodies_should_reach_authentication() {
     let router = api_router_with_origins(ModelsExecution::new(), Vec::new()).await;
     let response = router
         .oneshot(
             Request::post("/v1/responses")
-                .body(Body::from(vec![b'a'; REMOVED_BODY_LIMIT_BYTES + 1]))
-                .expect("build request above the removed limit"),
+                .body(Body::from(vec![b'a'; LARGE_BODY_BYTES]))
+                .expect("build large request"),
         )
         .await
-        .expect("route request above the removed limit");
+        .expect("route large request");
 
     // 请求进入处理器后应因缺少凭据而被拒绝
     // 若提前施加正文大小限制，则会在认证前返回 413

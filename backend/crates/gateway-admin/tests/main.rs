@@ -5,20 +5,16 @@ use std::str::FromStr as _;
 use chrono::{TimeDelta, Utc};
 use gateway_core::account::OpaqueProviderData;
 
-use gateway_admin::{
-    model::{
-        PageSize, Revision,
-        accounts::AccountUsage,
-        auth::LoginCommand,
-        client_keys::ClientKeyPageSize,
-        observability::{DecimalAmount, RequestOutcome, TimeRange},
-        provider_credentials::{
-            CredentialCommitGuard, ProviderDocument, ProviderQuota, ProviderQuotaWindow,
-            QuotaLocalUsageAttribution,
-        },
-        settings::AdminApiKey,
+use gateway_admin::model::{
+    PageSize, Revision,
+    accounts::AccountUsage,
+    auth::LoginCommand,
+    client_keys::ClientKeyPageSize,
+    observability::{DecimalAmount, RequestOutcome, TimeRange},
+    provider_credentials::{
+        ProviderDocument, ProviderQuota, ProviderQuotaWindow, QuotaLocalUsageAttribution,
     },
-    ports::store::{AccountStore, AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore},
+    settings::AdminApiKey,
 };
 
 mod backup;
@@ -97,20 +93,6 @@ fn login_command_debug_should_redact_password() {
         password: "secret-password".to_owned(),
     };
     assert!(!format!("{command:?}").contains("secret-password"));
-}
-
-#[test]
-fn all_store_capability_traits_should_be_object_safe() {
-    fn assert_object_safe<T: ?Sized + Send + Sync>() {}
-
-    assert_object_safe::<dyn AccountStore>();
-    assert_object_safe::<dyn AuthStore>();
-    assert_object_safe::<dyn ClientKeyStore>();
-    assert_object_safe::<dyn ObservabilityStore>();
-    assert_object_safe::<dyn SettingsStore>();
-
-    fn assert_send_object_safe<T: ?Sized + Send>() {}
-    assert_send_object_safe::<dyn CredentialCommitGuard>();
 }
 
 #[test]

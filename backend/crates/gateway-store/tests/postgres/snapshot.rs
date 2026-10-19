@@ -8,7 +8,7 @@ use gateway_store::postgres::{
 use super::TestDatabase;
 
 #[test]
-fn snapshot_client_policy_contains_only_common_limits() {
+fn client_key_snapshot_debug_redacts_plaintext_key() {
     let policy = ClientApiKeySnapshot {
         name_snapshot: None,
         request_profiles: Default::default(),
@@ -20,8 +20,6 @@ fn snapshot_client_policy_contains_only_common_limits() {
             requests_per_minute: 60,
         },
     };
-    assert_eq!(policy.limits.max_concurrency, 3);
-    assert!(policy.group_ids.is_empty());
     assert!(!format!("{policy:?}").contains("sk_snapshot_secret"));
 }
 
@@ -50,6 +48,8 @@ async fn runtime_snapshot_loads_enabled_plaintext_key_without_debug_exposure() {
         Some("snapshot")
     );
     assert!(snapshot.client_api_keys[0].group_ids.is_empty());
+    assert_eq!(snapshot.client_api_keys[0].limits.max_concurrency, 2);
+    assert_eq!(snapshot.client_api_keys[0].limits.requests_per_minute, 60);
     assert_eq!(
         snapshot.client_api_keys[0].plaintext_key.expose_for_auth(),
         plaintext

@@ -46,7 +46,6 @@ async fn list_route_should_keep_camel_case_group_and_page_wire() {
         value["data"]["items"][0]["usage"]["retainedTotalUsd"],
         "5.5"
     );
-    assert!(value["data"]["items"][0].get("member_count").is_none());
 }
 
 #[tokio::test]

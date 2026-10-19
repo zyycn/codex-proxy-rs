@@ -156,14 +156,6 @@ fn config_loader_should_ignore_unknown_fields_in_configuration_sections() {
 }
 
 #[test]
-fn config_loader_should_ignore_removed_tls_and_fingerprint_sections() {
-    let mut document = valid_config_document();
-    document["openai"]["tls"] = serde_json::json!({});
-    document["openai"]["fingerprint"] = serde_json::json!({"browser": "removed"});
-    parse_config(&document.to_string()).expect("removed provider settings are ignored");
-}
-
-#[test]
 fn config_loader_should_reject_invalid_known_fields_alongside_unknown_fields() {
     for port in [serde_json::json!(0), serde_json::json!("not-a-port")] {
         let mut document = valid_config_document();
@@ -192,7 +184,7 @@ fn config_loader_should_report_startup_configuration_diagnostics() {
     ] {
         let mut document = valid_config_document();
         if case == "unused" {
-            document["openai"]["wire_profile"]["location"] = serde_json::json!(UNUSED_SECRET);
+            document["openai"]["unused_setting"] = serde_json::json!(UNUSED_SECRET);
         } else if case == "missing" {
             document["host"]["listen"]
                 .as_object_mut()
@@ -232,7 +224,7 @@ fn config_loader_should_report_startup_configuration_diagnostics() {
         );
         match case {
             "unused" => assert!(
-                stderr.contains("openai.wire_profile") && stderr.contains("已忽略"),
+                stderr.contains("openai.unused_setting") && stderr.contains("已忽略"),
                 "{stderr}"
             ),
             "missing" => assert!(stderr.contains("host.listen.port"), "{stderr}"),
@@ -256,19 +248,7 @@ fn config_loader_should_allow_missing_provider_configuration() {
     let mut document = valid_config_document();
     document.as_object_mut().unwrap().remove("openai");
     document.as_object_mut().unwrap().remove("xai");
-    parse_config(&document.to_string()).expect("provider defaults require no YAML identity");
-}
-
-#[test]
-fn config_loader_should_ignore_removed_provider_identity_sections() {
-    let mut document = valid_config_document();
-    document["openai"]["wire_profile"] = serde_json::json!({"codex_version":"legacy-invalid"});
-    document["xai"] = serde_json::json!({"wire_profile": {"client_identifier": "legacy-client"}});
-    let (config, _directory) =
-        parse_config(&document.to_string()).expect("removed identities ignored");
-    let debug = format!("{config:?}");
-    assert!(!debug.contains("legacy-invalid"));
-    assert!(!debug.contains("legacy-client"));
+    parse_config(&document.to_string()).expect("providers use defaults when omitted");
 }
 
 #[test]

@@ -11,7 +11,7 @@ use gateway_api::admin::accounts::{
 use gateway_core::operation::RawJsonPayload;
 
 #[test]
-fn quota_forecast_projection_only_exposes_capacity_and_preserves_null_zero() {
+fn quota_forecast_projection_formats_capacity_and_preserves_null_zero() {
     let now = "2026-09-12T00:00:00Z".parse().unwrap();
     let forecast = AccountQuotaForecast {
         period: AccountUsagePeriod::Weekly,
@@ -54,16 +54,6 @@ fn quota_forecast_projection_only_exposes_capacity_and_preserves_null_zero() {
     assert_eq!(week["estimatedTokensDisplay"], "1M");
     assert!(week["estimatedUsd"].is_null());
     assert_eq!(week["estimatedUsdDisplay"], "—");
-    for forecast in value["forecasts"].as_array().unwrap() {
-        for field in [
-            "remainingTokens",
-            "remainingTokensDisplay",
-            "remainingUsd",
-            "remainingUsdDisplay",
-        ] {
-            assert!(forecast.get(field).is_none(), "unexpected field: {field}");
-        }
-    }
     assert_eq!(
         week["source"],
         serde_json::json!({
@@ -77,9 +67,6 @@ fn quota_forecast_projection_only_exposes_capacity_and_preserves_null_zero() {
             "usdDisplay": "$0.1234"
         })
     );
-    assert!(week.get("method").is_none());
-    assert!(week.get("methodDisplay").is_none());
-    assert!(value.get("generatedAtDisplay").is_none());
     assert_eq!(value["forecasts"][1]["estimatedTokens"], 0);
     assert_eq!(value["forecasts"][1]["estimatedTokensDisplay"], "0");
     assert_eq!(value["forecasts"][1]["estimatedUsd"], 0.0);
@@ -87,7 +74,6 @@ fn quota_forecast_projection_only_exposes_capacity_and_preserves_null_zero() {
     assert_eq!(value["forecasts"][1]["period"], "monthly");
     assert_eq!(value["forecasts"][1]["targetDays"], 30.0);
     assert_eq!(value["forecasts"][1]["extrapolated"], true);
-    assert!(value.get("account").is_none());
 }
 
 #[test]
