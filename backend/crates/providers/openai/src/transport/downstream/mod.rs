@@ -4,17 +4,25 @@
 mod body;
 mod grok;
 mod headers;
+mod search_history;
 
+use gateway_core::engine::middleware::MiddlewareHeader;
 use serde_json::{Map, Value};
+
+use super::protocol::responses::CodexResponsesRequest;
 
 pub(super) use body::normalize_codex_request_body;
 
 pub(crate) fn normalize_selected_codex_downstream_body(
-    body: &mut Map<String, Value>,
+    request: &mut CodexResponsesRequest,
     context: &Map<String, Value>,
+    middleware_headers: &[MiddlewareHeader],
+    request_id: &str,
 ) {
+    let body = request.body_mut();
     body::normalize_non_codex_request_body(body);
     grok::normalize_request_body(body, context);
+    search_history::normalize_search_history(request, middleware_headers, request_id);
 }
 
 pub(super) fn is_non_codex_request_header(name: &str) -> bool {

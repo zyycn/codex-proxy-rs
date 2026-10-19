@@ -12,6 +12,7 @@ mod precommit;
 mod privacy;
 mod recovery;
 mod response_interrupt;
+mod search_history;
 mod search_model_access;
 mod selection_retry;
 mod session_binding;
@@ -930,6 +931,34 @@ async fn capture_replay_compatibility_request(
     api_key: bool,
     websocket: bool,
 ) -> Value {
+    let original = json!({
+        "model":"gpt-5.4","store":false,"stream":true,"input":input,
+        "instructions":"Preserve the original instructions.",
+        "tools":[{"type":"function","name":"echo","parameters":{"type":"object","properties":{"status":{"type":"string"},"content":{"type":"array"}}}}],
+        "future_field":{"status":"keep","content":[1]},
+        "client_metadata":{"extension":{"status":"keep","content":[1]}}
+    });
+    let actual = capture_downstream_request(original.clone(), api_key, websocket, false).await;
+    for field in ["model", "store", "instructions", "tools", "future_field"] {
+        assert_eq!(
+            actual[field].to_string(),
+            original[field].to_string(),
+            "unexpected change in {field}"
+        );
+    }
+    assert_eq!(
+        actual["client_metadata"]["extension"],
+        original["client_metadata"]["extension"]
+    );
+    actual
+}
+
+async fn capture_downstream_request(
+    original: Value,
+    api_key: bool,
+    websocket: bool,
+    lite: bool,
+) -> Value {
     let http = MockServer::start().await;
     let (base_url, websocket_server) = if websocket {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -980,33 +1009,33 @@ async fn capture_replay_compatibility_request(
     } else {
         create_account(&store, "acct_provider_contract").await;
     }
-    let original = json!({
-        "model":"gpt-5.4","store":false,"stream":true,"input":input,
-        "instructions":"Preserve the original instructions.",
-        "tools":[{"type":"function","name":"echo","parameters":{"type":"object","properties":{"status":{"type":"string"},"content":{"type":"array"}}}}],
-        "future_field":{"status":"keep","content":[1]},
-        "client_metadata":{"extension":{"status":"keep","content":[1]}}
-    });
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object("openai", original.as_object().unwrap().clone())
             .unwrap()
-            .with_context(Map::from_iter([(
-                "use_websocket".to_owned(),
-                json!(websocket),
-            )])),
+            .with_context(Map::from_iter([
+                ("use_websocket".to_owned(), json!(websocket)),
+                (
+                    "responses_lite".to_owned(),
+                    json!(if lite { "true" } else { "false" }),
+                ),
+            ])),
     ));
     let provider = provider_with_base_url(&store, base_url);
     let mut stream = provider
         .execute(
             planned_request("openai", operation),
-            context("req_replay_compatibility", CancellationToken::new()),
+            context_with_state_owner_and_location(
+                "req_replay_compatibility",
+                "acct_provider_contract",
+                None,
+            ),
         )
         .await
         .unwrap();
     while let Some(event) = stream.next().await {
         event.expect("successful upstream completion");
     }
-    let actual = if let Some(server) = websocket_server {
+    if let Some(server) = websocket_server {
         timeout(Duration::from_secs(5), server)
             .await
             .unwrap()
@@ -1019,19 +1048,7 @@ async fn capture_replay_compatibility_request(
             "compatibility must run before the first send, without retry"
         );
         captured_request_body(&requests[0])
-    };
-    for field in ["model", "store", "instructions", "tools", "future_field"] {
-        assert_eq!(
-            actual[field].to_string(),
-            original[field].to_string(),
-            "unexpected change in {field}"
-        );
     }
-    assert_eq!(
-        actual["client_metadata"]["extension"],
-        original["client_metadata"]["extension"]
-    );
-    actual
 }
 
 const CAPTURE_COMPLETED_SSE: &str = concat!(

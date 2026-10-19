@@ -891,8 +891,10 @@ impl CodexProvider {
         );
         if codex_oauth {
             normalize_selected_codex_downstream_body(
-                upstream_request.body_mut(),
+                &mut upstream_request,
                 generate.protocol_payload().context(),
+                &middleware_headers,
+                context.request_id().as_str(),
             );
         }
         if let Some(location) = lease
