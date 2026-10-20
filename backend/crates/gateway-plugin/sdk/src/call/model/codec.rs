@@ -46,28 +46,43 @@ pub(in crate::call) fn pack<T: Serialize, const N: usize>(
     metadata: &T,
     payloads: [Vec<u8>; N],
 ) -> Result<Vec<u8>, ExecutionEncodingError> {
+    pack_with_limit(prefix, metadata, payloads, MAX_EXECUTION_PAYLOAD_BYTES)
+}
+
+pub(in crate::call) fn pack_with_limit<T: Serialize, const N: usize>(
+    prefix: [u8; 4],
+    metadata: &T,
+    payloads: [Vec<u8>; N],
+    maximum: usize,
+) -> Result<Vec<u8>, ExecutionEncodingError> {
     let header_bytes = 4 + 4 * (N + 1);
     let raw_bytes = payloads
         .iter()
-        .fold(0usize, |total, bytes| total.saturating_add(bytes.len()));
-    if raw_bytes > MAX_EXECUTION_PAYLOAD_BYTES {
+        .try_fold(0usize, |total, bytes| total.checked_add(bytes.len()))
+        .ok_or(ExecutionEncodingError)?;
+    if raw_bytes > maximum {
         return Err(ExecutionEncodingError);
     }
     let metadata = serde_json::to_vec(metadata).map_err(|_| ExecutionEncodingError)?;
     let total = header_bytes
-        .saturating_add(metadata.len())
-        .saturating_add(raw_bytes);
-    if total > MAX_EXECUTION_PAYLOAD_BYTES {
+        .checked_add(metadata.len())
+        .and_then(|total| total.checked_add(raw_bytes))
+        .ok_or(ExecutionEncodingError)?;
+    let lengths = std::iter::once(metadata.len())
+        .chain(payloads.iter().map(Vec::len))
+        .map(u32::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ExecutionEncodingError)?;
+    if total > maximum {
         return Err(ExecutionEncodingError);
     }
-    let mut result = Vec::with_capacity(total);
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(total)
+        .map_err(|_| ExecutionEncodingError)?;
     result.extend_from_slice(&prefix);
-    for length in std::iter::once(metadata.len()).chain(payloads.iter().map(Vec::len)) {
-        result.extend_from_slice(
-            &u32::try_from(length)
-                .map_err(|_| ExecutionEncodingError)?
-                .to_be_bytes(),
-        );
+    for length in lengths {
+        result.extend_from_slice(&length.to_be_bytes());
     }
     result.extend_from_slice(&metadata);
     for bytes in payloads {
@@ -80,11 +95,16 @@ pub(in crate::call) fn unpack<T: DeserializeOwned, const N: usize>(
     prefix: [u8; 4],
     bytes: &[u8],
 ) -> Result<(T, [&[u8]; N]), ExecutionEncodingError> {
+    unpack_with_limit(prefix, bytes, MAX_EXECUTION_PAYLOAD_BYTES)
+}
+
+pub(in crate::call) fn unpack_with_limit<T: DeserializeOwned, const N: usize>(
+    prefix: [u8; 4],
+    bytes: &[u8],
+    maximum: usize,
+) -> Result<(T, [&[u8]; N]), ExecutionEncodingError> {
     let header_bytes = 4 + 4 * (N + 1);
-    if bytes.len() < header_bytes
-        || bytes.len() > MAX_EXECUTION_PAYLOAD_BYTES
-        || bytes[..4] != prefix
-    {
+    if bytes.len() < header_bytes || bytes.len() > maximum || bytes[..4] != prefix {
         return Err(ExecutionEncodingError);
     }
     let mut cursor = header_bytes;

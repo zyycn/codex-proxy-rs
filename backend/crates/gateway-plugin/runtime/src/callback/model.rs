@@ -63,13 +63,19 @@ impl PluginModelPortSlot {
 
 pub(super) struct PluginModels {
     slot: Arc<PluginModelPortSlot>,
+    request_limits: Arc<super::request_limits::RequestLimits>,
     maximum_payload: usize,
 }
 
 impl PluginModels {
-    pub(super) fn new(slot: Arc<PluginModelPortSlot>, maximum_payload: usize) -> Self {
+    pub(super) fn new(
+        slot: Arc<PluginModelPortSlot>,
+        request_limits: Arc<super::request_limits::RequestLimits>,
+        maximum_payload: usize,
+    ) -> Self {
         Self {
             slot,
+            request_limits,
             maximum_payload,
         }
     }
@@ -121,17 +127,27 @@ impl PluginModels {
             "host.model.execute" | "host.model.execute_stream" => {
                 let mut request: ModelExecuteRequest =
                     serde_json::from_value(params).map_err(|_| invalid())?;
-                if payload.is_empty() || payload.len() > self.maximum_payload {
+                if payload.is_empty() {
                     return Err(invalid());
                 }
+                let check_size = |limit| {
+                    if payload.len() > gateway_plugin_sdk::call::model::request_payload_limit(limit)
+                    {
+                        Err(super::request_limits::too_large())
+                    } else {
+                        Ok(())
+                    }
+                };
                 let port = self.slot.upgrade()?;
                 let stream = method == "host.model.execute_stream";
                 let started = if let Some(client_key_id) = request.client_key_id.take() {
                     let bound = self.binding(&port, context, call, client_key_id).await?;
+                    check_size(bound.request_body_limit())?;
                     port.start_bound(self.bound_request(request, payload, stream, bound)?)
                         .await
                         .map_err(super::error::gateway)?
                 } else {
+                    check_size(self.request_limits.body_bytes(call)?)?;
                     let request = self.request(context, request, payload, stream)?;
                     port.start(request).await.map_err(super::error::gateway)?
                 };

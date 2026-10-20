@@ -96,6 +96,10 @@ async fn execute(
         Some(plugin_runtime.policy_registry()),
         Some(plugin_runtime.execution_registry()),
     );
+    or_shutdown!(
+        plugin_runtime,
+        plugin_runtime.bind_snapshots(&core.snapshots())
+    );
     let management = ManagementPorts::new(&store, providers.admin.clone(), core.snapshot_control());
     or_shutdown!(plugin_runtime, management.bind(&plugin_runtime));
     let core = or_shutdown!(plugin_runtime, core.activate().await);

@@ -1132,6 +1132,7 @@ where
                 .with_pricing(self.plan.pricing())
                 .with_request_location(self.plan.request_location().cloned())
                 .with_privacy(self.plan.privacy())
+                .with_request_body_limit(self.plan.request_body_limit())
                 .with_concurrency_wait_budget(self.concurrency_wait_budget.clone())
                 .with_connection_budget(if connection_rotation_reserved {
                     self.connection_budget.clone().reserve_next_opening()

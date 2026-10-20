@@ -331,7 +331,13 @@ impl RuntimeSnapshotCompiler {
                             });
                     if must_prepare {
                         let prepared = preparer
-                            .prepare(revision)
+                            .prepare_with_request_body_limit(
+                                revision,
+                                usize::try_from(
+                                    facts.settings.responses_max_decompressed_body_bytes,
+                                )
+                                .unwrap_or(usize::MAX),
+                            )
                             .await
                             .map_err(|_| RuntimeSnapshotCompileError::ExtensionsUnavailable)?;
                         prepared_extensions = Some((revision, prepared));
@@ -1201,6 +1207,7 @@ impl RuntimeSnapshot {
         }
 
         Ok(RoutingPlan {
+            request_body_limit: self.responses_max_decompressed_body_bytes(),
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),
@@ -1282,6 +1289,7 @@ impl RuntimeSnapshot {
             account_scope: Arc::clone(&account_scope),
         };
         Ok(RoutingPlan {
+            request_body_limit: self.responses_max_decompressed_body_bytes(),
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),

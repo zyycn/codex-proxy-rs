@@ -16,6 +16,7 @@ fn request(url: String) -> HttpRequest {
         url,
         headers: vec![],
         body: vec![],
+        maximum_body_bytes: 0,
     }
 }
 fn network() -> NetworkPolicy {

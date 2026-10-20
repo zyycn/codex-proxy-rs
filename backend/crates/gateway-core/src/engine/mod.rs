@@ -286,6 +286,7 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    request_body_limit: Option<usize>,
     lease_metadata: Option<Arc<crate::provider_ports::ProviderLeaseMetadata>>,
     response_control: Option<response_control::ResponseControl>,
     pricing: Arc<crate::metering::PricingOverrides>,
@@ -311,6 +312,12 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub const fn with_request_body_limit(mut self, bytes: usize) -> Self {
+        self.request_body_limit = Some(bytes);
+        self
+    }
+
     #[must_use]
     pub fn with_lease_metadata(
         mut self,
@@ -387,6 +394,7 @@ impl RequestAttemptContext {
     pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
             response_control: None,
+            request_body_limit: None,
             lease_metadata: None,
             request_id,
             client_api_key_ref,
@@ -542,6 +550,11 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    #[must_use]
+    pub const fn request_body_limit(&self) -> Option<usize> {
+        self.request.request_body_limit
+    }
+
     #[must_use]
     pub fn lease_metadata(&self) -> Option<Arc<crate::provider_ports::ProviderLeaseMetadata>> {
         self.request.lease_metadata.clone()
@@ -747,7 +760,8 @@ impl AttemptContext {
                 extension_scope: self.request.extension_scope.clone(),
                 execution_effects: self.request.execution_effects.as_ref().map(Arc::clone),
             },
-        );
+        )
+        .with_request_body_limit(self.request.request_body_limit);
         provider::execute_attempt_middleware(
             self.request.middleware.as_ref(),
             context,

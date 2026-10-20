@@ -8,3 +8,4 @@ mod management;
 mod middleware;
 mod observation;
 mod policy;
+mod upstream_adapter;

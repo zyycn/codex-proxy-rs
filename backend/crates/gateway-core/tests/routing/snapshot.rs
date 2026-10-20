@@ -1253,7 +1253,8 @@ fn decompression_setting_should_validate_and_remain_frozen_across_publication() 
         ));
     }
     let handle = RuntimeSnapshotHandle::new(compile(1, 64 * 1024 * 1024).unwrap());
-    let frozen = handle.acquire().unwrap();
+    let reader = handle.downgrade();
+    let frozen = reader.acquire().unwrap();
     handle.publish(compile(2, 128 * 1024 * 1024).unwrap());
     assert_eq!(
         handle
@@ -1266,6 +1267,13 @@ fn decompression_setting_should_validate_and_remain_frozen_across_publication() 
         frozen.responses_max_decompressed_body_bytes(),
         64 * 1024 * 1024
     );
+    assert_eq!(
+        reader
+            .acquire()
+            .unwrap()
+            .responses_max_decompressed_body_bytes(),
+        128 * 1024 * 1024
+    );
     handle.publish(compile(3, 1024 * 1024).unwrap());
     assert_eq!(
         handle
@@ -1274,6 +1282,10 @@ fn decompression_setting_should_validate_and_remain_frozen_across_publication() 
             .responses_max_decompressed_body_bytes(),
         1024 * 1024
     );
+    handle.suspend();
+    assert!(reader.acquire().is_err());
+    drop(handle);
+    assert!(reader.acquire().is_err());
 }
 
 #[test]

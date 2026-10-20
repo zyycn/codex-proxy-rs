@@ -10,6 +10,44 @@ use gateway_plugin_sdk::Contributions;
 use gateway_plugin_sdk::Stage;
 
 #[tokio::test]
+async fn initial_registration_http_uses_the_prepared_settings_without_a_publication() {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    for limit in [63, 64] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(u64::from(limit == 64))
+            .mount(&server)
+            .await;
+        let (cache, store, runtime) =
+            super::super::setup_with_contributions(Contributions::from([
+                crate::support::contribution(
+                    Capability::ModelCatalog,
+                    vec![Stage::Registration],
+                    vec![],
+                    vec![],
+                ),
+            ]))
+            .await;
+        store.snapshot.lock().unwrap().instances[0].configuration = serde_json::json!({
+            "registration_http": {"params": {"method":"POST", "url":server.uri(), "headers":[]}, "body":"x".repeat(64)},
+            "model_catalog":{"models":[{"id":"fixture-alias","provider":"openai","model":"fixture-upstream"}]}
+        });
+        let prepared = ExtensionPreparationPort::prepare_with_request_body_limit(
+            &runtime,
+            ConfigRevision::new(1).unwrap(),
+            limit,
+        )
+        .await
+        .unwrap();
+        assert_eq!(prepared.model_aliases().len(), usize::from(limit == 64));
+        drop(prepared);
+        runtime.shutdown().await;
+        super::super::wait_until_empty(cache.path()).await;
+    }
+}
+
+#[tokio::test]
 async fn model_catalog_is_frozen_without_entering_the_request_chain() {
     let (cache, store, runtime) = super::super::setup_with_contributions(Contributions::from([
         crate::support::contribution(

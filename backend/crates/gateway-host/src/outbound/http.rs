@@ -40,6 +40,8 @@ pub struct HttpRequest {
     pub url: String,
     pub headers: Vec<(String, Vec<u8>)>,
     pub body: Vec<u8>,
+    /// 调用方从有效配置派生的请求体上限；零只允许空正文
+    pub maximum_body_bytes: usize,
 }
 
 pub struct HttpResponse {
@@ -194,7 +196,7 @@ impl HttpClient {
         scope: Option<&str>,
         websocket_key: Option<&str>,
     ) -> Result<PendingResponse, HttpError> {
-        if request.body.len() > 16 * 1024 * 1024
+        if request.body.len() > request.maximum_body_bytes
             || request.headers.len() > 128
             || timeout.is_zero()
             || timeout > Duration::from_secs(120)

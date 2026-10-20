@@ -52,6 +52,7 @@ pub struct PluginRuntimeConfig {
 
 /// 只索引有主人的候选；当前代次仅由 Core 的发布视图持有
 pub struct PluginRuntime {
+    pub(super) request_limits: Arc<crate::callback::request_limits::RequestLimits>,
     pub(super) service_ports: Arc<crate::callback::services::ServicePorts>,
     pub(super) store: Arc<dyn PluginStore>,
     pub(super) state: Arc<dyn PluginStateStore>,
@@ -109,6 +110,7 @@ impl PluginRuntime {
             processes,
             validators: Arc::new(Semaphore::new(MAXIMUM_PARALLEL_PREPARATIONS)),
             configuration_schemas: Arc::default(),
+            request_limits: Arc::default(),
             service_ports: Arc::new(crate::callback::services::ServicePorts::default()),
             account_ports: Arc::new(PluginAccountPortSlot::new()),
             client_key_ports: Arc::new(PluginClientKeyPortSlot::new()),
@@ -136,6 +138,14 @@ impl PluginRuntime {
         dispatcher: &Arc<dyn gateway_core::engine::middleware::http::Dispatcher>,
     ) -> Result<(), AdminError> {
         self.service_ports.bind_http(dispatcher)
+    }
+
+    /// 读取当前发布设置，同时避免回调反向保活自身所在的插件集合
+    pub fn bind_snapshots(
+        &self,
+        snapshots: &gateway_core::runtime::RuntimeSnapshotHandle,
+    ) -> Result<(), AdminError> {
+        self.request_limits.bind(snapshots)
     }
 
     pub fn bind_services(

@@ -21,6 +21,7 @@ impl PluginRuntime {
         &self,
         instance: PluginInstance,
         target_revision: Revision,
+        request_body_limit: Option<usize>,
     ) -> Result<Arc<PreparedInstance>, AdminError> {
         let mut observer_entries = Vec::new();
         let mut commands = Vec::new();
@@ -151,7 +152,7 @@ impl PluginRuntime {
             configuration,
             contributes: manifest.contributes.clone(),
         };
-        let callbacks = Arc::new(PluginCallbacks::new(
+        let mut callbacks = PluginCallbacks::new(
             &instance,
             self.config.rpc_limits.maximum_buffered_body_bytes,
             &manifest,
@@ -166,7 +167,10 @@ impl PluginRuntime {
                 self.affinity_ports.clone(),
                 self.resource_ports.clone(),
             ),
-        )?);
+            self.request_limits.clone(),
+        )?;
+        callbacks.registration_body_limit = request_body_limit;
+        let callbacks = Arc::new(callbacks);
         let session = Arc::new(
             RpcSession::start_supervised(
                 package.clone(),

@@ -474,6 +474,7 @@ impl Environment {
             Some(runtime.execution_registry()),
             Some(runtime.frontend_authentication_registry()),
         );
+        runtime.bind_snapshots(&core.snapshots()).unwrap();
         let access = gateway_admin::initialize_plugin_accounts(
             super::native::admin_registry(),
             self.store.admin_ports().accounts(),
@@ -509,6 +510,7 @@ impl Environment {
         .activate()
         .await
         .unwrap();
+        runtime.bind_snapshots(&core.snapshots()).unwrap();
         runtime
             .bind_model_ports(
                 &core.nested_model_execution_port(),

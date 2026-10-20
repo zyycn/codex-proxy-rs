@@ -559,9 +559,22 @@ pub struct MiddlewareContext {
     deadline: crate::lifecycle::Deadline,
     extension_scope: ExtensionCallScope,
     execution_effects: Option<Arc<ExecutionEffects>>,
+    request_body_limit: Option<usize>,
 }
 
 impl MiddlewareContext {
+    /// attempt 只继承执行预算，不开放 request 设置改写
+    #[must_use]
+    pub const fn with_request_body_limit(mut self, bytes: Option<usize>) -> Self {
+        self.request_body_limit = bytes;
+        self
+    }
+
+    #[must_use]
+    pub const fn request_body_limit(&self) -> Option<usize> {
+        self.request_body_limit
+    }
+
     #[must_use]
     pub fn plan(&self) -> Option<FrozenMiddlewarePlan> {
         self.plan.clone()
@@ -590,6 +603,7 @@ impl MiddlewareContext {
         } = authority;
         Self {
             plan: None,
+            request_body_limit: None,
             request_id,
             mount,
             attempt_index,

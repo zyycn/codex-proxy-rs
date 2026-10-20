@@ -91,6 +91,7 @@ async fn call(
             input.extension_scope.clone(),
             None,
             gateway_core::lifecycle::CancellationToken::new(),
+            input.request_body_limit(),
         )
         .map_err(|_| ())?;
     let reply = invocation

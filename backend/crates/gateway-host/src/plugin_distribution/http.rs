@@ -96,6 +96,7 @@ impl Downloads {
                         url: url.to_string(),
                         headers,
                         body: vec![],
+                        maximum_body_bytes: 0,
                     },
                     egress.map(|egress| &egress.proxy),
                     &self.network,

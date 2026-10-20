@@ -15,6 +15,7 @@ mod log;
 mod middleware;
 mod model;
 pub(crate) mod private_state;
+pub(crate) mod request_limits;
 mod resources;
 mod scope;
 pub(crate) mod services;
@@ -80,6 +81,7 @@ impl PluginCallbackPorts {
 }
 
 pub(crate) struct PluginCallbacks {
+    pub(crate) registration_body_limit: Option<usize>,
     services: Arc<services::ServicePorts>,
     service_actor: gateway_admin::model::usage_data::UsageActor,
     accounts: Arc<accounts::PluginAccounts>,
@@ -96,6 +98,7 @@ pub(crate) struct PluginCallbacks {
     pending_middleware: Mutex<BTreeMap<String, Arc<dyn MiddlewareCallback>>>,
     calls: Mutex<BTreeMap<u64, Arc<CallResources>>>,
     maximum_payload: usize,
+    request_limits: Arc<request_limits::RequestLimits>,
 }
 
 impl PluginCallbacks {
@@ -106,8 +109,10 @@ impl PluginCallbacks {
         log_slots: Arc<tokio::sync::Semaphore>,
         private_state: Arc<private_state::PluginPrivateState>,
         ports: PluginCallbackPorts,
+        request_limits: Arc<request_limits::RequestLimits>,
     ) -> Result<Self, AdminError> {
         Ok(Self {
+            registration_body_limit: None,
             services: ports.services,
             service_actor: gateway_admin::model::usage_data::UsageActor::Plugin {
                 publisher: manifest.publisher.clone(),
@@ -126,7 +131,11 @@ impl PluginCallbacks {
                 log::PluginLog::new(manifest, log_slots)
                     .map_err(|_| AdminError::invalid("插件清单身份不合法"))?,
             ),
-            models: Arc::new(model::PluginModels::new(ports.models, maximum_payload)),
+            models: Arc::new(model::PluginModels::new(
+                ports.models,
+                request_limits.clone(),
+                maximum_payload,
+            )),
             private_state,
             http: ports.http,
             network: Arc::new(ports.network),
@@ -134,6 +143,7 @@ impl PluginCallbacks {
             pending_middleware: Mutex::new(BTreeMap::new()),
             calls: Mutex::new(BTreeMap::new()),
             maximum_payload,
+            request_limits,
         })
     }
 
@@ -181,6 +191,7 @@ impl PluginCallbacks {
         extensions: gateway_core::engine::extensions::ExtensionCallScope,
         plan: Option<gateway_core::engine::middleware::FrozenMiddlewarePlan>,
         cancellation: CancellationToken,
+        request_body_limit: Option<usize>,
     ) -> Result<Arc<CallbackScope>, PluginFault> {
         if !matches!(
             context.stage,
@@ -197,6 +208,7 @@ impl PluginCallbacks {
             scope = scope.with_execution_effects(effects);
         }
         scope.extension_scope = extensions;
+        scope.request_body_limit = request_body_limit;
         scope.origin = plan.map(|plan| InvocationContext {
             request_id: context
                 .request_id
@@ -212,11 +224,16 @@ impl PluginCallbacks {
         self.register_scope(context, scope)
     }
 
+    pub(crate) fn request_body_limit(&self) -> Result<usize, PluginFault> {
+        self.request_limits.current_body_bytes()
+    }
+
     pub(crate) fn prepare_upstream(
         &self,
         context: &CallContext,
         managed: Arc<upstream::ManagedUpstream>,
         extension_scope: gateway_core::engine::extensions::ExtensionCallScope,
+        request_body_limit: usize,
     ) -> Result<Arc<CallbackScope>, PluginFault> {
         if context.stage != gateway_plugin_sdk::Stage::Upstream
             || context.account_id.as_deref() != Some(managed.account.account_id().as_str())
@@ -227,6 +244,7 @@ impl PluginCallbacks {
         let mut scope = CallbackScope::new(context, managed.account.outbound_proxy().cloned())
             .with_upstream(managed);
         scope.extension_scope = extension_scope;
+        scope.request_body_limit = Some(request_body_limit);
         self.register_scope(context, scope)
     }
 
@@ -352,7 +370,13 @@ impl CallbackHandler for PluginCallbacks {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&context.resource_scope_id)
             .and_then(Weak::upgrade)
-            .unwrap_or_else(|| Arc::new(CallbackScope::for_call(context)));
+            .unwrap_or_else(|| {
+                let mut scope = CallbackScope::for_call(context);
+                if context.stage == gateway_plugin_sdk::Stage::Registration {
+                    scope.request_body_limit = self.registration_body_limit;
+                }
+                Arc::new(scope)
+            });
         let middleware = self
             .pending_middleware
             .lock()
@@ -401,6 +425,7 @@ impl CallbackHandler for PluginCallbacks {
         let data = self.data.clone();
         let keys = self.keys.clone();
         let models = self.models.clone();
+        let request_limits = self.request_limits.clone();
         let affinity = self.affinity.clone();
         let services = self.services.clone();
         let service_actor = self.service_actor.clone();
@@ -514,6 +539,7 @@ impl CallbackHandler for PluginCallbacks {
                 scope,
                 call: &call,
                 maximum_payload,
+                request_limits: &request_limits,
             };
             if method.starts_with("host.upstream.") {
                 return upstream::dispatch(&http, &method, params, payload).await;

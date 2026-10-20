@@ -209,7 +209,18 @@ SDK 不自动重试。超时或断连不能证明写入未提交；重试上限�
 - `host.model.execute[_stream]`：交给 Core 的路由、准入、租约、重试、账本和计费链路执行
 - `host.model.stream_read/close`：读取或关闭当前父调用创建的有界流
 
-`ModelExecuteRequest.client_key_id` 可显式选择执行 Key，不与触发插件的父请求 Key 求交。省略时继承现有模型父请求身份；没有模型父请求的调用必须提供 Key。所选 Key 的启用状态、模型规则、账号组、并发和预算继续由 Core 执行。
+模型请求正文使用独立的二进制载荷，不共用响应缓冲预算。宿主从有效设置
+`responses_max_decompressed_body_bytes` 取得原始正文预算 `L`，通过
+`call::model::request_payload_limit(L)` 为内部请求预留 JSON 字符串转义和元数据空间
+（`2 × L + 64 KiB`，受请求编码的 32 位分段长度约束）。超限返回带 HTTP 413 的
+`invalid_input`，不启动模型执行。上游适配器的请求 `GPAQ` 也使用请求预算，响应事件仍受
+原有 8 MiB 编码上限、Runtime 缓冲预算及流控窗口限制
+
+HTTP 和 request 中间件中的模型回调沿用有效请求设置；attempt、路由、调度、重试和上游适配器
+沿用该次模型请求冻结的正文预算。显式 Key 模型调用的预检与执行使用同一绑定快照，
+同一父调用内复用 Key 时不受后续配置发布影响；父调用结束后重新绑定才读取新配置，无需重新启用插件
+
+`ModelExecuteRequest.client_key_id` 可显式选择执行 Key，不与触发插件的父请求 Key 求交。省略时继承现有模型父请求身份；没有模型父请求的调用必须提供 Key。所选 Key 的启用状态、模型规则、账号组、并发和预算继续由 Core 执行
 嵌套调用与显式 Key 调用继承入口快照中的客户端 IP 和 User-Agent；没有 HTTP 入口的后台调用保持来源未知
 
 模型事件使用 `call::model::ExecutionEvent` 的 `GPE2` 封套，将 canonical 事实、宿主事实和原始 wire 分段编码。`host` 包含费用及定价明细、完整上游观测、会话状态和改写来源；当前 wire 与原始 wire 都保留二进制字节；`WirePayload::WebSocket` 独立保留完整文本消息和可选 JSON 视图，不把未知文本改造成 SSE。读取或回传快照不触发第二次计费、续接提交或发送状态更新。
@@ -232,6 +243,13 @@ SDK 不自动重试。超时或断连不能证明写入未提交；重试上限�
 `collect` 只返回正文，需要尾部头时使用 `read`；底层非流式回复携带 `trailers`，流式回复在 `stream_read` 中交付尾部头
 
 `host.http.do/do_stream` 和流读取／关闭方法提供受管 HTTP。正文使用独立二进制载荷，Host 统一执行代理、超时和背压，不按插件身份限制目标地址段。DNS 由宿主解析，连接保留目标 Host 与 TLS 域名校验；重定向不会自动跟随。
+受管 HTTP（包括 `host.upstream.http.do[_stream]`）的请求正文按有效设置
+`responses_max_decompressed_body_bytes` 检查。HTTP/request 中间件使用有效请求设置；
+attempt、路由、调度、重试和上游适配器使用执行冻结预算，其余调用读取当前发布配置。
+超限返回带 HTTP 413 的 `invalid_input` 和 `not_sent`，不向目标发送请求。
+注册阶段沿用正在编译的配置预算，首次发布前也可发送非空正文。
+非空正文无法取得有效配置时拒绝调用；无正文查询不消耗正文预算。
+这里检查实际出站正文，内部模型请求的转义余量不增加出站预算。响应缓冲及流窗口不随请求配置扩大
 普通调用使用父调用剩余期限；已建立的受管 HTTP 流或 WebSocket 会话按每次网络操作计时，仍受父资源取消约束
 
 期限耗尽返回 `timeout`，解析、连接或响应读取失败返回 `upstream`。错误 `details.kind` 和 `details.reason` 保留 Host 的故障分类与原因标记，响应正文仍由插件读取；协议故障不应直接展示内部消息

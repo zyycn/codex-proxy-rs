@@ -137,6 +137,7 @@ async fn route_with_entry(
             input.extension_scope().clone(),
             None,
             gateway_core::lifecycle::CancellationToken::new(),
+            input.request_body_limit(),
         )
         .map_err(|_| ())?;
     let reply = invocation
@@ -212,6 +213,7 @@ async fn schedule_with_entry(
             input.extension_scope().clone(),
             None,
             gateway_core::lifecycle::CancellationToken::new(),
+            input.request_body_limit(),
         )
         .map_err(|_| ())?;
     let reply = invocation

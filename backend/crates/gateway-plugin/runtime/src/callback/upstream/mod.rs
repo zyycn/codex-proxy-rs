@@ -133,6 +133,7 @@ impl ManagedUpstream {
         &self,
         request: adapter::UpstreamHttpRequest,
         body: Vec<u8>,
+        maximum_body_bytes: usize,
     ) -> Result<(HttpRequest, UpstreamPathPurpose), PluginFault> {
         let (target, purpose) = self.target.resolve(&request.path, &request.query)?;
         if request.headers.len() > 128 {
@@ -165,6 +166,7 @@ impl ManagedUpstream {
                 url: target.into(),
                 headers,
                 body,
+                maximum_body_bytes,
             },
             purpose,
         ))
@@ -183,6 +185,7 @@ pub(super) async fn dispatch(
         scope,
         call,
         maximum_payload,
+        ..
     } = *http;
     let managed = scope.upstream.as_ref().ok_or_else(denied)?;
     let timeout = || {
@@ -192,7 +195,8 @@ pub(super) async fn dispatch(
     match method {
         "host.upstream.http.do" | "host.upstream.http.do_stream" => {
             let request = serde_json::from_value(params).map_err(|_| invalid())?;
-            let (request, purpose) = managed.request(request, payload)?;
+            let maximum_body_bytes = http.body_limit(&payload)?;
+            let (request, purpose) = managed.request(request, payload, maximum_body_bytes)?;
             http.send(request, method.ends_with("do_stream"), Some(purpose))
                 .await
         }
@@ -222,6 +226,7 @@ pub(super) async fn dispatch(
                     headers: request.headers,
                 },
                 vec![],
+                0,
             )?;
             if purpose != UpstreamPathPurpose::Inference {
                 return Err(denied());

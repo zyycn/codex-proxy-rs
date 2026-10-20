@@ -6,6 +6,15 @@ pub(in crate::call) mod codec;
 pub mod facts;
 pub use codec::{ExecutionEncodingError, MAX_EXECUTION_PAYLOAD_BYTES};
 
+/// 内部请求允许 JSON 字符串转义与元数据开销，出站正文仍按原始配置上限检查
+#[must_use]
+pub fn request_payload_limit(body_bytes: usize) -> usize {
+    body_bytes
+        .saturating_mul(2)
+        .saturating_add(64 * 1024)
+        .min(u32::MAX as usize)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentKind {

@@ -3,7 +3,9 @@
 mod publications;
 mod publisher;
 
-pub use publications::{RuntimeSnapshotHandle, RuntimeSnapshotUnavailable};
+pub use publications::{
+    RuntimeSnapshotHandle, RuntimeSnapshotUnavailable, WeakRuntimeSnapshotHandle,
+};
 pub use publisher::{
     RuntimeSnapshotPublisher, SnapshotControl, SnapshotRevisionStream, SnapshotSubscriptionError,
     SnapshotSubscriptionPort, runtime_revision_needs_refresh,

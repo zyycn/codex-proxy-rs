@@ -218,10 +218,21 @@ impl Execution {
             .extension_scope()
             .extending(self.adapter.instance_id.clone())
             .ok_or_else(invalid)?;
+        let request_body_limit = invocation
+            .context
+            .request_body_limit()
+            .map(Ok)
+            .unwrap_or_else(|| self.adapter.callbacks.request_body_limit())
+            .map_err(|error| fault_error(error, UpstreamSendState::NotSent))?;
         let scope = self
             .adapter
             .callbacks
-            .prepare_upstream(&context, Arc::clone(&managed), extension_scope)
+            .prepare_upstream(
+                &context,
+                Arc::clone(&managed),
+                extension_scope,
+                request_body_limit,
+            )
             .map_err(|error| fault_error(error, UpstreamSendState::NotSent))?;
         let request = UpstreamAdapterRequest {
             adapter_id: declaration.id.clone(),
@@ -249,14 +260,18 @@ impl Execution {
                 .collect(),
             continuation: previous.map(|state| state.continuation),
         };
+        let body = invocation
+            .operation
+            .middleware_body()
+            .map_err(|source| invalid().with_source(source))?;
+        if body.len() > gateway_plugin_sdk::call::model::request_payload_limit(request_body_limit) {
+            return Err(fault_error(
+                crate::callback::request_limits::too_large(),
+                UpstreamSendState::NotSent,
+            ));
+        }
         let payload = request
-            .encode(
-                invocation
-                    .operation
-                    .middleware_body()
-                    .map_err(|source| invalid().with_source(source))?
-                    .to_vec(),
-            )
+            .encode(body.to_vec())
             .map_err(|source| invalid().with_source(source))?;
         invocation.context.trace().record("plugin.upstream", serde_json::json!({ "instanceId": self.adapter.instance_id, "adapterId": declaration.id, "generation": context.generation, "transport": declaration.transport.as_str() }));
         let mut stream = tokio::select! {

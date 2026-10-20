@@ -86,6 +86,7 @@ pub(super) async fn invoke(
             context.extension_scope().clone(),
             context.plan(),
             context.cancellation().clone(),
+            context.request_body_limit(),
         )
         .map_err(|_| MiddlewareError::Fault)?;
     let _binding = invocation_ports.callbacks.bind_middleware(

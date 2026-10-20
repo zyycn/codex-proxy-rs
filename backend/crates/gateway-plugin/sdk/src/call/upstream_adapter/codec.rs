@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::{UpstreamAdapterEvent, UpstreamAdapterRequest, UpstreamContinuation, UpstreamFailure};
 use crate::call::model::{
     ExecutionEncodingError, ExecutionEvent,
-    codec::{pack, unpack},
+    codec::{pack, pack_with_limit, unpack, unpack_with_limit},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -38,12 +38,13 @@ pub(super) fn encode_request(
     request: UpstreamAdapterRequest,
     body: Vec<u8>,
 ) -> Result<Vec<u8>, ExecutionEncodingError> {
-    pack(*b"GPAQ", &request, [body])
+    // 请求预算由宿主配置检查，线协议只约束 u32 长度；响应事件仍受独立预算限制
+    pack_with_limit(*b"GPAQ", &request, [body], usize::MAX)
 }
 
 pub(super) fn decode_request(
     bytes: &[u8],
 ) -> Result<(UpstreamAdapterRequest, Vec<u8>), ExecutionEncodingError> {
-    let (request, [body]) = unpack(*b"GPAQ", bytes)?;
+    let (request, [body]) = unpack_with_limit(*b"GPAQ", bytes, usize::MAX)?;
     Ok((request, body.to_vec()))
 }

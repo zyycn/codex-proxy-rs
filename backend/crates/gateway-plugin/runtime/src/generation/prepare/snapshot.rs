@@ -35,10 +35,13 @@ impl PluginRuntime {
         &self,
         snapshot: PluginInstanceSnapshot,
         required_revision: Option<Revision>,
+        request_body_limit: Option<usize>,
     ) -> Result<ExtensionSetReference, AdminError> {
         let target_revision = snapshot.config_revision.get();
         self.record_preparation(target_revision, PreparationDiagnostic::Preparing);
-        let result = self.prepare_inner(snapshot, required_revision).await;
+        let result = self
+            .prepare_inner(snapshot, required_revision, request_body_limit)
+            .await;
         match &result {
             Ok(reference) => self.record_preparation(
                 target_revision,
@@ -58,6 +61,7 @@ impl PluginRuntime {
         &self,
         snapshot: PluginInstanceSnapshot,
         required_revision: Option<Revision>,
+        request_body_limit: Option<usize>,
     ) -> Result<ExtensionSetReference, AdminError> {
         if self.shutting_down.load(Ordering::Acquire) {
             return Err(AdminError::unavailable("插件运行时正在关闭"));
@@ -124,7 +128,11 @@ impl PluginRuntime {
                     tokio::time::timeout(
                         // 沿用准备阶段原有的 30 秒预算；打包校验与能力恢复也在预算内
                         Duration::from_secs(30),
-                        self.prepare_instance(instance.clone(), snapshot.config_revision),
+                        self.prepare_instance(
+                            instance.clone(),
+                            snapshot.config_revision,
+                            request_body_limit,
+                        ),
                     )
                     .await
                     .unwrap_or_else(|_| Err(AdminError::unavailable("插件启动超时")))
@@ -363,15 +371,33 @@ impl PluginPreparation for PluginRuntime {
         snapshot: PluginInstanceSnapshot,
     ) -> Result<ExtensionSetReference, AdminError> {
         let required_revision = snapshot.config_revision;
-        self.prepare_snapshot(snapshot, Some(required_revision))
+        self.prepare_snapshot(snapshot, Some(required_revision), None)
             .await
     }
 }
 
 impl ExtensionPreparationPort for PluginRuntime {
+    fn prepare_with_request_body_limit(
+        &self,
+        revision: ConfigRevision,
+        request_body_limit: usize,
+    ) -> BoxFuture<'_, Result<ExtensionSetReference, ExtensionPreparationError>> {
+        self.prepare_revision(revision, Some(request_body_limit))
+    }
+
     fn prepare(
         &self,
         revision: ConfigRevision,
+    ) -> BoxFuture<'_, Result<ExtensionSetReference, ExtensionPreparationError>> {
+        self.prepare_revision(revision, None)
+    }
+}
+
+impl PluginRuntime {
+    fn prepare_revision(
+        &self,
+        revision: ConfigRevision,
+        request_body_limit: Option<usize>,
     ) -> BoxFuture<'_, Result<ExtensionSetReference, ExtensionPreparationError>> {
         Box::pin(async move {
             let snapshot = self
@@ -382,7 +408,7 @@ impl ExtensionPreparationPort for PluginRuntime {
             if snapshot.config_revision.get() != revision.get() {
                 return Err(ExtensionPreparationError);
             }
-            self.prepare_snapshot(snapshot, None)
+            self.prepare_snapshot(snapshot, None, request_body_limit)
                 .await
                 .map_err(|_| ExtensionPreparationError)
         })

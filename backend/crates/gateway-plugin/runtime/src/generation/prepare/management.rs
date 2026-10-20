@@ -13,7 +13,7 @@ impl PluginRuntime {
             .load_instances()
             .await
             .map_err(|_| AdminError::unavailable("无法读取已安装插件"))?;
-        let reference = self.prepare_snapshot(snapshot, None).await?;
+        let reference = self.prepare_snapshot(snapshot, None, None).await?;
         let set = self.prepared_set(&reference).await?;
         Ok(crate::PluginCommandSession::new(
             reference,

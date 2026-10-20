@@ -17,9 +17,18 @@ pub(super) struct HttpCallbacks<'a> {
     pub(super) scope: &'a Arc<CallbackScope>,
     pub(super) call: &'a CallResources,
     pub(super) maximum_payload: usize,
+    pub(super) request_limits: &'a super::request_limits::RequestLimits,
 }
 
 impl HttpCallbacks<'_> {
+    pub(super) fn body_limit(&self, body: &[u8]) -> Result<usize, PluginFault> {
+        // 空正文不占请求预算，也允许尚未发布设置的注册阶段执行无正文查询
+        if body.is_empty() {
+            return Ok(0);
+        }
+        self.request_limits.body_bytes(self.call)
+    }
+
     pub(super) async fn send(
         &self,
         request: HttpRequest,
@@ -32,7 +41,11 @@ impl HttpCallbacks<'_> {
             scope,
             call,
             maximum_payload,
+            ..
         } = *self;
+        if request.body.len() > request.maximum_body_bytes {
+            return Err(super::request_limits::too_large());
+        }
         let timeout = call.timeout()?;
         let attempt = call.start_upstream(upstream_purpose)?;
         let response = client
@@ -109,6 +122,7 @@ impl HttpCallbacks<'_> {
                         method: request.method,
                         url: request.url,
                         headers: request.headers,
+                        maximum_body_bytes: self.body_limit(&payload)?,
                         body: payload,
                     },
                     method == "host.http.do_stream",

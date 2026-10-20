@@ -8,7 +8,7 @@ use crate::{
 use futures::future::BoxFuture;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex as SyncMutex, RwLock},
+    sync::{Arc, Mutex as SyncMutex, RwLock, Weak},
 };
 
 /// 请求级冻结失败；此状态必须 fail closed
@@ -23,7 +23,27 @@ pub struct RuntimeSnapshotHandle {
     publications: Arc<SyncMutex<Vec<futures::channel::mpsc::Sender<()>>>>,
 }
 
+/// 不延长发布集合生命周期的只读句柄，供集合持有的扩展读取后续配置
+#[derive(Clone, Default)]
+pub struct WeakRuntimeSnapshotHandle {
+    current: Weak<RwLock<Option<Arc<RuntimeSnapshot>>>>,
+}
+
+impl WeakRuntimeSnapshotHandle {
+    pub fn acquire(&self) -> Result<Arc<RuntimeSnapshot>, RuntimeSnapshotUnavailable> {
+        let current = self.current.upgrade().ok_or(RuntimeSnapshotUnavailable)?;
+        acquire_current(&current)
+    }
+}
+
 impl RuntimeSnapshotHandle {
+    #[must_use]
+    pub fn downgrade(&self) -> WeakRuntimeSnapshotHandle {
+        WeakRuntimeSnapshotHandle {
+            current: Arc::downgrade(&self.current),
+        }
+    }
+
     #[must_use]
     pub fn new(initial: RuntimeSnapshot) -> Self {
         Self {
@@ -86,10 +106,7 @@ impl RuntimeSnapshotHandle {
 
     /// 冻结当前 Arc；后续发布不改变已经开始的请求
     pub fn acquire(&self) -> Result<Arc<RuntimeSnapshot>, RuntimeSnapshotUnavailable> {
-        read_unpoisoned(&self.current)
-            .clone()
-            .filter(|snapshot| snapshot.extensions().is_none_or(|set| set.can_serve()))
-            .ok_or(RuntimeSnapshotUnavailable)
+        acquire_current(&self.current)
     }
 }
 
@@ -107,6 +124,15 @@ impl HealthProbe for RuntimeSnapshotHandle {
             }
         })
     }
+}
+
+fn acquire_current(
+    current: &RwLock<Option<Arc<RuntimeSnapshot>>>,
+) -> Result<Arc<RuntimeSnapshot>, RuntimeSnapshotUnavailable> {
+    read_unpoisoned(current)
+        .clone()
+        .filter(|snapshot| snapshot.extensions().is_none_or(|set| set.can_serve()))
+        .ok_or(RuntimeSnapshotUnavailable)
 }
 
 fn read_unpoisoned<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {

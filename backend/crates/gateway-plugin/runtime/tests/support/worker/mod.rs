@@ -284,15 +284,51 @@ impl Peer {
         let Some(fixture) = self.configuration.get(fixture_field) else {
             return Ok(());
         };
+        for fixture in fixture
+            .as_array()
+            .map_or(std::slice::from_ref(fixture), Vec::as_slice)
+        {
+            if let Some(gate) = fixture["wait_for_file"].as_str() {
+                while !std::path::Path::new(gate).exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }
+            self.execute_nested_model_fixture(parent, fixture, marker_field)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn execute_nested_model_fixture(
+        &self,
+        parent: u64,
+        fixture: &Value,
+        marker_field: &str,
+    ) -> Result<(), PluginFault> {
+        let body = if let Some(path) = fixture["body_file"].as_str() {
+            std::fs::read(path).unwrap()
+        } else {
+            serde_json::to_vec(&fixture["body"]).unwrap()
+        };
         if fixture["stream"] == true {
-            let (result, payload) = self
+            let response = self
                 .callback_payload(
                     parent,
                     "host.model.execute_stream",
                     fixture["request"].clone(),
-                    serde_json::to_vec(&fixture["body"]).unwrap(),
+                    body,
                 )
-                .await?;
+                .await;
+            let (result, payload) = match response {
+                Err(error) if fixture["expect_error"] == true => {
+                    self.append_observation_marker(
+                        marker_field,
+                        &json!({"error":error.code,"http_status":error.http_status}),
+                    );
+                    return Ok(());
+                }
+                result => result?,
+            };
             assert!(payload.is_empty());
             let stream: gateway_plugin_sdk::call::host::ModelStreamResult =
                 serde_json::from_value(result).unwrap();
@@ -348,7 +384,7 @@ impl Peer {
                 parent,
                 "host.model.execute",
                 fixture["request"].clone(),
-                serde_json::to_vec(&fixture["body"]).unwrap(),
+                body,
             )
             .await;
         match callback {
@@ -366,7 +402,10 @@ impl Peer {
                 Ok(())
             }
             Err(error) if fixture["expect_error"] == true => {
-                self.append_observation_marker(marker_field, &json!({"error":error.code}));
+                self.append_observation_marker(
+                    marker_field,
+                    &json!({"error":error.code,"http_status":error.http_status}),
+                );
                 Ok(())
             }
             Err(error) => {
@@ -438,6 +477,37 @@ impl Peer {
             }
             self.send(Message::End { id, error: None }, vec![]).await;
             return;
+        }
+        if self.configuration["http_probe_methods"]
+            .as_array()
+            .is_some_and(|methods| {
+                methods
+                    .iter()
+                    .any(|probe| probe.as_str() == Some(method.as_str()))
+            })
+        {
+            let body = vec![
+                b'x';
+                self.configuration["http_probe_body_bytes"]
+                    .as_u64()
+                    .unwrap() as usize
+            ];
+            let response = self
+                .callback_payload(
+                    id,
+                    "host.http.do",
+                    json!({"method":"POST", "url":self.configuration["http_probe_url"]}),
+                    body,
+                )
+                .await;
+            let status = match response {
+                Ok((result, _)) => result["status"].as_u64().unwrap(),
+                Err(error) => u64::from(error.http_status.unwrap()),
+            };
+            self.append_observation_marker(
+                "http_probe_marker",
+                &json!({"method":method,"status":status}),
+            );
         }
         match method.as_str() {
             "upstream_adapter.register" => {
@@ -1304,6 +1374,20 @@ impl Peer {
                 return;
             }
             "plugin.register" => {
+                if let Some(request) = self.configuration.get("registration_http") {
+                    let result = self
+                        .callback_payload(
+                            id,
+                            "host.http.do",
+                            request["params"].clone(),
+                            request["body"].as_str().unwrap().as_bytes().to_vec(),
+                        )
+                        .await;
+                    if let Err(error) = result {
+                        self.send(Message::Error { id, error }, vec![]).await;
+                        return;
+                    }
+                }
                 if self.configuration["exit_during_registration"] == true {
                     std::process::exit(31);
                 }
@@ -1598,14 +1682,20 @@ impl Peer {
                 )
             }))
             .await?;
-            for (result, payload) in results {
+            for (callback, (result, payload)) in callbacks.iter().zip(results) {
                 self.append_observation_marker("upstream_http_marker", &result);
                 if let Some(stream) = result["stream"].as_str() {
+                    response_body.clear();
+                    let read_method = if callback["method"] == "host.http.do_stream" {
+                        "host.http.stream_read"
+                    } else {
+                        "host.upstream.http.stream_read"
+                    };
                     loop {
                         let (result, chunk) = self
                             .callback_payload(
                                 id,
-                                "host.upstream.http.stream_read",
+                                read_method,
                                 json!({"stream":stream,"maximum_bytes":65536}),
                                 vec![],
                             )

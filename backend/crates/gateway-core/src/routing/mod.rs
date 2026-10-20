@@ -561,6 +561,7 @@ impl ProviderCandidate {
 /// 一次请求冻结的 Provider 尝试顺序
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
+    request_body_limit: usize,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_location: Option<crate::account::RequestLocation>,
     privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
@@ -573,6 +574,11 @@ pub struct RoutingPlan {
 }
 
 impl RoutingPlan {
+    #[must_use]
+    pub const fn request_body_limit(&self) -> usize {
+        self.request_body_limit
+    }
+
     #[must_use]
     pub fn pricing(&self) -> Arc<crate::metering::PricingOverrides> {
         Arc::clone(&self.pricing)

@@ -197,6 +197,15 @@ pub struct BoundModelExecutionContext {
 }
 
 impl BoundModelExecutionContext {
+    /// 与实际执行共用绑定时的快照，不能回退到后续发布的配置
+    #[must_use]
+    pub fn request_body_limit(&self) -> usize {
+        self.authority
+            .client
+            .snapshot
+            .responses_max_decompressed_body_bytes()
+    }
+
     #[must_use]
     pub fn request_settings(&self) -> Option<&RequestSettings> {
         self.authority.client.request_settings()

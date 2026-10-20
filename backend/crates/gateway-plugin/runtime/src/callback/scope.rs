@@ -19,6 +19,7 @@ pub(crate) struct InvocationContext {
 /// 一次回调的调用链、账号与网络事实，由操作持有到完成
 pub(crate) struct CallbackScope {
     pub(super) origin: Option<InvocationContext>,
+    pub(super) request_body_limit: Option<usize>,
     stage: Stage,
     account_id: Option<String>,
     credential_revision: Option<u64>,
@@ -61,6 +62,7 @@ impl CallbackScope {
     pub(super) fn new(context: &CallContext, proxy: Option<OutboundProxy>) -> Self {
         Self {
             origin: None,
+            request_body_limit: None,
             stage: context.stage,
             account_id: context.account_id.clone(),
             credential_revision: context.credential_revision,

@@ -160,13 +160,24 @@ fn context_with_fast_mode(
     key: &str,
     mode: gateway_core::account::FastMode,
 ) -> AttemptContext {
+    context_with_body_limit(runtime, generation, key, mode, 64 * 1024 * 1024)
+}
+
+fn context_with_body_limit(
+    runtime: &gateway_plugin_runtime::PluginRuntime,
+    generation: &ExtensionSetReference,
+    key: &str,
+    mode: gateway_core::account::FastMode,
+    bytes: usize,
+) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new("req_one").unwrap(),
             ClientApiKeyId::new(key).unwrap(),
         )
         .with_upstream_adapters(runtime.execution_registry().upstream_adapters(generation))
-        .with_fast_mode(mode),
+        .with_fast_mode(mode)
+        .with_request_body_limit(bytes),
         NonZeroU32::new(1).unwrap(),
         SystemTime::now() + Duration::from_secs(5),
         AccountSelectionPolicy::new(
@@ -1443,5 +1454,122 @@ async fn malformed_adapter_events_fail_only_the_current_stream() {
         drop(generation);
         runtime.shutdown().await;
         super::wait_until_empty(cache.path()).await;
+    }
+}
+
+#[tokio::test]
+async fn large_adapter_requests_use_the_frozen_budget_for_both_http_capabilities() {
+    for streaming in [false, true] {
+        for upstream in [false, true] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(if streaming {
+                    "data: {}\n\n"
+                } else {
+                    "{}"
+                }))
+                .expect(if upstream { 2 } else { 4 })
+                .mount(&server)
+                .await;
+            let mut config = configuration(&server.uri(), streaming);
+            if !upstream {
+                let mut inference = config["upstream_callbacks"][0].clone();
+                inference["body"] = json!("{}");
+                config["upstream_callbacks"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(inference);
+                config["upstream_callbacks"][0]["method"] = json!(if streaming {
+                    "host.http.do_stream"
+                } else {
+                    "host.http.do"
+                });
+                config["upstream_callbacks"][0]["params"] = json!({"method":"POST", "url":format!("{}/auxiliary", server.uri()), "headers":[]});
+            }
+            let (cache, _, runtime) = setup(config).await;
+            let generation =
+                ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+                    .await
+                    .unwrap();
+            let account = Account::new();
+            let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object(
+                    "openai",
+                    json!({"model":"native-model","input":"x".repeat(17 * 1024 * 1024)})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                )
+                .unwrap(),
+            ));
+            let expected = operation.middleware_body().unwrap();
+            for accepted in [true, false, true] {
+                let context = context_with_body_limit(
+                    &runtime,
+                    &generation,
+                    "key-one",
+                    Default::default(),
+                    expected.len() - usize::from(!accepted),
+                );
+                let provider = ProviderKind::new("openai").unwrap();
+                let model = UpstreamModelId::new("native-model").unwrap();
+                let adapter = context
+                    .upstream_adapter(&provider, &model)
+                    .unwrap()
+                    .unwrap();
+                let metadata = ProviderCallMetadata::new(
+                    provider,
+                    model,
+                    account.id.clone(),
+                    UpstreamTransport::new(adapter.transport()).unwrap(),
+                );
+                let mut stream = adapter.execute(UpstreamAdapterInvocation {
+                    operation: operation.clone(),
+                    headers: vec![],
+                    context,
+                    metadata,
+                    account: account.clone(),
+                });
+                let mut completed = false;
+                let mut failure = None;
+                while let Some(event) = stream.next().await {
+                    match event {
+                        Ok(event) => {
+                            completed |= event
+                                .canonical_facts()
+                                .iter()
+                                .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
+                        }
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
+                }
+                if accepted {
+                    assert!(
+                        failure.is_none(),
+                        "streaming={streaming} upstream={upstream}: {failure:?}"
+                    );
+                    assert!(completed);
+                } else {
+                    assert_eq!(failure.unwrap().send_state(), UpstreamSendState::NotSent);
+                }
+            }
+            let requests = server
+                .received_requests()
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|request| request.body.len() > 1024 * 1024)
+                .collect::<Vec<_>>();
+            assert_eq!(requests.len(), 2);
+            for request in requests {
+                assert_eq!(request.body.as_slice(), expected.as_ref());
+            }
+            drop(generation);
+            runtime.shutdown().await;
+            super::wait_until_empty(cache.path()).await;
+        }
     }
 }

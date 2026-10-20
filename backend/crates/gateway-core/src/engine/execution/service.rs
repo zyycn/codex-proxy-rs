@@ -448,6 +448,12 @@ impl DefaultExecutionService {
                     account_group_ids.clone(),
                 )
                 .with_extension_scope(authorization.extension_scope.clone())
+                .with_request_body_limit(
+                    request
+                        .client
+                        .snapshot
+                        .responses_max_decompressed_body_bytes(),
+                )
                 .with_execution_effects(Arc::clone(&authorization.graph.as_ref()?.effects)),
             )
         });

@@ -265,7 +265,8 @@ Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-open
 多帧连续解码，整体展开结果受运行设置 `responsesMaxDecompressedBodyBytes` 约束（默认 64 MiB），
 超限在继续展开前返回 `400 request_too_large`，错误信息包含当前请求的上限字节数。zstd
 回溯窗口独立固定为最多 64 MiB，不能满足该限制的帧按解码失败处理。这个限制保护入站解压资源，不是
-模型上下文或 Token 上限；未压缩正文不受此长度限制。
+模型上下文或 Token 上限；未压缩正文不经过此解压检查。插件受管出站仍受同一设置约束，
+见[请求解压上限](#请求解压上限)。
 不支持的编码、逗号分隔的叠加编码和重复 `Content-Encoding` 头返回
 `400 unsupported_content_encoding`；压缩正文损坏、截断或解压后不是合法 JSON 返回
 `400 invalid_json`。本地错误不包含原始正文或解压库细节。WebSocket 文本帧不经过这条解压路径
@@ -1627,10 +1628,15 @@ Guardian 以 `subagent_kind` 或 `client_metadata.x-openai-subagent` 值 `guardi
 
 ### 请求解压上限
 
-`responsesMaxDecompressedBodyBytes` 是压缩 Responses HTTP 请求的解压输出上限，单位字节，默认
-67108864（64 MiB）。必须为正整数，且可表示为进程平台的 `isize`；管理端以整数 MiB 编辑。
-保存并发布成功后，新请求使用新值；已鉴权请求沿用原快照，无需重启。调高上限会增加大请求的内存占用，
-它不代表整个进程的内存预算
+`responsesMaxDecompressedBodyBytes` 限制压缩 Responses HTTP 请求的解压输出，以及插件受管 HTTP
+的实际出站正文（包括账号上游请求，无论是否压缩），单位字节，默认 67108864（64 MiB）。
+必须为正整数，且可表示为进程平台的 `isize`；管理端以整数 MiB 编辑。
+插件模型调用从同一设置派生内部请求编码预算，具体边界见 [SDK 模型请求](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#key模型与模型调用)
+
+保存并发布成功后，新请求使用新值；在途模型请求及其路由、调度、attempt 和重试回调沿用冻结预算。
+显式 Key 的模型调用沿用当前父调用内绑定的快照，父调用结束后重新绑定时使用新值；无模型请求上下文的
+受管 HTTP 调用读取当前发布值，无需重启插件。调小该值可能使插件上传或转发返回 413，且不发送出站请求。
+调高上限会增加大请求的内存占用，不代表扩大模型 Token 上限、响应缓冲或整个进程的内存预算
 
 ### 智能调度
 

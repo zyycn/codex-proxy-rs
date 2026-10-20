@@ -16,6 +16,7 @@ fn request(port: u16, secure: bool) -> HttpRequest {
         ),
         headers: vec![],
         body: vec![],
+        maximum_body_bytes: 0,
     }
 }
 

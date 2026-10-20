@@ -34,9 +34,15 @@ pub struct ModelRouteInput {
     requested_model: PublicModelId,
     available_providers: BTreeSet<ProviderKind>,
     execution_effects: Arc<ExecutionEffects>,
+    request_body_limit: Option<usize>,
 }
 
 impl ModelRouteInput {
+    #[must_use]
+    pub const fn request_body_limit(&self) -> Option<usize> {
+        self.request_body_limit
+    }
+
     #[must_use]
     pub const fn request_id(&self) -> &super::ModelRequestId {
         &self.request_id
@@ -188,9 +194,15 @@ pub struct AccountScheduleInput {
     model: Option<String>,
     candidates: Vec<AccountScheduleCandidate>,
     execution_effects: Arc<ExecutionEffects>,
+    request_body_limit: Option<usize>,
 }
 
 impl AccountScheduleInput {
+    #[must_use]
+    pub const fn request_body_limit(&self) -> Option<usize> {
+        self.request_body_limit
+    }
+
     #[must_use]
     pub const fn request_id(&self) -> &super::ModelRequestId {
         &self.request_id
@@ -282,9 +294,15 @@ pub struct RetryInput {
     pub extension_scope: ExtensionCallScope,
     pub facts: RetryFacts,
     execution_effects: Arc<ExecutionEffects>,
+    request_body_limit: Option<usize>,
 }
 
 impl RetryInput {
+    #[must_use]
+    pub const fn request_body_limit(&self) -> Option<usize> {
+        self.request_body_limit
+    }
+
     #[must_use]
     pub fn execution_effects(&self) -> Arc<ExecutionEffects> {
         Arc::clone(&self.execution_effects)
@@ -339,6 +357,7 @@ pub struct RequestPolicyContext {
     account_group_ids: Arc<[AccountGroupId]>,
     extension_scope: ExtensionCallScope,
     execution_effects: Arc<ExecutionEffects>,
+    request_body_limit: Option<usize>,
 }
 
 impl fmt::Debug for RequestPolicyContext {
@@ -353,6 +372,13 @@ impl fmt::Debug for RequestPolicyContext {
 }
 
 impl RequestPolicyContext {
+    /// 路由、调度和重试沿用同一次模型执行的冻结预算
+    #[must_use]
+    pub const fn with_request_body_limit(mut self, bytes: usize) -> Self {
+        self.request_body_limit = Some(bytes);
+        self
+    }
+
     pub async fn retry_decision(&self, facts: RetryFacts) -> RetryDecision {
         self.plan
             .retry_decision(RetryInput {
@@ -362,6 +388,7 @@ impl RequestPolicyContext {
                 extension_scope: self.extension_scope.clone(),
                 facts,
                 execution_effects: Arc::clone(&self.execution_effects),
+                request_body_limit: self.request_body_limit,
             })
             .await
             .unwrap_or_else(|_| {
@@ -391,6 +418,7 @@ impl RequestPolicyContext {
             account_group_ids: account_group_ids.into(),
             extension_scope: ExtensionCallScope::default(),
             execution_effects: Arc::new(ExecutionEffects::default()),
+            request_body_limit: None,
         }
     }
 
@@ -428,6 +456,7 @@ impl RequestPolicyContext {
                 requested_model,
                 available_providers,
                 execution_effects: Arc::clone(&self.execution_effects),
+                request_body_limit: self.request_body_limit,
             })
             .await
     }
@@ -474,6 +503,7 @@ impl RequestPolicyContext {
                 model: model.map(str::to_owned),
                 candidates: projected,
                 execution_effects: Arc::clone(&self.execution_effects),
+                request_body_limit: self.request_body_limit,
             })
             .await
             .map_err(|_| AccountPolicyError::Fault)?;

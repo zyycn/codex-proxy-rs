@@ -88,6 +88,15 @@ pub struct ExtensionPreparationError;
 
 /// 准备阶段读取与请求快照相同的持久 revision；不得自行发布当前代次
 pub trait ExtensionPreparationPort: Send + Sync {
+    /// 初始发布尚无可读快照，注册阶段沿用本次编译的正文预算
+    fn prepare_with_request_body_limit(
+        &self,
+        revision: ConfigRevision,
+        _request_body_limit: usize,
+    ) -> BoxFuture<'_, Result<ExtensionSetReference, ExtensionPreparationError>> {
+        self.prepare(revision)
+    }
+
     fn prepare(
         &self,
         revision: ConfigRevision,
