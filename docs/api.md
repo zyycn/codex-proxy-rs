@@ -774,8 +774,9 @@ OpenAI 主动额度刷新和正常响应携带的明确套餐会同步到账号�
 
 `outboundProxyId` 绑定已保存的代理，不要求出口测试成功；省略或 `null` 保留当前绑定，空字符串清除绑定。
 `outboundProxyUrl` 兼容 HTTP、HTTPS、SOCKS5、SOCKS5H 代理 URL，可带用户名和密码；不能与 ID 同时设置。
-编辑时省略或 `null` 表示保持原配置，空字符串表示清除代理并直连。列表和详情只返回
-不含认证信息的 `outboundProxyEndpoint`（直连时为 `null`）；只有显式敏感导出包含完整 URL。
+编辑时省略或 `null` 表示保持原配置，空字符串表示清除代理并直连。列表和详情返回绑定的
+`outboundProxyId`（未绑定时为 `null`，禁用代理仍保留 ID）和不含认证信息的 `outboundProxyEndpoint`
+（未配置时为 `null`）；只有显式敏感导出包含完整 URL。
 指定代理后，推理、OAuth 服务端交换/刷新及账号辅助请求使用同一出口；代理失败不会退回直连。
 浏览器打开的第三方 OAuth 授权页仍使用浏览器自身网络。
 账号出口与连接隔离见 [架构说明](architecture.md#账号出站代理)

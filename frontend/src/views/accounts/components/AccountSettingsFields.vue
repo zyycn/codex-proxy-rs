@@ -9,6 +9,7 @@ withDefaults(defineProps<{
   groups: AccountGroupRef[]
   groupsLoading: boolean
   disabled: boolean
+  currentProxyId?: string | null
   endpoint?: string | null
   accountId?: string
   preserveProxy?: boolean
@@ -71,6 +72,6 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         :disabled="disabled"
       />
     </ZFormItem>
-    <AccountProxyField v-model:mode="proxyMode" v-model:proxy-id="proxyId" :preserve="preserveProxy" :error="proxyError" :endpoint="endpoint" :account-id="accountId" :disabled="disabled" />
+    <AccountProxyField v-model:mode="proxyMode" v-model:proxy-id="proxyId" :preserve="preserveProxy" :error="proxyError" :current-proxy-id="currentProxyId" :endpoint="endpoint" :account-id="accountId" :disabled="disabled" />
   </div>
 </template>

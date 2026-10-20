@@ -10,6 +10,7 @@ pub(crate) fn admin_account_record(
     summary: ProviderAccountSummary,
 ) -> AdminStoreResult<AccountRecord> {
     Ok(AccountRecord {
+        outbound_proxy_id: summary.outbound_proxy_id,
         outbound_proxy_enabled: summary.outbound_proxy_enabled,
         outbound_proxy: summary.outbound_proxy,
         id: summary.id,

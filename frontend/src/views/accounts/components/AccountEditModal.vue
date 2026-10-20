@@ -97,6 +97,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         :groups-loading="groupsLoading"
         :disabled="saving"
         :show-scheduling="false"
+        :current-proxy-id="account.outboundProxyId"
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
       />

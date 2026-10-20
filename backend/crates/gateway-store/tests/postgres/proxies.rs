@@ -297,6 +297,10 @@ async fn disabled_proxy_projects_direct_while_preserving_bindings_and_credential
                 .credential;
             assert_eq!(configured.outbound_proxy.as_ref(), Some(&saved.proxy));
             assert_eq!(
+                configured.outbound_proxy_id.as_deref(),
+                Some(saved.id.as_str())
+            );
+            assert_eq!(
                 configured.effective_outbound_proxy(),
                 enabled.then_some(&saved.proxy)
             );

@@ -27,6 +27,7 @@ struct Facts(AtomicUsize, AtomicUsize, Option<String>);
 fn account() -> AccountRecord {
     let at = "2026-01-01T00:00:00Z".parse().unwrap();
     AccountRecord {
+        outbound_proxy_id: None,
         outbound_proxy_enabled: true,
         id: "acct_facts".into(),
         provider_kind: ProviderKind::new("openai").unwrap(),

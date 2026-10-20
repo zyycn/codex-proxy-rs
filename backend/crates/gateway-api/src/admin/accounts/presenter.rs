@@ -120,6 +120,7 @@ pub(super) fn account_view(
         },
         weight: account.weight.get(),
         model_access: account.model_access,
+        outbound_proxy_id: account.outbound_proxy_id,
         outbound_proxy_endpoint: account
             .outbound_proxy
             .as_ref()

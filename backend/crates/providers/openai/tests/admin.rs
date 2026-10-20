@@ -1755,6 +1755,7 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        outbound_proxy_id: None,
         outbound_proxy_enabled: true,
         notes: None,
         model_access: Default::default(),
