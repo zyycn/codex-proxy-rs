@@ -10,14 +10,14 @@ use crate::call::model::{
 
 #[derive(Serialize, Deserialize)]
 struct Metadata {
-    service_tier: Option<String>,
+    observation: Option<super::super::model::facts::ResponseObservation>,
     continuation: Option<UpstreamContinuation>,
     failure: Option<UpstreamFailure>,
 }
 
 pub(super) fn encode(value: UpstreamAdapterEvent) -> Result<Vec<u8>, ExecutionEncodingError> {
     let metadata = Metadata {
-        service_tier: value.service_tier,
+        observation: value.observation,
         continuation: value.continuation,
         failure: value.failure,
     };
@@ -28,7 +28,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<UpstreamAdapterEvent, ExecutionEnco
     let (metadata, [event]): (Metadata, _) = unpack(*b"GPA1", bytes)?;
     Ok(UpstreamAdapterEvent {
         event: ExecutionEvent::decode(event)?,
-        service_tier: metadata.service_tier,
+        observation: metadata.observation,
         continuation: metadata.continuation,
         failure: metadata.failure,
     })

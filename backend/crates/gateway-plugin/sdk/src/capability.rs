@@ -32,7 +32,8 @@ impl Capability {
             | Self::RetryPolicy
             | Self::Observer
             | Self::Management => &[2],
-            Self::Scheduler | Self::UpstreamAdapter => &[3],
+            Self::Scheduler => &[3],
+            Self::UpstreamAdapter => &[4],
             Self::ModelCatalog | Self::CommandLine | Self::Maintenance => &[1],
         }
     }

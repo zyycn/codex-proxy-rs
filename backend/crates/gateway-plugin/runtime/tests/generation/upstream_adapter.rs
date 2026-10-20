@@ -87,7 +87,7 @@ impl UpstreamAccountConnection for Account {
 fn configuration(base: &str, streaming: bool) -> Value {
     json!({
         "upstream_registration":{"adapters":[{"id":"example","provider":"openai","base_url":format!("{base}/adapter/"),"paths":[{"path":"responses","purpose":"inference"}],"authentication_kinds":["oauth"],"transport":if streaming {"http_sse"} else {"http_json"},"protocol":"openai"}]},
-        "upstream_callbacks":[{"method":if streaming {"host.upstream.http.do_stream"} else {"host.upstream.http.do"},"params":{"method":"POST","path":"responses","headers":[["content-type","application/json"]]},"body":"request"}],
+        "upstream_callbacks":[{"method":if streaming {"host.upstream.http.do_stream"} else {"host.upstream.http.do"},"params":{"method":"POST","path":"responses","headers":[["content-type",b"application/json".to_vec()]]},"body":"request"}],
         "upstream_events":[
             {"event":{"facts":[{"type":"started","id":"response-one","model":"native-model"}]}},
             {"event":{"facts":[{"type":"usage","usage":{"input_tokens":7,"output_tokens":2}},{"type":"completed","id":"response-one","model":"native-model","reason":"stop"}]},"wire":if streaming {"sse"} else {"http"},"continuation":{"scope":"persisted","upstream_response_id":"private-upstream-id","state":{"cursor":"opaque"}}}
@@ -447,6 +447,193 @@ async fn adapter_sse_outlives_rpc_budget_and_cancellation_closes_its_resources()
 }
 
 #[tokio::test]
+async fn adapter_preserves_parsed_and_opaque_websocket_messages() {
+    use gateway_plugin_sdk::call::model::{WireEvent, WirePayload};
+    let messages = [
+        "{ \"type\": \"future.event\", \"value\": 1e3 }".to_owned(),
+        "opaque future message".to_owned(),
+        format!("{{\"value\":{}0{}}}", "[".repeat(140), "]".repeat(140)),
+    ];
+    let mut config = configuration("http://127.0.0.1:1", false);
+    config["upstream_callbacks"] = json!([]);
+    config["upstream_registration"]["adapters"][0]["transport"] = json!("websocket");
+    let mut events = vec![config["upstream_events"][0].clone()];
+    for message in &messages {
+        events.push(json!({"event":{"facts":[],"wire":WireEvent {
+            protocol: "openai".into(),
+            payload: WirePayload::WebSocket {
+                event: None, data: serde_json::from_str(message).ok(), message: message.as_bytes().to_vec(),
+            },
+        }}}));
+    }
+    events.push(json!({"event":config["upstream_events"][1]["event"].clone()}));
+    config["upstream_events"] = json!(events);
+    let (cache, _, runtime) = setup(config).await;
+    let generation = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+        .await
+        .unwrap();
+    let mut stream = execute(&runtime, &generation, Account::new(), "key-one", None);
+    let mut received = Vec::new();
+    while let Some(event) = stream.next().await {
+        if let Some(wire) = event.unwrap().wire_event() {
+            assert!(wire.raw_sse_frame().is_none());
+            received.push(wire.raw_websocket_message().unwrap().to_owned());
+        }
+    }
+    assert_eq!(received, messages);
+    drop(stream);
+    drop(generation);
+    runtime.shutdown().await;
+    super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
+async fn managed_http_failure_keeps_host_reason_and_error_kind() {
+    let mut config = configuration("http://127.0.0.1:1", false);
+    config["upstream_callbacks"][0]["params"]["method"] = json!("invalid method");
+    let (cache, _, runtime) = setup(config).await;
+    let generation = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+        .await
+        .unwrap();
+    let mut stream = execute(&runtime, &generation, Account::new(), "key-one", None);
+    let error = stream.next().await.unwrap().unwrap_err();
+    let raw: Value = serde_json::from_str(error.raw_upstream_error().unwrap().as_str()).unwrap();
+    assert_eq!(raw["fault"]["details"]["kind"], "invalid_request");
+    assert_eq!(raw["fault"]["details"]["reason"], "method");
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    drop(stream);
+    drop(generation);
+    runtime.shutdown().await;
+    super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
+async fn adapter_preserves_observation_updates_and_measures_only_real_output() {
+    let mut config = configuration("http://127.0.0.1:1", true);
+    config["upstream_callbacks"] = json!([]);
+    config["upstream_events"] = json!([
+        {"event":{"facts":[{"type":"started","id":"response-one","model":"native-model"},
+            {"type":"content_added","index":0,"kind":"reasoning"}]},
+         "observation":{"transport":"http_sse","http_version":"HTTP/2","status_code":200,
+            "request_id":"upstream-494","upstream_response_model":"real-model",
+            "client_headers":[{"name":"x-bytes","value":[255]},{"name":"x-bytes","value":[254]}],
+            "provider_metadata":"{ \"future\": 1e3 }","timings":{"connect_ms":5,"headers_ms":8}}},
+        {"event":{"facts":[{"type":"reasoning_delta","index":0,"text":""}]}},
+        {"event":{"facts":[{"type":"reasoning_delta","index":0,"text":"thinking"}]}},
+        {"event":{"facts":[{"type":"content_added","index":1,"kind":"text"},{"type":"text_delta","index":1,"text":"answer"}]}},
+        {"event":{"facts":[]},"observation":{"transport":"http_sse","service_tier":"priority",
+            "timings":{"upstream_response_ms":1000,"upstream_api_overhead_ms":1.25,"upstream_engine_ms":998.75}}},
+        {"event":{"facts":[{"type":"usage","usage":{"input_tokens":7,"output_tokens":2}},
+            {"type":"completed","id":"response-one","model":"native-model","reason":"stop"}]},
+         "observation":{"transport":"http_sse","timings":{"first_token_ms":41}}}
+    ]);
+    let (cache, _, runtime) = setup(config).await;
+    let generation = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+        .await
+        .unwrap();
+    let context = context(&runtime, &generation, "key-one");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let mut stream = execute_with_context(Account::new(), context, None);
+    let mut observations = Vec::new();
+    while let Some(event) = stream.next().await {
+        observations.push(event.unwrap().response_observation().unwrap().clone());
+    }
+    assert_eq!(observations.len(), 6);
+    assert_eq!(observations[0].timings().first_token_ms, None);
+    assert_eq!(observations[1].timings().first_token_ms, None);
+    let first_output = observations[2].timings().first_token_ms.unwrap();
+    assert!(first_output >= 50, "首字计时必须包括调用前的等待");
+    assert_eq!(
+        observations[2].timings().first_reasoning_ms,
+        Some(first_output)
+    );
+    assert!(observations[3].timings().first_text_ms.unwrap() >= first_output);
+    assert_eq!(observations[3].timings().upstream_response_ms, None);
+    let last = observations.last().unwrap();
+    assert_eq!(last.timings().first_token_ms, Some(41));
+    assert_eq!(last.timings().connect_ms, Some(5));
+    assert_eq!(last.timings().headers_ms, Some(8));
+    assert_eq!(last.timings().upstream_response_ms, Some(1000));
+    assert_eq!(last.timings().upstream_api_overhead_ms, Some(1.25));
+    assert_eq!(last.timings().upstream_engine_ms, Some(998.75));
+    assert_eq!(last.status_code(), Some(200));
+    assert_eq!(last.http_version().unwrap().as_str(), "HTTP/2");
+    assert_eq!(last.request_id().unwrap().as_str(), "upstream-494");
+    assert_eq!(last.upstream_response_model(), Some("real-model"));
+    assert_eq!(last.service_tier(), Some("priority"));
+    assert_eq!(
+        last.provider_metadata().unwrap().as_json(),
+        "{ \"future\": 1e3 }"
+    );
+    assert_eq!(last.client_headers().len(), 2);
+    assert_eq!(last.client_headers()[0].value().as_ref(), [255]);
+    assert_eq!(last.client_headers()[1].value().as_ref(), [254]);
+    drop(stream);
+    drop(generation);
+    runtime.shutdown().await;
+    super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
+async fn managed_http_preserves_byte_headers_trailers_and_version_for_plugins() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for streaming in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let upstream = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                assert!(socket.read_buf(&mut request).await.unwrap() > 0);
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nX-Bytes: \xff\r\nX-Bytes: other\r\nTransfer-Encoding: chunked\r\nTrailer: x-tail\r\n\r\n").await.unwrap();
+            let body = if streaming { "data: {}\n\n" } else { "{}" };
+            socket
+                .write_all(format!("{:x}\r\n{body}\r\n", body.len()).as_bytes())
+                .await
+                .unwrap();
+            socket
+                .write_all(b"0\r\nx-tail: \xfe\r\nx-tail: final\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let records = tempfile::tempdir().unwrap();
+        let marker = records.path().join("http.jsonl");
+        let mut config = configuration(&base, streaming);
+        config["upstream_callbacks"][0]["body"] = json!("");
+        config["upstream_http_marker"] = json!(marker);
+        let (cache, _, runtime) = setup(config).await;
+        let generation =
+            ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+                .await
+                .unwrap();
+        let mut stream = execute(&runtime, &generation, Account::new(), "key-one", None);
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        upstream.await.unwrap();
+        let observations: Vec<Value> = std::fs::read_to_string(&marker)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(observations[0]["http_version"], "HTTP/1.1");
+        let headers = observations[0]["headers"].as_array().unwrap();
+        assert!(headers.contains(&json!(["x-bytes", [255]])));
+        assert!(headers.contains(&json!(["x-bytes", b"other".to_vec()])));
+        let trailers = &observations.last().unwrap()["trailers"];
+        assert_eq!(
+            trailers,
+            &json!([["x-tail", [254]], ["x-tail", b"final".to_vec()]])
+        );
+        drop(stream);
+        drop(generation);
+        runtime.shutdown().await;
+        super::wait_until_empty(cache.path()).await;
+    }
+}
+
+#[tokio::test]
 async fn adapter_accepts_service_tier_resolved_by_the_terminal_response() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -455,8 +642,10 @@ async fn adapter_accepts_service_tier_resolved_by_the_terminal_response() {
         .mount(&server)
         .await;
     let mut config = configuration(&server.uri(), false);
-    config["upstream_events"][0]["service_tier"] = json!("auto");
-    config["upstream_events"][1]["service_tier"] = json!("default");
+    config["upstream_events"][0]["observation"] =
+        json!({"transport":"http_json","service_tier":"auto"});
+    config["upstream_events"][1]["observation"] =
+        json!({"transport":"http_json","service_tier":"default"});
     let (cache, _, runtime) = setup(config).await;
     let generation = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
         .await
@@ -498,6 +687,7 @@ async fn adapter_failure_preserves_upstream_diagnostics_and_native_feedback() {
     let mut config = configuration(&server.uri(), false);
     config["upstream_events"] = json!([{
         "event": {"facts": []},
+        "observation":{"transport":"http_json","status_code":429,"timings":{"upstream_response_ms":230}},
         "failure": {
             "kind": "rate_limited", "status": 429, "retry_after_ms": 1500,
             "message": "fixture rate limit", "code": "rate_limit_exceeded"
@@ -509,7 +699,7 @@ async fn adapter_failure_preserves_upstream_diagnostics_and_native_feedback() {
         .unwrap();
     let account = Account::new();
     let mut stream = execute(&runtime, &generation, Arc::clone(&account), "key-one", None);
-    let error = stream.next().await.unwrap().unwrap_err();
+    let mut error = stream.next().await.unwrap().unwrap_err();
     assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
     assert_eq!(error.send_state(), UpstreamSendState::Sent);
     assert_eq!(error.upstream_status(), Some(429));
@@ -518,6 +708,10 @@ async fn adapter_failure_preserves_upstream_diagnostics_and_native_feedback() {
         "rate_limit_exceeded"
     );
     assert_eq!(error.retry_after(), Some(Duration::from_millis(1500)));
+    let observations = error.take_atomic_client_events();
+    let observation = observations[0].response_observation().unwrap();
+    assert_eq!(observation.status_code(), Some(429));
+    assert_eq!(observation.timings().upstream_response_ms, Some(230));
     let snapshot = error.stable_snapshot();
     let raw: Value = serde_json::from_str(snapshot.raw_upstream_error().unwrap().as_str()).unwrap();
     assert_eq!(raw["message"], "fixture rate limit");
@@ -573,7 +767,8 @@ async fn adapter_overrides_auth_headers_and_rejects_stale_continuation() {
     super::wait_until_empty(cache.path()).await;
 
     let mut config = configuration(&server.uri(), false);
-    config["upstream_callbacks"][0]["params"]["headers"] = json!([["Authorization", "injected"]]);
+    config["upstream_callbacks"][0]["params"]["headers"] =
+        json!([["Authorization", b"injected".to_vec()]]);
     let (cache, _, runtime) = setup(config).await;
     let generation = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
         .await
@@ -625,8 +820,13 @@ async fn adapter_does_not_publish_completed_when_rpc_fails_after_terminal_frame(
             .contains("fixture terminal fault")
     );
     assert!(!format!("{error:?}").contains("fixture terminal fault"));
-    let facts = error
-        .take_atomic_client_events()
+    let atomic = error.take_atomic_client_events();
+    assert!(
+        atomic
+            .iter()
+            .any(|event| event.response_observation().is_some())
+    );
+    let facts = atomic
         .into_iter()
         .flat_map(|event| event.into_parts().0)
         .collect::<Vec<_>>();
@@ -715,11 +915,12 @@ async fn websocket_continuation_reuses_exact_connection_and_consumes_each_handle
         let (socket, _) = listener.accept().await.unwrap();
         let mut ws = tokio_tungstenite::accept_hdr_async(
             socket,
-            |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+            |request: &tokio_tungstenite::tungstenite::handshake::server::Request, mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
                 assert_eq!(
                     request.headers()["authorization"],
                     "Bearer fixture-native-token"
                 );
+                response.headers_mut().append("x-bytes", http::HeaderValue::from_static("handshake-value"));
                 Ok(response)
             },
         )
@@ -734,7 +935,10 @@ async fn websocket_continuation_reuses_exact_connection_and_consumes_each_handle
         }
         assert!(ws.next().await.is_none_or(|result| result.is_err()));
     });
+    let records = tempfile::tempdir().unwrap();
+    let marker = records.path().join("handshake.jsonl");
     let mut config = configuration(&base, false);
+    config["upstream_http_marker"] = json!(marker);
     config["upstream_registration"]["adapters"][0]["transport"] = json!("websocket");
     config["upstream_events"][1]["continuation"]["scope"] = json!("connection_local");
     config["upstream_callbacks"] = json!([
@@ -778,6 +982,22 @@ async fn websocket_continuation_reuses_exact_connection_and_consumes_each_handle
         event.unwrap();
     }
     drop(second);
+    let handshakes: Vec<Value> = std::fs::read_to_string(&marker)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|value| value["status"] == 101)
+        .collect();
+    assert_eq!(handshakes.len(), 2);
+    assert_eq!(handshakes[0], handshakes[1]);
+    assert_eq!(handshakes[0]["http_version"], "HTTP/1.1");
+    assert!(
+        handshakes[0]["headers"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(["x-bytes", b"handshake-value".to_vec()]))
+    );
+
     let error = execute(
         &runtime,
         &generation,

@@ -95,6 +95,8 @@ pub struct UpstreamAdapterRequest {
     pub client_transport: String,
     /// 宿主冻结的 Fast 策略：default、enabled 或 disabled
     pub fast_mode: String,
+    /// 宿主发送调用前相对 Core 请求计时起点已经过的毫秒数
+    pub request_elapsed_ms: u64,
     pub headers: Vec<(String, Vec<u8>)>,
     /// 只能来自同账号、同插件代次的宿主续接记录，不从客户端正文信任此值
     pub continuation: Option<UpstreamContinuation>,
@@ -129,8 +131,8 @@ pub struct UpstreamContinuation {
 /// 一个完整 GPE2 事件与可选的结算／续接事实；见 [`Self::encode`]
 pub struct UpstreamAdapterEvent {
     pub event: ExecutionEvent,
-    /// 上游回显的最新服务档位，可在终态确定；是否参与计价由内置 Provider 决定
-    pub service_tier: Option<String>,
+    /// 本次执行的上游观测；不使用 ExecutionEvent.host 回写宿主账本
+    pub observation: Option<super::model::facts::ResponseObservation>,
     pub continuation: Option<UpstreamContinuation>,
     pub failure: Option<UpstreamFailure>,
 }
@@ -140,7 +142,7 @@ impl UpstreamAdapterEvent {
     pub const fn new(event: ExecutionEvent) -> Self {
         Self {
             event,
-            service_tier: None,
+            observation: None,
             continuation: None,
             failure: None,
         }
@@ -186,7 +188,7 @@ pub struct UpstreamFailure {
 pub struct UpstreamHttpRequest {
     pub method: String,
     pub path: String,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     #[serde(default)]
     pub query: Vec<(String, String)>,
 }
@@ -195,7 +197,7 @@ pub struct UpstreamHttpRequest {
 #[serde(deny_unknown_fields)]
 pub struct UpstreamWebSocketRequest {
     pub path: String,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     #[serde(default)]
     pub query: Vec<(String, String)>,
 }

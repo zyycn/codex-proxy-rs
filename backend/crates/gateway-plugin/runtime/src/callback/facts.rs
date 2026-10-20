@@ -18,7 +18,7 @@ use gateway_plugin_sdk::{
             FinishReason as WireFinishReason, Usage as WireUsage, WireEvent, WirePayload,
             facts::{self, ExecutionCost, ExecutionFacts},
         },
-        observation::{RequestMoney, RequestTimings},
+        observation::RequestMoney,
     },
 };
 
@@ -120,7 +120,7 @@ fn observation(value: &ProviderResponseObservation) -> facts::ResponseObservatio
         request_id: value.request_id().map(|value| value.as_str().to_owned()),
         service_tier: value.service_tier().map(str::to_owned),
         upstream_response_model: value.upstream_response_model().map(str::to_owned),
-        timings: RequestTimings {
+        timings: facts::ResponseTimings {
             transport_decision_wait_ms: timings.transport_decision_wait_ms,
             connect_ms: timings.connect_ms,
             headers_ms: timings.headers_ms,
@@ -132,7 +132,6 @@ fn observation(value: &ProviderResponseObservation) -> facts::ResponseObservatio
             upstream_response_ms: timings.upstream_response_ms,
             upstream_api_overhead_ms: timings.upstream_api_overhead_ms,
             upstream_engine_ms: timings.upstream_engine_ms,
-            latency_ms: None,
         },
         client_headers: value
             .client_headers()
@@ -271,6 +270,12 @@ fn project_wire(wire: &ProtocolWireEvent) -> Result<WireEvent, PluginFault> {
         WirePayload::RawJson {
             body: body.to_vec(),
         }
+    } else if let Some(message) = wire.raw_websocket_message() {
+        WirePayload::WebSocket {
+            event: wire.event_type().map(str::to_owned),
+            data: wire.has_json_data().then(|| wire.data().clone()),
+            message: message.as_bytes().to_vec(),
+        }
     } else if wire.has_json_data() {
         WirePayload::Json {
             event: wire.event_type().map(str::to_owned),
@@ -282,15 +287,6 @@ fn project_wire(wire: &ProtocolWireEvent) -> Result<WireEvent, PluginFault> {
     } else if let Some(frame) = wire.raw_sse_frame() {
         WirePayload::RawSse {
             frame: frame.to_vec(),
-        }
-    } else if let Some(message) = wire.raw_websocket_message() {
-        // 子模型回调采用 SDK 的事件流表达，不把 WebSocket 文本冒充 HTTP body
-        WirePayload::RawSse {
-            frame: gateway_protocol::openai::sse::encode_sse_event(
-                wire.event_type().unwrap_or_default(),
-                message,
-            )
-            .into_bytes(),
         }
     } else {
         return Err(PluginFault::new(

@@ -11,7 +11,8 @@ use crate::{
 /// 响应头与惰性正文；不包含宿主的内部流句柄
 pub struct HostHttpResponse {
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub http_version: String,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub body: HostHttpBody,
 }
 
@@ -20,6 +21,7 @@ pub struct HostHttpBody {
     host: HostClient,
     stream: Option<String>,
     upstream: bool,
+    trailers: Vec<(String, Vec<u8>)>,
     read: PendingRead<Result<HostReply, SessionError>>,
 }
 
@@ -64,11 +66,13 @@ impl HostClient {
         }
         Ok(HostHttpResponse {
             status: response.status,
+            http_version: response.http_version,
             headers: response.headers,
             body: HostHttpBody {
                 host: self.clone(),
                 stream: response.stream,
                 upstream,
+                trailers: response.trailers,
                 read: PendingRead::default(),
             },
         })
@@ -76,6 +80,12 @@ impl HostClient {
 }
 
 impl HostHttpBody {
+    /// 已收到的响应尾部头；读取至 EOF 后完整，名称、多值和字节原样保留
+    #[must_use]
+    pub fn trailers(&self) -> &[(String, Vec<u8>)] {
+        &self.trailers
+    }
+
     /// 按需读取至多 64 KiB，EOF 后再次读取不再调用宿主
     /// 取消一次等待后，再次调用会继续同一次读取，不丢弃分块
     ///
@@ -89,6 +99,8 @@ impl HostHttpBody {
         #[serde(deny_unknown_fields)]
         struct Read {
             eof: bool,
+            #[serde(default)]
+            trailers: Vec<(String, Vec<u8>)>,
         }
         let maximum_bytes = u32::try_from(self.host.maximum_stream_chunk_bytes().min(64 * 1024))
             .map_err(|_| invalid())?;
@@ -112,6 +124,7 @@ impl HostHttpBody {
             let _ = self.close().await;
             return Err(invalid());
         }
+        self.trailers.extend(result.trailers);
         if result.eof {
             self.stream = None;
             Ok(None)

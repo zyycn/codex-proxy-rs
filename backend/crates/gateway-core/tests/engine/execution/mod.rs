@@ -1195,6 +1195,114 @@ fn request_policy_snapshot(
     .with_extensions(Some(generation))
 }
 
+fn plugin_origin_scope() -> gateway_core::engine::extensions::ExtensionCallScope {
+    gateway_core::engine::extensions::ExtensionCallScope::default().with_request(Arc::new(
+        gateway_core::engine::extensions::RequestContext {
+            method: "POST".into(),
+            uri: "/plugin/proxy".into(),
+            http_version: "HTTP/1.1".into(),
+            headers: vec![gateway_core::engine::middleware::MiddlewareHeader::new(
+                "User-Agent",
+                Bytes::from_static(b"fixture-client/494"),
+            )],
+            peer_addr: None,
+            client_ip: Some("192.0.2.49".parse().unwrap()),
+        },
+    ))
+}
+
+#[test]
+fn explicit_key_model_execution_preserves_http_origin_and_leaves_background_origin_unknown() {
+    use gateway_core::engine::nested::{
+        BoundModelExecutionBinding, BoundModelExecutionRequest, NestedModelExecutionPort,
+    };
+    block_on(async {
+        for has_origin in [true, false] {
+            let store = Arc::new(TrackingExecutionStore::default());
+            let service = DefaultExecutionService::new(
+                RuntimeSnapshotHandle::new(request_policy_snapshot(
+                    super::extensions::reference("origin-fixture"),
+                    &[ProviderKind::new("openai").unwrap()],
+                )),
+                store.clone(),
+                ProviderRegistry::new([Arc::new(ProcessingProvider) as Arc<dyn Provider>]).unwrap(),
+                Arc::new(Admissions::default()),
+                Arc::new(UnusedContinuation),
+                Arc::new(RecordingClientApiKeyUsage::default()),
+                Arc::new(crate::RecordingDiagnostics::default()),
+            );
+            let input = request(&service, ClientTransport::InternalPlugin);
+            let context = NestedModelExecutionPort::bind(
+                &service,
+                BoundModelExecutionBinding {
+                    settings: None,
+                    client_key_id: ClientApiKeyId::new("key_start_test").unwrap(),
+                    initiating_plugin_instance_id: "origin-fixture".into(),
+                    cancellation: Default::default(),
+                    extension_scope: if has_origin {
+                        plugin_origin_scope()
+                    } else {
+                        Default::default()
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            let mut started = NestedModelExecutionPort::start_bound(
+                &service,
+                BoundModelExecutionRequest {
+                    context: context.clone(),
+                    public_model: input.public_model,
+                    operation: input.operation,
+                    metadata: input.metadata,
+                    provider: None,
+                    account: None,
+                },
+            )
+            .await
+            .unwrap();
+            let mut child = NestedModelExecutionPort::start(
+                &service,
+                NestedModelExecutionRequest {
+                    parent_request_id: started.request_id.clone(),
+                    initiating_plugin_instance_id: "nested-origin-fixture".into(),
+                    public_model: PublicModelId::new("gpt-start").unwrap(),
+                    operation: start_operation(),
+                    metadata: request(&service, ClientTransport::InternalPlugin).metadata,
+                    provider: None,
+                    account: None,
+                    parent_account: None,
+                },
+            )
+            .await
+            .unwrap();
+            child.session.collect_uncommitted().await.unwrap();
+            child.session.commit_downstream(Some(200)).await.unwrap();
+            child.session.detach_finalize().await;
+            started.session.collect_uncommitted().await.unwrap();
+            {
+                let requests = store.requests.lock().unwrap();
+                assert_eq!(requests.len(), 2);
+                for request in requests.iter() {
+                    assert_eq!(
+                        request.client_ip,
+                        has_origin.then(|| "192.0.2.49".parse().unwrap())
+                    );
+                    assert_eq!(
+                        request.user_agent.as_deref(),
+                        has_origin.then_some("fixture-client/494")
+                    );
+                    assert_eq!(
+                        request.client_transport,
+                        ClientTransport::InternalPlugin.as_str()
+                    );
+                }
+            }
+            started.session.detach_finalize().await;
+        }
+    });
+}
+
 #[test]
 fn completed_parent_rejects_new_nested_execution_and_cancels_an_active_child() {
     block_on(async {

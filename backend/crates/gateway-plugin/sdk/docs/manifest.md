@@ -34,7 +34,7 @@
 
 清单与宿主兼容声明的格式版本为 `2`，进程协议版本为 `4`；清单不接受 `permissions` 字段
 
-RPC v4 的帧布局、编码与会话生命周期见[通信边界](../README.md#通信边界)。插件使用 SDK 构建，并由 CLI 生成包含协议版本的安装包
+RPC v5 的帧布局、编码与会话生命周期见[通信边界](../README.md#通信边界)。插件使用 SDK 构建，并由 CLI 生成包含协议版本的安装包
 
 安装包清单校验与已安装元数据读取是两个边界：清单拒绝未知字段，并检查必需字段、类型和版本；
 数据库元数据的读取规则见[制品与发布](../../../../../docs/architecture.md#制品配置与发布)，不改变清单或 RPC 合同。
@@ -49,7 +49,7 @@ RPC v4 的帧布局、编码与会话生命周期见[通信边界](../README.md#
 
 ## 扩展项简写
 
-作者声明可以省略 `id` 和固定阶段。版本字段省略时为 `1`，适用于 `model_catalog`、`command_line` 和 `maintenance`；其余能力显式声明当前版本：`middleware` 为 `5`，`scheduler` 和 `upstream_adapter` 为 `3`，认证、路由、重试、观察和管理能力为 `2`：
+作者声明可以省略 `id` 和固定阶段。版本字段省略时为 `1`，适用于 `model_catalog`、`command_line` 和 `maintenance`；其余能力显式声明当前版本：`middleware` 为 `5`，`scheduler` 为 `3`，`upstream_adapter` 为 `4`，认证、路由、重试、观察和管理能力为 `2`：
 
 ```json
 {

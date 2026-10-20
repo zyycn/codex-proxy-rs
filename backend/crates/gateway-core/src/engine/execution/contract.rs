@@ -65,6 +65,22 @@ pub struct ExecutionRequestMetadata {
     pub previous_response_id: Option<PreviousResponseId>,
 }
 
+impl ExecutionRequestMetadata {
+    pub(super) fn inherit_request_origin(&mut self, scope: &ExtensionCallScope) {
+        let Some(request) = scope.request() else {
+            return;
+        };
+        // 执行入口可以是内部调用，客户端来源仍属于原始入口快照
+        self.client_ip = request.client_ip;
+        self.user_agent = request
+            .headers
+            .iter()
+            .find(|header| header.name().eq_ignore_ascii_case("user-agent"))
+            .and_then(|header| std::str::from_utf8(header.value()).ok())
+            .map(str::to_owned);
+    }
+}
+
 #[derive(Clone)]
 pub struct AuthenticatedClient {
     pub(super) settings: Option<RequestSettings>,

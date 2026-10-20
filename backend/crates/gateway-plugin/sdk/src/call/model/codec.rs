@@ -122,6 +122,7 @@ fn attach(target: Option<&mut Vec<u8>>, bytes: &[u8]) -> Result<(), ExecutionEnc
 fn raw_wire(wire: Option<&mut super::WireEvent>) -> Option<&mut Vec<u8>> {
     match &mut wire?.payload {
         WirePayload::Json { raw_sse, .. } => raw_sse.as_mut(),
+        WirePayload::WebSocket { message, .. } => Some(message),
         WirePayload::RawSse { frame } => Some(frame),
         WirePayload::RawJson { body } | WirePayload::RawBody { body } => Some(body),
     }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CallContext, Handshake, PluginFault};
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// 元数据与二进制载荷分开，流分块不经过 JSON/base64
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

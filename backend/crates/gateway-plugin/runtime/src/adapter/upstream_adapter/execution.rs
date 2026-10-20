@@ -106,6 +106,7 @@ impl Execution {
                 self.adapter.declaration.transport.as_str(),
                 self.invocation.account.as_ref(),
                 active.managed.send_state.get(),
+                self.invocation.context.timing_started_at(),
             )
             .map_err(|error| match error {
                 EventDecodeError::Invalid(error) => {
@@ -131,7 +132,7 @@ impl Execution {
             }.await;
             if let Err(error) = terminal {
                 // 尾部故障不得交付成功 wire，但已经解析的计量事实仍归 Core 结算
-                let metering = decoded
+                let mut metering: Vec<_> = decoded
                     .event
                     .canonical_facts()
                     .iter()
@@ -145,6 +146,11 @@ impl Execution {
                     .cloned()
                     .map(gateway_core::event::ProviderEvent::canonical)
                     .collect();
+                if let Some(observation) = decoded.event.response_observation() {
+                    metering.push(gateway_core::event::ProviderEvent::observation(
+                        observation.clone(),
+                    ));
+                }
                 return Err(error.with_atomic_client_events(metering));
             }
             self.ended = true;
@@ -232,6 +238,10 @@ impl Execution {
             protocol: invocation.operation.protocol().to_owned(),
             client_transport: invocation.context.client_transport().as_str().to_owned(),
             fast_mode: invocation.context.fast_mode().as_str().to_owned(),
+            request_elapsed_ms: u64::try_from(
+                invocation.context.timing_started_at().elapsed().as_millis(),
+            )
+            .unwrap_or(u64::MAX),
             headers: invocation
                 .headers
                 .iter()

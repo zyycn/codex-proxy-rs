@@ -24,7 +24,7 @@ use gateway_protocol::openai::sse::SseEventDecoder;
 pub(super) struct EventDecoder {
     sequence: EventSequenceValidator,
     response_id: Option<String>,
-    service_tier: Option<String>,
+    observation: Option<ProviderResponseObservation>,
     usage: Usage,
     contents: usize,
     pub(super) completed: bool,
@@ -54,6 +54,7 @@ impl EventDecoder {
         transport: &str,
         account: &dyn UpstreamAccountConnection,
         sent: UpstreamSendState,
+        started_at: std::time::Instant,
     ) -> Result<DecodedEvent, EventDecodeError> {
         let message = UpstreamAdapterEvent::decode(payload)
             .map_err(|source| invalid(sent).with_source(source))?;
@@ -65,22 +66,31 @@ impl EventDecoder {
             .wire
             .map(|wire| decode_wire(wire, protocol, sent))
             .transpose()?;
+        let has_observation = self.observation.is_some() || message.observation.is_some();
+        let mut observation = match self.observation.take() {
+            Some(observation) => observation,
+            None => ProviderResponseObservation::new(
+                UpstreamTransport::new(transport)
+                    .map_err(|source| invalid(sent).with_source(source))?,
+            ),
+        };
+        if let Some(update) = message.observation {
+            observation = super::observation::merge(observation, update, sent)?;
+        }
         if let Some(failure) = message.failure {
             if !message.event.facts.is_empty() || message.continuation.is_some() {
                 return Err(invalid(sent).into());
             }
-            let mut error = failure_error(failure, sent)?;
+            let mut events = Vec::new();
+            if has_observation {
+                events.push(ProviderEvent::observation(observation));
+            }
             if let Some(wire) = wire {
-                error = error.with_atomic_client_events(vec![ProviderEvent::wire(wire)]);
+                events.push(ProviderEvent::wire(wire));
             }
-            return Err(EventDecodeError::Upstream(error));
-        }
-        if let Some(tier) = message.service_tier {
-            if tier.is_empty() || tier.len() > 64 || tier.chars().any(char::is_control) {
-                return Err(invalid(sent).into());
-            }
-            // 上游可能在完成时才把 auto 解析为实际档位；与原生观测一样保留最新值
-            self.service_tier = Some(tier);
+            return Err(EventDecodeError::Upstream(
+                failure_error(failure, sent)?.with_atomic_client_events(events),
+            ));
         }
         let mut facts = Vec::new();
         for fact in message.event.facts {
@@ -181,7 +191,7 @@ impl EventDecoder {
                         return Err(invalid(sent).into());
                     }
                     if let Some(cost) =
-                        account.calculate_cost(self.service_tier.as_deref(), &self.usage)
+                        account.calculate_cost(observation.service_tier(), &self.usage)
                     {
                         let cost = GatewayEvent::CalculatedCost(cost);
                         self.sequence
@@ -213,22 +223,21 @@ impl EventDecoder {
         if message.continuation.is_some() && !self.completed {
             return Err(invalid(sent).into());
         }
+        observation =
+            super::observation::observe_output(observation, &facts, wire.is_some(), started_at);
+        self.observation = Some(observation.clone());
         let mut event = if let Some(wire) = wire {
             ProviderEvent::canonical_with_wire(facts, wire)
         } else {
             let mut facts = facts.into_iter();
-            let first = facts.next().ok_or_else(|| invalid(sent))?;
-            facts.fold(ProviderEvent::canonical(first), ProviderEvent::with_fact)
+            match facts.next() {
+                Some(first) => {
+                    facts.fold(ProviderEvent::canonical(first), ProviderEvent::with_fact)
+                }
+                None => ProviderEvent::observation(observation.clone()),
+            }
         };
-        if let Some(tier) = &self.service_tier {
-            let observation = ProviderResponseObservation::new(
-                UpstreamTransport::new(transport)
-                    .map_err(|source| invalid(sent).with_source(source))?,
-            )
-            .try_with_service_tier(tier.clone())
-            .map_err(|source| invalid(sent).with_source(source))?;
-            event.attach_observation(observation);
-        }
+        event.attach_observation(observation);
         Ok(DecodedEvent {
             event,
             continuation: message.continuation,
@@ -306,6 +315,20 @@ fn decode_wire(
                 )
             } else {
                 ProtocolWireEvent::json_with_sse_metadata(protocol, event, data, id, retry)
+            }
+        }
+        WirePayload::WebSocket {
+            event,
+            data,
+            message,
+        } => {
+            let message =
+                String::from_utf8(message).map_err(|source| invalid(sent).with_source(source))?;
+            if let Some(data) = data {
+                ProtocolWireEvent::json(protocol, event, data)
+                    .map(|wire| wire.with_raw_websocket_message(message))
+            } else {
+                ProtocolWireEvent::raw_websocket(protocol, message)
             }
         }
         WirePayload::RawSse { frame } => {

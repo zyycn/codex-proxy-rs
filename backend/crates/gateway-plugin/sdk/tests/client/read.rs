@@ -105,7 +105,7 @@ async fn verify_cancelled_read(method: &str) {
     reply(
         &mut host,
         id,
-        json!({"status":status,"headers":[],"stream":stream}),
+        json!({"status":status,"http_version":"HTTP/1.1","trailers":[],"headers":[],"stream":stream}),
         b"",
     )
     .await;

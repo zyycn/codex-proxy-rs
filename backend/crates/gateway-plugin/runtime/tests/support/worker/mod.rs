@@ -1599,6 +1599,7 @@ impl Peer {
             }))
             .await?;
             for (result, payload) in results {
+                self.append_observation_marker("upstream_http_marker", &result);
                 if let Some(stream) = result["stream"].as_str() {
                     loop {
                         let (result, chunk) = self
@@ -1609,6 +1610,7 @@ impl Peer {
                                 vec![],
                             )
                             .await?;
+                        self.append_observation_marker("upstream_http_marker", &result);
                         response_body.extend(chunk);
                         if result["eof"] == true {
                             break;
@@ -1625,7 +1627,9 @@ impl Peer {
             let mut message = UpstreamAdapterEvent::new(
                 serde_json::from_value::<ExecutionEvent>(event["event"].clone()).unwrap(),
             );
-            message.service_tier = event["service_tier"].as_str().map(str::to_owned);
+            message.observation = event
+                .get("observation")
+                .map(|value| serde_json::from_value(value.clone()).unwrap());
             message.continuation = event
                 .get("continuation")
                 .map(|value| serde_json::from_value(value.clone()).unwrap());

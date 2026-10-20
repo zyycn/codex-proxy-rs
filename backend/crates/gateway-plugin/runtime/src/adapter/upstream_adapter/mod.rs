@@ -3,6 +3,7 @@
 mod event;
 mod execution;
 mod failure;
+mod observation;
 mod registration;
 pub(crate) mod target;
 

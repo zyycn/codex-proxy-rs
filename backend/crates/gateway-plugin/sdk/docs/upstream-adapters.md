@@ -1,12 +1,12 @@
 # 受管上游适配器
 
-`upstream_adapter` v3 是现有生成请求洋葱链的终端，只挂到内置 `openai` / `xai`，不替换独立图像或压缩端点。
+`upstream_adapter` v4 是现有生成请求洋葱链的终端，只挂到内置 `openai` / `xai`，不替换独立图像或压缩端点。
 插件定义 Base URL、业务路径、请求编码和响应解析；宿主继续持有身份、ACL、选号、租约、凭据、代理、重试和账本。
 普通请求或响应加工使用 [middleware](capabilities.md#洋葱中间件)
 
 ## 声明与绑定
 
-清单声明 `upstream_adapter`、版本 `3`，以及匹配的 `inputFormats` / `outputFormats`；固定阶段 `upstream` 由作者清单规范化入口生成。
+清单声明 `upstream_adapter`、版本 `4`，以及匹配的 `inputFormats` / `outputFormats`；固定阶段 `upstream` 由作者清单规范化入口生成。
 使用 `PluginBuilder::on` 注册
 `methods::UPSTREAM_ADAPTER_REGISTER` 与 `methods::UPSTREAM_ADAPTER_EXECUTE`
 
@@ -55,15 +55,15 @@ while let Some(bytes) = body.read().await? {
 
 正文与普通 `HostClient::http` 共用 `read`、`collect(maximum_bytes)` 和 `close`；每次读取至多 64 KiB，
 不后台预读，不向作者暴露流 ID。提前关闭及收集超限会释放正文，父调用结束或取消时宿主兜底回收。
-JSON 可有界收集，SSE 应增量解析，不能把读取块当成完整事件
+JSON 可有界收集，SSE 应增量解析，不能把读取块当成完整事件。HTTP 版本、字节头及 trailers 的读取见[网络](capabilities.md#网络)
 
 WebSocket 使用 `call.host.upstream_websocket(request).await?`，返回
-`UpstreamWebSocketUpgrade::Connected { headers, connection }` 或 `Rejected { status, headers, body }`。
+`UpstreamWebSocketUpgrade::Connected { http_version, headers, connection }` 或 `Rejected { status, http_version, headers, body, trailers }`。
 连接提供 `send(kind, body)`、`read()`、`close()`，支持完整文本与二进制消息，Ping/Pong 由宿主处理。
 读写可同时进行，等待上游输出时可以发送控制消息；有先后依赖的消息须顺序等待 `send`。
 同一时刻只允许一个读取者；取消一次 `read()` 等待后，再次读取继续同一次接收，不跳过消息。
 `close` 会唤醒在途操作并释放连接，并发关闭等待同一次完成；读取超时或连接错误也会关闭连接。
-握手拒绝保留 HTTP 状态和正文。底层 `host.upstream.*` 是 SDK 使用的资源协议
+握手拒绝保留 HTTP 状态、正文和 trailers；连接复用返回该连接最初的握手版本和响应头。底层 `host.upstream.*` 是 SDK 使用的资源协议
 
 ```rust,ignore
 let (message, ()) = tokio::try_join!(
@@ -80,15 +80,27 @@ let (message, ()) = tokio::try_join!(
 
 执行返回 `TypedReply<Empty>` 的有界 `ResponseStream`。每个 chunk 使用 `UpstreamAdapterEvent::encode()`，
 包含标准事实与可选原始 wire；事件需符合开始、内容、工具、用量和唯一结束的顺序。
-原始 JSON / SSE 字节与标准事实分开传递，错误使用 `UpstreamFailure`；宿主网络观测决定发送状态，插件不能将其降为未发送
+原始 JSON / SSE / WebSocket 字节与标准事实分开传递，错误使用 `UpstreamFailure`；宿主网络观测决定发送状态，插件不能将其降为未发送
 
 初始 RPC 回复受插件处理预算约束，默认上限为 120 秒；持续接收与解析应放在返回的流中。
 初始流式回复后，流的寿命遵循模型请求期限与取消，受管 HTTP 正文每次读取单独计时。
 持续有数据的流不会因初始 RPC 预算耗尽而结束，单次读取超时、客户端取消和流结束仍会回收资源
 
 用量提交标准 `Usage`，费用由内置 Provider 按已冻结的上游模型与价格计算，响应回显模型不切换计价。
-`service_tier` 记录上游回显的最新档位，允许上游在完成时确定实际值；OpenAI 计价沿用请求策略，回显档位仅作观测。
+`observation.service_tier` 记录上游回显的最新档位，允许上游在完成时确定实际值；OpenAI 计价沿用请求策略，回显档位仅作观测。
 未知用量或价格保留未知。宿主确认 RPC 正常结束后才发布完成事实，插件不能独立结算或组织换号重试
+
+`UpstreamAdapterEvent.observation` 接收 `ResponseObservation` 原始观测：HTTP 版本、状态、请求 ID、回显模型、
+服务档位、字节响应头、Provider JSON 元数据及 `ResponseTimings`。`transport` 与注册传输类型一致；
+已提供字段覆盖同次执行的旧值，缺失字段或空 headers 保留已有观测，允许独立的观测事件及失败事件携带观测。
+`ExecutionEvent.host` 是宿主结果的只读快照，不能用于回写费用、发送状态或续接
+
+`first_*_ms` 相对 Core 请求计时起点，包含本次请求的排队和重试等待。
+`request_elapsed_ms` 提供宿主发送本次适配器调用前已耗的时间，插件自行计时须对齐该基线；
+没有报告时 Runtime 在收到首事件、非空正文／推理／工具增量时记录相应时间。
+开始、心跳和空增量不构成首个输出，显式报告的计时优先于宿主缺省观测。
+`upstream_response_ms`、`upstream_api_overhead_ms`、`upstream_engine_ms` 只能来自上游原始计时，
+没有来源时保持缺失。观测合同不包含总耗时、速率或计算费用，这些由宿主业务层消费原始值计算
 
 成功终态可附带 `UpstreamContinuation`，包含上游响应 ID、不超过 32 KiB 的私有续接材料和作用域：
 

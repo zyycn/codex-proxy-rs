@@ -135,7 +135,7 @@ fn capability_contract_versions_are_checked_independently_of_rpc_version() {
     for (capability, stage, supported, needs_formats) in [
         (Capability::Middleware, Stage::Request, 5, true),
         (Capability::Management, Stage::Management, 2, false),
-        (Capability::UpstreamAdapter, Stage::Upstream, 3, true),
+        (Capability::UpstreamAdapter, Stage::Upstream, 4, true),
         (Capability::Scheduler, Stage::Scheduling, 3, false),
     ] {
         for mut manifest in [source_manifest(), packaged_manifest()] {
@@ -396,7 +396,7 @@ fn contributes_rejects_duplicate_capability_keys_in_direct_json_parsing() {
 
     let handshake = format!(
         r#"{{
-            "protocol_version":4,"artifact_sha256":"digest","plugin_id":"test.example",
+            "protocol_version":5,"artifact_sha256":"digest","plugin_id":"test.example",
             "instance_id":"instance","generation":1,"incarnation":"incarnation",
             "contributes":{{"middleware":{declaration},"middleware":{declaration}}}
         }}"#

@@ -108,10 +108,23 @@ impl PluginHandler for NetworkHandler {
             if call.params["collect"] == true {
                 return Ok(CallReply::unary(json!({}), response.body.collect(3).await?));
             }
+            if call.params["metadata"] == true {
+                assert_eq!(response.http_version, "HTTP/1.1");
+                assert_eq!(
+                    response.headers,
+                    vec![
+                        ("x-bytes".to_owned(), vec![0xff]),
+                        ("x-bytes".to_owned(), b"other".to_vec())
+                    ]
+                );
+            }
             let mut body = response.body;
             let bytes = body.read().await?.unwrap();
             assert!(body.read().await?.is_none());
             assert!(body.read().await?.is_none());
+            if call.params["metadata"] == true {
+                assert_eq!(body.trailers(), &[("x-tail".to_owned(), vec![0xfe])]);
+            }
             body.close().await?;
             body.close().await?;
             Ok(CallReply::unary(json!({}), bytes))
@@ -146,7 +159,14 @@ async fn reply_callback(
 async fn http_response_objects_share_pull_semantics_and_retire_eof_handles() {
     for method in ["http", "upstream"] {
         let (mut host, task) = start_session(NetworkHandler).await;
-        send_call(&mut host, 1, method, json!({}), b"request".to_vec()).await;
+        send_call(
+            &mut host,
+            1,
+            method,
+            json!({"metadata":true}),
+            b"request".to_vec(),
+        )
+        .await;
         let prefix = if method == "http" {
             "host.http"
         } else {
@@ -155,7 +175,7 @@ async fn http_response_objects_share_pull_semantics_and_retire_eof_handles() {
         let frame = reply_callback(
             &mut host,
             &format!("{prefix}.do_stream"),
-            json!({"status":200,"headers":[],"stream":"private-handle"}),
+            json!({"status":200,"http_version":"HTTP/1.1","trailers":[],"headers":[["x-bytes",[255]],["x-bytes",b"other".to_vec()]],"stream":"private-handle"}),
             vec![],
         )
         .await;
@@ -173,7 +193,7 @@ async fn http_response_objects_share_pull_semantics_and_retire_eof_handles() {
         reply_callback(
             &mut host,
             &format!("{prefix}.stream_read"),
-            json!({"eof":true}),
+            json!({"eof":true,"trailers":[["x-tail",[254]]]}),
             vec![],
         )
         .await;
@@ -191,7 +211,7 @@ async fn bounded_collection_closes_the_host_stream_before_reporting_overflow() {
     reply_callback(
         &mut host,
         "host.upstream.http.do_stream",
-        json!({"status":200,"headers":[],"stream":"private-handle"}),
+        json!({"status":200,"http_version":"HTTP/1.1","trailers":[],"headers":[],"stream":"private-handle"}),
         vec![],
     )
     .await;
@@ -222,7 +242,7 @@ async fn websocket_session_handles_messages_eof_and_http_rejection() {
     reply_callback(
         &mut host,
         "host.upstream.websocket.open",
-        json!({"status":101,"headers":[],"stream":null}),
+        json!({"status":101,"http_version":"HTTP/1.1","trailers":[],"headers":[],"stream":null}),
         vec![],
     )
     .await;
@@ -249,7 +269,7 @@ async fn websocket_session_handles_messages_eof_and_http_rejection() {
     reply_callback(
         &mut host,
         "host.upstream.websocket.open",
-        json!({"status":401,"headers":[],"stream":null}),
+        json!({"status":401,"http_version":"HTTP/1.1","trailers":[],"headers":[],"stream":null}),
         b"unauthorized".to_vec(),
     )
     .await;
@@ -268,7 +288,7 @@ async fn websocket_send_and_read_callbacks_can_be_in_flight_together() {
     reply_callback(
         &mut host,
         "host.upstream.websocket.open",
-        json!({"status":101,"headers":[],"stream":null}),
+        json!({"status":101,"http_version":"HTTP/1.1","trailers":[],"headers":[],"stream":null}),
         vec![],
     )
     .await;
@@ -329,7 +349,7 @@ async fn websocket_close_can_be_retried_after_cancelling_its_future() {
     reply_callback(
         &mut host,
         "host.upstream.websocket.open",
-        json!({"status":101,"headers":[],"stream":null}),
+        json!({"status":101,"http_version":"HTTP/1.1","trailers":[],"headers":[],"stream":null}),
         vec![],
     )
     .await;
@@ -362,7 +382,7 @@ async fn websocket_close_does_not_wait_for_a_pending_reader() {
     reply_callback(
         &mut host,
         "host.upstream.websocket.open",
-        json!({"status":101,"headers":[],"stream":null}),
+        json!({"status":101,"http_version":"HTTP/1.1","trailers":[],"headers":[],"stream":null}),
         vec![],
     )
     .await;

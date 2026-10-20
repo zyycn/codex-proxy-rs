@@ -63,15 +63,17 @@ pub struct HttpRequest {
     pub method: String,
     pub url: String,
     #[serde(default)]
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpResponse {
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub http_version: String,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub stream: Option<String>,
+    pub trailers: Vec<(String, Vec<u8>)>,
 }
 
 /// 宿主账号列表查询；cursor 是上次结果返回的稳定账号 ID

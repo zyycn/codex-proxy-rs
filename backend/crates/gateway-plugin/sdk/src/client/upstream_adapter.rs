@@ -21,13 +21,16 @@ use crate::{
 /// 握手拒绝仍保留 HTTP 状态及正文，供适配器解析上游错误
 pub enum UpstreamWebSocketUpgrade {
     Connected {
-        headers: Vec<(String, String)>,
+        http_version: String,
+        headers: Vec<(String, Vec<u8>)>,
         connection: UpstreamWebSocket,
     },
     Rejected {
         status: u16,
-        headers: Vec<(String, String)>,
+        http_version: String,
+        headers: Vec<(String, Vec<u8>)>,
         body: Vec<u8>,
+        trailers: Vec<(String, Vec<u8>)>,
     },
 }
 
@@ -57,6 +60,7 @@ impl HostClient {
         }
         Ok(if response.status == 101 {
             UpstreamWebSocketUpgrade::Connected {
+                http_version: response.http_version,
                 headers: response.headers,
                 connection: UpstreamWebSocket {
                     host: self.clone(),
@@ -67,8 +71,10 @@ impl HostClient {
         } else {
             UpstreamWebSocketUpgrade::Rejected {
                 status: response.status,
+                http_version: response.http_version,
                 headers: response.headers,
                 body,
+                trailers: response.trailers,
             }
         })
     }

@@ -102,7 +102,21 @@ async fn reading_websocket_facts_preserves_original_text_and_opaque_messages() {
         );
     }
     assert_eq!(delivered, messages);
-    assert_eq!(marker_lines(&marker, 4).await.len(), 4);
+    let snapshots = marker_lines(&marker, 4).await;
+    for (snapshot, original) in snapshots[1..].iter().zip(&messages) {
+        let event: gateway_plugin_sdk::call::model::ExecutionEvent =
+            serde_json::from_value(snapshot.clone()).unwrap();
+        let gateway_plugin_sdk::call::model::WirePayload::WebSocket { data, message, .. } =
+            event.wire.unwrap().payload
+        else {
+            panic!("WebSocket facts must retain their original transport");
+        };
+        assert_eq!(message, original.as_bytes());
+        assert_eq!(
+            data.is_some(),
+            serde_json::from_str::<serde_json::Value>(original).is_ok()
+        );
+    }
     drop(stream);
     runtime.shutdown().await;
 }

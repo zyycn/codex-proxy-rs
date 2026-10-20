@@ -149,6 +149,12 @@ pub enum WirePayload {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         raw_sse: Option<Vec<u8>>,
     },
+    /// 完整 WebSocket 文本消息及可用的解析视图，原文独立放入二进制段
+    WebSocket {
+        event: Option<String>,
+        data: Option<serde_json::Value>,
+        message: Vec<u8>,
+    },
     /// 注释、非 JSON data 等原生 SSE 表达，不能夹带第二个帧
     RawSse { frame: Vec<u8> },
     /// 一个完整的非流式 JSON 响应正文，保留空白与字段顺序

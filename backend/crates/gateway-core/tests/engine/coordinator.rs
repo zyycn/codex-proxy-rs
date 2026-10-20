@@ -3467,13 +3467,16 @@ fn explicit_429_after_structural_event_should_retry_before_commit() {
 fn atomic_response_failed_should_rotate_account_before_stream_commit() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
+    let mut failure = atomic_response_failed("response-first-failed", "first account failure");
+    let mut events = failure.take_atomic_client_events();
+    events[0].attach_observation(
+        ProviderResponseObservation::new(UpstreamTransport::new("http_sse").unwrap())
+            .with_request_id(OpaqueUpstreamValue::new("upstream-failed-attempt")),
+    );
     let (coordinator, store, provider) = coordinator(vec![
         Script::ObservedStream {
             account_id: "acct_first",
-            items: vec![Err(atomic_response_failed(
-                "response-first-failed",
-                "first account failure",
-            ))],
+            items: vec![Err(failure.with_atomic_client_events(events))],
         },
         Script::Stream {
             account_id: "acct_second",
@@ -3516,6 +3519,10 @@ fn atomic_response_failed_should_rotate_account_before_stream_commit() {
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.commits, 1);
     assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(
+        state.intermediate_request_ids,
+        [Some("upstream-failed-attempt".to_owned())]
+    );
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
 }
 

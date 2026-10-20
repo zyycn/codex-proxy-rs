@@ -45,16 +45,12 @@ impl HttpCallbacks<'_> {
         );
         let response = response.map_err(http_error)?;
         let mut body = response.body;
-        let headers = response
-            .headers
-            .into_iter()
-            .map(|(name, value)| String::from_utf8(value).map(|value| (name, value)))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| sent_fault(ErrorCode::Fault, "HTTP header cannot be represented"))?;
         let mut result = wire::HttpResponse {
             status: response.status,
-            headers,
+            http_version: format!("{:?}", response.version),
+            headers: response.headers,
             stream: None,
+            trailers: Vec::new(),
         };
         let mut payload = Vec::new();
         if streaming {
@@ -90,6 +86,7 @@ impl HttpCallbacks<'_> {
                 }
                 payload.extend_from_slice(&chunk);
             }
+            result.trailers = body.take_trailers();
         }
         Ok(RpcReply {
             result: serde_json::to_value(result).map_err(|_| invalid())?,
@@ -111,11 +108,7 @@ impl HttpCallbacks<'_> {
                     HttpRequest {
                         method: request.method,
                         url: request.url,
-                        headers: request
-                            .headers
-                            .into_iter()
-                            .map(|(name, value)| (name, value.into_bytes()))
-                            .collect(),
+                        headers: request.headers,
                         body: payload,
                     },
                     method == "host.http.do_stream",
@@ -149,6 +142,9 @@ impl HttpCallbacks<'_> {
                     _ = closed.wait_for(|closed| *closed) => Err(denied()),
                     result = body.as_mut().ok_or_else(denied)?.read_with_timeout(request.maximum_bytes as usize, timeout) => result.map_err(http_error),
                 };
+                let trailers = body
+                    .as_mut()
+                    .map_or_else(Vec::new, |body| body.take_trailers());
                 if !matches!(&result, Ok(Some(_))) {
                     body.take();
                     stream.closed.send_replace(true);
@@ -160,7 +156,7 @@ impl HttpCallbacks<'_> {
                 }
                 let chunk = result?;
                 Ok(RpcReply {
-                    result: serde_json::json!({"eof":chunk.is_none()}),
+                    result: serde_json::json!({"eof":chunk.is_none(), "trailers": trailers}),
                     payload: chunk.map_or_else(Vec::new, |chunk| chunk.to_vec()),
                 })
             }
@@ -217,6 +213,10 @@ pub(super) fn http_error(error: HttpError) -> PluginFault {
         HttpErrorKind::Response => (ErrorCode::Upstream, "目标网站响应读取失败"),
     };
     let mut fault = PluginFault::new(code, message);
+    fault.details = Some(serde_json::json!({
+        "kind": error.kind(),
+        "reason": error.reason(),
+    }));
     fault.send_state = match error.send_state {
         UpstreamSendState::NotSent => SendState::NotSent,
         UpstreamSendState::Sent => SendState::Sent,

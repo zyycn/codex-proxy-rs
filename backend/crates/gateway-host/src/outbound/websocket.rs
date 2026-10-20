@@ -27,6 +27,8 @@ type Socket = WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>;
 
 /// 读写分别串行，允许等待输出时发送控制消息；关闭会唤醒在途操作并释放容量
 pub struct ManagedWebSocket {
+    handshake_version: http::Version,
+    handshake_headers: Vec<(String, Vec<u8>)>,
     writer: Mutex<Option<(SplitSink<Socket, Message>, OwnedSemaphorePermit)>>,
     reader: Mutex<Option<SplitStream<Socket>>>,
     closed: watch::Sender<bool>,
@@ -39,6 +41,7 @@ pub enum WebSocketMessage {
 
 pub struct WebSocketResponse {
     pub status: u16,
+    pub version: http::Version,
     pub headers: Vec<(String, Vec<u8>)>,
     pub connection: Option<ManagedWebSocket>,
     pub body: Option<HttpBody>,
@@ -70,6 +73,7 @@ impl HttpClient {
             let response = response.into_http();
             return Ok(WebSocketResponse {
                 status: response.status,
+                version: response.version,
                 headers: response.headers,
                 connection: None,
                 body: Some(response.body),
@@ -112,8 +116,11 @@ impl HttpClient {
         let (writer, reader) = socket.split();
         Ok(WebSocketResponse {
             status: response.status,
-            headers: response.headers,
+            version: response.response.version(),
+            headers: response.headers.clone(),
             connection: Some(ManagedWebSocket {
+                handshake_version: response.response.version(),
+                handshake_headers: response.headers,
                 writer: Mutex::new(Some((writer, response.permit))),
                 reader: Mutex::new(Some(reader)),
                 closed: watch::channel(false).0,
@@ -124,6 +131,17 @@ impl HttpClient {
 }
 
 impl ManagedWebSocket {
+    /// 连接复用仍可读取最初握手的原始元数据，不伪造一次新握手
+    #[must_use]
+    pub const fn handshake_version(&self) -> http::Version {
+        self.handshake_version
+    }
+
+    #[must_use]
+    pub fn handshake_headers(&self) -> &[(String, Vec<u8>)] {
+        &self.handshake_headers
+    }
+
     pub async fn send(
         &self,
         message: WebSocketMessage,

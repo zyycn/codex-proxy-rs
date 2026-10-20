@@ -4,10 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::WireEvent;
-use crate::call::{
-    middleware::MiddlewareHeader,
-    observation::{RequestMoney, RequestTimings},
-};
+use crate::call::{middleware::MiddlewareHeader, observation::RequestMoney};
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,10 +73,58 @@ pub struct ResponseObservation {
     pub request_id: Option<String>,
     pub service_tier: Option<String>,
     pub upstream_response_model: Option<String>,
-    pub timings: RequestTimings,
+    #[serde(default)]
+    pub timings: ResponseTimings,
+    #[serde(default)]
     pub client_headers: Vec<MiddlewareHeader>,
     /// Provider 已产生的完整观测 JSON 文本，保留原始表示
     pub provider_metadata: Option<String>,
+}
+
+/// 原始上游计时；不包含最终总耗时、速率或费用等业务结果
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseTimings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport_decision_wait_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_event_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_reasoning_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_text_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_token_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_processing_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_response_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_api_overhead_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_engine_ms: Option<f64>,
+}
+
+impl ResponseObservation {
+    #[must_use]
+    pub fn new(transport: impl Into<String>) -> Self {
+        Self {
+            transport: transport.into(),
+            http_version: None,
+            websocket_pool: None,
+            status_code: None,
+            request_id: None,
+            service_tier: None,
+            upstream_response_model: None,
+            timings: ResponseTimings::default(),
+            client_headers: Vec::new(),
+            provider_metadata: None,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
