@@ -177,6 +177,8 @@ impl Execution {
             ));
         }
         let mut context = self.adapter.session.context(Stage::Upstream, timeout);
+        // 初始回复后由模型执行持有流的期限与取消，RPC 预算只约束建立阶段
+        context.resource_stream = true;
         context.request =
             crate::adapter::request_context(invocation.context.extension_scope().request());
         context.request_id = Some(invocation.context.request_id().as_str().to_owned());

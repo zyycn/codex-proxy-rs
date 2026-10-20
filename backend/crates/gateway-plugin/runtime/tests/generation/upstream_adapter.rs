@@ -102,6 +102,17 @@ async fn setup(
     Arc<super::Store>,
     gateway_plugin_runtime::PluginRuntime,
 ) {
+    setup_with_limits(config, gateway_plugin_runtime::RpcLimits::default()).await
+}
+
+async fn setup_with_limits(
+    config: Value,
+    limits: gateway_plugin_runtime::RpcLimits,
+) -> (
+    tempfile::TempDir,
+    Arc<super::Store>,
+    gateway_plugin_runtime::PluginRuntime,
+) {
     let contributes = Contributions::from([crate::support::contribution(
         Capability::UpstreamAdapter,
         vec![Stage::Upstream],
@@ -109,7 +120,7 @@ async fn setup(
         vec!["openai".into()],
     )]);
     let (cache, store, runtime) =
-        super::setup_with_contributions_and_restart_circuit(contributes, Default::default()).await;
+        super::setup_with_limits(contributes, Default::default(), limits).await;
     {
         let mut snapshot = store.snapshot.lock().unwrap();
         let instance = &mut snapshot.instances[0];
@@ -303,6 +314,132 @@ async fn adapter_http_and_sse_are_cold_authenticated_and_settled_once() {
         assert_eq!(state.extension_owner().unwrap().adapter_id, "example");
         assert_eq!(account.failures.load(Ordering::SeqCst), 0);
         drop(stream);
+        drop(generation);
+        runtime.shutdown().await;
+        super::wait_until_empty(cache.path()).await;
+    }
+}
+
+#[tokio::test]
+async fn adapter_sse_outlives_rpc_budget_and_cancellation_closes_its_resources() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    for cancel in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (started, receiving) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            let head_end = loop {
+                if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    break end + 4;
+                }
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert!(count > 0 && request.len() < 16 * 1024);
+                request.extend_from_slice(&buffer[..count]);
+            };
+            let length: usize = std::str::from_utf8(&request[..head_end])
+                .unwrap()
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .unwrap()
+                .1
+                .trim()
+                .parse()
+                .unwrap();
+            while request.len() < head_end + length {
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n: heartbeat\n\n")
+                .await
+                .unwrap();
+            started.send(()).unwrap();
+            for _ in 0..6 {
+                tokio::select! {
+                    result = socket.read(&mut buffer) => {
+                        assert_eq!(result.unwrap(), 0);
+                        return false;
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(200)) => {}
+                }
+                if socket.write_all(b": heartbeat\n\n").await.is_err() {
+                    return false;
+                }
+            }
+            socket.shutdown().await.unwrap();
+            true
+        });
+        let mut config = configuration(&base, true);
+        // 此夹具汇总 HTTP 正文后产出规范事件，不把多个心跳伪装成一个 SSE 帧
+        config["upstream_events"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("wire");
+        let (cache, _, runtime) = setup_with_limits(
+            config,
+            gateway_plugin_runtime::RpcLimits {
+                maximum_call_timeout: Duration::from_millis(500),
+                ..Default::default()
+            },
+        )
+        .await;
+        let generation =
+            ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+                .await
+                .unwrap();
+        let account = Account::new();
+        let context = context(&runtime, &generation, "key-one");
+        let cancellation = context.cancellation().clone();
+        let mut stream = execute_with_context(account.clone(), context, None);
+        let consume = async {
+            let mut completed = 0;
+            while let Some(event) = stream.next().await {
+                completed += event?
+                    .canonical_facts()
+                    .iter()
+                    .filter(|fact| matches!(fact, GatewayEvent::Completed(_)))
+                    .count();
+            }
+            Ok::<_, ProviderError>(completed)
+        };
+        let interrupt = async {
+            receiving.await.unwrap();
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            if cancel {
+                cancellation.cancel();
+            }
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(consume, interrupt)
+        })
+        .await
+        .unwrap();
+        if cancel {
+            assert_eq!(result.unwrap_err().kind(), ProviderErrorKind::Cancelled);
+        } else {
+            assert_eq!(result.unwrap(), 1);
+        }
+        drop(stream);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), server)
+                .await
+                .unwrap()
+                .unwrap(),
+            !cancel
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while Arc::strong_count(&account) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         drop(generation);
         runtime.shutdown().await;
         super::wait_until_empty(cache.path()).await;

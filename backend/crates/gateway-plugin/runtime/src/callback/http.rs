@@ -142,11 +142,12 @@ impl HttpCallbacks<'_> {
                 let mut body = stream.body.try_lock().map_err(|_| {
                     PluginFault::new(ErrorCode::Capacity, "HTTP stream already has a reader")
                 })?;
+                let timeout = call.timeout()?;
                 let mut closed = stream.closed.subscribe();
                 let result = tokio::select! {
                     biased;
                     _ = closed.wait_for(|closed| *closed) => Err(denied()),
-                    result = body.as_mut().ok_or_else(denied)?.read(request.maximum_bytes as usize) => result.map_err(http_error),
+                    result = body.as_mut().ok_or_else(denied)?.read_with_timeout(request.maximum_bytes as usize, timeout) => result.map_err(http_error),
                 };
                 if !matches!(&result, Ok(Some(_))) {
                     body.take();

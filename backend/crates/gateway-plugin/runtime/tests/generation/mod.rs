@@ -49,6 +49,14 @@ async fn setup_with_contributions_and_restart_circuit(
     contributes: Contributions,
     restart_circuit: PluginRestartCircuitConfig,
 ) -> (tempfile::TempDir, Arc<Store>, PluginRuntime) {
+    setup_with_limits(contributes, restart_circuit, RpcLimits::default()).await
+}
+
+async fn setup_with_limits(
+    contributes: Contributions,
+    restart_circuit: PluginRestartCircuitConfig,
+    rpc_limits: RpcLimits,
+) -> (tempfile::TempDir, Arc<Store>, PluginRuntime) {
     let cache = tempfile::tempdir().unwrap();
     let artifact = PackageInspector::new(PackageLimits::default(), "1.0.0".parse().unwrap())
         .inspect(
@@ -83,7 +91,7 @@ async fn setup_with_contributions_and_restart_circuit(
             cache_directory: cache.path().to_owned(),
             host_version: "1.0.0".parse().unwrap(),
             package_limits: PackageLimits::default(),
-            rpc_limits: RpcLimits::default(),
+            rpc_limits,
             restart_circuit,
         },
         Arc::new(gateway_host::outbound::HttpClient::new().unwrap()),

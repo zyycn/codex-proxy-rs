@@ -378,19 +378,38 @@ impl PendingResponse {
 
 impl HttpBody {
     pub async fn read(&mut self, maximum: usize) -> Result<Option<Bytes>, HttpError> {
+        self.read_until(maximum, self.deadline).await
+    }
+
+    /// 资源 owner 已接管总寿命时，每次读取使用独立预算，取消仍由 owner 回收正文
+    pub async fn read_with_timeout(
+        &mut self,
+        maximum: usize,
+        timeout: Duration,
+    ) -> Result<Option<Bytes>, HttpError> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| HttpError::sent("read timeout"))?;
+        self.read_until(maximum, deadline).await
+    }
+
+    async fn read_until(
+        &mut self,
+        maximum: usize,
+        deadline: Instant,
+    ) -> Result<Option<Bytes>, HttpError> {
         if maximum == 0 || maximum > 64 * 1024 {
             return Err(HttpError::sent("read size"));
         }
         loop {
-            // 已缓冲的数据和就绪帧也受同一期限约束，慢读者不能无限续用 HTTP 资源
-            if Instant::now() >= self.deadline {
+            // 已缓冲的数据和就绪帧也受本次期限约束，不能绕过 owner 的读取预算
+            if Instant::now() >= deadline {
                 return Err(HttpError::sent("response deadline").with_kind(HttpErrorKind::Timeout));
             }
             if !self.pending.is_empty() {
                 return Ok(Some(self.pending.split_to(maximum.min(self.pending.len()))));
             }
-            self.pending = match tokio::time::timeout_at(self.deadline, self.response.frame()).await
-            {
+            self.pending = match tokio::time::timeout_at(deadline, self.response.frame()).await {
                 Ok(Some(Ok(frame))) => match frame.into_data() {
                     Ok(chunk) => chunk,
                     Err(_) => continue,
