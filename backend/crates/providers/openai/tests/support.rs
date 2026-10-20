@@ -109,6 +109,7 @@ impl MemoryAccountStore {
                     base_url,
                     api_key: "sk-api-test-only".to_owned(),
                     transport,
+                    balance_query: Default::default(),
                 },
             ),
         )

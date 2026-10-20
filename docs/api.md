@@ -711,6 +711,8 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游；Provider 未提供额度能力时返回空额度投影 |
 | `GET` | `/api/admin/accounts/quota-forecast` | `accountId` | 按需读取周/月容量预测、源窗口剩余估算与采样依据，不刷新上游额度 |
 | `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 访问 Provider 并刷新额度，同时同步额度所属状态 |
+| `GET` | `/api/admin/accounts/balance` | `accountId` | 读取 API Key 账号已保存的上游余额，不访问上游 |
+| `POST` | `/api/admin/accounts/balance/refresh` | `{ accountId }` | 使用当前 API Key 和账号出口查询余额，不改变调度状态 |
 | `GET` | `/api/admin/accounts/personal-info` | `accountId` | 按需汇聚 Provider 上游个人资料、累计活动与订阅信息，不更新额度或 credential |
 | `GET` | `/api/admin/accounts/profile-avatar` | `accountId`、可选 `version` | 返回支持头像能力的 Provider 字节流，需要管理员会话；`version` 仅区分浏览器缓存 |
 | `GET` | `/api/admin/accounts/reset-credits` | `accountId` | 查询支持该能力的 Provider 重置卡，不读取本地库存 |
@@ -1018,6 +1020,46 @@ API Key 账号与 OAuth 共用现有 Responses、Images 和 standalone Search �
 账号列表和详情的 API Key `usage` 汇总该账号创建后仍保留的本地请求记录，`windowLabelDisplay` 为 `通用额度`；
 日志清理会影响累计范围，不代表上游余额。OAuth 账号仍按实际周/月额度窗口统计
 
+API Key 账号可通过 `balance_query` 显式选择上游用量查询，默认 `disabled`。
+创建或导入时放在 API Key 文档中，编辑时使用 `connection.balanceQuery`；省略编辑字段保留现有选择。
+支持以下内置类型，均使用账号当前的 API Key 和出站代理，不需要额外登录令牌：
+
+| 类型 | 上游接口 | 展示内容 |
+| --- | --- | --- |
+| `kimi` | `https://api.moonshot.cn/v1/users/me/balance` | 国内按量付费，可用、现金及代金券余额，币种 CNY |
+| `kimi_global` | `https://api.moonshot.ai/v1/users/me/balance` | 海外按量付费，可用、现金及代金券余额，币种 USD |
+| `kimi_coding` | `https://api.kimi.com/coding/v1/usages` | 国内编程订阅，5 小时、周剩余额度和重置时间 |
+| `kimi_coding_global` | `https://api.kimi.ai/coding/v1/usages` | 海外编程订阅，5 小时、周剩余额度和重置时间 |
+| `deepseek` | `/user/balance` | 各币种可用、赠送及充值余额 |
+| `sub2api` | `/v1/usage` | 钱包余额、Key 总额度、Key 限额窗口及订阅分组额度 |
+
+Kimi 的套餐和地区由查询类型显式指定，使用固定的官方查询接口，不读取账号 Base URL。
+Coding 额度的 `unit` 为 `%`，
+`remaining` 和 `used` 分别表示剩余、已用百分比，保留两位小数以内，`total` 为 `"100"`。
+5 小时窗口来自 `limits[].detail`，周窗口来自 `usage`，仅显示上游实际提供的窗口
+
+百分比额度同时投影到账号的 `quota.windows`，首页活跃账号的 `usageWindow` 返回代表窗口，均使用已用比例
+金额余额仍由 `balance.entries` 提供，不转换为百分比窗口
+
+DeepSeek 和 Sub2API 查询地址与账号 Base URL 同源，移除末尾 `/v1` 后追加上表路径，保留已有路径前缀。
+`GET /api/admin/accounts/balance` 只读取已保存结果，`POST /api/admin/accounts/balance/refresh`
+手动访问上游。Coding 查询超时为 15 秒，其他查询为 10 秒，不自动重试。
+未启用时返回 `{ balance: null }`，不探测上游接口
+账号列表和详情保持未启用查询前的展示，不显示查询按钮或启用提示
+
+启用用量查询的账号添加后会在后台查询一次，不阻塞添加请求。
+后台任务每 5 分钟刷新已启用的 API Key 账号，与页面是否打开无关；未选择用量查询的账号不请求上游。
+页面可见时每 30 秒读取本地快照，手动查询仍可立即访问上游
+
+启用后 `balance` 包含 `queryType`、`observedAt`、`observedAtDisplay` 和 `entries`。
+未查询或连接设置已更新时，观察时间为空、条目为空。每项包含 `label`、`remaining`、`used`、
+`total`、`unit`、`unlimited`、`isValid`、`invalidMessage`、`resetAt`、`resetAtDisplay` 和
+`details: [{ label, amount }]`，金额保留上游十进制文本，未提供的金额为 `null`，零余额不会转换为空值。
+Sub2API 的订阅不限量标记 `remaining=-1` 展示为 `unlimited=true`，不作为负余额展示
+
+余额查询不改变账号调度、凭据状态或本地计费。失败返回错误并保留上次结果及其查询时间，
+401/403 不会自动停用账号。后台单账号查询失败不影响其他账号，留待下一轮更新
+
 批量导入 AT / RT 使用 `accounts` JSON 数组，最多 200 项，不接受纯文本 token 列表。例如：
 
 ```json
@@ -1060,7 +1102,8 @@ sub2api 的 `credentials.model_mapping` 不转换为本项目的账号模型限�
   "connection": {
     "baseUrl": "https://api.example.com/v1",
     "transport": "http",
-    "apiKey": "..."
+    "apiKey": "...",
+    "balanceQuery": "sub2api"
   }
 }
 ```
@@ -1070,7 +1113,8 @@ sub2api 的 `credentials.model_mapping` 不转换为本项目的账号模型限�
 OpenAI OAuth 账号只接受 `connection: { transport }`，不接受 `baseUrl`、`apiKey` 或 OAuth token。
 连接设置不能修改账号 ID、Provider 或认证类型，也不接受通用凭据文档。
 凭据与设置在同一事务中保存，任一校验或持久化失败均不落库。
-`GET /api/admin/accounts/detail` 对 API Key 账号额外返回 `credentialConfiguration: { base_url, transport }`；
+`GET /api/admin/accounts/detail` 对 API Key 账号额外返回 `credentialConfiguration: { base_url, transport, balance_query? }`，
+未启用余额查询时省略 `balance_query`；
 OAuth 账号返回 `credentialConfiguration: { transport }`。响应不回显密钥或 token；不适用的账号省略该字段。
 更新会推进凭据 revision 并失效目录与连接；旧版本会话不可静默续接到新上游
 

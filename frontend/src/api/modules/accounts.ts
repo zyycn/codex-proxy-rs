@@ -412,7 +412,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 }
 
 interface AccountUpdateParam {
-  connection?: { baseUrl?: string, transport: ApiKeyConfiguration['transport'], apiKey?: string }
+  connection?: { baseUrl?: string, transport: ApiKeyConfiguration['transport'], apiKey?: string, balanceQuery?: ApiKeyBalanceQuery }
   outboundProxyUrl?: string
   outboundProxyId?: string
   accountId: string
@@ -719,9 +719,55 @@ export function completeAccountOAuth(data: AccountOAuthCompleteParam, options: R
   })
 }
 
+export type ApiKeyBalanceQuery = 'disabled' | 'kimi' | 'kimi_global' | 'kimi_coding' | 'kimi_coding_global' | 'deepseek' | 'sub2api'
+
+export interface AccountBalanceEntry {
+  label: string
+  remaining: string | null
+  used: string | null
+  total: string | null
+  unit: string
+  unlimited: boolean
+  isValid: boolean
+  invalidMessage: string | null
+  resetAt: string | null
+  resetAtDisplay: string | null
+  details: { label: string, amount: string }[]
+}
+
+export interface AccountBalance {
+  queryType: Exclude<ApiKeyBalanceQuery, 'disabled'>
+  observedAt: string | null
+  observedAtDisplay: string | null
+  entries: AccountBalanceEntry[]
+}
+
+export interface AccountBalanceResponse {
+  balance: AccountBalance | null
+}
+
+export function getAccountBalance(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<AccountBalanceResponse>({
+    url: '/api/admin/accounts/balance',
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}
+
+export function refreshAccountBalance(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<AccountBalanceResponse>({
+    url: '/api/admin/accounts/balance/refresh',
+    method: 'POST',
+    data,
+    ...options,
+  })
+}
+
 export interface ApiKeyConfiguration {
   base_url: string
   transport: 'http' | 'prefer_websocket'
+  balance_query?: ApiKeyBalanceQuery
 }
 
 export function getAccountDetail(data: AccountIdParam, options: RequestOptions = {}) {

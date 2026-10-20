@@ -1,5 +1,7 @@
 //! OpenAI 管理边界：Provider preparation 与 Redis OAuth pending 适配
 
+pub(crate) mod balance;
+
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -707,7 +709,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
             if refresh {
                 return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
             }
-            return Ok(project_quota(None, &account));
+            let balance =
+                balance::account_balance(self.accounts.as_ref(), &account_id, false).await?;
+            let mut quota = balance::project_quota(balance)?;
+            quota.limit_reached = account.quota().is_exhausted();
+            return Ok(quota);
         }
         let snapshot = if refresh {
             let snapshot = Some(
@@ -725,6 +731,36 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 .map_err(map_quota_error)?
         };
         Ok(project_quota(snapshot, &account))
+    }
+
+    async fn observe_initial_usage(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<(), ProviderAdminError> {
+        let account = self.account(account_id).await?;
+        if account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY {
+            balance::account_balance(self.accounts.as_ref(), account_id, true)
+                .await
+                .map(|_| ())
+        } else {
+            self.quota(ProviderQuotaRequest {
+                account_id: account_id.clone(),
+                refresh: true,
+                rolling_usage: None,
+            })
+            .await
+            .map(|_| ())
+        }
+    }
+
+    async fn balance(
+        &self,
+        account_id: &ProviderAccountId,
+        refresh: bool,
+    ) -> Result<Option<gateway_admin::model::account_balance::AccountBalance>, ProviderAdminError>
+    {
+        self.account(account_id).await?;
+        balance::account_balance(self.accounts.as_ref(), account_id, refresh).await
     }
 
     fn quota_forecast_observation(

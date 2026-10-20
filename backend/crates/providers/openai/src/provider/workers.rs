@@ -3,6 +3,7 @@
 use super::*;
 use crate::transport::profile::cli_release::CliReleaseService;
 use crate::transport::profile::platform_release::PlatformDesktopReleaseService;
+use gateway_core::account::ProviderAccountStore;
 
 pub(crate) struct ClientReleaseServices {
     pub desktop: Arc<CodexDesktopReleaseService>,
@@ -16,6 +17,7 @@ pub(super) const WORKER_LEASE_TTL: Duration = Duration::from_secs(15 * 60);
 pub(super) const WORKER_LEASE_RENEWAL: Duration = Duration::from_secs(5 * 60);
 pub(super) const OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 pub(super) const QUOTA_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+const API_KEY_BALANCE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 pub(super) const DESKTOP_RELEASE_WORKER_OWNER: &str = "openai-desktop-release";
 pub(super) const MODEL_ETAG_WORKER_OWNER: &str = "openai-model-etag";
 pub(super) const MODEL_CATALOG_WORKER_OWNER: &str = "openai-model-catalog";
@@ -24,6 +26,7 @@ pub(super) const WARMUP_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(crate) fn worker_contributions(
     timezone: gateway_core::time::DeploymentTimeZone,
+    accounts: Arc<dyn ProviderAccountStore>,
     refresh: Arc<CodexCredentialRefreshService>,
     quota: Arc<CodexCredentialQuotaService>,
     catalog: Arc<CodexCredentialCatalogService>,
@@ -71,6 +74,8 @@ pub(crate) fn worker_contributions(
             QUOTA_CHECK_INTERVAL,
             Box::new(OpenAiQuotaTask {
                 quota: Arc::clone(&quota),
+                accounts,
+                last_balance_refresh_at: tokio::sync::Mutex::new(None),
             }),
         )?),
         WorkerContribution::Registration(scheduled_registration(
@@ -204,6 +209,46 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
 
 pub(super) struct OpenAiQuotaTask {
     quota: Arc<CodexCredentialQuotaService>,
+    accounts: Arc<dyn ProviderAccountStore>,
+    last_balance_refresh_at: tokio::sync::Mutex<Option<Instant>>,
+}
+
+impl OpenAiQuotaTask {
+    async fn refresh_api_key_balances(&self) -> Result<(), WorkerTaskError> {
+        let mut last_refresh = self.last_balance_refresh_at.lock().await;
+        if last_refresh.is_some_and(|last| last.elapsed() < API_KEY_BALANCE_REFRESH_INTERVAL) {
+            return Ok(());
+        }
+        let provider = ProviderKind::new(PROVIDER_NAME).expect("OpenAI Provider 标识固定有效");
+        let accounts = self
+            .accounts
+            .list_for_provider(&provider)
+            .await
+            .map_err(|error| {
+                WorkerTaskError::safe("API Key balance accounts are unavailable").with_source(error)
+            })?;
+        // 复用额度 worker 的巡检和租约，单独保留主动查询间隔，避免每轮请求余额接口
+        *last_refresh = Some(Instant::now());
+        drop(last_refresh);
+        for account in accounts.into_iter().filter(|account| {
+            account.enabled()
+                && account.authentication_kind()
+                    == crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY
+        }) {
+            if let Err(error) =
+                crate::admin::balance::account_balance(self.accounts.as_ref(), account.id(), true)
+                    .await
+            {
+                // 单账号失败不触发整轮短退避，按正常五分钟周期继续查询
+                tracing::warn!(
+                    account_id = %account.id(),
+                    balance_error = ?error.kind(),
+                    "API Key balance refresh failed"
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(super) struct OpenAiCatalogTask {
@@ -245,24 +290,32 @@ impl ScheduledTask for OpenAiQuotaTask {
             if context.cancellation().is_cancelled() {
                 return Ok(());
             }
-            match self.quota.synchronize().await {
-                Ok(summary) if summary.has_operational_failures() => {
-                    tracing::warn!(
-                        updated = summary.updated,
-                        exhausted = summary.exhausted,
-                        banned = summary.banned,
-                        transient = summary.transient,
-                        stale = summary.stale,
-                        "OpenAI quota cycle contained operational failures"
-                    );
+            let synchronize = async {
+                let (quota, balance) =
+                    tokio::join!(self.quota.synchronize(), self.refresh_api_key_balances());
+                match quota {
+                    Ok(summary) if summary.has_operational_failures() => {
+                        tracing::warn!(
+                            updated = summary.updated,
+                            exhausted = summary.exhausted,
+                            banned = summary.banned,
+                            transient = summary.transient,
+                            stale = summary.stale,
+                            "OpenAI quota cycle contained operational failures"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        return Err(WorkerTaskError::safe("OpenAI quota synchronization failed")
+                            .with_source(error));
+                    }
                 }
-                Ok(_) => {}
-                Err(error) => {
-                    return Err(WorkerTaskError::safe("OpenAI quota synchronization failed")
-                        .with_source(error));
-                }
+                balance
+            };
+            tokio::select! {
+                () = context.cancellation().cancelled() => Ok(()),
+                result = synchronize => result,
             }
-            Ok(())
         })
     }
 }

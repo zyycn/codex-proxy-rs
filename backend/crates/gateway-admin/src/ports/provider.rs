@@ -289,6 +289,29 @@ pub trait ProviderAdmin: Send + Sync {
         request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError>;
 
+    /// 导入或授权提交后的首次用量观察，由 Provider 选择适用的查询
+    async fn observe_initial_usage(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<(), ProviderAdminError> {
+        self.quota(ProviderQuotaRequest {
+            account_id: account_id.clone(),
+            refresh: true,
+            rolling_usage: None,
+        })
+        .await
+        .map(|_| ())
+    }
+
+    /// API Key 的余额仅用于展示，不产生调度或凭据状态
+    async fn balance(
+        &self,
+        _account_id: &ProviderAccountId,
+        _refresh: bool,
+    ) -> Result<Option<crate::model::account_balance::AccountBalance>, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
     /// 历史观测的协议字段仅由具体 Provider 解释；不支持时保留累计估算
     fn quota_forecast_observation(
         &self,

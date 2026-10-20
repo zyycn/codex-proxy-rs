@@ -320,7 +320,7 @@ const {
             </template>
 
             <template #usage="{ row }">
-              <AccountQuotaSummaryCell :account="row" @show-concurrency="openConcurrency(row)" />
+              <AccountQuotaSummaryCell :account="row" @show-concurrency="openConcurrency(row)" @balance-updated="void refreshAccountsSilently()" />
             </template>
 
             <template #groups="{ row }">
@@ -361,6 +361,7 @@ const {
                   @account-updated="void replaceAccount($event)"
                   @quota-reset="handleQuotaReset"
                   @refresh-quota="handleRefreshQuota"
+                  @balance-updated="void refreshAccountsSilently()"
                 />
                 <AccountUsagePanel :account="row" />
               </div>

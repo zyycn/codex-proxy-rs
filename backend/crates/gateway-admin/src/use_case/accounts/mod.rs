@@ -118,6 +118,14 @@ pub trait AccountsService: Send + Sync {
         account_id: &ProviderAccountId,
     ) -> Result<AccountQuotaForecastReport, AdminError>;
 
+    async fn balance(
+        &self,
+        _account_id: &ProviderAccountId,
+        _refresh: bool,
+    ) -> Result<Option<crate::model::account_balance::AccountBalance>, AdminError> {
+        Err(AdminError::invalid("当前 Provider 不支持余额查询"))
+    }
+
     async fn personal_info(
         &self,
         _account_id: &ProviderAccountId,
@@ -807,6 +815,18 @@ impl AccountsService for DefaultAccountsService {
             .account_configuration(account_id)
             .await
             .map_err(|error| map_provider_error(error, "provider account configuration"))
+    }
+
+    async fn balance(
+        &self,
+        account_id: &ProviderAccountId,
+        refresh: bool,
+    ) -> Result<Option<crate::model::account_balance::AccountBalance>, AdminError> {
+        let (_, provider) = self.provider_for_account(account_id).await?;
+        provider
+            .balance(account_id, refresh)
+            .await
+            .map_err(|error| map_provider_error(error, "provider account balance"))
     }
 
     async fn quota(

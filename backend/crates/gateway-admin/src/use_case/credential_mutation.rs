@@ -9,7 +9,7 @@ use crate::{
             CredentialDetails, CredentialMutationResult, CredentialRotationCommit,
             PendingAuthorizationMutation, PreparedAuthorizationCommit,
             PreparedAuthorizationCredential, PreparedCredentialImport, PreparedCredentialRotation,
-            ProviderQuotaRequest, StartAuthorization,
+            StartAuthorization,
         },
     },
     ports::{provider::ProviderAdmin, store::AccountStore},
@@ -18,7 +18,7 @@ use gateway_core::{account::ProviderAccountId, routing::ProviderKind, runtime::S
 
 use super::{map_store_error, publish_committed};
 
-pub(super) async fn publish_credentials_and_observe_quota(
+pub(super) async fn publish_credentials_and_observe_usage(
     provider: &std::sync::Arc<dyn crate::ports::provider::ProviderAdmin>,
     snapshot: &dyn SnapshotControl,
     revision: crate::model::Revision,
@@ -34,20 +34,13 @@ pub(super) async fn publish_credentials_and_observe_quota(
     let request_id = request_id.to_owned();
     tokio::spawn(async move {
         for account_id in account_ids {
-            if let Err(error) = provider
-                .quota(ProviderQuotaRequest {
-                    account_id: account_id.clone(),
-                    refresh: true,
-                    rolling_usage: None,
-                })
-                .await
-            {
+            if let Err(error) = provider.observe_initial_usage(&account_id).await {
                 tracing::warn!(
                     request_id,
                     provider = %provider.provider_kind().as_str(),
                     account_id = %account_id.as_str(),
-                    quota_error = ?error.kind(),
-                    "initial quota observation failed"
+                    usage_error = ?error.kind(),
+                    "initial account usage observation failed"
                 );
             }
         }

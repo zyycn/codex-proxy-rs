@@ -266,10 +266,14 @@ pub struct AccountConnectionUpdateRequest {
     pub base_url: Option<String>,
     pub transport: String,
     pub api_key: Option<String>,
+    pub balance_query: Option<String>,
 }
 
 impl AccountConnectionUpdateRequest {
     fn validate(&self) -> Result<(), WireValidationError> {
+        if let Some(balance_query) = &self.balance_query {
+            require_text(balance_query, 32, "connection.balanceQuery")?;
+        }
         if let Some(base_url) = &self.base_url {
             require_text(base_url, 2048, "connection.baseUrl")?;
         }
@@ -294,6 +298,9 @@ impl AccountConnectionUpdateRequest {
         }
         if let Some(key) = self.api_key {
             material.insert("api_key".to_owned(), Value::String(key));
+        }
+        if let Some(balance_query) = self.balance_query {
+            material.insert("balance_query".to_owned(), Value::String(balance_query));
         }
         ProviderDocument::new(OpaqueProviderData::new(material))
     }

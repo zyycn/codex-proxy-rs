@@ -1,4 +1,18 @@
-import type { Account, ApiKeyConfiguration } from '@/api'
+import type { Account, ApiKeyBalanceQuery, ApiKeyConfiguration } from '@/api'
+
+export const balanceQueryOptions = [
+  { label: '不查询', value: 'disabled' },
+  { label: 'Kimi', value: 'kimi' },
+  { label: 'DeepSeek', value: 'deepseek' },
+  { label: 'Sub2API', value: 'sub2api' },
+]
+
+export const kimiBalanceQueryOptions = [
+  { value: 'kimi', plan: 'payg', region: 'cn' },
+  { value: 'kimi_global', plan: 'payg', region: 'intl' },
+  { value: 'kimi_coding', plan: 'coding', region: 'cn' },
+  { value: 'kimi_coding_global', plan: 'coding', region: 'intl' },
+] as const
 
 export function isOpenAiApiKeyAccount(account: Pick<Account, 'provider' | 'authenticationKind'> | null | undefined): boolean {
   return account?.provider === 'openai' && account.authenticationKind === 'api_key'
@@ -11,16 +25,20 @@ export function isOpenAiOAuthAccount(account: Pick<Account, 'provider' | 'authen
 export interface ApiKeyAccountForm extends ApiKeyConfiguration {
   name: string
   apiKey: string
+  balance_query: ApiKeyBalanceQuery
 }
 
 export function emptyApiKeyAccountForm(): ApiKeyAccountForm {
-  return { name: '', base_url: '', apiKey: '', transport: 'http' }
+  return { name: '', base_url: '', apiKey: '', transport: 'http', balance_query: 'disabled' }
 }
 
 export function parseApiKeyConfiguration(value: Record<string, unknown> | undefined): ApiKeyConfiguration | undefined {
   if (!value || typeof value.base_url !== 'string' || (value.transport !== 'http' && value.transport !== 'prefer_websocket'))
     return undefined
-  return { base_url: value.base_url, transport: value.transport }
+  const balanceQuery = value.balance_query ?? 'disabled'
+  if (!balanceQueryOptions.some(option => option.value === balanceQuery) && !kimiBalanceQueryOptions.some(option => option.value === balanceQuery))
+    return undefined
+  return { base_url: value.base_url, transport: value.transport, balance_query: balanceQuery as ApiKeyBalanceQuery }
 }
 
 export function apiKeyAccountError(form: ApiKeyAccountForm, editing = false): string | undefined {

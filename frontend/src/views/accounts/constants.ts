@@ -183,7 +183,7 @@ function windowRoleOrder(role: AccountQuotaWindow['role']) {
 }
 
 function quotaLimitLabel(window: AccountQuotaWindow) {
-  if (window.limitId === 'codex')
+  if (window.limitId === 'codex' || window.limitId === 'api_key_balance')
     return '通用额度'
   return window.limitName
 }

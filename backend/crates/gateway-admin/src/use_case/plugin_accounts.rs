@@ -20,7 +20,7 @@ use crate::{
 };
 
 use super::{
-    map_provider_error, map_store_error, publish_credentials_and_observe_quota,
+    map_provider_error, map_store_error, publish_credentials_and_observe_usage,
     required_credential, required_plugin_credential, validate_prepared_import,
     validate_prepared_rotation_facts,
 };
@@ -164,7 +164,7 @@ impl PluginAccountAccess for DefaultPluginAccountAccess {
                 .await?
                 .credential
                 .credential_revision;
-                publish_credentials_and_observe_quota(
+                publish_credentials_and_observe_usage(
                     &provider,
                     self.snapshot.as_ref(),
                     result.config_revision,
@@ -207,7 +207,7 @@ impl PluginAccountAccess for DefaultPluginAccountAccess {
                 let credential_revision = result
                     .credential_revision
                     .ok_or_else(|| AdminError::internal("账号保存未返回凭据版本"))?;
-                publish_credentials_and_observe_quota(
+                publish_credentials_and_observe_usage(
                     &provider,
                     self.snapshot.as_ref(),
                     result.config_revision,

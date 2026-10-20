@@ -21,7 +21,7 @@ use crate::{
 use super::super::{
     commit_authorization, commit_credential_rotation, delete_credentials, map_provider_error,
     map_store_error, pending_authorization, publish_committed,
-    publish_credentials_and_observe_quota, required_credential, validate_authorization_commit,
+    publish_credentials_and_observe_usage, required_credential, validate_authorization_commit,
     validate_prepared_import, validate_prepared_rotation,
 };
 
@@ -88,7 +88,7 @@ impl ProviderCredentials {
             .await
             .map_err(|error| map_store_error(error, "provider credential import"))?;
         drop(proxy_reservation);
-        publish_credentials_and_observe_quota(
+        publish_credentials_and_observe_usage(
             &self.provider,
             self.snapshot.as_ref(),
             result.config_revision,
@@ -235,7 +235,7 @@ impl super::CredentialsService {
     ) -> Result<CredentialMutationResult, AdminError> {
         let result = outcome.result;
         if outcome.newly_committed {
-            publish_credentials_and_observe_quota(
+            publish_credentials_and_observe_usage(
                 provider,
                 self.snapshot.as_ref(),
                 result.config_revision,

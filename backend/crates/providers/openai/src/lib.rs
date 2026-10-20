@@ -234,7 +234,7 @@ pub async fn initialize(
     let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(OpenAiAdminProvider::new(
         provider_kind,
         profile,
-        accounts,
+        Arc::clone(&accounts),
         OpenAiAdminServices {
             credentials: credential_admin,
             oauth: oauth_admin,
@@ -247,6 +247,7 @@ pub async fn initialize(
     ));
     let worker_contributions = provider::worker_contributions(
         config.timezone,
+        accounts,
         refresh,
         quota,
         catalog,

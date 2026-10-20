@@ -29,6 +29,14 @@ where
         )
         .route("/api/admin/accounts/quota", get(account_quota::<S>))
         .route(
+            "/api/admin/accounts/balance",
+            get(super::balance::read::<S>),
+        )
+        .route(
+            "/api/admin/accounts/balance/refresh",
+            post(super::balance::refresh::<S>),
+        )
+        .route(
             "/api/admin/accounts/personal-info",
             get(account_personal_info::<S>),
         )

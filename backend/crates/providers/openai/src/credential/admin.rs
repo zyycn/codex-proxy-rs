@@ -259,6 +259,8 @@ struct CodexCprApiKeyExportAccount {
     base_url: String,
     api_key: String,
     transport: ResponsesTransport,
+    #[serde(skip_serializing_if = "super::api_key::ApiKeyBalanceQuery::is_disabled")]
+    balance_query: super::api_key::ApiKeyBalanceQuery,
 }
 
 #[derive(Serialize)]
@@ -456,6 +458,7 @@ impl CodexCredentialAdmin {
             base_url: String,
             transport: ResponsesTransport,
             api_key: Option<String>,
+            balance_query: Option<super::api_key::ApiKeyBalanceQuery>,
         }
         let rotation: Rotation = serde_json::from_value(material)
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
@@ -467,6 +470,9 @@ impl CodexCredentialAdmin {
         };
         data.base_url = rotation.base_url;
         data.transport = rotation.transport;
+        if let Some(balance_query) = rotation.balance_query {
+            data.balance_query = balance_query;
+        }
         if let Some(api_key) = rotation.api_key {
             data.api_key = api_key;
         }
@@ -699,6 +705,7 @@ impl CodexCredentialAdmin {
                         base_url: data.base_url,
                         api_key: data.api_key,
                         transport: data.transport,
+                        balance_query: data.balance_query,
                     })
                 }
 
@@ -1539,6 +1546,12 @@ fn parse_api_key_import(value: &Value) -> Result<ApiKeyCredentialData, CodexCred
     let data = ApiKeyCredentialData {
         schema_version: 1,
         installation_id: uuid::Uuid::new_v4().to_string(),
+        balance_query: credentials
+            .get("balance_query")
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(|_| CodexCredentialAdminError::InvalidInput)?
+            .unwrap_or_default(),
         base_url,
         api_key: first_string(credentials, &["api_key"])
             .ok_or(CodexCredentialAdminError::InvalidCredential)?,
