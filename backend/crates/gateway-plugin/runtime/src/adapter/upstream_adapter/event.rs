@@ -234,7 +234,12 @@ impl EventDecoder {
                 Some(first) => {
                     facts.fold(ProviderEvent::canonical(first), ProviderEvent::with_fact)
                 }
-                None => ProviderEvent::observation(observation.clone()),
+                None => {
+                    return Ok(DecodedEvent {
+                        event: ProviderEvent::observation(observation),
+                        continuation: message.continuation,
+                    });
+                }
             }
         };
         event.attach_observation(observation);

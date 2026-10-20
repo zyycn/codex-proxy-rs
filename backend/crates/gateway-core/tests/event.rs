@@ -3,8 +3,9 @@
 use bytes::Bytes;
 use gateway_core::event::{
     ContentItem, ContentKind, EventSequenceError, EventSequenceValidator, GatewayEvent,
-    ProtocolWireEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
-    ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
+    ProtocolWireEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseMetadata,
+    ProviderResponseObservation, ProviderResponseTimings, ReasoningDelta, ResponseMeta, TextDelta,
+    ToolCallDelta,
 };
 use gateway_core::upstream::UpstreamTransport;
 use serde_json::json;
@@ -334,4 +335,62 @@ fn validator_should_accept_reasoning_and_tool_call_stream() {
     }
 
     assert_eq!(validator.finish(), Ok(()));
+}
+
+#[test]
+fn response_observation_snapshots_preserve_values_without_copying_large_payloads() {
+    let metadata = format!("{{\"raw\":\"{}\"}}", "a".repeat(32 * 1024 - 10));
+    let observation =
+        ProviderResponseObservation::new(UpstreamTransport::new("http_sse").expect("transport"))
+            .with_provider_metadata(
+                ProviderResponseMetadata::new(metadata.clone()).expect("metadata"),
+            )
+            .with_client_headers(
+                (0..32)
+                    .map(|_| {
+                        ProviderResponseHeader::new("set-cookie", Bytes::from_static(b"raw-\xff"))
+                    })
+                    .collect(),
+            )
+            .with_timings(ProviderResponseTimings {
+                first_event_ms: Some(17),
+                ..ProviderResponseTimings::default()
+            });
+
+    let allocations = allocation_counter::measure(|| {
+        for _ in 0..1_000 {
+            std::hint::black_box(observation.clone());
+        }
+    });
+    // 允许小标量字段的复制，但流式快照不能随大头集合和 metadata 重复分配
+    assert!(allocations.bytes_total < 256 * 1_000, "{allocations:?}");
+    assert_eq!(allocations.bytes_current, 0);
+
+    let updated = observation
+        .clone()
+        .with_client_headers(Vec::new())
+        .with_provider_metadata(
+            ProviderResponseMetadata::new("{\"updated\":true}".to_owned()).expect("metadata"),
+        )
+        .with_timings(ProviderResponseTimings {
+            first_event_ms: Some(23),
+            ..ProviderResponseTimings::default()
+        });
+    assert_eq!(
+        observation.provider_metadata().expect("metadata").as_json(),
+        metadata
+    );
+    assert_eq!(observation.client_headers().len(), 32);
+    assert!(
+        observation.client_headers().iter().all(|header| {
+            header.name() == "set-cookie" && header.value().as_ref() == b"raw-\xff"
+        })
+    );
+    assert_eq!(observation.timings().first_event_ms, Some(17));
+    assert_eq!(
+        updated.provider_metadata().expect("metadata").as_json(),
+        "{\"updated\":true}"
+    );
+    assert!(updated.client_headers().is_empty());
+    assert_eq!(updated.timings().first_event_ms, Some(23));
 }

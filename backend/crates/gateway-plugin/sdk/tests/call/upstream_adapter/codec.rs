@@ -11,7 +11,8 @@ fn request() -> UpstreamAdapterRequest {
         "adapter_id":"example", "provider":"openai", "upstream_model":"fixture",
         "client_key_id":"key", "account_id":"account", "credential_revision":1,
         "protocol":"openai", "client_transport":"http_json", "fast_mode":"default",
-        "headers":[["x-fixture",[97,98]]], "continuation":null
+        "headers":[["x-fixture",[97,98]]], "continuation":null,
+        "request_elapsed_ms":0
     }))
     .unwrap()
 }

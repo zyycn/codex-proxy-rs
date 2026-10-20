@@ -547,7 +547,7 @@ pub struct ProviderResponseTimings {
 /// 这样 Provider 专有协议不会渗入路由
 /// 或管理领域
 #[derive(Clone, PartialEq, Eq)]
-pub struct ProviderResponseMetadata(String);
+pub struct ProviderResponseMetadata(Arc<str>);
 
 impl ProviderResponseMetadata {
     const MAX_BYTES: usize = 32 * 1024;
@@ -561,7 +561,7 @@ impl ProviderResponseMetadata {
         serde_json::from_str::<Value>(&json)
             .ok()
             .filter(Value::is_object)
-            .map(|_| Self(json))
+            .map(|_| Self(json.into()))
     }
 
     /// 返回不透明的 JSON 文本，供持久化 adapter 原样验证和写入
@@ -626,7 +626,8 @@ pub struct ProviderResponseObservation {
     service_tier: Option<String>,
     upstream_response_model: Option<String>,
     timings: ProviderResponseTimings,
-    client_headers: Vec<ProviderResponseHeader>,
+    // 流式事件分别持有快照，共享不可变头集合，避免逐事件复制头名和集合
+    client_headers: Arc<[ProviderResponseHeader]>,
     provider_metadata: Option<ProviderResponseMetadata>,
 }
 
@@ -642,7 +643,7 @@ impl ProviderResponseObservation {
             service_tier: None,
             upstream_response_model: None,
             timings: ProviderResponseTimings::default(),
-            client_headers: Vec::new(),
+            client_headers: Arc::default(),
             provider_metadata: None,
         }
     }
@@ -719,7 +720,7 @@ impl ProviderResponseObservation {
 
     #[must_use]
     pub fn with_client_headers(mut self, client_headers: Vec<ProviderResponseHeader>) -> Self {
-        self.client_headers = client_headers;
+        self.client_headers = client_headers.into();
         self
     }
 
