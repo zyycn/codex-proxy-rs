@@ -16,7 +16,7 @@ use gateway_admin::{
 use gateway_core::{
     lifecycle::CancellationToken,
     policy::ClientApiKeyId,
-    task::{WorkerContribution, WorkerRunnable},
+    task::{WorkerContribution, WorkerDaemonContext, WorkerRunnable},
 };
 use serde_json::{Value, json};
 use tokio::{sync::Notify, time::timeout};
@@ -277,7 +277,11 @@ async fn published_maintenance_resets_budget_with_only_budget_permission() {
     };
     let stop = CancellationToken::new();
     let cancellation = stop.clone();
-    let worker = tokio::spawn(async move { task.run(cancellation).await.unwrap() });
+    let worker = tokio::spawn(async move {
+        task.run(WorkerDaemonContext::new(cancellation))
+            .await
+            .unwrap()
+    });
     let result: Value = timeout(Duration::from_secs(15), async {
         loop {
             if let Ok(content) = std::fs::read_to_string(&marker)

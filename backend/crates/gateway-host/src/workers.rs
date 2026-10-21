@@ -14,9 +14,9 @@ use gateway_core::health::{
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
-    WorkerDefinitionError, WorkerDisabledReason, WorkerId, WorkerKind, WorkerLeaderLeaseGuard,
-    WorkerLeaderLeasePort, WorkerLeaseAcquisition, WorkerLeaseRequest, WorkerRegistration,
-    WorkerRunnable, WorkerSchedule, WorkerTaskError,
+    WorkerDaemonContext, WorkerDefinitionError, WorkerDisabledReason, WorkerId, WorkerKind,
+    WorkerLeaderLeaseGuard, WorkerLeaderLeasePort, WorkerLeaseAcquisition, WorkerLeaseRequest,
+    WorkerRegistration, WorkerRunnable, WorkerSchedule, WorkerTaskError,
 };
 use tokio::task::JoinHandle;
 
@@ -235,7 +235,7 @@ pub enum WorkerStartError {
 #[derive(Clone)]
 struct HealthEntry {
     snapshot: WorkerHealthSnapshot,
-    success_freshness: Duration,
+    success_freshness: Option<Duration>,
 }
 
 #[derive(Default)]
@@ -253,11 +253,14 @@ impl WorkerHealthRegistry {
             .values()
             .map(|registration| {
                 let freshness = match &registration.runnable {
-                    WorkerRunnable::Scheduled { schedule, .. } => (*schedule)
-                        .interval()
-                        .saturating_mul(2)
-                        .saturating_add(schedule.maximum_backoff()),
-                    WorkerRunnable::Daemon { restart, .. } => restart.maximum_backoff(),
+                    WorkerRunnable::Scheduled { schedule, .. } => Some(
+                        (*schedule)
+                            .interval()
+                            .saturating_mul(2)
+                            .saturating_add(schedule.maximum_backoff()),
+                    ),
+                    // daemon 可长期空闲或执行备份，重启退避不约束工作耗时
+                    WorkerRunnable::Daemon { .. } => None,
                 };
                 let key = WorkerHealthKey::Task(registration.id.clone());
                 (
@@ -275,7 +278,7 @@ impl WorkerHealthRegistry {
                 key.clone(),
                 HealthEntry {
                     snapshot: empty_snapshot(key, WorkerRuntimeState::Disabled),
-                    success_freshness: Duration::ZERO,
+                    success_freshness: None,
                 },
             )
         }));
@@ -315,11 +318,11 @@ impl WorkerHealthRegistry {
         });
     }
 
-    fn succeeded(&self, id: &WorkerId) {
+    fn succeeded(&self, id: &WorkerId, runtime_state: WorkerRuntimeState, cycles: u64) {
         self.update(id, |state| {
-            state.state = WorkerRuntimeState::Idle;
+            state.state = runtime_state;
             state.consecutive_failures = 0;
-            state.completed_cycles = state.completed_cycles.saturating_add(1);
+            state.completed_cycles = state.completed_cycles.saturating_add(cycles);
             state.last_success_at = Some(SystemTime::now());
             state.last_error = None;
         });
@@ -361,8 +364,11 @@ impl WorkerHealthSource for WorkerHealthRegistry {
                     snapshot.state,
                     WorkerRuntimeState::Running | WorkerRuntimeState::Idle
                 ) && snapshot.last_success_at.is_some_and(|last_success| {
-                    now.duration_since(last_success)
-                        .is_ok_and(|age| age > entry.success_freshness)
+                    now.duration_since(last_success).is_ok_and(|age| {
+                        entry
+                            .success_freshness
+                            .is_some_and(|freshness| age > freshness)
+                    })
                 });
                 if stale {
                     snapshot.state = WorkerRuntimeState::BackingOff;
@@ -407,7 +413,7 @@ async fn supervise_scheduled(
 
         let delay = match outcome {
             ScheduledOutcome::Succeeded => {
-                health.succeeded(&id);
+                health.succeeded(&id, WorkerRuntimeState::Idle, 1);
                 backoff = schedule.initial_backoff();
                 schedule.interval()
             }
@@ -595,17 +601,33 @@ async fn supervise_daemon(
             break;
         }
         health.running(&id, None);
-        let daemon_cancel = CancellationToken::new();
-        let run = AssertUnwindSafe(task.run(daemon_cancel.clone())).catch_unwind();
+        let context = WorkerDaemonContext::new(CancellationToken::new());
+        let run = AssertUnwindSafe(task.run(context.clone())).catch_unwind();
         tokio::pin!(run);
-        let result = tokio::select! {
-            result = &mut run => Some(result),
-            () = cancellation.cancelled() => {
-                daemon_cancel.cancel();
-                let _ = run.await;
-                None
+        let mut completed = 0;
+        let result = loop {
+            let outcome = tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    context.cancellation().cancel();
+                    let _ = run.await;
+                    break None;
+                }
+                result = &mut run => Some(result),
+                () = context.progress_since(completed) => None,
+            };
+            // 成功与退出可在同一 poll 内发生，先消费进度再记录本次退出故障
+            let cycles = context.completed_cycles();
+            if cycles > completed {
+                health.succeeded(&id, WorkerRuntimeState::Running, cycles - completed);
+                completed = cycles;
+                backoff = restart.initial_backoff();
+            }
+            if let Some(result) = outcome {
+                break Some(result);
             }
         };
+        context.cancellation().cancel();
         let Some(result) = result else { break };
         let error = match result {
             Ok(Ok(())) => WorkerTaskError::safe("daemon exited unexpectedly"),

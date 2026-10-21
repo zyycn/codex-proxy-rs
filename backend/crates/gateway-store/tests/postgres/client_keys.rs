@@ -12,8 +12,10 @@ use gateway_admin::{
     ports::store::ClientKeyStore as _,
 };
 use gateway_core::{
-    engine::execution::ClientApiKeyUsageSink as _, lifecycle::CancellationToken,
-    policy::ClientApiKeyId, task::DaemonTask as _,
+    engine::execution::ClientApiKeyUsageSink as _,
+    lifecycle::CancellationToken,
+    policy::ClientApiKeyId,
+    task::{DaemonTask as _, WorkerDaemonContext},
 };
 use gateway_store::postgres::{
     ClientApiKeyCursor, ClientApiKeyCursorValue, ClientApiKeyListQuery, ClientApiKeyRepository,
@@ -592,7 +594,7 @@ async fn client_key_usage_daemon_should_flush_pending_touch_on_shutdown() {
     let task = {
         let writer = Arc::clone(&writer);
         let cancellation = cancellation.clone();
-        tokio::spawn(async move { writer.run(cancellation).await })
+        tokio::spawn(async move { writer.run(WorkerDaemonContext::new(cancellation)).await })
     };
     sink.record_used(&ClientApiKeyId::new("key_usage_daemon").expect("valid client API Key ID"));
     cancellation.cancel();

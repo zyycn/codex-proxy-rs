@@ -2,6 +2,7 @@
 
 use super::*;
 use gateway_core::task::DaemonTask;
+use gateway_core::task::WorkerDaemonContext;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 const COMMAND_DRAIN_TIMEOUT: Duration = Duration::from_secs(4);
@@ -52,7 +53,7 @@ fn spawn_command_writer<T>(
 where
     T: DaemonTask + Send + 'static,
 {
-    tokio::spawn(async move { writer.run(cancellation).await })
+    tokio::spawn(async move { writer.run(WorkerDaemonContext::new(cancellation)).await })
 }
 
 impl CommandStoreDrain {

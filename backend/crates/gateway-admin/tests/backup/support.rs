@@ -5,6 +5,7 @@
 //! 供 backup::task 与 use_case::backup 的测试复用
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -92,6 +93,7 @@ pub(crate) fn queued_record(seed: &BackupRecordSeed) -> BackupRecord {
 /// 内存版备份仓储
 pub(crate) struct FakeBackupRepository {
     settings: Mutex<BackupSettings>,
+    settings_unavailable: AtomicBool,
     records: Mutex<Vec<BackupRecord>>,
 }
 
@@ -99,8 +101,14 @@ impl FakeBackupRepository {
     pub(crate) fn new(settings: BackupSettings) -> Self {
         Self {
             settings: Mutex::new(settings),
+            settings_unavailable: AtomicBool::new(false),
             records: Mutex::new(Vec::new()),
         }
+    }
+
+    pub(crate) fn set_settings_unavailable(&self, unavailable: bool) {
+        self.settings_unavailable
+            .store(unavailable, Ordering::SeqCst);
     }
 
     /// 测试辅助：读取当前全部记录
@@ -134,6 +142,13 @@ impl FakeBackupRepository {
 #[async_trait]
 impl BackupRepository for FakeBackupRepository {
     async fn load_settings(&self) -> AdminStoreResult<BackupSettings> {
+        if self.settings_unavailable.load(Ordering::SeqCst) {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::Unavailable,
+                "backup",
+                "test store unavailable",
+            ));
+        }
         Ok(self.settings.lock().expect("settings").clone())
     }
 

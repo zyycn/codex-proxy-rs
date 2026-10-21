@@ -13,6 +13,7 @@ use gateway_core::engine::admission::{
 };
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::policy::{ClientApiKeyId, RateLimits};
+use gateway_core::task::WorkerDaemonContext;
 use gateway_store::redis::BufferedClientAdmissionPort;
 
 #[derive(Default)]
@@ -280,5 +281,5 @@ fn spawn_writer<T>(
 where
     T: gateway_core::task::DaemonTask + 'static,
 {
-    tokio::spawn(async move { writer.run(cancellation).await })
+    tokio::spawn(async move { writer.run(WorkerDaemonContext::new(cancellation)).await })
 }

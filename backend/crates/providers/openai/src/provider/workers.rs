@@ -3,6 +3,7 @@
 use super::*;
 use crate::transport::profile::cli_release::CliReleaseService;
 use crate::transport::profile::platform_release::PlatformDesktopReleaseService;
+use gateway_core::task::WorkerDaemonContext;
 
 pub(crate) struct ClientReleaseServices {
     pub desktop: Arc<CodexDesktopReleaseService>,
@@ -299,11 +300,9 @@ impl ScheduledTask for OpenAiCatalogTask {
 }
 
 impl DaemonTask for OpenAiCatalogEtagTask {
-    fn run(
-        &self,
-        cancellation: gateway_core::lifecycle::CancellationToken,
-    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(&self, context: WorkerDaemonContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation();
             loop {
                 tokio::select! {
                     () = cancellation.cancelled() => return Ok(()),
@@ -314,6 +313,8 @@ impl DaemonTask for OpenAiCatalogEtagTask {
                         error = %error,
                         "OpenAI model catalog ETag refresh failed"
                     );
+                } else {
+                    context.succeeded();
                 }
             }
         })

@@ -9,10 +9,7 @@ use std::{
 
 use chrono::Utc;
 use futures::{FutureExt as _, StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
-use gateway_core::{
-    lifecycle::CancellationToken,
-    task::{DaemonTask, WorkerTaskError},
-};
+use gateway_core::task::{DaemonTask, WorkerDaemonContext, WorkerTaskError};
 use tokio::{sync::Notify, time::Instant};
 use uuid::Uuid;
 
@@ -332,8 +329,9 @@ impl ImportTasksService for DefaultImportTasksService {
 pub(crate) struct ImportTaskWorker(pub Arc<DefaultImportTasksService>);
 
 impl DaemonTask for ImportTaskWorker {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(&self, context: WorkerDaemonContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation();
             let mut active = FuturesUnordered::new();
             // 固定一个取消 future，避免循环反复注册中立 CancellationToken 的 waiter
             let cancelled = cancellation.cancelled();
@@ -354,6 +352,7 @@ impl DaemonTask for ImportTaskWorker {
                     };
                     active.push(self.0.execute(id, index, input));
                 }
+                context.succeeded();
                 tokio::select! {
                     () = &mut cancelled => {},
                     _ = active.next(), if !active.is_empty() => {},

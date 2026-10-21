@@ -12,7 +12,7 @@ use gateway_admin::ports::system::{
 use gateway_core::diagnostics::{OperationalDiagnostics, OperationalFailure};
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::task::{
-    DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind,
+    DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerDaemonContext, WorkerId, WorkerKind,
     WorkerLeaderLeasePort, WorkerLeaseAcquisition, WorkerLeaseError, WorkerLeaseRequest,
     WorkerRegistration, WorkerRunnable, WorkerTaskError,
 };
@@ -365,8 +365,9 @@ impl Drop for TaskLifetime {
 }
 
 impl DaemonTask for WriterTask {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(&self, context: WorkerDaemonContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation();
             let _lifetime = TaskLifetime(self.probe.dropped.clone());
             let mut received = self.received.lock().await;
             self.probe.started.cancel();
@@ -394,8 +395,9 @@ impl DaemonTask for WriterTask {
 struct IdleTask;
 
 impl DaemonTask for IdleTask {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(&self, context: WorkerDaemonContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation();
             cancellation.cancelled().await;
             Ok(())
         })

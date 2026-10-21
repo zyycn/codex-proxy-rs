@@ -16,7 +16,7 @@ use gateway_core::error::{
 };
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
-use gateway_core::task::DaemonTask as _;
+use gateway_core::task::{DaemonTask as _, WorkerDaemonContext};
 use gateway_core::upstream::UpstreamSendState;
 use gateway_store::postgres::{BufferedExecutionStore, PgExecutionStore};
 use tokio::sync::{Notify, Semaphore};
@@ -288,7 +288,7 @@ async fn observation_writer_persists_commands_in_enqueue_order() {
     let task = tokio::spawn({
         let writer = Arc::clone(&writer);
         let cancellation = cancellation.clone();
-        async move { writer.run(cancellation).await }
+        async move { writer.run(WorkerDaemonContext::new(cancellation)).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
@@ -338,7 +338,7 @@ async fn request_affine_lanes_run_independently_and_preserve_each_request_order(
     let task = tokio::spawn({
         let writer = Arc::clone(&writer);
         let cancellation = cancellation.clone();
-        async move { writer.run(cancellation).await }
+        async move { writer.run(WorkerDaemonContext::new(cancellation)).await }
     });
     inner.wait_for_started(2).await;
     assert_eq!(inner.maximum_active.load(Ordering::Acquire), 2);
@@ -383,7 +383,7 @@ async fn idle_wait_includes_a_dequeued_write_until_persistence_finishes() {
     let task = tokio::spawn({
         let writer = Arc::clone(&writer);
         let cancellation = cancellation.clone();
-        async move { writer.run(cancellation).await }
+        async move { writer.run(WorkerDaemonContext::new(cancellation)).await }
     });
     inner.wait_for_started(1).await;
 
@@ -430,7 +430,7 @@ async fn global_item_budget_includes_writes_running_in_every_lane() {
     let task = tokio::spawn({
         let writer = Arc::clone(&writer);
         let cancellation = cancellation.clone();
-        async move { writer.run(cancellation).await }
+        async move { writer.run(WorkerDaemonContext::new(cancellation)).await }
     });
     inner.wait_for_started(2).await;
     assert_eq!(store.stats().queued_items, 2);
@@ -477,7 +477,7 @@ async fn all_lanes_share_one_shutdown_deadline_for_inflight_writes() {
     let task = tokio::spawn({
         let writer = Arc::clone(&writer);
         let cancellation = cancellation.clone();
-        async move { writer.run(cancellation).await }
+        async move { writer.run(WorkerDaemonContext::new(cancellation)).await }
     });
     inner.wait_for_started(4).await;
     cancellation.cancel();
@@ -512,7 +512,7 @@ async fn observation_writer_continues_after_a_database_write_failure() {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     writer
-        .run(cancellation)
+        .run(WorkerDaemonContext::new(cancellation))
         .await
         .expect("shutdown drains observations");
 
@@ -545,7 +545,7 @@ async fn shutdown_drains_observations_already_accepted_by_the_queue() {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     writer
-        .run(cancellation)
+        .run(WorkerDaemonContext::new(cancellation))
         .await
         .expect("shutdown drains observations");
 
@@ -653,7 +653,7 @@ async fn zero_attempt_create_and_finalize_drain_in_order_with_trace() {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     writer
-        .run(cancellation)
+        .run(WorkerDaemonContext::new(cancellation))
         .await
         .expect("shutdown drains accepted commands");
     let stats = store.stats();
@@ -703,7 +703,7 @@ async fn request_affine_lanes_persist_a_postgres_lifecycle_burst_without_orphans
     let task = tokio::spawn({
         let writer = Arc::clone(&writer);
         let cancellation = cancellation.clone();
-        async move { writer.run(cancellation).await }
+        async move { writer.run(WorkerDaemonContext::new(cancellation)).await }
     });
     tokio::time::timeout(Duration::from_secs(15), async {
         while store.stats().persisted_total != WRITES {
@@ -760,7 +760,10 @@ async fn zero_attempt_dropped_finalize_is_fail_open_and_recoverable_at_deadline(
     assert_eq!(store.stats().dropped_total, 1);
     let cancellation = CancellationToken::new();
     cancellation.cancel();
-    writer.run(cancellation).await.expect("drain create only");
+    writer
+        .run(WorkerDaemonContext::new(cancellation))
+        .await
+        .expect("drain create only");
     let repository = observability_repository(&database.pool);
     let pending = repository
         .usage_record_detail(request.id.as_str())
@@ -842,7 +845,7 @@ async fn zero_attempt_dropped_create_does_not_make_finalize_an_upsert() {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     writer
-        .run(cancellation)
+        .run(WorkerDaemonContext::new(cancellation))
         .await
         .expect("drain orphan finalization");
     assert_eq!(store.stats().persisted_total, 0);
@@ -913,7 +916,7 @@ async fn zero_attempt_postgres_write_failures_are_not_retried_and_do_not_stop_th
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     writer
-        .run(cancellation)
+        .run(WorkerDaemonContext::new(cancellation))
         .await
         .expect("continue draining after PG errors");
     let stats = store.stats();
@@ -1023,7 +1026,10 @@ async fn operational_failure_uses_the_bounded_queue_without_creating_a_model_req
     assert_eq!(store.stats().dropped_total, 1);
     let cancellation = CancellationToken::new();
     cancellation.cancel();
-    writer.run(cancellation).await.unwrap();
+    writer
+        .run(WorkerDaemonContext::new(cancellation))
+        .await
+        .unwrap();
     let row: (
         Option<String>,
         String,
@@ -1105,7 +1111,10 @@ async fn progress_congestion_preserves_failure_reserve_without_waiting() {
     assert_eq!(store.stats().dropped_total, 1);
     let cancelled = CancellationToken::new();
     cancelled.cancel();
-    writer.run(cancelled).await.unwrap();
+    writer
+        .run(WorkerDaemonContext::new(cancelled))
+        .await
+        .unwrap();
     assert_eq!(store.stats().persisted_total, 5);
     let detail: String =
         sqlx::query_scalar("select error_details from ops_events where component = 'admin'")

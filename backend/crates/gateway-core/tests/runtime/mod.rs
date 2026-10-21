@@ -28,7 +28,8 @@ use gateway_core::runtime::{
 };
 use gateway_core::settings::SettingsValues;
 use gateway_core::task::{
-    ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerKind, WorkerRunnable,
+    ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerDaemonContext, WorkerKind,
+    WorkerRunnable,
 };
 
 type ReadGate<T> = Arc<Mutex<Option<oneshot::Receiver<Result<T, SnapshotStoreError>>>>>;
@@ -490,7 +491,7 @@ fn subscription_refresh_should_wait_for_inflight_compile_and_reload_authoritativ
             })
             .expect("subscription task");
         let cancellation = CancellationToken::new();
-        let mut daemon = task.run(cancellation.clone());
+        let mut daemon = task.run(WorkerDaemonContext::new(cancellation.clone()));
         let mut old = Box::pin(publisher.refresh());
         assert!(futures::poll!(old.as_mut()).is_pending());
         *store.facts.lock().expect("facts lock") = Ok(scoped_facts(11, false));

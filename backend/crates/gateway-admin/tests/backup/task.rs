@@ -11,6 +11,7 @@ use gateway_admin::{
     ports::backup::{BackupRepository, DatabaseDumpPort, DumpRequest},
 };
 use gateway_core::lifecycle::CancellationToken;
+use gateway_core::task::{DaemonTask, WorkerDaemonContext};
 
 use super::support::{
     DUMP_CONTENT, FakeBackupRepository, FakeDumpPort, FakeObjectStore, backup_id,
@@ -378,4 +379,41 @@ async fn manual_backup_preserves_primary_and_final_delete_failures() {
             record.error_message
         );
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn daemon_reports_success_only_after_a_complete_cycle_and_recovers_after_store_failure() {
+    let repository = Arc::new(FakeBackupRepository::new(configured_settings()));
+    let task = Arc::new(BackupTask::new(
+        repository.clone(),
+        Arc::new(FakeDumpPort::new()),
+        Arc::new(FakeObjectStore::new()),
+    ));
+    let context = WorkerDaemonContext::new(CancellationToken::new());
+    repository.set_settings_unavailable(true);
+    let error = task.run(context.clone()).await.unwrap_err();
+    assert_eq!(error.as_safe_str(), "backup store failed");
+    assert_eq!(context.completed_cycles(), 0);
+
+    repository.set_settings_unavailable(false);
+    let recovered = WorkerDaemonContext::new(CancellationToken::new());
+    let worker = tokio::spawn({
+        let task = task.clone();
+        let context = recovered.clone();
+        async move { task.run(context).await }
+    });
+    recovered.progress_since(0).await;
+    assert_eq!(recovered.completed_cycles(), 1);
+    repository.set_settings_unavailable(true);
+    tokio::time::advance(std::time::Duration::from_secs(30)).await;
+    assert_eq!(
+        worker.await.unwrap().unwrap_err().as_safe_str(),
+        "backup store failed"
+    );
+    assert_eq!(recovered.completed_cycles(), 1);
+
+    let cancelled = WorkerDaemonContext::new(CancellationToken::new());
+    cancelled.cancellation().cancel();
+    task.run(cancelled.clone()).await.unwrap();
+    assert_eq!(cancelled.completed_cycles(), 0);
 }

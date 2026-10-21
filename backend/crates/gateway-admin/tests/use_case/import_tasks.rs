@@ -14,7 +14,7 @@ use gateway_admin::{
 use gateway_core::{
     lifecycle::CancellationToken,
     routing::ProviderKind,
-    task::{WorkerContribution, WorkerKind, WorkerRunnable},
+    task::{WorkerContribution, WorkerDaemonContext, WorkerKind, WorkerRunnable},
 };
 use uuid::Uuid;
 
@@ -75,7 +75,9 @@ fn start(bundle: &mut AdminBundle) -> (CancellationToken, tokio::task::JoinHandl
     let cancellation = CancellationToken::new();
     let token = cancellation.clone();
     let handle = tokio::spawn(async move {
-        task.run(token).await.expect("import daemon exits cleanly");
+        task.run(WorkerDaemonContext::new(token))
+            .await
+            .expect("import daemon exits cleanly");
     });
     (cancellation, handle)
 }

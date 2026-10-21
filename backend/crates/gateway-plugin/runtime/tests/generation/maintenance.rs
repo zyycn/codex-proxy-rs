@@ -9,6 +9,7 @@ use gateway_admin::{
     },
     ports::plugin_resources::PluginResourceAccess,
 };
+use gateway_core::task::WorkerDaemonContext;
 use gateway_core::{
     account::FastMode,
     lifecycle::CancellationToken,
@@ -165,7 +166,9 @@ async fn start(
     let stop = CancellationToken::new();
     let cancellation = stop.clone();
     let task = tokio::spawn(async move {
-        task.run(cancellation).await.unwrap();
+        task.run(WorkerDaemonContext::new(cancellation))
+            .await
+            .unwrap();
     });
     (runtime, core, resources, stop, task)
 }

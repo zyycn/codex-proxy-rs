@@ -17,7 +17,7 @@ use gateway_core::engine::admission::{
 };
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::policy::ClientApiKeyId;
-use gateway_core::task::{DaemonTask, WorkerTaskError};
+use gateway_core::task::{DaemonTask, WorkerDaemonContext, WorkerTaskError};
 use tokio::sync::{Mutex, mpsc};
 
 const DEFAULT_QUEUE_CAPACITY: usize = 4_096;
@@ -139,8 +139,9 @@ pub struct ClientAdmissionReleaseWriter {
 }
 
 impl DaemonTask for ClientAdmissionReleaseWriter {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(&self, context: WorkerDaemonContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation();
             let mut receiver = self.receiver.lock().await;
             loop {
                 let release = tokio::select! {
@@ -155,7 +156,10 @@ impl DaemonTask for ClientAdmissionReleaseWriter {
                         "client admission release queue closed",
                     ));
                 };
-                release_admission(self.inner.as_ref(), self.diagnostics.as_ref(), release).await;
+                if release_admission(self.inner.as_ref(), self.diagnostics.as_ref(), release).await
+                {
+                    context.succeeded();
+                }
             }
         })
     }
@@ -185,7 +189,7 @@ async fn release_admission(
     port: &dyn ClientAdmissionPort,
     diagnostics: &dyn gateway_core::diagnostics::OperationalDiagnostics,
     release: AdmissionRelease,
-) {
+) -> bool {
     if let Err(source) = port
         .release(&release.client_api_key_id, &release.model_request_id)
         .await
@@ -205,5 +209,7 @@ async fn release_admission(
                 "admission diagnostic could not be recorded"
             );
         }
+        return false;
     }
+    true
 }
