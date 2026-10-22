@@ -19,6 +19,7 @@ bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 futures = "0.3.32"
 gateway-core = { path = "../gateway-core" }
+gateway-protocol = { path = "../gateway-protocol" }
 heck = "0.5.0"
 hex = "0.4.3"
 hkdf = "0.13.0"

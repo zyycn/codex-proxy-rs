@@ -206,6 +206,7 @@ pub enum AdminConfigError {
 /// 字段全部私有；调用方经 accessor 直接调用能力，不需要命名内部 `use_case` 模块
 #[derive(Clone)]
 pub struct AdminServices {
+    upstream_quota: Arc<use_case::upstream_quota::UpstreamQuotaService>,
     timezone: gateway_core::time::DeploymentTimeZone,
     public_services: Arc<public_service::Registry>,
     plugins: Arc<PluginsService>,
@@ -229,6 +230,11 @@ pub struct AdminServices {
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn upstream_quota(&self) -> &use_case::upstream_quota::UpstreamQuotaService {
+        &self.upstream_quota
+    }
+
     #[must_use]
     pub const fn timezone(&self) -> gateway_core::time::DeploymentTimeZone {
         self.timezone
@@ -483,6 +489,10 @@ async fn initialize_inner(
     public_services.register_accounts(&accounts)?;
     public_services.register_usage_data(&usage_data)?;
     let services = AdminServices {
+        upstream_quota: Arc::new(use_case::upstream_quota::UpstreamQuotaService::new(
+            store.client_keys(),
+            registry.clone(),
+        )),
         timezone,
         public_services: Arc::new(public_services),
         plugin_management: Arc::new(PluginManagementService::new(

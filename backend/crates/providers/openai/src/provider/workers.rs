@@ -75,6 +75,13 @@ pub(crate) fn worker_contributions(
             }),
         )?),
         WorkerContribution::Registration(scheduled_registration(
+            WorkerId::try_new(WorkerKind::QuotaCatalogHealth, "openai-upstream-quota")?,
+            Duration::from_secs(60),
+            Box::new(OpenAiUpstreamQuotaTask {
+                quota: Arc::clone(&quota),
+            }),
+        )?),
+        WorkerContribution::Registration(scheduled_registration(
             warmup_id,
             WARMUP_CHECK_INTERVAL,
             Box::new(OpenAiWarmupTask::new(Arc::clone(&quota), timezone)),
@@ -205,6 +212,23 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
 
 pub(super) struct OpenAiQuotaTask {
     quota: Arc<CodexCredentialQuotaService>,
+}
+
+struct OpenAiUpstreamQuotaTask {
+    quota: Arc<CodexCredentialQuotaService>,
+}
+
+impl ScheduledTask for OpenAiUpstreamQuotaTask {
+    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            tokio::select! {
+                _ = context.cancellation().cancelled() => Ok(()),
+                result = self.quota.refresh_upstream_due() => result.map_err(|error| {
+                    WorkerTaskError::safe("upstream quota refresh is unavailable").with_source(error)
+                }),
+            }
+        })
+    }
 }
 
 pub(super) struct OpenAiCatalogTask {

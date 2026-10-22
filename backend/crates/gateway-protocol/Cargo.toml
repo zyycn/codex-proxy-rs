@@ -12,6 +12,7 @@ name = "main"
 path = "tests/main.rs"
 
 [dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
 http = "1.5.0"
 httpdate = "1.0.3"
 memchr = "2.8.3"

@@ -333,6 +333,7 @@ export const themeDashboardSummary: DashboardSummaryResponse = {
       requestCount: 1_284,
       requestBuckets: [],
       quotaUsedPercent: 32,
+      upstreamAccountCount: null,
       metricLabel: '今日 Token',
       metricValue: '926K',
       usageWindow: {
@@ -366,6 +367,7 @@ export const themeDashboardSummary: DashboardSummaryResponse = {
         label: `08-23 ${index + 12}:00–${index + 13}:00 · ${Math.round(requestCount / 3)} 次请求`,
       })),
       quotaUsedPercent: null,
+      upstreamAccountCount: null,
       metricLabel: '次数',
       metricValue: '894',
       usageWindow: {
@@ -404,6 +406,7 @@ export const themeDashboardSummary: DashboardSummaryResponse = {
       requestCount: 742,
       requestBuckets: [],
       quotaUsedPercent: 68,
+      upstreamAccountCount: null,
       metricLabel: '今日 Token',
       metricValue: '512K',
       usageWindow: {

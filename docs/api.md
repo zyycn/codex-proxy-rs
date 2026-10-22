@@ -203,6 +203,7 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 | `POST` | `/v1/providers/{provider}/models/{model}/count_tokens` | 调用指定 Provider/model 声明的精确 Token 计数；请求和响应均为 JSON |
 | `GET` / `POST` | `/v1/providers/{provider}/http/{endpoint}` | 调用指定 Provider 预先声明的固定 HTTP 操作；不是任意 URL 代理 |
 | `GET` | `/v1/usage` | 查询当前 Client Key 的日与周额度，仅使用网关已结算的 USD 账本 |
+| `GET` | `/v1/quota` | 查询当前 Client Key 可见的匿名 OpenAI 账号额度快照，须开启额度共享 |
 
 ### Images 请求
 
@@ -576,6 +577,70 @@ OpenAI 选号阶段确认本次可选账号全部额度耗尽时，HTTP 返回 `
 
 缺失、非法、已禁用或已删除的 Key 返回 OpenAI 风格 `401` 错误；未知查询参数返回 `400 invalid_usage_query`，
 读取账本失败返回 `503 usage_unavailable`，不会用零余额掩盖故障
+
+### 上游账号额度透传
+
+上游管理员为分发的 Client Key 开启 `quotaSharingEnabled`，下游在 API Key 账号的连接设置中开启
+`fetch_upstream_quota`，即可在账号额度位置展开上游子账号。Key 持有者无需管理员权限
+
+`GET /v1/quota` 使用与 `/v1/usage` 相同的 Bearer Key 认证和 request 中间件。仅返回该 Key 授权范围内
+已启用的 OpenAI 账号；额度耗尽、冷却或并发占满的账号仍保留。停用账号及其额度、模型列表不向下游导出。查询不执行推理准入、扣费、预算窗口开启或主动上游刷新，
+Key 预算耗尽后仍可查询。接口不接受查询参数或请求体，响应带 `Cache-Control: no-store`
+
+```json
+{
+  "schemaVersion": 1,
+  "accounts": [
+    {
+      "id": "opaque-account-1",
+      "label": "上游账号 1",
+      "status": "observed",
+      "observedAt": "2026-10-15T12:00:00Z",
+      "windows": [
+        {
+          "key": "codex:primary",
+          "group": "codex",
+          "label": "5 小时额度",
+          "role": "primary",
+          "windowSeconds": 18000,
+          "usedPercent": 75,
+          "resetAt": "2026-10-15T15:00:00Z",
+          "limitReached": false
+        }
+      ]
+    },
+    { "id": "opaque-account-2", "label": "上游账号 2", "status": "unknown", "observedAt": null, "windows": [] }
+  ]
+}
+```
+
+这是 CPR 网关间的扩展协议，不是 OpenAI 标准接口。单账号也使用 `accounts[]`；API Key 账号已有子额度时展开为平铺条目，
+没有数据或未开启获取时仍保留 `unknown` 条目，不从混合账号池中消失。空数组表示没有可导出的条目，不表示额度耗尽
+
+`id` 在同一导出方和 Key 范围内稳定匿名化，`label` 默认使用匿名名称。Key 开启 `quotaSharingIncludeNames` 后保留本地账号名称或上游已提供的名称，名称可能包含邮箱等身份信息；内部账号 ID、连接地址和凭据不对外披露。
+`status` 为 `observed`、`unknown` 或 `stale`，只说明观测状态，不是账号调度状态；`unknown` 必须为
+`observedAt: null`、`windows: []`。其他状态保留原始观测时间，多级转发不以获取时间替代它
+
+可选 `models` 是已缓存的账号模型 ID 列表，按账号模型限制过滤；省略或 `null` 表示未提供，空数组表示已知列表为空。
+模型列表不会触发实时目录查询，也不从混合账号池的模型并集推断单账号模型。多级转发保留子账号的模型限制，每一跳按当前 Key 的披露选项裁剪名称和模型列表
+
+窗口 `key` 在账号内唯一，`group`、`label` 为分组和名称；`role` 为 `primary`、`secondary`、`monthly` 或 `null`，
+`windowSeconds` 为实际时长或 `null`，不从角色猜测周期。`usedPercent` 是 0–100 的已用百分比，`null` 表示未知；
+`resetAt` 为 RFC3339 时间或 `null`，`limitReached` 为触顶事实。可选 `limitId`、`limitName` 保留模型或限额分类。
+除 `models`、`limitId`、`limitName` 外，字段允许为 `null` 不代表可省略；同版本未知附加字段会被忽略
+
+缺失或无效 Key 返回 `401`；共享未开启返回 `403 quota_sharing_disabled`；不合法的查询返回
+`400 invalid_quota_query`；存储不可用返回 `503 quota_unavailable`。完整响应上限 1 MiB，超过时返回
+`503 quota_response_too_large`，不静默截断；错误均使用 OpenAI 风格对象
+
+下游使用保存的 API 前缀追加 `quota`，不另补 `/v1`；每 60 秒获取直接上游快照，保存连接后后台尝试获取一次。
+手动刷新复用账号额度刷新入口，最短间隔 10 秒，过于频繁返回管理错误 `429` / `42902`。单次网络查询最多 5 秒，
+不跟随重定向、不立即重试；展开页面只读取本地快照。接口不支持时显示“额度待观测”，获取失败保留旧数据并标记失败；
+明确认证或权限拒绝后，旧值仅供本地展示，成功获取新快照前不继续向下一层转发。上游关系须无环
+
+管理端 `account.quota.upstream` 在已启用且开启获取的 API Key 账号上返回子额度及 `fetchedAt`、`lastAttemptAt`、
+安全错误分类和对应展示文字。它不混入原 `quota.windows`，也不改变本地请求用量或调度状态。
+未开启获取、已停用的 API Key 账号和 OAuth 账号不返回该字段。`accounts[].models` 为模型 ID 列表或 `null`
 
 ### Codex Live 语音通话
 
@@ -1026,13 +1091,17 @@ HTTP 会明文传输 API Key 和请求内容，仅用于可信网络。
 API Key 每次导入创建独立账号；更新已有账号使用 `/api/admin/accounts/update` 的 `connection` 字段。
 导出会显式包含密钥，沿用敏感导出的确认合同
 
+可选 `fetch_upstream_quota` 默认 `false`，控制是否获取[兼容网关的上游额度](#上游账号额度透传)，
+随 CPR 账号导出与连接配置保存；旧导入文件缺少该字段时仍可使用
+
 sub2api 的 `platform=openai`、`type=apikey` 使用 `credentials.base_url` / `credentials.api_key`；
 导入时按其端点规则将服务根、版本前缀或完整 `/responses` 地址转换为 API 前缀，缺省地址为官方 `/v1`。
 非空模型映射、请求头覆盖、其他协议和启用的 `extra.openai_*` 设置尚未适配，返回输入错误，需先移除并在本项目重新配置
 
 API Key 账号与 OAuth 共用现有 Responses、Images 和 standalone Search 请求与响应链路，
 包括 Responses Lite 和原生压缩协议的透传，实际支持情况由上游决定；不提供独立 compact 路由。
-模型目录、连接测试和本地用量统计可用；OAuth 刷新/重新授权、ChatGPT 额度、个人资料、订阅和重置卡不适用。
+模型目录、连接测试和本地用量统计可用，也可选获取兼容网关的上游额度。
+OAuth 刷新/重新授权、直接 ChatGPT 额度查询、个人资料、订阅和重置卡不适用。
 客户端的 `image_generation` 和 `X-OpenAI-Actor-Authorization` 声明不改变账号的实际能力。
 账号列表和详情的 API Key `usage` 汇总该账号创建后仍保留的本地请求记录，`windowLabelDisplay` 为 `通用额度`；
 日志清理会影响累计范围，不代表上游余额。OAuth 账号仍按实际周/月额度窗口统计
@@ -1086,10 +1155,11 @@ sub2api 的 `credentials.model_mapping` 不转换为本项目的账号模型限�
 
 `connection.transport` 支持 `http`、`prefer_websocket`。省略 `connection` 时只更新账号设置；
 省略 `connection.apiKey` 保留当前密钥，空字符串无效。
+可选 `connection.fetchUpstreamQuota` 控制额度获取，省略时保留当前设置。
 OpenAI OAuth 账号只接受 `connection: { transport }`，不接受 `baseUrl`、`apiKey` 或 OAuth token。
 连接设置不能修改账号 ID、Provider 或认证类型，也不接受通用凭据文档。
 凭据与设置在同一事务中保存，任一校验或持久化失败均不落库。
-`GET /api/admin/accounts/detail` 对 API Key 账号额外返回 `credentialConfiguration: { base_url, transport }`；
+`GET /api/admin/accounts/detail` 对 API Key 账号额外返回 `credentialConfiguration: { base_url, transport, fetch_upstream_quota }`；
 OAuth 账号返回 `credentialConfiguration: { transport }`。响应不回显密钥或 token；不适用的账号省略该字段。
 更新会推进凭据 revision 并失效目录与连接；旧版本会话不可静默续接到新上游
 
@@ -1388,6 +1458,15 @@ HTTP 返回 `403` 和 `image_generation_disabled`，WebSocket 每个 `response.c
 
 创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
 `dailyLimitUsd`、`weeklyLimitUsd`、`customKey` 和 `providerRequestProfileOverrides`。更新请求携带 `id`，不接受 `customKey`。
+创建和更新还接受以下可选布尔字段，列表返回同名字段；更新时省略或 `null` 保留当前值：
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `quotaSharingEnabled` | `false` | 允许查询授权范围内的上游额度 |
+| `quotaSharingIncludeNames` | `false` | 传递账号名称 |
+| `quotaSharingIncludeModels` | `false` | 传递已缓存的账号模型列表 |
+
+名称和模型列表选项仅在额度共享开启时生效，关闭共享仍保留各项选择。共享设置与名称、分组和限额在同一事务提交，并保留审计，不改变该 Key 的推理权限。
 `groupIds` 必须显式提交：空数组派生 `routingScope: "all"`，非空数组派生
 `routingScope: "groups"`。响应同时返回分组引用 `groups`，以及从当前有效账号池派生、仅供展示的
 `providerKinds`。创建和 reveal 响应会返回完整明文 Key，调用方
@@ -1996,6 +2075,9 @@ Dashboard 的 `capacityInfo` 统计普通容量，不含独立审批池；`maxCo
 `usedSlots` 仍表示实际在途数，Redis 不可用时为 `null`；没有可用账号时 `totalSlots` 为 `0`
 
 Dashboard 的 `accountUsage[]` 由后端提供 `usageWindow`、`metricLabel`、`metricValue`
+
+`upstreamAccountCount` 为账号已保存的上游额度快照中的账号数，没有快照时为 `null`。
+额度列表通过 `GET /api/admin/accounts/quota?accountId=...` 读取，两个接口均不主动访问上游
 
 `usageWindow` 复用账号额度窗口合同，缺失额度事实时为 `null`；窗口标签、百分比、触顶状态、重置时间
 和本地用量由 Provider/Admin 投影。套餐缺失不表示免费套餐，显示时舍入的百分比不用于判断触顶

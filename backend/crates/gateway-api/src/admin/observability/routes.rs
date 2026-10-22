@@ -1,6 +1,7 @@
 //! 固定 `/api/admin` 观测路由与 handler
 
 use crate::auth::SessionState;
+use gateway_core::account::ProviderAccountId;
 
 use super::*;
 
@@ -60,10 +61,26 @@ where
         .dashboard_summary(range, domain_trend_kind(kind))
         .await
         .map_err(map_service_error)?;
-    Ok(AdminResponse::new(
-        StatusCode::OK,
-        AdminEnvelope::ok(dashboard_view(result, kind, time)),
-    ))
+    let mut data = dashboard_view(result, kind, time);
+    let ids = data
+        .account_usage
+        .iter()
+        .filter(|account| account.provider == "openai" && account.authentication_kind == "api_key")
+        .map(|account| {
+            ProviderAccountId::new(account.id.clone()).map_err(|_| AdminError::internal())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let snapshots = state
+        .admin_services()
+        .upstream_quota()
+        .snapshots(&ids)
+        .await
+        .map_err(map_service_error)?;
+    for account in &mut data.account_usage {
+        let id = ProviderAccountId::new(account.id.clone()).map_err(|_| AdminError::internal())?;
+        account.upstream_account_count = snapshots.get(&id).map(|quota| quota.accounts.len());
+    }
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
 pub(crate) async fn dashboard_trend<S>(

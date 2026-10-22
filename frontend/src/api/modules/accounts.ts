@@ -13,6 +13,7 @@ export type AccountErrorReason
     | 'account_banned'
 
 export interface AccountQuotaWindow {
+  remainingPercentDisplay?: string
   key: string
   group: string
   limitId: string | null
@@ -35,6 +36,7 @@ export interface AccountQuotaCredits {
 }
 
 export interface AccountQuota {
+  upstream?: AccountUpstreamQuota | null
   refreshedAtDisplay: string
   limitReached: boolean
   // 429 临时限流（Redis 冷却）到期时间；非限流中为 null。
@@ -44,6 +46,26 @@ export interface AccountQuota {
   recoveryProbeRequired: boolean
   windows: AccountQuotaWindow[]
   credits: AccountQuotaCredits | null
+}
+
+export interface UpstreamQuotaAccount {
+  id: string
+  label: string
+  models: string[] | null
+  status: 'observed' | 'unknown' | 'stale'
+  observedAt: string | null
+  observedAtDisplay: string
+  windows: AccountQuotaWindow[]
+}
+
+export interface AccountUpstreamQuota {
+  fetchedAt: string | null
+  fetchedAtDisplay: string
+  lastAttemptAt: string | null
+  lastAttemptAtDisplay: string
+  lastErrorCode: string | null
+  lastErrorDisplay: string | null
+  accounts: UpstreamQuotaAccount[]
 }
 
 export interface AccountCurrencyCost {
@@ -413,7 +435,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 }
 
 interface AccountUpdateParam {
-  connection?: { baseUrl?: string, transport: ApiKeyConfiguration['transport'], apiKey?: string }
+  connection?: { baseUrl?: string, transport: ApiKeyConfiguration['transport'], apiKey?: string, fetchUpstreamQuota?: boolean }
   outboundProxyUrl?: string
   outboundProxyId?: string
   accountId: string
@@ -576,6 +598,15 @@ function stableAvatarVersion(value: string) {
   return hash.toString(36)
 }
 
+export function getAccountQuota(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<AccountQuotaResponse>({
+    url: '/api/admin/accounts/quota',
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}
+
 export function refreshAccountQuota(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountQuotaResponse>({
     url: '/api/admin/accounts/quota/refresh',
@@ -721,6 +752,7 @@ export function completeAccountOAuth(data: AccountOAuthCompleteParam, options: R
 }
 
 export interface ApiKeyConfiguration {
+  fetch_upstream_quota?: boolean
   base_url: string
   transport: 'http' | 'prefer_websocket'
 }

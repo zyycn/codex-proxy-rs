@@ -722,6 +722,65 @@ impl PgAdminClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for PgAdminClientKeyStore {
+    async fn quota_sharing_settings(
+        &self,
+        ids: &[ClientApiKeyId],
+    ) -> AdminStoreResult<
+        std::collections::BTreeMap<
+            String,
+            gateway_admin::model::upstream_quota::QuotaSharingSettings,
+        >,
+    > {
+        let ids = ids.iter().map(|id| id.as_str()).collect::<Vec<_>>();
+        let rows: Vec<(String, bool, bool, bool)> = sqlx::query_as(
+            "select id, quota_sharing_enabled, quota_sharing_include_names, quota_sharing_include_models from client_api_keys where id=any($1)",
+        )
+        .bind(ids)
+        .fetch_all(&self.keys.pool)
+        .await
+        .map_err(|source| {
+            admin_store_error(
+                ENTITY,
+                postgres_unavailable("read quota sharing settings", source),
+            )
+        })?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, enabled, include_names, include_models)| {
+                (
+                    id,
+                    gateway_admin::model::upstream_quota::QuotaSharingSettings {
+                        enabled,
+                        include_names,
+                        include_models,
+                    },
+                )
+            })
+            .collect())
+    }
+
+    async fn quota_export_identity(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_admin::model::upstream_quota::QuotaExportIdentity>> {
+        let row: Option<(bool, bool, bool, bool, String)> = sqlx::query_as("select enabled, quota_sharing_enabled, quota_sharing_include_names, quota_sharing_include_models, quota_identity_secret from client_api_keys where id=$1")
+            .bind(id.as_str()).fetch_optional(&self.keys.pool).await
+            .map_err(|source| admin_store_error(ENTITY, postgres_unavailable("read quota export identity", source)))?;
+        Ok(row.map(
+            |(enabled, sharing_enabled, include_names, include_models, secret)| {
+                gateway_admin::model::upstream_quota::QuotaExportIdentity {
+                    enabled,
+                    sharing: gateway_admin::model::upstream_quota::QuotaSharingSettings {
+                        enabled: sharing_enabled,
+                        include_names,
+                        include_models,
+                    },
+                    secret: secrecy::SecretString::from(secret),
+                }
+            },
+        ))
+    }
+
     async fn update_client_key_budget_limits(
         &self,
         command: gateway_admin::model::client_keys::UpdateClientKeyBudgetLimits,
@@ -884,10 +943,20 @@ impl ClientKeyStore for PgAdminClientKeyStore {
         command: NewClientKey,
         context: &MutationContext,
     ) -> AdminStoreResult<(gateway_admin::model::Revision, AdminClientKeyRecord)> {
+        self.create_client_key_with_quota_sharing(command, Default::default(), context)
+            .await
+    }
+
+    async fn create_client_key_with_quota_sharing(
+        &self,
+        command: NewClientKey,
+        sharing: gateway_admin::model::upstream_quota::QuotaSharingUpdate,
+        context: &MutationContext,
+    ) -> AdminStoreResult<(gateway_admin::model::Revision, AdminClientKeyRecord)> {
         let id = command.id;
         let revision = self
             .control_plane
-            .create_client_api_key(
+            .create_client_api_key_with_quota_sharing(
                 NewClientApiKey {
                     request_profile_overrides: command.request_profile_overrides,
                     id: id.as_str().to_owned(),
@@ -903,6 +972,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                     max_concurrency: command.limits.max_concurrency,
                     requests_per_minute: command.limits.requests_per_minute,
                 },
+                sharing,
                 mutation_audit(
                     context,
                     MutationAuditOperation::ClientApiKeyCreate,
@@ -934,10 +1004,20 @@ impl ClientKeyStore for PgAdminClientKeyStore {
         command: AdminUpdateClientKey,
         context: &MutationContext,
     ) -> AdminStoreResult<(gateway_admin::model::Revision, AdminClientKeyRecord)> {
+        self.update_client_key_with_quota_sharing(command, Default::default(), context)
+            .await
+    }
+
+    async fn update_client_key_with_quota_sharing(
+        &self,
+        command: AdminUpdateClientKey,
+        sharing: gateway_admin::model::upstream_quota::QuotaSharingUpdate,
+        context: &MutationContext,
+    ) -> AdminStoreResult<(gateway_admin::model::Revision, AdminClientKeyRecord)> {
         let id = command.id;
         let revision = self
             .control_plane
-            .update_client_api_key(
+            .update_client_api_key_with_quota_sharing(
                 UpdateClientApiKeyDetails {
                     request_profile_override_updates: command.request_profile_override_updates,
                     id: id.as_str().to_owned(),
@@ -953,6 +1033,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                     daily_limit_usd: command.daily_limit_usd,
                     weekly_limit_usd: command.weekly_limit_usd,
                 },
+                sharing,
                 mutation_audit(
                     context,
                     MutationAuditOperation::ClientApiKeyUpdate,

@@ -130,11 +130,12 @@ export function useAccountEditor(options: {
         apiKey.value.apiKey !== ''
         || apiKey.value.base_url.trim() !== savedConfiguration.value?.base_url
         || apiKey.value.transport !== savedConfiguration.value?.transport
+        || apiKey.value.fetch_upstream_quota !== (savedConfiguration.value?.fetch_upstream_quota ?? false)
       )
       await updateAccount({
         ...settings,
         connection: connectionChanged
-          ? { baseUrl: apiKey.value.base_url.trim(), transport: apiKey.value.transport, apiKey: apiKey.value.apiKey || undefined }
+          ? { baseUrl: apiKey.value.base_url.trim(), transport: apiKey.value.transport, apiKey: apiKey.value.apiKey || undefined, fetchUpstreamQuota: apiKey.value.fetch_upstream_quota }
           : isOAuth && configurationReady.value && oauthTransport.value !== savedOAuthTransport.value
             ? { transport: oauthTransport.value }
             : undefined,

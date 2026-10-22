@@ -241,6 +241,7 @@ pub(super) fn account_quota_view(
     let recovery_probe_required = cooldown.is_some_and(|value| value.kind.requires_probe());
     (
         AccountQuotaView {
+            upstream: None,
             refreshed_at_display,
             limit_reached: quota.limit_reached,
             rate_limited_until,
@@ -281,6 +282,7 @@ pub(crate) fn quota_window_view(
         .as_ref()
         .map_or_else(|| label.clone(), |name| format!("{name} · {label}"));
     AccountQuotaWindowView {
+        remaining_percent_display: None,
         label_display,
         window_label_display: label,
         key,

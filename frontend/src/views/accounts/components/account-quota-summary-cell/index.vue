@@ -46,7 +46,10 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
           <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ account.usage.windowLabelDisplay }}</span>
           <AccountCapacityIndicator :capacity="account.capacity" @show-details="emit('showConcurrency')" />
         </div>
-        <div class="h-1 w-full rounded-full bg-cp-success" title="上游额度未提供，绿色条不表示剩余额度" aria-hidden="true" />
+        <span v-if="account.quota.upstream" class="text-cp-xs font-emphasis text-cp-text-secondary">
+          上游账号 {{ account.quota.upstream.accounts.length }} 个
+        </span>
+        <div v-else class="h-1 w-full rounded-full bg-cp-success" title="上游额度未提供，绿色条不表示剩余额度" aria-hidden="true" />
       </div>
     </template>
     <template v-else-if="summaryEntries.length > 0">

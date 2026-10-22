@@ -2,16 +2,17 @@
 import type { AccountQuotaWindow } from '@/api'
 
 import { computed } from 'vue'
-import AccountRequestTimeline from '@/components/account/account-usage-window/AccountRequestTimeline.vue'
+import AccountRequestTimeline from './account-usage-window/AccountRequestTimeline.vue'
 import {
   quotaWindowLocalUsageDisplay,
   quotaWindowPresentation,
   resolveAccountUsageWindowPresentation,
-} from '@/components/account/account-usage-window/presenter'
+} from './account-usage-window/presenter'
 
 const props = defineProps<{
   label: string | null
   windows: AccountQuotaWindow[]
+  remaining?: boolean
 }>()
 
 const grouped = computed(() => props.windows.length > 1 && Boolean(props.label))
@@ -22,6 +23,8 @@ const items = computed(() => props.windows.map((window) => {
     variant: 'detail',
     showLocalValue: true,
   })
+  const percent = props.remaining && window.usedPercent !== null ? 100 - window.usedPercent : window.usedPercent
+  const percentDisplay = props.remaining ? (window.remainingPercentDisplay ?? '—') : window.usedPercentDisplay
 
   return {
     key: window.key,
@@ -34,14 +37,14 @@ const items = computed(() => props.windows.map((window) => {
     label: grouped.value
       ? window.windowLabelDisplay
       : window.labelDisplay,
-    ariaLabel: window.labelDisplay,
-    usedPercent: window.usedPercent,
-    usedPercentDisplay: window.usedPercentDisplay,
+    ariaLabel: `${window.labelDisplay}${props.remaining ? '剩余' : '已使用'}`,
+    percent,
+    percentDisplay,
     localUsageDisplay: quotaWindowLocalUsageDisplay(window),
     resetAtDisplay: window.resetAtDisplay,
     percentTextClass: presentation.percentTextClass,
     barClass: presentation.barClass,
-    barStyle: presentation.barStyle,
+    barStyle: props.remaining ? { width: `${percent ?? 0}%` } : presentation.barStyle,
   }
 }))
 </script>
@@ -58,7 +61,7 @@ const items = computed(() => props.windows.map((window) => {
 
     <div
       class="grid min-w-0 gap-3"
-      :class="grouped ? 'grid-cols-2' : 'grid-cols-1'"
+      :class="windows.length > 1 ? 'grid-cols-2' : 'grid-cols-1'"
     >
       <div v-for="item in items" :key="item.key" class="grid min-w-0 gap-1.5">
         <template v-if="item.local">
@@ -105,9 +108,9 @@ const items = computed(() => props.windows.map((window) => {
               </strong>
               <strong
                 :class="item.percentTextClass"
-                :title="`额度已使用：${item.usedPercentDisplay}`"
+                :title="`额度${remaining ? '剩余' : '已使用'}：${item.percentDisplay}`"
               >
-                {{ item.usedPercentDisplay }}
+                <template v-if="remaining">剩余 </template>{{ item.percentDisplay }}
               </strong>
             </span>
           </div>
@@ -118,8 +121,8 @@ const items = computed(() => props.windows.map((window) => {
             :aria-label="item.ariaLabel"
             aria-valuemin="0"
             aria-valuemax="100"
-            :aria-valuenow="item.usedPercent ?? undefined"
-            :aria-valuetext="item.usedPercentDisplay"
+            :aria-valuenow="item.percent ?? undefined"
+            :aria-valuetext="item.percentDisplay"
           >
             <div
               class="h-full rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none"

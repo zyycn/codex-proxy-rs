@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { dashboardSnapshotView, MetricTone } from '../presenter'
-import { ZCard, ZEmpty } from '@codex-proxy/ui'
+import { ZButton, ZCard, ZEmpty } from '@codex-proxy/ui'
 
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
-import { computed } from 'vue'
+import { computed, shallowRef } from 'vue'
 import AccountUsageWindow from '@/components/account/account-usage-window/index.vue'
+import AccountUpstreamQuotaModal from '@/components/account/AccountUpstreamQuotaModal.vue'
 import { formatCompactNumber } from '@/utils/format'
 import { metricToneIconClasses, metricToneValueClasses } from '../constants'
 import DashboardAccountIdentity from './DashboardAccountIdentity.vue'
@@ -17,6 +18,14 @@ const props = defineProps<{
   capacity?: DashboardSnapshot['capacityInfo']
   rotationStrategy?: string | null
 }>()
+
+const upstreamQuotaAccountId = shallowRef('')
+const upstreamQuotaOpen = shallowRef(false)
+
+function showUpstreamQuota(accountId: string) {
+  upstreamQuotaAccountId.value = accountId
+  upstreamQuotaOpen.value = true
+}
 
 const unlimitedCapacity = computed(() => props.capacity?.maxConcurrentPerAccount === 0 && props.capacity.totalSlots === null)
 
@@ -265,7 +274,19 @@ const statusBars = computed(() => {
                   </span>
                 </span>
 
+                <ZButton
+                  v-if="account.upstreamAccountCount !== null"
+                  type="primary"
+                  variant="text"
+                  size="small"
+                  class="max-w-full justify-self-start px-0 whitespace-nowrap"
+                  aria-haspopup="dialog"
+                  @click="showUpstreamQuota(account.id)"
+                >
+                  上游账号 {{ account.upstreamAccountCount }} 个
+                </ZButton>
                 <AccountUsageWindow
+                  v-else
                   :window="account.usageWindow ?? undefined"
                   :show-local-value="false"
                   variant="metric"
@@ -340,5 +361,10 @@ const statusBars = computed(() => {
         </div>
       </section>
     </div>
+    <AccountUpstreamQuotaModal
+      v-if="upstreamQuotaAccountId"
+      v-model="upstreamQuotaOpen"
+      :account-id="upstreamQuotaAccountId"
+    />
   </ZCard>
 </template>

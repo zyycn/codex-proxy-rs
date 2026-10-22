@@ -7,6 +7,9 @@ export type ApiKeyRoutingScope = 'all' | 'groups'
 export type ApiKeyBudgetPeriod = 'daily' | 'weekly' | 'all'
 
 export interface ApiKey {
+  quotaSharingEnabled?: boolean
+  quotaSharingIncludeNames: boolean
+  quotaSharingIncludeModels: boolean
   providerRequestProfileOverrides: ProviderRequestProfiles
   openaiClientProfileOverride: ClientProfileSelection | null
   xaiClientProfileOverride: XaiClientProfileSelection | null
@@ -69,6 +72,9 @@ interface ApiKeyListParams {
 }
 
 export interface ApiKeyWriteParam {
+  quotaSharingEnabled?: boolean
+  quotaSharingIncludeNames?: boolean
+  quotaSharingIncludeModels?: boolean
   name: string
   label: string | null
   groupIds: string[]

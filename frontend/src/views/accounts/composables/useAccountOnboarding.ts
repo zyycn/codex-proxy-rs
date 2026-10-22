@@ -74,7 +74,7 @@ export function useAccountOnboarding(options: {
           provider: 'openai',
           settings,
           outboundProxyId,
-          data: { provider: 'openai', authentication_kind: 'api_key', name: form.apiKey.name.trim(), base_url: form.apiKey.base_url.trim(), api_key: form.apiKey.apiKey, transport: form.apiKey.transport },
+          data: { provider: 'openai', authentication_kind: 'api_key', name: form.apiKey.name.trim(), base_url: form.apiKey.base_url.trim(), api_key: form.apiKey.apiKey, transport: form.apiKey.transport, fetch_upstream_quota: form.apiKey.fetch_upstream_quota },
         })
         await finishCreate('API Key 账号已添加')
         return

@@ -13,6 +13,7 @@ mod reset_credits;
 mod scheduling;
 mod service;
 pub(crate) mod snapshot;
+mod upstream;
 mod warmup;
 
 pub use reset_credits::CodexResetCreditsError;
@@ -169,6 +170,8 @@ impl From<gateway_core::error::StoreError> for CodexCredentialQuotaError {
 }
 
 pub struct CodexCredentialQuotaService {
+    upstream_refresh_locks:
+        Mutex<BTreeMap<ProviderAccountId, std::sync::Weak<upstream::UpstreamRefreshLock>>>,
     repository: CodexCredentialRepository,
     store: Arc<dyn ProviderAccountStore>,
     profile: CodexWireProfileState,

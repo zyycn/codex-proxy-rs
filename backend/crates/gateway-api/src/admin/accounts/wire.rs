@@ -385,6 +385,8 @@ pub use crate::admin::account_groups::AccountGroupRefView;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<AccountUpstreamQuotaView>,
     pub refreshed_at_display: String,
     pub limit_reached: bool,
     /// 冷却到期或可开始恢复探测的时间；非限流中为 `null`
@@ -394,6 +396,30 @@ pub struct AccountQuotaView {
     pub recovery_probe_required: bool,
     pub windows: Vec<AccountQuotaWindowView>,
     pub credits: Option<AccountQuotaCreditsView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUpstreamQuotaView {
+    pub fetched_at: Option<String>,
+    pub fetched_at_display: String,
+    pub last_attempt_at: Option<String>,
+    pub last_attempt_at_display: String,
+    pub last_error_code: Option<String>,
+    pub last_error_display: Option<String>,
+    pub accounts: Vec<UpstreamQuotaAccountView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamQuotaAccountView {
+    pub id: String,
+    pub label: String,
+    pub models: Option<Vec<String>>,
+    pub status: gateway_protocol::quota::QuotaObservationStatus,
+    pub observed_at: Option<String>,
+    pub observed_at_display: String,
+    pub windows: Vec<AccountQuotaWindowView>,
 }
 
 /// 上游点数安全视图，不透出额度响应中的其他 Provider 字段
@@ -409,6 +435,8 @@ pub struct AccountQuotaCreditsView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaWindowView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining_percent_display: Option<String>,
     pub key: String,
     pub group: String,
     pub limit_id: Option<String>,

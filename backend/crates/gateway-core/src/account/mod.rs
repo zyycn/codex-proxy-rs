@@ -17,6 +17,8 @@ pub mod scope;
 mod selection;
 mod smart_scheduling;
 mod store;
+mod upstream_quota;
+pub use upstream_quota::*;
 
 pub use error::CredentialError;
 pub use model::*;

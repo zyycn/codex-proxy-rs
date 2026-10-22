@@ -42,6 +42,7 @@ pub enum ProviderAdminErrorKind {
     Unsupported,
     NotFound,
     Conflict,
+    RateLimited,
     /// Provider 已发起不可逆操作，但无法确认最终执行结果
     Ambiguous,
     Unavailable,
@@ -139,6 +140,27 @@ struct ProviderAdminDiagnostic {
 /// 运行时资源通知只在事务成功后发生
 #[async_trait]
 pub trait ProviderAdmin: Send + Sync {
+    /// 读取展示型子额度，不访问上游，也不改变原生额度状态
+    async fn upstream_quota_snapshots(
+        &self,
+        _accounts: &[ProviderAccountId],
+    ) -> Result<
+        BTreeMap<ProviderAccountId, crate::model::upstream_quota::AccountUpstreamQuota>,
+        ProviderAdminError,
+    > {
+        Ok(BTreeMap::new())
+    }
+
+    /// 为授权范围内的账号生成额度事实；匿名化由管理用例统一完成
+    async fn quota_accounts(
+        &self,
+        _accounts: &[ProviderAccountId],
+        _include_models: bool,
+    ) -> Result<Vec<(ProviderAccountId, gateway_protocol::quota::QuotaAccount)>, ProviderAdminError>
+    {
+        Ok(Vec::new())
+    }
+
     fn compile_privacy_policy(
         &self,
         _policy: &gateway_core::settings::privacy::CodexPrivacyPolicy,

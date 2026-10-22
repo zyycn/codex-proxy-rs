@@ -14,6 +14,27 @@ fn loaded_credential_from_record(
 
 #[async_trait]
 impl ProviderAccountStore for PgProviderAccountRepository {
+    async fn upstream_quota_snapshots(
+        &self,
+        accounts: &[CoreProviderAccountId],
+    ) -> Result<Vec<gateway_core::account::UpstreamQuotaSnapshot>, CoreStoreError> {
+        upstream_quota::read(&self.pool, accounts).await
+    }
+
+    async fn claim_upstream_quota_refresh(
+        &self,
+        claim: &gateway_core::account::UpstreamQuotaRefreshClaim,
+    ) -> Result<bool, CoreStoreError> {
+        upstream_quota::claim(&self.pool, claim).await
+    }
+
+    async fn finish_upstream_quota_refresh(
+        &self,
+        result: gateway_core::account::UpstreamQuotaRefreshResult,
+    ) -> Result<bool, CoreStoreError> {
+        upstream_quota::finish(&self.pool, result).await
+    }
+
     async fn create_account(&self, account: CoreNewProviderAccount) -> Result<(), CoreStoreError> {
         if account.account.revision().get() != 1 {
             return Err(CoreStoreError::new(CoreStoreErrorKind::InvalidData));

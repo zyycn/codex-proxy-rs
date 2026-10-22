@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ApiKeyFormValue } from '../composables/useApiKeyEditor'
 import type { AccountGroupRef } from '@/api'
-import { ZButton, ZDialog, ZForm, ZFormItem, ZInput } from '@codex-proxy/ui'
+import { ZButton, ZDialog, ZForm, ZFormItem, ZInput, ZSwitch } from '@codex-proxy/ui'
 
 import { DollarSign, KeyRound } from '@lucide/vue'
 import { computed } from 'vue'
@@ -85,6 +85,19 @@ function updateForm<Key extends keyof ApiKeyFormValue>(key: Key, value: ApiKeyFo
           @update:model-value="updateForm('groupIds', $event)"
         />
       </ZFormItem>
+
+      <div class="grid gap-3">
+        <ZFormItem description="上游信息透传">
+          <ZSwitch :model-value="form.quotaSharingEnabled" label="允许查询信息" :disabled="saving" @update:model-value="updateForm('quotaSharingEnabled', $event)" />
+        </ZFormItem>
+        <ZFormItem v-if="form.quotaSharingEnabled" class="rounded-cp bg-cp-fill-quaternary p-4">
+          <div class="grid grid-cols-2 items-center gap-x-6 gap-y-3">
+            <ZSwitch :model-value="true" label="传递账号额度" aria-readonly="true" class="cursor-default!" @click.prevent />
+            <ZSwitch :model-value="form.quotaSharingIncludeNames" label="传递账号名称" :disabled="saving" @update:model-value="updateForm('quotaSharingIncludeNames', $event)" />
+            <ZSwitch :model-value="form.quotaSharingIncludeModels" label="传递模型列表" :disabled="saving" @update:model-value="updateForm('quotaSharingIncludeModels', $event)" />
+          </div>
+        </ZFormItem>
+      </div>
 
       <ZFormItem label="上游身份">
         <ProviderRequestProfilesEditor

@@ -18,6 +18,7 @@ pub mod plugins;
 pub mod proxies;
 pub mod settings;
 pub mod system;
+pub mod upstream_quota;
 pub mod usage_data;
 
 mod credential_mutation;

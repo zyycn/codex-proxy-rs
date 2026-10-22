@@ -4,3 +4,5 @@
 
 /// OpenAI wire contract
 pub mod openai;
+/// 网关之间的匿名账号额度查询合同
+pub mod quota;

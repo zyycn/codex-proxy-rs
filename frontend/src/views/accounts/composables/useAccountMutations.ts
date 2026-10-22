@@ -228,7 +228,10 @@ export function useAccountMutations(options: {
         }
         ZNotification.success({ message: '额度已刷新' })
       }
-      catch {}
+      catch {
+        // 上游失败也会保存获取状态，重新读取以展示失败原因和保留的旧值。
+        await loadAccounts()
+      }
     })
   }
 

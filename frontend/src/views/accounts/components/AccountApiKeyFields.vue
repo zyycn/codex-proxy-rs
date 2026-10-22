@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ApiKeyAccountForm } from '../utils/upstreamApiKey'
-import { ZFormItem, ZInput, ZSegmented } from '@codex-proxy/ui'
+import { ZFormItem, ZInput, ZSegmented, ZSwitch } from '@codex-proxy/ui'
 
 defineProps<{ disabled?: boolean, editing?: boolean }>()
 const form = defineModel<ApiKeyAccountForm>({ required: true })
@@ -23,6 +23,9 @@ const transportOptions = [
     </ZFormItem>
     <ZFormItem label="API Key" :required="!editing">
       <ZInput v-model="form.apiKey" type="password" :placeholder="editing ? '留空保留当前密钥' : '输入上游密钥'" :disabled="disabled" autocomplete="new-password" />
+    </ZFormItem>
+    <ZFormItem description="上游支持额度查询时，显示其账号额度">
+      <ZSwitch v-model="form.fetch_upstream_quota" label="获取上游额度" :disabled="disabled" />
     </ZFormItem>
     <ZFormItem label="传输方式">
       <ZSegmented v-model="form.transport" aria-label="传输方式" :options="transportOptions" :disabled="disabled" title="WS 优先需要上游支持 Responses WebSocket" />

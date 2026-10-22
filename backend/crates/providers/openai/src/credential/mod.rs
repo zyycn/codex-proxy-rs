@@ -27,6 +27,7 @@ pub(crate) use types::parse_access_token_expiration;
 
 pub(crate) use crate::CODEX_AUTHENTICATION_KIND_API_KEY;
 
+pub(crate) use api_key::quota_setting;
 pub use api_key::{ApiKeyAuthentication, ApiKeyConfiguration, ApiKeyCredentialData};
 
 pub use admin::{

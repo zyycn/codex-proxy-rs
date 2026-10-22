@@ -270,6 +270,11 @@ impl FrozenAccountScope {
         self.allow_image_generation
     }
 
+    /// 只枚举已冻结的授权集合，不按当前额度、冷却或租约过滤
+    pub fn account_ids(&self) -> impl Iterator<Item = &ProviderAccountId> {
+        self.directory.accounts.keys().filter(|id| self.allows(id))
+    }
+
     /// 与 Key 授权范围一同冻结；具体字段只由对应 Provider 解释
     #[must_use]
     pub fn with_request_profiles(

@@ -36,6 +36,7 @@ pub(super) fn map_provider_error(
         ProviderAdminErrorKind::Unsupported => AdminErrorKind::Invalid,
         ProviderAdminErrorKind::NotFound => AdminErrorKind::NotFound,
         ProviderAdminErrorKind::Conflict => AdminErrorKind::Conflict,
+        ProviderAdminErrorKind::RateLimited => AdminErrorKind::RateLimited,
         ProviderAdminErrorKind::Ambiguous => AdminErrorKind::UpstreamResultUnknown,
         ProviderAdminErrorKind::Unavailable => AdminErrorKind::Unavailable,
         ProviderAdminErrorKind::CredentialRefreshRequired => AdminErrorKind::Unavailable,

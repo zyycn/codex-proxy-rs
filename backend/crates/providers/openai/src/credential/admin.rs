@@ -133,7 +133,7 @@ struct ParsedCodexImportAccount {
 #[derive(Debug)]
 enum ParsedCodexAuthentication {
     OAuth(ParsedOAuthAuthentication),
-    ApiKey(ApiKeyCredentialData),
+    ApiKey(ApiKeyCredentialData, bool),
 }
 
 struct ParsedOAuthAuthentication {
@@ -259,6 +259,8 @@ struct CodexCprApiKeyExportAccount {
     base_url: String,
     api_key: String,
     transport: ResponsesTransport,
+    #[serde(skip_serializing_if = "skip_disabled_quota")]
+    fetch_upstream_quota: bool,
 }
 
 #[derive(Serialize)]
@@ -414,12 +416,14 @@ impl CodexCredentialAdmin {
         account_id: String,
         name: String,
         data: ApiKeyCredentialData,
+        fetch_upstream_quota: bool,
     ) -> Result<NewProviderAccount, CodexCredentialAdminError> {
         if name.trim().is_empty() {
             return Err(CodexCredentialAdminError::InvalidInput);
         }
         let credential = CodexCredentialCodec::encode_complete(CodexCredentialData::ApiKey(data))
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let credential = super::api_key::with_quota_setting(credential, fetch_upstream_quota);
         let account = ProviderAccount::new(
             ProviderAccountId::new(account_id)
                 .map_err(|_| CodexCredentialAdminError::InvalidInput)?,
@@ -456,9 +460,14 @@ impl CodexCredentialAdmin {
             base_url: String,
             transport: ResponsesTransport,
             api_key: Option<String>,
+            fetch_upstream_quota: Option<bool>,
         }
         let rotation: Rotation = serde_json::from_value(material)
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
+        let fetch_upstream_quota = rotation.fetch_upstream_quota.unwrap_or(
+            super::api_key::quota_setting(&current.credential)
+                .map_err(|_| CodexCredentialAdminError::InvalidCredential)?,
+        );
         let CodexCredentialData::ApiKey(mut data) =
             CodexCredentialCodec::decode_complete(&current.credential)
                 .map_err(|_| CodexCredentialAdminError::InvalidCredential)?
@@ -472,6 +481,7 @@ impl CodexCredentialAdmin {
         }
         let credential = CodexCredentialCodec::encode_complete(CodexCredentialData::ApiKey(data))
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let credential = super::api_key::with_quota_setting(credential, fetch_upstream_quota);
         let profile = ProviderAccountUpdate {
             account_id: current.account.id().clone(),
             name: current.account.name().to_owned(),
@@ -672,6 +682,8 @@ impl CodexCredentialAdmin {
             }
             let data = CodexCredentialCodec::decode_complete(&item.current.credential)
                 .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+            let fetch_upstream_quota = super::api_key::quota_setting(&item.current.credential)
+                .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
             let common = CodexCprExportCommon {
                 model_access: account.model_access().clone(),
                 id: account.id().as_str().to_owned(),
@@ -699,6 +711,7 @@ impl CodexCredentialAdmin {
                         base_url: data.base_url,
                         api_key: data.api_key,
                         transport: data.transport,
+                        fetch_upstream_quota,
                     })
                 }
 
@@ -1043,13 +1056,14 @@ impl CodexCredentialAdminService {
         for candidate in candidates {
             let account_id = format!("acct_{}", uuid::Uuid::now_v7().simple());
             let authentication = match candidate.authentication {
-                ParsedCodexAuthentication::ApiKey(data) => {
+                ParsedCodexAuthentication::ApiKey(data, fetch_upstream_quota) => {
                     let mut prepared = CodexCredentialAdmin.prepare_api_key(
                         account_id,
                         candidate
                             .name
                             .unwrap_or_else(|| "OpenAI API Key".to_owned()),
                         data,
+                        fetch_upstream_quota,
                     )?;
                     prepared.model_access = candidate.model_access;
                     prepared.account = prepared
@@ -1304,7 +1318,18 @@ fn parse_codex_import_account(
         name: first_string(value, &["name", "label"]),
         email: first_string(value, &["email"]).or_else(|| first_string(credentials, &["email"])),
         authentication: if is_api_key_import(value) {
-            ParsedCodexAuthentication::ApiKey(parse_api_key_import(value)?)
+            ParsedCodexAuthentication::ApiKey(
+                parse_api_key_import(value)?,
+                credentials
+                    .get("fetch_upstream_quota")
+                    .map(|value| {
+                        value
+                            .as_bool()
+                            .ok_or(CodexCredentialAdminError::InvalidInput)
+                    })
+                    .transpose()?
+                    .unwrap_or(false),
+            )
         } else {
             ParsedCodexAuthentication::OAuth(parse_oauth_import_tokens(value)?)
         },
@@ -1475,6 +1500,10 @@ fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn skip_disabled_quota(value: &bool) -> bool {
+    !*value
 }
 
 fn is_api_key_import(value: &Value) -> bool {

@@ -155,6 +155,7 @@ export interface DashboardAccountUsage {
   requestBuckets: DashboardAccountRequestBucket[]
   quotaUsedPercent: number | null
   usageWindow: AccountQuotaWindow | null
+  upstreamAccountCount: number | null
   metricLabel: string
   metricValue: string
   lastUsed: string

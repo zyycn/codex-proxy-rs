@@ -63,6 +63,7 @@ mod repository;
 mod reset_credit_automation;
 mod rows;
 mod runtime;
+mod upstream_quota;
 
 pub use admin_adapter::*;
 pub(crate) use admin_queries::*;

@@ -263,6 +263,7 @@ impl UpdateAccountRequest {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountConnectionUpdateRequest {
+    pub fetch_upstream_quota: Option<bool>,
     pub base_url: Option<String>,
     pub transport: String,
     pub api_key: Option<String>,
@@ -294,6 +295,9 @@ impl AccountConnectionUpdateRequest {
         }
         if let Some(key) = self.api_key {
             material.insert("api_key".to_owned(), Value::String(key));
+        }
+        if let Some(enabled) = self.fetch_upstream_quota {
+            material.insert("fetch_upstream_quota".to_owned(), Value::Bool(enabled));
         }
         ProviderDocument::new(OpaqueProviderData::new(material))
     }

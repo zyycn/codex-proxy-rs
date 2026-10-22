@@ -15,6 +15,28 @@ use super::{
 /// `provider_accounts` 的数据库中立端口
 #[async_trait]
 pub trait ProviderAccountStore: Send + Sync {
+    /// 只读取展示快照；未提供该扩展的存储不影响原有账号能力
+    async fn upstream_quota_snapshots(
+        &self,
+        _accounts: &[ProviderAccountId],
+    ) -> Result<Vec<super::UpstreamQuotaSnapshot>, StoreError> {
+        Ok(Vec::new())
+    }
+
+    async fn claim_upstream_quota_refresh(
+        &self,
+        _claim: &super::UpstreamQuotaRefreshClaim,
+    ) -> Result<bool, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::Unavailable))
+    }
+
+    async fn finish_upstream_quota_refresh(
+        &self,
+        _result: super::UpstreamQuotaRefreshResult,
+    ) -> Result<bool, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::Unavailable))
+    }
+
     async fn create_account(&self, account: NewProviderAccount) -> Result<(), StoreError>;
 
     async fn get_account(

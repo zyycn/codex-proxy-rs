@@ -28,6 +28,40 @@ use super::{map_store_error, publish_committed};
 /// API 消费的 Client Key 管理服务
 #[async_trait]
 pub trait ClientKeyService: Send + Sync {
+    async fn quota_sharing_settings(
+        &self,
+        _ids: &[ClientApiKeyId],
+    ) -> Result<
+        std::collections::BTreeMap<String, crate::model::upstream_quota::QuotaSharingSettings>,
+        AdminError,
+    > {
+        Ok(std::collections::BTreeMap::new())
+    }
+
+    async fn create_with_quota_sharing(
+        &self,
+        context: &MutationContext,
+        command: CreateClientKey,
+        sharing: crate::model::upstream_quota::QuotaSharingUpdate,
+    ) -> Result<CreatedClientKey, AdminError> {
+        if !sharing.is_empty() {
+            return Err(AdminError::unavailable("当前存储不支持额度共享设置"));
+        }
+        self.create(context, command).await
+    }
+
+    async fn update_with_quota_sharing(
+        &self,
+        context: &MutationContext,
+        command: UpdateClientKey,
+        sharing: crate::model::upstream_quota::QuotaSharingUpdate,
+    ) -> Result<ClientKeyMutation, AdminError> {
+        if !sharing.is_empty() {
+            return Err(AdminError::unavailable("当前存储不支持额度共享设置"));
+        }
+        self.update(context, command).await
+    }
+
     async fn get(&self, id: &ClientApiKeyId) -> Result<ClientKeyRecord, AdminError>;
     async fn list(&self, query: ClientKeyListQuery) -> Result<ClientKeyPage, AdminError>;
     async fn reveal(&self, id: &ClientApiKeyId) -> Result<ClientKeySecret, AdminError>;
@@ -89,6 +123,19 @@ impl DefaultClientKeyService {
 
 #[async_trait]
 impl ClientKeyService for DefaultClientKeyService {
+    async fn quota_sharing_settings(
+        &self,
+        ids: &[ClientApiKeyId],
+    ) -> Result<
+        std::collections::BTreeMap<String, crate::model::upstream_quota::QuotaSharingSettings>,
+        AdminError,
+    > {
+        self.store
+            .quota_sharing_settings(ids)
+            .await
+            .map_err(|error| map_store_error(error, "client key quota sharing"))
+    }
+
     async fn get(&self, id: &ClientApiKeyId) -> Result<ClientKeyRecord, AdminError> {
         self.store
             .get_client_key(id)
@@ -157,6 +204,16 @@ impl ClientKeyService for DefaultClientKeyService {
         context: &MutationContext,
         command: CreateClientKey,
     ) -> Result<CreatedClientKey, AdminError> {
+        self.create_with_quota_sharing(context, command, Default::default())
+            .await
+    }
+
+    async fn create_with_quota_sharing(
+        &self,
+        context: &MutationContext,
+        command: CreateClientKey,
+        sharing: crate::model::upstream_quota::QuotaSharingUpdate,
+    ) -> Result<CreatedClientKey, AdminError> {
         crate::model::client_keys::validate_group_ids(&command.group_ids)
             .map_err(|_| AdminError::invalid("Client API Key 分组不合法"))?;
         for (provider, profile) in &command.request_profile_overrides {
@@ -174,7 +231,7 @@ impl ClientKeyService for DefaultClientKeyService {
         };
         let (config_revision, record) = self
             .store
-            .create_client_key(
+            .create_client_key_with_quota_sharing(
                 NewClientKey {
                     request_profile_overrides: command.request_profile_overrides,
                     id,
@@ -185,6 +242,7 @@ impl ClientKeyService for DefaultClientKeyService {
                     budget: command.budget,
                     plaintext: plaintext.clone(),
                 },
+                sharing,
                 context,
             )
             .await
@@ -201,6 +259,16 @@ impl ClientKeyService for DefaultClientKeyService {
         context: &MutationContext,
         command: UpdateClientKey,
     ) -> Result<ClientKeyMutation, AdminError> {
+        self.update_with_quota_sharing(context, command, Default::default())
+            .await
+    }
+
+    async fn update_with_quota_sharing(
+        &self,
+        context: &MutationContext,
+        command: UpdateClientKey,
+        sharing: crate::model::upstream_quota::QuotaSharingUpdate,
+    ) -> Result<ClientKeyMutation, AdminError> {
         crate::model::client_keys::validate_group_ids(&command.group_ids)
             .map_err(|_| AdminError::invalid("Client API Key 分组不合法"))?;
         for (provider, profile) in &command.request_profile_override_updates {
@@ -214,7 +282,7 @@ impl ClientKeyService for DefaultClientKeyService {
         let id = command.id.clone();
         let (config_revision, record) = self
             .store
-            .update_client_key(command, context)
+            .update_client_key_with_quota_sharing(command, sharing, context)
             .await
             .map_err(map_client_key_write_error)?;
         publish_committed(self.snapshot.as_ref(), config_revision).await?;

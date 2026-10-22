@@ -115,7 +115,8 @@ where
         .list(command)
         .await
         .map_err(map_service_error)?;
-    let data = account_page_data(result, page, page_size, Utc::now(), time);
+    let mut data = account_page_data(result, page, page_size, Utc::now(), time);
+    attach_upstream(state.admin_services(), &mut data.items).await?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -141,10 +142,15 @@ where
         .account_configuration(&account_id)
         .await
         .map_err(map_service_error)?;
-    let data = AccountDetailData {
+    let mut data = AccountDetailData {
         account: account_view(result, Utc::now(), time),
         credential_configuration: configuration.map(provider_document_value),
     };
+    attach_upstream(
+        state.admin_services(),
+        std::slice::from_mut(&mut data.account),
+    )
+    .await?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -333,7 +339,12 @@ where
         .refresh(&auth.context().mutation_context(), account_id)
         .await
         .map_err(map_service_error)?;
-    let data = account_refresh_data(result, Utc::now(), time);
+    let mut data = account_refresh_data(result, Utc::now(), time);
+    attach_upstream(
+        state.admin_services(),
+        std::slice::from_mut(&mut data.account),
+    )
+    .await?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -353,7 +364,12 @@ where
         .recover(&auth.context().mutation_context(), account_id)
         .await
         .map_err(map_service_error)?;
-    let data = account_refresh_data(result, Utc::now(), time);
+    let mut data = account_refresh_data(result, Utc::now(), time);
+    attach_upstream(
+        state.admin_services(),
+        std::slice::from_mut(&mut data.account),
+    )
+    .await?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -373,9 +389,14 @@ where
         .quota(&account_id, false)
         .await
         .map_err(map_service_error)?;
-    let data = AccountQuotaData {
+    let mut data = AccountQuotaData {
         account: account_view(result, Utc::now(), time),
     };
+    attach_upstream(
+        state.admin_services(),
+        std::slice::from_mut(&mut data.account),
+    )
+    .await?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -504,9 +525,14 @@ where
         .quota(&account_id, true)
         .await
         .map_err(map_service_error)?;
-    let data = AccountQuotaData {
+    let mut data = AccountQuotaData {
         account: account_view(result, Utc::now(), time),
     };
+    attach_upstream(
+        state.admin_services(),
+        std::slice::from_mut(&mut data.account),
+    )
+    .await?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 

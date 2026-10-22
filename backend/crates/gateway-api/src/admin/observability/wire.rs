@@ -401,6 +401,7 @@ pub struct DashboardAccountUsageView {
     pub request_buckets: Vec<crate::time::RequestBucketView>,
     pub quota_used_percent: Option<f64>,
     pub usage_window: Option<crate::admin::accounts::AccountQuotaWindowView>,
+    pub upstream_account_count: Option<usize>,
     pub metric_label: String,
     pub metric_value: String,
     pub last_used: String,

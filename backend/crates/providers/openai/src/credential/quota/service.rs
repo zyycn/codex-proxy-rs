@@ -69,6 +69,7 @@ impl CodexCredentialQuotaService {
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
+            upstream_refresh_locks: Mutex::new(BTreeMap::new()),
             store: Arc::clone(repository.store()),
             repository,
             profile,

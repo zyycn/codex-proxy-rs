@@ -971,6 +971,7 @@ pub(crate) fn dashboard_view(
             usage_window: credential
                 .quota_window
                 .map(|window| crate::admin::accounts::quota_window_view(window, time)),
+            upstream_account_count: None,
             metric_label,
             metric_value,
             last_used: time.relative_optional(credential.last_used_at, range.end),

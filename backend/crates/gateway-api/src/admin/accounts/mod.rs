@@ -66,7 +66,9 @@ mod credentials;
 mod handlers;
 mod import_tasks;
 mod presenter;
+mod upstream_quota;
 mod wire;
+use upstream_quota::attach_upstream;
 
 pub use credentials::*;
 pub use handlers::{profile_avatar_response, router};

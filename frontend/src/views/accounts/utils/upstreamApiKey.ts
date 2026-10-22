@@ -9,18 +9,19 @@ export function isOpenAiOAuthAccount(account: Pick<Account, 'provider' | 'authen
 }
 
 export interface ApiKeyAccountForm extends ApiKeyConfiguration {
+  fetch_upstream_quota: boolean
   name: string
   apiKey: string
 }
 
 export function emptyApiKeyAccountForm(): ApiKeyAccountForm {
-  return { name: '', base_url: '', apiKey: '', transport: 'http' }
+  return { name: '', base_url: '', apiKey: '', transport: 'http', fetch_upstream_quota: false }
 }
 
-export function parseApiKeyConfiguration(value: Record<string, unknown> | undefined): ApiKeyConfiguration | undefined {
+export function parseApiKeyConfiguration(value: Record<string, unknown> | undefined): (ApiKeyConfiguration & { fetch_upstream_quota: boolean }) | undefined {
   if (!value || typeof value.base_url !== 'string' || (value.transport !== 'http' && value.transport !== 'prefer_websocket'))
     return undefined
-  return { base_url: value.base_url, transport: value.transport }
+  return { base_url: value.base_url, transport: value.transport, fetch_upstream_quota: value.fetch_upstream_quota === true }
 }
 
 export function apiKeyAccountError(form: ApiKeyAccountForm, editing = false): string | undefined {
