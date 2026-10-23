@@ -1168,7 +1168,9 @@ RUST_MIN_STACK=16777216 cargo +1.99.1 nextest run --manifest-path backend/Cargo.
 局部验证可追加 `-E 'package(=gateway-store) & test(/^redis::/)'` 等过滤条件；资源受限时用
 `--test-threads 4` 限制同时运行的用例数，编译并发另由 `--build-jobs` 控制
 未安装 nextest 时可使用 `cargo +1.99.1 test --manifest-path backend/Cargo.toml --test main --locked`，
-同样设置 `RUST_MIN_STACK=16777216`；该入口只在单个测试二进制内并发，跨 crate 依次运行
+同样设置 `RUST_MIN_STACK=16777216`；该入口只在单个测试二进制内并发，跨 crate 依次运行。
+单个二进制内的默认并行度等于 CPU 数，插件 Runtime 的用例在 10 线程并行下会因资源竞争返回
+`MiddlewareError::Fault`；出现这类失败时追加 `-- --test-threads 8` 限制并发
 
 线程栈设置与当前 CI 一致。Store 与插件 Runtime 的 PostgreSQL/Redis 集成测试需按
 [本地测试库](../backend/migrations/README.md#本地测试库) 配置专用服务；未设置环境变量时，本地相关测试会跳过。
