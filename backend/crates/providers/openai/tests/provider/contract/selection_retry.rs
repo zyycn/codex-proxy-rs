@@ -140,6 +140,145 @@ async fn cyber_policy_rotation_preserves_upstream_response_and_next_request_stay
 }
 
 #[tokio::test]
+async fn streaming_not_found_preserves_accounts_and_stops_gateway_retries() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let raw = json!({
+        "type": "error", "status": 404,
+        "error": {
+            "type": "invalid_request_error", "code": null, "param": "input",
+            "message": "Item with id 'rs_missing' not found. Items are not persisted when `store` is set to false. Try again with `store` set to true, or remove this item from your input."
+        }
+    })
+    .to_string();
+    let created = json!({
+        "type": "response.created",
+        "response": {"id": "resp_missing_item", "model": "gpt-5.4", "output": []}
+    })
+    .to_string();
+    for websocket in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        let requests = Arc::new(AtomicUsize::new(0));
+        let upstream_requests = Arc::clone(&requests);
+        let http = MockServer::start().await;
+        let (base_url, server) = if websocket {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let created = created.clone();
+            let raw = raw.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let mut ws = accept_codex_test_websocket(socket).await;
+                    while let Some(Ok(message)) = ws.next().await {
+                        match message {
+                            Message::Text(_) => {
+                                let count = upstream_requests.fetch_add(1, Ordering::SeqCst) + 1;
+                                ws.send(Message::Text(created.clone().into()))
+                                    .await
+                                    .unwrap();
+                                ws.send(Message::Ping(Bytes::new())).await.unwrap();
+                                ws.send(Message::Text(raw.clone().into())).await.unwrap();
+                                if count == 3 {
+                                    return;
+                                }
+                            }
+                            Message::Close(_) => break,
+                            _ => {}
+                        }
+                    }
+                }
+            });
+            (base_url, Some(server))
+        } else {
+            let response = ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(format!("data: {created}\n\n: keepalive\n\ndata: {raw}\n\n"));
+            Mock::given(method("POST"))
+                .and(path("/codex/responses"))
+                .respond_with(move |_: &wiremock::Request| {
+                    upstream_requests.fetch_add(1, Ordering::SeqCst);
+                    response.clone()
+                })
+                .mount(&http)
+                .await;
+            (http.uri(), None)
+        };
+        let provider = provider_with_base_url(&store, base_url);
+        let providers =
+            ProviderRegistry::new([provider as Arc<dyn gateway_core::engine::provider::Provider>])
+                .unwrap();
+        let coordinator =
+            AttemptCoordinator::new(GatewayEngine::new(Arc::new(NoopExecutionStore), providers));
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "openai",
+                Map::from_iter([
+                    ("model".to_owned(), json!("gpt-5.4")),
+                    (
+                        "input".to_owned(),
+                        json!([{"type": "item_reference", "id": "rs_missing"}]),
+                    ),
+                    ("store".to_owned(), json!(false)),
+                ]),
+            )
+            .unwrap()
+            .with_context(Map::from_iter([(
+                "use_websocket".to_owned(),
+                json!(websocket),
+            )])),
+        ));
+        let plan = execution_plan(&operation);
+        // 重复请求必须继续使用同一可调度账号，不能把历史条目缺失累计为凭据失效
+        for index in 1..=3 {
+            let mut session = coordinator
+                .start(
+                    execution_request(
+                        &format!("req_missing_item_{index}"),
+                        &operation,
+                        Duration::from_secs(5),
+                    ),
+                    operation.clone(),
+                    plan.clone(),
+                    None,
+                    None,
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            let EngineError::Provider(error) =
+                timeout(Duration::from_secs(5), session.collect_uncommitted())
+                    .await
+                    .unwrap()
+                    .unwrap_err()
+            else {
+                panic!("expected the original upstream rejection");
+            };
+            assert_eq!(
+                error.kind(),
+                ProviderErrorKind::InvalidRequest,
+                "websocket={websocket}"
+            );
+            assert_eq!(error.upstream_status(), Some(404));
+            assert!(!error.replay_is_safe());
+            assert!(error.retry_is_prohibited());
+            assert_eq!(error.raw_upstream_error().unwrap().as_str(), raw);
+            assert_eq!(requests.load(Ordering::SeqCst), index);
+            let account = store.account("acct_provider_contract").unwrap();
+            assert_eq!(account.credential_state(), CredentialState::Ready);
+            assert_eq!(account.last_error_reason(), None);
+        }
+        if let Some(server) = server {
+            timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn stalled_http_proxy_retries_same_account_before_using_reserved_rotation_budget() {
     stalled_proxy_recovery(false).await;
 }

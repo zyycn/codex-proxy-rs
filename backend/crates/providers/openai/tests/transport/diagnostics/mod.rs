@@ -404,6 +404,13 @@ fn openai_account_failure_matrix_is_preserved() {
             r#"{"error":{"message":"access forbidden"}}"#,
             CodexFailureCategory::PermissionDenied,
         ),
+        (404, "", CodexFailureCategory::CloudflarePathBlocked),
+        (404, " \r\n\t", CodexFailureCategory::CloudflarePathBlocked),
+        (
+            404,
+            r#"{"error":{"type":"invalid_request_error","code":null,"message":"Item with id 'rs_missing' not found.","param":"input"}}"#,
+            CodexFailureCategory::InvalidRequest,
+        ),
         (
             429,
             r#"{"error":{"type":"usage_limit_reached","message":"quota window reached"}}"#,
