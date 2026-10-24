@@ -23,7 +23,7 @@ fn source_manifest() -> Manifest {
         "contributes": {
             "middleware": {
                 "id": "9acme.request-tags.tagRequest",
-                "version": 5,
+                "version": 6,
                 "stages": ["request"],
                 "inputFormats": ["openai"],
                 "outputFormats": ["openai"]
@@ -96,7 +96,7 @@ fn author_manifest_fills_default_ids_versions_and_fixed_stages() {
         "main": "bin/worker",
         "runtime": "trustedProcess",
         "contributes": {
-            "middleware": {"version": 5, "stages": ["attempt"]},
+            "middleware": {"version": 6, "stages": ["attempt"]},
             "management": {"version": 2}
         }
     });
@@ -105,7 +105,7 @@ fn author_manifest_fills_default_ids_versions_and_fixed_stages() {
     let management = &manifest.contributes[&Capability::Management];
 
     assert_eq!(middleware.id, "9acme.request-tags.middleware");
-    assert_eq!(middleware.version, 5);
+    assert_eq!(middleware.version, 6);
     assert_eq!(middleware.stages, [Stage::Attempt]);
     assert_eq!(management.id, "9acme.request-tags.management");
     assert_eq!(management.version, 2);
@@ -133,7 +133,7 @@ fn installation_checks_protocol_engine_and_target() {
 #[test]
 fn capability_contract_versions_are_checked_independently_of_rpc_version() {
     for (capability, stage, supported, needs_formats) in [
-        (Capability::Middleware, Stage::Request, 5, true),
+        (Capability::Middleware, Stage::Request, 6, true),
         (Capability::Management, Stage::Management, 2, false),
         (Capability::UpstreamAdapter, Stage::Upstream, 5, true),
         (Capability::Scheduler, Stage::Scheduling, 3, false),
@@ -377,7 +377,7 @@ fn manifest_round_trips_public_fields_and_rejects_unknown_fields() {
 #[test]
 fn contributes_rejects_duplicate_capability_keys_in_direct_json_parsing() {
     let declaration = r#"{
-        "id":"test.example.middleware","version":5,"stages":["request"],
+        "id":"test.example.middleware","version":6,"stages":["request"],
         "inputFormats":["openai"],"outputFormats":["openai"]
     }"#;
     let manifest = format!(
@@ -412,7 +412,7 @@ fn contributes_rejects_duplicate_capability_keys_in_direct_json_parsing() {
 fn contribution_declaration_uses_camel_case_description_fields() {
     let declaration = ContributionDeclaration {
         id: "test.example.middleware".into(),
-        version: 5,
+        version: 6,
         stages: vec![Stage::Request],
         input_formats: vec!["openai".into()],
         output_formats: vec!["openai".into()],
@@ -421,7 +421,7 @@ fn contribution_declaration_uses_camel_case_description_fields() {
         serde_json::to_value(declaration).unwrap(),
         json!({
             "id":"test.example.middleware",
-            "version":5,
+            "version":6,
             "stages":["request"],
             "inputFormats":["openai"],
             "outputFormats":["openai"]

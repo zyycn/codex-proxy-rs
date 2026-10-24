@@ -22,7 +22,7 @@ use crate::transport::{
         catalog_etag, parse_codex_model_catalog,
     },
     diagnostics::CodexUpstreamSendPhase,
-    endpoints::{CODEX_RESPONSES_PATH, endpoint_url},
+    endpoints::endpoint_url,
     headers::websocket_header_pairs,
     profile::CodexWireProfileState,
     protocol::{
@@ -76,6 +76,7 @@ impl CodexBackendClient {
             outbound_proxy: None,
             egress_key: String::new(),
             middleware_headers: Vec::new(),
+            outbound_middleware: None,
             base_url,
             official_base_url: crate::OFFICIAL_CODEX_BASE_URL.to_owned(),
             protocol: OpenAiUpstreamProtocol::Codex,
@@ -117,7 +118,6 @@ impl CodexBackendClient {
         let profile = self.profile.snapshot();
         let mut headers =
             self.request_headers_for_http_response(&profile, upstream_request, context)?;
-        let headers_started_at = Instant::now();
         // OAuth 请求遵循 Codex 压缩合同；API Key 上游使用普通 JSON
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
         // 再由 API 层收集 canonical events 并返回完整 JSON
@@ -147,31 +147,43 @@ impl CodexBackendClient {
         if let Some(body) = upstream_body.as_object() {
             super::diagnostics::evidence::record_request(
                 &trace,
-                "provider.request.outbound",
+                if self.outbound_middleware.is_some() {
+                    "provider.request.native"
+                } else {
+                    "provider.request.outbound"
+                },
                 body,
                 "http_sse",
                 Some(&headers),
             );
         }
-        trace.headers(
-            "upstream.request.headers",
-            serde_json::json!({
-                "method": "POST", "endpoint": CODEX_RESPONSES_PATH,
-            }),
-            headers
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.as_bytes())),
-        );
-        trace.capture("upstream.request.body", &body);
-        let client = self.http_opening_client()?;
-        let outbound = client.post(endpoint).headers(headers);
         let body = if self.protocol == OpenAiUpstreamProtocol::Codex {
             zstd::stream::encode_all(std::io::Cursor::new(body), 3)
                 .map_err(CodexClientError::RequestCompression)?
         } else {
             body
         };
-        let response = outbound.body(body).send().await?;
+        let outbound = self
+            .prepare_http_request(endpoint, headers, body.into())
+            .await?;
+        trace.headers(
+            "upstream.request.headers",
+            serde_json::json!({"method": outbound.method().as_str(), "transport": "http_sse"}),
+            outbound
+                .headers()
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
+        );
+        trace.capture(
+            "upstream.request.body",
+            outbound
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .unwrap_or_default(),
+        );
+        let client = self.http_opening_client()?;
+        let headers_started_at = Instant::now();
+        let response = client.execute(outbound).await?;
         let upstream_headers_ms = elapsed_duration_millis(headers_started_at.elapsed());
         let http_version = http_version_name(response.version()).to_string();
         let status = response.status();
@@ -186,7 +198,8 @@ impl CodexBackendClient {
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
-        let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
+        let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers())
+            .with_response_origin(Some(response.url().clone()));
         let turn_state = response_meta::turn_state(response.headers());
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
@@ -312,7 +325,11 @@ impl CodexBackendClient {
         if let Some(body) = body.as_object() {
             super::diagnostics::evidence::record_request(
                 &context.trace.cloned().unwrap_or_default(),
-                "provider.request.outbound",
+                if self.outbound_middleware.is_some() {
+                    "provider.request.native"
+                } else {
+                    "provider.request.outbound"
+                },
                 body,
                 "websocket",
                 Some(&headers),
@@ -338,6 +355,8 @@ impl CodexBackendClient {
         .map_err(CodexClientError::WebSocketEncode)?;
         websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
         websocket_create.connection.connection_budget = self.connection_budget.clone();
+        let (websocket_create, outbound_profile) =
+            self.prepare_websocket_request(websocket_create).await?;
         context.trace.cloned().unwrap_or_default().headers(
             "upstream.request.headers",
             serde_json::json!({"transport": "websocket", "phase": "prepared_opening"}),
@@ -353,7 +372,10 @@ impl CodexBackendClient {
             let artifact = websocket_audit_artifact_from_attempt(
                 &websocket_request,
                 websocket_create.connection().opening_audit_snapshot(),
-                websocket_payload_audit_snapshot(&websocket_request),
+                // 插件准备后只由受控 wire capture 记录实际正文，不把原生 JSON 冒充最终帧
+                self.outbound_middleware
+                    .is_none()
+                    .then(|| websocket_payload_audit_snapshot(&websocket_request)),
             );
             if let Err(error) =
                 write_websocket_audit_artifact_from_env(&artifact, self.timezone).await
@@ -361,11 +383,15 @@ impl CodexBackendClient {
                 tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
             }
         }
-        let connection_profile = websocket_connection_profile(
+        let mut connection_profile = websocket_connection_profile(
             &headers,
             &self.middleware_headers,
             original_headers.as_ref(),
         );
+        if let Some(profile) = outbound_profile {
+            connection_profile.push('\0');
+            connection_profile.push_str(&profile);
+        }
         let pool_key =
             self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
@@ -381,11 +407,26 @@ impl CodexBackendClient {
             TransportRequirement::HttpRequired => None,
         };
         let prepare_started_at = Instant::now();
+        let opening_origin_key = self.outbound_middleware.as_ref().map(|_| {
+            format!(
+                "{}\0{}",
+                websocket_origin_key(
+                    &websocket_create
+                        .connection()
+                        .endpoint()
+                        .replacen("wss://", "https://", 1)
+                        .replacen("ws://", "http://", 1)
+                ),
+                self.egress_key
+            )
+        });
         let prepared = prepare_response_create_request_with_pool(
             &websocket_create,
             pool,
             &self.websocket_origin_breaker,
-            &self.websocket_origin_key,
+            opening_origin_key
+                .as_deref()
+                .unwrap_or(&self.websocket_origin_key),
             fast_path_budget,
             requirement.requires_websocket(),
             Some(DEFAULT_STREAM_IDLE_TIMEOUT),
@@ -581,7 +622,10 @@ impl CodexBackendClient {
         let mut key = CodexWebSocketPoolKey::new(&self.base_url, account_id, conversation_id)
             .with_egress_key(&self.egress_key)
             .with_outbound_proxy(self.outbound_proxy.as_ref())
-            .with_connection_profile(connection_profile);
+            .with_connection_profile(format!(
+                "{connection_profile}\0{}",
+                context.installation_id.unwrap_or_default(),
+            ));
         if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
             key = key.with_downstream_connection_id(connection_id);
         }
@@ -613,7 +657,8 @@ impl CodexBackendClient {
         }
         let response = request.send().await?;
         let status = response.status();
-        let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
+        let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers())
+            .with_response_origin(Some(response.url().clone()));
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
         let etag = status

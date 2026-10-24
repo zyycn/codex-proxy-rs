@@ -5,6 +5,7 @@ mod facts;
 mod http;
 mod lifecycle;
 mod mounts;
+mod outbound;
 mod retry;
 mod scheduling;
 mod service;
@@ -1308,7 +1309,7 @@ async fn real_request_plugins_rewrite_settings_in_onion_order() {
         InstanceFixture { id: "settings-first", configuration: serde_json::json!({"mode":"settings","expected_settings":baseline_json,"settings":first}), bindings: vec![binding(MIDDLEWARE_CONTRIBUTION,"request",0,PluginFailurePolicy::Reject)] },
         InstanceFixture { id: "settings-second", configuration: serde_json::json!({"mode":"settings","expected_settings":first,"settings":last}), bindings: vec![binding(MIDDLEWARE_CONTRIBUTION,"request",1,PluginFailurePolicy::Reject)] },
         InstanceFixture { id: "settings-pass", configuration: serde_json::json!({"mode":"settings","expected_settings":last}), bindings: vec![binding(MIDDLEWARE_CONTRIBUTION,"request",2,PluginFailurePolicy::Reject)] },
-    ], package).await;
+    ], package.clone()).await;
     let generation = prepare(&runtime).await;
     let plan = runtime
         .execution_registry()
@@ -1366,6 +1367,43 @@ async fn real_request_plugins_rewrite_settings_in_onion_order() {
         assert!(body.next_frame().await.unwrap().is_none());
         body.close().await;
     }
+    drop(plan);
+    drop(generation);
+    super::wait_until_empty(cache.path()).await;
+
+    // 根对象 null 也是显式替换，必须由设置合同拒绝，不能悄悄沿用原配置
+    let (cache, runtime) = setup_package(vec![InstanceFixture {
+        id: "settings-null",
+        configuration: serde_json::json!({"mode":"settings", "expected_settings":baseline_json, "settings":null}),
+        bindings: vec![binding(MIDDLEWARE_CONTRIBUTION, "request", 0, PluginFailurePolicy::Reject)],
+    }], package).await;
+    let generation = prepare(&runtime).await;
+    let plan = runtime
+        .execution_registry()
+        .middleware(&generation)
+        .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    assert!(
+        plan.handle(
+            middleware_context(ClientTransport::HttpJson),
+            MiddlewareRequest::new(
+                "openai",
+                middleware_headers(),
+                Bytes::from_static(br#"{"input":"hello"}"#)
+            )
+            .with_settings(configuration),
+            (Downstream {
+                calls: Arc::clone(&calls),
+                closes: Arc::default(),
+                reads: Arc::default(),
+                error: false
+            })
+            .into_next(),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     drop(plan);
     drop(generation);
     super::wait_until_empty(cache.path()).await;
@@ -1593,7 +1631,7 @@ impl CapabilitiesNext {
 
 #[tokio::test]
 async fn sdk_capability_declarations_require_request_stage() {
-    for (version, attempt) in [(5, false), (5, true)] {
+    for (version, attempt) in [(6, false), (6, true)] {
         let stage = if attempt {
             Stage::Attempt
         } else {

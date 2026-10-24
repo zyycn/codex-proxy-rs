@@ -88,7 +88,7 @@ fn plan(action: Action) -> FrozenMiddlewarePlan {
 }
 
 fn terminal(polls: Arc<AtomicUsize>, released: Arc<AtomicUsize>) -> ProviderMiddlewareTerminal {
-    Box::new(move |_, _| {
+    Box::new(move |_, _, _| {
         Box::pin(async move {
             let metadata = ProviderCallMetadata::new(
                 ProviderKind::new("openai").unwrap(),
@@ -127,6 +127,7 @@ fn inspecting_a_response_waits_for_the_outer_stream_and_keeps_send_facts() {
                 context(),
                 operation(),
                 ClientTransport::HttpJson,
+                None,
                 terminal(polls.clone(), released.clone()),
             )
             .await
@@ -165,6 +166,7 @@ fn rejecting_metadata_drops_the_unactivated_handler_and_account_lease() {
             context(),
             operation(),
             ClientTransport::HttpJson,
+            None,
             terminal(polls.clone(), released.clone()),
         )
         .await
@@ -194,7 +196,8 @@ fn middleware_rejection_before_next_does_not_wait_for_activation() {
                 context(),
                 operation(),
                 ClientTransport::HttpJson,
-                Box::new(|_, _| panic!("rejected middleware cannot prepare upstream")),
+                None,
+                Box::new(|_, _, _| panic!("rejected middleware cannot prepare upstream")),
             )
             .await
             .err()

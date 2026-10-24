@@ -37,6 +37,7 @@ export const PLUGIN_REQUEST_STAGES = computed<Record<string, PluginRequestStage>
   service: { label: t('plugins.fields.serviceCall'), scope: 'none', globalLabel: t('plugins.fields.allServiceCalls') },
   request: { label: t('plugins.fields.requestToStart'), scope: 'model' },
   attempt: { label: t('plugins.fields.everyTry'), scope: 'provider' },
+  outbound: { label: t('plugins.fields.outboundPreparation'), scope: 'provider' },
   upstream: { label: t('plugins.fields.upstreamCall'), scope: 'provider' },
   routing: { label: t('plugins.fields.modelRouting'), scope: 'model' },
   scheduling: { label: t('plugins.fields.accountScheduling'), scope: 'provider' },

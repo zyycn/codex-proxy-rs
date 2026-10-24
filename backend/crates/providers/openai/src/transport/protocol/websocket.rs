@@ -172,13 +172,13 @@ pub fn websocket_payload_audit_snapshot(request: &CodexResponsesRequest) -> Payl
 pub fn websocket_audit_artifact_from_attempt(
     request: &CodexResponsesRequest,
     opening: OpeningAuditSnapshot,
-    payload: PayloadAuditSnapshot,
+    payload: Option<PayloadAuditSnapshot>,
 ) -> WebSocketAuditArtifact {
     WebSocketAuditArtifact {
         transport_mode: transport_requirement(request).as_str().to_string(),
         fallback_allowed: transport_requirement(request).allows_pre_send_http_fallback(),
         opening: Some(opening),
-        payload: Some(payload),
+        payload,
     }
 }
 

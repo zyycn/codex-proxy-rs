@@ -26,7 +26,7 @@ impl Capability {
     #[must_use]
     pub const fn contract_versions(self) -> &'static [u32] {
         match self {
-            Self::Middleware => &[5],
+            Self::Middleware => &[6],
             Self::FrontendAuthentication
             | Self::ModelRouter
             | Self::RetryPolicy
@@ -91,6 +91,8 @@ pub enum Stage {
     WebSocket,
     Request,
     Attempt,
+    /// Provider 发送前的完整请求准备，不执行上游发送
+    Outbound,
     /// Core 登记已选账号的 attempt 后才启动的受管上游执行
     Upstream,
     Observation,

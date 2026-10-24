@@ -1,5 +1,7 @@
 //! 验证中间件挂载、正文模式、增量头部与二进制帧的线协议合同
 
+mod outbound;
+
 use gateway_plugin_sdk::{
     Capability, Stage,
     call::middleware::{
@@ -10,6 +12,47 @@ use gateway_plugin_sdk::{
     },
 };
 use serde_json::json;
+
+#[test]
+fn provider_parameters_distinguish_preserve_empty_and_invalid_replacement() {
+    let preserved: MiddlewareNextRequest =
+        serde_json::from_value(json!({"body":"preserve"})).unwrap();
+    assert!(preserved.provider_parameters.is_none());
+    for replacement in [json!({}), json!({"installation_id":null})] {
+        let request: MiddlewareNextRequest = serde_json::from_value(json!({
+            "body":"preserve", "provider_parameters":replacement,
+        }))
+        .unwrap();
+        assert_eq!(
+            request.provider_parameters.as_ref(),
+            replacement.as_object()
+        );
+    }
+    for invalid in [
+        json!(null),
+        json!([]),
+        json!("invalid"),
+        json!(42),
+        json!(false),
+    ] {
+        assert!(
+            serde_json::from_value::<MiddlewareNextRequest>(json!({
+                "body":"preserve", "provider_parameters":invalid,
+            }))
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn settings_replacement_preserves_explicit_null_for_host_validation() {
+    let preserved: MiddlewareNextRequest =
+        serde_json::from_value(json!({"body":"preserve"})).unwrap();
+    assert!(preserved.settings.is_none());
+    let replaced: MiddlewareNextRequest =
+        serde_json::from_value(json!({"body":"preserve", "settings":null})).unwrap();
+    assert_eq!(replaced.settings, Some(serde_json::Value::Null));
+}
 
 #[test]
 fn middleware_capability_and_mounts_have_one_stable_wire_vocabulary() {
@@ -32,6 +75,7 @@ fn middleware_capability_and_mounts_have_one_stable_wire_vocabulary() {
 #[test]
 fn middleware_request_keeps_body_out_of_json_and_rejects_unknown_fields() {
     let request = MiddlewareRequestHead {
+        provider_parameters: None,
         settings_sources: serde_json::Value::Null,
         settings: serde_json::Value::Null,
         client_key_id: "fixture-key".into(),
@@ -69,6 +113,7 @@ fn middleware_request_keeps_body_out_of_json_and_rejects_unknown_fields() {
 #[test]
 fn next_distinguishes_preserve_from_replace_empty_and_uses_incremental_headers() {
     let preserve = MiddlewareNextRequest {
+        provider_parameters: None,
         settings: None,
         protocol: None,
         header_mutations: Vec::new(),
@@ -81,6 +126,7 @@ fn next_distinguishes_preserve_from_replace_empty_and_uses_incremental_headers()
     );
 
     let replace = MiddlewareNextRequest {
+        provider_parameters: None,
         settings: None,
         protocol: Some("xai".into()),
         header_mutations: vec![

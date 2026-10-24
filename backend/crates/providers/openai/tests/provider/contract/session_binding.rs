@@ -140,12 +140,14 @@ impl MiddlewarePlan for ChangeTurnMetadata {
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         let metadata = self.0;
         Box::pin(async move {
-            let (protocol, mut headers, body) = request.into_parts();
+            let protocol = request.protocol().to_owned();
+            let mut headers = request.headers().to_vec();
+            let body = request.body().clone();
             headers.push(MiddlewareHeader::new(
                 "x-codex-turn-metadata",
                 Bytes::from_static(metadata),
             ));
-            next.run(MiddlewareRequest::new(protocol, headers, body))
+            next.run(request.replace_parts(protocol, headers, body, None)?)
                 .await
         })
     }

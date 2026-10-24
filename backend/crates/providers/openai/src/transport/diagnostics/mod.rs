@@ -79,6 +79,7 @@ pub struct CodexUpstreamFailure {
     pub(crate) usage_limit_resets_at: Option<i64>,
     pub(crate) retry_after_seconds: Option<u64>,
     pub(crate) request_id: Option<String>,
+    pub(crate) response_origin: Option<url::Url>,
     pub(crate) set_cookie_headers: Vec<String>,
     pub(crate) rate_limit_headers: Vec<(String, String)>,
     pub(crate) send_phase: CodexUpstreamSendPhase,
@@ -124,6 +125,7 @@ impl CodexUpstreamFailure {
                 .flatten(),
             retry_after_seconds,
             request_id: diagnostics.request_id.clone(),
+            response_origin: diagnostics.response_origin.clone(),
             set_cookie_headers: set_cookie_headers.to_vec(),
             rate_limit_headers: rate_limit_headers.to_vec(),
             send_phase,
@@ -171,6 +173,7 @@ impl CodexUpstreamFailure {
                 .request_id
                 .clone()
                 .or_else(|| diagnostics.request_id.clone()),
+            response_origin: diagnostics.response_origin.clone(),
             set_cookie_headers: set_cookie_headers.to_vec(),
             rate_limit_headers: rate_limit_headers.to_vec(),
             send_phase,
@@ -282,16 +285,43 @@ enum UpstreamFailureSource {
     SseFailure,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct CodexUpstreamDiagnostics {
     pub status_code: Option<u16>,
     pub request_id: Option<String>,
     pub identity_authorization_error: Option<String>,
     pub identity_error_code: Option<String>,
     pub trace_headers: Vec<(String, String)>,
+    /// 实际响应所属 URL；WebSocket 沿用实际 opening，不能使用本次候选目标
+    pub response_origin: Option<url::Url>,
+}
+
+impl std::fmt::Debug for CodexUpstreamDiagnostics {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CodexUpstreamDiagnostics")
+            .field("status_code", &self.status_code)
+            .field("request_id", &self.request_id)
+            .field(
+                "identity_authorization_error",
+                &self.identity_authorization_error,
+            )
+            .field("identity_error_code", &self.identity_error_code)
+            .field("trace_headers", &self.trace_headers)
+            .field(
+                "response_origin",
+                &self.response_origin.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 impl CodexUpstreamDiagnostics {
+    pub(crate) fn with_response_origin(mut self, url: Option<url::Url>) -> Self {
+        self.response_origin = url;
+        self
+    }
+
     pub(crate) fn error_event_request_id(value: &Value) -> Option<String> {
         let headers = value.get("headers")?.as_object()?;
         let mut mapped = HeaderMap::new();
@@ -326,6 +356,7 @@ impl CodexUpstreamDiagnostics {
             identity_error_code: header_value(headers, IDENTITY_ERROR_JSON_HEADER)
                 .and_then(|encoded| decode_identity_error_code(&encoded)),
             trace_headers: trace_headers(headers),
+            response_origin: None,
         }
     }
 

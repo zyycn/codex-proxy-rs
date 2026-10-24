@@ -2,6 +2,7 @@
 
 mod contract;
 pub mod http;
+pub mod outbound;
 mod plan;
 pub mod service;
 pub mod websocket;

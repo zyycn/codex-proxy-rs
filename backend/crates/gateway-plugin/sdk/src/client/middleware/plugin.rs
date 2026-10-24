@@ -27,7 +27,7 @@ use super::{
 ///
 /// let contributes = Contributions::from([(Capability::Middleware, ContributionDeclaration {
 ///     id: "acme.request-tags.tagRequest".into(),
-///     version: 5,
+///     version: 6,
 ///     stages: vec![Stage::Request],
 ///     input_formats: vec!["openai".into()],
 ///     output_formats: vec!["openai".into()],
@@ -67,7 +67,7 @@ where
                 .contract_versions()
                 .contains(&declaration.version)
             || declaration.stages.is_empty()
-            || declaration.stages.len() > 5
+            || declaration.stages.len() > 6
             || declaration.stages.iter().any(|stage| {
                 !matches!(
                     stage,
@@ -76,6 +76,7 @@ where
                         | Stage::Service
                         | Stage::Request
                         | Stage::Attempt
+                        | Stage::Outbound
                 ) || !C::accepts(*stage)
             })
             || declaration

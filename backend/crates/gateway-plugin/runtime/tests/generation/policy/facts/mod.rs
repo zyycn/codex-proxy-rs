@@ -71,7 +71,8 @@ async fn reading_websocket_facts_preserves_original_text_and_opaque_messages() {
         attempt_middleware_context_for_transport(Arc::default(), ClientTransport::WebSocket),
         operation(),
         ClientTransport::WebSocket,
-        Box::new(move |_, _| {
+        None,
+        Box::new(move |_, _, _| {
             Box::pin(async move {
                 Ok(ProviderStream::new(
                     ProviderCallMetadata::new(
@@ -227,7 +228,8 @@ async fn facts_are_readable_without_replacing_or_duplicating_the_original_execut
         attempt_middleware_context(Arc::default()),
         operation(),
         ClientTransport::HttpJson,
-        Box::new(move |_, _| {
+        None,
+        Box::new(move |_, _, _| {
             Box::pin(async move {
                 Ok(ProviderStream::new(
                     metadata,

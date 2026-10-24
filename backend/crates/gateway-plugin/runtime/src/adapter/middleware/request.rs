@@ -61,7 +61,10 @@ pub(super) async fn invoke(
     };
     let mut call_context = invocation_ports.session.context(
         match entry.mount {
-            MiddlewareMount::Http | MiddlewareMount::WebSocket | MiddlewareMount::Service => {
+            MiddlewareMount::Http
+            | MiddlewareMount::WebSocket
+            | MiddlewareMount::Service
+            | MiddlewareMount::Outbound => {
                 return Err(MiddlewareError::InvalidState);
             }
             MiddlewareMount::Request => Stage::Request,
@@ -95,6 +98,7 @@ pub(super) async fn invoke(
         scope,
     )?;
     let head = MiddlewareRequestHead {
+        provider_parameters: invocation.provider_parameters(),
         settings_sources: invocation.settings_sources(),
         settings: invocation
             .settings()
@@ -107,7 +111,10 @@ pub(super) async fn invoke(
             .collect(),
         request_id: context.request_id().as_str().to_owned(),
         mount: match context.mount() {
-            MiddlewareMount::Http | MiddlewareMount::WebSocket | MiddlewareMount::Service => {
+            MiddlewareMount::Http
+            | MiddlewareMount::WebSocket
+            | MiddlewareMount::Service
+            | MiddlewareMount::Outbound => {
                 return Err(MiddlewareError::InvalidState);
             }
             MiddlewareMount::Request => WireMiddlewareMount::Request,

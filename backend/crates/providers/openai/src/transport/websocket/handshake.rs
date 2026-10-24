@@ -39,6 +39,32 @@ const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
 const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl CodexWebSocketConnection {
+    /// 复用传输库的握手编码检查，不能在拨号后才发现插件输出不可表示
+    pub(crate) fn validate_prepared_opening(&mut self) -> Result<(), tungstenite::Error> {
+        let mut offers = self
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("sec-websocket-extensions"));
+        self.permessage_deflate = match (offers.next(), offers.next()) {
+            (None, None) => false,
+            (Some((_, value)), None) if value == WEBSOCKET_EXTENSIONS => true,
+            // 锁定的客户端按配置生成 offer，不支持任意原始扩展声明
+            _ => {
+                return Err(tungstenite::Error::Protocol(
+                    tungstenite::error::ProtocolError::InvalidHeader(
+                        tungstenite::http::HeaderName::from_static("sec-websocket-extensions")
+                            .into(),
+                    ),
+                ));
+            }
+        };
+        tungstenite::handshake::client::generate_request(
+            websocket_handshake_request(self)?,
+            Some(&websocket_config(self).extensions),
+        )?;
+        Ok(())
+    }
+
     /// 构造 Responses WebSocket 连接描述
     pub fn responses(
         base_url: &str,
@@ -64,6 +90,7 @@ impl CodexWebSocketConnection {
         Self {
             endpoint,
             headers,
+            permessage_deflate: true,
             outbound_proxy: None,
             connection_budget: None,
         }
@@ -155,6 +182,7 @@ pub(super) async fn send_websocket_request(
 
 pub(super) fn websocket_connection_metadata(
     response: &WsResponse<Option<Vec<u8>>>,
+    connection: &CodexWebSocketConnection,
 ) -> CodexWebSocketConnectionMetadata {
     CodexWebSocketConnectionMetadata {
         turn_state: response_meta::turn_state(response.headers()),
@@ -164,7 +192,8 @@ pub(super) fn websocket_connection_metadata(
         diagnostics: response_meta::diagnostics(
             Some(response.status().as_u16()),
             response.headers(),
-        ),
+        )
+        .with_response_origin(websocket_response_origin(connection)),
     }
 }
 
@@ -208,24 +237,32 @@ async fn connect_websocket(
                 Ok(None)
             )
         {
-            let (websocket, response) =
-                connect_async_tls_with_config(request, Some(websocket_config()), false, connector)
-                    .await?;
+            let (websocket, response) = connect_async_tls_with_config(
+                request,
+                Some(websocket_config(connection)),
+                false,
+                connector,
+            )
+            .await?;
             return Ok((Box::new(websocket) as RawWsStream, response));
         }
         let stream = dial_account(connection).await?;
         match stream {
             MaybeTlsStream::Plain(tcp) => {
-                let (websocket, response) =
-                    client_async_tls_with_config(request, tcp, Some(websocket_config()), connector)
-                        .await?;
+                let (websocket, response) = client_async_tls_with_config(
+                    request,
+                    tcp,
+                    Some(websocket_config(connection)),
+                    connector,
+                )
+                .await?;
                 Ok((Box::new(websocket) as RawWsStream, response))
             }
             stream => {
                 let (websocket, response) = client_async_tls_with_config(
                     request,
                     stream,
-                    Some(websocket_config()),
+                    Some(websocket_config(connection)),
                     connector,
                 )
                 .await?;
@@ -239,7 +276,9 @@ async fn connect_websocket(
     })?;
     match result {
         Ok((websocket, response)) => Ok((websocket, response)),
-        Err(tungstenite::Error::Http(response)) => Err(websocket_opening_error(response.as_ref())),
+        Err(tungstenite::Error::Http(response)) => {
+            Err(websocket_opening_error(response.as_ref(), connection))
+        }
         Err(error) => Err(CodexWebSocketExchangeError::Connect(error)),
     }
 }
@@ -345,9 +384,9 @@ fn websocket_handshake_request(
     builder.body(())
 }
 
-fn websocket_config() -> WebSocketConfig {
+fn websocket_config(connection: &CodexWebSocketConnection) -> WebSocketConfig {
     let mut extensions = ExtensionsConfig::default();
-    extensions.permessage_deflate = Some(DeflateConfig::default());
+    extensions.permessage_deflate = connection.permessage_deflate.then(DeflateConfig::default);
 
     let mut config = WebSocketConfig::default();
     // 上游 Responses 事件属于 Codex 协议数据，不能沿用 tungstenite 的私有
@@ -358,7 +397,10 @@ fn websocket_config() -> WebSocketConfig {
     config
 }
 
-fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSocketExchangeError {
+fn websocket_opening_error(
+    response: &WsResponse<Option<Vec<u8>>>,
+    connection: &CodexWebSocketConnection,
+) -> CodexWebSocketExchangeError {
     let status_code = response.status().as_u16();
     let raw_body = response
         .body()
@@ -391,9 +433,20 @@ fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSo
                 ))
             }),
         response_meta::set_cookie_headers(response.headers()),
-        response_meta::diagnostics(Some(status_code), response.headers()),
+        response_meta::diagnostics(Some(status_code), response.headers())
+            .with_response_origin(websocket_response_origin(connection)),
         CodexUpstreamSendPhase::BeforePayload,
     )
+}
+
+fn websocket_response_origin(connection: &CodexWebSocketConnection) -> Option<reqwest::Url> {
+    reqwest::Url::parse(
+        &connection
+            .endpoint
+            .replacen("wss://", "https://", 1)
+            .replacen("ws://", "http://", 1),
+    )
+    .ok()
 }
 
 fn websocket_host_header(endpoint: &str) -> Option<String> {

@@ -50,6 +50,7 @@ pub(crate) async fn connect_live_sideband(
     let connection = CodexWebSocketConnection {
         endpoint,
         headers: business_headers,
+        permessage_deflate: true,
         outbound_proxy,
         connection_budget: None,
     };

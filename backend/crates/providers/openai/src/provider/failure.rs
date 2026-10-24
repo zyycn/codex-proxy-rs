@@ -48,6 +48,7 @@ pub(super) struct MappedProviderFailure {
     pub(super) cyber_policy_failure: bool,
     pub(super) upstream_capacity_failure: bool,
     pub(super) set_cookie_headers: Vec<String>,
+    pub(super) response_origin: Option<Url>,
     pub(super) rate_limit_headers: Vec<(String, String)>,
     pub(super) observation: Option<ProviderResponseObservation>,
     pub(super) capture_response_cookies: bool,
@@ -63,6 +64,7 @@ impl MappedProviderFailure {
             cyber_policy_failure: false,
             upstream_capacity_failure: false,
             set_cookie_headers: Vec::new(),
+            response_origin: None,
             rate_limit_headers: Vec::new(),
             observation: None,
             capture_response_cookies: false,
@@ -345,7 +347,10 @@ pub(super) async fn apply_failure(
             .selector
             .capture_response_cookies(
                 account,
-                context.response_origin,
+                failure
+                    .response_origin
+                    .as_ref()
+                    .unwrap_or(context.response_origin),
                 &failure.set_cookie_headers,
             )
             .await
@@ -738,6 +743,9 @@ pub(super) fn map_client_error(
     uncertain_state: UpstreamSendState,
     observe_transport: bool,
 ) -> MappedProviderFailure {
+    if let CodexClientError::Outbound(error) = error {
+        return MappedProviderFailure::plain(*error);
+    }
     let local_connection_capacity = crate::transport::connection::is_admission_failure(&error);
     let diagnostic = if local_connection_capacity {
         Some(
@@ -789,13 +797,15 @@ pub(super) fn map_client_error(
     let connect_retry = !local_connection_capacity
         && matches!(&error, CodexClientError::Http(error) if transient_http_connect(error));
     let mut failure = match &error {
-        CodexClientError::Privacy(_) => MappedProviderFailure::plain(
-            provider_error(
-                ProviderErrorKind::InvalidRequest,
-                UpstreamSendState::NotSent,
+        CodexClientError::Outbound(_) | CodexClientError::Privacy(_) => {
+            MappedProviderFailure::plain(
+                provider_error(
+                    ProviderErrorKind::InvalidRequest,
+                    UpstreamSendState::NotSent,
+                )
+                .with_retry_prohibited(),
             )
-            .with_retry_prohibited(),
-        ),
+        }
         CodexClientError::ConnectionBudgetExhausted => MappedProviderFailure::plain(
             provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent)
                 .with_connection_retry(gateway_core::engine::AttemptTransport::Fallback),
@@ -1021,6 +1031,7 @@ fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
             "invalid_sse",
             "OpenAI HTTP returned an invalid Responses event stream".to_owned(),
         ),
+        CodexClientError::Outbound(_) => return None,
         CodexClientError::Privacy(error) => (
             "prepare",
             "privacy_policy_rejected",
@@ -1468,6 +1479,7 @@ pub(super) fn map_upstream_failure(
         // 普通 5xx 与未知流内错误不足以证明容量拒绝，不能用于冻结账号
         upstream_capacity_failure: capacity_unavailable,
         set_cookie_headers: failure.set_cookie_headers,
+        response_origin: failure.response_origin,
         rate_limit_headers: failure.rate_limit_headers,
         observation,
         capture_response_cookies: !matches!(

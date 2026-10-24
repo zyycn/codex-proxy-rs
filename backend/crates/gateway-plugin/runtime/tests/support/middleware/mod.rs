@@ -1,6 +1,7 @@
 //! 中间件测试插件子进程入口及异常退出清理辅助
 
 mod http_resources;
+mod outbound;
 mod usage_data;
 
 use gateway_plugin_sdk::{
@@ -26,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Capability::Middleware,
             ContributionDeclaration {
                 id: "test.example.middleware".into(),
-                version: 5,
+                version: 6,
                 stages: vec![
                     Stage::Http,
                     Stage::WebSocket,
@@ -88,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             id: "test.example.middleware".into(),
             version: configuration["middleware_version"]
                 .as_u64()
-                .unwrap_or(5)
+                .unwrap_or(6)
                 .try_into()?,
             stages: vec![if configuration["service"] == true {
                 Stage::Service
@@ -98,6 +99,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Stage::WebSocket
             } else if configuration["attempt"] == true {
                 Stage::Attempt
+            } else if configuration["outbound"] == true {
+                Stage::Outbound
             } else {
                 Stage::Request
             }],
@@ -107,6 +110,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "http".into()
             } else if configuration["websocket"] == true {
                 "websocket".into()
+            } else if configuration["outbound"] == true {
+                "outbound".into()
             } else {
                 "openai".into()
             }],
@@ -116,11 +121,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "http".into()
             } else if configuration["websocket"] == true {
                 "websocket".into()
+            } else if configuration["outbound"] == true {
+                "outbound".into()
             } else {
                 "openai".into()
             }],
         },
     )]);
+    if configuration["outbound"] == true {
+        let plugin = MiddlewarePlugin::new(
+            &contributes,
+            move |call: gateway_plugin_sdk::client::OutboundCall| {
+                outbound::handle(call, configuration.clone())
+            },
+        )?;
+        session.run(plugin).await?;
+        return Ok(());
+    }
     if configuration["service"] == true {
         let plugin = MiddlewarePlugin::new(
             &contributes,
@@ -528,6 +545,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     call.request.head.settings = settings.clone();
                 }
             }
+            if mode == "parameters" {
+                assert_eq!(
+                    serde_json::to_value(&call.request.head.provider_parameters).unwrap(),
+                    configuration["expected_parameters"],
+                );
+                if let Some(parameters) = configuration.get("parameters") {
+                    call.request.head.provider_parameters = if parameters.is_null() {
+                        None
+                    } else {
+                        Some(parameters.as_object().unwrap().clone())
+                    };
+                }
+            }
             if mode == "inspect" && !call.request.body.is_empty() {
                 // 读取和解析只能作用于副本，不能把解析结果写回未改写的正文
                 assert!(serde_json::from_slice::<serde_json::Value>(&call.request.body).is_ok());
@@ -590,7 +620,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(vec![frame])
                     })?;
                 }
-                "passthrough" | "declare" | "settings" => {}
+                "passthrough" | "declare" | "settings" | "parameters" => {}
                 "inspect" => {
                     response.body = response.body.inspect_frames(|frame| {
                         assert!(!frame.payload.is_empty());

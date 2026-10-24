@@ -394,7 +394,7 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
         Box::pin(async move {
             if !self.endpoint_policy.validate_inference(request.endpoint()) {
                 return Err(GrokInferenceTransportError::new(
-                    GrokInferenceTransportErrorKind::Protocol,
+                    GrokInferenceTransportErrorKind::InvalidRequest,
                     UpstreamSendState::NotSent,
                 ));
             }
@@ -402,12 +402,12 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
             trace.headers(
                 "upstream.request.headers",
                 serde_json::json!({
-                    "method": "POST", "endpoint": request.endpoint().path(),
+                    "method": request.method().as_str(), "operation": "responses",
                 }),
                 request
                     .headers()
                     .iter()
-                    .map(|header| (header.name(), header.value().expose().as_bytes())),
+                    .map(|header| (header.name(), header.value().as_ref())),
             );
             trace.capture("upstream.request.body", request.body());
             let (client, client_cache_status) = self
@@ -415,10 +415,10 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
                 .await
                 .map_err(|error| *error)?;
             let mut builder = client
-                .post(request.endpoint().clone())
+                .request(request.method().clone(), request.endpoint().clone())
                 .body(request.body().to_vec());
             for header in request.headers() {
-                builder = builder.header(header.name(), header.value().expose());
+                builder = builder.header(header.name(), header.value().as_ref());
             }
             let dns_observer = Arc::new(RequestDnsObserver::default());
             let headers_started_at = Instant::now();

@@ -18,7 +18,7 @@ SDK 包版本为 `0.1.0`，独立于网关版本，处于实验阶段。能力�
 | 根门面 | 清单、能力声明、调用上下文、消息与帧、公开错误 |
 | `call::frontend_authentication` | 数据面认证信封、认证器标识与外部 principal 结果 |
 | `call::model` | 宿主模型调用的 canonical 事实、原生 wire 与有界事件编解码 |
-| `call::middleware` | HTTP、WebSocket 消息、公开服务、模型请求及 attempt 的洋葱调用、单次 next 与惰性正文合同 |
+| `call::middleware` | HTTP、WebSocket 消息、公开服务、模型请求、attempt 与上游出站准备的洋葱调用、单次 next 与惰性正文合同 |
 | `call::services` | 公开服务的类型化操作、输入输出及错误合同；`usage` 提供[用量维护与计价](docs/usage-data.md) |
 | `call::upstream_adapter` | 内置 OpenAI / xAI 的[受管上游适配器](docs/upstream-adapters.md)注册、执行、出站与续接合同 |
 | `call::policy` | 模型路由、账号调度与重试决策合同 |
@@ -31,7 +31,7 @@ SDK 包版本为 `0.1.0`，独立于网关版本，处于实验阶段。能力�
 
 `call/` 按业务能力组织数据，`message.rs` 定义消息与帧。已有请求链的请求／响应改写、协议转换和思考参数映射使用
 `call::middleware`；需要指定业务上游并解析结果时使用 `call::upstream_adapter`，作为洋葱链终端复用宿主账号与结算。
-下游 WebSocket 改写使用 `websocket` 中间件；上游 WebSocket 的观察接口保留只读合同
+下游 WebSocket 改写使用 `websocket` 中间件；上游发送前的请求准备使用 `outbound` 中间件，响应观察接口保留只读合同
 
 插件使用的导入路径例如：
 

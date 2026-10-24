@@ -1046,6 +1046,7 @@ impl Peer {
                         id,
                         NEXT_METHOD,
                         serde_json::to_value(MiddlewareNextRequest {
+                            provider_parameters: None,
                             settings: None,
                             protocol: None,
                             header_mutations: Vec::new(),

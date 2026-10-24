@@ -280,7 +280,8 @@ impl CodexProvider {
                 provider_kind,
                 Some(upstream_model.as_str().to_owned()),
                 account_id,
-                Box::new(move |operation, middleware_headers| {
+                Some(RequestParameters::baseline(lease.installation_id())),
+                Box::new(move |operation, middleware_headers, parameters| {
                     Box::pin(async move {
                         provider
                             .execute_selected_live_call(
@@ -288,8 +289,11 @@ impl CodexProvider {
                                 operation,
                                 upstream_model,
                                 middleware_headers,
-                                lease,
-                                account_selection_wait_ms,
+                                SelectedRequest {
+                                    parameters: RequestParameters::decode(parameters)?,
+                                    lease,
+                                    account_selection_wait_ms,
+                                },
                             )
                             .await
                     })
@@ -304,9 +308,13 @@ impl CodexProvider {
         operation: Operation,
         upstream_model: UpstreamModelId,
         middleware_headers: Vec<MiddlewareHeader>,
-        mut lease: CodexCredentialLease,
-        account_selection_wait_ms: u64,
+        selected: SelectedRequest,
     ) -> Result<ProviderStream, ProviderError> {
+        let SelectedRequest {
+            parameters,
+            mut lease,
+            account_selection_wait_ms,
+        } = selected;
         let Operation::ProviderHttp(request) = operation else {
             return Err(provider_error(
                 ProviderErrorKind::InvalidRequest,
@@ -333,6 +341,11 @@ impl CodexProvider {
         let allows_account_state_mutation = lease.allows_account_state_mutation();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
+        let outbound_middleware = context.outbound_middleware(
+            provider_kind.clone(),
+            Some(upstream_model.as_str().to_owned()),
+            lease.account_id().clone(),
+        );
         let metadata = ProviderCallMetadata::new(
             provider_kind,
             upstream_model.clone(),
@@ -361,12 +374,14 @@ impl CodexProvider {
             .cloned()
             .collect::<Vec<_>>();
         let events = cold_live_call_stream(ColdLiveCall {
+            parameters,
             client: self
                 .client_for_request(&context)?
                 .for_account(lease.account())
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, false).error)?
                 .with_responses_api_base_url(lease.authentication().responses_api_base_url())
-                .with_middleware_headers(middleware_headers),
+                .with_middleware_headers(middleware_headers)
+                .with_outbound_middleware(outbound_middleware),
             registry: Arc::clone(&self.live_registry),
             response_origin: self.live_calls_url.clone(),
             endpoint_query: request.query().map(str::to_owned),
@@ -392,6 +407,7 @@ impl CodexProvider {
 }
 
 struct ColdLiveCall {
+    parameters: RequestParameters,
     client: CodexBackendClient,
     registry: Arc<CodexLiveRegistry>,
     response_origin: Url,
@@ -435,7 +451,7 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
             authorization.expose_secret(),
             active_account.upstream_account_id(),
             &request_id,
-            Some(request.lease.installation_id()),
+            Some(&request.parameters.installation_id),
         );
         request_context.trace = Some(&trace);
         request_context.account_selection = CodexAccountSelectionTelemetry::new(

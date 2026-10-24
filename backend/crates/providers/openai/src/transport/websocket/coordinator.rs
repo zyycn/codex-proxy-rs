@@ -501,7 +501,7 @@ async fn connect_websocket_connection(
     Ok((
         PooledWebSocketConnection {
             websocket,
-            metadata: websocket_connection_metadata(&response),
+            metadata: websocket_connection_metadata(&response, connection),
             continuation: WebSocketContinuationState::default(),
             created_at: tokio::time::Instant::now(),
         },

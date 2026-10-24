@@ -104,6 +104,7 @@ impl RpcError {
                     Stage::WebSocket => "WebSocket 中间件：插件返回了无效响应",
                     Stage::Request => "请求中间件：插件返回了无效响应",
                     Stage::Attempt => "尝试中间件：插件返回了无效响应",
+                    Stage::Outbound => "出站准备中间件：插件返回了无效响应",
                     Stage::Upstream => "上游适配阶段：插件返回了无效响应",
                     Stage::Observation => "观察阶段：插件返回了无效响应",
                     Stage::Management | Stage::PublicManagement => "管理阶段：插件返回了无效响应",

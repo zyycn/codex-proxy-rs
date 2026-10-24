@@ -135,6 +135,15 @@ pub(crate) enum MiddlewareCompletionBody {
 }
 
 impl MiddlewareInvocation {
+    pub(crate) fn provider_parameters(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .original_request
+            .provider_parameters()
+            .cloned()
+    }
+
     pub(crate) fn settings(&self) -> Result<serde_json::Value, PluginFault> {
         let state = self
             .state
@@ -334,6 +343,12 @@ impl MiddlewareInvocation {
         request: MiddlewareNextRequest,
         payload: Vec<u8>,
     ) -> Result<MiddlewareRequest, PluginFault> {
+        if let Some(parameters) = request.provider_parameters {
+            if original.provider_parameters().is_none() {
+                return Err(invalid());
+            }
+            original = original.with_provider_parameters(parameters);
+        }
         if let Some(settings) = request.settings {
             let current = original.settings().ok_or_else(|| {
                 PluginFault::new(

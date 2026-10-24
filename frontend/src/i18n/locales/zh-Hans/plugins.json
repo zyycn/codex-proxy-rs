@@ -516,6 +516,7 @@
       "allServiceCalls": "所有服务调用",
       "requestToStart": "请求开始",
       "everyTry": "每次尝试",
+      "outboundPreparation": "出站请求准备",
       "upstreamCall": "上游调用",
       "accountScheduling": "账号调度",
       "retryDecision": "重试决策",

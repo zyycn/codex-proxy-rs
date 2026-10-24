@@ -250,7 +250,7 @@ fn source_manifest() -> &'static [u8] {
       "main":"bin/plugin",
       "runtime":"trustedProcess",
       "contributes":{
-        "middleware":{"version":5,"stages":["request"],"inputFormats":["openai"],"outputFormats":["openai"]},
+        "middleware":{"version":6,"stages":["request"],"inputFormats":["openai"],"outputFormats":["openai"]},
         "management":{"version":2}
       },
 

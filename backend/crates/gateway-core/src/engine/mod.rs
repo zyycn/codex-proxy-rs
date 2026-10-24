@@ -755,6 +755,7 @@ impl AttemptContext {
         provider: ProviderKind,
         model: Option<String>,
         account_id: ProviderAccountId,
+        parameters: Option<serde_json::Map<String, serde_json::Value>>,
         terminal: provider::ProviderMiddlewareTerminal,
     ) -> Result<provider::ProviderStream, ProviderError> {
         // 入口已校验原请求，此处复查中间件最终提交的 operation，每次重试均生效
@@ -762,7 +763,7 @@ impl AttemptContext {
             .account_scope()
             .is_some_and(|scope| !scope.allows_image_generation())
         {
-            Box::new(move |operation, headers| {
+            Box::new(move |operation, headers, parameters| {
                 Box::pin(async move {
                     image_generation::check_image_generation(false, &operation).map_err(|_| {
                         ProviderError::new(
@@ -771,18 +772,64 @@ impl AttemptContext {
                         )
                         .with_retry_prohibited()
                     })?;
-                    terminal(operation, headers).await
+                    terminal(operation, headers, parameters).await
                 })
             })
         } else {
             terminal
         };
-        let context = middleware::MiddlewareContext::new(
+        let context = self.middleware_context(
+            middleware::MiddlewareMount::Attempt,
+            Some(operation.kind()),
+            provider,
+            model,
+            account_id,
+        );
+        provider::execute_attempt_middleware(
+            self.request.middleware.as_ref(),
+            context,
+            operation,
+            self.request.client_transport,
+            parameters,
+            terminal,
+        )
+        .await
+    }
+
+    /// 为当前实际账号冻结出站准备链，无此阶段时保留 Provider 原生路径
+    #[must_use]
+    pub fn outbound_middleware(
+        &self,
+        provider: ProviderKind,
+        model: Option<String>,
+        account_id: ProviderAccountId,
+    ) -> Option<middleware::outbound::Pipeline> {
+        let plan = self.request.middleware.as_ref()?;
+        let context = self.middleware_context(
+            middleware::MiddlewareMount::Outbound,
+            None,
+            provider,
+            model,
+            account_id,
+        );
+        plan.has_outbound(&context)
+            .then(|| middleware::outbound::Pipeline::new(plan.clone(), context))
+    }
+
+    fn middleware_context(
+        &self,
+        mount: middleware::MiddlewareMount,
+        operation: Option<crate::operation::OperationKind>,
+        provider: ProviderKind,
+        model: Option<String>,
+        account_id: ProviderAccountId,
+    ) -> middleware::MiddlewareContext {
+        middleware::MiddlewareContext::new(
             middleware::MiddlewareTarget {
                 request_id: self.request.request_id.clone(),
-                mount: middleware::MiddlewareMount::Attempt,
+                mount,
                 attempt_index: Some(self.attempt_index),
-                operation: Some(operation.kind()),
+                operation,
                 endpoint: self.request.endpoint.clone(),
                 transport: self.request.client_transport,
                 provider: Some(provider),
@@ -798,15 +845,7 @@ impl AttemptContext {
                 execution_effects: self.request.execution_effects.as_ref().map(Arc::clone),
             },
         )
-        .with_request_body_limit(self.request.request_body_limit);
-        provider::execute_attempt_middleware(
-            self.request.middleware.as_ref(),
-            context,
-            operation,
-            self.request.client_transport,
-            terminal,
-        )
-        .await
+        .with_request_body_limit(self.request.request_body_limit)
     }
 
     #[must_use]

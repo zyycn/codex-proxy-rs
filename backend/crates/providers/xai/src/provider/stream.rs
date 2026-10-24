@@ -176,6 +176,9 @@ pub(super) fn cold_compaction_http_sse_stream(
                 body,
                 session.binding().clone(),
             ).with_trace(context.trace());
+            let inference_request = super::outbound::prepare_request(
+                inference_request, &context, &session, &upstream_model,
+            ).await?;
             if context.deadline().is_elapsed() {
                 Err(mark_transient_compaction_failure(provider_error(
                     ProviderErrorKind::Timeout,
@@ -482,6 +485,9 @@ pub(super) fn cold_http_sse_stream(
                 body,
                 session.binding().clone(),
             ).with_trace(context.trace());
+            let inference_request = super::outbound::prepare_request(
+                inference_request, &context, &session, &upstream_model,
+            ).await?;
             if context.deadline().is_elapsed() {
                 Err(provider_error(
                     ProviderErrorKind::Timeout,

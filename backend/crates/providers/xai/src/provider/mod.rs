@@ -72,6 +72,7 @@ use crate::{GrokCatalogCapabilityEvidence, GrokCatalogModel};
 
 mod continuation;
 mod failure;
+mod outbound;
 mod stream;
 mod upstream_adapter;
 mod workers;
@@ -295,7 +296,8 @@ impl GrokBuildProvider {
                 provider_kind,
                 Some(model),
                 account_id,
-                Box::new(move |operation, middleware_headers| {
+                None,
+                Box::new(move |operation, middleware_headers, _| {
                     Box::pin(async move {
                         if let Some(adapter) = adapter {
                             return provider.execute_upstream_adapter(

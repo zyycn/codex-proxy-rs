@@ -1,5 +1,6 @@
 //! 验证 xAI 原生执行的协议转换、账号选择与交付状态隔离
 
+mod outbound;
 mod replay_tool_names;
 mod scheduling;
 mod selection_retry;
@@ -511,7 +512,7 @@ async fn attempt_middleware_runs_once_before_native_encoding() {
                 .headers()
                 .iter()
                 .filter(|header| header.name() == "x-business-context")
-                .map(|header| header.value().expose())
+                .map(|header| std::str::from_utf8(header.value()).unwrap())
                 .collect::<Vec<_>>(),
             vec!["tenant-public", "trace-public"],
         );
@@ -542,7 +543,7 @@ async fn attempt_middleware_runs_once_before_native_encoding() {
         .headers()
         .iter()
         .filter(|header| header.name().eq_ignore_ascii_case("authorization"))
-        .map(|header| header.value().expose())
+        .map(|header| std::str::from_utf8(header.value()).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(values, ["Bearer plugin-value"]);
     assert!(!format!("{:?}", requests[0].headers()).contains("Bearer plugin-value"));
@@ -1296,7 +1297,7 @@ async fn provider_with_recovery(
 
 async fn provider_with_catalog_transport(
     selector: Arc<dyn GrokSessionSelector>,
-    transport: Arc<StubInferenceTransport>,
+    transport: Arc<dyn GrokInferenceTransport>,
     recovery: Arc<StubRecovery>,
     catalog_transport: Arc<dyn GrokModelCatalogTransport>,
 ) -> Arc<GrokBuildProvider> {
@@ -2468,7 +2469,7 @@ async fn compaction_should_pin_recorded_account_and_forward_session_headers() {
             .headers()
             .iter()
             .find(|header| header.name().eq_ignore_ascii_case(name))
-            .map(|header| header.value().expose())
+            .map(|header| std::str::from_utf8(header.value()).unwrap())
     };
     assert_eq!(header("x-grok-conv-id"), Some("cache-session"));
     assert_eq!(header("x-grok-session-id"), Some("cache-session"));
@@ -4380,12 +4381,14 @@ async fn configured_request_profile_reaches_inference_headers() {
     let requests = transport.requests.lock().unwrap();
     let headers = requests[0].headers();
     let header = |name| {
-        headers
-            .iter()
-            .find(|header| header.name() == name)
-            .unwrap()
-            .value()
-            .expose()
+        std::str::from_utf8(
+            headers
+                .iter()
+                .find(|header| header.name() == name)
+                .unwrap()
+                .value(),
+        )
+        .unwrap()
     };
     assert_eq!(header("x-grok-client-version"), "9.8.7");
     assert_eq!(header("x-grok-client-identifier"), "profile-contract");

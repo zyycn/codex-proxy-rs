@@ -14,6 +14,7 @@ mod keys;
 mod log;
 mod middleware;
 mod model;
+pub(crate) mod outbound;
 pub(crate) mod private_state;
 pub(crate) mod request_limits;
 mod resources;
@@ -197,6 +198,7 @@ impl PluginCallbacks {
             context.stage,
             gateway_plugin_sdk::Stage::Request
                 | gateway_plugin_sdk::Stage::Attempt
+                | gateway_plugin_sdk::Stage::Outbound
                 | gateway_plugin_sdk::Stage::Routing
                 | gateway_plugin_sdk::Stage::Scheduling
                 | gateway_plugin_sdk::Stage::Retry

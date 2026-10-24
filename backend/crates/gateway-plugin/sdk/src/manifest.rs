@@ -315,6 +315,7 @@ impl Manifest {
                                     | Stage::Service
                                     | Stage::Request
                                     | Stage::Attempt
+                                    | Stage::Outbound
                             )
                         })))
                 || (*capability != Capability::Middleware

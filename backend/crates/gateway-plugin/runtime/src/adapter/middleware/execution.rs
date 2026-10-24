@@ -51,6 +51,35 @@ impl PluginMiddlewarePlan {
 }
 
 impl MiddlewarePlan for PluginMiddlewarePlan {
+    fn has_outbound(&self, context: &MiddlewareContext) -> bool {
+        self.middleware
+            .get(&MiddlewareMount::Outbound)
+            .is_some_and(|entries| entries.iter().any(|entry| outbound_matches(entry, context)))
+    }
+
+    fn handle_outbound(
+        &self,
+        context: MiddlewareContext,
+        request: gateway_core::engine::middleware::outbound::Request,
+        next: gateway_core::engine::middleware::outbound::Next,
+    ) -> BoxFuture<
+        'static,
+        Result<gateway_core::engine::middleware::outbound::Request, MiddlewareError>,
+    > {
+        self.chain(
+            MiddlewareMount::Outbound,
+            context,
+            outbound_matches,
+            |entry, context, request, next, timeout| {
+                Box::pin(super::outbound::invoke(
+                    entry, context, request, next, timeout,
+                ))
+            },
+            next,
+        )
+        .run(request)
+    }
+
     fn has_service(&self) -> bool {
         self.middleware.contains_key(&MiddlewareMount::Service)
     }
@@ -153,4 +182,15 @@ impl MiddlewarePlan for PluginMiddlewarePlan {
         )
         .run(request)
     }
+}
+
+// 存在性检查与实际组合使用同一选择规则，未命中时不进入原生报文准备
+fn outbound_matches(entry: &MiddlewareEntry, context: &MiddlewareContext) -> bool {
+    !context.extension_scope().contains(&entry.instance_id)
+        && entry.scope.matches_processing(
+            context.client_key_id(),
+            context.account_group_ids(),
+            context.provider(),
+            context.model(),
+        )
 }

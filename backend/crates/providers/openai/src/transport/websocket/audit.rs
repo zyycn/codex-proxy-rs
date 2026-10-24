@@ -79,16 +79,9 @@ impl CodexWebSocketConnection {
 fn request_line_for_endpoint(endpoint: &str) -> String {
     let path = reqwest::Url::parse(endpoint)
         .ok()
-        .map(|url| {
-            let mut path = url.path().to_string();
-            if let Some(query) = url.query() {
-                path.push('?');
-                path.push_str(query);
-            }
-            path
-        })
+        .map(|url| url.path().to_owned())
         .filter(|path| !path.is_empty())
-        .unwrap_or_else(|| endpoint.to_string());
+        .unwrap_or_else(|| "<redacted>".to_owned());
     format!("GET {path} HTTP/1.1")
 }
 

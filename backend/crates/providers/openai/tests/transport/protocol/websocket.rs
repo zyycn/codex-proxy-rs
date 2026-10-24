@@ -133,8 +133,11 @@ fn required_websocket_audit_should_forbid_http_fallback() {
         .clone(),
     );
     let payload = websocket_payload_audit_snapshot(&request);
-    let artifact =
-        websocket_audit_artifact_from_attempt(&request, OpeningAuditSnapshot::default(), payload);
+    let artifact = websocket_audit_artifact_from_attempt(
+        &request,
+        OpeningAuditSnapshot::default(),
+        Some(payload),
+    );
 
     assert_eq!(artifact.transport_mode, "explicit_websocket_warmup");
     assert!(!artifact.fallback_allowed);
@@ -326,7 +329,7 @@ fn websocket_audit_artifact_should_record_opening_and_redacted_payload() {
     };
     let payload = websocket_payload_audit_snapshot(&request);
 
-    let artifact = websocket_audit_artifact_from_attempt(&request, opening.clone(), payload);
+    let artifact = websocket_audit_artifact_from_attempt(&request, opening.clone(), Some(payload));
 
     assert_eq!(artifact.opening, Some(opening));
     assert_eq!(

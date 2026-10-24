@@ -12,6 +12,22 @@ mod diagnostics;
 mod fingerprint;
 mod metadata;
 
+#[test]
+fn outbound_websocket_diagnostics_do_not_expose_target_credentials() {
+    let connection = CodexWebSocketConnection::new(
+        "wss://user:password@upstream.example/responses?access_token=secret",
+        vec![("authorization".into(), "Bearer credential".into())],
+    );
+    assert_eq!(
+        connection.opening_audit_snapshot().request_line,
+        "GET /responses HTTP/1.1"
+    );
+    let debug = format!("{connection:?}");
+    for value in ["password", "access_token", "secret", "credential"] {
+        assert!(!debug.contains(value));
+    }
+}
+
 fn rate_limit_event(used_percent: u64) -> String {
     json!({
         "type": "codex.rate_limits",

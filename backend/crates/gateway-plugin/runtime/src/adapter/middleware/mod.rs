@@ -2,6 +2,7 @@
 
 mod execution;
 mod http;
+mod outbound;
 mod request;
 mod service;
 mod websocket;
@@ -56,11 +57,16 @@ pub(crate) fn validate_bindings(
         }
         if !matches!(
             stage,
-            Stage::Http | Stage::WebSocket | Stage::Service | Stage::Request | Stage::Attempt
+            Stage::Http
+                | Stage::WebSocket
+                | Stage::Service
+                | Stage::Request
+                | Stage::Attempt
+                | Stage::Outbound
         ) || !stages.insert(stage)
         {
             return Err(AdminError::invalid(
-                "同一插件实例的中间件只能在 http/websocket/service/request/attempt 各绑定一次",
+                "同一插件实例的中间件只能在 http/websocket/service/request/attempt/outbound 各绑定一次",
             ));
         }
         if matches!(stage, Stage::Http | Stage::WebSocket | Stage::Service)
@@ -117,7 +123,7 @@ pub(crate) fn unavailable_entries(
         .filter(|binding| {
             matches!(
                 binding.stage.as_str(),
-                "http" | "websocket" | "service" | "request" | "attempt"
+                "http" | "websocket" | "service" | "request" | "attempt" | "outbound"
             )
         })
         .map(|binding| {
@@ -151,6 +157,7 @@ fn compile_entry(
             "websocket" => MiddlewareMount::WebSocket,
             "request" => MiddlewareMount::Request,
             "attempt" => MiddlewareMount::Attempt,
+            "outbound" => MiddlewareMount::Outbound,
             _ => return Err(AdminError::invalid("插件中间件阶段无效")),
         },
         invocation,

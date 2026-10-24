@@ -4,6 +4,72 @@ use super::*;
 use gateway_admin::ports::plugins::PluginPreparation;
 
 #[tokio::test]
+async fn provider_parameters_compose_through_sdk_without_merging_deleted_fields() {
+    let worker = std::fs::read(env!("CARGO_BIN_EXE_gateway-plugin-test-middleware")).unwrap();
+    let package = crate::support::package_with_contributions(
+        &worker,
+        Contributions::from([crate::support::contribution(
+            Capability::Middleware,
+            vec![Stage::Attempt],
+            vec!["openai".into()],
+            vec!["openai".into()],
+        )]),
+    );
+    let original = serde_json::json!({"installation_id":"account-default", "future":{"keep":true}});
+    let first = serde_json::json!({"installation_id":"plugin-first"});
+    let last = serde_json::json!({});
+    let instances = [
+        ("parameters-first", original.clone(), first.clone()),
+        ("parameters-last", first, serde_json::Value::Null),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (id, expected, parameters))| InstanceFixture {
+        id,
+        configuration: serde_json::json!({"mode":"parameters", "attempt":true,
+            "expected_parameters":expected, "parameters":parameters}),
+        bindings: vec![binding(
+            MIDDLEWARE_CONTRIBUTION,
+            "attempt",
+            index as i32,
+            PluginFailurePolicy::Reject,
+        )],
+    })
+    .collect();
+    let (cache, runtime) = setup_package(instances, package).await;
+    let generation = prepare(&runtime).await;
+    let plan = runtime
+        .execution_registry()
+        .middleware(&generation)
+        .unwrap();
+    let downstream = Downstream {
+        calls: Arc::default(),
+        closes: Arc::default(),
+        reads: Arc::default(),
+        error: false,
+    };
+    let response = plan
+        .handle(
+            attempt_middleware_context(Arc::default()),
+            budget_request().with_provider_parameters(original.as_object().unwrap().clone()),
+            gateway_core::middleware::compose(Vec::new(), move |request| {
+                assert_eq!(
+                    request.provider_parameters().unwrap(),
+                    last.as_object().unwrap()
+                );
+                downstream.into_next().run(request)
+            }),
+        )
+        .await
+        .unwrap();
+    let (_, _, _, body, _) = response.into_parts();
+    body.close().await;
+    drop(plan);
+    drop(generation);
+    super::super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
 async fn partial_update_preserves_inflight_middleware_and_uses_new_configuration_for_new_calls() {
     let (cache, store, runtime) = super::super::setup_with_contributions(Contributions::from([
         crate::support::contribution(Capability::Middleware, vec![Stage::Request], vec![], vec![]),

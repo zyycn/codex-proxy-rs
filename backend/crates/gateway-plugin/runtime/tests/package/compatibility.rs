@@ -63,7 +63,7 @@ async fn package_inspector_returns_static_requirements_without_starting_the_plug
         requirements.protocol_version,
         gateway_plugin_sdk::PROTOCOL_VERSION
     );
-    assert_eq!(requirements.capabilities, vec![("middleware".into(), 5)]);
+    assert_eq!(requirements.capabilities, vec![("middleware".into(), 6)]);
 }
 
 #[tokio::test]

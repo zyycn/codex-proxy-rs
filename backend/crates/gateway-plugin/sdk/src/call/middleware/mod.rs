@@ -1,6 +1,7 @@
 //! 统一请求/响应中间件的跨进程数据合同
 
 pub mod http;
+pub mod outbound;
 pub mod websocket;
 
 use serde::{Deserialize, Serialize};
@@ -69,6 +70,9 @@ pub struct MiddlewareRequestHead {
     /// 当前请求的完整有效执行设置；尚未建立可改写设置的边界使用 null
     #[serde(default)]
     pub settings: serde_json::Value,
+    /// 本次 Provider 构造参数；仅原生 attempt 提供
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_parameters: Option<serde_json::Map<String, serde_json::Value>>,
     pub request_id: String,
     pub client_key_id: String,
     pub account_group_ids: Vec<String>,
@@ -121,8 +125,19 @@ pub struct CapabilityDeclaration {
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareNextRequest {
     /// None 保留原设置；Some 是完整替换，字段删除必须符合对应设置类型
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_replacement"
+    )]
     pub settings: Option<serde_json::Value>,
+    /// 完整替换构造参数；空对象仍表示显式替换，不隐式合并或补回删除字段
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_replacement"
+    )]
+    pub provider_parameters: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol: Option<String>,
     #[serde(default)]
@@ -130,6 +145,15 @@ pub struct MiddlewareNextRequest {
     pub body: MiddlewareRequestBody,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<CapabilityDeclaration>,
+}
+
+fn deserialize_replacement<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    // 只有缺省表示保留；显式值按字段类型解码，不能被 Option 当作省略
+    T::deserialize(deserializer).map(Some)
 }
 
 /// 受父调用约束的不透明响应正文句柄

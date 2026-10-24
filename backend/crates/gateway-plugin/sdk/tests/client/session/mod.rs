@@ -308,7 +308,7 @@ fn middleware_contributions() -> Contributions {
         Capability::Middleware,
         ContributionDeclaration {
             id: "test.example.middleware".into(),
-            version: 5,
+            version: 6,
             stages: vec![Stage::Request],
             input_formats: vec!["openai".into()],
             output_formats: vec!["openai".into()],
@@ -391,6 +391,7 @@ fn middleware_context(id: u64) -> CallContext {
 
 pub(super) fn middleware_request() -> MiddlewareRequestHead {
     MiddlewareRequestHead {
+        provider_parameters: None,
         settings_sources: serde_json::Value::Null,
         settings: serde_json::Value::Null,
         client_key_id: "fixture-key".into(),

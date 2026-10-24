@@ -7,12 +7,24 @@ use crate::transport::protocol::responses::{
 };
 
 /// WebSocket opening 描述
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CodexWebSocketConnection {
     pub(crate) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(crate) outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub(super) endpoint: String,
     pub(super) headers: Vec<(String, String)>,
+    pub(super) permessage_deflate: bool,
+}
+
+impl fmt::Debug for CodexWebSocketConnection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CodexWebSocketConnection")
+            .field("endpoint", &"<redacted>")
+            .field("header_count", &self.headers.len())
+            .field("permessage_deflate", &self.permessage_deflate)
+            .finish_non_exhaustive()
+    }
 }
 
 // 请求预算和代理额度不是连接身份，额度调整不能改变已有连接的复用合同
@@ -20,6 +32,7 @@ impl PartialEq for CodexWebSocketConnection {
     fn eq(&self, other: &Self) -> bool {
         self.endpoint == other.endpoint
             && self.headers == other.headers
+            && self.permessage_deflate == other.permessage_deflate
             && self
                 .outbound_proxy
                 .as_ref()
@@ -110,6 +123,21 @@ impl fmt::Display for PreviousResponseUnavailableReason {
 }
 
 impl CodexWebSocketRequest {
+    pub(crate) fn take_payload_text(&mut self) -> String {
+        std::mem::take(&mut self.payload_text)
+    }
+
+    pub(crate) fn replace_outbound(
+        &mut self,
+        endpoint: String,
+        headers: Vec<(String, String)>,
+        payload: String,
+    ) {
+        self.connection.endpoint = endpoint;
+        self.connection.headers = headers;
+        self.payload_text = payload;
+    }
+
     /// 返回连接描述
     pub fn connection(&self) -> &CodexWebSocketConnection {
         &self.connection
@@ -132,6 +160,7 @@ impl CodexWebSocketConnection {
         Self {
             endpoint: endpoint.into(),
             headers,
+            permessage_deflate: true,
             outbound_proxy: None,
             connection_budget: None,
         }

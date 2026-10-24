@@ -2,6 +2,337 @@
 
 use super::*;
 
+#[derive(Debug)]
+struct ParametersMiddleware(Map<String, Value>);
+
+impl MiddlewarePlan for ParametersMiddleware {
+    fn handle(
+        &self,
+        context: MiddlewareContext,
+        request: MiddlewareRequest,
+        next: MiddlewareNext,
+    ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
+        assert_eq!(context.mount(), MiddlewareMount::Attempt);
+        assert!(request.provider_parameters().unwrap()["installation_id"].is_string());
+        next.run(request.with_provider_parameters(self.0.clone()))
+    }
+}
+
+#[tokio::test]
+async fn request_parameters_drive_native_identity_and_derivation_across_http_and_websocket() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let identities = [
+        "f77b9b8e-563a-4d84-a66f-f2a0c98d5a8e",
+        "f6e974b5-708d-4940-b619-1ab2c58c2f2c",
+    ];
+    let mut captures = Vec::new();
+    for identity in identities {
+        for websocket in [false, true] {
+            let (base_url, capture): (
+                String,
+                BoxFuture<'static, (reqwest::header::HeaderMap, Value)>,
+            ) = if websocket {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let task = tokio::spawn(async move {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let mut headers = None;
+                    let mut socket =
+                        crate::transport::accept_codex_test_websocket_with(socket, |request, _| {
+                            headers = Some(request.headers().clone())
+                        })
+                        .await;
+                    let frame = socket.next().await.unwrap().unwrap();
+                    let body = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                    socket.send(Message::Text(json!({"type":"response.completed", "response":{
+                            "id":"resp_parameters", "model":"gpt-5.4", "status":"completed", "output":[]
+                        }}).to_string().into())).await.unwrap();
+                    (headers.unwrap(), body)
+                });
+                (url, Box::pin(async { task.await.unwrap() }))
+            } else {
+                let server = MockServer::start().await;
+                Mock::given(method("POST"))
+                    .and(path("/codex/responses"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .insert_header("content-type", "text/event-stream")
+                            .set_body_string(CAPTURE_COMPLETED_SSE),
+                    )
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                (
+                    server.uri(),
+                    Box::pin(async move {
+                        let requests = server.received_requests().await.unwrap();
+                        (
+                            requests[0].headers.clone(),
+                            captured_request_body(&requests[0]),
+                        )
+                    }),
+                )
+            };
+            let payload = payload(websocket);
+            let mut request_context = payload.context().clone();
+            let mut turn_metadata = metadata();
+            turn_metadata["installation_id"] = json!("client-installation");
+            request_context.insert("turn_metadata".into(), json!(turn_metadata.to_string()));
+            let mut stream = provider_with_base_url(&store, base_url)
+                .execute(
+                    planned_request(
+                        "openai",
+                        Operation::Generate(GenerateRequest::from_protocol_payload(
+                            payload.with_context(request_context),
+                        )),
+                    ),
+                    context_with_middleware(
+                        "req_parameters",
+                        Arc::new(ParametersMiddleware(Map::from_iter([(
+                            "installation_id".into(),
+                            json!(identity),
+                        )]))),
+                        FastMode::Default,
+                    ),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                stream.metadata().provider_account_id().as_str(),
+                "acct_provider_contract"
+            );
+            while let Some(event) = stream.next().await {
+                event.unwrap();
+            }
+            let (headers, body) = capture.await;
+            assert_eq!(body["client_metadata"]["x-codex-installation-id"], identity);
+            let metadata: Value =
+                serde_json::from_str(headers["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
+            assert_eq!(metadata["installation_id"], identity);
+            assert_eq!(
+                headers["session-id"].to_str().unwrap(),
+                body["client_metadata"]["session_id"]
+            );
+            captures.push((
+                body["client_metadata"]["session_id"].clone(),
+                body["prompt_cache_key"].clone(),
+            ));
+        }
+    }
+    assert_eq!(captures[0], captures[1]);
+    assert_eq!(captures[2], captures[3]);
+    assert_ne!(captures[0].0, captures[2].0);
+    assert_ne!(captures[0].1, captures[2].1);
+}
+
+#[tokio::test]
+async fn request_parameters_partition_new_websocket_chains_without_preventing_reuse() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let identities = ["parameters-first", "parameters-second"];
+    let server = tokio::spawn(async move {
+        let mut retained = Vec::new();
+        for (index, identity) in identities.into_iter().enumerate() {
+            let (socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut socket =
+                crate::transport::accept_codex_test_websocket_with(socket, |request, _| {
+                    let metadata: Value = serde_json::from_str(
+                        request.headers()["x-codex-turn-metadata"].to_str().unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(metadata["installation_id"], identity);
+                })
+                .await;
+            for turn in 0..=index {
+                let text = tokio::time::timeout(Duration::from_secs(3), async {
+                    loop {
+                        match socket.next().await.unwrap().unwrap() {
+                            Message::Text(text) => break text,
+                            Message::Ping(payload) => {
+                                socket.send(Message::Pong(payload)).await.unwrap()
+                            }
+                            message => panic!("unexpected websocket frame: {message:?}"),
+                        }
+                    }
+                })
+                .await
+                .unwrap();
+                let body: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(body["client_metadata"]["x-codex-installation-id"], identity);
+                socket.send(Message::Text(json!({"type":"response.completed", "response":{
+                    "id":format!("resp_parameters_{index}_{turn}"), "model":"gpt-5.4", "status":"completed", "output":[]
+                }}).to_string().into())).await.unwrap();
+            }
+            // 保持旧连接可复用，证明新身份的隔离不是由测试服务端断开触发
+            retained.push(socket);
+        }
+    });
+    let provider = provider_with_base_url(&store, url);
+    for identity in [identities[0], identities[1], identities[1]] {
+        let payload = payload(true);
+        let mut request_context = payload.context().clone();
+        request_context.insert(
+            "turn_metadata".into(),
+            json!(json!({"installation_id":"client-installation"}).to_string()),
+        );
+        let mut stream = Arc::clone(&provider)
+            .execute(
+                planned_request(
+                    "openai",
+                    Operation::Generate(
+                        GenerateRequest::from_protocol_payload(
+                            payload.with_context(request_context),
+                        )
+                        .with_provider_session_state(
+                            ProviderSessionState::new(
+                                "openai",
+                                Map::from_iter([
+                                    ("account_id".into(), json!("acct_provider_contract")),
+                                    ("conversation_id".into(), json!("parameters-conversation")),
+                                    ("continuation_scope".into(), json!("persisted")),
+                                ]),
+                            )
+                            .unwrap(),
+                        ),
+                    ),
+                ),
+                context_with_middleware(
+                    "req_parameters_pool",
+                    Arc::new(ParametersMiddleware(Map::from_iter([(
+                        "installation_id".into(),
+                        json!(identity),
+                    )]))),
+                    FastMode::Default,
+                ),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(event) = stream.next().await {
+                event.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+    }
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn request_parameters_apply_to_images_and_search_without_reencoding_opaque_bodies() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[]})))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let provider = provider_with_base_url(&store, server.uri());
+    let body = Bytes::from_static(br#"{ "future":1, "future":2 }"#);
+    let raw = RawJsonPayload::new("openai", body.clone())
+        .unwrap()
+        .with_context(Map::from_iter([(
+            "turn_metadata".into(),
+            json!(json!({"installation_id":"client-installation"}).to_string()),
+        )]));
+    for operation in [
+        Operation::GenerateImage(ImageRequest::from_raw_json(
+            ImageRequestKind::Generation,
+            raw.clone(),
+        )),
+        Operation::GenerateImage(ImageRequest::from_raw_json(
+            ImageRequestKind::Edit,
+            raw.clone(),
+        )),
+        Operation::Search(StandaloneSearchRequest::from_raw_json(raw)),
+    ] {
+        let mut stream = Arc::clone(&provider)
+            .execute(
+                planned_provider_endpoint_request("openai", operation),
+                context_with_middleware(
+                    "req_parameters_json",
+                    Arc::new(ParametersMiddleware(Map::from_iter([(
+                        "installation_id".into(),
+                        json!("plugin-installation"),
+                    )]))),
+                    FastMode::Default,
+                ),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+    for request in server.received_requests().await.unwrap() {
+        assert_eq!(request.body.as_slice(), body.as_ref());
+        let metadata: Value =
+            serde_json::from_str(request.headers["x-codex-turn-metadata"].to_str().unwrap())
+                .unwrap();
+        assert_eq!(metadata["installation_id"], "plugin-installation");
+    }
+}
+
+#[tokio::test]
+async fn invalid_request_parameters_fail_without_account_identity_fallback_or_send() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    let provider = provider_with_base_url(&store, server.uri());
+    for parameters in [
+        json!({}),
+        json!({"installation_id":null}),
+        json!({"installation_id":42}),
+    ] {
+        let error = provider
+            .clone()
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                context_with_middleware(
+                    "req_invalid_parameters",
+                    Arc::new(ParametersMiddleware(
+                        parameters.as_object().unwrap().clone(),
+                    )),
+                    FastMode::Default,
+                ),
+            )
+            .await
+            .err()
+            .expect("invalid parameters must fail");
+        assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert!(error.retry_is_prohibited());
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut stream = provider
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_after_invalid_parameters", CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+}
+
 fn metadata() -> Value {
     json!({"session_id":"source-session", "thread_id":"source-thread", "turn_id":"source-turn",
         "parent_thread_id":"source-session", "forked_from_thread_id":"source-session",

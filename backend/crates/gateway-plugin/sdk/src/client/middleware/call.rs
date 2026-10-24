@@ -1,8 +1,8 @@
 //! 多边界插件只注册一次处理器，按类型选择当前调用视图
 use super::super::session::{CallReply, PluginCall};
 use super::{
-    HttpCall, HttpResponse, MiddlewareInput, MiddlewareOutput, MiddlewareResponse, RequestCall,
-    ServiceCall, ServiceResponse, WebSocketCall, WebSocketMessage,
+    HttpCall, HttpResponse, MiddlewareInput, MiddlewareOutput, MiddlewareResponse, OutboundCall,
+    OutboundRequest, RequestCall, ServiceCall, ServiceResponse, WebSocketCall, WebSocketMessage,
 };
 use crate::{CallContext, PluginFault, Stage};
 
@@ -11,12 +11,14 @@ pub enum MiddlewareCall {
     Http(Box<HttpCall>),
     WebSocket(Box<WebSocketCall>),
     Request(Box<RequestCall>),
+    Outbound(Box<OutboundCall>),
 }
 pub enum MiddlewareResult {
     Service(ServiceResponse),
     Http(HttpResponse),
     WebSocket(Option<WebSocketMessage>),
     Request(MiddlewareResponse),
+    Outbound(OutboundRequest),
 }
 impl MiddlewareCall {
     #[must_use]
@@ -26,11 +28,17 @@ impl MiddlewareCall {
             Self::Http(call) => &call.context,
             Self::WebSocket(call) => &call.context,
             Self::Request(call) => &call.context,
+            Self::Outbound(call) => &call.context,
         }
     }
     /// 原样进入下游，供当前处理器不感兴趣的调用复用
     pub async fn forward(self) -> Result<MiddlewareResult, PluginFault> {
         match self {
+            Self::Outbound(call) => call
+                .next
+                .run(call.request)
+                .await
+                .map(MiddlewareResult::Outbound),
             Self::Service(call) => call.forward().await.map(MiddlewareResult::Service),
             Self::Http(call) => call
                 .next
@@ -57,9 +65,13 @@ impl MiddlewareInput for MiddlewareCall {
             || HttpCall::accepts(stage)
             || WebSocketCall::accepts(stage)
             || RequestCall::accepts(stage)
+            || OutboundCall::accepts(stage)
     }
     fn decode(call: PluginCall) -> Result<Self, PluginFault> {
         match call.context.stage {
+            Stage::Outbound => {
+                OutboundCall::decode(call).map(|call| Self::Outbound(Box::new(call)))
+            }
             Stage::Service => ServiceCall::decode(call).map(Box::new).map(Self::Service),
             Stage::Http => HttpCall::decode(call).map(Box::new).map(Self::Http),
             Stage::WebSocket => WebSocketCall::decode(call)
@@ -76,6 +88,7 @@ impl MiddlewareOutput for MiddlewareResult {
             Self::Http(response) => response.encode(),
             Self::WebSocket(response) => response.encode(),
             Self::Request(response) => response.encode(),
+            Self::Outbound(request) => request.encode(),
         }
     }
 }
@@ -98,5 +111,11 @@ impl From<MiddlewareResponse> for MiddlewareResult {
 impl From<ServiceResponse> for MiddlewareResult {
     fn from(response: ServiceResponse) -> Self {
         Self::Service(response)
+    }
+}
+
+impl From<OutboundRequest> for MiddlewareResult {
+    fn from(request: OutboundRequest) -> Self {
+        Self::Outbound(request)
     }
 }

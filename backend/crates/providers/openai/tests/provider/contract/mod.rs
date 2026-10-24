@@ -8,6 +8,8 @@ mod error_details;
 mod image_account_eligibility;
 mod image_model_access;
 mod model_account_eligibility;
+mod outbound;
+pub(super) use outbound::outbound_context;
 mod passthrough;
 mod precommit;
 mod privacy;
@@ -1552,12 +1554,17 @@ impl MiddlewarePlan for TranslationMiddleware {
         assert_eq!(context.mount(), MiddlewareMount::Attempt);
         assert!(context.account_id().is_some());
         *self.translations.lock().unwrap() += 1;
-        let (_, headers, _) = request.into_parts();
-        next.run(MiddlewareRequest::new(
-            "openai",
-            headers,
-            Bytes::from(serde_json::to_vec(&self.target).unwrap()),
-        ))
+        let headers = request.headers().to_vec();
+        next.run(
+            request
+                .replace_parts(
+                    "openai".into(),
+                    headers,
+                    Bytes::from(serde_json::to_vec(&self.target).unwrap()),
+                    None,
+                )
+                .unwrap(),
+        )
     }
 }
 
@@ -1591,16 +1598,21 @@ impl MiddlewarePlan for RecordingMiddleware {
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         assert_eq!(context.mount(), MiddlewareMount::Attempt);
         assert_eq!(request.protocol(), "openai");
-        let (protocol, mut headers, bytes) = request.into_parts();
+        let (protocol, mut headers, bytes) = request.clone().into_parts();
         let mut body: Map<String, Value> = serde_json::from_slice(&bytes).unwrap();
         self.observed.lock().unwrap().push(body.clone());
         body.insert(self.replacement.0.clone(), self.replacement.1.clone());
         headers.extend(self.request_headers.clone());
-        next.run(MiddlewareRequest::new(
-            protocol,
-            headers,
-            Bytes::from(serde_json::to_vec(&body).unwrap()),
-        ))
+        next.run(
+            request
+                .replace_parts(
+                    protocol,
+                    headers,
+                    Bytes::from(serde_json::to_vec(&body).unwrap()),
+                    None,
+                )
+                .unwrap(),
+        )
     }
 }
 

@@ -34,6 +34,56 @@ const MODEL: &str = "gpt-live-1-codex";
 const ACCOUNT: &str = "acct_provider_contract";
 const CALL: &str = "call_live_regression";
 
+#[tokio::test]
+async fn outbound_live_create_sends_final_body_headers_method_and_target() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, ACCOUNT).await;
+    let original = MockServer::start().await;
+    let target = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/plugin-live"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("location", format!("/v1/live/{CALL}"))
+                .insert_header("content-type", "application/sdp")
+                .set_body_string("v=0\r\n"),
+        )
+        .expect(1)
+        .mount(&target)
+        .await;
+    let uri = format!("{}/plugin-live", target.uri());
+    let mut stream = provider_with_base_url(&store, original.uri())
+        .execute(
+            live_request(),
+            super::contract::outbound_context("req_outbound_live", move |request| {
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&request.body).unwrap()["sdp"],
+                    "v=0"
+                );
+                assert!(!request.header_map().unwrap().contains_key("accept"));
+                request.target = gateway_core::engine::middleware::outbound::Target::Http {
+                    method: reqwest::Method::PUT,
+                    uri: uri.parse().unwrap(),
+                };
+                request
+                    .headers
+                    .retain(|header| !matches!(header.name(), "user-agent" | "accept"));
+                request.body = Bytes::from_static(b"\xffopaque live request");
+                Ok(())
+            }),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+    assert!(original.received_requests().await.unwrap().is_empty());
+    let requests = target.received_requests().await.unwrap();
+    assert_eq!(requests[0].body, b"\xffopaque live request");
+    assert!(!requests[0].headers.contains_key("user-agent"));
+    assert_eq!(requests[0].headers["accept"], "*/*");
+}
+
 fn scope(model_access: AccountModelAccess) -> Arc<FrozenAccountScope> {
     Arc::new(FrozenAccountScope::new(
         Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
@@ -150,6 +200,73 @@ async fn bootstrap() -> (Arc<dyn Provider>, Arc<MemoryAccountStore>, MockServer)
 async fn live_bootstrap_preserves_model_through_middleware_and_metadata() {
     let (_provider, _store, upstream) = bootstrap().await;
     upstream.verify().await;
+}
+
+#[derive(Debug)]
+struct ParametersMiddleware;
+
+impl MiddlewarePlan for ParametersMiddleware {
+    fn handle(
+        &self,
+        _context: MiddlewareContext,
+        request: MiddlewareRequest,
+        next: MiddlewareNext,
+    ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
+        assert!(request.provider_parameters().unwrap()["installation_id"].is_string());
+        next.run(
+            request.with_provider_parameters(serde_json::Map::from_iter([(
+                "installation_id".into(),
+                json!("live-plugin-installation"),
+            )])),
+        )
+    }
+}
+
+#[tokio::test]
+async fn live_create_uses_request_parameters_without_changing_call_ownership() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, ACCOUNT).await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/realtime/calls"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("location", format!("/v1/live/{CALL}"))
+                .insert_header("content-type", "application/sdp")
+                .set_body_string("v=0\r\n"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = crate::admin::initialized_test_provider(store, server.uri()).await;
+    let request =
+        live_request_with_headers(vec![gateway_core::operation::ProviderHttpHeader::new(
+            "x-codex-turn-metadata",
+            Bytes::from(json!({"installation_id":"client-installation"}).to_string()),
+        )]);
+    let mut stream = provider
+        .execute(
+            request,
+            context_with_middleware(
+                "req_live_parameters",
+                Arc::new(ParametersMiddleware),
+                FastMode::Default,
+            ),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+    assert_eq!(stream.metadata().provider_account_id().as_str(), ACCOUNT);
+    let requests = server.received_requests().await.unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(
+        requests[0].headers["x-codex-turn-metadata"]
+            .to_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(metadata["installation_id"], "live-plugin-installation");
 }
 
 #[tokio::test]

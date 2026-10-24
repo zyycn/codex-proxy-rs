@@ -471,6 +471,7 @@ pub type ProviderMiddlewareTerminal = Box<
     dyn FnOnce(
             Operation,
             Vec<MiddlewareHeader>,
+            Option<serde_json::Map<String, serde_json::Value>>,
         ) -> BoxFuture<'static, Result<ProviderStream, ProviderError>>
         + Send
         + 'static,
@@ -489,18 +490,19 @@ fn provider_middleware_next(
     activate: oneshot::Receiver<()>,
     observation: Arc<Mutex<MiddlewareSendObservation>>,
 ) -> MiddlewareNext {
-    crate::middleware::compose(Vec::new(), move |request| {
+    crate::middleware::compose(Vec::new(), move |mut request| {
         Box::pin(async move {
             let fallback_protocol = operation.protocol().to_owned();
             if request.has_capability_declaration() {
                 return Err(MiddlewareError::InvalidState);
             }
+            let parameters = request.take_provider_parameters();
             let (protocol, headers, body) = request.into_parts();
             validate_attempt_headers(&headers)?;
             let operation = operation
                 .replace_middleware_wire(protocol, body)
                 .map_err(|_| MiddlewareError::InvalidState)?;
-            let stream = terminal(operation, headers)
+            let stream = terminal(operation, headers, parameters)
                 .await
                 .map_err(MiddlewareError::Provider)?;
             let metadata = stream.metadata().clone();
@@ -734,18 +736,22 @@ pub async fn execute_attempt_middleware(
     context: MiddlewareContext,
     operation: Operation,
     transport: ClientTransport,
+    parameters: Option<serde_json::Map<String, serde_json::Value>>,
     terminal: ProviderMiddlewareTerminal,
 ) -> Result<ProviderStream, ProviderError> {
     let Some(plan) = plan else {
-        return terminal(operation, Vec::new()).await;
+        return terminal(operation, Vec::new(), parameters).await;
     };
-    let request = MiddlewareRequest::new(
+    let mut request = MiddlewareRequest::new(
         operation.protocol(),
         Vec::<MiddlewareHeader>::new(),
         operation
             .middleware_body()
             .map_err(|_| middleware_protocol_error(UpstreamSendState::NotSent))?,
     );
+    if let Some(parameters) = parameters {
+        request = request.with_provider_parameters(parameters);
+    }
     let (prepared, metadata) = oneshot::channel();
     let (activate, activation) = oneshot::channel();
     let observation = Arc::new(Mutex::new(MiddlewareSendObservation {
@@ -893,7 +899,10 @@ fn unprepared_middleware_response(
     }
 }
 
-fn middleware_error(error: MiddlewareError, send_state: UpstreamSendState) -> ProviderError {
+pub(super) fn middleware_error(
+    error: MiddlewareError,
+    send_state: UpstreamSendState,
+) -> ProviderError {
     match error {
         MiddlewareError::Provider(error) => error,
         MiddlewareError::Rejected | MiddlewareError::Remote { rejected: true, .. } => {

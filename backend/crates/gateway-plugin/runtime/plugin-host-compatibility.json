@@ -8,7 +8,7 @@
     { "capability": "model_router", "versions": [2] },
     { "capability": "model_catalog", "versions": [1] },
     { "capability": "retry_policy", "versions": [2] },
-    { "capability": "middleware", "versions": [5] },
+    { "capability": "middleware", "versions": [6] },
     { "capability": "upstream_adapter", "versions": [5] },
     { "capability": "observer", "versions": [2] },
     { "capability": "command_line", "versions": [1] },

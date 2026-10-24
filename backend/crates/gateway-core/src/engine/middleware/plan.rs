@@ -9,6 +9,18 @@ use std::{fmt, sync::Arc};
 
 /// 一个发布代次冻结的统一数据面中间件计划
 pub trait MiddlewarePlan: Send + Sync + fmt::Debug {
+    fn has_outbound(&self, _context: &MiddlewareContext) -> bool {
+        false
+    }
+    fn handle_outbound(
+        &self,
+        _context: MiddlewareContext,
+        request: super::outbound::Request,
+        next: super::outbound::Next,
+    ) -> BoxFuture<'static, Result<super::outbound::Request, MiddlewareError>> {
+        next.run(request)
+    }
+
     fn has_service(&self) -> bool {
         false
     }
@@ -73,6 +85,20 @@ pub struct FrozenMiddlewarePlan {
 }
 
 impl FrozenMiddlewarePlan {
+    #[must_use]
+    pub fn has_outbound(&self, context: &MiddlewareContext) -> bool {
+        self.plan.has_outbound(context)
+    }
+    pub fn handle_outbound(
+        &self,
+        mut context: MiddlewareContext,
+        request: super::outbound::Request,
+        next: super::outbound::Next,
+    ) -> BoxFuture<'static, Result<super::outbound::Request, MiddlewareError>> {
+        context.plan = Some(self.clone());
+        self.plan.handle_outbound(context, request, next)
+    }
+
     #[must_use]
     pub fn has_service(&self) -> bool {
         self.plan.has_service()

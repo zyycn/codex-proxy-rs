@@ -53,7 +53,7 @@ RPC v5 的帧布局、编码与会话生命周期见[通信边界](../README.md#
 
 | 能力 | 当前版本 |
 | --- | --- |
-| `middleware` | `5` |
+| `middleware` | `6` |
 | `scheduler` | `3` |
 | `upstream_adapter` | `5` |
 | `frontend_authentication`、`model_router`、`retry_policy`、`observer`、`management` | `2` |
@@ -67,7 +67,7 @@ RPC v5 的帧布局、编码与会话生命周期见[通信边界](../README.md#
     "management": { "version": 2 },
     "command_line": {},
     "middleware": {
-      "version": 5,
+      "version": 6,
       "stages": ["request"],
       "inputFormats": ["openai"],
       "outputFormats": ["openai"]
@@ -90,7 +90,7 @@ capability 固定并由工具生成：
 
 `observer` 使用一个处理器接收完成与上游 WebSocket 事件，实例绑定按 `event` 选择订阅类型；具体合同见[观察事件](capabilities.md#路由调度与观察)
 
-`middleware` 必须从 `http`、`websocket`、`service`、`request`、`attempt` 中显式选择挂载；同一处理器可覆盖多个边界，协议格式等真实业务选择也不能省略。
+`middleware` 必须从 `http`、`websocket`、`service`、`request`、`attempt`、`outbound` 中显式选择挂载；同一处理器可覆盖多个边界，协议格式等真实业务选择也不能省略。
 安装清单若携带不同的固定阶段会被拒绝，而不是在加载时静默改写
 
 ## 完整信任

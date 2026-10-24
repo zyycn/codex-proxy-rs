@@ -1,6 +1,7 @@
 //! 请求中间件的改写、交付状态与发布代次持有测试
 
 mod cold;
+mod outbound;
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -339,7 +340,7 @@ fn attempt_middleware_consumes_owned_next_once_and_preserves_host_envelopes() {
 
         let terminal: ProviderMiddlewareTerminal = {
             let terminal_calls = Arc::clone(&terminal_calls);
-            Box::new(move |operation, headers| {
+            Box::new(move |operation, headers, _| {
                 terminal_calls.fetch_add(1, Ordering::SeqCst);
                 Box::pin(async move {
                     assert!(headers.is_empty());
@@ -391,6 +392,7 @@ fn attempt_middleware_consumes_owned_next_once_and_preserves_host_envelopes() {
             context(),
             operation(),
             ClientTransport::HttpJson,
+            None,
             terminal,
         )
         .await
@@ -485,7 +487,7 @@ fn attempt_passthrough_preserves_parsed_wire_for_every_client_transport() {
                 payload.clone(),
             )
             .unwrap();
-            let terminal: ProviderMiddlewareTerminal = Box::new(move |_, _| {
+            let terminal: ProviderMiddlewareTerminal = Box::new(move |_, _, _| {
                 Box::pin(async move {
                     Ok(ProviderStream::new(
                         empty_provider_stream().metadata().clone(),
@@ -499,6 +501,7 @@ fn attempt_passthrough_preserves_parsed_wire_for_every_client_transport() {
                 context(),
                 operation(),
                 transport,
+                None,
                 terminal,
             )
             .await
@@ -566,7 +569,7 @@ fn attempt_sse_encoding_keeps_opaque_metadata_from_creating_extra_frames() {
                 Some(10),
             )
             .unwrap();
-            let terminal: ProviderMiddlewareTerminal = Box::new(move |_, _| {
+            let terminal: ProviderMiddlewareTerminal = Box::new(move |_, _, _| {
                 Box::pin(async move {
                     Ok(ProviderStream::new(
                         empty_provider_stream().metadata().clone(),
@@ -581,6 +584,7 @@ fn attempt_sse_encoding_keeps_opaque_metadata_from_creating_extra_frames() {
                 context(),
                 operation(),
                 ClientTransport::HttpSse,
+                None,
                 terminal,
             )
             .await
@@ -595,7 +599,7 @@ fn attempt_middleware_preserves_multi_value_and_authentication_headers() {
         let allowed_calls = Arc::new(AtomicUsize::new(0));
         let allowed_terminal: ProviderMiddlewareTerminal = {
             let allowed_calls = Arc::clone(&allowed_calls);
-            Box::new(move |_operation, headers| {
+            Box::new(move |_operation, headers, _| {
                 allowed_calls.fetch_add(1, Ordering::SeqCst);
                 Box::pin(async move {
                     assert_eq!(headers.len(), 2);
@@ -623,6 +627,7 @@ fn attempt_middleware_preserves_multi_value_and_authentication_headers() {
             context(),
             operation(),
             ClientTransport::HttpJson,
+            None,
             allowed_terminal,
         )
         .await
@@ -632,7 +637,7 @@ fn attempt_middleware_preserves_multi_value_and_authentication_headers() {
         let calls = Arc::new(AtomicUsize::new(0));
         let terminal: ProviderMiddlewareTerminal = {
             let calls = calls.clone();
-            Box::new(move |_, headers| {
+            Box::new(move |_, headers, _| {
                 calls.fetch_add(1, Ordering::SeqCst);
                 Box::pin(async move {
                     assert_eq!(headers[0].name(), "authorization");
@@ -656,6 +661,7 @@ fn attempt_middleware_preserves_multi_value_and_authentication_headers() {
             context(),
             operation(),
             ClientTransport::HttpJson,
+            None,
             terminal,
         )
         .await
@@ -735,7 +741,8 @@ fn attempt_middleware_cannot_add_image_generation_to_a_denied_scope() {
             ProviderKind::new("openai").unwrap(),
             Some("gpt-test".into()),
             ProviderAccountId::new("acct_middleware").unwrap(),
-            Box::new(move |operation, _| {
+            None,
+            Box::new(move |operation, _, _| {
                 Box::pin(async move {
                     assert!(operation.image_generation_requested());
                     count.fetch_add(1, Ordering::SeqCst);

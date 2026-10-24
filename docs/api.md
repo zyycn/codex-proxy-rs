@@ -308,14 +308,16 @@ Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和
 出站移除下游的 `traceparent`、`tracestate` 及 WS metadata 中对应的
 `ws_request_header_traceparent`、`ws_request_header_tracestate`
 
-会话、线程、窗口及父子线程引用在出站时按账号安装身份稳定映射为 UUID；
-同账号保留引用关系，换账号使用不同标识。HTTP 请求头、正文 metadata、WS 副本及
+会话、线程、窗口及父子线程引用在出站时按本次安装身份稳定映射为 UUID；
+默认使用账号安装身份，同账号保留引用关系，换账号使用不同标识。HTTP 请求头、正文 metadata、WS 副本及
 已识别的 Desktop 自动 Git 上下文使用一致映射。
 轮次及父子轮次引用保留客户端原值，包括输入项的 `internal_chat_message_metadata_passthrough.turn_id`、
 请求 metadata 中的 `turn_id`、`parent_turn_id`、`root_turn_id`，以及 `x-client-turn-id`、
 Images 的 `x-codex-image-turn-id` 和 Desktop 自动 Git 上下文的 `clientUserMessageId`。
-输入项元数据保持不变。Search 的会话 `id` 按同一账号域映射，只替换该值的原始字节，其余正文保持不变。
-`prompt_cache_key` 同样按账号映射，保留同账号内的缓存共享关系；未提供时不补造。
+输入项元数据保持不变。Search 的会话 `id` 按同一安装身份域映射，只替换该值的原始字节，其余正文保持不变。
+`prompt_cache_key` 同样按安装身份映射，保留同一身份内的缓存共享关系；未提供时不补造。
+受信任插件可通过 attempt 构造参数选择本次安装身份；参数只影响出站构造，不改变实际选号与计费归属，
+详见 [SDK 请求构造参数](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)。
 续接 response ID、历史 item/call ID、业务正文和未知扩展不参与映射，
 该处理减少显式追踪标识的跨账号复用，不保证会话内容或业务 metadata 无法关联
 
@@ -473,7 +475,7 @@ Images 排除已知为 Free 套餐的 OAuth 账号；套餐缺失或未知时不
 
 `/v1/alpha/search` 使用相同的 OpenAI Provider 原生端点边界：模型不映射，正文除会话 `id` 的账号归一及显式请求策略外原样转发，
 Provider 旁路读取请求中的 `model`，按[账号模型限制](#账号模型限制)选号。
-`x-codex-turn-metadata` 在移除客户端账号身份并按当前 lease 重写 installation ID 后转发；上游账号
+`x-codex-turn-metadata` 在移除客户端账号身份并按本次构造参数重写 installation ID 后转发；上游账号
 Authorization、Cookie、account ID、originator 和 User-Agent 均由代理安全重建。
 Images 与 Search 保留通过现有过滤规则的普通业务请求头及多值字节；Responses 原连接的 turn state
 不随独立端点转发，turn metadata 仍由所属端点按当前账号处理。
@@ -612,7 +614,7 @@ OpenAI 选号阶段确认本次可选账号全部额度耗尽时，HTTP 返回 `
 引导、sideband 与 hangup 的业务扩展头默认透传；认证、账号身份、下游环境与传输头遵守
 [请求头与身份](#请求头与身份)边界。`X-Session-Id`、`Voice-Session-Id` 是 Live 业务会话标识，原样透传。
 `Session-Id`、`Thread-Id` 等已识别追踪标识按选中账号的安装身份稳定映射，同账号各阶段保持一致，
-换账号使用不同标识；客户端 trace 被剥离。
+换账号使用不同标识；客户端 trace 被剥离。创建请求可由 attempt 插件改写本次构造身份，后续 sideband / hangup 仍使用钉住账号的身份。
 Live 不继承 Responses 的路由提示与续接状态；turn metadata 中的原账号绑定信息清理后保留其他字段。
 真实 call ID 保留用于钉住账号访问通话。HTTP 业务头保留原始多值字节，sideband 握手沿用 WebSocket 可编码的头值
 
@@ -2527,9 +2529,13 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 `model_catalog`、`management`、`command_line` 和 `maintenance` 按清单声明注册，不接受 binding；
 `frontend_authentication` 必须由管理员显式配置身份映射，也不自动创建
 
-`middleware` v5 可绑定 `http`、`websocket`、`service`、`request` 和 `attempt`，按声明的挂载阶段分别配置。
+`middleware` v6 可绑定 `http`、`websocket`、`service`、`request`、`attempt` 和 `outbound`，按声明的挂载阶段分别配置。
 `http`、`websocket` 和 `service` 不使用 Key、分组、Provider 或模型范围，这些数组必须为空；插件在处理器内匹配路径、消息或服务操作。
-`request` 与 `routing` 支持 Key、分组和公开模型范围，Provider 范围必须为空；`attempt`、`upstream`、`scheduling`、`retry` 与 `observation` 可使用 Provider 范围
+`request` 与 `routing` 支持 Key、分组和公开模型范围，Provider 范围必须为空；`attempt`、`outbound`、`upstream`、`scheduling`、`retry` 与 `observation` 可使用 Provider 范围
+
+`outbound` 准备原生 Provider 交给 transport 的请求，覆盖 OpenAI Responses HTTP / WS、Images、Search、Live 创建及 xAI 生成与压缩。
+它使用最终上游模型匹配范围，下一层返回准备后的请求，不执行发送；字节、headers、HTTP 方法和目标的合同见 [SDK 出站请求准备](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#上游出站准备)。
+该阶段不包括 OAuth、额度刷新等后台请求，也不包括由 `upstream_adapter` 自行执行的发送
 
 `observer` 固定使用 `observation/observe`，必填 `event` 为 `request_completed` 或 `websocket_response`。
 每种事件最多一条绑定，可分别设置请求范围；同一实例两类事件的 `order` 必须相同。其他能力不接受非空 `event`。
