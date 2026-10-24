@@ -3,7 +3,6 @@
 //! 数据库密码只通过 `PGPASSWORD` 环境变量传给子进程，绝不进入命令行参数或日志
 //! 导出以有界内存流式写入暂存文件并计算 SHA-256；取消时终止子进程并清理部分文件
 
-use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -59,11 +58,14 @@ impl DatabaseDumpPort for PgDumpAdapter {
             return Err(cancelled());
         }
         // 创建和最终改名不跨取消点，避免后台文件操作在清理之后重新留下文件
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let file = options
             .open(&partial)
             .map_err(|_| pg_dump_failed("无法创建暂存文件"))?;
         let _partial_cleanup = PartialArchive(partial.clone());
