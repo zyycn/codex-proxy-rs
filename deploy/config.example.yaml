@@ -78,8 +78,10 @@ api:
   request_id_header: 'x-request-id'
 
 openai:
-  # 数据驻留约束；省略或 null 不指定地域约束，与管理端客户端身份无关。
+  # 数据驻留参考值：us；填写值原样发送，省略或 null 时删除对应请求头
   residency: us
+  # 账号路由参考值：us、us_cr；填写值原样发送，省略或 null 时删除对应请求头
+  account_routing_override: us
 
 # Compose 启动桥接区；密码仍只维护在 store 中。
 services:

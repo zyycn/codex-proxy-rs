@@ -604,14 +604,14 @@ async fn verify_live_call_identity() {
     };
     use gateway_core::live::LiveHangupRequest;
     use provider_openai::credential::{CodexCredentialAdmin, ImportCodexOAuthCredential};
-    use provider_openai::transport::profile::{CodexResidency, CodexWireProfile};
+    use provider_openai::transport::profile::CodexWireProfile;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
     let profile = CodexWireProfile {
         originator: "codex_cli_rs".to_owned(),
         exact_user_agent: Some("codex_cli_rs/0.160.0 (Linux; x86_64) live-test".to_owned()),
         codex_version: "0.160.0".to_owned(),
-        residency: Some(CodexResidency::Us),
+        residency: Some("us".to_owned()),
         ..CodexWireProfile::default()
     };
     let opaque_profile = |profile: &CodexWireProfile| {

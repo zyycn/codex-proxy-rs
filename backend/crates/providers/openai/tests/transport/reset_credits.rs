@@ -32,6 +32,7 @@ fn client(base_url: &str) -> CodexBackendClient {
             terminal: "xterm-256color".to_owned(),
             exact_user_agent: None,
             residency: None,
+            account_routing_override: None,
             verified_at: Utc
                 .with_ymd_and_hms(2026, 8, 20, 0, 0, 0)
                 .single()

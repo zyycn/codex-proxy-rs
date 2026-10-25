@@ -2152,8 +2152,24 @@ async fn guardian_header_should_open_a_distinct_websocket() {
 
 #[tokio::test]
 async fn residency_profile_should_open_a_distinct_websocket() {
-    assert_changed_handshake_opens_distinct_websocket("x-openai-internal-codex-residency", "us")
+    for value in ["us", ""] {
+        assert_changed_handshake_opens_distinct_websocket(
+            "x-openai-internal-codex-residency",
+            value,
+        )
         .await;
+    }
+}
+
+#[tokio::test]
+async fn account_routing_profile_should_open_a_distinct_websocket() {
+    for value in ["us_cr", ""] {
+        assert_changed_handshake_opens_distinct_websocket(
+            "x-openai-account-routing-override",
+            value,
+        )
+        .await;
+    }
 }
 
 async fn assert_changed_handshake_opens_distinct_websocket(
@@ -2227,9 +2243,15 @@ async fn assert_changed_handshake_opens_distinct_websocket(
         )
         .await
         .unwrap();
-    let backend = if header == "x-openai-internal-codex-residency" {
+    let backend = if header != "x-codex-guardian" {
         let mut profile = test_wire_profile().snapshot();
-        profile.residency = Some(provider_openai::transport::profile::CodexResidency::Us);
+        match header {
+            "x-openai-internal-codex-residency" => profile.residency = Some(value.to_owned()),
+            "x-openai-account-routing-override" => {
+                profile.account_routing_override = Some(value.to_owned())
+            }
+            _ => unreachable!("unknown profile header"),
+        }
         backend.with_request_profile(profile)
     } else {
         backend

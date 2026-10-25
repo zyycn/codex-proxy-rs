@@ -7,7 +7,6 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::credential::CodexQuotaRefreshPolicy;
-use crate::transport::profile::CodexResidency;
 use crate::transport::session::{CodexSessionIdentity, CodexSessionIdentityError};
 use crate::transport::websocket::CodexWebSocketPoolConfig;
 use crate::{
@@ -42,7 +41,9 @@ pub struct OpenAiConfig {
     #[serde(default = "default_stream_max_retries")]
     pub stream_max_retries: u64,
     #[serde(default)]
-    pub residency: Option<CodexResidency>,
+    pub residency: Option<String>,
+    #[serde(default)]
+    pub account_routing_override: Option<String>,
     #[serde(skip)]
     identity_secret_path: PathBuf,
 }
@@ -124,6 +125,7 @@ impl Default for OpenAiConfig {
             auth: CodexAuthSettings::default(),
             stream_max_retries: DEFAULT_STREAM_MAX_RETRIES,
             residency: None,
+            account_routing_override: None,
             identity_secret_path: PathBuf::new(),
         }
     }

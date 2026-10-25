@@ -40,13 +40,6 @@ const MAX_APPCAST_BYTES: usize = 1024 * 1024;
 const ARTIFACT_PROFILE_CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const ARTIFACT_PROFILE_SCHEMA_VERSION: u64 = 1;
 
-/// 与官方 managed residency requirement 相同的可选请求约束
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum CodexResidency {
-    Us,
-}
-
 /// 保留已有配置类型入口；位置规则由出口领域统一维护
 pub use gateway_core::account::RequestLocation as CodexRequestLocation;
 
@@ -77,7 +70,9 @@ pub struct CodexWireProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exact_user_agent: Option<String>,
     /// 未配置时不发送 residency 头；不随制品版本更新而改变
-    pub residency: Option<CodexResidency>,
+    pub residency: Option<String>,
+    /// 部署指定的账号路由头；未配置时不发送，不随客户端身份选择改变
+    pub account_routing_override: Option<String>,
     /// 版本元组最后一次经制品核验的时间；不表示 TLS 传输已重新核验
     pub verified_at: DateTime<Utc>,
 }
@@ -96,6 +91,7 @@ impl Default for CodexWireProfile {
             terminal: "unknown".to_owned(),
             exact_user_agent: None,
             residency: None,
+            account_routing_override: None,
             // 制品核验于 2026-09-06T03:26:12.084Z；进程启动不构成重新核验
             verified_at: DateTime::UNIX_EPOCH + chrono::Duration::milliseconds(1_788_665_172_084),
         }

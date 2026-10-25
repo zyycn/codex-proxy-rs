@@ -157,6 +157,7 @@ impl ExactIdentity {
 
     fn profile(&self, state: &CodexWireProfileState) -> CodexWireProfile {
         let environment = self.environment.as_ref();
+        let deployment = state.snapshot();
         CodexWireProfile {
             client_kind: if self.originator == "Codex Desktop" {
                 ClientKind::Desktop
@@ -180,7 +181,8 @@ impl ExactIdentity {
                 .map(|value| value.terminal.clone())
                 .unwrap_or_default(),
             exact_user_agent: Some(self.user_agent.clone()),
-            residency: state.snapshot().residency,
+            residency: deployment.residency,
+            account_routing_override: deployment.account_routing_override,
             verified_at: DateTime::UNIX_EPOCH,
         }
     }

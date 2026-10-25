@@ -153,6 +153,7 @@ fn wire_profile_should_generate_bundled_core_app_server_user_agent() {
         terminal: "unknown".to_owned(),
         exact_user_agent: None,
         residency: None,
+        account_routing_override: None,
         verified_at: Utc
             .with_ymd_and_hms(2026, 8, 3, 0, 0, 0)
             .single()
@@ -501,6 +502,7 @@ fn wire_profile() -> CodexWireProfile {
         terminal: "unknown".to_owned(),
         exact_user_agent: None,
         residency: None,
+        account_routing_override: None,
         verified_at: Utc
             .with_ymd_and_hms(2026, 8, 3, 0, 0, 0)
             .single()

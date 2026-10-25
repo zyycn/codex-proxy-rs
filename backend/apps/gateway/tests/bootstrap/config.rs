@@ -370,10 +370,28 @@ fn config_loader_should_reject_zero_server_port() {
 }
 
 #[test]
-fn config_loader_should_validate_openai_residency() {
+fn config_loader_should_accept_optional_openai_routing_strings() {
+    for value in [
+        serde_json::Value::Null,
+        serde_json::json!("us"),
+        serde_json::json!("custom-value"),
+        serde_json::json!(""),
+    ] {
+        let mut document = valid_config_document();
+        document["openai"]["residency"] = value.clone();
+        document["openai"]["account_routing_override"] = value;
+        parse_config(&document.to_string()).expect("optional routing strings");
+    }
     let mut document = valid_config_document();
-    document["openai"]["residency"] = serde_json::json!("invalid");
-    assert_rejected(document.to_string());
+    document["openai"]
+        .as_object_mut()
+        .unwrap()
+        .remove("residency");
+    document["openai"]
+        .as_object_mut()
+        .unwrap()
+        .remove("account_routing_override");
+    parse_config(&document.to_string()).expect("omitted routing strings");
 }
 
 fn assert_rejected(config: String) {

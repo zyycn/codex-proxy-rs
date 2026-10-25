@@ -231,7 +231,10 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`
 | 代理位置 | “代理管理”；优先于全局位置，全局关闭时仍可独立生效 |
 
 位置覆盖只影响 OpenAI 请求中受支持的位置与时区信息，不改变上下文日期、真实出口 IP、epoch 时间戳或系统时区。
-`openai.residency` 是独立的部署约束。身份与位置字段见 [运行设置 API](../docs/api.md#8-运行设置)。
+`openai.residency` 和 `openai.account_routing_override` 是独立于客户端身份的启动配置，
+分别指定 `x-openai-internal-codex-residency` 和 `x-openai-account-routing-override` 请求头。
+两项均为可选字符串，填写值原样发送，不校验地域或路由枚举；省略或设为 `null` 时删除对应的下游请求头且不补发。
+示例配置均填写 `us`，修改后重启应用生效。身份与位置字段见 [运行设置 API](../docs/api.md#8-运行设置)
 后台账号操作使用 Provider 自己的官方画像；发布资料刷新不改写用户选择或 `config.yaml`
 
 ### 批量维护代理

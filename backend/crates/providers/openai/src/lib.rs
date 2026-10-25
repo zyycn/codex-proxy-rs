@@ -83,7 +83,8 @@ pub async fn initialize(
     let credential_state = ports.credential_state();
     let profile =
         transport::profile::CodexWireProfileState::new(transport::profile::CodexWireProfile {
-            residency: config.residency,
+            residency: config.residency.clone(),
+            account_routing_override: config.account_routing_override.clone(),
             ..Default::default()
         });
     let artifact_cache =

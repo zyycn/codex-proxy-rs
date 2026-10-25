@@ -293,8 +293,10 @@ API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`originator`、`v
 包括会话、线程、Lite 和其他业务扩展头。
 上游认证只来自选中的账号；API Key 不携带 OAuth Cookie、ChatGPT 账号身份或下游的
 `X-OpenAI-Actor-Authorization` 托管认证声明。
-下游的 `x-openai-account-routing-override`、`x-openai-fedramp` 也不透传，
-工作区路由与合规属性不能从原账号继承。
+下游的 `x-openai-internal-codex-residency`、`x-openai-account-routing-override`、`x-openai-fedramp`
+也不透传，地域、工作区路由与合规属性不能从原账号继承。
+前两项仅按部署配置 `openai.residency`、`openai.account_routing_override` 的字符串值生成，
+省略或 `null` 时不发送，配置说明见 [部署与运维](../deploy/README.md#启动后的运行设置)
 上述过滤描述原生转发；已信任插件的显式 header 改写可以覆盖账号与画像生成的默认头，
 不按认证或会话字段名称拦截，边界见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 

@@ -228,6 +228,7 @@ fn selector_with_runtime(
         terminal: "selector-contract".to_owned(),
         exact_user_agent: None,
         residency: None,
+        account_routing_override: None,
         verified_at: chrono::Utc::now(),
     });
     let http = reqwest::Client::builder().build().expect("HTTP client");

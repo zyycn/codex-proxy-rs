@@ -734,11 +734,13 @@ fn websocket_connection_profile(
         X_OPENAI_MEMGEN_REQUEST_HEADER,
         "x-codex-guardian",
         "x-openai-internal-codex-residency",
+        "x-openai-account-routing-override",
     ]
     .map(|name| {
+        // 空字符串也是显式配置，必须与未发送的请求头区分
         headers
             .get(name)
-            .and_then(|value| value.to_str().ok())
+            .map(|value| format!("{name}:{}", hex::encode(value.as_bytes())))
             .unwrap_or_default()
     })
     .join("\0");

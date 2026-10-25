@@ -69,6 +69,7 @@ fn wire_profile() -> CodexWireProfileState {
         terminal: "catalog-contract".to_owned(),
         exact_user_agent: None,
         residency: None,
+        account_routing_override: None,
         verified_at: Utc
             .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
             .single()

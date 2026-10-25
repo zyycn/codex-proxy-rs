@@ -5,11 +5,36 @@ use std::path::Path;
 use provider_openai::config::{MAX_STREAM_MAX_RETRIES, OpenAiConfig};
 
 #[test]
-fn openai_config_keeps_residency_separate_from_client_identity() {
-    use provider_openai::transport::profile::CodexResidency;
-    let config: OpenAiConfig = serde_json::from_str(r#"{"residency":"us"}"#).unwrap();
-    assert_eq!(config.residency, Some(CodexResidency::Us));
-    assert!(serde_json::from_str::<OpenAiConfig>(r#"{"residency":"invalid"}"#).is_err());
+fn openai_config_preserves_optional_routing_header_values() {
+    for (document, expected) in [
+        (r#"{}"#, (None, None)),
+        (
+            r#"{"residency":null,"account_routing_override":null}"#,
+            (None, None),
+        ),
+        (
+            r#"{"residency":"us","account_routing_override":"us"}"#,
+            (Some("us"), Some("us")),
+        ),
+        (
+            r#"{"residency":"custom-region","account_routing_override":"custom-route"}"#,
+            (Some("custom-region"), Some("custom-route")),
+        ),
+        (
+            r#"{"residency":"","account_routing_override":"NO_CONSTRAINT"}"#,
+            (Some(""), Some("NO_CONSTRAINT")),
+        ),
+    ] {
+        let config: OpenAiConfig = serde_json::from_str(document).unwrap();
+        assert_eq!(
+            (
+                config.residency.as_deref(),
+                config.account_routing_override.as_deref()
+            ),
+            expected,
+            "{document}",
+        );
+    }
 }
 
 #[test]

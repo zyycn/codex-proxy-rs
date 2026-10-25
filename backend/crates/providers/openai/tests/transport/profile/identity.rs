@@ -4,9 +4,7 @@ use gateway_core::account::OpaqueProviderData;
 use provider_openai::transport::headers::build_codex_model_headers;
 use provider_openai::transport::profile::identity::RequestProfileSelection;
 use provider_openai::transport::profile::selection::ClientProfileSelection;
-use provider_openai::transport::profile::{
-    CodexResidency, CodexWireProfile, CodexWireProfileState,
-};
+use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::{Value, json};
 
 fn document(value: Value) -> OpaqueProviderData {
@@ -16,7 +14,8 @@ fn document(value: Value) -> OpaqueProviderData {
 #[test]
 fn complete_custom_identities_send_exact_user_agent_and_matching_companion_headers() {
     let state = CodexWireProfileState::new(CodexWireProfile {
-        residency: Some(CodexResidency::Us),
+        residency: Some("us".to_owned()),
+        account_routing_override: Some("us_cr".to_owned()),
         ..Default::default()
     });
     for (core, originator, user_agent) in [
@@ -48,6 +47,7 @@ fn complete_custom_identities_send_exact_user_agent_and_matching_companion_heade
         assert_eq!(headers["originator"], originator);
         assert_eq!(headers["version"], core);
         assert_eq!(headers["x-openai-internal-codex-residency"], "us");
+        assert_eq!(headers["x-openai-account-routing-override"], "us_cr");
         assert!(profile.desktop_build.is_empty());
         let frozen: CodexWireProfile =
             serde_json::from_value(serde_json::to_value(&profile).unwrap()).unwrap();
