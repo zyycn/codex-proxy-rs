@@ -165,9 +165,10 @@ impl ManagementEntry {
         {
             return Err(invalid_state());
         }
-        let mut context = self
-            .session
-            .context(Stage::PublicManagement, limits.maximum_call_timeout);
+        let mut context = self.session.context(
+            Stage::PublicManagement,
+            self.session.budget(Stage::PublicManagement),
+        );
         context.request = crate::adapter::request_context(request.request_context.as_deref());
         context.request_id = Some(request.request_id);
         let _scope = self

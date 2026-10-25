@@ -16,7 +16,6 @@ pub(super) async fn invoke(
     context: core::Context,
     input: core::Value,
     next: core::Next,
-    timeout: std::time::Duration,
 ) -> Result<core::Value, core::Error> {
     let Some(ports) = &entry.invocation else {
         return if entry.failure_policy == PluginFailurePolicy::Delegate {
@@ -26,7 +25,9 @@ pub(super) async fn invoke(
         };
     };
     let invocation = Invocation::new(next);
-    let mut call = ports.session.context(Stage::Service, timeout);
+    let mut call = ports
+        .session
+        .context(Stage::Service, ports.session.budget(Stage::Service));
     call.request = crate::adapter::request_context(context.extensions.request());
     call.request_id = Some(context.request_id.clone());
     let _binding = ports

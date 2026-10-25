@@ -6,6 +6,120 @@ use serde_json::json;
 
 use crate::support::environment::Environment;
 
+#[derive(Default)]
+struct BudgetAccountAccess {
+    calls: std::sync::atomic::AtomicUsize,
+    first_started: tokio::sync::Notify,
+    second_started: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl gateway_admin::ports::plugin_accounts::PluginAccountAccess for BudgetAccountAccess {
+    async fn list(
+        &self,
+        _: gateway_admin::model::provider_credentials::PluginAccountListQuery,
+    ) -> Result<
+        gateway_admin::model::provider_credentials::PluginAccountPage,
+        gateway_admin::model::AdminError,
+    > {
+        panic!("账号提交不应读取账号列表")
+    }
+
+    async fn get_runtime(
+        &self,
+        _: &gateway_core::account::ProviderAccountId,
+    ) -> Result<gateway_admin::model::accounts::AccountRecord, gateway_admin::model::AdminError>
+    {
+        panic!("创建账号不应读取已有账号")
+    }
+
+    async fn get_credential(
+        &self,
+        _: &gateway_core::account::ProviderAccountId,
+    ) -> Result<
+        gateway_admin::model::provider_credentials::PluginAccountCredential,
+        gateway_admin::model::AdminError,
+    > {
+        panic!("账号提交不应读取凭据")
+    }
+
+    async fn save(
+        &self,
+        _: gateway_admin::model::provider_credentials::PreparedPluginAccountSave,
+        _: &gateway_admin::model::MutationContext,
+    ) -> Result<
+        gateway_admin::model::provider_credentials::PluginAccountSaveResult,
+        gateway_admin::model::AdminError,
+    > {
+        if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            self.first_started.notify_one();
+            tokio::time::sleep(std::time::Duration::from_secs(70)).await;
+            Ok(
+                gateway_admin::model::provider_credentials::PluginAccountSaveResult {
+                    config_revision: gateway_admin::model::Revision::new(2).unwrap(),
+                    account_id: gateway_core::account::ProviderAccountId::new(
+                        "acct_command_budget",
+                    )
+                    .unwrap(),
+                    credential_revision: gateway_admin::model::Revision::new(1).unwrap(),
+                },
+            )
+        } else {
+            self.second_started.notify_one();
+            std::future::pending().await
+        }
+    }
+}
+
+#[tokio::test]
+async fn account_commits_share_the_commands_declared_deadline_and_report_partial_completion() {
+    use gateway_admin::ports::plugin_accounts::PluginAccountAccess;
+    use std::{sync::Arc, time::Duration};
+
+    let account = json!({"action":"create","provider_id":"openai","facts":{
+        "name":"预算测试","authentication_kind":"api_key","material":{"key":"fixture-only"}
+    }});
+    let config = json!({
+        "call_budgets_ms":{"command_line":180_000},
+        "command_registration":{"commands":[{"name":"save","description":"提交账号"}]},
+        "command_result":{"stdout":"","stderr":"","exit_code":0,"accounts":[account, account]},
+    });
+    let (_directory, _store, runtime) = super::setup(config).await;
+    let probe = Arc::new(BudgetAccountAccess::default());
+    let accounts: Arc<dyn PluginAccountAccess> = probe.clone();
+    runtime.bind_account_ports(&accounts).unwrap();
+    let commands = runtime.prepare_command_line().await.unwrap();
+    let task = tokio::spawn(async move {
+        let result = commands.execute("commands", "save", &[]).await;
+        (commands, result)
+    });
+    tokio::time::timeout(Duration::from_secs(5), probe.first_started.notified())
+        .await
+        .unwrap();
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(121)).await;
+    probe.second_started.notified().await;
+    assert!(
+        !task.is_finished(),
+        "账号提交沿用声明预算，不能被默认期限截断"
+    );
+    tokio::time::advance(Duration::from_secs(60)).await;
+    let (commands, result) = task.await.unwrap();
+    tokio::time::resume();
+    assert!(
+        matches!(
+            result,
+            Err(PluginCommandError::Incomplete {
+                saved_accounts: 1,
+                reason: "超过命令总期限",
+            })
+        ),
+        "后续账号提交不能重新获得完整预算"
+    );
+    commands.shutdown().await;
+}
+
 #[tokio::test]
 async fn model_requests_have_a_body_limit_independent_of_the_response_buffer() {
     use gateway_plugin_sdk::call::model::request_payload_limit;

@@ -48,12 +48,13 @@ impl PluginCommandSession {
         let payload = serde_json::to_vec(&invocation)
             .map_err(|_| AdminError::invalid("插件命令参数无法编码"))?;
         let mut saved_accounts = 0;
+        let deadline = tokio::time::Instant::now() + command.session.budget(Stage::CommandLine);
         let result = tokio::select! {
             biased;
             () = cancellation.cancelled() => Ok(Err("调用已取消")),
-            result = tokio::time::timeout(
-                self.limits.maximum_call_timeout,
-                command.execute(payload, self.limits, &mut saved_accounts),
+            result = tokio::time::timeout_at(
+                deadline,
+                command.execute(payload, self.limits, deadline, &mut saved_accounts),
             ) => result,
         };
         match result {
@@ -76,11 +77,14 @@ impl PluginCommand {
         &self,
         payload: Vec<u8>,
         limits: RpcLimits,
+        deadline: tokio::time::Instant,
         saved_accounts: &mut usize,
     ) -> Result<PluginCommandOutput, &'static str> {
-        let mut context = self
-            .session
-            .context(Stage::CommandLine, limits.maximum_call_timeout);
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err("超过命令总期限");
+        }
+        let mut context = self.session.context(Stage::CommandLine, remaining);
         context.request_id = Some(uuid::Uuid::new_v4().to_string());
         let scope = self
             .callbacks
@@ -135,6 +139,7 @@ fn rpc_failure(error: RpcError) -> &'static str {
         }
         RpcError::Capacity | RpcError::Overloaded => "插件调用容量不足",
         RpcError::Context(_) => "调用上下文无效",
+        RpcError::Budget(_) => "调用预算冲突",
         RpcError::Remote(_) => "插件拒绝命令",
     }
 }

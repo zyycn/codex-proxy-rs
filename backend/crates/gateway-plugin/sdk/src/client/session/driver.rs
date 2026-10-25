@@ -11,7 +11,8 @@ use tokio::{
 };
 
 use crate::{
-    CallContext, ErrorCode, Frame, FrameError, Handshake, Message, PROTOCOL_VERSION, PluginFault,
+    CallBudgets, CallContext, ErrorCode, Frame, FrameError, Handshake, Message, PROTOCOL_VERSION,
+    PluginFault, ResolvedCallBudgets,
 };
 
 use super::super::frame::{EncodedFrame, read_frame, write_frame};
@@ -31,6 +32,7 @@ pub struct PluginSession<R, W> {
     writer: W,
     handshake: Handshake,
     config: SessionConfig,
+    call_budgets: CallBudgets,
 }
 
 impl<R, W> PluginSession<R, W>
@@ -70,12 +72,25 @@ where
             writer,
             handshake,
             config,
+            call_budgets: CallBudgets::new(),
         })
     }
 
     #[must_use]
     pub const fn handshake(&self) -> &Handshake {
         &self.handshake
+    }
+
+    /// 在 Ready 前声明所需预算，可根据握手中的实例配置计算
+    /// 未声明的阶段采用协议默认值，同一会话的预算在 run 时冻结
+    ///
+    /// # Errors
+    ///
+    /// 预算为零或平台计时器无法表示时失败，原声明保持不变
+    pub fn set_call_budgets(&mut self, budgets: CallBudgets) -> Result<(), SessionError> {
+        crate::budget::validate_values(&budgets)?;
+        self.call_budgets = budgets;
+        Ok(())
     }
 
     /// 发送 Ready 并持续处理调用、回调、流控、取消与关闭
@@ -87,6 +102,7 @@ where
     where
         H: PluginHandler,
     {
+        let call_budgets = ResolvedCallBudgets::resolve(&self.call_budgets)?;
         let data_capacity = self
             .config
             .maximum_calls
@@ -117,6 +133,7 @@ where
             &Frame::control(Message::Ready {
                 protocol_version: PROTOCOL_VERSION,
                 incarnation: self.handshake.incarnation.clone(),
+                call_budgets: self.call_budgets,
             }),
         )
         .await?;
@@ -124,6 +141,7 @@ where
         let (completed, completions) = mpsc::channel(self.config.maximum_calls);
         let mut driver = SessionDriver {
             config: self.config,
+            call_budgets,
             instance_id: self.handshake.instance_id,
             generation: self.handshake.generation,
             incarnation: self.handshake.incarnation,
@@ -200,6 +218,7 @@ impl Drop for CompletionGuard {
 
 struct SessionDriver {
     config: SessionConfig,
+    call_budgets: ResolvedCallBudgets,
     instance_id: String,
     generation: u64,
     incarnation: String,
@@ -323,7 +342,7 @@ impl SessionDriver {
             || context.generation != self.generation
             || context.incarnation != self.incarnation
             || context.timeout_ms == 0
-            || Duration::from_millis(context.timeout_ms) > self.config.maximum_call_timeout
+            || Duration::from_millis(context.timeout_ms) > self.call_budgets.budget(context.stage)
             || method.is_empty()
             || method.len() > 128
         {

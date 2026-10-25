@@ -64,14 +64,11 @@ async fn session_model_and_network_callbacks_outlive_handshake_and_each_executio
     let key = format!("key_{}", uuid::Uuid::new_v4().simple());
     environment.client_key(&key, "sk-session-fixture").await;
     environment
-        .install_plugin(serde_json::json!({"http":true,"mode":"callbacks"}))
+        .install_plugin(
+            serde_json::json!({"http":true,"mode":"callbacks", "call_budgets_ms":{"http":500}}),
+        )
         .await;
-    let (runtime, bundle) = environment
-        .runtime_with_limits(RpcLimits {
-            maximum_call_timeout: Duration::from_millis(500),
-            ..RpcLimits::default()
-        })
-        .await;
+    let (runtime, bundle) = environment.runtime_with_limits(RpcLimits::default()).await;
     environment.store.start_command_line_writes().unwrap();
     let snapshot = bundle.snapshots().snapshot_for_diagnostics().unwrap();
     let plan = runtime
@@ -185,12 +182,10 @@ async fn session_model_and_network_callbacks_outlive_handshake_and_each_executio
 
 #[tokio::test]
 async fn real_plugin_controls_upgrade_and_concurrent_duplex_with_large_binary_frames() {
-    let (_cache, runtime, generation, plan) = http_plugin_with_limits(
-        "upgrade",
-        RpcLimits {
-            maximum_call_timeout: Duration::from_millis(500),
-            ..RpcLimits::default()
-        },
+    let (_cache, runtime, generation, plan) = http_plugin_with_configuration(
+        serde_json::json!({"http":true,"mode":"upgrade", "call_budgets_ms":{"http":500}}),
+        RpcLimits::default(),
+        PluginFailurePolicy::Reject,
     )
     .await;
     let (send, incoming) = tokio::sync::mpsc::channel(1);

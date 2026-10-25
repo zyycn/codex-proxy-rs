@@ -1,6 +1,6 @@
 //! 校验并准备插件上游适配声明与能力绑定
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use gateway_admin::model::{
     AdminError,
@@ -56,7 +56,7 @@ pub(crate) async fn prepare(
     let reply = session
         .call(
             REGISTER_METHOD,
-            session.context(Stage::Registration, Duration::from_secs(5)),
+            session.context(Stage::Registration, session.budget(Stage::Registration)),
             serde_json::json!({}),
             vec![],
         )

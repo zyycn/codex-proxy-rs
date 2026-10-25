@@ -369,54 +369,85 @@ async fn retry_policy_preserves_decisions_and_leaves_replay_safety_to_core() {
 }
 
 #[tokio::test]
-async fn retry_policy_timeout_exhausts_the_chain_budget_and_delegates() {
+async fn retry_policy_combines_instance_budgets_with_one_request_bounded_chain() {
     use gateway_core::{
         engine::policy::{RetryDecision, RetryFacts},
         error::ProviderErrorKind,
         upstream::UpstreamSendState,
     };
-    let records = tempfile::tempdir().unwrap();
-    let second_marker = records.path().join("second.jsonl");
-    let (_cache, runtime) = setup(
-        vec![
+    for (
+        first_budget,
+        first_delay,
+        second_budget,
+        second_delay,
+        request_budget,
+        expected,
+        reached_second,
+    ) in [
+        (100, 500, 1000, 100, 2000, RetryDecision::Stop, true),
+        (1000, 100, 50, 300, 2000, RetryDecision::Delegate, true),
+        (1000, 300, 1000, 800, 2000, RetryDecision::Delegate, true),
+        (1000, 500, 1000, 0, 100, RetryDecision::Delegate, false),
+        (3000, 2100, 3000, 0, 5000, RetryDecision::Stop, true),
+    ] {
+        let records = tempfile::tempdir().unwrap();
+        let second_marker = records.path().join("second.jsonl");
+        let (_cache, runtime) = setup(vec![
             InstanceFixture {
                 id: "retry-delayed",
-                configuration: serde_json::json!({"retry_delay_ms":500,"retry_decision":{"decision":"stop"}}),
-
-                bindings: vec![binding("test.example.retryPolicy", "retry", 0, PluginFailurePolicy::Delegate)],
+                configuration: serde_json::json!({
+                    "call_budgets_ms":{"retry":first_budget},
+                    "retry_delay_ms":first_delay,
+                    "retry_decision":{"decision":"delegate"},
+                }),
+                bindings: vec![binding(
+                    "test.example.retryPolicy",
+                    "retry",
+                    0,
+                    PluginFailurePolicy::Delegate,
+                )],
             },
             InstanceFixture {
                 id: "retry-next",
-                configuration: serde_json::json!({"retry_marker":second_marker,"retry_decision":{"decision":"stop"}}),
-
-                bindings: vec![binding("test.example.retryPolicy", "retry", 1, PluginFailurePolicy::Delegate)],
+                configuration: serde_json::json!({
+                    "call_budgets_ms":{"retry":second_budget},
+                    "retry_delay_ms":second_delay,
+                    "retry_marker":second_marker,
+                    "retry_decision":{"decision":"stop"},
+                }),
+                bindings: vec![binding(
+                    "test.example.retryPolicy",
+                    "retry",
+                    1,
+                    PluginFailurePolicy::Delegate,
+                )],
             },
-        ],
-
-    ).await;
-    let context = policy_context(&runtime, prepare(&runtime).await, "req_retry_timeout");
-    let decision = tokio::time::timeout(
-        Duration::from_secs(2),
-        context.retry_decision(RetryFacts {
-            attempt_index: NonZeroU32::MIN,
-            provider: ProviderKind::new("openai").unwrap(),
-            model: Some("gpt-test".into()),
-            error_kind: ProviderErrorKind::RateLimited,
-            upstream_status: Some(429),
-            send_state: UpstreamSendState::NotSent,
-            remaining_routing_attempts: 1,
-            remaining_deadline: Duration::from_millis(100),
-            retry_allowed: true,
-        }),
-    )
-    .await
-    .expect("the shared deadline bounds the whole retry chain");
-    assert_eq!(decision, RetryDecision::Delegate);
-    assert!(
-        !second_marker.exists(),
-        "later policies cannot restart an exhausted budget"
-    );
-    runtime.shutdown().await;
+        ])
+        .await;
+        let context = policy_context(&runtime, prepare(&runtime).await, "req_retry_timeout");
+        let decision = tokio::time::timeout(
+            Duration::from_secs(6),
+            context.retry_decision(RetryFacts {
+                attempt_index: NonZeroU32::MIN,
+                provider: ProviderKind::new("openai").unwrap(),
+                model: Some("gpt-test".into()),
+                error_kind: ProviderErrorKind::RateLimited,
+                upstream_status: Some(429),
+                send_state: UpstreamSendState::NotSent,
+                remaining_routing_attempts: 1,
+                remaining_deadline: Duration::from_millis(request_budget),
+                retry_allowed: true,
+            }),
+        )
+        .await
+        .expect("重试链不能重置总预算");
+        assert_eq!(
+            decision, expected,
+            "{first_budget}/{second_budget}/{request_budget}"
+        );
+        assert_eq!(second_marker.exists(), reached_second);
+        runtime.shutdown().await;
+    }
 }
 
 async fn marker_lines(path: &std::path::Path, count: usize) -> Vec<serde_json::Value> {

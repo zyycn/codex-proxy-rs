@@ -167,7 +167,7 @@ impl Execution {
         let timeout = invocation
             .context
             .deadline()
-            .bounded(self.adapter.session.maximum_call_timeout());
+            .bounded(self.adapter.session.budget(Stage::Upstream));
         if timeout.is_zero() || invocation.context.cancellation().is_cancelled() {
             return Err(ProviderError::new(
                 ProviderErrorKind::Cancelled,

@@ -26,8 +26,7 @@ use gateway_core::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Weak, atomic::Ordering},
-    time::Duration,
+    sync::{Arc, Weak},
 };
 
 impl PluginRuntime {
@@ -39,9 +38,11 @@ impl PluginRuntime {
     ) -> Result<ExtensionSetReference, AdminError> {
         let target_revision = snapshot.config_revision.get();
         self.record_preparation(target_revision, PreparationDiagnostic::Preparing);
-        let result = self
-            .prepare_inner(snapshot, required_revision, request_body_limit)
-            .await;
+        let result = tokio::select! {
+            biased;
+            () = self.shutting_down.cancelled() => Err(AdminError::unavailable("插件运行时正在关闭")),
+            result = self.prepare_inner(snapshot, required_revision, request_body_limit) => result,
+        };
         match &result {
             Ok(reference) => self.record_preparation(
                 target_revision,
@@ -63,7 +64,7 @@ impl PluginRuntime {
         required_revision: Option<Revision>,
         request_body_limit: Option<usize>,
     ) -> Result<ExtensionSetReference, AdminError> {
-        if self.shutting_down.load(Ordering::Acquire) {
+        if self.shutting_down.is_cancelled() {
             return Err(AdminError::unavailable("插件运行时正在关闭"));
         }
         if snapshot.instances.len() > 64 {
@@ -72,7 +73,7 @@ impl PluginRuntime {
         let fingerprint = fingerprint(&snapshot)?;
         // 准备串行化与弱索引分锁；诊断和已发布请求不会等待外部 I/O
         let _prepare = self.prepare_lock.lock().await;
-        if self.shutting_down.load(Ordering::Acquire) {
+        if self.shutting_down.is_cancelled() {
             return Err(AdminError::unavailable("插件运行时正在关闭"));
         }
         let existing = {
@@ -125,17 +126,12 @@ impl PluginRuntime {
                 let result = if let Some(instance) = reusable {
                     Ok(instance)
                 } else {
-                    tokio::time::timeout(
-                        // 沿用准备阶段原有的 30 秒预算；打包校验与能力恢复也在预算内
-                        Duration::from_secs(30),
-                        self.prepare_instance(
-                            instance.clone(),
-                            snapshot.config_revision,
-                            request_body_limit,
-                        ),
+                    self.prepare_instance(
+                        instance.clone(),
+                        snapshot.config_revision,
+                        request_body_limit,
                     )
                     .await
-                    .unwrap_or_else(|_| Err(AdminError::unavailable("插件启动超时")))
                 };
                 (instance, identity, result)
             },
@@ -208,7 +204,6 @@ impl PluginRuntime {
                 .rpc_limits
                 .maximum_calls
                 .min(self.config.rpc_limits.maximum_executing_calls),
-            self.config.rpc_limits.maximum_call_timeout,
             self.config.rpc_limits.maximum_buffered_body_bytes,
         )
         .map(|plan| {
@@ -217,21 +212,16 @@ impl PluginRuntime {
                 .map_err(|_| AdminError::invalid("插件观察计划注册冲突"))
         })
         .transpose()?;
-        let policies = crate::adapter::policy::PluginRequestPolicyPlan::compile(
-            policy_entries,
-            self.config.rpc_limits.maximum_call_timeout,
-        )?
-        .map(|plan| {
-            self.policies
-                .register(id.clone(), plan)
-                .map_err(|_| AdminError::invalid("插件请求策略计划注册冲突"))
-        })
-        .transpose()?;
-        let middleware = crate::adapter::middleware::PluginMiddlewarePlan::compile(
-            middleware_entries,
-            self.config.rpc_limits.maximum_call_timeout,
-        )
-        .map(|plan| plan as Arc<dyn gateway_core::engine::middleware::MiddlewarePlan>);
+        let policies = crate::adapter::policy::PluginRequestPolicyPlan::compile(policy_entries)?
+            .map(|plan| {
+                self.policies
+                    .register(id.clone(), plan)
+                    .map_err(|_| AdminError::invalid("插件请求策略计划注册冲突"))
+            })
+            .transpose()?;
+        let middleware =
+            crate::adapter::middleware::PluginMiddlewarePlan::compile(middleware_entries)
+                .map(|plan| plan as Arc<dyn gateway_core::engine::middleware::MiddlewarePlan>);
         let upstream_adapters =
             crate::adapter::upstream_adapter::PluginUpstreamAdapterPlan::compile(upstream_entries);
         let execution = if middleware.is_some() || upstream_adapters.is_some() {
@@ -252,7 +242,6 @@ impl PluginRuntime {
         let authentication =
             crate::adapter::frontend_authentication::PluginFrontendAuthenticationPlan::compile(
                 authentication_entries,
-                self.config.rpc_limits.maximum_call_timeout,
             )?
             .map(|plan| {
                 self.authentications

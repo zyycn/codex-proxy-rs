@@ -1,6 +1,86 @@
 //! 会话调用分派、并发帧读取与处理器响应边界测试
 
 use super::*;
+use gateway_plugin_sdk::CallBudgets;
+
+#[tokio::test(start_paused = true)]
+async fn declared_long_budgets_survive_callbacks_and_expose_remaining_time() {
+    for budget_ms in [600_000, 1_800_000] {
+        let (host, plugin) = tokio::io::duplex(16_384);
+        let (plugin_reader, plugin_writer) = tokio::io::split(plugin);
+        let task = tokio::spawn(async move {
+            let mut session =
+                PluginSession::accept(plugin_reader, plugin_writer, SessionConfig::default())
+                    .await?;
+            let declared = session.handshake().configuration["maintenance_ms"]
+                .as_u64()
+                .unwrap();
+            session.set_call_budgets(CallBudgets::from([(Stage::Maintenance, declared)]))?;
+            session.run(TestHandler::default()).await
+        });
+        let (reader, writer) = tokio::io::split(host);
+        let mut host = HostPeer { reader, writer };
+        let mut hello = handshake();
+        hello.configuration = json!({"maintenance_ms": budget_ms});
+        send_control(&mut host, Message::Hello { handshake: hello }).await;
+        let Message::Ready { call_budgets, .. } = receive(&mut host).await.message else {
+            panic!("expected Ready")
+        };
+        assert_eq!(call_budgets[&Stage::Maintenance], budget_ms);
+        let mut call_context = context(1, Duration::from_millis(budget_ms));
+        call_context.stage = Stage::Maintenance;
+        send_control(
+            &mut host,
+            Message::Call {
+                id: 1,
+                method: "budget".into(),
+                context: call_context,
+                params: json!({}),
+            },
+        )
+        .await;
+        let Message::Callback {
+            id, parent_id: 1, ..
+        } = receive(&mut host).await.message
+        else {
+            panic!("expected callback")
+        };
+        tokio::time::advance(Duration::from_secs(125)).await;
+        send_control(
+            &mut host,
+            Message::Result {
+                id,
+                result: json!({}),
+            },
+        )
+        .await;
+        let Message::Result { id: 1, result } = receive(&mut host).await.message else {
+            panic!("long call must remain active")
+        };
+        assert_eq!(result["initial_ms"], budget_ms);
+        let remaining = result["remaining_ms"].as_u64().unwrap();
+        assert!(remaining <= budget_ms - 125_000 && remaining >= budget_ms - 126_000);
+        shutdown(&mut host, task).await;
+    }
+}
+
+#[tokio::test]
+async fn calls_cannot_exceed_the_budget_negotiated_for_their_stage() {
+    let (mut host, task) = start_session(TestHandler::default()).await;
+    let mut context = context(1, Duration::from_secs(3));
+    context.stage = Stage::Retry;
+    send_control(
+        &mut host,
+        Message::Call {
+            id: 1,
+            method: "echo".into(),
+            context,
+            params: json!({}),
+        },
+    )
+    .await;
+    assert!(matches!(task.await.unwrap(), Err(SessionError::Protocol)));
+}
 
 #[test]
 fn middleware_plugin_rejects_declarations_without_matching_handlers() {

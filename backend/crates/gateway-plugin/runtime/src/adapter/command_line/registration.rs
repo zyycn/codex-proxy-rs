@@ -4,7 +4,7 @@ use super::PluginCommand;
 use crate::{RpcSession, callback::PluginCallbacks};
 use gateway_admin::model::{AdminError, plugins::instances::PluginInstance};
 use gateway_plugin_sdk::{Capability, Manifest, Stage, call::management::CommandRegistration};
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 const MAXIMUM_REGISTRATION_BYTES: usize = 64 * 1024;
 
@@ -23,7 +23,7 @@ pub(crate) async fn prepare(
     let reply = session
         .call(
             "command_line.register",
-            session.context(Stage::Registration, Duration::from_secs(5)),
+            session.context(Stage::Registration, session.budget(Stage::Registration)),
             serde_json::json!({}),
             Vec::new(),
         )

@@ -16,7 +16,6 @@ pub(super) async fn invoke(
     context: core::Context,
     message: core::Message,
     next: core::Next,
-    timeout: std::time::Duration,
 ) -> Result<Option<core::Message>, MiddlewareError> {
     let Some(ports) = &entry.invocation else {
         return if entry.failure_policy == PluginFailurePolicy::Delegate {
@@ -44,7 +43,9 @@ pub(super) async fn invoke(
             .encode(message)
             .map_err(|_| MiddlewareError::Fault)?,
     };
-    let mut call = ports.session.context(Stage::WebSocket, timeout);
+    let mut call = ports
+        .session
+        .context(Stage::WebSocket, ports.session.budget(Stage::WebSocket));
     call.request = crate::adapter::request_context(context.extensions.request());
     call.request_id = Some(context.connection_id.clone());
     let _binding = ports

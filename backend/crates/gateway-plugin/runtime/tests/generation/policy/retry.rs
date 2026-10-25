@@ -136,6 +136,7 @@ async fn retry_callback_effects_survive_success_failure_and_cancellation() {
                 "retry_http_return_marker":(outcome == "early_result").then_some(marker),
                 "retry_service_request":is_service.then_some(service_request),
                 "retry_service_marker":service_marker,
+                "call_budgets_ms":{"retry":500},
             }))
             .await;
         let key = "sk-retry-effects-fixture";
@@ -146,10 +147,7 @@ async fn retry_callback_effects_survive_success_failure_and_cancellation() {
         });
         let (runtime, core) = environment
             .runtime_with_providers(
-                RpcLimits {
-                    maximum_call_timeout: Duration::from_millis(500),
-                    ..RpcLimits::default()
-                },
+                RpcLimits::default(),
                 ProviderRegistry::new([provider.clone() as Arc<dyn Provider>]).unwrap(),
             )
             .await;

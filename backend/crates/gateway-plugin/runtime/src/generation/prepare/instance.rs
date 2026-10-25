@@ -16,18 +16,22 @@ use gateway_admin::{
 use gateway_plugin_sdk::{Handshake, Stage, call::registration::Registration};
 use std::{sync::Arc, time::Duration};
 
+const PROCESS_PREPARATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+struct StartedInstance {
+    instance: PluginInstance,
+    package: Arc<crate::PreparedPackage>,
+    callbacks: Arc<PluginCallbacks>,
+    prepared: PreparedInstance,
+}
+
 impl PluginRuntime {
-    pub(super) async fn prepare_instance(
+    async fn start_instance(
         &self,
         instance: PluginInstance,
         target_revision: Revision,
         request_body_limit: Option<usize>,
-    ) -> Result<Arc<PreparedInstance>, AdminError> {
-        let mut observer_entries = Vec::new();
-        let mut commands = Vec::new();
-        let mut management = Vec::new();
-        let mut policy_entries = Vec::new();
-        let mut authentication_entries = Vec::new();
+    ) -> Result<StartedInstance, AdminError> {
         let authorization_binding = instance_fingerprint(&instance)?;
         if self.restart_circuit_is_open(&RestartIdentity::new(
             instance.id.clone(),
@@ -109,7 +113,6 @@ impl PluginRuntime {
         crate::compatibility::report(&manifest, &instance_id)?;
         let restart_identity =
             RestartIdentity::new(instance_id.clone(), authorization_binding.clone());
-        let bindings = instance.bindings.clone();
         let owner = self
             .state
             .load_owner(
@@ -181,23 +184,69 @@ impl PluginRuntime {
                 lifecycle,
             )
             .await
-            .map_err(|_| AdminError::unavailable("插件进程握手失败"))?,
+            .map_err(|error| match error {
+                crate::RpcError::Budget(gateway_plugin_sdk::CallBudgetError::Invalid {
+                    stage,
+                    milliseconds,
+                }) => AdminError::invalid(format!(
+                    "插件阶段 {stage:?} 的调用预算无效：{milliseconds} 毫秒"
+                )),
+                _ => AdminError::unavailable("插件进程握手失败"),
+            })?,
         );
-        let mut prepared = PreparedInstance {
+        let prepared = PreparedInstance {
             instance_id: instance_id.clone(),
             artifact_sha256: instance.artifact_sha256.clone(),
             revision: instance.revision,
-            session: session.clone(),
+            session,
             private_state: private_state.clone(),
             maintenance: manifest
                 .contributes
                 .contains_key(&gateway_plugin_sdk::Capability::Maintenance),
             contributions: PreparedContributions::default(),
         };
+        Ok(StartedInstance {
+            instance,
+            package,
+            callbacks,
+            prepared,
+        })
+    }
+
+    pub(super) async fn prepare_instance(
+        &self,
+        instance: PluginInstance,
+        target_revision: Revision,
+        request_body_limit: Option<usize>,
+    ) -> Result<Arc<PreparedInstance>, AdminError> {
+        // 启动控制期限只包住制品准备与握手，Ready 后每次注册使用协商预算
+        let StartedInstance {
+            instance,
+            package,
+            callbacks,
+            mut prepared,
+        } = tokio::time::timeout(
+            PROCESS_PREPARATION_TIMEOUT,
+            self.start_instance(instance, target_revision, request_body_limit),
+        )
+        .await
+        .map_err(|_| AdminError::unavailable("插件启动超时"))??;
+        let session = &prepared.session;
+        let manifest = package.package().manifest();
+        let plugin_id = manifest
+            .plugin_id()
+            .map_err(|_| AdminError::invalid("插件身份无效"))?;
+        let instance_id = &instance.id;
+        let bindings = &instance.bindings;
+        let mut observer_entries = Vec::new();
+        let mut commands = Vec::new();
+        let mut management = Vec::new();
+        let mut policy_entries = Vec::new();
+        let mut authentication_entries = Vec::new();
         let registration = session
             .call(
                 "plugin.register",
-                session.context(Stage::Registration, Duration::from_secs(5)),
+                session.context(Stage::Registration, session.budget(Stage::Registration)),
                 serde_json::json!({}),
                 vec![],
             )
@@ -211,7 +260,7 @@ impl PluginRuntime {
         commands.extend(
             crate::adapter::command_line::prepare(
                 &instance,
-                &manifest,
+                manifest,
                 session.clone(),
                 callbacks.clone(),
             )
@@ -228,8 +277,8 @@ impl PluginRuntime {
             management.push(entry);
         }
         if let Some(entry) = crate::adapter::frontend_authentication::prepare_entry(
-            &manifest,
-            &bindings,
+            manifest,
+            bindings,
             session.clone(),
             callbacks.clone(),
         )
@@ -238,35 +287,34 @@ impl PluginRuntime {
             authentication_entries.push(entry);
         }
         if let Some(entry) = crate::adapter::observer::compile_entry(
-            &manifest,
+            manifest,
             &plugin_id,
-            &instance_id,
-            &bindings,
+            instance_id,
+            bindings,
             session.clone(),
             callbacks.clone(),
         )? {
             observer_entries.push(entry);
         }
         policy_entries.extend(crate::adapter::policy::compile_entries(
-            &manifest,
-            &instance_id,
-            &bindings,
+            manifest,
+            instance_id,
+            bindings,
             session.clone(),
             callbacks.clone(),
         )?);
         let middleware_entries = crate::adapter::middleware::compile_entries(
-            &manifest,
-            &instance_id,
-            &bindings,
+            manifest,
+            instance_id,
+            bindings,
             session.clone(),
             callbacks.clone(),
         )?;
-        let model_aliases =
-            crate::adapter::catalog::prepare(&manifest, &instance, &session).await?;
+        let model_aliases = crate::adapter::catalog::prepare(manifest, &instance, session).await?;
         let upstream_entries = crate::adapter::upstream_adapter::prepare(
-            &manifest,
+            manifest,
             &instance,
-            Arc::clone(&session),
+            Arc::clone(session),
             Arc::clone(&callbacks),
         )
         .await?;

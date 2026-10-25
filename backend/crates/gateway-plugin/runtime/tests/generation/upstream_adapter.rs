@@ -533,14 +533,8 @@ async fn adapter_sse_outlives_rpc_budget_and_cancellation_closes_its_resources()
             .as_object_mut()
             .unwrap()
             .remove("wire");
-        let (cache, _, runtime) = setup_with_limits(
-            config,
-            gateway_plugin_runtime::RpcLimits {
-                maximum_call_timeout: Duration::from_millis(500),
-                ..Default::default()
-            },
-        )
-        .await;
+        config["call_budgets_ms"] = json!({"upstream":500});
+        let (cache, _, runtime) = setup(config).await;
         let generation =
             ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
                 .await

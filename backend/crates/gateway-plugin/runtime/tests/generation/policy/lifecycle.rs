@@ -147,7 +147,8 @@ async fn sdk_budget_runtime(stage: Stage, count: usize) -> (tempfile::TempDir, P
         .enumerate()
         .map(|(order, id)| InstanceFixture {
             id,
-            configuration: serde_json::json!({"mode":"map", "attempt":stage == Stage::Attempt}),
+            configuration: serde_json::json!({"mode":"map", "attempt":stage == Stage::Attempt,
+                "call_budgets_ms":{"request":300,"attempt":300}}),
             bindings: vec![binding(
                 MIDDLEWARE_CONTRIBUTION,
                 mount,
@@ -156,15 +157,7 @@ async fn sdk_budget_runtime(stage: Stage, count: usize) -> (tempfile::TempDir, P
             )],
         })
         .collect();
-    setup_package_with_limits(
-        instances,
-        package,
-        RpcLimits {
-            maximum_call_timeout: Duration::from_millis(300),
-            ..RpcLimits::default()
-        },
-    )
-    .await
+    setup_package_with_limits(instances, package, RpcLimits::default()).await
 }
 
 fn budget_request() -> MiddlewareRequest {

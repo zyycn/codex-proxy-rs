@@ -1,6 +1,6 @@
 //! 在 Provider 发送前组合完整出站请求，并沿用模型数据面的调用资源
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use gateway_admin::model::plugins::instances::PluginFailurePolicy;
 use gateway_core::engine::middleware::{MiddlewareContext, MiddlewareError, outbound as core};
@@ -17,7 +17,6 @@ pub(super) async fn invoke(
     context: MiddlewareContext,
     request: core::Request,
     next: core::Next,
-    timeout: Duration,
 ) -> Result<core::Request, MiddlewareError> {
     let Some(ports) = &entry.invocation else {
         return if entry.failure_policy == PluginFailurePolicy::Delegate {
@@ -54,7 +53,12 @@ pub(super) async fn invoke(
                 .get(),
         },
     };
-    let mut call = ports.session.context(Stage::Outbound, timeout);
+    let mut call = ports.session.context(
+        Stage::Outbound,
+        context
+            .deadline()
+            .bounded(ports.session.budget(Stage::Outbound)),
+    );
     call.request = crate::adapter::request_context(context.extension_scope().request());
     call.request_id = Some(input.metadata.request_id.clone());
     call.attempt_id = Some(format!(

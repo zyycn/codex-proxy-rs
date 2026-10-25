@@ -17,11 +17,10 @@ use super::RetryEntry;
 pub(super) fn decide(
     entries: Arc<[RetryEntry]>,
     input: RetryInput,
-    timeout: Duration,
 ) -> BoxFuture<'static, Result<RetryDecision, RequestPolicyFault>> {
     Box::pin(async move {
-        let started = std::time::Instant::now();
-        for entry in entries.iter().filter(|entry| {
+        let started = tokio::time::Instant::now();
+        let matched = entries.iter().filter(|entry| {
             !input.extension_scope.contains(&entry.instance_id)
                 && entry.scope.matches_processing(
                     &input.client_key_id,
@@ -29,23 +28,32 @@ pub(super) fn decide(
                     Some(&input.facts.provider),
                     input.facts.model.as_deref(),
                 )
-        }) {
+        });
+        let timeout = matched
+            .clone()
+            .filter_map(|entry| entry.invocation.as_ref())
+            .map(|invocation| invocation.session.budget(Stage::Retry))
+            .max()
+            .unwrap_or_default()
+            .min(input.facts.remaining_deadline);
+        for entry in matched {
             // 整条委托链共享预算，不能每个插件重新取得完整等待时间
-            let remaining = timeout
-                .min(input.facts.remaining_deadline)
-                .saturating_sub(started.elapsed());
+            let remaining = timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
                 break;
             }
-            match call(entry, &input, remaining).await {
-                Ok(RetryDecision::Delegate) => {}
-                Ok(decision) => return Ok(decision),
-                Err(()) => tracing::warn!(
-                    plugin_id = entry.plugin_id,
-                    instance_id = entry.instance_id,
-                    request_id = input.request_id.as_str(),
-                    "插件重试策略无效或调用失败，委托后续策略"
-                ),
+            match tokio::time::timeout(remaining, call(entry, &input, remaining)).await {
+                Err(_) => break,
+                Ok(result) => match result {
+                    Ok(RetryDecision::Delegate) => {}
+                    Ok(decision) => return Ok(decision),
+                    Err(()) => tracing::warn!(
+                        plugin_id = entry.plugin_id,
+                        instance_id = entry.instance_id,
+                        request_id = input.request_id.as_str(),
+                        "插件重试策略无效或调用失败，委托后续策略"
+                    ),
+                },
             }
         }
         Ok(RetryDecision::Delegate)
@@ -79,7 +87,10 @@ async fn call(
             .unwrap_or(u64::MAX),
         allowed_actions,
     };
-    let mut context = invocation.session.context(Stage::Retry, timeout);
+    let mut context = invocation.session.context(
+        Stage::Retry,
+        timeout.min(invocation.session.budget(Stage::Retry)),
+    );
     context.request = crate::adapter::request_context(input.extension_scope.request());
     context.request_id = Some(request.request_id.clone());
     context.attempt_id = Some(format!("{}:{}", request.request_id, request.attempt_index));

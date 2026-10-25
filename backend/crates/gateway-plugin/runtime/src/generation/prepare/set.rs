@@ -10,18 +10,12 @@ use gateway_core::{
         extensions::ExecutionExtensionPlans, observation::RequestObserverPlan,
         policy::RequestPolicyPlan,
     },
+    lifecycle::CancellationToken,
     routing::extensions::{ExtensionSetId, ExtensionSetLease},
 };
 use secrecy::ExposeSecret as _;
 use sha2::{Digest as _, Sha256};
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 pub(super) struct PreparedSet {
     pub(super) id: ExtensionSetId,
@@ -32,7 +26,7 @@ pub(super) struct PreparedSet {
         Option<Arc<dyn gateway_core::engine::authentication::FrontendAuthenticationPlan>>,
     pub(super) sessions: Vec<Arc<PreparedInstance>>,
     pub(super) failures: BTreeMap<String, PluginInstanceRuntimeFailure>,
-    pub(super) shutting_down: Arc<AtomicBool>,
+    pub(super) shutting_down: CancellationToken,
     pub(super) commands: Vec<Arc<crate::adapter::command_line::PluginCommand>>,
     pub(super) management: Vec<crate::adapter::management::ManagementEntry>,
     pub(super) model_aliases: Vec<gateway_core::routing::ContributedModelAlias>,
@@ -94,7 +88,7 @@ impl ExtensionSetLease for PreparedSet {
 
     fn can_serve(&self) -> bool {
         // 发布的是可用能力和故障绑定组成的完整计划；单个进程退出不能使原生转发失效
-        !self.shutting_down.load(Ordering::Acquire)
+        !self.shutting_down.is_cancelled()
     }
 }
 

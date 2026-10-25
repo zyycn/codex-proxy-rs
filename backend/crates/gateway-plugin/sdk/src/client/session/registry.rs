@@ -35,6 +35,13 @@ pub struct HostClient {
 }
 
 impl HostClient {
+    /// 读取父调用剩余处理预算，包含 next 暂停；资源流接管寿命后返回 None
+    /// 外部请求期限、网络操作期限和取消信号仍独立生效
+    #[must_use]
+    pub fn remaining_budget(&self) -> Option<std::time::Duration> {
+        self.deadline.remaining()
+    }
+
     pub(crate) fn maximum_stream_chunk_bytes(&self) -> usize {
         let window = self.credits.maximum_bytes();
         if window == 0 {

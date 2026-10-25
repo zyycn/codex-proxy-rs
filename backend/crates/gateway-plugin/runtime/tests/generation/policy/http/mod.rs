@@ -42,6 +42,24 @@ async fn http_plugin_with_policy(
     ExtensionSetReference,
     gateway_core::engine::middleware::FrozenMiddlewarePlan,
 ) {
+    http_plugin_with_configuration(
+        serde_json::json!({"http":true,"mode":mode}),
+        limits,
+        failure_policy,
+    )
+    .await
+}
+
+async fn http_plugin_with_configuration(
+    configuration: serde_json::Value,
+    limits: RpcLimits,
+    failure_policy: PluginFailurePolicy,
+) -> (
+    tempfile::TempDir,
+    PluginRuntime,
+    ExtensionSetReference,
+    gateway_core::engine::middleware::FrozenMiddlewarePlan,
+) {
     let worker = std::fs::read(env!("CARGO_BIN_EXE_gateway-plugin-test-middleware")).unwrap();
     let package = crate::support::package_with_contributions(
         &worker,
@@ -55,7 +73,7 @@ async fn http_plugin_with_policy(
     let (cache, runtime) = setup_package_with_limits(
         vec![InstanceFixture {
             id: "http-plugin",
-            configuration: serde_json::json!({"http":true,"mode":mode}),
+            configuration,
             bindings: vec![binding(MIDDLEWARE_CONTRIBUTION, "http", 0, failure_policy)],
         }],
         package,

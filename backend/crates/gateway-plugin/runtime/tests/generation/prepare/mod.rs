@@ -2,6 +2,7 @@
 
 mod diagnostics;
 mod instance;
+mod maintenance;
 mod management;
 mod runtime;
 mod set;

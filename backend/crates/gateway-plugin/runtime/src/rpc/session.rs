@@ -12,10 +12,13 @@ use std::{
 use futures::future::BoxFuture;
 use gateway_host::process::{ProcessControl, ProcessSpec, ProcessStartError, ProcessSupervisor};
 use gateway_plugin_sdk::{
-    CallContext, Frame, Handshake, Message, PROTOCOL_VERSION, PluginFault, Stage,
+    CallBudgetError, CallBudgetSource, CallContext, Frame, Handshake, Message, PROTOCOL_VERSION,
+    PluginFault, ResolvedCallBudgets, Stage,
     client::{CallDeadline, CallDeadlinePause, EncodedFrame, read_frame, write_frame},
 };
-use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
+use tokio::sync::{
+    Mutex as AsyncMutex, Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch,
+};
 
 use crate::{PreparedPackage, RpcStream, stream::StreamIngress};
 
@@ -32,7 +35,6 @@ pub struct RpcLimits {
     pub maximum_queue_timeout: Duration,
     pub maximum_callbacks: usize,
     pub handshake_timeout: Duration,
-    pub maximum_call_timeout: Duration,
     pub maximum_stderr_bytes: usize,
 }
 
@@ -46,7 +48,6 @@ impl Default for RpcLimits {
             maximum_queue_timeout: Duration::from_secs(30),
             maximum_callbacks: 64,
             handshake_timeout: Duration::from_secs(5),
-            maximum_call_timeout: Duration::from_secs(120),
             maximum_stderr_bytes: 64 * 1024,
         }
     }
@@ -58,6 +59,8 @@ pub enum RpcError {
     Start(#[source] ProcessStartError),
     #[error("plugin handshake does not match the prepared instance")]
     Handshake(#[source] Option<gateway_core::error::ErrorSource>),
+    #[error("plugin call budget negotiation failed: {0}")]
+    Budget(#[from] CallBudgetError),
     #[error("plugin protocol is invalid")]
     Protocol(#[source] Option<gateway_core::error::ErrorSource>),
     #[error("plugin returned an invalid response at {0:?}")]
@@ -89,6 +92,7 @@ impl RpcError {
         match self {
             RpcError::Start(_) => ("process_start", "插件进程启动失败"),
             RpcError::Handshake(_) => ("handshake", "插件握手失败"),
+            RpcError::Budget(_) => ("call_budget", "插件调用预算协商失败"),
             RpcError::Protocol(_) => ("protocol", "插件协议错误"),
             RpcError::InvalidResponse(stage, _) => (
                 "invalid_response",
@@ -191,6 +195,7 @@ pub trait CallbackHandler: Send + Sync {
 pub struct RpcSession {
     shared: Arc<Shared>,
     handshake: Handshake,
+    budgets: ResolvedCallBudgets,
     data: mpsc::Sender<EncodedFrame>,
     slots: Arc<Semaphore>,
     next_call: AsyncMutex<u64>,
@@ -222,6 +227,7 @@ pub(crate) struct Shared {
     callback_slots: Arc<Semaphore>,
     next_slots: Arc<Semaphore>,
     execution: ExecutionCapacity,
+    cancellations_changed: Notify,
 }
 
 struct State {
@@ -295,6 +301,7 @@ impl Shared {
         }
         self.stopped.send_replace(true);
         self.process.stop();
+        self.cancellations_changed.notify_waiters();
     }
 
     fn expect_stop(&self) {
@@ -512,6 +519,8 @@ impl Shared {
             return Err(RpcError::Protocol(None));
         }
         state.calls.remove(&id);
+        drop(state);
+        self.cancellations_changed.notify_waiters();
         Ok(())
     }
 
@@ -568,8 +577,36 @@ impl Shared {
 }
 
 impl RpcSession {
-    pub(crate) const fn maximum_call_timeout(&self) -> Duration {
-        self.limits.maximum_call_timeout
+    pub fn budget(&self, stage: Stage) -> Duration {
+        self.budgets.budget(stage)
+    }
+
+    #[must_use]
+    pub(crate) fn budget_source(&self, stage: Stage) -> CallBudgetSource {
+        self.budgets.source(stage)
+    }
+
+    /// 替换维护任务前等待已取消的调用确认；未确认仍沿用会话的有界故障回收
+    pub(crate) async fn settle_cancellations(&self) {
+        let ids: Vec<_> = self
+            .shared
+            .state()
+            .calls
+            .iter()
+            .filter_map(|(id, call)| call.cancellation.is_some().then_some(*id))
+            .collect();
+        loop {
+            let changed = self.shared.cancellations_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if !ids.iter().any(|id| self.shared.is_cancelling(*id)) {
+                break;
+            }
+            changed.await;
+        }
+        if !self.is_ready() {
+            self.shared.process.exited().await;
+        }
     }
 
     pub async fn start(
@@ -620,7 +657,6 @@ impl RpcSession {
             || limits.maximum_buffered_body_bytes < 1024
             || limits.maximum_buffered_body_bytes > 16 * 1024 * 1024
             || limits.handshake_timeout.is_zero()
-            || limits.maximum_call_timeout.is_zero()
         {
             return Err(RpcError::Context(None));
         }
@@ -691,11 +727,12 @@ impl RpcSession {
                 Message::Ready {
                     protocol_version,
                     incarnation,
+                    call_budgets,
                 } if protocol_version == handshake.protocol_version
                     && incarnation == handshake.incarnation
                     && reply.payload.is_empty() =>
                 {
-                    Ok(())
+                    ResolvedCallBudgets::resolve(&call_budgets).map_err(RpcError::Budget)
                 }
                 _ => Err(RpcError::Handshake(None)),
             }
@@ -703,15 +740,18 @@ impl RpcSession {
         .await
         .map_err(|_| RpcError::Timeout)
         .and_then(|result| result);
-        if let Err(error) = ready {
-            if let Some(lifecycle) = &lifecycle {
-                // 只有 Ready 之后的存活才可复位预算；长时间卡在握手不等于稳定运行
-                lifecycle.fail(Duration::ZERO);
+        let budgets = match ready {
+            Ok(budgets) => budgets,
+            Err(error) => {
+                if let Some(lifecycle) = &lifecycle {
+                    // 只有 Ready 之后的存活才可复位预算；长时间卡在握手不等于稳定运行
+                    lifecycle.fail(Duration::ZERO);
+                }
+                process.stop();
+                process.exited().await;
+                return Err(error);
             }
-            process.stop();
-            process.exited().await;
-            return Err(error);
-        }
+        };
         let (data, data_receiver) = mpsc::channel(limits.maximum_calls);
         let (control, control_receiver) =
             mpsc::channel(limits.maximum_callbacks + 2 * limits.maximum_calls + 8);
@@ -737,6 +777,7 @@ impl RpcSession {
                 limits.maximum_queued_calls,
                 limits.maximum_queue_timeout,
             ),
+            cancellations_changed: Notify::new(),
         });
         dispatch::start(
             input,
@@ -760,6 +801,7 @@ impl RpcSession {
         Ok(Self {
             shared,
             handshake,
+            budgets,
             data,
             slots: Arc::new(Semaphore::new(limits.maximum_calls)),
             next_call: AsyncMutex::new(1),
@@ -799,8 +841,8 @@ impl RpcSession {
 
     #[must_use]
     pub fn context(&self, stage: gateway_plugin_sdk::Stage, timeout: Duration) -> CallContext {
-        // 宿主生成的上下文受本会话预算约束；固定注册期限不能使较小的总预算无法启动
-        let timeout = timeout.min(self.limits.maximum_call_timeout);
+        // 调用方可以传入更短的外部剩余期限，不能扩大实例已协商的阶段预算
+        let timeout = timeout.min(self.budget(stage));
         CallContext {
             request: None,
             call_id: 0,
@@ -823,7 +865,7 @@ impl RpcSession {
             || context.generation != self.handshake.generation
             || context.incarnation != self.handshake.incarnation
             || context.timeout_ms == 0
-            || Duration::from_millis(context.timeout_ms) > self.limits.maximum_call_timeout
+            || Duration::from_millis(context.timeout_ms) > self.budget(context.stage)
             || method.is_empty()
             || method.len() > 128
         {

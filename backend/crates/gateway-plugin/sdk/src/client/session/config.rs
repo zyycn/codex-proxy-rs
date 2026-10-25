@@ -17,7 +17,6 @@ pub struct SessionConfig {
     pub maximum_callbacks: usize,
     pub maximum_buffered_stream_chunks: usize,
     pub handshake_timeout: Duration,
-    pub maximum_call_timeout: Duration,
 }
 
 impl Default for SessionConfig {
@@ -29,7 +28,6 @@ impl Default for SessionConfig {
             maximum_callbacks: 64,
             maximum_buffered_stream_chunks: 1_024,
             handshake_timeout: Duration::from_secs(5),
-            maximum_call_timeout: Duration::from_secs(120),
         }
     }
 }
@@ -45,7 +43,6 @@ impl SessionConfig {
             || self.maximum_buffered_stream_chunks == 0
             || self.maximum_buffered_stream_chunks > MAXIMUM_BUFFERED_STREAM_CHUNKS
             || self.handshake_timeout.is_zero()
-            || self.maximum_call_timeout.is_zero()
         {
             return Err(SessionError::Configuration);
         }

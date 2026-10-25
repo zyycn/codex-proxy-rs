@@ -1,7 +1,5 @@
 //! 编译插件模型目录贡献并校验能力绑定
 
-use std::time::Duration;
-
 use gateway_admin::model::{
     AdminError,
     plugins::instances::{PluginCapabilityBinding, PluginInstance},
@@ -23,7 +21,7 @@ pub(crate) async fn prepare(
     let reply = session
         .call(
             "model_catalog.register",
-            session.context(Stage::Registration, Duration::from_secs(5)),
+            session.context(Stage::Registration, session.budget(Stage::Registration)),
             serde_json::json!({}),
             Vec::new(),
         )

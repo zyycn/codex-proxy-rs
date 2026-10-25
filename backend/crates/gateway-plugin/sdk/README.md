@@ -64,7 +64,7 @@ sequenceDiagram
   participant H as 宿主 Runtime
   participant P as 插件会话
   H->>P: Hello
-  P-->>H: Ready（相同 incarnation）
+  P-->>H: Ready（相同 incarnation、所需预算声明）
   H->>P: 注册能力，核对清单
   P-->>H: 注册结果
   H->>P: Call（ID、上下文、载荷）
@@ -78,7 +78,7 @@ sequenceDiagram
 ### 并发与期限
 
 每个宿主插件会话默认允许 64 个执行中的 RPC 调用、64 个初次排队调用和 256 个总在途上下文。
-初次排队和等待 `next` 后的恢复排队各限 30 秒，不扣插件自身默认上限 120 秒的处理预算。
+初次排队和等待 `next` 后的恢复排队各限 30 秒，不扣插件自身的处理预算。
 恢复等待占总在途名额，不占初次排队名额。
 等待 `next` 时释放执行名额并暂停处理预算，返回后重新取得名额，继续同一次调用；
 已返回响应头的流继续占用在途预算，不占首结果执行名额。具体组合行为见[洋葱中间件](docs/capabilities.md#洋葱中间件)
@@ -91,13 +91,60 @@ sequenceDiagram
 达到容量或等待上限时，中间件返回过载错误；HTTP 响应为 503（`middleware_capacity_unavailable`），
 不跳过插件或重放请求。调整 SDK 会话配置需重新构建插件包，容量应结合插件耗时、正文和响应流的资源占用评估
 
+### 声明调用预算
+
+插件在 `PluginSession::accept` 后、`run` 前通过 `set_call_budgets` 声明各阶段所需的毫秒预算，可读取
+`session.handshake().configuration`，由自身配置决定模型、批量任务等场景的时长
+
+```rust,no_run
+use gateway_plugin_sdk::{CallBudgets, Stage};
+use gateway_plugin_sdk::client::{PluginHandler, PluginSession, SessionConfig, SessionError};
+
+# async fn configure<R, W, H>(reader: R, writer: W, handler: H) -> Result<(), SessionError>
+# where R: tokio::io::AsyncRead + Unpin + Send + 'static,
+# W: tokio::io::AsyncWrite + Unpin + Send + 'static, H: PluginHandler {
+let mut session = PluginSession::accept(reader, writer, SessionConfig::default()).await?;
+let maintenance_ms = session.handshake().configuration["maintenanceBudgetMs"]
+    .as_u64()
+    .unwrap_or(600_000);
+session.set_call_budgets(CallBudgets::from([
+    (Stage::Maintenance, maintenance_ms),
+    (Stage::CommandLine, 1_800_000),
+]))?;
+session.run(handler).await?;
+# Ok(())
+# }
+```
+
+未声明的阶段使用协议默认值，默认表由 SDK 集中维护，宿主与插件使用同一份合同。
+默认值不限制插件显式声明的最大时长
+
+| 阶段 | 默认预算 |
+| --- | ---: |
+| `registration` | 5 秒 |
+| `configuration`、`authentication` | 30 秒 |
+| `routing`、`scheduling`、`retry`、`observation` | 2 秒 |
+| `maintenance`、`management`、`public_management`、`command_line` | 120 秒 |
+| `http`、`service`、`websocket`、`request`、`attempt`、`outbound`、`upstream` | 120 秒 |
+
+`Ready.call_budgets` 携带显式声明，双方按相同规则解析并冻结该会话预算。预算必须为正的有限毫秒值，
+不接受零值、数值溢出和平台无法表示的期限。修改声明需要创建新会话，不支持调用中无限续期
+
+每次 `CallContext.timeout_ms` 是该调用的初始处理预算，外部剩余期限较短时可以小于会话预算。
+`call.host.remaining_budget()` 读取共享期限中的剩余值，正确反映 `next` 暂停；资源流 owner 接管寿命后返回 `None`。
+普通模型和网络回调消耗父调用剩余预算，不会重置预算。请求总期限、网络操作期限、停用和取消仍独立生效，
+声明长预算不保证模型必然完成，也不提供跨宿主重启恢复；检查点和业务幂等由插件维护
+
+宿主关闭使用独立宽限并取消未完成调用，不等待插件处理预算耗尽。
+注册与配置迁移位于实例准备链路，其实际耗时仍会影响宿主启动和实例就绪
+
 ### 帧与会话
 
 `CallContext.timeout_ms` 限定初始处理期限。宿主对由流或连接 owner 管理的调用设置 `resource_stream`：
 首个流式结果成功返回后，正文、会话及关联回调由资源取消与终态回收，不再沿用初始期限。
 普通调用继续使用原期限；资源模式仍保留并发容量、Credit、父调用关联及取消约束
 
-协议 v5 的帧头由大端 `u32` 元数据长度和大端 `u64` 载荷长度组成，随后依次传输 JSON 元数据和二进制载荷。
+协议 v6 的帧头由大端 `u32` 元数据长度和大端 `u64` 载荷长度组成，随后依次传输 JSON 元数据和二进制载荷。
 元数据保留 64 KiB 上限；正文总量不由插件传输层额外限制。传输内部以 256 KiB 为单次 I/O 块，
 不逐块发起 RPC，也不要求插件配置与宿主同步。读取按进度扩展缓冲区；截断正文必须报错，不能作为完整消息交付
 

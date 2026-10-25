@@ -11,7 +11,7 @@ use gateway_plugin_sdk::{
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let session = PluginSession::accept(
+    let mut session = PluginSession::accept(
         tokio::io::stdin(),
         tokio::io::stdout(),
         SessionConfig::default(),
@@ -22,6 +22,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("map")
         .to_owned();
     let configuration = session.handshake().configuration.clone();
+    if let Some(budgets) = configuration.get("call_budgets_ms") {
+        session.set_call_budgets(serde_json::from_value(budgets.clone())?)?;
+    }
     if mode == "mixed_mounts" {
         let contributes = Contributions::from([(
             Capability::Middleware,

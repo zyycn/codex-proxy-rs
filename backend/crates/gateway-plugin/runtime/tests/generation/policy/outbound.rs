@@ -268,13 +268,18 @@ async fn outbound_next_wait_pauses_plugin_budget_and_cancel_releases_the_continu
     for cancel in [false, true] {
         let (cache, runtime) = runtime(
             vec![
-                instance("outer", 0, serde_json::json!({})),
-                instance("inner", 1, serde_json::json!({})),
+                instance(
+                    "outer",
+                    0,
+                    serde_json::json!({"call_budgets_ms":{"outbound":300}}),
+                ),
+                instance(
+                    "inner",
+                    1,
+                    serde_json::json!({"call_budgets_ms":{"outbound":300}}),
+                ),
             ],
-            RpcLimits {
-                maximum_call_timeout: Duration::from_millis(300),
-                ..RpcLimits::default()
-            },
+            RpcLimits::default(),
         )
         .await;
         let generation = prepare(&runtime).await;

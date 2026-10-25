@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use gateway_admin::model::{
@@ -31,7 +31,6 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
 use crate::{RpcSession, adapter::scope::BindingScope};
 
-const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(2);
 const OBSERVATION_ENVELOPE_RESERVE: usize = 16 * 1024;
 
 #[derive(Clone)]
@@ -57,10 +56,11 @@ impl ObserverEntry {
         event: Event,
         payload: Vec<u8>,
         extensions: gateway_core::engine::extensions::ExtensionCallScope,
-        timeout: Duration,
     ) {
         let request_id = event.request_id();
-        let mut context = self.session.context(Stage::Observation, timeout);
+        let mut context = self
+            .session
+            .context(Stage::Observation, self.session.budget(Stage::Observation));
         context.request = crate::adapter::request_context(extensions.request());
         context.request_id = Some(request_id.to_owned());
         let Ok(_scope) = self.callbacks.prepare_extensions(&context, extensions) else {
@@ -166,7 +166,6 @@ pub(crate) struct PluginObserverPlan {
     websocket_queues: Arc<Mutex<BTreeMap<String, mpsc::Sender<QueuedWebSocketObservation>>>>,
     websocket_queue_capacity: usize,
     maximum_websocket_payload_bytes: usize,
-    timeout: Duration,
 }
 
 struct QueuedWebSocketObservation {
@@ -180,7 +179,6 @@ impl PluginObserverPlan {
     pub(crate) fn compile(
         mut entries: Vec<ObserverEntry>,
         maximum_calls: usize,
-        maximum_call_timeout: Duration,
         maximum_buffered_body_bytes: usize,
     ) -> Option<Arc<Self>> {
         if entries.is_empty() {
@@ -205,7 +203,6 @@ impl PluginObserverPlan {
             websocket_queues: Arc::new(Mutex::new(BTreeMap::new())),
             websocket_queue_capacity: maximum_calls.clamp(1, 256),
             maximum_websocket_payload_bytes,
-            timeout: maximum_call_timeout.min(OBSERVATION_TIMEOUT),
         }))
     }
 
@@ -326,7 +323,6 @@ impl RequestObserverPlan for PluginObserverPlan {
             return;
         };
         let entries = Arc::clone(&self.entries);
-        let timeout = self.timeout;
         handle.spawn(async move {
             let _generation = generation;
             let _slot = slot;
@@ -342,7 +338,6 @@ impl RequestObserverPlan for PluginObserverPlan {
                         Event::RequestCompleted(Box::new(wire_observation(&observation))),
                         Vec::new(),
                         observation.extension_scope().clone(),
-                        timeout,
                     )
                     .await;
             }
@@ -372,10 +367,8 @@ impl PluginObserverPlan {
         let (sender, receiver) = mpsc::channel(self.websocket_queue_capacity);
         queues.insert(request_id.to_owned(), sender.clone());
         let entries = Arc::clone(&self.entries);
-        let timeout = self.timeout;
         handle.spawn(dispatch_websocket_queue(
             entries,
-            timeout,
             generation,
             worker_slot,
             receiver,
@@ -386,7 +379,6 @@ impl PluginObserverPlan {
 
 async fn dispatch_websocket_queue(
     entries: Arc<[ObserverEntry]>,
-    timeout: Duration,
     generation: ExtensionSetReference,
     worker_slot: OwnedSemaphorePermit,
     mut receiver: mpsc::Receiver<QueuedWebSocketObservation>,
@@ -422,7 +414,6 @@ async fn dispatch_websocket_queue(
                     Event::WebSocketResponse(Box::new(request)),
                     queued.payload.to_vec(),
                     queued.observation.extension_scope().clone(),
-                    timeout,
                 )
                 .await;
         }

@@ -552,3 +552,55 @@ async fn a_host_version_mismatch_still_restores_the_enabled_plugin() {
     runtime.shutdown().await;
     super::super::wait_until_empty(cache.path()).await;
 }
+
+#[tokio::test]
+async fn declared_registration_budget_is_not_cut_short_by_process_preparation_timeout() {
+    let (cache, store, runtime) = super::super::setup().await;
+    let mut snapshot = store.snapshot.lock().unwrap().clone();
+    snapshot.instances[0].configuration = serde_json::json!({
+        "registration_delay_ms":31_000,
+        "call_budgets_ms":{"registration":40_000},
+    });
+    let candidate = tokio::time::timeout(
+        Duration::from_secs(45),
+        PluginPreparation::prepare(&runtime, snapshot),
+    )
+    .await
+    .expect("registration stays bounded by its declared budget")
+    .expect("ready process may register beyond the startup control deadline");
+    assert!(candidate.is_ready());
+    drop(candidate);
+    super::super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
+async fn shutdown_cancels_long_registration_and_reclaims_the_unpublished_candidate() {
+    let (cache, store, runtime) = super::super::setup().await;
+    let runtime = std::sync::Arc::new(runtime);
+    let markers = tempfile::tempdir().unwrap();
+    let started = markers.path().join("registration");
+    let mut snapshot = store.snapshot.lock().unwrap().clone();
+    snapshot.instances[0].configuration = serde_json::json!({
+        "registration_started_marker":started,
+        "registration_delay_ms":600_000,
+        "call_budgets_ms":{"registration":600_000},
+    });
+    let preparing = tokio::spawn({
+        let runtime = std::sync::Arc::clone(&runtime);
+        async move { PluginPreparation::prepare(runtime.as_ref(), snapshot).await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !started.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), runtime.shutdown())
+        .await
+        .expect(
+            "shutdown must cancel candidate preparation instead of waiting for its long budget",
+        );
+    assert!(preparing.await.unwrap().is_err());
+    super::super::wait_until_empty(cache.path()).await;
+}

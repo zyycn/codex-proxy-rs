@@ -1,6 +1,6 @@
 //! 将插件管理声明编译为页面、路由与资源入口
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc};
 
 use gateway_admin::model::{
     AdminError,
@@ -34,7 +34,7 @@ pub(crate) async fn prepare(
     let reply = session
         .call(
             "management.register",
-            session.context(Stage::Registration, Duration::from_secs(5)),
+            session.context(Stage::Registration, session.budget(Stage::Registration)),
             serde_json::json!({}),
             Vec::new(),
         )

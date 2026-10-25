@@ -174,8 +174,7 @@ async fn failed_or_cancelled_commands_are_not_replayed_and_children_are_reaped()
                 } else {
                     // 正常完成注册并确认命令已进入子进程后，只推进执行期限
                     tokio::time::pause();
-                    tokio::time::advance(limits.maximum_call_timeout + Duration::from_millis(1))
-                        .await;
+                    tokio::time::advance(Duration::from_secs(120) + Duration::from_millis(1)).await;
                 }
             }
         };
@@ -208,4 +207,47 @@ async fn failed_or_cancelled_commands_are_not_replayed_and_children_are_reaped()
             assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
         }
     }
+}
+
+#[tokio::test]
+async fn command_declared_budget_survives_the_default_and_expires_at_its_own_deadline() {
+    use std::time::Duration;
+
+    let mut config = configuration(json!([]));
+    config["command_wait"] = json!(true);
+    config["call_budgets_ms"] = json!({"command_line":180_000});
+    let (directory, store, runtime) = setup(config).await;
+    let marker = directory.path().join("command-budget.jsonl");
+    store.snapshot.lock().unwrap().instances[0].configuration["command_marker"] = json!(marker);
+    let commands = runtime.prepare_command_line().await.unwrap();
+    let task = tokio::spawn(async move {
+        let result = commands.execute("commands", "inspect", &[]).await;
+        (commands, result)
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !marker.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(121)).await;
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished(), "声明的命令预算不受默认 120 秒截断");
+    tokio::time::advance(Duration::from_secs(60)).await;
+    let (commands, result) = task.await.unwrap();
+    tokio::time::resume();
+    let error = result.err().unwrap();
+    assert!(matches!(
+        error,
+        gateway_plugin_runtime::PluginCommandError::Incomplete {
+            saved_accounts: 0,
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("超时") || error.to_string().contains("总期限"));
+    commands.shutdown().await;
+    assert_eq!(std::fs::read_to_string(marker).unwrap().lines().count(), 1);
 }

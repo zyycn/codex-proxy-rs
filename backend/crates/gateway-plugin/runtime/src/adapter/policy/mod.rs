@@ -3,7 +3,7 @@
 mod retry;
 mod route_schedule;
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, sync::Arc};
 
 use gateway_admin::model::{
     AdminError,
@@ -12,8 +12,6 @@ use gateway_admin::model::{
 use gateway_plugin_sdk::{Capability, Manifest, Stage};
 
 use crate::{RpcSession, adapter::scope::BindingScope, callback::PluginCallbacks};
-
-const POLICY_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub(crate) enum PolicyEntry {
@@ -219,7 +217,6 @@ pub(crate) struct PluginRequestPolicyPlan {
     routers: Arc<[ModelRouterEntry]>,
     schedulers: Arc<[AccountSchedulerEntry]>,
     retries: Arc<[RetryEntry]>,
-    policy_timeout: Duration,
 }
 
 impl fmt::Debug for PluginRequestPolicyPlan {
@@ -234,10 +231,7 @@ impl fmt::Debug for PluginRequestPolicyPlan {
 }
 
 impl PluginRequestPolicyPlan {
-    pub(crate) fn compile(
-        entries: Vec<PolicyEntry>,
-        maximum_call_timeout: Duration,
-    ) -> Result<Option<Arc<Self>>, AdminError> {
+    pub(crate) fn compile(entries: Vec<PolicyEntry>) -> Result<Option<Arc<Self>>, AdminError> {
         let mut routers = Vec::new();
         let mut schedulers = Vec::new();
         let mut retries = Vec::new();
@@ -277,7 +271,6 @@ impl PluginRequestPolicyPlan {
             routers: routers.into(),
             schedulers: schedulers.into(),
             retries: retries.into(),
-            policy_timeout: maximum_call_timeout.min(POLICY_TIMEOUT),
         })))
     }
 }

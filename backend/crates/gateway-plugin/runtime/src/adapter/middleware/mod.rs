@@ -18,7 +18,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     sync::Arc,
-    time::Duration,
 };
 
 #[derive(Clone)]
@@ -168,7 +167,6 @@ fn compile_entry(
 
 pub(crate) struct PluginMiddlewarePlan {
     middleware: BTreeMap<MiddlewareMount, Box<[Arc<MiddlewareEntry>]>>,
-    middleware_timeout: Duration,
 }
 
 impl fmt::Debug for PluginMiddlewarePlan {
@@ -181,10 +179,7 @@ impl fmt::Debug for PluginMiddlewarePlan {
 }
 
 impl PluginMiddlewarePlan {
-    pub(crate) fn compile(
-        mut entries: Vec<MiddlewareEntry>,
-        maximum_call_timeout: Duration,
-    ) -> Option<Arc<Self>> {
+    pub(crate) fn compile(mut entries: Vec<MiddlewareEntry>) -> Option<Arc<Self>> {
         if entries.is_empty() {
             return None;
         }
@@ -208,7 +203,6 @@ impl PluginMiddlewarePlan {
                 .into_iter()
                 .map(|(mount, entries)| (mount, entries.into_boxed_slice()))
                 .collect(),
-            middleware_timeout: maximum_call_timeout,
         }))
     }
 }

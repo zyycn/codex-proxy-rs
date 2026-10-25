@@ -36,6 +36,33 @@ pub(super) struct LifecycleCallbacks {
 
 struct OversizedReplyCallbacks;
 
+#[derive(Default)]
+struct BudgetCallbacks {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl CallbackHandler for BudgetCallbacks {
+    fn call(
+        &self,
+        context: CallContext,
+        _method: String,
+        _params: serde_json::Value,
+        payload: Vec<u8>,
+    ) -> BoxFuture<'static, Result<RpcReply, PluginFault>> {
+        let started = Arc::clone(&self.started);
+        let release = Arc::clone(&self.release);
+        Box::pin(async move {
+            started.notify_one();
+            release.notified().await;
+            Ok(RpcReply {
+                result: json!({"budget_ms": context.timeout_ms}),
+                payload,
+            })
+        })
+    }
+}
+
 impl CallbackHandler for OversizedReplyCallbacks {
     fn call(
         &self,
@@ -336,7 +363,7 @@ async fn real_process_round_trips_raw_bytes_and_reentrant_callbacks() {
         session
             .context(Stage::Registration, Duration::MAX)
             .timeout_ms,
-        u64::try_from(RpcLimits::default().maximum_call_timeout.as_millis()).unwrap()
+        5_000
     );
     *callbacks.nested.lock().unwrap() = Some(Arc::downgrade(&session));
     let context = session.context(Stage::Management, Duration::from_secs(2));
@@ -352,6 +379,106 @@ async fn real_process_round_trips_raw_bytes_and_reentrant_callbacks() {
     assert_eq!(reply.result, json!({"hello": "世界"}));
     assert_eq!(reply.payload, [0, 255, 128]);
     assert_eq!(callbacks.called.load(Ordering::Relaxed), 1);
+    session.shutdown(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn declared_stage_budget_covers_long_callback_without_affecting_other_calls() {
+    let (_cache, prepared, mut handshake, processes) = prepared_session();
+    handshake.configuration = json!({"call_budgets_ms":{"maintenance":600_000,"management":40}});
+    let callbacks = Arc::new(BudgetCallbacks::default());
+    let session = Arc::new(
+        RpcSession::start(
+            prepared,
+            handshake,
+            RpcLimits::default(),
+            &processes,
+            callbacks.clone(),
+        )
+        .await
+        .unwrap(),
+    );
+    let calling = {
+        let session = Arc::clone(&session);
+        tokio::spawn(async move {
+            session
+                .call(
+                    "callback",
+                    session.context(Stage::Maintenance, session.budget(Stage::Maintenance)),
+                    json!({}),
+                    vec![],
+                )
+                .await
+        })
+    };
+    callbacks.started.notified().await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(125)).await;
+    assert!(!calling.is_finished());
+    tokio::time::resume();
+    let short = session
+        .call(
+            "hang",
+            session.context(Stage::Management, session.budget(Stage::Management)),
+            json!({}),
+            vec![],
+        )
+        .await;
+    assert!(matches!(short, Err(RpcError::Timeout)));
+    callbacks.release.notify_one();
+    let reply = calling.await.unwrap().unwrap();
+    assert_eq!(reply.result, json!({"budget_ms":600_000}));
+    assert!(session.is_ready());
+    session.shutdown(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn invalid_budget_rejects_candidate_before_business_and_releases_process_capacity() {
+    let (_cache, prepared, mut handshake, _) = prepared_session();
+    let processes =
+        gateway_host::process::ProcessSupervisor::new(std::num::NonZeroUsize::new(1).unwrap());
+    handshake.configuration = json!({"call_budgets_ms":{"maintenance":0}});
+    let callbacks = Arc::new(LifecycleCallbacks::default());
+    let result = RpcSession::start(
+        prepared.clone(),
+        handshake.clone(),
+        RpcLimits::default(),
+        &processes,
+        callbacks.clone(),
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(RpcError::Budget(
+            gateway_plugin_sdk::CallBudgetError::Invalid {
+                stage: Stage::Maintenance,
+                milliseconds: 0,
+            }
+        ))
+    ));
+    assert_eq!(callbacks.begun.load(Ordering::Relaxed), 0);
+    handshake.configuration = json!({});
+    handshake.incarnation = uuid::Uuid::new_v4().to_string();
+    let session = RpcSession::start(
+        prepared,
+        handshake,
+        RpcLimits::default(),
+        &processes,
+        callbacks,
+    )
+    .await
+    .unwrap();
+    assert!(
+        session
+            .call(
+                "echo",
+                session.context(Stage::Maintenance, session.budget(Stage::Maintenance)),
+                json!({}),
+                vec![]
+            )
+            .await
+            .is_ok()
+    );
     session.shutdown(Duration::from_secs(1)).await;
 }
 

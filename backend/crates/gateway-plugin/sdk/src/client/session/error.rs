@@ -1,12 +1,14 @@
 //! 插件侧传输和会话错误及稳定业务错误投影
 
-use crate::{ErrorCode, FrameError, PluginFault};
+use crate::{CallBudgetError, ErrorCode, FrameError, PluginFault};
 
 /// 插件侧传输和会话错误
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("plugin session configuration is invalid")]
     Configuration,
+    #[error(transparent)]
+    CallBudget(#[from] CallBudgetError),
     #[error("plugin handshake is invalid")]
     Handshake,
     #[error("plugin protocol is invalid")]
@@ -36,7 +38,11 @@ impl SessionError {
             Self::Timeout => PluginFault::new(ErrorCode::Timeout, "host callback timed out"),
             Self::Cancelled => PluginFault::new(ErrorCode::Cancelled, "parent call was cancelled"),
             Self::Capacity => PluginFault::new(ErrorCode::Capacity, "plugin capacity is exhausted"),
-            Self::Configuration | Self::Protocol | Self::Handshake | Self::Frame(_) => {
+            Self::Configuration
+            | Self::CallBudget(_)
+            | Self::Protocol
+            | Self::Handshake
+            | Self::Frame(_) => {
                 PluginFault::new(ErrorCode::InvalidInput, "plugin session input is invalid")
             }
             Self::Closed | Self::HandlerStopped => {

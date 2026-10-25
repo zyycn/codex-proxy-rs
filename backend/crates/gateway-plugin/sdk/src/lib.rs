@@ -1,5 +1,6 @@
 //! 实验性插件线协议；不依赖网关领域或基础设施类型
 
+mod budget;
 pub mod call;
 mod capability;
 #[cfg(feature = "io")]
@@ -9,6 +10,7 @@ mod error;
 mod manifest;
 mod message;
 
+pub use budget::{CallBudgetError, CallBudgetSource, CallBudgets, ResolvedCallBudgets};
 pub use capability::{Capability, ContributionDeclaration, Contributions, FailurePolicy, Stage};
 pub use context::{CallContext, Handshake, RequestContext};
 pub use error::{ErrorCode, PluginFault, SendState};

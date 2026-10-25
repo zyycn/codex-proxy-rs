@@ -1,6 +1,6 @@
 //! 插件模型路由与账号调度调用，以及请求事实的线协议投影
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures::future::BoxFuture;
@@ -38,7 +38,7 @@ impl RequestPolicyPlan for PluginRequestPolicyPlan {
         input: gateway_core::engine::policy::RetryInput,
     ) -> BoxFuture<'static, Result<gateway_core::engine::policy::RetryDecision, RequestPolicyFault>>
     {
-        super::retry::decide(self.retries.clone(), input, self.policy_timeout)
+        super::retry::decide(self.retries.clone(), input)
     }
 
     fn route_model(
@@ -46,12 +46,11 @@ impl RequestPolicyPlan for PluginRequestPolicyPlan {
         input: ModelRouteInput,
     ) -> BoxFuture<'static, Result<ModelRouteDecision, RequestPolicyFault>> {
         let routers = std::sync::Arc::clone(&self.routers);
-        let timeout = self.policy_timeout;
         Box::pin(async move {
             for entry in routers.iter().filter(|entry| {
                 !input.suppresses_plugin(&entry.instance_id) && entry.scope.matches_route(&input)
             }) {
-                let result = route_with_entry(entry, &input, timeout).await;
+                let result = route_with_entry(entry, &input).await;
                 match result {
                     Ok(ModelRouteDecision::Unhandled) => continue,
                     Ok(decision) => return Ok(decision),
@@ -78,14 +77,13 @@ impl RequestPolicyPlan for PluginRequestPolicyPlan {
         input: AccountScheduleInput,
     ) -> BoxFuture<'static, Result<AccountScheduleDecision, RequestPolicyFault>> {
         let schedulers = std::sync::Arc::clone(&self.schedulers);
-        let timeout = self.policy_timeout;
         Box::pin(async move {
             let Some(entry) = schedulers.iter().find(|entry| {
                 !input.suppresses_plugin(&entry.instance_id) && entry.scope.matches_schedule(&input)
             }) else {
                 return Ok(AccountScheduleDecision::Delegate);
             };
-            match schedule_with_entry(entry, &input, timeout).await {
+            match schedule_with_entry(entry, &input).await {
                 Ok(decision) => Ok(decision),
                 Err(())
                     if entry.failure_policy
@@ -108,7 +106,6 @@ impl RequestPolicyPlan for PluginRequestPolicyPlan {
 async fn route_with_entry(
     entry: &ModelRouterEntry,
     input: &ModelRouteInput,
-    timeout: Duration,
 ) -> Result<ModelRouteDecision, ()> {
     let invocation = entry.invocation.as_ref().ok_or(())?;
     let projection = operation_projection(input.operation())?;
@@ -126,7 +123,9 @@ async fn route_with_entry(
             .collect(),
         headers,
     };
-    let mut context = invocation.session.context(Stage::Routing, timeout);
+    let mut context = invocation
+        .session
+        .context(Stage::Routing, invocation.session.budget(Stage::Routing));
     context.request = crate::adapter::request_context(input.extension_scope().request());
     context.request_id = Some(input.request_id().as_str().to_owned());
     let _network_scope = invocation
@@ -172,7 +171,6 @@ async fn route_with_entry(
 async fn schedule_with_entry(
     entry: &AccountSchedulerEntry,
     input: &AccountScheduleInput,
-    timeout: Duration,
 ) -> Result<AccountScheduleDecision, ()> {
     let invocation = entry.invocation.as_ref().ok_or(())?;
     let candidates = input.candidates();
@@ -197,7 +195,10 @@ async fn schedule_with_entry(
             })
             .collect(),
     };
-    let mut context = invocation.session.context(Stage::Scheduling, timeout);
+    let mut context = invocation.session.context(
+        Stage::Scheduling,
+        invocation.session.budget(Stage::Scheduling),
+    );
     context.request = crate::adapter::request_context(input.extension_scope().request());
     context.request_id = Some(input.request_id().as_str().to_owned());
     context.attempt_id = Some(format!(

@@ -528,15 +528,29 @@ impl Peer {
                 return;
             }
             "plugin.reconcile" => {
-                let result = if let Some(results) = self.data_queries(id).await {
-                    self.append_observation_marker(
-                        "maintenance_marker",
-                        &json!({"phase":"done", "results":results}),
-                    );
-                    Ok(())
-                } else {
-                    self.reconcile_fixture(id).await
-                };
+                let result =
+                    if let Some(path) = self.configuration["maintenance_wait_marker"].as_str() {
+                        self.append_observation_marker(
+                            "maintenance_marker",
+                            &json!({"phase":"start", "id":id}),
+                        );
+                        while !std::path::Path::new(path).exists() {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                        self.append_observation_marker(
+                            "maintenance_marker",
+                            &json!({"phase":"done", "id":id}),
+                        );
+                        Ok(())
+                    } else if let Some(results) = self.data_queries(id).await {
+                        self.append_observation_marker(
+                            "maintenance_marker",
+                            &json!({"phase":"done", "results":results}),
+                        );
+                        Ok(())
+                    } else {
+                        self.reconcile_fixture(id).await
+                    };
                 match result {
                     Ok(()) => {
                         self.send(
@@ -1374,6 +1388,10 @@ impl Peer {
                 return;
             }
             "plugin.register" => {
+                self.append_observation_marker("registration_started_marker", &json!({"id":id}));
+                if let Some(delay) = self.configuration["registration_delay_ms"].as_u64() {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                }
                 if let Some(request) = self.configuration.get("registration_http") {
                     let result = self
                         .callback_payload(
@@ -1489,6 +1507,13 @@ async fn main() {
         Message::Ready {
             protocol_version: gateway_plugin_sdk::PROTOCOL_VERSION,
             incarnation: handshake.incarnation,
+            call_budgets: serde_json::from_value(
+                peer.configuration
+                    .get("call_budgets_ms")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            )
+            .unwrap(),
         },
         vec![],
     )
@@ -1519,6 +1544,10 @@ async fn main() {
             } => {
                 assert!(id > last_call && !id.is_multiple_of(2) && context.call_id == id);
                 last_call = id;
+                peer.append_observation_marker(
+                    "call_context_marker",
+                    &json!({"method":method, "context":context}),
+                );
                 if matches!(
                     method.as_str(),
                     "malformed_truncated_frame" | "malformed_frame_length" | "malformed_metadata"

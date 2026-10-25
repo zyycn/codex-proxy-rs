@@ -58,6 +58,19 @@ impl PluginHandler for TestHandler {
         Box::pin(async move {
             match call.method.as_str() {
                 "echo" => Ok(CallReply::unary(call.params, call.payload)),
+                "budget" => {
+                    call.host
+                        .call("host.log", json!({}), vec![])
+                        .await
+                        .map_err(SessionError::into_plugin_fault)?;
+                    Ok(CallReply::unary(
+                        json!({
+                            "initial_ms": call.context.timeout_ms,
+                            "remaining_ms": call.host.remaining_budget().map(|value| value.as_millis()),
+                        }),
+                        vec![],
+                    ))
+                }
                 "key_facts" => {
                     let result = call
                         .host
@@ -263,7 +276,6 @@ async fn start_session_with_capacity<H: PluginHandler>(
             maximum_callbacks: 4,
             maximum_buffered_stream_chunks: 16,
             handshake_timeout: Duration::from_secs(1),
-            maximum_call_timeout: Duration::from_secs(2),
         },
     )
     .await
@@ -296,6 +308,7 @@ async fn start_configured_session<H: PluginHandler>(
             message: Message::Ready {
                 protocol_version: PROTOCOL_VERSION,
                 ref incarnation,
+                ..
             },
             ref payload,
         } if incarnation == "test-incarnation" && payload.is_empty()

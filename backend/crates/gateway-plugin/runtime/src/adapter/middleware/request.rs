@@ -1,9 +1,6 @@
 //! 请求与尝试中间件的 RPC 调用、失败回退和响应正文生命周期
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -37,7 +34,6 @@ pub(super) async fn invoke(
     context: MiddlewareContext,
     request: MiddlewareRequest,
     next: MiddlewareNext,
-    maximum_timeout: Duration,
 ) -> Result<MiddlewareResponse, MiddlewareError> {
     let Some(invocation_ports) = &entry.invocation else {
         return if entry.failure_policy
@@ -48,10 +44,7 @@ pub(super) async fn invoke(
             Err(MiddlewareError::Fault)
         };
     };
-    if maximum_timeout.is_zero()
-        || context.deadline().is_elapsed()
-        || context.cancellation().is_cancelled()
-    {
+    if context.deadline().is_elapsed() || context.cancellation().is_cancelled() {
         return Err(MiddlewareError::Fault);
     }
     let invocation = MiddlewareInvocation::new(&context, request, next, entry.instance_id.clone());
@@ -59,18 +52,21 @@ pub(super) async fn invoke(
         Ok(projection) => projection,
         Err(_) => return recover_rpc(&entry, &invocation, RpcError::Context(None)).await,
     };
+    let stage = match entry.mount {
+        MiddlewareMount::Http
+        | MiddlewareMount::WebSocket
+        | MiddlewareMount::Service
+        | MiddlewareMount::Outbound => {
+            return Err(MiddlewareError::InvalidState);
+        }
+        MiddlewareMount::Request => Stage::Request,
+        MiddlewareMount::Attempt => Stage::Attempt,
+    };
     let mut call_context = invocation_ports.session.context(
-        match entry.mount {
-            MiddlewareMount::Http
-            | MiddlewareMount::WebSocket
-            | MiddlewareMount::Service
-            | MiddlewareMount::Outbound => {
-                return Err(MiddlewareError::InvalidState);
-            }
-            MiddlewareMount::Request => Stage::Request,
-            MiddlewareMount::Attempt => Stage::Attempt,
-        },
-        maximum_timeout,
+        stage,
+        context
+            .deadline()
+            .bounded(invocation_ports.session.budget(stage)),
     );
     call_context.resource_stream = true;
     call_context.request = crate::adapter::request_context(context.extension_scope().request());

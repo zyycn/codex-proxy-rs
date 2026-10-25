@@ -90,9 +90,10 @@ impl PluginRuntime {
                     .session
                     .call(
                         "plugin.state.migrate",
-                        instance
-                            .session
-                            .context(Stage::Configuration, Duration::from_secs(30)),
+                        instance.session.context(
+                            Stage::Configuration,
+                            instance.session.budget(Stage::Configuration),
+                        ),
                         serde_json::json!({}),
                         serde_json::to_vec(&request)
                             .map_err(|_| AdminError::internal("状态迁移批次无法编码"))?,
@@ -207,7 +208,11 @@ impl gateway_admin::ports::plugins::PluginStateLifecycle for PluginRuntime {
         prepared: &ExtensionSetReference,
         transition: PluginStateTransition,
     ) -> Result<(), AdminError> {
-        self.run_state_migration(prepared, transition).await
+        tokio::select! {
+            biased;
+            () = self.shutting_down.cancelled() => Err(AdminError::unavailable("插件运行时正在关闭")),
+            result = self.run_state_migration(prepared, transition) => result,
+        }
     }
 }
 pub(super) fn map_state_admin_error(

@@ -2,9 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CallContext, Handshake, PluginFault};
+use crate::{CallBudgets, CallContext, Handshake, PluginFault};
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// 元数据与二进制载荷分开，流分块不经过 JSON/base64
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -16,6 +16,7 @@ pub enum Message {
     Ready {
         protocol_version: u32,
         incarnation: String,
+        call_budgets: CallBudgets,
     },
     Call {
         id: u64,

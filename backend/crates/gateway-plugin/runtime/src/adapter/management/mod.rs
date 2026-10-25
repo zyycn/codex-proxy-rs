@@ -98,7 +98,7 @@ impl ManagementEntry {
         .map_err(|_| AdminError::invalid("插件管理请求无法编码"))?;
         let mut context = self
             .session
-            .context(Stage::Management, limits.maximum_call_timeout);
+            .context(Stage::Management, self.session.budget(Stage::Management));
         context.request = crate::adapter::request_context(request.request_context.as_deref());
         context.request_id = Some(request.request_id);
         let _scope = self
