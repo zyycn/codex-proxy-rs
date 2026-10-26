@@ -28,7 +28,7 @@ fn identity_queries_keep_frozen_permissions_without_using_execution_resources() 
         let settings = service.request_settings().unwrap();
         let key = ClientApiKeyId::new("key_start_test").unwrap();
         let client =
-            NestedModelExecutionPort::resolve_client(&service, key.clone(), Some(settings.clone()))
+            ClientIdentityPort::resolve_client(&service, key.clone(), Some(settings.clone()))
                 .await
                 .unwrap();
         snapshots.publish(start_snapshot_with_policy(
@@ -59,12 +59,11 @@ fn identity_queries_keep_frozen_permissions_without_using_execution_resources() 
         .await
         .unwrap();
         assert_eq!(models, vec![PublicModelId::new("gpt-start").unwrap()]);
-        let frozen =
-            NestedModelExecutionPort::resolve_client(&service, key.clone(), Some(settings))
-                .await
-                .unwrap();
+        let frozen = ClientIdentityPort::resolve_client(&service, key.clone(), Some(settings))
+            .await
+            .unwrap();
         assert_eq!(frozen.snapshot().revision().get(), 1);
-        let current = NestedModelExecutionPort::resolve_client(&service, key, None).await;
+        let current = ClientIdentityPort::resolve_client(&service, key, None).await;
         assert!(matches!(current, Err(error) if error.kind() == GatewayErrorKind::Unauthorized));
 
         let cancellation = CancellationToken::default();
@@ -108,7 +107,7 @@ fn execution_scope_limits_apply_only_when_starting_a_model() {
                 scope.extending(format!("ancestor-{index}")).unwrap()
             });
         for extension_scope in [repeated, exhausted] {
-            let client = NestedModelExecutionPort::resolve_client(
+            let client = ClientIdentityPort::resolve_client(
                 &service,
                 ClientApiKeyId::new("key_start_test").unwrap(),
                 None,
@@ -234,7 +233,7 @@ fn verification_keeps_parent_origin_and_requires_the_frontend_principal_mapping(
             let mut cancelled_origin = origin.clone();
             cancelled_origin.cancellation = CancellationToken::default();
             cancelled_origin.cancellation.cancel();
-            let cancelled = NestedModelExecutionPort::verify_client(
+            let cancelled = ClientIdentityPort::verify_client(
                 &service,
                 ClientAuthenticationRequest::new("External fixture")
                     .unwrap()
@@ -244,7 +243,7 @@ fn verification_keeps_parent_origin_and_requires_the_frontend_principal_mapping(
             .await;
             assert!(matches!(cancelled, Err(error) if error.kind() == GatewayErrorKind::Cancelled));
             assert_eq!(plan.calls.load(Ordering::SeqCst), 0);
-            let result = NestedModelExecutionPort::verify_client(
+            let result = ClientIdentityPort::verify_client(
                 &service,
                 ClientAuthenticationRequest::new("External fixture")
                     .unwrap()

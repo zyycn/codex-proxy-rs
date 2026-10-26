@@ -1,4 +1,4 @@
-//! 复用 Core 的身份查询与模型执行入口；不拥有权限、路由、重试或计费规则
+//! 模型目录与执行适配；身份解析交给客户端端口，路由与计费沿用 Core
 
 use std::sync::{Arc, OnceLock, Weak};
 
@@ -8,7 +8,6 @@ use gateway_core::{
     account::ProviderAccountId,
     engine::{
         CommitRequirement, ModelRequestId,
-        authentication::ClientAuthenticationRequest,
         execution::{
             AuthenticatedClient, ClientTransport, ExecutionRequestMetadata, ExecutionSession,
         },
@@ -22,12 +21,10 @@ use gateway_core::{
         GenerateRequest, ImageRequest, ImageRequestKind, Operation, ProtocolPayload,
         RawJsonPayload, StandaloneSearchRequest,
     },
-    policy::ClientApiKeyId,
-    routing::{PublicModelId, UpstreamModelId},
+    routing::PublicModelId,
 };
 use gateway_plugin_sdk::{
     CallContext, ErrorCode, PluginFault,
-    call::data,
     call::host::{
         ModelEventBatch, ModelExecuteRequest, ModelExecuteResult, ModelListRequest,
         ModelListResult, ModelOperation, ModelStreamCloseRequest, ModelStreamReadRequest,
@@ -39,7 +36,6 @@ use super::{CallResources, denied, invalid};
 use crate::RpcReply;
 
 const MAX_MODEL_STREAMS_PER_CALL: usize = 16;
-const MAX_CLIENT_IDENTITIES_PER_CALL: usize = 16;
 
 pub(crate) struct PluginModelPortSlot {
     port: OnceLock<Weak<dyn NestedModelExecutionPort>>,
@@ -65,6 +61,7 @@ impl PluginModelPortSlot {
 
 pub(super) struct PluginModels {
     slot: Arc<PluginModelPortSlot>,
+    clients: Arc<super::client::PluginClients>,
     request_limits: Arc<super::request_limits::RequestLimits>,
     maximum_payload: usize,
 }
@@ -72,11 +69,13 @@ pub(super) struct PluginModels {
 impl PluginModels {
     pub(super) fn new(
         slot: Arc<PluginModelPortSlot>,
+        clients: Arc<super::client::PluginClients>,
         request_limits: Arc<super::request_limits::RequestLimits>,
         maximum_payload: usize,
     ) -> Self {
         Self {
             slot,
+            clients,
             request_limits,
             maximum_payload,
         }
@@ -91,64 +90,6 @@ impl PluginModels {
         payload: Vec<u8>,
     ) -> Result<RpcReply, PluginFault> {
         match method {
-            data::CLIENT_VERIFY => {
-                if params != serde_json::json!({}) {
-                    return Err(invalid());
-                }
-                let request: data::VerifyClientRequest =
-                    serde_json::from_slice(&payload).map_err(|_| invalid())?;
-                let mut authentication = ClientAuthenticationRequest::new(request.authorization)
-                    .map_err(|_| invalid())?
-                    .with_invocation(call.child_origin(context)?);
-                if let Some(settings) = call.request_settings() {
-                    authentication = authentication.with_settings(settings);
-                }
-                let port = self.slot.upgrade()?;
-                call.observe_dispatch()?;
-                let client = port
-                    .verify_client(authentication)
-                    .await
-                    .map_err(super::error::gateway)?;
-                super::admin::encode(&data::VerifiedClient {
-                    client_key_id: client.policy().key_id().as_str().to_owned(),
-                })
-            }
-            data::ACCESS_CHECK => {
-                if params != serde_json::json!({}) {
-                    return Err(invalid());
-                }
-                let request: data::AccessQuery =
-                    serde_json::from_slice(&payload).map_err(|_| invalid())?;
-                let port = self.slot.upgrade()?;
-                let client = self.identity(&port, call, request.client_key_id).await?;
-                let scope = client.policy().account_scope();
-                let model = request
-                    .upstream_model
-                    .map(UpstreamModelId::new)
-                    .transpose()
-                    .map_err(|_| invalid())?;
-                let accounts = request
-                    .account_ids
-                    .into_iter()
-                    .map(|account_id| {
-                        let account =
-                            ProviderAccountId::new(account_id.clone()).map_err(|_| invalid())?;
-                        let allowed = model.as_ref().map_or_else(
-                            || scope.allows(&account),
-                            |model| scope.allows_model(&account, model.as_str()),
-                        );
-                        Ok(data::AccountAccessFacts {
-                            account_id,
-                            allowed,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, PluginFault>>()?;
-                super::admin::encode(&data::AccessFacts {
-                    schema_version: 1,
-                    client_key_id: client.policy().key_id().as_str().to_owned(),
-                    accounts,
-                })
-            }
             "host.models.list" => {
                 if !payload.is_empty() {
                     return Err(invalid());
@@ -162,7 +103,7 @@ impl PluginModels {
                     return Err(invalid());
                 }
                 let port = self.slot.upgrade()?;
-                let client = self.identity(&port, call, request.client_key_id).await?;
+                let client = self.clients.identity(call, request.client_key_id).await?;
                 let models = port
                     .models(
                         client,
@@ -196,7 +137,7 @@ impl PluginModels {
                 let port = self.slot.upgrade()?;
                 let stream = method == "host.model.execute_stream";
                 let started = if let Some(client_key_id) = request.client_key_id.take() {
-                    let client = self.identity(&port, call, client_key_id).await?;
+                    let client = self.clients.identity(call, client_key_id).await?;
                     check_size(client.snapshot().responses_max_decompressed_body_bytes())?;
                     let request = self.request_parts(request, payload, stream)?;
                     let request = Self::bound_request(context, call, request, client);
@@ -293,38 +234,6 @@ impl PluginModels {
             }
             _ => Err(denied()),
         }
-    }
-
-    async fn identity(
-        &self,
-        port: &Arc<dyn NestedModelExecutionPort>,
-        call: &CallResources,
-        client_key_id: String,
-    ) -> Result<AuthenticatedClient, PluginFault> {
-        let key = ClientApiKeyId::new(client_key_id.clone()).map_err(|_| invalid())?;
-        let settings = call.request_settings();
-        let mut identities = call.client_identities.lock().await;
-        if let Some(client) = identities
-            .get(&client_key_id)
-            .filter(|client| client.request_settings() == settings.as_ref())
-        {
-            return Ok(client.clone());
-        }
-        if !identities.contains_key(&client_key_id)
-            && identities.len() >= MAX_CLIENT_IDENTITIES_PER_CALL
-        {
-            return Err(PluginFault::new(
-                ErrorCode::Capacity,
-                "client identity capacity is exhausted",
-            ));
-        }
-        let client = port
-            .resolve_client(key, settings)
-            .await
-            .map_err(super::error::gateway)?;
-        // 查询与执行共用调用内快照，执行链和子执行取消只在真正启动时建立
-        identities.insert(client_key_id, client.clone());
-        Ok(client)
     }
 
     fn request(

@@ -8,7 +8,8 @@ use super::{
 use crate::{
     PackageLimits, RpcLimits, RpcSession,
     callback::{
-        PluginAccountPortSlot, PluginAffinityPortSlot, PluginClientKeyPortSlot, PluginModelPortSlot,
+        PluginAccountPortSlot, PluginAffinityPortSlot, PluginClientIdentityPortSlot,
+        PluginClientKeyPortSlot, PluginModelPortSlot,
     },
 };
 use gateway_admin::{
@@ -21,7 +22,7 @@ use gateway_admin::{
 };
 use gateway_core::{
     engine::{
-        authentication::FrontendAuthenticationExtensionIndex,
+        authentication::{ClientIdentityPort, FrontendAuthenticationExtensionIndex},
         extensions::ExecutionExtensionIndex,
         nested::{AffinityLookupPort, NestedModelExecutionPort},
         observation::RequestObserverExtensionIndex,
@@ -69,6 +70,7 @@ pub struct PluginRuntime {
     pub(super) account_ports: Arc<PluginAccountPortSlot>,
     pub(super) client_key_ports: Arc<PluginClientKeyPortSlot>,
     pub(super) resource_ports: Arc<crate::callback::PluginResourcePorts>,
+    pub(super) client_identity_port: Arc<PluginClientIdentityPortSlot>,
     pub(super) model_ports: Arc<PluginModelPortSlot>,
     pub(super) affinity_ports: Arc<PluginAffinityPortSlot>,
     pub(super) observers: RequestObserverExtensionIndex,
@@ -113,6 +115,7 @@ impl PluginRuntime {
             account_ports: Arc::new(PluginAccountPortSlot::new()),
             client_key_ports: Arc::new(PluginClientKeyPortSlot::new()),
             resource_ports: Arc::new(crate::callback::PluginResourcePorts::new()),
+            client_identity_port: Arc::new(PluginClientIdentityPortSlot::new()),
             model_ports: Arc::new(PluginModelPortSlot::new()),
             affinity_ports: Arc::new(PluginAffinityPortSlot::new()),
             observers: RequestObserverExtensionIndex::default(),
@@ -166,6 +169,14 @@ impl PluginRuntime {
         access: &Arc<dyn PluginClientKeyAccess>,
     ) -> Result<(), AdminError> {
         self.client_key_ports.bind(access)
+    }
+
+    /// 身份查询独立装配，复用 Core 的认证与冻结权限，不要求绑定模型执行端口
+    pub fn bind_client_identity_port(
+        &self,
+        clients: &Arc<dyn ClientIdentityPort>,
+    ) -> Result<(), AdminError> {
+        self.client_identity_port.bind(clients)
     }
 
     /// Core 激活后一次性绑定嵌套执行与亲和查询端口；Runtime 仅保存 Weak，避免组合根强环

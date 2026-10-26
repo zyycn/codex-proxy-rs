@@ -13,8 +13,8 @@ use futures::future::BoxFuture;
 
 use crate::{
     account::ProviderAccountId, error::GatewayError, identity::ProviderKind,
-    lifecycle::CancellationToken, operation::Operation, policy::ClientApiKeyId,
-    provider_ports::ProviderSessionAffinityKey, routing::PublicModelId,
+    lifecycle::CancellationToken, operation::Operation, provider_ports::ProviderSessionAffinityKey,
+    routing::PublicModelId,
 };
 
 use super::{
@@ -111,19 +111,6 @@ impl fmt::Debug for NestedModelExecutionRequest {
 
 /// 嵌套模型执行只进入 Core 的既有执行会话；Runtime 不实现重试、commit 或计费
 pub trait NestedModelExecutionPort: Send + Sync {
-    /// 只解析身份与冻结权限，不建立模型执行图或记录使用事实
-    fn resolve_client(
-        &self,
-        client_key_id: ClientApiKeyId,
-        settings: Option<crate::routing::request_settings::RequestSettings>,
-    ) -> BoxFuture<'_, Result<AuthenticatedClient, GatewayError>>;
-
-    /// 复用入口认证计划及 principal 映射，不进行模型准入
-    fn verify_client(
-        &self,
-        request: super::authentication::ClientAuthenticationRequest,
-    ) -> BoxFuture<'_, Result<AuthenticatedClient, GatewayError>>;
-
     fn models(
         &self,
         client: AuthenticatedClient,

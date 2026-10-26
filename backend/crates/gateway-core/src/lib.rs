@@ -34,6 +34,7 @@ use engine::ExecutionStore;
 use engine::admission::{
     ClientAdmissionPort, ClientAdmissionRecoveryPort, restore_client_admission_startup,
 };
+use engine::authentication::ClientIdentityPort;
 use engine::continuation::NativeContinuationPort;
 use engine::execution::{
     ClientApiKeyUsageSink, ClientKeyVerifier, DefaultExecutionService, ExecutionService,
@@ -127,6 +128,7 @@ pub struct CoreBundle {
     client_key_verifier: Arc<dyn ClientKeyVerifier>,
     snapshot_control: Arc<dyn SnapshotControl>,
     account_probe: Arc<dyn AccountProbe>,
+    client_identity: Arc<dyn ClientIdentityPort>,
     nested_model_execution: Arc<dyn NestedModelExecutionPort>,
     affinity_lookup: Arc<dyn AffinityLookupPort>,
     health_probes: Vec<Arc<dyn HealthProbe>>,
@@ -181,6 +183,7 @@ impl CoreStartup {
         let execution: Arc<dyn ExecutionService> = service.clone();
         let client_key_verifier: Arc<dyn ClientKeyVerifier> = service.clone();
         let account_probe: Arc<dyn AccountProbe> = service.clone();
+        let client_identity: Arc<dyn ClientIdentityPort> = service.clone();
         let nested_model_execution: Arc<dyn NestedModelExecutionPort> = service.clone();
         let affinity_lookup: Arc<dyn AffinityLookupPort> = service;
         let snapshot_control: Arc<dyn SnapshotControl> = publisher;
@@ -191,6 +194,7 @@ impl CoreStartup {
             client_key_verifier,
             snapshot_control,
             account_probe,
+            client_identity,
             nested_model_execution,
             affinity_lookup,
             health_probes,
@@ -264,6 +268,11 @@ impl CoreBundle {
     #[must_use]
     pub fn account_probe(&self) -> Arc<dyn AccountProbe> {
         Arc::clone(&self.account_probe)
+    }
+
+    #[must_use]
+    pub fn client_identity_port(&self) -> Arc<dyn ClientIdentityPort> {
+        Arc::clone(&self.client_identity)
     }
 
     #[must_use]
@@ -395,6 +404,7 @@ pub struct CoreCommandPlaneStartup {
 pub struct CoreCommandPlaneBundle {
     control: CoreControlPlaneBundle,
     account_probe: Arc<dyn AccountProbe>,
+    client_identity: Arc<dyn ClientIdentityPort>,
     nested_model_execution: Arc<dyn NestedModelExecutionPort>,
     affinity_lookup: Arc<dyn AffinityLookupPort>,
 }
@@ -425,11 +435,13 @@ impl CoreCommandPlaneStartup {
             .with_snapshot_refresh(Arc::clone(&control.publisher)),
         );
         let account_probe: Arc<dyn AccountProbe> = service.clone();
+        let client_identity: Arc<dyn ClientIdentityPort> = service.clone();
         let nested_model_execution: Arc<dyn NestedModelExecutionPort> = service.clone();
         let affinity_lookup: Arc<dyn AffinityLookupPort> = service;
         Ok(CoreCommandPlaneBundle {
             control,
             account_probe,
+            client_identity,
             nested_model_execution,
             affinity_lookup,
         })
@@ -450,6 +462,11 @@ impl CoreCommandPlaneBundle {
     #[must_use]
     pub fn snapshot_control(&self) -> Arc<dyn SnapshotControl> {
         self.control.snapshot_control()
+    }
+
+    #[must_use]
+    pub fn client_identity_port(&self) -> Arc<dyn ClientIdentityPort> {
+        Arc::clone(&self.client_identity)
     }
 
     #[must_use]

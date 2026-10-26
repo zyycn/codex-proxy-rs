@@ -38,6 +38,10 @@ pub async fn run() -> Result<(), BootstrapError> {
     let management = ManagementPorts::new(&store, providers.admin.clone(), core.snapshot_control());
     or_shutdown!(plugin_runtime, management.bind(&plugin_runtime));
     let mut core = or_shutdown!(plugin_runtime, core.activate().await);
+    or_shutdown!(
+        plugin_runtime,
+        plugin_runtime.bind_client_identity_port(&core.client_identity_port())
+    );
     let nested_models = core.nested_model_execution_port();
     let affinity_lookup = core.affinity_lookup_port();
     or_shutdown!(

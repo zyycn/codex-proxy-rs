@@ -276,6 +276,15 @@ async fn startup_failure_of_an_unrelated_plugin_preserves_native_authentication_
 
 #[tokio::test]
 async fn callback_verification_reenters_the_authentication_instance_without_model_binding() {
+    assert_callback_identity_queries(true).await;
+}
+
+#[tokio::test]
+async fn client_queries_do_not_require_model_execution_ports() {
+    assert_callback_identity_queries(false).await;
+}
+
+async fn assert_callback_identity_queries(include_models: bool) {
     use gateway_admin::{
         model::plugins::management::PluginManagementRequest,
         ports::plugin_management::PluginManagement,
@@ -292,10 +301,14 @@ async fn callback_verification_reenters_the_authentication_instance_without_mode
         .directory
         .path()
         .join("authenticated-facts.json");
-    let facts = json!([
-        {"method":"host.data.access.check", "query":{"client_key_id":"key_frontend", "account_ids":[account.as_str(), "acct_missing"]}},
-        {"method":"host.models.list", "params":{"client_key_id":"key_frontend", "protocol":"codex", "client_version":"0.154.0"}}
-    ]);
+    let mut facts = vec![json!(
+        {"method":"host.data.access.check", "query":{"client_key_id":"key_frontend", "account_ids":[account.as_str(), "acct_missing"]}}
+    )];
+    if include_models {
+        facts.push(json!(
+            {"method":"host.models.list", "params":{"client_key_id":"key_frontend", "protocol":"codex", "client_version":"0.154.0"}}
+        ));
+    }
     let mut config = configuration(
         json!({"outcome":"authenticated","principal":"external-user"}),
         true,
@@ -303,20 +316,32 @@ async fn callback_verification_reenters_the_authentication_instance_without_mode
     );
     config["sdk_session"] = json!(true);
     config["frontend_authentication_marker"] = json!(marker);
-    config["auth_queries"] = facts.clone();
+    config["auth_queries"] = json!(facts);
     config["management_registration"] = json!({"routes":[{"method":"GET","path":"facts","request_content_types":[],"response_content_types":["application/json"]}]});
-    config["data_queries"] = json!([
-        {"method":"host.client.verify", "query":{"authorization":"External controlled-fixture"}},
-        facts[0].clone(), facts[1].clone()
-    ]);
+    let mut queries = vec![json!(
+        {"method":"host.client.verify", "query":{"authorization":"External controlled-fixture"}}
+    )];
+    queries.extend(facts);
+    config["data_queries"] = json!(queries);
     environment.install_plugin(config).await;
     let (runtime, core) = environment
-        .runtime_with_limits(RpcLimits {
-            maximum_executing_calls: 1,
-            maximum_queue_timeout: std::time::Duration::from_millis(500),
-            ..RpcLimits::default()
-        })
+        .runtime_with_identity_port(
+            RpcLimits {
+                maximum_executing_calls: 1,
+                maximum_queue_timeout: std::time::Duration::from_millis(500),
+                ..RpcLimits::default()
+            },
+            crate::support::native::provider_registry(),
+        )
         .await;
+    if include_models {
+        runtime
+            .bind_model_ports(
+                &core.nested_model_execution_port(),
+                &core.affinity_lookup_port(),
+            )
+            .unwrap();
+    }
     let snapshot = core.snapshots().acquire().unwrap();
     let generation = snapshot.extensions().unwrap();
     let view = runtime.views(generation).await.unwrap().remove(0);
@@ -348,9 +373,11 @@ async fn callback_verification_reenters_the_authentication_instance_without_mode
             {"account_id":account.as_str(),"allowed":true}, {"account_id":"acct_missing","allowed":false}
         ])
     );
-    assert_eq!(authenticated_facts[1], results[2]);
-    // 此替身只登记执行能力，没有原生目录；查询应成功返回空目录而不是执行绑定错误
-    assert_eq!(results[2], json!({"models":[]}));
+    if include_models {
+        assert_eq!(authenticated_facts[1], results[2]);
+        // 此替身只登记执行能力，没有原生目录；查询应成功返回空目录而不是执行绑定错误
+        assert_eq!(results[2], json!({"models":[]}));
+    }
     assert!(
         environment
             .bound_model_requests("key_frontend")

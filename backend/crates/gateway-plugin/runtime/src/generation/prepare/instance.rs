@@ -161,15 +161,16 @@ impl PluginRuntime {
             &manifest,
             self.log_slots.clone(),
             private_state.clone(),
-            PluginCallbackPorts::new(
-                self.service_ports.clone(),
-                self.http.clone(),
-                self.account_ports.clone(),
-                self.client_key_ports.clone(),
-                self.model_ports.clone(),
-                self.affinity_ports.clone(),
-                self.resource_ports.clone(),
-            ),
+            PluginCallbackPorts {
+                services: self.service_ports.clone(),
+                http: self.http.clone(),
+                accounts: self.account_ports.clone(),
+                keys: self.client_key_ports.clone(),
+                clients: self.client_identity_port.clone(),
+                models: self.model_ports.clone(),
+                affinity: self.affinity_ports.clone(),
+                resources: self.resource_ports.clone(),
+            },
             self.request_limits.clone(),
         )?;
         callbacks.registration_body_limit = request_body_limit;

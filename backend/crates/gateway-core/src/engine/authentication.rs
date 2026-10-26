@@ -9,9 +9,31 @@ use std::{
 use futures::future::BoxFuture;
 
 use crate::{
+    error::GatewayError,
     policy::{ClientApiKeyId, PlaintextClientApiKey},
-    routing::extensions::{ExtensionSetId, ExtensionSetReference},
+    routing::{
+        extensions::{ExtensionSetId, ExtensionSetReference},
+        request_settings::RequestSettings,
+    },
 };
+
+use super::execution::AuthenticatedClient;
+
+/// 身份解析与认证只返回冻结权限，不提供模型执行入口
+pub trait ClientIdentityPort: Send + Sync {
+    /// 只解析身份与冻结权限，不建立模型执行图或记录使用事实
+    fn resolve_client(
+        &self,
+        client_key_id: ClientApiKeyId,
+        settings: Option<RequestSettings>,
+    ) -> BoxFuture<'_, Result<AuthenticatedClient, GatewayError>>;
+
+    /// 复用入口认证计划及 principal 映射，不进行模型准入
+    fn verify_client(
+        &self,
+        request: ClientAuthenticationRequest,
+    ) -> BoxFuture<'_, Result<AuthenticatedClient, GatewayError>>;
+}
 
 pub const MAXIMUM_AUTHORIZATION_BYTES: usize = 8 * 1024;
 

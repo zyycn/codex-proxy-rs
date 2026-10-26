@@ -4,6 +4,7 @@ mod accounts;
 mod admin;
 mod affinity;
 mod call_resources;
+mod client;
 mod data;
 pub(crate) mod error;
 mod facts;
@@ -38,6 +39,7 @@ use crate::{CallbackHandler, RpcReply};
 pub(crate) use accounts::PluginAccountPortSlot;
 pub(crate) use affinity::PluginAffinityPortSlot;
 use call_resources::{CallResources, HttpStream};
+pub(crate) use client::PluginClientIdentityPortSlot;
 pub(crate) use keys::PluginClientKeyPortSlot;
 pub(crate) use middleware::{
     MiddlewareBinding, MiddlewareBodyAuthority, MiddlewareCallback, MiddlewareCompletionBody,
@@ -48,37 +50,14 @@ pub(crate) use resources::PluginResourcePorts;
 pub(crate) use scope::{CallbackScope, InvocationContext};
 
 pub(crate) struct PluginCallbackPorts {
-    services: Arc<services::ServicePorts>,
-    http: Arc<HttpClient>,
-    network: NetworkPolicy,
-    accounts: Arc<PluginAccountPortSlot>,
-    keys: Arc<PluginClientKeyPortSlot>,
-    models: Arc<PluginModelPortSlot>,
-    affinity: Arc<PluginAffinityPortSlot>,
-    resources: Arc<PluginResourcePorts>,
-}
-
-impl PluginCallbackPorts {
-    pub(crate) fn new(
-        services: Arc<services::ServicePorts>,
-        http: Arc<HttpClient>,
-        accounts: Arc<PluginAccountPortSlot>,
-        keys: Arc<PluginClientKeyPortSlot>,
-        models: Arc<PluginModelPortSlot>,
-        affinity: Arc<PluginAffinityPortSlot>,
-        resources: Arc<PluginResourcePorts>,
-    ) -> Self {
-        Self {
-            services,
-            http,
-            network: NetworkPolicy::unrestricted(),
-            accounts,
-            keys,
-            models,
-            affinity,
-            resources,
-        }
-    }
+    pub(crate) services: Arc<services::ServicePorts>,
+    pub(crate) http: Arc<HttpClient>,
+    pub(crate) accounts: Arc<PluginAccountPortSlot>,
+    pub(crate) keys: Arc<PluginClientKeyPortSlot>,
+    pub(crate) clients: Arc<PluginClientIdentityPortSlot>,
+    pub(crate) models: Arc<PluginModelPortSlot>,
+    pub(crate) affinity: Arc<PluginAffinityPortSlot>,
+    pub(crate) resources: Arc<PluginResourcePorts>,
 }
 
 pub(crate) struct PluginCallbacks {
@@ -91,6 +70,7 @@ pub(crate) struct PluginCallbacks {
     keys: Arc<keys::PluginClientKeys>,
     affinity: Arc<affinity::PluginAffinity>,
     log: Arc<log::PluginLog>,
+    clients: Arc<client::PluginClients>,
     models: Arc<model::PluginModels>,
     private_state: Arc<private_state::PluginPrivateState>,
     http: Arc<HttpClient>,
@@ -112,6 +92,7 @@ impl PluginCallbacks {
         ports: PluginCallbackPorts,
         request_limits: Arc<request_limits::RequestLimits>,
     ) -> Result<Self, AdminError> {
+        let clients = Arc::new(client::PluginClients::new(ports.clients));
         Ok(Self {
             registration_body_limit: None,
             services: ports.services,
@@ -132,14 +113,16 @@ impl PluginCallbacks {
                 log::PluginLog::new(manifest, log_slots)
                     .map_err(|_| AdminError::invalid("插件清单身份不合法"))?,
             ),
+            clients: clients.clone(),
             models: Arc::new(model::PluginModels::new(
                 ports.models,
+                clients,
                 request_limits.clone(),
                 maximum_payload,
             )),
             private_state,
             http: ports.http,
-            network: Arc::new(ports.network),
+            network: Arc::new(NetworkPolicy::unrestricted()),
             scopes: Mutex::new(BTreeMap::new()),
             pending_middleware: Mutex::new(BTreeMap::new()),
             calls: Mutex::new(BTreeMap::new()),
@@ -437,6 +420,7 @@ impl CallbackHandler for PluginCallbacks {
         let resources = self.resources.clone();
         let data = self.data.clone();
         let keys = self.keys.clone();
+        let clients = self.clients.clone();
         let models = self.models.clone();
         let request_limits = self.request_limits.clone();
         let affinity = self.affinity.clone();
@@ -513,10 +497,14 @@ impl CallbackHandler for PluginCallbacks {
             }
             if matches!(
                 method.as_str(),
-                "host.models.list"
-                    | gateway_plugin_sdk::call::data::CLIENT_VERIFY
+                gateway_plugin_sdk::call::data::CLIENT_VERIFY
                     | gateway_plugin_sdk::call::data::ACCESS_CHECK
             ) {
+                return clients
+                    .call(&context, &call, &method, params, payload)
+                    .await;
+            }
+            if method == "host.models.list" {
                 return models.call(&context, &call, &method, params, payload).await;
             }
             if matches!(

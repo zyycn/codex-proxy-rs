@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use gateway_core::engine::authentication::ClientIdentityPort;
 use gateway_core::engine::budget::{ClientBudgetCharge, ClientBudgetError, ClientBudgetPort};
 use gateway_core::error::GatewayError;
 
@@ -1233,7 +1234,7 @@ fn explicit_key_model_execution_preserves_http_origin_and_leaves_background_orig
                 Arc::new(crate::RecordingDiagnostics::default()),
             );
             let input = request(&service, ClientTransport::InternalPlugin);
-            let client = NestedModelExecutionPort::resolve_client(
+            let client = ClientIdentityPort::resolve_client(
                 &service,
                 ClientApiKeyId::new("key_start_test").unwrap(),
                 None,

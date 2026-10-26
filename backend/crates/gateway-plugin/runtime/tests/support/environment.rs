@@ -464,6 +464,21 @@ impl Environment {
         limits: RpcLimits,
         providers: gateway_core::engine::provider::ProviderRegistry,
     ) -> (Arc<PluginRuntime>, gateway_core::CoreBundle) {
+        let (runtime, core) = self.runtime_with_identity_port(limits, providers).await;
+        runtime
+            .bind_model_ports(
+                &core.nested_model_execution_port(),
+                &core.affinity_lookup_port(),
+            )
+            .unwrap();
+        (runtime, core)
+    }
+
+    pub async fn runtime_with_identity_port(
+        &self,
+        limits: RpcLimits,
+        providers: gateway_core::engine::provider::ProviderRegistry,
+    ) -> (Arc<PluginRuntime>, gateway_core::CoreBundle) {
         let runtime = self.plugin_runtime_with_limits(limits);
         let core = gateway_core::prepare(
             self.store.core_ports(),
@@ -487,10 +502,7 @@ impl Environment {
             .insert(Arc::as_ptr(&runtime) as usize, access);
         let core = core.activate().await.unwrap();
         runtime
-            .bind_model_ports(
-                &core.nested_model_execution_port(),
-                &core.affinity_lookup_port(),
-            )
+            .bind_client_identity_port(&core.client_identity_port())
             .unwrap();
         (runtime, core)
     }
@@ -511,6 +523,9 @@ impl Environment {
         .await
         .unwrap();
         runtime.bind_snapshots(&core.snapshots()).unwrap();
+        runtime
+            .bind_client_identity_port(&core.client_identity_port())
+            .unwrap();
         runtime
             .bind_model_ports(
                 &core.nested_model_execution_port(),

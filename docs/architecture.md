@@ -112,6 +112,7 @@ flowchart LR
   Runtime <-->|SDK 协议| Plugin["插件进程"]
   Runtime -->|受管资源| Host["Host<br/>进程、网络、Worker"]
   Runtime -->|账号事务端口| Admin
+  Runtime -->|身份查询端口| Core
   Runtime -->|模型执行端口| Core
 ```
 
@@ -183,8 +184,9 @@ flowchart LR
   Provider 来源与执行事件快照可由插件读取，包含费用明细、上游观测、会话状态和原始 wire；读取快照不转移计量和资源所有权。
   数据面插件通过受管 HTTP 已发送、无法证明未发送，或进入主动 HTTP／公开服务调用链时，Runtime 把该事实并入 Core 的请求副作用水位，后续不能按
   Provider 的 `not_sent` 结果透明重放；RPC 返回或取消前同步封存未完成的发送，并禁止已关闭调用再分派 HTTP／公开服务
-- **身份查询与执行准入分离**：Core 的 `AuthenticatedClient` 持有身份和冻结权限，模型目录与账号授权直接读取这份事实。
-  Runtime 只按父调用缓存身份快照，查询不建立模型执行图；真正发起模型执行时才检查深度、建立执行归属并申请原生资源。
+- **身份查询与执行准入分离**：Core 通过 `ClientIdentityPort` 独立提供身份解析和认证，`AuthenticatedClient` 持有身份和冻结权限，模型目录与账号授权直接读取这份事实。
+  Runtime 的客户端适配器承接认证与授权查询，模型适配器复用同一身份解析。
+  身份快照只按父调用缓存，查询不建立模型执行图；真正发起模型执行时才检查深度、建立执行归属并申请原生资源。
   认证复用原有认证计划与 principal 映射，通用 `InvocationOrigin` 传递父调用来源、取消、冻结计划和副作用归属，认证不依赖模型执行上下文
 - **挂起与恢复由共同边界管理**：SDK 在父处理 future 返回 `Pending` 后报告挂起，再次 poll 前等待 Runtime 的执行授权。
   Runtime 的调用表持有唯一准入状态，挂起保留总在途名额；结果接收独立于任务恢复，回调额度持续保留到消费、丢弃或父调用终结。

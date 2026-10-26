@@ -27,7 +27,7 @@ use crate::{
             ClientAdmissionRequest,
         },
         authentication::{
-            ClientAuthenticationRequest, FrontendAuthenticationDecision,
+            ClientAuthenticationRequest, ClientIdentityPort, FrontendAuthenticationDecision,
             FrontendAuthenticationExtensionIndex,
         },
         budget::{ClientBudgetCharge, ClientBudgetPort},
@@ -1705,7 +1705,7 @@ impl ExecutionService for DefaultExecutionService {
     }
 }
 
-impl NestedModelExecutionPort for DefaultExecutionService {
+impl ClientIdentityPort for DefaultExecutionService {
     fn resolve_client(
         &self,
         client_key_id: ClientApiKeyId,
@@ -1737,7 +1737,9 @@ impl NestedModelExecutionPort for DefaultExecutionService {
             }
         })
     }
+}
 
+impl NestedModelExecutionPort for DefaultExecutionService {
     fn models(
         &self,
         client: AuthenticatedClient,
