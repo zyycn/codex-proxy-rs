@@ -948,8 +948,8 @@ fn transparent_encoder_should_translate_error_wire_to_response_failed_for_websoc
         json!({
             "type": "error",
             "status": 429,
-            "headers": {"x-request-id": "req_raw"},
-            "error": {"type": "custom_type", "code": "custom_code", "message": "raw marker"},
+            "headers": {"x-request-id": "req_raw", "Retry-After": "24"},
+            "error": {"type": "rate_limit_error", "code": "turn_rate_limit_exceeded", "message": "raw marker"},
             "future": {"keep": true}
         }),
     );

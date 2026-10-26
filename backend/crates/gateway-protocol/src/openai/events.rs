@@ -199,8 +199,9 @@ pub fn retry_after_seconds_from_value(value: &Value) -> Option<u64> {
         .pointer("/response/error")
         .or_else(|| value.get("error"))
         .unwrap_or(value);
-    retry_after_seconds_header(error)
-        .or_else(|| retry_after_seconds_header(value))
+    retry_after_header(error)
+        .or_else(|| retry_after_header(value))
+        .map(|(_, seconds)| seconds)
         .or_else(|| retry_after_seconds_field(error))
         .or_else(|| {
             error
@@ -225,22 +226,27 @@ fn retry_after_seconds_field(value: &Value) -> Option<u64> {
         .filter(|seconds| *seconds > 0)
 }
 
-fn retry_after_seconds_header(value: &Value) -> Option<u64> {
+/// 同时保留原始头值与解析秒数，供事件转换和重试观测共用官方头部规则
+pub(super) fn retry_after_header(value: &Value) -> Option<(&Value, u64)> {
     let headers = value.get("headers")?.as_object()?;
     // 官方先按 HTTP 头值校验，再覆盖大小写不同的同名头；最后才解释重试时间
     // 合法但无法解析为时间的末项也会覆盖前值，非法头值和数组不参与覆盖
-    let header = headers
+    let (value, header) = headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
-        .filter_map(|(_, value)| match value {
-            Value::String(value) => http::HeaderValue::from_str(value).ok(),
-            Value::Number(_) | Value::Bool(_) => {
-                http::HeaderValue::from_str(&value.to_string()).ok()
-            }
-            Value::Null | Value::Array(_) | Value::Object(_) => None,
+        .filter_map(|(_, value)| {
+            let header = match value {
+                Value::String(value) => http::HeaderValue::from_str(value).ok(),
+                Value::Number(_) | Value::Bool(_) => {
+                    http::HeaderValue::from_str(&value.to_string()).ok()
+                }
+                Value::Null | Value::Array(_) | Value::Object(_) => None,
+            }?;
+            Some((value, header))
         })
         .next_back()?;
-    super::headers::parse_retry_after_seconds(header.to_str().ok()?)
+    let seconds = super::headers::parse_retry_after_seconds(header.to_str().ok()?)?;
+    Some((value, seconds))
 }
 
 /// 标准化的单个限流窗口

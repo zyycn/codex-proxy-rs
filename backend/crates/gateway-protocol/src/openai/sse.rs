@@ -295,7 +295,7 @@ pub fn response_failed_sse_data_with_id(
 /// 将携带嵌套错误的上游事件投影为 OpenAI Responses `response.failed` 数据
 ///
 /// 该投影供客户端 SSE 兼容转换使用
-/// 原始错误对象和事件级元数据保持不透明；
+/// 保留原始错误与事件级元数据，并补齐官方 SSE 读取的错误重试头
 /// 已有 response 快照只更新失败终态字段
 pub fn response_failed_sse_data_from_error_event(
     response: Option<&Value>,
@@ -303,7 +303,23 @@ pub fn response_failed_sse_data_from_error_event(
     error_event: &Value,
 ) -> Option<Value> {
     let mut event = error_event.as_object()?.clone();
-    let error = event.remove("error").filter(Value::is_object)?;
+    let mut error = event.remove("error").filter(Value::is_object)?;
+    // 官方 WS 先读错误头、再读事件头，SSE 只读 response.error.headers
+    // 仅补充有效的等待建议，保留原始日期或秒数，不复制其他事件级响应头
+    if super::events::retry_after_header(&error).is_none()
+        && let Some((retry_after, _)) = super::events::retry_after_header(error_event)
+    {
+        let headers = error
+            .as_object_mut()?
+            .entry("headers")
+            .or_insert_with(|| json!({}));
+        if !headers.is_object() {
+            *headers = json!({});
+        }
+        let headers = headers.as_object_mut()?;
+        headers.retain(|name, _| !name.eq_ignore_ascii_case("retry-after"));
+        headers.insert("retry-after".to_owned(), retry_after.clone());
+    }
     let mut response = response
         .and_then(Value::as_object)
         .cloned()

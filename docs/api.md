@@ -509,6 +509,9 @@ OpenAI HTTP 明确未发送的瞬时建连失败（含 TLS 握手 EOF）在单�
 `turn_rate_limit_exceeded` 保留原始错误和 `Retry-After`，由客户端按自身重试预算等待。
 代理不因此写入账号冷却、换号或透明重试，其他会话仍可使用该账号
 
+上游 WS `error` 转为 SSE `response.failed` 时，事件级的有效 `Retry-After` 同时放入
+`response.error.headers`，供客户端读取；错误对象已有有效重试头时优先保留
+
 Responses 的 HTTP/SSE 与 WebSocket 按顺序即时交付正常事件，不暂存前导等待后续输出。
 未启用中间件链时，无输出的 `response.created`、`response.in_progress`
 及 `codex.response.metadata`、`codex.rate_limits` 元数据交付后仍可按已有安全条件重试，

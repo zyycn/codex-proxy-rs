@@ -443,6 +443,76 @@ fn response_failed_projection_should_preserve_response_error_and_event_metadata(
 }
 
 #[test]
+fn response_failed_projection_should_preserve_retry_advice_for_sse_clients() {
+    let cases = [
+        (
+            json!({"Retry-After": "24"}),
+            None,
+            Some(json!({"retry-after": "24"})),
+        ),
+        (
+            json!({"ReTrY-AfTeR": 15}),
+            None,
+            Some(json!({"retry-after": 15})),
+        ),
+        (
+            json!({"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}),
+            None,
+            Some(json!({"retry-after": "Wed, 21 Oct 2015 07:28:00 GMT"})),
+        ),
+        (
+            json!({"Retry-After": "24"}),
+            Some(json!({"ReTrY-AfTeR": "7", "x-error-id": "keep"})),
+            Some(json!({"ReTrY-AfTeR": "7", "x-error-id": "keep"})),
+        ),
+        (
+            json!({"Retry-After": "24"}),
+            Some(json!({"Retry-After": "0"})),
+            Some(json!({"Retry-After": "0"})),
+        ),
+        (
+            json!({"Retry-After": "24", "x-event-id": "event-only"}),
+            Some(json!({"Retry-After": "later", "x-error-id": "keep"})),
+            Some(json!({"retry-after": "24", "x-error-id": "keep"})),
+        ),
+        (
+            json!({"Retry-After": "24"}),
+            Some(json!(null)),
+            Some(json!({"retry-after": "24"})),
+        ),
+        (json!({"Retry-After": ["24"]}), None, None),
+        (json!({"Retry-After": "later"}), None, None),
+        (json!({}), None, None),
+    ];
+    for (event_headers, error_headers, expected_headers) in cases {
+        let mut error_event = json!({
+            "type": "error",
+            "status": 429,
+            "headers": event_headers,
+            "error": {
+                "type": "rate_limit_error",
+                "code": "turn_rate_limit_exceeded",
+                "message": "Codex is at capacity, please try again later"
+            }
+        });
+        if let Some(headers) = error_headers {
+            error_event["error"]["headers"] = headers;
+        }
+        let projected =
+            response_failed_sse_data_from_error_event(None, Some("resp_retry"), &error_event)
+                .expect("wrapped error event should project");
+
+        // 官方 SSE 解析器仅接收 response，无法回读事件顶层的等待提示
+        assert_eq!(
+            projected.pointer("/response/error/headers"),
+            expected_headers.as_ref(),
+            "upstream event: {error_event}"
+        );
+        assert_eq!(projected["headers"], error_event["headers"]);
+    }
+}
+
+#[test]
 fn done_frame_detection_should_require_exact_single_data_field() {
     assert_eq!(
         [

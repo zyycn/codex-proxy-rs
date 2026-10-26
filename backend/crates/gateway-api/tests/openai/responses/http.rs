@@ -2164,109 +2164,132 @@ async fn streaming_upstream_wire_failure_should_not_be_rewritten_as_a_gateway_er
 
 #[tokio::test]
 async fn streaming_upstream_error_event_should_be_translated_to_response_failed_for_sse() {
-    let trace = Arc::new(Trace::default());
-    let error_data = json!({
-        "type": "error",
-        "error": {
-            "type": "service_unavailable_error",
-            "code": "server_is_overloaded",
-            "message": "Our servers are currently overloaded. Please try again later.",
-            "param": null,
-            "future_error_field": {"keep": true}
-        },
-        "sequence_number": 2,
-        "future_event_field": {"keep": true}
-    });
-    let projected_error_frame = Bytes::from(encode_sse_event("error", &error_data.to_string()));
-    let error_wire = ProviderEvent::wire(
-        ProtocolWireEvent::json_with_raw_sse_metadata(
-            "openai",
-            Some("error".to_owned()),
-            error_data,
-            projected_error_frame,
-            None,
-            None,
-        )
-        .expect("valid upstream error wire"),
-    );
-    let started_wire = ProviderEvent::canonical_with_wire(
-        vec![started()],
-        ProtocolWireEvent::json(
-            "openai",
-            Some("response.created".to_owned()),
-            json!({
-                "type": "response.created",
-                "response": {
-                    "id": "resp_test",
-                    "model": "public-model",
-                    "status": "in_progress",
-                    "future_response_field": {"keep": true}
-                }
-            }),
-        )
-        .expect("valid upstream started wire"),
-    );
-    let session = FakeSession::streaming(
-        Arc::clone(&trace),
-        vec![
-            NextStep::Event(CoordinatedEvent::single(
-                started_wire,
-                CommitRequirement::CommitBeforeDelivery,
-            )),
-            NextStep::Event(CoordinatedEvent::single(
-                error_wire,
-                CommitRequirement::AlreadyCommitted,
-            )),
-            NextStep::Error(EngineError::Provider(ProviderError::new(
-                ProviderErrorKind::UpstreamCapacityUnavailable,
-                UpstreamSendState::Sent,
-            ))),
-        ],
-    );
-
-    let response = stream_execution_response(Box::new(session), None).await;
-    let body = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("read SSE body");
-    let body = String::from_utf8(body.to_vec()).expect("SSE is UTF-8");
-    let events = parse_sse_events(&body).expect("translated SSE should parse");
-    let failed = events
-        .iter()
-        .find(|event| event.event.as_deref() == Some("response.failed"))
-        .expect("translated response.failed event");
-    let failed: Value = serde_json::from_str(&failed.data).expect("response.failed JSON");
-
-    assert_eq!(
+    for (error_type, code, client_code, kind, client_status) in [
         (
-            failed,
-            body.matches("event: response.failed").count(),
-            body.contains("event: error\n"),
-            body.ends_with("data: [DONE]\n\n"),
+            "service_unavailable_error",
+            "server_is_overloaded",
+            "server_error",
+            ProviderErrorKind::UpstreamCapacityUnavailable,
+            503,
         ),
         (
-            json!({
-                "type": "response.failed",
-                "response": {
-                    "id": "resp_test",
-                    "model": "public-model",
-                    "status": "failed",
-                    "error": {
-                        "type": "service_unavailable_error",
-                        "code": "server_error",
-                        "message": "Our servers are currently overloaded. Please try again later.",
-                        "param": null,
-                        "future_error_field": {"keep": true}
+            "rate_limit_error",
+            "turn_rate_limit_exceeded",
+            "turn_rate_limit_exceeded",
+            ProviderErrorKind::RateLimited,
+            429,
+        ),
+    ] {
+        let trace = Arc::new(Trace::default());
+        let error_data = json!({
+            "type": "error",
+            "status": 429,
+            "headers": {"Retry-After": "24"},
+            "error": {
+                "type": error_type,
+                "code": code,
+                "message": "Our servers are currently overloaded. Please try again later.",
+                "param": null,
+                "future_error_field": {"keep": true}
+            },
+            "sequence_number": 2,
+            "future_event_field": {"keep": true}
+        });
+        let projected_error_frame = Bytes::from(encode_sse_event("error", &error_data.to_string()));
+        let error_wire = ProviderEvent::wire(
+            ProtocolWireEvent::json_with_raw_sse_metadata(
+                "openai",
+                Some("error".to_owned()),
+                error_data,
+                projected_error_frame,
+                None,
+                None,
+            )
+            .expect("valid upstream error wire"),
+        );
+        let started_wire = ProviderEvent::canonical_with_wire(
+            vec![started()],
+            ProtocolWireEvent::json(
+                "openai",
+                Some("response.created".to_owned()),
+                json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_test",
+                        "model": "public-model",
+                        "status": "in_progress",
+                        "future_response_field": {"keep": true}
+                    }
+                }),
+            )
+            .expect("valid upstream started wire"),
+        );
+        let session = FakeSession::streaming(
+            Arc::clone(&trace),
+            vec![
+                NextStep::Event(CoordinatedEvent::single(
+                    started_wire,
+                    CommitRequirement::CommitBeforeDelivery,
+                )),
+                NextStep::Event(CoordinatedEvent::single(
+                    error_wire,
+                    CommitRequirement::AlreadyCommitted,
+                )),
+                NextStep::Error(EngineError::Provider(ProviderError::new(
+                    kind,
+                    UpstreamSendState::Sent,
+                ))),
+            ],
+        );
+
+        let response = stream_execution_response(Box::new(session), None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read SSE body");
+        let body = String::from_utf8(body.to_vec()).expect("SSE is UTF-8");
+        let events = parse_sse_events(&body).expect("translated SSE should parse");
+        let failed = events
+            .iter()
+            .find(|event| event.event.as_deref() == Some("response.failed"))
+            .expect("translated response.failed event");
+        let failed: Value = serde_json::from_str(&failed.data).expect("response.failed JSON");
+
+        assert_eq!(
+            (
+                failed,
+                body.matches("event: response.failed").count(),
+                body.contains("event: error\n"),
+                body.ends_with("data: [DONE]\n\n"),
+            ),
+            (
+                json!({
+                    "type": "response.failed",
+                    "status": client_status,
+                    "headers": {"Retry-After": "24"},
+                    "response": {
+                        "id": "resp_test",
+                        "model": "public-model",
+                        "status": "failed",
+                        "error": {
+                            "type": error_type,
+                            "code": client_code,
+                            "message": "Our servers are currently overloaded. Please try again later.",
+                            "param": null,
+                            "future_error_field": {"keep": true},
+                            "headers": {"retry-after": "24"}
+                        },
+                        "future_response_field": {"keep": true}
                     },
-                    "future_response_field": {"keep": true}
-                },
-                "sequence_number": 2,
-                "future_event_field": {"keep": true}
-            }),
-            1,
-            false,
-            true,
-        )
-    );
+                    "sequence_number": 2,
+                    "future_event_field": {"keep": true}
+                }),
+                1,
+                false,
+                true,
+            )
+        );
+    }
 }
 
 #[tokio::test]
