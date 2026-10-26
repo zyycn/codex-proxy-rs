@@ -195,8 +195,8 @@ importers:
         specifier: 1.0.1
         version: 1.0.1(vue@3.5.44(typescript@6.0.3))
       '@codex-proxy/ui':
-        specifier: github:zyycn/codex-proxy-ui#v0.7.0
-        version: https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/0692ca034be88de6faf88bc76f1a6e9e7ad65225(axios@1.20.0(debug@4.4.3))(change-case@5.4.4)(vite@8.3.4(@types/node@26.6.5)(jiti@2.7.0)(yaml@2.9.0))(vue@3.5.44(typescript@6.0.3))
+        specifier: github:zyycn/codex-proxy-ui#v0.6.1
+        version: https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/c480b40b947761968412543d74d29a6e6e100f3f(axios@1.20.0(debug@4.4.3))(change-case@5.4.4)(vite@8.3.4(@types/node@26.6.5)(jiti@2.7.0)(yaml@2.9.0))(vue@3.5.44(typescript@6.0.3))
       '@fontsource-variable/inter':
         specifier: ^5.3.0
         version: 5.3.0
@@ -443,9 +443,9 @@ packages:
     resolution: {integrity: sha512-y7/yvZ2TPAnR9+jnc00klvNNLkJiXFFrQA/hlLCcxA9a2A4zQIOimyFQ9XfwYKiGD1fb5GY8vbKIIgO8d5Tb2A==}
     engines: {node: '>= 20.12.0'}
 
-  '@codex-proxy/ui@https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/0692ca034be88de6faf88bc76f1a6e9e7ad65225':
-    resolution: {gitHosted: true, integrity: sha512-JJesyJ1Y/QcdXhBtmKX6k0GyUgOSxiV8sJrUymvLyKjC8NhHLmtpXWt/evZcjYBDyJEIRll85bmSmtMF9/Wpqw==, tarball: https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/0692ca034be88de6faf88bc76f1a6e9e7ad65225}
-    version: 0.7.0
+  '@codex-proxy/ui@https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/c480b40b947761968412543d74d29a6e6e100f3f':
+    resolution: {gitHosted: true, integrity: sha512-mmawMrkJokL/x/H/gWYOYSL+XXC4EFQ8cRyYVF3Pqj+EjU3RlhEP4zWHxWWkTjE9+8sWShXXHG1akdC37D/Y7A==, tarball: https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/c480b40b947761968412543d74d29a6e6e100f3f}
+    version: 0.6.1
     engines: {node: '>=24'}
     peerDependencies:
       vite: ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
@@ -971,10 +971,6 @@ packages:
   '@pkgr/core@0.3.6':
     resolution: {integrity: sha512-SEeaJLb3qBNF/OaXnaR1NmmBbFYk1zC0ZH/52fATcRPLFg/p791YrcyFFy44Bo9sLaGuSuLp5Q6axbb/O+v/RA==}
     engines: {node: ^14.18.0 || >=16.0.0}
-
-  '@rc-component/async-validator@6.0.0':
-    resolution: {integrity: sha512-D3AGQwdyE58gmvx6waVSXJ80JGO+IY5L2O8HDnSOex7JNlzB3GuN/4hyHNTdhy2qtOhkpbIjmeAN3tL993wKbA==}
-    engines: {node: '>=14.x'}
 
   '@rolldown/binding-android-arm-eabi@1.2.14':
     resolution: {integrity: sha512-aWR+XKH9+rW7m5fWq/5360J3mHycrx/o6xZM2DQFdJnTMdyP7/WzxPjhtLbVWdKo2y612/4U1bWqb3HQhiF7vg==}
@@ -3426,12 +3422,11 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
-  '@codex-proxy/ui@https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/0692ca034be88de6faf88bc76f1a6e9e7ad65225(axios@1.20.0(debug@4.4.3))(change-case@5.4.4)(vite@8.3.4(@types/node@26.6.5)(jiti@2.7.0)(yaml@2.9.0))(vue@3.5.44(typescript@6.0.3))':
+  '@codex-proxy/ui@https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/c480b40b947761968412543d74d29a6e6e100f3f(axios@1.20.0(debug@4.4.3))(change-case@5.4.4)(vite@8.3.4(@types/node@26.6.5)(jiti@2.7.0)(yaml@2.9.0))(vue@3.5.44(typescript@6.0.3))':
     dependencies:
       '@ant-design/colors': 8.0.1
       '@ant-design/fast-color': 3.0.1
       '@lucide/vue': 1.59.0(vue@3.5.44(typescript@6.0.3))
-      '@rc-component/async-validator': 6.0.0
       '@vueuse/core': 15.0.0(vue@3.5.44(typescript@6.0.3))
       '@vueuse/integrations': 15.0.0(axios@1.20.0(debug@4.4.3))(change-case@5.4.4)(sortablejs@1.15.7)(vue@3.5.44(typescript@6.0.3))
       dayjs: 1.11.23
@@ -3862,10 +3857,6 @@ snapshots:
     optional: true
 
   '@pkgr/core@0.3.6': {}
-
-  '@rc-component/async-validator@6.0.0':
-    dependencies:
-      '@babel/runtime': 7.29.10
 
   '@rolldown/binding-android-arm-eabi@1.2.14':
     optional: true
