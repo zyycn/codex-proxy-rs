@@ -10,7 +10,9 @@ export function pluginBridge(): Plugin {
   const dependencies = new Set<string>()
   return {
     name: 'plugin-management-bridge',
-    resolveId: source => source === id ? resolvedId : undefined,
+    resolveId: source => source === id
+      ? resolvedId
+      : undefined,
     async load(source) {
       if (source !== resolvedId)
         return
@@ -20,11 +22,19 @@ export function pluginBridge(): Plugin {
         build: {
           write: false,
           minify: true,
-          lib: { entry, name: 'CodexProxyPluginBridge', formats: ['iife'] },
+          lib: {
+            entry,
+            name: 'CodexProxyPluginBridge',
+            formats: ['iife'],
+          },
         },
       })
-      const outputs = (Array.isArray(result) ? result : [result])
-        .flatMap(output => 'output' in output ? output.output : [])
+      const outputs = (Array.isArray(result)
+        ? result
+        : [result])
+        .flatMap(output => 'output' in output
+          ? output.output
+          : [])
       const [chunk] = outputs
       if (outputs.length !== 1 || chunk?.type !== 'chunk' || chunk.imports.length || chunk.dynamicImports.length)
         throw new Error('插件管理桥必须构建为单个独立脚本')
@@ -38,7 +48,9 @@ export function pluginBridge(): Plugin {
     handleHotUpdate({ file, server }) {
       if (dependencies.has(file)) {
         const module = server.moduleGraph.getModuleById(resolvedId)
-        return module ? [module] : []
+        return module
+          ? [module]
+          : []
       }
     },
   }

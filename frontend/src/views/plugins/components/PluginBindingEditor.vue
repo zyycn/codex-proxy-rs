@@ -16,7 +16,10 @@ const emit = defineEmits<{ validityChange: [valid: boolean] }>()
 const { t } = useI18n({ useScope: 'global' })
 
 const bindings = defineModel<PluginCapabilityBinding[]>({ required: true })
-const entries = computed(() => pluginRequestBindingEntries(props.metadata).map(entry => ({ ...entry, key: keyOf(entry) })))
+const entries = computed(() => pluginRequestBindingEntries(props.metadata).map(entry => ({
+  ...entry,
+  key: keyOf(entry),
+})))
 function keyOf(binding: Pick<PluginCapabilityBinding, 'contribution' | 'stage' | 'event'>) {
   return `${binding.contribution}:${binding.stage}:${binding.event ?? ''}`
 }
@@ -30,15 +33,40 @@ function bindingFor(key: string) {
   return bindings.value.find(binding => keyOf(binding) === key)
 }
 function patch(key: string, value: Partial<PluginCapabilityBinding>) {
-  bindings.value = bindings.value.map(binding => keyOf(binding) === key ? { ...binding, ...value } : binding)
+  bindings.value = bindings.value.map(binding => keyOf(binding) === key
+    ? {
+        ...binding,
+        ...value,
+      }
+    : binding)
 }
 function toggle(entry: typeof entries.value[number], enabled: boolean) {
   globalScopes.value.delete(entry.key)
   scopeDrafts.delete(entry.key)
   bindings.value = bindings.value.filter(binding => keyOf(binding) !== entry.key)
   if (enabled) {
-    const order = entry.stage === 'observation' ? bindings.value.find(binding => binding.stage === 'observation')?.order ?? 0 : 0
-    bindings.value = [...bindings.value, { contribution: entry.contribution, stage: entry.stage, event: entry.event, order, failurePolicy: entry.stage === 'observation' ? 'observe' : entry.stage === 'retry' ? 'delegate' : 'reject', providerIds: [], models: [], clientKeyIds: [], accountGroupIds: [], identityBindings: [] }]
+    const order = entry.stage === 'observation'
+      ? bindings.value.find(binding => binding.stage === 'observation')?.order ?? 0
+      : 0
+    bindings.value = [
+      ...bindings.value,
+      {
+        contribution: entry.contribution,
+        stage: entry.stage,
+        event: entry.event,
+        order,
+        failurePolicy: entry.stage === 'observation'
+          ? 'observe'
+          : entry.stage === 'retry'
+            ? 'delegate'
+            : 'reject',
+        providerIds: [],
+        models: [],
+        clientKeyIds: [],
+        accountGroupIds: [],
+        identityBindings: [],
+      },
+    ]
   }
 }
 function setGlobal(key: string, value: boolean) {
@@ -46,10 +74,20 @@ function setGlobal(key: string, value: boolean) {
     const binding = bindingFor(key)
     if (binding && !globalScopes.value.has(key)) {
       const { clientKeyIds, accountGroupIds, models, providerIds } = binding
-      scopeDrafts.set(key, { clientKeyIds, accountGroupIds, models, providerIds })
+      scopeDrafts.set(key, {
+        clientKeyIds,
+        accountGroupIds,
+        models,
+        providerIds,
+      })
     }
     globalScopes.value.add(key)
-    patch(key, { clientKeyIds: [], accountGroupIds: [], models: [], providerIds: [] })
+    patch(key, {
+      clientKeyIds: [],
+      accountGroupIds: [],
+      models: [],
+      providerIds: [],
+    })
   }
   else {
     globalScopes.value.delete(key)

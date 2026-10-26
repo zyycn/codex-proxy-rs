@@ -43,17 +43,41 @@ const { t } = useI18n({ useScope: 'global' })
 const category = defineModel<ThemeEditorGlobalCategory>('category', { required: true })
 const derivedOpen = shallowRef(false)
 
-const localizedPresets = computed(() => THEME_COLOR_PRESETS.map(preset => ({ ...preset, ...uiLocale.value.theme[preset.id] })))
+const localizedPresets = computed(() => THEME_COLOR_PRESETS.map(preset => ({
+  ...preset,
+  ...uiLocale.value.theme[preset.id],
+})))
 const colorPresets = THEME_COLOR_PRESETS.map(preset => preset.seed)
 const categoryOptions = computed(() => ([
-  { label: t('common.fields.color'), value: 'color' },
-  { label: t('appearance.globalTokens.size'), value: 'size' },
-  { label: t('appearance.globalTokens.style'), value: 'style' },
+  {
+    label: t('common.fields.color'),
+    value: 'color',
+  },
+  {
+    label: t('appearance.globalTokens.size'),
+    value: 'size',
+  },
+  {
+    label: t('appearance.globalTokens.style'),
+    value: 'style',
+  },
 ]))
 const modeOptions = computed(() => ([
-  { label: t('appearance.globalTokens.systemMode'), value: 'system', icon: Laptop },
-  { label: t('appearance.globalTokens.lightColor'), value: 'light', icon: Sun },
-  { label: t('appearance.globalTokens.dark'), value: 'dark', icon: Moon },
+  {
+    label: t('appearance.globalTokens.systemMode'),
+    value: 'system',
+    icon: Laptop,
+  },
+  {
+    label: t('appearance.globalTokens.lightColor'),
+    value: 'light',
+    icon: Sun,
+  },
+  {
+    label: t('appearance.globalTokens.dark'),
+    value: 'dark',
+    icon: Moon,
+  },
 ]))
 const presetSwatchesById = new Map(
   THEME_COLOR_PRESETS.map(preset => [

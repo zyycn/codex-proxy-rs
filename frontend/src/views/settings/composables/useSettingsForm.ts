@@ -31,7 +31,12 @@ export function useSettingsForm() {
     providerRequestProfiles: {} as ProviderRequestProfiles,
     codexPrivacyPolicy: { enabled: false, onError: 'skip_rule', rules: [] } as CodexPrivacyPolicy,
     requestLocationEnabled: false,
-    requestLocation: { country: '', region: '', city: '', timezone: '' },
+    requestLocation: {
+      country: '',
+      region: '',
+      city: '',
+      timezone: '',
+    },
     refreshMarginSeconds: null as number | null,
     refreshConcurrency: null as number | null,
     maxConcurrentPerAccount: null as number | null,
@@ -83,14 +88,18 @@ export function useSettingsForm() {
 
   function numericModel(key: 'resetCreditMaxWeeklyRemainingPercent' | 'resetCreditLeadMinutes' | 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'openaiGuardianReservedConcurrency' | 'maxAccountRotations' | 'openaiSessionAffinityTtlHours' | 'maxWaitingPerKey' | 'maxWaitingPerAccount' | 'concurrencyWaitTimeoutSeconds' | 'responsesMaxDecompressedBodyMiB' | 'usageRetentionDays' | 'accountAutoFreezeThreshold' | 'accountAutoFreezeWindowSeconds' | 'accountAutoFreezeDurationSeconds') {
     return computed({
-      get: () => (form[key] === null ? '' : String(form[key])),
+      get: () => (form[key] === null
+        ? ''
+        : String(form[key])),
       set: (value: string) => {
         if (!value.trim()) {
           form[key] = null
           return
         }
         const parsed = Number(value)
-        form[key] = Number.isFinite(parsed) ? parsed : null
+        form[key] = Number.isFinite(parsed)
+          ? parsed
+          : null
       },
     })
   }
@@ -117,7 +126,9 @@ export function useSettingsForm() {
 
   function versionError(value: string): string {
     const normalized = value.trim()
-    return normalized && !isSemver(normalized) ? t('settings.form.enterStandardSemverForExample') : ''
+    return normalized && !isSemver(normalized)
+      ? t('settings.form.enterStandardSemverForExample')
+      : ''
   }
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
@@ -189,19 +200,30 @@ export function useSettingsForm() {
       if (result.status === 'detected') {
         form.requestLocation = { ...result.location }
         form.requestLocationEnabled = true
-        ZNotification.success({ message: t('settings.form.exitLocationFilledIn') })
+        ZNotification.success({
+          message: t('settings.form.exitLocationFilledIn'),
+        })
       }
       else if (result.status === 'conflict') {
-        ZNotification.warning({ message: t('settings.form.ipv4AndIpv6ExportTimeZonesAre') })
+        ZNotification.warning({
+          message: t('settings.form.ipv4AndIpv6ExportTimeZonesAre'),
+        })
       }
       else {
-        ZNotification.warning({ message: result.status === 'failed' ? result.message : t('settings.form.unableToObtainExitLocation') })
+        ZNotification.warning({
+          message: result.status === 'failed'
+            ? result.message
+            : t('settings.form.unableToObtainExitLocation'),
+        })
       }
     })
   }
 
   function addMapping() {
-    mappings.value = [...mappings.value, { requestedModel: '', upstreamModel: '' }]
+    mappings.value = [
+      ...mappings.value,
+      { requestedModel: '', upstreamModel: '' },
+    ]
   }
 
   function updateMapping(index: number, key: 'requestedModel' | 'upstreamModel', value: string) {
@@ -241,52 +263,74 @@ export function useSettingsForm() {
       return
     const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, openaiGuardianReservedConcurrency, openaiAccountAffinity, maxAccountRotations, openaiSessionAffinityTtlHours, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds, responsesMaxDecompressedBodyMiB, accountAutoFreezeThreshold, accountAutoFreezeWindowSeconds, accountAutoFreezeDurationSeconds } = form
     if (!openaiAccountAffinity || maxAccountRotations === null || openaiSessionAffinityTtlHours === null || refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || openaiGuardianReservedConcurrency === null || !rotationStrategy || maxWaitingPerKey === null || maxWaitingPerAccount === null || concurrencyWaitTimeoutSeconds === null) {
-      ZNotification.warning({ message: t('settings.form.requiredSettings') })
+      ZNotification.warning({
+        message: t('settings.form.requiredSettings'),
+      })
       return
     }
     if (!Number.isInteger(openaiSessionAffinityTtlHours) || openaiSessionAffinityTtlHours < 1 || openaiSessionAffinityTtlHours > 720) {
-      ZNotification.warning({ message: t('settings.form.invalidAffinityDuration') })
+      ZNotification.warning({
+        message: t('settings.form.invalidAffinityDuration'),
+      })
       return
     }
     if (!Number.isInteger(maxAccountRotations) || maxAccountRotations < 0 || maxAccountRotations > 31) {
-      ZNotification.warning({ message: t('settings.form.invalidSwitchLimit') })
+      ZNotification.warning({
+        message: t('settings.form.invalidSwitchLimit'),
+      })
       return
     }
     if (!Number.isInteger(maxConcurrentPerAccount) || maxConcurrentPerAccount < 0 || maxConcurrentPerAccount > 4294967295) {
-      ZNotification.warning({ message: t('settings.form.invalidConcurrency') })
+      ZNotification.warning({
+        message: t('settings.form.invalidConcurrency'),
+      })
       return
     }
     if (!Number.isInteger(openaiGuardianReservedConcurrency) || openaiGuardianReservedConcurrency < 0 || openaiGuardianReservedConcurrency > 4294967295) {
-      ZNotification.warning({ message: t('settings.form.invalidReviewConcurrency') })
+      ZNotification.warning({
+        message: t('settings.form.invalidReviewConcurrency'),
+      })
       return
     }
     if (responsesMaxDecompressedBodyMiB === null || !Number.isInteger(responsesMaxDecompressedBodyMiB) || responsesMaxDecompressedBodyMiB < 1
       || !Number.isSafeInteger(responsesMaxDecompressedBodyMiB * MIB)) {
-      ZNotification.warning({ message: t('settings.form.invalidBodyLimit') })
+      ZNotification.warning({
+        message: t('settings.form.invalidBodyLimit'),
+      })
       return
     }
     const resetCreditMaxWeeklyRemainingPercent = form.resetCreditMaxWeeklyRemainingPercent
     if (resetCreditMaxWeeklyRemainingPercent !== null && (!Number.isInteger(resetCreditMaxWeeklyRemainingPercent) || resetCreditMaxWeeklyRemainingPercent < 0 || resetCreditMaxWeeklyRemainingPercent > 100)) {
-      ZNotification.warning({ message: t('settings.form.invalidQuotaThreshold') })
+      ZNotification.warning({
+        message: t('settings.form.invalidQuotaThreshold'),
+      })
       return
     }
     const resetCreditLeadMinutes = form.resetCreditLeadMinutes
     if (resetCreditLeadMinutes === null || !Number.isInteger(resetCreditLeadMinutes) || resetCreditLeadMinutes < 1 || resetCreditLeadMinutes > 1440) {
-      ZNotification.warning({ message: t('settings.form.invalidResetLeadTime') })
+      ZNotification.warning({
+        message: t('settings.form.invalidResetLeadTime'),
+      })
       return
     }
     const usageRetentionDays = form.usageRetentionDays
     if (usageRetentionDays === null || !Number.isInteger(usageRetentionDays) || usageRetentionDays < 1 || usageRetentionDays > 31) {
-      ZNotification.warning({ message: t('settings.form.invalidRetention') })
+      ZNotification.warning({
+        message: t('settings.form.invalidRetention'),
+      })
       return
     }
     if (![maxWaitingPerKey, maxWaitingPerAccount].every(value => Number.isInteger(value) && value >= 0 && value <= 1000)
       || !Number.isInteger(concurrencyWaitTimeoutSeconds) || concurrencyWaitTimeoutSeconds < 1 || concurrencyWaitTimeoutSeconds > 120) {
-      ZNotification.warning({ message: t('settings.form.invalidQueueSettings') })
+      ZNotification.warning({
+        message: t('settings.form.invalidQueueSettings'),
+      })
       return
     }
     if (minCodexDesktopVersionError.value || minCodexCliVersionError.value) {
-      ZNotification.warning({ message: t('settings.form.invalidClientVersion') })
+      ZNotification.warning({
+        message: t('settings.form.invalidClientVersion'),
+      })
       return
     }
     // 关闭时保留已保存的自定义值，未完成的草稿不阻止停止覆盖。
@@ -299,33 +343,45 @@ export function useSettingsForm() {
       return
     }
     if (accountAutoFreezeThreshold === null || accountAutoFreezeWindowSeconds === null || accountAutoFreezeDurationSeconds === null) {
-      ZNotification.warning({ message: t('settings.form.overloadSettingsRequired') })
+      ZNotification.warning({
+        message: t('settings.form.overloadSettingsRequired'),
+      })
       return
     }
     if (!Number.isInteger(accountAutoFreezeThreshold) || accountAutoFreezeThreshold < 2 || accountAutoFreezeThreshold > 1000
       || !Number.isInteger(accountAutoFreezeWindowSeconds) || accountAutoFreezeWindowSeconds < 60 || accountAutoFreezeWindowSeconds > 3600
       || !Number.isInteger(accountAutoFreezeDurationSeconds) || accountAutoFreezeDurationSeconds < 300 || accountAutoFreezeDurationSeconds > 604800) {
-      ZNotification.warning({ message: t('settings.form.invalidOverloadSettings') })
+      ZNotification.warning({
+        message: t('settings.form.invalidOverloadSettings'),
+      })
       return
     }
     const probeModel = form.accountAutoFreezeProbeModel.trim()
     if (probeModel.length > 128) {
-      ZNotification.warning({ message: t('settings.form.invalidProbeModel') })
+      ZNotification.warning({
+        message: t('settings.form.invalidProbeModel'),
+      })
       return
     }
     const scheduleTime = form.accountWarmupScheduleTime.trim()
     const timeRegex = /^(?:[01]\d|2[0-3]):[0-5]\d(?:,(?:[01]\d|2[0-3]):[0-5]\d)*$/
     if (!scheduleTime || !timeRegex.test(scheduleTime)) {
-      ZNotification.warning({ message: t('settings.form.invalidWarmupTimes') })
+      ZNotification.warning({
+        message: t('settings.form.invalidWarmupTimes'),
+      })
       return
     }
     const warmupModel = form.accountWarmupModel.trim()
     if (form.accountWarmupEnabled && !warmupModel) {
-      ZNotification.warning({ message: t('settings.form.warmupModelRequired') })
+      ZNotification.warning({
+        message: t('settings.form.warmupModelRequired'),
+      })
       return
     }
     if (warmupModel.length > 128) {
-      ZNotification.warning({ message: t('settings.form.invalidWarmupModel') })
+      ZNotification.warning({
+        message: t('settings.form.invalidWarmupModel'),
+      })
       return
     }
     await saveAction.run(async () => {
@@ -371,7 +427,9 @@ export function useSettingsForm() {
         resetCreditMaxWeeklyRemainingPercent,
       })
       applySettings(result)
-      ZNotification.success({ message: t('settings.form.settingsSaved') })
+      ZNotification.success({
+        message: t('settings.form.settingsSaved'),
+      })
     }, {
       onError: (cause) => {
         if (cause instanceof ApiError && cause.status !== 409)
@@ -423,7 +481,10 @@ function requestProfileUpdates(
 ): ProviderRequestProfileUpdates {
   const updates: ProviderRequestProfileUpdates = {}
   const clonedCurrent = cloneDeep(current)
-  for (const provider of new Set([...Object.keys(previous), ...Object.keys(current)])) {
+  for (const provider of new Set([
+    ...Object.keys(previous),
+    ...Object.keys(current),
+  ])) {
     if (isEqual(previous[provider], current[provider]))
       continue
     updates[provider] = clonedCurrent[provider] ?? null

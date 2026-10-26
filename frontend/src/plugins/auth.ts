@@ -11,8 +11,12 @@ export const authPlugin: Plugin = {
 
     async function redirectToLogin(loginMode = authStore.session?.role ?? 'admin') {
       authStore.invalidateSession()
-      if (router.currentRoute.value.name !== 'login')
-        await router.replace({ name: 'login', state: { loginMode } })
+      if (router.currentRoute.value.name !== 'login') {
+        await router.replace({
+          name: 'login',
+          state: { loginMode },
+        })
+      }
     }
 
     setUnauthorizedHandler(() => redirectToLogin())

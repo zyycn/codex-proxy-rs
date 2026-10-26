@@ -23,7 +23,12 @@ const stage = useTemplateRef<HTMLElement>('stage')
 const boardWidth = 1600
 const boardHeight = 1808
 const { canZoomIn, canZoomOut, dragging, fitToViewport, resetScale, scale, scalePercent, zoomIn, zoomOut }
-  = useThemePreviewCanvas({ viewport, stage, boardWidth, boardHeight })
+  = useThemePreviewCanvas({
+    viewport,
+    stage,
+    boardWidth,
+    boardHeight,
+  })
 
 const stageStyle = computed<CSSProperties>(() => ({
   width: `${boardWidth * scale.value}px`,

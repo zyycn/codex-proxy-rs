@@ -11,7 +11,11 @@ const { t } = useI18n({ useScope: 'global' })
 
 const metrics = computed(() => ([
   ...keyUsageTokenMetrics.value,
-  { label: t('usage.page.cacheHitRate'), icon: Gauge, tone: 'text-cp-success-text' },
+  {
+    label: t('usage.page.cacheHitRate'),
+    icon: Gauge,
+    tone: 'text-cp-success-text',
+  },
 ]))
 </script>
 

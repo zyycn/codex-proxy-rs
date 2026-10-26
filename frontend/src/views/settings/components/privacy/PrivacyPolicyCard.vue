@@ -21,8 +21,19 @@ const isNew = shallowRef(false)
 const presetOpen = shallowRef(false)
 const testOpen = shallowRef(false)
 const stepCount = computed(() => model.value.rules.reduce((count, rule) => count + rule.steps.length, 0))
-const availableSteps = computed(() => 32 - stepCount.value + (isNew.value ? 0 : selected.value?.steps.length ?? 0))
-const failureOptions = computed<{ value: CodexPrivacyPolicy['onError'], label: string }[]>(() => ([{ value: 'skip_rule', label: t('settings.privacy.skipCurrentRule') }, { value: 'reject_request', label: t('settings.privacy.blockRequestFromBeingSent') }]))
+const availableSteps = computed(() => 32 - stepCount.value + (isNew.value
+  ? 0
+  : selected.value?.steps.length ?? 0))
+const failureOptions = computed<{ value: CodexPrivacyPolicy['onError'], label: string }[]>(() => ([
+  {
+    value: 'skip_rule',
+    label: t('settings.privacy.skipCurrentRule'),
+  },
+  {
+    value: 'reject_request',
+    label: t('settings.privacy.blockRequestFromBeingSent'),
+  },
+]))
 
 function edit(rule: PrivacyRule, create = false) {
   selected.value = rule
@@ -31,16 +42,33 @@ function edit(rule: PrivacyRule, create = false) {
   presetOpen.value = false
 }
 function apply(rule: PrivacyRule) {
-  model.value = { ...model.value, rules: isNew.value ? [...model.value.rules, rule] : model.value.rules.map(item => item.id === rule.id ? rule : item) }
+  model.value = {
+    ...model.value,
+    rules: isNew.value
+      ? [...model.value.rules, rule]
+      : model.value.rules.map(item => item.id === rule.id
+          ? rule
+          : item),
+  }
 }
 function add(key?: string) {
-  edit(key ? createPreset(key) : newRule(), true)
+  edit(key
+    ? createPreset(key)
+    : newRule(), true)
 }
 function toggle(rule: PrivacyRule, enabled: boolean) {
-  model.value = { ...model.value, rules: model.value.rules.map(item => item.id === rule.id ? { ...item, enabled } : item) }
+  model.value = {
+    ...model.value,
+    rules: model.value.rules.map(item => item.id === rule.id
+      ? { ...item, enabled }
+      : item),
+  }
 }
 function remove(rule: PrivacyRule) {
-  model.value = { ...model.value, rules: model.value.rules.filter(item => item.id !== rule.id) }
+  model.value = {
+    ...model.value,
+    rules: model.value.rules.filter(item => item.id !== rule.id),
+  }
 }
 </script>
 

@@ -17,8 +17,15 @@ function animate() {
   if (!icon.value)
     return
   gsap.set(icon.value, { y: 0 })
-  if (preferredMotion.value !== 'reduce')
-    motion = gsap.to(icon.value, { y: -5, duration: 0.8, repeat: -1, yoyo: true, ease: 'power1.inOut' })
+  if (preferredMotion.value !== 'reduce') {
+    motion = gsap.to(icon.value, {
+      y: -5,
+      duration: 0.8,
+      repeat: -1,
+      yoyo: true,
+      ease: 'power1.inOut',
+    })
+  }
 }
 
 onMounted(animate)

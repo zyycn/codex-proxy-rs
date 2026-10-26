@@ -10,5 +10,7 @@ export interface PluginRefreshContext {
 export function notifyPluginError(title: string, error: unknown): void {
   if (error instanceof ApiError && error.kind === 'cancelled')
     return
-  ZNotification.error({ message: errorMessage(error, title) })
+  ZNotification.error({
+    message: errorMessage(error, title),
+  })
 }

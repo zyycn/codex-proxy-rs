@@ -27,7 +27,9 @@ const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ default: false })
 const form = defineModel<ApiKeyFormValue>('form', { required: true })
-const title = computed(() => props.editing ? t('keys.actions.editKey') : t('keys.filters.createApiKey'))
+const title = computed(() => props.editing
+  ? t('keys.actions.editKey')
+  : t('keys.filters.createApiKey'))
 const formRef = useTemplateRef<InstanceType<typeof ZForm>>('formElement')
 const rules = useApiKeyFormRules()
 

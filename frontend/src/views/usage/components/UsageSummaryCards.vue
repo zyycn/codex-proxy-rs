@@ -15,14 +15,31 @@ const { t } = useI18n({ useScope: 'global' })
 
 const averageLatency = computed(() => {
   const raw = props.summary.averageLatencyMsValue
-  const value = raw == null || !Number.isFinite(raw) || raw < 0 ? 0 : raw
-  if (value < 1_000)
-    return { value: String(Math.round(value)), unit: 'ms' }
-  if (value < 60_000)
-    return { value: (value / 1_000).toFixed(2), unit: 's' }
-  if (value < 3_600_000)
-    return { value: (value / 60_000).toFixed(1), unit: 'min' }
-  return { value: (value / 3_600_000).toFixed(1), unit: 'h' }
+  const value = raw == null || !Number.isFinite(raw) || raw < 0
+    ? 0
+    : raw
+  if (value < 1_000) {
+    return {
+      value: String(Math.round(value)),
+      unit: 'ms',
+    }
+  }
+  if (value < 60_000) {
+    return {
+      value: (value / 1_000).toFixed(2),
+      unit: 's',
+    }
+  }
+  if (value < 3_600_000) {
+    return {
+      value: (value / 60_000).toFixed(1),
+      unit: 'min',
+    }
+  }
+  return {
+    value: (value / 3_600_000).toFixed(1),
+    unit: 'h',
+  }
 })
 
 const items = computed(() => [

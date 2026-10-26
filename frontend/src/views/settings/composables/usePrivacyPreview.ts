@@ -23,5 +23,10 @@ export function usePrivacyPreview() {
     catch {}
     finally { state.finish(id) }
   }
-  return { loading: state.loading, result, run, invalidate }
+  return {
+    loading: state.loading,
+    result,
+    run,
+    invalidate,
+  }
 }

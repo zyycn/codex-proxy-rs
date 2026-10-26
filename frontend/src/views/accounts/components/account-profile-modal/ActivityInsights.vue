@@ -14,14 +14,26 @@ const props = defineProps<{
 const { t } = useI18n({ useScope: 'global' })
 
 const insightRows = computed(() => [
-  { label: t('accounts.profile.activity.quickMode'), value: formatPercent(props.insights.fastModePercent) },
+  {
+    label: t('accounts.profile.activity.quickMode'),
+    value: formatPercent(props.insights.fastModePercent),
+  },
   {
     label: t('accounts.profile.activity.reasoningEffort'),
     value: formatReasoning(props.insights.reasoningEffort, props.insights.reasoningEffortPercent),
   },
-  { label: t('accounts.profile.activity.exploredSkills'), value: formatNumber(props.insights.skillsExplored) },
-  { label: t('accounts.profile.activity.totalNumberOfSkillsUsed'), value: formatNumber(props.insights.totalSkillsUsed) },
-  { label: t('accounts.profile.activity.totalNumberOfChats'), value: formatNumber(props.insights.totalThreads) },
+  {
+    label: t('accounts.profile.activity.exploredSkills'),
+    value: formatNumber(props.insights.skillsExplored),
+  },
+  {
+    label: t('accounts.profile.activity.totalNumberOfSkillsUsed'),
+    value: formatNumber(props.insights.totalSkillsUsed),
+  },
+  {
+    label: t('accounts.profile.activity.totalNumberOfChats'),
+    value: formatNumber(props.insights.totalThreads),
+  },
 ])
 const invocations = computed(() =>
   (props.insights.invocations ?? [])
@@ -30,7 +42,9 @@ const invocations = computed(() =>
 )
 
 function formatNumber(value: number | null) {
-  return value === null ? '—' : formatInteger(value)
+  return value === null
+    ? '—'
+    : formatInteger(value)
 }
 
 function formatPercent(value: number | null) {
@@ -42,7 +56,9 @@ function formatPercent(value: number | null) {
 function formatReasoning(effort: string | null, percent: number | null) {
   if (!effort)
     return '—'
-  return percent === null ? effort : `${effort} · ${formatPercent(percent)}`
+  return percent === null
+    ? effort
+    : `${effort} · ${formatPercent(percent)}`
 }
 
 function invocationView(invocation: AccountProfileInvocation) {

@@ -15,7 +15,9 @@ export function useTableSort<Row extends object>(
 
       const { key, direction } = parsed
       if (typeof key === 'string' && (direction === 'asc' || direction === 'desc')
-        && toValue(source).some(column => column.sortable && (column.sortable === true ? column.key : column.sortable) === key)) {
+        && toValue(source).some(column => column.sortable && (column.sortable === true
+          ? column.key
+          : column.sortable) === key)) {
         return { key, direction }
       }
     }

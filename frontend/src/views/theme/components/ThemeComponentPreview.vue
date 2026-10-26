@@ -50,14 +50,32 @@ const controlHeight = shallowRef(38)
 const syncTagVisible = shallowRef(true)
 
 const providerOptions = computed(() => ([
-  { label: formatProviderLabel('openai'), value: 'openai' },
-  { label: formatProviderLabel('xai'), value: 'xai' },
-  { label: t('appearance.preview.components.allPlatforms'), value: 'all' },
+  {
+    label: formatProviderLabel('openai'),
+    value: 'openai',
+  },
+  {
+    label: formatProviderLabel('xai'),
+    value: 'xai',
+  },
+  {
+    label: t('appearance.preview.components.allPlatforms'),
+    value: 'all',
+  },
 ]))
 const viewOptions = computed(() => ([
-  { label: t('common.values.all'), value: 'all' },
-  { label: t('common.status.healthy'), value: 'active' },
-  { label: t('appearance.preview.components.restricted'), value: 'limited' },
+  {
+    label: t('common.values.all'),
+    value: 'all',
+  },
+  {
+    label: t('common.status.healthy'),
+    value: 'active',
+  },
+  {
+    label: t('appearance.preview.components.restricted'),
+    value: 'limited',
+  },
 ]))
 const themeSwatches = [
   { label: 'Container', className: 'bg-cp-bg-container' },
@@ -69,25 +87,115 @@ const themeSwatches = [
   { label: 'Error', className: 'bg-cp-error' },
 ]
 const progressItems = computed(() => ([
-  { label: t('appearance.preview.components.accountAvailability'), value: '94%', width: '94%' },
-  { label: t('appearance.preview.components.todaySQuota'), value: '68%', width: '68%' },
-  { label: t('appearance.preview.components.batchImport'), value: '12 / 20', width: '60%' },
+  {
+    label: t('appearance.preview.components.accountAvailability'),
+    value: '94%',
+    width: '94%',
+  },
+  {
+    label: t('appearance.preview.components.todaySQuota'),
+    value: '68%',
+    width: '68%',
+  },
+  {
+    label: t('appearance.preview.components.batchImport'),
+    value: '12 / 20',
+    width: '60%',
+  },
 ]))
 const tableColumns = computed(() => (defineTableColumns<PreviewTableRow>([
-  { key: 'account', label: t('accounts.account'), kind: 'identity', size: '3xl' },
-  { key: 'provider', label: t('appearance.preview.components.platform'), kind: 'status', size: 'md' },
-  { key: 'status', label: t('common.fields.status'), kind: 'status', size: 'md' },
-  { key: 'requests', label: t('appearance.preview.components.requestToday'), kind: 'numeric', size: 'lg' },
-  { key: 'latency', label: t('usage.firstTokenLatency'), kind: 'numeric', size: 'lg' },
-  { key: 'updatedAt', label: t('appearance.preview.components.recentlyUsed'), kind: 'datetime', size: 'lg' },
+  {
+    key: 'account',
+    label: t('accounts.account'),
+    kind: 'identity',
+    size: '3xl',
+  },
+  {
+    key: 'provider',
+    label: t('appearance.preview.components.platform'),
+    kind: 'status',
+    size: 'md',
+  },
+  {
+    key: 'status',
+    label: t('common.fields.status'),
+    kind: 'status',
+    size: 'md',
+  },
+  {
+    key: 'requests',
+    label: t('appearance.preview.components.requestToday'),
+    kind: 'numeric',
+    size: 'lg',
+  },
+  {
+    key: 'latency',
+    label: t('usage.firstTokenLatency'),
+    kind: 'numeric',
+    size: 'lg',
+  },
+  {
+    key: 'updatedAt',
+    label: t('appearance.preview.components.recentlyUsed'),
+    kind: 'datetime',
+    size: 'lg',
+  },
 ])))
 const tableRows = computed<PreviewTableRow[]>(() => ([
-  { id: 'relay', account: 'relay@example.com', provider: formatProviderLabel('openai'), status: 'active', requests: '12,840', latency: '228 ms', updatedAt: t('appearance.preview.components.justNow') },
-  { id: 'gateway', account: 'gateway@example.com', provider: formatProviderLabel('xai'), status: 'active', requests: '9,462', latency: '316 ms', updatedAt: t('common.time.minutesAgo', { count: 2 }) },
-  { id: 'quota', account: 'quota@example.com', provider: formatProviderLabel('openai'), status: 'rate_limited', requests: '7,318', latency: '486 ms', updatedAt: t('common.time.minutesAgo', { count: 5 }) },
-  { id: 'batch', account: 'batch@example.com', provider: formatProviderLabel('openai'), status: 'active', requests: '5,904', latency: '264 ms', updatedAt: t('common.time.minutesAgo', { count: 8 }) },
-  { id: 'fallback', account: 'fallback@example.com', provider: formatProviderLabel('xai'), status: 'error', requests: '3,172', latency: '—', updatedAt: t('common.time.minutesAgo', { count: 12 }) },
-  { id: 'disabled', account: 'disabled@example.com', provider: formatProviderLabel('openai'), status: 'disabled', requests: '0', latency: '—', updatedAt: t('appearance.preview.components.hoursAgo') },
+  {
+    id: 'relay',
+    account: 'relay@example.com',
+    provider: formatProviderLabel('openai'),
+    status: 'active',
+    requests: '12,840',
+    latency: '228 ms',
+    updatedAt: t('appearance.preview.components.justNow'),
+  },
+  {
+    id: 'gateway',
+    account: 'gateway@example.com',
+    provider: formatProviderLabel('xai'),
+    status: 'active',
+    requests: '9,462',
+    latency: '316 ms',
+    updatedAt: t('common.time.minutesAgo', { count: 2 }),
+  },
+  {
+    id: 'quota',
+    account: 'quota@example.com',
+    provider: formatProviderLabel('openai'),
+    status: 'rate_limited',
+    requests: '7,318',
+    latency: '486 ms',
+    updatedAt: t('common.time.minutesAgo', { count: 5 }),
+  },
+  {
+    id: 'batch',
+    account: 'batch@example.com',
+    provider: formatProviderLabel('openai'),
+    status: 'active',
+    requests: '5,904',
+    latency: '264 ms',
+    updatedAt: t('common.time.minutesAgo', { count: 8 }),
+  },
+  {
+    id: 'fallback',
+    account: 'fallback@example.com',
+    provider: formatProviderLabel('xai'),
+    status: 'error',
+    requests: '3,172',
+    latency: '—',
+    updatedAt: t('common.time.minutesAgo', { count: 12 }),
+  },
+  {
+    id: 'disabled',
+    account: 'disabled@example.com',
+    provider: formatProviderLabel('openai'),
+    status: 'disabled',
+    requests: '0',
+    latency: '—',
+    updatedAt: t('appearance.preview.components.hoursAgo'),
+  },
 ]))
 const pagination: PaginationState = {
   currentPage: 2,

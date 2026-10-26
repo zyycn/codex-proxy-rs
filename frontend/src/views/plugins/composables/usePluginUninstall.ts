@@ -14,7 +14,11 @@ export function usePluginUninstall(refresh: () => Promise<void>) {
 
   function request(plugin: InstalledPlugin) {
     // 固定确认范围，重试不扩大到此后新建的配置或版本。
-    pending.value = { ...plugin, artifacts: [...plugin.artifacts], configurations: [...plugin.configurations] }
+    pending.value = {
+      ...plugin,
+      artifacts: [...plugin.artifacts],
+      configurations: [...plugin.configurations],
+    }
     acknowledged.value = false
     progress.value = ''
     open.value = true
@@ -53,7 +57,9 @@ export function usePluginUninstall(refresh: () => Promise<void>) {
       if ((await getPluginArtifacts(options)).some(artifact => artifact.metadata.pluginId === plugin.id))
         throw new Error(t('plugins.uninstall.newVersion'))
       open.value = false
-      ZNotification.success({ message: t('plugins.uninstall.completed') })
+      ZNotification.success({
+        message: t('plugins.uninstall.completed'),
+      })
       await refresh()
     }
     catch (cause) {
@@ -67,5 +73,13 @@ export function usePluginUninstall(refresh: () => Promise<void>) {
         progress.value = ''
     }
   }
-  return { open, pending, acknowledged, busy, progress, request, confirm }
+  return {
+    open,
+    pending,
+    acknowledged,
+    busy,
+    progress,
+    request,
+    confirm,
+  }
 }

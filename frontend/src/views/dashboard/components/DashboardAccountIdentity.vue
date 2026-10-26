@@ -20,7 +20,9 @@ type DashboardAccount = DashboardSnapshot['accountUsage'][number]
 const email = computed(() => props.account.email?.trim() || String(props.account.id))
 const displayTitle = computed(() => email.value.split('@')[0] || email.value)
 const normalizedProvider = computed(() => props.account.provider?.trim().toLowerCase() || '')
-const providerIconComponent = computed(() => normalizedProvider.value ? providerIcon(normalizedProvider.value) : undefined)
+const providerIconComponent = computed(() => normalizedProvider.value
+  ? providerIcon(normalizedProvider.value)
+  : undefined)
 const authenticationIconComponent = computed(() => authenticationIcon(props.account.authenticationKind))
 const providerLabel = computed(() => formatProviderLabel(props.account.provider, t('common.providers.unknown')))
 

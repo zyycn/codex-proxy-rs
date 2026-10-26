@@ -39,8 +39,20 @@ const customLocation = defineModel<boolean>('customLocation', { required: true }
 const location = defineModel<RequestLocation>('location', { required: true })
 const mode = shallowRef('single')
 const testAfterCreate = shallowRef(true)
-const modeOptions = computed(() => ([{ label: t('proxies.editor.single'), value: 'single' }, { label: t('proxies.editor.batch'), value: 'batch' }]))
-const batch = useProxyBatchCreate({ test: (proxy, options, detectLocation) => props.testSavedProxies(proxy, options, detectLocation), reload: () => props.reloadAfterCreate() })
+const modeOptions = computed(() => ([
+  {
+    label: t('proxies.editor.single'),
+    value: 'single',
+  },
+  {
+    label: t('proxies.editor.batch'),
+    value: 'batch',
+  },
+]))
+const batch = useProxyBatchCreate({
+  test: (proxy, options, detectLocation) => props.testSavedProxies(proxy, options, detectLocation),
+  reload: () => props.reloadAfterCreate(),
+})
 const {
   text: batchText,
   prefix: batchPrefix,
@@ -64,7 +76,9 @@ const manualLocationWarning = computed(() => {
   return ''
 })
 const busy = computed(() => props.saving || props.testingConnection || props.detectingLocation || batchBusy.value)
-const title = computed(() => props.proxy ? t('proxies.actions.edit') : t('proxies.editor.createTitle'))
+const title = computed(() => props.proxy
+  ? t('proxies.actions.edit')
+  : t('proxies.editor.createTitle'))
 const connectionDescription = computed(() => props.proxy
   ? t('proxies.editor.connectionHelp')
   : t('proxies.editor.protocolHelp'))

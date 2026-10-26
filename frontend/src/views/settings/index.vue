@@ -31,11 +31,26 @@ const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
 const router = useRouter()
 const sectionOptions = computed(() => ([
-  { label: t('settings.page.tabs.runtime'), value: 'runtime' },
-  { label: t('settings.page.tabs.upstream'), value: 'upstream' },
-  { label: t('settings.page.tabs.pricing'), value: 'pricing' },
-  { label: t('settings.page.tabs.access'), value: 'access' },
-  { label: t('settings.page.tabs.backups'), value: 'backup' },
+  {
+    label: t('settings.page.tabs.runtime'),
+    value: 'runtime',
+  },
+  {
+    label: t('settings.page.tabs.upstream'),
+    value: 'upstream',
+  },
+  {
+    label: t('settings.page.tabs.pricing'),
+    value: 'pricing',
+  },
+  {
+    label: t('settings.page.tabs.access'),
+    value: 'access',
+  },
+  {
+    label: t('settings.page.tabs.backups'),
+    value: 'backup',
+  },
 ]))
 const section = computed(() => {
   switch (route.name) {
@@ -51,7 +66,9 @@ const visited = reactive(new Set<string>())
 const settingsVisited = shallowRef(false)
 
 function switchSection(value = 'runtime'): void {
-  void router.push(value === 'runtime' ? '/settings' : `/settings/${value}`)
+  void router.push(value === 'runtime'
+    ? '/settings'
+    : `/settings/${value}`)
 }
 
 const {

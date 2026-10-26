@@ -15,7 +15,9 @@ const testItems = computed(() => props.tests ?? [])
 const rows = computed(() => {
   const tests = new Map(testItems.value.map(item => [item.key, item]))
   return props.items.map((item) => {
-    const test = item.record ? tests.get(item.record.id) : undefined
+    const test = item.record
+      ? tests.get(item.record.id)
+      : undefined
     const detection = test?.record?.lastTest?.location
     return {
       item,
@@ -25,7 +27,9 @@ const rows = computed(() => {
         ? test.message
         : detection?.status === 'failed'
           ? detection.message
-          : item.status !== 'succeeded' ? item.message : '',
+          : item.status !== 'succeeded'
+            ? item.message
+            : '',
     }
   })
 })
@@ -34,7 +38,10 @@ const created = computed(() => props.items.filter(item => item.status === 'succe
 const invalid = computed(() => props.items.filter(item => item.status === 'failed').length)
 const succeeded = computed(() => testItems.value.filter(item => item.status === 'succeeded').length)
 const failed = computed(() => testItems.value.filter(item => item.status === 'failed').length)
-const allOperations = computed(() => [...props.items, ...testItems.value])
+const allOperations = computed(() => [
+  ...props.items,
+  ...testItems.value,
+])
 const attention = computed(() => allOperations.value.filter(item => ['error', 'conflict', 'busy', 'unknown'].includes(item.status)).length)
 const skipped = computed(() => allOperations.value.filter(item => item.status === 'skipped').length)
 const locationPending = computed(() => testItems.value.filter(item => item.status === 'succeeded' && item.record?.lastTest?.location.status !== 'detected').length)

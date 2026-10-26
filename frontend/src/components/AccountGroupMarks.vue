@@ -11,7 +11,9 @@ const props = defineProps<{
 const { t } = useI18n({ useScope: 'global' })
 
 const fullNames = computed(() =>
-  props.groups.map(group => (group.enabled ? group.name : t('common.status.disabledName', { name: group.name }))).join('、'),
+  props.groups.map(group => (group.enabled
+    ? group.name
+    : t('common.status.disabledName', { name: group.name }))).join('、'),
 )
 </script>
 

@@ -24,8 +24,16 @@ const activeTab = shallowRef<'artifacts' | 'extensions'>('artifacts')
 const management = usePluginManagement()
 
 const tabOptions = computed(() => ([
-  { label: t('plugins.management.installed'), value: 'artifacts', icon: PackageOpen },
-  { label: t('plugins.management.extensions'), value: 'extensions', icon: PanelsTopLeft },
+  {
+    label: t('plugins.management.installed'),
+    value: 'artifacts',
+    icon: PackageOpen,
+  },
+  {
+    label: t('plugins.management.extensions'),
+    value: 'extensions',
+    icon: PanelsTopLeft,
+  },
 ]))
 </script>
 

@@ -20,7 +20,9 @@ const { t } = useI18n({ useScope: 'global' })
 const copyText = useCopyText()
 
 function copyCommand(command: string) {
-  void copyText(command, { successText: t('settings.clientVersion.commandCopied') })
+  void copyText(command, {
+    successText: t('settings.clientVersion.commandCopied'),
+  })
 }
 </script>
 

@@ -33,10 +33,21 @@ const http = axios.create({
 })
 
 // 从外到内：提示、会话恢复、重试、错误归一化、原始响应处理、实际传输
-const plugins: RequestPlugin[] = [feedbackPlugin, sessionPlugin, retryPlugin, errorPlugin, rawPlugin]
+const plugins: RequestPlugin[] = [
+  feedbackPlugin,
+  sessionPlugin,
+  retryPlugin,
+  errorPlugin,
+  rawPlugin,
+]
 
 function execute(config: RequestConfig, raw?: RawResponseOptions, stream = false) {
-  const context: RequestContext = { config, raw, stream, isCurrent: () => !config.signal?.aborted }
+  const context: RequestContext = {
+    config,
+    raw,
+    stream,
+    isCurrent: () => !config.signal?.aborted,
+  }
   const transport: RequestNext = () => http.request<unknown>(context.config)
   return plugins.reduceRight<RequestNext>((next, plugin) => () => plugin(context, next), transport)()
 }
@@ -57,9 +68,16 @@ export async function requestRaw(config: RequestConfig, options: RawResponseOpti
 export async function requestStream(config: RequestConfig, options: RawResponseOptions): Promise<Response> {
   // 成功正文保持流式交付；宿主错误仍由同一管线识别和恢复，禁止网络错误重放写操作
   const controller = new AbortController()
-  const signal = config.signal ? AbortSignal.any([config.signal, controller.signal]) : controller.signal
+  const signal = config.signal
+    ? AbortSignal.any([config.signal, controller.signal])
+    : controller.signal
   try {
-    const { data } = await execute({ ...config, adapter: 'fetch', retry: false, signal }, options, true)
+    const { data } = await execute({
+      ...config,
+      adapter: 'fetch',
+      retry: false,
+      signal,
+    }, options, true)
     return data as Response
   }
   catch (error) {

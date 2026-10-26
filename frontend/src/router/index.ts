@@ -43,7 +43,9 @@ router.beforeEach(async (to, from) => {
     }
     catch {
       // 首次进入时没有页面可保留，转到登录页；已有页面则保留，且不清除会话。
-      return from === START_LOCATION ? login : false
+      return from === START_LOCATION
+        ? login
+        : false
     }
   }
 

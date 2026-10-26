@@ -140,7 +140,9 @@ export function readPluginFrameTheme(): PluginFrameTheme {
   if (fontCode)
     tokens['--cp-font-family-code'] = fontCode
   return {
-    name: root.dataset.theme === 'dark' ? 'dark' : 'light',
+    name: root.dataset.theme === 'dark'
+      ? 'dark'
+      : 'light',
     tokens,
   }
 }
@@ -162,7 +164,9 @@ async function loadResources(view: PluginManagementView, signal: AbortSignal) {
   let cursor = 0
   let total = 0
   const workers = Array.from(
-    { length: Math.min(RESOURCE_CONCURRENCY, view.resources.length) },
+    {
+      length: Math.min(RESOURCE_CONCURRENCY, view.resources.length),
+    },
     async () => {
       while (cursor < view.resources.length) {
         const descriptor = view.resources[cursor++]
@@ -193,10 +197,16 @@ function rewriteDocument(
   ensureResourceUrl: (path: string) => string,
 ) {
   const unsupported = document.querySelector('base, iframe, frame, frameset, object, embed, portal, template')
-  if (unsupported)
-    throw new Error(t('plugins.frame.unsupportedElement', { value: unsupported.tagName.toLowerCase() }))
-  if ([...document.querySelectorAll('meta[http-equiv]')].some(meta => meta.getAttribute('http-equiv')?.toLowerCase() === 'refresh'))
+  if (unsupported) {
+    throw new Error(t('plugins.frame.unsupportedElement', {
+      value: unsupported.tagName.toLowerCase(),
+    }))
+  }
+  if ([
+    ...document.querySelectorAll('meta[http-equiv]'),
+  ].some(meta => meta.getAttribute('http-equiv')?.toLowerCase() === 'refresh')) {
     throw new Error(t('plugins.frame.redirectForbidden'))
+  }
 
   for (const script of document.querySelectorAll('script')) {
     if (script.getAttribute('type')?.trim().toLowerCase() === 'module')
@@ -223,12 +233,22 @@ function rewriteDocument(
     link.setAttribute('href', ensureResourceUrl(path))
   }
 
-  const supportedSourceElements = new Set(['AUDIO', 'IMG', 'SCRIPT', 'SOURCE', 'TRACK', 'VIDEO'])
+  const supportedSourceElements = new Set([
+    'AUDIO',
+    'IMG',
+    'SCRIPT',
+    'SOURCE',
+    'TRACK',
+    'VIDEO',
+  ])
   for (const element of document.querySelectorAll<HTMLElement>('[src]')) {
     if (element.tagName === 'SCRIPT')
       continue
-    if (!supportedSourceElements.has(element.tagName))
-      throw new Error(t('plugins.frame.unsupportedSrc', { value: element.tagName.toLowerCase() }))
+    if (!supportedSourceElements.has(element.tagName)) {
+      throw new Error(t('plugins.frame.unsupportedSrc', {
+        value: element.tagName.toLowerCase(),
+      }))
+    }
     const path = resolveResourceReference(entryPath, element.getAttribute('src') ?? '', resources)
     if (element.tagName === 'IMG' && !contentType(resources.get(path)?.descriptor.contentType ?? '').startsWith('image/'))
       throw new Error(t('plugins.frame.invalidPluginImageAssetType', { path }))
@@ -248,7 +268,10 @@ function rewriteDocument(
       if (!reference)
         throw new Error(t('plugins.frame.emptySrcset'))
       const path = resolveResourceReference(entryPath, reference, resources)
-      return [ensureResourceUrl(path), ...descriptor].join(' ')
+      return [
+        ensureResourceUrl(path),
+        ...descriptor,
+      ].join(' ')
     }).join(', ')
     element.setAttribute('srcset', rewritten)
   }
@@ -268,8 +291,14 @@ function rewriteDocument(
           continue
         throw new Error(t('plugins.frame.externalNavigation'))
       }
-      if (['action', 'formaction', 'ping', 'background'].includes(name) && attribute.value)
+      if ([
+        'action',
+        'formaction',
+        'ping',
+        'background',
+      ].includes(name) && attribute.value) {
         throw new Error(t('plugins.frame.pluginPageDoesNotSupportUrls', { name }))
+      }
       if (
         name !== 'style'
         && /\burl\s*\(/iu.test(attribute.value)
@@ -331,7 +360,9 @@ function rewriteCss(
     if (node.type === 'Atrule' && node.name.toLowerCase() === 'import') {
       if (!allowImports)
         throw new Error(t('plugins.frame.inlineStyleImport'))
-      const reference = node.prelude?.type === 'AtrulePrelude' ? node.prelude.children.first : null
+      const reference = node.prelude?.type === 'AtrulePrelude'
+        ? node.prelude.children.first
+        : null
       if (node.block || !reference || (reference.type !== 'String' && reference.type !== 'Url'))
         throw new Error(t('plugins.frame.unsupportedPluginImportSyntax', { ownerPath }))
       const path = resolveResourceReference(ownerPath, reference.value, resources)

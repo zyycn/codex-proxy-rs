@@ -106,7 +106,9 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   })
 
   const needRestart = computed(() => Boolean(updateStatus.value?.needRestart))
-  const restartTargetVersion = computed(() => needRestart.value ? normalizeSystemVersion(updateStatus.value?.currentVersion) : '')
+  const restartTargetVersion = computed(() => needRestart.value
+    ? normalizeSystemVersion(updateStatus.value?.currentVersion)
+    : '')
   const selectedChannel = computed(() => policy.value?.channel ?? 'stable')
   const availableChannels = computed(() => policy.value?.availableChannels ?? [])
   const canChangeChannel = computed(() => availableChannels.value.length > 1
@@ -274,7 +276,11 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   }
 
   function settlePhase() {
-    setPhase(needRestart.value ? { kind: 'restart_required' } : updateError.value ? { kind: 'failed' } : { kind: 'ready' })
+    setPhase(needRestart.value
+      ? { kind: 'restart_required' }
+      : updateError.value
+        ? { kind: 'failed' }
+        : { kind: 'ready' })
   }
 
   async function loadDetail(refresh: boolean, generation: number, channel?: SystemUpdateChannel) {
@@ -289,7 +295,13 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       return
     if (version.value && detail.policy.channel === version.value.updateChannel) {
       // 侧栏只提示当前运行通道的更新，临时查看其他通道不会改变全局提示。
-      version.value = { ...version.value, latestVersion: detail.latestVersion, hasUpdate: detail.hasUpdate, updateCached: detail.cached, updateWarning: detail.warning }
+      version.value = {
+        ...version.value,
+        latestVersion: detail.latestVersion,
+        hasUpdate: detail.hasUpdate,
+        updateCached: detail.cached,
+        updateWarning: detail.warning,
+      }
     }
   }
 

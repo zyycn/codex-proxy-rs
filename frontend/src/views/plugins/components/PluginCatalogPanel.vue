@@ -22,12 +22,34 @@ const status = shallowRef('all')
 const display = shallowRef('cards')
 const page = shallowRef(1)
 const pageSize = shallowRef(20)
-const statusOptions = computed(() => ([{ label: t('common.status.all'), value: 'all' }, ...Object.entries(PLUGIN_STATUS_LABELS.value).map(([value, label]) => ({ value, label }))]))
-const displayOptions = computed(() => ([{ label: t('plugins.catalog.cardView'), value: 'cards', icon: LayoutGrid }, { label: t('plugins.catalog.listView'), value: 'list', icon: List }]))
+const statusOptions = computed(() => ([
+  {
+    label: t('common.status.all'),
+    value: 'all',
+  },
+  ...Object.entries(PLUGIN_STATUS_LABELS.value).map(([value, label]) => ({ value, label })),
+]))
+const displayOptions = computed(() => ([
+  {
+    label: t('plugins.catalog.cardView'),
+    value: 'cards',
+    icon: LayoutGrid,
+  },
+  {
+    label: t('plugins.catalog.listView'),
+    value: 'list',
+    icon: List,
+  },
+]))
 const filtered = computed(() => props.plugins.filter((plugin) => {
   const metadata = plugin.artifact.metadata
   return (status.value === 'all' || pluginStatus(plugin) === status.value)
-    && [metadata.displayName, metadata.pluginId, metadata.publisher, metadata.description].some(value => value.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))
+    && [
+      metadata.displayName,
+      metadata.pluginId,
+      metadata.publisher,
+      metadata.description,
+    ].some(value => value.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))
 }))
 const rows = computed(() => filtered.value
   .slice((page.value - 1) * pageSize.value, page.value * pageSize.value)
@@ -37,7 +59,9 @@ const rows = computed(() => filtered.value
     return {
       ...plugin,
       versionLabel: version,
-      versionTitle: `${current ? t('plugins.catalog.currentVersion') : t('plugins.catalog.installedVersion')}：${version}`,
+      versionTitle: `${current
+        ? t('plugins.catalog.currentVersion')
+        : t('plugins.catalog.installedVersion')}：${version}`,
     }
   }))
 const pagination = computed(() => ({ currentPage: page.value, pageSize: pageSize.value, total: filtered.value.length }))
@@ -48,11 +72,36 @@ watch(() => filtered.value.length, (total) => {
   page.value = Math.min(page.value, Math.max(1, Math.ceil(total / pageSize.value)))
 })
 const columns = computed(() => (defineTableColumns<(typeof rows.value)[number]>([
-  { key: 'plugin', label: t('navigation.plugins'), kind: 'identity', size: '3xl' },
-  { key: 'status', label: t('common.fields.status'), kind: 'custom', size: 'lg' },
-  { key: 'capabilities', label: t('plugins.catalog.provideFunctionality'), kind: 'custom', size: 'xl' },
-  { key: 'configurations', label: t('plugins.catalog.versionCount'), kind: 'custom', size: 'lg' },
-  { key: 'actions', label: t('common.fields.actions'), kind: 'actions', size: 'sm' },
+  {
+    key: 'plugin',
+    label: t('navigation.plugins'),
+    kind: 'identity',
+    size: '3xl',
+  },
+  {
+    key: 'status',
+    label: t('common.fields.status'),
+    kind: 'custom',
+    size: 'lg',
+  },
+  {
+    key: 'capabilities',
+    label: t('plugins.catalog.provideFunctionality'),
+    kind: 'custom',
+    size: 'xl',
+  },
+  {
+    key: 'configurations',
+    label: t('plugins.catalog.versionCount'),
+    kind: 'custom',
+    size: 'lg',
+  },
+  {
+    key: 'actions',
+    label: t('common.fields.actions'),
+    kind: 'actions',
+    size: 'sm',
+  },
 ])))
 </script>
 

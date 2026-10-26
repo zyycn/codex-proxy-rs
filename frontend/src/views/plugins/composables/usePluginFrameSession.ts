@@ -214,8 +214,12 @@ export function usePluginFrameSession(options: {
   }
 
   function routeForMessage(view: PluginManagementView, payload: Record<string, unknown>) {
-    const method = typeof payload.method === 'string' ? payload.method.toUpperCase() : ''
-    const path = typeof payload.path === 'string' ? payload.path : ''
+    const method = typeof payload.method === 'string'
+      ? payload.method.toUpperCase()
+      : ''
+    const path = typeof payload.path === 'string'
+      ? payload.path
+      : ''
     return view.routes.find(route => route.method === method && route.path === path)
   }
 
@@ -239,7 +243,9 @@ export function usePluginFrameSession(options: {
       throw new Error(t('plugins.frame.contentTypeRequired'))
     return {
       query,
-      contentType: typeof contentType === 'string' ? contentType : undefined,
+      contentType: typeof contentType === 'string'
+        ? contentType
+        : undefined,
       body,
     }
   }
@@ -277,7 +283,9 @@ export function usePluginFrameSession(options: {
   ) {
     if (!isRecord(message.payload))
       throw new Error(t('plugins.frame.invalidCallbackTicket'))
-    const path = typeof message.payload.path === 'string' ? message.payload.path : ''
+    const path = typeof message.payload.path === 'string'
+      ? message.payload.path
+      : ''
     const ttlSeconds = message.payload.ttlSeconds
     if (!current.view.callbacks.some(callback => callback.path === path))
       throw new Error(t('plugins.frame.unregisteredCallback'))
@@ -487,7 +495,9 @@ export function usePluginFrameSession(options: {
     const request = current.modelRequests.get(message.id)
     if (!request || request.source !== source)
       return
-    const pullId = isRecord(message.payload) ? message.payload.pullId : undefined
+    const pullId = isRecord(message.payload)
+      ? message.payload.pullId
+      : undefined
     if (!Number.isSafeInteger(pullId) || Number(pullId) < 1) {
       terminateModelRequest(current, request, t('plugins.frame.invalidPullId'))
       return
@@ -561,7 +571,9 @@ export function usePluginFrameSession(options: {
     }
     const frame = source as Window
     if (event.data.type === 'resize') {
-      const height = isRecord(event.data.payload) ? event.data.payload.height : undefined
+      const height = isRecord(event.data.payload)
+        ? event.data.payload.height
+        : undefined
       if (typeof height === 'number' && Number.isSafeInteger(height) && height > 0 && height <= 1_000_000)
         contentHeight.value = height
       return
@@ -665,5 +677,15 @@ export function usePluginFrameSession(options: {
   )
 
   const frameKey = computed(() => session.value?.channel)
-  return { srcdoc, loading, loadError, contentHeight, frameKey, loadPage, handleFrameLoad, pushLayout, pushTheme }
+  return {
+    srcdoc,
+    loading,
+    loadError,
+    contentHeight,
+    frameKey,
+    loadPage,
+    handleFrameLoad,
+    pushLayout,
+    pushTheme,
+  }
 }

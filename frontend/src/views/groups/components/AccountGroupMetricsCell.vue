@@ -62,14 +62,20 @@ const metrics = computed<MetricItem[]>(() => {
       {
         label: t('groups.metrics.concurrency'),
         value: `${props.group.capacity.usedSlots ?? '—'} / ${props.group.capacity.totalSlots ?? '∞'}`,
-        tone: (props.group.capacity.usedSlots ?? 0) > 0 ? 'active' : 'primary',
+        tone: (props.group.capacity.usedSlots ?? 0) > 0
+          ? 'active'
+          : 'primary',
         icon: Grid2X2,
       },
     ]
   }
 
   return [
-    { label: t('groups.metrics.today'), value: formatUsd(props.group.usage.todayUsd), tone: 'primary' },
+    {
+      label: t('groups.metrics.today'),
+      value: formatUsd(props.group.usage.todayUsd),
+      tone: 'primary',
+    },
     {
       label: t('groups.metrics.cumulative'),
       value: formatUsd(props.group.usage.retainedTotalUsd),

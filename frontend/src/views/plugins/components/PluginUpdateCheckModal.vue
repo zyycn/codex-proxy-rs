@@ -27,7 +27,9 @@ const status = computed(() => {
     return t('plugins.updates.currentlyUsingThisVersion')
   if (newer.value)
     return t('plugins.updates.verifiedUpdate')
-  return current.value?.version === candidate.value.version ? t('plugins.updates.sameVersionDifferentContent') : t('plugins.updates.noHigherVersionFound')
+  return current.value?.version === candidate.value.version
+    ? t('plugins.updates.sameVersionDifferentContent')
+    : t('plugins.updates.noHigherVersionFound')
 })
 </script>
 

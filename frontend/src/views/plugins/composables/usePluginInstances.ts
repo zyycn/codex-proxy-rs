@@ -81,8 +81,18 @@ export function usePluginInstances({ artifacts, refresh, onEdit, onSaved }: Inst
     const digests = new Set(currentArtifacts.filter(value => value.metadata.pluginId === artifact.metadata.pluginId).map(value => value.metadata.sha256))
     const replacements = currentInstances
       .filter(current => current.enabled && current.id !== (instanceId ?? request.creationId) && digests.has(current.artifactSha256))
-      .map(({ id, name, revision, artifactSha256 }) => ({ id, name, revision, version: currentArtifacts.find(value => value.metadata.sha256 === artifactSha256)?.metadata.version }))
-    return { request, instanceId, artifact, replacements }
+      .map(({ id, name, revision, artifactSha256 }) => ({
+        id,
+        name,
+        revision,
+        version: currentArtifacts.find(value => value.metadata.sha256 === artifactSha256)?.metadata.version,
+      }))
+    return {
+      request,
+      instanceId,
+      artifact,
+      replacements,
+    }
   }
 
   async function requestInstanceEnable(instance: PluginInstance) {
@@ -114,7 +124,9 @@ export function usePluginInstances({ artifacts, refresh, onEdit, onSaved }: Inst
         await persistInstance(pending.request, instance.id)
       }
       return true
-    }, { onError: error => notifyPluginError(t('plugins.instances.loadFailed'), error) })
+    }, {
+      onError: error => notifyPluginError(t('plugins.instances.loadFailed'), error),
+    })
     if (!result)
       await refresh(true, true)
   }
@@ -129,7 +141,9 @@ export function usePluginInstances({ artifacts, refresh, onEdit, onSaved }: Inst
         replaceInstances: pending.replacements.map(instance => ({ id: instance.id, expectedRevision: instance.revision })),
       }, pending.instanceId)
       return true
-    }, { onError: error => notifyPluginError(t('plugins.instances.configurationEnablementFailed'), error) })
+    }, {
+      onError: error => notifyPluginError(t('plugins.instances.configurationEnablementFailed'), error),
+    })
     // 失败后保留编辑草稿或已保存配置，再次提交需重新读取并确认停用范围。
     showEnableConfirmation.value = false
     if (!result)
@@ -142,7 +156,13 @@ export function usePluginInstances({ artifacts, refresh, onEdit, onSaved }: Inst
     await updatePluginInstance({ id: instanceId, instance: request }, { silent: true })
     showEnableConfirmation.value = false
     showInstance.value = false
-    ZNotification.success({ message: request.replaceInstances?.length ? t('plugins.instances.switchedCurrentConfiguration') : request.enabled ? t('plugins.instances.pluginSettingsApplied') : t('plugins.instances.savedDisabled') })
+    ZNotification.success({
+      message: request.replaceInstances?.length
+        ? t('plugins.instances.switchedCurrentConfiguration')
+        : request.enabled
+          ? t('plugins.instances.pluginSettingsApplied')
+          : t('plugins.instances.savedDisabled'),
+    })
     await refresh(true)
     onSaved()
   }
@@ -153,7 +173,9 @@ export function usePluginInstances({ artifacts, refresh, onEdit, onSaved }: Inst
     busyInstanceId.value = instance.id
     try {
       await disablePluginInstance({ id: instance.id }, { silent: true })
-      ZNotification.success({ message: t('plugins.instances.pluginDisabled') })
+      ZNotification.success({
+        message: t('plugins.instances.pluginDisabled'),
+      })
       await refresh(true)
     }
     catch (error) {
@@ -177,7 +199,9 @@ export function usePluginInstances({ artifacts, refresh, onEdit, onSaved }: Inst
     try {
       await deletePluginInstance({ id: instance.id }, { silent: true })
       showInstanceDelete.value = false
-      ZNotification.success({ message: t('plugins.instances.deleted') })
+      ZNotification.success({
+        message: t('plugins.instances.deleted'),
+      })
       await refresh(true)
     }
     catch (error) {
@@ -196,5 +220,25 @@ export function usePluginInstances({ artifacts, refresh, onEdit, onSaved }: Inst
     showInstance.value = true
   }
 
-  return { configurationArtifact, configurationDraft, configurationError, showInstance, editingInstance, savingInstance, pendingEnable, showEnableConfirmation, busyInstanceId, showInstanceDelete, pendingDeleteInstance, openEditInstance, saveInstance, requestInstanceEnable, confirmInstanceEnable, requestInstanceDisable, requestInstanceDelete, confirmInstanceDelete, editVersionPlan }
+  return {
+    configurationArtifact,
+    configurationDraft,
+    configurationError,
+    showInstance,
+    editingInstance,
+    savingInstance,
+    pendingEnable,
+    showEnableConfirmation,
+    busyInstanceId,
+    showInstanceDelete,
+    pendingDeleteInstance,
+    openEditInstance,
+    saveInstance,
+    requestInstanceEnable,
+    confirmInstanceEnable,
+    requestInstanceDisable,
+    requestInstanceDelete,
+    confirmInstanceDelete,
+    editVersionPlan,
+  }
 }

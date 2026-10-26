@@ -55,13 +55,24 @@ const hasNoCacheCost = computed(() =>
 const coverageRate = computed(() => {
   const { known, partial, unknown } = props.cost.coverage
   const total = known + partial + unknown
-  return total > 0 ? (known + partial) / total : null
+  return total > 0
+    ? (known + partial) / total
+    : null
 })
 
 const viewOptions = computed(() => ([
-  { label: t('usage.fields.cost'), value: 'cost' },
-  { label: t('usage.cost.savings'), value: 'savings' },
-  { label: t('usage.cost.cache'), value: 'cache' },
+  {
+    label: t('usage.fields.cost'),
+    value: 'cost',
+  },
+  {
+    label: t('usage.cost.savings'),
+    value: 'savings',
+  },
+  {
+    label: t('usage.cost.cache'),
+    value: 'cache',
+  },
 ]))
 
 const hasData = computed(() => {
@@ -99,19 +110,37 @@ const chartOption = computed<EChartsOption>(() => {
       theme,
     ),
     yAxis: usageValueAxis(theme, axisFormatter(), {
-      min: activeView.value === 'cache' ? 0 : undefined,
-      max: activeView.value === 'cache' ? 1 : undefined,
+      min: activeView.value === 'cache'
+        ? 0
+        : undefined,
+      max: activeView.value === 'cache'
+        ? 1
+        : undefined,
     }),
     series,
   }
 })
 
 function legendNames() {
-  if (activeView.value === 'savings')
-    return [t('usage.cost.cacheSavings')]
-  if (activeView.value === 'cache')
-    return [t('usage.cost.cacheTokenProportion'), t('usage.cost.hitRequestRate')]
-  return hasNoCacheCost.value ? [t('usage.cost.actualCost'), t('usage.cost.withoutCacheEstimate')] : [t('usage.cost.actualCost')]
+  if (activeView.value === 'savings') {
+    return [
+      t('usage.cost.cacheSavings'),
+    ]
+  }
+  if (activeView.value === 'cache') {
+    return [
+      t('usage.cost.cacheTokenProportion'),
+      t('usage.cost.hitRequestRate'),
+    ]
+  }
+  return hasNoCacheCost.value
+    ? [
+        t('usage.cost.actualCost'),
+        t('usage.cost.withoutCacheEstimate'),
+      ]
+    : [
+        t('usage.cost.actualCost'),
+      ]
 }
 
 function axisFormatter() {
@@ -222,7 +251,9 @@ function formatTooltip(params: unknown) {
 }
 
 function costAmount(value: string | null, pointIndex: number) {
-  return value ?? (requestActivity.value[pointIndex] === false ? '0' : null)
+  return value ?? (requestActivity.value[pointIndex] === false
+    ? '0'
+    : null)
 }
 </script>
 

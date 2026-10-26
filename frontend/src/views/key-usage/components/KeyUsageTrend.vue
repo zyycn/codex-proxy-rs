@@ -27,32 +27,87 @@ const option = computed<EChartsOption>(() => {
       color: color(metric.colorToken, metric.fallback),
       data: props.points.map(point => keyUsageTokenValue(point, metric.key)),
     })),
-    { key: 'costUsd', name: t('usage.trends.cost'), color: colors.danger, data: props.points.map(point => point.costUsd === null ? null : Number(point.costUsd)), cost: true },
+    {
+      key: 'costUsd',
+      name: t('usage.trends.cost'),
+      color: colors.danger,
+      data: props.points.map(point => point.costUsd === null
+        ? null
+        : Number(point.costUsd)),
+      cost: true,
+    },
   ]
   return {
     animation: false,
-    textStyle: { fontFamily: color('--font-sans', 'sans-serif') },
-    grid: { left: 8, right: 12, top: 48, bottom: 0, containLabel: true },
+    textStyle: {
+      fontFamily: color('--font-sans', 'sans-serif'),
+    },
+    grid: {
+      left: 8,
+      right: 12,
+      top: 48,
+      bottom: 0,
+      containLabel: true,
+    },
     tooltip: {
       trigger: 'axis',
       ...chartTooltipStyle(colors, { axisPointer: true, confine: true }),
       // 富文本渲染不把模型等外部内容插入 HTML。
       renderMode: 'richText',
-      valueFormatter: value => typeof value === 'number' ? formatInteger(value) : '—',
+      valueFormatter: value => typeof value === 'number'
+        ? formatInteger(value)
+        : '—',
     },
-    legend: { top: 0, right: 0, type: 'plain', icon: 'circle', itemWidth: 7, itemHeight: 7, textStyle: { color: colors.textSecondary, fontSize: 11 } },
+    legend: {
+      top: 0,
+      right: 0,
+      type: 'plain',
+      icon: 'circle',
+      itemWidth: 7,
+      itemHeight: 7,
+      textStyle: { color: colors.textSecondary, fontSize: 11 },
+    },
     xAxis: {
       type: 'category',
       boundaryGap: false,
       data: props.points.map(point => point.time),
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: colors.textMuted, fontSize: 10, hideOverlap: true, formatter: (_value: string, index: number) => props.points[index]?.label ?? '' },
-      axisPointer: { label: { formatter: ({ value }) => props.points.find(point => point.time === value)?.label ?? '' } },
+      axisLabel: {
+        color: colors.textMuted,
+        fontSize: 10,
+        hideOverlap: true,
+        formatter: (_value: string, index: number) => props.points[index]?.label ?? '',
+      },
+      axisPointer: {
+        label: {
+          formatter: ({ value }) => props.points.find(point => point.time === value)?.label ?? '',
+        },
+      },
     },
     yAxis: [
-      { type: 'value', min: 0, axisLabel: { color: colors.textMuted, fontSize: 10, formatter: (value: number) => formatCompactNumber(value) }, splitLine: { lineStyle: { color: colors.grid, type: 'dashed' } } },
-      { type: 'value', min: 0, axisLabel: { color: colors.textMuted, fontSize: 10, formatter: (value: number) => money(value) }, splitLine: { show: false } },
+      {
+        type: 'value',
+        min: 0,
+        axisLabel: {
+          color: colors.textMuted,
+          fontSize: 10,
+          formatter: (value: number) => formatCompactNumber(value),
+        },
+        splitLine: {
+          lineStyle: { color: colors.grid, type: 'dashed' },
+        },
+      },
+      {
+        type: 'value',
+        min: 0,
+        axisLabel: {
+          color: colors.textMuted,
+          fontSize: 10,
+          formatter: (value: number) => money(value),
+        },
+        splitLine: { show: false },
+      },
     ],
     series: lines.map((line): LineSeriesOption => ({
       id: line.key,
@@ -64,10 +119,22 @@ const option = computed<EChartsOption>(() => {
       showSymbol: props.points.length <= 1,
       connectNulls: false,
       symbolSize: 5,
-      lineStyle: { color: line.color, width: 2, type: line.cost ? 'dashed' : 'solid' },
+      lineStyle: {
+        color: line.color,
+        width: 2,
+        type: line.cost ? 'dashed' : 'solid',
+      },
       itemStyle: { color: line.color },
-      areaStyle: line.key === 'cachedInputTokens' ? { color: line.color, opacity: 0.1 } : undefined,
-      tooltip: { valueFormatter: value => typeof value === 'number' ? (line.cost ? money(value) : formatInteger(value)) : '—' },
+      areaStyle: line.key === 'cachedInputTokens'
+        ? { color: line.color, opacity: 0.1 }
+        : undefined,
+      tooltip: {
+        valueFormatter: value => typeof value === 'number'
+          ? (line.cost
+              ? money(value)
+              : formatInteger(value))
+          : '—',
+      },
     })),
   }
 })

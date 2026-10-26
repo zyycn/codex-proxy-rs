@@ -67,7 +67,10 @@ export function useApiKeyUse() {
   }
 
   async function copyToClipboard(text: string) {
-    await copyText(text, { successText: t('keys.configuration.copiedToClipboard'), emptyErrorText: t('common.errors.copy') })
+    await copyText(text, {
+      successText: t('keys.configuration.copiedToClipboard'),
+      emptyErrorText: t('common.errors.copy'),
+    })
   }
 
   async function withPlaintextKey(apiKey: ApiKey, use: (key: string) => void | Promise<void>) {
@@ -80,7 +83,9 @@ export function useApiKeyUse() {
       if (!result || !revealRequest.isCurrent(requestId))
         return
       if (!result.plaintextKey) {
-        ZNotification.error({ message: t('keys.configuration.fullApiKeyNotAvailable') })
+        ZNotification.error({
+          message: t('keys.configuration.fullApiKeyNotAvailable'),
+        })
         return
       }
       await use(result.plaintextKey)

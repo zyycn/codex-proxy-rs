@@ -12,8 +12,12 @@ const { t } = useI18n({ useScope: 'global' })
 
 const location = computed(() => proxyExitLocation(props.proxy))
 const customLocation = computed(() => props.proxy.autoLocation ? null : props.proxy.location)
-const customLabel = computed(() => customLocation.value ? `${countryName(customLocation.value.country)} · ${customLocation.value.city}` : '')
-const flag = computed(() => location.value ? countryFlagUrl(location.value.country) : undefined)
+const customLabel = computed(() => customLocation.value
+  ? `${countryName(customLocation.value.country)} · ${customLocation.value.city}`
+  : '')
+const flag = computed(() => location.value
+  ? countryFlagUrl(location.value.country)
+  : undefined)
 const label = computed(() => {
   if (props.proxy.lastTest?.success === false)
     return t('proxies.region.connectionFailed')
@@ -34,7 +38,9 @@ const description = computed(() => {
     return detection.message
   if (detection?.status === 'conflict')
     return t('proxies.region.ipv4AndIpv6EgressTimeZonesAre')
-  return location.value ? t('proxies.region.exitLocation', { label: label.value, timezone: location.value.timezone }) : t('proxies.region.detectHelp')
+  return location.value
+    ? t('proxies.region.exitLocation', { label: label.value, timezone: location.value.timezone })
+    : t('proxies.region.detectHelp')
 })
 </script>
 

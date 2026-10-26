@@ -14,7 +14,10 @@ export function displayValue(value: unknown) {
 }
 
 export function fieldValueClass(mono?: boolean) {
-  return [fieldValueBaseClass, mono ? 'font-mono tabular-nums' : undefined]
+  return [
+    fieldValueBaseClass,
+    mono ? 'font-mono tabular-nums' : undefined,
+  ]
 }
 
 export function isErrorUsageRecord(record: Pick<UsageRecordDetail, 'logicalOutcome'> | null) {
@@ -79,7 +82,9 @@ function extractInputText(body: unknown) {
       return content.flatMap((part) => {
         const value = asRecord(part)
         const text = stringProperty(value, 'text')
-        return value?.type === 'input_text' && text ? [text] : []
+        return value?.type === 'input_text' && text
+          ? [text]
+          : []
       })
     })
     .filter(Boolean)
@@ -98,7 +103,9 @@ function extractOutputText(body: unknown) {
         return []
       return content.flatMap((part) => {
         const text = stringProperty(asRecord(part), 'text')
-        return text ? [text] : []
+        return text
+          ? [text]
+          : []
       })
     })
     .filter(Boolean)
@@ -106,10 +113,14 @@ function extractOutputText(body: unknown) {
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined
+  return isRecord(value)
+    ? value
+    : undefined
 }
 
 function stringProperty(value: Record<string, unknown> | undefined, key: string) {
   const valueAtKey = value?.[key]
-  return typeof valueAtKey === 'string' ? valueAtKey : undefined
+  return typeof valueAtKey === 'string'
+    ? valueAtKey
+    : undefined
 }

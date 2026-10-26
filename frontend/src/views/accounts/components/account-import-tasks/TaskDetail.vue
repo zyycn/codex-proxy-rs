@@ -16,8 +16,14 @@ const { t } = useI18n({ useScope: 'global' })
 
 const filter = shallowRef('all')
 const filterOptions = computed(() => ([
-  { label: t('common.values.all'), value: 'all' },
-  { label: t('accounts.importTasks.needProcessing'), value: 'attention' },
+  {
+    label: t('common.values.all'),
+    value: 'all',
+  },
+  {
+    label: t('accounts.importTasks.needProcessing'),
+    value: 'attention',
+  },
 ]))
 const hasAttention = computed(() => props.task.counts.failed + props.task.counts.unknown > 0)
 const visibleItems = computed(() => filter.value === 'attention'

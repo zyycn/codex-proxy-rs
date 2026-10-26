@@ -36,16 +36,25 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const filterParams = computed(() => {
     const value = filterValue.value.trim() || undefined
     return {
-      clientApiKeyName: filterField.value === 'key' ? value : undefined,
-      accountName: filterField.value === 'account' ? value : undefined,
-      model: filterField.value === 'model' ? value : undefined,
+      clientApiKeyName: filterField.value === 'key'
+        ? value
+        : undefined,
+      accountName: filterField.value === 'account'
+        ? value
+        : undefined,
+      model: filterField.value === 'model'
+        ? value
+        : undefined,
     }
   })
   const providerQuery = shallowRef('')
   let tableParams = snapshot()
   const table = useStablePagedQuery({
     initialPageSize: 10,
-    load: (pagination, requestOptions) => getUsageRecords({ ...pagination, ...tableParams }, requestOptions),
+    load: (pagination, requestOptions) => getUsageRecords({
+      ...pagination,
+      ...tableParams,
+    }, requestOptions),
   })
   const { currentPage, pageSize, loading, error, items: records, total: totalRecords } = table
   const refreshingList = shallowRef(false)
@@ -56,7 +65,9 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   let diagnosticController: AbortController | undefined
   const scopedParams = () => ({
     ...options.timeRangeParams.value,
-    ...(providerQuery.value ? { provider: providerQuery.value } : {}),
+    ...(providerQuery.value
+      ? { provider: providerQuery.value }
+      : {}),
   })
   const usagePagination = computed(() => ({
     currentPage: currentPage.value,
@@ -96,7 +107,11 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
     await Promise.all([
       table.execute(),
-      ...(scope === 'all' ? [loadUsageAnalytics(globalParams)] : []),
+      ...(scope === 'all'
+        ? [
+            loadUsageAnalytics(globalParams),
+          ]
+        : []),
     ])
   }
 
@@ -335,7 +350,12 @@ function emptyOverview() {
       cachedInputTokens: 0,
       totalTokens: 0,
       points: [],
-      coverage: { known: 0, partial: 0, unknown: 0, notBillable: 0 },
+      coverage: {
+        known: 0,
+        partial: 0,
+        unknown: 0,
+        notBillable: 0,
+      },
     },
   }
   return overview

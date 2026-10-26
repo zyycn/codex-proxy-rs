@@ -29,7 +29,9 @@ function usageLineSeries(
   const area = options.area ?? (options.stack ? 'strong' : false)
   const alpha = area ? areaAlpha[area] : null
   const sampleCount = data.reduce<number>(
-    (count, value) => count + (value == null ? 0 : 1),
+    (count, value) => count + (value == null
+      ? 0
+      : 1),
     0,
   )
   const showSymbols = sampleCount > 0 && sampleCount <= 12
@@ -46,7 +48,9 @@ function usageLineSeries(
     showSymbol: showSymbols,
     showAllSymbol: showSymbols,
     symbol: 'circle',
-    symbolSize: sampleCount === 1 ? 7 : 5,
+    symbolSize: sampleCount === 1
+      ? 7
+      : 5,
     lineStyle: { color, width: 2.2 },
     itemStyle: { color },
     areaStyle: alpha
@@ -165,16 +169,22 @@ export function formatDurationAxis(value: number) {
     return '—'
   if (value < 1_000)
     return `${Math.round(value)} ms`
-  return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)} s`
+  return `${(value / 1_000).toFixed(value >= 10_000
+    ? 0
+    : 1)} s`
 }
 
 export function formatUsdAxis(value: number) {
-  const safeValue = Number.isFinite(value) ? value : 0
+  const safeValue = Number.isFinite(value)
+    ? value
+    : 0
   if (Math.abs(safeValue) >= 1_000)
     return `$${formatLocalizedCompactNumber(safeValue)}`
   if (Math.abs(safeValue) < 0.01 && safeValue !== 0)
     return `$${safeValue.toFixed(3)}`
-  return `$${safeValue.toFixed(safeValue < 1 ? 2 : 1)}`
+  return `$${safeValue.toFixed(safeValue < 1
+    ? 2
+    : 1)}`
 }
 
 function escapeTooltip(value: string) {

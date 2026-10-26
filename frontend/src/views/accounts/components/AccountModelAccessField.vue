@@ -25,10 +25,26 @@ const inputError = ref('')
 const request = useRequestState()
 const { loading, error } = request
 const modes = computed(() => [
-  ...(props.allowPreserve ? [{ value: 'preserve', label: t('accounts.modelAccess.reserve') }] : []),
-  { value: 'all', label: t('common.values.unlimited') },
-  { value: 'allowlist', label: t('accounts.modelAccess.allowlist') },
-  { value: 'denylist', label: t('accounts.modelAccess.blocklist') },
+  ...(props.allowPreserve
+    ? [
+        {
+          value: 'preserve',
+          label: t('accounts.modelAccess.reserve'),
+        },
+      ]
+    : []),
+  {
+    value: 'all',
+    label: t('common.values.unlimited'),
+  },
+  {
+    value: 'allowlist',
+    label: t('accounts.modelAccess.allowlist'),
+  },
+  {
+    value: 'denylist',
+    label: t('accounts.modelAccess.blocklist'),
+  },
 ])
 const mode = computed({
   get: () => model.value?.mode ?? 'preserve',
@@ -38,19 +54,31 @@ const mode = computed({
       model.value = undefined
       return
     }
-    model.value = { mode: value as AccountModelAccess['mode'], models: value === 'all' ? [] : [...(model.value?.models ?? [])] }
+    model.value = {
+      mode: value as AccountModelAccess['mode'],
+      models: value === 'all'
+        ? []
+        : [
+            ...(model.value?.models ?? []),
+          ],
+    }
   },
 })
 const restricted = computed(() => mode.value === 'allowlist' || mode.value === 'denylist')
 const canAdd = computed(() => Boolean(search.value.trim()) && !model.value?.models.includes(search.value.trim()))
 const models = computed(() => {
-  const entries = new Map(catalog.value.map(item => [item.id, { ...item, unavailable: false }]))
+  const entries = new Map(catalog.value.map(item => [
+    item.id,
+    { ...item, unavailable: false },
+  ]))
   for (const id of model.value?.models ?? []) {
     if (!entries.has(id))
       entries.set(id, { id, label: id, unavailable: true })
   }
   const query = search.value.trim().toLowerCase()
-  return [...entries.values()].filter(item => `${item.id} ${item.label}`.toLowerCase().includes(query))
+  return [
+    ...entries.values(),
+  ].filter(item => `${item.id} ${item.label}`.toLowerCase().includes(query))
 })
 
 function select(id: string, selected: boolean) {
@@ -60,8 +88,13 @@ function select(id: string, selected: boolean) {
   if (selected)
     ids.add(id)
   else ids.delete(id)
-  const next = { ...model.value, models: [...ids] }
-  inputError.value = selected ? accountModelAccessError(next) ?? '' : ''
+  const next = {
+    ...model.value,
+    models: [...ids],
+  }
+  inputError.value = selected
+    ? accountModelAccessError(next) ?? ''
+    : ''
   if (!inputError.value)
     model.value = next
 }
@@ -99,7 +132,10 @@ async function load(refresh = false) {
   }
 }
 
-watch([() => props.accountId, restricted], () => {
+watch([
+  () => props.accountId,
+  restricted,
+], () => {
   request.invalidate()
   catalog.value = []
   search.value = ''

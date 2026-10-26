@@ -21,10 +21,26 @@ const billingItems = computed(() => {
     return []
 
   return [
-    { label: t('usage.billing.serviceLevel'), value: value.serviceTierDisplay, tone: 'info' },
-    { label: t('settings.pricing.multiplier'), value: value.multiplierDisplay, tone: 'info' },
-    { label: t('usage.billing.totalCost'), value: value.totalAmountDisplay, tone: 'success' },
-    { label: t('usage.billing.standardFee'), value: value.standardAmountDisplay, tone: 'default' },
+    {
+      label: t('usage.billing.serviceLevel'),
+      value: value.serviceTierDisplay,
+      tone: 'info',
+    },
+    {
+      label: t('settings.pricing.multiplier'),
+      value: value.multiplierDisplay,
+      tone: 'info',
+    },
+    {
+      label: t('usage.billing.totalCost'),
+      value: value.totalAmountDisplay,
+      tone: 'success',
+    },
+    {
+      label: t('usage.billing.standardFee'),
+      value: value.standardAmountDisplay,
+      tone: 'default',
+    },
   ]
 })
 
@@ -34,21 +50,75 @@ const amountItems = computed(() => {
     return []
 
   return [
-    { label: value.image ? t('usage.billing.textInputCost') : t('usage.billing.inputCost'), value: value.inputAmountDisplay, accent: false },
+    {
+      label: value.image
+        ? t('usage.billing.textInputCost')
+        : t('usage.billing.inputCost'),
+      value: value.inputAmountDisplay,
+      accent: false,
+    },
     ...(value.image
       ? [
-          { label: t('usage.billing.imageInputFee'), value: value.image.inputAmountDisplay, accent: false },
-          { label: t('usage.billing.imageCachingCharges'), value: value.image.cacheReadAmountDisplay, accent: false },
-          { label: t('usage.billing.imageInputUnitPrice'), value: value.image.inputPriceDisplay, accent: true },
-          { label: t('usage.billing.imageCacheUnitPrice'), value: value.image.cacheReadPriceDisplay, accent: true },
+          {
+            label: t('usage.billing.imageInputFee'),
+            value: value.image.inputAmountDisplay,
+            accent: false,
+          },
+          {
+            label: t('usage.billing.imageCachingCharges'),
+            value: value.image.cacheReadAmountDisplay,
+            accent: false,
+          },
+          {
+            label: t('usage.billing.imageInputUnitPrice'),
+            value: value.image.inputPriceDisplay,
+            accent: true,
+          },
+          {
+            label: t('usage.billing.imageCacheUnitPrice'),
+            value: value.image.cacheReadPriceDisplay,
+            accent: true,
+          },
         ]
       : []),
-    { label: value.image ? t('usage.billing.imageOutputFee') : t('usage.billing.outputFee'), value: value.outputAmountDisplay, accent: false },
-    { label: value.image ? t('usage.billing.textInputUnitPrice') : t('usage.billing.inputUnitPrice'), value: value.inputPriceDisplay, accent: true },
-    { label: value.image ? t('usage.billing.imageOutputUnitPrice') : t('usage.billing.outputUnitPrice'), value: value.outputPriceDisplay, accent: true },
-    { label: value.image ? t('usage.billing.textCacheReadCost') : t('usage.billing.cacheReadCost'), value: value.cacheReadAmountDisplay, accent: false },
-    { label: t('usage.billing.cacheWriteCost'), value: value.cacheWriteAmountDisplay, accent: false },
-    { label: t('usage.billing.cacheWriteUnitPrice'), value: value.cacheWritePriceDisplay, accent: true },
+    {
+      label: value.image
+        ? t('usage.billing.imageOutputFee')
+        : t('usage.billing.outputFee'),
+      value: value.outputAmountDisplay,
+      accent: false,
+    },
+    {
+      label: value.image
+        ? t('usage.billing.textInputUnitPrice')
+        : t('usage.billing.inputUnitPrice'),
+      value: value.inputPriceDisplay,
+      accent: true,
+    },
+    {
+      label: value.image
+        ? t('usage.billing.imageOutputUnitPrice')
+        : t('usage.billing.outputUnitPrice'),
+      value: value.outputPriceDisplay,
+      accent: true,
+    },
+    {
+      label: value.image
+        ? t('usage.billing.textCacheReadCost')
+        : t('usage.billing.cacheReadCost'),
+      value: value.cacheReadAmountDisplay,
+      accent: false,
+    },
+    {
+      label: t('usage.billing.cacheWriteCost'),
+      value: value.cacheWriteAmountDisplay,
+      accent: false,
+    },
+    {
+      label: t('usage.billing.cacheWriteUnitPrice'),
+      value: value.cacheWritePriceDisplay,
+      accent: true,
+    },
   ]
 })
 

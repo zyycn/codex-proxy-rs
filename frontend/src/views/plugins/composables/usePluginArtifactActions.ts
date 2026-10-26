@@ -24,7 +24,9 @@ export function usePluginArtifactActions({ refresh }: PluginRefreshContext) {
     try {
       await deletePluginArtifact({ sha256: artifact.metadata.sha256 }, { silent: true })
       showArtifactDelete.value = false
-      ZNotification.success({ message: t('plugins.artifacts.pluginProductHasBeenDeleted') })
+      ZNotification.success({
+        message: t('plugins.artifacts.pluginProductHasBeenDeleted'),
+      })
       await refresh(true)
     }
     catch (error) {
@@ -35,5 +37,11 @@ export function usePluginArtifactActions({ refresh }: PluginRefreshContext) {
     }
   }
 
-  return { showArtifactDelete, pendingArtifact, busyDigest, requestArtifactDelete, confirmArtifactDelete }
+  return {
+    showArtifactDelete,
+    pendingArtifact,
+    busyDigest,
+    requestArtifactDelete,
+    confirmArtifactDelete,
+  }
 }

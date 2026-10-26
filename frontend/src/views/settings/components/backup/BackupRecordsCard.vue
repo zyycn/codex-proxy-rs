@@ -40,18 +40,53 @@ const { t } = useI18n({ useScope: 'global' })
 const deleteOpen = defineModel<boolean>('deleteOpen', { required: true })
 
 const columns = computed(() => (defineTableColumns<BackupRecord>([
-  { key: 'id', label: 'ID', kind: 'mono', size: 'lg' },
-  { key: 'status', label: t('common.fields.status'), kind: 'status' },
-  { key: 'fileName', label: t('settings.backup.fileName'), kind: 'text' },
-  { key: 'sizeBytes', label: t('settings.backup.size'), kind: 'numeric' },
-  { key: 'expiresAt', label: t('settings.backup.expirationTime'), kind: 'datetime' },
-  { key: 'trigger', label: t('settings.backup.triggerMode'), kind: 'status' },
-  { key: 'startedAt', label: t('settings.backup.startTime'), kind: 'datetime' },
-  { key: 'actions', label: t('common.fields.actions'), kind: 'actions' },
+  {
+    key: 'id',
+    label: 'ID',
+    kind: 'mono',
+    size: 'lg',
+  },
+  {
+    key: 'status',
+    label: t('common.fields.status'),
+    kind: 'status',
+  },
+  {
+    key: 'fileName',
+    label: t('settings.backup.fileName'),
+    kind: 'text',
+  },
+  {
+    key: 'sizeBytes',
+    label: t('settings.backup.size'),
+    kind: 'numeric',
+  },
+  {
+    key: 'expiresAt',
+    label: t('settings.backup.expirationTime'),
+    kind: 'datetime',
+  },
+  {
+    key: 'trigger',
+    label: t('settings.backup.triggerMode'),
+    kind: 'status',
+  },
+  {
+    key: 'startedAt',
+    label: t('settings.backup.startTime'),
+    kind: 'datetime',
+  },
+  {
+    key: 'actions',
+    label: t('common.fields.actions'),
+    kind: 'actions',
+  },
 ])))
 
 function triggerLabel(value: string): string {
-  return value === 'manual' ? t('settings.backup.manual') : t('settings.backup.plan')
+  return value === 'manual'
+    ? t('settings.backup.manual')
+    : t('settings.backup.plan')
 }
 
 function formatSize(value: unknown): string {
@@ -65,7 +100,9 @@ function formatSize(value: unknown): string {
     size /= 1024
     index += 1
   }
-  return `${size >= 100 || index === 0 ? Math.round(size) : size.toFixed(1)} ${units[index]}`
+  return `${size >= 100 || index === 0
+    ? Math.round(size)
+    : size.toFixed(1)} ${units[index]}`
 }
 
 /** 从对象 key 提取文件名（最后一段）。 */
@@ -77,8 +114,12 @@ function formatFileName(record: BackupRecord): string {
 
 /** 记录 ID 的短标识：`backup_` 前缀 + 前 8 位 hex，与对象 key 文件名一致；完整值通过 title 展示。 */
 function shortId(id: string): string {
-  const hex = id.startsWith('backup_') ? id.slice('backup_'.length) : id
-  return hex.length > 8 ? `backup_${hex.slice(0, 8)}` : id
+  const hex = id.startsWith('backup_')
+    ? id.slice('backup_'.length)
+    : id
+  return hex.length > 8
+    ? `backup_${hex.slice(0, 8)}`
+    : id
 }
 
 function canDownload(record: BackupRecord): boolean {

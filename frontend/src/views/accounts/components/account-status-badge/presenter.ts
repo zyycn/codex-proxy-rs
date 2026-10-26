@@ -171,7 +171,9 @@ export function resolveAccountStatusPresentation(
     ? errorRecoveryHints.value[input.errorReason]
     : definition.recoveryHint
   const hasDetail = input.status === 'error' || mode === 'rate_limited' || isBackoff
-  const retry = nextRefreshDisplay ? t('accounts.status.nextAttempt', { nextRefreshDisplay }) : ''
+  const retry = nextRefreshDisplay
+    ? t('accounts.status.nextAttempt', { nextRefreshDisplay })
+    : ''
   const triggerLabel = t('accounts.status.clickOrFocusToViewDetails', { title, description: definition.description, retry })
 
   return {
@@ -186,7 +188,9 @@ export function resolveAccountStatusPresentation(
     errorText: input.errorMessage || null,
     nextRefreshDisplay,
     rateLimitRecovery,
-    recoveryTimeLabel: waitsForProbe ? t('accounts.status.resumeDetection') : t('accounts.status.expectedToRecover'),
+    recoveryTimeLabel: waitsForProbe
+      ? t('accounts.status.resumeDetection')
+      : t('accounts.status.expectedToRecover'),
     triggerLabel,
   }
 }

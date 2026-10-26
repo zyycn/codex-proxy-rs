@@ -25,7 +25,9 @@ const tableBody = shallowRef<HTMLTableSectionElement | null>(null)
 const reorderHelpId = useId()
 const announcement = shallowRef('')
 const preferredMotion = usePreferredReducedMotion()
-const animation = computed(() => preferredMotion.value === 'reduce' ? 0 : 200)
+const animation = computed(() => preferredMotion.value === 'reduce'
+  ? 0
+  : 200)
 const sortingDisabled = computed(() => props.disabled || props.rules.length < 2)
 const sortableRules = computed({
   get: () => props.rules,
@@ -50,7 +52,10 @@ const { option: setSortableOption } = useSortable(tableBody, sortableRules, {
 })
 
 // 表格空态没有 tbody，增删规则后重新绑定排序容器
-watch([container, () => props.rules.length], () => {
+watch([
+  container,
+  () => props.rules.length,
+], () => {
   tableBody.value = container.value?.querySelector('tbody') ?? null
 }, { flush: 'post' })
 watch([tableBody, sortingDisabled, animation], async () => {
@@ -81,11 +86,38 @@ function moveWithKeyboard(id: string, direction: -1 | 1) {
 }
 
 const columns = computed(() => (defineTableColumns<PrivacyRule>([
-  { key: 'enabled', label: t('common.actions.enable'), kind: 'status', size: 'sm', fixedWidth: true },
-  { key: 'name', label: t('settings.privacy.rules.ruleField'), kind: 'identity', size: '3xl' },
-  { key: 'scope', label: t('settings.privacy.rules.scope'), kind: 'meta', size: 'lg' },
-  { key: 'action', label: t('settings.privacy.rules.processingMethod'), kind: 'meta', size: 'md' },
-  { key: 'actions', label: '', kind: 'actions', size: 'lg', fixedWidth: true },
+  {
+    key: 'enabled',
+    label: t('common.actions.enable'),
+    kind: 'status',
+    size: 'sm',
+    fixedWidth: true,
+  },
+  {
+    key: 'name',
+    label: t('settings.privacy.rules.ruleField'),
+    kind: 'identity',
+    size: '3xl',
+  },
+  {
+    key: 'scope',
+    label: t('settings.privacy.rules.scope'),
+    kind: 'meta',
+    size: 'lg',
+  },
+  {
+    key: 'action',
+    label: t('settings.privacy.rules.processingMethod'),
+    kind: 'meta',
+    size: 'md',
+  },
+  {
+    key: 'actions',
+    label: '',
+    kind: 'actions',
+    size: 'lg',
+    fixedWidth: true,
+  },
 ])))
 </script>
 

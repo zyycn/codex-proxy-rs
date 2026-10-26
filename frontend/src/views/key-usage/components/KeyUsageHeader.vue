@@ -25,8 +25,12 @@ const loggingOut = shallowRef(false)
 async function logout() {
   loggingOut.value = true
   try {
-    if (await auth.logout())
-      await router.replace({ name: 'login', state: { loginMode: 'key' } })
+    if (await auth.logout()) {
+      await router.replace({
+        name: 'login',
+        state: { loginMode: 'key' },
+      })
+    }
   }
   finally {
     loggingOut.value = false

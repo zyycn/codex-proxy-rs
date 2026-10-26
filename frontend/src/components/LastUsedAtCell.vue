@@ -4,7 +4,12 @@ import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{ value: string | null, fullDisplay: string | null }>()
 const { locale } = useI18n({ useScope: 'global' })
-const shortTimeUnits: Record<string, string> = { sec: 's', min: 'min', hr: 'h', day: 'd' }
+const shortTimeUnits: Record<string, string> = {
+  sec: 's',
+  min: 'min',
+  hr: 'h',
+  day: 'd',
+}
 
 const display = useTimeAgoIntl(() => props.value ?? 0, {
   get locale() { return locale.value },

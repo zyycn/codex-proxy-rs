@@ -27,7 +27,12 @@ export function useProxies() {
     proxyUrl: '',
     maxWebsocketConnections: '',
     customLocation: false,
-    location: { country: '', region: '', city: '', timezone: '' },
+    location: {
+      country: '',
+      region: '',
+      city: '',
+      timezone: '',
+    },
   })
   const formTestResult = shallowRef<OutboundProxyTest | null>(null)
   const saveAction = useAsyncAction()
@@ -52,11 +57,22 @@ export function useProxies() {
     editing.value = proxy
     form.name = proxy?.name ?? ''
     form.proxyUrl = ''
-    form.maxWebsocketConnections = proxy?.maxWebsocketConnections ? String(proxy.maxWebsocketConnections) : ''
+    form.maxWebsocketConnections = proxy?.maxWebsocketConnections
+      ? String(proxy.maxWebsocketConnections)
+      : ''
     formTestResult.value = null
-    const currentLocation = proxy?.autoLocation ? proxy.detectedLocation?.location ?? proxy.location : proxy?.location
+    const currentLocation = proxy?.autoLocation
+      ? proxy.detectedLocation?.location ?? proxy.location
+      : proxy?.location
     form.customLocation = currentLocation != null
-    form.location = currentLocation ? { ...currentLocation } : { country: '', region: '', city: '', timezone: '' }
+    form.location = currentLocation
+      ? { ...currentLocation }
+      : {
+          country: '',
+          region: '',
+          city: '',
+          timezone: '',
+        }
     showForm.value = true
   }
 
@@ -73,7 +89,9 @@ export function useProxies() {
           continue
         const record = result.data
         // 列表或编辑目标已换版本时，迟到的测试不能覆盖新配置
-        proxies.value = proxies.value.map(item => item.id === record.id && item.revision === target.revision ? record : item)
+        proxies.value = proxies.value.map(item => item.id === record.id && item.revision === target.revision
+          ? record
+          : item)
         if (editing.value?.id === record.id && editing.value.revision === target.revision) {
           editing.value = record
           formTestResult.value = record.lastTest
@@ -93,18 +111,31 @@ export function useProxies() {
     try {
       const result = proxyResultData((await testSavedProxies([proxy], {}, true))[0])
       const test = result.lastTest
-      if (!test?.success)
+      if (!test?.success) {
         ZNotification.error({ message: `${result.name}：${test?.message ?? t('proxies.actions.testFailed')}` })
-      else if (test.location.status === 'failed')
-        ZNotification.warning({ message: t('proxies.actions.connectedWithDetails', { name: result.name, message: test.location.message }) })
-      else if (test.location.status === 'conflict')
-        ZNotification.warning({ message: t('proxies.actions.timeZoneMismatch', { name: result.name }) })
-      else
-        ZNotification.success({ message: t('proxies.actions.connected', { name: result.name }) })
+      }
+      else if (test.location.status === 'failed') {
+        ZNotification.warning({
+          message: t('proxies.actions.connectedWithDetails', { name: result.name, message: test.location.message }),
+        })
+      }
+      else if (test.location.status === 'conflict') {
+        ZNotification.warning({
+          message: t('proxies.actions.timeZoneMismatch', { name: result.name }),
+        })
+      }
+      else {
+        ZNotification.success({
+          message: t('proxies.actions.connected', { name: result.name }),
+        })
+      }
     }
     catch (error) {
-      if (!(error instanceof ApiError))
-        ZNotification.error({ message: errorMessage(error, t('proxies.actions.testFailed')) })
+      if (!(error instanceof ApiError)) {
+        ZNotification.error({
+          message: errorMessage(error, t('proxies.actions.testFailed')),
+        })
+      }
     }
     finally {
       await query.execute({ silent: true })
@@ -120,17 +151,23 @@ export function useProxies() {
       return
     }
     if (!proxyUrl) {
-      ZNotification.warning({ message: t('proxies.actions.fillInProxyConnectionAddress') })
+      ZNotification.warning({
+        message: t('proxies.actions.fillInProxyConnectionAddress'),
+      })
       return
     }
     await formTestAction.run(async () => {
       // 新地址只做探测，保存前不修改代理及关联账号的连接配置。
       const result = await probeProxy({ proxyUrl, detectLocation: false })
       formTestResult.value = result
-      if (!result.success)
+      if (!result.success) {
         ZNotification.error({ message: result.message })
-      else
-        ZNotification.success({ message: t('proxies.actions.connectedInMs', { latencyMs: result.latencyMs }) })
+      }
+      else {
+        ZNotification.success({
+          message: t('proxies.actions.connectedInMs', { latencyMs: result.latencyMs }),
+        })
+      }
     })
   }
 
@@ -139,7 +176,9 @@ export function useProxies() {
       return
     const proxyUrl = form.proxyUrl.trim()
     if (!proxyUrl && !editing.value) {
-      ZNotification.warning({ message: t('proxies.actions.fillInProxyConnectionAddress') })
+      ZNotification.warning({
+        message: t('proxies.actions.fillInProxyConnectionAddress'),
+      })
       return
     }
     detectingLocation.value = true
@@ -152,7 +191,9 @@ export function useProxies() {
         }
         else {
           const proxy = editing.value!
-          const updated = proxyResultData((await testProxy([{ id: proxy.id, revision: proxy.revision, detectLocation: true }]))[0])
+          const updated = proxyResultData((await testProxy([
+            { id: proxy.id, revision: proxy.revision, detectLocation: true },
+          ]))[0])
           editing.value = updated
           result = updated.lastTest
           await query.execute({ silent: true })
@@ -165,16 +206,22 @@ export function useProxies() {
         if (result.location.status === 'detected') {
           form.location = { ...result.location.location }
           form.customLocation = true
-          ZNotification.success({ message: t('proxies.actions.exitLocationFilledIn') })
+          ZNotification.success({
+            message: t('proxies.actions.exitLocationFilledIn'),
+          })
         }
         else if (result.location.status === 'conflict') {
-          ZNotification.warning({ message: t('proxies.editor.timeZoneMismatch') })
+          ZNotification.warning({
+            message: t('proxies.editor.timeZoneMismatch'),
+          })
         }
         else if (result.location.status === 'failed') {
           ZNotification.warning({ message: result.location.message })
         }
         else {
-          ZNotification.warning({ message: t('proxies.actions.unableToObtainExitLocation') })
+          ZNotification.warning({
+            message: t('proxies.actions.unableToObtainExitLocation'),
+          })
         }
       })
     }
@@ -189,16 +236,24 @@ export function useProxies() {
     const name = form.name.trim()
     const proxyUrl = form.proxyUrl.trim()
     if (!name || (!editing.value && !proxyUrl)) {
-      ZNotification.warning({ message: t('proxies.actions.fieldsRequired') })
+      ZNotification.warning({
+        message: t('proxies.actions.fieldsRequired'),
+      })
       return
     }
     const maxWebsocketConnections = Number(form.maxWebsocketConnections)
     if (!Number.isInteger(maxWebsocketConnections) || maxWebsocketConnections < 0 || maxWebsocketConnections > 4294967295) {
-      ZNotification.warning({ message: t('proxies.actions.invalidConnectionLimit') })
+      ZNotification.warning({
+        message: t('proxies.actions.invalidConnectionLimit'),
+      })
       return
     }
-    const location = form.customLocation ? normalizeRequestLocation(form.location) : null
-    const locationError = location ? requestLocationError(location) : ''
+    const location = form.customLocation
+      ? normalizeRequestLocation(form.location)
+      : null
+    const locationError = location
+      ? requestLocationError(location)
+      : ''
     if (locationError) {
       ZNotification.warning({ message: locationError })
       return
@@ -215,15 +270,19 @@ export function useProxies() {
             proxyUrl: proxyUrl || undefined,
             location,
           })
-        : createProxy([{
-            name,
-            autoLocation: false,
-            maxWebsocketConnections,
-            proxyUrl,
-            location,
-          }]).then(results => proxyResultData(results[0])))
+        : createProxy([
+            {
+              name,
+              autoLocation: false,
+              maxWebsocketConnections,
+              proxyUrl,
+              location,
+            },
+          ]).then(results => proxyResultData(results[0])))
       showForm.value = false
-      ZNotification.success({ message: t('proxies.actions.saved') })
+      ZNotification.success({
+        message: t('proxies.actions.saved'),
+      })
       await reloadAfterCreate()
     })
   }
@@ -243,9 +302,18 @@ export function useProxies() {
       return
     updating.add(proxy.id)
     try {
-      await updateProxy({ id: proxy.id, revision: proxy.revision, name: proxy.name, enabled })
+      await updateProxy({
+        id: proxy.id,
+        revision: proxy.revision,
+        name: proxy.name,
+        enabled,
+      })
       showDisable.value = false
-      ZNotification.success({ message: enabled ? t('proxies.actions.proxyEnabled') : t('proxies.actions.disabled') })
+      ZNotification.success({
+        message: enabled
+          ? t('proxies.actions.proxyEnabled')
+          : t('proxies.actions.disabled'),
+      })
     }
     catch {}
     finally {
@@ -277,7 +345,9 @@ export function useProxies() {
       await deleteProxy({ id: proxy.id, revision: proxy.revision })
       showDelete.value = false
       await query.execute()
-      ZNotification.success({ message: t('proxies.actions.deleted') })
+      ZNotification.success({
+        message: t('proxies.actions.deleted'),
+      })
     })
   }
 

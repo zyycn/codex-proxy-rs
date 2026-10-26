@@ -23,7 +23,9 @@ export const useAuthStore = defineStore('auth', () => {
       return pendingCheck.value
     const check = loadSession(async () => {
       const status = await getAuthStatus()
-      return status.authenticated ? status : refreshAuthSession()
+      return status.authenticated
+        ? status
+        : refreshAuthSession()
     }).finally(() => {
       if (pendingCheck.value === check)
         pendingCheck.value = undefined
@@ -108,5 +110,18 @@ export const useAuthStore = defineStore('auth', () => {
     resetUnauthorizedHandling()
   }
 
-  return { session, sessionGeneration, isAuthenticated, isAdmin, sessionChecked, loading, checking, checkAuth, refreshSession, login, logout, invalidateSession }
+  return {
+    session,
+    sessionGeneration,
+    isAuthenticated,
+    isAdmin,
+    sessionChecked,
+    loading,
+    checking,
+    checkAuth,
+    refreshSession,
+    login,
+    logout,
+    invalidateSession,
+  }
 })

@@ -43,7 +43,9 @@ export function usePluginCredentials({ credentials, refresh }: CredentialContext
     try {
       await deletePluginSourceCredential({ id: credential.id }, { silent: true })
       showCredentialDelete.value = false
-      ZNotification.success({ message: t('plugins.credentials.sourceCredentialsDeleted') })
+      ZNotification.success({
+        message: t('plugins.credentials.sourceCredentialsDeleted'),
+      })
       await refresh(true)
     }
     catch (error) {
@@ -54,5 +56,13 @@ export function usePluginCredentials({ credentials, refresh }: CredentialContext
     }
   }
 
-  return { savingCredential, showCredentialDelete, pendingCredential, busyCredentialId, saveCredential, requestCredentialDelete, confirmCredentialDelete }
+  return {
+    savingCredential,
+    showCredentialDelete,
+    pendingCredential,
+    busyCredentialId,
+    saveCredential,
+    requestCredentialDelete,
+    confirmCredentialDelete,
+  }
 }

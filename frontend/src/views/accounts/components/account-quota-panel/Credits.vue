@@ -19,7 +19,9 @@ const balanceDisplay = computed(() => {
   const [, sign, integer, fraction] = decimal
   // 点数可能包含高精度小数，整数分组与小数文本分别处理，避免转成浮点数。
   const grouped = `${sign}${new Intl.NumberFormat(numberLocale()).format(BigInt(integer!))}`
-  return fraction ? `${grouped}.${fraction}` : grouped
+  return fraction
+    ? `${grouped}.${fraction}`
+    : grouped
 })
 const value = computed(() => {
   if (props.credits?.unlimited)

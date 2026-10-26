@@ -18,12 +18,37 @@ const { t } = useI18n({ useScope: 'global' })
 
 const columns = computed<TableColumn<PricingRow>[]>(() => ([
   { key: 'select', kind: 'selection' },
-  { key: 'model', label: t('settings.pricing.model'), kind: 'identity' },
-  { key: 'input', label: t('settings.pricing.input'), kind: 'numeric' },
-  { key: 'output', label: t('settings.pricing.output'), kind: 'numeric' },
-  { key: 'cacheRead', label: t('settings.pricing.cacheRead'), kind: 'numeric' },
-  { key: 'multiplier', label: t('settings.pricing.multiplier'), kind: 'numeric', align: 'center' },
-  { key: 'actions', label: t('common.fields.actions'), kind: 'actions' },
+  {
+    key: 'model',
+    label: t('settings.pricing.model'),
+    kind: 'identity',
+  },
+  {
+    key: 'input',
+    label: t('settings.pricing.input'),
+    kind: 'numeric',
+  },
+  {
+    key: 'output',
+    label: t('settings.pricing.output'),
+    kind: 'numeric',
+  },
+  {
+    key: 'cacheRead',
+    label: t('settings.pricing.cacheRead'),
+    kind: 'numeric',
+  },
+  {
+    key: 'multiplier',
+    label: t('settings.pricing.multiplier'),
+    kind: 'numeric',
+    align: 'center',
+  },
+  {
+    key: 'actions',
+    label: t('common.fields.actions'),
+    kind: 'actions',
+  },
 ]))
 
 function summaryBand(row: PricingRow) {

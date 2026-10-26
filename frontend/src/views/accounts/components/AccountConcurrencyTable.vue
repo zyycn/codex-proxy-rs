@@ -17,11 +17,37 @@ defineProps<{
 const { t } = useI18n({ useScope: 'global' })
 
 const columns = computed(() => (defineTableColumns<AccountConcurrencyEntry>([
-  { key: 'key', label: t('accounts.concurrency.key'), kind: 'identity', size: '2xl' },
-  { key: 'model', label: t('accounts.concurrency.model'), kind: 'mono', size: 'lg' },
-  { key: 'clientIp', label: t('accounts.concurrency.sourceIp'), kind: 'custom', size: '4xl' },
-  { key: 'startedAtDisplay', label: t('accounts.concurrency.startTime'), kind: 'datetime', size: 'xl' },
-  { key: 'occupiedMs', label: t('accounts.concurrency.elapsed'), kind: 'numeric', size: 'lg', formatter: (_, row) => formatDuration(row.occupiedMs) },
+  {
+    key: 'key',
+    label: t('accounts.concurrency.key'),
+    kind: 'identity',
+    size: '2xl',
+  },
+  {
+    key: 'model',
+    label: t('accounts.concurrency.model'),
+    kind: 'mono',
+    size: 'lg',
+  },
+  {
+    key: 'clientIp',
+    label: t('accounts.concurrency.sourceIp'),
+    kind: 'custom',
+    size: '4xl',
+  },
+  {
+    key: 'startedAtDisplay',
+    label: t('accounts.concurrency.startTime'),
+    kind: 'datetime',
+    size: 'xl',
+  },
+  {
+    key: 'occupiedMs',
+    label: t('accounts.concurrency.elapsed'),
+    kind: 'numeric',
+    size: 'lg',
+    formatter: (_, row) => formatDuration(row.occupiedMs),
+  },
 ])))
 </script>
 

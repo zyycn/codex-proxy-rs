@@ -148,7 +148,9 @@ function restorePosition() {
     return
   }
 
-  const sideX = storedPosition.value.side === 'right' ? bounds.value.maxX : bounds.value.minX
+  const sideX = storedPosition.value.side === 'right'
+    ? bounds.value.maxX
+    : bounds.value.minX
   applyPosition({
     initialized: true,
     side: storedPosition.value.side,
@@ -159,12 +161,16 @@ function restorePosition() {
 
 function snapPosition(rawX: number, rawY: number) {
   const { minX, maxX, minY, maxY } = bounds.value
-  const side = rawX <= (minX + maxX) / 2 ? 'left' : 'right'
+  const side = rawX <= (minX + maxX) / 2
+    ? 'left'
+    : 'right'
 
   return {
     initialized: true,
     side,
-    x: side === 'left' ? minX : maxX,
+    x: side === 'left'
+      ? minX
+      : maxX,
     y: clamp(rawY, minY, maxY),
   } satisfies StoredPosition
 }
@@ -184,12 +190,16 @@ function applyPosition(position: StoredPosition) {
 }
 
 function positiveNumber(value: number, fallback: number) {
-  return Number.isFinite(value) && value > 0 ? value : fallback
+  return Number.isFinite(value) && value > 0
+    ? value
+    : fallback
 }
 
 function parseCssPixel(value: string) {
   const parsed = Number.parseFloat(value)
-  return Number.isFinite(parsed) ? parsed : 0
+  return Number.isFinite(parsed)
+    ? parsed
+    : 0
 }
 
 onMounted(async () => {

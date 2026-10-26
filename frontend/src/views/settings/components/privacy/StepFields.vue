@@ -13,16 +13,27 @@ const step = defineModel<PrivacyStep>({ required: true })
 const fixedValue = defineModel<string>('fixedValue', { required: true })
 const fieldPresetId = useId()
 const usesPattern = computed(() => ['regex_replace', 'rename_key'].includes(step.value.action) || (step.value.action === 'remove_field' && step.value.pattern !== null))
-const pattern = computed({ get: () => step.value.pattern ?? '', set: (value: string) => {
-  step.value.pattern = value
-} })
-const conditional = computed({ get: () => step.value.pattern !== null, set: (value: boolean) => {
-  step.value.pattern = value ? '' : null
-} })
+const pattern = computed({
+  get: () => step.value.pattern ?? '',
+  set: (value: string) => {
+    step.value.pattern = value
+  },
+})
+const conditional = computed({
+  get: () => step.value.pattern !== null,
+  set: (value: boolean) => {
+    step.value.pattern = value ? '' : null
+  },
+})
 const fields = computed(() => fieldsByScope.value[step.value.scope] ?? [])
-const fieldChoice = computed({ get: () => fields.value.some(field => field.value === step.value.selector) ? step.value.selector : '', set: (value: string) => {
-  step.value.selector = value
-} })
+const fieldChoice = computed({
+  get: () => fields.value.some(field => field.value === step.value.selector)
+    ? step.value.selector
+    : '',
+  set: (value: string) => {
+    step.value.selector = value
+  },
+})
 const selectorPlaceholder = computed(() => ({
   turn_metadata: t('settings.privacy.steps.pathPlaceholder'),
   desktop_git_context: t('settings.privacy.steps.forExampleRemotesFetchurl'),

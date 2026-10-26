@@ -16,19 +16,27 @@ export function parseAccountSchedulingForm(
   weight: string,
 ): AccountSchedulingParseResult {
   const limitText = concurrencyLimit.trim()
-  const parsedLimit = limitText === '' ? null : Number(limitText)
+  const parsedLimit = limitText === ''
+    ? null
+    : Number(limitText)
   if (
     parsedLimit !== null
     && (!Number.isSafeInteger(parsedLimit)
       || parsedLimit < 1
       || parsedLimit > MAX_ACCOUNT_CONCURRENCY)
   ) {
-    return { valid: false, message: t('accounts.scheduling.invalidConcurrency', { value: MAX_ACCOUNT_CONCURRENCY }) }
+    return {
+      valid: false,
+      message: t('accounts.scheduling.invalidConcurrency', { value: MAX_ACCOUNT_CONCURRENCY }),
+    }
   }
 
   const parsedWeight = Number(weight.trim())
   if (!Number.isSafeInteger(parsedWeight) || parsedWeight < 1 || parsedWeight > 100) {
-    return { valid: false, message: t('accounts.scheduling.weightMustBeIntegerFromTo') }
+    return {
+      valid: false,
+      message: t('accounts.scheduling.weightMustBeIntegerFromTo'),
+    }
   }
 
   return {
@@ -41,5 +49,7 @@ export function parseAccountSchedulingForm(
 }
 
 export function concurrencyLimitInput(value: number | null) {
-  return value === null ? '' : String(value)
+  return value === null
+    ? ''
+    : String(value)
 }

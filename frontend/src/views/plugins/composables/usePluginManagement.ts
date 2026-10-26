@@ -110,7 +110,10 @@ export function usePluginManagement() {
   const installation = usePluginInstallation({
     onInstalled,
     onSourceSaved: (source) => {
-      sources.value = [...sources.value.filter(value => value.pluginId !== source.pluginId), source]
+      sources.value = [
+        ...sources.value.filter(value => value.pluginId !== source.pluginId),
+        source,
+      ]
     },
   })
   const updateCheck = usePluginUpdateCheck(credentials)
@@ -124,7 +127,9 @@ export function usePluginManagement() {
     const artifactIndex = artifacts.value.findIndex(value => value.metadata.sha256 === artifact.metadata.sha256)
     artifacts.value = artifactIndex < 0
       ? [...artifacts.value, artifact]
-      : artifacts.value.map((value, index) => index === artifactIndex ? artifact : value)
+      : artifacts.value.map((value, index) => index === artifactIndex
+          ? artifact
+          : value)
     selectedPluginId.value = artifact.metadata.pluginId
     await refresh(true)
     if (switchTarget) {
@@ -151,7 +156,9 @@ export function usePluginManagement() {
   function openDetail(pluginId: string) {
     selectedPluginId.value = pluginId
     const plugin = catalog.value.find(value => value.id === pluginId)
-    detailSection.value = plugin?.artifacts.some(artifact => artifact.acceptedAt) ? 'configurations' : 'versions'
+    detailSection.value = plugin?.artifacts.some(artifact => artifact.acceptedAt)
+      ? 'configurations'
+      : 'versions'
     showDetail.value = true
   }
 

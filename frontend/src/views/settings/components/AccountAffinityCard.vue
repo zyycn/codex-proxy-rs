@@ -14,7 +14,20 @@ const { t } = useI18n({ useScope: 'global' })
 const accountAffinity = defineModel<AccountAffinity | ''>({ required: true })
 const affinityTtlHours = defineModel<string>('ttlHours', { required: true })
 const maxAccountRotations = defineModel<string>('maxAccountRotations', { required: true })
-const affinityOptions = computed(() => ([{ label: t('settings.affinity.modes.relaxed'), value: 'relaxed' }, { label: t('settings.affinity.modes.preferred'), value: 'preferred' }, { label: t('settings.affinity.modes.strict'), value: 'strict' }]))
+const affinityOptions = computed(() => ([
+  {
+    label: t('settings.affinity.modes.relaxed'),
+    value: 'relaxed',
+  },
+  {
+    label: t('settings.affinity.modes.preferred'),
+    value: 'preferred',
+  },
+  {
+    label: t('settings.affinity.modes.strict'),
+    value: 'strict',
+  },
+]))
 </script>
 
 <template>

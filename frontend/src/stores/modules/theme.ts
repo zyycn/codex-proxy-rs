@@ -269,7 +269,9 @@ export const useThemeStore = defineStore(
       if (themeTransitioning.value)
         return
       requestThemeTransition(event)
-      themeMode.value = effectiveTheme.value === 'dark' ? 'light' : 'dark'
+      themeMode.value = effectiveTheme.value === 'dark'
+        ? 'light'
+        : 'dark'
     }
 
     function requestThemeTransition(event?: MouseEvent): void {

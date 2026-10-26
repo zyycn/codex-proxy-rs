@@ -23,7 +23,9 @@ const saveAction = useAsyncAction()
 const busy = computed(() => loadAction.loading.value || saveAction.loading.value)
 const resultText = computed(() => {
   switch (status.value?.lastResult) {
-    case 'pending': return status.value?.enabled ? t('accounts.quotaReset.automation.confirming') : t('accounts.quotaReset.automation.unconfirmed')
+    case 'pending': return status.value?.enabled
+      ? t('accounts.quotaReset.automation.confirming')
+      : t('accounts.quotaReset.automation.unconfirmed')
     case 'expired_unknown': return t('accounts.quotaReset.automation.expiredUnconfirmed')
     case 'discovery_failed': return t('accounts.quotaReset.automation.queryFailed')
     case 'weekly_quota_above_threshold': return t('accounts.quotaReset.automation.aboveThreshold')

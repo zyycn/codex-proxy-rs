@@ -23,8 +23,14 @@ const { t } = useI18n({ useScope: 'global' })
 const preview = defineModel<ThemeEditorPreview>({ required: true })
 
 const previewOptions = computed(() => ([
-  { label: t('appearance.preview.homeArtboard'), value: 'page' },
-  { label: t('appearance.preview.components.componentOverview'), value: 'components' },
+  {
+    label: t('appearance.preview.homeArtboard'),
+    value: 'page',
+  },
+  {
+    label: t('appearance.preview.components.componentOverview'),
+    value: 'components',
+  },
 ]))
 </script>
 

@@ -16,7 +16,12 @@ export interface ApiKeyAccountForm extends Omit<ApiKeyConfiguration, 'transport'
 }
 
 export function emptyApiKeyAccountForm(): ApiKeyAccountForm {
-  return { name: '', base_url: '', apiKey: '', transport: 'http' }
+  return {
+    name: '',
+    base_url: '',
+    apiKey: '',
+    transport: 'http',
+  }
 }
 
 export function parseApiKeyConfiguration(value: Record<string, unknown> | undefined): ApiKeyConfiguration | undefined {

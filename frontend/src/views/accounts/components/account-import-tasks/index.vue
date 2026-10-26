@@ -27,7 +27,10 @@ const retentionId = useId()
 const taskOptions = computed(() => props.tasks.map(task => ({
   value: task.taskId,
   label: task.createdAtDisplay,
-  description: t('accounts.importTasks.items', { total: task.total, value: taskLabel(task) }),
+  description: t('accounts.importTasks.items', {
+    total: task.total,
+    value: taskLabel(task),
+  }),
 })))
 
 watch(open, () => {

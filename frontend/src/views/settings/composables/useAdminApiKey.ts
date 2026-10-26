@@ -41,7 +41,11 @@ export function useAdminApiKey() {
         const wasEnabled = status.exists
         generatedKey.value = (await regenerateAdminApiKey()).key
         status.exists = true
-        ZNotification.success({ message: wasEnabled ? t('settings.adminApiKey.adminApiKeyUpdated') : t('settings.adminApiKey.generated') })
+        ZNotification.success({
+          message: wasEnabled
+            ? t('settings.adminApiKey.adminApiKeyUpdated')
+            : t('settings.adminApiKey.generated'),
+        })
       },
     )
   }
@@ -56,13 +60,18 @@ export function useAdminApiKey() {
         status.exists = false
         generatedKey.value = ''
         showDeleteModal.value = false
-        ZNotification.success({ message: t('settings.adminApiKey.adminApiKeyDeleted') })
+        ZNotification.success({
+          message: t('settings.adminApiKey.adminApiKeyDeleted'),
+        })
       },
     )
   }
 
   async function copyGeneratedKey() {
-    await copyText(generatedKey.value, { successText: t('common.feedback.copied'), errorFromException: true })
+    await copyText(generatedKey.value, {
+      successText: t('common.feedback.copied'),
+      errorFromException: true,
+    })
   }
 
   return {

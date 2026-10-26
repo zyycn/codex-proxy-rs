@@ -107,12 +107,17 @@ export function dashboardTrendView(trend: DashboardTrendResponse | null) {
 
   if (trend.kind === 'usage') {
     const points = aggregateUsageTrend(trend.points)
-    return { points, summary: usageTrendSummary(points) }
+    return {
+      points,
+      summary: usageTrendSummary(points),
+    }
   }
 
   const summary = trend.summary.map(item => ({
     ...trendMetricView(item.metric),
-    value: trend.kind === 'errors' && item.ratio !== null ? item.ratio : item.value,
+    value: trend.kind === 'errors' && item.ratio !== null
+      ? item.ratio
+      : item.value,
   }))
   return { points: trend.points, summary }
 }
@@ -162,10 +167,20 @@ function metricCards(
         recentPoints.map(point => point.requestsValue),
         'info',
       ),
-      trend: hasTodayRequests ? trendState(traffic.todayRequestsValue, traffic.yesterdayRequestsValue, 'info') : undefined,
+      trend: hasTodayRequests
+        ? trendState(traffic.todayRequestsValue, traffic.yesterdayRequestsValue, 'info')
+        : undefined,
       details: [
-        { label: t('dashboard.metrics.totalRequests'), value: traffic.totalRequests, tone: 'info' },
-        { label: t('usage.averageTtft'), value: cache.averageFirstTokenLatencyMs, tone: 'info' },
+        {
+          label: t('dashboard.metrics.totalRequests'),
+          value: traffic.totalRequests,
+          tone: 'info',
+        },
+        {
+          label: t('usage.averageTtft'),
+          value: cache.averageFirstTokenLatencyMs,
+          tone: 'info',
+        },
       ],
     },
     {
@@ -179,10 +194,20 @@ function metricCards(
         recentPoints.map(point => point.tokensValue),
         'success',
       ),
-      trend: hasTodayRequests ? trendState(tokens.todayTokensValue, tokens.yesterdayTokensValue, 'success') : undefined,
+      trend: hasTodayRequests
+        ? trendState(tokens.todayTokensValue, tokens.yesterdayTokensValue, 'success')
+        : undefined,
       details: [
-        { label: t('dashboard.metrics.totalTokens'), value: tokens.totalTokens, tone: 'success' },
-        { label: t('dashboard.metrics.totalCharges'), value: formatDashboardUsd(tokens.totalBillingAmountUsd), tone: 'success' },
+        {
+          label: t('dashboard.metrics.totalTokens'),
+          value: tokens.totalTokens,
+          tone: 'success',
+        },
+        {
+          label: t('dashboard.metrics.totalCharges'),
+          value: formatDashboardUsd(tokens.totalBillingAmountUsd),
+          tone: 'success',
+        },
       ],
     },
     {
@@ -191,7 +216,9 @@ function metricCards(
       valueRaw: cache.todayHitRateValue,
       valueFormatter: formatDashboardRate,
       icon: Timer,
-      tone: cache.todayHitRateValue && cache.todayHitRateValue > 0 ? 'warning' : 'normal',
+      tone: cache.todayHitRateValue && cache.todayHitRateValue > 0
+        ? 'warning'
+        : 'normal',
       sparkline: sparkline(
         recentPoints.map(point => point.cacheHitRateValue),
         'warning',
@@ -200,8 +227,16 @@ function metricCards(
         ? trendState(cache.todayHitRateValue, cache.yesterdayHitRateValue, 'warning')
         : undefined,
       details: [
-        { label: t('dashboard.metrics.totalCacheHits'), value: cache.totalHitRate, tone: 'warning' },
-        { label: t('dashboard.metrics.totalCache'), value: cache.totalCachedInputTokens, tone: 'warning' },
+        {
+          label: t('dashboard.metrics.totalCacheHits'),
+          value: cache.totalHitRate,
+          tone: 'warning',
+        },
+        {
+          label: t('dashboard.metrics.totalCache'),
+          value: cache.totalCachedInputTokens,
+          tone: 'warning',
+        },
       ],
     },
   ]
@@ -212,7 +247,9 @@ function formatAccountCount(value: number) {
 }
 
 function sparkline(values: number[], tone: MetricTone) {
-  return values.some(value => value > 0) ? { values, tone } : undefined
+  return values.some(value => value > 0)
+    ? { values, tone }
+    : undefined
 }
 
 function recentTrendWindow(points: DashboardTrendPoint[]) {
@@ -227,11 +264,15 @@ function recentTrendWindow(points: DashboardTrendPoint[]) {
 }
 
 function formatDashboardRate(value: number) {
-  return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '—'
+  return Number.isFinite(value)
+    ? `${(value * 100).toFixed(1)}%`
+    : '—'
 }
 
 function aggregateUsageTrend(points: DashboardTrendPoint[]) {
-  return Array.from({ length: Math.ceil(points.length / 2) }, (_, groupIndex) => {
+  return Array.from({
+    length: Math.ceil(points.length / 2),
+  }, (_, groupIndex) => {
     const group = points.slice(groupIndex * 2, groupIndex * 2 + 2)
     const first = group[0]
     const requestsValue = sum(group, point => point.requestsValue)
@@ -244,7 +285,9 @@ function aggregateUsageTrend(points: DashboardTrendPoint[]) {
     )
     const uncachedInputTokensValue = inputTokensValue - cachedInputTokensValue
     const effectiveTokensValue = uncachedInputTokensValue + outputTokensValue
-    const cacheHitRateValue = inputTokensValue ? cachedInputTokensValue / inputTokensValue : 0
+    const cacheHitRateValue = inputTokensValue
+      ? cachedInputTokensValue / inputTokensValue
+      : 0
     const successRateValue = requestsValue
       ? ((requestsValue - errorsValue) / requestsValue) * 100
       : 0
@@ -262,7 +305,9 @@ function aggregateUsageTrend(points: DashboardTrendPoint[]) {
       uncachedInputTokens: formatCompactNumber(uncachedInputTokensValue),
       uncachedInputTokensValue,
       effectiveTokens: formatCompactNumber(effectiveTokensValue),
-      effectiveTokensValue: effectiveTokensValue > 0 ? effectiveTokensValue : null,
+      effectiveTokensValue: effectiveTokensValue > 0
+        ? effectiveTokensValue
+        : null,
       cacheHitRate: formatDashboardRate(cacheHitRateValue),
       cacheHitRateValue,
       tokensValue: inputTokensValue + outputTokensValue,
@@ -325,20 +370,58 @@ function trendState(
     return { direction: 'up', tone: 'success' }
   if (current < previous)
     return { direction: 'down', tone: 'danger' }
-  return previous > 0 || current > 0 ? { direction: 'flat', tone: fallbackTone } : undefined
+  return previous > 0 || current > 0
+    ? { direction: 'flat', tone: fallbackTone }
+    : undefined
 }
 
 // 展示与交互共享指标身份，切换语言不改变高亮或颜色
 const trendMetrics = computed(() => ({
-  inputTokens: { label: t('dashboard.metrics.inputTokens'), tone: 'info', colorVar: '--cp-color-blue-solid' },
-  outputTokens: { label: t('dashboard.metrics.outputTokens'), tone: 'success', colorVar: '--cp-color-green-solid' },
-  cachedInputTokens: { label: t('dashboard.metrics.cachedInputTokens'), tone: 'normal', colorVar: '--cp-color-text-tertiary' },
-  firstTokenP95Ms: { label: t('dashboard.metrics.firstTokenP95Ms'), tone: 'normal', colorVar: '--cp-color-cyan-solid' },
-  latencyP95Ms: { label: t('dashboard.metrics.latencyP95Ms'), tone: 'warning', colorVar: '--cp-color-orange-solid' },
-  outputThroughputP50: { label: t('dashboard.metrics.outputThroughputP50'), tone: 'success', colorVar: '--cp-color-green-solid' },
-  errors: { label: t('dashboard.metrics.errors'), tone: 'danger', colorVar: '--cp-color-red-solid' },
-  successRate: { label: t('dashboard.metrics.successRate'), tone: 'success', colorVar: '--cp-color-green-solid' },
-  requests: { label: t('dashboard.metrics.totalRequests'), tone: 'info', colorVar: '--cp-color-blue-solid' },
+  inputTokens: {
+    label: t('dashboard.metrics.inputTokens'),
+    tone: 'info',
+    colorVar: '--cp-color-blue-solid',
+  },
+  outputTokens: {
+    label: t('dashboard.metrics.outputTokens'),
+    tone: 'success',
+    colorVar: '--cp-color-green-solid',
+  },
+  cachedInputTokens: {
+    label: t('dashboard.metrics.cachedInputTokens'),
+    tone: 'normal',
+    colorVar: '--cp-color-text-tertiary',
+  },
+  firstTokenP95Ms: {
+    label: t('dashboard.metrics.firstTokenP95Ms'),
+    tone: 'normal',
+    colorVar: '--cp-color-cyan-solid',
+  },
+  latencyP95Ms: {
+    label: t('dashboard.metrics.latencyP95Ms'),
+    tone: 'warning',
+    colorVar: '--cp-color-orange-solid',
+  },
+  outputThroughputP50: {
+    label: t('dashboard.metrics.outputThroughputP50'),
+    tone: 'success',
+    colorVar: '--cp-color-green-solid',
+  },
+  errors: {
+    label: t('dashboard.metrics.errors'),
+    tone: 'danger',
+    colorVar: '--cp-color-red-solid',
+  },
+  successRate: {
+    label: t('dashboard.metrics.successRate'),
+    tone: 'success',
+    colorVar: '--cp-color-green-solid',
+  },
+  requests: {
+    label: t('dashboard.metrics.totalRequests'),
+    tone: 'info',
+    colorVar: '--cp-color-blue-solid',
+  },
 } satisfies Record<DashboardTrendMetric, { label: string, tone: MetricTone, colorVar: string }>))
 
 export function trendMetricView(metric: DashboardTrendMetric) {

@@ -12,7 +12,9 @@ const { t } = useI18n({ useScope: 'global' })
 const themeStore = useThemeStore()
 const { effectiveTheme } = storeToRefs(themeStore)
 
-const label = computed(() => effectiveTheme.value === 'dark' ? t('appearance.switchToLight') : t('appearance.switchToDark'))
+const label = computed(() => effectiveTheme.value === 'dark'
+  ? t('appearance.switchToLight')
+  : t('appearance.switchToDark'))
 </script>
 
 <template>

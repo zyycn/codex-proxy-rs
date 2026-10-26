@@ -27,7 +27,11 @@ const parameters = computed(() => {
     .map(([key, value]) => ({
       key,
       label: schema?.properties?.[key]?.title ?? key,
-      value: value == null ? t('plugins.enable.notSet') : typeof value === 'string' ? value : JSON.stringify(value),
+      value: value == null
+        ? t('plugins.enable.notSet')
+        : typeof value === 'string'
+          ? value
+          : JSON.stringify(value),
     }))
 })
 </script>

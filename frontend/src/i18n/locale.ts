@@ -20,7 +20,9 @@ export function normalizeLocale(language: string): Locale {
         return 'zh-Hant'
       if (script === 'Hans')
         return 'zh-Hans'
-      return region && ['TW', 'HK', 'MO'].includes(region) ? 'zh-Hant' : 'zh-Hans'
+      return region && ['TW', 'HK', 'MO'].includes(region)
+        ? 'zh-Hant'
+        : 'zh-Hans'
     }
   }
   catch {

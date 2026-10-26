@@ -22,15 +22,61 @@ const totalBillingDisplay = computed(() => totalBilling.value?.estimatedAmountDi
 const hasUsageSummary = computed(() => (props.account.usage.totalTokens ?? 0) > 0 || totalBilling.value !== undefined)
 
 const modelUsageColumns = computed(() => (defineTableColumns<AccountModelUsage>([
-  { key: 'model', label: t('accounts.concurrency.model'), kind: 'text', size: 'md' },
-  { key: 'requestCountDisplay', label: t('accounts.usage.call'), kind: 'numeric', size: 'xs' },
-  { key: 'successRateDisplay', label: t('accounts.usage.successRate'), kind: 'numeric', size: 'sm' },
-  { key: 'inputTokensDisplay', label: t('accounts.usage.input'), kind: 'numeric', size: 'xs' },
-  { key: 'outputTokensDisplay', label: t('accounts.usage.output'), kind: 'numeric', size: 'xs' },
-  { key: 'cachedInputTokensDisplay', label: t('accounts.usage.cache'), kind: 'numeric', size: 'xs' },
-  { key: 'totalTokensDisplay', label: t('accounts.usage.total'), kind: 'numeric', size: 'xs' },
-  { key: 'billingAmountUsdDisplay', label: t('accounts.usage.cost'), kind: 'numeric', size: 'sm' },
-  { key: 'lastUsedAt', label: t('accounts.fields.lastUsed'), kind: 'datetime', size: 'md', align: 'right' },
+  {
+    key: 'model',
+    label: t('accounts.concurrency.model'),
+    kind: 'text',
+    size: 'md',
+  },
+  {
+    key: 'requestCountDisplay',
+    label: t('accounts.usage.call'),
+    kind: 'numeric',
+    size: 'xs',
+  },
+  {
+    key: 'successRateDisplay',
+    label: t('accounts.usage.successRate'),
+    kind: 'numeric',
+    size: 'sm',
+  },
+  {
+    key: 'inputTokensDisplay',
+    label: t('accounts.usage.input'),
+    kind: 'numeric',
+    size: 'xs',
+  },
+  {
+    key: 'outputTokensDisplay',
+    label: t('accounts.usage.output'),
+    kind: 'numeric',
+    size: 'xs',
+  },
+  {
+    key: 'cachedInputTokensDisplay',
+    label: t('accounts.usage.cache'),
+    kind: 'numeric',
+    size: 'xs',
+  },
+  {
+    key: 'totalTokensDisplay',
+    label: t('accounts.usage.total'),
+    kind: 'numeric',
+    size: 'xs',
+  },
+  {
+    key: 'billingAmountUsdDisplay',
+    label: t('accounts.usage.cost'),
+    kind: 'numeric',
+    size: 'sm',
+  },
+  {
+    key: 'lastUsedAt',
+    label: t('accounts.fields.lastUsed'),
+    kind: 'datetime',
+    size: 'md',
+    align: 'right',
+  },
 ])))
 </script>
 

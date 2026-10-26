@@ -19,7 +19,9 @@ export function isSupportedProvider(value: unknown): value is SupportedProvider 
 export function formatProviderLabel(value?: string | null, fallback = '—') {
   const normalized = value?.trim()
   const provider = normalized?.toLowerCase()
-  return isSupportedProvider(provider) ? PROVIDER_DISPLAY_NAMES[provider] : (normalized || fallback)
+  return isSupportedProvider(provider)
+    ? PROVIDER_DISPLAY_NAMES[provider]
+    : (normalized || fallback)
 }
 
 export function providerIcon(value: string): Component {
@@ -35,7 +37,9 @@ export function formatAuthenticationLabel(value?: string | null) {
   switch (normalized?.toLowerCase()) {
     case 'oauth': return 'OAuth'
     case 'api_key': return t('common.fields.apiKey')
-    default: return normalized ? t('common.providers.customAuth', { normalized }) : t('common.providers.unknownAuth')
+    default: return normalized
+      ? t('common.providers.customAuth', { normalized })
+      : t('common.providers.unknownAuth')
   }
 }
 

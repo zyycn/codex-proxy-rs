@@ -16,13 +16,20 @@ const sample = shallowRef('')
 const localError = shallowRef('')
 const preview = usePrivacyPreview()
 const { loading, result } = preview
-const output = computed(() => result.value ? JSON.stringify({ body: result.value.body, headers: result.value.headers, turnMetadata: result.value.turnMetadata }, null, 2) : '')
+const output = computed(() => result.value
+  ? JSON.stringify({ body: result.value.body, headers: result.value.headers, turnMetadata: result.value.turnMetadata }, null, 2)
+  : '')
 watch(open, (value) => {
   preview.invalidate()
-  sample.value = value ? JSON.stringify(exampleRequest(), null, 2) : ''
+  sample.value = value
+    ? JSON.stringify(exampleRequest(), null, 2)
+    : ''
   localError.value = ''
 })
-watch([sample, () => props.policy], () => preview.invalidate(), { deep: true, flush: 'sync' })
+watch([
+  sample,
+  () => props.policy,
+], () => preview.invalidate(), { deep: true, flush: 'sync' })
 async function test() {
   localError.value = ''
   try {

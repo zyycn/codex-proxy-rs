@@ -62,7 +62,9 @@ export function useAccountsQuery() {
   async function replaceAccount(updated: Account) {
     // 先取消旧查询并应用接口返回的账号，避免旧响应覆盖最新行数据。
     query.invalidate()
-    query.items.value = query.items.value.map(account => account.id === updated.id ? updated : account)
+    query.items.value = query.items.value.map(account => account.id === updated.id
+      ? updated
+      : account)
 
     // 筛选、排序、概览和末页回退仍由回读校准，但不触发整表加载。
     if (!await query.execute({ background: true }))

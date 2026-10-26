@@ -21,7 +21,9 @@ const values = defineModel<string[]>({ required: true })
 const text = computed({
   get: () => values.value.join('\n'),
   set: (value) => {
-    values.value = [...new Set(value.split(/[\n,]/).map(item => item.trim()).filter(Boolean))]
+    values.value = [
+      ...new Set(value.split(/[\n,]/).map(item => item.trim()).filter(Boolean)),
+    ]
   },
 })
 </script>

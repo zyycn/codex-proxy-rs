@@ -51,8 +51,11 @@ export function useAccountQuotaForecast(
       if (disposed)
         return
       onAccountUpdated(result.account)
-      if (accountId.value === targetAccountId && await load())
-        ZNotification.success({ message: t('accounts.actions.quotaRefreshed') })
+      if (accountId.value === targetAccountId && await load()) {
+        ZNotification.success({
+          message: t('accounts.actions.quotaRefreshed'),
+        })
+      }
     }
     catch (cause) {
       if (!disposed && accountId.value === targetAccountId) {
@@ -78,5 +81,12 @@ export function useAccountQuotaForecast(
     disposed = true
   })
 
-  return { report, loading, refreshing, error, load, refresh }
+  return {
+    report,
+    loading,
+    refreshing,
+    error,
+    load,
+    refresh,
+  }
 }

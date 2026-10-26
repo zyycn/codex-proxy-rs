@@ -57,7 +57,11 @@ export function usePluginUpdateCheck(credentials: Ref<PluginSourceCredential[]>)
       if (source.kind === 'github') {
         // 手动来源仍可按需查询稳定发布，不为一次查询修改持久化策略。
         const release = binding.policy.kind === 'manual'
-          ? await queryPluginRelease({ query: { repository: source.repository, tag: null, allowPrerelease: false }, credentialIds, outboundProxyId: binding.outboundProxyId }, options)
+          ? await queryPluginRelease({
+              query: { repository: source.repository, tag: null, allowPrerelease: false },
+              credentialIds,
+              outboundProxyId: binding.outboundProxyId,
+            }, options)
           : (await checkPluginUpdate({ pluginId: target.id, credentialIds }, options)).release
         candidate = { binding, credentialIds, release }
         const asset = selectPluginReleaseAsset(release, target.artifact)
@@ -66,15 +70,32 @@ export function usePluginUpdateCheck(credentials: Ref<PluginSourceCredential[]>)
             expectedPluginId: target.id,
             credentialIds,
             outboundProxyId: binding.outboundProxyId,
-            location: { kind: 'github', repository: release.repository, tag: release.tag, asset: asset.name, allow_prerelease: release.prerelease, sha256: asset.sha256 },
+            location: {
+              kind: 'github',
+              repository: release.repository,
+              tag: release.tag,
+              asset: asset.name,
+              allow_prerelease: release.prerelease,
+              sha256: asset.sha256,
+            },
           }
           candidate.artifact = await verifyRemotePlugin(candidate.request, options)
         }
       }
       else {
-        const request: VerifyRemotePluginRequest = { expectedPluginId: target.id, credentialIds, outboundProxyId: binding.outboundProxyId, location: { kind: 'url', url: source.url, sha256: null } }
+        const request: VerifyRemotePluginRequest = {
+          expectedPluginId: target.id,
+          credentialIds,
+          outboundProxyId: binding.outboundProxyId,
+          location: { kind: 'url', url: source.url, sha256: null },
+        }
         const artifact = await verifyRemotePlugin(request, options)
-        candidate = { binding, credentialIds, artifact, request }
+        candidate = {
+          binding,
+          credentialIds,
+          artifact,
+          request,
+        }
       }
       candidate.instance = currentPluginInstance(target)
       const latest = (await getPluginUpdateSources(options)).find(value => value.pluginId === target.id)
@@ -102,5 +123,11 @@ export function usePluginUpdateCheck(credentials: Ref<PluginSourceCredential[]>)
       cancel(false)
   }, { flush: 'sync' })
   onScopeDispose(cancel)
-  return { open, checking, plugin, result, check }
+  return {
+    open,
+    checking,
+    plugin,
+    result,
+    check,
+  }
 }

@@ -18,18 +18,62 @@ export const ACCOUNT_GROUP_COLOR_PRESETS = [
 
 export const accountGroupColumns = computed(() => (defineTableColumns<AccountGroup>([
   { key: 'selection', kind: 'selection' },
-  { key: 'identity', label: t('groups.group'), kind: 'identity' },
-  { key: 'color', label: t('common.fields.color'), kind: 'status', size: 'sm' },
-  { key: 'enabled', label: t('common.fields.status'), kind: 'status' },
-  { key: 'accountCount', label: t('accounts.fields.count'), kind: 'custom' },
-  { key: 'capacity', label: t('groups.fields.capacity'), kind: 'custom', size: 'md' },
-  { key: 'usage', label: t('usage.usage'), kind: 'custom' },
-  { key: 'updatedAtDisplay', label: t('common.fields.updatedAt'), kind: 'datetime' },
-  { key: 'actions', label: t('common.fields.actions'), kind: 'actions', size: 'lg' },
+  {
+    key: 'identity',
+    label: t('groups.group'),
+    kind: 'identity',
+  },
+  {
+    key: 'color',
+    label: t('common.fields.color'),
+    kind: 'status',
+    size: 'sm',
+  },
+  {
+    key: 'enabled',
+    label: t('common.fields.status'),
+    kind: 'status',
+  },
+  {
+    key: 'accountCount',
+    label: t('accounts.fields.count'),
+    kind: 'custom',
+  },
+  {
+    key: 'capacity',
+    label: t('groups.fields.capacity'),
+    kind: 'custom',
+    size: 'md',
+  },
+  {
+    key: 'usage',
+    label: t('usage.usage'),
+    kind: 'custom',
+  },
+  {
+    key: 'updatedAtDisplay',
+    label: t('common.fields.updatedAt'),
+    kind: 'datetime',
+  },
+  {
+    key: 'actions',
+    label: t('common.fields.actions'),
+    kind: 'actions',
+    size: 'lg',
+  },
 ])))
 
 export const accountGroupStatusOptions = computed(() => ([
-  { label: t('common.status.all'), value: '' },
-  { label: t('common.status.enabled'), value: 'enabled' },
-  { label: t('common.status.disabled'), value: 'disabled' },
+  {
+    label: t('common.status.all'),
+    value: '',
+  },
+  {
+    label: t('common.status.enabled'),
+    value: 'enabled',
+  },
+  {
+    label: t('common.status.disabled'),
+    value: 'disabled',
+  },
 ]))

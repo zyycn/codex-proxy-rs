@@ -37,7 +37,10 @@ async function handleSubmit(): Promise<void> {
   loginPending.value = true
   const selectedRealm = realm.value
   const result = await authStore.login(selectedRealm === 'key'
-    ? { mode: 'key', apiKey: apiKey.value.trim() }
+    ? {
+        mode: 'key',
+        apiKey: apiKey.value.trim(),
+      }
     : {
         mode: 'admin',
         username: username.value.trim(),
@@ -62,7 +65,9 @@ async function handleSubmit(): Promise<void> {
 }
 
 function normalizeRealm(value: unknown): LoginRealm {
-  return value === 'key' ? 'key' : 'admin'
+  return value === 'key'
+    ? 'key'
+    : 'admin'
 }
 
 function resolveDestination(): string {

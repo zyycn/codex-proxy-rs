@@ -21,12 +21,16 @@ const { t } = useI18n({ useScope: 'global' })
 const model = defineModel<ClientProfileSelection | null>({ required: true })
 const presetDraft = shallowRef<PresetClientProfileSelection>()
 const customDraft = shallowRef<CustomClientProfileSelection>()
-const preset = computed(() => model.value && !model.value.mode ? model.value : undefined)
+const preset = computed(() => model.value && !model.value.mode
+  ? model.value
+  : undefined)
 const custom = computed(() => model.value?.mode === 'custom' || preset.value?.versionMode === 'fixed')
 const platforms = { macos: 'MacOS', linux: 'Linux', windows: 'Windows' }
 const presetOptions = computed(() => props.presets.map(({ configuration }) => ({
   value: `${configuration.platform}-${configuration.client}`,
-  label: `${platforms[configuration.platform]} · ${configuration.client === 'desktop' ? 'Desktop' : 'CLI'}`,
+  label: `${platforms[configuration.platform]} · ${configuration.client === 'desktop'
+    ? 'Desktop'
+    : 'CLI'}`,
 })))
 const currentPreset = computed(() => props.presets.find(({ configuration }) =>
   configuration.client === preset.value?.client && configuration.platform === preset.value?.platform,
@@ -34,13 +38,18 @@ const currentPreset = computed(() => props.presets.find(({ configuration }) =>
 const selectedPreset = computed({
   get: () => {
     const selection = preset.value ?? presetDraft.value
-    return selection ? `${selection.platform}-${selection.client}` : ''
+    return selection
+      ? `${selection.platform}-${selection.client}`
+      : ''
   },
   set: (value: string) => {
     const selected = props.presets.find(({ configuration }) => `${configuration.platform}-${configuration.client}` === value)
     if (selected) {
       customDraft.value = undefined
-      model.value = { ...selected.configuration, versionMode: selected.automaticAvailable ? 'latest' : 'fixed' }
+      model.value = {
+        ...selected.configuration,
+        versionMode: selected.automaticAvailable ? 'latest' : 'fixed',
+      }
     }
   },
 })
@@ -49,7 +58,12 @@ const cliEntry = computed({
   set: (value: string) => {
     if (preset.value && (value === 'core' || value === 'tui' || value === 'exec')) {
       customDraft.value = undefined
-      model.value = { ...preset.value, cliEntry: value === 'core' ? null : value }
+      model.value = {
+        ...preset.value,
+        cliEntry: value === 'core'
+          ? null
+          : value,
+      }
     }
   },
 })
@@ -61,23 +75,39 @@ const versionMode = computed({
         return
       if (preset.value)
         presetDraft.value = { ...preset.value }
-      model.value = { ...(customDraft.value ?? { mode: 'custom', userAgent: props.preview!.userAgent }) }
+      model.value = {
+        ...(customDraft.value ?? { mode: 'custom', userAgent: props.preview!.userAgent }),
+      }
     }
     else {
       if (model.value?.mode === 'custom')
         customDraft.value = { ...model.value }
       const selection = preset.value ?? presetDraft.value ?? props.presets[0]?.configuration
       if (selection) {
-        model.value = { ...selection, versionMode: 'latest', codexVersion: null, desktopVersion: null, desktopBuild: null }
+        model.value = {
+          ...selection,
+          versionMode: 'latest',
+          codexVersion: null,
+          desktopVersion: null,
+          desktopBuild: null,
+        }
       }
     }
   },
 })
 const versionLag = computed({
-  get: () => preset.value?.versionLag == null ? '' : String(preset.value.versionLag),
+  get: () => preset.value?.versionLag == null
+    ? ''
+    : String(preset.value.versionLag),
   set: (value: string) => {
-    if (preset.value)
-      model.value = { ...preset.value, versionLag: value === '' ? null : Number(value) }
+    if (preset.value) {
+      model.value = {
+        ...preset.value,
+        versionLag: value === ''
+          ? null
+          : Number(value),
+      }
+    }
   },
 })
 const versionLagError = computed(() => {
@@ -89,21 +119,37 @@ const versionLagError = computed(() => {
 const terminal = computed({
   get: () => preset.value?.terminal ?? '',
   set: (value: string) => {
-    if (preset.value)
-      model.value = { ...preset.value, terminal: value === '' ? null : value }
+    if (preset.value) {
+      model.value = {
+        ...preset.value,
+        terminal: value === ''
+          ? null
+          : value,
+      }
+    }
   },
 })
 const osVersion = computed({
   get: () => preset.value?.osVersion ?? '',
   set: (value: string) => {
-    if (preset.value)
-      model.value = { ...preset.value, osVersion: value === '' ? null : value }
+    if (preset.value) {
+      model.value = {
+        ...preset.value,
+        osVersion: value === ''
+          ? null
+          : value,
+      }
+    }
   },
 })
 const userAgent = computed({
-  get: () => model.value?.mode === 'custom' ? model.value.userAgent : props.preview?.userAgent ?? '',
+  get: () => model.value?.mode === 'custom'
+    ? model.value.userAgent
+    : props.preview?.userAgent ?? '',
   set: (value: string) => {
-    const previous = model.value?.mode === 'custom' ? model.value : undefined
+    const previous = model.value?.mode === 'custom'
+      ? model.value
+      : undefined
     if (preset.value)
       presetDraft.value = { ...preset.value }
     // 已知客户端的配套头重新派生，避免修改版本后继续携带旧值。
@@ -111,7 +157,9 @@ const userAgent = computed({
     model.value = {
       mode: 'custom',
       userAgent: value,
-      ...(!recognized && previous ? { originator: previous.originator, codexVersion: previous.codexVersion } : {}),
+      ...(!recognized && previous
+        ? { originator: previous.originator, codexVersion: previous.codexVersion }
+        : {}),
     }
   },
 })

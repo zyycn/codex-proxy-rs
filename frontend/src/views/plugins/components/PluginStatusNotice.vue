@@ -10,7 +10,13 @@ const props = defineProps<{ instance: PluginInstance }>()
 const { t } = useI18n({ useScope: 'global' })
 
 const failure = computed(() => props.instance.loadError ?? props.instance.runtime.failure?.message)
-const title = computed(() => failure.value ? (props.instance.loadError ? t('plugins.status.unableToStart') : t('plugins.status.runFailed')) : props.instance.compatibilityWarning ? t('plugins.status.compatibilityReminder') : t('plugins.status.deprecatedApi'))
+const title = computed(() => failure.value
+  ? (props.instance.loadError
+      ? t('plugins.status.unableToStart')
+      : t('plugins.status.runFailed'))
+  : props.instance.compatibilityWarning
+    ? t('plugins.status.compatibilityReminder')
+    : t('plugins.status.deprecatedApi'))
 </script>
 
 <template>

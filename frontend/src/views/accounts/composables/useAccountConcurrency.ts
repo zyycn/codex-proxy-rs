@@ -45,7 +45,10 @@ export function useAccountConcurrency(account: Ref<Account | null>, open: Ref<bo
       if (!request.isCurrent(id))
         return
       const firstReceivedAt = performance.now()
-      const collected = new Map(result.entries.map(entry => [entry.leaseId, { entry, receivedAt: firstReceivedAt }]))
+      const collected = new Map(result.entries.map(entry => [
+        entry.leaseId,
+        { entry, receivedAt: firstReceivedAt },
+      ]))
       // 按首次总数限定本轮读取，避免持续新增占用让刷新无界延长
       const pages = Math.ceil(result.total / result.pageSize)
       for (let page = 2; page <= pages; page++) {
@@ -60,9 +63,13 @@ export function useAccountConcurrency(account: Ref<Account | null>, open: Ref<bo
       }
       const snapshotAt = performance.now()
       data.value = {
-        entries: [...collected.values()].map(({ entry, receivedAt }) => ({
+        entries: [
+          ...collected.values(),
+        ].map(({ entry, receivedAt }) => ({
           ...entry,
-          occupiedMs: entry.occupiedMs === null ? null : entry.occupiedMs + snapshotAt - receivedAt,
+          occupiedMs: entry.occupiedMs === null
+            ? null
+            : entry.occupiedMs + snapshotAt - receivedAt,
         })),
       }
       request.error.value = ''
@@ -80,7 +87,10 @@ export function useAccountConcurrency(account: Ref<Account | null>, open: Ref<bo
     }
   }
 
-  watch([active, () => account.value?.id], ([isActive, accountId], [, previousAccountId]) => {
+  watch([
+    active,
+    () => account.value?.id,
+  ], ([isActive, accountId], [, previousAccountId]) => {
     stop()
     // 同一账号保留已确认内容，暂停轮询和弹窗退场不提前清空
     if (accountId !== previousAccountId) {
@@ -94,5 +104,10 @@ export function useAccountConcurrency(account: Ref<Account | null>, open: Ref<bo
   }, { immediate: true })
   onScopeDispose(stop)
 
-  return { data, entries, loading: request.loading, error: request.error }
+  return {
+    data,
+    entries,
+    loading: request.loading,
+    error: request.error,
+  }
 }

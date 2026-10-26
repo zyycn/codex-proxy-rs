@@ -21,9 +21,13 @@ export function useProxyBatchCreate(options: { test: ProxyTestExecutor, reload: 
   const testingRequested = shallowRef(false)
   const tests = useProxyBatchTest(options.test)
   const stopping = computed(() => stopRequested.value || tests.stopping.value)
-  const parsed = computed(() => text.value.length > MAX_BATCH_INPUT_BYTES ? [] : parseProxyBatch(text.value, prefix.value, protocol.value))
+  const parsed = computed(() => text.value.length > MAX_BATCH_INPUT_BYTES
+    ? []
+    : parseProxyBatch(text.value, prefix.value, protocol.value))
   const inputError = computed(() => proxyBatchInputError(text.value, parsed.value.length))
-  const created = computed(() => items.value.flatMap(item => item.record ? [item.record] : []))
+  const created = computed(() => items.value.flatMap(item => item.record
+    ? [item.record]
+    : []))
   const canEditFailures = computed(() => items.value.some(item => !item.record && item.status !== 'unknown' && Boolean(item.input)))
   let disposed = false
 
@@ -80,7 +84,12 @@ export function useProxyBatchCreate(options: { test: ProxyTestExecutor, reload: 
         for (const item of group)
           item.status = 'running'
         try {
-          const results = await createProxy(group.map(item => ({ name: item.name, proxyUrl: item.proxyUrl, autoLocation: false, location: null })), { silent: true, retry: false })
+          const results = await createProxy(group.map(item => ({
+            name: item.name,
+            proxyUrl: item.proxyUrl,
+            autoLocation: false,
+            location: null,
+          })), { silent: true, retry: false })
           for (const [index, item] of group.entries()) {
             const result = results[index]
             if (result?.status === 'succeeded') {
@@ -94,7 +103,9 @@ export function useProxyBatchCreate(options: { test: ProxyTestExecutor, reload: 
             else {
               const failure = proxyBatchFailure(result)
               item.status = failure.status
-              item.message = failure.status === 'conflict' ? t('proxies.batchCreate.conflict') : failure.message
+              item.message = failure.status === 'conflict'
+                ? t('proxies.batchCreate.conflict')
+                : failure.message
               if (failure.stop)
                 stop()
             }
@@ -152,5 +163,23 @@ export function useProxyBatchCreate(options: { test: ProxyTestExecutor, reload: 
     }
   })
 
-  return { text, prefix, protocol, items, busy, stopping, testingRequested, tests, parsed, inputError, created, canEditFailures, submit, testCreated, stop, clear, editFailures }
+  return {
+    text,
+    prefix,
+    protocol,
+    items,
+    busy,
+    stopping,
+    testingRequested,
+    tests,
+    parsed,
+    inputError,
+    created,
+    canEditFailures,
+    submit,
+    testCreated,
+    stop,
+    clear,
+    editFailures,
+  }
 }

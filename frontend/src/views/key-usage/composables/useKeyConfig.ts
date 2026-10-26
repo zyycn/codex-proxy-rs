@@ -32,7 +32,10 @@ export function useKeyConfig() {
   }
 
   function copyConfig(text: string) {
-    return copyText(text, { successText: t('usage.configuration.copiedToClipboard'), emptyErrorText: t('common.errors.copy') })
+    return copyText(text, {
+      successText: t('usage.configuration.copiedToClipboard'),
+      emptyErrorText: t('common.errors.copy'),
+    })
   }
 
   // 明文只随弹窗保存在内存中，不进入登录状态或浏览器持久化存储。
@@ -40,5 +43,12 @@ export function useKeyConfig() {
     configKey.value = null
   })
 
-  return { showConfig, configKey, configuring: request.loading, apiBaseUrl, openConfig, copyConfig }
+  return {
+    showConfig,
+    configKey,
+    configuring: request.loading,
+    apiBaseUrl,
+    openConfig,
+    copyConfig,
+  }
 }

@@ -16,9 +16,18 @@ export function groupInstalledPlugins(artifacts: PluginArtifact[], instances: Pl
   for (const artifact of [...artifacts].sort((a, b) => b.installedAt.localeCompare(a.installedAt))) {
     const id = artifact.metadata.pluginId
     const group = groups.get(id)
-    if (group)
+    if (group) {
       group.artifacts.push(artifact)
-    else groups.set(id, { id, artifact, artifacts: [artifact], configurations: [], source: sources.find(source => source.pluginId === id) })
+    }
+    else {
+      groups.set(id, {
+        id,
+        artifact,
+        artifacts: [artifact],
+        configurations: [],
+        source: sources.find(source => source.pluginId === id),
+      })
+    }
   }
   const artifactPlugins = new Map(artifacts.map(artifact => [artifact.metadata.sha256, artifact.metadata.pluginId]))
   for (const instance of instances) {
@@ -30,7 +39,9 @@ export function groupInstalledPlugins(artifacts: PluginArtifact[], instances: Pl
     const current = currentPluginInstance(plugin)
     plugin.artifact = plugin.artifacts.find(artifact => artifact.metadata.sha256 === current?.artifactSha256) ?? plugin.artifact
   }
-  return [...groups.values()]
+  return [
+    ...groups.values(),
+  ]
 }
 
 export function configurationStatus(instance: PluginInstance): PluginCatalogStatus {
@@ -42,7 +53,9 @@ export function configurationStatus(instance: PluginInstance): PluginCatalogStat
     return 'disabled'
   if (['blocked', 'preparation_failed', 'faulted'].includes(instance.runtime.status))
     return 'failed'
-  return instance.runtime.status === 'running' ? 'enabled' : 'pending'
+  return instance.runtime.status === 'running'
+    ? 'enabled'
+    : 'pending'
 }
 
 export function pluginStatus(plugin: InstalledPlugin): PluginCatalogStatus {
@@ -51,7 +64,9 @@ export function pluginStatus(plugin: InstalledPlugin): PluginCatalogStatus {
   if (plugin.configurations.filter(instance => instance.enabled).length > 1)
     return 'failed'
   const instance = currentPluginInstance(plugin)
-  return instance ? configurationStatus(instance) : 'unconfigured'
+  return instance
+    ? configurationStatus(instance)
+    : 'unconfigured'
 }
 
 export function pluginStatusType(status: PluginCatalogStatus) {

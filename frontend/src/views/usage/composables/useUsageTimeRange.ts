@@ -12,7 +12,10 @@ function dateStart(date: Date, offset = 0) {
 
 export function useUsageTimeRange() {
   const now = new Date()
-  const selectedDates = shallowRef<[Date, Date]>([dateStart(now), dateStart(now)])
+  const selectedDates = shallowRef<[Date, Date]>([
+    dateStart(now),
+    dateStart(now),
+  ])
   const timeRange = computed<DatePickerValue>({
     get: () => selectedDates.value,
     set: (value) => {
@@ -49,5 +52,11 @@ export function useUsageTimeRange() {
     return rangeParams(Date.now())
   }
 
-  return { timeRange, timeRangeParams, disabledDate, refreshTimeRangeEnd, latestTimeRangeParams }
+  return {
+    timeRange,
+    timeRangeParams,
+    disabledDate,
+    refreshTimeRangeEnd,
+    latestTimeRangeParams,
+  }
 }

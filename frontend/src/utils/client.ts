@@ -91,7 +91,10 @@ export function buildCodexCcSwitchImportDeeplink(input: CodexCcSwitchImportInput
     ['endpoint', baseUrl],
     ['apiKey', input.apiKey],
     ['usageEnabled', 'true'],
-    ['usageScript', encodeBase64(buildUsageScript(input.apiKey, baseUrl))],
+    [
+      'usageScript',
+      encodeBase64(buildUsageScript(input.apiKey, baseUrl)),
+    ],
     ['usageAutoInterval', '30'],
   ]
 
@@ -116,5 +119,7 @@ export function resolveServiceRootUrl() {
   const origin = window.location.origin.replace(/\/+$/, '')
   if (!normalizedApiBase)
     return origin
-  return `${origin}${normalizedApiBase.startsWith('/') ? normalizedApiBase : `/${normalizedApiBase}`}`
+  return `${origin}${normalizedApiBase.startsWith('/')
+    ? normalizedApiBase
+    : `/${normalizedApiBase}`}`
 }

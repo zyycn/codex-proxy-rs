@@ -24,14 +24,28 @@ const previewError = shallowRef('')
 const previewing = shallowRef(false)
 const needsVersionInput = computed(() => model.value?.versionMode === 'fixed' && !model.value.clientVersion)
 const fields = computed(() => ([
-  { key: 'clientIdentifier', label: t('settings.clientProfile.clientId') },
-  { key: 'clientMode', label: t('settings.clientProfile.operatingMode') },
-  { key: 'targetOs', label: t('settings.clientProfile.operatingSystem') },
-  { key: 'targetArch', label: t('settings.clientProfile.cpuArchitecture') },
+  {
+    key: 'clientIdentifier',
+    label: t('settings.clientProfile.clientId'),
+  },
+  {
+    key: 'clientMode',
+    label: t('settings.clientProfile.operatingMode'),
+  },
+  {
+    key: 'targetOs',
+    label: t('settings.clientProfile.operatingSystem'),
+  },
+  {
+    key: 'targetArch',
+    label: t('settings.clientProfile.cpuArchitecture'),
+  },
 ] as const))
 
 const source = computed({
-  get: () => model.value === null ? 'global' : 'independent',
+  get: () => model.value === null
+    ? 'global'
+    : 'independent',
   set: (value: string) => {
     if (value === 'global')
       model.value = null
@@ -45,16 +59,26 @@ const versionMode = computed({
     if (model.value) {
       model.value = {
         ...model.value,
-        versionMode: value === 'fixed' ? 'fixed' : 'latest',
-        clientVersion: value === 'fixed' ? preview.value?.clientVersion ?? null : null,
+        versionMode: value === 'fixed'
+          ? 'fixed'
+          : 'latest',
+        clientVersion: value === 'fixed'
+          ? preview.value?.clientVersion ?? null
+          : null,
       }
     }
   },
 })
 
 function updateField(key: keyof XaiClientProfileSelection, value: string) {
-  if (model.value)
-    model.value = { ...model.value, [key]: key === 'clientVersion' ? value || null : value }
+  if (model.value) {
+    model.value = {
+      ...model.value,
+      [key]: key === 'clientVersion'
+        ? value || null
+        : value,
+    }
+  }
 }
 
 async function load() {
@@ -67,7 +91,10 @@ async function load() {
   }
 }
 
-watch([model, () => props.active], ([configuration, active], _, onCleanup) => {
+watch([
+  model,
+  () => props.active,
+], ([configuration, active], _, onCleanup) => {
   if (!active)
     return
   let cancelled = false

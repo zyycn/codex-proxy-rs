@@ -16,11 +16,17 @@ const open = defineModel<boolean>({ required: true })
 const selected = shallowRef(new Set<string>())
 const changes = computed(() => {
   const items: { id: string, provider: string, model: string, custom: boolean, details: { label: string, before: string, after: string }[] }[] = []
-  const providers = new Set([...Object.keys(props.catalog.synced), ...Object.keys(props.preview?.prices ?? {})])
+  const providers = new Set([
+    ...Object.keys(props.catalog.synced),
+    ...Object.keys(props.preview?.prices ?? {}),
+  ])
   for (const provider of providers) {
     const previous = props.catalog.synced[provider] ?? {}
     const next = props.preview?.prices[provider] ?? {}
-    for (const model of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+    for (const model of new Set([
+      ...Object.keys(previous),
+      ...Object.keys(next),
+    ])) {
       if (JSON.stringify(previous[model]) === JSON.stringify(next[model]))
         continue
       const details = []
@@ -37,7 +43,13 @@ const changes = computed(() => {
           }
         }
       }
-      items.push({ id: `${provider}/${model}`, provider, model, details, custom: !!props.catalog.overrides[provider]?.[model] })
+      items.push({
+        id: `${provider}/${model}`,
+        provider,
+        model,
+        details,
+        custom: !!props.catalog.overrides[provider]?.[model],
+      })
     }
   }
   return items
@@ -47,7 +59,9 @@ const allSelected = computed(() => changes.value.length > 0 && selectedChanges.v
 const partiallySelected = computed(() => selectedChanges.value.length > 0 && !allSelected.value)
 
 watch(() => props.preview, () => {
-  selected.value = new Set(props.preview ? changes.value.map(item => item.id) : [])
+  selected.value = new Set(props.preview
+    ? changes.value.map(item => item.id)
+    : [])
 }, { immediate: true })
 
 function toggle(id: string, checked: boolean) {

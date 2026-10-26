@@ -47,9 +47,13 @@ export function useApiKeyMutations(options: {
         options.selectedIds.value = remaining
         showSingleDeleteModal.value = false
         await options.reload()
-        ZNotification.success({ message: t('common.feedback.deleted') })
+        ZNotification.success({
+          message: t('common.feedback.deleted'),
+        })
       },
-      { onError: () => void options.reload() },
+      {
+        onError: () => void options.reload(),
+      },
     )
   }
 
@@ -68,9 +72,13 @@ export function useApiKeyMutations(options: {
         }
         showDeleteModal.value = false
         await options.reload()
-        ZNotification.success({ message: t('keys.actions.deletedApiKeyDeletedApiKeys', { count: deleteCount }) })
+        ZNotification.success({
+          message: t('keys.actions.deletedApiKeyDeletedApiKeys', { count: deleteCount }),
+        })
       },
-      { onError: () => void options.reload() },
+      {
+        onError: () => void options.reload(),
+      },
     )
   }
 
@@ -80,7 +88,11 @@ export function useApiKeyMutations(options: {
         const mutation = key.enabled ? disableApiKey : enableApiKey
         await mutation({ id: key.id })
         await options.reload()
-        ZNotification.success({ message: key.enabled ? t('common.status.disabled') : t('common.status.enabled') })
+        ZNotification.success({
+          message: key.enabled
+            ? t('common.status.disabled')
+            : t('common.status.enabled'),
+        })
       }
       catch {
         void options.reload()
@@ -88,5 +100,17 @@ export function useApiKeyMutations(options: {
     })
   }
 
-  return { showDeleteModal, showSingleDeleteModal, pendingDeleteKey, deleteCount, deletingKey, batchDeleting, updatingStatusKeyIds, requestDeleteKey, handleDelete, handleBatchDelete, handleToggleStatus }
+  return {
+    showDeleteModal,
+    showSingleDeleteModal,
+    pendingDeleteKey,
+    deleteCount,
+    deletingKey,
+    batchDeleting,
+    updatingStatusKeyIds,
+    requestDeleteKey,
+    handleDelete,
+    handleBatchDelete,
+    handleToggleStatus,
+  }
 }

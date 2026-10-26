@@ -14,14 +14,34 @@ const props = defineProps<{ summary: KeyUsageMetrics }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
-const hitRate = computed(() => props.summary.inputTokens > 0 ? props.summary.cachedInputTokens / props.summary.inputTokens * 100 : null)
+const hitRate = computed(() => props.summary.inputTokens > 0
+  ? props.summary.cachedInputTokens / props.summary.inputTokens * 100
+  : null)
 const metrics = computed(() => [
-  ...keyUsageTokenMetrics.value.map(metric => ({ ...metric, value: keyUsageTokenValue(props.summary, metric.key), percentage: false })),
-  { label: t('usage.page.cacheHitRate'), value: hitRate.value, icon: Gauge, tone: 'text-cp-success-text', percentage: true },
+  ...keyUsageTokenMetrics.value.map(metric => ({
+    ...metric,
+    value: keyUsageTokenValue(props.summary, metric.key),
+    percentage: false,
+  })),
+  {
+    label: t('usage.page.cacheHitRate'),
+    value: hitRate.value,
+    icon: Gauge,
+    tone: 'text-cp-success-text',
+    percentage: true,
+  },
 ].map(item => ({
   ...item,
-  display: item.value === null ? '—' : item.percentage ? `${item.value.toFixed(1)}%` : formatCompactNumber(item.value),
-  exact: item.value === null ? '—' : item.percentage ? `${item.value.toFixed(1)}%` : formatInteger(item.value),
+  display: item.value === null
+    ? '—'
+    : item.percentage
+      ? `${item.value.toFixed(1)}%`
+      : formatCompactNumber(item.value),
+  exact: item.value === null
+    ? '—'
+    : item.percentage
+      ? `${item.value.toFixed(1)}%`
+      : formatInteger(item.value),
 })))
 </script>
 

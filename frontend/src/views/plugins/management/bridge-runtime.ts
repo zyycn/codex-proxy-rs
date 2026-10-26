@@ -82,7 +82,9 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
         root.style.setProperty(name, value)
     }
     currentTheme = theme.name
-    window.dispatchEvent(new CustomEvent('codex-proxy-themechange', { detail: { theme: currentTheme } }))
+    window.dispatchEvent(new CustomEvent('codex-proxy-themechange', {
+      detail: { theme: currentTheme },
+    }))
   }
 
   async function bodyBytes(body: unknown): Promise<ArrayBuffer> {
@@ -100,7 +102,7 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
   function nextRequestId() {
     sequence += 1
     if (!Number.isSafeInteger(sequence))
-      throw new Error('Plugin page request IDs exhausted')
+      throw new RangeError('Plugin page request IDs exhausted')
     return sequence
   }
 
@@ -126,7 +128,9 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
       const timer = window.setTimeout(() => {
         pending.delete(id)
         reject(new Error('Plugin management request timed out'))
-      }, kind === 'request' ? initial.managementTimeoutMs : initial.apiTimeoutMs)
+      }, kind === 'request'
+        ? initial.managementTimeoutMs
+        : initial.apiTimeoutMs)
       pending.set(id, { resolve, reject, timer })
       post(kind, id, payload, transfer)
     })
@@ -167,24 +171,39 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
       throw new TypeError('Invalid plugin management request')
     const method = String(input.method || '').toUpperCase()
     const path = String(input.path || '')
-    const query = input.query == null ? '' : String(input.query)
-    const contentType = input.contentType == null ? undefined : String(input.contentType)
+    const query = input.query == null
+      ? ''
+      : String(input.query)
+    const contentType = input.contentType == null
+      ? undefined
+      : String(input.contentType)
     if (new TextEncoder().encode(query).byteLength > maximumQueryBytes || query.includes('#') || query.startsWith('?'))
       throw new TypeError('Invalid plugin management query parameters')
     const body = await bodyBytes(input.body)
     if (body.byteLength > maximumBodyBytes)
       throw new TypeError('Plugin management request body exceeds 1 MiB')
-    return invoke('request', { method, path, query, contentType, body }, [body])
+    return invoke('request', {
+      method,
+      path,
+      query,
+      contentType,
+      body,
+    }, [body])
   }
 
   function callbackTicket(input: { path: string, ttlSeconds: number }) {
     if (!input || typeof input !== 'object')
       return Promise.reject(new TypeError('Invalid plugin callback ticket request'))
-    return invoke('callback-ticket', { path: String(input.path || ''), ttlSeconds: Number(input.ttlSeconds) })
+    return invoke('callback-ticket', {
+      path: String(input.path || ''),
+      ttlSeconds: Number(input.ttlSeconds),
+    })
   }
 
   function abortError(reason: unknown) {
-    return reason instanceof Error ? reason : new DOMException('Model request canceled', 'AbortError')
+    return reason instanceof Error
+      ? reason
+      : new DOMException('Model request canceled', 'AbortError')
   }
 
   function clearModelOperation(operation: ModelOperation) {
@@ -235,7 +254,7 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
 
   function validateResponseHeaders(value: unknown) {
     if (!Array.isArray(value))
-      throw new Error('Model response header is invalid')
+      throw new TypeError('Model response header is invalid')
     for (const entry of value) {
       if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' || typeof entry[1] !== 'string')
         throw new Error('Model response header is invalid')
@@ -249,7 +268,9 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
     if (!operation)
       return
     if (message.type === 'models-error') {
-      const text = typeof message.error === 'string' && message.error ? message.error : 'Model request failed'
+      const text = typeof message.error === 'string' && message.error
+        ? message.error
+        : 'Model request failed'
       failModelOperation(operation, new Error(text), false)
       return
     }
@@ -300,7 +321,9 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
         operation.resolve(new Response(stream, { status, statusText, headers }))
       }
       catch (error) {
-        failModelOperation(operation, error instanceof Error ? error : new Error('Invalid model response protocol'), true)
+        failModelOperation(operation, error instanceof Error
+          ? error
+          : new Error('Invalid model response protocol'), true)
       }
       return
     }
@@ -320,7 +343,9 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
         settleModelPull(operation)
       }
       catch (error) {
-        failModelOperation(operation, error instanceof Error ? error : new Error('Model response read failed'), true)
+        failModelOperation(operation, error instanceof Error
+          ? error
+          : new Error('Model response read failed'), true)
       }
       return
     }
@@ -418,13 +443,22 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
       return
     }
     if (message.type === 'layout') {
-      applyLayout(isRecord(message.payload) ? message.payload.viewportHeight : undefined)
+      applyLayout(isRecord(message.payload)
+        ? message.payload.viewportHeight
+        : undefined)
       return
     }
     if (typeof message.id !== 'number' || !Number.isSafeInteger(message.id) || message.id < 1)
       return
     if (message.type === 'models-response' || message.type === 'models-chunk' || message.type === 'models-complete' || message.type === 'models-error') {
-      handleModelMessage({ id: message.id, type: message.type, error: message.error, payload: isRecord(message.payload) ? message.payload : undefined })
+      handleModelMessage({
+        id: message.id,
+        type: message.type,
+        error: message.error,
+        payload: isRecord(message.payload)
+          ? message.payload
+          : undefined,
+      })
       return
     }
     if (message.type !== 'result')
@@ -434,9 +468,14 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
       return
     pending.delete(message.id)
     clearTimeout(operation.timer)
-    if (message.ok)
+    if (message.ok) {
       operation.resolve(message.payload)
-    else operation.reject(new Error(typeof message.error === 'string' ? message.error : 'Plugin management request failed'))
+    }
+    else {
+      operation.reject(new Error(typeof message.error === 'string'
+        ? message.error
+        : 'Plugin management request failed'))
+    }
   })
 
   window.addEventListener('pagehide', () => {
@@ -449,7 +488,9 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
       operation.reject(error)
     }
     pending.clear()
-    for (const operation of [...modelOperations.values()])
+    for (const operation of [
+      ...modelOperations.values(),
+    ])
       failModelOperation(operation, error, true)
   }, { once: true })
 
@@ -469,7 +510,11 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
       return value
     },
   }
-  Object.defineProperty(window, 'codexProxyPlugin', { value: Object.freeze(api), configurable: false, writable: false })
+  Object.defineProperty(window, 'codexProxyPlugin', {
+    value: Object.freeze(api),
+    configurable: false,
+    writable: false,
+  })
   applyTheme(initial.theme)
   applyLayout(initial.viewportHeight)
 }

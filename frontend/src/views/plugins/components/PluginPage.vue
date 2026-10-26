@@ -42,11 +42,19 @@ const frameKey = computed(() => {
   if (!currentView || !currentPage)
     return ''
   const target = currentView.target
-  return [target.instanceId, target.artifactSha256, target.revision, currentPage.id, frameReload.value].join(':')
+  return [
+    target.instanceId,
+    target.artifactSha256,
+    target.revision,
+    currentPage.id,
+    frameReload.value,
+  ].join(':')
 })
 
 function routeParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? (value[0] ?? '') : (value ?? '')
+  return Array.isArray(value)
+    ? (value[0] ?? '')
+    : (value ?? '')
 }
 
 async function refreshDirectory() {

@@ -28,8 +28,15 @@ const base = computed(() => props.row?.base.bands[selectedBand.value])
 const current = computed(() => draft.value[selectedBand.value])
 const bps = computed(() => parseMultiplier(multiplier.value))
 const sourceOptions = computed(() => [
-  { label: t('settings.pricing.sourcePrice'), value: 'inherit', disabled: selectedBand.value === 'standard' && !props.row?.base.bands.standard },
-  { label: t('settings.rotation.customized'), value: 'custom' },
+  {
+    label: t('settings.pricing.sourcePrice'),
+    value: 'inherit',
+    disabled: selectedBand.value === 'standard' && !props.row?.base.bands.standard,
+  },
+  {
+    label: t('settings.rotation.customized'),
+    value: 'custom',
+  },
 ])
 const priceMode = computed({
   get: () => current.value ? 'custom' : 'inherit',
@@ -38,8 +45,19 @@ const priceMode = computed({
 const bandOptions = computed(() => bands.value
   .filter(band => props.row?.base.bands.image
     ? ['standard', 'image'].includes(band.value)
-    : props.provider !== 'xai' || !['flex', 'long_flex', 'ultrafast', 'long_ultrafast', 'image'].includes(band.value))
-  .map(band => ({ ...band, label: band.value === 'standard' && props.row?.base.bands.image ? t('settings.pricing.textToken') : band.label })))
+    : props.provider !== 'xai' || ![
+      'flex',
+      'long_flex',
+      'ultrafast',
+      'long_ultrafast',
+      'image',
+    ].includes(band.value))
+  .map(band => ({
+    ...band,
+    label: band.value === 'standard' && props.row?.base.bands.image
+      ? t('settings.pricing.textToken')
+      : band.label,
+  })))
 
 watch(open, (value) => {
   if (!value)
@@ -57,9 +75,19 @@ watch([model, multiplier, draft], () => {
   validation.value = ''
 }, { deep: true })
 function toggleBand(enabled: boolean) {
-  if (enabled)
-    draft.value[selectedBand.value] = { ...(base.value ?? { input: '', output: '', cacheRead: '', cacheWrite: '' }) }
-  else delete draft.value[selectedBand.value]
+  if (enabled) {
+    draft.value[selectedBand.value] = {
+      ...(base.value ?? {
+        input: '',
+        output: '',
+        cacheRead: '',
+        cacheWrite: '',
+      }),
+    }
+  }
+  else {
+    delete draft.value[selectedBand.value]
+  }
 }
 function updatePrice(field: keyof TokenPrices, value: string) {
   if (current.value && !props.saving)

@@ -5,13 +5,39 @@ interface RouteCluster {
   className: string
 }
 
-const ingressProtocols = ['HTTP JSON', 'HTTP SSE', 'WS JSON', 'WS SSE'] as const
-const upstreamProtocols = ['RESPONSES', 'CHAT', 'REALTIME', 'TRACE'] as const
+const ingressProtocols = [
+  'HTTP JSON',
+  'HTTP SSE',
+  'WS JSON',
+  'WS SSE',
+] as const
+const upstreamProtocols = [
+  'RESPONSES',
+  'CHAT',
+  'REALTIME',
+  'TRACE',
+] as const
 const routeClusters: readonly RouteCluster[] = [
-  { id: 'edge', labels: ['edge', 'cache', 'keys'], className: 'login-route-cluster--edge' },
-  { id: 'retry', labels: ['retry', 'trace', 'sse'], className: 'login-route-cluster--retry' },
-  { id: 'audit', labels: ['audit', 'events', 'logs'], className: 'login-route-cluster--audit' },
-  { id: 'model', labels: ['model', 'tools', 'quota'], className: 'login-route-cluster--model' },
+  {
+    id: 'edge',
+    labels: ['edge', 'cache', 'keys'],
+    className: 'login-route-cluster--edge',
+  },
+  {
+    id: 'retry',
+    labels: ['retry', 'trace', 'sse'],
+    className: 'login-route-cluster--retry',
+  },
+  {
+    id: 'audit',
+    labels: ['audit', 'events', 'logs'],
+    className: 'login-route-cluster--audit',
+  },
+  {
+    id: 'model',
+    labels: ['model', 'tools', 'quota'],
+    className: 'login-route-cluster--model',
+  },
 ]
 </script>
 

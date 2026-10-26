@@ -88,15 +88,21 @@ export default antfu(
     },
     rules: {
       'template-style/single-line-simple-interpolation': 'error',
-      'vue/html-closing-bracket-newline': ['error', {
-        singleline: 'never',
-        multiline: 'always',
-      }],
-      'vue/multiline-html-element-content-newline': ['error', {
-        ignores: ['pre', 'textarea'],
-        ignoreWhenEmpty: true,
-        allowEmptyLines: false,
-      }],
+      'vue/html-closing-bracket-newline': [
+        'error',
+        {
+          singleline: 'never',
+          multiline: 'always',
+        },
+      ],
+      'vue/multiline-html-element-content-newline': [
+        'error',
+        {
+          ignores: ['pre', 'textarea'],
+          ignoreWhenEmpty: true,
+          allowEmptyLines: false,
+        },
+      ],
       'vue/mustache-interpolation-spacing': ['error', 'always'],
     },
   },
@@ -118,7 +124,12 @@ export default antfu(
       '@intlify/vue-i18n/no-duplicate-keys-in-locale': 'error',
       '@intlify/vue-i18n/valid-message-syntax': 'error',
       '@intlify/vue-i18n/valid-plural-forms': 'error',
-      '@intlify/vue-i18n/no-unused-keys': ['error', { extensions: ['.ts', '.vue'] }],
+      '@intlify/vue-i18n/no-unused-keys': [
+        'error',
+        {
+          extensions: ['.ts', '.vue'],
+        },
+      ],
     },
   },
 )

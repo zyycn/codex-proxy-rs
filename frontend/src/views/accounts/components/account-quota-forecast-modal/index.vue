@@ -33,11 +33,19 @@ const { now, pause, resume } = useNow({
   scheduler: callback => useIntervalFn(callback, 30_000),
 })
 const options = computed(() => report.value?.forecasts.map(item => ({
-  label: item.period === 'weekly' ? t('accounts.quotaForecast.weeklyQuota') : t('accounts.quotaForecast.monthlyQuota'),
+  label: item.period === 'weekly'
+    ? t('accounts.quotaForecast.weeklyQuota')
+    : t('accounts.quotaForecast.monthlyQuota'),
   value: item.period,
 })) ?? [
-  { label: t('accounts.quotaForecast.weeklyQuota'), value: 'weekly' },
-  { label: t('accounts.quotaForecast.monthlyQuota'), value: 'monthly' },
+  {
+    label: t('accounts.quotaForecast.weeklyQuota'),
+    value: 'weekly',
+  },
+  {
+    label: t('accounts.quotaForecast.monthlyQuota'),
+    value: 'monthly',
+  },
 ])
 const forecast = computed(() => report.value?.forecasts.find(item => item.period === period.value))
 const unavailableReason = computed(() => {

@@ -190,7 +190,9 @@ export function useAccountResetCredits(options: {
         || (result.code === 'already_redeemed' && operation.hasTransportFailure)
       target.pendingOperation = null
       if (!confirmed) {
-        ZNotification.error({ message: resetResultMessage(result.code) })
+        ZNotification.error({
+          message: resetResultMessage(result.code),
+        })
         await loadSessionCredits(target, true)
         return false
       }
@@ -213,11 +215,16 @@ export function useAccountResetCredits(options: {
           ...operation,
           hasTransportFailure: true,
         }
-        ZNotification.warning({ message: t('accounts.quotaReset.resultUnknown'), ...({ duration: 5000 }) })
+        ZNotification.warning({
+          message: t('accounts.quotaReset.resultUnknown'),
+          ...({ duration: 5000 }),
+        })
       }
       else {
         target.pendingOperation = null
-        ZNotification.error({ message: errorMessage(error, t('accounts.quotaReset.quotaResetFailed')) })
+        ZNotification.error({
+          message: errorMessage(error, t('accounts.quotaReset.quotaResetFailed')),
+        })
         await loadSessionCredits(target, true)
       }
       return false

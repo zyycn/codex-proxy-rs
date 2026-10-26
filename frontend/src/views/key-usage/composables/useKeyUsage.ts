@@ -26,7 +26,11 @@ export function useKeyUsage() {
   })
   const records = useStablePagedQuery({
     initialPageSize: 20,
-    load: (pagination, options) => getKeyUsageRecords({ ...query.value, ...pagination, kind: kind.value }, { ...options, silent: true }),
+    load: (pagination, options) => getKeyUsageRecords({
+      ...query.value,
+      ...pagination,
+      kind: kind.value,
+    }, { ...options, silent: true }),
     onSuccess: () => {
       recordsStale.value = false
       records.error.value = ''
@@ -55,7 +59,10 @@ export function useKeyUsage() {
     const generation = queryGeneration
     rangeEnd.value = Date.now()
     try {
-      const [, recordsOk] = await Promise.all([loadOverview(), records.execute(undefined, { silent: true })])
+      const [, recordsOk] = await Promise.all([
+        loadOverview(),
+        records.execute(undefined, { silent: true }),
+      ])
       // 轮询被新筛选或翻页取代时，不把取消结果标成刷新失败。
       if (generation === queryGeneration)
         recordsStale.value = !recordsOk

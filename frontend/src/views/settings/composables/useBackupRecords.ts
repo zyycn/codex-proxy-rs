@@ -115,7 +115,9 @@ export function useBackupRecords() {
     creating.value = true
     try {
       await createBackup()
-      ZNotification.success({ message: t('settings.backup.backupTaskCreated') })
+      ZNotification.success({
+        message: t('settings.backup.backupTaskCreated'),
+      })
       await paged.execute({ silent: true })
     }
     catch {}
@@ -139,8 +141,11 @@ export function useBackupRecords() {
       link.remove()
     }
     catch (cause) {
-      if (!(cause instanceof ApiError))
-        ZNotification.error({ message: errorMessage(cause, t('settings.backup.failedToDownloadBackup')) })
+      if (!(cause instanceof ApiError)) {
+        ZNotification.error({
+          message: errorMessage(cause, t('settings.backup.failedToDownloadBackup')),
+        })
+      }
     }
     finally {
       downloadStates.value = { ...downloadStates.value, [record.id]: false }
@@ -159,7 +164,9 @@ export function useBackupRecords() {
     deleting.value = true
     try {
       await deleteBackup({ backupId: target.id })
-      ZNotification.success({ message: t('settings.backup.backupDeletionRequested') })
+      ZNotification.success({
+        message: t('settings.backup.backupDeletionRequested'),
+      })
       await paged.execute({ silent: true })
     }
     catch {}

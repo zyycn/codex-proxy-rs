@@ -138,7 +138,9 @@ function connectionTestFailureText(event: ConnectionTestFailureEvent) {
 }
 
 function connectionTestFailureLabel(event: ConnectionTestFailureEvent) {
-  return event.source ? CONNECTION_TEST_SOURCE_LABEL.value[event.source] || t('accounts.connectionTest.failed') : t('accounts.connectionTest.failed')
+  return event.source
+    ? CONNECTION_TEST_SOURCE_LABEL.value[event.source] || t('accounts.connectionTest.failed')
+    : t('accounts.connectionTest.failed')
 }
 
 function connectionTestFailureDiagnostics(event: ConnectionTestFailureEvent) {
@@ -308,7 +310,9 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       return
     }
     connectionTestLogs.value = connectionTestLogs.value.map((item, itemIndex) =>
-      itemIndex === index ? { ...next, time: item.time } : item,
+      itemIndex === index
+        ? { ...next, time: item.time }
+        : item,
     )
   }
 
@@ -425,7 +429,9 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
         return
       applyConnectionTestModels(result, refresh)
       if (refresh) {
-        ZNotification.success({ message: t('accounts.connectionTest.modelsRefreshed', { count: connectionTestModelOptions.value.length }) })
+        ZNotification.success({
+          message: t('accounts.connectionTest.modelsRefreshed', { count: connectionTestModelOptions.value.length }),
+        })
       }
       else if (!connectionTestSelectedModel.value) {
         connectionTestError.value = t('accounts.connectionTest.noModelsAvailable')
@@ -537,7 +543,10 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       failConnectionTest(t('accounts.connectionTest.errors.disconnected'))
   })
 
-  watch([showConnectionTestModal, () => testingAccount.value?.id], ([open]) => {
+  watch([
+    showConnectionTestModal,
+    () => testingAccount.value?.id,
+  ], ([open]) => {
     modelsRequest.invalidate({ resetLoading: open })
     if (!open) {
       abortConnectionTest()

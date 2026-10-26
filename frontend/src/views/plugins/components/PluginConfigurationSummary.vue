@@ -25,17 +25,27 @@ const groups = computed(() => {
     if (capability === 'management' || capability === 'command_line')
       continue
     const group = result.get(binding.contribution)
-    if (group)
+    if (group) {
       group.bindings.push(binding)
-    else result.set(binding.contribution, { label: pluginCapabilityLabel(capability ?? binding.contribution), bindings: [binding] })
+    }
+    else {
+      result.set(binding.contribution, {
+        label: pluginCapabilityLabel(capability ?? binding.contribution),
+        bindings: [binding],
+      })
+    }
   }
-  return [...result.entries()].map(([id, group]) => {
+  return [
+    ...result.entries(),
+  ].map(([id, group]) => {
     const scopes = new Map<string, { binding: PluginCapabilityBinding, stages: string[] }>()
     for (const binding of group.bindings) {
       const stage = PLUGIN_REQUEST_STAGES.value[binding.stage]
       // 按实际范围合并，不能把数量相同、目标不同的绑定当成同一项。
       const key = JSON.stringify([
-        stage?.scope === 'none' ? binding.stage : Boolean(stage),
+        stage?.scope === 'none'
+          ? binding.stage
+          : Boolean(stage),
         binding.stage === 'authentication',
         [...binding.clientKeyIds].sort(),
         [...binding.accountGroupIds].sort(),
@@ -43,16 +53,28 @@ const groups = computed(() => {
         [...binding.models].sort(),
         binding.identityBindings.map(identity => JSON.stringify([identity.principal, identity.clientKeyId])).sort(),
       ])
-      const label = binding.event ? PLUGIN_OBSERVER_EVENT_LABELS.value[binding.event] : stage?.label ?? (binding.stage === 'authentication' ? t('plugins.configuration.clientAuthentication') : binding.stage)
+      const label = binding.event
+        ? PLUGIN_OBSERVER_EVENT_LABELS.value[binding.event]
+        : stage?.label ?? (binding.stage === 'authentication'
+          ? t('plugins.configuration.clientAuthentication')
+          : binding.stage)
       const scope = scopes.get(key)
-      if (scope)
+      if (scope) {
         scope.stages.push(label)
-      else scopes.set(key, { binding, stages: [label] })
+      }
+      else {
+        scopes.set(key, {
+          binding,
+          stages: [label],
+        })
+      }
     }
     return {
       id,
       label: group.label,
-      scopes: [...scopes.entries()].map(([key, scope]) => ({
+      scopes: [
+        ...scopes.entries(),
+      ].map(([key, scope]) => ({
         key,
         stages: scope.stages.filter(label => label !== group.label).join('、'),
         label: scopeLabel(scope.binding),
@@ -69,9 +91,17 @@ const summary = computed(() => {
   const bindings = props.instance.bindings
   const requests = bindings.filter(binding => PLUGIN_REQUEST_STAGES.value[binding.stage])
   return [
-    requests.length && t('plugins.configuration.requestHandling', { value: requests.some(hasScope) ? t('plugins.configuration.customScope') : t('plugins.configuration.applyGlobally') }),
+    requests.length && t('plugins.configuration.requestHandling', {
+      value: requests.some(hasScope)
+        ? t('plugins.configuration.customScope')
+        : t('plugins.configuration.applyGlobally'),
+    }),
     bindings.some(binding => binding.stage === 'authentication') && t('plugins.configuration.clientAuthentication'),
-  ].filter(Boolean).join(' · ') || (groups.value.length ? t('plugins.configuration.description') : props.showCommand ? t('plugins.configuration.providesTerminalCommands') : t('plugins.configuration.requestHandlingNotConfigured'))
+  ].filter(Boolean).join(' · ') || (groups.value.length
+    ? t('plugins.configuration.description')
+    : props.showCommand
+      ? t('plugins.configuration.providesTerminalCommands')
+      : t('plugins.configuration.requestHandlingNotConfigured'))
 })
 
 function scopeLabel(binding: PluginCapabilityBinding) {
@@ -81,10 +111,16 @@ function scopeLabel(binding: PluginCapabilityBinding) {
     binding.providerIds.length && t('plugins.configuration.providers', { count: binding.providerIds.length }),
     binding.models.length && binding.models.join('、'),
   ].filter(Boolean).join(' · ')
-  if (binding.stage === 'authentication')
-    return [t('plugins.configuration.identityMappings', { count: binding.identityBindings.length }), scope].filter(Boolean).join(' · ')
+  if (binding.stage === 'authentication') {
+    return [
+      t('plugins.configuration.identityMappings', { count: binding.identityBindings.length }),
+      scope,
+    ].filter(Boolean).join(' · ')
+  }
   const stage = PLUGIN_REQUEST_STAGES.value[binding.stage]
-  return scope || stage?.globalLabel || (stage ? t('plugins.configuration.allRequests') : t('plugins.configuration.noLimitOnScope'))
+  return scope || stage?.globalLabel || (stage
+    ? t('plugins.configuration.allRequests')
+    : t('plugins.configuration.noLimitOnScope'))
 }
 </script>
 

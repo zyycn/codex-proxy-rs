@@ -20,13 +20,19 @@ const list = useTemplateRef<HTMLOListElement>('list')
 const scrollbar = useTemplateRef('scrollbar')
 const items = computed(() => props.steps.map((step, index) => {
   const field = fieldsByScope.value[step.scope]?.find(field => field.value && field.value === step.selector)?.label
-    || (step.selector === '$' && step.scope !== 'request_header' ? (step.scope === 'environment_text' ? t('settings.privacy.steps.entireEnvironmentText') : t('settings.privacy.steps.fullContent')) : step.selector.trim() || t('settings.privacy.steps.noFieldsSelected'))
+    || (step.selector === '$' && step.scope !== 'request_header'
+      ? (step.scope === 'environment_text'
+          ? t('settings.privacy.steps.entireEnvironmentText')
+          : t('settings.privacy.steps.fullContent'))
+      : step.selector.trim() || t('settings.privacy.steps.noFieldsSelected'))
   const scope = scopes.value.find(scope => scope.value === step.scope)?.label
   const action = actions.value.find(action => action.value === step.action)?.label
   const effect = step.action === 'set_value'
     ? `→ ${props.fixedValues[index] ?? '""'}`
     : step.action === 'remove_field'
-      ? (step.pattern === null ? t('settings.privacy.steps.deleteHelp') : t('settings.privacy.steps.deleteAfterMatching', { value: step.pattern || t('settings.privacy.steps.noExpressionEntered') }))
+      ? (step.pattern === null
+          ? t('settings.privacy.steps.deleteHelp')
+          : t('settings.privacy.steps.deleteAfterMatching', { value: step.pattern || t('settings.privacy.steps.noExpressionEntered') }))
       : `→ ${step.replacement || t('settings.privacy.steps.clearMatchingContent')}`
   return { step, field, scope, action, effect }
 }))
@@ -43,7 +49,9 @@ function stepKey(step: PrivacyStep) {
 const reorderHelpId = useId()
 const announcement = shallowRef('')
 const preferredMotion = usePreferredReducedMotion()
-const animation = computed(() => preferredMotion.value === 'reduce' ? 0 : 200)
+const animation = computed(() => preferredMotion.value === 'reduce'
+  ? 0
+  : 200)
 const sortingDisabled = computed(() => props.steps.length < 2)
 const sortableSteps = computed({
   get: () => props.steps,

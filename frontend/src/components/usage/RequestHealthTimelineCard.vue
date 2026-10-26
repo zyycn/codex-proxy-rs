@@ -118,7 +118,9 @@ function animatePointWave(centerIndex: number) {
   const cellsByDistance: HTMLElement[][] = [[], [], []]
 
   for (let distance = 0; distance <= 2; distance += 1) {
-    const candidateIndexes = distance === 0 ? [centerIndex] : [centerIndex - distance, centerIndex + distance]
+    const candidateIndexes = distance === 0
+      ? [centerIndex]
+      : [centerIndex - distance, centerIndex + distance]
 
     for (const index of candidateIndexes) {
       const button = buttons[index]
@@ -140,7 +142,10 @@ function animatePointWave(centerIndex: number) {
 
   if (preferredMotion.value === 'reduce') {
     const cells = cellsByDistance.flat()
-    gsap.set([...cells, ...cellsToRelease], { clearProps: 'transform,willChange' })
+    gsap.set([
+      ...cells,
+      ...cellsToRelease,
+    ], { clearProps: 'transform,willChange' })
     wavedCellIndexes = nextCellIndexes
     return
   }
@@ -197,7 +202,12 @@ function releasePointWave() {
 
 function pointAccessibilityLabel(point: DashboardHealthTimelinePoint) {
   const eligibleRequests = healthEligibleRequestCount(point)
-  return t('usage.health.validRequestsAvailability', { time: point.time, label: healthStatusMeta.value[point.status].label, count: formatHealthCount(eligibleRequests), reliabilityDisplay: point.reliabilityDisplay })
+  return t('usage.health.validRequestsAvailability', {
+    time: point.time,
+    label: healthStatusMeta.value[point.status].label,
+    count: formatHealthCount(eligibleRequests),
+    reliabilityDisplay: point.reliabilityDisplay,
+  })
 }
 
 watch(popoverOpen, (open) => {

@@ -56,9 +56,18 @@ const secretSchemas = computed(() => {
   }))
 })
 const secretModes = computed(() => ([
-  { label: t('plugins.configuration.keepExistingValues'), value: 'preserve' },
-  { label: t('plugins.configuration.replaceAllValues'), value: 'replace' },
-  { label: t('plugins.configuration.clearAllValues'), value: 'clear' },
+  {
+    label: t('plugins.configuration.keepExistingValues'),
+    value: 'preserve',
+  },
+  {
+    label: t('plugins.configuration.replaceAllValues'),
+    value: 'replace',
+  },
+  {
+    label: t('plugins.configuration.clearAllValues'),
+    value: 'clear',
+  },
 ]))
 const existingSecretLabels = computed(() => props.existingSecretFields.map(name => ({
   name,
@@ -69,7 +78,10 @@ const missingConfigurationFields = computed(() => requiredConfigurationFields.va
   !Object.hasOwn(configuration.value, name),
 ))
 const configurationFieldErrors = computed(() => Object.fromEntries(
-  missingConfigurationFields.value.map(name => [name, t('plugins.configuration.fillInRequiredConfiguration')]),
+  missingConfigurationFields.value.map(name => [
+    name,
+    t('plugins.configuration.fillInRequiredConfiguration'),
+  ]),
 ))
 const requiredSecretFields = computed(() => secretSchemas.value.filter(field => field.required))
 const missingSecretFields = computed(() => requiredSecretFields.value.filter((field) => {
@@ -119,7 +131,9 @@ const valid = computed(() => !configurationError.value
   && !missingSecretFields.value.length)
 const validationMessage = computed(() => secretModeError.value
   || configurationError.value
-  || (missingSecretFields.value.length ? t('plugins.configuration.secretsRequired') : t('plugins.configuration.checkBasicSettings')))
+  || (missingSecretFields.value.length
+    ? t('plugins.configuration.secretsRequired')
+    : t('plugins.configuration.checkBasicSettings')))
 
 watch(valid, value => emit('validityChange', value), { immediate: true })
 
@@ -156,7 +170,9 @@ async function focusInvalid() {
 
   await nextTick()
   const missingName = missingSecretFields.value[0]?.name
-  const container = [...(secretFieldsRoot.value?.querySelectorAll<HTMLElement>('[data-secret-field]') ?? [])]
+  const container = [
+    ...(secretFieldsRoot.value?.querySelectorAll<HTMLElement>('[data-secret-field]') ?? []),
+  ]
     .find(element => element.dataset.secretField === missingName)
   container?.querySelector<HTMLElement>('input:not([type="hidden"]), textarea, button, [tabindex]:not([tabindex="-1"])')?.focus()
   return 'secret' as const

@@ -17,11 +17,26 @@ const { t } = useI18n({ useScope: 'global' })
 
 const tokenDetails = computed(() => usageTokenDetails(props.record.tokenDetails))
 const tokenItems = computed(() => [
-  { label: t('usage.tokens.enterToken'), value: tokenDetails.value.inputTokensDisplay },
-  { label: t('usage.tokens.outputToken'), value: tokenDetails.value.outputTokensDisplay },
-  { label: t('usage.tokens.cacheReadTokens'), value: tokenDetails.value.cachedInputTokensDisplay },
-  { label: t('usage.tokens.cacheWriteTokens'), value: tokenDetails.value.cacheWriteInputTokensDisplay },
-  { label: t('usage.tokens.reasoningToken'), value: tokenDetails.value.reasoningOutputTokensDisplay },
+  {
+    label: t('usage.tokens.enterToken'),
+    value: tokenDetails.value.inputTokensDisplay,
+  },
+  {
+    label: t('usage.tokens.outputToken'),
+    value: tokenDetails.value.outputTokensDisplay,
+  },
+  {
+    label: t('usage.tokens.cacheReadTokens'),
+    value: tokenDetails.value.cachedInputTokensDisplay,
+  },
+  {
+    label: t('usage.tokens.cacheWriteTokens'),
+    value: tokenDetails.value.cacheWriteInputTokensDisplay,
+  },
+  {
+    label: t('usage.tokens.reasoningToken'),
+    value: tokenDetails.value.reasoningOutputTokensDisplay,
+  },
 ])
 </script>
 

@@ -18,23 +18,31 @@ const props = withDefaults(
 const { t } = useI18n({ useScope: 'global' })
 
 const normalizedProvider = computed(() => (props.provider ?? '').trim().toLowerCase())
-const providerIconComponent = computed(() => normalizedProvider.value ? providerIcon(normalizedProvider.value) : undefined)
+const providerIconComponent = computed(() => normalizedProvider.value
+  ? providerIcon(normalizedProvider.value)
+  : undefined)
 const authenticationIconComponent = computed(() => authenticationIcon(props.authenticationKind))
 const showAuthenticationKind = computed(() => props.authenticationKind !== undefined)
 const groupGapClass = computed(() => {
   if (props.size === 'xs')
     return 'gap-0.75'
-  return props.size === 'sm' ? 'gap-1' : 'gap-2'
+  return props.size === 'sm'
+    ? 'gap-1'
+    : 'gap-2'
 })
 const iconContainerClass = computed(() => {
   if (props.size === 'xs')
     return 'size-4.5 rounded-md'
-  return props.size === 'sm' ? 'size-5 rounded-md' : 'size-7 rounded-lg'
+  return props.size === 'sm'
+    ? 'size-5 rounded-md'
+    : 'size-7 rounded-lg'
 })
 const iconClass = computed(() => {
   if (props.size === 'xs')
     return 'size-2.5'
-  return props.size === 'sm' ? 'size-3' : 'size-4'
+  return props.size === 'sm'
+    ? 'size-3'
+    : 'size-4'
 })
 
 const providerLabel = computed(() => formatProviderLabel(props.provider, t('common.providers.unknown')))

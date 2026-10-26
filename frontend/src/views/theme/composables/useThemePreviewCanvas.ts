@@ -115,7 +115,9 @@ export function useThemePreviewCanvas(options: ThemePreviewCanvasOptions) {
       return
 
     const rect = viewport.getBoundingClientRect()
-    const direction = event.deltaY > 0 ? -1 : 1
+    const direction = event.deltaY > 0
+      ? -1
+      : 1
     setScale(
       scale.value + direction * zoomStep,
       { x: event.clientX - rect.left, y: event.clientY - rect.top },

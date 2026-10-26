@@ -83,7 +83,9 @@ const chartOption = computed<EChartsOption>(() => {
     ...successRateSeries.map((item, index) => index === 0
       ? {
           ...item,
-          symbol: activePointCount <= 16 ? 'circle' : 'none',
+          symbol: activePointCount <= 16
+            ? 'circle'
+            : 'none',
           symbolSize: 4,
         }
       : item),
@@ -99,7 +101,14 @@ const chartOption = computed<EChartsOption>(() => {
       outerBoundsMode: 'same',
       outerBoundsContain: 'axisLabel',
     },
-    legend: usageLegend(theme, [t('common.status.success'), t('usage.health.point.serviceFailed'), t('usage.status.cancelled'), t('usage.health.notCompleted'), t('usage.health.point.callerError'), t('usage.health.serviceSuccessRate')]),
+    legend: usageLegend(theme, [
+      t('common.status.success'),
+      t('usage.health.point.serviceFailed'),
+      t('usage.status.cancelled'),
+      t('usage.health.notCompleted'),
+      t('usage.health.point.callerError'),
+      t('usage.health.serviceSuccessRate'),
+    ]),
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
       chartPoints.map(point => point.label),
@@ -125,7 +134,9 @@ function serviceSuccessRate(point: HealthPoint) {
   const total = healthEligibleRequestCount(point)
   if (total > 0)
     return 1 - point.errorRate
-  return requestCount(point) === 0 ? 0 : null
+  return requestCount(point) === 0
+    ? 0
+    : null
 }
 
 function outcomeSeries(name: string, data: number[], color: string) {
@@ -157,7 +168,9 @@ function formatTooltip(params: unknown) {
     usageTooltipItem(t('usage.health.point.callerError'), formatCompactNumber(point.callerErrorRequests), theme.normal),
     usageTooltipItem(
       t('usage.health.serviceSuccessRate'),
-      successRate == null ? t('usage.health.noServiceResult') : formatPercent(successRate),
+      successRate == null
+        ? t('usage.health.noServiceResult')
+        : formatPercent(successRate),
       theme.success,
     ),
   ])

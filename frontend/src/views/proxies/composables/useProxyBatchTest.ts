@@ -27,8 +27,16 @@ export function useProxyBatchTest(test: ProxyTestExecutor) {
   async function run(proxies: OutboundProxyRecord[]) {
     if (running.value || disposed)
       return
-    const targets = [...new Map(proxies.map(proxy => [proxy.id, proxy])).values()]
-    items.value = targets.map(proxy => ({ key: proxy.id, name: proxy.name, endpoint: proxy.endpoint, status: 'pending', message: '' }))
+    const targets = [
+      ...new Map(proxies.map(proxy => [proxy.id, proxy])).values(),
+    ]
+    items.value = targets.map(proxy => ({
+      key: proxy.id,
+      name: proxy.name,
+      endpoint: proxy.endpoint,
+      status: 'pending',
+      message: '',
+    }))
     running.value = true
     stopping.value = false
     try {
@@ -48,7 +56,9 @@ export function useProxyBatchTest(test: ProxyTestExecutor) {
               const record = result.data
               item.record = record
               item.status = record.lastTest!.success ? 'succeeded' : 'failed'
-              item.message = record.lastTest!.message || (record.lastTest!.success ? t('proxies.batchTest.connectionIsNormal') : t('proxies.region.connectionFailed'))
+              item.message = record.lastTest!.message || (record.lastTest!.success
+                ? t('proxies.batchTest.connectionIsNormal')
+                : t('proxies.region.connectionFailed'))
             }
             else {
               const failure = proxyBatchFailure(result)
@@ -86,5 +96,12 @@ export function useProxyBatchTest(test: ProxyTestExecutor) {
     stop()
   })
 
-  return { items, running, stopping, run, stop, reset }
+  return {
+    items,
+    running,
+    stopping,
+    run,
+    stop,
+    reset,
+  }
 }

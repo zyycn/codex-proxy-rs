@@ -33,7 +33,9 @@ export function useDashboard() {
   const capacityInfo = computed(() => snapshot.value.capacityInfo)
   const rotationStrategy = computed(() => snapshot.value.rotationStrategy)
   const trendView = computed(() => dashboardTrendView(
-    trend.value?.kind === activeTrendKind.value ? trend.value : null,
+    trend.value?.kind === activeTrendKind.value
+      ? trend.value
+      : null,
   ))
   const trendPoints = computed(() => trendView.value.points)
   const trendSummary = computed(() => trendView.value.summary)

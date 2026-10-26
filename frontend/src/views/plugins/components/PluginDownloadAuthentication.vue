@@ -25,16 +25,47 @@ const selected = defineModel<string[]>({ required: true })
 const pending = defineModel<boolean>('pending', { required: true })
 const draft = defineModel<CreatePluginSourceCredentialRequest | null>('draft', { required: true })
 const mode = shallowRef(selected.value.length ? 'saved' : 'public')
-const form = reactive({ kind: 'bearer', token: '', username: '', password: '', headerName: '', headerValue: '' })
+const form = reactive({
+  kind: 'bearer',
+  token: '',
+  username: '',
+  password: '',
+  headerName: '',
+  headerValue: '',
+})
 const authOptions = computed(() => ([
-  { label: t('plugins.downloadAuth.accessToken'), value: 'bearer' },
-  { label: t('plugins.downloadAuth.usernameAndPassword'), value: 'basic' },
-  { label: t('plugins.downloadAuth.customRequestHeader'), value: 'header' },
+  {
+    label: t('plugins.downloadAuth.accessToken'),
+    value: 'bearer',
+  },
+  {
+    label: t('plugins.downloadAuth.usernameAndPassword'),
+    value: 'basic',
+  },
+  {
+    label: t('plugins.downloadAuth.customRequestHeader'),
+    value: 'header',
+  },
 ]))
 const modeOptions = computed(() => [
-  { label: t('plugins.downloadAuth.noCertificationRequired'), value: 'public' },
-  { label: props.kind === 'github' ? t('plugins.downloadAuth.fillInGithubToken') : t('plugins.downloadAuth.credentialsPlaceholder'), value: 'new' },
-  ...(props.credentials.length ? [{ label: t('plugins.downloadAuth.useSavedCredentials'), value: 'saved' }] : []),
+  {
+    label: t('plugins.downloadAuth.noCertificationRequired'),
+    value: 'public',
+  },
+  {
+    label: props.kind === 'github'
+      ? t('plugins.downloadAuth.fillInGithubToken')
+      : t('plugins.downloadAuth.credentialsPlaceholder'),
+    value: 'new',
+  },
+  ...(props.credentials.length
+    ? [
+        {
+          label: t('plugins.downloadAuth.useSavedCredentials'),
+          value: 'saved',
+        },
+      ]
+    : []),
 ])
 const scope = computed(() => {
   if (props.kind === 'github') {
@@ -48,24 +79,59 @@ const scope = computed(() => {
     const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
     if (!(url.protocol === 'https:' || (url.protocol === 'http:' && loopback)) || url.username || url.password || url.hash || /[%\\]/.test(url.pathname))
       return null
-    return { origin: url.origin, pathPrefix: url.pathname, name: t('plugins.downloadAuth.download', { hostname: url.hostname }) }
+    return {
+      origin: url.origin,
+      pathPrefix: url.pathname,
+      name: t('plugins.downloadAuth.download', { hostname: url.hostname }),
+    }
   }
   catch {
     return null
   }
 })
 const authentication = computed<PluginSourceAuthentication | null>(() => {
-  if (props.kind === 'github')
-    return form.token.trim() ? { kind: 'github', token: form.token.trim() } : null
-  if (form.kind === 'basic')
-    return form.username.trim() && form.password ? { kind: 'basic', username: form.username.trim(), password: form.password } : null
-  if (form.kind === 'header')
-    return form.headerName.trim() && form.headerValue ? { kind: 'header', name: form.headerName.trim(), value: form.headerValue } : null
-  return form.token.trim() ? { kind: 'bearer', token: form.token.trim() } : null
+  if (props.kind === 'github') {
+    return form.token.trim()
+      ? {
+          kind: 'github',
+          token: form.token.trim(),
+        }
+      : null
+  }
+  if (form.kind === 'basic') {
+    return form.username.trim() && form.password
+      ? {
+          kind: 'basic',
+          username: form.username.trim(),
+          password: form.password,
+        }
+      : null
+  }
+  if (form.kind === 'header') {
+    return form.headerName.trim() && form.headerValue
+      ? {
+          kind: 'header',
+          name: form.headerName.trim(),
+          value: form.headerValue,
+        }
+      : null
+  }
+  return form.token.trim()
+    ? {
+        kind: 'bearer',
+        token: form.token.trim(),
+      }
+    : null
 })
 
 function clearSecrets() {
-  Object.assign(form, { token: '', username: '', password: '', headerName: '', headerValue: '' })
+  Object.assign(form, {
+    token: '',
+    username: '',
+    password: '',
+    headerName: '',
+    headerValue: '',
+  })
 }
 
 function changeMode(value: string | undefined) {
@@ -100,7 +166,9 @@ watch([mode, scope, authentication], () => {
     ? {
         ...scope.value,
         name: scope.value.name.slice(0, 128),
-        purposes: props.kind === 'github' ? ['metadata', 'artifact'] : ['artifact'],
+        purposes: props.kind === 'github'
+          ? ['metadata', 'artifact']
+          : ['artifact'],
         authentication: authentication.value,
       }
     : null

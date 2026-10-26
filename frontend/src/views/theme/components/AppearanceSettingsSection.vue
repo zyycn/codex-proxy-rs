@@ -50,21 +50,33 @@ const {
 } = useThemeEditor()
 
 const scopeOptions = computed(() => ([
-  { label: t('appearance.settings.global'), value: 'global' },
-  { label: t('appearance.settings.components'), value: 'component' },
+  {
+    label: t('appearance.settings.global'),
+    value: 'global',
+  },
+  {
+    label: t('appearance.settings.components'),
+    value: 'component',
+  },
 ]))
 
 function switchScope(value: string) {
-  scope.value = value === 'component' ? 'component' : 'global'
+  scope.value = value === 'component'
+    ? 'component'
+    : 'global'
   mobilePreviewOpen.value = false
 }
 
 function saveTheme(event: MouseEvent) {
   if (!save(event)) {
-    ZNotification.error({ message: t('appearance.settings.invalidTheme') })
+    ZNotification.error({
+      message: t('appearance.settings.invalidTheme'),
+    })
     return
   }
-  ZNotification.success({ message: t('appearance.settings.themeSavedAndApplied') })
+  ZNotification.success({
+    message: t('appearance.settings.themeSavedAndApplied'),
+  })
 }
 </script>
 

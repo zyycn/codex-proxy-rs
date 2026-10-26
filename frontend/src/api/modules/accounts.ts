@@ -711,7 +711,10 @@ export function startAccountOAuth(data: AccountOAuthStartParam, options: Request
 
 function providerInputBody(data: object) {
   // Provider 文档是不透明 JSON，先编码，避免 HTTP 客户端合并配置时过滤特殊字段名。
-  return { headers: { 'Content-Type': 'application/json' }, data: JSON.stringify(data) }
+  return {
+    headers: { 'Content-Type': 'application/json' },
+    data: JSON.stringify(data),
+  }
 }
 
 export function completeAccountOAuth(data: AccountOAuthCompleteParam, options: RequestOptions = {}) {

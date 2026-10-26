@@ -35,10 +35,18 @@ const status = defineModel<string>('status', { required: true })
 const provider = defineModel<string>('provider', { required: true })
 const group = defineModel<string>('group', { required: true })
 const groupOptions = computed(() => [
-  { label: t('accounts.filters.allGroups'), value: '' },
-  { label: t('accounts.filters.ungroupedAccounts'), value: 'ungrouped' },
+  {
+    label: t('accounts.filters.allGroups'),
+    value: '',
+  },
+  {
+    label: t('accounts.filters.ungroupedAccounts'),
+    value: 'ungrouped',
+  },
   ...props.groups.map(group => ({
-    label: group.enabled ? group.name : t('accounts.filters.disabled', { name: group.name }),
+    label: group.enabled
+      ? group.name
+      : t('accounts.filters.disabled', { name: group.name }),
     value: group.id,
   })),
 ])

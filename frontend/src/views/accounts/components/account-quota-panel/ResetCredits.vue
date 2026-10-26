@@ -52,7 +52,9 @@ const {
 const modalTitle = computed(() => {
   if (!confirmation.value)
     return t('accounts.quotaReset.limitReset')
-  return confirmation.value.ambiguous ? t('accounts.quotaReset.confirmLastReset') : t('accounts.quotaReset.confirmResetAmount')
+  return confirmation.value.ambiguous
+    ? t('accounts.quotaReset.confirmLastReset')
+    : t('accounts.quotaReset.confirmResetAmount')
 })
 const triggerLabel = computed(() => {
   if (ambiguous.value)
@@ -62,7 +64,9 @@ const triggerLabel = computed(() => {
       ? t('accounts.quotaReset.queryFailedWithCount', { count: availableCount.value })
       : t('accounts.quotaReset.queryFailedLabel')
   }
-  return hasSnapshot.value ? t('accounts.quotaReset.availableCount', { count: availableCount.value }) : t('accounts.quotaReset.viewCredits')
+  return hasSnapshot.value
+    ? t('accounts.quotaReset.availableCount', { count: availableCount.value })
+    : t('accounts.quotaReset.viewCredits')
 })
 const showTriggerCount = computed(() => hasSnapshot.value && availableCount.value > 0)
 const confirmCreditTitle = computed(() => confirmation.value?.credit
@@ -71,15 +75,20 @@ const confirmCreditTitle = computed(() => confirmation.value?.credit
 const creditItems = computed(() => availableCredits.value.map(credit => ({
   id: credit.id,
   title: creditTitle(credit),
-  expiry: credit.expiresAtDisplay ? t('accounts.quotaReset.expires', { expiresAtDisplay: credit.expiresAtDisplay }) : t('accounts.quotaReset.expiryHelp'),
+  expiry: credit.expiresAtDisplay
+    ? t('accounts.quotaReset.expires', { expiresAtDisplay: credit.expiresAtDisplay })
+    : t('accounts.quotaReset.expiryHelp'),
 })))
 const showCountOnlyAction = computed(() => !loadError.value
   && hasSnapshot.value
   && availableCount.value > 0
   && creditItems.value.length === 0)
 const countLabel = computed(() => {
-  if (!hasSnapshot.value)
-    return loading.value ? t('accounts.quotaReset.querying') : t('accounts.quotaReset.toBeQueried')
+  if (!hasSnapshot.value) {
+    return loading.value
+      ? t('accounts.quotaReset.querying')
+      : t('accounts.quotaReset.toBeQueried')
+  }
   return t('accounts.quotaReset.usesAvailable', { count: availableCount.value })
 })
 
@@ -94,8 +103,11 @@ watch(panelOpen, (isOpen) => {
 })
 
 watch(showConfirm, (confirming) => {
-  if (panelOpen.value)
-    confirmation.value = confirming ? { credit: consumptionCredit.value, ambiguous: ambiguous.value } : null
+  if (panelOpen.value) {
+    confirmation.value = confirming
+      ? { credit: consumptionCredit.value, ambiguous: ambiguous.value }
+      : null
+  }
 })
 
 function creditTitle(credit: AccountResetCredit | undefined) {

@@ -32,17 +32,53 @@ export const PLUGIN_CAPABILITY_LABELS = computed<Record<string, string>>(() => (
 
 // 编辑入口、范围控件与摘要共用阶段描述；能力和阶段的合法组合由宿主校验。
 export const PLUGIN_REQUEST_STAGES = computed<Record<string, PluginRequestStage>>(() => ({
-  http: { label: t('plugins.fields.httpRequest'), scope: 'none', globalLabel: t('plugins.fields.allHttpRequests') },
-  websocket: { label: t('plugins.fields.websocketMessages'), scope: 'none', globalLabel: t('plugins.fields.allWebsocketMessages') },
-  service: { label: t('plugins.fields.serviceCall'), scope: 'none', globalLabel: t('plugins.fields.allServiceCalls') },
-  request: { label: t('plugins.fields.requestToStart'), scope: 'model' },
-  attempt: { label: t('plugins.fields.everyTry'), scope: 'provider' },
-  outbound: { label: t('plugins.fields.outboundPreparation'), scope: 'provider' },
-  upstream: { label: t('plugins.fields.upstreamCall'), scope: 'provider' },
-  routing: { label: t('plugins.fields.modelRouting'), scope: 'model' },
-  scheduling: { label: t('plugins.fields.accountScheduling'), scope: 'provider' },
-  retry: { label: t('plugins.fields.retryDecision'), scope: 'provider' },
-  observation: { label: t('plugins.fields.eventObservation'), scope: 'provider' },
+  http: {
+    label: t('plugins.fields.httpRequest'),
+    scope: 'none',
+    globalLabel: t('plugins.fields.allHttpRequests'),
+  },
+  websocket: {
+    label: t('plugins.fields.websocketMessages'),
+    scope: 'none',
+    globalLabel: t('plugins.fields.allWebsocketMessages'),
+  },
+  service: {
+    label: t('plugins.fields.serviceCall'),
+    scope: 'none',
+    globalLabel: t('plugins.fields.allServiceCalls'),
+  },
+  request: {
+    label: t('plugins.fields.requestToStart'),
+    scope: 'model',
+  },
+  attempt: {
+    label: t('plugins.fields.everyTry'),
+    scope: 'provider',
+  },
+  outbound: {
+    label: t('plugins.fields.outboundPreparation'),
+    scope: 'provider',
+  },
+  upstream: {
+    label: t('plugins.fields.upstreamCall'),
+    scope: 'provider',
+  },
+  routing: {
+    label: t('plugins.fields.modelRouting'),
+    scope: 'model',
+  },
+  scheduling: {
+    label: t('plugins.fields.accountScheduling'),
+    scope: 'provider',
+  },
+  retry: {
+    label: t('plugins.fields.retryDecision'),
+    scope: 'provider',
+  },
+  observation: {
+    label: t('plugins.fields.eventObservation'),
+    scope: 'provider',
+  },
 }))
 
 export const PLUGIN_STATUS_LABELS = computed<Record<PluginCatalogStatus, string>>(() => ({

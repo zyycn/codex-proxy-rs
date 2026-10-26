@@ -45,13 +45,21 @@ useEventListener(panel, 'keydown', handleKeydown)
 useEventListener(panel, 'keydown', (event) => {
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key))
     return
-  const options = [...(panel.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])]
+  const options = [
+    ...(panel.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []),
+  ]
   if (!options.length)
     return
   event.preventDefault()
   event.stopPropagation()
   const current = options.indexOf(event.target as HTMLButtonElement)
-  const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length
+  const next = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? options.length - 1
+      : (current + (event.key === 'ArrowDown'
+          ? 1
+          : -1) + options.length) % options.length
   options[next]?.focus()
 })
 watch(open, async (value) => {

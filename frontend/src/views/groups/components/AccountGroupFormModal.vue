@@ -21,7 +21,9 @@ const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ required: true })
 const form = defineModel<AccountGroupFormValue>('form', { required: true })
-const title = computed(() => props.group ? t('groups.actions.editGroup') : t('groups.filters.createGroup'))
+const title = computed(() => props.group
+  ? t('groups.actions.editGroup')
+  : t('groups.filters.createGroup'))
 const description = computed(() => props.group
   ? t('groups.editor.editDescription')
   : t('groups.editor.createDescription'))

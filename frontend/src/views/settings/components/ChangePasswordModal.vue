@@ -21,8 +21,11 @@ const form = reactive({ currentPassword: '', newPassword: '', confirmation: '' }
 const passwordError = computed(() => {
   if (!submitted.value)
     return undefined
-  if ([...form.newPassword.trim()].length < 12)
+  if ([
+    ...form.newPassword.trim(),
+  ].length < 12) {
     return t('settings.password.validation.minLength')
+  }
   if (new TextEncoder().encode(form.newPassword).length > 1024)
     return t('settings.password.newPasswordCannotExceedBytes')
   if (form.newPassword === form.currentPassword)
@@ -51,7 +54,9 @@ async function submit() {
     await changeAdminPassword({ currentPassword: form.currentPassword, newPassword: form.newPassword })
     auth.invalidateSession()
     open.value = false
-    ZNotification.success({ message: t('settings.password.changed') })
+    ZNotification.success({
+      message: t('settings.password.changed'),
+    })
     await router.replace('/login')
   })
 }

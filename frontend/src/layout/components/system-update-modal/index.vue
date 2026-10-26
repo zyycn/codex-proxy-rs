@@ -88,15 +88,36 @@ const updateLogRows = computed(() =>
 )
 
 const channelLabels = computed(() => ({
-  stable: { label: t('systemUpdate.channels.stable.label'), description: t('systemUpdate.channels.stable.description') },
-  rc: { label: t('systemUpdate.channels.rc.label'), description: t('systemUpdate.channels.rc.description') },
-  beta: { label: t('systemUpdate.channels.beta.label'), description: t('systemUpdate.channels.beta.description') },
-  alpha: { label: t('systemUpdate.channels.alpha.label'), description: t('systemUpdate.channels.alpha.description') },
-  exp: { label: t('systemUpdate.channels.experimental.label'), description: t('systemUpdate.channels.experimental.description') },
+  stable: {
+    label: t('systemUpdate.channels.stable.label'),
+    description: t('systemUpdate.channels.stable.description'),
+  },
+  rc: {
+    label: t('systemUpdate.channels.rc.label'),
+    description: t('systemUpdate.channels.rc.description'),
+  },
+  beta: {
+    label: t('systemUpdate.channels.beta.label'),
+    description: t('systemUpdate.channels.beta.description'),
+  },
+  alpha: {
+    label: t('systemUpdate.channels.alpha.label'),
+    description: t('systemUpdate.channels.alpha.description'),
+  },
+  exp: {
+    label: t('systemUpdate.channels.experimental.label'),
+    description: t('systemUpdate.channels.experimental.description'),
+  },
 }))
 const channelOptions = computed(() => availableChannels.value.map(value => ({
   value,
-  label: { stable: 'Stable', rc: 'RC', beta: 'Beta', alpha: 'Alpha', exp: 'Exp' }[value],
+  label: {
+    stable: 'Stable',
+    rc: 'RC',
+    beta: 'Beta',
+    alpha: 'Alpha',
+    exp: 'Exp',
+  }[value],
 })))
 
 async function handleChannelChange(value: string) {
@@ -133,7 +154,11 @@ async function handleCheckUpdates(force = true) {
       ZNotification.error({ message: data.warning })
       return
     }
-    ZNotification.success({ message: data?.hasUpdate ? t('systemUpdate.feedback.available') : t('systemUpdate.feedback.noUpdates') })
+    ZNotification.success({
+      message: data?.hasUpdate
+        ? t('systemUpdate.feedback.available')
+        : t('systemUpdate.feedback.noUpdates'),
+    })
   }
   catch {}
 }
@@ -151,12 +176,16 @@ async function handleUpdateRequest() {
       return
     }
     if (!data?.hasUpdate || !canUpdate.value) {
-      ZNotification.success({ message: t('systemUpdate.feedback.noUpdates') })
+      ZNotification.success({
+        message: t('systemUpdate.feedback.noUpdates'),
+      })
       return
     }
     const remoteTargetVersion = normalizeSystemVersion(data.latestVersion)
     if (!remoteTargetVersion) {
-      ZNotification.error({ message: t('systemUpdate.errors.remoteTargetMissing') })
+      ZNotification.error({
+        message: t('systemUpdate.errors.remoteTargetMissing'),
+      })
       return
     }
     if (previousTargetVersion && previousTargetVersion !== remoteTargetVersion) {
@@ -177,7 +206,9 @@ async function runConfirmedUpdate(targetVersion: string, channel: SystemUpdateCh
   try {
     const result = await updateNow(targetVersion, channel)
     if (result) {
-      ZNotification.success({ message: t('systemUpdate.feedback.started') })
+      ZNotification.success({
+        message: t('systemUpdate.feedback.started'),
+      })
     }
   }
   catch {}
@@ -209,7 +240,9 @@ async function handleRestart() {
     await restartNow(restartPlan.value)
   }
   catch (error: unknown) {
-    ZNotification.error({ message: errorMessage(error, t('systemUpdate.errors.preRestartCheck')) })
+    ZNotification.error({
+      message: errorMessage(error, t('systemUpdate.errors.preRestartCheck')),
+    })
   }
   finally {
     checkingRestart.value = false
@@ -225,7 +258,9 @@ async function handleConfirmRestart() {
   }
   catch (error: unknown) {
     restartConfirmOpen.value = false
-    ZNotification.error({ message: errorMessage(error, t('systemUpdate.errors.restart')) })
+    ZNotification.error({
+      message: errorMessage(error, t('systemUpdate.errors.restart')),
+    })
   }
 }
 

@@ -13,8 +13,16 @@ const { t } = useI18n({ useScope: 'global' })
 
 const provider = defineModel<string>({ required: true })
 const options = computed(() => ([
-  { label: t('common.providers.all'), value: '', icon: LayoutGrid },
-  ...PROVIDER_IDS.map(value => ({ label: formatProviderLabel(value), value, icon: providerIcon(value) })),
+  {
+    label: t('common.providers.all'),
+    value: '',
+    icon: LayoutGrid,
+  },
+  ...PROVIDER_IDS.map(value => ({
+    label: formatProviderLabel(value),
+    value,
+    icon: providerIcon(value),
+  })),
 ]))
 </script>
 

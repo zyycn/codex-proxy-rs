@@ -16,7 +16,9 @@ export function useApiKeysQuery() {
   const apiKeys = shallowRef<ApiKey[]>([])
   const request = useRequestState()
   const { loading } = request
-  const cursors = new Map<number, string | undefined>([[1, undefined]])
+  const cursors = new Map<number, string | undefined>([
+    [1, undefined],
+  ])
 
   const apiKeyPagination = computed(() => ({
     currentPage: page.value,
@@ -31,8 +33,12 @@ export function useApiKeysQuery() {
   }
 
   function knownPageBefore(targetPage: number) {
-    return [...cursors.keys()].reduce(
-      (known, candidate) => (candidate <= targetPage && candidate > known ? candidate : known),
+    return [
+      ...cursors.keys(),
+    ].reduce(
+      (known, candidate) => (candidate <= targetPage && candidate > known
+        ? candidate
+        : known),
       1,
     )
   }

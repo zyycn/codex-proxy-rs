@@ -67,9 +67,15 @@ export function useAccountBatchEditor(options: {
       ZNotification.warning({ message: modelError })
       return
     }
-    const scheduling = parseAccountSchedulingForm(editedFields.value.has('concurrencyLimit') ? concurrencyLimit.value : '', editedFields.value.has('weight') ? weight.value : '1')
+    const scheduling = parseAccountSchedulingForm(editedFields.value.has('concurrencyLimit')
+      ? concurrencyLimit.value
+      : '', editedFields.value.has('weight')
+      ? weight.value
+      : '1')
     if (proxyMode.value === 'proxy' && !proxyId.value.trim()) {
-      ZNotification.warning({ message: t('accounts.batchEdit.proxyRequired') })
+      ZNotification.warning({
+        message: t('accounts.batchEdit.proxyRequired'),
+      })
       return
     }
     if (!scheduling.valid) {
@@ -82,17 +88,36 @@ export function useAccountBatchEditor(options: {
       await batchUpdateAccounts({
         accountIds,
         modelAccess: modelAccess.value,
-        outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
+        outboundProxyId: proxyMode.value === 'preserve'
+          ? undefined
+          : proxyMode.value === 'direct'
+            ? ''
+            : proxyId.value.trim(),
         enabled: schedulingEnabled.value,
-        concurrencyLimit: editedFields.value.has('concurrencyLimit') ? scheduling.values.concurrencyLimit : undefined,
-        weight: editedFields.value.has('weight') ? scheduling.values.weight : undefined,
-        groupIds: editedFields.value.has('groupIds') ? [...new Set(selectedGroupIds.value)] : undefined,
+        concurrencyLimit: editedFields.value.has('concurrencyLimit')
+          ? scheduling.values.concurrencyLimit
+          : undefined,
+        weight: editedFields.value.has('weight')
+          ? scheduling.values.weight
+          : undefined,
+        groupIds: editedFields.value.has('groupIds')
+          ? [
+              ...new Set(selectedGroupIds.value),
+            ]
+          : undefined,
       })
       showBatchEditModal.value = false
       options.selectedIds.value = new Set()
-      ZNotification.success({ message: t('accounts.batchEdit.saved', { count: accountIds.length }) })
-      void Promise.allSettled([options.reloadAccounts(), options.reloadGroups()])
-    }, { onError: () => void options.reloadAccounts() })
+      ZNotification.success({
+        message: t('accounts.batchEdit.saved', { count: accountIds.length }),
+      })
+      void Promise.allSettled([
+        options.reloadAccounts(),
+        options.reloadGroups(),
+      ])
+    }, {
+      onError: () => void options.reloadAccounts(),
+    })
   }
 
   function selectedAccounts() {
@@ -145,7 +170,9 @@ function sharedConcurrencyLimit(accounts: Account[]) {
 
 function sharedWeight(accounts: Account[]) {
   const first = accounts[0]?.weight ?? 1
-  return accounts.every(account => account.weight === first) ? String(first) : '1'
+  return accounts.every(account => account.weight === first)
+    ? String(first)
+    : '1'
 }
 
 function sharedGroupIds(accounts: Account[]) {

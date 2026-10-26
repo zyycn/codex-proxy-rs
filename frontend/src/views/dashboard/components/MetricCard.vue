@@ -45,8 +45,17 @@ const sparklineOption = computed<EChartsOption | null>(() => {
   return {
     animation: false,
     grid: { left: 0, right: 0, top: 4, bottom: 4 },
-    xAxis: { type: 'category', show: false, data: values.map((_, index) => index) },
-    yAxis: { type: 'value', show: false, min: 'dataMin', max: 'dataMax' },
+    xAxis: {
+      type: 'category',
+      show: false,
+      data: values.map((_, index) => index),
+    },
+    yAxis: {
+      type: 'value',
+      show: false,
+      min: 'dataMin',
+      max: 'dataMax',
+    },
     series: [
       {
         type: 'line',

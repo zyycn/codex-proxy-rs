@@ -111,7 +111,11 @@ export function useBackupSettings() {
         schedule.value.scheduleEnabled = data.scheduleEnabled
         savedSchedule.value = { ...savedSchedule.value, scheduleEnabled: data.scheduleEnabled }
       }
-      ZNotification.success({ message: schedulePaused ? t('settings.backup.storageSaved') : t('settings.backup.storageConfigurationSaved') })
+      ZNotification.success({
+        message: schedulePaused
+          ? t('settings.backup.storageSaved')
+          : t('settings.backup.storageConfigurationSaved'),
+      })
       return true
     }
     catch {
@@ -130,7 +134,9 @@ export function useBackupSettings() {
       const result = await testBackupStorage()
       if (result.ok) {
         verified.value = true
-        ZNotification.success({ message: t('settings.backup.connectionVerified') })
+        ZNotification.success({
+          message: t('settings.backup.connectionVerified'),
+        })
       }
       else {
         verified.value = false
@@ -157,7 +163,9 @@ export function useBackupSettings() {
         retentionCount: Number(schedule.value.retentionCount) || 0,
       })
       applySchedule(data)
-      ZNotification.success({ message: t('settings.backup.backupPlanSaved') })
+      ZNotification.success({
+        message: t('settings.backup.backupPlanSaved'),
+      })
       return true
     }
     catch {

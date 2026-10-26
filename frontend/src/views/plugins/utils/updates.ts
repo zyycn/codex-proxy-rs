@@ -24,5 +24,7 @@ export function selectPluginReleaseAsset(release: PluginRelease, previous?: Plug
   const prefix = asset.slice(0, index)
   const suffix = asset.slice(index + version.length)
   const matches = assets.filter(candidate => candidate.name.startsWith(prefix) && candidate.name.endsWith(suffix))
-  return matches.length === 1 ? matches[0] : undefined
+  return matches.length === 1
+    ? matches[0]
+    : undefined
 }

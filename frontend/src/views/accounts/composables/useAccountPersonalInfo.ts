@@ -13,8 +13,12 @@ export function useAccountPersonalInfo({ accountId, open, capabilities }: {
   const info = shallowRef<AccountPersonalInfoResponse | null>(null)
   const request = useRequestState()
   const { loading } = request
-  const profile = computed(() => capabilities.value.profile ? info.value?.profile ?? null : null)
-  const subscription = computed(() => capabilities.value.subscription ? info.value?.subscription ?? null : null)
+  const profile = computed(() => capabilities.value.profile
+    ? info.value?.profile ?? null
+    : null)
+  const subscription = computed(() => capabilities.value.subscription
+    ? info.value?.subscription ?? null
+    : null)
   const error = computed(() => request.error.value || (capabilities.value.profile ? info.value?.profileError : '') || '')
 
   async function load() {
@@ -39,7 +43,12 @@ export function useAccountPersonalInfo({ accountId, open, capabilities }: {
   }
 
   // 打开或切换账号只请求一次；关闭取消等待，刷新按钮复用同一入口。
-  watch([open, accountId, () => capabilities.value.profile, () => capabilities.value.subscription], ([isOpen]) => {
+  watch([
+    open,
+    accountId,
+    () => capabilities.value.profile,
+    () => capabilities.value.subscription,
+  ], ([isOpen]) => {
     request.invalidate({ resetLoading: isOpen })
     if (!isOpen)
       return

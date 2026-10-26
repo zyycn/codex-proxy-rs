@@ -39,15 +39,23 @@ const metrics = computed(() => [
 ])
 
 function formatMetric(value: number | null | undefined) {
-  return value == null ? '—' : formatCompactNumber(value)
+  return value == null
+    ? '—'
+    : formatCompactNumber(value)
 }
 
 function formatExact(value: number | null | undefined) {
-  return value == null ? undefined : `${formatInteger(value)} Tokens`
+  return value == null
+    ? undefined
+    : `${formatInteger(value)} Tokens`
 }
 
 function formatDays(value: number | null | undefined) {
-  return value == null ? '—' : t('accounts.profile.metrics.dayCount', { integer: formatInteger(value) })
+  return value == null
+    ? '—'
+    : t('accounts.profile.metrics.dayCount', {
+        integer: formatInteger(value),
+      })
 }
 
 function formatDuration(value: number | null | undefined) {
@@ -57,13 +65,21 @@ function formatDuration(value: number | null | undefined) {
   const days = Math.floor(totalMinutes / (24 * 60))
   const hours = Math.floor((totalMinutes % (24 * 60)) / 60)
   const minutes = totalMinutes % 60
-  if (days > 0)
-    return hours > 0 ? t('accounts.profile.metrics.dH', { days, hours }) : t('accounts.profile.metrics.elapsedDays', { days })
-  if (hours > 0)
-    return minutes > 0 ? t('accounts.profile.metrics.hMin', { hours, minutes }) : t('accounts.profile.metrics.elapsedHours', { hours })
+  if (days > 0) {
+    return hours > 0
+      ? t('accounts.profile.metrics.dH', { days, hours })
+      : t('accounts.profile.metrics.elapsedDays', { days })
+  }
+  if (hours > 0) {
+    return minutes > 0
+      ? t('accounts.profile.metrics.hMin', { hours, minutes })
+      : t('accounts.profile.metrics.elapsedHours', { hours })
+  }
   if (totalMinutes > 0)
     return t('accounts.profile.metrics.min', { totalMinutes })
-  return t('accounts.profile.metrics.durationSeconds', { value: Math.max(0, Math.floor(value / 1000)) })
+  return t('accounts.profile.metrics.durationSeconds', {
+    value: Math.max(0, Math.floor(value / 1000)),
+  })
 }
 </script>
 

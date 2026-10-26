@@ -92,12 +92,16 @@ export function callPluginManagementRoute(
   call: PluginManagementRawRequest,
   options: RequestOptions = {},
 ) {
-  const query = call.query ? `?${call.query}` : ''
+  const query = call.query
+    ? `?${call.query}`
+    : ''
   return requestPluginManagementRaw({
     url: `${pluginManagementTargetPath(target)}/api/${encodePluginPath(call.path)}${query}`,
     method: call.method,
     data: call.body?.byteLength ? call.body : undefined,
-    headers: call.contentType ? { 'Content-Type': call.contentType } : undefined,
+    headers: call.contentType
+      ? { 'Content-Type': call.contentType }
+      : undefined,
     timeout: PLUGIN_MANAGEMENT_TIMEOUT_MS,
     ...options,
   })

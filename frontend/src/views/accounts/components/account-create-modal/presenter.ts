@@ -48,24 +48,56 @@ export function resolveAccountCreatePresentation(input: {
     modeOptions: modes,
     available,
     modal: {
-      title: configuring ? t('accounts.onboarding.accountSettings') : input.reauthorizing ? t('accounts.onboarding.reauthorizeAccount') : t('accounts.filters.importAccount'),
-      description: configuring ? t('accounts.onboarding.settingsDescription') : input.reauthorizing ? t('accounts.onboarding.reauthorizeDescription') : description,
+      title: configuring
+        ? t('accounts.onboarding.accountSettings')
+        : input.reauthorizing
+          ? t('accounts.onboarding.reauthorizeAccount')
+          : t('accounts.filters.importAccount'),
+      description: configuring
+        ? t('accounts.onboarding.settingsDescription')
+        : input.reauthorizing
+          ? t('accounts.onboarding.reauthorizeDescription')
+          : description,
       type: configuring ? 'default' as const : 'info' as const,
       width: configuring ? '42rem' : '36rem',
     },
     oauth: {
-      callbackLabel: id === 'xai' ? t('accounts.onboarding.callbackLabel') : t('accounts.onboarding.callbackAddress'),
-      callbackPlaceholder: id === 'openai' ? 'http://localhost:1455/auth/callback?code=...&state=...' : t('accounts.onboarding.callbackPlaceholder'),
+      callbackLabel: id === 'xai'
+        ? t('accounts.onboarding.callbackLabel')
+        : t('accounts.onboarding.callbackAddress'),
+      callbackPlaceholder: id === 'openai'
+        ? 'http://localhost:1455/auth/callback?code=...&state=...'
+        : t('accounts.onboarding.callbackPlaceholder'),
       description: t('accounts.onboarding.callbackHelp'),
     },
     importInput: form.mode === 'access_token'
-      ? { label: 'Access Token', placeholder: t('accounts.onboarding.pasteOneAccessTokenPerLine'), uploadable: false }
+      ? {
+          label: 'Access Token',
+          placeholder: t('accounts.onboarding.pasteOneAccessTokenPerLine'),
+          uploadable: false,
+        }
       : form.mode === 'refresh_token'
-        ? { label: 'Refresh Token', placeholder: t('accounts.onboarding.pasteOneRefreshTokenPerLine'), uploadable: false }
-        : { label: isBatch ? t('accounts.onboarding.batchAccountFiles') : t('accounts.onboarding.accountFile'), placeholder: isBatch ? t('accounts.onboarding.packagePlaceholder') : t('accounts.onboarding.pasteAccountJsonContent'), uploadable: true },
+        ? {
+            label: 'Refresh Token',
+            placeholder: t('accounts.onboarding.pasteOneRefreshTokenPerLine'),
+            uploadable: false,
+          }
+        : {
+            label: isBatch
+              ? t('accounts.onboarding.batchAccountFiles')
+              : t('accounts.onboarding.accountFile'),
+            placeholder: isBatch
+              ? t('accounts.onboarding.packagePlaceholder')
+              : t('accounts.onboarding.pasteAccountJsonContent'),
+            uploadable: true,
+          },
     canSubmit,
     submitLabel: form.mode === 'oauth'
-      ? input.reauthorizing ? t('accounts.onboarding.completeReauthorization') : t('accounts.onboarding.completeImport')
-      : isBatch ? t('accounts.onboarding.batchImport') : t('accounts.filters.importAccount'),
+      ? input.reauthorizing
+        ? t('accounts.onboarding.completeReauthorization')
+        : t('accounts.onboarding.completeImport')
+      : isBatch
+        ? t('accounts.onboarding.batchImport')
+        : t('accounts.filters.importAccount'),
   }
 }

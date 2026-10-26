@@ -64,7 +64,10 @@ export function usePagedQuery<Result extends PageResult>(options: {
         return false
 
       if (result.items.length === 0 && result.page.total > 0 && result.page.page > 1) {
-        return execute({ ...execution, page: clamp(result.page.totalPages, 1, Number.POSITIVE_INFINITY) })
+        return execute({
+          ...execution,
+          page: clamp(result.page.totalPages, 1, Number.POSITIVE_INFINITY),
+        })
       }
 
       items.value = result.items

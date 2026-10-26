@@ -29,11 +29,40 @@ const { accounts, loading, error, pagination, search, setPage, setPageSize, remo
   onRemoved: () => emit('removed'),
 })
 const columns = computed(() => (defineTableColumns<OutboundProxyAccount>([
-  { key: 'identity', label: t('accounts.account'), kind: 'identity', size: '3xl' },
-  { key: 'provider', label: t('proxies.accounts.platformType'), kind: 'custom', size: 'md', align: 'center' },
-  { key: 'plan', label: t('proxies.accounts.subscription'), kind: 'custom', size: 'sm', align: 'center' },
-  { key: 'groups', label: t('groups.group'), kind: 'custom', size: 'lg', align: 'center' },
-  { key: 'actions', label: t('common.fields.actions'), kind: 'actions', size: 'xs', align: 'center' },
+  {
+    key: 'identity',
+    label: t('accounts.account'),
+    kind: 'identity',
+    size: '3xl',
+  },
+  {
+    key: 'provider',
+    label: t('proxies.accounts.platformType'),
+    kind: 'custom',
+    size: 'md',
+    align: 'center',
+  },
+  {
+    key: 'plan',
+    label: t('proxies.accounts.subscription'),
+    kind: 'custom',
+    size: 'sm',
+    align: 'center',
+  },
+  {
+    key: 'groups',
+    label: t('groups.group'),
+    kind: 'custom',
+    size: 'lg',
+    align: 'center',
+  },
+  {
+    key: 'actions',
+    label: t('common.fields.actions'),
+    kind: 'actions',
+    size: 'xs',
+    align: 'center',
+  },
 ])))
 const rows = computed(() => accounts.value.map(account => ({
   ...account,
@@ -47,7 +76,9 @@ const description = computed(() => props.proxy
   ? props.proxy.name
   : undefined)
 const emptyText = computed(() => error.value
-  || (search.value.trim() ? t('proxies.accounts.noMatches') : t('proxies.accounts.empty')))
+  || (search.value.trim()
+    ? t('proxies.accounts.noMatches')
+    : t('proxies.accounts.empty')))
 const tableHeight = computed(() => {
   // 空列表与少量账号保留最小高度，多行限制高度并在表格内滚动。
   const count = accounts.value.length || (loading.value
@@ -68,7 +99,10 @@ function requestRemove(account: OutboundProxyAccount) {
   showRemove.value = true
 }
 
-watch([open, () => props.proxy?.id], () => {
+watch([
+  open,
+  () => props.proxy?.id,
+], () => {
   showRemove.value = false
 })
 </script>

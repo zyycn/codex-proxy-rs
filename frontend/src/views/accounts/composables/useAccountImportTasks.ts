@@ -80,7 +80,10 @@ export function useAccountImportTasks(options: { reload: () => Promise<unknown> 
   }
 
   function created(task: AccountImportTask, reveal = true) {
-    tasks.value = [task, ...tasks.value.filter(entry => entry.taskId !== task.taskId)]
+    tasks.value = [
+      task,
+      ...tasks.value.filter(entry => entry.taskId !== task.taskId),
+    ]
     selectedId.value = task.taskId
     detail.value = null
     if (open.value || !reveal)
@@ -117,5 +120,18 @@ export function useAccountImportTasks(options: { reload: () => Promise<unknown> 
     clearTimeout(timer)
   })
 
-  return { open, tasks, detail, selectedId, error, loading, activeCount, stopping: stopAction.loading, select, created, refresh, stop }
+  return {
+    open,
+    tasks,
+    detail,
+    selectedId,
+    error,
+    loading,
+    activeCount,
+    stopping: stopAction.loading,
+    select,
+    created,
+    refresh,
+    stop,
+  }
 }

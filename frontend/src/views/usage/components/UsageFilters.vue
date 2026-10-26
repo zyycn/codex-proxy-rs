@@ -21,9 +21,18 @@ const { t } = useI18n({ useScope: 'global' })
 const field = defineModel<UsageRecordFilterField>('field', { required: true })
 const value = defineModel<string>('value', { required: true })
 const fieldOptions = computed(() => [
-  { value: 'key', label: t('usage.filters.keyName') },
-  { value: 'account', label: t('usage.filters.account') },
-  { value: 'model', label: t('usage.fields.model') },
+  {
+    value: 'key',
+    label: t('usage.filters.keyName'),
+  },
+  {
+    value: 'account',
+    label: t('usage.filters.account'),
+  },
+  {
+    value: 'model',
+    label: t('usage.fields.model'),
+  },
 ])
 </script>
 

@@ -39,7 +39,9 @@ async function selectLocale(value: Locale, close: () => void) {
       close()
   }
   catch {
-    notification.error({ message: t('navigation.languageLoadFailed') })
+    notification.error({
+      message: t('navigation.languageLoadFailed'),
+    })
   }
   finally {
     if (pendingLocale.value === value)

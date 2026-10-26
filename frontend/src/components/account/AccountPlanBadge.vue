@@ -30,8 +30,12 @@ const fallbackPalettes = [
   'bg-cp-orange-container text-cp-orange-on-container',
 ] as const
 
-const rawPlanType = computed(() => props.authenticationKind === 'api_key' ? 'api' : props.planType?.trim() || '')
-const displayText = computed(() => props.authenticationKind === 'api_key' ? 'API' : props.planTypeDisplay)
+const rawPlanType = computed(() => props.authenticationKind === 'api_key'
+  ? 'api'
+  : props.planType?.trim() || '')
+const displayText = computed(() => props.authenticationKind === 'api_key'
+  ? 'API'
+  : props.planTypeDisplay)
 
 const sizeClass = computed(() => {
   if (props.size === 'xs')

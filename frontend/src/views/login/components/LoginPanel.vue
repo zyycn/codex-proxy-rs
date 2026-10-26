@@ -26,12 +26,22 @@ const password = defineModel<string>('password', { required: true })
 const apiKey = defineModel<string>('apiKey', { required: true })
 
 const realmOptions = computed(() => ([
-  { label: t('auth.adminSignIn'), value: 'admin', icon: ShieldCheck },
-  { label: t('auth.apiKeySignIn'), value: 'key', icon: KeyRound },
+  {
+    label: t('auth.adminSignIn'),
+    value: 'admin',
+    icon: ShieldCheck,
+  },
+  {
+    label: t('auth.apiKeySignIn'),
+    value: 'key',
+    icon: KeyRound,
+  },
 ]))
 
 const isKeyRealm = computed(() => realm.value === 'key')
-const realmCaption = computed(() => isKeyRealm.value ? t('auth.keyRealm') : t('auth.adminRealm'))
+const realmCaption = computed(() => isKeyRealm.value
+  ? t('auth.keyRealm')
+  : t('auth.adminRealm'))
 const submitLabel = computed(() => {
   if (props.loading)
     return t('auth.signingIn')

@@ -16,9 +16,18 @@ const { t } = useI18n({ useScope: 'global' })
 
 const mode = shallowRef<ProfileActivityMode>('daily')
 const modeOptions = computed(() => ([
-  { label: t('accounts.profile.activity.daily'), value: 'daily' },
-  { label: t('accounts.profile.activity.weekly'), value: 'weekly' },
-  { label: t('accounts.profile.activity.cumulative'), value: 'cumulative' },
+  {
+    label: t('accounts.profile.activity.daily'),
+    value: 'daily',
+  },
+  {
+    label: t('accounts.profile.activity.weekly'),
+    value: 'weekly',
+  },
+  {
+    label: t('accounts.profile.activity.cumulative'),
+    value: 'cumulative',
+  },
 ]))
 const levelClasses: Record<ProfileActivityLevel, string> = {
   0: 'bg-cp-activity-level-0',
@@ -31,7 +40,11 @@ const grid = computed(() => buildProfileActivityGrid(props.calendar, mode.value)
 const rangeLabel = computed(() => grid.value.rangeLabel)
 const monthLabels = computed(() =>
   grid.value.weeks.flatMap((week, weekIndex) =>
-    week.monthLabel ? [{ label: week.monthLabel, weekIndex }] : [],
+    week.monthLabel
+      ? [
+          { label: week.monthLabel, weekIndex },
+        ]
+      : [],
   ),
 )
 </script>

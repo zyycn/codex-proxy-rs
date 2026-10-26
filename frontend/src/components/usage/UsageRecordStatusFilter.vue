@@ -11,9 +11,21 @@ const { t } = useI18n({ useScope: 'global' })
 
 const model = defineModel<UsageRecordStatus>({ required: true })
 const options = computed(() => ([
-  { label: t('common.status.success'), value: 'success', icon: Sun },
-  { label: t('usage.filters.error'), value: 'error', icon: CloudRain },
-  { label: t('common.values.all'), value: 'all', icon: List },
+  {
+    label: t('common.status.success'),
+    value: 'success',
+    icon: Sun,
+  },
+  {
+    label: t('usage.filters.error'),
+    value: 'error',
+    icon: CloudRain,
+  },
+  {
+    label: t('common.values.all'),
+    value: 'all',
+    icon: List,
+  },
 ]))
 </script>
 

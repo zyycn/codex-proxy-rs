@@ -31,14 +31,18 @@ const previewing = shallowRef(false)
 const independentDraft = shallowRef<ClientProfileSelection>()
 const effective = computed(() => model.value ?? options.value?.globalConfiguration)
 const inherited = computed(() => props.allowInherit && model.value === null)
-const preset = computed(() => effective.value && !effective.value.mode ? effective.value : undefined)
+const preset = computed(() => effective.value && !effective.value.mode
+  ? effective.value
+  : undefined)
 const custom = computed(() => effective.value?.mode === 'custom' || preset.value?.versionMode === 'fixed')
 const needsInput = computed(() => effective.value?.mode === 'custom'
   ? !effective.value.userAgent.trim()
   : preset.value?.versionMode === 'fixed'
     && (!preset.value.codexVersion || (preset.value.client === 'desktop' && (!preset.value.desktopVersion || !preset.value.desktopBuild))))
 const profileSource = computed({
-  get: () => model.value === null ? 'global' : 'independent',
+  get: () => model.value === null
+    ? 'global'
+    : 'independent',
   set: (value: string) => {
     if (value === 'global') {
       if (model.value)
@@ -46,7 +50,9 @@ const profileSource = computed({
       model.value = null
     }
     else if (independentDraft.value ?? options.value?.globalConfiguration) {
-      model.value = { ...(independentDraft.value ?? options.value!.globalConfiguration) }
+      model.value = {
+        ...(independentDraft.value ?? options.value!.globalConfiguration),
+      }
     }
   },
 })
@@ -64,7 +70,10 @@ async function load() {
   }
 }
 
-watch([model, () => props.active], ([configuration, active], _, onCleanup) => {
+watch([
+  model,
+  () => props.active,
+], ([configuration, active], _, onCleanup) => {
   if (!active)
     return
   let cancelled = false

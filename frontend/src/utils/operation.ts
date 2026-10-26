@@ -10,7 +10,9 @@ export function errorMessage(error: unknown, fallback = t('common.errors.request
     : error && typeof error === 'object' && 'message' in error
       ? (error as { message?: unknown }).message
       : undefined
-  return typeof message === 'string' && message ? message : fallback
+  return typeof message === 'string' && message
+    ? message
+    : fallback
 }
 
 export async function withMinimumDuration<T>(
@@ -19,7 +21,9 @@ export async function withMinimumDuration<T>(
 ): Promise<T> {
   const startedAt = Date.now()
   try {
-    return await (typeof task === 'function' ? task() : task)
+    return await (typeof task === 'function'
+      ? task()
+      : task)
   }
   finally {
     const remaining = minimumMs - (Date.now() - startedAt)

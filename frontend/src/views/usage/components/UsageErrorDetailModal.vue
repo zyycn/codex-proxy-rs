@@ -23,30 +23,103 @@ const panelTitleClass = 'm-0 text-cp-sm leading-none font-heavy text-cp-text-sec
 
 const errorMessage = computed(() => {
   const message = props.record?.message.trim()
-  return message && message !== props.record?.logicalOutcome ? message : t('usage.error.noDetails')
+  return message && message !== props.record?.logicalOutcome
+    ? message
+    : t('usage.error.noDetails')
 })
-const responseText = computed(() => props.record ? visibleResponseText(props.record) : '')
+const responseText = computed(() => props.record
+  ? visibleResponseText(props.record)
+  : '')
 const metadataText = computed(() => props.record && Object.keys(props.record.metadata).length
   ? JSON.stringify(props.record.metadata, null, 2)
   : '')
 const contextItems = computed(() => [
-  { label: t('accounts.account'), value: props.record ? usageAccountText(props.record) : null, mono: true, fullWidth: true },
-  { label: t('usage.fields.time'), value: props.record?.createdAtDisplay, mono: true },
-  { label: t('usage.latency.totalLatency'), value: props.record?.latencyMsDisplay, mono: true },
-  { label: t('usage.error.platform'), value: props.record?.provider, mono: true },
-  { label: t('usage.fields.endpoint'), value: props.record?.route, mono: true },
-  { label: t('usage.error.requestModel'), value: props.record ? usageModelDisplay(props.record).primary : null, mono: true },
-  { label: t('usage.error.upstreamModel'), value: props.record?.upstreamModel, mono: true },
-  { label: t('usage.error.clientTransfer'), value: usageTransportType(props.record?.clientTransport), mono: true },
-  { label: t('usage.error.upstreamTransport'), value: usageTransportType(props.record?.upstreamTransport), mono: true },
+  {
+    label: t('accounts.account'),
+    value: props.record
+      ? usageAccountText(props.record)
+      : null,
+    mono: true,
+    fullWidth: true,
+  },
+  {
+    label: t('usage.fields.time'),
+    value: props.record?.createdAtDisplay,
+    mono: true,
+  },
+  {
+    label: t('usage.latency.totalLatency'),
+    value: props.record?.latencyMsDisplay,
+    mono: true,
+  },
+  {
+    label: t('usage.error.platform'),
+    value: props.record?.provider,
+    mono: true,
+  },
+  {
+    label: t('usage.fields.endpoint'),
+    value: props.record?.route,
+    mono: true,
+  },
+  {
+    label: t('usage.error.requestModel'),
+    value: props.record
+      ? usageModelDisplay(props.record).primary
+      : null,
+    mono: true,
+  },
+  {
+    label: t('usage.error.upstreamModel'),
+    value: props.record?.upstreamModel,
+    mono: true,
+  },
+  {
+    label: t('usage.error.clientTransfer'),
+    value: usageTransportType(props.record?.clientTransport),
+    mono: true,
+  },
+  {
+    label: t('usage.error.upstreamTransport'),
+    value: usageTransportType(props.record?.upstreamTransport),
+    mono: true,
+  },
 ])
 const identifierItems = computed(() => [
-  { label: t('usage.error.clientStatusCode'), value: props.record?.clientStatusCode, mono: true },
-  { label: t('usage.error.upstreamStatusCode'), value: props.record?.upstreamStatusCode, mono: true },
-  { label: t('usage.error.requestId'), value: props.record?.requestId, mono: true, fullWidth: true },
-  { label: t('usage.error.upstreamRequestId'), value: props.record?.upstreamRequestId, mono: true, fullWidth: true },
-  { label: t('usage.error.responseId'), value: props.record?.responseId, mono: true, fullWidth: true },
-  { label: t('usage.error.clientKeyId'), value: props.record?.clientApiKeyId, mono: true, fullWidth: true },
+  {
+    label: t('usage.error.clientStatusCode'),
+    value: props.record?.clientStatusCode,
+    mono: true,
+  },
+  {
+    label: t('usage.error.upstreamStatusCode'),
+    value: props.record?.upstreamStatusCode,
+    mono: true,
+  },
+  {
+    label: t('usage.error.requestId'),
+    value: props.record?.requestId,
+    mono: true,
+    fullWidth: true,
+  },
+  {
+    label: t('usage.error.upstreamRequestId'),
+    value: props.record?.upstreamRequestId,
+    mono: true,
+    fullWidth: true,
+  },
+  {
+    label: t('usage.error.responseId'),
+    value: props.record?.responseId,
+    mono: true,
+    fullWidth: true,
+  },
+  {
+    label: t('usage.error.clientKeyId'),
+    value: props.record?.clientApiKeyId,
+    mono: true,
+    fullWidth: true,
+  },
 ])
 const attempts = computed(() => (props.record?.attempts ?? []).map(attempt => ({
   id: attempt.id,
@@ -54,14 +127,46 @@ const attempts = computed(() => (props.record?.attempts ?? []).map(attempt => ({
   outcome: attempt.outcome,
   statusCode: attempt.statusCode,
   items: [
-    { label: t('usage.error.errorCode'), value: attempt.providerErrorCode, mono: true },
-    { label: t('usage.error.failureClassification'), value: attempt.failureClass, mono: true },
-    { label: t('accounts.account'), value: usageAccountText(attempt), mono: true },
-    { label: t('usage.error.platform'), value: attempt.provider, mono: true },
-    { label: t('usage.error.upstreamTransport'), value: usageTransportType(attempt.transport), mono: true },
-    { label: t('usage.error.duration'), value: formatDuration(attempt.latencyMs), mono: true },
-    { label: t('usage.error.triggerMode'), value: attempt.trigger, mono: true },
-    { label: t('usage.error.sendStatus'), value: attempt.sendState, mono: true },
+    {
+      label: t('usage.error.errorCode'),
+      value: attempt.providerErrorCode,
+      mono: true,
+    },
+    {
+      label: t('usage.error.failureClassification'),
+      value: attempt.failureClass,
+      mono: true,
+    },
+    {
+      label: t('accounts.account'),
+      value: usageAccountText(attempt),
+      mono: true,
+    },
+    {
+      label: t('usage.error.platform'),
+      value: attempt.provider,
+      mono: true,
+    },
+    {
+      label: t('usage.error.upstreamTransport'),
+      value: usageTransportType(attempt.transport),
+      mono: true,
+    },
+    {
+      label: t('usage.error.duration'),
+      value: formatDuration(attempt.latencyMs),
+      mono: true,
+    },
+    {
+      label: t('usage.error.triggerMode'),
+      value: attempt.trigger,
+      mono: true,
+    },
+    {
+      label: t('usage.error.sendStatus'),
+      value: attempt.sendState,
+      mono: true,
+    },
   ],
 })))
 </script>

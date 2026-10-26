@@ -24,7 +24,9 @@ const hasAnimatedValue = computed(
     && Number.isFinite(props.rawValue)
     && Boolean(props.formatter),
 )
-const sourceValue = computed(() => (hasAnimatedValue.value ? (props.rawValue ?? 0) : 0))
+const sourceValue = computed(() => (hasAnimatedValue.value
+  ? (props.rawValue ?? 0)
+  : 0))
 const disabled = computed(() => preferredMotion.value === 'reduce' || !hasAnimatedValue.value)
 const animatedValue = useTransition(sourceValue, {
   duration: computed(() => props.duration),
@@ -33,7 +35,9 @@ const animatedValue = useTransition(sourceValue, {
 })
 
 const displayValue = computed(() =>
-  hasAnimatedValue.value && props.formatter ? props.formatter(animatedValue.value) : props.value,
+  hasAnimatedValue.value && props.formatter
+    ? props.formatter(animatedValue.value)
+    : props.value,
 )
 </script>
 

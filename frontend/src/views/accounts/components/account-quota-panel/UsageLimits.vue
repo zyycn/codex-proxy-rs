@@ -25,7 +25,9 @@ const items = computed(() => orderedPanelQuotaWindows(props.windows)
       label: quotaWindowLabel(window),
       resetAtDisplay: window.resetAtDisplay,
       remaining,
-      remainingDisplay: remaining === null ? t('accounts.quota.awaitingData') : t('accounts.quota.remaining', { remaining }),
+      remainingDisplay: remaining === null
+        ? t('accounts.quota.awaitingData')
+        : t('accounts.quota.remaining', { remaining }),
       barClass: presentation.barClass,
       percentTextClass: presentation.percentTextClass,
       barStyle: { width: `${remaining ?? 0}%` },

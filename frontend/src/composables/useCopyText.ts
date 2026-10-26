@@ -28,7 +28,11 @@ export function useCopyText() {
       ZNotification.success({ message: options.successText })
     }
     catch (error: unknown) {
-      ZNotification.error({ message: options.errorFromException ? errorMessage(error, t('common.errors.copy')) : t('common.errors.copy') })
+      ZNotification.error({
+        message: options.errorFromException
+          ? errorMessage(error, t('common.errors.copy'))
+          : t('common.errors.copy'),
+      })
     }
   }
 }

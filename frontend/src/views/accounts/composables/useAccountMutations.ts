@@ -105,7 +105,9 @@ export function useAccountMutations(options: {
         options.selectedIds.value = remaining
         showSingleDeleteModal.value = false
         await loadAccounts()
-        ZNotification.success({ message: t('accounts.actions.deleted') })
+        ZNotification.success({
+          message: t('accounts.actions.deleted'),
+        })
       },
     )
   }
@@ -129,15 +131,22 @@ export function useAccountMutations(options: {
         }
         showDeleteModal.value = false
         await loadAccounts()
-        ZNotification.success({ message: t('accounts.actions.deletedAccountDeletedAccounts', { count: deletedCount }) })
+        ZNotification.success({
+          message: t('accounts.actions.deletedAccountDeletedAccounts', { count: deletedCount }),
+        })
       },
       {
         errorText: false,
         onError: (error) => {
           void loadAccounts().catch(() => undefined)
-          ZNotification.error({ message: deletedCount > 0
-            ? t('accounts.actions.partialDeletion', { count: deletedCount, value: errorMessage(error, t('common.errors.operation')) })
-            : errorMessage(error, t('accounts.actions.batchDeletionFailed')) })
+          ZNotification.error({
+            message: deletedCount > 0
+              ? t('accounts.actions.partialDeletion', {
+                  count: deletedCount,
+                  value: errorMessage(error, t('common.errors.operation')),
+                })
+              : errorMessage(error, t('accounts.actions.batchDeletionFailed')),
+          })
         },
       },
     )
@@ -148,7 +157,9 @@ export function useAccountMutations(options: {
       return
     const selected = [...options.selectedIds.value]
     if (selected.length === 0) {
-      ZNotification.warning({ message: t('accounts.actions.exportSelectionRequired') })
+      ZNotification.warning({
+        message: t('accounts.actions.exportSelectionRequired'),
+      })
       return
     }
     if (exportDisabledReason.value) {
@@ -164,9 +175,13 @@ export function useAccountMutations(options: {
         })
         const fileName = payload.fileName
         await downloadJson(payload, fileName)
-        ZNotification.success({ message: t('accounts.actions.exported', { count: selected.length }) })
+        ZNotification.success({
+          message: t('accounts.actions.exported', { count: selected.length }),
+        })
       },
-      { errorText: t('accounts.actions.exportFailed') },
+      {
+        errorText: t('accounts.actions.exportFailed'),
+      },
     )
   }
 
@@ -177,7 +192,9 @@ export function useAccountMutations(options: {
         const plan = account.planTypeDisplay.trim().replace(/[^\p{L}\p{N}_-]/gu, '_') || 'unknown-plan'
         const name = account.name.trim().replace(/[^\p{L}\p{N}_-]/gu, '_') || 'account'
         await downloadJson(result.catalog, `cpr-model-catalog-${plan}-${name}.json`)
-        ZNotification.success({ message: t('accounts.actions.modelCatalogDownloadedModels', { count: result.modelCount }) })
+        ZNotification.success({
+          message: t('accounts.actions.modelCatalogDownloadedModels', { count: result.modelCount }),
+        })
       }
       catch {}
     })
@@ -200,7 +217,9 @@ export function useAccountMutations(options: {
           ZNotification.error({ message: result.error || t('accounts.actions.refreshFailed') })
           return
         }
-        ZNotification.success({ message: t('accounts.actions.tokenRefreshed') })
+        ZNotification.success({
+          message: t('accounts.actions.tokenRefreshed'),
+        })
       }
       catch {}
     })
@@ -209,9 +228,16 @@ export function useAccountMutations(options: {
   async function handleToggleScheduling(account: Account) {
     await togglingSchedulingAccounts.run(account.id, async () => {
       try {
-        await batchUpdateAccounts({ accountIds: [account.id], enabled: !account.enabled })
+        await batchUpdateAccounts({
+          accountIds: [account.id],
+          enabled: !account.enabled,
+        })
         await loadAccounts()
-        ZNotification.success({ message: account.enabled ? t('accounts.actions.schedulingIsDisabled') : t('accounts.actions.schedulingIsEnabled') })
+        ZNotification.success({
+          message: account.enabled
+            ? t('accounts.actions.schedulingIsDisabled')
+            : t('accounts.actions.schedulingIsEnabled'),
+        })
       }
       catch {}
     })
@@ -227,7 +253,9 @@ export function useAccountMutations(options: {
           selectedIds.delete(accountId)
           options.selectedIds.value = selectedIds
         }
-        ZNotification.success({ message: t('accounts.actions.quotaRefreshed') })
+        ZNotification.success({
+          message: t('accounts.actions.quotaRefreshed'),
+        })
       }
       catch {}
     })
@@ -241,7 +269,12 @@ export function useAccountMutations(options: {
       await options.replaceAccount(result.account)
     }
     catch (error: unknown) {
-      ZNotification.warning({ message: t('accounts.actions.resetRefreshFailed', { value: errorMessage(error, t('accounts.actions.refreshQuotaManually')) }), ...({ duration: 5000 }) })
+      ZNotification.warning({
+        message: t('accounts.actions.resetRefreshFailed', {
+          value: errorMessage(error, t('accounts.actions.refreshQuotaManually')),
+        }),
+        ...({ duration: 5000 }),
+      })
     }
   }
 
@@ -255,7 +288,9 @@ export function useAccountMutations(options: {
           selectedIds.delete(accountId)
           options.selectedIds.value = selectedIds
         }
-        ZNotification.success({ message: t('accounts.actions.statusRestored') })
+        ZNotification.success({
+          message: t('accounts.actions.statusRestored'),
+        })
       }
       catch {}
     })

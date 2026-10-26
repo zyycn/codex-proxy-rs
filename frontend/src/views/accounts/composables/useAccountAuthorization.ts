@@ -67,10 +67,12 @@ export function useAccountAuthorization(onComplete: () => Promise<void>) {
         return
       const expiresAt = Date.parse(result.expiresAt)
       if (!Number.isFinite(expiresAt))
-        throw new Error(t('accounts.onboarding.invalidExpiry'))
+        throw new RangeError(t('accounts.onboarding.invalidExpiry'))
       context = { provider: request.start.provider, settings: request.settings }
       flow.value = result
-      status.value = expired() ? 'expired' : 'waiting'
+      status.value = expired()
+        ? 'expired'
+        : 'waiting'
       expiryTimer = setTimeout(() => {
         // 不取消正在确认的提交，过期后仍接收服务端已经提交的结果。
         if (status.value !== 'completing')
@@ -109,12 +111,22 @@ export function useAccountAuthorization(onComplete: () => Promise<void>) {
     }
     catch (cause) {
       if (!current.signal.aborted) {
-        status.value = expired() ? 'expired' : 'paused'
+        status.value = expired()
+          ? 'expired'
+          : 'paused'
         error.value = errorMessage(cause, t('accounts.onboarding.authorizationFailed'))
       }
     }
   }
 
   onScopeDispose(reset)
-  return { view, callback, busy, start, complete, cancel, reset }
+  return {
+    view,
+    callback,
+    busy,
+    start,
+    complete,
+    cancel,
+    reset,
+  }
 }

@@ -21,13 +21,27 @@ const billingPeriod = computed(() => {
   const period = props.subscription?.billingPeriod
   if (!period)
     return null
-  const labels: Record<string, string> = { month: t('accounts.profile.subscription.byMonth'), monthly: t('accounts.profile.subscription.byMonth'), year: t('accounts.profile.subscription.byYear'), yearly: t('accounts.profile.subscription.byYear'), annual: t('accounts.profile.subscription.byYear') }
+  const labels: Record<string, string> = {
+    month: t('accounts.profile.subscription.byMonth'),
+    monthly: t('accounts.profile.subscription.byMonth'),
+    year: t('accounts.profile.subscription.byYear'),
+    yearly: t('accounts.profile.subscription.byYear'),
+    annual: t('accounts.profile.subscription.byYear'),
+  }
   return labels[period.toLowerCase()] ?? period
 })
 const billing = computed(() => [billingPeriod.value, props.subscription?.billingCurrency].filter(Boolean).join(' · ') || t('common.values.unknown'))
 const dates = computed(() => [
-  { label: t('accounts.profile.subscription.subscriptionStarts'), value: props.subscription?.startsAt, display: props.subscription?.startsAtDisplay },
-  { label: t('accounts.profile.subscription.subscriptionEnds'), value: props.subscription?.expiresAt, display: props.subscription?.expiresAtDisplay },
+  {
+    label: t('accounts.profile.subscription.subscriptionStarts'),
+    value: props.subscription?.startsAt,
+    display: props.subscription?.startsAtDisplay,
+  },
+  {
+    label: t('accounts.profile.subscription.subscriptionEnds'),
+    value: props.subscription?.expiresAt,
+    display: props.subscription?.expiresAtDisplay,
+  },
 ])
 </script>
 

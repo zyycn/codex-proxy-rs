@@ -76,7 +76,10 @@ export function requestActivityByBucket(
   activity: Array<{ bucket: string, totalRequests: number }>,
 ) {
   const requestsByBucket = new Map(
-    activity.map(point => [point.bucket, Math.max(0, point.totalRequests)]),
+    activity.map(point => [
+      point.bucket,
+      Math.max(0, point.totalRequests),
+    ]),
   )
   return buckets.map(bucket => (requestsByBucket.get(bucket) ?? 0) > 0)
 }
@@ -85,11 +88,15 @@ export function zeroInactiveValues(
   values: TemporalValue[],
   active: boolean[],
 ) {
-  return values.map((value, index) => normalizeValue(value) ?? (active[index] === false ? 0 : null))
+  return values.map((value, index) => normalizeValue(value) ?? (active[index] === false
+    ? 0
+    : null))
 }
 
 function normalizeValue(value: TemporalValue) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : null
 }
 
 function boundedGapRuns(values: Array<number | null>) {

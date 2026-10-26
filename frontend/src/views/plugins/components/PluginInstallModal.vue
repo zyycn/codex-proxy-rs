@@ -89,12 +89,18 @@ const credentialDraft = shallowRef<CreatePluginSourceCredentialRequest | null>(n
 const submitting = shallowRef(false)
 const authenticationIncomplete = computed(() => pendingAuthentication.value && !credentialDraft.value)
 const modeOptions = computed(() => ([
-  { label: t('plugins.installation.uploadPackage'), value: 'upload', icon: FileArchive },
+  {
+    label: t('plugins.installation.uploadPackage'),
+    value: 'upload',
+    icon: FileArchive,
+  },
   { label: 'URL', value: 'url', icon: Link },
   { label: 'GitHub', value: 'github', icon: Github },
 ]))
 const busy = computed(() => submitting.value || props.saving || props.querying || props.verifying || props.savingCredential)
-const connectionForm = computed(() => props.mode === 'url' ? urlForm : githubForm)
+const connectionForm = computed(() => props.mode === 'url'
+  ? urlForm
+  : githubForm)
 
 function changeMode(value: string) {
   if (busy.value || (value !== 'upload' && value !== 'url' && value !== 'github'))
@@ -105,7 +111,9 @@ const releaseAssets = computed(() => (props.release?.assets ?? []).filter(asset 
 const digestPattern = /^[a-f0-9]{64}$/
 const digestError = computed(() => {
   const digest = connectionForm.value.sha256.trim().toLowerCase()
-  return digest && !digestPattern.test(digest) ? t('plugins.installation.enterDigitHexadecimalDigest') : ''
+  return digest && !digestPattern.test(digest)
+    ? t('plugins.installation.enterDigitHexadecimalDigest')
+    : ''
 })
 const remoteRequest = computed<VerifyRemotePluginRequest | null>(() => {
   if (digestError.value)
@@ -130,11 +138,22 @@ const remoteRequest = computed<VerifyRemotePluginRequest | null>(() => {
     expectedPluginId: props.updateSource?.pluginId ?? null,
     credentialIds: [...githubForm.credentialIds],
     outboundProxyId: githubForm.outboundProxyId || null,
-    location: { kind: 'github', repository: release.repository, tag: release.tag, asset: githubForm.asset, allow_prerelease: release.prerelease, sha256: sha256 || null },
+    location: {
+      kind: 'github',
+      repository: release.repository,
+      tag: release.tag,
+      asset: githubForm.asset,
+      allow_prerelease: release.prerelease,
+      sha256: sha256 || null,
+    },
   }
 })
-const selection = computed(() => props.mode === 'upload' ? uploadFile.value : remoteRequest.value)
-const requestKey = computed(() => selection.value ? pluginInstallSelectionKey(selection.value) : null)
+const selection = computed(() => props.mode === 'upload'
+  ? uploadFile.value
+  : remoteRequest.value)
+const requestKey = computed(() => selection.value
+  ? pluginInstallSelectionKey(selection.value)
+  : null)
 const verified = computed<VerifiedPluginArtifact | null>(() => {
   if (props.acceptanceArtifact) {
     return {
@@ -149,7 +168,9 @@ const verified = computed<VerifiedPluginArtifact | null>(() => {
 const previousArtifact = computed(() => props.installedArtifacts
   .filter(artifact => artifact.acceptedAt && artifact.metadata.pluginId === verified.value?.metadata.pluginId)
   .sort((left, right) => right.acceptedAt!.localeCompare(left.acceptedAt!))[0])
-const installationLabel = computed(() => previousArtifact.value ? t('plugins.installation.installNewVersion') : t('plugins.details.installation'))
+const installationLabel = computed(() => previousArtifact.value
+  ? t('plugins.installation.installNewVersion')
+  : t('plugins.details.installation'))
 const sourceDraft = computed<PluginUpdateSourceBinding | null>(() => {
   const previous = props.updateSource
   if (!previous)
@@ -157,13 +178,23 @@ const sourceDraft = computed<PluginUpdateSourceBinding | null>(() => {
   const source = props.mode === 'upload'
     ? { kind: 'upload' as const }
     : props.mode === 'url'
-      ? { kind: 'url' as const, url: urlForm.url.trim() }
-      : { kind: 'github' as const, repository: githubRepository() }
+      ? {
+          kind: 'url' as const,
+          url: urlForm.url.trim(),
+        }
+      : {
+          kind: 'github' as const,
+          repository: githubRepository(),
+        }
   return {
     pluginId: previous.pluginId,
     source,
-    policy: isEqual(source, previous.source) ? previous.policy : { kind: 'manual' },
-    outboundProxyId: props.mode === 'upload' ? null : connectionForm.value.outboundProxyId || null,
+    policy: isEqual(source, previous.source)
+      ? previous.policy
+      : { kind: 'manual' },
+    outboundProxyId: props.mode === 'upload'
+      ? null
+      : connectionForm.value.outboundProxyId || null,
   }
 })
 const sourceChanged = computed(() => sourceDraft.value !== null && !isEqual(sourceDraft.value, { ...props.updateSource, outboundProxyId: props.updateSource?.outboundProxyId ?? null }))
@@ -202,7 +233,9 @@ async function verifySelected() {
 }
 
 function reset() {
-  activeDraftKey = props.acceptanceArtifact || props.updateSource ? null : 'install'
+  activeDraftKey = props.acceptanceArtifact || props.updateSource
+    ? null
+    : 'install'
   uploadFile.value = null
   Object.assign(urlForm, {
     url: '',
@@ -251,13 +284,19 @@ function reset() {
     }
     githubForm.repository = source.source.repository
     githubForm.outboundProxyId = source.outboundProxyId ?? ''
-    githubForm.tag = source.policy.kind === 'pinned' ? source.policy.tag : ''
+    githubForm.tag = source.policy.kind === 'pinned'
+      ? source.policy.tag
+      : ''
     githubForm.allowPrerelease = source.policy.kind === 'pinned' && source.policy.allow_prerelease
   }
   const draft = activeDraftKey ? drafts.value[activeDraftKey] : null
   if (draft) {
-    Object.assign(urlForm, draft.url, { credentialIds: draft.url.credentialIds.filter(id => props.credentials.some(credential => credential.id === id)) })
-    Object.assign(githubForm, draft.github, { credentialIds: draft.github.credentialIds.filter(id => props.credentials.some(credential => credential.id === id)) })
+    Object.assign(urlForm, draft.url, {
+      credentialIds: draft.url.credentialIds.filter(id => props.credentials.some(credential => credential.id === id)),
+    })
+    Object.assign(githubForm, draft.github, {
+      credentialIds: draft.github.credentialIds.filter(id => props.credentials.some(credential => credential.id === id)),
+    })
     emit('changeMode', draft.mode)
   }
   // 明确选择的检查结果优先于旧草稿，仍需重新校验包并确认信任来源。
@@ -294,8 +333,14 @@ function rememberDraft() {
     ...drafts.value,
     [activeDraftKey]: {
       mode: props.mode,
-      url: { ...urlForm, credentialIds: [...urlForm.credentialIds] },
-      github: { ...github, credentialIds: [...github.credentialIds] },
+      url: {
+        ...urlForm,
+        credentialIds: [...urlForm.credentialIds],
+      },
+      github: {
+        ...github,
+        credentialIds: [...github.credentialIds],
+      },
     },
   }
 }
@@ -307,7 +352,9 @@ useEventListener('pagehide', () => {
 function chooseFile(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0] ?? null
   if (file && file.size > 32 * 1024 * 1024) {
-    ZNotification.warning({ message: t('plugins.installation.pluginPackageCannotExceedMib') })
+    ZNotification.warning({
+      message: t('plugins.installation.pluginPackageCannotExceedMib'),
+    })
     uploadFile.value = null
     ;(event.target as HTMLInputElement).value = ''
     return
@@ -321,7 +368,9 @@ function installSelected() {
     return
   }
   if (!selection.value || !verified.value) {
-    ZNotification.warning({ message: t('plugins.installation.verificationRequired') })
+    ZNotification.warning({
+      message: t('plugins.installation.verificationRequired'),
+    })
     return
   }
   emit('install', selection.value)
@@ -337,11 +386,15 @@ async function queryRelease() {
   const repository = githubRepository()
   const tag = githubForm.tag.trim()
   if (!/^[-\w.]+\/[-\w.]+$/.test(repository)) {
-    ZNotification.warning({ message: t('plugins.installation.githubRepositoryRequired') })
+    ZNotification.warning({
+      message: t('plugins.installation.githubRepositoryRequired'),
+    })
     return
   }
   if (githubForm.allowPrerelease && !tag) {
-    ZNotification.warning({ message: t('plugins.installation.prereleaseTagRequired') })
+    ZNotification.warning({
+      message: t('plugins.installation.prereleaseTagRequired'),
+    })
     return
   }
   submitting.value = true
@@ -410,7 +463,9 @@ watch(
   () => props.release,
   async (release) => {
     const previous = props.installedArtifacts.find(artifact => artifact.metadata.pluginId === props.updateSource?.pluginId)
-    githubForm.asset = release ? selectPluginReleaseAsset(release, previous)?.name ?? '' : ''
+    githubForm.asset = release
+      ? selectPluginReleaseAsset(release, previous)?.name ?? ''
+      : ''
     if (githubForm.asset) {
       await nextTick()
       await verifySelected()

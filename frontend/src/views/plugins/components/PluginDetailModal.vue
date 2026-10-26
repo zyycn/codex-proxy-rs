@@ -38,7 +38,18 @@ const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ required: true })
 const section = shallowRef('configurations')
-const sections = computed(() => ([{ label: t('navigation.overview'), value: 'configurations', icon: Settings2 }, { label: t('plugins.details.version'), value: 'versions', icon: Layers }]))
+const sections = computed(() => ([
+  {
+    label: t('navigation.overview'),
+    value: 'configurations',
+    icon: Settings2,
+  },
+  {
+    label: t('plugins.details.version'),
+    value: 'versions',
+    icon: Layers,
+  },
+]))
 const current = computed(() => props.plugin && currentPluginInstance(props.plugin))
 const legacy = computed(() => props.plugin?.configurations.filter(instance => instance.id !== current.value?.id) ?? [])
 const currentArtifact = computed(() => current.value && artifactForInstance(current.value, props.plugin?.artifacts ?? []))

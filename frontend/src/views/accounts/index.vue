@@ -70,7 +70,10 @@ const {
 } = useAccountGroupCatalog()
 
 const importTasks = useAccountImportTasks({
-  reload: () => Promise.all([loadAccounts(), loadGroups()]),
+  reload: () => Promise.all([
+    loadAccounts(),
+    loadGroups(),
+  ]),
 })
 const {
   open: showImportTasks,
@@ -123,7 +126,10 @@ const {
   onImportTaskCreated: importTasks.created,
   accounts,
   selectedIds,
-  reload: () => Promise.all([loadAccounts(), loadGroups()]),
+  reload: () => Promise.all([
+    loadAccounts(),
+    loadGroups(),
+  ]),
   replaceAccount,
 })
 

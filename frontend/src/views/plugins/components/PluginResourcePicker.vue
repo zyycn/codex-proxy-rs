@@ -16,15 +16,26 @@ const selected = defineModel<string[]>({ required: true })
 const options = shallowRef<{ id: string, label: string, disabled: boolean }[]>([])
 const loading = shallowRef(false)
 const error = shallowRef('')
-const label = computed(() => props.kind === 'keys' ? t('plugins.bindings.clientKey') : t('plugins.bindings.accountGrouping'))
+const label = computed(() => props.kind === 'keys'
+  ? t('plugins.bindings.clientKey')
+  : t('plugins.bindings.accountGrouping'))
 let controller: AbortController | undefined
 const choices = computed(() => {
   const known = new Set(options.value.map(option => option.id))
-  const unavailable = selected.value.filter(id => !known.has(id)).map(id => ({ id, label: t('plugins.resources.unavailable', { id }), disabled: true }))
-  return [...unavailable, ...options.value].map(option => ({
+  const unavailable = selected.value.filter(id => !known.has(id)).map(id => ({
+    id,
+    label: t('plugins.resources.unavailable', { id }),
+    disabled: true,
+  }))
+  return [
+    ...unavailable,
+    ...options.value,
+  ].map(option => ({
     value: option.id,
     label: option.label,
-    description: option.disabled ? t('common.status.unavailable') : undefined,
+    description: option.disabled
+      ? t('common.status.unavailable')
+      : undefined,
     // 已失效的绑定仍可取消，不能重新选入。
     disabled: option.disabled && !selected.value.includes(option.id),
   }))
@@ -71,7 +82,10 @@ async function load() {
       loading.value = false
   }
 }
-watch([() => props.kind, () => props.active], ([, active]) => {
+watch([
+  () => props.kind,
+  () => props.active,
+], ([, active]) => {
   controller?.abort()
   controller = undefined
   if (active)

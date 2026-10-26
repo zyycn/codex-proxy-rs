@@ -37,7 +37,9 @@ const forecastOpen = shallowRef(false)
 const hasForecast = computed(() => props.account.authenticationKind !== 'api_key')
 const hasPersonalInfo = computed(() => props.account.capabilities.profile || props.account.capabilities.subscription)
 const hasActions = computed(() => hasPersonalInfo.value || hasForecast.value || props.account.capabilities.quotaRefresh || props.account.capabilities.resetCredits)
-const lastRefreshed = computed(() => t('accounts.quota.lastRefreshed', { refreshedAtDisplay: formatRelativeTime(props.account.quota.refreshedAtRelative) }))
+const lastRefreshed = computed(() => t('accounts.quota.lastRefreshed', {
+  refreshedAtDisplay: formatRelativeTime(props.account.quota.refreshedAtRelative),
+}))
 watch(hasPersonalInfo, (available) => {
   if (!available)
     profileOpen.value = false

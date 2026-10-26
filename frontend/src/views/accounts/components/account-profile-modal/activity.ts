@@ -9,14 +9,28 @@ export function buildProfileActivityGrid(calendar: ProfileActivityCalendar | nul
   let cumulative = 0
   const weeks = (calendar?.weeks ?? []).map((week) => {
     const weekly = week.cells.reduce((sum, cell) => sum + cell.tokens, 0)
-    return { ...week, cells: week.cells.map((cell) => {
-      cumulative += cell.isFuture ? 0 : cell.tokens
-      return { ...cell, value: mode === 'weekly' ? weekly : mode === 'cumulative' ? cumulative : cell.tokens, level: 0 as ProfileActivityLevel }
-    }) }
+    return {
+      ...week,
+      cells: week.cells.map((cell) => {
+        cumulative += cell.isFuture ? 0 : cell.tokens
+        return {
+          ...cell,
+          value: mode === 'weekly'
+            ? weekly
+            : mode === 'cumulative'
+              ? cumulative
+              : cell.tokens,
+          level: 0 as ProfileActivityLevel,
+        }
+      }),
+    }
   })
   const maximum = Math.max(0, ...weeks.flatMap(week => week.cells).filter(cell => !cell.isFuture).map(cell => cell.value))
-  for (const cell of weeks.flatMap(week => week.cells))
-    cell.level = cell.value <= 0 || maximum <= 0 ? 0 : Math.min(4, Math.max(1, Math.ceil(cell.value / maximum * 4))) as ProfileActivityLevel
+  for (const cell of weeks.flatMap(week => week.cells)) {
+    cell.level = cell.value <= 0 || maximum <= 0
+      ? 0
+      : Math.min(4, Math.max(1, Math.ceil(cell.value / maximum * 4))) as ProfileActivityLevel
+  }
   return { weeks, rangeLabel: calendar?.rangeLabel ?? '' }
 }
 

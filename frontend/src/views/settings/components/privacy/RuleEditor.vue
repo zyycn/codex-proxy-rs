@@ -26,13 +26,18 @@ const step = computed({
 })
 const sample = shallowRef('')
 const fixedValues = ref<string[]>(['""'])
-const fixedValue = computed({ get: () => fixedValues.value[selectedIndex.value] ?? '""', set: (value: string) => {
-  fixedValues.value[selectedIndex.value] = value
-} })
+const fixedValue = computed({
+  get: () => fixedValues.value[selectedIndex.value] ?? '""',
+  set: (value: string) => {
+    fixedValues.value[selectedIndex.value] = value
+  },
+})
 const localError = shallowRef('')
 const preview = usePrivacyPreview()
 const { loading, result } = preview
-const processed = computed(() => result.value ? JSON.stringify({ body: result.value.body, headers: result.value.headers, turnMetadata: result.value.turnMetadata }, null, 2) : '')
+const processed = computed(() => result.value
+  ? JSON.stringify({ body: result.value.body, headers: result.value.headers, turnMetadata: result.value.turnMetadata }, null, 2)
+  : '')
 const outcome = computed(() => result.value?.outcomes[0])
 
 watch(open, (value) => {
@@ -98,22 +103,40 @@ async function test() {
   try {
     const rule = preparedRule()
     const value: PrivacySample = JSON.parse(sample.value)
-    await preview.run({ enabled: true, onError: 'skip_rule', rules: [{ ...rule, enabled: true }] }, value)
+    await preview.run({
+      enabled: true,
+      onError: 'skip_rule',
+      rules: [
+        { ...rule, enabled: true },
+      ],
+    }, value)
   }
-  catch (cause) { localError.value = cause instanceof Error ? cause.message : t('settings.privacy.rules.invalidSampleFormat') }
+  catch (cause) {
+    localError.value = cause instanceof Error
+      ? cause.message
+      : t('settings.privacy.rules.invalidSampleFormat')
+  }
 }
 async function apply() {
   if (props.disabled)
     return
   try {
     const rule = preparedRule()
-    const validated = await preview.run({ enabled: false, onError: 'skip_rule', rules: [rule] }, { body: {}, headers: {}, turnMetadata: null })
+    const validated = await preview.run({
+      enabled: false,
+      onError: 'skip_rule',
+      rules: [rule],
+    }, { body: {}, headers: {}, turnMetadata: null })
     if (!validated || !open.value)
       return
     emit('apply', rule)
     open.value = false
   }
-  catch (cause) { localError.value = cause instanceof Error ? cause.message : t('settings.privacy.rules.ruleFormatIsInvalid') }
+  catch (cause) {
+    localError.value = cause instanceof Error
+      ? cause.message
+      : t('settings.privacy.rules.ruleFormatIsInvalid')
+  }
 }
 </script>
 

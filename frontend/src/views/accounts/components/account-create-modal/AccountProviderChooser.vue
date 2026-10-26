@@ -13,7 +13,11 @@ const { t } = useI18n({ useScope: 'global' })
 
 const source = defineModel<AccountCreateSource | null>({ required: true })
 const options = computed(() => ([
-  { value: 'bundle', label: t('accounts.onboarding.batchImport'), icon: LayoutGrid },
+  {
+    value: 'bundle',
+    label: t('accounts.onboarding.batchImport'),
+    icon: LayoutGrid,
+  },
   ...PROVIDER_IDS.map(provider => ({
     value: `provider:${provider}`,
     label: formatProviderLabel(provider),
@@ -21,11 +25,18 @@ const options = computed(() => ([
   })),
 ]))
 const selected = computed({
-  get: () => source.value?.kind === 'provider' ? `provider:${source.value.id}` : source.value?.kind ?? '',
+  get: () => source.value?.kind === 'provider'
+    ? `provider:${source.value.id}`
+    : source.value?.kind ?? '',
   set: (value: string) => {
     if (!options.value.some(option => option.value === value))
       return
-    source.value = value === 'bundle' ? { kind: 'bundle' } : { kind: 'provider', id: value.slice('provider:'.length) }
+    source.value = value === 'bundle'
+      ? { kind: 'bundle' }
+      : {
+          kind: 'provider',
+          id: value.slice('provider:'.length),
+        }
   },
 })
 </script>

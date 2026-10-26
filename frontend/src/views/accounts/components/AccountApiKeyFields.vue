@@ -13,7 +13,10 @@ const { t } = useI18n({ useScope: 'global' })
 const form = defineModel<ApiKeyAccountForm>({ required: true })
 const transportOptions = computed(() => ([
   { label: 'HTTP / SSE', value: 'http' },
-  { label: t('accounts.credentials.wsFirst'), value: 'prefer_websocket' },
+  {
+    label: t('accounts.credentials.wsFirst'),
+    value: 'prefer_websocket',
+  },
 ]))
 </script>
 

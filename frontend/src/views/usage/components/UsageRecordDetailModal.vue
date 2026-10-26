@@ -37,75 +37,185 @@ const open = defineModel<boolean>({ default: false })
 
 const { palette } = useChartPalette()
 
-const requestText = computed(() => props.record ? visibleRequestText(props.record) : '')
-const responseText = computed(() => props.record ? visibleResponseText(props.record) : '')
+const requestText = computed(() => props.record
+  ? visibleRequestText(props.record)
+  : '')
+const responseText = computed(() => props.record
+  ? visibleResponseText(props.record)
+  : '')
 const modelDisplay = computed(() => props.record
   ? usageModelDisplay(props.record)
   : { primary: '—', secondary: '' })
 const tokenDetails = computed(() => props.record?.tokenDetails ?? null)
 const billing = computed(() => props.record ? props.record.billing : null)
-const latencyDetails = computed(() => props.record ? usageLatencyDetails(props.record) : null)
+const latencyDetails = computed(() => props.record
+  ? usageLatencyDetails(props.record)
+  : null)
 
 const panelClass = 'min-w-0 rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5'
 const panelTitleClass = 'm-0 text-cp-sm leading-none font-heavy text-cp-text-secondary'
 
-const accountDisplay = computed(() => props.record ? usageAccountText(props.record) : '—')
+const accountDisplay = computed(() => props.record
+  ? usageAccountText(props.record)
+  : '—')
 const finalAttemptIndex = computed(() => {
   const attempts = props.record?.attempts ?? []
   const last = attempts[attempts.length - 1]
   return last?.attemptIndex ?? props.record?.attemptCount
 })
 const requestItems = computed(() => [
-  { label: t('accounts.account'), value: accountDisplay.value, mono: true, fullWidth: true },
-  { label: t('usage.request.statusCode'), value: props.record?.statusCode, mono: true },
-  { label: t('usage.request.message'), value: props.record?.message },
-  { label: t('usage.fields.time'), value: props.record?.createdAtDisplay, mono: true },
-  { label: t('usage.fields.endpoint'), value: props.record?.route, mono: true },
+  {
+    label: t('accounts.account'),
+    value: accountDisplay.value,
+    mono: true,
+    fullWidth: true,
+  },
+  {
+    label: t('usage.request.statusCode'),
+    value: props.record?.statusCode,
+    mono: true,
+  },
+  {
+    label: t('usage.request.message'),
+    value: props.record?.message,
+  },
+  {
+    label: t('usage.fields.time'),
+    value: props.record?.createdAtDisplay,
+    mono: true,
+  },
+  {
+    label: t('usage.fields.endpoint'),
+    value: props.record?.route,
+    mono: true,
+  },
 ])
 const overviewItems = computed(() => [
-  { label: t('usage.error.clientTransfer'), value: usageTransportType(props.record?.clientTransport), mono: true },
-  { label: t('usage.error.upstreamTransport'), value: usageTransportType(props.record?.upstreamTransport), mono: true },
-  { label: t('usage.latency.totalLatency'), value: props.record?.latencyMsDisplay, mono: true },
-  { label: t('usage.request.upstreamTimeConsumption'), value: latencyDetails.value?.upstreamDisplay ?? '—', mono: true },
+  {
+    label: t('usage.error.clientTransfer'),
+    value: usageTransportType(props.record?.clientTransport),
+    mono: true,
+  },
+  {
+    label: t('usage.error.upstreamTransport'),
+    value: usageTransportType(props.record?.upstreamTransport),
+    mono: true,
+  },
+  {
+    label: t('usage.latency.totalLatency'),
+    value: props.record?.latencyMsDisplay,
+    mono: true,
+  },
+  {
+    label: t('usage.request.upstreamTimeConsumption'),
+    value: latencyDetails.value?.upstreamDisplay ?? '—',
+    mono: true,
+  },
   {
     label: t('usage.status.firstOutputWaiting'),
     value: latencyDetails.value?.firstOutputDisplay ?? '—',
     mono: true,
   },
-  { label: t('usage.tokens.totalTokens'), value: tokenDetails.value?.totalTokensDisplay, mono: true },
+  {
+    label: t('usage.tokens.totalTokens'),
+    value: tokenDetails.value?.totalTokensDisplay,
+    mono: true,
+  },
 ])
 
 const modelRouteItems = computed(() => [
-  { label: t('usage.fields.endpoint'), value: props.record?.route, mono: true },
-  { label: t('usage.fields.reasoningEffort'), value: props.record ? usageReasoningEffort(props.record) : '—' },
-  { label: t('usage.error.requestModel'), value: modelDisplay.value.primary, mono: true },
+  {
+    label: t('usage.fields.endpoint'),
+    value: props.record?.route,
+    mono: true,
+  },
+  {
+    label: t('usage.fields.reasoningEffort'),
+    value: props.record
+      ? usageReasoningEffort(props.record)
+      : '—',
+  },
+  {
+    label: t('usage.error.requestModel'),
+    value: modelDisplay.value.primary,
+    mono: true,
+  },
   {
     label: t('usage.error.upstreamModel'),
     value: modelDisplay.value.secondary || props.record?.upstreamModel,
     mono: true,
   },
-  { label: t('usage.request.storageModel'), value: props.record?.model, mono: true },
+  {
+    label: t('usage.request.storageModel'),
+    value: props.record?.model,
+    mono: true,
+  },
 ])
 
 const clientUpstreamItems = computed(() => [
-  { label: t('usage.request.clientIp'), value: props.record ? usageClientIp(props.record) : '—', mono: true },
-  { label: t('usage.billing.serviceLevel'), value: props.record?.serviceTier, mono: true },
-  { label: t('usage.request.eventType'), value: props.record?.kind, mono: true },
-  { label: t('usage.request.trySerialNumber'), value: finalAttemptIndex.value },
+  {
+    label: t('usage.request.clientIp'),
+    value: props.record
+      ? usageClientIp(props.record)
+      : '—',
+    mono: true,
+  },
+  {
+    label: t('usage.billing.serviceLevel'),
+    value: props.record?.serviceTier,
+    mono: true,
+  },
+  {
+    label: t('usage.request.eventType'),
+    value: props.record?.kind,
+    mono: true,
+  },
+  {
+    label: t('usage.request.trySerialNumber'),
+    value: finalAttemptIndex.value,
+  },
   {
     label: 'User-Agent',
-    value: props.record ? usageUserAgent(props.record) : '',
+    value: props.record
+      ? usageUserAgent(props.record)
+      : '',
     mono: true,
     fullWidth: true,
   },
 ])
 
 const identifierItems = computed(() => [
-  { label: t('usage.error.requestId'), value: props.record?.requestId, mono: true, wrap: true, fullWidth: true },
-  { label: t('usage.error.responseId'), value: props.record?.responseId, mono: true, wrap: true },
-  { label: t('usage.error.upstreamRequestId'), value: props.record?.upstreamRequestId, mono: true, wrap: true },
-  { label: t('usage.request.accountId'), value: props.record?.accountId, mono: true, wrap: true },
-  { label: t('usage.error.clientKeyId'), value: props.record?.clientApiKeyId, mono: true, wrap: true },
+  {
+    label: t('usage.error.requestId'),
+    value: props.record?.requestId,
+    mono: true,
+    wrap: true,
+    fullWidth: true,
+  },
+  {
+    label: t('usage.error.responseId'),
+    value: props.record?.responseId,
+    mono: true,
+    wrap: true,
+  },
+  {
+    label: t('usage.error.upstreamRequestId'),
+    value: props.record?.upstreamRequestId,
+    mono: true,
+    wrap: true,
+  },
+  {
+    label: t('usage.request.accountId'),
+    value: props.record?.accountId,
+    mono: true,
+    wrap: true,
+  },
+  {
+    label: t('usage.error.clientKeyId'),
+    value: props.record?.clientApiKeyId,
+    mono: true,
+    wrap: true,
+  },
 ])
 
 interface AttemptRow {
@@ -122,14 +232,53 @@ interface AttemptRow {
 }
 
 const attemptColumns = computed(() => (defineTableColumns<AttemptRow>([
-  { key: 'attemptIndex', label: t('usage.request.serialNumber'), kind: 'index' },
-  { key: 'outcome', label: t('usage.request.result'), kind: 'status', size: 'sm' },
-  { key: 'provider', label: t('usage.error.platform'), kind: 'meta', size: 'sm' },
-  { key: 'model', label: t('usage.fields.model'), kind: 'mono', size: 'lg' },
-  { key: 'transport', label: t('usage.diagnostics.transport'), kind: 'status', size: 'md' },
-  { key: 'statusCode', label: t('common.fields.status'), kind: 'status', size: 'sm' },
-  { key: 'accountLabel', label: t('accounts.account'), kind: 'mono', size: '2xl' },
-  { key: 'latencyMs', label: t('usage.error.duration'), kind: 'numeric', size: 'sm' },
+  {
+    key: 'attemptIndex',
+    label: t('usage.request.serialNumber'),
+    kind: 'index',
+  },
+  {
+    key: 'outcome',
+    label: t('usage.request.result'),
+    kind: 'status',
+    size: 'sm',
+  },
+  {
+    key: 'provider',
+    label: t('usage.error.platform'),
+    kind: 'meta',
+    size: 'sm',
+  },
+  {
+    key: 'model',
+    label: t('usage.fields.model'),
+    kind: 'mono',
+    size: 'lg',
+  },
+  {
+    key: 'transport',
+    label: t('usage.diagnostics.transport'),
+    kind: 'status',
+    size: 'md',
+  },
+  {
+    key: 'statusCode',
+    label: t('common.fields.status'),
+    kind: 'status',
+    size: 'sm',
+  },
+  {
+    key: 'accountLabel',
+    label: t('accounts.account'),
+    kind: 'mono',
+    size: '2xl',
+  },
+  {
+    key: 'latencyMs',
+    label: t('usage.error.duration'),
+    kind: 'numeric',
+    size: 'sm',
+  },
 ])))
 
 const attemptRows = computed<AttemptRow[]>(() =>
@@ -150,39 +299,120 @@ const attemptRows = computed<AttemptRow[]>(() =>
 const billingItems = computed(() => {
   const value = billing.value
   if (!value) {
-    return [{
-      label: t('usage.billing.totalCost'),
-      value: props.record ? usageBillingText(props.record) : '—',
-      mono: true,
-    }]
+    return [
+      {
+        label: t('usage.billing.totalCost'),
+        value: props.record
+          ? usageBillingText(props.record)
+          : '—',
+        mono: true,
+      },
+    ]
   }
 
   return [
-    { label: t('usage.billing.totalCost'), value: value.totalAmountDisplay, mono: true },
+    {
+      label: t('usage.billing.totalCost'),
+      value: value.totalAmountDisplay,
+      mono: true,
+    },
     ...(value.image
       ? [
-          { label: t('usage.billing.imageInputFee'), value: value.image.inputAmountDisplay, mono: true },
-          { label: t('usage.billing.imageCachingCharges'), value: value.image.cacheReadAmountDisplay, mono: true },
-          { label: t('usage.billing.imageInputUnitPrice'), value: value.image.inputPriceDisplay, mono: true },
-          { label: t('usage.billing.imageCacheUnitPrice'), value: value.image.cacheReadPriceDisplay, mono: true },
+          {
+            label: t('usage.billing.imageInputFee'),
+            value: value.image.inputAmountDisplay,
+            mono: true,
+          },
+          {
+            label: t('usage.billing.imageCachingCharges'),
+            value: value.image.cacheReadAmountDisplay,
+            mono: true,
+          },
+          {
+            label: t('usage.billing.imageInputUnitPrice'),
+            value: value.image.inputPriceDisplay,
+            mono: true,
+          },
+          {
+            label: t('usage.billing.imageCacheUnitPrice'),
+            value: value.image.cacheReadPriceDisplay,
+            mono: true,
+          },
         ]
       : []),
-    { label: value.image ? t('usage.request.textInput') : t('usage.request.input'), value: value.inputAmountDisplay, mono: true },
-    { label: value.image ? t('usage.request.imageOutput') : t('usage.metrics.output'), value: value.outputAmountDisplay, mono: true },
-    { label: value.image ? t('usage.request.textCacheRead') : t('usage.request.cacheRead'), value: value.cacheReadAmountDisplay, mono: true },
-    { label: t('usage.request.cacheWrites'), value: value.cacheWriteAmountDisplay, mono: true },
-    { label: t('usage.billing.standardFee'), value: value.standardAmountDisplay, mono: true },
-    { label: value.image ? t('usage.billing.textInputUnitPrice') : t('usage.billing.inputUnitPrice'), value: value.inputPriceDisplay, mono: true },
-    { label: value.image ? t('usage.billing.imageOutputUnitPrice') : t('usage.billing.outputUnitPrice'), value: value.outputPriceDisplay, mono: true },
-    { label: value.image ? t('usage.request.textCacheUnitPrice') : t('usage.request.cacheUnitPrice'), value: value.cacheReadPriceDisplay, mono: true },
-    { label: t('usage.billing.cacheWriteUnitPrice'), value: value.cacheWritePriceDisplay, mono: true },
-    { label: t('usage.billing.serviceLevel'), value: value.serviceTierDisplay },
-    { label: t('settings.pricing.multiplier'), value: value.multiplierDisplay, mono: true },
+    {
+      label: value.image
+        ? t('usage.request.textInput')
+        : t('usage.request.input'),
+      value: value.inputAmountDisplay,
+      mono: true,
+    },
+    {
+      label: value.image
+        ? t('usage.request.imageOutput')
+        : t('usage.metrics.output'),
+      value: value.outputAmountDisplay,
+      mono: true,
+    },
+    {
+      label: value.image
+        ? t('usage.request.textCacheRead')
+        : t('usage.request.cacheRead'),
+      value: value.cacheReadAmountDisplay,
+      mono: true,
+    },
+    {
+      label: t('usage.request.cacheWrites'),
+      value: value.cacheWriteAmountDisplay,
+      mono: true,
+    },
+    {
+      label: t('usage.billing.standardFee'),
+      value: value.standardAmountDisplay,
+      mono: true,
+    },
+    {
+      label: value.image
+        ? t('usage.billing.textInputUnitPrice')
+        : t('usage.billing.inputUnitPrice'),
+      value: value.inputPriceDisplay,
+      mono: true,
+    },
+    {
+      label: value.image
+        ? t('usage.billing.imageOutputUnitPrice')
+        : t('usage.billing.outputUnitPrice'),
+      value: value.outputPriceDisplay,
+      mono: true,
+    },
+    {
+      label: value.image
+        ? t('usage.request.textCacheUnitPrice')
+        : t('usage.request.cacheUnitPrice'),
+      value: value.cacheReadPriceDisplay,
+      mono: true,
+    },
+    {
+      label: t('usage.billing.cacheWriteUnitPrice'),
+      value: value.cacheWritePriceDisplay,
+      mono: true,
+    },
+    {
+      label: t('usage.billing.serviceLevel'),
+      value: value.serviceTierDisplay,
+    },
+    {
+      label: t('settings.pricing.multiplier'),
+      value: value.multiplierDisplay,
+      mono: true,
+    },
   ]
 })
 
 function tokenCount(value: number | null | undefined): number | null {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null
 }
 
 function remainingTokenCount(total: number | null | undefined, ...parts: (number | null | undefined)[]): number | null {
@@ -198,7 +428,9 @@ function remainingTokenCount(total: number | null | undefined, ...parts: (number
     remainder -= knownPart
   }
   // 未上报或子项越界时不能补零，否则环图会伪造完整的占比
-  return remainder >= 0 ? remainder : null
+  return remainder >= 0
+    ? remainder
+    : null
 }
 
 const tokenChartItems = computed(() => {
@@ -209,13 +441,17 @@ const tokenChartItems = computed(() => {
     {
       label: t('usage.metrics.newInput'),
       value: freshInputTokens,
-      display: freshInputTokens === null ? '—' : formatInteger(freshInputTokens),
+      display: freshInputTokens === null
+        ? '—'
+        : formatInteger(freshInputTokens),
       color: palette.value.info,
     },
     {
       label: t('usage.request.nonInferentialOutput'),
       value: nonReasoningOutputTokens,
-      display: nonReasoningOutputTokens === null ? '—' : formatInteger(nonReasoningOutputTokens),
+      display: nonReasoningOutputTokens === null
+        ? '—'
+        : formatInteger(nonReasoningOutputTokens),
       color: palette.value.success,
     },
     {
@@ -241,23 +477,37 @@ const tokenChartItems = computed(() => {
 const tokenChartComplete = computed(() => tokenChartItems.value.every(item => item.value !== null))
 const tokenDetailItems = computed(() => [
   ...tokenChartItems.value,
-  { label: t('usage.request.totalOutput'), display: tokenDetails.value?.outputTokensDisplay ?? '—', color: null },
+  {
+    label: t('usage.request.totalOutput'),
+    display: tokenDetails.value?.outputTokensDisplay ?? '—',
+    color: null,
+  },
 ])
 
 const tokenDonutOption = computed<EChartsOption>(() => {
   const items = tokenChartComplete.value
-    ? tokenChartItems.value.flatMap(item => item.value !== null && item.value > 0 ? [{ ...item, value: item.value }] : [])
+    ? tokenChartItems.value.flatMap(item => item.value !== null && item.value > 0
+        ? [
+            { ...item, value: item.value },
+          ]
+        : [])
     : []
 
   return {
     tooltip: {
       trigger: 'item',
-      ...chartTooltipStyle(palette.value, { padding: [9, 12] }),
+      ...chartTooltipStyle(palette.value, {
+        padding: [9, 12],
+      }),
       formatter: (params: unknown) => {
         if (typeof params !== 'object' || params === null)
           return ''
-        const name = 'name' in params && typeof params.name === 'string' ? params.name : ''
-        const marker = 'marker' in params && typeof params.marker === 'string' ? params.marker : ''
+        const name = 'name' in params && typeof params.name === 'string'
+          ? params.name
+          : ''
+        const marker = 'marker' in params && typeof params.marker === 'string'
+          ? params.marker
+          : ''
         const item = tokenChartItems.value.find(entry => entry.label === name)
         if (!item)
           return ''

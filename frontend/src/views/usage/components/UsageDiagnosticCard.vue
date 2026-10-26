@@ -27,12 +27,30 @@ type Diagnostics = Omit<Awaited<ReturnType<typeof getUsageRecordInsightsDiagnost
 const dimension = defineModel('dimension', { type: String, required: true })
 
 const dimensionOptions = computed(() => ([
-  { label: t('usage.fields.model'), value: 'model' },
-  { label: t('accounts.account'), value: 'account' },
-  { label: t('usage.diagnostics.key'), value: 'apiKey' },
-  { label: t('usage.fields.upstream'), value: 'provider' },
-  { label: t('usage.diagnostics.transport'), value: 'transport' },
-  { label: t('usage.filters.error'), value: 'failureClass' },
+  {
+    label: t('usage.fields.model'),
+    value: 'model',
+  },
+  {
+    label: t('accounts.account'),
+    value: 'account',
+  },
+  {
+    label: t('usage.diagnostics.key'),
+    value: 'apiKey',
+  },
+  {
+    label: t('usage.fields.upstream'),
+    value: 'provider',
+  },
+  {
+    label: t('usage.diagnostics.transport'),
+    value: 'transport',
+  },
+  {
+    label: t('usage.filters.error'),
+    value: 'failureClass',
+  },
 ]))
 
 const resultDimension = computed(() => props.diagnostics.dimension || dimension.value)
@@ -58,7 +76,13 @@ const diagnosticColumns = computed(() => defineTableColumns<DiagnosticDisplayIte
   },
   ...(resultDimension.value === 'account'
     ? defineTableColumns<DiagnosticDisplayItem>([
-        { key: 'accountPlanType', label: t('usage.fields.subscription'), kind: 'status', size: 'sm', fixedWidth: true },
+        {
+          key: 'accountPlanType',
+          label: t('usage.fields.subscription'),
+          kind: 'status',
+          size: 'sm',
+          fixedWidth: true,
+        },
       ])
     : []),
   {
@@ -73,7 +97,12 @@ const diagnosticColumns = computed(() => defineTableColumns<DiagnosticDisplayIte
     kind: 'numeric',
     size: 'xs',
   },
-  { key: 'firstTokenP95Ms', label: t('usage.diagnostics.performance'), kind: 'numeric', size: 'lg' },
+  {
+    key: 'firstTokenP95Ms',
+    label: t('usage.diagnostics.performance'),
+    kind: 'numeric',
+    size: 'lg',
+  },
   {
     key: 'estimatedCost',
     label: t('usage.fields.cost'),
@@ -97,7 +126,9 @@ const hasData = computed(() => !props.loading && displayItems.value.length > 0)
 function diagnosticNameDisplay(name: string) {
   const raw = name.trim() || t('common.values.unknown')
   const full
-    = resultDimension.value === 'transport' ? ({ websocket: 'WS', http_sse: 'SSE' }[raw] ?? raw) : raw
+    = resultDimension.value === 'transport'
+      ? ({ websocket: 'WS', http_sse: 'SSE' }[raw] ?? raw)
+      : raw
   if (resultDimension.value !== 'model' && resultDimension.value !== 'account') {
     return { primary: full, secondary: '', full }
   }

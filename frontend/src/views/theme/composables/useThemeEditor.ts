@@ -79,7 +79,12 @@ export function useThemeEditor() {
   const dirty = computed(() => modificationCount.value > 0)
 
   watch(
-    [themeMode, themeColor, customThemeColor, themeCustomization],
+    [
+      themeMode,
+      themeColor,
+      customThemeColor,
+      themeCustomization,
+    ],
     () => {
       const hadUnsavedChanges = dirty.value
       saved.value = createStoreDraft()
@@ -125,7 +130,9 @@ export function useThemeEditor() {
 
   function setMode(mode: ThemeMode) {
     draft.value = { ...draft.value, mode }
-    previewTheme.value = mode === 'system' ? effectiveTheme.value : mode
+    previewTheme.value = mode === 'system'
+      ? effectiveTheme.value
+      : mode
   }
 
   function setSeedColor(key: ColorSeedKey, color: string) {
@@ -142,11 +149,15 @@ export function useThemeEditor() {
   }
 
   function resetSeed(key: keyof ThemeSeedOverrides) {
-    const nextSeed = { ...(draft.value.customization.seed ?? {}) }
+    const nextSeed = {
+      ...(draft.value.customization.seed ?? {}),
+    }
     delete nextSeed[key]
     setCustomization({
       ...draft.value.customization,
-      seed: Object.keys(nextSeed).length > 0 ? nextSeed : undefined,
+      seed: Object.keys(nextSeed).length > 0
+        ? nextSeed
+        : undefined,
     })
   }
 
@@ -163,11 +174,15 @@ export function useThemeEditor() {
   }
 
   function resetComponentNumber(key: ComponentNumberKey) {
-    const component = { ...(draft.value.customization.component ?? {}) }
+    const component = {
+      ...(draft.value.customization.component ?? {}),
+    }
     delete component[key]
     setCustomization({
       ...draft.value.customization,
-      component: Object.keys(component).length > 0 ? component : undefined,
+      component: Object.keys(component).length > 0
+        ? component
+        : undefined,
     })
   }
 
@@ -182,11 +197,15 @@ export function useThemeEditor() {
   }
 
   function resetTokenOverride(name: ThemeTokenName) {
-    const tokenOverrides = { ...(draft.value.customization.tokenOverrides ?? {}) }
+    const tokenOverrides = {
+      ...(draft.value.customization.tokenOverrides ?? {}),
+    }
     delete tokenOverrides[name]
     setCustomization({
       ...draft.value.customization,
-      tokenOverrides: Object.keys(tokenOverrides).length > 0 ? tokenOverrides : undefined,
+      tokenOverrides: Object.keys(tokenOverrides).length > 0
+        ? tokenOverrides
+        : undefined,
     })
   }
 
@@ -235,7 +254,9 @@ export function useThemeEditor() {
   }
 
   function resolvedDraftTheme(value: ThemeEditorDraft): ThemeName {
-    return value.mode === 'system' ? effectiveTheme.value : value.mode
+    return value.mode === 'system'
+      ? effectiveTheme.value
+      : value.mode
   }
 
   return {
@@ -282,9 +303,15 @@ function cloneDraft(value: ThemeEditorDraft): ThemeEditorDraft {
   return {
     ...value,
     customization: normalizeThemeCustomization({
-      seed: { ...(value.customization.seed ?? {}) },
-      component: { ...(value.customization.component ?? {}) },
-      tokenOverrides: { ...(value.customization.tokenOverrides ?? {}) },
+      seed: {
+        ...(value.customization.seed ?? {}),
+      },
+      component: {
+        ...(value.customization.component ?? {}),
+      },
+      tokenOverrides: {
+        ...(value.customization.tokenOverrides ?? {}),
+      },
     }),
   }
 }
@@ -298,21 +325,30 @@ function countDraftChanges(saved: ThemeEditorDraft, draft: ThemeEditorDraft) {
 
   const savedSeed = saved.customization.seed ?? {}
   const draftSeed = draft.customization.seed ?? {}
-  for (const key of new Set([...Object.keys(savedSeed), ...Object.keys(draftSeed)])) {
+  for (const key of new Set([
+    ...Object.keys(savedSeed),
+    ...Object.keys(draftSeed),
+  ])) {
     if (savedSeed[key as keyof ThemeSeedOverrides] !== draftSeed[key as keyof ThemeSeedOverrides])
       count += 1
   }
 
   const savedTokens = saved.customization.tokenOverrides ?? {}
   const draftTokens = draft.customization.tokenOverrides ?? {}
-  for (const key of new Set([...Object.keys(savedTokens), ...Object.keys(draftTokens)])) {
+  for (const key of new Set([
+    ...Object.keys(savedTokens),
+    ...Object.keys(draftTokens),
+  ])) {
     if (savedTokens[key as ThemeTokenName] !== draftTokens[key as ThemeTokenName])
       count += 1
   }
 
   const savedComponent = saved.customization.component ?? {}
   const draftComponent = draft.customization.component ?? {}
-  for (const key of new Set([...Object.keys(savedComponent), ...Object.keys(draftComponent)])) {
+  for (const key of new Set([
+    ...Object.keys(savedComponent),
+    ...Object.keys(draftComponent),
+  ])) {
     if (
       savedComponent[key as keyof ThemeComponentOverrides]
       !== draftComponent[key as keyof ThemeComponentOverrides]

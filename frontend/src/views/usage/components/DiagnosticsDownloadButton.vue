@@ -12,7 +12,9 @@ function download() {
   const id = props.requestId || props.errorId
   if (!id || !props.active)
     return
-  const target = props.requestId ? { requestId: props.requestId } : { errorId: id }
+  const target = props.requestId
+    ? { requestId: props.requestId }
+    : { errorId: id }
   window.open(getDiagnosticsDownloadUrl(target), '_blank', 'noopener,noreferrer')
 }
 </script>

@@ -36,17 +36,23 @@ const emailText = computed(() => accountIdentityLabel(props.account))
 const visibleNotes = computed(() => props.showNotes ? props.account.notes : undefined)
 
 const displayTitle = computed(() =>
-  visibleNotes.value || props.titleMode === 'email' || props.account.authenticationKind === 'api_key' ? emailText.value : emailText.value.split('@')[0],
+  visibleNotes.value || props.titleMode === 'email' || props.account.authenticationKind === 'api_key'
+    ? emailText.value
+    : emailText.value.split('@')[0],
 )
 
 const secondaryText = computed(() =>
-  props.titleMode === 'email' || props.account.authenticationKind === 'api_key' ? null : emailText.value,
+  props.titleMode === 'email' || props.account.authenticationKind === 'api_key'
+    ? null
+    : emailText.value,
 )
 
 const initial = computed(() => displayTitle.value.slice(0, 1).toUpperCase())
 
 const avatarSizeClass = computed(() =>
-  props.size === 'lg' ? 'size-10 text-cp-xl' : 'size-9 text-cp',
+  props.size === 'lg'
+    ? 'size-10 text-cp-xl'
+    : 'size-9 text-cp',
 )
 
 const secondaryClass = computed(() =>
@@ -55,7 +61,9 @@ const secondaryClass = computed(() =>
     : 'mt-0.5 font-mono text-cp-xs text-cp-text-quaternary',
 )
 
-const metaGapClass = computed(() => props.metaSize === 'xs' ? 'gap-1' : 'gap-1.5')
+const metaGapClass = computed(() => props.metaSize === 'xs'
+  ? 'gap-1'
+  : 'gap-1.5')
 
 const avatarToneClass = computed(() => {
   const identity = props.account.id || props.account.email || displayTitle.value

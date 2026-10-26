@@ -53,7 +53,9 @@ export function usePluginVersions({ catalog, instances, busyInstanceId, refresh,
         target: { artifactSha256: artifact.metadata.sha256, expectedRevision: instance.revision },
       }, { silent: true })
       showVersionSwitch.value = false
-      ZNotification.success({ message: t('plugins.switchedTo', { version: artifact.metadata.version }) })
+      ZNotification.success({
+        message: t('plugins.switchedTo', { version: artifact.metadata.version }),
+      })
       await refresh(true)
       onApplied()
     }
@@ -114,9 +116,14 @@ export function usePluginVersions({ catalog, instances, busyInstanceId, refresh,
       return
     busyInstanceId.value = instance.id
     try {
-      await rollbackPluginInstance({ id: instance.id, target: { artifactSha256, expectedRevision: plan.instanceRevision } }, { silent: true })
+      await rollbackPluginInstance({
+        id: instance.id,
+        target: { artifactSha256, expectedRevision: plan.instanceRevision },
+      }, { silent: true })
       showRollback.value = false
-      ZNotification.success({ message: t('plugins.rollback.completed', { version: target.version }) })
+      ZNotification.success({
+        message: t('plugins.rollback.completed', { version: target.version }),
+      })
       await refresh(true)
     }
     catch (error) {
@@ -136,5 +143,17 @@ export function usePluginVersions({ catalog, instances, busyInstanceId, refresh,
 
   onScopeDispose(() => rollbackController?.abort())
 
-  return { showRollback, rollbackInstance, rollbackPlan, loadingRollback, pendingVersionSwitch, showVersionSwitch, requestVersionSwitch, confirmVersionSwitch, applyVersionSwitch, openRollback, confirmRollback }
+  return {
+    showRollback,
+    rollbackInstance,
+    rollbackPlan,
+    loadingRollback,
+    pendingVersionSwitch,
+    showVersionSwitch,
+    requestVersionSwitch,
+    confirmVersionSwitch,
+    applyVersionSwitch,
+    openRollback,
+    confirmRollback,
+  }
 }

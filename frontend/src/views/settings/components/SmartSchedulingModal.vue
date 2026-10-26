@@ -19,19 +19,55 @@ const { t } = useI18n({ useScope: 'global' })
 const open = defineModel<boolean>({ required: true })
 const formId = useId()
 const fields = computed(() => ([
-  { key: 'loadWeight', label: t('settings.scheduling.weights.load'), help: t('settings.scheduling.weights.loadHelp') },
-  { key: 'quotaWeight', label: t('settings.scheduling.weights.quota'), help: t('settings.scheduling.weights.quotaHelp') },
-  { key: 'healthWeight', label: t('settings.scheduling.weights.health'), help: t('settings.scheduling.weights.healthHelp') },
-  { key: 'latencyWeight', label: t('settings.scheduling.weights.latency'), help: t('settings.scheduling.weights.latencyHelp') },
-  { key: 'resetWeight', label: t('settings.scheduling.weights.reset'), help: t('settings.scheduling.weights.resetHelp') },
-  { key: 'queueWeight', label: t('settings.scheduling.weights.queue'), help: t('settings.scheduling.weights.queueHelp') },
+  {
+    key: 'loadWeight',
+    label: t('settings.scheduling.weights.load'),
+    help: t('settings.scheduling.weights.loadHelp'),
+  },
+  {
+    key: 'quotaWeight',
+    label: t('settings.scheduling.weights.quota'),
+    help: t('settings.scheduling.weights.quotaHelp'),
+  },
+  {
+    key: 'healthWeight',
+    label: t('settings.scheduling.weights.health'),
+    help: t('settings.scheduling.weights.healthHelp'),
+  },
+  {
+    key: 'latencyWeight',
+    label: t('settings.scheduling.weights.latency'),
+    help: t('settings.scheduling.weights.latencyHelp'),
+  },
+  {
+    key: 'resetWeight',
+    label: t('settings.scheduling.weights.reset'),
+    help: t('settings.scheduling.weights.resetHelp'),
+  },
+  {
+    key: 'queueWeight',
+    label: t('settings.scheduling.weights.queue'),
+    help: t('settings.scheduling.weights.queueHelp'),
+  },
 ] as const))
-const draft = reactive({ loadWeight: '', quotaWeight: '', healthWeight: '', latencyWeight: '', resetWeight: '', queueWeight: '' })
+const draft = reactive({
+  loadWeight: '',
+  quotaWeight: '',
+  healthWeight: '',
+  latencyWeight: '',
+  resetWeight: '',
+  queueWeight: '',
+})
 const submitted = shallowRef(false)
 const errors = computed(() => Object.fromEntries(fields.value.map(({ key }) => {
   const value = Number(draft[key])
   const valid = draft[key].trim() && Number.isFinite(value) && value >= 0 && value <= 10 && Math.round(value * 10) / 10 === value
-  return [key, valid ? undefined : t('settings.scheduling.enterValueFromToUpToOne')]
+  return [
+    key,
+    valid
+      ? undefined
+      : t('settings.scheduling.enterValueFromToUpToOne'),
+  ]
 })))
 const emptyWeights = computed(() => fields.value.every(({ key }) => Number(draft[key]) === 0))
 

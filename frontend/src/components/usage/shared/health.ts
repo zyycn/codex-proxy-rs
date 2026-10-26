@@ -11,11 +11,26 @@ interface DashboardHealthStatusMeta {
 }
 
 export const healthLegend = computed(() => ([
-  { status: 'no_data', label: t('usage.noValidSample') },
-  { status: 'unavailable', label: t('usage.notReachable') },
-  { status: 'unstable', label: t('usage.unstable') },
-  { status: 'low_sample', label: t('usage.lowSample') },
-  { status: 'stable', label: t('usage.stable') },
+  {
+    status: 'no_data',
+    label: t('usage.noValidSample'),
+  },
+  {
+    status: 'unavailable',
+    label: t('usage.notReachable'),
+  },
+  {
+    status: 'unstable',
+    label: t('usage.unstable'),
+  },
+  {
+    status: 'low_sample',
+    label: t('usage.lowSample'),
+  },
+  {
+    status: 'stable',
+    label: t('usage.stable'),
+  },
 ] satisfies { status: DashboardHealthStatus, label: string }[]))
 
 export const healthStatusMeta = computed<Record<DashboardHealthStatus, DashboardHealthStatusMeta>>(() => ({

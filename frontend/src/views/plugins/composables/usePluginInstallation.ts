@@ -58,7 +58,9 @@ export function usePluginInstallation({ onInstalled, onSourceSaved }: Installati
   function openVersionInstall(plugin: InstalledPlugin) {
     const source = plugin.source
     if (!source || source.source.kind === 'builtin') {
-      ZNotification.warning({ message: t('plugins.installation.noSource') })
+      ZNotification.warning({
+        message: t('plugins.installation.noSource'),
+      })
       return
     }
     openInstall(source.source.kind)
@@ -92,7 +94,9 @@ export function usePluginInstallation({ onInstalled, onSourceSaved }: Installati
       updateSource.value = source
       onSourceSaved(source)
       return true
-    }, { onError: error => notifyPluginError(t('plugins.installation.sourceSaveFailed'), error) })
+    }, {
+      onError: error => notifyPluginError(t('plugins.installation.sourceSaveFailed'), error),
+    })
     return result === true
   }
 
@@ -129,7 +133,9 @@ export function usePluginInstallation({ onInstalled, onSourceSaved }: Installati
   async function installArtifact(request: PluginInstallSelection) {
     const verified = verifiedArtifact.value
     if (!verified || verified.requestKey !== pluginInstallSelectionKey(request)) {
-      ZNotification.warning({ message: t('plugins.installation.verificationRequired') })
+      ZNotification.warning({
+        message: t('plugins.installation.verificationRequired'),
+      })
       return
     }
     const result = await action.run(async () => {
@@ -150,7 +156,13 @@ export function usePluginInstallation({ onInstalled, onSourceSaved }: Installati
     if (!result)
       return
     showInstall.value = false
-    ZNotification.success({ message: result.configurationRequired ? t('plugins.installation.installedNeedsConfiguration') : result.defaultInstanceId ? t('plugins.installation.preparing') : t('plugins.installation.pluginVersionInstalled') })
+    ZNotification.success({
+      message: result.configurationRequired
+        ? t('plugins.installation.installedNeedsConfiguration')
+        : result.defaultInstanceId
+          ? t('plugins.installation.preparing')
+          : t('plugins.installation.pluginVersionInstalled'),
+    })
     await onInstalled(result)
   }
 
@@ -173,20 +185,30 @@ export function usePluginInstallation({ onInstalled, onSourceSaved }: Installati
       // 使用检查时的实例 revision，避免下载期间的设置变更被升级覆盖。
       await onInstalled(result, instance)
       return true
-    }, { onError: error => notifyPluginError(t('plugins.installation.pluginUpgradeFailed'), error) })
+    }, {
+      onError: error => notifyPluginError(t('plugins.installation.pluginUpgradeFailed'), error),
+    })
     return completed === true
   }
 
   async function acceptArtifact(artifact: PluginArtifact) {
     if (acceptanceArtifact.value?.metadata.sha256 !== artifact.metadata.sha256) {
-      ZNotification.warning({ message: t('plugins.installation.versionRequired') })
+      ZNotification.warning({
+        message: t('plugins.installation.versionRequired'),
+      })
       return
     }
     const result = await action.run(() => acceptPluginArtifact({ sha256: artifact.metadata.sha256 }, { silent: true }))
     if (!result)
       return
     showInstall.value = false
-    ZNotification.success({ message: result.configurationRequired ? t('plugins.installation.installedNeedsConfiguration') : result.defaultInstanceId ? t('plugins.installation.preparing') : t('plugins.installation.pluginVersionInstalled') })
+    ZNotification.success({
+      message: result.configurationRequired
+        ? t('plugins.installation.installedNeedsConfiguration')
+        : result.defaultInstanceId
+          ? t('plugins.installation.preparing')
+          : t('plugins.installation.pluginVersionInstalled'),
+    })
     await onInstalled(result)
   }
 
@@ -209,8 +231,12 @@ export function usePluginInstallation({ onInstalled, onSourceSaved }: Installati
         : await verifyRemotePlugin(request, options)
       if (updateSource.value && artifact.metadata.pluginId !== updateSource.value.pluginId)
         throw new Error(t('plugins.installation.packageMismatch'))
-      if (verificationController === controller)
-        verifiedArtifact.value = { requestKey: pluginInstallSelectionKey(request), artifact }
+      if (verificationController === controller) {
+        verifiedArtifact.value = {
+          requestKey: pluginInstallSelectionKey(request),
+          artifact,
+        }
+      }
     }
     catch (error) {
       if (verificationController === controller)

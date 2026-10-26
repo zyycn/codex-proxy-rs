@@ -74,15 +74,51 @@ const pluginMenuId = useId()
 const pluginGroupExpanded = shallowRef(route.path.startsWith('/plugins'))
 
 const navItems = computed(() => ([
-  { label: t('navigation.overview'), icon: LayoutDashboard, path: '/' },
-  { label: t('navigation.accounts'), icon: Users, path: '/accounts' },
-  { label: t('navigation.proxies'), icon: Network, path: '/proxies' },
-  { label: t('navigation.groups'), icon: FolderTree, path: '/groups' },
-  { label: t('navigation.apiKeys'), icon: KeyRound, path: '/keys' },
-  { label: t('navigation.usage'), icon: ChartNoAxesColumn, path: '/usage' },
-  { label: t('navigation.plugins'), icon: Puzzle, path: '/plugins' },
-  { label: t('navigation.appearance'), icon: Palette, path: '/theme' },
-  { label: t('navigation.settings'), icon: Settings, path: '/settings' },
+  {
+    label: t('navigation.overview'),
+    icon: LayoutDashboard,
+    path: '/',
+  },
+  {
+    label: t('navigation.accounts'),
+    icon: Users,
+    path: '/accounts',
+  },
+  {
+    label: t('navigation.proxies'),
+    icon: Network,
+    path: '/proxies',
+  },
+  {
+    label: t('navigation.groups'),
+    icon: FolderTree,
+    path: '/groups',
+  },
+  {
+    label: t('navigation.apiKeys'),
+    icon: KeyRound,
+    path: '/keys',
+  },
+  {
+    label: t('navigation.usage'),
+    icon: ChartNoAxesColumn,
+    path: '/usage',
+  },
+  {
+    label: t('navigation.plugins'),
+    icon: Puzzle,
+    path: '/plugins',
+  },
+  {
+    label: t('navigation.appearance'),
+    icon: Palette,
+    path: '/theme',
+  },
+  {
+    label: t('navigation.settings'),
+    icon: Settings,
+    path: '/settings',
+  },
 ]))
 const pluginNavIndex = navItems.value.findIndex(item => item.path === '/plugins')
 const pluginMenuVisible = computed(() => pluginGroupExpanded.value && !isCollapsed.value)
@@ -106,15 +142,21 @@ const activeNavIndex = computed(() => {
   return Math.max(0, index)
 })
 const activeNavIndicatorStyle = computed(() => ({
-  transform: `translate3d(0, ${activeNavIndex.value * 58 + (activeNavIndex.value > pluginNavIndex ? pluginChildrenHeight.value : 0)}px, 0)`,
-  opacity: isActive('/plugins') && pluginMenuVisible.value ? 0 : 1,
+  transform: `translate3d(0, ${activeNavIndex.value * 58 + (activeNavIndex.value > pluginNavIndex
+    ? pluginChildrenHeight.value
+    : 0)}px, 0)`,
+  opacity: isActive('/plugins') && pluginMenuVisible.value
+    ? 0
+    : 1,
 }))
 const activePluginIndex = computed(() => route.name === 'plugins'
   ? 0
   : pluginPageViews.value.findIndex(isPluginViewActive) + 1)
 const activePluginIndicatorStyle = computed(() => ({
   transform: `translate3d(0, ${activePluginIndex.value * 44}px, 0)`,
-  opacity: isActive('/plugins') && pluginMenuVisible.value ? 1 : 0,
+  opacity: isActive('/plugins') && pluginMenuVisible.value
+    ? 1
+    : 0,
 }))
 const navFeedbackMuted = shallowRef(false)
 const { start: restoreNavFeedback, stop: stopNavFeedbackRestore } = useTimeoutFn(
@@ -153,7 +195,9 @@ function navigatePluginView(view: PluginManagementView) {
 
 function isPluginViewActive(view: PluginManagementView) {
   const value = route.params.instanceId
-  const routeInstanceId = Array.isArray(value) ? value[0] : value
+  const routeInstanceId = Array.isArray(value)
+    ? value[0]
+    : value
   return route.name === 'plugin-page' && routeInstanceId === view.target.instanceId
 }
 
@@ -162,7 +206,9 @@ function pluginViewLabel(view: PluginManagementView) {
   if (pluginViewNameCounts.value.get(title) === 1)
     return title
   const duplicateName = pluginPageViews.value.some(item => item !== view && item.name === view.name && item.pages[0]?.title === title)
-  return `${title} · ${duplicateName ? shortPluginInstanceId(view.target.instanceId) : view.name}`
+  return `${title} · ${duplicateName
+    ? shortPluginInstanceId(view.target.instanceId)
+    : view.name}`
 }
 
 function openSystemUpdate() {
@@ -184,11 +230,15 @@ const collapsedSidebarWidth = 88
 const expandedSidebarWidth = 251
 const sidebarWidth = computed(() => (isCollapsed.value ? collapsedSidebarWidth : expandedSidebarWidth))
 const brandLabelVisible = shallowRef(!isCollapsed.value)
-const themeToggleLabel = computed(() => (effectiveTheme.value === 'dark' ? t('appearance.switchToLight') : t('appearance.switchToDark')))
+const themeToggleLabel = computed(() => (effectiveTheme.value === 'dark'
+  ? t('appearance.switchToLight')
+  : t('appearance.switchToDark')))
 const versionText = computed(() => version.value?.version.trim() ?? '')
 const hasVersionLabel = computed(() => versionText.value.length > 0)
 const versionLabel = computed(() => `v${versionText.value}`)
-const updateButtonLabel = computed(() => (hasUpdate.value ? t('navigation.update.available') : t('navigation.update.open')))
+const updateButtonLabel = computed(() => (hasUpdate.value
+  ? t('navigation.update.available')
+  : t('navigation.update.open')))
 
 function prefersReducedMotion() {
   return preferredMotion.value === 'reduce'
@@ -204,14 +254,18 @@ function animateSidebarLabels(collapsed: boolean) {
   if (prefersReducedMotion()) {
     gsap.set(labels, {
       opacity: collapsed ? 0 : 1,
-      x: collapsed ? -6 : 0,
+      x: collapsed
+        ? -6
+        : 0,
     })
     return
   }
 
   gsap.to(labels, {
     opacity: collapsed ? 0 : 1,
-    x: collapsed ? -6 : 0,
+    x: collapsed
+      ? -6
+      : 0,
     duration: collapsed ? 0.16 : 0.2,
     ease: collapsed ? 'power2.in' : 'power3.out',
     stagger: collapsed ? 0 : 0.018,
@@ -295,7 +349,9 @@ function animateSidebarWidth(collapsed: boolean) {
 }
 
 function animateNavSignal() {
-  const signal = isActive('/plugins') && pluginMenuVisible.value ? pluginNavSignalEls.value?.[0] : navSignalEl.value
+  const signal = isActive('/plugins') && pluginMenuVisible.value
+    ? pluginNavSignalEls.value?.[0]
+    : navSignalEl.value
   if (!signal)
     return
 
@@ -371,7 +427,12 @@ watch(
 
 onBeforeUnmount(() => {
   stopNavFeedbackRestore()
-  const targets = [sidebarEl.value, brandLabelEl.value, navSignalEl.value, ...(pluginNavSignalEls.value ?? [])].filter((target): target is HTMLElement =>
+  const targets = [
+    sidebarEl.value,
+    brandLabelEl.value,
+    navSignalEl.value,
+    ...(pluginNavSignalEls.value ?? []),
+  ].filter((target): target is HTMLElement =>
     Boolean(target),
   )
   gsap.killTweensOf(targets)

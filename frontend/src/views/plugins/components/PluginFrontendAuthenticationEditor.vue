@@ -40,13 +40,21 @@ const keysFailed = shallowRef(false)
 let keyLoadController: AbortController | null = null
 
 const fallbackOptions = computed(() => ([
-  { label: t('plugins.frontendAuth.exclusiveCertification'), value: 'reject' },
-  { label: t('plugins.frontendAuth.fallbackApiKeyIfNoMatch'), value: 'delegate' },
+  {
+    label: t('plugins.frontendAuth.exclusiveCertification'),
+    value: 'reject',
+  },
+  {
+    label: t('plugins.frontendAuth.fallbackApiKeyIfNoMatch'),
+    value: 'delegate',
+  },
 ]))
 
 const keyOptions = computed(() => {
   const options = clientKeys.value.map(key => ({
-    label: `${key.name || key.prefix}${key.enabled ? '' : t('plugins.frontendAuth.disabled')}`,
+    label: `${key.name || key.prefix}${key.enabled
+      ? ''
+      : t('plugins.frontendAuth.disabled')}`,
     value: key.id,
     description: `${key.prefix} · ${key.id}`,
   }))
@@ -119,7 +127,9 @@ function enableAuthentication(enabled: boolean) {
         models: [],
         clientKeyIds: [],
         accountGroupIds: [],
-        identityBindings: [{ principal: '', clientKeyId: '' }],
+        identityBindings: [
+          { principal: '', clientKeyId: '' },
+        ],
       }
     : null
 }
@@ -148,7 +158,12 @@ function updateIdentity(index: number, update: Partial<PluginFrontendIdentityBin
   binding.value = {
     ...binding.value,
     identityBindings: binding.value.identityBindings.map((identity, identityIndex) =>
-      identityIndex === index ? { ...identity, ...update } : identity,
+      identityIndex === index
+        ? {
+            ...identity,
+            ...update,
+          }
+        : identity,
     ),
   }
 }
@@ -187,7 +202,9 @@ async function loadClientKeys() {
   catch (error: unknown) {
     if (!controller.signal.aborted) {
       keysFailed.value = true
-      ZNotification.error({ message: errorMessage(error, t('plugins.frontendAuth.failedToLoadClientKey')) })
+      ZNotification.error({
+        message: errorMessage(error, t('plugins.frontendAuth.failedToLoadClientKey')),
+      })
     }
   }
   finally {

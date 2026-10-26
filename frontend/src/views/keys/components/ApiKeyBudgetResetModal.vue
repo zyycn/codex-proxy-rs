@@ -19,14 +19,31 @@ const open = defineModel<boolean>({ default: false })
 const period = shallowRef('all')
 const { loading, run } = useAsyncAction()
 const periods = computed(() => ([
-  { label: t('common.values.all'), value: 'all' },
-  { label: t('keys.budgetReset.dailyQuota'), value: 'daily' },
-  { label: t('keys.budgetReset.weeklyQuota'), value: 'weekly' },
+  {
+    label: t('common.values.all'),
+    value: 'all',
+  },
+  {
+    label: t('keys.budgetReset.dailyQuota'),
+    value: 'daily',
+  },
+  {
+    label: t('keys.budgetReset.weeklyQuota'),
+    value: 'weekly',
+  },
 ]))
 const windows = computed(() => props.apiKey
   ? [
-      { value: 'daily', label: t('keys.budgetReset.dailyQuota'), used: props.apiKey.dailyUsedUsd },
-      { value: 'weekly', label: t('keys.budgetReset.weeklyQuota'), used: props.apiKey.weeklyUsedUsd },
+      {
+        value: 'daily',
+        label: t('keys.budgetReset.dailyQuota'),
+        used: props.apiKey.dailyUsedUsd,
+      },
+      {
+        value: 'weekly',
+        label: t('keys.budgetReset.weeklyQuota'),
+        used: props.apiKey.weeklyUsedUsd,
+      },
     ].map(window => ({ ...window, selected: period.value === 'all' || period.value === window.value }))
   : [])
 
@@ -43,7 +60,9 @@ async function resetBudget() {
   await run(async () => {
     await resetApiKeyBudget({ id: key.id, period: selectedPeriod })
     open.value = false
-    ZNotification.success({ message: t('keys.budgetReset.keyQuotaReset') })
+    ZNotification.success({
+      message: t('keys.budgetReset.keyQuotaReset'),
+    })
     emit('reset')
   })
 }

@@ -12,13 +12,27 @@ const props = defineProps<{ budget: KeyUsageBudget }>()
 const { t } = useI18n({ useScope: 'global' })
 
 const windows = computed(() => [
-  { label: t('usage.budget.todaySQuota'), limit: props.budget.dailyLimitUsd, used: props.budget.dailyUsedUsd, reset: props.budget.dailyResetsAt, resetDisplay: props.budget.dailyResetsAtDisplay },
-  { label: t('usage.budget.weeklyQuota'), limit: props.budget.weeklyLimitUsd, used: props.budget.weeklyUsedUsd, reset: props.budget.weeklyResetsAt, resetDisplay: props.budget.weeklyResetsAtDisplay },
+  {
+    label: t('usage.budget.todaySQuota'),
+    limit: props.budget.dailyLimitUsd,
+    used: props.budget.dailyUsedUsd,
+    reset: props.budget.dailyResetsAt,
+    resetDisplay: props.budget.dailyResetsAtDisplay,
+  },
+  {
+    label: t('usage.budget.weeklyQuota'),
+    limit: props.budget.weeklyLimitUsd,
+    used: props.budget.weeklyUsedUsd,
+    reset: props.budget.weeklyResetsAt,
+    resetDisplay: props.budget.weeklyResetsAtDisplay,
+  },
 ].map(window => ({
   ...window,
   limited: Number(window.limit) > 0,
   remaining: Math.max(0, Number(window.limit) - Number(window.used)),
-  percentage: Number(window.limit) > 0 ? Number(window.used) / Number(window.limit) * 100 : 0,
+  percentage: Number(window.limit) > 0
+    ? Number(window.used) / Number(window.limit) * 100
+    : 0,
 })))
 </script>
 

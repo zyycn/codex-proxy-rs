@@ -20,7 +20,9 @@ const preferredMotion = usePreferredReducedMotion()
 const heartbeatDot = useTemplateRef<HTMLElement>('heartbeatDot')
 const heartbeatRing = useTemplateRef<HTMLElement>('heartbeatRing')
 const statusLabel = computed(() =>
-  props.updatedAt ? t('dashboard.refresh.lastUpdated', { updatedAt: props.updatedAt }) : t('dashboard.refresh.waiting'),
+  props.updatedAt
+    ? t('dashboard.refresh.lastUpdated', { updatedAt: props.updatedAt })
+    : t('dashboard.refresh.waiting'),
 )
 
 function pulse() {

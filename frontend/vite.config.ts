@@ -14,13 +14,19 @@ export default defineConfig(({ mode }) => {
     base: '/',
     plugins: [
       vue(),
-      VueI18n({ include: fileURLToPath(new URL('./src/i18n/locales/**/*.json', import.meta.url)) }),
+      VueI18n({
+        include: fileURLToPath(new URL('./src/i18n/locales/**/*.json', import.meta.url)),
+      }),
       tailwindcss(),
-      CodexProxyUI({ source: sourceUi ? uiRoot : undefined }),
+      CodexProxyUI({
+        source: sourceUi ? uiRoot : undefined,
+      }),
       pluginBridge(),
     ],
     resolve: {
-      alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+      alias: {
+        '@': fileURLToPath(new URL('./src', import.meta.url)),
+      },
     },
     server: {
       port: 5173,

@@ -44,14 +44,18 @@ const releaseLabel = computed(() => {
   const release = profile.value?.release
   if (!release?.latestVersion)
     return t('dashboard.clientIdentity.notChecked')
-  return release.latestBuild ? `${release.latestVersion} · Build ${release.latestBuild}` : release.latestVersion
+  return release.latestBuild
+    ? `${release.latestVersion} · Build ${release.latestBuild}`
+    : release.latestVersion
 })
 
 const releaseStatus = computed(() => {
   const current = profile.value
   if (!current?.release) {
     return {
-      label: current?.attributes.some(item => item.key === 'version_policy' && item.value === 'fixed') ? t('dashboard.clientIdentity.customVersion') : t('dashboard.clientIdentity.active'),
+      label: current?.attributes.some(item => item.key === 'version_policy' && item.value === 'fixed')
+        ? t('dashboard.clientIdentity.customVersion')
+        : t('dashboard.clientIdentity.active'),
       title: t('dashboard.clientIdentity.activeDescription'),
       tone: 'bg-cp-info-container text-cp-info-on-container',
       icon: ShieldCheck,
@@ -93,12 +97,16 @@ const releaseStatus = computed(() => {
 
 const verifiedLabel = computed(() => {
   const verifiedAt = profile.value?.verifiedAtDisplay
-  return verifiedAt ? t('dashboard.clientIdentity.verifiedAt', { verifiedAt }) : undefined
+  return verifiedAt
+    ? t('dashboard.clientIdentity.verifiedAt', { verifiedAt })
+    : undefined
 })
 
 const checkedLabel = computed(() => {
   const checkedAt = profile.value?.release?.checkedAtDisplay
-  return checkedAt ? t('dashboard.clientIdentity.checkedAt', { checkedAt }) : undefined
+  return checkedAt
+    ? t('dashboard.clientIdentity.checkedAt', { checkedAt })
+    : undefined
 })
 
 function toPascalCase(value: string) {
@@ -116,7 +124,9 @@ const clientIdentity = computed(() => {
   const value = current.attributes.find(attribute => attribute.key === 'client_identifier')?.value
   if (!value)
     return '—'
-  return current.provider === 'xai' ? toPascalCase(value) : value
+  return current.provider === 'xai'
+    ? toPascalCase(value)
+    : value
 })
 
 const attributeLabels = computed<Record<string, string>>(() => ({
@@ -131,7 +141,12 @@ const identityAttributes = computed(() => {
   if (!current)
     return []
   return isSupportedProvider(current.provider)
-    ? [{ label: t('dashboard.clientIdentity.clientId'), value: clientIdentity.value }]
+    ? [
+        {
+          label: t('dashboard.clientIdentity.clientId'),
+          value: clientIdentity.value,
+        },
+      ]
     : current.attributes.map(attribute => ({
         label: attributeLabels.value[attribute.key] ?? attribute.key,
         value: attribute.value,

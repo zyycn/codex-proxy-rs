@@ -42,16 +42,45 @@ const authenticationBinding = computed({
   get: () => bindings.value.find(binding => binding.contribution === authenticationContribution.value?.id) ?? null,
   set: (binding) => {
     const others = bindings.value.filter(value => value.contribution !== authenticationContribution.value?.id)
-    bindings.value = binding ? [...others, cloneDeep(binding)] : others
+    bindings.value = binding
+      ? [
+          ...others,
+          cloneDeep(binding),
+        ]
+      : others
   },
 })
 const hasRequestBindings = computed(() => props.artifact && pluginRequestBindingEntries(props.artifact.metadata).length > 0)
 const sections = computed(() => [
-  { label: t('plugins.configuration.pluginParameters'), value: 'general', icon: Settings2 },
-  ...(hasRequestBindings.value ? [{ label: t('plugins.configuration.advancedSettings'), value: 'requests', icon: Blocks }] : []),
-  ...(authenticationContribution.value ? [{ label: t('plugins.configuration.clientAuthentication'), value: 'authentication', icon: ShieldCheck }] : []),
+  {
+    label: t('plugins.configuration.pluginParameters'),
+    value: 'general',
+    icon: Settings2,
+  },
+  ...(hasRequestBindings.value
+    ? [
+        {
+          label: t('plugins.configuration.advancedSettings'),
+          value: 'requests',
+          icon: Blocks,
+        },
+      ]
+    : []),
+  ...(authenticationContribution.value
+    ? [
+        {
+          label: t('plugins.configuration.clientAuthentication'),
+          value: 'authentication',
+          icon: ShieldCheck,
+        },
+      ]
+    : []),
 ])
-const primaryLabel = computed(() => versionChanged.value ? t('plugins.configuration.applyAndSwitch') : props.instance?.configurationRequired ? t('plugins.configuration.saveAndEnable') : t('plugins.configuration.saveSettings'))
+const primaryLabel = computed(() => versionChanged.value
+  ? t('plugins.configuration.applyAndSwitch')
+  : props.instance?.configurationRequired
+    ? t('plugins.configuration.saveAndEnable')
+    : t('plugins.configuration.saveSettings'))
 
 async function focusConfigurationInvalid() {
   section.value = 'general'
@@ -71,7 +100,9 @@ async function submit() {
   }
   if (!bindingsValid.value) {
     section.value = 'requests'
-    ZNotification.warning({ message: t('plugins.configuration.setRequestScopeOrCheckApplyTo') })
+    ZNotification.warning({
+      message: t('plugins.configuration.setRequestScopeOrCheckApplyTo'),
+    })
     return
   }
   if (!authenticationValid.value) {
@@ -86,8 +117,11 @@ async function submit() {
     configuration: cloneDeep(configuration.value),
     bindings: cloneDeep(bindings.value),
   }
-  if (secretMode.value !== 'preserve')
-    input.secrets = secretMode.value === 'clear' ? {} : cloneDeep(secretValues.value)
+  if (secretMode.value !== 'preserve') {
+    input.secrets = secretMode.value === 'clear'
+      ? {}
+      : cloneDeep(secretValues.value)
+  }
   emit('save', input)
 }
 

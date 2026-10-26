@@ -35,10 +35,14 @@ export function useProxyBatchTesting(options: { test: ProxyTestExecutor, reload:
       if (!request.isCurrent(requestId))
         return
       if (!collected.size) {
-        ZNotification.warning({ message: t('proxies.batchTest.proxyMissing') })
+        ZNotification.warning({
+          message: t('proxies.batchTest.proxyMissing'),
+        })
         return
       }
-      await tests.run([...collected.values()])
+      await tests.run([
+        ...collected.values(),
+      ])
       if (!request.isCurrent(requestId))
         return
       await options.reload()
@@ -48,7 +52,9 @@ export function useProxyBatchTesting(options: { test: ProxyTestExecutor, reload:
       const incomplete = tests.items.value.filter(item => item.status !== 'succeeded')
       const locationPending = tests.items.value.filter(item => item.status === 'succeeded' && item.record?.lastTest?.location.status !== 'detected').length
       const missing = wanted.size - collected.size
-      const summary = [t('proxies.batchTest.batchTestCompletedConnected', { succeeded })]
+      const summary = [
+        t('proxies.batchTest.batchTestCompletedConnected', { succeeded }),
+      ]
       if (incomplete.length)
         summary.push(t('proxies.batchTest.unsuccessful', { count: incomplete.length }))
       if (locationPending)
@@ -58,8 +64,12 @@ export function useProxyBatchTesting(options: { test: ProxyTestExecutor, reload:
       const firstFailure = incomplete.find(item => item.status !== 'skipped')
       if (firstFailure)
         summary.push(`${firstFailure.name}：${firstFailure.message}`)
-      const notify = incomplete.length || locationPending || missing ? ZNotification.warning : ZNotification.success
-      notify({ message: summary.join('，') })
+      const notify = incomplete.length || locationPending || missing
+        ? ZNotification.warning
+        : ZNotification.success
+      notify({
+        message: summary.join('，'),
+      })
     }
     catch (cause) {
       request.fail(requestId, cause)
