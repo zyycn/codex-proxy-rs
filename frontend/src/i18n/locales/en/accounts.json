@@ -194,7 +194,7 @@
       "searchOrAddModels": "Search or add models",
       "searchOrEnterIdAndPressEnter": "Search or enter ID and press Enter to add",
       "selectModel": "Select model",
-      "notInCurrentModelCatalog": "{id} (not in the current model catalog)",
+      "notInCurrentModelCatalog": "This model is no longer available in the upstream model list",
       "loadingModel": "Loading model",
       "noMatchingModels": "No matching models",
       "noModels": "No models",

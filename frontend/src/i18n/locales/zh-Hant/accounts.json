@@ -194,7 +194,7 @@
       "searchOrAddModels": "搜索或添加模型",
       "searchOrEnterIdAndPressEnter": "搜索或輸入 ID，回車添加",
       "selectModel": "選擇模型",
-      "notInCurrentModelCatalog": "{id}（當前目錄未返回）",
+      "notInCurrentModelCatalog": "上游的列表已經沒有了這個模型",
       "loadingModel": "加載模型中",
       "noMatchingModels": "無匹配模型",
       "noModels": "暫無模型",

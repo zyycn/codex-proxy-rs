@@ -180,12 +180,12 @@ watch(search, () => {
             :class="model?.models.includes(item.id) ? 'bg-cp-primary-container text-cp-primary-on-container' : 'bg-cp-fill-quaternary text-cp-text-secondary hover:bg-cp-fill-tertiary hover:text-cp-text'"
             :model-value="model?.models.includes(item.id) ?? false"
             :label="item.id"
-            :title="item.unavailable && accountId ? t('accounts.modelAccess.notInCurrentModelCatalog', { id: item.id }) : item.id"
+            :title="item.unavailable && accountId ? t('accounts.modelAccess.notInCurrentModelCatalog') : item.id"
             :disabled="disabled"
             @update:model-value="select(item.id, $event)"
           >
             <template #label>
-              <span class="block truncate">{{ item.id }}</span>
+              <span class="block truncate" :class="{ 'text-cp-error-text': item.unavailable }">{{ item.id }}</span>
             </template>
           </ZCheckbox>
         </div>
