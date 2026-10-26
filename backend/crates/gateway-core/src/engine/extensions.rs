@@ -62,6 +62,17 @@ impl ExtensionCallScope {
     }
 }
 
+/// 宿主签发的父调用来源；身份裁决、执行链和实际资源仍由各自 owner 持有
+#[derive(Clone, Debug)]
+pub struct InvocationOrigin {
+    pub request_id: String,
+    pub call_id: String,
+    pub cancellation: crate::lifecycle::CancellationToken,
+    pub extensions: ExtensionCallScope,
+    pub plan: Option<super::middleware::FrozenMiddlewarePlan>,
+    pub effects: Option<Arc<super::nested::ExecutionEffects>>,
+}
+
 /// 同一代次的具体执行计划；不拥有发布状态，运行资源由对应发布集合保活
 #[derive(Debug, Default)]
 pub struct ExecutionExtensionPlans {

@@ -268,11 +268,28 @@ async fn completed_call_does_not_discard_a_partially_read_next_frame() {
         tokio::time::timeout(Duration::from_secs(2), async {
             // 单字节缓冲保证前缀已经进入读取 future，而不是仍滞留在传输队列
             let (mut host, task) = start_session_with_capacity(TestHandler::default(), 1).await;
-            send_call(&mut host, 1, "slow", json!("first"), Vec::new()).await;
-            host.writer.write_all(&encoded[..split]).await.unwrap();
+            send_call(&mut host, 1, "delayed_stream", json!({}), Vec::new()).await;
+            send_control(
+                &mut host,
+                Message::Credit {
+                    id: 1,
+                    bytes: 1_024,
+                    frames: 1,
+                },
+            )
+            .await;
             assert!(matches!(
                 receive(&mut host).await.message,
                 Message::Result { id: 1, .. }
+            ));
+            host.writer.write_all(&encoded[..split]).await.unwrap();
+            assert!(matches!(
+                receive(&mut host).await.message,
+                Message::Stream { id: 1, sequence: 0 }
+            ));
+            assert!(matches!(
+                receive(&mut host).await.message,
+                Message::End { id: 1, error: None }
             ));
             host.writer.write_all(&encoded[split..]).await.unwrap();
             assert_eq!(

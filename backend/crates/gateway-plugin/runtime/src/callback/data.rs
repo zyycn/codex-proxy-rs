@@ -98,7 +98,7 @@ impl PluginData {
                     next_cursor: page.next_cursor.map(|id| id.as_str().to_owned()),
                 })
             }
-            data::QUOTA_GET | data::QUOTA_REFRESH => {
+            data::QUOTA_GET | data::QUOTA_REFRESH | data::QUOTA_DETAILS => {
                 let accounts = self.accounts.upgrade().map_err(map_admin_error)?;
                 let query: data::QuotaFactsQuery =
                     serde_json::from_slice(payload).map_err(|_| invalid())?;
@@ -109,6 +109,35 @@ impl PluginData {
                     accounts.get_quota(&account_id).await
                 }
                 .map_err(map_admin_error)?;
+                if method == data::QUOTA_DETAILS {
+                    return super::admin::encode(&data::QuotaDetails {
+                        schema_version: 1,
+                        account_id: account_id.as_str().to_owned(),
+                        observed_at_ms: quota.observed_at.map(|time| time.timestamp_millis()),
+                        limit_reached: quota.limit_reached,
+                        windows: quota
+                            .windows
+                            .into_iter()
+                            .map(|window| data::QuotaWindowDetails {
+                                key: window.key,
+                                group: window.group,
+                                label: window.label,
+                                limit_id: window.limit_id,
+                                limit_name: window.limit_name,
+                                role: window.role.map(|role| role.as_str().to_owned()),
+                                window_seconds: window.window_seconds,
+                                used_percent: window.used_percent,
+                                reset_at_ms: window.reset_at.map(|time| time.timestamp_millis()),
+                                limit_reached: window.limit_reached,
+                            })
+                            .collect(),
+                        credits: quota.credits.map(|credits| data::QuotaCredits {
+                            has_credits: credits.has_credits,
+                            unlimited: credits.unlimited,
+                            balance: credits.balance,
+                        }),
+                    });
+                }
                 serde_json::to_vec(&data::QuotaFacts {
                     schema_version: 1,
                     account_id: account_id.as_str().to_owned(),

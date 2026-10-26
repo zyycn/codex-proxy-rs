@@ -23,6 +23,8 @@ use gateway_plugin_sdk::call::{
     upstream_adapter::{UpstreamAdapterEvent, UpstreamAdapterRequest},
 };
 
+mod scheduled;
+
 type CallbackResult = Result<(Value, Vec<u8>), PluginFault>;
 struct PendingCallback {
     parent: u64,
@@ -82,6 +84,7 @@ struct Peer {
     output: mpsc::Sender<Frame>,
     callbacks: Mutex<BTreeMap<u64, PendingCallback>>,
     next_callback: AtomicU64,
+    resumptions: Mutex<BTreeMap<u64, oneshot::Sender<()>>>,
     streams: Mutex<BTreeMap<u64, Arc<Credits>>>,
 }
 
@@ -90,18 +93,21 @@ impl Peer {
         let queries = self.configuration["data_queries"].as_array()?;
         let mut results = Vec::new();
         for query in queries {
-            let metadata_query = query["method"] == "host.keys.list";
+            let metadata_query =
+                query["method"] == "host.keys.list" || query.get("params").is_some();
             let result = self
                 .callback_payload(
                     id,
                     query["method"].as_str().unwrap(),
                     if metadata_query {
-                        query["query"].clone()
+                        query.get("params").unwrap_or(&query["query"]).clone()
                     } else {
                         json!({})
                     },
                     if metadata_query {
-                        vec![]
+                        query["body"]
+                            .as_str()
+                            .map_or_else(Vec::new, |body| body.as_bytes().to_vec())
                     } else {
                         serde_json::to_vec(&query["query"]).unwrap()
                     },
@@ -243,6 +249,36 @@ impl Peer {
         self.callback_payload(parent, method, params, vec![]).await
     }
 
+    async fn send_callback(
+        &self,
+        parent: u64,
+        method: &str,
+        params: Value,
+        payload: Vec<u8>,
+    ) -> (u64, oneshot::Receiver<CallbackResult>) {
+        let (response, received) = oneshot::channel();
+        let mut callbacks = self.callbacks.lock().await;
+        let id = self.next_callback.fetch_add(2, Ordering::Relaxed);
+        callbacks.insert(
+            id,
+            PendingCallback {
+                parent,
+                response: Some(response),
+            },
+        );
+        self.send(
+            Message::Callback {
+                id,
+                parent_id: parent,
+                method: method.into(),
+                params,
+            },
+            payload,
+        )
+        .await;
+        (id, received)
+    }
+
     async fn callback_payload(
         &self,
         parent: u64,
@@ -250,29 +286,17 @@ impl Peer {
         params: Value,
         payload: Vec<u8>,
     ) -> CallbackResult {
-        let (response, received) = oneshot::channel();
-        {
-            let mut callbacks = self.callbacks.lock().await;
-            let id = self.next_callback.fetch_add(2, Ordering::Relaxed);
-            callbacks.insert(
+        let (id, received) = self.send_callback(parent, method, params, payload).await;
+        let result = received.await.unwrap();
+        self.send(
+            Message::CallbackConsumed {
                 id,
-                PendingCallback {
-                    parent,
-                    response: Some(response),
-                },
-            );
-            self.send(
-                Message::Callback {
-                    id,
-                    parent_id: parent,
-                    method: method.into(),
-                    params,
-                },
-                payload,
-            )
-            .await;
-        }
-        received.await.unwrap()
+                parent_id: parent,
+            },
+            vec![],
+        )
+        .await;
+        result
     }
 
     async fn run_nested_model_fixture(
@@ -1349,31 +1373,43 @@ impl Peer {
             "slow" => tokio::time::sleep(Duration::from_millis(400)).await,
             "hang" | "hang_uncancellable" => return,
             "crash" => std::process::exit(7),
-            "callback" | "callback_method" | "forged_callback" => {
+            "callback" | "callback_method" => {
                 let callback_method = if method == "callback_method" {
                     params["method"].as_str().unwrap().to_owned()
                 } else {
                     "host.log".into()
                 };
-                // 分配与入队保持同一顺序，避免并发回调制造不合法 ID 序列
-                let mut callbacks = self.callbacks.lock().await;
-                let callback = self.next_callback.fetch_add(2, Ordering::Relaxed);
-                callbacks.insert(
-                    callback,
-                    PendingCallback {
-                        parent: id,
-                        response: None,
+                let (callback, received) = self
+                    .send_callback(id, &callback_method, params, payload)
+                    .await;
+                self.send(Message::Suspend { id, epoch: 1 }, vec![]).await;
+                let result = received.await.unwrap();
+                let (resumed, granted) = oneshot::channel();
+                self.resumptions.lock().await.insert(id, resumed);
+                self.send(Message::Resume { id, epoch: 1 }, vec![]).await;
+                granted.await.unwrap();
+                self.send(
+                    Message::CallbackConsumed {
+                        id: callback,
+                        parent_id: id,
                     },
-                );
+                    vec![],
+                )
+                .await;
+                match result {
+                    Ok((result, payload)) => {
+                        self.send(Message::Result { id, result }, payload).await
+                    }
+                    Err(error) => self.send(Message::Error { id, error }, vec![]).await,
+                }
+                return;
+            }
+            "forged_callback" => {
                 self.send(
                     Message::Callback {
-                        id: callback,
-                        parent_id: if method == "forged_callback" {
-                            999999
-                        } else {
-                            id
-                        },
-                        method: callback_method,
+                        id: self.next_callback.fetch_add(2, Ordering::Relaxed),
+                        parent_id: 999999,
+                        method: "host.log".into(),
                         params,
                     },
                     payload,
@@ -1426,7 +1462,7 @@ impl Peer {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     let mut input = tokio::io::stdin();
     let (output, mut frames) = mpsc::channel::<Frame>(64);
@@ -1437,6 +1473,11 @@ async fn main() {
         }
     });
     let hello = read_frame(&mut input).await.unwrap();
+    if matches!(&hello.message, Message::Hello { handshake } if handshake.configuration["sdk_session"] == true)
+    {
+        scheduled::run(hello, input).await;
+        return;
+    }
     let Message::Hello { mut handshake } = hello.message else {
         panic!("expected handshake")
     };
@@ -1491,6 +1532,7 @@ async fn main() {
         output,
         callbacks: Mutex::new(BTreeMap::new()),
         next_callback: AtomicU64::new(2),
+        resumptions: Mutex::new(BTreeMap::new()),
         streams: Mutex::new(BTreeMap::new()),
     });
     let exit_after_ready = peer.configuration["exit_after_ready_delays_ms"]
@@ -1602,6 +1644,11 @@ async fn main() {
                         async move { peer.respond(id, method, params, frame.payload).await },
                     ),
                 );
+            }
+            Message::Resumed { id, epoch: 1 } => {
+                if let Some(resumed) = peer.resumptions.lock().await.remove(&id) {
+                    let _ = resumed.send(());
+                }
             }
             Message::Cancel { id } => {
                 if uncancellable.contains(&id) {

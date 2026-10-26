@@ -26,7 +26,7 @@
 | 版本字段 | 当前值 | 对应合同 |
 | --- | --- | --- |
 | `manifestVersion` / `manifest_schema_versions` | `2` | 插件清单格式 |
-| `package.protocolVersion` / `protocol_versions` | `6` | 插件进程 RPC 封装，不是 OpenAI 或 xAI 的业务协议 |
+| `package.protocolVersion` / `protocol_versions` | `7` | 插件进程 RPC 封装，不是 OpenAI 或 xAI 的业务协议 |
 | `contributes.<capability>.version` / `capabilities[].versions` | 见[扩展项简写](#扩展项简写) | 指定扩展能力的行为合同 |
 | 宿主声明的 `schema_version` | `2` | 宿主兼容声明自身的格式 |
 
@@ -34,7 +34,7 @@
 
 清单不接受 `permissions` 字段；插件按[完整信任](#完整信任)运行
 
-RPC v6 的帧布局、编码与会话生命周期见[通信边界](../README.md#通信边界)。插件使用 SDK 构建，并由 CLI 生成包含协议版本的安装包
+RPC v7 的帧布局、编码与会话生命周期见[通信边界](../README.md#通信边界)。插件使用 SDK 构建，并由 CLI 生成包含协议版本的安装包
 
 安装包清单校验与已安装元数据读取是两个边界：清单拒绝未知字段，并检查必需字段、类型和版本；
 数据库元数据的读取规则见[制品与发布](../../../../../docs/architecture.md#制品配置与发布)，不改变清单或 RPC 合同。

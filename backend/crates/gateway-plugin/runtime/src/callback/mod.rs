@@ -221,7 +221,9 @@ impl PluginCallbacks {
                 .clone()
                 .unwrap_or_else(|| context.resource_scope_id.clone()),
             cancellation,
-            plan,
+            extensions: scope.extension_scope.clone(),
+            effects: scope.execution_effects.clone(),
+            plan: Some(plan),
         });
         self.register_scope(context, scope)
     }
@@ -278,7 +280,7 @@ impl PluginCallbacks {
     pub(crate) fn prepare_frontend_authentication(
         &self,
         context: &CallContext,
-        request: Option<Arc<gateway_core::engine::extensions::RequestContext>>,
+        request: &gateway_core::engine::authentication::ClientAuthenticationRequest,
     ) -> Result<Arc<CallbackScope>, PluginFault> {
         if context.stage != gateway_plugin_sdk::Stage::Authentication
             || context.account_id.is_some()
@@ -287,7 +289,16 @@ impl PluginCallbacks {
         {
             return Err(denied());
         }
-        self.prepare_scope(context, None, request)
+        let mut scope = CallbackScope::for_call(context);
+        scope.settings = request.settings().cloned();
+        if let Some(origin) = request.invocation() {
+            scope.extension_scope = origin.extensions.clone();
+            scope.execution_effects = origin.effects.clone();
+            scope.origin = Some(origin.clone());
+        } else if let Some(request) = request.shared_request_context() {
+            scope.extension_scope = scope.extension_scope.with_request(request);
+        }
+        self.register_scope(context, scope)
     }
 
     pub(crate) async fn save_command_account(
@@ -500,7 +511,12 @@ impl CallbackHandler for PluginCallbacks {
             ) {
                 return keys.call(&context, &method, params, &payload).await;
             }
-            if method == "host.models.list" {
+            if matches!(
+                method.as_str(),
+                "host.models.list"
+                    | gateway_plugin_sdk::call::data::CLIENT_VERIFY
+                    | gateway_plugin_sdk::call::data::ACCESS_CHECK
+            ) {
                 return models.call(&context, &call, &method, params, payload).await;
             }
             if matches!(
@@ -524,6 +540,7 @@ impl CallbackHandler for PluginCallbacks {
                     | gateway_plugin_sdk::call::data::KEYS_GET
                     | gateway_plugin_sdk::call::data::QUOTA_GET
                     | gateway_plugin_sdk::call::data::QUOTA_REFRESH
+                    | gateway_plugin_sdk::call::data::QUOTA_DETAILS
             ) {
                 return data.call(&method, params, &payload).await;
             }
@@ -543,6 +560,9 @@ impl CallbackHandler for PluginCallbacks {
                 maximum_payload,
                 request_limits: &request_limits,
             };
+            if method == gateway_plugin_sdk::call::host::ACCOUNT_HTTP {
+                return http.account(&accounts, params, payload).await;
+            }
             if method.starts_with("host.upstream.") {
                 return upstream::dispatch(&http, &method, params, payload).await;
             }

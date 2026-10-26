@@ -197,8 +197,13 @@ pub(super) async fn dispatch(
             let request = serde_json::from_value(params).map_err(|_| invalid())?;
             let maximum_body_bytes = http.body_limit(&payload)?;
             let (request, purpose) = managed.request(request, payload, maximum_body_bytes)?;
-            http.send(request, method.ends_with("do_stream"), Some(purpose))
-                .await
+            http.send(
+                request,
+                method.ends_with("do_stream"),
+                Some(purpose),
+                scope.proxy.as_ref(),
+            )
+            .await
         }
         "host.upstream.http.stream_read" | "host.upstream.http.stream_close" => {
             http.dispatch(

@@ -195,21 +195,29 @@ impl FrontendAuthenticationPlan for PluginFrontendAuthenticationPlan {
             let mut context =
                 session.context(Stage::Authentication, session.budget(Stage::Authentication));
             context.request = crate::adapter::request_context(request.request_context());
+            context.request_id = request.invocation().map(|origin| origin.request_id.clone());
             let _scope = callbacks
-                .prepare_frontend_authentication(&context, request.shared_request_context())
+                .prepare_frontend_authentication(&context, request)
                 .map_err(|_| FrontendAuthenticationError)?;
             let input = FrontendAuthenticationRequest {
                 authorization: request.authorization().to_owned(),
             };
-            let reply = session
-                .call(
-                    "frontend_auth.authenticate",
-                    context,
-                    serde_json::json!({}),
-                    serde_json::to_vec(&input).map_err(|_| FrontendAuthenticationError)?,
-                )
-                .await
-                .map_err(|_| FrontendAuthenticationError)?;
+            let invocation = session.call(
+                "frontend_auth.authenticate",
+                context,
+                serde_json::json!({}),
+                serde_json::to_vec(&input).map_err(|_| FrontendAuthenticationError)?,
+            );
+            let reply = if let Some(origin) = request.invocation() {
+                tokio::select! {
+                    biased;
+                    () = origin.cancellation.cancelled() => return Err(FrontendAuthenticationError),
+                    reply = invocation => reply,
+                }
+            } else {
+                invocation.await
+            }
+            .map_err(|_| FrontendAuthenticationError)?;
             let result: FrontendAuthenticationResult =
                 serde_json::from_slice(&reply.payload).map_err(|_| FrontendAuthenticationError)?;
             match result {

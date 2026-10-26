@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use gateway_plugin_sdk::{
     ErrorCode, Frame, Message, PluginFault,
-    call::middleware::NEXT_METHOD,
     client::{EncodedFrame, read_frame},
 };
 use tokio::{
@@ -100,6 +99,13 @@ async fn read_loop<R: AsyncRead + Unpin>(
             }
         };
         let result = match frame.message {
+            Message::Suspend { id, epoch } if frame.payload.is_empty() => shared.suspend(id, epoch),
+            Message::Resume { id, epoch } if frame.payload.is_empty() => {
+                shared.request_resume(id, epoch)
+            }
+            Message::CallbackConsumed { id, parent_id } if frame.payload.is_empty() => {
+                shared.consume_callback(parent_id, id)
+            }
             Message::Cancelled { id } if frame.payload.is_empty() => {
                 shared.acknowledge_cancellation(id)
             }
@@ -125,26 +131,17 @@ async fn read_loop<R: AsyncRead + Unpin>(
                     Err(RpcError::Protocol(None))
                 } else if let Some(context) = shared.context(parent_id) {
                     last_callback = id;
-                    if let Some(permit) = shared.try_callback_slot(&method) {
+                    if let Some(permit) = shared.try_callback_slot() {
                         let handler = Arc::clone(&callbacks);
                         let response = Arc::clone(&shared);
                         let (ready, started) = oneshot::channel();
-                        let pause = (method == NEXT_METHOD)
-                            .then(|| shared.pause_next(parent_id))
-                            .flatten();
+                        let callback_method = method.clone();
                         let task = tokio::spawn(async move {
                             // 先把任务归属登记到父调用，再允许执行宿主操作
                             if started.await.is_err() {
                                 return;
                             }
                             let result = handler.call(context, method, params, frame.payload).await;
-                            if pause.is_some()
-                                && let Err(error) = response.resume_next(parent_id).await
-                            {
-                                response.cancel(parent_id, error);
-                                return;
-                            }
-                            drop(pause);
                             let reply = match result {
                                 Ok(reply) => Frame {
                                     message: Message::Result {
@@ -166,9 +163,14 @@ async fn read_loop<R: AsyncRead + Unpin>(
                                     ),
                                 })),
                             }
-                            drop(permit);
                         });
-                        if shared.track_callback(parent_id, task.abort_handle()) {
+                        if shared.track_callback(
+                            parent_id,
+                            id,
+                            &callback_method,
+                            task.abort_handle(),
+                            permit,
+                        ) {
                             let _ = ready.send(());
                         }
                     } else {

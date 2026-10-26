@@ -16,8 +16,9 @@ use crate::{
 pub const MAXIMUM_AUTHORIZATION_BYTES: usize = 8 * 1024;
 
 /// API 从数据面 Authorization 头构造的有界认证信封
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ClientAuthenticationRequest {
+    invocation: Option<Arc<super::extensions::InvocationOrigin>>,
     request_context: Option<Arc<super::extensions::RequestContext>>,
     settings: Option<crate::routing::request_settings::RequestSettings>,
     authorization: Arc<str>,
@@ -25,6 +26,18 @@ pub struct ClientAuthenticationRequest {
 }
 
 impl ClientAuthenticationRequest {
+    /// 子认证继承受信调用的来源、取消和副作用归属，不据此跳过认证器
+    #[must_use]
+    pub fn with_invocation(mut self, origin: super::extensions::InvocationOrigin) -> Self {
+        self.invocation = Some(Arc::new(origin));
+        self
+    }
+
+    #[must_use]
+    pub fn invocation(&self) -> Option<&super::extensions::InvocationOrigin> {
+        self.invocation.as_deref()
+    }
+
     #[must_use]
     pub fn with_request_context(
         mut self,
@@ -35,12 +48,18 @@ impl ClientAuthenticationRequest {
     }
     #[must_use]
     pub fn request_context(&self) -> Option<&super::extensions::RequestContext> {
-        self.request_context.as_deref()
+        self.invocation
+            .as_ref()
+            .and_then(|origin| origin.extensions.request())
+            .or(self.request_context.as_deref())
     }
 
     #[must_use]
     pub fn shared_request_context(&self) -> Option<Arc<super::extensions::RequestContext>> {
-        self.request_context.clone()
+        self.invocation
+            .as_ref()
+            .and_then(|origin| origin.extensions.shared_request())
+            .or_else(|| self.request_context.clone())
     }
 
     #[must_use]
@@ -79,6 +98,7 @@ impl ClientAuthenticationRequest {
             .filter(|value| !value.is_empty())
             .and_then(|value| PlaintextClientApiKey::new(value.to_owned()).ok());
         Ok(Self {
+            invocation: None,
             settings: None,
             request_context: None,
             authorization: authorization.into(),

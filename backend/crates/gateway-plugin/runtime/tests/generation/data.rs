@@ -22,7 +22,12 @@ use gateway_plugin_sdk::{Capability, Contributions, Stage};
 use serde_json::{Value, json};
 
 #[derive(Default)]
-struct Facts(AtomicUsize, AtomicUsize, Option<String>);
+struct Facts {
+    reads: AtomicUsize,
+    refreshes: AtomicUsize,
+    email: Option<String>,
+    runtime_account: Option<AccountRecord>,
+}
 
 fn account() -> AccountRecord {
     let at = "2026-01-01T00:00:00Z".parse().unwrap();
@@ -71,7 +76,7 @@ impl PluginAccountAccess for Facts {
         &self,
         account: &ProviderAccountId,
     ) -> Result<ProviderQuota, AdminError> {
-        self.1.fetch_add(1, Ordering::SeqCst);
+        self.refreshes.fetch_add(1, Ordering::SeqCst);
         if account.as_str() == "acct_missing" {
             return Err(AdminError::not_found("missing account"));
         }
@@ -88,19 +93,26 @@ impl PluginAccountAccess for Facts {
     }
 
     async fn list(&self, query: PluginAccountListQuery) -> Result<PluginAccountPage, AdminError> {
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.reads.fetch_add(1, Ordering::SeqCst);
         assert_eq!(query.limit.get(), 1);
         assert_eq!(query.provider_kind.unwrap().as_str(), "openai");
         assert_eq!(query.cursor.unwrap().as_str(), "acct_before");
         let mut account = account();
-        account.email.clone_from(&self.2);
+        account.email.clone_from(&self.email);
         Ok(PluginAccountPage {
             accounts: vec![account],
             next_cursor: Some(ProviderAccountId::new("acct_facts").unwrap()),
         })
     }
-    async fn get_runtime(&self, _: &ProviderAccountId) -> Result<AccountRecord, AdminError> {
-        panic!("事实回调只使用对应的窄查询")
+    async fn get_runtime(&self, id: &ProviderAccountId) -> Result<AccountRecord, AdminError> {
+        let account = self
+            .runtime_account
+            .as_ref()
+            .expect("事实回调只使用对应的窄查询");
+        if account.id != id.as_str() {
+            return Err(AdminError::not_found("fixture account is unavailable"));
+        }
+        Ok(account.clone())
     }
     async fn get_credential(
         &self,
@@ -116,10 +128,14 @@ impl PluginAccountAccess for Facts {
         panic!("不允许修改账号")
     }
     async fn get_quota(&self, account: &ProviderAccountId) -> Result<ProviderQuota, AdminError> {
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.reads.fetch_add(1, Ordering::SeqCst);
         assert_eq!(account.as_str(), "acct_facts");
         Ok(ProviderQuota {
-            credits: None,
+            credits: Some(ProviderQuotaCredits {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("123456789.123456789".into()),
+            }),
             plan_type: Some("private plan".into()),
             observed_at: None,
             refresh_token_expires_at: None,
@@ -129,17 +145,24 @@ impl PluginAccountAccess for Facts {
                 label: "private label".into(),
                 limit_id: None,
                 limit_name: None,
-                role: None,
+                role: Some(ProviderQuotaWindowRole::Primary),
                 local_usage_attribution: QuotaLocalUsageAttribution::Unavailable,
                 window_seconds: Some(604800),
                 used_percent: None,
                 reset_at: None,
-                limit_reached: false,
+                limit_reached: true,
                 local_usage: None,
                 provider_data: None,
             }],
-            limit_reached: false,
-            provider_data: None,
+            limit_reached: true,
+            provider_data: Some(ProviderDocument::new(
+                gateway_core::account::OpaqueProviderData::new(
+                    json!({"private":"provider-internal-fixture"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )),
         })
     }
 }
@@ -157,11 +180,10 @@ async fn management_facts_validate_queries_without_permission_declarations() {
             Default::default(),
         )
         .await;
-        let facts = Arc::new(Facts(
-            AtomicUsize::new(0),
-            AtomicUsize::new(0),
-            email.map(str::to_owned),
-        ));
+        let facts = Arc::new(Facts {
+            email: email.map(str::to_owned),
+            ..Default::default()
+        });
         let port: Arc<dyn PluginAccountAccess> = facts.clone();
         runtime.bind_account_ports(&port).unwrap();
         {
@@ -172,6 +194,7 @@ async fn management_facts_validate_queries_without_permission_declarations() {
                 "data_queries":[
                     {"method":"host.data.accounts.list","query":{"provider_id":"openai","cursor":"acct_before","limit":1}},
                     {"method":"host.data.quota.get","query":{"account_id":"acct_facts"}},
+                    {"method":"host.data.quota.details","query":{"account_id":"acct_facts"}},
                     {"method":"host.data.accounts.list","query":{"limit":0}},
                     {"method":"host.data.accounts.list","query":{"limit":65535}},
                     {"method":"host.data.quota.get","query":{"account_id":"acct_facts","sql":"SELECT secret"}}
@@ -209,7 +232,8 @@ async fn management_facts_validate_queries_without_permission_declarations() {
             .unwrap();
         let result: Value = serde_json::from_slice(&response.body).unwrap();
 
-        assert_eq!(facts.0.load(Ordering::SeqCst), 2, "{result}");
+        assert_eq!(facts.reads.load(Ordering::SeqCst), 3, "{result}");
+        assert_eq!(facts.refreshes.load(Ordering::SeqCst), 0);
         assert_eq!(
             result[0],
             json!({"schema_version":1,"accounts":[{
@@ -227,7 +251,19 @@ async fn management_facts_validate_queries_without_permission_declarations() {
             json!({"schema_version":1,"account_id":"acct_facts","observed_at_ms":null,
                 "windows":[{"key":"weekly","window_seconds":604800,"used_percent":null,"reset_at_ms":null}]})
         );
-        for invalid in &result.as_array().unwrap()[2..] {
+        let details: gateway_plugin_sdk::call::data::QuotaDetails =
+            serde_json::from_value(result[2].clone()).unwrap();
+        assert_eq!(details.observed_at_ms, None);
+        assert_eq!(details.windows[0].used_percent, None);
+        assert_eq!(details.windows[0].role.as_deref(), Some("primary"));
+        assert_eq!(details.windows[0].label, "private label");
+        assert!(details.limit_reached && details.windows[0].limit_reached);
+        assert_eq!(
+            details.credits.unwrap().balance.as_deref(),
+            Some("123456789.123456789")
+        );
+        assert!(!result[2].to_string().contains("provider-internal-fixture"));
+        for invalid in &result.as_array().unwrap()[3..] {
             assert_eq!(invalid["error"], "invalid_input");
         }
 
@@ -301,7 +337,7 @@ async fn quota_refresh_is_available_without_permission_declarations() {
             .unwrap();
         let result: Value = serde_json::from_slice(&response.body).unwrap();
 
-        assert_eq!(facts.1.load(Ordering::SeqCst), 4);
+        assert_eq!(facts.refreshes.load(Ordering::SeqCst), 4);
         assert_eq!(result[0]["observed_at_ms"], Value::Null);
         assert_eq!(
             result[1],
@@ -321,5 +357,151 @@ async fn quota_refresh_is_available_without_permission_declarations() {
         drop(generation);
         runtime.shutdown().await;
         super::wait_until_empty(cache.path()).await;
+    }
+}
+
+async fn management_queries(accounts: Arc<dyn PluginAccountAccess>, queries: Value) -> Value {
+    let (cache, store, runtime) =
+        super::setup_with_contributions(Contributions::from([crate::support::contribution(
+            Capability::Management,
+            vec![Stage::Management],
+            vec![],
+            vec![],
+        )]))
+        .await;
+    runtime.bind_account_ports(&accounts).unwrap();
+    store.snapshot.lock().unwrap().instances[0].configuration = json!({
+        "management_registration":{"routes":[{"method":"GET","path":"facts","request_content_types":[],"response_content_types":["application/json"]}]},
+        "data_queries":queries,
+        "sdk_session":true,
+    });
+    let generation = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+        .await
+        .unwrap();
+    let view = runtime.views(&generation).await.unwrap().remove(0);
+    let response = runtime
+        .handle(
+            &generation,
+            &view.target,
+            PluginManagementRequest {
+                request_context: None,
+                headers: vec![],
+                method: "GET".into(),
+                path: "facts".into(),
+                query: String::new(),
+                content_type: None,
+                body: vec![],
+                request_id: "account-http-fixture".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let result = serde_json::from_slice(&response.body).unwrap();
+    drop(generation);
+    runtime.shutdown().await;
+    super::wait_until_empty(cache.path()).await;
+    result
+}
+
+async fn request_head(stream: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt as _;
+    let mut bytes = Vec::new();
+    while !bytes.ends_with(b"\r\n\r\n") {
+        assert!(bytes.len() < 16 * 1024);
+        bytes.push(stream.read_u8().await.unwrap());
+    }
+    String::from_utf8(bytes).unwrap()
+}
+
+#[tokio::test]
+async fn account_http_uses_the_selected_proxy_and_rejects_unavailable_account_versions() {
+    use tokio::io::AsyncWriteExt as _;
+    for scenario in [
+        "plain",
+        "explicit-auth",
+        "rotated",
+        "disabled",
+        "proxy-failed",
+        "missing",
+    ] {
+        let target = wiremock::MockServer::start().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+            "http://{}",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let successful = matches!(scenario, "plain" | "explicit-auth");
+        let proxy_task = if successful {
+            Some(tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = request_head(&mut socket).await;
+                assert!(request.starts_with("GET http://127.0.0.1:"));
+                socket
+                    .write_all(
+                        b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+                request
+            }))
+        } else {
+            drop(listener);
+            None
+        };
+        let mut selected = account();
+        selected.outbound_proxy = Some(proxy);
+        selected.enabled = scenario != "disabled";
+        if scenario == "rotated" {
+            selected.credential_revision = Revision::new(2).unwrap();
+        }
+        let accounts: Arc<dyn PluginAccountAccess> = Arc::new(Facts {
+            runtime_account: Some(selected),
+            ..Default::default()
+        });
+        let headers = if scenario == "explicit-auth" {
+            vec![("authorization", b"Bearer plugin-fixture".to_vec())]
+        } else {
+            vec![]
+        };
+        let results = management_queries(accounts, json!([{
+            "method":gateway_plugin_sdk::call::host::ACCOUNT_HTTP,
+            "params":{
+                "account_id":if scenario == "missing" {"acct_missing"} else {"acct_facts"},
+                "credential_revision":1,
+                "request":{"method":"GET","url":format!("{}/facts", target.uri()),"headers":headers},
+            },
+        }])).await;
+        if let Some(task) = proxy_task {
+            assert_eq!(results[0]["status"], 201, "{scenario}: {results}");
+            let request = tokio::time::timeout(std::time::Duration::from_secs(3), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .to_ascii_lowercase();
+            assert!(
+                request.starts_with("get http://127.0.0.1:") && request.contains("/facts http/1.1"),
+                "{request}"
+            );
+            assert_eq!(
+                request.contains("authorization:"),
+                scenario == "explicit-auth"
+            );
+            if scenario == "explicit-auth" {
+                assert!(request.contains("authorization: bearer plugin-fixture\r\n"));
+            }
+        } else {
+            let expected = match scenario {
+                "rotated" => "conflict",
+                "disabled" => "permission_denied",
+                "missing" => "rejected",
+                _ => "upstream",
+            };
+            assert_eq!(results[0]["error"], expected, "{scenario}: {results}");
+        }
+        assert!(
+            target.received_requests().await.unwrap().is_empty(),
+            "{scenario} must not connect directly"
+        );
     }
 }

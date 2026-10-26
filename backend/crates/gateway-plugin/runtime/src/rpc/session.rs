@@ -46,7 +46,7 @@ impl Default for RpcLimits {
             maximum_executing_calls: 64,
             maximum_queued_calls: 64,
             maximum_queue_timeout: Duration::from_secs(30),
-            maximum_callbacks: 64,
+            maximum_callbacks: 320,
             handshake_timeout: Duration::from_secs(5),
             maximum_stderr_bytes: 64 * 1024,
         }
@@ -225,7 +225,6 @@ pub(crate) struct Shared {
     pub process: ProcessControl,
     pub stopped: watch::Sender<bool>,
     callback_slots: Arc<Semaphore>,
-    next_slots: Arc<Semaphore>,
     execution: ExecutionCapacity,
     cancellations_changed: Notify,
 }
@@ -245,14 +244,48 @@ struct PendingCall {
     context: CallContext,
     result: Option<oneshot::Sender<Result<RpcReply, RpcError>>>,
     stream: Option<StreamIngress>,
-    callbacks: Vec<tokio::task::AbortHandle>,
+    scheduling: Option<Scheduling>,
+    callbacks: BTreeMap<u64, CallbackTask>,
+}
+
+// 调度状态只属于父任务；回调完成与恢复授权分别推进
+enum Scheduling {
+    Running {
+        epoch: u64,
+    },
+    Suspended {
+        epoch: u64,
+        pause: Option<CallDeadlinePause>,
+    },
+    Resuming {
+        epoch: u64,
+        pause: Option<CallDeadlinePause>,
+        task: tokio::task::AbortHandle,
+    },
+}
+
+struct CallbackTask {
+    task: tokio::task::AbortHandle,
+    pauses_budget: bool,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Drop for CallbackTask {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 impl PendingCall {
-    fn finish(mut self, result: Result<RpcReply, RpcError>) {
-        for callback in self.callbacks.drain(..) {
-            callback.abort();
+    fn stop_resumption(&mut self) {
+        if let Some(Scheduling::Resuming { task, .. }) = self.scheduling.take() {
+            task.abort();
         }
+    }
+
+    fn finish(mut self, result: Result<RpcReply, RpcError>) {
+        self.callbacks.clear();
+        self.stop_resumption();
         let stream = self.stream.take();
         let sender = self.result.take();
         // 先同步关闭调用资源，Core 才能在收到结果时看到全部发送副作用
@@ -318,12 +351,16 @@ impl Shared {
         {
             log_timeout(&call.context, "plugin", "initial_reply", "remote_timeout");
         }
+        if result.is_ok() && !matches!(call.scheduling, Some(Scheduling::Running { .. })) {
+            return Err(RpcError::Protocol(None));
+        }
         if call.stream.is_some() && result.is_ok() {
             if call.context.resource_stream {
                 call.deadline.clear();
             }
             let initial = call.result.take().ok_or(RpcError::Protocol(None))?;
             call.execution.take();
+            call.scheduling.take();
             call.handler.streaming(&call.context);
             let _ = initial.send(result);
         } else {
@@ -404,43 +441,6 @@ impl Shared {
             .map(|call| call.context.clone())
     }
 
-    pub fn pause_next(&self, id: u64) -> Option<CallDeadlinePause> {
-        let mut state = self.state();
-        let call = state
-            .calls
-            .get_mut(&id)
-            .filter(|call| call.cancellation.is_none())?;
-        let pause = call.deadline.pause()?;
-        call.execution.take();
-        Some(pause)
-    }
-
-    pub async fn resume_next(&self, id: u64) -> Result<(), RpcError> {
-        {
-            let state = self.state();
-            let call = state
-                .calls
-                .get(&id)
-                .filter(|call| call.cancellation.is_none())
-                .ok_or(RpcError::Cancelled)?;
-            // 已交付响应头的流只占在途资源，不重新占用首结果执行名额
-            if call.result.is_none() {
-                return Ok(());
-            }
-        }
-        let permit = self.execution.resume().await?;
-        let mut state = self.state();
-        let call = state
-            .calls
-            .get_mut(&id)
-            .filter(|call| call.cancellation.is_none())
-            .ok_or(RpcError::Cancelled)?;
-        if call.result.is_some() {
-            call.execution = Some(permit);
-        }
-        Ok(())
-    }
-
     pub fn is_cancelling(&self, id: u64) -> bool {
         self.state()
             .calls
@@ -489,9 +489,8 @@ impl Shared {
         }
         call.cancellation = Some(error.clone());
         call.handler.finish(&call.context);
-        for callback in call.callbacks.drain(..) {
-            callback.abort();
-        }
+        call.callbacks.clear();
+        call.stop_resumption();
         if let Some(result) = call.result.take() {
             let _ = result.send(Err(error.clone()));
         }
@@ -524,21 +523,134 @@ impl Shared {
         Ok(())
     }
 
-    pub fn track_callback(&self, parent_id: u64, callback: tokio::task::AbortHandle) -> bool {
-        if let Some(call) = self
-            .state()
+    pub fn track_callback(
+        &self,
+        parent_id: u64,
+        id: u64,
+        method: &str,
+        task: tokio::task::AbortHandle,
+        permit: OwnedSemaphorePermit,
+    ) -> bool {
+        let mut state = self.state();
+        let Some(call) = state
             .calls
             .get_mut(&parent_id)
             .filter(|call| call.cancellation.is_none())
+        else {
+            task.abort();
+            return false;
+        };
+        let pauses_budget = method == gateway_plugin_sdk::call::middleware::NEXT_METHOD;
+        if !pauses_budget
+            && let Some(Scheduling::Suspended { pause, .. } | Scheduling::Resuming { pause, .. }) =
+                call.scheduling.as_mut()
         {
-            // 已完成回调的句柄不继续占用请求预算
-            call.callbacks.retain(|handle| !handle.is_finished());
-            call.callbacks.push(callback);
-            true
-        } else {
-            callback.abort();
-            false
+            pause.take();
         }
+        call.callbacks.insert(
+            id,
+            CallbackTask {
+                task,
+                pauses_budget,
+                _permit: permit,
+            },
+        );
+        true
+    }
+
+    pub(super) fn consume_callback(&self, parent_id: u64, id: u64) -> Result<(), RpcError> {
+        if id == 0 || !id.is_multiple_of(2) || parent_id == 0 || parent_id.is_multiple_of(2) {
+            return Err(RpcError::Protocol(None));
+        }
+        // 取消确认可以与消费确认交错；确认只能撤销资源，不能重新创建调用
+        if let Some(call) = self.state().calls.get_mut(&parent_id) {
+            call.callbacks.remove(&id);
+        }
+        Ok(())
+    }
+
+    pub(super) fn suspend(&self, id: u64, epoch: u64) -> Result<(), RpcError> {
+        if id == 0 || id.is_multiple_of(2) || epoch == 0 {
+            return Err(RpcError::Protocol(None));
+        }
+        let mut state = self.state();
+        let Some(call) = state.calls.get_mut(&id) else {
+            return Ok(());
+        };
+        if call.cancellation.is_some() {
+            return Ok(());
+        }
+        match call.scheduling.as_ref() {
+            Some(Scheduling::Running { epoch: previous })
+                if previous.checked_add(1) == Some(epoch) => {}
+            _ => return Err(RpcError::Protocol(None)),
+        }
+        let pauses = !call.callbacks.is_empty()
+            && call
+                .callbacks
+                .values()
+                .all(|callback| callback.pauses_budget);
+        let pause = pauses.then(|| call.deadline.pause()).flatten();
+        call.execution.take();
+        call.scheduling = Some(Scheduling::Suspended { epoch, pause });
+        Ok(())
+    }
+
+    pub(super) fn request_resume(self: &Arc<Self>, id: u64, epoch: u64) -> Result<(), RpcError> {
+        if id == 0 || id.is_multiple_of(2) || epoch == 0 {
+            return Err(RpcError::Protocol(None));
+        }
+        let mut state = self.state();
+        let Some(call) = state.calls.get_mut(&id) else {
+            return Ok(());
+        };
+        if call.cancellation.is_some() {
+            return Ok(());
+        }
+        if !matches!(call.scheduling, Some(Scheduling::Suspended { epoch: current, .. }) if current == epoch)
+        {
+            return Err(RpcError::Protocol(None));
+        }
+        let Some(Scheduling::Suspended { pause, .. }) = call.scheduling.take() else {
+            return Err(RpcError::Protocol(None));
+        };
+        let shared = Arc::clone(self);
+        let (ready, started) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            if started.await.is_err() {
+                return;
+            }
+            match shared.execution.resume().await {
+                Ok(permit) => shared.grant_resume(id, epoch, permit),
+                Err(error) => shared.cancel(id, error),
+            }
+        });
+        call.scheduling = Some(Scheduling::Resuming {
+            epoch,
+            pause,
+            task: task.abort_handle(),
+        });
+        let _ = ready.send(());
+        Ok(())
+    }
+
+    fn grant_resume(&self, id: u64, epoch: u64, permit: OwnedSemaphorePermit) {
+        let mut state = self.state();
+        let Some(call) = state
+            .calls
+            .get_mut(&id)
+            .filter(|call| call.cancellation.is_none())
+        else {
+            return;
+        };
+        if !matches!(call.scheduling, Some(Scheduling::Resuming { epoch: current, .. }) if current == epoch)
+        {
+            return;
+        }
+        call.execution = Some(permit);
+        call.scheduling = Some(Scheduling::Running { epoch });
+        drop(state);
+        self.send_control(Frame::control(Message::Resumed { id, epoch }));
     }
 
     pub fn send_control(&self, frame: Frame) {
@@ -555,23 +667,18 @@ impl Shared {
         }
     }
 
-    pub(super) fn try_callback_slot(&self, method: &str) -> Option<OwnedSemaphorePermit> {
-        let slots = if method == gateway_plugin_sdk::call::middleware::NEXT_METHOD {
-            &self.next_slots
-        } else {
-            &self.callback_slots
-        };
-        slots.clone().try_acquire_owned().ok()
+    pub(super) fn try_callback_slot(&self) -> Option<OwnedSemaphorePermit> {
+        self.callback_slots.clone().try_acquire_owned().ok()
     }
 
     async fn wait_for_callbacks(&self, limits: RpcLimits) {
-        for (slots, maximum) in [
-            (&self.callback_slots, limits.maximum_callbacks),
-            (&self.next_slots, limits.maximum_calls),
-        ] {
-            if let Ok(permits) = slots.clone().acquire_many_owned(maximum as u32).await {
-                drop(permits);
-            }
+        if let Ok(permits) = self
+            .callback_slots
+            .clone()
+            .acquire_many_owned(limits.maximum_callbacks as u32)
+            .await
+        {
+            drop(permits);
         }
     }
 }
@@ -653,7 +760,7 @@ impl RpcSession {
             || limits.maximum_queued_calls > 256
             || limits.maximum_queue_timeout.is_zero()
             || limits.maximum_callbacks == 0
-            || limits.maximum_callbacks > 256
+            || limits.maximum_callbacks > 512
             || limits.maximum_buffered_body_bytes < 1024
             || limits.maximum_buffered_body_bytes > 16 * 1024 * 1024
             || limits.handshake_timeout.is_zero()
@@ -771,7 +878,6 @@ impl RpcSession {
             process,
             stopped,
             callback_slots,
-            next_slots: Arc::new(Semaphore::new(limits.maximum_calls)),
             execution: ExecutionCapacity::new(
                 limits.maximum_executing_calls,
                 limits.maximum_queued_calls,
@@ -902,7 +1008,8 @@ impl RpcSession {
                 context,
                 result: Some(result),
                 stream,
-                callbacks: Vec::new(),
+                scheduling: Some(Scheduling::Running { epoch: 0 }),
+                callbacks: BTreeMap::new(),
             },
         );
         Ok(StartedCall {

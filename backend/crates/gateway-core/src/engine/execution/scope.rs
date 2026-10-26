@@ -15,13 +15,10 @@ use crate::{
     lifecycle::{CancellationToken, Deadline},
     operation::Operation,
     policy::ClientApiKeyId,
-    routing::{
-        FrozenAccountScope, PublicModelId, UpstreamModelId, request_settings::RequestSettings,
-    },
+    routing::{FrozenAccountScope, PublicModelId, UpstreamModelId},
 };
 use std::{
     collections::BTreeMap,
-    fmt,
     sync::{
         Arc, Mutex, Weak,
         atomic::{AtomicUsize, Ordering},
@@ -186,57 +183,6 @@ pub(super) struct ActiveRequestLease {
     pub(super) registry: ActiveRequestRegistry,
     pub(super) request_id: ModelRequestId,
     pub(super) authority: Arc<ActiveRequestAuthority>,
-}
-
-/// 管理页或 CLI 一次调用持有的显式模型执行身份
-///
-/// 结构不暴露 Key 明文；Runtime 只能把它原样交回 Core 发起模型请求
-#[derive(Clone)]
-pub struct BoundModelExecutionContext {
-    pub(super) authority: Arc<BoundModelExecutionAuthority>,
-}
-
-impl BoundModelExecutionContext {
-    /// 与实际执行共用绑定时的快照，不能回退到后续发布的配置
-    #[must_use]
-    pub fn request_body_limit(&self) -> usize {
-        self.authority
-            .client
-            .snapshot
-            .responses_max_decompressed_body_bytes()
-    }
-
-    #[must_use]
-    pub fn request_settings(&self) -> Option<&RequestSettings> {
-        self.authority.client.request_settings()
-    }
-}
-
-pub(super) struct BoundModelExecutionAuthority {
-    pub(super) client: AuthenticatedClient,
-    pub(super) account_scope: Arc<FrozenAccountScope>,
-    pub(super) cancellation: CancellationToken,
-    pub(super) extension_scope: ExtensionCallScope,
-    pub(super) initiating_plugin_instance_id: String,
-}
-
-impl fmt::Debug for BoundModelExecutionContext {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BoundModelExecutionContext")
-            .field("key_id", &self.authority.client.policy.key_id())
-            .field(
-                "initiating_plugin_instance_id",
-                &self.authority.initiating_plugin_instance_id,
-            )
-            .finish_non_exhaustive()
-    }
-}
-
-impl Drop for BoundModelExecutionAuthority {
-    fn drop(&mut self) {
-        self.cancellation.cancel();
-    }
 }
 
 impl ActiveRequestLease {

@@ -36,25 +36,23 @@ pub(super) async fn call(
         request.timeout_ms,
         &context.instance_id,
     )?;
-    let parent = call.scope.origin.as_ref();
+    call.scope.check_child_depth(&context.instance_id)?;
+    let origin = call.child_origin(context)?;
     let child = core::Context {
         plugin_instance_id: Some(context.instance_id.clone()),
-        request_id: context
-            .request_id
-            .clone()
-            .unwrap_or_else(|| context.resource_scope_id.clone()),
+        request_id: origin.request_id,
         call_id: uuid::Uuid::now_v7().to_string(),
-        parent_call_id: Some(parent.map_or_else(
-            || format!("{}:{}", context.resource_scope_id, context.call_id),
-            |parent| parent.call_id.clone(),
-        )),
-        extensions: call.scope.child_extensions(&context.instance_id)?,
-        // 句柄可以在父 RPC End 后交给 HTTP 发送端；生命周期属于父调用和响应正文，不能在 RPC End 提前取消
-        cancellation: parent.map_or_else(
-            || call.cancellation.child_token(),
-            |parent| parent.cancellation.child_token(),
-        ),
-        plan: parent.map(|parent| parent.plan.clone()),
+        parent_call_id: Some(origin.call_id),
+        extensions: origin.extensions,
+        // 转交正文后由消费端持有原请求寿命，父 RPC End 只撤销新业务分派
+        cancellation: call
+            .scope
+            .origin
+            .as_ref()
+            .map_or(origin.cancellation, |parent| {
+                parent.cancellation.child_token()
+            }),
+        plan: origin.plan,
     };
     let body = call.http_resources.body(request.body, payload).await?;
     let mut http = core::Request::new(body);

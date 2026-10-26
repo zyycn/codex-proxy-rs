@@ -9,6 +9,7 @@ mod error;
 mod lifecycle;
 mod output;
 mod registry;
+mod scheduling;
 mod stream;
 
 pub use call::{CallFuture, CallReply, PluginCall, PluginHandler};

@@ -66,6 +66,32 @@ impl PluginAccounts {
         Self { slot }
     }
 
+    pub(super) async fn http_proxy(
+        &self,
+        account_id: String,
+        credential_revision: u64,
+    ) -> Result<Option<gateway_core::account::OutboundProxy>, PluginFault> {
+        let id = ProviderAccountId::new(account_id).map_err(|_| invalid())?;
+        let expected = Revision::new(credential_revision).map_err(|_| invalid())?;
+        let account = self
+            .slot
+            .upgrade()
+            .map_err(map_admin_error)?
+            .get_runtime(&id)
+            .await
+            .map_err(map_admin_error)?;
+        if !account.enabled {
+            return Err(denied());
+        }
+        if account.credential_revision != expected {
+            return Err(PluginFault::new(
+                ErrorCode::Conflict,
+                "account credential revision has changed",
+            ));
+        }
+        Ok(account.effective_outbound_proxy().cloned())
+    }
+
     pub(super) async fn call(
         &self,
         context: &CallContext,

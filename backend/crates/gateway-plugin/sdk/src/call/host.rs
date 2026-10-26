@@ -66,6 +66,16 @@ pub struct HttpRequest {
     pub headers: Vec<(String, Vec<u8>)>,
 }
 
+pub const ACCOUNT_HTTP: &str = "host.http.account";
+
+/// 显式选择账号代理和凭据版本；认证头仍由插件提供，不取得推理租约
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AccountHttpRequest {
+    pub account_id: String,
+    pub credential_revision: u64,
+    pub request: HttpRequest,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpResponse {

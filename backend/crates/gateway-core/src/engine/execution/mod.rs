@@ -12,7 +12,6 @@ pub use contract::{
     StartedExecution,
 };
 mod scope;
-pub use scope::BoundModelExecutionContext;
 mod service;
 pub use failure::gateway_error_from_engine;
 pub use service::DefaultExecutionService;

@@ -16,9 +16,8 @@ pub(super) struct CallResources {
     pub(super) cancellation: CancellationToken,
     pub(super) scope: Arc<CallbackScope>,
     pub(super) http_resources: Arc<http_middleware::resources::Resources>,
-    pub(super) model_bindings: tokio::sync::Mutex<
-        BTreeMap<String, gateway_core::engine::execution::BoundModelExecutionContext>,
-    >,
+    pub(super) client_identities:
+        tokio::sync::Mutex<BTreeMap<String, gateway_core::engine::execution::AuthenticatedClient>>,
     pub(super) state: Mutex<CallState>,
 }
 
@@ -32,18 +31,57 @@ impl CallResources {
         Self {
             deadline: deadline.clone(),
             operation_timeout: Duration::from_millis(context.timeout_ms),
-            cancellation: CancellationToken::new(),
+            cancellation: scope
+                .origin
+                .as_ref()
+                .map_or_else(CancellationToken::new, |origin| {
+                    origin.cancellation.child_token()
+                }),
             scope,
             http_resources: middleware
                 .as_ref()
                 .and_then(|middleware| middleware.http_resources())
                 .unwrap_or_default(),
-            model_bindings: tokio::sync::Mutex::new(BTreeMap::new()),
+            client_identities: tokio::sync::Mutex::new(BTreeMap::new()),
             state: Mutex::new(CallState {
                 middleware,
                 ..CallState::default()
             }),
         }
+    }
+
+    /// 子调用共享受信来源；身份解析与执行准入仍留在各能力 owner
+    pub(super) fn child_origin(
+        &self,
+        context: &CallContext,
+    ) -> Result<gateway_core::engine::extensions::InvocationOrigin, PluginFault> {
+        let parent = self.scope.origin.as_ref();
+        Ok(gateway_core::engine::extensions::InvocationOrigin {
+            request_id: parent.map_or_else(
+                || {
+                    context
+                        .request_id
+                        .clone()
+                        .unwrap_or_else(|| context.resource_scope_id.clone())
+                },
+                |origin| origin.request_id.clone(),
+            ),
+            call_id: parent.map_or_else(
+                || format!("{}:{}", context.resource_scope_id, context.call_id),
+                |origin| origin.call_id.clone(),
+            ),
+            cancellation: self.cancellation.child_token(),
+            extensions: if self.scope.extension_scope.contains(&context.instance_id) {
+                self.scope.extension_scope.clone()
+            } else {
+                self.scope
+                    .extension_scope
+                    .extending(context.instance_id.clone())
+                    .ok_or_else(super::invalid)?
+            },
+            plan: parent.and_then(|origin| origin.plan.clone()),
+            effects: self.scope.execution_effects.clone(),
+        })
     }
 
     pub(super) fn close(&self) {
@@ -114,7 +152,9 @@ impl CallResources {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .middleware
             .clone();
-        middleware.and_then(|middleware| middleware.request_settings())
+        middleware
+            .and_then(|middleware| middleware.request_settings())
+            .or_else(|| self.scope.settings.clone())
     }
 
     /// 建立受管流后，网络操作各自计时；连接空闲时间不消耗后续操作的预算

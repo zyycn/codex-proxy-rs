@@ -273,3 +273,90 @@ async fn startup_failure_of_an_unrelated_plugin_preserves_native_authentication_
     }
     close(environment, runtime, core).await;
 }
+
+#[tokio::test]
+async fn callback_verification_reenters_the_authentication_instance_without_model_binding() {
+    use gateway_admin::{
+        model::plugins::management::PluginManagementRequest,
+        ports::plugin_management::PluginManagement,
+    };
+    use gateway_plugin_runtime::RpcLimits;
+    let Some(environment) = Environment::create().await else {
+        return;
+    };
+    environment
+        .client_key("key_frontend", "sk-native-fixture")
+        .await;
+    let account = environment.account(None).await;
+    let marker = environment
+        .directory
+        .path()
+        .join("authenticated-facts.json");
+    let facts = json!([
+        {"method":"host.data.access.check", "query":{"client_key_id":"key_frontend", "account_ids":[account.as_str(), "acct_missing"]}},
+        {"method":"host.models.list", "params":{"client_key_id":"key_frontend", "protocol":"codex", "client_version":"0.154.0"}}
+    ]);
+    let mut config = configuration(
+        json!({"outcome":"authenticated","principal":"external-user"}),
+        true,
+        "External controlled-fixture",
+    );
+    config["sdk_session"] = json!(true);
+    config["frontend_authentication_marker"] = json!(marker);
+    config["auth_queries"] = facts.clone();
+    config["management_registration"] = json!({"routes":[{"method":"GET","path":"facts","request_content_types":[],"response_content_types":["application/json"]}]});
+    config["data_queries"] = json!([
+        {"method":"host.client.verify", "query":{"authorization":"External controlled-fixture"}},
+        facts[0].clone(), facts[1].clone()
+    ]);
+    environment.install_plugin(config).await;
+    let (runtime, core) = environment
+        .runtime_with_limits(RpcLimits {
+            maximum_executing_calls: 1,
+            maximum_queue_timeout: std::time::Duration::from_millis(500),
+            ..RpcLimits::default()
+        })
+        .await;
+    let snapshot = core.snapshots().acquire().unwrap();
+    let generation = snapshot.extensions().unwrap();
+    let view = runtime.views(generation).await.unwrap().remove(0);
+    let response = runtime
+        .handle(
+            generation,
+            &view.target,
+            PluginManagementRequest {
+                request_context: None,
+                headers: Vec::new(),
+                method: "GET".into(),
+                path: "facts".into(),
+                query: String::new(),
+                content_type: None,
+                body: Vec::new(),
+                request_id: "verify-composition".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let results: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(results[0], json!({"client_key_id":"key_frontend"}));
+    let authenticated_facts: Value =
+        serde_json::from_slice(&std::fs::read(marker).unwrap()).unwrap();
+    assert_eq!(authenticated_facts[0], results[1]);
+    assert_eq!(
+        authenticated_facts[0]["accounts"],
+        json!([
+            {"account_id":account.as_str(),"allowed":true}, {"account_id":"acct_missing","allowed":false}
+        ])
+    );
+    assert_eq!(authenticated_facts[1], results[2]);
+    // 此替身只登记执行能力，没有原生目录；查询应成功返回空目录而不是执行绑定错误
+    assert_eq!(results[2], json!({"models":[]}));
+    assert!(
+        environment
+            .bound_model_requests("key_frontend")
+            .await
+            .is_empty()
+    );
+    drop(snapshot);
+    close(environment, runtime, core).await;
+}

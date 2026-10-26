@@ -111,7 +111,7 @@ async fn verify_cancelled_read(method: &str) {
     .await;
     let first = callback_id(&mut host, read).await;
     signals.cancel.notify_one();
-    signals.dropped.notified().await;
+    session::wait_suspended(&mut host, &signals.dropped).await;
     // 已取消的读取随后成功，下一次 read 应恢复同一读取结果
     reply(&mut host, first, data.clone(), b"first").await;
     signals.resume.notify_one();
@@ -264,7 +264,7 @@ async fn middleware_http_and_websocket_reads_resume_the_pending_chunk() {
         };
         let id = callback_id(&mut host, method).await;
         signals.cancel.notify_one();
-        signals.dropped.notified().await;
+        session::wait_suspended(&mut host, &signals.dropped).await;
         reply(&mut host, id, json!({"eof":false}), b"first").await;
         signals.resume.notify_one();
         let frame = session::receive(&mut host).await;
@@ -296,7 +296,7 @@ async fn model_frame_survives_cancellation_while_fetching_its_facts() {
     .await;
     let id = callback_id(&mut host, BODY_FACTS_METHOD).await;
     signals.cancel.notify_one();
-    signals.dropped.notified().await;
+    session::wait_suspended(&mut host, &signals.dropped).await;
     reply(&mut host, id, json!({"present":false}), b"").await;
     signals.resume.notify_one();
     let frame = session::receive(&mut host).await;
@@ -314,7 +314,7 @@ async fn http_forwarding_retains_a_pending_read_under_output_backpressure() {
     )
     .await;
     signals.cancel.notify_one();
-    signals.dropped.notified().await;
+    session::wait_suspended(&mut host, &signals.dropped).await;
     reply(&mut host, id, json!({"eof":false}), b"first").await;
     signals.resume.notify_one();
     write_frame(
@@ -359,7 +359,7 @@ async fn pending_http_read_is_split_when_credit_arrives_after_the_callback() {
     )
     .await;
     signals.cancel.notify_one();
-    signals.dropped.notified().await;
+    session::wait_suspended(&mut host, &signals.dropped).await;
     let expected = vec![b'a'; 8192];
     reply(&mut host, id, json!({"eof":false}), &expected).await;
     signals.resume.notify_one();
@@ -417,7 +417,7 @@ async fn websocket_transfer_rejects_a_payload_with_a_pending_read() {
     let (mut host, task, signals) = start_middleware(Action::WebSocketTransfer).await;
     let _id = callback_id(&mut host, BODY_READ_METHOD).await;
     signals.cancel.notify_one();
-    signals.dropped.notified().await;
+    session::wait_suspended(&mut host, &signals.dropped).await;
     signals.resume.notify_one();
     assert!(matches!(session::receive(&mut host).await.message,
         Message::Error { id: 1, error } if error.code == ErrorCode::InvalidInput));

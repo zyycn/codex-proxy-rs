@@ -5,7 +5,7 @@ use gateway_plugin_sdk::client::{CallFuture, CallReply, PluginCall, PluginHandle
 use gateway_plugin_sdk::{ErrorCode, Frame, Message};
 use gateway_plugin_sdk::{
     call::{
-        host::HttpRequest,
+        host::{AccountHttpRequest, HttpRequest},
         upstream_adapter::{UpstreamHttpRequest, UpstreamWebSocketRequest, WebSocketMessageKind},
     },
     client::UpstreamWebSocketUpgrade,
@@ -91,6 +91,21 @@ impl PluginHandler for NetworkHandler {
                         call.payload,
                     )
                     .await?
+            } else if call.method == "account" {
+                call.host
+                    .account_http(
+                        AccountHttpRequest {
+                            account_id: "acct_one".into(),
+                            credential_revision: 7,
+                            request: HttpRequest {
+                                method: "POST".into(),
+                                url: "https://example.test/responses".into(),
+                                headers: vec![],
+                            },
+                        },
+                        call.payload,
+                    )
+                    .await?
             } else {
                 call.host
                     .upstream_http(
@@ -157,7 +172,7 @@ async fn reply_callback(
 
 #[tokio::test]
 async fn http_response_objects_share_pull_semantics_and_retire_eof_handles() {
-    for method in ["http", "upstream"] {
+    for method in ["http", "account", "upstream"] {
         let (mut host, task) = start_session(NetworkHandler).await;
         send_call(
             &mut host,
@@ -167,19 +182,28 @@ async fn http_response_objects_share_pull_semantics_and_retire_eof_handles() {
             b"request".to_vec(),
         )
         .await;
-        let prefix = if method == "http" {
+        let prefix = if method != "upstream" {
             "host.http"
         } else {
             "host.upstream.http"
         };
+        let open_method = if method == "account" {
+            gateway_plugin_sdk::call::host::ACCOUNT_HTTP.to_owned()
+        } else {
+            format!("{prefix}.do_stream")
+        };
         let frame = reply_callback(
             &mut host,
-            &format!("{prefix}.do_stream"),
+            &open_method,
             json!({"status":200,"http_version":"HTTP/1.1","trailers":[],"headers":[["x-bytes",[255]],["x-bytes",b"other".to_vec()]],"stream":"private-handle"}),
             vec![],
         )
         .await;
         assert_eq!(frame.payload, b"request");
+        if method == "account" {
+            assert!(matches!(frame.message, Message::Callback { params, .. }
+                if params["account_id"] == "acct_one" && params["credential_revision"] == 7));
+        }
         let frame = reply_callback(
             &mut host,
             &format!("{prefix}.stream_read"),

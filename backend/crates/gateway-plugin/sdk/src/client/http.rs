@@ -39,6 +39,20 @@ impl HostClient {
             .await
     }
 
+    /// 使用指定账号的当前代理发起请求，认证头由调用方显式提供
+    /// 账号必须启用且凭据版本匹配；代理失败不回退直连
+    ///
+    /// # Errors
+    /// 账号不可用、版本冲突、期限或网络请求失败时返回错误
+    pub async fn account_http(
+        &self,
+        request: wire::AccountHttpRequest,
+        body: Vec<u8>,
+    ) -> Result<HostHttpResponse, PluginFault> {
+        self.open_http(wire::ACCOUNT_HTTP, request, body, false)
+            .await
+    }
+
     /// 由宿主附加已选账号的认证与代理，返回统一的惰性正文
     ///
     /// # Errors

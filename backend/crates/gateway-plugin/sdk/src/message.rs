@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CallBudgets, CallContext, Handshake, PluginFault};
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// 元数据与二进制载荷分开，流分块不经过 JSON/base64
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -41,6 +41,26 @@ pub enum Message {
         method: String,
         #[serde(skip)]
         params: serde_json::Value,
+    },
+    /// 父处理任务已交还执行权，epoch 在同一调用内严格递增
+    Suspend {
+        id: u64,
+        epoch: u64,
+    },
+    /// 已挂起任务被唤醒，请求重新取得执行名额
+    Resume {
+        id: u64,
+        epoch: u64,
+    },
+    /// 宿主已取得执行名额，插件才可再次驱动父处理任务
+    Resumed {
+        id: u64,
+        epoch: u64,
+    },
+    /// 回调 future 已消费结果或被释放，宿主可回收对应驻留额度
+    CallbackConsumed {
+        id: u64,
+        parent_id: u64,
     },
     Cancel {
         id: u64,
@@ -102,6 +122,10 @@ impl std::fmt::Debug for Message {
             Self::Result { id, .. } => ("Result", Some(id)),
             Self::Error { id, .. } => ("Error", Some(id)),
             Self::Callback { id, .. } => ("Callback", Some(id)),
+            Self::Suspend { id, .. } => ("Suspend", Some(id)),
+            Self::Resume { id, .. } => ("Resume", Some(id)),
+            Self::Resumed { id, .. } => ("Resumed", Some(id)),
+            Self::CallbackConsumed { id, .. } => ("CallbackConsumed", Some(id)),
             Self::Cancel { id } => ("Cancel", Some(id)),
             Self::Cancelled { id } => ("Cancelled", Some(id)),
             Self::Stream { id, .. } => ("Stream", Some(id)),

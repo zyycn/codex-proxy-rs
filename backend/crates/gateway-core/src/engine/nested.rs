@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     ModelRequestId,
-    execution::{BoundModelExecutionContext, ExecutionRequestMetadata, StartedExecution},
+    execution::{AuthenticatedClient, ExecutionRequestMetadata, StartedExecution},
 };
 
 /// 同一请求图内不可逆外部副作用的单调水位
@@ -59,37 +59,14 @@ pub struct NestedModelExecutionRequest {
     pub parent_account: Option<ProviderAccountId>,
 }
 
-/// 插件为当前调用或连接显式绑定的模型执行身份
-///
-/// Key ID 由插件选择，发起实例由宿主确定
-/// Core 在绑定时冻结当前
-/// Key 策略；每个实际模型请求仍独立经过准入、预算、账本与计费
-pub struct BoundModelExecutionBinding {
-    pub settings: Option<crate::routing::request_settings::RequestSettings>,
-    pub client_key_id: ClientApiKeyId,
-    pub initiating_plugin_instance_id: String,
-    /// 身份随父调用或连接回收；每个模型请求使用独立的执行期限
-    pub cancellation: CancellationToken,
-    /// 宿主保留的扩展调用链，异步观察不能通过新建模型请求清空防递归事实
-    pub extension_scope: super::extensions::ExtensionCallScope,
-}
-
-impl fmt::Debug for BoundModelExecutionBinding {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BoundModelExecutionBinding")
-            .field("client_key_id", &self.client_key_id)
-            .field(
-                "initiating_plugin_instance_id",
-                &self.initiating_plugin_instance_id,
-            )
-            .finish_non_exhaustive()
-    }
-}
-
 /// 显式身份作用域内的一次模型请求
+///
+/// 身份与权限可先用于查询；执行链只在真正启动模型请求时建立
 pub struct BoundModelExecutionRequest {
-    pub context: BoundModelExecutionContext,
+    pub client: AuthenticatedClient,
+    pub initiating_plugin_instance_id: String,
+    pub cancellation: CancellationToken,
+    pub extension_scope: super::extensions::ExtensionCallScope,
     pub public_model: PublicModelId,
     pub operation: Operation,
     pub metadata: ExecutionRequestMetadata,
@@ -101,7 +78,11 @@ impl fmt::Debug for BoundModelExecutionRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("BoundModelExecutionRequest")
-            .field("context", &self.context)
+            .field("client", &self.client)
+            .field(
+                "initiating_plugin_instance_id",
+                &self.initiating_plugin_instance_id,
+            )
             .field("public_model", &self.public_model)
             .field("operation", &self.operation.kind())
             .field("provider", &self.provider)
@@ -130,18 +111,26 @@ impl fmt::Debug for NestedModelExecutionRequest {
 
 /// 嵌套模型执行只进入 Core 的既有执行会话；Runtime 不实现重试、commit 或计费
 pub trait NestedModelExecutionPort: Send + Sync {
+    /// 只解析身份与冻结权限，不建立模型执行图或记录使用事实
+    fn resolve_client(
+        &self,
+        client_key_id: ClientApiKeyId,
+        settings: Option<crate::routing::request_settings::RequestSettings>,
+    ) -> BoxFuture<'_, Result<AuthenticatedClient, GatewayError>>;
+
+    /// 复用入口认证计划及 principal 映射，不进行模型准入
+    fn verify_client(
+        &self,
+        request: super::authentication::ClientAuthenticationRequest,
+    ) -> BoxFuture<'_, Result<AuthenticatedClient, GatewayError>>;
+
     fn models(
         &self,
-        context: BoundModelExecutionContext,
+        client: AuthenticatedClient,
+        cancellation: CancellationToken,
         protocol: String,
         client_version: String,
     ) -> BoxFuture<'_, Result<Vec<PublicModelId>, GatewayError>>;
-
-    /// 为插件调用冻结显式执行身份；取消父调用会取消其所有模型执行
-    fn bind(
-        &self,
-        binding: BoundModelExecutionBinding,
-    ) -> BoxFuture<'_, Result<BoundModelExecutionContext, GatewayError>>;
 
     fn start(
         &self,

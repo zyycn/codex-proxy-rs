@@ -7,14 +7,7 @@ use gateway_core::{
 };
 use gateway_plugin_sdk::{CallContext, Stage};
 
-/// 所有中间件共享的父调用身份；不混入协议操作或服务参数
-#[derive(Clone)]
-pub(crate) struct InvocationContext {
-    pub request_id: String,
-    pub call_id: String,
-    pub cancellation: gateway_core::lifecycle::CancellationToken,
-    pub plan: gateway_core::engine::middleware::FrozenMiddlewarePlan,
-}
+pub(crate) use gateway_core::engine::extensions::InvocationOrigin as InvocationContext;
 
 /// 一次回调的调用链、账号与网络事实，由操作持有到完成
 pub(crate) struct CallbackScope {
@@ -25,7 +18,8 @@ pub(crate) struct CallbackScope {
     credential_revision: Option<u64>,
     pub(super) proxy: Option<OutboundProxy>,
     pub(super) extension_scope: gateway_core::engine::extensions::ExtensionCallScope,
-    execution_effects: Option<Arc<ExecutionEffects>>,
+    pub(super) execution_effects: Option<Arc<ExecutionEffects>>,
+    pub(super) settings: Option<gateway_core::routing::request_settings::RequestSettings>,
     pub(super) upstream: Option<Arc<super::upstream::ManagedUpstream>>,
 }
 
@@ -37,14 +31,13 @@ impl CallbackScope {
         }
     }
 
-    pub(super) fn child_extensions(
+    pub(super) fn check_child_depth(
         &self,
         instance_id: &str,
-    ) -> Result<gateway_core::engine::extensions::ExtensionCallScope, gateway_plugin_sdk::PluginFault>
-    {
+    ) -> Result<(), gateway_plugin_sdk::PluginFault> {
         // 上游适配器在进入回调前已登记当前实例；主动子调用沿用该集合
         if self.extension_scope.contains(instance_id) {
-            return Ok(self.extension_scope.clone());
+            return Ok(());
         }
         if self.extension_scope.len()
             >= gateway_core::engine::extensions::ExtensionCallScope::MAXIMUM_DEPTH
@@ -54,9 +47,7 @@ impl CallbackScope {
                 "child call depth exceeded",
             ));
         }
-        self.extension_scope
-            .extending(instance_id.to_owned())
-            .ok_or_else(super::invalid)
+        Ok(())
     }
 
     pub(super) fn new(context: &CallContext, proxy: Option<OutboundProxy>) -> Self {
@@ -69,6 +60,7 @@ impl CallbackScope {
             proxy,
             extension_scope: Default::default(),
             execution_effects: None,
+            settings: None,
             upstream: None,
         }
     }

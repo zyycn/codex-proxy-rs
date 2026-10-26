@@ -29,16 +29,42 @@ impl HttpCallbacks<'_> {
         self.request_limits.body_bytes(self.call)
     }
 
+    pub(super) async fn account(
+        &self,
+        accounts: &super::accounts::PluginAccounts,
+        params: serde_json::Value,
+        payload: Vec<u8>,
+    ) -> Result<RpcReply, PluginFault> {
+        let request: wire::AccountHttpRequest = decode(params)?;
+        let maximum_body_bytes = self.body_limit(&payload)?;
+        let proxy = accounts
+            .http_proxy(request.account_id, request.credential_revision)
+            .await?;
+        self.send(
+            HttpRequest {
+                method: request.request.method,
+                url: request.request.url,
+                headers: request.request.headers,
+                body: payload,
+                maximum_body_bytes,
+            },
+            true,
+            None,
+            proxy.as_ref(),
+        )
+        .await
+    }
+
     pub(super) async fn send(
         &self,
         request: HttpRequest,
         streaming: bool,
         upstream_purpose: Option<gateway_plugin_sdk::call::upstream_adapter::UpstreamPathPurpose>,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<RpcReply, PluginFault> {
         let Self {
             client,
             network,
-            scope,
             call,
             maximum_payload,
             ..
@@ -48,9 +74,7 @@ impl HttpCallbacks<'_> {
         }
         let timeout = call.timeout()?;
         let attempt = call.start_upstream(upstream_purpose)?;
-        let response = client
-            .open(request, scope.proxy.as_ref(), network, timeout)
-            .await;
+        let response = client.open(request, proxy, network, timeout).await;
         attempt.finish(
             response
                 .as_ref()
@@ -127,6 +151,7 @@ impl HttpCallbacks<'_> {
                     },
                     method == "host.http.do_stream",
                     None,
+                    self.scope.proxy.as_ref(),
                 )
                 .await
             }

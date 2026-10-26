@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tokio::{
     io::AsyncWrite,
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch},
 };
 
 use crate::Frame;
@@ -15,6 +15,7 @@ use super::{CallCancellation, CallDeadline, SessionError};
 pub(super) struct Output {
     pub(super) sender: mpsc::Sender<Outbound>,
     pub(super) data_slots: Arc<Semaphore>,
+    pub(super) failed: watch::Sender<bool>,
 }
 
 impl Clone for Output {
@@ -22,6 +23,7 @@ impl Clone for Output {
         Self {
             sender: self.sender.clone(),
             data_slots: Arc::clone(&self.data_slots),
+            failed: self.failed.clone(),
         }
     }
 }
@@ -65,7 +67,16 @@ impl Output {
                 frame,
                 _data_slot: None,
             })
-            .map_err(|_| SessionError::Capacity)
+            .map_err(|_| {
+                // drop 路径也会提交资源确认，队列耗尽不能静默丢失生命周期消息
+                self.failed.send_replace(true);
+                SessionError::Capacity
+            })
+    }
+
+    pub(super) async fn failed(&self) {
+        let mut failed = self.failed.subscribe();
+        let _ = failed.wait_for(|failed| *failed).await;
     }
 }
 

@@ -29,7 +29,7 @@ fn limits() -> RpcLimits {
         maximum_executing_calls: 1,
         maximum_queued_calls: 1,
         maximum_queue_timeout: Duration::from_millis(200),
-        maximum_callbacks: 1,
+        maximum_callbacks: 4,
         ..Default::default()
     }
 }
@@ -146,7 +146,7 @@ async fn next_resumption_does_not_need_a_vacant_initial_queue_slot() {
         }
     });
     started.recv().await.unwrap();
-    // 等待 next 不挤占唯一的普通回调额度
+    // 未消费的 next 与普通回调共享有界驻留额度
     let mut occupying = Box::pin(call(&session, "callback"));
     assert!(futures::poll!(&mut occupying).is_pending());
     started.recv().await.unwrap();
@@ -323,6 +323,249 @@ async fn resumption_queue_wait_preserves_the_remaining_plugin_processing_budget(
     assert!(!waiting.is_finished());
     drop(active);
     assert!(waiting.await.unwrap().is_ok());
+    assert!(session.is_ready());
+    session.shutdown(Duration::from_secs(1)).await;
+}
+
+async fn scheduled<C: CallbackHandler + 'static>(
+    callbacks: Arc<C>,
+    mut limits: RpcLimits,
+) -> (tempfile::TempDir, Arc<RpcSession>) {
+    let (cache, prepared, mut handshake, processes) = prepared_session();
+    handshake.configuration = json!({"sdk_session": true});
+    limits.maximum_queue_timeout = Duration::from_secs(2);
+    let session = RpcSession::start(prepared, handshake, limits, &processes, callbacks)
+        .await
+        .unwrap();
+    (cache, Arc::new(session))
+}
+
+struct CrossCallbacks {
+    other: std::sync::Mutex<std::sync::Weak<RpcSession>>,
+    ready: Arc<tokio::sync::Barrier>,
+}
+
+impl CallbackHandler for CrossCallbacks {
+    fn call(
+        &self,
+        _context: CallContext,
+        _method: String,
+        _params: serde_json::Value,
+        _payload: Vec<u8>,
+    ) -> BoxFuture<'static, Result<RpcReply, PluginFault>> {
+        let other = self.other.lock().unwrap().upgrade().unwrap();
+        let ready = self.ready.clone();
+        Box::pin(async move {
+            ready.wait().await;
+            other
+                .call(
+                    "echo",
+                    other.context(Stage::Request, Duration::from_secs(2)),
+                    json!("child"),
+                    Vec::new(),
+                )
+                .await
+                .map_err(|_| PluginFault::new(gateway_plugin_sdk::ErrorCode::Fault, "child failed"))
+        })
+    }
+}
+
+#[tokio::test]
+async fn independent_sessions_release_execution_for_every_callback_method() {
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let left = Arc::new(CrossCallbacks {
+        other: Default::default(),
+        ready: barrier.clone(),
+    });
+    let right = Arc::new(CrossCallbacks {
+        other: Default::default(),
+        ready: barrier,
+    });
+    let (_left_cache, a) = scheduled(left.clone(), limits()).await;
+    let (_right_cache, b) = scheduled(right.clone(), limits()).await;
+    *left.other.lock().unwrap() = Arc::downgrade(&b);
+    *right.other.lock().unwrap() = Arc::downgrade(&a);
+    for method in [
+        "host.service.call",
+        "host.http.dispatch",
+        "host.model.execute",
+        "host.client.verify",
+        NEXT_METHOD,
+        "host.unclassified",
+    ] {
+        let invoke = |session: Arc<RpcSession>| async move {
+            session
+                .call(
+                    "callback",
+                    session.context(Stage::Request, Duration::from_secs(2)),
+                    json!({"method":method}),
+                    Vec::new(),
+                )
+                .await
+        };
+        let (a_result, b_result) = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(invoke(a.clone()), invoke(b.clone()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(a_result.unwrap().result, json!("child"), "{method}");
+        assert_eq!(b_result.unwrap().result, json!("child"), "{method}");
+    }
+    a.shutdown(Duration::from_secs(1)).await;
+    b.shutdown(Duration::from_secs(1)).await;
+}
+
+struct PartialCallbacks {
+    entered: mpsc::UnboundedSender<String>,
+    fast: Arc<Semaphore>,
+    slow: Arc<Semaphore>,
+}
+
+impl CallbackHandler for PartialCallbacks {
+    fn call(
+        &self,
+        _context: CallContext,
+        method: String,
+        _params: serde_json::Value,
+        _payload: Vec<u8>,
+    ) -> BoxFuture<'static, Result<RpcReply, PluginFault>> {
+        self.entered.send(method.clone()).unwrap();
+        let gate = match method.as_str() {
+            "fast" => Some(self.fast.clone()),
+            "slow" => Some(self.slow.clone()),
+            _ => None,
+        };
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                gate.acquire().await.unwrap().forget();
+            }
+            Ok(RpcReply {
+                result: json!(method),
+                payload: Vec::new(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_partial_callback_result_requires_a_permit_and_can_wait_again() {
+    let (entered, mut events) = mpsc::unbounded_channel();
+    let fast = Arc::new(Semaphore::new(0));
+    let slow = Arc::new(Semaphore::new(0));
+    let (cache, session) = scheduled(
+        Arc::new(PartialCallbacks {
+            entered,
+            fast: fast.clone(),
+            slow: slow.clone(),
+        }),
+        limits(),
+    )
+    .await;
+    let parent = tokio::spawn({
+        let session = session.clone();
+        async move { call(&session, "partial").await }
+    });
+    for _ in 0..2 {
+        tokio::time::timeout(Duration::from_secs(2), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    let marker = cache.path().join("processing");
+    let busy = tokio::spawn({
+        let session = session.clone();
+        let marker = marker.clone();
+        async move {
+            session
+                .call(
+                    "busy",
+                    session.context(Stage::Request, Duration::from_secs(2)),
+                    json!({"marker":marker, "delay_ms":300}),
+                    Vec::new(),
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !marker.exists() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    fast.add_permits(1);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), events.recv())
+            .await
+            .is_err()
+    );
+    busy.await.unwrap().unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), events.recv())
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("processed")
+    );
+    assert!(!parent.is_finished());
+    // 再次等待慢回调后，独立调用可取得同一个执行名额
+    assert!(call(&session, "echo").await.is_ok());
+    slow.add_permits(1);
+    assert_eq!(parent.await.unwrap().unwrap().result, json!("complete"));
+    session.shutdown(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn polling_wakeups_and_cancelled_suspensions_leave_the_session_usable() {
+    let (entered, mut events) = mpsc::unbounded_channel();
+    let slow = Arc::new(Semaphore::new(0));
+    let (_cache, session) = scheduled(
+        Arc::new(PartialCallbacks {
+            entered,
+            fast: Arc::new(Semaphore::new(0)),
+            slow,
+        }),
+        RpcLimits {
+            maximum_calls: 1,
+            ..limits()
+        },
+    )
+    .await;
+    assert_eq!(
+        call(&session, "yield").await.unwrap().result,
+        json!("yielded")
+    );
+    let parent = tokio::spawn({
+        let session = session.clone();
+        async move {
+            session
+                .call(
+                    "callback",
+                    session.context(Stage::Request, Duration::from_secs(2)),
+                    json!({"method":"slow"}),
+                    Vec::new(),
+                )
+                .await
+        }
+    });
+    assert_eq!(events.recv().await.as_deref(), Some("slow"));
+    assert!(matches!(
+        call(&session, "echo").await,
+        Err(RpcError::Overloaded)
+    ));
+    parent.abort();
+    assert!(matches!(parent.await, Err(error) if error.is_cancelled()));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match call(&session, "echo").await {
+                Ok(_) => break,
+                Err(RpcError::Overloaded) => tokio::task::yield_now().await,
+                Err(error) => panic!("{error}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
     assert!(session.is_ready());
     session.shutdown(Duration::from_secs(1)).await;
 }

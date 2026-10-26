@@ -12,8 +12,8 @@ use crate::{Frame, Message, call::middleware::NEXT_METHOD};
 
 use super::super::frame::EncodedFrame;
 use super::{
-    CallCancellation, CallDeadline, CallDeadlinePause, SessionError, credit::CreditWindow,
-    output::Output,
+    CallCancellation, CallDeadline, SessionError, credit::CreditWindow, output::Output,
+    scheduling::CallSchedule,
 };
 
 /// 宿主回调的成功结果；不实现 `Debug`，避免载荷进入普通诊断
@@ -32,6 +32,7 @@ pub struct HostClient {
     pub(super) output: Output,
     pub(super) maximum_stream_chunk_bytes: usize,
     pub(super) credits: Arc<CreditWindow>,
+    pub(super) schedule: Arc<CallSchedule>,
 }
 
 impl HostClient {
@@ -75,6 +76,16 @@ impl HostClient {
         };
         let managed_next = method == NEXT_METHOD;
         let (id, received) = self.callbacks.begin(self.parent_id, managed_next)?;
+        let mut guard = CallbackGuard {
+            id,
+            parent_id: self.parent_id,
+            callbacks: &self.callbacks,
+            output: &self.output,
+            sent: false,
+        };
+        if !managed_next {
+            self.schedule.charge_wait();
+        }
         let frame = Frame {
             message: Message::Callback {
                 id,
@@ -84,32 +95,23 @@ impl HostClient {
             },
             payload,
         };
-        let frame = EncodedFrame::new(frame).map_err(|_| {
-            self.callbacks.retire(id);
-            SessionError::Protocol
-        })?;
+        let frame = EncodedFrame::new(frame).map_err(|_| SessionError::Protocol)?;
         let sent = tokio::select! {
             biased;
             () = self.cancellation.cancelled() => Err(SessionError::Cancelled),
             () = self.deadline.wait() => Err(SessionError::Timeout),
             result = self.output.send_data(frame) => result,
         };
-        if let Err(error) = sent {
-            self.callbacks.retire(id);
-            return Err(error);
-        }
-        if managed_next {
-            self.callbacks.pause_next(id, &self.deadline);
-        }
+        sent?;
+        guard.sent = true;
+        self.callbacks.mark_sent(id);
         drop(ordered);
         tokio::select! {
             biased;
             () = self.cancellation.cancelled() => {
-                self.callbacks.retire(id);
                 Err(SessionError::Cancelled)
             }
             () = self.deadline.wait() => {
-                self.callbacks.retire(id);
                 Err(SessionError::Timeout)
             }
             result = received => result.map_err(|_| SessionError::Closed)?,
@@ -121,7 +123,6 @@ pub(super) struct CallbackRegistry {
     state: Mutex<CallbackState>,
     order: tokio::sync::Mutex<()>,
     maximum: usize,
-    maximum_next: usize,
     maximum_retired: usize,
 }
 
@@ -135,12 +136,33 @@ struct CallbackState {
 struct PendingCallback {
     parent_id: u64,
     managed_next: bool,
-    pause: Option<CallDeadlinePause>,
-    result: oneshot::Sender<Result<HostReply, SessionError>>,
+    sent: bool,
+    result: Option<oneshot::Sender<Result<HostReply, SessionError>>>,
+}
+
+struct CallbackGuard<'a> {
+    id: u64,
+    parent_id: u64,
+    callbacks: &'a CallbackRegistry,
+    output: &'a Output,
+    sent: bool,
+}
+
+impl Drop for CallbackGuard<'_> {
+    fn drop(&mut self) {
+        if self.callbacks.retire(self.id) && self.sent {
+            let _ = self
+                .output
+                .send_control(Frame::control(Message::CallbackConsumed {
+                    id: self.id,
+                    parent_id: self.parent_id,
+                }));
+        }
+    }
 }
 
 impl CallbackRegistry {
-    pub(super) fn new(maximum: usize, maximum_next: usize) -> Self {
+    pub(super) fn new(maximum: usize) -> Self {
         Self {
             state: Mutex::new(CallbackState {
                 next_id: 2,
@@ -150,8 +172,7 @@ impl CallbackRegistry {
             }),
             order: tokio::sync::Mutex::new(()),
             maximum,
-            maximum_next,
-            maximum_retired: (maximum + maximum_next).saturating_mul(2),
+            maximum_retired: maximum.saturating_mul(2),
         }
     }
 
@@ -164,18 +185,7 @@ impl CallbackRegistry {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let maximum = if managed_next {
-            self.maximum_next
-        } else {
-            self.maximum
-        };
-        if state
-            .pending
-            .values()
-            .filter(|pending| pending.managed_next == managed_next)
-            .count()
-            >= maximum
-        {
+        if state.pending.len() >= self.maximum {
             return Err(SessionError::Capacity);
         }
         let id = state.next_id;
@@ -186,21 +196,40 @@ impl CallbackRegistry {
             PendingCallback {
                 parent_id,
                 managed_next,
-                result,
-                pause: None,
+                sent: false,
+                result: Some(result),
             },
         );
         Ok((id, received))
     }
 
-    fn pause_next(&self, id: u64, deadline: &CallDeadline) {
+    fn mark_sent(&self, id: u64) {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(pending) = state.pending.get_mut(&id) {
-            pending.pause = deadline.pause();
+        if let Some(callback) = state.pending.get_mut(&id) {
+            callback.sent = true;
         }
+    }
+
+    pub(super) fn pauses_budget(&self, parent_id: u64) -> bool {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut has_next = false;
+        for callback in state
+            .pending
+            .values()
+            .filter(|call| call.parent_id == parent_id)
+        {
+            if !callback.managed_next || !callback.sent {
+                return false;
+            }
+            has_next = true;
+        }
+        has_next
     }
 
     pub(super) fn resolve(&self, frame: Frame) -> Result<(), SessionError> {
@@ -208,13 +237,13 @@ impl CallbackRegistry {
             Message::Result { id, .. } | Message::Error { id, .. } => *id,
             _ => return Err(SessionError::Protocol),
         };
-        let pending = {
+        let sender = {
             let mut state = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(pending) = state.pending.remove(&id) {
-                Some(pending)
+            if let Some(pending) = state.pending.get_mut(&id) {
+                Some(pending.result.take().ok_or(SessionError::Protocol)?)
             } else if state.retired.remove(&id) {
                 state.retired_order.retain(|retired| *retired != id);
                 None
@@ -222,7 +251,7 @@ impl CallbackRegistry {
                 return Err(SessionError::Protocol);
             }
         };
-        let Some(mut pending) = pending else {
+        let Some(sender) = sender else {
             return Ok(());
         };
         let result = match frame.message {
@@ -235,20 +264,22 @@ impl CallbackRegistry {
             }
             _ => return Err(SessionError::Protocol),
         };
-        // 收到宿主结果就恢复预算，不依赖插件再次轮询 next future
-        pending.pause.take();
-        let _ = pending.result.send(result);
+        let _ = sender.send(result);
         Ok(())
     }
 
-    fn retire(&self, id: u64) {
+    fn retire(&self, id: u64) -> bool {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.pending.remove(&id).is_some() {
-            retire_callback(&mut state, id, self.maximum_retired);
+        if let Some(pending) = state.pending.remove(&id) {
+            if pending.result.is_some() {
+                retire_callback(&mut state, id, self.maximum_retired);
+            }
+            return true;
         }
+        false
     }
 
     pub(super) fn finish_parent(&self, parent_id: u64) {
@@ -261,7 +292,9 @@ impl CallbackRegistry {
             let mut finished = Vec::new();
             for (id, pending) in std::mem::take(&mut state.pending) {
                 if pending.parent_id == parent_id {
-                    retire_callback(&mut state, id, self.maximum_retired);
+                    if pending.result.is_some() {
+                        retire_callback(&mut state, id, self.maximum_retired);
+                    }
                     finished.push(pending);
                 } else {
                     remaining.insert(id, pending);
@@ -271,7 +304,9 @@ impl CallbackRegistry {
             finished
         };
         for pending in pending {
-            let _ = pending.result.send(Err(SessionError::Cancelled));
+            if let Some(result) = pending.result {
+                let _ = result.send(Err(SessionError::Cancelled));
+            }
         }
     }
 
@@ -284,7 +319,9 @@ impl CallbackRegistry {
             std::mem::take(&mut state.pending)
         };
         for pending in pending.into_values() {
-            let _ = pending.result.send(Err(SessionError::Closed));
+            if let Some(result) = pending.result {
+                let _ = result.send(Err(SessionError::Closed));
+            }
         }
     }
 }

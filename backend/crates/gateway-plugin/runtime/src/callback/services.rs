@@ -63,27 +63,18 @@ impl ServicePorts {
             )
         })?;
         let call = registry.call(&request.operation, request.input);
-        let scope = &resources.scope;
-        let origin = scope.origin.as_ref();
+        resources.scope.check_child_depth(&context.instance_id)?;
+        let origin = resources.child_origin(context)?;
         let parent = gateway_admin::public_service::Origin {
-            request_id: origin.map_or_else(
-                || {
-                    context
-                        .request_id
-                        .clone()
-                        .unwrap_or_else(|| context.resource_scope_id.clone())
-                },
-                |origin| origin.request_id.clone(),
-            ),
-            call_id: origin.map_or_else(
-                || format!("{}:{}", context.resource_scope_id, context.call_id),
-                |origin| origin.call_id.clone(),
-            ),
-            cancellation: resources.cancellation.clone(),
-            extensions: scope.child_extensions(&context.instance_id)?,
-            plan: origin.map_or(gateway_admin::public_service::Plan::Current, |origin| {
-                gateway_admin::public_service::Plan::Frozen(Some(origin.plan.clone()))
-            }),
+            request_id: origin.request_id,
+            call_id: origin.call_id,
+            cancellation: origin.cancellation,
+            extensions: origin.extensions,
+            plan: origin
+                .plan
+                .map_or(gateway_admin::public_service::Plan::Current, |plan| {
+                    gateway_admin::public_service::Plan::Frozen(Some(plan))
+                }),
         };
         // 即使终端只读，服务中间件也可提交写入；不存在的操作不会进入调用链
         if registry
