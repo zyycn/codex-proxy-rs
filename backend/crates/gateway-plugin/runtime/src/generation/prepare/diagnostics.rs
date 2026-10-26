@@ -10,7 +10,7 @@ use gateway_admin::model::{
     AdminError, AdminErrorKind, Revision,
     plugins::instances::{
         PluginInstance, PluginInstanceRuntime, PluginInstanceRuntimeFailure,
-        PluginInstanceRuntimeStatus, PluginInstanceSnapshot,
+        PluginInstanceRuntimeLoad, PluginInstanceRuntimeStatus, PluginInstanceSnapshot,
     },
 };
 use gateway_core::routing::extensions::ExtensionSetReference;
@@ -227,6 +227,17 @@ impl InstanceRuntimeProjection<'_> {
             actual_artifact_sha256: active.map(|instance| instance.artifact_sha256.clone()),
             failure,
             draining_revisions: draining_revisions.into_iter().collect(),
+            load: active.map(|instance| {
+                let load = instance.session.load();
+                PluginInstanceRuntimeLoad {
+                    active_calls: load.active_calls,
+                    executing_calls: load.executing_calls,
+                    queued_calls: load.queued_calls,
+                    resuming_calls: load.resuming_calls,
+                    pending_callbacks: load.pending_callbacks,
+                    active_streams: load.active_streams,
+                }
+            }),
         }
     }
 }

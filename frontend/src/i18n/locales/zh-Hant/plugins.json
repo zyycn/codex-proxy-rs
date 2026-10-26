@@ -424,7 +424,9 @@
       "compatibilityEnding": "兼容窗口已滿，後續正式版本將移除舊接口轉換",
       "unsupportedVersionHelp": "配置與數據保留，請安裝可加載的插件版本",
       "restartHelp": "啓用配置保留，可在插件詳情中重新啓動",
-      "upgradeHelp": "請更新插件，或聯繫作者升級接口"
+      "upgradeHelp": "請更新插件，或聯繫作者升級接口",
+      "unknown": "運行狀態未知",
+      "unknownDescription": "暫時無法讀取運行狀態，啟用配置保持不變"
     },
     "updates": {
       "packageRequired": "請選擇插件包以確認版本與兼容性",
@@ -530,6 +532,20 @@
       "releaseList": "發行清單",
       "noRemoteUpdateSource": "無遠程更新來源"
     },
-    "onePerLine": "每行一項"
+    "onePerLine": "每行一項",
+    "runtime": {
+      "title": "運行負載",
+      "helpTitle": "運行負載說明",
+      "idle": "當前空閒",
+      "inFlightSummary": "{count} 個在途調用",
+      "revision": "運行配置版本：{revision}",
+      "description": "當前運行配置的採樣值，不含正在退出的舊配置，計數可能重疊",
+      "activeCalls": "在途調用",
+      "executingCalls": "執行中",
+      "queuedCalls": "排隊中",
+      "resumingCalls": "等待恢復",
+      "pendingCallbacks": "駐留回調",
+      "activeStreams": "活動流"
+    }
   }
 }

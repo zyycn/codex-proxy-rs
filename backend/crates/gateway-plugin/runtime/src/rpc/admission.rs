@@ -47,4 +47,11 @@ impl ExecutionCapacity {
         self.active.close();
         self.queued.close();
     }
+
+    pub(super) fn available(&self) -> (usize, usize) {
+        (
+            self.active.available_permits(),
+            self.queued.available_permits(),
+        )
+    }
 }

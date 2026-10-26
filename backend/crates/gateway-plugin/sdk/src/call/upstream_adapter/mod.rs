@@ -9,6 +9,15 @@ mod codec;
 pub const REGISTER_METHOD: &str = "upstream_adapter.register";
 pub const EXECUTE_METHOD: &str = "upstream_adapter.execute";
 
+pub const HTTP_DO: &str = "host.upstream.http.do";
+pub const HTTP_DO_STREAM: &str = "host.upstream.http.do_stream";
+pub const HTTP_STREAM_READ: &str = "host.upstream.http.stream_read";
+pub const HTTP_STREAM_CLOSE: &str = "host.upstream.http.stream_close";
+pub const WEBSOCKET_OPEN: &str = "host.upstream.websocket.open";
+pub const WEBSOCKET_SEND: &str = "host.upstream.websocket.send";
+pub const WEBSOCKET_READ: &str = "host.upstream.websocket.read";
+pub const WEBSOCKET_CLOSE: &str = "host.upstream.websocket.close";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BuiltinProvider {

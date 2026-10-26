@@ -31,7 +31,7 @@ struct BlockingCallbacks {
 #[derive(Default)]
 pub(super) struct LifecycleCallbacks {
     pub(super) begun: AtomicUsize,
-    finished: AtomicUsize,
+    pub(super) finished: AtomicUsize,
 }
 
 struct OversizedReplyCallbacks;

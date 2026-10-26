@@ -11,7 +11,7 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
-use super::session::{CallbackHandler, RpcError, RpcReply, Shared};
+use super::{CallbackHandler, RpcError, RpcReply, Shared};
 
 pub(super) fn start<W, R>(
     writer: W,

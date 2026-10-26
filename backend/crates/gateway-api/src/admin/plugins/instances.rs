@@ -9,8 +9,8 @@ use axum::{
 };
 use gateway_admin::model::plugins::instances::{
     ConfigurePluginInstance, PluginCapabilityBinding, PluginInstance, PluginInstanceRuntime,
-    PluginInstanceRuntimeFailure, PluginInstanceRuntimeStatus, PluginInstanceView,
-    RollbackPluginInstance,
+    PluginInstanceRuntimeFailure, PluginInstanceRuntimeLoad, PluginInstanceRuntimeStatus,
+    PluginInstanceView, RollbackPluginInstance,
 };
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,7 @@ struct InstanceView {
 #[serde(rename_all = "snake_case")]
 enum InstanceRuntimeStatus {
     Disabled,
+    Unknown,
     AwaitingPublication,
     Preparing,
     Running,
@@ -83,6 +84,7 @@ impl From<PluginInstanceRuntimeStatus> for InstanceRuntimeStatus {
     fn from(value: PluginInstanceRuntimeStatus) -> Self {
         match value {
             PluginInstanceRuntimeStatus::Disabled => Self::Disabled,
+            PluginInstanceRuntimeStatus::Unknown => Self::Unknown,
             PluginInstanceRuntimeStatus::AwaitingPublication => Self::AwaitingPublication,
             PluginInstanceRuntimeStatus::Preparing => Self::Preparing,
             PluginInstanceRuntimeStatus::Running => Self::Running,
@@ -118,6 +120,31 @@ struct InstanceRuntimeView {
     actual_artifact_sha256: Option<String>,
     failure: Option<InstanceRuntimeFailure>,
     draining_revisions: Vec<u64>,
+    load: Option<InstanceRuntimeLoad>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstanceRuntimeLoad {
+    active_calls: usize,
+    executing_calls: usize,
+    queued_calls: usize,
+    resuming_calls: usize,
+    pending_callbacks: usize,
+    active_streams: usize,
+}
+
+impl From<PluginInstanceRuntimeLoad> for InstanceRuntimeLoad {
+    fn from(value: PluginInstanceRuntimeLoad) -> Self {
+        Self {
+            active_calls: value.active_calls,
+            executing_calls: value.executing_calls,
+            queued_calls: value.queued_calls,
+            resuming_calls: value.resuming_calls,
+            pending_callbacks: value.pending_callbacks,
+            active_streams: value.active_streams,
+        }
+    }
 }
 
 impl From<PluginInstanceRuntime> for InstanceRuntimeView {
@@ -128,6 +155,7 @@ impl From<PluginInstanceRuntime> for InstanceRuntimeView {
             actual_artifact_sha256: value.actual_artifact_sha256,
             failure: value.failure.map(Into::into),
             draining_revisions: value.draining_revisions,
+            load: value.load.map(Into::into),
         }
     }
 }

@@ -1,10 +1,10 @@
 import type { ShallowRef } from 'vue'
+import type { PluginBridgeMessage, PluginModelMessageType } from '../management/bridge-contract'
 import type { PluginManagementPage, PluginManagementRoute, PluginManagementView } from '@/api'
 import { useEventListener } from '@vueuse/core'
 import { computed, nextTick, onScopeDispose, shallowRef, watch } from 'vue'
 import {
   callPluginManagementRoute,
-  callPluginModelResponses,
   createPluginManagementCallbackTicket,
   pluginManagementCallbackPath,
 } from '@/api'
@@ -12,31 +12,18 @@ import { API_BASE_URL } from '@/api/constants'
 import { ApiError } from '@/api/request'
 import { t } from '@/i18n'
 import { errorMessage, generateRequestId } from '@/utils/operation'
+import { isPluginBridgeRequest, isRecord } from '../management/bridge-contract'
 import {
   assemblePluginManagementPage,
   hasControlCharacter,
   MAXIMUM_MANAGEMENT_BODY_BYTES,
   MAXIMUM_MANAGEMENT_IN_FLIGHT,
   MAXIMUM_MANAGEMENT_QUERY_BYTES,
-  MAXIMUM_MODEL_BODY_BYTES,
-  MAXIMUM_MODEL_CHUNK_BYTES,
-  MAXIMUM_MODEL_IN_FLIGHT,
-  MODEL_REQUEST_DEADLINE_MS,
-  MODEL_RESPONSE_IDLE_MS,
   PLUGIN_MANAGEMENT_BRIDGE,
   PLUGIN_MANAGEMENT_BRIDGE_VERSION,
   readPluginFrameTheme,
 } from '../management/frame'
-
-interface BridgeMessage {
-  target: string
-  version: number
-  channel: string
-  session: string
-  type: string
-  id: number
-  payload?: unknown
-}
+import { createPluginModelStreams } from '../management/model-streams'
 
 interface FrameSession {
   channel: string
@@ -45,24 +32,9 @@ interface FrameSession {
   view: PluginManagementView
   page: PluginManagementPage
   revoke: () => void
-  inFlight: number
   requestIds: Set<number>
-  modelRequests: Map<number, ModelRequest>
+  models: ReturnType<typeof createPluginModelStreams>
   loaded: boolean
-}
-
-interface ModelRequest {
-  id: number
-  source: Window
-  controller: AbortController
-  reader?: ReadableStreamDefaultReader<Uint8Array>
-  buffered?: Uint8Array
-  bufferedOffset: number
-  reading: boolean
-  nextPullId: number
-  activePullId?: number
-  totalTimer?: ReturnType<typeof setTimeout>
-  idleTimer?: ReturnType<typeof setTimeout>
 }
 
 export function usePluginFrameSession(options: {
@@ -91,8 +63,7 @@ export function usePluginFrameSession(options: {
     if (!current)
       return
     current.controller.abort()
-    for (const request of current.modelRequests.values())
-      terminateModelRequest(current, request)
+    current.models.dispose()
     current.revoke()
   }
 
@@ -124,18 +95,23 @@ export function usePluginFrameSession(options: {
         assembled.revoke()
         return
       }
-      session.value = {
+      const requestIds = new Set<number>()
+      const current: FrameSession = {
         channel,
         session: sessionId,
         controller,
         view,
         page,
         revoke: assembled.revoke,
-        inFlight: 0,
-        requestIds: new Set(),
-        modelRequests: new Map(),
+        requestIds,
+        models: createPluginModelStreams({
+          target: view.target,
+          requestIds,
+          post: (...args) => postModelMessage(current, ...args),
+        }),
         loaded: false,
       }
+      session.value = current
       srcdoc.value = assembled.srcdoc
     }
     catch (error) {
@@ -170,23 +146,6 @@ export function usePluginFrameSession(options: {
     }
     loadError.value = t('plugins.frame.navigationBlocked')
     disposeSession()
-  }
-
-  function isBridgeMessage(value: unknown): value is BridgeMessage {
-    if (!value || typeof value !== 'object')
-      return false
-    const message = value as Record<string, unknown>
-    return message.target === PLUGIN_MANAGEMENT_BRIDGE
-      && message.version === PLUGIN_MANAGEMENT_BRIDGE_VERSION
-      && typeof message.channel === 'string'
-      && typeof message.session === 'string'
-      && typeof message.type === 'string'
-      && Number.isSafeInteger(message.id)
-      && Number(message.id) > 0
-  }
-
-  function isRecord(value: unknown): value is Record<string, unknown> {
-    return Boolean(value && typeof value === 'object' && !Array.isArray(value))
   }
 
   function postResult(
@@ -253,7 +212,7 @@ export function usePluginFrameSession(options: {
   async function handleRouteRequest(
     current: FrameSession,
     source: Window,
-    message: BridgeMessage,
+    message: PluginBridgeMessage,
   ) {
     if (!isRecord(message.payload))
       throw new Error(t('plugins.frame.invalidRequestParameters'))
@@ -279,7 +238,7 @@ export function usePluginFrameSession(options: {
   async function handleCallbackTicket(
     current: FrameSession,
     source: Window,
-    message: BridgeMessage,
+    message: PluginBridgeMessage,
   ) {
     if (!isRecord(message.payload))
       throw new Error(t('plugins.frame.invalidCallbackTicket'))
@@ -306,7 +265,7 @@ export function usePluginFrameSession(options: {
   function postModelMessage(
     current: FrameSession,
     source: Window,
-    type: 'models-response' | 'models-chunk' | 'models-complete' | 'models-error',
+    type: PluginModelMessageType,
     id: number,
     payload?: unknown,
     error?: string,
@@ -326,236 +285,6 @@ export function usePluginFrameSession(options: {
     }, '*', transfer)
   }
 
-  function validateModelRequestPayload(payload: unknown) {
-    if (!isRecord(payload))
-      throw new Error(t('plugins.frame.invalidModelRequest'))
-    const clientKeyId = payload.clientKeyId
-    const body = payload.body
-    if (
-      typeof clientKeyId !== 'string'
-      || !clientKeyId
-      || clientKeyId !== clientKeyId.trim()
-      || clientKeyId.length > 128
-      || hasControlCharacter(clientKeyId)
-    ) {
-      throw new Error(t('plugins.frame.clientkeyidIsInvalid'))
-    }
-    if (typeof body !== 'string' || new TextEncoder().encode(body).byteLength > MAXIMUM_MODEL_BODY_BYTES)
-      throw new Error(t('plugins.frame.invalidModelBody'))
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(body)
-    }
-    catch {
-      throw new Error(t('plugins.frame.invalidModelJson'))
-    }
-    if (!isRecord(parsed))
-      throw new Error(t('plugins.frame.modelObjectRequired'))
-    return { clientKeyId, body }
-  }
-
-  function modelResponseHeaders(response: Response) {
-    // 完整转交浏览器可读取的响应头；浏览器自身的 Headers 合同仍然适用。
-    return Array.from(response.headers.entries())
-  }
-
-  function supportedModelResponse(response: Response) {
-    if (!response.body)
-      return true
-    const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
-    return contentType === 'application/json'
-      || contentType === 'text/event-stream'
-      || Boolean(contentType?.endsWith('+json'))
-  }
-
-  function detachModelRequest(current: FrameSession, request: ModelRequest) {
-    if (current.modelRequests.get(request.id) !== request)
-      return false
-    current.modelRequests.delete(request.id)
-    clearTimeout(request.totalTimer)
-    clearTimeout(request.idleTimer)
-    request.totalTimer = undefined
-    request.idleTimer = undefined
-    return true
-  }
-
-  function cancelModelReader(request: ModelRequest) {
-    const reader = request.reader
-    if (!reader)
-      return
-    void reader.cancel()
-      .finally(() => {
-        try {
-          reader.releaseLock()
-        }
-        catch {
-          // 取消中的 read 会自行释放；会话清理不能因此产生未处理拒绝。
-        }
-      })
-      .catch(() => undefined)
-  }
-
-  function terminateModelRequest(current: FrameSession, request: ModelRequest, error?: string) {
-    if (!detachModelRequest(current, request))
-      return
-    request.controller.abort()
-    cancelModelReader(request)
-    if (error)
-      postModelMessage(current, request.source, 'models-error', request.id, undefined, error)
-  }
-
-  function completeModelRequest(current: FrameSession, request: ModelRequest, pullId: number) {
-    if (!detachModelRequest(current, request))
-      return
-    try {
-      request.reader?.releaseLock()
-    }
-    catch {
-      // EOF 已确定，锁清理失败不应阻断结束标记。
-    }
-    postModelMessage(current, request.source, 'models-complete', request.id, { pullId })
-  }
-
-  function armModelIdleTimeout(current: FrameSession, request: ModelRequest) {
-    clearTimeout(request.idleTimer)
-    request.idleTimer = setTimeout(() => {
-      terminateModelRequest(current, request, t('plugins.frame.pageDidNotContinueToReadModel'))
-    }, MODEL_RESPONSE_IDLE_MS)
-  }
-
-  async function handleModelRequest(current: FrameSession, source: Window, message: BridgeMessage) {
-    if (current.modelRequests.size >= MAXIMUM_MODEL_IN_FLIGHT) {
-      postModelMessage(current, source, 'models-error', message.id, undefined, t('plugins.frame.modelConcurrencyLimit'))
-      return
-    }
-    if (current.requestIds.has(message.id) || current.modelRequests.has(message.id)) {
-      postModelMessage(current, source, 'models-error', message.id, undefined, t('plugins.frame.duplicateModelRequest'))
-      return
-    }
-
-    let payload: ReturnType<typeof validateModelRequestPayload>
-    try {
-      payload = validateModelRequestPayload(message.payload)
-    }
-    catch (error) {
-      postModelMessage(current, source, 'models-error', message.id, undefined, errorMessage(error))
-      return
-    }
-
-    const request: ModelRequest = {
-      id: message.id,
-      source,
-      controller: new AbortController(),
-      bufferedOffset: 0,
-      reading: false,
-      nextPullId: 1,
-    }
-    current.modelRequests.set(message.id, request)
-    request.totalTimer = setTimeout(() => {
-      terminateModelRequest(current, request, t('plugins.frame.modelTimeout'))
-    }, MODEL_REQUEST_DEADLINE_MS)
-
-    try {
-      const response = await callPluginModelResponses(
-        current.view.target,
-        payload.clientKeyId,
-        payload.body,
-        request.controller.signal,
-      )
-      if (current.modelRequests.get(request.id) !== request)
-        return
-      if (!supportedModelResponse(response))
-        throw new Error(t('plugins.frame.unsupportedModelContentType'))
-
-      const hasBody = response.body !== null
-      if (response.body)
-        request.reader = response.body.getReader()
-      const statusText = response.statusText.length <= 256 && !hasControlCharacter(response.statusText)
-        ? response.statusText
-        : ''
-      postModelMessage(current, source, 'models-response', message.id, {
-        status: response.status,
-        statusText,
-        headers: modelResponseHeaders(response),
-        hasBody,
-      })
-      if (!hasBody) {
-        detachModelRequest(current, request)
-        return
-      }
-      armModelIdleTimeout(current, request)
-    }
-    catch (error) {
-      if (current.modelRequests.get(request.id) === request)
-        terminateModelRequest(current, request, errorMessage(error, t('plugins.frame.modelRequestFailed')))
-    }
-  }
-
-  async function handleModelPull(current: FrameSession, source: Window, message: BridgeMessage) {
-    const request = current.modelRequests.get(message.id)
-    if (!request || request.source !== source)
-      return
-    const pullId = isRecord(message.payload)
-      ? message.payload.pullId
-      : undefined
-    if (!Number.isSafeInteger(pullId) || Number(pullId) < 1) {
-      terminateModelRequest(current, request, t('plugins.frame.invalidPullId'))
-      return
-    }
-    if (request.reading) {
-      if (request.activePullId !== pullId)
-        terminateModelRequest(current, request, t('plugins.frame.concurrentPull'))
-      return
-    }
-    if (pullId !== request.nextPullId) {
-      terminateModelRequest(current, request, t('plugins.frame.stalePullId'))
-      return
-    }
-    clearTimeout(request.idleTimer)
-    request.idleTimer = undefined
-    request.reading = true
-    request.activePullId = Number(pullId)
-    try {
-      while (current.modelRequests.get(message.id) === request) {
-        if (!request.buffered || request.bufferedOffset >= request.buffered.byteLength) {
-          request.buffered = undefined
-          request.bufferedOffset = 0
-          const result = await request.reader?.read()
-          if (current.modelRequests.get(message.id) !== request)
-            return
-          if (!result || result.done) {
-            completeModelRequest(current, request, Number(pullId))
-            return
-          }
-          if (result.value.byteLength === 0)
-            continue
-          request.buffered = result.value
-        }
-
-        const end = Math.min(request.bufferedOffset + MAXIMUM_MODEL_CHUNK_BYTES, request.buffered.byteLength)
-        const chunk = request.buffered.slice(request.bufferedOffset, end)
-        request.bufferedOffset = end
-        if (request.bufferedOffset >= request.buffered.byteLength) {
-          request.buffered = undefined
-          request.bufferedOffset = 0
-        }
-        const body = chunk.buffer
-        request.nextPullId += 1
-        postModelMessage(current, source, 'models-chunk', message.id, { pullId, body }, undefined, [body])
-        armModelIdleTimeout(current, request)
-        return
-      }
-    }
-    catch (error) {
-      if (current.modelRequests.get(message.id) === request)
-        terminateModelRequest(current, request, errorMessage(error, t('plugins.frame.modelResponseReadFailed')))
-    }
-    finally {
-      request.reading = false
-      request.activePullId = undefined
-    }
-  }
-
   async function handleBridgeMessage(event: MessageEvent) {
     const current = session.value
     const source = event.source
@@ -563,7 +292,7 @@ export function usePluginFrameSession(options: {
       !current
       || source !== options.iframe.value?.contentWindow
       || event.origin !== 'null'
-      || !isBridgeMessage(event.data)
+      || !isPluginBridgeRequest(event.data)
       || event.data.channel !== current.channel
       || event.data.session !== current.session
     ) {
@@ -579,30 +308,27 @@ export function usePluginFrameSession(options: {
       return
     }
     if (event.data.type === 'models-request') {
-      void handleModelRequest(current, frame, event.data)
+      void current.models.request(frame, event.data)
       return
     }
     if (event.data.type === 'models-pull') {
-      void handleModelPull(current, frame, event.data)
+      void current.models.pull(frame, event.data)
       return
     }
     if (event.data.type === 'models-cancel') {
-      const request = current.modelRequests.get(event.data.id)
-      if (request?.source === frame)
-        terminateModelRequest(current, request)
+      current.models.cancel(frame, event.data.id)
       return
     }
     if (!['request', 'callback-ticket'].includes(event.data.type))
       return
-    if (current.requestIds.has(event.data.id) || current.modelRequests.has(event.data.id)) {
+    if (current.requestIds.has(event.data.id) || current.models.has(event.data.id)) {
       postResult(current, frame, event.data.id, false, undefined, t('plugins.frame.duplicateManagementRequest'))
       return
     }
-    if (current.inFlight >= MAXIMUM_MANAGEMENT_IN_FLIGHT) {
+    if (current.requestIds.size >= MAXIMUM_MANAGEMENT_IN_FLIGHT) {
       postResult(current, frame, event.data.id, false, undefined, t('plugins.frame.managementConcurrencyLimit'))
       return
     }
-    current.inFlight += 1
     current.requestIds.add(event.data.id)
     try {
       if (event.data.type === 'request')
@@ -622,7 +348,6 @@ export function usePluginFrameSession(options: {
     }
     finally {
       current.requestIds.delete(event.data.id)
-      current.inFlight = Math.max(0, current.inFlight - 1)
     }
   }
 

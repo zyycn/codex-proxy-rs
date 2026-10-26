@@ -882,6 +882,74 @@ async fn invalid_client_key_and_group_scopes_are_rejected_before_publish() {
 }
 
 #[tokio::test]
+async fn observer_call_load_tracks_the_active_lease_until_completion() {
+    use gateway_admin::ports::plugins::PluginRuntimeDiagnostics;
+
+    let markers = tempfile::tempdir().unwrap();
+    let started = markers.path().join("started.jsonl");
+    let completed = markers.path().join("completed.jsonl");
+    let (cache, store, runtime) = setup(
+        vec![(
+            "tracked",
+            serde_json::json!({
+                "observation_started_marker": started,
+                "observation_marker": completed,
+                "observation_delay_ms": 200,
+            }),
+            vec![binding(EventKind::RequestCompleted, 0)],
+        )],
+        RpcLimits::default(),
+    )
+    .await;
+    let snapshot = store.snapshot.lock().unwrap().clone();
+    let generation = gateway_core::routing::extensions::ExtensionPreparationPort::prepare(
+        &runtime,
+        ConfigRevision::new(1).unwrap(),
+    )
+    .await
+    .unwrap();
+    let plan = runtime.observer_registry().resolve(&generation).unwrap();
+    plan.dispatch(
+        generation.clone(),
+        observation("req_tracked", RequestObservationOutcome::Succeeded)
+            .with_provider(ProviderKind::new("openai").unwrap()),
+    );
+    wait_for_lines(&started, 1).await;
+    let read_load = || async {
+        runtime
+            .runtime_diagnostics(&snapshot, Some(1), Some(&generation))
+            .await
+            .unwrap()
+            .remove("tracked")
+            .unwrap()
+            .load
+            .expect("published session has a load snapshot")
+    };
+    let load = read_load().await;
+    assert_eq!(load.active_calls, 1);
+    assert_eq!(load.executing_calls, 1);
+    assert_eq!(load.queued_calls, 0);
+    assert_eq!(load.pending_callbacks, 0);
+    assert_eq!(load.active_streams, 0);
+
+    wait_for_lines(&completed, 1).await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let load = read_load().await;
+            if load.active_calls == 0 && load.executing_calls == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed calls release their observed resource occupancy");
+    drop(plan);
+    drop(generation);
+    super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
 async fn observer_backpressure_drops_excess_and_inflight_dispatch_keeps_generation_alive() {
     let marker_directory = tempfile::tempdir().unwrap();
     let started = marker_directory.path().join("started.jsonl");

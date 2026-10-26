@@ -1,5 +1,6 @@
-import type { PluginBridgeInitial } from './bridge-contract'
-import { hasControlCharacter, MAXIMUM_MANAGEMENT_BODY_BYTES, MAXIMUM_MANAGEMENT_IN_FLIGHT, MAXIMUM_MANAGEMENT_QUERY_BYTES, MAXIMUM_MODEL_BODY_BYTES, MAXIMUM_MODEL_CHUNK_BYTES, MAXIMUM_MODEL_IN_FLIGHT, MODEL_REQUEST_DEADLINE_MS } from './bridge-contract'
+import type { PluginBridgeInitial, PluginCallbackTicket, PluginHostBridge, PluginManagementReply, PluginManagementRequest, PluginPageMessageType } from './bridge-contract'
+import { isRecord, MAXIMUM_MANAGEMENT_BODY_BYTES, MAXIMUM_MANAGEMENT_IN_FLIGHT, MAXIMUM_MANAGEMENT_QUERY_BYTES } from './bridge-contract'
+import { createPluginModelBridge } from './bridge-models'
 
 interface PendingOperation {
   resolve: (value: unknown) => void
@@ -7,50 +8,8 @@ interface PendingOperation {
   timer: number
 }
 
-interface ModelOperation {
-  id: number
-  resolve: (value: Response) => void
-  reject: (error: Error) => void
-  signal?: AbortSignal
-  abort?: () => void
-  timer?: number
-  controller?: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>>
-  responseStarted: boolean
-  pullPromise?: Promise<void>
-  pullResolve?: () => void
-  pullReject?: (error: Error) => void
-  pullSequence: number
-  pullId?: number
-}
-
-interface ModelMessage {
-  id: number
-  type: string
-  payload?: Record<string, unknown>
-  error?: unknown
-}
-
-interface ManagementRequest {
-  method: string
-  path: string
-  query?: string
-  contentType?: string
-  body?: string | ArrayBuffer | ArrayBufferView
-}
-
-interface ModelRequest {
-  clientKeyId: string
-  body: Record<string, unknown>
-  signal?: AbortSignal
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
 export default function installPluginBridge(initial: PluginBridgeInitial) {
   const pending = new Map<number, PendingOperation>()
-  const modelOperations = new Map<number, ModelOperation>()
   let sequence = 0
   let resizeObserver: ResizeObserver | undefined
   let resizeFrame = 0
@@ -60,10 +19,6 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
   const maximumBodyBytes = MAXIMUM_MANAGEMENT_BODY_BYTES
   const maximumQueryBytes = MAXIMUM_MANAGEMENT_QUERY_BYTES
   const maximumInFlight = MAXIMUM_MANAGEMENT_IN_FLIGHT
-  const maximumModelBodyBytes = MAXIMUM_MODEL_BODY_BYTES
-  const maximumModelChunkBytes = MAXIMUM_MODEL_CHUNK_BYTES
-  const maximumModelInFlight = MAXIMUM_MODEL_IN_FLIGHT
-  const modelRequestDeadlineMs = MODEL_REQUEST_DEADLINE_MS
 
   function applyLayout(height: unknown) {
     if (typeof height === 'number' && Number.isSafeInteger(height) && height >= 0) {
@@ -106,7 +61,7 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
     return sequence
   }
 
-  function post(type: string, id: number, payload?: unknown, transfer: Transferable[] = []) {
+  function post(type: PluginPageMessageType, id: number, payload?: unknown, transfer: Transferable[] = []) {
     parent.postMessage({
       target: initial.target,
       version: initial.version,
@@ -118,7 +73,13 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
     }, initial.parentOrigin, transfer)
   }
 
-  function invoke(kind: string, payload: unknown, transfer: Transferable[] = []): Promise<unknown> {
+  const modelBridge = createPluginModelBridge({
+    nextRequestId,
+    post,
+    isDisposed: () => disposed,
+  })
+
+  function invoke<T>(kind: 'request' | 'callback-ticket', payload: unknown, transfer: Transferable[] = []): Promise<T> {
     if (disposed)
       return Promise.reject(new Error('Plugin page is closed'))
     if (pending.size >= maximumInFlight)
@@ -131,7 +92,11 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
       }, kind === 'request'
         ? initial.managementTimeoutMs
         : initial.apiTimeoutMs)
-      pending.set(id, { resolve, reject, timer })
+      pending.set(id, {
+        resolve: value => resolve(value as T),
+        reject,
+        timer,
+      })
       post(kind, id, payload, transfer)
     })
   }
@@ -166,7 +131,7 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
 
   window.addEventListener('load', observeContentHeight, { once: true })
 
-  async function request(input: ManagementRequest) {
+  async function request(input: PluginManagementRequest) {
     if (!input || typeof input !== 'object')
       throw new TypeError('Invalid plugin management request')
     const method = String(input.method || '').toUpperCase()
@@ -182,7 +147,7 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
     const body = await bodyBytes(input.body)
     if (body.byteLength > maximumBodyBytes)
       throw new TypeError('Plugin management request body exceeds 1 MiB')
-    return invoke('request', {
+    return invoke<PluginManagementReply>('request', {
       method,
       path,
       query,
@@ -194,219 +159,9 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
   function callbackTicket(input: { path: string, ttlSeconds: number }) {
     if (!input || typeof input !== 'object')
       return Promise.reject(new TypeError('Invalid plugin callback ticket request'))
-    return invoke('callback-ticket', {
+    return invoke<PluginCallbackTicket>('callback-ticket', {
       path: String(input.path || ''),
       ttlSeconds: Number(input.ttlSeconds),
-    })
-  }
-
-  function abortError(reason: unknown) {
-    return reason instanceof Error
-      ? reason
-      : new DOMException('Model request canceled', 'AbortError')
-  }
-
-  function clearModelOperation(operation: ModelOperation) {
-    if (modelOperations.get(operation.id) !== operation)
-      return
-    modelOperations.delete(operation.id)
-    clearTimeout(operation.timer)
-    if (operation.signal && operation.abort)
-      operation.signal.removeEventListener('abort', operation.abort)
-  }
-
-  function settleModelPull(operation: ModelOperation, error?: Error) {
-    const resolve = operation.pullResolve
-    const reject = operation.pullReject
-    operation.pullResolve = undefined
-    operation.pullReject = undefined
-    operation.pullPromise = undefined
-    operation.pullId = undefined
-    if (error)
-      reject?.(error)
-    else resolve?.()
-  }
-
-  function failModelOperation(operation: ModelOperation, error: Error, notifyParent: boolean) {
-    if (modelOperations.get(operation.id) !== operation)
-      return
-    clearModelOperation(operation)
-    settleModelPull(operation, error)
-    if (operation.controller) {
-      try {
-        operation.controller.error(error)
-      }
-      catch {}
-    }
-    else {
-      operation.reject(error)
-    }
-    if (notifyParent)
-      post('models-cancel', operation.id)
-  }
-
-  function finishModelOperation(operation: ModelOperation) {
-    if (modelOperations.get(operation.id) !== operation)
-      return
-    clearModelOperation(operation)
-    settleModelPull(operation)
-  }
-
-  function validateResponseHeaders(value: unknown) {
-    if (!Array.isArray(value))
-      throw new TypeError('Model response header is invalid')
-    for (const entry of value) {
-      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' || typeof entry[1] !== 'string')
-        throw new Error('Model response header is invalid')
-    }
-    // 与宿主共享浏览器的 Headers 校验，不再按插件身份过滤字段。
-    return new Headers(value as [string, string][])
-  }
-
-  function handleModelMessage(message: ModelMessage) {
-    const operation = modelOperations.get(message.id)
-    if (!operation)
-      return
-    if (message.type === 'models-error') {
-      const text = typeof message.error === 'string' && message.error
-        ? message.error
-        : 'Model request failed'
-      failModelOperation(operation, new Error(text), false)
-      return
-    }
-    if (message.type === 'models-response') {
-      if (operation.controller || operation.responseStarted || !message.payload || typeof message.payload !== 'object') {
-        failModelOperation(operation, new Error('Invalid model response protocol'), true)
-        return
-      }
-      try {
-        const status = message.payload.status
-        const statusText = message.payload.statusText ?? ''
-        const hasBody = message.payload.hasBody
-        if (typeof status !== 'number' || !Number.isSafeInteger(status) || status < 200 || status > 599 || typeof statusText !== 'string' || statusText.length > 256 || hasControlCharacter(statusText) || typeof hasBody !== 'boolean')
-          throw new Error('Model response status is invalid')
-        const headers = validateResponseHeaders(message.payload.headers)
-        operation.responseStarted = true
-        if (!hasBody) {
-          finishModelOperation(operation)
-          operation.resolve(new Response(null, { status, statusText, headers }))
-          return
-        }
-        const stream = new ReadableStream({
-          start(controller) {
-            operation.controller = controller
-          },
-          pull() {
-            if (modelOperations.get(operation.id) !== operation)
-              return undefined
-            if (operation.pullPromise)
-              return operation.pullPromise
-            operation.pullSequence += 1
-            operation.pullId = operation.pullSequence
-            operation.pullPromise = new Promise<void>((resolve, reject) => {
-              operation.pullResolve = resolve
-              operation.pullReject = reject
-              post('models-pull', operation.id, { pullId: operation.pullId })
-            })
-            return operation.pullPromise
-          },
-          cancel() {
-            if (modelOperations.get(operation.id) === operation) {
-              clearModelOperation(operation)
-              settleModelPull(operation)
-              post('models-cancel', operation.id)
-            }
-          },
-        }, { highWaterMark: 0 })
-        operation.resolve(new Response(stream, { status, statusText, headers }))
-      }
-      catch (error) {
-        failModelOperation(operation, error instanceof Error
-          ? error
-          : new Error('Invalid model response protocol'), true)
-      }
-      return
-    }
-    if (!operation.controller || !operation.responseStarted) {
-      failModelOperation(operation, new Error('Invalid model response protocol'), true)
-      return
-    }
-    if (message.type === 'models-chunk') {
-      const pullId = message.payload?.pullId
-      const body = message.payload?.body
-      if (!operation.pullPromise || !Number.isSafeInteger(pullId) || pullId !== operation.pullId || !(body instanceof ArrayBuffer) || body.byteLength === 0 || body.byteLength > maximumModelChunkBytes) {
-        failModelOperation(operation, new Error('Invalid model response chunk'), true)
-        return
-      }
-      try {
-        operation.controller.enqueue(new Uint8Array(body))
-        settleModelPull(operation)
-      }
-      catch (error) {
-        failModelOperation(operation, error instanceof Error
-          ? error
-          : new Error('Model response read failed'), true)
-      }
-      return
-    }
-    if (message.type === 'models-complete') {
-      const pullId = message.payload?.pullId
-      if (!operation.pullPromise || !Number.isSafeInteger(pullId) || pullId !== operation.pullId) {
-        failModelOperation(operation, new Error('Model response end tag is invalid'), true)
-        return
-      }
-      try {
-        operation.controller.close()
-      }
-      catch {}
-      finishModelOperation(operation)
-    }
-  }
-
-  function modelResponses(input: ModelRequest): Promise<Response> {
-    if (disposed)
-      return Promise.reject(new Error('Plugin page is closed'))
-    if (!input || typeof input !== 'object' || !input.body || typeof input.body !== 'object' || Array.isArray(input.body))
-      return Promise.reject(new TypeError('Responses request body must be a JSON object'))
-    if (typeof input.clientKeyId !== 'string' || !input.clientKeyId || input.clientKeyId !== input.clientKeyId.trim() || input.clientKeyId.length > 128 || hasControlCharacter(input.clientKeyId))
-      return Promise.reject(new TypeError('clientKeyId is invalid'))
-    if (input.signal !== undefined && !(input.signal instanceof AbortSignal))
-      return Promise.reject(new TypeError('signal must be AbortSignal'))
-    if (input.signal?.aborted)
-      return Promise.reject(abortError(input.signal.reason))
-    if (modelOperations.size >= maximumModelInFlight)
-      return Promise.reject(new Error('Model request concurrency limit reached'))
-    let body
-    try {
-      body = JSON.stringify(input.body)
-    }
-    catch {
-      return Promise.reject(new TypeError('Responses request body must be JSON serializable'))
-    }
-    if (typeof body !== 'string' || new TextEncoder().encode(body).byteLength > maximumModelBodyBytes)
-      return Promise.reject(new TypeError('Responses request body exceeds 8 MiB'))
-    const id = nextRequestId()
-    return new Promise((resolve, reject) => {
-      const operation: ModelOperation = {
-        id,
-        resolve,
-        reject,
-        signal: input.signal,
-        abort: undefined,
-        timer: undefined,
-        controller: undefined,
-        responseStarted: false,
-        pullPromise: undefined,
-        pullResolve: undefined,
-        pullReject: undefined,
-        pullSequence: 0,
-        pullId: undefined,
-      }
-      operation.abort = () => failModelOperation(operation, abortError(input.signal?.reason), true)
-      operation.timer = window.setTimeout(() => failModelOperation(operation, new Error('Model request exceeded 10 minutes'), true), modelRequestDeadlineMs)
-      modelOperations.set(id, operation)
-      input.signal?.addEventListener('abort', operation.abort, { once: true })
-      post('models-request', id, { clientKeyId: input.clientKeyId, body })
     })
   }
 
@@ -451,7 +206,7 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
     if (typeof message.id !== 'number' || !Number.isSafeInteger(message.id) || message.id < 1)
       return
     if (message.type === 'models-response' || message.type === 'models-chunk' || message.type === 'models-complete' || message.type === 'models-error') {
-      handleModelMessage({
+      modelBridge.handle({
         id: message.id,
         type: message.type,
         error: message.error,
@@ -488,20 +243,17 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
       operation.reject(error)
     }
     pending.clear()
-    for (const operation of [
-      ...modelOperations.values(),
-    ])
-      failModelOperation(operation, error, true)
+    modelBridge.dispose()
   }, { once: true })
 
-  const api = {
+  const api: PluginHostBridge = {
     version: initial.version,
     plugin: Object.freeze(initial.plugin),
     page: Object.freeze(initial.page),
     get theme() { return currentTheme },
     request,
     callbackTicket,
-    models: Object.freeze({ responses: modelResponses }),
+    models: Object.freeze({ responses: modelBridge.responses }),
     resourceUrl(path: string) {
       const key = String(path)
       if (!Object.hasOwn(initial.resourceUrls, key))

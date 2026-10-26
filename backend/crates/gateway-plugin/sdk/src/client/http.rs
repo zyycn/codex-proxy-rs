@@ -5,7 +5,10 @@ use serde::{Serialize, de::DeserializeOwned};
 use super::{HostClient, HostReply, SessionError, read::PendingRead};
 use crate::{
     ErrorCode, PluginFault,
-    call::{host as wire, upstream_adapter::UpstreamHttpRequest},
+    call::{
+        host as wire,
+        upstream_adapter::{self, UpstreamHttpRequest},
+    },
 };
 
 /// 响应头与惰性正文；不包含宿主的内部流句柄
@@ -35,7 +38,7 @@ impl HostClient {
         request: wire::HttpRequest,
         body: Vec<u8>,
     ) -> Result<HostHttpResponse, PluginFault> {
-        self.open_http("host.http.do_stream", request, body, false)
+        self.open_http(wire::HTTP_DO_STREAM, request, body, false)
             .await
     }
 
@@ -62,7 +65,7 @@ impl HostClient {
         request: UpstreamHttpRequest,
         body: Vec<u8>,
     ) -> Result<HostHttpResponse, PluginFault> {
-        self.open_http("host.upstream.http.do_stream", request, body, true)
+        self.open_http(upstream_adapter::HTTP_DO_STREAM, request, body, true)
             .await
     }
 
@@ -124,9 +127,9 @@ impl HostHttpBody {
                 let host = self.host.clone();
                 let params = serde_json::json!({"stream": stream, "maximum_bytes": maximum_bytes});
                 let method = if self.upstream {
-                    "host.upstream.http.stream_read"
+                    upstream_adapter::HTTP_STREAM_READ
                 } else {
-                    "host.http.stream_read"
+                    wire::HTTP_STREAM_READ
                 };
                 async move { host.call(method, params, vec![]).await }
             })
@@ -183,9 +186,9 @@ impl HostHttpBody {
         empty_callback(
             &self.host,
             if self.upstream {
-                "host.upstream.http.stream_close"
+                upstream_adapter::HTTP_STREAM_CLOSE
             } else {
-                "host.http.stream_close"
+                wire::HTTP_STREAM_CLOSE
             },
             wire::StreamClose {
                 stream: stream.clone(),

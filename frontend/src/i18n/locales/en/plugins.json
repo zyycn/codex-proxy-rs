@@ -424,7 +424,9 @@
       "compatibilityEnding": "The compatibility window has ended, a future stable release will remove the old API adapter",
       "unsupportedVersionHelp": "Configuration and data are kept, install a supported plugin version",
       "restartHelp": "The enabled configuration is kept, restart it in plugin details",
-      "upgradeHelp": "Update the plugin or ask its author to upgrade the API"
+      "upgradeHelp": "Update the plugin or ask its author to upgrade the API",
+      "unknown": "Runtime status unknown",
+      "unknownDescription": "Runtime status is unavailable, the enabled configuration is unchanged"
     },
     "updates": {
       "packageRequired": "Select a plugin package to confirm its version and compatibility",
@@ -530,6 +532,20 @@
       "releaseList": "Release list",
       "noRemoteUpdateSource": "No remote update source"
     },
-    "onePerLine": "One item per line"
+    "onePerLine": "One item per line",
+    "runtime": {
+      "title": "Runtime load",
+      "helpTitle": "About runtime load",
+      "idle": "Currently idle",
+      "inFlightSummary": "{count} active call | {count} active calls",
+      "revision": "Runtime configuration revision: {revision}",
+      "description": "Sampled from the current runtime configuration, excluding older configurations that are shutting down, counts may overlap",
+      "activeCalls": "Active calls",
+      "executingCalls": "Executing",
+      "queuedCalls": "Queued",
+      "resumingCalls": "Awaiting resume",
+      "pendingCallbacks": "Pending callbacks",
+      "activeStreams": "Active streams"
+    }
   }
 }

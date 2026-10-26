@@ -52,7 +52,7 @@ impl PluginClientKeys {
         params: serde_json::Value,
         payload: &[u8],
     ) -> Result<RpcReply, PluginFault> {
-        if method == "host.keys.list" {
+        if method == gateway_plugin_sdk::call::host::KEYS_LIST {
             return self.ports.list(params, payload).await;
         }
         if params != serde_json::json!({}) {

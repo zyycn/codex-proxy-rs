@@ -139,7 +139,7 @@ impl HttpCallbacks<'_> {
     ) -> Result<RpcReply, PluginFault> {
         let call = self.call;
         match method {
-            "host.http.do" | "host.http.do_stream" => {
+            wire::HTTP_DO | wire::HTTP_DO_STREAM => {
                 let request: wire::HttpRequest = decode(params)?;
                 self.send(
                     HttpRequest {
@@ -149,13 +149,13 @@ impl HttpCallbacks<'_> {
                         maximum_body_bytes: self.body_limit(&payload)?,
                         body: payload,
                     },
-                    method == "host.http.do_stream",
+                    method == wire::HTTP_DO_STREAM,
                     None,
                     self.scope.proxy.as_ref(),
                 )
                 .await
             }
-            "host.http.stream_read" => {
+            wire::HTTP_STREAM_READ => {
                 if !payload.is_empty() {
                     return Err(invalid());
                 }
@@ -199,7 +199,7 @@ impl HttpCallbacks<'_> {
                     payload: chunk.map_or_else(Vec::new, |chunk| chunk.to_vec()),
                 })
             }
-            "host.http.stream_close" => {
+            wire::HTTP_STREAM_CLOSE => {
                 if !payload.is_empty() {
                     return Err(invalid());
                 }

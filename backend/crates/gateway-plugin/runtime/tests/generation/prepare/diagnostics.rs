@@ -2,7 +2,9 @@
 
 use super::wait_until_unready;
 use gateway_admin::model::Revision;
-use gateway_admin::model::plugins::instances::PluginInstanceRuntimeStatus;
+use gateway_admin::model::plugins::instances::{
+    PluginInstanceRuntimeLoad, PluginInstanceRuntimeStatus,
+};
 use gateway_admin::ports::plugins::PluginPreparation;
 use gateway_core::routing::ConfigRevision;
 use gateway_core::routing::extensions::ExtensionPreparationPort;
@@ -31,6 +33,17 @@ async fn diagnostics_distinguish_running_failed_preparation_and_draining_generat
         Some(snapshot.instances[0].artifact_sha256.as_str())
     );
     assert!(running.failure.is_none());
+    assert_eq!(
+        running.load,
+        Some(PluginInstanceRuntimeLoad {
+            active_calls: 0,
+            executing_calls: 0,
+            queued_calls: 0,
+            resuming_calls: 0,
+            pending_callbacks: 0,
+            active_streams: 0,
+        })
+    );
 
     let mut failed = snapshot.clone();
     failed.config_revision = Revision::new(2).unwrap();
@@ -56,6 +69,7 @@ async fn diagnostics_distinguish_running_failed_preparation_and_draining_generat
     );
     assert!(failed_runtime.failure.is_some());
     assert_eq!(failed_runtime.actual_revision, Some(1));
+    assert_eq!(failed_runtime.load, running.load);
 
     let mut disabled = failed;
     disabled.config_revision = Revision::new(3).unwrap();
@@ -105,6 +119,7 @@ async fn preparing_diagnostics_never_wait_for_the_serialized_prepare_io() {
         diagnostics["instance-one"].status,
         PluginInstanceRuntimeStatus::Preparing
     );
+    assert!(diagnostics["instance-one"].load.is_none());
 
     let candidate = preparation.await.expect("delayed candidate");
     drop(candidate);

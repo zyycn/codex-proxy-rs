@@ -170,14 +170,20 @@ export function usePluginManagement() {
     clearTimeout(pollTimer)
     if (disposed)
       return
-    if (instances.value.some(instance => instance.enabled && ['awaiting_publication', 'preparing', 'draining'].includes(instance.runtime.status))) {
+    const currentVisible = showDetail.value && currentPlugin.value?.configurations.some(instance => instance.enabled)
+    if (currentVisible || instances.value.some(instance => instance.enabled && [
+      'awaiting_publication',
+      'preparing',
+      'draining',
+      'unknown',
+    ].includes(instance.runtime.status))) {
       pollTimer = setTimeout(async () => {
         await refresh(true, true)
         schedulePoll()
       }, 3000)
     }
   }
-  watch(instances, schedulePoll)
+  watch([instances, showDetail, selectedPluginId], schedulePoll)
   watch([currentPlugin, showDetail], ([plugin, visible]) => {
     if (!visible)
       return

@@ -15,6 +15,7 @@ import { artifactForInstance } from '../utils/model'
 import PluginConfigurationSummary from './PluginConfigurationSummary.vue'
 import PluginHelpPopover from './PluginHelpPopover.vue'
 import PluginLegacyConfigurations from './PluginLegacyConfigurations.vue'
+import PluginRuntimeLoad from './PluginRuntimeLoad.vue'
 import PluginStatusNotice from './PluginStatusNotice.vue'
 import PluginVersionsPanel from './PluginVersionsPanel.vue'
 
@@ -65,6 +66,8 @@ function configurationNotes(instance: PluginInstance) {
     notes.push(t('plugins.details.pendingDescription'))
   if (configurationStatus(instance) === 'unconfigured')
     notes.push(t('plugins.details.requiredConfiguration'))
+  if (configurationStatus(instance) === 'unknown')
+    notes.push(t('plugins.status.unknownDescription'))
   if (instance.runtime.drainingRevisions.length)
     notes.push(t('plugins.details.versionInUse'))
   return notes
@@ -120,6 +123,7 @@ watch(() => props.initialSection, value => section.value = value)
             :metadata="artifactForInstance(instance, plugin.artifacts)?.metadata"
             :show-command="configurationStatus(instance) === 'enabled' && Boolean(capabilities(instance).command_line)"
           />
+          <PluginRuntimeLoad v-if="instance.runtime.load" :load="instance.runtime.load" :revision="instance.runtime.actualRevision" />
           <div class="flex flex-wrap items-center gap-2">
             <div v-if="configurationStatus(instance) === 'enabled'" class="mr-auto flex min-w-0 flex-wrap items-center gap-2">
               <RouterLink v-for="page in viewByInstance.get(instance.id)?.pages ?? []" :key="page.id" :to="pluginPageLocation(viewByInstance.get(instance.id)!, page)" class="inline-flex h-cp-control-sm min-w-0 items-center gap-1.5 rounded-cp bg-cp-primary-container px-2.5 text-cp-sm leading-none text-cp-primary-on-container no-underline outline-none transition-colors hover:bg-cp-primary-container-hover focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none" @click="open = false">

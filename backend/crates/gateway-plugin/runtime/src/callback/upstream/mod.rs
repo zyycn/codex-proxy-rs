@@ -193,31 +193,31 @@ pub(super) async fn dispatch(
             .map(|remaining| remaining.min(Duration::from_secs(120)))
     };
     match method {
-        "host.upstream.http.do" | "host.upstream.http.do_stream" => {
+        adapter::HTTP_DO | adapter::HTTP_DO_STREAM => {
             let request = serde_json::from_value(params).map_err(|_| invalid())?;
             let maximum_body_bytes = http.body_limit(&payload)?;
             let (request, purpose) = managed.request(request, payload, maximum_body_bytes)?;
             http.send(
                 request,
-                method.ends_with("do_stream"),
+                method == adapter::HTTP_DO_STREAM,
                 Some(purpose),
                 scope.proxy.as_ref(),
             )
             .await
         }
-        "host.upstream.http.stream_read" | "host.upstream.http.stream_close" => {
+        adapter::HTTP_STREAM_READ | adapter::HTTP_STREAM_CLOSE => {
             http.dispatch(
-                if method.ends_with("stream_read") {
-                    "host.http.stream_read"
+                if method == adapter::HTTP_STREAM_READ {
+                    wire::HTTP_STREAM_READ
                 } else {
-                    "host.http.stream_close"
+                    wire::HTTP_STREAM_CLOSE
                 },
                 params,
                 payload,
             )
             .await
         }
-        "host.upstream.websocket.open" => {
+        adapter::WEBSOCKET_OPEN => {
             if !payload.is_empty() || !managed.websocket_allowed {
                 return Err(denied());
             }
@@ -303,7 +303,7 @@ pub(super) async fn dispatch(
                 payload,
             })
         }
-        "host.upstream.websocket.send" => {
+        adapter::WEBSOCKET_SEND => {
             let message: adapter::UpstreamWebSocketMessage =
                 serde_json::from_value(params).map_err(|_| invalid())?;
             let message = match message.kind {
@@ -327,7 +327,7 @@ pub(super) async fn dispatch(
                 payload: vec![],
             })
         }
-        "host.upstream.websocket.read" => {
+        adapter::WEBSOCKET_READ => {
             if params != serde_json::json!({}) || !payload.is_empty() {
                 return Err(invalid());
             }
@@ -358,7 +358,7 @@ pub(super) async fn dispatch(
                 payload,
             })
         }
-        "host.upstream.websocket.close" => {
+        adapter::WEBSOCKET_CLOSE => {
             if params != serde_json::json!({}) || !payload.is_empty() {
                 return Err(invalid());
             }

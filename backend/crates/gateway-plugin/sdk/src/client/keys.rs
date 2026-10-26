@@ -3,7 +3,7 @@
 use crate::{
     ErrorCode, PluginFault,
     call::{
-        host::{KeyListRequest, KeyListResult},
+        host::{KEYS_LIST, KeyListRequest, KeyListResult},
         key_budgets,
     },
 };
@@ -41,7 +41,7 @@ impl HostClient {
         let invalid = || PluginFault::new(ErrorCode::InvalidInput, "invalid key list payload");
         let reply = self
             .call(
-                "host.keys.list",
+                KEYS_LIST,
                 serde_json::to_value(query).map_err(|_| invalid())?,
                 Vec::new(),
             )

@@ -49,6 +49,8 @@ use serde_json::json;
 
 use super::TestPluginPorts;
 
+mod queries;
+
 const OLD_ARTIFACT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const NEW_ARTIFACT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -88,6 +90,11 @@ impl gateway_admin::ports::plugins::PluginPackageInspector for LifecycleFixture 
         archive: Arc<[u8]>,
         digest: String,
     ) -> Result<Option<String>, AdminError> {
+        let gate = self.inspection_gate.lock().unwrap().clone();
+        if let Some(gate) = gate.filter(|gate| gate.digest == digest) {
+            gate.started.notify_one();
+            gate.release.notified().await;
+        }
         self.inspect(archive, Some(digest)).await?;
         Ok(self.data.lock().unwrap().compatibility_warning.clone())
     }
@@ -143,11 +150,19 @@ struct LifecycleFixture {
     behavior: MigrationBehavior,
     data: Mutex<FixtureData>,
     next_prepared: AtomicU64,
+    inspection_gate: Mutex<Option<Arc<InspectionGate>>>,
+}
+
+struct InspectionGate {
+    digest: String,
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 impl LifecycleFixture {
     fn new(behavior: MigrationBehavior) -> Arc<Self> {
         Arc::new(Self {
+            inspection_gate: Mutex::new(None),
             behavior,
             data: Mutex::new(FixtureData {
                 snapshot: PluginInstanceSnapshot {
@@ -968,49 +983,6 @@ fn state_unavailable<T>() -> PluginStateStoreResult<T> {
     Err(PluginStateStoreError::new(
         PluginStateStoreErrorKind::Unavailable,
     ))
-}
-
-#[tokio::test]
-async fn instance_list_uses_runtime_diagnostics_and_keeps_running_compatibility_derived() {
-    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
-    let expected = PluginInstanceRuntime {
-        status: PluginInstanceRuntimeStatus::PreparationFailed,
-        actual_revision: Some(9),
-        actual_artifact_sha256: Some(OLD_ARTIFACT.into()),
-        failure: Some(PluginInstanceRuntimeFailure {
-            code: "unavailable".into(),
-            message: "插件候选准备失败".into(),
-        }),
-        draining_revisions: vec![8],
-    };
-    fixture.data.lock().unwrap().diagnostics = Some(BTreeMap::from([(
-        "00000000-0000-7000-8000-000000000001".into(),
-        expected.clone(),
-    )]));
-
-    let views = service(fixture, Arc::new(Published::default()))
-        .instances()
-        .await
-        .unwrap();
-    assert_eq!(views.len(), 1);
-    assert!(!views[0].running);
-    assert_eq!(views[0].runtime, expected);
-}
-
-#[tokio::test]
-async fn instance_list_falls_back_without_inventing_runtime_failures() {
-    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
-    let views = service(fixture, Arc::new(Published::default()))
-        .instances()
-        .await
-        .unwrap();
-    assert_eq!(views.len(), 1);
-    assert_eq!(
-        views[0].runtime.status,
-        PluginInstanceRuntimeStatus::AwaitingPublication
-    );
-    assert!(!views[0].running);
-    assert!(views[0].runtime.failure.is_none());
 }
 
 #[tokio::test]

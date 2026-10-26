@@ -84,6 +84,7 @@ pub struct PluginInstanceMutation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginInstanceRuntimeStatus {
     Disabled,
+    Unknown,
     AwaitingPublication,
     Preparing,
     Running,
@@ -108,6 +109,21 @@ pub struct PluginInstanceRuntime {
     pub actual_artifact_sha256: Option<String>,
     pub failure: Option<PluginInstanceRuntimeFailure>,
     pub draining_revisions: Vec<u64>,
+    pub load: Option<PluginInstanceRuntimeLoad>,
+}
+
+/// 当前发布会话的资源占用采样，计数可以重叠且不构成原子快照
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginInstanceRuntimeLoad {
+    /// 总在途名额，包含排队、取消确认和仍由响应流持有的调用
+    pub active_calls: usize,
+    pub executing_calls: usize,
+    pub queued_calls: usize,
+    pub resuming_calls: usize,
+    /// 包含已返回但尚未由插件消费的回调结果
+    pub pending_callbacks: usize,
+    /// 已交付首结果但尚未收到 End 的流
+    pub active_streams: usize,
 }
 
 /// 可继续运行的旧接口提示，与无法启用的兼容性错误分开

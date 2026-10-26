@@ -21,8 +21,8 @@ use gateway_admin::{
 use gateway_plugin_sdk::{
     ErrorCode, Manifest, PluginFault,
     call::host::{
-        StateDeleteRequest, StateDeleteResult, StateGetRequest, StateGetResult, StatePutRequest,
-        StatePutResult, StateRecord,
+        self as wire, StateDeleteRequest, StateDeleteResult, StateGetRequest, StateGetResult,
+        StatePutRequest, StatePutResult, StateRecord,
     },
 };
 use sha2::{Digest as _, Sha256};
@@ -99,7 +99,7 @@ impl PluginPrivateState {
             .clone()
             .ok_or_else(denied_fault)?;
         let result = match method {
-            "host.state.get" => {
+            wire::STATE_GET => {
                 let request: StateGetRequest =
                     serde_json::from_value(params).map_err(|_| invalid_fault())?;
                 self.authorize(&request.namespace)?;
@@ -115,7 +115,7 @@ impl PluginPrivateState {
                     });
                 serde_json::to_value(StateGetResult { record }).map_err(|_| internal_fault())?
             }
-            "host.state.put" => {
+            wire::STATE_PUT => {
                 let request: StatePutRequest =
                     serde_json::from_value(params).map_err(|_| invalid_fault())?;
                 self.authorize(&request.namespace)?;
@@ -141,7 +141,7 @@ impl PluginPrivateState {
                 })
                 .map_err(|_| internal_fault())?
             }
-            "host.state.delete" => {
+            wire::STATE_DELETE => {
                 let request: StateDeleteRequest =
                     serde_json::from_value(params).map_err(|_| invalid_fault())?;
                 self.authorize(&request.namespace)?;

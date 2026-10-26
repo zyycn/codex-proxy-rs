@@ -191,6 +191,7 @@ export interface PluginCapabilityBinding {
 
 export type PluginInstanceRuntimeStatus
   = | 'disabled'
+    | 'unknown'
     | 'awaiting_publication'
     | 'preparing'
     | 'running'
@@ -204,12 +205,22 @@ export interface PluginInstanceRuntimeFailure {
   message: string
 }
 
+export interface PluginInstanceRuntimeLoad {
+  activeCalls: number
+  executingCalls: number
+  queuedCalls: number
+  resumingCalls: number
+  pendingCallbacks: number
+  activeStreams: number
+}
+
 export interface PluginInstanceRuntime {
   status: PluginInstanceRuntimeStatus
   actualRevision: number | null
   actualArtifactSha256: string | null
   failure: PluginInstanceRuntimeFailure | null
   drainingRevisions: number[]
+  load?: PluginInstanceRuntimeLoad | null
 }
 
 export interface PluginInstance {

@@ -26,7 +26,7 @@ use gateway_core::{
 use gateway_plugin_sdk::{
     CallContext, ErrorCode, PluginFault,
     call::host::{
-        ModelEventBatch, ModelExecuteRequest, ModelExecuteResult, ModelListRequest,
+        self as wire, ModelEventBatch, ModelExecuteRequest, ModelExecuteResult, ModelListRequest,
         ModelListResult, ModelOperation, ModelStreamCloseRequest, ModelStreamReadRequest,
         ModelStreamReadResult, ModelStreamResult,
     },
@@ -90,7 +90,7 @@ impl PluginModels {
         payload: Vec<u8>,
     ) -> Result<RpcReply, PluginFault> {
         match method {
-            "host.models.list" => {
+            wire::MODELS_LIST => {
                 if !payload.is_empty() {
                     return Err(invalid());
                 }
@@ -120,7 +120,7 @@ impl PluginModels {
                         .collect(),
                 })
             }
-            "host.model.execute" | "host.model.execute_stream" => {
+            wire::MODEL_EXECUTE | wire::MODEL_EXECUTE_STREAM => {
                 let mut request: ModelExecuteRequest =
                     serde_json::from_value(params).map_err(|_| invalid())?;
                 if payload.is_empty() {
@@ -135,7 +135,7 @@ impl PluginModels {
                     }
                 };
                 let port = self.slot.upgrade()?;
-                let stream = method == "host.model.execute_stream";
+                let stream = method == wire::MODEL_EXECUTE_STREAM;
                 let started = if let Some(client_key_id) = request.client_key_id.take() {
                     let client = self.clients.identity(call, client_key_id).await?;
                     check_size(client.snapshot().responses_max_decompressed_body_bytes())?;
@@ -150,7 +150,7 @@ impl PluginModels {
                     let request = self.request(context, request, payload, stream)?;
                     port.start(request).await.map_err(super::error::gateway)?
                 };
-                if method == "host.model.execute" {
+                if method == wire::MODEL_EXECUTE {
                     execute_buffered(started, self.maximum_payload).await
                 } else {
                     let stream = Arc::new(ModelStream::new(started.session, self.maximum_payload));
@@ -174,7 +174,7 @@ impl PluginModels {
                     })
                 }
             }
-            "host.model.stream_read" => {
+            wire::MODEL_STREAM_READ => {
                 if !payload.is_empty() {
                     return Err(invalid());
                 }
@@ -213,7 +213,7 @@ impl PluginModels {
                     payload: read.payload,
                 })
             }
-            "host.model.stream_close" => {
+            wire::MODEL_STREAM_CLOSE => {
                 if !payload.is_empty() {
                     return Err(invalid());
                 }

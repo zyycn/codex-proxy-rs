@@ -12,7 +12,7 @@ use crate::{
     call::{
         host::HttpResponse,
         upstream_adapter::{
-            UpstreamWebSocketMessage, UpstreamWebSocketRead, UpstreamWebSocketRequest,
+            self, UpstreamWebSocketMessage, UpstreamWebSocketRead, UpstreamWebSocketRequest,
             WebSocketMessageKind,
         },
     },
@@ -54,7 +54,7 @@ impl HostClient {
         request: UpstreamWebSocketRequest,
     ) -> Result<UpstreamWebSocketUpgrade, PluginFault> {
         let (response, body): (HttpResponse, _) =
-            callback(self, "host.upstream.websocket.open", request, vec![]).await?;
+            callback(self, upstream_adapter::WEBSOCKET_OPEN, request, vec![]).await?;
         if response.stream.is_some() || (response.status == 101 && !body.is_empty()) {
             return Err(invalid());
         }
@@ -94,7 +94,7 @@ impl UpstreamWebSocket {
         }
         empty_callback(
             &self.host,
-            "host.upstream.websocket.send",
+            upstream_adapter::WEBSOCKET_SEND,
             UpstreamWebSocketMessage { kind },
             body,
         )
@@ -119,7 +119,7 @@ impl UpstreamWebSocket {
                 let host = self.host.clone();
                 async move {
                     host.call(
-                        "host.upstream.websocket.read",
+                        upstream_adapter::WEBSOCKET_READ,
                         serde_json::json!({}),
                         vec![],
                     )
@@ -150,7 +150,7 @@ impl UpstreamWebSocket {
             .get_or_try_init(|| async {
                 empty_callback(
                     &self.host,
-                    "host.upstream.websocket.close",
+                    upstream_adapter::WEBSOCKET_CLOSE,
                     serde_json::json!({}),
                     vec![],
                 )

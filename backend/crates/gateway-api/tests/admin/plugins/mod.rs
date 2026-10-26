@@ -323,6 +323,17 @@ async fn instance_list_serializes_safe_runtime_diagnostics() {
     assert_eq!(instance["runtime"]["status"], "preparation_failed");
     assert_eq!(instance["runtime"]["actualRevision"], 6);
     assert_eq!(
+        instance["runtime"]["load"],
+        serde_json::json!({
+            "activeCalls": 3,
+            "executingCalls": 1,
+            "queuedCalls": 1,
+            "resumingCalls": 1,
+            "pendingCallbacks": 2,
+            "activeStreams": 0,
+        })
+    );
+    assert_eq!(
         instance["runtime"]["drainingRevisions"],
         serde_json::json!([5])
     );
@@ -665,6 +676,14 @@ impl gateway_admin::ports::plugins::PluginRuntimeDiagnostics for TestPluginPorts
                                 message: "插件候选准备失败".into(),
                             }),
                             draining_revisions: vec![5],
+                            load: Some(gateway_admin::model::plugins::instances::PluginInstanceRuntimeLoad {
+                                active_calls: 3,
+                                executing_calls: 1,
+                                queued_calls: 1,
+                                resuming_calls: 1,
+                                pending_callbacks: 2,
+                                active_streams: 0,
+                            }),
                         },
                     )
                 })
