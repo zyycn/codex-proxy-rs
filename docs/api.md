@@ -2593,6 +2593,9 @@ CLI 插件也须在具体调用中选择当前 Key。管理员身份本身不提
 `preparation_failed`、`faulted`、`draining` 和 `unknown`。`running` 要求配置匹配、当前会话就绪且发布集合可服务。
 已启用实例缺少运行诊断时返回 `unknown`，不根据发布版本推断运行正常，也不制造失败原因；已停用配置仍可确定为 `disabled`
 
+恢复已保存实例时，包结构、摘要、RPC 封装或平台校验失败会返回 `runtime.status="preparation_failed"` 和
+`runtime.failure.code="package_unloadable"`。该实例的全部贡献被隔离，`running=false`，持久化的 `enabled` 与 `bindings` 保持原值；手动保存或启用不兼容实例仍返回错误
+
 `runtime.load` 与 `actualRevision`、`actualArtifactSha256` 指向同一会话，不汇总其他排空版本。
 以下计数来自现有调用表和容量资源，采样不是原子快照，各项可能重叠，不能相加作为调用总数：
 

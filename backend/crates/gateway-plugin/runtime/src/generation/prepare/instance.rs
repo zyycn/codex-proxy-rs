@@ -18,6 +18,27 @@ use std::{sync::Arc, time::Duration};
 
 const PROCESS_PREPARATION_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Debug)]
+pub(super) enum InstancePreparationError {
+    UnloadablePackage(crate::PackageError),
+    Failed(AdminError),
+}
+
+impl InstancePreparationError {
+    pub(super) fn into_admin_error(self) -> AdminError {
+        match self {
+            Self::UnloadablePackage(error) => crate::package::inspection_error(error),
+            Self::Failed(error) => error,
+        }
+    }
+}
+
+impl From<AdminError> for InstancePreparationError {
+    fn from(error: AdminError) -> Self {
+        Self::Failed(error)
+    }
+}
+
 struct StartedInstance {
     instance: PluginInstance,
     package: Arc<crate::PreparedPackage>,
@@ -31,7 +52,7 @@ impl PluginRuntime {
         instance: PluginInstance,
         target_revision: Revision,
         request_body_limit: Option<usize>,
-    ) -> Result<StartedInstance, AdminError> {
+    ) -> Result<StartedInstance, InstancePreparationError> {
         let authorization_binding = instance_fingerprint(&instance)?;
         if self.restart_circuit_is_open(&RestartIdentity::new(
             instance.id.clone(),
@@ -39,7 +60,8 @@ impl PluginRuntime {
         )) {
             return Err(AdminError::unavailable(
                 "插件实例连续异常退出，已暂停自动重启；请检查配置后重新启用",
-            ));
+            )
+            .into());
         }
         let validation_slot = self
             .validators
@@ -65,28 +87,27 @@ impl PluginRuntime {
                         Some(&instance.artifact_sha256),
                         limits,
                     )
-                    .map_err(|_| AdminError::invalid("插件恢复包校验失败"))?,
+                    .map_err(InstancePreparationError::UnloadablePackage)?,
                 );
+                let package =
+                    Arc::new(package.prepare(&directory).map_err(|error| match error {
+                        crate::PackageError::Manifest(_) => {
+                            InstancePreparationError::UnloadablePackage(error)
+                        }
+                        _ => AdminError::unavailable("插件制品准备失败").into(),
+                    })?);
+                let manifest = package.package().manifest();
                 let (configuration, state_configuration) =
-                    super::super::configuration::validate(&instance, package.manifest(), &schemas)?;
-                crate::adapter::observer::validate_bindings(
-                    package.manifest(),
-                    &instance.bindings,
-                )?;
-                crate::adapter::policy::validate_bindings(package.manifest(), &instance.bindings)?;
-                crate::adapter::middleware::validate_bindings(
-                    package.manifest(),
-                    &instance.bindings,
-                )?;
-                crate::adapter::upstream_adapter::validate_bindings(
-                    package.manifest(),
-                    &instance.bindings,
-                )?;
+                    super::super::configuration::validate(&instance, manifest, &schemas)?;
+                crate::adapter::observer::validate_bindings(manifest, &instance.bindings)?;
+                crate::adapter::policy::validate_bindings(manifest, &instance.bindings)?;
+                crate::adapter::middleware::validate_bindings(manifest, &instance.bindings)?;
+                crate::adapter::upstream_adapter::validate_bindings(manifest, &instance.bindings)?;
                 crate::adapter::frontend_authentication::validate_bindings(
-                    package.manifest(),
+                    manifest,
                     &instance.bindings,
                 )?;
-                let requirements = crate::package::compatibility_requirements(package.manifest())?;
+                let requirements = crate::package::compatibility_requirements(manifest)?;
                 if let Some(warning) =
                     crate::package::compatibility_warning(&requirements, &host_version)?
                 {
@@ -96,12 +117,12 @@ impl PluginRuntime {
                         "插件版本未经宿主保证，尝试启动"
                     );
                 }
-                let package = Arc::new(
-                    package
-                        .prepare(&directory)
-                        .map_err(|_| AdminError::unavailable("插件制品准备失败"))?,
-                );
-                Ok((package, configuration, instance, state_configuration))
+                Ok::<_, InstancePreparationError>((
+                    package,
+                    configuration,
+                    instance,
+                    state_configuration,
+                ))
             })
             .await
             .map_err(|_| AdminError::internal("插件校验任务失败"))??;
@@ -219,7 +240,7 @@ impl PluginRuntime {
         instance: PluginInstance,
         target_revision: Revision,
         request_body_limit: Option<usize>,
-    ) -> Result<Arc<PreparedInstance>, AdminError> {
+    ) -> Result<Arc<PreparedInstance>, InstancePreparationError> {
         // 启动控制期限只包住制品准备与握手，Ready 后每次注册使用协商预算
         let StartedInstance {
             instance,
@@ -256,7 +277,7 @@ impl PluginRuntime {
         let descriptor: Registration = serde_json::from_value(registration.result)
             .map_err(|_| AdminError::invalid("插件注册结果无效"))?;
         if descriptor.contributes != manifest.contributes || !registration.payload.is_empty() {
-            return Err(AdminError::invalid("插件注册结果与清单不符"));
+            return Err(AdminError::invalid("插件注册结果与清单不符").into());
         }
         commands.extend(
             crate::adapter::command_line::prepare(

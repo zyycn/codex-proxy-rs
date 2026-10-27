@@ -3,6 +3,7 @@
 use super::{
     PluginRuntime,
     diagnostics::{PreparationDiagnostic, runtime_failure_from_admin},
+    instance::InstancePreparationError,
     set::{PreparedContributions, PreparedSet, fingerprint, instance_fingerprint},
 };
 use crate::ValidatedPackage;
@@ -12,7 +13,7 @@ use gateway_admin::{
     model::{
         AdminError, Revision,
         plugins::{
-            instances::{PluginInstance, PluginInstanceSnapshot},
+            instances::{PluginInstance, PluginInstanceRuntimeFailure, PluginInstanceSnapshot},
             state::PluginStateConfiguration,
         },
     },
@@ -147,8 +148,27 @@ impl PluginRuntime {
                     contributions.append(candidate.contributions.clone());
                     sessions.push(candidate);
                 }
-                Err(error) if required_revision == Some(instance.revision) => return Err(error),
-                Err(error) => {
+                Err(error) if required_revision == Some(instance.revision) => {
+                    return Err(error.into_admin_error());
+                }
+                Err(InstancePreparationError::UnloadablePackage(error)) => {
+                    let error = crate::package::inspection_error(error);
+                    tracing::error!(
+                        event = "plugin.instance.quarantined",
+                        instance_id = instance.id,
+                        reason = error.message(),
+                        "插件包无法加载，已隔离其全部贡献"
+                    );
+                    // 包无法装载时没有可执行能力，不能发布全局拒绝占位阻断宿主
+                    failures.insert(
+                        instance.id.clone(),
+                        PluginInstanceRuntimeFailure {
+                            code: "package_unloadable".to_owned(),
+                            message: format!("{}；插件已隔离，请更换兼容安装包", error.message()),
+                        },
+                    );
+                }
+                Err(InstancePreparationError::Failed(error)) => {
                     // 目录没有拒绝请求用的 binding，不能在恢复失败时悄悄撤销仍启用的别名
                     // 不复制其他候选的注册结果；让发布事务保留调用方持有的旧有效快照
                     let has_retained_catalog = self

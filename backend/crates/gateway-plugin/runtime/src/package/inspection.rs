@@ -207,7 +207,7 @@ impl PluginPackageInspector for PackageInspector {
     }
 }
 
-fn inspection_error(error: PackageError) -> AdminError {
+pub(crate) fn inspection_error(error: PackageError) -> AdminError {
     match error {
         PackageError::Manifest(gateway_plugin_sdk::ManifestError::Incompatible) => {
             AdminError::invalid("插件清单或协议版本不兼容，请使用当前 SDK 重新构建")
