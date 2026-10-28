@@ -462,6 +462,13 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别客户端，Cor
 - 可恢复观测写入失败不能替换已经确定的客户端协议结果
 
 Responses 按模型目录编译候选；全局模型映射是精确映射，未命中时模型名原样交给候选 Provider。
+Chat Completions 由 API 将入站消息规范化为 Responses 正文，进入共用 Generate 执行链；
+request 中间件回程经过 Responses 协议复核后，再由 API 投影成 Chat JSON 或 SSE。
+HTTP 中间件位于转换外侧，request 与 attempt 中间件处理 Responses，实际 endpoint 始终为 `/v1/chat/completions`。
+Chat 复用既有提交、取消与终结生命周期；Core 继续独占路由、重试、交付事实与结算，
+Provider 继续独占上游身份、字段兼容、隐私策略及账号隔离，Chat 层只负责协议映射。
+字段合同见 [Chat Completions](api.md#chat-completions-请求)，插件视图见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
+
 Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
 的账号范围确实包含 Codex 账号时生成单一 OpenAI 候选。Images 的图片模型由 Provider 从正文旁路
 提取，用于账号模型政策检查，并在中间件改写后复验当前租约账号；不要求图片模型进入文本目录。

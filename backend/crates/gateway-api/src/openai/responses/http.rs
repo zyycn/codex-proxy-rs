@@ -31,6 +31,7 @@ use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
 use gateway_core::lifecycle::{CancellationToken, ConnectionGuard};
 use gateway_core::operation::OperationKind;
 use gateway_protocol::openai::sse::{DONE_SSE_FRAME, response_failed_sse_event_with_id};
+use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::ApiState;
@@ -121,6 +122,23 @@ pub(crate) async fn execute_prepared_responses(
     request: ResponsesHttpRequest,
     authorization: Option<Arc<dyn ResponseAuthorization>>,
 ) -> Response {
+    execute_prepared_response(service, prepared, request, authorization, None).await
+}
+
+/// 下游协议只投影出口字节 执行会话和计量仍归原 owner
+pub(in crate::openai) struct HttpResponseAdapter {
+    pub endpoint: &'static str,
+    pub wrap: Box<dyn FnOnce(MiddlewareResponse) -> MiddlewareResponse + Send>,
+    pub stream_error: fn(&Value) -> Bytes,
+}
+
+pub(in crate::openai) async fn execute_prepared_response(
+    service: OpenAiService,
+    prepared: PreparedRootExecution,
+    request: ResponsesHttpRequest,
+    authorization: Option<Arc<dyn ResponseAuthorization>>,
+    adapter: Option<HttpResponseAdapter>,
+) -> Response {
     let ResponsesHttpRequest {
         peer_address,
         ingress_id,
@@ -148,8 +166,14 @@ pub(crate) async fn execute_prepared_responses(
     // 中间件正文已经由入口按上限解压；传输编码和旧长度不能与改写后的正文混用
     middleware_headers.remove(CONTENT_ENCODING);
     middleware_headers.remove(CONTENT_LENGTH);
+    let endpoint = adapter
+        .as_ref()
+        .map_or(crate::openai::router::RESPONSES_PATH, |adapter| {
+            adapter.endpoint
+        });
+    let stream_error = adapter.as_ref().map(|adapter| adapter.stream_error);
     let input = RequestInput {
-        endpoint: crate::openai::router::RESPONSES_PATH.to_owned(),
+        endpoint: endpoint.to_owned(),
         protocol: OPENAI_PROTOCOL.to_owned(),
         operation: Some(OperationKind::Generate),
         transport,
@@ -194,12 +218,7 @@ pub(crate) async fn execute_prepared_responses(
                     None
                 };
                 let started = terminal_service
-                    .start_prepared_response(
-                        prepared,
-                        decoded,
-                        transport,
-                        crate::openai::router::RESPONSES_PATH,
-                    )
+                    .start_prepared_response(prepared, decoded, transport, endpoint)
                     .await
                     .map_err(MiddlewareError::Gateway)?;
                 let _ = terminal_request_id.set(started.request_id.clone());
@@ -242,17 +261,18 @@ pub(crate) async fn execute_prepared_responses(
                 } else {
                     response
                 };
-                into_http_response(
-                    validated_middleware_response(response, validation, stream),
-                    expected,
-                )
-                .await
+                let response = validated_middleware_response(response, validation, stream);
+                let response = match adapter {
+                    Some(adapter) => (adapter.wrap)(response),
+                    None => response,
+                };
+                into_http_response(response, expected).await
             }
             Err(error) => error_response(error),
         }
     };
     let response = if stream {
-        super::keepalive::response(response, keepalive).await
+        super::keepalive::response_with_encoder(response, keepalive, stream_error).await
     } else {
         response.await
     };

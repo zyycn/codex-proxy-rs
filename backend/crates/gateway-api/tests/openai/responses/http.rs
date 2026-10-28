@@ -2551,6 +2551,110 @@ async fn buffered_response_collects_completed_output_items_without_rewriting_str
 }
 
 #[tokio::test]
+async fn native_responses_route_preserves_images_and_encrypted_reasoning_in_json_and_sse() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
+    let reasoning = json!({
+        "id":"rs_native","type":"reasoning","encrypted_content":"opaque-reasoning-for-replay",
+        "summary":[{"type":"summary_text","text":"native summary"}],
+        "future_reasoning_field":{"keep":true}
+    });
+    let image = json!({
+        "id":"ig_native","type":"image_generation_call","status":"completed",
+        "result":"b3BhcXVlLWltYWdl","output_format":"png",
+        "future_image_field":{"keep":true}
+    });
+    let terminal = json!({
+        "id":"resp_test","object":"response","model":"public-model","status":"completed",
+        "output":[reasoning, image],"future_terminal_field":{"keep":true}
+    });
+    for streaming in [false, true] {
+        let trace = Arc::new(Trace::default());
+        let mut expected_sse = Vec::new();
+        let mut events = Vec::new();
+        for (index, (kind, mut data, facts)) in [
+            (
+                "response.created",
+                json!({"response":{"id":"resp_test","model":"public-model","status":"in_progress","output":[]}}),
+                vec![started()],
+            ),
+            (
+                "response.output_item.done",
+                json!({"output_index":0,"item":reasoning}),
+                vec![],
+            ),
+            (
+                "response.image_generation_call.partial_image",
+                json!({"item_id":"ig_native","output_index":1,"partial_image_index":0,"partial_image_b64":"b3BhcXVlLXBhcnRpYWw="}),
+                vec![],
+            ),
+            (
+                "response.output_item.done",
+                json!({"output_index":1,"item":image}),
+                vec![],
+            ),
+            (
+                "response.completed",
+                json!({"response":terminal}),
+                vec![completed()],
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            data["type"] = json!(kind);
+            let id = format!("native-boundary-{index}");
+            // 保留行结束符、空白和 SSE 元数据，不能仅比较 JSON 后掩盖重编码
+            let raw = Bytes::from(format!(
+                "id: {id}\r\nevent: {kind}\r\nretry: 1234\r\ndata: {data} \r\n\r\n"
+            ));
+            expected_sse.extend_from_slice(&raw);
+            events.push(ProviderEvent::canonical_with_wire(
+                facts,
+                ProtocolWireEvent::json_with_raw_sse_metadata(
+                    "openai",
+                    Some(kind.to_owned()),
+                    data,
+                    raw,
+                    Some(id),
+                    Some(1234),
+                )
+                .unwrap(),
+            ));
+        }
+        let session = if streaming {
+            FakeSession::streaming(
+                Arc::clone(&trace),
+                vec![
+                    NextStep::Event(
+                        CoordinatedEvent::try_batch(
+                            events,
+                            CommitRequirement::CommitBeforeDelivery,
+                        )
+                        .unwrap(),
+                    ),
+                    NextStep::FinalizeSuccess,
+                ],
+            )
+        } else {
+            FakeSession::buffered_provider(Arc::clone(&trace), events)
+        };
+        // 使用真实 /v1/responses 入口，覆盖共享执行函数的可选适配器为空分支
+        let response = response(&admin, "openai", session, streaming).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        if streaming {
+            expected_sse.extend_from_slice(b"data: [DONE]\n\n");
+            assert_eq!(body.as_ref(), expected_sse.as_slice());
+            assert_eq!(trace.snapshot(), ["next_event", "commit", "next_end"]);
+        } else {
+            assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), terminal);
+            assert_eq!(trace.snapshot(), ["collect", "commit"]);
+        }
+        assert!(!trace.is_cancelled());
+    }
+}
+
+#[tokio::test]
 async fn buffered_response_keeps_authoritative_terminal_and_supports_omitted_output() {
     let item = json!({"id": "rs_test", "type": "reasoning", "encrypted_content": "opaque"});
     for (terminal, expected_output) in [

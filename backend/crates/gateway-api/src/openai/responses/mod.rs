@@ -10,10 +10,12 @@ pub mod websocket;
 
 pub(crate) use crate::request_context::request_client_context;
 pub use error::{ProtocolError, ProtocolErrorBody, RequestDecodeError, ResponseEncodeError};
+pub(in crate::openai) use http::{HttpResponseAdapter, execute_prepared_response};
 pub(crate) use http::{
     ResponseAuthorization, ResponsesHttpRequest, execute_prepared_responses, responses,
 };
 pub use http::{collect_execution_response, stream_execution_response};
+pub(in crate::openai) use request::decompress_request_body;
 pub use request::{
     ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, ResponsesRequestMetadata,
     decode_request_with_headers,

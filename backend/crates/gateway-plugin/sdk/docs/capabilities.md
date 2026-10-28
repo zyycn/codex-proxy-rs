@@ -344,6 +344,10 @@ let status = host.service::<SetResetCreditAutomation>((account_id, true)).await?
 插件改写后用于后续认证、版本检查、正文解压及执行；不新增设置业务的中间件入口。`timeout_ms` 使用宿主 HTTP 超时基线，
 插件可改写或用 `None` 清除；终端按有效值执行，不恢复宿主默认值。宿主快照不可用时 `settings` 为 `null`
 
+`POST /v1/chat/completions` 在 HTTP 挂载中保留 Chat 请求与 Chat JSON/SSE 响应视图，
+转换为 Responses 发生在内层模型入口。自行按 URI 筛选、改写或分派模型请求的 HTTP 插件，
+需要将该路径包含在自身匹配范围内；只匹配 `/v1/responses` 不会覆盖 Chat
+
 `HttpCall.settings_sources` 返回 `config_revision`、宿主 `host` 基线、运行设置的 `overrides`、Key 作用域的 `execution` 与 `http_timeout`。
 每条改写记录含 `instance_id`、`order` 和 `value`；来源由宿主记录，修改查询结果不会写入设置。
 宿主比较提交前后的值，仅记录实际改变的设置项；同值赋值不新增改写记录。每个顶层设置项整体替换，`false`、`0`、
@@ -467,6 +471,13 @@ SDK 仅在对象改变时提交完整替换，`false`、`0`、空映射和合同
 Responses 终端重新解码插件正文时读取改写后的正文上限；attempt 阶段的 `settings` 为 `null`，已经完成的准入不能经该入口重做。
 更早的改写使用上述 HTTP 请求的 `settings`。`request.head.settings_sources` 使用相同的来源结构，`execution.input` 表示进入当前 Key 作用域时的有效值。
 原生 Responses WebSocket 每轮请求读取当前宿主快照，重新认证并解析 Key 策略，同时保留握手阶段的显式改写；已开始的执行保持自己的冻结值
+
+Chat Completions 在 request 与 attempt 挂载中使用规范化的 Responses 请求和响应正文，
+`request.head.endpoint` 仍为 `/v1/chat/completions`，`protocol` 仍为 `openai`。
+request 改写按 Responses 合同重新解码，响应先经过该合同的复核，再由 API 投影成 Chat 交给外层 HTTP 挂载。
+Chat 的下游流模式及 `include_usage` 由 API 持有，request 阶段不能切换已确定的下游流模式。
+同一边界的原样保留不要求 Chat 与 Responses 字节相同；需要读写 `messages` 或 `choices` 的插件应使用 HTTP 挂载，
+字段范围见 [Chat 合同](../../../../../docs/api.md#chat-completions-请求)
 
 中间件可读取和改写完整请求、响应 headers、正文与响应帧，也不按字段名称过滤认证、Cookie、会话或连接头。
 该能力遵循[完整信任](manifest.md#完整信任)边界；类型、HTTP 格式、大小及资源生命周期仍需符合合同

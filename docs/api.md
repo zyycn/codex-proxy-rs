@@ -7,7 +7,7 @@
 | 查找内容 | 入口 |
 | --- | --- |
 | 鉴权与响应 | [公共约定](#1-鉴权与公共约定) · [浏览器会话与 Key 自助页](#4-浏览器认证) |
-| 客户端协议 | [Responses、Images、模型与 Provider 操作](#3-openai-数据面与模型目录) · [额度查询](#api-key-额度查询) |
+| 客户端协议 | [Responses、Chat、Images、模型与 Provider 操作](#3-openai-数据面与模型目录) · [额度查询](#api-key-额度查询) |
 | 账号与授权范围 | [账号](#5-账号) · [代理](#独立代理管理--managed-proxies) · [分组](#6-账号分组) · [Client Key](#7-client-key) |
 | 系统与运维 | [健康检查](#2-健康检查) · [运行设置](#8-运行设置) · [备份](#9-备份) · [统计与诊断](#10-dashboard用量与错误) · [版本与更新](#11-版本更新与重启) |
 | 插件 | [安装包与来源](#安装包与来源) · [运行实例](#121-运行实例) · [管理扩展](#122-管理扩展页面与原始-api) |
@@ -200,13 +200,14 @@ Dashboard 的 `lastUsedRelative` 和账号额度的 `refreshedAtRelative` 由后
 
 ## 3. OpenAI 数据面与模型目录
 
-除下述 Responses 入站解压保护外，Responses、Images 和 standalone Search HTTP body、
+除下述入站解压保护外，Responses、Chat Completions、Images 和 standalone Search HTTP body、
 WebSocket message 和 frame 不设置网关私有长度上限；协议可接受性由上游决定
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
 | `POST` | `/v1/responses` | OpenAI Responses JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
+| `POST` | `/v1/chat/completions` | Chat Completions 转 Responses 执行；返回单 choice 的 Chat JSON 或 SSE |
 | `POST` | `/v1/alpha/search` | Codex standalone web search；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/generations` | 通过 OpenAI Provider 发起图像生成；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/edits` | 通过 OpenAI Provider 发起图像编辑；JSON 原样转发，multipart 上传转为原生 Images JSON |
@@ -215,6 +216,93 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 | `POST` | `/v1/providers/{provider}/models/{model}/count_tokens` | 调用指定 Provider/model 声明的精确 Token 计数；请求和响应均为 JSON |
 | `GET` / `POST` | `/v1/providers/{provider}/http/{endpoint}` | 调用指定 Provider 预先声明的固定 HTTP 操作；不是任意 URL 代理 |
 | `GET` | `/v1/usage` | 查询当前 Client Key 的日与周额度，仅使用网关已结算的 USD 账本 |
+
+### Chat Completions 请求
+
+`POST /v1/chat/completions` 接受 Chat 消息历史，转换为 Responses 请求执行，再交付 Chat 格式结果。
+每次请求须提供非空字符串 `model` 和非空数组 `messages`，多轮对话由客户端携带完整历史；
+没有 Chat 查询、删除或服务端历史续接接口。`stream` 省略、`null` 或 `false` 时返回 JSON，`true` 时返回 SSE
+
+官方 OpenAI SDK 可使用 Chat Completions 方法，将 `base_url` 指向网关的 `/v1`。
+下面的 `CPR_CLIENT_KEY` 为管理端创建的 Client Key，`CPR_MODEL` 为当前 Key 可用的模型 ID，可通过 `/v1/models` 查询：
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://gateway.example.com/v1",
+    api_key=os.environ["CPR_CLIENT_KEY"],
+)
+completion = client.chat.completions.create(
+    model=os.environ["CPR_MODEL"],
+    messages=[{"role": "user", "content": "你好"}],
+)
+print(completion.choices[0].message.content)
+```
+
+#### 请求字段
+
+| 字段 | 支持与映射 |
+| --- | --- |
+| `messages[].role` | `system`、`developer`、`user`、`assistant`、`tool`，保持消息顺序；assistant 文本历史使用 Responses 的 `output_text` |
+| `messages[].content` | 字符串或文本块数组；`user` 还可包含 `image_url`，支持 HTTP(S) URL 和非空 `data:image/...;base64,...`，保留 `detail`，不代取图片 |
+| `messages[].refusal`、assistant 的 `refusal` 内容块 | 保留拒绝历史；assistant 的 `content` 仅在同时有工具调用或拒绝内容时可省略或为 `null` |
+| `messages[].tool_calls`、`messages[].tool_call_id` | assistant 的 function 调用转为 `function_call`，tool 结果转为 `function_call_output`，保留调用 ID 与 arguments 字符串，不解析或执行函数 |
+| `tools` | 仅支持现代 `type: "function"`；将 `function` 定义展开为 Responses 工具，保留 parameters schema；`strict` 省略或 `null` 时显式使用 `false` |
+| `tool_choice`、`parallel_tool_calls` | 支持 `auto`、`none`、`required` 和指定 function；`required` 须提供工具，指定名称须存在于 `tools`；并行选项保留布尔值 |
+| `response_format` | `text`、`json_object`、`json_schema` 映射到 `text.format`，JSON Schema 保留原值 |
+| `reasoning_effort`、`verbosity` | 分别映射到 `reasoning.effort`、`text.verbosity`；接受非空字符串，不固定枚举档位 |
+| `max_completion_tokens`、`max_tokens` | 正整数映射到 `max_output_tokens`，同时提供时前者优先 |
+| `temperature`、`top_p` | 分别接受 0 到 2、0 到 1 的数字，包含端点；是否生效见下文 |
+| `user`、`safety_identifier`、`service_tier`、`prompt_cache_key`、`prompt_cache_retention` | 两侧同语义的字符串保留原值，档位与缓存策略由上游判断 |
+| `metadata`、`prompt_cache_options`、`moderation` | 两侧同结构的对象原样携带，不逐层重建内部字段 |
+| 文本、图片内容块的 `prompt_cache_breakpoint` | 同结构对象原样携带；assistant 输出消息不支持此选项 |
+
+可选映射参数为 `null` 时按未提供处理。字段类型、角色组合或工具选择无效时，在访问上游前返回 `400`，
+错误中的 `param` 指向对应字段，不回显字段值。工具参数字符串和 schema 的业务有效性由客户端与上游按各自合同处理
+
+以下参数只接受所列中性值；省略或 `null` 也接受，其他值返回 `400 unsupported_parameter`：
+
+| 字段 | 接受值 |
+| --- | --- |
+| `n` | `1` |
+| `store`、`logprobs` | `false` |
+| `top_logprobs`、`frequency_penalty`、`presence_penalty` | `0` |
+| `logit_bias` | `{}` |
+| `stop`、旧式 `functions` | `[]` |
+| `modalities` | `["text"]` |
+
+`function_call`、`seed`、`prediction`、`audio`、`web_search_options`、`reasoning_content` 及消息级 `reasoning` 不支持非 `null` 值。
+非空消息 `name`、旧式 `function` 角色、文件内容、音频内容、custom 或 hosted 工具及未知内容类型也会明确拒绝。
+该入口不接收 Responses 请求形状；`input`、`previous_response_id`、`conversation`、`instructions`、`reasoning`、
+`text`、`include`、`background` 和 `max_output_tokens` 不支持非 `null` 值，需要这些原生能力时使用 `/v1/responses`
+
+未知客户端附加字段只在请求、消息及工具等协议包装对象中忽略，不据名称自动转交 Responses，
+也不递归删除 schema、metadata 或工具参数内的业务字段。新枚举值和同结构对象内部的扩展交由上游判断；
+新的工具类型、输出模态或续接语义需要明确映射，不承诺跨协议完全透传
+
+#### 响应与共用规则
+
+非流式响应包含一个 `choices` 项，支持文本、拒绝和 function 工具调用。
+流式响应交付对应的 Chat delta；`stream_options` 仅在 `stream: true` 时可提供，
+`include_usage: true` 在完整上游用量可用时于结束前追加 `choices: []` 的用量块，其余块的 `usage` 为 `null`。
+未提供完整用量时不补造 Token 数；缺省不启用流长度混淆，`include_obfuscation: true` 不受支持，`false` 可接受
+
+响应对象新增普通属性、非必要事件不影响已有内容映射；无法表达的业务输出、缺少必要终态或终态冲突会失败，
+不以丢弃内容或补造成功结束掩盖错误。OpenAI 是此入口的兼容目标，混合分组仍沿用现有选路与 fallback 规则，
+不能据此推导所有 Provider 都具备相同的 Chat 能力
+
+Responses 的 reasoning 项（包括摘要与 `encrypted_content`）不投影到 Chat 消息，
+实际推理用量仍保留。需要推理密文回放或图片输出时使用原生 Responses 接口；Chat 的图片输入支持不代表图片输出可用
+
+Chat 沿用 [Client Key 鉴权](#openai-数据面客户端接口)、[请求期限](#请求期限)、[请求解压](#请求解压)、
+[请求头与身份](#请求头与身份)及[隐私策略](#隐私策略)。隐私策略的 `request_body` 面向转换后的 Responses 正文，
+例如 `$.input`，不需要另外维护一套针对 `messages` 的规则
+
+转换后的请求仍执行统一[正文兼容](#正文兼容)：顶层 `temperature`、`max_output_tokens` 和
+`prompt_cache_retention` 会被移除。因此接受相应 Chat 参数不表示采样、输出长度或缓存保留设置必然生效，
+不会通过本地截断模拟长度控制；`top_p` 等其他参数继续由上游判断
 
 ### Images 请求
 
@@ -272,7 +360,7 @@ Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-open
 
 #### 请求解压
 
-`POST /v1/responses` 在鉴权后按 `Content-Encoding` 解压，再解析 JSON；支持单一 `gzip`、
+`POST /v1/responses` 与 `POST /v1/chat/completions` 在鉴权后按 `Content-Encoding` 解压，再解析 JSON；支持单一 `gzip`、
 `deflate`（zlib 封装）和 `zstd`，缺省、空值或 `identity` 直接使用原始正文。gzip 多成员与 zstd
 多帧连续解码，整体展开结果受运行设置 `responsesMaxDecompressedBodyBytes` 约束（默认 64 MiB），
 超限在继续展开前返回 `400 request_too_large`，错误信息包含当前请求的上限字节数。zstd
