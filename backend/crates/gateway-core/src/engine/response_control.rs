@@ -3,6 +3,7 @@
 use std::fmt;
 use std::sync::{Arc, Mutex, Weak};
 
+use crate::lifecycle::CancellationToken;
 use async_trait::async_trait;
 
 /// Provider 实现的连接控制通道，消息内容由上游协议解释
@@ -22,6 +23,7 @@ pub struct ResponseControlUnavailable;
 #[derive(Clone, Default)]
 pub struct ResponseControl {
     target: Arc<Mutex<Option<Weak<dyn ResponseControlTransport>>>>,
+    connection_cancellation: Option<CancellationToken>,
 }
 
 /// 某次已交付响应所属的弱连接快照，重绑后不能把旧消息发送到新连接
@@ -50,6 +52,18 @@ impl fmt::Debug for ResponseControl {
 }
 
 impl ResponseControl {
+    /// 下游连接跨多轮存续，不能使用单次响应的取消信号代替
+    #[must_use]
+    pub fn with_connection_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.connection_cancellation = Some(cancellation);
+        self
+    }
+
+    #[must_use]
+    pub fn connection_cancellation(&self) -> Option<&CancellationToken> {
+        self.connection_cancellation.as_ref()
+    }
+
     /// 仅保存弱引用，不延长旧 attempt 的连接生命周期
     #[must_use]
     pub fn binding(&self) -> Option<ResponseControlBinding> {

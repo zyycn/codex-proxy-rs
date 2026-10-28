@@ -1246,7 +1246,7 @@ fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> Provider
             let mut message =
                 format!("OpenAI WebSocket stream ended before a terminal response ({reason})");
             if let Some(timeout) = timeout {
-                message.push_str(&format!("; local keepalive timeout after {timeout:?}"));
+                message.push_str(&format!("; local Pong write timeout after {timeout:?}"));
             }
             if let Some(last_event_type) = last_event_type {
                 message.push_str("; last event type: ");

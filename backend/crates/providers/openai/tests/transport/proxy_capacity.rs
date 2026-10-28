@@ -5,12 +5,13 @@ use gateway_core::{
     account::{CredentialRevision, OutboundProxy, ProviderAccount, ProviderAccountId},
     routing::ProviderKind,
 };
+use gateway_core::{engine::response_control::ResponseControl, lifecycle::CancellationToken};
 use provider_openai::transport::websocket::PreviousResponseUnavailableReason;
 
 fn limited_pool() -> Arc<CodexWebSocketPool> {
     Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
         max_age: Duration::from_mins(55),
-        ..websocket_pool_config_for_tests(None, None, None)
+        ..websocket_pool_config_for_tests(None)
     }))
 }
 
@@ -139,6 +140,276 @@ async fn proxy_capacity_preserves_idle_reuse_beyond_two_minutes_without_pressure
 }
 
 #[tokio::test]
+async fn proxy_capacity_idle_timeout_restarts_when_a_connection_is_returned() {
+    let proxy = LimitedProxy::start(32).await;
+    let pool = limited_pool();
+    let client = proxy.client(pool.clone(), "acct_a", 1);
+    respond(&client, "idle-reset").await;
+    for _ in 0..2 {
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(200)).await;
+        tokio::time::resume();
+        pool.maintain_idle_connections().await;
+        respond(&client, "idle-reset").await;
+    }
+    assert_eq!(proxy.opened.load(Ordering::SeqCst), 1);
+    pool.shutdown().await;
+}
+
+#[tokio::test]
+async fn proxy_capacity_releases_idle_sockets_after_five_minutes() {
+    let proxy = LimitedProxy::start(32).await;
+    let pool = limited_pool();
+    let client = proxy.client(pool.clone(), "acct_a", 1);
+    respond(&client, "idle-expired").await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(300)).await;
+    tokio::time::resume();
+    pool.maintain_idle_connections().await;
+    wait_until(|| proxy.active.load(Ordering::SeqCst) == 0).await;
+    timeout(
+        Duration::from_secs(3),
+        respond(&client, "after-idle-expiry"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(proxy.opened.load(Ordering::SeqCst), 2);
+    pool.shutdown().await;
+}
+
+#[tokio::test]
+async fn proxy_capacity_preserves_bound_sockets_beyond_idle_timeout() {
+    let control = ResponseControl::default().with_connection_cancellation(CancellationToken::new());
+    let proxy = LimitedProxy::start(32).await;
+    let pool = limited_pool();
+    let client = proxy.client(pool.clone(), "acct_a", 1);
+    let mut request = pooled_websocket_request("bound-idle");
+    request.downstream_websocket_connection_id = Some("downstream-bound-idle".to_owned());
+    client
+        .create_response(
+            &request,
+            request_context("bound-first", Some("test-upstream"))
+                .with_response_control(Some(&control)),
+        )
+        .await
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(301)).await;
+    tokio::time::resume();
+    pool.maintain_idle_connections().await;
+    client
+        .create_response(
+            &request,
+            request_context("bound-next", Some("test-upstream"))
+                .with_response_control(Some(&control)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(proxy.opened.load(Ordering::SeqCst), 1);
+    pool.shutdown().await;
+}
+
+#[tokio::test]
+async fn downstream_close_releases_idle_socket_without_waiting_for_maintenance() {
+    let proxy = LimitedProxy::start(32).await;
+    let pool = limited_pool();
+    let client = proxy.client(pool.clone(), "acct_a", 1);
+    let cancellation = CancellationToken::new();
+    let control = ResponseControl::default().with_connection_cancellation(cancellation.clone());
+    let mut request = pooled_websocket_request("closed-client");
+    request.downstream_websocket_connection_id = Some("downstream-closed".to_owned());
+    client
+        .create_response(
+            &request,
+            request_context("bound", Some("test-upstream")).with_response_control(Some(&control)),
+        )
+        .await
+        .unwrap();
+    cancellation.cancel();
+    wait_until(|| proxy.active.load(Ordering::SeqCst) == 0).await;
+    timeout(Duration::from_secs(3), respond(&client, "next-client"))
+        .await
+        .unwrap();
+    assert_eq!(proxy.opened.load(Ordering::SeqCst), 2);
+    pool.shutdown().await;
+}
+
+#[tokio::test]
+async fn downstream_close_cancels_active_response_and_prevents_return_to_pool() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let proxy = LimitedProxy::with_gates(32, None, Some(gate.clone())).await;
+    let pool = limited_pool();
+    let client = proxy.client(pool.clone(), "acct_a", 1);
+    let cancellation = CancellationToken::new();
+    let control = ResponseControl::default().with_connection_cancellation(cancellation.clone());
+    let mut request = pooled_websocket_request("active-client");
+    request.downstream_websocket_connection_id = Some("downstream-active".to_owned());
+    let task = tokio::spawn(async move {
+        client
+            .create_response(
+                &request,
+                request_context("active", Some("test-upstream"))
+                    .with_response_control(Some(&control)),
+            )
+            .await
+    });
+    wait_until(|| !proxy.requests.lock().unwrap().is_empty()).await;
+    cancellation.cancel();
+    let response = timeout(Duration::from_secs(3), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(response.body.is_empty());
+    wait_until(|| proxy.active.load(Ordering::SeqCst) == 0).await;
+    gate.add_permits(2);
+    let client = proxy.client(pool.clone(), "acct_a", 1);
+    timeout(
+        Duration::from_secs(3),
+        respond(&client, "after-active-cancel"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(proxy.opened.load(Ordering::SeqCst), 2);
+    pool.shutdown().await;
+}
+
+#[tokio::test]
+async fn downstream_close_cancels_connecting_socket_and_releases_proxy_capacity() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let proxy = LimitedProxy::with_gates(32, Some(gate.clone()), None).await;
+    let pool = limited_pool();
+    let client = proxy.client(pool.clone(), "acct_a", 1);
+    let cancellation = CancellationToken::new();
+    let control = ResponseControl::default().with_connection_cancellation(cancellation.clone());
+    let mut request = pooled_websocket_request("opening-client");
+    request.downstream_websocket_connection_id = Some("downstream-opening".to_owned());
+    request.set_previous_response_id(None);
+    request.previous_response_scope = None;
+    let task = tokio::spawn(async move {
+        client
+            .create_response(
+                &request,
+                request_context("opening", Some("test-upstream"))
+                    .with_response_control(Some(&control)),
+            )
+            .await
+    });
+    wait_until(|| proxy.active.load(Ordering::SeqCst) == 1).await;
+    cancellation.cancel();
+    assert!(
+        timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+    wait_until(|| proxy.active.load(Ordering::SeqCst) == 0).await;
+    gate.add_permits(2);
+    let client = proxy.client(pool.clone(), "acct_a", 1);
+    timeout(
+        Duration::from_secs(3),
+        respond(&client, "after-opening-cancel"),
+    )
+    .await
+    .unwrap();
+    pool.shutdown().await;
+}
+
+#[tokio::test]
+async fn old_downstream_close_does_not_destroy_a_transferred_continuation() {
+    let proxy = LimitedProxy::start(32).await;
+    let pool = limited_pool();
+    let client = proxy.client(pool.clone(), "acct_a", 1);
+    let old_cancellation = CancellationToken::new();
+    let new_cancellation = CancellationToken::new();
+    let old_control =
+        ResponseControl::default().with_connection_cancellation(old_cancellation.clone());
+    let new_control =
+        ResponseControl::default().with_connection_cancellation(new_cancellation.clone());
+    let mut request = pooled_websocket_request("transferred-chain");
+    request.downstream_websocket_connection_id = Some("downstream-old".to_owned());
+    client
+        .create_response(
+            &request,
+            request_context("old", Some("test-upstream")).with_response_control(Some(&old_control)),
+        )
+        .await
+        .unwrap();
+    request.downstream_websocket_connection_id = Some("downstream-new".to_owned());
+    let waiting_control = old_control.clone();
+    let old_reader = tokio::spawn(async move { waiting_control.receive().await });
+    tokio::task::yield_now().await;
+    request.set_previous_response_id(Some("resp_proxy_0".to_owned()));
+    request.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+    client
+        .create_response(
+            &request,
+            request_context("transferred", Some("test-upstream"))
+                .with_response_control(Some(&new_control)),
+        )
+        .await
+        .unwrap();
+    assert!(
+        timeout(Duration::from_secs(3), old_reader)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+    assert!(
+        old_control
+            .send(r#"{"type":"response.interrupt"}"#)
+            .await
+            .is_err()
+    );
+    old_cancellation.cancel();
+    tokio::task::yield_now().await;
+    request.set_previous_response_id(Some("resp_proxy_0".to_owned()));
+    client
+        .create_response(
+            &request,
+            request_context("continued", Some("test-upstream"))
+                .with_response_control(Some(&new_control)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(proxy.opened.load(Ordering::SeqCst), 1);
+    new_cancellation.cancel();
+    wait_until(|| proxy.active.load(Ordering::SeqCst) == 0).await;
+    pool.shutdown().await;
+}
+
+#[tokio::test]
+async fn rebinding_downstream_retires_old_socket_before_waiting_for_capacity() {
+    let proxy = LimitedProxy::start(32).await;
+    let pool = limited_pool();
+    let client = proxy.client(pool.clone(), "acct_a", 1);
+    let cancellation = CancellationToken::new();
+    let control = ResponseControl::default().with_connection_cancellation(cancellation.clone());
+    for conversation in ["old-chain", "replacement-chain"] {
+        let mut request = pooled_websocket_request(conversation);
+        request.downstream_websocket_connection_id = Some("same-downstream".to_owned());
+        timeout(
+            Duration::from_secs(3),
+            client.create_response(
+                &request,
+                request_context("rebind", Some("test-upstream"))
+                    .with_response_control(Some(&control)),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
+    assert_eq!(proxy.opened.load(Ordering::SeqCst), 2);
+    assert!(proxy.peak.load(Ordering::SeqCst) <= 1);
+    cancellation.cancel();
+    wait_until(|| proxy.active.load(Ordering::SeqCst) == 0).await;
+    pool.shutdown().await;
+}
+
+#[tokio::test]
 async fn proxy_capacity_does_not_limit_direct_connections() {
     let pool = limited_pool();
     let proxy = LimitedProxy::start(32).await;
@@ -208,13 +479,17 @@ async fn proxy_capacity_releases_failed_handshake_before_the_next_connection() {
 
 #[tokio::test]
 async fn proxy_capacity_protects_downstream_bindings_and_blocks_unpooled_bypass() {
+    let control = ResponseControl::default().with_connection_cancellation(CancellationToken::new());
     let proxy = LimitedProxy::start(32).await;
     let pool = limited_pool();
     let client = proxy.client(pool.clone(), "acct_a", 1);
     let mut pinned = pooled_websocket_request("pinned");
     pinned.downstream_websocket_connection_id = Some("downstream-a".to_owned());
     client
-        .create_response(&pinned, request_context("pinned", Some("test-upstream")))
+        .create_response(
+            &pinned,
+            request_context("pinned", Some("test-upstream")).with_response_control(Some(&control)),
+        )
         .await
         .unwrap();
     let unpooled = codex_request("gpt-test", "be brief", Vec::new());
@@ -233,7 +508,8 @@ async fn proxy_capacity_protects_downstream_bindings_and_blocks_unpooled_bypass(
     client
         .create_response(
             &pinned,
-            request_context("pinned-reuse", Some("test-upstream")),
+            request_context("pinned-reuse", Some("test-upstream"))
+                .with_response_control(Some(&control)),
         )
         .await
         .unwrap();
@@ -433,7 +709,16 @@ impl LimitedProxy {
                                 stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n").await.unwrap();
                                 return;
                             }
-                            if let Some(gate) = connect_gate { gate.acquire().await.unwrap().forget(); }
+                            if let Some(gate) = connect_gate {
+                                let mut byte = [0];
+                                tokio::select! {
+                                    permit = gate.acquire() => permit.unwrap().forget(),
+                                    result = stream.peek(&mut byte) => {
+                                        assert_eq!(result.unwrap(), 0, "cancelled opening must close TCP");
+                                        return;
+                                    }
+                                }
+                            }
                             stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await.unwrap();
                             if request.contains("X-Capacity-Probe: health") {
                                 let health = read_http_request(&mut stream).await;
@@ -449,7 +734,16 @@ impl LimitedProxy {
                                 match message {
                                     Message::Text(payload) => {
                                         requests.lock().unwrap().push(serde_json::from_str(&payload).unwrap());
-                                        if let Some(gate) = &response_gate { gate.acquire().await.unwrap().forget(); }
+                                        if let Some(gate) = &response_gate {
+                                            tokio::select! {
+                                                permit = gate.acquire() => permit.unwrap().forget(),
+                                                message = ws.next() => {
+                                                    assert!(matches!(message, None | Some(Err(_)) | Some(Ok(Message::Close(_)))));
+                                                    let _ = ws.flush().await;
+                                                    break;
+                                                }
+                                            }
+                                        }
                                         if ws.send(Message::Text(completed_websocket_response(&format!("resp_proxy_{id}"), 1, 1).into())).await.is_err() { break; }
                                     }
                                     Message::Ping(payload) => { if ws.send(Message::Pong(payload)).await.is_err() { break; } }
@@ -573,14 +867,22 @@ async fn proxy_capacity_enabling_and_lowering_limits_keeps_existing_socket_count
 
 #[tokio::test]
 async fn proxy_capacity_enabling_limit_preserves_existing_downstream_bindings() {
+    let controls = [
+        ResponseControl::default().with_connection_cancellation(CancellationToken::new()),
+        ResponseControl::default().with_connection_cancellation(CancellationToken::new()),
+    ];
     let proxy = LimitedProxy::start(32).await;
     let pool = limited_pool();
     let unlimited = proxy.client(pool.clone(), "acct_a", 0);
-    for index in 0..2 {
+    for (index, control) in controls.iter().enumerate() {
         let mut request = pooled_websocket_request(&format!("pinned-{index}"));
         request.downstream_websocket_connection_id = Some(format!("downstream-{index}"));
         unlimited
-            .create_response(&request, request_context("pinned", Some("test-upstream")))
+            .create_response(
+                &request,
+                request_context("pinned", Some("test-upstream"))
+                    .with_response_control(Some(control)),
+            )
             .await
             .unwrap();
     }
@@ -590,7 +892,8 @@ async fn proxy_capacity_enabling_limit_preserves_existing_downstream_bindings() 
     limited
         .create_response(
             &retained,
-            request_context("pinned-reused", Some("test-upstream")),
+            request_context("pinned-reused", Some("test-upstream"))
+                .with_response_control(Some(&controls[0])),
         )
         .await
         .unwrap();

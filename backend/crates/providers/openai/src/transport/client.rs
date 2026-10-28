@@ -464,6 +464,8 @@ impl<'a> CodexAccountSelectionTelemetry<'a> {
 /// 单次 Codex 上游请求的上下文
 #[derive(Clone, Copy)]
 pub struct CodexRequestContext<'a> {
+    /// 本次根执行的控制与下游连接生命周期，不由共享 HTTP client 持有
+    pub response_control: Option<&'a gateway_core::engine::response_control::ResponseControl>,
     /// 显式传递的请求诊断上下文，跨连接任务共享
     pub trace: Option<&'a gateway_core::diagnostics::TraceContext>,
     /// Provider 已构造并脱敏持有的完整 Authorization 值
@@ -512,6 +514,7 @@ impl<'a> CodexRequestContext<'a> {
     ) -> Self {
         Self {
             trace: None,
+            response_control: None,
             authorization,
             account_id,
             request_id,
@@ -535,6 +538,15 @@ impl<'a> CodexRequestContext<'a> {
     #[must_use]
     pub const fn with_trace(mut self, trace: &'a gateway_core::diagnostics::TraceContext) -> Self {
         self.trace = Some(trace);
+        self
+    }
+
+    #[must_use]
+    pub fn with_response_control(
+        mut self,
+        control: Option<&'a gateway_core::engine::response_control::ResponseControl>,
+    ) -> Self {
+        self.response_control = control;
         self
     }
 }
@@ -689,7 +701,6 @@ pub struct CodexBackendClient {
         gateway_core::lifecycle::CancellationToken,
     )>,
     pub(super) timezone: gateway_core::time::DeploymentTimeZone,
-    pub(super) response_control: Option<gateway_core::engine::response_control::ResponseControl>,
     pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(super) client: Client,
     pub(super) direct_client: Client,
@@ -713,14 +724,6 @@ impl CodexBackendClient {
         timezone: gateway_core::time::DeploymentTimeZone,
     ) -> Self {
         self.timezone = timezone;
-        self
-    }
-
-    pub(crate) fn with_response_control(
-        mut self,
-        control: Option<gateway_core::engine::response_control::ResponseControl>,
-    ) -> Self {
-        self.response_control = control;
         self
     }
 

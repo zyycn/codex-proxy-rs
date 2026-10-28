@@ -10,6 +10,8 @@ pub(super) const DOWNSTREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(5 * 60
 pub(super) const DOWNSTREAM_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 pub(super) const CONNECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 pub(super) const DOWNSTREAM_PING_INTERVAL: Duration = Duration::from_secs(25);
+pub(super) const DOWNSTREAM_PONG_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const DOWNSTREAM_PING_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// WebSocket pump 的写入与生命周期预算
 #[derive(Clone, Copy)]
@@ -124,6 +126,7 @@ pub enum PumpExitReason {
     ReadError,
     WriteError,
     WriteTimeout,
+    PongTimeout,
     LifecycleShutdown,
     ConnectionMaxAge,
     CoordinatorDropped,
@@ -141,6 +144,7 @@ impl PumpExitReason {
             Self::ReadError => "read_error",
             Self::WriteError => "write_error",
             Self::WriteTimeout => "write_timeout",
+            Self::PongTimeout => "pong_timeout",
             Self::LifecycleShutdown => "lifecycle_shutdown",
             Self::ConnectionMaxAge => "connection_max_age",
             Self::CoordinatorDropped => "coordinator_dropped",

@@ -215,6 +215,7 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 authorization: "Bearer lease-token",
                 account_id: Some("lease-account"),
@@ -360,6 +361,7 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 authorization: "Bearer lease-token",
                 account_id: Some("lease-account"),

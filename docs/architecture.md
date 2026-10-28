@@ -485,6 +485,14 @@ API 暂存的下一轮请求和连接泵接收队列共用容量名额，控制�
 Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 canonical event，不读取 Provider SDK
 类型。Provider 独占 credential schema、OAuth、账号选择、模型目录、额度投影和上游 transport
 
+Responses 下游连接的心跳和退出由 API 拥有，每条 WS 使用独立取消信号，沿 Core 的 `ResponseControl` 传到 Provider 请求上下文。
+单轮执行结束不取消连接生命周期，连接退出则取消当前执行及仍归它所有的上游资源；API 不直接调用具体 Provider 清池。
+OpenAI 的连接池监督该取消信号，按当前归属保护绑定连接；精确续接接手 socket 时撤销旧控制收发并转移归属，旧客户端不能消费新响应或清理新 owner 的连接。
+重新绑定或切到 HTTP 时移除失去用途的旧连接，失效 reservation 不能重新归池。
+普通空闲期限复用池槽位的 `idle_since`，只在归池时重置；心跳不刷新业务空闲，建连与在途不参与空闲回收。
+回收先移出可复用集合，再在锁外有界关闭并等待 pump/socket 释放，物理容量随 socket 归还；批量关闭并行执行。
+协议合同与运行参数分别见 [Responses 传输](api.md#websocket-与上游传输)和[部署与运维](../deploy/README.md#公网访问)
+
 OpenAI 的 OAuth 与 API Key 共用现有账号和事务。API Key 的 Base URL、密钥和传输策略属于 Provider 凭据 JSON，
 随 credential revision 更新；普通详情只投影非敏感连接设置。API Key 客户端目录按账号、凭据版本和客户端版本隔离，
 标准 `data` 模型列表通过通用画像输出，完整 Codex `models` 目录保留原生对象。通用账号层按 Provider 提交的

@@ -82,6 +82,13 @@ openai:
   residency: us
   # 账号路由参考值：us、us_cr；填写值原样发送，省略或 null 时删除对应请求头
   account_routing_override: null
+  # 可选：完整的 Responses 上游 WS 池配置；省略整段使用以下默认值。
+  # ws_pool:
+  #   enabled: true
+  #   max_age_ms: 3300000
+  #   max_connecting: 8
+  #   idle_timeout_ms: 300000 # 仅回收未绑定活跃客户端 WS 的空闲连接，必须大于零。
+  #   stream_idle_timeout_ms: 300000
 
 # Compose 启动桥接区；密码仍只维护在 store 中。
 services:

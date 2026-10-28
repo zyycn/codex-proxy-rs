@@ -827,7 +827,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 &authorization,
                 cookie_header.as_ref(),
                 account_selection,
-            ).with_trace(&trace),
+            ).with_trace(&trace).with_response_control(context.response_control()),
             active_account.id().as_str(),
             context.deadline(),
             &cancellation,

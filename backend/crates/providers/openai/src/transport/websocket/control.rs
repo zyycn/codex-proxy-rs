@@ -8,6 +8,7 @@ use gateway_core::engine::response_control::{
 };
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{self, Message};
+use tokio_util::sync::CancellationToken;
 
 use super::CodexWebSocketExchangeError;
 
@@ -25,6 +26,7 @@ pub(super) type SharedMessages = Arc<Mutex<mpsc::Receiver<Result<Message, tungst
 pub(super) struct PumpControl {
     pub(super) tx_command: mpsc::Sender<PumpCommand>,
     pub(super) rx_message: SharedMessages,
+    pub(super) cancellation: CancellationToken,
 }
 
 pub(super) async fn send_message(
@@ -45,17 +47,23 @@ pub(super) async fn send_message(
 #[async_trait]
 impl ResponseControlTransport for PumpControl {
     async fn send(&self, payload: &str) -> Result<(), ResponseControlUnavailable> {
-        tokio::time::timeout(
-            WEBSOCKET_SEND_TIMEOUT,
-            send_message(&self.tx_command, Message::Text(payload.to_owned().into())),
-        )
-        .await
-        .map_err(|_| ResponseControlUnavailable)?
-        .map_err(|_| ResponseControlUnavailable)
+        tokio::select! {
+            biased;
+            () = self.cancellation.cancelled() => Err(ResponseControlUnavailable),
+            result = tokio::time::timeout(
+                WEBSOCKET_SEND_TIMEOUT,
+                send_message(&self.tx_command, Message::Text(payload.to_owned().into())),
+            ) => result.map_err(|_| ResponseControlUnavailable)?.map_err(|_| ResponseControlUnavailable),
+        }
     }
 
     async fn receive(&self) -> Result<String, ResponseControlUnavailable> {
-        match self.rx_message.lock().await.recv().await {
+        let message = tokio::select! {
+            biased;
+            () = self.cancellation.cancelled() => return Err(ResponseControlUnavailable),
+            message = async { self.rx_message.lock().await.recv().await } => message,
+        };
+        match message {
             Some(Ok(Message::Text(text))) => Ok(text.to_string()),
             _ => Err(ResponseControlUnavailable),
         }

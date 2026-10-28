@@ -10,8 +10,7 @@ use tokio::time::Instant;
 use super::CodexWebSocketPool;
 use super::lease::WebSocketPoolConnectOutcome;
 use super::state::{
-    PooledWebSocketConnection, WebSocketPoolSlot, close_pooled_connections,
-    should_close_idle_connection,
+    PooledWebSocketConnection, WebSocketPoolSlot, close_pooled_connections, idle_connection_loss,
 };
 
 impl CodexWebSocketPool {
@@ -71,11 +70,7 @@ impl CodexWebSocketPool {
         self.tasks.wait().await;
     }
 
-    /// 维护池 slot：清扫已死亡或超龄的 idle 连接，以及异常残留的 Busy reservation
-    ///
-    /// 保活（ping/pong）与失活检测已下沉到每条连接的 pump 任务内部，此处不再做
-    /// 同步 ping 探活，只负责把「后台已标记 closed」或「超过 max_age」的 idle
-    /// 连接从池中摘除并关闭，避免它们占用 slot
+    /// 清扫已关闭、超龄或空闲到期的连接，以及超龄残留的 reservation
     pub async fn maintain_idle_connections(&self) {
         let close = self.take_expired_slots().await;
         close_pooled_connections(close).await;
@@ -156,43 +151,50 @@ impl CodexWebSocketPool {
             .slots
             .iter()
             .filter_map(|(key, slot)| match slot {
-                WebSocketPoolSlot::Idle { connection, .. }
-                    if should_close_idle_connection(connection, now, self.config.max_age) =>
-                {
-                    Some(key.clone())
-                }
+                WebSocketPoolSlot::Idle {
+                    connection,
+                    idle_since,
+                } => idle_connection_loss(
+                    state.has_downstream_binding(key),
+                    connection,
+                    *idle_since,
+                    now,
+                    &self.config,
+                )
+                .map(|observation| (key.clone(), Some(observation))),
                 WebSocketPoolSlot::Busy(reservation)
                     if now.duration_since(reservation.reserved_at) >= self.config.max_age =>
                 {
-                    Some(key.clone())
+                    Some((key.clone(), None))
                 }
                 WebSocketPoolSlot::Connecting(connecting)
                     if now.duration_since(connecting.started_at) >= self.config.max_age =>
                 {
-                    Some(key.clone())
+                    Some((key.clone(), None))
                 }
-                WebSocketPoolSlot::Idle { .. }
-                | WebSocketPoolSlot::Busy(_)
-                | WebSocketPoolSlot::Connecting(_) => None,
+                WebSocketPoolSlot::Busy(_) | WebSocketPoolSlot::Connecting(_) => None,
             })
             .collect::<Vec<_>>();
-        for key in keys {
+        for (key, observation) in keys {
             match state.slots.remove(&key) {
-                Some(WebSocketPoolSlot::Idle { connection, .. }) => {
-                    let observation = if connection.websocket.is_closed() {
-                        connection.websocket.observation()
-                    } else {
-                        connection
-                            .websocket
-                            .observation()
-                            .with_exit_reason("max_age_expired")
-                    };
-                    state.remember_continuation_loss(
-                        &key,
-                        connection.continuation.latest_response_id(),
-                        observation,
-                        now,
-                    );
+                Some(WebSocketPoolSlot::Idle {
+                    connection,
+                    idle_since,
+                }) => {
+                    if let Some(observation) = observation {
+                        tracing::info!(
+                            websocket_connection_id = %connection.websocket.connection_id(),
+                            exit_reason = observation.exit_reason(),
+                            idle_age_ms = now.duration_since(idle_since).as_millis(),
+                            "Removed unavailable idle WebSocket during maintenance"
+                        );
+                        state.remember_continuation_loss(
+                            &key,
+                            connection.continuation.latest_response_id(),
+                            observation,
+                            now,
+                        );
+                    }
                     close.push(*connection);
                 }
                 Some(WebSocketPoolSlot::Busy(reservation)) => {

@@ -98,7 +98,7 @@ impl CodexWebSocketPool {
                     .filter_map(|(key, slot)| match slot {
                         WebSocketPoolSlot::Idle { idle_since, .. }
                             if key.proxy_capacity_key == proxy_key
-                                && key.downstream_connection_id.is_empty() =>
+                                && !state.has_downstream_binding(key) =>
                         {
                             Some((key, *idle_since))
                         }

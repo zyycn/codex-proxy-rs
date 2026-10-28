@@ -30,6 +30,7 @@ use tokio::{
 pub struct ResponsesWebSocketConnection {
     connection_id: Arc<str>,
     opened_at: Instant,
+    cancellation: CancellationToken,
     expired: Arc<AtomicBool>,
     commands: Option<mpsc::Sender<ConnectionCommand>>,
     incoming: mpsc::Receiver<PendingConnectionEvent>,
@@ -266,7 +267,9 @@ impl ResponsesWebSocketConnection {
     }
 
     fn terminate(&mut self, reason: PumpExitReason) {
+        let reason = self.exited.try_recv().unwrap_or(reason);
         self.exit_reason.get_or_insert(reason);
+        self.cancellation.cancel();
         self.commands.take();
         if let Some(task) = self.pump_task.take() {
             task.abort();
@@ -306,6 +309,7 @@ impl ResponsesWebSocketConnection {
 
 impl Drop for ResponsesWebSocketConnection {
     fn drop(&mut self) {
+        self.cancellation.cancel();
         self.commands.take();
         if let Some(task) = self.pump_task.take() {
             task.abort();
@@ -314,6 +318,7 @@ impl Drop for ResponsesWebSocketConnection {
 }
 
 /// 为 WebSocket transport 启动包含冻结中间件计划的单 owner pump
+/// cancellation 必须属于本连接，连接退出或句柄释放时会取消它
 pub fn spawn_connection<S, E>(
     socket: S,
     connection_id: Arc<str>,
@@ -341,7 +346,7 @@ where
         incoming_tx,
         exit_tx,
         Arc::clone(&connection_id),
-        cancellation,
+        cancellation.clone(),
         opened_at,
         Arc::clone(&expired),
         Arc::clone(&stats),
@@ -353,6 +358,7 @@ where
     ResponsesWebSocketConnection {
         connection_id,
         opened_at,
+        cancellation,
         expired,
         commands: Some(command_tx),
         incoming: incoming_rx,

@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use futures::{StreamExt, stream::FuturesUnordered};
 use sha2::{Digest, Sha256};
 use tokio::{sync::watch, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -107,6 +108,7 @@ const MAX_CONTINUATION_TOMBSTONES: usize = 4_096;
 #[derive(Default)]
 pub(super) struct WebSocketPoolState {
     pub(super) slots: HashMap<CodexWebSocketPoolKey, WebSocketPoolSlot>,
+    pub(super) downstream_connections: HashMap<String, gateway_core::lifecycle::CancellationToken>,
     continuation_tombstones: VecDeque<WebSocketContinuationTombstone>,
     pub(super) shutting_down: bool,
 }
@@ -237,18 +239,33 @@ pub(super) async fn close_pooled_connection(connection: PooledWebSocketConnectio
 }
 
 pub(super) async fn close_pooled_connections(connections: Vec<PooledWebSocketConnection>) {
-    for connection in connections {
-        close_pooled_connection(connection).await;
-    }
+    // 每条连接独立执行有界关闭，避免批量回收累计握手等待并拖延后续扫描
+    let mut closing = connections
+        .into_iter()
+        .map(close_pooled_connection)
+        .collect::<FuturesUnordered<_>>();
+    while closing.next().await.is_some() {}
 }
 
-/// idle 连接是否应从池中摘除：被后台 pump 标记死亡，或已超过 `max_age`
-pub(super) fn should_close_idle_connection(
+/// 取得连接和维护扫描共用的失效判断，保留原生续接丢失的具体原因
+pub(super) fn idle_connection_loss(
+    has_downstream_binding: bool,
     connection: &PooledWebSocketConnection,
+    idle_since: Instant,
     now: Instant,
-    max_age: Duration,
-) -> bool {
-    connection.websocket.is_closed() || now.duration_since(connection.created_at) >= max_age
+    config: &super::CodexWebSocketPoolConfig,
+) -> Option<WebSocketConnectionObservation> {
+    if connection.websocket.is_closed() {
+        return Some(connection.websocket.observation());
+    }
+    let reason = if now.duration_since(connection.created_at) >= config.max_age {
+        "max_age_expired"
+    } else if !has_downstream_binding && now.duration_since(idle_since) >= config.idle_timeout {
+        "idle_timeout_expired"
+    } else {
+        return None;
+    };
+    Some(connection.websocket.observation().with_exit_reason(reason))
 }
 
 fn short_sha256<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {

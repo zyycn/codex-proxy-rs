@@ -91,6 +91,7 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 turn_metadata: request.turn_metadata.as_deref(),
                 beta_features: request.beta_features.as_deref(),

@@ -181,13 +181,15 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
         "Responses WebSocket connected"
     );
     let _connection_guard = connection_guard;
-    let cancellation = lifecycle.cancellation();
+    let cancellation = lifecycle.cancellation().child_token();
+    let _connection_cancellation =
+        crate::middleware::websocket::CancelOnDrop(Some(cancellation.clone()));
     let request_headers =
         request_headers.with_downstream_websocket_connection_id(connection_id.clone());
     let mut connection = ResponsesWebSocketConnection::new(
         socket,
         connection_id,
-        cancellation,
+        cancellation.clone(),
         middleware,
         encode_headers(&raw_headers).into(),
     );
@@ -299,7 +301,11 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
             }
             execution.prepare_execution(client).await
         };
-        let prepared = match preparation.await {
+        let prepared = match tokio::select! {
+            biased;
+            _ = connection.wait_for_exit() => break,
+            prepared = preparation => prepared,
+        } {
             Ok(prepared) => prepared,
             Err(error) => {
                 trace_rejected_request(
@@ -317,6 +323,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
                 continue;
             }
         };
+        let prepared = prepared.with_connection_cancellation(cancellation.clone());
         let request_id = Arc::<str>::from(prepared.request_id().to_string());
         response_control = prepared.response_control();
         let capture = new_replay_capture();

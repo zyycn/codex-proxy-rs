@@ -38,8 +38,6 @@ async fn send_timeout_should_abort_stalled_pump_and_allow_next_request() {
             .unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
-        ping_interval: None,
-        liveness_timeout: None,
         maintenance_interval: None,
         ..CodexWebSocketPoolConfig::default()
     }));

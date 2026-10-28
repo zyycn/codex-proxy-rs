@@ -1,6 +1,7 @@
 //! Codex WebSocket 连接池
 
 mod capacity;
+mod downstream;
 mod lease;
 mod state;
 mod supervisor;
@@ -18,9 +19,8 @@ use uuid::Uuid;
 
 use self::state::{
     WebSocketPoolConnecting, WebSocketPoolSlot, WebSocketPoolState, close_pooled_connection,
-    close_pooled_connections,
+    close_pooled_connections, idle_connection_loss,
 };
-use super::pump::PumpKeepalive;
 use super::pump::WebSocketConnectionObservation;
 
 use self::capacity::ProxyCapacity;
@@ -38,10 +38,8 @@ pub(crate) use self::{
 
 const DEFAULT_MAX_CONNECTING: usize = 16;
 const DEFAULT_MAX_AGE: Duration = Duration::from_mins(55);
-const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(25);
-const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(25);
-// 心跳也覆盖正在生成的连接，给短时链路停顿留出恢复余量
-const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(5);
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// WebSocket 连接池
@@ -74,12 +72,8 @@ pub struct CodexWebSocketPoolConfig {
     pub max_connecting: usize,
     /// 后台维护间隔；`None` 表示不启动后台任务
     pub maintenance_interval: Option<Duration>,
-    /// 池化连接的探活 ping 间隔（包括正在生成的连接）；`None` 表示不主动 ping
-    pub ping_interval: Option<Duration>,
-    /// 发送 ping 后等待任意入站帧的超时时间；零值表示不校验 Pong deadline
-    pub ping_timeout: Duration,
-    /// idle socket 无活动多久后视为失活
-    pub liveness_timeout: Option<Duration>,
+    /// 未绑定下游 WS 的连接归池后可空闲的时间，不由 Ping/Pong 刷新
+    pub idle_timeout: Duration,
     /// 等待下一条上游消息的空闲超时；`None` 或零值使用默认 300 秒
     pub stream_idle_timeout: Option<Duration>,
 }
@@ -91,35 +85,18 @@ impl Default for CodexWebSocketPoolConfig {
             max_age: DEFAULT_MAX_AGE,
             max_connecting: DEFAULT_MAX_CONNECTING,
             maintenance_interval: Some(DEFAULT_MAINTENANCE_INTERVAL),
-            ping_interval: Some(DEFAULT_PING_INTERVAL),
-            ping_timeout: DEFAULT_PING_TIMEOUT,
-            // idle 连接不设失活截断：靠 ping/pong 保活，只在 max_age（55 分钟）
-            // 或 ping 失败时关闭，维持跨轮可复用连接
-            liveness_timeout: None,
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
             stream_idle_timeout: Some(DEFAULT_STREAM_IDLE_TIMEOUT),
         }
     }
 }
 
-impl CodexWebSocketPoolConfig {
-    /// pump 后台任务的保活策略：从连接池配置派生出 ping/pong 与 liveness 策略
-    pub(crate) fn keepalive(&self) -> PumpKeepalive {
-        PumpKeepalive {
-            ping_interval: self.ping_interval,
-            ping_timeout: (!self.ping_timeout.is_zero()).then_some(self.ping_timeout),
-            liveness_timeout: self.liveness_timeout,
-        }
-    }
-}
-
 impl CodexWebSocketPool {
-    /// 使用指定连接总寿命构造连接池，不启动定时保活与清理
+    /// 使用指定连接总寿命构造连接池，不启动定时清理
     pub fn new(max_age: Duration) -> Self {
         Self::with_config(CodexWebSocketPoolConfig {
             max_age,
             maintenance_interval: None,
-            ping_interval: None,
-            liveness_timeout: None,
             ..CodexWebSocketPoolConfig::default()
         })
     }
@@ -140,11 +117,6 @@ impl CodexWebSocketPool {
         pool
     }
 
-    /// pump 后台任务的保活策略（供建连时传入）
-    pub(crate) fn keepalive(&self) -> PumpKeepalive {
-        self.config.keepalive()
-    }
-
     /// 等待下一条上游消息的空闲超时；`None` 或零值使用默认 300 秒
     pub(crate) fn stream_idle_timeout(&self) -> Option<Duration> {
         self.config.stream_idle_timeout
@@ -160,17 +132,26 @@ impl CodexWebSocketPool {
         key: &CodexWebSocketPoolKey,
         required_response_id: Option<&str>,
         proxy: Option<&gateway_core::account::OutboundProxy>,
+        downstream_cancellation: Option<&gateway_core::lifecycle::CancellationToken>,
     ) -> WebSocketPoolAcquire {
         self.spawn_maintenance_task();
+        if let Some(cancellation) = downstream_cancellation {
+            self.register_downstream(key, cancellation);
+        }
         let mut proxy_permit = None;
         loop {
             let mut connections_to_close = Vec::new();
             let acquire = {
                 let mut state = self.lock_state();
                 let mut continuation_loss = None;
-                if !self.config.enabled || state.shutting_down {
+                if !self.config.enabled
+                    || state.shutting_down
+                    || downstream_cancellation
+                        .is_some_and(gateway_core::lifecycle::CancellationToken::is_cancelled)
+                {
                     return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled);
                 }
+                let requested_key = key;
                 let key = if let Some(response_id) = required_response_id {
                     let Some(key) = state.slots.iter().find_map(|(candidate, slot)| {
                         (candidate.same_logical_connection(key)
@@ -201,35 +182,57 @@ impl CodexWebSocketPool {
                         });
                     }
                     Some(WebSocketPoolSlot::Idle { .. }) => {
-                        let Some(WebSocketPoolSlot::Idle { connection, .. }) =
-                            state.slots.remove(&key)
+                        let Some(WebSocketPoolSlot::Idle {
+                            mut connection,
+                            idle_since,
+                        }) = state.slots.remove(&key)
                         else {
                             return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
                         };
-                        // 零成本探活：后台 pump 已实时感知连接死亡（RST/Close/EOF/失活），
-                        // 复用前只需读取 is_closed 标志，避免复用到静默死连接后卡到超时
-                        let expired = connection.created_at.elapsed() >= self.config.max_age;
-                        let closed = connection.websocket.is_closed();
-                        if !expired && !closed {
+                        // 取得时与后台扫描共用到期判断，避免维护周期内重新借出过期连接
+                        let loss = idle_connection_loss(
+                            state.has_downstream_binding(&key),
+                            &connection,
+                            idle_since,
+                            tokio::time::Instant::now(),
+                            &self.config,
+                        )
+                        .or_else(|| {
+                            state.downstream_closed(&key).then(|| {
+                                connection
+                                    .websocket
+                                    .observation()
+                                    .with_exit_reason("downstream_connection_closed")
+                            })
+                        });
+                        let Some(observation) = loss else {
+                            connection.websocket.revoke_control();
+                            let retired = state.take_downstream_connections(
+                                &requested_key.downstream_connection_id,
+                                Some(&key),
+                                "downstream_rebound",
+                            );
+                            // 精确续接可接手另一条下游连接的 socket，池键必须跟随新 owner
+                            let key = key.with_downstream_connection_id(
+                                requested_key.downstream_connection_id.clone(),
+                            );
                             let lease = WebSocketPoolLease::reserve(
                                 self.clone(),
                                 key.clone(),
                                 connection.continuation.latest_response_id(),
                             );
-                            state.slots.insert(
-                                key.clone(),
-                                WebSocketPoolSlot::Busy(lease.reservation.clone()),
-                            );
+                            state
+                                .slots
+                                .insert(key, WebSocketPoolSlot::Busy(lease.reservation.clone()));
+                            self.close_retired_connections(retired);
                             return WebSocketPoolAcquire::Reused { connection, lease };
-                        }
-                        let observation = if expired && !closed {
-                            connection
-                                .websocket
-                                .observation()
-                                .with_exit_reason("max_age_expired")
-                        } else {
-                            connection.websocket.observation()
                         };
+                        tracing::info!(
+                            websocket_connection_id = %connection.websocket.connection_id(),
+                            exit_reason = observation.exit_reason(),
+                            idle_age_ms = idle_since.elapsed().as_millis(),
+                            "Removed unavailable idle WebSocket before reuse"
+                        );
                         state.remember_continuation_loss(
                             &key,
                             connection.continuation.latest_response_id(),
@@ -244,6 +247,11 @@ impl CodexWebSocketPool {
                     None => {}
                 }
 
+                connections_to_close.extend(state.take_downstream_connections(
+                    &requested_key.downstream_connection_id,
+                    Some(&key),
+                    "downstream_rebound",
+                ));
                 let acquire = if let Some(observation) = continuation_loss {
                     Some(WebSocketPoolAcquire::ContinuationLost(observation))
                 } else if required_response_id.is_some() {
@@ -285,7 +293,17 @@ impl CodexWebSocketPool {
             if let Some(acquire) = acquire {
                 return acquire;
             }
-            match self.acquire_proxy_capacity(proxy, Some(key)).await {
+            let capacity = tokio::select! {
+                biased;
+                () = async {
+                    match downstream_cancellation {
+                        Some(cancellation) => cancellation.cancelled().await,
+                        None => std::future::pending().await,
+                    }
+                } => return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled),
+                capacity = self.acquire_proxy_capacity(proxy, Some(key)) => capacity,
+            };
+            match capacity {
                 Ok(permit) => proxy_permit = permit,
                 Err(_) => return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled),
             }

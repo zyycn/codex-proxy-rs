@@ -1108,7 +1108,6 @@ impl CodexProvider {
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, false).error)?
                 .with_responses_api_base_url(lease.authentication().responses_api_base_url())
                 .with_connection_budget(context.connection_budget().clone())
-                .with_response_control(context.response_control().cloned())
                 .with_middleware_headers(middleware_headers)
                 .with_outbound_middleware(outbound_middleware)
                 .with_privacy(context.privacy(), context.cancellation().clone()),

@@ -69,6 +69,10 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
     response_control: Option<ResponseControl>,
 ) -> CodexWebSocketStreamingExchange {
     websocket.bind_control(response_control.as_ref());
+    let downstream_cancellation = response_control
+        .as_ref()
+        .and_then(ResponseControl::connection_cancellation)
+        .cloned();
     let websocket_connection_id = websocket.connection_id();
     let response_metadata = metadata.clone();
     let rate_limit_updates = Arc::new(Mutex::new(Vec::new()));
@@ -94,6 +98,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
             stream_idle_timeout,
             trace,
             shutdown,
+            downstream_cancellation,
             rate_limit_updates: rate_limit_updates_for_task,
             response_metadata_updates: response_metadata_updates_for_task,
             tx,
@@ -133,6 +138,7 @@ struct WebSocketStreamForwardState {
     reused_connection: bool,
     stream_idle_timeout: Option<Duration>,
     shutdown: CancellationToken,
+    downstream_cancellation: Option<gateway_core::lifecycle::CancellationToken>,
     rate_limit_updates: CodexWebSocketRateLimitUpdates,
     response_metadata_updates: CodexWebSocketResponseMetadataUpdates,
     tx: mpsc::Sender<Result<Bytes, CodexWebSocketExchangeError>>,
@@ -147,6 +153,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         reused_connection,
         stream_idle_timeout,
         shutdown,
+        downstream_cancellation,
         rate_limit_updates,
         response_metadata_updates,
         tx,
@@ -163,6 +170,20 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
     loop {
         let message = tokio::select! {
             biased;
+            () = async {
+                match &downstream_cancellation {
+                    Some(cancellation) => cancellation.cancelled().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                trace.record("upstream.cancelled", json!({"reason": "downstream_connection_closed"}));
+                discard_stream_websocket(
+                    websocket,
+                    pool_return,
+                    StreamWebSocketDiscardReason::ClientCancelled,
+                ).await;
+                return;
+            }
             // 客户端断开下游 SSE 流：立即丢弃连接并释放池 slot，
             // 不再傻等上游 idle 超时（否则同会话后续请求会一直 bypass/busy）
             () = tx.closed() => {
@@ -382,10 +403,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         reason => CodexWebSocketExchangeError::StreamEndedBeforeTerminal {
             reason: reason.map_or("stream_eof", PumpExitReason::as_str),
             timeout: match reason {
-                Some(
-                    PumpExitReason::PongTimeout { timeout }
-                    | PumpExitReason::LivenessTimeout { timeout },
-                ) => Some(*timeout),
+                Some(PumpExitReason::PongWriteTimeout { timeout }) => Some(*timeout),
                 _ => None,
             },
             last_event_type,
@@ -414,7 +432,7 @@ async fn finish_stream_websocket(
     pool_return: Option<WebSocketStreamPoolReturn>,
 ) {
     let Some(pool_return) = pool_return else {
-        websocket.close().await;
+        websocket.close_and_wait().await;
         return;
     };
     pool_return

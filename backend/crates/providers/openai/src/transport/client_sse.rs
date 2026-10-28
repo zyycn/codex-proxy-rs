@@ -69,7 +69,6 @@ impl CodexBackendClient {
             privacy: None,
             timezone: Default::default(),
             connection_budget: None,
-            response_control: None,
             direct_client: client.clone(),
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
@@ -115,6 +114,14 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        if let (Some(pool), Some(connection_id)) = (
+            &self.websocket_pool,
+            upstream_request
+                .downstream_websocket_connection_id
+                .as_deref(),
+        ) {
+            pool.release_downstream_connections(connection_id).await;
+        }
         let profile = self.profile.snapshot();
         let mut headers =
             self.request_headers_for_http_response(&profile, upstream_request, context)?;
@@ -395,7 +402,21 @@ impl CodexBackendClient {
         let pool_key =
             self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
-        let pool = self.websocket_pool.as_deref().map(|pool| (pool, pool_key));
+        let downstream_cancellation = context.response_control.and_then(
+            gateway_core::engine::response_control::ResponseControl::connection_cancellation,
+        );
+        if pool_key.is_none()
+            && let (Some(pool), Some(connection_id)) = (
+                &self.websocket_pool,
+                request.downstream_websocket_connection_id.as_deref(),
+            )
+        {
+            pool.release_downstream_connections(connection_id).await;
+        }
+        let pool = self
+            .websocket_pool
+            .as_deref()
+            .map(|pool| (pool, pool_key, downstream_cancellation));
         let fast_path_budget = match requirement {
             TransportRequirement::PersistedContinuation | TransportRequirement::NewChain => {
                 Some(WEBSOCKET_FAST_PATH_BUDGET)
@@ -553,7 +574,7 @@ impl CodexBackendClient {
                 let mut exchange = execute_prepared_response_create_request_stream(
                     &websocket_request,
                     prepared,
-                    self.response_control.clone(),
+                    context.response_control.cloned(),
                     context
                         .trace
                         .cloned()

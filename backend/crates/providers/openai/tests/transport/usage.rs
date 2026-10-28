@@ -509,6 +509,7 @@ async fn fetch_should_use_wham_usage_headers_only() {
 
     let usage = client(&server.uri())
         .fetch_usage(CodexRequestContext {
+            response_control: None,
             trace: None,
             authorization: "Bearer oauth-access",
             account_id: Some("acct_123"),
@@ -908,6 +909,7 @@ fn profile() -> CodexWireProfileState {
 
 fn context() -> CodexRequestContext<'static> {
     CodexRequestContext {
+        response_control: None,
         trace: None,
         authorization: "Bearer oauth-access",
         account_id: Some("acct_123"),

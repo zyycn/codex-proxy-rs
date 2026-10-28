@@ -1,17 +1,7 @@
-//! 常驻后台的 WebSocket 泵（对齐官方 Codex CLI 的连接管理）
+//! 单 owner 驱动上游 WebSocket，被动回复心跳并在终止后有界释放 socket
 //!
-//! 每条上游 WebSocket 连接都由一个后台 pump 任务独占：
-//! - 持续读取 socket：一旦观察到 `Close` / EOF / 传输错误，立即把连接标记为 `closed`
-//! - 自动回应上游 `Ping`，并按 `ping_interval` 主动 `Ping`；收到非关闭入站帧即解除本次心跳 deadline
-//! - 可选 `liveness_timeout`：长时间无任何入站活动时判定连接失活并退出
-//!
-//! 因此空闲连接的“死没死”在后台被实时感知；复用方只需零成本读取 [`PumpedWebSocket::is_closed`]，
-//! 无需在请求路径上做同步探活 ping（消除“复用到静默死连接才卡住超时”的长尾）
-//!
-//! 收发都通过 channel 与 pump 任务交互：
-//! - 发送：`send` 走 command channel，等待 pump 回执
-//! - 接收：`next` 从 message channel 取出 pump 转发的入站帧（`Ping`/`Pong` 已被 pump 吞掉）
-//! - 入站缓冲满时暂停读取 socket 和主动探活，仅继续处理发送/关闭命令；消费恢复后按原顺序继续转发
+//! 业务消息通过有界队列交付，Ping/Pong 由 pump 消费，不刷新生成期间的消息等待超时
+//! 入站背压暂停读取，仍可接收关闭命令；已观察到的终止先释放 socket，再等待终止消息交付
 
 use gateway_core::engine::response_control::{ResponseControl, ResponseControlTransport};
 
@@ -22,11 +12,7 @@ use std::sync::{
 use std::time::Duration;
 
 use futures::{Sink, SinkExt, Stream, StreamExt};
-use tokio::{
-    sync::mpsc,
-    task::JoinHandle,
-    time::{Instant, MissedTickBehavior},
-};
+use tokio::{sync::mpsc, task::JoinHandle, time::Instant};
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
@@ -55,6 +41,8 @@ impl<T> WebSocketIo for T where
 pub(crate) type RawWsStream = Box<dyn WebSocketIo>;
 
 const PUMP_COMMAND_BUFFER: usize = 32;
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+const PONG_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// pump 日志的账号级关联上下文；空闲连接被上游重置等场景用于回溯归属
 #[derive(Debug, Clone, Default)]
@@ -68,28 +56,6 @@ impl PumpLogContext {
         Self {
             account_id,
             conversation_id_hash,
-        }
-    }
-}
-
-/// pump 保活策略
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct PumpKeepalive {
-    /// 主动 `Ping` 间隔；`None` 表示 pump 不主动 ping（仅被动读取 + 回应上游 ping）
-    pub(crate) ping_interval: Option<Duration>,
-    /// 主动 `Ping` 发出后等待任意入站帧的 deadline；`None` 表示不校验响应
-    pub(crate) ping_timeout: Option<Duration>,
-    /// 无入站活动多久后判定失活；`None` 表示只靠显式 close/传输错误发现死亡
-    pub(crate) liveness_timeout: Option<Duration>,
-}
-
-impl PumpKeepalive {
-    /// 不做主动保活（用于即用即弃的非池化连接）
-    pub(crate) fn disabled() -> Self {
-        Self {
-            ping_interval: None,
-            ping_timeout: None,
-            liveness_timeout: None,
         }
     }
 }
@@ -112,10 +78,7 @@ pub(crate) enum PumpExitReason {
         message: String,
         metric_reason: &'static str,
     },
-    PongTimeout {
-        timeout: Duration,
-    },
-    LivenessTimeout {
+    PongWriteTimeout {
         timeout: Duration,
     },
     KeepaliveTransportError {
@@ -134,8 +97,7 @@ impl PumpExitReason {
             Self::UpstreamCloseFrame { .. } => "upstream_close_frame",
             Self::UpstreamEof => "upstream_eof",
             Self::InboundTransportError { .. } => "inbound_transport_error",
-            Self::PongTimeout { .. } => "pong_timeout",
-            Self::LivenessTimeout { .. } => "liveness_timeout",
+            Self::PongWriteTimeout { .. } => "pong_write_timeout",
             Self::KeepaliveTransportError { .. } => "keepalive_transport_error",
             Self::MessageReceiverClosed => "message_receiver_closed",
         }
@@ -147,9 +109,7 @@ impl PumpExitReason {
             | Self::InboundTransportError { message, .. }
             | Self::KeepaliveTransportError { message, .. } => Some(message.clone()),
             Self::UpstreamCloseFrame { close } => close.as_ref().map(ToString::to_string),
-            Self::PongTimeout { timeout } | Self::LivenessTimeout { timeout } => {
-                Some(format!("{timeout:?}"))
-            }
+            Self::PongWriteTimeout { timeout } => Some(format!("{timeout:?}")),
             Self::CommandChannelClosed
             | Self::LocalClose
             | Self::UpstreamEof
@@ -172,8 +132,7 @@ impl PumpExitReason {
                 }
             }
             Self::UpstreamEof => "eof",
-            Self::PongTimeout { .. } => "pong_timeout",
-            Self::LivenessTimeout { .. } => "liveness_timeout",
+            Self::PongWriteTimeout { .. } => "pong_write_timeout",
             Self::MessageReceiverClosed => "message_receiver_closed",
         }
     }
@@ -191,8 +150,7 @@ impl PumpExitReason {
             Self::OutboundTransportError { .. }
                 | Self::UpstreamEof
                 | Self::InboundTransportError { .. }
-                | Self::PongTimeout { .. }
-                | Self::LivenessTimeout { .. }
+                | Self::PongWriteTimeout { .. }
                 | Self::KeepaliveTransportError { .. }
         )
     }
@@ -202,8 +160,6 @@ impl PumpExitReason {
             self,
             Self::CommandChannelClosed
                 | Self::UpstreamCloseFrame { .. }
-                | Self::PongTimeout { .. }
-                | Self::LivenessTimeout { .. }
                 | Self::MessageReceiverClosed
         )
     }
@@ -212,12 +168,6 @@ impl PumpExitReason {
 struct PendingInbound {
     item: Result<Message, tungstenite::Error>,
     exit_reason: Option<PumpExitReason>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PendingPing {
-    payload: [u8; 8],
-    deadline: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,7 +233,7 @@ pub(crate) struct PumpedWebSocket {
     connection_id: Uuid,
     tx_command: mpsc::Sender<PumpCommand>,
     rx_message: SharedMessages,
-    control: Option<Arc<dyn ResponseControlTransport>>,
+    control: Option<Arc<PumpControl>>,
     closed: Arc<AtomicBool>,
     lifecycle: Arc<Mutex<PumpLifecycleState>>,
     pump: Option<JoinHandle<()>>,
@@ -308,7 +258,6 @@ impl PumpedWebSocket {
     /// 用底层流启动一个 pump 任务并返回句柄
     pub(crate) fn new(
         inner: RawWsStream,
-        keepalive: PumpKeepalive,
         context: PumpLogContext,
         proxy_permit: Option<super::pool::ProxyConnectionPermit>,
     ) -> Self {
@@ -335,7 +284,6 @@ impl PumpedWebSocket {
                 inner,
                 rx_command,
                 tx_message,
-                keepalive,
                 context,
                 closed_for_task,
                 lifecycle_for_task,
@@ -363,14 +311,24 @@ impl PumpedWebSocket {
 
     /// 每轮发送后替换控制 owner，旧执行的弱引用不能控制下一轮连接
     pub(crate) fn bind_control(&mut self, control: Option<&ResponseControl>) {
+        self.revoke_control();
         self.control = control.map(|control| {
-            let transport: Arc<dyn ResponseControlTransport> = Arc::new(PumpControl {
+            let transport = Arc::new(PumpControl {
                 tx_command: self.tx_command.clone(),
                 rx_message: Arc::clone(&self.rx_message),
+                cancellation: tokio_util::sync::CancellationToken::new(),
             });
-            control.bind(&transport);
+            let target: Arc<dyn ResponseControlTransport> = transport.clone();
+            control.bind(&target);
             transport
         });
+    }
+
+    /// 弱引用升级后的在途读取仍持有强引用，复用前必须主动撤销，释放消息接收锁
+    pub(crate) fn revoke_control(&mut self) {
+        if let Some(control) = self.control.take() {
+            control.cancellation.cancel();
+        }
     }
 
     /// 取出下一帧入站消息（`Ping`/`Pong` 已被 pump 处理，不会到达这里）
@@ -406,7 +364,10 @@ impl PumpedWebSocket {
     }
 
     pub(crate) async fn close_and_wait(self) {
-        self.close().await;
+        if !self.is_closed() {
+            // 预算覆盖入队和回执，已阻塞的业务写入不能拖住连接回收
+            let _ = tokio::time::timeout(CLOSE_TIMEOUT, self.send(Message::Close(None))).await;
+        }
         self.abort_and_wait().await;
     }
 
@@ -416,13 +377,6 @@ impl PumpedWebSocket {
             // 只等待任务析构，确保先释放物理 socket，再归还代理名额
             pump.abort();
             let _ = pump.await;
-        }
-    }
-
-    /// 主动关闭连接（best-effort 发送 Close 帧）
-    pub(crate) async fn close(&self) {
-        if !self.is_closed() {
-            let _ = self.send(Message::Close(None)).await;
         }
     }
 }
@@ -435,38 +389,16 @@ impl Drop for PumpedWebSocket {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "pump owns one flat set of channel/state handles and log context"
-)]
 async fn pump_loop(
     connection_id: Uuid,
     mut inner: PumpSocket,
     mut rx_command: mpsc::Receiver<PumpCommand>,
     tx_message: mpsc::Sender<Result<Message, tungstenite::Error>>,
-    keepalive: PumpKeepalive,
     context: PumpLogContext,
     closed: Arc<AtomicBool>,
     lifecycle: Arc<Mutex<PumpLifecycleState>>,
 ) {
-    let mut last_activity = lifecycle
-        .lock()
-        .expect("WebSocket pump lifecycle lock poisoned")
-        .last_activity;
-    let ping_interval = keepalive.ping_interval.filter(|d| !d.is_zero());
-    let ping_timeout = keepalive.ping_timeout.filter(|d| !d.is_zero());
-    let liveness_timeout = keepalive.liveness_timeout.filter(|d| !d.is_zero());
-    let mut ping_ticker = ping_interval.map(|d| {
-        // 首个 tick 推迟一整个间隔：tokio::time::interval 默认会让首个 tick 立即就绪，
-        // 否则连接一建立就会立刻发一帧 Ping，与首个请求 Text 抢跑、打乱帧序
-        let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + d, d);
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        ticker
-    });
-
-    let mut pending_inbound: Option<PendingInbound> = None;
-    let mut pending_ping: Option<PendingPing> = None;
-    let mut ping_sequence = 0_u64;
+    let mut pending_inbound = None;
     let mut backpressure_events = 0_u64;
 
     let reason = 'pump: loop {
@@ -479,12 +411,7 @@ async fn pump_loop(
                     let pending = pending_inbound
                         .take()
                         .expect("pending inbound frame must exist");
-                    permit.send(pending.item);
-                    if let Some(reason) = pending.exit_reason {
-                        break 'pump reason;
-                    }
-                    // 背压期间无法读取 socket，不能把这段本地下游阻塞误算成上游静默
-                    last_activity = Instant::now();
+                    permit.send(pending);
                 }
                 command = rx_command.recv() => {
                     let Some(command) = command else {
@@ -498,8 +425,6 @@ async fn pump_loop(
             continue;
         }
 
-        let pong_deadline = pending_ping.map(|ping| ping.deadline);
-        let liveness_deadline = liveness_timeout.map(|timeout| last_activity + timeout);
         tokio::select! {
             command = rx_command.recv() => {
                 let Some(command) = command else {
@@ -515,17 +440,22 @@ async fn pump_loop(
                     Some(Ok(message)) => {
                         // Close 是终止信号，不能刷新链路健康时间或抹掉关闭前的静默时长
                         if !matches!(message, Message::Close(_)) {
-                            last_activity = Instant::now();
-                            record_activity(&lifecycle, last_activity);
-                            observe_inbound(connection_id, &mut pending_ping, &message);
+                            record_activity(&lifecycle, Instant::now());
                         }
                         match message {
                             Message::Ping(payload) => {
-                                if let Err(error) = inner.stream.send(Message::Pong(payload)).await {
-                                    break 'pump PumpExitReason::KeepaliveTransportError {
+                                match tokio::time::timeout(
+                                    PONG_WRITE_TIMEOUT,
+                                    inner.stream.send(Message::Pong(payload)),
+                                ).await {
+                                    Ok(Ok(())) => {}
+                                    Ok(Err(error)) => break 'pump PumpExitReason::KeepaliveTransportError {
                                         message: error.to_string(),
                                         metric_reason: transport_metric_reason(&error),
-                                    };
+                                    },
+                                    Err(_) => break 'pump PumpExitReason::PongWriteTimeout {
+                                        timeout: PONG_WRITE_TIMEOUT,
+                                    },
                                 }
                             }
                             Message::Pong(_) => {}
@@ -580,28 +510,6 @@ async fn pump_loop(
                     }
                 }
             }
-            _ = tick(&mut ping_ticker) => {
-                if pending_ping.is_none() {
-                    match send_keepalive_ping(
-                        &mut inner.stream,
-                        &mut ping_sequence,
-                        ping_timeout,
-                    ).await {
-                        Ok(pending) => pending_ping = pending,
-                        Err(reason) => break 'pump reason,
-                    }
-                }
-            }
-            _ = wait_until(pong_deadline) => {
-                break 'pump PumpExitReason::PongTimeout {
-                    timeout: ping_timeout.expect("pending ping must have a timeout"),
-                };
-            }
-            _ = wait_until(liveness_deadline) => {
-                break 'pump PumpExitReason::LivenessTimeout {
-                    timeout: liveness_timeout.expect("liveness deadline must have a timeout"),
-                };
-            }
         }
     };
 
@@ -626,13 +534,18 @@ async fn pump_loop(
     );
 
     if reason.should_send_close() {
-        let _ = inner.stream.send(Message::Close(None)).await;
+        let _ = tokio::time::timeout(CLOSE_TIMEOUT, inner.stream.send(Message::Close(None))).await;
+    }
+    // 消费方可能仍在排空业务消息，连接和容量不能继续等它读取终止消息
+    drop(inner);
+    if let Some(pending) = pending_inbound {
+        let _ = tx_message.send(pending).await;
     }
 }
 
 fn enqueue_inbound(
     tx_message: &mpsc::Sender<Result<Message, tungstenite::Error>>,
-    pending_inbound: &mut Option<PendingInbound>,
+    pending_inbound: &mut Option<Result<Message, tungstenite::Error>>,
     connection_id: Uuid,
     backpressure_events: &mut u64,
     inbound: PendingInbound,
@@ -649,8 +562,8 @@ fn enqueue_inbound(
                     "Responses WebSocket pump applying inbound backpressure"
                 );
             }
-            *pending_inbound = Some(PendingInbound { item, exit_reason });
-            None
+            *pending_inbound = Some(item);
+            exit_reason
         }
         Err(mpsc::error::TrySendError::Closed(_)) => Some(PumpExitReason::MessageReceiverClosed),
     }
@@ -685,22 +598,6 @@ async fn handle_command(
         None if is_close => Some(PumpExitReason::LocalClose),
         None => None,
     }
-}
-
-fn observe_inbound(connection_id: Uuid, pending_ping: &mut Option<PendingPing>, message: &Message) {
-    let Some(pending) = pending_ping else {
-        return;
-    };
-    if let Message::Pong(payload) = message
-        && payload.as_ref() != pending.payload
-    {
-        tracing::debug!(
-            websocket_connection_id = %connection_id,
-            "Responses WebSocket pump received a non-matching Pong"
-        );
-    }
-    // 匹配 Pong 是探针的直接回执；其他入站帧同样证明上游链路仍可达
-    *pending_ping = None;
 }
 
 fn record_activity(lifecycle: &Mutex<PumpLifecycleState>, observed_at: Instant) {
@@ -746,26 +643,6 @@ pub(crate) fn transport_metric_reason(error: &tungstenite::Error) -> &'static st
 
 fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-}
-
-async fn send_keepalive_ping(
-    inner: &mut RawWsStream,
-    sequence: &mut u64,
-    ping_timeout: Option<Duration>,
-) -> Result<Option<PendingPing>, PumpExitReason> {
-    let payload = sequence.to_be_bytes();
-    *sequence = sequence.wrapping_add(1);
-    inner
-        .send(Message::Ping(payload.to_vec().into()))
-        .await
-        .map_err(|error| PumpExitReason::KeepaliveTransportError {
-            message: error.to_string(),
-            metric_reason: transport_metric_reason(&error),
-        })?;
-    Ok(ping_timeout.map(|timeout| PendingPing {
-        payload,
-        deadline: Instant::now() + timeout,
-    }))
 }
 
 fn log_pump_exit(
@@ -821,23 +698,5 @@ fn log_pump_exit(
             backpressure_events,
             "Responses WebSocket pump stopped"
         );
-    }
-}
-
-/// 等待 ping ticker；`None` 时永远挂起，让 `select!` 分支实际禁用
-async fn tick(ticker: &mut Option<tokio::time::Interval>) {
-    match ticker {
-        Some(ticker) => {
-            ticker.tick().await;
-        }
-        None => std::future::pending::<()>().await,
-    }
-}
-
-/// 等待可选 deadline；`None` 时永远挂起，让 `select!` 分支实际禁用
-async fn wait_until(deadline: Option<Instant>) {
-    match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
-        None => std::future::pending::<()>().await,
     }
 }

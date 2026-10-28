@@ -71,6 +71,7 @@ async fn controls_reject_closed_socket_without_losing_backpressured_close() {
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let (burst, ready) = oneshot::channel();
     let (closed, closing) = oneshot::channel();
+    let (released, released_rx) = oneshot::channel();
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
         let mut ws = accept_codex_test_websocket(socket).await;
@@ -89,7 +90,7 @@ async fn controls_reject_closed_socket_without_losing_backpressured_close() {
         for _ in 0..81 {
             ws.send(delta.clone()).await.unwrap();
         }
-        // Pong 证明 pump 已读取前面的突发数据，随后 Close 必须等待下游排空
+        // Pong 证明 pump 已读取前面的突发数据，Close 的交付仍需等待下游排空
         ws.send(Message::Ping(vec![1].into())).await.unwrap();
         assert!(matches!(
             ws.next().await.unwrap().unwrap(),
@@ -102,8 +103,11 @@ async fn controls_reject_closed_socket_without_losing_backpressured_close() {
         .await
         .unwrap();
         closed.send(()).unwrap();
-        // 保留 TCP 直到客户端确认关闭，避免把 Close 场景变成连接重置
-        let _ = ws.next().await;
+        // 直接观察 TCP EOF，不能只凭客户端回了 Close 就认定物理连接已经释放
+        tokio::io::copy(ws.get_mut(), &mut tokio::io::sink())
+            .await
+            .unwrap();
+        released.send(()).unwrap();
     });
     let control = ResponseControl::default();
     let mut stream = provider_with_base_url(&store, base_url)
@@ -123,7 +127,10 @@ async fn controls_reject_closed_socket_without_losing_backpressured_close() {
         .await
         .unwrap()
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    timeout(Duration::from_secs(2), released_rx)
+        .await
+        .expect("observed Close must release the socket before the response is drained")
+        .unwrap();
     assert_eq!(
         timeout(
             Duration::from_secs(2),
