@@ -93,6 +93,7 @@ let (message, ()) = tokio::try_join!(
 执行返回 `TypedReply<Empty>` 的有界 `ResponseStream`。每个 chunk 使用 `UpstreamAdapterEvent::encode()`，
 包含标准事实与可选原始 wire；事件需符合开始、内容、工具、用量和唯一结束的顺序。
 原始 JSON / SSE / WebSocket 字节与标准事实分开传递，错误使用 `UpstreamFailure`；宿主网络观测决定发送状态，插件不能将其降为未发送
+`status`、`code`、可选 `error_type` 和 `message` 保留实际上游错误字段，缺失类型保持空值；流内失败不能使用成功握手状态或从业务码推导状态
 
 宿主只对一次受管 `inference` HTTP 调用明确返回的 429 提供有限重放证明：插件必须报告
 `rate_limited` 和 `status: 429`，且此前及失败事件中均无业务事实、wire 或续接材料。

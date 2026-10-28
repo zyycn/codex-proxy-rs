@@ -19,7 +19,6 @@ fn cookie_provider(store: &Arc<MemoryAccountStore>, base_url: String) -> Arc<Cod
         http.clone(),
         base_url.clone(),
         Arc::new(MemoryCooldownPort::new()),
-        Arc::clone(&leases) as Arc<dyn ProviderLeasePort>,
         crate::support::runtime_policy(),
     ));
     let feedback = Arc::new(AccountFeedbackStats::default());

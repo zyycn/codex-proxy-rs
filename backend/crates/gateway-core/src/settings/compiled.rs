@@ -13,6 +13,8 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledSettings {
     pub(crate) values: SettingsValues,
+    pub(crate) account_error_protection:
+        std::sync::Arc<crate::account::CompiledAccountErrorProtection>,
     pub(crate) privacy: Option<std::sync::Arc<dyn super::privacy::CompiledPrivacyPolicy>>,
     pub(crate) account_selection_policy: AccountSelectionPolicy,
     pub(crate) client_queue_policy: ConcurrencyQueuePolicy,
@@ -23,10 +25,29 @@ pub(crate) struct CompiledSettings {
 
 impl CompiledSettings {
     pub(crate) fn new(
-        settings: SettingsValues,
+        mut settings: SettingsValues,
         compiler: Option<&dyn super::privacy::PrivacyPolicyCompiler>,
         previous: Option<&Self>,
     ) -> Result<Self, InvalidSettings> {
+        if let Some(previous) = previous {
+            settings.account_error_protection_revision =
+                previous.values.account_error_protection_revision;
+        }
+        if settings.account_error_protection_revision == 0 {
+            return Err(InvalidSettings);
+        }
+        settings
+            .account_error_protection
+            .validate()
+            .map_err(|_| InvalidSettings)?;
+        let account_error_protection = previous
+            .filter(|previous| {
+                previous.values.account_error_protection == settings.account_error_protection
+            })
+            .map_or_else(
+                || std::sync::Arc::new(settings.account_error_protection.compile()),
+                |previous| previous.account_error_protection.clone(),
+            );
         let privacy = if let Some(previous) = previous.filter(|previous| {
             previous.values.codex_privacy_policy == settings.codex_privacy_policy
         }) {
@@ -100,6 +121,7 @@ impl CompiledSettings {
             }
         }
         Ok(Self {
+            account_error_protection,
             account_selection_policy,
             client_queue_policy,
             responses_max_decompressed_body_bytes,

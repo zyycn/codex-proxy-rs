@@ -58,6 +58,10 @@ pub(super) fn failure_error(
     if failure.message.len() > 64 * 1024
         || failure.code.as_ref().is_some_and(|code| code.len() > 256)
         || failure
+            .error_type
+            .as_ref()
+            .is_some_and(|value| value.len() > 256)
+        || failure
             .status
             .is_some_and(|status| !(400..=599).contains(&status))
         || failure
@@ -81,6 +85,12 @@ pub(super) fn failure_error(
     let raw =
         serde_json::to_string(&failure).map_err(|source| invalid(sent).with_source(source))?;
     let mut error = ProviderError::new(kind, sent)
+        .with_upstream_failure_fields(gateway_core::upstream::UpstreamFailureFields {
+            status: failure.status,
+            code: failure.code.clone(),
+            error_type: failure.error_type.clone(),
+            message: Some(failure.message.clone()),
+        })
         .with_raw_upstream_error(RawUpstreamError::new(raw))
         .with_diagnostic(
             ProviderDiagnostic::new(format!(
@@ -96,7 +106,7 @@ pub(super) fn failure_error(
     error = error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
         failure.message,
         failure.code,
-        None,
+        failure.error_type,
     ));
     if let Some(status) = failure.status {
         error = error.with_status(status);

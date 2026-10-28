@@ -496,6 +496,7 @@ pub struct ProviderError {
 
 #[derive(Clone, Default)]
 struct ProviderErrorUpstreamValues {
+    failure_fields: Option<crate::upstream::UpstreamFailureFields>,
     code: Option<OpaqueUpstreamValue>,
     request_id: Option<OpaqueUpstreamValue>,
 }
@@ -544,6 +545,21 @@ impl ProviderError {
             self.upstream_status = Some(status);
         }
         self
+    }
+
+    /// 明确上游来源；本地错误不得使用这个入口构造匹配事实
+    #[must_use]
+    pub fn with_upstream_failure_fields(
+        mut self,
+        fields: crate::upstream::UpstreamFailureFields,
+    ) -> Self {
+        self.upstream_values_mut().failure_fields = Some(fields);
+        self
+    }
+
+    #[must_use]
+    pub fn upstream_failure_fields(&self) -> Option<&crate::upstream::UpstreamFailureFields> {
+        self.upstream_values.as_ref()?.failure_fields.as_ref()
     }
 
     /// 保留原始上游错误 code，不参与普通格式化或替代稳定分类

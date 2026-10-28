@@ -685,13 +685,6 @@ impl AccountRuntimeStore for UnavailableStore {
         Ok(BTreeMap::new())
     }
 
-    async fn capacity_peaks(
-        &self,
-        _account_ids: &[String],
-    ) -> AdminStoreResult<BTreeMap<String, u32>> {
-        Ok(BTreeMap::new())
-    }
-
     async fn finish_freeze(
         &self,
         _account_id: &str,

@@ -91,17 +91,17 @@ async fn account_cooldown_returns_an_instant_and_server_formatted_recovery() {
             ),
             (
                 Some(7200),
-                AccountCooldownKind::CapacityFreeze,
+                AccountCooldownKind::ErrorProtection,
                 Some("剩余 2 小时"),
             ),
             (
                 Some(7500),
-                AccountCooldownKind::CapacityFreezeProbe,
+                AccountCooldownKind::ErrorProtectionProbe,
                 Some("剩余 2 小时 5 分"),
             ),
             (
                 Some(-60),
-                AccountCooldownKind::CapacityFreezeProbe,
+                AccountCooldownKind::ErrorProtectionProbe,
                 Some("等待探测成功"),
             ),
             (Some(20), AccountCooldownKind::RateLimit, None),
@@ -121,7 +121,14 @@ async fn account_cooldown_returns_an_instant_and_server_formatted_recovery() {
                 last_error_reason: None,
                 last_error_message: None,
             };
-            *fixture.account.lock().unwrap() = Some(account_page_item(facts, now, "oauth"));
+            let mut item = account_page_item(facts, now, "oauth");
+            if kind.is_error_protection() {
+                item.protection_rules = vec![gateway_core::account::AccountProtectionMatch {
+                    id: "removed-rule".to_owned(),
+                    name: "触发时的规则名称".to_owned(),
+                }];
+            }
+            *fixture.account.lock().unwrap() = Some(item);
             let response = admin::accounts::router::<AdminTestState>()
                 .with_state(fixture.state())
                 .oneshot(
@@ -138,6 +145,17 @@ async fn account_cooldown_returns_an_instant_and_server_formatted_recovery() {
             let body = to_bytes(response.into_body(), 32768).await.unwrap();
             let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
             let quota = &value["data"]["items"][0]["quota"];
+            if kind.is_error_protection() {
+                assert_eq!(quota["rateLimitReason"], "error_protection");
+                assert_eq!(
+                    quota["protectionRules"],
+                    serde_json::json!([
+                        {"id":"removed-rule", "name":"触发时的规则名称"}
+                    ])
+                );
+            } else {
+                assert_eq!(quota["protectionRules"], serde_json::json!([]));
+            }
             match until {
                 Some(until) => {
                     assert_eq!(
@@ -256,6 +274,7 @@ fn account_page_item(
     use gateway_core::account::resolve_account_status;
 
     AccountPageItem {
+        protection_rules: Vec::new(),
         account: AccountRecord {
             outbound_proxy_id: None,
             outbound_proxy_enabled: true,

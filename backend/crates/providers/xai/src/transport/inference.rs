@@ -361,6 +361,7 @@ pub struct GrokInferenceTransportError {
     raw_upstream_error: Option<Box<RawUpstreamError>>,
     send_state: UpstreamSendState,
     status: Option<u16>,
+    upstream_fields: Option<Box<gateway_core::upstream::UpstreamFailureFields>>,
     retry_after: Option<Duration>,
     http_version: Option<UpstreamHttpVersion>,
     request_id: Option<OpaqueUpstreamValue>,
@@ -382,6 +383,7 @@ impl GrokInferenceTransportError {
             raw_upstream_error: None,
             send_state,
             status: None,
+            upstream_fields: None,
             retry_after: None,
             http_version: None,
             request_id: None,
@@ -395,6 +397,22 @@ impl GrokInferenceTransportError {
             credential_recovery_required: false,
             sensitive_context_redacted: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_upstream_failure_fields(
+        mut self,
+        fields: gateway_core::upstream::UpstreamFailureFields,
+    ) -> Self {
+        self.upstream_fields = Some(Box::new(fields));
+        self
+    }
+
+    #[must_use]
+    pub fn upstream_failure_fields(
+        &self,
+    ) -> Option<&gateway_core::upstream::UpstreamFailureFields> {
+        self.upstream_fields.as_deref()
     }
 
     /// 保存 transport 提取的安全诊断，避免 Provider 映射时丢失原因

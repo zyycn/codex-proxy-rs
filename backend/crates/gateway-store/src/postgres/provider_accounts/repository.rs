@@ -88,12 +88,47 @@ pub trait ProviderAccountAdminRepository: Send + Sync {
 #[derive(Clone)]
 pub struct PgProviderAccountRepository {
     pub(crate) pool: PgPool,
+    protection: Option<std::sync::Arc<dyn gateway_core::provider_ports::ProviderCooldownPort>>,
 }
 
 impl PgProviderAccountRepository {
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            protection: None,
+        }
+    }
+    #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        protection: std::sync::Arc<dyn gateway_core::provider_ports::ProviderCooldownPort>,
+    ) -> Self {
+        self.protection = Some(protection);
+        self
+    }
+
+    /// PostgreSQL 已提交的凭据结果不能因可丢失运行态失败而回报未提交
+    pub(super) async fn advance_protection_revision(&self, account: &str, revision: Revision) {
+        let Some(protection) = &self.protection else {
+            return;
+        };
+        let (Ok(account), Ok(revision)) = (
+            CoreProviderAccountId::new(account),
+            CoreCredentialRevision::new(revision.get()),
+        ) else {
+            return;
+        };
+        if !matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                protection.advance_protection_revision(&account, revision)
+            )
+            .await,
+            Ok(Ok(_))
+        ) {
+            tracing::warn!("credential committed but account protection revision was not advanced");
+        }
     }
 }
 
@@ -283,10 +318,13 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .ok_or(StoreError::Conflict {
             source: None,
             entity: ENTITY,
-            id: update.account_id,
+            id: update.account_id.clone(),
             kind: ConflictKind::StaleRevision,
         })?;
-        Revision::new(to_u64(next)?)
+        let revision = Revision::new(to_u64(next)?)?;
+        self.advance_protection_revision(&update.account_id, revision)
+            .await;
+        Ok(revision)
     }
 
     async fn apply_provider_account_state(
@@ -491,7 +529,15 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             postgres_unavailable("begin provider account admin import", source)
         })?;
         let result = import_provider_accounts_in_transaction(&mut transaction, command).await;
-        finish_admin_transaction(transaction, result, "provider account admin import").await
+        let imported =
+            finish_admin_transaction(transaction, result, "provider account admin import").await?;
+        use futures::{StreamExt as _, stream};
+        stream::iter(&imported.credential_revisions)
+            .for_each_concurrent(32, |(account, revision)| {
+                self.advance_protection_revision(account, *revision)
+            })
+            .await;
+        Ok(imported)
     }
 
     async fn rotate_provider_account(
@@ -501,8 +547,14 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         let mut transaction = self.pool.begin().await.map_err(|source| {
             postgres_unavailable("begin provider account admin rotation", source)
         })?;
+        let account_id = command.credential.account_id.clone();
         let result = rotate_provider_account_admin_in_transaction(&mut transaction, command).await;
-        finish_admin_transaction(transaction, result, "provider account admin rotation").await
+        let rotation =
+            finish_admin_transaction(transaction, result, "provider account admin rotation")
+                .await?;
+        self.advance_protection_revision(&account_id, rotation.credential_revision)
+            .await;
+        Ok(rotation)
     }
 
     async fn batch_update_provider_accounts_admin(

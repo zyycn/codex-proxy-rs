@@ -1,4 +1,4 @@
-//! Provider 冷却、容量窗口和运行状态端口
+//! Provider 冷却与账号错误保护的运行状态端口
 
 use super::ProviderStoreError;
 /// 账号级 cooldown 的来源类别；调度状态统一按 `rate_limited` 处理
@@ -8,7 +8,7 @@ use crate::{
     routing::UpstreamModelId,
 };
 use futures::future::BoxFuture;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 /// 可丢失的账号冷却事实，不进入持久状态；探测冻结到期后仍需确认恢复
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,7 +152,63 @@ impl ProviderScopedCooldown {
     }
 }
 
+/// 单次实际上游尝试开始时捕获的反馈栅栏
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountProtectionGuard {
+    pub account_id: ProviderAccountId,
+    pub credential_revision: CredentialRevision,
+    pub policy_generation: String,
+    pub reset_generation: String,
+    pub evidence_version: u64,
+}
+
 pub trait ProviderCooldownPort: Send + Sync {
+    /// 由配置发布边界调用，只有保护配置变化才推进策略代次
+    fn publish_protection_policy<'a>(
+        &'a self,
+        _policy: &'a crate::account::AccountErrorProtection,
+        _revision: crate::routing::ConfigRevision,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn begin_protection<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _revision: CredentialRevision,
+        _fingerprint: &'a str,
+        _snapshot_revision: crate::routing::ConfigRevision,
+    ) -> BoxFuture<'a, Result<Option<AccountProtectionGuard>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// 凭据提交后只使旧凭据保护反馈失效，保留账号与模型限流
+    fn advance_protection_revision<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    /// 同一原子操作内递增窗口计数并冻结，活动冻结不被迟到反馈顺延
+    fn record_protection_failure<'a>(
+        &'a self,
+        _guard: &'a AccountProtectionGuard,
+        _policy: &'a crate::account::AccountErrorProtection,
+        _matched: &'a [crate::account::AccountProtectionMatch],
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    /// 只清除开始时所见的未冻结证据，不解除冻结或清除较新的失败
+    fn record_protection_success<'a>(
+        &'a self,
+        _guard: &'a AccountProtectionGuard,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
     fn put_if_later(
         &self,
         cooldown: ProviderCooldown,
@@ -194,26 +250,10 @@ pub trait ProviderCooldownPort: Send + Sync {
         account_id: &'a ProviderAccountId,
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
 
-    /// 记录一次容量类失败并返回滑动窗口内的累计次数，同时把观测到的账号
-    /// 在途并发并入窗口峰值（`in_flight` 为 0 表示本次未观测，跳过峰值更新）
-    /// 只服务容量熔断触发器；调用频率受失败频率约束，不需要批量接口
-    fn record_capacity_failure<'a>(
-        &'a self,
-        account_id: &'a ProviderAccountId,
-        window: Duration,
-        in_flight: u32,
-    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>>;
-
-    /// 普通请求成功后原子清除临时限流及失败证据；必须保留任何容量冻结
+    /// 普通请求成功只清除临时限流，保护证据由带栅栏的专用反馈负责
     fn clear_after_success<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
         through_revision: CredentialRevision,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
-
-    /// 读取窗口内观测到的在途并发峰值；无证据时返回 `None`
-    fn capacity_peak_in_flight<'a>(
-        &'a self,
-        account_id: &'a ProviderAccountId,
-    ) -> BoxFuture<'a, Result<Option<u32>, ProviderStoreError>>;
 }

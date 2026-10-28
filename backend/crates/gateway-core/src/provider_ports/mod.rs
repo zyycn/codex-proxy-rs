@@ -22,15 +22,14 @@ mod credential;
 pub use credential::{ProviderCredentialState, ProviderCredentialStatePort};
 mod cooldown;
 pub use cooldown::{
-    ProviderCooldown, ProviderCooldownKind, ProviderCooldownPort, ProviderCooldownScope,
-    ProviderScopedCooldown,
+    AccountProtectionGuard, ProviderCooldown, ProviderCooldownKind, ProviderCooldownPort,
+    ProviderCooldownScope, ProviderScopedCooldown,
 };
 mod refresh;
 pub use refresh::{ProviderRefreshPolicy, provider_refresh_backoff_at, provider_refresh_retry_at};
 mod runtime_policy;
 pub use runtime_policy::{
-    ProviderFreezePolicy, ProviderRuntimePolicyPort, ProviderWarmupPolicy,
-    valid_warmup_schedule_time,
+    ProviderRuntimePolicyPort, ProviderWarmupPolicy, valid_warmup_schedule_time,
 };
 mod oauth;
 pub use oauth::{

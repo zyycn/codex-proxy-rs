@@ -574,13 +574,15 @@
       "reauthorizeHelp": "Reauthorize the account to resume scheduling",
       "replaceCredentialsHelp": "Update or reimport credentials, then test the connection again",
       "upstreamRestrictionHelp": "Check the upstream account and resolve its restrictions before enabling it",
-      "capacityFailuresHelp": "Capacity failures reached the threshold, scheduling is paused for this account",
       "recoveryProbeHelp": "After cooldown, a successful recovery probe resumes scheduling, or you can restore the account manually",
       "recoveryHelp": "Scheduling resumes after cooldown, or you can restore the account manually",
       "nextAttempt": ", next attempt: {nextRefreshDisplay}",
       "clickOrFocusToViewDetails": "{title}, {description}{retry}, click or focus to view details",
       "resumeDetection": "Resume detection",
-      "expectedToRecover": "Expected to recover"
+      "expectedToRecover": "Expected to recover",
+      "errorProtection": "Error protection",
+      "protectionFailuresHelp": "Failures matching your rules reached the threshold, scheduling is paused for this account",
+      "matchedProtectionRules": "Rules matched when protection started"
     },
     "fields": {
       "platformType": "Provider",

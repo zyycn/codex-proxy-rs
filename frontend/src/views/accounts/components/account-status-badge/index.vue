@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountErrorReason, AccountStatus } from '@/api'
+import type { AccountErrorReason, AccountProtectionRule, AccountStatus } from '@/api'
 
 import { ZPopover, ZScrollbar } from '@codex-proxy/ui'
 import { computed } from 'vue'
@@ -14,7 +14,8 @@ const props = withDefaults(
     errorReason?: AccountErrorReason | null
     errorMessage?: string | null
     rateLimitRecoveryDisplay?: string | null
-    rateLimitReason?: 'upstream_rate_limit' | 'capacity_freeze' | null
+    rateLimitReason?: 'upstream_rate_limit' | 'error_protection' | null
+    protectionRules?: AccountProtectionRule[]
     recoveryProbeRequired?: boolean
     nextRefreshAt?: string | null
     nextRefreshAtDisplay?: string | null
@@ -25,6 +26,7 @@ const props = withDefaults(
     errorMessage: null,
     rateLimitRecoveryDisplay: null,
     rateLimitReason: null,
+    protectionRules: () => [],
     recoveryProbeRequired: false,
     nextRefreshAt: null,
     nextRefreshAtDisplay: null,
@@ -42,6 +44,7 @@ const presentation = computed(() =>
     errorMessage: props.errorMessage,
     rateLimitRecoveryDisplay: props.rateLimitRecoveryDisplay,
     rateLimitReason: props.rateLimitReason,
+    protectionRules: props.protectionRules,
     recoveryProbeRequired: props.recoveryProbeRequired,
     nextRefreshAt: props.nextRefreshAt,
     nextRefreshAtDisplay: props.nextRefreshAtDisplay,
@@ -109,6 +112,15 @@ const presentation = computed(() =>
         <p class="m-0 text-pretty font-emphasis text-cp-text-secondary">
           {{ presentation.description }}
         </p>
+
+        <div v-if="presentation.protectionRules.length" class="grid gap-1.5">
+          <span class="text-cp-xs font-emphasis text-cp-text-tertiary">{{ t('accounts.status.matchedProtectionRules') }}</span>
+          <ul class="m-0 list-none space-y-1 p-0 text-cp-text">
+            <li v-for="rule in presentation.protectionRules" :key="rule.id" class="wrap-anywhere">
+              {{ rule.name }}
+            </li>
+          </ul>
+        </div>
 
         <div
           v-if="presentation.rateLimitRecovery"

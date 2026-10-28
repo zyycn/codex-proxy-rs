@@ -214,6 +214,8 @@ struct SnapshotSettingsRow {
     pricing_synced_json: sqlx::types::Json<gateway_core::metering::PricingOverrides>,
     pricing_overrides_json: sqlx::types::Json<gateway_core::metering::PricingOverrides>,
     config_revision: i64,
+    account_error_protection_revision: i64,
+    account_error_protection_json: sqlx::types::Json<gateway_core::account::AccountErrorProtection>,
     max_concurrent_per_account: i64,
     smart_scheduling_json: sqlx::types::Json<gateway_core::account::SmartSchedulingConfig>,
     rotation_strategy: String,
@@ -240,7 +242,7 @@ async fn load_settings(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<(Revision, SettingsValues)> {
     let row = sqlx::query_as::<_, SnapshotSettingsRow>(
-        "select config_revision, max_concurrent_per_account, rotation_strategy, smart_scheduling_json, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours, request_location_json, request_location_enabled, codex_privacy_policy_json, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
+        "select config_revision, account_error_protection_revision, account_error_protection_json, max_concurrent_per_account, rotation_strategy, smart_scheduling_json, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours, request_location_json, request_location_enabled, codex_privacy_policy_json, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
     .await
@@ -285,6 +287,8 @@ async fn load_settings(
         })
         .with_request_location(row.request_location_json.0, row.request_location_enabled)
         .with_codex_privacy_policy(row.codex_privacy_policy_json.0)
+        .with_account_error_protection(row.account_error_protection_json.0)
+        .with_account_error_protection_revision(to_u64(row.account_error_protection_revision)?)
         .with_concurrency_queues(
             to_u32(row.max_waiting_per_key)?,
             to_u32(row.max_waiting_per_account)?,

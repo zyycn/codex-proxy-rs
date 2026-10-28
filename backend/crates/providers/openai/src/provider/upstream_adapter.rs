@@ -59,6 +59,7 @@ impl CodexProvider {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
             })?,
         )
+        .with_credential_revision(lease.account().revision())
         .with_account_snapshot(Some(
             gateway_core::account::AccountHistorySnapshot::from_account(lease.account()),
         ))

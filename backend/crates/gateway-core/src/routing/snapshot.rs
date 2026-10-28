@@ -1349,6 +1349,11 @@ impl RuntimeSnapshot {
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),
             privacy: self.settings.privacy.clone(),
+            account_error_protection: Arc::clone(&self.settings.account_error_protection),
+            account_error_protection_revision: self
+                .settings
+                .values
+                .account_error_protection_revision,
             account_selection_policy: self.settings.account_selection_policy,
             operation: operation.kind(),
             max_attempts: NonZeroU32::new(super::MAX_REQUEST_ATTEMPTS)
@@ -1431,6 +1436,11 @@ impl RuntimeSnapshot {
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),
             privacy: self.settings.privacy.clone(),
+            account_error_protection: Arc::clone(&self.settings.account_error_protection),
+            account_error_protection_revision: self
+                .settings
+                .values
+                .account_error_protection_revision,
             account_selection_policy: self.settings.account_selection_policy,
             operation: operation.kind(),
             max_attempts: NonZeroU32::new(super::MAX_REQUEST_ATTEMPTS)

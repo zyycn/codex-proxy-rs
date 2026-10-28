@@ -551,6 +551,9 @@ pub(super) fn map_transport_error_with_state(
     {
         mapped = mapped.with_retry_prohibited();
     }
+    if let Some(fields) = error.upstream_failure_fields() {
+        mapped = mapped.with_upstream_failure_fields(fields.clone());
+    }
     if let Some(status) = error.status() {
         mapped = mapped.with_status(status);
         if allow_explicit_replay

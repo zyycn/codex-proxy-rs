@@ -221,11 +221,17 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .await
         .map_err(|source| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, source))?;
         match next {
-            Some(next) => Ok(CredentialCasOutcome::Updated(
-                CoreCredentialRevision::new(to_u64(next).map_err(core_store_error)?).map_err(
-                    |source| CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, source),
-                )?,
-            )),
+            Some(next) => {
+                let revision = Revision::new(to_u64(next).map_err(core_store_error)?)
+                    .map_err(core_store_error)?;
+                self.advance_protection_revision(&account_id, revision)
+                    .await;
+                Ok(CredentialCasOutcome::Updated(
+                    CoreCredentialRevision::new(revision.get()).map_err(|source| {
+                        CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, source)
+                    })?,
+                ))
+            }
             None => Ok(CredentialCasOutcome::Conflict),
         }
     }

@@ -81,6 +81,7 @@ pub struct AccountListQuery {
 /// Admin query service 从运行态存储取得的当前账号冷却快照
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccountRuntimeSnapshot {
+    pub protection_rules: BTreeMap<String, Vec<gateway_core::account::AccountProtectionMatch>>,
     pub cooldown: BTreeMap<String, gateway_core::account::AccountCooldown>,
     /// `None` 表示实时 lease 存储不可用；`Some` 中未出现的账号当前使用量为零
     pub in_flight: Option<BTreeMap<String, u64>>,
@@ -93,6 +94,9 @@ pub struct AccountFreeze {
     pub until: DateTime<Utc>,
     pub generation: String,
     pub requires_probe: bool,
+    pub duration_seconds: Option<u64>,
+    pub probe_model: Option<String>,
+    pub protection_rules: Vec<gateway_core::account::AccountProtectionMatch>,
 }
 
 /// 可选的账号分组成员筛选条件
@@ -203,6 +207,7 @@ pub struct AccountPage {
 /// 同一状态快照下的账号事实与唯一状态投影
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountPageItem {
+    pub protection_rules: Vec<gateway_core::account::AccountProtectionMatch>,
     pub account: AccountRecord,
     pub projection: AccountStatusProjection,
     pub capacity: AccountCapacity,

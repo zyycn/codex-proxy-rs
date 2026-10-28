@@ -114,7 +114,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "min_codex_desktop_version".to_owned(),
                     "min_codex_cli_version".to_owned(),
                     "retention".to_owned(),
-                    "account_auto_freeze".to_owned(),
+                    "account_error_protection".to_owned(),
                 ],
             ),
         };

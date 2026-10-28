@@ -15,6 +15,48 @@ pub type Revision = NonZeroU64;
 pub type RotationStrategy = String;
 pub type AccountAffinity = String;
 pub type PricingOverrides = BTreeMap<String, BTreeMap<String, ModelPriceOverride>>;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountErrorProtection {
+    pub enabled: bool,
+    pub rules: Vec<AccountErrorRule>,
+    pub threshold: u32,
+    pub window_seconds: u64,
+    pub duration_seconds: u64,
+    pub probe_enabled: bool,
+    pub probe_model: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountErrorRule {
+    pub id: String,
+    pub name: String,
+    pub conditions: Vec<AccountErrorCondition>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountErrorCondition {
+    pub field: AccountErrorField,
+    pub operator: AccountErrorOperator,
+    pub values: Vec<Option<String>>,
+    #[serde(default)]
+    pub ignore_case: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountErrorField {
+    Provider,
+    Status,
+    Code,
+    Type,
+    Message,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountErrorOperator {
+    Equals,
+    Contains,
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodexPrivacyPolicy {
@@ -114,13 +156,7 @@ pub struct RuntimeSettings {
     pub usage_retention_days: u32,
     pub ops_event_retention_days: u32,
     pub audit_retention_days: u32,
-    pub account_auto_freeze_enabled: bool,
-    pub account_auto_freeze_threshold: u32,
-    pub account_auto_freeze_window_seconds: u64,
-    pub account_auto_freeze_duration_seconds: u64,
-    pub account_auto_freeze_probe_enabled: bool,
-    pub account_auto_freeze_probe_model: Option<String>,
-    pub account_auto_freeze_adaptive_concurrency: bool,
+    pub account_error_protection: AccountErrorProtection,
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
@@ -155,13 +191,7 @@ pub struct ReplaceRuntimeSettings {
     pub usage_retention_days: u32,
     pub ops_event_retention_days: u32,
     pub audit_retention_days: u32,
-    pub account_auto_freeze_enabled: bool,
-    pub account_auto_freeze_threshold: u32,
-    pub account_auto_freeze_window_seconds: u64,
-    pub account_auto_freeze_duration_seconds: u64,
-    pub account_auto_freeze_probe_enabled: bool,
-    pub account_auto_freeze_probe_model: Option<String>,
-    pub account_auto_freeze_adaptive_concurrency: bool,
+    pub account_error_protection: AccountErrorProtection,
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
@@ -358,14 +388,7 @@ impl From<RuntimeSettings> for ReplaceRuntimeSettings {
             usage_retention_days: settings.usage_retention_days,
             ops_event_retention_days: settings.ops_event_retention_days,
             audit_retention_days: settings.audit_retention_days,
-            account_auto_freeze_enabled: settings.account_auto_freeze_enabled,
-            account_auto_freeze_threshold: settings.account_auto_freeze_threshold,
-            account_auto_freeze_window_seconds: settings.account_auto_freeze_window_seconds,
-            account_auto_freeze_duration_seconds: settings.account_auto_freeze_duration_seconds,
-            account_auto_freeze_probe_enabled: settings.account_auto_freeze_probe_enabled,
-            account_auto_freeze_probe_model: settings.account_auto_freeze_probe_model,
-            account_auto_freeze_adaptive_concurrency: settings
-                .account_auto_freeze_adaptive_concurrency,
+            account_error_protection: settings.account_error_protection,
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_schedule_time: settings.account_warmup_schedule_time,
             account_warmup_model: settings.account_warmup_model,

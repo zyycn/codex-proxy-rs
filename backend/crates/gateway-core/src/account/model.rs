@@ -623,6 +623,10 @@ pub enum AccountCooldownKind {
     CapacityFreeze,
     /// 到期后仍阻止调度，必须由恢复探测成功或管理员恢复解除
     CapacityFreezeProbe,
+    /// 自定义错误规则触发的账号保护
+    ErrorProtection,
+    /// 账号保护到期后需要探测确认恢复
+    ErrorProtectionProbe,
 }
 
 impl AccountCooldownKind {
@@ -632,17 +636,25 @@ impl AccountCooldownKind {
             Self::RateLimit => "rate_limit",
             Self::CapacityFreeze => "capacity_freeze",
             Self::CapacityFreezeProbe => "capacity_freeze_probe",
+            Self::ErrorProtection => "error_protection",
+            Self::ErrorProtectionProbe => "error_protection_probe",
         }
     }
 
     #[must_use]
-    pub const fn is_capacity_freeze(self) -> bool {
-        matches!(self, Self::CapacityFreeze | Self::CapacityFreezeProbe)
+    pub const fn is_error_protection(self) -> bool {
+        matches!(
+            self,
+            Self::CapacityFreeze
+                | Self::CapacityFreezeProbe
+                | Self::ErrorProtection
+                | Self::ErrorProtectionProbe
+        )
     }
 
     #[must_use]
     pub const fn requires_probe(self) -> bool {
-        matches!(self, Self::CapacityFreezeProbe)
+        matches!(self, Self::CapacityFreezeProbe | Self::ErrorProtectionProbe)
     }
 
     #[must_use]
@@ -651,6 +663,8 @@ impl AccountCooldownKind {
             "rate_limit" => Some(Self::RateLimit),
             "capacity_freeze" => Some(Self::CapacityFreeze),
             "capacity_freeze_probe" => Some(Self::CapacityFreezeProbe),
+            "error_protection" => Some(Self::ErrorProtection),
+            "error_protection_probe" => Some(Self::ErrorProtectionProbe),
             _ => None,
         }
     }

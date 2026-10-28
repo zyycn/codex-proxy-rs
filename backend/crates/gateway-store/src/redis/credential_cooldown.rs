@@ -12,7 +12,6 @@ use gateway_core::{
 };
 use redis::{Script, aio::ConnectionManager};
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use crate::{Revision, StoreError, StoreResult, redis_unavailable, require_nonempty};
 
@@ -75,48 +74,6 @@ redis.call('ZREM', KEYS[2], ARGV[2])
 return 1
 "#;
 
-// 探测结果只能修改读到的这一代冻结；删除后重建同 revision 的冻结也不匹配
-const FINISH_FREEZE_SCRIPT: &str = r#"
-if redis.call('HGET', KEYS[1], 'generation') ~= ARGV[2]
-  or redis.call('HGET', KEYS[1], 'revision') ~= ARGV[1] then return 0 end
-local kind = redis.call('HGET', KEYS[1], 'kind')
-if kind ~= 'capacity_freeze' and kind ~= 'capacity_freeze_probe' then return 0 end
-if ARGV[4] == '' then
-  redis.call('DEL', KEYS[1], KEYS[3], KEYS[4])
-  redis.call('ZREM', KEYS[2], ARGV[3])
-else
-  local until_ms = math.max(tonumber(redis.call('HGET', KEYS[1], 'until_ms')), tonumber(ARGV[4]))
-  redis.call('HSET', KEYS[1], 'until_ms', until_ms, 'generation', ARGV[5])
-  redis.call('ZADD', KEYS[2], until_ms, ARGV[3])
-  if kind == 'capacity_freeze_probe' then
-    redis.call('PERSIST', KEYS[1])
-  else
-    local clock = redis.call('TIME')
-    local now_ms = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
-    redis.call('PEXPIRE', KEYS[1], math.max(1, until_ms - now_ms + 60000))
-  end
-end
-return 1
-"#;
-
-// 每次容量失败都顺延窗口 TTL（与刷新退避计数同语义），并把本次观测到的
-// 在途并发并入峰值证据；峰值与计数共享同一窗口生命周期
-const RECORD_CAPACITY_FAILURE_SCRIPT: &str = r#"
-local count = redis.call('INCR', KEYS[1])
-local ttl_ms = tonumber(ARGV[1])
-redis.call('PEXPIRE', KEYS[1], ttl_ms)
-local in_flight = tonumber(ARGV[2])
-if in_flight > 0 then
-  local peak = tonumber(redis.call('GET', KEYS[2]) or '0')
-  if in_flight > peak then
-    redis.call('SET', KEYS[2], in_flight, 'PX', ttl_ms)
-  else
-    redis.call('PEXPIRE', KEYS[2], ttl_ms)
-  end
-end
-return count
-"#;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialCooldown {
     pub provider_account_id: String,
@@ -143,8 +100,8 @@ pub trait CredentialCooldownRepository: Send + Sync {
 
 #[derive(Clone)]
 pub struct RedisCredentialCooldownRepository {
-    connection: ConnectionManager,
-    namespace: String,
+    pub(super) connection: ConnectionManager,
+    pub(super) namespace: String,
 }
 
 impl RedisCredentialCooldownRepository {
@@ -155,12 +112,12 @@ impl RedisCredentialCooldownRepository {
         })
     }
 
-    fn key(&self, provider_account_id: &str) -> StoreResult<String> {
+    pub(super) fn key(&self, provider_account_id: &str) -> StoreResult<String> {
         let fingerprint = resource_fingerprint("credential cooldown", provider_account_id)?;
         Ok(format!("{}:account:{fingerprint}:cooldown", self.namespace))
     }
 
-    fn active_index_key(&self) -> String {
+    pub(super) fn active_index_key(&self) -> String {
         format!("{}:account:active-cooldowns", self.namespace)
     }
 
@@ -302,63 +259,73 @@ impl RedisCredentialCooldownRepository {
         Ok(removed == 1)
     }
 
-    async fn indexed_accounts(&self) -> StoreResult<Vec<String>> {
-        let mut connection = self.connection.clone();
-        redis::cmd("ZRANGE")
+    async fn all_cooldown_accounts(&self) -> StoreResult<Vec<String>> {
+        let (mut accounts, protected): (Vec<String>, Vec<String>) = redis::pipe()
+            .cmd("ZRANGE")
             .arg(self.active_index_key())
             .arg(0)
             .arg(-1)
-            .query_async(&mut connection)
+            .cmd("ZRANGE")
+            .arg(self.protection_index_key())
+            .arg(0)
+            .arg(-1)
+            .query_async(&mut self.connection.clone())
             .await
-            .map_err(|source| redis_unavailable("list indexed cooldowns", source))
+            .map_err(|e| redis_unavailable("list account cooldowns", e))?;
+        accounts.extend(protected);
+        accounts.sort_unstable();
+        accounts.dedup();
+        Ok(accounts)
     }
 
     pub(crate) async fn active_cooldowns(&self) -> StoreResult<AccountRuntimeSnapshot> {
-        let mut cooldown = BTreeMap::new();
-        for account_id in self.indexed_accounts().await? {
-            if let Some((_, until, kind, _)) = self
-                .read_at_key(self.key(&account_id)?, Some(&account_id))
-                .await?
-            {
-                cooldown.insert(
-                    account_id,
+        use futures::{StreamExt as _, TryStreamExt as _};
+        let reads = futures::stream::iter(self.all_cooldown_accounts().await?)
+            .map(|account| async move {
+                self.read_account_runtime(&account)
+                    .await
+                    .map(|runtime| (account, runtime))
+            })
+            .buffer_unordered(32)
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut snapshot = AccountRuntimeSnapshot::default();
+        for (account, (cooldown, freeze)) in reads {
+            if let Some(cooldown) = cooldown {
+                snapshot.cooldown.insert(
+                    account.clone(),
                     gateway_core::account::AccountCooldown {
-                        until: until.into(),
-                        kind,
+                        until: cooldown.cooldown_until.into(),
+                        kind: cooldown.kind,
                     },
                 );
             }
+            if let Some(freeze) = freeze {
+                snapshot
+                    .protection_rules
+                    .insert(account, freeze.protection_rules);
+            }
         }
-        Ok(AccountRuntimeSnapshot {
-            cooldown,
-            in_flight: None,
-        })
+        Ok(snapshot)
     }
 
-    /// 包含已到探测时间但尚未确认恢复的冻结；到期不能从 worker 工作集中移除
     pub(crate) async fn active_freezes(
         &self,
     ) -> StoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountFreeze>> {
-        let mut freezes = BTreeMap::new();
-        for account_id in self.indexed_accounts().await? {
-            if let Some((revision, until, kind, generation)) = self
-                .read_at_key(self.key(&account_id)?, Some(&account_id))
-                .await?
-                && kind.is_capacity_freeze()
-            {
-                freezes.insert(
-                    account_id,
-                    gateway_admin::model::accounts::AccountFreeze {
-                        credential_revision: gateway_admin::model::Revision::new(revision.get())
-                            .map_err(|source| invalid("freeze revision").with_source(source))?,
-                        until,
-                        generation,
-                        requires_probe: kind.requires_probe(),
-                    },
-                );
-            }
-        }
-        Ok(freezes)
+        use futures::{StreamExt as _, TryStreamExt as _};
+        let reads = futures::stream::iter(self.all_cooldown_accounts().await?)
+            .map(|account| async move {
+                self.read_account_runtime(&account)
+                    .await
+                    .map(|(_, freeze)| (account, freeze))
+            })
+            .buffer_unordered(32)
+            .try_collect::<Vec<_>>()
+            .await?;
+        Ok(reads
+            .into_iter()
+            .filter_map(|(account, freeze)| freeze.map(|value| (account, value)))
+            .collect())
     }
 
     pub(crate) async fn finish_freeze(
@@ -367,41 +334,8 @@ impl RedisCredentialCooldownRepository {
         expected: &gateway_admin::model::accounts::AccountFreeze,
         postpone_until: Option<DateTime<Utc>>,
     ) -> StoreResult<bool> {
-        let mut connection = self.connection.clone();
-        let changed: i64 = Script::new(FINISH_FREEZE_SCRIPT)
-            .key(self.key(account_id)?)
-            .key(self.active_index_key())
-            .key(self.capacity_failures_key(account_id)?)
-            .key(self.capacity_peak_key(account_id)?)
-            .arg(expected.credential_revision.get())
-            .arg(&expected.generation)
-            .arg(account_id)
-            .arg(
-                postpone_until
-                    .map(|until| until.timestamp_millis().to_string())
-                    .unwrap_or_default(),
-            )
-            .arg(uuid::Uuid::new_v4().to_string())
-            .invoke_async(&mut connection)
+        self.finish_protection(account_id, expected, postpone_until)
             .await
-            .map_err(|source| redis_unavailable("finish capacity freeze", source))?;
-        Ok(changed == 1)
-    }
-
-    /// 读取窗口内观测到的在途并发峰值；key 随窗口 TTL 过期，无需额外清理
-    pub(crate) async fn read_capacity_peak(
-        &self,
-        provider_account_id: &str,
-    ) -> StoreResult<Option<u32>> {
-        let mut connection = self.connection.clone();
-        let peak: Option<i64> = redis::cmd("GET")
-            .arg(self.capacity_peak_key(provider_account_id)?)
-            .query_async(&mut connection)
-            .await
-            .map_err(|source| redis_unavailable("read capacity peak in-flight", source))?;
-        peak.map(u32::try_from)
-            .transpose()
-            .map_err(|source| invalid("capacity peak in-flight is invalid").with_source(source))
     }
 }
 
@@ -413,6 +347,8 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
             "provider_account_id",
             &cooldown.provider_account_id,
         )?;
+        self.migrate_protection(&cooldown.provider_account_id)
+            .await?;
         self.cache_at_key(
             self.key(&cooldown.provider_account_id)?,
             cooldown.credential_revision,
@@ -432,18 +368,9 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
             "provider_account_id",
             provider_account_id,
         )?;
-        self.read_at_key(self.key(provider_account_id)?, Some(provider_account_id))
+        self.read_account_runtime(provider_account_id)
             .await
-            .map(|value| {
-                value.map(
-                    |(credential_revision, cooldown_until, kind, _)| CredentialCooldown {
-                        provider_account_id: provider_account_id.to_owned(),
-                        credential_revision,
-                        cooldown_until,
-                        kind,
-                    },
-                )
-            })
+            .map(|(cooldown, _)| cooldown)
     }
 
     async fn invalidate_credential_cooldown(
@@ -456,12 +383,17 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
             "provider_account_id",
             provider_account_id,
         )?;
-        self.invalidate_at_key(
-            self.key(provider_account_id)?,
-            through_revision,
-            Some(provider_account_id),
-        )
-        .await
+        let protection_cleared = self
+            .clear_protection(provider_account_id, through_revision)
+            .await?;
+        let cooldown_cleared = self
+            .invalidate_at_key(
+                self.key(provider_account_id)?,
+                through_revision,
+                Some(provider_account_id),
+            )
+            .await?;
+        Ok(protection_cleared || cooldown_cleared)
     }
 
     async fn delete_account_cooldowns(&self, provider_account_id: &str) -> StoreResult<bool> {
@@ -477,6 +409,8 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
             self.key(provider_account_id)?,
             self.capacity_failures_key(provider_account_id)?,
             self.capacity_peak_key(provider_account_id)?,
+            self.protection_key(provider_account_id)?,
+            self.protection_state_key(provider_account_id)?,
         ];
         let pattern = format!(
             "{}:account:{}:cooldown:*",
@@ -505,12 +439,14 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
             r#"
             local removed = 0
             for i = 2, #KEYS do removed = removed + redis.call('DEL', KEYS[i]) end
+            redis.call('ZREM', ARGV[2], ARGV[1])
             return removed + redis.call('ZREM', KEYS[1], ARGV[1])
         "#,
         )
         .key(self.active_index_key())
         .key(keys)
         .arg(provider_account_id)
+        .arg(self.protection_index_key())
         .invoke_async(&mut connection)
         .await
         .map_err(|source| redis_unavailable("delete account cooldowns and index", source))?;
@@ -519,6 +455,70 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
 }
 
 impl ProviderCooldownPort for RedisCredentialCooldownRepository {
+    fn advance_protection_revision<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        revision: CredentialRevision,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            self.advance_account_protection_revision(account, revision)
+                .await
+                .map_err(|e| {
+                    crate::provider_unavailable("advance protection credential revision", e)
+                })
+        })
+    }
+
+    fn publish_protection_policy<'a>(
+        &'a self,
+        policy: &'a gateway_core::account::AccountErrorProtection,
+        revision: gateway_core::routing::ConfigRevision,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.publish_policy(policy, revision)
+                .await
+                .map_err(|e| crate::provider_unavailable("publish account protection", e))
+        })
+    }
+    fn begin_protection<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        revision: CredentialRevision,
+        fingerprint: &'a str,
+        snapshot_revision: gateway_core::routing::ConfigRevision,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<gateway_core::provider_ports::AccountProtectionGuard>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            self.begin_account_protection(account, revision, fingerprint, snapshot_revision)
+                .await
+                .map_err(|e| crate::provider_unavailable("begin account protection", e))
+        })
+    }
+    fn record_protection_failure<'a>(
+        &'a self,
+        guard: &'a gateway_core::provider_ports::AccountProtectionGuard,
+        policy: &'a gateway_core::account::AccountErrorProtection,
+        matched: &'a [gateway_core::account::AccountProtectionMatch],
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            self.protection_failure(guard, policy, matched)
+                .await
+                .map_err(|e| crate::provider_unavailable("record protection failure", e))
+        })
+    }
+    fn record_protection_success<'a>(
+        &'a self,
+        guard: &'a gateway_core::provider_ports::AccountProtectionGuard,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            self.protection_success(guard)
+                .await
+                .map_err(|e| crate::provider_unavailable("record protection success", e))
+        })
+    }
+
     fn put_if_later(
         &self,
         cooldown: ProviderCooldown,
@@ -665,34 +665,6 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
         })
     }
 
-    fn record_capacity_failure<'a>(
-        &'a self,
-        account_id: &'a ProviderAccountId,
-        window: Duration,
-        in_flight: u32,
-    ) -> futures::future::BoxFuture<'a, Result<u32, ProviderStoreError>> {
-        Box::pin(async move {
-            let mut connection = self.connection.clone();
-            let window_ms = u64::try_from(window.as_millis())
-                .map_err(|_| provider_invalid("encode capacity failure window"))?;
-            let count: i64 = Script::new(RECORD_CAPACITY_FAILURE_SCRIPT)
-                .key(
-                    self.capacity_failures_key(account_id.as_str())
-                        .map_err(|_| provider_invalid("encode capacity failure key"))?,
-                )
-                .key(
-                    self.capacity_peak_key(account_id.as_str())
-                        .map_err(|_| provider_invalid("encode capacity peak key"))?,
-                )
-                .arg(i64::try_from(window_ms).unwrap_or(i64::MAX))
-                .arg(i64::from(in_flight))
-                .invoke_async(&mut connection)
-                .await
-                .map_err(|source| crate::provider_unavailable("record capacity failure", source))?;
-            u32::try_from(count).map_err(|_| provider_invalid("decode capacity failure count"))
-        })
-    }
-
     fn clear_after_success<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
@@ -724,22 +696,9 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
             Ok(())
         })
     }
-
-    fn capacity_peak_in_flight<'a>(
-        &'a self,
-        account_id: &'a ProviderAccountId,
-    ) -> futures::future::BoxFuture<'a, Result<Option<u32>, ProviderStoreError>> {
-        Box::pin(async move {
-            self.read_capacity_peak(account_id.as_str())
-                .await
-                .map_err(|source| {
-                    crate::provider_unavailable("read capacity peak in-flight", source)
-                })
-        })
-    }
 }
 
-fn invalid(message: &str) -> StoreError {
+pub(super) fn invalid(message: &str) -> StoreError {
     StoreError::InvalidData {
         source: None,
         entity: "credential cooldown",

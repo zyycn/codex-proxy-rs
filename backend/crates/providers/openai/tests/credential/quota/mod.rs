@@ -1,6 +1,5 @@
 //! OpenAI 额度事实边界与展示快照回归
 
-mod capacity_freeze;
 mod credits;
 mod initial_sync;
 mod recovery;
@@ -87,7 +86,6 @@ pub(super) fn quota_service_with_initial_delays(
         http,
         base_url,
         Arc::new(crate::support::MemoryCooldownPort::new()),
-        Arc::new(crate::support::TestLeaseCoordinator::default()),
         crate::support::runtime_policy(),
     )
     .with_initial_sync_delays(delays)

@@ -718,6 +718,10 @@ impl ExecutionStore for FakeStore {
 }
 
 enum Script {
+    ProtectedStream {
+        account_id: &'static str,
+        items: Vec<Result<GatewayEvent, ProviderError>>,
+    },
     Stream {
         account_id: &'static str,
         items: Vec<Result<GatewayEvent, ProviderError>>,
@@ -823,7 +827,10 @@ impl Provider for ScriptedProvider {
             .lock()
             .expect("operations lock")
             .push(request.operation().clone());
-        self.contexts.lock().expect("contexts lock").push(context);
+        self.contexts
+            .lock()
+            .expect("contexts lock")
+            .push(context.clone());
         // 模拟官方发布在每次上游尝试开始后推进，重试应继续使用首次解析版本
         self.profile_generation.fetch_add(1, Ordering::SeqCst);
         let script = self
@@ -832,10 +839,12 @@ impl Provider for ScriptedProvider {
             .expect("scripts lock")
             .pop_front()
             .expect("one script per provider call");
+        let protected = matches!(script, Script::ProtectedStream { .. });
         match script {
             Script::Error(error) => Err(error),
             Script::Pending => futures::future::pending().await,
-            Script::Stream { account_id, items } => {
+            Script::Stream { account_id, items }
+            | Script::ProtectedStream { account_id, items } => {
                 let candidate = request.candidate();
                 let metadata = ProviderCallMetadata::new(
                     candidate.provider().clone(),
@@ -847,13 +856,29 @@ impl Provider for ScriptedProvider {
                     UpstreamTransport::new("http_sse").expect("transport"),
                 )
                 .with_upstream_request_id(OpaqueUpstreamValue::new("upstream-request"));
-                Ok(ProviderStream::new(
+                let metadata = metadata.with_credential_revision(
+                    gateway_core::account::CredentialRevision::new(7).unwrap(),
+                );
+                let stream = ProviderStream::new(
                     metadata,
                     Box::pin(futures::stream::iter(
                         items.into_iter().map(canonical_provider_event),
                     )),
                     TrackedLease(Arc::clone(&self.released_leases)),
-                ))
+                );
+                if protected {
+                    context
+                        .execute_middleware(
+                            request.operation().clone(),
+                            candidate.provider().clone(),
+                            Some("gpt-5".into()),
+                            ProviderAccountId::new(account_id).unwrap(),
+                            Box::new(move |_, _| Box::pin(async move { Ok(stream) })),
+                        )
+                        .await
+                } else {
+                    Ok(stream)
+                }
             }
             Script::HangingStream { account_id, items } => {
                 let candidate = request.candidate();
@@ -1142,6 +1167,24 @@ fn plan_with_profiles(
     fast_mode: FastMode,
     profiles: BTreeMap<ProviderKind, gateway_core::account::OpaqueProviderData>,
 ) -> RoutingPlan {
+    plan_with_protection(
+        operation,
+        account_selection_policy,
+        request_location,
+        fast_mode,
+        profiles,
+        Default::default(),
+    )
+}
+
+fn plan_with_protection(
+    operation: &Operation,
+    account_selection_policy: AccountSelectionPolicy,
+    request_location: gateway_core::account::RequestLocation,
+    fast_mode: FastMode,
+    profiles: BTreeMap<ProviderKind, gateway_core::account::OpaqueProviderData>,
+    protection: gateway_core::account::AccountErrorProtection,
+) -> RoutingPlan {
     let provider = ProviderKind::new("openai").expect("provider");
     let public_model = PublicModelId::new("gpt-5").expect("public model");
     let capabilities = ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
@@ -1193,7 +1236,8 @@ fn plan_with_profiles(
             )
             .unwrap(),
         )
-        .with_request_location(request_location, true),
+        .with_request_location(request_location, true)
+        .with_account_error_protection(protection),
         vec![provider.clone()],
         vec![ProviderModel::new(
             provider.clone(),
@@ -7127,4 +7171,88 @@ fn lease_cancellation_is_preserved_in_the_single_request_terminal() {
             Some(reason.message())
         );
     });
+}
+
+#[test]
+fn error_protection_tracks_real_retry_attempts_and_skips_diagnostic_runs() {
+    use super::account_protection::{Feedback, policy};
+    for diagnostic in [false, true] {
+        let operation = generate_operation();
+        let route_plan = plan_with_protection(
+            &operation,
+            AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::new(1).unwrap()),
+            Default::default(),
+            FastMode::Default,
+            BTreeMap::new(),
+            policy().as_ref().clone(),
+        );
+        let feedback = Arc::new(Feedback::default());
+        let failure = ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+            .with_replay_safe()
+            .with_upstream_failure_fields(gateway_core::upstream::UpstreamFailureFields {
+                status: None,
+                code: Some("invalid_prompt".into()),
+                error_type: None,
+                message: None,
+            });
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            Script::ProtectedStream {
+                account_id: "acct_first",
+                items: vec![Err(failure)],
+            },
+            Script::ProtectedStream {
+                account_id: "acct_second",
+                items: complete_stream(None),
+            },
+        ]));
+        let mut registry = ProviderRegistry::builder();
+        registry.register(provider.clone()).unwrap();
+        let coordinator = AttemptCoordinator::new(
+            GatewayEngine::new(Arc::new(FakeStore::default()), registry.build())
+                .with_account_error_protection(feedback.clone()),
+        );
+        let request = model_request(&operation, SystemTime::now() + Duration::from_secs(30));
+        let mut session = block_on(async {
+            if diagnostic {
+                coordinator
+                    .start_diagnostic(
+                        request,
+                        operation,
+                        route_plan,
+                        ProviderAccountId::new("acct_first").unwrap(),
+                        None,
+                        CancellationToken::new(),
+                    )
+                    .await
+            } else {
+                coordinator
+                    .start(
+                        request,
+                        operation,
+                        route_plan,
+                        None,
+                        None,
+                        CancellationToken::new(),
+                    )
+                    .await
+            }
+        })
+        .unwrap();
+        if diagnostic {
+            assert!(block_on(session.next_event()).is_err());
+            assert_eq!(feedback.begin.load(Ordering::SeqCst), 0);
+        } else {
+            block_on(session.collect_uncommitted()).unwrap();
+            assert_eq!(feedback.begin.load(Ordering::SeqCst), 2);
+            assert_eq!(feedback.failures.lock().unwrap().len(), 1);
+            assert_eq!(feedback.successes.load(Ordering::SeqCst), 1);
+            let observed = feedback.failures.lock().unwrap();
+            assert_eq!(observed[0].0.account_id.as_str(), "acct_first");
+        }
+        drop(session);
+        assert_eq!(
+            provider.released_leases.load(Ordering::SeqCst),
+            if diagnostic { 1 } else { 2 }
+        );
+    }
 }

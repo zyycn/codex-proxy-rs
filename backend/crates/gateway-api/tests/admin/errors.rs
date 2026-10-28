@@ -506,6 +506,7 @@ mod provider {
             last_error_message: None,
         };
         AccountPageItem {
+            protection_rules: Vec::new(),
             capacity: gateway_admin::model::accounts::AccountCapacity {
                 used_slots: None,
                 total_slots: None,

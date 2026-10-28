@@ -320,6 +320,7 @@ impl CodexProvider {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
             })?,
         )
+        .with_credential_revision(lease.account().revision())
         .with_account_snapshot(Some(
             gateway_core::account::AccountHistorySnapshot::from_account(lease.account()),
         ))
@@ -627,7 +628,6 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             response_origin: &request.response_origin,
             cyber_policy_scope: None,
             allows_account_state_mutation,
-            allows_capacity_feedback: !request.context.is_diagnostic_required_account(),
         };
         let active_account = request.lease.account().clone();
         let cookie_header = build_cookie_header(request.lease.cookies())?;
@@ -795,7 +795,6 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             response_origin: &response_origin,
             cyber_policy_scope: cyber_policy_scope.as_ref(),
             allows_account_state_mutation,
-            allows_capacity_feedback: !context.is_diagnostic_required_account(),
         };
         let mut active_account = lease.account().clone();
         let cookie_header = build_cookie_header(lease.cookies())?;

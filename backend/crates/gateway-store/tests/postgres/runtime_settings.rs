@@ -9,6 +9,10 @@ use gateway_store::postgres::{
 
 use super::TestDatabase;
 
+fn enabled_protection() -> gateway_core::account::AccountErrorProtection {
+    serde_json::from_value(serde_json::json!({"enabled":true,"rules":[{"id":"custom","name":"自定义错误","conditions":[{"field":"code","operator":"equals","values":["custom_rejection"],"ignoreCase":false}]}],"threshold":12,"windowSeconds":600,"durationSeconds":7200,"probeEnabled":true,"probeModel":null})).unwrap()
+}
+
 pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
         request_profile_updates: BTreeMap::new(),
@@ -38,13 +42,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             usage_retention_days: 31,
             ops_event_retention_days: 30,
             audit_retention_days: 90,
-            account_auto_freeze_enabled: true,
-            account_auto_freeze_threshold: 12,
-            account_auto_freeze_window_seconds: 600,
-            account_auto_freeze_duration_seconds: 7_200,
-            account_auto_freeze_probe_enabled: true,
-            account_auto_freeze_probe_model: None,
-            account_auto_freeze_adaptive_concurrency: true,
+            account_error_protection: enabled_protection(),
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
@@ -291,13 +289,16 @@ fn runtime_settings_reject_invalid_model_mapping() {
 }
 
 #[test]
-fn runtime_settings_reject_out_of_range_auto_freeze() {
+fn runtime_settings_reject_out_of_range_error_protection() {
     for update in [
         {
             let runtime_settings_base = settings_with_margin(3_600);
             RuntimeSettingsUpdate {
                 values: gateway_admin::model::settings::RuntimeSettingsValues {
-                    account_auto_freeze_threshold: 1,
+                    account_error_protection: gateway_core::account::AccountErrorProtection {
+                        threshold: 1,
+                        ..enabled_protection()
+                    },
                     ..runtime_settings_base.values
                 },
                 ..runtime_settings_base
@@ -307,7 +308,10 @@ fn runtime_settings_reject_out_of_range_auto_freeze() {
             let runtime_settings_base = settings_with_margin(3_600);
             RuntimeSettingsUpdate {
                 values: gateway_admin::model::settings::RuntimeSettingsValues {
-                    account_auto_freeze_window_seconds: 59,
+                    account_error_protection: gateway_core::account::AccountErrorProtection {
+                        window_seconds: 59,
+                        ..enabled_protection()
+                    },
                     ..runtime_settings_base.values
                 },
                 ..runtime_settings_base
@@ -317,7 +321,10 @@ fn runtime_settings_reject_out_of_range_auto_freeze() {
             let runtime_settings_base = settings_with_margin(3_600);
             RuntimeSettingsUpdate {
                 values: gateway_admin::model::settings::RuntimeSettingsValues {
-                    account_auto_freeze_duration_seconds: 299,
+                    account_error_protection: gateway_core::account::AccountErrorProtection {
+                        duration_seconds: 299,
+                        ..enabled_protection()
+                    },
                     ..runtime_settings_base.values
                 },
                 ..runtime_settings_base
@@ -327,7 +334,10 @@ fn runtime_settings_reject_out_of_range_auto_freeze() {
             let runtime_settings_base = settings_with_margin(3_600);
             RuntimeSettingsUpdate {
                 values: gateway_admin::model::settings::RuntimeSettingsValues {
-                    account_auto_freeze_probe_model: Some(" pad ".to_owned()),
+                    account_error_protection: gateway_core::account::AccountErrorProtection {
+                        probe_model: Some(" pad ".to_owned()),
+                        ..enabled_protection()
+                    },
                     ..runtime_settings_base.values
                 },
                 ..runtime_settings_base
@@ -571,11 +581,10 @@ async fn request_location_defaults_and_updates_reach_the_runtime_snapshot() {
     let mut update = settings_with_margin(3600);
     update.values.request_location = serde_json::from_value(serde_json::json!({"country":"JP", "region":" Tokyo ", "city":" Tokyo ", "timezone":"Asia/Tokyo"})).unwrap();
     update.values.request_location_enabled = true;
-    update.values.account_auto_freeze_threshold = 17;
-    update.values.account_auto_freeze_window_seconds = 900;
-    update.values.account_auto_freeze_duration_seconds = 3_600;
-    update.values.account_auto_freeze_probe_model = Some("gpt-5.5".to_owned());
-    update.values.account_auto_freeze_adaptive_concurrency = false;
+    update.values.account_error_protection.threshold = 17;
+    update.values.account_error_protection.window_seconds = 900;
+    update.values.account_error_protection.duration_seconds = 3_600;
+    update.values.account_error_protection.probe_model = Some("gpt-5.5".to_owned());
     let expected = update.values.request_location.clone().normalized().unwrap();
     let mut disabled = update.clone();
     disabled.values.request_location = expected.clone();
@@ -619,16 +628,18 @@ async fn request_location_defaults_and_updates_reach_the_runtime_snapshot() {
     );
     // 位置开关与自动冻结共用设置写入，切换位置不能覆盖冻结参数
     for saved in [&settings, &disabled_settings] {
-        assert!(saved.values.account_auto_freeze_enabled);
-        assert_eq!(saved.values.account_auto_freeze_threshold, 17);
-        assert_eq!(saved.values.account_auto_freeze_window_seconds, 900);
-        assert_eq!(saved.values.account_auto_freeze_duration_seconds, 3_600);
-        assert!(saved.values.account_auto_freeze_probe_enabled);
+        assert!(saved.values.account_error_protection.enabled);
+        assert_eq!(saved.values.account_error_protection.threshold, 17);
+        assert_eq!(saved.values.account_error_protection.window_seconds, 900);
         assert_eq!(
-            saved.values.account_auto_freeze_probe_model.as_deref(),
+            saved.values.account_error_protection.duration_seconds,
+            3_600
+        );
+        assert!(saved.values.account_error_protection.probe_enabled);
+        assert_eq!(
+            saved.values.account_error_protection.probe_model.as_deref(),
             Some("gpt-5.5")
         );
-        assert!(!saved.values.account_auto_freeze_adaptive_concurrency);
     }
     assert!(disabled_snapshot.config_revision > snapshot.config_revision);
     for invalid in [
@@ -657,7 +668,7 @@ async fn request_location_defaults_and_updates_reach_the_runtime_snapshot() {
 }
 
 #[tokio::test]
-async fn auto_freeze_defaults_off_and_explicit_opt_in_round_trips() {
+async fn error_protection_defaults_off_and_explicit_opt_in_round_trips() {
     let Some(database) = TestDatabase::create("freeze_opt_in").await else {
         return;
     };
@@ -668,7 +679,8 @@ async fn auto_freeze_defaults_off_and_explicit_opt_in_round_trips() {
             .await
             .expect("default settings")
             .values
-            .account_auto_freeze_enabled
+            .account_error_protection
+            .enabled
     );
     repository
         .update_runtime_settings(settings_with_margin(3_600))
@@ -680,7 +692,8 @@ async fn auto_freeze_defaults_off_and_explicit_opt_in_round_trips() {
             .await
             .expect("settings")
             .values
-            .account_auto_freeze_enabled
+            .account_error_protection
+            .enabled
     );
     database.close().await;
 }
@@ -1187,5 +1200,46 @@ async fn reset_credit_weekly_threshold_defaults_unset_and_round_trips() {
         assert!(sqlx::query("update runtime_settings set reset_credit_max_weekly_remaining_percent = $1 where id = 1")
             .bind(threshold).execute(&database.pool).await.is_err());
     }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn protection_revision_tracks_only_policy_changes_and_survives_return_to_previous_rules() {
+    let Some(database) = TestDatabase::create("protection_revision").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let initial = repository.load_runtime_settings().await.unwrap();
+    assert!(!initial.values.account_error_protection.enabled);
+    assert!(initial.values.account_error_protection.rules.is_empty());
+    let a = settings_with_margin(300);
+    repository.update_runtime_settings(a.clone()).await.unwrap();
+    let first = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        first.account_error_protection_revision,
+        first.config_revision
+    );
+    let mut unrelated = a.clone();
+    unrelated.values.max_concurrent_per_account = 17;
+    repository.update_runtime_settings(unrelated).await.unwrap();
+    let same = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        same.account_error_protection_revision,
+        first.account_error_protection_revision
+    );
+    assert!(same.config_revision > first.config_revision);
+    let mut b = a.clone();
+    b.values.account_error_protection.rules[0].conditions[0].values =
+        vec![Some("different_code".into())];
+    repository.update_runtime_settings(b).await.unwrap();
+    repository.update_runtime_settings(a).await.unwrap();
+    let final_settings = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        final_settings.values.account_error_protection,
+        first.values.account_error_protection
+    );
+    assert!(
+        final_settings.account_error_protection_revision > same.account_error_protection_revision
+    );
     database.close().await;
 }

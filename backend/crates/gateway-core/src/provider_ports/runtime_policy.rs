@@ -3,7 +3,6 @@
 use super::{ProviderRefreshPolicy, ProviderStoreError, ProviderStoreErrorKind};
 use crate::{account::OpaqueProviderData, identity::ProviderKind, routing::ConfigRevision};
 use futures::future::BoxFuture;
-use std::time::Duration;
 
 pub trait ProviderRuntimePolicyPort: Send + Sync {
     /// 原子推进预热执行游标，重启或时钟回拨后不重复领取已消费的时刻
@@ -45,153 +44,11 @@ pub trait ProviderRuntimePolicyPort: Send + Sync {
         &self,
     ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>>;
 
-    /// 读取账号容量熔断策略；默认关闭，只有实现运行时设置的存储需要覆盖
-    fn load_freeze_policy(
-        &self,
-    ) -> BoxFuture<'_, Result<ProviderFreezePolicy, ProviderStoreError>> {
-        Box::pin(async move { Ok(ProviderFreezePolicy::disabled()) })
-    }
-
     /// 读取账号模型预激活策略；默认关闭，只有实现运行时设置的存储需要覆盖
     fn load_warmup_policy(
         &self,
     ) -> BoxFuture<'_, Result<ProviderWarmupPolicy, ProviderStoreError>> {
         Box::pin(async move { Ok(ProviderWarmupPolicy::disabled()) })
-    }
-}
-
-/// 账号容量熔断（自动冻结）策略；来源于 `runtime_settings`，
-/// 由 Provider 触发路径与恢复 worker 共享同一份配置事实
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderFreezePolicy {
-    enabled: bool,
-    threshold: u32,
-    window: Duration,
-    freeze_duration: Duration,
-    probe_enabled: bool,
-    probe_model: Option<String>,
-    adaptive_concurrency: bool,
-}
-
-impl ProviderFreezePolicy {
-    /// 管理写入与运行策略构造共用的冻结约束
-    pub fn validate_values(
-        threshold: u32,
-        window_seconds: u64,
-        duration_seconds: u64,
-        probe_model: Option<&str>,
-    ) -> Result<(), &'static str> {
-        for (valid, field) in [
-            (
-                (2..=1_000).contains(&threshold),
-                "account_auto_freeze_threshold",
-            ),
-            (
-                (60..=3_600).contains(&window_seconds),
-                "account_auto_freeze_window_seconds",
-            ),
-            (
-                (300..=604_800).contains(&duration_seconds),
-                "account_auto_freeze_duration_seconds",
-            ),
-            (
-                valid_optional_probe_model(probe_model),
-                "account_auto_freeze_probe_model",
-            ),
-        ] {
-            if !valid {
-                return Err(field);
-            }
-        }
-        Ok(())
-    }
-
-    /// 边界与迁移 `0010_account_auto_freeze.sql` 的 check 约束一致；
-    /// store 层写入前已校验，这里兜底防御越界配置
-    pub fn try_new(
-        enabled: bool,
-        threshold: u32,
-        window_seconds: u64,
-        freeze_duration_seconds: u64,
-        probe_enabled: bool,
-        probe_model: Option<String>,
-        adaptive_concurrency: bool,
-    ) -> Result<Self, ProviderStoreError> {
-        if Self::validate_values(
-            threshold,
-            window_seconds,
-            freeze_duration_seconds,
-            probe_model.as_deref(),
-        )
-        .is_err()
-        {
-            return Err(ProviderStoreError::new(
-                ProviderStoreErrorKind::InvalidData,
-                "validate freeze policy",
-            ));
-        }
-        Ok(Self {
-            enabled,
-            threshold,
-            window: Duration::from_secs(window_seconds),
-            freeze_duration: Duration::from_secs(freeze_duration_seconds),
-            probe_enabled,
-            probe_model,
-            adaptive_concurrency,
-        })
-    }
-
-    /// 功能关闭时的全零策略；触发路径与 worker 都以此短路
-    #[must_use]
-    pub const fn disabled() -> Self {
-        Self {
-            enabled: false,
-            threshold: 2,
-            window: Duration::from_secs(60),
-            freeze_duration: Duration::from_secs(300),
-            probe_enabled: false,
-            probe_model: None,
-            adaptive_concurrency: false,
-        }
-    }
-
-    #[must_use]
-    pub const fn enabled(&self) -> bool {
-        self.enabled
-    }
-
-    /// 窗口内触发冻结的请求级失败次数阈值
-    #[must_use]
-    pub const fn threshold(&self) -> u32 {
-        self.threshold
-    }
-
-    /// 失败计数滑动窗口；每次失败都会顺延窗口
-    #[must_use]
-    pub const fn window(&self) -> Duration {
-        self.window
-    }
-
-    /// 冻结时长；探测失败后的顺延也使用该值
-    #[must_use]
-    pub const fn freeze_duration(&self) -> Duration {
-        self.freeze_duration
-    }
-
-    #[must_use]
-    pub const fn probe_enabled(&self) -> bool {
-        self.probe_enabled
-    }
-
-    /// 探测模型；`None` 表示由 worker 选择账号可用的第一个模型
-    #[must_use]
-    pub fn probe_model(&self) -> Option<&str> {
-        self.probe_model.as_deref()
-    }
-
-    #[must_use]
-    pub const fn adaptive_concurrency(&self) -> bool {
-        self.adaptive_concurrency
     }
 }
 

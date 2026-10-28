@@ -20,11 +20,11 @@ use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
-    ProviderCooldownScope, ProviderFreezePolicy, ProviderLeaseAcquisition, ProviderLeasePort,
-    ProviderLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
-    ProviderSchedulingLeaseRequest, ProviderSchedulingState, ProviderScopedCooldown,
-    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionExclusionPort,
-    ProviderSessionExclusions, ProviderStoreError,
+    ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderSchedulingLeaseRequest,
+    ProviderSchedulingState, ProviderScopedCooldown, ProviderSessionAffinityKey,
+    ProviderSessionAffinityPort, ProviderSessionExclusionPort, ProviderSessionExclusions,
+    ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::{
@@ -1115,36 +1115,6 @@ pub(crate) fn runtime_policy() -> Arc<dyn ProviderRuntimePolicyPort> {
     Arc::new(StaticRuntimePolicy)
 }
 
-/// 冻结策略可配置的运行时策略 fake；容量熔断触发测试用
-pub(crate) struct StaticFreezePolicy(ProviderFreezePolicy);
-
-impl StaticFreezePolicy {
-    /// 构造带固定冻结策略的端口句柄；命名沿用测试构造器语义
-    #[must_use]
-    pub(crate) fn policy_port(policy: ProviderFreezePolicy) -> Arc<dyn ProviderRuntimePolicyPort> {
-        Arc::new(Self(policy))
-    }
-}
-
-impl ProviderRuntimePolicyPort for StaticFreezePolicy {
-    fn load_refresh_policy(
-        &self,
-    ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
-        Box::pin(async {
-            ProviderRefreshPolicy::try_new(
-                Duration::from_secs(60 * 60),
-                NonZeroU32::new(2).expect("positive concurrency"),
-            )
-        })
-    }
-
-    fn load_freeze_policy(
-        &self,
-    ) -> BoxFuture<'_, Result<ProviderFreezePolicy, ProviderStoreError>> {
-        Box::pin(async { Ok(self.0.clone()) })
-    }
-}
-
 pub(crate) fn secret(access_token: &str) -> CodexOAuthSecret {
     CodexOAuthSecret {
         access_token: SecretString::from(access_token.to_owned()),
@@ -1170,7 +1140,6 @@ type CooldownReadHook =
 #[derive(Clone, Default)]
 pub(crate) struct MemoryCooldownPort {
     pub(crate) cooldowns: Arc<Mutex<BTreeMap<ProviderAccountId, ProviderCooldown>>>,
-    capacity_failures: Arc<Mutex<BTreeMap<ProviderAccountId, (u32, u32)>>>,
     before_read: Option<Arc<CooldownReadHook>>,
 }
 
@@ -1183,16 +1152,6 @@ impl MemoryCooldownPort {
     pub(crate) fn with_read_hook(mut self, hook: Arc<CooldownReadHook>) -> Self {
         self.before_read = Some(hook);
         self
-    }
-
-    /// 测试断言用：窗口内累计失败次数与在途峰值
-    #[must_use]
-    pub(crate) fn capacity_evidence(&self, account_id: &ProviderAccountId) -> Option<(u32, u32)> {
-        self.capacity_failures
-            .lock()
-            .expect("capacity failures lock")
-            .get(account_id)
-            .copied()
     }
 }
 
@@ -1271,24 +1230,6 @@ impl ProviderCooldownPort for MemoryCooldownPort {
         Box::pin(async { Ok(false) })
     }
 
-    fn record_capacity_failure<'a>(
-        &'a self,
-        account_id: &'a ProviderAccountId,
-        _window: Duration,
-        in_flight: u32,
-    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>> {
-        Box::pin(async move {
-            let mut failures = self
-                .capacity_failures
-                .lock()
-                .expect("capacity failures lock");
-            let entry = failures.entry(account_id.clone()).or_insert((0, 0));
-            entry.0 = entry.0.saturating_add(1);
-            entry.1 = entry.1.max(in_flight);
-            Ok(entry.0)
-        })
-    }
-
     fn clear_after_success<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
@@ -1297,30 +1238,13 @@ impl ProviderCooldownPort for MemoryCooldownPort {
         Box::pin(async move {
             let mut cooldowns = self.cooldowns.lock().expect("cooldown lock");
             if cooldowns.get(account_id).is_some_and(|value| {
-                value.kind().is_capacity_freeze() || value.credential_revision() > _through_revision
+                value.kind().is_error_protection()
+                    || value.credential_revision() > _through_revision
             }) {
                 return Ok(());
             }
             cooldowns.remove(account_id);
-            self.capacity_failures
-                .lock()
-                .expect("capacity failures lock")
-                .remove(account_id);
             Ok(())
-        })
-    }
-
-    fn capacity_peak_in_flight<'a>(
-        &'a self,
-        account_id: &'a ProviderAccountId,
-    ) -> BoxFuture<'a, Result<Option<u32>, ProviderStoreError>> {
-        Box::pin(async move {
-            Ok(self
-                .capacity_failures
-                .lock()
-                .expect("capacity failures lock")
-                .get(account_id)
-                .map(|(_, peak)| *peak))
         })
     }
 }

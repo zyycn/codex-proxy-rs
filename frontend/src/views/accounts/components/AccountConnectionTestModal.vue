@@ -65,6 +65,7 @@ function connectionLogClass(tone: string) {
           :error-message="account.errorMessage"
           :rate-limit-recovery-display="account.quota.rateLimitRecoveryDisplay"
           :rate-limit-reason="account.quota.rateLimitReason"
+          :protection-rules="account.quota.protectionRules"
           :recovery-probe-required="account.quota.recoveryProbeRequired"
           :next-refresh-at="account.nextRefreshAt"
           :next-refresh-at-display="account.nextRefreshAtDisplay"

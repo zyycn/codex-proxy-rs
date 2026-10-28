@@ -65,7 +65,6 @@ impl CodexCredentialQuotaService {
         http: Client,
         base_url: String,
         cooldowns: Arc<dyn ProviderCooldownPort>,
-        leases: Arc<dyn ProviderLeasePort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
@@ -75,9 +74,7 @@ impl CodexCredentialQuotaService {
             http,
             base_url,
             cooldowns,
-            leases,
             runtime_policy,
-            freeze_policy_cache: Mutex::new(None),
             scheduling: CodexQuotaSchedulingProjection::default(),
             reset_consume_locks: ResetCreditLocks::default(),
             initial_sync_delays: Arc::new(|| {
@@ -95,82 +92,6 @@ impl CodexCredentialQuotaService {
     pub fn with_initial_sync_delays(mut self, delays: CodexInitialSyncDelays) -> Self {
         self.initial_sync_delays = delays;
         self
-    }
-
-    /// 读取容量熔断策略（带短 TTL 缓存）；读取失败退化为关闭，熔断不得放大失败
-    async fn freeze_policy(&self) -> ProviderFreezePolicy {
-        {
-            let cache = self.freeze_policy_cache.lock().await;
-            if let Some((policy, loaded_at)) = cache.as_ref()
-                && loaded_at.elapsed() < FREEZE_POLICY_CACHE_TTL
-            {
-                return policy.clone();
-            }
-        }
-        let loaded = self.runtime_policy.load_freeze_policy().await.ok();
-        let mut cache = self.freeze_policy_cache.lock().await;
-        if let Some(policy) = loaded {
-            *cache = Some((policy.clone(), Instant::now()));
-            return policy;
-        }
-        cache
-            .as_ref()
-            .filter(|(_, loaded_at)| loaded_at.elapsed() < FREEZE_POLICY_CACHE_TTL)
-            .map_or_else(ProviderFreezePolicy::disabled, |(policy, _)| policy.clone())
-    }
-
-    /// 容量熔断入口：滑动窗口内累计容量类失败，达到阈值即写入带
-    /// `CapacityFreeze` 类别的账号级冷却
-    /// 调度侧立即屏蔽该账号，恢复由
-    /// freeze-recovery worker 处理；本路径只依赖 Redis 可丢失事实
-    pub async fn apply_capacity_failure(&self, account: &ProviderAccount, observed_at: SystemTime) {
-        let policy = self.freeze_policy().await;
-        if !policy.enabled() {
-            return;
-        }
-        let in_flight = self.current_in_flight(account.id()).await;
-        let Ok(count) = self
-            .cooldowns
-            .record_capacity_failure(account.id(), policy.window(), in_flight)
-            .await
-        else {
-            return;
-        };
-        if count < policy.threshold() {
-            return;
-        }
-        let Some(until) = observed_at.checked_add(policy.freeze_duration()) else {
-            return;
-        };
-        let cooldown = ProviderCooldown::new_with_kind(
-            account.id().clone(),
-            account.revision(),
-            until,
-            if policy.probe_enabled() {
-                ProviderCooldownKind::CapacityFreezeProbe
-            } else {
-                ProviderCooldownKind::CapacityFreeze
-            },
-        );
-        if self.cooldowns.put_if_later(cooldown).await.is_ok() {
-            tracing::warn!(
-                account_id = account.id().as_str(),
-                threshold = policy.threshold(),
-                window_seconds = policy.window().as_secs(),
-                freeze_seconds = policy.freeze_duration().as_secs(),
-                peak_in_flight = in_flight,
-                "账号容量熔断触发：冻结该账号一段时间",
-            );
-        }
-    }
-
-    async fn current_in_flight(&self, account_id: &ProviderAccountId) -> u32 {
-        self.leases
-            .account_in_flight(std::slice::from_ref(account_id))
-            .await
-            .ok()
-            .and_then(|signals| signals.get(account_id).copied())
-            .unwrap_or(0)
     }
 
     /// 真实推理错误只更新额度访问事实，不伪造 Provider JSON 或展示百分比

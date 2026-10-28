@@ -1615,6 +1615,18 @@ fn decoder_should_scrub_account_fingerprints_from_failure_messages() {
         visible.message(),
         "Too many requests for team [redacted] and model grok-4. Requests per Second (actual/limit): 2/2"
     );
+    let fields = error
+        .upstream_failure_fields()
+        .expect("original upstream fields");
+    assert_eq!(fields.status, None);
+    assert_eq!(fields.error_type, None);
+    assert!(
+        fields
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("00000000-0000-0000-0000-000000000013")
+    );
     assert!(!format!("{error:?}").contains("00000000-0000"));
 }
 
@@ -1628,6 +1640,7 @@ fn decoder_should_omit_client_details_for_unstructured_failures() {
         .push(body.as_bytes())
         .expect_err("failed response must surface");
 
+    assert_eq!(error.upstream_failure_fields().unwrap().message, None);
     assert!(error.client_visible_upstream_error().is_none());
     assert_eq!(
         error.upstream_code().map(|code| code.as_str()),

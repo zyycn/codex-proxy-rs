@@ -315,6 +315,7 @@ const {
                 :error-message="row.errorMessage"
                 :rate-limit-recovery-display="row.quota.rateLimitRecoveryDisplay"
                 :rate-limit-reason="row.quota.rateLimitReason"
+                :protection-rules="row.quota.protectionRules"
                 :recovery-probe-required="row.quota.recoveryProbeRequired"
                 :next-refresh-at="row.nextRefreshAt"
                 :next-refresh-at-display="row.nextRefreshAtDisplay"

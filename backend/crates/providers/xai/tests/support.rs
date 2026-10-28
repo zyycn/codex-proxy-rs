@@ -974,28 +974,12 @@ impl ProviderCooldownPort for MemoryCooldownPort {
         })
     }
 
-    fn record_capacity_failure<'a>(
-        &'a self,
-        _account_id: &'a ProviderAccountId,
-        _window: Duration,
-        _in_flight: u32,
-    ) -> futures::future::BoxFuture<'a, Result<u32, ProviderStoreError>> {
-        Box::pin(async { Ok(0) })
-    }
-
     fn clear_after_success<'a>(
         &'a self,
         _account_id: &'a ProviderAccountId,
         _through_revision: gateway_core::account::CredentialRevision,
     ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async { Ok(()) })
-    }
-
-    fn capacity_peak_in_flight<'a>(
-        &'a self,
-        _account_id: &'a ProviderAccountId,
-    ) -> futures::future::BoxFuture<'a, Result<Option<u32>, ProviderStoreError>> {
-        Box::pin(async { Ok(None) })
     }
 }
 

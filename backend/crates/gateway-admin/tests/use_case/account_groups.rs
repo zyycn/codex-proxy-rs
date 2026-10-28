@@ -315,6 +315,7 @@ impl AccountRuntimeStore for FakeRuntimeStore {
     ) -> AdminStoreResult<AccountRuntimeSnapshot> {
         *self.requested_accounts.lock().expect("requested accounts") = account_ids.to_vec();
         Ok(AccountRuntimeSnapshot {
+            protection_rules: std::collections::BTreeMap::new(),
             cooldown: BTreeMap::from([(
                 "acct_limited".to_owned(),
                 std::time::SystemTime::from(Utc::now() + Duration::minutes(5)).into(),
@@ -326,13 +327,6 @@ impl AccountRuntimeStore for FakeRuntimeStore {
     async fn active_freezes(
         &self,
     ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountFreeze>> {
-        Ok(BTreeMap::new())
-    }
-
-    async fn capacity_peaks(
-        &self,
-        _account_ids: &[String],
-    ) -> AdminStoreResult<BTreeMap<String, u32>> {
         Ok(BTreeMap::new())
     }
 

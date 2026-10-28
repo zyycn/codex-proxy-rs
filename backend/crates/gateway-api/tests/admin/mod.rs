@@ -647,13 +647,7 @@ impl SettingsStore for MemorySettingsStore {
                 usage_retention_days: command.values.usage_retention_days,
                 ops_event_retention_days: command.values.ops_event_retention_days,
                 audit_retention_days: command.values.audit_retention_days,
-                account_auto_freeze_enabled: true,
-                account_auto_freeze_threshold: 12,
-                account_auto_freeze_window_seconds: 600,
-                account_auto_freeze_duration_seconds: 7_200,
-                account_auto_freeze_probe_enabled: true,
-                account_auto_freeze_probe_model: None,
-                account_auto_freeze_adaptive_concurrency: true,
+                account_error_protection: command.values.account_error_protection,
                 account_warmup_enabled: false,
                 account_warmup_schedule_time: "08:00".to_owned(),
                 account_warmup_model: None,
@@ -1400,6 +1394,7 @@ impl AccountRuntimeStore for UnusedStore {
     async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot> {
         Ok(AccountRuntimeSnapshot {
             cooldown: BTreeMap::new(),
+            protection_rules: BTreeMap::new(),
             in_flight: Some(BTreeMap::new()),
         })
     }
@@ -1407,6 +1402,7 @@ impl AccountRuntimeStore for UnusedStore {
     async fn account_runtime(&self, _: &[String]) -> AdminStoreResult<AccountRuntimeSnapshot> {
         Ok(AccountRuntimeSnapshot {
             cooldown: BTreeMap::new(),
+            protection_rules: BTreeMap::new(),
             in_flight: Some(BTreeMap::new()),
         })
     }
@@ -1414,13 +1410,6 @@ impl AccountRuntimeStore for UnusedStore {
     async fn active_freezes(
         &self,
     ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountFreeze>> {
-        Ok(BTreeMap::new())
-    }
-
-    async fn capacity_peaks(
-        &self,
-        _account_ids: &[String],
-    ) -> AdminStoreResult<BTreeMap<String, u32>> {
         Ok(BTreeMap::new())
     }
 
@@ -1843,13 +1832,7 @@ fn test_runtime_settings() -> RuntimeSettings {
             usage_retention_days: 31,
             ops_event_retention_days: 30,
             audit_retention_days: 90,
-            account_auto_freeze_enabled: true,
-            account_auto_freeze_threshold: 12,
-            account_auto_freeze_window_seconds: 600,
-            account_auto_freeze_duration_seconds: 7_200,
-            account_auto_freeze_probe_enabled: true,
-            account_auto_freeze_probe_model: None,
-            account_auto_freeze_adaptive_concurrency: true,
+            account_error_protection: Default::default(),
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,

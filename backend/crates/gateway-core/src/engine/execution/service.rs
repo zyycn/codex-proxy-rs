@@ -92,6 +92,7 @@ pub struct DefaultExecutionService {
     frontend_authentication: Option<FrontendAuthenticationExtensionIndex>,
     session_affinity: Option<Arc<dyn ProviderSessionAffinityPort>>,
     client_retry: Option<Arc<dyn crate::engine::client_retry::ClientRetryStore>>,
+    account_error_protection: Option<Arc<dyn crate::provider_ports::ProviderCooldownPort>>,
     snapshot_refresh: Option<Arc<RuntimeSnapshotPublisher>>,
     active_requests: ActiveRequestRegistry,
 }
@@ -123,6 +124,7 @@ impl DefaultExecutionService {
             frontend_authentication: None,
             session_affinity: None,
             client_retry: None,
+            account_error_protection: None,
             snapshot_refresh: None,
             active_requests: Arc::default(),
         }
@@ -131,6 +133,15 @@ impl DefaultExecutionService {
     #[must_use]
     pub fn with_budget(mut self, budget: Arc<dyn ClientBudgetPort>) -> Self {
         self.budget = Some(budget);
+        self
+    }
+
+    #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        store: Arc<dyn crate::provider_ports::ProviderCooldownPort>,
+    ) -> Self {
+        self.account_error_protection = Some(store);
         self
     }
 
@@ -850,6 +861,9 @@ impl DefaultExecutionService {
             deadline_at: authorization.deadline_at,
         };
         let mut engine = GatewayEngine::new(self.observations.clone(), providers);
+        if let Some(store) = &self.account_error_protection {
+            engine = engine.with_account_error_protection(Arc::clone(store));
+        }
         // 插件内部调用不共享外部客户端的失败轮次，探测另走 transient engine
         if authorization.nested.is_none()
             && authorization.bound.is_none()

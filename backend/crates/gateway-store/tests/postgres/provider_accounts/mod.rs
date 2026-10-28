@@ -9,6 +9,7 @@ use std::{
 mod admin_adapter;
 mod authorization;
 mod deletion;
+mod protection_revision;
 mod quota_forecast;
 mod timestamps;
 mod usage_projection;
@@ -852,6 +853,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
                 sort: None,
             },
             AccountRuntimeSnapshot {
+                protection_rules: std::collections::BTreeMap::new(),
                 cooldown: BTreeMap::from([(
                     "acct_alpha".to_owned(),
                     SystemTime::from(now + TimeDelta::minutes(5)).into(),

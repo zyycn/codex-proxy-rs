@@ -488,6 +488,8 @@ pub struct ResponsesSseFailure {
     pub message: String,
     /// 上游错误码
     pub upstream_code: Option<String>,
+    /// 上游显式 message，保留缺失与空串的区别
+    pub upstream_message: Option<String>,
     /// 上游显式错误类型；不从业务码推导
     pub upstream_type: Option<String>,
     /// 上游显式状态码；不从业务码或错误类型推导
@@ -524,6 +526,7 @@ impl ResponsesSseFailure {
             event: event.to_string(),
             message: failure_message(value).unwrap_or_else(|| "Codex upstream SSE failed".into()),
             upstream_code: failure_code(value),
+            upstream_message: failure_message(value),
             upstream_type: failure_type(value),
             explicit_status_code: failure_explicit_status_code(value),
             retry_after_seconds: events::retry_after_seconds_from_value(value),

@@ -640,6 +640,15 @@ async fn inference_transport_should_retain_http_failure_bodies_only_in_explicit_
         );
         assert!(error.transport_metrics().headers_ms().is_some());
         assert!(error.client_visible_upstream_error().is_none());
+        assert_eq!(
+            error.upstream_failure_fields(),
+            Some(&gateway_core::upstream::UpstreamFailureFields {
+                status: Some(status),
+                code: None,
+                error_type: None,
+                message: None,
+            })
+        );
         assert_eq!(error.raw_upstream_error().unwrap().as_str(), secret);
         assert!(!rendered.contains(&secret));
     }
@@ -712,6 +721,15 @@ async fn inference_transport_should_scrub_nested_json_error_details() {
             Some("rate-limit:burst"),
             Some("rate_limit_error"),
         )
+    );
+    assert_eq!(
+        error.upstream_failure_fields(),
+        Some(&gateway_core::upstream::UpstreamFailureFields {
+            status: Some(429),
+            code: Some("rate-limit:burst".into()),
+            error_type: Some("rate_limit_error".into()),
+            message: Some(format!("team {account_fingerprint}\nrate limited")),
+        })
     );
     assert!(!rendered.contains(account_fingerprint));
 }

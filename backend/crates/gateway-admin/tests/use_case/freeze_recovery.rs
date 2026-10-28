@@ -1,4 +1,4 @@
-//! 容量熔断冻结恢复编排回归：到期探测、失败顺延与自适应并发下调
+//! 账号保护恢复编排：到期探测、快照参数与失败顺延
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -24,7 +24,7 @@ use gateway_core::task::{
 use super::AdminHarness;
 use super::accounts::{FakeAccountStore, FakeProviderAdmin, account_record, events, revision};
 
-fn runtime_settings(enabled: bool, probe_enabled: bool, adaptive: bool) -> RuntimeSettings {
+fn runtime_settings(enabled: bool, probe_enabled: bool) -> RuntimeSettings {
     RuntimeSettings {
         request_profiles: Default::default(),
         config_revision: revision(1),
@@ -52,13 +52,22 @@ fn runtime_settings(enabled: bool, probe_enabled: bool, adaptive: bool) -> Runti
             usage_retention_days: 31,
             ops_event_retention_days: 30,
             audit_retention_days: 90,
-            account_auto_freeze_enabled: enabled,
-            account_auto_freeze_threshold: 12,
-            account_auto_freeze_window_seconds: 600,
-            account_auto_freeze_duration_seconds: 7_200,
-            account_auto_freeze_probe_enabled: probe_enabled,
-            account_auto_freeze_probe_model: Some("gpt-5.5".to_owned()),
-            account_auto_freeze_adaptive_concurrency: adaptive,
+            account_error_protection: gateway_core::account::AccountErrorProtection {
+                enabled,
+                probe_enabled,
+                probe_model: Some("gpt-5.5".to_owned()),
+                rules: vec![gateway_core::account::AccountErrorRule {
+                    id: "sample".into(),
+                    name: "示例".into(),
+                    conditions: vec![gateway_core::account::AccountErrorCondition {
+                        field: gateway_core::account::AccountErrorField::Code,
+                        operator: gateway_core::account::AccountErrorOperator::Equals,
+                        values: vec![Some("custom_failure".into())],
+                        ignore_case: false,
+                    }],
+                }],
+                ..Default::default()
+            },
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
@@ -131,19 +140,17 @@ fn store_unavailable() -> AdminStoreError {
     )
 }
 
-/// 记录解冻/顺延调用的运行态 fake；冻结与峰值证据由测试预置
+/// 记录解冻与顺延调用，冻结快照由测试预置
 struct FreezeRuntimeStore {
     freezes: BTreeMap<String, AccountFreeze>,
-    peaks: BTreeMap<String, u32>,
     cleared: Mutex<Vec<String>>,
     extended: Mutex<Vec<(String, DateTime<Utc>)>>,
 }
 
 impl FreezeRuntimeStore {
-    fn new(freezes: BTreeMap<String, AccountFreeze>, peaks: BTreeMap<String, u32>) -> Arc<Self> {
+    fn new(freezes: BTreeMap<String, AccountFreeze>) -> Arc<Self> {
         Arc::new(Self {
             freezes,
-            peaks,
             cleared: Mutex::new(Vec::new()),
             extended: Mutex::new(Vec::new()),
         })
@@ -186,16 +193,6 @@ impl AccountRuntimeStore for FreezeRuntimeStore {
 
     async fn active_freezes(&self) -> AdminStoreResult<BTreeMap<String, AccountFreeze>> {
         Ok(self.freezes.clone())
-    }
-
-    async fn capacity_peaks(
-        &self,
-        account_ids: &[String],
-    ) -> AdminStoreResult<BTreeMap<String, u32>> {
-        Ok(account_ids
-            .iter()
-            .filter_map(|id| self.peaks.get(id).map(|peak| (id.clone(), *peak)))
-            .collect())
     }
 
     async fn finish_freeze(
@@ -241,9 +238,10 @@ struct FailingProbe;
 impl AccountProbe for FailingProbe {
     fn probe(
         &self,
-        _: AccountProbeRequest,
+        request: AccountProbeRequest,
         _: Option<Arc<gateway_core::routing::RuntimeSnapshot>>,
     ) -> futures::future::BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        assert_eq!(request.upstream_model.as_str(), "snapshot-model");
         Box::pin(async {
             Err(AccountProbeError::new(
                 gateway_core::error::GatewayError::new(
@@ -317,6 +315,9 @@ fn freeze_until(until: DateTime<Utc>) -> BTreeMap<String, AccountFreeze> {
     BTreeMap::from([(
         "acct_test".to_owned(),
         AccountFreeze {
+            duration_seconds: None,
+            probe_model: None,
+            protection_rules: Vec::new(),
             credential_revision: revision(1),
             until,
             generation: "freeze-generation".to_owned(),
@@ -331,9 +332,9 @@ fn freeze_due() -> BTreeMap<String, AccountFreeze> {
 
 #[tokio::test]
 async fn probe_success_clears_freeze() {
-    let runtime = FreezeRuntimeStore::new(freeze_due(), BTreeMap::new());
+    let runtime = FreezeRuntimeStore::new(freeze_due());
     let (task, _store) = recovery_task(
-        runtime_settings(true, true, false),
+        runtime_settings(true, true),
         Arc::clone(&runtime),
         Arc::new(SuccessfulProbe),
     )
@@ -346,10 +347,13 @@ async fn probe_success_clears_freeze() {
 }
 
 #[tokio::test]
-async fn probe_failure_postpones_freeze() {
-    let runtime = FreezeRuntimeStore::new(freeze_due(), BTreeMap::new());
+async fn probe_failure_postpones_using_the_freeze_snapshot() {
+    let mut freezes = freeze_due();
+    freezes.get_mut("acct_test").unwrap().duration_seconds = Some(300);
+    freezes.get_mut("acct_test").unwrap().probe_model = Some("snapshot-model".into());
+    let runtime = FreezeRuntimeStore::new(freezes);
     let (task, _store) = recovery_task(
-        runtime_settings(true, true, false),
+        runtime_settings(true, true),
         Arc::clone(&runtime),
         Arc::new(FailingProbe),
     )
@@ -364,16 +368,16 @@ async fn probe_failure_postpones_freeze() {
     assert_eq!(account_id, "acct_test");
     let remaining = until.timestamp_millis() - Utc::now().timestamp_millis();
     assert!(
-        remaining > 7_000_000 && remaining <= 7_200_000,
-        "postponed freeze should be about 2 hours, got {remaining}ms"
+        remaining > 290_000 && remaining <= 300_000,
+        "postponed freeze should use the frozen 5-minute duration, got {remaining}ms"
     );
 }
 
 #[tokio::test]
 async fn disabled_policy_releases_due_freeze_without_probing() {
-    let runtime = FreezeRuntimeStore::new(freeze_due(), BTreeMap::new());
+    let runtime = FreezeRuntimeStore::new(freeze_due());
     let (task, _store) = recovery_task(
-        runtime_settings(false, true, false),
+        runtime_settings(false, true),
         Arc::clone(&runtime),
         Arc::new(SuccessfulProbe),
     )
@@ -385,59 +389,12 @@ async fn disabled_policy_releases_due_freeze_without_probing() {
     assert!(runtime.extended().is_empty());
 }
 
-#[tokio::test]
-async fn adaptive_concurrency_lowers_limit_to_observed_peak() {
-    let runtime = FreezeRuntimeStore::new(
-        freeze_until(Utc::now() + TimeDelta::hours(1)),
-        BTreeMap::from([("acct_test".to_owned(), 4_u32)]),
-    );
-    let (task, store) = recovery_task(
-        runtime_settings(true, false, true),
-        Arc::clone(&runtime),
-        Arc::new(SuccessfulProbe),
-    )
-    .await;
-
-    run_cycle(task.as_ref()).await;
-
-    // 峰值 4 × 0.8 = 3（不低于下限 2），低于全局默认 5，应下调到 3
-    assert_eq!(
-        *store.lowered_limits.lock().expect("lowered limits"),
-        vec![("acct_test".to_owned(), 3)]
-    );
-    assert!(store.update_commands().is_empty());
-    assert!(runtime.extended().is_empty());
-    assert!(runtime.cleared().is_empty());
-}
-
-#[tokio::test]
-async fn adaptive_concurrency_never_raises_limit() {
-    let runtime = FreezeRuntimeStore::new(
-        freeze_until(Utc::now() + TimeDelta::hours(1)),
-        BTreeMap::from([("acct_test".to_owned(), 40_u32)]),
-    );
-    let (task, store) = recovery_task(
-        runtime_settings(true, false, true),
-        Arc::clone(&runtime),
-        Arc::new(SuccessfulProbe),
-    )
-    .await;
-
-    run_cycle(task.as_ref()).await;
-
-    // 峰值 40 的目标 32 高于全局默认 5；只降不升，不下发任何更新
-    assert!(store.update_commands().is_empty());
-}
-
 /// 到期时间还早（超过探测提前量）的冻结不发起探测
 #[tokio::test]
 async fn probe_skips_freezes_far_from_expiry() {
-    let runtime = FreezeRuntimeStore::new(
-        freeze_until(Utc::now() + TimeDelta::hours(1)),
-        BTreeMap::new(),
-    );
+    let runtime = FreezeRuntimeStore::new(freeze_until(Utc::now() + TimeDelta::hours(1)));
     let (task, _store) = recovery_task(
-        runtime_settings(true, true, false),
+        runtime_settings(true, true),
         Arc::clone(&runtime),
         Arc::new(SuccessfulProbe),
     )
@@ -449,13 +406,10 @@ async fn probe_skips_freezes_far_from_expiry() {
     assert!(runtime.extended().is_empty());
 }
 
-/// 停用账号不参与探测恢复；并发下调同样跳过
+/// 停用账号不参与探测恢复
 #[tokio::test]
 async fn disabled_accounts_are_skipped() {
-    let runtime = FreezeRuntimeStore::new(
-        freeze_due(),
-        BTreeMap::from([("acct_test".to_owned(), 4_u32)]),
-    );
+    let runtime = FreezeRuntimeStore::new(freeze_due());
     let mut record = account_record("openai");
     record.enabled = false;
     let store = FakeAccountStore::with_account(record, events());
@@ -463,7 +417,7 @@ async fn disabled_accounts_are_skipped() {
         .accounts(Arc::clone(&store) as Arc<dyn AccountStore>)
         .account_runtime(Arc::clone(&runtime) as Arc<dyn AccountRuntimeStore>)
         .settings(Arc::new(FreezeSettingsStore {
-            settings: runtime_settings(true, true, true),
+            settings: runtime_settings(true, true),
         }))
         .provider(FakeProviderAdmin::new("openai", events()))
         .probe(Arc::new(SuccessfulProbe))

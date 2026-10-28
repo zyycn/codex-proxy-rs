@@ -141,6 +141,7 @@ pub struct RuntimeSnapshotPublisher {
     compiler: Arc<RuntimeSnapshotCompiler>,
     snapshots: RuntimeSnapshotHandle,
     subscriptions: Arc<dyn SnapshotSubscriptionPort>,
+    account_error_protection: Option<Arc<dyn crate::provider_ports::ProviderCooldownPort>>,
     refresh_lock: Arc<Mutex<()>>,
     refresh_priority: Arc<SyncMutex<RefreshPriorityState>>,
 }
@@ -162,9 +163,19 @@ impl RuntimeSnapshotPublisher {
             compiler,
             snapshots,
             subscriptions,
+            account_error_protection: None,
             refresh_lock: Arc::new(Mutex::new(())),
             refresh_priority: Arc::new(SyncMutex::new(RefreshPriorityState::default())),
         }
+    }
+
+    #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        store: Arc<dyn crate::provider_ports::ProviderCooldownPort>,
+    ) -> Self {
+        self.account_error_protection = Some(store);
+        self
     }
 
     /// 串行重编译并替换本进程快照；无法确认配置时暂停新请求
@@ -217,11 +228,13 @@ impl RuntimeSnapshotPublisher {
             );
             if !changed
                 && !self.provider_catalogs_need_refresh()
-                && self
-                    .snapshots
-                    .acquire()
-                    .is_ok_and(|snapshot| snapshot.extensions().is_none_or(|set| set.is_ready()))
+                && let Ok(snapshot) = self.snapshots.acquire()
+                && snapshot.extensions().is_none_or(|set| set.is_ready())
             {
+                // 周期对账恢复可能丢失的 Redis gate，不因此重新编译目录或暂停现有配置
+                if !self.publish_protection_policy(&snapshot).await {
+                    tracing::warn!("account protection policy reconciliation is unavailable");
+                }
                 return Ok(persisted_revision);
             }
             changed
@@ -254,8 +267,45 @@ impl RuntimeSnapshotPublisher {
             }
         };
         let revision = snapshot.revision();
+        let protection_changed = self
+            .snapshots
+            .snapshot_for_diagnostics()
+            .is_none_or(|previous| {
+                previous.settings().account_error_protection_revision()
+                    != snapshot.settings().account_error_protection_revision()
+            });
+        if (protection_changed || matches!(mode, RefreshMode::Reconcile))
+            && !self.publish_protection_policy(&snapshot).await
+        {
+            if protection_changed {
+                // 真正的策略替换必须先撤销旧反馈资格，继续沿用已有 pending 发布语义
+                self.snapshots.suspend();
+                return Err(RuntimeSnapshotCompileError::StoreUnavailable);
+            }
+            tracing::warn!("account protection policy reconciliation is unavailable");
+        }
         self.snapshots.publish(snapshot);
         Ok(revision)
+    }
+
+    async fn publish_protection_policy(&self, snapshot: &crate::routing::RuntimeSnapshot) -> bool {
+        let Some(store) = &self.account_error_protection else {
+            return true;
+        };
+        let Ok(revision) =
+            ConfigRevision::new(snapshot.settings().account_error_protection_revision())
+        else {
+            return false;
+        };
+        let publish = store
+            .publish_protection_policy(snapshot.settings().account_error_protection(), revision)
+            .fuse();
+        let timeout = Delay::new(Duration::from_secs(1)).fuse();
+        pin_mut!(publish, timeout);
+        select_biased! {
+            result = publish => result.is_ok(),
+            _ = timeout => false,
+        }
     }
 
     #[must_use]

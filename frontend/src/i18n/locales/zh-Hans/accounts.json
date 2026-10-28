@@ -574,13 +574,15 @@
       "reauthorizeHelp": "重新授权后，账号会重新参与调度",
       "replaceCredentialsHelp": "请更新或重新导入凭据，再次测试连接",
       "upstreamRestrictionHelp": "请确认上游账号状态，解除限制后再启用",
-      "capacityFailuresHelp": "容量类请求失败累计达到阈值，系统已暂停该账号的调度",
       "recoveryProbeHelp": "冷却结束后进行恢复探测，成功后恢复调度，也可手动恢复账号",
       "recoveryHelp": "冷却结束后自动恢复调度，也可手动恢复账号",
       "nextAttempt": "，下次尝试：{nextRefreshDisplay}",
       "clickOrFocusToViewDetails": "{title}，{description}{retry}，点击或聚焦查看详情",
       "resumeDetection": "恢复探测",
-      "expectedToRecover": "预计恢复"
+      "expectedToRecover": "预计恢复",
+      "errorProtection": "错误保护",
+      "protectionFailuresHelp": "匹配规则的失败累计达到阈值，系统已暂停该账号的调度",
+      "matchedProtectionRules": "触发时命中的规则"
     },
     "fields": {
       "platformType": "平台",

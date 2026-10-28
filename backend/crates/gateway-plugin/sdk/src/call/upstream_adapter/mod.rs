@@ -188,6 +188,8 @@ pub enum UpstreamFailureKind {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct UpstreamFailure {
     pub kind: UpstreamFailureKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_type: Option<String>,
     pub status: Option<u16>,
     pub retry_after_ms: Option<u64>,
     pub message: String,

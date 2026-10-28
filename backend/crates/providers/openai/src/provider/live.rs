@@ -343,6 +343,7 @@ impl CodexProvider {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
             })?,
         )
+        .with_credential_revision(lease.account().revision())
         .with_account_snapshot(Some(
             gateway_core::account::AccountHistorySnapshot::from_account(lease.account()),
         ))
@@ -422,7 +423,6 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
             response_origin: &request.response_origin,
             cyber_policy_scope: None,
             allows_account_state_mutation,
-            allows_capacity_feedback: !request.context.is_diagnostic_required_account(),
         };
         let active_account = request.lease.account().clone();
         let authorization = request

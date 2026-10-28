@@ -371,7 +371,7 @@ async fn capacity_freeze_survives_due_time_and_runtime_restart_until_probe_succe
     let key = namespace_keys(&mut connection, &namespace)
         .await
         .into_iter()
-        .find(|key| key.ends_with(":cooldown"))
+        .find(|key| key.ends_with(":error-protection"))
         .expect("freeze key");
     let ttl: i64 = redis::cmd("PTTL")
         .arg(key)
@@ -487,78 +487,265 @@ async fn stale_probe_cannot_recreate_manual_recovery_or_clear_or_extend_new_free
     );
 }
 
+fn protection_policy(threshold: u32) -> gateway_core::account::AccountErrorProtection {
+    serde_json::from_value(serde_json::json!({"enabled":true,"threshold":threshold,"windowSeconds":60,"durationSeconds":300,"probeEnabled":true,"probeModel":"probe-snapshot","rules":[{"id":"custom","name":"自定义拒绝","conditions":[{"field":"code","operator":"equals","values":["arbitrary_rejection"],"ignoreCase":false}]}]})).unwrap()
+}
+
+async fn protection_guard(
+    repository: &RedisCredentialCooldownRepository,
+    id: &ProviderAccountId,
+    revision: u64,
+    policy: &gateway_core::account::AccountErrorProtection,
+    policy_revision: u64,
+) -> gateway_core::provider_ports::AccountProtectionGuard {
+    repository
+        .begin_protection(
+            id,
+            CredentialRevision::new(revision).unwrap(),
+            &policy.fingerprint(),
+            gateway_core::routing::ConfigRevision::new(policy_revision).unwrap(),
+        )
+        .await
+        .unwrap()
+        .expect("active protection guard")
+}
+
+fn matched() -> Vec<gateway_core::account::AccountProtectionMatch> {
+    vec![gateway_core::account::AccountProtectionMatch {
+        id: "custom".into(),
+        name: "自定义拒绝".into(),
+    }]
+}
+
 #[tokio::test]
-async fn ordinary_success_and_later_429_preserve_capacity_freeze_and_peak_evidence() {
-    let Some((repository, _connection, _namespace)) = repository().await else {
+async fn protection_threshold_is_atomic_and_recovery_preserves_later_rate_limit() {
+    use gateway_admin::ports::store::AccountRuntimeStore;
+    let Some((repository, connection, namespace)) = repository().await else {
         return;
     };
-    let id = ProviderAccountId::new("acct_late_success").expect("account id");
-    let revision = CredentialRevision::new(1).expect("revision");
+    let policy = protection_policy(2);
     repository
-        .record_capacity_failure(&id, StdDuration::from_secs(600), 8)
+        .publish_protection_policy(
+            &policy,
+            gateway_core::routing::ConfigRevision::new(1).unwrap(),
+        )
         .await
-        .expect("failure evidence");
-    let frozen = CredentialCooldown {
-        kind: ProviderCooldownKind::CapacityFreezeProbe,
-        ..cooldown(id.as_str(), 1, 30)
-    };
-    repository
-        .cache_credential_cooldown(&frozen)
-        .await
-        .expect("freeze");
-    repository
-        .clear_after_success(&id, revision)
-        .await
-        .expect("late success");
-    assert_eq!(
-        repository.capacity_peak_in_flight(&id).await.expect("peak"),
-        Some(8)
+        .unwrap();
+    let id = ProviderAccountId::new("acct_custom").unwrap();
+    let a = protection_guard(&repository, &id, 1, &policy, 1).await;
+    let b = protection_guard(&repository, &id, 1, &policy, 1).await;
+    let matches = matched();
+    let (one, two) = tokio::join!(
+        repository.record_protection_failure(&a, &policy, &matches),
+        repository.record_protection_failure(&b, &policy, &matches)
     );
+    assert_ne!(one.unwrap(), two.unwrap());
+    let runtime = runtime_store(&repository, connection, &namespace);
+    let snapshot = runtime
+        .active_freezes()
+        .await
+        .unwrap()
+        .remove(id.as_str())
+        .unwrap();
+    assert_eq!(snapshot.protection_rules, matches);
+    assert_eq!(snapshot.duration_seconds, Some(300));
+    assert_eq!(snapshot.probe_model.as_deref(), Some("probe-snapshot"));
     assert!(
         !repository
-            .cache_credential_cooldown(&cooldown(id.as_str(), 1, 60))
+            .record_protection_failure(&a, &policy, &matches)
             .await
-            .expect("429 must not downgrade freeze")
+            .unwrap()
+    );
+    repository
+        .clear_after_success(&id, CredentialRevision::new(1).unwrap())
+        .await
+        .unwrap();
+    assert!(
+        repository
+            .read(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .kind()
+            .is_error_protection()
+    );
+    let rate = cooldown(id.as_str(), 1, 600);
+    assert!(repository.cache_credential_cooldown(&rate).await.unwrap());
+    assert!(
+        runtime
+            .finish_freeze(id.as_str(), &snapshot, None)
+            .await
+            .unwrap()
     );
     assert_eq!(
         repository
             .read_credential_cooldown(id.as_str())
             .await
-            .expect("read"),
-        Some(frozen)
+            .unwrap(),
+        Some(rate)
+    );
+    assert!(
+        !runtime
+            .finish_freeze(id.as_str(), &snapshot, None)
+            .await
+            .unwrap()
     );
 }
 
 #[tokio::test]
-async fn ordinary_success_still_clears_rate_limit_and_unfrozen_failure_evidence() {
-    let Some((repository, _connection, _namespace)) = repository().await else {
+async fn protection_feedback_is_fenced_by_success_manual_recovery_and_policy_revision() {
+    let Some((repository, _, _)) = repository().await else {
         return;
     };
-    let id = ProviderAccountId::new("acct_success_429").expect("id");
+    let policy = protection_policy(2);
+    let revision = gateway_core::routing::ConfigRevision::new(1).unwrap();
     repository
-        .record_capacity_failure(&id, StdDuration::from_secs(600), 3)
+        .publish_protection_policy(&policy, revision)
         .await
-        .expect("failure evidence");
-    repository
-        .cache_credential_cooldown(&cooldown(id.as_str(), 1, 30))
-        .await
-        .expect("429");
-    repository
-        .clear_after_success(&id, CredentialRevision::new(1).expect("revision"))
-        .await
-        .expect("success");
+        .unwrap();
+    let id = ProviderAccountId::new("acct_fenced").unwrap();
+    let before_failure = protection_guard(&repository, &id, 1, &policy, 1).await;
+    let failure = protection_guard(&repository, &id, 1, &policy, 1).await;
+    assert!(
+        !repository
+            .record_protection_failure(&failure, &policy, &matched())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repository
+            .record_protection_success(&before_failure)
+            .await
+            .unwrap()
+    );
+    let success = protection_guard(&repository, &id, 1, &policy, 1).await;
     assert!(
         repository
-            .read_credential_cooldown(id.as_str())
+            .record_protection_success(&success)
             .await
-            .expect("read")
-            .is_none()
+            .unwrap()
+    );
+    assert!(
+        !repository
+            .record_protection_failure(&failure, &policy, &matched())
+            .await
+            .unwrap()
+    );
+    let before_manual = protection_guard(&repository, &id, 1, &policy, 1).await;
+    repository
+        .clear(&id, CredentialRevision::new(1).unwrap())
+        .await
+        .unwrap();
+    assert!(
+        !repository
+            .record_protection_failure(&before_manual, &policy, &matched())
+            .await
+            .unwrap()
+    );
+    let old_a = protection_guard(&repository, &id, 1, &policy, 1).await;
+    // 同一策略的发布不推进代次；专属版本变化则即使内容相同也拒绝旧快照
+    repository
+        .publish_protection_policy(&policy, revision)
+        .await
+        .unwrap();
+    assert!(
+        !repository
+            .record_protection_failure(&old_a, &policy, &matched())
+            .await
+            .unwrap()
+    );
+    repository
+        .publish_protection_policy(
+            &policy,
+            gateway_core::routing::ConfigRevision::new(3).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !repository
+            .record_protection_failure(&old_a, &policy, &matched())
+            .await
+            .unwrap()
     );
     assert!(
         repository
-            .capacity_peak_in_flight(&id)
+            .begin_protection(
+                &id,
+                CredentialRevision::new(1).unwrap(),
+                &policy.fingerprint(),
+                revision
+            )
             .await
-            .expect("peak")
+            .unwrap()
             .is_none()
     );
+    let new_a = protection_guard(&repository, &id, 1, &policy, 3).await;
+    assert!(
+        !repository
+            .record_protection_failure(&new_a, &policy, &matched())
+            .await
+            .unwrap()
+    );
+    let second = protection_guard(&repository, &id, 1, &policy, 3).await;
+    assert!(
+        repository
+            .record_protection_failure(&second, &policy, &matched())
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn credential_rotation_and_redis_state_loss_reject_old_protection_feedback() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let policy = protection_policy(2);
+    repository
+        .publish_protection_policy(
+            &policy,
+            gateway_core::routing::ConfigRevision::new(1).unwrap(),
+        )
+        .await
+        .unwrap();
+    let id = ProviderAccountId::new("acct_rotated").unwrap();
+    let old = protection_guard(&repository, &id, 1, &policy, 1).await;
+    let new = protection_guard(&repository, &id, 2, &policy, 1).await;
+    assert!(
+        !repository
+            .record_protection_failure(&old, &policy, &matched())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repository
+            .record_protection_failure(&new, &policy, &matched())
+            .await
+            .unwrap()
+    );
+    let state = namespace_keys(&mut connection, &namespace)
+        .await
+        .into_iter()
+        .find(|key| key.ends_with(":error-protection-state"))
+        .unwrap();
+    redis::cmd("DEL")
+        .arg(state)
+        .query_async::<i64>(&mut connection)
+        .await
+        .unwrap();
+    assert!(
+        !repository
+            .record_protection_failure(&new, &policy, &matched())
+            .await
+            .unwrap()
+    );
+    let recovered = protection_guard(&repository, &id, 2, &policy, 1).await;
+    assert_ne!(recovered.reset_generation, new.reset_generation);
+    assert!(
+        !repository
+            .record_protection_failure(&recovered, &policy, &matched())
+            .await
+            .unwrap()
+    );
+    assert!(repository.read(&id).await.unwrap().is_none());
 }

@@ -8,6 +8,10 @@ use crate::identity::ProviderKind;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsValues {
+    #[serde(default)]
+    pub(crate) account_error_protection: crate::account::AccountErrorProtection,
+    #[serde(skip, default = "initial_protection_revision")]
+    pub(crate) account_error_protection_revision: u64,
     pub(crate) pricing: Arc<crate::metering::PricingOverrides>,
     pub(crate) request_profiles: Arc<BTreeMap<ProviderKind, crate::account::OpaqueProviderData>>,
     pub(crate) codex_privacy_policy: super::privacy::CodexPrivacyPolicy,
@@ -29,7 +33,36 @@ pub struct SettingsValues {
     pub(crate) min_codex_cli_version: Option<String>,
 }
 
+fn initial_protection_revision() -> u64 {
+    1
+}
+
 impl SettingsValues {
+    #[must_use]
+    pub const fn with_account_error_protection_revision(mut self, revision: u64) -> Self {
+        self.account_error_protection_revision = revision;
+        self
+    }
+
+    #[must_use]
+    pub const fn account_error_protection_revision(&self) -> u64 {
+        self.account_error_protection_revision
+    }
+
+    #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        policy: crate::account::AccountErrorProtection,
+    ) -> Self {
+        self.account_error_protection = policy;
+        self
+    }
+
+    #[must_use]
+    pub const fn account_error_protection(&self) -> &crate::account::AccountErrorProtection {
+        &self.account_error_protection
+    }
+
     #[must_use]
     pub fn with_codex_privacy_policy(mut self, policy: super::privacy::CodexPrivacyPolicy) -> Self {
         self.codex_privacy_policy = policy;
@@ -134,6 +167,8 @@ impl SettingsValues {
         min_codex_cli_version: Option<String>,
     ) -> Self {
         Self {
+            account_error_protection: Default::default(),
+            account_error_protection_revision: 1,
             request_profiles: Arc::default(),
             pricing: Arc::default(),
             codex_privacy_policy: Default::default(),

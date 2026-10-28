@@ -156,7 +156,6 @@ pub async fn initialize(
         http.clone(),
         config.base_url().to_owned(),
         ports.cooldowns(),
-        Arc::clone(&leases),
         Arc::clone(&runtime_policy),
     ));
     let profile_statistics = Arc::new(CodexCredentialProfileService::new(

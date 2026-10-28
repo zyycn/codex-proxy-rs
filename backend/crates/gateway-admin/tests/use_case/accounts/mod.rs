@@ -720,6 +720,7 @@ impl FakeAccountStore {
             last_error_message: account.last_error_message.clone(),
         };
         AccountPageItem {
+            protection_rules: Vec::new(),
             capacity: gateway_admin::model::accounts::AccountCapacity {
                 used_slots: None,
                 total_slots: account
@@ -1189,13 +1190,7 @@ impl SettingsStore for StaticSettingsStore {
                 usage_retention_days: 30,
                 ops_event_retention_days: 30,
                 audit_retention_days: 30,
-                account_auto_freeze_enabled: true,
-                account_auto_freeze_threshold: 12,
-                account_auto_freeze_window_seconds: 600,
-                account_auto_freeze_duration_seconds: 7_200,
-                account_auto_freeze_probe_enabled: true,
-                account_auto_freeze_probe_model: None,
-                account_auto_freeze_adaptive_concurrency: true,
+                account_error_protection: gateway_core::account::AccountErrorProtection::default(),
                 account_warmup_enabled: false,
                 account_warmup_schedule_time: "08:00".to_owned(),
                 account_warmup_model: None,
@@ -3680,6 +3675,7 @@ impl AccountRuntimeStore for CapacityRuntime {
             return Err(store_unavailable());
         }
         Ok(AccountRuntimeSnapshot {
+            protection_rules: std::collections::BTreeMap::new(),
             in_flight: self.counts.clone(),
             ..Default::default()
         })
@@ -3688,10 +3684,6 @@ impl AccountRuntimeStore for CapacityRuntime {
     async fn active_freezes(
         &self,
     ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountFreeze>> {
-        Ok(BTreeMap::new())
-    }
-
-    async fn capacity_peaks(&self, _: &[String]) -> AdminStoreResult<BTreeMap<String, u32>> {
         Ok(BTreeMap::new())
     }
 

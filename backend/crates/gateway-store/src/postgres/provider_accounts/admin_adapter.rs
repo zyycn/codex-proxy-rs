@@ -29,7 +29,7 @@ fn account_capacity(
 #[derive(Clone)]
 pub struct PgAdminAccountStore {
     pub(super) pool: PgPool,
-    accounts: PgProviderAccountRepository,
+    pub(super) accounts: PgProviderAccountRepository,
     observability: PgObservabilityRepository,
     control_plane: PgControlPlaneRepository,
     cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
@@ -43,9 +43,14 @@ impl PgAdminAccountStore {
         cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
         query_budget: ObservabilityQueryBudget,
     ) -> Self {
+        let accounts = PgProviderAccountRepository::new(pool.clone());
+        let accounts = match &cooldowns {
+            Some(port) => accounts.with_account_error_protection(port.clone()),
+            None => accounts,
+        };
         Self {
             pool: pool.clone(),
-            accounts: PgProviderAccountRepository::new(pool.clone()),
+            accounts,
             observability: PgObservabilityRepository::new(
                 pool.clone(),
                 None,
@@ -324,6 +329,11 @@ impl AccountStore for PgAdminAccountStore {
                 let mut account = admin_account_record(summary)?;
                 account.groups = groups_by_account.remove(&account_id).unwrap_or_default();
                 Ok(AccountPageItem {
+                    protection_rules: runtime
+                        .protection_rules
+                        .get(&account.id)
+                        .cloned()
+                        .unwrap_or_default(),
                     capacity: account_capacity(
                         &account,
                         page.default_concurrency,
@@ -383,6 +393,11 @@ impl AccountStore for PgAdminAccountStore {
             )
         })?;
         Ok(Some(AccountPageItem {
+            protection_rules: runtime
+                .protection_rules
+                .get(&account_id)
+                .cloned()
+                .unwrap_or_default(),
             capacity: account_capacity(&account, default_concurrency, runtime.in_flight.as_ref()),
             account,
             projection,

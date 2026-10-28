@@ -635,7 +635,7 @@ OpenAI 仅在允许安全重放且尚未交付不可重放输出时执行下表�
 流内失败事件使用相同解析规则，WS 转 HTTP 回退也遵守服务器建议；等待受请求截止时间和取消约束，
 重试受[请求总尝试次数](#账号亲和与换号)约束。
 已发送的容量失败计入[智能调度健康分](architecture.md#智能调度)，可用账号的会话亲和优先。
-容量不足不触发 Provider 全局熔断，也不作为账号额度耗尽；启用账号自动冻结且达到阈值时写入临时冷却。
+容量不足不触发 Provider 全局熔断，也不作为账号额度耗尽；账号冷却由独立的[错误保护规则](#账号错误保护)决定。
 客户端错误兼容由 API 编码出口统一处理：最终交付的 `server_is_overloaded`、`slow_down` 错误码
 投影为 `server_error`，HTTP 错误状态及 WS 包装错误的数字状态投影为 `503`，让客户端执行自己的
 有界重试。Provider 已确认容量不足的初始失败，即使没有这两个错误码，也返回 `503`。
@@ -882,9 +882,10 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 账号设置保存不等待上游模型目录刷新完成
 
 账号限流详情在 `quota` 中返回：`rateLimitReason` 为 `upstream_rate_limit`（上游临时限流）、
-`capacity_freeze`（容量错误触发自动冻结）或 `null`。`recoveryProbeRequired` 表示解除冻结是否需要成功探测；
+`error_protection`（自定义错误规则触发保护）或 `null`。`recoveryProbeRequired` 表示解除冻结是否需要成功探测；
 此时 `rateLimitedUntil` 是最早探测时间，到期后仍保持 `rate_limited`，直到探测成功或手动恢复。
-未要求探测时，该字段表示冷却结束时间。所有此类情况统一显示“限流中”，仅详情原因和恢复条件不同
+未要求探测时，该字段表示冷却结束时间。`protectionRules` 返回触发时的规则快照 `[{ id, name }]`，
+没有保护原因时为空数组，修改或删除当前规则不改写此快照。错误保护与上游限流独立恢复，解除保护不保证其他限制已经解除
 
 `quota.credits` 返回上游点数余额，未提供点数信息时为 `null`。对象包含 `hasCredits`、`unlimited` 和
 `balance`，余额为保留上游精度的十进制字符串，未提供余额时为 `null`，明确的零余额为 `"0"`。
@@ -1636,7 +1637,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | [请求解压](#请求解压上限) | `responsesMaxDecompressedBodyBytes` |
 | [客户端门禁](#1-鉴权与公共约定) | `minCodexDesktopVersion`、`minCodexCliVersion` |
 | [历史保留](#历史保留) | `usageRetentionDays`、`opsEventRetentionDays`、`auditRetentionDays` |
-| [账号自动冻结](#账号自动冻结) | `accountAutoFreezeEnabled`、`accountAutoFreezeThreshold`、`accountAutoFreezeWindowSeconds`、`accountAutoFreezeDurationSeconds`、`accountAutoFreezeProbeEnabled`、`accountAutoFreezeProbeModel`、`accountAutoFreezeAdaptiveConcurrency` |
+| [账号错误保护](#账号错误保护) | `accountErrorProtection` |
 | [账号预热](#账号预热) | `accountWarmupEnabled`、`accountWarmupScheduleTime`、`accountWarmupModel` |
 | [主动额度重置卡](#主动额度重置卡) | `resetCreditLeadMinutes`、`resetCreditMaxWeeklyRemainingPercent` |
 
@@ -1961,19 +1962,49 @@ User-Agent 使用 `grok-shell/<版本> (<系统>; <架构>)`，其中 `arm64` �
 固定版本不受后台更新影响。预览返回配置、来源、最终身份字段、`userAgent`、`versionSource`、`verifiedAt`、
 `checkedAt` 和 `error`；固定版本不附带官方核验时间。Dashboard 展示已保存的通用身份
 
-### 账号自动冻结
+### 账号错误保护
 
-账号自动冻结（`accountAutoFreezeEnabled`）默认关闭。启用后，在统计窗口内按尝试累计明确的上游容量拒绝
-（`server_is_overloaded`、`slow_down` 或结构化错误中的明确过载提示），普通 5xx、`invalid_prompt` 和未识别的上游错误不计入。
-达到阈值后把该账号冻结为带恢复倒计时的 `rate_limited` 状态。`accountAutoFreezeThreshold`
-取值 2～1,000（默认 12，按普通请求的 attempt 计数，含请求内同账号重试，不含诊断探测与本地连接保护错误）；`accountAutoFreezeWindowSeconds`
-取值 60～3,600（默认 600，随每次失败滑动顺延）；`accountAutoFreezeDurationSeconds` 取值 300～604,800
-（默认 7,200，即 2 小时，探测失败后按该时长顺延）。`accountAutoFreezeProbeEnabled` 开启时恢复 worker
-在到期后执行真实探测调用，成功才解冻；探测过程中和服务重启后继续阻止普通请求。关闭自动冻结或探测后，
-已有冻结等待当前冷却结束再恢复调度。`accountAutoFreezeProbeModel` 为 `string | null`，留空时自动
-选择账号可用的第一个模型。`accountAutoFreezeAdaptiveConcurrency` 开启时冻结期间把账号并发上限下调到
-观测在途峰值的 80%（下限 2，只降不升）。这会持久修改账号并发设置；跟随全局默认的账号也会设为独立上限，
-解冻后不自动恢复，管理员可手动改回
+`accountErrorProtection` 是设置替换请求的必填对象，按管理员定义的上游错误规则累计失败，达到阈值后暂停该账号后续调度。
+不预设错误类型，不改变原始错误交付、认证与额度状态、重试资格或续接规则，新安装默认关闭且规则为空
+
+| 字段 | 默认值 | 约束与含义 |
+| --- | --- | --- |
+| `enabled` | `false` | 启用时至少有一条有效规则 |
+| `rules` | `[]` | 最多 32 条，任意规则命中后累计同一账号计数 |
+| `threshold` | `12` | 2～1,000，按普通请求的实际 attempt 计数 |
+| `windowSeconds` | `600` | 60～3,600，每次匹配失败续期的计数有效期 |
+| `durationSeconds` | `7200` | 300～604,800，冻结及探测失败后等待的秒数 |
+| `probeEnabled` | `true` | 到期后要求探测成功才解除保护 |
+| `probeModel` | `null` | 1～128 字符的探测模型名，留空选账号首个可用模型 |
+
+规则形状为 `{ id, name, conditions }`，`id` 必须唯一，`id` 和 `name` 是 1～128 字符的无首尾空白、无控制字符文本。
+每条规则有 1～8 个条件，条件全部满足才命中，至少含一个非 Provider 条件。每个条件为
+`{ field, operator, values, ignoreCase }`，候选值之间为 OR，`ignoreCase` 默认 `false`
+
+| `field` | `operator` | `values` 内容 |
+| --- | --- | --- |
+| `provider` | `equals` | Provider 标识 |
+| `status` | `equals` | 100～599 的三位数字字符串，如 `"400"` |
+| `code`、`type` | `equals` | 原始结构化错误码或错误类型 |
+| `message` | `equals`、`contains` | 原始结构化错误信息 |
+
+每个条件有 1～16 个候选值，每个 message 候选最多 1,024 字符，其余最多 256 字符。
+规则标识、名称、候选文本与探测模型的 UTF-8 字节总量不超过 64 KiB，超限整次保存失败。
+`null` 候选显式匹配字段缺失，与空字符串不同；`contains` 仅支持非空白文本，不接受 `null`。
+`equals` 去除两端空白后比较，`ignoreCase: true` 仅忽略 ASCII 大小写，不使用正则或全文响应扫描。
+message 的包含比较只检查 UTF-8 安全截断的前 8 KiB，等值比较针对完整字段
+
+HTTP 拒绝使用原始上游状态码；SSE 或 WS 流内失败只使用错误事件明确携带的状态码，没有则缺失，
+不会用握手成功的 200/101 或网关投影后的状态补齐。规则不匹配请求正文、普通输出、本地超时、连接失败或插件 RPC 故障。
+探测和预热不参与计数，同一 attempt 命中多条规则只累计一次，真实重试属于新的 attempt
+
+完整成功的普通调用清除尚未形成冻结的同期证据，未匹配错误不续期也不清零；计数口径不是严格的“最近 N 秒事件数”。
+规则或保护参数改变后重新累计，无关设置变更保留计数。已有冻结保存触发规则与恢复参数，不被后续编辑改写。
+无探测时到期恢复，有探测时到期仍阻止调度，探测失败按冻结时的时长顺延。关闭保护或探测后，已有冻结等待当前冷却结束再解除。
+保护到期或探测解除不清除独立的上游限流或模型冷却；账号手动恢复沿用强制清除本地状态的语义，使旧在途反馈和旧探测失效
+
+设置更新不接受 `accountAutoFreeze*` 字段，缺少 `accountErrorProtection` 或混用新旧字段均拒绝，避免旧客户端覆盖已保存规则。
+已有部署与备份的旧保护设置清理见[错误保护配置升级](../deploy/README.md#错误保护配置升级)
 
 ### Windows 客户端下载
 

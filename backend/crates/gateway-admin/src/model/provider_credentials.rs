@@ -1246,6 +1246,7 @@ impl fmt::Debug for ProviderExport {
 /// 统一账号目录的一行完整结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
+    pub protection_rules: Vec<gateway_core::account::AccountProtectionMatch>,
     pub account: AccountRecord,
     pub capacity: super::accounts::AccountCapacity,
     pub capabilities: super::accounts::ProviderAccountCapabilities,

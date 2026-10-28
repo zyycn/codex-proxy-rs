@@ -61,7 +61,6 @@ use gateway_core::operation::{
     OperationKind, ProtocolPayload, ProviderSessionState, RawJsonPayload, StandaloneSearchRequest,
 };
 use gateway_core::policy::ClientApiKeyId;
-use gateway_core::provider_ports::ProviderLeasePort;
 use gateway_core::routing::extensions::{ExtensionSetId, ExtensionSetLease, ExtensionSetReference};
 use gateway_core::routing::{
     ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ModelServiceTier,
@@ -1247,7 +1246,6 @@ fn provider_and_quota_with_runtime_ports(
         http.clone(),
         base_url.clone(),
         cooldowns,
-        Arc::clone(&leases) as Arc<dyn ProviderLeasePort>,
         policy,
     ));
     let account_feedback = Arc::new(AccountFeedbackStats::default());
@@ -8686,8 +8684,7 @@ async fn request_rejections_should_not_retry_or_cool_down_accounts() {
         } else {
             http_generate_operation()
         };
-        let (provider, _) =
-            provider_with_capacity_tracking(&store, server.uri(), Arc::clone(&cooldowns));
+        let (provider, _) = provider_with_cooldowns(&store, server.uri(), Arc::clone(&cooldowns));
         let mut stream = provider
             .execute(
                 planned_request("openai", operation),
@@ -8759,7 +8756,7 @@ fn capacity_websocket_operation() -> Operation {
     )
 }
 
-fn provider_with_capacity_tracking(
+fn provider_with_cooldowns(
     store: &Arc<MemoryAccountStore>,
     base_url: String,
     cooldowns: Arc<MemoryCooldownPort>,
@@ -8771,118 +8768,82 @@ fn provider_with_capacity_tracking(
         Arc::new(TestLeaseCoordinator::default()),
         0,
         cooldowns,
-        crate::support::StaticFreezePolicy::policy_port(
-            gateway_core::provider_ports::ProviderFreezePolicy::try_new(
-                true, 12, 600, 7_200, true, None, true,
-            )
-            .expect("freeze policy"),
-        ),
+        crate::support::runtime_policy(),
     );
     (provider, pool)
 }
 
 #[tokio::test]
-async fn capacity_feedback_only_counts_overload_rejections_and_excludes_diagnostic_probes() {
-    use gateway_core::provider_ports::ProviderCooldownPort as _;
-
+async fn http_and_websocket_rejections_preserve_original_protection_fields() {
     for websocket in [false, true] {
-        for (status, code, capacity) in [
-            (429, "slow_down", true),
-            (503, "server_is_overloaded", true),
-            (500, "server_error", false),
-            (502, "server_error", false),
-            (503, "service_unavailable_error", false),
+        for (status, code) in [
+            (400, "invalid_prompt"),
+            (429, "slow_down"),
+            (503, "server_is_overloaded"),
+            (500, "server_error"),
         ] {
-            for diagnostic in [false, true] {
-                let store = Arc::new(MemoryAccountStore::default());
-                let account_id = "acct_provider_contract";
-                create_account(&store, account_id).await;
-                let account = store.account(account_id).expect("account");
-                let cooldowns = Arc::new(MemoryCooldownPort::new());
-                let server = MockServer::start().await;
-                Mock::given(method(if websocket { "GET" } else { "POST" }))
-                    .and(path("/codex/responses"))
-                    .respond_with(
-                        ResponseTemplate::new(status).set_body_json(json!({"error": {
-                            "code": code,
-                            "message": "Upstream temporarily unavailable"
-                        }})),
-                    )
-                    .expect(2)
-                    .mount(&server)
-                    .await;
-                let (provider, _) =
-                    provider_with_capacity_tracking(&store, server.uri(), Arc::clone(&cooldowns));
-                // 同时验证窗口证据已过期与尚未过期：探测不能重建峰值，也不能改写原计数
-                for existing_evidence in [None, Some((4, 20))] {
-                    if let Some((count, peak)) = existing_evidence {
-                        for _ in 0..count {
-                            cooldowns
-                                .record_capacity_failure(
-                                    account.id(),
-                                    Duration::from_secs(600),
-                                    peak,
-                                )
-                                .await
-                                .expect("seed normal-request evidence");
-                        }
-                    }
-                    let before = cooldowns.capacity_evidence(account.id());
-                    let attempt = if diagnostic {
-                        diagnostic_context("req_capacity_feedback_probe", account_id)
-                    } else {
-                        context("req_capacity_feedback_business", CancellationToken::new())
-                    };
-                    let operation = if websocket {
-                        capacity_websocket_operation()
-                    } else {
-                        http_generate_operation()
-                    };
-                    let mut stream = Arc::clone(&provider)
-                        .execute(planned_request("openai", operation), attempt)
-                        .await
-                        .expect("prepare upstream attempt");
-                    let error = loop {
-                        match stream.next().await {
-                            Some(Ok(_)) => {}
-                            Some(Err(error)) => break error,
-                            None => panic!("expected upstream rejection"),
-                        }
-                    };
-                    assert_eq!(
-                        error.upstream_status(),
-                        Some(status),
-                        "unexpected upstream error: {error:?}"
-                    );
-                    let after = cooldowns.capacity_evidence(account.id());
-                    if diagnostic || !capacity {
-                        assert_eq!(
-                            after, before,
-                            "only explicit overload from ordinary requests may change capacity evidence: {status}/{code}"
-                        );
-                    } else {
-                        assert_eq!(
-                            after.map(|(count, _)| count),
-                            Some(before.map_or(1, |(count, _)| count + 1))
-                        );
-                    }
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_provider_contract").await;
+            let server = MockServer::start().await;
+            Mock::given(method(if websocket { "GET" } else { "POST" }))
+                .and(path("/codex/responses"))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_json(json!({"error": {
+                        "code": code, "type": "explicit_type", "message": "original message"
+                    }})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let (provider, pool) =
+                provider_with_cooldowns(&store, server.uri(), Arc::new(MemoryCooldownPort::new()));
+            let operation = if websocket {
+                capacity_websocket_operation()
+            } else {
+                http_generate_operation()
+            };
+            let mut stream = provider
+                .execute(
+                    planned_request("openai", operation),
+                    context("req_original_fields", CancellationToken::new()),
+                )
+                .await
+                .expect("attempt");
+            assert_eq!(
+                stream.metadata().credential_revision(),
+                Some(store.account("acct_provider_contract").unwrap().revision())
+            );
+            let error = loop {
+                match stream.next().await {
+                    Some(Ok(_)) => {}
+                    Some(Err(error)) => break error,
+                    None => panic!("upstream rejection"),
                 }
-            }
+            };
+            assert_eq!(
+                error.upstream_failure_fields(),
+                Some(&gateway_core::upstream::UpstreamFailureFields {
+                    status: Some(status),
+                    code: Some(code.to_owned()),
+                    error_type: Some("explicit_type".to_owned()),
+                    message: Some("original message".to_owned()),
+                })
+            );
+            drop(stream);
+            pool.shutdown().await;
         }
     }
 }
 
 #[tokio::test]
-async fn local_websocket_connection_cancellation_does_not_supply_capacity_evidence() {
+async fn local_websocket_connection_cancellation_has_no_upstream_failure_fields() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_provider_contract";
     create_account(&store, account_id).await;
-    let account = store.account(account_id).expect("account");
     let cooldowns = Arc::new(MemoryCooldownPort::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
     let base_url = format!("http://{}", listener.local_addr().expect("address"));
-    let (provider, pool) =
-        provider_with_capacity_tracking(&store, base_url, Arc::clone(&cooldowns));
+    let (provider, pool) = provider_with_cooldowns(&store, base_url, Arc::clone(&cooldowns));
     let operation = capacity_websocket_operation();
     let mut stream = provider
         .execute(
@@ -8917,7 +8878,7 @@ async fn local_websocket_connection_cancellation_does_not_supply_capacity_eviden
         error.diagnostic().and_then(|diagnostic| diagnostic.code()),
         Some("shared_connect_failed")
     );
-    assert_eq!(cooldowns.capacity_evidence(account.id()), None);
+    assert!(error.upstream_failure_fields().is_none());
     pool.shutdown().await;
 }
 
@@ -8958,9 +8919,7 @@ async fn websocket_usage_limit_rejection_preserves_quota_state_for_account_rotat
 }
 
 #[tokio::test]
-async fn capacity_feedback_in_stream_only_counts_explicit_overload() {
-    use gateway_core::provider_ports::{ProviderCooldownKind, ProviderCooldownPort as _};
-
+async fn stream_failures_preserve_error_fields_independent_of_retry_classification() {
     for (use_websocket, (code, message, expected_kind, scored)) in
         [false, true].into_iter().flat_map(|websocket| {
             [
@@ -9013,16 +8972,7 @@ async fn capacity_feedback_in_stream_only_counts_explicit_overload() {
         for semantic_output in [false, true] {
             let store = Arc::new(MemoryAccountStore::default());
             create_account(&store, "acct_provider_contract").await;
-            let account = store.account("acct_provider_contract").expect("account");
             let cooldowns = Arc::new(MemoryCooldownPort::new());
-            // 距离冻结阈值只差一次，验证非容量错误不会把可调度账号推入冷却
-            for _ in 0..11 {
-                cooldowns
-                    .record_capacity_failure(account.id(), Duration::from_secs(600), 20)
-                    .await
-                    .expect("seed capacity evidence");
-            }
-            let before = cooldowns.capacity_evidence(account.id());
             let mut events = vec![
                 json!({"type": "response.created", "response": {"id": "resp_capacity", "model": "gpt-5.4"}}),
             ];
@@ -9076,7 +9026,7 @@ async fn capacity_feedback_in_stream_only_counts_explicit_overload() {
                 http_generate_operation()
             };
             let (provider, pool) =
-                provider_with_capacity_tracking(&store, base_url, Arc::clone(&cooldowns));
+                provider_with_cooldowns(&store, base_url, Arc::clone(&cooldowns));
             let mut stream = provider
                 .execute(
                     planned_request("openai", operation),
@@ -9116,29 +9066,15 @@ async fn capacity_feedback_in_stream_only_counts_explicit_overload() {
                 provider_openai::openai_failure_affects_account_score(&error),
                 scored
             );
-            let cooldown = cooldowns.read(account.id()).await.expect("read cooldown");
-            if capacity {
-                assert_eq!(
-                    cooldowns
-                        .capacity_evidence(account.id())
-                        .map(|(count, _)| count),
-                    Some(12)
-                );
-                assert_eq!(
-                    cooldown.expect("capacity cooldown").kind(),
-                    ProviderCooldownKind::CapacityFreezeProbe
-                );
-            } else {
-                assert_eq!(
-                    cooldowns.capacity_evidence(account.id()),
-                    before,
-                    "non-capacity error {code} changed capacity evidence"
-                );
-                assert!(
-                    cooldown.is_none(),
-                    "non-capacity error {code} froze the account"
-                );
-            }
+            assert_eq!(
+                error.upstream_failure_fields(),
+                Some(&gateway_core::upstream::UpstreamFailureFields {
+                    status: None,
+                    code: Some(code.to_owned()),
+                    error_type: None,
+                    message: Some(message.to_owned()),
+                })
+            );
             assert_eq!(
                 serde_json::from_str::<Value>(
                     error.raw_upstream_error().expect("raw error").as_str()

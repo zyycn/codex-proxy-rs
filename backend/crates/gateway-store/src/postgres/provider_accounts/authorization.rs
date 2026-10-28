@@ -46,6 +46,14 @@ impl PgAdminAccountStore {
                     .commit()
                     .await
                     .map_err(|source| unavailable_receipt().with_source(source))?;
+                if let Some(revision) = outcome.result.credential_revision {
+                    self.accounts
+                        .advance_protection_revision(
+                            outcome.result.account_id.as_str(),
+                            store_revision(revision)?,
+                        )
+                        .await;
+                }
                 Ok(outcome)
             }
             Err(error) => {

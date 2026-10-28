@@ -574,13 +574,15 @@
       "reauthorizeHelp": "重新授權後，賬號會重新參與調度",
       "replaceCredentialsHelp": "請更新或重新導入憑據，再次測試連接",
       "upstreamRestrictionHelp": "請確認上游賬號狀態，解除限制後再啓用",
-      "capacityFailuresHelp": "容量類請求失敗累計達到閾值，系統已暫停該賬號的調度",
       "recoveryProbeHelp": "冷卻結束後進行恢復探測，成功後恢復調度，也可手動恢復賬號",
       "recoveryHelp": "冷卻結束後自動恢復調度，也可手動恢復賬號",
       "nextAttempt": "，下次嘗試：{nextRefreshDisplay}",
       "clickOrFocusToViewDetails": "{title}，{description}{retry}，點擊或聚焦查看詳情",
       "resumeDetection": "恢復探測",
-      "expectedToRecover": "預計恢復"
+      "expectedToRecover": "預計恢復",
+      "errorProtection": "錯誤保護",
+      "protectionFailuresHelp": "匹配規則的失敗累計達到閾值，系統已暫停該賬號的調度",
+      "matchedProtectionRules": "觸發時命中的規則"
     },
     "fields": {
       "platformType": "平臺",

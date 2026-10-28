@@ -45,6 +45,7 @@ async fn account_capacity_should_resolve_limits_for_list_and_detail() {
             Some(BTreeMap::from([("acct_override".to_owned(), 2)])),
         ] {
             let runtime = AccountRuntimeSnapshot {
+                protection_rules: std::collections::BTreeMap::new(),
                 in_flight: counts,
                 ..Default::default()
             };

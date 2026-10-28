@@ -85,3 +85,22 @@ pub enum AttemptTransport {
     /// 使用 Provider 定义的备用传输
     Fallback,
 }
+
+/// Provider 从实际失败响应或错误事件提取的原始结构化字段
+/// 不承载本地错误、状态推导、客户端文案改写或非结构化正文
+#[derive(Clone, PartialEq, Eq)]
+pub struct UpstreamFailureFields {
+    pub status: Option<u16>,
+    pub code: Option<String>,
+    pub error_type: Option<String>,
+    pub message: Option<String>,
+}
+
+impl fmt::Debug for UpstreamFailureFields {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UpstreamFailureFields")
+            .field("status", &self.status)
+            .finish_non_exhaustive()
+    }
+}

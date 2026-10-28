@@ -214,6 +214,16 @@ fn sdk_settings_contract_matches_host_declarations() {
     let mut replacement_fields = Vec::new();
     for (path, names) in [
         (
+            "../gateway-core/src/account/error_protection.rs",
+            &[
+                "AccountErrorProtection",
+                "AccountErrorRule",
+                "AccountErrorCondition",
+                "AccountErrorField",
+                "AccountErrorOperator",
+            ][..],
+        ),
+        (
             "../gateway-core/src/settings/privacy.rs",
             &[
                 "CodexPrivacyPolicy",

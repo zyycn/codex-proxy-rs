@@ -46,7 +46,6 @@ pub(super) struct MappedProviderFailure {
     /// 原始上游错误描述，仅在凭据错误状态下持久化
     pub(super) error_message: Option<String>,
     pub(super) cyber_policy_failure: bool,
-    pub(super) upstream_capacity_failure: bool,
     pub(super) set_cookie_headers: Vec<String>,
     pub(super) response_origin: Option<Url>,
     pub(super) rate_limit_headers: Vec<(String, String)>,
@@ -62,7 +61,6 @@ impl MappedProviderFailure {
             account_failure: None,
             error_message: None,
             cyber_policy_failure: false,
-            upstream_capacity_failure: false,
             set_cookie_headers: Vec::new(),
             response_origin: None,
             rate_limit_headers: Vec::new(),
@@ -161,7 +159,6 @@ pub(super) struct OpenAiFailureContext<'a> {
     pub(super) response_origin: &'a Url,
     pub(super) cyber_policy_scope: Option<&'a CodexCyberPolicyScope>,
     pub(super) allows_account_state_mutation: bool,
-    pub(super) allows_capacity_feedback: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -363,12 +360,6 @@ pub(super) async fn apply_failure(
         );
     }
     // 探测只验证恢复，不能把探测自身的单请求并发当作业务负载证据
-    if context.allows_capacity_feedback && failure.upstream_capacity_failure {
-        context
-            .quota
-            .apply_capacity_failure(account, SystemTime::now())
-            .await;
-    }
 }
 
 pub(super) fn schedule_authoritative_quota_refresh_after_failure(
@@ -1359,7 +1350,6 @@ pub(super) fn map_upstream_failure(
     replay_boundary: ReplayBoundary,
 ) -> MappedProviderFailure {
     let category = failure.category();
-    let capacity_unavailable = category == CodexFailureCategory::CapacityUnavailable;
     let retry_policy = transient_retry_policy(category, &failure);
     let cyber_policy_failure = failure
         .status
@@ -1375,7 +1365,8 @@ pub(super) fn map_upstream_failure(
     } else {
         provider_error_kind(category)
     };
-    let mut error = provider_error(error_kind, send_state);
+    let mut error = provider_error(error_kind, send_state)
+        .with_upstream_failure_fields(failure.upstream_fields.clone());
     let replay_safe = failure.replay_is_safe() || cyber_policy_failure;
     // WS opening 的 426 是明确的传输切换信号；普通拒绝不能仅凭 NotSent 触发换号
     let upgrade_required = failure.send_phase == CodexUpstreamSendPhase::BeforePayload
@@ -1477,7 +1468,6 @@ pub(super) fn map_upstream_failure(
         error_message: failure.client_message,
         cyber_policy_failure,
         // 普通 5xx 与未知流内错误不足以证明容量拒绝，不能用于冻结账号
-        upstream_capacity_failure: capacity_unavailable,
         set_cookie_headers: failure.set_cookie_headers,
         response_origin: failure.response_origin,
         rate_limit_headers: failure.rate_limit_headers,

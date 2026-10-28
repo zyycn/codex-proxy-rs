@@ -10,8 +10,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use gateway_core::account::RotationStrategy;
 use gateway_core::provider_ports::{
-    ProviderFreezePolicy, ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
-    ProviderStoreErrorKind, ProviderWarmupPolicy,
+    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
+    ProviderWarmupPolicy,
 };
 
 use gateway_admin::model::settings::RuntimeSettingsValues;
@@ -24,6 +24,7 @@ pub struct RuntimeSettings {
     pub request_profiles:
         BTreeMap<gateway_core::routing::ProviderKind, gateway_core::account::OpaqueProviderData>,
     pub config_revision: Revision,
+    pub account_error_protection_revision: Revision,
     pub admin_api_key: Option<String>,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
@@ -155,10 +156,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
-                    account_auto_freeze_enabled, account_auto_freeze_threshold,
-                    account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
-                    account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                    account_auto_freeze_adaptive_concurrency,
+                    account_error_protection_json, account_error_protection_revision,
                     account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent
              from runtime_settings where id = 1",
         )
@@ -289,25 +287,6 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
         })
     }
 
-    fn load_freeze_policy(
-        &self,
-    ) -> futures::future::BoxFuture<'_, Result<ProviderFreezePolicy, ProviderStoreError>> {
-        Box::pin(async move {
-            let settings = RuntimeSettingsRepository::load_runtime_settings(self)
-                .await
-                .map_err(|source| crate::provider_unavailable("load freeze policy", source))?;
-            ProviderFreezePolicy::try_new(
-                settings.values.account_auto_freeze_enabled,
-                settings.values.account_auto_freeze_threshold,
-                settings.values.account_auto_freeze_window_seconds,
-                settings.values.account_auto_freeze_duration_seconds,
-                settings.values.account_auto_freeze_probe_enabled,
-                settings.values.account_auto_freeze_probe_model,
-                settings.values.account_auto_freeze_adaptive_concurrency,
-            )
-        })
-    }
-
     fn load_warmup_policy(
         &self,
     ) -> futures::future::BoxFuture<'_, Result<ProviderWarmupPolicy, ProviderStoreError>> {
@@ -333,10 +312,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
-                account_auto_freeze_enabled, account_auto_freeze_threshold,
-                account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
-                account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                account_auto_freeze_adaptive_concurrency,
+                account_error_protection_json, account_error_protection_revision,
                 account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent
          from runtime_settings where id = 1",
     )
@@ -398,28 +374,23 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      max_waiting_per_key = $11,
                      max_waiting_per_account = $12,
                      concurrency_wait_timeout_seconds = $13,
-                     account_auto_freeze_enabled = $14,
-                     account_auto_freeze_threshold = $15,
-                     account_auto_freeze_window_seconds = $16,
-                     account_auto_freeze_duration_seconds = $17,
-                     account_auto_freeze_probe_enabled = $18,
-                     account_auto_freeze_probe_model = $19,
-                     account_auto_freeze_adaptive_concurrency = $20,
-                     request_location_json = $21,
-                     request_location_enabled = $22,
-                     responses_max_decompressed_body_bytes = $23,
-	                 provider_request_profiles_json = (provider_request_profiles_json - $24::text[]) || $25::jsonb,
-                     account_warmup_enabled = $26,
-                     account_warmup_schedule_time = $27,
-                     account_warmup_model = $28,
-                     smart_scheduling_json = $29,
-                     openai_guardian_reserved_concurrency = $30,
-                     openai_account_affinity = $31,
-                     max_account_rotations = $32,
-                     openai_session_affinity_ttl_hours = $33,
-                     codex_privacy_policy_json = $34,
-                     reset_credit_lead_minutes = $35,
-                     reset_credit_max_weekly_remaining_percent = $36,
+                     account_error_protection_revision = case when account_error_protection_json is distinct from $14::jsonb then config_revision + 1 else account_error_protection_revision end,
+                     account_error_protection_json = $14,
+                     request_location_json = $15,
+                     request_location_enabled = $16,
+                     responses_max_decompressed_body_bytes = $17,
+	                 provider_request_profiles_json = (provider_request_profiles_json - $18::text[]) || $19::jsonb,
+                     account_warmup_enabled = $20,
+                     account_warmup_schedule_time = $21,
+                     account_warmup_model = $22,
+                     smart_scheduling_json = $23,
+                     openai_guardian_reserved_concurrency = $24,
+                     openai_account_affinity = $25,
+                     max_account_rotations = $26,
+                     openai_session_affinity_ttl_hours = $27,
+                     codex_privacy_policy_json = $28,
+                     reset_credit_lead_minutes = $29,
+                     reset_credit_max_weekly_remaining_percent = $30,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -437,16 +408,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(i64::from(update.values.max_waiting_per_key))
     .bind(i64::from(update.values.max_waiting_per_account))
     .bind(i64::from(update.values.concurrency_wait_timeout_seconds))
-    .bind(update.values.account_auto_freeze_enabled)
-    .bind(i64::from(update.values.account_auto_freeze_threshold))
-    .bind(i64::try_from(update.values.account_auto_freeze_window_seconds).map_err(|_| invalid_numeric())?)
-    .bind(
-        i64::try_from(update.values.account_auto_freeze_duration_seconds)
-            .map_err(|_| invalid_numeric())?,
-    )
-    .bind(update.values.account_auto_freeze_probe_enabled)
-    .bind(update.values.account_auto_freeze_probe_model.as_deref())
-    .bind(update.values.account_auto_freeze_adaptive_concurrency)
+    .bind(sqlx::types::Json(&update.values.account_error_protection))
     .bind(sqlx::types::Json(
         update.values.request_location
             .clone()
@@ -563,13 +525,8 @@ struct RuntimeSettingsRow {
     max_account_rotations: i64,
     openai_session_affinity_ttl_hours: i64,
     responses_max_decompressed_body_bytes: i64,
-    account_auto_freeze_enabled: bool,
-    account_auto_freeze_threshold: i64,
-    account_auto_freeze_window_seconds: i64,
-    account_auto_freeze_duration_seconds: i64,
-    account_auto_freeze_probe_enabled: bool,
-    account_auto_freeze_probe_model: Option<String>,
-    account_auto_freeze_adaptive_concurrency: bool,
+    account_error_protection_revision: i64,
+    account_error_protection_json: sqlx::types::Json<gateway_core::account::AccountErrorProtection>,
     account_warmup_enabled: bool,
     account_warmup_schedule_time: String,
     account_warmup_model: Option<String>,
@@ -594,6 +551,9 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
     Ok(RuntimeSettings {
         request_profiles,
         config_revision: Revision::new(to_u64(row.config_revision)?)?,
+        account_error_protection_revision: Revision::new(to_u64(
+            row.account_error_protection_revision,
+        )?)?,
         admin_api_key: row.admin_api_key,
         rotation_strategy: row.rotation_strategy,
         model_mappings: row.model_mappings_json.0,
@@ -632,13 +592,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
             responses_max_decompressed_body_bytes: to_u64(
                 row.responses_max_decompressed_body_bytes,
             )?,
-            account_auto_freeze_enabled: row.account_auto_freeze_enabled,
-            account_auto_freeze_threshold: to_u32(row.account_auto_freeze_threshold)?,
-            account_auto_freeze_window_seconds: to_u64(row.account_auto_freeze_window_seconds)?,
-            account_auto_freeze_duration_seconds: to_u64(row.account_auto_freeze_duration_seconds)?,
-            account_auto_freeze_probe_enabled: row.account_auto_freeze_probe_enabled,
-            account_auto_freeze_probe_model: row.account_auto_freeze_probe_model,
-            account_auto_freeze_adaptive_concurrency: row.account_auto_freeze_adaptive_concurrency,
+            account_error_protection: row.account_error_protection_json.0,
             account_warmup_enabled: row.account_warmup_enabled,
             account_warmup_schedule_time: row.account_warmup_schedule_time,
             account_warmup_model: row.account_warmup_model,

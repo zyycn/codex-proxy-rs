@@ -2,6 +2,7 @@
 
 use sha2::{Digest, Sha256};
 
+mod account_error_protection;
 mod admin_account_runtime;
 mod artifact_profile;
 mod auth;

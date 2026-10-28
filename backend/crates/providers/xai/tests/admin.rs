@@ -993,28 +993,12 @@ impl ProviderCooldownPort for TestCooldown {
         Box::pin(async { Ok(false) })
     }
 
-    fn record_capacity_failure<'a>(
-        &'a self,
-        _account_id: &'a ProviderAccountId,
-        _window: Duration,
-        _in_flight: u32,
-    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>> {
-        Box::pin(async { Ok(0) })
-    }
-
     fn clear_after_success<'a>(
         &'a self,
         _account_id: &'a ProviderAccountId,
         _through_revision: gateway_core::account::CredentialRevision,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async { Ok(()) })
-    }
-
-    fn capacity_peak_in_flight<'a>(
-        &'a self,
-        _account_id: &'a ProviderAccountId,
-    ) -> BoxFuture<'a, Result<Option<u32>, ProviderStoreError>> {
-        Box::pin(async { Ok(None) })
     }
 }
 

@@ -4,15 +4,15 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::future::join_all;
+use futures::{StreamExt as _, TryStreamExt as _};
 use gateway_admin::{
     model::accounts::AccountRuntimeSnapshot,
     ports::store::{AccountRuntimeStore, AdminStoreResult},
 };
 
 use super::{
-    CredentialCooldownRepository as _, CredentialLeaseRepository as _,
-    RedisCredentialCooldownRepository, RedisCredentialLeaseRepository,
+    CredentialLeaseRepository as _, RedisCredentialCooldownRepository,
+    RedisCredentialLeaseRepository,
 };
 
 /// 只组合可丢失 Redis 事实；不持有 PostgreSQL，也不执行状态投影
@@ -57,28 +57,31 @@ impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
         &self,
         account_ids: &[String],
     ) -> AdminStoreResult<AccountRuntimeSnapshot> {
-        let reads = account_ids.iter().map(|account_id| async move {
-            self.cooldowns
-                .read_credential_cooldown(account_id)
-                .await
-                .map(|cooldown| {
-                    cooldown.map(|cooldown| {
-                        (
-                            account_id.clone(),
-                            gateway_core::account::AccountCooldown {
-                                until: cooldown.cooldown_until.into(),
-                                kind: cooldown.kind,
-                            },
-                        )
-                    })
-                })
-        });
+        let reads = futures::stream::iter(account_ids.iter().cloned())
+            .map(|account| async move {
+                self.cooldowns
+                    .read_account_runtime(&account)
+                    .await
+                    .map(|runtime| (account, runtime))
+            })
+            .buffer_unordered(32)
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|error| crate::admin_store_error("account runtime", error))?;
         let mut cooldown = BTreeMap::new();
-        for result in join_all(reads).await {
-            if let Some((account_id, until)) =
-                result.map_err(|error| crate::admin_store_error("account runtime", error))?
-            {
-                cooldown.insert(account_id, until);
+        let mut protection_rules = BTreeMap::new();
+        for (account, (current, freeze)) in reads {
+            if let Some(current) = current {
+                cooldown.insert(
+                    account.clone(),
+                    gateway_core::account::AccountCooldown {
+                        until: current.cooldown_until.into(),
+                        kind: current.kind,
+                    },
+                );
+            }
+            if let Some(freeze) = freeze {
+                protection_rules.insert(account.clone(), freeze.protection_rules);
             }
         }
         let in_flight = self
@@ -93,6 +96,7 @@ impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
                     .collect()
             });
         Ok(AccountRuntimeSnapshot {
+            protection_rules,
             cooldown,
             in_flight,
         })
@@ -105,27 +109,6 @@ impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
             .active_freezes()
             .await
             .map_err(|error| crate::admin_store_error("account runtime", error))
-    }
-
-    async fn capacity_peaks(
-        &self,
-        account_ids: &[String],
-    ) -> AdminStoreResult<BTreeMap<String, u32>> {
-        let reads = account_ids.iter().map(|account_id| async move {
-            self.cooldowns
-                .read_capacity_peak(account_id)
-                .await
-                .map(|peak| peak.map(|value| (account_id.clone(), value)))
-        });
-        let mut peaks = BTreeMap::new();
-        for result in join_all(reads).await {
-            if let Some((account_id, peak)) =
-                result.map_err(|error| crate::admin_store_error("account runtime", error))?
-            {
-                peaks.insert(account_id, peak);
-            }
-        }
-        Ok(peaks)
     }
 
     async fn finish_freeze(

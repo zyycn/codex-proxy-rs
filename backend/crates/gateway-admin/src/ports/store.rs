@@ -259,16 +259,10 @@ pub trait AccountRuntimeStore: Send + Sync {
         account_ids: &[String],
     ) -> AdminStoreResult<AccountRuntimeSnapshot>;
 
-    /// 容量熔断自动冻结中的账号与其冻结截止时间；429 临时限流不包含在内
+    /// 账号错误保护中的账号与其冻结快照；临时限流不包含在内
     async fn active_freezes(
         &self,
     ) -> AdminStoreResult<BTreeMap<String, crate::model::accounts::AccountFreeze>>;
-
-    /// 读取容量失败窗口内观测到的在途并发峰值（自适应并发下调的证据）
-    async fn capacity_peaks(
-        &self,
-        account_ids: &[String],
-    ) -> AdminStoreResult<BTreeMap<String, u32>>;
 
     /// 仅当冻结快照仍匹配时解除或顺延；旧探测不得覆盖手动恢复或新一轮冻结
     async fn finish_freeze(

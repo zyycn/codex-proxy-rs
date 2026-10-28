@@ -37,6 +37,7 @@ impl GrokBuildProvider {
             session.account_id().clone(),
             UpstreamTransport::new(adapter.transport()).map_err(|_| protocol_not_sent())?,
         )
+        .with_credential_revision(session.credential_revision())
         .with_account_snapshot(session.account_snapshot().cloned())
         .with_selection_observation(ProviderSelectionObservation::new(
             selected.account_selection_wait_ms,

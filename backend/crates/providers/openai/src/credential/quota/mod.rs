@@ -35,8 +35,7 @@ use gateway_core::account::{
     QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::provider_ports::{
-    ProviderCooldown, ProviderCooldownKind, ProviderCooldownPort, ProviderFreezePolicy,
-    ProviderLeasePort, ProviderRuntimePolicyPort,
+    ProviderCooldown, ProviderCooldownPort, ProviderRuntimePolicyPort,
 };
 use gateway_protocol::openai::events::{
     ParsedRateLimits, RateLimitDetails, RateLimitWindow, parse_rate_limit_headers,
@@ -175,10 +174,7 @@ pub struct CodexCredentialQuotaService {
     http: Client,
     base_url: String,
     cooldowns: Arc<dyn ProviderCooldownPort>,
-    leases: Arc<dyn ProviderLeasePort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
-    /// 冻结策略的短 TTL 缓存：失败路径热读，避免每个容量错误都查询设置
-    freeze_policy_cache: Mutex<Option<(ProviderFreezePolicy, Instant)>>,
     scheduling: CodexQuotaSchedulingProjection,
     reset_consume_locks: ResetCreditLocks,
     /// 首查随机延迟采样器；测试注入固定值获得确定性节奏。
@@ -188,9 +184,6 @@ pub struct CodexCredentialQuotaService {
 /// 首查随机延迟采样器：每次调用为一个账号返回独立随机延迟
 #[doc(hidden)]
 pub type CodexInitialSyncDelays = Arc<dyn Fn() -> Duration + Send + Sync>;
-
-/// 冻结策略缓存活跃期；过期后下一次容量错误重新读取运行时设置
-const FREEZE_POLICY_CACHE_TTL: Duration = Duration::from_secs(30);
 
 struct PreparedCodexRuntimeCredential {
     account: ProviderAccount,

@@ -24,9 +24,7 @@ use gateway_core::engine::{
 };
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::policy::ClientApiKeyId;
-use gateway_core::provider_ports::{
-    ProviderCooldownPort, ProviderLeasePort, ProviderSessionAffinityKey,
-};
+use gateway_core::provider_ports::{ProviderCooldownPort, ProviderSessionAffinityKey};
 use gateway_core::routing::{
     ClientRoutingScope, FrozenAccountScope, ProviderKind, RuntimeAccount, RuntimeAccountDirectory,
 };
@@ -238,7 +236,6 @@ fn selector_with_runtime(
         http,
         OFFICIAL_CODEX_BASE_URL.to_owned(),
         cooldowns,
-        Arc::clone(&leases) as Arc<dyn ProviderLeasePort>,
         crate::support::runtime_policy(),
     ));
     CodexCredentialSelector::new(

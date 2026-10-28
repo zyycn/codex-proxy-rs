@@ -1,5 +1,6 @@
 //! 执行引擎各阶段与端口合同的测试入口
 
+pub(crate) mod account_protection;
 mod admission;
 mod connection;
 mod continuation;

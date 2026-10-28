@@ -561,6 +561,8 @@ impl ProviderCandidate {
 /// 一次请求冻结的 Provider 尝试顺序
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
+    account_error_protection: Arc<crate::account::CompiledAccountErrorProtection>,
+    account_error_protection_revision: u64,
     request_body_limit: usize,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_location: Option<crate::account::RequestLocation>,
@@ -574,6 +576,16 @@ pub struct RoutingPlan {
 }
 
 impl RoutingPlan {
+    #[must_use]
+    pub const fn account_error_protection_revision(&self) -> u64 {
+        self.account_error_protection_revision
+    }
+
+    #[must_use]
+    pub fn account_error_protection(&self) -> Arc<crate::account::CompiledAccountErrorProtection> {
+        Arc::clone(&self.account_error_protection)
+    }
+
     #[must_use]
     pub const fn request_body_limit(&self) -> usize {
         self.request_body_limit

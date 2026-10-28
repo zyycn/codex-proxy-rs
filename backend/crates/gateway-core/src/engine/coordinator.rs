@@ -1150,6 +1150,17 @@ where
         }
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_account_error_protection(
+                    (!self.account_selection.is_diagnostic()
+                        && self.plan.account_error_protection().policy().enabled)
+                        .then(|| self.engine.account_error_protection.as_ref())
+                        .flatten()
+                        .map(|store| super::account_protection::ProtectionContext {
+                            store: Arc::clone(store),
+                            policy: self.plan.account_error_protection(),
+                            revision: self.plan.account_error_protection_revision(),
+                        }),
+                )
                 .with_lease_metadata(Arc::clone(&self.lease_metadata))
                 .with_response_control(self.response_control.clone())
                 .with_request_profile(self.request_profiles.get(candidate.provider()).cloned())

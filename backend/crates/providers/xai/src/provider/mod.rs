@@ -772,6 +772,7 @@ fn provider_call_metadata(
         selected.account_id().clone(),
         UpstreamTransport::new(HTTP_SSE_TRANSPORT).map_err(|_| protocol_not_sent())?,
     )
+    .with_credential_revision(selected.credential_revision())
     .with_account_snapshot(selected.account_snapshot().cloned())
     .with_selection_observation(ProviderSelectionObservation::new(
         account_selection_wait_ms,

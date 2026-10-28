@@ -394,6 +394,7 @@ pub struct AccountQuotaView {
     pub rate_limit_recovery_display: Option<String>,
     pub rate_limit_reason: Option<String>,
     pub recovery_probe_required: bool,
+    pub protection_rules: Vec<gateway_core::account::AccountProtectionMatch>,
     pub windows: Vec<AccountQuotaWindowView>,
     pub credits: Option<AccountQuotaCreditsView>,
 }

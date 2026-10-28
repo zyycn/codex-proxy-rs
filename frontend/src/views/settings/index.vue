@@ -8,11 +8,11 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
 import AccountAffinityCard from './components/AccountAffinityCard.vue'
-import AccountAutoFreezeCard from './components/AccountAutoFreezeCard.vue'
 import AccountWarmupCard from './components/AccountWarmupCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import ClientProfileCard from './components/ClientProfileCard.vue'
 import ConcurrencyPolicyCard from './components/ConcurrencyPolicyCard.vue'
+import AccountErrorProtectionCard from './components/error-protection/AccountErrorProtectionCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import PrivacyPolicyCard from './components/privacy/PrivacyPolicyCard.vue'
 import RequestHistoryCard from './components/RequestHistoryCard.vue'
@@ -98,10 +98,6 @@ const {
   usageRetentionDaysValue,
   resetCreditLeadMinutesValue,
   resetCreditMaxWeeklyRemainingPercentValue,
-  accountAutoFreezeThresholdValue,
-  accountAutoFreezeWindowSecondsValue,
-  accountAutoFreezeDurationSecondsValue,
-
   minCodexDesktopVersionError,
   minCodexCliVersionError,
   saveSettings,
@@ -205,15 +201,7 @@ watch(section, (value) => {
             v-model:concurrency-wait-timeout-seconds="concurrencyWaitTimeoutSecondsValue"
             v-model:openai-guardian-reserved-concurrency="openaiGuardianReservedConcurrencyValue"
           />
-          <AccountAutoFreezeCard
-            v-model:enabled="form.accountAutoFreezeEnabled"
-            v-model:threshold="accountAutoFreezeThresholdValue"
-            v-model:window-seconds="accountAutoFreezeWindowSecondsValue"
-            v-model:duration-seconds="accountAutoFreezeDurationSecondsValue"
-            v-model:probe-enabled="form.accountAutoFreezeProbeEnabled"
-            v-model:probe-model="form.accountAutoFreezeProbeModel"
-            v-model:adaptive-concurrency="form.accountAutoFreezeAdaptiveConcurrency"
-          />
+          <AccountErrorProtectionCard v-model="form.accountErrorProtection" :disabled="disabled" />
           <AccountWarmupCard
             v-model:enabled="form.accountWarmupEnabled"
             v-model:schedule-time="form.accountWarmupScheduleTime"

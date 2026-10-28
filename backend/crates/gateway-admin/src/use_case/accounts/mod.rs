@@ -474,6 +474,7 @@ impl DefaultAccountsService {
                     .and_then(|(window, _)| window.local_usage.clone())
             });
         Ok(AccountDirectoryItem {
+            protection_rules: stored.protection_rules,
             capacity: stored.capacity,
             capabilities: provider
                 .account_capabilities(account_id, &stored.account.authentication_kind),
@@ -583,6 +584,7 @@ impl AccountsService for DefaultAccountsService {
                         .and_then(|(window, _)| window.local_usage.clone())
                 });
                 Ok(AccountDirectoryItem {
+                    protection_rules: item.protection_rules,
                     capacity: crate::model::accounts::AccountCapacity {
                         used_slots: in_flight
                             .as_ref()

@@ -72,6 +72,7 @@ pub(super) fn account_view(
         projection,
         usage,
         quota,
+        protection_rules,
     } = item;
     let status = projection.status.as_str().to_owned();
     let cooldown = projection.cooldown;
@@ -86,7 +87,8 @@ pub(super) fn account_view(
     if account.authentication_kind == "api_key" {
         usage.window_kind = AccountUsageWindowKind::General;
     }
-    let (quota, refresh_token_expires_at) = account_quota_view(quota, cooldown, now, time);
+    let (mut quota, refresh_token_expires_at) = account_quota_view(quota, cooldown, now, time);
+    quota.protection_rules = protection_rules;
     AccountView {
         capabilities: capabilities.into(),
         id: account.id.clone(),
@@ -232,8 +234,8 @@ pub(super) fn account_quota_view(
         }
     });
     let rate_limit_reason = cooldown.map(|value| {
-        if value.kind.is_capacity_freeze() {
-            "capacity_freeze".to_owned()
+        if value.kind.is_error_protection() {
+            "error_protection".to_owned()
         } else {
             "upstream_rate_limit".to_owned()
         }
@@ -251,6 +253,7 @@ pub(super) fn account_quota_view(
             rate_limit_recovery_display,
             rate_limit_reason,
             recovery_probe_required,
+            protection_rules: Vec::new(),
             windows,
             credits: quota.credits.map(|credits| AccountQuotaCreditsView {
                 has_credits: credits.has_credits,

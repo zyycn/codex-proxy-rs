@@ -64,6 +64,7 @@ pub struct CoreStorePorts {
     budget: Option<Arc<dyn engine::budget::ClientBudgetPort>>,
     session_affinity: Option<Arc<dyn ProviderSessionAffinityPort>>,
     client_retry: Option<Arc<dyn engine::client_retry::ClientRetryStore>>,
+    account_error_protection: Option<Arc<dyn crate::provider_ports::ProviderCooldownPort>>,
 }
 
 impl CoreStorePorts {
@@ -94,12 +95,22 @@ impl CoreStorePorts {
             budget: None,
             session_affinity: None,
             client_retry: None,
+            account_error_protection: None,
         }
     }
 
     #[must_use]
     pub fn with_budget(mut self, budget: Arc<dyn engine::budget::ClientBudgetPort>) -> Self {
         self.budget = Some(budget);
+        self
+    }
+
+    #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        store: Arc<dyn crate::provider_ports::ProviderCooldownPort>,
+    ) -> Self {
+        self.account_error_protection = Some(store);
         self
     }
 
@@ -223,6 +234,9 @@ fn build_execution_service(
     );
     if let Some(budget) = &ports.budget {
         service = service.with_budget(Arc::clone(budget));
+    }
+    if let Some(store) = &ports.account_error_protection {
+        service = service.with_account_error_protection(Arc::clone(store));
     }
     if let Some(store) = &ports.client_retry {
         service = service.with_client_retry_store(Arc::clone(store));
@@ -515,11 +529,12 @@ pub fn prepare_control_plane(
     }
     let compiler = Arc::new(compiler);
     let snapshots = RuntimeSnapshotHandle::default();
-    let publisher = Arc::new(RuntimeSnapshotPublisher::new(
-        compiler,
-        snapshots.clone(),
-        ports.snapshot_subscriptions,
-    ));
+    let mut publisher =
+        RuntimeSnapshotPublisher::new(compiler, snapshots.clone(), ports.snapshot_subscriptions);
+    if let Some(store) = ports.account_error_protection {
+        publisher = publisher.with_account_error_protection(store);
+    }
+    let publisher = Arc::new(publisher);
     CoreControlPlaneStartup {
         snapshots,
         publisher,
