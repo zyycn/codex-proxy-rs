@@ -406,6 +406,7 @@ pub struct DashboardAccountUsageView {
     pub provider: String,
     pub authentication_kind: String,
     pub email: String,
+    pub notes: Option<String>,
     pub plan_type: Option<String>,
     pub plan_type_display: String,
     pub tokens: String,

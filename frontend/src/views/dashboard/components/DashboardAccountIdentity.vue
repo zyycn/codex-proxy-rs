@@ -19,6 +19,9 @@ type DashboardAccount = DashboardSnapshot['accountUsage'][number]
 
 const email = computed(() => props.account.email?.trim() || String(props.account.id))
 const displayTitle = computed(() => email.value.split('@')[0] || email.value)
+const secondaryText = computed(() => props.account.authenticationKind === 'api_key'
+  ? props.account.notes
+  : email.value)
 const normalizedProvider = computed(() => props.account.provider?.trim().toLowerCase() || '')
 const providerIconComponent = computed(() => normalizedProvider.value
   ? providerIcon(normalizedProvider.value)
@@ -64,10 +67,11 @@ const avatarToneClass = computed(() =>
         <AccountPlanBadge :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="xs" />
       </span>
       <span
+        v-if="secondaryText"
         class="mt-0.5 block min-w-0 truncate font-mono text-cp-xs font-emphasis text-cp-text-quaternary"
-        :title="email"
+        :title="secondaryText"
       >
-        {{ email }}
+        {{ secondaryText }}
       </span>
     </span>
   </div>

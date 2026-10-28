@@ -145,6 +145,7 @@ export interface DashboardAccountUsage {
   provider: string
   authenticationKind: string
   email: string
+  notes: string | null
   planType: string | null
   planTypeDisplay: string
   tokens: string

@@ -937,6 +937,7 @@ async fn dashboard_should_preserve_provider_plan_names() {
             authentication_kind: "oauth".to_owned(),
             name: (*plan).to_owned(),
             email: None,
+            notes: None,
             plan_type: Some((*plan).to_owned()),
             plan_type_display: None,
             request_count: 0,

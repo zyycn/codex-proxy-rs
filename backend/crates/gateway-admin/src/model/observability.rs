@@ -653,6 +653,7 @@ pub struct DashboardAccountUsage {
     pub authentication_kind: String,
     pub name: String,
     pub email: Option<String>,
+    pub notes: Option<String>,
     pub plan_type: Option<String>,
     /// Admin 按 Provider 补齐的套餐展示名称
     pub plan_type_display: Option<String>,

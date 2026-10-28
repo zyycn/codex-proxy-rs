@@ -227,6 +227,7 @@ pub struct ProviderAccountUsageObservation {
     pub authentication_kind: String,
     pub name: String,
     pub email: Option<String>,
+    pub notes: Option<String>,
     pub plan_type: Option<String>,
     pub request_count: u64,
     pub success_count: u64,

@@ -2148,6 +2148,8 @@ Dashboard 的 `accountUsage[]` 返回稳定指标 `metric=requests|tokens`、可
 `requests` 使用代表性额度窗口的本地请求数，`tokens` 使用今日 Token；未知数值为 `null`，零值保留 `0`。
 `metricLabel`、`metricValue` 和 `lastUsed` 保留给兼容调用方，当前管理端不解析或显示这些字段
 
+`accountUsage[].notes` 为账号当前备注，无备注时为 `null`
+
 `usageWindow` 复用账号额度窗口合同，缺失额度事实时为 `null`；窗口标签、百分比、触顶状态、重置时间
 和本地用量由 Provider/Admin 投影。套餐缺失不表示免费套餐，显示时舍入的百分比不用于判断触顶
 

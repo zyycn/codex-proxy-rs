@@ -930,6 +930,7 @@ pub(crate) fn dashboard_view(
                 .email
                 .clone()
                 .unwrap_or_else(|| credential.name.clone()),
+            notes: credential.notes,
             plan_type: credential.plan_type.clone(),
             plan_type_display: credential
                 .plan_type_display

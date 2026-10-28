@@ -87,6 +87,7 @@ pub(crate) async fn provider_account_usage(
             authentication_kind: get(&row, "authentication_kind")?,
             name: get(&row, "name")?,
             email: get(&row, "email")?,
+            notes: get(&row, "notes")?,
             plan_type: get(&row, "plan_type")?,
             request_count: state.count("completed_request_count"),
             success_count: state.count("completed_request_count"),

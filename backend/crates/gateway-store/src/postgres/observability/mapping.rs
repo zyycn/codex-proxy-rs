@@ -138,6 +138,7 @@ pub(crate) fn admin_dashboard_account_usage(
         authentication_kind: usage.authentication_kind,
         name: usage.name,
         email: usage.email,
+        notes: usage.notes,
         plan_type: usage.plan_type,
         plan_type_display: None,
         request_count: usage.request_count,
