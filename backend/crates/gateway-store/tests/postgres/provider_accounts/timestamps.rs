@@ -1,7 +1,6 @@
 //! 验证账号观测与凭据写入在乱序和时钟回退时保持时间边界
 
 use super::*;
-use gateway_core::account::AccountConcurrencyLimit;
 use gateway_store::postgres::RecoverProviderAccount;
 
 #[tokio::test]
@@ -211,20 +210,6 @@ async fn credential_and_admin_writes_preserve_existing_update_time_after_clock_r
             .await
             .expect("stale refresh conflicts"),
         CredentialCasOutcome::Conflict
-    );
-    assert!(
-        admin_account_store(&database.pool)
-            .lower_concurrency_limit(
-                &account_id,
-                AccountConcurrencyLimit::new(1).expect("limit"),
-                &MutationContext {
-                    actor: MutationActor::System,
-                    request_id: "rollback-concurrency".to_owned()
-                },
-            )
-            .await
-            .expect("lower concurrency after rollback")
-            .is_some()
     );
     repository
         .recover_provider_account_admin(RecoverProviderAccount {

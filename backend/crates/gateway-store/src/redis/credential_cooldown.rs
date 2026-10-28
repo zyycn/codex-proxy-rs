@@ -368,9 +368,7 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
             "provider_account_id",
             provider_account_id,
         )?;
-        self.read_account_runtime(provider_account_id)
-            .await
-            .map(|(cooldown, _)| cooldown)
+        self.read_effective_cooldown(provider_account_id).await
     }
 
     async fn invalidate_credential_cooldown(

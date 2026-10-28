@@ -209,14 +209,6 @@ pub trait AccountStore:
         context: &MutationContext,
     ) -> AdminStoreResult<AccountUpdateResult>;
 
-    /// 在事务内按最新启用状态、账号上限和全局默认值判断，只降低并发上限
-    async fn lower_concurrency_limit(
-        &self,
-        account_id: &gateway_core::account::ProviderAccountId,
-        limit: gateway_core::account::AccountConcurrencyLimit,
-        context: &MutationContext,
-    ) -> AdminStoreResult<Option<AccountUpdateResult>>;
-
     async fn recover_account(
         &self,
         account_id: &gateway_core::account::ProviderAccountId,

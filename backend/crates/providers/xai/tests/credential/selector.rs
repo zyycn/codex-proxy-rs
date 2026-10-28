@@ -375,6 +375,53 @@ async fn unauthorized_feedback_records_runtime_cooldown_without_persisting_accou
 }
 
 #[tokio::test]
+async fn error_protection_waits_for_probe_before_resuming_account_selection() {
+    use gateway_core::provider_ports::{
+        ProviderCooldown, ProviderCooldownKind, ProviderCooldownPort,
+    };
+
+    let fixture = SelectorFixture::new(&["protected", "available"]).await;
+    let protected = account_id("protected");
+    let revision = CredentialRevision::new(1).expect("revision");
+    fixture
+        .cooldowns
+        .put_if_later(ProviderCooldown::new_with_kind(
+            protected.clone(),
+            revision,
+            SystemTime::now() - Duration::from_secs(1),
+            ProviderCooldownKind::ErrorProtectionProbe,
+        ))
+        .await
+        .expect("freeze awaiting probe");
+
+    assert!(matches!(
+        fixture
+            .selector
+            .select(fixture.request_with_required(BTreeSet::new(), Some(protected.clone())))
+            .await,
+        Err(GrokSessionSelectorError::AccountCoolingDown { retry_after: None })
+    ));
+    let selected = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("other account remains available");
+    assert_eq!(selected.account_id(), &account_id("available"));
+
+    fixture
+        .cooldowns
+        .clear(&protected, revision)
+        .await
+        .expect("probe recovery");
+    let recovered = fixture
+        .selector
+        .select(fixture.request_with_required(BTreeSet::new(), Some(protected.clone())))
+        .await
+        .expect("recovered account is eligible");
+    assert_eq!(recovered.account_id(), &protected);
+}
+
+#[tokio::test]
 async fn account_scoped_cooldown_survives_credential_rotation() {
     let fixture = SelectorFixture::new(&["revision-fence"]).await;
     let id = account_id("revision-fence");

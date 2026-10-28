@@ -593,6 +593,53 @@ async fn protection_threshold_is_atomic_and_recovery_preserves_later_rate_limit(
 }
 
 #[tokio::test]
+async fn scheduling_cooldown_does_not_depend_on_protection_display_details() {
+    use gateway_admin::ports::store::AccountRuntimeStore;
+
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let policy = protection_policy(2);
+    repository
+        .publish_protection_policy(
+            &policy,
+            gateway_core::routing::ConfigRevision::new(1).unwrap(),
+        )
+        .await
+        .unwrap();
+    let id = ProviderAccountId::new("acct_display_details").unwrap();
+    let guard = protection_guard(&repository, &id, 1, &policy, 1).await;
+    repository
+        .record_protection_failure(&guard, &policy, &matched())
+        .await
+        .unwrap();
+    assert!(
+        repository
+            .record_protection_failure(&guard, &policy, &matched())
+            .await
+            .unwrap()
+    );
+    let expected = repository.read(&id).await.unwrap().unwrap();
+    let key = namespace_keys(&mut connection, &namespace)
+        .await
+        .into_iter()
+        .find(|key| key.ends_with(":error-protection"))
+        .unwrap();
+
+    // 管理展示快照损坏不能让调度丢失已生效的冻结事实
+    redis::cmd("HSET")
+        .arg(key)
+        .arg("rules")
+        .arg("invalid display snapshot")
+        .query_async::<i64>(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(repository.read(&id).await.unwrap(), Some(expected));
+    let runtime = runtime_store(&repository, connection, &namespace);
+    assert!(runtime.account_runtime(&[id.to_string()]).await.is_err());
+}
+
+#[tokio::test]
 async fn protection_feedback_is_fenced_by_success_manual_recovery_and_policy_revision() {
     let Some((repository, _, _)) = repository().await else {
         return;

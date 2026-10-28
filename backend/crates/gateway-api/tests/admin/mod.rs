@@ -1321,15 +1321,6 @@ impl AccountStore for UnusedStore {
         Err(unavailable("account enabled"))
     }
 
-    async fn lower_concurrency_limit(
-        &self,
-        _: &gateway_core::account::ProviderAccountId,
-        _: gateway_core::account::AccountConcurrencyLimit,
-        _: &MutationContext,
-    ) -> AdminStoreResult<Option<gateway_admin::model::accounts::AccountUpdateResult>> {
-        Ok(None)
-    }
-
     async fn recover_account(
         &self,
         _: &ProviderAccountId,

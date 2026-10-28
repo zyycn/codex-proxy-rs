@@ -13,13 +13,14 @@ use gateway_core::{
 };
 use redis::Script;
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 const PUBLISH: &str = r#"
 local old = redis.call('HGET', KEYS[1], 'fingerprint')
 local revision = tonumber(redis.call('HGET', KEYS[1], 'revision') or '0')
 if revision > tonumber(ARGV[2]) then return 0 end
 if old ~= ARGV[1] or revision ~= tonumber(ARGV[2]) then
-  redis.call('HSET', KEYS[1], 'fingerprint', ARGV[1], 'changed_revision', ARGV[2], 'generation', ARGV[3])
+  redis.call('HSET', KEYS[1], 'fingerprint', ARGV[1], 'generation', ARGV[3])
 end
 redis.call('HSET', KEYS[1], 'revision', ARGV[2], 'enabled', ARGV[4])
 return 1
@@ -27,25 +28,32 @@ return 1
 
 // 原 key 的代次和恢复时间原样搬运，不重新开始冷却
 const MIGRATE: &str = r#"
-local kind = redis.call('HGET', KEYS[1], 'kind')
-if kind == 'capacity_freeze' or kind == 'capacity_freeze_probe' then
-  if redis.call('EXISTS', KEYS[2]) == 0 then redis.call('RENAME', KEYS[1], KEYS[2]) else redis.call('DEL', KEYS[1]) end
-  redis.call('ZREM', KEYS[3], ARGV[1])
-  redis.call('ZADD', KEYS[4], redis.call('HGET', KEYS[2], 'until_ms'), ARGV[1])
+local function migrate_protection(legacy, protection, legacy_index, protection_index, account)
+  local kind = redis.call('HGET', legacy, 'kind')
+  if kind == 'capacity_freeze' or kind == 'capacity_freeze_probe' then
+    if redis.call('EXISTS', protection) == 0 then redis.call('RENAME', legacy, protection) else redis.call('DEL', legacy) end
+    redis.call('ZREM', legacy_index, account)
+    redis.call('ZADD', protection_index, redis.call('HGET', protection, 'until_ms'), account)
+  end
 end
-return 1
 "#;
 
-const BEGIN: &str = r#"
-local old_kind = redis.call('HGET', KEYS[5], 'kind')
-if old_kind == 'capacity_freeze' or old_kind == 'capacity_freeze_probe' then
-  if redis.call('EXISTS', KEYS[3]) == 0 then redis.call('RENAME', KEYS[5], KEYS[3]) else redis.call('DEL', KEYS[5]) end
-  redis.call('ZREM', KEYS[6], ARGV[5])
-  redis.call('ZADD', KEYS[4], redis.call('HGET', KEYS[3], 'until_ms'), ARGV[5])
-end
+static MIGRATE_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
+    Script::new(
+        &[
+            MIGRATE,
+            "migrate_protection(KEYS[1], KEYS[2], KEYS[3], KEYS[4], ARGV[1])\nreturn 1",
+        ]
+        .concat(),
+    )
+});
+
+static BEGIN: LazyLock<Script> = LazyLock::new(|| {
+    Script::new(&[MIGRATE, r#"
+migrate_protection(KEYS[5], KEYS[3], KEYS[6], KEYS[4], ARGV[5])
 if redis.call('HGET', KEYS[1], 'enabled') ~= '1'
   or redis.call('HGET', KEYS[1], 'fingerprint') ~= ARGV[2]
-  or tonumber(redis.call('HGET', KEYS[1], 'changed_revision') or '0') ~= tonumber(ARGV[3]) then return {} end
+  or tonumber(redis.call('HGET', KEYS[1], 'revision') or '0') ~= tonumber(ARGV[3]) then return {} end
 local clock = redis.call('TIME')
 local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
 local frozen_revision = tonumber(redis.call('HGET', KEYS[3], 'revision') or '0')
@@ -65,7 +73,8 @@ if current ~= tonumber(ARGV[1]) or redis.call('HGET', KEYS[2], 'policy') ~= gene
 end
 redis.call('EXPIRE', KEYS[2], 691200)
 return {generation, redis.call('HGET', KEYS[2], 'reset'), redis.call('HGET', KEYS[2], 'version')}
-"#;
+"#].concat())
+});
 
 // 反馈不创建丢失的 guard 状态；Redis 丢失状态或手动恢复后不能重放历史失败
 const FAILURE: &str = r#"
@@ -103,14 +112,9 @@ redis.call('HINCRBY', KEYS[2], 'version', 1)
 return 1
 "#;
 
-// 调度读取一次脚本同时观察两种原因，保护关闭时不额外增加往返
+// 调度和管理详情共用原子状态判断，各自只返回所需数据
 const READ_EFFECTIVE: &str = r#"
-local old_kind = redis.call('HGET', KEYS[1], 'kind')
-if old_kind == 'capacity_freeze' or old_kind == 'capacity_freeze_probe' then
-  if redis.call('EXISTS', KEYS[3]) == 0 then redis.call('RENAME', KEYS[1], KEYS[3]) else redis.call('DEL', KEYS[1]) end
-  redis.call('ZREM', KEYS[2], ARGV[1])
-  redis.call('ZADD', KEYS[4], redis.call('HGET', KEYS[3], 'until_ms'), ARGV[1])
-end
+migrate_protection(KEYS[1], KEYS[3], KEYS[2], KEYS[4], ARGV[1])
 local clock = redis.call('TIME')
 local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
 local selected = {}
@@ -124,8 +128,21 @@ for i = 1, 3, 2 do
     redis.call('DEL', KEYS[i]); redis.call('ZREM', KEYS[i+1], ARGV[1])
   end
 end
-return {selected, redis.call('HGETALL', KEYS[3])}
 "#;
+
+static READ_COOLDOWN: LazyLock<Script> =
+    LazyLock::new(|| Script::new(&[MIGRATE, READ_EFFECTIVE, "return selected"].concat()));
+
+static READ_ACCOUNT_RUNTIME: LazyLock<Script> = LazyLock::new(|| {
+    Script::new(
+        &[
+            MIGRATE,
+            READ_EFFECTIVE,
+            "return {selected, redis.call('HGETALL', KEYS[3])}",
+        ]
+        .concat(),
+    )
+});
 
 const CLEAR: &str = r#"
 local current = math.max(tonumber(redis.call('HGET', KEYS[1], 'revision') or '0'), tonumber(redis.call('HGET', KEYS[2], 'revision') or '0'))
@@ -203,7 +220,7 @@ impl RedisCredentialCooldownRepository {
         Ok(())
     }
     pub(super) async fn migrate_protection(&self, account: &str) -> StoreResult<()> {
-        Script::new(MIGRATE)
+        MIGRATE_SCRIPT
             .key(self.key(account)?)
             .key(self.protection_key(account)?)
             .key(self.active_index_key())
@@ -221,7 +238,7 @@ impl RedisCredentialCooldownRepository {
         fingerprint: &str,
         snapshot_revision: ConfigRevision,
     ) -> StoreResult<Option<AccountProtectionGuard>> {
-        let result: Vec<String> = Script::new(BEGIN)
+        let result: Vec<String> = BEGIN
             .key(self.policy_key())
             .key(self.protection_state_key(account.as_str())?)
             .key(self.protection_key(account.as_str())?)
@@ -302,11 +319,27 @@ impl RedisCredentialCooldownRepository {
             .map_err(|e| redis_unavailable("record protection success", e))?;
         Ok(changed == 1)
     }
+    pub(super) async fn read_effective_cooldown(
+        &self,
+        account: &str,
+    ) -> StoreResult<Option<CredentialCooldown>> {
+        let result: Vec<String> = READ_COOLDOWN
+            .key(self.key(account)?)
+            .key(self.active_index_key())
+            .key(self.protection_key(account)?)
+            .key(self.protection_index_key())
+            .arg(account)
+            .invoke_async(&mut self.connection.clone())
+            .await
+            .map_err(|e| redis_unavailable("read account cooldown", e))?;
+        parse_cooldown(account, &result)
+    }
+
     pub(super) async fn read_account_runtime(
         &self,
         account: &str,
     ) -> StoreResult<(Option<CredentialCooldown>, Option<AccountFreeze>)> {
-        let (result, values): (Vec<String>, BTreeMap<String, String>) = Script::new(READ_EFFECTIVE)
+        let (result, values): (Vec<String>, BTreeMap<String, String>) = READ_ACCOUNT_RUNTIME
             .key(self.key(account)?)
             .key(self.active_index_key())
             .key(self.protection_key(account)?)
@@ -316,19 +349,7 @@ impl RedisCredentialCooldownRepository {
             .await
             .map_err(|e| redis_unavailable("read account cooldown snapshot", e))?;
         let invalid = || super::credential_cooldown::invalid("invalid account cooldown snapshot");
-        let cooldown = if let [revision, until, kind] = result.as_slice() {
-            Some(CredentialCooldown {
-                provider_account_id: account.to_owned(),
-                credential_revision: Revision::new(revision.parse().map_err(|_| invalid())?)?,
-                cooldown_until: DateTime::from_timestamp_millis(
-                    until.parse().map_err(|_| invalid())?,
-                )
-                .ok_or_else(invalid)?,
-                kind: ProviderCooldownKind::parse(kind).ok_or_else(invalid)?,
-            })
-        } else {
-            None
-        };
+        let cooldown = parse_cooldown(account, &result)?;
         let freeze = if values.is_empty() {
             None
         } else {
@@ -431,4 +452,18 @@ impl RedisCredentialCooldownRepository {
             .map_err(|e| redis_unavailable("finish account protection", e))?;
         Ok(changed == 1)
     }
+}
+
+fn parse_cooldown(account: &str, values: &[String]) -> StoreResult<Option<CredentialCooldown>> {
+    let [revision, until, kind] = values else {
+        return Ok(None);
+    };
+    let invalid = || super::credential_cooldown::invalid("invalid account cooldown snapshot");
+    Ok(Some(CredentialCooldown {
+        provider_account_id: account.to_owned(),
+        credential_revision: Revision::new(revision.parse().map_err(|_| invalid())?)?,
+        cooldown_until: DateTime::from_timestamp_millis(until.parse().map_err(|_| invalid())?)
+            .ok_or_else(invalid)?,
+        kind: ProviderCooldownKind::parse(kind).ok_or_else(invalid)?,
+    }))
 }

@@ -617,7 +617,6 @@ pub(super) struct FakeAccountStore {
     automations: Mutex<
         BTreeMap<String, gateway_admin::model::reset_credit_automation::ResetCreditAutomation>,
     >,
-    pub(super) lowered_limits: Mutex<Vec<(String, u32)>>,
 }
 
 impl FakeAccountStore {
@@ -638,7 +637,6 @@ impl FakeAccountStore {
             quota_window_queries: Mutex::new(Vec::new()),
             quota_forecast_history: Mutex::new(QuotaForecastHistory::default()),
             update_commands: Mutex::new(Vec::new()),
-            lowered_limits: Mutex::new(Vec::new()),
             automations: Mutex::default(),
         })
     }
@@ -1035,35 +1033,6 @@ impl AccountStore for FakeAccountStore {
             config_revision: revision(2),
             account_id: ProviderAccountId::new(command.account_id).expect("account ID"),
         })
-    }
-
-    async fn lower_concurrency_limit(
-        &self,
-        account_id: &ProviderAccountId,
-        limit: gateway_core::account::AccountConcurrencyLimit,
-        _: &MutationContext,
-    ) -> AdminStoreResult<Option<AccountUpdateResult>> {
-        let mut accounts = self.accounts.lock().expect("accounts");
-        let Some(account) = accounts
-            .iter_mut()
-            .find(|account| account.id == account_id.as_str())
-        else {
-            return Ok(None);
-        };
-        if !account.enabled
-            || account.concurrency_limit.map_or(5, |value| value.get()) <= limit.get()
-        {
-            return Ok(None);
-        }
-        account.concurrency_limit = Some(limit);
-        self.lowered_limits
-            .lock()
-            .expect("lowered limits")
-            .push((account.id.clone(), limit.get()));
-        Ok(Some(AccountUpdateResult {
-            config_revision: revision(2),
-            account_id: account_id.clone(),
-        }))
     }
 
     async fn recover_account(
