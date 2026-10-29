@@ -86,6 +86,7 @@ fn selected_usage_window(quota: &ProviderQuota) -> Option<(&str, AccountUsagePer
 
 fn usage_quota(windows: Vec<ProviderQuotaWindow>) -> ProviderQuota {
     ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: None,
         observed_at: None,
@@ -98,6 +99,7 @@ fn usage_quota(windows: Vec<ProviderQuotaWindow>) -> ProviderQuota {
 
 fn usage_window(key: &str, group: &str, seconds: u64) -> ProviderQuotaWindow {
     ProviderQuotaWindow {
+        upstream: None,
         key: key.to_owned(),
         group: group.to_owned(),
         label: key.to_owned(),
@@ -136,6 +138,7 @@ fn usage_window(key: &str, group: &str, seconds: u64) -> ProviderQuotaWindow {
 #[test]
 fn dashboard_quota_should_preserve_unknown_and_actual_window_facts() {
     let mut quota = ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: None,
         observed_at: None,
@@ -148,6 +151,7 @@ fn dashboard_quota_should_preserve_unknown_and_actual_window_facts() {
     assert!(quota.representative_used_percent().is_none());
 
     let rolling = ProviderQuotaWindow {
+        upstream: None,
         key: "provider_rolling".to_owned(),
         group: "requests".to_owned(),
         label: "Provider rolling window".to_owned(),
@@ -180,6 +184,7 @@ fn dashboard_quota_should_preserve_unknown_and_actual_window_facts() {
     quota.windows.insert(
         0,
         ProviderQuotaWindow {
+            upstream: None,
             key: "model_specific".to_owned(),
             used_percent: Some(100.0),
             local_usage_attribution: QuotaLocalUsageAttribution::Unavailable,

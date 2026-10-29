@@ -154,6 +154,10 @@ impl GrokBuildProvider {
 
 #[async_trait]
 impl Provider for GrokBuildProvider {
+    fn is_direct_account(&self, authentication_kind: &str) -> bool {
+        crate::credential::is_direct_account_kind(authentication_kind)
+    }
+
     fn resolve_request_profile(
         &self,
         configuration: &gateway_core::account::OpaqueProviderData,

@@ -27,6 +27,7 @@ pub(super) const SEARCH_PATH: &str = "/v1/alpha/search";
 pub(super) const MODELS_PATH: &str = "/v1/models";
 pub(super) const MODEL_DETAIL_PATH: &str = "/v1/models/{model_id}";
 pub(super) const USAGE_PATH: &str = "/v1/usage";
+pub(super) const PEER_LINK_PATH: &str = "/v1/cpr/link";
 
 /// 构造 OpenAI 客户端协议路由
 pub(crate) fn router() -> Router<ApiState> {
@@ -40,6 +41,7 @@ pub(crate) fn router() -> Router<ApiState> {
         // 官方 OpenAI 模型详情合同使用 path ID；它不属于 Admin API 约束
         .route(MODEL_DETAIL_PATH, get(model_detail))
         .merge(usage::router())
+        .merge(super::peer_link::router())
         .merge(live::router())
         // OpenAI 数据面正文属于客户端/上游协议；代理不能用私有大小上限提前拒绝
         // 上游本可接受的未来 payload

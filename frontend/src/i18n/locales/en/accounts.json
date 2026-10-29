@@ -288,6 +288,7 @@
       "totalCharges": "Total cost",
       "noModelUsageYet": "No model usage yet",
       "windows": {
+        "daily": "Daily usage",
         "general": "Total usage",
         "weekly": "Weekly usage",
         "monthly": "Monthly usage",
@@ -607,6 +608,28 @@
       "pasteAtLeastOne": "Paste at least one {label}",
       "missingProvider": "The import file contains no {provider} accounts",
       "importFilesMustBeJsonObjects": "Import files must be JSON objects"
+    },
+    "upstream": {
+      "account": "Account {number}",
+      "poolChart": "Shared pool account quotas",
+      "poolKeyboard": "Arrow keys select an account, plus and minus zoom, Home shows the full pool",
+      "startsOnNextUse": "Starts on next use",
+      "link": "CPR Link",
+      "observedAt": "Updated {time}",
+      "stale": "Data expired",
+      "pending": "Not queried",
+      "queued": "Queued",
+      "running": "Querying",
+      "accepted": "Query is still incomplete; refresh later to view the result",
+      "unauthorized": "Upstream access denied",
+      "unsupported": "Upstream does not support CPR Link",
+      "rateLimited": "Upstream query rate limited",
+      "invalidResponse": "Invalid upstream data",
+      "unavailable": "Upstream unavailable",
+      "pool": "Shared pool",
+      "ready": "available",
+      "nodeQuota": "Node quota",
+      "quota": "Upstream quota"
     }
   }
 }

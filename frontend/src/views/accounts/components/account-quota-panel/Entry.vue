@@ -6,8 +6,8 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AccountRequestTimeline from '@/components/account/account-usage-window/AccountRequestTimeline.vue'
 import {
+  quotaWindowDetails,
   quotaWindowLabel,
-  quotaWindowLocalUsageDisplay,
   quotaWindowPresentation,
   resolveAccountUsageWindowPresentation,
 } from '@/components/account/account-usage-window/presenter'
@@ -29,6 +29,7 @@ const items = computed(() => props.windows.map((window) => {
   })
 
   return {
+    ...quotaWindowDetails(window),
     key: window.key,
     local: view.mode === 'local',
     localLabel: view.local.label,
@@ -42,8 +43,6 @@ const items = computed(() => props.windows.map((window) => {
     ariaLabel: quotaWindowLabel(window),
     usedPercent: window.usedPercent,
     usedPercentDisplay: window.usedPercentDisplay,
-    localUsageDisplay: quotaWindowLocalUsageDisplay(window),
-    resetAtDisplay: window.resetAtDisplay,
     percentTextClass: presentation.percentTextClass,
     barClass: presentation.barClass,
     barStyle: presentation.barStyle,
@@ -101,6 +100,10 @@ const items = computed(() => props.windows.map((window) => {
               {{ item.label }}
             </span>
             <span class="flex shrink-0 items-baseline gap-1.5 font-mono font-heavy tabular-nums">
+              <template v-if="item.amountUsedDisplay">
+                <strong class="text-cp-text-quaternary">{{ item.amountUsedDisplay }}</strong>
+                <span v-if="item.localUsageDisplay" class="font-normal text-cp-text-quaternary" aria-hidden="true">·</span>
+              </template>
               <strong
                 v-if="item.localUsageDisplay"
                 class="text-cp-text-quaternary"

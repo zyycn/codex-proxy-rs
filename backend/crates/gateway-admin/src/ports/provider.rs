@@ -179,6 +179,19 @@ pub trait ProviderAdmin: Send + Sync {
     }
 
     fn provider_kind(&self) -> &ProviderKind;
+    /// 与执行 Provider 共用的直连资格，未知实现默认不公开账号
+    fn is_direct_account(&self, _authentication_kind: &str) -> bool {
+        false
+    }
+
+    /// 仅依据本地账号事实判断通用模型资格；未知实现不能宣称完整覆盖
+    fn peer_model_eligible(
+        &self,
+        _account: &crate::model::accounts::AccountRecord,
+        _model: &str,
+    ) -> Option<bool> {
+        None
+    }
 
     /// 只读取原生 Provider 能力及账号类型，不执行网络或数据库查询
     fn account_capabilities(
@@ -307,6 +320,14 @@ pub trait ProviderAdmin: Send + Sync {
             .await
         }))
         .await
+    }
+
+    /// 只写入本地刷新计划；处理该管理动作时不得访问上游
+    async fn refresh_upstream_info(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<crate::model::upstream_info::UpstreamRefreshReceipt, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
     /// 历史观测的协议字段仅由具体 Provider 解释；不支持时保留累计估算

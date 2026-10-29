@@ -52,6 +52,7 @@ async fn key_facts_read_current_database_groups_without_secrets() {
             .client_keys()
             .update_client_key(
                 UpdateClientKey {
+                    peer_sharing: None,
                     request_profile_override_updates: Default::default(),
                     id: ClientApiKeyId::new(id).unwrap(),
                     name: "facts".into(),

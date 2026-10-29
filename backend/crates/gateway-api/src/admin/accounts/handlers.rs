@@ -17,6 +17,10 @@ where
             get(super::concurrency::list::<S>),
         )
         .route("/api/admin/accounts/detail", get(account_detail::<S>))
+        .route(
+            "/api/admin/accounts/upstream-info/refresh",
+            post(super::upstream_info::refresh::<S>),
+        )
         .route("/api/admin/accounts/export", get(export_accounts::<S>))
         .route("/api/admin/accounts/import", post(import_accounts::<S>))
         .route("/api/admin/accounts/refresh", post(refresh_account::<S>))

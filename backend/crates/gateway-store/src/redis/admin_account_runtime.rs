@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt as _, TryStreamExt as _};
 use gateway_admin::{
     model::accounts::AccountRuntimeSnapshot,
     ports::store::{AccountRuntimeStore, AdminStoreResult},
@@ -57,34 +56,8 @@ impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
         &self,
         account_ids: &[String],
     ) -> AdminStoreResult<AccountRuntimeSnapshot> {
-        let reads = futures::stream::iter(account_ids.iter().cloned())
-            .map(|account| async move {
-                self.cooldowns
-                    .read_account_runtime(&account)
-                    .await
-                    .map(|runtime| (account, runtime))
-            })
-            .buffer_unordered(32)
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|error| crate::admin_store_error("account runtime", error))?;
-        let mut cooldown = BTreeMap::new();
-        let mut protection_rules = BTreeMap::new();
-        for (account, (current, freeze)) in reads {
-            if let Some(current) = current {
-                cooldown.insert(
-                    account.clone(),
-                    gateway_core::account::AccountCooldown {
-                        until: current.cooldown_until.into(),
-                        kind: current.kind,
-                    },
-                );
-            }
-            if let Some(freeze) = freeze {
-                protection_rules.insert(account.clone(), freeze.protection_rules);
-            }
-        }
-        let in_flight = self
+        let mut snapshot = self.account_rate_limits(account_ids).await?;
+        snapshot.in_flight = self
             .leases
             .credential_runtime_signals(account_ids)
             .await
@@ -95,11 +68,17 @@ impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
                     .map(|signal| (signal.resource_id, u64::from(signal.in_flight)))
                     .collect()
             });
-        Ok(AccountRuntimeSnapshot {
-            protection_rules,
-            cooldown,
-            in_flight,
-        })
+        Ok(snapshot)
+    }
+
+    async fn account_rate_limits(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<AccountRuntimeSnapshot> {
+        self.cooldowns
+            .account_cooldowns(account_ids)
+            .await
+            .map_err(|error| crate::admin_store_error("account runtime", error))
     }
 
     async fn active_freezes(

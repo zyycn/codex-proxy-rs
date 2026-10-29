@@ -14,6 +14,10 @@ export type AccountErrorReason
     | 'account_banned'
 
 export interface AccountQuotaWindow {
+  sourceAccountId?: string | null
+  amount?: { usedDisplay: string, remainingDisplay: string, totalDisplay: string } | null
+  observedAtDisplay?: string | null
+  stale?: boolean
   key: string
   group: string
   limitId: string | null
@@ -96,7 +100,7 @@ export interface AccountModelUsage {
 }
 
 export interface AccountUsage {
-  windowKind: 'general' | 'weekly' | 'monthly' | 'quota'
+  windowKind: 'general' | 'daily' | 'weekly' | 'monthly' | 'quota'
   requestCount: number | null
   requestCountDisplay: string
   inputTokens: number | null
@@ -136,6 +140,7 @@ export interface AccountModelAccess {
 }
 
 export interface Account {
+  upstream: AccountUpstream | null
   capabilities: AccountCapabilities
   outboundProxyId: string | null
   outboundProxyEndpoint: string | null
@@ -175,6 +180,34 @@ export interface Account {
   quota: AccountQuota
   usage: AccountUsage
   groups: AccountGroupRef[]
+}
+
+export interface AccountUpstream {
+  discovered: boolean
+  node: { id: string, name: string, software: string } | null
+  observedAt: string | null
+  observedAtDisplay: string
+  observedAtRelative: RelativeTimeView | null
+  stale: boolean
+  connectionRevision: string
+  sync: {
+    state: 'idle' | 'queued' | 'running'
+    requestGeneration: number
+    completedGeneration: number
+  }
+  lastError: 'unauthorized' | 'unsupported' | 'rate_limited' | 'invalid_response' | 'unavailable' | null
+  pool: {
+    accountCount: number
+    states: { ready: number, cooldown: number, exhausted: number, disabled: number, error: number, unknown: number }
+    plans: Array<{ name: string, count: number }>
+  } | null
+}
+
+export interface AccountUpstreamRefreshItem {
+  accountId: string
+  connectionRevision: string
+  requestGeneration: number
+  state: 'queued' | 'running'
 }
 
 export interface AccountCapabilities {
@@ -588,6 +621,15 @@ function stableAvatarVersion(value: string) {
 export function refreshAccountQuota(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountQuotaResponse>({
     url: '/api/admin/accounts/quota/refresh',
+    method: 'POST',
+    data,
+    ...options,
+  })
+}
+
+export function refreshAccountUpstreamInfo(data: { accountIds: string[] }, options: RequestOptions = {}) {
+  return request<{ items: AccountUpstreamRefreshItem[] }>({
+    url: '/api/admin/accounts/upstream-info/refresh',
     method: 'POST',
     data,
     ...options,

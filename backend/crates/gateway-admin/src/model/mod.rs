@@ -14,6 +14,7 @@ pub mod diagnostics;
 pub mod import_tasks;
 pub mod key_usage;
 pub mod observability;
+pub mod peer_link;
 pub mod plugin_client_keys;
 pub mod plugin_resources;
 pub mod plugins;
@@ -26,6 +27,7 @@ pub mod reset_credit_automation;
 pub mod retention;
 pub mod settings;
 pub mod system;
+pub mod upstream_info;
 pub mod usage_data;
 
 /// 管理用例对外返回的稳定错误分类

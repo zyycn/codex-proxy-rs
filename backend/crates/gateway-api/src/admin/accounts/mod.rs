@@ -44,7 +44,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use uuid::{Uuid, Version};
 
-use super::presenter::{format_compact_number, format_decimal_currency, format_number};
+use super::presenter::{
+    format_compact_number, format_decimal_currency, format_number, format_percentage,
+};
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, PageMeta,
     WireValidationError,
@@ -66,11 +68,13 @@ mod credentials;
 mod handlers;
 mod import_tasks;
 mod presenter;
+mod upstream_info;
 mod wire;
 
 pub use credentials::*;
 pub use handlers::{profile_avatar_response, router};
 pub(super) use presenter::quota_window_view;
+pub use upstream_info::{AccountQuotaAmountView, AccountUpstreamInfoView};
 pub use wire::*;
 
 use credentials::{

@@ -1152,6 +1152,11 @@ impl fmt::Debug for ProviderRequest {
 /// 新的 attempt 再次调用
 #[async_trait]
 pub trait Provider: Send + Sync {
+    /// 声明可用于互联共享的直连认证方式，不执行网络查询
+    fn is_direct_account(&self, _authentication_kind: &str) -> bool {
+        false
+    }
+
     /// Provider 解释自己的隐私规则，Core 仅冻结编译结果
     fn compile_privacy_policy(
         &self,
@@ -1371,6 +1376,12 @@ impl ProviderRegistry {
 }
 
 impl ProviderCatalogPort for ProviderRegistry {
+    fn is_direct_account(&self, provider: &ProviderKind, authentication_kind: &str) -> bool {
+        self.providers
+            .get(provider)
+            .is_some_and(|provider| provider.is_direct_account(authentication_kind))
+    }
+
     fn model_catalog_is_exhaustive(&self, provider: &ProviderKind) -> bool {
         self.providers
             .get(provider)

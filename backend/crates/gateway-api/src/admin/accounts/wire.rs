@@ -266,6 +266,7 @@ pub struct AccountSummaryView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
+    pub upstream: Option<super::AccountUpstreamInfoView>,
     pub capabilities: AccountCapabilitiesView,
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_endpoint: Option<String>,
@@ -412,6 +413,11 @@ pub struct AccountQuotaCreditsView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaWindowView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_account_id: Option<String>,
+    pub amount: Option<super::AccountQuotaAmountView>,
+    pub observed_at_display: Option<String>,
+    pub stale: bool,
     pub key: String,
     pub group: String,
     pub limit_id: Option<String>,
@@ -433,6 +439,7 @@ pub struct AccountQuotaWindowView {
 #[serde(rename_all = "snake_case")]
 pub enum AccountUsageWindowKind {
     General,
+    Daily,
     Weekly,
     Monthly,
     Quota,

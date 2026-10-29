@@ -288,6 +288,7 @@
       "totalCharges": "总计费：",
       "noModelUsageYet": "暂无模型用量",
       "windows": {
+        "daily": "日用量",
         "general": "累计用量",
         "weekly": "周用量",
         "monthly": "月用量",
@@ -607,6 +608,28 @@
       "pasteAtLeastOne": "请至少粘贴一个 {label}",
       "missingProvider": "批量导入文件不包含 {provider} 账号文档",
       "importFilesMustBeJsonObjects": "导入文件必须是 JSON 对象"
+    },
+    "upstream": {
+      "account": "账号 {number}",
+      "poolChart": "共享池账号额度",
+      "poolKeyboard": "左右键选择账号，加减键缩放，Home 键查看全池",
+      "startsOnNextUse": "下次使用时开启",
+      "link": "CPR 互联",
+      "observedAt": "{time}更新",
+      "stale": "数据已过期",
+      "pending": "待查询",
+      "queued": "等待查询",
+      "running": "查询中",
+      "accepted": "查询尚未完成，稍后刷新可查看结果",
+      "unauthorized": "上游未授权",
+      "unsupported": "上游暂不支持互联",
+      "rateLimited": "上游查询受限",
+      "invalidResponse": "上游数据异常",
+      "unavailable": "上游暂不可用",
+      "pool": "共享池",
+      "ready": "可用",
+      "nodeQuota": "节点额度",
+      "quota": "上游额度"
     }
   }
 }

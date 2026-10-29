@@ -10,6 +10,7 @@ pub mod credentials;
 pub mod import_tasks;
 pub mod key_usage;
 pub mod observability;
+pub mod peer_link;
 pub mod plugin_accounts;
 pub mod plugin_client_keys;
 pub mod plugin_resources;

@@ -130,6 +130,35 @@ pub trait AccountStore:
         runtime: AccountRuntimeSnapshot,
     ) -> AdminStoreResult<Option<AccountPageItem>>;
 
+    /// 批量读取指定账号与当前启用分组的交集，分组只用于授权筛选，不加载展示信息
+    /// 不加载凭据正文或触发 Provider 查询
+    async fn load_accounts_in_enabled_groups(
+        &self,
+        account_ids: &[gateway_core::account::ProviderAccountId],
+        group_ids: &[gateway_core::routing::AccountGroupId],
+    ) -> AdminStoreResult<Vec<crate::model::accounts::AccountRecord>> {
+        if group_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut accounts = Vec::with_capacity(account_ids.len());
+        for id in account_ids {
+            if let Some(item) = self
+                .load_account(id.as_str(), AccountRuntimeSnapshot::default())
+                .await?
+                && item
+                    .account
+                    .groups
+                    .iter()
+                    .any(|group| group.enabled && group_ids.contains(&group.id))
+            {
+                let mut account = item.account;
+                account.groups.clear();
+                accounts.push(account);
+            }
+        }
+        Ok(accounts)
+    }
+
     async fn account_exists(&self, account_id: &str) -> AdminStoreResult<bool>;
 
     async fn load_account_usage(
@@ -251,6 +280,14 @@ pub trait AccountRuntimeStore: Send + Sync {
         account_ids: &[String],
     ) -> AdminStoreResult<AccountRuntimeSnapshot>;
 
+    /// 只需账号可用状态时不读取在途租约，避免池规模放大容量查询
+    async fn account_rate_limits(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<AccountRuntimeSnapshot> {
+        self.account_runtime(account_ids).await
+    }
+
     /// 账号错误保护中的账号与其冻结快照；临时限流不包含在内
     async fn active_freezes(
         &self,
@@ -321,6 +358,16 @@ pub trait AuthStore: Send + Sync {
 /// Client API Key 资料读取与管理写入
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
+    async fn peer_node_identity(
+        &self,
+    ) -> AdminStoreResult<crate::model::peer_link::PeerNodeIdentity> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "peer node",
+            "peer node is unavailable",
+        ))
+    }
+
     /// 按已验证的 ID 读取资料，不读取完整明文 Key
     async fn get_client_key(
         &self,

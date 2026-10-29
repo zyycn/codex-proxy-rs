@@ -97,6 +97,11 @@ mod settings;
 mod system;
 mod wire;
 
+pub(super) struct ProviderQuotaGate {
+    pub entered: tokio::sync::Semaphore,
+    pub release: tokio::sync::Semaphore,
+}
+
 pub(super) struct AdminTestFixture {
     pub services: AdminServices,
     plugin_ports: Arc<plugins::TestPluginPorts>,
@@ -113,6 +118,7 @@ pub(super) struct AdminTestFixture {
     pub dashboard_summary_range: Arc<Mutex<Option<TimeRange>>>,
     pub provider_error: Arc<Mutex<Option<ProviderAdminError>>>,
     pub provider_quota: Arc<Mutex<Option<ProviderQuota>>>,
+    pub provider_quota_gate: Arc<Mutex<Option<Arc<ProviderQuotaGate>>>>,
     pub account: Arc<Mutex<Option<AccountPageItem>>>,
     pub account_usage: Arc<Mutex<Vec<AccountUsage>>>,
 }
@@ -189,16 +195,19 @@ impl AdminTestFixture {
             plugin_ports.clone(),
         );
         let provider_quota = Arc::new(Mutex::new(None));
+        let provider_quota_gate = Arc::new(Mutex::new(None));
         let providers: Vec<Arc<dyn ProviderAdmin>> = vec![
             Arc::new(UnusedProvider::new(
                 "openai",
                 Arc::clone(&provider_error),
                 Arc::clone(&provider_quota),
+                Arc::clone(&provider_quota_gate),
             )),
             Arc::new(UnusedProvider::new(
                 "xai",
                 Arc::clone(&provider_error),
                 Arc::clone(&provider_quota),
+                Arc::clone(&provider_quota_gate),
             )),
         ];
         let bundle = gateway_admin::initialize(
@@ -247,6 +256,7 @@ impl AdminTestFixture {
             dashboard_summary_range,
             provider_error,
             provider_quota,
+            provider_quota_gate,
             account,
             account_usage,
         }
@@ -991,6 +1001,15 @@ fn mutation(
 
 #[async_trait]
 impl ClientKeyStore for MemoryClientKeyStore {
+    async fn peer_node_identity(
+        &self,
+    ) -> AdminStoreResult<gateway_admin::model::peer_link::PeerNodeIdentity> {
+        Ok(gateway_admin::model::peer_link::PeerNodeIdentity {
+            id: "test-peer-node".to_owned(),
+            name: "测试节点".to_owned(),
+        })
+    }
+
     async fn update_client_key_budget_limits(
         &self,
         _: gateway_admin::model::client_keys::UpdateClientKeyBudgetLimits,
@@ -1065,6 +1084,7 @@ impl ClientKeyStore for MemoryClientKeyStore {
         let now = Utc::now();
         Ok(Some(ClientKeySecret::new(
             ClientKeyRecord {
+                peer_sharing: Default::default(),
                 request_profile_overrides: Default::default(),
                 budget: Default::default(),
                 id: id.clone(),
@@ -1584,6 +1604,7 @@ struct UnusedProvider {
     kind: ProviderKind,
     error: Arc<Mutex<Option<ProviderAdminError>>>,
     quota: Arc<Mutex<Option<ProviderQuota>>>,
+    quota_gate: Arc<Mutex<Option<Arc<ProviderQuotaGate>>>>,
 }
 
 impl UnusedProvider {
@@ -1591,17 +1612,46 @@ impl UnusedProvider {
         kind: &str,
         error: Arc<Mutex<Option<ProviderAdminError>>>,
         quota: Arc<Mutex<Option<ProviderQuota>>>,
+        quota_gate: Arc<Mutex<Option<Arc<ProviderQuotaGate>>>>,
     ) -> Self {
         Self {
             kind: ProviderKind::new(kind).expect("provider kind"),
             error,
             quota,
+            quota_gate,
         }
     }
 }
 
 #[async_trait]
 impl ProviderAdmin for UnusedProvider {
+    fn is_direct_account(&self, authentication_kind: &str) -> bool {
+        authentication_kind == "oauth"
+    }
+
+    fn peer_model_eligible(
+        &self,
+        _: &gateway_admin::model::accounts::AccountRecord,
+        _: &str,
+    ) -> Option<bool> {
+        Some(true)
+    }
+
+    async fn refresh_upstream_info(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<gateway_admin::model::upstream_info::UpstreamRefreshReceipt, ProviderAdminError>
+    {
+        Ok(
+            gateway_admin::model::upstream_info::UpstreamRefreshReceipt {
+                account_id: account_id.as_str().to_owned(),
+                connection_revision: "connection-7".to_owned(),
+                request_generation: 7,
+                state: gateway_admin::model::upstream_info::UpstreamSyncState::Queued,
+            },
+        )
+    }
+
     fn pricing_catalog(&self) -> gateway_admin::model::pricing::ProviderPricingCatalog {
         serde_json::from_value(serde_json::json!({
             "builtin-model": {
@@ -1690,6 +1740,11 @@ impl ProviderAdmin for UnusedProvider {
         &self,
         _: gateway_admin::model::provider_credentials::ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError> {
+        let gate = self.quota_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.entered.add_permits(1);
+            gate.release.acquire().await.unwrap().forget();
+        }
         if let Some(quota) = self.quota.lock().expect("provider quota").clone() {
             return Ok(quota);
         }

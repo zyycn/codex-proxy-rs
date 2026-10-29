@@ -1692,9 +1692,11 @@ async fn accounts_recover_disabled_should_only_enable_scheduling_and_preserve_qu
             );
         }
         let quota = ProviderQuota {
+            upstream: None,
             credits: None,
             observed_at: Some(Utc::now()),
             windows: vec![ProviderQuotaWindow {
+                upstream: None,
                 key: "primary".to_owned(),
                 group: "shortTerm".to_owned(),
                 label: "5小时限额".to_owned(),
@@ -1996,6 +1998,7 @@ async fn accounts_should_fill_missing_plan_from_quota_without_overriding_known_s
     ] {
         let provider = FakeProviderAdmin::new("openai", events());
         provider.set_quota(ProviderQuota {
+            upstream: None,
             plan_type: quota_plan.map(str::to_owned),
             ..empty_quota()
         });
@@ -2039,11 +2042,13 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
     let events = events();
     let openai = FakeProviderAdmin::new("openai", events.clone());
     openai.set_quota(ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
+            upstream: None,
             key: "primary".to_owned(),
             group: "shortTerm".to_owned(),
             label: "5小时限额".to_owned(),
@@ -2197,11 +2202,13 @@ async fn accounts_list_should_map_unknown_credential_to_error_not_normal() {
 async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
+            upstream: None,
             key: "primary".to_owned(),
             group: "shortTerm".to_owned(),
             label: "5小时限额".to_owned(),
@@ -2246,11 +2253,13 @@ async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view()
 async fn accounts_list_should_not_derive_exhaustion_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
+            upstream: None,
             key: "primary".to_owned(),
             group: "shortTerm".to_owned(),
             label: "5小时限额".to_owned(),
@@ -2298,10 +2307,12 @@ async fn quota_forecast_reads_raw_snapshot_and_limits_usage_to_observation_time(
     let observed = now - TimeDelta::hours(1);
     let reset = now + TimeDelta::days(1);
     provider.set_quota(ProviderQuota {
+        upstream: None,
         credits: None,
         observed_at: Some(observed),
         limit_reached: true,
         windows: vec![ProviderQuotaWindow {
+            upstream: None,
             key: "week".to_owned(),
             group: "shortTerm".to_owned(),
             label: "周额度".to_owned(),
@@ -2390,6 +2401,7 @@ async fn quota_forecast_only_queries_the_two_selected_source_windows() {
         .map(|index| {
             let monthly = index % 2 == 1;
             ProviderQuotaWindow {
+                upstream: None,
                 key: if monthly {
                     format!("month-{index}")
                 } else {
@@ -2411,6 +2423,7 @@ async fn quota_forecast_only_queries_the_two_selected_source_windows() {
         })
         .collect();
     provider.set_quota(ProviderQuota {
+        upstream: None,
         plan_type: Some("pro".to_owned()),
         observed_at: Some(observed),
         windows,
@@ -2462,9 +2475,11 @@ async fn quota_forecast_same_window_reversal_keeps_recorded_usage_in_the_report(
         let reset = now + TimeDelta::days(1);
         let provider = FakeProviderAdmin::new("openai", events());
         provider.set_quota(ProviderQuota {
+            upstream: None,
             plan_type: Some("pro".to_owned()),
             observed_at: Some(observed),
             windows: vec![ProviderQuotaWindow {
+                upstream: None,
                 key: "week".to_owned(),
                 group: "shortTerm".to_owned(),
                 label: "周额度".to_owned(),
@@ -2540,10 +2555,12 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
     let added = now - TimeDelta::hours(5);
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: Some("pro".to_owned()),
         observed_at: Some(observed),
         windows: vec![ProviderQuotaWindow {
+            upstream: None,
             key: "week".to_owned(),
             group: "shortTerm".to_owned(),
             label: "周额度".to_owned(),
@@ -2637,6 +2654,163 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
 }
 
 #[tokio::test]
+async fn peer_account_usage_should_follow_budget_windows_without_borrowing_pool_windows() {
+    use gateway_admin::model::upstream_info::{
+        ProviderUpstreamInfo, UpstreamQuotaAmount, UpstreamQuotaWindow, UpstreamSync,
+        UpstreamSyncState,
+    };
+
+    for longest in [86_400, 604_800] {
+        let provider = FakeProviderAdmin::new("openai", events());
+        let mut account = account_record("openai");
+        account.authentication_kind = "api_key".to_owned();
+        account.created_at = Utc::now() - TimeDelta::days(60);
+        let store = FakeAccountStore::with_account(account, events());
+        let reset_at = Utc::now() + TimeDelta::hours(1);
+        let mut quota = empty_quota();
+        quota.upstream = Some(ProviderUpstreamInfo {
+            discovered: true,
+            node: None,
+            observed_at: Some(Utc::now()),
+            stale: false,
+            connection_revision: "1".to_owned(),
+            sync: UpstreamSync {
+                state: UpstreamSyncState::Idle,
+                request_generation: 1,
+                completed_generation: 1,
+            },
+            last_error: None,
+            pool: None,
+        });
+        quota.windows = [86_400, 604_800, 30 * 86_400]
+            .into_iter()
+            .filter(|seconds| *seconds <= longest || *seconds == 30 * 86_400)
+            .map(|seconds| ProviderQuotaWindow {
+                upstream: Some(UpstreamQuotaWindow {
+                    account_id: None,
+                    observed_at: Some(Utc::now()),
+                    stale: false,
+                    amount: (seconds <= longest).then(|| UpstreamQuotaAmount {
+                        unit: "USD".to_owned(),
+                        used: "1".to_owned(),
+                        remaining: Some("9".to_owned()),
+                        total: Some("10".to_owned()),
+                    }),
+                }),
+                key: seconds.to_string(),
+                group: "general".to_owned(),
+                label: "额度".to_owned(),
+                limit_id: None,
+                limit_name: None,
+                role: None,
+                local_usage_attribution: if seconds <= longest {
+                    QuotaLocalUsageAttribution::AccountWide
+                } else {
+                    QuotaLocalUsageAttribution::Unavailable
+                },
+                window_seconds: Some(seconds),
+                used_percent: Some(10.0),
+                reset_at: Some(reset_at),
+                limit_reached: false,
+                local_usage: None,
+                provider_data: None,
+            })
+            .collect();
+        provider.set_quota(quota.clone());
+        let window_usage = [86_400, 604_800]
+            .into_iter()
+            .filter(|seconds| *seconds <= longest)
+            .map(|seconds| AccountUsageWindowResult {
+                account_id: "acct_test".to_owned(),
+                key: seconds.to_string(),
+                usage: quota_local_usage("acct_test", if seconds == longest { 1_234 } else { 123 }),
+            })
+            .collect::<Vec<_>>();
+        store.set_quota_window_usage(window_usage.clone());
+        let services = accounts_service(provider.clone(), store.clone()).await;
+        let page = services
+            .accounts()
+            .list(AccountListQuery {
+                page: 1,
+                page_size: gateway_admin::model::PageSize::new(20).unwrap(),
+                provider_kind: None,
+                group_filter: None,
+                search: None,
+                status: None,
+                sort: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            page.items[0].usage.as_ref().unwrap().total_tokens,
+            Some(1_234)
+        );
+        let queries = store.quota_window_queries();
+        assert_eq!(queries.len(), window_usage.len());
+        for (query, expected) in queries.iter().zip(&window_usage) {
+            assert_eq!(query.key, expected.key);
+            assert_eq!(
+                query.range.start,
+                reset_at - TimeDelta::seconds(query.key.parse().unwrap())
+            );
+            assert_eq!(query.range.end, reset_at);
+            let window = page.items[0]
+                .quota
+                .windows
+                .iter()
+                .find(|window| window.key == query.key)
+                .unwrap();
+            assert_eq!(window.local_usage.as_ref(), Some(&expected.usage));
+            assert_eq!(window.used_percent, Some(10.0));
+            assert_eq!(
+                window
+                    .upstream
+                    .as_ref()
+                    .unwrap()
+                    .amount
+                    .as_ref()
+                    .unwrap()
+                    .used,
+                "1"
+            );
+        }
+        assert!(
+            page.items[0]
+                .quota
+                .windows
+                .last()
+                .unwrap()
+                .local_usage
+                .is_none()
+        );
+        let id = ProviderAccountId::new("acct_test").unwrap();
+        let detail = services.accounts().quota(&id, false).await.unwrap();
+        assert_eq!(detail.usage, page.items[0].usage);
+        assert_eq!(detail.quota.windows, page.items[0].quota.windows);
+        assert_eq!(store.quota_window_queries()[0].range, queries[0].range);
+
+        quota
+            .windows
+            .iter_mut()
+            .find(|window| window.window_seconds == Some(longest))
+            .unwrap()
+            .reset_at = None;
+        provider.set_quota(quota);
+        store.set_quota_window_usage(
+            window_usage
+                .into_iter()
+                .filter(|usage| usage.key != longest.to_string())
+                .collect(),
+        );
+        let unopened = services.accounts().quota(&id, false).await.unwrap();
+        assert!(
+            unopened.usage.is_none(),
+            "未开启的最长窗口不能借用日窗口或历史累计"
+        );
+    }
+}
+
+#[tokio::test]
 async fn api_key_list_and_detail_should_accumulate_local_usage_without_subscription_windows() {
     let provider = FakeProviderAdmin::new("openai", events());
     let mut account = account_record("openai");
@@ -2687,11 +2861,13 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::hours(1);
     provider.set_quota(ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
+            upstream: None,
             key: "primary".to_owned(),
             group: "shortTerm".to_owned(),
             label: "5小时限额".to_owned(),
@@ -2756,6 +2932,7 @@ async fn accounts_list_and_quota_refresh_should_select_the_same_weekly_or_monthl
     let account_id = ProviderAccountId::new("acct_test").expect("account id");
     let reset_at = Utc::now() + TimeDelta::days(1);
     let short = ProviderQuotaWindow {
+        upstream: None,
         key: "short".to_owned(),
         group: "shortTerm".to_owned(),
         label: "5小时限额".to_owned(),
@@ -2771,12 +2948,14 @@ async fn accounts_list_and_quota_refresh_should_select_the_same_weekly_or_monthl
         provider_data: None,
     };
     let week = ProviderQuotaWindow {
+        upstream: None,
         key: "week".to_owned(),
         label: "周额度".to_owned(),
         window_seconds: Some(7 * 86_400),
         ..short.clone()
     };
     let month = ProviderQuotaWindow {
+        upstream: None,
         key: "month".to_owned(),
         group: "monthly".to_owned(),
         label: "月额度".to_owned(),
@@ -2788,6 +2967,7 @@ async fn accounts_list_and_quota_refresh_should_select_the_same_weekly_or_monthl
         (vec![short, month], "month", 3000, 30),
     ] {
         provider.set_quota(ProviderQuota {
+            upstream: None,
             windows,
             ..empty_quota()
         });
@@ -2845,12 +3025,14 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::days(7);
     provider.set_quota(ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![
             ProviderQuotaWindow {
+                upstream: None,
                 key: "core-primary".to_owned(),
                 group: "weekly".to_owned(),
                 label: "周额度".to_owned(),
@@ -2866,6 +3048,7 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
                 provider_data: None,
             },
             ProviderQuotaWindow {
+                upstream: None,
                 key: "codex-bengalfox-primary".to_owned(),
                 group: "weekly".to_owned(),
                 label: "周额度".to_owned(),
@@ -3147,6 +3330,7 @@ pub(super) fn document() -> ProviderDocument {
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: None,
         observed_at: None,

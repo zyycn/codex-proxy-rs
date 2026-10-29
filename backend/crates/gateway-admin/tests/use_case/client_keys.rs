@@ -96,6 +96,7 @@ impl ClientKeyStore for TestClientKeyStore {
         }
         self.plaintexts.lock().unwrap().push(key.plaintext);
         let record = ClientKeyRecord {
+            peer_sharing: key.peer_sharing,
             request_profile_overrides: Default::default(),
             id: key.id,
             name: key.name,
@@ -234,6 +235,7 @@ async fn plugin_client_key_list_projects_only_public_identity_and_uses_stable_na
         list_response: Mutex::new(Some(ClientKeyPage {
             config_revision: Revision::new(7).expect("revision"),
             items: vec![ClientKeyRecord {
+                peer_sharing: Default::default(),
                 request_profile_overrides: Default::default(),
                 id: key_id.clone(),
                 name: "Public identity".to_owned(),
@@ -370,6 +372,7 @@ async fn duplicate_names_report_the_same_actionable_conflict_on_create_and_updat
         .update(
             &mutation_context(),
             UpdateClientKey {
+                peer_sharing: None,
                 request_profile_override_updates: Default::default(),
                 id: ClientApiKeyId::new("key_existing").unwrap(),
                 name: "Migration".to_owned(),
@@ -390,6 +393,7 @@ async fn duplicate_names_report_the_same_actionable_conflict_on_create_and_updat
 
 fn create_command(key: Option<&str>) -> CreateClientKey {
     CreateClientKey {
+        peer_sharing: Default::default(),
         request_profile_overrides: Default::default(),
         custom_key: key.map(|value| PlaintextClientApiKey::new(value).unwrap()),
         name: "Migration".to_owned(),
@@ -398,6 +402,53 @@ fn create_command(key: Option<&str>) -> CreateClientKey {
         limits: RateLimits::unlimited(),
         budget: Default::default(),
     }
+}
+
+#[tokio::test]
+async fn peer_sharing_requires_explicit_groups_and_independent_plan_authorization_before_writing() {
+    use gateway_core::policy::ClientPeerSharing;
+    let store = Arc::new(TestClientKeyStore::default());
+    let services = super::AdminHarness::new()
+        .client_keys(store.clone())
+        .build()
+        .await;
+    for sharing in [
+        ClientPeerSharing {
+            enabled: true,
+            ..Default::default()
+        },
+        ClientPeerSharing {
+            share_plans: true,
+            ..Default::default()
+        },
+    ] {
+        let mut command = create_command(None);
+        command.peer_sharing = sharing;
+        let error = services
+            .client_keys()
+            .create(&mutation_context(), command)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), AdminErrorKind::Invalid);
+    }
+    assert!(store.plaintexts.lock().unwrap().is_empty());
+    let mut command = create_command(None);
+    command.peer_sharing = ClientPeerSharing {
+        enabled: true,
+        share_pool: true,
+        share_quota: true,
+        share_plans: true,
+    };
+    command.group_ids.push(
+        gateway_core::routing::AccountGroupId::new(format!("grp_{}", "1".repeat(32))).unwrap(),
+    );
+    let expected = command.peer_sharing;
+    let result = services
+        .client_keys()
+        .create(&mutation_context(), command)
+        .await
+        .unwrap();
+    assert_eq!(result.secret.record.peer_sharing, expected);
 }
 
 fn mutation_context() -> MutationContext {
@@ -436,6 +487,7 @@ async fn duplicate_group_ids_are_rejected_before_key_creation_or_update() {
         .update(
             &mutation_context(),
             UpdateClientKey {
+                peer_sharing: None,
                 request_profile_override_updates: Default::default(),
                 id: ClientApiKeyId::new("key_existing").unwrap(),
                 name: "Migration".to_owned(),

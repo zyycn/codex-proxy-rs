@@ -83,6 +83,7 @@ impl PluginResourceAccess for DefaultPluginResourceAccess {
                     resource_key,
                     groups,
                     NewClientKey {
+                        peer_sharing: Default::default(),
                         id,
                         name: command.name,
                         label: None,

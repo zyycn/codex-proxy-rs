@@ -43,7 +43,7 @@ Client Key 通过账号分组限定路由范围：未绑定分组时可使用全
 
 运行设置可以分别配置 `minCodexDesktopVersion` 与 `minCodexCliVersion`。两者只接受 SemVer，`null`
 表示不限制，比较版本时忽略 `+` 后的构建元数据。API 在 Client Key 鉴权成功后识别官方客户端请求头；
-适用门禁的客户端没有合法版本，或版本低于对应门槛时，除只读 `/v1/usage` 外的 `/v1/*` HTTP 请求和新 WebSocket
+适用门禁的客户端没有合法版本，或版本低于对应门槛时，除只读 `/v1/usage`、`/v1/cpr/link` 外的 `/v1/*` HTTP 请求和新 WebSocket
 握手在访问上游前返回 `400 Bad Request`，按不可重试的请求错误处理。
 未知客户端保持兼容，不应用版本门禁
 
@@ -223,6 +223,7 @@ WebSocket message 和 frame 不设置网关私有长度上限；请求字段与�
 | `POST` | `/v1/providers/{provider}/models/{model}/count_tokens` | 调用指定 Provider/model 声明的精确 Token 计数；请求和响应均为 JSON |
 | `GET` / `POST` | `/v1/providers/{provider}/http/{endpoint}` | 调用指定 Provider 预先声明的固定 HTTP 操作；不是任意 URL 代理 |
 | `GET` | `/v1/usage` | 查询当前 Client Key 的日与周额度，仅使用网关已结算的 USD 账本 |
+| `GET` | `/v1/cpr/link` | 返回当前 Key 获准公开的 CPR 互联节点、预算及直连账号池观测 |
 
 ### Chat Completions 请求
 
@@ -708,6 +709,89 @@ OpenAI 选号阶段确认本次可选账号全部额度耗尽时，HTTP 返回 `
 缺失、非法、已禁用或已删除的 Key 返回 OpenAI 风格 `401` 错误；未知查询参数返回 `400 invalid_usage_query`，
 读取账本失败返回 `503 usage_unavailable`，不会用零余额掩盖故障
 
+### CPR 互联只读协议
+
+`GET {api_base}/cpr/link` 使用同一数据面入口认证；CPR 默认路径为 `/v1/cpr/link`，传入当前下游使用的推理 Key。
+只有该 Key 显式开启 `peerSharing.enabled` 且绑定非空分组时可查询。接口不接受 Cookie、管理 API Key 或查询参数，
+不执行推理、占用推理并发/RPM、更新最近使用时间或刷新上游；Key 预算耗尽后仍可查询
+
+协议识别依赖 `object: "cpr.peer"`、`schema_version: 1` 和 `capabilities`，不依赖 `node.software`。
+第三方项目或插件可实现同一协议；未知能力可以忽略，不支持的版本应按不兼容处理。
+响应直接返回 JSON，所有状态均带 `Cache-Control: no-store`。节点 ID 在本节点持久化，名称与软件名仅用于展示
+
+只公开预算的完整响应形态如下：
+
+```json
+{
+  "object": "cpr.peer",
+  "schema_version": 1,
+  "node": { "id": "7527ed09-c917-445f-9355-de6501803ccf", "name": "CPR 节点", "software": "codex-proxy-rs" },
+  "capabilities": ["key_usage"],
+  "observed_at": "2026-10-29T12:00:00Z",
+  "expires_at": "2026-10-29T12:05:00Z",
+  "usage": {
+    "status": "available",
+    "observed_at": "2026-10-29T12:00:00Z",
+    "data": {
+      "unit": "USD",
+      "daily": { "total": "1", "used": "0.6", "remaining": "0.4", "resetsAt": "2026-10-29T16:00:00Z" },
+      "weekly": { "total": null, "used": "2", "remaining": null, "resetsAt": null }
+    }
+  },
+  "pool": { "disclosure": "none" },
+  "quota": { "disclosure": "none" }
+}
+```
+
+`usage.data` 沿用 [API Key 额度查询](#api-key-额度查询) 的十进制金额、窗口及不限额语义。
+`usage.status` 可为 `available`、`unavailable` 或 `unknown`；没有可用数据时不把缺失值解释为零余额
+
+| 能力 | 数据合同 | 公开条件 |
+| --- | --- | --- |
+| `key_usage` | `usage` 为当前认证 Key 的本地预算账本 | `enabled` |
+| `pool_summary` | `pool.disclosure: "summary"`，含 `observed_at`、`account_count` 与 `states`；状态计数为 `ready`、`cooldown`、`exhausted`、`disabled`、`error`、`unknown` | `sharePool` |
+| 套餐分布 | `pool.plans: [{ name, count }]`；未授权时省略，不返回账号与套餐的逐项对应关系 | `sharePlans`，且已公开账号池 |
+| `quota_windows` | `quota.disclosure: "accounts"`，`accounts` 保留匿名账号及各自窗口；未授权时只返回 `disclosure: "none"` | `shareQuota` |
+| `model_availability` | `models` 按当前 Key 与请求到该节点的公开模型汇总，见下 | `shareQuota` |
+
+账号额度示例：
+
+```json
+{
+  "id": "df306c3718c99d3615352e41d32751d3",
+  "models": ["gpt-5.4"],
+  "observed_at": "2026-10-29T11:58:00Z",
+  "expires_at": "2026-10-29T12:28:00Z",
+  "windows": [{ "key": "weekly", "group": "shortTerm", "label": "周额度", "role": "secondary", "window_seconds": 604800, "used_percent": 47, "reset_at": "2026-10-31T16:00:00Z", "limit_reached": false }]
+}
+```
+
+匿名 `id` 在同一 Key 下稳定，不能当作本地账号 ID。返回结果不含 Key、邮箱、账号名称、代理或凭据正文。
+窗口的 `key`、`group`、`label`、可选 `limit_id`／`limit_name` 与可选 `role`（`primary`、`secondary`、`monthly`）保留原生展示口径；
+`window_seconds`、`used_percent`、`reset_at` 均可缺失。不同账号或不同周期的百分比不能相加，
+不能从百分比推算 Token 总额，也不能用本地请求用量填充上游额度
+
+模型汇总条目形如 `{ "model": "gpt-5.4", "coverage": "complete", "state": "available", "observed_at": "...", "expires_at": "..." }`。
+`coverage` 为 `complete` 或 `partial`，`state` 为 `available`、`exhausted` 或 `unknown`。
+只有该模型所有候选的资格与额度都明确、有效且全部耗尽，才能给出 `complete + exhausted`。
+它是通用模型额度参考，不承诺 Images、Live 等各操作的额外资格或即时容量；过期、缺失或部分覆盖保持中性，
+请求仍需执行当前节点的正常授权与调度
+
+顶层 `observed_at` 是此次本地快照组装时间，默认有效期 5 分钟；账号窗口与模型汇总保留各自的原始观测时间，
+不因查询或转发而更新。各组件有效期最多为原始观测后 30 分钟，并受重置边界约束；过去的重置时间意味着旧窗口过期，
+不意味着额度已经恢复。接入端应按各组件时间判断，不能用新的顶层时间延长旧观测
+
+共享范围同时受当前 Key 的公开开关、分组及冻结权限限制，只包含 Provider 明确声明的直连 OAuth 账号。
+互联 Key 的实际推理也使用该直连范围，不把 API Key 转接账号再次作为共享池，协议不递归查询其他节点。
+接口不分页、不截断账号集后声称完整；共享范围最多 3000 个账号、额度窗口总计最多 6000 个、模型最多 2000 个。
+任一数量超限、响应超过 4 MiB 或本地读取失败返回 `503 peer_snapshot_unavailable`
+
+缺失、非法、禁用或删除的 Key 返回 `401`；未开启共享或没有显式分组返回 `403 peer_sharing_disabled`；
+未知参数返回 `400 invalid_peer_query`。每个进程对每个认证 Key 独立限制为每分钟 30 次。
+涉及账号池、额度或模型聚合的查询每个进程最多同时执行 8 个，满额时立即返回
+`429 peer_query_rate_limited` 和 `Retry-After: 1`；仅查询 Key 预算不占用聚合槽位。
+每 Key 限流同样返回 `429 peer_query_rate_limited`，`Retry-After` 表示剩余等待秒数；两类限制均不消耗推理请求配额
+
 ### Codex Live 语音通话
 
 语音通话复用数据面 Client Key 鉴权，并按该 Key 的账号分组选路。通话引导是一次性请求，走与其他
@@ -866,6 +950,7 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游；Provider 未提供额度能力时返回空额度投影 |
 | `GET` | `/api/admin/accounts/quota-forecast` | `accountId` | 按需读取周/月容量预测、源窗口剩余估算与采样依据，不刷新上游额度 |
 | `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 访问 Provider 并刷新额度，同时同步额度所属状态 |
+| `POST` | `/api/admin/accounts/upstream-info/refresh` | `{ accountIds }` | 为已启用互联的 API Key 账号保存刷新计划，返回 HTTP 202，不等待上游 |
 | `GET` | `/api/admin/accounts/personal-info` | `accountId` | 按需汇聚 Provider 上游个人资料、累计活动与订阅信息，不更新额度或 credential |
 | `GET` | `/api/admin/accounts/profile-avatar` | `accountId`、可选 `version` | 返回支持头像能力的 Provider 字节流，需要管理员会话；`version` 仅区分浏览器缓存 |
 | `GET` | `/api/admin/accounts/reset-credits` | `accountId` | 查询支持该能力的 Provider 重置卡，不读取本地库存 |
@@ -938,6 +1023,57 @@ OpenAI 主动额度刷新和正常响应携带的明确套餐会同步到账号�
 指定代理后，推理、OAuth 服务端交换/刷新及账号辅助请求使用同一出口；代理失败不会退回直连。
 浏览器打开的第三方 OAuth 授权页仍使用浏览器自身网络。
 账号出口与连接隔离见 [架构说明](architecture.md#账号出站代理)
+
+### 上游互联快照
+
+启用的 OpenAI API Key 账号由后台主动识别互联能力，使用该账号的 API 前缀、Bearer 密钥和出站代理
+访问 `{base_url}/cpr/link`；地址可指向 CPR 或实现相同协议的其他项目。普通上游不支持该协议时退避重试，不影响模型请求
+
+账号列表返回已保存观测的 Key 预算窗口与池汇总；详情和额度 GET 另含池内逐账号窗口。
+查询这些接口不会访问上游，展开节点视图时通过账号详情读取窗口。
+`account.upstream` 未建立计划或账号停用时为 `null`；有计划时包含：
+
+| 字段 | 含义 |
+| --- | --- |
+| `discovered` | 当前连接已成功识别兼容协议，首次识别前为 `false`；界面仅为已识别连接展示互联信息 |
+| `node` | 已验证协议返回的 `{ id, name, software }`，首次同步前或授权被拒绝时为 `null` |
+| `observedAt`、`observedAtDisplay`、`observedAtRelative` | 上游观测时间及服务端格式化结果，不代表本次页面查询时间 |
+| `stale` | 快照是否已过期；过期值仅供查看 |
+| `connectionRevision` | 当前连接身份的不可解释标识，地址、密钥或出口变化后应停止等待旧身份 |
+| `sync` | `{ state, requestGeneration, completedGeneration }`，状态为 `idle`、`queued` 或 `running` |
+| `lastError` | 最近同步失败分类：`unauthorized`、`unsupported`、`rate_limited`、`invalid_response`、`unavailable`，成功时为 `null` |
+| `pool` | 上游授权公开的账号数量、状态数量及套餐数量，未公开时为 `null` |
+
+互联额度复用 `quota.windows`。上游 Key 的日/周消费限额窗口可返回
+`amount: { usedDisplay, remainingDisplay, totalDisplay }`，字符串包含单位，美元使用 `$` 前缀；金额不换算成 Token。
+Key 消费窗口的 `localUsage` 按各自 `[resetAt - windowSeconds, resetAt)` 边界聚合本机请求，
+与上游金额和百分比分开展示；未开启或边界缺失时不查询。
+上游池内的原生窗口通过 `sourceAccountId` 保留授权 Key 内稳定的匿名账号归属，
+不相加为统一余额，`localUsage` 保持缺失；Key 消费窗口与本机账号窗口不返回该字段。
+互联窗口返回独立的 `observedAtDisplay` 和 `stale`
+
+`POST /api/admin/accounts/upstream-info/refresh` 使用管理员鉴权，接受 1–200 个账号 ID，重复 ID 合并。
+成功返回 HTTP 202，响应 `data` 为：
+
+```json
+{
+  "items": [
+    {
+      "accountId": "acct_...",
+      "connectionRevision": "<opaque-revision>",
+      "requestGeneration": 3,
+      "state": "queued"
+    }
+  ]
+}
+```
+
+202 表示计划已保存，不表示上游查询成功。已排队或运行的请求合并为同一代次；调用者后续读取原有
+账号接口，在连接身份相同且 `completedGeneration >= requestGeneration` 时结束等待，再检查
+`lastError` 与快照时间。手动刷新遵守最小间隔和失败退避，不能通过反复提交绕过上游限流
+
+网络错误、限流或无效响应保留同一连接的旧观测；401/403 或连接身份变化清除旧观测。
+单个账号停用时停止同步并清理互联观测，重新启用后建立计划
 
 ### 账号模型限制
 
@@ -1174,8 +1310,13 @@ API Key 账号与 OAuth 共用现有 Responses、Images 和 standalone Search �
 包括 Responses Lite 和原生压缩协议的透传，实际支持情况由上游决定；不提供独立 compact 路由。
 模型目录、连接测试和本地用量统计可用；OAuth 刷新/重新授权、ChatGPT 额度、个人资料、订阅和重置卡不适用。
 客户端的 `image_generation` 和 `X-OpenAI-Actor-Authorization` 声明不改变账号的实际能力。
-账号列表和详情的 API Key `usage` 汇总该账号创建后仍保留的本地请求记录，`usage.windowKind` 为 `general`，管理端按当前语言显示通用额度；
-日志清理会影响累计范围，不代表上游余额。OAuth 账号仍按实际周/月额度窗口统计
+未启用 CPR 互联的 API Key 账号，其列表和详情 `usage` 汇总账号创建后仍保留的本地请求记录，
+`usage.windowKind` 为 `general`，管理端显示累计用量。日志清理会影响累计范围，不代表上游余额
+
+互联账号按上游 Key 最长的消费窗口统计本机 Token、费用和模型用量，有周额度时使用周窗口，只有日额度时使用日窗口，
+`usage.windowKind` 分别为 `weekly` 或 `daily`。查询边界同账号额度窗口，为 `[resetAt - windowSeconds, resetAt)`；
+未开启或缺少重置边界时显示无数据，不回退到历史累计，也不采用池内其他账号的周期。
+OAuth 账号仍按实际周/月额度窗口统计
 
 批量导入 AT / RT 使用 `accounts` JSON 数组，最多 200 项，不接受纯文本 token 列表。例如：
 
@@ -1304,13 +1445,14 @@ OAuth start 使用：
   不凭旧快照恢复账号
 - 正常 Responses 请求会解析上游响应的 rate-limit headers，合并进同一 quota 快照并同步状态。Free、
   K12 等套餐共用该状态机；套餐只参与账号展示和按套餐隔离的模型目录 cache，不存在 K12 专属额度路径
-- 账号详情的 Token 统计、模型排行和列表 Token 汇总优先使用账号级周额度窗口，无可统计的周窗口时
+- OAuth 账号详情的 Token 统计、模型排行和列表 Token 汇总优先使用账号级周额度窗口，无可统计的周窗口时
   使用月额度窗口；`usage.windowKind` 随选中的窗口返回 `weekly` 或 `monthly`。查询边界
   严格为 `[resetAt - windowSeconds, resetAt)`，不是自然周/月或最近 7/30 天；额度刷新若返回了更早的
   重置时间，会按新边界重新聚合。没有边界完整、可归属到账号的周/月窗口时显示无数据，`usage.windowKind` 为 `quota`
   （周/月额度窗口），不回退到 5 小时、日窗口或历史累计。
   金额原值保持完整精度，USD 展示值
-  小于 1 美元时最多保留四位小数，其余保留两位
+  小于 1 美元时最多保留四位小数，其余最多保留两位，小数末尾不补零。
+  额度百分比展示最多保留一位小数，小数末尾不补零；数值为零时返回 `0%`
 
 ### 周/月额度预测
 
@@ -1527,11 +1669,17 @@ HTTP 返回 `403` 和 `image_generation_disabled`，WebSocket 每个 `response.c
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
 
 创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
-`dailyLimitUsd`、`weeklyLimitUsd`、`customKey` 和 `providerRequestProfileOverrides`。更新请求携带 `id`，不接受 `customKey`。
+`dailyLimitUsd`、`weeklyLimitUsd`、`customKey`、`providerRequestProfileOverrides` 和 `peerSharing`。更新请求携带 `id`，不接受 `customKey`。
 `groupIds` 必须显式提交：空数组派生 `routingScope: "all"`，非空数组派生
 `routingScope: "groups"`。响应同时返回分组引用 `groups`，以及从当前有效账号池派生、仅供展示的
 `providerKinds`。创建和 reveal 响应会返回完整明文 Key，调用方
 必须立即安全保存
+
+`peerSharing` 为 `{ enabled, sharePool, shareQuota, sharePlans }`，各项均为布尔值且默认 `false`。
+创建时省略保持关闭；更新时省略或 `null` 保留整个配置，提交对象时替换完整配置，对象内省略项为 `false`。
+列表、创建及更新响应均返回完整对象。`sharePlans` 需要 `sharePool`；开启 `enabled` 必须提交非空 `groupIds`，
+开启后推理和 [CPR 互联导出](#cpr-互联只读协议) 都限制到这些组内的直连 OAuth 账号。
+账号池、原生额度窗口、套餐分布分别按对应开关公开；关闭共享不改变已保存的其他开关值
 
 `providerRequestProfileOverrides` 按 Provider ID 保存身份选择，列表返回同名对象。创建时各项为完整配置对象，
 未提供的 Provider 跟随通用设置；更新时省略某项保留原值，设为 `null` 清除该项覆盖。最多 256 项，每项最多 64 KiB。

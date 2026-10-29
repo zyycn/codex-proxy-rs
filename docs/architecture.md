@@ -59,9 +59,9 @@ flowchart TB
 | --- | --- |
 | `backend/apps/gateway` | 读取顶层配置、连接 Bundle、注册 Provider 与 Worker |
 | `backend/apps/plugin-cli`（包名 `codex-proxy-plugin-cli`） | `cpr-plugin package` 校验作者清单并生成平台元数据、资源摘要与归档；内部仅依赖 SDK，不参与网关运行时加载 |
-| `gateway-protocol` | 跨层共享的 OpenAI wire contract、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
+| `gateway-protocol` | 跨层共享的 OpenAI 与 CPR 互联线协议、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
 | `gateway-core` | operation、canonical event、请求快照、路由、admission、attempt 协调、交付边界和计量 |
-| `gateway-admin` | 管理领域、Key 用量查询、Provider/Store 端口、审计语义、备份与历史保留策略 |
+| `gateway-admin` | 管理领域、Key 用量与互联共享查询、Provider/Store 端口、审计语义、备份与历史保留策略 |
 | `gateway-api` | HTTP/WS/SSE 解码与交付、Admin 与 Key 用量 wire、静态 Web UI；不直接访问 Store 或具体 Provider |
 | `gateway-store` | PostgreSQL、Redis、S3/R2、`pg_dump` 适配器；不拥有业务策略 |
 | `gateway-host` | 配置加载、日志、HTTP 生命周期、Worker 监督与历史保留任务、系统更新及外部价格源适配 |
@@ -700,10 +700,14 @@ API 只输出各入口所需的字段白名单，不复用管理员的宽响应�
 
 Client Key 与账号分组形成授权范围：
 
-- 没有分组关联表示 `AllAccounts`
+- 普通 Client Key 没有分组关联表示 `AllAccounts`
 - 有关联时只允许已启用分组成员的并集
 - 已绑定分组为空或全部禁用时得到空池，绝不回退为全部账号
 - 分组可以包含多个 Provider，账号也可以属于多个分组
+
+开启 CPR 互联共享的 Key 必须显式绑定分组，并且实际推理范围只包含 Provider 确认的直连认证账号。
+Core 将直连认证类型与分组权限一起冻结；删除最后一个分组得到空池，当前凭据类型变化也不能绕过旧快照的直连限制。
+内置 OpenAI 和 xAI 声明 OAuth 账号为直连，未知 Provider 默认不获得共享资格；互联 API Key 账号不向下一层转供
 
 Core 按映射后的模型冻结 Provider 归属：已知模型只在明确声明该模型且能力匹配的 Provider 中路由，
 再应用账号授权、模型政策和请求约束；账号不可用或所属 Provider 被排除不能扩大归属范围。
@@ -735,6 +739,9 @@ Core 定义、校验并统一拥有评分规则，内置选号与诊断复用同
 - 排队系数只在选择等待队列时结合其他评分和进程内实时等待人数，不影响立即选号分数与容差；系数为零时选最短队列。
   `ConcurrencyWaitQueue` 在同一锁内读取队长并入队，保持已有位置、同级 FIFO、取消回收、容量和共享等待预算；Provider 传入候选须已限定续写范围
 - 健康分按已发送尝试的结果计算账号级平滑失败率并随时间衰减；明确容量拒绝的平滑权重为 0.4，其他可计分失败和成功为 0.2
+- CPR 互联的观测只进入现有额度分：当前连接 Key 的新鲜预算耗尽，或请求模型完整覆盖的账号池明确耗尽时降低分数。
+  单个账号的原生窗口可提供剩余比例，多账号窗口不合并成池百分比；未知、过期和覆盖不完整的观测保持中性。
+  数据面只读 Provider 的本地缓存，不触发远端查询，不修改真实冷却、权重、并发、亲和或账号可用状态
 - 插件显式选号使用候选校验和实际亲和结果；过滤后委托沿用内置评分、权重和亲和，过滤结果同时约束重选与等待。
   临时容量阻塞与策略排除分开，全部过滤直接拒绝请求，后续评估不继承上次过滤结果
 
@@ -923,6 +930,7 @@ PostgreSQL 周期对账才是正确性基础
 | --- | --- | --- |
 | 账号、credential、分组、Client Key、设置、审计、请求与备份记录 | PostgreSQL | 业务持久化事实 |
 | Client Key 金额窗口与费用事件 | PostgreSQL | 准入与幂等结算的权威账本，独立于请求观测与日志保留策略 |
+| CPR 互联节点身份、共享权限、上游观测与同步计划 | PostgreSQL | 节点身份重启后稳定；每个连接仅保留当前快照和可恢复计划，原始观测时间与本地同步时间分开保存 |
 | 插件包体、安装来源、制品接受事实、实例配置与私有状态 | PostgreSQL | 完整信任决定绑定已接受摘要；进程内发布集合由持久化事实构建 |
 | admission、lease、cooldown、circuit、会话亲和、continuation、失败轮次、OAuth pending、目录 cache | Redis | 可重建、可过期的协调状态 |
 | 控制面统一登录会话与登录限流桶 | Redis | AuthService 唯一拥有；保存 Admin / Key 身份、绑定 ID、绝对有效期和计数，不保存原始凭据 |
@@ -973,6 +981,20 @@ OpenAI 订阅周期属于按需个人信息，不是额度事实。Admin 账号�
 订阅不由 quota、导入或后台任务触发，不持久化。汇聚结果返回前核对账号身份与 credential revision，
 避免重新授权期间展示混合身份信息；单项失败不丢弃另一项可用结果。前端只在打开「个人信息」或手动
 刷新信息时请求，关闭后取消等待，不维护两套请求状态
+
+### CPR 互联观测
+
+共享端由 Admin 汇聚已授权分组中的本地账号事实、Provider 只读额度和当前 Key 费用账本，API 负责版本化线协议输出。
+导出同时核对请求冻结权限和当前共享设置、分组及认证方式，不回源查询，不输出账号凭据或本地账号标识。
+协议按版本和能力识别，第三方实现与内置节点使用相同合同；共享端不转发接入端的远端快照。
+Admin 为账号聚合设置独立并发上限，满额立即返回可重试的限流响应，避免重查询占满共享数据库与执行资源
+
+OpenAI Provider 在后台主动识别启用的 API Key 上游，拥有协议校验、展示和调度投影，Store 只持久化不透明观测及同步计划。
+计划查询与领取只读元数据，每次领取带独立 token，删除重建计划后的旧执行者不能提交观测。
+Provider 按连接身份及完成版本缓存管理摘要与调度投影，完整观测分批读取，解析和投影在锁外完成；选号只读取不可变投影。
+账号列表核对观测版本后返回预算与池汇总，详情读取逐节点窗口；手动刷新仅入队，完成后仍通过原列表或详情读取结果。
+界面复用现有额度窗口，保留上游原始观测时间；Key 金额、原生账号百分比和本机 Token 用量分别解释。
+请求与字段合同见 [CPR 互联 API](api.md#cpr-互联只读协议)
 
 主动额度重置是 OpenAI Provider 的不可逆上游操作：列表查询和消费都直接使用当前 Desktop 请求画像；
 完整卡片库存不落库。消费请求携带调用方生成的 UUIDv4 幂等键，同一账号的手动与自动消费共用进程内锁；
@@ -1093,7 +1115,12 @@ Worker 由各 Bundle 贡献、由 Host 统一监督：
 - Core：`runtime` owner 的 RuntimeSnapshot 周期对账和 Redis change 订阅
 - Admin：S3/R2 备份 daemon，负责调度、执行、删除收敛与保留清理；
   以及账号错误保护恢复 worker（到期解除或探测恢复）
-- Provider：credential refresh、quota/catalog 健康、账号预热和官方版本/etag 检查
+- Provider：credential refresh、quota/catalog 健康、账号预热、CPR 互联同步和官方版本/etag 检查
+
+互联同步使用账号出口的受管 HTTP 客户端，不跟随跳转；网络等待不持有数据库事务。
+开启、连接变化、周期扫描和手动刷新共用持久计划，单轮领取和并发均有界，失败遵守退避及上游 `Retry-After`。
+Store 按连接身份与领取代次比较后写入；凭据、地址或有效代理变化使旧结果失效，取消留下的租约到期后可重新领取。
+同一连接的临时失败保留原始观测，授权拒绝清除公开数据；成功同步不会刷新历史额度的观测时间
 
 Daemon 每次运行持有独立的取消与成功进度上下文，实际工作或依赖检查成功后由 owner 上报。
 Host 据此清除连续失败与当前错误、重置重启退避，并保持 `Running`；仅重启不会恢复健康，

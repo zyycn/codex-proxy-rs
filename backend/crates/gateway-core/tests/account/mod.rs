@@ -3,6 +3,7 @@
 mod location;
 mod model_access;
 mod proxy;
+mod scope;
 mod selection;
 mod selection_diagnostics;
 mod smart_scheduling;

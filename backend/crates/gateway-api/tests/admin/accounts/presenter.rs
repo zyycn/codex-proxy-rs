@@ -70,7 +70,7 @@ fn quota_forecast_projection_formats_capacity_and_preserves_null_zero() {
     assert_eq!(value["forecasts"][1]["estimatedTokens"], 0);
     assert_eq!(value["forecasts"][1]["estimatedTokensDisplay"], "0");
     assert_eq!(value["forecasts"][1]["estimatedUsd"], 0.0);
-    assert_eq!(value["forecasts"][1]["estimatedUsdDisplay"], "$0.00");
+    assert_eq!(value["forecasts"][1]["estimatedUsdDisplay"], "$0");
     assert_eq!(value["forecasts"][1]["period"], "monthly");
     assert_eq!(value["forecasts"][1]["targetDays"], 30.0);
     assert_eq!(value["forecasts"][1]["extrapolated"], true);

@@ -8,6 +8,7 @@ pub mod images;
 pub(crate) mod live;
 pub(crate) mod middleware;
 pub mod models;
+mod peer_link;
 pub mod responses;
 pub mod router;
 pub mod search;

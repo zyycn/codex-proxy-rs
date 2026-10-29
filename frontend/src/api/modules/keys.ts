@@ -6,7 +6,15 @@ import request from '../request'
 export type ApiKeyRoutingScope = 'all' | 'groups'
 export type ApiKeyBudgetPeriod = 'daily' | 'weekly' | 'all'
 
+export interface ApiKeyPeerSharing {
+  enabled: boolean
+  sharePool: boolean
+  shareQuota: boolean
+  sharePlans: boolean
+}
+
 export interface ApiKey {
+  peerSharing: ApiKeyPeerSharing
   providerRequestProfileOverrides: ProviderRequestProfiles
   openaiClientProfileOverride: ClientProfileSelection | null
   xaiClientProfileOverride: XaiClientProfileSelection | null
@@ -69,6 +77,7 @@ interface ApiKeyListParams {
 }
 
 export interface ApiKeyWriteParam {
+  peerSharing: ApiKeyPeerSharing
   name: string
   label: string | null
   groupIds: string[]

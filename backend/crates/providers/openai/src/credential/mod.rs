@@ -78,3 +78,8 @@ pub use types::{
 };
 
 mod diagnostics;
+
+/// 直连资格由 Provider 拥有，执行快照与只读导出使用同一判断
+pub(crate) fn is_direct_account_kind(authentication_kind: &str) -> bool {
+    authentication_kind == CODEX_AUTHENTICATION_KIND_OAUTH
+}

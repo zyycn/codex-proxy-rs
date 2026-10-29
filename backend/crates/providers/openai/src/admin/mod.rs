@@ -1,5 +1,7 @@
 //! OpenAI 管理边界：Provider preparation 与 Redis OAuth pending 适配
 
+mod quota;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -86,6 +88,7 @@ pub(crate) struct OpenAiAdminProvider {
     catalog: Arc<CodexCredentialCatalogService>,
     websocket_pool: Arc<CodexWebSocketPool>,
     desktop_release: CodexDesktopReleaseStatus,
+    peer_info: Arc<crate::peer::PeerInfoService>,
 }
 
 pub(crate) struct OpenAiAdminServices {
@@ -94,6 +97,7 @@ pub(crate) struct OpenAiAdminServices {
     pub(crate) profile_statistics: Arc<CodexCredentialProfileService>,
     pub(crate) quota: Arc<CodexCredentialQuotaService>,
     pub(crate) catalog: Arc<CodexCredentialCatalogService>,
+    pub(crate) peer_info: Arc<crate::peer::PeerInfoService>,
 }
 
 impl OpenAiAdminProvider {
@@ -117,6 +121,7 @@ impl OpenAiAdminProvider {
             catalog: services.catalog,
             websocket_pool,
             desktop_release,
+            peer_info: services.peer_info,
         }
     }
 
@@ -166,6 +171,16 @@ impl OpenAiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for OpenAiAdminProvider {
+    fn is_direct_account(&self, authentication_kind: &str) -> bool {
+        crate::credential::is_direct_account_kind(authentication_kind)
+    }
+
+    fn peer_model_eligible(&self, account: &AccountRecord, model: &str) -> Option<bool> {
+        account_from_record(account).ok().map(|account| {
+            crate::credential::CodexSelectionModel::Requested(model).allows_account(&account)
+        })
+    }
+
     fn compile_privacy_policy(
         &self,
         policy: &gateway_core::settings::privacy::CodexPrivacyPolicy,
@@ -254,6 +269,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
     }
 
     async fn account_unavailable(&self, account_id: &ProviderAccountId) {
+        self.peer_info.forget(account_id);
         self.websocket_pool.evict_account(account_id.as_str()).await;
     }
 
@@ -262,6 +278,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
             return;
         }
         self.quota.invalidate_scheduling(account_ids);
+        for id in account_ids {
+            if let Err(error) = self.peer_info.account_changed(id).await {
+                tracing::warn!(account_id = %id, error = %error, "upstream information plan reconciliation failed");
+            }
+        }
         if let Err(error) = self.catalog.invalidate() {
             tracing::warn!(
                 account_count = account_ids.len(),
@@ -704,7 +725,18 @@ impl ProviderAdmin for OpenAiAdminProvider {
             if refresh {
                 return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
             }
-            return Ok(project_quota(None, account.quota().is_exhausted()));
+            let connection = gateway_core::account::UpstreamConnection::for_account(&account);
+            let record = self
+                .peer_info
+                .read(std::slice::from_ref(&account_id))
+                .await
+                .map_err(map_store_error)?
+                .into_iter()
+                .find(|record| record.plan.connection == connection);
+            return Ok(record.as_ref().map_or_else(
+                || project_quota(None, false),
+                |record| crate::peer::PeerInfoService::project(record, SystemTime::now()),
+            ));
         }
         let snapshot = if refresh {
             let snapshot = Some(
@@ -728,70 +760,20 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         requests: &[ProviderQuotaReadRequest<'_>],
     ) -> Vec<Result<ProviderQuota, ProviderAdminError>> {
-        let identities = requests
-            .iter()
-            .map(|request| {
-                if request.account.provider_kind != self.provider_kind {
-                    return Err(provider_admin_error(ProviderAdminErrorKind::NotFound));
-                }
-                let id = ProviderAccountId::new(request.account.id.clone())
-                    .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-                let revision =
-                    CredentialRevision::new(request.account.credential_revision.get())
-                        .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-                Ok((id, revision))
-            })
-            .collect::<Vec<_>>();
-        let ids = requests
-            .iter()
-            .zip(&identities)
-            .filter(|(request, _)| {
-                request.account.authentication_kind
-                    != crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY
-            })
-            .filter_map(|(_, identity)| identity.as_ref().ok().map(|(id, _)| id.clone()))
-            .collect::<Vec<_>>();
-        let observations = if ids.is_empty() {
-            Ok(BTreeMap::new())
-        } else {
-            self.accounts
-                .get_quotas(&ids)
-                .await
-                .map_err(|error| map_quota_error(error.into()))
-                .map(|values| {
-                    values
-                        .into_iter()
-                        .map(|observation| (observation.account_id.clone(), observation))
-                        .collect::<BTreeMap<_, _>>()
-                })
-        };
-        requests
-            .iter()
-            .zip(identities)
-            .map(|(request, identity)| {
-                let (id, revision) = identity?;
-                let snapshot = if request.account.authentication_kind
-                    == crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY
-                {
-                    None
-                } else {
-                    observations
-                        .as_ref()
-                        .map_err(Clone::clone)?
-                        .get(&id)
-                        .map(|observation| {
-                            self.quota.project_observation(&id, revision, observation)
-                        })
-                        .transpose()
-                        .map_err(map_quota_error)?
-                        .flatten()
-                };
-                Ok(project_quota(
-                    snapshot,
-                    request.account.quota.is_exhausted(),
-                ))
-            })
-            .collect()
+        self.read_quota_snapshots(requests).await
+    }
+
+    async fn refresh_upstream_info(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<gateway_admin::model::upstream_info::UpstreamRefreshReceipt, ProviderAdminError>
+    {
+        let record = self
+            .peer_info
+            .request_refresh(account_id)
+            .await
+            .map_err(map_store_error)?;
+        Ok(crate::peer::PeerInfoService::receipt(&record))
     }
 
     fn quota_forecast_observation(
@@ -1225,6 +1207,7 @@ fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> 
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: None,
         observed_at: None,
@@ -1264,6 +1247,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
         .iter()
         .filter(|window| should_project_quota_window(window))
         .map(|window| ProviderQuotaWindow {
+            upstream: None,
             key: window.key().to_owned(),
             group: quota_group(window.kind()).to_owned(),
             label: codex_quota_window_label(window.kind(), window.role(), window.window_seconds()),
@@ -1287,6 +1271,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
     // 在窗口全部过期后继续维持限流
     let limit_reached = quota_windows_limit_reached(&windows);
     ProviderQuota {
+        upstream: None,
         plan_type: snapshot.plan_type().map(str::to_owned),
         observed_at: Some(DateTime::<Utc>::from(snapshot.observed_at())),
         refresh_token_expires_at: None,

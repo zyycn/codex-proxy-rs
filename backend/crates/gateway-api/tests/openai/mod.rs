@@ -9,6 +9,7 @@ mod images;
 mod live;
 mod middleware;
 mod models;
+mod peer_link;
 mod responses;
 mod router;
 mod search;

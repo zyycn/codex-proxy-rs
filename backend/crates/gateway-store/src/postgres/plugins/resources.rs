@@ -203,6 +203,7 @@ impl PluginResourceStore for PgPluginStore {
             return Err(denied());
         }
         let key = NewClientApiKey {
+            peer_sharing: Default::default(),
             request_profile_overrides: command.request_profile_overrides,
             id: command.id.as_str().to_owned(),
             name: command.name,

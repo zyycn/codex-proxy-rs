@@ -12,6 +12,7 @@ mod deletion;
 mod protection_revision;
 mod quota_forecast;
 mod timestamps;
+mod upstream_info;
 mod usage_projection;
 
 use chrono::{TimeDelta, Utc};

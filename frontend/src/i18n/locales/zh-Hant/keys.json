@@ -77,7 +77,13 @@
       },
       "enterApiKeyName": "請輸入 API密鑰名稱",
       "invalidKey": "自定義 API密鑰只能包含 HTTP 可傳輸的可見字符，不能包含空格或換行",
-      "requestsPerMinute": "每分鐘請求數"
+      "requestsPerMinute": "每分鐘請求數",
+      "peerSharing": "CPR 互聯",
+      "peerSharingHelp": "允許其他節點查詢此 Key 的額度，模型請求僅使用所選分組中的直連帳號",
+      "sharePool": "共享帳號池概覽",
+      "shareQuota": "共享帳號額度",
+      "sharePlans": "共享方案組成",
+      "peerGroupRequired": "請為互聯 Key 選擇帳號分組"
     },
     "fields": {
       "copyFullKey": "複製完整密鑰",

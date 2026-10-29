@@ -288,6 +288,7 @@
       "totalCharges": "總計費：",
       "noModelUsageYet": "暫無模型用量",
       "windows": {
+        "daily": "日用量",
         "general": "累計用量",
         "weekly": "周用量",
         "monthly": "月用量",
@@ -607,6 +608,28 @@
       "pasteAtLeastOne": "請至少粘貼一個 {label}",
       "missingProvider": "批量導入文件不包含 {provider} 賬號文檔",
       "importFilesMustBeJsonObjects": "導入文件必須是 JSON 對象"
+    },
+    "upstream": {
+      "account": "帳號 {number}",
+      "poolChart": "共享池帳號額度",
+      "poolKeyboard": "左右鍵選擇帳號，加減鍵縮放，Home 鍵查看全池",
+      "startsOnNextUse": "下次使用時開啟",
+      "link": "CPR 互聯",
+      "observedAt": "{time}更新",
+      "stale": "資料已過期",
+      "pending": "待查詢",
+      "queued": "等待查詢",
+      "running": "查詢中",
+      "accepted": "查詢尚未完成，稍後重新整理可查看結果",
+      "unauthorized": "上游未授權",
+      "unsupported": "上游暫不支援互聯",
+      "rateLimited": "上游查詢受限",
+      "invalidResponse": "上游資料異常",
+      "unavailable": "上游暫不可用",
+      "pool": "共享池",
+      "ready": "可用",
+      "nodeQuota": "節點額度",
+      "quota": "上游額度"
     }
   }
 }

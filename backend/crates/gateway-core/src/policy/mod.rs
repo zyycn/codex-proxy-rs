@@ -3,6 +3,9 @@
 //! Client API Key 冻结账号分组权限；模型名称不参与权限判断
 
 mod client_version;
+mod peer_sharing;
+
+pub use peer_sharing::{ClientPeerSharing, ClientPeerSharingError};
 
 pub use client_version::{
     ClientVersionRejection, CodexClientKind, CodexClientMinVersions, CodexClientVersion,
@@ -119,6 +122,7 @@ pub struct ClientSettings {
 /// 从 `client_api_keys` 冻结的公开准入事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientPolicy {
+    peer_sharing: ClientPeerSharing,
     name_snapshot: Option<String>,
     defaults: Arc<ClientSettings>,
     key_id: ClientApiKeyId,
@@ -164,6 +168,7 @@ impl ClientPolicy {
         limits: RateLimits,
     ) -> Self {
         Self {
+            peer_sharing: ClientPeerSharing::default(),
             name_snapshot: None,
             defaults: Arc::new(ClientSettings {
                 request_profiles: account_scope.request_profiles().clone(),
@@ -182,6 +187,23 @@ impl ClientPolicy {
     pub fn with_name_snapshot(mut self, name: Option<String>) -> Self {
         self.name_snapshot = name;
         self
+    }
+
+    #[must_use]
+    pub fn with_peer_sharing(mut self, sharing: ClientPeerSharing) -> Self {
+        self.account_scope = Arc::new(
+            self.account_scope
+                .as_ref()
+                .clone()
+                .with_direct_accounts_only(sharing.enabled),
+        );
+        self.peer_sharing = sharing;
+        self
+    }
+
+    #[must_use]
+    pub const fn peer_sharing(&self) -> ClientPeerSharing {
+        self.peer_sharing
     }
 
     #[must_use]

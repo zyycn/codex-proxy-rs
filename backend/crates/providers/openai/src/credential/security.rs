@@ -171,17 +171,7 @@ impl CodexCredentialCodec {
     pub fn decode(
         credential: &PlaintextCredential,
     ) -> Result<CodexRuntimeCredential, CodexCredentialDataError> {
-        let value = Value::Object(credential.expose_to_provider().clone());
-        if serde_json::to_vec(&value)
-            .map_err(|_| CodexCredentialDataError::Invalid)?
-            .len()
-            > MAX_CREDENTIAL_BYTES
-        {
-            return Err(CodexCredentialDataError::TooLarge);
-        }
-        let data = serde_json::from_value::<CodexCredentialData>(value)
-            .map_err(|_| CodexCredentialDataError::Invalid)?;
-        validate(&data)?;
+        let data = Self::decode_complete(credential)?;
         let transport = match &data {
             CodexCredentialData::OAuth(data) => data.transport,
             CodexCredentialData::ApiKey(data) => data.transport,
@@ -237,7 +227,19 @@ impl CodexCredentialCodec {
     pub fn decode_complete(
         credential: &PlaintextCredential,
     ) -> Result<CodexCredentialData, CodexCredentialDataError> {
-        let value = Value::Object(credential.expose_to_provider().clone());
+        let mut value = credential.expose_to_provider().clone();
+        if serde_json::to_vec(&value)
+            .map_err(|_| CodexCredentialDataError::Invalid)?
+            .len()
+            > MAX_CREDENTIAL_BYTES
+        {
+            return Err(CodexCredentialDataError::TooLarge);
+        }
+        // 已保存的 API Key 凭据可带旧开关，自动发现不再读取或写入该设置
+        if value.contains_key("api_key") {
+            value.remove("upstream_info_enabled");
+        }
+        let value = Value::Object(value);
         let data = serde_json::from_value::<CodexCredentialData>(value)
             .map_err(|_| CodexCredentialDataError::Invalid)?;
         validate(&data)?;

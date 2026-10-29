@@ -108,6 +108,7 @@ pub struct ClientKeyListQuery {
 /// 不含完整明文 Key 的管理投影
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyRecord {
+    pub peer_sharing: gateway_core::policy::ClientPeerSharing,
     pub request_profile_overrides: ProviderRequestProfileOverrides,
     pub id: ClientApiKeyId,
     pub name: String,
@@ -167,6 +168,7 @@ impl fmt::Debug for ClientKeySecret {
 /// API 提交的 Client Key 创建命令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateClientKey {
+    pub peer_sharing: gateway_core::policy::ClientPeerSharing,
     pub request_profile_overrides: ProviderRequestProfileOverrides,
     pub custom_key: Option<PlaintextClientApiKey>,
     pub name: String,
@@ -179,6 +181,7 @@ pub struct CreateClientKey {
 /// 管理用例生成 ID 与明文后的持久化命令
 #[derive(Clone, PartialEq, Eq)]
 pub struct NewClientKey {
+    pub peer_sharing: gateway_core::policy::ClientPeerSharing,
     pub request_profile_overrides: ProviderRequestProfileOverrides,
     pub id: ClientApiKeyId,
     pub name: String,
@@ -204,6 +207,7 @@ impl fmt::Debug for NewClientKey {
 /// 修改 Client Key 的公开策略字段
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateClientKey {
+    pub peer_sharing: Option<gateway_core::policy::ClientPeerSharing>,
     pub request_profile_override_updates: ProviderRequestProfileOverrideUpdates,
     pub id: ClientApiKeyId,
     pub name: String,

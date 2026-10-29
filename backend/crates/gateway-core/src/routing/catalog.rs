@@ -149,6 +149,11 @@ pub struct ProviderCatalogUnavailable;
 
 /// 快照编译与对账使用的对象安全目录端口
 pub trait ProviderCatalogPort: Send + Sync {
+    /// Provider 解释认证类型，快照只冻结直连事实；未知扩展不默认获得转供资格
+    fn is_direct_account(&self, _provider: &ProviderKind, _authentication_kind: &str) -> bool {
+        false
+    }
+
     /// 目录是否完整到足以根据缺项拒绝请求；发现型目录交由上游验证模型名
     fn model_catalog_is_exhaustive(&self, _provider: &ProviderKind) -> bool {
         true

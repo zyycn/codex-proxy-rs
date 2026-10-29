@@ -1349,6 +1349,89 @@ fn facts(config_revision: u64, observed_current_revision: u64) -> SnapshotFacts 
     facts_with_min_versions(config_revision, observed_current_revision, None, None)
 }
 
+#[test]
+fn peer_policy_compilation_keeps_only_explicitly_shared_direct_accounts() {
+    use gateway_core::{
+        account::ProviderAccountId, policy::ClientPeerSharing, routing::AccountGroupId,
+    };
+    struct DirectCatalog;
+    impl ProviderCatalogPort for DirectCatalog {
+        fn is_direct_account(&self, provider: &ProviderKind, kind: &str) -> bool {
+            provider.as_str() == "alpha" && kind == "oauth"
+        }
+        fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
+            BTreeMap::from([(
+                ProviderKind::new("alpha").unwrap(),
+                ProviderCatalogGeneration::new(1),
+            )])
+        }
+        fn query_model_capabilities(
+            &self,
+            _: &ProviderKind,
+        ) -> BoxFuture<'_, Result<Vec<ProviderModelCapabilities>, ProviderCatalogUnavailable>>
+        {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+    let group = AccountGroupId::new("grp_11111111111111111111111111111111").unwrap();
+    let direct = ProviderAccountId::new("acct_direct").unwrap();
+    let proxy = ProviderAccountId::new("acct_proxy").unwrap();
+    for (bound, enabled, expected) in [
+        (true, true, true),
+        (true, false, false),
+        (false, true, false),
+    ] {
+        let facts = SnapshotFacts::new(
+            revision(1),
+            revision(1),
+            SettingsValues::new(3, "smart", BTreeMap::new(), None, None),
+            vec![
+                SnapshotClientPolicyFacts::new(
+                    ClientApiKeyId::new("key_peer").unwrap(),
+                    PlaintextClientApiKey::new("sk_peer_test").unwrap(),
+                    if bound {
+                        vec![group.clone()]
+                    } else {
+                        Vec::new()
+                    },
+                    RateLimits::unlimited(),
+                )
+                .with_peer_sharing(ClientPeerSharing {
+                    enabled: true,
+                    ..Default::default()
+                }),
+            ],
+            vec![SnapshotAccountGroupFacts::new(
+                group.clone(),
+                "共享组".into(),
+                enabled,
+            )],
+            vec![
+                SnapshotProviderAccountFacts::new(direct.clone(), "alpha")
+                    .with_authentication_kind("oauth".into()),
+                SnapshotProviderAccountFacts::new(proxy.clone(), "alpha")
+                    .with_authentication_kind("api_key".into()),
+            ],
+            vec![
+                SnapshotAccountGroupMemberFacts::new(group.clone(), direct.clone()),
+                SnapshotAccountGroupMemberFacts::new(group.clone(), proxy.clone()),
+            ],
+        );
+        let snapshot = block_on(
+            RuntimeSnapshotCompiler::new(
+                Arc::new(TestSnapshotStore::new(Ok(facts))),
+                Arc::new(DirectCatalog),
+            )
+            .compile(),
+        )
+        .unwrap();
+        let scope = snapshot.client_policies().next().unwrap().account_scope();
+        assert_eq!(scope.allows(&direct), expected);
+        assert!(!scope.allows(&proxy));
+        assert_eq!(scope.provider_kinds().is_empty(), !expected);
+    }
+}
+
 fn facts_with_min_versions(
     config_revision: u64,
     observed_current_revision: u64,

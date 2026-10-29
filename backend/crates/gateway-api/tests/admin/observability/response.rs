@@ -1628,6 +1628,7 @@ async fn dashboard_summary_should_identify_metrics_without_localized_labels() {
                 request_buckets: Vec::new(),
                 quota_used_percent: None,
                 quota_window: requests.map(|request_count| ProviderQuotaWindow {
+                    upstream: None,
                     key: "rolling".to_owned(),
                     group: "shortTerm".to_owned(),
                     label: "滚动窗口".to_owned(),

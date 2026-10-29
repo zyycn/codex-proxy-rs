@@ -55,6 +55,13 @@ const CONNECTION_TEST_INPUT: &str = "Reply with exactly OK.";
 /// 统一账号页消费的服务
 #[async_trait]
 pub trait AccountsService: Send + Sync {
+    async fn refresh_upstream_info(
+        &self,
+        _account_ids: Vec<ProviderAccountId>,
+    ) -> Result<Vec<crate::model::upstream_info::UpstreamRefreshReceipt>, AdminError> {
+        Err(AdminError::invalid("该服务商不支持上游信息查询"))
+    }
+
     async fn concurrency(
         &self,
         account_id: ProviderAccountId,
@@ -381,32 +388,51 @@ impl DefaultAccountsService {
     async fn load_api_key_usage(
         &self,
         accounts: &[AccountPageItem],
+        quotas: &[ProviderQuota],
     ) -> Result<BTreeMap<String, AccountUsage>, AdminError> {
         let now = Utc::now();
-        // API Key 没有套餐周期；本地累计直接查询账号创建后仍保留的请求记录
+        let mut usage = BTreeMap::new();
+        // 互联账号复用已聚合的最长 Key 窗口，普通 API Key 保留累计口径
         let windows = accounts
             .iter()
-            .filter(|item| item.account.authentication_kind == "api_key")
-            .map(|item| AccountUsageWindowQuery {
-                account_id: item.account.id.clone(),
-                key: "account-lifetime".to_owned(),
-                range: TimeRange {
-                    start: item.account.created_at,
-                    end: now,
-                },
+            .zip(quotas)
+            .filter(|(item, _)| item.account.authentication_kind == "api_key")
+            .filter_map(|(item, quota)| {
+                if quota
+                    .upstream
+                    .as_ref()
+                    .is_some_and(|upstream| upstream.discovered)
+                {
+                    if let Some(local_usage) = quota
+                        .upstream_usage_window()
+                        .and_then(|window| window.local_usage.as_ref())
+                    {
+                        usage.insert(item.account.id.clone(), local_usage.clone());
+                    }
+                    return None;
+                }
+                Some(AccountUsageWindowQuery {
+                    account_id: item.account.id.clone(),
+                    key: "account-lifetime".to_owned(),
+                    range: TimeRange {
+                        start: item.account.created_at,
+                        end: now,
+                    },
+                })
             })
             .collect::<Vec<_>>();
         if windows.is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(usage);
         }
-        Ok(self
-            .accounts
-            .load_account_usage_by_windows(&windows)
-            .await
-            .map_err(|error| map_store_error(error, "API Key account usage"))?
-            .into_iter()
-            .map(|result| (result.account_id, result.usage))
-            .collect())
+        usage.extend(
+            self.accounts
+                .load_account_usage_by_windows(&windows)
+                .await
+                .map_err(|error| map_store_error(error, "API Key account usage"))?
+                .into_iter()
+                .map(|result| (result.account_id, result.usage)),
+        );
+        Ok(usage)
     }
 
     async fn load_directory_item(
@@ -458,7 +484,7 @@ impl DefaultAccountsService {
         )
         .await?;
         let usage = self
-            .load_api_key_usage(std::slice::from_ref(&stored))
+            .load_api_key_usage(std::slice::from_ref(&stored), std::slice::from_ref(&quota))
             .await?
             .remove(&stored.account.id)
             .or_else(|| {
@@ -486,6 +512,26 @@ impl DefaultAccountsService {
 
 #[async_trait]
 impl AccountsService for DefaultAccountsService {
+    async fn refresh_upstream_info(
+        &self,
+        account_ids: Vec<ProviderAccountId>,
+    ) -> Result<Vec<crate::model::upstream_info::UpstreamRefreshReceipt>, AdminError> {
+        if account_ids.is_empty() || account_ids.len() > 200 {
+            return Err(AdminError::invalid("请选择要刷新的账号"));
+        }
+        let mut results = Vec::with_capacity(account_ids.len());
+        for id in account_ids {
+            let (_, provider) = self.provider_for_account(&id).await?;
+            results.push(
+                provider
+                    .refresh_upstream_info(&id)
+                    .await
+                    .map_err(|error| map_provider_error(error, "upstream information refresh"))?,
+            );
+        }
+        Ok(results)
+    }
+
     async fn concurrency(
         &self,
         account_id: ProviderAccountId,
@@ -557,7 +603,7 @@ impl AccountsService for DefaultAccountsService {
         let mut quotas = Self::read_quotas(providers, &page.items, &rolling_usage).await;
         self.attach_quota_local_usage(&page.items, &mut quotas)
             .await?;
-        let mut api_key_usage = self.load_api_key_usage(&page.items).await?;
+        let mut api_key_usage = self.load_api_key_usage(&page.items, &quotas).await?;
         let items = page
             .items
             .into_iter()
@@ -1144,6 +1190,7 @@ fn map_reset_credits_error_after_refresh(
 /// 账号目录中单个账号 quota 读取失败时使用的空额度投影
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        upstream: None,
         credits: None,
         plan_type: None,
         observed_at: None,

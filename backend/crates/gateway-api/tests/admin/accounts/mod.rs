@@ -527,10 +527,15 @@ mod response {
     #[test]
     fn account_usage_currency_should_limit_usd_to_four_fraction_digits() {
         assert_eq!(format_decimal_currency("0.1204956", "USD"), "$0.1205");
-        assert_eq!(format_decimal_currency("0.99996", "USD"), "$1.00");
+        assert_eq!(format_decimal_currency("0.99996", "USD"), "$1");
         assert_eq!(format_decimal_currency("0.0300", "USD"), "$0.03");
+        assert_eq!(format_decimal_currency("0.00", "USD"), "$0");
+        assert_eq!(format_decimal_currency("100.0000", "USD"), "$100");
+        assert_eq!(format_decimal_currency("12.3000", "USD"), "$12.3");
         assert_eq!(format_decimal_currency("12.3456", "USD"), "$12.35");
         assert_eq!(format_decimal_currency("0.1204956", "CNY"), "CNY 0.1204956");
+        assert_eq!(format_decimal_currency("12.3000", "CNY"), "CNY 12.3");
+        assert_eq!(format_decimal_currency("100", "CNY"), "CNY 100");
     }
 }
 

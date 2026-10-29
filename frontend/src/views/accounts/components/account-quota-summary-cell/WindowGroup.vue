@@ -39,7 +39,7 @@ const trackGridStyle = computed(() => ({
 <template>
   <div class="col-span-full grid min-w-0 grid-cols-subgrid gap-y-1.5">
     <div class="col-span-full grid min-w-0 grid-cols-subgrid items-baseline text-[10px] leading-3 font-bold">
-      <span class="min-w-0 truncate text-cp-text-quaternary" :title="label">
+      <span class="min-w-0 truncate text-cp-text-quaternary">
         {{ label }}
       </span>
       <strong

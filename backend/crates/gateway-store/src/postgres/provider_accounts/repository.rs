@@ -1210,3 +1210,42 @@ pub(super) async fn rotate_provider_account_admin_in_transaction(
         credential_revision,
     })
 }
+
+impl PgProviderAccountRepository {
+    pub(super) async fn load_account_summaries_in_enabled_groups(
+        &self,
+        account_ids: &[String],
+        group_ids: &[AccountGroupId],
+    ) -> StoreResult<Vec<ProviderAccountSummary>> {
+        if account_ids.is_empty() || group_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let group_ids = group_ids
+            .iter()
+            .map(AccountGroupId::as_str)
+            .collect::<Vec<_>>();
+        let rows = sqlx::query(
+            "select coalesce(proxy_enabled, true) as outbound_proxy_enabled, coalesce(max_websocket_connections, 0) as outbound_proxy_max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
+                    upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
+                    access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, model_access_json, credential_state,
+                    credential_observed_at, quota_access_state, quota_evidence,
+                    quota_access_observed_at, quota_reset_at,
+                    quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
+               from provider_accounts
+               left join (select id as location_proxy_id, enabled as proxy_enabled, max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone from outbound_proxies) proxy_location
+                 on outbound_proxy_id = location_proxy_id
+              where id = any($1::text[]) and exists (
+                select 1 from account_group_accounts membership
+                join account_groups account_group on account_group.id = membership.account_group_id
+                where membership.provider_account_id = provider_accounts.id
+                  and account_group.enabled and account_group.id = any($2::text[])
+              ) order by id",
+        )
+        .bind(account_ids)
+        .bind(group_ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|source| postgres_unavailable("load account summaries", source))?;
+        rows.into_iter().map(account_summary_from_row).collect()
+    }
+}

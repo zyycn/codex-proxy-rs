@@ -10,6 +10,73 @@ use tower::ServiceExt as _;
 use super::super::{AdminTestFixture, AdminTestState};
 
 #[tokio::test]
+async fn upstream_refresh_requires_admin_and_returns_an_accepted_generation() {
+    use gateway_core::account::{AccountStatusFacts, CredentialState, QuotaState};
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    *fixture.account.lock().unwrap() = Some(account_page_item(
+        AccountStatusFacts {
+            enabled: true,
+            credential_state: CredentialState::Ready,
+            access_token_expires_at: None,
+            quota: QuotaState::unknown(),
+            cooldown: None,
+            last_error_reason: None,
+            last_error_message: None,
+        },
+        chrono::Utc::now(),
+        "api_key",
+    ));
+    for (authenticated, ids, expected) in [
+        (
+            false,
+            serde_json::json!(["acct_cooldown"]),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (true, serde_json::json!([]), StatusCode::BAD_REQUEST),
+        (
+            true,
+            serde_json::json!(["invalid"]),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            true,
+            serde_json::json!(["acct_cooldown", "acct_cooldown"]),
+            StatusCode::ACCEPTED,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/admin/accounts/upstream-info/refresh")
+            .header("x-request-id", "req_upstream_refresh")
+            .header(header::CONTENT_TYPE, "application/json");
+        if authenticated {
+            request = request.header(header::COOKIE, "cpr_session=valid-session");
+        }
+        let response = admin::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                request
+                    .body(Body::from(
+                        serde_json::json!({"accountIds":ids}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::ACCEPTED {
+            let body = to_bytes(response.into_body(), 8192).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                value["data"]["items"],
+                serde_json::json!([{"accountId":"acct_cooldown", "connectionRevision":"connection-7", "requestGeneration":7, "state":"queued"}])
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn account_proxy_binding_is_distinct_from_the_redacted_endpoint() {
     use chrono::Utc;
     use gateway_core::account::{AccountStatusFacts, CredentialState, OutboundProxy, QuotaState};
@@ -227,6 +294,7 @@ async fn account_quota_refresh_time_uses_server_clock_and_deployment_timezone() 
             ),
         ] {
             *fixture.provider_quota.lock().unwrap() = Some(ProviderQuota {
+                upstream: None,
                 plan_type: None,
                 observed_at,
                 refresh_token_expires_at: None,

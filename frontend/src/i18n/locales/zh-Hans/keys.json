@@ -77,7 +77,13 @@
       },
       "enterApiKeyName": "请输入 API密钥名称",
       "invalidKey": "自定义 API密钥只能包含 HTTP 可传输的可见字符，不能包含空格或换行",
-      "requestsPerMinute": "每分钟请求数"
+      "requestsPerMinute": "每分钟请求数",
+      "peerSharing": "CPR 互联",
+      "peerSharingHelp": "允许其他节点查询此 Key 的额度，模型请求仅使用所选分组中的直连账号",
+      "sharePool": "共享账号池概览",
+      "shareQuota": "共享账号额度",
+      "sharePlans": "共享套餐构成",
+      "peerGroupRequired": "请为互联 Key 选择账号分组"
     },
     "fields": {
       "copyFullKey": "复制完整密钥",

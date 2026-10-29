@@ -15,11 +15,13 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
 import { useIdSet } from '@/composables/useIdSet'
 import { t } from '@/i18n'
+import { accountUpstreamErrorMessage } from '@/utils/account-upstream'
 import { notification as ZNotification } from '@/utils/notification'
 import { errorMessage, withMinimumDuration } from '@/utils/operation'
 import { isSupportedProvider } from '@/utils/providers'
 
 import { useAccountOnboarding } from './useAccountOnboarding'
+import { useAccountUpstreamRefresh } from './useAccountUpstreamRefresh'
 
 export function useAccountMutations(options: {
   accounts: Ref<Account[]>
@@ -29,6 +31,7 @@ export function useAccountMutations(options: {
   replaceAccount: (account: Account) => Promise<boolean>
 }) {
   const loadAccounts = options.reload
+  const upstreamRefresh = useAccountUpstreamRefresh(options.accounts)
   const { downloadJson } = useDownload()
   const onboarding = useAccountOnboarding({
     reload: loadAccounts,
@@ -244,20 +247,44 @@ export function useAccountMutations(options: {
   }
 
   async function handleRefreshQuota(accountId: string) {
+    const account = options.accounts.value.find(item => item.id === accountId)
     await refreshingQuotaAccounts.run(accountId, async () => {
       try {
-        const result = await withMinimumDuration(() => refreshAccountQuota({ accountId }))
+        const result = account?.upstream?.discovered
+          ? await upstreamRefresh.refresh(account)
+          : await withMinimumDuration(() => refreshAccountQuota({ accountId }))
+        if (!result)
+          return
+        if ('pending' in result) {
+          ZNotification.info({
+            message: t('accounts.upstream.accepted'),
+          })
+          return
+        }
         const remainsVisible = await options.replaceAccount(result.account)
         if (!remainsVisible) {
           const selectedIds = new Set(options.selectedIds.value)
           selectedIds.delete(accountId)
           options.selectedIds.value = selectedIds
         }
-        ZNotification.success({
-          message: t('accounts.actions.quotaRefreshed'),
-        })
+        if (result.account.upstream?.lastError) {
+          ZNotification.warning({
+            message: accountUpstreamErrorMessage(result.account.upstream.lastError),
+          })
+        }
+        else {
+          ZNotification.success({
+            message: t('accounts.actions.quotaRefreshed'),
+          })
+        }
       }
-      catch {}
+      catch (error) {
+        if (account?.upstream?.discovered) {
+          ZNotification.error({
+            message: errorMessage(error),
+          })
+        }
+      }
     })
   }
 

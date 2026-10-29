@@ -19,16 +19,40 @@ const emit = defineEmits<{ showConcurrency: [] }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
-const quotaWindows = computed(() => props.account.quota.windows)
+// 互联列表只展示此 Key 的消费限额，池内各账号的百分比不能代表整个上游
+const quotaWindows = computed(() => props.account.upstream?.discovered
+  ? props.account.quota.windows.filter(window => window.amount)
+  : props.account.quota.windows)
 const visibleQuotaWindows = computed(() => visibleSummaryQuotaWindows(quotaWindows.value))
-const summaryEntries = computed(() => groupedAccountQuotaWindows(visibleQuotaWindows.value))
+const summaryEntries = computed(() => props.account.upstream?.discovered && visibleQuotaWindows.value.length
+  ? [
+      {
+        key: 'upstream-key',
+        label: t('accounts.quota.general'),
+        windows: visibleQuotaWindows.value,
+      },
+    ]
+  : groupedAccountQuotaWindows(visibleQuotaWindows.value))
 const hasUsage = computed(() => (props.account.usage.requestCount ?? 0) > 0)
 const recentUsageEntry = computed(() => recentlyUsedQuotaEntry(
   summaryEntries.value,
   props.account.usage.models,
 ))
-const currentUsageWindow = computed(() => representativeQuotaWindow(recentUsageEntry.value))
+const currentUsageWindow = computed(() => representativeQuotaWindow(recentUsageEntry.value)
+  ?? recentUsageEntry.value?.windows.find(window => window.amount))
 const currentUsageDisplay = computed(() => currentUsageWindow.value?.usedPercentDisplay ?? '—')
+const hasUpstreamQuota = computed(() => Boolean(props.account.upstream?.discovered && props.account.upstream.node))
+const summaryValue = computed(() => {
+  return {
+    value: props.account.usage.totalTokens == null
+      ? '0'
+      : props.account.usage.totalTokensDisplay,
+    label: t('common.units.tokens'),
+    title: props.account.authenticationKind === 'api_key'
+      ? t('accounts.quota.localTokens')
+      : t('accounts.quota.totalTokensFor', { windowLabelDisplay: usageWindowLabels.value[props.account.usage.windowKind] }),
+  }
+})
 const currentUsageTextClass = computed(() => currentUsageWindow.value
   ? quotaWindowPresentation(currentUsageWindow.value, '2px').percentTextClass
   : 'text-cp-text-quaternary')
@@ -37,12 +61,12 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
 
 <template>
   <div class="box-border grid min-h-16.5 w-full min-w-0 content-center gap-1.5 py-1.5">
-    <template v-if="account.authenticationKind === 'api_key'">
+    <template v-if="account.authenticationKind === 'api_key' && summaryEntries.length === 0">
       <span
         class="flex min-w-0 items-baseline gap-1 font-mono leading-none tabular-nums"
         :title="t('accounts.quota.localTokens')"
       >
-        <strong class="truncate text-cp-xs font-heavy text-cp-text">{{ account.usage.totalTokensDisplay }}</strong>
+        <strong class="truncate text-cp-xs font-heavy text-cp-text">{{ summaryValue.value }}</strong>
         <span class="shrink-0 text-[9px] font-emphasis tracking-[0.02em] text-cp-text-quaternary">{{ t('common.units.tokens') }}</span>
       </span>
       <div class="grid min-w-0 gap-1.5">
@@ -55,18 +79,18 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
     </template>
     <template v-else-if="summaryEntries.length > 0">
       <div
-        v-if="hasUsage"
+        v-if="hasUsage || hasUpstreamQuota"
         class="flex min-w-0 items-baseline justify-between gap-2 leading-none"
       >
         <span
           class="flex min-w-0 items-baseline gap-1 font-mono tabular-nums"
-          :title="t('accounts.quota.totalTokensFor', { windowLabelDisplay: usageWindowLabels[account.usage.windowKind] })"
+          :title="summaryValue.title"
         >
           <strong class="truncate text-cp-xs font-heavy text-cp-text">
-            {{ account.usage.totalTokensDisplay }}
+            {{ summaryValue.value }}
           </strong>
           <span class="shrink-0 text-[9px] font-emphasis tracking-[0.02em] text-cp-text-quaternary">
-            {{ t('common.units.tokens') }}
+            {{ summaryValue.label }}
           </span>
         </span>
         <span

@@ -42,6 +42,7 @@ pub struct SnapshotAccountGroupData {
 pub struct SnapshotProviderAccountData {
     pub id: String,
     pub provider_kind: String,
+    pub authentication_kind: String,
     pub model_access: gateway_core::account::AccountModelAccess,
 }
 
@@ -147,6 +148,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                     )
                     .with_name_snapshot(key.name_snapshot)
                     .with_request_profiles(key.request_profiles)
+                    .with_peer_sharing(key.peer_sharing)
                 })
                 .collect();
             let account_groups = data
@@ -166,6 +168,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                         .map(|id| {
                             SnapshotProviderAccountFacts::new(id, account.provider_kind)
                                 .with_model_access(account.model_access)
+                                .with_authentication_kind(account.authentication_kind)
                         })
                         .map_err(|_| SnapshotStoreError::unavailable())
                 })
@@ -310,12 +313,13 @@ async fn load_client_keys(
             i64,
             sqlx::types::Json<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
             String,
+            sqlx::types::Json<gateway_core::policy::ClientPeerSharing>,
         ),
     >(
         "select k.id, k.key,
                 coalesce(array_agg(kg.account_group_id order by kg.account_group_id)
                   filter (where kg.account_group_id is not null), '{}') as group_ids,
-                k.max_concurrency, k.requests_per_minute, k.provider_request_profiles_json, k.name
+                k.max_concurrency, k.requests_per_minute, k.provider_request_profiles_json, k.name, k.peer_sharing_json
          from client_api_keys k
          left join client_api_key_groups kg on kg.client_api_key_id = k.id
          where k.enabled
@@ -330,6 +334,7 @@ async fn load_client_keys(
             let mut key = ClientApiKeySnapshot::from_persisted(row.0, row.1, row.2, row.3, row.4)?;
             key.request_profiles = decode_request_profiles(row.5.0)?;
             key.name_snapshot = Some(row.6);
+            key.peer_sharing = row.7.0;
             Ok(key)
         })
         .collect()
@@ -367,18 +372,20 @@ async fn load_provider_accounts(
         (
             String,
             String,
+            String,
             sqlx::types::Json<gateway_core::account::AccountModelAccess>,
         ),
-    >("select id, provider_kind, model_access_json from provider_accounts order by id")
+    >("select id, provider_kind, authentication_kind, model_access_json from provider_accounts order by id")
     .fetch_all(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("load snapshot provider accounts", source))
     .map(|rows| {
         rows.into_iter()
             .map(
-                |(id, provider_kind, model_access)| SnapshotProviderAccountData {
+                |(id, provider_kind, authentication_kind, model_access)| SnapshotProviderAccountData {
                     id,
                     provider_kind,
+                    authentication_kind,
                     model_access: model_access.0,
                 },
             )

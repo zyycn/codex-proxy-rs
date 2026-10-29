@@ -363,6 +363,21 @@ async fn capacity_freeze_survives_due_time_and_runtime_restart_until_probe_succe
         panic!("status snapshot: {error}");
     });
     assert!(snapshot.cooldown[&frozen.provider_account_id].is_active(SystemTime::now()));
+    let scoped = runtime
+        .account_rate_limits(&[frozen.provider_account_id.clone(), "acct_absent".to_owned()])
+        .await
+        .expect("scoped cooldown snapshot");
+    assert_eq!(scoped.cooldown.len(), 1);
+    assert!(scoped.cooldown[&frozen.provider_account_id].is_active(SystemTime::now()));
+    assert!(scoped.in_flight.is_none());
+    assert!(
+        runtime
+            .account_rate_limits(&["acct_absent".to_owned()])
+            .await
+            .unwrap()
+            .cooldown
+            .is_empty()
+    );
     assert!(
         snapshot.cooldown[&frozen.provider_account_id]
             .kind

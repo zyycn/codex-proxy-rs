@@ -279,8 +279,44 @@ impl RedisCredentialCooldownRepository {
     }
 
     pub(crate) async fn active_cooldowns(&self) -> StoreResult<AccountRuntimeSnapshot> {
+        self.read_cooldown_accounts(self.all_cooldown_accounts().await?)
+            .await
+    }
+
+    pub(crate) async fn account_cooldowns(
+        &self,
+        accounts: &[String],
+    ) -> StoreResult<AccountRuntimeSnapshot> {
+        if accounts.is_empty() {
+            return Ok(AccountRuntimeSnapshot::default());
+        }
+        // 索引与冷却事实由 Lua 原子维护，只读取范围内实际有状态的账号
+        let (cooldowns, protections): (Vec<Option<f64>>, Vec<Option<f64>>) = redis::pipe()
+            .cmd("ZMSCORE")
+            .arg(self.active_index_key())
+            .arg(accounts)
+            .cmd("ZMSCORE")
+            .arg(self.protection_index_key())
+            .arg(accounts)
+            .query_async(&mut self.connection.clone())
+            .await
+            .map_err(|error| redis_unavailable("read scoped account cooldown index", error))?;
+        let active = accounts
+            .iter()
+            .zip(cooldowns)
+            .zip(protections)
+            .filter(|((_, cooldown), protection)| cooldown.is_some() || protection.is_some())
+            .map(|((account, _), _)| account.clone())
+            .collect();
+        self.read_cooldown_accounts(active).await
+    }
+
+    async fn read_cooldown_accounts(
+        &self,
+        accounts: Vec<String>,
+    ) -> StoreResult<AccountRuntimeSnapshot> {
         use futures::{StreamExt as _, TryStreamExt as _};
-        let reads = futures::stream::iter(self.all_cooldown_accounts().await?)
+        let reads = futures::stream::iter(accounts)
             .map(|account| async move {
                 self.read_account_runtime(&account)
                     .await

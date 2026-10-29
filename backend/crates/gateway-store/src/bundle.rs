@@ -143,6 +143,8 @@ async fn connect(
         postgres::PgProviderAccountRepository::new(pool.clone())
             .with_account_error_protection(cooldowns.clone()),
     );
+    let upstream_info: Arc<dyn gateway_core::account::UpstreamInfoStore> =
+        provider_accounts.clone();
     let account_store: Arc<dyn ProviderAccountStore> = provider_accounts;
 
     let credential_leases =
@@ -277,6 +279,7 @@ async fn connect(
 
     let provider_ports = ProviderStorePorts::new(
         account_store,
+        upstream_info,
         provider_leases,
         provider_session_affinity,
         Arc::new(redis::RedisProviderSessionExclusionRepository::new(

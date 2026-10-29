@@ -23,6 +23,7 @@ defineProps<{
 
 const emit = defineEmits<{
   save: []
+  afterLeave: []
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
@@ -50,6 +51,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
     :title="t('accounts.editor.title')"
     width="42rem"
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
+    @closed="emit('afterLeave')"
   >
     <div v-if="account" class="grid gap-5">
       <div

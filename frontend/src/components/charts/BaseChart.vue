@@ -17,6 +17,7 @@ const props = withDefaults(
   },
 )
 
+const emit = defineEmits<{ ready: [chart: EChartsType] }>()
 const chartElement = useTemplateRef<HTMLElement>('chart')
 const chart = shallowRef<EChartsType>()
 let pendingInitElement: HTMLElement | undefined
@@ -34,6 +35,7 @@ function ensureChart(element: HTMLElement) {
     return
   chart.value = init(element, undefined, { renderer: 'canvas' })
   applyOption(props.option)
+  emit('ready', chart.value)
 }
 
 const { pause: pausePendingInit, resume: resumePendingInit } = useRafFn(

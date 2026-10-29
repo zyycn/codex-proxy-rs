@@ -1,5 +1,7 @@
 //! 验证 OpenAI 管理能力、请求画像、Bundle 组装与额度投影
 
+mod peer_info;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
@@ -164,7 +166,7 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.core_provider().name(), "openai");
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
-    assert_eq!(contributions.len(), 8);
+    assert_eq!(contributions.len(), 9);
     assert!(
         contributions
             .iter()
@@ -237,6 +239,7 @@ async fn quota_forecast_observation_reuses_protocol_parser_and_keeps_window_iden
         .unwrap();
     let provider = bundle.admin_provider();
     let mut window = gateway_admin::model::provider_credentials::ProviderQuotaWindow {
+        upstream: None,
         key: "codex:604800s".to_owned(),
         group: "shortTerm".to_owned(),
         label: "周额度".to_owned(),
@@ -1917,8 +1920,21 @@ fn provider_ports_with_catalog(
     pending: Arc<TestOAuthPending>,
     catalog_cache: Arc<TestCatalogCache>,
 ) -> ProviderStorePorts {
+    let upstream = Arc::new(peer_info::MemoryUpstreamInfoStore::new(Arc::clone(
+        &accounts,
+    )));
+    provider_ports_with_upstream(accounts, pending, catalog_cache, upstream)
+}
+
+fn provider_ports_with_upstream(
+    accounts: Arc<MemoryAccountStore>,
+    pending: Arc<TestOAuthPending>,
+    catalog_cache: Arc<TestCatalogCache>,
+    upstream: Arc<dyn gateway_core::account::UpstreamInfoStore>,
+) -> ProviderStorePorts {
     ProviderStorePorts::new(
         accounts,
+        upstream,
         Arc::new(TestLeaseCoordinator::default()),
         Arc::new(MemorySessionAffinity::default()),
         Arc::new(MemorySessionExclusions::default()),
@@ -2705,8 +2721,10 @@ mod errors {
     }
 
     fn refresh_ports(store: Arc<MemoryAccountStore>, busy: bool) -> ProviderStorePorts {
+        let upstream = Arc::new(peer_info::MemoryUpstreamInfoStore::new(Arc::clone(&store)));
         ProviderStorePorts::new(
             store,
+            upstream,
             Arc::new(RefreshLeases { busy }),
             Arc::new(MemorySessionAffinity::default()),
             Arc::new(MemorySessionExclusions::default()),

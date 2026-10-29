@@ -239,9 +239,31 @@ function localTokenDisplay(localUsage: AccountLocalUsage | null) {
   return formatInteger(total)
 }
 
-export function quotaWindowLocalUsageDisplay(window: AccountQuotaWindow) {
+export function quotaWindowDetails(window: AccountQuotaWindow) {
   const localUsage = accountLocalUsage(window.localUsage)
-  return localTokenDisplay(localUsage) || null
+  const tokenDisplay = localTokenDisplay(localUsage) || null
+  const amountDisplay = window.amount?.usedDisplay ?? null
+  const amount = amountDisplay?.replace(/[^\d.]/g, '')
+  const amountUsedDisplay = amount && Number(amount) === 0
+    ? null
+    : amountDisplay
+  const hasConsumption = Boolean(tokenDisplay || amountUsedDisplay)
+    || (!window.amount && localUsage?.totalTokens == null)
+  return {
+    localUsageDisplay: tokenDisplay,
+    amountUsedDisplay,
+    consumptionDisplay: hasConsumption
+      ? [
+          amountDisplay,
+          tokenDisplay || (localUsage?.totalTokens === 0 || window.amount
+            ? '0'
+            : '—'),
+        ].filter(Boolean).join(' · ')
+      : null,
+    resetAtDisplay: window.amount && window.resetAtDisplay === '—'
+      ? t('accounts.upstream.startsOnNextUse')
+      : window.resetAtDisplay,
+  }
 }
 
 const quotaWindowPeriods = [
@@ -365,7 +387,7 @@ export function quotaWindowPresentation(window: AccountQuotaWindow, minimumWidth
   }
 }
 
-function quotaWindowTone(usedPercent: number | null): QuotaWindowTone {
+export function quotaWindowTone(usedPercent: number | null): QuotaWindowTone {
   if (usedPercent === null)
     return 'unknown'
   // 每个窗口按自身的已用比例分档，剩余不足 30% / 10% 时分别预警

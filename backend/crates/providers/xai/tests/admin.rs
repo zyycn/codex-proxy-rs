@@ -78,6 +78,7 @@ async fn account_unavailable_clears_real_selector_cooldowns_only_for_deleted_acc
     let cooldowns = Arc::new(MemoryCooldownPort::default());
     let ports = ProviderStorePorts::new(
         store.clone(),
+        Arc::new(crate::support::UnusedUpstreamInfoStore),
         Arc::new(TestLeases),
         Arc::new(TestSessionAffinity),
         Arc::new(TestSessionExclusions),
@@ -723,6 +724,7 @@ fn provider_ports_with_catalog(
 ) -> ProviderStorePorts {
     ProviderStorePorts::new(
         accounts,
+        Arc::new(crate::support::UnusedUpstreamInfoStore),
         Arc::new(TestLeases),
         Arc::new(TestSessionAffinity),
         Arc::new(TestSessionExclusions),
@@ -1232,6 +1234,7 @@ mod errors {
         account.outbound_proxy = before.outbound_proxy().cloned();
         let ports = ProviderStorePorts::new(
             store.clone(),
+            Arc::new(crate::support::UnusedUpstreamInfoStore),
             Arc::new(BusyRefreshLeases),
             Arc::new(TestSessionAffinity),
             Arc::new(TestSessionExclusions),

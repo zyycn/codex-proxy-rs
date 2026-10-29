@@ -26,6 +26,139 @@ use gateway_store::postgres::{
 use super::TestDatabase;
 
 #[tokio::test]
+async fn peer_sharing_persists_across_reads_and_cannot_lose_its_group_scope() {
+    use gateway_admin::{
+        model::{
+            MutationActor, MutationContext,
+            account_groups::{AccountGroupColor, NewAccountGroup},
+            client_keys::{NewClientKey, UpdateClientKey},
+        },
+        ports::store::{AccountGroupStore as _, AdminStoreErrorKind},
+    };
+    use gateway_core::{
+        account::FastMode,
+        policy::{ClientPeerSharing, RateLimits},
+        routing::AccountGroupId,
+    };
+    use gateway_store::postgres::{
+        ObservabilityQueryBudget, PgAccountGroupRepository, PgRuntimeSnapshotRepository,
+        RuntimeSnapshotRepository as _,
+    };
+    let Some(database) = TestDatabase::create("peer_key_sharing").await else {
+        return;
+    };
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "peer-sharing-test".into(),
+    };
+    let group = AccountGroupId::new(format!("grp_{}", "2".repeat(32))).unwrap();
+    let groups = PgAccountGroupRepository::new(
+        database.pool.clone(),
+        ObservabilityQueryBudget::try_new(4, Duration::from_secs(10), Duration::from_secs(10))
+            .unwrap(),
+    );
+    groups
+        .create_account_group(
+            NewAccountGroup {
+                id: group.clone(),
+                name: "Shared".into(),
+                description: None,
+                color: AccountGroupColor::parse("#2563EBFF").unwrap(),
+                fast_mode: FastMode::Default,
+                allow_image_generation: true,
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    let store = PgAdminClientKeyStore::new(database.pool.clone());
+    let sharing = ClientPeerSharing {
+        enabled: true,
+        share_pool: true,
+        share_quota: true,
+        share_plans: false,
+    };
+    let id = ClientApiKeyId::new("key_peer_shared").unwrap();
+    store
+        .create_client_key(
+            NewClientKey {
+                peer_sharing: sharing,
+                request_profile_overrides: Default::default(),
+                id: id.clone(),
+                name: "Peer".into(),
+                label: None,
+                group_ids: vec![group.clone()],
+                limits: RateLimits::unlimited(),
+                budget: Default::default(),
+                plaintext: "synthetic-peer-sharing-key".into(),
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_client_key(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .peer_sharing,
+        sharing
+    );
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.client_api_keys[0].peer_sharing, sharing);
+    let first_identity = store.peer_node_identity().await.unwrap();
+    assert_eq!(
+        first_identity,
+        PgAdminClientKeyStore::new(database.pool.clone())
+            .peer_node_identity()
+            .await
+            .unwrap()
+    );
+    let mut update = UpdateClientKey {
+        peer_sharing: None,
+        request_profile_override_updates: Default::default(),
+        id: id.clone(),
+        name: "Renamed peer".into(),
+        label: None,
+        group_ids: Vec::new(),
+        limits: RateLimits::unlimited(),
+        daily_limit_usd: None,
+        weekly_limit_usd: None,
+    };
+    let error = store
+        .update_client_key(update.clone(), &context)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), AdminStoreErrorKind::Invalid);
+    assert_eq!(
+        store
+            .get_client_key(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .groups
+            .len(),
+        1
+    );
+    update.group_ids = vec![group];
+    let (_, updated) = store
+        .update_client_key(update.clone(), &context)
+        .await
+        .unwrap();
+    assert_eq!(updated.peer_sharing, sharing);
+    update.group_ids.clear();
+    update.peer_sharing = Some(ClientPeerSharing::default());
+    let (_, updated) = store.update_client_key(update, &context).await.unwrap();
+    assert!(!updated.peer_sharing.enabled);
+    assert!(updated.groups.is_empty());
+    database.close().await;
+}
+
+#[tokio::test]
 async fn custom_keys_persist_exactly_and_keep_short_keys_masked() {
     use gateway_admin::model::{MutationActor, MutationContext, client_keys::NewClientKey};
     use gateway_core::policy::RateLimits;
@@ -53,6 +186,7 @@ async fn custom_keys_persist_exactly_and_keep_short_keys_masked() {
         let (_, record) = store
             .create_client_key(
                 NewClientKey {
+                    peer_sharing: Default::default(),
                     request_profile_overrides: Default::default(),
                     id: id.clone(),
                     name: format!("Custom {index}"),
@@ -108,6 +242,7 @@ async fn duplicate_custom_keys_conflict_atomically_without_extra_audits() {
     };
     let key = "custom-key-case-sensitive!";
     let command = |id: &str| NewClientKey {
+        peer_sharing: Default::default(),
         request_profile_overrides: Default::default(),
         id: ClientApiKeyId::new(id).unwrap(),
         name: id.to_owned(),
@@ -144,6 +279,7 @@ async fn duplicate_custom_keys_conflict_atomically_without_extra_audits() {
 #[test]
 fn generated_client_key_format_remains_valid() {
     let key = NewClientApiKey {
+        peer_sharing: Default::default(),
         request_profile_overrides: Default::default(),
         budget: Default::default(),
         id: "key-1".to_owned(),
@@ -177,6 +313,7 @@ async fn client_key_names_are_checked_atomically_on_create_and_rename() {
         request_id: "duplicate-name-test".to_owned(),
     };
     let create = |id: &str, name: &str| NewClientKey {
+        peer_sharing: Default::default(),
         request_profile_overrides: Default::default(),
         id: ClientApiKeyId::new(id).unwrap(),
         name: name.to_owned(),
@@ -187,6 +324,7 @@ async fn client_key_names_are_checked_atomically_on_create_and_rename() {
         plaintext: format!("synthetic-credential-{id}"),
     };
     let update = |id: ClientApiKeyId, name: &str| UpdateClientKey {
+        peer_sharing: None,
         request_profile_override_updates: Default::default(),
         id,
         name: name.to_owned(),
@@ -650,6 +788,7 @@ async fn dedicated_reveal_returns_plaintext_without_debug_exposure() {
 fn client_key_debug_redacts_plaintext() {
     let secret = format!("sk_{}", "s".repeat(43));
     let key = NewClientApiKey {
+        peer_sharing: Default::default(),
         request_profile_overrides: Default::default(),
         budget: Default::default(),
         id: "key-1".to_owned(),
@@ -723,6 +862,7 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
     let (_, record) = store
         .create_client_key(
             NewClientKey {
+                peer_sharing: Default::default(),
                 id: id.clone(),
                 name: "profile".to_owned(),
                 label: None,
@@ -745,6 +885,7 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
     );
     assert_eq!(record.request_profile_overrides.get(&xai), Some(&profile));
     let update = |override_value: Option<Option<OpaqueProviderData>>| UpdateClientKey {
+        peer_sharing: None,
         id: id.clone(),
         name: "profile".to_owned(),
         label: None,

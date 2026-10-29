@@ -41,11 +41,11 @@ pub fn format_compact_number(value: u64) -> String {
 }
 
 /// 货币展示格式化
-/// USD 常规金额保留两位，小于 1 美元时最多保留四位
+/// USD 常规金额最多保留两位，小于 1 美元时最多保留四位，小数末尾不补零
 #[must_use]
 pub fn format_decimal_currency(amount: &str, currency: &str) -> String {
     if currency != "USD" {
-        return format!("{currency} {amount}");
+        return format!("{currency} {}", trim_decimal_zeros(amount));
     }
 
     const DECIMAL_SCALE: u128 = 10_000_000_000;
@@ -60,13 +60,21 @@ pub fn format_decimal_currency(amount: &str, currency: &str) -> String {
     let display_scale = 10_u128.pow(precision);
     let whole = rounded / display_scale;
     let fraction = rounded % display_scale;
-    let mut display = format!("{whole}.{fraction:0width$}", width = precision as usize);
-    while display.ends_with('0')
-        && display
-            .split_once('.')
-            .is_some_and(|(_, fraction)| fraction.len() > 2)
-    {
-        display.pop();
+    let display = format!("{whole}.{fraction:0width$}", width = precision as usize);
+    format!("${}", trim_decimal_zeros(&display))
+}
+
+/// 百分比最多保留一位小数，整数百分比不补零
+#[must_use]
+pub(super) fn format_percentage(value: f64) -> String {
+    let display = format!("{value:.1}");
+    format!("{}%", trim_decimal_zeros(&display))
+}
+
+fn trim_decimal_zeros(value: &str) -> &str {
+    if value.contains('.') {
+        value.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        value
     }
-    format!("${display}")
 }

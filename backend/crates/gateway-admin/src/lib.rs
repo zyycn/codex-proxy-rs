@@ -26,6 +26,7 @@ mod use_case;
 pub use use_case::plugins::{PluginDistributionPorts, PluginManagementService, PluginsService};
 
 pub use use_case::key_usage::KeyUsageService;
+pub use use_case::peer_link::{PeerLinkError, PeerLinkService};
 
 pub use use_case::{
     account_groups::AccountGroupService,
@@ -213,6 +214,7 @@ pub struct AdminServices {
     proxies: Arc<dyn ProxiesService>,
     auth: Arc<dyn AuthService>,
     key_usage: Arc<dyn KeyUsageService>,
+    peer_link: Arc<dyn PeerLinkService>,
     accounts: Arc<dyn AccountsService>,
     account_groups: Arc<dyn AccountGroupService>,
     client_keys: Arc<dyn ClientKeyService>,
@@ -256,6 +258,11 @@ impl AdminServices {
     #[must_use]
     pub fn key_usage(&self) -> &dyn KeyUsageService {
         self.key_usage.as_ref()
+    }
+
+    #[must_use]
+    pub fn peer_link(&self) -> &dyn PeerLinkService {
+        self.peer_link.as_ref()
     }
 
     #[must_use]
@@ -483,6 +490,12 @@ async fn initialize_inner(
     public_services.register_accounts(&accounts)?;
     public_services.register_usage_data(&usage_data)?;
     let services = AdminServices {
+        peer_link: Arc::new(use_case::peer_link::DefaultPeerLinkService::new(
+            store.client_keys(),
+            store.accounts(),
+            store.account_runtime(),
+            registry.clone(),
+        )),
         timezone,
         public_services: Arc::new(public_services),
         plugin_management: Arc::new(PluginManagementService::new(

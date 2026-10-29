@@ -10,6 +10,7 @@ use super::TestDatabase;
 #[test]
 fn client_key_snapshot_debug_redacts_plaintext_key() {
     let policy = ClientApiKeySnapshot {
+        peer_sharing: Default::default(),
         name_snapshot: None,
         request_profiles: Default::default(),
         id: ClientApiKeyId::new("key-1").expect("client key ID"),

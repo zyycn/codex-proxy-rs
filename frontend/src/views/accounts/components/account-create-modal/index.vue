@@ -37,7 +37,7 @@ const props = withDefaults(defineProps<{
   account: null,
 })
 
-const emit = defineEmits<{ create: [], generateOauth: [] }>()
+const emit = defineEmits<{ create: [], generateOauth: [], afterLeave: [] }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -95,6 +95,7 @@ function continueToImport() {
     :type="view.modal.type"
     :width="view.modal.width"
     :show-close="!busy" :close-on-click-modal="!busy" :close-on-press-escape="!busy"
+    @closed="emit('afterLeave')"
   >
     <template #icon>
       <Settings2 v-if="view.configuring" class="text-cp-text" :size="20" aria-hidden="true" />
