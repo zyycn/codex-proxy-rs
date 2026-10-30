@@ -1,4 +1,4 @@
-//! 管理端批量读取原生额度与互联快照，不在列表查询中访问上游
+//! 管理端批量读取原生额度，不在列表查询中访问上游
 
 use super::*;
 
@@ -44,31 +44,6 @@ impl OpenAiAdminProvider {
                         .collect::<BTreeMap<_, _>>()
                 })
         };
-        let peer_ids = requests
-            .iter()
-            .zip(&identities)
-            .filter(|(request, _)| {
-                request.account.authentication_kind
-                    == crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY
-            })
-            .filter_map(|(_, identity)| identity.as_ref().ok().map(|(id, _)| id.clone()))
-            .collect::<Vec<_>>();
-        let peer_observations = if peer_ids.is_empty() {
-            Ok(BTreeMap::new())
-        } else {
-            self.peer_info
-                .read_summaries(&peer_ids)
-                .await
-                .map_err(map_store_error)
-                .map(|records| {
-                    records
-                        .into_iter()
-                        .map(|(connection, quota)| {
-                            (connection.account_id.clone(), (connection, quota))
-                        })
-                        .collect::<BTreeMap<_, _>>()
-                })
-        };
         requests
             .iter()
             .zip(identities)
@@ -77,17 +52,7 @@ impl OpenAiAdminProvider {
                 let snapshot = if request.account.authentication_kind
                     == crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY
                 {
-                    let connection = gateway_core::account::UpstreamConnection::new(
-                        id.clone(),
-                        revision,
-                        request.account.effective_outbound_proxy(),
-                    );
-                    return Ok(peer_observations
-                        .as_ref()
-                        .map_err(Clone::clone)?
-                        .get(&id)
-                        .filter(|(observed, _)| *observed == connection)
-                        .map_or_else(|| project_quota(None, false), |(_, quota)| quota.clone()));
+                    return Ok(project_quota(None, false));
                 } else {
                     observations
                         .as_ref()

@@ -322,12 +322,22 @@ pub trait ProviderAdmin: Send + Sync {
         .await
     }
 
-    /// 只写入本地刷新计划；处理该管理动作时不得访问上游
-    async fn refresh_upstream_info(
+    /// 仅依据账号类型声明 CPR 连接能力，通用用例不解析 Provider 凭据
+    fn peer_authentication_kinds(&self) -> &[&str] {
+        &[]
+    }
+
+    fn supports_peer_connection(&self, authentication_kind: &str) -> bool {
+        self.peer_authentication_kinds()
+            .contains(&authentication_kind)
+    }
+
+    /// 从本轮加载的凭据提取连接材料，避免在校验连接版本后另读一份凭据
+    fn peer_connection(
         &self,
-        _account_id: &ProviderAccountId,
-    ) -> Result<crate::model::upstream_info::UpstreamRefreshReceipt, ProviderAdminError> {
-        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+        _loaded: &gateway_core::account::LoadedCredential,
+    ) -> Result<Option<super::peer::PeerConnection>, ProviderAdminError> {
+        Ok(None)
     }
 
     /// 历史观测的协议字段仅由具体 Provider 解释；不支持时保留累计估算
@@ -406,6 +416,10 @@ pub struct ProviderAdminRegistry {
 }
 
 impl ProviderAdminRegistry {
+    pub(crate) fn registered(&self) -> BTreeMap<ProviderKind, Arc<dyn ProviderAdmin>> {
+        self.providers.as_ref().clone()
+    }
+
     pub fn pricing_catalog(&self) -> gateway_core::metering::PricingOverrides {
         self.providers
             .iter()

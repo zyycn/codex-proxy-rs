@@ -1040,6 +1040,43 @@ impl RuntimeSnapshot {
                 && !self.is_known_upstream_model(&upstream_model))
     }
 
+    /// 通用模型候选资格，不以原生目录来源限制推理，也不替代操作能力与实时选号检查
+    #[must_use]
+    pub fn allows_public_model_for_account(
+        &self,
+        public_model: &PublicModelId,
+        scope: &FrozenAccountScope,
+        account: &ProviderAccountId,
+    ) -> bool {
+        let Some(provider) = scope.account_provider(account) else {
+            return false;
+        };
+        let upstream = self.mapped_model(public_model.as_str());
+        if !scope.allows_model(account, &upstream)
+            || !self.contains_public_model_for_provider(public_model, provider)
+        {
+            return false;
+        }
+        let Ok(upstream) = UpstreamModelId::from_client_wire(upstream) else {
+            return false;
+        };
+        let native = self
+            .provider_models
+            .get(provider)
+            .is_some_and(|models| models.contains_key(&upstream));
+        // 仅由适配器贡献的模型仍受声明账号范围限制，不能借发现型目录扩大资格
+        native
+            || !self
+                .contributed_models()
+                .iter()
+                .any(|model| &model.provider == provider && &model.id == public_model)
+            || self.contributed_models().iter().any(|model| {
+                &model.provider == provider
+                    && &model.id == public_model
+                    && model.accounts.contains(account)
+            })
+    }
+
     fn is_known_upstream_model(&self, upstream_model: &UpstreamModelId) -> bool {
         self.provider_models
             .values()

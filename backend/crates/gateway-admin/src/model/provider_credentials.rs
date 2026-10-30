@@ -829,7 +829,7 @@ pub struct ProviderQuotaReadRequest<'a> {
 }
 
 /// Provider 已解析的 quota 结果及其不透明差异字段
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ProviderQuota {
     pub upstream: Option<super::upstream_info::ProviderUpstreamInfo>,
     /// 上游额度响应明确提供的套餐，可用于补全账号展示

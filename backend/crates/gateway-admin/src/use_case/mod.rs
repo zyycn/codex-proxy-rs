@@ -27,10 +27,10 @@ mod publication;
 
 use credential_mutation::{
     commit_authorization, commit_credential_refresh, commit_credential_rotation,
-    delete_credentials, import_proxy_binding, pending_authorization,
-    publish_credentials_and_observe_quota, required_credential, required_plugin_credential,
-    validate_authorization_commit, validate_prepared_import, validate_prepared_rotation,
-    validate_prepared_rotation_facts,
+    delete_credentials, import_proxy_binding, notify_account_facts_changed,
+    notify_account_unavailable, pending_authorization, publish_credentials_and_observe_quota,
+    required_credential, required_plugin_credential, validate_authorization_commit,
+    validate_prepared_import, validate_prepared_rotation, validate_prepared_rotation_facts,
 };
 use error::{map_provider_error, map_store_error};
 use publication::publish_committed;

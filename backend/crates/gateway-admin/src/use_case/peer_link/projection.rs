@@ -1,6 +1,6 @@
 //! 从已授权的本地账号事实派生公开汇总，保留原始观测时间
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use gateway_core::{
@@ -71,13 +71,12 @@ pub(super) fn quota_and_models(
         let Ok(id) = ProviderAccountId::new(account.id.clone()) else {
             continue;
         };
-        let single_scope = scope.restricted_to(&BTreeSet::new(), &BTreeSet::from([id]));
         let provider = providers.require(&account.provider_kind).ok();
         let account_models = models
             .iter()
             .filter_map(|model| {
                 let upstream = snapshot.mapped_model(model.as_str());
-                if !snapshot.contains_public_model_for_scope(model, &single_scope)
+                if !snapshot.allows_public_model_for_account(model, scope, &id)
                     || !account.model_access.allows(&upstream)
                 {
                     return None;

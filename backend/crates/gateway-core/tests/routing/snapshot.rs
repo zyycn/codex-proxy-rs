@@ -183,6 +183,23 @@ fn same_name_native_and_adapted_sources_keep_account_capabilities_separate() {
     let scope = native.all_account_scope();
     let b_only = Arc::new(scope.restricted_to(&Default::default(), &[b.clone()].into()));
     assert!(native.public_models_for_scope(&b_only).is_empty());
+    assert!(native.allows_public_model_for_account(&id, &b_only, &b));
+    let c = ProviderAccountId::new("acct_c").unwrap();
+    assert!(!native.allows_public_model_for_account(&id, &scope, &c));
+    assert!(!native.allows_public_model_for_account(&id, &b_only, &c));
+    assert!(
+        native
+            .plan(
+                &id,
+                &super::operation(),
+                b_only.clone(),
+                &Default::default()
+            )
+            .unwrap()
+            .candidates()[0]
+            .account_scope()
+            .allows(&b)
+    );
     let snapshot = native.with_extensions(Some(ExtensionSetReference::new(
         ExtensionSetId::new("adapted".into()).unwrap(),
         Arc::new(ModelLease(vec![contribution.clone()])),
@@ -277,7 +294,10 @@ fn adapted_models_limit_visibility_and_routing_to_capable_authorized_accounts() 
     use gateway_core::{
         account::ProviderAccountId,
         operation::{Feature, GenerateRequest, Operation, ProtocolPayload},
-        routing::{ContributedModel, SupportLevel},
+        routing::{
+            ClientRoutingScope, ContributedModel, FrozenAccountScope, RuntimeAccount,
+            RuntimeAccountDirectory, SupportLevel,
+        },
     };
     let account = ProviderAccountId::new("acct_openai").unwrap();
     let provider = ProviderKind::new("openai").unwrap();
@@ -296,6 +316,16 @@ fn adapted_models_limit_visibility_and_routing_to_capable_authorized_accounts() 
     )));
     let scope = super::account_scope();
     assert!(snapshot.public_models_for_scope(&scope).contains(&id));
+    assert!(snapshot.allows_public_model_for_account(&id, &scope, &account));
+    let undeclared = ProviderAccountId::new("acct_undeclared").unwrap();
+    let all = FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            undeclared.clone(),
+            RuntimeAccount::new(ProviderKind::new("openai").unwrap(), Default::default()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    );
+    assert!(!snapshot.allows_public_model_for_account(&id, &all, &undeclared));
     assert!(
         snapshot
             .public_model_profiles_for_scope(&scope)

@@ -30,6 +30,7 @@ pub struct ProviderCredentials {
     accounts: Arc<dyn AccountStore>,
     proxies: Arc<dyn crate::ports::proxy::ProxyStore>,
     snapshot: Arc<dyn SnapshotControl>,
+    upstream_info: Option<Arc<dyn crate::ports::peer::PeerUpstreamService>>,
 }
 
 impl ProviderCredentials {
@@ -39,12 +40,14 @@ impl ProviderCredentials {
         accounts: Arc<dyn AccountStore>,
         proxies: Arc<dyn crate::ports::proxy::ProxyStore>,
         snapshot: Arc<dyn SnapshotControl>,
+        upstream_info: Option<Arc<dyn crate::ports::peer::PeerUpstreamService>>,
     ) -> Self {
         Self {
             provider,
             accounts,
             proxies,
             snapshot,
+            upstream_info,
         }
     }
     pub async fn import_document(
@@ -89,6 +92,7 @@ impl ProviderCredentials {
             .map_err(|error| map_store_error(error, "provider credential import"))?;
         drop(proxy_reservation);
         publish_credentials_and_observe_quota(
+            self.upstream_info.as_deref(),
             &self.provider,
             self.snapshot.as_ref(),
             result.config_revision,
@@ -160,11 +164,19 @@ impl ProviderCredentials {
         )
         .await?;
         if disable_account {
-            self.provider.account_unavailable(&account_id).await;
-        }
-        self.provider
-            .account_facts_changed(std::slice::from_ref(&result.account_id))
+            super::super::notify_account_unavailable(
+                self.upstream_info.as_deref(),
+                self.provider.as_ref(),
+                &account_id,
+            )
             .await;
+        }
+        super::super::notify_account_facts_changed(
+            self.upstream_info.as_deref(),
+            self.provider.as_ref(),
+            std::slice::from_ref(&result.account_id),
+        )
+        .await;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
         Ok(result)
     }
@@ -174,6 +186,7 @@ impl ProviderCredentials {
         command: CredentialDeletion,
     ) -> Result<CredentialDeletionResult, AdminError> {
         let result = delete_credentials(
+            self.upstream_info.as_deref(),
             self.accounts.as_ref(),
             self.provider.as_ref(),
             command,
@@ -236,6 +249,7 @@ impl super::CredentialsService {
         let result = outcome.result;
         if outcome.newly_committed {
             publish_credentials_and_observe_quota(
+                self.upstream_info.as_deref(),
                 provider,
                 self.snapshot.as_ref(),
                 result.config_revision,

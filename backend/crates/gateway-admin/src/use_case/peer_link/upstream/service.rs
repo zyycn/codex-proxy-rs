@@ -1,7 +1,7 @@
 //! 后台计划协调与仅供 Smart 排序的内存观测
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, RwLock},
     time::{Duration, SystemTime},
 };
@@ -9,25 +9,25 @@ use std::{
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 use gateway_core::{
     account::{
-        LoadedCredential, ProviderAccount, ProviderAccountId, UpstreamConnection,
-        UpstreamInfoClaim, UpstreamInfoCompletion, UpstreamInfoFailure, UpstreamInfoPlan,
-        UpstreamInfoRecord, UpstreamInfoStore,
+        LoadedCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
+        UpstreamConnection, UpstreamInfoClaim, UpstreamInfoCompletion, UpstreamInfoFailure,
+        UpstreamInfoPlan, UpstreamInfoRecord, UpstreamInfoSource, UpstreamInfoStore,
+        UpstreamSchedulingSignal,
     },
     error::{StoreError, StoreErrorKind},
     routing::ProviderKind,
     task::WorkerCycleContext,
 };
 
-use gateway_admin::model::provider_credentials::ProviderQuota;
+use crate::model::provider_credentials::ProviderQuota;
 use gateway_protocol::peer::PeerLink;
 
-use crate::credential::{CodexCredentialRepository, CodexRuntimeAuthentication};
-
-use super::{
-    client,
-    scheduling::{PeerSchedulingSignal, SchedulingObservation},
-    snapshot,
+use crate::ports::{
+    peer::{PeerConnection, PeerTransport},
+    provider::{ProviderAdmin, ProviderAdminRegistry},
 };
+
+use super::{scheduling::SchedulingObservation, snapshot};
 
 const BATCH_SIZE: u32 = 100;
 const FETCH_BATCH: u32 = 20;
@@ -73,32 +73,35 @@ impl CachedObservation {
 }
 
 pub(crate) struct PeerInfoService {
-    repository: CodexCredentialRepository,
+    accounts: Arc<dyn ProviderAccountStore>,
     store: Arc<dyn UpstreamInfoStore>,
-    provider: ProviderKind,
-    cursor: tokio::sync::Mutex<Option<ProviderAccountId>>,
+    providers: BTreeMap<ProviderKind, Arc<dyn ProviderAdmin>>,
+    transport: Arc<dyn PeerTransport>,
+    cursors: tokio::sync::Mutex<BTreeMap<ProviderKind, Option<ProviderAccountId>>>,
     cache_refresh: tokio::sync::Mutex<()>,
     observations: RwLock<HashMap<ProviderAccountId, CachedObservation>>,
 }
 
 impl PeerInfoService {
     pub(crate) fn new(
-        repository: CodexCredentialRepository,
+        accounts: Arc<dyn ProviderAccountStore>,
         store: Arc<dyn UpstreamInfoStore>,
-        provider: ProviderKind,
+        providers: &ProviderAdminRegistry,
+        transport: Arc<dyn PeerTransport>,
     ) -> Self {
         Self {
-            repository,
+            accounts,
             store,
-            provider,
-            cursor: tokio::sync::Mutex::new(None),
+            providers: providers.registered(),
+            transport,
+            cursors: tokio::sync::Mutex::new(BTreeMap::new()),
             cache_refresh: tokio::sync::Mutex::new(()),
             observations: RwLock::new(HashMap::new()),
         }
     }
 
     pub(crate) async fn account_changed(&self, id: &ProviderAccountId) -> Result<(), StoreError> {
-        let loaded = self.repository.store().load_current_credential(id).await?;
+        let loaded = self.accounts.load_current_credential(id).await?;
         self.reconcile(&loaded).await
     }
 
@@ -113,12 +116,7 @@ impl PeerInfoService {
 
     async fn reconcile(&self, loaded: &LoadedCredential) -> Result<(), StoreError> {
         let connection = UpstreamConnection::for_account(&loaded.account);
-        let enabled = self
-            .repository
-            .decode_runtime_credential(loaded)
-            .ok()
-            .map(|credential| credential.authentication)
-            .is_some_and(|credential| matches!(credential, CodexRuntimeAuthentication::ApiKey(_)));
+        let enabled = self.connection(loaded).is_some();
         self.store
             .reconcile(
                 &connection,
@@ -150,14 +148,8 @@ impl PeerInfoService {
         &self,
         id: &ProviderAccountId,
     ) -> Result<UpstreamInfoPlan, StoreError> {
-        let loaded = self.repository.store().load_current_credential(id).await?;
-        if !matches!(
-            self.repository
-                .decode_runtime_credential(&loaded)
-                .ok()
-                .map(|credential| credential.authentication),
-            Some(CodexRuntimeAuthentication::ApiKey(_))
-        ) {
+        let loaded = self.accounts.load_current_credential(id).await?;
+        if self.connection(&loaded).is_none() {
             return Err(StoreError::new(StoreErrorKind::InvalidData));
         }
         self.reconcile(&loaded).await?;
@@ -168,6 +160,33 @@ impl PeerInfoService {
                 MINIMUM_INTERVAL,
             )
             .await
+    }
+
+    pub(crate) async fn read_quota(
+        &self,
+        id: &ProviderAccountId,
+    ) -> Result<Option<ProviderQuota>, StoreError> {
+        let account = self
+            .accounts
+            .get_account(id)
+            .await?
+            .ok_or_else(|| StoreError::new(StoreErrorKind::InvalidData))?;
+        if !self
+            .providers
+            .get(account.provider())
+            .is_some_and(|provider| {
+                provider.supports_peer_connection(account.authentication_kind())
+            })
+        {
+            return Ok(None);
+        }
+        let connection = UpstreamConnection::for_account(&account);
+        Ok(self
+            .read(std::slice::from_ref(id))
+            .await?
+            .iter()
+            .find(|record| record.plan.connection == connection)
+            .map(|record| Self::project(record, SystemTime::now())))
     }
 
     pub(crate) async fn read(
@@ -189,17 +208,49 @@ impl PeerInfoService {
             })
             .collect::<Vec<_>>();
         drop(expired);
-        let mut cursor = self.cursor.lock().await;
+        let mut failure = None;
+        for provider in self.providers.keys() {
+            if context.cancellation().is_cancelled() {
+                break;
+            }
+            // 一个 Provider 的账号读取失败不阻止其他 Provider 本轮同步
+            if let Err(error) = self.synchronize_provider(provider, context).await {
+                failure.get_or_insert(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    fn connection(&self, loaded: &LoadedCredential) -> Option<PeerConnection> {
+        self.providers
+            .get(loaded.account.provider())?
+            .peer_connection(loaded)
+            .ok()
+            .flatten()
+    }
+
+    async fn synchronize_provider(
+        &self,
+        provider: &ProviderKind,
+        context: &WorkerCycleContext,
+    ) -> Result<(), StoreError> {
+        let mut cursors = self.cursors.lock().await;
+        let cursor = cursors.entry(provider.clone()).or_default();
         let candidates = self
             .store
-            .list_candidates(&self.provider, cursor.as_ref(), BATCH_SIZE)
+            .list_candidates(
+                provider,
+                self.providers[provider].peer_authentication_kinds(),
+                cursor.as_ref(),
+                BATCH_SIZE,
+            )
             .await?;
         *cursor = if candidates.len() < BATCH_SIZE as usize {
             None
         } else {
             candidates.last().map(|loaded| loaded.account.id().clone())
         };
-        drop(cursor);
+        drop(cursors);
         let mut ids = Vec::with_capacity(candidates.len());
         for loaded in candidates {
             if context.cancellation().is_cancelled() {
@@ -219,7 +270,7 @@ impl PeerInfoService {
         let pending = self
             .store
             .claim_due(
-                &self.provider,
+                provider,
                 SystemTime::now(),
                 FETCH_BATCH,
                 Duration::from_secs(60),
@@ -236,8 +287,7 @@ impl PeerInfoService {
     async fn synchronize_one(&self, claim: UpstreamInfoClaim) -> Result<(), StoreError> {
         let record = claim.plan;
         let loaded = match self
-            .repository
-            .store()
+            .accounts
             .load_current_credential(&record.connection.account_id)
             .await
         {
@@ -257,17 +307,14 @@ impl PeerInfoService {
         {
             return self.reconcile(&loaded).await;
         }
-        let Ok(CodexRuntimeAuthentication::ApiKey(authentication)) = self
-            .repository
-            .decode_runtime_credential(&loaded)
-            .map(|credential| credential.authentication)
-        else {
+        let Some(authentication) = self.connection(&loaded) else {
             return self.reconcile(&loaded).await;
         };
-        let (result, retry_after) = match client::fetch(&loaded.account, &authentication).await {
-            Ok(bytes) => (snapshot::parse(&bytes, SystemTime::now()), None),
-            Err(failure) => (Err(failure.kind), failure.retry_after),
-        };
+        let (result, retry_after) =
+            match self.transport.fetch(&loaded.account, &authentication).await {
+                Ok(bytes) => (snapshot::parse(&bytes, SystemTime::now()), None),
+                Err(failure) => (Err(failure.kind), failure.retry_after),
+            };
         let now = SystemTime::now();
         let delay = match result {
             Ok(_) => Duration::from_secs(240 + stable_jitter(loaded.account.id().as_str())),
@@ -414,14 +461,16 @@ impl PeerInfoService {
             .insert(record.plan.connection.account_id.clone(), cached);
         drop(previous);
     }
+}
 
+impl UpstreamInfoSource for PeerInfoService {
     /// 数据面只取不可变投影；模型查询与有效期判断不持有共享锁
-    pub(crate) fn signal(
+    fn signal(
         &self,
         account: &ProviderAccount,
         model: &str,
         now: SystemTime,
-    ) -> Option<PeerSchedulingSignal> {
+    ) -> Option<UpstreamSchedulingSignal> {
         let connection = UpstreamConnection::for_account(account);
         let scheduling = {
             let observations = self

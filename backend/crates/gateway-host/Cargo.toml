@@ -18,6 +18,7 @@ flate2 = "1.1.9"
 futures = "0.3.32"
 gateway-admin = { path = "../gateway-admin" }
 gateway-core = { path = "../gateway-core" }
+gateway-protocol = { path = "../gateway-protocol" }
 hex = "0.4.3"
 http = "1.4.0"
 http-body-util = "0.1.3"

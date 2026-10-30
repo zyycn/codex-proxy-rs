@@ -96,7 +96,7 @@ const items = computed(() => props.windows.map((window) => {
         </template>
         <template v-else>
           <div class="flex min-w-0 items-baseline justify-between gap-2 text-cp-xs leading-3.5">
-            <span class="min-w-0 truncate font-bold text-cp-text-quaternary">
+            <span class="min-w-0 truncate font-bold text-cp-text-quaternary" :title="item.observationDisplay || undefined">
               {{ item.label }}
             </span>
             <span class="flex shrink-0 items-baseline gap-1.5 font-mono font-heavy tabular-nums">
@@ -126,8 +126,8 @@ const items = computed(() => props.windows.map((window) => {
             :aria-label="item.ariaLabel"
             aria-valuemin="0"
             aria-valuemax="100"
-            :aria-valuenow="item.usedPercent ?? undefined"
-            :aria-valuetext="item.usedPercentDisplay"
+            :aria-valuenow="item.stale ? undefined : item.usedPercent ?? undefined"
+            :aria-valuetext="item.stale ? `${item.usedPercentDisplay} · ${item.observationDisplay}` : item.usedPercentDisplay"
           >
             <div
               class="h-full rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none"

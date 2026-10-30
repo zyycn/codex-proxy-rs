@@ -2,6 +2,7 @@
 
 mod projection;
 mod rate_limit;
+pub mod upstream;
 
 use std::{collections::BTreeMap, sync::Arc};
 

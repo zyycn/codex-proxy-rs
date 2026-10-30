@@ -15,8 +15,6 @@ use gateway_core::account::{
     CredentialState, LoadedCredential, NewProviderAccount, PlaintextCredential, ProviderAccount,
     ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, ProviderRefreshQuery,
     QuotaAccessChange, QuotaObservation, QuotaObservationTouch, QuotaState, QuotaWriteOutcome,
-    UpstreamConnection, UpstreamInfoClaim, UpstreamInfoCompletion, UpstreamInfoPlan,
-    UpstreamInfoRecord, UpstreamInfoStore,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
@@ -232,64 +230,6 @@ pub async fn rejecting_account_proxy() -> (
         String::from_utf8(header).unwrap()
     });
     (proxy, task)
-}
-
-/// xAI 不消费互联计划，禁止测试期间意外访问该持久化能力
-pub struct UnusedUpstreamInfoStore;
-
-#[async_trait]
-impl UpstreamInfoStore for UnusedUpstreamInfoStore {
-    async fn list_candidates(
-        &self,
-        _: &ProviderKind,
-        _: Option<&ProviderAccountId>,
-        _: u32,
-    ) -> Result<Vec<LoadedCredential>, StoreError> {
-        panic!("xAI must not scan CPR Link accounts")
-    }
-
-    async fn reconcile(
-        &self,
-        _: &UpstreamConnection,
-        _: bool,
-        _: SystemTime,
-    ) -> Result<(), StoreError> {
-        panic!("xAI must not reconcile CPR Link plans")
-    }
-
-    async fn request_refresh(
-        &self,
-        _: &UpstreamConnection,
-        _: SystemTime,
-        _: Duration,
-    ) -> Result<UpstreamInfoPlan, StoreError> {
-        panic!("xAI must not request CPR Link refreshes")
-    }
-
-    async fn read(&self, _: &[ProviderAccountId]) -> Result<Vec<UpstreamInfoRecord>, StoreError> {
-        panic!("xAI must not read CPR Link snapshots")
-    }
-
-    async fn read_plans(
-        &self,
-        _: &[ProviderAccountId],
-    ) -> Result<Vec<UpstreamInfoPlan>, StoreError> {
-        panic!("xAI must not read CPR Link plans")
-    }
-
-    async fn claim_due(
-        &self,
-        _: &ProviderKind,
-        _: SystemTime,
-        _: u32,
-        _: Duration,
-    ) -> Result<Vec<UpstreamInfoClaim>, StoreError> {
-        panic!("xAI must not claim CPR Link plans")
-    }
-
-    async fn complete(&self, _: UpstreamInfoCompletion) -> Result<bool, StoreError> {
-        panic!("xAI must not complete CPR Link plans")
-    }
 }
 
 #[derive(Clone)]

@@ -1,6 +1,7 @@
 //! 管理控制面 HTTP 接口的测试入口
 
 mod plugins;
+mod upstream_info;
 use std::{
     collections::BTreeMap,
     sync::{
@@ -220,6 +221,9 @@ impl AdminTestFixture {
             ClientConfig::default(),
             stores,
             gateway_admin::AdminRuntimePorts {
+                upstream_info: Some(Arc::new(upstream_info::TestPeerInfo(Arc::clone(
+                    &provider_quota,
+                )))),
                 timezone,
                 service_middleware: std::sync::Arc::new(|| None),
                 plugin_preparation: plugin_ports.clone(),
@@ -1637,19 +1641,8 @@ impl ProviderAdmin for UnusedProvider {
         Some(true)
     }
 
-    async fn refresh_upstream_info(
-        &self,
-        account_id: &ProviderAccountId,
-    ) -> Result<gateway_admin::model::upstream_info::UpstreamRefreshReceipt, ProviderAdminError>
-    {
-        Ok(
-            gateway_admin::model::upstream_info::UpstreamRefreshReceipt {
-                account_id: account_id.as_str().to_owned(),
-                connection_revision: "connection-7".to_owned(),
-                request_generation: 7,
-                state: gateway_admin::model::upstream_info::UpstreamSyncState::Queued,
-            },
-        )
+    fn peer_authentication_kinds(&self) -> &[&str] {
+        &["api_key"]
     }
 
     fn pricing_catalog(&self) -> gateway_admin::model::pricing::ProviderPricingCatalog {

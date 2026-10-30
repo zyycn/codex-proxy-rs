@@ -20,18 +20,20 @@ impl UpstreamInfoStore for PgProviderAccountRepository {
     async fn list_candidates(
         &self,
         provider: &ProviderKind,
+        authentication_kinds: &[&str],
         after: Option<&CoreProviderAccountId>,
         limit: u32,
     ) -> Result<Vec<LoadedCredential>, CoreStoreError> {
         let ids = sqlx::query_scalar::<_, String>(
             "select id from provider_accounts
-             where provider_kind = $1 and authentication_kind = 'api_key'
+             where provider_kind = $1 and authentication_kind = any($4::text[])
                and ($2::text is null or id > $2)
              order by id limit $3",
         )
         .bind(provider.as_str())
         .bind(after.map(CoreProviderAccountId::as_str))
         .bind(i64::from(limit.min(200)))
+        .bind(authentication_kinds)
         .fetch_all(&self.pool)
         .await
         .map_err(database_error)?;

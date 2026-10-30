@@ -61,10 +61,10 @@ flowchart TB
 | `backend/apps/plugin-cli`（包名 `codex-proxy-plugin-cli`） | `cpr-plugin package` 校验作者清单并生成平台元数据、资源摘要与归档；内部仅依赖 SDK，不参与网关运行时加载 |
 | `gateway-protocol` | 跨层共享的 OpenAI 与 CPR 互联线协议、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
 | `gateway-core` | operation、canonical event、请求快照、路由、admission、attempt 协调、交付边界和计量 |
-| `gateway-admin` | 管理领域、Key 用量与互联共享查询、Provider/Store 端口、审计语义、备份与历史保留策略 |
+| `gateway-admin` | 管理领域、Key 用量、互联共享查询与上游同步、Provider/Store 端口、审计语义、备份与历史保留策略 |
 | `gateway-api` | HTTP/WS/SSE 解码与交付、Admin 与 Key 用量 wire、静态 Web UI；不直接访问 Store 或具体 Provider |
 | `gateway-store` | PostgreSQL、Redis、S3/R2、`pg_dump` 适配器；不拥有业务策略 |
-| `gateway-host` | 配置加载、日志、HTTP 生命周期、Worker 监督与历史保留任务、系统更新及外部价格源适配 |
+| `gateway-host` | 配置加载、日志、HTTP 生命周期、Worker 监督与历史保留任务、系统更新、互联 HTTP 与外部价格源适配 |
 | `gateway-plugin/sdk`（包名 `gateway-plugin-sdk`） | 公开插件清单与线协议，独立于网关领域；异步收发通过可选 `io` feature 提供 |
 | `gateway-plugin/runtime`（包名 `gateway-plugin-runtime`） | 插件包校验、能力适配、双向 RPC 与发布集合；通过 Host 管理子进程和受管 HTTP |
 | `providers/openai` | OpenAI OAuth、账号选择、目录、额度、Responses/Images/Search transport |
@@ -989,9 +989,13 @@ OpenAI 订阅周期属于按需个人信息，不是额度事实。Admin 账号�
 协议按版本和能力识别，第三方实现与内置节点使用相同合同；共享端不转发接入端的远端快照。
 Admin 为账号聚合设置独立并发上限，满额立即返回可重试的限流响应，避免重查询占满共享数据库与执行资源
 
-OpenAI Provider 在后台主动识别启用的 API Key 上游，拥有协议校验、展示和调度投影，Store 只持久化不透明观测及同步计划。
+Admin 的 `peer_link` 分别拥有共享导出与上游消费用例；上游消费统一处理发现、协议校验、同步、展示和调度投影。
+Provider 声明可连接的认证种类，并从本轮凭据中提取连接材料；当前 OpenAI API Key 提供该适配，xAI 原生账号继续参与共享导出。
+Host 执行有界 HTTP 请求，复用组合根注入的证书策略和账号出口；Store 只持久化不透明观测及同步计划，不按厂商或认证种类硬编码候选。
 计划查询与领取只读元数据，每次领取带独立 token，删除重建计划后的旧执行者不能提交观测。
-Provider 按连接身份及完成版本缓存管理摘要与调度投影，完整观测分批读取，解析和投影在锁外完成；选号只读取不可变投影。
+Admin 按连接身份及完成版本缓存管理摘要与调度投影，完整观测分批读取，解析和投影在锁外完成。
+Core 定义中立调度信号与只读端口，组合根绑定观测来源；Provider 选号不持有控制面服务，弱引用避免互相保活。
+账号和凭据提交后的共用通知同时失效原生 Provider 与互联派生状态，插件账号写入复用同一流程。
 账号列表核对观测版本后返回预算与池汇总，详情读取逐节点窗口；手动刷新仅入队，完成后仍通过原列表或详情读取结果。
 界面复用现有额度窗口，保留上游原始观测时间；Key 金额、原生账号百分比和本机 Token 用量分别解释。
 请求与字段合同见 [CPR 互联 API](api.md#cpr-互联只读协议)
@@ -1114,8 +1118,8 @@ Worker 由各 Bundle 贡献、由 Host 统一监督：
 - Host：历史保留任务，持有调度、单轮行数/批数/时长预算、取消和日志；Admin 校验[保留窗口](api.md#历史保留)，Store 执行有界批量删除
 - Core：`runtime` owner 的 RuntimeSnapshot 周期对账和 Redis change 订阅
 - Admin：S3/R2 备份 daemon，负责调度、执行、删除收敛与保留清理；
-  以及账号错误保护恢复 worker（到期解除或探测恢复）
-- Provider：credential refresh、quota/catalog 健康、账号预热、CPR 互联同步和官方版本/etag 检查
+  以及账号错误保护恢复 worker（到期解除或探测恢复）、公共 CPR 互联同步
+- Provider：credential refresh、quota/catalog 健康、账号预热和官方版本/etag 检查
 
 互联同步使用账号出口的受管 HTTP 客户端，不跟随跳转；网络等待不持有数据库事务。
 开启、连接变化、周期扫描和手动刷新共用持久计划，单轮领取和并发均有界，失败遵守退避及上游 `Retry-After`。

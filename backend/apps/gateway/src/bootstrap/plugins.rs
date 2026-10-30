@@ -42,6 +42,7 @@ impl ManagementPorts {
         store: &gateway_store::StoreBundle,
         providers: ProviderAdminRegistry,
         snapshot: Arc<dyn SnapshotControl>,
+        upstream_info: Arc<dyn gateway_admin::ports::peer::PeerUpstreamService>,
     ) -> Self {
         let ports = store.admin_ports();
         Self {
@@ -49,6 +50,7 @@ impl ManagementPorts {
                 providers.clone(),
                 ports.accounts(),
                 snapshot.clone(),
+                Some(upstream_info),
             ),
             keys: gateway_admin::initialize_plugin_client_keys(
                 providers,

@@ -104,8 +104,8 @@ function quotaWindowCode(windowSeconds: number | null, role: AccountQuotaWindow[
             :aria-label="item.label"
             aria-valuemin="0"
             aria-valuemax="100"
-            :aria-valuenow="item.usedPercent ?? undefined"
-            :aria-valuetext="item.usedPercentDisplay"
+            :aria-valuenow="item.stale ? undefined : item.usedPercent ?? undefined"
+            :aria-valuetext="item.stale ? `${item.usedPercentDisplay} · ${item.observationDisplay}` : item.usedPercentDisplay"
           >
             <div
               class="h-full rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none"
@@ -114,6 +114,10 @@ function quotaWindowCode(windowSeconds: number | null, role: AccountQuotaWindow[
             />
           </div>
         </template>
+
+        <p v-if="item.observationDisplay" class="mt-2 text-[10px] leading-4 text-cp-text-tertiary">
+          {{ item.observationDisplay }}
+        </p>
 
         <dl class="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[10px] leading-4">
           <template v-if="item.local">

@@ -18,7 +18,7 @@ export function usePoolQuotaWindows(account: () => Account) {
     request.invalidate()
     const current = account()
     windows.value = current.quota.windows
-    if (!current.upstream?.discovered || !current.upstream.pool
+    if (!current.upstream?.discovered
       || windows.value.some(window => window.sourceAccountId)) {
       return
     }

@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use gateway_admin::model::{
+use crate::model::{
     provider_credentials::{
         ProviderQuota, ProviderQuotaWindow, ProviderQuotaWindowRole, QuotaLocalUsageAttribution,
     },

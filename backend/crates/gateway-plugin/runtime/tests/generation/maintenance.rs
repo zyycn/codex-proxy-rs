@@ -65,6 +65,7 @@ async fn import_account(
         crate::support::native::admin_registry(),
         environment.store.admin_ports().accounts(),
         core.snapshot_control(),
+        None,
     );
     let result = access
         .save(

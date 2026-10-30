@@ -67,6 +67,7 @@ pub(super) struct Providers {
     pub(super) xai: provider_xai::ProviderBundle,
     pub(super) core: ProviderRegistry,
     pub(super) admin: ProviderAdminRegistry,
+    pub(super) peer: gateway_admin::PeerUpstreamBundle,
 }
 
 impl Providers {
@@ -75,16 +76,33 @@ impl Providers {
         environment: &Environment,
     ) -> Result<Self, BootstrapError> {
         let ports = environment.store.provider_ports();
-        let openai =
-            provider_openai::initialize(config.with_timezone(environment.timezone), ports.clone())
-                .await?;
+        let upstream_reader = Arc::new(gateway_core::account::UpstreamInfoReader::default());
+        let openai = provider_openai::initialize(
+            config.with_timezone(environment.timezone),
+            ports.clone(),
+            upstream_reader.clone(),
+        )
+        .await?;
         environment.host.report_startup_ready("OpenAI Provider");
         let xai = provider_xai::initialize(ports).await?;
         environment.host.report_startup_ready("xAI Provider");
         let core = ProviderRegistry::new([openai.core_provider(), xai.core_provider()])?;
         let admin = ProviderAdminRegistry::new([openai.admin_provider(), xai.admin_provider()])
             .map_err(|_| gateway_admin::model::AdminError::invalid("Provider 管理身份冲突"))?;
+        let peer = gateway_admin::initialize_peer_upstream(
+            environment.store.provider_ports().accounts(),
+            environment.store.upstream_info(),
+            &admin,
+            Arc::new(gateway_host::peer::HttpPeerTransport::with_client_builder(
+                provider_openai::build_reqwest_client_with_custom_ca,
+            )),
+        )
+        .map_err(|_| gateway_admin::model::AdminError::invalid("互联后台任务配置无效"))?;
+        upstream_reader
+            .bind(&peer.scheduling_source())
+            .map_err(|_| gateway_admin::model::AdminError::invalid("互联观测端口重复绑定"))?;
         Ok(Self {
+            peer,
             openai,
             xai,
             core,

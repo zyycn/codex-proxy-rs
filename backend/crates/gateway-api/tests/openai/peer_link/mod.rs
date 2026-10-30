@@ -1,5 +1,7 @@
 //! 验证互联导出的授权范围、过期观测和独立于推理准入的只读合同
 
+mod catalog;
+
 use crate::{
     admin::AdminTestFixture,
     support::{RAW_KEY, empty_request, key_fixture, response_json},
@@ -200,6 +202,10 @@ fn router_with_sharing(
     )
     .unwrap()
     .with_account_directory(directory);
+    router_with_snapshot(fixture, snapshot)
+}
+
+fn router_with_snapshot(fixture: &AdminTestFixture, snapshot: RuntimeSnapshot) -> Router {
     let execution = Arc::new(DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(snapshot),
         Arc::new(super::UnusedExecutionStore),

@@ -135,7 +135,7 @@ pub struct CodexCredentialSelector {
     session_affinity: Arc<dyn ProviderSessionAffinityPort>,
     session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
     quota: Arc<CodexCredentialQuotaService>,
-    peer_info: Option<Arc<crate::peer::PeerInfoService>>,
+    upstream_info: Option<Arc<dyn gateway_core::account::UpstreamInfoSource>>,
     cookie_policy: CodexCookiePolicy,
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
     account_feedback: Arc<AccountFeedbackStats>,
@@ -283,7 +283,7 @@ impl CodexCredentialSelector {
             session_affinity,
             session_exclusions,
             quota,
-            peer_info: None,
+            upstream_info: None,
             cookie_policy,
             risk_recovery: Mutex::new(HashMap::new()),
             waiting: ConcurrencyWaitQueue::default(),
@@ -314,8 +314,11 @@ impl CodexCredentialSelector {
     }
 
     #[must_use]
-    pub(crate) fn with_peer_info(mut self, peer_info: Arc<crate::peer::PeerInfoService>) -> Self {
-        self.peer_info = Some(peer_info);
+    pub(crate) fn with_upstream_info(
+        mut self,
+        upstream_info: Arc<dyn gateway_core::account::UpstreamInfoSource>,
+    ) -> Self {
+        self.upstream_info = Some(upstream_info);
         self
     }
 
@@ -331,10 +334,10 @@ impl CodexCredentialSelector {
         if strategy != RotationStrategy::Smart {
             return None;
         }
-        let signal = self
-            .peer_info
-            .as_ref()?
-            .signal(account, model.model()?, SystemTime::now())?;
+        let signal =
+            self.upstream_info
+                .as_ref()?
+                .signal(account, model.model()?, SystemTime::now())?;
         let rank = if signal.exhausted {
             Some(0)
         } else {

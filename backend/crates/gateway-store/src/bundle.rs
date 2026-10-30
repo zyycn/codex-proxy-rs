@@ -11,6 +11,7 @@ pub struct StoreBundle {
     admin_ports: AdminStorePorts,
     core_ports: CoreStorePorts,
     provider_ports: ProviderStorePorts,
+    upstream_info: Arc<dyn gateway_core::account::UpstreamInfoStore>,
     retention: Arc<dyn gateway_admin::ports::retention::RetentionStore>,
     worker_leader_lease: Arc<dyn WorkerLeaderLeasePort>,
     health_probes: Vec<Arc<dyn HealthProbe>>,
@@ -34,6 +35,11 @@ impl StoreBundle {
     #[must_use]
     pub fn core_ports(&self) -> CoreStorePorts {
         self.core_ports.clone()
+    }
+
+    #[must_use]
+    pub fn upstream_info(&self) -> Arc<dyn gateway_core::account::UpstreamInfoStore> {
+        Arc::clone(&self.upstream_info)
     }
 
     #[must_use]
@@ -279,7 +285,6 @@ async fn connect(
 
     let provider_ports = ProviderStorePorts::new(
         account_store,
-        upstream_info,
         provider_leases,
         provider_session_affinity,
         Arc::new(redis::RedisProviderSessionExclusionRepository::new(
@@ -334,6 +339,7 @@ async fn connect(
         admin_ports,
         core_ports,
         provider_ports,
+        upstream_info,
         retention,
         worker_leader_lease,
         health_probes,

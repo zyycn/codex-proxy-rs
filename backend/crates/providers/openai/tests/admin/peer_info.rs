@@ -1,4 +1,4 @@
-//! 通过正式 ProviderAdmin 和 WorkerContribution 验证请求/后台/观测的边界
+//! OpenAI 凭据适配、公共互联服务、Host 传输与调度只读端口的集成验证
 
 use super::*;
 use gateway_core::{
@@ -58,6 +58,7 @@ impl UpstreamInfoStore for MemoryUpstreamInfoStore {
     async fn list_candidates(
         &self,
         provider: &ProviderKind,
+        authentication_kinds: &[&str],
         after: Option<&ProviderAccountId>,
         limit: u32,
     ) -> Result<Vec<LoadedCredential>, StoreError> {
@@ -66,7 +67,7 @@ impl UpstreamInfoStore for MemoryUpstreamInfoStore {
         for account in accounts
             .into_iter()
             .filter(|account| {
-                account.authentication_kind() == "api_key"
+                authentication_kinds.contains(&account.authentication_kind())
                     && after.is_none_or(|after| account.id() > after)
             })
             .take(limit as usize)
@@ -260,7 +261,7 @@ fn peer_document() -> Value {
 async fn fixture(
     server: &MockServer,
 ) -> (
-    provider_openai::ProviderBundle,
+    PeerFixture,
     Arc<MemoryAccountStore>,
     Arc<MemoryUpstreamInfoStore>,
     ProviderAccountId,
@@ -277,27 +278,17 @@ async fn fixture(
     let id = ProviderAccountId::new("acct_peer").unwrap();
     let upstream = Arc::new(MemoryUpstreamInfoStore::new(accounts.clone()));
     let config = valid_config();
-    let bundle = provider_openai::initialize(
-        config.config.clone(),
-        provider_ports_with_upstream(
-            accounts.clone(),
-            Arc::new(TestOAuthPending::default()),
-            Arc::new(TestCatalogCache::default()),
-            upstream.clone(),
-        ),
-    )
-    .await
-    .unwrap();
+    let bundle = peer_fixture(config.config.clone(), accounts.clone(), upstream.clone()).await;
     (bundle, accounts, upstream, id, config)
 }
 
-fn worker(bundle: &mut provider_openai::ProviderBundle) -> gateway_core::task::WorkerRegistration {
+fn worker(bundle: &mut PeerFixture) -> gateway_core::task::WorkerRegistration {
     bundle
         .take_worker_contributions()
         .into_iter()
         .find_map(|contribution| match contribution {
             WorkerContribution::Registration(registration)
-                if registration.id.owner() == "openai-peer-info" =>
+                if registration.id.owner() == "peer-info" =>
             {
                 Some(registration)
             }
@@ -320,18 +311,22 @@ async fn cycle(worker: &gateway_core::task::WorkerRegistration) {
 }
 
 async fn quota(
-    bundle: &provider_openai::ProviderBundle,
+    bundle: &PeerFixture,
     id: &ProviderAccountId,
 ) -> gateway_admin::model::provider_credentials::ProviderQuota {
-    bundle
-        .admin_provider()
-        .quota(ProviderQuotaRequest {
-            account_id: id.clone(),
-            refresh: false,
-            rolling_usage: None,
-        })
-        .await
-        .unwrap()
+    match bundle.peer.service().read_quota(id).await.unwrap() {
+        Some(quota) => quota,
+        None => bundle
+            .provider
+            .admin_provider()
+            .quota(ProviderQuotaRequest {
+                account_id: id.clone(),
+                refresh: false,
+                rolling_usage: None,
+            })
+            .await
+            .unwrap(),
+    }
 }
 
 #[tokio::test]
@@ -349,9 +344,9 @@ async fn refresh_and_reads_are_local_and_worker_owns_the_upstream_request() {
         .await;
     let (mut bundle, _, _, id, _config) = fixture(&server).await;
     let admin = bundle.admin_provider();
-    admin.account_facts_changed(std::slice::from_ref(&id)).await;
-    let first = admin.refresh_upstream_info(&id).await.unwrap();
-    let second = admin.refresh_upstream_info(&id).await.unwrap();
+    admin.account_changed(&id).await.unwrap();
+    let first = admin.request_refresh(&id).await.unwrap();
+    let second = admin.request_refresh(&id).await.unwrap();
     assert_eq!(first.request_generation, second.request_generation);
     assert!(quota(&bundle, &id).await.upstream.unwrap().node.is_none());
     assert!(server.received_requests().await.unwrap().is_empty());
@@ -469,11 +464,7 @@ async fn transient_failure_preserves_observation_and_revocation_erases_it() {
         Some("unavailable")
     );
     assert_eq!(failed.windows.len(), 2);
-    let receipt = bundle
-        .admin_provider()
-        .refresh_upstream_info(&id)
-        .await
-        .unwrap();
+    let receipt = bundle.admin_provider().request_refresh(&id).await.unwrap();
     assert!(receipt.request_generation > 0);
     assert!(
         store.read(std::slice::from_ref(&id)).await.unwrap()[0]
@@ -527,10 +518,7 @@ async fn disabling_during_an_in_flight_request_fences_the_late_observation() {
     });
     wait_for_request(&server).await;
     accounts.set_enabled(&id, false).await.unwrap();
-    bundle
-        .admin_provider()
-        .account_facts_changed(std::slice::from_ref(&id))
-        .await;
+    bundle.admin_provider().account_changed(&id).await.unwrap();
     running.await.unwrap();
     assert!(
         store
@@ -825,17 +813,7 @@ async fn lists_reuse_versioned_summaries_and_details_keep_node_windows() {
         Some("node-one")
     );
 
-    let restored = provider_openai::initialize(
-        config.config.clone(),
-        provider_ports_with_upstream(
-            accounts,
-            Arc::new(TestOAuthPending::default()),
-            Arc::new(TestCatalogCache::default()),
-            store.clone(),
-        ),
-    )
-    .await
-    .unwrap();
+    let restored = peer_fixture(config.config.clone(), accounts, store.clone()).await;
     let summary = restored
         .admin_provider()
         .read_quotas(&requests)
@@ -1011,4 +989,56 @@ async fn cold_lists_bound_full_snapshot_batches_and_reuse_every_hydrated_summary
             .load(std::sync::atomic::Ordering::Relaxed),
         records.len() + 2
     );
+}
+
+struct PeerFixture {
+    provider: provider_openai::ProviderBundle,
+    peer: gateway_admin::PeerUpstreamBundle,
+}
+
+impl PeerFixture {
+    fn admin_provider(&self) -> Arc<dyn gateway_admin::ports::peer::PeerUpstreamService> {
+        self.peer.service()
+    }
+
+    fn core_provider(&self) -> Arc<dyn gateway_core::engine::provider::Provider> {
+        self.provider.core_provider()
+    }
+
+    fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
+        self.peer.take_worker_contributions()
+    }
+}
+
+async fn peer_fixture(
+    config: provider_openai::OpenAiConfig,
+    accounts: Arc<MemoryAccountStore>,
+    store: Arc<MemoryUpstreamInfoStore>,
+) -> PeerFixture {
+    let reader = Arc::new(gateway_core::account::UpstreamInfoReader::default());
+    let provider = provider_openai::initialize(
+        config,
+        provider_ports_with_catalog(
+            accounts.clone(),
+            Arc::new(TestOAuthPending::default()),
+            Arc::new(TestCatalogCache::default()),
+        ),
+        reader.clone(),
+    )
+    .await
+    .unwrap();
+    let registry =
+        gateway_admin::ports::provider::ProviderAdminRegistry::new([provider.admin_provider()])
+            .unwrap();
+    let peer = gateway_admin::initialize_peer_upstream(
+        accounts.clone(),
+        store,
+        &registry,
+        Arc::new(gateway_host::peer::HttpPeerTransport::with_client_builder(
+            provider_openai::build_reqwest_client_with_custom_ca,
+        )),
+    )
+    .unwrap();
+    reader.bind(&peer.scheduling_source()).unwrap();
+    PeerFixture { provider, peer }
 }

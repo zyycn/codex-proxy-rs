@@ -10,8 +10,10 @@ export interface PoolNode {
   tone: ReturnType<typeof quotaWindowTone>
 }
 
-export function poolNodes(windows: AccountQuotaWindow[], count: number): PoolNode[] {
-  const limit = Math.min(MAX_POOL_NODES, Math.max(0, Math.trunc(count)))
+export function poolNodes(windows: AccountQuotaWindow[], count?: number): PoolNode[] {
+  const limit = count === undefined
+    ? MAX_POOL_NODES
+    : Math.min(MAX_POOL_NODES, Math.max(0, Math.trunc(count)))
   const accounts = new Map<string, AccountQuotaWindow[]>()
   for (const window of windows) {
     if (!window.sourceAccountId || window.amount)
@@ -35,7 +37,9 @@ export function poolNodes(windows: AccountQuotaWindow[], count: number): PoolNod
     }
   })
   // 未公开逐账号额度时仅补灰色位置，不能把汇总可用数解释为各账号剩余额度
-  while (nodes.length < limit)
-    nodes.push({ id: `unobserved:${nodes.length}`, windows: [], tone: 'unknown' })
+  if (count !== undefined) {
+    while (nodes.length < limit)
+      nodes.push({ id: `unobserved:${nodes.length}`, windows: [], tone: 'unknown' })
+  }
   return nodes
 }

@@ -6,10 +6,7 @@ use gateway_protocol::peer::{PeerComponentStatus, PeerLink, PeerModelCoverage, P
 
 use super::snapshot;
 
-pub(crate) struct PeerSchedulingSignal {
-    pub exhausted: bool,
-    pub remaining_percent: Option<f64>,
-}
+use gateway_core::account::UpstreamSchedulingSignal;
 
 #[derive(Clone, Copy)]
 struct Validity {
@@ -169,7 +166,7 @@ impl SchedulingObservation {
                 <= snapshot::FRESH_FOR
     }
 
-    pub(super) fn signal(&self, model: &str, now: SystemTime) -> Option<PeerSchedulingSignal> {
+    pub(super) fn signal(&self, model: &str, now: SystemTime) -> Option<UpstreamSchedulingSignal> {
         if !self.fresh(now) {
             return None;
         }
@@ -178,7 +175,7 @@ impl SchedulingObservation {
             .iter()
             .any(|validity| validity.fresh(now))
         {
-            return Some(PeerSchedulingSignal {
+            return Some(UpstreamSchedulingSignal {
                 exhausted: true,
                 remaining_percent: None,
             });
@@ -187,7 +184,7 @@ impl SchedulingObservation {
         if !model.validity.fresh(now) {
             return None;
         }
-        Some(PeerSchedulingSignal {
+        Some(UpstreamSchedulingSignal {
             exhausted: model.exhausted,
             remaining_percent: model
                 .account

@@ -13,7 +13,7 @@ use super::PeerInfoService;
 
 impl PeerInfoService {
     pub(crate) fn worker(self: &Arc<Self>) -> Result<WorkerContribution, WorkerDefinitionError> {
-        let id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, "openai-peer-info")?;
+        let id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, "peer-info")?;
         let ttl = Duration::from_secs(120);
         let schedule = WorkerSchedule::try_new(
             Duration::from_secs(15),

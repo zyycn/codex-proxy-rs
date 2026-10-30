@@ -250,6 +250,15 @@ export function quotaWindowDetails(window: AccountQuotaWindow) {
   const hasConsumption = Boolean(tokenDisplay || amountUsedDisplay)
     || (!window.amount && localUsage?.totalTokens == null)
   return {
+    stale: window.stale,
+    observationDisplay: [
+      window.stale
+        ? t('accounts.upstream.stale')
+        : null,
+      window.observedAtDisplay && window.observedAtDisplay !== '—'
+        ? t('accounts.upstream.observedAt', { time: window.observedAtDisplay })
+        : null,
+    ].filter(Boolean).join(' · '),
     localUsageDisplay: tokenDisplay,
     amountUsedDisplay,
     consumptionDisplay: hasConsumption
@@ -374,7 +383,7 @@ function rollingWindowDurationDisplay(windowSeconds: number | null | undefined) 
 
 export function quotaWindowPresentation(window: AccountQuotaWindow, minimumWidth: string) {
   const percent = clamp(window.usedPercent ?? 0, 0, 100)
-  const tone = quotaWindowTone(window.usedPercent)
+  const tone = quotaWindowTone(window.stale ? null : window.usedPercent)
   return {
     barStyle: {
       width: `${percent}%`,

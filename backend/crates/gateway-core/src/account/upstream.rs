@@ -1,6 +1,9 @@
-//! 上游互联观测与后台计划；原始协议由 Provider 解释，不改变账号自身额度状态
+//! 上游互联观测与后台计划；原始协议由控制面解释，不改变账号自身额度状态
 
-use std::time::SystemTime;
+use std::{
+    sync::{Arc, OnceLock, Weak},
+    time::SystemTime,
+};
 
 use sha2::{Digest, Sha256};
 
@@ -108,3 +111,51 @@ pub struct UpstreamInfoCompletion {
     pub next_attempt_at: SystemTime,
     pub result: Result<OpaqueProviderData, UpstreamInfoFailure>,
 }
+
+/// 调度侧只消费已发布的中立观测，不读取协议、凭据或持久存储
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UpstreamSchedulingSignal {
+    pub exhausted: bool,
+    pub remaining_percent: Option<f64>,
+}
+
+pub trait UpstreamInfoSource: Send + Sync {
+    fn signal(
+        &self,
+        account: &ProviderAccount,
+        model: &str,
+        now: SystemTime,
+    ) -> Option<UpstreamSchedulingSignal>;
+}
+
+/// 组合根在管理服务就绪后绑定一次；弱引用避免 Provider 与管理服务互相保活
+#[derive(Default)]
+pub struct UpstreamInfoReader {
+    source: OnceLock<Weak<dyn UpstreamInfoSource>>,
+}
+
+impl UpstreamInfoReader {
+    pub fn bind(
+        &self,
+        source: &Arc<dyn UpstreamInfoSource>,
+    ) -> Result<(), UpstreamInfoAlreadyBound> {
+        self.source
+            .set(Arc::downgrade(source))
+            .map_err(|_| UpstreamInfoAlreadyBound)
+    }
+}
+
+impl UpstreamInfoSource for UpstreamInfoReader {
+    fn signal(
+        &self,
+        account: &ProviderAccount,
+        model: &str,
+        now: SystemTime,
+    ) -> Option<UpstreamSchedulingSignal> {
+        self.source.get()?.upgrade()?.signal(account, model, now)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("upstream information source is already bound")]
+pub struct UpstreamInfoAlreadyBound;

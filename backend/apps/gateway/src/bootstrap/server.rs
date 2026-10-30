@@ -35,7 +35,12 @@ pub async fn run() -> Result<(), BootstrapError> {
         plugin_runtime,
         plugin_runtime.bind_snapshots(&core.snapshots())
     );
-    let management = ManagementPorts::new(&store, providers.admin.clone(), core.snapshot_control());
+    let management = ManagementPorts::new(
+        &store,
+        providers.admin.clone(),
+        core.snapshot_control(),
+        providers.peer.service(),
+    );
     or_shutdown!(plugin_runtime, management.bind(&plugin_runtime));
     let mut core = or_shutdown!(plugin_runtime, core.activate().await);
     or_shutdown!(
@@ -77,6 +82,7 @@ pub async fn run() -> Result<(), BootstrapError> {
             config.client,
             store.admin_ports(),
             gateway_admin::AdminRuntimePorts {
+                upstream_info: Some(providers.peer.service()),
                 timezone,
                 service_middleware: service_middleware(core.snapshots(), &plugin_runtime),
                 providers: providers.admin,
@@ -165,6 +171,7 @@ pub async fn run() -> Result<(), BootstrapError> {
     plan.extend(providers.openai.take_worker_contributions());
     plan.extend(providers.xai.take_worker_contributions());
     plan.extend(admin.take_worker_contributions());
+    plan.extend(providers.peer.take_worker_contributions());
     plan.push(or_shutdown!(
         plugin_runtime,
         plugin_runtime.maintenance_worker(core.snapshots())

@@ -32,6 +32,9 @@ const emit = defineEmits<{
 
 const { t } = useI18n({ useScope: 'global' })
 const poolWindows = usePoolQuotaWindows(() => props.account)
+const hasUpstreamPool = computed(() => props.account.upstream?.discovered && (
+  props.account.upstream.pool || poolWindows.value.some(window => window.sourceAccountId && !window.amount)
+))
 
 const quotaEntries = computed(() => groupedAccountQuotaWindows(
   orderedPanelQuotaWindows(props.account.upstream?.discovered
@@ -131,8 +134,8 @@ watch(hasPersonalInfo, (available) => {
         :label="entry.label"
         :windows="entry.windows"
       />
-      <AccountUpstreamPool v-if="account.upstream?.discovered && account.upstream.pool" :pool="account.upstream.pool" :windows="poolWindows" />
-      <p v-if="quotaEntries.length === 0 && !account.upstream?.pool && !account.quota.windows.length" class="m-0 text-cp-sm font-emphasis text-cp-text-secondary">
+      <AccountUpstreamPool v-if="hasUpstreamPool" :pool="account.upstream?.pool" :windows="poolWindows" />
+      <p v-if="quotaEntries.length === 0 && !hasUpstreamPool" class="m-0 text-cp-sm font-emphasis text-cp-text-secondary">
         {{ t('accounts.quota.unobserved') }}
       </p>
     </div>

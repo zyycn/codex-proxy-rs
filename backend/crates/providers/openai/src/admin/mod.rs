@@ -88,7 +88,6 @@ pub(crate) struct OpenAiAdminProvider {
     catalog: Arc<CodexCredentialCatalogService>,
     websocket_pool: Arc<CodexWebSocketPool>,
     desktop_release: CodexDesktopReleaseStatus,
-    peer_info: Arc<crate::peer::PeerInfoService>,
 }
 
 pub(crate) struct OpenAiAdminServices {
@@ -97,7 +96,6 @@ pub(crate) struct OpenAiAdminServices {
     pub(crate) profile_statistics: Arc<CodexCredentialProfileService>,
     pub(crate) quota: Arc<CodexCredentialQuotaService>,
     pub(crate) catalog: Arc<CodexCredentialCatalogService>,
-    pub(crate) peer_info: Arc<crate::peer::PeerInfoService>,
 }
 
 impl OpenAiAdminProvider {
@@ -121,7 +119,6 @@ impl OpenAiAdminProvider {
             catalog: services.catalog,
             websocket_pool,
             desktop_release,
-            peer_info: services.peer_info,
         }
     }
 
@@ -269,7 +266,6 @@ impl ProviderAdmin for OpenAiAdminProvider {
     }
 
     async fn account_unavailable(&self, account_id: &ProviderAccountId) {
-        self.peer_info.forget(account_id);
         self.websocket_pool.evict_account(account_id.as_str()).await;
     }
 
@@ -278,11 +274,6 @@ impl ProviderAdmin for OpenAiAdminProvider {
             return;
         }
         self.quota.invalidate_scheduling(account_ids);
-        for id in account_ids {
-            if let Err(error) = self.peer_info.account_changed(id).await {
-                tracing::warn!(account_id = %id, error = %error, "upstream information plan reconciliation failed");
-            }
-        }
         if let Err(error) = self.catalog.invalidate() {
             tracing::warn!(
                 account_count = account_ids.len(),
@@ -725,18 +716,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             if refresh {
                 return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
             }
-            let connection = gateway_core::account::UpstreamConnection::for_account(&account);
-            let record = self
-                .peer_info
-                .read(std::slice::from_ref(&account_id))
-                .await
-                .map_err(map_store_error)?
-                .into_iter()
-                .find(|record| record.plan.connection == connection);
-            return Ok(record.as_ref().map_or_else(
-                || project_quota(None, false),
-                |record| crate::peer::PeerInfoService::project(record, SystemTime::now()),
-            ));
+            return Ok(project_quota(None, false));
         }
         let snapshot = if refresh {
             let snapshot = Some(
@@ -763,17 +743,30 @@ impl ProviderAdmin for OpenAiAdminProvider {
         self.read_quota_snapshots(requests).await
     }
 
-    async fn refresh_upstream_info(
+    fn peer_authentication_kinds(&self) -> &[&str] {
+        &[crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY]
+    }
+
+    fn peer_connection(
         &self,
-        account_id: &ProviderAccountId,
-    ) -> Result<gateway_admin::model::upstream_info::UpstreamRefreshReceipt, ProviderAdminError>
-    {
-        let record = self
-            .peer_info
-            .request_refresh(account_id)
-            .await
-            .map_err(map_store_error)?;
-        Ok(crate::peer::PeerInfoService::receipt(&record))
+        loaded: &gateway_core::account::LoadedCredential,
+    ) -> Result<Option<gateway_admin::ports::peer::PeerConnection>, ProviderAdminError> {
+        if loaded.account.provider() != &self.provider_kind
+            || !self.supports_peer_connection(loaded.account.authentication_kind())
+        {
+            return Ok(None);
+        }
+        let credential = CodexCredentialCodec::decode(&loaded.credential)
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+        match credential.authentication {
+            crate::credential::CodexRuntimeAuthentication::ApiKey(authentication) => {
+                Ok(Some(gateway_admin::ports::peer::PeerConnection {
+                    base_url: authentication.configuration.base_url,
+                    bearer_token: authentication.secret,
+                }))
+            }
+            crate::credential::CodexRuntimeAuthentication::OAuth(_) => Ok(None),
+        }
     }
 
     fn quota_forecast_observation(

@@ -5,14 +5,13 @@ use super::{
     ProviderCooldownPort, ProviderCredentialStatePort, ProviderLeasePort,
     ProviderRuntimePolicyPort, ProviderSessionAffinityPort, ProviderSessionExclusionPort,
 };
-use crate::account::{AccountFeedbackStats, ProviderAccountStore, UpstreamInfoStore};
+use crate::account::{AccountFeedbackStats, ProviderAccountStore};
 use std::{fmt, sync::Arc};
 
 /// Provider 只能按能力取用端口，无法取得 Redis client 或 repository 集合
 #[derive(Clone)]
 pub struct ProviderStorePorts {
     accounts: Arc<dyn ProviderAccountStore>,
-    upstream_info: Arc<dyn UpstreamInfoStore>,
     leases: Arc<dyn ProviderLeasePort>,
     session_affinity: Arc<dyn ProviderSessionAffinityPort>,
     session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
@@ -32,7 +31,6 @@ impl ProviderStorePorts {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         accounts: Arc<dyn ProviderAccountStore>,
-        upstream_info: Arc<dyn UpstreamInfoStore>,
         leases: Arc<dyn ProviderLeasePort>,
         session_affinity: Arc<dyn ProviderSessionAffinityPort>,
         session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
@@ -46,7 +44,6 @@ impl ProviderStorePorts {
     ) -> Self {
         Self {
             accounts,
-            upstream_info,
             leases,
             session_affinity,
             session_exclusions,
@@ -69,11 +66,6 @@ impl ProviderStorePorts {
     #[must_use]
     pub fn accounts(&self) -> Arc<dyn ProviderAccountStore> {
         Arc::clone(&self.accounts)
-    }
-
-    #[must_use]
-    pub fn upstream_info(&self) -> Arc<dyn UpstreamInfoStore> {
-        Arc::clone(&self.upstream_info)
     }
 
     #[must_use]

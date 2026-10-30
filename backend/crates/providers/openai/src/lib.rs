@@ -4,7 +4,6 @@ mod admin;
 mod compat;
 pub mod config;
 mod jitter;
-mod peer;
 mod provider;
 mod request_identity;
 mod session_transport;
@@ -64,6 +63,7 @@ pub struct ProviderBundle {
 pub async fn initialize(
     config: OpenAiConfig,
     ports: ProviderStorePorts,
+    upstream_info: Arc<dyn gateway_core::account::UpstreamInfoSource>,
 ) -> Result<ProviderBundle, OpenAiInitializeError> {
     let provider_kind =
         ProviderKind::new("openai").map_err(|_| OpenAiInitializeError::InvalidProviderKind)?;
@@ -142,11 +142,6 @@ pub async fn initialize(
     );
     platform_releases.restore().await;
     let repository = CodexCredentialRepository::new(Arc::clone(&accounts));
-    let peer_info = Arc::new(peer::PeerInfoService::new(
-        repository.clone(),
-        ports.upstream_info(),
-        provider_kind.clone(),
-    ));
     let websocket_pool = Arc::new(CodexWebSocketPool::with_config(
         config.websocket_pool_config(),
     ));
@@ -182,7 +177,7 @@ pub async fn initialize(
             Arc::clone(&account_feedback),
             CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
         )
-        .with_peer_info(Arc::clone(&peer_info)),
+        .with_upstream_info(upstream_info),
     );
     let core_provider: Arc<dyn Provider> = Arc::new(
         CodexProvider::new(
@@ -251,12 +246,11 @@ pub async fn initialize(
             profile_statistics,
             quota: Arc::clone(&quota),
             catalog: Arc::clone(&catalog),
-            peer_info: Arc::clone(&peer_info),
         },
         websocket_pool,
         desktop_release_status,
     ));
-    let mut worker_contributions = provider::worker_contributions(
+    let worker_contributions = provider::worker_contributions(
         config.timezone,
         refresh,
         quota,
@@ -270,11 +264,6 @@ pub async fn initialize(
         },
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
-    worker_contributions.push(
-        peer_info
-            .worker()
-            .map_err(|_| OpenAiInitializeError::Worker)?,
-    );
 
     Ok(ProviderBundle {
         core_provider,

@@ -93,10 +93,11 @@ pub trait ProviderAccountStore: Send + Sync {
 /// 与 Provider 无关的计划持久化端口，所有方法均只访问本地存储
 #[async_trait]
 pub trait UpstreamInfoStore: Send + Sync {
-    /// 按账号 ID 游标扫描 API Key 账号；是否启用互联仍由 Provider 解释凭据
+    /// 按账号 ID 游标扫描 Provider 声明支持互联的认证种类；通用存储不判断认证协议
     async fn list_candidates(
         &self,
         provider: &ProviderKind,
+        authentication_kinds: &[&str],
         after: Option<&ProviderAccountId>,
         limit: u32,
     ) -> Result<Vec<LoadedCredential>, StoreError>;

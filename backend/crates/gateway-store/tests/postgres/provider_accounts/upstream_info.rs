@@ -433,3 +433,55 @@ async fn changed_credentials_and_proxy_reject_old_results_before_reconciliation(
     );
     database.close().await;
 }
+
+#[tokio::test]
+async fn discovery_filters_by_declared_provider_and_authentication_kinds() {
+    let Some((database, repository, _)) = fixture("peer_discovery").await else {
+        return;
+    };
+    let mut input = account("acct_peer_xai", "generic-peer");
+    input.provider_kind = "xai".into();
+    input.authentication_kind = "peer_test".into();
+    repository.insert_provider_account(input).await.unwrap();
+    let xai = ProviderKind::new("xai").unwrap();
+    let candidates = repository
+        .list_candidates(&xai, &["peer_test"], None, 100)
+        .await
+        .unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].account.id().as_str(), "acct_peer_xai");
+    assert!(
+        repository
+            .list_candidates(&xai, &[], None, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        repository
+            .list_candidates(&xai, &["api_key"], None, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        repository
+            .list_candidates(&xai, &["peer_test"], Some(candidates[0].account.id()), 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        repository
+            .list_candidates(
+                &ProviderKind::new("openai").unwrap(),
+                &["peer_test"],
+                None,
+                100
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    database.close().await;
+}

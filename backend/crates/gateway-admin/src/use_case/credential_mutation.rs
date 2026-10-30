@@ -19,13 +19,14 @@ use gateway_core::{account::ProviderAccountId, routing::ProviderKind, runtime::S
 use super::{map_store_error, publish_committed};
 
 pub(super) async fn publish_credentials_and_observe_quota(
+    peer: Option<&dyn crate::ports::peer::PeerUpstreamService>,
     provider: &std::sync::Arc<dyn crate::ports::provider::ProviderAdmin>,
     snapshot: &dyn SnapshotControl,
     revision: crate::model::Revision,
     account_ids: &[ProviderAccountId],
     request_id: &str,
 ) -> Result<(), AdminError> {
-    provider.account_facts_changed(account_ids).await;
+    notify_account_facts_changed(peer, provider.as_ref(), account_ids).await;
     publish_committed(snapshot, revision).await?;
 
     // 凭据已经提交；额度只是可重建的观察，不能拖住管理请求或回滚提交结果
@@ -343,6 +344,7 @@ pub(super) async fn commit_credential_refresh(
 }
 
 pub(super) async fn delete_credentials(
+    peer: Option<&dyn crate::ports::peer::PeerUpstreamService>,
     accounts: &dyn AccountStore,
     provider: &dyn ProviderAdmin,
     command: CredentialDeletion,
@@ -365,11 +367,37 @@ pub(super) async fn delete_credentials(
         .await
         .map_err(|error| map_store_error(error, resource))?;
     for account_id in &account_ids {
-        provider.account_unavailable(account_id).await;
+        notify_account_unavailable(peer, provider, account_id).await;
     }
-    provider.account_facts_changed(&account_ids).await;
+    notify_account_facts_changed(peer, provider, &account_ids).await;
     Ok(CredentialDeletionResult {
         config_revision: revision,
         account_ids,
     })
+}
+
+pub(super) async fn notify_account_facts_changed(
+    peer: Option<&dyn crate::ports::peer::PeerUpstreamService>,
+    provider: &dyn ProviderAdmin,
+    ids: &[ProviderAccountId],
+) {
+    provider.account_facts_changed(ids).await;
+    if let Some(peer) = peer {
+        for id in ids {
+            if let Err(error) = peer.account_changed(id).await {
+                tracing::warn!(account_id = %id, error = %error, "upstream information plan reconciliation failed");
+            }
+        }
+    }
+}
+
+pub(super) async fn notify_account_unavailable(
+    peer: Option<&dyn crate::ports::peer::PeerUpstreamService>,
+    provider: &dyn ProviderAdmin,
+    id: &ProviderAccountId,
+) {
+    if let Some(peer) = peer {
+        peer.forget(id);
+    }
+    provider.account_unavailable(id).await;
 }

@@ -1473,6 +1473,7 @@ async fn plugin_account_save_publishes_native_credential_change() {
         ProviderAdminRegistry::new([provider.clone() as Arc<dyn ProviderAdmin>]).unwrap(),
         store.clone(),
         snapshot,
+        None,
     );
     let result = access
         .save(
@@ -1516,6 +1517,7 @@ async fn plugin_account_reads_resolve_the_authoritative_provider_from_the_accoun
         ProviderAdminRegistry::new([registered_provider as Arc<dyn ProviderAdmin>]).unwrap(),
         store,
         Arc::new(RecordingPluginAccountPublication(events.clone())),
+        None,
     );
     let account_id = ProviderAccountId::new("acct_test").expect("account ID");
 
@@ -1563,6 +1565,7 @@ async fn plugin_account_save_rejects_stale_authentication_kind_before_commit() {
         ProviderAdminRegistry::new([provider as Arc<dyn ProviderAdmin>]).unwrap(),
         store.clone(),
         Arc::new(RecordingPluginAccountPublication(events.clone())),
+        None,
     );
 
     let error = access
@@ -3775,6 +3778,7 @@ async fn plugin_quota_refresh_uses_native_provider_without_changing_configuratio
         ProviderAdminRegistry::new([provider.clone() as Arc<dyn ProviderAdmin>]).unwrap(),
         store,
         Arc::new(RecordingPluginAccountPublication(events.clone())),
+        None,
     );
     let id = ProviderAccountId::new("acct_test").unwrap();
     access.get_quota(&id).await.unwrap();
