@@ -770,6 +770,21 @@ pub(super) async fn send_control(
     payload: &str,
     request_id: &Arc<str>,
 ) -> ForwardOutcome {
+    // HTTP 桥接没有原连接可中断；普通 error 会使 Codex 丢弃仍可正常完成的响应流
+    // 仅在发送前确认无绑定时拒绝中断，不把发送结果不明的失败伪装成明确拒绝
+    if control.binding().is_none()
+        && let Some(message) = super::interrupt::ResponseInterrupt::unavailable_event(payload)
+    {
+        return if connection
+            .send_text(message, WriteContext::request(request_id, FramePhase::Data))
+            .await
+            .is_ok()
+        {
+            ForwardOutcome::Continue
+        } else {
+            ForwardOutcome::Disconnect
+        };
+    }
     let result = tokio::select! {
         _ = connection.wait_for_exit() => return ForwardOutcome::Disconnect,
         result = control.send(payload) => result,

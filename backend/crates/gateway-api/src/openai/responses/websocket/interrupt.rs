@@ -1,4 +1,4 @@
-//! 当前逻辑响应的中断意图，跨重试连接保留并随新响应 ID 转发
+//! 当前逻辑响应的中断意图、无控制通道时的拒绝与跨重试转发
 
 use std::{borrow::Cow, collections::BTreeSet};
 
@@ -53,20 +53,30 @@ impl ResponseInterrupt {
 
     /// 未知控制消息、模式和其他逻辑响应的 ID 仍走原始透明通道
     pub(super) fn retain(&mut self, payload: &str) -> bool {
-        let Ok(event) = serde_json::from_str::<Value>(payload) else {
+        let Some(event) = interrupt_request(payload) else {
             return false;
         };
-        if event["type"] != "response.interrupt"
-            || event["mode"] != "discard_partial_items"
-            || !event["response_id"]
-                .as_str()
-                .is_some_and(|id| self.delivered_ids.contains(id))
+        if !event["response_id"]
+            .as_str()
+            .is_some_and(|id| self.delivered_ids.contains(id))
         {
             return false;
         }
         self.pending = Some(event);
         self.sent = false;
         true
+    }
+
+    /// 中断失败不代表模型响应失败，客户端仍可收完真实终态后续接
+    pub(super) fn unavailable_event(payload: &str) -> Option<String> {
+        let event = interrupt_request(payload)?;
+        Some(
+            serde_json::json!({
+                "type": "response.interrupt.failed",
+                "response_id": event["response_id"],
+            })
+            .to_string(),
+        )
     }
 
     pub(super) async fn forward_pending(&mut self, control: &ResponseControl) {
@@ -88,4 +98,14 @@ impl ResponseInterrupt {
             self.sent = true;
         }
     }
+}
+
+fn interrupt_request(payload: &str) -> Option<Value> {
+    let event: Value = serde_json::from_str(payload).ok()?;
+    (event["type"] == "response.interrupt"
+        && event["mode"] == "discard_partial_items"
+        && event["response_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()))
+    .then_some(event)
 }
