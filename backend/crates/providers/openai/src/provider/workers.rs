@@ -308,14 +308,11 @@ impl DaemonTask for OpenAiCatalogEtagTask {
                     () = cancellation.cancelled() => return Ok(()),
                     () = self.catalog.wait_for_etag_refresh() => {},
                 };
-                if let Err(error) = self.catalog.refresh().await {
-                    tracing::warn!(
-                        error = %error,
-                        "OpenAI model catalog ETag refresh failed"
-                    );
-                } else {
-                    context.succeeded();
-                }
+                // 失败的 ETag 已重新入队，交回 Host 退避后再领取，避免立即重试
+                self.catalog.refresh().await.map_err(|error| {
+                    WorkerTaskError::safe("OpenAI 模型目录 ETag 刷新失败").with_source(error)
+                })?;
+                context.succeeded();
             }
         })
     }
