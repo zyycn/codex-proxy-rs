@@ -266,7 +266,6 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
 
     async fn update_provider_account(&self, account: UpdateProviderAccount) -> StoreResult<bool> {
         require_nonempty(ENTITY, "id", &account.id)?;
-        require_nonempty(ENTITY, "name", &account.name)?;
         let result = sqlx::query(
             "update provider_accounts
              set name = $2, email = $3, plan_type = $4, updated_at = greatest(now(), updated_at)
@@ -547,6 +546,14 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 )
                 .await?;
             }
+            if let Some(name) = command.name.as_deref() {
+                update_provider_account_name_in_transaction(
+                    &mut transaction,
+                    &command.account_ids,
+                    name,
+                )
+                .await?;
+            }
             append_admin_audit_event_in_transaction(&mut transaction, command.audit, revision)
                 .await?;
             Ok(revision)
@@ -629,6 +636,20 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         .await;
         finish_admin_transaction(transaction, result, "provider account admin deletion").await
     }
+}
+
+async fn update_provider_account_name_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_ids: &[String],
+    name: &str,
+) -> StoreResult<()> {
+    sqlx::query("update provider_accounts set name = $2 where id = any($1::text[])")
+        .bind(account_ids)
+        .bind(name.trim())
+        .execute(&mut **transaction)
+        .await
+        .map_err(|source| postgres_unavailable("update provider account name", source))?;
+    Ok(())
 }
 
 async fn update_provider_account_notes_in_transaction(
@@ -1112,7 +1133,6 @@ pub(super) async fn rotate_provider_account_admin_in_transaction(
 ) -> StoreResult<ProviderAccountAdminRotation> {
     command.scope.validate()?;
     require_nonempty(ENTITY, "account_id", &command.profile.id)?;
-    require_nonempty(ENTITY, "name", &command.profile.name)?;
     if let Some(identity) = &command.replacement_identity {
         require_nonempty(ENTITY, "upstream_user_id", identity.upstream_user_id())?;
         if let Some(account_id) = identity.upstream_account_id() {
@@ -1157,6 +1177,9 @@ pub(super) async fn rotate_provider_account_admin_in_transaction(
             .await?;
         if let Some(notes) = settings.notes.as_deref() {
             update_provider_account_notes_in_transaction(transaction, ids, notes).await?;
+        }
+        if let Some(name) = settings.name.as_deref() {
+            update_provider_account_name_in_transaction(transaction, ids, name).await?;
         }
     }
     append_admin_audit_event_in_transaction(transaction, command.audit, config_revision).await?;

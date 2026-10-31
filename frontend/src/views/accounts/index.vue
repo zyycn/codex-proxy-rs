@@ -192,6 +192,7 @@ const {
   configurationReady,
   showEditModal,
   editingAccount,
+  name: editingName,
   notes: editingNotes,
   schedulingEnabled,
   concurrencyLimit: editingConcurrencyLimit,
@@ -440,6 +441,7 @@ const {
       v-model="showEditModal"
       v-model:api-key="editingApiKey"
       v-model:oauth-transport="editingOAuthTransport"
+      v-model:name="editingName"
       v-model:notes="editingNotes"
       v-model:enabled="schedulingEnabled"
       v-model:concurrency-limit="editingConcurrencyLimit"

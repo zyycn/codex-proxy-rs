@@ -174,13 +174,43 @@ async fn reauthorization_replay_keeps_the_committed_revision_and_later_profile_e
             },
         )),
     };
+    let rename = UpdateAccount {
+        account_id: id.to_string(),
+        name: Some("renamed team".to_owned()),
+        notes: None,
+        enabled: true,
+        concurrency_limit: None,
+        weight: gateway_core::account::AccountWeight::DEFAULT,
+        model_access: None,
+        group_ids: vec![],
+        outbound_proxy: None,
+    };
+    store
+        .update_account(rename.clone(), &context)
+        .await
+        .unwrap();
     let committed = store
         .commit_authorization(command.clone(), &context)
         .await
         .unwrap();
-    sqlx::query("update provider_accounts set name='later profile' where id=$1")
-        .bind(id.as_str())
-        .execute(&database.pool)
+    assert_eq!(
+        store
+            .load_account(id.as_str(), Default::default())
+            .await
+            .unwrap()
+            .unwrap()
+            .account
+            .name,
+        "renamed team"
+    );
+    store
+        .update_account(
+            UpdateAccount {
+                name: Some("later profile".to_owned()),
+                ..rename
+            },
+            &context,
+        )
         .await
         .unwrap();
     let replayed = store

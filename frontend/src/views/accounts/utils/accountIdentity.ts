@@ -4,8 +4,9 @@ type AccountIdentity = Pick<Account, 'id' | 'email'>
   & Partial<Pick<Account, 'accountId' | 'name' | 'authenticationKind'>>
 
 export function accountIdentityLabel(account: AccountIdentity): string {
-  if (account.authenticationKind === 'api_key' && account.name)
-    return account.name
+  const name = account.name?.trim()
+  if (name)
+    return name
   const email = account.email?.trim()
   if (email)
     return email

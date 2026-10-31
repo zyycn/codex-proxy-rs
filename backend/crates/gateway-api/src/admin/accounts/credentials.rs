@@ -116,7 +116,10 @@ pub struct StartAccountAuthorizationRequest {
 impl StartAccountAuthorizationRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         parse_provider(&self.provider)?;
-        require_text(&self.name, MAX_NAME_BYTES, "name")?;
+        validate_account_name(&self.name)?;
+        if self.account_id.is_none() && self.name.trim().is_empty() {
+            return Err(WireValidationError::new("name"));
+        }
         if let Some(account_id) = self.account_id.as_deref() {
             require_account_id(account_id, "accountId")?;
         }
@@ -213,6 +216,7 @@ pub struct UpdateAccountRequest {
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
     pub account_id: String,
+    pub name: Option<String>,
     pub notes: Option<String>,
     pub enabled: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
@@ -225,6 +229,9 @@ pub struct UpdateAccountRequest {
 impl UpdateAccountRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         require_account_id(&self.account_id, "accountId")?;
+        if let Some(name) = &self.name {
+            validate_account_name(name)?;
+        }
         if let Some(connection) = &self.connection {
             connection.validate()?;
         }
@@ -248,6 +255,7 @@ impl UpdateAccountRequest {
                 self.outbound_proxy_url,
             )?,
             account_id: self.account_id,
+            name: self.name.map(|name| name.trim().to_owned()),
             notes: self.notes,
             enabled: self.enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
@@ -509,6 +517,13 @@ fn require_wire_id(value: &str, field: &'static str) -> Result<(), WireValidatio
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
     {
         return Err(WireValidationError::new(field));
+    }
+    Ok(())
+}
+
+fn validate_account_name(value: &str) -> Result<(), WireValidationError> {
+    if value.len() > MAX_NAME_BYTES || value.chars().any(char::is_control) {
+        return Err(WireValidationError::new("name"));
     }
     Ok(())
 }

@@ -89,7 +89,7 @@ function handleExplanationKeydown(event: KeyboardEvent) {
 
     <div class="grid grid-cols-1 gap-4">
       <div class="flex flex-wrap items-center justify-between gap-4">
-        <AccountIdentityCell :account="account" show-plan title-mode="email" meta-position="secondary" meta-size="xs" class="max-w-full">
+        <AccountIdentityCell :account="account" show-plan meta-position="secondary" meta-size="xs" class="max-w-full">
           <template #meta>
             <ProviderIconGroup :provider="account.provider" size="xs" />
           </template>

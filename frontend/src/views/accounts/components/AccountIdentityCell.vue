@@ -17,7 +17,6 @@ const props = withDefaults(
     size?: 'md' | 'lg'
     showPlan?: boolean
     showNotes?: boolean
-    titleMode?: 'local-part' | 'email'
     metaPosition?: 'title' | 'secondary'
     metaSize?: 'xs' | 'sm'
   }>(),
@@ -25,27 +24,21 @@ const props = withDefaults(
     size: 'md',
     showPlan: false,
     showNotes: false,
-    titleMode: 'local-part',
     metaPosition: 'title',
     metaSize: 'sm',
   },
 )
 
-const emailText = computed(() => accountIdentityLabel(props.account))
+const displayTitle = computed(() => accountIdentityLabel(props.account))
 
 const visibleNotes = computed(() => props.showNotes ? props.account.notes : undefined)
 
-const displayTitle = computed(() =>
-  visibleNotes.value || props.titleMode === 'email' || props.account.authenticationKind === 'api_key'
-    ? emailText.value
-    : emailText.value.split('@')[0],
-)
-
-const secondaryText = computed(() =>
-  props.titleMode === 'email' || props.account.authenticationKind === 'api_key'
-    ? null
-    : emailText.value,
-)
+const identityTitle = computed(() => {
+  const email = props.account.email?.trim()
+  return email && email !== displayTitle.value
+    ? `${displayTitle.value}\n${email}`
+    : displayTitle.value
+})
 
 const initial = computed(() => displayTitle.value.slice(0, 1).toUpperCase())
 
@@ -53,12 +46,6 @@ const avatarSizeClass = computed(() =>
   props.size === 'lg'
     ? 'size-10 text-cp-xl'
     : 'size-9 text-cp',
-)
-
-const secondaryClass = computed(() =>
-  props.size === 'lg'
-    ? 'mt-1 text-cp-sm text-cp-text-secondary'
-    : 'mt-0.5 font-mono text-cp-xs text-cp-text-quaternary',
 )
 
 const metaGapClass = computed(() => props.metaSize === 'xs'
@@ -81,7 +68,7 @@ const avatarToneClass = computed(() => {
     </span>
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-2">
-        <span class="min-w-0 truncate text-cp font-heavy text-cp-text" :title="displayTitle">
+        <span class="min-w-0 truncate text-cp font-heavy text-cp-text" :title="identityTitle">
           {{ displayTitle }}
         </span>
         <span
@@ -102,9 +89,6 @@ const avatarToneClass = computed(() => {
         <AccountPlanBadge v-if="showPlan" :upstream="account.upstream" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
       </div>
       <AccountNotesPopover v-else-if="visibleNotes" :notes="visibleNotes" class="mt-0.5" />
-      <div v-else-if="secondaryText" class="truncate font-emphasis" :class="secondaryClass">
-        {{ secondaryText }}
-      </div>
     </div>
   </div>
 </template>

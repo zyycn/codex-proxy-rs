@@ -439,6 +439,45 @@ mod batch_update {
 }
 
 #[test]
+fn single_update_should_validate_optional_names_and_accept_clearing() {
+    use gateway_api::admin::accounts::UpdateAccountRequest;
+    use serde_json::json;
+
+    let baseline = json!({
+        "accountId": "acct_name", "enabled": true, "concurrencyLimit": null,
+        "weight": 1, "groupIds": []
+    });
+    let omitted: UpdateAccountRequest = serde_json::from_value(baseline.clone()).unwrap();
+    assert!(omitted.name.is_none());
+    omitted.validate().unwrap();
+    for (name, valid) in [
+        (json!(null), true),
+        (json!("  团队账号  "), true),
+        (json!("a".repeat(512)), true),
+        (json!("账".repeat(170)), true),
+        (json!("账".repeat(171)), false),
+        (json!("a".repeat(513)), false),
+        (json!(""), true),
+        (json!("   "), true),
+        (json!(" \t "), false),
+        (json!("账号\n名称"), false),
+        (json!("账号\u{0085}"), false),
+    ] {
+        let mut input = baseline.clone();
+        input["name"] = name;
+        let request: UpdateAccountRequest = serde_json::from_value(input).unwrap();
+        if valid {
+            request.validate().expect("accept optional bounded name");
+        } else {
+            assert_eq!(request.validate().unwrap_err().field(), "name");
+        }
+    }
+    let mut unknown = baseline;
+    unknown["unknownField"] = json!(true);
+    assert!(serde_json::from_value::<UpdateAccountRequest>(unknown).is_err());
+}
+
+#[test]
 fn single_update_should_accept_optional_unicode_and_multiline_notes() {
     use gateway_api::admin::accounts::UpdateAccountRequest;
     use serde_json::json;
@@ -732,7 +771,7 @@ mod actions {
     fn credential_recovery_requests_should_not_accept_client_revision_fences() {
         let authorization: StartAccountAuthorizationRequest = serde_json::from_value(json!({
             "provider": "openai",
-            "name": "reauthorize",
+            "name": "",
             "accountId": "acct_1"
         }))
         .expect("decode reauthorization");

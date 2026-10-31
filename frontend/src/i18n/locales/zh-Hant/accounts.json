@@ -159,6 +159,8 @@
       "elapsed": "佔用時長"
     },
     "editor": {
+      "namePlaceholder": "留空預設使用賬號郵箱",
+      "nameInvalid": "賬號名稱最多 512 位元組，不能包含換行或控制字元",
       "title": "編輯賬號",
       "transportLabel": "上游傳輸方式",
       "loadError": "上游設置讀取失敗",

@@ -159,6 +159,8 @@
       "elapsed": "占用时长"
     },
     "editor": {
+      "namePlaceholder": "留空默认使用账号邮箱",
+      "nameInvalid": "账号名称最多 512 字节，不能包含换行或控制字符",
       "title": "编辑账号",
       "transportLabel": "上游传输方式",
       "loadError": "上游设置读取失败",

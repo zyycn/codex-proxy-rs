@@ -159,6 +159,8 @@
       "elapsed": "Elapsed"
     },
     "editor": {
+      "namePlaceholder": "Leave blank to use the account email",
+      "nameInvalid": "Use an account name within 512 bytes, without line breaks or control characters",
       "title": "Edit account",
       "transportLabel": "Upstream transport",
       "loadError": "Could not load upstream settings",

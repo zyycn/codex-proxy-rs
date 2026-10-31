@@ -3,7 +3,7 @@ import type { ApiKeyAccountForm } from '../utils/upstreamApiKey'
 
 import type { Account, AccountGroupRef, AccountModelAccess } from '@/api'
 
-import { ZButton, ZDialog, ZFormItem, ZSegmented, ZTextarea } from '@codex-proxy/ui'
+import { ZButton, ZDialog, ZFormItem, ZInput, ZSegmented, ZTextarea } from '@codex-proxy/ui'
 
 import { useI18n } from 'vue-i18n'
 import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
@@ -36,6 +36,7 @@ const transportOptions = [
   { label: 'SSE', value: 'http' },
 ]
 const notes = defineModel<string>('notes', { required: true })
+const name = defineModel<string>('name', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
@@ -94,6 +95,15 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
       />
+
+      <ZFormItem :label="t('accounts.credentials.accountName')">
+        <ZInput
+          v-model="name"
+          :aria-label="t('accounts.credentials.accountName')"
+          :placeholder="t('accounts.editor.namePlaceholder')"
+          :disabled="saving"
+        />
+      </ZFormItem>
 
       <ZFormItem :label="t('common.fields.notes')">
         <ZTextarea

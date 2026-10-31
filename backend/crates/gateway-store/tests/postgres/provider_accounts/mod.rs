@@ -456,7 +456,7 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
 }
 
 #[tokio::test]
-async fn quota_plan_changes_survive_inflight_background_and_manual_token_refresh() {
+async fn profile_changes_survive_inflight_background_and_manual_token_refresh() {
     let Some(database) = TestDatabase::create("quota_plan_refresh").await else {
         return;
     };
@@ -466,6 +466,26 @@ async fn quota_plan_changes_survive_inflight_background_and_manual_token_refresh
     seed.plan_type = Some("plus".to_owned());
     repository.insert_provider_account(seed).await.unwrap();
     let original = repository.get_account(&id).await.unwrap().unwrap();
+    admin_account_store(&database.pool)
+        .update_account(
+            UpdateAccount {
+                account_id: id.to_string(),
+                name: Some("renamed team".to_owned()),
+                notes: None,
+                enabled: true,
+                concurrency_limit: None,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
+                model_access: None,
+                group_ids: vec![],
+                outbound_proxy: None,
+            },
+            &MutationContext {
+                actor: MutationActor::System,
+                request_id: "rename-before-refresh".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
     let config_revision = current_revision(&database.pool).await;
     let observed_at = SystemTime::now();
     let observation = QuotaObservation {
@@ -489,7 +509,7 @@ async fn quota_plan_changes_survive_inflight_background_and_manual_token_refresh
     assert_eq!(upgraded.revision(), original.revision());
     assert_eq!(current_revision(&database.pool).await, config_revision);
 
-    // 刷新在额度更新前已准备好旧资料，CAS 提交仍须保留数据库中的新套餐
+    // 刷新已准备好旧资料，CAS 提交仍须保留数据库中的新名称和套餐
     let refresh = CredentialCasUpdate::new(
         id.clone(),
         original.revision(),
@@ -520,6 +540,7 @@ async fn quota_plan_changes_survive_inflight_background_and_manual_token_refresh
     ));
     let current = repository.get_account(&id).await.unwrap().unwrap();
     assert_eq!(current.plan_type(), Some("pro"));
+    assert_eq!(current.name(), "renamed team");
     let stale = QuotaObservation {
         expected_connection: None,
         plan_type: Some("free".to_owned()),
@@ -548,7 +569,7 @@ async fn quota_plan_changes_survive_inflight_background_and_manual_token_refresh
         .unwrap();
     let refreshed = repository.get_account(&id).await.unwrap().unwrap();
     assert_eq!(refreshed.plan_type(), Some("pro"));
-    assert_eq!(refreshed.name(), original.name());
+    assert_eq!(refreshed.name(), "renamed team");
     assert_eq!(refreshed.email(), original.email());
     let observed_at = SystemTime::now();
     repository
@@ -1187,6 +1208,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let result = store
         .update_account(
             UpdateAccount {
+                name: None,
                 notes: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -1268,6 +1290,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         request_id: "proxy-edit".to_owned(),
     };
     let command = UpdateAccount {
+        name: None,
         notes: None,
         model_access: Default::default(),
         account_id: "acct_proxy".to_owned(),
@@ -1325,6 +1348,120 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
 }
 
 #[tokio::test]
+async fn account_rename_preserves_facts_and_is_searchable() {
+    let Some(database) = TestDatabase::create("account_rename").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let mut seed = account("acct_rename", "rename-user");
+    seed.name = "Original team".to_owned();
+    seed.outbound_proxy =
+        Some(gateway_core::account::OutboundProxy::parse("http://127.0.0.1:18080").unwrap());
+    repository.insert_provider_account(seed).await.unwrap();
+    let facts_query = "select to_jsonb(a) - 'name' - 'updated_at'
+                       from provider_accounts a where id = 'acct_rename'";
+    let before: serde_json::Value = sqlx::query_scalar(facts_query)
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    let store = admin_account_store(&database.pool);
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "rename-account".to_owned(),
+    };
+    let command = UpdateAccount {
+        account_id: "acct_rename".to_owned(),
+        name: Some("  研发团队  ".to_owned()),
+        notes: None,
+        enabled: true,
+        concurrency_limit: None,
+        weight: gateway_core::account::AccountWeight::DEFAULT,
+        model_access: None,
+        group_ids: vec![],
+        outbound_proxy: None,
+    };
+    let result = store
+        .update_account(command.clone(), &context)
+        .await
+        .unwrap();
+    assert_eq!(result.config_revision.get(), 2);
+    let after: serde_json::Value = sqlx::query_scalar(facts_query)
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+    for (search, total) in [("研发团队", 1), ("Original team", 0), ("acct_rename@", 1)] {
+        let page = store
+            .list_accounts(
+                AccountListQuery {
+                    page: 1,
+                    page_size: PageSize::new(20).unwrap(),
+                    provider_kind: None,
+                    group_filter: None,
+                    search: Some(search.to_owned()),
+                    status: None,
+                    sort: None,
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.total, total, "{search}");
+    }
+    let fields: Vec<String> = sqlx::query_scalar(
+        "select changed_fields from admin_audit_events where admin_request_id = 'rename-account'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert!(fields.iter().any(|field| field == "name"));
+    store
+        .update_account(
+            UpdateAccount {
+                name: None,
+                ..command.clone()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .load_account("acct_rename", Default::default())
+            .await
+            .unwrap()
+            .unwrap()
+            .account
+            .name,
+        "研发团队"
+    );
+    store
+        .update_account(
+            UpdateAccount {
+                name: Some("  ".to_owned()),
+                ..command
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    let cleared = store
+        .load_account("acct_rename", Default::default())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cleared.account.name, "");
+    assert_eq!(
+        sqlx::query_scalar::<_, serde_json::Value>(facts_query)
+            .fetch_one(&database.pool)
+            .await
+            .unwrap(),
+        before
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
     let Some(database) = TestDatabase::create("account_notes").await else {
         return;
@@ -1340,6 +1477,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
         request_id: "notes-edit".to_owned(),
     };
     let command = UpdateAccount {
+        name: None,
         account_id: "acct_notes".to_owned(),
         notes: Some("  团队备用\n下月续费  ".to_owned()),
         enabled: true,
@@ -1489,6 +1627,7 @@ async fn invalid_account_notes_roll_back_scheduling_revision_and_audit() {
     let result = admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                name: None,
                 account_id: "acct_notes".to_owned(),
                 notes: Some("备".repeat(501)),
                 enabled: false,
@@ -2516,6 +2655,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            name: None,
             notes: None,
             model_access: Default::default(),
             outbound_proxy: None,
@@ -2584,6 +2724,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
     .await
     .expect("seed group");
     let settings = UpdateAccount {
+        name: Some("  团队新名称  ".to_owned()),
         account_id: ACCOUNT_ID.to_owned(),
         notes: Some("统一保存".to_owned()),
         enabled: false,
@@ -2623,6 +2764,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
     assert_eq!(before["concurrency_limit"], 3);
     assert_eq!(before["weight"], 7);
     assert_eq!(before["notes"], "统一保存");
+    assert_eq!(before["name"], "团队新名称");
     assert_eq!(
         account_group_ids(&database.pool, ACCOUNT_ID).await,
         [GROUP_ID]
@@ -2633,6 +2775,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
             "missing_group",
             2,
             UpdateAccount {
+                name: Some(String::new()),
                 enabled: true,
                 group_ids: vec![
                     AccountGroupId::new("grp_00000000000000000000000000000092").unwrap(),
@@ -2687,6 +2830,35 @@ async fn credential_rotation_and_settings_share_one_transaction() {
             .await
             .unwrap();
         assert_eq!(audit_count, 1, "{case}");
+    }
+    for (expected_revision, name) in [(2, Some(String::new())), (3, None)] {
+        repository
+            .rotate_provider_account(RotateProviderAccount {
+                scope: scope.clone(),
+                profile: profile(ACCOUNT_ID, ""),
+                replacement_identity: None,
+                credential: credential_update(ACCOUNT_ID, expected_revision, "cleared-profile"),
+                settings: Some(UpdateAccount {
+                    name,
+                    ..settings.clone()
+                }),
+                audit: audit(
+                    &format!("clear_name_{expected_revision}"),
+                    "rotate",
+                    ACCOUNT_ID,
+                ),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            repository
+                .get_account(&ProviderAccountId::new(ACCOUNT_ID).unwrap())
+                .await
+                .unwrap()
+                .unwrap()
+                .name(),
+            ""
+        );
     }
     database.close().await;
 }
@@ -3307,6 +3479,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
     admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                name: None,
                 notes: None,
                 model_access: Default::default(),
                 account_id: id.as_str().to_owned(),

@@ -10,7 +10,9 @@ use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwnerBinding, PendingAuthorizationMutation,
 };
 use gateway_admin::model::{MutationActor, MutationContext};
-use gateway_core::account::{AccountStatus, ProviderAccountId};
+use gateway_core::account::{
+    AccountStatus, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
+};
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
@@ -403,7 +405,7 @@ async fn separate_new_authorizations_use_distinct_surface_stable_ids() {
 }
 
 #[tokio::test]
-async fn repeated_reauthorization_derives_the_same_surface_id_for_one_account() {
+async fn repeated_reauthorization_preserves_surface_id_with_a_cleared_name() {
     let store = Arc::new(MemoryAccountStore::default());
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
@@ -416,6 +418,15 @@ async fn repeated_reauthorization_derives_the_same_surface_id_for_one_account() 
         })
         .await;
     let account_id = ProviderAccountId::new("acct_surface_reauth").expect("account id");
+    store
+        .update_account(ProviderAccountUpdate {
+            account_id: account_id.clone(),
+            name: String::new(),
+            email: Some("reauthorize@example.com".to_owned()),
+            plan_type: None,
+        })
+        .await
+        .unwrap();
     let mut surface_ids = Vec::new();
     for request_id in ["surface-reauth-first", "surface-reauth-second"] {
         let service = CodexOAuthAdminService::new(
