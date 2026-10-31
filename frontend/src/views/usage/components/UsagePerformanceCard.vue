@@ -246,7 +246,7 @@ function formatThroughput(value: number | null) {
     </template>
 
     <template #body>
-      <div class="grid min-h-66 gap-3">
+      <div class="grid min-h-66" :class="hasData ? 'gap-3' : 'flex-1'">
         <div
           v-if="hasData"
           class="grid gap-2 rounded-xl bg-cp-fill-quaternary/45 p-2"
@@ -275,7 +275,7 @@ function formatThroughput(value: number | null) {
                     ? t('usage.performance.noThroughput')
                     : t('usage.performance.noLatency')
           "
-          class="h-52.5 place-content-center"
+          class="place-content-center"
         />
       </div>
     </template>

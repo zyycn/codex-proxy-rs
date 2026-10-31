@@ -271,7 +271,7 @@ function costAmount(value: string | null, pointIndex: number) {
     </template>
 
     <template #body>
-      <div class="grid min-h-66 gap-3">
+      <div class="grid min-h-66" :class="hasData ? 'gap-3' : 'flex-1'">
         <div v-if="hasData" class="grid grid-cols-2 gap-x-1 gap-y-3 rounded-xl bg-cp-fill-quaternary/45 p-2 @min-[24rem]/cost:grid-cols-3 @min-[40rem]/cost:grid-cols-5">
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="text-[10px] font-bold text-cp-text-quaternary" :title="t('usage.billing.totalCost')">{{ t('usage.cost.actualCost') }}</span>
@@ -310,7 +310,7 @@ function costAmount(value: string | null, pointIndex: number) {
           size="small"
           surface="none"
           :title="loading ? t('usage.cost.loading') : t('usage.cost.empty')"
-          class="h-52.5 place-content-center"
+          class="place-content-center"
         />
       </div>
     </template>
