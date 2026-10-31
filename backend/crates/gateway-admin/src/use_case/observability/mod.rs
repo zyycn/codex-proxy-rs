@@ -948,7 +948,7 @@ impl DefaultObservabilityService {
                     return None;
                 };
                 if let Some(peer) = peer
-                    && let Ok(Some(quota)) = peer.read_quota(&account_id).await
+                    && let Ok(Some(quota)) = peer.read_summary(&account_id).await
                 {
                     return Some(quota);
                 }

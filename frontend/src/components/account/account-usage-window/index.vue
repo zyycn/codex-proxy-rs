@@ -128,8 +128,16 @@ const view = computed(() => resolveAccountUsageWindowPresentation({
       />
     </template>
 
-    <div v-else :class="view.classes.header">
-      <span class="min-w-0 text-cp-text-secondary">{{ t('accounts.quota.unobserved') }}</span>
-    </div>
+    <template v-else>
+      <div :class="view.classes.header" aria-hidden="true">
+        <span class="h-3.5" />
+      </div>
+      <div
+        class="col-span-full"
+        :class="[view.classes.track, view.classes.trackOffset]"
+        role="progressbar"
+        :aria-label="t('accounts.quota.unobserved')"
+      />
+    </template>
   </div>
 </template>

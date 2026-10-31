@@ -72,7 +72,7 @@ const variantDefinitions: Record<
     labelClass: 'truncate text-cp-text-quaternary',
     valueClass: 'text-[10px] leading-[14px] font-heavy',
     trackOffsetClass: 'mt-auto',
-    trackShapeClass: 'h-[3px] w-full overflow-hidden rounded-full',
+    trackShapeClass: 'h-1 w-full overflow-hidden rounded-full',
     minimumBarWidth: '3px',
     compactValues: true,
     labelTooltip: true,
@@ -221,7 +221,7 @@ function usageWindowMode(
   window: AccountQuotaWindow | undefined,
   localUsage: AccountLocalUsage | null,
 ): AccountUsageWindowMode {
-  if (typeof window?.usedPercent === 'number')
+  if (typeof window?.usedPercent === 'number' || window?.amount)
     return 'quota'
   if (localUsage)
     return 'local'
@@ -243,11 +243,7 @@ export function quotaWindowDetails(window: AccountQuotaWindow) {
   const localUsage = accountLocalUsage(window.localUsage)
   const tokenDisplay = localTokenDisplay(localUsage) || null
   const amountDisplay = window.amount?.usedDisplay ?? null
-  const amount = amountDisplay?.replace(/[^\d.]/g, '')
-  const amountUsedDisplay = amount && Number(amount) === 0
-    ? null
-    : amountDisplay
-  const hasConsumption = Boolean(tokenDisplay || amountUsedDisplay)
+  const hasConsumption = Boolean(tokenDisplay || amountDisplay)
     || (!window.amount && localUsage?.totalTokens == null)
   return {
     stale: window.stale,
@@ -260,13 +256,16 @@ export function quotaWindowDetails(window: AccountQuotaWindow) {
         : null,
     ].filter(Boolean).join(' · '),
     localUsageDisplay: tokenDisplay,
-    amountUsedDisplay,
+    amountUsedDisplay: amountDisplay,
+    quotaValueDisplay: window.amount && window.usedPercent === null
+      ? window.amount.totalDisplay
+      : window.usedPercentDisplay,
     consumptionDisplay: hasConsumption
       ? [
           amountDisplay,
-          tokenDisplay || (localUsage?.totalTokens === 0 || window.amount
-            ? '0'
-            : '—'),
+          tokenDisplay || (!window.amount && localUsage?.totalTokens == null
+            ? '—'
+            : null),
         ].filter(Boolean).join(' · ')
       : null,
     resetAtDisplay: window.amount && window.resetAtDisplay === '—'

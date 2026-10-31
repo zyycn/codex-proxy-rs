@@ -42,6 +42,12 @@ impl PeerUpstreamService for TestPeerInfo {
     async fn read_quota(&self, _: &ProviderAccountId) -> Result<Option<ProviderQuota>, StoreError> {
         Ok(self.0.lock().unwrap().clone())
     }
+    async fn read_summary(
+        &self,
+        _: &ProviderAccountId,
+    ) -> Result<Option<ProviderQuota>, StoreError> {
+        Ok(self.0.lock().unwrap().clone())
+    }
     async fn read_quotas(
         &self,
         requests: &[ProviderQuotaReadRequest<'_>],

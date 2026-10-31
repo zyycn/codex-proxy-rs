@@ -69,6 +69,7 @@ async fn peer_response(state: ApiState, client: AuthenticatedClient, uri: Uri) -
                 max_accounts: MAX_ACCOUNTS,
                 max_quota_windows: MAX_QUOTA_WINDOWS,
                 max_models: MAX_MODELS,
+                max_response_bytes: MAX_RESPONSE_BYTES,
             },
         )
         .await

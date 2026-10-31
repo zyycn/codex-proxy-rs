@@ -54,7 +54,11 @@ pub(super) fn pool_summary(
     summary
 }
 
-pub(super) fn quota_and_models(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "投影显式接收已授权事实和调用边界的响应预算"
+)]
+pub(super) async fn quota_and_models(
     client: &AuthenticatedClient,
     accounts: &[AccountRecord],
     quotas: &BTreeMap<String, ProviderQuota>,
@@ -62,39 +66,50 @@ pub(super) fn quota_and_models(
     runtime: &AccountRuntimeSnapshot,
     models: &[gateway_core::routing::PublicModelId],
     now: DateTime<Utc>,
-) -> (Vec<PeerAccountQuota>, Vec<PeerModelSummary>) {
+    max_response_bytes: usize,
+) -> Result<(Vec<PeerAccountQuota>, Vec<PeerModelSummary>), super::PeerLinkError> {
     let snapshot = client.snapshot();
     let scope = client.policy().account_scope();
-    let mut observations = BTreeMap::<String, Vec<Option<ModelObservation>>>::new();
+    let mut observations = BTreeMap::<&str, ModelObservations>::new();
+    let mut model_bytes = 0usize;
     let mut result = Vec::with_capacity(accounts.len());
-    for account in accounts {
+    for (index, account) in accounts.iter().enumerate() {
+        // 大池投影不能连续占住异步执行线程，取消请求也要能及时释放并发名额
+        if index % 16 == 0 {
+            tokio::task::yield_now().await;
+        }
+        let observation = model_observation(account, runtime, now);
         let Ok(id) = ProviderAccountId::new(account.id.clone()) else {
             continue;
         };
         let provider = providers.require(&account.provider_kind).ok();
-        let account_models = models
-            .iter()
-            .filter_map(|model| {
-                let upstream = snapshot.mapped_model(model.as_str());
-                if !snapshot.allows_public_model_for_account(model, scope, &id)
-                    || !account.model_access.allows(&upstream)
-                {
-                    return None;
+        let mut account_models = Vec::new();
+        for model in models {
+            let upstream = snapshot.mapped_model(model.as_str());
+            if !snapshot.allows_public_model_for_account(model, scope, &id)
+                || !account.model_access.allows(&upstream)
+            {
+                continue;
+            }
+            let eligible = provider
+                .as_ref()
+                .and_then(|provider| provider.peer_model_eligible(account, &upstream));
+            if eligible == Some(false) {
+                continue;
+            }
+            observations
+                .entry(model.as_str())
+                .or_default()
+                .observe(eligible.and(observation));
+            if eligible == Some(true) {
+                // 模型名是响应字节数的下界；提前拒绝必然超限的交叉展开，不误拒稀疏授权
+                model_bytes = model_bytes.saturating_add(model.as_str().len());
+                if model_bytes > max_response_bytes {
+                    return Err(super::PeerLinkError::SnapshotTooLarge);
                 }
-                let eligible = provider
-                    .as_ref()
-                    .and_then(|provider| provider.peer_model_eligible(account, &upstream));
-                if eligible == Some(false) {
-                    return None;
-                }
-                let observation = eligible.and_then(|_| model_observation(account, runtime, now));
-                observations
-                    .entry(model.as_str().to_owned())
-                    .or_default()
-                    .push(observation);
-                (eligible == Some(true)).then(|| model.as_str().to_owned())
-            })
-            .collect::<Vec<_>>();
+                account_models.push(model.as_str().to_owned());
+            }
+        }
         let quota = quotas.get(&account.id);
         let observed_at = quota.and_then(|quota| quota.observed_at);
         let expires_at = observed_at.map(|observed| {
@@ -138,21 +153,10 @@ pub(super) fn quota_and_models(
         .iter()
         .map(|model| {
             let values = observations.remove(model.as_str()).unwrap_or_default();
-            let complete = !values.is_empty() && values.iter().all(Option::is_some);
-            let observed_at = values.iter().flatten().map(|value| value.observed_at).min();
-            let expires_at = values.iter().flatten().map(|value| value.expires_at).min();
-            let state = if values
-                .iter()
-                .flatten()
-                .any(|value| value.state == PeerModelState::Available)
-            {
+            let complete = values.observed_at.is_some() && !values.incomplete;
+            let state = if values.available {
                 PeerModelState::Available
-            } else if complete
-                && values
-                    .iter()
-                    .flatten()
-                    .all(|value| value.state == PeerModelState::Exhausted)
-            {
+            } else if complete {
                 PeerModelState::Exhausted
             } else {
                 PeerModelState::Unknown
@@ -161,18 +165,43 @@ pub(super) fn quota_and_models(
                 model: model.as_str().to_owned(),
                 complete,
                 state,
-                observed_at,
-                expires_at,
+                observed_at: values.observed_at,
+                expires_at: values.expires_at,
             }
         })
         .collect();
-    (result, summaries)
+    Ok((result, summaries))
 }
 
+#[derive(Clone, Copy)]
 struct ModelObservation {
     state: PeerModelState,
     observed_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
+}
+
+#[derive(Default)]
+struct ModelObservations {
+    incomplete: bool,
+    available: bool,
+    observed_at: Option<DateTime<Utc>>,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+impl ModelObservations {
+    fn observe(&mut self, observation: Option<ModelObservation>) {
+        let Some(observation) = observation else {
+            self.incomplete = true;
+            return;
+        };
+        self.available |= observation.state == PeerModelState::Available;
+        self.observed_at = Some(self.observed_at.map_or(observation.observed_at, |current| {
+            current.min(observation.observed_at)
+        }));
+        self.expires_at = Some(self.expires_at.map_or(observation.expires_at, |current| {
+            current.min(observation.expires_at)
+        }));
+    }
 }
 
 fn model_observation(

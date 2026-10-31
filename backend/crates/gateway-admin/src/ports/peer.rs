@@ -54,6 +54,14 @@ pub trait PeerUpstreamService: gateway_core::account::UpstreamInfoSource {
         Option<crate::model::provider_credentials::ProviderQuota>,
         gateway_core::error::StoreError,
     >;
+    /// 读取版本化摘要，不展开远端节点窗口
+    async fn read_summary(
+        &self,
+        account_id: &gateway_core::account::ProviderAccountId,
+    ) -> Result<
+        Option<crate::model::provider_credentials::ProviderQuota>,
+        gateway_core::error::StoreError,
+    >;
     async fn read_quotas(
         &self,
         requests: &[crate::model::provider_credentials::ProviderQuotaReadRequest<'_>],

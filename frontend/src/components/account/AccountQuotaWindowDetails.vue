@@ -34,7 +34,6 @@ const detailItems = computed(() =>
       code: quotaWindowCode(window.windowSeconds, window.role),
       label: quotaWindowLabel(window, false),
       usedPercent: window.usedPercent,
-      usedPercentDisplay: window.usedPercentDisplay,
       percentTextClass: view.quota.percentTextClass,
       barClass: view.quota.barClass,
       barStyle: view.quota.barStyle,
@@ -89,7 +88,7 @@ function quotaWindowCode(windowSeconds: number | null, role: AccountQuotaWindow[
             class="font-mono text-cp-xs leading-none font-heavy tabular-nums"
             :class="item.local ? 'text-cp-text' : item.percentTextClass"
           >
-            {{ item.local ? t('accounts.quota.requestCount', { requestDisplay: item.requestDisplay }) : item.usedPercentDisplay }}
+            {{ item.local ? t('accounts.quota.requestCount', { requestDisplay: item.requestDisplay }) : item.quotaValueDisplay }}
           </strong>
         </div>
 
@@ -107,7 +106,7 @@ function quotaWindowCode(windowSeconds: number | null, role: AccountQuotaWindow[
             aria-valuemin="0"
             aria-valuemax="100"
             :aria-valuenow="item.stale ? undefined : item.usedPercent ?? undefined"
-            :aria-valuetext="item.stale ? `${item.usedPercentDisplay} · ${item.observationDisplay}` : item.usedPercentDisplay"
+            :aria-valuetext="item.stale ? `${item.quotaValueDisplay} · ${item.observationDisplay}` : item.quotaValueDisplay"
           >
             <div
               class="h-full rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none"

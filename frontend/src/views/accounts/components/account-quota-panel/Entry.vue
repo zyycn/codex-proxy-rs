@@ -42,7 +42,6 @@ const items = computed(() => props.windows.map((window) => {
       : quotaWindowLabel(window),
     ariaLabel: quotaWindowLabel(window),
     usedPercent: window.usedPercent,
-    usedPercentDisplay: window.usedPercentDisplay,
     percentTextClass: presentation.percentTextClass,
     barClass: presentation.barClass,
     barStyle: presentation.barStyle,
@@ -101,7 +100,9 @@ const items = computed(() => props.windows.map((window) => {
             </span>
             <span class="flex shrink-0 items-baseline gap-1.5 font-mono font-heavy tabular-nums">
               <template v-if="item.amountUsedDisplay">
-                <strong class="text-cp-text-quaternary">{{ item.amountUsedDisplay }}</strong>
+                <strong class="text-cp-text-quaternary">
+                  {{ item.amountUsedDisplay }}<template v-if="item.usedPercent === null"> / {{ item.quotaValueDisplay }}</template>
+                </strong>
                 <span v-if="item.localUsageDisplay" class="font-normal text-cp-text-quaternary" aria-hidden="true">·</span>
               </template>
               <strong
@@ -112,10 +113,11 @@ const items = computed(() => props.windows.map((window) => {
                 {{ item.localUsageDisplay }}
               </strong>
               <strong
+                v-if="!item.amountUsedDisplay || item.usedPercent !== null"
                 :class="item.percentTextClass"
-                :title="t('accounts.quota.quotaUsed', { rate: item.usedPercentDisplay })"
+                :title="item.usedPercent === null ? undefined : t('accounts.quota.quotaUsed', { rate: item.quotaValueDisplay })"
               >
-                {{ item.usedPercentDisplay }}
+                {{ item.quotaValueDisplay }}
               </strong>
             </span>
           </div>
@@ -127,7 +129,7 @@ const items = computed(() => props.windows.map((window) => {
             aria-valuemin="0"
             aria-valuemax="100"
             :aria-valuenow="item.stale ? undefined : item.usedPercent ?? undefined"
-            :aria-valuetext="item.stale ? `${item.usedPercentDisplay} · ${item.observationDisplay}` : item.usedPercentDisplay"
+            :aria-valuetext="item.stale ? `${item.quotaValueDisplay} · ${item.observationDisplay}` : item.quotaValueDisplay"
           >
             <div
               class="h-full rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none"

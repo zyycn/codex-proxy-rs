@@ -330,6 +330,53 @@ async fn quota(
 }
 
 #[tokio::test]
+async fn key_usage_retains_unlimited_windows_without_pool_disclosure() {
+    for weekly_total in [None, Some("50")] {
+        let server = MockServer::start().await;
+        let mut document = peer_document();
+        document["capabilities"] = json!(["key_usage"]);
+        document["pool"] = json!({"disclosure":"none"});
+        document["usage"]["data"]["daily"] =
+            json!({"total":null,"used":"0","remaining":null,"resetsAt":null});
+        document["usage"]["data"]["weekly"]["total"] = json!(weekly_total);
+        document["usage"]["data"]["weekly"]["remaining"] = json!(weekly_total.map(|_| "45"));
+        Mock::given(method("GET"))
+            .and(path("/custom/v1/cpr/link"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(document))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (mut bundle, _, _, id, _config) = fixture(&server).await;
+        cycle(&worker(&mut bundle)).await;
+        let observed = quota(&bundle, &id).await;
+        assert!(observed.upstream.unwrap().pool.is_none());
+        assert_eq!(observed.windows.len(), 2);
+        let daily = &observed.windows[0];
+        assert_eq!(daily.key, "peer:budget:daily");
+        assert_eq!(daily.used_percent, None);
+        assert!(!daily.limit_reached);
+        let amount = daily.upstream.as_ref().unwrap().amount.as_ref().unwrap();
+        assert_eq!(amount.used, "0");
+        assert!(amount.total.is_none());
+        assert!(amount.remaining.is_none());
+        let weekly = &observed.windows[1];
+        assert_eq!(weekly.key, "peer:budget:weekly");
+        assert_eq!(weekly.used_percent, weekly_total.map(|_| 10.0));
+        let amount = weekly.upstream.as_ref().unwrap().amount.as_ref().unwrap();
+        assert_eq!(amount.used, "5");
+        assert_eq!(amount.total.as_deref(), weekly_total);
+        let summary = bundle
+            .peer
+            .service()
+            .read_summary(&id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.windows, observed.windows);
+    }
+}
+
+#[tokio::test]
 async fn refresh_and_reads_are_local_and_worker_owns_the_upstream_request() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -793,6 +840,14 @@ async fn lists_reuse_versioned_summaries_and_details_keep_node_windows() {
         );
         assert!(summary.upstream.as_ref().unwrap().discovered);
         assert_eq!(summary.upstream.unwrap().pool.unwrap().account_count, 2);
+        let single = bundle
+            .admin_provider()
+            .read_summary(&id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(single.windows.len(), 2);
+        assert!(single.upstream.as_ref().unwrap().discovered);
         cycle(&worker).await;
     }
     assert_eq!(

@@ -53,7 +53,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
     @closed="emit('afterLeave')"
   >
-    <div v-if="account" class="grid gap-5">
+    <div v-if="account" class="grid min-w-0 grid-cols-1 gap-5">
       <div
         class="flex flex-wrap items-center justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5"
       >

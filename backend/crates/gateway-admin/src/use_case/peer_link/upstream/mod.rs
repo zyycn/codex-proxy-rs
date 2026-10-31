@@ -84,6 +84,13 @@ impl PeerUpstreamService for PeerInfoService {
         PeerInfoService::read_quota(self, account_id).await
     }
 
+    async fn read_summary(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<Option<ProviderQuota>, StoreError> {
+        PeerInfoService::read_summary(self, account_id).await
+    }
+
     async fn read_quotas(
         &self,
         requests: &[crate::model::provider_credentials::ProviderQuotaReadRequest<'_>],

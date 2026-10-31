@@ -1057,8 +1057,9 @@ OpenAI 主动额度刷新和正常响应携带的明确套餐会同步到账号�
 | `lastError` | 最近同步失败分类：`unauthorized`、`unsupported`、`rate_limited`、`invalid_response`、`unavailable`，成功时为 `null` |
 | `pool` | 上游授权公开的账号数量、状态数量及套餐数量，未公开时为 `null` |
 
-互联额度复用 `quota.windows`。上游 Key 的日/周消费限额窗口可返回
-`amount: { usedDisplay, remainingDisplay, totalDisplay }`，字符串包含单位，美元使用 `$` 前缀；金额不换算成 Token。
+互联额度复用 `quota.windows`。可用的上游 Key 账本始终保留日、周窗口，不限额也保留已用金额。
+窗口返回 `amount: { usedDisplay, remainingDisplay, totalDisplay }`，字符串包含单位，美元使用 `$` 前缀；
+不限额的总额与剩余额显示为 `∞`，`usedPercent` 为 `null`，金额不换算成 Token。
 Key 消费窗口的 `localUsage` 按各自 `[resetAt - windowSeconds, resetAt)` 边界聚合本机请求，
 与上游金额和百分比分开展示；未开启或边界缺失时不查询。
 上游池内的原生窗口通过 `sourceAccountId` 保留授权 Key 内稳定的匿名账号归属，

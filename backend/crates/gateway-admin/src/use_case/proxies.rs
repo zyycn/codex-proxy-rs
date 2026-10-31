@@ -237,7 +237,7 @@ impl ProxiesService for DefaultProxiesService {
                         && let Some(peer) = self.upstream_info.as_deref()
                     {
                         account.upstream = peer
-                            .read_quota(&account_id)
+                            .read_summary(&account_id)
                             .await
                             .ok()
                             .flatten()

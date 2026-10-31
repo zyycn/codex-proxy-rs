@@ -83,7 +83,7 @@ pub struct AccountQuotaAmountView {
 pub(super) fn amount_view(amount: &UpstreamQuotaAmount) -> AccountQuotaAmountView {
     let display = |value: Option<&str>| {
         value.map_or_else(
-            || "不限额".to_owned(),
+            || "∞".to_owned(),
             |value| crate::admin::presenter::format_decimal_currency(value, &amount.unit),
         )
     };

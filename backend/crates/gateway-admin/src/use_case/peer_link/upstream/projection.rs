@@ -86,10 +86,12 @@ impl PeerInfoService {
                     ("daily", "日额度", 86400, &usage.daily),
                     ("weekly", "周额度", 604800, &usage.weekly),
                 ] {
-                    let total = window.total.as_deref().and_then(snapshot::decimal);
-                    if total.is_none_or(|value| value <= 0.0) {
-                        continue;
-                    }
+                    // 不限额仍有日、周账本，只是不计算占用百分比
+                    let total = window
+                        .total
+                        .as_deref()
+                        .and_then(snapshot::decimal)
+                        .filter(|value| *value > 0.0);
                     let used_percent = snapshot::decimal(&window.used)
                         .zip(total)
                         .map(|(used, total)| (used / total * 100.0).clamp(0.0, 100.0));

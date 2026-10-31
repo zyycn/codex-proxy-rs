@@ -10,6 +10,7 @@ pub struct PeerLinkLimits {
     pub max_accounts: usize,
     pub max_quota_windows: usize,
     pub max_models: usize,
+    pub max_response_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -457,7 +457,7 @@ async fn proxy_routes_save_reload_test_rename_and_delete_without_exposing_creden
         json!([{
             "id":"acct_linked", "name":"工作账号", "email":"work@example.invalid",
             "provider":"openai", "enabled":true, "authenticationKind":"oauth",
-            "planType":"plus", "planTypeDisplay":"Plus", "groups":[]
+            "planType":"plus", "planTypeDisplay":"Plus", "groups":[], "upstream":null
         }])
     );
 

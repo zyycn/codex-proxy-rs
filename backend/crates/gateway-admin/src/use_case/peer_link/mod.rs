@@ -232,7 +232,9 @@ impl PeerLinkService for DefaultPeerLinkService {
                 &runtime,
                 &public_models,
                 now,
-            );
+                limits.max_response_bytes,
+            )
+            .await?;
             // 发布窗口内缺失或已变更的账号不能被静默剔除后推导整个模型池耗尽
             if accounts.len() != ids.len() {
                 for model in &mut models {

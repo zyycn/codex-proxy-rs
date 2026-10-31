@@ -1877,7 +1877,8 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     assert_eq!(imported.account_ids, ["acct_admin_upsert"]);
     sqlx::query(
         "update provider_accounts
-         set provider_quota_json = '{}'::jsonb, quota_observed_at = now(), updated_at = now()
+         set provider_quota_json = '{}'::jsonb, quota_observed_at = now(),
+             updated_at = greatest(updated_at, now())
          where id = 'acct_admin_upsert'",
     )
     .execute(&database.pool)

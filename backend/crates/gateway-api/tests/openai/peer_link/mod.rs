@@ -206,7 +206,12 @@ fn router_with_sharing(
 }
 
 fn router_with_snapshot(fixture: &AdminTestFixture, snapshot: RuntimeSnapshot) -> Router {
-    let execution = Arc::new(DefaultExecutionService::new(
+    let execution = execution_with_snapshot(snapshot);
+    super::api_router_with_admin_and_execution(fixture.services.clone(), execution)
+}
+
+fn execution_with_snapshot(snapshot: RuntimeSnapshot) -> Arc<DefaultExecutionService> {
+    Arc::new(DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(snapshot),
         Arc::new(super::UnusedExecutionStore),
         ProviderRegistry::default(),
@@ -214,8 +219,7 @@ fn router_with_snapshot(fixture: &AdminTestFixture, snapshot: RuntimeSnapshot) -
         Arc::new(super::UnusedContinuation),
         Arc::new(super::IgnoredClientApiKeyUsage),
         Arc::new(crate::support::RecordingDiagnostics::default()),
-    ));
-    super::api_router_with_admin_and_execution(fixture.services.clone(), execution)
+    ))
 }
 
 async fn query(app: &Router, path: &str, plaintext: Option<&str>) -> Response {

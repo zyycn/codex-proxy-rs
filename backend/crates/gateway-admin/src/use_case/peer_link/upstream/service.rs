@@ -166,6 +166,36 @@ impl PeerInfoService {
         &self,
         id: &ProviderAccountId,
     ) -> Result<Option<ProviderQuota>, StoreError> {
+        let Some(connection) = self.current_connection(id).await? else {
+            return Ok(None);
+        };
+        Ok(self
+            .read(std::slice::from_ref(id))
+            .await?
+            .iter()
+            .find(|record| record.plan.connection == connection)
+            .map(|record| Self::project(record, SystemTime::now())))
+    }
+
+    pub(crate) async fn read_summary(
+        &self,
+        id: &ProviderAccountId,
+    ) -> Result<Option<ProviderQuota>, StoreError> {
+        let Some(connection) = self.current_connection(id).await? else {
+            return Ok(None);
+        };
+        Ok(self
+            .read_summaries(std::slice::from_ref(id))
+            .await?
+            .into_iter()
+            .find(|(current, _)| *current == connection)
+            .map(|(_, quota)| quota))
+    }
+
+    async fn current_connection(
+        &self,
+        id: &ProviderAccountId,
+    ) -> Result<Option<UpstreamConnection>, StoreError> {
         let account = self
             .accounts
             .get_account(id)
@@ -180,13 +210,7 @@ impl PeerInfoService {
         {
             return Ok(None);
         }
-        let connection = UpstreamConnection::for_account(&account);
-        Ok(self
-            .read(std::slice::from_ref(id))
-            .await?
-            .iter()
-            .find(|record| record.plan.connection == connection)
-            .map(|record| Self::project(record, SystemTime::now())))
+        Ok(Some(UpstreamConnection::for_account(&account)))
     }
 
     pub(crate) async fn read(
