@@ -218,6 +218,7 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
     assert!(!data.to_string().contains("private-sentinel"));
     let observations = fixture.observations.lock().unwrap();
     assert_eq!(observations.summaries.len(), 1);
+    assert_eq!(observations.concurrency_selections, vec![false]);
     assert_eq!(observations.trends.len(), 2);
     for (_, filter) in observations
         .summaries

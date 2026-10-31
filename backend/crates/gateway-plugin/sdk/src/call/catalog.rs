@@ -35,6 +35,7 @@ pub struct ModelPresentation {
     pub description: Option<String>,
     pub default_reasoning_effort: Option<String>,
     pub supported_reasoning_efforts: Vec<String>,
+    pub reasoning_summary: bool,
     pub context_window_tokens: Option<u64>,
     pub max_context_window_tokens: Option<u64>,
     pub image_input: bool,

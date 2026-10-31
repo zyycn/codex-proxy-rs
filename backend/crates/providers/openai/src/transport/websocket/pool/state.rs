@@ -24,6 +24,7 @@ pub struct CodexWebSocketPoolKey {
     account_id: String,
     conversation_id: String,
     connection_profile: String,
+    routing_affinity_id: Option<Uuid>,
     pub(super) downstream_connection_id: String,
     egress_key: String,
     pub(super) proxy_capacity_key: String,
@@ -41,6 +42,7 @@ impl CodexWebSocketPoolKey {
             account_id: account_id.into(),
             conversation_id: conversation_id.into(),
             connection_profile: String::new(),
+            routing_affinity_id: None,
             downstream_connection_id: String::new(),
             egress_key: String::new(),
             proxy_capacity_key: String::new(),
@@ -66,6 +68,11 @@ impl CodexWebSocketPoolKey {
         &self.account_id
     }
 
+    pub(crate) fn with_routing_affinity(mut self, id: Option<Uuid>) -> Self {
+        self.routing_affinity_id = id;
+        self
+    }
+
     pub(crate) fn with_egress_key(mut self, key: &str) -> Self {
         self.egress_key = key.to_owned();
         self
@@ -84,6 +91,10 @@ impl CodexWebSocketPoolKey {
     }
 
     pub(crate) fn stable_hash(&self) -> String {
+        let routing_affinity = self
+            .routing_affinity_id
+            .map(|id| id.to_string())
+            .unwrap_or_default();
         short_sha256([
             self.base_url.as_str(),
             self.account_id.as_str(),
@@ -91,6 +102,7 @@ impl CodexWebSocketPoolKey {
             self.connection_profile.as_str(),
             self.downstream_connection_id.as_str(),
             self.egress_key.as_str(),
+            routing_affinity.as_str(),
         ])
     }
 
@@ -99,6 +111,7 @@ impl CodexWebSocketPoolKey {
             && self.account_id == other.account_id
             && self.conversation_id == other.conversation_id
             && self.egress_key == other.egress_key
+            && self.routing_affinity_id == other.routing_affinity_id
     }
 }
 
@@ -171,6 +184,7 @@ impl WebSocketPoolState {
 
 #[derive(Clone)]
 pub(crate) struct CodexWebSocketConnectionMetadata {
+    pub(crate) routing_affinity: Option<crate::transport::routing_affinity::ChatGptRoutingAffinity>,
     pub(crate) turn_state: Option<String>,
     pub(crate) set_cookie_headers: Vec<String>,
     pub(crate) rate_limit_headers: Vec<(String, String)>,

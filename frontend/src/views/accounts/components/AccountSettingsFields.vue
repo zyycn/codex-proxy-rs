@@ -23,7 +23,7 @@ withDefaults(defineProps<{
 const { t } = useI18n({ useScope: 'global' })
 
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
-const enabled = defineModel<boolean>('enabled', { required: true })
+const enabled = defineModel<boolean>('enabled')
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
@@ -34,14 +34,16 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
 <template>
   <div class="grid gap-5">
     <AccountModelAccessField v-model="modelAccess" :account-id="accountId" :disabled="disabled" :allow-preserve="preserveModelAccess" />
-    <div v-if="showScheduling" class="flex min-h-6 items-center justify-between gap-3">
-      <span class="text-cp leading-none font-medium text-cp-text-secondary">{{ t('accounts.scheduling.scheduling') }}</span>
-      <ZSwitch
-        v-model="enabled"
-        :aria-label="t('accounts.scheduling.switchAccountSchedule')"
-        :disabled="disabled"
-      />
-    </div>
+    <slot name="scheduling">
+      <div v-if="showScheduling" class="flex min-h-6 items-center justify-between gap-3">
+        <span class="text-cp leading-none font-medium text-cp-text-secondary">{{ t('accounts.scheduling.scheduling') }}</span>
+        <ZSwitch
+          v-model="enabled"
+          :aria-label="t('accounts.scheduling.switchAccountSchedule')"
+          :disabled="disabled"
+        />
+      </div>
+    </slot>
 
     <div class="grid gap-4 sm:grid-cols-2">
       <ZFormItem :label="t('accounts.scheduling.concurrencyLimit')">

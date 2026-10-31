@@ -162,6 +162,7 @@ pub struct ModelPresentation {
     description: Option<String>,
     default_reasoning_effort: Option<String>,
     supported_reasoning_efforts: Vec<String>,
+    reasoning_summary: bool,
     context_window_tokens: Option<u64>,
     max_context_window_tokens: Option<u64>,
     image_input: bool,
@@ -252,6 +253,12 @@ impl ModelPresentation {
         self
     }
 
+    #[must_use]
+    pub const fn with_reasoning_summary(mut self, reasoning_summary: bool) -> Self {
+        self.reasoning_summary = reasoning_summary;
+        self
+    }
+
     /// 目录声明的可覆盖上限；客户端本地 context window 覆盖会被它钳制
     #[must_use]
     pub const fn with_max_context_window_tokens(
@@ -323,6 +330,11 @@ impl ModelPresentation {
     #[must_use]
     pub fn supported_reasoning_efforts(&self) -> &[String] {
         &self.supported_reasoning_efforts
+    }
+
+    #[must_use]
+    pub const fn reasoning_summary(&self) -> bool {
+        self.reasoning_summary
     }
 
     #[must_use]

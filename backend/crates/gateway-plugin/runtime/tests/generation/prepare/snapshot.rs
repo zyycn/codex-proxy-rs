@@ -60,6 +60,29 @@ async fn adapted_catalog_freezes_adapter_accounts_and_preserves_the_active_gener
     );
     assert_eq!(active.model_aliases().len(), 1);
     assert_eq!(active.model_aliases()[0].id.as_str(), "native-alias");
+    assert!(!active.models()[0].presentation.reasoning_summary());
+    for summary in [None, Some(false), Some(true)] {
+        let mut candidate = snapshot.clone();
+        candidate.config_revision = Revision::new(2).unwrap();
+        candidate.instances[0].revision = candidate.config_revision;
+        let mut presentation = serde_json::json!({
+            "display_name":"Shared", "default_reasoning_effort":"low",
+            "supported_reasoning_efforts":["low","high"]
+        });
+        if let Some(summary) = summary {
+            presentation["reasoning_summary"] = summary.into();
+        }
+        candidate.instances[0].configuration["model_catalog"]["models"][0]["presentation"] =
+            presentation;
+        let prepared = PluginPreparation::prepare(&runtime, candidate)
+            .await
+            .unwrap();
+        let presentation = &prepared.models()[0].presentation;
+        assert_eq!(presentation.default_reasoning_effort(), Some("low"));
+        assert_eq!(presentation.supported_reasoning_efforts(), ["low", "high"]);
+        assert_eq!(presentation.reasoning_summary(), summary.unwrap_or(false));
+        assert!(active.is_ready());
+    }
     for scenario in ["accounts", "model", "binding", "key", "group"] {
         let mut invalid = snapshot.clone();
         invalid.config_revision = Revision::new(2).unwrap();

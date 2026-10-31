@@ -571,6 +571,7 @@ let plugin = PluginBuilder::from_json(include_bytes!("../plugin.json"))?
 - 适配器及 binding 的模型范围必须覆盖 `id`；带 Key／账号组条件的适配器不能贡献静态目录，不能丢弃这些条件扩大可见范围
 - `features` 使用 `RequestFeature`，仅为生成操作声明工具、图片输入、推理或 JSON Schema 支持；没有声明的能力不能借用同名原生模型的支持事实
 - `presentation` 是独立通用画像，字段见 `call::catalog::ModelPresentation`；省略的布尔能力为 false，未声明推理档位不补猜
+- `presentation.reasoning_summary` 独立声明 `reasoning.summary` 参数支持，默认 false；推理档位不代表摘要能力，只有能够处理该参数的适配器才声明 true，客户端目录相应使用 `auto` 或 `none` 作为摘要默认值
 - 同名条目可关联不同账号，但 Provider、能力及画像须一致，账号集合不能重叠，也不能与插件直接别名同名，以免展示与实际选择产生歧义
 - 别名与适配模型每实例合计最多 256 条，注册响应载荷最多 64 KiB；目录与适配器随同一代次发布，账号最终资格取当前 Key、分组及账号模型政策的交集
 

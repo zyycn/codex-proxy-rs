@@ -4207,6 +4207,7 @@ async fn provider_compiles_realtime_catalog_capabilities() {
         .presentation()
         .expect("Grok model presentation");
     assert_eq!(presentation.display_name(), Some("Grok 4.5"));
+    assert!(presentation.reasoning_summary());
     assert_eq!(
         presentation.supported_reasoning_efforts(),
         ["low", "medium", "high", "xhigh"]

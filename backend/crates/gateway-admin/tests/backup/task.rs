@@ -240,6 +240,75 @@ async fn retention_cleans_expired_scheduled_backups() {
 }
 
 #[tokio::test]
+async fn retention_scans_all_pages_and_deletes_only_one_batch_per_cycle() {
+    for (retention_days, retention_count, retained) in [
+        (0, 999, 999),
+        (0, 1000, 1000),
+        (0, 1001, 1001),
+        (30, 0, 1000),
+    ] {
+        let mut settings = configured_settings();
+        settings.retention_days = retention_days;
+        settings.retention_count = retention_count;
+        let repository = Arc::new(FakeBackupRepository::new(settings));
+        let object_store = Arc::new(FakeObjectStore::new());
+        let now = Utc::now();
+        let mut seeds = Vec::new();
+        for index in 0..retained + 15 {
+            let completed_at = if retention_days > 0 && index >= retained {
+                now - Duration::days(40) - Duration::minutes(index)
+            } else {
+                now - Duration::minutes(index)
+            };
+            let seed = BackupRecordSeed {
+                id: backup_id(&format!("retention-{index}")),
+                trigger_kind: BackupTriggerKind::Scheduled,
+                scheduled_at: Some(completed_at),
+                object_key: format!("codex/retention-{index}.dump"),
+                expires_at: None,
+            };
+            repository
+                .insert_backup_record(seed.clone(), &system_context())
+                .await
+                .expect("insert scheduled backup");
+            repository.set_completed(&seed.id, completed_at);
+            object_store
+                .objects
+                .lock()
+                .expect("objects")
+                .insert(seed.object_key.clone(), DUMP_CONTENT.to_vec());
+            seeds.push(seed);
+        }
+        let task = BackupTask::new(
+            repository.clone(),
+            Arc::new(FakeDumpPort::new()),
+            object_store.clone(),
+        );
+
+        for deleted in [10, 15] {
+            task.run_cycle(&CancellationToken::new())
+                .await
+                .expect("run retention cycle");
+            let records = repository.all_records();
+            assert_eq!(records.len(), seeds.len() - deleted);
+            for (index, seed) in seeds.iter().enumerate() {
+                let retained = usize::try_from(retained).unwrap();
+                let should_remain = index < retained || index >= retained + deleted;
+                assert_eq!(
+                    records.iter().any(|record| record.id == seed.id),
+                    should_remain,
+                    "record {index}, retention days {retention_days}, count {retention_count}"
+                );
+                assert_eq!(
+                    object_store.object(&seed.object_key).is_some(),
+                    should_remain
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn timezone_change_rebases_future_cursor_without_running_old_due_backup() {
     let mut settings = configured_settings();
     settings.schedule_enabled = true;

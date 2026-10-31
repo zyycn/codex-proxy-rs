@@ -194,7 +194,8 @@ impl KeyUsageService for DefaultKeyUsageService {
             self.observations.usage_insights_observation(
                 query.range,
                 filter,
-                Granularity::for_range(query.range)
+                Granularity::for_range(query.range),
+                false,
             ),
             self.observations.usage_trend(
                 today,

@@ -116,6 +116,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
     });
 
     CodexWebSocketStreamingExchange {
+        routing_affinity: response_metadata.routing_affinity,
         websocket_connection_id,
         body: Box::pin(body),
         turn_state: response_metadata.turn_state,
@@ -403,7 +404,10 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         reason => CodexWebSocketExchangeError::StreamEndedBeforeTerminal {
             reason: reason.map_or("stream_eof", PumpExitReason::as_str),
             timeout: match reason {
-                Some(PumpExitReason::PongWriteTimeout { timeout }) => Some(*timeout),
+                Some(
+                    PumpExitReason::PingWriteTimeout { timeout }
+                    | PumpExitReason::PongWriteTimeout { timeout },
+                ) => Some(*timeout),
                 _ => None,
             },
             last_event_type,

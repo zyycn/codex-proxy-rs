@@ -54,6 +54,7 @@ impl ModelsExecution {
                     .to_vec(),
             )
             .with_context_window_tokens(Some(500_000))
+            .with_reasoning_summary(true)
             .with_max_context_window_tokens(Some(900_000))
             .with_image_input(true)
             .with_agent_tools(true, true)
@@ -319,6 +320,7 @@ async fn native_catalog_preserves_complete_objects_and_only_rewrites_alias_slug(
         "model_messages": {"token_budget": "upstream template", "future_section": [null, {"a": true}]},
         "service_tiers": [{"id": "priority", "name": "Fast", "description": "Official speed tier"}],
         "tool_mode": "code_mode_only", "use_responses_lite": true,
+        "supports_reasoning_summary_parameter": true, "default_reasoning_summary": "detailed",
         "future_field": {"nested": [1, null, "value"]}, "explicit_null": null
     });
     let entry = |model: &str| PublicModelDescriptor::Native {
@@ -559,6 +561,8 @@ async fn models_should_encode_provider_profiles_for_current_codex_clients() {
     );
     assert_eq!(model["slug"], "grok-4.5");
     assert_eq!(model["default_reasoning_level"], "medium");
+    assert_eq!(model["supports_reasoning_summary_parameter"], true);
+    assert_eq!(model["default_reasoning_summary"], "auto");
     assert_eq!(model["context_window"], 500_000);
     assert_eq!(model["max_context_window"], 900_000);
     assert_eq!(model["apply_patch_tool_type"], "freeform");
@@ -592,6 +596,40 @@ async fn models_should_encode_provider_profiles_for_current_codex_clients() {
             }
         ])
     );
+}
+
+#[tokio::test]
+async fn models_should_keep_reasoning_effort_independent_from_summary_support() {
+    for summary in [None, Some(false), Some(true)] {
+        let mut presentation = ModelPresentation::default()
+            .with_reasoning(Some("low".into()), vec!["low".into(), "high".into()]);
+        if let Some(summary) = summary {
+            presentation = presentation.with_reasoning_summary(summary);
+        }
+        let response = api_router(ModelsExecution::with_presentation(presentation))
+            .await
+            .oneshot(authorized_request("/v1/models?client_version=0.166.0"))
+            .await
+            .expect("Codex catalog response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let model = &value["models"][0];
+        assert_eq!(model["default_reasoning_level"], "low");
+        assert_eq!(model["supported_reasoning_levels"][1]["effort"], "high");
+        assert_eq!(
+            model["supports_reasoning_summary_parameter"],
+            summary.unwrap_or(false)
+        );
+        assert_eq!(
+            model["default_reasoning_summary"],
+            if summary == Some(true) {
+                "auto"
+            } else {
+                "none"
+            }
+        );
+    }
 }
 
 #[tokio::test]

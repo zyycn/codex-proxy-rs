@@ -185,9 +185,12 @@
       "reserve": "Reserve",
       "allowlist": "Allowlist",
       "blocklist": "Blocklist",
-      "modelLimitations": "Model limitations",
+      "modelCatalog": "Model catalog",
       "refreshModel": "Refresh model",
       "modelRestrictionMode": "Model restriction mode",
+      "catalogHelpTitle": "Model catalog details",
+      "catalogObservedAtHelp": "The time shows when the upstream catalog was last successfully fetched",
+      "catalogDescription": "The catalog lists model IDs, verify endpoint support with an actual request — a connection test only checks the endpoint it uses",
       "searchOrAddModels": "Search or add models",
       "searchOrEnterIdAndPressEnter": "Search or enter ID and press Enter to add",
       "selectModel": "Select model",
@@ -226,6 +229,7 @@
       "outboundTunnel": "Outbound tunnel"
     },
     "scheduling": {
+      "preserve": "Keep unchanged",
       "scheduling": "Scheduling",
       "switchAccountSchedule": "Switch account schedule",
       "concurrencyLimit": "Concurrency limit",

@@ -26,7 +26,8 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    health: Health
+    health: Health | null
+    error?: string
     granularity: string
     loading?: boolean
   }>(),
@@ -43,7 +44,7 @@ type HealthPoint = Health['points'][number]
 use([BarChart])
 
 const { palette } = useChartPalette()
-const points = computed<HealthPoint[]>(() => props.health.points)
+const points = computed<HealthPoint[]>(() => props.health?.points ?? [])
 
 const hasData = computed(
   () => !props.loading && points.value.some(point => requestCount(point) > 0),
@@ -186,7 +187,7 @@ function formatTooltip(params: unknown) {
   >
     <template #body>
       <div class="grid min-h-66" :class="hasData ? 'gap-3' : 'h-full'">
-        <div v-if="hasData" class="grid grid-cols-3 gap-2 rounded-xl bg-cp-fill-quaternary/45 p-2">
+        <div v-if="hasData && health" class="grid grid-cols-3 gap-2 rounded-xl bg-cp-fill-quaternary/45 p-2">
           <div class="grid gap-1 px-2">
             <span class="text-[10px] font-bold text-cp-text-quaternary">{{ t('usage.health.serviceSuccessRate') }}</span>
             <strong class="font-mono text-cp-base font-heavy tabular-nums text-cp-green-text">
@@ -211,7 +212,7 @@ function formatTooltip(params: unknown) {
           v-else
           size="small"
           surface="none"
-          :title="loading ? t('usage.health.loading') : t('usage.health.empty')"
+          :title="error || (loading ? t('usage.health.loading') : t('usage.health.empty'))"
           class="h-full place-content-center"
         />
       </div>

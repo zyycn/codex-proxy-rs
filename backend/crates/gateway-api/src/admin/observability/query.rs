@@ -53,6 +53,71 @@ pub struct UsageAnalyticsQuery {
     pub end_time: Option<String>,
 }
 
+/// 卡片内的指标选择与时间、Provider 范围
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageMetricQuery<T> {
+    pub metric: T,
+    pub provider: Option<String>,
+    pub period: Option<String>,
+    pub as_of: Option<i64>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+}
+
+impl<T> UsageMetricQuery<T> {
+    pub fn into_parts(self) -> (UsageAnalyticsQuery, T) {
+        (
+            UsageAnalyticsQuery {
+                provider: self.provider,
+                period: self.period,
+                as_of: self.as_of,
+                start_time: self.start_time,
+                end_time: self.end_time,
+            },
+            self.metric,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UsagePerformanceMetricKind {
+    Latency,
+    FirstToken,
+    Throughput,
+    Load,
+}
+
+impl From<UsagePerformanceMetricKind> for domain::UsageInsightMetric {
+    fn from(value: UsagePerformanceMetricKind) -> Self {
+        match value {
+            UsagePerformanceMetricKind::Latency => Self::Latency,
+            UsagePerformanceMetricKind::FirstToken => Self::FirstToken,
+            UsagePerformanceMetricKind::Throughput => Self::Throughput,
+            UsagePerformanceMetricKind::Load => Self::Load,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageCostMetricKind {
+    Cost,
+    Savings,
+    Cache,
+}
+
+impl From<UsageCostMetricKind> for domain::UsageInsightMetric {
+    fn from(value: UsageCostMetricKind) -> Self {
+        match value {
+            UsageCostMetricKind::Cost => Self::Cost,
+            UsageCostMetricKind::Savings => Self::Savings,
+            UsageCostMetricKind::Cache => Self::Cache,
+        }
+    }
+}
+
 impl UsageQuery {
     /// 校验 Element Plus 风格的页码分页字段
     pub fn validate_pagination(&self) -> Result<(u32, u16), WireValidationError> {

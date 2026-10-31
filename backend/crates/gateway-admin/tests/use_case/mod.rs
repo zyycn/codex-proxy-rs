@@ -807,8 +807,25 @@ impl ObservabilityStore for UnavailableStore {
         _: TimeRange,
         _: UsageFilter,
         _: Granularity,
+        _include_concurrency: bool,
     ) -> AdminStoreResult<gateway_admin::model::observability::UsageInsightsObservation> {
         Err(unavailable("usage insights"))
+    }
+
+    async fn usage_metric_observation(
+        &self,
+        range: gateway_admin::model::observability::TimeRange,
+        filter: gateway_admin::model::observability::UsageFilter,
+        granularity: gateway_admin::model::observability::Granularity,
+        metric: gateway_admin::model::observability::UsageInsightMetric,
+    ) -> AdminStoreResult<gateway_admin::model::observability::UsageInsightsObservation> {
+        self.usage_insights_observation(
+            range,
+            filter,
+            granularity,
+            metric == gateway_admin::model::observability::UsageInsightMetric::Load,
+        )
+        .await
     }
 
     async fn list_usage_records(&self, _: UsageQuery) -> AdminStoreResult<UsagePage> {

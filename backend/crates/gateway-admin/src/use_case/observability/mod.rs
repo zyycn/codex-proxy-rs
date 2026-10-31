@@ -19,11 +19,14 @@ use crate::{
             DiagnosticDimension, DiagnosticsItem, DiagnosticsResult, Granularity, HealthStatus,
             HealthTimeline, HealthTimelinePoint, OpsErrorPage, OpsErrorQuery, ProviderBillingInput,
             RequestMetricPoint, RequestMetrics, TimeRange, Trend, TrendKind, TrendPoint,
-            TrendSummary, UsageBilling, UsageBillingProjection, UsageCalculatedBillingFact,
-            UsageConcurrencyPoint, UsageDetail, UsageFilter, UsageInsights, UsageInsightsCost,
-            UsageInsightsCostPoint, UsageInsightsHealth, UsageInsightsHealthPoint,
-            UsageInsightsLoad, UsageInsightsPerformance, UsageInsightsPerformancePoint,
-            UsageOverview, UsagePage, UsageQuery, UsageSummary,
+            TrendSummary, UsageBilling, UsageBillingProjection, UsageCacheEfficiency,
+            UsageCalculatedBillingFact, UsageConcurrencyPoint, UsageCostComparison,
+            UsageCostSummary, UsageDetail, UsageFilter, UsageInsight, UsageInsightData,
+            UsageInsightMetric, UsageInsights, UsageInsightsCost, UsageInsightsCostPoint,
+            UsageInsightsHealth, UsageInsightsHealthPoint, UsageInsightsLoad,
+            UsageInsightsObservation, UsageInsightsPerformance, UsageInsightsPerformancePoint,
+            UsageMetricPoint, UsageMetricSeries, UsageOverview, UsagePage, UsageQuery,
+            UsageSummary, UsageThroughputPercentiles,
         },
         provider_credentials::ProviderQuotaRequest,
     },
@@ -65,6 +68,12 @@ pub trait ObservabilityService: Send + Sync {
         range: TimeRange,
         filter: UsageFilter,
     ) -> Result<UsageInsights, AdminError>;
+    async fn usage_metric(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+        metric: UsageInsightMetric,
+    ) -> Result<UsageInsight, AdminError>;
     async fn diagnostics(
         &self,
         range: TimeRange,
@@ -237,6 +246,7 @@ impl ObservabilityService for DefaultObservabilityService {
                 range,
                 UsageFilter::default(),
                 Granularity::for_range(range),
+                false,
             )
             .await
             .map_err(|error| map_store_error(error, "dashboard trend"))?;
@@ -294,21 +304,25 @@ impl ObservabilityService for DefaultObservabilityService {
         let granularity = Granularity::for_range(range);
         let observation = self
             .store
-            .usage_insights_observation(range, filter, granularity)
+            .usage_insights_observation(range, filter, granularity, true)
             .await
             .map_err(|error| map_store_error(error, "usage insights"))?;
-        let mut standard_costs = UsageCostScenarios::default();
-        for point in observation.costs {
-            if let Some(amount) = point.standard_amount {
-                standard_costs.standard.add(point.bucket_start, amount)?;
-            }
-            if let Some(amount) = point.no_cache_amount {
-                standard_costs.no_cache.add(point.bucket_start, amount)?;
-            }
-        }
-        let overview = observation.overview;
-        let trend = observation.trend;
-        build_usage_insights(overview, trend, standard_costs, observation.concurrency)
+        insights_from_observation(observation)
+    }
+
+    async fn usage_metric(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+        metric: UsageInsightMetric,
+    ) -> Result<UsageInsight, AdminError> {
+        let observation = self
+            .store
+            .usage_metric_observation(range, filter, Granularity::for_range(range), metric)
+            .await
+            .map_err(|error| map_store_error(error, "usage metric"))?;
+        let insights = insights_from_observation(observation)?;
+        Ok(select_usage_metric(insights, metric))
     }
 
     async fn diagnostics(
@@ -333,6 +347,7 @@ impl ObservabilityService for DefaultObservabilityService {
                 DiagnosticsItem {
                     key: item.key,
                     name: item.name,
+                    account_authentication_kind: item.account_authentication_kind,
                     account_plan_type_display: item.account_provider_kind.as_deref().and_then(
                         |provider| {
                             self.providers
@@ -382,6 +397,148 @@ impl ObservabilityService for DefaultObservabilityService {
                 });
         }
         Ok(page)
+    }
+}
+
+fn insights_from_observation(
+    observation: UsageInsightsObservation,
+) -> Result<UsageInsights, AdminError> {
+    let mut standard_costs = UsageCostScenarios::default();
+    for point in observation.costs {
+        if let Some(amount) = point.standard_amount {
+            standard_costs.standard.add(point.bucket_start, amount)?;
+        }
+        if let Some(amount) = point.no_cache_amount {
+            standard_costs.no_cache.add(point.bucket_start, amount)?;
+        }
+    }
+    let overview = observation.overview;
+    let trend = observation.trend;
+    build_usage_insights(overview, trend, standard_costs, observation.concurrency)
+}
+
+fn select_usage_metric(insights: UsageInsights, metric: UsageInsightMetric) -> UsageInsight {
+    let activity = insights
+        .health
+        .points
+        .iter()
+        .map(|point| (point.bucket_start, point.total_requests))
+        .collect::<BTreeMap<_, _>>();
+    let data = match metric {
+        UsageInsightMetric::Health => UsageInsightData::Health(insights.health),
+        UsageInsightMetric::Latency => UsageInsightData::Latency(metric_series(
+            insights.performance.latency_percentiles,
+            insights
+                .performance
+                .points
+                .into_iter()
+                .map(|point| (point.bucket_start, point.latency_percentiles)),
+            &activity,
+        )),
+        UsageInsightMetric::FirstToken => UsageInsightData::FirstToken(metric_series(
+            insights.performance.first_token_latency_percentiles,
+            insights
+                .performance
+                .points
+                .into_iter()
+                .map(|point| (point.bucket_start, point.first_token_latency_percentiles)),
+            &activity,
+        )),
+        UsageInsightMetric::Throughput => UsageInsightData::Throughput(metric_series(
+            UsageThroughputPercentiles {
+                p10: insights.performance.output_throughput_p10,
+                p50: insights.performance.output_throughput_p50,
+                p90: insights.performance.output_throughput_p90,
+            },
+            insights.performance.points.into_iter().map(|point| {
+                (
+                    point.bucket_start,
+                    UsageThroughputPercentiles {
+                        p10: point.output_throughput_p10,
+                        p50: point.output_throughput_p50,
+                        p90: point.output_throughput_p90,
+                    },
+                )
+            }),
+            &activity,
+        )),
+        UsageInsightMetric::Load => UsageInsightData::Load(metric_series(
+            insights.performance.load,
+            insights
+                .performance
+                .points
+                .into_iter()
+                .map(|point| (point.bucket_start, point.load)),
+            &activity,
+        )),
+        UsageInsightMetric::Cost => UsageInsightData::Cost(metric_series(
+            cost_summary(&insights.cost),
+            insights.cost.points.into_iter().map(|point| {
+                (
+                    point.bucket_start,
+                    UsageCostComparison {
+                        estimated_cost: point.estimated_cost,
+                        no_cache_cost: point.no_cache_cost,
+                    },
+                )
+            }),
+            &activity,
+        )),
+        UsageInsightMetric::Savings => UsageInsightData::Savings(metric_series(
+            cost_summary(&insights.cost),
+            insights
+                .cost
+                .points
+                .into_iter()
+                .map(|point| (point.bucket_start, point.cache_savings)),
+            &activity,
+        )),
+        UsageInsightMetric::Cache => UsageInsightData::Cache(metric_series(
+            cost_summary(&insights.cost),
+            insights.cost.points.into_iter().map(|point| {
+                (
+                    point.bucket_start,
+                    UsageCacheEfficiency {
+                        input_tokens: point.input_tokens,
+                        cached_token_rate: point.cached_token_rate,
+                        cache_hit_request_rate: point.cache_hit_request_rate,
+                    },
+                )
+            }),
+            &activity,
+        )),
+    };
+    UsageInsight {
+        analytics: insights.analytics,
+        granularity: insights.granularity,
+        data,
+    }
+}
+
+fn cost_summary(cost: &UsageInsightsCost) -> UsageCostSummary {
+    UsageCostSummary {
+        estimated_cost: cost.estimated_cost.clone(),
+        cache_savings: cost.cache_savings.clone(),
+        tier_premium: cost.tier_premium.clone(),
+        cost_per_successful_request: cost.cost_per_successful_request.clone(),
+        coverage: cost.coverage.clone(),
+    }
+}
+
+fn metric_series<S, P>(
+    summary: S,
+    points: impl Iterator<Item = (DateTime<Utc>, P)>,
+    activity: &BTreeMap<DateTime<Utc>, u64>,
+) -> UsageMetricSeries<S, P> {
+    UsageMetricSeries {
+        summary,
+        points: points
+            .map(|(bucket_start, value)| UsageMetricPoint {
+                bucket_start,
+                request_count: activity.get(&bucket_start).copied().unwrap_or_default(),
+                value,
+            })
+            .collect(),
     }
 }
 

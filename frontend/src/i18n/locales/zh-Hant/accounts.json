@@ -185,9 +185,12 @@
       "reserve": "保留",
       "allowlist": "白名單",
       "blocklist": "黑名單",
-      "modelLimitations": "模型限制",
+      "modelCatalog": "模型目錄",
       "refreshModel": "刷新模型",
       "modelRestrictionMode": "模型限制模式",
+      "catalogHelpTitle": "模型目錄說明",
+      "catalogObservedAtHelp": "時間表示最近一次成功取得上游目錄的時間",
+      "catalogDescription": "目錄僅提供模型 ID，端點能力請透過實際請求確認，連線測試僅驗證測試所用端點",
       "searchOrAddModels": "搜索或添加模型",
       "searchOrEnterIdAndPressEnter": "搜索或輸入 ID，回車添加",
       "selectModel": "選擇模型",
@@ -226,6 +229,7 @@
       "outboundTunnel": "出站隧道"
     },
     "scheduling": {
+      "preserve": "保留",
       "scheduling": "調度",
       "switchAccountSchedule": "切換賬號調度",
       "concurrencyLimit": "併發限制",

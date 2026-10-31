@@ -106,7 +106,7 @@ fn retention_count_keeps_newest_n() {
             Some(base),
         ),
     ];
-    let decisions = decide_retention(0, 2, now, &records);
+    let decisions = decide_retention(0, 2, now, 0, &records);
     let ids: Vec<_> = decisions.iter().map(|d| d.record_id.as_str()).collect();
     assert_eq!(ids, vec!["oldest"]);
     assert_eq!(decisions[0].reason, RetentionReason::Count);
@@ -131,7 +131,7 @@ fn retention_days_deletes_old_scheduled_but_keeps_newest() {
             Some(now - Duration::days(40)),
         ),
     ];
-    let decisions = decide_retention(30, 0, now, &records);
+    let decisions = decide_retention(30, 0, now, 0, &records);
     let ids: Vec<_> = decisions.iter().map(|d| d.record_id.as_str()).collect();
     assert_eq!(ids, vec!["ancient"]);
 }
@@ -146,7 +146,7 @@ fn newest_scheduled_never_auto_deleted_even_when_ancient() {
         now - Duration::days(400),
         Some(now - Duration::days(400)),
     )];
-    assert!(decide_retention(30, 1, now, &records).is_empty());
+    assert!(decide_retention(30, 1, now, 0, &records).is_empty());
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn disabled_thresholds_delete_nothing() {
             Some(now - Duration::days(90)),
         ),
     ];
-    assert!(decide_retention(0, 0, now, &records).is_empty());
+    assert!(decide_retention(0, 0, now, 0, &records).is_empty());
 }
 
 #[test]

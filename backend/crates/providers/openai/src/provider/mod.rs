@@ -104,6 +104,7 @@ use crate::transport::{
 
 mod execution;
 mod failure;
+mod guardian;
 mod live;
 mod observation;
 mod upstream_adapter;
@@ -156,6 +157,7 @@ pub struct CodexProvider {
     live_calls_url: Url,
     session_identity: Option<CodexSessionIdentity>,
     session_transport_recovery: CodexSessionTransportRecovery,
+    guardian_routing: guardian::GuardianRouting,
     stream_max_retries: u32,
     live_registry: Arc<CodexLiveRegistry>,
     live_gateway: Option<Arc<CodexLiveGateway>>,
@@ -360,6 +362,7 @@ impl CodexProvider {
             live_calls_url,
             session_identity: None,
             session_transport_recovery: CodexSessionTransportRecovery::default(),
+            guardian_routing: guardian::GuardianRouting::default(),
             stream_max_retries,
             live_registry: Arc::new(CodexLiveRegistry::default()),
             live_gateway: None,
@@ -940,11 +943,43 @@ impl CodexProvider {
         let state_before = trace
             .is_enabled()
             .then(|| crate::transport::diagnostics::evidence::request_state(&upstream_request));
+        let guardian_parent = (!state_owner_cross_account
+            && upstream_request.is_guardian()
+            && matches!(
+                lease.authentication(),
+                crate::credential::CodexRuntimeAuthentication::OAuth(_)
+            ))
+        .then(|| {
+            upstream_request
+                .client_metadata()?
+                .get("parent_response_id")?
+                .as_str()
+        })
+        .flatten()
+        .and_then(|response_id| {
+            self.guardian_routing
+                .get(
+                    context.client_api_key_ref(),
+                    lease.account_id(),
+                    response_id,
+                )
+                .map(|affinity| (response_id.to_owned(), affinity))
+        });
         scope_request_to_account(
             &mut upstream_request,
             lease.installation_id(),
             account_scope,
         );
+        // 父响应的可信关联只恢复此字段，不把首次 Guardian 请求的其他账号状态视为可信
+        if let Some((response_id, _)) = &guardian_parent
+            && let Some(Value::Object(metadata)) =
+                upstream_request.body_mut().get_mut("client_metadata")
+        {
+            metadata.insert(
+                "parent_response_id".to_owned(),
+                Value::String(response_id.clone()),
+            );
+        }
         if let Some(before) = state_before {
             trace.record_evidence("provider.request.account_scope", serde_json::json!({
                 "scope": match account_scope {
@@ -1111,6 +1146,7 @@ impl CodexProvider {
                 .for_account(lease.account())
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, false).error)?
                 .with_responses_api_base_url(lease.authentication().responses_api_base_url())
+                .with_routing_affinity(guardian_parent.map(|(_, affinity)| affinity))
                 .with_connection_budget(context.connection_budget().clone())
                 .with_middleware_headers(middleware_headers)
                 .with_outbound_middleware(outbound_middleware)
@@ -1127,6 +1163,7 @@ impl CodexProvider {
             session_transport_key,
             session_transport_key_hash,
             session_transport_recovery: self.session_transport_recovery.clone(),
+            guardian_routing: self.guardian_routing.clone(),
             websocket_retry_count,
             stream_max_retries: self.stream_max_retries,
             session_capture,

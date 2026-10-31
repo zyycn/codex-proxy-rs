@@ -8,13 +8,15 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
-  summary: Omit<Awaited<ReturnType<typeof getUsageRecordSummary>>, 'analytics'>
+  summary: Omit<Awaited<ReturnType<typeof getUsageRecordSummary>>, 'analytics'> | null
+  loading?: boolean
+  error?: string
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
 const averageLatency = computed(() => {
-  const raw = props.summary.averageLatencyMsValue
+  const raw = props.summary?.averageLatencyMsValue
   const value = raw == null || !Number.isFinite(raw) || raw < 0
     ? 0
     : raw
@@ -47,7 +49,7 @@ const items = computed(() => [
     key: 'requests',
     label: t('usage.successfulRequest'),
     icon: Activity,
-    value: props.summary.totalRequests,
+    value: props.summary?.totalRequests,
     detail: t('usage.withinFilterRange'),
     tone: 'bg-cp-blue-container text-cp-blue-on-container',
   },
@@ -55,15 +57,15 @@ const items = computed(() => [
     key: 'tokens',
     label: t('usage.tokens.totalTokens'),
     icon: FileText,
-    value: props.summary.totalTokens,
-    detail: t('usage.inputOutput', { inputTokens: props.summary.inputTokens, outputTokens: props.summary.outputTokens }),
+    value: props.summary?.totalTokens,
+    detail: t('usage.inputOutput', { inputTokens: props.summary?.inputTokens, outputTokens: props.summary?.outputTokens }),
     tone: 'bg-cp-green-container text-cp-green-on-container',
   },
   {
     key: 'cached',
     label: t('usage.cachedTokens'),
     icon: Database,
-    value: props.summary.cachedInputTokens,
+    value: props.summary?.cachedInputTokens,
     detail: t('usage.cacheReadHit'),
     tone: 'bg-cp-orange-container text-cp-orange-on-container',
   },
@@ -96,10 +98,10 @@ const items = computed(() => [
           {{ item.label }}
         </span>
         <strong class="my-2 block truncate font-mono text-[24px] leading-none font-extrabold text-cp-text">
-          {{ item.value }}<span v-if="item.unit" class="ml-0.5 font-sans text-cp font-semibold text-cp-text-secondary">{{ item.unit }}</span>
+          {{ summary ? item.value : '—' }}<span v-if="summary && item.unit" class="ml-0.5 font-sans text-cp font-semibold text-cp-text-secondary">{{ item.unit }}</span>
         </strong>
         <span class="block truncate text-cp-sm leading-none font-emphasis text-cp-text-quaternary">
-          {{ item.detail }}
+          {{ error || (loading ? t('common.status.loading') : item.detail) }}
         </span>
       </div>
     </ZCard>

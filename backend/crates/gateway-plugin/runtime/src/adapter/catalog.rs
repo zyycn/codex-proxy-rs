@@ -108,6 +108,7 @@ pub(crate) async fn prepare(
                 capabilities,
                 presentation: ModelPresentation::new(p.display_name, p.description)
                     .with_reasoning(p.default_reasoning_effort, p.supported_reasoning_efforts)
+                    .with_reasoning_summary(p.reasoning_summary)
                     .with_context_window_tokens(p.context_window_tokens)
                     .with_max_context_window_tokens(p.max_context_window_tokens)
                     .with_image_input(p.image_input)

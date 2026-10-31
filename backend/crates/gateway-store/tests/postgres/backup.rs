@@ -79,6 +79,63 @@ async fn enable_verified_schedule(repository: &PgBackupRepository) -> BackupSett
 }
 
 #[tokio::test]
+async fn scheduled_completed_pages_keep_stable_order_and_exclude_other_records() {
+    let Some(db) = TestDatabase::create("backup_retention_pages").await else {
+        return;
+    };
+    let repository = PgBackupRepository::new(db.pool.clone());
+    let now = Utc::now();
+    sqlx::query(
+        "insert into backup_records (
+            id, trigger_kind, status, scheduled_at, object_key, size_bytes, sha256,
+            error_code, error_message, started_at, completed_at, created_at, updated_at
+         )
+         select 'backup_' || lpad(to_hex(n), 32, '0'),
+                case when n = 1006 then 'manual' else 'scheduled' end,
+                case when n = 1007 then 'failed' else 'completed' end,
+                case when n = 1006 then null else $1 - n * interval '1 minute' end,
+                'codex/' || n || '.dump', 1, repeat('a', 64),
+                case when n = 1007 then 'backup.pg_dump_failed' end,
+                case when n = 1007 then '导出失败' end,
+                $1 - interval '2 days', $1, $1 - interval '2 days', $1
+           from generate_series(1, 1007) as n",
+    )
+    .bind(now)
+    .execute(&db.pool)
+    .await
+    .expect("seed completed backups with tied completion times");
+
+    let first = repository
+        .list_scheduled_completed_desc(0, 1000)
+        .await
+        .expect("first page");
+    let second = repository
+        .list_scheduled_completed_desc(1000, 1000)
+        .await
+        .expect("second page");
+    assert_eq!(first.len(), 1000);
+    assert_eq!(second.len(), 5);
+    let ids: Vec<_> = first
+        .iter()
+        .chain(&second)
+        .map(|record| record.id.clone())
+        .collect();
+    let expected: Vec<_> = (1..=1005)
+        .rev()
+        .map(|index| format!("backup_{index:032x}"))
+        .collect();
+    assert_eq!(ids, expected);
+    assert!(
+        repository
+            .list_scheduled_completed_desc(1005, 1000)
+            .await
+            .expect("past final page")
+            .is_empty()
+    );
+    db.close().await;
+}
+
+#[tokio::test]
 async fn storage_rotation_pauses_schedule_and_rejects_stale_verification() {
     let Some(db) = TestDatabase::create("backup_rotation").await else {
         return;

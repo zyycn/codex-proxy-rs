@@ -1884,7 +1884,10 @@ fn reset_credit_command(account_id: ProviderAccountId) -> ConsumeProviderResetCr
     }
 }
 
-fn initialized_provider_request(operation: Operation, account_id: &str) -> ProviderRequest {
+pub(crate) fn initialized_provider_request(
+    operation: Operation,
+    account_id: &str,
+) -> ProviderRequest {
     let provider = ProviderKind::new("openai").expect("provider");
     let upstream_model = UpstreamModelId::new("gpt-5.4").expect("upstream model");
     let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
@@ -1914,7 +1917,7 @@ fn initialized_provider_request(operation: Operation, account_id: &str) -> Provi
     ProviderRequest::new(operation, plan.candidates()[0].clone())
 }
 
-fn initialized_attempt_context(request_id: &str, account_id: &str) -> AttemptContext {
+pub(crate) fn initialized_attempt_context(request_id: &str, account_id: &str) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new(request_id).expect("request id"),
@@ -1945,6 +1948,15 @@ pub(crate) async fn initialized_test_provider(
     accounts: Arc<MemoryAccountStore>,
     base_url: String,
 ) -> Arc<dyn gateway_core::engine::provider::Provider> {
+    initialized_test_bundle(accounts, base_url)
+        .await
+        .core_provider()
+}
+
+pub(crate) async fn initialized_test_bundle(
+    accounts: Arc<MemoryAccountStore>,
+    base_url: String,
+) -> provider_openai::ProviderBundle {
     let mut config = valid_config();
     config.config.api.base_url = base_url;
     provider_openai::initialize(
@@ -1954,7 +1966,6 @@ pub(crate) async fn initialized_test_provider(
     )
     .await
     .expect("initialized provider")
-    .core_provider()
 }
 
 fn provider_ports() -> ProviderStorePorts {

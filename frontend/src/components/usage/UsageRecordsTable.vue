@@ -79,10 +79,10 @@ const { t } = useI18n({ useScope: 'global' })
 
     <template #accountPlanType="{ row }">
       <AccountPlanBadge
-        v-if="row.accountPlanType || row.authenticationKind === 'api_key'"
-        :authentication-kind="row.authenticationKind || undefined"
+        v-if="row.authenticationKind === 'api_key' || row.accountPlanType"
+        :authentication-kind="row.authenticationKind ?? undefined"
         :plan-type="row.accountPlanType"
-        :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType || '—'"
+        :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType || ''"
         size="sm"
       />
       <span v-else class="text-cp-text-quaternary">—</span>

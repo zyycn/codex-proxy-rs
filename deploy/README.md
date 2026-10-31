@@ -317,7 +317,8 @@ Responses 流式请求完成准入后，每 15 秒无输出会发送一次 SSE �
 `api.request_timeout_seconds` 默认 `null`，只控制 HTTP 路由返回响应前的等待，不是流式正文或 WebSocket 每轮执行的总时限。
 排队、插件显式执行期限与客户端断开的边界见 [请求期限](../docs/api.md#请求期限)
 
-OpenAI 上游 WebSocket 被动回应 Ping，不主动发送心跳；Pong 写入最多等待 5 秒。
+OpenAI Responses 上游 WebSocket 每 25 秒发送 Ping 保活，并回应上游 Ping；Ping/Pong 写入最多等待 5 秒，
+不因等待 Pong 超时主动断开。入站背压期间暂停主动 Ping，恢复后不集中补发。
 下游 Responses WebSocket 每 25 秒发送 Ping，第一条未响应的 Ping 发出后 30 秒没有入站活动即断开；
 接收中的消息字节、Pong 和其他有效入站消息均算活动，慢速上传不必等整帧收齐才刷新探活状态。
 后续 Ping 不延长这次截止，心跳入队及写入最多等待 5 秒。两段心跳各自处理，不跨 WS 转发或转换为 SSE 事件。

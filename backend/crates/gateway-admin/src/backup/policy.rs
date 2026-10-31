@@ -126,30 +126,32 @@ pub struct RetentionDecision {
 /// 自动保留规则：
 /// - `retentionDays = 0` 时不按天数清理；`retentionCount = 0` 时不按份数清理
 /// - 自动计划备份满足任一启用阈值即可进入删除
-/// - 无论阈值如何，至少保留最近一个成功的计划备份（倒序下标 0）
+/// - 无论阈值如何，至少保留最近一个成功的计划备份（全局倒序下标 0）
 /// - 手动备份不进入本规则；手工/计划记录各自的 `expires_at` 由到期扫描处理
+/// - `offset` 是当前页在全部 completed 计划备份中的起始位置
 #[must_use]
 pub fn decide_retention(
     retention_days: u32,
     retention_count: u32,
     now: DateTime<Utc>,
+    offset: u64,
     scheduled_completed_desc: &[BackupRecord],
 ) -> Vec<RetentionDecision> {
     let mut decisions = Vec::new();
     for (index, record) in scheduled_completed_desc.iter().enumerate() {
+        let position = offset.saturating_add(index as u64);
         if record.status != BackupStatus::Completed {
             continue;
         }
         // 最近一个成功的计划备份永远保留
-        if index == 0 {
+        if position == 0 {
             continue;
         }
         let expired_by_days = retention_days > 0
             && record.completed_at.is_some_and(|completed_at| {
                 completed_at <= now - Duration::days(i64::from(retention_days))
             });
-        let exceeded_count =
-            retention_count > 0 && index >= usize::try_from(retention_count).unwrap_or(usize::MAX);
+        let exceeded_count = retention_count > 0 && position >= u64::from(retention_count);
         if expired_by_days || exceeded_count {
             decisions.push(RetentionDecision {
                 record_id: record.id.clone(),

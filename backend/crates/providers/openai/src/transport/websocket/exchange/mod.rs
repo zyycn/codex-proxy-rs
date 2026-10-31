@@ -25,6 +25,7 @@ pub(super) use self::stream::{WebSocketStreamPoolReturn, stream_websocket_respon
 
 /// Responses WebSocket 文本流交互结果
 pub struct CodexWebSocketStreamingExchange {
+    pub(crate) routing_affinity: Option<crate::transport::routing_affinity::ChatGptRoutingAffinity>,
     /// 关联请求日志与底层 pump 生命周期日志的连接标识
     pub(crate) websocket_connection_id: Uuid,
     /// 上游完整 WebSocket 文本消息流

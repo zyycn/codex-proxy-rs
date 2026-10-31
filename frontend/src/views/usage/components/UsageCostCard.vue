@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import type { EChartsOption, LineSeriesOption } from 'echarts'
 
-import type { getUsageRecordInsightsOverview } from '@/api'
+import type { UsageCostMetric, UsageMetricResponse } from '@/api'
 import { ZCard, ZEmpty, ZSegmented } from '@codex-proxy/ui'
 
-import { computed, shallowRef } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import {
-  requestActivityByBucket,
   zeroInactiveValues,
 } from '@/components/charts/timeSeriesGap'
 import { chartTooltipContent, tooltipIndex, tooltipRows } from '@/components/charts/tooltip'
@@ -27,8 +26,8 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    cost: Cost
-    activity: Activity
+    result: UsageMetricResponse<UsageCostMetric> | null
+    error?: string
     loading?: boolean
   }>(),
   {
@@ -38,22 +37,27 @@ const props = withDefaults(
 
 const { t } = useI18n({ useScope: 'global' })
 
-type Cost = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['cost']
-type Activity = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']['points']
 type UsageChartPalette = ReturnType<typeof useChartPalette>['palette']['value']
 
-const activeView = shallowRef('cost')
+const activeView = defineModel<UsageCostMetric>({ required: true })
 const { palette } = useChartPalette()
-const points = computed(() => props.cost.points)
-const requestActivity = computed(() => requestActivityByBucket(
-  points.value.map(point => point.bucket),
-  props.activity,
-))
-const hasNoCacheCost = computed(() =>
-  points.value.some(point => point.noCacheCost != null),
-)
+const cost = computed(() => props.result?.data.summary ?? null)
+const points = computed(() => props.result?.data.points ?? [])
+const costPoints = computed(() => props.result?.metric === 'cost'
+  ? props.result.data.points
+  : [])
+const savingsPoints = computed(() => props.result?.metric === 'savings'
+  ? props.result.data.points
+  : [])
+const cachePoints = computed(() => props.result?.metric === 'cache'
+  ? props.result.data.points
+  : [])
+const requestActivity = computed(() => points.value.map(point => point.requestCount > 0))
+const hasNoCacheCost = computed(() => costPoints.value.some(point => point.value.noCacheCost != null))
 const coverageRate = computed(() => {
-  const { known, partial, unknown } = props.cost.coverage
+  if (!cost.value)
+    return null
+  const { known, partial, unknown } = cost.value.coverage
   const total = known + partial + unknown
   return total > 0
     ? (known + partial) / total
@@ -76,16 +80,13 @@ const viewOptions = computed(() => ([
 ]))
 
 const hasData = computed(() => {
-  if (props.loading || points.value.length === 0)
+  if (props.loading || props.result?.metric !== activeView.value)
     return false
-  if (activeView.value === 'cost') {
-    return points.value.some(point => point.estimatedCost != null || point.noCacheCost != null)
-  }
+  if (activeView.value === 'cost')
+    return costPoints.value.some(point => point.value.estimatedCost != null || point.value.noCacheCost != null)
   if (activeView.value === 'savings')
-    return points.value.some(point => point.cacheSavings != null)
-  return points.value.some(
-    point => point.inputTokens > 0 || point.cachedTokenRate > 0 || (point.cacheHitRequestRate ?? 0) > 0,
-  )
+    return savingsPoints.value.some(point => point.value != null)
+  return cachePoints.value.some(({ value }) => value.inputTokens > 0 || value.cachedTokenRate > 0 || (value.cacheHitRequestRate ?? 0) > 0)
 })
 
 const chartOption = computed<EChartsOption>(() => {
@@ -152,13 +153,12 @@ function axisFormatter() {
 }
 
 function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
-  const chartPoints = points.value
   if (activeView.value === 'savings') {
     return [
       ...usageGapAwareLineSeries(
         t('usage.cost.cacheSavings'),
         zeroInactiveValues(
-          chartPoints.map(point => decimalDisplayNumber(point.cacheSavings)),
+          savingsPoints.value.map(point => decimalDisplayNumber(point.value)),
           requestActivity.value,
         ),
         theme.success,
@@ -171,12 +171,12 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
     return [
       ...usageGapAwareLineSeries(
         t('usage.cost.cacheTokenProportion'),
-        chartPoints.map(point => point.cachedTokenRate),
+        cachePoints.value.map(point => point.value.cachedTokenRate),
         theme.normal,
       ),
       ...usageGapAwareLineSeries(
         t('usage.cost.hitRequestRate'),
-        chartPoints.map(point => point.cacheHitRequestRate),
+        cachePoints.value.map(point => point.value.cacheHitRequestRate),
         theme.success,
       ),
     ]
@@ -186,7 +186,7 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
     ...usageGapAwareLineSeries(
       t('usage.cost.actualCost'),
       zeroInactiveValues(
-        chartPoints.map(point => decimalDisplayNumber(point.estimatedCost)),
+        costPoints.value.map(point => decimalDisplayNumber(point.value.estimatedCost)),
         requestActivity.value,
       ),
       theme.success,
@@ -198,7 +198,7 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
       ...usageGapAwareLineSeries(
         t('usage.cost.withoutCacheEstimate'),
         zeroInactiveValues(
-          chartPoints.map(point => decimalDisplayNumber(point.noCacheCost)),
+          costPoints.value.map(point => decimalDisplayNumber(point.value.noCacheCost)),
           requestActivity.value,
         ),
         theme.textMuted,
@@ -220,7 +220,7 @@ function formatTooltip(params: unknown) {
     return chartTooltipContent(point.label, [
       usageTooltipItem(
         t('usage.cost.cacheSavings'),
-        formatUsd(costAmount(point.cacheSavings, pointIndex)),
+        formatUsd(costAmount(savingsPoints.value[pointIndex]?.value ?? null, pointIndex)),
         theme.success,
       ),
     ])
@@ -228,22 +228,22 @@ function formatTooltip(params: unknown) {
 
   if (activeView.value === 'cache') {
     return chartTooltipContent(point.label, [
-      usageTooltipItem(t('usage.cost.cacheTokenProportion'), formatPercent(point.cachedTokenRate), theme.normal),
-      usageTooltipItem(t('usage.cost.hitRequestRate'), formatPercent(point.cacheHitRequestRate), theme.success),
+      usageTooltipItem(t('usage.cost.cacheTokenProportion'), formatPercent(cachePoints.value[pointIndex]?.value.cachedTokenRate ?? null), theme.normal),
+      usageTooltipItem(t('usage.cost.hitRequestRate'), formatPercent(cachePoints.value[pointIndex]?.value.cacheHitRequestRate ?? null), theme.success),
     ])
   }
 
   const lines = [
     usageTooltipItem(
       t('usage.cost.actualCost'),
-      formatUsd(costAmount(point.estimatedCost, pointIndex)),
+      formatUsd(costAmount(costPoints.value[pointIndex]?.value.estimatedCost ?? null, pointIndex)),
       theme.success,
     ),
   ]
-  if (point.noCacheCost != null) {
+  if (costPoints.value[pointIndex]?.value.noCacheCost != null) {
     lines.push(usageTooltipItem(
       t('usage.cost.withoutCacheEstimate'),
-      formatUsd(costAmount(point.noCacheCost, pointIndex)),
+      formatUsd(costAmount(costPoints.value[pointIndex]?.value.noCacheCost ?? null, pointIndex)),
       theme.textMuted,
     ))
   }
@@ -266,13 +266,13 @@ function costAmount(value: string | null, pointIndex: number) {
   >
     <template #actions>
       <div class="flex justify-end">
-        <ZSegmented v-model="activeView" :aria-label="t('usage.cost.costView')" :options="viewOptions" :disabled="loading" />
+        <ZSegmented v-model="activeView" :aria-label="t('usage.cost.costView')" :options="viewOptions" />
       </div>
     </template>
 
     <template #body>
       <div class="grid min-h-66" :class="hasData ? 'gap-3' : 'flex-1'">
-        <div v-if="hasData" class="grid grid-cols-2 gap-x-1 gap-y-3 rounded-xl bg-cp-fill-quaternary/45 p-2 @min-[24rem]/cost:grid-cols-3 @min-[40rem]/cost:grid-cols-5">
+        <div v-if="hasData && cost" class="grid grid-cols-2 gap-x-1 gap-y-3 rounded-xl bg-cp-fill-quaternary/45 p-2 @min-[24rem]/cost:grid-cols-3 @min-[40rem]/cost:grid-cols-5">
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="text-[10px] font-bold text-cp-text-quaternary" :title="t('usage.billing.totalCost')">{{ t('usage.cost.actualCost') }}</span>
             <strong class="wrap-anywhere font-mono text-cp-sm font-heavy tabular-nums text-cp-text" :title="formatUsd(cost.estimatedCost)">
@@ -309,7 +309,7 @@ function costAmount(value: string | null, pointIndex: number) {
           v-else
           size="small"
           surface="none"
-          :title="loading ? t('usage.cost.loading') : t('usage.cost.empty')"
+          :title="error || (loading ? t('usage.cost.loading') : t('usage.cost.empty'))"
           class="place-content-center"
         />
       </div>

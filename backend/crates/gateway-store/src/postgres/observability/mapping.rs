@@ -280,6 +280,7 @@ fn admin_diagnostic_observation(
         key: observation.key,
         name: observation.name,
         account_provider_kind: observation.account_provider_kind,
+        account_authentication_kind: observation.account_authentication_kind,
         account_plan_type: observation.account_plan_type,
         request_count: observation.request_count,
         success_count: observation.success_count,

@@ -1,4 +1,4 @@
-//! 验证 S3 分片完整读取、并发上限与取消和失败时的请求回收
+//! 验证 S3 连接探针清理、分片完整读取、并发上限与取消和失败时的请求回收
 
 use std::{io, time::Duration};
 
@@ -454,5 +454,85 @@ async fn failed_multipart_retains_abort_failure_without_changing_primary_code() 
         assert!(error.message().contains("未安排自动重试"));
         assert!(!error.message().contains("probe-upload"));
         assert!(!error.message().contains("probe error"));
+    }
+}
+
+#[tokio::test]
+async fn connection_probe_attempts_cleanup_after_an_interrupted_get_body() {
+    for delete_allowed in [true, false] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let storage = BackupStorageConfig {
+            storage_revision: 1,
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            region: "auto".into(),
+            bucket: "backup-bucket".into(),
+            access_key_id: "test-access-key".into(),
+            secret_access_key: SecretString::from("test-secret-key"),
+            prefix: "backups".into(),
+            force_path_style: true,
+        };
+        let mut probe =
+            tokio::spawn(
+                async move { S3ObjectStoreAdapter::new().test_connection(&storage).await },
+            );
+        let (mut put, request, body) = accept_request(&listener).await;
+        assert!(request.starts_with("PUT "));
+        let object_path = request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .split('?')
+            .next()
+            .unwrap()
+            .to_owned();
+        respond(&mut put, &xml_response("")).await;
+        let (mut head, request, _) = accept_request(&listener).await;
+        assert!(request.starts_with("HEAD "));
+        respond(&mut head, "HTTP/1.1 200 OK\r\ncontent-length: 64\r\nx-amz-meta-probe: backup-connection-test\r\nconnection: close\r\n\r\n").await;
+        let (mut get, request, _) = accept_request(&listener).await;
+        assert!(request.starts_with("GET "));
+        get.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 64\r\nconnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        get.write_all(&body[..32]).await.unwrap();
+        get.shutdown().await.unwrap();
+        drop(get);
+        let (mut delete, request, _) = tokio::select! {
+            result = &mut probe => panic!("probe returned before cleaning up the uploaded object: {result:?}"),
+            request = accept_request(&listener) => request,
+        };
+        assert!(request.starts_with("DELETE "));
+        let delete_path = request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .split('?')
+            .next()
+            .unwrap();
+        assert_eq!(delete_path, object_path);
+        respond(
+            &mut delete,
+            &if delete_allowed {
+                xml_response("")
+            } else {
+                error_response("403 Forbidden", "AccessDenied")
+            },
+        )
+        .await;
+        let result = tokio::time::timeout(Duration::from_secs(3), probe)
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("body failure is a staged connection test result");
+        assert!(!result.ok);
+        assert_eq!(result.stage, "getObject");
+        assert_eq!(result.code, Some(code::UPSTREAM_FAILURE));
+        assert_eq!(result.message, "读取探针对象响应失败");
     }
 }

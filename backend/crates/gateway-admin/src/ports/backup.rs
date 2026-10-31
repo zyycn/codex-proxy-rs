@@ -136,9 +136,10 @@ pub trait BackupRepository: Send + Sync {
         timezone: &str,
     ) -> AdminStoreResult<bool>;
 
-    /// 按完成时间倒序读取 completed 计划备份，供保留策略扫描（最多 `limit` 条）
+    /// 按完成时间及 ID 倒序分页读取 completed 计划备份，offset 相对完整集合
     async fn list_scheduled_completed_desc(
         &self,
+        offset: u64,
         limit: u32,
     ) -> AdminStoreResult<Vec<BackupRecord>>;
 }
@@ -388,6 +389,7 @@ impl BackupRepository for UnavailableBackupRepository {
     }
     async fn list_scheduled_completed_desc(
         &self,
+        _offset: u64,
         _limit: u32,
     ) -> AdminStoreResult<Vec<BackupRecord>> {
         Err(disabled_store())

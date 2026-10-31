@@ -38,8 +38,8 @@ use super::policy::{BackupSchedule, decide_retention};
 const BACKUP_LOOP_INTERVAL: Duration = Duration::from_secs(30);
 /// 每个循环最多执行的保留删除数量
 const RETENTION_BATCH_SIZE: usize = 10;
-/// 保留扫描一次读取的 completed 计划备份上限
-const RETENTION_SCAN_LIMIT: u32 = 1000;
+/// 保留扫描每页读取的 completed 计划备份数量
+const RETENTION_PAGE_SIZE: u32 = 1000;
 /// 每个循环最多完成的待删除记录数量
 const PENDING_DELETION_BATCH: u32 = 20;
 
@@ -112,7 +112,7 @@ impl BackupTask {
         self.recover_intermediate(cancellation).await?;
         self.finish_pending_deletions().await?;
         self.process_next_task(cancellation).await?;
-        self.run_retention_batch(Utc::now()).await?;
+        self.run_retention_batch(Utc::now(), cancellation).await?;
         Ok(())
     }
 
@@ -637,7 +637,11 @@ impl BackupTask {
     }
 
     /// 执行一小批到期保留清理：先处理 `expires_at` 已到期的记录，再按天数/份数清理计划备份
-    async fn run_retention_batch(&self, now: DateTime<Utc>) -> Result<(), WorkerTaskError> {
+    async fn run_retention_batch(
+        &self,
+        now: DateTime<Utc>,
+        cancellation: &CancellationToken,
+    ) -> Result<(), WorkerTaskError> {
         let settings = self.repository.load_settings().await.map_err(repo_error)?;
 
         // 1. expires_at 已到期的记录（手动或计划）无条件进入删除
@@ -659,18 +663,41 @@ impl BackupTask {
         }
 
         // 2. 计划备份按 retentionDays / retentionCount 清理
-        let records = self
-            .repository
-            .list_scheduled_completed_desc(RETENTION_SCAN_LIMIT)
-            .await
-            .map_err(repo_error)?;
-        let decisions = decide_retention(
-            settings.retention_days,
-            settings.retention_count,
-            now,
-            &records,
-        );
-        for decision in decisions.into_iter().take(RETENTION_BATCH_SIZE) {
+        if settings.retention_days == 0 && settings.retention_count == 0 {
+            return Ok(());
+        }
+        let mut offset = 0;
+        let mut decisions = Vec::new();
+        loop {
+            if cancellation.is_cancelled() {
+                return Ok(());
+            }
+            let records = self
+                .repository
+                .list_scheduled_completed_desc(offset, RETENTION_PAGE_SIZE)
+                .await
+                .map_err(repo_error)?;
+            let remaining = RETENTION_BATCH_SIZE - decisions.len();
+            decisions.extend(
+                decide_retention(
+                    settings.retention_days,
+                    settings.retention_count,
+                    now,
+                    offset,
+                    &records,
+                )
+                .into_iter()
+                .take(remaining),
+            );
+            if decisions.len() == RETENTION_BATCH_SIZE
+                || records.len() < RETENTION_PAGE_SIZE as usize
+            {
+                break;
+            }
+            offset += records.len() as u64;
+        }
+        // 收齐本批候选后再删除，避免删除前页记录导致后续分页跳过数据
+        for decision in decisions {
             let Some(record) = self
                 .repository
                 .transition_to_deleting(&decision.record_id, now, None)

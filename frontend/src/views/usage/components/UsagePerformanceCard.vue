@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
 
-import type { getUsageRecordInsightsOverview } from '@/api'
+import type { UsageMetricResponse, UsageOverviewLoad, UsagePerformanceMetric } from '@/api'
 import { ZCard, ZEmpty, ZSegmented } from '@codex-proxy/ui'
 
-import { computed, shallowRef } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { requestActivityByBucket, zeroInactiveValues } from '@/components/charts/timeSeriesGap'
+import { zeroInactiveValues } from '@/components/charts/timeSeriesGap'
 import { chartTooltipContent, tooltipIndex, tooltipRows } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 import { formatLocalizedCompactNumber as formatCompactNumber, formatDuration } from '@/utils/format'
@@ -24,8 +24,8 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    performance: Performance
-    activity: Activity
+    performance: UsageMetricResponse<UsagePerformanceMetric> | null
+    error?: string
     loading?: boolean
   }>(),
   {
@@ -35,33 +35,25 @@ const props = withDefaults(
 
 const { t } = useI18n({ useScope: 'global' })
 
-type Performance = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['performance']
-type PerformancePoint = Performance['points'][number]
-type PerformanceMetric = Exclude<keyof PerformancePoint, 'bucket' | 'label' | 'load'>
-
 interface PerformanceSeries {
-  field: PerformanceMetric | keyof PerformancePoint['load']
-  value: (point: Omit<Performance, 'points'>) => number | null
+  field: string
+  summary: number | null
+  values: (number | null)[]
   label: string
   color: string
   yAxisIndex: number
   format: (value: number | null) => string
 }
 
-type Activity = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']['points']
-
-const activeView = shallowRef('total')
+const activeView = defineModel<UsagePerformanceMetric>({ required: true })
 const { palette } = useChartPalette()
-const performancePoints = computed<PerformancePoint[]>(() => props.performance.points)
-const requestActivity = computed(() => requestActivityByBucket(
-  performancePoints.value.map(point => point.bucket),
-  props.activity,
-))
+const performancePoints = computed(() => props.performance?.data.points ?? [])
+const requestActivity = computed(() => performancePoints.value.map(point => point.requestCount > 0))
 
 const viewOptions = computed(() => ([
   {
     label: t('usage.latency.totalLatency'),
-    value: 'total',
+    value: 'latency',
   },
   {
     label: t('usage.ttft'),
@@ -78,12 +70,14 @@ const viewOptions = computed(() => ([
 ]))
 
 const seriesDefinitions = computed<PerformanceSeries[]>(() => {
+  const response = props.performance
+  if (!response || response.metric !== activeView.value)
+    return []
   const theme = palette.value
-  if (activeView.value === 'load') {
-    return [
+  if (response.metric === 'load') {
+    const fields: { field: keyof UsageOverviewLoad, label: string, color: string, yAxisIndex: number, format: (value: number | null) => string }[] = [
       {
         field: 'averageConcurrency',
-        value: point => point.load.averageConcurrency,
         label: t('usage.performance.averageConcurrency'),
         color: theme.info,
         yAxisIndex: 0,
@@ -91,7 +85,6 @@ const seriesDefinitions = computed<PerformanceSeries[]>(() => {
       },
       {
         field: 'peakConcurrency',
-        value: point => point.load.peakConcurrency,
         label: t('usage.performance.peakConcurrency'),
         color: theme.warning,
         yAxisIndex: 0,
@@ -99,7 +92,6 @@ const seriesDefinitions = computed<PerformanceSeries[]>(() => {
       },
       {
         field: 'admissionDecisionP95Ms',
-        value: point => point.load.admissionDecisionP95Ms,
         label: t('usage.performance.admissionP95'),
         color: theme.success,
         yAxisIndex: 1,
@@ -107,52 +99,56 @@ const seriesDefinitions = computed<PerformanceSeries[]>(() => {
       },
       {
         field: 'accountSelectionWaitP95Ms',
-        value: point => point.load.accountSelectionWaitP95Ms,
         label: t('usage.performance.accountSelectionP95'),
         color: theme.reasoning,
         yAxisIndex: 1,
         format: formatDuration,
       },
     ]
+    return fields.map(item => ({
+      ...item,
+      summary: response.data.summary[item.field],
+      values: response.data.points.map(point => point.value[item.field]),
+    }))
   }
-  const throughput = activeView.value === 'throughput'
-  const fields: PerformanceMetric[] = throughput
-    ? ['outputThroughputP10', 'outputThroughputP50', 'outputThroughputP90']
-    : activeView.value === 'firstToken'
-      ? ['firstTokenP50Ms', 'firstTokenP95Ms', 'firstTokenP99Ms']
-      : ['latencyP50Ms', 'latencyP95Ms', 'latencyP99Ms']
-  const labels = throughput
-    ? ['P10', 'P50', 'P90']
-    : ['P50', 'P95', 'P99']
   const colors = [theme.info, theme.warning, theme.danger]
-  return fields.map((field, index) => ({
+  if (response.metric === 'throughput') {
+    return (['p10', 'p50', 'p90'] as const).map((field, index) => ({
+      field,
+      summary: response.data.summary[field],
+      values: response.data.points.map(point => point.value[field]),
+      label: field.toUpperCase(),
+      color: colors[index]!,
+      yAxisIndex: 0,
+      format: formatThroughput,
+    }))
+  }
+  return (['p50Ms', 'p95Ms', 'p99Ms'] as const).map((field, index) => ({
     field,
-    value: point => point[field],
-    label: labels[index]!,
+    summary: response.data.summary[field],
+    values: response.data.points.map(point => point.value[field]),
+    label: ['P50', 'P95', 'P99'][index]!,
     color: colors[index]!,
     yAxisIndex: 0,
-    format: throughput ? formatThroughput : formatDuration,
+    format: formatDuration,
   }))
 })
 
-const selectedSeries = computed(() => seriesDefinitions.value.map((series) => {
-  const values = performancePoints.value.map(series.value)
-  return {
-    ...series,
-    // 并发包含之前时间桶开始的请求，不按本桶新请求数补零
-    values: series.field === 'averageConcurrency' || series.field === 'peakConcurrency'
-      ? values
-      : zeroInactiveValues(values, requestActivity.value),
-  }
-}))
+const selectedSeries = computed(() => seriesDefinitions.value.map(series => ({
+  ...series,
+  // 并发包含之前时间桶开始的请求，不按本桶新请求数补零
+  values: series.field === 'averageConcurrency' || series.field === 'peakConcurrency'
+    ? series.values
+    : zeroInactiveValues(series.values, requestActivity.value),
+})))
 
 const summaryMetrics = computed(() => seriesDefinitions.value.map(series => ({
   label: series.label,
-  value: series.format(series.value(props.performance)),
+  value: series.format(series.summary),
 })))
 
 const hasData = computed(() => !props.loading
-  && seriesDefinitions.value.some(series => performancePoints.value.some(point => series.value(point) != null)))
+  && seriesDefinitions.value.some(series => series.values.some(value => value != null)))
 
 const chartOption = computed<EChartsOption>(() => {
   const theme = palette.value
@@ -241,7 +237,7 @@ function formatThroughput(value: number | null) {
   >
     <template #actions>
       <div class="flex justify-end">
-        <ZSegmented v-model="activeView" :aria-label="t('usage.performance.performanceIndicators')" :options="viewOptions" :disabled="loading" />
+        <ZSegmented v-model="activeView" :aria-label="t('usage.performance.performanceIndicators')" :options="viewOptions" />
       </div>
     </template>
 
@@ -265,7 +261,7 @@ function formatThroughput(value: number | null) {
           size="small"
           surface="none"
           :title="
-            loading
+            error || (loading
               ? t('usage.performance.loading')
               : activeView === 'load'
                 ? t('usage.performance.noLoad')
@@ -273,7 +269,7 @@ function formatThroughput(value: number | null) {
                   ? t('usage.performance.noTtftSamples')
                   : activeView === 'throughput'
                     ? t('usage.performance.noThroughput')
-                    : t('usage.performance.noLatency')
+                    : t('usage.performance.noLatency'))
           "
           class="place-content-center"
         />

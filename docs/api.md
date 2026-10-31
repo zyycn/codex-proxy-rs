@@ -453,6 +453,10 @@ turn metadata 的 `workspaces` 也会保留仓库绝对路径、Git 远端地址
 切号或归属未知时移除。`x-codex-guardian`、`guardian_credits_requested` 和序列化
 `x-codex-turn-metadata` 内普通扩展的同名 `parent_response_id` 保持原样
 
+同一 Client Key、同一 OAuth 账号的 Guardian 请求可利用网关记录的父响应 WS 握手信息，
+尽力复用父请求的上游路由。路由 Cookie 仅在网关与上游之间使用，不传给客户端；
+网关重启、记录淘汰或 Cookie 到期后仍可按普通路由请求，不保证上游路由亲和
+
 #### WebSocket 与上游传输
 
 公开 HTTP 请求在路由匹配前经过已绑定的 `http` 中间件；插件可以改写握手路径和请求参数。
@@ -463,7 +467,7 @@ Responses WebSocket 接受文本消息，`response.create` 在同一连接串行
 留在有界接收队列中，待当前响应完成终结和写出后再逐条校验、准入与执行，不因请求提前到达而断开。
 接收队列容量为 32 个事件，超载仍关闭连接；Ping/Pong、客户端关闭和服务关闭不等待队列中的请求执行
 
-网关分别维护两段链路的心跳：上游 WS 被动回复 Pong，下游 WS 独立探活；Ping/Pong 不跨段转发，也不转换为 SSE 事件。
+网关分别维护两段链路的心跳：上游 WS 定时发送 Ping 保活并回复 Pong，下游 WS 独立探活；Ping/Pong 不跨段转发，也不转换为 SSE 事件。
 下游探活包含消息接收中的字节进度，完整消息收齐后才进入中间件与请求处理。
 客户端断开时取消当前执行，并释放仍归该客户端所有的上游连接。`response.completed` 只结束本轮响应，保留客户端 WS 等待下一轮请求
 
@@ -483,8 +487,12 @@ Responses WebSocket 接受文本消息，`response.create` 在同一连接串行
 跨账号缺少原连接上下文时，仍通过恢复错误要求客户端完整重放
 
 控制帧不重新选号、不创建推理 attempt。响应结束后原连接仍可接收控制帧并返回上游事件；
-下一轮执行使用新绑定的控制入口。除上述重试期间保留中断的情况外，尚未建立原连接、原连接已失效、
-实际走 HTTP 或 Provider 未提供控制通道时返回 `400`，不能通过控制帧新建上游连接
+下一轮执行使用新绑定的控制入口。没有绑定上游控制通道时（包括实际走 HTTP），有效的
+`response.interrupt` / `discard_partial_items` 请求返回带原 `response_id` 的
+`response.interrupt.failed`，当前模型响应继续交付真实事件与终态，客户端可收完后再续接。
+该事件只表示网关无法转发中断，不表示上游已停止生成或丢弃部分输出。
+未知控制消息、未知模式或无效响应 ID 字段在无控制通道时仍返回 `400`。
+除上述重试期间保留中断的情况外，已绑定的原连接失效或发送失败仍返回 `400`，不能通过控制帧新建上游连接
 
 中断后继续转发上游事件与终态；只有 `response.incomplete` 的 `incomplete_details.reason` 为
 `interrupted` 时，才按官方中断语义保留原连接续接能力。部分输出是否被丢弃以上游终态为准。
@@ -957,9 +965,9 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `POST` | `/api/admin/accounts/reset-credits` | `{ accountId, creditId?, redeemRequestId }` | 使用 UUIDv4 幂等键消费一张 Provider 重置卡 |
 | `GET` | `/api/admin/accounts/reset-credits/automation` | `accountId` | 读取自动使用开关与本地计划，不查询上游 |
 | `POST` | `/api/admin/accounts/reset-credits/automation` | `{ accountId, enabled }` | 设置账号自动使用开关，默认关闭 |
-| `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取该 Provider + 套餐的模型 cache，缺失时有限实时拉取 |
+| `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取 Provider 模型目录缓存，缺失时有限实时拉取；返回 `{ models, observedAt, observedAtDisplay }` |
 | `GET` | `/api/admin/accounts/models/catalog` | `accountId` | 读取指定账号的完整 Codex 原生模型目录，返回 `{ modelCount, observedAt, catalog }` |
-| `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖 cache |
+| `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖缓存，响应结构与模型目录查询相同 |
 | `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
 | `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyId?, outboundProxyUrl? }` | 为支持登录的 Provider 创建 flow；`accountId` 表示重新授权 |
 | `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl, settings? }` | 消费 OAuth callback；首次授权可附带账号设置，重新授权保留原设置 |
@@ -987,6 +995,11 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 模型目录导出保留上游原生模型对象和能力字段，不包含账号凭据；不支持 Codex 原生目录的账号不能导出。
 响应中的 `catalog` 可直接保存为 JSON 文件，用于 Codex 的 `model_catalog_json` 配置。
 账号设置保存不等待上游模型目录刷新完成
+
+模型目录查询和刷新响应中的 `observedAt` 表示 Provider 最近一次成功获取目录的时间，`observedAtDisplay` 按部署时区格式化；Provider 未提供观察时间时分别返回 `null` 和 `—`
+
+`models` 只表示上游目录返回了这些模型 ID，不表示 Responses、Chat Completions、Embeddings 等所有端点均已验证可用。
+连接测试仅验证所选模型在 Provider 测试路径上的请求，其他端点需通过对应请求确认；目录观察时间不改变路由或账号能力判断
 
 账号限流详情在 `quota` 中返回：`rateLimitReason` 为 `upstream_rate_limit`（上游临时限流）、
 `error_protection`（自定义错误规则触发保护）或 `null`。`recoveryProbeRequired` 表示解除冻结是否需要成功探测；
@@ -2309,7 +2322,10 @@ Dashboard 的当前账号摘要包含 `upstream`，结构与账号列表一致�
 | `GET` | `/api/admin/usage/records` | 请求记录分页列表 |
 | `GET` | `/api/admin/usage/records/detail` | 按 `id` 查询请求详情 |
 | `GET` | `/api/admin/usage/records/summary` | 当前筛选条件的请求汇总 |
-| `GET` | `/api/admin/usage/insights/overview` | 用量、成本与成功率洞察 |
+| `GET` | `/api/admin/usage/insights/overview` | 完整用量洞察 |
+| `GET` | `/api/admin/usage/insights/health` | 请求健康 |
+| `GET` | `/api/admin/usage/insights/performance` | 响应性能；`metric=latency\|firstToken\|throughput\|load` |
+| `GET` | `/api/admin/usage/insights/cost` | 成本效率；`metric=cost\|savings\|cache` |
 | `GET` | `/api/admin/usage/insights/diagnostics` | 按维度聚合诊断 |
 | `GET` | `/api/admin/operations/errors` | 运维错误分页列表 |
 | `GET` | `/api/admin/diagnostics/export` | 按 `requestId` 或 `errorId` 下载诊断 ZIP 附件 |
@@ -2331,7 +2347,7 @@ Dashboard 的当前账号摘要包含 `upstream`，结构与账号列表一致�
 
 `points[]` 提供趋势图与首页卡片使用的请求数、Tokens、缓存比例、错误数、成功率、
 `latencyValue`、首 Token P95、总延迟 P95 和输出吞吐 P50，以及时间标签与展示值
-请求并发与内部调度等待通过用量洞察的 `performance.load` 查询
+请求并发与内部调度等待通过 `/api/admin/usage/insights/performance?metric=load` 查询
 
 ### Dashboard 客户端身份
 
@@ -2368,7 +2384,7 @@ Dashboard 默认 `period=today`，用量、诊断和错误查询默认 `period=7
 Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚点
 
 请求明细列表接受 `currentPage`、`pageSize`、时间范围、`provider`、`clientApiKeyName`、`accountName`、`model` 和 `status`。
-汇总和洞察只接受时间范围与 `provider`；诊断另接受 `dimension`、`model` 和 `statusCode`。
+汇总和洞察接受时间范围与 `provider`；性能和成本另要求 `metric`，诊断另接受 `dimension`、`model` 和 `statusCode`。
 各接口拒绝未知参数，明细筛选不改变顶部统计范围
 
 请求列表的 `status` 可取 `success`、`error`、`all`，默认 `success`；未知值返回 `400`。
@@ -2387,7 +2403,7 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 `retryCount` 为额外执行尝试次数之和，`retryRate` 为发生过重试的请求数占该组请求数的比例，同一请求多次重试只计一次
 
 使用记录列表和错误排查列表的 `accountPlanType` / `accountPlanTypeDisplay` 来自记录保存的账号订阅快照。
-账号维度诊断使用该账号最近请求的订阅快照；未保存订阅时为 `null`
+账号维度诊断使用该账号最近请求的订阅快照，并通过 `authenticationKind` 返回同一请求的认证类型快照；未保存的字段为 `null`，非账号维度的认证类型为 `null`
 
 管理端请求列表及 Dashboard 最近请求中的 `accountNotes` 来自请求保存的账号备注快照，未保存时为 `null`
 
@@ -2412,6 +2428,20 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 
 运维错误列表的 `search` 使用字面量包含匹配，`%`、`_` 和 `\` 按普通字符处理，不支持密钥值或可见前缀搜索。
 请求详情通过 `/api/admin/usage/records/detail?id=...` 查询
+
+### 卡片洞察查询
+
+请求健康、响应性能、成本效率与热点诊断分别查询自己的路由；性能和成本按选中的 `metric` 查询，诊断按 `dimension` 查询。
+各卡片独立加载和显示错误，切换选项取消该卡片的旧请求；时间范围与平台筛选共同作用于所有卡片。
+`overview` 返回完整洞察，管理端卡片使用分项接口
+
+健康、性能与成本接口返回 `analytics`、`granularity`、`metric` 和 `data`。
+健康的 `metric` 固定为 `health`，`data` 含健康摘要和趋势；性能与成本的 `data` 含 `summary` 和 `points`，
+每个点包含 `bucket`、`label`、`requestCount` 和所选指标的 `value`。缺失样本保留 `null`，不填充未查询指标
+
+性能摘要与趋势分别返回总耗时分位数、首 Token 分位数、吞吐分位数或负载指标；只有 `metric=load` 读取请求并发。
+成本的三个选项共用费用、节省、溢价、每次成功请求费用和覆盖率摘要，趋势分别返回实际与无缓存估算费用、缓存节省或缓存比例。
+缺少 `metric`、选择其他卡片的指标或传入未知指标均返回 `400`
 
 ### 记录范围与统计口径
 

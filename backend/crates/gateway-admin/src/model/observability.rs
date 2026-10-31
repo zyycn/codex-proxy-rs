@@ -966,6 +966,7 @@ pub struct DiagnosticObservation {
     pub key: String,
     pub name: String,
     pub account_provider_kind: Option<String>,
+    pub account_authentication_kind: Option<String>,
     pub account_plan_type: Option<String>,
     pub request_count: u64,
     pub success_count: u64,
@@ -1353,11 +1354,90 @@ pub struct UsageInsights {
     pub providers: Vec<ProviderObservation>,
 }
 
+/// 单次洞察查询所需的指标，持久化层据此选择计数、分布与费用状态
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UsageInsightMetric {
+    Health,
+    Latency,
+    FirstToken,
+    Throughput,
+    Load,
+    Cost,
+    Savings,
+    Cache,
+}
+
+/// 单个指标的时间点，活动计数与指标共用读取快照
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageMetricPoint<T> {
+    pub bucket_start: DateTime<Utc>,
+    pub request_count: u64,
+    pub value: T,
+}
+
+/// 各指标复用时间序列形状，汇总与时间点保留各自的类型
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageMetricSeries<S, P = S> {
+    pub summary: S,
+    pub points: Vec<UsageMetricPoint<P>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageThroughputPercentiles {
+    pub p10: Option<u64>,
+    pub p50: Option<u64>,
+    pub p90: Option<u64>,
+}
+
+/// 成本卡片各视图共同显示的汇总
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageCostSummary {
+    pub estimated_cost: Option<DecimalAmount>,
+    pub cache_savings: Option<DecimalAmount>,
+    pub tier_premium: Option<DecimalAmount>,
+    pub cost_per_successful_request: Option<DecimalAmount>,
+    pub coverage: CostCoverage,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageCostComparison {
+    pub estimated_cost: Option<DecimalAmount>,
+    pub no_cache_cost: Option<DecimalAmount>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageCacheEfficiency {
+    pub input_tokens: u64,
+    pub cached_token_rate: f64,
+    pub cache_hit_request_rate: Option<f64>,
+}
+
+/// 只发布本次请求的指标，未查询的值不伪装成零
+#[derive(Debug, Clone, PartialEq)]
+pub enum UsageInsightData {
+    Health(UsageInsightsHealth),
+    Latency(UsageMetricSeries<LatencyPercentiles>),
+    FirstToken(UsageMetricSeries<LatencyPercentiles>),
+    Throughput(UsageMetricSeries<UsageThroughputPercentiles>),
+    Load(UsageMetricSeries<UsageInsightsLoad>),
+    Cost(UsageMetricSeries<UsageCostSummary, UsageCostComparison>),
+    Savings(UsageMetricSeries<UsageCostSummary, Option<DecimalAmount>>),
+    Cache(UsageMetricSeries<UsageCostSummary, UsageCacheEfficiency>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageInsight {
+    pub analytics: AnalyticsMetadata,
+    pub granularity: Granularity,
+    pub data: UsageInsightData,
+}
+
 /// 已完成分母计算的诊断项
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiagnosticsItem {
     pub key: String,
     pub name: String,
+    pub account_authentication_kind: Option<String>,
     pub account_plan_type: Option<String>,
     pub account_plan_type_display: Option<String>,
     pub request_count: u64,

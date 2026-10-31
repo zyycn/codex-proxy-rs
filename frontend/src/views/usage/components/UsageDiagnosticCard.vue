@@ -12,7 +12,8 @@ import { formatLocalizedCompactNumber as formatCompactNumber, formatDuration, fo
 
 const props = withDefaults(
   defineProps<{
-    diagnostics: Diagnostics
+    diagnostics: Diagnostics | null
+    error?: string
     loading?: boolean
   }>(),
   {
@@ -53,7 +54,7 @@ const dimensionOptions = computed(() => ([
   },
 ]))
 
-const resultDimension = computed(() => props.diagnostics.dimension || dimension.value)
+const resultDimension = computed(() => props.diagnostics?.dimension || dimension.value)
 const resultDimensionLabel = computed(
   () => dimensionOptions.value.find(option => option.value === resultDimension.value)?.label ?? t('usage.diagnostics.dimensions'),
 )
@@ -116,7 +117,7 @@ type DiagnosticDisplayItem = Diagnostics['items'][number] & {
 }
 
 const displayItems = computed<DiagnosticDisplayItem[]>(() =>
-  props.diagnostics.items.map(item => ({
+  (props.diagnostics?.items ?? []).map(item => ({
     ...item,
     nameDisplay: diagnosticNameDisplay(item.name),
   })),
@@ -155,7 +156,6 @@ function diagnosticNameDisplay(name: string) {
           v-model="dimension"
           :aria-label="t('usage.diagnostics.diagnosticDimension')"
           :options="dimensionOptions"
-          :disabled="loading"
         />
       </div>
     </template>
@@ -200,9 +200,10 @@ function diagnosticNameDisplay(name: string) {
 
         <template #accountPlanType="{ row }">
           <AccountPlanBadge
-            v-if="row.accountPlanType"
+            v-if="row.authenticationKind === 'api_key' || row.accountPlanType"
+            :authentication-kind="row.authenticationKind ?? undefined"
             :plan-type="row.accountPlanType"
-            :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType"
+            :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType || ''"
             size="sm"
           />
           <span v-else class="text-cp-text-quaternary">—</span>
@@ -263,7 +264,7 @@ function diagnosticNameDisplay(name: string) {
         v-else
         size="small"
         surface="none"
-        :title="loading ? t('usage.diagnostics.loading') : t('usage.diagnostics.empty')"
+        :title="error || (loading ? t('usage.diagnostics.loading') : t('usage.diagnostics.empty'))"
         class="h-full min-h-40 place-content-center"
       />
     </template>

@@ -470,7 +470,8 @@ impl BackupRepository for FakeBackupRepository {
 
     async fn list_scheduled_completed_desc(
         &self,
-        _limit: u32,
+        offset: u64,
+        limit: u32,
     ) -> AdminStoreResult<Vec<BackupRecord>> {
         let mut records = self
             .records
@@ -488,7 +489,11 @@ impl BackupRepository for FakeBackupRepository {
                 .cmp(&a.completed_at)
                 .then_with(|| b.id.cmp(&a.id))
         });
-        Ok(records)
+        Ok(records
+            .into_iter()
+            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+            .take(limit as usize)
+            .collect())
     }
 }
 

@@ -369,6 +369,8 @@ export interface AccountResetCreditResultResponse {
 
 export interface AccountModelsResponse {
   models: Array<{ id: string, label: string }>
+  observedAt?: string | null
+  observedAtDisplay?: string
 }
 
 export interface AccountModelCatalogResponse {

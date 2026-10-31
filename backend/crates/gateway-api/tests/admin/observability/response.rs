@@ -670,67 +670,84 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
 
     use crate::admin::{AdminTestFixture, AdminTestState};
 
-    let fixture = AdminTestFixture::new().await;
-    fixture.auth.insert_session("valid-session");
-    *fixture.diagnostics.lock().expect("diagnostics") = DiagnosticsObservation {
-        analytics: Default::default(),
-        total_request_count: 4,
-        items: vec![DiagnosticObservation {
-            key: "acct_diag".to_owned(),
-            account_provider_kind: Some("openai".to_owned()),
-            account_plan_type: Some("pro".to_owned()),
-            name: "diag@example.invalid".to_owned(),
-            request_count: 2,
-            success_count: 2,
-            failure_count: 0,
-            attempt_count: 5,
-            total_tokens: 200,
-            average_latency_ms: Some(100),
-            latency_p95_ms: Some(3800),
-            first_token_p95_ms: Some(1200),
-            non_completion_count: 0,
-            retry_count: 3,
-            retried_request_count: 1,
-            cost_coverage: CostCoverage::default(),
-            costs: Vec::new(),
-        }],
-    };
-    let response = observability::router::<AdminTestState>()
-        .with_state(fixture.state())
-        .oneshot(
-            Request::builder()
-                .uri("/api/admin/usage/insights/diagnostics?dimension=account")
-                .header(header::COOKIE, "cpr_session=valid-session")
-                .header("x-request-id", "req_diagnostics_snapshot")
-                .body(Body::empty())
-                .expect("diagnostics request"),
-        )
-        .await
-        .expect("diagnostics response");
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), 1024 * 1024)
-        .await
-        .expect("diagnostics body");
-    let value: serde_json::Value = serde_json::from_slice(&body).expect("diagnostics JSON");
-    assert_eq!(value["data"]["items"][0]["requestShare"], 0.5);
-    assert_eq!(value["data"]["items"][0]["retryCount"], 3);
-    assert_eq!(value["data"]["items"][0]["retryRate"], 0.5);
-    assert_eq!(value["data"]["items"][0]["accountPlanType"], "pro");
-    assert_eq!(value["data"]["items"][0]["accountPlanTypeDisplay"], "Pro");
-    assert_eq!(
-        (
-            &value["data"]["items"][0]["key"],
-            &value["data"]["items"][0]["name"],
-            &value["data"]["items"][0]["latencyP95Ms"],
-            &value["data"]["dimension"],
-        ),
-        (
-            &serde_json::json!("acct_diag"),
-            &serde_json::json!("diag@example.invalid"),
-            &serde_json::json!(3800),
-            &serde_json::json!("account"),
-        )
-    );
+    for (authentication_kind, plan_type, plan_display) in [
+        (Some("oauth"), Some("pro"), Some("Pro")),
+        (Some("api_key"), None, None),
+        (None, None, None),
+    ] {
+        let fixture = AdminTestFixture::new().await;
+        fixture.auth.insert_session("valid-session");
+        *fixture.diagnostics.lock().expect("diagnostics") = DiagnosticsObservation {
+            analytics: Default::default(),
+            total_request_count: 4,
+            items: vec![DiagnosticObservation {
+                key: "acct_diag".to_owned(),
+                account_provider_kind: Some("openai".to_owned()),
+                account_authentication_kind: authentication_kind.map(str::to_owned),
+                account_plan_type: plan_type.map(str::to_owned),
+                name: "diag@example.invalid".to_owned(),
+                request_count: 2,
+                success_count: 2,
+                failure_count: 0,
+                attempt_count: 5,
+                total_tokens: 200,
+                average_latency_ms: Some(100),
+                latency_p95_ms: Some(3800),
+                first_token_p95_ms: Some(1200),
+                non_completion_count: 0,
+                retry_count: 3,
+                retried_request_count: 1,
+                cost_coverage: CostCoverage::default(),
+                costs: Vec::new(),
+            }],
+        };
+        let response = observability::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/usage/insights/diagnostics?dimension=account")
+                    .header(header::COOKIE, "cpr_session=valid-session")
+                    .header("x-request-id", "req_diagnostics_snapshot")
+                    .body(Body::empty())
+                    .expect("diagnostics request"),
+            )
+            .await
+            .expect("diagnostics response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("diagnostics body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("diagnostics JSON");
+        assert_eq!(value["data"]["items"][0]["requestShare"], 0.5);
+        assert_eq!(value["data"]["items"][0]["retryCount"], 3);
+        assert_eq!(value["data"]["items"][0]["retryRate"], 0.5);
+        assert_eq!(
+            value["data"]["items"][0]["authenticationKind"],
+            serde_json::json!(authentication_kind)
+        );
+        assert_eq!(
+            value["data"]["items"][0]["accountPlanType"],
+            serde_json::json!(plan_type)
+        );
+        assert_eq!(
+            value["data"]["items"][0]["accountPlanTypeDisplay"],
+            serde_json::json!(plan_display)
+        );
+        assert_eq!(
+            (
+                &value["data"]["items"][0]["key"],
+                &value["data"]["items"][0]["name"],
+                &value["data"]["items"][0]["latencyP95Ms"],
+                &value["data"]["dimension"],
+            ),
+            (
+                &serde_json::json!("acct_diag"),
+                &serde_json::json!("diag@example.invalid"),
+                &serde_json::json!(3800),
+                &serde_json::json!("account"),
+            )
+        );
+    }
 }
 
 pub(super) fn usage_record_with_account(
@@ -1380,6 +1397,157 @@ async fn usage_insights_maps_load_summary_and_points_to_camel_case() {
             "accountSelectionWaitP95Ms": null,
         })
     );
+}
+
+#[tokio::test]
+async fn usage_card_routes_return_only_the_selected_metric_and_validate_options() {
+    use crate::admin::{AdminTestFixture, AdminTestState};
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use chrono::Duration;
+    use gateway_admin::model::observability::{
+        AttemptMetrics, CurrencyCost, Granularity, LatencyPercentiles, PercentileMilliseconds,
+        RequestMetricPoint, RequestMetrics, TimeRange, UsageConcurrencyPoint, UsageOverview,
+    };
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let now = Utc::now();
+    let range = TimeRange::new(now - Duration::minutes(15), now).unwrap();
+    let metrics = RequestMetrics {
+        request_count: 10,
+        success_count: 8,
+        failure_count: 2,
+        latency_percentiles: LatencyPercentiles {
+            p95_ms: Some(PercentileMilliseconds::new(43.5).unwrap()),
+            ..Default::default()
+        },
+        first_token_latency_percentiles: LatencyPercentiles {
+            p95_ms: Some(PercentileMilliseconds::new(17.25).unwrap()),
+            ..Default::default()
+        },
+        output_throughput_p50: Some(22),
+        ..Default::default()
+    };
+    {
+        let mut observations = fixture.observations.lock().unwrap();
+        observations.summary = Some(UsageOverview {
+            analytics: Default::default(),
+            range,
+            requests: metrics.clone(),
+            attempts: AttemptMetrics {
+                costs: vec![CurrencyCost {
+                    currency: "USD".into(),
+                    amount: "12.5".parse().unwrap(),
+                }],
+                ..Default::default()
+            },
+            providers: Vec::new(),
+        });
+        observations.trend = Some(vec![RequestMetricPoint {
+            bucket_start: range.start,
+            granularity: Granularity::FifteenMinutes,
+            metrics,
+            cost_coverage: Default::default(),
+            costs: Vec::new(),
+        }]);
+        observations.concurrency = vec![UsageConcurrencyPoint {
+            bucket_start: range.start,
+            average_concurrency: 1.25,
+            peak_concurrency: 3,
+        }];
+    }
+    let router = observability::router::<AdminTestState>().with_state(fixture.state());
+    for (path, metric, field, expected) in [
+        ("health", "health", "totalRequests", json!(10)),
+        (
+            "performance?metric=latency",
+            "latency",
+            "p95Ms",
+            json!(43.5),
+        ),
+        (
+            "performance?metric=firstToken",
+            "firstToken",
+            "p95Ms",
+            json!(17.25),
+        ),
+        (
+            "performance?metric=throughput",
+            "throughput",
+            "p50",
+            json!(22),
+        ),
+        (
+            "performance?metric=load",
+            "load",
+            "peakConcurrency",
+            json!(3),
+        ),
+        ("cost?metric=cost", "cost", "estimatedCost", json!("12.5")),
+        (
+            "cost?metric=savings",
+            "savings",
+            "estimatedCost",
+            json!("12.5"),
+        ),
+        ("cost?metric=cache", "cache", "estimatedCost", json!("12.5")),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/admin/usage/insights/{path}"))
+                    .header(header::COOKIE, "cpr_session=valid-session")
+                    .header("x-request-id", "req_usage_card_metric")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, StatusCode::OK, "{path}: {value}");
+        let result = &value["data"];
+        assert_eq!(result["metric"], metric);
+        assert_eq!(result.as_object().unwrap().len(), 4);
+        let data = &result["data"];
+        if metric == "health" {
+            assert_eq!(data[field], expected);
+        } else {
+            assert_eq!(data["summary"][field], expected, "{path}");
+            assert_eq!(data["points"][0]["requestCount"], 10);
+            assert_eq!(data.as_object().unwrap().len(), 2);
+        }
+    }
+    for path in [
+        "performance",
+        "cost",
+        "performance?metric=cost",
+        "cost?metric=load",
+        "health?metric=load",
+        "performance?metric=unknown",
+        "cost?metric=cache&status=error",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/admin/usage/insights/{path}"))
+                    .header(header::COOKIE, "cpr_session=valid-session")
+                    .header("x-request-id", "req_usage_card_metric")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+    }
 }
 
 #[tokio::test]

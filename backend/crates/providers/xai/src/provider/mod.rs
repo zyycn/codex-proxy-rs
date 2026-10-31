@@ -903,6 +903,7 @@ fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
         .iter()
         .map(|effort| effort.as_str().to_owned())
         .collect::<Vec<_>>();
+    let reasoning_summary = reasoning_efforts.iter().any(|effort| effort != "none");
     let default_reasoning = model
         .capabilities()
         .default_reasoning_effort()
@@ -918,6 +919,7 @@ fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
         model.metadata().description().map(str::to_owned),
     )
     .with_reasoning(default_reasoning, reasoning_efforts)
+    .with_reasoning_summary(reasoning_summary)
     .with_context_window_tokens(context_window_tokens)
     .with_max_context_window_tokens(
         model

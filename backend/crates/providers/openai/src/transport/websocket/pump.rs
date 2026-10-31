@@ -1,4 +1,4 @@
-//! 单 owner 驱动上游 WebSocket，被动回复心跳并在终止后有界释放 socket
+//! 单 owner 驱动上游 WebSocket，定时保活、回复心跳并在终止后有界释放 socket
 //!
 //! 业务消息通过有界队列交付，Ping/Pong 由 pump 消费，不刷新生成期间的消息等待超时
 //! 入站背压暂停读取，仍可接收关闭命令；已观察到的终止先释放 socket，再等待终止消息交付
@@ -42,6 +42,8 @@ pub(crate) type RawWsStream = Box<dyn WebSocketIo>;
 
 const PUMP_COMMAND_BUFFER: usize = 32;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+const PING_INTERVAL: Duration = Duration::from_secs(25);
+const PING_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const PONG_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// pump 日志的账号级关联上下文；空闲连接被上游重置等场景用于回溯归属
@@ -78,6 +80,9 @@ pub(crate) enum PumpExitReason {
         message: String,
         metric_reason: &'static str,
     },
+    PingWriteTimeout {
+        timeout: Duration,
+    },
     PongWriteTimeout {
         timeout: Duration,
     },
@@ -97,6 +102,7 @@ impl PumpExitReason {
             Self::UpstreamCloseFrame { .. } => "upstream_close_frame",
             Self::UpstreamEof => "upstream_eof",
             Self::InboundTransportError { .. } => "inbound_transport_error",
+            Self::PingWriteTimeout { .. } => "ping_write_timeout",
             Self::PongWriteTimeout { .. } => "pong_write_timeout",
             Self::KeepaliveTransportError { .. } => "keepalive_transport_error",
             Self::MessageReceiverClosed => "message_receiver_closed",
@@ -109,7 +115,9 @@ impl PumpExitReason {
             | Self::InboundTransportError { message, .. }
             | Self::KeepaliveTransportError { message, .. } => Some(message.clone()),
             Self::UpstreamCloseFrame { close } => close.as_ref().map(ToString::to_string),
-            Self::PongWriteTimeout { timeout } => Some(format!("{timeout:?}")),
+            Self::PingWriteTimeout { timeout } | Self::PongWriteTimeout { timeout } => {
+                Some(format!("{timeout:?}"))
+            }
             Self::CommandChannelClosed
             | Self::LocalClose
             | Self::UpstreamEof
@@ -132,6 +140,7 @@ impl PumpExitReason {
                 }
             }
             Self::UpstreamEof => "eof",
+            Self::PingWriteTimeout { .. } => "ping_write_timeout",
             Self::PongWriteTimeout { .. } => "pong_write_timeout",
             Self::MessageReceiverClosed => "message_receiver_closed",
         }
@@ -150,6 +159,7 @@ impl PumpExitReason {
             Self::OutboundTransportError { .. }
                 | Self::UpstreamEof
                 | Self::InboundTransportError { .. }
+                | Self::PingWriteTimeout { .. }
                 | Self::PongWriteTimeout { .. }
                 | Self::KeepaliveTransportError { .. }
         )
@@ -400,6 +410,9 @@ async fn pump_loop(
 ) {
     let mut pending_inbound = None;
     let mut backpressure_events = 0_u64;
+    // 首次保活留出完整间隔，背压恢复后跳过错过的 tick，避免集中补发
+    let mut heartbeat = tokio::time::interval_at(Instant::now() + PING_INTERVAL, PING_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let reason = 'pump: loop {
         if pending_inbound.is_some() {
@@ -432,6 +445,22 @@ async fn pump_loop(
                 };
                 if let Some(reason) = handle_command(&mut inner.stream, command, closed.load(Ordering::Acquire)).await {
                     break 'pump reason;
+                }
+            }
+            _ = heartbeat.tick() => {
+                // Ping 只保活链路，不设 Pong deadline，也不刷新业务空闲或连接池回收时间
+                match tokio::time::timeout(
+                    PING_WRITE_TIMEOUT,
+                    inner.stream.send(Message::Ping(Default::default())),
+                ).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => break 'pump PumpExitReason::KeepaliveTransportError {
+                        message: error.to_string(),
+                        metric_reason: transport_metric_reason(&error),
+                    },
+                    Err(_) => break 'pump PumpExitReason::PingWriteTimeout {
+                        timeout: PING_WRITE_TIMEOUT,
+                    },
                 }
             }
             message = inner.stream.next() => {

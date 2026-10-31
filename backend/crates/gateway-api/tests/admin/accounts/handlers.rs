@@ -77,6 +77,86 @@ async fn upstream_refresh_requires_admin_and_returns_an_accepted_generation() {
 }
 
 #[tokio::test]
+async fn account_model_reads_and_refreshes_preserve_provider_observation_time() {
+    use chrono::{DateTime, Utc};
+    use gateway_admin::model::provider_credentials::{ProviderModel, ProviderModels};
+    use gateway_core::{
+        account::{AccountStatusFacts, CredentialState, QuotaState},
+        routing::UpstreamModelId,
+    };
+    use serde_json::json;
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let observed_at: DateTime<Utc> = "2026-09-12T08:00:00Z".parse().unwrap();
+    *fixture.account.lock().unwrap() = Some(account_page_item(
+        AccountStatusFacts {
+            enabled: true,
+            credential_state: CredentialState::Ready,
+            access_token_expires_at: None,
+            quota: QuotaState::unknown(),
+            cooldown: None,
+            last_error_reason: None,
+            last_error_message: None,
+        },
+        observed_at,
+        "api_key",
+    ));
+    let router = admin::accounts::router::<AdminTestState>().with_state(fixture.state());
+    for observed_at in [Some(observed_at), None] {
+        *fixture.provider_models.lock().unwrap() = Some(ProviderModels {
+            models: vec![ProviderModel {
+                id: UpstreamModelId::new("model-a").unwrap(),
+                name: "Model A".to_owned(),
+            }],
+            observed_at,
+        });
+        for (method, uri, body) in [
+            (
+                "GET",
+                "/api/admin/accounts/models?accountId=acct_cooldown",
+                "",
+            ),
+            (
+                "POST",
+                "/api/admin/accounts/models/refresh",
+                r#"{"accountId":"acct_cooldown"}"#,
+            ),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("x-request-id", "req_model_catalog")
+                        .header(header::COOKIE, "cpr_session=valid-session")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+            let body = to_bytes(response.into_body(), 8192).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                value["data"]["models"],
+                json!([{ "id": "model-a", "label": "model-a" }])
+            );
+            assert_eq!(
+                value["data"]["observedAt"],
+                json!(observed_at.map(|_| "2026-09-12T16:00:00+08:00"))
+            );
+            assert_eq!(
+                value["data"]["observedAtDisplay"],
+                observed_at.map_or("—", |_| "2026-09-12 16:00:00")
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn account_proxy_binding_is_distinct_from_the_redacted_endpoint() {
     use chrono::Utc;
     use gateway_core::account::{AccountStatusFacts, CredentialState, OutboundProxy, QuotaState};

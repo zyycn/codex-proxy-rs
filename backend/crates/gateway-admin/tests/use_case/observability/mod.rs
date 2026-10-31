@@ -1047,6 +1047,50 @@ async fn dashboard_should_preserve_provider_plan_names() {
     }
 }
 
+#[tokio::test]
+async fn dashboard_and_usage_insights_keep_concurrency_cache_entries_separate() {
+    for dashboard_first in [true, false] {
+        let now = Utc::now();
+        let range = observation_range(now);
+        let store = Arc::new(FixtureObservabilityStore::new(range));
+        store
+            .concurrency
+            .lock()
+            .unwrap()
+            .push(UsageConcurrencyPoint {
+                bucket_start: range.start,
+                average_concurrency: 2.0,
+                peak_concurrency: 3,
+            });
+        let services = observability_services(store.clone()).await;
+        for dashboard in [
+            dashboard_first,
+            !dashboard_first,
+            dashboard_first,
+            !dashboard_first,
+        ] {
+            if dashboard {
+                services
+                    .observability()
+                    .dashboard_trend(range, TrendKind::Usage)
+                    .await
+                    .unwrap();
+            } else {
+                let result = services
+                    .observability()
+                    .usage_insights(range, UsageFilter::default())
+                    .await
+                    .unwrap();
+                assert_eq!(result.performance.load.peak_concurrency, 3);
+            }
+        }
+        assert_eq!(
+            *store.concurrency_selections.lock().unwrap(),
+            vec![!dashboard_first, dashboard_first]
+        );
+    }
+}
+
 struct FixtureObservabilityStore {
     yesterday: Mutex<RequestMetrics>,
     trend: Mutex<Vec<RequestMetricPoint>>,
@@ -1054,6 +1098,8 @@ struct FixtureObservabilityStore {
     projected_costs: Mutex<Vec<UsageProjectedCostPoint>>,
     concurrency: Mutex<Vec<UsageConcurrencyPoint>>,
     insights_fail: AtomicBool,
+    concurrency_selections: Mutex<Vec<bool>>,
+    metric_selections: Mutex<Vec<gateway_admin::model::observability::UsageInsightMetric>>,
     summary_fail: AtomicBool,
     diagnostics: Mutex<DiagnosticsObservation>,
     runtime_slots: Mutex<Option<DashboardRuntimeSlots>>,
@@ -1082,6 +1128,8 @@ impl FixtureObservabilityStore {
             projected_costs: Mutex::new(Vec::new()),
             concurrency: Mutex::new(Vec::new()),
             insights_fail: AtomicBool::new(false),
+            concurrency_selections: Mutex::new(Vec::new()),
+            metric_selections: Mutex::new(Vec::new()),
             summary_fail: AtomicBool::new(false),
             diagnostics: Mutex::new(DiagnosticsObservation::default()),
             runtime_slots: Mutex::new(None),
@@ -1198,8 +1246,13 @@ impl ObservabilityStore for FixtureObservabilityStore {
         _: TimeRange,
         _: UsageFilter,
         granularity: Granularity,
+        include_concurrency: bool,
     ) -> AdminStoreResult<UsageInsightsObservation> {
         self.usage_granularities.lock().unwrap().push(granularity);
+        self.concurrency_selections
+            .lock()
+            .unwrap()
+            .push(include_concurrency);
         if self.insights_fail.load(Ordering::SeqCst) {
             return Err(super::unavailable("projection read failed"));
         }
@@ -1211,8 +1264,29 @@ impl ObservabilityStore for FixtureObservabilityStore {
                 .lock()
                 .expect("projected costs")
                 .clone(),
-            concurrency: self.concurrency.lock().expect("concurrency").clone(),
+            concurrency: if include_concurrency {
+                self.concurrency.lock().expect("concurrency").clone()
+            } else {
+                Vec::new()
+            },
         })
+    }
+
+    async fn usage_metric_observation(
+        &self,
+        range: gateway_admin::model::observability::TimeRange,
+        filter: gateway_admin::model::observability::UsageFilter,
+        granularity: gateway_admin::model::observability::Granularity,
+        metric: gateway_admin::model::observability::UsageInsightMetric,
+    ) -> AdminStoreResult<gateway_admin::model::observability::UsageInsightsObservation> {
+        self.metric_selections.lock().unwrap().push(metric);
+        self.usage_insights_observation(
+            range,
+            filter,
+            granularity,
+            metric == gateway_admin::model::observability::UsageInsightMetric::Load,
+        )
+        .await
     }
 
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {
@@ -1486,6 +1560,7 @@ fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
         retry_count: 0,
         retried_request_count: 0,
         account_provider_kind: None,
+        account_authentication_kind: None,
         account_plan_type: None,
         key: name.to_owned(),
         name: name.to_owned(),
@@ -1741,4 +1816,49 @@ async fn insights_cache_should_reject_deleted_building_and_old_generation_times(
             "{reason}"
         );
     }
+}
+
+#[tokio::test]
+async fn usage_metric_cache_isolates_selections_and_filters() {
+    use gateway_admin::model::observability::UsageInsightMetric as Metric;
+    let range = observation_range(Utc::now());
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    let services = observability_services(store.clone()).await;
+    let metrics = [
+        Metric::Health,
+        Metric::Latency,
+        Metric::FirstToken,
+        Metric::Throughput,
+        Metric::Load,
+        Metric::Cost,
+        Metric::Savings,
+        Metric::Cache,
+    ];
+    for _ in 0..2 {
+        for metric in metrics {
+            services
+                .observability()
+                .usage_metric(range, UsageFilter::default(), metric)
+                .await
+                .unwrap();
+        }
+    }
+    assert_eq!(*store.metric_selections.lock().unwrap(), metrics);
+    assert_eq!(
+        *store.concurrency_selections.lock().unwrap(),
+        vec![false, false, false, false, true, false, false, false]
+    );
+    services
+        .observability()
+        .usage_metric(
+            range,
+            UsageFilter {
+                provider_kind: Some("openai".into()),
+                ..Default::default()
+            },
+            Metric::Latency,
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.metric_selections.lock().unwrap().len(), 9);
 }

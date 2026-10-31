@@ -396,6 +396,7 @@ pub(super) struct ColdResponse {
     pub(super) session_transport_key: Option<ProviderSessionAffinityKey>,
     pub(super) session_transport_key_hash: Option<String>,
     pub(super) session_transport_recovery: CodexSessionTransportRecovery,
+    pub(super) guardian_routing: guardian::GuardianRouting,
     pub(super) websocket_retry_count: u32,
     pub(super) stream_max_retries: u32,
     pub(super) session_capture: Option<OpenAiSessionCapture>,
@@ -781,6 +782,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         session_transport_key,
         session_transport_key_hash,
         session_transport_recovery,
+        guardian_routing,
         websocket_retry_count,
         stream_max_retries,
         mut session_capture,
@@ -951,6 +953,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             }
         }
         let response_transport = response.transport;
+        let routing_affinity = response.routing_affinity;
         let websocket_connection_id = response.websocket_connection_id;
         let mut body = response.body;
         let mut failure_diagnostics = response.diagnostics.clone();
@@ -1132,6 +1135,13 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 )
             });
             let timing_signals = decoder.take_timing_signals();
+            if let Some(affinity) = &routing_affinity {
+                for fact in events.iter().flat_map(ProviderEvent::canonical_facts) {
+                    if let GatewayEvent::Started(meta) = fact {
+                        guardian_routing.remember(context.client_api_key_ref(), active_account.id(), meta.response_id(), affinity);
+                    }
+                }
+            }
             let output_timing_changed = observation_state
                 .observe_timing_signals(timing_signals, context.timing_started_at());
             let upstream_timing_changed = observation_state

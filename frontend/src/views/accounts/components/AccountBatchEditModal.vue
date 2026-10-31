@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { AccountGroupRef, AccountModelAccess } from '@/api'
 
-import { ZButton, ZDialog } from '@codex-proxy/ui'
+import { ZButton, ZDialog, ZFormItem, ZSegmented } from '@codex-proxy/ui'
 
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
@@ -21,13 +22,37 @@ const emit = defineEmits<{
 const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ required: true })
-const enabled = defineModel<boolean>('enabled', { required: true })
+const enabled = defineModel<boolean | undefined>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
+const schedulingModes = computed(() => [
+  {
+    value: 'preserve',
+    label: t('accounts.scheduling.preserve'),
+  },
+  {
+    value: 'enabled',
+    label: t('accounts.actions.enableScheduling'),
+  },
+  {
+    value: 'disabled',
+    label: t('accounts.actions.disableScheduling'),
+  },
+])
+const schedulingMode = computed({
+  get: () => enabled.value === undefined
+    ? 'preserve'
+    : enabled.value ? 'enabled' : 'disabled',
+  set: (value: string) => {
+    enabled.value = value === 'preserve'
+      ? undefined
+      : value === 'enabled'
+  },
+})
 </script>
 
 <template>
@@ -40,7 +65,6 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
   >
     <div class="grid gap-5">
       <AccountSettingsFields
-        v-model:enabled="enabled"
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"
         v-model:model-access="modelAccess"
@@ -52,7 +76,19 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         :groups="groups"
         :groups-loading="groupsLoading"
         :disabled="saving"
-      />
+      >
+        <template #scheduling>
+          <ZFormItem :label="t('accounts.scheduling.scheduling')">
+            <ZSegmented
+              v-model="schedulingMode"
+              class="w-80 min-w-0 max-w-full"
+              :aria-label="t('accounts.scheduling.scheduling')"
+              :options="schedulingModes"
+              :disabled="saving"
+            />
+          </ZFormItem>
+        </template>
+      </AccountSettingsFields>
     </div>
 
     <template #footer>

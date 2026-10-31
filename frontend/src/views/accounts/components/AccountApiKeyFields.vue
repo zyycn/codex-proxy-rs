@@ -11,7 +11,7 @@ const { t } = useI18n({ useScope: 'global' })
 
 const form = defineModel<ApiKeyAccountForm>({ required: true })
 const transportOptions = [
-  { label: 'HTTP / SSE', value: 'http' },
+  { label: 'SSE', value: 'http' },
   { label: 'WS', value: 'prefer_websocket' },
 ]
 </script>

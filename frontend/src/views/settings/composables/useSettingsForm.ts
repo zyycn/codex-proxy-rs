@@ -414,8 +414,11 @@ export function useSettingsForm() {
       })
     }, {
       onError: (cause) => {
-        if (cause instanceof ApiError && cause.status !== 409)
+        // 明确拒绝的请求保留草稿，执行结果未知时仍回读设置以同步已提交的版本
+        if (cause instanceof ApiError && cause.status !== 409
+          && (cause.kind !== 'api' || cause.status < 400 || cause.status >= 500)) {
           void loadSettings(true)
+        }
       },
     })
   }

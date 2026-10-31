@@ -534,6 +534,7 @@ async fn unassigned_correction_changes_totals_without_inventing_dimension_member
             range,
             NativeFilter::default(),
             gateway_admin::model::observability::Granularity::Hour,
+            true,
         )
         .await
         .map(|snapshot| snapshot.overview)

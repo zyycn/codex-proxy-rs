@@ -45,7 +45,7 @@ watch(() => props.notes, recheckOpen, { flush: 'post' })
     <template #reference>
       <button
         type="button"
-        class="inline-flex min-w-0 max-w-full cursor-default touch-manipulation items-center rounded-cp-sm border-0 bg-transparent p-0 text-left text-cp-xs leading-4 text-cp-text-tertiary outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
+        class="inline-flex min-w-0 max-w-full cursor-default touch-manipulation items-center rounded-cp-sm border-0 bg-transparent p-0 text-left font-mono text-cp-xs leading-4 font-emphasis text-cp-text-quaternary outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
         :aria-label="t('accounts.notes.viewAccountNotes')"
         aria-haspopup="dialog"
         :aria-expanded="open"

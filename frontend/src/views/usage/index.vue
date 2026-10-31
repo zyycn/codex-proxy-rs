@@ -48,10 +48,14 @@ const {
   providerQuery,
   usagePagination,
   loading,
-  analyticsLoading,
   records,
   summary,
-  insights,
+  health,
+  performance,
+  cost,
+  diagnostics,
+  performanceMetric,
+  costMetric,
   refreshingList,
   diagnosticDimension,
   loadUsageRecords,
@@ -99,12 +103,15 @@ watch(timeRange, () => {
       </template>
     </ZPageHeader>
 
-    <UsageSummaryCards :summary="summary" />
+    <UsageSummaryCards :summary="summary.data" :loading="summary.loading" :error="summary.error" />
     <UsageInsightsGrid
       v-model:diagnostic-dimension="diagnosticDimension"
-      :overview="insights.overview"
-      :diagnostics="insights.diagnostics"
-      :loading="analyticsLoading"
+      v-model:performance-metric="performanceMetric"
+      v-model:cost-metric="costMetric"
+      :health="health"
+      :performance="performance"
+      :cost="cost"
+      :diagnostics="diagnostics"
     />
 
     <ZCard

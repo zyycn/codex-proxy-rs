@@ -41,7 +41,6 @@ const recentUsageEntry = computed(() => recentlyUsedQuotaEntry(
 const currentUsageWindow = computed(() => representativeQuotaWindow(recentUsageEntry.value)
   ?? recentUsageEntry.value?.windows.find(window => window.amount))
 const currentUsageDisplay = computed(() => currentUsageWindow.value?.usedPercentDisplay ?? '—')
-const hasUpstreamQuota = computed(() => Boolean(props.account.upstream?.discovered && props.account.upstream.node))
 const summaryValue = computed(() => {
   return {
     value: props.account.usage.totalTokens == null
@@ -63,10 +62,11 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
   <div class="box-border grid min-h-16.5 w-full min-w-0 content-center gap-1.5 py-1.5">
     <template v-if="summaryEntries.length > 0 || account.authenticationKind === 'api_key'">
       <div
-        v-if="hasUsage || hasUpstreamQuota || account.authenticationKind === 'api_key'"
+        v-if="hasUsage || currentUsageWindow || account.authenticationKind === 'api_key'"
         class="flex min-w-0 items-baseline justify-between gap-2 leading-none"
       >
         <span
+          v-if="hasUsage || account.authenticationKind === 'api_key'"
           class="flex min-w-0 items-baseline gap-1 font-mono tabular-nums"
           :title="summaryValue.title"
         >
@@ -79,7 +79,7 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
         </span>
         <span
           v-if="currentUsageWindow"
-          class="flex shrink-0 items-baseline gap-1 text-[9px] font-emphasis text-cp-text-quaternary"
+          class="ml-auto flex shrink-0 items-baseline gap-1 text-[9px] font-emphasis text-cp-text-quaternary"
           :title="t('accounts.quota.usageRateHelp')"
         >
           <span>{{ t('accounts.quota.usageRate') }}</span>

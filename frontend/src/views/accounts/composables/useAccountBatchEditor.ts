@@ -18,7 +18,7 @@ export function useAccountBatchEditor(options: {
   const selectedAccountsById = new Map<string, Account>()
   const showBatchEditModal = shallowRef(false)
   const editingCount = shallowRef(0)
-  const schedulingEnabled = shallowRef(false)
+  const schedulingEnabled = shallowRef<boolean>()
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
@@ -30,7 +30,7 @@ export function useAccountBatchEditor(options: {
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
 
-  // 调度按开关值统一更新，其他未操作字段保留每个账号原值
+  // 未操作的批量字段保留每个账号原值
   watch([concurrencyLimit, weight, selectedGroupIds], (values, previous) => {
     if (!showBatchEditModal.value || saving.value)
       return
@@ -50,7 +50,7 @@ export function useAccountBatchEditor(options: {
     modelAccess.value = undefined
     editedFields.value.clear()
     catalogAccountId.value = accounts[0]?.id
-    schedulingEnabled.value = false
+    schedulingEnabled.value = undefined
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
@@ -62,6 +62,11 @@ export function useAccountBatchEditor(options: {
   async function save() {
     if (saving.value || options.selectedIds.value.size === 0)
       return
+    if (schedulingEnabled.value === undefined && modelAccess.value === undefined
+      && editedFields.value.size === 0 && proxyMode.value === 'preserve') {
+      showBatchEditModal.value = false
+      return
+    }
     const modelError = accountModelAccessError(modelAccess.value)
     if (modelError) {
       ZNotification.warning({ message: modelError })

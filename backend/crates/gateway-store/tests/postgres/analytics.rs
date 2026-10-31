@@ -144,6 +144,7 @@ async fn usage_summary_preserves_counts_latency_samples_and_costs_across_read_pa
                 range,
                 filter,
                 gateway_admin::model::observability::Granularity::Hour,
+                true,
             )
             .await
             .unwrap()
@@ -233,6 +234,7 @@ async fn usage_summary_preserves_counts_latency_samples_and_costs_across_read_pa
             full,
             exact_filter,
             gateway_admin::model::observability::Granularity::Hour,
+            true,
         )
         .await
         .unwrap();
@@ -302,6 +304,7 @@ async fn provider_counts_match_for_rollups_boundaries_and_filtered_facts() {
                 range,
                 filter.clone(),
                 gateway_admin::model::observability::Granularity::Hour,
+                true,
             )
             .await
             .map(|snapshot| snapshot.overview)
@@ -411,6 +414,7 @@ async fn insights_share_bucket_states_without_merging_exact_percentiles() {
                 range,
                 filter.clone(),
                 gateway_admin::model::observability::Granularity::Hour,
+                true,
             )
             .await
             .map(|snapshot| snapshot.overview)
@@ -431,7 +435,7 @@ async fn insights_share_bucket_states_without_merging_exact_percentiles() {
             gateway_admin::model::observability::Granularity::Hour,
         ] {
             let observation = repo
-                .usage_insights_observation(range, filter.clone(), granularity)
+                .usage_insights_observation(range, filter.clone(), granularity, true)
                 .await
                 .unwrap();
             assert_eq!(observation.overview.requests, expected.requests);
@@ -1110,6 +1114,7 @@ async fn persisted_histograms_merge_long_tails_and_distinguish_empty_from_zero()
             range,
             Default::default(),
             gateway_admin::model::observability::Granularity::Hour,
+            true,
         )
         .await
         .map(|snapshot| snapshot.overview)
@@ -1122,6 +1127,7 @@ async fn persisted_histograms_merge_long_tails_and_distinguish_empty_from_zero()
                 ..Default::default()
             },
             gateway_admin::model::observability::Granularity::Hour,
+            true,
         )
         .await
         .map(|snapshot| snapshot.overview)
@@ -1156,6 +1162,7 @@ async fn persisted_histograms_merge_long_tails_and_distinguish_empty_from_zero()
             ObservabilityRange::new(start, start + TimeDelta::minutes(10)).unwrap(),
             Default::default(),
             gateway_admin::model::observability::Granularity::Hour,
+            true,
         )
         .await
         .map(|snapshot| snapshot.overview)
@@ -1170,6 +1177,7 @@ async fn persisted_histograms_merge_long_tails_and_distinguish_empty_from_zero()
                 .unwrap(),
             Default::default(),
             gateway_admin::model::observability::Granularity::Hour,
+            true,
         )
         .await
         .map(|snapshot| snapshot.overview)
@@ -1775,9 +1783,37 @@ async fn insights_concurrency_counts_logical_request_overlap_once_per_bucket() {
                     ..Default::default()
                 },
                 granularity,
+                true,
             )
             .await
             .unwrap();
+        let without_concurrency = repo
+            .usage_insights_observation(
+                ObservabilityRange::new(
+                    start + TimeDelta::minutes(from),
+                    start + TimeDelta::minutes(to),
+                )
+                .unwrap(),
+                UsageRecordFilter {
+                    provider_kind: provider.map(str::to_owned),
+                    ..Default::default()
+                },
+                granularity,
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(without_concurrency.concurrency.is_empty());
+        assert_eq!(
+            without_concurrency.overview.requests,
+            insights.overview.requests
+        );
+        assert_eq!(
+            without_concurrency.overview.attempts,
+            insights.overview.attempts
+        );
+        assert_eq!(without_concurrency.trend, insights.trend);
+        assert_eq!(without_concurrency.costs, insights.costs);
         assert_eq!(insights.concurrency.len(), expected.len());
         for (point, (average, peak)) in insights.concurrency.iter().zip(expected) {
             assert!(
@@ -1823,6 +1859,7 @@ async fn insights_concurrency_weights_calendar_days_across_dst() {
                     ..Default::default()
                 },
                 gateway_admin::model::observability::Granularity::Day,
+                true,
             )
             .await
             .unwrap();
@@ -1874,6 +1911,7 @@ async fn sql_edge_histograms_preserve_repeated_samples_and_power_of_two_boundari
             range,
             Default::default(),
             gateway_admin::model::observability::Granularity::Hour,
+            true,
         )
         .await
         .unwrap()
@@ -1885,6 +1923,7 @@ async fn sql_edge_histograms_preserve_repeated_samples_and_power_of_two_boundari
             range,
             Default::default(),
             gateway_admin::model::observability::Granularity::Hour,
+            true,
         )
         .await
         .unwrap()

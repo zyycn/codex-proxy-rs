@@ -760,12 +760,93 @@ pub struct UsageInsightsOverviewView {
     pub providers: Vec<ProviderOverviewView>,
 }
 
+/// 单项洞察响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageMetricView {
+    pub analytics: AnalyticsView,
+    pub granularity: String,
+    #[serde(flatten)]
+    pub data: UsageMetricDataView,
+}
+
+/// 指标标签与响应字段一一对应，未查询的数据不会出现在响应中
+#[derive(Debug, Serialize)]
+#[serde(tag = "metric", content = "data", rename_all = "camelCase")]
+pub enum UsageMetricDataView {
+    Health(OverviewHealthView),
+    Latency(UsageMetricSeriesView<UsageLatencyView>),
+    FirstToken(UsageMetricSeriesView<UsageLatencyView>),
+    Throughput(UsageMetricSeriesView<UsageThroughputView>),
+    Load(UsageMetricSeriesView<OverviewLoadView>),
+    Cost(UsageMetricSeriesView<UsageCostSummaryView, UsageCostComparisonView>),
+    Savings(UsageMetricSeriesView<UsageCostSummaryView, Option<String>>),
+    Cache(UsageMetricSeriesView<UsageCostSummaryView, UsageCacheView>),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageMetricSeriesView<S, P = S> {
+    pub summary: S,
+    pub points: Vec<UsageMetricPointView<P>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageMetricPointView<P> {
+    pub bucket: DateTime<Utc>,
+    pub label: String,
+    pub request_count: u64,
+    pub value: P,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageLatencyView {
+    pub p50_ms: Option<f64>,
+    pub p95_ms: Option<f64>,
+    pub p99_ms: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UsageThroughputView {
+    pub p10: Option<u64>,
+    pub p50: Option<u64>,
+    pub p90: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageCostSummaryView {
+    pub estimated_cost: Option<String>,
+    pub cache_savings: Option<String>,
+    pub tier_premium: Option<String>,
+    pub cost_per_successful_request: Option<String>,
+    pub coverage: CostCoverageView,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageCostComparisonView {
+    pub estimated_cost: Option<String>,
+    pub no_cache_cost: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageCacheView {
+    pub input_tokens: u64,
+    pub cached_token_rate: f64,
+    pub cache_hit_request_rate: Option<f64>,
+}
+
 /// 诊断聚合项目
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticItemView {
     pub key: String,
     pub name: String,
+    pub authentication_kind: Option<String>,
     pub account_plan_type: Option<String>,
     pub account_plan_type_display: Option<String>,
     pub request_count: u64,

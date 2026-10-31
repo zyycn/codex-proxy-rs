@@ -168,14 +168,18 @@ impl BackupObjectStorePort for S3ObjectStoreAdapter {
             .await
         {
             Ok(get) => {
-                let received = get
-                    .body
-                    .collect()
-                    .await
-                    .map_err(|_| {
-                        BackupError::new(code::UPSTREAM_FAILURE, "读取探针对象响应失败".to_owned())
-                    })?
-                    .into_bytes();
+                let received = match get.body.collect().await {
+                    Ok(body) => body.into_bytes(),
+                    Err(_) => {
+                        let _ = best_effort_delete(&client, config, &probe_key).await;
+                        return Ok(ConnectionTestResult {
+                            ok: false,
+                            stage: ConnectionTestStage::GetObject.as_str(),
+                            code: Some(code::UPSTREAM_FAILURE),
+                            message: "读取探针对象响应失败".to_owned(),
+                        });
+                    }
+                };
                 if received.as_ref() != body.as_slice() {
                     let _ = best_effort_delete(&client, config, &probe_key).await;
                     return Ok(ConnectionTestResult {

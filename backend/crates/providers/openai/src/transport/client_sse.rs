@@ -17,10 +17,7 @@ use reqwest::{
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 
 use crate::transport::{
-    catalog::{
-        CodexModelCatalogError, CodexModelCatalogSnapshot, MAX_CODEX_MODEL_CATALOG_BYTES,
-        catalog_etag, parse_codex_model_catalog,
-    },
+    catalog::{CodexModelCatalogSnapshot, catalog_etag, parse_codex_model_catalog},
     diagnostics::CodexUpstreamSendPhase,
     endpoints::endpoint_url,
     headers::websocket_header_pairs,
@@ -66,6 +63,7 @@ impl CodexBackendClient {
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
+            routing_affinity: None,
             privacy: None,
             timezone: Default::default(),
             connection_budget: None,
@@ -125,6 +123,10 @@ impl CodexBackendClient {
         let profile = self.profile.snapshot();
         let mut headers =
             self.request_headers_for_http_response(&profile, upstream_request, context)?;
+        let endpoint = endpoint_url(&self.base_url, self.protocol.responses_path());
+        if let Some(affinity) = &self.routing_affinity {
+            affinity.apply(&endpoint, &mut headers);
+        }
         // OAuth 请求遵循 Codex 压缩合同；API Key 上游使用普通 JSON
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
         // 再由 API 层收集 canonical events 并返回完整 JSON
@@ -145,7 +147,6 @@ impl CodexBackendClient {
         self.apply_privacy(&mut upstream_body, &mut headers)?;
         let body =
             serde_json::to_vec(&upstream_body).map_err(CodexClientError::RequestBodyEncode)?;
-        let endpoint = endpoint_url(&self.base_url, self.protocol.responses_path());
         let trace = context
             .trace
             .cloned()
@@ -261,6 +262,7 @@ impl CodexBackendClient {
 
         let rate_limit_updates = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         Ok(CodexBackendStreamingResponse {
+            routing_affinity: None,
             body: http_sse_stream(response, Arc::clone(&rate_limit_updates), trace),
             transport: CodexBackendTransport::HttpSse,
             websocket_connection_id: None,
@@ -324,6 +326,12 @@ impl CodexBackendClient {
         let profile = self.profile.snapshot();
         let mut headers =
             self.request_headers_for_websocket_response(&profile, &websocket_request, context)?;
+        if let Some(affinity) = &self.routing_affinity {
+            affinity.apply(
+                &endpoint_url(&self.base_url, self.protocol.responses_path()),
+                &mut headers,
+            );
+        }
         let mut body = serde_json::Value::Object(std::mem::take(websocket_request.body_mut()));
         profile.apply_context_versions(&mut body);
         super::correlation::scope_request(&mut body, &mut headers, context.installation_id);
@@ -600,6 +608,9 @@ impl CodexBackendClient {
                     }));
                 }
                 Ok(CodexBackendStreamingResponse {
+                    routing_affinity: (self.protocol == OpenAiUpstreamProtocol::Codex)
+                        .then_some(exchange.routing_affinity)
+                        .flatten(),
                     body: Box::pin(
                         exchange
                             .body
@@ -644,6 +655,7 @@ impl CodexBackendClient {
             .with_egress_key(&self.egress_key)
             .with_outbound_proxy(self.outbound_proxy.as_ref())
             .with_connection_profile(connection_profile);
+        key = key.with_routing_affinity(self.routing_affinity.as_ref().map(|pin| pin.id()));
         if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
             key = key.with_downstream_connection_id(connection_id);
         }
@@ -684,9 +696,9 @@ impl CodexBackendClient {
             .then(|| catalog_etag(response.headers()))
             .transpose()?
             .flatten();
-        let body = read_model_catalog_body(response).await?;
+        let body = response.bytes().await?;
         if !status.is_success() {
-            let body = String::from_utf8_lossy_owned(body);
+            let body = String::from_utf8_lossy(&body).into_owned();
             return Err(CodexClientError::Upstream {
                 status,
                 retry_after_seconds: retry_after_seconds
@@ -719,28 +731,6 @@ fn is_websocket_replayable_prelude(frame: &[u8]) -> bool {
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|event_type| is_replaceable_response_prelude(event_type, &value))
         })
-}
-
-async fn read_model_catalog_body(response: ReqwestResponse) -> CodexClientResult<Vec<u8>> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_CODEX_MODEL_CATALOG_BYTES as u64)
-    {
-        return Err(CodexModelCatalogError::ResponseTooLarge.into());
-    }
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        let Some(next_len) = body.len().checked_add(chunk.len()) else {
-            return Err(CodexModelCatalogError::ResponseTooLarge.into());
-        };
-        if next_len > MAX_CODEX_MODEL_CATALOG_BYTES {
-            return Err(CodexModelCatalogError::ResponseTooLarge.into());
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
 }
 
 fn websocket_connection_profile(

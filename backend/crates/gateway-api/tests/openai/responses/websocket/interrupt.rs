@@ -1,4 +1,4 @@
-//! 验证未知控制消息、迟到中断、结算期间收发和创建请求的串行准入
+//! 验证控制消息透传、HTTP 中断拒绝、结算期间收发和创建请求的串行准入
 
 use super::*;
 use gateway_core::engine::client_retry::{ClientRetryKey, ClientRetryStore};
@@ -244,7 +244,9 @@ impl ResponseControlTransport for ControlTransport {
 #[derive(Default)]
 struct InterruptProvider {
     calls: AtomicUsize,
+    store: Arc<SettlementPorts>,
     fail_first: bool,
+    http_only: bool,
     retry_started: tokio::sync::Notify,
     retry_release: tokio::sync::Notify,
     transport: Mutex<Option<Arc<ControlTransport>>>,
@@ -284,7 +286,9 @@ impl Provider for InterruptProvider {
         let id = format!("resp_interrupt_{number}");
         let transport = Arc::new(ControlTransport::new(id));
         let owner: Arc<dyn ResponseControlTransport> = transport.clone();
-        context.response_control().unwrap().bind(&owner);
+        if !self.http_only {
+            context.response_control().unwrap().bind(&owner);
+        }
         *self.transport.lock().unwrap() = Some(transport.clone());
         let candidate = request.candidate();
         let metadata = ProviderCallMetadata::new(
@@ -296,7 +300,12 @@ impl Provider for InterruptProvider {
                 "acct_api_test"
             })
             .unwrap(),
-            UpstreamTransport::new("websocket").unwrap(),
+            UpstreamTransport::new(if self.http_only {
+                "http_sse"
+            } else {
+                "websocket"
+            })
+            .unwrap(),
         );
         let body = futures::stream::unfold(
             (0, transport, self),
@@ -457,7 +466,7 @@ async fn connect(
         } else {
             snapshot("sk_ws_interrupt", "openai")
         }),
-        Arc::new(SettlementPorts::default()),
+        provider.store.clone(),
         ProviderRegistry::new([provider as Arc<dyn Provider>]).unwrap(),
         admissions,
         Arc::new(UnusedContinuation),
@@ -487,6 +496,140 @@ fn upstream_control_error() -> Value {
 
 fn interrupt(id: &str, mode: &str) -> Value {
     json!({"type":"response.interrupt","response_id":id,"mode":mode,"future_extension":true})
+}
+
+#[tokio::test]
+async fn http_response_rejects_interrupt_without_aborting_or_admitting_queued_requests() {
+    let provider = Arc::new(InterruptProvider {
+        http_only: true,
+        ..Default::default()
+    });
+    let admissions = Arc::new(InterruptAdmissions::default());
+    let (mut socket, _server) = connect(provider.clone(), admissions.clone()).await;
+    let create = json!({"type":"response.create","model":"model-a","input":"hello"});
+    send(&mut socket, create.clone()).await;
+    assert_eq!(next(&mut socket).await["type"], "response.created");
+    send(&mut socket, create).await;
+    send(
+        &mut socket,
+        interrupt("resp_interrupt_0", "discard_partial_items"),
+    )
+    .await;
+    assert_eq!(
+        next(&mut socket).await,
+        json!({
+            "type":"response.interrupt.failed", "response_id":"resp_interrupt_0"
+        })
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(admissions.active.load(Ordering::SeqCst), 1);
+    assert!(
+        provider
+            .transport
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .requests
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+
+    provider.complete.notify_one();
+    let completed = next(&mut socket).await;
+    assert_eq!(completed["type"], "response.completed");
+    assert_eq!(completed["response"]["id"], "resp_interrupt_0");
+    assert_eq!(
+        next(&mut socket).await["response"]["id"],
+        "resp_interrupt_1"
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        provider.store.finalizations.lock().unwrap()[0].outcome,
+        gateway_core::engine::ExecutionOutcome::Succeeded
+    );
+    provider.complete.notify_one();
+    assert_eq!(next(&mut socket).await["type"], "response.completed");
+    socket.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn http_response_rejects_late_interrupt_during_settlement_and_when_idle() {
+    let provider = Arc::new(InterruptProvider {
+        http_only: true,
+        ..Default::default()
+    });
+    let (release, wait_for_release) = tokio::sync::oneshot::channel();
+    let admissions = Arc::new(InterruptAdmissions {
+        release_gate: Mutex::new(Some(wait_for_release)),
+        ..Default::default()
+    });
+    let (mut socket, _server) = connect(provider.clone(), admissions.clone()).await;
+    let create = json!({"type":"response.create","model":"model-a","input":"hello"});
+    send(&mut socket, create.clone()).await;
+    assert_eq!(next(&mut socket).await["type"], "response.created");
+    provider.complete.notify_one();
+    assert_eq!(next(&mut socket).await["type"], "response.completed");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        admissions.release_started.notified(),
+    )
+    .await
+    .unwrap();
+    let control = interrupt("resp_interrupt_0", "discard_partial_items");
+    let rejection = json!({"type":"response.interrupt.failed","response_id":"resp_interrupt_0"});
+    send(&mut socket, control.clone()).await;
+    assert_eq!(next(&mut socket).await, rejection);
+    assert_eq!(admissions.active.load(Ordering::SeqCst), 1);
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while admissions.active.load(Ordering::SeqCst) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    send(&mut socket, control).await;
+    assert_eq!(next(&mut socket).await, rejection);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    send(&mut socket, create).await;
+    assert_eq!(
+        next(&mut socket).await["response"]["id"],
+        "resp_interrupt_1"
+    );
+    provider.complete.notify_one();
+    assert_eq!(next(&mut socket).await["type"], "response.completed");
+    socket.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn missing_control_channel_keeps_unknown_and_invalid_controls_as_errors() {
+    let provider = Arc::new(InterruptProvider::default());
+    let (mut socket, _server) =
+        connect(provider.clone(), Arc::new(InterruptAdmissions::default())).await;
+    for control in [
+        interrupt("resp_unknown", "future_mode"),
+        interrupt("", "discard_partial_items"),
+        json!({"type":"response.interrupt", "mode":"discard_partial_items"}),
+        json!({"type":"future.control"}),
+    ] {
+        send(&mut socket, control).await;
+        assert_eq!(next(&mut socket).await["type"], "error");
+    }
+    send(
+        &mut socket,
+        interrupt("resp_unknown", "discard_partial_items"),
+    )
+    .await;
+    assert_eq!(
+        next(&mut socket).await,
+        json!({
+            "type":"response.interrupt.failed", "response_id":"resp_unknown"
+        })
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    socket.close(None).await.unwrap();
 }
 
 #[tokio::test]

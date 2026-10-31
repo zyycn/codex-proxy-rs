@@ -3,7 +3,7 @@ import type { AccountModelAccess } from '@/api'
 
 import { ZCheckbox, ZEmpty, ZFormItem, ZIconButton, ZInput, ZPopover, ZScrollbar, ZSegmented } from '@codex-proxy/ui'
 
-import { RefreshCw, Search, TriangleAlert } from '@lucide/vue'
+import { CircleAlert, RefreshCw, Search, TriangleAlert } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getAccountModels, refreshAccountModels } from '@/api'
@@ -21,6 +21,7 @@ const { t } = useI18n({ useScope: 'global' })
 const model = defineModel<AccountModelAccess | undefined>({ required: true })
 // 未取得目录时不能判断缺失，成功返回空目录则可以
 const catalog = ref<Array<{ id: string, label: string }>>()
+const catalogObservedAtDisplay = ref<string>()
 const search = ref('')
 const inputError = ref('')
 const request = useRequestState()
@@ -113,6 +114,15 @@ function addModel() {
     search.value = ''
 }
 
+function handleCatalogHelpKeydown(event: KeyboardEvent, open: boolean, close: () => void) {
+  if (event.key === 'Escape' && open) {
+    // 先关闭说明浮层，避免同一次按键也关闭编辑弹窗
+    event.preventDefault()
+    event.stopPropagation()
+    close()
+  }
+}
+
 async function load(refresh = false) {
   const accountId = props.accountId
   if (!accountId || !restricted.value)
@@ -123,8 +133,10 @@ async function load(refresh = false) {
       { accountId },
       { signal: request.signal },
     )
-    if (request.isCurrent(requestId))
+    if (request.isCurrent(requestId)) {
       catalog.value = result.models
+      catalogObservedAtDisplay.value = result.observedAt ? result.observedAtDisplay : undefined
+    }
   }
   catch (cause) {
     request.fail(requestId, cause)
@@ -140,6 +152,7 @@ watch([
 ], () => {
   request.invalidate()
   catalog.value = undefined
+  catalogObservedAtDisplay.value = undefined
   search.value = ''
   inputError.value = ''
   error.value = ''
@@ -153,7 +166,40 @@ watch(search, () => {
 
 <template>
   <div class="grid gap-3">
-    <ZFormItem :label="t('accounts.modelAccess.modelLimitations')">
+    <ZFormItem>
+      <template #label>
+        <span class="inline-flex flex-wrap items-end gap-x-2 gap-y-1">
+          <span>{{ t('accounts.modelAccess.modelCatalog') }}</span>
+          <span v-if="restricted && catalogObservedAtDisplay" class="text-cp-xs leading-none font-normal text-cp-text-tertiary tabular-nums">
+            {{ catalogObservedAtDisplay }}
+          </span>
+        </span>
+      </template>
+      <template v-if="restricted" #label-extra>
+        <ZPopover class="-my-1 -ml-1.5 shrink-0" trigger="hover-click" placement="top-start" role="tooltip">
+          <template #reference="{ open, id, close }">
+            <ZIconButton
+              variant="link"
+              class="size-6!"
+              :aria-label="t('accounts.modelAccess.catalogHelpTitle')"
+              :aria-describedby="open ? id : undefined"
+              :aria-expanded="open"
+              :title="undefined"
+              @keydown="handleCatalogHelpKeydown($event, open, close)"
+            >
+              <CircleAlert class="size-[1em] text-cp-xs" aria-hidden="true" />
+            </ZIconButton>
+          </template>
+          <div class="max-w-72 space-y-2 px-3 py-2 text-cp-sm leading-relaxed text-cp-text-secondary">
+            <p class="m-0">
+              {{ t('accounts.modelAccess.catalogObservedAtHelp') }}
+            </p>
+            <p class="m-0">
+              {{ t('accounts.modelAccess.catalogDescription') }}
+            </p>
+          </div>
+        </ZPopover>
+      </template>
       <div class="flex min-w-0 items-center justify-between gap-2">
         <ZSegmented v-model="mode" class="w-80 min-w-0 max-w-full" :aria-label="t('accounts.modelAccess.modelRestrictionMode')" :options="modes" :disabled="disabled" />
         <ZIconButton v-if="restricted && accountId" :aria-label="t('accounts.modelAccess.refreshModel')" variant="plain" :loading="loading" :disabled="disabled" @click="load(true)">

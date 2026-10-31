@@ -630,6 +630,7 @@ pub type CodexResponseMetadataUpdates = CodexWebSocketResponseMetadataUpdates;
 
 /// Codex Responses 上游流式响应
 pub struct CodexBackendStreamingResponse {
+    pub(crate) routing_affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
     /// HTTP 为 SSE 字节块，WebSocket 为完整 UTF-8 文本消息
     pub body: CodexBackendSseStream,
     /// 实际使用的上游传输
@@ -696,6 +697,7 @@ impl OpenAiUpstreamProtocol {
 /// Codex HTTP/SSE 上游客户端
 #[derive(Clone)]
 pub struct CodexBackendClient {
+    pub(super) routing_affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
     pub(super) privacy: Option<(
         Arc<dyn gateway_core::settings::privacy::CompiledPrivacyPolicy>,
         gateway_core::lifecycle::CancellationToken,
@@ -718,6 +720,14 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn with_routing_affinity(
+        mut self,
+        affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
+    ) -> Self {
+        self.routing_affinity = affinity;
+        self
+    }
+
     #[must_use]
     pub(crate) fn with_timezone(
         mut self,

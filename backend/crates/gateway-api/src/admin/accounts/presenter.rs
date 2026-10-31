@@ -43,7 +43,11 @@ pub(super) fn account_refresh_data(
     }
 }
 
-pub(super) fn account_models_data(result: ProviderModels) -> AccountModelsData {
+pub(super) fn account_models_data(
+    result: ProviderModels,
+    time: crate::time::TimePresenter,
+) -> AccountModelsData {
+    let observed_at = result.observed_at;
     AccountModelsData {
         models: result
             .models
@@ -56,6 +60,9 @@ pub(super) fn account_models_data(result: ProviderModels) -> AccountModelsData {
                 }
             })
             .collect(),
+        observed_at: observed_at.map(|value| time.rfc3339(&value)),
+        observed_at_display: observed_at
+            .map_or_else(|| "—".to_owned(), |value| time.datetime(&value)),
     }
 }
 

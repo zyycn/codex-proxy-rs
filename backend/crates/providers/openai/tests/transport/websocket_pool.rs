@@ -365,7 +365,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
             .unwrap();
         second_websocket.close(None).await.unwrap();
     });
-    // 无 maintenance、无主动 ping：完全依赖 pump 后台读取感知连接死亡
+    // 不启动维护，验证 pump 读取到上游关闭后即可阻止复用
     let pool = Arc::new(CodexWebSocketPool::with_config(
         websocket_pool_config_for_tests(None),
     ));
@@ -1210,11 +1210,10 @@ async fn concurrent_pool_transport_counts(max_connecting: usize) -> (usize, usiz
 }
 
 #[tokio::test]
-async fn websocket_pool_should_reject_expired_idle_continuation_despite_upstream_ping() {
+async fn websocket_pool_should_reject_expired_idle_continuation_despite_keepalive() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let (send_ping_tx, send_ping_rx) = tokio::sync::oneshot::channel();
-    let (pong_seen_tx, pong_seen_rx) = tokio::sync::oneshot::channel();
+    let (ping_seen_tx, ping_seen_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut first = accept_codex_test_websocket(stream).await;
@@ -1225,16 +1224,16 @@ async fn websocket_pool_should_reject_expired_idle_continuation_despite_upstream
             ))
             .await
             .unwrap();
-        send_ping_rx.await.unwrap();
-        let payload = b"upstream-idle-probe".to_vec();
-        first
-            .send(Message::Ping(payload.clone().into()))
-            .await
-            .unwrap();
-        let pong = first.next().await.unwrap().unwrap();
-        assert_eq!(pong, Message::Pong(payload.into()));
-        pong_seen_tx.send(()).unwrap();
-        std::assert_matches!(first.next().await.unwrap().unwrap(), Message::Close(_));
+        std::assert_matches!(first.next().await.unwrap().unwrap(), Message::Ping(_));
+        first.flush().await.unwrap();
+        ping_seen_tx.send(()).unwrap();
+        loop {
+            match first.next().await.unwrap().unwrap() {
+                Message::Ping(_) => first.flush().await.unwrap(),
+                Message::Close(_) => break,
+                other => panic!("unexpected idle frame: {other:?}"),
+            }
+        }
 
         let (stream, _) = listener.accept().await.unwrap();
         let mut second = accept_codex_test_websocket(stream).await;
@@ -1269,8 +1268,7 @@ async fn websocket_pool_should_reject_expired_idle_continuation_despite_upstream
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(299)).await;
     tokio::time::resume();
-    send_ping_tx.send(()).unwrap();
-    timeout(Duration::from_secs(2), pong_seen_rx)
+    timeout(Duration::from_secs(2), ping_seen_rx)
         .await
         .unwrap()
         .unwrap();
@@ -1332,12 +1330,17 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
             ))
             .await
             .unwrap();
-        let close = timeout(Duration::from_secs(60), first_websocket.next())
-            .await
-            .expect("gc sweep should close the expired idle websocket")
-            .expect("gc sweep should send a close frame")
-            .expect("close frame should be valid");
-        std::assert_matches!(close, Message::Close(_));
+        timeout(Duration::from_secs(60), async {
+            loop {
+                match first_websocket.next().await.unwrap().unwrap() {
+                    Message::Ping(_) => first_websocket.flush().await.unwrap(),
+                    Message::Close(_) => break,
+                    other => panic!("unexpected idle frame: {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("gc sweep should close the expired idle websocket");
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
@@ -1791,8 +1794,13 @@ async fn websocket_pool_should_reclaim_idle_connections_on_maintenance_ticks() {
             ))
             .await
             .unwrap();
-        let message = websocket.next().await.unwrap().unwrap();
-        std::assert_matches!(message, Message::Close(_));
+        loop {
+            match websocket.next().await.unwrap().unwrap() {
+                Message::Ping(_) => websocket.flush().await.unwrap(),
+                Message::Close(_) => break,
+                other => panic!("unexpected idle frame: {other:?}"),
+            }
+        }
         closed_tx.send(()).unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::default());

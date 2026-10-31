@@ -729,8 +729,11 @@ pub struct AccountModelView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountModelsData {
     pub models: Vec<AccountModelView>,
+    pub observed_at: Option<String>,
+    pub observed_at_display: String,
 }
 
 /// 账号模型目录文件；`catalog` 直接作为 Codex `model_catalog_json` 的文件正文落盘
