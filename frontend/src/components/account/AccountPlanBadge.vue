@@ -1,12 +1,15 @@
 <script setup lang="ts">
+import type { AccountUpstream } from '@/api'
 import { computed } from 'vue'
 
 import { stableVisualIndex } from '@/utils/color'
+import AccountUpstreamBadge from './AccountUpstreamBadge.vue'
 
 const props = withDefaults(
   defineProps<{
     planType?: string | null
     authenticationKind?: string
+    upstream?: AccountUpstream | null
     planTypeDisplay: string
     size?: 'xs' | 'sm' | 'md'
   }>(),
@@ -17,6 +20,7 @@ const props = withDefaults(
 )
 
 const planPalettes: Record<string, string> = {
+  api: 'bg-cp-cyan-container-strong text-cp-cyan-on-container',
   free: 'bg-cp-cyan-container text-cp-cyan-on-container',
   plus: 'bg-cp-blue-container-strong text-cp-blue-on-container',
   pro: 'bg-cp-purple-container-strong text-cp-purple-on-container',
@@ -56,7 +60,9 @@ const paletteClass = computed(() => {
 </script>
 
 <template>
+  <AccountUpstreamBadge v-if="upstream?.discovered && upstream.node" :size="size" />
   <span
+    v-else
     class="inline-flex min-w-0 max-w-full items-center justify-center whitespace-nowrap leading-none shadow-cp-tertiary"
     :class="[sizeClass, paletteClass]"
     :title="displayText || undefined"

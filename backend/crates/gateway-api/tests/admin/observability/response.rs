@@ -1602,6 +1602,7 @@ async fn dashboard_summary_should_identify_metrics_without_localized_labels() {
         .map(|(index, (requests, tokens, last_used_at))| {
             let account_id = format!("acct_metric_{index}");
             DashboardAccountUsage {
+                upstream: None,
                 account_id: account_id.clone(),
                 provider_kind: "openai".to_owned(),
                 authentication_kind: "oauth".to_owned(),
@@ -1802,6 +1803,7 @@ async fn dashboard_relative_time_preserves_server_anchor_boundaries_and_deployme
                 provider_accounts: Default::default(),
                 trend: Vec::new(),
                 account_usage: vec![DashboardAccountUsage {
+                    upstream: None,
                     account_id: "acct_relative_time".to_owned(),
                     provider_kind: "openai".to_owned(),
                     authentication_kind: "oauth".to_owned(),

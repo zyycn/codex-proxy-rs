@@ -7,7 +7,6 @@ import { ChevronDown } from '@lucide/vue'
 import { ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
-import AccountUpstreamBadge from '@/components/account/AccountUpstreamBadge.vue'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
@@ -325,8 +324,7 @@ const {
 
             <template #planType="{ row }">
               <div class="flex min-w-0 justify-center">
-                <AccountUpstreamBadge v-if="row.upstream?.discovered && row.upstream.node" :upstream="row.upstream" />
-                <AccountPlanBadge v-else :authentication-kind="row.authenticationKind" :plan-type="row.planType" :plan-type-display="row.planTypeDisplay" />
+                <AccountPlanBadge :upstream="row.upstream" :authentication-kind="row.authenticationKind" :plan-type="row.planType" :plan-type-display="row.planTypeDisplay" />
               </div>
             </template>
 

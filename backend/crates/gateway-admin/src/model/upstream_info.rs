@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderUpstreamInfo {
     pub discovered: bool,
     pub node: Option<UpstreamNode>,

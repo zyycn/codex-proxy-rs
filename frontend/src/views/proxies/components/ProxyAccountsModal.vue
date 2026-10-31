@@ -135,8 +135,7 @@ watch([
           <ProviderIconGroup :provider="row.provider" :authentication-kind="row.authenticationKind" />
         </template>
         <template #plan="{ row }">
-          <AccountPlanBadge v-if="row.planType && row.planTypeDisplay" :plan-type="row.planType" :plan-type-display="row.planTypeDisplay" />
-          <span v-else class="text-cp-xs text-cp-text-quaternary">—</span>
+          <AccountPlanBadge :upstream="row.upstream" :authentication-kind="row.authenticationKind" :plan-type="row.planType" :plan-type-display="row.planTypeDisplay || '—'" />
         </template>
         <template #groups="{ row }">
           <div class="flex justify-center">

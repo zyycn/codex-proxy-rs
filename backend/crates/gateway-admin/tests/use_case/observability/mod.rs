@@ -995,6 +995,7 @@ async fn dashboard_should_preserve_provider_plan_names() {
     *store.account_usage.lock().unwrap() = plans
         .iter()
         .map(|(plan, _)| DashboardAccountUsage {
+            upstream: None,
             account_id: format!("account-{plan}"),
             provider_kind: "openai".to_owned(),
             authentication_kind: "oauth".to_owned(),

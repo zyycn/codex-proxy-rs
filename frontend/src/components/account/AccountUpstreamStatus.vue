@@ -9,14 +9,10 @@ const props = defineProps<{ upstream: AccountUpstream }>()
 const { t } = useI18n({ useScope: 'global' })
 const status = computed(() => {
   const upstream = props.upstream
-  if (upstream.sync.state === 'queued')
-    return t('accounts.upstream.queued')
-  if (upstream.sync.state === 'running')
-    return t('accounts.upstream.running')
   if (upstream.lastError)
     return accountUpstreamErrorMessage(upstream.lastError)
   if (!upstream.observedAt)
-    return t('accounts.upstream.pending')
+    return ''
   const observed = t('accounts.upstream.observedAt', {
     time: formatRelativeTime(upstream.observedAtRelative),
   })

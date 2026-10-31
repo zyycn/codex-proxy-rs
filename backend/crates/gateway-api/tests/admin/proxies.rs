@@ -192,6 +192,7 @@ impl ProxyStore for MemoryProxies {
         }
         Ok(ProxyAccountPage {
             items: vec![ProxyAccountRef {
+                upstream: None,
                 id: "acct_linked".to_owned(),
                 name: "工作账号".to_owned(),
                 email: Some("work@example.invalid".to_owned()),

@@ -9,7 +9,7 @@ import { accountIdentityLabel } from '../utils/accountIdentity'
 import AccountNotesPopover from './AccountNotesPopover.vue'
 
 type AccountIdentity = Pick<Account, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
-  & Partial<Pick<Account, 'accountId' | 'notes' | 'name' | 'authenticationKind'>>
+  & Partial<Pick<Account, 'accountId' | 'notes' | 'name' | 'authenticationKind' | 'upstream'>>
 
 const props = withDefaults(
   defineProps<{
@@ -90,7 +90,7 @@ const avatarToneClass = computed(() => {
           :class="metaGapClass"
         >
           <slot name="meta" />
-          <AccountPlanBadge v-if="showPlan" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
+          <AccountPlanBadge v-if="showPlan" :upstream="account.upstream" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
         </span>
       </div>
       <div
@@ -99,7 +99,7 @@ const avatarToneClass = computed(() => {
         :class="metaGapClass"
       >
         <slot name="meta" />
-        <AccountPlanBadge v-if="showPlan" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
+        <AccountPlanBadge v-if="showPlan" :upstream="account.upstream" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
       </div>
       <AccountNotesPopover v-else-if="visibleNotes" :notes="visibleNotes" class="mt-0.5" />
       <div v-else-if="secondaryText" class="truncate font-emphasis" :class="secondaryClass">

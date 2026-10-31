@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AccountQuotaWindow } from '@/api'
+import { ZEmpty } from '@codex-proxy/ui'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AccountRequestTimeline from './account-usage-window/AccountRequestTimeline.vue'
@@ -72,7 +73,8 @@ function quotaWindowCode(windowSeconds: number | null, role: AccountQuotaWindow[
       </h3>
     </header>
 
-    <div class="grid gap-4" :class="detailHeading ? 'px-3 pt-3 pb-3' : 'px-4 pt-4 pb-3'">
+    <ZEmpty v-if="detailItems.length === 0" :title="t('accounts.quota.unobserved')" size="small" surface="none" />
+    <div v-else class="grid gap-4" :class="detailHeading ? 'px-3 pt-3 pb-3' : 'px-4 pt-4 pb-3'">
       <article v-for="item in detailItems" :key="item.key">
         <div class="grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-2.5">
           <span

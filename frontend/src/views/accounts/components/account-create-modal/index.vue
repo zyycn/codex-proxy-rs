@@ -116,6 +116,8 @@ function continueToImport() {
         />
         <div class="flex shrink-0 items-center gap-3">
           <AccountPlanBadge
+            :upstream="account.upstream"
+            :authentication-kind="account.authenticationKind"
             :plan-type="account.planType"
             :plan-type-display="account.planTypeDisplay"
             size="sm"

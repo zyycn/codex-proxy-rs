@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { useId } from 'vue'
 
+const props = withDefaults(defineProps<{ variant?: 'tile' | 'glyph' }>(), {
+  variant: 'tile',
+})
+
 const id = useId().replaceAll(':', '')
 const noiseFilterId = `${id}-brand-noise`
 const wornFilterId = `${id}-brand-worn`
@@ -8,8 +12,8 @@ const mistGradientId = `${id}-brand-mist`
 </script>
 
 <template>
-  <svg class="text-cp-text-light-solid" xmlns="http://www.w3.org/2000/svg" viewBox="48 48 416 416" focusable="false">
-    <defs>
+  <svg :class="{ 'text-cp-text-light-solid': props.variant === 'tile' }" xmlns="http://www.w3.org/2000/svg" viewBox="48 48 416 416" focusable="false">
+    <defs v-if="props.variant === 'tile'">
       <filter :id="noiseFilterId" x="0" y="0" width="100%" height="100%">
         <feTurbulence type="fractalNoise" baseFrequency="1.7" numOctaves="2" seed="31" result="noise" />
         <feColorMatrix
@@ -31,14 +35,14 @@ const mistGradientId = `${id}-brand-mist`
       </radialGradient>
     </defs>
 
-    <rect class="fill-(--cp-brand-mark-bg)" x="48" y="48" width="416" height="416" rx="88" />
+    <rect v-if="props.variant === 'tile'" class="fill-(--cp-brand-mark-bg)" x="48" y="48" width="416" height="416" rx="88" />
     <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="36">
       <path d="M156 307A112 112 0 0 1 307 156" />
       <path d="M356 205A112 112 0 0 1 205 356" />
     </g>
     <path d="m407 105-119 153-183 149 124-157Z" fill="currentColor" />
 
-    <g :filter="`url(#${wornFilterId})`" fill="none" stroke="currentColor" stroke-linecap="square">
+    <g v-if="props.variant === 'tile'" :filter="`url(#${wornFilterId})`" fill="none" stroke="currentColor" stroke-linecap="square">
       <path d="M92 170 136 148" stroke-width="1" opacity="0.38" />
       <path d="M98 178 142 156" stroke-width="0.5" opacity="0.3" />
       <path d="M308 398 346 378" stroke-width="0.9" opacity="0.36" />
@@ -51,7 +55,7 @@ const mistGradientId = `${id}-brand-mist`
       <path d="M126 118 136 110" stroke-width="0.6" opacity="0.26" />
       <path d="M400 96 410 88" stroke-width="0.6" opacity="0.24" />
     </g>
-    <g :filter="`url(#${wornFilterId})`" fill="currentColor">
+    <g v-if="props.variant === 'tile'" :filter="`url(#${wornFilterId})`" fill="currentColor">
       <path
         d="M98 176 104 173 108 175 114 170 118 173 124 167 130 170 136 164 142 167 148 161 154 164 160 158Z"
         opacity="0.34"
@@ -60,6 +64,7 @@ const mistGradientId = `${id}-brand-mist`
     </g>
 
     <rect
+      v-if="props.variant === 'tile'"
       x="48"
       y="48"
       width="416"
@@ -69,6 +74,6 @@ const mistGradientId = `${id}-brand-mist`
       :filter="`url(#${noiseFilterId})`"
       opacity="0.08"
     />
-    <rect x="48" y="48" width="416" height="416" rx="88" :fill="`url(#${mistGradientId})`" />
+    <rect v-if="props.variant === 'tile'" x="48" y="48" width="416" height="416" rx="88" :fill="`url(#${mistGradientId})`" />
   </svg>
 </template>

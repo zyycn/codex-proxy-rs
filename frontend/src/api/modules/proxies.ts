@@ -1,4 +1,5 @@
 import type { RequestOptions } from '../request'
+import type { AccountUpstream } from './accounts'
 import type { AccountGroupRef } from './groups'
 import type { RequestLocation } from './settings'
 import request from '../request'
@@ -53,6 +54,7 @@ interface ProxyPage {
 }
 
 export interface OutboundProxyAccount {
+  upstream: AccountUpstream | null
   id: string
   name: string
   email: string | null

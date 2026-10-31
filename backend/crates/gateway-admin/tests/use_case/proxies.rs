@@ -216,6 +216,7 @@ async fn linked_accounts_share_plan_resolution_and_only_read_cached_quota() {
             .provider(provider.clone())
             .proxies(Arc::new(TestProxies {
                 accounts: Some(vec![ProxyAccountRef {
+                    upstream: None,
                     id: "acct_plan".to_owned(),
                     name: "套餐测试".to_owned(),
                     email: None,

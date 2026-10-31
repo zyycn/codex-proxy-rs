@@ -507,6 +507,7 @@ impl ProxyStore for PgProxyRepository {
         .into_iter()
         .map(|row| {
             Ok(ProxyAccountRef {
+                upstream: None,
                 id: row.try_get("id").map_err(|source| invalid().with_source(source))?,
                 name: row.try_get("name").map_err(|source| invalid().with_source(source))?,
                 email: row.try_get("email").map_err(|source| invalid().with_source(source))?,

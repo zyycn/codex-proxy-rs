@@ -64,7 +64,7 @@ const avatarToneClass = computed(() =>
         <strong class="min-w-0 truncate text-cp leading-[1.15] font-heavy text-cp-text">
           {{ displayTitle }}
         </strong>
-        <AccountPlanBadge :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="xs" />
+        <AccountPlanBadge :upstream="account.upstream" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="xs" />
       </span>
       <span
         v-if="secondaryText"

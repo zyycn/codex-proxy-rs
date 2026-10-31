@@ -919,6 +919,9 @@ pub(crate) fn dashboard_view(
             ),
         };
         account_usage_views.push(DashboardAccountUsageView {
+            upstream: credential.upstream.map(|info| {
+                crate::admin::accounts::upstream_info_view(info, chrono::Utc::now(), time)
+            }),
             id: credential.account_id.clone(),
             provider: credential.provider_kind.clone(),
             authentication_kind: credential.authentication_kind.clone(),

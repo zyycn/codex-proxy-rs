@@ -74,6 +74,7 @@ mod wire;
 pub use credentials::*;
 pub use handlers::{profile_avatar_response, router};
 pub(super) use presenter::quota_window_view;
+pub(crate) use upstream_info::view as upstream_info_view;
 pub use upstream_info::{AccountQuotaAmountView, AccountUpstreamInfoView};
 pub use wire::*;
 

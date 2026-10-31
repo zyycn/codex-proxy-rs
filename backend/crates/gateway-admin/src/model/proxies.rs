@@ -28,6 +28,7 @@ pub struct ProxyListQuery {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyAccountRef {
+    pub upstream: Option<super::upstream_info::ProviderUpstreamInfo>,
     pub id: String,
     pub name: String,
     pub email: Option<String>,

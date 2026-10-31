@@ -531,6 +531,7 @@ async fn initialize_inner(
             proxy_probe,
             snapshot.clone(),
             registry.clone(),
+            upstream_info.clone(),
         )),
         auth,
         accounts: accounts.clone(),

@@ -94,7 +94,7 @@ pub(super) fn amount_view(amount: &UpstreamQuotaAmount) -> AccountQuotaAmountVie
     }
 }
 
-pub(super) fn view(
+pub(crate) fn view(
     info: ProviderUpstreamInfo,
     now: DateTime<Utc>,
     time: crate::time::TimePresenter,

@@ -1134,9 +1134,11 @@ Search 的选号限制不约束插件在选号后主动改写正文。
 添加和测试在各项的 `httpStatus` 返回这些状态，其他单项接口使用 HTTP 状态码
 
 代理列表只返回关联账号数量。关联账号按需查询，每项包含 `id`、`name`、`email`、`provider`、`enabled`、
-`authenticationKind`、`planType`、`planTypeDisplay` 和 `groups: [{ id, name, color, enabled }]`，
+`authenticationKind`、`planType`、`planTypeDisplay`、`upstream` 和 `groups: [{ id, name, color, enabled }]`，
 不返回账号凭据。默认每页 20 条，按名称、ID 稳定排序；搜索不区分大小写，匹配名称或邮箱的字面子串。
 不存在的代理返回 404，未绑定账号或没有匹配结果时返回空页。数量与当前页对应同一查询快照
+
+`upstream` 复用账号列表的互联观测结构和发现状态语义，只读取本地观测，不触发远端刷新
 
 移除关联账号只清除指定账号的代理绑定与连接地址，使其改为直连，保留凭据、调度参数与分组。
 若账号已不再绑定请求中的代理，则返回 409
@@ -2296,6 +2298,9 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 审计动作：`backup.s3_config_updated`、`backup.s3_connection_tested`、`backup.schedule_updated`、`backup.created`、`backup.download_url_created`、`backup.delete_requested`。审计详情与记录表均不保存 Secret、数据库连接串或预签名 URL query
 
 ## 10. Dashboard、用量与错误
+
+Dashboard 的当前账号摘要包含 `upstream`，结构与账号列表一致，用于统一互联身份展示；
+`planType` / `planTypeDisplay` 仍保留原生订阅含义。历史请求记录保持请求发生时的身份与订阅快照
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |

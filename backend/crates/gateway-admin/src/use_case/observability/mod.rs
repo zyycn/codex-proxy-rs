@@ -812,6 +812,7 @@ impl DefaultObservabilityService {
                 quota.apply_limit_reached_display();
                 account.quota_used_percent = quota.representative_used_percent();
                 account.quota_window = quota.representative_window().cloned();
+                account.upstream = quota.upstream;
             }
         }
     }

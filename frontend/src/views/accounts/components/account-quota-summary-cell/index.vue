@@ -61,25 +61,9 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
 
 <template>
   <div class="box-border grid min-h-16.5 w-full min-w-0 content-center gap-1.5 py-1.5">
-    <template v-if="account.authenticationKind === 'api_key' && summaryEntries.length === 0">
-      <span
-        class="flex min-w-0 items-baseline gap-1 font-mono leading-none tabular-nums"
-        :title="t('accounts.quota.localTokens')"
-      >
-        <strong class="truncate text-cp-xs font-heavy text-cp-text">{{ summaryValue.value }}</strong>
-        <span class="shrink-0 text-[9px] font-emphasis tracking-[0.02em] text-cp-text-quaternary">{{ t('common.units.tokens') }}</span>
-      </span>
-      <div class="grid min-w-0 gap-1.5">
-        <div class="flex min-w-0 items-start justify-between gap-2 leading-3">
-          <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ usageWindowLabels[account.usage.windowKind] }}</span>
-          <AccountCapacityIndicator :capacity="account.capacity" @show-details="emit('showConcurrency')" />
-        </div>
-        <div class="h-1 w-full rounded-full bg-cp-success" :title="t('accounts.quota.unavailableHelp')" aria-hidden="true" />
-      </div>
-    </template>
-    <template v-else-if="summaryEntries.length > 0">
+    <template v-if="summaryEntries.length > 0 || account.authenticationKind === 'api_key'">
       <div
-        v-if="hasUsage || hasUpstreamQuota"
+        v-if="hasUsage || hasUpstreamQuota || account.authenticationKind === 'api_key'"
         class="flex min-w-0 items-baseline justify-between gap-2 leading-none"
       >
         <span
@@ -105,13 +89,13 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
         </span>
       </div>
 
-      <div v-if="recentUsageEntry" class="flex min-w-0 items-end gap-2">
+      <div class="flex min-w-0 items-end gap-2">
         <!-- 共用列轨道为容量留位，进度条仍铺满整行，容量标记独立于额度弹层 -->
         <div class="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] gap-x-2">
           <AccountQuotaSummaryEntry
             class="col-span-full col-start-1 row-start-1"
-            :label="recentUsageEntry.label"
-            :windows="recentUsageEntry.windows"
+            :label="recentUsageEntry ? recentUsageEntry.label : t('accounts.upstream.quota')"
+            :windows="recentUsageEntry?.windows ?? []"
             :show-percentage="false"
           />
           <AccountCapacityIndicator

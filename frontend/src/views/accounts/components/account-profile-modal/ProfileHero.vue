@@ -70,7 +70,7 @@ watch(
           <h3 id="profile-display-name" class="m-0 min-w-0 truncate text-cp-lg leading-tight font-heavy text-cp-text">
             {{ displayName }}
           </h3>
-          <AccountPlanBadge v-if="account.planType" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" />
+          <AccountPlanBadge :upstream="account.upstream" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" />
         </div>
         <div
           v-if="username || accountIdentity"

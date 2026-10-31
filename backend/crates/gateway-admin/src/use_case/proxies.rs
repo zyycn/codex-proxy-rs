@@ -87,6 +87,7 @@ pub(crate) struct DefaultProxiesService {
     probe: Arc<dyn ProxyProbe>,
     snapshot: Arc<dyn SnapshotControl>,
     providers: ProviderAdminRegistry,
+    upstream_info: Option<Arc<dyn crate::ports::peer::PeerUpstreamService>>,
     test_slots: Semaphore,
 }
 
@@ -96,12 +97,14 @@ impl DefaultProxiesService {
         probe: Arc<dyn ProxyProbe>,
         snapshot: Arc<dyn SnapshotControl>,
         providers: ProviderAdminRegistry,
+        upstream_info: Option<Arc<dyn crate::ports::peer::PeerUpstreamService>>,
     ) -> Self {
         Self {
             store,
             probe,
             snapshot,
             providers,
+            upstream_info,
             test_slots: Semaphore::new(4),
         }
     }
@@ -226,19 +229,30 @@ impl ProxiesService for DefaultProxiesService {
             .map(|mut account| async {
                 // 与账号目录一致，缺失套餐时读取已有额度快照；限制并发且不触发上游刷新
                 let mut cached_quota = None;
-                if explicit_plan_type(account.plan_type.as_deref()).is_none()
-                    && let Ok(kind) = ProviderKind::new(account.provider_kind.clone())
+                if let Ok(kind) = ProviderKind::new(account.provider_kind.clone())
                     && let Ok(provider) = self.providers.require(&kind)
                     && let Ok(account_id) = ProviderAccountId::new(account.id.clone())
-                    && let Ok(quota) = provider
-                        .quota(ProviderQuotaRequest {
-                            account_id,
-                            refresh: false,
-                            rolling_usage: None,
-                        })
-                        .await
                 {
-                    cached_quota = Some(quota);
+                    if provider.supports_peer_connection(&account.authentication_kind)
+                        && let Some(peer) = self.upstream_info.as_deref()
+                    {
+                        account.upstream = peer
+                            .read_quota(&account_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|quota| quota.upstream);
+                    }
+                    if explicit_plan_type(account.plan_type.as_deref()).is_none() {
+                        cached_quota = provider
+                            .quota(ProviderQuotaRequest {
+                                account_id,
+                                refresh: false,
+                                rolling_usage: None,
+                            })
+                            .await
+                            .ok();
+                    }
                 }
                 account.plan_type_display = self.providers.resolve_account_plan(
                     &account.provider_kind,

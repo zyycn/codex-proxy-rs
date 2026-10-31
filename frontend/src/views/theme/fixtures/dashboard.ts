@@ -338,6 +338,7 @@ export const themeDashboardSummary = computed<DashboardSummaryResponse>(() => ({
   accountUsage: [
     {
       id: 'preview-openai-1',
+      upstream: null,
       provider: 'openai',
       authenticationKind: 'oauth',
       email: 'relay@example.com',
@@ -372,6 +373,7 @@ export const themeDashboardSummary = computed<DashboardSummaryResponse>(() => ({
     },
     {
       id: 'preview-xai-1',
+      upstream: null,
       provider: 'xai',
       authenticationKind: 'oauth',
       email: 'gateway@example.com',
@@ -427,6 +429,7 @@ export const themeDashboardSummary = computed<DashboardSummaryResponse>(() => ({
     },
     {
       id: 'preview-openai-2',
+      upstream: null,
       provider: 'openai',
       authenticationKind: 'oauth',
       email: 'control@example.com',

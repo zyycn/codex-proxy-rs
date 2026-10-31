@@ -47,16 +47,16 @@ const hasForecast = computed(() => props.account.authenticationKind !== 'api_key
 const hasPersonalInfo = computed(() => props.account.capabilities.profile || props.account.capabilities.subscription)
 const canRefresh = computed(() => props.account.capabilities.quotaRefresh || props.account.upstream?.discovered)
 const hasActions = computed(() => hasPersonalInfo.value || hasForecast.value || canRefresh.value || props.account.capabilities.resetCredits)
-const lastRefreshed = computed(() => t('accounts.quota.lastRefreshed', {
-  refreshedAtDisplay: formatRelativeTime(props.account.upstream?.discovered
-    ? props.account.upstream.observedAtRelative
-    : props.account.quota.refreshedAtRelative),
-}))
+const lastRefreshed = computed(() => props.account.upstream?.discovered && !props.account.upstream.observedAt
+  ? null
+  : t('accounts.quota.lastRefreshed', {
+      refreshedAtDisplay: formatRelativeTime(props.account.upstream?.discovered
+        ? props.account.upstream.observedAtRelative
+        : props.account.quota.refreshedAtRelative),
+    }))
 const showUpstreamStatus = computed(() => props.account.upstream?.discovered && (
-  !props.account.upstream.observedAt
-  || props.account.upstream.stale
+  (props.account.upstream.observedAt && props.account.upstream.stale)
   || props.account.upstream.lastError
-  || props.account.upstream.sync.state !== 'idle'
 ))
 watch(hasPersonalInfo, (available) => {
   if (!available)
@@ -75,13 +75,15 @@ watch(hasPersonalInfo, (available) => {
         class="col-span-2 row-start-2 m-0 flex min-w-0 items-center gap-1.5 text-cp-xs font-emphasis text-cp-text-secondary"
       >
         <span class="shrink-0 whitespace-nowrap">{{ t('accounts.quota.quota', { provider: formatProviderLabel(account.provider) }) }}</span>
-        <template v-if="account.planType">
+        <template v-if="account.planType || account.authenticationKind === 'api_key'">
           <span class="shrink-0">·</span>
-          <AccountPlanBadge :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" class="shrink-0" />
+          <AccountPlanBadge :upstream="account.upstream" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" class="shrink-0" />
         </template>
-        <span class="shrink-0">·</span>
-        <AccountUpstreamStatus v-if="showUpstreamStatus && account.upstream" :upstream="account.upstream" />
-        <span v-else class="min-w-0 truncate" :title="lastRefreshed">{{ lastRefreshed }}</span>
+        <template v-if="showUpstreamStatus || lastRefreshed">
+          <span class="shrink-0">·</span>
+          <AccountUpstreamStatus v-if="showUpstreamStatus && account.upstream" :upstream="account.upstream" />
+          <span v-else-if="lastRefreshed" class="min-w-0 truncate" :title="lastRefreshed">{{ lastRefreshed }}</span>
+        </template>
       </p>
       <div v-if="hasActions" class="col-start-2 row-start-1 flex items-center gap-0.5 [&_svg]:size-3.5 [&_svg]:stroke-2">
         <ZIconButton
@@ -124,8 +126,11 @@ watch(hasPersonalInfo, (available) => {
       </div>
     </div>
 
-    <div v-if="!account.capabilities.quota && !account.upstream?.discovered && quotaEntries.length === 0" class="grid flex-1 place-items-center">
-      <ZEmpty :title="t('accounts.quota.queryUnsupported')" surface="none" />
+    <div v-if="quotaEntries.length === 0 && !hasUpstreamPool" class="grid flex-1 place-items-center">
+      <ZEmpty
+        :title="!account.capabilities.quota && !account.upstream?.discovered ? t('accounts.quota.queryUnsupported') : t('accounts.quota.unobserved')"
+        surface="none"
+      />
     </div>
     <div v-else class="grid min-h-0 gap-3">
       <AccountQuotaPanelEntry
@@ -135,9 +140,6 @@ watch(hasPersonalInfo, (available) => {
         :windows="entry.windows"
       />
       <AccountUpstreamPool v-if="hasUpstreamPool" :pool="account.upstream?.pool" :windows="poolWindows" />
-      <p v-if="quotaEntries.length === 0 && !hasUpstreamPool" class="m-0 text-cp-sm font-emphasis text-cp-text-secondary">
-        {{ t('accounts.quota.unobserved') }}
-      </p>
     </div>
   </section>
 

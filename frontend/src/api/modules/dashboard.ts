@@ -1,6 +1,6 @@
 import type { RequestOptions } from '../request'
 import type { RelativeTimeView } from '../time'
-import type { AccountQuotaWindow } from './accounts'
+import type { AccountQuotaWindow, AccountUpstream } from './accounts'
 import type { AnalyticsMetadata } from './analytics'
 import type { UsageListRecord } from './usage'
 import request from '../request'
@@ -141,6 +141,7 @@ export interface DashboardAccountRequestBucket {
 }
 
 export interface DashboardAccountUsage {
+  upstream: AccountUpstream | null
   id: string
   provider: string
   authenticationKind: string
