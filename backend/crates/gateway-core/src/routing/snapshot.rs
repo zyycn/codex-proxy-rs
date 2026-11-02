@@ -23,7 +23,7 @@ use super::{
     RuntimeAccountDirectory, UpstreamModelId,
 };
 
-const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
+const MAXIMUM_SNAPSHOT_STABILITY_ATTEMPTS: usize = 4;
 
 type ModelCatalogAccounts = BTreeMap<ProviderKind, BTreeMap<String, BTreeSet<ProviderAccountId>>>;
 
@@ -328,14 +328,17 @@ impl RuntimeSnapshotCompiler {
             ConfigRevision,
             crate::routing::extensions::ExtensionSetReference,
         )> = None;
-        for _ in 0..MAXIMUM_CATALOG_STABILITY_ATTEMPTS {
+        let mut instability = RuntimeSnapshotCompileError::CatalogChanged;
+        for _ in 0..MAXIMUM_SNAPSHOT_STABILITY_ATTEMPTS {
             let facts = self
                 .store
                 .load_snapshot_facts()
                 .await
                 .map_err(|_| RuntimeSnapshotCompileError::StoreUnavailable)?;
             if facts.config_revision != facts.observed_current_revision {
-                return Err(RuntimeSnapshotCompileError::RevisionChanged);
+                // 并发提交使本轮事实过期时重读完整快照，不能混用不同版本的权限
+                instability = RuntimeSnapshotCompileError::RevisionChanged;
+                continue;
             }
             let revision = facts.config_revision;
             let extensions = match &self.extensions {
@@ -390,7 +393,8 @@ impl RuntimeSnapshotCompiler {
                         .map_err(|_| RuntimeSnapshotCompileError::StoreUnavailable)?
                         != revision
                 {
-                    return Err(RuntimeSnapshotCompileError::RevisionChanged);
+                    instability = RuntimeSnapshotCompileError::RevisionChanged;
+                    continue;
                 }
                 let snapshot = snapshot
                     .with_provider_catalog_generations(if cached.is_some() && !refresh_catalog {
@@ -401,8 +405,9 @@ impl RuntimeSnapshotCompiler {
                     .with_extensions(extensions);
                 return Ok(snapshot);
             }
+            instability = RuntimeSnapshotCompileError::CatalogChanged;
         }
-        Err(RuntimeSnapshotCompileError::CatalogChanged)
+        Err(instability)
     }
 }
 

@@ -730,12 +730,58 @@ impl ProviderCatalogPort for PublishingCatalog {
 
 #[test]
 fn compiler_should_reject_revision_changed_during_consistent_read() {
-    let facts = facts(1, 2);
-    let compiler = compiler(Arc::new(TestSnapshotStore::new(Ok(facts))));
+    let store = Arc::new(SequencedSnapshotStore {
+        facts: vec![facts(1, 2)],
+        loads: AtomicUsize::new(0),
+        current_revision: revision(2),
+    });
+    let compiler = compiler(store.clone());
 
     let error = block_on(compiler.compile()).expect_err("revision drift must fail closed");
 
     assert_eq!(error, RuntimeSnapshotCompileError::RevisionChanged);
+    assert_eq!(store.loads.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn compiler_reloads_complete_facts_after_revision_changes_during_read() {
+    let store = Arc::new(SequencedSnapshotStore {
+        facts: vec![facts(1, 2), facts(2, 2)],
+        loads: AtomicUsize::new(0),
+        current_revision: revision(2),
+    });
+
+    let snapshot = block_on(compiler(store.clone()).compile()).expect("latest consistent facts");
+
+    assert_eq!(snapshot.revision(), revision(2));
+    assert_eq!(store.loads.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn compiler_reloads_revision_changed_after_extension_preparation() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let extensions = Arc::new(CountingExtensionPreparation {
+        prepares: AtomicUsize::new(0),
+        drops: Arc::clone(&drops),
+    });
+    let compiler = RuntimeSnapshotCompiler::new(
+        Arc::new(SequencedSnapshotStore {
+            facts: vec![facts(1, 1), facts(2, 2)],
+            loads: AtomicUsize::new(0),
+            current_revision: revision(2),
+        }),
+        Arc::new(TestCatalog::Empty),
+    )
+    .with_extensions(extensions.clone());
+
+    let snapshot = block_on(compiler.compile()).expect("latest prepared snapshot");
+
+    assert_eq!(snapshot.revision(), revision(2));
+    assert_eq!(snapshot.extensions().unwrap().id().as_str(), "prepared-2");
+    assert_eq!(extensions.prepares.load(Ordering::SeqCst), 2);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    drop(snapshot);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
 
 #[test]
