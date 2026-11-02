@@ -482,15 +482,22 @@ fn classify_upstream_failure(
         };
     }
 
+    // 参数值不支持属于请求错误，不能因消息提及模型而推断账号无模型权限
     // 官方 Codex 将流内 invalid_prompt 归为请求错误，不依赖 HTTP 状态码
-    if matches!(source, UpstreamFailureSource::SseFailure) && code == "invalid_prompt" {
+    if code == "unsupported_value"
+        || (matches!(source, UpstreamFailureSource::SseFailure) && code == "invalid_prompt")
+    {
         return CodexFailureCategory::InvalidRequest;
     }
 
-    if [code.as_str(), message.as_str(), body.as_str()]
-        .into_iter()
-        .any(is_model_unsupported)
-    {
+    // 对齐官方 Codex 的模型拒绝合同，消息与正文不提供账号模型资格证据
+    if matches!(
+        (fields.code.as_deref(), status),
+        (
+            Some("model_not_found"),
+            None | Some(StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND)
+        )
+    ) {
         return CodexFailureCategory::ModelUnsupported;
     }
     let identity_signals = [
@@ -592,16 +599,6 @@ fn normalized(value: Option<&str>) -> String {
 fn non_empty_owned(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
-}
-
-fn is_model_unsupported(value: &str) -> bool {
-    value.contains("model_not_supported")
-        || value.contains("model_not_available")
-        || (value.contains("model")
-            && (value.contains("not supported")
-                || value.contains("not available")
-                || value.contains("not_supported")
-                || value.contains("not_available")))
 }
 
 fn is_identity_verification_required(value: &str) -> bool {

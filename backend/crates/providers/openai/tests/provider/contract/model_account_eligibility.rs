@@ -454,6 +454,133 @@ async fn missing_catalog_unknown_plan_and_rotated_api_credentials_preserve_upstr
 }
 
 #[tokio::test]
+async fn unsupported_reasoning_value_preserves_account_eligibility_across_transports() {
+    for transport in ["http", "sse", "websocket"] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        let cooldowns = Arc::new(MemoryCooldownPort::new());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (provider, pool) = provider_with_cooldowns(
+            &store,
+            format!("http://{}", listener.local_addr().unwrap()),
+            cooldowns.clone(),
+        );
+        let upstream_error = json!({
+            "code": "unsupported_value",
+            "type": "invalid_request_error",
+            "param": "reasoning.effort",
+            "message": "Unsupported value: 'none' is not supported with the 'gpt-6-astra' model. Supported values are: 'low', 'medium', 'high', 'xhigh', and 'max'."
+        });
+        let expected_message = upstream_error["message"].as_str().unwrap().to_owned();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            if transport == "websocket" {
+                let mut socket = accept_codex_test_websocket(socket).await;
+                socket.next().await.unwrap().unwrap();
+                socket
+                    .send(Message::Text(
+                        json!({
+                            "type": "error", "error": upstream_error, "status": 400
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+            } else {
+                read_http_request(&mut socket).await;
+                let (status, content_type, body) = if transport == "sse" {
+                    let event = json!({"type":"response.failed","response":{
+                        "id":"resp_bad_effort","status":"failed","output":[],"error":upstream_error
+                    }});
+                    (
+                        "200 OK",
+                        "text/event-stream",
+                        gateway_protocol::openai::sse::encode_sse_event(
+                            "response.failed",
+                            &event.to_string(),
+                        ),
+                    )
+                } else {
+                    (
+                        "400 Bad Request",
+                        "application/json",
+                        json!({"error":upstream_error}).to_string(),
+                    )
+                };
+                socket.write_all(format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                ).as_bytes()).await.unwrap();
+            }
+            // 合法请求仍应使用同一个账号，不能被上一请求的参数拒绝隔离
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            socket.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{CAPTURE_COMPLETED_SSE}",
+                CAPTURE_COMPLETED_SSE.len()
+            ).as_bytes()).await.unwrap();
+        });
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            json!({
+                "model":"gpt-6-astra","input":"hello","reasoning":{"effort":"none"}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+        .unwrap()
+        .with_context(Map::from_iter([(
+            "use_websocket".to_owned(),
+            json!(transport == "websocket"),
+        )]));
+        let mut stream = provider
+            .clone()
+            .execute(
+                planned_request_for_model(
+                    "openai",
+                    Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                    "gpt-6-astra",
+                ),
+                context("req_unsupported_effort", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        let (_, error) = super::precommit::stream_failure(&mut stream).await;
+        assert_eq!(
+            error.kind(),
+            ProviderErrorKind::InvalidRequest,
+            "{transport}"
+        );
+        assert!(error.retry_is_prohibited(), "{transport}");
+        assert!(!error.replay_is_safe(), "{transport}");
+        let visible = error.client_visible_upstream_error().unwrap();
+        assert_eq!(visible.code(), Some("unsupported_value"));
+        assert_eq!(visible.message(), expected_message);
+        drop(stream);
+        assert!(cooldowns.scoped.lock().unwrap().is_empty(), "{transport}");
+        let mut recovered = provider
+            .clone()
+            .execute(
+                planned_request_for_model("openai", operation("gpt-6-astra"), "gpt-6-astra"),
+                context("req_valid_effort", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            recovered.metadata().provider_account_id().as_str(),
+            "acct_provider_contract"
+        );
+        while let Some(event) = recovered.next().await {
+            event.unwrap();
+        }
+        server.await.unwrap();
+        pool.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn upstream_model_rejection_cools_only_that_model_across_requests_and_transports() {
     use gateway_core::provider_ports::{ProviderCooldownScope, ProviderScopedCooldown};
 
