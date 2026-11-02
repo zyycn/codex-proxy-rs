@@ -13,6 +13,7 @@ services:
       service: postgres-credentials
     image: postgres:18-bookworm@sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc
     restart: unless-stopped
+    # 小内存部署可在此调整数据库预算，保留 UTC 参数，详见 README.md#小内存优化
     command:
       - postgres
       - -c

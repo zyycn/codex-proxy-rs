@@ -53,6 +53,7 @@ store:
     # 与 PostgreSQL 共用密码格式要求，并满足 Redis 服务端密码策略
     password: &redis_password ''
   # 可选：PostgreSQL 连接池预算；下列值与当前推荐默认一致。
+  # 小内存低并发部署的池上限与数据库调优见 deploy/README.md#小内存优化
   # pool:
   #   max_connections: 20
   #   acquire_timeout_seconds: 5
@@ -104,6 +105,7 @@ services:
       POSTGRES_PASSWORD: *postgres_password
 
   redis-credentials:
+    # 可选的持久化与内存预算见 deploy/README.md#小内存优化，调整时保留密码参数
     command:
       - redis-server
       - --appendonly

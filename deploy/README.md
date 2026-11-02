@@ -19,7 +19,7 @@
 | 位置 | 内容 | 修改方式 |
 | --- | --- | --- |
 | `deploy/config.yaml` | 监听、数据库/Redis 连接、部署凭据、时区、日志与可选内存分配策略等启动配置 | 从模板创建，已有部署合并修改，不覆盖原文件 |
-| `deploy/compose.yaml` | 镜像、容器网络、端口、挂载与资源限制 | 调整 Compose 并重建受影响容器 |
+| `deploy/compose.yaml` | 镜像、容器网络、端口、挂载、PostgreSQL 启动参数与资源限制 | 调整 Compose 并重建受影响容器 |
 | PostgreSQL | 账号、Key、运行设置、上游身份、插件配置等业务数据 | 管理端或管理 API |
 | 浏览器本地 | 主题和界面偏好 | 当前浏览器的主题设置 |
 
@@ -58,6 +58,21 @@ host:
 
 ### 小内存优化
 
+1 GB 内存、网关与 PostgreSQL / Redis 同机、低并发部署可从本节参数开始评估。
+这些值是调优起点，不是整机内存上限或容量保证；先记录实际负载下的内存峰值，优先缩小数据库连接池和缓冲，再按需调整 Redis 与应用空闲内存回收
+
+| 调整对象 | 配置入口 | 生效方式 |
+| --- | --- | --- |
+| 应用空闲内存回收 | `config.yaml` → `services.app-runtime.environment.GLIBC_TUNABLES` | 重建应用容器 |
+| 应用 PostgreSQL 连接池 | `config.yaml` → `store.pool.max_connections` | 重启应用；Compose 可按下文重建 |
+| PostgreSQL 内存与连接预算 | `compose.yaml` → `services.postgres.command` | 重建 PostgreSQL 容器 |
+| Redis 持久化与内存预算 | `config.yaml` → `services.redis-credentials.command` | 重建 Redis 容器 |
+
+以下 YAML 片段合并到已有节点，不要重复创建顶层 `store` / `services`，也不要覆盖凭据、挂载和健康检查。
+这些参数没有管理端热更新入口；二进制部署沿用 `store.pool`，PostgreSQL / Redis 参数则配置到各自服务的配置文件或启动命令，应用不会读取 `services` 桥接区来修改外部数据库
+
+#### 应用空闲内存回收
+
 Linux/glibc 部署可选择更积极地归还请求结束后的空闲内存，适合内存紧张且请求后 RSS 长时间偏高的机器。
 该选项默认关闭，官方 Linux 镜像支持；更频繁的映射与回收可能增加 CPU 开销，应结合实际负载观察
 
@@ -71,7 +86,7 @@ services:
 ```
 
 Compose 从 `services.app-runtime` 取得参数；不开启优化时保留该段并将值设为 `''`。
-PostgreSQL 和 Redis 的凭据桥接配置与该段并列，无需在 `compose.yaml` 重复填写参数
+PostgreSQL 和 Redis 的凭据桥接配置与该段并列，无需在 `compose.yaml` 重复填写 `GLIBC_TUNABLES`
 
 校验并重建应用容器使配置生效；`docker compose restart` 不会更新容器环境变量：
 
@@ -93,6 +108,114 @@ GLIBC_TUNABLES=glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=13
 
 该变量由 glibc 在进程启动时读取，不支持管理端热更新。
 它不设置内存上限，不释放仍被请求或连接持有的缓冲，也不处理容器文件缓存；观察时分别比较进程 RSS、cgroup 的 `anon` 与 `file`
+
+#### PostgreSQL 与应用连接池
+
+在 `deploy/config.yaml` 的 `store` 下设置连接池上限，未列出的池参数保留默认值：
+
+```yaml
+store:
+  pool:
+    max_connections: 5
+```
+
+应用默认上限为 20，允许的最小值为 2；降低上限可以限制实际数据库连接数，但也会增加请求、后台写入与管理查询之间的等待。
+如果出现连接获取超时，应结合数据库负载调大池容量，不要仅延长等待时间
+
+将 `deploy/compose.yaml` 中 `services.postgres.command` 替换为以下列表，保留 UTC 参数：
+
+```yaml
+command:
+  - postgres
+  - -c
+  - timezone=UTC
+  - -c
+  - log_timezone=UTC
+  - -c
+  - shared_buffers=64MB
+  - -c
+  - max_connections=30
+  - -c
+  - work_mem=2MB
+  - -c
+  - maintenance_work_mem=32MB
+  - -c
+  - autovacuum_work_mem=16MB
+  - -c
+  - max_parallel_workers_per_gather=0
+```
+
+`shared_buffers` 缩小共享缓冲；服务端 `max_connections` 限制整个数据库的连接数，应覆盖所有应用池，并为备份、维护和其他客户端留余量。
+它与应用连接池上限是两个配置，调小服务端上限不会主动回收应用池里的空闲连接
+
+`work_mem` 是每个排序或哈希操作的基础预算，哈希还受 `hash_mem_multiplier` 影响，一条 SQL 可以同时使用多份预算。
+`maintenance_work_mem` 限制维护操作内存，`autovacuum_work_mem` 按自动清理进程分别计；保持自动清理开启。
+关闭并行查询、缩小这些预算可能增加临时文件 I/O，并延长统计、索引创建与维护时间
+
+参数定义见 [PostgreSQL 18 内存与并行查询](https://www.postgresql.org/docs/18/runtime-config-resource.html)和[连接设置](https://www.postgresql.org/docs/18/runtime-config-connection.html)
+
+#### Redis 持久化与内存预算
+
+项目默认开启 AOF，未显式设置 `maxmemory` 和定时 RDB 快照规则。
+小内存部署可保留 AOF，关闭定时 RDB 快照以减少快照期间的 fork / 写时复制峰值；代价是少一份独立的 RDB 快照，AOF 重写仍需要预留额外内存
+
+在已有 `deploy/config.yaml` 中替换 `services.redis-credentials.command`，复用同一文件内的密码锚点，保留该服务的 `healthcheck`：
+
+```yaml
+services:
+  redis-credentials:
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - ''
+      - --requirepass
+      - *redis_password
+      # 当前用量和负载峰值明显低于 64 MiB 时，再取消以下注释
+      # - --maxmemory
+      # - 64mb
+      # - --maxmemory-policy
+      # - noeviction
+```
+
+`--save` 后的空字符串必须保留，它表示关闭定时快照。持久化取舍见 [Redis 文档](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)
+
+设置内存上限前先查看 `INFO memory` 的 `used_memory`、`used_memory_peak` 和 `used_memory_rss`，为业务增长、分配器和持久化峰值留余量。
+`maxmemory 64mb` 只是可选起点，未达到上限时不会因此降低 RSS，也不是进程或容器的总内存上限。
+达到上限后，`noeviction` 会拒绝需要增加内存的写入，可能影响登录与请求调度，应调大预算或减少负载
+
+Redis 保存租约、冷却和登录会话等[协调状态](../docs/architecture.md#8-状态所有权)，不要使用 `allkeys-lru`、`volatile-lru` 等提前淘汰键的策略。
+预算与策略定义见 [Redis 内存限制](https://redis.io/docs/latest/develop/reference/eviction/)
+
+#### 使配置生效与检查效果
+
+只调整应用配置时，按[应用空闲内存回收](#应用空闲内存回收)中的命令重建应用容器。
+调整 PostgreSQL / Redis 启动参数需要短暂停服，在维护窗口执行；只改其中一个服务时，数据库重建命令只列出该服务：
+
+```bash
+docker compose -f deploy/compose.yaml config --quiet
+docker compose -f deploy/compose.yaml stop codex-proxy-rs
+docker compose -f deploy/compose.yaml up -d --no-build --no-deps --force-recreate --wait postgres redis
+docker compose -f deploy/compose.yaml up -d --no-build --no-deps --force-recreate --wait codex-proxy-rs
+```
+
+数据库健康检查通过后再执行最后一条命令；`restart` 不会更新容器启动命令或环境变量。
+外部数据库需通过其管理方式应用参数，不能用本地 Compose 命令代替
+
+通过交互提示输入对应数据库密码，核对实际生效值与内存占用，避免将密码写入命令行：
+
+```bash
+docker compose -f deploy/compose.yaml exec postgres psql -U codex_proxy -d codex_proxy -W \
+  -c 'SHOW shared_buffers; SHOW max_connections; SHOW work_mem; SHOW maintenance_work_mem; SHOW autovacuum_work_mem; SHOW max_parallel_workers_per_gather;'
+docker compose -f deploy/compose.yaml exec redis redis-cli --askpass CONFIG GET appendonly save maxmemory maxmemory-policy
+docker compose -f deploy/compose.yaml exec redis redis-cli --askpass INFO memory
+docker compose -f deploy/compose.yaml stats --no-stream
+```
+
+在相同负载下比较空闲、请求峰值与后台统计 / 维护期间的占用，并检查实际模型请求、管理查询是否正常，有无连接获取超时、Redis OOM 或容器重启。
+不要把 PostgreSQL 各进程的 RSS 直接相加，共享页会重复计数；容器文件缓存也应与匿名内存区分。
+容器硬内存上限不能代替这些预算，过紧会导致 OOM；需要回退时恢复调整前的参数，按同样流程重建对应容器
 
 ## 部署结构
 
