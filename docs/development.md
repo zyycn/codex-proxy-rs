@@ -14,7 +14,7 @@
 
 ## 环境与依赖
 
-需要 Node.js 26.12.1、pnpm、[Rust 工具链](architecture.md#验证命令)、PostgreSQL 和 Redis
+需要 Node.js 26.13.0、pnpm、[Rust 工具链](architecture.md#验证命令)、PostgreSQL 和 Redis
 
 各前端的 `packageManager` 固定 pnpm 版本，宿主 CI 和 Docker 从 `frontend/package.json` 读取
 
