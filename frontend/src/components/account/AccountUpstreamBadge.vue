@@ -15,7 +15,8 @@ const { t } = useI18n({ useScope: 'global' })
     :title="t('accounts.upstream.link')"
   >
     <AppBrandMark variant="glyph" class="relative size-4 shrink-0" aria-hidden="true" />
-    <span class="relative font-mono text-[10px] leading-none font-heavy tracking-[0.05em]">CPR</span>
+    <!-- 大写字形在行盒内偏上，保留紧凑行高并对齐图标的视觉中心 -->
+    <span class="relative top-px font-mono text-[10px] leading-none font-heavy tracking-[0.05em]">CPR</span>
   </span>
 </template>
 
