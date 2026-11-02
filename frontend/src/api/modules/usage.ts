@@ -94,6 +94,7 @@ export interface UsageListRecord {
   accountNotes: string | null
   accountPlanType: string | null
   accountPlanTypeDisplay: string | null
+  accountUpstreamPeer: boolean | null
   route: string
   model: string | null
   requestedModel: string | null
@@ -364,6 +365,7 @@ export interface UsageDiagnosticItem {
   authenticationKind: string | null
   accountPlanType: string | null
   accountPlanTypeDisplay: string | null
+  accountUpstreamPeer: boolean | null
   requestCount: number
   successCount: number
   errorCount: number

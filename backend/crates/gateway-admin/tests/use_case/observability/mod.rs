@@ -1479,6 +1479,7 @@ fn total_record(
     now: DateTime<Utc>,
 ) -> UsageListRecord {
     UsageListRecord {
+        provider_account_upstream_peer: None,
         error_code: None,
         error_message: None,
         client_status_code: None,

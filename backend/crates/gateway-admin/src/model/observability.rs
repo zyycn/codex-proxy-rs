@@ -739,6 +739,8 @@ pub struct UsageListRecord {
     /// 请求选号时冻结的账号套餐
     pub provider_account_plan_type: Option<String>,
     pub provider_account_plan_type_display: Option<String>,
+    /// 查询时的互联识别结果，缺少当前摘要时为未知
+    pub provider_account_upstream_peer: Option<bool>,
     pub provider_account_authentication_kind: Option<String>,
     pub upstream_model_id: Option<String>,
     pub upstream_transport: Option<String>,
@@ -1439,6 +1441,8 @@ pub struct DiagnosticsItem {
     pub name: String,
     pub account_authentication_kind: Option<String>,
     pub account_plan_type: Option<String>,
+    /// 仅账号维度补充当前互联识别结果
+    pub account_upstream_peer: Option<bool>,
     pub account_plan_type_display: Option<String>,
     pub request_count: u64,
     pub success_count: u64,

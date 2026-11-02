@@ -8,6 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use futures::StreamExt as _;
 use gateway_core::{account::ProviderAccountId, routing::ProviderKind};
 
 use crate::{
@@ -133,7 +134,8 @@ impl DefaultObservabilityService {
         )
         .map_err(|error| map_store_error(error, "dashboard"))?;
         let runtime_slots = observation.runtime_slots;
-        self.enrich_list_records(&mut observation.recent_requests);
+        self.enrich_list_records(&mut observation.recent_requests)
+            .await;
         self.enrich_dashboard_quotas(&mut observation.account_usage)
             .await;
         for account in &mut observation.account_usage {
@@ -259,7 +261,7 @@ impl ObservabilityService for DefaultObservabilityService {
             .list_usage_records(query)
             .await
             .map_err(|error| map_store_error(error, "usage records"))?;
-        self.enrich_list_records(&mut page.items);
+        self.enrich_list_records(&mut page.items).await;
         Ok(page)
     }
 
@@ -336,6 +338,12 @@ impl ObservabilityService for DefaultObservabilityService {
             .usage_diagnostics(range, filter, dimension, 100)
             .await
             .map_err(|error| map_store_error(error, "usage diagnostics"))?;
+        let peers = if dimension == DiagnosticDimension::Account {
+            self.current_upstream_peers(observation.items.iter().map(|item| item.key.as_str()))
+                .await
+        } else {
+            HashMap::new()
+        };
         let items = observation
             .items
             .into_iter()
@@ -345,6 +353,7 @@ impl ObservabilityService for DefaultObservabilityService {
                     rate_or_zero(item.non_completion_count, item.request_count);
                 let retry_rate = rate_or_zero(item.retried_request_count, item.request_count);
                 DiagnosticsItem {
+                    account_upstream_peer: peers.get(&item.key).copied(),
                     key: item.key,
                     name: item.name,
                     account_authentication_kind: item.account_authentication_kind,
@@ -912,6 +921,29 @@ fn usd_cost(costs: &[CurrencyCost]) -> Option<DecimalAmount> {
 }
 
 impl DefaultObservabilityService {
+    async fn current_upstream_peers<'a>(
+        &self,
+        ids: impl Iterator<Item = &'a str>,
+    ) -> HashMap<String, bool> {
+        let Some(peer) = self.upstream_info.as_deref() else {
+            return HashMap::new();
+        };
+        let ids = ids
+            .map(str::to_owned)
+            .collect::<std::collections::BTreeSet<_>>();
+        // 同一页重复账号只读取一次摘要，单个账号不存在或读取失败不阻断历史记录
+        futures::stream::iter(ids)
+            .map(|id: String| async move {
+                let account_id = ProviderAccountId::new(id.clone()).ok()?;
+                let upstream = peer.read_summary(&account_id).await.ok()??.upstream?;
+                Some((id, upstream.discovered && upstream.observed_at.is_some()))
+            })
+            .buffer_unordered(8)
+            .filter_map(|value| async move { value })
+            .collect()
+            .await
+    }
+
     async fn enrich_dashboard_quotas(&self, accounts: &mut [DashboardAccountUsage]) {
         if accounts.is_empty() {
             return;
@@ -976,8 +1008,22 @@ impl DefaultObservabilityService {
 
     /// 补充当前套餐展示名称，逐条尽力把可校验的总额升级为完整分解；单条脏数据（非法 Provider kind、
     /// 不支持的来源或费用规则失败）只保留该条已存的总额，不影响整页返回
-    fn enrich_list_records(&self, records: &mut [crate::model::observability::UsageListRecord]) {
+    async fn enrich_list_records(
+        &self,
+        records: &mut [crate::model::observability::UsageListRecord],
+    ) {
+        let peers = self
+            .current_upstream_peers(
+                records
+                    .iter()
+                    .filter_map(|record| record.provider_account_ref.as_deref()),
+            )
+            .await;
         for record in records {
+            record.provider_account_upstream_peer = record
+                .provider_account_ref
+                .as_ref()
+                .and_then(|id| peers.get(id).copied());
             record.provider_account_plan_type_display =
                 record.provider_kind.as_deref().and_then(|provider| {
                     self.providers

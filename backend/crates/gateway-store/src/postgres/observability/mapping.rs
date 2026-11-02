@@ -327,6 +327,7 @@ pub(crate) fn usage_list_record_from_row(
         provider_account_name: get(row, "provider_account_name")?,
         provider_account_email: get(row, "provider_account_email")?,
         provider_account_notes: get(row, "provider_account_notes")?,
+        provider_account_upstream_peer: None,
         provider_account_plan_type: get(row, "provider_account_plan_type")?,
         provider_account_plan_type_display: None,
         provider_account_authentication_kind: get(row, "provider_account_authentication_kind")?,

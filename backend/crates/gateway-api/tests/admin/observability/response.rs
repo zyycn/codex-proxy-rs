@@ -656,6 +656,23 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
     );
 }
 
+fn peer_summary(
+    discovered: bool,
+    observed: bool,
+) -> gateway_admin::model::provider_credentials::ProviderQuota {
+    gateway_admin::model::provider_credentials::ProviderQuota {
+        upstream: Some(gateway_admin::model::upstream_info::ProviderUpstreamInfo {
+            discovered,
+            observed_at: observed.then(chrono::Utc::now),
+            stale: true,
+            connection_revision: "test-connection".to_owned(),
+            last_error: None,
+            pool: None,
+        }),
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
 async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
     use axum::{
@@ -670,13 +687,17 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
 
     use crate::admin::{AdminTestFixture, AdminTestState};
 
-    for (authentication_kind, plan_type, plan_display) in [
-        (Some("oauth"), Some("pro"), Some("Pro")),
-        (Some("api_key"), None, None),
-        (None, None, None),
+    for (authentication_kind, plan_type, plan_display, peer) in [
+        (Some("oauth"), Some("pro"), Some("Pro"), None),
+        (Some("api_key"), None, None, None),
+        (Some("api_key"), None, None, Some((true, true))),
+        (Some("api_key"), None, None, Some((true, false))),
+        (Some("api_key"), None, None, Some((false, true))),
+        (None, None, None, None),
     ] {
         let fixture = AdminTestFixture::new().await;
         fixture.auth.insert_session("valid-session");
+        *fixture.provider_quota.lock().unwrap() = peer.map(|(d, o)| peer_summary(d, o));
         *fixture.diagnostics.lock().expect("diagnostics") = DiagnosticsObservation {
             analytics: Default::default(),
             total_request_count: 4,
@@ -718,6 +739,10 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
             .await
             .expect("diagnostics body");
         let value: serde_json::Value = serde_json::from_slice(&body).expect("diagnostics JSON");
+        assert_eq!(
+            value["data"]["items"][0]["accountUpstreamPeer"],
+            json!(peer.map(|(d, o)| d && o))
+        );
         assert_eq!(value["data"]["items"][0]["requestShare"], 0.5);
         assert_eq!(value["data"]["items"][0]["retryCount"], 3);
         assert_eq!(value["data"]["items"][0]["retryRate"], 0.5);
@@ -906,6 +931,7 @@ async fn usage_route_projects_request_facts_and_billing() {
         .lock()
         .expect("usage records")
         .push(UsageListRecord {
+            provider_account_upstream_peer: None,
             error_code: None,
             error_message: None,
             client_status_code: None,
@@ -1131,6 +1157,39 @@ async fn usage_route_projects_request_facts_and_billing() {
         value["data"]["items"][2]["billing"]["totalAmountDisplay"],
         "$0.007"
     );
+
+    // 互联标识随当前摘要变化，重复请求共享同一账号，既有请求快照保持原值
+    for peer in [
+        Some((true, true)),
+        Some((true, false)),
+        Some((false, true)),
+        None,
+    ] {
+        *fixture.provider_quota.lock().unwrap() = peer.map(|(d, o)| peer_summary(d, o));
+        let response = observability::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/usage/records?status=all")
+                    .header(header::COOKIE, "cpr_session=valid-session")
+                    .header("x-request-id", "req_peer_badge")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        for item in value["data"]["items"].as_array().unwrap() {
+            assert_eq!(
+                item["accountUpstreamPeer"],
+                json!(peer.map(|(d, o)| d && o))
+            );
+            assert_eq!(item["accountName"], "Snapshot Alpha");
+            assert_eq!(item["accountPlanType"], "supergrok_plus");
+        }
+    }
 }
 
 #[tokio::test]

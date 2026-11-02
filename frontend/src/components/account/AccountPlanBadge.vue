@@ -11,6 +11,7 @@ const props = withDefaults(
     planType?: string | null
     authenticationKind?: string
     upstream?: AccountUpstream | null
+    upstreamPeer?: boolean | null
     planTypeDisplay: string
     size?: 'xs' | 'sm' | 'md'
   }>(),
@@ -61,7 +62,7 @@ const paletteClass = computed(() => {
 </script>
 
 <template>
-  <AccountUpstreamBadge v-if="upstream?.discovered && upstream.observedAt" :size="size" />
+  <AccountUpstreamBadge v-if="upstreamPeer || (upstream?.discovered && upstream.observedAt)" :size="size" />
   <span
     v-else-if="!accountUpstreamPending(upstream)"
     class="inline-flex min-w-0 max-w-full items-center justify-center whitespace-nowrap leading-none shadow-z-tertiary"

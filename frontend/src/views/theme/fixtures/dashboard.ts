@@ -119,6 +119,7 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageListRecord
     accountNotes: null,
     accountPlanType: null,
     accountPlanTypeDisplay: null,
+    accountUpstreamPeer: null,
     route: stream ? '/v1/responses' : '/v1/chat/completions',
     model: options.model,
     requestedModel: options.model,

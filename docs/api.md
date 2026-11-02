@@ -2511,10 +2511,14 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 
 管理端请求列表及 Dashboard 最近请求中的 `accountNotes` 来自请求保存的账号备注快照，未保存时为 `null`
 
+请求列表、Dashboard 最近请求及账号维度诊断的 `accountUpstreamPeer` 来自账号当前的互联摘要，
+已发现且有观测时间时为 `true`，尚未识别成功时为 `false`；摘要缺失、账号已删除或读取失败时为 `null`。
+该字段仅供 CPR 标识展示，不写入历史快照，非账号维度诊断为 `null`
+
 `/api/admin/usage/records` 与 `/api/admin/operations/errors` 的 `clientApiKeyName` 来自请求保存的 Key 名称快照，
 未保存时为 `null`，不影响记录返回，不包含密钥原文
 
-查询不关联当前配置，改名、修改订阅或删除配置不改变已有快照。补写的历史 Key 名称与订阅取自补写时仍存在的配置，
+上述快照字段不关联当前配置，改名、修改订阅或删除配置不改变已有快照。补写的历史 Key 名称与订阅取自补写时仍存在的配置，
 不保证等于请求发生时的值；无法补齐的字段保持未知
 
 运维错误记录的 `errorDetails` 为受控诊断文本，无详情时为 `null`。
