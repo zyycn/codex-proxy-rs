@@ -266,7 +266,7 @@ export interface ConfigurePluginInstanceRequest {
   artifactSha256: string
   enabled: boolean
   configuration: Record<string, unknown>
-  secrets?: Record<string, string>
+  secrets?: Record<string, string | null>
   bindings: PluginCapabilityBinding[]
 }
 

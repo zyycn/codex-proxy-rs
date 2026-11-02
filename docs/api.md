@@ -2929,7 +2929,8 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 创建与更新的配置字段为 `name`、`artifactSha256`、`enabled`、`configuration` 和必填的 `bindings`，
 `secrets` 可选。输入严格拒绝未知字段。`artifactSha256` 必须指向
 已接受的制品。`configuration` 是匹配插件 schema 的 JSON 对象；敏感字段必须
-放入 `secrets`，空对象清除全部值。省略时同版本编辑保留当前值；跨版本编辑优先保留目标版本快照的密钥，没有快照则保留当前值
+放入 `secrets`，按字段更新：字符串设置对应值，`null` 清除对应字段，未出现的字段保留。省略 `secrets` 或传空对象均不修改密钥
+同版本编辑以当前值为基础；跨版本编辑优先以目标版本快照的密钥为基础，没有快照则使用当前值。创建以空集合为基础，密钥值不会返回给管理端
 
 创建可传 `creationId`（标准小写 UUID），同一草稿重试复用该 ID，已保存且内容不同则返回 409，不创建副本或覆盖旧配置。
 相同内容的重试仍会重新准备并发布，不保证配置 revision 不变。更新可传 `expectedRevision`，与实例列表的 `revision`

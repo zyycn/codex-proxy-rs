@@ -28,17 +28,16 @@ pub(super) fn same_creation_request(
     existing: &PluginInstance,
     input: &ConfigurePluginInstance,
 ) -> bool {
-    let same_secrets = input
+    let mut requested_secrets = input
         .secrets
-        .as_ref()
-        .map_or(existing.secrets.is_empty(), |secrets| {
-            secrets.len() == existing.secrets.len()
-                && secrets.iter().all(|(key, value)| {
-                    existing
-                        .secrets
-                        .get(key)
-                        .is_some_and(|current| current.expose_secret() == value.expose_secret())
-                })
+        .iter()
+        .filter_map(|(key, value)| value.as_ref().map(|value| (key, value)));
+    let same_secrets = requested_secrets.clone().count() == existing.secrets.len()
+        && requested_secrets.all(|(key, value)| {
+            existing
+                .secrets
+                .get(key)
+                .is_some_and(|current| current.expose_secret() == value.expose_secret())
         });
     existing.name == input.name.trim()
         && existing.artifact_sha256 == input.artifact_sha256

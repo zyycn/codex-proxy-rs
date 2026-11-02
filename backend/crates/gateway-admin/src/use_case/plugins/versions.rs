@@ -69,7 +69,7 @@ impl PluginsService {
             artifact_sha256: input.artifact_sha256,
             enabled: existing.enabled,
             configuration: saved.configuration,
-            secrets: Some(saved.secrets),
+            secrets: Default::default(),
             bindings: saved.bindings,
         };
         // 沿用同一份快照的 CAS 和状态迁移流程，不能在检查目标后重新读取并覆盖并发配置
@@ -202,7 +202,7 @@ impl PluginsService {
             artifact_sha256: input.artifact_sha256,
             enabled: existing.enabled,
             configuration: configuration.configuration,
-            secrets: Some(configuration.secrets),
+            secrets: Default::default(),
             bindings: configuration.bindings,
         };
         // 同一次读取的 CAS 覆盖草稿计算、准备与提交，不能覆盖并发设置

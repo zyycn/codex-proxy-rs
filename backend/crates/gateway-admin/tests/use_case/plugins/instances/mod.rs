@@ -49,6 +49,7 @@ use serde_json::json;
 
 use super::TestPluginPorts;
 
+mod configuration;
 mod queries;
 
 const OLD_ARTIFACT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -759,7 +760,7 @@ fn input() -> ConfigurePluginInstance {
         artifact_sha256: NEW_ARTIFACT.into(),
         enabled: true,
         configuration: json!({}),
-        secrets: None,
+        secrets: Default::default(),
         bindings: vec![],
     }
 }
@@ -942,6 +943,8 @@ async fn configuration_retry_reuses_creation_id_and_rejects_changed_draft() {
         // 此用例验证创建重试，使用不需要私有状态迁移的固定版本
         value.artifact_sha256 = OLD_ARTIFACT.into();
         value.enabled = false;
+        value.secrets =
+            serde_json::from_value(json!({"token": "saved-token", "absent": null})).unwrap();
         value
     };
     let created = service
@@ -955,9 +958,26 @@ async fn configuration_retry_reuses_creation_id_and_rejects_changed_draft() {
     assert_eq!(created.instance.id, creation_id);
     assert_eq!(retried.instance.id, creation_id);
     assert_eq!(fixture.snapshot().instances.len(), 2);
+    use secrecy::ExposeSecret as _;
+    assert_eq!(
+        retried.instance.secrets["token"].expose_secret(),
+        "saved-token"
+    );
+    assert!(!retried.instance.secrets.contains_key("absent"));
     let before = fixture.snapshot().config_revision;
     let mut changed = request();
     changed.name = "changed draft".into();
+    let error = service
+        .configure_instance(None, changed, &context())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), AdminErrorKind::Conflict);
+    assert_eq!(fixture.snapshot().config_revision, before);
+    let mut changed = request();
+    changed
+        .secrets
+        .insert("token".into(), Some("different-token".into()));
     let error = service
         .configure_instance(None, changed, &context())
         .await
@@ -1432,23 +1452,6 @@ async fn version_switch_preparation_failure_preserves_current_and_saved_settings
     assert_eq!(
         data.history[NEW_ARTIFACT].configuration,
         json!({"oldVersion":true})
-    );
-}
-
-#[tokio::test]
-async fn version_edit_preserves_the_target_versions_secrets_when_omitted() {
-    use secrecy::ExposeSecret as _;
-    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
-    let before = fixture.snapshot();
-    let mut request = input();
-    request.secrets = None;
-    let result = service(fixture, Arc::new(Published::default()))
-        .configure_instance(Some(&before.instances[0].id), request, &context())
-        .await
-        .unwrap();
-    assert_eq!(
-        result.instance.secrets["token"].expose_secret(),
-        "old-version-secret"
     );
 }
 

@@ -217,7 +217,7 @@ impl PluginsService {
                 artifact_sha256: metadata.sha256.clone(),
                 enabled: !configuration_required && compatible,
                 configuration: configuration.clone(),
-                secrets: None,
+                secrets: Default::default(),
                 bindings: bindings.clone(),
             };
             match self.configure_instance(None, input, context).await {
