@@ -1753,7 +1753,12 @@ where
                 max_delay,
                 jitter,
                 ..
-            }) if ordinary_retry && !suppress_transient_retry => {
+            }) if ordinary_retry
+                && !suppress_transient_retry
+                && error
+                    .retry_after()
+                    .is_none_or(|after| after <= MAX_SAME_ACCOUNT_ADVISED_WAIT) =>
+            {
                 let retries = self
                     .transient_retry_counts
                     .entry(current.metadata.provider_account_id().clone())
@@ -2692,6 +2697,12 @@ where
         self.last_observed_provider = Some(provider_kind);
     }
 }
+
+/// 同账号瞬态重试最多遵循的服务器建议等待
+///
+/// 更长的建议不在原账号空等：下游可能已提交，静默期间客户端空闲超时（Codex 默认 300 秒）会先触发；
+/// RetryThenRotateAccount 直接换号，RetryThenReturnError 把带 retry-after 的错误交给客户端退避
+const MAX_SAME_ACCOUNT_ADVISED_WAIT: Duration = Duration::from_secs(30);
 
 fn is_return_error_retry(error: &ProviderError) -> bool {
     matches!(

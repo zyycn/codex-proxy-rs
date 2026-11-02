@@ -4217,6 +4217,41 @@ fn server_retry_advice_should_override_local_backoff_and_transport_fallback() {
 }
 
 #[test]
+fn long_server_retry_advice_should_rotate_instead_of_waiting_on_the_same_account() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, _, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(
+                transient_rejection().with_retry_after(Duration::from_secs(308))
+            )],
+        },
+        Script::Stream {
+            account_id: "acct_second",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    let started = std::time::Instant::now();
+    block_on(session.collect_uncommitted()).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let first = ProviderAccountId::new("acct_first").unwrap();
+    let contexts = provider.contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 2);
+    assert_eq!(contexts[1].required_account(), None);
+    assert!(contexts[1].excluded_accounts().contains(&first));
+}
+
+#[test]
 fn zero_server_retry_advice_should_override_nonzero_local_backoff() {
     for policy in [
         TransientRetryPolicy::RetryThenRotateAccount,
