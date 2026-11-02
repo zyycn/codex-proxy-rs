@@ -864,6 +864,9 @@ CPR 默认路径为 `/v1/cpr/link`，使用同一数据面入口认证，不接�
 | `sharePlans` | 已公开账号池中的 `pool.plans` |
 | `shareQuota` | `quota_windows` 与 `model_availability` |
 
+套餐分布沿用账号页口径：优先使用账号已有的明确套餐，缺失时从已保存的额度快照补全，无需开启 `shareQuota`。
+仍未知的账号只计入账号总数，不推断为 Free
+
 共享范围同时受当前 Key 的公开开关、分组及冻结权限限制，只包含 Provider 明确声明的直连 OAuth 账号。
 互联 Key 的推理也使用该直连范围，不把 API Key 转接账号再次作为共享池，不递归查询其他节点。
 这些开关和账号组织方式属于 CPR 内置实现；第三方通过自身授权规则生成协议数据

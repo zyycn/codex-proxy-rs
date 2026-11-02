@@ -25,6 +25,7 @@ use crate::{
 
 pub(super) fn pool_summary(
     accounts: &[AccountRecord],
+    quotas: &BTreeMap<String, ProviderQuota>,
     runtime: &AccountRuntimeSnapshot,
     providers: &ProviderAdminRegistry,
     share_plans: bool,
@@ -43,12 +44,13 @@ pub(super) fn pool_summary(
             AccountStatus::Error => summary.error += 1,
         }
         if let Some(plans) = &mut summary.plans
-            && let (Some(plan), Ok(provider)) = (
-                &account.plan_type,
-                providers.require(&account.provider_kind),
+            && let Some(plan) = providers.resolve_account_plan(
+                account.provider_kind.as_str(),
+                &mut account.plan_type.clone(),
+                quotas.get(&account.id),
             )
         {
-            *plans.entry(provider.plan_type_display(plan)).or_default() += 1;
+            *plans.entry(plan).or_default() += 1;
         }
     }
     summary

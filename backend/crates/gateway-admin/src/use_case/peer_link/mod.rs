@@ -15,7 +15,7 @@ use crate::{
     model::{
         AdminError,
         peer_link::{PeerLinkExport, PeerLinkLimits},
-        provider_credentials::ProviderQuotaReadRequest,
+        provider_credentials::{ProviderQuotaReadRequest, explicit_plan_type},
     },
     ports::{
         provider::ProviderAdminRegistry,
@@ -175,10 +175,16 @@ impl PeerLinkService for DefaultPeerLinkService {
             .await
             .map_err(|error| map_store_error(error, "peer account runtime"))?;
         let mut quotas = BTreeMap::new();
-        if sharing.share_quota {
+        if sharing.share_quota || sharing.share_plans {
             let mut window_count = 0usize;
             let mut by_provider = BTreeMap::new();
             for account in &accounts {
+                // 仅公开套餐时只补读缺失套餐的本地额度，不回源刷新或扩大公开范围
+                if !sharing.share_quota
+                    && explicit_plan_type(account.plan_type.as_deref()).is_some()
+                {
+                    continue;
+                }
                 by_provider
                     .entry(&account.provider_kind)
                     .or_insert_with(Vec::new)
@@ -200,9 +206,11 @@ impl PeerLinkService for DefaultPeerLinkService {
                     .zip(provider.read_quotas(&requests).await)
                 {
                     if let Ok(quota) = quota {
-                        window_count = window_count.saturating_add(quota.windows.len());
-                        if window_count > limits.max_quota_windows {
-                            return Err(PeerLinkError::SnapshotTooLarge);
+                        if sharing.share_quota {
+                            window_count = window_count.saturating_add(quota.windows.len());
+                            if window_count > limits.max_quota_windows {
+                                return Err(PeerLinkError::SnapshotTooLarge);
+                            }
                         }
                         quotas.insert(account.id.clone(), quota);
                     }
@@ -215,6 +223,7 @@ impl PeerLinkService for DefaultPeerLinkService {
         if sharing.share_pool {
             result.pool = Some(projection::pool_summary(
                 &accounts,
+                &quotas,
                 &runtime,
                 &self.providers,
                 sharing.share_plans,
