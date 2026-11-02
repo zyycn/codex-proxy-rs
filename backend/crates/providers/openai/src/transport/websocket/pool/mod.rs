@@ -131,6 +131,7 @@ impl CodexWebSocketPool {
         &self,
         key: &CodexWebSocketPoolKey,
         required_response_id: Option<&str>,
+        requires_search: bool,
         proxy: Option<&gateway_core::account::OutboundProxy>,
         downstream_cancellation: Option<&gateway_core::lifecycle::CancellationToken>,
     ) -> WebSocketPoolAcquire {
@@ -204,6 +205,18 @@ impl CodexWebSocketPool {
                                     .observation()
                                     .with_exit_reason("downstream_connection_closed")
                             })
+                        })
+                        .or_else(|| {
+                            // https://github.com/zyycn/codex-proxy-rs/issues/570
+                            // Codex 首包未初始化搜索时不能在原 socket 后加声明，generate=false 也占首包
+                            // 上游允许后续启用搜索并经直连验证后可移除此回收条件
+                            (requires_search && connection.initial_search_declared == Some(false))
+                                .then(|| {
+                                    connection
+                                        .websocket
+                                        .observation()
+                                        .with_exit_reason("search_activation_required")
+                                })
                         });
                         let Some(observation) = loss else {
                             connection.websocket.revoke_control();

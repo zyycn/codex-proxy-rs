@@ -30,6 +30,7 @@ pub(in crate::transport::websocket) struct WebSocketStreamPoolReturn {
     pub(in crate::transport::websocket) lease: WebSocketPoolLease,
     pub(in crate::transport::websocket) created_at: tokio::time::Instant,
     pub(in crate::transport::websocket) continuation: WebSocketContinuationState,
+    pub(in crate::transport::websocket) initial_search_declared: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -446,6 +447,7 @@ async fn finish_stream_websocket(
             metadata: reusable_websocket_metadata(metadata),
             continuation,
             created_at: pool_return.created_at,
+            initial_search_declared: Some(pool_return.initial_search_declared),
         })
         .await;
 }

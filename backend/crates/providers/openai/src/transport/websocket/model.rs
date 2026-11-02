@@ -51,6 +51,8 @@ pub struct CodexWebSocketRequest {
     pub(crate) connection: CodexWebSocketConnection,
     pub(super) payload_text: String,
     pub(super) continuation: WebSocketContinuationRequirement,
+    // 仅 Codex backend 约束首包搜索初始化，API Key 的 Responses API 不采用此规则
+    pub(super) codex_search_declared: Option<bool>,
 }
 
 /// 当前 WebSocket 请求对 previous response 状态的要求

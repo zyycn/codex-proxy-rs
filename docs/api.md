@@ -481,6 +481,11 @@ Responses WebSocket 接受文本消息，`response.create` 在同一连接串行
 活跃客户端 WS 的绑定不受普通空闲回收期限约束；上游关闭、总寿命到期或连接被回收仍可能使连接内续接失效，
 客户端按既有 `previous_response_not_found` 合同完整重放。具体心跳和回收参数见[部署与运维](../deploy/README.md#公网访问)
 
+Codex OAuth 上游 WS 首包未声明搜索时，后续新增 `web_search` 声明需要新连接，非生成预热也属于首包。
+HTTP/SSE 与 WS 入站共用此判断；新链在发送前重新建连，依赖原连接的增量请求返回
+`400 previous_response_not_found`，由客户端携带完整历史重试。网关保留请求中的搜索配置；
+已初始化搜索的连接可以继续复用，临时移除搜索或从文本搜索增加图片搜索不触发此回收。
+
 其余文本消息发送到当前执行绑定的上游 WebSocket，未知类型、模式和扩展字段由上游校验。
 `response.interrupt` 的 `discard_partial_items` 模式若指向当前逻辑请求已交付的响应 ID，
 网关会保留中断意图；重试交付新的 `response.created` 后，以新 ID 转发中断，避免换号空档丢失控制消息。

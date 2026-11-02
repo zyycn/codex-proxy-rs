@@ -11,6 +11,7 @@ mod cleanup;
 mod diagnostics;
 mod fingerprint;
 mod metadata;
+mod pool;
 
 #[test]
 fn outbound_websocket_diagnostics_do_not_expose_target_credentials() {
