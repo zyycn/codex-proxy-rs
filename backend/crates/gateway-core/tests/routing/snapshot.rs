@@ -785,6 +785,64 @@ fn compiler_reloads_revision_changed_after_extension_preparation() {
 }
 
 #[test]
+fn compiler_rechecks_revision_when_extension_preparation_rejects_stale_facts() {
+    struct RacingPreparation {
+        store: Arc<TestSnapshotStore>,
+        changes: usize,
+        calls: AtomicUsize,
+    }
+
+    impl ExtensionPreparationPort for RacingPreparation {
+        fn prepare(
+            &self,
+            _: ConfigRevision,
+        ) -> BoxFuture<'_, Result<ExtensionSetReference, ExtensionPreparationError>> {
+            Box::pin(async move {
+                let call = self.calls.fetch_add(1, Ordering::SeqCst);
+                if self.changes == 0 || call < self.changes {
+                    if self.changes != 0 {
+                        let next = u64::try_from(call).unwrap() + 2;
+                        *self.store.facts.lock().unwrap() = Ok(facts(next, next));
+                        *self.store.current_revision.lock().unwrap() = Ok(revision(next));
+                    }
+                    return Err(ExtensionPreparationError);
+                }
+                Ok(ExtensionSetReference::new(
+                    ExtensionSetId::new("ready".to_owned()).unwrap(),
+                    Arc::new(AliasLease(vec![])),
+                ))
+            })
+        }
+    }
+
+    for (changes, expected_calls) in [(0, 1), (1, 2), (4, 4)] {
+        let store = Arc::new(TestSnapshotStore::new(Ok(facts(1, 1))));
+        let extensions = Arc::new(RacingPreparation {
+            store: store.clone(),
+            changes,
+            calls: AtomicUsize::new(0),
+        });
+        let compiler = RuntimeSnapshotCompiler::new(store, Arc::new(TestCatalog::Empty))
+            .with_extensions(extensions.clone());
+
+        let result = block_on(compiler.compile());
+
+        match changes {
+            0 => assert_eq!(
+                result.unwrap_err(),
+                RuntimeSnapshotCompileError::ExtensionsUnavailable
+            ),
+            1 => assert_eq!(result.unwrap().revision(), revision(2)),
+            _ => assert_eq!(
+                result.unwrap_err(),
+                RuntimeSnapshotCompileError::RevisionChanged
+            ),
+        }
+        assert_eq!(extensions.calls.load(Ordering::SeqCst), expected_calls);
+    }
+}
+
+#[test]
 fn compiler_accepts_unlimited_default_account_concurrency() {
     let facts = SnapshotFacts::new(
         revision(1),

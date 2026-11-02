@@ -350,7 +350,7 @@ impl RuntimeSnapshotCompiler {
                                 *prepared_revision != revision || !prepared.is_ready()
                             });
                     if must_prepare {
-                        let prepared = preparer
+                        let prepared = match preparer
                             .prepare_with_request_body_limit(
                                 revision,
                                 usize::try_from(
@@ -359,7 +359,21 @@ impl RuntimeSnapshotCompiler {
                                 .unwrap_or(usize::MAX),
                             )
                             .await
-                            .map_err(|_| RuntimeSnapshotCompileError::ExtensionsUnavailable)?;
+                        {
+                            Ok(prepared) => prepared,
+                            Err(_) => {
+                                // 扩展读取也可能遇到并发提交；只有版本已变才重读事实
+                                let observed =
+                                    self.store.current_config_revision().await.map_err(|_| {
+                                        RuntimeSnapshotCompileError::StoreUnavailable
+                                    })?;
+                                if observed == revision {
+                                    return Err(RuntimeSnapshotCompileError::ExtensionsUnavailable);
+                                }
+                                instability = RuntimeSnapshotCompileError::RevisionChanged;
+                                continue;
+                            }
+                        };
                         prepared_extensions = Some((revision, prepared));
                     }
                     prepared_extensions
