@@ -87,17 +87,13 @@ async fn slow_settlement_does_not_block_receipt_or_concurrent_admission() {
     let worker_context = WorkerDaemonContext::new(CancellationToken::new());
     let running_context = worker_context.clone();
     let task = tokio::spawn(async move { writer.run(running_context).await });
-    tokio::time::timeout(Duration::from_millis(500), async {
-        for result in
-            futures::future::join_all((0..4).map(|_| store.admit(key_id("allowed")))).await
-        {
-            result.unwrap();
-        }
-        let error = store.admit(key_id("exhausted")).await.unwrap_err();
-        assert_eq!(error.client_error_code(), Some("key_daily_budget_exceeded"));
-    })
-    .await
-    .expect("admission must not wait for settlement row locks");
+    // 行锁直到准入断言结束才释放，等待行锁会被准入自身的一秒期限判为失败
+    // 不给整组请求另设更短的期限，避免把连接建立和并发调度耗时误判为锁等待
+    for result in futures::future::join_all((0..4).map(|_| store.admit(key_id("allowed")))).await {
+        result.expect("admission must not wait for settlement row locks");
+    }
+    let error = store.admit(key_id("exhausted")).await.unwrap_err();
+    assert_eq!(error.client_error_code(), Some("key_daily_budget_exceeded"));
     let before: i64 = sqlx::query_scalar("select count(*) from client_api_key_charge_events")
         .fetch_one(&database.pool)
         .await

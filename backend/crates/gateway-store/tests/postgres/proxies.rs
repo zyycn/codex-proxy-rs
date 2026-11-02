@@ -333,7 +333,12 @@ async fn disabled_proxy_projects_direct_while_preserving_bindings_and_credential
         );
         assert_eq!(proxies.get(&saved.id).await.unwrap().enabled, enabled);
         let reservation = proxies.reserve_import(&saved.id).await;
-        assert_eq!(reservation.is_ok(), enabled);
+        assert_eq!(
+            reservation.is_ok(),
+            enabled,
+            "import reservation failed: {:?}",
+            reservation.as_ref().err()
+        );
         drop(reservation);
         if !enabled {
             let error = admin
