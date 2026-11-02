@@ -260,6 +260,7 @@ async fn slow_pooled_openings_should_remain_healthy_and_serve_subsequent_request
                 let payload = websocket.next().await.unwrap().unwrap();
                 let payload: Value = serde_json::from_str(payload.to_text().unwrap()).unwrap();
                 assert_eq!(payload["input"][0]["content"], "subsequent request");
+                assert_eq!(payload["tools"][0]["type"], "web_search");
                 websocket
                     .send(Message::Text(
                         completed_websocket_response("resp_background_ready", 2, 1).into(),
@@ -300,11 +301,14 @@ async fn slow_pooled_openings_should_remain_healthy_and_serve_subsequent_request
         );
         websocket_ready_rx.recv().await.unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
-        let mut subsequent = codex_request(
+        let mut body = codex_request_body(
             "gpt-5.5",
             "be brief",
             vec![json!({"role":"user","content":"subsequent request"})],
         );
+        // 后台只完成握手，首次写入可以直接声明搜索，不应按无搜索首包回收
+        body.insert("tools".into(), json!([{"type":"web_search"}]));
+        let mut subsequent = CodexResponsesRequest::from_body(body);
         subsequent.use_websocket = true;
         subsequent.local_conversation_id = request.local_conversation_id.clone();
         let second = backend

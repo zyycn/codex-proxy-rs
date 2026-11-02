@@ -11528,6 +11528,88 @@ async fn api_key_websocket_uses_api_path_and_bearer_without_oauth_identity() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn api_key_websocket_search_activation_reuses_original_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key(
+            "acct_provider_contract",
+            base,
+            provider_openai::credential::ResponsesTransport::PreferWebsocket,
+        )
+        .await;
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = crate::transport::accept_codex_test_websocket(stream).await;
+        for search in [false, true] {
+            let frame = websocket.next().await.unwrap().unwrap();
+            let payload: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+            assert_eq!(
+                payload["tools"].as_array().unwrap().len(),
+                usize::from(search)
+            );
+            websocket
+                .send(Message::Text(
+                    crate::transport::completed_websocket_response("resp_api_search", 1, 1).into(),
+                ))
+                .await
+                .unwrap();
+        }
+    });
+    let provider = provider(&store);
+    let session_state = ProviderSessionState::new(
+        "openai",
+        Map::from_iter([
+            ("account_id".into(), json!("acct_provider_contract")),
+            ("conversation_id".into(), json!("api-search-session")),
+            ("continuation_scope".into(), json!("connection_local")),
+        ]),
+    )
+    .unwrap();
+    for tools in [json!([]), json!([{"type":"web_search"}])] {
+        let operation = Operation::Generate(
+            GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object(
+                    "openai",
+                    json!({
+                        "model":"gpt-5.4", "input":"hello", "store":false,
+                        "session_id":"api-search-session", "tools":tools
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                )
+                .unwrap()
+                .with_context(Map::from_iter([
+                    ("use_websocket".into(), json!(true)),
+                    (
+                        "downstream_websocket_connection_id".into(),
+                        json!("api-search-lane"),
+                    ),
+                ])),
+            )
+            .with_provider_session_state(session_state.clone()),
+        );
+        timeout(Duration::from_secs(3), async {
+            let mut stream = Arc::clone(&provider)
+                .execute(
+                    planned_request("openai", operation),
+                    diagnostic_context("req_api_search", "acct_provider_contract"),
+                )
+                .await
+                .unwrap();
+            while let Some(event) = stream.next().await {
+                event.expect("API Key search activation should keep the same socket");
+            }
+        })
+        .await
+        .unwrap();
+    }
+    server.await.unwrap();
+}
+
 fn quota_continuation_operation(use_websocket: bool) -> Operation {
     Operation::Generate(
         GenerateRequest::from_protocol_payload(

@@ -197,6 +197,8 @@ pub(crate) struct PooledWebSocketConnection {
     pub(crate) metadata: CodexWebSocketConnectionMetadata,
     pub(crate) continuation: WebSocketContinuationState,
     pub(crate) created_at: Instant,
+    // 首个已写入请求决定搜索能力，None 表示仅完成握手，后续工具变化不能覆盖此事实
+    pub(crate) initial_search_declared: Option<bool>,
 }
 
 /// 只随具体 WebSocket 生命周期存在的续接状态

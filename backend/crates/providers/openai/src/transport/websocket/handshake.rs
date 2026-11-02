@@ -128,6 +128,8 @@ impl CodexWebSocketConnection {
             connection,
             payload_text: websocket_response_create_payload_text(request)?,
             continuation: WebSocketContinuationRequirement::from_request(request),
+            codex_search_declared: (path == CODEX_RESPONSES_PATH)
+                .then(|| crate::compat::declares_hosted_search(request.body())),
         })
     }
 }
