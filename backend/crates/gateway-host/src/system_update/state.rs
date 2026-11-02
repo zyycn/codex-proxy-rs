@@ -149,7 +149,7 @@ impl UpdateTempDir {
 
 impl Drop for UpdateTempDir {
     fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(&self.path)
+        if let Err(error) = super::swap::remove_dir_all(&self.path)
             && error.kind() != io::ErrorKind::NotFound
         {
             tracing::warn!(path = %self.path.display(), error = %error, "清理系统更新临时目录失败");

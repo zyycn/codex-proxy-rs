@@ -171,6 +171,12 @@ jobs:
           toolchain: ${{ needs.release-info.outputs.rust }}
           targets: ${{ matrix.target }}
 
+      - name: Configure Windows runtime linkage
+        if: runner.os == 'Windows'
+        shell: bash
+        # 发行包静态链接 MSVC 运行库，解压运行时无需另外安装 VC++ Redistributable
+        run: echo 'RUSTFLAGS=-C target-feature=+crt-static' >> "$GITHUB_ENV"
+
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -186,6 +192,8 @@ jobs:
         shell: bash
         run: |
           cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
+          "target/${{ matrix.target }}/release/${{ matrix.binary }}" --help
+          "target/${{ matrix.target }}/release/${{ matrix.binary }}" --version
           mkdir -p "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}"
         working-directory: backend
@@ -194,6 +202,16 @@ jobs:
           CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
           CPR_BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
+
+      - name: Verify Windows platform behavior
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: backend
+        env:
+          RUST_MIN_STACK: '16777216'
+        run: |
+          cargo test --release --locked --target "${{ matrix.target }}" -p gateway-admin --test main use_case::plugins::official::
+          cargo test --release --locked --target "${{ matrix.target }}" -p gateway-host --test main system_update::
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

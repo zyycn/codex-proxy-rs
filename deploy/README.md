@@ -6,7 +6,7 @@
 
 | 任务 | 入口 |
 | --- | --- |
-| 安装与启动 | [手动安装](#手动安装) · [启动](#启动) · [公网访问](#公网访问) |
+| 安装与启动 | [手动安装](#手动安装) · [Windows 二进制部署](#windows-二进制部署) · [启动](#启动) · [公网访问](#公网访问) |
 | 接入客户端 | [客户端配置](#客户端配置) · [时区与客户端环境信息](#时区与客户端环境信息) · [登录与生图排查](#登录与生图排查) |
 | 日常运维 | [运行设置](#启动后的运行设置) · [小内存优化](#小内存优化) · [持久化与日志](#持久化与备份) · [请求排查](#请求错误排查) · [密码轮换](#密码语义) |
 | 更新与恢复 | [镜像升级](#镜像升级与源码构建) · [在线更新](#管理端在线更新) · [备份与恢复](#备份与恢复) · [停止与重启](#停止与重启) |
@@ -189,6 +189,42 @@ store:
 `redis://redis:6379/`，使用 ACL 用户时还需把应用服务的该环境变量改为
 `redis://u1@redis-host:6379/0`，其中主机名必须能从应用容器访问；只改 `config.yaml` 不会生效。
 默认 Compose Redis 服务使用密码认证，不会自动创建 ACL 用户
+
+## Windows 二进制部署
+
+发行包提供 Windows x64（`windows_amd64`）和 ARM64（`windows_arm64`）版本，按运行机器的 CPU 架构选择。
+需先准备可访问的 PostgreSQL 和 Redis，创建数据库及用户；使用数据库备份功能时，还需将匹配服务端版本的 `pg_dump` 加入 `PATH`
+
+从 [Release 附件](https://github.com/zyycn/codex-proxy-rs/releases) 下载对应的
+`codex-proxy-rs_<version>_windows_<arch>.tar.gz`，解压后保留 `codex-proxy-rs.exe`、`web/dist`、`deploy` 和 `plugins/official` 的目录关系。
+在解压后的 `codex-proxy-rs` 目录中打开 PowerShell，首次安装时创建配置：
+
+```powershell
+Copy-Item .\deploy\config.example.yaml .\deploy\config.yaml
+```
+
+编辑 `deploy/config.yaml`，填写 `store.database`、`store.redis` 的连接地址和独立密码，以及 `admin.default_password`。
+密码格式沿用模板要求；将已有的 `api.asset_directory` 改为 `../web/dist`，在 `host` 下合并以下更新与重启配置：
+
+```yaml
+host:
+  system_update:
+    deployment_mode: binary
+    self_restart_enabled: true
+api:
+  asset_directory: '../web/dist'
+```
+
+从安装目录启动：
+
+```powershell
+.\codex-proxy-rs.exe serve
+```
+
+启动成功后访问 `http://127.0.0.1:8080`，使用配置中的管理员账号登录；在运行终端按 `Ctrl+C` 停止服务。
+官方构建支持管理端[在线更新、重启与回滚](#管理端在线更新)，安装目录与 `.runtime` 必须可写。
+手动更换版本时先停止进程并备份当前发行文件，再整体替换 EXE、`web/dist` 和 `plugins/official`，
+保留 `deploy/config.yaml` 与 `.runtime`，按新版本模板合并配置后重新启动
 
 ## 启动
 
@@ -783,7 +819,7 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
 宿主范围或能力版本不匹配时，可在插件页确认风险后尝试本次启动；清单、RPC、平台或包完整性错误不能绕过。具体操作见[插件故障处理](../docs/plugins.md#故障处理)
 
 部署须保留完整的二进制、Web 资源与官方插件目录；不要手动修改制品元数据或迁移 checksum 绕过校验。
-macOS arm64 提供构建产物；部署前需验证目标平台的插件运行与上游调用，不能只以打包成功判断可用
+macOS arm64、Windows x64 / ARM64 提供构建产物；插件安装包必须匹配宿主 OS 和架构，部署前需验证目标平台的插件运行与上游调用，不能只以打包成功判断可用
 
 ## 备份与恢复
 

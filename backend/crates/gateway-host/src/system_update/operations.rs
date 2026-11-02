@@ -41,10 +41,16 @@ pub struct ProcessSystemOperations {
     cancellation: CancellationToken,
     events: Arc<UpdateEvents>,
     config: Arc<SystemUpdateConfig>,
-    operation_lock: Arc<AsyncMutex<Option<OperationFileLock>>>,
+    operation_lock: Arc<AsyncMutex<Option<RestartGuard>>>,
     release_cache: Arc<ReleaseCache>,
     running_files: Arc<Result<ReleaseFiles, OperationError>>,
     diagnostics: super::diagnostics::Diagnostics,
+}
+
+struct RestartGuard {
+    // 字段按声明顺序释放，先移除更新锁，再通知替换进程开始启动
+    _file_lock: OperationFileLock,
+    _replacement_input: Option<std::process::ChildStdin>,
 }
 
 impl ProcessSystemOperations {
@@ -75,7 +81,7 @@ impl ProcessSystemOperations {
         self.diagnostics.bind(diagnostics);
     }
 
-    fn lock_operation(&self) -> Result<OwnedMutexGuard<Option<OperationFileLock>>, OperationError> {
+    fn lock_operation(&self) -> Result<OwnedMutexGuard<Option<RestartGuard>>, OperationError> {
         let operation = Arc::clone(&self.operation_lock)
             .try_lock_owned()
             .map_err(|_| conflict("已有系统操作正在执行"))?;
@@ -559,15 +565,17 @@ impl SystemOperations for ProcessSystemOperations {
         {
             return Err(conflict("重启检查期间安装文件已变化，请重新确认"));
         }
-        let message = if self.config.deployment_mode == "docker" {
-            "已安排进程内重启"
+        let (message, replacement_input) = if self.config.deployment_mode == "docker" {
+            ("已安排进程内重启", None)
         } else {
-            spawn_replacement(&self.config)?;
-            "已安排自重启"
+            ("已安排自重启", spawn_replacement(&self.config)?)
         };
         let operation_id = operation_id("restart");
         // 受理后直到旧服务释放，保留重启状态和跨进程锁；延迟关闭只用于送达响应
-        *operation = Some(file_lock);
+        *operation = Some(RestartGuard {
+            _file_lock: file_lock,
+            _replacement_input: replacement_input,
+        });
         let cancellation = self.cancellation.clone();
         drop(tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(500)).await;

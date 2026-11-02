@@ -366,6 +366,7 @@ fn target_environment_matches(target: &str) -> bool {
     match target {
         "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu" => cfg!(target_env = "gnu"),
         "aarch64-apple-darwin" => cfg!(target_os = "macos"),
+        "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc" => cfg!(target_env = "msvc"),
         _ => false,
     }
 }
@@ -390,6 +391,20 @@ const SUPPORTED_PLATFORMS: &[Platform] = &[
         release_architecture: "arm64",
         target: "aarch64-apple-darwin",
         runtime_os: "macos",
+        runtime_architecture: "aarch64",
+    },
+    Platform {
+        release_os: "windows",
+        release_architecture: "amd64",
+        target: "x86_64-pc-windows-msvc",
+        runtime_os: "windows",
+        runtime_architecture: "x86_64",
+    },
+    Platform {
+        release_os: "windows",
+        release_architecture: "arm64",
+        target: "aarch64-pc-windows-msvc",
+        runtime_os: "windows",
         runtime_architecture: "aarch64",
     },
 ];

@@ -294,10 +294,38 @@ fn protect_official_plugins(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn remove_dir_all(path: &Path) -> io::Result<()> {
+pub(crate) fn remove_dir_all(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     make_directories_writable(path)?;
+    #[cfg(windows)]
+    make_files_writable(path)?;
     fs::remove_dir_all(path)
+}
+
+#[cfg(windows)]
+fn make_files_writable(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "release directory contains an unsupported file type",
+        ));
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)? {
+            make_files_writable(&entry?.path())?;
+        }
+    } else if metadata.permissions().readonly() {
+        // tar 的 0444 会成为 Windows 只读属性，清理受管备份前必须移除此属性
+        let mut permissions = metadata.permissions();
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "仅 Windows 清理只读属性，不会放宽 Unix 权限"
+        )]
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

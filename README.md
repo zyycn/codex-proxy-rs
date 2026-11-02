@@ -40,6 +40,8 @@
 
 以下命令适用于 Linux amd64/arm64，需要 Docker Engine、Docker Compose Plugin、curl 和 OpenSSL
 
+Windows x64 / ARM64 使用发行包部署，步骤见 [Windows 二进制部署](deploy/README.md#windows-二进制部署)
+
 已有部署请先看 [升级说明](deploy/README.md#镜像升级与源码构建)，不要覆盖原配置
 
 ### 一键安装

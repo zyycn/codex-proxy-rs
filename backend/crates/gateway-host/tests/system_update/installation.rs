@@ -18,8 +18,7 @@ async fn manual_image_replacement_should_clear_pending_state_and_invalid_backup(
     assert!(complete_update(&service, TARGET_VERSION).await.need_restart);
     // 模拟重建镜像：数据卷保留，应用文件和容器内备份被重新替换
     fixture.write_executable("manually-installed-binary");
-    fs::remove_file(fixture.root.path().join("codex-proxy-rs.backup"))
-        .expect("remove image backup");
+    fs::remove_file(fixture.backup()).expect("remove image backup");
     let mut config = fixture.config(&format!("{}/repos", server.uri()));
     config.version = "1.1.0".into();
     config.deployment_mode = "docker".into();
@@ -126,11 +125,7 @@ async fn pending_update_should_revoke_rollback_when_backup_content_changes() {
         .await;
     let service = fixture.service(&server);
     assert!(complete_update(&service, TARGET_VERSION).await.need_restart);
-    fs::write(
-        fixture.root.path().join("codex-proxy-rs.backup"),
-        "unrelated-backup",
-    )
-    .expect("changed backup");
+    fs::write(fixture.backup(), "unrelated-backup").expect("changed backup");
     let status = service
         .update_status()
         .await

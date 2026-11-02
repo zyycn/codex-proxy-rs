@@ -6,13 +6,25 @@ use std::{
 };
 
 fn main() {
+    let executable = std::env::current_exe().unwrap();
+    let directory = executable.parent().unwrap();
+    if directory.join("restart-probe").is_file() {
+        std::fs::write(directory.join("replacement-waiting"), b"ready").unwrap();
+        let arguments = gateway_host::system_update::startup_arguments()
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert!(!arguments.iter().any(|value| value == "--restart-handoff"));
+        assert!(!directory.join("update.lock").exists());
+        std::fs::write(directory.join("replacement-ran"), b"started").unwrap();
+        return;
+    }
     let mode = std::fs::read_to_string("mode").unwrap();
     if mode == "stderr" {
         std::io::stderr().write_all(&[b'x'; 4096]).unwrap();
     }
     if matches!(
         mode.as_str(),
-        "busy" | "stdin" | "stdout" | "exit" | "allocate"
+        "busy" | "stdin" | "stdout" | "exit" | "allocate" | "update-probe"
     ) {
         std::io::stdout().write_all(b"R").unwrap();
         std::io::stdout().flush().unwrap();
@@ -24,6 +36,11 @@ fn main() {
         "stdin" => {
             std::io::stdin().read_exact(&mut [0; 1]).unwrap();
             std::fs::write("unblocked", b"stdin").unwrap();
+        }
+        "update-probe" => {
+            std::io::stdin().read_exact(&mut [0; 1]).unwrap();
+            std::fs::write("unblocked", b"still-running").unwrap();
+            return;
         }
         "stdout" => {
             // 测试端不消费此正文，超过管道容量后必须由监督器终止，而不是等待写入完成

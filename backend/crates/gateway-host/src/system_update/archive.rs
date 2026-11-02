@@ -6,7 +6,11 @@ use std::path::{Component, Path, PathBuf};
 
 use super::{OperationError, internal, invalid};
 
-const APP_BINARY_NAME: &str = "codex-proxy-rs";
+const APP_BINARY_NAME: &str = if cfg!(windows) {
+    "codex-proxy-rs.exe"
+} else {
+    "codex-proxy-rs"
+};
 const MAX_EXTRACTED_SIZE: u64 = 1024 * 1024 * 1024;
 const MAX_ARCHIVE_FILES: usize = 20_000;
 
@@ -126,12 +130,40 @@ pub(crate) fn extract_release(
 
 fn unsafe_archive_path(path: &Path) -> bool {
     path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::Prefix(_) | Component::RootDir
-            )
+        || path.components().any(|component| match component {
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir => true,
+            #[cfg(windows)]
+            Component::Normal(name) => unsafe_windows_name(name),
+            _ => false,
         })
+}
+
+#[cfg(windows)]
+fn unsafe_windows_name(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    // 防止归档路径被 Win32 解释为设备、NTFS 备用数据流或另一个规范化文件名
+    if name.ends_with(['.', ' '])
+        || name
+            .chars()
+            .any(|value| value < ' ' || "<>:\"|?*".contains(value))
+    {
+        return true;
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || stem
+            .strip_prefix("COM")
+            .or_else(|| stem.strip_prefix("LPT"))
+            .is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
 }
 
 fn web_dist_relative_path(path: &Path) -> Option<PathBuf> {

@@ -446,6 +446,8 @@ fn release_platform() -> (&'static str, &'static str, &'static str) {
         ("linux", "x86_64") => ("linux", "amd64", "x86_64-unknown-linux-gnu"),
         ("linux", "aarch64") => ("linux", "arm64", "aarch64-unknown-linux-gnu"),
         ("macos", "aarch64") => ("darwin", "arm64", "aarch64-apple-darwin"),
+        ("windows", "x86_64") => ("windows", "amd64", "x86_64-pc-windows-msvc"),
+        ("windows", "aarch64") => ("windows", "arm64", "aarch64-pc-windows-msvc"),
         platform => panic!("unsupported test platform: {platform:?}"),
     }
 }
