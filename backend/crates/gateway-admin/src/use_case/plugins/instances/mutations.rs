@@ -158,7 +158,6 @@ impl PluginsService {
         }
         let saved = if let Some(previous) = &existing
             && previous.artifact_sha256 != input.artifact_sha256
-            && input.secrets.is_none()
         {
             self.store
                 .load_version_configuration(&previous.id, &input.artifact_sha256)
@@ -167,6 +166,21 @@ impl PluginsService {
         } else {
             None
         };
+        let mut secrets = saved.map(|saved| saved.secrets).unwrap_or_else(|| {
+            existing
+                .as_ref()
+                .map_or_else(Default::default, |instance| instance.secrets.clone())
+        });
+        for (name, value) in input.secrets {
+            match value {
+                Some(value) => {
+                    secrets.insert(name, value);
+                }
+                None => {
+                    secrets.remove(&name);
+                }
+            }
+        }
         let instance = PluginInstance {
             id: existing.as_ref().map_or_else(
                 || {
@@ -182,14 +196,7 @@ impl PluginsService {
             enabled: input.enabled,
             trusted_process: true,
             configuration: input.configuration,
-            secrets: input
-                .secrets
-                .or_else(|| saved.map(|saved| saved.secrets))
-                .unwrap_or_else(|| {
-                    existing
-                        .as_ref()
-                        .map_or_else(Default::default, |instance| instance.secrets.clone())
-                }),
+            secrets,
             bindings: input.bindings,
             revision: candidate_revision,
         };

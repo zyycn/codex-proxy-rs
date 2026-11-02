@@ -165,8 +165,9 @@ pub struct ConfigurePluginInstance {
     pub artifact_sha256: String,
     pub enabled: bool,
     pub configuration: serde_json::Value,
-    /// 缺省保留旧值；显式空对象清除全部 secret
-    pub secrets: Option<BTreeMap<String, SecretString>>,
+    /// 按字段更新，省略的字段保留，null 清除对应字段
+    #[serde(default)]
+    pub secrets: BTreeMap<String, Option<SecretString>>,
     pub bindings: Vec<PluginCapabilityBinding>,
 }
 

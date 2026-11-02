@@ -2,7 +2,7 @@
 import type { ConfigurePluginInstanceRequest, PluginArtifact, PluginInstance, PluginVersionPlan } from '@/api'
 
 import { ZButton, ZDialog, ZSegmented } from '@codex-proxy/ui'
-import { Blocks, Save, Settings2, ShieldCheck } from '@lucide/vue'
+import { Blocks, Settings2, ShieldCheck } from '@lucide/vue'
 import { cloneDeep } from 'es-toolkit'
 import { computed, nextTick, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -29,8 +29,7 @@ const section = shallowRef('general')
 const configurationValid = shallowRef(true)
 const authenticationValid = shallowRef(true)
 const bindingsValid = shallowRef(true)
-const secretMode = shallowRef<'preserve' | 'replace' | 'clear'>('preserve')
-const secretValues = ref<Record<string, string>>({})
+const secretValues = ref<Record<string, string | null>>({})
 const configuration = ref<Record<string, unknown>>({})
 const bindings = ref<ConfigurePluginInstanceRequest['bindings']>([])
 const configurationFields = useTemplateRef<{ focusInvalid: () => Promise<unknown>, validationMessage: string }>('configurationFields')
@@ -117,11 +116,8 @@ async function submit() {
     configuration: cloneDeep(configuration.value),
     bindings: cloneDeep(bindings.value),
   }
-  if (secretMode.value !== 'preserve') {
-    input.secrets = secretMode.value === 'clear'
-      ? {}
-      : cloneDeep(secretValues.value)
-  }
+  if (Object.keys(secretValues.value).length)
+    input.secrets = cloneDeep(secretValues.value)
   emit('save', input)
 }
 
@@ -131,7 +127,6 @@ watch(open, async (value) => {
   secretValues.value = {}
   configuration.value = cloneDeep(props.draft?.configuration ?? props.instance?.configuration ?? {})
   bindings.value = cloneDeep(props.draft?.bindings ?? props.instance?.bindings ?? [])
-  secretMode.value = existingSecretFields.value.length ? 'preserve' : 'replace'
   configurationValid.value = true
   authenticationValid.value = true
   bindingsValid.value = true
@@ -158,7 +153,6 @@ function clearSecrets() {
           ref="configurationFields"
           v-model:configuration="configuration"
           v-model:secrets="secretValues"
-          v-model:secret-mode="secretMode"
           :schema="artifact.metadata.configurationSchema"
           :secret-fields="artifact.metadata.secretFields"
           :existing-secret-fields="existingSecretFields"
@@ -192,9 +186,6 @@ function clearSecrets() {
         {{ t('common.actions.cancel') }}
       </ZButton>
       <ZButton type="primary" :loading="saving" :disabled="!instance || !artifact" @click="submit">
-        <template #icon>
-          <Save class="size-4" />
-        </template>
         {{ primaryLabel }}
       </ZButton>
     </template>
