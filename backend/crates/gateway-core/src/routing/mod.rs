@@ -576,6 +576,7 @@ pub struct RoutingPlan {
     account_error_protection: Arc<crate::account::CompiledAccountErrorProtection>,
     account_error_protection_revision: u64,
     request_body_limit: usize,
+    max_retry_after: std::time::Duration,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_location: Option<crate::account::RequestLocation>,
     privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
@@ -596,6 +597,12 @@ impl RoutingPlan {
     #[must_use]
     pub fn account_error_protection(&self) -> Arc<crate::account::CompiledAccountErrorProtection> {
         Arc::clone(&self.account_error_protection)
+    }
+
+    /// 本次请求接受的单次 Retry-After 等待上限
+    #[must_use]
+    pub const fn max_retry_after(&self) -> std::time::Duration {
+        self.max_retry_after
     }
 
     #[must_use]

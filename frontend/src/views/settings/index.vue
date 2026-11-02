@@ -95,6 +95,7 @@ const {
   maxWaitingPerKeyValue,
   maxWaitingPerAccountValue,
   concurrencyWaitTimeoutSecondsValue,
+  maxRetryAfterSecondsValue,
   responsesMaxDecompressedBodyMiBValue,
   usageRetentionDaysValue,
   resetCreditLeadMinutesValue,
@@ -210,6 +211,7 @@ watch(section, (value) => {
             v-model:max-waiting-per-key="maxWaitingPerKeyValue"
             v-model:max-waiting-per-account="maxWaitingPerAccountValue"
             v-model:concurrency-wait-timeout-seconds="concurrencyWaitTimeoutSecondsValue"
+            v-model:max-retry-after-seconds="maxRetryAfterSecondsValue"
             v-model:openai-guardian-reserved-concurrency="openaiGuardianReservedConcurrencyValue"
           />
           <AccountErrorProtectionCard v-model="form.accountErrorProtection" :disabled="disabled" />

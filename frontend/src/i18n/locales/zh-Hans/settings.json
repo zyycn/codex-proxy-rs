@@ -241,7 +241,7 @@
       "saveAndLogInAgain": "保存并重新登录"
     },
     "concurrency": {
-      "title": "并发策略",
+      "title": "并发与重试",
       "accountLimit": {
         "label": "默认账号并发",
         "help": "未单独设置时使用，0 不限"
@@ -258,7 +258,13 @@
         "helpTitle": "自动审批独立并发说明"
       },
       "queueTimeoutHelpTitle": "排队超时说明",
-      "queueTimeoutDetails": "密钥与账号队列共用此时限，从首次入队起计时"
+      "queueTimeoutDetails": "密钥与账号队列共用此时限，从首次入队起计时",
+      "retryAfter": {
+        "label": "上游重试等待上限（秒）",
+        "help": "超限时尝试换号",
+        "helpTitle": "上游重试等待说明",
+        "details": "默认 240 秒，限制单次 Retry-After 等待，不是请求总时长。超限时尝试换号，无可用账号则返回错误。0 表示不接受正数等待。换号仍受最大换号次数和请求可重试条件限制。"
+      }
     },
     "modelMapping": "模型映射",
     "routing": {
@@ -597,7 +603,8 @@
       "warmupModelRequired": "启用预激活时请选择模型",
       "invalidWarmupModel": "预激活模型名称不能超过 128 个字符",
       "settingsSaved": "设置已保存",
-      "invalidProtectionSettings": "失败阈值应为 2～1000，计数有效期为 60～3600 秒，冷却时长为 300～604800 秒"
+      "invalidProtectionSettings": "失败阈值应为 2～1000，计数有效期为 60～3600 秒，冷却时长为 300～604800 秒",
+      "invalidRetryAfterLimit": "上游重试等待上限应为 0～4294967295 的整数"
     },
     "page": {
       "tabs": {

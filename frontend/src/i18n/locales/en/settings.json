@@ -241,7 +241,7 @@
       "saveAndLogInAgain": "Save and log in again"
     },
     "concurrency": {
-      "title": "Concurrency",
+      "title": "Concurrency and retries",
       "accountLimit": {
         "label": "Default account concurrency",
         "help": "Used unless overridden, 0 means unlimited"
@@ -258,7 +258,13 @@
         "helpTitle": "About auto review concurrency"
       },
       "queueTimeoutHelpTitle": "About queue timeout",
-      "queueTimeoutDetails": "The API key and account queues share this timeout, measured from the first queue entry"
+      "queueTimeoutDetails": "The API key and account queues share this timeout, measured from the first queue entry",
+      "retryAfter": {
+        "label": "Upstream retry wait limit (s)",
+        "help": "Try another account above the limit",
+        "helpTitle": "About upstream retry waits",
+        "details": "Defaults to 240 seconds. Limits each Retry-After wait, not the total request duration. Above the limit, try another account; return the error if none is available. Set to 0 to reject positive waits. Account rotation still follows the rotation limit and request replay conditions."
+      }
     },
     "modelMapping": "Model mapping",
     "routing": {
@@ -597,7 +603,8 @@
       "warmupModelRequired": "Select a model to enable warmup",
       "invalidWarmupModel": "Warmup model name must not exceed 128 characters",
       "settingsSaved": "Settings saved",
-      "invalidProtectionSettings": "Use a failure threshold of 2–1,000, count validity of 60–3,600 seconds, and a cooldown of 300–604,800 seconds"
+      "invalidProtectionSettings": "Use a failure threshold of 2–1,000, count validity of 60–3,600 seconds, and a cooldown of 300–604,800 seconds",
+      "invalidRetryAfterLimit": "Upstream retry wait limit must be an integer from 0 to 4,294,967,295"
     },
     "page": {
       "tabs": {

@@ -12,6 +12,7 @@ const maxWaitingPerKey = defineModel<string>('maxWaitingPerKey', { required: tru
 const maxWaitingPerAccount = defineModel<string>('maxWaitingPerAccount', { required: true })
 const concurrencyWaitTimeoutSeconds = defineModel<string>('concurrencyWaitTimeoutSeconds', { required: true })
 const openaiGuardianReservedConcurrency = defineModel<string>('openaiGuardianReservedConcurrency', { required: true })
+const maxRetryAfterSeconds = defineModel<string>('maxRetryAfterSeconds', { required: true })
 </script>
 
 <template>
@@ -69,6 +70,21 @@ const openaiGuardianReservedConcurrency = defineModel<string>('openaiGuardianRes
           </ZPopover>
         </template>
         <ZInput v-model="openaiGuardianReservedConcurrency" :aria-label="t('settings.concurrency.autoReview.label')" type="number" min="0" max="4294967295" step="1" />
+      </ZFormItem>
+      <ZFormItem :show-message="Boolean(maxRetryAfterSeconds.trim())" prop="maxRetryAfterSeconds" :label="t('settings.concurrency.retryAfter.label')" :description="t('settings.concurrency.retryAfter.help')">
+        <template #label-extra>
+          <ZPopover class="-my-1" trigger="hover-click" placement="top-start">
+            <template #reference="{ open }">
+              <ZIconButton variant="link" :aria-label="t('settings.concurrency.retryAfter.helpTitle')" :title="undefined" :aria-expanded="open" class="size-6!">
+                <CircleAlert class="size-3.5" aria-hidden="true" />
+              </ZIconButton>
+            </template>
+            <p class="max-w-72 px-3 py-2 text-z-sm leading-relaxed text-z-text-secondary">
+              {{ t('settings.concurrency.retryAfter.details') }}
+            </p>
+          </ZPopover>
+        </template>
+        <ZInput v-model="maxRetryAfterSeconds" :aria-label="t('settings.concurrency.retryAfter.label')" type="number" min="0" max="4294967295" step="1" />
       </ZFormItem>
     </div>
   </ZCard>

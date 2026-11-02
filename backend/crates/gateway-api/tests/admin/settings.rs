@@ -57,6 +57,7 @@ fn update_body() -> Value {
         "maxAccountRotations": 3,
         "openaiSessionAffinityTtlHours": 24,
         "concurrencyWaitTimeoutSeconds": 30,
+        "maxRetryAfterSeconds": 240,
         "responsesMaxDecompressedBodyBytes": 67108864,
         "rotationStrategy": "round_robin",
         "smartScheduling": gateway_core::account::SmartSchedulingConfig::default(),
