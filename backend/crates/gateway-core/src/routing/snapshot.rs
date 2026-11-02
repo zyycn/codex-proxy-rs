@@ -1408,6 +1408,9 @@ impl RuntimeSnapshot {
 
         Ok(RoutingPlan {
             request_body_limit: self.responses_max_decompressed_body_bytes(),
+            max_retry_after: std::time::Duration::from_secs(u64::from(
+                self.settings.values.max_retry_after_seconds,
+            )),
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),
@@ -1495,6 +1498,9 @@ impl RuntimeSnapshot {
         };
         Ok(RoutingPlan {
             request_body_limit: self.responses_max_decompressed_body_bytes(),
+            max_retry_after: std::time::Duration::from_secs(u64::from(
+                self.settings.values.max_retry_after_seconds,
+            )),
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),

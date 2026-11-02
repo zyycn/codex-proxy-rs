@@ -39,6 +39,7 @@ export function useSettingsFormRules(form: () => SettingsForm) {
     'maxWaitingPerKey': integer(0, 1000, t('settings.form.invalidQueueSettings')),
     'maxWaitingPerAccount': integer(0, 1000, t('settings.form.invalidQueueSettings')),
     'concurrencyWaitTimeoutSeconds': integer(1, 120, t('settings.form.invalidQueueSettings')),
+    'maxRetryAfterSeconds': integer(0, 4_294_967_295, t('settings.form.invalidRetryAfterLimit')),
     'responsesMaxDecompressedBodyMiB': integer(1, Math.floor(Number.MAX_SAFE_INTEGER / 1024 / 1024), t('settings.form.invalidBodyLimit')),
     'resetCreditLeadMinutes': integer(1, 1440, t('settings.form.invalidResetLeadTime')),
     'resetCreditMaxWeeklyRemainingPercent': {

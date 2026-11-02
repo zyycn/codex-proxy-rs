@@ -1166,6 +1166,7 @@ impl SettingsStore for StaticSettingsStore {
                 max_waiting_per_key: 0,
                 max_waiting_per_account: 0,
                 concurrency_wait_timeout_seconds: 30,
+                max_retry_after_seconds: 240,
                 openai_guardian_reserved_concurrency: 0,
                 openai_account_affinity: gateway_core::account::AccountAffinity::Relaxed,
                 max_account_rotations: 3,

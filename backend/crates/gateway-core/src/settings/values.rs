@@ -21,6 +21,7 @@ pub struct SettingsValues {
     pub(crate) max_waiting_per_key: u32,
     pub(crate) max_waiting_per_account: u32,
     pub(crate) concurrency_wait_timeout_seconds: u32,
+    pub(crate) max_retry_after_seconds: u32,
     pub(crate) openai_guardian_reserved_concurrency: u32,
     pub(crate) openai_account_affinity: crate::account::AccountAffinity,
     pub(crate) max_account_rotations: u32,
@@ -81,6 +82,13 @@ impl SettingsValues {
         affinity: crate::account::AccountAffinity,
     ) -> Self {
         self.openai_account_affinity = affinity;
+        self
+    }
+
+    /// 网关接受的单次服务器建议等待上限，超过时交由既有换号或错误出口处理
+    #[must_use]
+    pub const fn with_max_retry_after_seconds(mut self, seconds: u32) -> Self {
+        self.max_retry_after_seconds = seconds;
         self
     }
 
@@ -178,6 +186,7 @@ impl SettingsValues {
             max_waiting_per_key: 0,
             max_waiting_per_account: 0,
             concurrency_wait_timeout_seconds: 30,
+            max_retry_after_seconds: 240,
             openai_guardian_reserved_concurrency: 0,
             openai_account_affinity: crate::account::AccountAffinity::default(),
             max_account_rotations: 3,
