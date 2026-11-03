@@ -32,6 +32,7 @@ impl CodexBackendClient {
         content_type: Option<&str>,
     ) -> CodexClientResult<HeaderMap> {
         let mut headers = self.model_request_headers(&self.profile.snapshot(), context)?;
+        let mut passthrough = HeaderMap::new();
         for header in extra_protocol_headers {
             let name = HeaderName::from_bytes(header.name().as_bytes())?;
             if is_managed_identity_header(name.as_str())
@@ -57,8 +58,9 @@ impl CodexBackendClient {
             } else {
                 HeaderValue::from_bytes(header.value())?
             };
-            headers.append(name, value);
+            passthrough.append(name, value);
         }
+        headers.extend(passthrough);
         if let Some(content_type) = content_type {
             headers.insert(
                 reqwest::header::CONTENT_TYPE,

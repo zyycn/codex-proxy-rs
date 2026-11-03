@@ -136,15 +136,35 @@ async fn account_correlation_preserves_turns_across_transports_and_account_switc
                 event.unwrap();
             }
             let (headers, body) = capture.await;
-            assert!(!headers.contains_key("traceparent"));
-            assert!(!headers.contains_key("tracestate"));
-            assert!(!headers.contains_key("sentry-trace"));
-            assert!(!headers.contains_key("baggage"));
+            assert_eq!(
+                headers["traceparent"],
+                "00-11111111111111111111111111111111-2222222222222222-01"
+            );
+            assert_eq!(headers["tracestate"], "vendor=source");
+            assert_eq!(headers["sentry-trace"], "source-trace");
+            assert_eq!(
+                headers
+                    .get_all("baggage")
+                    .iter()
+                    .map(|value| value.to_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["sentry-environment=synthetic", "sentry-release=synthetic"]
+            );
             let flat = &body["client_metadata"];
-            assert!(flat.get("ws_request_header_traceparent").is_none());
-            assert!(flat.get("ws_request_header_tracestate").is_none());
-            assert!(flat.get("ws_request_header_sentry-trace").is_none());
-            assert!(flat.get("ws_request_header_baggage").is_none());
+            assert_eq!(
+                flat["ws_request_header_traceparent"],
+                headers["traceparent"].to_str().unwrap()
+            );
+            assert_eq!(flat["ws_request_header_tracestate"], "vendor=source");
+            assert_eq!(flat["ws_request_header_sentry-trace"], "source-trace");
+            assert_eq!(
+                flat["ws_request_header_baggage"],
+                "sentry-environment=synthetic"
+            );
+            assert_eq!(
+                headers["x-codex-installation-id"].to_str().unwrap(),
+                flat["x-codex-installation-id"]
+            );
             let header: Value =
                 serde_json::from_str(headers["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
             let full: Value =
@@ -163,8 +183,8 @@ async fn account_correlation_preserves_turns_across_transports_and_account_switc
             assert_eq!(flat["x-client-turn-id"], "source-turn");
             assert_eq!(flat["turn_id"], "source-turn");
             for metadata in [&header, &full] {
-                assert!(metadata.get("sentry-trace").is_none());
-                assert!(metadata.get("baggage").is_none());
+                assert_eq!(metadata["sentry-trace"], "source-trace");
+                assert_eq!(metadata["baggage"], "sentry-environment=synthetic");
                 assert_eq!(metadata["turn_id"], "source-turn");
                 assert_eq!(metadata["parent_turn_id"], "source-turn");
                 assert_eq!(metadata["root_turn_id"], "source-turn");

@@ -428,6 +428,10 @@ fn live_protocol_headers() -> Vec<gateway_core::operation::ProviderHttpHeader> {
         ("traceparent", "client-trace"),
         ("tracestate", "client-state"),
         ("ws_request_header_traceparent", "client-ws-trace"),
+        ("x-codex-installation-id", "foreign-installation"),
+        ("X-OpenAI-Account-Routing-Override", "first-route"),
+        ("x-openai-account-routing-override", "second-route"),
+        ("x-openai-fedramp", "true"),
         ("x-codex-turn-state", "foreign-turn-state"),
         ("x-codex-routing-hint", "foreign-route"),
         ("openai-alpha", "live-test"),
@@ -452,6 +456,15 @@ fn assert_live_correlation(headers: &reqwest::header::HeaderMap) {
     uuid::Uuid::parse_str(session).unwrap();
     assert_eq!(headers["thread-id"], session);
     assert_eq!(headers["openai-alpha"], "live-test");
+    assert_eq!(headers["x-openai-fedramp"], "true");
+    assert_eq!(
+        headers
+            .get_all("x-openai-account-routing-override")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["first-route", "second-route"]
+    );
     assert_eq!(
         headers
             .get_all("x-test-business")
@@ -465,9 +478,6 @@ fn assert_live_correlation(headers: &reqwest::header::HeaderMap) {
         "x-oai-attestation",
         "x-forwarded-for",
         "x-stainless-runtime",
-        "traceparent",
-        "tracestate",
-        "ws_request_header_traceparent",
         "x-codex-turn-state",
         "x-codex-routing-hint",
     ] {
@@ -479,7 +489,14 @@ fn assert_live_correlation(headers: &reqwest::header::HeaderMap) {
     assert_eq!(metadata["future"], true);
     assert_ne!(metadata["installation_id"], "foreign-installation");
     assert!(metadata.get("account_id").is_none());
-    assert!(metadata.get("traceparent").is_none());
+    assert_eq!(metadata["traceparent"], "client-trace");
+    assert_eq!(headers["traceparent"], "client-trace");
+    assert_eq!(headers["tracestate"], "client-state");
+    assert_eq!(headers["ws_request_header_traceparent"], "client-ws-trace");
+    assert_eq!(
+        headers["x-codex-installation-id"].to_str().unwrap(),
+        metadata["installation_id"]
+    );
 }
 
 #[tokio::test]

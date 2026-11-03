@@ -23,16 +23,6 @@ const ID_FIELDS: &[&str] = &[
     "parentThreadId",
 ];
 const METADATA_FIELDS: &[&str] = &["turnMetadata", "turn_metadata", "x-codex-turn-metadata"];
-const TRACE_FIELDS: &[&str] = &[
-    "traceparent",
-    "tracestate",
-    "sentry-trace",
-    "baggage",
-    "ws_request_header_traceparent",
-    "ws_request_header_tracestate",
-    "ws_request_header_sentry-trace",
-    "ws_request_header_baggage",
-];
 // Live 的 x-session-id 与 voice-session-id 是业务会话引用，必须原样传递
 const ID_HEADERS: &[&str] = &[
     "session-id",
@@ -102,25 +92,14 @@ fn map_fields(object: &mut Map<String, Value>, installation_id: &str, fields: &[
     changed
 }
 
-fn scope_object(object: &mut Map<String, Value>, installation_id: Option<&str>) -> usize {
-    let mut changed = 0;
-    for key in TRACE_FIELDS {
-        changed += usize::from(object.remove(*key).is_some());
-    }
-    if let Some(installation_id) = installation_id {
-        changed += map_fields(object, installation_id, ID_FIELDS);
-    }
-    changed
-}
-
-fn scope_metadata(value: &mut Value, installation_id: Option<&str>) {
+fn scope_metadata(value: &mut Value, installation_id: &str) {
     match value {
         Value::Object(object) => {
-            scope_object(object, installation_id);
+            map_fields(object, installation_id, ID_FIELDS);
         }
         Value::String(raw) => {
             if let Ok(Value::Object(mut object)) = serde_json::from_str(raw)
-                && scope_object(&mut object, installation_id) > 0
+                && map_fields(&mut object, installation_id, ID_FIELDS) > 0
                 && let Some(encoded) = serialize_ascii_turn_metadata(&Value::Object(object))
             {
                 *raw = encoded;
@@ -131,29 +110,27 @@ fn scope_metadata(value: &mut Value, installation_id: Option<&str>) {
 }
 
 pub(super) fn scope_headers(headers: &mut HeaderMap, installation_id: Option<&str>) {
-    for name in TRACE_FIELDS {
-        headers.remove(*name);
-    }
+    let Some(installation_id) = installation_id else {
+        return;
+    };
     for name in ID_HEADERS {
-        if let Some(installation_id) = installation_id {
-            let values: Vec<_> = headers
-                .get_all(*name)
-                .iter()
-                .map(|value| {
-                    value
-                        .to_str()
-                        .ok()
-                        .filter(|value| !value.is_empty())
-                        .and_then(|value| {
-                            HeaderValue::from_str(&scoped_id(installation_id, value)).ok()
-                        })
-                        .unwrap_or_else(|| value.clone())
-                })
-                .collect();
-            headers.remove(*name);
-            for value in values {
-                headers.append(*name, value);
-            }
+        let values: Vec<_> = headers
+            .get_all(*name)
+            .iter()
+            .map(|value| {
+                value
+                    .to_str()
+                    .ok()
+                    .filter(|value| !value.is_empty())
+                    .and_then(|value| {
+                        HeaderValue::from_str(&scoped_id(installation_id, value)).ok()
+                    })
+                    .unwrap_or_else(|| value.clone())
+            })
+            .collect();
+        headers.remove(*name);
+        for value in values {
+            headers.append(*name, value);
         }
     }
     let values: Vec<_> = headers
@@ -183,18 +160,19 @@ pub(super) fn scope_request(
     installation_id: Option<&str>,
 ) {
     scope_headers(headers, installation_id);
+    let Some(installation_id) = installation_id else {
+        return;
+    };
     if let Some(object) = body.as_object_mut() {
-        scope_object(object, installation_id);
-        if let Some(installation_id) = installation_id {
-            map_fields(object, installation_id, &["prompt_cache_key"]);
-        }
+        map_fields(object, installation_id, ID_FIELDS);
+        map_fields(object, installation_id, &["prompt_cache_key"]);
         for key in METADATA_FIELDS {
             if let Some(value) = object.get_mut(*key) {
                 scope_metadata(value, installation_id);
             }
         }
         if let Some(Value::Object(metadata)) = object.get_mut("client_metadata") {
-            scope_object(metadata, installation_id);
+            map_fields(metadata, installation_id, ID_FIELDS);
             for key in METADATA_FIELDS {
                 if let Some(value) = metadata.get_mut(*key) {
                     scope_metadata(value, installation_id);
@@ -202,9 +180,6 @@ pub(super) fn scope_request(
             }
         }
     }
-    let Some(installation_id) = installation_id else {
-        return;
-    };
     // 只处理官方自动 Git 上下文的关联字段，不扫描普通用户输入和工具输出
     let Ok(targets) = locate_contexts(body, true, || Ok(())) else {
         return;

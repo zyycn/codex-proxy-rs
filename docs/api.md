@@ -395,10 +395,11 @@ API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`originator`、`v
 包括会话、线程、Lite 和其他业务扩展头。
 上游认证只来自选中的账号；API Key 不携带 OAuth Cookie、ChatGPT 账号身份或下游的
 `X-OpenAI-Actor-Authorization` 托管认证声明。
-下游的 `x-openai-internal-codex-residency`、`x-openai-account-routing-override`、`x-openai-fedramp`
-也不透传，地域、工作区路由与合规属性不能从原账号继承。
-前两项仅按部署配置 `openai.residency`、`openai.account_routing_override` 的字符串值生成，
-省略或 `null` 时不发送，配置说明见 [部署与运维](../deploy/README.md#启动后的运行设置)
+`x-codex-installation-id` 使用选中账号已生成并持久化的安装 ID，与正文 `client_metadata` 中的安装身份一致。
+`x-openai-internal-codex-residency` 仅按部署配置 `openai.residency` 生成，省略或 `null` 时不发送。
+`x-openai-account-routing-override` 和 `x-openai-fedramp` 按业务头透传，保留原始多值。
+客户端未提供路由头时，使用 `openai.account_routing_override` 配置值，配置说明见
+[部署与运维](../deploy/README.md#启动后的运行设置)
 上述过滤描述原生转发；已信任插件的显式 header 改写可以覆盖账号与画像生成的默认头，
 不按认证或会话字段名称拦截，边界见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 
@@ -409,8 +410,8 @@ Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和
 两者同时存在时仍优先使用 `session-id`。正文中的 `client_metadata.session_id`、
 `prompt_cache_key` 不受这条请求头规则影响。
 `thread-id`、turn metadata 等 Codex 协议字段及未知业务扩展不受下游环境头过滤规则影响；
-出站移除下游的 `traceparent`、`tracestate`、`sentry-trace`、`baggage`，
-以及 WS metadata 中对应的 `ws_request_header_*` 副本
+`traceparent`、`tracestate`、`sentry-trace`、`baggage` 及 WS metadata 中对应的
+`ws_request_header_*` 副本保持原值
 
 会话、线程、窗口及父子线程引用在出站时按本次安装身份稳定映射为 UUID；
 默认使用账号安装身份，同账号保留引用关系，换账号使用不同标识。HTTP 请求头、正文 metadata、WS 副本及
@@ -916,7 +917,7 @@ CPR 默认路径为 `/v1/cpr/link`，使用同一数据面入口认证，不接�
 引导、sideband 与 hangup 的业务扩展头默认透传；认证、账号身份、下游环境与传输头遵守
 [请求头与身份](#请求头与身份)边界。`X-Session-Id`、`Voice-Session-Id` 是 Live 业务会话标识，原样透传。
 `Session-Id`、`Thread-Id` 等已识别追踪标识按选中账号的安装身份稳定映射，同账号各阶段保持一致，
-换账号使用不同标识；客户端 trace 被剥离。创建请求可由 attempt 插件改写本次构造身份，后续 sideband / hangup 仍使用钉住账号的身份。
+换账号使用不同标识，客户端 trace 原样透传。创建请求可由 attempt 插件改写本次构造身份，后续 sideband / hangup 仍使用钉住账号的身份。
 Live 不继承 Responses 的路由提示与续接状态；turn metadata 中的原账号绑定信息清理后保留其他字段。
 真实 call ID 保留用于钉住账号访问通话。HTTP 业务头保留原始多值字节，sideband 握手沿用 WebSocket 可编码的头值
 

@@ -71,10 +71,18 @@ fn assert_isolated_request(
     body: &Value,
     owner: Option<&str>,
 ) {
-    for name in ["x-openai-account-routing-override", "x-openai-fedramp"] {
-        assert!(
-            !headers.contains_key(name),
-            "leaked {name} with owner {owner:?}"
+    for (name, values) in [
+        ("x-openai-account-routing-override", ["us", "us_cr"]),
+        ("x-openai-fedramp", ["true", "false"]),
+    ] {
+        assert_eq!(
+            headers
+                .get_all(name)
+                .iter()
+                .map(|value| value.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            values,
+            "changed {name} with owner {owner:?}"
         );
     }
     assert_eq!(headers["x-codex-guardian"], "true");
@@ -112,7 +120,7 @@ fn assert_isolated_request(
 }
 
 #[tokio::test]
-async fn http_isolates_account_headers_and_only_scopes_guardian_parent_reference() {
+async fn http_preserves_routing_headers_and_only_scopes_guardian_parent_reference() {
     for owner in [Some(SELECTED_ACCOUNT), Some("acct_scope_old"), None] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, SELECTED_ACCOUNT).await;
@@ -155,7 +163,7 @@ async fn http_isolates_account_headers_and_only_scopes_guardian_parent_reference
 }
 
 #[tokio::test]
-async fn websocket_isolates_account_headers_and_only_scopes_guardian_parent_reference() {
+async fn websocket_preserves_routing_headers_and_only_scopes_guardian_parent_reference() {
     for owner in [Some(SELECTED_ACCOUNT), Some("acct_scope_old"), None] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, SELECTED_ACCOUNT).await;

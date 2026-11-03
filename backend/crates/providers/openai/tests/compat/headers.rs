@@ -45,6 +45,8 @@ const DOWNSTREAM_CLIENT_HEADERS: &[(&str, &str)] = &[
 ];
 
 const BUSINESS_EXTENSION_HEADERS: &[(&str, &str)] = &[
+    ("X-OpenAI-Account-Routing-Override", "first-route"),
+    ("x-openai-fedramp", "true"),
     ("x-grok-turn-idx", "7"),
     ("X-Grok-Model-Override", "synthetic-model"),
     ("x-grok-session-id", "synthetic-grok-session"),
@@ -202,7 +204,10 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
     });
     // 不经 API 解码，直接构造协议上下文，验证 Provider 自身的过滤边界
     let request = request_with_opaque_headers(false);
-    let profile = test_wire_profile();
+    let mut configured_profile = test_wire_profile().snapshot();
+    configured_profile.account_routing_override = Some("configured-route".into());
+    let profile =
+        provider_openai::transport::profile::CodexWireProfileState::new(configured_profile);
     let profile_snapshot = profile.snapshot();
     let expected_user_agent = profile_snapshot.user_agent();
     let expected_core_version = profile_snapshot.codex_version;
@@ -277,7 +282,14 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
     ] {
         assert_eq!(raw_header_values(&raw, name), vec![value.to_vec()]);
     }
-    assert!(raw_header_values(&raw, "traceparent").is_empty());
+    assert_eq!(
+        raw_header_values(&raw, "traceparent"),
+        vec![b"synthetic-trace".to_vec()]
+    );
+    assert_eq!(
+        raw_header_values(&raw, "x-codex-installation-id"),
+        vec![b"lease-installation".to_vec()]
+    );
     let session = raw_header_values(&raw, "session-id");
     assert!(uuid::Uuid::parse_str(std::str::from_utf8(&session[0]).unwrap()).is_ok());
     // 指纹头由运行时画像生成，不透传客户端值
@@ -295,7 +307,6 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
     );
     for dropped in [
         "openai-beta",
-        "x-codex-installation-id",
         "x-openai-actor-authorization",
         "x-oai-attestation",
         "x-oai-is",
@@ -358,13 +369,15 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
             .expect("send opaque terminal event");
     });
     let request = request_with_opaque_headers(true);
+    let mut profile = test_wire_profile().snapshot();
+    profile.account_routing_override = Some("configured-route".into());
     let client = CodexBackendClient::new(
         reqwest::Client::builder()
             .no_proxy()
             .build()
             .expect("HTTP client"),
         format!("http://{address}"),
-        test_wire_profile(),
+        provider_openai::transport::profile::CodexWireProfileState::new(profile),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_mins(1))));
 
@@ -430,7 +443,6 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
     assert_eq!(values("version"), vec![b"1.2.3".to_vec()]);
     assert!(values("x-openai-internal-codex-residency").is_empty());
     for dropped in [
-        "x-codex-installation-id",
         "x-openai-actor-authorization",
         "x-oai-attestation",
         "x-oai-is",
@@ -462,7 +474,11 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
     ] {
         assert_eq!(values(name), vec![value.to_vec()], "missing {name}");
     }
-    assert!(values("traceparent").is_empty());
+    assert_eq!(values("traceparent"), vec![b"synthetic-trace".to_vec()]);
+    assert_eq!(
+        values("x-codex-installation-id"),
+        vec![b"lease-installation".to_vec()]
+    );
     let session = values("session-id");
     assert!(uuid::Uuid::parse_str(std::str::from_utf8(&session[0]).unwrap()).is_ok());
     assert_eq!(values("x-codex-turn-state"), vec![b"turn-ascii".to_vec()]);

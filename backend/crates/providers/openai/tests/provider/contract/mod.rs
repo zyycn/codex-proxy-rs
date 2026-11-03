@@ -6010,7 +6010,7 @@ async fn opaque_provider_options_do_not_change_openai_account_selection() {
 }
 
 #[tokio::test]
-async fn http_account_scoping_drops_downstream_installation_header() {
+async fn http_account_scoping_replaces_downstream_installation_header() {
     for owner in ["acct_scope_same", "acct_scope_old"] {
         let raw = r#"{"installation_id":"client-installation","future":true}"#;
         let request = capture_scoped_http_request(
@@ -6051,7 +6051,10 @@ async fn http_account_scoping_drops_downstream_installation_header() {
         assert_ne!(installation_id, "client-installation");
         assert!(uuid::Uuid::parse_str(installation_id).is_ok());
         assert_eq!(body["installation_id"], installation_id);
-        assert!(captured_header_values(&request, "x-codex-installation-id").is_empty());
+        assert_eq!(
+            captured_header_values(&request, "x-codex-installation-id"),
+            vec![installation_id.as_bytes().to_vec()]
+        );
         let headers = captured_header_values(&request, "x-codex-turn-metadata");
         assert_eq!(headers.len(), 1);
         for encoded in [
@@ -6069,7 +6072,7 @@ async fn http_account_scoping_drops_downstream_installation_header() {
 }
 
 #[tokio::test]
-async fn websocket_account_scoping_drops_downstream_installation_header() {
+async fn websocket_account_scoping_replaces_downstream_installation_header() {
     for owner in ["acct_scope_same", "acct_scope_old"] {
         let raw = r#"{"installation_id":"client-installation","future":true}"#;
         let store = Arc::new(MemoryAccountStore::default());
@@ -6148,7 +6151,7 @@ async fn websocket_account_scoping_drops_downstream_installation_header() {
         assert_ne!(installation_id, "client-installation");
         assert!(uuid::Uuid::parse_str(installation_id).is_ok());
         assert_eq!(body["installation_id"], installation_id);
-        assert!(!header.contains_key("x-codex-installation-id"));
+        assert_eq!(header["x-codex-installation-id"], installation_id);
         for encoded in [
             header["x-codex-turn-metadata"]
                 .to_str()
@@ -6220,7 +6223,10 @@ async fn same_account_scope_preserves_future_protocol_shapes() {
         body.pointer("/client_metadata/x-codex-installation-id")
     );
     assert!(body.pointer("/client_metadata/installation_id").is_none());
-    assert!(captured_header_values(&request, "x-codex-installation-id").is_empty());
+    assert_eq!(
+        request.headers["x-codex-installation-id"].to_str().unwrap(),
+        body["client_metadata"]["x-codex-installation-id"]
+    );
 }
 
 #[tokio::test]

@@ -291,9 +291,9 @@ async fn privacy_header_change_isolates_websocket_then_reuses_stable_headers() {
         let mut sockets = Vec::new();
         let mut cache_keys = Vec::new();
         let mut session_headers = Vec::new();
-        for (expected, requests) in [
-            ("Bearer first-synthetic-token", 1),
-            ("Bearer second-synthetic-token", 2),
+        for (expected, trace, requests) in [
+            ("Bearer first-synthetic-token", "first-trace", 1),
+            ("Bearer second-synthetic-token", "second-trace", 2),
         ] {
             let (stream, _) = timeout(Duration::from_secs(5), listener.accept())
                 .await
@@ -302,8 +302,11 @@ async fn privacy_header_change_isolates_websocket_then_reuses_stable_headers() {
             let mut socket =
                 crate::transport::accept_codex_test_websocket_with(stream, |request, response| {
                     assert_eq!(request.headers()["authorization"], expected);
-                    assert!(!request.headers().contains_key("sentry-trace"));
-                    assert!(!request.headers().contains_key("baggage"));
+                    assert_eq!(request.headers()["sentry-trace"], trace);
+                    assert_eq!(
+                        request.headers()["baggage"],
+                        format!("sentry-trace_id={trace}")
+                    );
                     session_headers.push(request.headers()["session-id"].clone());
                     response.headers_mut().insert(
                         "sec-websocket-extensions",

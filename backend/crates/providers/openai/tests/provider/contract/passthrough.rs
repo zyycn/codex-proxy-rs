@@ -85,6 +85,13 @@ async fn independent_endpoints_send_opaque_headers_without_client_identity() {
     let entries: Vec<_> = [
         ("x-future-business", "first"),
         ("x-future-business", "second"),
+        ("x-codex-installation-id", "client-installation"),
+        ("x-openai-account-routing-override", "client-route"),
+        ("x-openai-fedramp", "true"),
+        ("traceparent", "client-trace"),
+        ("tracestate", "vendor=client"),
+        ("sentry-trace", "sentry-client-trace"),
+        ("baggage", "environment=synthetic"),
         ("authorization", "Bearer client-secret"),
         ("chatgpt-account-id", "client-account"),
         ("x-stainless-runtime", "client-runtime"),
@@ -134,6 +141,17 @@ async fn independent_endpoints_send_opaque_headers_without_client_identity() {
         let requests = server.received_requests().await.unwrap();
         let sent = requests.last().unwrap();
         assert_eq!(sent.url.path(), endpoint);
+        uuid::Uuid::parse_str(sent.headers["x-codex-installation-id"].to_str().unwrap()).unwrap();
+        for (name, expected) in [
+            ("x-openai-account-routing-override", "client-route"),
+            ("x-openai-fedramp", "true"),
+            ("traceparent", "client-trace"),
+            ("tracestate", "vendor=client"),
+            ("sentry-trace", "sentry-client-trace"),
+            ("baggage", "environment=synthetic"),
+        ] {
+            assert_eq!(sent.headers[name], expected);
+        }
         if endpoint.ends_with("search") {
             assert_scoped_search_body(&sent.body, &raw);
         } else {

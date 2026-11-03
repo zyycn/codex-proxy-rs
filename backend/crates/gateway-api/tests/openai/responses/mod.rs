@@ -431,6 +431,9 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         values("x-codex-installation-id"),
         vec![b"client-installation".to_vec()]
     );
+    for name in ["x-openai-account-routing-override", "x-openai-fedramp"] {
+        assert_eq!(values(name), vec![b"first".to_vec(), b"second".to_vec()]);
+    }
     for preserved in [
         "accept",
         "content-type",
@@ -450,8 +453,6 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         "cookie",
         "chatgpt-account-id",
         "chatgpt-project-id",
-        "x-openai-account-routing-override",
-        "x-openai-fedramp",
         // 上游指纹由运行时画像统一生成，客户端不得覆盖
         "user-agent",
         "originator",
