@@ -100,6 +100,7 @@ async fn initialize_inner(
         timezone,
         providers.clone(),
         snapshot.clone(),
+        published_snapshot.clone(),
         probe.clone(),
         upstream_info.clone(),
     );
@@ -297,6 +298,7 @@ pub fn initialize_accounts(
     timezone: gateway_core::time::DeploymentTimeZone,
     providers: ProviderAdminRegistry,
     snapshot: Arc<dyn SnapshotControl>,
+    published_snapshot: gateway_core::runtime::RuntimeSnapshotHandle,
     probe: Arc<dyn AccountProbe>,
     upstream_info: Option<Arc<dyn ports::peer::PeerUpstreamService>>,
 ) -> Arc<dyn AccountsService> {
@@ -307,6 +309,7 @@ pub fn initialize_accounts(
         timezone,
         providers,
         snapshot,
+        published_snapshot,
         probe,
         upstream_info,
     ))

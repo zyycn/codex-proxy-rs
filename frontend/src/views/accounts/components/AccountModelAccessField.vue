@@ -141,6 +141,12 @@ async function load(refresh = false) {
     if (request.isCurrent(requestId)) {
       catalog.value = result.models
       catalogObservedAtDisplay.value = result.observedAt ? result.observedAtDisplay : undefined
+      if (refresh && result.modelAccess && model.value?.mode === 'allowlist') {
+        model.value = {
+          ...result.modelAccess,
+          models: [...result.modelAccess.models],
+        }
+      }
     }
   }
   catch (cause) {

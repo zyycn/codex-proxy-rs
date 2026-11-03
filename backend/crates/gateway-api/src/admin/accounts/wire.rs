@@ -734,6 +734,8 @@ pub struct AccountModelsData {
     pub models: Vec<AccountModelView>,
     pub observed_at: Option<String>,
     pub observed_at_display: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
 }
 
 /// 账号模型目录文件；`catalog` 直接作为 Codex `model_catalog_json` 的文件正文落盘

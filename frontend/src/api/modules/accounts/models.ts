@@ -1,11 +1,13 @@
 import type { RequestOptions } from '../../request'
-import type { AccountIdParam } from './types'
+import type { AccountIdParam, AccountModelAccess } from './types'
 import request from '../../request'
 
 export interface AccountModelsResponse {
   models: Array<{ id: string, label: string }>
   observedAt?: string | null
   observedAtDisplay?: string
+  /** 强制刷新成功后，服务端实际保留的账号白名单；普通查询不返回。 */
+  modelAccess?: AccountModelAccess
 }
 
 export interface AccountModelCatalogResponse {

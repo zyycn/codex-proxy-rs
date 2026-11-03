@@ -101,6 +101,7 @@ pub(super) struct AdminHarness {
     account_runtime: Arc<dyn AccountRuntimeStore>,
     account_groups: Arc<dyn AccountGroupStore>,
     snapshot: Arc<dyn SnapshotControl>,
+    published_snapshot: gateway_core::runtime::RuntimeSnapshotHandle,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
     observability: Arc<dyn ObservabilityStore>,
@@ -129,6 +130,7 @@ impl AdminHarness {
             account_runtime: unavailable.clone(),
             account_groups: Arc::new(UnavailableAccountGroupStore),
             snapshot: Arc::new(NoopSnapshot),
+            published_snapshot: gateway_core::runtime::RuntimeSnapshotHandle::default(),
             auth: Arc::new(BootstrapAuthStore::default()),
             client_keys: unavailable.clone(),
             observability: unavailable.clone(),
@@ -183,6 +185,14 @@ impl AdminHarness {
 
     pub(super) fn snapshot(mut self, snapshot: Arc<dyn SnapshotControl>) -> Self {
         self.snapshot = snapshot;
+        self
+    }
+
+    pub(super) fn published_snapshot(
+        mut self,
+        snapshot: gateway_core::runtime::RuntimeSnapshotHandle,
+    ) -> Self {
+        self.published_snapshot = snapshot;
         self
     }
 
@@ -302,7 +312,7 @@ impl AdminHarness {
                 service_middleware: self.service_middleware,
                 plugin_preparation: Arc::new(plugins::TestPluginPorts),
                 plugin_management: Arc::new(plugins::TestPluginPorts),
-                published_snapshot: gateway_core::runtime::RuntimeSnapshotHandle::default(),
+                published_snapshot: self.published_snapshot,
                 plugin_inspector: self.plugin_inspector,
                 plugin_distribution: Arc::new(plugins::TestPluginPorts),
                 pricing_source: Arc::new(UnavailablePricingSource),

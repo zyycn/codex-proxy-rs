@@ -14,7 +14,7 @@ use gateway_core::{
     account::ProviderAccountId,
     engine::probe::{AccountProbe, AccountProbeRequest},
     routing::{ProviderKind, UpstreamModelId},
-    runtime::SnapshotControl,
+    runtime::{RuntimeSnapshotHandle, SnapshotControl},
 };
 
 use crate::{
@@ -22,8 +22,8 @@ use crate::{
         AdminError, MutationContext,
         accounts::{
             AccountConnectionTestEvent, AccountConnectionTestEventStream, AccountListQuery,
-            AccountPageItem, AccountUpdateResult, AccountUsage, AccountUsageWindowQuery,
-            AccountsUpdateResult, BatchUpdateAccounts, UpdateAccount,
+            AccountModelsRefreshResult, AccountPageItem, AccountUpdateResult, AccountUsage,
+            AccountUsageWindowQuery, AccountsUpdateResult, BatchUpdateAccounts, UpdateAccount,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -171,6 +171,12 @@ pub trait AccountsService: Send + Sync {
         refresh: bool,
     ) -> Result<ProviderModels, AdminError>;
 
+    async fn refresh_models(
+        &self,
+        context: &MutationContext,
+        account_id: &ProviderAccountId,
+    ) -> Result<AccountModelsRefreshResult, AdminError>;
+
     async fn model_catalog_document(
         &self,
         account_id: &ProviderAccountId,
@@ -190,6 +196,7 @@ pub(crate) struct DefaultAccountsService {
     timezone: gateway_core::time::DeploymentTimeZone,
     providers: ProviderAdminRegistry,
     snapshot: Arc<dyn SnapshotControl>,
+    published_snapshot: RuntimeSnapshotHandle,
     probe: Arc<dyn AccountProbe>,
     upstream_info: Option<Arc<dyn crate::ports::peer::PeerUpstreamService>>,
     reset_credit_locks:
@@ -209,6 +216,7 @@ impl DefaultAccountsService {
         timezone: gateway_core::time::DeploymentTimeZone,
         providers: ProviderAdminRegistry,
         snapshot: Arc<dyn SnapshotControl>,
+        published_snapshot: RuntimeSnapshotHandle,
         probe: Arc<dyn AccountProbe>,
         upstream_info: Option<Arc<dyn crate::ports::peer::PeerUpstreamService>>,
     ) -> Self {
@@ -219,6 +227,7 @@ impl DefaultAccountsService {
             timezone,
             providers,
             snapshot,
+            published_snapshot,
             probe,
             upstream_info,
             reset_credit_locks: Arc::new(futures::lock::Mutex::new(BTreeMap::new())),
@@ -517,6 +526,50 @@ impl DefaultAccountsService {
             account: stored.account,
             quota,
         })
+    }
+
+    async fn model_access_after_catalog_refresh(
+        &self,
+        account: &crate::model::accounts::AccountRecord,
+        models: &ProviderModels,
+    ) -> Result<Option<gateway_core::account::AccountModelAccess>, AdminError> {
+        use gateway_core::account::AccountModelAccessMode;
+
+        if account.model_access.mode() != AccountModelAccessMode::Allowlist {
+            return Ok(None);
+        }
+        let Ok(snapshot) = self.published_snapshot.acquire() else {
+            tracing::warn!(
+                account_id = account.id.as_str(),
+                "跳过模型白名单清理：运行时目录快照尚未就绪"
+            );
+            return Ok(None);
+        };
+        let native_models = models
+            .models
+            .iter()
+            .map(|model| model.id.to_string())
+            .collect::<BTreeSet<_>>();
+        let available = snapshot.model_access_ids_for_account(
+            &account.provider_kind,
+            &ProviderAccountId::new(account.id.clone())
+                .map_err(|_| AdminError::invalid("服务商账号 ID 不合法"))?,
+            &native_models,
+        );
+        let retained = account
+            .model_access
+            .models()
+            .iter()
+            .filter(|model| available.contains(*model))
+            .cloned()
+            .collect::<Vec<_>>();
+        // 空白名单无法表达 allowlist；保留原策略，避免一次目录误报把账号变成全拒绝
+        if retained.is_empty() || retained.len() == account.model_access.models().len() {
+            return Ok(None);
+        }
+        gateway_core::account::AccountModelAccess::new(AccountModelAccessMode::Allowlist, retained)
+            .map(Some)
+            .map_err(|_| AdminError::invalid("模型白名单清理结果不合法"))
     }
 }
 
@@ -1108,6 +1161,57 @@ impl AccountsService for DefaultAccountsService {
             .models(account_id, refresh)
             .await
             .map_err(|error| map_provider_error(error, "provider model catalog"))
+    }
+
+    async fn refresh_models(
+        &self,
+        context: &MutationContext,
+        account_id: &ProviderAccountId,
+    ) -> Result<AccountModelsRefreshResult, AdminError> {
+        let (stored, provider) = self.provider_for_account(account_id).await?;
+        let models = provider
+            .models(account_id, true)
+            .await
+            .map_err(|error| map_provider_error(error, "provider model catalog"))?;
+        let Some(next_model_access) = self
+            .model_access_after_catalog_refresh(&stored.account, &models)
+            .await?
+        else {
+            return Ok(AccountModelsRefreshResult {
+                models,
+                model_access: None,
+            });
+        };
+
+        // 目录请求跨越网络等待，策略可能在此期间被管理员修改；发现变化时保持新策略，
+        // 避免用旧白名单覆盖并发更新
+        let current = self.load_account(account_id).await?;
+        if current.account.credential_revision != stored.account.credential_revision
+            || current.account.provider_kind != stored.account.provider_kind
+            || current.account.model_access != stored.account.model_access
+        {
+            return Ok(AccountModelsRefreshResult {
+                models,
+                model_access: None,
+            });
+        }
+        self.batch_update(
+            context,
+            BatchUpdateAccounts {
+                account_ids: vec![account_id.to_string()],
+                enabled: None,
+                concurrency_limit: None,
+                weight: None,
+                model_access: Some(next_model_access.clone()),
+                group_ids: None,
+                outbound_proxy: None,
+            },
+        )
+        .await?;
+        Ok(AccountModelsRefreshResult {
+            models,
+            model_access: Some(next_model_access),
+        })
     }
 
     async fn model_catalog_document(

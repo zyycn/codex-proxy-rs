@@ -136,6 +136,7 @@ async fn execute(
         timezone,
         providers.admin.clone(),
         core.snapshot_control(),
+        core.snapshots(),
         core.account_probe(),
         Some(providers.peer.service()),
     );

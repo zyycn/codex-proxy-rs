@@ -265,6 +265,13 @@ pub struct AccountsUpdateResult {
     pub account_ids: Vec<gateway_core::account::ProviderAccountId>,
 }
 
+/// 账号模型目录强制刷新结果；`model_access` 仅在刷新同时清理了白名单时返回
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountModelsRefreshResult {
+    pub models: super::provider_credentials::ProviderModels,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
+}
+
 /// 账号批量删除命令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteAccounts {

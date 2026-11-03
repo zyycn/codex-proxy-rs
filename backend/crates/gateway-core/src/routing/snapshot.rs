@@ -1023,6 +1023,42 @@ impl RuntimeSnapshot {
             .collect()
     }
 
+    /// 返回账号模型白名单刷新后仍可保留的公开 ID
+    ///
+    /// `native_models` 是本次账号目录成功读取的原生上游 ID；插件适配模型、直接别名和
+    /// 全局映射只有在当前账号及当前 Provider 能够将其落到这些原生 ID，或由该账号明确
+    /// 贡献适配模型时才参与保留。这样管理端清理陈旧白名单时不会把适配器模型误删
+    #[must_use]
+    pub fn model_access_ids_for_account(
+        &self,
+        provider: &ProviderKind,
+        account: &ProviderAccountId,
+        native_models: &BTreeSet<String>,
+    ) -> BTreeSet<String> {
+        let mut upstream_models = native_models.clone();
+        let mut ids = native_models.clone();
+        for model in self
+            .contributed_models()
+            .iter()
+            .filter(|model| &model.provider == provider && model.accounts.contains(account))
+        {
+            ids.insert(model.id.as_str().to_owned());
+            upstream_models.insert(self.mapped_model(model.id.as_str()));
+        }
+
+        for alias in self.model_aliases().iter().filter(|alias| {
+            &alias.provider == provider && upstream_models.contains(alias.target.as_str())
+        }) {
+            ids.insert(alias.id.as_str().to_owned());
+        }
+        for alias in self.settings.values.model_mappings.keys() {
+            if upstream_models.contains(&self.mapped_model(alias)) {
+                ids.insert(alias.clone());
+            }
+        }
+        ids
+    }
+
     /// 已知模型只属于明确声明它的 Provider；未知模型仍可由非完整目录透传
     #[must_use]
     pub fn contains_public_model_for_provider(

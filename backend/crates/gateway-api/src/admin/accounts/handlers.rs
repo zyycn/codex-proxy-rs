@@ -594,7 +594,7 @@ where
 }
 
 async fn refresh_account_models<S>(
-    _auth: AdminAuth,
+    auth: AdminAuth,
     State(state): State<S>,
     AdminJson(request): AdminJson<AccountActionRequest>,
 ) -> Result<impl IntoResponse, AdminError>
@@ -605,11 +605,11 @@ where
     let result = state
         .admin_services()
         .accounts()
-        .models(&account_id, true)
+        .refresh_models(&auth.context().mutation_context(), &account_id)
         .await
         .map_err(map_service_error)?;
     let time = crate::time::TimePresenter::new(state.admin_services().timezone());
-    let data = account_models_data(result, time);
+    let data = account_models_data_with_access(result.models, time, result.model_access);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 

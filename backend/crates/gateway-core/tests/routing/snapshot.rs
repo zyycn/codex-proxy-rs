@@ -370,6 +370,39 @@ fn adapted_models_limit_visibility_and_routing_to_capable_authorized_accounts() 
     );
 }
 
+#[test]
+fn model_access_catalog_keeps_native_adapted_and_effective_alias_ids() {
+    use std::collections::BTreeSet;
+
+    use gateway_core::account::ProviderAccountId;
+    use gateway_core::routing::{ContributedModel, ModelPresentation};
+
+    let account = ProviderAccountId::new("acct_openai").unwrap();
+    let provider = ProviderKind::new("openai").unwrap();
+    let snapshot = super::snapshot().with_extensions(Some(ExtensionSetReference::new(
+        ExtensionSetId::new("model-access-cleanup".into()).unwrap(),
+        Arc::new(ModelLease(vec![ContributedModel {
+            owner: "fixture".into(),
+            id: PublicModelId::new("adapted-model").unwrap(),
+            provider: provider.clone(),
+            accounts: [account.clone()].into(),
+            capabilities: super::capabilities(),
+            presentation: ModelPresentation::new(Some("Adapted".into()), None),
+        }])),
+    )));
+
+    let ids = snapshot.model_access_ids_for_account(
+        &provider,
+        &account,
+        &BTreeSet::from(["native-model".to_owned(), "gpt-5.5".to_owned()]),
+    );
+
+    assert!(ids.contains("native-model"));
+    assert!(ids.contains("adapted-model"));
+    assert!(ids.contains("gpt-5.4"));
+    assert!(!ids.contains("stale-model"));
+}
+
 impl ExtensionSetLease for AliasLease {
     fn is_ready(&self) -> bool {
         true

@@ -21,7 +21,7 @@ use gateway_core::{
     },
     error::{ClientVisibleUpstreamError, GatewayError, GatewayErrorKind},
     operation::{GenerateRequest, Operation, ProtocolPayload},
-    routing::ProviderKind,
+    routing::{ProviderKind, UpstreamModelId},
     upstream::UpstreamSendState,
 };
 
@@ -97,6 +97,7 @@ pub(super) struct FakeProviderAdmin {
     profile_result: Mutex<Result<ProviderProfileStatistics, ProviderAdminErrorKind>>,
     subscription_result: Mutex<Result<Option<ProviderSubscription>, ProviderAdminErrorKind>>,
     personal_info_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
+    model_ids: Mutex<Vec<String>>,
 }
 
 impl FakeProviderAdmin {
@@ -127,6 +128,7 @@ impl FakeProviderAdmin {
             profile_result: Mutex::new(Ok(empty_profile_statistics())),
             subscription_result: Mutex::new(Ok(None)),
             personal_info_barrier: Mutex::new(None),
+            model_ids: Mutex::new(Vec::new()),
         })
     }
 
@@ -177,6 +179,11 @@ impl FakeProviderAdmin {
             .iter()
             .map(|account_id| (*account_id).to_owned())
             .collect();
+    }
+
+    pub(super) fn set_model_ids(&self, model_ids: &[&str]) {
+        *self.model_ids.lock().expect("provider model IDs") =
+            model_ids.iter().map(|model| (*model).to_owned()).collect();
     }
 
     pub(super) fn quota_requests(&self) -> Vec<ProviderQuotaRequest> {
@@ -575,9 +582,22 @@ impl ProviderAdmin for FakeProviderAdmin {
         _: &ProviderAccountId,
         _: bool,
     ) -> Result<ProviderModels, ProviderAdminError> {
+        self.require_available()?;
+        let models = self
+            .model_ids
+            .lock()
+            .expect("provider model IDs")
+            .iter()
+            .map(
+                |id| gateway_admin::model::provider_credentials::ProviderModel {
+                    id: UpstreamModelId::new(id.clone()).expect("model ID"),
+                    name: id.clone(),
+                },
+            )
+            .collect();
         Ok(ProviderModels {
-            models: Vec::new(),
-            observed_at: None,
+            models,
+            observed_at: Some(Utc::now()),
         })
     }
 
@@ -1090,6 +1110,13 @@ impl AccountStore for FakeAccountStore {
             for account in self.accounts.lock().expect("accounts").iter_mut() {
                 if command.account_ids.contains(&account.id) {
                     account.enabled = enabled;
+                }
+            }
+        }
+        if let Some(model_access) = command.model_access {
+            for account in self.accounts.lock().expect("accounts").iter_mut() {
+                if command.account_ids.contains(&account.id) {
+                    account.model_access = model_access.clone();
                 }
             }
         }
@@ -3637,6 +3664,93 @@ async fn personal_info_should_discard_results_when_account_changes_during_query(
         };
         assert_eq!(result.unwrap_err().kind(), expected);
     }
+}
+
+fn ready_published_snapshot() -> gateway_core::runtime::RuntimeSnapshotHandle {
+    gateway_core::runtime::RuntimeSnapshotHandle::new(
+        gateway_core::routing::RuntimeSnapshot::new(
+            gateway_core::routing::ConfigRevision::new(1).unwrap(),
+            gateway_core::settings::SettingsValues::new(1, "smart", BTreeMap::new(), None, None),
+            vec![ProviderKind::new("openai").unwrap()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn model_catalog_refresh_prunes_stale_allowlist_without_touching_other_settings() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    provider.set_model_ids(&["native-model"]);
+    let mut account = account_record("openai");
+    account.model_access = gateway_core::account::AccountModelAccess::new(
+        gateway_core::account::AccountModelAccessMode::Allowlist,
+        vec!["native-model".to_owned(), "stale-model".to_owned()],
+    )
+    .unwrap();
+    let store = FakeAccountStore::with_account(account, events());
+    let services = super::AdminHarness::new()
+        .accounts(store.clone())
+        .settings(Arc::new(StaticSettingsStore::default()))
+        .provider(provider)
+        .published_snapshot(ready_published_snapshot())
+        .build()
+        .await;
+
+    let result = services
+        .accounts()
+        .refresh_models(
+            &context("catalog-refresh"),
+            &ProviderAccountId::new("acct_test").unwrap(),
+        )
+        .await
+        .expect("catalog refresh");
+
+    assert_eq!(
+        result.model_access.unwrap().models(),
+        &std::collections::BTreeSet::from(["native-model".to_owned()])
+    );
+    assert_eq!(
+        store.accounts.lock().unwrap()[0].model_access.models(),
+        &std::collections::BTreeSet::from(["native-model".to_owned()])
+    );
+}
+
+#[tokio::test]
+async fn failed_model_catalog_refresh_does_not_prune_allowlist() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    provider.set_model_ids(&["native-model"]);
+    provider.fail_next(ProviderAdminErrorKind::Unavailable);
+    let mut account = account_record("openai");
+    account.model_access = gateway_core::account::AccountModelAccess::new(
+        gateway_core::account::AccountModelAccessMode::Allowlist,
+        vec!["native-model".to_owned(), "stale-model".to_owned()],
+    )
+    .unwrap();
+    let store = FakeAccountStore::with_account(account.clone(), events());
+    let services = super::AdminHarness::new()
+        .accounts(store.clone())
+        .settings(Arc::new(StaticSettingsStore::default()))
+        .provider(provider)
+        .published_snapshot(ready_published_snapshot())
+        .build()
+        .await;
+
+    let error = services
+        .accounts()
+        .refresh_models(
+            &context("catalog-refresh-failed"),
+            &ProviderAccountId::new("acct_test").unwrap(),
+        )
+        .await
+        .expect_err("failed catalog refresh");
+
+    assert_eq!(
+        error.kind(),
+        gateway_admin::model::AdminErrorKind::Unavailable
+    );
+    assert_eq!(store.accounts.lock().unwrap()[0], account);
 }
 
 async fn accounts_service(
