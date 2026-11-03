@@ -3303,6 +3303,7 @@ struct FailingProvider;
 struct NativeCatalogProvider {
     fail: bool,
     empty: bool,
+    adapted: bool,
 }
 
 #[async_trait]
@@ -3336,23 +3337,33 @@ impl Provider for NativeCatalogProvider {
         if self.empty {
             return Ok(Some(Vec::new()));
         }
-        Ok(Some(
-            ["gpt-new", "gpt-start"]
-                .into_iter()
-                .map(|id| gateway_core::routing::ProviderModelDescriptor {
-                    model: UpstreamModelId::new(id).expect("id"),
-                    content: gateway_core::routing::ProviderModelContent::Native(
-                        RawJsonPayload::new(
-                            "codex",
-                            serde_json::to_vec(&json!({"slug":id,"future":null}))
-                                .expect("JSON")
-                                .into(),
-                        )
-                        .expect("payload"),
+        let mut models = ["gpt-new", "gpt-start"]
+            .into_iter()
+            .map(|id| gateway_core::routing::ProviderModelDescriptor {
+                model: UpstreamModelId::new(id).expect("id"),
+                content: gateway_core::routing::ProviderModelContent::Native(
+                    RawJsonPayload::new(
+                        "codex",
+                        serde_json::to_vec(&json!({"slug":id,"future":null}))
+                            .expect("JSON")
+                            .into(),
+                    )
+                    .expect("payload"),
+                ),
+            })
+            .collect::<Vec<_>>();
+        if self.adapted {
+            models.push(gateway_core::routing::ProviderModelDescriptor {
+                model: UpstreamModelId::new("shared-model").expect("id"),
+                content: gateway_core::routing::ProviderModelContent::Adapted(
+                    gateway_core::routing::ModelPresentation::new(
+                        Some("Provider shared".into()),
+                        None,
                     ),
-                })
-                .collect(),
-        ))
+                ),
+            });
+        }
+        Ok(Some(models))
     }
     async fn execute(
         self: Arc<Self>,
@@ -3427,9 +3438,11 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
         let service = DefaultExecutionService::new(
             RuntimeSnapshotHandle::new(snapshot),
             Arc::new(TrackingExecutionStore::default()),
-            ProviderRegistry::new([
-                Arc::new(NativeCatalogProvider { fail, empty }) as Arc<dyn Provider>
-            ])
+            ProviderRegistry::new([Arc::new(NativeCatalogProvider {
+                fail,
+                empty,
+                adapted: false,
+            }) as Arc<dyn Provider>])
             .expect("registry"),
             Arc::new(UnusedAdmissions),
             Arc::new(UnusedContinuation),
@@ -3493,6 +3506,73 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
             "插件别名使用相同原生对象，不伪造字段"
         );
     }
+}
+
+#[test]
+fn client_catalog_prefers_account_scoped_adapted_profile_over_generic_provider_profile() {
+    #[derive(Debug)]
+    struct Contributions(Vec<gateway_core::routing::ContributedModel>);
+    impl gateway_core::routing::extensions::ExtensionSetLease for Contributions {
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        fn model_aliases(&self) -> &[gateway_core::routing::ContributedModelAlias] {
+            &[]
+        }
+
+        fn models(&self) -> &[gateway_core::routing::ContributedModel] {
+            &self.0
+        }
+    }
+
+    let snapshot = start_snapshot().with_extensions(Some(ExtensionSetReference::new(
+        gateway_core::routing::extensions::ExtensionSetId::new("catalog-precedence".into())
+            .unwrap(),
+        Arc::new(Contributions(vec![
+            gateway_core::routing::ContributedModel {
+                owner: "catalog-plugin".into(),
+                id: PublicModelId::new("shared-model").unwrap(),
+                provider: ProviderKind::new("openai").unwrap(),
+                accounts: [ProviderAccountId::new("acct_start").unwrap()].into(),
+                capabilities: ModelCapabilities::new([OperationKind::Generate].into(), None),
+                presentation: gateway_core::routing::ModelPresentation::new(
+                    Some("Plugin shared".into()),
+                    None,
+                ),
+            },
+        ])),
+    )));
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(snapshot),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::new([Arc::new(NativeCatalogProvider {
+            fail: false,
+            empty: false,
+            adapted: true,
+        }) as Arc<dyn Provider>])
+        .expect("provider registry"),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+        Arc::new(crate::RecordingDiagnostics::default()),
+    );
+
+    let client = service.authenticate("sk_start_test").expect("authenticate");
+    let models =
+        block_on(service.client_model_catalog(&client, "codex", "0.154.0")).expect("models");
+    let shared = models
+        .iter()
+        .find_map(|entry| match entry {
+            gateway_core::routing::PublicModelDescriptor::Adapted(profile)
+                if profile.model().as_str() == "shared-model" =>
+            {
+                Some(profile)
+            }
+            _ => None,
+        })
+        .expect("shared model");
+    assert_eq!(shared.presentation().display_name(), Some("Plugin shared"));
 }
 
 #[async_trait]

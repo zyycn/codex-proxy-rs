@@ -19,6 +19,7 @@ fn identity_queries_keep_frozen_permissions_without_using_execution_resources() 
             ProviderRegistry::new([Arc::new(NativeCatalogProvider {
                 fail: false,
                 empty: false,
+                adapted: false,
             }) as Arc<dyn Provider>])
             .unwrap(),
             Arc::new(UnusedAdmissions),
@@ -94,6 +95,7 @@ fn execution_scope_limits_apply_only_when_starting_a_model() {
             ProviderRegistry::new([Arc::new(NativeCatalogProvider {
                 fail: false,
                 empty: false,
+                adapted: false,
             }) as Arc<dyn Provider>])
             .unwrap(),
             Arc::new(UnusedAdmissions),

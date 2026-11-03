@@ -62,7 +62,8 @@ use crate::{
     policy::{ClientApiKeyId, ClientPolicy},
     provider_ports::{ProviderSessionAffinityPort, ProviderStoreErrorKind},
     routing::{
-        FrozenAccountScope, ProviderCatalogUnavailable, PublicModelDescriptor, PublicModelId,
+        FrozenAccountScope, ProviderCatalogUnavailable, ProviderModelContent,
+        ProviderModelDescriptor, PublicModelDescriptor, PublicModelId, PublicModelProfile,
         RoutingContext, RuntimeSnapshot, UpstreamModelId, request_settings::RequestSettings,
     },
     runtime::{RuntimeSnapshotHandle, RuntimeSnapshotPublisher},
@@ -70,10 +71,26 @@ use crate::{
 use futures::{FutureExt as _, future::BoxFuture, pin_mut, select_biased};
 use futures_timer::Delay;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Weak},
     time::{Instant, SystemTime},
 };
+
+/// 将 Provider 目录条目投影为客户端条目并应用当前账号范围的适配画像
+fn client_catalog_descriptor(
+    source: &ProviderModelDescriptor,
+    model: PublicModelId,
+    contributed_profiles: &BTreeMap<PublicModelId, PublicModelProfile>,
+) -> PublicModelDescriptor {
+    match &source.content {
+        ProviderModelContent::Native(_) => source.content.for_public_model(model),
+        ProviderModelContent::Adapted(_) => contributed_profiles
+            .get(&model)
+            .cloned()
+            .map(PublicModelDescriptor::Adapted)
+            .unwrap_or_else(|| source.content.for_public_model(model)),
+    }
+}
 
 pub struct DefaultExecutionService {
     snapshots: RuntimeSnapshotHandle,
@@ -1564,6 +1581,12 @@ impl ExecutionService for DefaultExecutionService {
             let mut seen = BTreeSet::new();
             for kind in scope.provider_kinds() {
                 let provider = providers.get(kind).ok_or(ProviderCatalogUnavailable)?;
+                let contributed_profiles =
+                    client.snapshot.contributed_profiles_for_scope(kind, scope);
+                let contributed_by_model = contributed_profiles
+                    .iter()
+                    .map(|profile| (profile.model().clone(), profile.clone()))
+                    .collect::<BTreeMap<_, _>>();
                 let Some(models) = provider
                     .query_client_model_catalog(scope, protocol, client_version)
                     .await?
@@ -1598,7 +1621,11 @@ impl ExecutionService for DefaultExecutionService {
                         continue;
                     }
                     if seen.insert(model.clone()) {
-                        result.push(source.content.for_public_model(model));
+                        result.push(client_catalog_descriptor(
+                            source,
+                            model,
+                            &contributed_by_model,
+                        ));
                     }
                 }
                 for model in client.snapshot.public_models_for_provider(kind) {
@@ -1617,11 +1644,15 @@ impl ExecutionService for DefaultExecutionService {
                     }
                     if let Some(source) = by_id.get(target.as_str()) {
                         seen.insert(model.clone());
-                        result.push(source.content.for_public_model(model));
+                        result.push(client_catalog_descriptor(
+                            source,
+                            model,
+                            &contributed_by_model,
+                        ));
                     }
                 }
-                // 原生完整对象优先；只补入当前授权账号实际提供的独立适配画像
-                for profile in client.snapshot.contributed_profiles_for_scope(kind, scope) {
+                // 没有 Provider 目录条目的适配模型仍由当前授权账号贡献
+                for profile in contributed_profiles {
                     if seen.insert(profile.model().clone()) {
                         result.push(PublicModelDescriptor::Adapted(profile));
                     }
