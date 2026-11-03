@@ -9,6 +9,7 @@ import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import UsageBillingCell from '@/components/usage/UsageBillingCell.vue'
 import UsageClientIpCell from '@/components/usage/UsageClientIpCell.vue'
+import UsageErrorCell from '@/components/usage/UsageErrorCell.vue'
 import UsageLatencyCell from '@/components/usage/UsageLatencyCell.vue'
 import UsageModelCell from '@/components/usage/UsageModelCell.vue'
 import UsagePerformanceCell from '@/components/usage/UsagePerformanceCell.vue'
@@ -16,7 +17,7 @@ import UsageReasoningEffortCell from '@/components/usage/UsageReasoningEffortCel
 import UsageRouteCell from '@/components/usage/UsageRouteCell.vue'
 import UsageTimeCell from '@/components/usage/UsageTimeCell.vue'
 import UsageTokenCell from '@/components/usage/UsageTokenCell.vue'
-import UsageTransportBadge from '@/components/usage/UsageTransportBadge.vue'
+import UsageTransportCell from '@/components/usage/UsageTransportCell.vue'
 import {
   usageAccountText,
   usageUserAgent,
@@ -116,22 +117,11 @@ const { t } = useI18n({ useScope: 'global' })
     </template>
 
     <template #errorMessage="{ row }">
-      <div class="min-w-0 py-0.5" :title="row.errorMessage || row.errorCode || undefined">
-        <code class="block truncate font-mono text-z-sm font-bold text-z-error-text">
-          {{ row.errorCode || (row.logicalOutcome === 'incomplete' ? t('usage.error.responseIsNotComplete') : t('usage.error.requestFailed')) }}
-        </code>
-        <p v-if="row.errorMessage" class="mt-1 mb-0 truncate text-z-xs leading-[1.45] font-emphasis text-z-text-secondary">
-          {{ row.errorMessage }}
-        </p>
-      </div>
+      <UsageErrorCell :record="row" />
     </template>
 
-    <template #clientTransport="{ row }">
-      <UsageTransportBadge :transport="row.clientTransport" />
-    </template>
-
-    <template #upstreamTransport="{ row }">
-      <UsageTransportBadge :transport="row.upstreamTransport" />
+    <template #transport="{ row }">
+      <UsageTransportCell :upstream="row.upstreamTransport" :client="row.clientTransport" />
     </template>
 
     <template #tokenDetails="{ row }">

@@ -260,6 +260,11 @@ pub(crate) fn usage_list_record_view(
     UsageListRecordView {
         error_code: record.error_code,
         error_message: record.error_message,
+        error_kind: record.error_kind,
+        websocket_close_code: record.websocket_close_code,
+        continuation_unavailable_reason: record.continuation_unavailable_reason,
+        upstream_connection_exit_reason: record.upstream_connection_exit_reason,
+        recovered: record.recovered,
         logical_outcome: record.outcome.as_str().to_owned(),
         client_api_key_name: record.client_api_key_name,
         id: record.id,
@@ -357,6 +362,23 @@ pub(crate) fn usage_record_view(
         .or_else(|| record.requested_model_id.clone());
     let metadata = provider_metadata_fields(record.provider_metadata_json.as_deref());
     UsageRecordView {
+        upstream_error: record
+            .upstream_error
+            .map(|error| super::wire::UsageUpstreamErrorView {
+                code: error.code,
+                error_type: error.error_type,
+                message: error.message,
+                param: error.param,
+                close_reason: error.close_reason,
+                last_event_type: error.last_event_type,
+            }),
+        retry_after_ms: record.retry_after_ms,
+        error_code: record.provider_error_code,
+        error_kind: record.error_kind,
+        websocket_close_code: record.websocket_close_code,
+        continuation_unavailable_reason: record.continuation_unavailable_reason,
+        upstream_connection_exit_reason: record.upstream_connection_exit_reason,
+        recovered: record.recovered,
         id: record.id.clone(),
         request_id: record.id,
         client_api_key_id: Some(record.client_api_key_ref),

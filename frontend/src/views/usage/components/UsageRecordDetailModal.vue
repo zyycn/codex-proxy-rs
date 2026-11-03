@@ -25,11 +25,16 @@ import { attemptOutcomeClass, attemptOutcomeText, displayValue, fieldLabelClass,
 import DiagnosticsDownloadButton from './DiagnosticsDownloadButton.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 import UsageDetailFieldGrid from './UsageDetailFieldGrid.vue'
+import UsageDetailState from './UsageDetailState.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
 const props = defineProps<{
   record: UsageRecordDetail | null
+  loading?: boolean
+  error?: string
 }>()
+
+const emit = defineEmits<{ retry: [] }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -160,11 +165,15 @@ const clientUpstreamItems = computed(() => [
       : '—',
     mono: true,
   },
-  {
-    label: t('usage.billing.serviceLevel'),
-    value: props.record?.serviceTier,
-    mono: true,
-  },
+  ...(props.record?.serviceTier
+    ? [
+        {
+          label: t('usage.billing.serviceLevel'),
+          value: props.record?.serviceTier,
+          mono: true,
+        },
+      ]
+    : []),
   {
     label: t('usage.request.eventType'),
     value: props.record?.kind,
@@ -198,12 +207,16 @@ const identifierItems = computed(() => [
     mono: true,
     wrap: true,
   },
-  {
-    label: t('usage.error.upstreamRequestId'),
-    value: props.record?.upstreamRequestId,
-    mono: true,
-    wrap: true,
-  },
+  ...(props.record?.upstreamRequestId
+    ? [
+        {
+          label: t('usage.error.upstreamRequestId'),
+          value: props.record?.upstreamRequestId,
+          mono: true,
+          wrap: true,
+        },
+      ]
+    : []),
   {
     label: t('usage.request.accountId'),
     value: props.record?.accountId,
@@ -553,7 +566,8 @@ const tokenDonutOption = computed<EChartsOption>(() => {
     type="info"
     width="64rem"
   >
-    <div v-if="record" class="grid min-w-0 gap-3">
+    <UsageDetailState v-if="loading || error" :loading="!!loading" :error="error" @retry="emit('retry')" />
+    <div v-else-if="record" class="grid min-w-0 gap-3">
       <section class="grid min-w-0 gap-3 lg:grid-cols-2">
         <section :class="panelClass">
           <h3 :class="panelTitleClass">
@@ -708,7 +722,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
     </div>
 
     <template #footer>
-      <DiagnosticsDownloadButton v-if="record" :request-id="record.requestId" :active="open" />
+      <DiagnosticsDownloadButton :request-id="record?.requestId" :active="open && !loading" />
       <ZButton type="primary" @click="open = false">
         {{ t('common.actions.close') }}
       </ZButton>

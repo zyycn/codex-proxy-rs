@@ -88,6 +88,11 @@ pub struct ImageBillingView {
 pub struct UsageListRecordView {
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+    pub error_kind: Option<String>,
+    pub websocket_close_code: Option<u16>,
+    pub continuation_unavailable_reason: Option<String>,
+    pub upstream_connection_exit_reason: Option<String>,
+    pub recovered: bool,
     pub logical_outcome: String,
     pub client_api_key_name: Option<String>,
     pub id: String,
@@ -122,10 +127,30 @@ pub struct UsageListRecordView {
     pub user_agent: Option<String>,
 }
 
+/// 受控详情中的原始上游错误字段
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageUpstreamErrorView {
+    pub code: Option<String>,
+    pub error_type: Option<String>,
+    pub message: Option<String>,
+    pub param: Option<String>,
+    pub close_reason: Option<String>,
+    pub last_event_type: Option<String>,
+}
+
 /// 单条逻辑请求详情展示
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageRecordView {
+    pub upstream_error: Option<UsageUpstreamErrorView>,
+    pub retry_after_ms: Option<u64>,
+    pub error_code: Option<String>,
+    pub error_kind: Option<String>,
+    pub websocket_close_code: Option<u16>,
+    pub continuation_unavailable_reason: Option<String>,
+    pub upstream_connection_exit_reason: Option<String>,
+    pub recovered: bool,
     pub id: String,
     pub request_id: String,
     pub client_api_key_id: Option<String>,

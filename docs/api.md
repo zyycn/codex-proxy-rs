@@ -2510,6 +2510,18 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 
 请求列表的 `errorCode` / `errorMessage` 提供最终请求的错误码与错误信息，未记录时为 `null`
 
+请求列表与详情的 `errorKind` 保留网关分类，`websocketCloseCode` 只提取已保存关闭帧的数字码，
+与原始上游 `errorCode` 分开。`continuationUnavailableReason` 和 `upstreamConnectionExitReason`
+保留已记录的续接及连接退出原因，缺失字段为 `null`，不根据错误文案推断。
+`recovered` 表示已关联到后续成功请求，原请求的 `logicalOutcome` 保持不变。
+这些字段用于本地化摘要，原始错误信息及受控诊断仍按各自合同保留
+
+`upstreamError` 仅在请求详情返回，从已保存的上游 JSON 投影 `code`、`errorType`、`message`、`param`，
+或 WS 关闭帧的 `closeReason`、`lastEventType`；不重新分类错误，也不包含原始请求、任意响应头或本地原因链。
+缺失、非 JSON 或未识别的结构返回 `null`，完整受控诊断通过诊断包获取。
+详情的 `message` 是网关摘要，不等同于上游 `upstreamError.message`；
+`retryAfterMs` 是已记录的重试等待毫秒数，未记录时为 `null`
+
 诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。诊断按请求量降序返回最多 100 项，
 同请求量按维度标识稳定排列

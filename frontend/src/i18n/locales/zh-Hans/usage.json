@@ -111,13 +111,13 @@
       "reasoningEffort": "推理强度",
       "endpoint": "端点",
       "upstream": "上游",
-      "access": "接入",
       "cost": "费用",
       "latency": "延迟",
       "time": "时间",
       "keyName": "密钥名称",
       "subscription": "订阅",
-      "platformType": "平台"
+      "platformType": "平台",
+      "transport": "传输"
     },
     "outputThroughput": "速率",
     "noValidSample": "无有效样本",
@@ -295,7 +295,27 @@
       "attempt": "尝试 {index}",
       "diagnosticData": "诊断数据",
       "responseContent": "响应内容",
-      "metadata": "元数据"
+      "metadata": "元数据",
+      "recovered": "后续已恢复",
+      "summary": {
+        "upstreamRestart": "上游关闭连接（服务重启）",
+        "upstreamBusy": "上游关闭连接（稍后重试）",
+        "messageTooLarge": "上游因消息过大关闭连接",
+        "upstreamClosed": "上游在响应完成前关闭连接",
+        "processInterrupted": "请求执行中断，未记录到最终结果",
+        "continuationExpired": "续接连接已到期，需要完整重发",
+        "continuationUnavailable": "续接状态不可用，需要完整重发",
+        "connectionLimit": "上游连接已到时限，需要重新连接",
+        "contextTooLong": "上下文超过模型限制",
+        "quotaExceeded": "上游可用额度不足",
+        "rateLimited": "上游请求频率受限",
+        "serverOverloaded": "上游服务负载过高"
+      },
+      "websocketCloseCode": "WS 关闭码",
+      "lastEventType": "最后事件",
+      "retryAfter": "重试等待",
+      "closeReason": "关闭原因",
+      "gatewayMessage": "网关摘要"
     },
     "insights": {
       "useStatisticalObservations": "使用统计观测"
@@ -332,7 +352,8 @@
       "incompleteDetails": "明细不完整",
       "total": "总计",
       "requestContent": "请求内容",
-      "inProgress": "进行中"
+      "inProgress": "进行中",
+      "loadingDetails": "正在加载请求详情"
     },
     "successfulRequest": "成功请求",
     "withinFilterRange": "筛选范围内",
@@ -342,6 +363,7 @@
     "averageTimeTaken": "平均耗时",
     "successfulRequestAverage": "成功请求平均值",
     "usageOverview": "使用概览",
-    "noUsageRecords": "暂无使用记录"
+    "noUsageRecords": "暂无使用记录",
+    "transportDirection": "上游 {upstream} · 接入 {client}"
   }
 }
