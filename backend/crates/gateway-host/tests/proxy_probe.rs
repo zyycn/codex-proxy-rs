@@ -155,6 +155,39 @@ async fn dual_stack_proxy_probe_reports_single_stack_when_only_one_succeeds() {
     assert!(result.message.contains("仅 IPv4"));
 }
 
+#[tokio::test]
+async fn dual_stack_latency_measures_the_selected_exit_without_the_other_family_wait() {
+    use std::time::{Duration, Instant};
+
+    for working_family in ["v4", "v6"] {
+        let server = MockServer::start().await;
+        for (family, ip) in [("v4", "203.0.113.8"), ("v6", "2001:db8::8")] {
+            let response = if family == working_family {
+                ResponseTemplate::new(200).set_body_json(json!({"ip": ip}))
+            } else {
+                ResponseTemplate::new(503).set_delay(Duration::from_millis(500))
+            };
+            Mock::given(path(format!("/{family}")))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let started = Instant::now();
+        let result = HttpProxyProbe::new_dual(
+            format!("{}/v4", server.uri()),
+            format!("{}/v6", server.uri()),
+        )
+        .test(None, false)
+        .await;
+        assert!(result.success);
+        assert_eq!(result.exit_ipv4.is_some(), working_family == "v4");
+        assert_eq!(result.exit_ipv6.is_some(), working_family == "v6");
+        assert!(started.elapsed() >= Duration::from_millis(500));
+        assert!(u128::from(result.latency_ms) + 400 < started.elapsed().as_millis());
+    }
+}
+
 fn location_response(ip: &str, timezone: &str) -> serde_json::Value {
     json!({"success": true, "ip": ip, "country_code": "JP", "region": "Tokyo", "city": "Tokyo", "timezone": {"id": timezone}})
 }
