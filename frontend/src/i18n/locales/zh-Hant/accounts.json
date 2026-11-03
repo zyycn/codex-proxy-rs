@@ -304,7 +304,6 @@
       "fileReadingFailedTryAgain": "文件讀取失敗，請重新選擇",
       "uploadFiles": "上傳文件",
       "authorizationExpired": "授權已過期，可重新開始或檢查已完成的授權結果",
-      "pollingPaused": "查詢已暫停，可檢查授權結果後繼續",
       "regenerateAuthorizationLink": "重新生成授權鏈接",
       "generateAuthorizationLink": "生成授權鏈接",
       "authorizationLink": "授權鏈接",

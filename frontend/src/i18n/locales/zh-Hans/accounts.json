@@ -304,7 +304,6 @@
       "fileReadingFailedTryAgain": "文件读取失败，请重新选择",
       "uploadFiles": "上传文件",
       "authorizationExpired": "授权已过期，可重新开始或检查已完成的授权结果",
-      "pollingPaused": "查询已暂停，可检查授权结果后继续",
       "regenerateAuthorizationLink": "重新生成授权链接",
       "generateAuthorizationLink": "生成授权链接",
       "authorizationLink": "授权链接",

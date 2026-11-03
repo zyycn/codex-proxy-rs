@@ -3,11 +3,10 @@ import type { AccountAuthorizationView } from '../../composables/useAccountAutho
 
 import { ZButton, ZForm, ZFormItem, ZIconButton, ZScrollbar, ZTextarea } from '@codex-proxy/ui'
 import { Copy, KeyRound } from '@lucide/vue'
-import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCopyText } from '@/composables/useCopyText'
 
-const props = defineProps<{
+defineProps<{
   authUrl: string
   panelTitle: string
   panelDescription: string
@@ -25,13 +24,6 @@ const { t } = useI18n({ useScope: 'global' })
 
 const callback = defineModel<string>({ required: true })
 const copyWithToast = useCopyText()
-const statusText = computed(() => {
-  if (props.authorization.status === 'expired')
-    return t('accounts.onboarding.authorizationExpired')
-  if (props.authorization.status === 'paused')
-    return t('accounts.onboarding.pollingPaused')
-  return ''
-})
 </script>
 
 <template>
@@ -88,13 +80,6 @@ const statusText = computed(() => {
         </ZScrollbar>
       </ZFormItem>
     </ZForm>
-
-    <p v-if="statusText" class="m-0 text-z-sm text-z-text-secondary" role="status">
-      {{ statusText }}
-    </p>
-    <p v-if="authorization.error" class="m-0 text-z-sm text-z-error" role="alert">
-      {{ authorization.error }}
-    </p>
 
     <ZForm v-if="authorization.flow">
       <ZFormItem :label="callbackLabel" required>

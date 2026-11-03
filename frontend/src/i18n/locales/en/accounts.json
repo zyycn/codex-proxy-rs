@@ -304,7 +304,6 @@
       "fileReadingFailedTryAgain": "File reading failed, please try again",
       "uploadFiles": "Upload files",
       "authorizationExpired": "Authorization expired, start again or check whether authorization completed",
-      "pollingPaused": "Polling paused, check the authorization result to continue",
       "regenerateAuthorizationLink": "Regenerate authorization link",
       "generateAuthorizationLink": "Generate authorization link",
       "authorizationLink": "Authorization link",
