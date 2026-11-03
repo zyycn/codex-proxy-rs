@@ -142,8 +142,12 @@ async fn independent_endpoints_send_opaque_headers_without_client_identity() {
         let sent = requests.last().unwrap();
         assert_eq!(sent.url.path(), endpoint);
         uuid::Uuid::parse_str(sent.headers["x-codex-installation-id"].to_str().unwrap()).unwrap();
+        assert!(
+            !sent
+                .headers
+                .contains_key("x-openai-account-routing-override")
+        );
         for (name, expected) in [
-            ("x-openai-account-routing-override", "client-route"),
             ("x-openai-fedramp", "true"),
             ("traceparent", "client-trace"),
             ("tracestate", "vendor=client"),

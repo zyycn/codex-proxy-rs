@@ -396,10 +396,10 @@ API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`originator`、`v
 上游认证只来自选中的账号；API Key 不携带 OAuth Cookie、ChatGPT 账号身份或下游的
 `X-OpenAI-Actor-Authorization` 托管认证声明。
 `x-codex-installation-id` 使用选中账号已生成并持久化的安装 ID，与正文 `client_metadata` 中的安装身份一致。
-`x-openai-internal-codex-residency` 仅按部署配置 `openai.residency` 生成，省略或 `null` 时不发送。
-`x-openai-account-routing-override` 和 `x-openai-fedramp` 按业务头透传，保留原始多值。
-客户端未提供路由头时，使用 `openai.account_routing_override` 配置值，配置说明见
-[部署与运维](../deploy/README.md#启动后的运行设置)
+`x-openai-internal-codex-residency` 和 `x-openai-account-routing-override` 分别由部署配置
+`openai.residency`、`openai.account_routing_override` 控制，配置值原样发送并覆盖客户端同名头，
+省略或 `null` 时删除对应请求头。配置说明见 [部署与运维](../deploy/README.md#启动后的运行设置)
+`x-openai-fedramp` 按业务头透传，保留原始多值。
 上述过滤描述原生转发；已信任插件的显式 header 改写可以覆盖账号与画像生成的默认头，
 不按认证或会话字段名称拦截，边界见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 

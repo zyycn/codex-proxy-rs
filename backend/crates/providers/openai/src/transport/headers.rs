@@ -34,7 +34,9 @@ pub(super) fn is_managed_identity_header(name: &str) -> bool {
             | "originator"
             | "user-agent"
             | "version"
+            // 地域和账号路由统一按部署配置生成
             | "x-openai-internal-codex-residency"
+            | "x-openai-account-routing-override"
             | "x-oai-attestation"
             | "x-oai-is"
             | "x-oai-is-update"

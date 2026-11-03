@@ -45,7 +45,6 @@ const DOWNSTREAM_CLIENT_HEADERS: &[(&str, &str)] = &[
 ];
 
 const BUSINESS_EXTENSION_HEADERS: &[(&str, &str)] = &[
-    ("X-OpenAI-Account-Routing-Override", "first-route"),
     ("x-openai-fedramp", "true"),
     ("x-grok-turn-idx", "7"),
     ("X-Grok-Model-Override", "synthetic-model"),
@@ -78,6 +77,10 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
                 [
                     "x-openai-internal-codex-residency",
                     STANDARD.encode(b"future-region")
+                ],
+                [
+                    "X-OpenAI-Account-Routing-Override",
+                    STANDARD.encode(b"client-route")
                 ],
                 ["x-codex-turn-state", STANDARD.encode(b"turn-ascii")],
                 ["x-codex-turn-state", STANDARD.encode(b"turn-\x80")],
@@ -287,6 +290,10 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         vec![b"synthetic-trace".to_vec()]
     );
     assert_eq!(
+        raw_header_values(&raw, "x-openai-account-routing-override"),
+        vec![b"configured-route".to_vec()]
+    );
+    assert_eq!(
         raw_header_values(&raw, "x-codex-installation-id"),
         vec![b"lease-installation".to_vec()]
     );
@@ -475,6 +482,10 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
         assert_eq!(values(name), vec![value.to_vec()], "missing {name}");
     }
     assert_eq!(values("traceparent"), vec![b"synthetic-trace".to_vec()]);
+    assert_eq!(
+        values("x-openai-account-routing-override"),
+        vec![b"configured-route".to_vec()]
+    );
     assert_eq!(
         values("x-codex-installation-id"),
         vec![b"lease-installation".to_vec()]

@@ -459,14 +459,6 @@ fn assert_live_correlation(headers: &reqwest::header::HeaderMap) {
     assert_eq!(headers["x-openai-fedramp"], "true");
     assert_eq!(
         headers
-            .get_all("x-openai-account-routing-override")
-            .iter()
-            .map(|value| value.to_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["first-route", "second-route"]
-    );
-    assert_eq!(
-        headers
             .get_all("x-test-business")
             .iter()
             .map(|value| value.to_str().unwrap())
@@ -478,6 +470,7 @@ fn assert_live_correlation(headers: &reqwest::header::HeaderMap) {
         "x-oai-attestation",
         "x-forwarded-for",
         "x-stainless-runtime",
+        "x-openai-account-routing-override",
         "x-codex-turn-state",
         "x-codex-routing-hint",
     ] {

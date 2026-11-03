@@ -392,10 +392,9 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`
 位置覆盖只影响 OpenAI 请求中受支持的位置与时区信息，不改变上下文日期、真实出口 IP、epoch 时间戳或系统时区。
 `openai.residency` 和 `openai.account_routing_override` 是独立于客户端身份的启动配置，
 分别指定 `x-openai-internal-codex-residency` 和 `x-openai-account-routing-override` 请求头。
-两项均为可选字符串，不校验地域或路由枚举。
-地域头使用配置值，省略或设为 `null` 时不发送。
-路由头优先透传客户端值，客户端未提供时使用配置值，两者均缺省时不发送。
-示例配置均填写 `us`，修改后重启应用生效。身份与位置字段见 [运行设置 API](../docs/api.md#8-运行设置)
+两项均为可选字符串，配置值原样发送并覆盖客户端同名头，支持自定义地域或路由值。
+省略或设为 `null` 时删除对应请求头。
+修改后重启应用生效。身份与位置字段见 [运行设置 API](../docs/api.md#8-运行设置)
 后台账号操作使用 Provider 自己的官方画像；发布资料刷新不改写用户选择或 `config.yaml`
 
 ### CPR 互联

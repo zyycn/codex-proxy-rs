@@ -143,7 +143,7 @@ fn deployment_routing_survives_artifact_updates_and_profile_selection() {
 }
 
 #[tokio::test]
-async fn model_transports_apply_residency_and_client_or_default_routing() {
+async fn model_transports_apply_deployment_routing_with_or_without_client_headers() {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 
@@ -266,19 +266,13 @@ async fn model_transports_apply_residency_and_client_or_default_routing() {
                 .expect("model response");
             let headers = capture.await;
             for (name, value) in HEADERS.into_iter().zip(expected) {
-                let expected_values =
-                    if name == "x-openai-account-routing-override" && has_downstream_headers {
-                        vec!["downstream-first", "downstream-second"]
-                    } else {
-                        value.into_iter().collect::<Vec<_>>()
-                    };
                 assert_eq!(
                     headers
                         .get_all(name)
                         .iter()
                         .map(|value| value.to_str().unwrap())
                         .collect::<Vec<_>>(),
-                    expected_values,
+                    value.into_iter().collect::<Vec<_>>(),
                     "{document}, websocket={websocket}, downstream={has_downstream_headers}, {name}",
                 );
             }
