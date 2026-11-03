@@ -9,7 +9,6 @@ import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
 import AccountUpstreamStatus from '@/components/account/AccountUpstreamStatus.vue'
-import { accountUpstreamPending } from '@/utils/account-upstream'
 import { formatRelativeTime } from '@/utils/relative-time'
 import { usePoolQuotaWindows } from '../../composables/usePoolQuotaWindows'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
@@ -43,8 +42,7 @@ const quotaEntries = computed(() => groupedAccountQuotaWindows(
 ))
 const profileOpen = shallowRef(false)
 const forecastOpen = shallowRef(false)
-const hasPlanBadge = computed(() => !accountUpstreamPending(props.account.upstream)
-  && (Boolean(props.account.planType) || props.account.authenticationKind === 'api_key'))
+const hasPlanBadge = computed(() => Boolean(props.account.planType) || props.account.authenticationKind === 'api_key')
 const hasForecast = computed(() => props.account.authenticationKind !== 'api_key')
 const hasPersonalInfo = computed(() => props.account.capabilities.profile || props.account.capabilities.subscription)
 const canRefresh = computed(() => props.account.capabilities.quotaRefresh || props.account.upstream?.discovered)

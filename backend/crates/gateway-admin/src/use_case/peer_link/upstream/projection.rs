@@ -20,6 +20,7 @@ impl PeerInfoService {
     pub(super) fn project_peer(
         connection: &UpstreamConnection,
         peer: Option<&PeerLink>,
+        unavailable: Option<UpstreamInfoFailure>,
         last_error: Option<UpstreamInfoFailure>,
         now: SystemTime,
     ) -> ProviderQuota {
@@ -30,11 +31,13 @@ impl PeerInfoService {
             !snapshot::component_fresh(Some(&peer.observed_at), Some(&peer.expires_at), now)
         });
         let info = ProviderUpstreamInfo {
-            discovered: peer.is_some(),
+            discovered: peer.is_some() || unavailable.is_some(),
             observed_at,
             stale,
             connection_revision: connection.revision.clone(),
-            last_error: last_error.map(|error| error.as_str().to_owned()),
+            last_error: last_error
+                .or(unavailable)
+                .map(|error| error.as_str().to_owned()),
             pool: peer
                 .as_ref()
                 .and_then(|peer| peer.pool.as_ref())

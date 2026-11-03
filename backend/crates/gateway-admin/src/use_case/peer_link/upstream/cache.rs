@@ -57,6 +57,7 @@ impl PeerInfoService {
                             scheduling: None,
                             summary: None,
                             unsupported: false,
+                            unavailable: None,
                         },
                     ));
                 }
@@ -92,6 +93,7 @@ impl PeerInfoService {
                     (
                         connection.clone(),
                         cached.and_then(|cached| cached.summary.clone()),
+                        cached.and_then(|cached| cached.unavailable),
                         cached.is_some_and(|cached| cached.unsupported),
                     )
                 })
@@ -99,10 +101,11 @@ impl PeerInfoService {
         };
         Ok(summaries
             .into_iter()
-            .map(|(connection, peer, unsupported)| {
+            .map(|(connection, peer, unavailable, unsupported)| {
                 let quota = Self::project_peer(
                     &connection,
                     peer.as_deref(),
+                    unavailable,
                     self.last_error(&connection)
                         .or(unsupported.then_some(UpstreamInfoFailure::Unsupported)),
                     now,
@@ -137,6 +140,8 @@ impl PeerInfoService {
             summary,
             unsupported: observation
                 .is_some_and(|value| snapshot::is_unsupported(&value.quota, connection)),
+            unavailable: observation
+                .and_then(|value| snapshot::unavailable_reason(&value.quota, connection)),
         };
         let previous = self
             .observations
