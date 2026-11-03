@@ -503,6 +503,11 @@ OpenAI Provider 按 Client Key、所选 OAuth 账号和父响应 ID 关联 WS �
 缺失或失效时按普通上游路由执行。transport 负责 Cookie 有效期和同 origin、同端点路径约束，
 连接池按快照身份隔离审查连接；复用父连接不会重新计算 Cookie 有效期，Cookie 到期不强制关闭已建立的审查连接
 
+OpenAI Provider 在交付响应头或 WS metadata 前记录 turn state 的归属证明，包括失败响应。
+证明按 Client Key、账号、客户端会话、线程和轮次隔离，API Key 额外绑定凭据版本；只保存摘要与过期时间，
+不保存 token 原值或正文。进程内最多 4096 项，保留时长复用请求的会话亲和策略，已验证回传与上游观测续期；
+满额时清理过期项并淘汰最早过期项。证明缺失时保留既有未知归属处理，不参与选号或授权其他账号状态复用
+
 OpenAI 的 OAuth 与 API Key 共用现有账号和事务。API Key 的 Base URL、密钥和传输策略属于 Provider 凭据 JSON，
 随 credential revision 更新；普通详情只投影非敏感连接设置。API Key 客户端目录按账号、凭据版本和客户端版本隔离，
 标准 `data` 模型列表通过通用画像输出，完整 Codex `models` 目录保留原生对象。通用账号层按 Provider 提交的
