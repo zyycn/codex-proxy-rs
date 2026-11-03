@@ -32,7 +32,7 @@ const hasQuotaWindow = computed(() => props.windows.some(window => typeof window
 </script>
 
 <template>
-  <ZPopover class="grid! w-full grid-cols-subgrid" trigger="hover-click" placement="right" :hover-delay="240">
+  <ZPopover class="grid! w-full grid-cols-subgrid" trigger="hover-click" placement="right" :offset="12" :hover-delay="240">
     <template #reference="{ open }">
       <button
         type="button"

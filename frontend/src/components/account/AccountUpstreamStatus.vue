@@ -13,15 +13,15 @@ const status = computed(() => {
     return accountUpstreamErrorMessage(upstream.lastError)
   if (!upstream.observedAt)
     return ''
-  const observed = t('accounts.upstream.observedAt', {
+  return t('accounts.upstream.observedAt', {
     time: formatRelativeTime(upstream.observedAtRelative),
   })
-  return upstream.stale
-    ? `${observed} · ${t('accounts.upstream.stale')}`
-    : observed
 })
 const detail = computed(() => [
   props.upstream.observedAtDisplay,
+  props.upstream.stale
+    ? t('accounts.upstream.stale')
+    : null,
   accountUpstreamErrorMessage(props.upstream.lastError),
 ].filter(Boolean).join(' · '))
 </script>

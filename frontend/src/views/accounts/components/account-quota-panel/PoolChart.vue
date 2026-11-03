@@ -33,6 +33,12 @@ const activeNode = computed(() => activeIndex.value === null
 const activeWindows = computed(() => groupedAccountQuotaWindows(
   orderedPanelQuotaWindows(activeNode.value?.windows ?? []),
 ).flatMap(entry => entry.windows))
+const remainingLabel = computed(() => {
+  const remaining = activeNode.value?.remainingPercent
+  return remaining == null
+    ? ''
+    : t('accounts.quota.remaining', { remaining: Math.round(remaining * 10) / 10 })
+})
 const canZoom = computed(() => props.nodes.length > MIN_VISIBLE_NODES)
 let chart: EChartsType | undefined
 let highlightedIndex: number | null = null
@@ -49,6 +55,7 @@ const option = computed<EChartsOption>(() => {
     unknown: color('color-border', ''),
   }
   const nodes = props.nodes
+  const trackFill = color('color-border-secondary', '')
   return {
     animation: reducedMotion.value !== 'reduce',
     animationDuration: 0,
@@ -89,13 +96,15 @@ const option = computed<EChartsOption>(() => {
     series: [
       {
         type: 'custom',
+        // 节点命中由容器统一处理，避免色条与空隙触发不同光标
+        silent: true,
         animationThreshold: nodes.length,
         clip: true,
         dimensions: ['account', 'value'],
         encode: { x: 0, y: 1 },
         data: nodes.map((node, index) => ({
           id: node.id,
-          value: [index, 1],
+          value: [index, (node.remainingPercent ?? 0) / 100],
         })),
         renderItem: (_params, api) => {
           const index = Number(api.value(0))
@@ -103,19 +112,34 @@ const option = computed<EChartsOption>(() => {
           const pitch = api.coord([index + 1, 0])[0]! - x
           const width = Math.min(8, pitch * 0.72)
           const fill = colors[nodes[index]!.tone]
+          const shape = {
+            x: x - width / 2,
+            y: 7,
+            width,
+            height: 22,
+            r: Math.min(2, width / 2),
+          }
+          // 耗尽时保留红色底线，未知额度只显示灰色轨道
+          const height = nodes[index]!.remainingPercent === null
+            ? 0
+            : Math.max(2, Number(api.value(1)) * 22)
           return {
-            type: 'rect',
-            shape: {
-              x: x - width / 2,
-              y: 7,
-              width,
-              height: 22,
-              r: Math.min(2, width / 2),
-            },
-            style: { fill, stroke: fill, lineWidth: 0 },
-            emphasis: {
-              style: { fill, stroke: fill, lineWidth: 2 },
-            },
+            type: 'group',
+            children: [
+              {
+                type: 'rect',
+                shape,
+                style: { fill: trackFill, stroke: fill, lineWidth: 0 },
+                emphasis: {
+                  style: { stroke: fill, lineWidth: 2 },
+                },
+              },
+              {
+                type: 'rect',
+                shape: { ...shape, y: 29 - height, height },
+                style: { fill },
+              },
+            ],
           }
         },
       },
@@ -260,12 +284,12 @@ onBeforeUnmount(() => chart?.off('datazoom', onDataZoom))
 </script>
 
 <template>
-  <div class="min-w-0">
+  <div class="flex min-w-0">
     <ZPopover ref="popover" v-model="open" class="w-full" placement="top" trigger="hover-click" :reference-element="anchor" :disabled="!activeNode?.windows.length" :hover-delay="180" animate-position>
       <template #reference>
         <div
           class="relative w-full rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-z-control-outline"
-          role="slider" tabindex="0" :aria-valuemin="1" :aria-valuemax="nodes.length" :aria-valuenow="(activeIndex ?? 0) + 1" :aria-valuetext="t('accounts.upstream.account', { number: (activeIndex ?? 0) + 1 })" :aria-label="t('accounts.upstream.poolChart')" :aria-description="t('accounts.upstream.poolKeyboard')"
+          role="slider" tabindex="0" :aria-valuemin="1" :aria-valuemax="nodes.length" :aria-valuenow="(activeIndex ?? 0) + 1" :aria-valuetext="[t('accounts.upstream.account', { number: (activeIndex ?? 0) + 1 }), remainingLabel].filter(Boolean).join(' · ')" :aria-label="t('accounts.upstream.poolChart')" :aria-description="t('accounts.upstream.poolKeyboard')"
           @pointermove="onPointerMove" @pointerleave="onPointerLeave" @click="onChartClick" @dblclick="resetZoom" @keydown="onKeydown"
         >
           <BaseChart :option="option" :height="36" @ready="onReady" />

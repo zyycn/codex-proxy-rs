@@ -627,6 +627,8 @@
       "unavailable": "Upstream unavailable",
       "pool": "Shared pool",
       "ready": "available",
+      "otherPlans": "Other plans",
+      "morePlans": "View {count} more plans",
       "nodeQuota": "Node quota",
       "quota": "Upstream quota"
     }

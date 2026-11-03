@@ -13,6 +13,7 @@ const props = withDefaults(
     upstream?: AccountUpstream | null
     upstreamPeer?: boolean | null
     planTypeDisplay: string
+    count?: number
     size?: 'xs' | 'sm' | 'md'
   }>(),
   {
@@ -62,13 +63,14 @@ const paletteClass = computed(() => {
 </script>
 
 <template>
-  <AccountUpstreamBadge v-if="upstreamPeer || (upstream?.discovered && upstream.observedAt)" :size="size" />
+  <AccountUpstreamBadge v-if="upstreamPeer || upstream?.discovered" :size="size" />
   <span
     v-else-if="!accountUpstreamPending(upstream)"
-    class="inline-flex min-w-0 max-w-full items-center justify-center whitespace-nowrap leading-none shadow-z-tertiary"
+    class="inline-flex min-w-0 max-w-full items-center justify-center gap-1 whitespace-nowrap leading-none shadow-z-tertiary"
     :class="[sizeClass, paletteClass]"
     :title="displayText || undefined"
   >
     <span class="truncate">{{ displayText }}</span>
+    <span v-if="count !== undefined" class="shrink-0 tabular-nums">{{ count }}</span>
   </span>
 </template>

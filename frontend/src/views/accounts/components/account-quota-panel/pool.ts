@@ -1,4 +1,5 @@
 import type { AccountQuotaWindow } from '@/api'
+import { clamp } from 'es-toolkit'
 import { quotaWindowTone } from '@/components/account/account-usage-window/presenter'
 
 // 与互联协议的账号上限一致，汇总数字不能触发无界节点分配
@@ -7,6 +8,7 @@ const MAX_POOL_NODES = 3_000
 export interface PoolNode {
   id: string
   windows: AccountQuotaWindow[]
+  remainingPercent: number | null
   tone: ReturnType<typeof quotaWindowTone>
 }
 
@@ -25,21 +27,31 @@ export function poolNodes(windows: AccountQuotaWindow[], count?: number): PoolNo
     accounts.set(window.sourceAccountId, group)
   }
   const nodes: PoolNode[] = [...accounts].map(([id, windows]) => {
-    const percentages = windows.filter(window => !window.stale)
+    const percentages = windows
       .map(window => window.limitReached ? 100 : window.usedPercent)
       .filter((value): value is number => typeof value === 'number')
+    const usedPercent = percentages.length
+      ? Math.max(...percentages)
+      : null
     return {
       id,
       windows,
-      tone: quotaWindowTone(percentages.length
-        ? Math.max(...percentages)
-        : null),
+      remainingPercent: usedPercent === null
+        ? null
+        : 100 - clamp(usedPercent, 0, 100),
+      tone: quotaWindowTone(usedPercent),
     }
   })
   // 未公开逐账号额度时仅补灰色位置，不能把汇总可用数解释为各账号剩余额度
   if (count !== undefined) {
-    while (nodes.length < limit)
-      nodes.push({ id: `unobserved:${nodes.length}`, windows: [], tone: 'unknown' })
+    while (nodes.length < limit) {
+      nodes.push({
+        id: `unobserved:${nodes.length}`,
+        windows: [],
+        remainingPercent: null,
+        tone: 'unknown',
+      })
+    }
   }
   return nodes
 }

@@ -381,8 +381,11 @@ function rollingWindowDurationDisplay(windowSeconds: number | null | undefined) 
 }
 
 export function quotaWindowPresentation(window: AccountQuotaWindow, minimumWidth: string) {
-  const percent = clamp(window.usedPercent ?? 0, 0, 100)
-  const tone = quotaWindowTone(window.stale ? null : window.usedPercent)
+  const unlimited = window.amount?.totalDisplay === '∞'
+  const percent = unlimited
+    ? 100
+    : clamp(window.usedPercent ?? 0, 0, 100)
+  const tone = quotaWindowTone(unlimited ? 0 : window.usedPercent)
   return {
     barStyle: {
       width: `${percent}%`,

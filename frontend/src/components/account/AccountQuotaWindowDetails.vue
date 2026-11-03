@@ -116,10 +116,6 @@ function quotaWindowCode(windowSeconds: number | null, role: AccountQuotaWindow[
           </div>
         </template>
 
-        <p v-if="item.observationDisplay" class="mt-2 text-[10px] leading-4 text-z-text-tertiary">
-          {{ item.observationDisplay }}
-        </p>
-
         <dl class="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[10px] leading-4">
           <template v-if="item.local">
             <dt class="font-emphasis text-z-text-tertiary">

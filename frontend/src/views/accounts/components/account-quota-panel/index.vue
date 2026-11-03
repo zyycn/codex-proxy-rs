@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Account } from '@/api'
 
-import { ZEmpty, ZIconButton } from '@codex-proxy/ui'
+import { ZEmpty, ZIconButton, ZScrollbar } from '@codex-proxy/ui'
 
 import { ChartNoAxesCombined, RefreshCw, UserRound } from '@lucide/vue'
 
@@ -67,7 +67,7 @@ watch(hasPersonalInfo, (available) => {
 </script>
 
 <template>
-  <section class="flex min-h-0 min-w-0 flex-col rounded-lg bg-z-bg-container p-4 shadow-z-tertiary">
+  <section class="flex max-h-72 min-h-0 min-w-0 flex-col rounded-lg bg-z-bg-container p-4 shadow-z-tertiary">
     <div class="mb-3 grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
       <h3 class="m-0 text-z-lg font-heavy text-z-text">
         {{ account.upstream?.discovered ? t('accounts.upstream.quota') : t('accounts.quota.accountLimit') }}
@@ -78,7 +78,6 @@ watch(hasPersonalInfo, (available) => {
       >
         <AccountPlanBadge v-if="hasPlanBadge" :upstream="account.upstream" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" class="shrink-0" />
         <template v-if="showUpstreamStatus || lastRefreshed">
-          <span v-if="hasPlanBadge" class="shrink-0">·</span>
           <AccountUpstreamStatus v-if="showUpstreamStatus && account.upstream" :upstream="account.upstream" />
           <span v-else-if="lastRefreshed" class="min-w-0 truncate" :title="lastRefreshed">{{ lastRefreshed }}</span>
         </template>
@@ -130,14 +129,18 @@ watch(hasPersonalInfo, (available) => {
         surface="none"
       />
     </div>
-    <div v-else class="grid min-h-0 gap-3">
-      <AccountQuotaPanelEntry
-        v-for="entry in quotaEntries"
-        :key="entry.key"
-        :label="entry.label"
-        :windows="entry.windows"
-      />
-      <AccountUpstreamPool v-if="hasUpstreamPool" :pool="account.upstream?.pool" :windows="poolWindows" />
+    <div v-else class="flex min-h-0 flex-1 flex-col gap-3">
+      <ZScrollbar v-if="quotaEntries.length" height="100%" class="-mr-3 [--z-scrollbar-track-inset-block-start:0px]">
+        <div class="grid gap-3 pr-3">
+          <AccountQuotaPanelEntry
+            v-for="entry in quotaEntries"
+            :key="entry.key"
+            :label="entry.label"
+            :windows="entry.windows"
+          />
+        </div>
+      </ZScrollbar>
+      <AccountUpstreamPool v-if="hasUpstreamPool" class="mt-auto" :pool="account.upstream?.pool" :windows="poolWindows" />
     </div>
   </section>
 
