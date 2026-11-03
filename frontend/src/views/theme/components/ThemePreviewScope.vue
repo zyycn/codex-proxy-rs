@@ -3,13 +3,14 @@ import type { ThemeScheme } from '@codex-proxy/ui/theme'
 import type { CSSProperties } from 'vue'
 import type { ThemeColorTokens } from '@/composables/useThemeColor'
 
-import { computed, onMounted, shallowRef, useTemplateRef } from 'vue'
+import { computed, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import { provideThemeColorTokens } from '@/composables/useThemeColor'
 
 const props = defineProps<{
   theme: ThemeScheme
   style: CSSProperties
+  stylesRevision: number
 }>()
 
 const host = useTemplateRef<HTMLElement>('host')
@@ -29,12 +30,22 @@ function serializeDocumentStyles() {
   }).filter(Boolean).join('\n')
 }
 
+let applicationStyles: HTMLStyleElement | undefined
+
+function refreshStyles() {
+  if (applicationStyles)
+    applicationStyles.textContent = serializeDocumentStyles()
+}
+
+// 异步预览的 CSS 到齐后同步影子根，避免只复制首帧样式而丢失后加载的规则
+watch(() => props.stylesRevision, refreshStyles, { flush: 'post' })
+
 onMounted(() => {
   if (!host.value)
     return
 
   const shadowRoot = host.value.attachShadow({ mode: 'open' })
-  const applicationStyles = document.createElement('style')
+  applicationStyles = document.createElement('style')
   const previewRoot = document.createElement('div')
 
   applicationStyles.dataset.themePreviewStyles = ''
@@ -54,7 +65,7 @@ onMounted(() => {
   >
     <Teleport v-if="contentRoot" :to="contentRoot">
       <div
-        class="h-full min-h-0 w-full min-w-0 bg-z-bg-layout font-sans text-z-text"
+        class="h-full min-h-0 w-full min-w-0 font-sans text-z-text"
         :data-theme="theme"
         :style="style"
       >

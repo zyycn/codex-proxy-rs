@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ZButton, ZInput, ZPageHeader, ZScrollbar, ZSegmented, ZSkeleton } from '@codex-proxy/ui'
+import { ZButton, ZInput, ZPageHeader, ZScrollbar, ZSegmented } from '@codex-proxy/ui'
 import { Check, Eye, Pencil, RotateCcw, Save, Search, Undo2 } from '@lucide/vue'
 
-import { computed, defineAsyncComponent, shallowRef } from 'vue'
+import { computed, shallowRef } from 'vue'
 
 import { useI18n } from 'vue-i18n'
 
@@ -10,14 +10,8 @@ import { notification as ZNotification } from '@/utils/notification'
 
 import { useThemeEditor } from '../composables/useThemeEditor'
 import ThemeComponentTokenPanel from './ThemeComponentTokenPanel.vue'
+import ThemeEditorPreview from './ThemeEditorPreview.vue'
 import ThemeGlobalTokenPanel from './ThemeGlobalTokenPanel.vue'
-
-const ThemeEditorPreview = defineAsyncComponent({
-  loader: () => import('./ThemeEditorPreview.vue'),
-  loadingComponent: ZSkeleton,
-  delay: 200,
-  timeout: 30000,
-})
 
 const { t } = useI18n({ useScope: 'global' })
 const mobilePreviewOpen = shallowRef(false)

@@ -374,7 +374,8 @@ Store 在其他入口发生变化时更新保存基线；没有未保存修改�
 ### 隔离预览
 
 [`ThemePreviewScope.vue`](../frontend/src/views/theme/components/ThemePreviewScope.vue) 创建开放 Shadow Root，复制应用
-样式，并把预览内容 Teleport 到影子根中。预览可独立切换浅色和深色，不受外层主题影响
+样式，并把预览内容 Teleport 到影子根中。预览可独立切换浅色和深色，不受外层主题影响。
+画布和操作控件先显示，选中的预览内容异步加载，就绪前画布留空，资源加载完成后同步影子根样式
 
 - **首页画板**复用真实 `DashboardContent` 和固定 fixture，不请求接口，也不启动自动刷新
 - **组件概览**展示基础组件、表格、空状态、骨架、浮层和菜单等关键状态
