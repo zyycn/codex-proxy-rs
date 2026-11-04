@@ -129,9 +129,9 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             case when pg_input_is_valid(mr.error_details, 'jsonb') then
               case when jsonb_typeof(mr.error_details::jsonb -> 'upstream') = 'string'
                 and pg_input_is_valid(mr.error_details::jsonb ->> 'upstream', 'jsonb') then
-                json_value((mr.error_details::jsonb ->> 'upstream')::jsonb,
-                  '$ ? (@.type == \"websocket.close\").code ? (@.type() == \"number\")'
-                  returning text null on error)
+                (select case when jsonb_array_length(codes) = 1 then codes ->> 0 end
+                 from jsonb_path_query_array((mr.error_details::jsonb ->> 'upstream')::jsonb,
+                   '$ ? (@.type == \"websocket.close\").code ? (@.type() == \"number\")') as codes)
               end
             end as websocket_close_code,
             mr.continuation_unavailable_reason, mr.upstream_connection_exit_reason,
