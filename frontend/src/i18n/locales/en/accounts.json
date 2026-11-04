@@ -232,7 +232,12 @@
       "disabledSuffix": "(disabled)",
       "testFailed": "(test failed)",
       "notTested": "(not tested)",
-      "outboundTunnel": "Outbound tunnel"
+      "outboundTunnel": "Outbound tunnel",
+      "testExit": "Test egress",
+      "selectToTest": "Select a direct connection or managed proxy to test egress",
+      "disabledUsesDirect": "The proxy is disabled, so the test uses the server’s direct connection",
+      "connected": "Egress connected · {latencyMs} ms",
+      "testIncomplete": "No test result received, run the test again"
     },
     "scheduling": {
       "preserve": "Keep unchanged",

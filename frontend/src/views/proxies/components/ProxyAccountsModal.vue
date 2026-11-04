@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { OutboundProxyAccount, OutboundProxyRecord } from '@/api'
 
-import { defineTableColumns, ZConfirmDialog, ZDialog, ZIconButton, ZInput, ZPagination, ZTable } from '@codex-proxy/ui'
-import { Search, Unlink } from '@lucide/vue'
+import { defineTableColumns, ZButton, ZConfirmDialog, ZDialog, ZIconButton, ZInput, ZPagination, ZTable } from '@codex-proxy/ui'
+import { Plus, Search, Unlink } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
@@ -10,23 +10,25 @@ import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { stablePresetVisualToneClass } from '@/utils/color'
 import { useProxyAccounts } from '../composables/useProxyAccounts'
+import ProxyAssignAccountsModal from './ProxyAssignAccountsModal.vue'
 
 const props = defineProps<{
   proxy: OutboundProxyRecord | null
 }>()
 
-const emit = defineEmits<{ removed: [] }>()
+const emit = defineEmits<{ changed: [] }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ required: true })
 const pendingRemove = shallowRef<OutboundProxyAccount | null>(null)
 const showRemove = shallowRef(false)
+const showAssign = shallowRef(false)
 const removeProxyName = shallowRef('')
-const { accounts, loading, error, pagination, search, setPage, setPageSize, removing, removeAccount } = useProxyAccounts({
+const { accounts, loading, error, pagination, search, setPage, setPageSize, removing, removeAccount, reloadAccounts } = useProxyAccounts({
   isOpen: () => open.value,
   proxyId: () => props.proxy?.id,
-  onRemoved: () => emit('removed'),
+  onRemoved: () => emit('changed'),
 })
 const columns = computed(() => (defineTableColumns<OutboundProxyAccount>([
   {
@@ -99,22 +101,39 @@ function requestRemove(account: OutboundProxyAccount) {
   showRemove.value = true
 }
 
+function onAssigned() {
+  emit('changed')
+  void reloadAccounts()
+}
+
 watch([
   open,
   () => props.proxy?.id,
 ], () => {
   showRemove.value = false
+  showAssign.value = false
 })
 </script>
 
 <template>
   <ZDialog v-model="open" :title="t('proxies.accounts.linkAccount')" :description="description" width="48rem" :show-close="!removing" :close-on-click-modal="!removing" :close-on-press-escape="!removing">
     <div class="flex min-h-0 flex-col">
-      <ZInput v-model="search" class="mb-4 shrink-0 sm:w-80" :disabled="removing" :aria-label="t('proxies.accounts.searchAssociatedAccounts')" :placeholder="t('proxies.accounts.searchAccountNameOrEmail')">
-        <template #prefix>
-          <Search class="size-4.5 text-z-text-tertiary" />
-        </template>
-      </ZInput>
+      <div class="mb-4 flex shrink-0 flex-wrap items-center gap-3">
+        <ZInput v-model="search" class="min-w-0 flex-1 sm:max-w-80" :disabled="removing" :aria-label="t('proxies.accounts.searchAssociatedAccounts')" :placeholder="t('proxies.accounts.searchAccountNameOrEmail')">
+          <template #prefix>
+            <Search class="size-4.5 text-z-text-tertiary" />
+          </template>
+        </ZInput>
+        <ZButton type="primary" class="ml-auto shrink-0" :disabled="removing || !proxy?.enabled" @click="showAssign = true">
+          <template #icon>
+            <Plus class="size-4" />
+          </template>
+          {{ t('proxies.assignment.title') }}
+        </ZButton>
+      </div>
+      <p v-if="proxy && !proxy.enabled" class="mt-0 mb-3 text-z-xs text-z-text-secondary">
+        {{ t('proxies.assignment.enableFirst') }}
+      </p>
       <ZTable :key="proxy?.id" class="min-h-0 shrink-0 [--z-table-row-height:64px]" :style="{ height: tableHeight }" :columns="columns" :data="rows" :loading="loading" :empty-text="emptyText">
         <template #identity="{ row }">
           <div class="flex min-w-0 items-center gap-3">
@@ -162,4 +181,5 @@ watch([
       {{ t('proxies.accounts.removeDescription', { name: pendingRemove?.name, removeProxyName }) }}
     </p>
   </ZConfirmDialog>
+  <ProxyAssignAccountsModal v-model="showAssign" :proxy="proxy" @assigned="onAssigned" />
 </template>

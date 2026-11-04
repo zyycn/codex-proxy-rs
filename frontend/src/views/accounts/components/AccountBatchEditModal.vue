@@ -95,7 +95,7 @@ const schedulingMode = computed({
         v-model:proxy-id="proxyId"
         preserve-model-access
 
-        :account-id="catalogAccountId"
+        :model-account-id="catalogAccountId"
         :groups="groups"
         :groups-loading="groupsLoading"
         :disabled="saving"

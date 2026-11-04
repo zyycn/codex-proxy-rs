@@ -198,6 +198,6 @@ watch(search, () => {
         {{ t('proxies.page.deleteDescription') }}
       </p>
     </ZConfirmDialog>
-    <ProxyAccountsModal v-model="showAccounts" :proxy="inspected" @removed="loadProxies({ silent: true })" />
+    <ProxyAccountsModal v-model="showAccounts" :proxy="inspected" @changed="loadProxies({ silent: true })" />
   </div>
 </template>

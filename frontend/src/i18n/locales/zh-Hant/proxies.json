@@ -161,6 +161,19 @@
       "disableDescription": "關聯賬號的新請求將改爲直連，代理配置和綁定會保留，重新啓用後恢復使用",
       "delete": "確定刪除“{name}”嗎？",
       "deleteDescription": "將自動解除關聯賬號，關聯賬號的新請求將改爲直連"
+    },
+    "assignment": {
+      "title": "分配賬號",
+      "currentProxy": "當前代理",
+      "noAccounts": "暫無賬號",
+      "searchAccounts": "搜索待分配賬號",
+      "selectPage": "選擇當前頁可分配賬號",
+      "selectAccount": "選擇賬號 {name}",
+      "alreadyAssigned": "已使用此代理",
+      "selectionLimit": "一次最多分配 {count} 個賬號",
+      "enableFirst": "啟用此代理後可分配賬號",
+      "assignAction": "分配 ({count})",
+      "assigned": "已將 {count} 個賬號分配至“{name}”"
     }
   }
 }

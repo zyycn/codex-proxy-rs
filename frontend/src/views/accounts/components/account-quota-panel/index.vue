@@ -47,13 +47,15 @@ const hasForecast = computed(() => props.account.authenticationKind !== 'api_key
 const hasPersonalInfo = computed(() => props.account.capabilities.profile || props.account.capabilities.subscription)
 const canRefresh = computed(() => props.account.capabilities.quotaRefresh || props.account.upstream != null)
 const hasActions = computed(() => hasPersonalInfo.value || hasForecast.value || canRefresh.value || props.account.capabilities.resetCredits)
-const lastRefreshed = computed(() => props.account.upstream?.discovered && !props.account.upstream.observedAt
-  ? undefined
-  : t('accounts.quota.lastRefreshed', {
-      refreshedAtDisplay: formatRelativeTime(props.account.upstream?.discovered
-        ? props.account.upstream.observedAtRelative
-        : props.account.quota.refreshedAtRelative),
-    }))
+const lastRefreshed = computed(() => {
+  const { upstream, quota } = props.account
+  if (upstream?.discovered && !upstream.observedAt)
+    return undefined
+  const refreshedAt = upstream?.discovered ? upstream.observedAtRelative : quota.refreshedAtRelative
+  return refreshedAt
+    ? t('accounts.quota.lastRefreshed', { refreshedAtDisplay: formatRelativeTime(refreshedAt) })
+    : undefined
+})
 const refreshTitle = computed(() => props.account.upstream?.stale && props.account.upstream.observedAt
   ? `${props.account.upstream.observedAtDisplay} · ${t('accounts.upstream.stale')}`
   : lastRefreshed.value)
@@ -70,7 +72,7 @@ watch(hasPersonalInfo, (available) => {
         {{ account.upstream?.discovered ? t('accounts.upstream.quota') : t('accounts.quota.accountLimit') }}
       </h3>
       <p
-        v-if="account.capabilities.quota || quotaEntries.length > 0 || account.upstream?.discovered"
+        v-if="(account.capabilities.quota || quotaEntries.length > 0 || account.upstream?.discovered) && (hasPlanBadge || lastRefreshed)"
         class="col-span-2 row-start-2 m-0 flex min-w-0 items-center gap-1.5 text-z-xs font-emphasis text-z-text-secondary"
       >
         <AccountPlanBadge v-if="hasPlanBadge" :upstream="account.upstream" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" class="shrink-0" />

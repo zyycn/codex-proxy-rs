@@ -161,6 +161,19 @@
       "disableDescription": "New requests from linked accounts will use direct connections, proxy settings and bindings are kept and resume when reenabled",
       "delete": "Delete “{name}”?",
       "deleteDescription": "Linked accounts will be unlinked and new requests will use direct connections"
+    },
+    "assignment": {
+      "title": "Assign accounts",
+      "currentProxy": "Current proxy",
+      "noAccounts": "No accounts available",
+      "searchAccounts": "Search accounts to assign",
+      "selectPage": "Select eligible accounts on this page",
+      "selectAccount": "Select account {name}",
+      "alreadyAssigned": "Already using this proxy",
+      "selectionLimit": "Assign up to {count} accounts at a time",
+      "enableFirst": "Enable this proxy before assigning accounts",
+      "assignAction": "Assign ({count})",
+      "assigned": "Assigned {count} account to “{name}” | Assigned {count} accounts to “{name}”"
     }
   }
 }

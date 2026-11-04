@@ -105,10 +105,6 @@ async function requestSave() {
         </div>
       </div>
 
-      <ZFormItem v-if="isOpenAiOAuthAccount(account)" :label="t('accounts.editor.transportLabel')">
-        <ZSegmented v-model="oauthTransport" :aria-label="t('accounts.editor.transportLabel')" :options="transportOptions" :disabled="saving || !configurationReady" />
-      </ZFormItem>
-
       <AccountApiKeyFields v-if="isOpenAiApiKeyAccount(account)" v-model="apiKey" editing :disabled="saving || !configurationReady" />
 
       <AccountSettingsFields
@@ -128,7 +124,13 @@ async function requestSave() {
         :current-proxy-id="account.outboundProxyId"
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
-      />
+      >
+        <template v-if="isOpenAiOAuthAccount(account)" #name-extra>
+          <ZFormItem :label="t('accounts.editor.transportLabel')">
+            <ZSegmented v-model="oauthTransport" class="w-full" :aria-label="t('accounts.editor.transportLabel')" :options="transportOptions" :disabled="saving || !configurationReady" />
+          </ZFormItem>
+        </template>
+      </AccountSettingsFields>
     </ZForm>
 
     <template #footer>
