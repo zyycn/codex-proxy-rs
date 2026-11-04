@@ -276,6 +276,10 @@ impl HealthProbe for PostgresHealthProbe {
         "postgres"
     }
 
+    fn required_for_readiness(&self) -> bool {
+        true
+    }
+
     fn check(&self) -> futures::future::BoxFuture<'_, HealthState> {
         Box::pin(health_state_with_one_retry(
             || self.check_once(),
@@ -317,6 +321,10 @@ pub(crate) struct RedisHealthProbe {
 impl HealthProbe for RedisHealthProbe {
     fn name(&self) -> &'static str {
         "redis"
+    }
+
+    fn required_for_readiness(&self) -> bool {
+        true
     }
 
     fn check(&self) -> futures::future::BoxFuture<'_, HealthState> {

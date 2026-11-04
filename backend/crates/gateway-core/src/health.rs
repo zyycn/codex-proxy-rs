@@ -18,6 +18,11 @@ pub enum HealthState {
 pub trait HealthProbe: Send + Sync {
     fn name(&self) -> &'static str;
 
+    /// 仅接收请求必需的依赖参与就绪检查
+    fn required_for_readiness(&self) -> bool {
+        false
+    }
+
     fn check(&self) -> BoxFuture<'_, HealthState>;
 }
 

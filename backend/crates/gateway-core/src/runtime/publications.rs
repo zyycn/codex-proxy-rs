@@ -115,6 +115,10 @@ impl HealthProbe for RuntimeSnapshotHandle {
         "runtime_snapshot"
     }
 
+    fn required_for_readiness(&self) -> bool {
+        true
+    }
+
     fn check(&self) -> BoxFuture<'_, HealthState> {
         Box::pin(async move {
             if self.acquire().is_ok() {

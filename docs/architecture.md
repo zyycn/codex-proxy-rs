@@ -1216,7 +1216,8 @@ Admin worker 复用连接测试，按凭据及冻结代次比较后解除或顺�
 ### 启动与关闭
 
 启动只有在配置、PostgreSQL、Redis、Provider、Core、Admin、API 和 Worker 全部初始化成功后才进入服务。
-健康检查综合 Core、Store 与 Worker 状态，但不会把单个 Provider 的业务降级等同于整个进程失活。
+Core 与 Store 在各自的探针上声明接收请求所需的依赖。API 的就绪检查只运行这些探针，
+综合健康检查另纳入 Host 文件日志与关键 Worker 状态，并记录故障变化。
 客户端下载解析由 Host 的 `ClientDistributionResolver` 实现，组合根注入 Admin；只在管理员请求时访问外部来源，
 不阻塞启动。失败时使用官方稳定地址，临时直链不持久化或代理下载，字段与来源规则见 [客户端下载 API](api.md#windows-客户端下载)
 
