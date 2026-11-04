@@ -419,13 +419,14 @@ enum ChecksumKind {
 fn release_archive(kind: ArchiveKind) -> Vec<u8> {
     let encoder = GzEncoder::new(Vec::new(), Compression::default());
     let mut tar = Builder::new(encoder);
-    append_file(&mut tar, BINARY_NAME, b"new-binary", false);
-    append_file(&mut tar, "web/dist/index.html", b"new-web", false);
+    append_file(&mut tar, BINARY_NAME, b"new-binary", 0o755, false);
+    append_file(&mut tar, "web/dist/index.html", b"new-web", 0o755, false);
     if !matches!(kind, ArchiveKind::MissingOfficialManifest) {
         append_file(
             &mut tar,
             "plugins/official/plugin-release-manifest.json",
             b"new-manifest",
+            0o444,
             false,
         );
     }
@@ -433,16 +434,18 @@ fn release_archive(kind: ArchiveKind) -> Vec<u8> {
         &mut tar,
         "plugins/official/new-plugin.tar.gz",
         b"new-plugin",
+        0o644,
         false,
     );
     if let ArchiveKind::UnsafePath(name) = kind {
-        append_file(&mut tar, name, b"escape", true);
+        append_file(&mut tar, name, b"escape", 0o755, true);
     }
     if matches!(kind, ArchiveKind::NestedOfficialAsset) {
         append_file(
             &mut tar,
             "plugins/official/nested/plugin.tar.gz",
             b"nested",
+            0o444,
             false,
         );
     }
@@ -468,14 +471,16 @@ fn append_symlink(tar: &mut Builder<GzEncoder<Vec<u8>>>, name: &str, target: &st
     tar.append(&header, std::io::empty()).expect("append link");
 }
 
-fn append_file(tar: &mut Builder<GzEncoder<Vec<u8>>>, name: &str, data: &[u8], unsafe_path: bool) {
+fn append_file(
+    tar: &mut Builder<GzEncoder<Vec<u8>>>,
+    name: &str,
+    data: &[u8],
+    mode: u32,
+    unsafe_path: bool,
+) {
     let mut header = Header::new_gnu();
     header.set_entry_type(EntryType::Regular);
-    header.set_mode(if name.starts_with("plugins/official/") {
-        0o444
-    } else {
-        0o755
-    });
+    header.set_mode(mode);
     header.set_size(u64::try_from(data.len()).expect("size"));
     header
         .set_path(if unsafe_path { "safe" } else { name })

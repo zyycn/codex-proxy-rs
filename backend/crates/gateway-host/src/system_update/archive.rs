@@ -86,11 +86,7 @@ pub(crate) fn extract_release(
                 .unpack(&target)
                 .map_err(|error| internal("无法解压官方插件文件").with_source(error))?;
             #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                fs::set_permissions(&target, fs::Permissions::from_mode(0o444))
-                    .map_err(|error| internal("无法设置官方插件文件权限").with_source(error))?;
-            }
+            ensure_official_plugin_file_readonly(&target)?;
             found_official_manifest |= relative == Path::new("plugin-release-manifest.json");
             continue;
         }
@@ -126,6 +122,24 @@ pub(crate) fn extract_release(
         web_dist_dir: found_web.then_some(web_dist_dir),
         official_plugins_dir,
     })
+}
+
+#[cfg(unix)]
+fn ensure_official_plugin_file_readonly(path: &Path) -> Result<(), OperationError> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // tar 解包已对打开的文件描述符套用归档模式
+    // Docker Desktop 把 macOS 目录挂进容器后，0444 文件再次 chmod 会返回 EPERM，权限已满足时不必再改
+    let current_mode = fs::symlink_metadata(path)
+        .map_err(|error| internal("无法设置官方插件文件权限").with_source(error))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if current_mode == 0o444 {
+        return Ok(());
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o444))
+        .map_err(|error| internal("无法设置官方插件文件权限").with_source(error))
 }
 
 fn unsafe_archive_path(path: &Path) -> bool {
