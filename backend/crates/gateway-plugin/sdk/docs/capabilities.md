@@ -578,7 +578,8 @@ let plugin = PluginBuilder::from_json(include_bytes!("../plugin.json"))?
 清单须显式声明 `model_catalog.version = 2`，可使用上述 `.model_catalog(...)` 固定目录，
 或通过 `PluginBuilder::on(methods::MODEL_CATALOG_REGISTER_V2, handler)` 返回 `TypedReply<ModelCatalogRegistrationV2>`。
 
-原生 Codex 目录成功返回后，宿主保留其中的完整对象，只追加可见且尚未出现的适配模型画像；原生读取错误仍向调用方返回错误。
+Codex 客户端目录保留 Provider 的完整原生对象。对于通用画像，当前账号范围内的同名适配模型使用插件声明的 `presentation`，
+包括 xAI 这类由宿主转换的目录。仅由插件提供的可见模型按声明顺序追加到所属 Provider 的条目之后。原生目录读取失败时返回错误。
 适配模型的 wire 模型名、协议编解码及摘要由插件负责，宿主只使用公开 ID、能力和账号范围参与现有选号，不生成请求正文或转换历史
 
 ### 重试决策

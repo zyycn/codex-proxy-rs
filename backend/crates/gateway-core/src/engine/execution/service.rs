@@ -62,15 +62,16 @@ use crate::{
     policy::{ClientApiKeyId, ClientPolicy},
     provider_ports::{ProviderSessionAffinityPort, ProviderStoreErrorKind},
     routing::{
-        FrozenAccountScope, ProviderCatalogUnavailable, PublicModelDescriptor, PublicModelId,
-        RoutingContext, RuntimeSnapshot, UpstreamModelId, request_settings::RequestSettings,
+        FrozenAccountScope, ProviderCatalogUnavailable, ProviderModelContent,
+        PublicModelDescriptor, PublicModelId, RoutingContext, RuntimeSnapshot, UpstreamModelId,
+        request_settings::RequestSettings,
     },
     runtime::{RuntimeSnapshotHandle, RuntimeSnapshotPublisher},
 };
 use futures::{FutureExt as _, future::BoxFuture, pin_mut, select_biased};
 use futures_timer::Delay;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Weak},
     time::{Instant, SystemTime},
 };
@@ -1575,11 +1576,27 @@ impl ExecutionService for DefaultExecutionService {
                     }
                     continue;
                 };
+                let contributions: Vec<_> = client
+                    .snapshot
+                    .contributed_models_for_scope(kind, scope)
+                    .collect();
+                let mut contributed_by_model = BTreeMap::new();
+                if !contributions.is_empty()
+                    && models
+                        .iter()
+                        .any(|entry| matches!(entry.content, ProviderModelContent::Adapted(_)))
+                {
+                    contributed_by_model.extend(
+                        contributions
+                            .iter()
+                            .map(|model| (&model.id, &model.presentation)),
+                    );
+                }
                 // 保留上游顺序；映射只选择完整的目标对象，不能跨账号/模型混拼字段
                 let by_id = models
                     .iter()
                     .map(|entry| (entry.model.as_str(), entry))
-                    .collect::<std::collections::BTreeMap<_, _>>();
+                    .collect::<BTreeMap<_, _>>();
                 for entry in &models {
                     let target = client.snapshot.mapped_model(entry.model.as_str());
                     if !scope.allows_provider_model(kind, &target) {
@@ -1598,7 +1615,11 @@ impl ExecutionService for DefaultExecutionService {
                         continue;
                     }
                     if seen.insert(model.clone()) {
-                        result.push(source.content.for_public_model(model));
+                        result.push(
+                            source
+                                .content
+                                .for_public_model(model, &contributed_by_model),
+                        );
                     }
                 }
                 for model in client.snapshot.public_models_for_provider(kind) {
@@ -1617,13 +1638,17 @@ impl ExecutionService for DefaultExecutionService {
                     }
                     if let Some(source) = by_id.get(target.as_str()) {
                         seen.insert(model.clone());
-                        result.push(source.content.for_public_model(model));
+                        result.push(
+                            source
+                                .content
+                                .for_public_model(model, &contributed_by_model),
+                        );
                     }
                 }
-                // 原生完整对象优先；只补入当前授权账号实际提供的独立适配画像
-                for profile in client.snapshot.contributed_profiles_for_scope(kind, scope) {
-                    if seen.insert(profile.model().clone()) {
-                        result.push(PublicModelDescriptor::Adapted(profile));
+                // 没有 Provider 目录条目的适配模型仍由当前授权账号贡献
+                for model in contributions {
+                    if seen.insert(model.id.clone()) {
+                        result.push(PublicModelDescriptor::Adapted(model.public_profile()));
                     }
                 }
             }
