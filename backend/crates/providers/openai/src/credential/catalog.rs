@@ -829,7 +829,7 @@ impl CodexCredentialCatalogService {
                         authorization.expose_secret(),
                         account.upstream_account_id(),
                         &request_id,
-                        None,
+                        client_version.map(|_| credential.installation_id.as_str()),
                     ),
                     client_version,
                 )

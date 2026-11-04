@@ -490,7 +490,7 @@ pub struct CodexRequestContext<'a> {
     pub parent_thread_id: Option<&'a str>,
     /// cookie 头
     pub cookie_header: Option<&'a str>,
-    /// 当前账号稳定派生的 installation ID
+    /// 本次请求生效的安装 ID
     pub installation_id: Option<&'a str>,
     /// 客户端 session ID
     pub session_id: Option<&'a str>,

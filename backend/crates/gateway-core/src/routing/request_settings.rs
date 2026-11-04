@@ -236,7 +236,13 @@ impl RequestSettings {
         if !self.overrides.contains_key("request_profiles") && !defaults.request_profiles.is_empty()
         {
             let mut profiles = runtime.request_profiles().clone();
-            profiles.extend(defaults.request_profiles.clone());
+            for (provider, key_profile) in &defaults.request_profiles {
+                let profile = crate::settings::request_profiles::resolve_key_profile(
+                    key_profile,
+                    profiles.get(provider),
+                );
+                profiles.insert(provider.clone(), profile.into_owned());
+            }
             runtime = runtime.with_request_profiles(profiles);
         }
         ExecutionSettings {

@@ -330,6 +330,10 @@ impl CodexProvider {
         ));
         // Standalone Provider 端点没有可证明的账号 owner；Images/Search metadata 必须按
         // 跨账号输入收敛到当前 lease，不能沿用下游声明的账号或 installation identity
+        let client = self.client_for_request(&context)?;
+        let installation_id = client
+            .profile_state()
+            .effective_installation_id(lease.installation_id());
         let turn_metadata = payload
             .context()
             .get("turn_metadata")
@@ -337,13 +341,13 @@ impl CodexProvider {
             .and_then(|metadata| {
                 crate::transport::request::scope_turn_metadata(
                     metadata,
-                    lease.installation_id(),
+                    &installation_id,
                     RequestAccountScope::Different,
                 )
             });
         let events = cold_json_response_stream(ColdJsonResponse {
-            client: self
-                .client_for_request(&context)?
+            installation_id,
+            client: client
                 .for_account(lease.account())
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, false).error)?
                 .with_responses_api_base_url(lease.authentication().responses_api_base_url())
@@ -384,6 +388,7 @@ struct RawJsonEndpointRequest {
 
 pub(super) struct ColdResponse {
     pub(super) client: CodexBackendClient,
+    pub(super) installation_id: String,
     pub(super) response_origin: Url,
     pub(super) request: CodexResponsesRequest,
     pub(super) upstream_model: UpstreamModelId,
@@ -404,6 +409,7 @@ pub(super) struct ColdResponse {
 
 pub(super) struct ColdJsonResponse {
     pub(super) client: CodexBackendClient,
+    pub(super) installation_id: String,
     pub(super) response_origin: Url,
     pub(super) endpoint_path: &'static str,
     pub(super) body: Bytes,
@@ -593,7 +599,6 @@ pub(super) fn map_handshake_attempt_error(
 pub(super) async fn create_json_attempt(
     request: &ColdJsonResponse,
     account: &ProviderAccount,
-    installation_id: &str,
     authorization: &SecretString,
     cookie_header: Option<&SecretString>,
     account_selection: CodexAccountSelectionTelemetry<'_>,
@@ -607,7 +612,7 @@ pub(super) async fn create_json_attempt(
         authorization.expose_secret(),
         account.upstream_account_id(),
         request_id,
-        Some(installation_id),
+        Some(&request.installation_id),
     );
     request_context.trace = Some(&trace);
     request_context.cookie_header = cookie_header.map(ExposeSecret::expose_secret);
@@ -659,7 +664,6 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
         let response = create_json_attempt(
             &request,
             &active_account,
-            request.lease.installation_id(),
             &authorization,
             cookie_header.as_ref(),
             account_selection,
@@ -779,6 +783,7 @@ fn image_response_metering(
 pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
     let ColdResponse {
         client,
+        installation_id,
         response_origin,
         request,
         upstream_model,
@@ -835,7 +840,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 &request,
                 &request_id,
                 &active_account,
-                lease.installation_id(),
+                &installation_id,
                 &authorization,
                 cookie_header.as_ref(),
                 account_selection,

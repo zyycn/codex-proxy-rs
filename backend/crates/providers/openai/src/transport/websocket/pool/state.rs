@@ -24,6 +24,7 @@ pub struct CodexWebSocketPoolKey {
     account_id: String,
     conversation_id: String,
     connection_profile: String,
+    installation_id: Option<String>,
     routing_affinity_id: Option<Uuid>,
     pub(super) downstream_connection_id: String,
     egress_key: String,
@@ -42,11 +43,18 @@ impl CodexWebSocketPoolKey {
             account_id: account_id.into(),
             conversation_id: conversation_id.into(),
             connection_profile: String::new(),
+            installation_id: None,
             routing_affinity_id: None,
             downstream_connection_id: String::new(),
             egress_key: String::new(),
             proxy_capacity_key: String::new(),
         }
+    }
+
+    /// 安装身份参与逻辑连接归属，精确续写也不能跨安装身份复用旧握手
+    pub(crate) fn with_installation_id(mut self, id: Option<&str>) -> Self {
+        self.installation_id = id.map(str::to_owned);
+        self
     }
 
     /// 区分实际 WebSocket opening 画像，防止复用旧 UA 或不同握手语义的连接
@@ -100,6 +108,7 @@ impl CodexWebSocketPoolKey {
             self.account_id.as_str(),
             self.conversation_id.as_str(),
             self.connection_profile.as_str(),
+            self.installation_id.as_deref().unwrap_or_default(),
             self.downstream_connection_id.as_str(),
             self.egress_key.as_str(),
             routing_affinity.as_str(),
@@ -109,6 +118,7 @@ impl CodexWebSocketPoolKey {
     pub(super) fn same_logical_connection(&self, other: &Self) -> bool {
         self.base_url == other.base_url
             && self.account_id == other.account_id
+            && self.installation_id == other.installation_id
             && self.conversation_id == other.conversation_id
             && self.egress_key == other.egress_key
             && self.routing_affinity_id == other.routing_affinity_id

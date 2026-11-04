@@ -332,24 +332,35 @@ impl SettingsService for DefaultSettingsService {
         configuration: Option<&gateway_core::account::OpaqueProviderData>,
     ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
         let profile_provider = self.profile_provider(provider)?;
-        let global;
-        let (configuration, source) = if let Some(configuration) = configuration {
-            (configuration, "override")
+        let independent = configuration.filter(|key| {
+            gateway_core::settings::request_profiles::inherited_fields(key).is_none()
+        });
+        let preview = if let Some(key) = independent {
+            profile_provider.preview_key_client_profile(key, None)
         } else {
-            global = self
+            let global = self
                 .load()
                 .await?
                 .client_profile(provider)
                 .cloned()
                 .or_else(|| profile_provider.default_client_profile())
                 .ok_or_else(|| AdminError::internal("通用客户端身份尚未初始化"))?;
-            (&global, "global")
-        };
-        let mut preview = profile_provider
-            .preview_client_profile(configuration)
-            .map_err(|error| super::map_provider_error(error, "client profile"))?
-            .into_inner();
-        preview.insert("source".to_owned(), serde_json::Value::from(source));
+            if let Some(key) = configuration {
+                profile_provider.preview_key_client_profile(key, Some(&global))
+            } else {
+                profile_provider.preview_client_profile(&global)
+            }
+        }
+        .map_err(|error| super::map_provider_error(error, "client profile"))?;
+        let mut preview = preview.into_inner();
+        preview.insert(
+            "source".to_owned(),
+            serde_json::Value::from(if independent.is_some() {
+                "override"
+            } else {
+                "global"
+            }),
+        );
         Ok(gateway_core::account::OpaqueProviderData::new(preview))
     }
 

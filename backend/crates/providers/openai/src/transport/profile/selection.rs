@@ -116,9 +116,14 @@ impl Default for ClientProfileSelection {
 
 impl ClientProfileSelection {
     pub fn parse(document: &OpaqueProviderData) -> Result<Self, ClientProfileError> {
-        let selection: Self =
-            serde_json::from_value(Value::Object(document.expose_to_provider().clone()))
-                .map_err(|_| ClientProfileError::Invalid)?;
+        Self::from_fields(document.expose_to_provider().clone())
+    }
+
+    pub(super) fn from_fields(
+        fields: serde_json::Map<String, Value>,
+    ) -> Result<Self, ClientProfileError> {
+        let selection: Self = serde_json::from_value(Value::Object(fields))
+            .map_err(|_| ClientProfileError::Invalid)?;
         selection.validate()?;
         Ok(selection)
     }
@@ -272,6 +277,7 @@ impl ClientProfileSelection {
                 .clone()
                 .unwrap_or_else(|| "unknown".to_owned()),
             exact_user_agent: None,
+            installation_id: None,
             residency: deployment.residency,
             account_routing_override: deployment.account_routing_override,
             verified_at: release.verified_at.unwrap_or(DateTime::UNIX_EPOCH),
@@ -383,6 +389,8 @@ pub(crate) fn object(value: &impl Serialize) -> Result<OpaqueProviderData, Clien
 pub enum ClientProfileError {
     #[error("客户端身份字段或版本组合不合法")]
     Invalid,
+    #[error("安装 ID 必须是带连字符的 UUID")]
+    InvalidInstallationId,
     #[error("User-Agent 必须是 1 至 4096 字节的单行 ASCII 文本，且首尾不能含空白")]
     InvalidUserAgent,
     #[error("无法识别 User-Agent，请补充 originator 和有效的 Core version")]

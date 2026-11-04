@@ -309,6 +309,16 @@ async fn exact_continuation_reuses_owning_socket_after_connection_profile_update
     let mut continuation = first_request;
     continuation.set_previous_response_id(Some("resp_connection_local".to_owned()));
     continuation.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+    let changed_installation = backend
+        .create_response(
+            &continuation,
+            CodexRequestContext {
+                installation_id: Some("3b11bc82-c666-417d-b9ff-2a34fd040385"),
+                ..request_context("req_other_installation", Some("chatgpt-account"))
+            },
+        )
+        .await;
+    assert!(changed_installation.is_err(), "不同安装身份不能续用原握手");
     let second = backend
         .create_response(
             &continuation,

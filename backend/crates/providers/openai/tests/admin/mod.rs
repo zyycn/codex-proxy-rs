@@ -169,6 +169,67 @@ async fn custom_identity_preview_and_dashboard_share_the_exact_request_profile()
 }
 
 #[tokio::test]
+async fn installation_id_is_optional_and_validated_only_for_key_profiles() {
+    let bundle = provider_openai::initialize(
+        valid_config().config,
+        provider_ports(),
+        Arc::new(gateway_core::account::UpstreamInfoReader::default()),
+    )
+    .await
+    .unwrap();
+    let provider = bundle.admin_provider();
+    let id = "3B11BC82-C666-417D-B9FF-2A34FD040385";
+    for (value, valid) in [
+        (json!(id), true),
+        (json!(null), true),
+        (json!(""), true),
+        (json!(id.replace('-', "")), false),
+        (json!("bad"), false),
+        (json!(42), false),
+    ] {
+        let configuration = OpaqueProviderData::new(
+            json!({
+                "mode": "custom", "userAgent": "codex-tui/1.0.0", "installationId": value
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let preview = provider.preview_key_client_profile(&configuration, None);
+        assert_eq!(preview.is_ok(), valid);
+        if value == id {
+            assert_eq!(
+                preview.unwrap().expose_to_provider()["configuration"]["installationId"],
+                id.to_lowercase()
+            );
+            assert!(provider.preview_client_profile(&configuration).is_err());
+        }
+    }
+    let doc =
+        |value: serde_json::Value| OpaqueProviderData::new(value.as_object().unwrap().clone());
+    let global = doc(json!({"mode": "custom", "userAgent": "codex-tui/2.0.0"}));
+    let key = doc(json!({"inherit":{"installationId":id}}));
+    let preview = provider
+        .preview_key_client_profile(&key, Some(&global))
+        .unwrap()
+        .into_inner();
+    assert_eq!(preview["userAgent"], "codex-tui/2.0.0");
+    assert_eq!(
+        preview["configuration"]["installationId"],
+        id.to_lowercase()
+    );
+    assert!(provider.preview_client_profile(&key).is_err());
+    assert!(
+        provider
+            .preview_key_client_profile(
+                &doc(json!({"inherit":{"userAgent":"other"}})),
+                Some(&global)
+            )
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions_once() {
     let config = valid_config();
     let mut bundle = provider_openai::initialize(

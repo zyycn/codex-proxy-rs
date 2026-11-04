@@ -225,6 +225,7 @@ fn selector_with_runtime(
         arch: "x86_64".to_owned(),
         terminal: "selector-contract".to_owned(),
         exact_user_agent: None,
+        installation_id: None,
         residency: None,
         account_routing_override: None,
         verified_at: chrono::Utc::now(),

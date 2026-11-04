@@ -231,8 +231,29 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         configuration: &gateway_core::account::OpaqueProviderData,
     ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        if configuration
+            .expose_to_provider()
+            .contains_key("installationId")
+            || gateway_core::settings::request_profiles::inherited_fields(configuration).is_some()
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Invalid)
+                .with_public_message("安装 ID 只能在 API 密钥中设置"));
+        }
         self.profile
             .preview_selection(configuration)
+            .map_err(map_client_profile_error)
+    }
+
+    fn preview_key_client_profile(
+        &self,
+        key: &gateway_core::account::OpaqueProviderData,
+        global: Option<&gateway_core::account::OpaqueProviderData>,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        crate::transport::profile::identity::inherited_identity_fields(key)
+            .map_err(map_client_profile_error)?;
+        let profile = gateway_core::settings::request_profiles::resolve_key_profile(key, global);
+        self.profile
+            .preview_selection(&profile)
             .map_err(map_client_profile_error)
     }
 
@@ -2077,6 +2098,7 @@ fn map_client_profile_error(
     use crate::transport::profile::selection::ClientProfileError;
     let message = match error {
         ClientProfileError::Invalid => "客户端身份字段或版本组合不合法",
+        ClientProfileError::InvalidInstallationId => "安装 ID 必须是带连字符的 UUID",
         ClientProfileError::InvalidUserAgent => {
             "User-Agent 必须是 1 至 4096 字节的单行 ASCII 文本，且首尾不能含空白"
         }

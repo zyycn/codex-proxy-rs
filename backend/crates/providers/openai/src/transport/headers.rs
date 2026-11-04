@@ -28,7 +28,7 @@ pub(super) fn is_managed_identity_header(name: &str) -> bool {
             | "chatgpt-project-id"
             | "openai-organization"
             | "openai-project"
-            // 安装头与 client_metadata 共用当前账号的安装身份
+            // 安装头与 client_metadata 共用本次请求的安装身份
             | "x-codex-installation-id"
             // 画像和设备证明须属于选定账号，不能由下游覆盖
             | "originator"

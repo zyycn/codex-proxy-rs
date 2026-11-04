@@ -558,7 +558,7 @@ pub(crate) fn scope_request_to_account(
                 metadata.remove("parent_response_id");
             }
             // 官方 Core 在 client_metadata 使用带 x-codex 前缀的键，
-            // turn metadata 内仍使用 installation_id；两处均取当前账号的安装身份
+            // turn metadata 内仍使用 installation_id；两处均取本次请求生效的安装身份
             metadata.insert(
                 "x-codex-installation-id".to_owned(),
                 Value::String(installation_id.to_owned()),

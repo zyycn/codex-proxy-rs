@@ -152,6 +152,7 @@ fn wire_profile_should_generate_bundled_core_app_server_user_agent() {
         arch: "arm64".to_owned(),
         terminal: "unknown".to_owned(),
         exact_user_agent: None,
+        installation_id: None,
         residency: None,
         account_routing_override: None,
         verified_at: Utc
@@ -501,6 +502,7 @@ fn wire_profile() -> CodexWireProfile {
         arch: "arm64".to_owned(),
         terminal: "unknown".to_owned(),
         exact_user_agent: None,
+        installation_id: None,
         residency: None,
         account_routing_override: None,
         verified_at: Utc

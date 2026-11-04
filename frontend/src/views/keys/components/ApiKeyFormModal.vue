@@ -2,14 +2,16 @@
 import type { ApiKeyFormValue } from '../composables/useApiKeyEditor'
 
 import type { AccountGroupRef, ApiKeyPeerSharing } from '@/api'
-import { ZButton, ZCheckbox, ZDialog, ZForm, ZFormItem, ZInput, ZSwitch } from '@codex-proxy/ui'
-import { DollarSign, KeyRound } from '@lucide/vue'
+import { ZButton, ZCheckbox, ZDialog, ZForm, ZFormItem, ZIconButton, ZInput, ZSwitch } from '@codex-proxy/ui'
+import { Dices, DollarSign, KeyRound } from '@lucide/vue'
 
 import { computed, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { isValidInstallationId } from '@/api/modules/settings/profiles'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import ProviderRequestProfilesEditor from '@/components/client-profile/ProviderRequestProfilesEditor.vue'
 import HelpPopover from '@/components/HelpPopover.vue'
+import { generateRequestId as generateUuid } from '@/utils/operation'
 import { useApiKeyFormRules } from '../composables/useApiKeyFormRules'
 
 const props = defineProps<{
@@ -34,10 +36,14 @@ const title = computed(() => props.editing
 const formRef = useTemplateRef<InstanceType<typeof ZForm>>('formElement')
 const rules = useApiKeyFormRules(() => form.value)
 
+const installationIdError = computed(() => isValidInstallationId(form.value.installationId)
+  ? ''
+  : t('settings.clientProfile.invalidInstallationId'))
+
 watch(open, () => formRef.value?.clearValidate())
 
 async function requestSave() {
-  if (props.saving || !await formRef.value?.validate().catch(() => false))
+  if (props.saving || installationIdError.value || !await formRef.value?.validate().catch(() => false))
     return
   emit('save')
 }
@@ -69,16 +75,15 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
     </template>
 
     <ZForm ref="formElement" :model="form" :rules="rules" scroll-to-error focus-on-error novalidate class="grid gap-6" @submit="requestSave">
-      <ZFormItem prop="name" :label="t('common.fields.name')" :show-message="false">
-        <ZInput
-          :model-value="form.name" :aria-label="t('common.fields.name')"
-          :placeholder="t('keys.editor.namePlaceholder')"
-          :disabled="saving"
-          @update:model-value="updateForm('name', $event)"
-        />
-      </ZFormItem>
-
-      <div class="grid gap-6" :class="{ 'sm:grid-cols-2': !editing }">
+      <div class="grid grid-cols-2 gap-6">
+        <ZFormItem prop="name" :label="t('common.fields.name')" :show-message="false">
+          <ZInput
+            :model-value="form.name" :aria-label="t('common.fields.name')"
+            :placeholder="t('keys.editor.namePlaceholder')"
+            :disabled="saving"
+            @update:model-value="updateForm('name', $event)"
+          />
+        </ZFormItem>
         <ZFormItem :label="t('keys.editor.labelOptional')">
           <ZInput
             :model-value="form.label" :aria-label="t('keys.editor.labelOptional')"
@@ -87,23 +92,23 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
             @update:model-value="updateForm('label', $event)"
           />
         </ZFormItem>
-
-        <ZFormItem
-          v-if="!editing"
-          prop="customKey"
-          :label="t('keys.editor.customKeyOptional')"
-        >
-          <ZInput
-            :model-value="form.customKey" type="password"
-            autocomplete="new-password"
-            :spellcheck="false"
-            :aria-label="t('keys.editor.customKeyOptional')"
-            :placeholder="t('keys.editor.keyPlaceholder')"
-            :disabled="saving"
-            @update:model-value="updateForm('customKey', $event)"
-          />
-        </ZFormItem>
       </div>
+
+      <ZFormItem
+        v-if="!editing"
+        prop="customKey"
+        :label="t('keys.editor.customKeyOptional')"
+      >
+        <ZInput
+          :model-value="form.customKey" type="password"
+          autocomplete="new-password"
+          :spellcheck="false"
+          :aria-label="t('keys.editor.customKeyOptional')"
+          :placeholder="t('keys.editor.keyPlaceholder')"
+          :disabled="saving"
+          @update:model-value="updateForm('customKey', $event)"
+        />
+      </ZFormItem>
 
       <ZFormItem prop="groupIds" :label="t('groups.group')" :required="form.peerSharing.enabled">
         <AccountGroupCheckboxGrid
@@ -133,14 +138,45 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
         </div>
       </ZFormItem>
 
-      <ZFormItem :label="t('keys.editor.upstreamIdentity')">
-        <ProviderRequestProfilesEditor
-          :model-value="form.providerRequestProfileOverrides" allow-inherit
-          :active="open"
-          :disabled="saving"
-          @update:model-value="updateForm('providerRequestProfileOverrides', $event)"
-        />
-      </ZFormItem>
+      <div class="grid gap-4">
+        <ZFormItem :label="t('keys.editor.upstreamIdentity')">
+          <ProviderRequestProfilesEditor
+            :model-value="form.providerRequestProfileOverrides" allow-inherit
+            :active="open"
+            :disabled="saving"
+            @update:model-value="updateForm('providerRequestProfileOverrides', $event)"
+          />
+        </ZFormItem>
+
+        <ZFormItem :label="t('settings.clientProfile.installationId')" :error="installationIdError">
+          <template #label-extra>
+            <span class="-my-2 inline-flex">
+              <HelpPopover :label="t('settings.clientProfile.installationId')" :content="t('settings.clientProfile.installationIdHelp')" />
+            </span>
+          </template>
+          <template #extra>
+            <ZIconButton
+              variant="link" size="small" class="-my-2"
+              :aria-label="t('settings.clientProfile.generateInstallationId')"
+              :disabled="saving"
+              @click="updateForm('installationId', generateUuid())"
+            >
+              <Dices class="size-4" aria-hidden="true" />
+            </ZIconButton>
+          </template>
+          <ZInput
+            :model-value="form.installationId"
+            :aria-label="t('settings.clientProfile.installationId')"
+            :aria-invalid="!!installationIdError"
+            :placeholder="t('settings.clientProfile.installationIdPlaceholder')"
+            :disabled="saving"
+            :spellcheck="false"
+            autocomplete="off"
+            class="font-mono"
+            @update:model-value="updateForm('installationId', $event)"
+          />
+        </ZFormItem>
+      </div>
 
       <div class="grid gap-6 sm:grid-cols-2">
         <ZFormItem prop="dailyLimitUsd" :label="t('keys.editor.dailyLimit')">
@@ -208,6 +244,7 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
       <ZButton
         type="primary"
         :loading="saving"
+        :disabled="!!installationIdError"
         @click="requestSave"
       >
         {{ editing ? t('common.actions.save') : t('common.actions.create') }}

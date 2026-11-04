@@ -222,6 +222,15 @@ pub trait ProviderAdmin: Send + Sync {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
+    /// Key 可以继承当前全局画像；额外字段的合法性由对应 Provider 判定
+    fn preview_key_client_profile(
+        &self,
+        key: &gateway_core::account::OpaqueProviderData,
+        _global: Option<&gateway_core::account::OpaqueProviderData>,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        self.preview_client_profile(key)
+    }
+
     /// 提供最终套餐展示名称；未覆盖时采用通用的大驼峰格式
     fn plan_type_display(&self, plan_type: &str) -> String {
         default_plan_type_display(plan_type)

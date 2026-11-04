@@ -12,7 +12,10 @@ use super::{CodexWireProfile, CodexWireProfileState};
 
 /// 已解析的配置；没有 mode 的预设配置复用官方版本与平台合同
 #[derive(Debug, Clone)]
-pub struct RequestProfileSelection(ParsedSelection);
+pub struct RequestProfileSelection {
+    selection: ParsedSelection,
+    installation_id: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 enum ParsedSelection {
@@ -32,62 +35,100 @@ enum SelectionDocument {
     },
 }
 
+pub(crate) fn inherited_identity_fields(
+    document: &OpaqueProviderData,
+) -> Result<Option<&serde_json::Map<String, Value>>, ClientProfileError> {
+    let inherited = gateway_core::settings::request_profiles::inherited_fields(document);
+    if inherited.is_some_and(|fields| fields.len() != 1 || !fields.contains_key("installationId")) {
+        return Err(ClientProfileError::Invalid);
+    }
+    Ok(inherited)
+}
+
 impl RequestProfileSelection {
     pub fn preset(&self) -> Option<&ClientProfileSelection> {
-        match &self.0 {
+        match &self.selection {
             ParsedSelection::Preset(selection) => Some(selection),
             _ => None,
         }
     }
 
     pub fn version_mode(&self) -> VersionMode {
-        match &self.0 {
+        match &self.selection {
             ParsedSelection::Preset(selection) => selection.version_mode,
             ParsedSelection::Custom(_) => VersionMode::Fixed,
         }
     }
 
     pub fn parse(document: &OpaqueProviderData) -> Result<Self, ClientProfileError> {
-        let fields = document.expose_to_provider();
-        if !fields.contains_key("mode") {
-            return ClientProfileSelection::parse(document)
-                .map(ParsedSelection::Preset)
-                .map(Self);
-        }
-        let document = serde_json::from_value(Value::Object(fields.clone()))
-            .map_err(|_| ClientProfileError::Invalid)?;
-        let selection = match document {
-            SelectionDocument::Custom {
-                user_agent,
-                originator,
-                codex_version,
-            } => ParsedSelection::Custom(ExactIdentity::parse(
-                &user_agent,
-                originator.as_deref(),
-                codex_version.as_deref(),
-            )?),
+        let inherited = inherited_identity_fields(document)?;
+        let mut fields = inherited
+            .unwrap_or_else(|| document.expose_to_provider())
+            .clone();
+        let installation_id = match fields.remove("installationId") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(value)) if value.is_empty() => None,
+            Some(Value::String(value)) => {
+                let parsed = uuid::Uuid::try_parse(&value)
+                    .map_err(|_| ClientProfileError::InvalidInstallationId)?;
+                if value.len() != uuid::fmt::Hyphenated::LENGTH {
+                    return Err(ClientProfileError::InvalidInstallationId);
+                }
+                Some(parsed.to_string())
+            }
+            Some(_) => return Err(ClientProfileError::InvalidInstallationId),
         };
-        Ok(Self(selection))
+        let selection = if inherited.is_some() {
+            ParsedSelection::Preset(ClientProfileSelection::default())
+        } else if fields.contains_key("mode") {
+            match serde_json::from_value(Value::Object(fields))
+                .map_err(|_| ClientProfileError::Invalid)?
+            {
+                SelectionDocument::Custom {
+                    user_agent,
+                    originator,
+                    codex_version,
+                } => ParsedSelection::Custom(ExactIdentity::parse(
+                    &user_agent,
+                    originator.as_deref(),
+                    codex_version.as_deref(),
+                )?),
+            }
+        } else {
+            ParsedSelection::Preset(ClientProfileSelection::from_fields(fields)?)
+        };
+        Ok(Self {
+            selection,
+            installation_id,
+        })
     }
 
     pub fn resolve(
         &self,
         state: &CodexWireProfileState,
     ) -> Result<CodexWireProfile, ClientProfileError> {
-        match &self.0 {
-            ParsedSelection::Preset(selection) => selection.resolve(state),
-            ParsedSelection::Custom(identity) => Ok(identity.profile(state)),
-        }
+        let mut profile = match &self.selection {
+            ParsedSelection::Preset(selection) => selection.resolve(state)?,
+            ParsedSelection::Custom(identity) => identity.profile(state),
+        };
+        profile.installation_id.clone_from(&self.installation_id);
+        Ok(profile)
     }
 
     pub(super) fn preview(
         &self,
         state: &CodexWireProfileState,
     ) -> Result<OpaqueProviderData, ClientProfileError> {
-        match &self.0 {
-            ParsedSelection::Preset(selection) => state.preview_preset_selection(selection),
-            ParsedSelection::Custom(identity) => identity.preview(state),
-        }
+        let preview = match &self.selection {
+            ParsedSelection::Preset(selection) => state.preview_preset_selection(selection)?,
+            ParsedSelection::Custom(identity) => identity.preview(state)?,
+        };
+        let Some(id) = &self.installation_id else {
+            return Ok(preview);
+        };
+        let mut fields = preview.into_inner();
+        fields["configuration"]["installationId"] = Value::String(id.clone());
+        Ok(OpaqueProviderData::new(fields))
     }
 }
 
@@ -181,6 +222,7 @@ impl ExactIdentity {
                 .map(|value| value.terminal.clone())
                 .unwrap_or_default(),
             exact_user_agent: Some(self.user_agent.clone()),
+            installation_id: None,
             residency: deployment.residency,
             account_routing_override: deployment.account_routing_override,
             verified_at: DateTime::UNIX_EPOCH,

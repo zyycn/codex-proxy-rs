@@ -69,6 +69,9 @@ pub struct CodexWireProfile {
     /// 入口专属或自定义的完整值；存在时不得用默认预设重新拼接
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exact_user_agent: Option<String>,
+    /// Key 独立配置的安装身份；省略时保留当前调用的账号基线
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation_id: Option<String>,
     /// 未配置时不发送 residency 头；不随制品版本更新而改变
     pub residency: Option<String>,
     /// 部署指定的账号路由头；未配置时不发送，不随客户端身份选择改变
@@ -90,6 +93,7 @@ impl Default for CodexWireProfile {
             arch: "arm64".to_owned(),
             terminal: "unknown".to_owned(),
             exact_user_agent: None,
+            installation_id: None,
             residency: None,
             account_routing_override: None,
             // 制品核验于 2026-09-06T03:26:12.084Z；进程启动不构成重新核验
@@ -203,6 +207,16 @@ impl CodexWireProfileState {
         cli_release::seed_releases(&state);
         platform_release::seed_releases(&state);
         state
+    }
+
+    pub(crate) fn effective_installation_id(&self, account_installation_id: &str) -> String {
+        self.profile
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .installation_id
+            .as_deref()
+            .unwrap_or(account_installation_id)
+            .to_owned()
     }
 
     /// 返回当前画像的独立快照，避免持锁执行网络请求

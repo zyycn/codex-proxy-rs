@@ -961,11 +961,11 @@ impl CodexProvider {
                 )
                 .map(|affinity| (response_id.to_owned(), affinity))
         });
-        scope_request_to_account(
-            &mut upstream_request,
-            lease.installation_id(),
-            account_scope,
-        );
+        let client = self.client_for_request(&context)?;
+        let installation_id = client
+            .profile_state()
+            .effective_installation_id(lease.installation_id());
+        scope_request_to_account(&mut upstream_request, &installation_id, account_scope);
         // 父响应的可信关联只恢复此字段，不把首次 Guardian 请求的其他账号状态视为可信
         if let Some((response_id, _)) = &guardian_parent
             && let Some(Value::Object(metadata)) =
@@ -1143,8 +1143,8 @@ impl CodexProvider {
             AttemptTransport::Default | AttemptTransport::Fallback => 0,
         };
         let events = cold_response_stream(ColdResponse {
-            client: self
-                .client_for_request(&context)?
+            installation_id,
+            client: client
                 .for_account(lease.account())
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, false).error)?
                 .with_responses_api_base_url(lease.authentication().responses_api_base_url())

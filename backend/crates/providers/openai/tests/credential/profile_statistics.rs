@@ -25,6 +25,7 @@ fn wire_profile() -> CodexWireProfileState {
         arch: "x86_64".to_owned(),
         terminal: "profile-statistics-contract".to_owned(),
         exact_user_agent: None,
+        installation_id: None,
         residency: None,
         account_routing_override: None,
         verified_at: Utc

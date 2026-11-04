@@ -40,12 +40,19 @@ fn snapshot(revision: u64, name: &str) -> Arc<RuntimeSnapshot> {
 }
 
 fn policy(id: &str) -> ClientPolicy {
+    policy_with_profiles(id, profiles(&[("openai", id)]))
+}
+
+fn policy_with_profiles(
+    id: &str,
+    overrides: BTreeMap<ProviderKind, OpaqueProviderData>,
+) -> ClientPolicy {
     ClientPolicy::new(
         ClientApiKeyId::new(id).unwrap(),
         PlaintextClientApiKey::new(format!("fixture-{id}")).unwrap(),
         Arc::new(
             FrozenAccountScope::new(Arc::default(), ClientRoutingScope::all_accounts())
-                .with_request_profiles(profiles(&[("openai", id)]))
+                .with_request_profiles(overrides)
                 .with_fast_mode(FastMode::Disabled),
         ),
         true,
@@ -84,6 +91,34 @@ fn settings_facts_are_shared_and_invalid_compilation_does_not_change_them() {
             .is_err()
     );
     assert!(std::ptr::eq(original.settings(), frozen.settings()));
+}
+
+#[test]
+fn inherited_key_fields_follow_the_current_global_profile_without_changing_key_defaults() {
+    let provider = ProviderKind::new("openai").unwrap();
+    let key_profile = OpaqueProviderData::new(
+        json!({"inherit":{"device":"test-device"}})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let mut key = policy_with_profiles(
+        "device-key",
+        BTreeMap::from([(provider.clone(), key_profile.clone())]),
+    );
+    for (revision, name) in [(1, "first"), (2, "second")] {
+        key = RequestSettings::new(snapshot(revision, name)).apply_policy(key);
+        assert_eq!(
+            key.account_scope()
+                .request_profile(&provider)
+                .unwrap()
+                .expose_to_provider(),
+            json!({"identity":name,"device":"test-device"})
+                .as_object()
+                .unwrap()
+        );
+        assert_eq!(key.defaults().request_profiles[&provider], key_profile);
+    }
 }
 
 #[test]
