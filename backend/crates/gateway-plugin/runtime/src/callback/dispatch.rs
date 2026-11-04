@@ -79,6 +79,7 @@ impl CallbackHandler for PluginCallbacks {
         let request_limits = self.request_limits.clone();
         let affinity = self.affinity.clone();
         let services = self.services.clone();
+        let usage = self.usage.clone();
         let service_actor = self.service_actor.clone();
         Box::pin(async move {
             let call = call.ok_or_else(denied)?;
@@ -149,6 +150,15 @@ impl CallbackHandler for PluginCallbacks {
                 return services
                     .call(&context, &call, service_actor, params, &payload)
                     .await;
+            }
+            if matches!(
+                method.as_str(),
+                gateway_plugin_sdk::call::services::usage::RECORDS_SCAN
+                    | gateway_plugin_sdk::call::services::usage::STATISTICS_QUERY
+                    | gateway_plugin_sdk::call::services::usage::READ_NEXT
+                    | gateway_plugin_sdk::call::services::usage::READ_CLOSE
+            ) {
+                return usage.call(&call, &method, params, &payload).await;
             }
             if is_private_state {
                 return private_state.call(&method, params, &payload).await;

@@ -146,6 +146,10 @@ async fn execute(
         providers.admin,
     );
     or_shutdown!(plugin_runtime, services.register_usage_data(&usage_data));
+    or_shutdown!(
+        plugin_runtime,
+        plugin_runtime.bind_usage_queries(&usage_data)
+    );
     let services = std::sync::Arc::new(services);
     or_shutdown!(plugin_runtime, plugin_runtime.bind_services(&services));
     let commands = or_shutdown!(plugin_runtime, plugin_runtime.prepare_command_line().await);

@@ -1,7 +1,9 @@
 //! 复用请求明细和聚合存储的有界维护入口，不管理插件工作流
 
 mod aggregates;
+mod read;
 mod records;
+mod scan;
 
 use super::{ObservabilityConnection, ObservabilityQueryBudget};
 use crate::{StoreError, StoreResult, postgres_unavailable};
@@ -23,6 +25,13 @@ impl PgUsageDataStore {
 
 #[async_trait::async_trait]
 impl UsageDataStore for PgUsageDataStore {
+    async fn open_read(
+        &self,
+        query: UsageReadQuery,
+        cancellation: gateway_core::lifecycle::CancellationToken,
+    ) -> UsageDataResult<Box<dyn UsageReadSession>> {
+        Ok(read::open(self, query, cancellation))
+    }
     async fn get_record(&self, request: GetUsageRecord) -> UsageDataResult<UsageRecord> {
         self.budget
             .run(&self.pool, "usage record", |mut connection| async move {

@@ -110,6 +110,10 @@ impl CallResources {
             stream.close();
         }
         state.model_streams.clear();
+        for reader in state.usage_readers.values() {
+            reader.cancel();
+        }
+        state.usage_readers.clear();
     }
 
     pub(super) fn start_upstream(
@@ -179,6 +183,7 @@ impl CallResources {
 
 #[derive(Default)]
 pub(super) struct CallState {
+    pub(super) usage_readers: BTreeMap<String, Arc<super::usage::UsageReader>>,
     pub(super) closed: bool,
     pub(super) middleware: Option<Arc<dyn MiddlewareCallback>>,
     pub(super) streams: BTreeMap<String, Arc<HttpStream>>,

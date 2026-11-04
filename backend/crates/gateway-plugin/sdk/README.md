@@ -19,7 +19,7 @@ SDK 包版本为 `0.1.0`，独立于网关版本，处于实验阶段。能力�
 | `call::frontend_authentication` | 数据面认证信封、认证器标识与外部 principal 结果 |
 | `call::model` | 宿主模型调用的 canonical 事实、原生 wire 与有界事件编解码 |
 | `call::middleware` | HTTP、WebSocket 消息、公开服务、模型请求、attempt 与上游出站准备的洋葱调用、单次 next 与惰性正文合同 |
-| `call::services` | 公开服务的类型化操作、输入输出及错误合同；`usage` 提供[用量维护与计价](docs/usage-data.md) |
+| `call::services` | 公开服务的类型化操作、输入输出及错误合同，`usage` 提供[用量查询、维护与计价](docs/usage-data.md) |
 | `call::upstream_adapter` | 内置 OpenAI / xAI 的[受管上游适配器](docs/upstream-adapters.md)注册、执行、出站与续接合同 |
 | `call::policy` | 模型路由、账号调度与重试决策合同 |
 | `call::catalog` | 固定 Provider 的直接别名与适配模型注册合同，见[模型目录](docs/capabilities.md#模型目录) |
@@ -46,6 +46,8 @@ use gateway_plugin_sdk::client::{read_frame, write_frame};
 `PluginSession::accept/run` 和 `PluginHandler`。组合插件从作者清单建立类型化方法，SDK 自动生成
 `plugin.register`；作者不需要复制贡献项或手写方法名、阶段和敏感载荷编解码。
 会话管理握手、有界并发、父调用关联、回调、流信用、取消、排空与关闭，容量与计时见[并发与期限](#并发与期限)
+
+`HostClient::scan_usage_records` 与 `query_usage_statistics` 提供用量明细扫描和完整分组统计，按批读取与关闭见[用量查询](docs/usage-data.md#完整扫描与分组统计)
 
 `ResponseStream::channel` 提供有界流生产入口，`ResponseStream::pull` 按消费进度驱动生产者；`PluginCall` 的宿主客户端只代表当前父调用，
 不能把一个调用的资源误用到另一个调用。插件程序自行选择运行时和启动入口，不会启动网关。

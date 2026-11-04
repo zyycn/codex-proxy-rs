@@ -1,5 +1,6 @@
 //! `model_requests` 完成用量事实的 PostgreSQL 语义
 
+use gateway_admin::model::usage_data::UsageReadFilter;
 use sqlx::{Postgres, QueryBuilder};
 
 /// 只把已完整交付给客户端、且存在用量证据的成功响应投影为用量事实
@@ -54,4 +55,25 @@ pub(crate) fn push_completed_usage_fact_filter(query: &mut QueryBuilder<Postgres
 /// 原始请求审计仍保留该行；默认业务指标只把最终成功链视为一次结果
 pub(crate) fn push_unrecovered_request_filter(query: &mut QueryBuilder<Postgres>, alias: &str) {
     query.push(format!(" and {alias}.recovered_at is null"));
+}
+
+pub(crate) fn push_usage_read_filter(query: &mut QueryBuilder<Postgres>, filter: &UsageReadFilter) {
+    for (column, value) in [
+        ("mr.provider_kind", &filter.records.provider),
+        ("mr.upstream_model_id", &filter.records.model),
+        ("mr.provider_account_ref", &filter.records.account_ref),
+        ("mr.client_api_key_ref", &filter.records.client_key_ref),
+    ] {
+        if let Some(value) = value {
+            query
+                .push(format!(" and {column}="))
+                .push_bind(value.clone());
+        }
+    }
+    if let Some(group) = &filter.routing_group_ref {
+        query
+            .push(" and ")
+            .push_bind(group.clone())
+            .push("=any(mr.routing_group_refs)");
+    }
 }

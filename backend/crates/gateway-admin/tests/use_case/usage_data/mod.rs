@@ -64,6 +64,7 @@ fn sdk_wire_types_match_host_contracts() {
         "value.rs",
         "record.rs",
         "query.rs",
+        "read.rs",
         "aggregate.rs",
         "pricing.rs",
         "error.rs",

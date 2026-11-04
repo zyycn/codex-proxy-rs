@@ -10,6 +10,7 @@ mod plugin;
 mod resources;
 mod session;
 mod upstream_adapter;
+mod usage;
 
 use crate::{ErrorCode, PluginFault};
 use serde::{Serialize, de::DeserializeOwned};
@@ -33,6 +34,7 @@ pub use session::{
     ResponseStream, SessionConfig, SessionError, StreamSender,
 };
 pub use upstream_adapter::{UpstreamWebSocket, UpstreamWebSocketUpgrade};
+pub use usage::UsageReader;
 
 async fn payload_call<T: Serialize, R: DeserializeOwned>(
     host: &HostClient,

@@ -50,6 +50,50 @@ pub struct Environment {
 }
 
 impl Environment {
+    pub async fn active_usage_transactions(&self) -> i64 {
+        sqlx::query_scalar(
+            "select count(distinct a.pid) from pg_stat_activity a
+             join pg_locks l on l.pid=a.pid
+             join pg_class c on c.oid=l.relation
+             join pg_namespace n on n.oid=c.relnamespace
+             where n.nspname=$1 and c.relname='model_requests'
+             and a.xact_start is not null",
+        )
+        .bind(&self.schema)
+        .fetch_one(&self.admin)
+        .await
+        .unwrap()
+    }
+
+    pub async fn prepare_empty_analytics(&self) {
+        use gateway_store::postgres::{ObservabilityQueryBudget, PgRequestAnalyticsRepository};
+        use std::time::Duration;
+
+        let options = self
+            .admin
+            .connect_options()
+            .as_ref()
+            .clone()
+            .options([("search_path", self.schema.as_str())]);
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let budget =
+            ObservabilityQueryBudget::try_new(1, Duration::from_secs(5), Duration::from_secs(10))
+                .unwrap();
+        let analytics = PgRequestAnalyticsRepository::new(pool.clone(), budget);
+        for _ in 0..10 {
+            analytics.maintain(100).await.unwrap();
+            if !analytics.status().await.unwrap().building {
+                pool.close().await;
+                return;
+            }
+        }
+        panic!("empty analytics did not become ready");
+    }
+
     pub async fn client_key(&self, id: &str, plaintext: &str) {
         self.client_key_with_limits(id, plaintext, gateway_core::policy::RateLimits::unlimited())
             .await;

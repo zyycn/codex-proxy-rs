@@ -10,6 +10,8 @@ pub enum UsageErrorKind {
     Conflict,
     CapacityExceeded,
     Unavailable,
+    Cancelled,
+    Timeout,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

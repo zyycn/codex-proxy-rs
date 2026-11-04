@@ -37,6 +37,7 @@ pub(crate) use analytics::accounts::{
 pub(crate) use analytics::backup_projection_ready;
 pub(crate) use analytics::{AGGREGATE_COLLECTION, AnalyticsSnapshot};
 pub use analytics::{AnalyticsMaintenance, AnalyticsStatus, PgRequestAnalyticsRepository};
+pub(crate) use analytics::{begin_snapshot, declare_usage_statistics, decode_usage_statistics};
 pub(crate) use mapping::*;
 pub use model::*;
 pub(crate) use queries::*;

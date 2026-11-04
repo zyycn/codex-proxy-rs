@@ -208,6 +208,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ));
                     }
                     use gateway_plugin_sdk::{call::services::settings, client::ServiceResponse};
+                    if mode == "usage_hold" && call.is::<settings::ApiKeyExists>() {
+                        return usage_data::hold(call, records.unwrap()).await;
+                    }
                     if mode == "usage_data" && call.is::<settings::ApiKeyExists>() {
                         return usage_data::exercise(call).await;
                     }

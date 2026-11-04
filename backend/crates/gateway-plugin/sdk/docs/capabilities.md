@@ -74,6 +74,11 @@ Provider 固定为宿主内置的 OpenAI 与 xAI。宿主开放以下 11 类扩�
 
 所有回调都通过当前 `TypedCall.host` 发起，关联父调用及其取消信号。普通调用使用父调用剩余期限；已经建立的资源流按[会话生命周期](../README.md#帧与会话)回收，网络操作单独计时
 
+用量扫描和完整分组统计使用 `HostClient::scan_usage_records`、`query_usage_statistics`，
+对应 `host.usage.records.scan`、`host.usage.statistics.query`。返回的读取资源通过
+`host.usage.read.next` 和 `host.usage.read.close` 拉取与关闭，SDK 提供 `UsageReader` 封装。
+这些回调使用空控制参数和二进制 JSON 载荷，查询语义、快照与预算见[用量查询](usage-data.md#完整扫描与分组统计)
+
 ### 基础事实
 
 基础事实接口提供账号分页、Key 分组绑定及额度观测。查询不进入模型执行链，也不触发计费；账号凭据使用[账号接口](#账号与凭据)读取
@@ -521,7 +526,7 @@ restore_and_validate_response(response).await
 仅实现中间件时也可使用轻量的 `MiddlewarePlugin`；需要与管理或其他方法组合时使用
 `PluginBuilder`，两者复用相同的类型化调用与结果合同
 
-用量明细、聚合维护与费用试算使用 `call::services::usage`，输入输出和批量语义见 [用量维护与计价](usage-data.md)
+用量查询、明细与聚合维护、费用试算使用 `call::services::usage`，输入输出和批量语义见 [用量查询、维护与计价](usage-data.md)
 
 ### 扩展的组合边界
 

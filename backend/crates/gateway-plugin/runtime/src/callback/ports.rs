@@ -19,6 +19,7 @@ use super::{
 };
 
 pub(crate) struct PluginCallbackPorts {
+    pub(crate) usage: Arc<super::usage::UsagePorts>,
     pub(crate) services: Arc<services::ServicePorts>,
     pub(crate) http: Arc<HttpClient>,
     pub(crate) accounts: Arc<PluginAccountPortSlot>,
@@ -30,6 +31,7 @@ pub(crate) struct PluginCallbackPorts {
 }
 
 pub(crate) struct PluginCallbacks {
+    pub(super) usage: Arc<super::usage::UsagePorts>,
     pub(crate) registration_body_limit: Option<usize>,
     pub(super) services: Arc<services::ServicePorts>,
     pub(super) service_actor: gateway_admin::model::usage_data::UsageActor,
@@ -63,6 +65,7 @@ impl PluginCallbacks {
     ) -> Result<Self, AdminError> {
         let clients = Arc::new(client::PluginClients::new(ports.clients));
         Ok(Self {
+            usage: ports.usage,
             registration_body_limit: None,
             services: ports.services,
             service_actor: gateway_admin::model::usage_data::UsageActor::Plugin {
