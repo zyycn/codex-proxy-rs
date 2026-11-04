@@ -88,10 +88,10 @@ function resolveDestination(): string {
     </div>
 
     <section
-      class="grid min-h-dvh items-center justify-items-center px-5 py-[clamp(24px,5dvh,64px)] min-[980px]:justify-items-end min-[980px]:pr-[clamp(48px,17.3vw,332px)] max-[560px]:p-4.5"
+      class="grid min-h-dvh items-center justify-items-center px-5 py-16 min-[980px]:justify-items-end min-[980px]:py-[clamp(24px,5dvh,64px)] min-[980px]:pr-[clamp(48px,17.3vw,332px)] max-[560px]:px-4.5"
       :aria-label="t('auth.pageLabel')"
     >
-      <div class="min-h-120 w-[min(440px,100%)]">
+      <div class="w-[min(440px,100%)] min-[980px]:min-h-120">
         <LoginPanel
           v-model:realm="realm"
           v-model:username="username"
