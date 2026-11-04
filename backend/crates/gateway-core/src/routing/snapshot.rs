@@ -701,24 +701,18 @@ impl RuntimeSnapshot {
         self.extensions.as_ref().map_or(&[], |set| set.models())
     }
 
-    pub(crate) fn contributed_profiles_for_scope(
+    pub(crate) fn contributed_models_for_scope(
         &self,
         provider: &ProviderKind,
         scope: &FrozenAccountScope,
-    ) -> Vec<super::PublicModelProfile> {
-        self.contributed_models()
-            .iter()
-            .filter(|model| {
-                &model.provider == provider
-                    && model.accounts.iter().any(|account| {
-                        scope.account_provider(account) == Some(provider)
-                            && scope.allows_model(account, &self.mapped_model(model.id.as_str()))
-                    })
-            })
-            .map(|model| {
-                super::PublicModelProfile::new(model.id.clone(), model.presentation.clone())
-            })
-            .collect()
+    ) -> impl Iterator<Item = &super::ContributedModel> {
+        self.contributed_models().iter().filter(move |model| {
+            &model.provider == provider
+                && model.accounts.iter().any(|account| {
+                    scope.account_provider(account) == Some(provider)
+                        && scope.allows_model(account, &self.mapped_model(model.id.as_str()))
+                })
+        })
     }
 
     fn model_alias(&self, model: &str) -> Option<&super::ContributedModelAlias> {
@@ -1014,13 +1008,21 @@ impl RuntimeSnapshot {
         provider: &ProviderKind,
         scope: &FrozenAccountScope,
     ) -> Vec<super::PublicModelProfile> {
-        self.public_model_profiles_for_provider(provider)
-            .into_iter()
-            .filter(|profile| {
-                self.native_catalog_model_allowed_for_scope(provider, profile.model(), scope)
-            })
-            .chain(self.contributed_profiles_for_scope(provider, scope))
-            .collect()
+        let mut profiles = self.public_model_profiles_for_provider(provider);
+        profiles.retain(|profile| {
+            self.native_catalog_model_allowed_for_scope(provider, profile.model(), scope)
+        });
+        // Provider 画像按公开 ID 排序，追加的插件画像保留注册顺序，不参与二分查找
+        let provider_count = profiles.len();
+        for model in self.contributed_models_for_scope(provider, scope) {
+            match profiles[..provider_count]
+                .binary_search_by(|profile| profile.model().cmp(&model.id))
+            {
+                Ok(index) => profiles[index].presentation.clone_from(&model.presentation),
+                Err(_) => profiles.push(model.public_profile()),
+            }
+        }
+        profiles
     }
 
     /// 已知模型只属于明确声明它的 Provider；未知模型仍可由非完整目录透传

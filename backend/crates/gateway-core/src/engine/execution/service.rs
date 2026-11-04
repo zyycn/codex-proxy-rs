@@ -63,8 +63,8 @@ use crate::{
     provider_ports::{ProviderSessionAffinityPort, ProviderStoreErrorKind},
     routing::{
         FrozenAccountScope, ProviderCatalogUnavailable, ProviderModelContent,
-        ProviderModelDescriptor, PublicModelDescriptor, PublicModelId, PublicModelProfile,
-        RoutingContext, RuntimeSnapshot, UpstreamModelId, request_settings::RequestSettings,
+        PublicModelDescriptor, PublicModelId, RoutingContext, RuntimeSnapshot, UpstreamModelId,
+        request_settings::RequestSettings,
     },
     runtime::{RuntimeSnapshotHandle, RuntimeSnapshotPublisher},
 };
@@ -75,22 +75,6 @@ use std::{
     sync::{Arc, Weak},
     time::{Instant, SystemTime},
 };
-
-/// 将 Provider 目录条目投影为客户端条目并应用当前账号范围的适配画像
-fn client_catalog_descriptor(
-    source: &ProviderModelDescriptor,
-    model: PublicModelId,
-    contributed_profiles: &BTreeMap<PublicModelId, PublicModelProfile>,
-) -> PublicModelDescriptor {
-    match &source.content {
-        ProviderModelContent::Native(_) => source.content.for_public_model(model),
-        ProviderModelContent::Adapted(_) => contributed_profiles
-            .get(&model)
-            .cloned()
-            .map(PublicModelDescriptor::Adapted)
-            .unwrap_or_else(|| source.content.for_public_model(model)),
-    }
-}
 
 pub struct DefaultExecutionService {
     snapshots: RuntimeSnapshotHandle,
@@ -1581,12 +1565,6 @@ impl ExecutionService for DefaultExecutionService {
             let mut seen = BTreeSet::new();
             for kind in scope.provider_kinds() {
                 let provider = providers.get(kind).ok_or(ProviderCatalogUnavailable)?;
-                let contributed_profiles =
-                    client.snapshot.contributed_profiles_for_scope(kind, scope);
-                let contributed_by_model = contributed_profiles
-                    .iter()
-                    .map(|profile| (profile.model().clone(), profile.clone()))
-                    .collect::<BTreeMap<_, _>>();
                 let Some(models) = provider
                     .query_client_model_catalog(scope, protocol, client_version)
                     .await?
@@ -1598,11 +1576,27 @@ impl ExecutionService for DefaultExecutionService {
                     }
                     continue;
                 };
+                let contributions: Vec<_> = client
+                    .snapshot
+                    .contributed_models_for_scope(kind, scope)
+                    .collect();
+                let mut contributed_by_model = BTreeMap::new();
+                if !contributions.is_empty()
+                    && models
+                        .iter()
+                        .any(|entry| matches!(entry.content, ProviderModelContent::Adapted(_)))
+                {
+                    contributed_by_model.extend(
+                        contributions
+                            .iter()
+                            .map(|model| (&model.id, &model.presentation)),
+                    );
+                }
                 // 保留上游顺序；映射只选择完整的目标对象，不能跨账号/模型混拼字段
                 let by_id = models
                     .iter()
                     .map(|entry| (entry.model.as_str(), entry))
-                    .collect::<std::collections::BTreeMap<_, _>>();
+                    .collect::<BTreeMap<_, _>>();
                 for entry in &models {
                     let target = client.snapshot.mapped_model(entry.model.as_str());
                     if !scope.allows_provider_model(kind, &target) {
@@ -1621,11 +1615,11 @@ impl ExecutionService for DefaultExecutionService {
                         continue;
                     }
                     if seen.insert(model.clone()) {
-                        result.push(client_catalog_descriptor(
-                            source,
-                            model,
-                            &contributed_by_model,
-                        ));
+                        result.push(
+                            source
+                                .content
+                                .for_public_model(model, &contributed_by_model),
+                        );
                     }
                 }
                 for model in client.snapshot.public_models_for_provider(kind) {
@@ -1644,17 +1638,17 @@ impl ExecutionService for DefaultExecutionService {
                     }
                     if let Some(source) = by_id.get(target.as_str()) {
                         seen.insert(model.clone());
-                        result.push(client_catalog_descriptor(
-                            source,
-                            model,
-                            &contributed_by_model,
-                        ));
+                        result.push(
+                            source
+                                .content
+                                .for_public_model(model, &contributed_by_model),
+                        );
                     }
                 }
                 // 没有 Provider 目录条目的适配模型仍由当前授权账号贡献
-                for profile in contributed_profiles {
-                    if seen.insert(profile.model().clone()) {
-                        result.push(PublicModelDescriptor::Adapted(profile));
+                for model in contributions {
+                    if seen.insert(model.id.clone()) {
+                        result.push(PublicModelDescriptor::Adapted(model.public_profile()));
                     }
                 }
             }
