@@ -234,7 +234,6 @@
       "notTested": "（未測試）",
       "outboundTunnel": "出站隧道",
       "testExit": "測試出口",
-      "testHelp": "檢查網絡出口，不驗證賬號權限或額度",
       "selectToTest": "選擇直連或受管理的代理後可測試出口",
       "disabledUsesDirect": "代理已禁用，將測試服務器直連出口",
       "connected": "出口連通 · {latencyMs} ms",

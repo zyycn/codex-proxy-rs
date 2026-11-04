@@ -167,14 +167,12 @@
       "currentProxy": "当前代理",
       "noAccounts": "暂无账号",
       "searchAccounts": "搜索待分配账号",
-      "replaceHelp": "所选账号将使用此代理，原有代理会被替换，其他账号设置保持不变",
       "selectPage": "选择当前页可分配账号",
       "selectAccount": "选择账号 {name}",
       "alreadyAssigned": "已使用此代理",
       "selectionLimit": "一次最多分配 {count} 个账号",
       "enableFirst": "启用此代理后可分配账号",
-      "selectedCount": "已选 {count} 个账号",
-      "assignAction": "确认分配",
+      "assignAction": "分配 ({count})",
       "assigned": "已将 {count} 个账号分配至“{name}”"
     }
   }

@@ -234,7 +234,6 @@
       "notTested": "（未测试）",
       "outboundTunnel": "出站隧道",
       "testExit": "测试出口",
-      "testHelp": "检查网络出口，不验证账号权限或额度",
       "selectToTest": "选择直连或受管理的代理后可测试出口",
       "disabledUsesDirect": "代理已禁用，将测试服务器直连出口",
       "connected": "出口连通 · {latencyMs} ms",

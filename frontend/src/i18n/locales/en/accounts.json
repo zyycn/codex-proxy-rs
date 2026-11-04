@@ -234,7 +234,6 @@
       "notTested": "(not tested)",
       "outboundTunnel": "Outbound tunnel",
       "testExit": "Test egress",
-      "testHelp": "Checks network connectivity, not account permissions or quota",
       "selectToTest": "Select a direct connection or managed proxy to test egress",
       "disabledUsesDirect": "The proxy is disabled, so the test uses the server’s direct connection",
       "connected": "Egress connected · {latencyMs} ms",
