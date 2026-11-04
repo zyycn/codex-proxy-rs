@@ -806,11 +806,12 @@ pub struct ProviderQuotaWindow {
     pub provider_data: Option<ProviderDocument>,
 }
 
-/// 账号用量统计周期，按周优先、月次之选择；短期限流窗口不参与统计面板
+/// 账号用量统计周期，完整周/月额度优先，随后使用 Provider 提供的本地滚动日统计
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AccountUsagePeriod {
     Weekly,
     Monthly,
+    Daily,
 }
 
 /// Provider 解释 quota 所需的公共请求事实
@@ -998,16 +999,27 @@ impl ProviderQuota {
         }
     }
 
-    /// 选择账号用量统计的周/月窗口，同时返回展示所需的周期事实
+    /// 选择账号用量统计窗口，同时返回展示所需的周期事实
     ///
-    /// 只使用边界完整、可归属到整个账号的窗口；周优先于月，同周期保持
-    /// Provider 投影顺序
-    /// 没有符合条件的窗口时不回退到短期或历史累计
+    /// 周/月额度使用边界完整、可归属到整个账号的窗口
+    /// 周优先于月，同周期保持 Provider 投影顺序
+    /// Provider 提供的无固定重置点的滚动日统计可独立展示
     #[must_use]
     pub fn usage_window(&self) -> Option<(&ProviderQuotaWindow, AccountUsagePeriod)> {
         self.usage_windows()
             .filter(|(window, _)| window.local_usage.is_some())
             .min_by_key(|(_, period)| *period)
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .find(|window| {
+                        window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide
+                            && window.window_seconds == Some(86_400)
+                            && window.reset_at.is_none()
+                            && window.local_usage.is_some()
+                    })
+                    .map(|window| (window, AccountUsagePeriod::Daily))
+            })
     }
 
     /// 互联账号按最长的 Key 消费周期统计本地用量，池内账号窗口不代表此 Key 的周期
@@ -1025,7 +1037,7 @@ impl ProviderQuota {
             .max_by_key(|window| window.window_seconds)
     }
 
-    /// 统计与预测共用窗口归属规则，避免把模型专属桶或短期限流当作账号容量
+    /// 周/月额度的归属规则，供额度周期统计与容量预测共用
     pub(crate) fn usage_windows(
         &self,
     ) -> impl Iterator<Item = (&ProviderQuotaWindow, AccountUsagePeriod)> {

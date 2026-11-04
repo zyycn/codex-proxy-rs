@@ -463,7 +463,13 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             },
         );
         stored.credential = credential;
-        stored.quota = None;
+        if preserve_profile {
+            if let Some(quota) = &mut stored.quota {
+                quota.expected_revision = next;
+            }
+        } else {
+            stored.quota = None;
+        }
         Ok(CredentialCasOutcome::Updated(next))
     }
 

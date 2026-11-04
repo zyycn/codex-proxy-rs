@@ -489,7 +489,7 @@ impl GrokCredentialRefreshService {
             .upstream_user_id()
             .ok_or(GrokCredentialRepositoryError::InvalidCredentialData(None))?
             .to_owned();
-        let prepared = GrokCredentialAdmin
+        let mut prepared = GrokCredentialAdmin
             .prepare_rotation(&RotateManagedGrokCredential {
                 current,
                 secret: GrokOAuthSecret {
@@ -512,6 +512,7 @@ impl GrokCredentialRefreshService {
                 },
             })
             .map_err(GrokCredentialRefreshError::from)?;
+        prepared.credential = prepared.credential.preserving_profile();
         Ok(prepared.with_refresh_guards(capacity_guard, account_guard))
     }
 

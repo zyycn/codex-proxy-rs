@@ -444,9 +444,12 @@ fn account_page_item(
 }
 
 #[tokio::test]
-async fn account_usage_preserves_cache_read_and_write_counts_and_missing_values() {
+async fn account_usage_preserves_periods_cache_counts_and_missing_values() {
     use chrono::Utc;
     use gateway_admin::model::accounts::AccountUsage;
+    use gateway_admin::model::provider_credentials::{
+        ProviderQuota, ProviderQuotaWindow, QuotaLocalUsageAttribution,
+    };
     use gateway_core::account::{AccountStatusFacts, CredentialState, QuotaState};
 
     let fixture = AdminTestFixture::new().await;
@@ -461,9 +464,19 @@ async fn account_usage_preserves_cache_read_and_write_counts_and_missing_values(
         last_error_reason: None,
         last_error_message: None,
     };
-    *fixture.account.lock().unwrap() = Some(account_page_item(facts, now, "api_key"));
-    for (read, write) in [(Some(13), Some(7)), (None, None)] {
-        *fixture.account_usage.lock().unwrap() = vec![AccountUsage {
+    for (authentication_kind, read, write) in [
+        ("api_key", Some(13), Some(7)),
+        ("api_key", None, None),
+        ("oauth", Some(13), Some(7)),
+        ("oauth", None, None),
+    ] {
+        let mut account = account_page_item(facts.clone(), now, authentication_kind);
+        if authentication_kind == "oauth" {
+            account.account.provider_kind =
+                gateway_core::routing::ProviderKind::new("xai").unwrap();
+        }
+        *fixture.account.lock().unwrap() = Some(account);
+        let local_usage = AccountUsage {
             account_id: "acct_cooldown".to_owned(),
             request_count: 1,
             success_count: 1,
@@ -480,9 +493,33 @@ async fn account_usage_preserves_cache_read_and_write_counts_and_missing_values(
             cost_coverage: Default::default(),
             costs: Vec::new(),
             last_used_at: Some(now),
-            request_buckets: Vec::new(),
+            request_buckets: vec![gateway_admin::model::accounts::AccountRequestBucket {
+                bucket_start: now,
+                request_count: 1,
+            }],
             models: Vec::new(),
-        }];
+        };
+        *fixture.account_usage.lock().unwrap() = vec![local_usage.clone()];
+        *fixture.provider_quota.lock().unwrap() =
+            (authentication_kind == "oauth").then(|| ProviderQuota {
+                windows: vec![ProviderQuotaWindow {
+                    upstream: None,
+                    key: "rolling-day".to_owned(),
+                    group: "shortTerm".to_owned(),
+                    label: "日限额".to_owned(),
+                    limit_id: None,
+                    limit_name: None,
+                    role: None,
+                    local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
+                    window_seconds: Some(86_400),
+                    used_percent: None,
+                    reset_at: None,
+                    limit_reached: false,
+                    local_usage: Some(local_usage),
+                    provider_data: None,
+                }],
+                ..Default::default()
+            });
         let response = admin::accounts::router::<AdminTestState>()
             .with_state(fixture.state())
             .oneshot(
@@ -500,6 +537,27 @@ async fn account_usage_preserves_cache_read_and_write_counts_and_missing_values(
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(status, StatusCode::OK, "{value}");
         let usage = &value["data"]["items"][0]["usage"];
+        assert_eq!(
+            usage["windowKind"],
+            if authentication_kind == "oauth" {
+                "daily"
+            } else {
+                "general"
+            }
+        );
+        assert_eq!(usage["requestCount"], 1);
+        assert_eq!(usage["totalTokens"], 120);
+        if authentication_kind == "oauth" {
+            let window = &value["data"]["items"][0]["quota"]["windows"][0];
+            assert_eq!(window["localUsage"]["requestCount"], 1);
+            assert_eq!(
+                window["localUsage"]["requestBuckets"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
         assert_eq!(usage["cachedInputTokens"], serde_json::json!(read));
         assert_eq!(usage["cacheWriteInputTokens"], serde_json::json!(write));
         assert_eq!(

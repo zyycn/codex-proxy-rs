@@ -7,7 +7,6 @@ use gateway_core::account::OpaqueProviderData;
 
 use gateway_admin::model::{
     PageSize, Revision,
-    accounts::AccountUsage,
     auth::LoginCommand,
     client_keys::ClientKeyPageSize,
     observability::{DecimalAmount, RequestOutcome, TimeRange},
@@ -144,57 +143,6 @@ fn representative_quota_should_prefer_account_wide_window_over_model_specific_wi
     };
 
     assert_eq!(quota.representative_used_percent(), Some(5.0));
-}
-
-#[test]
-fn usage_window_should_not_use_daily_rolling_usage_for_weekly_statistics() {
-    let usage = AccountUsage {
-        account_id: "acct_xai".to_owned(),
-        request_count: 5,
-        success_count: 5,
-        input_tokens: Some(100),
-        output_tokens: Some(20),
-        cached_input_tokens: Some(80),
-        cache_write_input_tokens: Some(0),
-        reasoning_output_tokens: Some(0),
-        image_input_tokens: Some(0),
-        image_output_tokens: Some(0),
-        image_request_count: 0,
-        image_request_failed_count: 0,
-        total_tokens: Some(120),
-        cost_coverage: Default::default(),
-        costs: Vec::new(),
-        last_used_at: Some(Utc::now()),
-        request_buckets: Vec::new(),
-        models: Vec::new(),
-    };
-    let quota = ProviderQuota {
-        upstream: None,
-        credits: None,
-        plan_type: None,
-        observed_at: None,
-        refresh_token_expires_at: None,
-        windows: vec![ProviderQuotaWindow {
-            upstream: None,
-            key: "free-rolling-24h".to_owned(),
-            group: "shortTerm".to_owned(),
-            label: "日限额".to_owned(),
-            limit_id: None,
-            limit_name: None,
-            role: None,
-            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
-            window_seconds: Some(86_400),
-            used_percent: None,
-            reset_at: None,
-            limit_reached: false,
-            local_usage: Some(usage),
-            provider_data: None,
-        }],
-        limit_reached: false,
-        provider_data: None,
-    };
-
-    assert_eq!(quota.usage_window(), None);
 }
 
 #[test]

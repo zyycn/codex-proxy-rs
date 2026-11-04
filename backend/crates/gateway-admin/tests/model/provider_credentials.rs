@@ -66,6 +66,36 @@ fn usage_window_should_not_fallback_to_short_daily_or_incomplete_windows() {
 }
 
 #[test]
+fn usage_window_should_preserve_provider_rolling_daily_statistics() {
+    let mut rolling = usage_window("rolling-day", "shortTerm", 86_400);
+    rolling.reset_at = None;
+    rolling.used_percent = None;
+    let mut quota = usage_quota(vec![rolling.clone()]);
+    assert_eq!(
+        selected_usage_window(&quota),
+        Some(("rolling-day", AccountUsagePeriod::Daily))
+    );
+
+    quota.limit_reached = true;
+    quota.apply_limit_reached_display();
+    assert_eq!(
+        selected_usage_window(&quota),
+        Some(("rolling-day", AccountUsagePeriod::Daily))
+    );
+
+    quota
+        .windows
+        .push(usage_window("week", "shortTerm", 7 * 86_400));
+    assert_eq!(
+        selected_usage_window(&quota),
+        Some(("week", AccountUsagePeriod::Weekly))
+    );
+
+    rolling.local_usage_attribution = QuotaLocalUsageAttribution::Unavailable;
+    assert_eq!(usage_quota(vec![rolling]).usage_window(), None);
+}
+
+#[test]
 fn usage_window_should_preserve_provider_order_for_equal_periods() {
     let quota = usage_quota(vec![
         usage_window("first-week", "shortTerm", 7 * 86_400),

@@ -8,12 +8,12 @@ use std::time::{Duration, SystemTime};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
-use gateway_admin::model::accounts::AccountRecord;
+use gateway_admin::model::accounts::{AccountRecord, AccountUsage};
 use gateway_admin::model::observability::{
     CurrencyCost, DesktopReleaseStatus, ProviderBillingInput,
 };
 use gateway_admin::model::provider_credentials::{
-    CompleteAuthorization, PrepareCredentialImport, PrepareCredentialRefresh,
+    AccountUsagePeriod, CompleteAuthorization, PrepareCredentialImport, PrepareCredentialRefresh,
     PrepareCredentialRotation, ProviderDocument, ProviderExportCredentialInput,
     ProviderQuotaRequest,
 };
@@ -529,15 +529,43 @@ async fn xai_admin_provider_projects_cached_quota_models_and_canonical_export() 
         Some(true)
     );
 
+    let rolling_usage = AccountUsage {
+        account_id: account.id().to_string(),
+        request_count: 5,
+        success_count: 5,
+        input_tokens: Some(100),
+        output_tokens: Some(20),
+        cached_input_tokens: Some(80),
+        cache_write_input_tokens: None,
+        reasoning_output_tokens: None,
+        image_input_tokens: None,
+        image_output_tokens: None,
+        image_request_count: 0,
+        image_request_failed_count: 0,
+        total_tokens: Some(120),
+        cost_coverage: Default::default(),
+        costs: Vec::new(),
+        last_used_at: Some(Utc::now()),
+        request_buckets: Vec::new(),
+        models: Vec::new(),
+    };
     let quota = admin
         .quota(ProviderQuotaRequest {
             account_id: account.id().clone(),
             refresh: false,
-            rolling_usage: None,
+            rolling_usage: Some(rolling_usage.clone()),
         })
         .await
         .expect("cached quota");
-    assert!(quota.windows.is_empty());
+    assert_eq!(quota.windows.len(), 1);
+    assert!(quota.observed_at.is_none());
+    assert!(quota.plan_type.is_none());
+    assert_eq!(quota.windows[0].window_seconds, Some(86_400));
+    assert_eq!(quota.windows[0].local_usage.as_ref(), Some(&rolling_usage));
+    assert_eq!(
+        quota.usage_window().map(|(_, period)| period),
+        Some(AccountUsagePeriod::Daily)
+    );
     store
         .compare_and_swap_quota(gateway_core::account::QuotaObservation {
             expected_connection: None,

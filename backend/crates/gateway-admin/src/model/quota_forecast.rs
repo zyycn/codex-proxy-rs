@@ -62,14 +62,15 @@ pub fn account_quota_forecasts(
     now: DateTime<Utc>,
     samples: &[QuotaForecastSample],
 ) -> [AccountQuotaForecast; 2] {
-    [AccountUsagePeriod::Weekly, AccountUsagePeriod::Monthly].map(|period| {
+    [
+        (AccountUsagePeriod::Weekly, 7 * DAY_SECONDS),
+        (AccountUsagePeriod::Monthly, 30 * DAY_SECONDS),
+    ]
+    .map(|(period, target_seconds)| {
         let selected = quota_forecast_source_window(quota, period);
         let mut forecast = AccountQuotaForecast {
             period,
-            target_seconds: match period {
-                AccountUsagePeriod::Weekly => 7 * DAY_SECONDS,
-                AccountUsagePeriod::Monthly => 30 * DAY_SECONDS,
-            },
+            target_seconds,
             extrapolated: false,
             source: None,
             unavailable_reason: Some("缺少周/月额度窗口，请刷新账号额度"),

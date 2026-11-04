@@ -193,6 +193,7 @@ fn quota_forecast_view(
         period: match forecast.period {
             AccountUsagePeriod::Weekly => "weekly",
             AccountUsagePeriod::Monthly => "monthly",
+            AccountUsagePeriod::Daily => "daily",
         },
         target_days: forecast.target_seconds as f64 / 86_400.0,
         extrapolated: forecast.extrapolated,
@@ -389,6 +390,7 @@ pub(super) fn account_usage_view(
     };
     AccountUsageView {
         window_kind: match period {
+            Some(AccountUsagePeriod::Daily) => AccountUsageWindowKind::Daily,
             Some(AccountUsagePeriod::Weekly) => AccountUsageWindowKind::Weekly,
             Some(AccountUsagePeriod::Monthly) => AccountUsageWindowKind::Monthly,
             None => AccountUsageWindowKind::Quota,
