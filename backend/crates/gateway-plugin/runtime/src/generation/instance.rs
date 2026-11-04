@@ -192,6 +192,7 @@ impl PluginRuntime {
             private_state.clone(),
             PluginCallbackPorts {
                 services: self.service_ports.clone(),
+                usage: self.usage_ports.clone(),
                 http: self.http.clone(),
                 accounts: self.account_ports.clone(),
                 keys: self.client_key_ports.clone(),

@@ -26,6 +26,7 @@ mod resources;
 mod scope;
 pub(crate) mod services;
 pub(crate) mod upstream;
+pub(crate) mod usage;
 pub(crate) mod websocket_middleware;
 
 pub(crate) use accounts::PluginAccountPortSlot;

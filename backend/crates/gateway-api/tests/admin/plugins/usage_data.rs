@@ -3,6 +3,14 @@ use super::TestPluginPorts;
 use gateway_admin::{model::usage_data::*, ports::usage_data::*};
 #[async_trait::async_trait]
 impl UsageDataStore for TestPluginPorts {
+    async fn open_read(
+        &self,
+        _: UsageReadQuery,
+        _: gateway_core::lifecycle::CancellationToken,
+    ) -> UsageDataResult<Box<dyn UsageReadSession>> {
+        Err(UsageDataError::unavailable("test usage reader unavailable"))
+    }
+
     async fn get_record(&self, _: GetUsageRecord) -> UsageDataResult<UsageRecord> {
         unreachable!("unexpected usage call")
     }

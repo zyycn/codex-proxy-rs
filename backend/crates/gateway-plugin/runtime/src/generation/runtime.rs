@@ -51,6 +51,7 @@ pub struct PluginRuntimeConfig {
 
 /// 只索引有主人的候选；当前代次仅由 Core 的发布视图持有
 pub struct PluginRuntime {
+    pub(super) usage_ports: Arc<crate::callback::usage::UsagePorts>,
     pub(super) request_limits: Arc<crate::callback::request_limits::RequestLimits>,
     pub(super) service_ports: Arc<crate::callback::services::ServicePorts>,
     pub(super) store: Arc<dyn PluginStore>,
@@ -91,6 +92,7 @@ impl PluginRuntime {
     ) -> Self {
         let restart_circuit = config.restart_circuit;
         Self {
+            usage_ports: Arc::default(),
             store,
             state,
             log_slots: Arc::new(Semaphore::new(
@@ -154,6 +156,13 @@ impl PluginRuntime {
         registry: &Arc<gateway_admin::public_service::Registry>,
     ) -> Result<(), AdminError> {
         self.service_ports.bind(registry)
+    }
+
+    pub fn bind_usage_queries(
+        &self,
+        service: &Arc<dyn gateway_admin::UsageDataService>,
+    ) -> Result<(), AdminError> {
+        self.usage_ports.bind(service)
     }
 
     pub fn bind_account_ports(

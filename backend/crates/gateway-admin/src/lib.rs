@@ -288,8 +288,8 @@ impl AdminServices {
     }
 
     #[must_use]
-    pub fn usage_data(&self) -> &dyn UsageDataService {
-        self.usage_data.as_ref()
+    pub fn usage_data(&self) -> Arc<dyn UsageDataService> {
+        self.usage_data.clone()
     }
 
     #[must_use]

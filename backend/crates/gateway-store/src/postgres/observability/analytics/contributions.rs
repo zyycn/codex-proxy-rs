@@ -188,38 +188,39 @@ impl AnalyticsSnapshot<'_> {
                 .map(|v| v.0)
                 .unwrap_or_default();
             for (currency, value) in costs {
-                let current = state
-                    .costs
-                    .get(&currency)
-                    .map(String::as_str)
-                    .unwrap_or("0");
-                let current = current
-                    .parse::<gateway_core::metering::Decimal>()
-                    .map_err(|_| invalid("native cost exceeds decimal range"))?;
-                let magnitude = value
-                    .strip_prefix('-')
-                    .unwrap_or(&value)
-                    .parse::<gateway_core::metering::Decimal>()
-                    .map_err(|_| invalid("aggregate cost exceeds decimal range"))?;
-                let scaled = if value.starts_with('-') {
-                    current.scaled().checked_sub(magnitude.scaled())
-                } else {
-                    current.scaled().checked_add(magnitude.scaled())
-                }
-                .ok_or_else(|| invalid("aggregate cost is outside native result range"))?;
-                let amount = gateway_core::metering::Decimal::from_scaled(scaled)
-                    .map_err(|_| invalid("aggregate cost exceeds native result range"))?;
-                state.costs.insert(currency, amount.canonical());
+                apply_cost(state, &currency, &value)?;
             }
         }
         Ok(())
     }
 }
-fn apply_count(state: &mut MetricState, name: &str, delta: i128) -> StoreResult<()> {
+pub(super) fn apply_count(state: &mut MetricState, name: &str, delta: i128) -> StoreResult<()> {
     let total = i128::from(state.count(name))
         .checked_add(delta)
         .and_then(|v| u64::try_from(v).ok())
         .ok_or_else(|| invalid("aggregate counter is outside native result range"))?;
     state.counts.insert(name.into(), total);
+    Ok(())
+}
+
+pub(super) fn apply_cost(state: &mut MetricState, currency: &str, value: &str) -> StoreResult<()> {
+    let current = state.costs.get(currency).map(String::as_str).unwrap_or("0");
+    let current = current
+        .parse::<gateway_core::metering::Decimal>()
+        .map_err(|_| invalid("native cost exceeds decimal range"))?;
+    let magnitude = value
+        .strip_prefix('-')
+        .unwrap_or(value)
+        .parse::<gateway_core::metering::Decimal>()
+        .map_err(|_| invalid("aggregate cost exceeds decimal range"))?;
+    let scaled = if value.starts_with('-') {
+        current.scaled().checked_sub(magnitude.scaled())
+    } else {
+        current.scaled().checked_add(magnitude.scaled())
+    }
+    .ok_or_else(|| invalid("aggregate cost is outside native result range"))?;
+    let amount = gateway_core::metering::Decimal::from_scaled(scaled)
+        .map_err(|_| invalid("aggregate cost exceeds native result range"))?;
+    state.costs.insert(currency.to_owned(), amount.canonical());
     Ok(())
 }

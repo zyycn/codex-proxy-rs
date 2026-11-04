@@ -92,6 +92,15 @@ pub(super) async fn list(
     Ok(UsageRecordPage { items, next_cursor })
 }
 fn decode(row: PgRow) -> StoreResult<UsageRecord> {
+    Ok(UsageRecord {
+        id: row.try_get("id").map_err(db_error)?,
+        data: decode_data(&row)?,
+        billing_snapshot: row.try_get("billing_snapshot_json").map_err(db_error)?,
+        provider_observation: row.try_get("provider_observation_json").map_err(db_error)?,
+    })
+}
+
+pub(super) fn decode_data(row: &PgRow) -> StoreResult<UsageRecordData> {
     let token = |name: &str| -> StoreResult<Option<UsageCount>> {
         row.try_get::<Option<i64>, _>(name)
             .map_err(db_error)?
@@ -128,44 +137,40 @@ fn decode(row: PgRow) -> StoreResult<UsageRecord> {
         },
         _ => UsageCost::Unavailable,
     };
-    Ok(UsageRecord {
-        id: row.try_get("id").map_err(db_error)?,
-        data: UsageRecordData {
-            client_key_ref: row.try_get("client_api_key_ref").map_err(db_error)?,
-            provider: row.try_get("provider_kind").map_err(db_error)?,
-            account_ref: row.try_get("provider_account_ref").map_err(db_error)?,
-            requested_model: row.try_get("requested_model_id").map_err(db_error)?,
-            model: row.try_get("upstream_model_id").map_err(db_error)?,
-            protocol: row.try_get("protocol").map_err(db_error)?,
-            operation: row.try_get("operation").map_err(db_error)?,
-            endpoint: row.try_get("endpoint").map_err(db_error)?,
-            client_transport: row.try_get("client_transport").map_err(db_error)?,
-            service_tier: row.try_get("service_tier").map_err(db_error)?,
-            started_at_ms: row
-                .try_get::<DateTime<Utc>, _>("started_at")
-                .map_err(db_error)?
-                .timestamp_millis(),
-            completed_at_ms: row
-                .try_get::<Option<DateTime<Utc>>, _>("completed_at")
-                .map_err(db_error)?
-                .map(|v| v.timestamp_millis()),
-            outcome,
-            tokens: UsageTokens {
-                input_tokens: token("input_tokens")?,
-                output_tokens: token("output_tokens")?,
-                cached_input_tokens: token("cached_input_tokens")?,
-                cache_write_input_tokens: token("cache_write_input_tokens")?,
-                reasoning_output_tokens: token("reasoning_output_tokens")?,
-                image_input_tokens: token("image_input_tokens")?,
-                image_output_tokens: token("image_output_tokens")?,
-                total_tokens: token("total_tokens")?,
-            },
-            cost,
+    Ok(UsageRecordData {
+        client_key_ref: row.try_get("client_api_key_ref").map_err(db_error)?,
+        provider: row.try_get("provider_kind").map_err(db_error)?,
+        account_ref: row.try_get("provider_account_ref").map_err(db_error)?,
+        requested_model: row.try_get("requested_model_id").map_err(db_error)?,
+        model: row.try_get("upstream_model_id").map_err(db_error)?,
+        protocol: row.try_get("protocol").map_err(db_error)?,
+        operation: row.try_get("operation").map_err(db_error)?,
+        endpoint: row.try_get("endpoint").map_err(db_error)?,
+        client_transport: row.try_get("client_transport").map_err(db_error)?,
+        service_tier: row.try_get("service_tier").map_err(db_error)?,
+        started_at_ms: row
+            .try_get::<DateTime<Utc>, _>("started_at")
+            .map_err(db_error)?
+            .timestamp_millis(),
+        completed_at_ms: row
+            .try_get::<Option<DateTime<Utc>>, _>("completed_at")
+            .map_err(db_error)?
+            .map(|v| v.timestamp_millis()),
+        outcome,
+        tokens: UsageTokens {
+            input_tokens: token("input_tokens")?,
+            output_tokens: token("output_tokens")?,
+            cached_input_tokens: token("cached_input_tokens")?,
+            cache_write_input_tokens: token("cache_write_input_tokens")?,
+            reasoning_output_tokens: token("reasoning_output_tokens")?,
+            image_input_tokens: token("image_input_tokens")?,
+            image_output_tokens: token("image_output_tokens")?,
+            total_tokens: token("total_tokens")?,
         },
-        billing_snapshot: row.try_get("billing_snapshot_json").map_err(db_error)?,
-        provider_observation: row.try_get("provider_observation_json").map_err(db_error)?,
+        cost,
     })
 }
+
 fn cost_parts(cost: &UsageCost) -> (&str, Option<&str>, Option<&str>) {
     match cost {
         UsageCost::Unavailable => ("unavailable", None, None),

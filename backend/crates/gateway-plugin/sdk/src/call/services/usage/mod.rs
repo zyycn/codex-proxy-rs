@@ -20,3 +20,11 @@ pub use operations::*;
 
 mod aggregate;
 pub use aggregate::*;
+
+mod read;
+pub use read::*;
+
+pub const RECORDS_SCAN: &str = "host.usage.records.scan";
+pub const STATISTICS_QUERY: &str = "host.usage.statistics.query";
+pub const READ_NEXT: &str = "host.usage.read.next";
+pub const READ_CLOSE: &str = "host.usage.read.close";

@@ -15,6 +15,11 @@ use std::sync::Arc;
 
 #[async_trait]
 pub trait UsageDataService: Send + Sync {
+    async fn open_read(
+        &self,
+        query: UsageReadQuery,
+        cancellation: gateway_core::lifecycle::CancellationToken,
+    ) -> UsageDataResult<Box<dyn UsageReadSession>>;
     async fn list_aggregates(
         &self,
         request: ListUsageAggregates,
@@ -58,6 +63,21 @@ impl DefaultUsageDataService {
 
 #[async_trait]
 impl UsageDataService for DefaultUsageDataService {
+    async fn open_read(
+        &self,
+        query: UsageReadQuery,
+        cancellation: gateway_core::lifecycle::CancellationToken,
+    ) -> UsageDataResult<Box<dyn UsageReadSession>> {
+        let filter = query.filter();
+        validation::query(&filter.records, None, None)?;
+        if let Some(group) = &filter.routing_group_ref {
+            validation::text(group, 128)?;
+        }
+        if !(1..=USAGE_READ_MAX_BATCH_ROWS).contains(&query.batch_size()) {
+            return Err(UsageDataError::invalid("读取批次条数应为 1 到 1024"));
+        }
+        self.store.open_read(query, cancellation).await
+    }
     async fn list_aggregates(
         &self,
         request: ListUsageAggregates,

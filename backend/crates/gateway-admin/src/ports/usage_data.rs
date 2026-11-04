@@ -2,6 +2,14 @@
 
 use crate::model::{auth::AdminAuditEvent, usage_data::*};
 use async_trait::async_trait;
+use gateway_core::lifecycle::CancellationToken;
+
+#[async_trait]
+pub trait UsageReadSession: Send {
+    async fn next_batch(&mut self) -> UsageDataResult<UsageReadBatch>;
+    fn is_finished(&self) -> bool;
+    async fn close(&mut self);
+}
 
 pub struct StoredUsageWrite {
     pub changes: Vec<(UsageRecordChange, AdminAuditEvent)>,
@@ -13,6 +21,11 @@ pub struct StoredAggregateWrite {
 
 #[async_trait]
 pub trait UsageDataStore: Send + Sync {
+    async fn open_read(
+        &self,
+        query: UsageReadQuery,
+        cancellation: CancellationToken,
+    ) -> UsageDataResult<Box<dyn UsageReadSession>>;
     async fn list_aggregates(
         &self,
         request: ListUsageAggregates,

@@ -160,6 +160,10 @@ pub async fn run() -> Result<(), BootstrapError> {
         plugin_runtime,
         plugin_runtime.bind_services(&admin.services().public_services())
     );
+    or_shutdown!(
+        plugin_runtime,
+        plugin_runtime.bind_usage_queries(&admin.services().usage_data())
+    );
 
     let mut plan = store.take_worker_contributions();
     plan.push(analytics_worker);

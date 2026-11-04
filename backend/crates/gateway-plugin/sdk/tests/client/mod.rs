@@ -5,3 +5,4 @@ mod http;
 mod pending_read;
 mod plugin;
 mod session;
+mod usage;

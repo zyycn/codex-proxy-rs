@@ -1,5 +1,7 @@
 //! 通用用量维护的原生统计、重试、原子性、重建与资源预算验收
 
+mod read;
+
 use super::{TestDatabase, drain_analytics, observability_query_budget, observability_repository};
 use chrono::{DateTime, TimeDelta, Utc};
 use gateway_admin::{

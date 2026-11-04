@@ -11,7 +11,9 @@ mod incremental;
 mod metrics;
 mod query;
 mod reset;
+mod usage_query;
 mod worker;
+pub(crate) use usage_query::{declare_usage_statistics, decode_usage_statistics};
 
 pub(crate) use query::*;
 pub use worker::{AnalyticsMaintenance, AnalyticsStatus, PgRequestAnalyticsRepository};
@@ -33,7 +35,7 @@ pub(crate) async fn backup_projection_ready(
         .map_err(|error| postgres_unavailable("check backup analytics readiness", error))
 }
 
-pub(super) async fn begin_snapshot(
+pub(crate) async fn begin_snapshot(
     connection: &mut ObservabilityConnection,
 ) -> StoreResult<sqlx::Transaction<'_, Postgres>> {
     let query_timeout = connection.query_timeout();
