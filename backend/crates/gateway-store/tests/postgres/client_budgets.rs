@@ -7,8 +7,8 @@ use gateway_admin::{
     model::{
         MutationActor, MutationContext, Revision,
         client_keys::{
-            ClientKeyBudgetMutationOrigin, ClientKeyBudgetPeriod, ResetClientKeyBudget,
-            UpdateClientKey, UpdateClientKeyBudgetLimits,
+            ClientKeyBudgetMutationOrigin, ClientKeyBudgetPeriod, DeleteClientKey, NewClientKey,
+            ResetClientKeyBudget, UpdateClientKey, UpdateClientKeyBudgetLimits,
         },
         plugin_resources::PluginResourceOwner,
         plugins::{PluginSource, instances::PluginInstance},
@@ -129,51 +129,83 @@ async fn open_budget_windows_only_write_for_new_charges() {
 }
 
 #[tokio::test]
-async fn indexed_charge_cleanup_keeps_other_keys_and_rolls_back_with_key_deletion() {
-    let Some(database) = TestDatabase::create("budget_key_cleanup").await else {
+async fn deleting_a_key_preserves_its_ledger_and_settles_inflight_requests_once() {
+    let Some(database) = TestDatabase::create("deleted_key_ledger").await else {
         return;
     };
-    let store = PgClientBudgetStore::new(database.pool.clone());
-    for key in ["deleted", "retained"] {
-        seed(&database, key, "0", "0").await;
-        store.settle(charge(key, key, "1.25")).await.unwrap();
-    }
-    let mut tx = database.pool.begin().await.unwrap();
-    sqlx::query("delete from client_api_keys where id = 'deleted'")
-        .execute(&mut *tx)
+    let budgets = PgClientBudgetStore::new(database.pool.clone());
+    let keys = PgAdminClientKeyStore::new(database.pool.clone());
+    seed(&database, "original", "0", "0").await;
+    budgets.admit(key_id("original")).await.unwrap();
+    budgets
+        .settle(charge("original", "before", "1.25"))
         .await
         .unwrap();
-    let remaining: Vec<String> = sqlx::query_scalar(
-        "select client_api_key_id from client_api_key_charge_events order by client_api_key_id",
+    budgets.admit(key_id("original")).await.unwrap();
+    keys.delete_client_key(
+        DeleteClientKey {
+            id: key_id("original"),
+        },
+        &context(),
     )
-    .fetch_all(&mut *tx)
     .await
     .unwrap();
-    assert_eq!(remaining, ["retained"]);
-    tx.rollback().await.unwrap();
-    let restored: i64 = sqlx::query_scalar("select count(*) from client_api_key_charge_events")
-        .fetch_one(&database.pool)
-        .await
-        .unwrap();
-    assert_eq!(restored, 2);
-    sqlx::query("delete from client_api_keys where id = 'deleted'")
-        .execute(&database.pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        status(&database, "retained")
+    assert!(
+        keys.reveal_client_key(&key_id("original"))
             .await
-            .daily_used_usd
-            .canonical(),
-        "1.25"
+            .unwrap()
+            .is_none()
     );
-    let remaining: Vec<String> = sqlx::query_scalar(
-        "select client_api_key_id from client_api_key_charge_events order by client_api_key_id",
+    assert_eq!(
+        budgets.admit(key_id("original")).await.unwrap_err().kind(),
+        GatewayErrorKind::Unauthorized
+    );
+
+    keys.create_client_key(
+        NewClientKey {
+            id: key_id("replacement"),
+            name: "original".into(),
+            label: None,
+            group_ids: Vec::new(),
+            peer_sharing: Default::default(),
+            request_profile_overrides: Default::default(),
+            limits: RateLimits::unlimited(),
+            budget: Default::default(),
+            plaintext: "synthetic-replacement-key".into(),
+        },
+        &context(),
+    )
+    .await
+    .unwrap();
+    let late = charge("original", "late", "2.50");
+    let (first, retry) = tokio::join!(budgets.settle(late.clone()), budgets.settle(late));
+    first.unwrap();
+    retry.unwrap();
+    let events: Vec<(String, String)> = sqlx::query_as(
+        "select request_id, trim_scale(amount_usd)::text from client_api_key_charge_events
+         where client_api_key_id='original' order by request_id",
     )
     .fetch_all(&database.pool)
     .await
     .unwrap();
-    assert_eq!(remaining, ["retained"]);
+    assert_eq!(
+        events,
+        [
+            ("req_before".into(), "1.25".into()),
+            ("req_late".into(), "2.5".into())
+        ]
+    );
+    let totals: (String, String) = sqlx::query_as(
+        "select trim_scale(daily_used_usd)::text, trim_scale(weekly_used_usd)::text
+         from client_api_key_budget_windows where client_api_key_id='original'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(totals, ("3.75".into(), "3.75".into()));
+    let replacement = status(&database, "replacement").await;
+    assert_eq!(replacement.daily_used_usd.canonical(), "0");
+    assert_eq!(replacement.weekly_used_usd.canonical(), "0");
     database.close().await;
 }
 

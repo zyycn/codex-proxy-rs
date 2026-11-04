@@ -297,16 +297,7 @@ impl PgClientBudgetStore {
             .begin()
             .await
             .map_err(|source| ClientBudgetError(Some(source.into())))?;
-        // 与窗口开启和重置统一先锁 Key，再写窗口和费用
-        let key = sqlx::query_scalar::<_, String>(
-            "select id from client_api_keys where id = $1 for update",
-        )
-        .bind(first.key_id.as_str())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|source| ClientBudgetError(Some(source.into())))?;
-        let Some(key) = key else { return Ok(()) }; // 删除 Key 时也会删除其费用记录
-        settle_in_transaction(&mut tx, &key, charges, self.timezone)
+        settle_in_transaction(&mut tx, first.key_id.as_str(), charges, self.timezone)
             .await
             .map_err(|source| ClientBudgetError(Some(source.into())))?;
         tx.commit()
@@ -321,6 +312,22 @@ async fn settle_in_transaction(
     charges: &[ClientBudgetCharge],
     timezone: gateway_core::time::DeploymentTimeZone,
 ) -> Result<(), sqlx::Error> {
+    // 凭据存在时与准入和重置共用 Key 行锁；删除后由准入已开启的窗口串行化迟到结算
+    let active = sqlx::query("select 1 from client_api_keys where id = $1 for update")
+        .bind(key)
+        .fetch_optional(&mut **tx)
+        .await?;
+    if active.is_none()
+        && sqlx::query(
+            "select 1 from client_api_key_budget_windows where client_api_key_id = $1 for update",
+        )
+        .bind(key)
+        .fetch_optional(&mut **tx)
+        .await?
+        .is_none()
+    {
+        return Ok(());
+    }
     let ids = charges
         .iter()
         .map(|charge| charge.request_id.as_str())
@@ -397,7 +404,7 @@ async fn advance_windows(
     let weekly_end = timezone
         .days_after(now, 7)
         .ok_or_else(|| sqlx::Error::Protocol("invalid budget week end".to_owned()))?;
-    // 调用方持有 Key 行锁；未滚动的窗口无需产生新元组与 WAL
+    // 未滚动的窗口无需产生新元组与 WAL
     sqlx::query("insert into client_api_key_budget_windows
         (client_api_key_id, daily_start, daily_end, weekly_start, weekly_end)
         select $1, $4, $5, $4, $6
