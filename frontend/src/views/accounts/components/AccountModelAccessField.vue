@@ -9,6 +9,7 @@ import { useI18n } from 'vue-i18n'
 import { getAccountModels, refreshAccountModels } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
 import { accountModelAccessError, accountModelIdError } from '../utils/modelAccess'
+import AccountModelCleanupPopover from './AccountModelCleanupPopover.vue'
 
 const props = withDefaults(defineProps<{
   accountId?: string
@@ -73,21 +74,44 @@ const mode = computed({
 })
 const restricted = computed(() => mode.value === 'allowlist' || mode.value === 'denylist')
 const canAdd = computed(() => Boolean(search.value.trim()) && !model.value?.models.includes(search.value.trim()))
+const catalogReady = computed(() => catalog.value !== undefined && !loading.value && !error.value)
+const missingModels = computed(() => {
+  // 空目录和失败不能作为批量清理依据，目录缺失也不等于独立端点或适配模型无效
+  if (mode.value !== 'allowlist' || !catalogReady.value || !catalog.value?.length)
+    return []
+  const ids = new Set(catalog.value.map(item => item.id))
+  return (model.value?.models ?? []).filter(id => !ids.has(id))
+})
 const models = computed(() => {
-  const catalogReady = catalog.value !== undefined && !loading.value && !error.value
   const entries = new Map((catalog.value ?? []).map(item => [
     item.id,
     { ...item, unavailable: false },
   ]))
   for (const id of model.value?.models ?? []) {
     if (!entries.has(id))
-      entries.set(id, { id, label: id, unavailable: catalogReady })
+      entries.set(id, { id, label: id, unavailable: catalogReady.value })
   }
   const query = search.value.trim().toLowerCase()
   return [
     ...entries.values(),
   ].filter(item => `${item.id} ${item.label}`.toLowerCase().includes(query))
 })
+
+function removeMissingModels(ids: string[]) {
+  if (props.disabled || model.value?.mode !== 'allowlist')
+    return
+  const selected = new Set(ids)
+  const removed = new Set(missingModels.value.filter(id => selected.has(id)))
+  if (!removed.size)
+    return
+  const next = {
+    ...model.value,
+    models: model.value.models.filter(id => !removed.has(id)),
+  }
+  inputError.value = accountModelAccessError(next) ?? ''
+  if (!inputError.value)
+    model.value = next
+}
 
 function select(id: string, selected: boolean) {
   if (props.disabled || !model.value || !restricted.value)
@@ -207,12 +231,15 @@ watch(search, () => {
       </template>
       <div class="flex min-w-0 items-center justify-between gap-2">
         <ZSegmented v-model="mode" class="w-80 min-w-0 max-w-full" :aria-label="t('accounts.modelAccess.modelRestrictionMode')" :options="modes" :disabled="disabled" />
-        <ZIconButton v-if="restricted && accountId" :aria-label="t('accounts.modelAccess.refreshModel')" variant="plain" :loading="loading" :disabled="disabled" @click="load(true)">
-          <template #loading>
-            <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
-          </template>
-          <RefreshCw class="size-3.5" />
-        </ZIconButton>
+        <div v-if="restricted && accountId" class="flex shrink-0 items-center gap-1">
+          <AccountModelCleanupPopover v-if="mode === 'allowlist'" :models="missingModels" :disabled="disabled || !missingModels.length" @remove="removeMissingModels" />
+          <ZIconButton :aria-label="t('accounts.modelAccess.refreshModel')" variant="plain" :loading="loading" :disabled="disabled" @click="load(true)">
+            <template #loading>
+              <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
+            </template>
+            <RefreshCw class="size-3.5" />
+          </ZIconButton>
+        </div>
       </div>
     </ZFormItem>
     <template v-if="restricted">

@@ -203,7 +203,12 @@
       "selectOrAddAtLeastOneModel": "請至少選擇或添加一個模型",
       "configureUpToModels": "最多配置 256 個模型",
       "invalidModelId": "請使用有效的精確模型 ID，不支持通配符",
-      "enterValidExactModelIdUpTo": "請輸入有效的精確模型 ID，最多 256 字節，不支持通配符"
+      "enterValidExactModelIdUpTo": "請輸入有效的精確模型 ID，最多 256 字節，不支持通配符",
+      "cleanupModels": "清理未列出模型",
+      "cleanupCatalogHint": "目錄可能不包含圖像、搜尋或外掛模型，僅勾選確定要移除的項目",
+      "cleanupSelection": "選擇要從白名單移除的模型",
+      "cleanupSaveHint": "僅修改目前表單，儲存帳號後生效",
+      "cleanupSelected": "移除已選 {count} 項"
     },
     "notes": {
       "viewAccountNotes": "查看賬號備註",

@@ -203,7 +203,12 @@
       "selectOrAddAtLeastOneModel": "Please select or add at least one model",
       "configureUpToModels": "Configure up to 256 models",
       "invalidModelId": "Enter an exact model ID, wildcards are not supported",
-      "enterValidExactModelIdUpTo": "Please enter a valid exact model ID, up to 256 bytes, no wildcards are supported"
+      "enterValidExactModelIdUpTo": "Please enter a valid exact model ID, up to 256 bytes, no wildcards are supported",
+      "cleanupModels": "Clean up unlisted models",
+      "cleanupCatalogHint": "The catalog may omit image, search or plugin models — select only entries you want to remove",
+      "cleanupSelection": "Select models to remove from the allowlist",
+      "cleanupSaveHint": "Changes apply after you save the account",
+      "cleanupSelected": "Remove selected ({count})"
     },
     "notes": {
       "viewAccountNotes": "View account notes",

@@ -203,7 +203,12 @@
       "selectOrAddAtLeastOneModel": "请至少选择或添加一个模型",
       "configureUpToModels": "最多配置 256 个模型",
       "invalidModelId": "请使用有效的精确模型 ID，不支持通配符",
-      "enterValidExactModelIdUpTo": "请输入有效的精确模型 ID，最多 256 字节，不支持通配符"
+      "enterValidExactModelIdUpTo": "请输入有效的精确模型 ID，最多 256 字节，不支持通配符",
+      "cleanupModels": "清理未列出模型",
+      "cleanupCatalogHint": "目录可能不包含图像、搜索或插件模型，仅勾选确定要移除的项",
+      "cleanupSelection": "选择要从白名单移除的模型",
+      "cleanupSaveHint": "只修改当前表单，保存账号后生效",
+      "cleanupSelected": "移除已选 {count} 项"
     },
     "notes": {
       "viewAccountNotes": "查看账号备注",
