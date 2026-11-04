@@ -471,6 +471,17 @@ async fn rollback_should_restore_binary_web_and_version_state() {
                 & 0o777,
             0o555
         );
+        for name in ["plugin-release-manifest.json", "new-plugin.tar.gz"] {
+            assert_eq!(
+                fs::metadata(fixture.official().join(name))
+                    .expect("official plugin file")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o444,
+                "{name}"
+            );
+        }
     }
     service
         .rollback(Arc::new(AllowingUpdatePreflight))
