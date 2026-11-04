@@ -22,6 +22,7 @@ const { t } = useI18n({ useScope: 'global' })
 
 const model = defineModel<AccountModelAccess | undefined>({ required: true })
 const formItem = useTemplateRef<InstanceType<typeof ZFormItem>>('modelAccessItem')
+const refreshButton = useTemplateRef<InstanceType<typeof ZIconButton>>('refreshButton')
 watch(model, () => {
   void formItem.value?.validate('change').catch(() => undefined)
 })
@@ -111,6 +112,12 @@ function removeMissingModels(ids: string[]) {
   inputError.value = accountModelAccessError(next) ?? ''
   if (!inputError.value)
     model.value = next
+}
+
+function restoreCleanupFocus() {
+  // 最后一项清理后入口禁用，改回相邻刷新按钮，避免焦点落到页面背景
+  if (!missingModels.value.length && document.activeElement === document.body)
+    refreshButton.value?.focus()
 }
 
 function select(id: string, selected: boolean) {
@@ -232,8 +239,8 @@ watch(search, () => {
       <div class="flex min-w-0 items-center justify-between gap-2">
         <ZSegmented v-model="mode" class="w-80 min-w-0 max-w-full" :aria-label="t('accounts.modelAccess.modelRestrictionMode')" :options="modes" :disabled="disabled" />
         <div v-if="restricted && accountId" class="flex shrink-0 items-center gap-1">
-          <AccountModelCleanupPopover v-if="mode === 'allowlist'" :models="missingModels" :disabled="disabled || !missingModels.length" @remove="removeMissingModels" />
-          <ZIconButton :aria-label="t('accounts.modelAccess.refreshModel')" variant="plain" :loading="loading" :disabled="disabled" @click="load(true)">
+          <AccountModelCleanupPopover v-if="mode === 'allowlist'" :models="missingModels" :model-count="model?.models.length ?? 0" :disabled="disabled || !missingModels.length" @remove="removeMissingModels" @closed="restoreCleanupFocus" />
+          <ZIconButton ref="refreshButton" :aria-label="t('accounts.modelAccess.refreshModel')" variant="plain" :loading="loading" :disabled="disabled" @click="load(true)">
             <template #loading>
               <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
             </template>

@@ -196,7 +196,7 @@
       "searchOrEnterIdAndPressEnter": "Search or enter ID and press Enter to add",
       "selectModel": "Select model",
       "notInCurrentModelCatalog": "{id} (not in the current model catalog)",
-      "modelCatalogMissingHint": "The current upstream catalog does not list this model, your selection has been kept",
+      "modelCatalogMissingHint": "The current upstream catalog does not list this model",
       "loadingModel": "Loading model",
       "noMatchingModels": "No matching models",
       "noModels": "No models",
@@ -205,10 +205,10 @@
       "invalidModelId": "Enter an exact model ID, wildcards are not supported",
       "enterValidExactModelIdUpTo": "Please enter a valid exact model ID, up to 256 bytes, no wildcards are supported",
       "cleanupModels": "Clean up unlisted models",
-      "cleanupCatalogHint": "The catalog may omit image, search or plugin models — select only entries you want to remove",
       "cleanupSelection": "Select models to remove from the allowlist",
-      "cleanupSaveHint": "Changes apply after you save the account",
-      "cleanupSelected": "Remove selected ({count})"
+      "cleanupKeepOne": "Keep at least one model in the allowlist",
+      "cleanupRemove": "Remove",
+      "cleanupSelected": "Remove ({count})"
     },
     "notes": {
       "viewAccountNotes": "View account notes",

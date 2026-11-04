@@ -196,7 +196,7 @@
       "searchOrEnterIdAndPressEnter": "搜索或輸入 ID，回車添加",
       "selectModel": "選擇模型",
       "notInCurrentModelCatalog": "{id}（當前目錄未返回）",
-      "modelCatalogMissingHint": "當前上游目錄未返回此模型，已保留你的選擇",
+      "modelCatalogMissingHint": "當前上游目錄未返回此模型",
       "loadingModel": "加載模型中",
       "noMatchingModels": "無匹配模型",
       "noModels": "暫無模型",
@@ -205,10 +205,10 @@
       "invalidModelId": "請使用有效的精確模型 ID，不支持通配符",
       "enterValidExactModelIdUpTo": "請輸入有效的精確模型 ID，最多 256 字節，不支持通配符",
       "cleanupModels": "清理未列出模型",
-      "cleanupCatalogHint": "目錄可能不包含圖像、搜尋或外掛模型，僅勾選確定要移除的項目",
       "cleanupSelection": "選擇要從白名單移除的模型",
-      "cleanupSaveHint": "僅修改目前表單，儲存帳號後生效",
-      "cleanupSelected": "移除已選 {count} 項"
+      "cleanupKeepOne": "請至少保留一個白名單模型",
+      "cleanupRemove": "移除",
+      "cleanupSelected": "移除 {count} 項"
     },
     "notes": {
       "viewAccountNotes": "查看賬號備註",
