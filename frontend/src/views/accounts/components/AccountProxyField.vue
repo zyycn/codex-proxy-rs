@@ -94,7 +94,10 @@ const { result, directResult, testing, test } = useAccountProxyTest({
 })
 // 代理复用目录中的最近测试，直连结果只保留在当前账号的编辑过程
 const optionTests = computed<Record<string, OutboundProxyTest | null>>(() => ({
-  ...Object.fromEntries(proxies.value.map(proxy => [proxy.id, proxy.enabled ? proxy.lastTest : null])),
+  ...Object.fromEntries(proxies.value.map(proxy => [
+    proxy.id,
+    proxy.enabled ? proxy.lastTest : null,
+  ])),
   direct: directResult.value,
 }))
 const selectedTest = computed(() => result.value ?? (testTarget.value === 'direct'

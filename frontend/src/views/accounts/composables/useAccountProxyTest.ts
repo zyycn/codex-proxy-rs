@@ -12,7 +12,9 @@ export function useAccountProxyTest(options: {
   onTested: (proxy: OutboundProxyRecord) => void
   onConflict: () => Promise<void>
 }) {
-  const request = useRequestState(cause => ZNotification.error({ message: errorMessage(cause) }))
+  const request = useRequestState(cause => ZNotification.error({
+    message: errorMessage(cause),
+  }))
   const result = shallowRef<OutboundProxyTest | null>(null)
   const directResult = shallowRef<OutboundProxyTest | null>(null)
   const targetId = computed(() => {

@@ -53,7 +53,9 @@ const lastRefreshed = computed(() => {
     return undefined
   const refreshedAt = upstream?.discovered ? upstream.observedAtRelative : quota.refreshedAtRelative
   return refreshedAt
-    ? t('accounts.quota.lastRefreshed', { refreshedAtDisplay: formatRelativeTime(refreshedAt) })
+    ? t('accounts.quota.lastRefreshed', {
+        refreshedAtDisplay: formatRelativeTime(refreshedAt),
+      })
     : undefined
 })
 const refreshTitle = computed(() => props.account.upstream?.stale && props.account.upstream.observedAt
