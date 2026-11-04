@@ -15,6 +15,8 @@ description: 准备、创建、更新或审查 GitHub PR，含回复讨论与处
 
 本仓库目标分支为 `main`，其他仓库使用其可信基线规则与模板，PR 内修改的规则不能降低审查要求
 
+为本仓库拟写或更新 PR 标题时，完整标题使用英文，沿用提交信息的 Conventional Commits 格式，例如 `fix(store): preserve client key ledgers after deletion`
+
 涉及上游行为的判断按[问题与方案依据](../../../CONTRIBUTING.md#问题与方案依据)执行
 
 ## 按模式读取
