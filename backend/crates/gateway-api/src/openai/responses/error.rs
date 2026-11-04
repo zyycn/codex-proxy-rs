@@ -62,6 +62,14 @@ pub enum RequestDecodeError {
         /// 字段路径
         field: String,
     },
+    /// 两个参数的要求无法同时满足
+    #[error("requested `{field}` is not supported with `{other}`")]
+    UnsupportedCombination {
+        /// 返回给客户端的参数路径
+        field: &'static str,
+        /// 与之冲突的参数路径
+        other: &'static str,
+    },
     /// Core operation 拒绝规范化后的字段
     #[error("field `{field}` violates the canonical operation contract")]
     CanonicalContract {
@@ -126,6 +134,11 @@ impl RequestDecodeError {
                 "unsupported_parameter",
                 format!("Parameter `{field}` is not supported by this gateway."),
                 Some(field.clone()),
+            ),
+            Self::UnsupportedCombination { field, other } => (
+                "unsupported_parameter",
+                format!("The requested `{field}` is not supported with `{other}`."),
+                Some((*field).to_owned()),
             ),
         };
         ProtocolErrorBody {

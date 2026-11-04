@@ -27,12 +27,35 @@ pub(in crate::openai) fn convert_request(
         ("stream".into(), stream.into()),
         ("store".into(), false.into()),
     ]);
-    if let Some(value) = optional(&mut chat, "tools") {
-        body.insert("tools".into(), function_tools(value)?.into());
-    }
-    if let Some(value) = optional(&mut chat, "tool_choice") {
-        let choice = tool_choice(value, body.get("tools"))?;
-        body.insert("tool_choice".into(), choice);
+    if let Some(options) = optional(&mut chat, "web_search_options") {
+        let tool = web_search_tool(options)?;
+        // Chat 搜索要求先检索，不能用强制搜索覆盖调用方的函数工具或选择
+        if let Some(tools) = optional(&mut chat, "tools")
+            && !array(tools, "tools")?.is_empty()
+        {
+            return Err(RequestDecodeError::UnsupportedCombination {
+                field: "tools",
+                other: "web_search_options",
+            });
+        }
+        if let Some(choice) = optional(&mut chat, "tool_choice")
+            && choice != "auto"
+        {
+            return Err(RequestDecodeError::UnsupportedCombination {
+                field: "tool_choice",
+                other: "web_search_options",
+            });
+        }
+        body.insert("tools".into(), Value::Array(vec![tool]));
+        body.insert("tool_choice".into(), json!({"type": "web_search"}));
+    } else {
+        if let Some(value) = optional(&mut chat, "tools") {
+            body.insert("tools".into(), function_tools(value)?.into());
+        }
+        if let Some(value) = optional(&mut chat, "tool_choice") {
+            let choice = tool_choice(value, body.get("tools"))?;
+            body.insert("tool_choice".into(), choice);
+        }
     }
     if let Some(value) = optional_bool(&mut chat, "parallel_tool_calls", "parallel_tool_calls")? {
         body.insert("parallel_tool_calls".into(), value.into());
@@ -112,7 +135,6 @@ fn validate_options(chat: &Map<String, Value>) -> Result<(), RequestDecodeError>
             | "prediction"
             | "seed"
             | "function_call"
-            | "web_search_options"
             | "reasoning_content"
             | "input"
             | "previous_response_id"
@@ -130,6 +152,33 @@ fn validate_options(chat: &Map<String, Value>) -> Result<(), RequestDecodeError>
         }
     }
     Ok(())
+}
+
+fn web_search_tool(value: Value) -> Result<Value, RequestDecodeError> {
+    let mut options = object(value, "web_search_options")?;
+    let mut tool = json!({"type": "web_search"});
+    if let Some(size) = optional(&mut options, "search_context_size") {
+        string(&size, "web_search_options.search_context_size", false)?;
+        tool["search_context_size"] = size;
+    }
+    if let Some(location) = optional(&mut options, "user_location") {
+        let mut location = object(location, "web_search_options.user_location")?;
+        let path = "web_search_options.user_location.type";
+        if required_string(&mut location, "type", path, false)? != "approximate" {
+            return Err(unsupported(path));
+        }
+        let path = "web_search_options.user_location.approximate";
+        let mut approximate = object(required(&mut location, "approximate", path)?, path)?;
+        let mut flat = json!({"type": "approximate"});
+        for field in ["city", "country", "region", "timezone"] {
+            if let Some(value) = optional(&mut approximate, field) {
+                string(&value, &format!("{path}.{field}"), true)?;
+                flat[field] = value;
+            }
+        }
+        tool["user_location"] = flat;
+    }
+    Ok(tool)
 }
 
 fn stream_options(value: Option<Value>, stream: bool) -> Result<bool, RequestDecodeError> {
@@ -176,10 +225,13 @@ fn messages(value: Value) -> Result<Vec<Value>, RequestDecodeError> {
         ) {
             return Err(unsupported(&format!("{path}.role")));
         }
-        if let Some(name) = optional(&mut message, "name")
-            && !string(&name, &format!("{path}.name"), true)?.is_empty()
-        {
-            return Err(unsupported(&format!("{path}.name")));
+        let name = optional(&mut message, "name").filter(|name| name != "");
+        if let Some(name) = &name {
+            let name_path = format!("{path}.name");
+            string(name, &name_path, true)?;
+            if role != "tool" {
+                return Err(unsupported(&name_path));
+            }
         }
         for field in ["function_call", "reasoning_content", "reasoning", "audio"] {
             if optional(&mut message, field).is_some() {
@@ -209,9 +261,12 @@ fn messages(value: Value) -> Result<Vec<Value>, RequestDecodeError> {
             } else {
                 content_parts(content, &role, &content_path, false)?.into()
             };
-            input.push(
-                json!({"type": "function_call_output", "call_id": call_id, "output": output}),
-            );
+            let mut item =
+                json!({"type": "function_call_output", "call_id": call_id, "output": output});
+            if let Some(name) = name {
+                item["name"] = name;
+            }
+            input.push(item);
             continue;
         }
 
@@ -275,6 +330,10 @@ fn content_parts(
                 required(&mut part, "image_url", &format!("{path}.image_url"))?,
                 &format!("{path}.image_url"),
             )?,
+            "file" if role == "user" => {
+                let file_path = format!("{path}.file");
+                inline_pdf_part(required(&mut part, "file", &file_path)?, &file_path)?
+            }
             "refusal" if role == "assistant" => json!({
                 "type": "refusal",
                 "refusal": required_string(&mut part, "refusal", &format!("{path}.refusal"), true)?,
@@ -299,6 +358,25 @@ fn text_part(text: String, is_assistant: bool) -> Value {
     } else {
         json!({"type": "input_text", "text": text})
     }
+}
+
+fn inline_pdf_part(value: Value, path: &str) -> Result<Value, RequestDecodeError> {
+    let mut file = object(value, path)?;
+    if optional(&mut file, "file_id").is_some() {
+        return Err(unsupported(&format!("{path}.file_id")));
+    }
+    let data_path = format!("{path}.file_data");
+    let data = required_string(&mut file, "file_data", &data_path, false)?;
+    if !data
+        .strip_prefix("data:application/pdf;base64,")
+        .is_some_and(|payload| !payload.trim().is_empty())
+    {
+        return Err(invalid(&data_path));
+    }
+    let name = required_string(&mut file, "filename", &format!("{path}.filename"), false)?;
+    let mut converted = json!({"type": "input_file", "filename": name});
+    converted["file_data"] = data.into();
+    Ok(converted)
 }
 
 fn image_part(value: Value, path: &str) -> Result<Value, RequestDecodeError> {
