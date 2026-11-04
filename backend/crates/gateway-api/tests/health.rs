@@ -1,4 +1,4 @@
-//! 验证健康接口按基础设施与关键 Worker 状态判定可用性
+//! 验证请求就绪、综合健康状态与故障诊断
 
 use std::sync::{Arc, Mutex};
 
@@ -87,6 +87,54 @@ async fn healthz_should_reject_critical_worker_failure() {
 }
 
 #[tokio::test]
+async fn readiness_ignores_freeze_recovery_and_logging_failures_without_clearing_alerts() {
+    let diagnostics = Arc::new(RecordingDiagnostics::default());
+    let router = health_router(
+        vec![Arc::new(MutableProbe(Mutex::new(HealthState::Degraded(
+            "file logging maintenance failed".to_owned(),
+        ))))],
+        vec![worker_snapshot(
+            WorkerKind::AccountFreezeRecovery,
+            WorkerRuntimeState::BackingOff,
+        )],
+        diagnostics.clone(),
+    )
+    .await;
+
+    for (path, expected) in [
+        ("/healthz", StatusCode::SERVICE_UNAVAILABLE),
+        ("/readyz", StatusCode::NO_CONTENT),
+        ("/healthz", StatusCode::SERVICE_UNAVAILABLE),
+    ] {
+        assert_eq!(
+            health_response(router.clone(), path).await.status(),
+            expected
+        );
+    }
+    assert_eq!(diagnostics.0.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn readiness_rejects_an_unavailable_runtime_snapshot() {
+    let router = health_router(
+        vec![Arc::new(
+            gateway_core::runtime::RuntimeSnapshotHandle::default(),
+        )],
+        Vec::new(),
+        Arc::new(RecordingDiagnostics::default()),
+    )
+    .await;
+    let response = health_response(router, "/readyz").await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn healthz_records_probe_changes_once_and_records_recurrence_after_recovery() {
     let probe = Arc::new(MutableProbe(Mutex::new(HealthState::Unhealthy(
         "file logging rejected records".to_owned(),
@@ -95,7 +143,8 @@ async fn healthz_records_probe_changes_once_and_records_recurrence_after_recover
     let router = health_router(vec![probe.clone()], Vec::new(), diagnostics.clone()).await;
 
     let responses =
-        futures::future::join_all((0..8).map(|_| health_response(router.clone()))).await;
+        futures::future::join_all((0..8).map(|_| health_response(router.clone(), "/healthz")))
+            .await;
     for response in responses {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(
@@ -126,18 +175,18 @@ async fn healthz_records_probe_changes_once_and_records_recurrence_after_recover
 
     *probe.0.lock().unwrap() = HealthState::Degraded("file logging maintenance failed".to_owned());
     assert_eq!(
-        health_response(router.clone()).await.status(),
+        health_response(router.clone(), "/healthz").await.status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
     assert_eq!(diagnostics.0.lock().unwrap().len(), 2);
     *probe.0.lock().unwrap() = HealthState::Healthy;
     assert_eq!(
-        health_response(router.clone()).await.status(),
+        health_response(router.clone(), "/healthz").await.status(),
         StatusCode::NO_CONTENT
     );
     *probe.0.lock().unwrap() = HealthState::Degraded("file logging maintenance failed".to_owned());
     assert_eq!(
-        health_response(router).await.status(),
+        health_response(router, "/healthz").await.status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
     assert_eq!(diagnostics.0.lock().unwrap().len(), 3);
@@ -168,7 +217,11 @@ async fn healthz_retains_worker_and_completed_probe_failures_when_another_probe_
     .await;
 
     assert_eq!(
-        health_response(router).await.status(),
+        health_response(router.clone(), "/readyz").await.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        health_response(router, "/healthz").await.status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
     let events = diagnostics.0.lock().unwrap();
@@ -202,12 +255,12 @@ async fn healthz_retries_failed_diagnostic_admission_without_changing_health_res
     .await;
 
     assert_eq!(
-        health_response(router.clone()).await.status(),
+        health_response(router.clone(), "/healthz").await.status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
     assert!(diagnostics.recorded.0.lock().unwrap().is_empty());
     assert_eq!(
-        health_response(router).await.status(),
+        health_response(router, "/healthz").await.status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
     assert_eq!(diagnostics.recorded.0.lock().unwrap().len(), 1);
@@ -258,14 +311,9 @@ async fn health_router(
     .router()
 }
 
-async fn health_response(router: axum::Router) -> axum::response::Response {
+async fn health_response(router: axum::Router, path: &str) -> axum::response::Response {
     router
-        .oneshot(
-            Request::builder()
-                .uri("/healthz")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
         .await
         .unwrap()
 }
@@ -287,6 +335,10 @@ struct PendingProbe;
 impl HealthProbe for PendingProbe {
     fn name(&self) -> &'static str {
         "pending"
+    }
+
+    fn required_for_readiness(&self) -> bool {
+        true
     }
 
     fn check(&self) -> BoxFuture<'_, HealthState> {

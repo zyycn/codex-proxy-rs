@@ -358,16 +358,19 @@ docker compose -f deploy/compose.yaml up -d --no-build --wait
 docker compose -f deploy/compose.yaml ps
 ```
 
-健康检查：
+Consul 或负载均衡器用 `GET /readyz` 决定是否接入流量。升级后先在实例上确认返回 `204`，
+再把服务注册中的检查路径切到 `/readyz`。如果路由还依赖 Docker 容器健康状态，
+也要将应用容器的 `healthcheck.test` 指向 `/readyz`
 
 ```bash
-curl -i http://127.0.0.1:8080/healthz
+curl -i http://127.0.0.1:8080/readyz
 ```
 
-`204 No Content` 表示应用、PostgreSQL、Redis 和后台任务的健康检查通过，不代表每个上游账号都可用
+用独立监控定期请求 `GET /healthz`，对文件日志故障、账号解冻等关键后台任务异常告警。镜像和 Compose 默认使用这项综合检查。
+两个接口的状态码见[健康检查 API](../docs/api.md#2-健康检查)
 
-`503 Service Unavailable` 的失败组件与原因保存在运维错误记录中，组件为 `health`，关联标识以
-`probe:` 或 `worker:` 开头；探针超时也会指明组件。连续相同故障去重，恢复后再次失败重新记录，
+`/healthz` 返回 `503` 时，失败组件与原因保存在运维错误记录中，组件为 `health`，关联标识以
+`probe:` 或 `worker:` 开头。Worker 事件的错误详情包含任务状态和 `last_error`。连续相同故障去重，恢复后再次失败重新记录，
 应用日志记录故障与恢复摘要。健康响应保持空正文，详情沿用有界观测队列，队列或存储故障时可能缺失
 
 HTTP 在数据库迁移和初始化完成后才监听。迁移期间启动日志每 15 秒报告已等待时间，
