@@ -332,31 +332,36 @@ impl CodexCredentialSelector {
         self
     }
 
-    fn quota_signals(
+    fn scheduling_signals(
         &self,
         account: &ProviderAccount,
         model: CodexSelectionModel<'_>,
         strategy: RotationStrategy,
-    ) -> Option<AccountQuotaSignals> {
+    ) -> (
+        Option<AccountQuotaSignals>,
+        Option<gateway_core::account::AccountConcurrencyLimit>,
+    ) {
         if account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH {
-            return self.quota.scheduling_signals(account);
+            return (self.quota.scheduling_signals(account), None);
         }
-        if strategy != RotationStrategy::Smart {
-            return None;
-        }
-        let signal =
-            self.upstream_info
-                .as_ref()?
-                .signal(account, model.model()?, SystemTime::now())?;
-        let rank = if signal.exhausted {
-            Some(0)
-        } else {
-            signal
-                .remaining_percent
-                .map(|percent| (percent.clamp(0.0, 100.0) * 100.0).round() as u64)
+        let Some(signal) = self
+            .upstream_info
+            .as_ref()
+            .and_then(|source| source.signal(account, model.model(), SystemTime::now()))
+        else {
+            return (None, None);
         };
-        // 选号只读取 Smart 额度分，额度恢复由互联同步事务独立提交
-        Some(AccountQuotaSignals::new(None, rank))
+        let quota = (strategy == RotationStrategy::Smart).then(|| {
+            let rank = if signal.exhausted {
+                Some(0)
+            } else {
+                signal
+                    .remaining_percent
+                    .map(|percent| (percent.clamp(0.0, 100.0) * 100.0).round() as u64)
+            };
+            AccountQuotaSignals::new(None, rank)
+        });
+        (quota, signal.concurrency_limit)
     }
 
     pub(crate) async fn select_with_cyber_policy(
@@ -777,6 +782,11 @@ impl CodexCredentialSelector {
                     let health = self
                         .account_feedback
                         .scheduling_signals(&self.provider_kind, account.id());
+                    let (quota, inherited_concurrency) = self.scheduling_signals(
+                        &account,
+                        model,
+                        request.attempt.account_selection_policy().strategy(),
+                    );
                     let signals = scheduling
                         .signals()
                         .get(account.id())
@@ -790,14 +800,14 @@ impl CodexCredentialSelector {
                             failure_rate_basis_points: None,
                             first_output_latency_ms: None,
                         })
-                        .with_provider_quota(self.quota_signals(
-                            &account,
-                            model,
-                            request.attempt.account_selection_policy().strategy(),
-                        ))
+                        .with_provider_quota(quota)
                         .with_rate_limit(rate_limits.get(account.id()).copied().flatten())
                         .with_runtime_health(health.0, health.1);
-                    AccountCandidate { account, signals }
+                    AccountCandidate {
+                        account,
+                        signals,
+                        inherited_concurrency,
+                    }
                 })
                 .collect::<Vec<_>>();
             let mut affinity = binding
@@ -1060,7 +1070,7 @@ impl CodexCredentialSelector {
                             self.provider_kind.clone(),
                             account.id().clone(),
                             account.revision(),
-                            context.concurrency_limit(&account),
+                            context.concurrency_limit(selected),
                             request.attempt.deadline(),
                         )
                         .with_metadata(request.attempt.lease_metadata())

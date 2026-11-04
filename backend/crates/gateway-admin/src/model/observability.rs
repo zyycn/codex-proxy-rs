@@ -684,8 +684,10 @@ pub struct DashboardAccountUsage {
 }
 
 /// Dashboard 当前账号池的可重建运行时槽位事实
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardRuntimeSlots {
+    /// 仅未设置本地覆盖的账号可能继承有效互联观测
+    pub inherited_versions: Vec<gateway_core::account::QuotaObservationVersion>,
     /// 继承运行参数默认并发上限的可调度账号数
     pub inherited_accounts: u64,
     /// 已配置账号级并发上限的可调度账号槽位总数

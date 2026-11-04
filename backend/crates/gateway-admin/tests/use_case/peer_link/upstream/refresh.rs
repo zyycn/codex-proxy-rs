@@ -216,7 +216,7 @@ async fn known_peer_failures_keep_identity_and_only_revocation_discards_shared_d
         assert_eq!(
             bundle
                 .scheduling_source()
-                .signal(&account, "model", SystemTime::now())
+                .signal(&account, Some("model"), SystemTime::now())
                 .is_none(),
             clears_data
         );

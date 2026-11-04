@@ -10,6 +10,8 @@ pub struct ProviderUpstreamInfo {
     pub stale: bool,
     pub connection_revision: String,
     pub last_error: Option<String>,
+    pub max_concurrency: Option<u64>,
+    pub requests_per_minute: Option<u64>,
     pub pool: Option<UpstreamPool>,
 }
 

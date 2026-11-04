@@ -290,7 +290,7 @@ impl UpstreamInfoSource for PeerInfoService {
     fn signal(
         &self,
         account: &ProviderAccount,
-        model: &str,
+        model: Option<&str>,
         now: SystemTime,
     ) -> Option<UpstreamSchedulingSignal> {
         if !account.enabled() {

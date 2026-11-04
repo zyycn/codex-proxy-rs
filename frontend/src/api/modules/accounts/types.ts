@@ -189,6 +189,8 @@ export interface AccountUpstream {
   stale: boolean
   connectionRevision: string
   lastError: 'unauthorized' | 'unsupported' | 'rate_limited' | 'invalid_response' | 'unavailable' | null
+  maxConcurrency: number | null
+  requestsPerMinute: number | null
   pool: {
     accountCount: number
     states: { ready: number, cooldown: number, exhausted: number, disabled: number, error: number, unknown: number }

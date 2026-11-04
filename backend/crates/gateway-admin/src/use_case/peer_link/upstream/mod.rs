@@ -25,6 +25,7 @@ use gateway_core::{
     error::StoreError,
     task::{WorkerContribution, WorkerDefinitionError},
 };
+pub(crate) use projection::account_capacity;
 use service::PeerInfoService;
 
 /// 组合根独立注册公共互联 Worker，不属于任何具体 Provider 的任务集合
@@ -62,6 +63,24 @@ pub fn initialize(
 
 #[async_trait::async_trait]
 impl PeerUpstreamService for PeerInfoService {
+    fn observed_concurrency_limit(
+        &self,
+        version: &gateway_core::account::QuotaObservationVersion,
+        now: std::time::SystemTime,
+    ) -> Option<gateway_core::account::AccountConcurrencyLimit> {
+        let observations = self
+            .observations
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cached = observations.get(&version.account_id)?;
+        if cached.observed_at != Some(version.observed_at)
+            || cached.connection.credential_revision != version.credential_revision
+        {
+            return None;
+        }
+        cached.scheduling.as_ref()?.concurrency_limit(now)
+    }
+
     async fn account_changed(&self, id: &ProviderAccountId) -> Result<(), StoreError> {
         PeerInfoService::account_changed(self, id).await
     }

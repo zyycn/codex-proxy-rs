@@ -16,6 +16,26 @@ use gateway_protocol::peer::{PeerComponentStatus, PeerLink};
 
 use super::{PeerInfoService, quota, snapshot};
 
+pub(crate) fn account_capacity(
+    account: &crate::model::accounts::AccountRecord,
+    mut capacity: crate::model::accounts::AccountCapacity,
+    quota: &ProviderQuota,
+) -> crate::model::accounts::AccountCapacity {
+    if account.concurrency_limit.is_none()
+        && let Some(info) = &quota.upstream
+        && !info.stale
+        && info
+            .observed_at
+            .is_some_and(|at| snapshot::fresh_at(at.into(), SystemTime::now()))
+        && let Some(limit) = info
+            .max_concurrency
+            .and_then(gateway_core::account::AccountConcurrencyLimit::from_key_limit)
+    {
+        capacity.total_slots = Some(u64::from(limit.get()));
+    }
+    capacity
+}
+
 impl PeerInfoService {
     pub(super) fn project_peer(
         connection: &UpstreamConnection,
@@ -30,6 +50,7 @@ impl PeerInfoService {
         let stale = peer.as_ref().is_none_or(|peer| {
             !snapshot::component_fresh(Some(&peer.observed_at), Some(&peer.expires_at), now)
         });
+        let limits = peer.and_then(|peer| peer.key_limits);
         let info = ProviderUpstreamInfo {
             discovered: peer.is_some() || unavailable.is_some(),
             observed_at,
@@ -38,6 +59,8 @@ impl PeerInfoService {
             last_error: last_error
                 .or(unavailable)
                 .map(|error| error.as_str().to_owned()),
+            max_concurrency: limits.and_then(|limits| limits.max_concurrency),
+            requests_per_minute: limits.and_then(|limits| limits.requests_per_minute),
             pool: peer
                 .as_ref()
                 .and_then(|peer| peer.pool.as_ref())

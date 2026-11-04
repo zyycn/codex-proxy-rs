@@ -79,7 +79,7 @@
       "invalidKey": "Use visible HTTP header characters, without spaces or line breaks",
       "requestsPerMinute": "Requests per minute",
       "peerSharing": "CPR Link",
-      "peerSharingHelp": "Allow other nodes to read this key’s budget; requests use only direct accounts in the selected groups",
+      "peerSharingHelp": "Share this key’s budget, concurrency limit and RPM with other nodes. Model requests use only direct accounts in the selected groups",
       "sharePool": "Share account pool summary",
       "shareQuota": "Share account quotas",
       "sharePlans": "Share plan breakdown",

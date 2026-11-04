@@ -32,7 +32,8 @@ const emit = defineEmits<{
 const { t } = useI18n({ useScope: 'global' })
 const poolWindows = usePoolQuotaWindows(() => props.account)
 const hasUpstreamPool = computed(() => props.account.upstream?.discovered && (
-  props.account.upstream.pool || poolWindows.value.some(window => window.sourceAccountId && !window.amount)
+  props.account.upstream.pool || props.account.upstream.maxConcurrency != null || props.account.upstream.requestsPerMinute != null
+  || poolWindows.value.some(window => window.sourceAccountId && !window.amount)
 ))
 
 const quotaEntries = computed(() => groupedAccountQuotaWindows(
@@ -138,7 +139,7 @@ watch(hasPersonalInfo, (available) => {
           />
         </div>
       </ZScrollbar>
-      <AccountUpstreamPool v-if="hasUpstreamPool" class="mt-auto" :pool="account.upstream?.pool" :windows="poolWindows" />
+      <AccountUpstreamPool v-if="hasUpstreamPool" class="mt-auto" :upstream="account.upstream" :windows="poolWindows" />
     </div>
   </section>
 

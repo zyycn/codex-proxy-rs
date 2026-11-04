@@ -17,6 +17,7 @@ pub struct PeerLinkLimits {
 pub struct PeerLinkExport {
     pub observed_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    pub key_limits: gateway_core::policy::RateLimits,
     pub budget: ClientBudgetStatus,
     pub budget_access: ClientBudgetAccess,
     pub budget_observed_at: DateTime<Utc>,

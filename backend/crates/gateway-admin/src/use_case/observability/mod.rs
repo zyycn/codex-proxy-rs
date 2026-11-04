@@ -133,7 +133,7 @@ impl DefaultObservabilityService {
             self.settings.load_runtime_settings(),
         )
         .map_err(|error| map_store_error(error, "dashboard"))?;
-        let runtime_slots = observation.runtime_slots;
+        let runtime_slots = observation.runtime_slots.as_ref();
         self.enrich_list_records(&mut observation.recent_requests)
             .await;
         self.enrich_dashboard_quotas(&mut observation.account_usage)
@@ -180,11 +180,19 @@ impl DefaultObservabilityService {
             .providers
             .dashboard_wire_profiles(&settings.request_profiles);
         let max_concurrent_per_account = u64::from(settings.values.max_concurrent_per_account);
-        let (inherited_accounts, overridden_slots) = runtime_slots
-            .as_ref()
+        let (mut inherited_accounts, mut overridden_slots) = runtime_slots
             .map_or((observation.provider_accounts.normal, 0), |slots| {
                 (slots.inherited_accounts, slots.overridden_slots)
             });
+        if let (Some(peer), Some(slots)) = (&self.upstream_info, runtime_slots) {
+            let now = std::time::SystemTime::now();
+            for version in &slots.inherited_versions {
+                if let Some(limit) = peer.observed_concurrency_limit(version, now) {
+                    inherited_accounts -= 1;
+                    overridden_slots = overridden_slots.saturating_add(u64::from(limit.get()));
+                }
+            }
+        }
         let total_slots = (max_concurrent_per_account > 0 || inherited_accounts == 0).then(|| {
             inherited_accounts
                 .saturating_mul(max_concurrent_per_account)

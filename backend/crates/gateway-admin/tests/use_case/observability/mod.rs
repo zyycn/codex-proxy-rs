@@ -448,6 +448,7 @@ async fn dashboard_summary_should_project_rebuildable_runtime_slots() {
     let now = Utc::now();
     let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
     store.replace_runtime_slots(Some(DashboardRuntimeSlots {
+        inherited_versions: Vec::new(),
         inherited_accounts: 2,
         overridden_slots: 5,
         used_slots: Some(2),
@@ -476,6 +477,7 @@ async fn dashboard_capacity_distinguishes_unlimited_inheritance_finite_overrides
         let now = Utc::now();
         let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
         store.replace_runtime_slots(Some(DashboardRuntimeSlots {
+            inherited_versions: Vec::new(),
             inherited_accounts,
             overridden_slots,
             used_slots: Some(2),
@@ -1212,7 +1214,7 @@ impl ObservabilityStore for FixtureObservabilityStore {
             range: query.range,
             totals: Default::default(),
             provider_accounts: AccountPoolMetrics::default(),
-            runtime_slots: *self.runtime_slots.lock().expect("runtime slots"),
+            runtime_slots: self.runtime_slots.lock().expect("runtime slots").clone(),
             trend: self.trend.lock().expect("trend").clone(),
             account_usage: self.account_usage.lock().expect("account usage").clone(),
             recent_requests: Vec::new(),

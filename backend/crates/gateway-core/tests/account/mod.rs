@@ -50,6 +50,7 @@ fn account(id: &str) -> ProviderAccount {
 
 fn candidate(id: &str, in_flight: u32, remaining: Option<u64>) -> AccountCandidate {
     AccountCandidate {
+        inherited_concurrency: None,
         account: account(id),
         signals: AccountRuntimeSignals {
             in_flight,
@@ -215,6 +216,7 @@ fn inconclusive_quota_observation_cannot_erase_confirmed_access() {
 fn diagnostic_selection_bypasses_all_local_account_eligibility() {
     let observed_at = SystemTime::now();
     let exhausted = AccountCandidate {
+        inherited_concurrency: None,
         account: account("acct_exhausted").with_account_facts(
             true,
             CredentialState::Ready,
@@ -233,6 +235,7 @@ fn diagnostic_selection_bypasses_all_local_account_eligibility() {
         },
     };
     let disabled = AccountCandidate {
+        inherited_concurrency: None,
         account: account("acct_disabled").with_account_facts(
             false,
             CredentialState::Ready,
@@ -1113,11 +1116,8 @@ fn reserved_concurrency_uses_its_own_limit_without_reducing_normal_capacity() {
 
     // 独立额度可以大于账号普通上限，极值不能回绕成无限并发
     reserved.reserved_concurrency = u32::MAX;
-    assert_eq!(
-        reserved.concurrency_limit(&candidates[0].account).get(),
-        u32::MAX
-    );
-    assert_eq!(normal.concurrency_limit(&candidates[0].account).get(), 5);
+    assert_eq!(reserved.concurrency_limit(&candidates[0]).get(), u32::MAX);
+    assert_eq!(normal.concurrency_limit(&candidates[0]).get(), 5);
 }
 
 #[test]

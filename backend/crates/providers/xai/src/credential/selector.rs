@@ -241,7 +241,11 @@ impl GrokAccountSessionSelector {
                         .ok_or(GrokSessionSelectorError::Unavailable(None))?
                         .with_provider_quota(self.quota.scheduling_signals(&account))
                         .with_runtime_health(health.0, health.1);
-                    Ok(AccountCandidate { account, signals })
+                    Ok(AccountCandidate {
+                        account,
+                        signals,
+                        inherited_concurrency: None,
+                    })
                 })
                 .collect::<Result<Vec<_>, GrokSessionSelectorError>>()?;
             if let Some(required) = request.required_account() {
@@ -319,11 +323,7 @@ impl GrokAccountSessionSelector {
                             self.provider_kind.clone(),
                             selected_id.clone(),
                             selected_revision,
-                            selected.account.effective_concurrency(
-                                request
-                                    .account_selection_policy()
-                                    .max_concurrent_per_account(),
-                            ),
+                            context.concurrency_limit(selected),
                             request.deadline(),
                         )
                         .with_metadata(request.lease_metadata.clone())

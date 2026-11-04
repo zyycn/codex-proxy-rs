@@ -60,6 +60,7 @@ pub trait AccountGroupService: Send + Sync {
 }
 
 pub(crate) struct DefaultAccountGroupService {
+    upstream_info: Option<Arc<dyn crate::ports::peer::PeerUpstreamService>>,
     store: Arc<dyn AccountGroupStore>,
     runtime: Arc<dyn AccountRuntimeStore>,
     snapshot: Arc<dyn SnapshotControl>,
@@ -68,11 +69,13 @@ pub(crate) struct DefaultAccountGroupService {
 impl DefaultAccountGroupService {
     #[must_use]
     pub(crate) fn new(
+        upstream_info: Option<Arc<dyn crate::ports::peer::PeerUpstreamService>>,
         store: Arc<dyn AccountGroupStore>,
         runtime: Arc<dyn AccountRuntimeStore>,
         snapshot: Arc<dyn SnapshotControl>,
     ) -> Self {
         Self {
+            upstream_info,
             store,
             runtime,
             snapshot,
@@ -105,7 +108,7 @@ impl DefaultAccountGroupService {
                 Default::default()
             }
         };
-        project_group_runtime(records, &members, &runtime);
+        project_group_runtime(records, &members, &runtime, self.upstream_info.as_deref());
         Ok(())
     }
 
@@ -215,6 +218,7 @@ fn project_group_runtime(
     records: &mut [AccountGroupRecord],
     members: &[AccountGroupMemberFact],
     runtime: &crate::model::accounts::AccountRuntimeSnapshot,
+    upstream: Option<&dyn crate::ports::peer::PeerUpstreamService>,
 ) {
     let now = SystemTime::now();
     let mut status_by_account = BTreeMap::new();
@@ -228,7 +232,14 @@ fn project_group_runtime(
             .or_insert_with(|| resolve_account_status(&status, now).status);
         slots_by_account
             .entry(member.account_id.as_str())
-            .or_insert(member.total_slots);
+            .or_insert_with(|| {
+                member
+                    .inherited_version
+                    .as_ref()
+                    .and_then(|version| upstream?.observed_concurrency_limit(version, now))
+                    .map(|limit| u64::from(limit.get()))
+                    .or(member.total_slots)
+            });
         accounts_by_group
             .entry(member.group_id.as_str())
             .or_default()

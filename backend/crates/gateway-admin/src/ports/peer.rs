@@ -38,6 +38,13 @@ pub trait PeerTransport: Send + Sync {
 /// 账号用例读取公共互联观测，显式刷新等待额度查询完成
 #[async_trait]
 pub trait PeerUpstreamService: gateway_core::account::UpstreamInfoSource {
+    /// 仅在指定持久观测与当前调度缓存一致时估算容量
+    fn observed_concurrency_limit(
+        &self,
+        version: &gateway_core::account::QuotaObservationVersion,
+        now: std::time::SystemTime,
+    ) -> Option<gateway_core::account::AccountConcurrencyLimit>;
+
     async fn account_changed(
         &self,
         id: &gateway_core::account::ProviderAccountId,

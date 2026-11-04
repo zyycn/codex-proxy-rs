@@ -89,10 +89,12 @@ pub(super) fn datetime(value: &str) -> Option<DateTime<Utc>> {
 }
 
 pub(super) fn fresh(observed: &str, now: SystemTime) -> bool {
-    timestamp(observed).is_some_and(|observed| {
-        observed <= now + Duration::from_secs(60)
-            && now.duration_since(observed).unwrap_or_default() <= FRESH_FOR
-    })
+    timestamp(observed).is_some_and(|observed| fresh_at(observed, now))
+}
+
+pub(super) fn fresh_at(observed: SystemTime, now: SystemTime) -> bool {
+    observed <= now + Duration::from_secs(60)
+        && now.duration_since(observed).unwrap_or_default() <= FRESH_FOR
 }
 
 pub(super) fn component_fresh(
@@ -162,6 +164,9 @@ pub(super) fn parse(
     }
     // 未授权能力不能借同名数据块越过逐层公开边界
     let disclosed = |capability| peer.capabilities.iter().any(|value| value == capability);
+    if !disclosed("key_limits") {
+        peer.key_limits = None;
+    }
     if !disclosed("key_usage") {
         peer.usage = None;
     }

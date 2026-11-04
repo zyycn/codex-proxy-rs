@@ -243,7 +243,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                     account.authentication_kind, account.credential_revision, account.outbound_proxy_id, account.outbound_proxy_url,
                     account.has_refresh_token, account.access_token_expires_at,
                     account.next_refresh_at, account.enabled, account.concurrency_limit,
-                    account.weight, account.model_access_json, account.credential_state, account.quota_access_state,
+                    account.quota_observed_at, account.weight, account.model_access_json, account.credential_state, account.quota_access_state,
                     account.quota_evidence, account.quota_access_observed_at,
                     account.quota_reset_at, account.last_error_reason,
                     account.last_error_message, account.credential_observed_at,
@@ -277,8 +277,10 @@ impl AccountGroupStore for PgAccountGroupRepository {
                 .map_err(|source| {
                     invalid("invalid default account concurrency").with_source(source)
                 })?;
+                let version = super::provider_accounts::quota_version_from_row(&row)?;
                 let account = account_summary_from_row(row)?;
                 Ok(AccountGroupMemberFact {
+                    inherited_version: version.filter(|_| account.concurrency_limit.is_none()),
                     group_id,
                     account_id: account.id,
                     status: AccountStatusFacts {

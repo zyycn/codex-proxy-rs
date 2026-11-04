@@ -755,29 +755,31 @@ OpenAI 选号阶段确认本次可选账号全部额度耗尽时，HTTP 返回 `
 | 顶层必填字段 | 合同 |
 | --- | --- |
 | `object` | 固定为 `"cpr.peer"` |
-| `schema_version` | 当前为 `2`，不支持的版本按不兼容处理 |
-| `capabilities` | 当前 Key 获准公开的能力名称列表，最多 32 项；未知能力可以忽略 |
+| `schema_version` | 固定为 `3`，接入端只接受此版本 |
+| `capabilities` | 当前密钥 获准公开的能力名称列表，最多 32 项；未知能力可以忽略 |
 | `observed_at` | 本次快照组装时间，RFC3339 UTC 时间 |
 | `expires_at` | 快照到期时间，必须晚于 `observed_at`，且不超过其后 30 分钟 |
 
-`usage`、`pool`、`quota`、`models` 按能力独立提供，未提供的数据块直接省略。
+`usage`、`key_limits`、`pool`、`quota`、`models` 按能力独立提供，未提供的数据块直接省略。
 接入端只消费已声明能力的数据，缺失值保持未知，不解释为零余额、空池或额度恢复。
 未知字段可以忽略；没有独立节点 ID，连接由本地账号及其凭据、出口版本识别
 
 | 能力 | 对应数据 |
 | --- | --- |
 | `key_usage` | `usage`：当前认证 Key 的预算访问结论与可选金额窗口 |
+| `key_limits` | `key_limits`：当前认证密钥公开的并发上限和 RPM |
 | `pool_summary` | `pool`：账号数量、互斥状态计数及可选套餐分布 |
 | `quota_windows` | `quota.accounts`：匿名账号及各自额度窗口 |
 | `model_availability` | `models`：按当前 Key 公开的模型额度汇总，可独立于账号明细提供 |
 
-只公开预算访问结论的完整响应：
+提供请求限制和预算访问结论的响应示例：
 
 ```json
 {
   "object": "cpr.peer",
-  "schema_version": 2,
-  "capabilities": ["key_usage"],
+  "schema_version": 3,
+  "key_limits": { "max_concurrency": 5, "requests_per_minute": 60 },
+  "capabilities": ["key_usage", "key_limits"],
   "observed_at": "2026-11-01T12:00:00Z",
   "expires_at": "2026-11-01T12:05:00Z",
   "usage": {
@@ -787,6 +789,11 @@ OpenAI 选号阶段确认本次可选账号全部额度耗尽时，HTTP 返回 `
   }
 }
 ```
+
+#### 密钥请求限制
+
+`key_limits` 形如 `{"max_concurrency":5,"requests_per_minute":60}`。上游可省略整个对象或其中任一项。已提供的值为非负整数，零表示该项不限；缺失表示未知。
+限制适用于整个密钥，有效期随顶层快照
 
 #### Key 预算
 
@@ -883,7 +890,7 @@ CPR 默认路径为 `/v1/cpr/link`，使用同一数据面入口认证，不接�
 
 | 共享配置 | 导出内容 |
 | --- | --- |
-| `enabled` | `key_usage`，包含明确访问结论及本地日、周美元账本；金额与周期口径见 [API Key 额度查询](#api-key-额度查询) |
+| `enabled` | `key_limits` 与 `key_usage`，包含密钥请求限制、明确访问结论及本地日、周美元账本；金额与周期口径见 [API Key 额度查询](#api-key-额度查询) |
 | `sharePool` | `pool_summary` |
 | `sharePlans` | 已公开账号池中的 `pool.plans` |
 | `shareQuota` | `quota_windows` 与 `model_availability` |
@@ -1085,8 +1092,7 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 账号列表的 `search` 仅按字面量包含匹配名称和邮箱，不区分大小写；`%`、`_` 和 `\` 按普通字符处理
 
 账号视图的 `capacity` 返回查询时的普通并发容量：`usedSlots` 不含独立审批池和排队请求，
-读取运行态失败时为 `null`；`totalSlots` 是应用账号独立配置或全局默认值后的上限，`null` 表示不限。
-该上限不代表上游实际允许的并发数
+读取运行态失败时为 `null`。`totalSlots` 是按[并发与排队](#并发与排队)取值的本机上限，`null` 表示不限。上游独立执行其密钥限制
 
 并发明细返回 `accountId`、`entries`、`total`、`page`、`pageSize` 和 `observedAt`，只统计普通并发池。每条包含 `leaseId`、`requestId`、`clientKeyId`、`clientKeyName`、`model`（入口请求模型）、`clientIp`、`startedAt`、`startedAtDisplay` 和 `occupiedMs`。占用时长从取得账号租约开始，不包含排队；缺少入口事实时相应字段为 `null`，租约仍计入总数
 
@@ -1159,6 +1165,7 @@ OpenAI 主动额度刷新和正常响应携带的明确套餐会同步到账号�
 | `stale` | 快照是否已过期；过期值仅供查看 |
 | `connectionRevision` | 当前连接身份的不可解释标识，用于隔离地址、密钥或出口变化前的展示结果 |
 | `lastError` | 当前实例最近同步失败分类：`unauthorized`、`unsupported`、`rate_limited`、`invalid_response`、`unavailable`；已保存的不支持结论及已确认互联的失权记录重启后仍返回对应分类，同步成功时为 `null` |
+| `maxConcurrency`、`requestsPerMinute` | 上游密钥的并发上限和 RPM，零表示不限，未观测到的项为 `null` |
 | `pool` | 上游授权公开的账号数量、状态数量及套餐数量，未公开时为 `null` |
 
 互联额度复用 `quota.windows`。上游 Key 账本按实际提供的周期展示，不补造缺失窗口；不限额也保留已用金额。
@@ -2042,7 +2049,8 @@ UA、平台参数及自动 Git 上下文版本由 [OpenAI 上游客户端身份]
 ### 并发与排队
 
 `maxConcurrentPerAccount` 是默认账号并发上限，初始值为 3，取值 0～4294967295；`0` 表示不限制。
-账号的 `concurrencyLimit: null` 继承该默认值，单独设置的正数上限仍优先生效。
+账号单独设置的正数 `concurrencyLimit` 优先。留空时，互联账号使用有效快照中密钥的正数并发上限，最大取 4294967295。
+无有效的上游正数上限时使用本机全局默认值。上游 RPM 供展示，由上游执行。
 无限并发仍统计在途请求，并遵守账号可用性与 Client Key 限制
 
 `maxWaitingPerKey` 与 `maxWaitingPerAccount` 是全局统一的普通排队容量，取值 0～1,000，默认 10，`0` 表示关闭；

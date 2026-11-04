@@ -13,28 +13,10 @@ pub(super) async fn versions(
         .collect::<Vec<_>>();
     let rows = sqlx::query("select id, credential_revision, quota_observed_at from provider_accounts where id = any($1) and quota_observed_at is not null")
         .bind(ids).fetch_all(&repository.pool).await.map_err(database_error)?;
-    rows.into_iter()
-        .map(|row| {
-            Ok(QuotaObservationVersion {
-                account_id: CoreProviderAccountId::new(
-                    row.try_get::<String, _>("id").map_err(database_error)?,
-                )
-                .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
-                credential_revision: CoreCredentialRevision::new(
-                    u64::try_from(
-                        row.try_get::<i64, _>("credential_revision")
-                            .map_err(database_error)?,
-                    )
-                    .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
-                )
-                .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
-                observed_at: row
-                    .try_get::<DateTime<Utc>, _>("quota_observed_at")
-                    .map_err(database_error)?
-                    .into(),
-            })
-        })
-        .collect()
+    rows.iter()
+        .filter_map(|row| super::quota_version_from_row(row).transpose())
+        .collect::<crate::StoreResult<Vec<_>>>()
+        .map_err(crate::core_store_error)
 }
 
 pub(super) async fn write(
