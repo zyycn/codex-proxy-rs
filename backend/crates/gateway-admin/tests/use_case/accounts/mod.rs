@@ -2,6 +2,7 @@
 
 mod reset_credit_automation;
 
+use gateway_core::engine::probe::AccountProbeTarget;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -1335,7 +1336,9 @@ async fn connection_test_should_probe_unavailable_account() {
     let events = services
         .accounts()
         .test_connection(
-            ProviderAccountId::new("acct_test").expect("account ID"),
+            AccountProbeTarget::ConnectionTest(
+                ProviderAccountId::new("acct_test").expect("account ID"),
+            ),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
         )
         .await
@@ -1372,7 +1375,9 @@ async fn connection_test_rate_limited_probe_returns_provider_failure() {
     let events = services
         .accounts()
         .test_connection(
-            ProviderAccountId::new("acct_test").expect("account ID"),
+            AccountProbeTarget::ConnectionTest(
+                ProviderAccountId::new("acct_test").expect("account ID"),
+            ),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
         )
         .await
@@ -1405,7 +1410,9 @@ async fn connection_test_should_preserve_disabled_account_status() {
     let events = services
         .accounts()
         .test_connection(
-            ProviderAccountId::new("acct_test").expect("account ID"),
+            AccountProbeTarget::ConnectionTest(
+                ProviderAccountId::new("acct_test").expect("account ID"),
+            ),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
         )
         .await

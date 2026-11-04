@@ -551,12 +551,23 @@ pub enum AccountEligibilityPolicy {
     #[default]
     Enforce,
     BypassForDiagnostic,
+    FreezeRecovery,
 }
 
 impl AccountEligibilityPolicy {
     #[must_use]
     pub const fn bypasses_local_eligibility(self) -> bool {
-        matches!(self, Self::BypassForDiagnostic)
+        !matches!(self, Self::Enforce)
+    }
+
+    /// 恢复探测只验证上游结果，不能通过回写 Cookie 或刷新凭据提前解除冻结
+    #[must_use]
+    pub const fn allows_account_state_mutation(self, enabled: bool) -> bool {
+        match self {
+            Self::Enforce => true,
+            Self::BypassForDiagnostic => enabled,
+            Self::FreezeRecovery => false,
+        }
     }
 }
 

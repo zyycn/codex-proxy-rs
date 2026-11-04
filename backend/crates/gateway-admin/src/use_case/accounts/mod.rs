@@ -12,7 +12,7 @@ use chrono::{Duration, Utc};
 use futures::StreamExt as _;
 use gateway_core::{
     account::ProviderAccountId,
-    engine::probe::{AccountProbe, AccountProbeRequest},
+    engine::probe::{AccountProbe, AccountProbeRequest, AccountProbeTarget},
     routing::{ProviderKind, UpstreamModelId},
     runtime::SnapshotControl,
 };
@@ -178,7 +178,7 @@ pub trait AccountsService: Send + Sync {
 
     async fn test_connection(
         &self,
-        account_id: ProviderAccountId,
+        target: AccountProbeTarget,
         upstream_model: UpstreamModelId,
     ) -> Result<AccountConnectionTestEventStream, AdminError>;
 }
@@ -1131,10 +1131,10 @@ impl AccountsService for DefaultAccountsService {
 
     async fn test_connection(
         &self,
-        account_id: ProviderAccountId,
+        target: AccountProbeTarget,
         upstream_model: UpstreamModelId,
     ) -> Result<AccountConnectionTestEventStream, AdminError> {
-        let (stored, provider) = self.provider_for_account(&account_id).await?;
+        let (stored, provider) = self.provider_for_account(target.account_id()).await?;
         let account = stored.account;
         let model = upstream_model.as_str().to_owned();
         let operation = provider
@@ -1157,7 +1157,7 @@ impl AccountsService for DefaultAccountsService {
             let result = probe
                 .probe(
                     AccountProbeRequest {
-                        account_id,
+                        target,
                         provider_kind: account.provider_kind,
                         upstream_model,
                         operation,

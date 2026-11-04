@@ -1,5 +1,6 @@
 //! 单行 `model_requests`、账号重试与下游提交屏障测试
 
+use gateway_core::engine::probe::AccountProbeTarget;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::{
@@ -2753,7 +2754,7 @@ fn continuation_history_failure_without_replay_proof_is_delivered_without_hidden
 }
 
 #[test]
-fn diagnostic_account_reaches_provider_and_matching_metadata_succeeds() {
+fn recovery_probe_reaches_provider_with_read_only_account() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let (coordinator, _, provider) = coordinator(vec![Script::Stream {
@@ -2765,7 +2766,7 @@ fn diagnostic_account_reaches_provider_and_matching_metadata_succeeds() {
         model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
         operation,
         route_plan,
-        required.clone(),
+        AccountProbeTarget::FreezeRecovery(required.clone()),
         None,
         CancellationToken::new(),
     ))
@@ -2777,6 +2778,11 @@ fn diagnostic_account_reaches_provider_and_matching_metadata_succeeds() {
     assert_eq!(contexts.len(), 1);
     assert_eq!(contexts[0].required_account(), Some(&required));
     assert!(contexts[0].is_diagnostic_required_account());
+    assert!(
+        !contexts[0]
+            .account_eligibility()
+            .allows_account_state_mutation(true)
+    );
 }
 
 #[test]
@@ -7397,7 +7403,9 @@ fn error_protection_tracks_real_retry_attempts_and_skips_diagnostic_runs() {
                         request,
                         operation,
                         route_plan,
-                        ProviderAccountId::new("acct_first").unwrap(),
+                        AccountProbeTarget::ConnectionTest(
+                            ProviderAccountId::new("acct_first").unwrap(),
+                        ),
                         None,
                         CancellationToken::new(),
                     )
