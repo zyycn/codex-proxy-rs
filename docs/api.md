@@ -1147,11 +1147,11 @@ OpenAI 主动额度刷新和正常响应携带的明确套餐会同步到账号�
 
 | 字段 | 含义 |
 | --- | --- |
-| `discovered` | 当前连接存在有效解析的互联快照；首次识别前或授权撤销后为 `false` |
+| `discovered` | 当前连接曾成功识别为互联；首次识别前为 `false`，识别后的同步失败或授权撤销不清除此身份，也不代表当前仍有共享授权或可用快照 |
 | `observedAt`、`observedAtDisplay`、`observedAtRelative` | 上游观测时间及服务端格式化结果，不代表本次页面查询时间 |
 | `stale` | 快照是否已过期；过期值仅供查看 |
 | `connectionRevision` | 当前连接身份的不可解释标识，用于隔离地址、密钥或出口变化前的展示结果 |
-| `lastError` | 当前实例最近同步失败分类：`unauthorized`、`unsupported`、`rate_limited`、`invalid_response`、`unavailable`；已保存的不支持结论在重启后仍返回 `unsupported`，同步成功时为 `null` |
+| `lastError` | 当前实例最近同步失败分类：`unauthorized`、`unsupported`、`rate_limited`、`invalid_response`、`unavailable`；已保存的不支持结论及已确认互联的失权记录重启后仍返回对应分类，同步成功时为 `null` |
 | `pool` | 上游授权公开的账号数量、状态数量及套餐数量，未公开时为 `null` |
 
 互联额度复用 `quota.windows`。上游 Key 账本按实际提供的周期展示，不补造缺失窗口；不限额也保留已用金额。
@@ -1164,11 +1164,16 @@ Key 消费窗口的 `localUsage` 按各自 `[resetAt - windowSeconds, resetAt)` 
 互联窗口返回独立的 `observedAtDisplay` 和 `stale`
 
 手动刷新复用 `POST /api/admin/accounts/quota/refresh`，请求 `{ accountId }`，与原生额度刷新一样等待查询结束并返回账号视图。
-手动刷新允许重新探测已确认不支持的连接；不支持协议作为正常识别结果返回账号视图，`discovered: false`、`lastError: unsupported`，不作为后台刷新失败报警。
-其他查询失败通过现有管理错误返回；并发刷新合并，连续刷新遵守最小间隔和上游重试时间。
+手动刷新允许重新探测已确认不支持的连接；不支持协议作为正常识别结果返回账号视图和 `lastError: unsupported`，不作为后台刷新失败报警。
+其他查询失败通过现有管理错误返回；失败后可回读账号取得更新后的身份与观测。
+并发刷新合并，连续手动刷新至少间隔 15 秒，并遵守上游 `Retry-After`，不继承自动重试的长退避。
 自动刷新由后台任务执行，刷新节流与临时失败提示属于当前实例的运行期状态，重启后重新建立。
-网络错误、限流或无效响应保留旧观测；401/403 清除已撤销内容。这些失败不写入不支持结论，待识别及已确认支持的连接仍退避重试。
-账号凭据或出口变更使旧观测失效。
+网络错误、限流或无效响应保留旧观测；401/403 清除已撤销内容，但已确认的互联连接保留识别身份和失败分类。
+已确认互联后变为不支持协议时，也只保留识别身份和失败分类，不保留池、预算或模型数据。
+无观测内容时 `observedAt` 与 `pool` 为 `null`，互联额度窗口为空，识别身份不作为调度或额度恢复证据。
+首次探测失败不能证明上游支持互联，管理端继续按普通 API Key 展示，不显示互联告警；已确认的连接显示同步失败原因，可通过现有刷新额度入口重试。
+除明确不支持协议外，待识别及已确认支持的连接仍退避重试。
+账号地址、密钥或出口变更使旧观测与识别身份失效，重新识别当前连接。
 账号停用后停止同步，重新启用后按当前连接的识别结果恢复后台任务
 
 成功同步后，明确的预算访问结论决定账号是否进入 `quota_exhausted`；
@@ -2504,6 +2509,18 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 不改变顶部统计，独立运维事件仍通过 `/api/admin/operations/errors` 查询
 
 请求列表的 `errorCode` / `errorMessage` 提供最终请求的错误码与错误信息，未记录时为 `null`
+
+请求列表与详情的 `errorKind` 保留网关分类，`websocketCloseCode` 只提取已保存关闭帧的数字码，
+与原始上游 `errorCode` 分开。`continuationUnavailableReason` 和 `upstreamConnectionExitReason`
+保留已记录的续接及连接退出原因，缺失字段为 `null`，不根据错误文案推断。
+`recovered` 表示已关联到后续成功请求，原请求的 `logicalOutcome` 保持不变。
+这些字段用于本地化摘要，原始错误信息及受控诊断仍按各自合同保留
+
+`upstreamError` 仅在请求详情返回，从已保存的上游 JSON 投影 `code`、`errorType`、`message`、`param`，
+或 WS 关闭帧的 `closeReason`、`lastEventType`；不重新分类错误，也不包含原始请求、任意响应头或本地原因链。
+缺失、非 JSON 或未识别的结构返回 `null`，完整受控诊断通过诊断包获取。
+详情的 `message` 是网关摘要，不等同于上游 `upstreamError.message`；
+`retryAfterMs` 是已记录的重试等待毫秒数，未记录时为 `null`
 
 诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。诊断按请求量降序返回最多 100 项，

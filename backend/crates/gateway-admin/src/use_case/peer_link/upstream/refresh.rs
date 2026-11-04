@@ -135,21 +135,30 @@ impl PeerInfoService {
         }
         .max(retry_after.unwrap_or_default());
         state.next_attempt = Instant::now() + delay;
-        state.manual_after = Instant::now()
-            + (if failure.is_some_and(|error| error != UpstreamInfoFailure::Unsupported) {
-                delay
-            } else {
-                Duration::from_secs(15)
-            })
-            .max(retry_after.unwrap_or_default());
+        // 管理员修复授权后可主动复核，不继承自动重试的长退避，仍遵守上游限流
+        state.manual_after =
+            Instant::now() + Duration::from_secs(15).max(retry_after.unwrap_or_default());
         state.last_error = failure;
         let document = match result {
             Ok(document) => Some(document),
-            // 空观测清除已撤销内容，并用共有观察时间阻止更早请求重新写回
-            Err(UpstreamInfoFailure::Unauthorized) => {
-                Some(OpaqueProviderData::new(Default::default()))
+            Err(error @ (UpstreamInfoFailure::Unauthorized | UpstreamInfoFailure::Unsupported)) => {
+                let discovered = self
+                    .read_summary(id)
+                    .await
+                    .map_err(store_error)?
+                    .and_then(|quota| quota.upstream)
+                    .is_some_and(|info| {
+                        info.connection_revision == connection.revision && info.discovered
+                    });
+                // 首次探测失败不能证明对方是互联节点；已确认的连接只留下无共享内容的识别记录
+                Some(if discovered {
+                    snapshot::unavailable(&connection, error)
+                } else if error == UpstreamInfoFailure::Unsupported {
+                    snapshot::unsupported(&connection)
+                } else {
+                    OpaqueProviderData::new(Default::default())
+                })
             }
-            Err(UpstreamInfoFailure::Unsupported) => Some(snapshot::unsupported(&connection)),
             Err(_) => None,
         };
         if let Some(document) = document {

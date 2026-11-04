@@ -6,6 +6,7 @@ import {
   batchUpdateAccounts,
   deleteAccounts,
   exportAccounts,
+  getAccountDetail,
   getAccountModelCatalog,
   recoverAccount,
   refreshAccount,
@@ -265,7 +266,14 @@ export function useAccountMutations(options: {
           })
         }
       }
-      catch {}
+      catch {
+        // 刷新失败也可能清除已撤销的共享内容，回读该账号使提示与额度同步更新
+        try {
+          const result = await getAccountDetail({ accountId }, { silent: true })
+          await options.replaceAccount(result.account)
+        }
+        catch {}
+      }
     })
   }
 

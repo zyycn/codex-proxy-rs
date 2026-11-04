@@ -134,7 +134,8 @@
         "adaptToArtboard": "适应画板"
       },
       "open": "预览",
-      "edit": "编辑"
+      "edit": "编辑",
+      "loadFailed": "预览加载失败"
     },
     "componentTokens": {
       "cardsAndContainers": "卡片与容器",

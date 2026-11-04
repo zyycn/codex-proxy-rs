@@ -2,7 +2,6 @@
 import type { AccountUpstream } from '@/api'
 import { computed } from 'vue'
 
-import { accountUpstreamPending } from '@/utils/account-upstream'
 import { stableVisualIndex } from '@/utils/color'
 import AccountUpstreamBadge from './AccountUpstreamBadge.vue'
 
@@ -65,7 +64,7 @@ const paletteClass = computed(() => {
 <template>
   <AccountUpstreamBadge v-if="upstreamPeer || upstream?.discovered" :size="size" />
   <span
-    v-else-if="!accountUpstreamPending(upstream)"
+    v-else
     class="inline-flex min-w-0 max-w-full items-center justify-center gap-1 whitespace-nowrap leading-none shadow-z-tertiary"
     :class="[sizeClass, paletteClass]"
     :title="displayText || undefined"

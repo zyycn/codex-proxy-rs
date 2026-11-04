@@ -134,7 +134,8 @@
         "adaptToArtboard": "Adapt to artboard"
       },
       "open": "Preview",
-      "edit": "Edit"
+      "edit": "Edit",
+      "loadFailed": "Preview could not be loaded"
     },
     "componentTokens": {
       "cardsAndContainers": "Cards and Containers",

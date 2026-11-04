@@ -175,6 +175,174 @@ async fn uncertain_discovery_failures_retry_without_becoming_unsupported() {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn known_peer_failures_keep_identity_and_only_revocation_discards_shared_data() {
+    for failure in [
+        UpstreamInfoFailure::Unauthorized,
+        UpstreamInfoFailure::Unsupported,
+        UpstreamInfoFailure::Unavailable,
+        UpstreamInfoFailure::RateLimited,
+        UpstreamInfoFailure::InvalidResponse,
+    ] {
+        let (bundle, accounts, transport, id) = fixture(failure);
+        *transport.failure.lock().unwrap() = None;
+        let before = bundle.service().refresh_quota(&id).await.unwrap();
+        assert!(!before.windows.is_empty());
+        tokio::time::advance(Duration::from_secs(15)).await;
+        *transport.failure.lock().unwrap() = Some(failure.into());
+        let result = bundle.service().refresh_quota(&id).await;
+        assert_eq!(result.is_ok(), failure == UpstreamInfoFailure::Unsupported);
+        let clears_data = matches!(
+            failure,
+            UpstreamInfoFailure::Unauthorized | UpstreamInfoFailure::Unsupported
+        );
+        let quota = bundle.service().read_quota(&id).await.unwrap().unwrap();
+        let info = quota.upstream.as_ref().unwrap();
+        assert!(info.discovered);
+        assert_eq!(info.last_error.as_deref(), Some(failure.as_str()));
+        assert_eq!(quota.windows.is_empty(), clears_data);
+        assert_eq!(info.observed_at.is_none(), clears_data);
+        assert_eq!(
+            bundle
+                .service()
+                .read_summary(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .upstream,
+            quota.upstream
+        );
+        let account = accounts.accounts.lock().unwrap()[0].clone();
+        assert_eq!(
+            bundle
+                .scheduling_source()
+                .signal(&account, "model", SystemTime::now())
+                .is_none(),
+            clears_data
+        );
+
+        drop(bundle);
+        let restarted = initialize(accounts, transport);
+        let restored = restarted.service().read_quota(&id).await.unwrap().unwrap();
+        assert!(restored.upstream.as_ref().unwrap().discovered);
+        assert_eq!(restored.windows.is_empty(), clears_data);
+        if clears_data {
+            assert_eq!(
+                restored.upstream.as_ref().unwrap().last_error.as_deref(),
+                Some(failure.as_str())
+            );
+        }
+        assert_eq!(
+            restarted
+                .service()
+                .read_summary(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .upstream,
+            restored.upstream
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn known_peer_identity_is_scoped_to_the_connection_after_revocation() {
+    for failure in [
+        UpstreamInfoFailure::Unauthorized,
+        UpstreamInfoFailure::Unsupported,
+    ] {
+        let (bundle, accounts, transport, id) = fixture(failure);
+        *transport.failure.lock().unwrap() = None;
+        bundle.service().refresh_quota(&id).await.unwrap();
+        tokio::time::advance(Duration::from_secs(15)).await;
+        *transport.failure.lock().unwrap() = Some(failure.into());
+        let _result = bundle.service().refresh_quota(&id).await;
+        let initial = accounts.accounts.lock().unwrap()[0].clone();
+        let edited = initial.clone().with_notes(Some("保留连接身份".into()));
+        *accounts.accounts.lock().unwrap() = vec![edited.clone()];
+        bundle.service().account_changed(&id).await.unwrap();
+        assert!(
+            bundle
+                .service()
+                .read_summary(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .upstream
+                .unwrap()
+                .discovered
+        );
+
+        // 地址和密钥修改推进凭据版本，出口变化则改变同一版本的连接身份
+        for replacement in [
+            edited.with_outbound_proxy(Some(
+                OutboundProxy::parse("http://other.invalid:8080").unwrap(),
+            )),
+            ProviderAccount::new(
+                id.clone(),
+                initial.provider().clone(),
+                "替换连接".into(),
+                None,
+                "peer_test".into(),
+                CredentialRevision::new(2).unwrap(),
+                None,
+            )
+            .with_account_facts(
+                true,
+                CredentialState::Ready,
+                QuotaState::unknown(),
+                None,
+                None,
+            ),
+        ] {
+            *accounts.accounts.lock().unwrap() = vec![replacement];
+            bundle.service().account_changed(&id).await.unwrap();
+            let detail = bundle.service().read_quota(&id).await.unwrap().unwrap();
+            assert!(!detail.upstream.as_ref().unwrap().discovered);
+            assert!(detail.upstream.as_ref().unwrap().last_error.is_none());
+            assert_eq!(
+                bundle
+                    .service()
+                    .read_summary(&id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .upstream,
+                detail.upstream
+            );
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_rediscovery_does_not_wait_for_authorization_backoff_but_respects_retry_after() {
+    for retry_after in [None, Some(Duration::from_secs(90))] {
+        let (mut bundle, _, transport, id) = fixture(UpstreamInfoFailure::Unauthorized);
+        *transport.failure.lock().unwrap() = None;
+        bundle.service().refresh_quota(&id).await.unwrap();
+        tokio::time::advance(Duration::from_secs(15)).await;
+        *transport.failure.lock().unwrap() = Some(PeerFetchFailure {
+            kind: UpstreamInfoFailure::Unauthorized,
+            retry_after,
+        });
+        assert!(bundle.service().refresh_quota(&id).await.is_err());
+        let worker = worker(&mut bundle);
+        *transport.failure.lock().unwrap() = None;
+        let delay = retry_after.unwrap_or(Duration::from_secs(15));
+        tokio::time::advance(delay - Duration::from_secs(1)).await;
+        assert!(bundle.service().refresh_quota(&id).await.is_err());
+        assert_eq!(transport.requests.load(Ordering::SeqCst), 2);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        cycle(&worker).await;
+        assert_eq!(transport.requests.load(Ordering::SeqCst), 2);
+        let recovered = bundle.service().refresh_quota(&id).await.unwrap();
+        assert_eq!(transport.requests.load(Ordering::SeqCst), 3);
+        assert!(recovered.upstream.as_ref().unwrap().discovered);
+        assert!(recovered.upstream.as_ref().unwrap().last_error.is_none());
+        assert!(!recovered.windows.is_empty());
+    }
+}
+
 fn fixture(
     failure: UpstreamInfoFailure,
 ) -> (

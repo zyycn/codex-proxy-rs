@@ -181,6 +181,7 @@ export interface Account {
 }
 
 export interface AccountUpstream {
+  // 同一连接曾确认支持互联，失权时仍为 true，观测内容则清空
   discovered: boolean
   observedAt: string | null
   observedAtDisplay: string

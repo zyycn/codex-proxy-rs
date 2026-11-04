@@ -4,15 +4,19 @@ import type { UsageRecordDetail } from '@/api'
 import { ZButton, ZDialog } from '@codex-proxy/ui'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { usageErrorSummary } from '@/components/usage/shared/errors'
 import { usageAccountText, usageModelDisplay, usageTransportType } from '@/components/usage/shared/presenter'
 import { formatDuration } from '@/utils/format'
 import { attemptOutcomeClass, attemptOutcomeText, visibleResponseText } from '../utils/detail'
 import DiagnosticsDownloadButton from './DiagnosticsDownloadButton.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 import UsageDetailFieldGrid from './UsageDetailFieldGrid.vue'
+import UsageDetailState from './UsageDetailState.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
-const props = defineProps<{ record: UsageRecordDetail | null }>()
+const props = defineProps<{ record: UsageRecordDetail | null, loading?: boolean, error?: string }>()
+
+const emit = defineEmits<{ retry: [] }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -27,6 +31,29 @@ const errorMessage = computed(() => {
     ? message
     : t('usage.error.noDetails')
 })
+const errorSummary = computed(() => props.record
+  ? usageErrorSummary(props.record)
+  : null)
+const upstreamMessage = computed(() => props.record?.upstreamError?.message)
+const errorItems = computed(() => [
+  { label: 'Code', value: props.record?.upstreamError?.code ?? props.record?.errorCode },
+  { label: 'Type', value: props.record?.upstreamError?.errorType },
+  { label: 'Param', value: props.record?.upstreamError?.param },
+  {
+    label: t('usage.error.websocketCloseCode'),
+    value: props.record?.websocketCloseCode,
+  },
+  {
+    label: t('usage.error.lastEventType'),
+    value: props.record?.upstreamError?.lastEventType,
+  },
+  {
+    label: t('usage.error.retryAfter'),
+    value: props.record?.retryAfterMs == null
+      ? null
+      : formatDuration(props.record.retryAfterMs),
+  },
+].filter(item => item.value != null && item.value !== '').map(item => ({ ...item, mono: true, wrap: true })))
 const responseText = computed(() => props.record
   ? visibleResponseText(props.record)
   : '')
@@ -102,12 +129,16 @@ const identifierItems = computed(() => [
     mono: true,
     fullWidth: true,
   },
-  {
-    label: t('usage.error.upstreamRequestId'),
-    value: props.record?.upstreamRequestId,
-    mono: true,
-    fullWidth: true,
-  },
+  ...(props.record?.upstreamRequestId
+    ? [
+        {
+          label: t('usage.error.upstreamRequestId'),
+          value: props.record.upstreamRequestId,
+          mono: true,
+          fullWidth: true,
+        },
+      ]
+    : []),
   {
     label: t('usage.error.responseId'),
     value: props.record?.responseId,
@@ -173,17 +204,45 @@ const attempts = computed(() => (props.record?.attempts ?? []).map(attempt => ({
 
 <template>
   <ZDialog v-model="open" :title="t('usage.error.errorDetails')" :description="t('usage.error.description')" type="danger" width="64rem">
-    <div v-if="record" class="grid min-w-0 gap-3">
+    <UsageDetailState v-if="loading || error" variant="error" :loading="!!loading" :error="error" @retry="emit('retry')" />
+    <div v-else-if="record" class="grid min-w-0 gap-3">
       <section class="min-w-0 rounded-z-card bg-z-error-container px-4 py-3.5 text-z-error-on-container">
-        <div class="flex items-center gap-3">
+        <div class="flex flex-wrap items-center gap-3">
           <h3 class="m-0 text-z-sm leading-none font-heavy">
             {{ record.logicalOutcome === 'incomplete' ? t('usage.error.responseIsNotComplete') : t('usage.error.requestFailed') }}
           </h3>
-          <UsageStatusCodeBadge v-if="record.statusCode !== null" :status-code="record.statusCode" />
+          <span v-if="record.recovered" class="rounded-z-sm bg-z-success-container px-2 py-1 text-z-xs font-emphasis text-z-success-on-container">
+            {{ t('usage.error.recovered') }}
+          </span>
         </div>
-        <p class="mt-3 mb-0 wrap-anywhere whitespace-pre-wrap font-mono text-z-sm leading-relaxed">
-          {{ errorMessage }}
+        <p v-if="errorSummary" class="mt-2 mb-0 text-z-sm leading-relaxed">
+          {{ errorSummary }}
         </p>
+        <UsageDetailFieldGrid v-if="errorItems.length" :items="errorItems" />
+        <template v-if="upstreamMessage">
+          <p class="mt-3 mb-1 text-z-xs text-z-text-secondary">
+            Message
+          </p>
+          <p class="m-0 wrap-anywhere whitespace-pre-wrap font-mono text-z-sm leading-relaxed" translate="no">
+            {{ upstreamMessage }}
+          </p>
+        </template>
+        <template v-if="record.upstreamError?.closeReason">
+          <p class="mt-3 mb-1 text-z-xs text-z-text-secondary">
+            {{ t('usage.error.closeReason') }}
+          </p>
+          <p class="m-0 wrap-anywhere whitespace-pre-wrap font-mono text-z-sm leading-relaxed" translate="no">
+            {{ record.upstreamError.closeReason }}
+          </p>
+        </template>
+        <template v-if="!upstreamMessage || upstreamMessage !== errorMessage">
+          <p class="mt-3 mb-1 text-z-xs text-z-text-secondary">
+            {{ t('usage.error.gatewayMessage') }}
+          </p>
+          <p class="m-0 wrap-anywhere whitespace-pre-wrap font-mono text-z-sm leading-relaxed" translate="no">
+            {{ errorMessage }}
+          </p>
+        </template>
       </section>
 
       <section class="grid min-w-0 gap-3 lg:grid-cols-2">
@@ -232,7 +291,7 @@ const attempts = computed(() => (props.record?.attempts ?? []).map(attempt => ({
     </div>
 
     <template #footer>
-      <DiagnosticsDownloadButton v-if="record" :request-id="record.requestId" :active="open" />
+      <DiagnosticsDownloadButton :request-id="record?.requestId" :active="open && !loading" />
       <ZButton type="primary" @click="open = false">
         {{ t('common.actions.close') }}
       </ZButton>

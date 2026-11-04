@@ -111,13 +111,13 @@
       "reasoningEffort": "Effort",
       "endpoint": "Endpoint",
       "upstream": "Upstream",
-      "access": "Access",
       "cost": "Cost",
       "latency": "Latency",
       "time": "Time",
       "keyName": "Key",
       "subscription": "Plan",
-      "platformType": "Provider"
+      "platformType": "Provider",
+      "transport": "Transport"
     },
     "outputThroughput": "Rate",
     "noValidSample": "No valid sample",
@@ -295,7 +295,27 @@
       "attempt": "Attempt {index}",
       "diagnosticData": "Diagnostic data",
       "responseContent": "Response content",
-      "metadata": "Metadata"
+      "metadata": "Metadata",
+      "recovered": "Subsequently recovered",
+      "summary": {
+        "upstreamRestart": "Upstream closed the connection (service restart)",
+        "upstreamBusy": "Upstream closed the connection (try again later)",
+        "messageTooLarge": "Upstream closed the connection because the message was too large",
+        "upstreamClosed": "Upstream closed the connection before the response completed",
+        "processInterrupted": "Request execution was interrupted without a recorded final result",
+        "continuationExpired": "Continuation connection expired, resend the full context",
+        "continuationUnavailable": "Continuation state is unavailable, resend the full context",
+        "connectionLimit": "Upstream connection reached its time limit, reconnect to continue",
+        "contextTooLong": "Context exceeds the model limit",
+        "quotaExceeded": "Upstream quota is insufficient",
+        "rateLimited": "Upstream request rate limit reached",
+        "serverOverloaded": "Upstream service is overloaded"
+      },
+      "websocketCloseCode": "WS close code",
+      "lastEventType": "Last event",
+      "retryAfter": "Retry after",
+      "closeReason": "Close reason",
+      "gatewayMessage": "Gateway summary"
     },
     "insights": {
       "useStatisticalObservations": "Use statistical observations"
@@ -332,7 +352,8 @@
       "incompleteDetails": "Incomplete details",
       "total": "Total",
       "requestContent": "Request content",
-      "inProgress": "In progress"
+      "inProgress": "In progress",
+      "loadingDetails": "Loading request details"
     },
     "successfulRequest": "Successful requests",
     "withinFilterRange": "Within filter range",
@@ -342,6 +363,7 @@
     "averageTimeTaken": "Average latency",
     "successfulRequestAverage": "Successful requests only",
     "usageOverview": "Usage overview",
-    "noUsageRecords": "No usage records"
+    "noUsageRecords": "No usage records",
+    "transportDirection": "Upstream {upstream} · Client {client}"
   }
 }

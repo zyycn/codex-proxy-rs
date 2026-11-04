@@ -24,16 +24,11 @@ export const usageDataColumns = computed(() => ([
     kind: 'mono',
   },
   {
-    key: 'upstreamTransport',
-    label: t('usage.fields.upstream'),
+    key: 'transport',
+    label: t('usage.fields.transport'),
     kind: 'status',
-    size: 'md',
-  },
-  {
-    key: 'clientTransport',
-    label: t('usage.fields.access'),
-    kind: 'status',
-    size: 'md',
+    size: 'lg',
+    fixedWidth: true,
   },
   {
     key: 'tokenDetails',
