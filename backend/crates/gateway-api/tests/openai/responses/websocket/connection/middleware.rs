@@ -388,6 +388,7 @@ async fn rewrite_upgrade_and_control_active_response_keep_http_context_until_con
     assert!(matches!(reply, ClientMessage::Binary(bytes) if bytes.as_ref() == [0,255,1]));
     assert_eq!(trace.starts.load(Ordering::SeqCst), 1);
     assert!(!trace.cancelled.load(Ordering::SeqCst));
+    trace.reconnect_for_replay.store(true, Ordering::Release);
     trace.release_terminal.notify_one();
     let reply = tokio::time::timeout(Duration::from_secs(2), socket.next())
         .await
@@ -400,6 +401,16 @@ async fn rewrite_upgrade_and_control_active_response_keep_http_context_until_con
     let event: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(event["type"], "response.completed");
     assert_eq!(event["plugin"], true);
+    socket
+        .send(ClientMessage::Ping(vec![9].into()))
+        .await
+        .unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .expect("Pong after middleware rewrote the terminal")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(reply, ClientMessage::Pong(_)));
     assert!(plan.incoming.load(Ordering::SeqCst) >= 2);
     assert!(plan.outgoing.load(Ordering::SeqCst) >= 3);
     socket.close(None).await.unwrap();

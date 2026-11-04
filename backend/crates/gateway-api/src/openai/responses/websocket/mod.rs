@@ -179,12 +179,10 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         crate::middleware::websocket::CancelOnDrop(Some(cancellation.clone()));
     let request_headers =
         request_headers.with_downstream_websocket_connection_id(connection_id.clone());
-    // Codex Core 观察正常关闭后会重建完整输入；原始帧由中间件改写时无法证明同一终态已交付
-    let reconnect_for_replay = crate::openai::auth::identify_codex_client(&raw_headers)
-        .is_some_and(|client| client.kind() == gateway_core::policy::CodexClientKind::Cli)
-        && !middleware
-            .as_ref()
-            .is_some_and(FrozenMiddlewarePlan::has_websocket);
+    // 帧中间件可能改写终态，此时不能据原始响应关闭下游连接
+    let reconnect_for_replay = !middleware
+        .as_ref()
+        .is_some_and(FrozenMiddlewarePlan::has_websocket);
     let mut connection = ResponsesWebSocketConnection::new(
         socket,
         connection_id,

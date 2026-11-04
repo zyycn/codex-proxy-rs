@@ -921,17 +921,7 @@ async fn start_active_response_with(
 
 #[tokio::test]
 async fn replay_reconnect_waits_for_queued_requests_and_writes_the_last_terminal() {
-    assert_replay_queue("codex-tui/0.166.0", true).await;
-}
-
-#[tokio::test]
-async fn third_party_client_keeps_its_socket_after_replay_required_responses() {
-    assert_replay_queue("integration-test", false).await;
-}
-
-async fn assert_replay_queue(user_agent: &str, expects_close: bool) {
-    let (trace, mut socket, server) =
-        start_active_response_with(None, "/v1/responses", user_agent).await;
+    let (trace, mut socket, server) = start_active_response().await;
     trace.reconnect_for_replay.store(true, Ordering::Release);
     for input in ["second", "third"] {
         socket
@@ -990,25 +980,13 @@ async fn assert_replay_queue(user_agent: &str, expects_close: bool) {
         vec![json!("hello"), json!("second"), json!("third")]
     );
     assert!(!trace.cancelled.load(Ordering::Acquire));
-    if !expects_close {
-        socket
-            .send(ClientMessage::Ping(vec![9].into()))
-            .await
-            .unwrap();
-    }
     let next = tokio::time::timeout(Duration::from_secs(2), socket.next())
         .await
-        .expect("close or pong")
+        .expect("replay close timeout")
         .unwrap()
         .unwrap();
-    if expects_close {
-        assert!(
-            matches!(next, ClientMessage::Close(Some(frame)) if frame.code == CloseCode::Normal)
-        );
-    } else {
-        assert!(matches!(next, ClientMessage::Pong(_)));
-        socket.close(None).await.unwrap();
-    }
+    assert!(matches!(next, ClientMessage::Close(Some(frame))
+        if frame.code == CloseCode::Normal && frame.reason == "Reconnect with full input."));
     server.abort();
 }
 
