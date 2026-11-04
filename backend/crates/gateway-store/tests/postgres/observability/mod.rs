@@ -147,6 +147,35 @@ async fn usage_error_facts_preserve_recovery_and_validate_saved_close_frames() {
             )),
             None,
         ),
+        (
+            Some(saved(
+                serde_json::json!({"type":"websocket.close","code":"1012"}),
+            )),
+            None,
+        ),
+        (
+            Some(saved(
+                serde_json::json!({"type":"websocket.close","code":1012.5}),
+            )),
+            None,
+        ),
+        (
+            Some(saved(serde_json::json!([
+                {"type":"websocket.close","code":1012},
+                {"type":"websocket.close","code":1013},
+            ]))),
+            None,
+        ),
+        (
+            Some(serde_json::json!({"upstream":"not json"}).to_string()),
+            None,
+        ),
+        (
+            Some(
+                serde_json::json!({"upstream":{"type":"websocket.close","code":1012}}).to_string(),
+            ),
+            None,
+        ),
         (Some("legacy plain-text error".to_owned()), None),
         (None, None),
     ] {
