@@ -15,6 +15,7 @@ withDefaults(defineProps<{
   currentProxyId?: string | null
   endpoint?: string | null
   accountId?: string
+  modelAccountId?: string
   preserveProxy?: boolean
   preserveModelAccess?: boolean
   showScheduling?: boolean
@@ -37,7 +38,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
 
 <template>
   <div class="grid gap-4.5">
-    <AccountModelAccessField v-model="modelAccess" form-prop="modelAccess" :account-id="accountId" :disabled="disabled" :allow-preserve="preserveModelAccess" />
+    <AccountModelAccessField v-model="modelAccess" form-prop="modelAccess" :account-id="modelAccountId ?? accountId" :disabled="disabled" :allow-preserve="preserveModelAccess" />
     <slot name="scheduling">
       <div v-if="showScheduling" class="flex min-h-6 items-center justify-between gap-3">
         <span class="text-z leading-none font-medium text-z-text-secondary">{{ t('accounts.scheduling.scheduling') }}</span>

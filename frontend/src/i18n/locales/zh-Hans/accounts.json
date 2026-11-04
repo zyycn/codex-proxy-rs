@@ -232,7 +232,13 @@
       "disabledSuffix": "（已禁用）",
       "testFailed": "（测试失败）",
       "notTested": "（未测试）",
-      "outboundTunnel": "出站隧道"
+      "outboundTunnel": "出站隧道",
+      "testExit": "测试出口",
+      "testHelp": "检查网络出口，不验证账号权限或额度",
+      "selectToTest": "选择直连或受管理的代理后可测试出口",
+      "disabledUsesDirect": "代理已禁用，将测试服务器直连出口",
+      "connected": "出口连通 · {latencyMs} ms",
+      "testIncomplete": "未取得测试结果，请重新测试"
     },
     "scheduling": {
       "scheduling": "调度",

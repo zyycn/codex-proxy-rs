@@ -187,11 +187,12 @@ export function testProxy(data: ProxyTestParam[], options: RequestOptions = {}) 
   })
 }
 
-export function probeProxy(data: ProxyProbeParam) {
+export function probeProxy(data: ProxyProbeParam, options: RequestOptions = {}) {
   return request<OutboundProxyTest>({
     url: '/api/admin/proxies/probe',
     method: 'POST',
     data,
     timeout: 25000,
+    ...options,
   })
 }

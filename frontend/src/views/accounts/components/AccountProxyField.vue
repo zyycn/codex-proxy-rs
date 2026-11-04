@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ZFormItem, ZSelect } from '@codex-proxy/ui'
+import { ZButton, ZFormItem, ZSelect } from '@codex-proxy/ui'
+import { Wifi } from '@lucide/vue'
 
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useProxyCatalog } from '@/composables/useProxyCatalog'
+import { useAccountProxyTest } from '../composables/useAccountProxyTest'
 
 const props = withDefaults(defineProps<{ accountId?: string, currentProxyId?: string | null, endpoint?: string | null, disabled?: boolean, preserve?: boolean, formProp: string }>(), { preserve: true })
 
@@ -68,10 +70,57 @@ const selection = computed({
       : ''
   },
 })
+const selectedProxy = computed(() => proxies.value.find(proxy => proxy.id === selection.value))
+const testTarget = computed(() => {
+  if (props.disabled || loading.value)
+    return null
+  // 禁用代理的账号实际走直连，不把该代理自身的测试结果当成账号出口
+  if (selection.value === 'direct' || selectedProxy.value?.enabled === false)
+    return 'direct' as const
+  return selectedProxy.value ?? null
+})
+const { result, testing, error, test } = useAccountProxyTest({
+  target: () => testTarget.value,
+  accountId: () => props.accountId,
+  onTested: (record) => {
+    proxies.value = proxies.value.map(proxy => proxy.id === record.id
+      ? record
+      : proxy)
+  },
+})
+const testDescription = computed(() => selectedProxy.value?.enabled === false
+  ? t('accounts.proxy.disabledUsesDirect')
+  : selection.value !== 'direct' && !selectedProxy.value
+    ? t('accounts.proxy.selectToTest')
+    : t('accounts.proxy.testHelp'))
 </script>
 
 <template>
   <ZFormItem :prop="formProp" :show-message="false" :label="t('accounts.proxy.outboundTunnel')">
-    <ZSelect v-model="selection" class="w-full" :options="options" :disabled="disabled || loading" :aria-label="t('accounts.proxy.outboundTunnel')" />
+    <div class="grid w-full min-w-0 gap-2">
+      <div class="flex min-w-0 gap-2">
+        <ZSelect v-model="selection" class="min-w-0 flex-1" :options="options" :disabled="disabled || loading" :aria-label="t('accounts.proxy.outboundTunnel')" />
+        <ZButton class="shrink-0" :loading="testing" :disabled="!testTarget" @click="test">
+          <template #icon>
+            <Wifi class="size-4" />
+          </template>
+          {{ t('accounts.proxy.testExit') }}
+        </ZButton>
+      </div>
+      <p class="m-0 text-z-xs text-z-text-secondary">
+        {{ testDescription }}
+      </p>
+      <div v-if="result" class="grid min-w-0 gap-1 text-z-xs" role="status">
+        <span :class="result.success ? 'text-z-success-text' : 'text-z-error-text'">
+          {{ result.success ? t('accounts.proxy.connected', { latencyMs: result.latencyMs }) : result.message }}
+        </span>
+        <span v-if="result.exitIpv4" class="font-mono break-all">IPv4 · {{ result.exitIpv4 }}</span>
+        <span v-if="result.exitIpv6" class="font-mono break-all">IPv6 · {{ result.exitIpv6 }}</span>
+        <span v-if="!result.exitIpv4 && !result.exitIpv6 && result.exitIp" class="font-mono break-all">IP · {{ result.exitIp }}</span>
+      </div>
+      <p v-if="error" class="m-0 text-z-xs wrap-break-word text-z-error-text" role="alert">
+        {{ error }}
+      </p>
+    </div>
   </ZFormItem>
 </template>

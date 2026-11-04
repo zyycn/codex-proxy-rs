@@ -1241,9 +1241,12 @@ Search 的选号限制不约束插件在选号后主动改写正文。
 | `POST` | `/api/admin/proxies/accounts/remove` | `{ proxyId, accountId }` | `{ configRevision }` |
 | `POST` | `/api/admin/proxies/create` | `[{ name, proxyUrl, location?, autoLocation?, maxWebsocketConnections? }]` | 逐项结果数组，成功项的 `data` 为 `{ record, configRevision }` |
 | `POST` | `/api/admin/proxies/update` | `{ id, revision, name, enabled?, proxyUrl?, location?, autoLocation?, maxWebsocketConnections? }` | `{ record, configRevision }` |
-| `POST` | `/api/admin/proxies/probe` | `{ proxyUrl, detectLocation? }` | 测试未保存的地址，返回连通性及可选位置结果，不创建代理 |
+| `POST` | `/api/admin/proxies/probe` | `{ proxyUrl, detectLocation? }` | 测试未保存的地址或服务器直连出口，返回连通性及可选位置结果，不创建代理 |
 | `POST` | `/api/admin/proxies/test` | `[{ id, revision, detectLocation? }]` | 逐项结果数组，成功项的 `data` 为最新代理记录 |
 | `POST` | `/api/admin/proxies/delete` | `{ id, revision }` | `{ configRevision }` |
+
+`probe` 的 `proxyUrl` 必填，空字符串表示服务器直连；非空值须为合法代理 URL，`null`、省略或非法地址均拒绝。
+探测不创建代理或修改账号绑定
 
 添加与测试统一接收 1–100 项数组，单条操作传一个元素，响应 `data` 按输入顺序返回等长数组。
 每项为 `{ status: "succeeded", data }`、`{ status: "failed", httpStatus, code, message, data: null }`
