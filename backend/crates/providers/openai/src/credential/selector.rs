@@ -8,11 +8,11 @@ use std::time::{Duration, SystemTime};
 use gateway_core::error::ErrorSource;
 
 use gateway_core::account::{
-    AccountAffinity, AccountCandidate, AccountCapacitySnapshot, AccountEligibilityPolicy,
-    AccountErrorReason, AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals,
-    AccountSchedulingBlocker, AccountSelectionContext, AccountSelectionPolicy, AccountSelector,
-    AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId,
-    QuotaEvidence, RotationStrategy,
+    AccountAffinity, AccountCandidate, AccountCapacitySnapshot, AccountErrorReason,
+    AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker,
+    AccountSelectionContext, AccountSelectionPolicy, AccountSelector, AccountStatus,
+    CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId, QuotaEvidence,
+    RotationStrategy,
 };
 use gateway_core::concurrency::{CapacityWait, ConcurrencyWaitQueue, QueueRejection, WaitPriority};
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, policy::AccountPolicyError};
@@ -510,7 +510,8 @@ impl CodexCredentialSelector {
             ),
             _ => None,
         };
-        let diagnostic = request.attempt.is_diagnostic_required_account();
+        let eligibility = request.attempt.account_eligibility();
+        let diagnostic = eligibility.bypasses_local_eligibility();
         let binding_key = request.session_affinity_key.filter(|_| !diagnostic);
         let affinity_mode = request
             .attempt
@@ -861,11 +862,7 @@ impl CodexCredentialSelector {
                     preferred_account: preferred.clone(),
                     preferred_account_overrides_weight: true,
                     round_robin_cursor,
-                    eligibility: if diagnostic {
-                        AccountEligibilityPolicy::BypassForDiagnostic
-                    } else {
-                        AccountEligibilityPolicy::Enforce
-                    },
+                    eligibility,
                     account_scope: request.attempt.account_scope().cloned(),
                     reserved_concurrency,
                 };
@@ -1062,7 +1059,8 @@ impl CodexCredentialSelector {
                     busy_accounts.insert(account.id().clone());
                     continue;
                 }
-                let allows_account_state_mutation = !diagnostic || account.enabled();
+                let allows_account_state_mutation =
+                    eligibility.allows_account_state_mutation(account.enabled());
                 match self
                     .leases
                     .try_acquire(ProviderLeaseRequest::Scheduling(
@@ -1814,7 +1812,7 @@ impl CodexCredentialLease {
         self.cyber_policy_scope.as_ref()
     }
 
-    /// 禁用账号的管理端诊断必须只返回真实上游结果，不能回写账号侧状态
+    /// 租约保留本次选号的回写权限，覆盖成功、失败与流式反馈
     #[must_use]
     pub(crate) const fn allows_account_state_mutation(&self) -> bool {
         self.allows_account_state_mutation

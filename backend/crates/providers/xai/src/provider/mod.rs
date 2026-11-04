@@ -7,8 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 use async_trait::async_trait;
 use futures::{StreamExt, future::BoxFuture};
 use gateway_core::account::{
-    AccountEligibilityPolicy, AccountFeedbackStats, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore,
+    AccountFeedbackStats, ProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
 use gateway_core::engine::continuation::ContinuationBinding;
 use gateway_core::engine::middleware::MiddlewareHeader;
@@ -725,11 +724,7 @@ async fn select_grok_session(
         context.request_policy_context().cloned(),
         context.attempt_index(),
     )
-    .with_eligibility_policy(if context.is_diagnostic_required_account() {
-        AccountEligibilityPolicy::BypassForDiagnostic
-    } else {
-        AccountEligibilityPolicy::Enforce
-    })
+    .with_eligibility_policy(context.account_eligibility())
     .with_affinity(affinity);
     selection.upstream_context = Some(context.clone());
     selection.adapter_required = adapter_required;

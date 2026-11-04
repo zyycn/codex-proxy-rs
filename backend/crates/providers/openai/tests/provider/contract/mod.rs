@@ -46,6 +46,7 @@ use gateway_core::engine::middleware::{
     FrozenMiddlewarePlan, MiddlewareContext, MiddlewareError, MiddlewareHeader, MiddlewareMount,
     MiddlewareNext, MiddlewarePlan, MiddlewareRequest, MiddlewareResponse,
 };
+use gateway_core::engine::probe::AccountProbeTarget;
 use gateway_core::engine::provider::{Provider as _, ProviderRequest};
 use gateway_core::engine::{
     AccountAttemptContext, AttemptContext, AttemptTransport, ContinuationAttempt, ModelRequestId,
@@ -1689,6 +1690,13 @@ fn fallback_transport_context(request_id: &str) -> AttemptContext {
 }
 
 fn diagnostic_context(request_id: &str, account_id: &str) -> AttemptContext {
+    probe_context(
+        request_id,
+        AccountProbeTarget::ConnectionTest(ProviderAccountId::new(account_id).unwrap()),
+    )
+}
+
+fn probe_context(request_id: &str, target: AccountProbeTarget) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new(request_id).expect("request id"),
@@ -1698,11 +1706,7 @@ fn diagnostic_context(request_id: &str, account_id: &str) -> AttemptContext {
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
-        AccountAttemptContext::diagnostic(
-            BTreeSet::new(),
-            ProviderAccountId::new(account_id).expect("account id"),
-            None,
-        ),
+        AccountAttemptContext::diagnostic(BTreeSet::new(), target, None),
         None,
         CancellationToken::new(),
     )

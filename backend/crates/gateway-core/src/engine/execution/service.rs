@@ -1334,14 +1334,14 @@ impl DefaultExecutionService {
         frozen: Option<Arc<crate::routing::RuntimeSnapshot>>,
     ) -> Result<AccountProbeResult, AccountProbeError> {
         let AccountProbeRequest {
-            account_id,
+            target,
             provider_kind,
             upstream_model,
             operation,
         } = request;
         let observed = ProbeObservation {
             provider_kind: provider_kind.clone(),
-            account_id: account_id.clone(),
+            account_id: target.account_id().clone(),
             upstream_model: upstream_model.clone(),
         };
         let snapshot = frozen
@@ -1402,7 +1402,7 @@ impl DefaultExecutionService {
                 new_request,
                 operation,
                 plan,
-                account_id,
+                target,
                 None,
                 CancellationToken::new(),
             )

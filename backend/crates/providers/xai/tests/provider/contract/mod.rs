@@ -6,6 +6,7 @@ mod scheduling;
 mod selection_retry;
 mod timing;
 
+use gateway_core::engine::probe::AccountProbeTarget;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1978,7 +1979,11 @@ fn diagnostic_context(request_id: &str, account_suffix: &str) -> AttemptContext 
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         selection_policy(),
-        AccountAttemptContext::diagnostic(BTreeSet::new(), account_id(account_suffix), None),
+        AccountAttemptContext::diagnostic(
+            BTreeSet::new(),
+            AccountProbeTarget::ConnectionTest(account_id(account_suffix)),
+            None,
+        ),
         None,
         CancellationToken::new(),
     )
