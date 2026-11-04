@@ -46,13 +46,21 @@ pub(in crate::openai) fn project_response(
     let mut content = None;
     let mut refusal = None;
     let mut tools = Vec::new();
+    let mut annotations = Vec::new();
+    let mut content_chars = 0;
     for item in output {
         match required_str(item, "type")? {
             "message" => {
+                // 两侧索引都按消息中的字符计数，合并多条 assistant 消息时平移引用
+                let message_offset = content_chars;
                 for part in message_parts(item)? {
                     let (kind, text) = part_text(part)?;
                     let target = match kind {
-                        PartKind::Text => &mut content,
+                        PartKind::Text => {
+                            append_url_citations(part, message_offset, &mut annotations)?;
+                            content_chars += text.chars().count() as u64;
+                            &mut content
+                        }
                         PartKind::Refusal => &mut refusal,
                     };
                     target.get_or_insert_with(String::new).push_str(text);
@@ -65,7 +73,7 @@ pub(in crate::openai) fn project_response(
                     "function": {"name": name, "arguments": arguments}
                 }));
             }
-            "reasoning" => {}
+            "reasoning" | "web_search_call" => {}
             _ => return Err(invalid_response()),
         }
     }
@@ -73,6 +81,9 @@ pub(in crate::openai) fn project_response(
     let mut message = json!({"role": "assistant", "content": content, "refusal": refusal});
     if !tools.is_empty() {
         message["tool_calls"] = Value::Array(tools);
+    }
+    if !annotations.is_empty() {
+        message["annotations"] = Value::Array(annotations);
     }
     serde_json::to_value(Envelope {
         identity,
@@ -117,6 +128,7 @@ enum Output {
     Message(BTreeMap<u64, Part>),
     Function(Tool),
     Reasoning,
+    WebSearch,
 }
 
 struct OutputItem {
@@ -357,6 +369,7 @@ impl ChatStreamEncoder {
             let output = match kind {
                 "message" => Output::Message(BTreeMap::new()),
                 "reasoning" => Output::Reasoning,
+                "web_search_call" => Output::WebSearch,
                 "function_call" => {
                     let (call_id, name, _) = function_fields(snapshot)?;
                     let tool_index = self.tool_count();
@@ -399,7 +412,7 @@ impl ChatStreamEncoder {
                     frames.push(delta_frame(&self.identity, self.include_usage, json!({"tool_calls": [{"index": tool.index, "function": {"arguments": suffix}}]}))?);
                 }
             }
-            (Output::Reasoning, "reasoning") => {}
+            (Output::Reasoning, "reasoning") | (Output::WebSearch, "web_search_call") => {}
             _ => return Err(invalid_response()),
         }
         Ok(())
@@ -500,6 +513,33 @@ fn part_text(part: &Value) -> Result<(PartKind, &str), ProtocolErrorBody> {
         "refusal" => Ok((PartKind::Refusal, required_str(part, "refusal")?)),
         _ => Err(invalid_response()),
     }
+}
+
+fn append_url_citations(
+    part: &Value,
+    message_offset: u64,
+    annotations: &mut Vec<Value>,
+) -> Result<(), ProtocolErrorBody> {
+    let Some(values) = part.get("annotations").filter(|value| !value.is_null()) else {
+        return Ok(());
+    };
+    for value in values.as_array().ok_or_else(invalid_response)? {
+        if value["type"] != "url_citation" {
+            continue;
+        }
+        let start = required_index(value, "start_index")?;
+        let end = required_index(value, "end_index")?;
+        if start > end {
+            return Err(invalid_response());
+        }
+        annotations.push(json!({"type": "url_citation", "url_citation": {
+            "url": required_str(value, "url")?,
+            "title": required_str(value, "title")?,
+            "start_index": message_offset.checked_add(start).ok_or_else(invalid_response)?,
+            "end_index": message_offset.checked_add(end).ok_or_else(invalid_response)?,
+        }}));
+    }
+    Ok(())
 }
 
 fn function_fields(item: &Value) -> Result<(&str, &str, &str), ProtocolErrorBody> {

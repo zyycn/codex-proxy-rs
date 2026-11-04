@@ -14,6 +14,8 @@ pub struct AccountUpstreamInfoView {
     pub stale: bool,
     pub connection_revision: String,
     pub last_error: Option<String>,
+    pub max_concurrency: Option<u64>,
+    pub requests_per_minute: Option<u64>,
     pub pool: Option<UpstreamPoolView>,
 }
 
@@ -78,6 +80,8 @@ pub(crate) fn view(
         stale: info.stale,
         connection_revision: info.connection_revision,
         last_error: info.last_error,
+        max_concurrency: info.max_concurrency,
+        requests_per_minute: info.requests_per_minute,
         pool: info.pool.map(|pool| UpstreamPoolView {
             account_count: pool.account_count,
             states: UpstreamPoolStatesView {

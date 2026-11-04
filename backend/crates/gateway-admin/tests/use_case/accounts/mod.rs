@@ -2,6 +2,7 @@
 
 mod reset_credit_automation;
 
+use gateway_core::engine::probe::AccountProbeTarget;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -1335,7 +1336,9 @@ async fn connection_test_should_probe_unavailable_account() {
     let events = services
         .accounts()
         .test_connection(
-            ProviderAccountId::new("acct_test").expect("account ID"),
+            AccountProbeTarget::ConnectionTest(
+                ProviderAccountId::new("acct_test").expect("account ID"),
+            ),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
         )
         .await
@@ -1372,7 +1375,9 @@ async fn connection_test_rate_limited_probe_returns_provider_failure() {
     let events = services
         .accounts()
         .test_connection(
-            ProviderAccountId::new("acct_test").expect("account ID"),
+            AccountProbeTarget::ConnectionTest(
+                ProviderAccountId::new("acct_test").expect("account ID"),
+            ),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
         )
         .await
@@ -1405,7 +1410,9 @@ async fn connection_test_should_preserve_disabled_account_status() {
     let events = services
         .accounts()
         .test_connection(
-            ProviderAccountId::new("acct_test").expect("account ID"),
+            AccountProbeTarget::ConnectionTest(
+                ProviderAccountId::new("acct_test").expect("account ID"),
+            ),
             gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
         )
         .await
@@ -2686,12 +2693,15 @@ async fn peer_account_usage_should_follow_budget_windows_without_borrowing_pool_
     for longest in [86_400, 604_800] {
         let provider = FakeProviderAdmin::new("openai", events());
         let mut account = account_record("openai");
+        account.concurrency_limit = None;
         account.authentication_kind = "api_key".to_owned();
         account.created_at = Utc::now() - TimeDelta::days(60);
         let store = FakeAccountStore::with_account(account, events());
         let reset_at = Utc::now() + TimeDelta::hours(1);
         let mut quota = empty_quota();
         quota.upstream = Some(ProviderUpstreamInfo {
+            max_concurrency: Some(7),
+            requests_per_minute: Some(60),
             discovered: true,
             observed_at: Some(Utc::now()),
             stale: false,
@@ -2762,6 +2772,8 @@ async fn peer_account_usage_should_follow_budget_windows_without_borrowing_pool_
             page.items[0].usage.as_ref().unwrap().total_tokens,
             Some(1_234)
         );
+        assert_eq!(page.items[0].capacity.total_slots, Some(7));
+        assert_eq!(page.items[0].account.concurrency_limit, None);
         let queries = store.quota_window_queries();
         assert_eq!(queries.len(), window_usage.len());
         for (query, expected) in queries.iter().zip(&window_usage) {

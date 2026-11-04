@@ -6,6 +6,7 @@ export function accountUpstreamErrorMessage(reason: AccountUpstream['lastError']
     return ''
   return {
     unauthorized: t('accounts.upstream.unauthorized'),
+    sharing_disabled: t('accounts.upstream.sharingDisabled'),
     unsupported: t('accounts.upstream.unsupported'),
     rate_limited: t('accounts.upstream.rateLimited'),
     invalid_response: t('accounts.upstream.invalidResponse'),

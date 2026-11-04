@@ -483,7 +483,7 @@ impl RequestPolicyContext {
                     .is_none(),
                 weight: candidate.account.weight().get(),
                 in_flight: candidate.signals.in_flight,
-                maximum_concurrency: context.concurrency_limit(&candidate.account).get(),
+                maximum_concurrency: context.concurrency_limit(candidate).get(),
                 last_started_at: candidate.signals.last_started_at,
                 quota_reset_at: candidate.signals.quota_reset_at,
                 quota_remaining_rank: candidate.signals.quota_remaining_rank,

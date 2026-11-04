@@ -123,6 +123,10 @@ impl PgObservabilityRepository {
             None
         };
         Ok(admin_observability::DashboardRuntimeSlots {
+            inherited_versions: normal_accounts
+                .iter()
+                .filter_map(|account| account.quota_version.clone())
+                .collect(),
             inherited_accounts,
             overridden_slots,
             used_slots,

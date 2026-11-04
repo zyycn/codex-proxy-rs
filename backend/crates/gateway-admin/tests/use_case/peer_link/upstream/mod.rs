@@ -241,7 +241,7 @@ async fn discovery_uses_provider_capabilities_and_publishes_neutral_signals() {
         let reader = UpstreamInfoReader::default();
         assert!(
             reader
-                .signal(&initial_accounts[0], "model", SystemTime::now())
+                .signal(&initial_accounts[0], Some("model"), SystemTime::now())
                 .is_none()
         );
         let source = bundle.scheduling_source();
@@ -273,7 +273,11 @@ async fn discovery_uses_provider_capabilities_and_publishes_neutral_signals() {
         );
         for account in &initial_accounts[..2] {
             if Some(account.provider().as_str()) == failed_provider {
-                assert!(reader.signal(account, "model", SystemTime::now()).is_none());
+                assert!(
+                    reader
+                        .signal(account, Some("model"), SystemTime::now())
+                        .is_none()
+                );
                 continue;
             }
             let observed = bundle
@@ -288,21 +292,21 @@ async fn discovery_uses_provider_capabilities_and_publishes_neutral_signals() {
             );
             assert!(
                 reader
-                    .signal(account, "model", SystemTime::now())
+                    .signal(account, Some("model"), SystemTime::now())
                     .unwrap()
                     .exhausted
             );
         }
         assert!(
             reader
-                .signal(&initial_accounts[2], "model", SystemTime::now())
+                .signal(&initial_accounts[2], Some("model"), SystemTime::now())
                 .is_none()
         );
         drop(worker);
         drop(bundle);
         assert!(
             reader
-                .signal(&initial_accounts[0], "model", SystemTime::now())
+                .signal(&initial_accounts[0], Some("model"), SystemTime::now())
                 .is_none()
         );
     }
@@ -332,7 +336,7 @@ async fn account_edits_preserve_observation_and_refresh_budget_until_connection_
     assert!(
         bundle
             .scheduling_source()
-            .signal(&edited, "model", SystemTime::now())
+            .signal(&edited, Some("model"), SystemTime::now())
             .is_some()
     );
     let after = service.refresh_quota(edited.id()).await.unwrap();
@@ -347,7 +351,7 @@ async fn account_edits_preserve_observation_and_refresh_budget_until_connection_
     assert!(
         bundle
             .scheduling_source()
-            .signal(&reconnected, "model", SystemTime::now())
+            .signal(&reconnected, Some("model"), SystemTime::now())
             .is_none()
     );
     service.refresh_quota(reconnected.id()).await.unwrap();
@@ -392,7 +396,7 @@ impl PeerTransport for TestTransport {
             .push(account.id().as_str().to_owned());
         let now = Utc::now();
         Ok(serde_json::to_vec(&serde_json::json!({
-            "object":"cpr.peer", "schema_version":2,
+            "object":"cpr.peer", "schema_version":3,
             "observed_at":now.to_rfc3339(),
             "expires_at":(now + chrono::Duration::minutes(5)).to_rfc3339(),
             "capabilities":["key_usage"],

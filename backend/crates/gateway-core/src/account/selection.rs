@@ -470,6 +470,8 @@ impl AccountQuotaSignals {
 /// 账号持久事实与可重建运行信号的请求级组合
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountCandidate {
+    /// 本次选号已确认的上游默认上限，与本地可编辑覆盖独立
+    pub inherited_concurrency: Option<super::AccountConcurrencyLimit>,
     pub account: ProviderAccount,
     pub signals: AccountRuntimeSignals,
 }
@@ -525,11 +527,16 @@ pub struct AccountSelectionContext {
 impl AccountSelectionContext {
     /// 本请求在该账号上可使用的并发上限；资格判断、租约与策略投影必须共用这一口径
     #[must_use]
-    pub fn concurrency_limit(&self, account: &ProviderAccount) -> AccountConcurrency {
+    pub fn concurrency_limit(&self, candidate: &AccountCandidate) -> AccountConcurrency {
         if self.reserved_concurrency > 0 {
             AccountConcurrency::new(self.reserved_concurrency)
         } else {
-            account.effective_concurrency(self.policy.max_concurrent_per_account())
+            let default = candidate
+                .inherited_concurrency
+                .map_or(self.policy.max_concurrent_per_account(), |limit| {
+                    limit.into_non_zero().into()
+                });
+            candidate.account.effective_concurrency(default)
         }
     }
 }
@@ -544,12 +551,23 @@ pub enum AccountEligibilityPolicy {
     #[default]
     Enforce,
     BypassForDiagnostic,
+    FreezeRecovery,
 }
 
 impl AccountEligibilityPolicy {
     #[must_use]
     pub const fn bypasses_local_eligibility(self) -> bool {
-        matches!(self, Self::BypassForDiagnostic)
+        !matches!(self, Self::Enforce)
+    }
+
+    /// 恢复探测只验证上游结果，不能通过回写 Cookie 或刷新凭据提前解除冻结
+    #[must_use]
+    pub const fn allows_account_state_mutation(self, enabled: bool) -> bool {
+        match self {
+            Self::Enforce => true,
+            Self::BypassForDiagnostic => enabled,
+            Self::FreezeRecovery => false,
+        }
     }
 }
 
@@ -671,8 +689,7 @@ impl AccountSelector {
                 )
             })
             .try_fold((0_u64, 0_u64), |(used, total), candidate| {
-                let capacity =
-                    u64::from(context.concurrency_limit(&candidate.account).limit()?.get());
+                let capacity = u64::from(context.concurrency_limit(candidate).limit()?.get());
                 Some((
                     used.saturating_add(u64::from(candidate.signals.in_flight)),
                     total.saturating_add(capacity),
@@ -868,7 +885,7 @@ impl AccountSelector {
             return Some(AccountSchedulingBlocker::ConcurrencyLimit);
         }
         if context
-            .concurrency_limit(&candidate.account)
+            .concurrency_limit(candidate)
             .limit()
             .is_some_and(|limit| candidate.signals.in_flight >= limit.get())
         {
@@ -885,7 +902,7 @@ const SMART_RESET_HALF_SCORE_SECONDS: f64 = 3_600.0;
 
 fn capacity_utilization(candidate: &AccountCandidate, context: &AccountSelectionContext) -> f64 {
     context
-        .concurrency_limit(&candidate.account)
+        .concurrency_limit(candidate)
         .limit()
         .map_or(0.0, |limit| {
             f64::from(candidate.signals.in_flight) / f64::from(limit.get())

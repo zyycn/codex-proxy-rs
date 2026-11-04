@@ -256,7 +256,7 @@ export function useAccountMutations(options: {
           options.selectedIds.value = selectedIds
         }
         if (result.account.upstream?.lastError) {
-          ZNotification.warning({
+          ZNotification.info({
             message: accountUpstreamErrorMessage(result.account.upstream.lastError),
           })
         }

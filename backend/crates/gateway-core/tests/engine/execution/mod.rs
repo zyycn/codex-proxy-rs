@@ -2,6 +2,7 @@
 
 mod identity;
 mod outbound;
+use gateway_core::engine::probe::AccountProbeTarget;
 use gateway_core::routing::{
     ContributedModel, ContributedModelAlias,
     extensions::{ExtensionSetId, ExtensionSetLease, ExtensionSetReference},
@@ -2114,6 +2115,7 @@ impl Provider for PolicySelectingProvider {
         )
         .with_scheduling(None, AccountWeight::new(100).unwrap());
         let candidates = [AccountCandidate {
+            inherited_concurrency: None,
             account,
             signals: AccountRuntimeSignals {
                 in_flight: 0,
@@ -3134,7 +3136,9 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
 
     let error = block_on(service.probe(
         AccountProbeRequest {
-            account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
+            target: AccountProbeTarget::ConnectionTest(
+                ProviderAccountId::new("acct_probe").expect("account ID"),
+            ),
             provider_kind: ProviderKind::new("openai").expect("provider kind"),
             upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
             operation: probe_operation(),
@@ -3166,7 +3170,9 @@ fn probe_failures_should_be_observable_without_a_model_request_row() {
 
     let error = block_on(service.probe(
         AccountProbeRequest {
-            account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
+            target: AccountProbeTarget::ConnectionTest(
+                ProviderAccountId::new("acct_probe").expect("account ID"),
+            ),
             provider_kind: ProviderKind::new("openai").expect("provider kind"),
             upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
             operation: probe_operation(),
@@ -3212,7 +3218,9 @@ fn provider_local_probe_failure_should_remain_distinct_from_upstream() {
 
     let error = block_on(service.probe(
         AccountProbeRequest {
-            account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
+            target: AccountProbeTarget::ConnectionTest(
+                ProviderAccountId::new("acct_probe").expect("account ID"),
+            ),
             provider_kind: ProviderKind::new("openai").expect("provider kind"),
             upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
             operation: probe_operation(),
@@ -3255,7 +3263,7 @@ fn diagnostic_probe_does_not_apply_data_plane_account_model_policy() {
 
     let error = block_on(service.probe(
         AccountProbeRequest {
-            account_id,
+            target: AccountProbeTarget::ConnectionTest(account_id),
             provider_kind: provider,
             upstream_model: UpstreamModelId::new("gpt-probe").expect("model"),
             operation: probe_operation(),
@@ -3287,7 +3295,9 @@ fn probe_observation_store_failure_preserves_the_provider_error() {
 
     let error = block_on(service.probe(
         AccountProbeRequest {
-            account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
+            target: AccountProbeTarget::ConnectionTest(
+                ProviderAccountId::new("acct_probe").expect("account ID"),
+            ),
             provider_kind: ProviderKind::new("openai").expect("provider kind"),
             upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
             operation: probe_operation(),

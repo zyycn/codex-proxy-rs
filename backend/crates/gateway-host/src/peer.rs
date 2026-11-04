@@ -61,12 +61,6 @@ impl PeerTransport for HttpPeerTransport {
             .await
             .map_err(|_| UpstreamInfoFailure::Unavailable)?;
         if !response.status().is_success() {
-            let kind = match response.status().as_u16() {
-                401 | 403 => UpstreamInfoFailure::Unauthorized,
-                404 | 405 | 501 => UpstreamInfoFailure::Unsupported,
-                429 => UpstreamInfoFailure::RateLimited,
-                _ => UpstreamInfoFailure::Unavailable,
-            };
             let retry_after = response
                 .headers()
                 .get(reqwest::header::RETRY_AFTER)
@@ -87,23 +81,48 @@ impl PeerTransport for HttpPeerTransport {
                         })
                 })
                 .map(|value| value.min(Duration::from_secs(24 * 60 * 60)));
+            let kind = match response.status().as_u16() {
+                401 => UpstreamInfoFailure::Unauthorized,
+                403 => forbidden_reason(response).await,
+                404 | 405 | 501 => UpstreamInfoFailure::Unsupported,
+                429 => UpstreamInfoFailure::RateLimited,
+                _ => UpstreamInfoFailure::Unavailable,
+            };
             return Err(PeerFetchFailure { kind, retry_after });
         }
-        if response
-            .content_length()
-            .is_some_and(|length| length > BODY_LIMIT as u64)
-        {
-            return Err(UpstreamInfoFailure::InvalidResponse.into());
-        }
-        let mut bytes = Vec::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|_| UpstreamInfoFailure::Unavailable)?;
-            if bytes.len().saturating_add(chunk.len()) > BODY_LIMIT {
-                return Err(UpstreamInfoFailure::InvalidResponse.into());
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        Ok(bytes)
+        read_body(response).await.map_err(Into::into)
     }
+}
+
+// 普通 403 只说明当前请求失权，上游明确关闭共享才清除互联身份
+async fn forbidden_reason(response: reqwest::Response) -> UpstreamInfoFailure {
+    if let Ok(bytes) = read_body(response).await
+        && let Ok(body) = serde_json::from_slice::<serde_json::Value>(&bytes)
+        && body
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_str)
+            == Some(gateway_protocol::peer::SHARING_DISABLED_CODE)
+    {
+        return UpstreamInfoFailure::SharingDisabled;
+    }
+    UpstreamInfoFailure::Unauthorized
+}
+
+async fn read_body(response: reqwest::Response) -> Result<Vec<u8>, UpstreamInfoFailure> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > BODY_LIMIT as u64)
+    {
+        return Err(UpstreamInfoFailure::InvalidResponse);
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| UpstreamInfoFailure::Unavailable)?;
+        if bytes.len().saturating_add(chunk.len()) > BODY_LIMIT {
+            return Err(UpstreamInfoFailure::InvalidResponse);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }

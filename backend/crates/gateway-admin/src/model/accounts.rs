@@ -219,7 +219,7 @@ pub struct AccountPageItem {
 pub struct AccountCapacity {
     /// 实时租约读取失败时为 `None`，不能当作空闲
     pub used_slots: Option<u64>,
-    /// 应用账号覆盖或全局默认值后的上限；`None` 表示不限
+    /// 应用账号覆盖或继承默认值后的普通并发上限；`None` 表示不限
     pub total_slots: Option<u64>,
 }
 

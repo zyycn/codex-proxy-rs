@@ -117,6 +117,7 @@ impl PeerLinkService for DefaultPeerLinkService {
                 .budget
                 .limits
                 .access(key.budget.daily_used_usd, key.budget.weekly_used_usd),
+            key_limits: key.limits,
             budget: key.budget,
             budget_observed_at,
             pool: None,

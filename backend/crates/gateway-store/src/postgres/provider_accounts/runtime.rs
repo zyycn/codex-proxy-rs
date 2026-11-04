@@ -64,6 +64,7 @@ pub(crate) async fn load_cooldown(
 pub(crate) struct ProviderAccountStatus {
     pub id: String,
     pub concurrency_limit: Option<gateway_core::account::AccountConcurrencyLimit>,
+    pub quota_version: Option<gateway_core::account::QuotaObservationVersion>,
     pub facts: AccountStatusFacts,
 }
 
@@ -72,7 +73,7 @@ pub(crate) async fn load_account_statuses<'e, E: sqlx::Executor<'e, Database = s
 ) -> crate::StoreResult<Vec<ProviderAccountStatus>> {
     use super::rows::{account_status_facts_from_row, get};
     let rows = sqlx::query(
-        "select id, enabled, concurrency_limit, credential_state, access_token_expires_at,
+        "select id, enabled, concurrency_limit, credential_revision, quota_observed_at, credential_state, access_token_expires_at,
                 quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
                 last_error_reason, last_error_message
          from provider_accounts",
@@ -91,6 +92,11 @@ pub(crate) async fn load_account_statuses<'e, E: sqlx::Executor<'e, Database = s
                 })
                 .transpose()?;
             Ok(ProviderAccountStatus {
+                quota_version: if concurrency_limit.is_none() {
+                    super::quota_version_from_row(row)?
+                } else {
+                    None
+                },
                 id: get(row, "id")?,
                 concurrency_limit,
                 facts: account_status_facts_from_row(row)?,

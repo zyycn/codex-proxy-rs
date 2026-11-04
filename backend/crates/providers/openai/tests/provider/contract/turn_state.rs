@@ -1,6 +1,7 @@
 //! 验证同轮全量请求回传的 token 归属、失败路径与账号状态隔离
 
 use super::*;
+use gateway_core::engine::probe::AccountProbeTarget;
 
 const TOKEN: &str = "upstream-turn-state";
 
@@ -293,7 +294,9 @@ async fn full_request_turn_state_requires_matching_client_account_thread_turn_an
                     account_policy(),
                     AccountAttemptContext::diagnostic(
                         BTreeSet::new(),
-                        ProviderAccountId::new("acct_session_affinity").unwrap(),
+                        AccountProbeTarget::ConnectionTest(
+                            ProviderAccountId::new("acct_session_affinity").unwrap(),
+                        ),
                         None,
                     ),
                     None,

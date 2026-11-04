@@ -63,6 +63,7 @@ struct ModelObservation {
 
 pub(super) struct SchedulingObservation {
     validity: Validity,
+    concurrency_limit: Option<gateway_core::account::AccountConcurrencyLimit>,
     exhausted_budgets: Vec<Validity>,
     models: HashMap<String, Option<ModelObservation>>,
 }
@@ -166,43 +167,52 @@ impl SchedulingObservation {
         }
         Some(Self {
             validity,
+            concurrency_limit: peer
+                .key_limits
+                .and_then(|limits| limits.max_concurrency)
+                .and_then(gateway_core::account::AccountConcurrencyLimit::from_key_limit),
             exhausted_budgets,
             models,
         })
     }
 
     pub(super) fn fresh(&self, now: SystemTime) -> bool {
-        self.validity.fresh(now)
-            && now
-                .duration_since(self.validity.observed_at)
-                .unwrap_or_default()
-                <= snapshot::FRESH_FOR
+        self.validity.fresh(now) && snapshot::fresh_at(self.validity.observed_at, now)
     }
 
-    pub(super) fn signal(&self, model: &str, now: SystemTime) -> Option<UpstreamSchedulingSignal> {
+    pub(super) fn concurrency_limit(
+        &self,
+        now: SystemTime,
+    ) -> Option<gateway_core::account::AccountConcurrencyLimit> {
+        self.concurrency_limit.filter(|_| self.fresh(now))
+    }
+
+    pub(super) fn signal(
+        &self,
+        model: Option<&str>,
+        now: SystemTime,
+    ) -> Option<UpstreamSchedulingSignal> {
         if !self.fresh(now) {
             return None;
         }
-        if self
+        let budget_exhausted = self
             .exhausted_budgets
             .iter()
-            .any(|validity| validity.fresh(now))
-        {
-            return Some(UpstreamSchedulingSignal {
-                exhausted: true,
-                remaining_percent: None,
-            });
-        }
-        let model = self.models.get(model)?.as_ref()?;
-        if !model.validity.fresh(now) {
+            .any(|validity| validity.fresh(now));
+        let model = model
+            .and_then(|id| self.models.get(id)?.as_ref())
+            .filter(|model| model.validity.fresh(now));
+        if !budget_exhausted && model.is_none() && self.concurrency_limit.is_none() {
             return None;
         }
         Some(UpstreamSchedulingSignal {
-            exhausted: model.exhausted,
-            remaining_percent: model
-                .account
-                .as_ref()
-                .and_then(|account| account.remaining_percent(now)),
+            concurrency_limit: self.concurrency_limit,
+            exhausted: budget_exhausted || model.is_some_and(|model| model.exhausted),
+            remaining_percent: if budget_exhausted {
+                None
+            } else {
+                model.and_then(|model| model.account.as_ref()?.remaining_percent(now))
+            },
         })
     }
 }

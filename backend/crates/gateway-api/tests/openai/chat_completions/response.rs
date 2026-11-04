@@ -62,6 +62,72 @@ async fn json_projects_public_identity_text_and_actual_usage() {
 }
 
 #[tokio::test]
+async fn web_search_projects_citations_in_json_and_streams_the_original_links() {
+    let linked = "[IANA](https://www.iana.org/)";
+    let text = format!("见 {linked}");
+    let citation = json!({"type":"url_citation","url":"https://www.iana.org/","title":"IANA",
+        "start_index":2,"end_index":text.chars().count()});
+    let mut prefix = message("🌍 ");
+    prefix["id"] = json!("msg_intro");
+    let search = json!({"type":"web_search_call","id":"ws_lookup","status":"completed",
+        "action":{"type":"search","query":"IANA"}});
+    let mut answer = message(&text);
+    answer["content"][0]["annotations"] = json!([citation]);
+    for stream in [false, true] {
+        let fixture = Fixture::new(Session::new(vec![
+            created(),
+            wire(
+                "response.output_item.done",
+                json!({"output_index":0,"item":prefix}),
+            ),
+            wire(
+                "response.output_item.done",
+                json!({"output_index":1,"item":search}),
+            ),
+            wire(
+                "response.output_text.delta",
+                json!({"output_index":2,"content_index":0,
+                "item_id":"msg_chat_test","delta":text}),
+            ),
+            wire(
+                "response.output_text.annotation.added",
+                json!({"output_index":2,"content_index":0,
+                "item_id":"msg_chat_test","annotation_index":0,"annotation":citation}),
+            ),
+            wire(
+                "response.output_item.done",
+                json!({"output_index":2,"item":answer}),
+            ),
+            completed(json!([])),
+        ]))
+        .await;
+        let mut request = chat_request(stream);
+        request["web_search_options"] = json!({});
+        let response = fixture.post(request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let expected = format!("🌍 {text}");
+        if stream {
+            let (_, chunks) = sse_body(response).await;
+            assert_eq!(combined(&chunks, "content"), expected);
+            assert_eq!(
+                chunks.last().unwrap()["choices"][0]["finish_reason"],
+                "stop"
+            );
+        } else {
+            let body = json_body(response).await;
+            let choice = &body["choices"][0];
+            assert_eq!(choice["finish_reason"], "stop");
+            assert_eq!(choice["message"]["content"], expected);
+            assert_eq!(
+                choice["message"]["annotations"],
+                json!([{"type":"url_citation","url_citation":{
+                "url":"https://www.iana.org/","title":"IANA","start_index":4,"end_index":expected.chars().count()}}])
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn json_tool_arguments_and_refusal_do_not_become_assistant_text() {
     for output in [
         json!([tool("fc1", "call1", "weather", "{ \"city\" : \"北京\" }")]),

@@ -55,6 +55,7 @@ fn account_id(id: &str) -> ProviderAccountId {
 
 fn candidate(id: &str) -> AccountCandidate {
     AccountCandidate {
+        inherited_concurrency: None,
         account: ProviderAccount::new(
             account_id(id),
             ProviderKind::new("openai").unwrap(),

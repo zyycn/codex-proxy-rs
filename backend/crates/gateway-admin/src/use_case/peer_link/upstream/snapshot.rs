@@ -28,21 +28,7 @@ pub(super) fn unsupported(connection: &UpstreamConnection) -> OpaqueProviderData
     ]))
 }
 
-pub(super) fn is_unsupported(data: &OpaqueProviderData, connection: &UpstreamConnection) -> bool {
-    let fields = data.expose_to_provider();
-    (fields.get("object").and_then(serde_json::Value::as_str) == Some("cpr.peer.unsupported")
-        && fields
-            .get("schema_version")
-            .and_then(serde_json::Value::as_u64)
-            == Some(1)
-        && fields
-            .get("connection_revision")
-            .and_then(serde_json::Value::as_str)
-            == Some(connection.revision.as_str()))
-        || unavailable_reason(data, connection) == Some(UpstreamInfoFailure::Unsupported)
-}
-
-// 失权后只保留同一连接已确认互联的事实，不保留已撤销的池、预算与模型数据
+// 授权撤销或共享关闭后只保存连接与失败原因，丢弃全部共享数据
 pub(super) fn unavailable(
     connection: &UpstreamConnection,
     reason: UpstreamInfoFailure,
@@ -58,20 +44,24 @@ pub(super) fn unavailable(
     ]))
 }
 
-pub(super) fn unavailable_reason(
+pub(super) fn stored_failure(
     data: &OpaqueProviderData,
     connection: &UpstreamConnection,
 ) -> Option<UpstreamInfoFailure> {
     let fields = data.expose_to_provider();
-    if fields.get("object")?.as_str()? != "cpr.peer.unavailable"
-        || fields.get("schema_version")?.as_u64()? != 1
+    if fields.get("schema_version")?.as_u64()? != 1
         || fields.get("connection_revision")?.as_str()? != connection.revision
     {
         return None;
     }
-    match fields.get("reason")?.as_str()? {
-        "unauthorized" => Some(UpstreamInfoFailure::Unauthorized),
-        "unsupported" => Some(UpstreamInfoFailure::Unsupported),
+    match fields.get("object")?.as_str()? {
+        "cpr.peer.unsupported" => Some(UpstreamInfoFailure::Unsupported),
+        "cpr.peer.unavailable" => match fields.get("reason")?.as_str()? {
+            "unauthorized" => Some(UpstreamInfoFailure::Unauthorized),
+            "sharing_disabled" => Some(UpstreamInfoFailure::SharingDisabled),
+            "unsupported" => Some(UpstreamInfoFailure::Unsupported),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -89,10 +79,12 @@ pub(super) fn datetime(value: &str) -> Option<DateTime<Utc>> {
 }
 
 pub(super) fn fresh(observed: &str, now: SystemTime) -> bool {
-    timestamp(observed).is_some_and(|observed| {
-        observed <= now + Duration::from_secs(60)
-            && now.duration_since(observed).unwrap_or_default() <= FRESH_FOR
-    })
+    timestamp(observed).is_some_and(|observed| fresh_at(observed, now))
+}
+
+pub(super) fn fresh_at(observed: SystemTime, now: SystemTime) -> bool {
+    observed <= now + Duration::from_secs(60)
+        && now.duration_since(observed).unwrap_or_default() <= FRESH_FOR
 }
 
 pub(super) fn component_fresh(
@@ -162,6 +154,9 @@ pub(super) fn parse(
     }
     // 未授权能力不能借同名数据块越过逐层公开边界
     let disclosed = |capability| peer.capabilities.iter().any(|value| value == capability);
+    if !disclosed("key_limits") {
+        peer.key_limits = None;
+    }
     if !disclosed("key_usage") {
         peer.usage = None;
     }

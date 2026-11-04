@@ -4,12 +4,14 @@ use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderUpstreamInfo {
-    /// 当前连接曾成功识别互联，失权时保留身份但清除观测内容
+    /// 当前连接的互联识别结果，明确关闭共享或不支持协议时清除
     pub discovered: bool,
     pub observed_at: Option<DateTime<Utc>>,
     pub stale: bool,
     pub connection_revision: String,
     pub last_error: Option<String>,
+    pub max_concurrency: Option<u64>,
+    pub requests_per_minute: Option<u64>,
     pub pool: Option<UpstreamPool>,
 }
 

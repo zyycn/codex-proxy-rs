@@ -435,6 +435,21 @@ pub(crate) fn require_core_update(updated: bool) -> Result<(), CoreStoreError> {
     }
 }
 
+pub(crate) fn quota_version_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> StoreResult<Option<gateway_core::account::QuotaObservationVersion>> {
+    let Some(observed_at) = get::<Option<DateTime<Utc>>>(row, "quota_observed_at")? else {
+        return Ok(None);
+    };
+    Ok(Some(gateway_core::account::QuotaObservationVersion {
+        account_id: CoreProviderAccountId::new(get::<String>(row, "id")?)
+            .map_err(|_| invalid("invalid account ID"))?,
+        credential_revision: CoreCredentialRevision::new(to_u64(get(row, "credential_revision")?)?)
+            .map_err(|_| invalid("invalid credential revision"))?,
+        observed_at: observed_at.into(),
+    }))
+}
+
 pub(crate) fn account_summary_from_row(
     row: sqlx::postgres::PgRow,
 ) -> StoreResult<ProviderAccountSummary> {

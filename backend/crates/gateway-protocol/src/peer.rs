@@ -2,8 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+pub const SHARING_DISABLED_CODE: &str = "peer_sharing_disabled";
 pub const OBJECT: &str = "cpr.peer";
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 pub const MAX_ACCOUNTS: usize = 3_000;
 pub const MAX_QUOTA_WINDOWS: usize = 6_000;
 pub const MAX_MODELS: usize = 2_000;
@@ -20,11 +21,22 @@ pub struct PeerLink {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<PeerUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_limits: Option<PeerKeyLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool: Option<PeerPool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota: Option<PeerQuota>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<PeerModelAvailability>,
+}
+
+/// 当前认证密钥公开的请求上限，缺失表示未知，零表示不限
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerKeyLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requests_per_minute: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -702,6 +702,8 @@ fn peer_summary(
 ) -> gateway_admin::model::provider_credentials::ProviderQuota {
     gateway_admin::model::provider_credentials::ProviderQuota {
         upstream: Some(gateway_admin::model::upstream_info::ProviderUpstreamInfo {
+            max_concurrency: None,
+            requests_per_minute: None,
             discovered,
             observed_at: observed.then(chrono::Utc::now),
             stale: true,

@@ -4,14 +4,14 @@ use chrono::{DateTime, Utc};
 use gateway_admin::model::peer_link::{PeerLinkExport, PeerModelState as ModelState};
 use gateway_core::metering::Decimal;
 use gateway_protocol::peer::{
-    OBJECT, PeerBudgetWindow, PeerComponentStatus, PeerKeyUsage, PeerLink, PeerModelAvailability,
-    PeerModelCoverage, PeerModelState, PeerPlanCount, PeerPool, PeerPoolStates, PeerQuota,
-    PeerQuotaAccount, PeerQuotaWindow, PeerUsage, SCHEMA_VERSION,
+    OBJECT, PeerBudgetWindow, PeerComponentStatus, PeerKeyLimits, PeerKeyUsage, PeerLink,
+    PeerModelAvailability, PeerModelCoverage, PeerModelState, PeerPlanCount, PeerPool,
+    PeerPoolStates, PeerQuota, PeerQuotaAccount, PeerQuotaWindow, PeerUsage, SCHEMA_VERSION,
 };
 use std::time::SystemTime;
 
 pub(super) fn response(export: PeerLinkExport) -> PeerLink {
-    let mut capabilities = vec!["key_usage".to_owned()];
+    let mut capabilities = vec!["key_usage".to_owned(), "key_limits".to_owned()];
     let pool = export.pool.map(|pool| {
         capabilities.push("pool_summary".to_owned());
         PeerPool {
@@ -74,6 +74,10 @@ pub(super) fn response(export: PeerLinkExport) -> PeerLink {
         capabilities,
         observed_at: export.observed_at.to_rfc3339(),
         expires_at: export.expires_at.to_rfc3339(),
+        key_limits: Some(PeerKeyLimits {
+            max_concurrency: Some(export.key_limits.max_concurrency),
+            requests_per_minute: Some(export.key_limits.requests_per_minute),
+        }),
         usage: Some(PeerUsage {
             status: PeerComponentStatus::Available,
             observed_at: Some(export.budget_observed_at.to_rfc3339()),

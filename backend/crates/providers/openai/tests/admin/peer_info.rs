@@ -11,7 +11,7 @@ use provider_openai::credential::ResponsesTransport;
 fn peer_document() -> Value {
     let now = Utc::now();
     json!({
-        "object":"cpr.peer", "schema_version":2,
+        "object":"cpr.peer", "schema_version":3,
         "observed_at":now.to_rfc3339(), "expires_at":(now + chrono::Duration::minutes(5)).to_rfc3339(),
         "capabilities":["key_usage", "pool_summary"],
         "usage":{"status":"available","observed_at":now.to_rfc3339(),"data":{"unit":"USD","allowed":true,"windows":[
@@ -480,7 +480,7 @@ async fn model_only_snapshots_publish_signals_without_budget_or_account_disclosu
         let server = MockServer::start().await;
         let now = Utc::now();
         let document = json!({
-            "object":"cpr.peer", "schema_version":2,
+            "object":"cpr.peer", "schema_version":3,
             "observed_at":now.to_rfc3339(), "expires_at":(now + chrono::Duration::minutes(5)).to_rfc3339(),
             "capabilities":["model_availability"],
             "models":[{"model":"gpt-5.4", "coverage":coverage, "state":state,
@@ -502,7 +502,7 @@ async fn model_only_snapshots_publish_signals_without_budget_or_account_disclosu
             reader
                 .signal(
                     &accounts.account(id.as_str()).unwrap(),
-                    "gpt-5.4",
+                    Some("gpt-5.4"),
                     SystemTime::now()
                 )
                 .map(|signal| signal.exhausted),
@@ -663,7 +663,35 @@ async fn transient_failure_preserves_observation_and_revocation_erases_it() {
     cycle(&worker).await;
     let revoked = quota(&bundle, &id).await;
     assert!(revoked.windows.is_empty());
-    assert!(revoked.upstream.unwrap().observed_at.is_none());
+    let info = revoked.upstream.unwrap();
+    assert!(info.observed_at.is_none());
+    assert!(info.discovered);
+
+    // 同为 403，仅共享关闭的协议码能改变识别结果
+    server.reset().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": { "code": "peer_sharing_disabled" }
+        })))
+        .mount(&server)
+        .await;
+    bundle.admin_provider().forget(&id);
+    cycle(&worker).await;
+    let disabled = quota(&bundle, &id).await;
+    let info = disabled.upstream.unwrap();
+    assert!(!info.discovered);
+    assert_eq!(info.last_error.as_deref(), Some("sharing_disabled"));
+    assert!(disabled.windows.is_empty());
+
+    server.reset().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(peer_document()))
+        .mount(&server)
+        .await;
+    bundle.admin_provider().forget(&id);
+    let recovered = bundle.admin_provider().refresh_quota(&id).await.unwrap();
+    assert!(recovered.upstream.unwrap().discovered);
+    assert!(!recovered.windows.is_empty());
 }
 
 async fn wait_for_request(server: &MockServer) {
@@ -778,7 +806,7 @@ async fn invalid_or_redirected_responses_never_replace_the_last_valid_snapshot()
     cycle(&worker).await;
     let observed_at = quota(&bundle, &id).await.observed_at;
     let mut wrong_schema = peer_document();
-    wrong_schema["schema_version"] = json!(99);
+    wrong_schema["schema_version"] = json!(2);
     let mut wrong_object = peer_document();
     wrong_object["object"] = json!("other.peer");
     let mut negative = peer_document();
@@ -897,6 +925,127 @@ async fn peer_sync_excludes_budget_exhausted_accounts_without_pool_disclosure() 
         event.unwrap();
     }
     server.verify().await;
+}
+
+#[tokio::test]
+async fn peer_key_limits_set_default_capacity_and_lease_without_model_or_pool_disclosure() {
+    use gateway_core::account::{AccountConcurrencyLimit, AccountWeight};
+    for (limits, observed, stale, local_limit, expected) in [
+        (
+            Some(json!({"max_concurrency":5})),
+            (Some(5), None),
+            false,
+            None,
+            5,
+        ),
+        (
+            Some(json!({"max_concurrency":5,"requests_per_minute":60})),
+            (Some(5), Some(60)),
+            false,
+            Some(1),
+            1,
+        ),
+        (
+            Some(json!({"max_concurrency":0})),
+            (Some(0), None),
+            false,
+            None,
+            2,
+        ),
+        (
+            Some(json!({"requests_per_minute":60})),
+            (None, Some(60)),
+            false,
+            None,
+            2,
+        ),
+        (None, (None, None), false, None, 2),
+        (
+            Some(json!({"max_concurrency":5})),
+            (Some(5), None),
+            true,
+            None,
+            2,
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let now = Utc::now();
+        let observed_at = if stale {
+            now - chrono::Duration::minutes(6)
+        } else {
+            now
+        };
+        let mut document = json!({
+            "object":"cpr.peer", "schema_version":3,
+            "capabilities": ["key_limits"],
+            "observed_at":observed_at.to_rfc3339(), "expires_at":(now + chrono::Duration::minutes(2)).to_rfc3339()
+        });
+        if let Some(limits) = limits {
+            document["key_limits"] = limits;
+        }
+        Mock::given(method("GET"))
+            .and(path("/custom/v1/cpr/link"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(document))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/custom/v1/responses"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(COMPLETED_SESSION_SSE),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (mut bundle, accounts, _, id, _config) = fixture(&server).await;
+        accounts.set_scheduling(
+            id.as_str(),
+            local_limit.and_then(AccountConcurrencyLimit::new),
+            AccountWeight::DEFAULT,
+        );
+        cycle(&worker(&mut bundle)).await;
+        let info = quota(&bundle, &id).await.upstream.unwrap();
+        assert_eq!((info.max_concurrency, info.requests_per_minute), observed);
+        let version = accounts
+            .get_quota_versions(std::slice::from_ref(&id))
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        let inherited = bundle
+            .admin_provider()
+            .observed_concurrency_limit(&version, SystemTime::now());
+        assert_eq!(
+            inherited.map(|limit| u64::from(limit.get())),
+            observed.0.filter(|limit| !stale && *limit > 0)
+        );
+        let mut stream = execute_peer_request(&bundle, "round_robin").await.unwrap();
+        let capacity = stream
+            .metadata()
+            .selection_observation()
+            .unwrap()
+            .capacity()
+            .unwrap();
+        assert_eq!(capacity.total_slots(), u64::from(expected));
+        assert_eq!(
+            bundle
+                .leases
+                .requests
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .max_concurrent()
+                .get(),
+            expected
+        );
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        server.verify().await;
+    }
 }
 
 #[tokio::test]
@@ -1238,6 +1387,7 @@ async fn execute_peer_request(
 }
 
 struct PeerFixture {
+    leases: Arc<TestLeaseCoordinator>,
     provider: provider_openai::ProviderBundle,
     peer: gateway_admin::PeerUpstreamBundle,
     cooldowns: Arc<MemoryCooldownPort>,
@@ -1263,11 +1413,12 @@ async fn peer_fixture(
 ) -> PeerFixture {
     let reader = Arc::new(gateway_core::account::UpstreamInfoReader::default());
     let cooldowns = Arc::new(MemoryCooldownPort::new());
+    let leases = Arc::new(TestLeaseCoordinator::default());
     let provider = provider_openai::initialize(
         config,
         ProviderStorePorts::new(
             accounts.clone(),
-            Arc::new(TestLeaseCoordinator::default()),
+            leases.clone(),
             Arc::new(MemorySessionAffinity::default()),
             Arc::new(MemorySessionExclusions::default()),
             Arc::new(TestCatalogCache::default()),
@@ -1295,6 +1446,7 @@ async fn peer_fixture(
     .unwrap();
     reader.bind(&peer.scheduling_source()).unwrap();
     PeerFixture {
+        leases,
         provider,
         peer,
         cooldowns,

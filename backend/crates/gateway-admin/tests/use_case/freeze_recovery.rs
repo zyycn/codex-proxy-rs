@@ -1,5 +1,6 @@
 //! 账号保护恢复编排：到期探测、快照参数与失败顺延
 
+use gateway_core::engine::probe::AccountProbeTarget;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -242,6 +243,10 @@ impl AccountProbe for FailingProbe {
         request: AccountProbeRequest,
         _: Option<Arc<gateway_core::routing::RuntimeSnapshot>>,
     ) -> futures::future::BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        assert!(matches!(
+            request.target,
+            AccountProbeTarget::FreezeRecovery(_)
+        ));
         assert_eq!(request.upstream_model.as_str(), "snapshot-model");
         Box::pin(async {
             Err(AccountProbeError::new(

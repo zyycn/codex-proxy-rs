@@ -39,6 +39,12 @@ impl ProviderAccountId {
 pub struct AccountConcurrencyLimit(NonZeroU32);
 
 impl AccountConcurrencyLimit {
+    /// Key 的正数上限映射到账号可表达的范围，零沿用本机默认值
+    #[must_use]
+    pub fn from_key_limit(limit: u64) -> Option<Self> {
+        Self::new(u32::try_from(limit).unwrap_or(u32::MAX))
+    }
+
     #[must_use]
     pub const fn new(value: u32) -> Option<Self> {
         match NonZeroU32::new(value) {

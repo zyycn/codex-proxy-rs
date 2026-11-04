@@ -73,6 +73,7 @@ pub struct AccountGroupUsage {
 /// 当前页账号组 membership 对应的持久账号事实；运行态在 Admin query service 合并
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupMemberFact {
+    pub inherited_version: Option<gateway_core::account::QuotaObservationVersion>,
     pub group_id: AccountGroupId,
     pub account_id: String,
     pub status: AccountStatusFacts,

@@ -6,9 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use gateway_core::account::{
-    AccountCandidate, AccountCapacitySnapshot, AccountEligibilityPolicy, AccountFeedbackStats,
-    AccountSelectionContext, AccountSelector, CredentialState, ProviderAccount, ProviderAccountId,
-    QuotaAccessState, QuotaEvidence, QuotaState,
+    AccountCandidate, AccountCapacitySnapshot, AccountFeedbackStats, AccountSelectionContext,
+    AccountSelector, CredentialState, ProviderAccount, ProviderAccountId, QuotaAccessState,
+    QuotaEvidence, QuotaState,
 };
 use gateway_core::concurrency::{CapacityWait, ConcurrencyWaitQueue};
 use gateway_core::engine::policy::AccountPolicyError;
@@ -101,7 +101,7 @@ impl GrokAccountSessionSelector {
             request.concurrency_wait_budget(),
         );
         'refresh: loop {
-            let diagnostic = request.eligibility() == AccountEligibilityPolicy::BypassForDiagnostic;
+            let diagnostic = request.eligibility().bypasses_local_eligibility();
             // store 侧常规调度列表不包含停用账号；管理端诊断要对固定账号执行真实上游
             // 验证，这里把不在列表里的 required 账号显式补回候选
             let mut accounts =
@@ -241,7 +241,11 @@ impl GrokAccountSessionSelector {
                         .ok_or(GrokSessionSelectorError::Unavailable(None))?
                         .with_provider_quota(self.quota.scheduling_signals(&account))
                         .with_runtime_health(health.0, health.1);
-                    Ok(AccountCandidate { account, signals })
+                    Ok(AccountCandidate {
+                        account,
+                        signals,
+                        inherited_concurrency: None,
+                    })
                 })
                 .collect::<Result<Vec<_>, GrokSessionSelectorError>>()?;
             if let Some(required) = request.required_account() {
@@ -311,7 +315,9 @@ impl GrokAccountSessionSelector {
                 let selected = selection.candidate();
                 let selected_id = selected.account.id().clone();
                 let selected_revision = selected.account.revision();
-                let allows_account_state_mutation = !diagnostic || selected.account.enabled();
+                let allows_account_state_mutation = request
+                    .eligibility()
+                    .allows_account_state_mutation(selected.account.enabled());
                 let lease = self
                     .scheduling
                     .try_acquire(ProviderLeaseRequest::Scheduling(
@@ -319,11 +325,7 @@ impl GrokAccountSessionSelector {
                             self.provider_kind.clone(),
                             selected_id.clone(),
                             selected_revision,
-                            selected.account.effective_concurrency(
-                                request
-                                    .account_selection_policy()
-                                    .max_concurrent_per_account(),
-                            ),
+                            context.concurrency_limit(selected),
                             request.deadline(),
                         )
                         .with_metadata(request.lease_metadata.clone())

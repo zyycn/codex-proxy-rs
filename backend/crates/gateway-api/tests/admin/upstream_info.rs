@@ -13,7 +13,7 @@ impl UpstreamInfoSource for TestPeerInfo {
     fn signal(
         &self,
         _: &ProviderAccount,
-        _: &str,
+        _: Option<&str>,
         _: SystemTime,
     ) -> Option<UpstreamSchedulingSignal> {
         None
@@ -22,6 +22,14 @@ impl UpstreamInfoSource for TestPeerInfo {
 
 #[async_trait]
 impl PeerUpstreamService for TestPeerInfo {
+    fn observed_concurrency_limit(
+        &self,
+        _: &gateway_core::account::QuotaObservationVersion,
+        _: std::time::SystemTime,
+    ) -> Option<gateway_core::account::AccountConcurrencyLimit> {
+        None
+    }
+
     async fn account_changed(&self, _: &ProviderAccountId) -> Result<(), StoreError> {
         Ok(())
     }

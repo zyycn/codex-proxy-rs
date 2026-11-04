@@ -85,7 +85,7 @@ async fn peer_response(state: ApiState, client: AuthenticatedClient, uri: Uri) -
             StatusCode::FORBIDDEN,
             "CPR Link sharing is not enabled for this API key.",
             "permission_error",
-            "peer_sharing_disabled",
+            gateway_protocol::peer::SHARING_DISABLED_CODE,
         )
         .into_response(),
         Err(PeerLinkError::RateLimited { retry_after }) => {

@@ -71,15 +71,8 @@ pub(crate) fn normalize_codex_request_body(body: &mut Map<String, Value>) {
         }
     }
 
-    for field in [
-        // Pi 普通 Responses 适配将 maxTokens 映射为 max_output_tokens，
-        // temperature 则原样写入；Pi 的 Codex 适配也可能发送 temperature
-        "max_output_tokens",
-        "temperature",
-        // Pi 开启长缓存时发送 24h；保留有效的 prompt_cache_key，
-        // 只剥离 Codex Responses 明确拒绝的缓存保留时长参数
-        "prompt_cache_retention",
-    ] {
+    // Codex 拒绝显式采样温度和缓存保留时长，独立的缓存键仍须保留
+    for field in ["temperature", "prompt_cache_retention"] {
         body.remove(field);
     }
 }
