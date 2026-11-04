@@ -69,6 +69,7 @@ fn encoder_should_adapt_pi_responses_parameters_without_losing_codex_fields() {
             "stream": true,
             "store": false,
             "prompt_cache_key": "client-session",
+            "max_output_tokens": 512,
             "reasoning": {"effort": "high", "summary": "auto"},
             "include": ["reasoning.encrypted_content"]
         })

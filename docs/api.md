@@ -258,10 +258,13 @@ print(completion.choices[0].message.content)
 | --- | --- |
 | `messages[].role` | `system`、`developer`、`user`、`assistant`、`tool`，保持消息顺序；assistant 文本历史使用 Responses 的 `output_text` |
 | `messages[].content` | 字符串或文本块数组；`user` 还可包含 `image_url`，支持 HTTP(S) URL 和非空 `data:image/...;base64,...`，保留 `detail`，不代取图片 |
+| `user` 消息的 `file` 内容块 | 提供非空文件名 `file.filename` 和 `data:application/pdf;base64,...` 格式的 `file.file_data`，两者原样映射到 Responses 的 `input_file` 内容块 |
 | `messages[].refusal`、assistant 的 `refusal` 内容块 | 保留拒绝历史；assistant 的 `content` 仅在同时有工具调用或拒绝内容时可省略或为 `null` |
 | `messages[].tool_calls`、`messages[].tool_call_id` | assistant 的 function 调用转为 `function_call`，tool 结果转为 `function_call_output`，保留调用 ID 与 arguments 字符串，不解析或执行函数 |
+| `messages[].name` | tool 消息的非空工具名映射到 `function_call_output.name`，仍须提供 `tool_call_id`；其他角色不支持非空名称，空字符串或 `null` 按省略处理 |
 | `tools` | 仅支持现代 `type: "function"`；将 `function` 定义展开为 Responses 工具，保留 parameters schema；`strict` 省略或 `null` 时显式使用 `false` |
 | `tool_choice`、`parallel_tool_calls` | 支持 `auto`、`none`、`required` 和指定 function；`required` 须提供工具，指定名称须存在于 `tools`；并行选项保留布尔值 |
+| `web_search_options` | `{}` 即要求上游执行 `web_search`。可设置 `search_context_size`（`low`、`medium`、`high`）和 `user_location`（`type: "approximate"`，位置字段放在 `approximate` 内） |
 | `response_format` | `text`、`json_object`、`json_schema` 映射到 `text.format`，JSON Schema 保留原值 |
 | `reasoning_effort`、`verbosity` | 分别映射到 `reasoning.effort`、`text.verbosity`；接受非空字符串，不固定枚举档位 |
 | `max_completion_tokens`、`max_tokens` | 正整数映射到 `max_output_tokens`，同时提供时前者优先 |
@@ -284,8 +287,8 @@ print(completion.choices[0].message.content)
 | `stop`、旧式 `functions` | `[]` |
 | `modalities` | `["text"]` |
 
-`function_call`、`seed`、`prediction`、`audio`、`web_search_options`、`reasoning_content` 及消息级 `reasoning` 不支持非 `null` 值。
-非空消息 `name`、旧式 `function` 角色、文件内容、音频内容、custom 或 hosted 工具及未知内容类型也会明确拒绝。
+`function_call`、`seed`、`prediction`、`audio`、`reasoning_content` 及消息级 `reasoning` 不支持非 `null` 值。
+旧式 `function` 角色、`file_id` 文件引用、非 PDF 文件、音频内容、`tools` 数组中的 custom 或 hosted 工具及未知内容类型也会明确拒绝。
 该入口不接收 Responses 请求形状；`input`、`previous_response_id`、`conversation`、`instructions`、`reasoning`、
 `text`、`include`、`background` 和 `max_output_tokens` 不支持非 `null` 值，需要这些原生能力时使用 `/v1/responses`
 
@@ -299,6 +302,10 @@ print(completion.choices[0].message.content)
 两种响应的 `id` 均由网关生成，`model` 保留客户端请求的模型 ID；流内各块使用同一身份。
 正常完成的 `finish_reason` 为 `stop`，包含工具调用时为 `tool_calls`；上游明确因输出长度或内容过滤而未完成时，
 分别为 `length` 或 `content_filter`
+
+联网搜索使用请求指定的模型，能否搜索取决于上游。搜索请求不接受非空函数工具列表，`tool_choice` 可省略或使用 `auto`。
+需要由模型在搜索和函数之间选择时使用 `/v1/responses`。非流式结果的 URL 引用位于 `choices[0].message.annotations`，
+索引对应合并后的消息正文。流式结果通过 `delta.content` 保留正文中的行内链接，逐条结构化引用事件可通过 Responses 获取
 
 `stream_options` 仅在 `stream: true` 时可提供，
 `include_usage: true` 在完整上游用量可用时于结束前追加 `choices: []` 的用量块，其余块的 `usage` 为 `null`。
@@ -317,9 +324,8 @@ Chat 沿用 [Client Key 鉴权](#openai-数据面客户端接口)、[请求期�
 [请求头与身份](#请求头与身份)及[隐私策略](#隐私策略)。隐私策略的 `request_body` 面向转换后的 Responses 正文，
 例如 `$.input`，不需要另外维护一套针对 `messages` 的规则
 
-转换后的请求按选中 Provider 的正文规则处理。OpenAI 的[正文兼容](#正文兼容)会移除顶层 `temperature`、
-`max_output_tokens` 和 `prompt_cache_retention`。因此接受相应 Chat 参数不表示采样、输出长度或缓存保留设置必然生效，
-不会通过本地截断模拟长度控制；`top_p` 等其他参数继续由上游判断
+转换后的请求按选中 Provider 的正文规则处理。OpenAI 的[正文兼容](#正文兼容)会移除顶层 `temperature` 和
+`prompt_cache_retention`。输出上限原值交给上游校验，低于模型下限时会收到上游错误；`top_p` 是否可用也由上游判断
 
 ### Images 请求
 
@@ -437,8 +443,8 @@ Images 的 `x-codex-image-turn-id` 和 Desktop 自动 Git 上下文的 `clientUs
 
 #### 正文兼容
 
-OpenAI Provider 的 Responses 上游编码会移除 Codex 不接受的顶层 `temperature`、`max_output_tokens` 和
-`prompt_cache_retention`。缺少顶层 `store` 时补齐 `false`，与官方 Codex 客户端一致；
+OpenAI Provider 的 Responses 上游编码会移除 Codex 不接受的顶层 `temperature` 和 `prompt_cache_retention`，
+并保留调用方指定的 `max_output_tokens`。缺少顶层 `store` 时补齐 `false`，与官方 Codex 客户端一致；
 显式提供的值保持原样。顶层 `input` 为字符串时按公开 Responses API 的语义展开为一条
 `user` 文本消息条目（`{"type": "message", "role": "user", "content": [{"type": "input_text", ...}]}`），
 因为 Codex 后端只接受条目数组；数组及其他类型原样透传。`input` 数组中显式指定 `type: "message"`
