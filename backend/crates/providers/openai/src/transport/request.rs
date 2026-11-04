@@ -68,6 +68,14 @@ const ACCOUNT_BOUND_STATE_KEYS: &[&str] = &[
 
 const TURN_METADATA_KEYS: &[&str] = &["turnMetadata", "turn_metadata", "x-codex-turn-metadata"];
 
+const CROSS_ACCOUNT_CLIENT_HEADERS: &[&str] = &[
+    "traceparent",
+    "tracestate",
+    "sentry-trace",
+    "baggage",
+    "x-openai-fedramp",
+];
+
 const INSTALLATION_ID_KEYS: &[&str] = &[
     "installation_id",
     "installationId",
@@ -471,6 +479,16 @@ pub(crate) fn scope_request_to_account(
     account_scope: RequestAccountScope,
     verified_turn_state: Option<&str>,
 ) {
+    if account_scope == RequestAccountScope::Different {
+        // 明确换号时同步清理各 wire 副本，避免把原账号的追踪与合规上下文带给新账号
+        for name in CROSS_ACCOUNT_CLIENT_HEADERS {
+            request.passthrough_headers.remove(*name);
+        }
+        clear_cross_account_client_metadata(request.body_mut());
+        if let Some(raw) = &mut request.turn_metadata {
+            clear_cross_account_turn_metadata(raw);
+        }
+    }
     let reset_account_state = !account_scope.can_reuse_account_state();
     let client_metadata_turn_state = metadata_string(request, "x-codex-turn-state");
     let turn_state = if reset_account_state {
@@ -582,6 +600,39 @@ pub(crate) fn scope_request_to_account(
 
     request.turn_state = turn_state;
     request.turn_metadata = turn_metadata;
+}
+
+fn clear_cross_account_client_metadata(metadata: &mut Map<String, Value>) -> bool {
+    let original_len = metadata.len();
+    metadata.retain(|key, _| {
+        let name = key.strip_prefix("ws_request_header_").unwrap_or(key);
+        !CROSS_ACCOUNT_CLIENT_HEADERS.contains(&name)
+    });
+    let mut changed = metadata.len() != original_len;
+    // 只处理协议 metadata 容器，业务输入和工具结果保持原始内容
+    for key in TURN_METADATA_KEYS
+        .iter()
+        .copied()
+        .chain(["client_metadata"])
+    {
+        match metadata.get_mut(key) {
+            Some(Value::Object(value)) => changed |= clear_cross_account_client_metadata(value),
+            Some(Value::String(raw)) => changed |= clear_cross_account_turn_metadata(raw),
+            _ => {}
+        }
+    }
+    changed
+}
+
+fn clear_cross_account_turn_metadata(raw: &mut String) -> bool {
+    if let Ok(Value::Object(mut metadata)) = serde_json::from_str(raw)
+        && clear_cross_account_client_metadata(&mut metadata)
+        && let Some(encoded) = serialize_ascii_turn_metadata(&Value::Object(metadata))
+    {
+        *raw = encoded;
+        return true;
+    }
+    false
 }
 
 fn metadata_string(request: &CodexResponsesRequest, key: &str) -> Option<String> {

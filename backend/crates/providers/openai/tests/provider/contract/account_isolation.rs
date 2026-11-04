@@ -3,6 +3,25 @@
 use super::*;
 
 const SELECTED_ACCOUNT: &str = "acct_scope_same";
+const CLIENT_ACCOUNT_HEADERS: &[(&str, &[&str])] = &[
+    (
+        "traceparent",
+        &["00-11111111111111111111111111111111-2222222222222222-01"],
+    ),
+    ("tracestate", &["vendor=client"]),
+    ("sentry-trace", &["client-trace"]),
+    ("baggage", &["environment=synthetic", "release=synthetic"]),
+    ("x-openai-fedramp", &["true", "false"]),
+];
+
+fn client_account_metadata() -> Map<String, Value> {
+    let mut metadata = Map::new();
+    for (name, values) in CLIENT_ACCOUNT_HEADERS {
+        metadata.insert((*name).to_owned(), json!(values[0]));
+        metadata.insert(format!("ws_request_header_{name}"), json!(values[0]));
+    }
+    metadata
+}
 
 pub(super) fn isolation_history() -> Value {
     json!([
@@ -25,38 +44,54 @@ pub(super) fn isolation_history() -> Value {
 }
 
 fn isolation_payload() -> ProtocolPayload {
-    ProtocolPayload::json_object(
-        "openai",
-        json!({
-            "model": "gpt-5.4",
-            "input": isolation_history(),
-            "client_metadata": {
-                "parent_response_id": "resp_parent_old",
-                "guardian_credits_requested": "true",
-                "x-codex-turn-metadata": r#"{"parent_response_id":"client-correlation"}"#,
-                "mcp_attribution": r#"{"status":"complete","sources":[]}"#
-            }
-        })
-        .as_object()
+    let mut turn_metadata = client_account_metadata();
+    turn_metadata.insert("parent_response_id".to_owned(), json!("client-correlation"));
+    turn_metadata.insert("workspace".to_owned(), json!("/工作区"));
+    turn_metadata.insert("future".to_owned(), json!({"traceparent":"business-value"}));
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "input": isolation_history(),
+        "client_metadata": {
+            "parent_response_id": "resp_parent_old",
+            "guardian_credits_requested": "true",
+            "x-codex-turn-metadata": Value::Object(turn_metadata.clone()).to_string(),
+            "turnMetadata": turn_metadata,
+            "mcp_attribution": r#"{"status":"complete","sources":[]}"#
+        }
+    });
+    body.as_object_mut()
         .unwrap()
-        .clone(),
-    )
-    .unwrap()
-    .with_context(Map::from_iter([(
-        "opaque_request_headers".to_owned(),
+        .extend(client_account_metadata());
+    body["client_metadata"]
+        .as_object_mut()
+        .unwrap()
+        .extend(client_account_metadata());
+    body["turnMetadata"] = json!(turn_metadata);
+    body["turn_metadata"] = json!(Value::Object(turn_metadata.clone()).to_string());
+    let mut headers = vec![
+        json!(["X-OpenAI-Account-Routing-Override", STANDARD.encode("us")]),
         json!([
-            ["X-OpenAI-Account-Routing-Override", STANDARD.encode("us")],
-            [
-                "x-openai-account-routing-override",
-                STANDARD.encode("us_cr")
-            ],
-            ["X-OpenAI-Fedramp", STANDARD.encode("true")],
-            ["x-openai-fedramp", STANDARD.encode("false")],
-            ["x-codex-guardian", STANDARD.encode("true")],
-            ["x-business-extension", STANDARD.encode("first")],
-            ["x-business-extension", STANDARD.encode("second")]
+            "x-openai-account-routing-override",
+            STANDARD.encode("us_cr")
         ]),
-    )]))
+        json!(["x-codex-guardian", STANDARD.encode("true")]),
+        json!(["x-business-extension", STANDARD.encode("first")]),
+        json!(["x-business-extension", STANDARD.encode("second")]),
+    ];
+    for (name, values) in CLIENT_ACCOUNT_HEADERS {
+        for value in *values {
+            headers.push(json!([name.to_ascii_uppercase(), STANDARD.encode(value)]));
+        }
+    }
+    ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
+        .unwrap()
+        .with_context(Map::from_iter([
+            ("opaque_request_headers".to_owned(), json!(headers)),
+            (
+                "turn_metadata".to_owned(),
+                json!(Value::Object(turn_metadata).to_string()),
+            ),
+        ]))
 }
 
 fn isolation_context(owner: Option<&str>) -> AttemptContext {
@@ -72,14 +107,24 @@ fn assert_isolated_request(
     owner: Option<&str>,
 ) {
     assert!(!headers.contains_key("x-openai-account-routing-override"));
-    assert_eq!(
-        headers
-            .get_all("x-openai-fedramp")
+    let switched = owner.is_some_and(|owner| owner != SELECTED_ACCOUNT);
+    for (name, values) in CLIENT_ACCOUNT_HEADERS {
+        let actual: Vec<_> = headers
+            .get_all(*name)
             .iter()
             .map(|value| value.to_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["true", "false"]
-    );
+            .collect();
+        let expected = if switched { &[][..] } else { *values };
+        assert_eq!(actual, expected, "{name}, owner={owner:?}");
+        for metadata in [body, &body["client_metadata"]] {
+            let expected = (!switched).then(|| json!(values[0]));
+            assert_eq!(metadata.get(*name), expected.as_ref());
+            assert_eq!(
+                metadata.get(format!("ws_request_header_{name}")),
+                expected.as_ref()
+            );
+        }
+    }
     assert_eq!(headers["x-codex-guardian"], "true");
     assert_eq!(
         headers
@@ -98,14 +143,31 @@ fn assert_isolated_request(
         body["client_metadata"]["guardian_credits_requested"],
         "true"
     );
+    let mut expected_turn_metadata = if switched {
+        Map::new()
+    } else {
+        client_account_metadata()
+    };
+    expected_turn_metadata.insert("parent_response_id".to_owned(), json!("client-correlation"));
+    expected_turn_metadata.insert("workspace".to_owned(), json!("/工作区"));
+    expected_turn_metadata.insert("future".to_owned(), json!({"traceparent":"business-value"}));
+    for metadata in [
+        &body["turnMetadata"],
+        &body["turn_metadata"],
+        &body["client_metadata"]["turnMetadata"],
+        &body["client_metadata"]["x-codex-turn-metadata"],
+    ] {
+        let actual = match metadata {
+            Value::String(raw) => serde_json::from_str(raw).unwrap(),
+            value => value.clone(),
+        };
+        assert_eq!(actual, Value::Object(expected_turn_metadata.clone()));
+    }
+    let header = headers["x-codex-turn-metadata"].to_str().unwrap();
+    assert!(header.is_ascii());
     assert_eq!(
-        serde_json::from_str::<Value>(
-            body["client_metadata"]["x-codex-turn-metadata"]
-                .as_str()
-                .unwrap()
-        )
-        .unwrap(),
-        json!({"parent_response_id": "client-correlation"}),
+        serde_json::from_str::<Value>(header).unwrap(),
+        Value::Object(expected_turn_metadata)
     );
     assert_eq!(
         body["client_metadata"]["mcp_attribution"],
@@ -115,7 +177,7 @@ fn assert_isolated_request(
 }
 
 #[tokio::test]
-async fn http_applies_deployment_routing_and_only_scopes_guardian_parent_reference() {
+async fn http_scopes_client_headers_and_guardian_parent_reference_to_the_account() {
     for owner in [Some(SELECTED_ACCOUNT), Some("acct_scope_old"), None] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, SELECTED_ACCOUNT).await;
@@ -158,7 +220,7 @@ async fn http_applies_deployment_routing_and_only_scopes_guardian_parent_referen
 }
 
 #[tokio::test]
-async fn websocket_applies_deployment_routing_and_only_scopes_guardian_parent_reference() {
+async fn websocket_scopes_client_headers_and_guardian_parent_reference_to_the_account() {
     for owner in [Some(SELECTED_ACCOUNT), Some("acct_scope_old"), None] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, SELECTED_ACCOUNT).await;

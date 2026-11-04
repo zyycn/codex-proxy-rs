@@ -399,7 +399,7 @@ API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`originator`、`v
 `x-openai-internal-codex-residency` 和 `x-openai-account-routing-override` 分别由部署配置
 `openai.residency`、`openai.account_routing_override` 控制，配置值原样发送并覆盖客户端同名头，
 省略或 `null` 时删除对应请求头。配置说明见 [部署与运维](../deploy/README.md#启动后的运行设置)
-`x-openai-fedramp` 按业务头透传，保留原始多值。
+`x-openai-fedramp` 默认按业务头透传并保留原始多值，Responses 明确换号时清理。
 上述过滤描述原生转发；已信任插件的显式 header 改写可以覆盖账号与画像生成的默认头，
 不按认证或会话字段名称拦截，边界见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 
@@ -410,8 +410,9 @@ Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和
 两者同时存在时仍优先使用 `session-id`。正文中的 `client_metadata.session_id`、
 `prompt_cache_key` 不受这条请求头规则影响。
 `thread-id`、turn metadata 等 Codex 协议字段及未知业务扩展不受下游环境头过滤规则影响；
-`traceparent`、`tracestate`、`sentry-trace`、`baggage` 及 WS metadata 中对应的
-`ws_request_header_*` 副本保持原值
+Responses 明确换号时清理 `traceparent`、`tracestate`、`sentry-trace`、`baggage` 和
+`x-openai-fedramp`，同时清理正文、`client_metadata`、turn metadata 中的同名字段及
+`ws_request_header_*` 副本。同账号及归属未知时保留原值，业务输入和工具结果保持原始内容
 
 会话、线程、窗口及父子线程引用在出站时按本次安装身份稳定映射为 UUID；
 默认使用账号安装身份，同账号保留引用关系，换账号使用不同标识。HTTP 请求头、正文 metadata、WS 副本及
