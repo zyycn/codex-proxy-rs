@@ -74,7 +74,7 @@ async function confirmAssignment() {
           </template>
         </ZInput>
         <div v-if="selectedIds.size" class="ml-auto flex shrink-0 gap-2">
-          <ZButton :disabled="assigning" @click="selectedIds = new Set()">
+          <ZButton type="danger" :disabled="assigning" @click="selectedIds = new Set()">
             {{ t('common.actions.reset') }}
           </ZButton>
           <ZButton type="primary" :loading="assigning" :disabled="!proxy?.enabled || tooManySelected" @click="confirmAssignment">
@@ -87,8 +87,7 @@ async function confirmAssignment() {
           <ZCheckbox :model-value="allSelected" :indeterminate="indeterminate" :disabled="loading || assigning" :aria-label="t('proxies.assignment.selectPage')" @update:model-value="toggleAll" />
         </template>
         <template #selection="{ row }">
-          <ZCheckbox v-if="row.outboundProxyId !== proxy?.id" :model-value="selectedIds.has(row.id)" :disabled="loading || assigning" :aria-label="t('proxies.assignment.selectAccount', { name: row.name })" @update:model-value="toggleSelection(row.id)" />
-          <span v-else class="text-z-text-quaternary" aria-hidden="true">—</span>
+          <ZCheckbox :model-value="selectedIds.has(row.id)" :disabled="loading || assigning || row.outboundProxyId === proxy?.id" :aria-label="t('proxies.assignment.selectAccount', { name: row.name })" @update:model-value="toggleSelection(row.id)" />
         </template>
         <template #identity="{ row }">
           <div class="min-w-0">
