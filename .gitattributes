@@ -1,0 +1,3 @@
+# SQLx migration checksums are byte-sensitive; keep migration inputs portable across hosts.
+backend/migrations/*.sql text eol=lf
+backend/migrations/.frozen-sha256 text eol=lf
