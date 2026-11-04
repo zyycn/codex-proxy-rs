@@ -108,7 +108,6 @@ body:
     id: expected-behavior
     attributes:
       label: 预期行为
-      description: 说明原本期望得到的结果。
     validations:
       required: true
 
