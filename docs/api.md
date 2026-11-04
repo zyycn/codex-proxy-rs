@@ -1799,6 +1799,17 @@ HTTP 返回 `403` 和 `image_generation_disabled`，WebSocket 每个 `response.c
 | `POST` | `/api/admin/client-keys/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/client-keys/disable` | `{ id }` | 禁用 |
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
+| `POST` | `/api/admin/client-keys/retire` | `{ id }` | 永久退役凭据，保留费用与资源归属 |
+
+退役仅限管理员，成功返回 `{ id }`。它禁用 Key、销毁原凭据并从管理及插件 Key 列表隐藏记录，
+保留原生费用账本、请求历史和插件资源映射。已有在途请求继续完成和结算；退役不等于取消请求，
+也不物理删除账本。退役后的 ID 不能再 reveal、更新策略、启用、重置预算或普通删除，这些操作返回 `404`。
+新 Key 可以复用退役记录的显示名称，但不继承原 ID 或费用
+
+同一 ID 重复退役成功且不重复写审计或推进配置版本；结果未知时可用原 ID 再调用，宿主重新发布持久状态。
+不存在的 ID 返回 `404`，失败不能推断写入未提交。插件对同一资源键继续 `ensure` 时返回原 ID 和 `enabled=false`，
+不会重新生成凭据；普通删除未退役资源仍允许插件以后重新创建。退役没有恢复启用接口，
+临时停用应使用 `disable`；退役及数据库回退边界见[部署说明](../deploy/README.md#client-key-退役与回退)
 
 创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
 `dailyLimitUsd`、`weeklyLimitUsd`、`customKey`、`providerRequestProfileOverrides` 和 `peerSharing`。更新请求携带 `id`，不接受 `customKey`。

@@ -277,6 +277,12 @@ impl fmt::Debug for CreatedClientKey {
     }
 }
 
+/// 永久废止凭据并保留资源归属与费用账本
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetireClientKey {
+    pub id: ClientApiKeyId,
+}
+
 /// Client Key 普通写操作结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyMutation {

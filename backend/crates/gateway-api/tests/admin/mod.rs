@@ -1129,6 +1129,20 @@ impl ClientKeyStore for MemoryClientKeyStore {
         Err(unavailable("client key enabled"))
     }
 
+    async fn retire_client_key(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+        _: gateway_core::policy::PlaintextClientApiKey,
+        _: &MutationContext,
+    ) -> AdminStoreResult<Revision> {
+        let mut stored = self.0.lock().unwrap();
+        let key = stored.as_mut().filter(|key| key.id == *id).ok_or_else(|| {
+            AdminStoreError::new(AdminStoreErrorKind::NotFound, "client key", "missing key")
+        })?;
+        key.enabled = false;
+        Ok(Revision::new(2).unwrap())
+    }
+
     async fn delete_client_key(
         &self,
         _: DeleteClientKey,

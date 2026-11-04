@@ -29,6 +29,8 @@ struct TestClientKeyStore {
     list_queries: Mutex<Vec<ClientKeyListQuery>>,
     list_response: Mutex<Option<ClientKeyPage>>,
     create_error: Option<AdminStoreErrorKind>,
+    retire_error: Option<AdminStoreErrorKind>,
+    retirement_keys: Mutex<Vec<PlaintextClientApiKey>>,
     update_error: Option<AdminStoreErrorKind>,
     resets: Mutex<Vec<gateway_admin::model::client_keys::ResetClientKeyBudget>>,
 }
@@ -135,6 +137,23 @@ impl ClientKeyStore for TestClientKeyStore {
         _: &MutationContext,
     ) -> AdminStoreResult<(Revision, ClientKeyRecord)> {
         Err(unused())
+    }
+
+    async fn retire_client_key(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+        key: gateway_core::policy::PlaintextClientApiKey,
+        _: &MutationContext,
+    ) -> AdminStoreResult<Revision> {
+        if let Some(kind) = self.retire_error {
+            return Err(AdminStoreError::new(
+                kind,
+                "client key",
+                "synthetic retirement failure",
+            ));
+        }
+        self.retirement_keys.lock().unwrap().push(key);
+        Ok(Revision::new(2).unwrap())
     }
 
     async fn delete_client_key(
@@ -503,4 +522,73 @@ async fn duplicate_group_ids_are_rejected_before_key_creation_or_update() {
     assert_eq!(created.kind(), AdminErrorKind::Invalid);
     assert_eq!(updated.kind(), AdminErrorKind::Invalid);
     assert!(store.plaintexts.lock().unwrap().is_empty());
+}
+
+#[derive(Default)]
+struct RetirementPublication(Mutex<Vec<u64>>);
+
+impl gateway_core::runtime::SnapshotControl for RetirementPublication {
+    fn publish_committed(
+        &self,
+        revision: gateway_core::routing::ConfigRevision,
+    ) -> futures::future::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.0.lock().unwrap().push(revision.get());
+        })
+    }
+}
+
+#[tokio::test]
+async fn retirement_republishes_committed_state_on_repeat_without_returning_a_secret() {
+    let store = Arc::new(TestClientKeyStore::default());
+    let published = Arc::new(RetirementPublication::default());
+    let services = super::AdminHarness::new()
+        .client_keys(store.clone())
+        .snapshot(published.clone())
+        .build()
+        .await;
+    let id = ClientApiKeyId::new("key_retire").unwrap();
+    for _ in 0..2 {
+        let result = services
+            .client_keys()
+            .retire(
+                &mutation_context(),
+                gateway_admin::model::client_keys::RetireClientKey { id: id.clone() },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.id, id);
+        assert!(result.record.is_none());
+    }
+    assert_eq!(*published.0.lock().unwrap(), vec![2, 2]);
+    let keys = store.retirement_keys.lock().unwrap();
+    assert_eq!(keys.len(), 2);
+    assert_ne!(keys[0].expose_for_auth(), keys[1].expose_for_auth());
+    assert!(!format!("{:?}", keys[0]).contains(keys[0].expose_for_auth()));
+}
+
+#[tokio::test]
+async fn failed_retirement_does_not_publish_or_report_success() {
+    let store = Arc::new(TestClientKeyStore {
+        retire_error: Some(AdminStoreErrorKind::NotFound),
+        ..Default::default()
+    });
+    let published = Arc::new(RetirementPublication::default());
+    let services = super::AdminHarness::new()
+        .client_keys(store)
+        .snapshot(published.clone())
+        .build()
+        .await;
+    let error = services
+        .client_keys()
+        .retire(
+            &mutation_context(),
+            gateway_admin::model::client_keys::RetireClientKey {
+                id: ClientApiKeyId::new("missing").unwrap(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), AdminErrorKind::NotFound);
+    assert!(published.0.lock().unwrap().is_empty());
 }

@@ -692,3 +692,76 @@ fn generic_profile_override_clear_rejects_conflicting_legacy_update() {
         "providerRequestProfileOverrides"
     );
 }
+
+#[tokio::test]
+async fn retirement_requires_admin_and_returns_only_identity() {
+    use crate::support::{RAW_KEY, json_request, key_fixture, response_json};
+    use axum::http::{Method, StatusCode, header};
+    use tower::ServiceExt as _;
+    let fixture = key_fixture().await;
+    fixture.auth.insert_session("valid-admin");
+    let record = fixture
+        .services
+        .client_keys()
+        .reveal(&gateway_core::policy::ClientApiKeyId::new("key-42").unwrap())
+        .await
+        .unwrap()
+        .record;
+    *fixture.client_key.lock().unwrap() = Some(record);
+    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let login = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/auth/login",
+            json!({"mode":"key", "apiKey":RAW_KEY}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let key_cookie = login.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    for (cookie, expected) in [
+        ("", StatusCode::UNAUTHORIZED),
+        (key_cookie.as_str(), StatusCode::FORBIDDEN),
+        ("cpr_session=valid-admin", StatusCode::OK),
+    ] {
+        let mut request = json_request(
+            Method::POST,
+            "/api/admin/client-keys/retire",
+            json!({"id":"key-42"}),
+        );
+        request
+            .headers_mut()
+            .insert(header::COOKIE, cookie.parse().unwrap());
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            assert_eq!(
+                response_json(response).await["data"],
+                json!({"id":"key-42"})
+            );
+        }
+        assert_eq!(
+            fixture.client_key.lock().unwrap().as_ref().unwrap().enabled,
+            expected != StatusCode::OK
+        );
+    }
+    let mut request = json_request(
+        Method::POST,
+        "/api/admin/client-keys/retire",
+        json!({"id":"missing"}),
+    );
+    request
+        .headers_mut()
+        .insert(header::COOKIE, "cpr_session=valid-admin".parse().unwrap());
+    assert_eq!(
+        app.oneshot(request).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}

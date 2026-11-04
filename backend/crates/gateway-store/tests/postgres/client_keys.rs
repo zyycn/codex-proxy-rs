@@ -935,3 +935,267 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
     assert!(snapshot.client_api_keys[0].request_profiles.is_empty());
     database.close().await;
 }
+
+#[tokio::test]
+async fn retirement_hides_credentials_preserves_late_charges_and_cannot_be_reenabled() {
+    use super::client_budgets::{charge, context, key_id, seed};
+    use gateway_admin::{
+        model::client_keys::{
+            ClientKeyBudgetMutationOrigin, ClientKeyBudgetPeriod, DeleteClientKey,
+            ResetClientKeyBudget, SetClientKeyEnabled, UpdateClientKeyBudgetLimits,
+        },
+        ports::store::AdminStoreErrorKind,
+    };
+    use gateway_core::{
+        engine::budget::ClientBudgetPort as _, error::GatewayErrorKind,
+        policy::PlaintextClientApiKey,
+    };
+    use gateway_store::postgres::{
+        PgClientBudgetStore, PgRuntimeSnapshotRepository, RuntimeSnapshotRepository as _,
+    };
+    let Some(database) = TestDatabase::create("key_retirement").await else {
+        return;
+    };
+    seed(&database, "retiring", "10", "20").await;
+    super::plugins::artifacts::initialize_revision(&database).await;
+    let id = key_id("retiring");
+    let store = PgAdminClientKeyStore::new(database.pool.clone());
+    let budget = PgClientBudgetStore::new(database.pool.clone());
+    budget.admit(id.clone()).await.unwrap();
+    budget
+        .settle(charge("retiring", "before", "1.25"))
+        .await
+        .unwrap();
+    let original = store.reveal_client_key(&id).await.unwrap().unwrap();
+    let initial = store
+        .list_client_keys(AdminClientKeyListQuery {
+            cursor: None,
+            page_size: ClientKeyPageSize::new(10).unwrap(),
+            search: None,
+            sort: AdminClientKeySort {
+                field: AdminClientKeySortField::CreatedAt,
+                direction: AdminSortDirection::Desc,
+            },
+        })
+        .await
+        .unwrap()
+        .config_revision;
+    let replacement = || PlaintextClientApiKey::new("retired-random-fixture").unwrap();
+    let revision = store
+        .retire_client_key(&id, replacement(), &context())
+        .await
+        .unwrap();
+    assert_eq!(revision.get(), initial.get() + 1);
+    let retire_context = context();
+    let enable_context = context();
+    let (repeated, enabled) = tokio::join!(
+        store.retire_client_key(&id, replacement(), &retire_context),
+        store.set_client_key_enabled(
+            SetClientKeyEnabled {
+                id: id.clone(),
+                enabled: true
+            },
+            &enable_context
+        ),
+    );
+    assert_eq!(repeated.unwrap(), revision);
+    assert_eq!(enabled.unwrap_err().kind(), AdminStoreErrorKind::NotFound);
+    assert!(store.get_client_key(&id).await.unwrap().is_none());
+    assert!(store.reveal_client_key(&id).await.unwrap().is_none());
+    let listed = store
+        .list_client_keys(AdminClientKeyListQuery {
+            cursor: None,
+            page_size: ClientKeyPageSize::new(10).unwrap(),
+            search: Some("retiring".into()),
+            sort: AdminClientKeySort {
+                field: AdminClientKeySortField::CreatedAt,
+                direction: AdminSortDirection::Desc,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(listed.total, 0);
+    assert!(listed.items.is_empty());
+    assert_eq!(listed.config_revision, revision);
+    assert!(
+        PgRuntimeSnapshotRepository::new(database.pool.clone())
+            .load_runtime_snapshot()
+            .await
+            .unwrap()
+            .client_api_keys
+            .is_empty()
+    );
+    assert_eq!(
+        budget.admit(id.clone()).await.unwrap_err().kind(),
+        GatewayErrorKind::PolicyDenied
+    );
+    assert_eq!(
+        store
+            .update_client_key(
+                gateway_admin::model::client_keys::UpdateClientKey {
+                    peer_sharing: None,
+                    request_profile_override_updates: Default::default(),
+                    id: id.clone(),
+                    name: "retiring".into(),
+                    label: None,
+                    group_ids: Vec::new(),
+                    limits: gateway_core::policy::RateLimits::unlimited(),
+                    daily_limit_usd: None,
+                    weekly_limit_usd: None,
+                },
+                &context()
+            )
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminStoreErrorKind::NotFound
+    );
+    assert_eq!(
+        store
+            .delete_client_key(DeleteClientKey { id: id.clone() }, &context())
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminStoreErrorKind::NotFound
+    );
+    assert_eq!(
+        store
+            .update_client_key_budget_limits(
+                UpdateClientKeyBudgetLimits {
+                    id: id.clone(),
+                    daily_limit_usd: Some("1".parse().unwrap()),
+                    weekly_limit_usd: None,
+                },
+                ClientKeyBudgetMutationOrigin::Admin,
+                &context()
+            )
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminStoreErrorKind::NotFound
+    );
+    assert_eq!(
+        store
+            .reset_client_key_budget(
+                ResetClientKeyBudget {
+                    id: id.clone(),
+                    period: ClientKeyBudgetPeriod::All,
+                },
+                ClientKeyBudgetMutationOrigin::Admin,
+                &context()
+            )
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminStoreErrorKind::NotFound
+    );
+    budget
+        .settle(charge("retiring", "after", "2.5"))
+        .await
+        .unwrap();
+    budget
+        .settle(charge("retiring", "after", "2.5"))
+        .await
+        .unwrap();
+    let (daily, weekly): (String, String) = sqlx::query_as(
+        "select daily_used_usd::text, weekly_used_usd::text from client_api_key_budget_windows where client_api_key_id=$1",
+    ).bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
+    for amount in [daily, weekly] {
+        assert_eq!(
+            amount
+                .parse::<gateway_core::metering::Decimal>()
+                .unwrap()
+                .canonical(),
+            "3.75"
+        );
+    }
+    let count: i64 = sqlx::query_scalar(
+        "select count(*) from client_api_key_charge_events where client_api_key_id=$1",
+    )
+    .bind(id.as_str())
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 2);
+    let (enabled, changed): (bool, bool) =
+        sqlx::query_as("select enabled, key <> $2 from client_api_keys where id=$1")
+            .bind(id.as_str())
+            .bind(original.expose_for_response())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert!(!enabled && changed);
+    assert!(
+        sqlx::query("update client_api_keys set enabled=true where id=$1")
+            .bind(id.as_str())
+            .execute(&database.pool)
+            .await
+            .is_err(),
+        "old enable code cannot bypass retirement"
+    );
+    let audits: i64 =
+        sqlx::query_scalar("select count(*) from admin_audit_events where action='retire'")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(audits, 1);
+    // 新凭据可复用显示名称，不接管已退役的身份或费用
+    let (_, new_key) = store
+        .create_client_key(
+            gateway_admin::model::client_keys::NewClientKey {
+                peer_sharing: Default::default(),
+                request_profile_overrides: Default::default(),
+                id: key_id("new-key"),
+                name: "retiring".into(),
+                label: None,
+                group_ids: Vec::new(),
+                limits: gateway_core::policy::RateLimits::unlimited(),
+                budget: Default::default(),
+                plaintext: "new-key-fixture".into(),
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(new_key.id, id);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn retirement_audit_failure_rolls_back_credentials_and_revision() {
+    use super::client_budgets::{context, key_id, seed};
+    use gateway_core::policy::PlaintextClientApiKey;
+    let Some(database) = TestDatabase::create("key_retirement_rollback").await else {
+        return;
+    };
+    seed(&database, "rollback", "1", "2").await;
+    super::plugins::artifacts::initialize_revision(&database).await;
+    let store = PgAdminClientKeyStore::new(database.pool.clone());
+    let id = key_id("rollback");
+    let original = store.reveal_client_key(&id).await.unwrap().unwrap();
+    sqlx::raw_sql("create function reject_retirement() returns trigger language plpgsql as $$
+        begin if new.action='retire' then raise exception 'synthetic audit failure'; end if; return new; end $$;
+        create trigger reject_retirement before insert on admin_audit_events for each row execute function reject_retirement();")
+        .execute(&database.pool).await.unwrap();
+    assert!(
+        store
+            .retire_client_key(
+                &id,
+                PlaintextClientApiKey::new("unused-replacement").unwrap(),
+                &context()
+            )
+            .await
+            .is_err()
+    );
+    let current = store.reveal_client_key(&id).await.unwrap().unwrap();
+    assert_eq!(
+        current.expose_for_response(),
+        original.expose_for_response()
+    );
+    assert!(current.record.enabled);
+    let (revision, unretired): (i64, bool) = sqlx::query_as("select config_revision, retired_at is null from runtime_settings, client_api_keys where runtime_settings.id=1 and client_api_keys.id=$1")
+        .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
+    assert_eq!(revision, 1);
+    assert!(unretired);
+    database.close().await;
+}

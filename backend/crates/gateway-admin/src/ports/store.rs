@@ -402,6 +402,14 @@ pub trait ClientKeyStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<Revision>;
 
+    /// 退役后隐藏凭据并保留幂等归属；重复调用返回当前 revision，不重复写入
+    async fn retire_client_key(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+        replacement_key: gateway_core::policy::PlaintextClientApiKey,
+        context: &MutationContext,
+    ) -> AdminStoreResult<Revision>;
+
     /// 局部更新预算上限，保留其他策略和账本；无变化时不产生配置版本或审计
     async fn update_client_key_budget_limits(
         &self,

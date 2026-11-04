@@ -39,6 +39,7 @@ pub enum MutationAuditOperation {
     ClientApiKeyUpdate,
     ClientApiKeyEnabled { enabled: bool },
     ClientApiKeyDelete,
+    ClientApiKeyRetire,
     PluginSourceChangeSource,
     PluginSourceDelete,
     OutboundProxyCreate,
@@ -101,6 +102,7 @@ impl MutationAuditOperation {
                 (if enabled { "enable" } else { "disable" }, "client_api_key")
             }
             Self::ClientApiKeyDelete => ("delete", "client_api_key"),
+            Self::ClientApiKeyRetire => ("retire", "client_api_key"),
             Self::PluginSourceChangeSource => ("change_source", "plugin_source"),
             Self::PluginSourceDelete => ("delete", "plugin_source"),
             Self::OutboundProxyCreate => ("create", "outbound_proxy"),

@@ -10,8 +10,8 @@ use gateway_admin::model::client_keys::{
     ClientKeyBudgetPeriod, ClientKeyCursor, ClientKeyCursorValue as DomainCursorValue,
     ClientKeyListQuery, ClientKeyMutation, ClientKeyPage, ClientKeyPageSize, ClientKeyRecord,
     ClientKeySecret, ClientKeySort as DomainSort, ClientKeySortField as DomainSortField,
-    CreateClientKey, CreatedClientKey, DeleteClientKey, ResetClientKeyBudget, SetClientKeyEnabled,
-    SortDirection, UpdateClientKey,
+    CreateClientKey, CreatedClientKey, DeleteClientKey, ResetClientKeyBudget, RetireClientKey,
+    SetClientKeyEnabled, SortDirection, UpdateClientKey,
 };
 use gateway_core::{
     engine::budget::ClientBudgetLimits,
@@ -889,6 +889,10 @@ where
             post(enable_client_key::<S>),
         )
         .route(
+            "/api/admin/client-keys/retire",
+            post(retire_client_key::<S>),
+        )
+        .route(
             "/api/admin/client-keys/delete",
             post(delete_client_key::<S>),
         )
@@ -1040,6 +1044,24 @@ where
                 &auth.context().mutation_context(),
                 SetClientKeyEnabled { id, enabled: true },
             )
+            .await,
+    )
+}
+
+async fn retire_client_key<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(payload): AdminJson<ClientKeyMutationRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let id = payload.into_domain_id().map_err(map_wire_error)?;
+    mutation_response(
+        state
+            .admin_services()
+            .client_keys()
+            .retire(&auth.context().mutation_context(), RetireClientKey { id })
             .await,
     )
 }

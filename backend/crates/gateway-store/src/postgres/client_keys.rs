@@ -391,7 +391,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
                     k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
                     k.updated_at, '[]'::jsonb as groups, '{}'::text[] as provider_kinds
              from client_api_keys k
-             where true",
+             where k.retired_at is null",
         );
         push_client_key_search(&mut statement, query.search.as_deref());
         if let Some(cursor) = &query.cursor {
@@ -433,7 +433,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         require_nonempty(ENTITY, "id", id)?;
         sqlx::query_as::<_, (String, String, bool, i64, i64)>(
             "select id, key, enabled, max_concurrency, requests_per_minute
-             from client_api_keys where id = $1",
+             from client_api_keys where id = $1 and retired_at is null",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -477,7 +477,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
                   join provider_accounts a on a.id = gm.provider_account_id
                   where kg.client_api_key_id = k.id) as provider_kinds
              ) groups on true
-             where k.id = $1",
+             where k.id = $1 and k.retired_at is null",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -759,7 +759,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                 ))
             })?;
         let current: Option<(String, String)> = sqlx::query_as(
-            "select daily_limit_usd::text, weekly_limit_usd::text from client_api_keys where id=$1 for update"
+            "select daily_limit_usd::text, weekly_limit_usd::text from client_api_keys where id=$1 and retired_at is null for update"
         ).bind(command.id.as_str()).fetch_optional(&mut *tx).await
             .map_err(|source| map_error(postgres_unavailable("lock budget limits key", source)))?;
         let (daily, weekly) = current.ok_or_else(|| {
@@ -1014,6 +1014,65 @@ impl ClientKeyStore for PgAdminClientKeyStore {
         Ok((admin_revision(revision)?, self.required_record(&id).await?))
     }
 
+    async fn retire_client_key(
+        &self,
+        id: &ClientApiKeyId,
+        replacement_key: PlaintextClientApiKey,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        let mut tx = self.keys.pool.begin().await.map_err(|source| {
+            admin_store_error(
+                ENTITY,
+                postgres_unavailable("begin client key retirement", source),
+            )
+        })?;
+        let result: StoreResult<_> = async {
+            // 配置锁先于 Key 行锁，与编辑、插件 ensure 和预算写入保持相同顺序
+            let current: i64 = sqlx::query_scalar(
+                "select config_revision from runtime_settings where id = 1 for update",
+            ).fetch_one(&mut *tx).await
+                .map_err(|source| postgres_unavailable("lock client key retirement revision", source))?;
+            let retired: bool = sqlx::query_scalar(
+                "select retired_at is not null from client_api_keys where id = $1 for update",
+            ).bind(id.as_str()).fetch_optional(&mut *tx).await
+                .map_err(|source| postgres_unavailable("lock retiring client key", source))?
+                .ok_or_else(|| StoreError::NotFound { source: None, entity: ENTITY, id: id.as_str().to_owned() })?;
+            if retired {
+                return crate::Revision::new(to_u64(current)?);
+            }
+            // 替代值不返回给调用方，保留非空 Key 存储合同并使旧明文永久失效
+            sqlx::query("update client_api_keys set enabled = false, key = $2, retired_at = now(), updated_at = now() where id = $1")
+                .bind(id.as_str()).bind(replacement_key.expose_for_auth()).execute(&mut *tx).await
+                .map_err(|source| postgres_unavailable("retire client key", source))?;
+            let revision = super::bump_config_revision_in_transaction(&mut tx).await?;
+            super::append_admin_audit_event_in_transaction(
+                &mut tx,
+                mutation_audit(context, MutationAuditOperation::ClientApiKeyRetire, id.as_str(),
+                    vec!["enabled".into(), "key".into(), "retired_at".into()]),
+                revision,
+            ).await?;
+            Ok(revision)
+        }.await;
+        match result {
+            Ok(revision) => {
+                tx.commit().await.map_err(|source| {
+                    admin_store_error(
+                        ENTITY,
+                        postgres_unavailable("commit client key retirement", source),
+                    )
+                })?;
+                admin_revision(revision)
+            }
+            Err(error) => {
+                let error = match tx.rollback().await {
+                    Ok(()) => error,
+                    Err(cleanup) => error.with_cleanup(cleanup),
+                };
+                Err(admin_store_error(ENTITY, error))
+            }
+        }
+    }
+
     async fn delete_client_key(
         &self,
         command: DeleteClientKey,
@@ -1204,21 +1263,19 @@ pub(crate) async fn update_client_api_key_in_transaction(
     // 控制面行锁已串行化配置写入，按同一事务里的保留配置验证分组修改
     let sharing = match key.peer_sharing {
         Some(sharing) => sharing,
-        None => {
-            sqlx::query_scalar::<_, sqlx::types::Json<ClientPeerSharing>>(
-                "select peer_sharing_json from client_api_keys where id = $1",
-            )
-            .bind(&key.id)
-            .fetch_optional(&mut **transaction)
-            .await
-            .map_err(|source| postgres_unavailable("load client peer sharing", source))?
-            .ok_or_else(|| StoreError::NotFound {
-                source: None,
-                entity: ENTITY,
-                id: key.id.clone(),
-            })?
-            .0
-        }
+        None => sqlx::query_scalar::<_, sqlx::types::Json<ClientPeerSharing>>(
+            "select peer_sharing_json from client_api_keys where id = $1 and retired_at is null",
+        )
+        .bind(&key.id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(|source| postgres_unavailable("load client peer sharing", source))?
+        .ok_or_else(|| StoreError::NotFound {
+            source: None,
+            entity: ENTITY,
+            id: key.id.clone(),
+        })?
+        .0,
     };
     sharing
         .validate(!key.group_ids.is_empty())
@@ -1249,7 +1306,7 @@ pub(crate) async fn update_client_api_key_in_transaction(
              provider_request_profiles_json = (provider_request_profiles_json - $8::text[])
                  || $9::jsonb,
              peer_sharing_json = coalesce($10::jsonb, peer_sharing_json)
-         where id = $1",
+         where id = $1 and retired_at is null",
     )
     .bind(&key.id)
     .bind(key.name.trim())
@@ -1277,7 +1334,7 @@ async fn ensure_client_key_name_available(
     // 不回填历史重名数据；创建和保存时统一校验，更新排除当前记录
     let duplicate: bool = sqlx::query_scalar(
         "select exists(select 1 from client_api_keys
-         where lower(btrim(name)) = lower($1) and id <> $2)",
+         where lower(btrim(name)) = lower($1) and id <> $2 and retired_at is null)",
     )
     .bind(name)
     .bind(id)
@@ -1302,7 +1359,7 @@ pub(crate) async fn set_client_api_key_enabled_in_transaction(
 ) -> StoreResult<()> {
     require_nonempty(ENTITY, "id", id)?;
     let result =
-        sqlx::query("update client_api_keys set enabled = $2, updated_at = now() where id = $1")
+        sqlx::query("update client_api_keys set enabled = $2, updated_at = now() where id = $1 and retired_at is null")
             .bind(id)
             .bind(enabled)
             .execute(&mut **transaction)
@@ -1318,7 +1375,7 @@ pub(crate) async fn delete_client_api_key_in_transaction(
     id: &str,
 ) -> StoreResult<()> {
     require_nonempty(ENTITY, "id", id)?;
-    let result = sqlx::query("delete from client_api_keys where id = $1")
+    let result = sqlx::query("delete from client_api_keys where id = $1 and retired_at is null")
         .bind(id)
         .execute(&mut **transaction)
         .await
@@ -1513,8 +1570,9 @@ fn client_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<ClientApiK
 }
 
 async fn count_client_api_keys(pool: &PgPool, search: Option<&str>) -> StoreResult<u64> {
-    let mut statement =
-        QueryBuilder::<Postgres>::new("select count(*)::bigint from client_api_keys where true");
+    let mut statement = QueryBuilder::<Postgres>::new(
+        "select count(*)::bigint from client_api_keys where retired_at is null",
+    );
     push_client_key_search(&mut statement, search);
     let count = statement
         .build_query_scalar::<i64>()

@@ -57,12 +57,13 @@ async fn reset_client_key_budget_in_transaction(
     context: &MutationContext,
 ) -> StoreResult<()> {
     // 与准入、结算共用 Key 行锁，重置边界必须在取得锁之后确定
-    let exists =
-        sqlx::query_scalar::<_, String>("select id from client_api_keys where id = $1 for update")
-            .bind(command.id.as_str())
-            .fetch_optional(&mut **tx)
-            .await
-            .map_err(|source| postgres_unavailable("lock budget reset key", source))?;
+    let exists = sqlx::query_scalar::<_, String>(
+        "select id from client_api_keys where id = $1 and retired_at is null for update",
+    )
+    .bind(command.id.as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|source| postgres_unavailable("lock budget reset key", source))?;
     if exists.is_none() {
         return Err(StoreError::NotFound {
             source: None,

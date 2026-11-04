@@ -767,6 +767,15 @@ impl ClientKeyStore for UnavailableStore {
         Err(unavailable("client key enabled"))
     }
 
+    async fn retire_client_key(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: gateway_core::policy::PlaintextClientApiKey,
+        _: &MutationContext,
+    ) -> AdminStoreResult<Revision> {
+        Err(unavailable("client key retirement"))
+    }
+
     async fn delete_client_key(
         &self,
         _: DeleteClientKey,

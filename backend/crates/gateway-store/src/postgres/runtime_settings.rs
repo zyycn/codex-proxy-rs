@@ -238,7 +238,7 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
                    union
                    select keys.provider_request_profiles_json -> $1
                    from client_api_keys keys
-                   where keys.provider_request_profiles_json ? $1
+                   where keys.provider_request_profiles_json ? $1 and keys.retired_at is null
                  ) profiles
                  where settings.id = 1",
             )

@@ -5,7 +5,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use gateway_core::{
-    engine::budget::ClientBudgetStatus, policy::ClientApiKeyId, runtime::SnapshotControl,
+    engine::budget::ClientBudgetStatus,
+    policy::{ClientApiKeyId, PlaintextClientApiKey},
+    runtime::SnapshotControl,
 };
 use rand_core::{OsRng, RngCore as _};
 use uuid::Uuid;
@@ -17,7 +19,7 @@ use crate::{
             ClientKeyBudgetMutationOrigin, ClientKeyCursorValue, ClientKeyListQuery,
             ClientKeyMutation, ClientKeyPage, ClientKeyRecord, ClientKeySecret, ClientKeySortField,
             CreateClientKey, CreatedClientKey, DeleteClientKey, NewClientKey, ResetClientKeyBudget,
-            SetClientKeyEnabled, UpdateClientKey, UpdateClientKeyBudgetLimits,
+            RetireClientKey, SetClientKeyEnabled, UpdateClientKey, UpdateClientKeyBudgetLimits,
         },
     },
     ports::store::{AdminStoreError, AdminStoreErrorKind, ClientKeyStore},
@@ -50,6 +52,11 @@ pub trait ClientKeyService: Send + Sync {
         &self,
         context: &MutationContext,
         command: DeleteClientKey,
+    ) -> Result<ClientKeyMutation, AdminError>;
+    async fn retire(
+        &self,
+        context: &MutationContext,
+        command: RetireClientKey,
     ) -> Result<ClientKeyMutation, AdminError>;
     async fn budget(&self, id: &ClientApiKeyId) -> Result<ClientBudgetStatus, AdminError>;
     async fn update_budget_limits(
@@ -246,6 +253,27 @@ impl ClientKeyService for DefaultClientKeyService {
             config_revision,
             record: Some(record),
             id,
+        })
+    }
+
+    async fn retire(
+        &self,
+        context: &MutationContext,
+        command: RetireClientKey,
+    ) -> Result<ClientKeyMutation, AdminError> {
+        let replacement_key = PlaintextClientApiKey::new(generate_key())
+            .map_err(|_| AdminError::internal("生成退役凭据替代值失败"))?;
+        let config_revision = self
+            .store
+            .retire_client_key(&command.id, replacement_key, context)
+            .await
+            .map_err(|error| map_store_error(error, "client API key"))?;
+        // 提交后进程可能退出，重复退役仍须发布持久版本以收敛撤权
+        publish_committed(self.snapshot.as_ref(), config_revision).await?;
+        Ok(ClientKeyMutation {
+            config_revision,
+            record: None,
+            id: command.id,
         })
     }
 
