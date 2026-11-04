@@ -79,9 +79,10 @@ api:
   request_id_header: 'x-request-id'
 
 openai:
-  # 数据驻留参考值：us；填写值原样发送，省略或 null 时删除对应请求头
+  # 以下两项原样发送配置值；省略或设为 null 时删除对应请求头
+  # 数据驻留参考值：us
   residency: us
-  # 账号路由参考值：us、us_cr；填写值原样发送，省略或 null 时删除对应请求头
+  # 账号路由参考值：us、us_cr
   account_routing_override: null
   # 可选：完整的 Responses 上游 WS 池配置；省略整段使用以下默认值。
   # ws_pool:

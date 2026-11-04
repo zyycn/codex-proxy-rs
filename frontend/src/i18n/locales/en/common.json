@@ -2,8 +2,8 @@
   "common": {
     "errors": {
       "canceled": "Request canceled",
-      "timeout": "Request timed out, try again later",
-      "network": "Connection failed, check your network and try again",
+      "timeout": "Request timed out",
+      "network": "Connection failed, check your network",
       "invalidParameters": "Invalid request parameters",
       "signInRequired": "Sign-in required",
       "forbidden": "You do not have permission to perform this action",
@@ -15,7 +15,7 @@
       "rateLimited": "Too many requests, try again later",
       "internal": "Internal server error",
       "upstreamFailure": "Upstream service request failed",
-      "unavailable": "Service temporarily unavailable, try again later",
+      "unavailable": "Service temporarily unavailable",
       "upstreamTimeout": "Upstream response timed out",
       "http": "Request failed (HTTP {status})",
       "request": "Request failed",
@@ -23,13 +23,14 @@
       "unsupportedResponse": "The service returned an unsupported response",
       "sessionExpired": "Your session has expired, sign in again",
       "operation": "Operation failed",
-      "copy": "Failed to copy",
+      "copy": "Could not write to clipboard",
+      "nothingToCopy": "Nothing to copy",
       "malformedJson": "The request body is not valid JSON",
       "invalidTimeRange": "Invalid time range",
       "invalidCredentials": "Invalid sign-in credentials",
       "invalidAdminApiKey": "Invalid admin API key",
       "tooManyLoginAttempts": "Too many sign-in attempts, try again later",
-      "upstreamResultUnknown": "The upstream result is unknown, refresh the status before deciding whether to retry"
+      "upstreamResultUnknown": "Upstream result unknown, refresh the status before deciding whether to retry"
     },
     "status": {
       "disabled": "Disabled",

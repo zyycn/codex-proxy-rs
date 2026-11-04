@@ -207,7 +207,7 @@ impl DefaultImportTasksService {
             }
             Err(_) => {
                 item.status = ImportItemStatus::Unknown;
-                item.message = Some("执行中断，请先核对账号列表再决定是否重新导入".to_owned());
+                item.message = Some("导入结果未知，重新导入前请核对账号列表".to_owned());
             }
         }
         entry.finish_if_done();

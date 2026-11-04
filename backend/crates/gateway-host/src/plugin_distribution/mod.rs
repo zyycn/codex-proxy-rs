@@ -173,7 +173,7 @@ impl PluginDistribution for HttpPluginDistribution {
             self.download_inner(location, credentials, egress.as_ref()),
         )
         .await
-        .map_err(|_| AdminError::bad_gateway("插件下载超时，请重试"))?
+        .map_err(|_| AdminError::bad_gateway("插件下载超时"))?
     }
 }
 
@@ -185,7 +185,7 @@ fn credential_ids(credentials: &[SourceCredential]) -> Vec<String> {
 }
 
 fn source_error() -> AdminError {
-    AdminError::bad_gateway("插件来源请求失败，请检查来源与下载授权后重试")
+    AdminError::bad_gateway("插件来源请求失败")
 }
 
 fn validate_digest(value: &str) -> Result<(), AdminError> {

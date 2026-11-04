@@ -102,10 +102,7 @@ async fn source_failures_log_status_without_credentials_url_or_response_body() {
         .err()
         .unwrap();
     assert_eq!(error.kind(), AdminErrorKind::BadGateway);
-    assert_eq!(
-        error.to_string(),
-        "插件来源请求失败，请检查来源与下载授权后重试"
-    );
+    assert_eq!(error.to_string(), "插件来源请求失败");
     output.seek(SeekFrom::Start(0)).unwrap();
     let mut log = String::new();
     output.read_to_string(&mut log).unwrap();

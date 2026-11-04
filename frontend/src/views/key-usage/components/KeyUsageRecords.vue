@@ -30,7 +30,7 @@ const { visibleColumns, columnOptions, setColumnVisible, setColumnOrder, resetCo
 </script>
 
 <template>
-  <ZCard :title="t('usage.records.requestLog')" :description="t('usage.records.currentRequestRecord')">
+  <ZCard :title="t('usage.records.requestLog')">
     <template #actions>
       <div class="flex items-center gap-2">
         <UsageRecordStatusFilter v-model="kind" />

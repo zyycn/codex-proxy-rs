@@ -43,7 +43,7 @@ impl PricingSource for ModelsDevPricing {
 }
 
 fn source_error() -> AdminError {
-    AdminError::bad_gateway("无法读取 models.dev 价目，请稍后重试；现有价格未变更")
+    AdminError::bad_gateway("无法读取 models.dev 价目，现有价格不变")
 }
 
 /// 只接受当前网关 Provider 的文本 Token 价格；不猜测缺失字段或模态换算

@@ -1226,10 +1226,9 @@ impl GatewayError {
                 GatewayErrorKind::UpstreamUnavailable,
                 "The upstream account cannot access the service.",
             ),
-            ProviderErrorKind::RequestPolicyDenied => Self::new(
-                GatewayErrorKind::PolicyDenied,
-                "Request policy rejected the request.",
-            ),
+            ProviderErrorKind::RequestPolicyDenied => {
+                Self::new(GatewayErrorKind::PolicyDenied, "Request blocked by policy.")
+            }
             ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted => Self::new(
                 GatewayErrorKind::RateLimited,
                 "Upstream capacity is temporarily unavailable.",
@@ -1248,7 +1247,7 @@ impl GatewayError {
             ),
             ProviderErrorKind::NoEligibleAccount => Self::new(
                 GatewayErrorKind::NoAvailableProvider,
-                "No upstream provider is currently available for this request.",
+                "No upstream provider is available for this request.",
             ),
             ProviderErrorKind::ProviderInfrastructureUnavailable => Self::new(
                 GatewayErrorKind::ProviderInfrastructureUnavailable,

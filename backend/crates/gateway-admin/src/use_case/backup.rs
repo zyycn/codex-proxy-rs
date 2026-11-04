@@ -162,7 +162,7 @@ impl BackupService for DefaultBackupService {
                 ok: false,
                 stage: "putObject",
                 code: Some(code::INVALID_CONFIG),
-                message: "备份存储配置不完整，无法执行连接测试".to_owned(),
+                message: "备份存储配置不完整".to_owned(),
             });
         };
         let result = self
@@ -198,14 +198,10 @@ impl BackupService for DefaultBackupService {
             .await
             .map_err(|error| map_store_error(error, "backup settings"))?;
         if !settings.storage_configured() {
-            return Err(AdminError::bad_request(
-                "备份存储配置不完整，请先保存存储配置",
-            ));
+            return Err(AdminError::bad_request("请先补全并保存备份存储配置"));
         }
         if !settings.storage_verified() {
-            return Err(AdminError::bad_request(
-                "备份存储尚未通过连接测试，请先测试存储配置",
-            ));
+            return Err(AdminError::bad_request("请先通过备份存储连接测试"));
         }
         let prefix = settings.prefix.as_deref().unwrap_or_default();
         let seed = build_backup_seed(
@@ -241,9 +237,7 @@ impl BackupService for DefaultBackupService {
     ) -> Result<DownloadUrlResult, AdminError> {
         let record = self.require_record(backup_id).await?;
         if record.status != BackupStatus::Completed {
-            return Err(AdminError::conflict(
-                "只有 completed 的备份才能创建下载地址",
-            ));
+            return Err(AdminError::conflict("只能下载已完成的备份"));
         }
         let settings = self
             .repository
@@ -280,9 +274,7 @@ impl BackupService for DefaultBackupService {
     ) -> Result<BackupRecord, AdminError> {
         let record = self.require_record(backup_id).await?;
         if !record.status.can_be_deleted() {
-            return Err(AdminError::conflict(
-                "只有 completed 或 failed 的备份才能删除",
-            ));
+            return Err(AdminError::conflict("只能删除已完成或失败的备份"));
         }
         let now = Utc::now();
         let deleting = self
@@ -290,7 +282,7 @@ impl BackupService for DefaultBackupService {
             .transition_to_deleting(backup_id, now, Some(context))
             .await
             .map_err(|error| map_store_error(error, "backup record"))?
-            .ok_or_else(|| AdminError::conflict("备份记录已进入删除流程"))?;
+            .ok_or_else(|| AdminError::conflict("备份状态已变更，请刷新列表"))?;
         Ok(deleting)
     }
 }

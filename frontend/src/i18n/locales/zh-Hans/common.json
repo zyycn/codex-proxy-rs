@@ -2,8 +2,8 @@
   "common": {
     "errors": {
       "canceled": "请求已取消",
-      "timeout": "请求超时，请稍后重试",
-      "network": "网络连接失败，请检查网络后重试",
+      "timeout": "请求超时",
+      "network": "网络连接失败，请检查网络",
       "invalidParameters": "请求参数不合法",
       "signInRequired": "需要登录",
       "forbidden": "没有权限执行此操作",
@@ -15,7 +15,7 @@
       "rateLimited": "请求过于频繁，请稍后重试",
       "internal": "服务内部错误",
       "upstreamFailure": "上游服务请求失败",
-      "unavailable": "服务暂不可用，请稍后重试",
+      "unavailable": "服务暂不可用",
       "upstreamTimeout": "上游服务响应超时",
       "http": "请求失败（HTTP {status}）",
       "request": "请求失败",
@@ -23,13 +23,14 @@
       "unsupportedResponse": "服务返回了不受支持的响应",
       "sessionExpired": "登录已失效，请重新登录",
       "operation": "操作失败",
-      "copy": "复制失败",
+      "copy": "无法写入剪贴板",
+      "nothingToCopy": "没有可复制的内容",
       "malformedJson": "请求体不是合法 JSON",
       "invalidTimeRange": "时间范围不合法",
       "invalidCredentials": "登录凭据错误",
       "invalidAdminApiKey": "管理 API密钥无效",
       "tooManyLoginAttempts": "登录尝试过多，请稍后重试",
-      "upstreamResultUnknown": "上游执行结果未知，请刷新状态后再决定是否重试"
+      "upstreamResultUnknown": "上游结果未知，请刷新状态再决定是否重试"
     },
     "status": {
       "disabled": "已禁用",

@@ -498,10 +498,10 @@ fn s3_error_message<E: ProvideErrorMetadata>(error: &SdkError<E, HttpResponse>) 
     // 不拼入原始 message，避免泄露请求细节
     let detail = error.code().unwrap_or("unknown");
     match status_of(error) {
-        Some(401) => format!("当前凭据认证失败（{detail}）"),
-        Some(403) => format!("当前凭据没有目标前缀的读写权限（{detail}）"),
+        Some(401) => format!("对象存储认证失败（{detail}）"),
+        Some(403) => format!("对象存储拒绝访问（{detail}）"),
         Some(404) => format!("目标存储或对象不存在（{detail}）"),
-        Some(500..=599) => format!("上游对象存储服务返回失败响应（{detail}）"),
+        Some(500..=599) => format!("对象存储服务异常（{detail}）"),
         _ => format!("对象存储请求失败（{detail}）"),
     }
 }

@@ -252,7 +252,7 @@ impl SettingsService for DefaultSettingsService {
                     .is_some_and(|models| models.contains_key(model))
             })
         {
-            return Err(AdminError::invalid("内置价目不能删除，仅支持人工覆盖"));
+            return Err(AdminError::invalid("内置价目只能覆盖，不能删除"));
         }
         let defaults = gateway_core::metering::merge_pricing(catalog.defaults, &catalog.synced);
         let defaults = defaults.get(&command.provider);
@@ -430,7 +430,7 @@ impl SettingsService for DefaultSettingsService {
                     crate::ports::store::AdminStoreErrorKind::Conflict
                         | crate::ports::store::AdminStoreErrorKind::StaleRevision
                 ) {
-                    AdminError::conflict("运行设置已被其他调用修改，请重新读取并确认后提交")
+                    AdminError::conflict("运行设置已变更，请刷新核对后提交")
                 } else {
                     map_store_error(error, "runtime settings")
                 }

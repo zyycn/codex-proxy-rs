@@ -184,7 +184,6 @@
     },
     "records": {
       "requestLog": "请求日志",
-      "currentRequestRecord": "当前请求记录",
       "noRecordsMatchTheseFilters": "所选条件下暂无记录"
     },
     "page": {
@@ -192,7 +191,6 @@
       "loadingUsage": "正在加载用量",
       "usageSummaryLoading": "用量汇总加载中",
       "usageTrends": "使用趋势",
-      "changesInUsageOverTime": "用量随时间的变化",
       "requestHealthTimeline": "请求健康时间线",
       "updated": "更新于 {asOfDisplay}",
       "description": "查看请求用量、性能趋势与调用错误记录",
@@ -214,9 +212,6 @@
       "cost": "成本",
       "cacheHit": "缓存命中",
       "empty": "所选时间内暂无请求"
-    },
-    "configuration": {
-      "copiedToClipboard": "已复制到剪贴板"
     },
     "metrics": {
       "notPriced": "未定价",

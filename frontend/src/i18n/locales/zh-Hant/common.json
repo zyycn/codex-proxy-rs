@@ -2,8 +2,8 @@
   "common": {
     "errors": {
       "canceled": "請求已取消",
-      "timeout": "請求超時，請稍後重試",
-      "network": "網絡連接失敗，請檢查網絡後重試",
+      "timeout": "請求超時",
+      "network": "網絡連接失敗，請檢查網絡",
       "invalidParameters": "請求參數不合法",
       "signInRequired": "需要登錄",
       "forbidden": "沒有權限執行此操作",
@@ -15,7 +15,7 @@
       "rateLimited": "請求過於頻繁，請稍後重試",
       "internal": "服務內部錯誤",
       "upstreamFailure": "上游服務請求失敗",
-      "unavailable": "服務暫不可用，請稍後重試",
+      "unavailable": "服務暫不可用",
       "upstreamTimeout": "上游服務響應超時",
       "http": "請求失敗（HTTP {status}）",
       "request": "請求失敗",
@@ -23,13 +23,14 @@
       "unsupportedResponse": "服務返回了不受支持的響應",
       "sessionExpired": "登錄已失效，請重新登錄",
       "operation": "操作失敗",
-      "copy": "複製失敗",
+      "copy": "無法寫入剪貼板",
+      "nothingToCopy": "沒有可複製的內容",
       "malformedJson": "請求體不是合法 JSON",
       "invalidTimeRange": "時間範圍不合法",
       "invalidCredentials": "登錄憑據錯誤",
       "invalidAdminApiKey": "管理 API密鑰無效",
       "tooManyLoginAttempts": "登錄嘗試過多，請稍後重試",
-      "upstreamResultUnknown": "上游執行結果未知，請刷新狀態後再決定是否重試"
+      "upstreamResultUnknown": "上游結果未知，請刷新狀態再決定是否重試"
     },
     "status": {
       "disabled": "已禁用",

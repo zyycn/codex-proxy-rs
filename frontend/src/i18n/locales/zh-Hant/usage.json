@@ -184,7 +184,6 @@
     },
     "records": {
       "requestLog": "請求日誌",
-      "currentRequestRecord": "當前請求記錄",
       "noRecordsMatchTheseFilters": "所選條件下暫無記錄"
     },
     "page": {
@@ -192,7 +191,6 @@
       "loadingUsage": "正在加載用量",
       "usageSummaryLoading": "用量彙總加載中",
       "usageTrends": "使用趨勢",
-      "changesInUsageOverTime": "用量隨時間的變化",
       "requestHealthTimeline": "請求健康時間線",
       "updated": "更新於 {asOfDisplay}",
       "description": "查看請求用量、性能趨勢與調用錯誤記錄",
@@ -214,9 +212,6 @@
       "cost": "成本",
       "cacheHit": "緩存命中",
       "empty": "所選時間內暫無請求"
-    },
-    "configuration": {
-      "copiedToClipboard": "已複製到剪貼板"
     },
     "metrics": {
       "notPriced": "未定價",

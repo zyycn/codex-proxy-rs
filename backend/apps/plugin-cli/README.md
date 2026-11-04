@@ -15,7 +15,7 @@ cargo +1.99.1 install --locked --path backend/apps/plugin-cli --root /path/to/lo
 
 ## 打包
 
-先构建目标平台的插件二进制；插件提供管理页面时，还需构建页面静态资源。打包命令传入作者清单、二进制和所需的资源目录映射，通过 `cpr-plugin package --help` 查看完整参数：
+先构建目标平台的二进制；有管理页面时，也构建静态资源。全部参数见 `cpr-plugin package --help`
 
 ```bash
 cpr-plugin package \

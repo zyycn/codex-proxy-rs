@@ -184,7 +184,6 @@
     },
     "records": {
       "requestLog": "Request log",
-      "currentRequestRecord": "Current request record",
       "noRecordsMatchTheseFilters": "No records match these filters"
     },
     "page": {
@@ -192,7 +191,6 @@
       "loadingUsage": "Loading usage",
       "usageSummaryLoading": "Usage summary loading",
       "usageTrends": "Trends",
-      "changesInUsageOverTime": "Changes in usage over time",
       "requestHealthTimeline": "Request health",
       "updated": "Updated {asOfDisplay}",
       "description": "View usage, performance trends, and request errors",
@@ -214,9 +212,6 @@
       "cost": "Cost",
       "cacheHit": "Cache hit",
       "empty": "No requests in the selected range"
-    },
-    "configuration": {
-      "copiedToClipboard": "Copied to clipboard"
     },
     "metrics": {
       "notPriced": "Not priced",

@@ -139,9 +139,6 @@ export function useApiKeyEditor(options: {
         }
         else if (created) {
           options.onCreated(created.key, created.name)
-          ZNotification.success({
-            message: t('keys.editor.created'),
-          })
         }
       },
       {

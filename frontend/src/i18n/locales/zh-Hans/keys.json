@@ -8,7 +8,6 @@
       "selectImportTool": "选择要导入的工具",
       "ccSwitchDescription": "管理和切换 AI 客户端配置",
       "viewOnGitHub": "在 GitHub 查看 {name}",
-      "copiedToClipboard": "已复制到剪贴板",
       "fullApiKeyNotAvailable": "完整 API密钥不可用",
       "title": "使用密钥"
     },
@@ -70,7 +69,6 @@
       "maximumConcurrency": "最大并发",
       "requestsPerMinuteRpm": "每分钟请求数（RPM）",
       "updated": "API密钥已更新",
-      "created": "API密钥已创建",
       "validation": {
         "amount": "{label}必须是非负金额，最多 10 位小数",
         "integer": "{label}必须是非负整数"
@@ -109,9 +107,8 @@
     "scope": {
       "allAccounts": {
         "title": "允许访问全部账号",
-        "summary": "保存后，此密钥可访问全部账号",
         "confirm": "允许访问",
-        "description": "此密钥可访问全部账号，包括未分组和以后新增的账号"
+        "description": "保存后也可访问未分组和以后新增的账号"
       }
     }
   }

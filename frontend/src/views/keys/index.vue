@@ -265,15 +265,11 @@ watch(
     <ZConfirmDialog
       v-model="showAllAccountsConfirm"
       :title="t('keys.scope.allAccounts.title')"
-      :description="t('keys.scope.allAccounts.summary')"
+      :description="t('keys.scope.allAccounts.description')"
       :confirm-text="t('keys.scope.allAccounts.confirm')"
       :loading="savingKey"
       @confirm="confirmAllAccountsScope"
-    >
-      <p class="m-0">
-        {{ t('keys.scope.allAccounts.description') }}
-      </p>
-    </ZConfirmDialog>
+    />
 
     <ZConfirmDialog
       v-model="showDeleteModal"

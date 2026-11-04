@@ -68,10 +68,7 @@ export function useAdminApiKey() {
   }
 
   async function copyGeneratedKey() {
-    await copyText(generatedKey.value, {
-      successText: t('common.feedback.copied'),
-      errorFromException: true,
-    })
+    await copyText(generatedKey.value)
   }
 
   return {

@@ -91,7 +91,7 @@ fn runtime() -> Result<tokio::runtime::Runtime, io::Error> {
 
 fn reject_extra_arguments(mut arguments: impl Iterator) -> Result<(), io::Error> {
     if arguments.next().is_some() {
-        return Err(invalid_cli("unexpected extra command arguments"));
+        return Err(invalid_cli("too many arguments"));
     }
     Ok(())
 }

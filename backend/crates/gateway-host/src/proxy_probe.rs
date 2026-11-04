@@ -69,9 +69,7 @@ impl HttpProxyProbe {
         mut self,
         build: impl Fn(reqwest::ClientBuilder) -> Result<reqwest::Client, E> + Send + Sync + 'static,
     ) -> Self {
-        self.build_client = Arc::new(move |builder| {
-            build(builder).map_err(|_| "无法创建代理连接，请检查证书信任配置")
-        });
+        self.build_client = Arc::new(move |builder| build(builder).map_err(|_| "无法创建代理连接"));
         self
     }
 
@@ -94,7 +92,7 @@ impl HttpProxyProbe {
             if error.is_timeout() {
                 "出口连接超时"
             } else {
-                "出口连接失败，请检查网络或代理配置"
+                "出口连接失败"
             }
         })?;
         if !response.status().is_success() {
@@ -319,7 +317,7 @@ impl HttpProxyProbe {
             .query(&[("fields", "ip,success,country_code,region,city,timezone.id")])
             .send()
             .await
-            .map_err(|_| "位置查询失败，请手动重试")?;
+            .map_err(|_| "位置查询失败")?;
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             return Err("位置查询服务限流，请稍后手动重试");
         }

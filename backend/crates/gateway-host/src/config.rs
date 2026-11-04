@@ -53,7 +53,7 @@ pub fn load_config<T: LoadableConfig>() -> Result<T, ConfigError> {
     // 此时日志尚未初始化；只报告字段路径，不回显可能包含凭据的配置值
     for field in unused {
         if !T::EXTERNAL_SECTIONS.contains(&field.as_str()) {
-            eprintln!("[警告] 配置字段 {field:?} 未使用，已忽略");
+            eprintln!("[警告] 已忽略未知配置字段 {field:?}");
         }
     }
     value.resolve_and_validate(source_dir)?;

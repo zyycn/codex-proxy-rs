@@ -69,8 +69,7 @@ export function useApiKeyUse() {
 
   async function copyToClipboard(text: string) {
     await copyText(text, {
-      successText: t('keys.configuration.copiedToClipboard'),
-      emptyErrorText: t('common.errors.copy'),
+      notifyWhenEmpty: true,
     })
   }
 

@@ -361,9 +361,10 @@ impl ProxiesService for DefaultProxiesService {
         proxy: Option<&OutboundProxy>,
         detect_location: bool,
     ) -> Result<ProxyTestResult, AdminError> {
-        let _permit = self.test_slots.try_acquire().map_err(|_| {
-            AdminError::new(AdminErrorKind::RateLimited, "代理测试繁忙，请稍后重试")
-        })?;
+        let _permit = self
+            .test_slots
+            .try_acquire()
+            .map_err(|_| AdminError::new(AdminErrorKind::RateLimited, "代理测试已达并发上限"))?;
         Ok(self.probe.test(proxy, detect_location).await)
     }
 
@@ -374,9 +375,10 @@ impl ProxiesService for DefaultProxiesService {
         detect_location: bool,
         context: &MutationContext,
     ) -> Result<ProxyRecord, AdminError> {
-        let _permit = self.test_slots.try_acquire().map_err(|_| {
-            AdminError::new(AdminErrorKind::RateLimited, "代理测试繁忙，请稍后重试")
-        })?;
+        let _permit = self
+            .test_slots
+            .try_acquire()
+            .map_err(|_| AdminError::new(AdminErrorKind::RateLimited, "代理测试已达并发上限"))?;
         let record = self
             .store
             .get(id)

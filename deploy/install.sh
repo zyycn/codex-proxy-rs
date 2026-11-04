@@ -286,7 +286,7 @@ main() {
       ADMIN_PASSWORD="$(openssl rand -hex 16)"
     fi
     validate_admin_password "$ADMIN_PASSWORD"
-    log "生成 PostgreSQL、Redis 和管理员密码"
+    log "写入密码配置"
     patch_config "$postgres_password" "$redis_password" "$ADMIN_PASSWORD"
   fi
 
@@ -344,7 +344,7 @@ main() {
   if [[ "$existing_config" -eq 0 ]]; then
     printf '管理员密码：    %s\n' "$ADMIN_PASSWORD"
   else
-    printf '管理员密码：    保留现有配置（未修改）\n'
+    printf '管理员密码：    未更改\n'
   fi
   printf '安装目录：      %s\n' "$INSTALL_DIR"
   printf '配置文件：      %s\n' "$CONFIG_FILE"

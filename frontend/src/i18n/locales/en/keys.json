@@ -8,7 +8,6 @@
       "selectImportTool": "Choose a tool to import into",
       "ccSwitchDescription": "Manage AI client configurations",
       "viewOnGitHub": "View {name} on GitHub",
-      "copiedToClipboard": "Copied to clipboard",
       "fullApiKeyNotAvailable": "Full API key not available",
       "title": "Use API key"
     },
@@ -70,7 +69,6 @@
       "maximumConcurrency": "Concurrency",
       "requestsPerMinuteRpm": "RPM",
       "updated": "API key updated",
-      "created": "API key created",
       "validation": {
         "amount": "{label} must be a non-negative amount with up to 10 decimal places",
         "integer": "{label} must be a non-negative integer"
@@ -109,9 +107,8 @@
     "scope": {
       "allAccounts": {
         "title": "Allow access to all accounts",
-        "summary": "After saving, this key can access all accounts",
         "confirm": "Allow access",
-        "description": "This key can access all accounts, including ungrouped and future accounts"
+        "description": "After saving, this includes ungrouped and future accounts"
       }
     }
   }

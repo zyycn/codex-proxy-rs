@@ -2,7 +2,6 @@ import { computed, onScopeDispose, shallowRef } from 'vue'
 import { getKeyUsageConfig } from '@/api/modules/key-usage'
 import { useCopyText } from '@/composables/useCopyText'
 import { useRequestState } from '@/composables/useRequestState'
-import { t } from '@/i18n'
 import { resolveServiceRootUrl } from '@/utils/client'
 
 export function useKeyConfig() {
@@ -33,8 +32,7 @@ export function useKeyConfig() {
 
   function copyConfig(text: string) {
     return copyText(text, {
-      successText: t('usage.configuration.copiedToClipboard'),
-      emptyErrorText: t('common.errors.copy'),
+      notifyWhenEmpty: true,
     })
   }
 

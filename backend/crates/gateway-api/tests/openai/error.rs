@@ -390,7 +390,7 @@ fn no_eligible_provider_account_should_preserve_safe_provider_detail() {
     );
     assert_eq!(
         gateway.safe_message(),
-        "No upstream provider is currently available for this request."
+        "No upstream provider is available for this request."
     );
 }
 
@@ -423,7 +423,7 @@ fn no_eligible_provider_account_should_map_to_service_unavailable() {
     assert_eq!(projected.kind(), GatewayErrorKind::NoAvailableProvider);
     assert_eq!(
         projected.safe_message(),
-        "No upstream provider is currently available for this request."
+        "No upstream provider is available for this request."
     );
 }
 
