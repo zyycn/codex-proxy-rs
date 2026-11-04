@@ -74,8 +74,8 @@ async function confirmAssignment() {
           </template>
         </ZInput>
         <div v-if="selectedIds.size" class="ml-auto flex shrink-0 gap-2">
-          <ZButton :disabled="assigning" @click="open = false">
-            {{ t('common.actions.cancel') }}
+          <ZButton :disabled="assigning" @click="selectedIds = new Set()">
+            {{ t('common.actions.reset') }}
           </ZButton>
           <ZButton type="primary" :loading="assigning" :disabled="!proxy?.enabled || tooManySelected" @click="confirmAssignment">
             {{ t('proxies.assignment.assignAction', { count: selectedIds.size }) }}
