@@ -6632,7 +6632,7 @@ async fn missing_affinity_continuation_should_require_client_replay_without_an_u
 }
 
 #[tokio::test]
-async fn missing_affinity_full_request_should_clear_unowned_turn_state() {
+async fn missing_affinity_full_request_should_preserve_client_turn_state() {
     let trace = gateway_core::diagnostics::TraceContext::new("req_unknown_turn_state");
     let input = json!((0..520).map(|index| json!({"role":"user", "content":format!("{index}:{}", "private-transcript".repeat(60))})).collect::<Vec<_>>());
     let store = Arc::new(MemoryAccountStore::default());
@@ -6695,7 +6695,10 @@ async fn missing_affinity_full_request_should_clear_unowned_turn_state() {
         .await
         .expect("captured full replay request");
 
-    assert!(captured_header_values(&requests[0], "x-codex-turn-state").is_empty());
+    assert_eq!(
+        captured_header_values(&requests[0], "x-codex-turn-state"),
+        vec![b"unowned-turn-state".to_vec()]
+    );
     assert_eq!(captured_request_body(&requests[0])["input"], input);
     let snapshot = trace.snapshot().unwrap();
     let events = snapshot["events"].as_array().unwrap();
@@ -6711,7 +6714,7 @@ async fn missing_affinity_full_request_should_clear_unowned_turn_state() {
     let scope = evidence("provider.request.account_scope");
     assert_eq!(scope["scope"], "unknown");
     assert!(scope["before"]["turnState"].is_object());
-    assert!(scope["after"]["turnState"].is_null());
+    assert_eq!(scope["before"]["turnState"], scope["after"]["turnState"]);
     for private in [
         "private-transcript",
         "private-instructions",
@@ -7398,7 +7401,7 @@ async fn queued_children_follow_root_migration_without_interrupting_the_running_
                     ),
                     ("session_id".to_owned(), json!("parent-session")),
                     ("thread_id".to_owned(), json!(thread_id)),
-                    ("turnState".to_owned(), json!("old-account-turn-state")),
+                    ("turnState".to_owned(), json!("client-turn-state")),
                 ]),
             )
             .expect("payload")
@@ -7502,10 +7505,16 @@ async fn queued_children_follow_root_migration_without_interrupting_the_running_
     );
     drop(resumed_child);
     for thread in ["child-one", "cold-child"] {
+        // 已知原账号的子请求清理旧 token；冷启动子请求不能仅凭根绑定历史推断归属
+        let request_context = if thread == "child-one" {
+            context_with_state_owner("req_child_busy", "acct_subagent_a")
+        } else {
+            context("req_child_busy", CancellationToken::new())
+        };
         let mut child = Arc::clone(&provider)
             .execute(
                 planned_request("openai", operation(thread)),
-                context("req_child_busy", CancellationToken::new()),
+                request_context,
             )
             .await
             .expect("child busy fallback");
@@ -7560,10 +7569,16 @@ async fn queued_children_follow_root_migration_without_interrupting_the_running_
     assert_eq!(affinity.binding_count(), 1);
     let requests = server.received_requests().await.expect("child requests");
     assert_eq!(requests.len(), 2);
-    for request in requests {
-        assert!(captured_header_values(&request, "x-codex-turn-state").is_empty());
+    for (request, expected_turn_state) in requests
+        .iter()
+        .zip([Vec::<Vec<u8>>::new(), vec![b"client-turn-state".to_vec()]])
+    {
         assert_eq!(
-            captured_request_body(&request).get("input"),
+            captured_header_values(request, "x-codex-turn-state"),
+            expected_turn_state
+        );
+        assert_eq!(
+            captured_request_body(request).get("input"),
             Some(&json!([{"role":"user", "content":"keep the complete transcript"}]))
         );
         assert_eq!(

@@ -48,7 +48,11 @@ impl CodexBackendClient {
                     .installation_id
                     .zip(std::str::from_utf8(header.value()).ok())
                     .and_then(|(installation_id, raw)| {
-                        super::request::scope_turn_metadata(raw, installation_id, true)
+                        super::request::scope_turn_metadata(
+                            raw,
+                            installation_id,
+                            super::request::RequestAccountScope::Different,
+                        )
                     })
                 else {
                     continue;

@@ -1,7 +1,6 @@
-//! 验证同轮全量请求回传的 token 归属、失败路径与账号状态隔离
+//! 验证客户端轮次 token 的全量回传、失败重试与账号状态隔离
 
 use super::*;
-use gateway_core::engine::probe::AccountProbeTarget;
 
 const TOKEN: &str = "upstream-turn-state";
 
@@ -126,15 +125,8 @@ async fn same_turn_full_http_request_preserves_observed_token_without_restoring_
 }
 
 #[tokio::test]
-async fn verified_header_echo_does_not_authorize_a_different_metadata_token() {
+async fn full_http_request_preserves_client_header_and_metadata_tokens() {
     let (_store, server, provider) = http_fixture().await;
-    collect_response(
-        &provider,
-        full_request(full_body(), None, false),
-        context("req_turn_first", CancellationToken::new()),
-    )
-    .await
-    .unwrap();
     let mut body = full_body();
     body["client_metadata"]["x-codex-turn-state"] = json!("unobserved-token");
     collect_response(
@@ -145,16 +137,15 @@ async fn verified_header_echo_does_not_authorize_a_different_metadata_token() {
     .await
     .unwrap();
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests[1].headers["x-codex-turn-state"], TOKEN);
-    assert!(
-        captured_request_body(&requests[1])["client_metadata"]
-            .get("x-codex-turn-state")
-            .is_none()
+    assert_eq!(requests[0].headers["x-codex-turn-state"], TOKEN);
+    assert_eq!(
+        captured_request_body(&requests[0])["client_metadata"]["x-codex-turn-state"],
+        "unobserved-token"
     );
 }
 
 #[tokio::test]
-async fn turn_state_from_failed_http_response_is_owned_before_a_terminal_success() {
+async fn turn_state_from_failed_http_response_survives_client_retry() {
     let (_store, server, provider) = http_fixture().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -186,7 +177,7 @@ async fn turn_state_from_failed_http_response_is_owned_before_a_terminal_success
 }
 
 #[tokio::test]
-async fn turn_state_proof_does_not_authorize_an_unowned_previous_response_id() {
+async fn client_turn_state_does_not_authorize_an_unowned_previous_response_id() {
     let (_store, server, provider) = http_fixture().await;
     collect_response(
         &provider,
@@ -214,21 +205,10 @@ async fn turn_state_proof_does_not_authorize_an_unowned_previous_response_id() {
 }
 
 #[tokio::test]
-async fn full_request_turn_state_requires_matching_client_account_thread_turn_and_token() {
-    for case in [
-        "new_turn",
-        "missing_turn",
-        "new_thread",
-        "new_session",
-        "new_key",
-        "new_account",
-        "unknown_token",
-        "conflicting_owner",
-        "expired",
-        "new_provider",
-    ] {
+async fn full_http_replay_preserves_turn_state_without_local_proof() {
+    for case in ["new_provider", "expired_affinity", "missing_turn"] {
         let (store, server, provider) = http_fixture().await;
-        let first_context = if case == "expired" {
+        let first_context = if case == "expired_affinity" {
             AttemptContext::new(
                 RequestAttemptContext::new(
                     ModelRequestId::new("req_turn_first").unwrap(),
@@ -242,8 +222,6 @@ async fn full_request_turn_state_requires_matching_client_account_thread_turn_an
                 None,
                 CancellationToken::new(),
             )
-        } else if case == "new_account" {
-            diagnostic_context("req_turn_first", "acct_session_affinity")
         } else {
             context("req_turn_first", CancellationToken::new())
         };
@@ -254,83 +232,101 @@ async fn full_request_turn_state_requires_matching_client_account_thread_turn_an
         )
         .await
         .unwrap();
-        let mut body = full_body();
-        let mut token = TOKEN;
-        let mut echo_context = context("req_turn_echo", CancellationToken::new());
         let provider = if case == "new_provider" {
             provider_with_base_url(&store, server.uri())
         } else {
             provider
         };
-        match case {
-            "new_turn" => body["client_metadata"]["turn_id"] = json!("another-turn"),
-            "missing_turn" => {
-                body["client_metadata"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("turn_id");
-            }
-            "new_thread" => body["client_metadata"]["thread_id"] = json!("another-thread"),
-            "new_session" => {
-                body["client_metadata"]["session_id"] = json!("another-session");
-                echo_context = diagnostic_context("req_turn_echo", "acct_session_affinity");
-            }
-            "unknown_token" => token = "unobserved-token",
-            "new_account" => {
-                create_account(&store, "acct_scope_new").await;
-                echo_context = diagnostic_context("req_turn_echo", "acct_scope_new");
-            }
-            "conflicting_owner" => {
-                echo_context = context_with_state_owner("req_turn_echo", "acct_scope_old")
-            }
-            "new_key" => {
-                echo_context = AttemptContext::new(
-                    RequestAttemptContext::new(
-                        ModelRequestId::new("req_turn_echo").unwrap(),
-                        ClientApiKeyId::new("another-key").unwrap(),
-                    ),
-                    NonZeroU32::new(1).unwrap(),
-                    SystemTime::now() + Duration::from_secs(30),
-                    account_policy(),
-                    AccountAttemptContext::diagnostic(
-                        BTreeSet::new(),
-                        AccountProbeTarget::ConnectionTest(
-                            ProviderAccountId::new("acct_session_affinity").unwrap(),
-                        ),
-                        None,
-                    ),
-                    None,
-                    CancellationToken::new(),
-                );
-            }
-            _ => {}
+        let mut body = full_body();
+        if case == "missing_turn" {
+            body["client_metadata"]
+                .as_object_mut()
+                .unwrap()
+                .remove("turn_id");
         }
-        body["client_metadata"]["x-codex-turn-state"] = json!(token);
+        for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+            body[key] = json!(TOKEN);
+            body["client_metadata"][key] = json!(TOKEN);
+        }
         collect_response(
             &provider,
-            full_request(body, Some(token), false),
-            echo_context,
+            full_request(body, Some(TOKEN), false),
+            context("req_turn_echo", CancellationToken::new()),
         )
         .await
         .unwrap_or_else(|error| panic!("{case}: {error:?}"));
         let requests = server.received_requests().await.unwrap();
-        assert_eq!(requests.len(), 2, "{case}");
-        assert!(
-            !requests[1].headers.contains_key("x-codex-turn-state"),
-            "{case}"
-        );
-        assert!(
-            captured_request_body(&requests[1])["client_metadata"]
-                .get("x-codex-turn-state")
-                .is_none(),
-            "{case}"
-        );
+        assert_eq!(requests[1].headers["x-codex-turn-state"], TOKEN, "{case}");
+        let body = captured_request_body(&requests[1]);
+        let metadata: Value = serde_json::from_str(
+            requests[1].headers["x-codex-turn-metadata"]
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+            assert_eq!(body[key], TOKEN, "{case}: {key}");
+            assert_eq!(body["client_metadata"][key], TOKEN, "{case}: {key}");
+            assert_eq!(metadata[key], TOKEN, "{case}: {key}");
+        }
     }
 }
 
 #[tokio::test]
+async fn conflicting_account_owner_clears_client_turn_state() {
+    let (_store, server, provider) = http_fixture().await;
+    let mut body = full_body();
+    for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+        body[key] = json!(TOKEN);
+        body["client_metadata"][key] = json!(TOKEN);
+    }
+    collect_response(
+        &provider,
+        full_request(body, Some(TOKEN), false),
+        context_with_state_owner("req_turn_switch", "acct_scope_old"),
+    )
+    .await
+    .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    assert!(!requests[0].headers.contains_key("x-codex-turn-state"));
+    let body = captured_request_body(&requests[0]);
+    let metadata: Value = serde_json::from_str(
+        requests[0].headers["x-codex-turn-metadata"]
+            .to_str()
+            .unwrap(),
+    )
+    .unwrap();
+    for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+        assert!(body.get(key).is_none(), "{key}");
+        assert!(body["client_metadata"].get(key).is_none(), "{key}");
+        assert!(metadata.get(key).is_none(), "{key}");
+    }
+}
+
+#[tokio::test]
+async fn full_http_request_does_not_restore_a_token_omitted_by_the_client() {
+    let (_store, server, provider) = http_fixture().await;
+    for request_id in ["req_turn_first", "req_turn_omitted"] {
+        collect_response(
+            &provider,
+            full_request(full_body(), None, false),
+            context(request_id, CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    }
+    let requests = server.received_requests().await.unwrap();
+    assert!(!requests[1].headers.contains_key("x-codex-turn-state"));
+    assert!(
+        captured_request_body(&requests[1])["client_metadata"]
+            .get("x-codex-turn-state")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn websocket_metadata_turn_state_survives_full_replay_after_completion_or_failure() {
-    for fail_first in [false, true] {
+    for (fail_first, new_provider) in [(false, false), (true, false), (false, true), (true, true)] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_session_affinity").await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -349,11 +345,7 @@ async fn websocket_metadata_turn_state_survives_full_replay_after_completion_or_
                 ))
                 .await
                 .unwrap();
-            if fail_first {
-                websocket.close(None).await.unwrap();
-                let (stream, _) = listener.accept().await.unwrap();
-                websocket = accept_codex_test_websocket(stream).await;
-            } else {
+            if !fail_first {
                 websocket
                     .send(Message::Text(
                         CAPTURE_COMPLETED_SSE
@@ -366,6 +358,9 @@ async fn websocket_metadata_turn_state_survives_full_replay_after_completion_or_
                     .await
                     .unwrap();
             }
+            websocket.close(None).await.unwrap();
+            let (stream, _) = listener.accept().await.unwrap();
+            websocket = accept_codex_test_websocket(stream).await;
             let echo: Value = loop {
                 match websocket.next().await.unwrap().unwrap() {
                     Message::Text(text) => break serde_json::from_str(&text).unwrap(),
@@ -390,7 +385,7 @@ async fn websocket_metadata_turn_state_survives_full_replay_after_completion_or_
                 .unwrap();
             echo
         });
-        let provider = provider_with_base_url(&store, base_url);
+        let provider = provider_with_base_url(&store, base_url.clone());
         let first = collect_response(
             &provider,
             full_request(full_body(), None, true),
@@ -398,9 +393,16 @@ async fn websocket_metadata_turn_state_survives_full_replay_after_completion_or_
         )
         .await;
         assert_eq!(first.is_err(), fail_first);
+        let provider = if new_provider {
+            provider_with_base_url(&store, base_url)
+        } else {
+            provider
+        };
+        let mut body = full_body();
+        body["client_metadata"]["x-codex-turn-state"] = json!(TOKEN);
         collect_response(
             &provider,
-            full_request(full_body(), Some(TOKEN), true),
+            full_request(body, None, true),
             context("req_turn_echo", CancellationToken::new()),
         )
         .await
@@ -411,7 +413,7 @@ async fn websocket_metadata_turn_state_survives_full_replay_after_completion_or_
             .unwrap();
         assert_eq!(
             echo["client_metadata"]["x-codex-turn-state"], TOKEN,
-            "failed first response: {fail_first}"
+            "failed first response: {fail_first}, new provider: {new_provider}"
         );
         assert!(echo.get("previous_response_id").is_none());
     }

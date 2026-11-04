@@ -437,9 +437,8 @@ Images 的 `x-codex-image-turn-id` 和 Desktop 自动 Git 上下文的 `clientUs
 该处理减少显式追踪标识的跨账号复用，不保证会话内容或业务 metadata 无法关联
 
 `x-codex-turn-state` 是上游返回的轮次路由 token，同一轮内应原样回传，开始新轮次时清除。
-全量请求没有 `previous_response_id` 时，代理也会保留已确认属于当前 Client Key、账号、会话、线程和轮次的回传值；
-未知归属、跨账号或跨轮次的值仍会清除。该证明只用于 turn state，不使其他账号状态字段成为可信续接上下文。
-归属证明为进程内有界缓存，实例切换、重启、过期或淘汰后，缺少其他可信会话状态的请求按未知归属处理
+全量请求没有 `previous_response_id` 或缺少本地归属记录时，代理原样保留客户端回传值；
+明确换账号或可信续接状态表明不属于同一轮时清除。该 token 不使其他账号状态字段或未知 `previous_response_id` 成为可信续接上下文
 
 #### 正文兼容
 

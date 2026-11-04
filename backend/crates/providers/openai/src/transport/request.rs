@@ -452,7 +452,7 @@ fn normalize_conversation_anchor_text(text: &str) -> String {
     rest.to_owned()
 }
 
-/// 新 turn 不得沿用上一轮的路由 token，各 wire 入口须同步清理
+/// 已确认换轮或换号时，各 wire 入口同步清理原有路由 token
 pub(crate) fn clear_request_turn_state(request: &mut CodexResponsesRequest) {
     request.turn_state = None;
     request.passthrough_headers.remove("x-codex-turn-state");
@@ -470,16 +470,17 @@ pub(crate) fn clear_request_turn_state(request: &mut CodexResponsesRequest) {
 ///
 /// 真实 account ID 由随后构造的 `CodexRequestContext` 注入请求头；installation ID
 /// 统一写入 Core 的 `client_metadata["x-codex-installation-id"]`，并替换原有兼容字段
-/// 绝不接受客户端提供的 token、cookie 或账号身份
+/// 绝不接受客户端提供的认证 token、cookie 或账号身份
 /// `input` 是 Responses 的可回放会话正文，
 /// item ID、encrypted content 和 compaction 都必须原样保留
 pub(crate) fn scope_request_to_account(
     request: &mut CodexResponsesRequest,
     installation_id: &str,
     account_scope: RequestAccountScope,
-    verified_turn_state: Option<&str>,
 ) {
+    // 全量请求缺少续接归属并不表示换号，客户端回传的轮次 token 不依赖本地缓存
     if account_scope == RequestAccountScope::Different {
+        clear_request_turn_state(request);
         // 明确换号时同步清理各 wire 副本，避免把原账号的追踪与合规上下文带给新账号
         for name in CROSS_ACCOUNT_CLIENT_HEADERS {
             request.passthrough_headers.remove(*name);
@@ -490,27 +491,17 @@ pub(crate) fn scope_request_to_account(
         }
     }
     let reset_account_state = !account_scope.can_reuse_account_state();
-    let client_metadata_turn_state = metadata_string(request, "x-codex-turn-state");
-    let turn_state = if reset_account_state {
-        verified_turn_state.map(ToOwned::to_owned)
-    } else {
-        request.turn_state.clone()
-    };
-    let client_metadata_turn_state = client_metadata_turn_state
-        .filter(|token| !reset_account_state || Some(token.as_str()) == verified_turn_state);
     let turn_metadata = request
         .turn_metadata
         .as_deref()
-        .and_then(|metadata| scope_turn_metadata(metadata, installation_id, reset_account_state));
+        .and_then(|metadata| scope_turn_metadata(metadata, installation_id, account_scope));
     let client_metadata_turn_metadata = metadata_string(request, "x-codex-turn-metadata")
-        .and_then(|metadata| scope_turn_metadata(&metadata, installation_id, reset_account_state));
+        .and_then(|metadata| scope_turn_metadata(&metadata, installation_id, account_scope));
 
     if reset_account_state {
-        request.passthrough_headers.remove("x-codex-turn-state");
         request.passthrough_headers.remove("x-codex-turn-metadata");
         for key in CROSS_ACCOUNT_IDENTITY_KEYS
             .iter()
-            .chain(TURN_STATE_KEYS)
             .chain(ACCOUNT_BOUND_STATE_KEYS)
         {
             request.body_mut().remove(*key);
@@ -520,7 +511,7 @@ pub(crate) fn scope_request_to_account(
         for (name, value) in &mut request.passthrough_headers {
             if name == "x-codex-turn-metadata"
                 && let Ok(raw) = value.to_str()
-                && let Some(scoped) = scope_turn_metadata(raw, installation_id, false)
+                && let Some(scoped) = scope_turn_metadata(raw, installation_id, account_scope)
                 && let Ok(scoped) = HeaderValue::from_str(&scoped)
             {
                 *value = scoped;
@@ -536,7 +527,7 @@ pub(crate) fn scope_request_to_account(
             .body()
             .get(*key)
             .and_then(Value::as_str)
-            .and_then(|value| scope_turn_metadata(value, installation_id, reset_account_state));
+            .and_then(|value| scope_turn_metadata(value, installation_id, account_scope));
         replace_existing_body_string(request, key, scoped.as_deref());
     }
 
@@ -551,14 +542,13 @@ pub(crate) fn scope_request_to_account(
                     (
                         key,
                         metadata.get(key).and_then(Value::as_str).and_then(|value| {
-                            scope_turn_metadata(value, installation_id, reset_account_state)
+                            scope_turn_metadata(value, installation_id, account_scope)
                         }),
                     )
                 });
             if reset_account_state {
                 for key in CROSS_ACCOUNT_IDENTITY_KEYS
                     .iter()
-                    .chain(TURN_STATE_KEYS)
                     .chain(ACCOUNT_BOUND_STATE_KEYS)
                 {
                     metadata.remove(*key);
@@ -581,11 +571,6 @@ pub(crate) fn scope_request_to_account(
             replace_existing_metadata_field(&mut metadata, "installationId", Some(installation_id));
             replace_metadata_field(
                 &mut metadata,
-                "x-codex-turn-state",
-                client_metadata_turn_state.as_deref(),
-            );
-            replace_metadata_field(
-                &mut metadata,
                 "x-codex-turn-metadata",
                 client_metadata_turn_metadata.as_deref(),
             );
@@ -598,7 +583,6 @@ pub(crate) fn scope_request_to_account(
     };
     request.set_client_metadata(scoped);
 
-    request.turn_state = turn_state;
     request.turn_metadata = turn_metadata;
 }
 
@@ -658,16 +642,21 @@ pub(crate) fn serialize_ascii_turn_metadata(value: &Value) -> Option<String> {
 pub(crate) fn scope_turn_metadata(
     raw: &str,
     installation_id: &str,
-    cross_account: bool,
+    account_scope: RequestAccountScope,
 ) -> Option<String> {
+    let reset_account_state = !account_scope.can_reuse_account_state();
     let Ok(Value::Object(mut metadata)) = serde_json::from_str::<Value>(raw) else {
-        return (!cross_account).then(|| raw.to_owned());
+        return (!reset_account_state).then(|| raw.to_owned());
     };
     let mut changed = false;
-    if cross_account {
+    if account_scope == RequestAccountScope::Different {
+        for key in TURN_STATE_KEYS {
+            changed |= metadata.remove(*key).is_some();
+        }
+    }
+    if reset_account_state {
         for key in CROSS_ACCOUNT_IDENTITY_KEYS
             .iter()
-            .chain(TURN_STATE_KEYS)
             .chain(ACCOUNT_BOUND_STATE_KEYS)
             .chain(TURN_METADATA_KEYS)
         {
@@ -675,7 +664,7 @@ pub(crate) fn scope_turn_metadata(
         }
     }
     if raw.is_ascii()
-        && !cross_account
+        && !reset_account_state
         && !changed
         && !INSTALLATION_ID_KEYS
             .iter()
