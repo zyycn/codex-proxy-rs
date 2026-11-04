@@ -34,8 +34,7 @@ pub(super) struct CachedObservation {
     pub checked_at: SystemTime,
     pub scheduling: Option<Arc<SchedulingObservation>>,
     pub summary: Option<Arc<PeerLink>>,
-    pub unsupported: bool,
-    pub unavailable: Option<UpstreamInfoFailure>,
+    pub stored_failure: Option<UpstreamInfoFailure>,
 }
 
 pub(crate) struct PeerInfoService {
@@ -173,21 +172,17 @@ impl PeerInfoService {
         let peer = observation
             .as_ref()
             .and_then(|value| snapshot::decode(&value.quota));
-        let unsupported = observation
+        let stored_failure = observation
             .as_ref()
-            .is_some_and(|value| snapshot::is_unsupported(&value.quota, &connection));
-        let unavailable = observation
-            .as_ref()
-            .and_then(|value| snapshot::unavailable_reason(&value.quota, &connection));
+            .and_then(|value| snapshot::stored_failure(&value.quota, &connection));
         if self.current_connection(id).await?.as_ref() != Some(&connection) {
             return Ok(None);
         }
         Ok(Some(Self::project_peer(
             &connection,
             peer.as_ref(),
-            unavailable,
-            self.last_error(&connection)
-                .or(unsupported.then_some(UpstreamInfoFailure::Unsupported)),
+            stored_failure,
+            self.last_error(&connection),
             SystemTime::now(),
         )))
     }

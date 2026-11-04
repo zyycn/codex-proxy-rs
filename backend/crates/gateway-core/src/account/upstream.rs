@@ -54,6 +54,7 @@ impl UpstreamConnection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpstreamInfoFailure {
     Unauthorized,
+    SharingDisabled,
     Unsupported,
     RateLimited,
     InvalidResponse,
@@ -65,6 +66,7 @@ impl UpstreamInfoFailure {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",
+            Self::SharingDisabled => "sharing_disabled",
             Self::Unsupported => "unsupported",
             Self::RateLimited => "rate_limited",
             Self::InvalidResponse => "invalid_response",

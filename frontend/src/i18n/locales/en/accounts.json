@@ -626,6 +626,7 @@
       "observedAt": "Updated {time}",
       "stale": "Data expired",
       "unauthorized": "Upstream access denied",
+      "sharingDisabled": "Upstream sharing is disabled",
       "unsupported": "Upstream does not support CPR Link",
       "rateLimited": "Upstream query rate limited",
       "invalidResponse": "Invalid upstream data",

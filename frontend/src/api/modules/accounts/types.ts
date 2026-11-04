@@ -181,14 +181,14 @@ export interface Account {
 }
 
 export interface AccountUpstream {
-  // 同一连接曾确认支持互联，失权时仍为 true，观测内容则清空
+  // 明确关闭共享或不支持互联时为 false，普通鉴权失败保留已识别身份
   discovered: boolean
   observedAt: string | null
   observedAtDisplay: string
   observedAtRelative: RelativeTimeView | null
   stale: boolean
   connectionRevision: string
-  lastError: 'unauthorized' | 'unsupported' | 'rate_limited' | 'invalid_response' | 'unavailable' | null
+  lastError: 'unauthorized' | 'sharing_disabled' | 'unsupported' | 'rate_limited' | 'invalid_response' | 'unavailable' | null
   maxConcurrency: number | null
   requestsPerMinute: number | null
   pool: {

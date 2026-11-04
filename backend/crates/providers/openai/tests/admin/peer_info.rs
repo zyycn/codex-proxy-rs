@@ -663,7 +663,35 @@ async fn transient_failure_preserves_observation_and_revocation_erases_it() {
     cycle(&worker).await;
     let revoked = quota(&bundle, &id).await;
     assert!(revoked.windows.is_empty());
-    assert!(revoked.upstream.unwrap().observed_at.is_none());
+    let info = revoked.upstream.unwrap();
+    assert!(info.observed_at.is_none());
+    assert!(info.discovered);
+
+    // 同为 403，仅共享关闭的协议码能改变识别结果
+    server.reset().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": { "code": "peer_sharing_disabled" }
+        })))
+        .mount(&server)
+        .await;
+    bundle.admin_provider().forget(&id);
+    cycle(&worker).await;
+    let disabled = quota(&bundle, &id).await;
+    let info = disabled.upstream.unwrap();
+    assert!(!info.discovered);
+    assert_eq!(info.last_error.as_deref(), Some("sharing_disabled"));
+    assert!(disabled.windows.is_empty());
+
+    server.reset().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(peer_document()))
+        .mount(&server)
+        .await;
+    bundle.admin_provider().forget(&id);
+    let recovered = bundle.admin_provider().refresh_quota(&id).await.unwrap();
+    assert!(recovered.upstream.unwrap().discovered);
+    assert!(!recovered.windows.is_empty());
 }
 
 async fn wait_for_request(server: &MockServer) {

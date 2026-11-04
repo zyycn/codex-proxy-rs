@@ -40,7 +40,7 @@ impl PeerInfoService {
     pub(super) fn project_peer(
         connection: &UpstreamConnection,
         peer: Option<&PeerLink>,
-        unavailable: Option<UpstreamInfoFailure>,
+        stored_failure: Option<UpstreamInfoFailure>,
         last_error: Option<UpstreamInfoFailure>,
         now: SystemTime,
     ) -> ProviderQuota {
@@ -52,12 +52,12 @@ impl PeerInfoService {
         });
         let limits = peer.and_then(|peer| peer.key_limits);
         let info = ProviderUpstreamInfo {
-            discovered: peer.is_some() || unavailable.is_some(),
+            discovered: peer.is_some() || stored_failure == Some(UpstreamInfoFailure::Unauthorized),
             observed_at,
             stale,
             connection_revision: connection.revision.clone(),
             last_error: last_error
-                .or(unavailable)
+                .or(stored_failure)
                 .map(|error| error.as_str().to_owned()),
             max_concurrency: limits.and_then(|limits| limits.max_concurrency),
             requests_per_minute: limits.and_then(|limits| limits.requests_per_minute),

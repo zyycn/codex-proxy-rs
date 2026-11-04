@@ -8,7 +8,6 @@ import { ChartNoAxesCombined, RefreshCw, UserRound } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
-import AccountUpstreamStatus from '@/components/account/AccountUpstreamStatus.vue'
 import { formatRelativeTime } from '@/utils/relative-time'
 import { usePoolQuotaWindows } from '../../composables/usePoolQuotaWindows'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
@@ -46,19 +45,18 @@ const forecastOpen = shallowRef(false)
 const hasPlanBadge = computed(() => Boolean(props.account.planType) || props.account.authenticationKind === 'api_key')
 const hasForecast = computed(() => props.account.authenticationKind !== 'api_key')
 const hasPersonalInfo = computed(() => props.account.capabilities.profile || props.account.capabilities.subscription)
-const canRefresh = computed(() => props.account.capabilities.quotaRefresh || props.account.upstream?.discovered)
+const canRefresh = computed(() => props.account.capabilities.quotaRefresh || props.account.upstream != null)
 const hasActions = computed(() => hasPersonalInfo.value || hasForecast.value || canRefresh.value || props.account.capabilities.resetCredits)
 const lastRefreshed = computed(() => props.account.upstream?.discovered && !props.account.upstream.observedAt
-  ? null
+  ? undefined
   : t('accounts.quota.lastRefreshed', {
       refreshedAtDisplay: formatRelativeTime(props.account.upstream?.discovered
         ? props.account.upstream.observedAtRelative
         : props.account.quota.refreshedAtRelative),
     }))
-const showUpstreamStatus = computed(() => props.account.upstream?.discovered && (
-  (props.account.upstream.observedAt && props.account.upstream.stale)
-  || props.account.upstream.lastError
-))
+const refreshTitle = computed(() => props.account.upstream?.stale && props.account.upstream.observedAt
+  ? `${props.account.upstream.observedAtDisplay} · ${t('accounts.upstream.stale')}`
+  : lastRefreshed.value)
 watch(hasPersonalInfo, (available) => {
   if (!available)
     profileOpen.value = false
@@ -76,10 +74,7 @@ watch(hasPersonalInfo, (available) => {
         class="col-span-2 row-start-2 m-0 flex min-w-0 items-center gap-1.5 text-z-xs font-emphasis text-z-text-secondary"
       >
         <AccountPlanBadge v-if="hasPlanBadge" :upstream="account.upstream" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" class="shrink-0" />
-        <template v-if="showUpstreamStatus || lastRefreshed">
-          <AccountUpstreamStatus v-if="showUpstreamStatus && account.upstream" :upstream="account.upstream" />
-          <span v-else-if="lastRefreshed" class="min-w-0 truncate" :title="lastRefreshed">{{ lastRefreshed }}</span>
-        </template>
+        <span v-if="lastRefreshed" class="min-w-0 truncate" :title="refreshTitle">{{ lastRefreshed }}</span>
       </p>
       <div v-if="hasActions" class="col-start-2 row-start-1 flex items-center gap-0.5 [&_svg]:size-3.5 [&_svg]:stroke-2">
         <ZIconButton

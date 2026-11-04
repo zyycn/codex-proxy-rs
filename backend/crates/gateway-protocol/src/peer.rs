@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub const SHARING_DISABLED_CODE: &str = "peer_sharing_disabled";
 pub const OBJECT: &str = "cpr.peer";
 pub const SCHEMA_VERSION: u32 = 3;
 pub const MAX_ACCOUNTS: usize = 3_000;

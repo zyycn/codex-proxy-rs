@@ -176,10 +176,11 @@ async fn uncertain_discovery_failures_retry_without_becoming_unsupported() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn known_peer_failures_keep_identity_and_only_revocation_discards_shared_data() {
+async fn known_peer_identity_changes_only_on_definitive_detection() {
     for failure in [
         UpstreamInfoFailure::Unauthorized,
         UpstreamInfoFailure::Unsupported,
+        UpstreamInfoFailure::SharingDisabled,
         UpstreamInfoFailure::Unavailable,
         UpstreamInfoFailure::RateLimited,
         UpstreamInfoFailure::InvalidResponse,
@@ -191,14 +192,15 @@ async fn known_peer_failures_keep_identity_and_only_revocation_discards_shared_d
         tokio::time::advance(Duration::from_secs(15)).await;
         *transport.failure.lock().unwrap() = Some(failure.into());
         let result = bundle.service().refresh_quota(&id).await;
-        assert_eq!(result.is_ok(), failure == UpstreamInfoFailure::Unsupported);
-        let clears_data = matches!(
+        let clears_identity = matches!(
             failure,
-            UpstreamInfoFailure::Unauthorized | UpstreamInfoFailure::Unsupported
+            UpstreamInfoFailure::Unsupported | UpstreamInfoFailure::SharingDisabled
         );
+        assert_eq!(result.is_ok(), clears_identity);
+        let clears_data = clears_identity || failure == UpstreamInfoFailure::Unauthorized;
         let quota = bundle.service().read_quota(&id).await.unwrap().unwrap();
         let info = quota.upstream.as_ref().unwrap();
-        assert!(info.discovered);
+        assert_eq!(info.discovered, !clears_identity);
         assert_eq!(info.last_error.as_deref(), Some(failure.as_str()));
         assert_eq!(quota.windows.is_empty(), clears_data);
         assert_eq!(info.observed_at.is_none(), clears_data);
@@ -221,10 +223,24 @@ async fn known_peer_failures_keep_identity_and_only_revocation_discards_shared_d
             clears_data
         );
 
+        if failure == UpstreamInfoFailure::Unsupported {
+            // 已运行 v3.40.0 的节点可能持有这种不支持记录，读取时应直接显示为普通 API Key
+            accounts.records.lock().unwrap().get_mut(&id).unwrap().quota =
+                serde_json::from_value(serde_json::json!({
+                    "object": "cpr.peer.unavailable",
+                    "schema_version": 1,
+                    "connection_revision": info.connection_revision,
+                    "reason": "unsupported",
+                }))
+                .unwrap();
+        }
         drop(bundle);
         let restarted = initialize(accounts, transport);
         let restored = restarted.service().read_quota(&id).await.unwrap().unwrap();
-        assert!(restored.upstream.as_ref().unwrap().discovered);
+        assert_eq!(
+            restored.upstream.as_ref().unwrap().discovered,
+            !clears_identity
+        );
         assert_eq!(restored.windows.is_empty(), clears_data);
         if clears_data {
             assert_eq!(
@@ -246,7 +262,7 @@ async fn known_peer_failures_keep_identity_and_only_revocation_discards_shared_d
 }
 
 #[tokio::test(start_paused = true)]
-async fn known_peer_identity_is_scoped_to_the_connection_after_revocation() {
+async fn peer_detection_after_revocation_is_scoped_to_the_connection() {
     for failure in [
         UpstreamInfoFailure::Unauthorized,
         UpstreamInfoFailure::Unsupported,
@@ -261,7 +277,7 @@ async fn known_peer_identity_is_scoped_to_the_connection_after_revocation() {
         let edited = initial.clone().with_notes(Some("保留连接身份".into()));
         *accounts.accounts.lock().unwrap() = vec![edited.clone()];
         bundle.service().account_changed(&id).await.unwrap();
-        assert!(
+        assert_eq!(
             bundle
                 .service()
                 .read_summary(&id)
@@ -270,7 +286,8 @@ async fn known_peer_identity_is_scoped_to_the_connection_after_revocation() {
                 .unwrap()
                 .upstream
                 .unwrap()
-                .discovered
+                .discovered,
+            failure == UpstreamInfoFailure::Unauthorized
         );
 
         // 地址和密钥修改推进凭据版本，出口变化则改变同一版本的连接身份

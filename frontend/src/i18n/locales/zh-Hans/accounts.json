@@ -626,6 +626,7 @@
       "observedAt": "{time}更新",
       "stale": "数据已过期",
       "unauthorized": "上游未授权",
+      "sharingDisabled": "上游已关闭互联共享",
       "unsupported": "上游暂不支持互联",
       "rateLimited": "上游查询受限",
       "invalidResponse": "上游数据异常",
