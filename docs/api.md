@@ -1898,8 +1898,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 预算检查超时、存储不可用或待结算队列无法接受新请求时返回 `503`、`key_budget_unavailable`
 
 自动结算按网关请求 ID 幂等执行，响应交付不等待费用落库，额度查询中的已用金额在后台写入后可见。
-账本独立于使用统计日志，记录保留至删除 Key，
-不受 `usageRetentionDays` 影响
+删除 Key 会撤销访问，保留请求记录和原 Key 的费用账本。删除前已准入的请求仍按原 Key ID 结算，
+同名新 Key 单独记账。请求记录按 `usageRetentionDays` 清理，费用账本不受该设置影响
 
 ## 8. 运行设置
 
