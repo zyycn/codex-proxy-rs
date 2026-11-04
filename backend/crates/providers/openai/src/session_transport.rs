@@ -1,4 +1,4 @@
-//! 根会话的连续 WS 失败预算；耗尽后保持 HTTP，空闲过期后释放状态
+//! 按客户端线程维护 WS 失败预算及大包 HTTP 回退区间，空闲过期后释放状态
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -6,6 +6,11 @@ use std::time::Duration;
 
 use gateway_core::provider_ports::ProviderSessionAffinityKey;
 use tokio::time::Instant;
+
+// 在实测的 16 MiB 上游 WS 边界前留半 MiB，再用 2 MiB 回差避免频繁切换
+const MIB: usize = 1024 * 1024;
+pub(crate) const WS_PAYLOAD_LIMIT: usize = 15 * MIB + MIB / 2;
+const WS_PAYLOAD_RESUME: usize = WS_PAYLOAD_LIMIT - 2 * MIB;
 
 const SESSION_IDLE_RETENTION: Duration = Duration::from_secs(8 * 60 * 60);
 const MAX_SESSION_TRANSPORTS: usize = 16_384;
@@ -17,6 +22,7 @@ pub(crate) struct CodexSessionTransportRecovery {
 
 struct SessionTransport {
     state: TransportState,
+    oversized: bool,
     last_used: Instant,
 }
 
@@ -46,39 +52,70 @@ impl CodexSessionTransportRecovery {
         key: &ProviderSessionAffinityKey,
         max_retries: u32,
     ) -> bool {
-        self.update(key, |state| match state {
-            TransportState::WebSocket { failures } if failures < max_retries => {
-                TransportState::WebSocket {
-                    failures: failures + 1,
+        self.update(key, |session| {
+            session.state = match session.state {
+                TransportState::WebSocket { failures } if failures < max_retries => {
+                    TransportState::WebSocket {
+                        failures: failures + 1,
+                    }
                 }
-            }
-            TransportState::WebSocket { .. } | TransportState::Http => TransportState::Http,
+                _ => TransportState::Http,
+            };
+            matches!(session.state, TransportState::Http)
         })
     }
 
     pub(crate) fn disable_websocket(&self, key: &ProviderSessionAffinityKey) {
-        self.update(key, |_| TransportState::Http);
+        self.update(key, |session| session.state = TransportState::Http);
     }
 
     pub(crate) fn websocket_succeeded(&self, key: &ProviderSessionAffinityKey) {
-        self.lock().remove(key);
+        // 预热或增量成功不能证明下一份完整请求能放进 WS
+        self.update(key, |session| {
+            session.state = TransportState::WebSocket { failures: 0 }
+        });
     }
 
-    fn update(
+    /// 只用完整新链的实际帧长度更新大小偏好，重连沿用同一线程的判断
+    pub(crate) fn http_for_full_payload(
+        &self,
+        key: Option<&ProviderSessionAffinityKey>,
+        bytes: usize,
+    ) -> bool {
+        let Some(key) = key else {
+            return bytes >= WS_PAYLOAD_LIMIT;
+        };
+        self.update(key, |session| {
+            if bytes >= WS_PAYLOAD_LIMIT {
+                session.oversized = true;
+            } else if bytes < WS_PAYLOAD_RESUME {
+                session.oversized = false;
+            }
+            session.oversized
+        })
+    }
+
+    fn update<T>(
         &self,
         key: &ProviderSessionAffinityKey,
-        update: impl FnOnce(TransportState) -> TransportState,
-    ) -> bool {
+        update: impl FnOnce(&mut SessionTransport) -> T,
+    ) -> T {
         let now = Instant::now();
         let mut sessions = self.lock();
-        let previous = sessions
+        let mut session = sessions
             .remove(key)
-            .filter(|session| {
-                now.saturating_duration_since(session.last_used) < SESSION_IDLE_RETENTION
-            })
-            .map_or(TransportState::WebSocket { failures: 0 }, |session| {
-                session.state
+            .filter(|s| now.saturating_duration_since(s.last_used) < SESSION_IDLE_RETENTION)
+            .unwrap_or(SessionTransport {
+                state: TransportState::WebSocket { failures: 0 },
+                oversized: false,
+                last_used: now,
             });
+        let result = update(&mut session);
+        if !session.oversized && matches!(session.state, TransportState::WebSocket { failures: 0 })
+        {
+            return result;
+        }
+        session.last_used = now;
         if sessions.len() >= MAX_SESSION_TRANSPORTS {
             sessions.retain(|_, session| {
                 now.saturating_duration_since(session.last_used) < SESSION_IDLE_RETENTION
@@ -92,16 +129,8 @@ impl CodexSessionTransportRecovery {
                 sessions.remove(&oldest);
             }
         }
-        let state = update(previous);
-        let uses_http = matches!(state, TransportState::Http);
-        sessions.insert(
-            key.clone(),
-            SessionTransport {
-                state,
-                last_used: now,
-            },
-        );
-        uses_http
+        sessions.insert(key.clone(), session);
+        result
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<ProviderSessionAffinityKey, SessionTransport>> {

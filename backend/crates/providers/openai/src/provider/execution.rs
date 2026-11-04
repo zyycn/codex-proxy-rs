@@ -448,6 +448,7 @@ pub(super) struct OpenAiSessionCapture {
     pub(super) client_turn_id: Option<String>,
     pub(super) reasoning_effort_override: Option<String>,
     pub(super) response_store: bool,
+    pub(super) oversized_http: bool,
     pub(super) continuation_scope: Option<OpenAiContinuationScope>,
 }
 
@@ -513,6 +514,13 @@ pub(super) fn attach_openai_session_update(
     };
     let Ok(update) = encode_openai_session_capture(&capture) else {
         return;
+    };
+    let update = if capture.oversized_http
+        && capture.continuation_scope == Some(OpenAiContinuationScope::ReplayRequired)
+    {
+        update.with_websocket_reconnect()
+    } else {
+        update
     };
     events[terminal_index].attach_session_update(update);
 }

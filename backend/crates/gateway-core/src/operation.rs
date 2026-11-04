@@ -123,6 +123,9 @@ pub struct ProviderSessionState {
     payload: Map<String, Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     extension_owner: Option<Box<ExtensionSessionOwner>>,
+    // 仅供本次终态交付后处置客户端连接，不持久化或传给外部适配器
+    #[serde(skip)]
+    reconnect_websocket: bool,
 }
 
 /// 受管扩展会话的宿主归属，不能把插件私有状态交给原生 Provider 解码
@@ -155,6 +158,7 @@ impl ProviderSessionState {
             provider,
             payload,
             extension_owner: None,
+            reconnect_websocket: false,
         })
     }
 
@@ -166,6 +170,18 @@ impl ProviderSessionState {
     #[must_use]
     pub const fn payload(&self) -> &Map<String, Value> {
         &self.payload
+    }
+
+    /// 提示能重连重放的客户端在本次成功交付后重建连接
+    #[must_use]
+    pub const fn with_websocket_reconnect(mut self) -> Self {
+        self.reconnect_websocket = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn prefers_websocket_reconnect(&self) -> bool {
+        self.reconnect_websocket
     }
 
     #[must_use]

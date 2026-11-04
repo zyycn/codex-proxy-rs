@@ -5108,7 +5108,8 @@ async fn oversized_http_new_chain_uses_http_without_disabling_session_websocket(
 
 #[tokio::test]
 async fn oversized_http_threshold_counts_utf8_and_json_escaping() {
-    const THRESHOLD: usize = 15 * 1024 * 1024;
+    const THRESHOLD: usize = 15 * 1024 * 1024 + 512 * 1024;
+    const RESUME: usize = THRESHOLD - 2 * 1024 * 1024;
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let server = MockServer::start().await;
@@ -5159,7 +5160,14 @@ async fn oversized_http_threshold_counts_utf8_and_json_escaping() {
     frame["session_id"] = body["session_id"].clone();
     let baseline_len = serde_json::to_vec(&frame).unwrap().len();
 
-    for (payload_len, expected) in [(THRESHOLD - 1, "websocket"), (THRESHOLD, "http_sse")] {
+    for (payload_len, expected) in [
+        (THRESHOLD - 1, "websocket"),
+        (THRESHOLD, "http_sse"),
+        (THRESHOLD - 1, "http_sse"),
+        (RESUME, "http_sse"),
+        (RESUME - 1, "websocket"),
+        (THRESHOLD - 1, "websocket"),
+    ] {
         let text = format!("{seed_text}{}", "x".repeat(payload_len - baseline_len));
         body.get_mut("input").unwrap()[0]["content"][0]["text"] = json!(text);
         let stream = Arc::clone(&provider)
@@ -5507,6 +5515,7 @@ async fn oversized_websocket_http_response_continues_with_client_tool_history_re
     }
     drop(first);
     let state = state.expect("HTTP response publishes replay requirement");
+    assert!(state.prefers_websocket_reconnect());
     assert_eq!(state.payload()["continuation_scope"], "replay_required");
     let tool_output =
         json!({"type": "function_call_output", "call_id": "call_large", "output": "done"});

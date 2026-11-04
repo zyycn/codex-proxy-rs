@@ -36,6 +36,7 @@ pub struct ResponsesWebSocketConnection {
     commands: Option<mpsc::Sender<ConnectionCommand>>,
     incoming: mpsc::Receiver<PendingConnectionEvent>,
     deferred: VecDeque<PendingConnectionEvent>,
+    input_gate: Arc<tokio::sync::Mutex<()>>,
     exited: oneshot::Receiver<PumpExitReason>,
     pump_task: Option<JoinHandle<()>>,
     stats: Arc<ConnectionStats>,
@@ -170,6 +171,26 @@ impl ResponsesWebSocketConnection {
             PumpExitReason::ServerClose,
         )
         .await;
+    }
+
+    pub(in super::super) async fn close_for_replay_if_idle(&mut self) -> bool {
+        // 原子划分入站帧与正常关闭，正在处理或已排队的帧都先按原合同执行
+        let Ok(_guard) = self.input_gate.clone().try_lock_owned() else {
+            return false;
+        };
+        if !self.deferred.is_empty() || !self.incoming.is_empty() {
+            return false;
+        }
+        self.close(
+            CloseFrame {
+                code: close_code::NORMAL,
+                reason: "Reconnect with full input.".into(),
+            },
+            WriteContext::connection(FramePhase::Close),
+            PumpExitReason::ServerClose,
+        )
+        .await;
+        true
     }
 
     pub(in super::super) async fn close_for_connection_limit(&mut self, reason: &'static str) {
@@ -344,11 +365,13 @@ where
     let extensions = crate::middleware::current()
         .map(|context| context.extensions)
         .unwrap_or_default();
+    let input_gate = Arc::new(tokio::sync::Mutex::new(()));
     let pump_task = tokio::spawn(run_pump(
         socket,
         activity.clone(),
         command_rx,
         incoming_tx,
+        Arc::clone(&input_gate),
         exit_tx,
         Arc::clone(&connection_id),
         cancellation.clone(),
@@ -368,6 +391,7 @@ where
         commands: Some(command_tx),
         incoming: incoming_rx,
         deferred: VecDeque::new(),
+        input_gate,
         exited: exit_rx,
         pump_task: Some(pump_task),
         stats,

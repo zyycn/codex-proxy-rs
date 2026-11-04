@@ -275,6 +275,11 @@ impl ResponsesDeliveryValidator {
         }
     }
 
+    pub(super) fn completed_response_id(&self) -> Option<&str> {
+        self.response_id()
+            .filter(|_| self.state.terminal == Some(TerminalKind::Completed))
+    }
+
     pub(super) fn finish_websocket_delivery(&self) -> Result<(), ResponseValidationError> {
         if !self.active || self.state.terminal.is_some() {
             Ok(())

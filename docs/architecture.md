@@ -621,7 +621,8 @@ client，OIDC 的 JWKS 缓存与单飞归属对应出口状态。自动刷新提
 客户端配置示例维护在 [部署文档](../deploy/README.md#客户端配置)
 
 客户端到代理与代理到上游的传输选择相互独立。客户端的 `supports_websockets = false`
-不禁止 Provider 使用上游 WebSocket。响应终态前的 Close 1000 仍视为失败，
+不禁止 Provider 使用上游 WebSocket。OpenAI Provider 按线程独立维护大包回退与 WS 失败预算，
+以终态会话更新提示下游重连；API 负责确认成功写出和入站队列空闲。响应终态前的 Close 1000 仍视为失败，
 后续恢复请求成功也不改写原失败请求的结果
 
 ### 错误与诊断三层边界

@@ -475,13 +475,13 @@ Responses WebSocket 接受文本消息，`response.create` 在同一连接串行
 
 网关分别维护两段链路的心跳：上游 WS 定时发送 Ping 保活并回复 Pong，下游 WS 独立探活；Ping/Pong 不跨段转发，也不转换为 SSE 事件。
 下游探活包含消息接收中的字节进度，完整消息收齐后才进入中间件与请求处理。
-客户端断开时取消当前执行，并释放仍归该客户端所有的上游连接。`response.completed` 只结束本轮响应，保留客户端 WS 等待下一轮请求
+客户端断开时取消当前执行，并释放仍归该客户端所有的上游连接。`response.completed` 结束本轮响应。通常保留客户端 WS 等待下一轮请求，大包回退后的 Codex 重连规则见下文
 
 | 入站 → 上游 | 正常回答结束后的连接处理 |
 | --- | --- |
 | SSE → SSE | 结束本次响应流，底层 HTTP 连接由 HTTP 连接池管理 |
 | SSE → WS | 结束 SSE，上游 WS 归池，按无客户端绑定的空闲期限回收 |
-| WS → SSE | 上游本次响应结束，下游 WS 保留 |
+| WS → SSE | 上游本次响应结束，下游 WS 通常保留；大包回退可触发正常重连 |
 | WS → WS | 保留当前绑定的上游 WS，支持下一轮续接 |
 
 活跃客户端 WS 的绑定不受普通空闲回收期限约束；上游关闭、总寿命到期或连接被回收仍可能使连接内续接失效，
@@ -520,7 +520,8 @@ OAuth 账号默认 `prefer_websocket`，客户端使用 HTTP/SSE 时仍可能选
 客户端可跳过预热继续正式请求，外部插件 adapter 按各自的协议能力处理
 
 Codex OAuth backend 的候选上游为 WS 时，无 `previous_response_id` 的普通新链若规范化
-`response.create` 达到 15 MiB，发送前选择 HTTP/SSE；HTTP 和 WS 入站均适用，下游交付协议不变。
+`response.create` 达到 15.5 MiB，发送前选择 HTTP/SSE；HTTP 和 WS 入站均适用。能关联到客户端线程时，
+后续完整新链沿用 HTTP/SSE，直到帧长低于 13.5 MiB 再尝试 WS。预热和增量帧不改变此大小判断。
 该阈值为已观察到的上游消息大小边界预留余量，不是网关输入长度上限或 OpenAI 公布的统一限制；
 API Key 账号、小请求、显式 warmup、未知外部 previous ID 和持久化续接不因该大小策略改用 HTTP
 
@@ -528,7 +529,11 @@ OAuth 的大 connection-local WS 续接，以及 HTTP `store=false` 成功后标
 的 WS 增量，均在发送前返回 `status: 400 / previous_response_not_found`。客户端应清除旧 ID，
 携带完整历史及工具调用／输出重试。官方 Codex 支持重连 WS 后完整重发，也可能按自身重试预算
 切到 HTTP；其他客户端需要自行实现此合同。代理不缓存 transcript，不把增量输入当作独立新链，
-连接内续接失去原连接时仍需客户端恢复；HTTP 链后续步骤可能增加一次恢复信号、重连及全量上传
+连接内续接失去原连接时仍需客户端恢复
+
+因大小走 HTTP/SSE 且需要完整重放时，网关向可识别的 Codex CLI/Core 写出成功终态后，
+下游空闲则正常关闭 WS。客户端观察到关闭后，下一步在新连接上发送完整输入。
+已接收的后续请求按序处理；启用 WS 帧中间件时保留连接。若增量先到，仍按上述 400 合同恢复
 
 已建立模型执行的 Responses、Images 和 Search HTTP 响应按以下规则返回关联 ID：
 `x-gateway-request-id` 为模型执行 ID；`x-request-id` 保留有效上游值，只有上游

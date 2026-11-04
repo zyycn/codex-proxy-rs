@@ -179,6 +179,12 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         crate::middleware::websocket::CancelOnDrop(Some(cancellation.clone()));
     let request_headers =
         request_headers.with_downstream_websocket_connection_id(connection_id.clone());
+    // Codex Core 观察正常关闭后会重建完整输入；原始帧由中间件改写时无法证明同一终态已交付
+    let reconnect_for_replay = crate::openai::auth::identify_codex_client(&raw_headers)
+        .is_some_and(|client| client.kind() == gateway_core::policy::CodexClientKind::Cli)
+        && !middleware
+            .as_ref()
+            .is_some_and(FrozenMiddlewarePlan::has_websocket);
     let mut connection = ResponsesWebSocketConnection::new(
         socket,
         connection_id,
@@ -401,7 +407,7 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
                 continue;
             }
         };
-        if forward_response(
+        let outcome = forward_response(
             &mut connection,
             response,
             request_id,
@@ -410,8 +416,12 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
             validation,
             &response_control,
         )
-        .await
-            == ForwardOutcome::Disconnect
+        .await;
+        if outcome == ForwardOutcome::Disconnect
+            || (outcome == ForwardOutcome::ReconnectIfIdle
+                && reconnect_for_replay
+                && !connection.is_expired()
+                && connection.close_for_replay_if_idle().await)
         {
             break;
         }

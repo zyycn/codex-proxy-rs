@@ -29,6 +29,7 @@ pub(super) async fn run_pump<S, E>(
     activity: watch::Sender<Instant>,
     commands: mpsc::Receiver<ConnectionCommand>,
     incoming: mpsc::Sender<PendingConnectionEvent>,
+    input_gate: Arc<tokio::sync::Mutex<()>>,
     exited: oneshot::Sender<PumpExitReason>,
     connection_id: Arc<str>,
     cancellation: CancellationToken,
@@ -63,7 +64,7 @@ pub(super) async fn run_pump<S, E>(
     // 心跳独立于业务写入等待，但共享唯一 writer，避免长写入或排队阻止失联检测
     let reason = tokio::select! {
         biased;
-        reason = read_connection(&mut reader, &incoming, sender.clone(), &activity, &context) => reason,
+        reason = read_connection(&mut reader, &incoming, &input_gate, sender.clone(), &activity, &context) => reason,
         reason = write_connection(writer.clone(), commands, &context) => reason,
         reason = heartbeat_connection(writer.clone(), received_activity, &context) => reason,
     };
@@ -81,6 +82,7 @@ pub(super) async fn run_pump<S, E>(
 async fn read_connection<S, E>(
     socket: &mut S,
     incoming: &mpsc::Sender<PendingConnectionEvent>,
+    input_gate: &tokio::sync::Mutex<()>,
     sender: Arc<dyn contract::Sender>,
     activity: &watch::Sender<Instant>,
     context: &PumpContext,
@@ -107,6 +109,7 @@ where
                 }
             }
             message = socket.next() => {
+                let _guard = input_gate.lock().await;
                 if matches!(&message, Some(Ok(_))) {
                     // 链路活动以真实入站为准，插件丢弃消息不应抹掉对端已经响应的事实
                     activity.send_replace(Instant::now());
