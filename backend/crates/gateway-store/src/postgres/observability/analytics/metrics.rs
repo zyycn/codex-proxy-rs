@@ -156,7 +156,7 @@ impl MetricState {
             }
         }
         let client_status: Option<i32> = get(row, "client_status_code")?;
-        if client_status.is_some_and(|value| (400..=499).contains(&value)) {
+        if outcome == "failed" && client_status.is_some_and(|value| (400..=499).contains(&value)) {
             self.increment("caller_error_count", 1)?;
         }
         let attempts = u64::try_from(get::<i32>(row, "attempt_count")?)

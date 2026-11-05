@@ -54,7 +54,7 @@
       "firstTokenP95Ms": "TTFT P95",
       "latencyP95Ms": "Latency P95",
       "outputThroughputP50": "Output throughput P50",
-      "errors": "Errors",
+      "errors": "Error count",
       "successRate": "Success rate",
       "totalRequests": "Total requests",
       "requestCount": "Requests",

@@ -16,14 +16,15 @@
       "serviceSuccessRate": "服务成功率",
       "notCompleted": "未完成",
       "requestVolume": "请求量",
-      "noServiceResult": "无服务结果",
       "title": "请求健康",
       "description": "请求状态分布",
       "descriptionWithGranularity": "请求状态分布 · {granularityText}",
-      "completionRate": "完成率",
-      "abnormalEnd": "非正常结束",
       "loading": "正在加载请求数据",
-      "empty": "当前范围暂无请求"
+      "empty": "当前范围暂无请求",
+      "errors": "错误",
+      "noSamples": "无样本",
+      "completionRate": "完成率",
+      "abnormalEnd": "非正常结束"
     },
     "billing": {
       "serviceLevel": "服务档位",
@@ -233,13 +234,13 @@
       "diagnosticDimension": "诊断维度",
       "noDiagnosticDataYet": "暂无诊断数据",
       "successful": "成功 {count}",
-      "failed": "失败 {count} 次",
-      "failureRate": "失败率 {rate}",
       "retryRate": "重试率 {rate}",
       "retries": "重试 {count}",
       "loading": "正在加载诊断数据",
       "empty": "当前范围暂无诊断数据",
-      "download": "下载"
+      "download": "下载",
+      "errors": "错误 {count} 次",
+      "errorRate": "错误率 {rate}"
     },
     "cost": {
       "savings": "节省",

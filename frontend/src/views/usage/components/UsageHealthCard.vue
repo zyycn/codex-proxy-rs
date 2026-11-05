@@ -10,7 +10,6 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { chartTooltipContent, tooltipIndex, tooltipRows } from '@/components/charts/tooltip'
-import { healthEligibleRequestCount } from '@/components/usage/shared/health'
 import { useChartPalette } from '@/composables/useChartPalette'
 
 import { formatLocalizedCompactNumber as formatCompactNumber, formatPercent } from '@/utils/format'
@@ -132,12 +131,9 @@ function requestCount(point: HealthPoint) {
 }
 
 function serviceSuccessRate(point: HealthPoint) {
-  const total = healthEligibleRequestCount(point)
-  if (total > 0)
-    return 1 - point.errorRate
-  return requestCount(point) === 0
-    ? 0
-    : null
+  return point.errorRate == null
+    ? null
+    : 1 - point.errorRate
 }
 
 function outcomeSeries(name: string, data: number[], color: string) {
@@ -170,7 +166,7 @@ function formatTooltip(params: unknown) {
     usageTooltipItem(
       t('usage.health.serviceSuccessRate'),
       successRate == null
-        ? t('usage.health.noServiceResult')
+        ? t('usage.health.noSamples')
         : formatPercent(successRate),
       theme.success,
     ),

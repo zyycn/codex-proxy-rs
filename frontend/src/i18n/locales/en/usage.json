@@ -16,14 +16,15 @@
       "serviceSuccessRate": "Service success",
       "notCompleted": "Incomplete",
       "requestVolume": "Requests",
-      "noServiceResult": "No service result",
       "title": "Health",
       "description": "Request outcomes",
       "descriptionWithGranularity": "Request outcomes · {granularityText}",
-      "completionRate": "Completion",
-      "abnormalEnd": "Abnormal",
       "loading": "Loading requests",
-      "empty": "No requests in this range"
+      "empty": "No requests in this range",
+      "errors": "Errors",
+      "noSamples": "No samples",
+      "completionRate": "Completion",
+      "abnormalEnd": "Abnormal"
     },
     "billing": {
       "serviceLevel": "Service tier",
@@ -233,13 +234,13 @@
       "diagnosticDimension": "Diagnostic dimension",
       "noDiagnosticDataYet": "No diagnostic data yet",
       "successful": "Successful: {count}",
-      "failed": "Failed: {count}",
-      "failureRate": "Failure rate: {rate}",
       "retryRate": "Retry rate: {rate}",
       "retries": "Retries: {count}",
       "loading": "Loading diagnostics",
       "empty": "No diagnostics in this range",
-      "download": "Download"
+      "download": "Download",
+      "errors": "Errors: {count}",
+      "errorRate": "Error rate: {rate}"
     },
     "cost": {
       "savings": "Savings",

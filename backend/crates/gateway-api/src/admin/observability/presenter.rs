@@ -701,8 +701,8 @@ pub(crate) fn trend_point_view(
         cached_input_tokens_value: point.metrics.cached_input_tokens,
         cache_hit_rate_value: point.cached_token_rate,
         tokens_value: point.metrics.total_tokens,
-        errors: format_compact_number(point.service_failure_count),
-        errors_value: point.service_failure_count,
+        errors: format_compact_number(point.error_count),
+        errors_value: point.error_count,
         latency_value: point.average_latency_ms,
         success_rate: success_rate_value
             .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}%")),
@@ -765,7 +765,7 @@ pub(crate) fn trend_summary_view(
         TrendKind::Errors => vec![
             TrendSummaryView {
                 metric: TrendMetric::Errors,
-                value: format_compact_number(summary.service_failure_count),
+                value: format_compact_number(summary.error_count),
                 ratio: None,
             },
             TrendSummaryView {

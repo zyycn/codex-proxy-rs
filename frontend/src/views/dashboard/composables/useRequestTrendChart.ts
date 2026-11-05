@@ -254,7 +254,9 @@ export function useRequestTrendChart(options: {
       case 'errors':
         return point?.errors ?? value
       case 'successRate':
-        return zeroAwareRateText(point, 'successRate', 'requestsValue') ?? value
+        return point?.successRateValue == null
+          ? t('usage.health.noSamples')
+          : trendPointText(point, 'successRate') ?? value
       case 'requests':
         return point?.requests ?? value
       default:
@@ -342,7 +344,7 @@ export function useRequestTrendChart(options: {
       ),
       ...gapLineSeries(
         'successRate',
-        activeSeriesValues('successRateValue'),
+        seriesValues('successRateValue'),
         trendColor('successRate'),
         { width: 2.4, yAxisIndex: 1 },
       ),

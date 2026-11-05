@@ -115,8 +115,8 @@ export function dashboardTrendView(trend: DashboardTrendResponse | null) {
 
   const summary = trend.summary.map(item => ({
     ...trendMetricView(item.metric),
-    value: trend.kind === 'errors' && item.ratio !== null
-      ? item.ratio
+    value: trend.kind === 'errors' && item.metric === 'successRate'
+      ? item.ratio ?? t('usage.health.noSamples')
       : item.value,
   }))
   return { points: trend.points, summary }

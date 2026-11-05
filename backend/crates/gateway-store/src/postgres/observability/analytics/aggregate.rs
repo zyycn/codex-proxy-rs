@@ -141,7 +141,7 @@ fn counter_expressions() -> Vec<(String, String)> {
     let mut counters = vec![
         ("request_count".to_owned(), "count(*)".to_owned()),
         ("completed_request_count".to_owned(), "count(*) filter(where is_completed_usage)".to_owned()),
-        ("caller_error_count".to_owned(), "count(*) filter(where client_status_code between 400 and 499)".to_owned()),
+        ("caller_error_count".to_owned(), "count(*) filter(where outcome='failed' and client_status_code between 400 and 499)".to_owned()),
         ("attempt_count".to_owned(), "coalesce(sum(attempt_count),0)".to_owned()),
         ("retry_count".to_owned(), "coalesce(sum(greatest(attempt_count-1,0)),0)".to_owned()),
         ("retried_request_count".to_owned(), "count(*) filter(where attempt_count>1)".to_owned()),
@@ -347,7 +347,14 @@ fn push_summary_aggregation_from(
     let counters = selected_counter_expressions(counter_names)
         .into_iter()
         .map(|(name, _)| {
-            let expression = format!("coalesce(sum(metric.{name}),0)");
+            // 汇总按终态分行，取消请求的 499 不属于调用方失败
+            // 直接筛选已有桶计数，历史统计无需重建
+            let expression = if source == "matching" && name == "caller_error_count" {
+                "coalesce(sum(metric.caller_error_count) filter(where outcome='failed'),0)"
+                    .to_owned()
+            } else {
+                format!("coalesce(sum(metric.{name}),0)")
+            };
             (name, expression)
         })
         .collect::<Vec<_>>();

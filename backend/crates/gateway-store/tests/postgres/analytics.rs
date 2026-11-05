@@ -372,8 +372,104 @@ async fn provider_counts_match_for_rollups_boundaries_and_filtered_facts() {
         );
         assert_eq!(openai.retry_count, 1);
         assert_eq!(openai.retried_request_count, 1);
-        assert_eq!(openai.non_completion_count, 0);
+        assert_eq!(openai.cancelled_count + openai.incomplete_count, 0);
         assert_eq!(openai.cost_coverage.unavailable_count, 1);
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn health_counters_match_for_rollups_and_facts_without_counting_recovery_or_cancelled_499() {
+    let Some(database) = TestDatabase::create("analytics_health_counters").await else {
+        return;
+    };
+    let start = DateTime::parse_from_rfc3339("2026-09-01T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    for (id, outcome, status) in [
+        ("health_success", "succeeded", 200),
+        ("health_failed", "failed", 502),
+        ("health_incomplete", "incomplete", 200),
+        ("health_caller", "failed", 400),
+        ("health_cancelled", "cancelled", 499),
+        ("health_recovered", "failed", 502),
+    ] {
+        seed(&database.pool, id, start + TimeDelta::minutes(5), &[]).await;
+        sqlx::query("update model_requests set outcome=$2,client_status_code=$3 where id=$1")
+            .bind(id)
+            .bind(outcome)
+            .bind(status)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("update model_requests set recovered_at=completed_at,recovery_request_id='health_success',recovery_attempt_count=1,request_observation_json=request_observation_json||jsonb_build_object('recovery',jsonb_build_object('retryDelayMs',0,'totalLatencyMs',1)) where id='health_recovered'")
+        .execute(&database.pool).await.unwrap();
+    drain_analytics(&database.pool).await;
+    // 模拟旧桶曾把取消的 499 计入调用方错误，无需重建也应得到相同结果
+    sqlx::raw_sql("update request_analytics_15m set counts=jsonb_set(counts,'{caller_error_count}','1') where outcome='cancelled'; update request_analytics_1h set counts=jsonb_set(counts,'{caller_error_count}','1') where outcome='cancelled'")
+        .execute(&database.pool).await.unwrap();
+    let repo = observability_repository(&database.pool);
+    let full = ObservabilityRange::new(start, start + TimeDelta::hours(1)).unwrap();
+    // 完整小时桶、十五分钟桶、边界事实与筛选回退复用同一批请求
+    for (range, filter) in [
+        (full, UsageRecordFilter::default()),
+        (
+            ObservabilityRange::new(start, start + TimeDelta::minutes(15)).unwrap(),
+            UsageRecordFilter::default(),
+        ),
+        (
+            ObservabilityRange::new(start + TimeDelta::minutes(4), start + TimeDelta::minutes(6))
+                .unwrap(),
+            UsageRecordFilter::default(),
+        ),
+        (
+            full,
+            UsageRecordFilter {
+                search: Some("model_".to_owned()),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let snapshot = repo
+            .usage_insights_observation(
+                range,
+                filter.clone(),
+                gateway_admin::model::observability::Granularity::Hour,
+                true,
+            )
+            .await
+            .unwrap();
+        let counts = snapshot.overview.requests;
+        assert_eq!(
+            (
+                counts.request_count,
+                counts.success_count,
+                counts.failure_count,
+                counts.incomplete_count,
+                counts.cancelled_count,
+                counts.caller_error_count
+            ),
+            (5, 1, 2, 1, 1, 1)
+        );
+        let diagnostic = repo
+            .usage_diagnostics(range, filter, DiagnosticDimension::Model, 100)
+            .await
+            .unwrap();
+        assert_eq!(diagnostic.total_request_count, 5);
+        assert_eq!(diagnostic.items.len(), 1);
+        let counts = &diagnostic.items[0];
+        assert_eq!(
+            (
+                counts.request_count,
+                counts.success_count,
+                counts.failure_count,
+                counts.incomplete_count,
+                counts.cancelled_count,
+                counts.caller_error_count
+            ),
+            (5, 1, 2, 1, 1, 1)
+        );
     }
     database.close().await;
 }

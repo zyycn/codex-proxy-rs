@@ -364,21 +364,26 @@ async fn health_views_should_include_incomplete_and_keep_final_outcomes_separate
     let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
     let services = observability_services(store.clone()).await;
     let fixtures = [
-        (162, 0, 2, 0, 0, 98.780_487_804_878_05),
-        (297, 0, 2, 5, 0, 99.331_103_678_929_76),
-        (467, 1, 5, 0, 0, 98.731_501_057_082_45),
-        (95, 2, 3, 4, 1, 95.0),
-        (100, 0, 0, 0, 0, 100.0),
+        (162, 0, 2, 0, 0, 0, Some(98.780_487_804_878_05)),
+        (297, 0, 2, 5, 0, 0, Some(99.331_103_678_929_76)),
+        (467, 1, 5, 0, 0, 0, Some(98.731_501_057_082_45)),
+        (95, 2, 3, 4, 1, 7, Some(95.0)),
+        (100, 0, 0, 0, 0, 0, Some(100.0)),
+        (0, 0, 0, 0, 0, 0, None),
+        (0, 0, 0, 4, 3, 2, None),
+        (0, 1, 2, 0, 0, 0, Some(0.0)),
     ];
 
-    for (index, (success, failed, incomplete, cancelled, caller_error, expected_percent)) in
-        fixtures.into_iter().enumerate()
+    for (
+        index,
+        (success, failed, incomplete, cancelled, caller_error, running, expected_percent),
+    ) in fixtures.into_iter().enumerate()
     {
         let range = observation_range(
             now + Duration::seconds(i64::try_from(index).expect("fixture index fits i64") * 2),
         );
         let metrics = RequestMetrics {
-            request_count: success + failed + incomplete + cancelled + caller_error,
+            request_count: success + failed + incomplete + cancelled + caller_error + running,
             success_count: success,
             failure_count: failed + caller_error,
             incomplete_count: incomplete,
@@ -399,6 +404,27 @@ async fn health_views_should_include_incomplete_and_keep_final_outcomes_separate
             providers: Vec::new(),
         });
 
+        let mut item = diagnostic(
+            "model",
+            success + failed + incomplete + cancelled + caller_error + running,
+        );
+        item.success_count = success;
+        item.failure_count = failed + caller_error;
+        item.incomplete_count = incomplete;
+        item.cancelled_count = cancelled;
+        item.caller_error_count = caller_error;
+        store.replace_diagnostics(DiagnosticsObservation {
+            analytics: Default::default(),
+            total_request_count: item.request_count,
+            items: vec![item],
+        });
+        let diagnostics = services
+            .observability()
+            .diagnostics(range, UsageFilter::default(), DiagnosticDimension::Model)
+            .await
+            .unwrap();
+        assert_eq!(diagnostics.items[0].error_count, failed + incomplete);
+
         let dashboard = services
             .observability()
             .dashboard_summary(range, TrendKind::Usage)
@@ -410,23 +436,12 @@ async fn health_views_should_include_incomplete_and_keep_final_outcomes_separate
             .iter()
             .find(|point| point.bucket_start == current_slot)
             .expect("current health slot");
-        assert_eq!(point.status, HealthStatus::Stable);
+        assert_eq!(dashboard.trend.summary.error_count, failed + incomplete);
+        assert_eq!(dashboard.trend.points[0].error_count, failed + incomplete);
         assert_eq!(point.failed_requests, failed);
         assert_eq!(point.incomplete_requests, incomplete);
         assert_eq!(point.cancelled_requests, cancelled);
         assert_eq!(point.caller_error_requests, caller_error);
-        for reliability in [timeline.reliability_percent, point.reliability_percent] {
-            assert!((reliability.expect("health reliability") - expected_percent).abs() < 1e-10);
-        }
-        for success_rate in [
-            dashboard.trend.summary.success_rate,
-            dashboard.trend.points[0].success_rate,
-        ] {
-            assert!(
-                (success_rate.expect("trend success rate") * 100.0 - expected_percent).abs()
-                    < 1e-10
-            );
-        }
 
         let insights = services
             .observability()
@@ -435,11 +450,31 @@ async fn health_views_should_include_incomplete_and_keep_final_outcomes_separate
             .expect("usage insights");
         assert_eq!(insights.health.failed_requests, failed);
         assert_eq!(insights.health.incomplete_requests, incomplete);
-        assert!((insights.health.success_rate * 100.0 - expected_percent).abs() < 1e-10);
-        assert!(
-            (insights.health.points[0].error_rate * 100.0 - (100.0 - expected_percent)).abs()
-                < 1e-10
-        );
+        for actual in [
+            timeline.reliability_percent,
+            point.reliability_percent,
+            dashboard
+                .trend
+                .summary
+                .success_rate
+                .map(|rate| rate * 100.0),
+            dashboard.trend.points[0]
+                .success_rate
+                .map(|rate| rate * 100.0),
+            insights.health.success_rate.map(|rate| rate * 100.0),
+            insights.health.points[0]
+                .error_rate
+                .map(|rate| (1.0 - rate) * 100.0),
+            diagnostics.items[0]
+                .error_rate
+                .map(|rate| (1.0 - rate) * 100.0),
+        ] {
+            match (actual, expected_percent) {
+                (Some(actual), Some(expected)) => assert!((actual - expected).abs() < 1e-10),
+                (None, None) => {}
+                _ => panic!("unexpected rate: {actual:?}, expected {expected_percent:?}"),
+            }
+        }
     }
 }
 
@@ -678,7 +713,7 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
 
     assert_eq!(insights.health.total_requests, 10);
     assert_eq!(insights.health.failed_requests, 2);
-    assert_eq!(insights.health.success_rate, 0.75);
+    assert_eq!(insights.health.success_rate, Some(0.75));
     assert_eq!(insights.health.completion_rate, 1.0);
     assert_eq!(insights.granularity, Granularity::FifteenMinutes);
     assert_eq!(
@@ -833,7 +868,7 @@ async fn diagnostics_should_preserve_request_order_when_a_small_sample_fails() {
     assert_eq!(result.items[1].key, "single_failure");
     assert_eq!(result.items[0].error_count, 0);
     assert_eq!(result.items[1].error_count, 1);
-    assert_eq!(result.items[1].error_rate, 1.0);
+    assert_eq!(result.items[1].error_rate, Some(1.0));
 }
 
 #[tokio::test]
@@ -1565,7 +1600,9 @@ fn health_metric_point(bucket_start: DateTime<Utc>, metrics: RequestMetrics) -> 
 fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
     DiagnosticObservation {
         first_token_p95_ms: None,
-        non_completion_count: 0,
+        cancelled_count: 0,
+        incomplete_count: 0,
+        caller_error_count: 0,
         retry_count: 0,
         retried_request_count: 0,
         account_provider_kind: None,

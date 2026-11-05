@@ -656,7 +656,7 @@ pub struct OverviewHealthPointView {
     pub cancelled_requests: u64,
     pub incomplete_requests: u64,
     pub caller_error_requests: u64,
-    pub error_rate: f64,
+    pub error_rate: Option<f64>,
 }
 
 /// 洞察健康摘要
@@ -669,7 +669,7 @@ pub struct OverviewHealthView {
     pub cancelled_requests: u64,
     pub incomplete_requests: u64,
     pub caller_error_requests: u64,
-    pub success_rate: f64,
+    pub success_rate: Option<f64>,
     pub completion_rate: f64,
     pub request_change_rate: Option<f64>,
     pub success_rate_change: Option<f64>,
@@ -879,7 +879,7 @@ pub struct DiagnosticItemView {
     pub request_count: u64,
     pub success_count: u64,
     pub error_count: u64,
-    pub error_rate: f64,
+    pub error_rate: Option<f64>,
     pub request_share: f64,
     pub average_latency_ms: Option<u64>,
     pub latency_p95_ms: Option<u64>,

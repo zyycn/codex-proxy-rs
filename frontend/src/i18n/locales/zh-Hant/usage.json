@@ -16,14 +16,15 @@
       "serviceSuccessRate": "服務成功率",
       "notCompleted": "未完成",
       "requestVolume": "請求量",
-      "noServiceResult": "無服務結果",
       "title": "請求健康",
       "description": "請求狀態分佈",
       "descriptionWithGranularity": "請求狀態分佈 · {granularityText}",
-      "completionRate": "完成率",
-      "abnormalEnd": "非正常結束",
       "loading": "正在加載請求數據",
-      "empty": "當前範圍暫無請求"
+      "empty": "當前範圍暫無請求",
+      "errors": "錯誤",
+      "noSamples": "無樣本",
+      "completionRate": "完成率",
+      "abnormalEnd": "非正常結束"
     },
     "billing": {
       "serviceLevel": "服務檔位",
@@ -233,13 +234,13 @@
       "diagnosticDimension": "診斷維度",
       "noDiagnosticDataYet": "暫無診斷數據",
       "successful": "成功 {count}",
-      "failed": "失敗 {count} 次",
-      "failureRate": "失敗率 {rate}",
       "retryRate": "重試率 {rate}",
       "retries": "重試 {count}",
       "loading": "正在加載診斷數據",
       "empty": "當前範圍暫無診斷數據",
-      "download": "下載"
+      "download": "下載",
+      "errors": "錯誤 {count} 次",
+      "errorRate": "錯誤率 {rate}"
     },
     "cost": {
       "savings": "節省",

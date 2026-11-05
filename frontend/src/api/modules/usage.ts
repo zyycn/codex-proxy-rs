@@ -257,7 +257,7 @@ export interface UsageOverviewHealthPoint {
   cancelledRequests: number
   incompleteRequests: number
   callerErrorRequests: number
-  errorRate: number
+  errorRate: number | null
 }
 
 export interface UsageOverviewHealth {
@@ -267,7 +267,7 @@ export interface UsageOverviewHealth {
   cancelledRequests: number
   incompleteRequests: number
   callerErrorRequests: number
-  successRate: number
+  successRate: number | null
   completionRate: number
   requestChangeRate: number | null
   successRateChange: number | null
@@ -386,7 +386,7 @@ export interface UsageDiagnosticItem {
   requestCount: number
   successCount: number
   errorCount: number
-  errorRate: number
+  errorRate: number | null
   requestShare: number
   averageLatencyMs: number | null
   latencyP95Ms: number | null
