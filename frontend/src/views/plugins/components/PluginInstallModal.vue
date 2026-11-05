@@ -458,6 +458,7 @@ watch(() => props.mode, () => {
   pendingAuthentication.value = false
   credentialDraft.value = null
 })
+watch(() => githubForm.allowPrerelease, () => formRef.value?.clearValidate('tag'))
 watch([pendingAuthentication, credentialDraft], () => {
   emit('resetVerification')
   if (props.mode === 'github') {
@@ -507,7 +508,7 @@ watch(
       class="mb-5 w-full"
       @update:model-value="changeMode"
     />
-    <ZForm v-if="!verified" ref="formElement" :model="connectionForm" :rules="rules" scroll-to-error focus-on-error novalidate @submit="mode === 'github' && !release ? queryRelease() : verifySelected()">
+    <ZForm v-if="!verified" ref="formElement" :model="connectionForm" :rules="rules" :validate-on-rule-change="false" scroll-to-error focus-on-error novalidate @submit="mode === 'github' && !release ? queryRelease() : verifySelected()">
       <div v-if="mode === 'upload'">
         <ZFormItem :label="t('plugins.assets.packageLabel')" required>
           <!-- 原生文件输入放在样式化上传区内，保留键盘与读屏语义。 -->
@@ -552,7 +553,7 @@ watch(
             </template>
           </ZInput>
         </ZFormItem>
-        <ZFormItem prop="tag" :show-message="false" :label="t('plugins.installation.tagLabel')">
+        <ZFormItem prop="tag" :label="t('plugins.installation.tagLabel')">
           <template #label-extra>
             <PluginHelpPopover :label="t('plugins.installation.tagHelpTitle')">
               {{ t('plugins.installation.tagHelp') }}

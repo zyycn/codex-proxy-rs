@@ -2,17 +2,20 @@
 import type { ProtectionCondition, ProtectionField, ProtectionOperator } from '@/api/modules/settings/protection'
 import { ZButton, ZCheckbox, ZIconButton, ZInput, ZPopover, ZSelect } from '@codex-proxy/ui'
 import { ChevronDown, Plus, Trash2, X } from '@lucide/vue'
-import { computed, useId } from 'vue'
+import { computed, shallowRef, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { protectionConditionError, protectionFieldLabels, protectionLimits, protectionOperatorLabels } from './form'
 
-const props = defineProps<{ disabled: boolean }>()
+const props = defineProps<{ disabled: boolean, showErrors: boolean }>()
 const emit = defineEmits<{ remove: [] }>()
 const condition = defineModel<ProtectionCondition>({ required: true })
 const { t } = useI18n({ useScope: 'global' })
 const optionsId = useId()
 const errorId = useId()
-const error = computed(() => protectionConditionError(condition.value))
+const inputEdited = shallowRef(false)
+const error = computed(() => props.showErrors || inputEdited.value
+  ? protectionConditionError(condition.value)
+  : '')
 const hasMissing = computed(() => condition.value.values.includes(null))
 const fields = computed(() => ([
   'provider',
@@ -41,7 +44,7 @@ function update(patch: Partial<ProtectionCondition>) {
 }
 
 function changeField(field: ProtectionField) {
-  update({
+  configure({
     field,
     operator: field === 'message'
       ? condition.value.operator
@@ -50,10 +53,20 @@ function changeField(field: ProtectionField) {
 }
 
 function changeOperator(operator: ProtectionOperator) {
-  update({ operator })
+  configure({ operator })
+}
+
+function configure(patch: Partial<ProtectionCondition>) {
+  if (!props.disabled) {
+    inputEdited.value = false
+    update(patch)
+  }
 }
 
 function updateValue(index: number, value: string) {
+  if (props.disabled)
+    return
+  inputEdited.value = true
   update({
     values: condition.value.values.map((previous, i) => i === index
       ? value
@@ -63,7 +76,7 @@ function updateValue(index: number, value: string) {
 
 function removeValue(index: number) {
   const values = condition.value.values.filter((_, i) => i !== index)
-  update({
+  configure({
     values: values.length
       ? values
       : [''],
@@ -73,7 +86,7 @@ function removeValue(index: number) {
 function toggleMissing(missing: boolean) {
   if (missing) {
     if (!hasMissing.value && condition.value.values.length < protectionLimits.values) {
-      update({
+      configure({
         values: [...condition.value.values, null],
       })
     }
@@ -81,7 +94,7 @@ function toggleMissing(missing: boolean) {
   else {
     // 空文本与缺失分别匹配，只移除缺失候选，保留用户输入的空文本
     const values = condition.value.values.filter(value => value !== null)
-    update({
+    configure({
       values: values.length
         ? values
         : [''],
@@ -135,7 +148,7 @@ function toggleMissing(missing: boolean) {
         </div>
       </div>
       <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1" :class="condition.values.length > 1 ? 'pl-6' : undefined">
-        <ZButton size="small" variant="text" :disabled="disabled || condition.values.length >= protectionLimits.values" @click="update({ values: [...condition.values, ''] })">
+        <ZButton size="small" variant="text" :disabled="disabled || condition.values.length >= protectionLimits.values" @click="configure({ values: [...condition.values, ''] })">
           <template #icon>
             <Plus class="size-3.5" />
           </template>

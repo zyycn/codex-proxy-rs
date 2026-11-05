@@ -23,9 +23,7 @@ const { t } = useI18n({ useScope: 'global' })
 const model = defineModel<AccountModelAccess | undefined>({ required: true })
 const formItem = useTemplateRef<InstanceType<typeof ZFormItem>>('modelAccessItem')
 const refreshButton = useTemplateRef<InstanceType<typeof ZIconButton>>('refreshButton')
-watch(model, () => {
-  void formItem.value?.validate('change').catch(() => undefined)
-})
+watch(model, () => formItem.value?.clearValidate())
 // 未取得目录时不能判断缺失，成功返回空目录则可以
 const catalog = ref<Array<{ id: string, label: string }>>()
 const catalogObservedAtDisplay = ref<string>()

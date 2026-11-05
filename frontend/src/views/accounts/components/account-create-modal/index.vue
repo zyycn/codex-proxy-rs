@@ -159,7 +159,7 @@ async function requestCreate() {
         </div>
       </div>
 
-      <ZForm v-if="view.configuring" ref="formElement" :model="form" :rules="settingsRules" scroll-to-error focus-on-error novalidate @submit="continueToImport">
+      <ZForm v-if="view.configuring" ref="formElement" :model="form" :rules="settingsRules" :validate-on-rule-change="false" scroll-to-error focus-on-error novalidate @submit="continueToImport">
         <AccountSetupFields v-model="form" :disabled="busy" :groups="groups" :groups-loading="groupsLoading" />
       </ZForm>
       <template v-if="!view.configuring">

@@ -86,7 +86,7 @@ async function requestSave() {
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
     @closed="emit('afterLeave')"
   >
-    <ZForm v-if="account" ref="formElement" :model="form" :rules="rules" scroll-to-error focus-on-error novalidate @submit="requestSave">
+    <ZForm v-if="account" ref="formElement" :model="form" :rules="rules" :validate-on-rule-change="false" scroll-to-error focus-on-error novalidate @submit="requestSave">
       <div
         class="flex flex-wrap items-center justify-between gap-4 rounded-z bg-z-fill-quaternary px-4 py-3.5"
       >

@@ -85,7 +85,7 @@ const schedulingMode = computed({
     width="48rem"
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
   >
-    <ZForm ref="formElement" :model="form" :rules="rules" scroll-to-error focus-on-error novalidate @submit="requestSave">
+    <ZForm ref="formElement" :model="form" :rules="rules" :validate-on-rule-change="false" scroll-to-error focus-on-error novalidate @submit="requestSave">
       <AccountSettingsFields
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"

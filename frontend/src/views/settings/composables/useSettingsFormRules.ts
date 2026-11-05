@@ -87,7 +87,8 @@ export function useSettingsFormRules(form: () => SettingsForm) {
       },
     ],
     'accountErrorProtection.rules': {
-      trigger: 'change',
+      // 子字段保留输入校验，整组完整性只在提交时检查
+      trigger: [],
       validator: () => {
         const error = protectionPolicyError(form().accountErrorProtection)
         return error

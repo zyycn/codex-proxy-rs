@@ -50,7 +50,8 @@ export function useAccountSettingsFormRules(
       message: t('accounts.scheduling.weightMustBeIntegerFromTo'),
     },
     modelAccess: {
-      trigger: 'change',
+      // 模式切换允许暂时为空，完整配置在提交时校验
+      trigger: [],
       validator: () => {
         const error = accountModelAccessError(form().modelAccess)
         return error
