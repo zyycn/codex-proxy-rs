@@ -472,6 +472,80 @@ impl CostCoverage {
     }
 }
 
+/// 请求健康计数与服务成功率，调用方错误和取消不计入有效样本
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RequestHealth {
+    pub success_requests: u64,
+    pub failed_requests: u64,
+    pub cancelled_requests: u64,
+    pub incomplete_requests: u64,
+    pub caller_error_requests: u64,
+}
+
+impl RequestHealth {
+    #[must_use]
+    pub fn from_counts(
+        success: u64,
+        failed: u64,
+        cancelled: u64,
+        incomplete: u64,
+        caller_error: u64,
+    ) -> Self {
+        Self {
+            success_requests: success,
+            failed_requests: failed.saturating_sub(caller_error),
+            cancelled_requests: cancelled,
+            incomplete_requests: incomplete,
+            caller_error_requests: caller_error,
+        }
+    }
+
+    pub(crate) fn from_metrics(metrics: &RequestMetrics) -> Self {
+        Self::from_counts(
+            metrics.success_count,
+            metrics.failure_count,
+            metrics.cancelled_count,
+            metrics.incomplete_count,
+            metrics.caller_error_count,
+        )
+    }
+
+    #[must_use]
+    pub fn success_rate(self) -> Option<f64> {
+        let total = self.eligible_requests();
+        (total > 0).then(|| self.success_requests as f64 / total as f64 * 100.0)
+    }
+
+    // 未完成保留交付终态，但上游失败、超时和进程中断都不能视为服务成功
+    pub(crate) fn non_success_requests(self) -> u64 {
+        self.failed_requests
+            .saturating_add(self.incomplete_requests)
+    }
+
+    pub(crate) fn eligible_requests(self) -> u64 {
+        self.success_requests
+            .saturating_add(self.non_success_requests())
+    }
+
+    pub(crate) fn add_metrics(&mut self, metrics: &RequestMetrics) {
+        self.add_window(Self::from_metrics(metrics));
+    }
+
+    pub(crate) fn add_window(&mut self, other: Self) {
+        self.success_requests = self.success_requests.saturating_add(other.success_requests);
+        self.failed_requests = self.failed_requests.saturating_add(other.failed_requests);
+        self.cancelled_requests = self
+            .cancelled_requests
+            .saturating_add(other.cancelled_requests);
+        self.incomplete_requests = self
+            .incomplete_requests
+            .saturating_add(other.incomplete_requests);
+        self.caller_error_requests = self
+            .caller_error_requests
+            .saturating_add(other.caller_error_requests);
+    }
+}
+
 /// 请求级聚合指标
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RequestMetrics {
@@ -622,7 +696,7 @@ pub struct AccountPoolMetrics {
 pub struct AccountModelUsage {
     pub model: String,
     pub request_count: u64,
-    pub success_count: u64,
+    pub health: RequestHealth,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
@@ -635,7 +709,7 @@ pub struct AccountModelUsage {
     pub total_tokens: Option<u64>,
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCost>,
-    pub last_used_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
 }
 
 /// 账号在单小时窗口内的请求数

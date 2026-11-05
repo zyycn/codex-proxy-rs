@@ -44,6 +44,8 @@ function latestModelUsage(models: readonly AccountModelUsage[]) {
   let latestTimestamp = Number.NEGATIVE_INFINITY
 
   for (const model of models) {
+    if (!model.lastUsedAt)
+      continue
     const timestamp = Date.parse(model.lastUsedAt)
     if (!Number.isFinite(timestamp) || timestamp <= latestTimestamp)
       continue
