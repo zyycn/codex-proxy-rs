@@ -5,7 +5,10 @@ use crate::request_context::request_client_context;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use axum::{
@@ -159,6 +162,8 @@ pub(in crate::openai) async fn execute_prepared_response(
     let execution = service.execution();
     let request_id = prepared.request_id().clone();
     let cancellation = prepared.cancellation();
+    let execution_entered = Arc::new(AtomicBool::new(false));
+    let terminal_entered = Arc::clone(&execution_entered);
     let started_request_id = Arc::new(OnceLock::new());
     let terminal_request_id = Arc::clone(&started_request_id);
     let (admitted, keepalive) = tokio::sync::oneshot::channel();
@@ -217,6 +222,7 @@ pub(in crate::openai) async fn execute_prepared_response(
                 } else {
                     None
                 };
+                terminal_entered.store(true, Ordering::Relaxed);
                 let started = terminal_service
                     .start_prepared_response(prepared, decoded, transport, endpoint)
                     .await
@@ -276,7 +282,15 @@ pub(in crate::openai) async fn execute_prepared_response(
     } else {
         response.await
     };
-    super::super::with_model_request_id(response, started_request_id.get().unwrap_or(&request_id))
+    // 预留 ID 没有对应执行记录，中间件提前返回时保留 HTTP 入口关联 ID
+    if execution_entered.load(Ordering::Relaxed) {
+        super::super::with_model_request_id(
+            response,
+            started_request_id.get().unwrap_or(&request_id),
+        )
+    } else {
+        response
+    }
 }
 
 async fn await_with_authorization<T>(

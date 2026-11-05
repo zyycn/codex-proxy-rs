@@ -1,5 +1,7 @@
 //! 将 Chat 请求转换为 Responses 正文，协议选项留在 API，业务 JSON 与上游兼容规则保持原有归属
 
+use std::collections::HashSet;
+
 use serde_json::{Map, Value, json};
 
 use crate::openai::responses::RequestDecodeError;
@@ -50,10 +52,10 @@ pub(in crate::openai) fn convert_request(
         body.insert("tool_choice".into(), json!({"type": "web_search"}));
     } else {
         if let Some(value) = optional(&mut chat, "tools") {
-            body.insert("tools".into(), function_tools(value)?.into());
+            body.insert("tools".into(), tools(value)?.into());
         }
         if let Some(value) = optional(&mut chat, "tool_choice") {
-            let choice = tool_choice(value, body.get("tools"))?;
+            let choice = tool_choice(value, "tool_choice")?;
             body.insert("tool_choice".into(), choice);
         }
     }
@@ -61,7 +63,10 @@ pub(in crate::openai) fn convert_request(
         body.insert("parallel_tool_calls".into(), value.into());
     }
 
-    let mut text = Map::new();
+    let mut text = optional(&mut chat, "text")
+        .map(|value| object(value, "text"))
+        .transpose()?
+        .unwrap_or_default();
     if let Some(value) = optional(&mut chat, "response_format") {
         text.insert("format".into(), response_format(value)?);
     }
@@ -72,47 +77,81 @@ pub(in crate::openai) fn convert_request(
     if !text.is_empty() {
         body.insert("text".into(), text.into());
     }
+    let mut reasoning = optional(&mut chat, "reasoning")
+        .map(|value| object(value, "reasoning"))
+        .transpose()?
+        .unwrap_or_default();
     if let Some(value) = optional(&mut chat, "reasoning_effort") {
         string(&value, "reasoning_effort", false)?;
-        body.insert("reasoning".into(), json!({"effort": value}));
+        reasoning.insert("effort".into(), value);
     }
-    for field in ["max_tokens", "max_completion_tokens"] {
+    if !reasoning.is_empty() {
+        body.insert("reasoning".into(), reasoning.into());
+    }
+    for field in ["max_output_tokens", "max_tokens", "max_completion_tokens"] {
         if let Some(value) = optional(&mut chat, field) {
-            if !value.as_u64().is_some_and(|tokens| tokens > 0) {
-                return Err(invalid(field));
-            }
             // 新字段优先，具体上游是否接受长度控制仍由现有 Provider 决定
             body.insert("max_output_tokens".into(), value);
         }
     }
-    for (field, maximum) in [("temperature", 2.0), ("top_p", 1.0)] {
-        if let Some(value) = optional(&mut chat, field) {
-            if !value
-                .as_f64()
-                .is_some_and(|number| (0.0..=maximum).contains(&number))
-            {
-                return Err(invalid(field));
-            }
-            body.insert(field.into(), value);
-        }
-    }
+    // 同语义字段不在入口预判模型支持范围，交由既有 Provider 与上游校验
     for field in [
+        "temperature",
+        "top_p",
         "user",
         "safety_identifier",
         "service_tier",
         "prompt_cache_key",
         "prompt_cache_retention",
+        "metadata",
+        "prompt_cache_options",
+        "moderation",
+        "instructions",
+        "include",
+        "max_tool_calls",
+        "truncation",
+        "context_management",
     ] {
         if let Some(value) = optional(&mut chat, field) {
-            string(&value, field, true)?;
             body.insert(field.into(), value);
         }
     }
-    for field in ["metadata", "prompt_cache_options", "moderation"] {
-        if let Some(value) = optional(&mut chat, field) {
-            let object = object(value, field)?;
-            body.insert(field.into(), object.into());
+    if optional_bool(&mut chat, "logprobs", "logprobs")? == Some(true) {
+        let mut include = body
+            .remove("include")
+            .map(|value| array(value, "include"))
+            .transpose()?
+            .unwrap_or_default();
+        let logprobs = json!("message.output_text.logprobs");
+        if !include.contains(&logprobs) {
+            include.push(logprobs);
         }
+        body.insert("include".into(), include.into());
+        if let Some(value) = optional(&mut chat, "top_logprobs") {
+            body.insert("top_logprobs".into(), value);
+        }
+    }
+    let ignored = [
+        "stop",
+        "seed",
+        "frequency_penalty",
+        "presence_penalty",
+        "logit_bias",
+        "prediction",
+    ]
+    .into_iter()
+    .filter(|field| {
+        chat.get(*field).is_some_and(|value| {
+            !value.is_null()
+                && value.as_f64() != Some(0.0)
+                && !value.as_array().is_some_and(Vec::is_empty)
+                && !value.as_object().is_some_and(Map::is_empty)
+        })
+    })
+    .collect::<Vec<_>>();
+    if !ignored.is_empty() {
+        tracing::info!(target: "request_trace", stage="chat.compatibility", ignored_options=?ignored,
+            "Chat-only optional controls omitted from Responses request");
     }
     // 未识别的客户端顶层扩展不等于 Responses 参数，不进入上游正文
     Ok(ConvertedChatRequest {
@@ -125,26 +164,10 @@ fn validate_options(chat: &Map<String, Value>) -> Result<(), RequestDecodeError>
     for (field, value) in chat.iter().filter(|(_, value)| !value.is_null()) {
         let supported = match field.as_str() {
             "n" => value.as_u64() == Some(1),
-            "store" | "logprobs" => value == false,
-            "frequency_penalty" | "presence_penalty" => value.as_f64() == Some(0.0),
-            "top_logprobs" => value.as_u64() == Some(0),
-            "logit_bias" => value.as_object().is_some_and(Map::is_empty),
-            "functions" | "stop" => value.as_array().is_some_and(Vec::is_empty),
+            "store" | "background" => value == false,
+            "functions" => value.as_array().is_some_and(Vec::is_empty),
             "modalities" => value == &json!(["text"]),
-            "audio"
-            | "prediction"
-            | "seed"
-            | "function_call"
-            | "reasoning_content"
-            | "input"
-            | "previous_response_id"
-            | "conversation"
-            | "instructions"
-            | "reasoning"
-            | "text"
-            | "include"
-            | "background"
-            | "max_output_tokens" => false,
+            "audio" | "function_call" | "input" | "previous_response_id" | "conversation" => false,
             _ => true,
         };
         if !supported {
@@ -215,6 +238,7 @@ fn messages(value: Value) -> Result<Vec<Value>, RequestDecodeError> {
         });
     }
     let mut input = Vec::with_capacity(messages.len());
+    let mut custom_calls = HashSet::new();
     for (index, value) in messages.into_iter().enumerate() {
         let path = format!("messages[{index}]");
         let mut message = object(value, &path)?;
@@ -229,11 +253,9 @@ fn messages(value: Value) -> Result<Vec<Value>, RequestDecodeError> {
         if let Some(name) = &name {
             let name_path = format!("{path}.name");
             string(name, &name_path, true)?;
-            if role != "tool" {
-                return Err(unsupported(&name_path));
-            }
         }
-        for field in ["function_call", "reasoning_content", "reasoning", "audio"] {
+        // Chat 的显示名称和明文推理历史没有对应的 Responses 输入语义
+        for field in ["function_call", "audio"] {
             if optional(&mut message, field).is_some() {
                 return Err(unsupported(&format!("{path}.{field}")));
             }
@@ -261,8 +283,12 @@ fn messages(value: Value) -> Result<Vec<Value>, RequestDecodeError> {
             } else {
                 content_parts(content, &role, &content_path, false)?.into()
             };
-            let mut item =
-                json!({"type": "function_call_output", "call_id": call_id, "output": output});
+            let kind = if custom_calls.contains(&call_id) {
+                "custom_tool_call_output"
+            } else {
+                "function_call_output"
+            };
+            let mut item = json!({"type": kind, "call_id": call_id, "output": output});
             if let Some(name) = name {
                 item["name"] = name;
             }
@@ -300,7 +326,15 @@ fn messages(value: Value) -> Result<Vec<Value>, RequestDecodeError> {
             }
             input.push(item);
         }
-        input.extend(calls);
+        for call in calls {
+            let id = string(&call["call_id"], &format!("{path}.tool_calls.id"), false)?.to_owned();
+            if call["type"] == "custom_tool_call" {
+                custom_calls.insert(id);
+            } else {
+                custom_calls.remove(&id);
+            }
+            input.push(call);
+        }
     }
     Ok(input)
 }
@@ -322,17 +356,22 @@ fn content_parts(
         let mut part = object(value, &path)?;
         let kind = required_string(&mut part, "type", &format!("{path}.type"), false)?;
         let mut converted = match kind.as_str() {
-            "text" => text_part(
+            "text" | "input_text" | "output_text" => text_part(
                 required_string(&mut part, "text", &format!("{path}.text"), true)?,
                 is_assistant,
             ),
-            "image_url" if role == "user" => image_part(
+            "image_url" if matches!(role, "user" | "tool") => image_part(
                 required(&mut part, "image_url", &format!("{path}.image_url"))?,
                 &format!("{path}.image_url"),
             )?,
-            "file" if role == "user" => {
+            "file" if matches!(role, "user" | "tool") => {
                 let file_path = format!("{path}.file");
-                inline_pdf_part(required(&mut part, "file", &file_path)?, &file_path)?
+                file_part(required(&mut part, "file", &file_path)?, &file_path)?
+            }
+            "input_audio" if matches!(role, "user" | "tool") => audio_part(&mut part, &path)?,
+            "input_image" | "input_file" if matches!(role, "user" | "tool") => {
+                part.insert("type".into(), kind.into());
+                Value::Object(std::mem::take(&mut part))
             }
             "refusal" if role == "assistant" => json!({
                 "type": "refusal",
@@ -360,23 +399,32 @@ fn text_part(text: String, is_assistant: bool) -> Value {
     }
 }
 
-fn inline_pdf_part(value: Value, path: &str) -> Result<Value, RequestDecodeError> {
+fn file_part(value: Value, path: &str) -> Result<Value, RequestDecodeError> {
     let mut file = object(value, path)?;
-    if optional(&mut file, "file_id").is_some() {
-        return Err(unsupported(&format!("{path}.file_id")));
-    }
-    let data_path = format!("{path}.file_data");
-    let data = required_string(&mut file, "file_data", &data_path, false)?;
-    if !data
-        .strip_prefix("data:application/pdf;base64,")
-        .is_some_and(|payload| !payload.trim().is_empty())
+    if !["file_id", "file_url", "file_data"]
+        .iter()
+        .any(|field| file.get(*field).is_some_and(|value| !value.is_null()))
     {
-        return Err(invalid(&data_path));
+        return Err(invalid(path));
     }
-    let name = required_string(&mut file, "filename", &format!("{path}.filename"), false)?;
-    let mut converted = json!({"type": "input_file", "filename": name});
-    converted["file_data"] = data.into();
-    Ok(converted)
+    // 文件可用性、格式和组合由接收文件的上游判断，网关不下载或重编码
+    file.insert("type".into(), "input_file".into());
+    Ok(file.into())
+}
+
+fn audio_part(part: &mut Map<String, Value>, path: &str) -> Result<Value, RequestDecodeError> {
+    if let Some(value) = optional(part, "input_audio") {
+        let path = format!("{path}.input_audio");
+        let mut audio = object(value, &path)?;
+        let data = required_string(&mut audio, "data", &format!("{path}.data"), false)?;
+        let format = required_string(&mut audio, "format", &format!("{path}.format"), false)?;
+        let mime = if format == "mp3" { "mpeg" } else { &format };
+        Ok(json!({"type":"input_audio", "audio_url":format!("data:audio/{mime};base64,{data}")}))
+    } else {
+        // Codex 使用 audio_url/file_id 引用，原生扩展保持其结构
+        part.insert("type".into(), "input_audio".into());
+        Ok(Value::Object(std::mem::take(part)))
+    }
 }
 
 fn image_part(value: Value, path: &str) -> Result<Value, RequestDecodeError> {
@@ -402,104 +450,82 @@ fn image_part(value: Value, path: &str) -> Result<Value, RequestDecodeError> {
 }
 
 fn tool_calls(value: Value, path: &str) -> Result<Vec<Value>, RequestDecodeError> {
-    let calls = array(value, path)?;
-    let mut result = Vec::with_capacity(calls.len());
-    for (index, value) in calls.into_iter().enumerate() {
-        let path = format!("{path}[{index}]");
-        let mut call = object(value, &path)?;
-        let id = required_string(&mut call, "id", &format!("{path}.id"), false)?;
-        if required_string(&mut call, "type", &format!("{path}.type"), false)? != "function" {
-            return Err(unsupported(&format!("{path}.type")));
-        }
-        let function_path = format!("{path}.function");
-        let mut function = object(
-            required(&mut call, "function", &function_path)?,
-            &function_path,
-        )?;
-        let name = required_string(
-            &mut function,
-            "name",
-            &format!("{function_path}.name"),
-            false,
-        )?;
-        let arguments = required_string(
-            &mut function,
-            "arguments",
-            &format!("{function_path}.arguments"),
-            true,
-        )?;
-        result.push(
-            json!({"type": "function_call", "call_id": id, "name": name, "arguments": arguments}),
-        );
-    }
-    Ok(result)
+    array(value, path)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let path = format!("{path}[{index}]");
+            let mut call = object(value, &path)?;
+            let id = required_string(&mut call, "id", &format!("{path}.id"), false)?;
+            let kind = required_string(&mut call, "type", &format!("{path}.type"), false)?;
+            let (output_type, data_field) = match kind.as_str() {
+                "function" => ("function_call", "arguments"),
+                "custom" => ("custom_tool_call", "input"),
+                _ => return Err(unsupported(&format!("{path}.type"))),
+            };
+            let nested_path = format!("{path}.{kind}");
+            let mut nested = object(required(&mut call, &kind, &nested_path)?, &nested_path)?;
+            let name = required_string(&mut nested, "name", &format!("{nested_path}.name"), false)?;
+            let data = required_string(
+                &mut nested,
+                data_field,
+                &format!("{nested_path}.{data_field}"),
+                true,
+            )?;
+            Ok(json!({"type":output_type, "call_id":id, "name":name, data_field:data}))
+        })
+        .collect()
 }
 
-fn function_tools(value: Value) -> Result<Vec<Value>, RequestDecodeError> {
+fn tools(value: Value) -> Result<Vec<Value>, RequestDecodeError> {
     array(value, "tools")?
         .into_iter()
         .enumerate()
         .map(|(index, value)| {
             let path = format!("tools[{index}]");
             let mut tool = object(value, &path)?;
-            if required_string(&mut tool, "type", &format!("{path}.type"), false)? != "function" {
-                return Err(unsupported(&format!("{path}.type")));
+            let kind = required_string(&mut tool, "type", &format!("{path}.type"), false)?;
+            if matches!(kind.as_str(), "function" | "custom") {
+                if let Some(nested) = optional(&mut tool, &kind) {
+                    tool = object(nested, &format!("{path}.{kind}"))?;
+                }
+                if kind == "function" && tool.get("strict").is_none_or(Value::is_null) {
+                    // Chat 的缺省是宽松 schema，不能让 Responses 收紧参数合同
+                    tool.insert("strict".into(), false.into());
+                }
             }
-            let function_path = format!("{path}.function");
-            let mut function = object(
-                required(&mut tool, "function", &function_path)?,
-                &function_path,
-            )?;
-            let name = required_string(
-                &mut function,
-                "name",
-                &format!("{function_path}.name"),
-                false,
-            )?;
-            // Chat 的缺省是宽松函数 schema，不能让 Responses 的缺省收紧原始参数合同
-            let strict =
-                optional_bool(&mut function, "strict", &format!("{function_path}.strict"))?
-                    .unwrap_or(false);
-            let mut converted = json!({"type": "function", "name": name, "strict": strict});
-            if let Some(description) = optional(&mut function, "description") {
-                string(&description, &format!("{function_path}.description"), true)?;
-                converted["description"] = description;
-            }
-            if let Some(parameters) = optional(&mut function, "parameters") {
-                converted["parameters"] = parameters;
-            }
-            Ok(converted)
+            // hosted 工具采用原生 Responses 结构，支持范围由选中的 Provider 决定
+            tool.insert("type".into(), kind.into());
+            Ok(tool.into())
         })
         .collect()
 }
 
-fn tool_choice(value: Value, tools: Option<&Value>) -> Result<Value, RequestDecodeError> {
-    let tools = tools.and_then(Value::as_array);
-    if let Value::String(choice) = &value {
-        return match choice.as_str() {
-            "auto" | "none" => Ok(value),
-            "required" if tools.is_some_and(|tools| !tools.is_empty()) => Ok(value),
-            "required" => Err(invalid("tool_choice")),
-            _ => Err(unsupported("tool_choice")),
-        };
+fn tool_choice(value: Value, path: &str) -> Result<Value, RequestDecodeError> {
+    if value.is_string() {
+        return Ok(value);
     }
-    let mut choice = object(value, "tool_choice")?;
-    if required_string(&mut choice, "type", "tool_choice.type", false)? != "function" {
-        return Err(unsupported("tool_choice.type"));
+    let mut choice = object(value, path)?;
+    let kind = required_string(&mut choice, "type", &format!("{path}.type"), false)?;
+    if matches!(kind.as_str(), "function" | "custom") {
+        if let Some(nested) = optional(&mut choice, &kind) {
+            choice = object(nested, &format!("{path}.{kind}"))?;
+        }
+    } else if kind == "allowed_tools" {
+        if let Some(nested) = optional(&mut choice, "allowed_tools") {
+            choice = object(nested, &format!("{path}.allowed_tools"))?;
+        }
+        if let Some(value) = optional(&mut choice, "tools") {
+            let mapped = array(value, &format!("{path}.tools"))?
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| tool_choice(value, &format!("{path}.tools[{index}]")))
+                .collect::<Result<Vec<_>, _>>()?;
+            choice.insert("tools".into(), mapped.into());
+        }
     }
-    let mut function = object(
-        required(&mut choice, "function", "tool_choice.function")?,
-        "tool_choice.function",
-    )?;
-    let name = required_string(&mut function, "name", "tool_choice.function.name", false)?;
-    if !tools.is_some_and(|tools| {
-        tools
-            .iter()
-            .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name.as_str()))
-    }) {
-        return Err(invalid("tool_choice.function.name"));
-    }
-    Ok(json!({"type": "function", "name": name}))
+    choice.insert("type".into(), kind.into());
+    Ok(choice.into())
 }
 
 fn response_format(value: Value) -> Result<Value, RequestDecodeError> {
@@ -538,7 +564,10 @@ fn response_format(value: Value) -> Result<Value, RequestDecodeError> {
             }
             Ok(converted)
         }
-        _ => Err(unsupported("response_format.type")),
+        _ => {
+            format.insert("type".into(), kind.into());
+            Ok(format.into())
+        }
     }
 }
 

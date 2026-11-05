@@ -411,23 +411,7 @@ impl DefaultExecutionService {
         started_at: SystemTime,
         request_id: Option<ModelRequestId>,
     ) -> Result<StartedExecution, GatewayError> {
-        crate::engine::image_generation::check_image_generation(
-            authorization.account_scope.allows_image_generation(),
-            &request.operation,
-        )?;
         let request_id = request_id.map_or_else(new_request_id, Ok)?;
-        if authorization.cancellation.is_cancelled() {
-            return Err(GatewayError::new(
-                GatewayErrorKind::Cancelled,
-                "Parent request was cancelled.",
-            ));
-        }
-        if authorization.deadline_at.is_elapsed() {
-            return Err(GatewayError::new(
-                GatewayErrorKind::Timeout,
-                "Request deadline elapsed.",
-            ));
-        }
         let account_group_ids = authorization
             .account_scope
             .routing_snapshot()
@@ -494,6 +478,22 @@ impl DefaultExecutionService {
         let budget_key_id = request.client.policy.key_id().clone();
         let mut entered_execution = false;
         let result = async {
+            crate::engine::image_generation::check_image_generation(
+                authorization.account_scope.allows_image_generation(),
+                &request.operation,
+            )?;
+            if authorization.cancellation.is_cancelled() {
+                return Err(GatewayError::new(
+                    GatewayErrorKind::Cancelled,
+                    "Parent request was cancelled.",
+                ));
+            }
+            if authorization.deadline_at.is_elapsed() {
+                return Err(GatewayError::new(
+                    GatewayErrorKind::Timeout,
+                    "Request deadline elapsed.",
+                ));
+            }
             if request_policy.is_some() {
                 start_guard = Some(self.prepare_execution_start(&request, &request_id, &mut authorization).await?);
             }
@@ -680,7 +680,7 @@ impl DefaultExecutionService {
                 request_id = request_id.as_str(),
                 key_id = budget_key_id.as_str(),
                 failure_kind = error.kind().as_str(),
-                "请求在路由或准入阶段被拒绝"
+                "请求在执行前被拒绝"
             );
             let rejection = crate::engine::EntryRejection {
                 request_id: request_id.clone(),

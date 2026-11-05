@@ -9,6 +9,14 @@ use gateway_core::error::{GatewayError, GatewayErrorKind};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+/// 认证边界提供的稳定拒绝原因，不携带认证输入
+#[derive(Clone)]
+pub(crate) struct AccessRejection(pub &'static str);
+
+/// 执行已交给 Core 观测，HTTP 入口只补充交付边界日志
+#[derive(Clone)]
+pub(crate) struct ExecutionObserved;
+
 /// OpenAI 风格的协议错误 JSON
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProtocolErrorBody {
@@ -107,6 +115,7 @@ pub fn gateway_error_response(error: &GatewayError) -> Response {
         error.client_error_code().unwrap_or(default_code),
     )
     .into_response();
+    response.extensions_mut().insert(error.clone());
     if let Some(delay) = error.retry_after()
         && let Ok(value) = HeaderValue::from_str(
             &delay

@@ -91,6 +91,7 @@ pub(crate) async fn live_call(
         Ok(prepared) => prepared,
         Err(error) => return gateway_error_response(&error),
     };
+    let request_id = prepared.request_id().clone();
     let started = match service
         .start_prepared_provider_endpoint(
             prepared,
@@ -103,7 +104,7 @@ pub(crate) async fn live_call(
         .await
     {
         Ok(started) => started,
-        Err(error) => return gateway_error_response(&error),
+        Err(error) => return with_model_request_id(gateway_error_response(&error), &request_id),
     };
     collect_live_call_response(started, uri.path().to_owned()).await
 }

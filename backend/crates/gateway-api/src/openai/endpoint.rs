@@ -1,6 +1,13 @@
 //! OpenAI Provider 原生非流式 JSON 端点的公共交付边界
 
-use std::{future::Future, net::IpAddr};
+use std::{
+    future::Future,
+    net::IpAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use axum::{
     body::{Body, Bytes},
@@ -49,6 +56,8 @@ where
     };
     let request_id = prepared.request_id().clone();
     let endpoint = input.endpoint.clone();
+    let execution_entered = Arc::new(AtomicBool::new(false));
+    let terminal_entered = Arc::clone(&execution_entered);
     let result = invoke_request(
         execution,
         prepared,
@@ -60,6 +69,7 @@ where
                     return Err(MiddlewareError::Rejected);
                 }
                 let operation = request.apply_capabilities(decode(body, headers).await?)?;
+                terminal_entered.store(true, Ordering::Relaxed);
                 let started = match service
                     .start_prepared_provider_endpoint(
                         prepared, operation,
@@ -82,11 +92,18 @@ where
         Ok(response) => into_http_response(response, ExpectedBody::SingleJson).await,
         Err(error) => error_response(error),
     };
-    if response.headers().contains_key("x-gateway-request-id") {
+    if !execution_entered.load(Ordering::Relaxed) {
+        return response;
+    }
+    let mut response = if response.headers().contains_key("x-gateway-request-id") {
         response
     } else {
         super::with_model_request_id(response, &request_id)
-    }
+    };
+    response
+        .extensions_mut()
+        .insert(crate::client_error::ExecutionObserved);
+    response
 }
 
 /// 只收集正文，不提前 commit；外层完成响应变换与校验后才提交 Core

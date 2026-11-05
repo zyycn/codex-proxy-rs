@@ -254,58 +254,55 @@ print(completion.choices[0].message.content)
 
 #### 请求字段
 
+入口负责将 Chat 结构映射为 Responses；同语义字段的模型支持范围、取值范围与业务有效性由 Provider 和上游判断。
+只有结构无法解码或不能正确表达的语义在本地返回 `400`，错误中的 `param` 指向字段，不回显字段值
+
 | 字段 | 支持与映射 |
 | --- | --- |
-| `messages[].role` | `system`、`developer`、`user`、`assistant`、`tool`，保持消息顺序；assistant 文本历史使用 Responses 的 `output_text` |
-| `messages[].content` | 字符串或文本块数组；`user` 还可包含 `image_url`，支持 HTTP(S) URL 和非空 `data:image/...;base64,...`，保留 `detail`，不代取图片 |
-| `user` 消息的 `file` 内容块 | 提供非空文件名 `file.filename` 和 `data:application/pdf;base64,...` 格式的 `file.file_data`，两者原样映射到 Responses 的 `input_file` 内容块 |
-| `messages[].refusal`、assistant 的 `refusal` 内容块 | 保留拒绝历史；assistant 的 `content` 仅在同时有工具调用或拒绝内容时可省略或为 `null` |
-| `messages[].tool_calls`、`messages[].tool_call_id` | assistant 的 function 调用转为 `function_call`，tool 结果转为 `function_call_output`，保留调用 ID 与 arguments 字符串，不解析或执行函数 |
-| `messages[].name` | tool 消息的非空工具名映射到 `function_call_output.name`，仍须提供 `tool_call_id`；其他角色不支持非空名称，空字符串或 `null` 按省略处理 |
-| `tools` | 仅支持现代 `type: "function"`；将 `function` 定义展开为 Responses 工具，保留 parameters schema；`strict` 省略或 `null` 时显式使用 `false` |
-| `tool_choice`、`parallel_tool_calls` | 支持 `auto`、`none`、`required` 和指定 function；`required` 须提供工具，指定名称须存在于 `tools`；并行选项保留布尔值 |
-| `web_search_options` | `{}` 即要求上游执行 `web_search`。可设置 `search_context_size`（`low`、`medium`、`high`）和 `user_location`（`type: "approximate"`，位置字段放在 `approximate` 内） |
-| `response_format` | `text`、`json_object`、`json_schema` 映射到 `text.format`，JSON Schema 保留原值 |
-| `reasoning_effort`、`verbosity` | 分别映射到 `reasoning.effort`、`text.verbosity`；接受非空字符串，不固定枚举档位 |
-| `max_completion_tokens`、`max_tokens` | 正整数映射到 `max_output_tokens`，同时提供时前者优先 |
-| `temperature`、`top_p` | 分别接受 0 到 2、0 到 1 的数字，包含端点；是否生效见下文 |
-| `user`、`safety_identifier`、`service_tier`、`prompt_cache_key`、`prompt_cache_retention` | 两侧同语义的字符串保留原值，档位与缓存策略由上游判断 |
-| `metadata`、`prompt_cache_options`、`moderation` | 两侧同结构的对象原样携带，不逐层重建内部字段 |
-| 文本、图片内容块的 `prompt_cache_breakpoint` | 同结构对象原样携带；assistant 输出消息不支持此选项 |
+| `messages[].role` | `system`、`developer`、`user`、`assistant`、`tool`，保持顺序；assistant 文本历史转为 `output_text` |
+| `messages[].content` | 字符串或内容块数组；user 和 tool 可包含图片、文件与音频，assistant 支持文本与拒绝内容 |
+| `image_url` 内容块 | HTTP(S) URL 或非空 `data:image/...;base64,...`，保留 `detail`，网关不代取图片 |
+| `file` 内容块 | `file.file_id`、`file.file_data`、`file.file_url` 至少提供一种，保留可选 `filename`；URL 和非 PDF 文件为网关的 Responses 扩展，实际支持由上游判断 |
+| `input_audio` 内容块 | Chat 的 `data` 和 `format` 转为 Responses `audio_url` data URL；原生音频引用与 `input_text`、`input_image`、`input_file` 内容块也可携带 |
+| `messages[].refusal`、assistant 的 `refusal` 内容块 | 保留拒绝历史；assistant 同时有工具调用或拒绝内容时，`content` 可省略或为 `null` |
+| `messages[].tool_calls`、`messages[].tool_call_id` | function 和 custom 调用分别映射到对应 Responses 调用及结果；保留 ID、参数或输入字符串，不解析或执行工具；custom 结果须携带前序调用历史 |
+| `messages[].name` | tool 消息的工具名随结果携带；其他角色的名称作为辅助信息忽略 |
+| `tools` | 展开 function/custom 定义，保留 schema、format 及原生工具对象；function 的 `strict` 省略或 `null` 时使用 `false` |
+| `tool_choice`、`parallel_tool_calls` | 展开指定 function/custom 和 `allowed_tools` 选择；原生选择与并行布尔值交给上游 |
+| `web_search_options` | `{}` 即要求上游执行 `web_search`；支持 `search_context_size` 与 `user_location.approximate` |
+| `response_format` | 映射到 `text.format`，保留 JSON Schema；未知格式交给上游 |
+| `reasoning_effort`、`verbosity` | 覆盖 `reasoning.effort`、`text.verbosity`，不固定枚举档位 |
+| `max_completion_tokens`、`max_tokens`、`max_output_tokens` | 映射到 `max_output_tokens`，按本行从左到右的顺序优先 |
+| `temperature`、`top_p` | 原值进入 Provider；是否生效见下文正文兼容规则 |
+| `user`、`safety_identifier`、`service_tier`、`prompt_cache_key`、`prompt_cache_retention` | 同语义字段保留原值 |
+| `metadata`、`prompt_cache_options`、`moderation` | 同结构对象原样携带，不递归清理业务字段 |
+| `instructions`、`reasoning`、`text`、`include`、`max_tool_calls`、`truncation`、`context_management` | Responses 原生扩展，保留原值；`reasoning`、`text` 须为对象 |
+| `logprobs`、`top_logprobs` | `logprobs: true` 请求输出文本 logprobs，并携带 `top_logprobs`；返回值位于 Chat 的 `choices[].logprobs` |
+| 内容块的 `prompt_cache_breakpoint` | 对象原样携带；assistant 输出消息不支持此选项 |
 
-可选映射参数为 `null` 时按未提供处理。字段类型、角色组合或工具选择无效时，在访问上游前返回 `400`，
-错误中的 `param` 指向对应字段，不回显字段值。工具参数字符串和 schema 的业务有效性由客户端与上游按各自合同处理
+可选映射参数为 `null` 时按未提供处理。`stop`、`seed`、`frequency_penalty`、`presence_penalty`、
+`logit_bias` 和 `prediction` 没有对应的 Responses 控制语义，接受后忽略，不保证生效。
+消息的 `reasoning_content` 和 `reasoning` 作为辅助历史忽略，不转为用户正文
 
-以下参数只接受所列中性值；省略或 `null` 也接受，其他值返回 `400 unsupported_parameter`：
+本地保留以下限制：`n` 只能为 `1`，`store` 和 `background` 只能为 `false`，
+`modalities` 只能为 `["text"]`，旧式 `functions` 只能为空数组；这些字段也可省略或为 `null`。
+非空旧式函数定义、`function_call`、旧式 `function` 角色、音频输出以及无法映射的内容类型会被拒绝。
+入口不接收 `input`、`previous_response_id` 或 `conversation`；需要服务端续接时使用 `/v1/responses`
 
-| 字段 | 接受值 |
-| --- | --- |
-| `n` | `1` |
-| `store`、`logprobs` | `false` |
-| `top_logprobs`、`frequency_penalty`、`presence_penalty` | `0` |
-| `logit_bias` | `{}` |
-| `stop`、旧式 `functions` | `[]` |
-| `modalities` | `["text"]` |
-
-`function_call`、`seed`、`prediction`、`audio`、`reasoning_content` 及消息级 `reasoning` 不支持非 `null` 值。
-旧式 `function` 角色、`file_id` 文件引用、非 PDF 文件、音频内容、`tools` 数组中的 custom 或 hosted 工具及未知内容类型也会明确拒绝。
-该入口不接收 Responses 请求形状；`input`、`previous_response_id`、`conversation`、`instructions`、`reasoning`、
-`text`、`include`、`background` 和 `max_output_tokens` 不支持非 `null` 值，需要这些原生能力时使用 `/v1/responses`
-
-未知客户端附加字段只在请求、消息及工具等协议包装对象中忽略，不据名称自动转交 Responses，
-也不递归删除 schema、metadata 或工具参数内的业务字段。新枚举值和同结构对象内部的扩展交由上游判断；
-新的工具类型、输出模态或续接语义需要明确映射，不承诺跨协议完全透传
+未知客户端附加字段在协议包装对象中忽略，不据名称自动转交 Responses；schema、metadata、工具参数和
+已识别的原生对象内部不做递归过滤。新工具声明可交给上游，但返回的业务输出仍须具有明确的 Chat 映射
 
 #### 响应与共用规则
 
-非流式响应包含一个 `choices` 项，支持文本、拒绝和 function 工具调用；流式响应交付对应的 Chat delta。
+非流式响应包含一个 `choices` 项，支持文本、拒绝及 function/custom 工具调用；流式响应交付对应的 Chat delta。
 两种响应的 `id` 均由网关生成，`model` 保留客户端请求的模型 ID；流内各块使用同一身份。
 正常完成的 `finish_reason` 为 `stop`，包含工具调用时为 `tool_calls`；上游明确因输出长度或内容过滤而未完成时，
 分别为 `length` 或 `content_filter`
 
-联网搜索使用请求指定的模型，能否搜索取决于上游。搜索请求不接受非空函数工具列表，`tool_choice` 可省略或使用 `auto`。
-需要由模型在搜索和函数之间选择时使用 `/v1/responses`。非流式结果的 URL 引用位于 `choices[0].message.annotations`，
-索引对应合并后的消息正文。流式结果通过 `delta.content` 保留正文中的行内链接，逐条结构化引用事件可通过 Responses 获取
+联网搜索使用请求指定的模型，能否搜索取决于上游。搜索请求不接受非空 `tools`，`tool_choice` 可省略或使用 `auto`。
+需要由模型在搜索和其他工具之间选择时使用 `/v1/responses`。非流式结果的 URL 引用位于 `choices[0].message.annotations`，
+索引对应合并后的消息正文。流式结果保留正文中的行内链接，并在结束前通过 `delta.annotations` 交付结构化引用，
+索引对应实际交付的合并正文
 
 `stream_options` 仅在 `stream: true` 时可提供，
 `include_usage: true` 在完整上游用量可用时于结束前追加 `choices: []` 的用量块，其余块的 `usage` 为 `null`。
@@ -317,8 +314,12 @@ print(completion.choices[0].message.content)
 OpenAI 是此入口的兼容目标，混合分组沿用账号范围内的选路与 fallback 规则，
 不能据此推导所有 Provider 都具备相同的 Chat 能力
 
-Responses 的 reasoning 项（包括摘要与 `encrypted_content`）不投影到 Chat 消息，
-实际推理用量仍保留。需要推理密文回放或图片输出时使用原生 Responses 接口；Chat 的图片输入支持不代表图片输出可用
+公开的推理摘要和推理文本投影到 `message.reasoning_content` / `delta.reasoning_content`；
+推理和上下文压缩的 `encrypted_content` 不作为可读内容返回，密文回放应使用原生 Responses。实际推理用量与上游 Token 明细保留
+
+原生 `image_generation` 工具的图片结果通过网关扩展 `message.images` / `delta.images` 返回，
+每项为 `type: "image_url"` 和包含 data URL 的 `image_url` 对象；流中带图片 `index`，预览与最终结果可能更新同一项。
+这是 Chat 扩展，需要客户端支持；音频输出和需要客户端执行的其他未映射动作不受支持
 
 Chat 沿用 [Client Key 鉴权](#openai-数据面客户端接口)、[请求期限](#请求期限)、[请求解压](#请求解压)、
 [请求头与身份](#请求头与身份)及[隐私策略](#隐私策略)。隐私策略的 `request_body` 面向转换后的 Responses 正文，
@@ -2623,7 +2624,10 @@ OpenAI 推理强度优先取 `input` 中最后一条 `type: "configuration_updat
 包含无可用账号、准备失败、启动/准备超时与取消。此时 attempt 数为零，未确认的 Provider、账号及
 上游传输为空；可用模型执行 ID 在“全部平台”下查询，不从路由候选推断实际调用平台。
 已登记的尝试即使尚未收到首个上游事件，也会保留真实 attempt。
-鉴权、解析、路由和准入等入口拒绝不属于该范围；请求观测仍是可能延迟或丢弃的异步投影
+执行会话前的拒绝记录为运维错误，不创建模型请求或用量。HTTP 鉴权、解码、未知路由、方法错误和
+请求中间件提前失败使用 `api/http_ingress`，可按入口关联 ID 查询；路由、权限、取消与准入拒绝由 Core 记录。
+摘要只含方法、路由模板、状态、原因码和已知参数路径，不保存请求正文、查询串或凭据。
+这些记录均为 best-effort；异步投影仍可能延迟或丢弃
 
 性能洞察的 `performance.load` 和 `performance.points[].load` 使用相同的负载结构，分别表示查询范围汇总与时间桶指标：
 

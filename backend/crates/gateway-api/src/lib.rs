@@ -30,6 +30,7 @@ use crate::openai::service::OpenAiService;
 pub mod admin;
 pub mod auth;
 mod client_error;
+mod diagnostics;
 mod health;
 mod key_usage;
 mod middleware;
@@ -280,6 +281,10 @@ pub fn initialize(
             headers_ms = latency.as_millis(), "HTTP response headers ready");
     });
     let router = router
+        .layer(axum::middleware::from_fn_with_state(
+            diagnostics.clone(),
+            diagnostics::record_ingress,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             diagnostics,
             admin::diagnostics::record_failure,
