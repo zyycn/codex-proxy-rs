@@ -201,7 +201,8 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
                 event
             }
             event = response_control.receive() => {
-                if forward_control_event(&mut connection, &response_control, event).await == ForwardOutcome::Disconnect {
+                let outcome = forward_control_event(&mut connection, &response_control, event).await;
+                if disconnect_after_forward(&mut connection, outcome, reconnect_for_replay).await {
                     break;
                 }
                 continue;
@@ -415,12 +416,7 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
             &response_control,
         )
         .await;
-        if outcome == ForwardOutcome::Disconnect
-            || (outcome == ForwardOutcome::ReconnectIfIdle
-                && reconnect_for_replay
-                && !connection.is_expired()
-                && connection.close_for_replay_if_idle().await)
-        {
+        if disconnect_after_forward(&mut connection, outcome, reconnect_for_replay).await {
             break;
         }
         if connection.is_expired() {
@@ -430,6 +426,18 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
     }
 
     connection.log_summary(request_count);
+}
+
+async fn disconnect_after_forward(
+    connection: &mut ResponsesWebSocketConnection,
+    outcome: ForwardOutcome,
+    reconnect_for_replay: bool,
+) -> bool {
+    outcome == ForwardOutcome::Disconnect
+        || (outcome == ForwardOutcome::ReconnectIfIdle
+            && reconnect_for_replay
+            && !connection.is_expired()
+            && connection.close_for_replay_if_idle().await)
 }
 
 // 尚未建立模型请求的拒绝也保留原文入口，用返回给客户端的 correlation ID 检索

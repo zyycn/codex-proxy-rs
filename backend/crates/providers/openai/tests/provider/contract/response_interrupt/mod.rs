@@ -208,6 +208,23 @@ fn interrupt_context(control: ResponseControl, previous: Option<&str>) -> Attemp
 
 #[tokio::test]
 async fn response_controls_use_the_original_socket_through_terminal_and_revoke_on_reuse() {
+    for terminal in [
+        None,
+        Some(Message::Close(None)),
+        Some(Message::Close(Some(CloseFrame {
+            code: CloseCode::Normal,
+            reason: "".into(),
+        }))),
+        Some(Message::Close(Some(CloseFrame {
+            code: CloseCode::Restart,
+            reason: "service restart".into(),
+        }))),
+    ] {
+        assert_response_control_lifecycle(terminal).await;
+    }
+}
+
+async fn assert_response_control_lifecycle(terminal: Option<Message>) {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -269,6 +286,11 @@ async fn response_controls_use_the_original_socket_through_terminal_and_revoke_o
                 json!({"type":"response.interrupt", "response_id":id,"mode":"future_mode", "extra":1})
             );
             socket
+                .send(Message::Binary(vec![0xff].into()))
+                .await
+                .unwrap();
+            socket.send(Message::Ping(vec![1].into())).await.unwrap();
+            socket
                 .send(Message::Text(
                     json!({"type":"future.idle_ack", "original":late})
                         .to_string()
@@ -278,6 +300,9 @@ async fn response_controls_use_the_original_socket_through_terminal_and_revoke_o
                 .unwrap();
         }
         let _ = finished.await;
+        if let Some(terminal) = terminal {
+            socket.send(terminal).await.unwrap();
+        }
     });
     let provider = provider_with_base_url(&store, base_url);
     let mut session_state = None;

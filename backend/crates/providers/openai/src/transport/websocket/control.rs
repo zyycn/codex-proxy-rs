@@ -58,14 +58,20 @@ impl ResponseControlTransport for PumpControl {
     }
 
     async fn receive(&self) -> Result<String, ResponseControlUnavailable> {
-        let message = tokio::select! {
-            biased;
-            () = self.cancellation.cancelled() => return Err(ResponseControlUnavailable),
-            message = async { self.rx_message.lock().await.recv().await } => message,
-        };
-        match message {
-            Some(Ok(Message::Text(text))) => Ok(text.to_string()),
-            _ => Err(ResponseControlUnavailable),
+        loop {
+            let message = tokio::select! {
+                biased;
+                () = self.cancellation.cancelled() => return Err(ResponseControlUnavailable),
+                message = async { self.rx_message.lock().await.recv().await } => message,
+            };
+            match message {
+                Some(Ok(Message::Text(text))) => return Ok(text.to_string()),
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                    return Err(ResponseControlUnavailable);
+                }
+                // 空闲控制通道只交付文本，其他数据帧不能代替连接终止信号
+                Some(Ok(_)) => {}
+            }
         }
     }
 }
