@@ -82,6 +82,7 @@ module ReleaseMetadata
       'platform_matrix' => JSON.generate('include' => entries),
       'docker_matrix' => JSON.generate('include' => docker),
       'non_docker_matrix' => JSON.generate('include' => native),
+      'windows_matrix' => JSON.generate('include' => entries.select { |entry| entry['os'] == 'windows' }),
       'docker_platforms' => docker.map { |entry| entry['dockerPlatform'] }.join(','),
       'previous_tag' => previous,
       'prerelease' => prerelease?(value),

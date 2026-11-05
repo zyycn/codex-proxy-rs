@@ -29,6 +29,7 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
       container: ${{ steps.filter.outputs.container }}
+      source_container: ${{ steps.filter.outputs.source_container }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,10 +68,30 @@ jobs:
               - '.dockerignore'
               - 'release/version.yaml'
               - '.github/actions/verify-container/**'
-              - '.github/actions/cargo-cache/**'
+              - '.github/actions/build-binary/**'
+              - '.github/actions/build-frontend/**'
+              - '.github/scripts/toolchains.rb'
+              - '.github/scripts/package-release.rb'
+              - '.github/scripts/release-metadata.rb'
               - '.github/workflows/_container.yml'
               - '.github/workflows/ci.yml'
               - '!**/*.md'
+            source_container:
+              - 'deploy/Dockerfile'
+              - 'deploy/Dockerfile.dockerignore'
+              - '.dockerignore'
+              - 'backend/**/Cargo.toml'
+              - 'backend/Cargo.lock'
+              - 'backend/rust-toolchain.toml'
+              - 'backend/**/build.rs'
+              - 'backend/.cargo/**'
+              - 'frontend/package.json'
+              - 'frontend/pnpm-lock.yaml'
+              - 'frontend/pnpm-workspace.yaml'
+              - 'frontend/.npmrc'
+              - 'frontend/patches/**'
+              - '.github/workflows/_container.yml'
+              - '.github/workflows/ci.yml'
 
   quality:
     needs: changes
@@ -78,7 +99,8 @@ jobs:
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
       run_backend: ${{ needs.changes.outputs.backend == 'true' }}
-      run_frontend: ${{ needs.changes.outputs.frontend == 'true' }}
+      # 预构建容器复用同一次前端检查产物，源码 Docker 构建仍独立验证
+      run_frontend: ${{ needs.changes.outputs.frontend == 'true' && (needs.changes.outputs.container != 'true' || needs.changes.outputs.source_container == 'true') }}
 
   container:
     needs: changes
@@ -89,3 +111,4 @@ jobs:
     uses: ./.github/workflows/_container.yml
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      source_build: ${{ needs.changes.outputs.source_container == 'true' }}

@@ -18,7 +18,7 @@ description: Codex Proxy RS 的版本规划、发布说明、正式或预发行�
 ## 必须保持的边界
 
 - Codex 兼容性变化按[问题与方案依据](../../../CONTRIBUTING.md#问题与方案依据)核对已有依据与验证范围，缺少依据列为发行风险，不以 CI 通过代替
-- `release/publish` 会提交、打 tag、推送并触发工作流，没有只读预演模式，不能用于探测或演练
+- `release/publish --check <version>` 只读检查发行准备条件；不带 `--check` 会提交、打 tag、推送并触发工作流，实际发布仍需相应授权
 - 同名版本、超时或中断先查本地与远端状态，不删已发布 tag、不移动 tag、不强推掩盖冲突
 - 预发行不得覆盖 GitHub Latest 或镜像 `latest`，完成后回读核对
 - `release/notes.md` 只承载当前发行的说明；常规文档修改另按开发入口执行[文档检查](../cpr-dev-guide/references/documentation.md)

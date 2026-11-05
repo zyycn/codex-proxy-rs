@@ -26,6 +26,9 @@
 
 进入实际发行准备后，读取目标分支的 [release/publish](../../../../release/publish)、[工作流](../../../../.github/workflows/release.yml)与[平台清单](../../../../release/platforms.yaml)，按当前入口执行，不另写脚本或绕过检查
 
+发布说明准备好、其他代码已提交后，执行 `release/publish --check <version>`，检查版本、说明、工作区、远端分支与 tag、工具链和插件兼容窗口。
+预检不修改文件、Git 引用或远端状态；远端存在本地未知提交时先同步再检查。它不替代 CI、发行物验证或实际发布授权
+
 按[验证要求](../../../../CONTRIBUTING.md#验证)核对目标提交的证据，区分通过、失败、跳过与未执行
 数据库变更同时读取[迁移冻结规则](../../../../backend/migrations/README.md#冻结规则)：
 

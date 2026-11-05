@@ -13,6 +13,7 @@ usage() {
   cat <<USAGE
 Usage:
   release/publish <version>
+  release/publish --check <version>
 
 Example:
   release/publish 0.1.4
@@ -20,6 +21,7 @@ Example:
 Before publishing, replace release/notes.md with the new version's notes,
 starting with "# v<version>". Leave the notes uncommitted; this command commits
 them together with release/version.yaml. Commit other tracked changes first.
+Use --check to validate without changing files, Git refs, or remote state.
 USAGE
 }
 
@@ -67,6 +69,14 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
+check_only=false
+if [[ "${1:-}" == "--check" ]]; then
+  check_only=true
+  # 只读检查也禁止 Git 的可选索引刷新
+  export GIT_OPTIONAL_LOCKS=0
+  shift
+fi
+
 [[ "$#" -eq 1 ]] || {
   usage >&2
   exit 2
@@ -83,6 +93,8 @@ version="$1"
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
 cd "$repo_root"
 version="$(ruby .github/scripts/release-metadata.rb validate "$version")"
+ruby .github/scripts/toolchains.rb >/dev/null
+ruby -r './.github/scripts/release-metadata' -e 'ReleaseMetadata.platforms'
 
 git ls-files --error-unmatch "$VERSION_FILE" >/dev/null 2>&1 || die "$VERSION_FILE is not tracked"
 
@@ -117,12 +129,20 @@ if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
   die "local tag already exists: $tag"
 fi
 
-git fetch "$remote"
+if [[ "$check_only" == false ]]; then
+  git fetch "$remote"
+fi
 
 upstream="$remote/$remote_branch"
 local_head="$(git rev-parse HEAD)"
-upstream_head="$(git rev-parse "$upstream")"
-merge_base="$(git merge-base HEAD "$upstream")"
+remote_refs="$(git ls-remote --refs "$remote" "$merge_ref" "refs/tags/$tag")" || die "failed to read remote refs"
+upstream_head="$(awk -v ref="$merge_ref" '$2 == ref { print $1 }' <<< "$remote_refs")"
+[[ -n "$upstream_head" ]] || die "upstream branch does not exist: $upstream"
+if awk -v ref="refs/tags/$tag" '$2 == ref { found = 1 } END { exit !found }' <<< "$remote_refs"; then
+  die "remote tag already exists: $tag"
+fi
+git cat-file -e "$upstream_head^{commit}" 2>/dev/null || die "upstream has unseen commits; run git fetch $remote first"
+merge_base="$(git merge-base HEAD "$upstream_head")" || die "branch has no common history with $upstream"
 
 if [[ "$local_head" != "$upstream_head" && "$merge_base" != "$upstream_head" ]]; then
   if [[ "$merge_base" == "$local_head" ]]; then
@@ -131,8 +151,15 @@ if [[ "$local_head" != "$upstream_head" && "$merge_base" != "$upstream_head" ]];
   die "branch has diverged from $upstream"
 fi
 
-if git ls-remote --exit-code --tags "$remote" "refs/tags/$tag" >/dev/null 2>&1; then
-  die "remote tag already exists: $tag"
+if [[ "$check_only" == true ]]; then
+  # 预检调用与正式更新相同的纯函数，不写回兼容窗口
+  ruby -r './backend/crates/gateway-plugin/runtime/plugin-api-lifecycle' -e '
+    deprecations, compatibility, version = ARGV
+    PluginApiLifecycle.advance(JSON.parse(File.read(deprecations)), JSON.parse(File.read(compatibility)), version)
+  ' "$PLUGIN_DEPRECATIONS_FILE" "$PLUGIN_COMPATIBILITY_FILE" "$version"
+  echo "Preflight passed: $APP_NAME $version on $branch -> $repository ($remote_branch)"
+  echo "No files, Git refs, or remote state changed. CI and release artifact validation still run after dispatch."
+  exit 0
 fi
 
 ruby backend/crates/gateway-plugin/runtime/plugin-api-lifecycle.rb "$PLUGIN_DEPRECATIONS_FILE" "$PLUGIN_COMPATIBILITY_FILE" "$version"
@@ -146,8 +173,7 @@ git commit \
 git tag -a "$tag" -m "$tag"
 git push --atomic "$remote" "HEAD:$remote_branch" "refs/tags/$tag"
 
-# Dispatch from the long-lived release branch instead of the tag so GitHub
-# Actions caches remain reusable across releases.
+# 从长期发行分支触发，使 Actions 缓存可跨版本复用
 if ! gh workflow run release.yml \
   --repo "$repository" \
   --ref "$remote_branch" \
@@ -158,7 +184,7 @@ if ! gh workflow run release.yml \
 fi
 
 cat <<DONE
-Published $APP_NAME $version
+Queued release for $APP_NAME $version
 Commit: $(git rev-parse --short HEAD)
 Tag:    $tag
 Release workflow dispatched from: $remote_branch

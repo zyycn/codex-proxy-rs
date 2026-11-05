@@ -43,4 +43,4 @@ runs:
         name: frontend-dist
         path: frontend/dist
         if-no-files-found: error
-        retention-days: 1
+        retention-days: 7

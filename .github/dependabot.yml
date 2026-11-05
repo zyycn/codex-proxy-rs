@@ -70,7 +70,6 @@ updates:
   - package-ecosystem: docker
     directories:
       - /deploy
-      - /.github/actions/cargo-cache
     labels: []
     schedule:
       interval: weekly

@@ -1,0 +1,76 @@
+name: Build binary
+description: Build a native release binary with shared dependency caching and timings
+inputs:
+  rust:
+    description: Pinned Rust toolchain
+    required: true
+  target:
+    description: Rust target triple
+    required: true
+  platform:
+    description: Release platform name, such as linux-amd64
+    required: true
+  binary:
+    description: Executable filename
+    default: codex-proxy-rs
+  rust-image:
+    description: Pinned Linux builder image; empty for native builds
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      with:
+        toolchain: ${{ inputs.rust }}
+        targets: ${{ inputs.target }}
+
+    - name: Configure Windows runtime linkage
+      if: runner.os == 'Windows'
+      shell: bash
+      # 发行包静态链接 MSVC 运行库，解压运行时无需安装 VC++ Redistributable
+      run: echo 'RUSTFLAGS=-C target-feature=+crt-static' >> "$GITHUB_ENV"
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        workspaces: backend -> target
+        shared-key: release-${{ inputs.target }}-${{ inputs.rust-image }}
+        cache-bin: false
+        # 只缓存依赖，避免随版本变化的 workspace 产物挤占缓存
+        save-if: ${{ github.event_name != 'pull_request' }}
+
+    - name: Build binary
+      shell: bash
+      working-directory: backend
+      env:
+        BUILD_TARGET: ${{ inputs.target }}
+        BUILD_PLATFORM: ${{ inputs.platform }}
+        BUILD_BINARY: ${{ inputs.binary }}
+        RUST_IMAGE: ${{ inputs.rust-image }}
+      run: |
+        set -euo pipefail
+        if [ -n "$RUST_IMAGE" ]; then
+          mkdir -p "$HOME/.cargo"
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -e CARGO_HOME=/cargo -e HOME=/tmp \
+            -e CPR_VERSION -e CPR_GIT_SHA -e CPR_BUILD_TIME -e CPR_BUILD_TYPE \
+            -v "$HOME/.cargo:/cargo" -v "$PWD/..:/workspace" \
+            -w /workspace/backend "$RUST_IMAGE" \
+            cargo build --release --locked --timings --target "$BUILD_TARGET" --bin codex-proxy-rs
+        else
+          cargo build --release --locked --timings --target "$BUILD_TARGET" --bin codex-proxy-rs
+        fi
+        "target/$BUILD_TARGET/release/$BUILD_BINARY" --help
+        "target/$BUILD_TARGET/release/$BUILD_BINARY" --version
+        mkdir -p "../dist/binaries/$BUILD_PLATFORM"
+        cp "target/$BUILD_TARGET/release/$BUILD_BINARY" "../dist/binaries/$BUILD_PLATFORM/$BUILD_BINARY"
+
+    - name: Upload build timings
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: build-timings-${{ inputs.platform }}
+        path: backend/target/cargo-timings/
+        if-no-files-found: ignore
+        retention-days: 7

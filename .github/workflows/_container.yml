@@ -7,13 +7,58 @@ on:
         description: Exact commit SHA to build and validate
         required: true
         type: string
+      source_build:
+        description: Validate the complete Docker source build
+        type: boolean
+        default: true
 
 permissions:
   contents: read
   security-events: write
 
 jobs:
+  frontend:
+    if: ${{ !inputs.source_build }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/build-frontend
+        with:
+          upload-artifact: 'true'
+
+  binary:
+    if: ${{ !inputs.source_build }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+      - id: toolchains
+        run: ruby .github/scripts/toolchains.rb >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/build-binary
+        with:
+          rust: ${{ steps.toolchains.outputs.rust }}
+          target: x86_64-unknown-linux-gnu
+          platform: linux-amd64
+          rust-image: ${{ steps.toolchains.outputs.rust_image }}
+        env:
+          CPR_GIT_SHA: ${{ inputs.ref }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: codex-proxy-rs-linux-amd64
+          path: dist/binaries/linux-amd64/
+          if-no-files-found: error
+          retention-days: 7
+
   container:
+    needs: [frontend, binary]
+    if: always() && !cancelled()
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
@@ -21,6 +66,14 @@ jobs:
       TRIVY_QUIET: 'true'
       TRIVY_SKIP_VERSION_CHECK: 'true'
     steps:
+      # 上游失败必须传递给已有的容器检查，不能让必需状态变成 skipped
+      - name: Require prebuilt inputs
+        if: ${{ !inputs.source_build }}
+        env:
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          BINARY_RESULT: ${{ needs.binary.result }}
+        run: test "$FRONTEND_RESULT" = success && test "$BINARY_RESULT" = success
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,41 +83,51 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Restore Cargo snapshot
-        id: cargo-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Download frontend
+        if: ${{ !inputs.source_build }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: ${{ runner.temp }}/container-cargo
-          # 同一平台和依赖复用快照，源码变化由 Cargo 指纹判定是否重编译
-          key: container-cargo-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml', 'deploy/Dockerfile', '.github/actions/cargo-cache/Dockerfile') }}
-          restore-keys: |
-            container-cargo-v4-${{ runner.os }}-${{ runner.arch }}-
+          name: frontend-dist
+          path: dist/docker/web/dist
 
-      - name: Restore Cargo mounts to BuildKit
-        id: cargo-restore
-        uses: ./.github/actions/cargo-cache
+      - name: Download binary
+        if: ${{ !inputs.source_build }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          operation: restore
-          builder: ${{ steps.buildx.outputs.name }}
-          path: ${{ runner.temp }}/container-cargo
-          architecture: amd64
+          name: codex-proxy-rs-linux-amd64
+          path: dist/docker-artifacts/codex-proxy-rs-linux-amd64
 
-      - name: Release restored Cargo snapshot
-        run: rm -rf "$RUNNER_TEMP/container-cargo"
+      - name: Prepare prebuilt image
+        if: ${{ !inputs.source_build }}
+        env:
+          MATRIX_OS: linux
+          MATRIX_ARCH: amd64
+          MATRIX_BINARY: codex-proxy-rs
+        run: |
+          ruby -r './.github/scripts/release-metadata' -e '
+            ReleaseMetadata.seal_manifest(
+              "version" => ReleaseMetadata.version(YAML.load_file("release/version.yaml").fetch("version")),
+              "git_sha" => ReleaseMetadata.git("rev-parse", "HEAD")
+            )'
+          ruby .github/scripts/package-release.rb image
 
       - name: Build runtime image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: deploy/Dockerfile
-          target: runtime
+          target: ${{ inputs.source_build && 'runtime' || 'runtime-prebuilt' }}
+          build-args: |
+            CPR_PREBUILT_DIR=dist/docker
+            CPR_GIT_SHA=${{ inputs.ref }}
           load: true
           tags: ${{ env.CPR_IMAGE }}
           no-cache-filters: |
             runtime-base
             runtime
-          cache-from: type=gha,scope=runtime-ci
-          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=runtime-ci' || '' }}
+            runtime-prebuilt
+          cache-from: type=gha,scope=runtime-${{ inputs.source_build && 'source' || 'prebuilt' }}
+          cache-to: ${{ (github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/main' && format('type=gha,mode=max,scope=runtime-{0}', inputs.source_build && 'source' || 'prebuilt') || '' }}
 
       - name: Verify runtime image
         uses: ./.github/actions/verify-container
@@ -72,23 +135,3 @@ jobs:
           image: ${{ env.CPR_IMAGE }}
           platform: linux/amd64
           artifact-name: container-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-amd64
-
-      # 构建层命中时 mount 仍可能为空，只有实际检查过内容的快照才允许保存。
-      - name: Export Cargo snapshot
-        if: >-
-          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          (steps.cargo-cache.outputs.cache-hit != 'true' || steps.cargo-restore.outputs.usable != 'true')
-        id: cargo-snapshot
-        uses: ./.github/actions/cargo-cache
-        with:
-          operation: snapshot
-          builder: ${{ steps.buildx.outputs.name }}
-          path: ${{ runner.temp }}/container-cargo
-          architecture: amd64
-
-      - name: Save Cargo snapshot
-        if: steps.cargo-snapshot.outputs.usable == 'true' && steps.cargo-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/container-cargo
-          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
