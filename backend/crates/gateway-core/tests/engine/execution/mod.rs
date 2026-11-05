@@ -5316,3 +5316,39 @@ fn image_policy_stays_frozen_for_prepared_requests_and_refreshes_for_the_next_tu
         assert_eq!(admissions.limits.lock().unwrap().len(), 1);
     });
 }
+
+#[test]
+fn cancelled_prepared_execution_records_rejection_without_admission_or_model_request() {
+    block_on(async {
+        let store = Arc::new(TrackingExecutionStore::default());
+        let service = DefaultExecutionService::new(
+            RuntimeSnapshotHandle::new(start_snapshot()),
+            store.clone(),
+            ProviderRegistry::default(),
+            Arc::new(UnusedAdmissions),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+            Arc::new(crate::RecordingDiagnostics::default()),
+        );
+        let request = request(&service, ClientTransport::HttpJson);
+        let prepared = service.prepare_execution(request.client).await.unwrap();
+        let id = prepared.request_id().clone();
+        prepared.cancellation().cancel();
+        let result = service
+            .start_prepared(
+                prepared,
+                gateway_core::engine::execution::PreparedExecutionRequest {
+                    public_model: request.public_model,
+                    operation: request.operation,
+                    metadata: request.metadata,
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(error) if error.kind() == GatewayErrorKind::Cancelled));
+        let rejected = store.entry_rejections.lock().unwrap();
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].request_id, id);
+        assert_eq!(rejected[0].error.kind(), GatewayErrorKind::Cancelled);
+        assert!(store.requests.lock().unwrap().is_empty());
+    });
+}

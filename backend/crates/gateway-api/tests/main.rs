@@ -3,6 +3,7 @@
 mod admin;
 mod architecture;
 mod auth;
+mod diagnostics;
 mod health;
 mod key_usage;
 mod middleware;

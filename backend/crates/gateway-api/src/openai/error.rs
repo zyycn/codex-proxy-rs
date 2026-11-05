@@ -23,7 +23,9 @@ pub use crate::client_error::{
 
 /// 严格协议 decoder/encoder 返回的安全错误 body
 pub fn protocol_error_response(status: StatusCode, body: ProtocolErrorBody) -> Response {
-    (status, Json(body.into_value())).into_response()
+    let mut response = (status, Json(body.clone().into_value())).into_response();
+    response.extensions_mut().insert(body);
+    response
 }
 
 /// 下游 Client API Key 无效

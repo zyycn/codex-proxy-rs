@@ -759,7 +759,7 @@ OAuth 恢复开关为 `host.logging.oauth_recovery`，默认关闭，与普通�
 2. 收集响应中的 `x-gateway-request-id`、`x-request-id` / `x-oai-request-id`；配置了
    `api.request_id_header` 时也记录该入口头。WebSocket 合成错误的关联头位于本条错误的 `headers`。
    在管理端错误列表按 ID 和时间搜索；检查平台条件并主动刷新，翻页不会推进查询时间。
-   只有入口 ID 时，改用入口日志和时间定位
+   只有入口 ID 时，在运维错误中按该 ID 搜索，并结合入口日志和时间定位
 3. 打开错误详情，核对上游/客户端状态、发送状态、attempt、失败阶段及后续恢复关联。
    下载诊断包作为反馈材料，先检查 `availability.gaps`、`exportTruncated` 以及尝试和时间线的完整性。
    该包包含经服务端脱敏的已存上游错误与时间线，分享前仍应检查业务内容及内部信息
@@ -770,11 +770,15 @@ OAuth 恢复开关为 `host.logging.oauth_recovery`，默认关闭，与普通�
    时，普通日志才按级别输出到 stdout；专用 dump/OAuth 恢复通道不会混入
 5. 查不到请求记录时，先用模型执行 ID 在“全部平台”下搜索：已进入执行会话的建流前失败也会记录，
    但其 attempt 为零，尚未确认的 Provider/账号/传输为空，不会命中具体平台或账号筛选。
-   再检查观测队列丢弃/写入失败告警及 `file_logging` 健康状态。鉴权、解析、路由和准入等入口拒绝
-   仍不保证进入错误列表；应结合入口状态与日志，不能据此认定请求未发生。异步投影有延迟，
+   鉴权、解析、未知路由、方法错误和执行前中间件失败记录为 `api/http_ingress` 运维事件，
+   路由、权限、取消和准入拒绝由执行层记录；它们没有模型请求或用量，不应按 Provider/账号筛选。
+   再检查观测队列丢弃/写入失败告警及 `file_logging` 健康状态。异步投影有延迟，
    刷新后仍需核对缺口，而不是反复重放可能已发送的请求
 6. 仅在上述信息不足且能够控制访问范围时临时开启 `host.logging.request_dump` 复现一次。
-   它会记录完整凭据与用户正文，应限定访问、摘取最小片段并人工脱敏；复现后关闭开关，
+   `ingress.request`、`ingress.request.headers` 与 `ingress.request.body` 按入口 ID 关联原始请求，
+   `ingress.response` 与对应 headers/body 记录响应；`ingress.body.finished` 的 `complete: false`
+   表示正文未读完或读取失败，不能当作完整转储。网关不会为日志读取尚未消费的正文。
+   转储含凭据与用户正文，应限定访问、摘取最小片段并人工脱敏；复现后关闭开关，
    按配置的保留窗口及组织的数据处理要求管理已生成文件。不要为普通请求排查开启 OAuth 恢复记录，
    也不要直接上传整个日志目录或完整转储
 

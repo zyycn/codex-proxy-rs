@@ -131,7 +131,7 @@ async fn web_search_projects_citations_in_json_and_streams_the_original_links() 
 async fn json_tool_arguments_and_refusal_do_not_become_assistant_text() {
     for output in [
         json!([tool("fc1", "call1", "weather", "{ \"city\" : \"北京\" }")]),
-        json!([{"type":"reasoning","id":"rs1","summary":[{"type":"summary_text","text":"private"}]},
+        json!([{"type":"reasoning","id":"rs1","summary":[{"type":"summary_text","text":"public summary"}]},
             {"type":"message","id":"refusal1","role":"assistant","status":"completed",
              "content":[{"type":"refusal","refusal":"cannot help"}]}]),
     ] {
@@ -141,7 +141,9 @@ async fn json_tool_arguments_and_refusal_do_not_become_assistant_text() {
         let body = json_body(response).await;
         let choice = &body["choices"][0];
         assert_eq!(choice["message"]["content"], Value::Null);
-        assert!(!body.to_string().contains("private"));
+        if output[0]["type"] == "reasoning" {
+            assert_eq!(choice["message"]["reasoning_content"], "public summary");
+        }
         if output[0]["type"] == "function_call" {
             assert_eq!(choice["finish_reason"], "tool_calls");
             assert_eq!(
@@ -296,7 +298,7 @@ async fn extra_attributes_and_auxiliary_events_preserve_existing_chat_results() 
     let fixture = Fixture::new(Session::new(vec![
         wire("response.future_auxiliary", json!({"future":true})),
         wire(
-            "response.reasoning_summary_text.delta",
+            "response.future_reasoning.delta",
             json!({"output_index":0,"summary_index":0,"delta":"private"}),
         ),
         created(),
@@ -317,6 +319,45 @@ async fn extra_attributes_and_auxiliary_events_preserve_existing_chat_results() 
             .load(std::sync::atomic::Ordering::SeqCst),
         2
     );
+}
+
+#[tokio::test]
+async fn compaction_state_preserves_chat_answer_without_exposing_ciphertext() {
+    for kind in ["compaction", "compaction_summary", "context_compaction"] {
+        for streaming in [false, true] {
+            let state =
+                json!({"type":kind,"id":"ctx_1","encrypted_content":"opaque-private-state"});
+            let fixture = Fixture::new(Session::new(vec![
+                created(),
+                wire(
+                    "response.output_item.added",
+                    json!({"output_index":0,"item":state}),
+                ),
+                wire(
+                    "response.output_item.done",
+                    json!({"output_index":0,"item":state}),
+                ),
+                completed(json!([state, message("preserved")])),
+            ]))
+            .await;
+            let response = fixture.post(chat_request(streaming)).await;
+            if streaming {
+                let (text, chunks) = sse_body(response).await;
+                assert_eq!(combined(&chunks, "content"), "preserved");
+                assert!(!text.contains("opaque-private-state"));
+                assert_eq!(
+                    chunks.last().unwrap()["choices"][0]["finish_reason"],
+                    "stop"
+                );
+            } else {
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = json_body(response).await;
+                assert_eq!(body["choices"][0]["message"]["content"], "preserved");
+                assert_eq!(body["choices"][0]["finish_reason"], "stop");
+                assert!(!body.to_string().contains("opaque-private-state"));
+            }
+        }
+    }
 }
 
 #[tokio::test]
@@ -355,7 +396,7 @@ async fn incomplete_projects_only_supported_finish_reasons() {
 async fn encrypted_reasoning_stays_private_while_public_text_and_usage_are_projected() {
     let reasoning = json!({
         "id":"rs_private","type":"reasoning",
-        "summary":[{"type":"summary_text","text":"PRIVATE_SUMMARY_MARKER"}],
+        "summary":[{"type":"summary_text","text":"PUBLIC_SUMMARY_MARKER"}],
         "encrypted_content":"OPAQUE_ENCRYPTED_REASONING_MARKER"
     });
     for streaming in [false, true] {
@@ -367,7 +408,7 @@ async fn encrypted_reasoning_stays_private_while_public_text_and_usage_are_proje
             ),
             wire(
                 "response.reasoning_summary_text.delta",
-                json!({"item_id":"rs_private","output_index":0,"summary_index":0,"delta":"PRIVATE_SUMMARY_MARKER"}),
+                json!({"item_id":"rs_private","output_index":0,"summary_index":0,"delta":"PUBLIC_SUMMARY_MARKER"}),
             ),
             wire(
                 "response.output_item.done",
@@ -377,7 +418,13 @@ async fn encrypted_reasoning_stays_private_while_public_text_and_usage_are_proje
                 "response.output_item.done",
                 json!({"output_index":1,"item":message("public answer")}),
             ),
-            completed(json!([reasoning, message("public answer")])),
+            wire("response.completed", json!({"response":{
+                "id":"resp_chat_test","object":"response","model":"upstream-model","status":"completed",
+                "output":[reasoning,message("public answer")],
+                "usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,
+                    "input_tokens_details":{"cached_tokens":3,"cache_write_tokens":4},
+                    "output_tokens_details":{"reasoning_tokens":2,"accepted_prediction_tokens":1}}
+            }})),
         ]))
         .await;
         let mut request = chat_request(streaming);
@@ -406,12 +453,17 @@ async fn encrypted_reasoning_stays_private_while_public_text_and_usage_are_proje
             )
         };
         assert_eq!(content, "public answer");
-        assert!(!body.contains("PRIVATE_SUMMARY_MARKER"), "{body}");
+        assert!(body.contains("PUBLIC_SUMMARY_MARKER"), "{body}");
         assert!(
             !body.contains("OPAQUE_ENCRYPTED_REASONING_MARKER"),
             "{body}"
         );
         assert_eq!(usage["completion_tokens_details"]["reasoning_tokens"], 2);
+        assert_eq!(
+            usage["completion_tokens_details"]["accepted_prediction_tokens"],
+            1
+        );
+        assert_eq!(usage["prompt_tokens_details"]["cache_write_tokens"], 4);
     }
 }
 
@@ -419,7 +471,7 @@ async fn encrypted_reasoning_stays_private_while_public_text_and_usage_are_proje
 async fn unrepresentable_business_output_fails_without_successful_chat_completion() {
     for output in [
         json!({"id":"future_output","type":"future_business_output","payload":"unrepresentable"}),
-        json!({"id":"ig_native","type":"image_generation_call","status":"completed","result":"OPAQUE_IMAGE_MARKER"}),
+        json!({"id":"action_native","type":"computer_call","status":"completed","call_id":"call_action","action":{"type":"click","x":1,"y":2}}),
     ] {
         for streaming in [false, true] {
             let fixture =
@@ -659,4 +711,184 @@ async fn conflicting_text_snapshot_fails_instead_of_appending_replacement_conten
             .iter()
             .any(|chunk| chunk["choices"][0]["finish_reason"].is_string())
     );
+}
+
+#[tokio::test]
+async fn custom_and_function_calls_keep_distinct_shapes_in_json_and_interleaved_streams() {
+    let custom = json!({"id":"ct_1","type":"custom_tool_call","call_id":"call_custom","name":"patch","input":"first\nsecond"});
+    let function = json!({"id":"fc_1","type":"function_call","call_id":"call_function","name":"lookup","arguments":"{}"});
+    for streaming in [false, true] {
+        let mut initial_custom = custom.clone();
+        initial_custom["input"] = json!("");
+        let mut initial_function = function.clone();
+        initial_function["arguments"] = json!("");
+        let fixture = Fixture::new(Session::new(vec![
+            created(),
+            wire(
+                "response.output_item.added",
+                json!({"output_index":0,"item":initial_custom}),
+            ),
+            wire(
+                "response.output_item.added",
+                json!({"output_index":1,"item":initial_function}),
+            ),
+            wire(
+                "response.custom_tool_call_input.delta",
+                json!({"output_index":0,"item_id":"ct_1","delta":"first\n"}),
+            ),
+            wire(
+                "response.function_call_arguments.delta",
+                json!({"output_index":1,"item_id":"fc_1","delta":"{}"}),
+            ),
+            wire(
+                "response.custom_tool_call_input.done",
+                json!({"output_index":0,"item_id":"ct_1","input":"first\nsecond"}),
+            ),
+            completed(json!([custom, function])),
+        ]))
+        .await;
+        let response = fixture.post(chat_request(streaming)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        if streaming {
+            let (_, chunks) = sse_body(response).await;
+            let calls = chunks
+                .iter()
+                .filter_map(|chunk| chunk["choices"][0]["delta"]["tool_calls"].as_array())
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                calls.iter().filter(|call| call["type"] == "custom").count(),
+                1
+            );
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call["type"] == "function")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter_map(|call| call["custom"]["input"].as_str())
+                    .collect::<String>(),
+                "first\nsecond"
+            );
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter_map(|call| call["function"]["arguments"].as_str())
+                    .collect::<String>(),
+                "{}"
+            );
+            assert_eq!(
+                chunks.last().unwrap()["choices"][0]["finish_reason"],
+                "tool_calls"
+            );
+        } else {
+            let body = json_body(response).await;
+            assert_eq!(
+                body["choices"][0]["message"]["tool_calls"],
+                json!([
+                    {"id":"call_custom","type":"custom","custom":{"name":"patch","input":"first\nsecond"}},
+                    {"id":"call_function","type":"function","function":{"name":"lookup","arguments":"{}"}}
+                ])
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn image_previews_and_final_images_are_projected_once_per_distinct_snapshot() {
+    let image = json!({"id":"ig_one","type":"image_generation_call","status":"completed","result":"ZmluYWw=","output_format":"webp"});
+    for streaming in [false, true] {
+        let fixture = Fixture::new(Session::new(vec![
+            created(),
+            wire("response.image_generation_call.partial_image", json!({"output_index":0,"item_id":"ig_one","partial_image_b64":"cHJldmlldw==","output_format":"webp"})),
+            wire("response.output_item.done", json!({"output_index":0,"item":image})),
+            completed(json!([image, message("created")])),
+        ])).await;
+        let response = fixture.post(chat_request(streaming)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        if streaming {
+            let (_, chunks) = sse_body(response).await;
+            let images = chunks
+                .iter()
+                .filter_map(|chunk| chunk["choices"][0]["delta"]["images"].as_array())
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(images.len(), 2);
+            assert_eq!(images[1]["index"], 0);
+            assert_eq!(
+                images[1]["image_url"]["url"],
+                "data:image/webp;base64,ZmluYWw="
+            );
+        } else {
+            let body = json_body(response).await;
+            assert_eq!(
+                body["choices"][0]["message"]["images"][0]["image_url"]["url"],
+                "data:image/webp;base64,ZmluYWw="
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn output_logprobs_survive_json_projection_and_stream_snapshot_deduplication() {
+    let probabilities =
+        json!([{"token":"hello","logprob":-0.1,"bytes":[104,101,108,108,111],"top_logprobs":[]}]);
+    let mut output = message("hello");
+    output["content"][0]["logprobs"] = probabilities.clone();
+    for streaming in [false, true] {
+        let fixture = Fixture::new(Session::new(vec![
+            created(),
+            wire("response.output_text.delta", json!({"output_index":0,"content_index":0,"item_id":"msg_chat_test","delta":"hello","logprobs":probabilities})),
+            wire("response.output_text.done", json!({"output_index":0,"content_index":0,"item_id":"msg_chat_test","text":"hello","logprobs":probabilities})),
+            completed(json!([output])),
+        ])).await;
+        let response = fixture.post(chat_request(streaming)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        if streaming {
+            let (_, chunks) = sse_body(response).await;
+            let values = chunks
+                .iter()
+                .filter_map(|chunk| chunk["choices"][0]["logprobs"]["content"].as_array())
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(json!(values), probabilities);
+        } else {
+            assert_eq!(
+                json_body(response).await["choices"][0]["logprobs"]["content"],
+                probabilities
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn streaming_citation_offsets_follow_delivered_text_when_messages_interleave() {
+    let citation = json!({"type":"url_citation","start_index":2,"end_index":4,"url":"https://example.com","title":"source"});
+    let mut first = message("abcd");
+    first["content"][0]["annotations"] = json!([citation]);
+    let mut second = message("xy");
+    second["id"] = json!("msg_second");
+    let fixture = Fixture::new(Session::new(vec![
+        created(),
+        wire("response.output_text.delta", json!({"output_index":0,"content_index":0,"item_id":"msg_chat_test","delta":"ab"})),
+        wire("response.output_text.delta", json!({"output_index":1,"content_index":0,"item_id":"msg_second","delta":"xy"})),
+        wire("response.output_text.delta", json!({"output_index":0,"content_index":0,"item_id":"msg_chat_test","delta":"cd"})),
+        wire("response.output_text.annotation.added", json!({"output_index":0,"content_index":0,"item_id":"msg_chat_test","annotation_index":0,"annotation":citation})),
+        completed(json!([first, second])),
+    ])).await;
+    let (_, chunks) = sse_body(fixture.post(chat_request(true)).await).await;
+    assert_eq!(combined(&chunks, "content"), "abxycd");
+    let annotations = chunks
+        .iter()
+        .filter_map(|chunk| chunk["choices"][0]["delta"]["annotations"].as_array())
+        .flatten()
+        .collect::<Vec<_>>();
+    assert_eq!(annotations.len(), 1);
+    assert_eq!(annotations[0]["url_citation"]["start_index"], 4);
+    assert_eq!(annotations[0]["url_citation"]["end_index"], 6);
 }

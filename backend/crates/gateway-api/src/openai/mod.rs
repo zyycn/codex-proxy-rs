@@ -25,6 +25,9 @@ pub(crate) fn with_model_request_id(
     let Ok(gateway_id) = HeaderValue::from_str(request_id.as_str()) else {
         return response;
     };
+    response
+        .extensions_mut()
+        .insert(crate::client_error::ExecutionObserved);
     let headers = response.headers_mut();
     let usable = |value: &HeaderValue| value.to_str().is_ok_and(|id| !id.trim().is_empty());
     if !headers.get("x-request-id").is_some_and(usable) {

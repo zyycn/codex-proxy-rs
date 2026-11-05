@@ -469,6 +469,8 @@ request 中间件回程经过 Responses 协议复核后，再由 API 投影成 C
 HTTP 中间件位于转换外侧，request 与 attempt 中间件处理 Responses，实际 endpoint 始终为 `/v1/chat/completions`。
 Chat 复用既有提交、取消与终结生命周期；Core 继续独占路由、重试、交付事实与结算，
 Provider 继续独占上游身份、字段兼容、隐私策略及账号隔离，Chat 层只负责协议映射。
+转换只拥有协议结构：同语义字段交给 Provider 与上游，无对应语义的可选控制项可降级忽略；
+丢失用户输入、客户端动作或无法表达响应的转换须明确失败，不补造结果。
 字段合同见 [Chat Completions](api.md#chat-completions-请求)，插件视图见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 
 Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
@@ -1157,8 +1159,10 @@ Provider 流返回的错误、随附事件与重试决策由 Core 会话持有�
 
 终态观测写入由会话持有；事件等待被取消后，后续 poll 或 detached finalizer 继续同一个 future，
 保留原结果及完成时间，不重复创建请求。观测写入失败仍为 best-effort，不阻断费用结算与准入释放。
-鉴权、解析、路由或准入等尚未进入执行会话的入口拒绝不纳入此请求记录边界；异步投影也仍可能延迟或
-丢弃。排障需结合入口日志，不能将“无记录”解释成没有发生错误
+执行会话前的拒绝不创建模型请求：API 通过统一 HTTP 入口记录鉴权、解码与中间件提前失败的运维事件，
+Core 负责路由、权限、取消、期限与准入拒绝。是否进入 Core 观测由内部交付标记传递，不能用预分配 ID
+或响应头推断，也不在两个 owner 重复记录同一拒绝。入口 ID 关联 HTTP 运维事件，不冒充模型请求 ID。
+异步投影仍可能延迟或丢弃，不能将“无记录”解释成没有发生错误
 
 只有完整交付客户端的成功推理响应进入 Token、延迟和成本聚合。OpenAI Provider 根据请求的
 `generate: false` 将连接与上下文准备归类为 `prewarm`，不信任客户端单独声明的同名 metadata。
@@ -1231,7 +1235,9 @@ Compose 的 `stop_grace_period` 必须覆盖后台关闭预算并留出进程清
 - `host.logging.oauth_recovery` 默认关闭，开启后将 OAuth 原始 AT/RT 写入独立文件；
   与普通文件日志开关分别控制，不输出到普通日志或 stdout。`.runtime/logs` 同样属于敏感数据
 - `host.logging.request_dump` 默认关闭；开启后独立请求转储包含原始请求头和正文，
-  可能包含密钥及用户内容，只能在明确的排障范围内使用，不能作为普通日志公开
+  可能包含密钥及用户内容，只能在明确的排障范围内使用，不能作为普通日志公开。
+  HTTP 数据面在鉴权和解码前按入口 ID 捕获已消费的原始字节，响应沿消费过程捕获；不为转储预读或
+  排空正文，取消、读取错误或未消费的正文标记为不完整
 - 所有接口的日志与诊断观测接收均不得等待队列空位或输出 I/O，请求侧只承担有界采集与入队开销
 - Host 拥有文件日志写入、轮转、保留和关闭流程。文件日志按条数与字节限制内存，WARN / ERROR
   另有预留额度；单个输出使用 FIFO 和后台批量缓冲，正常关闭时排空并同步。
