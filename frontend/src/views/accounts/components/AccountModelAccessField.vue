@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AccountModelAccess } from '@/api'
 
-import { ZCheckbox, ZEmpty, ZFormItem, ZIconButton, ZInput, ZPopover, ZScrollbar, ZSegmented } from '@codex-proxy/ui'
+import { ZEmpty, ZFormItem, ZIconButton, ZInput, ZPopover, ZScrollbar, ZSegmented } from '@codex-proxy/ui'
 
 import { CircleAlert, RefreshCw, Search, TriangleAlert } from '@lucide/vue'
 import { computed, ref, useTemplateRef, watch } from 'vue'
@@ -10,6 +10,7 @@ import { getAccountModels, refreshAccountModels } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
 import { accountModelAccessError, accountModelIdError } from '../utils/modelAccess'
 import AccountModelCleanupPopover from './AccountModelCleanupPopover.vue'
+import AccountModelOption from './AccountModelOption.vue'
 
 const props = withDefaults(defineProps<{
   accountId?: string
@@ -264,18 +265,12 @@ watch(search, () => {
             class="flex min-w-0 items-center rounded-z transition-colors duration-150 motion-reduce:transition-none"
             :class="model?.models.includes(item.id) ? 'bg-z-primary-container text-z-primary-on-container' : 'bg-z-fill-quaternary text-z-text-secondary hover:bg-z-fill-tertiary hover:text-z-text'"
           >
-            <ZCheckbox
-              class="min-h-11 min-w-0 flex-1 px-3 py-2.5"
+            <AccountModelOption
               :model-value="model?.models.includes(item.id) ?? false"
               :label="item.id"
-              :title="item.id"
               :disabled="disabled"
               @update:model-value="select(item.id, $event)"
-            >
-              <template #label>
-                <span class="block truncate">{{ item.id }}</span>
-              </template>
-            </ZCheckbox>
+            />
             <ZPopover v-if="item.unavailable" class="mr-1 shrink-0" trigger="hover-click" placement="top" role="tooltip">
               <template #reference="{ open, id }">
                 <ZIconButton
