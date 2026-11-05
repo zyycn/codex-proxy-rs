@@ -4,7 +4,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use gateway_admin::ports::provider::ProviderAdminRegistry;
 use gateway_core::{engine::provider::ProviderRegistry, time::DeploymentTimeZone};
-use gateway_host::{ConfigError, HostBundle, HostConfig, outbound::HttpClient};
+use gateway_host::{HostBundle, HostConfig, outbound::HttpClient};
 use gateway_store::{StoreBundle, StoreConfig};
 
 use super::BootstrapError;
@@ -33,6 +33,8 @@ impl Environment {
         let timezone = host.timezone;
         let store = store.with_timezone(timezone);
         let plugin_cache = host.runtime_data_dir().join("plugins");
+        // 插件兼容检查只需本地运行版本，管理端版本查询还会等待远端发行服务
+        let version = host.system_update.version.clone();
         let host = match mode {
             Mode::Server => gateway_host::initialize(host).await?,
             Mode::Command | Mode::Help => gateway_host::initialize_command_line(host).await?,
@@ -44,12 +46,6 @@ impl Environment {
             Mode::Help => gateway_store::initialize_read_only(store).await?,
         };
         host.report_startup_ready("Store");
-        let version = host
-            .system_operations()
-            .version()
-            .await
-            .map_err(|_| ConfigError::InvalidField("host.version"))?
-            .version;
         let plugin_http = Arc::new(HttpClient::new()?);
         Ok(Self {
             host,

@@ -5,14 +5,8 @@ use std::fs;
 use std::io;
 use std::process::{ChildStdin, Command, Stdio};
 
-#[cfg(unix)]
-use super::config::environment_value;
 use super::{OperationError, SystemUpdateConfig, internal};
 
-#[cfg(unix)]
-const RESTART_DELAY_ENV: &str = "CPR_RESTART_DELAY_MS";
-#[cfg(unix)]
-const DEFAULT_RESTART_DELAY_MS: u64 = 1_200;
 const RESTART_HANDOFF_ARGUMENT: &str = "--restart-handoff";
 
 /// 组合根在创建运行时前接收重启交接，并取得不含内部交接标记的 CLI 参数
@@ -47,39 +41,16 @@ pub(crate) fn spawn_replacement(
         }
     }
 
-    #[cfg(unix)]
-    let mut command = {
-        let delay_ms = environment_value(RESTART_DELAY_ENV)
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(DEFAULT_RESTART_DELAY_MS);
-        let delay = format!("{}.{:03}", delay_ms / 1_000, delay_ms % 1_000);
-        let mut command = Command::new("/bin/sh");
-        command
-            .arg("-c")
-            .arg("sleep \"$1\"; shift; exec \"$@\"")
-            .arg("codex-proxy-rs-restart")
-            .arg(delay)
-            .arg(&executable)
-            .args(env::args_os().skip(1))
-            .stdin(Stdio::null());
-        command
-    };
-    #[cfg(not(unix))]
-    let mut command = {
-        let mut command = Command::new(&executable);
-        command
-            .arg(RESTART_HANDOFF_ARGUMENT)
-            // 连续重启时移除当前进程已消费的交接标记，保留原始参数及编码
-            .args(
-                env::args_os()
-                    .skip(1)
-                    .skip_while(|value| value == RESTART_HANDOFF_ARGUMENT),
-            )
-            .stdin(Stdio::piped());
-        command
-    };
+    let mut command = Command::new(&executable);
     command
+        .arg(RESTART_HANDOFF_ARGUMENT)
+        // 连续重启时移除当前进程已消费的交接标记，保留原始参数及编码
+        .args(
+            env::args_os()
+                .skip(1)
+                .skip_while(|value| value == RESTART_HANDOFF_ARGUMENT),
+        )
+        .stdin(Stdio::piped())
         .spawn()
         .map(|mut child| child.stdin.take())
         .map_err(|error| internal("无法启动替换进程").with_source(error))

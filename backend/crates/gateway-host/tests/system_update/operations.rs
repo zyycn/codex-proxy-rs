@@ -260,7 +260,7 @@ async fn assert_system_operations_rejected(service: &ProcessSystemOperations, re
 }
 
 #[tokio::test]
-async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
+async fn restart_should_wait_for_service_release_before_starting_replacement() {
     let fixture = Fixture::new();
     let replacement_marker = fixture.root.path().join("replacement-ran");
     fs::copy(
@@ -285,20 +285,17 @@ async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
     tokio::time::timeout(Duration::from_secs(2), shutdown.cancelled())
         .await
         .expect("shutdown requested after spawn");
-    #[cfg(windows)]
-    {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while !fixture.root.path().join("replacement-waiting").exists() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("replacement waiting for old service");
-        assert!(
-            !replacement_marker.exists(),
-            "new service must wait for resource release"
-        );
-    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !fixture.root.path().join("replacement-waiting").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("replacement waiting for old service");
+    assert!(
+        !replacement_marker.exists(),
+        "new service must wait for resource release"
+    );
     drop(service);
     tokio::time::timeout(Duration::from_secs(2), async {
         while !replacement_marker.is_file() {
@@ -326,7 +323,6 @@ async fn restart_should_use_startup_path_after_running_executable_is_renamed() {
                 "system_update::operations::restart_should_use_startup_path_after_running_executable_is_renamed",
             ])
             .env(CHILD_ENV, "1")
-            .env("CPR_RESTART_DELAY_MS", "1200")
             .output()
             .expect("isolated restart test");
         assert!(
@@ -359,13 +355,16 @@ async fn restart_should_use_startup_path_after_running_executable_is_renamed() {
 
     let backup = fixture.backup();
     fs::rename(fixture.executable(), &backup).expect("back up running executable");
-    fixture.write_executable("#!/bin/sh\nprintf new > \"${0%/*}/replacement-version\"\n");
+    fixture.write_executable(
+        "#!/bin/sh\ncat >/dev/null\nprintf new > \"${0%/*}/replacement-version\"\n",
+    );
     assert_eq!(std::env::current_exe().expect("renamed executable"), backup);
 
     service
         .restart(Arc::new(AllowingUpdatePreflight))
         .await
         .expect("restart accepted");
+    drop(service);
     let marker = fixture.root.path().join("replacement-version");
     tokio::time::timeout(Duration::from_secs(5), async {
         while !marker.is_file() {
