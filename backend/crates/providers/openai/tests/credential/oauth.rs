@@ -567,5 +567,5 @@ async fn first_exchange_permits_missing_identity_claims_but_requires_a_parseable
     let error = complete("header.not-base64.signature".to_owned())
         .await
         .expect_err("official local payload parsing rejects malformed id tokens");
-    assert_eq!(error, CodexOAuthAdminError::TokenRejected);
+    assert!(matches!(error, CodexOAuthAdminError::TokenRejected));
 }

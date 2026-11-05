@@ -834,6 +834,113 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
 }
 
 #[tokio::test]
+async fn oauth_connection_failures_preserve_safe_diagnostics_and_release_the_claim() {
+    use std::error::Error as _;
+    use tokio::io::AsyncReadExt as _;
+
+    for timed_out in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let proxy_task = if timed_out {
+            Some(tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let count = socket.read(&mut request).await.unwrap();
+                assert!(request[..count].starts_with(b"CONNECT "));
+                std::future::pending::<()>().await;
+            }))
+        } else {
+            drop(listener);
+            None
+        };
+        let pending = Arc::new(TestOAuthPending::default());
+        let mut config = valid_config();
+        config.config.auth.oauth_token_endpoint =
+            "https://oauth.example.invalid/oauth/token?PRIVATE_URL_MARKER".to_owned();
+        let bundle = provider_openai::initialize(
+            config.config.clone(),
+            provider_ports_with(Arc::new(MemoryAccountStore::default()), pending.clone()),
+            Arc::new(gateway_core::account::UpstreamInfoReader::default()),
+        )
+        .await
+        .unwrap();
+        let context = MutationContext {
+            actor: MutationActor::System,
+            request_id: "oauth-connection-failure".to_owned(),
+        };
+        let started = bundle
+            .admin_provider()
+            .start_authorization(
+                PendingAuthorizationMutation::new(
+                    ProviderKind::new("openai").unwrap(),
+                    AuthorizationMutationTarget::Create {
+                        name: String::new(),
+                    },
+                    AuthorizationOwnerBinding::from_context(&context),
+                )
+                .with_outbound_proxy(Some(
+                    gateway_core::account::OutboundProxy::parse(&format!(
+                        "http://proxy-user:PRIVATE_PROXY_PASSWORD@{address}"
+                    ))
+                    .unwrap(),
+                )),
+            )
+            .await
+            .unwrap();
+        let state = {
+            let values = pending.values.lock().unwrap();
+            let (_, payload, _, _) = values.values().next().unwrap();
+            payload.expose_to_provider()["state"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let error = bundle
+            .admin_provider()
+            .complete_authorization(CompleteAuthorization {
+                settings: None,
+                context,
+                flow_id: started.flow_id,
+                callback_url: format!(
+                    "http://127.0.0.1:1455/auth/callback?code=PRIVATE_CODE&state={state}"
+                ),
+            })
+            .await
+            .unwrap_err();
+        if let Some(task) = proxy_task {
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+        }
+        assert_eq!(error.kind(), ProviderAdminErrorKind::Unavailable);
+        assert_eq!(
+            error.public_message(),
+            Some(if timed_out {
+                "连接 OpenAI 授权服务超时，请检查出站连接"
+            } else {
+                "无法连接 OpenAI 授权服务，请检查出站连接"
+            }),
+        );
+        let mut source = error.source();
+        let transport = loop {
+            let cause = source.expect("transport cause must reach the admin boundary");
+            if let Some(transport) = cause.downcast_ref::<reqwest::Error>() {
+                break transport;
+            }
+            source = cause.source();
+        };
+        assert!(transport.is_connect());
+        assert_eq!(transport.is_timeout(), timed_out);
+        assert!(transport.url().is_none());
+        assert!(!format!("{error:?} {error}").contains("PRIVATE_"));
+        let details =
+            gateway_core::error::ErrorDetails::capture(Some(&error.into()), None, true).unwrap();
+        assert!(!details.as_str().contains("PRIVATE_"));
+        let values = pending.values.lock().unwrap();
+        assert!(values.values().next().unwrap().3.is_none());
+    }
+}
+
+#[tokio::test]
 async fn openai_reauthorization_pending_payload_reuses_the_account_installation_id() {
     let accounts = Arc::new(MemoryAccountStore::default());
     accounts

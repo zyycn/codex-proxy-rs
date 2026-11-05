@@ -318,7 +318,7 @@ pub enum CodexOAuthPendingClaimOutcome {
     InProgress,
 }
 
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum CodexOAuthAdminError {
     #[error("invalid Codex OAuth admin input")]
     InvalidInput,
@@ -332,10 +332,8 @@ pub enum CodexOAuthAdminError {
     CallbackRejected,
     #[error("Codex OAuth token exchange was rejected")]
     TokenRejected,
-    #[error("Codex OAuth upstream is unavailable")]
-    UpstreamUnavailable,
-    #[error("Codex OAuth exchange send state is ambiguous")]
-    Ambiguous,
+    #[error("Codex OAuth token exchange failed")]
+    Exchange(#[source] AuthorizationCodeExchangeError),
     #[error("Codex OAuth pending storage is unavailable")]
     StorageUnavailable,
     #[error("Codex OAuth account mutation failed")]
@@ -702,7 +700,7 @@ impl CodexOAuthAdminService {
                 proxy,
             )
             .await
-            .map_err(map_exchange_error)?;
+            .map_err(CodexOAuthAdminError::Exchange)?;
         let mut secret = tokens.secret;
         if secret.refresh_token.is_none() {
             secret.refresh_token = fallback_refresh_token;
@@ -902,14 +900,6 @@ fn map_authorization_settlement_error(error: CodexOAuthPendingStoreError) -> Adm
         CodexOAuthPendingStoreError::Unavailable => {
             AdminError::unavailable("OpenAI 授权状态存储暂不可用，请稍后重试")
         }
-    }
-}
-
-fn map_exchange_error(error: AuthorizationCodeExchangeError) -> CodexOAuthAdminError {
-    match error {
-        AuthorizationCodeExchangeError::Rejected => CodexOAuthAdminError::TokenRejected,
-        AuthorizationCodeExchangeError::Unavailable => CodexOAuthAdminError::UpstreamUnavailable,
-        AuthorizationCodeExchangeError::Ambiguous => CodexOAuthAdminError::Ambiguous,
     }
 }
 

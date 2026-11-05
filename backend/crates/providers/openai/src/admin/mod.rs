@@ -1867,12 +1867,15 @@ fn log_import_failure(stage: &'static str, error: &'static str) {
 }
 
 fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
+    use crate::credential::token_client::AuthorizationCodeExchangeError as Exchange;
     use CodexOAuthAdminError as Error;
     use ProviderAdminErrorKind as Kind;
-    let (kind, message) = match error {
+    let (kind, message) = match &error {
         Error::InvalidInput => (Kind::Invalid, "OpenAI 授权参数不合法，请重新发起授权"),
         Error::CallbackRejected => (Kind::Invalid, "OpenAI 授权回调校验失败，请重新发起授权"),
-        Error::TokenRejected => (Kind::Invalid, "OpenAI 拒绝了授权码，请重新发起授权"),
+        Error::TokenRejected | Error::Exchange(Exchange::Rejected) => {
+            (Kind::Invalid, "OpenAI 拒绝了授权码，请重新发起授权")
+        }
         Error::Credential => (Kind::Invalid, "OpenAI 授权返回的凭据不完整或无效"),
         Error::NotFound | Error::FlowExpired => (
             Kind::NotFound,
@@ -1882,29 +1885,51 @@ fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
             Kind::Conflict,
             "OpenAI 授权流程正在处理或已被更新，请先检查授权状态",
         ),
-        Error::Ambiguous => (
+        Error::Exchange(Exchange::Ambiguous { .. }) => (
             Kind::Ambiguous,
             "OpenAI 授权结果未知，请先核对账号状态，不要立即重复提交",
         ),
-        Error::UpstreamUnavailable => (
+        Error::Exchange(Exchange::Connection {
+            timed_out: true, ..
+        }) => (
+            Kind::Unavailable,
+            "连接 OpenAI 授权服务超时，请检查出站连接",
+        ),
+        Error::Exchange(Exchange::Connection {
+            timed_out: false, ..
+        }) => (
+            Kind::Unavailable,
+            "无法连接 OpenAI 授权服务，请检查出站连接",
+        ),
+        Error::Exchange(Exchange::Unavailable) => (
             Kind::Unavailable,
             "OpenAI 授权服务暂不可用，请检查出站连接后重试",
         ),
         Error::StorageUnavailable => (Kind::Unavailable, "OpenAI 授权状态存储暂不可用，请稍后重试"),
     };
-    provider_admin_error(kind).with_public_message(message)
+    provider_admin_error(kind)
+        .with_public_message(message)
+        .with_source(error)
 }
 
 const fn oauth_error_code(error: &CodexOAuthAdminError) -> &'static str {
+    use crate::credential::token_client::AuthorizationCodeExchangeError as Exchange;
     match error {
         CodexOAuthAdminError::InvalidInput => "invalid_input",
         CodexOAuthAdminError::NotFound => "not_found",
         CodexOAuthAdminError::Conflict => "conflict",
         CodexOAuthAdminError::FlowExpired => "flow_expired",
         CodexOAuthAdminError::CallbackRejected => "callback_rejected",
-        CodexOAuthAdminError::TokenRejected => "token_rejected",
-        CodexOAuthAdminError::UpstreamUnavailable => "upstream_unavailable",
-        CodexOAuthAdminError::Ambiguous => "ambiguous",
+        CodexOAuthAdminError::TokenRejected
+        | CodexOAuthAdminError::Exchange(Exchange::Rejected) => "token_rejected",
+        CodexOAuthAdminError::Exchange(Exchange::Unavailable) => "upstream_unavailable",
+        CodexOAuthAdminError::Exchange(Exchange::Connection {
+            timed_out: true, ..
+        }) => "connect_timeout",
+        CodexOAuthAdminError::Exchange(Exchange::Connection {
+            timed_out: false, ..
+        }) => "connect_failed",
+        CodexOAuthAdminError::Exchange(Exchange::Ambiguous { .. }) => "ambiguous",
         CodexOAuthAdminError::StorageUnavailable => "storage_unavailable",
         CodexOAuthAdminError::Credential => "credential",
     }

@@ -15,8 +15,9 @@ use std::fmt;
 use std::time::Duration;
 
 const MAX_OAUTH_RESPONSE_BYTES: usize = 64 * 1024;
-const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const TOKEN_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const TOKEN_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+// 总期限为连接后的响应留出预算，避免先于连接期限触发而丢失连接失败分类
+const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Codex Desktop 使用的官方 OAuth public client
 pub const OFFICIAL_CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -332,15 +333,24 @@ impl fmt::Debug for AuthorizationTokenSet {
     }
 }
 
-/// Authorization Code exchange 的低基数失败
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+/// Authorization Code exchange 的失败分类及受控原因链
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum AuthorizationCodeExchangeError {
     #[error("authorization code was rejected")]
     Rejected,
     #[error("authorization code exchange is unavailable")]
     Unavailable,
+    #[error("authorization code connection failed (request URL redacted)")]
+    Connection {
+        timed_out: bool,
+        #[source]
+        source: gateway_core::error::ErrorSource,
+    },
     #[error("authorization code exchange send state is ambiguous")]
-    Ambiguous,
+    Ambiguous {
+        #[source]
+        source: gateway_core::error::ErrorSource,
+    },
 }
 
 #[async_trait]
@@ -646,15 +656,23 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
             .send()
             .await
             .map_err(|error| {
-                if is_safe_to_retry_refresh_transport(&error) {
-                    AuthorizationCodeExchangeError::Unavailable
+                // 连接阶段包含代理隧道和 TLS 握手，此时授权码尚未发往上游
+                if error.is_connect() {
+                    AuthorizationCodeExchangeError::Connection {
+                        timed_out: error.is_timeout(),
+                        source: error.without_url().into(),
+                    }
                 } else {
-                    AuthorizationCodeExchangeError::Ambiguous
+                    AuthorizationCodeExchangeError::Ambiguous {
+                        source: error.without_url().into(),
+                    }
                 }
             })?;
-        let (status, body) = read_bounded_response(response)
-            .await
-            .map_err(|_| AuthorizationCodeExchangeError::Ambiguous)?;
+        let (status, body) = read_bounded_response(response).await.map_err(|error| {
+            AuthorizationCodeExchangeError::Ambiguous {
+                source: error.into(),
+            }
+        })?;
         if !status.is_success() {
             return Err(match status.as_u16() {
                 429 | 500..=599 => AuthorizationCodeExchangeError::Unavailable,
