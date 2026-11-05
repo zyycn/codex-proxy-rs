@@ -88,6 +88,11 @@ impl AnalyticsSnapshot<'_> {
                 .account_fact_states("model_requests", range, account_ids, false, by_model)
                 .await;
         }
+        let retained_counter = if by_model {
+            "request_count"
+        } else {
+            "completed_request_count"
+        };
         let mut states = BTreeMap::new();
         // 排序与分组费用只需要账号总量，不额外展开模型维度
         let (collection, model) = if by_model {
@@ -117,7 +122,7 @@ impl AnalyticsSnapshot<'_> {
                 .push_bind(account_ids)
                 .push("::text[])");
             push_summary_buckets(&mut query, &buckets, seconds);
-            let counters = usage_counter_names();
+            let counters = usage_counter_names(by_model);
             // 每行一次展开指标，避免对可能位于 TOAST 的同一 JSON 反复解码
             query.push(format!(
                 "), totals as (select account_id,model,jsonb_build_object({}) as counts,max(last_used_at) as last_used_at from selected cross join lateral jsonb_to_record(counts) as metric({}) group by account_id,model),
@@ -149,7 +154,7 @@ impl AnalyticsSnapshot<'_> {
             merge_account_states(&mut states, boundary)?;
         }
         if !self.has_pending_requests().await? {
-            states.retain(|_, state| state.count("completed_request_count") > 0);
+            states.retain(|_, state| state.count(retained_counter) > 0);
             return Ok(states);
         }
         let old = self
@@ -192,7 +197,10 @@ impl AnalyticsSnapshot<'_> {
                     .map_err(|_| invalid("invalid account cost difference"))?;
                 state.costs.insert(currency.clone(), value.canonical());
             }
-            repair.insert(key);
+            // 失败终态没有用量极值，更新它们只需调整计数
+            if previous.last_used_at().is_some() {
+                repair.insert(key);
+            }
         }
         merge_account_states(&mut states, current)?;
         // 撤销最大值不能用减法；只对发生源版本替换的账号模型做索引定位
@@ -201,12 +209,12 @@ impl AnalyticsSnapshot<'_> {
             let state = states
                 .get_mut(&(account.clone(), model.clone()))
                 .ok_or_else(|| invalid("pending account state disappeared"))?;
-            if state.count("completed_request_count") == 0 {
+            if state.count(retained_counter) == 0 {
                 *state = MetricState::default();
                 continue;
             }
             let statement = format!(
-                "select started_at from model_requests mr where provider_account_ref=$1 and ($2::text is null or coalesce(upstream_model_id,requested_model_id,'')=$2) and started_at >= $3 and started_at < $4 and {completed} order by started_at desc,id desc limit 1"
+                "select started_at from model_requests mr where provider_account_ref=$1 and ($2::text is null or coalesce(upstream_model_id,requested_model_id,'')=$2) and started_at >= $3 and started_at < $4 and {completed} and mr.recovered_at is null order by started_at desc,id desc limit 1"
             );
             state.last_used_at = sqlx::query_scalar(sqlx::AssertSqlSafe(statement))
                 .bind(&account)
@@ -224,7 +232,7 @@ impl AnalyticsSnapshot<'_> {
                 .collect::<Vec<_>>();
             for currency in zero_currencies {
                 let statement = format!(
-                    "select exists(select 1 from model_requests mr where provider_account_ref=$1 and ($2::text is null or coalesce(upstream_model_id,requested_model_id,'')=$2) and started_at >= $3 and started_at < $4 and {completed} and cost_currency=$5 and cost_amount is not null)"
+                    "select exists(select 1 from model_requests mr where provider_account_ref=$1 and ($2::text is null or coalesce(upstream_model_id,requested_model_id,'')=$2) and started_at >= $3 and started_at < $4 and {completed} and mr.recovered_at is null and cost_currency=$5 and cost_amount is not null)"
                 );
                 let exists: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(statement))
                     .bind(&account)
@@ -240,7 +248,7 @@ impl AnalyticsSnapshot<'_> {
                 }
             }
         }
-        states.retain(|_, state| state.count("completed_request_count") > 0);
+        states.retain(|_, state| state.count(retained_counter) > 0);
         Ok(states)
     }
 
@@ -409,7 +417,10 @@ impl AnalyticsSnapshot<'_> {
             .push_bind(range.start)
             .push(" and mr.started_at < ")
             .push_bind(range.end);
-        push_completed_usage_fact_filter(&mut query, "mr");
+        if !by_model {
+            push_completed_usage_fact_filter(&mut query, "mr");
+        }
+        push_unrecovered_request_filter(&mut query, "mr");
         query.push(" group by mr.provider_account_ref,mr.cost_currency");
         if by_model {
             query.push(",coalesce(mr.upstream_model_id,mr.requested_model_id,'')");
@@ -465,7 +476,7 @@ fn merge_account_states(states: &mut AccountStates, incoming: AccountStates) -> 
     Ok(())
 }
 
-fn usage_counter_names() -> Vec<String> {
+fn usage_counter_names(by_model: bool) -> Vec<String> {
     let mut names = [
         "completed_request_count",
         "image_request_count",
@@ -477,6 +488,19 @@ fn usage_counter_names() -> Vec<String> {
     ]
     .map(str::to_owned)
     .to_vec();
+    if by_model {
+        names.extend(
+            [
+                "request_count",
+                "success_count",
+                "failure_count",
+                "cancelled_count",
+                "incomplete_count",
+                "caller_error_count",
+            ]
+            .map(str::to_owned),
+        );
+    }
     for name in super::metrics::TOKEN_METRICS {
         names.push(name.to_owned());
         names.push(format!("{name}_known_count"));
@@ -491,25 +515,49 @@ fn usage_fact_aggregate_sql(table: &str, by_model: bool) -> String {
         "''::text"
     };
     let mut counters = vec![
-        "'completed_request_count',count(*)".to_owned(),
-        "'image_request_count',count(*) filter(where image_generation_succeeded is true)".to_owned(),
-        "'image_request_failed_count',count(*) filter(where image_generation_succeeded is false)".to_owned(),
-        "'window_total_tokens',coalesce(sum(coalesce(total_tokens,coalesce(input_tokens,0)+coalesce(output_tokens,0))),0)".to_owned(),
+        "'completed_request_count',count(*) filter(where is_completed_usage)".to_owned(),
+        "'image_request_count',count(*) filter(where is_completed_usage and image_generation_succeeded is true)".to_owned(),
+        "'image_request_failed_count',count(*) filter(where is_completed_usage and image_generation_succeeded is false)".to_owned(),
+        "'window_total_tokens',coalesce(sum(coalesce(total_tokens,coalesce(input_tokens,0)+coalesce(output_tokens,0))) filter(where is_completed_usage),0)".to_owned(),
     ];
+    if by_model {
+        counters.push("'request_count',count(*)".to_owned());
+        counters.push(
+            "'caller_error_count',count(*) filter(where client_status_code between 400 and 499)"
+                .to_owned(),
+        );
+        for (outcome, name) in [
+            ("succeeded", "success"),
+            ("failed", "failure"),
+            ("cancelled", "cancelled"),
+            ("incomplete", "incomplete"),
+        ] {
+            counters.push(format!(
+                "'{name}_count',count(*) filter(where outcome='{outcome}')"
+            ));
+        }
+    }
     for name in super::metrics::TOKEN_METRICS {
         counters.push(format!(
-            "'{name}',coalesce(sum({name}),0),'{name}_known_count',count({name})"
+            "'{name}',coalesce(sum({name}) filter(where is_completed_usage),0),'{name}_known_count',count({name}) filter(where is_completed_usage)"
         ));
     }
     for source in ["provider_reported", "calculated", "unavailable"] {
         counters.push(format!(
-            "'{source}_count',count(*) filter(where cost_source='{source}')"
+            "'{source}_count',count(*) filter(where is_completed_usage and cost_source='{source}')"
         ));
     }
+    // 排序与分组费用已在 WHERE 限定完整交付，只在模型健康查询中按指标分别筛选
+    let completed = if by_model {
+        completed_usage_fact_predicate("mr")
+    } else {
+        "true".to_owned()
+    };
     format!("select mr.provider_account_ref as account_id,{model} as model,
-         jsonb_build_object({}) as counts,case when mr.cost_currency is not null and sum(mr.cost_amount) is not null
-           then jsonb_build_object(mr.cost_currency,sum(mr.cost_amount)::text) else '{{}}'::jsonb end as costs,
-         '{{}}'::jsonb as distributions,max(mr.started_at) as last_used_at from {table} mr",counters.join(","))
+         jsonb_build_object({}) as counts,case when mr.cost_currency is not null and sum(mr.cost_amount) filter(where is_completed_usage) is not null
+           then jsonb_build_object(mr.cost_currency,(sum(mr.cost_amount) filter(where is_completed_usage))::text) else '{{}}'::jsonb end as costs,
+         '{{}}'::jsonb as distributions,max(mr.started_at) filter(where is_completed_usage) as last_used_at
+         from (select mr.*,coalesce(({completed}),false) as is_completed_usage from {table} mr) mr",counters.join(","))
 }
 
 pub(crate) async fn account_usage_windows(
@@ -542,13 +590,11 @@ pub(crate) async fn account_usage_windows(
                     continue;
                 }
                 total.merge(state)?;
-                if !model.is_empty()
-                    && let Some(last_used_at) = state.last_used_at()
-                {
+                if !model.is_empty() {
                     models.push(AccountModelUsage {
                         model: model.clone(),
                         request_count: state.count("completed_request_count"),
-                        success_count: state.count("completed_request_count"),
+                        health: state.request_health(),
                         input_tokens: state.optional_count("input_tokens"),
                         output_tokens: state.optional_count("output_tokens"),
                         cached_input_tokens: state.optional_count("cached_input_tokens"),
@@ -561,7 +607,7 @@ pub(crate) async fn account_usage_windows(
                         image_request_failed_count: state.count("image_request_failed_count"),
                         cost_coverage: admin_cost_coverage(state.coverage()),
                         costs: account_costs(state)?,
-                        last_used_at,
+                        last_used_at: state.last_used_at(),
                     });
                 }
             }

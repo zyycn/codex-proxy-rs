@@ -1100,6 +1100,12 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 
 账号列表的 `search` 仅按字面量包含匹配名称和邮箱，不区分大小写；`%`、`_` 和 `\` 按普通字符处理
 
+账号模型用量的 `successRate` 按同一账号、模型和用量窗口内的[服务成功率](#记录范围与统计口径)计算，
+范围为 0–100，无有效样本时为 `null`，`successRateDisplay` 显示 `—`
+
+`requestCount`、Token、费用及 `lastUsedAt` 只统计完整交付的成功推理响应；
+仅有失败记录的模型也返回统计行，没有成功用量时 `lastUsedAt` 为 `null`
+
 账号视图的 `capacity` 返回查询时的普通并发容量：`usedSlots` 不含独立审批池和排队请求，
 读取运行态失败时为 `null`。`totalSlots` 是按[并发与排队](#并发与排队)取值的本机上限，`null` 表示不限。上游独立执行其密钥限制
 

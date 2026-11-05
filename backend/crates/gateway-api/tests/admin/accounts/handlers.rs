@@ -446,7 +446,8 @@ fn account_page_item(
 #[tokio::test]
 async fn account_usage_preserves_periods_cache_counts_and_missing_values() {
     use chrono::Utc;
-    use gateway_admin::model::accounts::AccountUsage;
+    use gateway_admin::model::accounts::{AccountModelUsage, AccountUsage};
+    use gateway_admin::model::observability::RequestHealth;
     use gateway_admin::model::provider_credentials::{
         ProviderQuota, ProviderQuotaWindow, QuotaLocalUsageAttribution,
     };
@@ -497,7 +498,35 @@ async fn account_usage_preserves_periods_cache_counts_and_missing_values() {
                 bucket_start: now,
                 request_count: 1,
             }],
-            models: Vec::new(),
+            models: [
+                (
+                    "mixed",
+                    RequestHealth::from_counts(1, 2, 3, 1, 1),
+                    Some(now),
+                ),
+                ("failed", RequestHealth::from_counts(0, 1, 0, 0, 0), None),
+                ("no-sample", RequestHealth::from_counts(0, 1, 1, 0, 1), None),
+            ]
+            .into_iter()
+            .map(|(model, health, last_used_at)| AccountModelUsage {
+                model: model.to_owned(),
+                request_count: u64::from(last_used_at.is_some()),
+                health,
+                input_tokens: None,
+                output_tokens: None,
+                cached_input_tokens: None,
+                cache_write_input_tokens: None,
+                reasoning_output_tokens: None,
+                image_input_tokens: None,
+                image_output_tokens: None,
+                image_request_count: 0,
+                image_request_failed_count: 0,
+                total_tokens: None,
+                cost_coverage: Default::default(),
+                costs: Vec::new(),
+                last_used_at,
+            })
+            .collect(),
         };
         *fixture.account_usage.lock().unwrap() = vec![local_usage.clone()];
         *fixture.provider_quota.lock().unwrap() =
@@ -545,6 +574,13 @@ async fn account_usage_preserves_periods_cache_counts_and_missing_values() {
                 "general"
             }
         );
+        assert_eq!(usage["models"][0]["successRateDisplay"], "33.3%");
+        assert!((usage["models"][0]["successRate"].as_f64().unwrap() - 100.0 / 3.0).abs() < 0.001);
+        assert_eq!(usage["models"][1]["successRate"], 0.0);
+        assert_eq!(usage["models"][1]["successRateDisplay"], "0.0%");
+        assert!(usage["models"][1]["lastUsedAt"].is_null());
+        assert!(usage["models"][2]["successRate"].is_null());
+        assert_eq!(usage["models"][2]["successRateDisplay"], "—");
         assert_eq!(usage["requestCount"], 1);
         assert_eq!(usage["totalTokens"], 120);
         if authentication_kind == "oauth" {

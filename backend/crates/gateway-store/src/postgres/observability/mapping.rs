@@ -174,7 +174,7 @@ pub(crate) fn admin_account_model_usage(
     admin_observability::AccountModelUsage {
         model: usage.model,
         request_count: usage.request_count,
-        success_count: usage.success_count,
+        health: usage.health,
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         cached_input_tokens: usage.cached_input_tokens,

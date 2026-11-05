@@ -515,7 +515,7 @@ pub struct ModelUsageView {
     pub partial_cost_count: u64,
     pub unknown_cost_count: u64,
     pub costs: Vec<CurrencyCostView>,
-    pub last_used_at: String,
+    pub last_used_at: Option<String>,
     pub last_used_at_display: String,
     pub last_used_at_full_display: Option<String>,
 }

@@ -148,3 +148,162 @@ async fn quota_windows_reconcile_moved_requests_and_pending_deletions_without_wa
     assert!(old.usage.costs.is_empty());
     database.close().await;
 }
+
+#[tokio::test]
+async fn model_success_rates_preserve_usage_across_source_summary_and_pending_reads() {
+    let Some(database) = TestDatabase::create("account_model_health").await else {
+        return;
+    };
+    PgProviderAccountRepository::new(database.pool.clone())
+        .insert_provider_account(account("acct_health", "user-health"))
+        .await
+        .unwrap();
+    let start = chrono::DateTime::from_timestamp(Utc::now().timestamp().div_euclid(3600) * 3600, 0)
+        .unwrap()
+        - TimeDelta::hours(3);
+    for (index, (id, model, outcome, status)) in [
+        ("health_success", "mixed", "succeeded", 200),
+        ("health_retry", "mixed", "succeeded", 200),
+        ("health_failed", "mixed", "failed", 502),
+        ("health_incomplete", "mixed", "incomplete", 200),
+        ("health_cancelled", "mixed", "cancelled", 200),
+        ("health_caller", "mixed", "failed", 400),
+        ("health_recovered", "mixed", "failed", 502),
+        ("health_only_failed", "failed-only", "failed", 502),
+        ("health_only_cancelled", "no-sample", "cancelled", 200),
+        ("health_only_caller", "no-sample", "failed", 400),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        seed_model_request(
+            &database.pool,
+            ModelRequestSeed {
+                request_id: id,
+                account_id: "acct_health",
+                provider_kind: "openai",
+                model,
+                total_tokens: 11,
+                cost_amount: "2.5",
+                started_at: start + TimeDelta::minutes(5 + index as i64 * 5),
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("update model_requests set outcome=$2,client_status_code=$3,attempt_count=case when id='health_retry' then 3 else 1 end where id=$1")
+            .bind(id).bind(outcome).bind(status).execute(&database.pool).await.unwrap();
+    }
+    sqlx::query("update model_requests set recovery_request_id='health_retry',recovered_at=completed_at,recovery_attempt_count=1,request_observation_json=jsonb_set(request_observation_json,'{recovery}',jsonb_build_object('retryDelayMs',0,'totalLatencyMs',1)) where id='health_recovered'")
+        .execute(&database.pool).await.unwrap();
+    let windows = [
+        AccountUsageWindowQuery {
+            account_id: "acct_health".to_owned(),
+            key: "whole".to_owned(),
+            range: TimeRange {
+                start,
+                end: start + TimeDelta::hours(2),
+            },
+        },
+        AccountUsageWindowQuery {
+            account_id: "acct_health".to_owned(),
+            key: "boundary".to_owned(),
+            range: TimeRange {
+                start: start + TimeDelta::minutes(3),
+                end: start + TimeDelta::minutes(117),
+            },
+        },
+    ];
+    let store = admin_account_store(&database.pool);
+    let source = store.load_account_usage_by_windows(&windows).await.unwrap();
+    for result in &source {
+        let usage = &result.usage;
+        assert_eq!((usage.request_count, usage.total_tokens), (2, Some(22)));
+        assert_eq!(usage.costs[0].amount.as_str(), "5");
+        assert_eq!(usage.cost_coverage.provider_reported_count, 2);
+        let mixed = usage
+            .models
+            .iter()
+            .find(|model| model.model == "mixed")
+            .unwrap();
+        assert_eq!(mixed.health.success_rate(), Some(50.0));
+        assert_eq!(mixed.health.success_requests, 2);
+        assert_eq!(mixed.health.failed_requests, 1);
+        assert_eq!(mixed.health.incomplete_requests, 1);
+        let failed = usage
+            .models
+            .iter()
+            .find(|model| model.model == "failed-only")
+            .unwrap();
+        assert_eq!(failed.health.success_rate(), Some(0.0));
+        assert_eq!(failed.last_used_at, None);
+        assert!(failed.costs.is_empty());
+        let excluded = usage
+            .models
+            .iter()
+            .find(|model| model.model == "no-sample")
+            .unwrap();
+        assert_eq!(excluded.health.success_rate(), None);
+    }
+    drain_analytics(&database.pool).await;
+    assert_eq!(
+        store.load_account_usage_by_windows(&windows).await.unwrap(),
+        source
+    );
+    let rolling = store
+        .load_account_usage(windows[0].range, &["acct_health".to_owned()])
+        .await
+        .unwrap();
+    for model in &rolling[0].models {
+        assert_eq!(
+            model.health,
+            source[0]
+                .usage
+                .models
+                .iter()
+                .find(|expected| expected.model == model.model)
+                .unwrap()
+                .health
+        );
+    }
+
+    // 待投影的成功变失败必须撤销费用与最近使用时间，失败变成功则补入当前源版本
+    sqlx::query("update model_requests set outcome='failed',client_status_code=502 where id in ('health_success','health_retry')")
+        .execute(&database.pool).await.unwrap();
+    sqlx::query("update model_requests set outcome='succeeded',client_status_code=200 where id='health_only_failed'")
+        .execute(&database.pool).await.unwrap();
+    sqlx::query("delete from model_requests where id='health_failed'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let pending = store.load_account_usage_by_windows(&windows).await.unwrap();
+    for result in &pending {
+        assert_eq!(
+            (result.usage.request_count, result.usage.total_tokens),
+            (1, Some(11))
+        );
+        assert_eq!(result.usage.costs[0].amount.as_str(), "2.5");
+        let mixed = result
+            .usage
+            .models
+            .iter()
+            .find(|model| model.model == "mixed")
+            .unwrap();
+        assert_eq!(mixed.health.success_rate(), Some(0.0));
+        assert_eq!(mixed.health.failed_requests, 2);
+        assert_eq!(mixed.last_used_at, None);
+        assert!(mixed.costs.is_empty());
+        let recovered = result
+            .usage
+            .models
+            .iter()
+            .find(|model| model.model == "failed-only")
+            .unwrap();
+        assert_eq!(recovered.health.success_rate(), Some(100.0));
+    }
+    drain_analytics(&database.pool).await;
+    assert_eq!(
+        store.load_account_usage_by_windows(&windows).await.unwrap(),
+        pending
+    );
+    database.close().await;
+}

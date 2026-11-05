@@ -42,14 +42,12 @@ pub(crate) async fn provider_account_usage(
         .await?
     {
         totals.entry(account.clone()).or_default().merge(&state)?;
-        if !model.is_empty()
-            && let Some(last_used_at) = state.last_used_at()
-        {
+        if !model.is_empty() {
             models_by_account.entry(account).or_default().push(
                 ProviderAccountModelUsageObservation {
                     model,
                     request_count: state.count("completed_request_count"),
-                    success_count: state.count("completed_request_count"),
+                    health: state.request_health(),
                     input_tokens: state.optional_count("input_tokens"),
                     output_tokens: state.optional_count("output_tokens"),
                     cached_input_tokens: state.optional_count("cached_input_tokens"),
@@ -62,7 +60,7 @@ pub(crate) async fn provider_account_usage(
                     image_request_failed_count: state.count("image_request_failed_count"),
                     cost_coverage: state.coverage(),
                     costs: state.costs()?,
-                    last_used_at,
+                    last_used_at: state.last_used_at(),
                 },
             );
         }
