@@ -23,8 +23,7 @@
       "empty": "當前範圍暫無請求",
       "errors": "錯誤",
       "noSamples": "無樣本",
-      "completionRate": "完成率",
-      "abnormalEnd": "非正常結束"
+      "completionRate": "完成率"
     },
     "billing": {
       "serviceLevel": "服務檔位",

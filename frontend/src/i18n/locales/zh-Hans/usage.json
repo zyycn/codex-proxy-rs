@@ -23,8 +23,7 @@
       "empty": "当前范围暂无请求",
       "errors": "错误",
       "noSamples": "无样本",
-      "completionRate": "完成率",
-      "abnormalEnd": "非正常结束"
+      "completionRate": "完成率"
     },
     "billing": {
       "serviceLevel": "服务档位",

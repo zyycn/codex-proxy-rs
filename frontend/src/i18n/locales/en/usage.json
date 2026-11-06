@@ -23,8 +23,7 @@
       "empty": "No requests in this range",
       "errors": "Errors",
       "noSamples": "No samples",
-      "completionRate": "Completion",
-      "abnormalEnd": "Abnormal"
+      "completionRate": "Completion"
     },
     "billing": {
       "serviceLevel": "Service tier",
