@@ -13,7 +13,7 @@ use super::release::{download_client, validate_download_url};
 use super::{OperationError, invalid, upstream};
 
 pub(crate) const MAX_DOWNLOAD_SIZE: u64 = 500 * 1024 * 1024;
-pub(crate) const MAX_CHECKSUM_SIZE: u64 = 1024 * 1024;
+const MAX_CHECKSUM_SIZE: u64 = 1024 * 1024;
 
 pub(crate) async fn download_file(
     url: &str,
@@ -81,19 +81,18 @@ pub(crate) async fn download_file(
     Ok(())
 }
 
-pub(crate) async fn verify_checksum(
-    file_path: &Path,
+pub(crate) async fn fetch_expected_checksum(
     file_name: &str,
     checksum_url: &str,
     checksum_size: u64,
     api_base: &str,
-) -> Result<(), OperationError> {
+) -> Result<String, OperationError> {
     validate_download_url(checksum_url, api_base)?;
     if checksum_size == 0 || checksum_size > MAX_CHECKSUM_SIZE {
         return Err(invalid("校验文件大小无效或超出限制"));
     }
     let client = download_client(api_base, Duration::from_secs(30))?;
-    let response = client
+    let mut response = client
         .get(checksum_url)
         .header(reqwest::header::ACCEPT_ENCODING, "identity")
         .send()
@@ -105,17 +104,27 @@ pub(crate) async fn verify_checksum(
             response.status().as_u16()
         )));
     }
-    let bytes = response
-        .bytes()
+    let size = checksum_size as usize;
+    let mut bytes = Vec::with_capacity(size);
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| super::error::http("校验文件读取失败", error))?;
-    if bytes.len() > MAX_CHECKSUM_SIZE as usize || bytes.len() as u64 != checksum_size {
+        .map_err(|error| super::error::http("校验文件读取失败", error))?
+    {
+        if chunk.len() > size - bytes.len() {
+            return Err(invalid("校验文件大小与发行信息不一致"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.len() != size {
         return Err(invalid("校验文件大小与发行信息不一致"));
     }
     let body =
         std::str::from_utf8(&bytes).map_err(|_| invalid("校验文件编码无效，无法校验更新包"))?;
-    let expected = checksum_for(body, file_name)
-        .ok_or_else(|| upstream("校验文件中缺少当前更新包的校验值"))?;
+    checksum_for(body, file_name).ok_or_else(|| upstream("校验文件中缺少当前更新包的校验值"))
+}
+
+pub(crate) fn verify_checksum(file_path: &Path, expected: &str) -> Result<(), OperationError> {
     let actual = sha256_file(file_path)?;
     if !expected.eq_ignore_ascii_case(&actual) {
         return Err(upstream("更新包校验失败，请重新下载"));

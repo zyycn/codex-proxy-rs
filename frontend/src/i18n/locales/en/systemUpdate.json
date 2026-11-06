@@ -32,8 +32,6 @@
       "started": "Update has started"
     },
     "errors": {
-      "remoteTargetMissing": "No remote target version was returned",
-      "infoPending": "Wait for update information to finish loading",
       "preRestartCheck": "Pre-restart check failed",
       "restart": "Restart failed, please check again",
       "unconfirmed": "Update task has not been confirmed, check its status and try again",
@@ -46,6 +44,8 @@
     "application": "Application updates",
     "releasePage": "Release page",
     "status": {
+      "warning": "Warning",
+      "unconfirmedVersion": "Unconfirmed",
       "checkingVersion": "Checking for updates",
       "lastFailed": "Last operation failed",
       "updating": "Updating",
@@ -61,9 +61,10 @@
     "targetVersion": "Target version v{version}",
     "releaseNotes": "Release notes",
     "progress": "Update progress",
+    "retryAt": "Retry after",
     "actions": {
       "check": "Check for updates",
-      "install": "Download and update",
+      "install": "Download update",
       "continueRestart": "Continue restart",
       "restart": "Restart now"
     },
@@ -74,12 +75,6 @@
       "requestErrorHelp": "Data and settings are kept, retry from the plugins page"
     },
     "versionAfterRestart": "Version after restart",
-    "confirmation": {
-      "newerVersion": "A newer update is available",
-      "channelChanged": "The latest version of the selected channel has changed",
-      "title": "Confirm update",
-      "description": "Confirm to close this dialog and update to the latest remote target version"
-    },
     "logs": {
       "live": "Live",
       "disconnectedState": "Disconnected",
@@ -93,8 +88,6 @@
     "latestVersion": "Latest in channel",
     "build": "Build",
     "deployment": "Deployment",
-    "displayedTarget": "Displayed target",
-    "remoteTarget": "Latest remote target",
     "buildTypes": {
       "release": "Release build",
       "source": "Source build",

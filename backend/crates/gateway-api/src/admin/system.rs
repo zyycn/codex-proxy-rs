@@ -20,8 +20,9 @@ use axum::{
 use futures::{Stream, StreamExt};
 use gateway_admin::model::system::{
     SystemOperationAccepted, SystemOperationKind, SystemOperationState, SystemOperationStatus,
-    SystemRestartPlan, SystemUpdateChannel, SystemUpdateDetail, SystemUpdateEvent,
-    SystemUpdateEventLevel, SystemUpdatePolicy, SystemUpdateStatus, SystemVersion,
+    SystemRestartPlan, SystemUpdateChannel, SystemUpdateCheck, SystemUpdateDetail,
+    SystemUpdateEvent, SystemUpdateEventLevel, SystemUpdatePolicy, SystemUpdateStatus,
+    SystemVersion,
 };
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +35,10 @@ use super::{
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateDetailQuery {
-    refresh: Option<bool>,
+    #[serde(default)]
+    refresh: bool,
+    #[serde(default)]
+    summary_only: bool,
     channel: Option<SystemUpdateChannel>,
 }
 
@@ -44,10 +48,16 @@ impl UpdateDetailQuery {
         self.channel
     }
 
-    /// 是否强制从发布源刷新
+    /// 摘要只读取发布索引；手动刷新有独立的最短间隔
     #[must_use]
-    pub fn refresh(&self) -> bool {
-        self.refresh.unwrap_or(false)
+    pub const fn check(&self) -> SystemUpdateCheck {
+        if self.summary_only {
+            SystemUpdateCheck::Summary
+        } else if self.refresh {
+            SystemUpdateCheck::Refresh
+        } else {
+            SystemUpdateCheck::Detail
+        }
     }
 }
 
@@ -116,10 +126,12 @@ struct SystemUpdateDetailView {
     update_supported: bool,
     unsupported_reason: Option<String>,
     warning: Option<String>,
+    retry_at: Option<String>,
+    retry_at_display: Option<String>,
 }
 
-impl From<SystemUpdateDetail> for SystemUpdateDetailView {
-    fn from(detail: SystemUpdateDetail) -> Self {
+impl From<(SystemUpdateDetail, crate::time::TimePresenter)> for SystemUpdateDetailView {
+    fn from((detail, time): (SystemUpdateDetail, crate::time::TimePresenter)) -> Self {
         Self {
             deployment_mode_label: deployment_mode_label(&detail.deployment_mode).to_owned(),
             build_type_label: build_type_label(&detail.build_type),
@@ -135,6 +147,8 @@ impl From<SystemUpdateDetail> for SystemUpdateDetailView {
             update_supported: detail.update_supported,
             unsupported_reason: detail.unsupported_reason,
             warning: detail.warning,
+            retry_at: detail.retry_at.map(|at| at.to_rfc3339()),
+            retry_at_display: detail.retry_at.map(|at| time.label(at, "%m-%d %H:%M:%S")),
         }
     }
 }
@@ -284,12 +298,15 @@ where
     let detail = state
         .admin_services()
         .system()
-        .update_detail(query.refresh(), query.channel())
+        .update_detail(query.check(), query.channel())
         .await
         .map_err(map_system_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(SystemUpdateDetailView::from(detail)),
+        AdminEnvelope::ok(SystemUpdateDetailView::from((
+            detail,
+            crate::time::TimePresenter::new(state.admin_services().timezone()),
+        ))),
     ))
 }
 

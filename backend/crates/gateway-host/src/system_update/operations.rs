@@ -5,7 +5,7 @@ use std::{fs, path::Path, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use gateway_admin::model::system::{
     SystemOperationAccepted, SystemOperationKind, SystemUpdateChannel as UpdateChannel,
-    SystemUpdateDetail, SystemUpdateStatus, SystemVersion,
+    SystemUpdateCheck, SystemUpdateDetail, SystemUpdateStatus, SystemVersion,
 };
 use gateway_admin::ports::system::{
     SystemOperationErrorKind, SystemOperations, SystemRestartPreflight, SystemUpdateCandidate,
@@ -16,15 +16,16 @@ use serde::Deserialize;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, broadcast};
 
 use super::archive::extract_release;
+use super::discovery::ReleaseCache;
 use super::download::{
-    MAX_CHECKSUM_SIZE, MAX_DOWNLOAD_SIZE, download_file, format_bytes, verify_checksum,
+    MAX_DOWNLOAD_SIZE, download_file, fetch_expected_checksum, format_bytes, verify_checksum,
 };
 use super::events::UpdateEvents;
 use super::installation::{OFFICIAL_PLUGIN_MANIFEST, ReleaseFiles};
 use super::process::spawn_replacement;
 use super::release::{
-    GitHubRelease, ReleaseCache, base_update_detail, confirmed_target, detail_from_release,
-    fetch_latest, select_archive, update_policy, validate_update_target, version_channel,
+    GitHubRelease, base_update_detail, confirmed_target, select_archive, update_policy,
+    validate_download_url, validate_update_target, version_channel,
 };
 use super::state::{
     OperationFileLock, UpdateOperation, UpdateTempDir, finish, operation_id, read_status,
@@ -180,31 +181,15 @@ impl ProcessSystemOperations {
         operation_id: &str,
         preflight: &dyn SystemUpdatePreflight,
     ) -> Result<ReleaseFiles, OperationError> {
-        let repository = self
-            .config
-            .update_repository
-            .as_deref()
-            .ok_or_else(|| conflict("未配置更新仓库 CPR_UPDATE_REPOSITORY"))?;
         self.events.info(
             Some(operation_id),
             Some("release"),
             "正在获取最新 Release 信息",
         );
-        let release = fetch_latest(
-            &self.config.github_api_base,
-            repository,
-            &self.config.version,
-            channel,
-        )
-        .await?
-        .ok_or_else(|| conflict("当前发行通道没有可用更新"))?;
-        let detail = detail_from_release(&self.config, &release, channel);
-        if detail.latest_version != target {
-            return Err(conflict("远端最新版本已变化，请重新确认"));
-        }
-        if !detail.has_update {
-            return Err(conflict("当前没有可用更新"));
-        }
+        let release = self
+            .release_cache
+            .install(&self.config, channel, target, &self.diagnostics)
+            .await?;
         self.events.info(
             Some(operation_id),
             Some("prepare"),
@@ -246,17 +231,25 @@ impl ProcessSystemOperations {
             .iter()
             .find(|asset| asset.name == "checksums.txt")
             .ok_or_else(|| upstream("发行版本缺少 checksums.txt 校验文件，无法安全更新"))?;
-        if checksum.size == 0 || checksum.size > MAX_CHECKSUM_SIZE {
-            return Err(invalid("校验文件大小无效或超出限制"));
-        }
-        self.events
-            .info(Some(operation_id), Some("prepare"), "正在创建临时更新目录");
+        validate_download_url(&archive.browser_download_url, &self.config.github_api_base)?;
+        self.events.info(
+            Some(operation_id),
+            Some("prepare"),
+            "正在获取更新包的 SHA-256 校验值",
+        );
+        let expected_checksum = fetch_expected_checksum(
+            &archive.name,
+            &checksum.browser_download_url,
+            checksum.size,
+            &self.config.github_api_base,
+        )
+        .await?;
         fs::create_dir_all(&self.config.update_temp_dir)
             .map_err(|error| internal("无法创建更新临时目录").with_source(error))?;
         let temp_root = fs::canonicalize(&self.config.update_temp_dir)
             .map_err(|error| internal("无法确定更新临时目录位置").with_source(error))?;
         let temp = UpdateTempDir::create(&temp_root)?;
-        let archive_path = temp.path().join(&archive.name);
+        let archive_path = temp.path().join("release.tar.gz");
         self.events
             .info(Some(operation_id), Some("download"), "开始下载更新包");
         download_file(
@@ -272,14 +265,8 @@ impl ProcessSystemOperations {
             .success(Some(operation_id), Some("download"), "更新包下载完成");
         self.events
             .info(Some(operation_id), Some("checksum"), "正在校验 checksum");
-        verify_checksum(
-            &archive_path,
-            &archive.name,
-            &checksum.browser_download_url,
-            checksum.size,
-            &self.config.github_api_base,
-        )
-        .await?;
+        // 安装包是最后一项远端资源，后续只使用已经固定的目标和校验值
+        verify_checksum(&archive_path, &expected_checksum)?;
         self.events
             .success(Some(operation_id), Some("checksum"), "checksum 校验通过");
         self.events
@@ -368,7 +355,10 @@ impl ProcessSystemOperations {
 #[async_trait]
 impl SystemOperations for ProcessSystemOperations {
     async fn version(&self) -> Result<SystemVersion, OperationError> {
-        let detail = self.update_detail(false, None).await?;
+        let detail = self
+            .release_cache
+            .local(&self.config, self.resolve_channel(None)?)
+            .await;
         Ok(SystemVersion {
             version: self.config.version.clone(),
             git_sha: self.config.git_sha.clone(),
@@ -386,25 +376,22 @@ impl SystemOperations for ProcessSystemOperations {
 
     async fn update_detail(
         &self,
-        refresh: bool,
+        check: SystemUpdateCheck,
         channel: Option<UpdateChannel>,
     ) -> Result<SystemUpdateDetail, OperationError> {
         let channel = self.resolve_channel(channel)?;
         match self
             .release_cache
-            .detail(&self.config, refresh, channel)
+            .detail(&self.config, channel, check, &self.diagnostics)
             .await
         {
             Ok(detail) => Ok(detail),
-            Err(error) => {
-                self.diagnostics.record("check_release", None, &error).await;
-                Ok(base_update_detail(
-                    &self.config,
-                    channel,
-                    self.config.update_support_error(),
-                    Some(error.message().to_owned()),
-                ))
-            }
+            Err(error) => Ok(base_update_detail(
+                &self.config,
+                channel,
+                self.config.update_support_error(),
+                Some(&error),
+            )),
         }
     }
 

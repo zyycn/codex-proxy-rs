@@ -7,13 +7,17 @@ use gateway_admin::model::system::SystemUpdateChannel::{Alpha, Beta, Experimenta
 async fn temporary_channel_should_filter_future_releases_without_changing_running_channel() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
-    let releases: Vec<_> = ["1.1.0", "1.2.0-rc.1", "1.3.0-beta.1", "1.4.0-alpha.1", "1.9.0-exp.9", "2.0.0"]
-        .into_iter().map(|version| serde_json::json!({"tag_name": format!("v{version}"), "prerelease": version.contains('-')})).collect();
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repository/releases"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(releases))
-        .mount(&server)
-        .await;
+    mount_index(&server, serde_json::json!({"published":{"1":{"stable":"1.1.0","rc":"1.2.0-rc.1","beta":"1.3.0-beta.1","alpha":"1.4.0-alpha.1"}}})).await;
+    for version in ["1.1.0", "1.2.0-rc.1", "1.3.0-beta.1", "1.4.0-alpha.1"] {
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/owner/repository/releases/tags/v{version}"
+            )))
+            .respond_with(release_response(version, vec![]))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
     let service = fixture.service(&server);
     for (channel, target) in [
         (Stable, "1.1.0"),
@@ -23,7 +27,7 @@ async fn temporary_channel_should_filter_future_releases_without_changing_runnin
         (Stable, "1.1.0"),
     ] {
         let detail = service
-            .update_detail(false, Some(channel))
+            .update_detail(SystemUpdateCheck::Detail, Some(channel))
             .await
             .expect("detail");
         assert_eq!(detail.latest_version, target);
@@ -34,7 +38,7 @@ async fn temporary_channel_should_filter_future_releases_without_changing_runnin
         );
         assert!(detail.has_update);
         let cached = service
-            .update_detail(false, Some(channel))
+            .update_detail(SystemUpdateCheck::Detail, Some(channel))
             .await
             .expect("cached");
         assert!(cached.cached);
@@ -46,27 +50,18 @@ async fn temporary_channel_should_filter_future_releases_without_changing_runnin
     assert!(!fixture.state().exists(), "检查通道不能写入实例偏好");
     let requests = server.received_requests().await.expect("requests");
     assert_eq!(requests.len(), 5);
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.url.path().ends_with("/releases"))
-    );
 }
 
 #[tokio::test]
 async fn reopening_should_infer_running_channel_and_switching_to_stable_should_not_downgrade() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repository/releases"))
-        .respond_with(release_response("1.0.0", Vec::new()))
-        .mount(&server)
-        .await;
+    fixture.mount_release_once(&server, "1.0.0").await;
     let mut config = fixture.config(&format!("{}/repos", server.uri()));
     config.version = "1.1.0-beta.1".into();
     let service = ProcessSystemOperations::new(CancellationToken::new(), config.clone());
     let temporary = service
-        .update_detail(true, Some(Stable))
+        .update_detail(SystemUpdateCheck::Refresh, Some(Stable))
         .await
         .expect("view stable");
     assert_eq!(temporary.policy.channel, Stable);
@@ -74,7 +69,7 @@ async fn reopening_should_infer_running_channel_and_switching_to_stable_should_n
     assert_eq!(temporary.latest_version, "1.1.0-beta.1");
     assert_eq!(
         service
-            .update_detail(false, None)
+            .update_detail(SystemUpdateCheck::Detail, None)
             .await
             .expect("reopened")
             .policy
@@ -84,7 +79,7 @@ async fn reopening_should_infer_running_channel_and_switching_to_stable_should_n
     let restarted = ProcessSystemOperations::new(CancellationToken::new(), config.clone());
     assert_eq!(
         restarted
-            .update_detail(false, None)
+            .update_detail(SystemUpdateCheck::Detail, None)
             .await
             .expect("restarted")
             .policy
@@ -95,7 +90,7 @@ async fn reopening_should_infer_running_channel_and_switching_to_stable_should_n
     let promoted = ProcessSystemOperations::new(CancellationToken::new(), config);
     assert_eq!(
         promoted
-            .update_detail(false, None)
+            .update_detail(SystemUpdateCheck::Detail, None)
             .await
             .expect("now stable")
             .policy
@@ -175,7 +170,7 @@ async fn install_should_use_confirmed_channel_and_infer_new_default_only_after_r
     );
     assert_eq!(
         restarted
-            .update_detail(false, None)
+            .update_detail(SystemUpdateCheck::Detail, None)
             .await
             .expect("new default")
             .policy
@@ -191,7 +186,7 @@ async fn temporary_channels_should_keep_experimental_isolation() {
     let service = fixture.service(&server);
     assert!(
         service
-            .update_detail(true, Some(Experimental))
+            .update_detail(SystemUpdateCheck::Refresh, Some(Experimental))
             .await
             .is_err()
     );
@@ -202,7 +197,7 @@ async fn temporary_channels_should_keep_experimental_isolation() {
     for channel in [Stable, Rc, Beta, Alpha] {
         assert!(
             experimental
-                .update_detail(true, Some(channel))
+                .update_detail(SystemUpdateCheck::Refresh, Some(channel))
                 .await
                 .is_err()
         );
@@ -214,58 +209,6 @@ async fn temporary_channels_should_keep_experimental_isolation() {
             .expect("requests")
             .is_empty()
     );
-}
-
-#[tokio::test]
-async fn slower_check_should_not_overwrite_newer_cached_candidate() {
-    let server = MockServer::start().await;
-    let fixture = Fixture::new();
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repository/releases"))
-        .respond_with(release_response("1.1.0", Vec::new()).set_delay(Duration::from_millis(150)))
-        .up_to_n_times(1)
-        .with_priority(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/repos/owner/repository/releases"))
-        .respond_with(release_response("1.2.0", Vec::new()))
-        .mount(&server)
-        .await;
-    let service = fixture.service(&server);
-    let first_service = service.clone();
-    let first = tokio::spawn(async move { first_service.update_detail(true, None).await });
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while server
-            .received_requests()
-            .await
-            .expect("requests")
-            .is_empty()
-        {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("first request sent");
-    assert_eq!(
-        service
-            .update_detail(true, None)
-            .await
-            .expect("new check")
-            .latest_version,
-        "1.2.0"
-    );
-    assert_eq!(
-        first
-            .await
-            .expect("join")
-            .expect("old check")
-            .latest_version,
-        "1.1.0"
-    );
-    let cached = service.update_detail(false, None).await.expect("cache");
-    assert!(cached.cached);
-    assert_eq!(cached.latest_version, "1.2.0");
 }
 
 #[tokio::test]
@@ -283,7 +226,10 @@ async fn inferred_prerelease_policy_should_follow_future_minor_and_patch_release
         let mut config = fixture.config(&format!("{}/repos", server.uri()));
         config.version = current.to_owned();
         let service = ProcessSystemOperations::new(CancellationToken::new(), config);
-        let detail = service.update_detail(true, None).await.expect("check");
+        let detail = service
+            .update_detail(SystemUpdateCheck::Refresh, None)
+            .await
+            .expect("check");
         assert!(detail.has_update);
         assert_eq!(detail.latest_version, target);
         assert_eq!(

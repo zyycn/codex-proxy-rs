@@ -793,7 +793,7 @@ async fn prerelease_updates_should_install_later_stages_and_stable_release() {
         let service = ProcessSystemOperations::new(CancellationToken::new(), config);
         assert!(
             service
-                .update_detail(true, None)
+                .update_detail(SystemUpdateCheck::Refresh, None)
                 .await
                 .expect("detail")
                 .has_update

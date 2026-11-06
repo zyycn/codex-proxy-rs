@@ -33,7 +33,7 @@ async fn manual_image_replacement_should_clear_pending_state_and_invalid_backup(
     );
     assert!(
         redeployed
-            .update_detail(true, None)
+            .update_detail(SystemUpdateCheck::Refresh, None)
             .await
             .expect("check")
             .has_update

@@ -48,7 +48,7 @@ watch(desktop, (isDesktop) => {
 })
 
 onMounted(() => {
-  void systemUpdateStore.loadVersion().catch(() => undefined)
+  void systemUpdateStore.loadSidebarVersion().catch(() => undefined)
 })
 
 onBeforeUnmount(() => {
