@@ -359,6 +359,141 @@ async fn strict_bound_waiters_recheck_only_their_account_until_capacity_opens() 
 }
 
 #[tokio::test]
+async fn strict_queue_failure_reselects_once_and_only_rebinds_after_admission() {
+    use gateway_core::concurrency::{ConcurrencyQueuePolicy, QueueRejection};
+    for (full, spare, enabled) in [
+        (false, true, true),
+        (true, true, true),
+        (false, false, true),
+        (true, false, true),
+        (false, true, false),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_first", "test-first");
+        create_account(&store, "acct_second", "test-second");
+        let first = ProviderAccountId::new("acct_first").unwrap();
+        let second = ProviderAccountId::new("acct_second").unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        let selector = selector_with_runtime(
+            &store,
+            leases.clone(),
+            Arc::new(MemorySessionAffinity::default()),
+            Arc::new(AccountFeedbackStats::default()),
+            Arc::new(MemoryCooldownPort::new()),
+        );
+        let policy = account_policy()
+            .with_queue(ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout: Duration::from_millis(150),
+            })
+            .with_switch_account_on_queue_failure(enabled);
+        let context = || projection_attempt("key_codex_contract", contract_account_scope(), policy);
+        let key = ProviderSessionAffinityKey::try_new("strict-queue-failure").unwrap();
+        assert_eq!(
+            select(&selector, &context(), &key, "gpt-5.4")
+                .await
+                .unwrap()
+                .account_id(),
+            &first
+        );
+        leases
+            .signals
+            .lock()
+            .unwrap()
+            .insert(first.clone(), signal(2));
+        if !spare {
+            leases
+                .signals
+                .lock()
+                .unwrap()
+                .insert(second.clone(), signal(2));
+        }
+        let head_ctx = context();
+        let mut head = Box::pin(select(&selector, &head_ctx, &key, "gpt-5.4"));
+        if full {
+            assert!(head.as_mut().now_or_never().is_none());
+        }
+        let ctx = context();
+        let mut pending = Box::pin(select(&selector, &ctx, &key, "gpt-5.4"));
+        if !full {
+            // B 即使空闲也不能在 A 的等待期内直接分流
+            assert!(pending.as_mut().now_or_never().is_none());
+        }
+        let result = pending.await;
+        let expected = if spare && enabled {
+            assert_eq!(result.unwrap().account_id(), &second);
+            &second
+        } else {
+            let reason = if full {
+                QueueRejection::Full
+            } else {
+                QueueRejection::Timeout
+            };
+            assert!(
+                matches!(result, Err(CredentialSelectionError::QueueRejected(actual)) if actual == reason)
+            );
+            &first
+        };
+        drop(head);
+        leases.signals.lock().unwrap().clear();
+        assert_eq!(
+            select(&selector, &context(), &key, "gpt-5.4")
+                .await
+                .unwrap()
+                .account_id(),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn account_queue_timeout_can_reselect_for_preferred_and_sessionless_requests() {
+    for mode in [AccountAffinity::Preferred, AccountAffinity::Relaxed] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_first", "test-first");
+        create_account(&store, "acct_second", "test-second");
+        let first = ProviderAccountId::new("acct_first").unwrap();
+        let second = ProviderAccountId::new("acct_second").unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        let selector = selector(&store, leases.clone());
+        let policy = account_policy()
+            .with_openai_account_affinity(mode)
+            .with_switch_account_on_queue_failure(true)
+            .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout: Duration::from_millis(30),
+            });
+        let ctx = projection_attempt("key_codex_contract", contract_account_scope(), policy);
+        let key = ProviderSessionAffinityKey::try_new("queue-fallback").unwrap();
+        let request = SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap(),
+            attempt: &ctx,
+            session_affinity_key: (mode == AccountAffinity::Preferred).then_some(&key),
+        };
+        assert_eq!(
+            selector.select(&request).await.unwrap().account_id(),
+            &first
+        );
+        for id in [&first, &second] {
+            leases.signals.lock().unwrap().insert(id.clone(), signal(2));
+        }
+        let mut pending = Box::pin(selector.select(&request));
+        assert!(pending.as_mut().now_or_never().is_none());
+        // B 在排队后恢复，等待时限短于队首重查周期，只有最后一次立即选号能取到 B
+        leases.signals.lock().unwrap().remove(&second);
+        assert_eq!(pending.await.unwrap().account_id(), &second);
+        if mode == AccountAffinity::Preferred {
+            leases.signals.lock().unwrap().remove(&first);
+            assert_eq!(
+                selector.select(&request).await.unwrap().account_id(),
+                &first
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn movable_waiters_use_other_accounts_even_before_queue_promotion() {
     for (mode, has_session, bind_session) in [
         (AccountAffinity::Relaxed, false, false),

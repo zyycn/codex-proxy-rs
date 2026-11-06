@@ -155,7 +155,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     refresh_concurrency, max_concurrent_per_account,
                     rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
-                    min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
+                    min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
                     account_error_protection_json, account_error_protection_revision,
                     account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent
              from runtime_settings where id = 1",
@@ -311,7 +311,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 refresh_concurrency, max_concurrent_per_account,
                 rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
-                min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
+                min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
                 account_error_protection_json, account_error_protection_revision,
                 account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent
          from runtime_settings where id = 1",
@@ -373,7 +373,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
 	                 min_codex_cli_version = $10,
                      max_waiting_per_key = $11,
                      max_waiting_per_account = $12,
-                     concurrency_wait_timeout_seconds = $13,
+                     key_queue_timeout_seconds = $13,
                      account_error_protection_revision = case when account_error_protection_json is distinct from $14::jsonb then config_revision + 1 else account_error_protection_revision end,
                      account_error_protection_json = $14,
                      request_location_json = $15,
@@ -392,6 +392,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      reset_credit_lead_minutes = $29,
                      reset_credit_max_weekly_remaining_percent = $30,
                      max_retry_after_seconds = $31,
+                     account_queue_timeout_seconds = $32,
+                     switch_account_on_queue_failure = $33,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -408,7 +410,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.values.min_codex_cli_version.as_deref())
     .bind(i64::from(update.values.max_waiting_per_key))
     .bind(i64::from(update.values.max_waiting_per_account))
-    .bind(i64::from(update.values.concurrency_wait_timeout_seconds))
+    .bind(i64::from(update.values.key_queue_timeout_seconds))
     .bind(sqlx::types::Json(&update.values.account_error_protection))
     .bind(sqlx::types::Json(
         update.values.request_location
@@ -435,6 +437,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(i64::from(update.values.reset_credit_lead_minutes))
     .bind(update.values.reset_credit_max_weekly_remaining_percent.map(i64::from))
     .bind(i64::from(update.values.max_retry_after_seconds))
+    .bind(i64::from(update.values.account_queue_timeout_seconds))
+    .bind(update.values.switch_account_on_queue_failure)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("update runtime settings in transaction", source))?
@@ -521,7 +525,9 @@ struct RuntimeSettingsRow {
     updated_at: DateTime<Utc>,
     max_waiting_per_key: i64,
     max_waiting_per_account: i64,
-    concurrency_wait_timeout_seconds: i64,
+    key_queue_timeout_seconds: i64,
+    account_queue_timeout_seconds: i64,
+    switch_account_on_queue_failure: bool,
     max_retry_after_seconds: i64,
     openai_guardian_reserved_concurrency: i64,
     openai_account_affinity: String,
@@ -580,7 +586,9 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
             min_codex_cli_version: row.min_codex_cli_version,
             max_waiting_per_key: to_u32(row.max_waiting_per_key)?,
             max_waiting_per_account: to_u32(row.max_waiting_per_account)?,
-            concurrency_wait_timeout_seconds: to_u32(row.concurrency_wait_timeout_seconds)?,
+            key_queue_timeout_seconds: to_u32(row.key_queue_timeout_seconds)?,
+            account_queue_timeout_seconds: to_u32(row.account_queue_timeout_seconds)?,
+            switch_account_on_queue_failure: row.switch_account_on_queue_failure,
             max_retry_after_seconds: to_u32(row.max_retry_after_seconds)?,
             openai_guardian_reserved_concurrency: to_u32(row.openai_guardian_reserved_concurrency)?,
             openai_account_affinity: gateway_core::account::AccountAffinity::parse(

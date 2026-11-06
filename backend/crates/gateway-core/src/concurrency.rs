@@ -19,7 +19,7 @@ pub struct ConcurrencyQueuePolicy {
     pub timeout: Duration,
 }
 
-/// 从首次入队开始计时，密钥、账号与后续重试共享同一个截止时刻
+/// 从首次入队开始计时，同一层的重新排队与重试共享截止时刻
 #[derive(Debug, Clone, Default)]
 pub struct ConcurrencyWaitBudget {
     deadline: Arc<OnceLock<Instant>>,

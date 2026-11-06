@@ -208,7 +208,9 @@ async fn request_settings_reach_query_terminal_without_mutating_authenticated_ba
             settings: Some(|settings| {
                 let mut runtime = serde_json::to_value(&settings.runtime).unwrap();
                 runtime["model_mappings"] = serde_json::json!({"model-a":"plugin-model"});
-                runtime["concurrency_wait_timeout_seconds"] = serde_json::json!(30);
+                runtime["key_queue_timeout_seconds"] = serde_json::json!(30);
+                runtime["account_queue_timeout_seconds"] = serde_json::json!(30);
+                runtime["switch_account_on_queue_failure"] = serde_json::json!(false);
                 settings.runtime = serde_json::from_value(runtime).unwrap();
                 settings.fast_mode = FastMode::Disabled;
             }),

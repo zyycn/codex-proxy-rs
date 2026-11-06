@@ -245,6 +245,10 @@
       "enterNewPasswordAgain": "Enter new password again",
       "saveAndLogInAgain": "Save and log in again"
     },
+    "units": {
+      "seconds": "seconds",
+      "inSeconds": "{label} (seconds)"
+    },
     "concurrency": {
       "title": "Concurrency and retries",
       "accountLimit": {
@@ -255,17 +259,23 @@
       "keyQueueHelp": "Per API key, 0 disables queuing",
       "accountQueueCapacity": "Account queue capacity",
       "accountQueueHelp": "Per account, 0 disables queuing",
-      "queueTimeoutLabel": "Queue timeout (s)",
-      "queueTimeoutHelp": "Shared by both queues, 1–120 seconds",
+      "keyTimeout": "API key queue timeout",
+      "keyTimeoutHelp": "Maximum wait for a key slot before returning an error",
+      "accountTimeout": "Account queue timeout",
+      "accountTimeoutHelp": "Starts on first account queue entry and continues across retries",
+      "queueFailure": "When the account queue is full or times out",
+      "queueFailureHelp": "Try another account with room. If switching is not possible, return the queue error.",
+      "queueFailureHelpTitle": "Account switching rules",
+      "queueFailureDetails": "Check once without queuing again. Requests pinned to an account, native continuations, and requests bound to a parent session cannot switch on their own.",
+      "returnError": "Return error",
+      "trySwitch": "Try another account",
       "autoReview": {
         "label": "Reserved auto review slots",
         "description": "Extra slots per Codex account, 0 shares regular concurrency",
         "helpTitle": "About auto review concurrency"
       },
-      "queueTimeoutHelpTitle": "About queue timeout",
-      "queueTimeoutDetails": "The API key and account queues share this timeout, measured from the first queue entry",
       "retryAfter": {
-        "label": "Upstream retry wait limit (s)",
+        "label": "Upstream retry wait limit",
         "help": "Try another account above the limit",
         "helpTitle": "About upstream retry waits",
         "details": "Defaults to 240 seconds. Limits each Retry-After wait, not the total request duration. Above the limit, try another account; return the error if none is available. Set to 0 to reject positive waits. Account rotation still follows the rotation limit and request replay conditions."
@@ -333,7 +343,7 @@
     },
     "tokenRefresh": {
       "title": "Credential refresh",
-      "leadTimeLabel": "Refresh lead time (s)",
+      "leadTimeLabel": "Refresh lead time",
       "leadTimeHelp": "Refresh access tokens before they expire",
       "concurrencyLabel": "Refresh concurrency limit",
       "concurrencyHelp": "Concurrent refresh limit, lower to reduce rate limiting"
@@ -641,7 +651,6 @@
       "countValidity": "Count validity",
       "windowHelp": "Each matching failure renews the count, a successful call clears it",
       "countValiditySeconds": "Count validity in seconds",
-      "seconds": "seconds",
       "cooldownTime": "Cooldown duration",
       "cooldownHelp": "A failed probe starts another cooldown",
       "cooldownTimeInSeconds": "Cooldown duration in seconds",

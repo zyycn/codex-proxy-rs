@@ -74,13 +74,12 @@ impl CompiledSettings {
         super::validate_request_limits(
             settings.max_waiting_per_key,
             settings.max_waiting_per_account,
-            settings.concurrency_wait_timeout_seconds,
+            settings.key_queue_timeout_seconds,
+            settings.account_queue_timeout_seconds,
             settings.max_account_rotations,
             settings.openai_session_affinity_ttl_hours,
         )
         .map_err(|_| InvalidSettings)?;
-        let queue_timeout =
-            Duration::from_secs(u64::from(settings.concurrency_wait_timeout_seconds));
         let responses_max_decompressed_body_bytes =
             super::response_body_limit(settings.responses_max_decompressed_body_bytes)
                 .map_err(|_| InvalidSettings)?;
@@ -104,11 +103,12 @@ impl CompiledSettings {
         .with_smart_scheduling(settings.smart_scheduling)
         .with_queue(ConcurrencyQueuePolicy {
             max_waiting: settings.max_waiting_per_account,
-            timeout: queue_timeout,
-        });
+            timeout: Duration::from_secs(u64::from(settings.account_queue_timeout_seconds)),
+        })
+        .with_switch_account_on_queue_failure(settings.switch_account_on_queue_failure);
         let client_queue_policy = ConcurrencyQueuePolicy {
             max_waiting: settings.max_waiting_per_key,
-            timeout: queue_timeout,
+            timeout: Duration::from_secs(u64::from(settings.key_queue_timeout_seconds)),
         };
         let request_location = settings
             .request_location_enabled

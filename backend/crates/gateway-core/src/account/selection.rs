@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use futures::FutureExt;
+
 use crate::concurrency::{CapacityWait, ConcurrencyQueuePolicy, QueueRejection};
 use crate::identity::ProviderKind;
 
@@ -92,6 +94,7 @@ pub struct AccountSelectionPolicy {
     queue_policy: ConcurrencyQueuePolicy,
     openai_guardian_reserved_concurrency: u32,
     openai_account_affinity: AccountAffinity,
+    switch_account_on_queue_failure: bool,
     max_account_rotations: u32,
     openai_session_affinity_ttl: Duration,
 }
@@ -108,6 +111,7 @@ impl AccountSelectionPolicy {
             max_concurrent_per_account: max_concurrent_per_account.into(),
             openai_guardian_reserved_concurrency: 0,
             openai_account_affinity: AccountAffinity::default(),
+            switch_account_on_queue_failure: false,
             max_account_rotations: 3,
             openai_session_affinity_ttl: Duration::from_secs(24 * 3600),
             queue_policy: ConcurrencyQueuePolicy {
@@ -126,6 +130,45 @@ impl AccountSelectionPolicy {
     #[must_use]
     pub const fn openai_account_affinity(self) -> AccountAffinity {
         self.openai_account_affinity
+    }
+
+    #[must_use]
+    pub const fn with_switch_account_on_queue_failure(mut self, enabled: bool) -> Self {
+        self.switch_account_on_queue_failure = enabled;
+        self
+    }
+
+    /// 原队位由首次选号释放。仅对允许换号的请求调用，重选不排队，也不延长请求总期限
+    pub async fn reselect_after_queue_rejection<
+        T,
+        E: From<QueueRejection>,
+        F: Future<Output = Result<T, E>>,
+    >(
+        self,
+        rejection: QueueRejection,
+        remaining: Option<Duration>,
+        select: impl FnOnce(ConcurrencyQueuePolicy) -> F,
+        no_account_available: impl FnOnce(&E) -> bool,
+    ) -> Result<T, E> {
+        if !self.switch_account_on_queue_failure || remaining.is_some_and(|time| time.is_zero()) {
+            return Err(rejection.into());
+        }
+        let queue = ConcurrencyQueuePolicy {
+            max_waiting: 0,
+            ..self.queue_policy
+        };
+        let selection = select(queue);
+        let result = match remaining {
+            Some(limit) => futures::select_biased! {
+                () = futures_timer::Delay::new(limit).fuse() => return Err(rejection.into()),
+                result = selection.fuse() => result,
+            },
+            None => selection.await,
+        };
+        match result {
+            Err(error) if no_account_available(&error) => Err(rejection.into()),
+            result => result,
+        }
     }
 
     #[must_use]

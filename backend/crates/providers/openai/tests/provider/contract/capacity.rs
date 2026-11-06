@@ -14,10 +14,12 @@ fn queued_context(request_id: &str) -> AttemptContext {
         ),
         NonZeroU32::new(1).unwrap(),
         SystemTime::now() + Duration::from_secs(5),
-        account_policy().with_queue(ConcurrencyQueuePolicy {
-            max_waiting: 1,
-            timeout: Duration::from_secs(2),
-        }),
+        account_policy()
+            .with_switch_account_on_queue_failure(true)
+            .with_queue(ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout: Duration::from_secs(2),
+            }),
         AccountAttemptContext::new(BTreeSet::new(), None, None)
             .with_account_scope(contract_account_scope()),
         None,

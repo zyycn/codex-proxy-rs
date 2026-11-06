@@ -53,7 +53,9 @@ pub struct RuntimeSettingsValues {
     pub max_concurrent_per_account: u32,
     pub max_waiting_per_key: u32,
     pub max_waiting_per_account: u32,
-    pub concurrency_wait_timeout_seconds: u32,
+    pub key_queue_timeout_seconds: u32,
+    pub account_queue_timeout_seconds: u32,
+    pub switch_account_on_queue_failure: bool,
     pub max_retry_after_seconds: u32,
     pub openai_guardian_reserved_concurrency: u32,
     pub openai_account_affinity: gateway_core::account::AccountAffinity,
@@ -201,7 +203,8 @@ impl RuntimeSettingsValues {
         gateway_core::settings::validate_request_limits(
             self.max_waiting_per_key,
             self.max_waiting_per_account,
-            self.concurrency_wait_timeout_seconds,
+            self.key_queue_timeout_seconds,
+            self.account_queue_timeout_seconds,
             self.max_account_rotations,
             self.openai_session_affinity_ttl_hours,
         )?;

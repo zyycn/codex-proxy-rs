@@ -4390,10 +4390,7 @@ impl Provider for QueuedAccountProvider {
     ) -> Result<ProviderStream, ProviderError> {
         let mut waiting = gateway_core::concurrency::CapacityWait::new(
             &self.waiting,
-            gateway_core::concurrency::ConcurrencyQueuePolicy {
-                max_waiting: 1,
-                timeout: Duration::from_secs(5),
-            },
+            context.account_selection_policy().queue_policy(),
             context.deadline().at(),
             context.concurrency_wait_budget(),
         );
@@ -4406,7 +4403,7 @@ impl Provider for QueuedAccountProvider {
 }
 
 #[test]
-fn account_wait_inherits_the_budget_spent_during_client_admission() {
+fn account_wait_starts_its_own_budget_after_client_admission() {
     use futures::FutureExt;
     block_on(async {
         let admissions = Arc::new(BoundedAdmissions::default());
@@ -4419,7 +4416,10 @@ fn account_wait_inherits_the_budget_spent_during_client_admission() {
             },
             FastMode::Default,
         );
-        let settings = snapshot.settings().clone().with_concurrency_queues(1, 0, 1);
+        let settings = snapshot
+            .settings()
+            .clone()
+            .with_concurrency_queues(1, 1, 1, 2, false);
         let snapshot = snapshot.with_settings(&settings).unwrap();
         let service = DefaultExecutionService::new(
             RuntimeSnapshotHandle::new(snapshot),
@@ -4437,12 +4437,12 @@ fn account_wait_inherits_the_budget_spent_during_client_admission() {
             .start(request(&service, ClientTransport::HttpSse))
             .await
             .unwrap();
-        let started_at = Instant::now();
         let mut queued = service.start(request(&service, ClientTransport::HttpSse));
         assert!(queued.as_mut().now_or_never().is_none());
         futures_timer::Delay::new(Duration::from_millis(200)).await;
         drop(running);
         let mut started = queued.await.unwrap();
+        let account_started = Instant::now();
         let error = started.session.collect_uncommitted().await.unwrap_err();
         assert!(
             matches!(
@@ -4453,9 +4453,8 @@ fn account_wait_inherits_the_budget_spent_during_client_admission() {
             "{error:?}"
         );
         assert!(
-            started_at.elapsed() < Duration::from_secs(3),
-            "账号层不能重新获得自己的 5 秒预算，实际耗时 {:?}",
-            started_at.elapsed()
+            account_started.elapsed() >= Duration::from_secs(2),
+            "账号排队应获得独立的两秒预算"
         );
         assert!(admissions.active.lock().unwrap().is_empty());
     });
@@ -4532,6 +4531,8 @@ fn queue_service(
         max_waiting,
         0,
         u32::try_from(timeout.as_secs()).unwrap(),
+        30,
+        false,
     );
     let snapshot = snapshot.with_settings(&settings).unwrap();
     let service = DefaultExecutionService::new(
@@ -4704,7 +4705,7 @@ fn request_settings_recompute_routing_and_admission_without_changing_sibling_or_
         let settings = snapshot
             .settings()
             .clone()
-            .with_concurrency_queues(0, 0, 30);
+            .with_concurrency_queues(0, 0, 30, 30, false);
         let snapshot = snapshot.with_settings(&settings).unwrap();
         let snapshots = RuntimeSnapshotHandle::new(snapshot);
         let admissions = Arc::new(Admissions::default());

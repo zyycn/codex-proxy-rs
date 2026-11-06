@@ -5,7 +5,6 @@ use super::contract::{AuthenticatedClient, ExecutionRequestMetadata};
 use super::{MAX_CONCURRENT_NESTED_EXECUTIONS, MAX_NESTED_EXECUTIONS};
 use crate::engine::budget::{ClientBudgetCharge, ClientBudgetPort};
 use crate::{
-    concurrency::ConcurrencyWaitBudget,
     engine::{
         ModelRequestId, ProviderAccountId, coordinator::CoordinationExtensions,
         extensions::ExtensionCallScope, nested::ExecutionEffects,
@@ -75,7 +74,6 @@ pub(super) struct AuthorizedExecution {
 pub(super) struct ExecutionStartGuard {
     pub(super) admission: ExecutionAdmission,
     pub(super) active_request: Option<ActiveRequestLease>,
-    pub(super) concurrency_wait_budget: ConcurrencyWaitBudget,
     pub(super) admission_decision_ms: Option<u64>,
 }
 

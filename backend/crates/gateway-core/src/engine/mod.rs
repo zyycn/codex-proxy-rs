@@ -880,7 +880,7 @@ impl AttemptContext {
         self.deadline
     }
 
-    /// 返回密钥准入、账号选择与重试共用的排队预算
+    /// 返回账号选择与后续重试共用的排队预算
     #[must_use]
     pub const fn concurrency_wait_budget(&self) -> &crate::concurrency::ConcurrencyWaitBudget {
         &self.request.concurrency_wait_budget
