@@ -94,29 +94,32 @@ async fn registration_with_a_changed_contribution_id_is_rejected() {
 async fn restart_circuit_caps_short_lived_crashes_and_a_new_revision_recovers() {
     let restart_circuit = gateway_plugin_runtime::PluginRestartCircuitConfig {
         maximum_failures: NonZeroUsize::new(3).unwrap(),
-        stability_window: Duration::from_secs(1),
+        // 本用例只验证连续崩溃的预算，不让宿主调度延迟触发稳定运行后的重置
+        stability_window: Duration::MAX,
     };
     let (cache, store, runtime) = super::setup_with_restart_circuit(restart_circuit).await;
     let controls = tempfile::tempdir().unwrap();
     let marker = controls.path().join("starts.jsonl");
+    let exits = [1, 2, 3].map(|start| controls.path().join(format!("exit-{start}")));
     let mut snapshot = store.snapshot.lock().unwrap().clone();
     snapshot.instances[0].configuration = serde_json::json!({
         "startup_marker": marker,
-        "exit_after_ready_ms": 20,
+        "exit_after_ready_signals": exits,
     });
     let mut active = PluginPreparation::prepare(&runtime, snapshot.clone())
         .await
         .expect("first incarnation");
-    for expected_start in 2..=3 {
+    for (index, exit) in exits.iter().enumerate() {
+        assert_eq!(startup_count(&marker), index + 1);
+        // Ready 早于注册完成；只有宿主拿到这一代后，才让对应的进程退出
+        std::fs::write(exit, b"exit").unwrap();
         wait_until_unready(&active).await;
-        let replacement = PluginPreparation::prepare(&runtime, snapshot.clone())
-            .await
-            .expect("failure budget still permits a restart");
-        drop(active);
-        active = replacement;
-        assert_eq!(startup_count(&marker), expected_start);
+        if index + 1 < exits.len() {
+            active = PluginPreparation::prepare(&runtime, snapshot.clone())
+                .await
+                .expect("failure budget still permits a restart");
+        }
     }
-    wait_until_unready(&active).await;
     assert!(
         PluginPreparation::prepare(&runtime, snapshot.clone())
             .await
@@ -434,7 +437,6 @@ async fn abandoned_candidate_keeps_shared_process_failure_in_restart_budget() {
     let mut snapshot = store.snapshot.lock().unwrap().clone();
     snapshot.instances[0].configuration = serde_json::json!({
         "startup_marker":marker,
-        "exit_after_ready_delays_ms":[null,null],
         "exit_after_ready_signals":[old_exit,null],
     });
     let mut other = snapshot.instances[0].clone();

@@ -1546,11 +1546,6 @@ async fn main() {
         resumptions: Mutex::new(BTreeMap::new()),
         streams: Mutex::new(BTreeMap::new()),
     });
-    let exit_after_ready = peer.configuration["exit_after_ready_delays_ms"]
-        .as_array()
-        .and_then(|delays| delays.get(startup))
-        .and_then(Value::as_u64)
-        .or_else(|| peer.configuration["exit_after_ready_ms"].as_u64());
     let exit_after_ready_signal = peer.configuration["exit_after_ready_signals"]
         .as_array()
         .and_then(|signals| signals.get(startup))
@@ -1571,12 +1566,7 @@ async fn main() {
         vec![],
     )
     .await;
-    if let Some(delay) = exit_after_ready {
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(delay)).await;
-            std::process::exit(7);
-        });
-    } else if let Some(signal) = exit_after_ready_signal {
+    if let Some(signal) = exit_after_ready_signal {
         tokio::spawn(async move {
             while !std::path::Path::new(&signal).exists() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
