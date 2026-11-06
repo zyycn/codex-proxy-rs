@@ -1327,6 +1327,50 @@ async fn saturated_account_snapshot_queues_and_rechecks_live_capacity() {
 }
 
 #[tokio::test]
+async fn account_queue_timeout_reselects_only_if_enabled_and_not_pinned() {
+    use futures::FutureExt;
+    let fixture = SelectorFixture::new(&["first", "spare"]).await;
+    let first = account_id("first");
+    let spare = account_id("spare");
+    for (enabled, pinned) in [(true, false), (true, true), (false, false)] {
+        let base = queue_request(&fixture, Duration::from_millis(30));
+        let req = GrokSessionSelection::new(
+            base.upstream_model().clone(),
+            BTreeSet::new(),
+            pinned.then_some(first.clone()),
+            base.account_selection_policy()
+                .with_switch_account_on_queue_failure(enabled),
+            base.deadline(),
+            base.account_scope().clone(),
+            base.client_api_key_id().clone(),
+        );
+        for signal in fixture.coordinator.signals.lock().unwrap().values_mut() {
+            signal.in_flight = 2;
+        }
+        let mut pending = fixture.selector.select(req);
+        assert!(pending.as_mut().now_or_never().is_none());
+        fixture
+            .coordinator
+            .signals
+            .lock()
+            .unwrap()
+            .get_mut(&spare)
+            .unwrap()
+            .in_flight = 0;
+        if enabled && !pinned {
+            assert_eq!(pending.await.unwrap().account_id(), &spare);
+        } else {
+            assert!(matches!(
+                pending.await,
+                Err(GrokSessionSelectorError::QueueRejected(
+                    gateway_core::concurrency::QueueRejection::Timeout
+                ))
+            ));
+        }
+    }
+}
+
+#[tokio::test]
 async fn account_queue_cancel_reclaims_capacity_and_does_not_wait_for_upstream_cooldown() {
     use futures::FutureExt;
     let fixture = SelectorFixture::new(&["queue-cancel"]).await;

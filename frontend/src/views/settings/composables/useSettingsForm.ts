@@ -48,7 +48,9 @@ export function useSettingsForm() {
     openaiSessionAffinityTtlHours: null as number | null,
     maxWaitingPerKey: null as number | null,
     maxWaitingPerAccount: null as number | null,
-    concurrencyWaitTimeoutSeconds: null as number | null,
+    keyQueueTimeoutSeconds: null as number | null,
+    accountQueueTimeoutSeconds: null as number | null,
+    switchAccountOnQueueFailure: false,
     maxRetryAfterSeconds: null as number | null,
     responsesMaxDecompressedBodyMiB: null as number | null,
 
@@ -91,7 +93,7 @@ export function useSettingsForm() {
     mappings.value = initial.mappings
   }
 
-  function numericModel(key: 'resetCreditMaxWeeklyRemainingPercent' | 'resetCreditLeadMinutes' | 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'openaiGuardianReservedConcurrency' | 'maxAccountRotations' | 'openaiSessionAffinityTtlHours' | 'maxWaitingPerKey' | 'maxWaitingPerAccount' | 'concurrencyWaitTimeoutSeconds' | 'maxRetryAfterSeconds' | 'responsesMaxDecompressedBodyMiB' | 'usageRetentionDays') {
+  function numericModel(key: 'resetCreditMaxWeeklyRemainingPercent' | 'resetCreditLeadMinutes' | 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'openaiGuardianReservedConcurrency' | 'maxAccountRotations' | 'openaiSessionAffinityTtlHours' | 'maxWaitingPerKey' | 'maxWaitingPerAccount' | 'keyQueueTimeoutSeconds' | 'accountQueueTimeoutSeconds' | 'maxRetryAfterSeconds' | 'responsesMaxDecompressedBodyMiB' | 'usageRetentionDays') {
     return computed({
       get: () => (form[key] === null
         ? ''
@@ -121,7 +123,8 @@ export function useSettingsForm() {
   const resetCreditLeadMinutesValue = numericModel('resetCreditLeadMinutes')
   const resetCreditMaxWeeklyRemainingPercentValue = numericModel('resetCreditMaxWeeklyRemainingPercent')
   const usageRetentionDaysValue = numericModel('usageRetentionDays')
-  const concurrencyWaitTimeoutSecondsValue = numericModel('concurrencyWaitTimeoutSeconds')
+  const keyQueueTimeoutSecondsValue = numericModel('keyQueueTimeoutSeconds')
+  const accountQueueTimeoutSecondsValue = numericModel('accountQueueTimeoutSeconds')
   const maxRetryAfterSecondsValue = numericModel('maxRetryAfterSeconds')
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
@@ -138,7 +141,9 @@ export function useSettingsForm() {
     form.openaiSessionAffinityTtlHours = data.openaiSessionAffinityTtlHours
     form.maxWaitingPerKey = data.maxWaitingPerKey
     form.maxWaitingPerAccount = data.maxWaitingPerAccount
-    form.concurrencyWaitTimeoutSeconds = data.concurrencyWaitTimeoutSeconds
+    form.keyQueueTimeoutSeconds = data.keyQueueTimeoutSeconds
+    form.accountQueueTimeoutSeconds = data.accountQueueTimeoutSeconds
+    form.switchAccountOnQueueFailure = data.switchAccountOnQueueFailure
     form.maxRetryAfterSeconds = data.maxRetryAfterSeconds
     form.responsesMaxDecompressedBodyMiB = data.responsesMaxDecompressedBodyBytes / MIB
 
@@ -238,7 +243,7 @@ export function useSettingsForm() {
     const savedSettings = saved.value
     if (saving.value || loading.value || detectingLocation.value || !savedSettings)
       return
-    const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, openaiGuardianReservedConcurrency, openaiAccountAffinity, maxAccountRotations, openaiSessionAffinityTtlHours, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds, maxRetryAfterSeconds, responsesMaxDecompressedBodyMiB } = form
+    const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, openaiGuardianReservedConcurrency, openaiAccountAffinity, maxAccountRotations, openaiSessionAffinityTtlHours, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, keyQueueTimeoutSeconds, accountQueueTimeoutSeconds, maxRetryAfterSeconds, responsesMaxDecompressedBodyMiB } = form
     const { resetCreditMaxWeeklyRemainingPercent, resetCreditLeadMinutes, usageRetentionDays } = form
     // 关闭时保留已保存的自定义值，未完成的草稿不阻止停止覆盖。
     const requestLocation = form.requestLocationEnabled
@@ -267,7 +272,9 @@ export function useSettingsForm() {
         openaiSessionAffinityTtlHours: openaiSessionAffinityTtlHours!,
         maxWaitingPerKey: maxWaitingPerKey!,
         maxWaitingPerAccount: maxWaitingPerAccount!,
-        concurrencyWaitTimeoutSeconds: concurrencyWaitTimeoutSeconds!,
+        keyQueueTimeoutSeconds: keyQueueTimeoutSeconds!,
+        accountQueueTimeoutSeconds: accountQueueTimeoutSeconds!,
+        switchAccountOnQueueFailure: form.switchAccountOnQueueFailure,
         maxRetryAfterSeconds: maxRetryAfterSeconds!,
         responsesMaxDecompressedBodyBytes: responsesMaxDecompressedBodyMiB! * MIB,
         rotationStrategy: rotationStrategy as RotationStrategy,
@@ -327,7 +334,8 @@ export function useSettingsForm() {
     openaiSessionAffinityTtlHoursValue,
     maxWaitingPerKeyValue,
     maxWaitingPerAccountValue,
-    concurrencyWaitTimeoutSecondsValue,
+    keyQueueTimeoutSecondsValue,
+    accountQueueTimeoutSecondsValue,
     maxRetryAfterSecondsValue,
     responsesMaxDecompressedBodyMiBValue,
     usageRetentionDaysValue,

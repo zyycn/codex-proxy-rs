@@ -56,7 +56,9 @@ fn update_body() -> Value {
         "openaiAccountAffinity": "relaxed",
         "maxAccountRotations": 3,
         "openaiSessionAffinityTtlHours": 24,
-        "concurrencyWaitTimeoutSeconds": 30,
+        "keyQueueTimeoutSeconds": 30,
+        "accountQueueTimeoutSeconds": 30,
+        "switchAccountOnQueueFailure": false,
         "maxRetryAfterSeconds": 240,
         "responsesMaxDecompressedBodyBytes": 67108864,
         "rotationStrategy": "round_robin",
@@ -659,8 +661,10 @@ fn concurrency_queue_fields_validate_bounds_and_accept_disabled_queues() {
     for (field, invalid) in [
         ("maxWaitingPerKey", 1001),
         ("maxWaitingPerAccount", 1001),
-        ("concurrencyWaitTimeoutSeconds", 0),
-        ("concurrencyWaitTimeoutSeconds", 121),
+        ("keyQueueTimeoutSeconds", 0),
+        ("accountQueueTimeoutSeconds", 0),
+        ("keyQueueTimeoutSeconds", 121),
+        ("accountQueueTimeoutSeconds", 121),
     ] {
         let mut body = update_body();
         body[field] = json!(invalid);
@@ -670,7 +674,7 @@ fn concurrency_queue_fields_validate_bounds_and_accept_disabled_queues() {
     let mut body = update_body();
     body["maxWaitingPerKey"] = json!(0);
     body["maxWaitingPerAccount"] = json!(1000);
-    body["concurrencyWaitTimeoutSeconds"] = json!(120);
+    body["accountQueueTimeoutSeconds"] = json!(120);
     serde_json::from_value::<UpdateRuntimeSettingsRequest>(body)
         .unwrap()
         .validate()

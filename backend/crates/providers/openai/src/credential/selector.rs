@@ -14,7 +14,9 @@ use gateway_core::account::{
     AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId,
     QuotaEvidence, RotationStrategy,
 };
-use gateway_core::concurrency::{CapacityWait, ConcurrencyWaitQueue, QueueRejection, WaitPriority};
+use gateway_core::concurrency::{
+    CapacityWait, ConcurrencyQueuePolicy, ConcurrencyWaitQueue, QueueRejection, WaitPriority,
+};
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, policy::AccountPolicyError};
 use gateway_core::provider_ports::{
     ProviderConcurrencyPool, ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition,
@@ -472,19 +474,61 @@ impl CodexCredentialSelector {
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
         model: CodexSelectionModel<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
+        let policy = request.attempt.account_selection_policy();
         let follow_only = !request.attempt.is_diagnostic_required_account()
-            && request
-                .attempt
-                .account_selection_policy()
-                .openai_account_affinity()
-                == AccountAffinity::Strict
+            && policy.openai_account_affinity() == AccountAffinity::Strict
             && request
                 .session_affinity_observation
                 .is_some_and(CodexSessionAffinity::follow_only);
+        let select = |queue_policy| {
+            self.select_inner_loop(
+                request,
+                cyber_policy_session_key,
+                model,
+                follow_only,
+                queue_policy,
+            )
+        };
+        let selection = async {
+            let rejection = match select(policy.queue_policy()).await {
+                Err(CredentialSelectionError::QueueRejected(reason))
+                    if !follow_only
+                        && request.attempt.required_account().is_none()
+                        && matches!(
+                            request.attempt.continuation_attempt(),
+                            ContinuationAttempt::None | ContinuationAttempt::ReplayAny
+                        ) =>
+                {
+                    reason
+                }
+                result => return result,
+            };
+            policy
+                .reselect_after_queue_rejection(
+                    rejection,
+                    request.attempt.deadline().remaining(),
+                    |queue| {
+                        request.attempt.trace().record(
+                            "account.queue.reselect",
+                            serde_json::json!({"reason": rejection.to_string()}),
+                        );
+                        select(queue)
+                    },
+                    |err| {
+                        matches!(
+                            err,
+                            CredentialSelectionError::CapacityUnavailable { .. }
+                                | CredentialSelectionError::NoEligibleCredential
+                                | CredentialSelectionError::QuotaExhausted
+                        )
+                    },
+                )
+                .await
+        };
         let result = tokio::select! {
             biased;
             () = request.attempt.cancellation().cancelled() => Err(CredentialSelectionError::Cancelled),
-            result = self.select_inner_loop(request, cyber_policy_session_key, model, follow_only) => result,
+            result = selection => result,
         };
         result.map_err(|error| {
             if follow_only
@@ -510,6 +554,7 @@ impl CodexCredentialSelector {
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
         model: CodexSelectionModel<'_>,
         follow_only: bool,
+        mut queue_policy: ConcurrencyQueuePolicy,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let adapter_model = match model {
             CodexSelectionModel::Requested(model) if request.managed_upstream => Some(
@@ -528,7 +573,6 @@ impl CodexCredentialSelector {
             .attempt
             .account_selection_policy()
             .openai_account_affinity();
-        let mut queue_policy = request.attempt.account_selection_policy().queue_policy();
         if follow_only {
             // 关闭普通账号排队不能放开后代线程换号，沿用队列时间设置并保留有界人数
             queue_policy.max_waiting = if queue_policy.max_waiting == 0 {

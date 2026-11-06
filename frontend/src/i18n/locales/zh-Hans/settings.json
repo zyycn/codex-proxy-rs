@@ -245,6 +245,10 @@
       "enterNewPasswordAgain": "再次输入新密码",
       "saveAndLogInAgain": "保存并重新登录"
     },
+    "units": {
+      "seconds": "秒",
+      "inSeconds": "{label}（秒）"
+    },
     "concurrency": {
       "title": "并发与重试",
       "accountLimit": {
@@ -255,17 +259,23 @@
       "keyQueueHelp": "每个密钥的等待上限，0 不排队",
       "accountQueueCapacity": "账号队列容量",
       "accountQueueHelp": "每个账号的等待上限，0 不排队",
-      "queueTimeoutLabel": "排队超时（秒）",
-      "queueTimeoutHelp": "两个队列共用，1–120 秒",
+      "keyTimeout": "密钥排队超时",
+      "keyTimeoutHelp": "等待密钥并发名额的时限，超时返回错误",
+      "accountTimeout": "账号排队超时",
+      "accountTimeoutHelp": "从首次进入账号队列起计时，重试不重置",
+      "queueFailure": "账号队满或超时后",
+      "queueFailureHelp": "尝试换号时，改用有空位的账号；无法换号则返回排队错误",
+      "queueFailureHelpTitle": "账号换号规则",
+      "queueFailureDetails": "只重新选择一次，不再排队。指定账号、需要用原账号续写，或必须跟随主会话的请求不能自行换号。",
+      "returnError": "返回错误",
+      "trySwitch": "尝试换号",
       "autoReview": {
         "label": "自动审批独立并发",
         "description": "每个 Codex 账号的额外名额，0 共用普通并发",
         "helpTitle": "自动审批独立并发说明"
       },
-      "queueTimeoutHelpTitle": "排队超时说明",
-      "queueTimeoutDetails": "密钥与账号队列共用此时限，从首次入队起计时",
       "retryAfter": {
-        "label": "上游重试等待上限（秒）",
+        "label": "上游重试等待上限",
         "help": "超限时尝试换号",
         "helpTitle": "上游重试等待说明",
         "details": "默认 240 秒，限制单次 Retry-After 等待，不是请求总时长。超限时尝试换号，无可用账号则返回错误。0 表示不接受正数等待。换号仍受最大换号次数和请求可重试条件限制。"
@@ -333,7 +343,7 @@
     },
     "tokenRefresh": {
       "title": "凭据刷新",
-      "leadTimeLabel": "提前刷新（秒）",
+      "leadTimeLabel": "提前刷新",
       "leadTimeHelp": "在访问令牌到期前触发刷新",
       "concurrencyLabel": "刷新并发上限",
       "concurrencyHelp": "同时刷新的上限，调低可减少限流"
@@ -641,7 +651,6 @@
       "countValidity": "计数有效期",
       "windowHelp": "每次匹配失败后续期，普通调用成功后清零",
       "countValiditySeconds": "计数有效期秒数",
-      "seconds": "秒",
       "cooldownTime": "冷却时长",
       "cooldownHelp": "探测失败时，按此时长延后恢复",
       "cooldownTimeInSeconds": "冷却时长秒数",

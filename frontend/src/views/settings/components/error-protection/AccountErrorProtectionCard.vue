@@ -193,7 +193,7 @@ function removeRule(id: string) {
             <Timer class="size-4" />
           </template>
           <template #suffix>
-            <span class="text-z-sm">{{ t('settings.errorProtection.seconds') }}</span>
+            <span class="text-z-sm">{{ t('settings.units.seconds') }}</span>
           </template>
         </ZInput>
       </ZFormItem>
@@ -216,7 +216,7 @@ function removeRule(id: string) {
             <Snowflake class="size-4" />
           </template>
           <template #suffix>
-            <span class="text-z-sm">{{ t('settings.errorProtection.seconds') }}</span>
+            <span class="text-z-sm">{{ t('settings.units.seconds') }}</span>
           </template>
         </ZInput>
       </ZFormItem>

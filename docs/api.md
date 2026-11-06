@@ -1912,7 +1912,7 @@ OpenAI Key 可设置 `installationId`（带连字符的 UUID，大小写均可�
 繁忙时先按调度策略选择可用账号，临时分流不改写会话绑定；没有可立即使用的账号时才按配置排队。严格亲和下已有绑定的后代线程只等待当前会话账号，
 根线程迁移后跟随新账号。绑定缺失时，任何有可靠会话身份的请求都可按调度策略原子首绑，后续请求沿用该绑定
 
-严格亲和下的后代线程始终启用账号排队，沿用 `concurrencyWaitTimeoutSeconds` 和请求截止时间；
+严格亲和下的后代线程始终启用账号排队，沿用 `accountQueueTimeoutSeconds` 和请求截止时间；
 `maxWaitingPerAccount` 为 0 时使用每队列 1,000 人上限，否则沿用配置的上限。
 可识别来源的 Search、Images、Live 创建请求采用同样规则，身份与轮次关联见[会话绑定](architecture.md#6-路由账号范围与-continuation)。
 插件显式选号须通过账号资格与租约检查，见[调度合同](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#路由调度与观察)。普通请求关闭账号排队且没有可用容量时返回 `503` / `account_capacity_unavailable`，
@@ -1928,7 +1928,7 @@ xAI 由本地账号/模型冷却、无可选账号、并发容量不足及选号
 保留 `account_unavailable_error` 类型和各自的机器码；可用备用 Provider 仍按路由范围与换号预算尝试。
 同次请求选号耗尽时保留最近一次上游失败，新的基础设施故障仍按自身原因报告
 
-队列满返回 `429` / `concurrency_queue_full`，排队超时返回 `429` / `concurrency_queue_timeout`；
+默认队列满返回 `429` / `concurrency_queue_full`，排队超时返回 `429` / `concurrency_queue_timeout`；
 WebSocket 使用对应错误事件。等待期间不发送上游请求，取消后释放等待位置，排队重查不重复计入 RPM。
 SSE 在 Key 准入完成并取得执行会话前不发送保活帧，此阶段保留 HTTP 错误状态；
 取得会话后的账号等待受 SSE 保活覆盖，已开始交付的失败沿用流内错误合同
@@ -1977,7 +1977,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | [隐私策略](#隐私策略) | `codexPrivacyPolicy` |
 | 模型映射 | `modelMappings` |
 | 凭据刷新 | `refreshMarginSeconds`、`refreshConcurrency` |
-| [并发与排队](#并发与排队) | `maxConcurrentPerAccount`、`maxWaitingPerKey`、`maxWaitingPerAccount`、`openaiGuardianReservedConcurrency`、`concurrencyWaitTimeoutSeconds` |
+| [并发与排队](#并发与排队) | `maxConcurrentPerAccount`、`maxWaitingPerKey`、`maxWaitingPerAccount`、`openaiGuardianReservedConcurrency`、`keyQueueTimeoutSeconds`、`accountQueueTimeoutSeconds`、`switchAccountOnQueueFailure` |
 | [上游重试等待](#容量拒绝与重试) | `maxRetryAfterSeconds` |
 | [亲和与换号](#账号亲和与换号) | `openaiAccountAffinity`、`openaiSessionAffinityTtlHours`、`maxAccountRotations` |
 | [调度策略](#智能调度) | `rotationStrategy`、`smartScheduling` |
@@ -2090,9 +2090,12 @@ UA、平台参数及自动 Git 上下文版本由 [OpenAI 上游客户端身份]
 每个 Key、每个账号各自独立计数，没有单对象覆盖字段。执行并发为 5、最大排队数为 5 时，
 该对象最多容纳 5 个执行请求与 5 个等待请求。Key 并发为 0（不限）时跳过 Key 排队。
 OpenAI 严格亲和下后代线程的会话账号等待不随普通账号排队关闭，见 [Client Key 等待规则](#7-client-key)。
-`concurrencyWaitTimeoutSeconds` 取值 1～120，默认 30，从首次入队开始计时，密钥与账号两层共享该等待时限；
-切换账号或内部重试不重新计时；若插件设置了请求总时限，等待也计入该时限。排队超时不用于中断已开始的上游生成。
-设置更新请求须包含这三个字段，新请求使用更新后的快照
+`keyQueueTimeoutSeconds` 和 `accountQueueTimeoutSeconds` 分别限制密钥与账号排队，各取 1～120 秒，默认 30 秒。
+每层从首次入队开始独立计时，账号重选、切换 Provider 或内部重试不重置账号时限。请求总期限仍优先，排队超时不用于中断已开始的上游生成
+
+`switchAccountOnQueueFailure` 默认 `false`，账号队满或超时返回原排队错误。开启后，允许换号的请求会在发送前再选一次可立即准入的账号，不重新排队。
+没有空位时返回原排队错误。OpenAI 会话沿用其亲和策略：严格模式成功换号后迁移绑定，优先模式临时分流时保留主绑定。密钥排队失败、必须跟随根线程的后代、固定账号与原生续写不触发换号。
+设置更新须提交两层队列容量、两个超时值和换号开关，对新请求生效
 
 `openaiGuardianReservedConcurrency`（默认 5，取值 0～4,294,967,295）设置 Codex Guardian 自动审批的每账号独立并发，保存后对新请求生效。
 Guardian 以 `subagent_kind` 或 `client_metadata.x-openai-subagent` 值 `guardian` 识别。取值 R 大于 0 时，

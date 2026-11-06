@@ -600,12 +600,6 @@ impl<S: ?Sized> ResponseExecutionSession<S>
 where
     S: ExecutionStore + 'static,
 {
-    /// 首次驱动前接入密钥准入使用的预算，所有账号尝试随后共享它
-    pub(crate) fn with_concurrency_wait_budget(mut self, budget: ConcurrencyWaitBudget) -> Self {
-        self.concurrency_wait_budget = budget;
-        self
-    }
-
     /// 传输首字节事实可在 next_event 等待期间由协议层提交
     pub fn response_commit(&self) -> super::execution::ResponseCommit {
         self.response_commit.clone()

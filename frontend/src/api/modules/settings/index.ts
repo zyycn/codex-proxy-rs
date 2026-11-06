@@ -53,7 +53,9 @@ export interface RuntimeSettings {
   openaiSessionAffinityTtlHours: number
   maxWaitingPerKey: number
   maxWaitingPerAccount: number
-  concurrencyWaitTimeoutSeconds: number
+  keyQueueTimeoutSeconds: number
+  accountQueueTimeoutSeconds: number
+  switchAccountOnQueueFailure: boolean
   maxRetryAfterSeconds: number
   responsesMaxDecompressedBodyBytes: number
   rotationStrategy: RotationStrategy

@@ -172,9 +172,8 @@ fn request_deadline_bounds_waiting_and_dropped_future_releases_its_ticket() {
 }
 
 #[test]
-fn new_layers_and_retries_cannot_restart_a_requests_wait_budget() {
+fn account_reselection_and_retries_share_the_account_wait_budget() {
     block_on(async {
-        let keys = ConcurrencyWaitQueue::default();
         let accounts = ConcurrencyWaitQueue::default();
         let policy = ConcurrencyQueuePolicy {
             max_waiting: 1,
@@ -182,11 +181,11 @@ fn new_layers_and_retries_cannot_restart_a_requests_wait_budget() {
         };
         let request_deadline = SystemTime::now() + Duration::from_secs(5);
         let budget = ConcurrencyWaitBudget::default();
-        let mut key_wait = CapacityWait::new(&keys, policy, request_deadline, &budget);
-        key_wait.wait(&["key"]).await.unwrap();
-        drop(key_wait);
+        let mut first = CapacityWait::new(&accounts, policy, request_deadline, &budget);
+        first.wait(&["first_account"]).await.unwrap();
+        drop(first);
 
-        // 第一层已取得重试机会，后续准备跨过总时限后不能在账号层重新排队
+        // 第一次账号等待已启动时限，重试或改选其他账号都不能重新计时
         futures_timer::Delay::new(policy.timeout).await;
         let next_attempt_budget = budget.clone();
         let mut account_wait =
