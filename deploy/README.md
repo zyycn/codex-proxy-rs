@@ -943,7 +943,7 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
 
 | 文件或目录 | 用途 |
 | --- | --- |
-| `plugin-release-manifest.json` | 固定宿主版本、提交、平台与支持的插件合同；插件列表当前为空 |
+| `plugins/official/plugin-release-manifest.json` | 随平台安装包和镜像分发，记录宿主版本、提交与支持的插件合同 |
 | 可执行文件同目录的 `plugins/official` | 随受信宿主发行物部署的只读目录，与二进制、Web 资源成套更新或恢复 |
 
 - 下载更新时校验发行身份，插件合同不兼容不阻止安装。点击重启时检查已安装目标版本，列出不兼容插件的名称和原因；确认后重启，不兼容实例保持未启动，启用配置、绑定、密钥和私有数据保留

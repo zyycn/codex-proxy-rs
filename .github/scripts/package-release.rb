@@ -34,7 +34,6 @@ module ReleasePackage
     default_image = "${CPR_IMAGE:-#{image}:latest}"
     raise 'Expected exactly one default application image in deploy/compose.yaml' unless compose.scan(default_image).length == 1
     File.write("#{release_dir}/compose.yaml", compose.sub(default_image, "${CPR_IMAGE:-#{image}:#{ENV.fetch('DOCKER_VERSION')}}"))
-    FileUtils.cp(MANIFEST, release_dir)
 
     platforms.each do |platform|
       raise "Unsupported archive format: #{platform['archive']}" unless platform['archive'] == 'tar.gz'

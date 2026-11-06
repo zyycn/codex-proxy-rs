@@ -87,7 +87,7 @@ module PublishedChannels
       platforms = YAML.safe_load(Base64.decode64(data.fetch('content'))).fetch('platforms')
       raise "Missing platforms for #{tag}" if platforms.empty?
       expected = platforms.map { |p| ReleaseMetadata.archive_name(version, p) }
-      expected.concat(%w[checksums.txt compose.yaml config.example.yaml plugin-release-manifest.json])
+      expected.concat(%w[checksums.txt compose.yaml config.example.yaml])
       expected << 'version.yaml' if index
       assets = release.fetch('assets').select { |a| a.fetch('state') == 'uploaded' && a.fetch('size').positive? }.to_h { |a| [a.fetch('name'), a] }
       missing = expected - assets.keys
