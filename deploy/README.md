@@ -849,7 +849,7 @@ OAuth 账号仍使用默认授权名称（如「Codex 账号」「OpenAI 账号�
 
 已保存的 Key `installationId` 由数据库迁移转换为 `installationSeed`，管理 API 调用方须改用新字段。
 升级后，这些 Key 的出站安装身份及关联的会话、缓存标识会变化，已有 WebSocket 精确续写需重新发送完整上下文。
-未配置该字段的 Key 继续使用账号安装身份，配置方式见 [Key 客户端身份](../docs/api.md#api-密钥)
+未配置该字段的 Key 继续使用账号安装身份，配置方式见 [Key 客户端身份](../docs/api.md)
 
 ### 错误保护配置升级
 
