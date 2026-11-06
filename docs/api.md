@@ -2795,7 +2795,7 @@ Provider metadata 分别保留 `requestedServiceTier` 与 `upstreamServiceTier` 
 
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |
-| `GET` | `/api/admin/system/version` | 无 | 当前构建、部署模式和可用更新 |
+| `GET` | `/api/admin/system/version` | 无 | 当前构建和部署模式；更新摘要只来自运行通道缓存 |
 | `GET` | `/api/admin/system/update/detail` | `refresh=true\|false`、`channel?` | 按临时通道读取或刷新 Release 详情 |
 | `GET` | `/api/admin/system/update/events` | 无 | SSE 更新事件流 |
 | `POST` | `/api/admin/system/update` | `{ targetVersion, channel? }` | 受理后台在线更新，返回 `202` |
@@ -2810,7 +2810,11 @@ Provider metadata 分别保留 `requestedServiceTier` 与 `upstreamServiceTier` 
 响应的 `policy` 包含本次 `channel` 与 `availableChannels`，普通实例可选 `stable`、`rc`、`beta`、`alpha`，
 实验实例仅允许 `exp`。不可用通道返回 `40901`，未知枚举值返回参数错误。
 执行时应同时发送页面确认的 `channel` 与 `targetVersion`，服务端冻结该通道并重新复核远端目标；
-省略通道时按运行版本推导。版本摘要接口始终检查运行通道，不受临时查询影响。
+省略通道时按运行版本推导。版本接口返回当前进程的构建信息，不查询 Release。
+`latestVersion`、`hasUpdate`、`updateCached` 和 `updateWarning` 只反映运行通道缓存；
+没有缓存时 `hasUpdate` 为 false、`latestVersion` 为当前版本、`updateCached` 为 false，
+这不表示已经确认没有更新。需要检查候选时调用详情接口。临时通道查询不会改写这份运行通道缓存。
+重启就绪判断读取版本接口，因此不依赖发行查询。
 检查与执行使用同一规则，禁止的通道转换、跨实验线、跨大版本、降级或同版本重装均以 `40901` 拒绝。
 `hasUpdate=true` 仅表示当前构建支持在线更新，且存在允许的更高版本；`latestVersion`、`releaseUrl` 和
 `notes` 对应这个候选。没有可升级候选时，`hasUpdate=false`、`latestVersion` 为当前版本，

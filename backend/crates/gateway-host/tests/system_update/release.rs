@@ -56,7 +56,8 @@ async fn update_detail_should_report_refresh_failure_and_clear_previous_update()
         .await
         .expect("version after failed refresh");
     assert!(!version.has_update);
-    assert!(version.update_warning.is_some());
+    assert!(!version.update_cached);
+    assert!(version.update_warning.is_none());
 }
 
 #[tokio::test]
@@ -538,4 +539,41 @@ async fn update_detail_should_withhold_cross_major_release() {
     assert!(detail.warning.is_none());
     assert!(detail.notes.is_none());
     assert!(detail.release_url.is_none());
+}
+
+#[tokio::test]
+async fn version_reports_the_running_build_without_listing_releases() {
+    let server = MockServer::start().await;
+    let fixture = Fixture::new();
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repository/releases"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(30))
+                .set_body_json(serde_json::json!([
+                    { "tag_name": "v1.1.0", "prerelease": false }
+                ])),
+        )
+        .mount(&server)
+        .await;
+    let service = fixture.service(&server);
+
+    let version = tokio::time::timeout(Duration::from_secs(1), service.version())
+        .await
+        .expect("running version must not wait for release discovery")
+        .expect("version");
+
+    assert_eq!(version.version, "1.0.0");
+    assert_eq!(version.latest_version, "1.0.0");
+    assert_eq!(version.update_channel, "stable");
+    assert!(!version.has_update);
+    assert!(!version.update_cached);
+    assert!(version.update_warning.is_none());
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
 }

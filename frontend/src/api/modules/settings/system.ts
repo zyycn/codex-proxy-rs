@@ -86,11 +86,12 @@ interface SystemUpdateTarget {
   channel: SystemUpdateChannel
 }
 
-export function getSystemUpdateDetail(data: SystemUpdateDetailQuery) {
+export function getSystemUpdateDetail(data: SystemUpdateDetailQuery, options: RequestOptions = {}) {
   return request<SystemUpdateDetail>({
     url: '/api/admin/system/update/detail',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 

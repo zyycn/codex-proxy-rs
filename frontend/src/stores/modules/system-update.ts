@@ -83,6 +83,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   })
 
   let loadVersionPromise: ReturnType<typeof getSystemVersion> | undefined
+  let summaryRequest: Promise<void> | undefined
   let loadSystemPromise: Promise<void> | undefined
   let statusRequest: Promise<void> | undefined
   let statusGeneration = 0
@@ -293,16 +294,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       await loadVersion()
     if (generation !== detailGeneration)
       return
-    if (version.value && detail.policy.channel === version.value.updateChannel) {
-      // 侧栏只提示当前运行通道的更新，临时查看其他通道不会改变全局提示。
-      version.value = {
-        ...version.value,
-        latestVersion: detail.latestVersion,
-        hasUpdate: detail.hasUpdate,
-        updateCached: detail.cached,
-        updateWarning: detail.warning,
-      }
-    }
+    applyRunningChannelSummary(detail)
   }
 
   async function loadSystem(refresh = false) {
@@ -331,6 +323,37 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     }
   }
 
+  function applyRunningChannelSummary(detail: Awaited<ReturnType<typeof getSystemUpdateDetail>>) {
+    // 侧栏只提示当前运行通道的更新，临时查看其他通道不会改变全局提示
+    if (!version.value || detail.policy.channel !== version.value.updateChannel)
+      return
+    version.value = {
+      ...version.value,
+      latestVersion: detail.latestVersion,
+      hasUpdate: detail.hasUpdate,
+      updateCached: detail.cached,
+      updateWarning: detail.warning,
+    }
+  }
+
+  function refreshRunningChannelSummary() {
+    if (summaryRequest)
+      return summaryRequest
+    summaryRequest = (async () => {
+      try {
+        const detail = await getSystemUpdateDetail({ refresh: false }, { silent: true })
+        applyRunningChannelSummary(detail)
+      }
+      catch {
+        // 发行查询失败时保留已经返回的运行版本
+      }
+      finally {
+        summaryRequest = undefined
+      }
+    })()
+    return summaryRequest
+  }
+
   async function loadVersion() {
     if (loadVersionPromise)
       return loadVersionPromise
@@ -339,6 +362,9 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     try {
       const versionData = await loadVersionPromise
       version.value = versionData
+      // 冷缓存不代表没有更新，补查不能挡在重启就绪探测前面
+      if (!versionData.updateCached)
+        void refreshRunningChannelSummary()
       return versionData
     }
     finally {

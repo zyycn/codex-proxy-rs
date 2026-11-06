@@ -105,6 +105,16 @@ impl ReleaseCache {
         }
     }
 
+    /// 只读取仍在有效期内的发行缓存，不发起发行查询
+    pub(crate) async fn cached_detail(
+        &self,
+        config: &SystemUpdateConfig,
+        channel: UpdateChannel,
+    ) -> Option<SystemUpdateDetail> {
+        let key = format!("{}|{}", config.release_cache_key(), channel.as_str());
+        self.cached(&key).await
+    }
+
     async fn cached(&self, key: &str) -> Option<SystemUpdateDetail> {
         let entry = self.entry.lock().await;
         let cached = entry.as_ref()?;

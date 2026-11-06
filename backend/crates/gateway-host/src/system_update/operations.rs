@@ -368,7 +368,21 @@ impl ProcessSystemOperations {
 #[async_trait]
 impl SystemOperations for ProcessSystemOperations {
     async fn version(&self) -> Result<SystemVersion, OperationError> {
-        let detail = self.update_detail(false, None).await?;
+        // 重启就绪探测依赖本接口，不能等待可能跨多页的发行列表
+        let channel = self.resolve_channel(None)?;
+        let cached = self
+            .release_cache
+            .cached_detail(&self.config, channel)
+            .await;
+        let (latest_version, has_update, update_cached, update_warning) = match cached {
+            Some(detail) => (
+                detail.latest_version,
+                detail.has_update,
+                detail.cached,
+                detail.warning,
+            ),
+            None => (self.config.version.clone(), false, false, None),
+        };
         Ok(SystemVersion {
             version: self.config.version.clone(),
             git_sha: self.config.git_sha.clone(),
@@ -377,10 +391,10 @@ impl SystemOperations for ProcessSystemOperations {
             update_channel: version_channel(&self.config.version)
                 .map(|channel| channel.as_str().to_owned())
                 .unwrap_or_else(|| "unknown".to_owned()),
-            latest_version: detail.latest_version,
-            has_update: detail.has_update,
-            update_cached: detail.cached,
-            update_warning: detail.warning,
+            latest_version,
+            has_update,
+            update_cached,
+            update_warning,
         })
     }
 
