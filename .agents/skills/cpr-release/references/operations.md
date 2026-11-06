@@ -46,9 +46,7 @@ release/publish "$release_version"
 - 构建与打包中间产物保留 7 天，在有效期内可重跑失败任务；产物过期后重跑完整工作流，不移动原 tag。
 - 发布完成后核对 GitHub Release 的版本、正式版/预发行状态和中文变更正文；对照平台清单与工作流确认归档、校验和及镜像产物。
   工作流附加的安装说明和自动提交列表按其当前配置处理，不用它们替代手写的中文变更说明。
-- 回读 `main/release/version.yaml` 的 `published`：正式版参与同一大版本四个普通通道的比较；RC 参与 RC、Beta、Alpha，Beta 参与 Beta、Alpha，Alpha 只参与自身。实验版只推进 `exp["X.Y.Z"]`。晚完成的发行不得回退较高候选；保留备版字段和其他大版本
-- 若 Release 和镜像均已发布，只有索引写回失败，使用包含发布脚本的工作区，在既有远程发布授权内单独执行
-  `GITHUB_REPOSITORY=owner/repo ruby .github/scripts/published-channels.rb "$release_version"`（使用已认证的 `gh`）。
-  脚本按 tag 复核公开状态、平台包与附件，以文件 SHA 防止覆盖并发修改。持续冲突或无权写入 main 时报告失败并核对分支规则；不重新打包或移动 tag。回读 main 确认后再报告索引已推进；raw 缓存传播期间，客户端可能短暂看到上一候选。索引最多 8 KiB，接近上限时核实并移除已结束维护的实验基线，不删仍受支持的通道
+- 回读固定预发行页 `update-index`（不是 GitHub Latest），按正文 JSON 的 `current` 下载对应 `v<current>` 的 `version.yaml`。核对快照版本及 `published`：正式版参与同一大版本四个普通通道的比较；RC 参与 RC、Beta、Alpha，Beta 参与 Beta、Alpha，Alpha 只参与自身。实验版只推进 `exp["X.Y.Z"]`。晚完成的发行不得回退较高候选或丢失其他发行线
+- 只有指针写入失败时，在既有授权内执行 `gh workflow run release.yml --ref main -f tag="v$release_version" -f index_only=true`。恢复任务与发布共用锁，只核对已公开版本的附件和待发布快照摘要，不重新打包、改版本 tag 或写 main。完成后回读指针与附件；待发布记录不能当作成功。索引附件最多 128 KiB
 - 返回版本、tag 对应提交、Release/工作流链接及实际结果。失败、仍在构建或缺失产物时明确说明，不能称为发布成功；
   Release 和镜像已生成也不表示用户的运行实例已经升级。

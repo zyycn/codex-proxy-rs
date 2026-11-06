@@ -10,6 +10,9 @@ use serde::Deserialize;
 
 use super::{OperationError, SystemUpdateConfig, conflict, invalid};
 
+pub(super) const MAX_DOWNLOAD_SIZE: u64 = 500 * 1024 * 1024;
+pub(super) const MAX_CHECKSUM_SIZE: u64 = 1024 * 1024;
+
 const APP_BINARY_NAME: &str = "codex-proxy-rs";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,6 +32,44 @@ pub(crate) struct GitHubAsset {
     pub(crate) name: String,
     pub(crate) browser_download_url: String,
     pub(crate) size: u64,
+}
+
+impl GitHubRelease {
+    pub(super) fn install_assets(
+        &self,
+        version: &str,
+        api_base: &str,
+    ) -> Result<(&GitHubAsset, &GitHubAsset), OperationError> {
+        let os = match env::consts::OS {
+            "macos" => "darwin",
+            os => os,
+        };
+        let arch = match env::consts::ARCH {
+            "x86_64" => "amd64",
+            "aarch64" => "arm64",
+            arch => arch,
+        };
+        let name = format!("{APP_BINARY_NAME}_{version}_{os}_{arch}.tar.gz");
+        let archive = self
+            .assets
+            .iter()
+            .find(|a| a.name == name)
+            .ok_or_else(|| conflict(format!("当前发行版本没有适用于 {os}/{arch} 的更新包")))?;
+        if !(1..=MAX_DOWNLOAD_SIZE).contains(&archive.size) {
+            return Err(invalid("更新包大小无效或超出限制"));
+        }
+        let checksum = self
+            .assets
+            .iter()
+            .find(|a| a.name == "checksums.txt")
+            .ok_or_else(|| super::upstream("发行版本缺少 checksums.txt 校验文件，无法安全更新"))?;
+        if !(1..=MAX_CHECKSUM_SIZE).contains(&checksum.size) {
+            return Err(invalid("校验文件大小无效或超出限制"));
+        }
+        validate_download_url(&archive.browser_download_url, api_base)?;
+        validate_download_url(&checksum.browser_download_url, api_base)?;
+        Ok((archive, checksum))
+    }
 }
 
 pub(crate) fn detail_from_release(
@@ -70,36 +111,6 @@ pub(crate) fn confirmed_target(target: Option<String>) -> Result<String, Operati
     Ok(target)
 }
 
-pub(crate) fn select_archive<'a>(
-    release: &'a GitHubRelease,
-    version: &str,
-) -> Result<&'a GitHubAsset, OperationError> {
-    let os = platform_os_aliases();
-    let arch = platform_arch_aliases();
-    let normalized = normalize_version(version);
-    release
-        .assets
-        .iter()
-        .find(|asset| {
-            asset.name.contains(APP_BINARY_NAME)
-                && asset.name.contains(&normalized)
-                && asset_matches_platform(&asset.name, os, arch)
-                && !asset.name.ends_with(".txt")
-        })
-        .or_else(|| {
-            release.assets.iter().find(|asset| {
-                asset_matches_platform(&asset.name, os, arch) && !asset.name.ends_with(".txt")
-            })
-        })
-        .ok_or_else(|| {
-            conflict(format!(
-                "当前发行版本没有适用于 {}/{} 的更新包",
-                env::consts::OS,
-                env::consts::ARCH
-            ))
-        })
-}
-
 /// 校验 GitHub Release 资产 URL 及其重定向目标是否位于受信任边界内
 pub fn validate_download_url(raw: &str, api_base: &str) -> Result<(), OperationError> {
     let url = reqwest::Url::parse(raw)
@@ -128,7 +139,7 @@ pub(crate) fn download_client(
     reqwest::Client::builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            if download_url_allowed(attempt.url(), &api_base) {
+            if attempt.previous().len() < 5 && download_url_allowed(attempt.url(), &api_base) {
                 attempt.follow()
             } else {
                 attempt.error(std::io::Error::other(
@@ -262,26 +273,6 @@ pub(crate) fn validate_update_target(
 
 fn repository_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-}
-
-fn platform_os_aliases() -> &'static [&'static str] {
-    match env::consts::OS {
-        "macos" => &["macos", "darwin"],
-        "linux" => &["linux"],
-        _ => &[env::consts::OS],
-    }
-}
-
-fn platform_arch_aliases() -> &'static [&'static str] {
-    match env::consts::ARCH {
-        "x86_64" => &["x86_64", "amd64"],
-        "aarch64" => &["aarch64", "arm64"],
-        _ => &[env::consts::ARCH],
-    }
-}
-
-fn asset_matches_platform(name: &str, os: &[&str], arch: &[&str]) -> bool {
-    os.iter().any(|alias| name.contains(alias)) && arch.iter().any(|alias| name.contains(alias))
 }
 
 fn github_download_host_allowed(host: &str) -> bool {

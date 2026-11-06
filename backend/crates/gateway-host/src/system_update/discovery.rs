@@ -104,7 +104,27 @@ impl ReleaseCache {
         };
         let summary = index.and_then(|index| candidate(config, channel, &index));
         match summary {
-            Ok((mut detail, _)) => {
+            Ok((mut detail, target)) => {
+                if detail.has_update {
+                    let slot = self
+                        .releases
+                        .lock()
+                        .await
+                        .iter()
+                        .find(|(v, _)| v == &target)
+                        .map(|(_, s)| Arc::clone(s));
+                    let checked = match slot {
+                        Some(slot) => slot.cached(NORMAL).await,
+                        None => None,
+                    };
+                    match checked {
+                        Some(Ok(Some(_))) => {}
+                        Some(Err(error)) => {
+                            return base_update_detail(config, channel, None, Some(&error));
+                        }
+                        _ => return base_update_detail(config, channel, None, None),
+                    }
+                }
                 detail.cached = true;
                 detail
             }
@@ -134,9 +154,11 @@ impl ReleaseCache {
                 .await?;
             let (mut detail, target) = candidate(config, channel, &index)?;
             detail.cached = cached;
-            if check != Check::Summary {
+            if check != Check::Summary || detail.has_update {
                 let (release, reused) = self.exact(config, &target, age, diagnostics).await?;
-                if let Some(release) = release {
+                if let Some(release) = release
+                    && check != Check::Summary
+                {
                     detail = detail_from_release(config, &release, channel);
                 }
                 detail.cached = cached && reused;

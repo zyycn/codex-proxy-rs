@@ -17,22 +17,20 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, broadcast};
 
 use super::archive::extract_release;
 use super::discovery::ReleaseCache;
-use super::download::{
-    MAX_DOWNLOAD_SIZE, download_file, fetch_expected_checksum, format_bytes, verify_checksum,
-};
+use super::download::{download_file, fetch_expected_checksum, format_bytes, verify_checksum};
 use super::events::UpdateEvents;
 use super::installation::{OFFICIAL_PLUGIN_MANIFEST, ReleaseFiles};
 use super::process::spawn_replacement;
 use super::release::{
-    GitHubRelease, base_update_detail, confirmed_target, select_archive, update_policy,
-    validate_download_url, validate_update_target, version_channel,
+    GitHubRelease, base_update_detail, confirmed_target, update_policy, validate_update_target,
+    version_channel,
 };
 use super::state::{
     OperationFileLock, UpdateOperation, UpdateTempDir, finish, operation_id, read_status,
     reconcile_installation, recover_interrupted, set_running,
 };
 use super::swap::{replace_release_files, rollback_official_plugins_dir, rollback_release};
-use super::{OperationError, SystemUpdateConfig, conflict, internal, invalid, upstream};
+use super::{OperationError, SystemUpdateConfig, conflict, internal, invalid};
 
 const MAX_OFFICIAL_PLUGIN_MANIFEST_SIZE: u64 = 256 * 1024;
 
@@ -211,7 +209,7 @@ impl ProcessSystemOperations {
             Some("asset"),
             "正在选择匹配当前平台的更新包",
         );
-        let archive = select_archive(release, version)?;
+        let (archive, checksum) = release.install_assets(version, &self.config.github_api_base)?;
         self.events.info(
             Some(operation_id),
             Some("asset"),
@@ -223,15 +221,6 @@ impl ProcessSystemOperations {
         );
         self.events
             .info(Some(operation_id), Some("verify"), "正在校验更新资源");
-        if archive.size == 0 || archive.size > MAX_DOWNLOAD_SIZE {
-            return Err(invalid("更新包大小无效或超出限制"));
-        }
-        let checksum = release
-            .assets
-            .iter()
-            .find(|asset| asset.name == "checksums.txt")
-            .ok_or_else(|| upstream("发行版本缺少 checksums.txt 校验文件，无法安全更新"))?;
-        validate_download_url(&archive.browser_download_url, &self.config.github_api_base)?;
         self.events.info(
             Some(operation_id),
             Some("prepare"),

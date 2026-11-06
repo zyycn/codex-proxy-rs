@@ -40,6 +40,7 @@ async fn archive_is_the_last_remote_request_before_activation() {
     assert_eq!(
         paths,
         [
+            POINTER_PATH,
             INDEX_PATH,
             &format!("/repos/owner/repository/releases/tags/v{TARGET_VERSION}"),
             "/checksums",

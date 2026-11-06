@@ -7,6 +7,10 @@ on:
         description: 'Tag to release, for example v0.1.0'
         required: true
         type: string
+      index_only:
+        description: 'Recover the index for an already public release without rebuilding'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,6 +25,7 @@ env:
 
 jobs:
   release-info:
+    if: ${{ !inputs.index_only }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
@@ -239,8 +244,6 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      id-token: write
-      attestations: write
 
     steps:
       - name: Checkout
@@ -273,11 +276,6 @@ jobs:
           DOCKER_VERSION: ${{ needs.release-info.outputs.docker_version }}
           PLATFORM_MATRIX: ${{ needs.release-info.outputs.platform_matrix }}
         run: ruby .github/scripts/package-release.rb archives
-
-      - name: Generate release asset provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-path: dist/release/*
 
       - name: Upload release assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -540,6 +538,17 @@ jobs:
           File.write(output, "#{notes}\n\n#{installation}\n")
           RUBY
 
+      - name: Prepare versioned channel snapshot under the publication lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release-info.outputs.version }}
+        run: ruby .github/scripts/published-channels.rb prepare "$VERSION"
+
+      - name: Generate release asset provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/release/*
+
       - name: Upload GitHub Release assets
         id: release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -564,8 +573,24 @@ jobs:
           RELEASE_ID: ${{ steps.release.outputs.id }}
         run: ruby .github/scripts/publish-release.rb
 
-      - name: Advance published channels on main
+      - name: Advance update-index to the verified snapshot
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.release-info.outputs.version }}
-        run: ruby .github/scripts/published-channels.rb "$VERSION"
+        run: ruby .github/scripts/published-channels.rb finish "$VERSION"
+
+  recover-index:
+    if: inputs.index_only
+    runs-on: ubuntu-26.04
+    concurrency:
+      group: release-publication
+      queue: max
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify public assets and finish pending publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: ruby .github/scripts/published-channels.rb finish "$TAG"
