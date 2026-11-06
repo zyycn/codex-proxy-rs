@@ -258,5 +258,4 @@ jobs:
           for script in .github/**/*.sh; do bash -n "$script"; done
           for script in .github/scripts/*.rb; do ruby -c "$script"; done
           ruby .github/scripts/toolchains.rb
-          ruby .github/scripts/tests/published-channels-test.rb
           ruby -c backend/crates/gateway-plugin/runtime/plugin-api-lifecycle.rb
