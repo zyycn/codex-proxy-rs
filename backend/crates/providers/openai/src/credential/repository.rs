@@ -7,8 +7,8 @@ use gateway_core::error::ErrorSource;
 
 use gateway_core::account::{
     AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, CredentialState, LoadedCredential, ProviderAccount, ProviderAccountStore,
-    ProviderAccountUpdate, ProviderRefreshQuery,
+    CredentialRevision, CredentialState, LoadedCredential, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore, ProviderAccountUpdate, ProviderRefreshQuery,
 };
 use gateway_core::routing::ProviderKind;
 use secrecy::ExposeSecret;
@@ -135,6 +135,19 @@ impl CodexCredentialRepository {
         })?;
         self.store
             .list_for_provider(&provider)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub(crate) async fn list_for_accounts(
+        &self,
+        accounts: &[ProviderAccountId],
+    ) -> Result<Vec<ProviderAccount>, CredentialRepositoryError> {
+        let provider = ProviderKind::new(PROVIDER_NAME).map_err(|source| {
+            CredentialRepositoryError::InvalidCredentialData(Some(ErrorSource::new(source)))
+        })?;
+        self.store
+            .list_for_provider_accounts(&provider, accounts)
             .await
             .map_err(Into::into)
     }

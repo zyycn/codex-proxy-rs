@@ -219,6 +219,13 @@ pub trait ProviderCooldownPort: Send + Sync {
         account_id: &'a ProviderAccountId,
     ) -> BoxFuture<'a, Result<Option<ProviderCooldown>, ProviderStoreError>>;
 
+    /// 按输入顺序返回每项读取结果，单项失败不丢弃其余账号事实
+    /// 实现应限制单批读取规模，取消后不启动后续批次
+    fn read_many<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+    ) -> BoxFuture<'a, Vec<Result<Option<ProviderCooldown>, ProviderStoreError>>>;
+
     fn clear<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
@@ -235,6 +242,13 @@ pub trait ProviderCooldownPort: Send + Sync {
         account_id: &'a ProviderAccountId,
         scope: &'a ProviderCooldownScope,
     ) -> BoxFuture<'a, Result<Option<ProviderScopedCooldown>, ProviderStoreError>>;
+
+    /// 与账号级批量读取使用相同的顺序、单项失败和取消合同
+    fn read_scoped_many<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+        scope: &'a ProviderCooldownScope,
+    ) -> BoxFuture<'a, Vec<Result<Option<ProviderScopedCooldown>, ProviderStoreError>>>;
 
     fn clear_scoped<'a>(
         &'a self,

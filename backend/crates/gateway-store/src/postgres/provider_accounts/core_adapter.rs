@@ -88,6 +88,26 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .collect()
     }
 
+    async fn list_for_provider_accounts(
+        &self,
+        provider: &ProviderKind,
+        account_ids: &[CoreProviderAccountId],
+    ) -> Result<Vec<CoreProviderAccount>, CoreStoreError> {
+        if account_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let account_ids = account_ids
+            .iter()
+            .map(CoreProviderAccountId::as_str)
+            .collect::<Vec<_>>();
+        self.list_provider_account_summaries(Some(provider.as_str()), false, Some(&account_ids))
+            .await
+            .map_err(core_store_error)?
+            .into_iter()
+            .map(core_account_from_summary)
+            .collect()
+    }
+
     async fn list_refresh_candidates(
         &self,
         query: CoreProviderRefreshQuery,

@@ -29,6 +29,13 @@ pub trait ProviderAccountStore: Send + Sync {
         provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, StoreError>;
 
+    /// 只读取指定 Provider 冻结范围内的已启用账号，空范围直接返回空池
+    async fn list_for_provider_accounts(
+        &self,
+        provider: &ProviderKind,
+        account_ids: &[ProviderAccountId],
+    ) -> Result<Vec<ProviderAccount>, StoreError>;
+
     /// 一次有界查询返回账号事实和 revision-fenced 明文 credential
     async fn list_refresh_candidates(
         &self,

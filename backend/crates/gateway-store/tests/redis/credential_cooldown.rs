@@ -327,6 +327,158 @@ fn cooldown(account_id: &str, revision: u64, seconds: i64) -> CredentialCooldown
     }
 }
 
+#[tokio::test]
+async fn cooldown_batch_preserves_order_partial_errors_and_due_probe_freezes() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let mut accounts = (0..131)
+        .map(|index| ProviderAccountId::new(format!("acct_batch_{index}")).unwrap())
+        .collect::<Vec<_>>();
+    accounts.push(accounts[130].clone());
+    repository
+        .cache_credential_cooldown(&cooldown(accounts[1].as_str(), 1, 60))
+        .await
+        .unwrap();
+    let bad_type_key = namespace_keys(&mut connection, &namespace)
+        .await
+        .into_iter()
+        .find(|key| key.ends_with(":cooldown"))
+        .unwrap();
+    redis::cmd("SET")
+        .arg(&bad_type_key)
+        .arg("invalid")
+        .query_async::<()>(&mut connection)
+        .await
+        .unwrap();
+    repository
+        .cache_credential_cooldown(&cooldown(accounts[2].as_str(), 2, 60))
+        .await
+        .unwrap();
+    let bad_value_key = namespace_keys(&mut connection, &namespace)
+        .await
+        .into_iter()
+        .find(|key| key.ends_with(":cooldown") && key != &bad_type_key)
+        .unwrap();
+    redis::cmd("HSET")
+        .arg(bad_value_key)
+        .arg("kind")
+        .arg("unknown")
+        .query_async::<i64>(&mut connection)
+        .await
+        .unwrap();
+    repository
+        .cache_credential_cooldown(&CredentialCooldown {
+            kind: ProviderCooldownKind::CapacityFreezeProbe,
+            ..cooldown(accounts[3].as_str(), 3, -60)
+        })
+        .await
+        .unwrap();
+    repository
+        .cache_credential_cooldown(&cooldown(accounts[130].as_str(), 4, 60))
+        .await
+        .unwrap();
+
+    assert!(repository.read_many(&[]).await.is_empty());
+    let results = repository.read_many(&accounts).await;
+    assert_eq!(results.len(), accounts.len());
+    assert!(
+        results[3]
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .kind()
+            .requires_probe()
+    );
+    assert!(results[130].as_ref().unwrap().is_some());
+    for (index, (account, result)) in accounts.iter().zip(results).enumerate() {
+        if matches!(index, 1 | 2) {
+            assert!(result.is_err(), "{index}");
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                repository.read(account).await.unwrap(),
+                "{index}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn scoped_cooldown_batch_preserves_model_revision_and_partial_errors() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let mut accounts = (0..130)
+        .map(|index| ProviderAccountId::new(format!("acct_scoped_batch_{index}")).unwrap())
+        .collect::<Vec<_>>();
+    accounts.push(accounts[129].clone());
+    let scope = ProviderCooldownScope::upstream_model(
+        gateway_core::routing::UpstreamModelId::new("gpt-test").unwrap(),
+    );
+    let other_scope = ProviderCooldownScope::upstream_model(
+        gateway_core::routing::UpstreamModelId::new("gpt-other").unwrap(),
+    );
+    let revision = CredentialRevision::new(3).unwrap();
+    let until = millisecond_precision(Utc::now() + Duration::seconds(60)).into();
+    repository
+        .put_scoped_if_later(ProviderScopedCooldown::new(
+            accounts[1].clone(),
+            revision,
+            scope.clone(),
+            until,
+        ))
+        .await
+        .unwrap();
+    let bad_key = namespace_keys(&mut connection, &namespace)
+        .await
+        .pop()
+        .unwrap();
+    redis::cmd("SET")
+        .arg(bad_key)
+        .arg("invalid")
+        .query_async::<()>(&mut connection)
+        .await
+        .unwrap();
+    for (account, model) in [(&accounts[2], &other_scope), (&accounts[129], &scope)] {
+        repository
+            .put_scoped_if_later(ProviderScopedCooldown::new(
+                account.clone(),
+                revision,
+                model.clone(),
+                until,
+            ))
+            .await
+            .unwrap();
+    }
+
+    assert!(repository.read_scoped_many(&[], &scope).await.is_empty());
+    let results = repository.read_scoped_many(&accounts, &scope).await;
+    assert_eq!(results.len(), accounts.len());
+    assert!(results[2].as_ref().unwrap().is_none());
+    assert_eq!(
+        results[129]
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .credential_revision(),
+        revision
+    );
+    for (index, (account, result)) in accounts.iter().zip(results).enumerate() {
+        if index == 1 {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                repository.read_scoped(account, &scope).await.unwrap(),
+                "{index}"
+            );
+        }
+    }
+}
+
 fn millisecond_precision(value: DateTime<Utc>) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(value.timestamp_millis()).expect("valid timestamp")
 }

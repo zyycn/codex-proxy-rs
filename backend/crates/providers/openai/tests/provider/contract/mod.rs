@@ -9842,6 +9842,7 @@ async fn disabled_account_diagnostic_uses_upstream_without_persisting_account_st
         .set_enabled(account.id(), false)
         .await
         .expect("disable test account");
+    store.fail_provider_listing();
 
     let affinity = Arc::new(MemorySessionAffinity::default());
     let server = MockServer::start().await;

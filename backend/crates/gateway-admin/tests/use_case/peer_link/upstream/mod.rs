@@ -456,6 +456,31 @@ impl ProviderAccountStore for TestAccounts {
             .cloned()
             .collect())
     }
+
+    async fn list_for_provider_accounts(
+        &self,
+        provider: &ProviderKind,
+        account_ids: &[ProviderAccountId],
+    ) -> Result<Vec<ProviderAccount>, StoreError> {
+        if account_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if Some(provider.as_str()) == self.failed_provider {
+            return Err(StoreError::new(StoreErrorKind::Unavailable));
+        }
+        Ok(self
+            .accounts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|account| {
+                account.provider() == provider
+                    && account.enabled()
+                    && account_ids.contains(account.id())
+            })
+            .cloned()
+            .collect())
+    }
     async fn list_refresh_candidates(
         &self,
         _query: ProviderRefreshQuery,

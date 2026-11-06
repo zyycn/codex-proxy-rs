@@ -1611,8 +1611,14 @@ async fn preferred_final_thread_rewrite_within_the_session_preserves_the_primary
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
+    let leases = Arc::new(TestLeaseCoordinator::default());
     let server = MockServer::start().await;
-    let provider = provider_with_affinity_and_base_url(&store, affinity, server.uri());
+    let provider = provider_with_affinity_and_base_url_and_leases(
+        &store,
+        affinity,
+        server.uri(),
+        leases.clone(),
+    );
     let request = |thread| {
         planned_request(
             "openai",
@@ -1631,7 +1637,18 @@ async fn preferred_final_thread_rewrite_within_the_session_preserves_the_primary
     );
     create_account(&store, "acct_subagent_b").await;
     let a = store.account("acct_subagent_a").unwrap();
-    store.set_enabled(a.id(), false).await.unwrap();
+    leases.signals.lock().unwrap().insert(
+        a.id().clone(),
+        gateway_core::account::AccountRuntimeSignals {
+            in_flight: 100,
+            last_started_at: None,
+            quota_reset_at: None,
+            quota_remaining_rank: None,
+            cooldown: None,
+            failure_rate_basis_points: None,
+            first_output_latency_ms: None,
+        },
+    );
     drop(
         provider
             .clone()
@@ -1642,7 +1659,7 @@ async fn preferred_final_thread_rewrite_within_the_session_preserves_the_primary
             .await
             .unwrap(),
     );
-    store.set_enabled(a.id(), true).await.unwrap();
+    leases.signals.lock().unwrap().clear();
     let plan = FrozenMiddlewarePlan::new(
         Arc::new(ChangeTurnMetadata(
             br#"{"session_id":"root","thread_id":"child"}"#,
@@ -1744,77 +1761,107 @@ async fn preferred_spillover_uses_selected_credentials_on_the_wire() {
 }
 
 #[tokio::test]
-async fn preferred_unavailable_primary_can_recover_without_losing_its_binding() {
+async fn preferred_primary_migration_distinguishes_temporary_and_persistent_unavailability() {
     use gateway_core::account::{
-        AccountAffinity, AccountRuntimeSignals, AccountSelectionPolicy, RotationStrategy,
+        AccountAffinity, AccountRuntimeSignals, AccountSelectionPolicy, AccountStateChange,
+        RotationStrategy,
     };
     use gateway_core::concurrency::ConcurrencyQueuePolicy;
 
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_subagent_a").await;
-    let leases = Arc::new(TestLeaseCoordinator::default());
-    let server = MockServer::start().await;
-    let provider = provider_with_affinity_and_base_url_and_leases(
-        &store,
-        Arc::new(MemorySessionAffinity::default()),
-        server.uri(),
-        leases.clone(),
-    );
-    let policy = AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::new(2).unwrap())
-        .with_openai_account_affinity(AccountAffinity::Preferred)
-        .with_queue(ConcurrencyQueuePolicy {
-            max_waiting: 10,
-            timeout: Duration::from_secs(1),
-        });
-    let select = || {
-        provider.clone().execute(
-            planned_request("openai", turn_request("root", "availability-turn")),
-            preferred_context_with_policy(
-                "req_primary_availability",
-                contract_account_scope(),
-                policy,
-            ),
-        )
-    };
-    drop(select().await.unwrap());
-    create_account(&store, "acct_subagent_b").await;
-    let primary = ProviderAccountId::new("acct_subagent_a").unwrap();
-    for reason in ["concurrency", "disabled", "quota"] {
-        let mut signals = AccountRuntimeSignals {
-            in_flight: 0,
-            last_started_at: None,
-            quota_reset_at: None,
-            quota_remaining_rank: None,
-            cooldown: None,
-            failure_rate_basis_points: None,
-            first_output_latency_ms: None,
+    for (reason, migrated) in [
+        ("concurrency", false),
+        ("quota_soon", false),
+        ("quota_just_reset", false),
+        ("disabled", true),
+        ("deleted", true),
+        ("expired", true),
+        ("invalid", true),
+        ("banned", true),
+        ("quota_unknown", true),
+        ("quota_later", true),
+        ("quota_stale", true),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_subagent_a").await;
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        let server = MockServer::start().await;
+        let provider = provider_with_affinity_and_base_url_and_leases(
+            &store,
+            Arc::new(MemorySessionAffinity::default()),
+            server.uri(),
+            leases.clone(),
+        );
+        let policy =
+            AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::new(2).unwrap())
+                .with_openai_account_affinity(AccountAffinity::Preferred)
+                .with_queue(ConcurrencyQueuePolicy {
+                    max_waiting: 10,
+                    timeout: Duration::from_secs(30),
+                });
+        let select = || {
+            provider.clone().execute(
+                planned_request("openai", turn_request("root", "availability-turn")),
+                preferred_context_with_policy(
+                    "req_primary_availability",
+                    contract_account_scope(),
+                    policy,
+                ),
+            )
         };
+        drop(select().await.unwrap());
+        create_account(&store, "acct_subagent_b").await;
+        let primary = ProviderAccountId::new("acct_subagent_a").unwrap();
+        let account = store.account(primary.as_str()).unwrap();
+        let now = SystemTime::now();
         match reason {
-            "concurrency" => signals.in_flight = 2,
-            "disabled" => {
-                store.set_enabled(&primary, false).await.unwrap();
+            "concurrency" => {
+                leases.signals.lock().unwrap().insert(
+                    primary.clone(),
+                    AccountRuntimeSignals {
+                        in_flight: 2,
+                        last_started_at: None,
+                        quota_reset_at: None,
+                        quota_remaining_rank: None,
+                        cooldown: None,
+                        failure_rate_basis_points: None,
+                        first_output_latency_ms: None,
+                    },
+                );
             }
-            "quota" => {
+            "disabled" => store.set_enabled(&primary, false).await.unwrap(),
+            "deleted" => store.delete_account(&primary).await.unwrap(),
+            "expired" | "invalid" | "banned" => {
+                let state = CredentialState::parse(reason).unwrap();
                 store
-                    .apply_quota_access(QuotaAccessChange {
+                    .apply_state_change(AccountStateChange {
                         account_id: primary.clone(),
-                        expected_revision: store.account(primary.as_str()).unwrap().revision(),
-                        state: QuotaState::exhausted(
-                            QuotaEvidence::UsageLimitReached,
-                            SystemTime::now(),
-                            None,
-                        ),
+                        expected_revision: account.revision(),
+                        credential_state: state,
+                        observed_at: now,
+                        error_reason: state.error_reason(),
+                        message: None,
                     })
                     .await
                     .unwrap();
             }
-            _ => unreachable!(),
+            _ => {
+                let reset = match reason {
+                    "quota_soon" => Some(now + Duration::from_secs(10)),
+                    "quota_just_reset" => Some(now - Duration::from_secs(10)),
+                    "quota_later" => Some(now + Duration::from_secs(3600)),
+                    "quota_stale" => Some(now - Duration::from_secs(3600)),
+                    _ => None,
+                };
+                store
+                    .apply_quota_access(QuotaAccessChange {
+                        account_id: primary.clone(),
+                        expected_revision: account.revision(),
+                        state: QuotaState::exhausted(QuotaEvidence::UsageLimitReached, now, reset),
+                    })
+                    .await
+                    .unwrap();
+            }
         }
-        leases
-            .signals
-            .lock()
-            .unwrap()
-            .insert(primary.clone(), signals);
         let fallback = tokio::time::timeout(Duration::from_millis(500), select())
             .await
             .unwrap()
@@ -1826,7 +1873,21 @@ async fn preferred_unavailable_primary_can_recover_without_losing_its_binding() 
         );
         drop(fallback);
         leases.signals.lock().unwrap().clear();
+        if reason == "deleted" {
+            create_account(&store, primary.as_str()).await;
+        }
         store.set_enabled(&primary, true).await.unwrap();
+        store
+            .apply_state_change(AccountStateChange {
+                account_id: primary.clone(),
+                expected_revision: store.account(primary.as_str()).unwrap().revision(),
+                credential_state: CredentialState::Ready,
+                observed_at: SystemTime::now(),
+                error_reason: None,
+                message: None,
+            })
+            .await
+            .unwrap();
         store
             .apply_quota_access(QuotaAccessChange {
                 account_id: primary.clone(),
@@ -1842,10 +1903,103 @@ async fn preferred_unavailable_primary_can_recover_without_losing_its_binding() 
                 .metadata()
                 .provider_account_id()
                 .as_str(),
-            "acct_subagent_a",
-            "{reason}"
+            if migrated {
+                "acct_subagent_b"
+            } else {
+                "acct_subagent_a"
+            },
+            "{reason}",
         );
     }
+}
+
+#[tokio::test]
+async fn preferred_spillover_stays_stable_and_concurrent_migration_claims_one_primary() {
+    use gateway_core::account::AccountRuntimeSignals;
+
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_subagent_a").await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let affinity = Arc::new(MemorySessionAffinity::with_operation_delay(
+        Duration::from_millis(5),
+    ));
+    let server = MockServer::start().await;
+    let provider = provider_with_affinity_and_base_url_and_leases(
+        &store,
+        affinity.clone(),
+        server.uri(),
+        leases.clone(),
+    );
+    let select = || {
+        provider.clone().execute(
+            planned_request("openai", turn_request("root", "stable-spillover")),
+            preferred_context("req_stable_spillover", contract_account_scope()),
+        )
+    };
+    drop(select().await.unwrap());
+    create_account(&store, "acct_subagent_b").await;
+    create_account(&store, "acct_session_affinity").await;
+    let primary = ProviderAccountId::new("acct_subagent_a").unwrap();
+    leases.signals.lock().unwrap().insert(
+        primary.clone(),
+        AccountRuntimeSignals {
+            in_flight: 100,
+            last_started_at: None,
+            quota_reset_at: None,
+            quota_remaining_rank: None,
+            cooldown: None,
+            failure_rate_basis_points: None,
+            first_output_latency_ms: None,
+        },
+    );
+    let fallback = select()
+        .await
+        .unwrap()
+        .metadata()
+        .provider_account_id()
+        .clone();
+    assert_ne!(fallback, primary);
+    for _ in 0..4 {
+        assert_eq!(
+            select().await.unwrap().metadata().provider_account_id(),
+            &fallback
+        );
+    }
+    leases
+        .busy_accounts
+        .lock()
+        .unwrap()
+        .insert(fallback.clone());
+    let alternate = select()
+        .await
+        .unwrap()
+        .metadata()
+        .provider_account_id()
+        .clone();
+    assert_ne!(alternate, fallback);
+    assert_ne!(alternate, primary);
+    leases.busy_accounts.lock().unwrap().clear();
+    assert_eq!(
+        select().await.unwrap().metadata().provider_account_id(),
+        &fallback
+    );
+    leases.signals.lock().unwrap().clear();
+    assert_eq!(
+        select().await.unwrap().metadata().provider_account_id(),
+        &primary
+    );
+
+    store.set_enabled(&primary, false).await.unwrap();
+    let (first, second) = tokio::join!(select(), select());
+    let migrated = first.unwrap().metadata().provider_account_id().clone();
+    assert_ne!(migrated, primary);
+    assert_eq!(second.unwrap().metadata().provider_account_id(), &migrated);
+    store.set_enabled(&primary, true).await.unwrap();
+    assert_eq!(
+        select().await.unwrap().metadata().provider_account_id(),
+        &migrated
+    );
+    assert_eq!(affinity.binding_count(), 1);
 }
 
 #[tokio::test]

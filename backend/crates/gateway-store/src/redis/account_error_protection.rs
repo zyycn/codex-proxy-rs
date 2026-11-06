@@ -335,6 +335,38 @@ impl RedisCredentialCooldownRepository {
         parse_cooldown(account, &result)
     }
 
+    pub(super) async fn read_effective_cooldowns(
+        &self,
+        account_ids: &[ProviderAccountId],
+    ) -> Vec<StoreResult<Option<CredentialCooldown>>> {
+        let mut results = Vec::with_capacity(account_ids.len());
+        for batch in account_ids.chunks(super::credential_cooldown::COOLDOWN_READ_BATCH_SIZE) {
+            let commands = batch
+                .iter()
+                .map(|account_id| {
+                    let account = account_id.as_str();
+                    let mut command = redis::cmd("EVALSHA");
+                    command
+                        .arg(READ_COOLDOWN.get_hash())
+                        .arg(4)
+                        .arg(self.key(account)?)
+                        .arg(self.active_index_key())
+                        .arg(self.protection_key(account)?)
+                        .arg(self.protection_index_key())
+                        .arg(account);
+                    Ok(command)
+                })
+                .collect();
+            let values = self.read_script_batch(&READ_COOLDOWN, commands).await;
+            results.extend(batch.iter().zip(values).map(|(account, value)| {
+                let values: Vec<String> = redis::from_redis_value(value?)
+                    .map_err(|source| redis_unavailable("decode account cooldown", source))?;
+                parse_cooldown(account.as_str(), &values)
+            }));
+        }
+        results
+    }
+
     pub(super) async fn read_account_runtime(
         &self,
         account: &str,

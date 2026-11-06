@@ -53,6 +53,7 @@ type CredentialLoadHook = dyn for<'a> Fn(
 pub(crate) struct MemoryAccountStore {
     accounts: Mutex<BTreeMap<ProviderAccountId, StoredAccount>>,
     account_reads: AtomicUsize,
+    provider_list_reads: AtomicUsize,
     quota_reads: AtomicUsize,
     largest_quota_read: AtomicUsize,
     fail_provider_listing: AtomicBool,
@@ -204,6 +205,10 @@ impl MemoryAccountStore {
         self.account_reads.load(Ordering::SeqCst)
     }
 
+    pub(crate) fn provider_list_reads(&self) -> usize {
+        self.provider_list_reads.load(Ordering::SeqCst)
+    }
+
     pub(crate) fn has_quota(&self, id: &str) -> bool {
         let Some(id) = ProviderAccountId::new(id).ok() else {
             return false;
@@ -292,6 +297,7 @@ impl ProviderAccountStore for MemoryAccountStore {
         &self,
         provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, StoreError> {
+        self.provider_list_reads.fetch_add(1, Ordering::SeqCst);
         if self.fail_provider_listing.load(Ordering::SeqCst) {
             return Err(StoreError::caused_by(
                 StoreErrorKind::Unavailable,
@@ -308,6 +314,36 @@ impl ProviderAccountStore for MemoryAccountStore {
             .expect("account store lock")
             .values()
             .filter(|stored| stored.account.provider() == provider && stored.account.enabled())
+            .map(|stored| stored.account.clone())
+            .collect())
+    }
+
+    async fn list_for_provider_accounts(
+        &self,
+        provider: &ProviderKind,
+        account_ids: &[ProviderAccountId],
+    ) -> Result<Vec<ProviderAccount>, StoreError> {
+        if account_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.provider_list_reads.fetch_add(1, Ordering::SeqCst);
+        if self.fail_provider_listing.load(Ordering::SeqCst) {
+            return Err(StoreError::caused_by(
+                StoreErrorKind::Unavailable,
+                std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "PRIVATE_DATABASE_CAUSE",
+                ),
+            ));
+        }
+        // 与 Postgres 实现的调度列表语义一致：停用账号不进入常规候选
+        Ok(self
+            .accounts
+            .lock()
+            .expect("account store lock")
+            .values()
+            .filter(|stored| stored.account.provider() == provider && stored.account.enabled())
+            .filter(|stored| account_ids.contains(stored.account.id()))
             .map(|stored| stored.account.clone())
             .collect())
     }
@@ -1215,6 +1251,37 @@ impl MemoryCooldownPort {
 }
 
 impl ProviderCooldownPort for MemoryCooldownPort {
+    fn read_many<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+    ) -> BoxFuture<'a, Vec<Result<Option<ProviderCooldown>, ProviderStoreError>>> {
+        Box::pin(async move {
+            let mut results = Vec::with_capacity(account_ids.len());
+            for batch in account_ids.chunks(128) {
+                results
+                    .extend(futures::future::join_all(batch.iter().map(|id| self.read(id))).await);
+            }
+            results
+        })
+    }
+
+    fn read_scoped_many<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+        scope: &'a ProviderCooldownScope,
+    ) -> BoxFuture<'a, Vec<Result<Option<ProviderScopedCooldown>, ProviderStoreError>>> {
+        Box::pin(async move {
+            let mut results = Vec::with_capacity(account_ids.len());
+            for batch in account_ids.chunks(128) {
+                results.extend(
+                    futures::future::join_all(batch.iter().map(|id| self.read_scoped(id, scope)))
+                        .await,
+                );
+            }
+            results
+        })
+    }
+
     fn put_if_later(
         &self,
         cooldown: ProviderCooldown,

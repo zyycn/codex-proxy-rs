@@ -360,23 +360,6 @@ impl CodexCredentialQuotaService {
         Ok(())
     }
 
-    /// 读取有效的账号冷却事实；等待恢复探测的冻结到期后仍有效
-    pub async fn cooldown(
-        &self,
-        account_id: &ProviderAccountId,
-    ) -> Result<Option<gateway_core::account::AccountCooldown>, CodexCredentialQuotaError> {
-        let Some(cooldown) = self.cooldowns.read(account_id).await.map_err(|error| {
-            CodexCredentialQuotaError::Store {
-                detail: error.to_string(),
-            }
-        })?
-        else {
-            return Ok(None);
-        };
-        let state = cooldown.scheduling_state();
-        Ok(state.is_active(SystemTime::now()).then_some(state))
-    }
-
     /// 读取单账号最后一次落库的 Provider quota，并由 Codex 域解析展示窗口
     pub async fn read_account(
         &self,
