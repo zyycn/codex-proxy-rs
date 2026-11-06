@@ -1562,7 +1562,12 @@ impl ExecutionService for DefaultExecutionService {
             for kind in scope.provider_kinds() {
                 let provider = providers.get(kind).ok_or(ProviderCatalogUnavailable)?;
                 let Some(models) = provider
-                    .query_client_model_catalog(scope, protocol, client_version)
+                    .query_client_model_catalog(
+                        client.policy.key_id(),
+                        scope,
+                        protocol,
+                        client_version,
+                    )
                     .await?
                 else {
                     for profile in client.snapshot.profiles_for_provider_scope(kind, scope) {

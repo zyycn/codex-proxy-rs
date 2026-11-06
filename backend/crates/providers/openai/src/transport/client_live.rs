@@ -32,13 +32,6 @@ impl CodexBackendClient {
         content_type: Option<&str>,
     ) -> CodexClientResult<HeaderMap> {
         let profile = self.profile.snapshot();
-        let context = CodexRequestContext {
-            installation_id: profile
-                .installation_id
-                .as_deref()
-                .or(context.installation_id),
-            ..context
-        };
         let mut headers = self.model_request_headers(&profile, context)?;
         for header in extra_protocol_headers {
             let name = HeaderName::from_bytes(header.name().as_bytes())?;

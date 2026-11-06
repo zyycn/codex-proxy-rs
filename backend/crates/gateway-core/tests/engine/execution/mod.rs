@@ -3340,6 +3340,7 @@ impl Provider for CatalogProvider {
     }
     async fn query_client_model_catalog(
         &self,
+        _client_api_key_id: &ClientApiKeyId,
         scope: &FrozenAccountScope,
         protocol: &str,
         version: &str,

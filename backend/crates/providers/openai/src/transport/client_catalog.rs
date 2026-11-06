@@ -25,16 +25,7 @@ impl CodexBackendClient {
             OpenAiUpstreamProtocol::ResponsesApi => "models",
         };
         let profile = self.profile.snapshot();
-        let headers = self.model_request_headers(
-            &profile,
-            CodexRequestContext {
-                installation_id: profile
-                    .installation_id
-                    .as_deref()
-                    .or(context.installation_id),
-                ..context
-            },
-        )?;
+        let headers = self.model_request_headers(&profile, context)?;
         let mut request = self
             .client
             .get(endpoint_url(&self.base_url, path))

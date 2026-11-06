@@ -433,13 +433,18 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
             .map_err(|_| {
                 provider_error(ProviderErrorKind::Unauthorized, UpstreamSendState::NotSent)
             })?;
+        let installation_id = profile.effective_installation_id(
+            request.context.client_api_key_ref(),
+            request.lease.account_id(),
+            request.lease.installation_id(),
+        );
         let request_id = request.context.request_id().as_str().to_owned();
         let trace = request.context.trace();
         let mut request_context = CodexRequestContext::auxiliary(
             authorization.expose_secret(),
             active_account.upstream_account_id(),
             &request_id,
-            Some(request.lease.installation_id()),
+            Some(&installation_id),
         );
         request_context.trace = Some(&trace);
         request_context.account_selection = CodexAccountSelectionTelemetry::new(
@@ -681,6 +686,11 @@ impl LiveGateway for CodexLiveGateway {
             let claim = LiveCallClaim::new(Arc::clone(&self.registry), request.call_id.to_owned());
             let (account, authorization, installation_id) =
                 self.load_pinned_credential(&account_id).await?;
+            let installation_id = profile.effective_installation_id(
+                request.client_api_key_id,
+                &account_id,
+                &installation_id,
+            );
             if !account.enabled() {
                 return Err(LiveGatewayError::new(
                     LiveGatewayErrorKind::OwnerMismatch,
@@ -739,6 +749,11 @@ impl LiveGateway for CodexLiveGateway {
                 })?;
             let (account, authorization, installation_id) =
                 self.load_pinned_credential(&account_id).await?;
+            let installation_id = profile.effective_installation_id(
+                request.client_api_key_id,
+                &account_id,
+                &installation_id,
+            );
             // hangup 与引导同源：必须走钉住账号的出口代理与连接池，
             // 不能使用共享 client 直连发出。
             let client = self
