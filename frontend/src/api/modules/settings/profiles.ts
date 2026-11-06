@@ -30,7 +30,7 @@ export interface CustomClientProfileSelection {
 
 export type ClientProfileSelection = PresetClientProfileSelection | CustomClientProfileSelection
 
-export function isValidInstallationId(value: unknown) {
+export function isValidInstallationSeed(value: unknown) {
   return value == null || value === '' || (typeof value === 'string' && value.length === 36 && /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value))
 }
 

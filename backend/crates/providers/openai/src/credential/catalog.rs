@@ -10,6 +10,7 @@ use futures::{StreamExt, stream};
 use gateway_core::account::{
     CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
 };
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
 };
@@ -206,6 +207,7 @@ struct CatalogCacheState {
 
 #[derive(PartialEq, Eq)]
 struct ClientCatalogKey {
+    client_key_id: Option<ClientApiKeyId>,
     account_id: ProviderAccountId,
     revision: CredentialRevision,
     plan: Option<String>,
@@ -311,6 +313,7 @@ impl CodexCredentialCatalogService {
     /// 同一账号/凭据版本/客户端版本的并发读取合并；原生正文仅保留在有界进程缓存
     pub async fn client_model_catalog(
         &self,
+        client_key_id: &ClientApiKeyId,
         scope: &FrozenAccountScope,
         client_version: &str,
     ) -> ClientCatalogResult {
@@ -339,7 +342,12 @@ impl CodexCredentialCatalogService {
                 let profile = request_profile.clone();
                 async move {
                     let result = self
-                        .cached_client_account_catalog(&account, client_version, profile)
+                        .cached_client_account_catalog(
+                            client_key_id,
+                            &account,
+                            client_version,
+                            profile,
+                        )
                         .await;
                     (account, result)
                 }
@@ -374,7 +382,12 @@ impl CodexCredentialCatalogService {
         let mut last_error = CodexCredentialCatalogError::NoEligibleCredential;
         for account in accounts.iter().take(MAX_CATALOG_FETCH_ATTEMPTS) {
             match self
-                .cached_client_account_catalog(account, client_version, request_profile.clone())
+                .cached_client_account_catalog(
+                    client_key_id,
+                    account,
+                    client_version,
+                    request_profile.clone(),
+                )
                 .await
             {
                 Ok(models) => {
@@ -403,11 +416,17 @@ impl CodexCredentialCatalogService {
 
     async fn cached_client_account_catalog(
         &self,
+        client_key_id: &ClientApiKeyId,
         account: &ProviderAccount,
         client_version: &str,
         profile: CodexWireProfile,
     ) -> ClientCatalogResult {
         let key = ClientCatalogKey {
+            // 无种子时沿用账号级目录缓存，启用后按 Key 隔离出站身份
+            client_key_id: profile
+                .installation_seed
+                .as_ref()
+                .map(|_| client_key_id.clone()),
             account_id: account.id().clone(),
             revision: account.revision(),
             plan: account.plan_type().map(str::to_owned),
@@ -450,7 +469,7 @@ impl CodexCredentialCatalogService {
                     CodexWireProfileState::new(profile),
                 );
                 let result = self
-                    .fetch_account_models(&client, account, Some(client_version))
+                    .fetch_account_models(&client, account, Some((client_key_id, client_version)))
                     .await
                     .map(|fetched| {
                         fetched
@@ -805,7 +824,7 @@ impl CodexCredentialCatalogService {
         &self,
         client: &CodexBackendClient,
         account: &ProviderAccount,
-        client_version: Option<&str>,
+        client_identity: Option<(&ClientApiKeyId, &str)>,
     ) -> Result<FetchedAccountModels, CodexCredentialCatalogError> {
         tokio::time::timeout(MODEL_CATALOG_TIMEOUT, async {
             let credential = self
@@ -813,6 +832,14 @@ impl CodexCredentialCatalogService {
                 .load_runtime_credential(account)
                 .await
                 .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+            let installation_id = client_identity.map(|(key_id, _)| {
+                client.profile_state().effective_installation_id(
+                    key_id,
+                    account.id(),
+                    &credential.installation_id,
+                )
+            });
+            let client_version = client_identity.map(|(_, version)| version);
             let request_id = format!("catalog_{}", Uuid::now_v7().simple());
             let authorization = credential
                 .authentication
@@ -829,7 +856,7 @@ impl CodexCredentialCatalogService {
                         authorization.expose_secret(),
                         account.upstream_account_id(),
                         &request_id,
-                        client_version.map(|_| credential.installation_id.as_str()),
+                        installation_id.as_deref(),
                     ),
                     client_version,
                 )

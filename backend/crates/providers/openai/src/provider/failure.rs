@@ -1098,7 +1098,7 @@ pub(super) fn profile_diagnostic(
     use crate::transport::profile::selection::ClientProfileError;
     let code = match error {
         ClientProfileError::Invalid => "request_profile_invalid",
-        ClientProfileError::InvalidInstallationId => "request_profile_installation_id_invalid",
+        ClientProfileError::InvalidInstallationSeed => "request_profile_installation_seed_invalid",
         ClientProfileError::InvalidUserAgent => "request_profile_user_agent_invalid",
         ClientProfileError::CompanionHeadersRequired => "request_profile_headers_required",
         ClientProfileError::CompanionHeadersConflict => "request_profile_headers_conflict",

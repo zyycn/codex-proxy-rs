@@ -405,7 +405,7 @@ API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`originator`、`v
 包括会话、线程、Lite 和其他业务扩展头。
 上游认证只来自选中的账号；API Key 不携带 OAuth Cookie、ChatGPT 账号身份或下游的
 `X-OpenAI-Actor-Authorization` 托管认证声明。
-`x-codex-installation-id` 优先使用当前 Key 设置的安装 ID，否则使用选中账号已持久化的安装 ID，与正文 `client_metadata` 中的安装身份一致。
+`x-codex-installation-id` 在 Key 配置种子时，由种子、Key ID 与选中账号 ID 稳定派生；未配置时使用账号已持久化的安装 ID，与正文 `client_metadata` 中的安装身份一致
 `x-openai-internal-codex-residency` 和 `x-openai-account-routing-override` 分别由部署配置
 `openai.residency`、`openai.account_routing_override` 控制，配置值原样发送并覆盖客户端同名头，
 省略或 `null` 时删除对应请求头。配置说明见 [部署与运维](../deploy/README.md#启动后的运行设置)
@@ -425,7 +425,7 @@ Responses 明确换号时清理 `traceparent`、`tracestate`、`sentry-trace`、
 `ws_request_header_*` 副本。同账号及归属未知时保留原值，业务输入和工具结果保持原始内容
 
 会话、线程、窗口及父子线程引用在出站时按本次安装身份稳定映射为 UUID；
-默认使用账号安装身份，换账号会改变映射；Key 配置固定安装 ID 时，换账号仍沿用该 ID 的映射。HTTP 请求头、正文 metadata、WS 副本及
+默认使用账号安装身份；Key 配置种子时，每个 Key × 账号组合拥有独立的安装身份，换账号会改变映射。HTTP 请求头、正文 metadata、WS 副本及
 已识别的 Desktop 自动 Git 上下文使用一致映射。
 轮次及父子轮次引用保留客户端原值，包括输入项的 `internal_chat_message_metadata_passthrough.turn_id`、
 请求 metadata 中的 `turn_id`、`parent_turn_id`、`root_turn_id`，以及 `x-client-turn-id`、
@@ -1858,8 +1858,8 @@ HTTP 返回 `403` 和 `image_generation_disabled`，WebSocket 每个 `response.c
 未提供的 Provider 跟随通用设置；更新时省略某项保留原值，设为 `null` 清除该项覆盖。最多 256 项，每项最多 64 KiB。
 独立配置整体覆盖通用设置，不逐字段继承；切换全局配置不会影响独立 Key。目录与选择规则见 [Provider 客户端身份](#provider-客户端身份)
 
-OpenAI Key 可设置 `installationId`（带连字符的 UUID，大小写均可）。在 `providerRequestProfileOverrides.openai` 中，继承全局 UA 时使用 `{"inherit":{"installationId":"3b11bc82-c666-417d-b9ff-2a34fd040385"}}`；独立预设和自定义 UA 将该字段与各自的画像字段并列。
-省略、空字符串或 `null` 使用选中账号的安装身份；填写后仅覆盖这把 Key 的出站安装身份，换账号仍使用该值，不改写账号凭据。通用设置不接受此字段。
+OpenAI Key 可设置 `installationSeed`（带连字符的 UUID，大小写均可，保存时规范化为小写）。在 `providerRequestProfileOverrides.openai` 中，继承全局 UA 时使用 `{"inherit":{"installationSeed":"3b11bc82-c666-417d-b9ff-2a34fd040385"}}`；独立预设和自定义 UA 将该字段与各自的画像字段并列
+省略、空字符串或 `null` 使用选中账号的安装身份；填写后由种子、稳定的 Key 记录 ID 和账号记录 ID 派生安装 UUID。同一组合在重启、UA 变化和凭据更新后保持稳定，换 Key、换账号或修改种子会改变身份。种子不会发送给上游，也不改写账号凭据。通用设置不接受此字段
 
 兼容字段 `openaiClientProfileOverride` 和 `xaiClientProfileOverride` 分别对应上述映射中的 `openai`、`xai`。
 创建时省略或 `null` 表示无覆盖；更新时省略保留、`null` 清除。与通用字段同时提交时必须一致，否则拒绝整个请求；
@@ -2298,7 +2298,7 @@ Responses 的自动 Desktop Git 上下文与请求头使用同一画像快照：
 该同步不依赖隐私策略开关；显式隐私规则在其后执行，仍可覆盖最终字段
 
 配置在请求开始时冻结，Provider 首次解析的版本用于该请求的全部重试与换号。
-安装 ID 不变时 WebSocket 精确续写沿用所属连接；更改或清除覆盖导致生效 ID 变化时，须重新发送完整上下文
+安装 ID 不变时 WebSocket 精确续写沿用所属连接；更改或清除种子导致生效 ID 变化时，须重新发送完整上下文
 
 ### xAI 上游客户端身份
 

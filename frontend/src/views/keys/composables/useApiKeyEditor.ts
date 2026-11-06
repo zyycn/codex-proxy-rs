@@ -10,7 +10,7 @@ import { notification as ZNotification } from '@/utils/notification'
 export interface ApiKeyFormValue {
   peerSharing: ApiKeyPeerSharing
   providerRequestProfileOverrides: ProviderRequestProfiles
-  installationId: string
+  installationSeed: string
   customKey: string
   name: string
   label: string
@@ -43,17 +43,17 @@ export function useApiKeyEditor(options: {
     const profiles = cloneDeep(key.providerRequestProfileOverrides)
     const openai = profiles.openai
     const identity = (openai?.inherit as Record<string, unknown> | undefined) ?? openai
-    const installationId = typeof identity?.installationId === 'string'
-      ? identity.installationId
+    const installationSeed = typeof identity?.installationSeed === 'string'
+      ? identity.installationSeed
       : ''
     if (openai?.inherit)
       delete profiles.openai
     else if (openai)
-      delete openai.installationId
+      delete openai.installationSeed
     form.value = {
       peerSharing: { ...key.peerSharing },
       providerRequestProfileOverrides: profiles,
-      installationId,
+      installationSeed,
       customKey: '',
       name: key.name,
       label: key.label ?? '',
@@ -100,13 +100,13 @@ export function useApiKeyEditor(options: {
           weeklyLimitUsd: form.value.weeklyLimitUsd.trim() || '0',
         }
         const profiles = cloneDeep(form.value.providerRequestProfileOverrides)
-        const installationId = form.value.installationId
-        if (installationId) {
-          // 仅固定安装 ID 时保留对全局 UA 的继承，不在 Key 中复制当前全局值
+        const installationSeed = form.value.installationSeed
+        if (installationSeed) {
+          // 仅设置种子时仍继承全局 UA，不在 Key 中复制当前全局值
           profiles.openai = profiles.openai
-            ? { ...profiles.openai, installationId }
+            ? { ...profiles.openai, installationSeed }
             : {
-                inherit: { installationId },
+                inherit: { installationSeed },
               }
         }
         const current = editingKey.value
@@ -174,7 +174,7 @@ function emptyForm(): ApiKeyFormValue {
       sharePlans: false,
     },
     providerRequestProfileOverrides: {},
-    installationId: '',
+    installationSeed: '',
     customKey: '',
     name: '',
     label: '',

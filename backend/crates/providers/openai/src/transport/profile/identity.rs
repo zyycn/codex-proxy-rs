@@ -4,6 +4,7 @@ use chrono::DateTime;
 use gateway_core::account::OpaqueProviderData;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::selection::{
     ClientKind, ClientProfileError, ClientProfileSelection, VersionMode, object,
@@ -14,13 +15,41 @@ use super::{CodexWireProfile, CodexWireProfileState};
 #[derive(Debug, Clone)]
 pub struct RequestProfileSelection {
     selection: ParsedSelection,
-    installation_id: Option<String>,
+    installation_seed: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 enum ParsedSelection {
     Preset(ClientProfileSelection),
     Custom(ExactIdentity),
+}
+
+impl CodexWireProfile {
+    pub(crate) fn effective_installation_id(
+        &self,
+        client_key_id: &gateway_core::policy::ClientApiKeyId,
+        account_id: &gateway_core::account::ProviderAccountId,
+        account_installation_id: &str,
+    ) -> String {
+        let Some(seed) = &self.installation_seed else {
+            return account_installation_id.to_owned();
+        };
+        // 稳定记录 ID 不受 UA、令牌刷新或账号凭据中的安装身份变化影响
+        // 长度前缀避免字段边界歧义，独立用途域不与会话关联标识共享派生空间
+        let mut digest = Sha256::new();
+        digest.update(b"codex-key-account-installation-v1\0");
+        for part in [seed.as_str(), client_key_id.as_str(), account_id.as_str()] {
+            digest.update((part.len() as u64).to_be_bytes());
+            digest.update(part.as_bytes());
+        }
+        let hash = digest.finalize();
+        let mut bytes = [0_u8; 16];
+        bytes.copy_from_slice(&hash[..16]);
+        // 沿用出站关联标识的 UUID 形状，值由种子确定，不按请求重新随机生成
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        uuid::Uuid::from_bytes(bytes).to_string()
+    }
 }
 
 #[derive(Deserialize)]
@@ -39,7 +68,8 @@ pub(crate) fn inherited_identity_fields(
     document: &OpaqueProviderData,
 ) -> Result<Option<&serde_json::Map<String, Value>>, ClientProfileError> {
     let inherited = gateway_core::settings::request_profiles::inherited_fields(document);
-    if inherited.is_some_and(|fields| fields.len() != 1 || !fields.contains_key("installationId")) {
+    if inherited.is_some_and(|fields| fields.len() != 1 || !fields.contains_key("installationSeed"))
+    {
         return Err(ClientProfileError::Invalid);
     }
     Ok(inherited)
@@ -65,18 +95,18 @@ impl RequestProfileSelection {
         let mut fields = inherited
             .unwrap_or_else(|| document.expose_to_provider())
             .clone();
-        let installation_id = match fields.remove("installationId") {
+        let installation_seed = match fields.remove("installationSeed") {
             None | Some(Value::Null) => None,
             Some(Value::String(value)) if value.is_empty() => None,
             Some(Value::String(value)) => {
                 let parsed = uuid::Uuid::try_parse(&value)
-                    .map_err(|_| ClientProfileError::InvalidInstallationId)?;
+                    .map_err(|_| ClientProfileError::InvalidInstallationSeed)?;
                 if value.len() != uuid::fmt::Hyphenated::LENGTH {
-                    return Err(ClientProfileError::InvalidInstallationId);
+                    return Err(ClientProfileError::InvalidInstallationSeed);
                 }
                 Some(parsed.to_string())
             }
-            Some(_) => return Err(ClientProfileError::InvalidInstallationId),
+            Some(_) => return Err(ClientProfileError::InvalidInstallationSeed),
         };
         let selection = if inherited.is_some() {
             ParsedSelection::Preset(ClientProfileSelection::default())
@@ -99,7 +129,7 @@ impl RequestProfileSelection {
         };
         Ok(Self {
             selection,
-            installation_id,
+            installation_seed,
         })
     }
 
@@ -111,7 +141,9 @@ impl RequestProfileSelection {
             ParsedSelection::Preset(selection) => selection.resolve(state)?,
             ParsedSelection::Custom(identity) => identity.profile(state),
         };
-        profile.installation_id.clone_from(&self.installation_id);
+        profile
+            .installation_seed
+            .clone_from(&self.installation_seed);
         Ok(profile)
     }
 
@@ -123,11 +155,11 @@ impl RequestProfileSelection {
             ParsedSelection::Preset(selection) => state.preview_preset_selection(selection)?,
             ParsedSelection::Custom(identity) => identity.preview(state)?,
         };
-        let Some(id) = &self.installation_id else {
+        let Some(seed) = &self.installation_seed else {
             return Ok(preview);
         };
         let mut fields = preview.into_inner();
-        fields["configuration"]["installationId"] = Value::String(id.clone());
+        fields["configuration"]["installationSeed"] = Value::String(seed.clone());
         Ok(OpaqueProviderData::new(fields))
     }
 }
@@ -222,7 +254,7 @@ impl ExactIdentity {
                 .map(|value| value.terminal.clone())
                 .unwrap_or_default(),
             exact_user_agent: Some(self.user_agent.clone()),
-            installation_id: None,
+            installation_seed: None,
             residency: deployment.residency,
             account_routing_override: deployment.account_routing_override,
             verified_at: DateTime::UNIX_EPOCH,

@@ -1219,6 +1219,7 @@ pub trait Provider: Send + Sync {
     /// `None` 表示不提供该协议的原生目录；读取失败不能伪装成不支持
     async fn query_client_model_catalog(
         &self,
+        _client_api_key_id: &ClientApiKeyId,
         _scope: &crate::account::scope::FrozenAccountScope,
         _protocol: &str,
         _client_version: &str,

@@ -7,7 +7,7 @@ import { Dices, DollarSign, KeyRound } from '@lucide/vue'
 
 import { computed, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { isValidInstallationId } from '@/api/modules/settings/profiles'
+import { isValidInstallationSeed } from '@/api/modules/settings/profiles'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import ProviderRequestProfilesEditor from '@/components/client-profile/ProviderRequestProfilesEditor.vue'
 import HelpPopover from '@/components/HelpPopover.vue'
@@ -36,14 +36,14 @@ const title = computed(() => props.editing
 const formRef = useTemplateRef<InstanceType<typeof ZForm>>('formElement')
 const rules = useApiKeyFormRules(() => form.value)
 
-const installationIdError = computed(() => isValidInstallationId(form.value.installationId)
+const installationSeedError = computed(() => isValidInstallationSeed(form.value.installationSeed)
   ? ''
-  : t('settings.clientProfile.invalidInstallationId'))
+  : t('settings.clientProfile.invalidInstallationSeed'))
 
 watch(open, () => formRef.value?.clearValidate())
 
 async function requestSave() {
-  if (props.saving || installationIdError.value || !await formRef.value?.validate().catch(() => false))
+  if (props.saving || installationSeedError.value || !await formRef.value?.validate().catch(() => false))
     return
   emit('save')
 }
@@ -148,32 +148,32 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
           />
         </ZFormItem>
 
-        <ZFormItem :label="t('settings.clientProfile.installationId')" :error="installationIdError">
+        <ZFormItem :label="t('settings.clientProfile.installationSeed')" :error="installationSeedError">
           <template #label-extra>
             <span class="-my-2 inline-flex">
-              <HelpPopover :label="t('settings.clientProfile.installationId')" :content="t('settings.clientProfile.installationIdHelp')" />
+              <HelpPopover :label="t('settings.clientProfile.installationSeed')" :content="t('settings.clientProfile.installationSeedHelp')" />
             </span>
           </template>
           <template #extra>
             <ZIconButton
               variant="link" size="small" class="-my-2"
-              :aria-label="t('settings.clientProfile.generateInstallationId')"
+              :aria-label="t('settings.clientProfile.generateInstallationSeed')"
               :disabled="saving"
-              @click="updateForm('installationId', generateUuid())"
+              @click="updateForm('installationSeed', generateUuid())"
             >
               <Dices class="size-4" aria-hidden="true" />
             </ZIconButton>
           </template>
           <ZInput
-            :model-value="form.installationId"
-            :aria-label="t('settings.clientProfile.installationId')"
-            :aria-invalid="!!installationIdError"
-            :placeholder="t('settings.clientProfile.installationIdPlaceholder')"
+            :model-value="form.installationSeed"
+            :aria-label="t('settings.clientProfile.installationSeed')"
+            :aria-invalid="!!installationSeedError"
+            :placeholder="t('settings.clientProfile.installationSeedPlaceholder')"
             :disabled="saving"
             :spellcheck="false"
             autocomplete="off"
             class="font-mono"
-            @update:model-value="updateForm('installationId', $event)"
+            @update:model-value="updateForm('installationSeed', $event)"
           />
         </ZFormItem>
       </div>
@@ -244,7 +244,7 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
       <ZButton
         type="primary"
         :loading="saving"
-        :disabled="!!installationIdError"
+        :disabled="!!installationSeedError"
         @click="requestSave"
       >
         {{ editing ? t('common.actions.save') : t('common.actions.create') }}

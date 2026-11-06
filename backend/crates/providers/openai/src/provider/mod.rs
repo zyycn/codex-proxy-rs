@@ -549,6 +549,7 @@ impl Provider for CodexProvider {
 
     async fn query_client_model_catalog(
         &self,
+        client_api_key_id: &gateway_core::policy::ClientApiKeyId,
         scope: &gateway_core::account::scope::FrozenAccountScope,
         protocol: &str,
         client_version: &str,
@@ -560,7 +561,7 @@ impl Provider for CodexProvider {
             return Ok(None);
         }
         self.catalog
-            .client_model_catalog(scope, client_version)
+            .client_model_catalog(client_api_key_id, scope, client_version)
             .await
             .map(Some)
             .map_err(|_| gateway_core::routing::ProviderCatalogUnavailable)
@@ -977,9 +978,11 @@ impl CodexProvider {
                 .map(|affinity| (response_id.to_owned(), affinity))
         });
         let client = self.client_for_request(&context)?;
-        let installation_id = client
-            .profile_state()
-            .effective_installation_id(lease.installation_id());
+        let installation_id = client.profile_state().effective_installation_id(
+            context.client_api_key_ref(),
+            lease.account_id(),
+            lease.installation_id(),
+        );
         scope_request_to_account(&mut upstream_request, &installation_id, account_scope);
         // 父响应的可信关联只恢复此字段，不把首次 Guardian 请求的其他账号状态视为可信
         if let Some((response_id, _)) = &guardian_parent

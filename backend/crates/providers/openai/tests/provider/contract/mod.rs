@@ -1114,7 +1114,7 @@ fn wire_profile() -> CodexWireProfileState {
         arch: "x86_64".to_owned(),
         terminal: "provider-contract".to_owned(),
         exact_user_agent: None,
-        installation_id: None,
+        installation_seed: None,
         residency: None,
         account_routing_override: None,
         verified_at: Utc::now(),
@@ -6034,13 +6034,13 @@ async fn opaque_provider_options_do_not_change_openai_account_selection() {
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
 }
 
-const KEY_INSTALLATION_ID: &str = "3b11bc82-c666-417d-b9ff-2a34fd040385";
+const KEY_INSTALLATION_SEED: &str = "3b11bc82-c666-417d-b9ff-2a34fd040385";
 
 #[tokio::test]
-async fn key_installation_override_scopes_http_headers_metadata_and_cache_without_changing_account()
-{
+async fn installation_seed_scopes_http_identity_and_cache_by_key_and_account() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_scope_same").await;
+    create_account(&store, "acct_scope_new").await;
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -6049,39 +6049,98 @@ async fn key_installation_override_scopes_http_headers_metadata_and_cache_withou
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(CAPTURE_COMPLETED_SSE),
         )
-        .expect(3)
+        .expect(9)
         .mount(&server)
         .await;
-    let provider = provider_with_base_url(&store, server.uri());
-    for installation_id in [None, Some(KEY_INSTALLATION_ID), None] {
+    let mut provider = provider_with_base_url(&store, server.uri());
+    let other_seed = "a3146f84-64b3-4759-9cf1-a8a001448930";
+    for (index, (key, account, seed, version)) in [
+        ("key_a", "acct_scope_same", None, "1.0.0"),
+        (
+            "key_a",
+            "acct_scope_same",
+            Some(KEY_INSTALLATION_SEED),
+            "1.0.0",
+        ),
+        (
+            "key_a",
+            "acct_scope_new",
+            Some(KEY_INSTALLATION_SEED),
+            "1.0.0",
+        ),
+        (
+            "key_b",
+            "acct_scope_same",
+            Some(KEY_INSTALLATION_SEED),
+            "1.0.0",
+        ),
+        (
+            "key_b",
+            "acct_scope_new",
+            Some(KEY_INSTALLATION_SEED),
+            "1.0.0",
+        ),
+        (
+            "key_a",
+            "acct_scope_same",
+            Some(KEY_INSTALLATION_SEED),
+            "2.0.0",
+        ),
+        ("key_a", "acct_scope_same", Some(other_seed), "1.0.0"),
+        ("key_a", "acct_scope_same", None, "1.0.0"),
+        (
+            "key_a",
+            "acct_scope_same",
+            Some(KEY_INSTALLATION_SEED),
+            "1.0.0",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 8 {
+            provider = provider_with_base_url(&store, server.uri());
+        }
         let configuration = OpaqueProviderData::new(json!({
-            "client": "cli", "platform": "linux", "versionMode": "fixed", "codexVersion":"1.0.0",
-            "installationId": installation_id
+            "client": "cli", "platform": "linux", "versionMode": "fixed", "codexVersion": version,
+            "installationSeed": seed
         }).as_object().unwrap().clone());
         let profile = provider.resolve_request_profile(&configuration).unwrap();
         let payload = ProtocolPayload::json_object(
             "openai",
-            json!({
-                "model":"gpt-5.4","input":"hello","prompt_cache_key":"same-cache-key"
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
+            json!({"model":"gpt-5.4","input":"hello","prompt_cache_key":"same-cache-key"})
+                .as_object()
+                .unwrap()
+                .clone(),
         )
         .unwrap()
         .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))]));
+        let context = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new(format!("req_seed_{index}")).unwrap(),
+                ClientApiKeyId::new(key).unwrap(),
+            )
+            .with_request_location(Some(global_request_location()))
+            .with_request_profile(Some(profile)),
+            NonZeroU32::new(1).unwrap(),
+            SystemTime::now() + Duration::from_secs(30),
+            account_policy(),
+            AccountAttemptContext::new(
+                BTreeSet::new(),
+                Some(ProviderAccountId::new(account).unwrap()),
+                None,
+            )
+            .with_account_scope(contract_account_scope()),
+            None,
+            CancellationToken::new(),
+        );
         let mut stream = Arc::clone(&provider)
             .execute(
                 planned_request(
                     "openai",
                     Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
                 ),
-                context_with_state_owner_and_profile(
-                    "req_device",
-                    "acct_scope_same",
-                    Some(global_request_location()),
-                    Some(profile),
-                ),
+                context,
             )
             .await
             .unwrap();
@@ -6090,24 +6149,41 @@ async fn key_installation_override_scopes_http_headers_metadata_and_cache_withou
         }
     }
     let requests = server.received_requests().await.unwrap();
-    let bodies = requests
+    let bodies: Vec<_> = requests.iter().map(captured_request_body).collect();
+    let ids: Vec<_> = requests
         .iter()
-        .map(captured_request_body)
-        .collect::<Vec<_>>();
-    for (request, body) in requests.iter().zip(&bodies) {
-        assert_eq!(
-            request.headers["x-codex-installation-id"].to_str().unwrap(),
-            body["client_metadata"]["x-codex-installation-id"]
-                .as_str()
-                .unwrap()
-        );
-    }
-    let id = |i: usize| &bodies[i]["client_metadata"]["x-codex-installation-id"];
-    assert_ne!(id(0), KEY_INSTALLATION_ID);
-    assert_eq!(id(1), KEY_INSTALLATION_ID);
-    assert_eq!(id(0), id(2));
-    assert_ne!(bodies[0]["prompt_cache_key"], bodies[1]["prompt_cache_key"]);
-    assert_eq!(bodies[0]["prompt_cache_key"], bodies[2]["prompt_cache_key"]);
+        .zip(&bodies)
+        .map(|(request, body)| {
+            let id = request.headers["x-codex-installation-id"].to_str().unwrap();
+            assert_eq!(id, body["client_metadata"]["x-codex-installation-id"]);
+            assert!(uuid::Uuid::parse_str(id).is_ok());
+            assert_ne!(id, KEY_INSTALLATION_SEED);
+            assert_ne!(id, other_seed);
+            assert!(!String::from_utf8_lossy(&request.body).contains(KEY_INSTALLATION_SEED));
+            id
+        })
+        .collect();
+    assert_eq!(ids[0], ids[7]);
+    assert_eq!(ids[1], ids[5]);
+    assert_eq!(ids[1], ids[8]);
+    assert_eq!(
+        [ids[0], ids[1], ids[2], ids[3], ids[4], ids[6]]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        6
+    );
+    assert_eq!(bodies[0]["prompt_cache_key"], bodies[7]["prompt_cache_key"]);
+    assert_eq!(bodies[1]["prompt_cache_key"], bodies[5]["prompt_cache_key"]);
+    assert_eq!(bodies[1]["prompt_cache_key"], bodies[8]["prompt_cache_key"]);
+    assert_eq!(
+        [0, 1, 2, 3, 4, 6]
+            .map(|i| bodies[i]["prompt_cache_key"].as_str().unwrap())
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        6
+    );
 }
 
 #[tokio::test]
@@ -6234,7 +6310,7 @@ async fn websocket_account_scoping_replaces_downstream_installation_header() {
         ]));
         let provider = provider_with_base_url(&store, base_url);
         let configuration = OpaqueProviderData::new(json!({
-            "mode": "custom", "userAgent": "codex-tui/1.0.0", "installationId": KEY_INSTALLATION_ID
+            "mode": "custom", "userAgent": "codex-tui/1.0.0", "installationSeed": KEY_INSTALLATION_SEED
         }).as_object().unwrap().clone());
         let profile = provider.resolve_request_profile(&configuration).unwrap();
         let mut stream = provider
@@ -6259,7 +6335,8 @@ async fn websocket_account_scoping_replaces_downstream_installation_header() {
         let installation_id = body["client_metadata"]["x-codex-installation-id"]
             .as_str()
             .expect("account installation ID");
-        assert_eq!(installation_id, KEY_INSTALLATION_ID);
+        assert_ne!(installation_id, KEY_INSTALLATION_SEED);
+        assert!(uuid::Uuid::parse_str(installation_id).is_ok());
         assert_eq!(body["installation_id"], installation_id);
         assert_eq!(header["x-codex-installation-id"], installation_id);
         for encoded in [
@@ -10475,7 +10552,12 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
         ClientRoutingScope::all_accounts(),
     );
     let native = provider
-        .query_client_model_catalog(&scope, "codex", "0.154.0")
+        .query_client_model_catalog(
+            &ClientApiKeyId::new("key_catalog").unwrap(),
+            &scope,
+            "codex",
+            "0.154.0",
+        )
         .await
         .expect("native catalog")
         .expect("supported");
@@ -11371,7 +11453,12 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
             .await
             .expect("standard API catalog");
         let catalog = provider
-            .query_client_model_catalog(&contract_account_scope(), "codex", "1.0.0")
+            .query_client_model_catalog(
+                &ClientApiKeyId::new("key_catalog").unwrap(),
+                &contract_account_scope(),
+                "codex",
+                "1.0.0",
+            )
             .await
             .unwrap()
             .unwrap();
