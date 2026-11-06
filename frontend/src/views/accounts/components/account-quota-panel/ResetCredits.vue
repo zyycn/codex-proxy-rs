@@ -16,6 +16,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  accountUpdated: [account: Account]
   consumed: [accountId: string]
 }>()
 
@@ -164,8 +165,9 @@ function handleRequestConsume(creditId: string) {
     <div v-else class="grid gap-4">
       <section class="overflow-hidden rounded-z bg-z-fill-quaternary" :aria-label="t('accounts.quotaReset.currentQuota')">
         <UsageLimits :windows="account.quota.windows" />
-        <AccountQuotaCredits :credits="account.quota.credits" />
       </section>
+
+      <AccountQuotaCredits :key="account.id" :account="account" @account-updated="emit('accountUpdated', $event)" />
 
       <ResetCreditAutomation v-if="account.capabilities.consumeResetCredit" :key="account.id" :account-id="account.id" />
 

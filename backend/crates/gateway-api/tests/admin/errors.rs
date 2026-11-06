@@ -578,6 +578,7 @@ mod provider {
                 total_slots: None,
             },
             account: AccountRecord {
+                auto_use_quota_credits: false,
                 outbound_proxy_id: None,
                 outbound_proxy_enabled: true,
                 notes: None,

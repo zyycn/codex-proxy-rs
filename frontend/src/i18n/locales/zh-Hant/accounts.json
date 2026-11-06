@@ -13,6 +13,8 @@
       "s": "{duration} 秒",
       "unlimited": "無限",
       "noPointsAvailableYet": "暫無可用點數",
+      "autoUsePoints": "自動使用額度點數",
+      "autoUsePointsHelp": "訂閱額度耗盡後，使用可用點數繼續請求",
       "quotaPoints": "額度點數",
       "point": "點",
       "requestsInThisWindow": "窗口請求：{requestDisplay} 次",
@@ -515,7 +517,6 @@
         "label": "自動使用臨期重置卡"
       },
       "automaticallyUseResetCard": "自動使用重置卡",
-      "automaticallyUsed": "自動使用",
       "automaticUsageRules": "自動使用規則",
       "setGlobalLeadTime": "設置全局提前時間",
       "minutesInAdvance": "提前 {leadMinutes} 分鐘",

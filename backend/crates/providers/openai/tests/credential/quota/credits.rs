@@ -22,62 +22,72 @@ async fn mount_usage(server: &MockServer, usage: serde_json::Value) {
 
 #[tokio::test]
 async fn credits_allow_exhausted_subscription_without_bypassing_spend_restrictions() {
-    for (metadata, allowed) in [
-        (
-            json!({"credits": {"has_credits": true, "unlimited": false}}),
-            true,
-        ),
-        (
-            json!({"credits": {"has_credits": false, "unlimited": true}}),
-            true,
-        ),
-        (json!({"credits": {"has_credits": true}}), true),
-        (json!({"credits": {"unlimited": true}}), true),
-        (
-            json!({"credits": {"has_credits": false, "unlimited": false, "balance": "500"}}),
-            false,
-        ),
-        (json!({"credits": null}), false),
-        (
-            json!({"credits": {"has_credits": true}, "spend_control": {"reached": true}}),
-            false,
-        ),
-        (
-            json!({"credits": {"has_credits": true}, "rate_limit_reached_type": {"type": "spend_limit_reached"}}),
-            false,
-        ),
-        (
-            json!({"credits": {"has_credits": true}, "rate_limit_reached_type": {"type": "rate_limit_reached"}}),
-            true,
-        ),
-    ] {
-        let store = Arc::new(MemoryAccountStore::default());
-        create_account_with_enabled(&store, "acct_credits", false).await;
-        let account = store.account("acct_credits").expect("account");
-        persist_credential_state(&store, &account, CredentialState::Expired).await;
-        let server = MockServer::start().await;
-        let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
-        let mut usage = exhausted_usage();
-        usage
-            .as_object_mut()
-            .expect("usage")
-            .extend(metadata.as_object().expect("metadata").clone());
-        mount_usage(&server, usage).await;
+    for auto_use in [false, true] {
+        for (metadata, usable) in [
+            (
+                json!({"credits": {"has_credits": true, "overage_limit_reached": true}}),
+                false,
+            ),
+            (
+                json!({"credits": {"has_credits": true, "unlimited": false}}),
+                true,
+            ),
+            (
+                json!({"credits": {"has_credits": false, "unlimited": true}}),
+                true,
+            ),
+            (json!({"credits": {"has_credits": true}}), true),
+            (json!({"credits": {"unlimited": true}}), true),
+            (
+                json!({"credits": {"has_credits": false, "unlimited": false, "balance": "500"}}),
+                false,
+            ),
+            (json!({"credits": null}), false),
+            (
+                json!({"credits": {"has_credits": true}, "spend_control": {"reached": true}}),
+                false,
+            ),
+            (
+                json!({"credits": {"has_credits": true}, "rate_limit_reached_type": {"type": "spend_limit_reached"}}),
+                false,
+            ),
+            (
+                json!({"credits": {"has_credits": true}, "rate_limit_reached_type": {"type": "rate_limit_reached"}}),
+                true,
+            ),
+        ] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account_with_enabled(&store, "acct_credits", false).await;
+            if auto_use {
+                store.enable_quota_credits("acct_credits");
+            }
+            let allowed = auto_use && usable;
+            let account = store.account("acct_credits").expect("account");
+            persist_credential_state(&store, &account, CredentialState::Expired).await;
+            let server = MockServer::start().await;
+            let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+            let mut usage = exhausted_usage();
+            usage
+                .as_object_mut()
+                .expect("usage")
+                .extend(metadata.as_object().expect("metadata").clone());
+            mount_usage(&server, usage).await;
 
-        let snapshot = service
-            .refresh_account(account.id())
-            .await
-            .expect("refresh credits");
-        assert_eq!(
-            snapshot.quota().access() == QuotaAccessState::Allowed,
-            allowed,
-            "{metadata}"
-        );
-        assert_eq!(snapshot.fact().remaining_percent(), Some(0));
-        let current = store.account("acct_credits").expect("current account");
-        assert_eq!(current.quota().is_exhausted(), !allowed, "{metadata}");
-        assert!(!current.enabled());
-        assert_eq!(current.credential_state(), CredentialState::Expired);
+            let snapshot = service
+                .refresh_account(account.id())
+                .await
+                .expect("refresh credits");
+            assert_eq!(
+                snapshot.quota().access() == QuotaAccessState::Allowed,
+                allowed,
+                "{metadata}"
+            );
+            assert_eq!(snapshot.fact().remaining_percent(), Some(0));
+            let current = store.account("acct_credits").expect("current account");
+            assert_eq!(current.quota().is_exhausted(), !allowed, "{metadata}");
+            assert!(!current.enabled());
+            assert_eq!(current.credential_state(), CredentialState::Expired);
+        }
     }
 }
 
@@ -86,6 +96,7 @@ async fn credits_refresh_clears_old_recovery_and_locks_again_only_when_spent() {
     for periodic in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_credits_recovery").await;
+        store.enable_quota_credits("acct_credits_recovery");
         let account = store.account("acct_credits_recovery").expect("account");
         let server = MockServer::start().await;
         let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
@@ -161,6 +172,7 @@ async fn credits_refresh_clears_old_recovery_and_locks_again_only_when_spent() {
 async fn credits_query_started_before_new_exhaustion_cannot_restore_access() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_stale_credits").await;
+    store.enable_quota_credits("acct_stale_credits");
     let account = store.account("acct_stale_credits").expect("account");
     let server = MockServer::start().await;
     let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
@@ -212,4 +224,46 @@ async fn credits_query_started_before_new_exhaustion_cannot_restore_access() {
             .quota()
             .is_exhausted()
     );
+}
+
+#[tokio::test]
+async fn passive_exhaustion_requires_fresh_credits_and_revokes_access_when_spent() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let id = "acct_passive_credit_policy";
+    create_account(&store, id).await;
+    store.enable_quota_credits(id);
+    let service = quota_service(&store);
+    let window = |used| json!({"primary": {"used_percent": used, "window_minutes": 300}});
+    let credits = |available| json!({"has_credits": available, "unlimited": false});
+    for (facts, expected) in [
+        (
+            json!({"rate_limits": window(20), "credits": credits(true)}),
+            QuotaAccessState::Allowed,
+        ),
+        (
+            json!({"rate_limits": window(100)}),
+            QuotaAccessState::Exhausted,
+        ),
+        (
+            json!({"rate_limits": window(100), "credits": credits(true)}),
+            QuotaAccessState::Allowed,
+        ),
+        (
+            json!({"credits": credits(false)}),
+            QuotaAccessState::Exhausted,
+        ),
+    ] {
+        let mut wire = facts;
+        wire["type"] = json!("codex.rate_limits");
+        let update = parse_rate_limits_event(&wire).expect("rate limit event");
+        service
+            .synchronize_passive_rate_limits(&store.account(id).unwrap(), &[update])
+            .await
+            .unwrap();
+        assert_eq!(
+            store.account(id).unwrap().quota().access(),
+            expected,
+            "{wire}"
+        );
+    }
 }

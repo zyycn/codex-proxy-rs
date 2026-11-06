@@ -106,7 +106,7 @@ pub(crate) async fn load_admin_account_page(
          select coalesce(p.enabled, true) as outbound_proxy_enabled, coalesce(p.max_websocket_connections, 0) as outbound_proxy_max_websocket_connections, p.auto_location, p.detected_location_json, p.location_country, p.location_region, p.location_city, p.location_timezone, a.outbound_proxy_id, a.outbound_proxy_url, a.id, a.provider_kind, a.name, a.notes, a.email, a.upstream_user_id,
                 a.upstream_account_id, a.plan_type, a.authentication_kind,
                 a.credential_revision, a.has_refresh_token, a.access_token_expires_at,
-                a.next_refresh_at, a.enabled, a.concurrency_limit, a.weight, a.model_access_json,
+                a.next_refresh_at, a.enabled, a.auto_use_quota_credits, a.concurrency_limit, a.weight, a.model_access_json,
                 a.credential_state, a.quota_access_state, a.quota_evidence,
                 a.quota_access_observed_at, a.quota_reset_at, a.last_error_reason,
                 a.last_error_message, a.credential_observed_at, a.created_at, a.updated_at,
