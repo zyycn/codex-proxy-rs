@@ -122,6 +122,9 @@ function formatTooltip(params: unknown) {
   if (!point)
     return ''
 
+  const successRate = point.errorRate == null
+    ? null
+    : 1 - point.errorRate
   const theme = palette.value
 
   return chartTooltipContent(point.label, [
@@ -133,7 +136,7 @@ function formatTooltip(params: unknown) {
     usageTooltipItem(t('usage.health.point.callerError'), formatCompactNumber(point.callerErrorRequests), theme.normal),
     usageTooltipItem(
       t('usage.health.serviceSuccessRate'),
-      serviceSuccessRateText(point.errorRate == null ? null : 1 - point.errorRate),
+      serviceSuccessRateText(successRate),
       theme.success,
     ),
   ])
