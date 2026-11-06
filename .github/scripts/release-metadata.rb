@@ -62,6 +62,10 @@ module ReleaseMetadata
     entries
   end
 
+  def self.archive_name(version, platform)
+    "#{APP_NAME}_#{version}_#{platform.fetch('os')}_#{platform.fetch('arch')}.#{platform.fetch('archive')}"
+  end
+
   def self.outputs(tag)
     value = version(YAML.load_file('release/version.yaml').fetch('version'))
     raise "Release tag #{tag} does not match v#{value}" unless tag == "v#{value}"

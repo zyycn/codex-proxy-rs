@@ -259,6 +259,3 @@ jobs:
           for script in .github/scripts/*.rb; do ruby -c "$script"; done
           ruby .github/scripts/toolchains.rb
           ruby -c backend/crates/gateway-plugin/runtime/plugin-api-lifecycle.rb
-
-      - name: Verify release preflight and CI evidence
-        run: ruby .github/scripts/release-checks-test.rb

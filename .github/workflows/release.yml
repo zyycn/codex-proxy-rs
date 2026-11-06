@@ -563,3 +563,9 @@ jobs:
           DIGEST: ${{ steps.manifest.outputs.digest }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
         run: ruby .github/scripts/publish-release.rb
+
+      - name: Advance published channels on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.release-info.outputs.version }}
+        run: ruby .github/scripts/published-channels.rb "$VERSION"

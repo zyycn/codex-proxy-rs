@@ -20,7 +20,7 @@
 
 调用入口前重新核对当前脚本的副作用、目标版本和待推送提交，保留无关工作区内容，不自动清理或暂存用户文件。
 先编辑 `release/notes.md`，保留为未提交改动（已暂存或未暂存均可）；其他已跟踪文件的改动应先单独提交。
-脚本会更新 `release/version.yaml`，按[接口弃用规则](../../../../backend/crates/gateway-plugin/sdk/docs/manifest.md#接口弃用)校验并维护 `plugin-api-deprecations.json`，将这些差异与最终工作区中的发布说明一起提交为 `chore(release): vX.Y.Z`。
+脚本只改 `release/version.yaml` 的顶层 `version`，按[接口弃用规则](../../../../backend/crates/gateway-plugin/sdk/docs/manifest.md#接口弃用)校验并维护 `plugin-api-deprecations.json`，将这些差异与最终工作区中的发布说明一起提交为 `chore(release): vX.Y.Z`。
 不要提前单独提交说明或把版本文件改成目标版本；脚本要求说明相对 HEAD 有改动，并自行更新版本号。
 本任务需要的提交按[项目约定](../../../../CONTRIBUTING.md#项目约定)保留英文 Conventional Commits 与相应署名。
 
@@ -46,5 +46,9 @@ release/publish "$release_version"
 - 构建与打包中间产物保留 7 天，在有效期内可重跑失败任务；产物过期后重跑完整工作流，不移动原 tag。
 - 发布完成后核对 GitHub Release 的版本、正式版/预发行状态和中文变更正文；对照平台清单与工作流确认归档、校验和及镜像产物。
   工作流附加的安装说明和自动提交列表按其当前配置处理，不用它们替代手写的中文变更说明。
+- 回读 `main/release/version.yaml` 的 `published`：正式版参与同一大版本四个普通通道的比较；RC 参与 RC、Beta、Alpha，Beta 参与 Beta、Alpha，Alpha 只参与自身。实验版只推进 `exp["X.Y.Z"]`。晚完成的发行不得回退较高候选；保留备版字段和其他大版本
+- 若 Release 和镜像均已发布，只有索引写回失败，使用包含发布脚本的工作区，在既有远程发布授权内单独执行
+  `GITHUB_REPOSITORY=owner/repo ruby .github/scripts/published-channels.rb "$release_version"`（使用已认证的 `gh`）。
+  脚本按 tag 复核公开状态、平台包与附件，以文件 SHA 防止覆盖并发修改。持续冲突或无权写入 main 时报告失败并核对分支规则；不重新打包或移动 tag。回读 main 确认后再报告索引已推进；raw 缓存传播期间，客户端可能短暂看到上一候选。索引最多 8 KiB，接近上限时核实并移除已结束维护的实验基线，不删仍受支持的通道
 - 返回版本、tag 对应提交、Release/工作流链接及实际结果。失败、仍在构建或缺失产物时明确说明，不能称为发布成功；
   Release 和镜像已生成也不表示用户的运行实例已经升级。
