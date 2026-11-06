@@ -759,6 +759,7 @@ impl AccountsService for DefaultAccountsService {
             self.accounts
                 .batch_update_accounts(
                     BatchUpdateAccounts {
+                        auto_use_quota_credits: None,
                         account_ids: vec![account_id.to_string()],
                         enabled: Some(true),
                         concurrency_limit: None,
@@ -837,15 +838,28 @@ impl AccountsService for DefaultAccountsService {
             (
                 std::sync::Arc<dyn crate::ports::provider::ProviderAdmin>,
                 Vec<ProviderAccountId>,
+                Vec<ProviderAccountId>,
             ),
         >::new();
         for account_id in &account_ids {
             let (item, provider) = self.provider_for_account(account_id).await?;
-            providers
+            if command.auto_use_quota_credits.is_some()
+                && !provider
+                    .account_capabilities(account_id, &item.account.authentication_kind)
+                    .quota_credits
+            {
+                return Err(AdminError::invalid("该账号不支持使用额度点数"));
+            }
+            let (_, selected, exhausted) = providers
                 .entry(item.account.provider_kind)
-                .or_insert_with(|| (provider, Vec::new()))
-                .1
-                .push(account_id.clone());
+                .or_insert_with(|| (provider, Vec::new(), Vec::new()));
+            selected.push(account_id.clone());
+            if command.auto_use_quota_credits == Some(true)
+                && !item.account.auto_use_quota_credits
+                && item.account.quota.is_exhausted()
+            {
+                exhausted.push(account_id.clone());
+            }
         }
         let enabled = command.enabled;
         let result = self
@@ -853,7 +867,7 @@ impl AccountsService for DefaultAccountsService {
             .batch_update_accounts(command, context)
             .await
             .map_err(|error| map_store_error(error, "provider accounts"))?;
-        for (provider, provider_ids) in providers.values() {
+        for (provider, provider_ids, _) in providers.values() {
             if enabled == Some(false) {
                 for account_id in provider_ids {
                     super::notify_account_unavailable(
@@ -872,6 +886,18 @@ impl AccountsService for DefaultAccountsService {
             .await;
         }
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+        for (provider, _, exhausted) in providers.into_values() {
+            if exhausted.is_empty() {
+                continue;
+            }
+            super::credential_mutation::observe_account_quotas(
+                self.upstream_info.as_ref(),
+                &provider,
+                &self.accounts,
+                &exhausted,
+                context.request_id.as_str(),
+            );
+        }
         Ok(result)
     }
 

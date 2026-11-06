@@ -150,6 +150,14 @@ impl MemoryAccountStore {
             .map(|stored| stored.account.clone())
     }
 
+    pub(crate) fn enable_quota_credits(&self, id: &str) {
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .unwrap();
+        stored.account = stored.account.clone().with_auto_use_quota_credits(true);
+    }
+
     pub(crate) fn set_model_access(
         &self,
         id: &str,
@@ -764,6 +772,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         rebuild.last_error_message,
     )
     .with_scheduling(current.concurrency_limit(), current.weight())
+    .with_auto_use_quota_credits(current.auto_use_quota_credits())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
     .with_outbound_proxy(current.outbound_proxy().cloned())
     .with_request_location(current.request_location().cloned())

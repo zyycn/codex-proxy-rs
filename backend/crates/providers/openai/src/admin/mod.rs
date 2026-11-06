@@ -205,6 +205,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
     ) -> gateway_admin::model::accounts::ProviderAccountCapabilities {
         let oauth = authentication_kind == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH;
         gateway_admin::model::accounts::ProviderAccountCapabilities {
+            quota_credits: oauth,
             quota: oauth,
             quota_refresh: oauth,
             profile: oauth,
@@ -1151,6 +1152,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         revision,
         account.access_token_expires_at.map(SystemTime::from),
     )
+    .with_auto_use_quota_credits(account.auto_use_quota_credits)
     .with_outbound_proxy(account.outbound_proxy.clone())
     .with_notes(account.notes.clone())
     .with_profile(

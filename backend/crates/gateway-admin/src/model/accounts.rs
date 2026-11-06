@@ -21,6 +21,7 @@ pub use gateway_core::account::{
 /// 账号可用的管理操作
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderAccountCapabilities {
+    pub quota_credits: bool,
     pub quota: bool,
     pub quota_refresh: bool,
     pub profile: bool,
@@ -110,6 +111,7 @@ pub enum AccountGroupFilter {
 /// 账号公共存储投影；Provider 专属字段不进入此结构
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {
+    pub auto_use_quota_credits: bool,
     pub id: String,
     pub provider_kind: ProviderKind,
     pub groups: Vec<AccountGroupRef>,
@@ -249,6 +251,7 @@ pub struct AccountUpdateResult {
 /// 仅修改显式字段的批量账号设置命令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchUpdateAccounts {
+    pub auto_use_quota_credits: Option<bool>,
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
     pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,

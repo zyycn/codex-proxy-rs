@@ -355,6 +355,7 @@ async fn disabled_proxy_projects_direct_while_preserving_bindings_and_credential
             let error = admin
                 .batch_update_accounts(
                     BatchUpdateAccounts {
+                        auto_use_quota_credits: None,
                         account_ids: vec![
                             "acct_enabled_openai".to_owned(),
                             "acct_enabled_xai".to_owned(),
@@ -1180,6 +1181,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
         admin
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    auto_use_quota_credits: None,
                     model_access: Default::default(),
                     account_ids: vec!["acct_one".to_owned(), "acct_missing".to_owned()],
                     enabled: Some(false),

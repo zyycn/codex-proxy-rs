@@ -364,9 +364,11 @@ impl QuotaAccessState {
     }
 }
 
-/// 权威额度耗尽证据
+/// 账号额度访问依据
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum QuotaEvidence {
+    /// 套餐已耗尽，但上游确认点数可用
+    CreditsAvailable,
     ProviderDenied,
     AccountLimitReached,
     UsageLimitReached,
@@ -377,6 +379,7 @@ impl QuotaEvidence {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::CreditsAvailable => "credits_available",
             Self::ProviderDenied => "provider_denied",
             Self::AccountLimitReached => "account_limit_reached",
             Self::UsageLimitReached => "usage_limit_reached",
@@ -387,6 +390,7 @@ impl QuotaEvidence {
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
+            "credits_available" => Some(Self::CreditsAvailable),
             "provider_denied" => Some(Self::ProviderDenied),
             "account_limit_reached" => Some(Self::AccountLimitReached),
             "usage_limit_reached" => Some(Self::UsageLimitReached),
@@ -456,6 +460,17 @@ impl QuotaState {
         }
     }
 
+    /// 点数是唯一放行依据时保留套餐重置时间，开关变化不伪造新观测
+    #[must_use]
+    pub const fn credits_only(observed_at: SystemTime, reset_at: Option<SystemTime>) -> Self {
+        Self {
+            access: QuotaAccessState::Allowed,
+            evidence: Some(QuotaEvidence::CreditsAvailable),
+            observed_at: Some(observed_at),
+            reset_at,
+        }
+    }
+
     /// 从持久化列恢复额度状态；非法组合返回 `None`
     #[must_use]
     pub const fn from_persisted(
@@ -464,32 +479,25 @@ impl QuotaState {
         observed_at: Option<SystemTime>,
         reset_at: Option<SystemTime>,
     ) -> Option<Self> {
-        match access {
-            QuotaAccessState::Unknown if evidence.is_none() && reset_at.is_none() => Some(Self {
+        let valid = match (access, evidence) {
+            (QuotaAccessState::Unknown, None) => reset_at.is_none(),
+            (QuotaAccessState::Allowed, None) => observed_at.is_some() && reset_at.is_none(),
+            (QuotaAccessState::Allowed, Some(QuotaEvidence::CreditsAvailable)) => {
+                observed_at.is_some()
+            }
+            (QuotaAccessState::Exhausted, Some(QuotaEvidence::CreditsAvailable)) => false,
+            (QuotaAccessState::Exhausted, Some(_)) => observed_at.is_some(),
+            _ => false,
+        };
+        if valid {
+            Some(Self {
                 access,
                 evidence,
                 observed_at,
                 reset_at,
-            }),
-            QuotaAccessState::Allowed
-                if evidence.is_none() && observed_at.is_some() && reset_at.is_none() =>
-            {
-                Some(Self {
-                    access,
-                    evidence,
-                    observed_at,
-                    reset_at,
-                })
-            }
-            QuotaAccessState::Exhausted if evidence.is_some() && observed_at.is_some() => {
-                Some(Self {
-                    access,
-                    evidence,
-                    observed_at,
-                    reset_at,
-                })
-            }
-            _ => None,
+            })
+        } else {
+            None
         }
     }
 
@@ -813,6 +821,7 @@ pub struct ProviderAccount {
     enabled: bool,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
+    auto_use_quota_credits: bool,
     model_access: super::AccountModelAccess,
     credential_state: CredentialState,
     quota: QuotaState,
@@ -851,6 +860,7 @@ impl ProviderAccount {
             enabled: true,
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
+            auto_use_quota_credits: false,
             model_access: super::AccountModelAccess::all(),
             credential_state: CredentialState::Unknown,
             quota: QuotaState::unknown(),
@@ -862,6 +872,17 @@ impl ProviderAccount {
             outbound_proxy: None,
             request_location: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_auto_use_quota_credits(mut self, enabled: bool) -> Self {
+        self.auto_use_quota_credits = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn auto_use_quota_credits(&self) -> bool {
+        self.auto_use_quota_credits
     }
 
     #[must_use]
