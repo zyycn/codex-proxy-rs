@@ -2,6 +2,7 @@
 
 mod account_eligibility;
 mod account_isolation;
+mod cache_preference;
 mod capacity;
 mod cookies;
 mod correlation;
@@ -7095,8 +7096,14 @@ async fn account_selection_log_should_include_affinity_observation_fields() {
 
     let conversation =
         selected_account_log_fields(&events, "req_affinity_observation_conversation");
-    assert_eq!(conversation["affinity_anchor_source"], "");
-    assert_eq!(conversation["affinity_anchor"], "");
+    assert_eq!(
+        conversation["affinity_anchor_source"],
+        "client-cache-preference"
+    );
+    assert_eq!(
+        conversation["affinity_anchor"],
+        conversation["affinity_key_hash"]
+    );
     assert_eq!(conversation["session_id"], "");
     assert_eq!(conversation["session_id_present"], false);
     assert_ne!(
@@ -7106,7 +7113,7 @@ async fn account_selection_log_should_include_affinity_observation_fields() {
 }
 
 #[tokio::test]
-async fn prompt_cache_key_alone_does_not_create_an_account_binding() {
+async fn relaxed_mode_skips_cache_preferences() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_affinity").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -7125,7 +7132,12 @@ async fn prompt_cache_key_alone_does_not_create_an_account_binding() {
     let stream = provider_with_affinity(&store, Arc::clone(&affinity))
         .execute(
             planned_request("openai", Operation::Generate(generation)),
-            context("req_affinity_key", CancellationToken::new()),
+            session_binding::context_with_affinity_policy(
+                "req_affinity_key",
+                contract_account_scope(),
+                account_policy()
+                    .with_openai_account_affinity(gateway_core::account::AccountAffinity::Relaxed),
+            ),
         )
         .await
         .expect("prepare provider stream");

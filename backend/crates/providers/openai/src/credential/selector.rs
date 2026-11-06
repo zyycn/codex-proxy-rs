@@ -249,15 +249,21 @@ impl AffinitySelection {
         }
     }
 
-    fn telemetry(&self, selected_account: &ProviderAccountId) -> AffinityTelemetry {
+    fn telemetry(
+        &self,
+        selected_account: &ProviderAccountId,
+        cache_preference: bool,
+    ) -> AffinityTelemetry {
         AffinityTelemetry {
             affinity_hit: self.bound_account.as_ref() == Some(selected_account)
                 && self.escape_reason.is_none(),
             escape_reason: self.escape_reason,
-            account_switch: self
-                .bound_account
-                .as_ref()
-                .is_some_and(|bound| bound != selected_account),
+            // 仅因缓存偏好而分流时，客户端的轮次状态仍没有已知归属。
+            account_switch: !cache_preference
+                && self
+                    .bound_account
+                    .as_ref()
+                    .is_some_and(|bound| bound != selected_account),
         }
     }
 }
@@ -514,11 +520,18 @@ impl CodexCredentialSelector {
         };
         let eligibility = request.attempt.account_eligibility();
         let diagnostic = eligibility.bypasses_local_eligibility();
-        let binding_key = request.session_affinity_key.filter(|_| !diagnostic);
-        let affinity_mode = request
-            .attempt
-            .account_selection_policy()
-            .openai_account_affinity();
+        let mut binding_key = request.session_affinity_key.filter(|_| !diagnostic);
+        let cache_preference = request
+            .session_affinity_observation
+            .is_some_and(CodexSessionAffinity::is_cache_preference);
+        let affinity_mode = if cache_preference {
+            AccountAffinity::Preferred
+        } else {
+            request
+                .attempt
+                .account_selection_policy()
+                .openai_account_affinity()
+        };
         let mut queue_policy = request.attempt.account_selection_policy().queue_policy();
         if follow_only {
             // 关闭普通账号排队不能放开后代线程换号，沿用队列时间设置并保留有界人数
@@ -608,7 +621,16 @@ impl CodexCredentialSelector {
         let mut snapshot_retries = 0;
         'capacity: loop {
             let binding = if let Some(key) = binding_key {
-                self.lookup_session_affinity(key).await?
+                match self.lookup_session_affinity(key).await {
+                    Ok(binding) => binding,
+                    Err(error) if cache_preference => {
+                        // 本次跳过缓存偏好读写，账号资格、策略和租约仍正常检查。
+                        tracing::warn!(%error, "OpenAI cache preference lookup unavailable");
+                        binding_key = None;
+                        None
+                    }
+                    Err(error) => return Err(error),
+                }
             } else {
                 None
             };
@@ -1266,23 +1288,28 @@ impl CodexCredentialSelector {
                         {
                             binding_account = primary.account_id();
                         }
-                        if let Some(key) = binding_key
-                            && !self
+                        if let Some(key) = binding_key {
+                            match self
                                 .admit_session(
                                     key,
                                     binding.as_ref(),
                                     binding_account,
-                                    request
-                                        .attempt
-                                        .account_selection_policy()
-                                        .openai_session_affinity_ttl(),
+                                    policy.openai_session_affinity_ttl(),
                                 )
-                                .await?
-                        {
-                            drop(guard);
-                            continue 'capacity;
+                                .await
+                            {
+                                Ok(false) => {
+                                    drop(guard);
+                                    continue 'capacity;
+                                }
+                                Err(error) if cache_preference => {
+                                    tracing::warn!(%error, "OpenAI cache preference update unavailable");
+                                }
+                                Err(error) => return Err(error),
+                                Ok(true) => {}
+                            }
                         }
-                        let affinity_telemetry = affinity.telemetry(account.id());
+                        let affinity_telemetry = affinity.telemetry(account.id(), cache_preference);
                         let affinity_observation = request.session_affinity_observation;
                         tracing::info!(
                             request_id = %request.attempt.request_id(),
@@ -1338,7 +1365,7 @@ impl CodexCredentialSelector {
                             cyber_policy_scope,
                             allows_account_state_mutation,
                             affinity_telemetry,
-                            admitted_session: binding_key.cloned(),
+                            admitted_session: binding_key.filter(|_| !cache_preference).cloned(),
                             capacity: capacity.map(AccountCapacitySnapshot::with_acquired_request),
                             _guard: guard,
                         });

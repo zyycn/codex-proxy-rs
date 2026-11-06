@@ -8,8 +8,10 @@ use sha2::{Digest, Sha256};
 
 use crate::request_identity::{account_session_with_headers, follows_session_with_headers};
 use crate::transport::protocol::responses::CodexResponsesRequest;
-use crate::transport::request::derive_conversation_anchor;
+use crate::transport::request::{derive_conversation_anchor, message_text_parts};
 
+const CLIENT_CACHE_PREFERENCE: &str = "client-cache-preference";
+const CONTENT_PREFERENCE: &str = "content-preference";
 const AFFINITY_KEY_HASH_LENGTH: usize = 12;
 
 /// 一次请求派生出的账号亲和键及其结构化日志上下文
@@ -18,7 +20,6 @@ pub(crate) struct CodexSessionAffinity {
     turn_alias: Option<(ProviderSessionAffinityKey, ProviderSessionAlias)>,
     key_hash: String,
     anchor_source: &'static str,
-    anchor: String,
     session_id: Option<String>,
     follow_only: bool,
 }
@@ -35,7 +36,6 @@ impl CodexSessionAffinity {
             key_hash: short_key_hash(&key),
             key,
             anchor_source: "turn-session",
-            anchor: String::new(),
             session_id: None,
             follow_only: root.is_some() || alias.follow_only,
             turn_alias: Some((turn, alias)),
@@ -89,8 +89,19 @@ impl CodexSessionAffinity {
     }
 
     #[must_use]
+    pub(crate) fn is_cache_preference(&self) -> bool {
+        matches!(
+            self.anchor_source,
+            CLIENT_CACHE_PREFERENCE | CONTENT_PREFERENCE
+        )
+    }
+
+    #[must_use]
     pub(crate) fn anchor(&self) -> &str {
-        &self.anchor
+        if self.is_cache_preference() {
+            return self.key_hash();
+        }
+        self.session_id.as_deref().unwrap_or_default()
     }
 
     #[must_use]
@@ -130,11 +141,58 @@ pub(crate) fn derive_codex_session_affinity(
     let session_id = non_empty(request.client_account_session_id.as_deref())?;
     session_affinity(
         "root-session",
-        session_id.to_owned(),
-        Some(session_id.to_owned()),
+        session_id,
+        Some(session_id),
         client_api_key_id,
     )
     .map(|affinity| affinity.with_follow_only(request.client_account_follow_only))
+}
+
+/// 仅供选号使用。缓存键与输入正文均不作为会话、轮次或传输身份。
+pub(crate) fn derive_cache_preference(
+    request: &CodexResponsesRequest,
+    client_key: &ClientApiKeyId,
+) -> Option<CodexSessionAffinity> {
+    if request.client_account_follow_only || request.previous_response_id().is_some() {
+        return None;
+    }
+    if request.explicit_prompt_cache_key
+        && let Some(key) = non_empty(request.prompt_cache_key())
+    {
+        return session_affinity(CLIENT_CACHE_PREFERENCE, key, None, client_key);
+    }
+    let mut hash = Sha256::new();
+    hash_text_field(&mut hash, std::iter::once(request.model()));
+    hash_text_field(&mut hash, std::iter::once(request.instructions()));
+    let mut items = request.input().iter().peekable();
+    while let Some(item) =
+        items.next_if(|item| matches!(item["role"].as_str(), Some("system" | "developer")))
+    {
+        hash_text_field(&mut hash, message_text_parts(item));
+    }
+    let first_user = items.next().filter(|item| item["role"] == "user")?;
+    if !hash_text_field(&mut hash, message_text_parts(first_user)) {
+        return None;
+    }
+    session_affinity(
+        CONTENT_PREFERENCE,
+        &hex::encode(hash.finalize()),
+        None,
+        client_key,
+    )
+}
+
+/// 长度前缀区分消息边界；同一消息的文本块按顺序流式计算，避免复制长提示词。
+fn hash_text_field<'a>(hash: &mut Sha256, parts: impl Iterator<Item = &'a str> + Clone) -> bool {
+    if !parts.clone().any(|part| !part.trim().is_empty()) {
+        return false;
+    }
+    let length: usize = parts.clone().map(str::len).sum();
+    hash.update((length as u64).to_be_bytes());
+    for part in parts {
+        hash.update(part.as_bytes());
+    }
+    true
 }
 
 /// 原生 JSON 端点与 Responses 共用绑定命名空间，Search id 是逻辑会话身份
@@ -159,8 +217,8 @@ pub(crate) fn derive_endpoint_affinity_with_headers(
     let session_id = account_session_with_headers(&body, payload.context(), headers)?;
     session_affinity(
         "root-session",
-        session_id.clone(),
-        Some(session_id),
+        &session_id,
+        Some(&session_id),
         client_api_key_id,
     )
     .map(|affinity| {
@@ -195,8 +253,8 @@ pub(crate) fn derive_live_session_affinity(
     let session_id = account_session_with_headers(&Map::new(), &Map::new(), &effective)?;
     session_affinity(
         "root-session",
-        session_id.clone(),
-        Some(session_id),
+        &session_id,
+        Some(&session_id),
         client_api_key_id,
     )
     .map(|affinity| {
@@ -216,16 +274,16 @@ pub(crate) fn derive_codex_transport_key(
     let (source, anchor) = non_empty(request.client_thread_id.as_deref())
         .map(|thread| ("thread-transport", thread.to_owned()))
         .or_else(|| derive_conversation_anchor(request))?;
-    session_affinity(source, anchor, None, client_api_key_id).map(CodexSessionAffinity::into_key)
+    session_affinity(source, &anchor, None, client_api_key_id).map(CodexSessionAffinity::into_key)
 }
 
 fn session_affinity(
     anchor_source: &'static str,
-    anchor: String,
-    session_id: Option<String>,
+    anchor: &str,
+    session_id: Option<&str>,
     client_api_key_id: &ClientApiKeyId,
 ) -> Option<CodexSessionAffinity> {
-    let session_key = opaque_affinity_key(anchor_source, &anchor)?;
+    let session_key = opaque_affinity_key(anchor_source, anchor)?;
     let key = opaque_affinity_key(
         "client-session",
         &format!(
@@ -240,8 +298,7 @@ fn session_affinity(
         turn_alias: None,
         key_hash,
         anchor_source,
-        anchor,
-        session_id,
+        session_id: session_id.map(str::to_owned),
         follow_only: false,
     })
 }

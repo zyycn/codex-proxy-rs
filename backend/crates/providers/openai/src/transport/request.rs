@@ -415,26 +415,25 @@ fn derive_stable_conversation_key(request: &CodexResponsesRequest) -> Option<Str
 }
 
 fn first_user_text(input: &[Value]) -> String {
-    for item in input {
-        if item.get("role").and_then(Value::as_str) != Some("user") {
-            continue;
-        }
-        let Some(content) = item.get("content") else {
-            return String::new();
-        };
-        if let Some(text) = content.as_str() {
-            return text.to_owned();
-        }
-        if let Some(parts) = content.as_array() {
-            return parts
-                .iter()
-                .filter(|part| part.get("type").and_then(Value::as_str) == Some("input_text"))
-                .filter_map(|part| part.get("text").and_then(Value::as_str))
-                .collect();
-        }
-        return String::new();
-    }
-    String::new()
+    input
+        .iter()
+        .find(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+        .into_iter()
+        .flat_map(message_text_parts)
+        .collect()
+}
+
+/// 同时接受简写字符串与 Responses 文本块，忽略图片等非文本部分。
+pub(crate) fn message_text_parts(item: &Value) -> impl Iterator<Item = &str> + Clone {
+    let content = &item["content"];
+    content.as_str().into_iter().chain(
+        content
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|part| part.get("type").and_then(Value::as_str) == Some("input_text"))
+            .filter_map(|part| part.get("text").and_then(Value::as_str)),
+    )
 }
 
 fn normalize_conversation_anchor_text(text: &str) -> String {

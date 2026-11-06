@@ -2115,6 +2115,11 @@ Guardian 以 `subagent_kind` 或 `client_metadata.x-openai-subagent` 值 `guardi
 
 插件显式选号及原生续写的状态归属约束在三种模式下仍然生效
 
+Chat Completions 和 Responses 通过原生 OpenAI Provider 选号时，缺少显式会话 ID 的请求默认在同一 Client Key 下优先复用账号。
+网关先匹配客户端传入的 `prompt_cache_key`，否则按上游模型、开头的指令和首条用户消息的文本匹配。
+后续消息及工具列表不参与匹配。即使在严格模式下，首选账号繁忙时也可以临时换号。
+宽松模式、没有缓存键又缺少对话开头文本的请求，仍按普通调度选号。此偏好只用于选号
+
 `openaiSessionAffinityTtlHours` 是账号绑定及其会话关联的滑动保留时长，单位小时，默认 24，取值 1～720。
 各类请求统一在发送前成功准入时按请求冻结值续期。
 响应完成不回写或续期。调整时长不扫描已有 Redis 键，已有记录保留原到期时间，下一次成功准入时使用新值；

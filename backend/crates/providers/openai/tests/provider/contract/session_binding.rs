@@ -489,7 +489,23 @@ async fn final_middleware_child_identity_can_claim_a_missing_binding() {
         stream.metadata().provider_account_id().as_str(),
         "acct_subagent_a"
     );
-    assert_eq!(affinity.binding_count(), 1);
+    drop(stream);
+    // 初始正文的缓存偏好与中间件最终声明的会话分别准入；后续显式会话直接复用后者。
+    let claimed = affinity.lookup_keys();
+    assert_eq!(claimed.iter().collect::<BTreeSet<_>>().len(), 2);
+    let follow = provider_with_affinity_and_base_url(&store, affinity.clone(), server.uri())
+        .execute(
+            planned_request("openai", turn_request("new-session", "next")),
+            context("req_final_child_follow", CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        follow.metadata().provider_account_id().as_str(),
+        "acct_subagent_a"
+    );
+    assert_eq!(affinity.lookup_keys().last(), claimed.last());
+    assert_eq!(affinity.binding_count(), 2);
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -1227,7 +1243,7 @@ fn preferred_context_with_ttl(
     scope: Arc<FrozenAccountScope>,
     ttl: Duration,
 ) -> AttemptContext {
-    preferred_context_with_policy(
+    context_with_affinity_policy(
         request_id,
         scope,
         account_policy()
@@ -1236,7 +1252,7 @@ fn preferred_context_with_ttl(
     )
 }
 
-fn preferred_context_with_policy(
+pub(super) fn context_with_affinity_policy(
     request_id: &str,
     scope: Arc<FrozenAccountScope>,
     policy: gateway_core::account::AccountSelectionPolicy,
@@ -1315,7 +1331,7 @@ async fn relaxed_and_preferred_session_requests_apply_distinct_scheduling_polici
             };
             provider.clone().execute(
                 request,
-                preferred_context_with_policy(
+                context_with_affinity_policy(
                     "req_preferred_session",
                     contract_account_scope(),
                     policy,
@@ -1699,6 +1715,15 @@ async fn preferred_final_thread_rewrite_within_the_session_preserves_the_primary
 
 #[tokio::test]
 async fn preferred_spillover_uses_selected_credentials_on_the_wire() {
+    assert_spillover_on_wire(false).await;
+}
+
+#[tokio::test]
+async fn content_preference_spills_over_even_in_strict_mode_and_preserves_turn_state() {
+    assert_spillover_on_wire(true).await;
+}
+
+async fn assert_spillover_on_wire(anonymous: bool) {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -1731,12 +1756,38 @@ async fn preferred_spillover_uses_selected_credentials_on_the_wire() {
         } else {
             leases.busy_accounts.lock().unwrap().clear();
         }
-        let mut stream = provider
-            .clone()
-            .execute(
-                planned_request("openai", turn_request("root", turn)),
+        let (operation, attempt) = if anonymous {
+            let mut input = vec![
+                json!({"role":"developer", "content":"review"}),
+                json!({"role":"user","content":"check this patch"}),
+            ];
+            if turn != "first" {
+                input.push(json!({"role":"assistant","content":"ready"}));
+                input.push(json!({"role":"user","content":turn}));
+            }
+            let payload = ProtocolPayload::json_object(
+                "openai",
+                Map::from_iter([("input".into(), json!(input))]),
+            )
+            .unwrap()
+            .with_context(Map::from_iter([
+                ("use_websocket".to_owned(), json!(false)),
+                ("turn_id".to_owned(), json!(turn)),
+                ("turn_state".to_owned(), json!("unowned-turn-state")),
+            ]));
+            (
+                Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                context("req_preference_wire", CancellationToken::new()),
+            )
+        } else {
+            (
+                turn_request("root", turn),
                 preferred_context("req_preferred_wire", contract_account_scope()),
             )
+        };
+        let mut stream = provider
+            .clone()
+            .execute(planned_request("openai", operation), attempt)
             .await
             .unwrap();
         while let Some(event) = stream.next().await {
@@ -1757,6 +1808,22 @@ async fn preferred_spillover_uses_selected_credentials_on_the_wire() {
         ]
     );
     assert_eq!(affinity.binding_count(), 1);
+    if anonymous {
+        assert!(affinity.alias_ttls().is_empty());
+        for request in &sent {
+            assert!(
+                captured_request_body(request)
+                    .get("prompt_cache_key")
+                    .is_none()
+            );
+            assert!(!request.headers.contains_key("session-id"));
+            assert!(!request.headers.contains_key("session_id"));
+            assert_eq!(
+                captured_header_values(request, "x-codex-turn-state"),
+                vec![b"unowned-turn-state".to_vec()]
+            );
+        }
+    }
     server.verify().await;
 }
 
@@ -1801,7 +1868,7 @@ async fn preferred_primary_migration_distinguishes_temporary_and_persistent_unav
         let select = || {
             provider.clone().execute(
                 planned_request("openai", turn_request("root", "availability-turn")),
-                preferred_context_with_policy(
+                context_with_affinity_policy(
                     "req_primary_availability",
                     contract_account_scope(),
                     policy,
