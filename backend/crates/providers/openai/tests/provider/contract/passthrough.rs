@@ -3,6 +3,75 @@
 use super::*;
 
 #[tokio::test]
+async fn responses_options_follow_the_selected_upstream_on_both_transports() {
+    let oauth_omissions = json!({
+        "frequency_penalty": 0, "presence_penalty": 0, "top_p": 1,
+        "chat_template_kwargs": {"enable_thinking": false}, "user": "example",
+        "metadata": {"source": "example"}, "safety_identifier": "example",
+        "truncation": "disabled", "stop_sequences": [], "prompt_cache_options": {}
+    });
+    let mut body = json!({
+        "model": "gpt-5.4", "input": "hello", "max_tokens": 16,
+        "stream_options": {"include_usage": true, "reasoning_summary_delivery": "sequential_cutoff"},
+        "client_metadata": {"user": "keep"},
+        "tools": [{"type": "function", "name": "sample", "parameters": {
+            "type": "object", "properties": {"top_p": {"type": "number"}}
+        }}]
+    });
+    let omissions = oauth_omissions.as_object().unwrap();
+    body.as_object_mut().unwrap().extend(omissions.clone());
+    for api_key in [false, true] {
+        for websocket in [false, true] {
+            let sent = capture_downstream_request(body.clone(), api_key, websocket, false).await;
+            for (field, value) in omissions {
+                assert_eq!(
+                    sent.get(field),
+                    api_key.then_some(value),
+                    "{field}, api_key={api_key}, websocket={websocket}"
+                );
+            }
+            if api_key {
+                assert_eq!(sent["stream_options"], body["stream_options"]);
+                assert_eq!(sent["max_tokens"], 16);
+                assert!(sent.get("max_output_tokens").is_none());
+            } else {
+                assert_eq!(
+                    sent["stream_options"],
+                    json!({"reasoning_summary_delivery": "sequential_cutoff"})
+                );
+                assert_eq!(sent["max_output_tokens"], 16);
+                assert!(sent.get("max_tokens").is_none());
+            }
+            assert_eq!(sent["client_metadata"]["user"], "keep");
+            assert_eq!(sent["tools"], body["tools"]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn codex_oauth_keeps_explicit_limits_and_context_options() {
+    for (native, completion, expected) in [
+        (json!(16), json!(32), json!(16)),
+        (Value::Null, json!(32), json!(32)),
+        (Value::Null, Value::Null, json!(64)),
+    ] {
+        let body = json!({
+            "model": "gpt-5.4", "input": "hello", "max_output_tokens": native,
+            "max_completion_tokens": completion, "max_tokens": 64,
+            "truncation": "auto", "stop_sequences": ["end"],
+            "prompt_cache_options": {"future_option": true}
+        });
+        let sent = capture_downstream_request(body.clone(), false, false, false).await;
+        assert_eq!(sent["max_output_tokens"], expected);
+        assert!(sent.get("max_completion_tokens").is_none());
+        assert!(sent.get("max_tokens").is_none());
+        for key in ["truncation", "stop_sequences", "prompt_cache_options"] {
+            assert_eq!(sent[key], body[key]);
+        }
+    }
+}
+
+#[tokio::test]
 async fn effort_values_reach_upstream_before_and_after_middleware() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;

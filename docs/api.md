@@ -325,8 +325,8 @@ Chat 沿用 [Client Key 鉴权](#openai-数据面客户端接口)、[请求期�
 [请求头与身份](#请求头与身份)及[隐私策略](#隐私策略)。隐私策略的 `request_body` 面向转换后的 Responses 正文，
 例如 `$.input`，不需要另外维护一套针对 `messages` 的规则
 
-转换后的请求按选中 Provider 的正文规则处理。OpenAI 的[正文兼容](#正文兼容)会移除顶层 `temperature` 和
-`prompt_cache_retention`。输出上限原值交给上游校验，低于模型下限时会收到上游错误；`top_p` 是否可用也由上游判断
+转换后的请求按选中的 Provider 执行。OpenAI 的字段处理见[正文兼容](#正文兼容)；
+输出上限原值交给上游校验，低于模型下限时会收到上游错误
 
 ### Images 请求
 
@@ -453,6 +453,15 @@ OpenAI Provider 的 Responses 上游编码会移除 Codex 不接受的顶层 `te
 `prompt_cache_key`、`reasoning`、`include` 等 Codex 参数继续保留。上述参数过滤只作用于顶层，
 不删除工具参数 schema、输入内容或 `client_metadata` 内的同名业务字段；其他未知字段继续透传。
 `prompt_cache_key` 不用于补造会话或线程请求头；客户端未提供缓存键、会话或线程身份时保持缺省
+
+发往 Codex/OAuth 的 Responses 请求另按下表处理；API Key 上游保留这些字段。规则只匹配表中列出的位置
+
+| 请求字段 | Codex/OAuth 出站行为 |
+| --- | --- |
+| `top_p`、`frequency_penalty`、`presence_penalty`、`chat_template_kwargs`、`user`、`metadata`、`safety_identifier` | 省略；采样参数取默认值时也省略 |
+| `stream_options.include_usage` | 省略该成员，保留其他流式选项 |
+| `truncation`、`stop_sequences`、`prompt_cache_options` | 分别仅在值为 `"disabled"`、`[]`、`{}` 时省略；显式策略交给上游校验 |
+| `max_completion_tokens`、`max_tokens` | 转为 `max_output_tokens`。原生字段优先，其次按左列顺序取首个非 `null` 值 |
 
 Codex/OAuth 上游的历史回填按字段形状兼容，不以 User-Agent 品牌区分：显式 `type: "reasoning"`
 的 `input` 项移除顶层 `status`；该项具有非空字符串 `encrypted_content` 时，还会移除非空数组
