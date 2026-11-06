@@ -41,7 +41,7 @@ impl SystemOperations for RecordingSystemOperations {
 
     async fn update_detail(
         &self,
-        _: bool,
+        _: gateway_admin::model::system::SystemUpdateCheck,
         _: Option<gateway_admin::model::system::SystemUpdateChannel>,
     ) -> Result<SystemUpdateDetail, SystemOperationError> {
         Ok(SystemUpdateDetail {
@@ -60,6 +60,7 @@ impl SystemOperations for RecordingSystemOperations {
             update_supported: false,
             unsupported_reason: Some("source build".to_owned()),
             warning: None,
+            retry_at: None,
         })
     }
 

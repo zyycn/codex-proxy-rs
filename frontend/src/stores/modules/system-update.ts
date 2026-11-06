@@ -87,6 +87,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   let statusRequest: Promise<void> | undefined
   let statusGeneration = 0
   let detailGeneration = 0
+  let runningSummaryGeneration = 0
   let submitting = false
   let activeOperationId: string | null = null
   let unconfirmedPreviousId: string | null | undefined
@@ -106,6 +107,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   })
 
   const needRestart = computed(() => Boolean(updateStatus.value?.needRestart))
+  const canRestart = computed(() => statusAvailable.value && needRestart.value && !updating.value && !restarting.value)
   const restartTargetVersion = computed(() => needRestart.value
     ? normalizeSystemVersion(updateStatus.value?.currentVersion)
     : '')
@@ -230,6 +232,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     statusPoll.pause()
     disconnectUpdateEvents()
     if (operation.status === 'failed' && activeOperationId && operation.operationId === activeOperationId) {
+      updateInfo.value = null
       updateError.value = operation.error || operation.message || t('systemUpdate.errors.updateFailed')
     }
     if (!['loading', 'checking', 'changing_channel'].includes(phaseKind.value))
@@ -284,7 +287,11 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   }
 
   async function loadDetail(refresh: boolean, generation: number, channel?: SystemUpdateChannel) {
-    const detail = await getSystemUpdateDetail({ refresh, channel })
+    const detail = await getSystemUpdateDetail({ refresh, channel }).catch((error: unknown) => {
+      if (generation === detailGeneration)
+        updateInfo.value = null
+      throw error
+    })
     if (generation !== detailGeneration)
       return
     updateInfo.value = detail
@@ -293,16 +300,31 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       await loadVersion()
     if (generation !== detailGeneration)
       return
-    if (version.value && detail.policy.channel === version.value.updateChannel) {
-      // 侧栏只提示当前运行通道的更新，临时查看其他通道不会改变全局提示。
-      version.value = {
-        ...version.value,
-        latestVersion: detail.latestVersion,
-        hasUpdate: detail.hasUpdate,
-        updateCached: detail.cached,
-        updateWarning: detail.warning,
-      }
+    applyRunningSummary(detail)
+  }
+
+  function applyRunningSummary(detail: Awaited<ReturnType<typeof getSystemUpdateDetail>>) {
+    if (!version.value || version.value.updateChannel !== detail.policy.channel)
+      return
+    runningSummaryGeneration++
+    version.value = {
+      ...version.value,
+      latestVersion: detail.latestVersion,
+      hasUpdate: detail.hasUpdate,
+      updateCached: detail.cached,
+      updateWarning: detail.warning,
     }
+  }
+
+  async function loadSidebarVersion() {
+    const generation = runningSummaryGeneration
+    const local = await loadVersion()
+    if (local.updateCached || generation !== runningSummaryGeneration)
+      return
+    const detail = await getSystemUpdateDetail({ summaryOnly: true }, { silent: true })
+    // 弹窗已写入运行通道的新结果时，迟到的侧栏请求不再覆盖
+    if (generation === runningSummaryGeneration)
+      applyRunningSummary(detail)
   }
 
   async function loadSystem(refresh = false) {
@@ -335,10 +357,12 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     if (loadVersionPromise)
       return loadVersionPromise
 
+    const generation = runningSummaryGeneration
     loadVersionPromise = getSystemVersion({ silent: true })
     try {
       const versionData = await loadVersionPromise
-      version.value = versionData
+      if (generation === runningSummaryGeneration)
+        version.value = versionData
       return versionData
     }
     finally {
@@ -376,7 +400,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       if (policy.value)
         policy.value = { ...policy.value, channel }
       // 选择只影响本次检查，重新打开时恢复运行通道；旧候选不能用于新通道下载。
-      await loadDetail(true, generation, channel)
+      await loadDetail(false, generation, channel)
       if (generation !== detailGeneration)
         return
       await refreshUpdateStatus()
@@ -519,7 +543,8 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     hasUpdate,
     hasCandidateUpdate,
     canUpdate,
-    loadVersion,
+    canRestart,
+    loadSidebarVersion,
     loadSystem,
     checkUpdates,
     changeChannel,
