@@ -195,7 +195,7 @@
       "searchOrEnterId": "Search models or enter a full ID",
       "addModel": "Add model",
       "customModels": "Custom",
-      "selectedModels": "Selected models",
+      "availableModels": "Available models",
       "upstreamCatalog": "Upstream catalog",
       "selectAll": "Select all",
       "deselectAll": "Deselect all",

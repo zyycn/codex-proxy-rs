@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AccountModelAccess } from '@/api'
 
-import { ZButton, ZEmpty, ZFormItem, ZIconButton, ZInput, ZPopover, ZScrollbar, ZSegmented } from '@codex-proxy/ui'
+import { ZButton, ZEmpty, ZFormItem, ZIconButton, ZInput, ZPopover, ZSegmented } from '@codex-proxy/ui'
 
 import { CircleAlert, ListChecks, ListMinus, Plus, RefreshCw, Search } from '@lucide/vue'
 import { computed, ref, useTemplateRef, watch } from 'vue'
@@ -75,14 +75,16 @@ const mode = computed({
 })
 const restricted = computed(() => mode.value === 'allowlist' || mode.value === 'denylist')
 const selectedIds = computed(() => new Set(model.value?.models))
+// 候选项保留到本次编辑结束，取消勾选只修改待保存的模型限制。
+const availableIds = ref<string[]>([])
 const catalogReady = computed(() => catalog.value !== undefined && !loading.value && !error.value)
 const extraIds = computed(() => {
   const ids = new Set(catalog.value?.map(item => item.id))
-  return (model.value?.models ?? []).filter(id => !ids.has(id))
+  return availableIds.value.filter(id => !ids.has(id))
 })
 // 目录已就绪且非空时才能按目录清理白名单
 const missingModels = computed(() => mode.value === 'allowlist' && catalogReady.value && catalog.value?.length
-  ? extraIds.value
+  ? extraIds.value.filter(id => selectedIds.value.has(id))
   : [])
 const query = computed(() => search.value.trim().toLowerCase())
 const catalogResults = computed(() => (catalog.value ?? [])
@@ -94,7 +96,7 @@ const groups = computed(() => [
     key: 'selected',
     label: catalogReady.value
       ? t('accounts.modelAccess.customModels')
-      : t('accounts.modelAccess.selectedModels'),
+      : t('accounts.modelAccess.availableModels'),
     ids: extraIds.value.filter(id => id.toLowerCase().includes(query.value)),
   },
   {
@@ -121,8 +123,10 @@ function removeMissingModels(ids: string[]) {
     models: model.value.models.filter(id => !removed.has(id)),
   }
   selectionError.value = accountModelAccessError(next) ?? ''
-  if (!selectionError.value)
+  if (!selectionError.value) {
+    availableIds.value = availableIds.value.filter(id => !removed.has(id))
     model.value = next
+  }
 }
 
 function restoreCleanupFocus() {
@@ -199,6 +203,21 @@ async function load(refresh = false) {
     request.finish(requestId)
   }
 }
+
+watch([
+  () => props.accountId,
+  () => model.value?.models,
+], ([accountId, ids], [previousAccountId]) => {
+  const retained = accountId === previousAccountId
+    ? availableIds.value
+    : []
+  availableIds.value = [
+    ...new Set([
+      ...retained,
+      ...(ids ?? []),
+    ]),
+  ]
+}, { immediate: true })
 
 watch([
   () => props.accountId,
@@ -282,38 +301,36 @@ watch(search, () => {
       <p v-if="inputError" class="m-0 text-z-xs text-z-error-text" role="alert">
         {{ inputError }}
       </p>
-      <ZScrollbar v-if="groups.length" max-height="15rem" class="min-w-0 -m-1">
-        <div class="grid gap-3 p-1" :aria-busy="loading || undefined">
-          <div v-for="group in groups" :key="group.key" role="group" :aria-label="group.label">
-            <div class="mb-1.5 flex items-center justify-between gap-2">
-              <span class="text-z-xs font-medium text-z-text-secondary">{{ group.label }}</span>
-              <ZIconButton
-                v-if="group.key === 'catalog'"
-                type="primary"
-                variant="link"
-                size="small"
-                class="-my-1 size-6!"
-                :aria-label="allResultsSelected ? t('accounts.modelAccess.deselectAll') : t('accounts.modelAccess.selectAll')"
-                :disabled="disabled || loading"
-                @click="select(group.ids, !allResultsSelected)"
-              >
-                <ListMinus v-if="allResultsSelected" aria-hidden="true" />
-                <ListChecks v-else aria-hidden="true" />
-              </ZIconButton>
-            </div>
-            <div class="grid grid-cols-2 gap-2 @xl:grid-cols-3 @3xl:grid-cols-4">
-              <div
-                v-for="id in group.ids"
-                :key="id"
-                class="flex min-w-0 items-center rounded-z transition-colors duration-150 motion-reduce:transition-none"
-                :class="selectedIds.has(id) ? 'bg-z-primary-container text-z-primary-on-container' : 'bg-z-fill-quaternary text-z-text-secondary hover:bg-z-fill-tertiary hover:text-z-text'"
-              >
-                <AccountModelOption :model-value="selectedIds.has(id)" :label="id" :disabled="disabled" @update:model-value="select([id], $event)" />
-              </div>
+      <div v-if="groups.length" class="grid min-w-0 gap-3" :aria-busy="loading || undefined">
+        <div v-for="group in groups" :key="group.key" role="group" :aria-label="group.label">
+          <div class="mb-1.5 flex items-center justify-between gap-2">
+            <span class="text-z-xs font-medium text-z-text-secondary">{{ group.label }}</span>
+            <ZIconButton
+              v-if="group.key === 'catalog'"
+              type="primary"
+              variant="link"
+              size="small"
+              class="-my-1 size-6!"
+              :aria-label="allResultsSelected ? t('accounts.modelAccess.deselectAll') : t('accounts.modelAccess.selectAll')"
+              :disabled="disabled || loading"
+              @click="select(group.ids, !allResultsSelected)"
+            >
+              <ListMinus v-if="allResultsSelected" aria-hidden="true" />
+              <ListChecks v-else aria-hidden="true" />
+            </ZIconButton>
+          </div>
+          <div class="grid grid-cols-2 gap-2 @xl:grid-cols-3 @3xl:grid-cols-4">
+            <div
+              v-for="id in group.ids"
+              :key="id"
+              class="flex min-w-0 items-center rounded-z transition-colors duration-150 motion-reduce:transition-none"
+              :class="selectedIds.has(id) ? 'bg-z-primary-container text-z-primary-on-container' : 'bg-z-fill-quaternary text-z-text-secondary hover:bg-z-fill-tertiary hover:text-z-text'"
+            >
+              <AccountModelOption :model-value="selectedIds.has(id)" :label="id" :disabled="disabled" @update:model-value="select([id], $event)" />
             </div>
           </div>
         </div>
-      </ZScrollbar>
+      </div>
       <p v-else-if="loading" class="m-0 py-4 text-center text-z-sm text-z-text-tertiary" role="status">
         {{ t('accounts.modelAccess.loadingModel') }}
       </p>

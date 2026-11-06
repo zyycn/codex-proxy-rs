@@ -195,7 +195,7 @@
       "searchOrEnterId": "搜索模型或輸入完整 ID",
       "addModel": "添加模型",
       "customModels": "自定義",
-      "selectedModels": "已選模型",
+      "availableModels": "可選模型",
       "upstreamCatalog": "上游目錄",
       "selectAll": "全選",
       "deselectAll": "取消全選",
