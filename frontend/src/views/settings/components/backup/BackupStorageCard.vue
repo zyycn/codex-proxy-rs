@@ -42,13 +42,13 @@ function updateStorage<Key extends keyof StorageForm>(key: Key, value: StorageFo
     <template #description>
       <I18nT keypath="settings.backup.storage.description" tag="span" scope="global" class="text-z-text-secondary">
         <template #service>
-          <button
-            type="button"
-            class="cursor-pointer border-0 bg-transparent p-0 text-z-link underline underline-offset-2 hover:text-z-link-hover"
+          <ZButton
+            variant="link"
+            class="h-auto! rounded-none! p-0! text-z-link! underline underline-offset-2 hover:text-z-link-hover! [font:inherit]!"
             @click="emit('openR2Guide')"
           >
             Cloudflare R2
-          </button>
+          </ZButton>
         </template>
       </I18nT>
     </template>

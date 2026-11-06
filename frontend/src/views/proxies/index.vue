@@ -146,10 +146,10 @@ watch(search, () => {
               <span v-else class="text-z-text-quaternary">{{ t('proxies.page.notTested') }}</span>
             </template>
             <template #accounts="{ row }">
-              <button type="button" class="flex w-fit cursor-pointer items-center gap-1.5 rounded-sm border-0 bg-transparent p-0 text-z-sm text-z-text-secondary outline-none transition-colors hover:text-z-primary-text focus-visible:ring-2 focus-visible:ring-z-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-z-bg-container" :aria-label="t('proxies.page.viewAccountsAssociatedWith', { name: row.name, count: row.accountCount })" @click="inspected = row; showAccounts = true">
+              <ZButton variant="link" size="small" class="h-auto! w-fit rounded-sm! p-0! text-z-sm! leading-normal! font-normal! no-underline! hover:text-z-primary-text! [&>span]:gap-1.5" :aria-label="t('proxies.page.viewAccountsAssociatedWith', { name: row.name, count: row.accountCount })" @click="inspected = row; showAccounts = true">
                 <Users class="size-3.5" aria-hidden="true" />
                 <span class="font-mono tabular-nums">{{ row.accountCount }}</span>
-              </button>
+              </ZButton>
             </template>
             <template #testedAt="{ row }">
               {{ row.lastTestAtDisplay ?? '-' }}

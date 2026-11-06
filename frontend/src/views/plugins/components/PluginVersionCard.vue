@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { PluginArtifact, PluginInstance } from '@/api'
 
-import { ZIconButton, ZTag } from '@codex-proxy/ui'
+import { ZButton, ZIconButton, ZTag } from '@codex-proxy/ui'
 import { ArrowDownToLine, ChevronDown, Play, Trash2 } from '@lucide/vue'
 import { computed, shallowRef, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -47,17 +47,19 @@ const detailsId = useId()
         <span class="text-z-xs text-z-text-secondary">{{ sourceLabel(artifact.source) }}</span>
         <span class="truncate font-mono text-z-xs text-z-text-quaternary">{{ shortDigest(artifact.metadata.sha256) }}</span>
       </div>
-      <button
+      <ZButton
         v-if="isCurrent"
-        type="button"
-        class="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-z border-0 bg-transparent p-0 text-z-xs text-z-primary-text outline-none focus-visible:ring-2 focus-visible:ring-z-control-outline"
+        type="primary"
+        variant="link"
+        size="small"
+        class="h-auto! rounded-z! p-0! text-z-xs! leading-normal! font-normal! no-underline! [&>span]:gap-1"
         :aria-expanded="detailsOpen"
         :aria-controls="detailsId"
         @click="detailsOpen = !detailsOpen"
       >
         {{ t('plugins.versionDetails') }}
         <ChevronDown class="size-3.5 transition-transform motion-reduce:transition-none" :class="detailsOpen ? 'rotate-180' : undefined" aria-hidden="true" />
-      </button>
+      </ZButton>
     </div>
     <ZTag v-if="!artifact.acceptedAt" type="warning" size="small">
       {{ t('plugins.toBeInstalled') }}

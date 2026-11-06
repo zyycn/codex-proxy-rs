@@ -123,20 +123,19 @@ function handleRequestConsume(creditId: string) {
 </script>
 
 <template>
-  <button
-    type="button"
-    class="inline-flex shrink-0 touch-manipulation items-center justify-center rounded-z border-0 bg-transparent text-z-text-secondary outline-none transition-[background-color,color,opacity,transform] duration-150 hover:bg-z-fill-quaternary hover:text-z-text active:bg-z-fill-tertiary focus-visible:ring-2 focus-visible:ring-z-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-z-bg-container motion-safe:active:scale-[0.96] motion-reduce:transition-none"
-    :class="showTriggerCount ? 'h-z-control-sm gap-1 px-2' : 'size-z-control-sm'"
+  <ZIconButton
+    size="small"
+    class="[&>span]:inline-flex [&>span]:items-center [&>span]:gap-1"
+    :class="showTriggerCount ? 'w-auto! px-2' : undefined"
     :aria-label="triggerLabel"
     :aria-pressed="panelOpen || undefined"
-    :title="triggerLabel"
     @click="panelOpen = true"
   >
     <TicketCheck class="size-3.5 shrink-0" />
     <span v-if="showTriggerCount" class="translate-y-px font-mono text-[10px] leading-none font-heavy tabular-nums">
       x{{ availableCount }}
     </span>
-  </button>
+  </ZIconButton>
 
   <ZDialog
     v-model="panelOpen"
