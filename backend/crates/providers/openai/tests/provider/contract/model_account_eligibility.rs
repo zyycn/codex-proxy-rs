@@ -141,8 +141,11 @@ async fn unlisted_models_remain_available_without_catalog_discovery() {
 }
 
 #[tokio::test]
-async fn catalog_membership_and_model_access_precede_weight_affinity_and_fixed_accounts() {
-    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+async fn account_allowlists_override_catalog_omissions_but_weight_affinity_and_pinning_do_not() {
+    use gateway_core::account::{
+        AccountModelAccess,
+        AccountModelAccessMode::{All, Allowlist, Denylist},
+    };
     use provider_openai::credential::ResponsesTransport;
 
     for (primary_api, secondary_api) in [(false, false), (true, true), (true, false), (false, true)]
@@ -264,52 +267,45 @@ async fn catalog_membership_and_model_access_precede_weight_affinity_and_fixed_a
             }
         }
         assert_eq!(affinity.binding_count(), 1);
-        // 目录资格不能被固定账号、模型允许列表或另一个账号的目录放宽
-        for (model, required, disable_supported) in [
-            ("gpt-6-astra", Some("acct_scope_new"), false),
-            ("custom-unlisted", None, false),
-            ("gpt-6-astra", None, true),
+        let primary = "acct_provider_contract";
+        let secondary = "acct_scope_new";
+        // 目录外许可只属于明确添加该模型的账号，不能借用同池账号的白名单
+        for (model, required, primary_mode, secondary_mode, expected) in [
+            ("gpt-6-astra", Some(secondary), All, All, None),
+            ("custom-unlisted", None, All, All, None),
+            ("gpt-6.1-sol", None, Allowlist, All, Some(primary)),
+            ("gpt-6-astra", None, Denylist, Allowlist, Some(secondary)),
+            (
+                "custom-unlisted",
+                None,
+                Denylist,
+                Allowlist,
+                Some(secondary),
+            ),
+            ("gpt-6-luna", Some(primary), Denylist, Allowlist, None),
         ] {
-            let scope = if disable_supported {
-                Arc::new(FrozenAccountScope::new(
-                    Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([
-                        (
-                            ProviderAccountId::new("acct_provider_contract").unwrap(),
-                            RuntimeAccount::new(
-                                ProviderKind::new("openai").unwrap(),
-                                BTreeSet::new(),
-                            )
-                            .with_model_access(
-                                AccountModelAccess::new(
-                                    AccountModelAccessMode::Denylist,
-                                    vec![model.to_owned()],
-                                )
-                                .unwrap(),
-                            ),
-                        ),
-                        (
-                            ProviderAccountId::new("acct_scope_new").unwrap(),
-                            RuntimeAccount::new(
-                                ProviderKind::new("openai").unwrap(),
-                                BTreeSet::new(),
-                            )
-                            .with_model_access(
-                                AccountModelAccess::new(
-                                    AccountModelAccessMode::Allowlist,
-                                    vec![model.to_owned()],
-                                )
-                                .unwrap(),
-                            ),
-                        ),
-                    ]))),
-                    ClientRoutingScope::all_accounts(),
-                ))
-            } else {
-                contract_account_scope()
-            };
+            let accounts = [(primary, primary_mode), (secondary, secondary_mode)]
+                .into_iter()
+                .map(|(id, mode)| {
+                    let access = if mode == All {
+                        AccountModelAccess::all()
+                    } else {
+                        AccountModelAccess::new(mode, vec![model.to_owned()]).unwrap()
+                    };
+                    (
+                        ProviderAccountId::new(id).unwrap(),
+                        RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new())
+                            .with_model_access(access),
+                    )
+                })
+                .collect();
+            let scope = Arc::new(FrozenAccountScope::new(
+                Arc::new(RuntimeAccountDirectory::new(accounts)),
+                ClientRoutingScope::all_accounts(),
+            ));
             let attempt = AttemptContext::new(
                 RequestAttemptContext::new(
-                    ModelRequestId::new("req_catalog_rejected").unwrap(),
+                    ModelRequestId::new("req_account_catalog_policy").unwrap(),
                     ClientApiKeyId::new("key_openai_contract").unwrap(),
                 ),
                 NonZeroU32::MIN,
@@ -325,19 +321,26 @@ async fn catalog_membership_and_model_access_precede_weight_affinity_and_fixed_a
                 CancellationToken::new(),
             );
             let acquisitions = leases.requests.lock().unwrap().len();
-            let error = provider
+            let result = provider
                 .clone()
                 .execute(
                     planned_request_for_model("openai", operation(model), model),
                     attempt,
                 )
-                .await
-                .err()
-                .expect("catalog and model access must both permit the account");
-            assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
-            assert_eq!(leases.requests.lock().unwrap().len(), acquisitions);
+                .await;
+            if let Some(expected) = expected {
+                let mut stream = result.unwrap();
+                assert_eq!(stream.metadata().provider_account_id().as_str(), expected);
+                while let Some(event) = stream.next().await {
+                    event.unwrap();
+                }
+            } else {
+                let error = result.err().expect("account must be excluded");
+                assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+                assert_eq!(leases.requests.lock().unwrap().len(), acquisitions);
+            }
         }
-        let sent = native
+        let sent: Vec<_> = native
             .received_requests()
             .await
             .unwrap()
@@ -345,8 +348,16 @@ async fn catalog_membership_and_model_access_precede_weight_affinity_and_fixed_a
             .chain(api_primary.received_requests().await.unwrap())
             .chain(api_secondary.received_requests().await.unwrap())
             .filter(|request| request.method == "POST")
-            .count();
-        assert_eq!(sent, 2);
+            .map(|request| {
+                captured_request_body(&request)["model"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(sent.len(), 5);
+        assert!(sent.iter().any(|model| model == "gpt-6.1-sol"));
+        assert!(sent.iter().any(|model| model == "custom-unlisted"));
     }
 }
 

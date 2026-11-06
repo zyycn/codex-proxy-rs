@@ -427,10 +427,10 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       )
       if (!modelsRequest.isCurrent(requestId))
         return
-      applyConnectionTestModels(result, refresh)
+      applyConnectionTestModels(result.models, account, refresh)
       if (refresh) {
         ZNotification.success({
-          message: t('accounts.connectionTest.modelsRefreshed', { count: connectionTestModelOptions.value.length }),
+          message: t('accounts.connectionTest.modelsRefreshed', { count: result.models.length }),
         })
       }
       else if (!connectionTestSelectedModel.value) {
@@ -441,28 +441,25 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       if (!modelsRequest.isCurrent(requestId))
         return
       connectionTestError.value = errorMessage(error)
-      if (!refresh) {
-        connectionTestModelOptions.value = []
-        connectionTestSelectedModel.value = ''
-      }
+      if (!refresh)
+        applyConnectionTestModels([], account)
     }
     finally {
       modelsRequest.finish(requestId)
     }
   }
 
-  function applyConnectionTestModels(result: AccountModelsResponse, preserveSelection = false) {
+  function applyConnectionTestModels(catalog: AccountModelsResponse['models'], account: Account, preserveSelection = false) {
     const previousSelection = preserveSelection ? connectionTestSelectedModel.value : ''
-    connectionTestModelOptions.value = []
-    for (const model of result.models ?? []) {
-      connectionTestModelOptions.value.push({
-        label: model.label || model.id,
-        value: model.id,
-      })
+    const labels = new Map(catalog.map(model => [model.id, model.label || model.id]))
+    if (account.modelAccess.mode === 'allowlist') {
+      for (const id of account.modelAccess.models) {
+        if (!labels.has(id))
+          labels.set(id, id)
+      }
     }
-    connectionTestSelectedModel.value = connectionTestModelOptions.value.some(
-      model => model.value === previousSelection,
-    )
+    connectionTestModelOptions.value = Array.from(labels, ([value, label]) => ({ value, label }))
+    connectionTestSelectedModel.value = labels.has(previousSelection)
       ? previousSelection
       : connectionTestModelOptions.value[0]?.value || ''
   }

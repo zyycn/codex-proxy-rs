@@ -82,7 +82,7 @@ async function requestSave() {
   <ZDialog
     v-model="open"
     :title="t('accounts.editor.title')"
-    width="42rem"
+    width="52rem"
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
     @closed="emit('afterLeave')"
   >
@@ -127,7 +127,7 @@ async function requestSave() {
       >
         <template v-if="isOpenAiOAuthAccount(account)" #name-extra>
           <ZFormItem :label="t('accounts.editor.transportLabel')">
-            <ZSegmented v-model="oauthTransport" class="w-full" :aria-label="t('accounts.editor.transportLabel')" :options="transportOptions" :disabled="saving || !configurationReady" />
+            <ZSegmented v-model="oauthTransport" class="w-40" :aria-label="t('accounts.editor.transportLabel')" :options="transportOptions" :disabled="saving || !configurationReady" />
           </ZFormItem>
         </template>
       </AccountSettingsFields>

@@ -9,10 +9,10 @@ use gateway_core::error::ErrorSource;
 
 use gateway_core::account::{
     AccountAffinity, AccountCandidate, AccountCapacitySnapshot, AccountErrorReason,
-    AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker,
-    AccountSelectionContext, AccountSelectionPolicy, AccountSelector, AccountStatus,
-    CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId, QuotaEvidence,
-    RotationStrategy,
+    AccountFeedbackStats, AccountModelAccessMode, AccountQuotaSignals, AccountRuntimeSignals,
+    AccountSchedulingBlocker, AccountSelectionContext, AccountSelectionPolicy, AccountSelector,
+    AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId,
+    QuotaEvidence, RotationStrategy,
 };
 use gateway_core::concurrency::{CapacityWait, ConcurrencyWaitQueue, QueueRejection, WaitPriority};
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, policy::AccountPolicyError};
@@ -635,10 +635,19 @@ impl CodexCredentialSelector {
                 })
                 .collect::<Vec<_>>();
             let mut eligible = Vec::with_capacity(accounts.len());
-            let catalog_excluded = match model {
-                CodexSelectionModel::Requested(model) if !diagnostic => self
-                    .catalog
-                    .scheduling_exclusions(&accounts, model, SystemTime::now()),
+            let catalog_excluded = match (model, request.attempt.account_scope()) {
+                (CodexSelectionModel::Requested(model), Some(scope)) if !diagnostic => {
+                    // 候选已通过冻结的模型政策，白名单精确命中的 ID 交给上游验证
+                    let mut excluded =
+                        self.catalog
+                            .scheduling_exclusions(&accounts, model, SystemTime::now());
+                    excluded.retain(|id| {
+                        scope.directory().account(id).is_none_or(|account| {
+                            account.model_access().mode() != AccountModelAccessMode::Allowlist
+                        })
+                    });
+                    excluded
+                }
                 _ => Default::default(),
             };
             let mut catalog_rejected = 0_usize;
