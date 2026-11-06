@@ -1719,7 +1719,7 @@ async fn preferred_spillover_uses_selected_credentials_on_the_wire() {
 }
 
 #[tokio::test]
-async fn content_preference_spills_over_even_in_strict_mode_and_preserves_turn_state() {
+async fn content_preference_spills_over_in_preferred_mode_and_preserves_turn_state() {
     assert_spillover_on_wire(true).await;
 }
 
@@ -1777,7 +1777,7 @@ async fn assert_spillover_on_wire(anonymous: bool) {
             ]));
             (
                 Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
-                context("req_preference_wire", CancellationToken::new()),
+                preferred_context("req_preference_wire", contract_account_scope()),
             )
         } else {
             (

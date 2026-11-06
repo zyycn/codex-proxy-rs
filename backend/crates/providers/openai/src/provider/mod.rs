@@ -709,7 +709,7 @@ impl Provider for CodexProvider {
                     requires_websocket,
                 )
             });
-        // 弱偏好只交给选号器；中间件复验、轮次关联和原生续接仍只认真实会话。
+        // 内容亲和只交给选号器；中间件复验、轮次关联和原生续接仍只认真实会话
         let account_affinity = selection_session_affinity
             .as_ref()
             .or(cache_preference.as_ref());

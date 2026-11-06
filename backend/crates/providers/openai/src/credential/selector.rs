@@ -524,14 +524,10 @@ impl CodexCredentialSelector {
         let cache_preference = request
             .session_affinity_observation
             .is_some_and(CodexSessionAffinity::is_cache_preference);
-        let affinity_mode = if cache_preference {
-            AccountAffinity::Preferred
-        } else {
-            request
-                .attempt
-                .account_selection_policy()
-                .openai_account_affinity()
-        };
+        let affinity_mode = request
+            .attempt
+            .account_selection_policy()
+            .openai_account_affinity();
         let mut queue_policy = request.attempt.account_selection_policy().queue_policy();
         if follow_only {
             // 关闭普通账号排队不能放开后代线程换号，沿用队列时间设置并保留有界人数
@@ -623,8 +619,10 @@ impl CodexCredentialSelector {
             let binding = if let Some(key) = binding_key {
                 match self.lookup_session_affinity(key).await {
                     Ok(binding) => binding,
-                    Err(error) if cache_preference => {
-                        // 本次跳过缓存偏好读写，账号资格、策略和租约仍正常检查。
+                    Err(error)
+                        if cache_preference && affinity_mode == AccountAffinity::Preferred =>
+                    {
+                        // 只有优先模式允许丢失缓存偏好；严格模式不能绕过绑定发送
                         tracing::warn!(%error, "OpenAI cache preference lookup unavailable");
                         binding_key = None;
                         None
@@ -1302,7 +1300,10 @@ impl CodexCredentialSelector {
                                     drop(guard);
                                     continue 'capacity;
                                 }
-                                Err(error) if cache_preference => {
+                                Err(error)
+                                    if cache_preference
+                                        && affinity_mode == AccountAffinity::Preferred =>
+                                {
                                     tracing::warn!(%error, "OpenAI cache preference update unavailable");
                                 }
                                 Err(error) => return Err(error),
