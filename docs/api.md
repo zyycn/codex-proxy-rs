@@ -1131,15 +1131,17 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 未要求探测时，该字段表示冷却结束时间。`protectionRules` 返回触发时的规则快照 `[{ id, name }]`，
 没有保护原因时为空数组，修改或删除当前规则不改写此快照。错误保护与上游限流独立恢复，解除保护不保证其他限制已经解除
 
-`quota.credits` 返回上游点数余额，未提供点数信息时为 `null`。对象包含 `hasCredits`、`unlimited` 和
-`balance`，余额为保留上游精度的十进制字符串，未提供余额时为 `null`，明确的零余额为 `"0"`。
-点数余额与重置卡库存独立。支持点数的账号返回 `capabilities.quotaCredits=true`，通过
-`POST /api/admin/accounts/batch-update` 提交 `{ "accountIds": ["acct_..."], "autoUseQuotaCredits": true }`
-设置，账号字段 `autoUseQuotaCredits` 默认 `false`。关闭时，订阅额度耗尽即停止调度，即使还有点数。
-开启后，只有上游确认 `hasCredits=true` 或 `unlimited=true` 且没有支出限制，才允许靠点数继续请求；
-余额数字本身不能证明点数可用。对已耗尽的账号开启时会复查额度，关闭时立即停止仅靠点数的放行
+`quota.credits` 返回上游点数信息，缺失时为 `null`；包含 `hasCredits`、`unlimited` 和 `balance`。
+余额是保留上游精度的十进制字符串，未知为 `null`，零为 `"0"`，与重置卡库存独立
 
-点数不能清除凭据错误、停用或冷却状态。实际请求被上游拒绝后不会为了使用点数重发同一次请求
+支持点数的账号返回 `capabilities.quotaCredits=true`。通过 `POST /api/admin/accounts/batch-update`
+提交 `{ "accountIds": ["acct_..."], "autoUseQuotaCredits": true }` 设置是否自动使用点数：
+
+- 默认关闭，订阅额度耗尽即停止调度
+- 开启后，上游确认 `hasCredits=true` 或 `unlimited=true` 且没有支出限制时，允许靠点数继续请求；余额数字本身不能证明可用
+- 对已耗尽账号开启时复查额度；关闭时立即撤销仅靠点数的放行
+
+点数不解除凭据错误、停用或冷却，也不触发对已被上游拒绝请求的重发
 
 账号名称是本地显示信息，与账号 ID、上游邮箱和凭据独立。编辑接口的可选 `name` 省略或为 `null` 时保留原值；
 提供字符串时去除首尾空白，空字符串清除名称并回退显示邮箱，原始输入最多 512 个 UTF-8 字节且不能包含控制字符。
@@ -1856,16 +1858,25 @@ HTTP 返回 `403` 和 `image_generation_disabled`，WebSocket 每个 `response.c
 开启后推理和 [CPR 互联导出](#cpr-互联只读协议) 都限制到这些组内的直连 OAuth 账号。
 账号池、原生额度窗口、套餐分布分别按对应开关公开；关闭共享不改变已保存的其他开关值
 
+### Key 客户端身份
+
 `providerRequestProfileOverrides` 按 Provider ID 保存身份选择，列表返回同名对象。创建时各项为完整配置对象，
 未提供的 Provider 跟随通用设置；更新时省略某项保留原值，设为 `null` 清除该项覆盖。最多 256 项，每项最多 64 KiB。
 独立配置整体覆盖通用设置，不逐字段继承；切换全局配置不会影响独立 Key。目录与选择规则见 [Provider 客户端身份](#provider-客户端身份)
 
-OpenAI Key 可设置 `installationSeed`（带连字符的 UUID，大小写均可，保存时规范化为小写）。在 `providerRequestProfileOverrides.openai` 中，继承全局 UA 时使用 `{"inherit":{"installationSeed":"3b11bc82-c666-417d-b9ff-2a34fd040385"}}`；独立预设和自定义 UA 将该字段与各自的画像字段并列
-省略、空字符串或 `null` 使用选中账号的安装身份；填写后由种子、稳定的 Key 记录 ID 和账号记录 ID 派生安装 UUID。同一组合在重启、UA 变化和凭据更新后保持稳定，换 Key、换账号或修改种子会改变身份。种子不会发送给上游，也不改写账号凭据。通用设置不接受此字段
+OpenAI Key 的 `installationSeed` 接受带连字符的 UUID，保存时规范化为小写；通用设置不接受此字段。
+在 `providerRequestProfileOverrides.openai` 中，继承全局 UA 时使用
+`{"inherit":{"installationSeed":"3b11bc82-c666-417d-b9ff-2a34fd040385"}}`；独立预设或自定义 UA 将它与画像字段并列
+
+- 省略、空字符串或 `null`：使用选中账号的安装身份
+- 填写种子：按种子、Key 记录 ID 和账号记录 ID 派生安装 UUID；重启、UA 变化或凭据更新不改变结果，换 Key、换账号或修改种子会改变身份
+- 种子不发送给上游，也不改写账号凭据；更改或清除种子使生效身份变化时，WebSocket 精确续写须重发完整上下文
 
 兼容字段 `openaiClientProfileOverride` 和 `xaiClientProfileOverride` 分别对应上述映射中的 `openai`、`xai`。
 创建时省略或 `null` 表示无覆盖；更新时省略保留、`null` 清除。与通用字段同时提交时必须一致，否则拒绝整个请求；
 响应中的兼容字段从同一映射派生，不是第二份配置
+
+### 名称与密钥值
 
 密钥列表的 `search` 仅匹配名称和标签，不匹配密钥值或可见前缀；搜索不区分大小写，使用字面量包含匹配，`%`、`_` 和 `\` 按普通字符处理。
 创建和更新时去除名称首尾空白，并按忽略大小写、首尾空格的名称查重，重复返回 `409`。
@@ -1893,6 +1904,8 @@ OpenAI Key 可设置 `installationSeed`（带连字符的 UUID，大小写均可
 ```
 
 自定义 Key 的分组权限、日／周限额和并发规则按本平台配置执行，不导入其他平台的历史用量
+
+### 限额与调度
 
 金额字段为非负十进制字符串，最多 10 位整数与 10 位小数，`"0"` 表示不限额。
 创建时省略金额字段默认为零；更新时省略或 `null` 保留当前值，修改限额不会清空已用金额。
@@ -2092,11 +2105,16 @@ UA、平台参数及自动 Git 上下文版本由 [OpenAI 上游客户端身份]
 每个 Key、每个账号各自独立计数，没有单对象覆盖字段。执行并发为 5、最大排队数为 5 时，
 该对象最多容纳 5 个执行请求与 5 个等待请求。Key 并发为 0（不限）时跳过 Key 排队。
 OpenAI 严格亲和下后代线程的会话账号等待不随普通账号排队关闭，见 [Client Key 等待规则](#7-client-key)。
-`keyQueueTimeoutSeconds` 和 `accountQueueTimeoutSeconds` 分别限制密钥与账号排队，各取 1～120 秒，默认 30 秒。
-每层从首次入队开始独立计时，账号重选、切换 Provider 或内部重试不重置账号时限。请求总期限仍优先，排队超时不用于中断已开始的上游生成
 
-`switchAccountOnQueueFailure` 默认 `false`，账号队满或超时返回原排队错误。开启后，允许换号的请求会在发送前再选一次可立即准入的账号，不重新排队。
-没有空位时返回原排队错误。OpenAI 会话沿用其亲和策略：严格模式成功换号后迁移绑定，优先模式临时分流时保留主绑定。密钥排队失败、必须跟随根线程的后代、固定账号与原生续写不触发换号。
+| 字段 | 默认值 | 行为 |
+| --- | --- | --- |
+| `keyQueueTimeoutSeconds` | `30` | Key 排队超时，1～120 秒 |
+| `accountQueueTimeoutSeconds` | `30` | 账号排队超时，1～120 秒 |
+| `switchAccountOnQueueFailure` | `false` | 开启后，账号队满或超时可再选一次允许且可立即准入的账号，不重新排队；关闭或无空位时返回原错误 |
+
+两层从各自首次入队开始计时，账号重选、Provider 切换或内部重试不重置账号时限。
+请求总期限优先，排队超时不中断已开始的上游生成。密钥排队失败、必须跟随根线程的后代、固定账号与原生续写不触发换号。
+OpenAI 严格模式成功换号后迁移绑定，优先模式临时分流时保留主绑定。
 设置更新须提交两层队列容量、两个超时值和换号开关，对新请求生效
 
 `openaiGuardianReservedConcurrency`（默认 5，取值 0～4,294,967,295）设置 Codex Guardian 自动审批的每账号独立并发，保存后对新请求生效。
@@ -2300,7 +2318,7 @@ Responses 的自动 Desktop Git 上下文与请求头使用同一画像快照：
 该同步不依赖隐私策略开关；显式隐私规则在其后执行，仍可覆盖最终字段
 
 配置在请求开始时冻结，Provider 首次解析的版本用于该请求的全部重试与换号。
-安装 ID 不变时 WebSocket 精确续写沿用所属连接；更改或清除种子导致生效 ID 变化时，须重新发送完整上下文
+WebSocket 精确续写沿用所属连接；安装身份配置与变更限制见 [Key 客户端身份](#key-客户端身份)
 
 ### xAI 上游客户端身份
 
@@ -2369,8 +2387,7 @@ HTTP 拒绝使用原始上游状态码；SSE 或 WS 流内失败只使用错误�
 无探测时到期恢复，有探测时到期仍阻止调度，探测失败按冻结时的时长顺延。关闭保护或探测后，已有冻结等待当前冷却结束再解除。
 保护到期或探测解除不清除独立的上游限流或模型冷却；账号手动恢复沿用强制清除本地状态的语义，使旧在途反馈和旧探测失效
 
-设置更新不接受 `accountAutoFreeze*` 字段，缺少 `accountErrorProtection` 或混用新旧字段均拒绝，避免旧客户端覆盖已保存规则。
-已有部署与备份的旧保护设置清理见[错误保护配置升级](../deploy/README.md#错误保护配置升级)
+设置更新必须包含 `accountErrorProtection`，不接受未知字段；已有部署或备份的配置处理见[升级前检查](../deploy/README.md#升级前检查)
 
 ### Windows 客户端下载
 
@@ -2828,7 +2845,8 @@ Provider metadata 分别保留 `requestedServiceTier` 与 `upstreamServiceTier` 
 当前构建不支持在线更新时不查询 Release，`hasUpdate=false`、`latestVersion` 为当前版本，
 `releaseUrl` 和 `notes` 为空，不支持原因通过 `updateSupported=false`、`unsupportedReason` 返回。
 `summaryOnly=true` 优先于 `refresh`，只读发布索引，不读取 Release；`notes`、`releaseUrl` 为空。详情或摘要检查失败时返回 `warning` 和 `hasUpdate=false`，此时 `latestVersion` 不代表已确认的通道版本。GitHub 限流时，`retryAt` 为最早可重试的 RFC 3339 时间，`retryAtDisplay` 按部署时区展示；其他情况两者均为 `null`。
-索引和按 tag 的详情在实例内共享，普通查询缓存 20 分钟，手动刷新最短间隔为 60 秒。同一查询合并并发请求，临时错误缓存 60 秒，限流时按来源退避。后台安装重新读取索引及精确 Release；目标变化须再次检查并确认。先取得匹配平台安装包的 SHA-256，再下载安装包；下载完成后使用已取得的校验值和包内发行清单，不再访问 GitHub
+普通查询缓存 20 分钟，手动刷新最短间隔为 60 秒；临时错误缓存 60 秒，限流按来源退避。
+后台安装重新核对通道和目标版本，目标变化须再次检查并确认；下载与校验流程见[在线更新](../deploy/README.md#管理端在线更新)
 
 更新 POST 在本地校验目标版本并持久化任务后返回 `202`，数据包含 `operationId`、`targetVersion`、
 `deploymentMode` 和 `message`，只表示已受理。Release 查询、远端目标复核、下载、校验及文件替换在后台

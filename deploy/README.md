@@ -388,7 +388,9 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`
 
 | 设置 | 入口与边界 |
 | --- | --- |
-| 上游客户端身份 | “系统设置 → 上游配置 → 客户端身份”；Key 可按 Provider 覆盖，支持自动或固定版本 |
+| 上游客户端身份 | “系统设置 → 上游配置 → 客户端身份”；Key 可按 Provider 覆盖，OpenAI Key 可独立配置[安装身份种子](../docs/api.md#key-客户端身份) |
+| 并发与排队 | “系统设置 → 运行设置”；Key 与账号分别设置排队容量和超时，可选择账号排队失败后换号，见[排队规则](../docs/api.md#并发与排队) |
+| 账号错误保护 | “系统设置 → 运行设置 → 错误保护”；默认关闭，按[自定义规则](../docs/api.md#账号错误保护)暂停账号调度 |
 | 全局请求位置 | “系统设置 → 上游配置 → 请求位置覆盖”；默认关闭，不从 YAML 导入 |
 | 代理位置 | “代理管理”；优先于全局位置，全局关闭时仍可独立生效 |
 
@@ -839,27 +841,10 @@ CPR_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 docker compose -f deploy/compose.yaml build codex-proxy-rs
 ```
 
-### 账号名称迁移
+### 升级前检查
 
-OAuth 账号仍使用默认授权名称（如「Codex 账号」「OpenAI 账号」「xAI 账号」）且保存了邮箱时，
-升级会清空默认名称，账号列表按邮箱前缀和完整邮箱分两行展示。
-自定义名称、已有改名审计记录的账号、无邮箱账号及 API Key 名称保留原值
-
-### Key 安装身份配置升级
-
-已保存的 Key `installationId` 由数据库迁移转换为 `installationSeed`，管理 API 调用方须改用新字段。
-升级后，这些 Key 的出站安装身份及关联的会话、缓存标识会变化，已有 WebSocket 精确续写需重新发送完整上下文。
-未配置该字段的 Key 继续使用账号安装身份，配置方式见 [Key 客户端身份](../docs/api.md)
-
-### 错误保护配置升级
-
-使用 `accountAutoFreeze*` 运行参数的部署升级时，数据库迁移删除全部旧保护设置，不转换规则或继承参数。
-`accountErrorProtection` 与新安装使用相同默认值：关闭保护、规则为空，其余参数见[错误保护 API](../docs/api.md#账号错误保护)。
-需要保护时，在「系统设置 → 运行设置 → 错误保护」重新配置规则并启用，
-使用管理 API 的客户端须同步改用[新的设置对象](../docs/api.md#账号错误保护)，旧字段写入会被拒绝
-
-已有活动冻结保留当前冷却截止时间，保护关闭时到期解除，未冻结的旧计数不沿用。通用错误保护仅暂停账号调度，不再自动下调并发；
-已经保存的账号并发上限保持原值，需要恢复时在账号设置中手动调整
+- Key 配置含 `installationId`：数据库自动转换为 `installationSeed`，API 调用方须使用[当前字段](../docs/api.md#key-客户端身份)。出站安装身份及关联的会话、缓存标识会变化，已有 WebSocket 精确续写需重发完整上下文
+- 数据库或备份含 `accountAutoFreeze*` 设置：升级后错误保护关闭、规则为空，需在管理端重新配置并启用；API 调用方使用 [`accountErrorProtection`](../docs/api.md#账号错误保护)。已有冻结到当前冷却截止后解除，账号并发上限保留，需调整时手动设置
 
 ### 版本命名与升级规则
 
@@ -879,9 +864,11 @@ OAuth 账号仍使用默认授权名称（如「Codex 账号」「OpenAI 账号�
 切换通道不会降级，Stable 候选也必须高于当前运行版本。
 下载、安装或待重启期间不能切换通道
 
-更新器从更新仓库 main 分支的 `release/version.yaml` 读取 `published`。例如 `published["3"].beta` 是 3.x Beta 通道可接收的最高已发布版本；`published["3"].exp["3.41.0"]` 只服务该实验基线。顶层 `version` 是构建版本，备版不会提前通知用户。自定义仓库须提供相同索引和对应的公开 `v<版本>` Release；未配置的通道会提示原因，不扫描历史版本
+更新候选来自更新仓库 main 分支 `release/version.yaml` 的 `published` 通道索引，顶层 `version` 仅表示构建版本。
+自定义仓库须提供相同索引和对应的公开 `v<版本>` Release；未配置的通道会提示原因
 
-查看详情或安装才按 tag 查询 Release，无需为更新器配置 GitHub 令牌。GitHub 限流时按提示稍后重试；仍使用旧更新器的实例也可从[对应版本的发行页](https://github.com/zyycn/codex-proxy-rs/releases)下载平台归档，按[手动安装](#手动安装)手动升级
+查看详情或安装时按 tag 查询 Release，无需配置 GitHub 令牌。GitHub 限流时按提示稍后重试；
+也可从[发行页](https://github.com/zyycn/codex-proxy-rs/releases)下载平台归档，按[手动安装](#手动安装)升级
 
 同一 `X.Y.Z-exp.N` 系列只用于同一轮实验，不能混用不同实验分支；变更基线即进入另一实验线，需手动迁移。
 exp 不进入正式版、alpha、beta 或 rc，普通实例也不能选择 Exp。
@@ -937,10 +924,10 @@ Compose 提供以下在线更新运行参数：
 
 管理端自重启遵循统一的[停止与重启](#停止与重启)策略，客户端需在新进程完成迁移与初始化后重新连接
 
-Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.tar.gz` 与
-`checksums.txt`。服务会在替换前再次查询远端最新版本，校验下载 host、声明大小、SHA-256 和
-归档路径；二进制或静态资源任一替换失败时恢复旧文件。成功后的旧二进制和旧静态目录分别保留为
-`*.backup`，管理端 rollback 会交换当前文件与这份备份。更新状态和跨进程锁可在以下位置排查：
+Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.tar.gz` 与 `checksums.txt`。
+服务在下载安装包前复核通道、目标版本及下载地址并取得 SHA-256，校验文件大小、摘要、归档路径和发行身份；
+后续安装与重启不依赖 GitHub。文件替换失败时恢复整组发行文件，成功后保留 `*.backup` 供管理端回滚。
+更新状态和跨进程锁可在以下位置排查：
 
 ```text
 .runtime/data/update-state.json
