@@ -8214,8 +8214,9 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             let mut body = Map::from_iter([
                 ("model".to_owned(), json!("gpt-5.4")),
                 ("input".to_owned(), json!("hello")),
+                // OAuth 会移除顶层 metadata，用 client_metadata 校验嵌套档位不被改写
                 (
-                    "metadata".to_owned(),
+                    "client_metadata".to_owned(),
                     json!({"service_tier":"priority","text":"fast priority"}),
                 ),
             ]);
@@ -8297,7 +8298,12 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 expected_tier
             );
             assert_eq!(operation, original);
-            assert_eq!(outbound["metadata"], body["metadata"]);
+            for (field, value) in body["client_metadata"]
+                .as_object()
+                .expect("client metadata")
+            {
+                assert_eq!(&outbound["client_metadata"][field], value);
+            }
             assert!(!observations.is_empty());
             for observation in &observations {
                 assert_eq!(
