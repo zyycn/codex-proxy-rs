@@ -508,23 +508,11 @@ jobs:
         shell: bash
         env:
           INSTALLATION_NOTES: |
-            ## 📥 安装
+            ## Linux 一键安装（Docker Compose）
 
-            **Docker 部署：**
             ```bash
-            # 从 GitHub 容器镜像仓库拉取
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.docker_version }}
+            curl -fsSLO https://raw.githubusercontent.com/${{ github.repository }}/${{ needs.release-info.outputs.tag }}/deploy/install.sh && CPR_RELEASE_TAG=${{ needs.release-info.outputs.tag }} bash install.sh
             ```
-
-            请从本版本附件下载 `compose.yaml` 和 `config.example.yaml`。Compose 默认固定到本版本镜像；升级前请对比模板与已有配置。
-
-            **手动下载：**
-            请从下方附件中下载适合当前平台的归档包。
-
-            附件包含与当前宿主版本及提交绑定的 `plugin-release-manifest.json`，当前没有默认内置插件。
-            教学示例由独立的 `codex-proxy-plugins` 仓库维护和发布，不随宿主发行物分发。
-
-            发布归档提供 GitHub 构建产物证明。Docker 镜像附带软件物料清单（SBOM）、构建来源证明和 cosign 无密钥签名。
 
             ## 📚 文档
 

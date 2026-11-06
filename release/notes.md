@@ -1,24 +1,29 @@
 # v3.42.0
 
-## 账号调度与额度
+## 新增功能
 
-- Key 和账号可以分别设置排队超时。开启「尝试换号」后，OpenAI 或 xAI 账号队满或超时时，网关会再找一次能立即接单的账号；没有空位则返回原错误。Key 队列、固定账号、原生续写和必须跟随主会话的子线程不会因此换号
-- OpenAI 调度减少了大号池选号和排队时的数据库与 Redis 读取。优先亲和模式下，主账号短时繁忙时临时分流，主账号失效或额度长期耗尽时，在后备账号接单后迁移绑定。没有显式会话 ID 的 Chat 和 Responses 请求，也可在同一 Key 下按缓存键或对话开头匹配账号；宽松模式仍按普通策略选号
-- Codex OAuth 账号的「自动使用点数」默认关闭。需要在套餐额度耗尽后继续使用点数时，请在「账号管理 → 展开账号 → 额度重置」为对应账号开启。只有上游确认点数可用且没有支出限制时才会继续调度
+- 并发排队：Key 和账号可分别设置超时，OpenAI 或 xAI 账号队满或超时时可尝试换号一次（默认关闭）
+- Codex OAuth：可在账号的「额度重置」中开启「自动使用点数」（默认关闭），套餐额度用尽且上游确认点数可用、无支出限制时生效
+- OpenAI Key：可设置安装身份种子，让每把 Key 在每个账号上使用独立、稳定的安装身份
 
-## OpenAI 请求与安装身份
+## 优化改进
 
-- 修复部分 Chat 客户端经 Codex OAuth 转发时，因携带默认采样参数或 `stream_options.include_usage` 而收到 400 的问题。旧式 token 上限会转为 `max_output_tokens`；显式截断、非空停止序列等策略仍交由上游校验。新增的字段处理仅用于 OAuth
-- OpenAI Key 可配置安装身份种子。同一把 Key 使用同一账号时安装身份保持稳定；换 Key 或换账号时使用不同身份。未配置种子的 Key 继续使用账号原有身份
+- 系统更新：按通道查询，无需翻页；新版本公开且当前平台的安装包和校验文件齐全后才提示升级
+- 安装更新：遇到 GitHub 限流时显示可重试时间；安装包下载后，校验和安装无需再访问 GitHub
+- OpenAI 调度：大账号池选号和排队时减少数据库与 Redis 读取
+- OpenAI 优先亲和：主账号繁忙时临时分流，失效或额度长期耗尽时改绑接单的账号
+- OpenAI 会话：优先亲和模式下，未提供会话 ID 的 Chat 和 Responses 请求也会尽量复用同一账号
+- 账号分组：悬停或点击色块即可查看组名和停用状态
 
-## 系统更新与管理端
+## 问题修复
 
-- 检查更新时按通道读取已发布版本，不再逐页遍历 GitHub Release。发现更高候选时按精确 tag 核对公开 Release、当前平台包和校验文件后才提示；遇到 GitHub 限流时显示可重试时间。安装包下载后，校验、安装和重启不再需要访问 GitHub
-- 编辑账号模型限制时，取消勾选的自定义模型会保留到本次编辑结束，可以在保存前重新勾选。账号分组色块支持悬停或点击查看组名及停用状态
+- 修复部分 Chat 客户端通过 Codex OAuth 转发时，默认采样参数或 `stream_options.include_usage` 导致请求返回 400 的问题
+- 修复编辑模型限制时，取消勾选的自定义模型在保存前就从列表消失的问题
 
-## 升级事项
+## 升级须知
 
-- 从 v3.41.2 升级时，两层排队超时都继承原值，换号默认关闭。两层独立计时，先后在两层排队的总等待时间可能变长。通过管理 API 或插件 SDK 更新运行设置时，用 `keyQueueTimeoutSeconds`、`accountQueueTimeoutSeconds` 和 `switchAccountOnQueueFailure` 替换 `concurrencyWaitTimeoutSeconds`
-- 已配置的 OpenAI Key 安装 ID 会自动转为种子；管理 API 调用方请将 `installationId` 改为 `installationSeed`。这些 Key 的出站安装身份及关联会话、缓存标识会变化，已有 WebSocket 精确续写需重新发送完整上下文
-- 使用自定义更新仓库的实例，请使用固定的 `update-index` 预发行页和版本 Release 的 `version.yaml` 附件提供通道索引。本仓库的发布工作流会自动维护，不需要额外分支
-- 从 v3.41.2 正式版升级只新增迁移 0039。若源码部署执行过中间版 main 的 `0039_queue_timeouts.sql`（包括随后执行过 0040 或 0041 的实例），其迁移记录与发行包不兼容。请勿直接覆盖升级或修改数据库中的校验和；应先在独立数据库验证恢复或数据迁移方案
+- **源码部署：** 执行过中间版 `main` 的 `0039_queue_timeouts.sql` 时，请先在独立数据库验证迁移，勿直接覆盖升级或修改校验和（从正式版 v3.41.2 升级不受影响）
+- **排队设置：** Key 与账号超时各自继承原值，先后排队的总等待时间可能变长
+- **管理 API 和插件 SDK：** 将 `concurrencyWaitTimeoutSeconds` 换为 `keyQueueTimeoutSeconds` 和 `accountQueueTimeoutSeconds`，并传入换号开关 `switchAccountOnQueueFailure`
+- **已设置安装 ID 的 Key：** 原值自动转为种子，API 字段由 `installationId` 改为 `installationSeed`；出站身份、会话和缓存标识随之变化，已有 WebSocket 精确续写需重发完整上下文
+- **自定义更新仓库：** 用 `update-index` 预发行页指向版本 Release 的 `version.yaml` 附件，本仓库的发布工作流会自动维护

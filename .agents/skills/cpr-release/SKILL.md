@@ -19,7 +19,7 @@ description: Codex Proxy RS 的版本规划、发布说明、正式或预发行�
 
 - Codex 兼容性变化按[问题与方案依据](../../../CONTRIBUTING.md#问题与方案依据)核对已有依据与验证范围，缺少依据列为发行风险，不以 CI 通过代替
 - `release/publish --check <version>` 只读检查发行准备条件；不带 `--check` 会提交、打 tag、推送并触发工作流，实际发布仍需相应授权
-- 同名版本、超时或中断先查本地与远端状态，不删已发布 tag、不移动 tag、不强推掩盖冲突
+- 同版本失败先区分[续跑原任务与修复源码后重发](references/operations.md#恢复与验收)：前者沿用原提交；后者仅在版本尚未公开时清理失败的版本提交，再生成唯一的版本提交。已发布的 tag 和产物保持不变
 - 备版只更新源码的构建版本；通道快照是版本 Release 的 `version.yaml` 附件，验收时核对固定预发行页 `update-index` 指向的公开快照
 - 预发行不得覆盖 GitHub Latest 或镜像 `latest`，完成后回读核对
 - `release/notes.md` 只承载当前发行的说明；常规文档修改另按开发入口执行[文档检查](../cpr-dev-guide/references/documentation.md)
