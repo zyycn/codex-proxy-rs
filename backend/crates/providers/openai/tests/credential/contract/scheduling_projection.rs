@@ -304,7 +304,7 @@ async fn projection_fill_merges_equal_keys_and_releases_cancelled_owners() {
 }
 
 #[tokio::test]
-async fn waiting_requests_recheck_only_their_account_until_capacity_opens() {
+async fn strict_bound_waiters_recheck_only_their_account_until_capacity_opens() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first", "test-first");
     create_account(&store, "acct_second", "test-second");
@@ -355,5 +355,108 @@ async fn waiting_requests_recheck_only_their_account_until_capacity_opens() {
     .unwrap();
     for lease in [first.unwrap(), second.unwrap()] {
         assert_eq!(lease.capacity_snapshot().unwrap().total_slots(), 4);
+    }
+}
+
+#[tokio::test]
+async fn movable_waiters_use_other_accounts_even_before_queue_promotion() {
+    for (mode, has_session, bind_session) in [
+        (AccountAffinity::Relaxed, false, false),
+        (AccountAffinity::Strict, true, false),
+        (AccountAffinity::Preferred, true, true),
+    ] {
+        for has_waiter_ahead in [false, true] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_first", "test-first");
+            create_account(&store, "acct_second", "test-second");
+            let first = ProviderAccountId::new("acct_first").unwrap();
+            let second = ProviderAccountId::new("acct_second").unwrap();
+            let leases = Arc::new(TestLeaseCoordinator::default());
+            let feedback = Arc::new(AccountFeedbackStats::default());
+            for _ in 0..4 {
+                feedback.report(
+                    &ProviderKind::new("openai").unwrap(),
+                    &second,
+                    AccountAttemptFeedback::Failed {
+                        first_output_ms: None,
+                    },
+                );
+            }
+            let selector = selector_with_runtime(
+                &store,
+                leases.clone(),
+                Arc::new(MemorySessionAffinity::default()),
+                feedback,
+                Arc::new(MemoryCooldownPort::new()),
+            );
+            // 健康分保证请求排入 A，已有队首时也不因 B 的队列较短而提前排入 B
+            let policy = account_policy()
+                .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                    max_waiting: 10,
+                    timeout: Duration::from_secs(5),
+                })
+                .with_smart_scheduling(
+                    gateway_core::account::SmartSchedulingConfig::new([
+                        0.0, 0.0, 1.0, 0.0, 0.0, 0.2,
+                    ])
+                    .unwrap(),
+                );
+            let head_attempt =
+                projection_attempt("key_codex_contract", contract_account_scope(), policy);
+            let head_key = ProviderSessionAffinityKey::try_new("fixed-head").unwrap();
+            assert_eq!(
+                select(&selector, &head_attempt, &head_key, "gpt-5.4")
+                    .await
+                    .unwrap()
+                    .account_id(),
+                &first,
+            );
+            let attempt = projection_attempt(
+                "key_codex_contract",
+                contract_account_scope(),
+                policy.with_openai_account_affinity(mode),
+            );
+            let key = ProviderSessionAffinityKey::try_new("movable-waiter").unwrap();
+            if bind_session {
+                assert_eq!(
+                    select(&selector, &attempt, &key, "gpt-5.4")
+                        .await
+                        .unwrap()
+                        .account_id(),
+                    &first,
+                );
+            }
+            for id in [&first, &second] {
+                leases.signals.lock().unwrap().insert(id.clone(), signal(2));
+            }
+            let mut head = Box::pin(select(&selector, &head_attempt, &head_key, "gpt-5.4"));
+            if has_waiter_ahead {
+                assert!(head.as_mut().now_or_never().is_none());
+            }
+            let request = SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap(),
+                attempt: &attempt,
+                session_affinity_key: has_session.then_some(&key),
+            };
+            let mut pending = Box::pin(selector.select(&request));
+            assert!(pending.as_mut().now_or_never().is_none());
+            // A 及其队首始终占位，只释放 B，验证请求能在晋升或超时前使用新空位
+            leases.signals.lock().unwrap().remove(&second);
+            let selected = tokio::time::timeout(Duration::from_secs(2), pending)
+                .await
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "missed free account: mode={mode:?}, has_waiter_ahead={has_waiter_ahead}"
+                    )
+                })
+                .unwrap();
+            assert_eq!(selected.account_id(), &second);
+            let capacity = selected.capacity_snapshot().unwrap();
+            assert_eq!((capacity.used_slots(), capacity.total_slots()), (3, 4));
+            if has_waiter_ahead {
+                assert!(head.as_mut().now_or_never().is_none());
+            }
+        }
     }
 }

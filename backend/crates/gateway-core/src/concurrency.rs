@@ -11,7 +11,7 @@ use futures_timer::Delay;
 
 const MAX_TOTAL_WAITING: usize = 1_024;
 const CAPACITY_RECHECK_INTERVAL: Duration = Duration::from_millis(100);
-const BINDING_RECHECK_INTERVAL: Duration = Duration::from_millis(500);
+const NON_HEAD_RECHECK_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ConcurrencyQueuePolicy {
@@ -235,11 +235,11 @@ impl<K: Eq + Hash> WaitTicket<K> {
         self.turn().await
     }
 
-    async fn retry_or_recheck_binding(&self) -> Result<(), QueueRejection> {
+    async fn retry_or_recheck(&self) -> Result<(), QueueRejection> {
         if !self.is_head() {
-            // 非队首由位置释放唤醒，低频兜底只用于检查外部绑定迁移
+            // 非队首由位置释放唤醒，低频重查覆盖外部调度状态变化
             let turn = self.turn().fuse();
-            let recheck = Delay::new(BINDING_RECHECK_INTERVAL).fuse();
+            let recheck = Delay::new(NON_HEAD_RECHECK_INTERVAL).fuse();
             pin_mut!(turn, recheck);
             return select_biased! {
                 result = turn => result,
@@ -326,14 +326,14 @@ impl<'a, K: Clone + Eq + Hash> CapacityWait<'a, K> {
         self
     }
 
-    /// 外部绑定可在队列等待期间变化，非队首只需低频检查绑定并由 can_try 复核资格
+    /// 允许非队首低频复核外部调度状态，当前队列准入仍由 can_try 裁决
     #[must_use]
     pub const fn with_periodic_recheck(mut self, enabled: bool) -> Self {
         self.periodic_recheck = enabled;
         self
     }
 
-    /// 当前等待位置，供调用方在非队首时只检查外部绑定而避免重复加载候选池
+    /// 当前等待位置，供调用方按请求归属限定重查范围
     #[must_use]
     pub fn queued_key(&self) -> Option<&K> {
         self.ticket.as_ref().map(WaitTicket::key)
@@ -388,7 +388,7 @@ impl<'a, K: Clone + Eq + Hash> CapacityWait<'a, K> {
         }
         if let Some(ticket) = &self.ticket {
             if self.periodic_recheck {
-                ticket.retry_or_recheck_binding().await?;
+                ticket.retry_or_recheck().await?;
             } else {
                 ticket.retry().await?;
             }

@@ -543,22 +543,6 @@ impl CodexCredentialSelector {
         } else {
             ProviderConcurrencyPool::Shared
         };
-        let mut waiting = CapacityWait::new(
-            if prioritized {
-                &self.reserved_waiting
-            } else {
-                &self.waiting
-            },
-            queue_policy,
-            request.attempt.deadline().at(),
-            request.attempt.concurrency_wait_budget(),
-        )
-        .with_periodic_recheck(binding_key.is_some())
-        .with_priority(if prioritized {
-            WaitPriority::High
-        } else {
-            WaitPriority::Normal
-        });
         let continuation_account = match request.attempt.continuation_attempt() {
             ContinuationAttempt::Native => request
                 .attempt
@@ -581,6 +565,22 @@ impl CodexCredentialSelector {
             return Err(CredentialSelectionError::NoEligibleCredential);
         }
         let pinned_account = required_account.or_else(|| continuation_account.clone());
+        let mut waiting = CapacityWait::new(
+            if prioritized {
+                &self.reserved_waiting
+            } else {
+                &self.waiting
+            },
+            queue_policy,
+            request.attempt.deadline().at(),
+            request.attempt.concurrency_wait_budget(),
+        )
+        .with_periodic_recheck(binding_key.is_some() || pinned_account.is_none())
+        .with_priority(if prioritized {
+            WaitPriority::High
+        } else {
+            WaitPriority::Normal
+        });
         let projection_key = match (model, request.attempt.account_scope()) {
             (CodexSelectionModel::Requested(model), Some(scope))
                 if !diagnostic
@@ -623,13 +623,18 @@ impl CodexCredentialSelector {
                 return Err(CredentialSelectionError::ContinuationOwnerChanged);
             }
             let force_full = std::mem::take(&mut refresh_candidates);
-            // 等待期间只复核当前账号，绑定迁移、资格变化或取得队首空位后才展开候选池
+            // 只有固定归属的等待者可缩小重查范围，可分流请求还需发现其他账号释放的容量
             let queued_account = waiting
                 .queued_key()
-                .filter(|_| {
+                .filter(|&queued| {
                     !force_full
                         && queued_binding == binding
                         && request.attempt.request_policy_context().is_none()
+                        && (pinned_account.as_ref() == Some(queued)
+                            || (follow_only || affinity_mode == AccountAffinity::Strict)
+                                && binding
+                                    .as_ref()
+                                    .is_some_and(|binding| binding.account_id() == queued))
                 })
                 .cloned();
             queued_binding = binding.clone();
