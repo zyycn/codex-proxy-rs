@@ -110,6 +110,10 @@ impl CodexCredentialQuotaService {
 
         let now_utc = chrono::Utc::now();
         for account in accounts {
+            if account.quota().is_exhausted() {
+                summary.skipped_exhausted += 1;
+                continue;
+            }
             if let Some(snapshot) = observed_snapshots.get(account.id()) {
                 // 1. 周线已触顶或耗尽跳过
                 let weekly_exhausted = snapshot

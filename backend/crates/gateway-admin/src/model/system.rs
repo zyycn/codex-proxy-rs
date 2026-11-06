@@ -3,6 +3,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// 摘要只读取发布索引，完整详情可按请求刷新
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemUpdateCheck {
+    Summary,
+    Detail,
+    Refresh,
+}
+
 /// 本次检查或安装选择的更新稳定性范围，具体版本准入由 Host 判定
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -69,6 +77,7 @@ pub struct SystemUpdateDetail {
     pub update_supported: bool,
     pub unsupported_reason: Option<String>,
     pub warning: Option<String>,
+    pub retry_at: Option<DateTime<Utc>>,
 }
 
 /// 系统操作类型

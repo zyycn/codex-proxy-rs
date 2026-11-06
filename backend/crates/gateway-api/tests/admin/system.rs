@@ -27,7 +27,22 @@ use super::{AdminTestFixture, AdminTestState, unavailable_system};
 #[test]
 fn update_detail_query_should_default_to_no_refresh_and_reject_unknown_fields() {
     let query: UpdateDetailQuery = serde_json::from_str("{}").expect("empty query object");
-    assert!(!query.refresh());
+    use gateway_admin::model::system::SystemUpdateCheck;
+    assert_eq!(query.check(), SystemUpdateCheck::Detail);
+    for (json, mode) in [
+        (r#"{"refresh":true}"#, SystemUpdateCheck::Refresh),
+        (
+            r#"{"summaryOnly":true,"refresh":true}"#,
+            SystemUpdateCheck::Summary,
+        ),
+    ] {
+        assert_eq!(
+            serde_json::from_str::<UpdateDetailQuery>(json)
+                .unwrap()
+                .check(),
+            mode
+        );
+    }
     assert!(serde_json::from_str::<UpdateDetailQuery>(r#"{"refresh":true,"extra":1}"#).is_err());
 }
 
@@ -191,7 +206,7 @@ impl SystemOperations for ProgressSystem {
 
     async fn update_detail(
         &self,
-        _: bool,
+        check: gateway_admin::model::system::SystemUpdateCheck,
         channel: Option<gateway_admin::model::system::SystemUpdateChannel>,
     ) -> Result<SystemUpdateDetail, SystemOperationError> {
         use gateway_admin::model::system::{SystemUpdateChannel, SystemUpdatePolicy};
@@ -206,11 +221,16 @@ impl SystemOperations for ProgressSystem {
             deployment_mode: "docker".into(),
             build_type: "release".into(),
             release_url: None,
-            notes: self.notes.clone(),
+            notes: if check == gateway_admin::model::system::SystemUpdateCheck::Summary {
+                None
+            } else {
+                self.notes.clone()
+            },
             cached: false,
             update_supported: true,
             unsupported_reason: None,
             warning: None,
+            retry_at: None,
         })
     }
 
@@ -281,7 +301,10 @@ impl SystemOperations for ProgressSystem {
 
 #[tokio::test]
 async fn update_detail_should_validate_and_forward_the_temporary_channel() {
-    let fixture = AdminTestFixture::with_system(Arc::new(ProgressSystem::default())).await;
+    let fixture = AdminTestFixture::with_system(Arc::new(ProgressSystem {
+        notes: Some("notes".into()),
+    }))
+    .await;
     fixture.auth.insert_session("valid-session");
     let router = app(fixture.state());
     for (authenticated, query, expected) in [
@@ -289,6 +312,8 @@ async fn update_detail_should_validate_and_forward_the_temporary_channel() {
         (true, "channel=nightly", StatusCode::BAD_REQUEST),
         (true, "channel=beta&extra=true", StatusCode::BAD_REQUEST),
         (true, "channel=beta", StatusCode::OK),
+        (true, "channel=beta&refresh=true", StatusCode::OK),
+        (true, "channel=beta&summaryOnly=true", StatusCode::OK),
         (true, "", StatusCode::OK),
     ] {
         let mut request = Request::builder()
@@ -307,6 +332,10 @@ async fn update_detail_should_validate_and_forward_the_temporary_channel() {
             let body: serde_json::Value =
                 serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.expect("body"))
                     .expect("json");
+            assert_eq!(
+                body["data"]["notes"].is_null(),
+                query.contains("summaryOnly")
+            );
             assert_eq!(
                 body["data"]["policy"]["channel"],
                 if query.is_empty() { "stable" } else { "beta" }

@@ -151,6 +151,18 @@ impl CodexAccountQuotaSnapshot {
         self.credits.as_ref()
     }
 
+    pub(super) fn access_with_credits(
+        &self,
+        subscription: QuotaState,
+        enabled: bool,
+    ) -> QuotaState {
+        if enabled && subscription.is_exhausted() && self.credits_usable {
+            QuotaState::credits_only(self.observed_at, subscription.reset_at())
+        } else {
+            subscription
+        }
+    }
+
     pub(super) const fn credits_usable(&self) -> bool {
         self.credits_usable
     }
@@ -351,11 +363,6 @@ pub(crate) fn parse_account_quota_snapshot(
     });
     let quota = authoritative_quota_state(&object, &windows, observed_at)?;
     let credits_usable = has_usable_credits(&object);
-    let quota = if credits_usable {
-        QuotaState::allowed(observed_at)
-    } else {
-        quota
-    };
     let recovery = object
         .get(RECOVERY_FIELD)
         .map(|value| serde_json::from_value(value.clone()))
@@ -400,10 +407,13 @@ fn has_usable_credits(usage: &Map<String, Value>) -> bool {
         == Some(true);
     let other_limit_reached = usage
         .get("rate_limit_reached_type")
-        .and_then(|reason| reason.get("type"))
-        .and_then(Value::as_str)
+        .and_then(|reason| reason.as_str().or_else(|| reason.get("type")?.as_str()))
         .is_some_and(|reason| reason != "rate_limit_reached");
-    available && !spend_reached && !other_limit_reached
+    let overage_reached = credits
+        .get("overage_limit_reached")
+        .and_then(Value::as_bool)
+        == Some(true);
+    available && !spend_reached && !other_limit_reached && !overage_reached
 }
 
 /// 只有默认 `codex` 桶能提供账号级套餐访问结论，具名桶只保留展示事实
@@ -427,9 +437,14 @@ fn authoritative_quota_state(
         .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
     let allowed = optional_bool(rate_limit, "allowed")?;
     let top_level_reached = optional_bool(rate_limit, "limit_reached")?.unwrap_or(false);
-    let window_reached = windows
-        .iter()
-        .any(|w| w.is_account_wide() && w.limit_reached);
+    let window_reached = windows.iter().any(|window| {
+        window.is_account_wide()
+            && (window.limit_reached
+                || (window.limit_reached()
+                    && window
+                        .reset_at()
+                        .is_none_or(|reset| SystemTime::from(reset) > observed_at)))
+    });
     let reset_at = windows
         .iter()
         .filter(|w| w.is_account_wide() && w.limit_reached())
@@ -444,16 +459,6 @@ fn authoritative_quota_state(
         })
         .map(SystemTime::from);
 
-    if allowed == Some(true) {
-        if top_level_reached || window_reached {
-            tracing::warn!(
-                top_level_reached,
-                window_reached,
-                "OpenAI quota returned contradictory access facts; explicit allowed=true wins"
-            );
-        }
-        return Ok(QuotaState::allowed(observed_at));
-    }
     if allowed == Some(false) {
         return Ok(QuotaState::exhausted(
             QuotaEvidence::ProviderDenied,
@@ -467,6 +472,9 @@ fn authoritative_quota_state(
             observed_at,
             reset_at,
         ));
+    }
+    if allowed == Some(true) {
+        return Ok(QuotaState::allowed(observed_at));
     }
     Ok(QuotaState::observed_unknown(observed_at))
 }

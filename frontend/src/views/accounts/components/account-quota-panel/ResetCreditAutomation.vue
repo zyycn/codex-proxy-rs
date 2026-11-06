@@ -69,11 +69,11 @@ watch(() => props.accountId, () => {
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-1">
         <h3 class="m-0 text-z-sm font-heavy text-z-text">
-          {{ t('accounts.quotaReset.automaticallyUsed') }}
+          {{ t('accounts.quotaReset.automaticallyUseResetCard') }}
         </h3>
-        <ZPopover trigger="click" placement="bottom-start" role="dialog">
+        <ZPopover trigger="hover" placement="bottom-start" role="tooltip">
           <template #reference="{ open, id }">
-            <ZIconButton variant="link" :title="undefined" size="small" class="size-6! p-0!" :aria-label="t('accounts.quotaReset.automaticUsageRules')" :aria-expanded="open" :aria-controls="id">
+            <ZIconButton variant="link" :title="undefined" size="small" class="size-6! p-0!" :aria-label="t('accounts.quotaReset.automaticUsageRules')" :aria-describedby="open ? id : undefined">
               <CircleHelp class="size-3.5" />
             </ZIconButton>
           </template>

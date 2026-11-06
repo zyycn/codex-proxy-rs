@@ -30,7 +30,18 @@ pub(super) async fn publish_credentials_and_observe_quota(
     notify_account_facts_changed(peer.map(AsRef::as_ref), provider.as_ref(), account_ids).await;
     publish_committed(snapshot, revision).await?;
 
-    // 凭据已经提交；额度只是可重建的观察，不能拖住管理请求或回滚提交结果
+    observe_account_quotas(peer, provider, accounts, account_ids, request_id);
+    Ok(())
+}
+
+pub(super) fn observe_account_quotas(
+    peer: Option<&std::sync::Arc<dyn crate::ports::peer::PeerUpstreamService>>,
+    provider: &std::sync::Arc<dyn ProviderAdmin>,
+    accounts: &std::sync::Arc<dyn AccountStore>,
+    account_ids: &[ProviderAccountId],
+    request_id: &str,
+) {
+    // 配置已提交，额度查询失败不回滚配置
     let provider = provider.clone();
     let peer = peer.cloned();
     let accounts = accounts.clone();
@@ -48,14 +59,14 @@ pub(super) async fn publish_credentials_and_observe_quota(
                     Ok(Some(account)) => account,
                     Ok(None) => continue,
                     Err(error) => {
-                        tracing::warn!(request_id, account_id = %account_id, error = %error, "initial quota account lookup failed");
+                        tracing::warn!(request_id, account_id = %account_id, error = %error, "quota observation account lookup failed");
                         continue;
                     }
                 };
                 if !account.enabled || &account.provider_kind != provider.provider_kind() {
                     continue;
                 }
-                // 首查与手动刷新共用认证能力分派，互联协议由 Admin 解释
+                // 后台查询与手动刷新共用认证能力分派，互联协议由 Admin 解释
                 super::peer_link::upstream::read_quota(
                     Some(peer),
                     provider.as_ref(),
@@ -72,12 +83,11 @@ pub(super) async fn publish_credentials_and_observe_quota(
                     provider = %provider.provider_kind().as_str(),
                     account_id = %account_id.as_str(),
                     quota_error = ?error.kind(),
-                    "initial quota observation failed"
+                    "account quota observation failed"
                 );
             }
         }
     });
-    Ok(())
 }
 
 pub(super) async fn required_credential(

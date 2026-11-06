@@ -406,6 +406,7 @@ fn account_page_item(
     AccountPageItem {
         protection_rules: Vec::new(),
         account: AccountRecord {
+            auto_use_quota_credits: false,
             outbound_proxy_id: None,
             outbound_proxy_enabled: true,
             id: "acct_cooldown".to_owned(),

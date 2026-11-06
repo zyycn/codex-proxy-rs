@@ -1179,7 +1179,7 @@ impl SystemOperations for UnavailableSystem {
 
     async fn update_detail(
         &self,
-        _: bool,
+        _: gateway_admin::model::system::SystemUpdateCheck,
         _: Option<gateway_admin::model::system::SystemUpdateChannel>,
     ) -> Result<SystemUpdateDetail, SystemOperationError> {
         Err(unavailable_system())

@@ -13,6 +13,8 @@
       "s": "{duration} s",
       "unlimited": "Unlimited",
       "noPointsAvailableYet": "No credits available",
+      "autoUsePoints": "Automatically use credits",
+      "autoUsePointsHelp": "Use available credits when the subscription limit is reached",
       "quotaPoints": "Credits",
       "point": "credits",
       "requestsInThisWindow": "Requests in this window: {requestDisplay}",
@@ -515,7 +517,6 @@
         "label": "Automatically use expiring reset credits"
       },
       "automaticallyUseResetCard": "Automatically use resets",
-      "automaticallyUsed": "Auto use",
       "automaticUsageRules": "Automatic usage rules",
       "setGlobalLeadTime": "Set global lead time",
       "minutesInAdvance": "{leadMinutes} min in advance",

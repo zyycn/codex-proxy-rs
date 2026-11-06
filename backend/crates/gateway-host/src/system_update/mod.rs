@@ -3,10 +3,12 @@
 mod archive;
 mod config;
 mod diagnostics;
+mod discovery;
 mod download;
 mod error;
 mod events;
 mod installation;
+mod metadata;
 mod operations;
 mod process;
 mod release;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SystemRestartPlan, SystemUpdateChannel, SystemUpdateDetail } from '@/api'
+import type { SystemRestartPlan, SystemUpdateChannel } from '@/api'
 
 import { ZButton, ZConfirmDialog, ZDialog, ZMarkdown, ZPopover, ZScrollbar, ZSegmented, ZSkeleton } from '@codex-proxy/ui'
 import {
@@ -9,6 +9,7 @@ import {
   Download,
   ExternalLink,
   History,
+  Hourglass,
   Power,
   RefreshCw,
   Terminal,
@@ -19,7 +20,7 @@ import { storeToRefs } from 'pinia'
 import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { checkSystemRestart } from '@/api'
-import { normalizeSystemVersion, useSystemUpdateStore } from '@/stores/modules/system-update'
+import { useSystemUpdateStore } from '@/stores/modules/system-update'
 import { notification as ZNotification } from '@/utils/notification'
 import { errorMessage } from '@/utils/operation'
 import {
@@ -51,14 +52,11 @@ const {
   updateStreamError,
   hasCandidateUpdate: hasUpdate,
   canUpdate,
+  canRestart,
 } = storeToRefs(systemUpdateStore)
 const { loadSystem, checkUpdates, changeChannel, updateNow, restartNow } = systemUpdateStore
 
 const updateLogScrollbar = useTemplateRef<InstanceType<typeof ZScrollbar>>('updateLogScrollbar')
-const updateConfirmOpen = shallowRef(false)
-const updateConfirmInfo = shallowRef<SystemUpdateDetail | null>(null)
-const updateConfirmPreviousTarget = shallowRef('')
-const preparingUpdate = shallowRef(false)
 const checkingRestart = shallowRef(false)
 const restartConfirmOpen = shallowRef(false)
 const restartPlan = shallowRef<SystemRestartPlan | null>(null)
@@ -75,8 +73,6 @@ const presentation = computed(() => resolveSystemUpdatePresentation({
   hasUpdate: hasUpdate.value,
   updateStreaming: updateStreaming.value,
   updateStreamError: updateStreamError.value,
-  previousTargetVersion: updateConfirmPreviousTarget.value,
-  confirmedTargetVersion: updateConfirmInfo.value?.latestVersion ?? null,
 }))
 
 const updateLogRows = computed(() =>
@@ -150,12 +146,10 @@ function pinUpdateLogsToBottom() {
 async function handleCheckUpdates(force = true) {
   try {
     const data = await checkUpdates(force)
-    if (data?.warning) {
-      ZNotification.error({ message: data.warning })
+    if (!data || data.warning)
       return
-    }
     ZNotification.success({
-      message: data?.hasUpdate
+      message: data.hasUpdate
         ? t('systemUpdate.feedback.available')
         : t('systemUpdate.feedback.noUpdates'),
     })
@@ -164,47 +158,11 @@ async function handleCheckUpdates(force = true) {
 }
 
 async function handleUpdateRequest() {
-  if (preparingUpdate.value || updating.value)
+  const detail = updateInfo.value
+  if (!canUpdate.value || !detail)
     return
-
-  const previousTargetVersion = normalizeSystemVersion(updateInfo.value?.latestVersion)
-  preparingUpdate.value = true
   try {
-    const data = await checkUpdates(true)
-    if (data?.warning) {
-      ZNotification.error({ message: data.warning })
-      return
-    }
-    if (!data?.hasUpdate || !canUpdate.value) {
-      ZNotification.success({
-        message: t('systemUpdate.feedback.noUpdates'),
-      })
-      return
-    }
-    const remoteTargetVersion = normalizeSystemVersion(data.latestVersion)
-    if (!remoteTargetVersion) {
-      ZNotification.error({
-        message: t('systemUpdate.errors.remoteTargetMissing'),
-      })
-      return
-    }
-    if (previousTargetVersion && previousTargetVersion !== remoteTargetVersion) {
-      updateConfirmPreviousTarget.value = previousTargetVersion
-      updateConfirmInfo.value = data
-      updateConfirmOpen.value = true
-      return
-    }
-    await runConfirmedUpdate(remoteTargetVersion, data.policy.channel)
-  }
-  catch {}
-  finally {
-    preparingUpdate.value = false
-  }
-}
-
-async function runConfirmedUpdate(targetVersion: string, channel: SystemUpdateChannel) {
-  try {
-    const result = await updateNow(targetVersion, channel)
+    const result = await updateNow(detail.latestVersion, detail.policy.channel)
     if (result) {
       ZNotification.success({
         message: t('systemUpdate.feedback.started'),
@@ -214,24 +172,11 @@ async function runConfirmedUpdate(targetVersion: string, channel: SystemUpdateCh
   catch {}
 }
 
-async function handleConfirmUpdate() {
-  const targetVersion = normalizeSystemVersion(updateConfirmInfo.value?.latestVersion)
-  if (!targetVersion || !updateConfirmInfo.value)
-    return
-
-  const channel = updateConfirmInfo.value.policy.channel
-  updateConfirmOpen.value = false
-  await nextTick()
-  await runConfirmedUpdate(targetVersion, channel)
-}
-
 async function handleRestart() {
-  if (checkingRestart.value || restarting.value)
+  if (checkingRestart.value || !canRestart.value)
     return
   checkingRestart.value = true
   try {
-    if (!updateInfo.value)
-      throw new Error(t('systemUpdate.errors.infoPending'))
     restartPlan.value = await checkSystemRestart()
     if (restartPlan.value.incompatiblePlugins.length) {
       restartConfirmOpen.value = true
@@ -361,11 +306,28 @@ watch(
           {{ updateInfo.unsupportedReason }}
         </p>
         <p
-          v-if="updateError || updateInfo?.warning"
+          v-if="updateError"
+          role="alert"
           class="m-0 rounded-z bg-z-error-container px-3 py-2 text-z-sm leading-normal font-bold text-z-error-on-container"
         >
-          {{ updateError || updateInfo?.warning }}
+          {{ updateError }}
         </p>
+        <div
+          v-else-if="updateInfo?.warning"
+          role="status"
+          class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3.5 gap-y-3 rounded-z bg-z-warning-container px-4 py-5 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
+        >
+          <span class="grid size-9 place-items-center rounded-z bg-z-warning-container-active text-z-warning-on-container" aria-hidden="true">
+            <component :is="updateInfo.retryAt ? Hourglass : TriangleAlert" class="size-[18px]" />
+          </span>
+          <p class="m-0 min-w-0 wrap-anywhere text-z font-bold leading-tight text-z-warning-on-container">
+            {{ updateInfo.warning }}
+          </p>
+          <div v-if="updateInfo.retryAt && updateInfo.retryAtDisplay" class="col-start-2 grid gap-1 sm:col-start-3 sm:text-end">
+            <span class="text-z-xs leading-none text-z-text-secondary">{{ t('systemUpdate.retryAt') }}</span>
+            <time :datetime="updateInfo.retryAt" class="font-mono text-z-sm font-emphasis tabular-nums text-z-text">{{ updateInfo.retryAtDisplay }}</time>
+          </div>
+        </div>
         <ZPopover v-if="lastFailedOperation" placement="bottom-start" class="justify-self-start">
           <template #reference>
             <ZButton variant="text" size="small">
@@ -476,7 +438,7 @@ watch(
           :options="channelOptions"
           :aria-label="t('systemUpdate.channels.label')"
           size="small"
-          :disabled="!canChangeChannel || preparingUpdate || updateConfirmOpen"
+          :disabled="!canChangeChannel"
           @update:model-value="handleChannelChange"
         />
         <ZPopover placement="top-start">
@@ -498,7 +460,7 @@ watch(
       </div>
       <ZButton
         :loading="checking"
-        :disabled="loading || updating || restarting || changingChannel || preparingUpdate"
+        :disabled="loading || updating || restarting || changingChannel"
         @click="handleCheckUpdates(true)"
       >
         <template #loading>
@@ -513,7 +475,7 @@ watch(
         v-if="needRestart"
         type="primary"
         :loading="restarting || checkingRestart"
-        :disabled="loading || updating || restartConfirmOpen"
+        :disabled="!canRestart || restartConfirmOpen"
         @click="handleRestart"
       >
         <template #icon>
@@ -524,8 +486,8 @@ watch(
       <ZButton
         v-else-if="hasUpdate || updating"
         type="primary"
-        :loading="preparingUpdate || updating"
-        :disabled="!canUpdate || preparingUpdate"
+        :loading="updating"
+        :disabled="!canUpdate"
         @click="handleUpdateRequest"
       >
         <template #icon>
@@ -560,38 +522,6 @@ watch(
       </ul>
       <p class="m-0 rounded-z bg-z-fill-quaternary px-3 py-2.5 text-z-sm leading-relaxed font-normal text-z-text-secondary">
         {{ t('systemUpdate.plugins.requestErrorHelp') }}
-      </p>
-    </div>
-  </ZConfirmDialog>
-
-  <ZConfirmDialog
-    v-model="updateConfirmOpen"
-    :title="t('systemUpdate.confirmation.newerVersion')"
-    :description="t('systemUpdate.confirmation.channelChanged')"
-    :confirm-text="t('systemUpdate.confirmation.title')"
-    :loading="updating"
-    :confirm-disabled="!updateConfirmInfo?.latestVersion"
-    @confirm="handleConfirmUpdate"
-  >
-    <div class="grid gap-3">
-      <div class="grid gap-2 rounded-z bg-z-fill-quaternary p-3">
-        <div
-          v-for="item in presentation.confirmRows"
-          :key="item.key"
-          class="flex min-w-0 items-center justify-between gap-3"
-        >
-          <span class="text-z-sm leading-none font-bold text-z-text-quaternary">
-            {{ item.label }}
-          </span>
-          <span
-            class="truncate font-mono text-z leading-none font-heavy text-z-text"
-          >
-            {{ item.value }}
-          </span>
-        </div>
-      </div>
-      <p class="m-0 text-z-sm leading-relaxed font-emphasis text-z-text-quaternary">
-        {{ t('systemUpdate.confirmation.description') }}
       </p>
     </div>
   </ZConfirmDialog>

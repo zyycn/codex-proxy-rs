@@ -32,8 +32,6 @@
       "started": "更新已开始"
     },
     "errors": {
-      "remoteTargetMissing": "远端目标版本为空",
-      "infoPending": "请等待系统更新信息加载完成",
       "preRestartCheck": "重启前检查失败",
       "restart": "重启失败，请重新检查",
       "unconfirmed": "尚未确认更新任务，请检查状态后重试",
@@ -46,6 +44,8 @@
     "application": "应用包更新",
     "releasePage": "发布页",
     "status": {
+      "warning": "警告",
+      "unconfirmedVersion": "未确认",
       "checkingVersion": "正在检查版本",
       "lastFailed": "上次操作失败",
       "updating": "更新中",
@@ -61,9 +61,10 @@
     "targetVersion": "目标版本 v{version}",
     "releaseNotes": "发布说明",
     "progress": "更新进度",
+    "retryAt": "可重试时间",
     "actions": {
       "check": "检查更新",
-      "install": "下载并更新",
+      "install": "下载更新",
       "continueRestart": "继续重启",
       "restart": "立即重启"
     },
@@ -74,12 +75,6 @@
       "requestErrorHelp": "配置和数据保留，可在插件页尝试启动"
     },
     "versionAfterRestart": "重启后版本",
-    "confirmation": {
-      "newerVersion": "发现新的更新版本",
-      "channelChanged": "所选通道的最新版本已变化",
-      "title": "确认更新",
-      "description": "点击确认后弹窗会关闭，并按远端最新目标版本开始更新"
-    },
     "logs": {
       "live": "实时",
       "disconnectedState": "断开",
@@ -93,8 +88,6 @@
     "latestVersion": "通道最新",
     "build": "构建",
     "deployment": "部署",
-    "displayedTarget": "已显示目标",
-    "remoteTarget": "远端最新目标",
     "buildTypes": {
       "release": "正式构建",
       "source": "源码构建",

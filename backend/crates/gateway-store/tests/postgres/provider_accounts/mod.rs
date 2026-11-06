@@ -1540,6 +1540,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                auto_use_quota_credits: None,
                 account_ids: vec!["acct_notes".to_owned()],
                 enabled: Some(false),
                 concurrency_limit: Some(None),
@@ -1778,6 +1779,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
     let enabled = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                auto_use_quota_credits: None,
                 account_ids: vec!["acct_recovery".to_owned()],
                 enabled: Some(true),
                 concurrency_limit: None,
@@ -1902,6 +1904,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     let result = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                auto_use_quota_credits: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
@@ -1939,6 +1942,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                auto_use_quota_credits: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
@@ -2678,6 +2682,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            auto_use_quota_credits: None,
             name: None,
             notes: None,
             model_access: Default::default(),
@@ -3693,6 +3698,7 @@ async fn model_access_only_batch_update_preserves_other_settings_and_survives_re
     .expect("policy");
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        auto_use_quota_credits: None,
         account_ids: vec![input.id.clone()],
         enabled: None,
         concurrency_limit: None,
@@ -3811,5 +3817,85 @@ async fn connection_configuration_update_preserves_credential_health() {
         );
     }
     assert_eq!(after["credential_revision"], 2);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn disabling_quota_credits_revokes_credit_only_access_even_with_a_late_observation() {
+    let Some(database) = TestDatabase::create("quota_credit_policy").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let input = account("acct_credit_policy", "user-credit-policy");
+    repository
+        .insert_provider_account(input.clone())
+        .await
+        .expect("insert");
+    let id = ProviderAccountId::new(input.id.clone()).expect("id");
+    let before = repository.get_account(&id).await.unwrap().unwrap();
+    assert!(!before.auto_use_quota_credits());
+    let admin = admin_account_store(&database.pool);
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "quota_credits".into(),
+    };
+    let set_policy = async |enabled| {
+        let command = BatchUpdateAccounts {
+            account_ids: vec![input.id.clone()],
+            auto_use_quota_credits: Some(enabled),
+            enabled: None,
+            concurrency_limit: None,
+            weight: None,
+            model_access: None,
+            group_ids: None,
+            outbound_proxy: None,
+        };
+        admin
+            .batch_update_accounts(command, &context)
+            .await
+            .unwrap();
+    };
+    let observe = async |state: QuotaState| {
+        let observation = QuotaObservation {
+            expected_connection: None,
+            plan_type: None,
+            account_id: id.clone(),
+            expected_revision: before.revision(),
+            quota: OpaqueProviderData::new(Default::default()),
+            observed_at: state.observed_at().unwrap(),
+            state,
+        };
+        assert_eq!(
+            repository
+                .compare_and_swap_quota(observation)
+                .await
+                .unwrap(),
+            QuotaWriteOutcome::Updated
+        );
+    };
+    let access = async || {
+        repository
+            .get_account(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .quota()
+            .access()
+    };
+
+    set_policy(true).await;
+    observe(QuotaState::credits_only(SystemTime::now(), None)).await;
+    assert_eq!(access().await, QuotaAccessState::Allowed);
+
+    set_policy(false).await;
+    assert_eq!(access().await, QuotaAccessState::Exhausted);
+    observe(QuotaState::credits_only(SystemTime::now(), None)).await;
+    assert_eq!(access().await, QuotaAccessState::Exhausted);
+
+    set_policy(true).await;
+    assert_eq!(access().await, QuotaAccessState::Exhausted);
+    observe(QuotaState::allowed(SystemTime::now())).await;
+    set_policy(false).await;
+    assert_eq!(access().await, QuotaAccessState::Allowed);
     database.close().await;
 }
