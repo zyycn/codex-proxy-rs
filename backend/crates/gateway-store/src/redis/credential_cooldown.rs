@@ -17,6 +17,8 @@ use crate::{Revision, StoreError, StoreResult, redis_unavailable, require_nonemp
 
 use super::{namespace, resource_fingerprint};
 
+pub(super) const COOLDOWN_READ_BATCH_SIZE: usize = 128;
+
 const WRITE_SCRIPT: &str = r#"
 local current = tonumber(redis.call('HGET', KEYS[1], 'revision') or '0')
 local incoming = tonumber(ARGV[1])
@@ -194,7 +196,7 @@ impl RedisCredentialCooldownRepository {
         &self,
         key: String,
         index_member: Option<&str>,
-    ) -> StoreResult<Option<(Revision, DateTime<Utc>, ProviderCooldownKind, String)>> {
+    ) -> StoreResult<Option<(Revision, DateTime<Utc>)>> {
         let mut connection = self.connection.clone();
         let result = if let Some(index_member) = index_member {
             Script::new(READ_SCRIPT)
@@ -210,26 +212,86 @@ impl RedisCredentialCooldownRepository {
                 .invoke_async(&mut connection)
                 .await
         };
-        let (present, revision, until_ms, kind, generation): (i64, String, String, String, String) =
-            result.map_err(|source| redis_unavailable("read credential cooldown", source))?;
-        if present == 0 {
-            return Ok(None);
+        parse_scoped_cooldown(
+            result.map_err(|source| redis_unavailable("read credential cooldown", source))?,
+        )
+    }
+
+    /// 保留每条命令的错误，脚本失效时只补发尚未执行的 NOSCRIPT 项
+    pub(super) async fn read_script_batch(
+        &self,
+        script: &Script,
+        commands: Vec<StoreResult<redis::Cmd>>,
+    ) -> Vec<StoreResult<redis::Value>> {
+        let mut pipeline = redis::pipe();
+        pipeline.ignore_errors();
+        for command in commands.iter().filter_map(|command| command.as_ref().ok()) {
+            pipeline.add_command(command.clone());
         }
-        let revision = revision
-            .parse::<u64>()
-            .map_err(|source| invalid("cached cooldown revision is invalid").with_source(source))?;
-        let until_ms = until_ms
-            .parse::<i64>()
-            .map_err(|source| invalid("cached cooldown expiry is invalid").with_source(source))?;
-        let cooldown_until = DateTime::from_timestamp_millis(until_ms)
-            .ok_or_else(|| invalid("cached cooldown expiry is invalid"))?;
-        let kind = ProviderCooldownKind::parse(&kind).unwrap_or(ProviderCooldownKind::RateLimit);
-        Ok(Some((
-            Revision::new(revision)?,
-            cooldown_until,
-            kind,
-            generation,
-        )))
+        let mut connection = self.connection.clone();
+        let values = pipeline
+            .query_async::<Vec<redis::RedisResult<redis::Value>>>(&mut connection)
+            .await;
+        let values = match values {
+            Ok(values) => {
+                let mut retry = redis::pipe();
+                retry.ignore_errors();
+                let mut retry_indices = Vec::new();
+                for (index, (command, value)) in pipeline.cmd_iter().zip(&values).enumerate() {
+                    if value.as_ref().is_err_and(|error| {
+                        error.kind() == redis::ErrorKind::Server(redis::ServerErrorKind::NoScript)
+                    }) {
+                        retry.add_command(command.clone());
+                        retry_indices.push(index);
+                    }
+                }
+                let mut values = values
+                    .into_iter()
+                    .map(|value| {
+                        value.map_err(|source| redis_unavailable("read cooldown batch", source))
+                    })
+                    .collect::<Vec<_>>();
+                if !retry_indices.is_empty() {
+                    let retried = async {
+                        script.load_async(&mut connection).await?;
+                        retry
+                            .query_async::<Vec<redis::RedisResult<redis::Value>>>(&mut connection)
+                            .await
+                    }
+                    .await;
+                    match retried {
+                        Ok(retried) => {
+                            for (index, value) in retry_indices.into_iter().zip(retried) {
+                                values[index] = value.map_err(|source| {
+                                    redis_unavailable("retry cooldown batch", source)
+                                });
+                            }
+                        }
+                        Err(source) => {
+                            let error = redis_unavailable("retry cooldown batch", source);
+                            for index in retry_indices {
+                                values[index] = Err(error.clone());
+                            }
+                        }
+                    }
+                }
+                values
+            }
+            Err(source) => {
+                vec![Err(redis_unavailable("read cooldown batch", source)); pipeline.len()]
+            }
+        };
+        let mut values = values.into_iter();
+        commands
+            .into_iter()
+            .map(|command| {
+                command.and_then(|_| {
+                    values
+                        .next()
+                        .unwrap_or_else(|| Err(invalid("missing cooldown batch response")))
+                })
+            })
+            .collect()
     }
 
     async fn invalidate_at_key(
@@ -579,19 +641,29 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
             CredentialCooldownRepository::read_credential_cooldown(self, account_id.as_str())
                 .await
                 .map_err(|source| crate::provider_unavailable("read credential cooldown", source))?
-                .map(|record| {
-                    let account_id = ProviderAccountId::new(record.provider_account_id)
-                        .map_err(|_| provider_invalid("decode credential cooldown"))?;
-                    let revision = CredentialRevision::new(record.credential_revision.get())
-                        .map_err(|_| provider_invalid("decode credential cooldown"))?;
-                    Ok(ProviderCooldown::new_with_kind(
-                        account_id,
-                        revision,
-                        record.cooldown_until.into(),
-                        record.kind,
-                    ))
-                })
+                .map(provider_cooldown)
                 .transpose()
+        })
+    }
+
+    fn read_many<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+    ) -> futures::future::BoxFuture<'a, Vec<Result<Option<ProviderCooldown>, ProviderStoreError>>>
+    {
+        Box::pin(async move {
+            self.read_effective_cooldowns(account_ids)
+                .await
+                .into_iter()
+                .map(|result| {
+                    result
+                        .map_err(|source| {
+                            crate::provider_unavailable("read credential cooldown", source)
+                        })?
+                        .map(provider_cooldown)
+                        .transpose()
+                })
+                .collect()
         })
     }
 
@@ -651,7 +723,7 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
             .map_err(|source| {
                 crate::provider_unavailable("read scoped credential cooldown", source)
             })?
-            .map(|(revision, until, _, _)| {
+            .map(|(revision, until)| {
                 Ok(ProviderScopedCooldown::new(
                     account_id.clone(),
                     CredentialRevision::new(revision.get())
@@ -661,6 +733,60 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
                 ))
             })
             .transpose()
+        })
+    }
+
+    fn read_scoped_many<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+        scope: &'a ProviderCooldownScope,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Vec<Result<Option<ProviderScopedCooldown>, ProviderStoreError>>,
+    > {
+        Box::pin(async move {
+            let script = Script::new(READ_SCRIPT);
+            let mut results = Vec::with_capacity(account_ids.len());
+            for batch in account_ids.chunks(COOLDOWN_READ_BATCH_SIZE) {
+                let commands = batch
+                    .iter()
+                    .map(|account| {
+                        let mut command = redis::cmd("EVALSHA");
+                        command
+                            .arg(script.get_hash())
+                            .arg(1)
+                            .arg(self.scoped_key(account.as_str(), scope)?)
+                            .arg("");
+                        Ok(command)
+                    })
+                    .collect();
+                let values = self.read_script_batch(&script, commands).await;
+                results.extend(batch.iter().zip(values).map(|(account, value)| {
+                    let value = value
+                        .and_then(|value| {
+                            redis::from_redis_value(value).map_err(|source| {
+                                redis_unavailable("decode scoped cooldown", source)
+                            })
+                        })
+                        .and_then(parse_scoped_cooldown)
+                        .map_err(|source| {
+                            crate::provider_unavailable("read scoped credential cooldown", source)
+                        })?;
+                    value
+                        .map(|(revision, until)| {
+                            Ok(ProviderScopedCooldown::new(
+                                account.clone(),
+                                CredentialRevision::new(revision.get()).map_err(|_| {
+                                    provider_invalid("decode scoped credential cooldown")
+                                })?,
+                                scope.clone(),
+                                until.into(),
+                            ))
+                        })
+                        .transpose()
+                }));
+            }
+            results
         })
     }
 
@@ -738,6 +864,36 @@ pub(super) fn invalid(message: &str) -> StoreError {
         entity: "credential cooldown",
         message: message.to_owned(),
     }
+}
+
+fn parse_scoped_cooldown(
+    (present, revision, until_ms, _, _): (i64, String, String, String, String),
+) -> StoreResult<Option<(Revision, DateTime<Utc>)>> {
+    if present == 0 {
+        return Ok(None);
+    }
+    let revision = revision
+        .parse::<u64>()
+        .map_err(|source| invalid("cached cooldown revision is invalid").with_source(source))?;
+    let until_ms = until_ms
+        .parse::<i64>()
+        .map_err(|source| invalid("cached cooldown expiry is invalid").with_source(source))?;
+    let cooldown_until = DateTime::from_timestamp_millis(until_ms)
+        .ok_or_else(|| invalid("cached cooldown expiry is invalid"))?;
+    Ok(Some((Revision::new(revision)?, cooldown_until)))
+}
+
+fn provider_cooldown(record: CredentialCooldown) -> Result<ProviderCooldown, ProviderStoreError> {
+    let account_id = ProviderAccountId::new(record.provider_account_id)
+        .map_err(|_| provider_invalid("decode credential cooldown"))?;
+    let revision = CredentialRevision::new(record.credential_revision.get())
+        .map_err(|_| provider_invalid("decode credential cooldown"))?;
+    Ok(ProviderCooldown::new_with_kind(
+        account_id,
+        revision,
+        record.cooldown_until.into(),
+        record.kind,
+    ))
 }
 
 fn provider_invalid(operation: &'static str) -> ProviderStoreError {

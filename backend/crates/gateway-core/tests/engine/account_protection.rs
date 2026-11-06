@@ -36,6 +36,21 @@ pub(crate) struct Feedback {
 }
 
 impl ProviderCooldownPort for Feedback {
+    fn read_many<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+    ) -> BoxFuture<'a, Vec<Result<Option<ProviderCooldown>, ProviderStoreError>>> {
+        Box::pin(async move { account_ids.iter().map(|_| Ok(None)).collect() })
+    }
+
+    fn read_scoped_many<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+        _scope: &'a ProviderCooldownScope,
+    ) -> BoxFuture<'a, Vec<Result<Option<ProviderScopedCooldown>, ProviderStoreError>>> {
+        Box::pin(async move { account_ids.iter().map(|_| Ok(None)).collect() })
+    }
+
     fn publish_protection_policy<'a>(
         &'a self,
         _: &'a AccountErrorProtection,

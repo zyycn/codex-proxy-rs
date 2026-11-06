@@ -13,6 +13,7 @@ mod quota;
 mod recovery_log;
 mod refresh;
 mod repository;
+mod scheduling_projection;
 mod selector;
 pub mod token_client;
 mod types;

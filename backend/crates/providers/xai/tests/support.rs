@@ -353,6 +353,26 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             .collect())
     }
 
+    async fn list_for_provider_accounts(
+        &self,
+        provider: &ProviderKind,
+        account_ids: &[ProviderAccountId],
+    ) -> Result<Vec<ProviderAccount>, StoreError> {
+        if account_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.fail_provider_listing.load(Ordering::SeqCst) {
+            return Err(invalid());
+        }
+        // 与 Postgres 实现的调度列表语义一致：停用账号不进入常规候选
+        Ok(lock(&self.accounts)
+            .values()
+            .filter(|stored| stored.account.provider() == provider && stored.account.enabled())
+            .filter(|stored| account_ids.contains(stored.account.id()))
+            .map(|stored| stored.account.clone())
+            .collect())
+    }
+
     async fn list_refresh_candidates(
         &self,
         query: ProviderRefreshQuery,
@@ -877,6 +897,37 @@ impl ProviderSessionExclusionPort for TestSessionExclusions {
 }
 
 impl ProviderCooldownPort for MemoryCooldownPort {
+    fn read_many<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+    ) -> futures::future::BoxFuture<'a, Vec<Result<Option<ProviderCooldown>, ProviderStoreError>>>
+    {
+        Box::pin(async move {
+            let cooldowns = lock(&self.cooldowns);
+            account_ids
+                .iter()
+                .map(|id| Ok(cooldowns.get(id).cloned()))
+                .collect()
+        })
+    }
+
+    fn read_scoped_many<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+        scope: &'a ProviderCooldownScope,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Vec<Result<Option<ProviderScopedCooldown>, ProviderStoreError>>,
+    > {
+        Box::pin(async move {
+            let cooldowns = lock(&self.scoped_cooldowns);
+            account_ids
+                .iter()
+                .map(|id| Ok(cooldowns.get(&(id.clone(), scope.clone())).cloned()))
+                .collect()
+        })
+    }
+
     fn put_if_later(
         &self,
         cooldown: ProviderCooldown,

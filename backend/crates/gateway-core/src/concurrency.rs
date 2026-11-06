@@ -11,6 +11,7 @@ use futures_timer::Delay;
 
 const MAX_TOTAL_WAITING: usize = 1_024;
 const CAPACITY_RECHECK_INTERVAL: Duration = Duration::from_millis(100);
+const BINDING_RECHECK_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ConcurrencyQueuePolicy {
@@ -223,12 +224,37 @@ impl<K: Eq + Hash> WaitTicket<K> {
     }
 
     pub async fn retry(&self) -> Result<(), QueueRejection> {
+        if !self.is_head() {
+            return self.turn().await;
+        }
         // 租约释放可能经过后台队列；有界重查同时覆盖释放通知之前及 TTL 到期的空位
         Delay::new(
             CAPACITY_RECHECK_INTERVAL.min(self.deadline.saturating_duration_since(Instant::now())),
         )
         .await;
         self.turn().await
+    }
+
+    async fn retry_or_recheck_binding(&self) -> Result<(), QueueRejection> {
+        if !self.is_head() {
+            // 非队首由位置释放唤醒，低频兜底只用于检查外部绑定迁移
+            let turn = self.turn().fuse();
+            let recheck = Delay::new(BINDING_RECHECK_INTERVAL).fuse();
+            pin_mut!(turn, recheck);
+            return select_biased! {
+                result = turn => result,
+                () = recheck => if Instant::now() < self.deadline { Ok(()) } else { Err(QueueRejection::Timeout) },
+            };
+        }
+        Delay::new(
+            CAPACITY_RECHECK_INTERVAL.min(self.deadline.saturating_duration_since(Instant::now())),
+        )
+        .await;
+        if Instant::now() < self.deadline {
+            Ok(())
+        } else {
+            Err(QueueRejection::Timeout)
+        }
     }
 }
 
@@ -300,11 +326,17 @@ impl<'a, K: Clone + Eq + Hash> CapacityWait<'a, K> {
         self
     }
 
-    /// 外部绑定可在队列等待期间变化，周期重读仍由 can_try 保持队首资格
+    /// 外部绑定可在队列等待期间变化，非队首只需低频检查绑定并由 can_try 复核资格
     #[must_use]
     pub const fn with_periodic_recheck(mut self, enabled: bool) -> Self {
         self.periodic_recheck = enabled;
         self
+    }
+
+    /// 当前等待位置，供调用方在非队首时只检查外部绑定而避免重复加载候选池
+    #[must_use]
+    pub fn queued_key(&self) -> Option<&K> {
+        self.ticket.as_ref().map(WaitTicket::key)
     }
 
     #[must_use]
@@ -356,14 +388,7 @@ impl<'a, K: Clone + Eq + Hash> CapacityWait<'a, K> {
         }
         if let Some(ticket) = &self.ticket {
             if self.periodic_recheck {
-                Delay::new(
-                    CAPACITY_RECHECK_INTERVAL
-                        .min(ticket.deadline.saturating_duration_since(Instant::now())),
-                )
-                .await;
-                if Instant::now() >= ticket.deadline {
-                    return Err(QueueRejection::Timeout);
-                }
+                ticket.retry_or_recheck_binding().await?;
             } else {
                 ticket.retry().await?;
             }

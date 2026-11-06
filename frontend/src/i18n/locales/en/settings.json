@@ -180,7 +180,7 @@
         "preferred": "Preferred",
         "strict": "Strict",
         "relaxedHelp": "Relaxed: use the scheduling policy without preferring the session's primary account",
-        "preferredHelp": "Preferred: reuse the primary account, route elsewhere temporarily if busy or unavailable, and keep the session binding",
+        "preferredHelp": "Preferred: reuse the primary account, spill over during brief congestion, and migrate the session binding if disabled or persistently unavailable",
         "strictHelp": "Strict: use one account per session, child threads wait and follow the parent thread's account switches"
       },
       "title": "Session affinity",

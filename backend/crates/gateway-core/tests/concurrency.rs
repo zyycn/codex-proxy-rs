@@ -49,6 +49,69 @@ fn cancelling_a_middle_waiter_preserves_fifo_and_reclaims_capacity() {
 }
 
 #[test]
+fn non_head_waiters_resume_on_promotion_without_waiting_for_the_recheck_timer() {
+    for periodic in [false, true] {
+        let queue = ConcurrencyWaitQueue::default();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let head = queue.enqueue(&["account"], 2, deadline).unwrap();
+        let budget = ConcurrencyWaitBudget::default();
+        let mut waiting = CapacityWait::new(
+            &queue,
+            ConcurrencyQueuePolicy {
+                max_waiting: 2,
+                timeout: Duration::from_secs(2),
+            },
+            None,
+            &budget,
+        )
+        .with_periodic_recheck(periodic);
+        assert!(waiting.wait(&["account"]).now_or_never().is_none());
+        assert_eq!(waiting.queued_key(), Some(&"account"));
+        let retry = waiting.wait(&["account"]);
+        futures::pin_mut!(retry);
+        assert!(retry.as_mut().now_or_never().is_none());
+        drop(head);
+        assert_eq!(retry.as_mut().now_or_never(), Some(Ok(())));
+    }
+}
+
+#[test]
+fn non_head_binding_rechecks_preserve_position_and_shared_deadline() {
+    block_on(async {
+        let queue = ConcurrencyWaitQueue::default();
+        let head = queue
+            .enqueue(&["account"], 2, Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        let budget = ConcurrencyWaitBudget::default();
+        let mut waiting = CapacityWait::new(
+            &queue,
+            ConcurrencyQueuePolicy {
+                max_waiting: 2,
+                timeout: Duration::from_millis(750),
+            },
+            None,
+            &budget,
+        )
+        .with_periodic_recheck(true);
+        let started = Instant::now();
+        waiting.wait(&["account"]).await.unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(500));
+        assert_eq!(waiting.queued_key(), Some(&"account"));
+        assert!(!waiting.can_try(&"account"));
+        assert!(matches!(
+            queue.enqueue(&["account"], 2, Instant::now() + Duration::from_secs(2)),
+            Err(QueueRejection::Full)
+        ));
+        assert_eq!(
+            waiting.wait(&["account"]).await,
+            Err(QueueRejection::Timeout)
+        );
+        drop((head, waiting));
+        assert!(!queue.has_waiters(&"account"));
+    });
+}
+
+#[test]
 fn wait_deadline_applies_before_and_after_becoming_head() {
     block_on(async {
         let queue = ConcurrencyWaitQueue::default();

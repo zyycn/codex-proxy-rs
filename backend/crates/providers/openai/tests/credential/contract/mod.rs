@@ -2,6 +2,7 @@
 
 mod capacity;
 mod cooldown_reads;
+mod scheduling_projection;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
@@ -144,6 +145,9 @@ async fn smart_reselection_respects_native_and_required_account_boundaries() {
         selector_with_affinity(&store, Arc::new(TestLeaseCoordinator::default()), affinity);
     let request_url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
     for binding in ["soft", "required", "native"] {
+        if binding != "soft" {
+            store.fail_provider_listing();
+        }
         let continuation = (binding == "native").then(|| {
             ContinuationBinding::Pinned(NativeContinuationPin::new(
                 PreviousResponseId::new("client_response"),
@@ -1128,6 +1132,7 @@ fn selector_uses_only_the_required_account() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first", "at-first");
     create_account(&store, "acct_second", "at-second");
+    store.fail_provider_listing();
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
     let required = ProviderAccountId::new("acct_second").expect("account id");
     let attempt = attempt_with_required(BTreeSet::new(), Some(required.clone()));
@@ -1143,32 +1148,50 @@ fn selector_uses_only_the_required_account() {
         )
         .expect("select required account");
     assert_eq!(lease.account_id(), &required);
+    let capacity = lease.capacity_snapshot().expect("fixed account capacity");
+    assert_eq!(capacity.used_slots(), 1);
+    assert_eq!(capacity.total_slots(), 2);
 }
 
 #[test]
 fn unavailable_required_account_never_falls_back() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_available", "at-available");
-    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
-    let attempt = attempt_with_required(
-        BTreeSet::new(),
-        Some(ProviderAccountId::new("acct_missing").expect("account id")),
-    );
-    let error =
-        block_on(
-            selector.select(&SelectCodexCredential {
-                upstream_model: "gpt-5.4",
-                request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
-                    .expect("request URL"),
-                attempt: &attempt,
-                session_affinity_key: None,
-            }),
-        )
-        .expect_err("missing required account must not fall back");
-    assert!(matches!(
-        error,
-        CredentialSelectionError::NoEligibleCredential
-    ));
+    for state in ["missing", "disabled", "outside_scope", "excluded"] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_available", "at-available");
+        let required = ProviderAccountId::new(if state == "outside_scope" {
+            "acct_outside"
+        } else {
+            "acct_missing"
+        })
+        .expect("account id");
+        if state != "missing" {
+            create_account(&store, required.as_str(), "at-required");
+        }
+        if state == "disabled" {
+            block_on(store.set_enabled(&required, false)).unwrap();
+        }
+        store.fail_provider_listing();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        let selector = selector(&store, leases.clone());
+        let excluded = if state == "excluded" {
+            BTreeSet::from([required.clone()])
+        } else {
+            BTreeSet::new()
+        };
+        let attempt = attempt_with_required(excluded, Some(required));
+        let error = block_on(selector.select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &Url::parse(OFFICIAL_CODEX_BASE_URL).expect("request URL"),
+            attempt: &attempt,
+            session_affinity_key: None,
+        }))
+        .expect_err("unavailable required account must not fall back");
+        assert!(
+            matches!(error, CredentialSelectionError::NoEligibleCredential),
+            "{state}: {error:?}"
+        );
+        assert!(leases.requests.lock().unwrap().is_empty(), "{state}");
+    }
 }
 
 #[test]
