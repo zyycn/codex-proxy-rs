@@ -832,10 +832,6 @@ docker compose -f deploy/compose.yaml up -d --no-build --wait
 
 升级后通过管理端版本接口或容器 image digest 确认运行实例的版本和 revision
 
-使用已保存代理进行 OpenAI 或 xAI 授权时，升级或回退前先完成进行中的授权。
-未完成授权的临时记录可能与目标版本不兼容，版本切换后应重新发起授权，不复用旧回调或授权码；
-已保存的账号与凭据不受该临时记录格式变化影响
-
 构建元数据通过一次性进程环境传入：
 
 ```bash
@@ -847,6 +843,7 @@ docker compose -f deploy/compose.yaml build codex-proxy-rs
 
 ### 升级前检查
 
+- OpenAI 或 xAI 授权使用已保存代理，且代理的 WebSocket 连接上限非零：升级或回退后，重新发起尚未完成的授权，不复用旧回调或授权码。上限为 `0` 的在途授权和已保存的账号、凭据不受影响
 - Key 配置含 `installationId`：数据库自动转换为 `installationSeed`，API 调用方须使用[当前字段](../docs/api.md#key-客户端身份)。出站安装身份及关联的会话、缓存标识会变化，已有 WebSocket 精确续写需重发完整上下文
 - 数据库或备份含 `accountAutoFreeze*` 设置：升级后错误保护关闭、规则为空，需在管理端重新配置并启用；API 调用方使用 [`accountErrorProtection`](../docs/api.md#账号错误保护)。已有冻结到当前冷却截止后解除，账号并发上限保留，需调整时手动设置
 
