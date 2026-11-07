@@ -40,6 +40,130 @@ async fn authorization_persists_an_unnamed_account_with_its_email() {
 }
 
 #[tokio::test]
+async fn authorization_preserves_saved_proxy_capacity_across_pending_storage() {
+    use gateway_core::account::OutboundProxy;
+
+    let Some(database) = TestDatabase::create("authorization_proxy_snapshot").await else {
+        return;
+    };
+    let proxy_url = "socks5h://proxy.example.invalid:1080";
+    let proxy_id = "proxy_synthetic";
+    sqlx::query(
+        "insert into outbound_proxies (id, name, proxy_url, enabled, max_websocket_connections) \
+         values ($1, 'Synthetic proxy', $2, true, 16)",
+    )
+    .bind(proxy_id)
+    .bind(proxy_url)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let (mut authorization, context) = command(credential("acct_proxy_test", "synthetic-user"));
+    let pending = authorization
+        .pending
+        .with_outbound_proxy(Some(
+            OutboundProxy::parse(proxy_url)
+                .unwrap()
+                .with_max_websocket_connections(16),
+        ))
+        .with_outbound_proxy_id(Some(proxy_id.into()));
+    authorization.pending = PendingAuthorizationMutation::from_storage_v1(
+        serde_json::Value::Object(pending.to_storage_v1()),
+    )
+    .unwrap();
+    if let AuthorizationCredentialCommit::Create(credential) = &mut authorization.credential {
+        credential.outbound_proxy = authorization.pending.outbound_proxy().cloned();
+    }
+    let store = admin_account_store(&database.pool);
+    let committed = store
+        .commit_authorization(authorization, &context)
+        .await
+        .expect("unchanged saved proxy must not cause an authorization conflict");
+    let saved_proxy: Option<String> =
+        sqlx::query_scalar("select outbound_proxy_id from provider_accounts where id = $1")
+            .bind(committed.result.account_id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(saved_proxy.as_deref(), Some(proxy_id));
+    database.close().await;
+}
+
+#[tokio::test]
+async fn authorization_rejects_a_saved_proxy_that_changed_after_start() {
+    use gateway_admin::ports::store::AdminStoreErrorKind;
+    use gateway_core::account::OutboundProxy;
+
+    let Some(database) = TestDatabase::create("authorization_proxy_changed").await else {
+        return;
+    };
+    let proxy_url = "socks5h://proxy.example.invalid:1080";
+    let proxy_id = "proxy_synthetic";
+    sqlx::query(
+        "insert into outbound_proxies (id, name, proxy_url, enabled, max_websocket_connections) \
+         values ($1, 'Synthetic proxy', $2, true, 16)",
+    )
+    .bind(proxy_id)
+    .bind(proxy_url)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let store = admin_account_store(&database.pool);
+    for (current_url, limit, enabled, expected) in [
+        (
+            "socks5h://other.example.invalid:1080",
+            16_i64,
+            true,
+            AdminStoreErrorKind::StaleRevision,
+        ),
+        (proxy_url, 17, true, AdminStoreErrorKind::StaleRevision),
+        (proxy_url, 16, false, AdminStoreErrorKind::Conflict),
+    ] {
+        sqlx::query(
+            "update outbound_proxies set proxy_url=$2, max_websocket_connections=$3, enabled=$4 where id=$1",
+        )
+        .bind(proxy_id)
+        .bind(current_url)
+        .bind(limit)
+        .bind(enabled)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let (mut authorization, context) = command(credential("acct_proxy_test", "synthetic-user"));
+        let pending = authorization
+            .pending
+            .with_outbound_proxy(Some(
+                OutboundProxy::parse(proxy_url)
+                    .unwrap()
+                    .with_max_websocket_connections(16),
+            ))
+            .with_outbound_proxy_id(Some(proxy_id.into()));
+        authorization.pending = PendingAuthorizationMutation::from_storage_v1(
+            serde_json::Value::Object(pending.to_storage_v1()),
+        )
+        .unwrap();
+        let receipt_key = authorization.key.clone();
+        let error = store
+            .commit_authorization(authorization, &context)
+            .await
+            .expect_err("changed or disabled proxy must fail closed");
+        assert_eq!(error.kind(), expected);
+        assert!(
+            store
+                .authorization_receipt(&receipt_key)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    let accounts: i64 = sqlx::query_scalar("select count(*) from provider_accounts")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(accounts, 0);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn concurrent_authorization_retries_share_one_account_write_and_one_receipt() {
     let Some(database) = TestDatabase::create("authorization_receipt_race").await else {
         return;
