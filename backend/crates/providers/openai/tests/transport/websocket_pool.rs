@@ -289,6 +289,21 @@ async fn exact_continuation_reuses_owning_socket_after_connection_profile_update
         profile.clone(),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_mins(1))));
+    let account = |user: &str| {
+        use gateway_core::account::{CredentialRevision, ProviderAccount, ProviderAccountId};
+        ProviderAccount::new(
+            ProviderAccountId::new("acct_shared_slot").unwrap(),
+            gateway_core::routing::ProviderKind::new("openai").unwrap(),
+            String::new(),
+            Some(user.to_owned()),
+            "oauth".to_owned(),
+            CredentialRevision::new(1).unwrap(),
+            None,
+        )
+        .with_profile(None, Some("chatgpt-account".into()), None)
+    };
+    let replacement = backend.for_account(&account("user-b")).unwrap();
+    let backend = backend.for_account(&account("user-a")).unwrap();
     let first_request = pooled_websocket_request("wire-profile-continuation");
     let first = backend
         .create_response(
@@ -309,6 +324,16 @@ async fn exact_continuation_reuses_owning_socket_after_connection_profile_update
     let mut continuation = first_request;
     continuation.set_previous_response_id(Some("resp_connection_local".to_owned()));
     continuation.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+    assert!(
+        replacement
+            .create_response(
+                &continuation,
+                request_context("req_reauthorized", Some("chatgpt-account"))
+            )
+            .await
+            .is_err(),
+        "同一工作区的另一个用户不能续用旧账号的连接"
+    );
     let changed_installation = backend
         .create_response(
             &continuation,

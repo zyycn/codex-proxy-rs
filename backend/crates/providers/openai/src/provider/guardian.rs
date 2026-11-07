@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gateway_core::{account::ProviderAccountId, policy::ClientApiKeyId};
+use gateway_core::{account::ProviderAccount, policy::ClientApiKeyId};
 use sha2::{Digest, Sha256};
 
 use crate::transport::routing_affinity::ChatGptRoutingAffinity;
@@ -29,7 +29,7 @@ impl GuardianRouting {
     pub(super) fn get(
         &self,
         client_key: &ClientApiKeyId,
-        account: &ProviderAccountId,
+        account: &ProviderAccount,
         response_id: &str,
     ) -> Option<ChatGptRoutingAffinity> {
         let key = parent_key(client_key, account, response_id);
@@ -48,7 +48,7 @@ impl GuardianRouting {
     pub(super) fn remember(
         &self,
         client_key: &ClientApiKeyId,
-        account: &ProviderAccountId,
+        account: &ProviderAccount,
         response_id: &str,
         affinity: &ChatGptRoutingAffinity,
     ) {
@@ -83,11 +83,12 @@ impl GuardianRouting {
 
 fn parent_key(
     client_key: &ClientApiKeyId,
-    account: &ProviderAccountId,
+    account: &ProviderAccount,
     response_id: &str,
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
-    for part in [client_key.as_str(), account.as_str(), response_id] {
+    let identity = crate::credential::oauth_identity_key(account);
+    for part in [client_key.as_str(), &identity, response_id] {
         hash.update(part.len().to_le_bytes());
         hash.update(part.as_bytes());
     }

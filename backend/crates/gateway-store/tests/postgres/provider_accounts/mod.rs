@@ -3007,7 +3007,7 @@ async fn provider_account_import_and_reauthorization_preserve_existing_membershi
 }
 
 #[tokio::test]
-async fn verified_credential_rotation_preserves_quota_exhaustion() {
+async fn quota_exhaustion_survives_rotation_only_for_the_same_upstream_identity() {
     let Some(database) = TestDatabase::create("provider_account_rotation_quota").await else {
         return;
     };
@@ -3043,7 +3043,7 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
     repository
         .rotate_provider_account(RotateProviderAccount {
             settings: None,
-            scope,
+            scope: scope.clone(),
             profile: profile("acct_rotation_quota", "reauthorized account"),
             replacement_identity: None,
             credential: credential_update("acct_rotation_quota", 1, "reauthorized-secret"),
@@ -3063,6 +3063,28 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
             .await
             .expect("load exhausted account after credential rotation");
     assert_eq!(quota_access_state, "exhausted".to_owned());
+
+    repository
+        .rotate_provider_account(RotateProviderAccount {
+            settings: None,
+            scope,
+            profile: profile("acct_rotation_quota", "reauthorized account"),
+            replacement_identity: Some(ProviderAccountIdentity::new(
+                "new-user".into(),
+                Some("new-workspace".into()),
+            )),
+            credential: credential_update("acct_rotation_quota", 2, "new-account-secret"),
+            audit: audit("audit_quota_rebind", "reauthorize", "acct_rotation_quota"),
+        })
+        .await
+        .unwrap();
+    let account = repository
+        .get_account(&ProviderAccountId::new("acct_rotation_quota").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(account.upstream_account_id(), Some("new-workspace"));
+    assert_eq!(account.quota(), QuotaState::unknown());
 
     database.close().await;
 }

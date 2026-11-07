@@ -477,6 +477,89 @@ async fn repeated_reauthorization_preserves_surface_id_with_a_cleared_name() {
 }
 
 #[tokio::test]
+async fn reauthorization_binds_the_selected_slot_to_the_new_oauth_account() {
+    use secrecy::ExposeSecret;
+
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = ProviderAccountId::new("acct_reauth").unwrap();
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_string(),
+            name: "local label".into(),
+            secret: secret("original-access"),
+            verified_account: account_profile("workspace-a"),
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .await;
+    let pending = Arc::new(PendingStore::default());
+    let service = CodexOAuthAdminService::new(
+        pending.clone(),
+        Arc::new(Exchanger {
+            id_token: id_token(serde_json::json!({
+                "email": "b@example.com",
+                "https://api.openai.com/auth": {
+                    "chatgpt_user_id": "user-b",
+                    "chatgpt_account_id": "workspace-b",
+                    "chatgpt_plan_type": "plus"
+                }
+            })),
+        }),
+        store,
+        CodexCredentialAdmin,
+        profile(),
+    );
+    let started = service
+        .start_authorization(StartCodexOAuthAuthorization {
+            mutation: reauthorization_mutation(account_id.clone(), "reauth-request"),
+        })
+        .await
+        .unwrap();
+    let state = pending
+        .pending
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .state
+        .clone();
+    let completed = service
+        .complete_authorization(CompleteCodexOAuthAuthorization {
+            owner_ref: "test-owner".into(),
+            flow_id: started.flow_id,
+            callback_url: SecretString::from(format!(
+                "http://127.0.0.1:1455/auth/callback?code=browser&state={}",
+                state.expose_secret()
+            )),
+        })
+        .await
+        .unwrap();
+    let CompletedCodexOAuthCredential::Reauthorize(rotation) = completed.credential else {
+        panic!("expected reauthorization")
+    };
+    let identity = rotation.replacement_identity.unwrap();
+    assert_eq!(identity.upstream_user_id(), "user-b");
+    assert_eq!(identity.upstream_account_id(), Some("workspace-b"));
+    assert_eq!(rotation.profile.account_id, account_id);
+    assert_eq!(rotation.profile.name, "local label");
+    assert_eq!(rotation.profile.email.as_deref(), Some("b@example.com"));
+    assert_eq!(rotation.profile.plan_type.as_deref(), Some("plus"));
+    let credential = rotation.credential.into_parts();
+    assert!(!credential.preserve_profile);
+    let runtime = CodexCredentialCodec::decode(&credential.credential).unwrap();
+    assert!(runtime.principal.is_none());
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .unwrap()
+            .access_token
+            .expose_secret(),
+        "access-token-from-upstream"
+    );
+}
+
+#[tokio::test]
 async fn first_exchange_preserves_optional_local_name_and_upstream_email() {
     for name in ["", "My account"] {
         let (credential, _, _) = complete_with_name(

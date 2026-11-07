@@ -310,11 +310,14 @@ async fn reauthorization_replay_keeps_the_committed_revision_and_later_profile_e
                 account_id: id.clone(),
                 provider_kind: ProviderKind::new("openai").unwrap(),
                 expected_credential_revision: gateway_admin::model::Revision::new(1).unwrap(),
-                replacement_identity: None,
+                replacement_identity: Some(ProviderAccountIdentity::new(
+                    "new-user".into(),
+                    Some("new-workspace".into()),
+                )),
                 name: "remote profile".into(),
-                email: None,
-                plan_type: None,
-                preserve_profile: true,
+                email: Some("new@example.com".into()),
+                plan_type: Some("plus".into()),
+                preserve_profile: false,
                 preserve_credential_state: false,
                 provider_material: ProviderDocument::new(OpaqueProviderData::new(
                     json!({"access_token":"rotated-test-only"})
@@ -347,15 +350,17 @@ async fn reauthorization_replay_keeps_the_committed_revision_and_later_profile_e
         .commit_authorization(command.clone(), &context)
         .await
         .unwrap();
+    let account = store
+        .load_account(id.as_str(), Default::default())
+        .await
+        .unwrap()
+        .unwrap()
+        .account;
+    assert_eq!(account.name, "renamed team");
+    assert_eq!(account.email.as_deref(), Some("new@example.com"));
     assert_eq!(
-        store
-            .load_account(id.as_str(), Default::default())
-            .await
-            .unwrap()
-            .unwrap()
-            .account
-            .name,
-        "renamed team"
+        account.upstream_account_id.as_deref(),
+        Some("new-workspace")
     );
     store
         .update_account(

@@ -4,9 +4,25 @@ use std::fmt;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
+
+/// 复用上游会话与账号资料时绑定本地记录和真实 OAuth 身份，正常续期不改变归属
+pub(crate) fn oauth_identity_key(account: &gateway_core::account::ProviderAccount) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hash = Sha256::new();
+    for part in [
+        account.id().as_str(),
+        account.upstream_user_id().unwrap_or_default(),
+        account.upstream_account_id().unwrap_or_default(),
+    ] {
+        hash.update((part.len() as u64).to_le_bytes());
+        hash.update(part.as_bytes());
+    }
+    hex::encode(hash.finalize())
+}
 
 /// OAuth AT/RT/ID Token；`Debug` 永不输出明文
 #[derive(Clone)]
@@ -51,6 +67,18 @@ pub(crate) struct CodexOAuthMetadata {
     pub(crate) chatgpt_plan_type: Option<String>,
     pub(crate) chatgpt_user_id: Option<String>,
     pub(crate) chatgpt_account_id: Option<String>,
+}
+
+impl CodexOAuthMetadata {
+    pub(crate) fn with_access_token_fallback(self, access_token: &SecretString) -> Self {
+        let fallback = parse_chatgpt_jwt_claims(access_token.expose_secret()).unwrap_or_default();
+        Self {
+            email: self.email.or(fallback.email),
+            chatgpt_plan_type: self.chatgpt_plan_type.or(fallback.chatgpt_plan_type),
+            chatgpt_user_id: self.chatgpt_user_id.or(fallback.chatgpt_user_id),
+            chatgpt_account_id: self.chatgpt_account_id.or(fallback.chatgpt_account_id),
+        }
+    }
 }
 
 impl fmt::Debug for CodexOAuthMetadata {

@@ -661,7 +661,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
         let access_token_expires_at =
             parse_access_token_expiration(secret.access_token.expose_secret());
         let prepared = CodexCredentialAdmin
-            .prepare_refreshed_oauth_rotation(current, secret, access_token_expires_at, None)
+            .prepare_oauth_rotation(current, secret, None, access_token_expires_at, None)
             .map_err(map_credential_admin_error)?;
         prepared_rotation(prepared, command.account.provider_kind)
     }

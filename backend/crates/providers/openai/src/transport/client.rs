@@ -885,6 +885,10 @@ impl CodexBackendClient {
             client
                 .egress_key
                 .push_str(&format!(":revision:{}", account.revision().get()));
+        } else {
+            client
+                .egress_key
+                .push_str(&crate::credential::oauth_identity_key(account));
         }
         client.websocket_origin_key = format!(
             "{}:{}",

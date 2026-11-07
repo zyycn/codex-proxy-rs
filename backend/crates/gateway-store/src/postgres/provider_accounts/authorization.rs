@@ -138,10 +138,13 @@ async fn commit_authorization_in_transaction(
                 context,
                 gateway_admin::model::audit::MutationAuditOperation::ProviderAccountReauthorize,
             )?;
-            let result =
-                repository::rotate_provider_account_admin_in_transaction(transaction, prepared)
-                    .await
-                    .map_err(|error| admin_store_error(ENTITY, error))?;
+            let result = repository::rotate_provider_account_admin_in_transaction(
+                transaction,
+                prepared,
+                true,
+            )
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?;
             admin_adapter::rotation_result(result, account_id.clone())?
         }
         _ => return Err(invalid_receipt()),

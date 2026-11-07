@@ -520,7 +520,8 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             postgres_unavailable("begin provider account admin rotation", source)
         })?;
         let account_id = command.credential.account_id.clone();
-        let result = rotate_provider_account_admin_in_transaction(&mut transaction, command).await;
+        let result =
+            rotate_provider_account_admin_in_transaction(&mut transaction, command, false).await;
         let rotation =
             finish_admin_transaction(transaction, result, "provider account admin rotation")
                 .await?;
@@ -849,6 +850,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     profile: &UpdateProviderAccount,
     replacement_identity: Option<&ProviderAccountIdentity>,
     update: &ProviderCredentialUpdate,
+    preserve_name: bool,
 ) -> StoreResult<Revision> {
     let replace_identity = replacement_identity.is_some();
     let upstream_user_id = replacement_identity.map(ProviderAccountIdentity::upstream_user_id);
@@ -857,11 +859,15 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     // 事务时间可能早于应用写入的额度观测，保留既有时间下界，避免轮换破坏时间约束
     let next = sqlx::query_scalar::<_, i64>(
         "update provider_accounts
-         set name = case when $14 then name else $4 end,
+         set name = case when $14 or $16 then name else $4 end,
              email = case when $14 then email else $5 end,
              plan_type = case when $14 then plan_type else $6 end,
              provider_quota_json = case when $14 then provider_quota_json else null end,
              quota_observed_at = case when $14 then quota_observed_at else null end,
+             quota_access_state = case when $11 then 'unknown' else quota_access_state end,
+             quota_evidence = case when $11 then null else quota_evidence end,
+             quota_access_observed_at = case when $11 then null else quota_access_observed_at end,
+             quota_reset_at = case when $11 then null else quota_reset_at end,
              provider_credentials_json = $7,
              credential_revision = credential_revision + 1,
              has_refresh_token = $8,
@@ -900,6 +906,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     .bind(upstream_account_id)
     .bind(update.preserve_profile)
     .bind(update.preserve_credential_state)
+    .bind(preserve_name)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {
@@ -1166,6 +1173,7 @@ pub(super) async fn import_provider_accounts_in_transaction(
 pub(super) async fn rotate_provider_account_admin_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     command: RotateProviderAccount,
+    preserve_name: bool,
 ) -> StoreResult<ProviderAccountAdminRotation> {
     command.scope.validate()?;
     require_nonempty(ENTITY, "account_id", &command.profile.id)?;
@@ -1194,6 +1202,7 @@ pub(super) async fn rotate_provider_account_admin_in_transaction(
         &command.profile,
         command.replacement_identity.as_ref(),
         &command.credential,
+        preserve_name,
     )
     .await?;
     // 凭据 CAS、普通设置和审计共享事务，任何设置失败都回滚凭据更新

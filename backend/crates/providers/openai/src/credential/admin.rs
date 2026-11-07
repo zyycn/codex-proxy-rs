@@ -31,9 +31,8 @@ use super::token_client::{
     OpenAiTokenClient, PersonalAccessTokenError, RefreshFailure, TokenRefresher,
 };
 use super::types::{
-    CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile, CodexCredentialData,
-    CodexCredentialPrincipal, CodexOAuthMetadata, CodexOAuthSecret, ResponsesTransport,
-    parse_access_token_expiration, parse_chatgpt_jwt_claims,
+    CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile, CodexCredentialData, CodexOAuthMetadata,
+    CodexOAuthSecret, ResponsesTransport, parse_access_token_expiration, parse_chatgpt_jwt_claims,
 };
 
 const PROVIDER_NAME: &str = "openai";
@@ -270,26 +269,6 @@ struct CodexCprOAuthExportAccount {
     refresh_token: Option<String>,
     id_token: Option<String>,
     access_token_expires_at: Option<String>,
-}
-
-/// App 已从 Store 读取的当前账号、revision 与明文 Provider JSON
-pub struct RotateManagedCodexCredential {
-    pub current: LoadedCredential,
-    pub secret: CodexOAuthSecret,
-    pub verified_account: CodexAccountProfile,
-    pub next_refresh_at: Option<DateTime<Utc>>,
-}
-
-impl std::fmt::Debug for RotateManagedCodexCredential {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("RotateManagedCodexCredential")
-            .field("current", &self.current)
-            .field("secret", &"<redacted>")
-            .field("verified_account", &self.verified_account)
-            .field("next_refresh_at", &self.next_refresh_at)
-            .finish()
-    }
 }
 
 /// Provider 验证后的 rotation；App 只做 Core -> Store command 的机械映射
@@ -725,21 +704,12 @@ impl CodexCredentialAdmin {
         })
     }
 
-    pub fn prepare_rotation(
-        &self,
-        input: RotateManagedCodexCredential,
-    ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
-        self.prepare_oauth_rotation(input, false)
-    }
-
-    /// 构建一次成功 RT exchange 的 CAS 写入，保留已存账号身份资料
-    ///
-    /// Refresh endpoint 已经完成本次 token 交换的授权；这里不对新 access
-    /// token 重新执行身份验证
-    pub(crate) fn prepare_refreshed_oauth_rotation(
+    /// 重新授权提供本次登录的身份；普通令牌续期只轮换凭据
+    pub(crate) fn prepare_oauth_rotation(
         &self,
         current: LoadedCredential,
         secret: CodexOAuthSecret,
+        metadata: Option<CodexOAuthMetadata>,
         access_token_expires_at: Option<DateTime<Utc>>,
         next_refresh_at: Option<DateTime<Utc>>,
     ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
@@ -753,6 +723,32 @@ impl CodexCredentialAdmin {
         let oauth = data
             .oauth_mut()
             .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+        let mut profile = ProviderAccountUpdate {
+            account_id: current.account.id().clone(),
+            name: current.account.name().to_owned(),
+            email: current.account.email().map(str::to_owned),
+            plan_type: current.account.plan_type().map(str::to_owned),
+        };
+        let reauthorization = metadata.is_some();
+        let mut replacement_identity = None;
+        if let Some(metadata) = metadata {
+            let user_id = metadata
+                .chatgpt_user_id
+                .filter(|id| !id.trim().is_empty())
+                .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+            if current.account.upstream_user_id() != Some(user_id.as_str())
+                || current.account.upstream_account_id() != metadata.chatgpt_account_id.as_deref()
+            {
+                replacement_identity = Some(ProviderAccountIdentity::new(
+                    user_id,
+                    metadata.chatgpt_account_id,
+                ));
+                oauth.cookies.clear();
+                oauth.principal = None;
+            }
+            profile.email = metadata.email;
+            profile.plan_type = metadata.chatgpt_plan_type;
+        }
         oauth.access_token = secret.access_token.expose_secret().to_owned();
         oauth.refresh_token = secret
             .refresh_token
@@ -764,12 +760,6 @@ impl CodexCredentialAdmin {
             .map(|value| value.expose_secret().to_owned());
         let credential = CodexCredentialCodec::encode_complete(data)
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
-        let profile = ProviderAccountUpdate {
-            account_id: current.account.id().clone(),
-            name: current.account.name().to_owned(),
-            email: current.account.email().map(str::to_owned),
-            plan_type: current.account.plan_type().map(str::to_owned),
-        };
         let credential = CredentialCasUpdate::new(
             current.account.id().clone(),
             current.account.revision(),
@@ -779,76 +769,14 @@ impl CodexCredentialAdmin {
             optional_time(access_token_expires_at),
             optional_time(next_refresh_at),
         )
-        .map_err(|_| CodexCredentialAdminError::InvalidCredential)?
-        .preserving_profile();
-        Ok(PreparedCodexCredentialRotation {
-            profile,
-            credential,
-            replacement_identity: None,
-            refresh_guards: None,
-        })
-    }
-
-    fn prepare_oauth_rotation(
-        &self,
-        input: RotateManagedCodexCredential,
-        replace_identity: bool,
-    ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
-        let access_token_expires_at = input.verified_account.access_token_expires_at;
-        let mut data = CodexCredentialCodec::decode_complete(&input.current.credential)
-            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
-        let oauth = data
-            .oauth_mut()
-            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
-        if input.current.account.provider().as_str() != PROVIDER_NAME
-            || input.current.account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
-        {
-            return Err(CodexCredentialAdminError::InvalidCredential);
-        }
-        let replacement_identity = replace_identity.then(|| {
-            ProviderAccountIdentity::new(
-                input.verified_account.chatgpt_user_id.clone(),
-                Some(input.verified_account.chatgpt_account_id.clone()),
-            )
-        });
-        if replace_identity {
-            oauth.principal = Some(CodexCredentialPrincipal {
-                oauth_subject: input.verified_account.oauth_subject.clone(),
-                poid: input.verified_account.poid.clone(),
-            });
-        }
-        oauth.access_token = input.secret.access_token.expose_secret().to_owned();
-        oauth.refresh_token = input
-            .secret
-            .refresh_token
-            .as_ref()
-            .map(|value| value.expose_secret().to_owned());
-        oauth.id_token = input
-            .secret
-            .id_token
-            .as_ref()
-            .map(|value| value.expose_secret().to_owned());
-        let credential = CodexCredentialCodec::encode_complete(data)
-            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
-        let profile = ProviderAccountUpdate {
-            account_id: input.current.account.id().clone(),
-            name: input.current.account.name().to_owned(),
-            email: input.verified_account.email,
-            plan_type: input.verified_account.plan_type,
-        };
-        let credential = CredentialCasUpdate::new(
-            input.current.account.id().clone(),
-            input.current.account.revision(),
-            profile.clone(),
-            credential,
-            input.secret.refresh_token.is_some(),
-            optional_time(access_token_expires_at),
-            optional_time(input.next_refresh_at),
-        )
         .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
         Ok(PreparedCodexCredentialRotation {
             profile,
-            credential,
+            credential: if reauthorization {
+                credential
+            } else {
+                credential.preserving_profile()
+            },
             replacement_identity,
             refresh_guards: None,
         })
@@ -1002,9 +930,10 @@ impl CodexCredentialAdminService {
         // 正常预刷新由 worker 读取当时的 runtime policy 动态判断；这里仅清除
         // 之前瞬态失败留下的 retry-not-before
         let next_refresh_at = None;
-        let mut prepared = CodexCredentialAdmin.prepare_refreshed_oauth_rotation(
+        let mut prepared = CodexCredentialAdmin.prepare_oauth_rotation(
             current,
             secret,
+            None,
             access_token_expires_at,
             next_refresh_at,
         )?;
@@ -1095,20 +1024,7 @@ impl CodexCredentialAdminService {
                     .as_ref()
                     .and_then(|token| parse_chatgpt_jwt_claims(token.expose_secret()).ok())
                     .unwrap_or_default();
-                let access_metadata = parse_chatgpt_jwt_claims(secret.access_token.expose_secret())
-                    .unwrap_or_default();
-                CodexOAuthMetadata {
-                    email: id_metadata.email.or(access_metadata.email),
-                    chatgpt_plan_type: id_metadata
-                        .chatgpt_plan_type
-                        .or(access_metadata.chatgpt_plan_type),
-                    chatgpt_user_id: id_metadata
-                        .chatgpt_user_id
-                        .or(access_metadata.chatgpt_user_id),
-                    chatgpt_account_id: id_metadata
-                        .chatgpt_account_id
-                        .or(access_metadata.chatgpt_account_id),
-                }
+                id_metadata.with_access_token_fallback(&secret.access_token)
             };
             let prepared =
                 CodexCredentialAdmin.prepare_unresolved_oauth(UnresolvedCodexOAuthCredential {

@@ -429,6 +429,8 @@ pub(super) struct OpenAiSessionState {
     pub(super) account_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) credential_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) oauth_identity: Option<String>,
     pub(super) conversation_id: Option<String>,
     #[serde(default)]
     pub(super) turn_state: Option<String>,
@@ -450,6 +452,7 @@ pub(super) enum OpenAiContinuationScope {
 pub(super) struct OpenAiSessionCapture {
     pub(super) account_id: String,
     pub(super) credential_revision: Option<u64>,
+    pub(super) oauth_identity: Option<String>,
     pub(super) conversation_id: Option<String>,
     pub(super) turn_state: Option<String>,
     pub(super) client_turn_id: Option<String>,
@@ -498,6 +501,7 @@ fn encode_openai_session_capture(
     encode_openai_session_state(OpenAiSessionState {
         account_id: capture.account_id.clone(),
         credential_revision: capture.credential_revision,
+        oauth_identity: capture.oauth_identity.clone(),
         conversation_id: capture.conversation_id.clone(),
         turn_state: capture.turn_state.clone(),
         client_turn_id: capture.client_turn_id.clone(),
@@ -1164,7 +1168,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             if let Some(affinity) = &routing_affinity {
                 for fact in events.iter().flat_map(ProviderEvent::canonical_facts) {
                     if let GatewayEvent::Started(meta) = fact {
-                        guardian_routing.remember(context.client_api_key_ref(), active_account.id(), meta.response_id(), affinity);
+                        guardian_routing.remember(context.client_api_key_ref(), &active_account, meta.response_id(), affinity);
                     }
                 }
             }

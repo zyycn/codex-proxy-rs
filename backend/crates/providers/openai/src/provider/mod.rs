@@ -888,15 +888,24 @@ impl CodexProvider {
         }
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
+        let oauth_identity = matches!(
+            lease.authentication(),
+            crate::credential::CodexRuntimeAuthentication::OAuth(_)
+        )
+        .then(|| crate::credential::oauth_identity_key(lease.account()));
         let native_owner = context.continuation().and_then(ContinuationBinding::pinned);
         let state_owner_cross_account = native_owner
             .is_some_and(|owner| !owner.matches(&provider_kind, lease.account_id()))
             || context
                 .account_state_owner()
                 .is_some_and(|owner| !owner.matches(&provider_kind, lease.account_id()))
-            || previous_session
-                .as_ref()
-                .is_some_and(|state| state.account_id != lease.account_id().as_str());
+            || previous_session.as_ref().is_some_and(|state| {
+                state.account_id != lease.account_id().as_str()
+                    || state
+                        .oauth_identity
+                        .as_ref()
+                        .is_some_and(|identity| Some(identity) != oauth_identity.as_ref())
+            });
         let has_explicit_state_owner = context.account_state_owner().is_some()
             || previous_session.is_some()
             || native_owner.is_some();
@@ -970,11 +979,7 @@ impl CodexProvider {
         .flatten()
         .and_then(|response_id| {
             self.guardian_routing
-                .get(
-                    context.client_api_key_ref(),
-                    lease.account_id(),
-                    response_id,
-                )
+                .get(context.client_api_key_ref(), lease.account(), response_id)
                 .map(|affinity| (response_id.to_owned(), affinity))
         });
         let client = self.client_for_request(&context)?;
@@ -1133,6 +1138,7 @@ impl CodexProvider {
         let session_capture =
             (!continuation_requested || previous_session.is_some()).then(|| OpenAiSessionCapture {
                 account_id: lease.account_id().as_str().to_owned(),
+                oauth_identity,
                 credential_revision: matches!(
                     lease.authentication(),
                     crate::credential::CodexRuntimeAuthentication::ApiKey(_)

@@ -505,6 +505,7 @@ OpenAI Provider 按 Client Key、所选 OAuth 账号和父响应 ID 关联 WS �
 缺失或失效时按普通上游路由执行。transport 负责 Cookie 有效期和同 origin、同端点路径约束，
 连接池按快照身份隔离审查连接；复用父连接不会重新计算 Cookie 有效期，Cookie 到期不强制关闭已建立的审查连接
 
+OpenAI OAuth 的连接、续接状态、Guardian 路由 Cookie 和头像缓存按本地账号、上游用户与工作区隔离，同号令牌续期不改变归属。
 OpenAI Provider 统一处理 Responses 的账号归属与 turn state 隔离，HTTP 与 WS 消费同一出站请求。
 全量请求缺少本地归属记录时保留客户端回传的路由 token，明确换号或可信续接状态不属于同一轮时清除；
 turn state 不参与选号，也不授权其他账号状态或 response ID 的复用
