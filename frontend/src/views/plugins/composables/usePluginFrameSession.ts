@@ -53,6 +53,7 @@ export function usePluginFrameSession(options: {
       ZNotification.error({ message, deduplicate: true })
   })
   const contentHeight = shallowRef(0)
+  const externalLink = shallowRef<URL>()
   const session = shallowRef<FrameSession>()
   let loadController: AbortController | undefined
   let previousViewportHeight = -1
@@ -62,6 +63,7 @@ export function usePluginFrameSession(options: {
     loadController = undefined
     const current = session.value
     session.value = undefined
+    externalLink.value = undefined
     srcdoc.value = ''
     contentHeight.value = 0
     previousViewportHeight = -1
@@ -290,6 +292,20 @@ export function usePluginFrameSession(options: {
     }, '*', transfer)
   }
 
+  function requestExternalLink(value: unknown) {
+    if (externalLink.value)
+      throw new Error(t('plugins.frame.externalLinkPending'))
+    // 短暂激活只能用于限制提示，打开地址仍须管理员在宿主内确认
+    if (!navigator.userActivation?.isActive || document.activeElement !== options.iframe.value)
+      throw new Error(t('plugins.frame.externalLinkRequiresClick'))
+    const url = typeof value === 'string'
+      ? URL.parse(value)
+      : null
+    if (!url || url.protocol !== 'https:' || url.username || url.password)
+      throw new Error(t('plugins.frame.invalidExternalLink'))
+    externalLink.value = url
+  }
+
   async function handleBridgeMessage(event: MessageEvent) {
     const current = session.value
     const source = event.source
@@ -324,7 +340,7 @@ export function usePluginFrameSession(options: {
       current.models.cancel(frame, event.data.id)
       return
     }
-    if (!['request', 'callback-ticket'].includes(event.data.type))
+    if (!['request', 'callback-ticket', 'open-external'].includes(event.data.type))
       return
     if (current.requestIds.has(event.data.id) || current.models.has(event.data.id)) {
       postResult(current, frame, event.data.id, false, undefined, t('plugins.frame.duplicateManagementRequest'))
@@ -336,9 +352,16 @@ export function usePluginFrameSession(options: {
     }
     current.requestIds.add(event.data.id)
     try {
-      if (event.data.type === 'request')
+      if (event.data.type === 'request') {
         await handleRouteRequest(current, frame, event.data)
-      else await handleCallbackTicket(current, frame, event.data)
+      }
+      else if (event.data.type === 'callback-ticket') {
+        await handleCallbackTicket(current, frame, event.data)
+      }
+      else {
+        requestExternalLink(event.data.payload)
+        postResult(current, frame, event.data.id, true)
+      }
     }
     catch (error) {
       if (session.value !== current || current.controller.signal.aborted)
@@ -412,6 +435,7 @@ export function usePluginFrameSession(options: {
     loading,
     loadError,
     contentHeight,
+    externalLink,
     frameKey,
     handleFrameLoad,
     pushLayout,
