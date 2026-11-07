@@ -832,6 +832,10 @@ docker compose -f deploy/compose.yaml up -d --no-build --wait
 
 升级后通过管理端版本接口或容器 image digest 确认运行实例的版本和 revision
 
+使用已保存代理进行 OpenAI 或 xAI 授权时，升级或回退前先完成进行中的授权。
+未完成授权的临时记录可能与目标版本不兼容，版本切换后应重新发起授权，不复用旧回调或授权码；
+已保存的账号与凭据不受该临时记录格式变化影响
+
 构建元数据通过一次性进程环境传入：
 
 ```bash

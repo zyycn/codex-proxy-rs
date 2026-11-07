@@ -304,6 +304,12 @@ impl PendingAuthorizationMutation {
                 "outbound_proxy_url".to_owned(),
                 Value::String(proxy.expose_url().to_owned()),
             );
+            if proxy.max_websocket_connections() != 0 {
+                document.insert(
+                    "outbound_proxy_max_websocket_connections".to_owned(),
+                    Value::from(proxy.max_websocket_connections()),
+                );
+            }
         }
         if let Some(id) = &self.outbound_proxy_id {
             document.insert("outbound_proxy_id".to_owned(), Value::String(id.clone()));
@@ -344,6 +350,11 @@ impl PendingAuthorizationMutation {
             .map(gateway_core::account::OutboundProxy::parse)
             .transpose()
             .map_err(|_| invalid())?;
+        let proxy = match (proxy, document.outbound_proxy_max_websocket_connections) {
+            (Some(proxy), Some(limit)) => Some(proxy.with_max_websocket_connections(limit)),
+            (None, Some(_)) => return Err(invalid()),
+            (proxy, None) => proxy,
+        };
         Ok(Self::new(
             provider_kind,
             target,
@@ -366,6 +377,8 @@ struct StoredAuthorizationMutationV1 {
     started_request_id: String,
     #[serde(default)]
     outbound_proxy_url: Option<String>,
+    #[serde(default)]
+    outbound_proxy_max_websocket_connections: Option<u32>,
     #[serde(default)]
     outbound_proxy_id: Option<String>,
 }
