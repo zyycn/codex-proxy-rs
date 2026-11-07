@@ -275,6 +275,7 @@ async fn connect(
         REDIS_NAMESPACE,
     )?));
 
+    let lease_cleanup = provider_leases.cleanup_worker();
     let provider_ports = ProviderStorePorts::new(
         account_store,
         provider_leases,
@@ -311,6 +312,7 @@ async fn connect(
                 client_key_usage_writer,
                 admission_release_writer,
                 budget_writer,
+                lease_cleanup,
             )?,
             None,
         ),
