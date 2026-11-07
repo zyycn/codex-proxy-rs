@@ -1197,7 +1197,7 @@ async fn api_key_client_catalog_cache_is_invalidated_by_credential_revision() {
 }
 
 #[tokio::test]
-async fn api_key_catalog_accepts_namespaced_model_ids_without_inventing_capabilities() {
+async fn api_key_catalog_hides_only_known_specialized_models_in_codex_picker() {
     use provider_openai::credential::ResponsesTransport;
     use provider_openai::transport::CodexCatalogCapabilityEvidence;
 
@@ -1206,11 +1206,18 @@ async fn api_key_catalog_accepts_namespaced_model_ids_without_inventing_capabili
     store
         .seed_api_key("acct_api", upstream.uri(), ResponsesTransport::Http)
         .await;
-    let ids = [
-        "gpt-5.4",
-        "ft:gpt-4.1-mini:example:custom:abc",
-        "vendor/model",
+    let picker_visibility = [
+        ("gpt-5.4", true),
+        ("ft:gpt-4.1-mini:example:custom:abc", true),
+        ("vendor/model", true),
+        ("gpt-image-2-custom", true),
+        ("gpt-image-2", false),
+        ("gpt-image-2-2026-04-21", false),
+        ("gpt-live-1", false),
+        ("gpt-realtime-2", false),
+        ("tts-1", false),
     ];
+    let ids = picker_visibility.map(|(id, _)| id);
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1240,21 +1247,19 @@ async fn api_key_catalog_accepts_namespaced_model_ids_without_inventing_capabili
         .client_model_catalog(&CLIENT_KEY, &client_scope(&[account]), "1.0.0")
         .await
         .expect("client catalog");
-    assert_eq!(
-        models
-            .iter()
-            .map(|model| model.model.as_str())
-            .collect::<std::collections::BTreeSet<_>>(),
-        ids.into_iter().collect()
-    );
-    for model in &models {
+    let actual_visibility = models.iter().map(|model| {
         let gateway_core::routing::ProviderModelContent::Adapted(presentation) = &model.content
         else {
             panic!("plain API IDs must remain adapted")
         };
         assert!(presentation.supported_reasoning_efforts().is_empty());
         assert_eq!(presentation.default_reasoning_effort(), None);
-    }
+        (model.model.as_str(), !presentation.hidden())
+    });
+    assert_eq!(
+        actual_visibility.collect::<std::collections::BTreeMap<_, _>>(),
+        picker_visibility.into_iter().collect()
+    );
 }
 
 #[tokio::test]

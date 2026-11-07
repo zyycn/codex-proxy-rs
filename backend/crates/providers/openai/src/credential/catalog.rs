@@ -480,12 +480,11 @@ impl CodexCredentialCatalogService {
                                 content: if model.document().protocol() == "codex" {
                                     ProviderModelContent::Native(model.document().clone())
                                 } else {
+                                    let model_id = model.request_model().as_str();
                                     ProviderModelContent::Adapted(
-                                        ModelPresentation::new(
-                                            Some(model.request_model().as_str().to_owned()),
-                                            None,
-                                        )
-                                        .with_agent_tools(true, false),
+                                        ModelPresentation::new(Some(model_id.to_owned()), None)
+                                            .with_agent_tools(true, false)
+                                            .with_hidden(is_specialized_api_model(model_id)),
                                     )
                                 },
                             })
@@ -1050,6 +1049,54 @@ impl CodexCredentialCatalogService {
         self.record_applied_catalog_etags(fetched.etags)?;
         Ok(snapshot)
     }
+}
+
+fn is_specialized_api_model(model: &str) -> bool {
+    // 普通目录不提供 Codex 可见性；仅按已知的专用模型 ID 隐藏，保留未知 ID 和直接调用
+    // 依据 https://developers.openai.com/api/docs/models 与 Codex 的语音通话模型
+    matches!(
+        model,
+        "dall-e-2"
+            | "dall-e-3"
+            | "chatgpt-image-latest"
+            | "gpt-image-1"
+            | "gpt-image-1-mini"
+            | "gpt-image-1.5"
+            | "gpt-image-1.5-2025-12-16"
+            | "gpt-image-2"
+            | "gpt-image-2-2026-04-21"
+            | "gpt-image-2.5-flare"
+            | "gpt-image-2.5-flare-2026-09-08"
+            | "gpt-image-2.5-sunburst"
+            | "gpt-image-2.5-sunburst-2026-09-08"
+            | "gpt-image-2.6-flare"
+            | "gpt-image-2.6-sunburst"
+            | "gpt-live-1"
+            | "gpt-live-1-codex"
+            | "gpt-live-transcribe"
+            | "gpt-realtime"
+            | "gpt-realtime-2025-08-28"
+            | "gpt-realtime-1.5"
+            | "gpt-realtime-2"
+            | "gpt-realtime-2.1"
+            | "gpt-realtime-2.1-mini"
+            | "gpt-realtime-mini"
+            | "gpt-realtime-mini-2025-10-06"
+            | "gpt-realtime-mini-2025-12-15"
+            | "gpt-realtime-translate"
+            | "gpt-realtime-whisper"
+            | "gpt-4o-realtime-preview"
+            | "gpt-4o-realtime-preview-2024-10-01"
+            | "gpt-4o-realtime-preview-2024-12-17"
+            | "gpt-4o-realtime-preview-2025-06-03"
+            | "gpt-4o-mini-realtime-preview"
+            | "gpt-4o-mini-realtime-preview-2024-12-17"
+            | "tts-1"
+            | "tts-1-hd"
+            | "gpt-4o-mini-tts"
+            | "gpt-4o-mini-tts-2025-03-20"
+            | "gpt-4o-mini-tts-2025-12-15"
+    )
 }
 
 fn model_ids(models: &[CodexCatalogModel]) -> Vec<String> {
