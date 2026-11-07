@@ -80,7 +80,7 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
     isDisposed: () => disposed,
   })
 
-  function invoke<T>(kind: 'request' | 'callback-ticket', payload: unknown, transfer: Transferable[] = []): Promise<T> {
+  function invoke<T>(kind: 'request' | 'callback-ticket' | 'open-external', payload: unknown, transfer: Transferable[] = []): Promise<T> {
     if (disposed)
       return Promise.reject(new Error('Plugin page is closed'))
     if (pending.size >= maximumInFlight)
@@ -254,6 +254,7 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
     get theme() { return currentTheme },
     request,
     callbackTicket,
+    openExternal: url => invoke<void>('open-external', url),
     models: Object.freeze({ responses: modelBridge.responses }),
     resourceUrl(path: string) {
       const key = String(path)

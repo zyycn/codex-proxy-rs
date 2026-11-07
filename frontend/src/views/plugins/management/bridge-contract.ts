@@ -9,7 +9,7 @@ export const MAXIMUM_MODEL_IN_FLIGHT = 4
 export const MODEL_REQUEST_DEADLINE_MS = 10 * 60 * 1000
 export const MODEL_RESPONSE_IDLE_MS = 30 * 1000
 
-export type PluginPageMessageType = 'request' | 'callback-ticket' | 'resize' | 'models-request' | 'models-pull' | 'models-cancel'
+export type PluginPageMessageType = 'request' | 'callback-ticket' | 'open-external' | 'resize' | 'models-request' | 'models-pull' | 'models-cancel'
 export type PluginModelMessageType = 'models-response' | 'models-chunk' | 'models-complete' | 'models-error'
 
 export interface PluginBridgeMessage {
@@ -63,6 +63,7 @@ export interface PluginHostBridge {
   readonly theme: 'light' | 'dark'
   request: (input: PluginManagementRequest) => Promise<PluginManagementReply>
   callbackTicket: (input: { path: string, ttlSeconds: number }) => Promise<PluginCallbackTicket>
+  openExternal: (url: string) => Promise<void>
   resourceUrl: (path: string) => string
   readonly models: Readonly<{ responses: (input: PluginModelRequest) => Promise<Response> }>
 }

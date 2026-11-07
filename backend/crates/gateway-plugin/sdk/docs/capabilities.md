@@ -692,7 +692,12 @@ keep、replace 或 delete；全部完成后宿主才原子提交新配置与状�
 宿主注入只读的 `window.codexProxyPlugin`。`request({ method, path, query?, contentType?, body? })` 只能访问当前版本
 已注册的管理路由，返回 `{ status, contentType, body: ArrayBuffer }`；`callbackTicket({ path, ttlSeconds })` 为已注册
 回调签发 1–600 秒的一次性地址；`resourceUrl(path)` 只解析同一制品已注册的非 HTML 资源。`theme` 为当前
-`light` / `dark` 值，变化时触发 `codex-proxy-themechange`。页面不能指定其他实例、制品、版本、URL 或请求 header
+`light` / `dark` 值，变化时触发 `codex-proxy-themechange`。管理请求不能指定其他实例、制品、版本、URL 或请求 header
+
+需要跳转到外部页面时，在插件页面的用户点击处理器中调用 `openExternal(url): Promise<void>`。
+地址必须是绝对 HTTPS URL，不能包含用户名或密码。宿主展示目标主机名和非默认端口，管理员可打开新标签页、复制链接或取消。
+Promise 成功只表示宿主已接受确认请求，不代表链接已打开；无用户操作、地址无效或已有链接待确认时，请求会被拒绝。
+切换页面会关闭确认框。兼容较早的 v2 宿主时，先检查 `typeof window.codexProxyPlugin.openExternal === 'function'`
 
 普通模型请求使用标准 `Response` 接口：
 

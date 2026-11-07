@@ -5,6 +5,7 @@ import { useEventListener, useResizeObserver } from '@vueuse/core'
 import { computed, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 import { useThemeStore } from '@/stores/modules/theme'
 import { usePluginFrameSession } from '../composables/usePluginFrameSession'
+import PluginExternalLinkDialog from './PluginExternalLinkDialog.vue'
 import PluginPageLoading from './PluginPageLoading.vue'
 
 const props = defineProps<{
@@ -20,7 +21,7 @@ const themeStore = useThemeStore()
 const containerRef = useTemplateRef<HTMLDivElement>('container')
 const iframeRef = useTemplateRef<HTMLIFrameElement>('iframe')
 const viewportHeight = shallowRef(0)
-const { srcdoc, loading, loadError, contentHeight, frameKey, handleFrameLoad, pushLayout, pushTheme } = usePluginFrameSession({
+const { srcdoc, loading, loadError, contentHeight, externalLink, frameKey, handleFrameLoad, pushLayout, pushTheme } = usePluginFrameSession({
   view: () => props.view,
   page: () => props.page,
   iframe: iframeRef,
@@ -73,5 +74,6 @@ onMounted(pushLayout)
       referrerpolicy="no-referrer"
       @load="handleFrameLoad"
     />
+    <PluginExternalLinkDialog v-if="externalLink" :link="externalLink" @closed="externalLink = undefined" />
   </div>
 </template>
