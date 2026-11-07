@@ -4,7 +4,7 @@ import type { ThemeScheme } from '@codex-proxy/ui/theme'
 import type { CSSProperties } from 'vue'
 
 import type { ThemeEditorPreview } from '../composables/useThemeEditor'
-import { ZSegmented } from '@codex-proxy/ui'
+import { ZCard, ZSegmented } from '@codex-proxy/ui'
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, shallowRef } from 'vue'
 
 import { useI18n } from 'vue-i18n'
@@ -67,13 +67,13 @@ const previewOptions = computed(() => ([
 
 <template>
   <section class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden" :aria-label="t('appearance.preview.themeRealTimePreview')">
-    <header class="shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-z-lg bg-z-bg-container px-3 py-2.5 shadow-z-tertiary">
+    <ZCard as="header" padding="none" class="shrink-0 flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
       <div>
         <strong class="block text-z-sm font-heavy text-z-text">{{ t('appearance.preview.livePreview') }}</strong>
         <span class="mt-0.5 block text-[9px] font-emphasis text-z-text-quaternary">{{ t('appearance.preview.description') }}</span>
       </div>
       <ZSegmented v-model="preview" :aria-label="t('appearance.preview.previewType')" size="small" :options="previewOptions" />
-    </header>
+    </ZCard>
 
     <ThemePreviewCanvas
       class="h-full min-h-0"

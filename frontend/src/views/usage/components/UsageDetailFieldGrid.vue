@@ -28,7 +28,7 @@ function valueClass(item: { mono?: boolean, wrap?: boolean }) {
       <dt :class="fieldLabelClass">
         {{ item.label }}
       </dt>
-      <dd :class="valueClass(item)" :title="displayValue(item.value)">
+      <dd :class="valueClass(item)" :title="item.wrap ? undefined : displayValue(item.value)">
         {{ displayValue(item.value) }}
       </dd>
     </div>

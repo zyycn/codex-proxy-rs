@@ -318,7 +318,7 @@ watch(
           class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3.5 gap-y-3 rounded-z bg-z-warning-container px-4 py-5 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
         >
           <span class="grid size-9 place-items-center rounded-z bg-z-warning-container-active text-z-warning-on-container" aria-hidden="true">
-            <component :is="updateInfo.retryAt ? Hourglass : TriangleAlert" class="size-[18px]" />
+            <component :is="updateInfo.retryAt ? Hourglass : TriangleAlert" class="size-4.5" />
           </span>
           <p class="m-0 min-w-0 wrap-anywhere text-z font-bold leading-tight text-z-warning-on-container">
             {{ updateInfo.warning }}
@@ -393,7 +393,7 @@ watch(
           </div>
           <span
             class="inline-flex h-6 items-center gap-1.5 rounded-full bg-z-fill-quaternary px-2 text-z-xs leading-none font-bold text-z-text-secondary"
-            :title="updateStreamError || presentation.streamStatusLabel"
+            :title="updateStreamError || undefined"
           >
             <i
               class="size-1.5 rounded-full"

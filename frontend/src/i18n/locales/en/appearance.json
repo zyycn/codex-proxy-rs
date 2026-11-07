@@ -2,6 +2,16 @@
   "appearance": {
     "switchToLight": "Switch to light mode",
     "switchToDark": "Switch to dark mode",
+    "themePresets": {
+      "material": "Surface material",
+      "title": "Theme preset",
+      "default": {
+        "label": "Default"
+      },
+      "soft": {
+        "label": "Soft glow"
+      }
+    },
     "settings": {
       "global": "Global",
       "components": "Components",
@@ -177,7 +187,6 @@
       "scrollBarSlider": "Scroll bar slider",
       "scrollBarHover": "Scroll bar Hover",
       "componentTokenComponentFamily": "Component token family",
-      "description": "Adjust component tokens for {label}, unchanged values continue to use the global seed and alias algorithms",
       "noMatchingComponentToken": "No matching component tokens",
       "kindLabel": "Component tokens"
     },
@@ -204,8 +213,6 @@
       "themeMode": "Theme mode",
       "globalTokenClassification": "Global token categories",
       "brandColorLabel": "Preset theme · Brand color · colorPrimary",
-      "brandColor": "Brand color",
-      "presetThemes": "Preset themes",
       "brandMainColor": "Brand main color",
       "paletteDescription": "Color scales and overall appearance",
       "semanticColorsTitle": "Semantic and neutral colors",
@@ -215,7 +222,6 @@
       "basicSpacing": "Basic spacing",
       "sizeStep": "Size step",
       "styleToken": "Style tokens",
-      "surfaceDescription": "Borderless surfaces, rounded corners, and layered shadows",
       "universalFillet": "Universal fillet",
       "shadowIntensity": "Shadow intensity"
     }

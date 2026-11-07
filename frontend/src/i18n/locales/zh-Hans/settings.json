@@ -629,7 +629,7 @@
         "access": "安全与访问",
         "backups": "数据备份"
       },
-      "description": "配置网关调度、上游与定价，管理访问安全、历史保留与备份",
+      "description": "管理调度、上游、定价、安全、数据留存与备份",
       "sectionsLabel": "设置分区",
       "undoAllBasicSettingsChanges": "撤销全部基础设置更改",
       "unsavedChanges": {

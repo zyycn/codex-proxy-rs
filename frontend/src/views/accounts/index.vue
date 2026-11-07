@@ -213,7 +213,7 @@ const {
 </script>
 
 <template>
-  <div class="flex min-h-0 w-full flex-col xl:h-full xl:overflow-hidden">
+  <div class="flex min-h-0 w-full flex-col xl:h-[calc(100dvh-3rem)] xl:flex-none!">
     <ZPageHeader
       :title="t('navigation.accounts')"
       :description="t('accounts.page.description')"
@@ -222,7 +222,7 @@ const {
     <AccountOverviewCards :summary="accountSummary" />
 
     <ZCard
-      class="mt-4 flex flex-col xl:h-[calc(100dvh-250px)] xl:min-h-125"
+      class="mt-4 flex flex-col xl:min-h-80 xl:flex-1"
     >
       <template #header>
         <AccountFilters

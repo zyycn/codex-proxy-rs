@@ -12,7 +12,7 @@
 </div>
 
 在管理端「主题」中调整颜色、字号、圆角和组件样式，保存后应用到当前浏览器。
-设置保存在浏览器本地，不会同步到服务器或其他设备。只想换配色时，选择预置主题即可
+设置保存在浏览器本地，不会同步到服务器或其他设备。只想换配色时，选择品牌色预置即可
 
 下文说明实现和扩展方式。颜色使用 Ant Design 十阶色板与项目的明暗角色规则，
 中性表面从背景和文字 Seed 派生；Vue 组件通过 CSS Variables 与 Tailwind CSS 4 使用这些值。
@@ -138,6 +138,7 @@ Seed 是用户配置与持久化的最小事实：
 
 ```ts
 type ThemeMode = 'system' | 'light' | 'dark'
+type ThemePresetId = 'default' | 'soft'
 type ThemeColorId = 'relay-blue' | 'deep-teal' | 'signal-violet' | 'graphite' | 'custom'
 
 interface ThemeCustomization {
@@ -157,7 +158,11 @@ interface ThemeCustomization {
 
 表格行高与卡片圆角通过 `customization.component` 的 `tableRowHeight`、`cardBorderRadius` 配置，属于组件尺寸覆盖
 
-持久化键为 `codex-proxy-rs-theme`。Store 不保存完整色板或 CSS Variables，损坏的模式、颜色与自定义值会在
+完整主题预设组合品牌配色、推荐材质、全局 Seed、组件尺寸和可编辑 Token。选择时替换草稿配置，保留当前明暗模式；保存后应用到管理端
+
+表面材质可单独选择：`default` 使用简洁表面，`soft` 使用柔和光影。切换材质保留草稿的配色和组件配置，显式尺寸优先于材质默认值
+
+持久化键为 `codex-proxy-rs-theme`，`themePreset` 缺省为 `default`。Store 不保存完整色板或 CSS Variables，损坏的模式、预设、颜色与自定义值会在
 初始化时规范化并回退到默认配置
 
 ### Map Token
@@ -201,7 +206,7 @@ Preset 的实心色使用 P6，普通 Container、Strong Container 与边界按 
 - `colorText / Heading / Secondary / Tertiary / Quaternary / Disabled`
 - `colorBorder / BorderSecondary / Split / Shadow`
 
-中继蓝使用稳定的浅色 / 深色中性基线；深海青、古风色与石墨预置额外提供各自的 `colorBgBase`、`colorTextBase`
+星津夜航使用稳定的浅色 / 深色中性基线；水墨江汀、粉墙回廊与朱阙金瓦预置额外提供各自的 `colorBgBase`、`colorTextBase`
 画像，自定义主色则只向通用中性基线注入少量色温。默认浅色采用中性锚点，默认深色使用 HSL 色调派生；带色温
 主题按外观距离平滑过渡到背景和文字 Seed 的 RGB 混色结果。稳定锚点用于 Surface 与 Shadow，Component 从角色派生，
 所有预置、自定义 Seed 和用户覆盖仍进入同一条算法，不在页面或组件中追加 HEX 特判。
@@ -242,13 +247,15 @@ Token 直接覆盖时不会自动重算同组件的其他状态；需要保持�
 | Button | `--z-button-primary-color / bg / hover-bg / active-bg`、`--z-button-secondary-bg / hover-bg / active-bg` |
 | IconButton | `--z-icon-button-secondary-bg / hover-bg / active-bg` |
 | Input | `--z-input-bg / hover-bg / active-bg / error-active-bg` 与对应 Shadow |
-| Menu | `--z-menu-item-selected-bg` |
+| Menu | `--z-menu-item-selected-bg / bg-image / shadow` |
 | Popover | `--z-popover-header-bg`、`--z-popover-shadow` |
 | Table | `--z-table-row-bg / stripe-bg / hover-bg / selected-bg / selected-hover-bg / height` |
-| Card | `--z-card-bg / border-radius / shadow` |
-| Layout | `--z-layout-sider-bg / shadow` |
+| Card | `--z-card-bg / bg-image / border-radius / shadow` |
+| Layout | `--z-layout-sider-bg / bg-image / border-radius / shadow` |
 | Scrollbar | `--z-scrollbar-thumb-bg / hover-bg` |
 | BrandMark | `--z-brand-mark-bg` |
+
+管理端侧栏由 UI 库的 `ZSidebar` 提供容器、折叠展示、两级导航与选中状态。应用提供菜单数据、品牌和底部操作插槽，在 `select` 中执行路由或插件导航；移动端遮罩与模态焦点由宿主布局持有
 
 组件状态由 UI 库的 Component 派生层统一生成，页面不维护混色系数：
 
@@ -279,14 +286,23 @@ Purple Strong Container 或 Purple Solid；同一组颜色仍由运行时色板�
 
 ## 预置主题
 
-| ID | 名称 | 主色 | 交互方向 |
-| --- | --- | --- | --- |
-| `relay-blue` | 中继蓝 | `#5983F4` | 清晰可信的冷蓝强调 |
-| `deep-teal` | 深海青 | `#0E7C72` | 冷静低饱和的青色强调 |
-| `signal-violet` | 古风色 | `#A0583D` | 温厚克制的赭色强调 |
-| `graphite` | 石墨 | `#525B66` | 近单色的灰色强调 |
+### 表面材质
 
-预置主题改变品牌主色，并可提供与该品牌匹配的浅色 / 深色背景和文字 Seed；不改变字号、密度、圆角或布局。
+| ID | 名称 | 推荐品牌色 | 表面 |
+| --- | --- | --- | --- |
+| `default` | 默认 | 星津夜航 | 简洁表面与轻量阴影 |
+| `soft` | 柔光 | 星津夜航 | 圆润边缘、表面高光与分层阴影，配色跟随品牌 |
+
+### 主题预设
+
+| 配色 ID | 名称 | 主色 | 推荐材质与组件 |
+| --- | --- | --- | --- |
+| `relay-blue` | 星津夜航 | `#5983F4` | 默认材质，标准控件与表格 |
+| `deep-teal` | 水墨江汀 | `#50605E` | 默认材质，6px 卡片圆角与 60px 表格行高 |
+| `signal-violet` | 粉墙回廊 | `#D395A8` | 默认材质，14px 正文与 68px 表格行高 |
+| `graphite` | 朱阙金瓦 | `#A34537` | 柔光，12px 卡片圆角与 54px 表格行高 |
+
+品牌配色改变品牌主色，并可提供与该品牌匹配的浅色 / 深色背景和文字 Seed；不改变字号、密度、圆角或布局。完整预设提供的 Seed 优先于品牌基线，用户覆盖优先于预设
 所有预置与自定义主题走同一条 Surface、Map、Alias 与 Component 派生链路，不存在页面级特判
 
 ## 运行时架构
@@ -349,7 +365,8 @@ UI 构建插件 `CodexProxyUI({ themePrefix: 'z' })` 同时配置变量生成与
 
 | 区域 | 能力 |
 | --- | --- |
-| 全局 / 颜色 | 模式、预置、自定义主色、功能色、链接、基础文本与背景、派生变量查看 |
+| 全局 / 预设 | 模式、完整主题预设、表面材质 |
+| 全局 / 颜色 | 自定义主色、功能色、链接、基础文本与背景、派生变量查看 |
 | 全局 / 尺寸 | 字号、基础间距、尺寸步长、控件高度 |
 | 全局 / 风格 | 通用圆角、阴影强度 |
 | 组件 | Action、Form、Surface、Data Display、Navigation、Layout |
@@ -430,6 +447,10 @@ utility / arbitrary variant；Vue Transition、跨浏览器 Range、动态富文
 ## 扩展指南
 
 ### 增加预置主题
+
+在 UI 库的 `themeProfiles` 中组合配色 ID 对应的材质与 `ThemeCustomization`。设置页将其复制为可编辑草稿，保存实际配置，无需持久化额外的选中标记。材质仍由组件 Token 派生层实现
+
+单独增加品牌配色：
 
 1. 在 `ThemeColorPresetId` 增加稳定 ID
 2. 在 `themeColorPresets` 声明名称、描述与主色 Seed

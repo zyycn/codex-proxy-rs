@@ -629,7 +629,7 @@
         "access": "Security",
         "backups": "Backups"
       },
-      "description": "Manage scheduling, upstreams, pricing, security, history retention, and backups",
+      "description": "Manage scheduling, upstreams, pricing, security, retention and backups",
       "sectionsLabel": "Settings sections",
       "undoAllBasicSettingsChanges": "Undo all basic settings changes",
       "unsavedChanges": {

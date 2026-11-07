@@ -2,6 +2,16 @@
   "appearance": {
     "switchToLight": "切换浅色模式",
     "switchToDark": "切换暗黑模式",
+    "themePresets": {
+      "material": "表面材质",
+      "title": "主题预设",
+      "default": {
+        "label": "默认"
+      },
+      "soft": {
+        "label": "柔光"
+      }
+    },
     "settings": {
       "global": "全局",
       "components": "组件",
@@ -177,7 +187,6 @@
       "scrollBarSlider": "滚动条滑块",
       "scrollBarHover": "滚动条 Hover",
       "componentTokenComponentFamily": "Component Token 组件族",
-      "description": "调整 {label} 的 Component Token，未修改的值继续由全局 Seed / Alias 算法生成",
       "noMatchingComponentToken": "没有匹配的 Component Token",
       "kindLabel": "组件 Token"
     },
@@ -204,8 +213,6 @@
       "themeMode": "主题模式",
       "globalTokenClassification": "全局 Token 分类",
       "brandColorLabel": "预置主题 品牌色 colorPrimary",
-      "brandColor": "品牌色",
-      "presetThemes": "预置主题",
       "brandMainColor": "品牌主色",
       "paletteDescription": "完整色阶与界面基调",
       "semanticColorsTitle": "功能色与中性色",
@@ -215,7 +222,6 @@
       "basicSpacing": "基础间距",
       "sizeStep": "尺寸步长",
       "styleToken": "风格 Token",
-      "surfaceDescription": "固定无边设计，圆角塑形，阴影分层",
       "universalFillet": "通用圆角",
       "shadowIntensity": "阴影强度"
     }

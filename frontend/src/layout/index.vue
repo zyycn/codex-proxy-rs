@@ -69,7 +69,7 @@ watch(
 <template>
   <div class="relative flex h-dvh overflow-hidden bg-z-bg-layout" :inert="mobileSidebarOpen">
     <AppSidebar
-      :collapsed="sidebarCollapsed"
+      :collapse="sidebarCollapsed"
       @toggle="toggleSidebar"
 
       @open-system-update="systemUpdateOpen = true"

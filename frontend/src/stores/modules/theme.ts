@@ -5,6 +5,7 @@ import type {
   ThemeColorId,
   ThemeCustomization,
   ThemeMode,
+  ThemePresetId,
 } from '@codex-proxy/ui/theme'
 
 import { normalizeHexColor } from '@codex-proxy/ui'
@@ -13,9 +14,11 @@ import {
   createTheme,
   defaultThemeColorId,
   defaultThemeMode,
+  defaultThemePresetId,
   defaultThemePrimaryColor,
   isThemeColorId,
   isThemeMode,
+  isThemePresetId,
   normalizeThemeCustomization,
   resolveThemeScheme,
 } from '@codex-proxy/ui/theme'
@@ -30,6 +33,7 @@ interface ThemeTransitionOrigin {
 }
 
 interface ThemeConfigurationInput {
+  preset: ThemePresetId
   mode: ThemeMode
   color: ThemeColorId
   customColor: string
@@ -49,6 +53,7 @@ export const useThemeStore = defineStore(
   'theme',
   () => {
     const themeMode = shallowRef<ThemeMode>(defaultThemeMode)
+    const themePreset = shallowRef<ThemePresetId>(defaultThemePresetId)
     const themeColor = shallowRef<ThemeColorId>(defaultThemeColorId)
     const customThemeColor = shallowRef(defaultThemePrimaryColor)
     const themeCustomization = ref<ThemeCustomization>({})
@@ -64,6 +69,7 @@ export const useThemeStore = defineStore(
     const resolvedTheme = computed(() =>
       createTheme({
         scheme: effectiveTheme.value,
+        preset: themePreset.value,
         colorId: themeColor.value,
         primaryColor: customThemeColor.value,
         customization: themeCustomization.value,
@@ -87,6 +93,8 @@ export const useThemeStore = defineStore(
     }
 
     function normalizePersistedTheme(): void {
+      if (!isThemePresetId(themePreset.value))
+        themePreset.value = defaultThemePresetId
       if (!isThemeMode(themeMode.value))
         themeMode.value = defaultThemeMode
       if (!isThemeColorId(themeColor.value))
@@ -237,10 +245,11 @@ export const useThemeStore = defineStore(
       event?: MouseEvent,
     ): boolean {
       const customColor = normalizeHexColor(configuration.customColor)
-      if (!isThemeMode(configuration.mode) || !isThemeColorId(configuration.color) || !customColor)
+      if (!isThemePresetId(configuration.preset) || !isThemeMode(configuration.mode) || !isThemeColorId(configuration.color) || !customColor)
         return false
 
       requestThemeTransition(event)
+      themePreset.value = configuration.preset
       themeMode.value = configuration.mode
       themeColor.value = configuration.color
       customThemeColor.value = customColor
@@ -251,6 +260,7 @@ export const useThemeStore = defineStore(
     function resetTheme(event?: MouseEvent): void {
       const unchanged
         = themeMode.value === defaultThemeMode
+          && themePreset.value === defaultThemePresetId
           && themeColor.value === defaultThemeColorId
           && customThemeColor.value === defaultThemePrimaryColor
           && Object.keys(themeCustomization.value).length === 0
@@ -260,6 +270,7 @@ export const useThemeStore = defineStore(
       }
       requestThemeTransition(event)
       themeMode.value = defaultThemeMode
+      themePreset.value = defaultThemePresetId
       themeColor.value = defaultThemeColorId
       customThemeColor.value = defaultThemePrimaryColor
       themeCustomization.value = {}
@@ -288,6 +299,7 @@ export const useThemeStore = defineStore(
 
     return {
       themeMode,
+      themePreset,
       themeColor,
       customThemeColor,
       themeCustomization,
@@ -308,6 +320,7 @@ export const useThemeStore = defineStore(
       key: 'codex-proxy-rs-theme',
       pick: [
         'themeMode',
+        'themePreset',
         'themeColor',
         'customThemeColor',
         'themeCustomization',
@@ -317,5 +330,5 @@ export const useThemeStore = defineStore(
 )
 
 function themeSignature(theme: Theme): string {
-  return `${theme.scheme}:${theme.colorId}:${theme.seed}:${JSON.stringify(theme.tokens)}`
+  return `${theme.preset}:${theme.scheme}:${theme.colorId}:${theme.seed}:${JSON.stringify(theme.tokens)}`
 }

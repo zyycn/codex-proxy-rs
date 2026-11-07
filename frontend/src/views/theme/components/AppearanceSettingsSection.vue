@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ZButton, ZInput, ZPageHeader, ZScrollbar, ZSegmented } from '@codex-proxy/ui'
+import { ZButton, ZCard, ZInput, ZPageHeader, ZScrollbar, ZSegmented } from '@codex-proxy/ui'
 import { Check, Eye, Pencil, RotateCcw, Save, Search, Undo2 } from '@lucide/vue'
 
 import { computed, shallowRef } from 'vue'
@@ -28,7 +28,9 @@ const {
   previewStyle,
   modificationCount,
   dirty,
-  selectPreset,
+  selectMaterial,
+  applyProfile,
+  resetPrimaryColor,
   setPrimaryColor,
   setMode,
   setSeedColor,
@@ -53,13 +55,6 @@ const scopeOptions = computed(() => ([
     value: 'component',
   },
 ]))
-
-function switchScope(value: string) {
-  scope.value = value === 'component'
-    ? 'component'
-    : 'global'
-  mobilePreviewOpen.value = false
-}
 
 function saveTheme(event: MouseEvent) {
   if (!save(event)) {
@@ -92,14 +87,7 @@ function saveTheme(event: MouseEvent) {
 
       <template #actions>
         <div class="flex max-w-[100cqw] flex-wrap items-center justify-end gap-2">
-          <ZSegmented
-            :model-value="scope"
-            :aria-label="t('appearance.settings.themeEditingLevel')"
-            :options="scopeOptions"
-            size="small"
-            @update:model-value="switchScope"
-          />
-          <ZButton size="small" class="min-[768px]:hidden" @click="mobilePreviewOpen = !mobilePreviewOpen">
+          <ZButton size="small" class="md:hidden" @click="mobilePreviewOpen = !mobilePreviewOpen">
             <template #icon>
               <Pencil v-if="mobilePreviewOpen" class="size-3.5" />
               <Eye v-else class="size-3.5" />
@@ -130,30 +118,38 @@ function saveTheme(event: MouseEvent) {
     </ZPageHeader>
 
     <section
-      class="theme-workbench isolate mt-5 overflow-hidden rounded-z-card bg-z-bg-layout shadow-z-card xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
+      class="theme-workbench isolate mt-5 overflow-hidden xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
       :aria-label="t('appearance.settings.themeEditor')"
     >
       <div
         class="theme-workbench-body grid min-h-180 gap-3 xl:min-h-0 xl:flex-1 xl:overflow-hidden xl:grid-cols-[370px_minmax(0,1fr)]"
       >
-        <aside
-          class="h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden rounded-z-lg bg-z-bg-container pt-3 pr-0 pb-3 pl-3 shadow-z-secondary min-[768px]:grid"
+        <ZCard
+          as="aside"
+          padding="none"
+          class="h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 py-3 md:grid"
           :class="mobilePreviewOpen ? 'hidden' : 'grid'"
           :aria-label="t('appearance.settings.themeTokenEditingPanel')"
         >
-          <ZInput
-            v-model="query"
-            class="pr-3"
-            :aria-label="t('appearance.settings.searchToken')"
-            :placeholder="t('appearance.settings.searchPlaceholder')"
-          >
-            <template #prefix>
-              <Search class="size-4" />
-            </template>
-          </ZInput>
+          <div class="grid gap-3 px-3">
+            <ZSegmented
+              v-model="scope"
+              :aria-label="t('appearance.settings.themeEditingLevel')"
+              :options="scopeOptions"
+            />
+            <ZInput
+              v-model="query"
+              :aria-label="t('appearance.settings.searchToken')"
+              :placeholder="t('appearance.settings.searchPlaceholder')"
+            >
+              <template #prefix>
+                <Search class="size-4" />
+              </template>
+            </ZInput>
+          </div>
 
           <ZScrollbar class="h-full min-h-0">
-            <div class="pr-4">
+            <div class="px-3">
               <ThemeGlobalTokenPanel
                 v-if="scope === 'global'"
                 v-model:category="globalCategory"
@@ -161,7 +157,9 @@ function saveTheme(event: MouseEvent) {
                 :resolved="resolvedPreview"
                 :query="query"
                 @mode="setMode"
-                @preset="selectPreset"
+                @material="selectMaterial"
+                @profile="applyProfile"
+                @reset-primary="resetPrimaryColor"
                 @primary="setPrimaryColor"
                 @seed-color="setSeedColor"
                 @seed-number="setSeedNumber"
@@ -180,9 +178,9 @@ function saveTheme(event: MouseEvent) {
               />
             </div>
           </ZScrollbar>
-        </aside>
+        </ZCard>
 
-        <div class="min-h-0 min-[768px]:block" :class="mobilePreviewOpen ? 'block' : 'hidden'">
+        <div class="min-h-0 md:block" :class="mobilePreviewOpen ? 'block' : 'hidden'">
           <ThemeEditorPreview v-model="preview" class="h-full" :theme="previewTheme" :style="previewStyle" />
         </div>
       </div>

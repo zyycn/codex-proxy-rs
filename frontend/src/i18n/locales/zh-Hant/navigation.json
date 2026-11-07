@@ -16,7 +16,6 @@
     "switchLanguage": "切換語言（{value}）",
     "languageLoadFailed": "語言加載失敗，請刷新重試",
     "mainLabel": "主導航",
-    "pluginsLabel": "插件導航",
     "pluginManagement": "插件管理",
     "online": "在線",
     "sidebar": {

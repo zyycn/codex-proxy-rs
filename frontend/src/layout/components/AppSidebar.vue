@@ -1,14 +1,13 @@
 <script setup lang="ts">
+import type { SidebarItem } from '@codex-proxy/ui'
+import type { RouteLocationRaw } from 'vue-router'
 import type { PluginManagementView } from '@/api'
-
-import { ZIconButton, ZMotionIcon, ZPopover, ZScrollbar } from '@codex-proxy/ui'
-
+import { ZIconButton, ZMotionIcon, ZSidebar } from '@codex-proxy/ui'
 import {
   ArrowUpCircle,
   Blocks,
   BringToFront,
   ChartNoAxesColumn,
-  ChevronDown,
   FolderTree,
   KeyRound,
   LayoutDashboard,
@@ -23,13 +22,10 @@ import {
   Sun,
   Users,
 } from '@lucide/vue'
-import { usePreferredReducedMotion, useTimeoutFn } from '@vueuse/core'
-import { gsap } from 'gsap'
 import { storeToRefs } from 'pinia'
-
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, useTemplateRef, watch } from 'vue'
+import { computed, onMounted, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { isNavigationFailure, NavigationFailureType, useRoute, useRouter } from 'vue-router'
 import AppBrandMark from '@/components/AppBrandMark.vue'
 import AppLanguageMenu from '@/components/AppLanguageMenu.vue'
 import { useAuthStore } from '@/stores/modules/auth'
@@ -38,17 +34,13 @@ import { useSystemUpdateStore } from '@/stores/modules/system-update'
 import { useThemeStore } from '@/stores/modules/theme'
 import { pluginPageLocation, shortPluginInstanceId } from '@/utils/plugin'
 
-const props = withDefaults(
-  defineProps<{
-    collapsed?: boolean
-    mobile?: boolean
-  }>(),
-  {
-    collapsed: false,
-    mobile: false,
-  },
-)
-
+const props = withDefaults(defineProps<{
+  collapse?: boolean
+  mobile?: boolean
+}>(), {
+  collapse: false,
+  mobile: false,
+})
 const emit = defineEmits<{
   close: []
   navigate: []
@@ -57,7 +49,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
-
+const sidebar = useTemplateRef<InstanceType<typeof ZSidebar>>('sidebar')
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
@@ -68,137 +60,87 @@ const { pageViews: pluginPageViews } = storeToRefs(pluginViewsStore)
 const { version, hasUpdate } = storeToRefs(systemUpdateStore)
 const { effectiveTheme } = storeToRefs(themeStore)
 const { toggleTheme } = themeStore
-const preferredMotion = usePreferredReducedMotion()
-const isCollapsed = computed(() => !props.mobile && Boolean(props.collapsed))
-const pluginMenuId = useId()
-const pluginGroupExpanded = shallowRef(route.path.startsWith('/plugins'))
+const isCollapsed = computed(() => !props.mobile && props.collapse)
 
-const navItems = computed(() => ([
-  {
-    label: t('navigation.overview'),
-    icon: LayoutDashboard,
-    path: '/',
-  },
-  {
-    label: t('navigation.accounts'),
-    icon: Users,
-    path: '/accounts',
-  },
-  {
-    label: t('navigation.proxies'),
-    icon: Network,
-    path: '/proxies',
-  },
-  {
-    label: t('navigation.groups'),
-    icon: FolderTree,
-    path: '/groups',
-  },
-  {
-    label: t('navigation.apiKeys'),
-    icon: KeyRound,
-    path: '/keys',
-  },
-  {
-    label: t('navigation.usage'),
-    icon: ChartNoAxesColumn,
-    path: '/usage',
-  },
-  {
-    label: t('navigation.plugins'),
-    icon: Puzzle,
-    path: '/plugins',
-  },
-  {
-    label: t('navigation.appearance'),
-    icon: Palette,
-    path: '/theme',
-  },
-  {
-    label: t('navigation.settings'),
-    icon: Settings,
-    path: '/settings',
-  },
-]))
-const pluginNavIndex = navItems.value.findIndex(item => item.path === '/plugins')
-const pluginMenuVisible = computed(() => pluginGroupExpanded.value && !isCollapsed.value)
 const pluginViewNameCounts = computed(() => pluginPageViews.value.reduce((counts, view) => {
   const title = view.pages[0]?.title ?? view.name
   counts.set(title, (counts.get(title) ?? 0) + 1)
   return counts
 }, new Map<string, number>()))
-const pluginChildrenHeight = computed(() => pluginMenuVisible.value
-  ? (pluginPageViews.value.length + 1) * 44
-  : 0)
 
-function isActive(path: string) {
-  if (path === '/')
-    return route.path === '/'
-  return route.path.startsWith(path)
-}
-
-const activeNavIndex = computed(() => {
-  const index = navItems.value.findIndex(item => isActive(item.path))
-  return Math.max(0, index)
-})
-const activePluginIndex = computed(() => route.name === 'plugins'
-  ? 0
-  : pluginPageViews.value.findIndex(isPluginViewActive) + 1)
-const activeNavIndicatorStyle = computed(() => {
-  const inPluginMenu = isActive('/plugins') && pluginMenuVisible.value
-  const offset = inPluginMenu
-    ? 50 + activePluginIndex.value * 44
-    : activeNavIndex.value > pluginNavIndex
-      ? pluginChildrenHeight.value
-      : 0
-  // 主菜单与子菜单共享选中框，位置和尺寸在同一次过渡中变化
-  return {
-    transform: `translate3d(${inPluginMenu ? 24 : 0}px, ${activeNavIndex.value * 58 + offset}px, 0)`,
-    width: inPluginMenu ? 'calc(100% - 24px)' : '100%',
-    height: inPluginMenu ? '40px' : '46px',
-  }
-})
-const navFeedbackMuted = shallowRef(false)
-const { start: restoreNavFeedback, stop: stopNavFeedbackRestore } = useTimeoutFn(
-  () => {
-    navFeedbackMuted.value = false
+const navItems = computed<SidebarItem[]>(() => [
+  {
+    index: '/',
+    label: t('navigation.overview'),
+    icon: LayoutDashboard,
   },
-  300,
-  { immediate: false },
-)
-
-function muteNavFeedbackDuringMove() {
-  navFeedbackMuted.value = true
-  stopNavFeedbackRestore()
-  restoreNavFeedback()
-}
-
-function navigate(path: string) {
-  muteNavFeedbackDuringMove()
-  void router.push(path)
-  emit('navigate')
-}
-
-function togglePluginGroup() {
-  if (isCollapsed.value) {
-    navigate('/plugins')
-    return
+  {
+    index: '/accounts',
+    label: t('navigation.accounts'),
+    icon: Users,
+  },
+  {
+    index: '/proxies',
+    label: t('navigation.proxies'),
+    icon: Network,
+  },
+  {
+    index: '/groups',
+    label: t('navigation.groups'),
+    icon: FolderTree,
+  },
+  {
+    index: '/keys',
+    label: t('navigation.apiKeys'),
+    icon: KeyRound,
+  },
+  {
+    index: '/usage',
+    label: t('navigation.usage'),
+    icon: ChartNoAxesColumn,
+  },
+  {
+    index: 'plugins',
+    label: t('navigation.plugins'),
+    icon: Puzzle,
+    children: [
+      {
+        index: '/plugins',
+        label: t('navigation.pluginManagement'),
+        icon: BringToFront,
+      },
+      ...pluginPageViews.value.map(view => ({
+        index: `plugin:${view.target.instanceId}`,
+        label: pluginViewLabel(view),
+        icon: Blocks,
+      })),
+    ],
+  },
+  {
+    index: '/theme',
+    label: t('navigation.appearance'),
+    icon: Palette,
+  },
+  {
+    index: '/settings',
+    label: t('navigation.settings'),
+    icon: Settings,
+  },
+])
+const activeIndex = computed(() => {
+  if (route.path.startsWith('/plugins')) {
+    if (route.name === 'plugins')
+      return '/plugins'
+    const view = pluginPageViews.value.find(isPluginViewActive)
+    return view
+      ? `plugin:${view.target.instanceId}`
+      : 'plugins'
   }
-  pluginGroupExpanded.value = !pluginGroupExpanded.value
-}
-
-function navigatePluginView(view: PluginManagementView) {
-  const page = view.pages[0]
-  if (page)
-    navigate(router.resolve(pluginPageLocation(view, page)).fullPath)
-}
+  return navItems.value.find(item => item.index !== '/' && route.path.startsWith(item.index))?.index ?? '/'
+})
 
 function isPluginViewActive(view: PluginManagementView) {
-  const value = route.params.instanceId
-  const routeInstanceId = Array.isArray(value)
-    ? value[0]
-    : value
-  return route.name === 'plugin-page' && routeInstanceId === view.target.instanceId
+  return route.name === 'plugin-page' && route.params.instanceId === view.target.instanceId
 }
 
 function pluginViewLabel(view: PluginManagementView) {
@@ -209,6 +151,24 @@ function pluginViewLabel(view: PluginManagementView) {
   return `${title} · ${duplicateName
     ? shortPluginInstanceId(view.target.instanceId)
     : view.name}`
+}
+
+async function handleSelect(index: string) {
+  // 路由守卫可能取消跳转，菜单保持当前页，直到实际路由改变
+  sidebar.value?.updateActiveIndex(activeIndex.value)
+  let target: RouteLocationRaw = index === 'plugins'
+    ? '/plugins'
+    : index
+  if (index.startsWith('plugin:')) {
+    const view = pluginPageViews.value.find(item => `plugin:${item.target.instanceId}` === index)
+    const page = view?.pages[0]
+    if (!view || !page)
+      return
+    target = pluginPageLocation(view, page)
+  }
+  const failure = await router.push(target)
+  if (!failure || isNavigationFailure(failure, NavigationFailureType.duplicated))
+    emit('navigate')
 }
 
 function openSystemUpdate() {
@@ -222,401 +182,65 @@ async function handleLogout() {
   emit('navigate')
 }
 
-const sidebarEl = ref<HTMLElement | null>(null)
-const brandLabelEl = ref<HTMLElement | null>(null)
-const navSignalEl = useTemplateRef<HTMLElement>('navSignal')
-const collapsedSidebarWidth = 88
-const expandedSidebarWidth = 251
-const sidebarWidth = computed(() => (isCollapsed.value ? collapsedSidebarWidth : expandedSidebarWidth))
-const brandLabelVisible = shallowRef(!isCollapsed.value)
-const themeToggleLabel = computed(() => (effectiveTheme.value === 'dark'
+const themeToggleLabel = computed(() => effectiveTheme.value === 'dark'
   ? t('appearance.switchToLight')
-  : t('appearance.switchToDark')))
+  : t('appearance.switchToDark'))
 const versionText = computed(() => version.value?.version.trim() ?? '')
 const hasVersionLabel = computed(() => versionText.value.length > 0)
 const versionLabel = computed(() => `v${versionText.value}`)
-const updateButtonLabel = computed(() => (hasUpdate.value
+const updateButtonLabel = computed(() => hasUpdate.value
   ? t('navigation.update.available')
-  : t('navigation.update.open')))
-
-function prefersReducedMotion() {
-  return preferredMotion.value === 'reduce'
-}
-
-function animateSidebarLabels(collapsed: boolean) {
-  const labels = sidebarEl.value?.querySelectorAll<HTMLElement>('.sidebar-label')
-
-  if (!labels?.length) {
-    return
-  }
-
-  if (prefersReducedMotion()) {
-    gsap.set(labels, {
-      opacity: collapsed ? 0 : 1,
-      x: collapsed
-        ? -6
-        : 0,
-    })
-    return
-  }
-
-  gsap.to(labels, {
-    opacity: collapsed ? 0 : 1,
-    x: collapsed
-      ? -6
-      : 0,
-    duration: collapsed ? 0.16 : 0.2,
-    ease: collapsed ? 'power2.in' : 'power3.out',
-    stagger: collapsed ? 0 : 0.018,
-    overwrite: true,
-  })
-}
-
-function hideBrandLabel() {
-  const label = brandLabelEl.value
-
-  if (label) {
-    gsap.killTweensOf(label)
-    gsap.set(label, {
-      opacity: 0,
-      x: -6,
-    })
-  }
-
-  brandLabelVisible.value = false
-}
-
-function animateBrandLabelEnter() {
-  const label = brandLabelEl.value
-
-  if (!label) {
-    return
-  }
-
-  if (prefersReducedMotion()) {
-    gsap.set(label, {
-      opacity: 1,
-      x: 0,
-    })
-    return
-  }
-
-  gsap.fromTo(
-    label,
-    {
-      opacity: 0,
-      x: -6,
-    },
-    {
-      opacity: 1,
-      x: 0,
-      duration: 0.2,
-      ease: 'power3.out',
-      overwrite: true,
-    },
-  )
-}
-
-function animateSidebarWidth(collapsed: boolean) {
-  if (!sidebarEl.value) {
-    return
-  }
-
-  const targetWidth = collapsed ? collapsedSidebarWidth : expandedSidebarWidth
-  const currentWidth = sidebarEl.value.getBoundingClientRect().width
-
-  if (prefersReducedMotion()) {
-    gsap.set(sidebarEl.value, {
-      width: targetWidth,
-      flexBasis: targetWidth,
-    })
-    return
-  }
-
-  gsap.set(sidebarEl.value, {
-    width: currentWidth,
-    flexBasis: currentWidth,
-  })
-
-  gsap.to(sidebarEl.value, {
-    width: targetWidth,
-    flexBasis: targetWidth,
-    duration: 0.34,
-    ease: 'power3.out',
-    overwrite: true,
-  })
-}
-
-function animateNavSignal() {
-  const signal = navSignalEl.value
-  if (!signal)
-    return
-
-  gsap.killTweensOf(signal)
-  if (prefersReducedMotion()) {
-    gsap.set(signal, { opacity: 0, xPercent: -70 })
-    return
-  }
-
-  gsap.fromTo(
-    signal,
-    { opacity: 0.48, xPercent: -70 },
-    {
-      opacity: 0,
-      xPercent: 120,
-      duration: 0.52,
-      ease: 'power2.out',
-      overwrite: true,
-    },
-  )
-}
+  : t('navigation.update.open'))
 
 onMounted(() => {
   void pluginViewsStore.ensureLoaded().catch(() => undefined)
-  gsap.set(sidebarEl.value, {
-    width: sidebarWidth.value,
-    flexBasis: sidebarWidth.value,
-  })
-  if (isCollapsed.value) {
-    hideBrandLabel()
-  }
-  else {
-    gsap.set(brandLabelEl.value, {
-      opacity: 1,
-      x: 0,
-    })
-  }
-  animateSidebarLabels(isCollapsed.value)
-  gsap.set(navSignalEl.value, { opacity: 0, xPercent: -70 })
-})
-
-watch(
-  () => isCollapsed.value,
-  async (collapsed) => {
-    if (collapsed) {
-      hideBrandLabel()
-    }
-    else {
-      brandLabelVisible.value = true
-    }
-    animateSidebarLabels(Boolean(collapsed))
-    animateSidebarWidth(Boolean(collapsed))
-    await nextTick()
-    if (!collapsed) {
-      animateBrandLabelEnter()
-    }
-  },
-)
-
-watch(
-  () => route.path,
-  async (path, previousPath) => {
-    if (path === previousPath)
-      return
-    if (path.startsWith('/plugins'))
-      pluginGroupExpanded.value = true
-    muteNavFeedbackDuringMove()
-    await nextTick()
-    animateNavSignal()
-  },
-  { flush: 'post' },
-)
-
-onBeforeUnmount(() => {
-  stopNavFeedbackRestore()
-  const targets = [
-    sidebarEl.value,
-    brandLabelEl.value,
-    navSignalEl.value,
-  ].filter((target): target is HTMLElement =>
-    Boolean(target),
-  )
-  gsap.killTweensOf(targets)
-
-  const labels = sidebarEl.value?.querySelectorAll<HTMLElement>('.sidebar-label')
-  if (labels?.length) {
-    gsap.killTweensOf(labels)
-  }
 })
 </script>
 
 <template>
-  <aside
-    ref="sidebarEl"
-    class="z-20 h-dvh shrink-0 flex-col overflow-hidden bg-(--z-layout-sider-bg) shadow-z-layout-sider"
-    :class="[
-      mobile ? 'flex' : 'hidden min-[961px]:flex',
-      isCollapsed ? 'w-22 basis-22 items-center' : 'w-62.75 basis-62.75',
-    ]"
+  <ZSidebar
+    ref="sidebar"
+    class="z-20"
+    :class="mobile ? 'flex' : 'hidden min-[961px]:flex'"
+    :items="navItems"
+    :default-active="activeIndex"
+    :collapse="isCollapsed"
+    :navigation-label="t('navigation.mainLabel')"
+    @select="handleSelect"
   >
-    <div
-      class="mx-4 mt-6 grid h-12 shrink-0 grid-cols-[44px_minmax(0,1fr)] items-center"
-      :class="isCollapsed ? 'w-11 justify-start' : 'self-stretch gap-3'"
-    >
+    <template #brand-icon>
       <ZMotionIcon
         variant="brand"
         class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-z"
       >
         <AppBrandMark class="block size-11 select-none" />
       </ZMotionIcon>
-      <span v-show="brandLabelVisible" ref="brandLabelEl" class="grid min-w-33 content-center overflow-hidden">
-        <strong class="text-base leading-[1.1] font-heavy text-z-text"> Codex Proxy </strong>
-        <span class="mt-1.5 flex h-4.5 min-w-0 items-center gap-2">
-          <span class="shrink-0 text-xs leading-none font-emphasis text-z-text-secondary"> Rust build </span>
-          <button
-            v-if="hasVersionLabel"
-            type="button"
-            class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-z-sm border-0 px-1.5 font-mono text-[10px] leading-none font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-z-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-z-bg-container"
-            :class="[
-              hasUpdate
-                ? 'bg-z-success-container text-z-success-on-container hover:bg-z-success-container-hover'
-                : 'bg-z-fill-quaternary text-z-text-quaternary hover:bg-z-fill-tertiary hover:text-z-text-secondary',
-            ]"
-            :aria-label="updateButtonLabel"
-            @click="openSystemUpdate"
-          >
-            <span>{{ versionLabel }}</span>
-            <ArrowUpCircle v-if="hasUpdate" class="size-3 shrink-0 text-z-success" />
-          </button>
-        </span>
+    </template>
+    <template #brand>
+      <strong class="text-base leading-[1.1] font-heavy text-z-text"> Codex Proxy </strong>
+      <span class="mt-1.5 flex h-4.5 min-w-0 items-center gap-2">
+        <span class="shrink-0 text-xs leading-none font-emphasis text-z-text-secondary"> Rust build </span>
+        <button
+          v-if="hasVersionLabel"
+          type="button"
+          class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-z-sm border-0 px-1.5 font-mono text-[10px] leading-none font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-z-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-z-bg-container"
+          :class="[
+            hasUpdate
+              ? 'bg-z-success-container text-z-success-on-container hover:bg-z-success-container-hover'
+              : 'bg-z-fill-quaternary text-z-text-quaternary hover:bg-z-fill-tertiary hover:text-z-text-secondary',
+          ]"
+          :aria-label="updateButtonLabel"
+          @click="openSystemUpdate"
+        >
+          <span>{{ versionLabel }}</span>
+          <ArrowUpCircle v-if="hasUpdate" class="size-3 shrink-0 text-z-success" />
+        </button>
       </span>
-    </div>
-
-    <ZScrollbar class="my-6 w-full flex-1">
-      <div class="px-4">
-        <!-- 焦点环绘制在按钮内侧，避免被滚动区和折叠菜单裁切 -->
-        <nav class="relative grid gap-3" :class="isCollapsed ? 'mx-auto w-11.5' : 'w-full'" :aria-label="t('navigation.mainLabel')">
-          <span
-            class="pointer-events-none absolute left-0 top-0 overflow-hidden rounded-z bg-z-menu-item-selected-bg transition-[transform,width,height] duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-            :style="activeNavIndicatorStyle"
-          >
-            <span
-              ref="navSignal"
-              class="absolute inset-y-0 left-0 w-2/3 [background:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--z-color-info)_9%,transparent),transparent)]"
-            />
-          </span>
-          <template v-for="item in navItems" :key="item.label">
-            <div v-if="item.path === '/plugins'" class="relative z-10 grid min-w-0">
-              <ZPopover trigger="hover" placement="right" role="tooltip" :show-after="800" :disabled="!isCollapsed" :enterable="false" class="w-full">
-                <template #reference="{ close }">
-                  <button
-                    type="button"
-                    class="inline-flex h-11.5 cursor-pointer items-center rounded-z border-0 bg-transparent text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-z-control-outline"
-                    :class="[
-                      isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
-                      isActive(item.path)
-                        ? navFeedbackMuted
-                          ? 'font-bold text-z-text transition-none'
-                          : 'font-bold text-z-text transition-colors duration-200'
-                        : navFeedbackMuted
-                          ? 'font-semibold text-z-text-secondary transition-none'
-                          : 'font-semibold text-z-text-secondary transition-colors duration-200 hover:bg-z-fill-quaternary hover:text-z-text',
-                    ]"
-                    :aria-expanded="isCollapsed ? undefined : pluginGroupExpanded"
-                    :aria-controls="isCollapsed ? undefined : pluginMenuId"
-                    :aria-label="isCollapsed ? item.label : undefined"
-                    @click="close(); togglePluginGroup()"
-                  >
-                    <component :is="item.icon" class="shrink-0" :size="20" />
-                    <span
-                      class="sidebar-label min-w-0 flex-1 overflow-hidden whitespace-nowrap text-left transition-[opacity,transform] duration-200"
-                      :class="isCollapsed ? 'hidden' : 'w-auto'"
-                    >
-                      {{ item.label }}
-                    </span>
-                    <span
-                      v-if="!isCollapsed"
-                      class="sidebar-label inline-flex size-4 shrink-0"
-                      aria-hidden="true"
-                    >
-                      <ChevronDown
-                        class="size-4 transition-transform duration-200 motion-reduce:transition-none"
-                        :class="pluginGroupExpanded ? undefined : '-rotate-90'"
-                      />
-                    </span>
-                  </button>
-                </template>
-                <span class="block px-3 py-2 text-z-sm whitespace-nowrap">{{ item.label }}</span>
-              </ZPopover>
-
-              <div
-                :id="pluginMenuId"
-                class="grid transition-[grid-template-rows] duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-                :class="pluginMenuVisible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'"
-                :inert="!pluginMenuVisible"
-                :aria-label="t('navigation.pluginsLabel')"
-              >
-                <div class="min-h-0 overflow-hidden">
-                  <div class="relative ml-3 grid gap-1 pt-1 pl-3">
-                    <button
-                      type="button"
-                      class="relative inline-flex h-10 min-w-0 cursor-pointer items-center gap-2 rounded-z border-0 bg-transparent px-3 text-left text-z-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-z-control-outline motion-reduce:transition-none"
-                      :class="route.name === 'plugins'
-                        ? 'font-emphasis text-z-text'
-                        : navFeedbackMuted ? 'font-semibold text-z-text-secondary' : 'font-semibold text-z-text-secondary hover:bg-z-fill-quaternary hover:text-z-text'"
-                      :aria-current="route.name === 'plugins' ? 'page' : undefined"
-                      @click="navigate('/plugins')"
-                    >
-                      <BringToFront class="block size-4 shrink-0" />
-                      <span class="sidebar-label truncate leading-none">{{ t('navigation.pluginManagement') }}</span>
-                    </button>
-                    <button
-                      v-for="view in pluginPageViews"
-                      :key="view.target.instanceId"
-                      type="button"
-                      class="relative inline-flex h-10 min-w-0 cursor-pointer items-center gap-2 rounded-z border-0 bg-transparent px-3 text-left text-z-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-z-control-outline motion-reduce:transition-none"
-                      :class="isPluginViewActive(view)
-                        ? 'font-emphasis text-z-text'
-                        : navFeedbackMuted ? 'font-semibold text-z-text-secondary' : 'font-semibold text-z-text-secondary hover:bg-z-fill-quaternary hover:text-z-text'"
-                      :aria-current="isPluginViewActive(view) ? 'page' : undefined"
-                      @click="navigatePluginView(view)"
-                    >
-                      <Blocks class="block size-4 shrink-0" />
-                      <span class="sidebar-label truncate leading-none">{{ pluginViewLabel(view) }}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <ZPopover v-else trigger="hover" placement="right" role="tooltip" :show-after="800" :disabled="!isCollapsed" :enterable="false" class="relative z-10 w-full">
-              <template #reference="{ close }">
-                <button
-                  type="button"
-                  class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-z border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-z-control-outline"
-                  :class="[
-                    isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
-                    isActive(item.path)
-                      ? navFeedbackMuted
-                        ? 'bg-transparent font-bold text-z-text transition-none'
-                        : 'bg-transparent font-bold text-z-text transition-colors duration-200'
-                      : navFeedbackMuted
-                        ? 'bg-transparent font-semibold text-z-text-secondary transition-none'
-                        : 'bg-transparent font-semibold text-z-text-secondary transition-colors duration-200 hover:bg-z-fill-quaternary hover:text-z-text',
-                  ]"
-                  :aria-label="isCollapsed ? item.label : undefined"
-                  @click="close(); navigate(item.path)"
-                >
-                  <component :is="item.icon" class="shrink-0" :size="20" />
-                  <span
-                    class="sidebar-label overflow-hidden whitespace-nowrap transition-[opacity,transform] duration-200"
-                    :class="isCollapsed ? 'pointer-events-none w-0' : 'w-auto'"
-                  >
-                    {{ item.label }}
-                  </span>
-                </button>
-              </template>
-              <span class="block px-3 py-2 text-z-sm whitespace-nowrap">{{ item.label }}</span>
-            </ZPopover>
-          </template>
-        </nav>
-      </div>
-    </ZScrollbar>
-
-    <div class="mx-4 mb-6 shrink-0" :class="isCollapsed ? 'w-11' : 'self-stretch'">
+    </template>
+    <template #footer>
       <div
         class="bg-z-fill-quaternary"
-        :class="isCollapsed ? 'grid gap-1 rounded-z p-1' : 'grid h-11 grid-cols-[4.25rem_auto] items-center justify-between rounded-z-lg px-2'"
+        :class="isCollapsed ? 'grid gap-1 rounded-z p-1' : 'grid min-h-11 grid-cols-[4.25rem_auto] items-center justify-between rounded-z-lg px-2'"
       >
         <span
           v-if="!isCollapsed"
@@ -626,7 +250,7 @@ onBeforeUnmount(() => {
           {{ t('navigation.online') }}
         </span>
 
-        <div class="flex shrink-0 items-center" :class="isCollapsed ? 'grid gap-1' : 'gap-1'">
+        <div :class="isCollapsed ? 'grid justify-items-center gap-1' : 'flex shrink-0 items-center gap-1 [&_button]:max-w-8'">
           <ZIconButton
             v-if="isCollapsed && hasUpdate"
             type="success" variant="plain"
@@ -674,6 +298,6 @@ onBeforeUnmount(() => {
           </ZIconButton>
         </div>
       </div>
-    </div>
-  </aside>
+    </template>
+  </ZSidebar>
 </template>

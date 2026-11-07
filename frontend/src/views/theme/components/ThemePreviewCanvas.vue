@@ -45,7 +45,7 @@ const boardStyle = computed<CSSProperties>(() => ({
 <template>
   <div
     ref="viewport"
-    class="@container/preview relative min-h-0 overflow-hidden rounded-z-lg bg-z-bg-layout bg-[radial-gradient(circle,color-mix(in_srgb,var(--z-color-text-quaternary)_24%,transparent)_1px,transparent_1px)] bg-size-[18px_18px] shadow-z-secondary select-none"
+    class="@container/preview relative min-h-0 overflow-hidden rounded-z-lg bg-z-bg-layout bg-[radial-gradient(circle,color-mix(in_srgb,var(--z-color-text-quaternary)_24%,transparent)_1px,transparent_1px)] bg-size-[18px_18px] select-none"
     :class="dragging ? 'cursor-grabbing' : 'cursor-grab'"
     role="application"
     tabindex="0"

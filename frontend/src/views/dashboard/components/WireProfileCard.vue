@@ -163,7 +163,7 @@ const authProtocol = computed(() => {
 const runtimeEnvironment = computed(() => {
   const target = profile.value?.target
   if (!target)
-    return { primary: '—', details: [] as string[], title: '—' }
+    return { primary: '—', details: [] as string[] }
 
   const present = (value: string) => value !== '—' && value.toLowerCase() !== 'unknown'
   const primary = [target.osType, target.osVersion].filter(present).join(' ')
@@ -171,7 +171,6 @@ const runtimeEnvironment = computed(() => {
   return {
     primary: primary || '—',
     details,
-    title: [primary, ...details].filter(Boolean).join(' · '),
   }
 })
 
@@ -238,13 +237,12 @@ watch(
             <div class="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1.5">
               <strong
                 :aria-label="profile.version"
-                class="inline-flex max-w-full min-w-0 items-baseline gap-2 font-mono leading-none tabular-nums"
-                :title="profile.version"
+                class="inline-flex max-w-full min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 font-mono leading-none tabular-nums"
               >
                 <span class="wrap-break-word text-[27px] leading-[1.05] font-heavy text-z-text">
                   {{ versionParts.release }}
                 </span>
-                <span v-if="versionParts.prerelease" class="truncate text-z-sm font-bold text-z-text-secondary">
+                <span v-if="versionParts.prerelease" class="text-z-sm font-bold wrap-anywhere text-z-text-secondary">
                   {{ versionParts.prerelease }}
                 </span>
               </strong>
@@ -263,10 +261,7 @@ watch(
                 <ShieldCheck class="size-3.25 text-z-text-tertiary" />
                 {{ t('dashboard.clientIdentity.authProtocol') }}
               </dt>
-              <dd
-                class="mt-2 mb-0 font-mono text-z-lg leading-snug font-bold wrap-anywhere tabular-nums text-z-text"
-                :title="authProtocol"
-              >
+              <dd class="mt-2 mb-0 font-mono text-z-lg leading-snug font-bold wrap-anywhere tabular-nums text-z-text">
                 {{ authProtocol }}
               </dd>
             </div>
@@ -276,10 +271,7 @@ watch(
                 <Monitor class="size-3.25 text-z-text-tertiary" />
                 {{ profile.provider === 'openai' ? t('dashboard.clientIdentity.emulatedEnvironment') : t('dashboard.clientIdentity.environment') }}
               </dt>
-              <dd
-                class="mt-2 mb-0 font-mono text-z-lg leading-snug font-bold wrap-anywhere tabular-nums text-z-text"
-                :title="runtimeEnvironment.title"
-              >
+              <dd class="mt-2 mb-0 font-mono text-z-lg leading-snug font-bold wrap-anywhere tabular-nums text-z-text">
                 {{ runtimeEnvironment.primary }}
                 <span v-if="runtimeEnvironment.details.length" class="text-z-xs font-emphasis text-z-text-secondary">
                   <template v-for="detail in runtimeEnvironment.details" :key="detail"> · {{ detail }} </template>
@@ -292,10 +284,7 @@ watch(
                 <Terminal class="size-3.25 text-z-text-tertiary" />
                 {{ attribute.label }}
               </dt>
-              <dd
-                class="mt-2 mb-0 font-mono text-[16px] leading-snug font-heavy wrap-anywhere tabular-nums text-z-text"
-                :title="attribute.value"
-              >
+              <dd class="mt-2 mb-0 font-mono text-[16px] leading-snug font-heavy wrap-anywhere tabular-nums text-z-text">
                 {{ attribute.value }}
               </dd>
             </div>

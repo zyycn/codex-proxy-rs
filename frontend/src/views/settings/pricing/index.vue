@@ -2,7 +2,7 @@
 import type { PricingRow } from './model'
 
 import type { ModelPricing, PricingChange } from '@/api'
-import { ZConfirmDialog, ZPagination } from '@codex-proxy/ui'
+import { ZCard, ZConfirmDialog, ZPagination } from '@codex-proxy/ui'
 import { computed, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PricingBatchModal from './PricingBatchModal.vue'
@@ -52,7 +52,7 @@ function requestDelete(row: PricingRow) {
 </script>
 
 <template>
-  <section class="flex min-h-0 min-w-0 flex-col rounded-z-card bg-z-bg-container p-3 shadow-z-card sm:p-4" :aria-label="t('settings.page.tabs.pricing')">
+  <ZCard padding="none" class="flex min-h-0 min-w-0 flex-col p-3 sm:p-4" :aria-label="t('settings.page.tabs.pricing')">
     <PricingToolbar
       v-model:search="search"
       v-model:provider="provider"
@@ -77,5 +77,5 @@ function requestDelete(row: PricingRow) {
     </ZConfirmDialog>
     <PricingBatchModal v-model="batchOpen" :rows="targets" :reset="batchReset" :saving="saving" @confirm="saveBatch" />
     <PricingSyncModal v-model="syncOpen" :preview="preview" :catalog="syncCatalog" :saving="saving" @confirm="confirmSync" />
-  </section>
+  </ZCard>
 </template>

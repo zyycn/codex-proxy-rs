@@ -54,7 +54,7 @@ const metrics = computed(() => [
         </ZMotionIcon>
         <span class="sr-only">{{ t('usage.summary.consumeTokens') }}</span>
         <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-          <strong class="min-w-0 font-mono text-[32px] leading-[1.05] font-heavy wrap-anywhere tabular-nums text-z-text" :title="formatCompactNumber(summary.totalTokens)">
+          <strong class="min-w-0 font-mono text-[32px] leading-[1.05] font-heavy wrap-anywhere tabular-nums text-z-text">
             <AnimatedMetricValue :value="formatInteger(summary.totalTokens)" :raw-value="summary.totalTokens" :formatter="formatInteger" />
           </strong>
           <span class="shrink-0 font-mono text-z-sm leading-none whitespace-nowrap text-z-text-tertiary">≈ {{ formatCompactNumber(summary.totalTokens) }}</span>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { PluginManagementView } from '@/api'
 
-import { ZButton, ZEmpty, ZTag } from '@codex-proxy/ui'
+import { ZButton, ZCard, ZEmpty, ZTag } from '@codex-proxy/ui'
 
 import { Blocks, ExternalLink } from '@lucide/vue'
 import { computed } from 'vue'
@@ -40,10 +40,12 @@ function openView(view: PluginManagementView) {
     />
 
     <div v-else class="grid content-start gap-3 overflow-y-auto sm:grid-cols-2 xl:grid-cols-3">
-      <article
+      <ZCard
         v-for="view in pageViews"
         :key="view.target.instanceId"
-        class="flex min-w-0 flex-col gap-3 rounded-z-card bg-z-bg-container p-4 shadow-z-card"
+        as="article"
+        padding="compact"
+        class="flex min-w-0 flex-col gap-3"
       >
         <div class="flex min-w-0 items-start gap-3">
           <span class="inline-flex size-9 shrink-0 items-center justify-center rounded-z bg-z-primary-container text-z-primary-on-container">
@@ -72,7 +74,7 @@ function openView(view: PluginManagementView) {
           </template>
           {{ t('plugins.extensions.openPage') }}
         </ZButton>
-      </article>
+      </ZCard>
     </div>
   </div>
 </template>

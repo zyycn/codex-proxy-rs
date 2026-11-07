@@ -374,12 +374,6 @@ function numericTokenValue(name: ThemeTokenName) {
     </section>
 
     <section class="grid gap-2" :aria-label="`${activeComponent.label} Component Token`">
-      <div class="rounded-z-lg bg-z-bg-container px-3 py-3 shadow-z-tertiary">
-        <p class="m-0 text-[10px] leading-normal font-emphasis text-z-text-secondary">
-          {{ t('appearance.componentTokens.description', { label: activeComponent.label }) }}
-        </p>
-      </div>
-
       <template v-for="token in visibleTokens" :key="token.name">
         <ThemeColorTokenField
           v-if="token.kind === 'color'"

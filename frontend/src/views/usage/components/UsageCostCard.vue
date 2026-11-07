@@ -275,25 +275,25 @@ function costAmount(value: string | null, pointIndex: number) {
         <div v-if="hasData && cost" class="grid grid-cols-2 gap-x-1 gap-y-3 rounded-xl bg-z-fill-quaternary/45 p-2 @min-[24rem]/cost:grid-cols-3 @min-[40rem]/cost:grid-cols-5">
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="text-[10px] font-bold text-z-text-quaternary" :title="t('usage.billing.totalCost')">{{ t('usage.cost.actualCost') }}</span>
-            <strong class="wrap-anywhere font-mono text-z-sm font-heavy tabular-nums text-z-text" :title="formatUsd(cost.estimatedCost)">
+            <strong class="wrap-anywhere font-mono text-z-sm font-heavy tabular-nums text-z-text">
               {{ formatUsd(cost.estimatedCost) }}
             </strong>
           </div>
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="text-[10px] font-bold text-z-text-quaternary" :title="t('usage.cost.cacheSavings')">{{ t('usage.cost.savings') }}</span>
-            <strong class="wrap-anywhere font-mono text-z-sm font-heavy tabular-nums text-z-green-text" :title="formatUsd(cost.cacheSavings)">
+            <strong class="wrap-anywhere font-mono text-z-sm font-heavy tabular-nums text-z-green-text">
               {{ formatUsd(cost.cacheSavings) }}
             </strong>
           </div>
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="text-[10px] font-bold text-z-text-quaternary" :title="t('usage.cost.tierPremium')">{{ t('usage.cost.premium') }}</span>
-            <strong class="wrap-anywhere font-mono text-z-sm font-heavy tabular-nums text-z-orange-text" :title="formatUsd(cost.tierPremium)">
+            <strong class="wrap-anywhere font-mono text-z-sm font-heavy tabular-nums text-z-orange-text">
               {{ formatUsd(cost.tierPremium) }}
             </strong>
           </div>
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="text-[10px] font-bold text-z-text-quaternary" :title="t('usage.cost.perSuccessfulRequestHelp')">{{ t('usage.cost.perSuccessfulRequest') }}</span>
-            <strong class="wrap-anywhere font-mono text-z-sm font-heavy tabular-nums text-z-text" :title="formatUsd(cost.costPerSuccessfulRequest, true)">
+            <strong class="wrap-anywhere font-mono text-z-sm font-heavy tabular-nums text-z-text">
               {{ formatUsd(cost.costPerSuccessfulRequest, true) }}
             </strong>
           </div>
