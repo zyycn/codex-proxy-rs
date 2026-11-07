@@ -1201,6 +1201,9 @@ async fn api_key_catalog_accepts_namespaced_model_ids_without_inventing_capabili
         "gpt-5.4",
         "ft:gpt-4.1-mini:example:custom:abc",
         "vendor/model",
+        "gpt-image-2",
+        "gpt-live-1",
+        "tts-1",
     ];
     Mock::given(method("GET"))
         .and(path("/models"))
@@ -1245,6 +1248,10 @@ async fn api_key_catalog_accepts_namespaced_model_ids_without_inventing_capabili
         };
         assert!(presentation.supported_reasoning_efforts().is_empty());
         assert_eq!(presentation.default_reasoning_effort(), None);
+        assert!(
+            presentation.hidden(),
+            "untyped API IDs must not be offered as Codex Agents"
+        );
     }
 }
 

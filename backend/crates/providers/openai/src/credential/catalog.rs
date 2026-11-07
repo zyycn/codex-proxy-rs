@@ -466,7 +466,10 @@ impl CodexCredentialCatalogService {
                                             Some(model.request_model().as_str().to_owned()),
                                             None,
                                         )
-                                        .with_agent_tools(true, false),
+                                        .with_agent_tools(true, false)
+                                        // Plain /models IDs provide no Codex Agent metadata.
+                                        // Keep them callable, but out of the Agent picker.
+                                        .with_hidden(true),
                                     )
                                 },
                             })
