@@ -50,7 +50,7 @@ const queueFailureOptions = computed(() => [
         <template #label-extra>
           <ZPopover class="-my-1" trigger="hover-click" placement="top-start">
             <template #reference="{ open }">
-              <ZIconButton variant="link" :aria-label="t('settings.concurrency.autoReview.helpTitle')" :title="undefined" :aria-expanded="open" class="size-6!">
+              <ZIconButton variant="link" :aria-label="t('settings.concurrency.autoReview.helpTitle')" :aria-expanded="open" class="size-6!">
                 <CircleAlert class="size-3.5" aria-hidden="true" />
               </ZIconButton>
             </template>
@@ -79,7 +79,7 @@ const queueFailureOptions = computed(() => [
         <template #label-extra>
           <ZPopover class="-my-1" trigger="hover-click" placement="top-start">
             <template #reference="{ open }">
-              <ZIconButton variant="link" :aria-label="t('settings.concurrency.retryAfter.helpTitle')" :title="undefined" :aria-expanded="open" class="size-6!">
+              <ZIconButton variant="link" :aria-label="t('settings.concurrency.retryAfter.helpTitle')" :aria-expanded="open" class="size-6!">
                 <CircleAlert class="size-3.5" aria-hidden="true" />
               </ZIconButton>
             </template>
@@ -105,7 +105,7 @@ const queueFailureOptions = computed(() => [
         <template #label-extra>
           <ZPopover class="-my-1" trigger="hover-click" placement="top-start">
             <template #reference="{ open }">
-              <ZIconButton variant="link" :aria-label="t('settings.concurrency.queueFailureHelpTitle')" :title="undefined" :aria-expanded="open" class="size-6!">
+              <ZIconButton variant="link" :aria-label="t('settings.concurrency.queueFailureHelpTitle')" :aria-expanded="open" class="size-6!">
                 <CircleAlert class="size-3.5" aria-hidden="true" />
               </ZIconButton>
             </template>

@@ -70,7 +70,6 @@ function handleRetentionKeydown(event: KeyboardEvent) {
           <template #reference>
             <ZIconButton
               variant="link"
-              :title="undefined"
               :aria-label="t('accounts.importTasks.taskRetentionInstructions')"
               size="small"
               :aria-expanded="retentionOpen"

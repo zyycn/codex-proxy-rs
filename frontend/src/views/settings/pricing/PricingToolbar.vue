@@ -76,7 +76,7 @@ const providerOptions = computed(() => props.providers.map(value => ({
         <div class="flex items-center gap-1">
           <ZPopover v-model="syncInfoOpen" placement="bottom-end" trigger="hover-click">
             <template #reference>
-              <ZIconButton variant="link" :title="undefined" :aria-label="t('settings.pricing.synchronizationInstructions')" size="small" :aria-expanded="syncInfoOpen" :aria-controls="syncInfoOpen ? syncInfoId : undefined">
+              <ZIconButton variant="link" :aria-label="t('settings.pricing.synchronizationInstructions')" size="small" :aria-expanded="syncInfoOpen" :aria-controls="syncInfoOpen ? syncInfoId : undefined">
                 <CircleAlert class="size-3.5" />
               </ZIconButton>
             </template>

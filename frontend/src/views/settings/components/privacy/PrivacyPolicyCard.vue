@@ -113,7 +113,7 @@ function remove(rule: PrivacyRule) {
             <ZSelect v-model="model.onError" size="small" class="w-34" :options="failureOptions" :aria-label="t('settings.privacy.ruleExecutionFailed')" :disabled="disabled" />
             <ZPopover trigger="hover-click" placement="top-end">
               <template #reference="{ open: helpOpen }">
-                <ZIconButton variant="link" size="small" :aria-label="t('settings.privacy.ruleExecutionInstructions')" :title="undefined" :aria-expanded="helpOpen">
+                <ZIconButton variant="link" size="small" :aria-label="t('settings.privacy.ruleExecutionInstructions')" :aria-expanded="helpOpen">
                   <CircleHelp class="size-3.5" />
                 </ZIconButton>
               </template>

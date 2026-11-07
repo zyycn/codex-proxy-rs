@@ -15,7 +15,6 @@ const { t } = useI18n({ useScope: 'global' })
   <ZIconButton
     size="default"
     :aria-label="loading ? t('common.location.resolving') : t('common.location.detect')"
-    :title="loading ? t('common.location.resolving') : t('common.location.detect')"
     :aria-busy="loading"
     :disabled="disabled || loading"
     @click="emit('detect')"

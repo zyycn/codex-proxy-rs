@@ -62,7 +62,7 @@ watch(() => step.value.action, (action) => {
       <template #label-extra>
         <ZPopover trigger="hover-click">
           <template #reference="{ open: helpOpen }">
-            <ZIconButton variant="link" size="small" :aria-label="t('settings.privacy.steps.fieldPathSyntax')" :title="undefined" class="-my-2" :aria-expanded="helpOpen">
+            <ZIconButton variant="link" size="small" :aria-label="t('settings.privacy.steps.fieldPathSyntax')" class="-my-2" :aria-expanded="helpOpen">
               <CircleHelp class="size-3.5" />
             </ZIconButton>
           </template>
@@ -84,7 +84,7 @@ watch(() => step.value.action, (action) => {
       <template #label-extra>
         <ZPopover trigger="hover-click">
           <template #reference="{ open: helpOpen }">
-            <ZIconButton variant="link" size="small" :aria-label="t('settings.privacy.steps.regularSyntaxDescription')" :title="undefined" class="-my-2" :aria-expanded="helpOpen">
+            <ZIconButton variant="link" size="small" :aria-label="t('settings.privacy.steps.regularSyntaxDescription')" class="-my-2" :aria-expanded="helpOpen">
               <CircleHelp class="size-3.5" />
             </ZIconButton>
           </template>

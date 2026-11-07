@@ -34,7 +34,6 @@ const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required:
         <ZIconButton
           variant="link"
           :aria-label="t('settings.clientVersion.openGuide')"
-          :title="undefined"
           class="size-6!"
           @click="emit('help')"
         >

@@ -114,7 +114,7 @@ function moveWithKeyboard(index: number, offset: -1 | 1) {
         </h3>
         <ZPopover trigger="hover-click">
           <template #reference="{ open: helpOpen }">
-            <ZIconButton variant="link" size="small" :aria-label="t('settings.privacy.steps.helpTitle')" :title="undefined" class="size-5!" :aria-expanded="helpOpen">
+            <ZIconButton variant="link" size="small" :aria-label="t('settings.privacy.steps.helpTitle')" class="size-5!" :aria-expanded="helpOpen">
               <CircleHelp class="size-3.5" />
             </ZIconButton>
           </template>

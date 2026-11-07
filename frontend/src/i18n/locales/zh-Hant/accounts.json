@@ -145,8 +145,7 @@
     },
     "capacity": {
       "concurrentRequestsLimit": "賬號併發佔用 {value}，上限 {value2}",
-      "viewConcurrencyDetails": "{label}，查看併發明細",
-      "viewDetails": "{label}，查看明細"
+      "viewConcurrencyDetails": "{label}，查看併發明細"
     },
     "concurrency": {
       "title": "併發明細",

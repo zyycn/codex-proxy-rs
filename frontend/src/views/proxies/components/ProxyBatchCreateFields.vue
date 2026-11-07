@@ -23,7 +23,7 @@ const invalid = computed(() => props.rows.filter(row => row.error))
       <template #label-extra>
         <ZPopover class="-my-1" trigger="hover-click" placement="bottom-start">
           <template #reference="{ open }">
-            <ZIconButton variant="link" :aria-label="t('proxies.batchCreate.formatDescription')" :title="undefined" :aria-expanded="open" class="size-6!">
+            <ZIconButton variant="link" :aria-label="t('proxies.batchCreate.formatDescription')" :aria-expanded="open" class="size-6!">
               <CircleHelp class="size-3.5" aria-hidden="true" />
             </ZIconButton>
           </template>

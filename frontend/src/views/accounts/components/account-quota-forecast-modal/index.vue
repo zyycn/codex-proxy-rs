@@ -117,7 +117,6 @@ function handleExplanationKeydown(event: KeyboardEvent) {
           <template #reference>
             <ZIconButton
               variant="link"
-              :title="undefined"
               :aria-label="t('accounts.quotaForecast.forecastDescription')"
               size="small"
               :aria-expanded="explanationOpen"

@@ -45,7 +45,6 @@ function select() {
           target="_blank"
           rel="noopener noreferrer"
           :aria-label="t('keys.configuration.viewOnGitHub', { name: 'CC Switch' })"
-          :title="t('keys.configuration.viewOnGitHub', { name: 'CC Switch' })"
           class="inline-grid size-9 shrink-0 place-items-center rounded-z-sm text-z-text-tertiary outline-none transition-colors hover:text-z-text focus-visible:ring-2 focus-visible:ring-z-control-outline focus-visible:ring-inset motion-reduce:transition-none"
         >
           <Github class="size-6" aria-hidden="true" />

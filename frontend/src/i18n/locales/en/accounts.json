@@ -145,8 +145,7 @@
     },
     "capacity": {
       "concurrentRequestsLimit": "Concurrent requests: {value}, limit: {value2}",
-      "viewConcurrencyDetails": "{label}, view concurrency details",
-      "viewDetails": "{label}, view details"
+      "viewConcurrencyDetails": "{label}, view concurrency details"
     },
     "concurrency": {
       "title": "Concurrency details",

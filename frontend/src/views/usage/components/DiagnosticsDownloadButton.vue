@@ -20,7 +20,7 @@ function download() {
 </script>
 
 <template>
-  <ZButton type="primary" :aria-label="t('usage.diagnostics.downloadDiagnosticPackage')" :title="t('usage.diagnostics.downloadDiagnosticPackage')" :disabled="!active || (!requestId && !errorId)" @click="download">
+  <ZButton type="primary" :aria-label="t('usage.diagnostics.downloadDiagnosticPackage')" :disabled="!active || (!requestId && !errorId)" @click="download">
     <template #icon>
       <Download :size="16" />
     </template>

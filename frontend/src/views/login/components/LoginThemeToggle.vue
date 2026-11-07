@@ -22,7 +22,6 @@ const label = computed(() => effectiveTheme.value === 'dark'
     type="button"
     class="relative inline-grid h-9 w-20 shrink-0 cursor-pointer grid-cols-2 place-items-center rounded-[20px] border-0 bg-z-bg-text-hover p-0 outline-none focus-visible:ring-2 focus-visible:ring-z-control-outline"
     :aria-label="label"
-    :title="label"
     @click="themeStore.toggleTheme($event)"
   >
     <Sun

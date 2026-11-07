@@ -472,7 +472,7 @@ onBeforeUnmount(() => {
                 ? 'bg-z-success-container text-z-success-on-container hover:bg-z-success-container-hover'
                 : 'bg-z-fill-quaternary text-z-text-quaternary hover:bg-z-fill-tertiary hover:text-z-text-secondary',
             ]"
-            :title="updateButtonLabel"
+            :aria-label="updateButtonLabel"
             @click="openSystemUpdate"
           >
             <span>{{ versionLabel }}</span>

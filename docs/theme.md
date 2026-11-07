@@ -243,7 +243,7 @@ Token 直接覆盖时不会自动重算同组件的其他状态；需要保持�
 | IconButton | `--z-icon-button-secondary-bg / hover-bg / active-bg` |
 | Input | `--z-input-bg / hover-bg / active-bg / error-active-bg` 与对应 Shadow |
 | Menu | `--z-menu-item-selected-bg` |
-| Popover | `--z-popover-header-bg` |
+| Popover | `--z-popover-header-bg`、`--z-popover-shadow` |
 | Table | `--z-table-row-bg / stripe-bg / hover-bg / selected-bg / selected-hover-bg / height` |
 | Card | `--z-card-bg / border-radius / shadow` |
 | Layout | `--z-layout-sider-bg / shadow` |

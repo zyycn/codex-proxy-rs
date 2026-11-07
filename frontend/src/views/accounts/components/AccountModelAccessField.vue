@@ -257,7 +257,6 @@ watch(search, () => {
               :aria-label="t('accounts.modelAccess.catalogHelpTitle')"
               :aria-describedby="open ? id : undefined"
               :aria-expanded="open"
-              :title="undefined"
               @keydown="handleCatalogHelpKeydown($event, open, close)"
             >
               <CircleAlert class="size-[1em] text-z-xs" aria-hidden="true" />

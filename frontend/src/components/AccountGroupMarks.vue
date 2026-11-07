@@ -43,7 +43,6 @@ const groupMarks = computed(() =>
           :aria-label="group.label"
           :aria-expanded="open"
           :aria-describedby="open ? id : undefined"
-          :title="undefined"
         >
           <span class="size-4 rounded-sm" :style="{ backgroundColor: group.color }" aria-hidden="true" />
         </ZIconButton>

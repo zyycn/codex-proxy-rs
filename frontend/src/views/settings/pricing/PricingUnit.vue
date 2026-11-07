@@ -18,7 +18,6 @@ const infoId = useId()
         variant="link"
         size="small"
         :aria-label="t('settings.pricing.unitHelp')"
-        :title="undefined"
         :aria-expanded="infoOpen"
         :aria-controls="infoOpen ? infoId : undefined"
       >

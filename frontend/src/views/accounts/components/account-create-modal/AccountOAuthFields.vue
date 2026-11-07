@@ -62,7 +62,6 @@ const copyWithToast = useCopyText()
           <ZIconButton
             variant="solid"
             size="small"
-            :title="t('accounts.onboarding.copyLink')"
             :aria-label="t('accounts.onboarding.copyLink')"
             :disabled="disabled"
             @click="copyWithToast(authUrl, { successText: t('accounts.onboarding.authorizationLinkCopied') })"

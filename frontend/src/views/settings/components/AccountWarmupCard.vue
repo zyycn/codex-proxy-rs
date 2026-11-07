@@ -20,7 +20,7 @@ const model = defineModel<string>('model', { required: true })
         {{ t('settings.warmup.title') }}
         <ZPopover trigger="hover-click" placement="top-start">
           <template #reference="{ open }">
-            <ZIconButton variant="link" :aria-label="t('settings.warmup.helpTitle')" :title="undefined" :aria-expanded="open" class="size-6!">
+            <ZIconButton variant="link" :aria-label="t('settings.warmup.helpTitle')" :aria-expanded="open" class="size-6!">
               <CircleAlert class="size-3.5" aria-hidden="true" />
             </ZIconButton>
           </template>

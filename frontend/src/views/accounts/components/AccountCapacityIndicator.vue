@@ -24,7 +24,6 @@ const label = computed(() => t('accounts.capacity.concurrentRequestsLimit', { va
   <ZButton
     variant="text" size="small" :type="full ? 'warning' : 'default'"
     :aria-label="t('accounts.capacity.viewConcurrencyDetails', { label })"
-    :title="t('accounts.capacity.viewDetails', { label })"
     class="relative top-0.75 -m-0.5 h-auto! px-0.5! py-0.5! whitespace-nowrap font-mono text-[9px]! font-normal! tabular-nums hover:bg-z-bg-text-hover!"
     @click.stop="$emit('showDetails')"
   >

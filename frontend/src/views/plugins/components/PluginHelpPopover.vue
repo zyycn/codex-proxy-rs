@@ -26,7 +26,6 @@ function handleKeydown(event: KeyboardEvent) {
         :aria-label="label"
         size="small"
         class="size-5!"
-        :title="undefined"
         :aria-expanded="open"
         :aria-describedby="open ? descriptionId : undefined"
         @keydown="handleKeydown"

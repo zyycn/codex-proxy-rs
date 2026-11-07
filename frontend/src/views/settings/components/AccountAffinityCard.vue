@@ -37,7 +37,7 @@ const affinityOptions = computed(() => ([
         <template #label-extra>
           <ZPopover class="-my-1" trigger="hover-click" placement="top-start">
             <template #reference="{ open }">
-              <ZIconButton variant="link" :aria-label="t('settings.affinity.accountAffinityInstructions')" :title="undefined" :aria-expanded="open" class="size-6!">
+              <ZIconButton variant="link" :aria-label="t('settings.affinity.accountAffinityInstructions')" :aria-expanded="open" class="size-6!">
                 <CircleAlert class="size-3.5" aria-hidden="true" />
               </ZIconButton>
             </template>

@@ -145,8 +145,7 @@
     },
     "capacity": {
       "concurrentRequestsLimit": "账号并发占用 {value}，上限 {value2}",
-      "viewConcurrencyDetails": "{label}，查看并发明细",
-      "viewDetails": "{label}，查看明细"
+      "viewConcurrencyDetails": "{label}，查看并发明细"
     },
     "concurrency": {
       "title": "并发明细",

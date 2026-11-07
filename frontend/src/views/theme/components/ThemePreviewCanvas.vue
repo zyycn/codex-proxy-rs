@@ -85,7 +85,7 @@ const boardStyle = computed<CSSProperties>(() => ({
       <ZButton
         size="small" variant="text"
         class="min-w-14 px-2! font-mono tabular-nums"
-        :title="t('appearance.preview.canvas.recovery')"
+        :aria-label="t('appearance.preview.canvas.recovery')"
         @click="resetScale"
       >
         {{ scalePercent }}%
