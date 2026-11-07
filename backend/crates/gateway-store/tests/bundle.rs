@@ -1,4 +1,4 @@
-//! 验证 Store 认证、凭据编码与只读检查 Bundle 的写入边界
+//! 验证 Store 认证、凭据编码、只读写入边界与账号租约关闭清理
 
 use gateway_core::{
     account::{
@@ -12,6 +12,166 @@ use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 
 use crate::support::config_connection;
+
+#[tokio::test]
+async fn shutdown_releases_owned_account_pools_and_preserves_other_instances() {
+    use gateway_core::lifecycle::{CancellationToken, Deadline};
+    use gateway_core::provider_ports::{
+        ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderLeaseRequest,
+        ProviderSchedulingLeaseRequest,
+    };
+    use gateway_core::task::{WorkerContribution, WorkerDaemonContext, WorkerRunnable};
+    use std::{num::NonZeroU32, time::Duration};
+
+    let (Some(database), Some(redis)) = (
+        crate::support::test_env("CPR_TEST_DATABASE_URL"),
+        crate::support::test_env("CPR_TEST_REDIS_URL"),
+    ) else {
+        return;
+    };
+    let mut config: StoreConfig = serde_json::from_value(json!({
+        "database": config_connection(url::Url::parse(&database).unwrap()),
+        "redis": config_connection(url::Url::parse(&redis).unwrap()),
+    }))
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    config.resolve_and_validate(directory.path()).unwrap();
+    // 只使用真实 Bundle 的租约端口与关闭任务，不需要创建业务账号或启动其他 Worker
+    let mut first = gateway_store::initialize_read_only(config.clone())
+        .await
+        .unwrap();
+    let mut second = gateway_store::initialize_read_only(config).await.unwrap();
+    let first_port = first.provider_ports().leases();
+    let second_port = second.provider_ports().leases();
+    let account =
+        ProviderAccountId::new(format!("acct_shutdown_{}", uuid::Uuid::new_v4().simple())).unwrap();
+    let mut first_requests = Vec::new();
+    let mut first_guards = Vec::new();
+    let mut second_requests = Vec::new();
+    let mut second_guards = Vec::new();
+    for pool in [
+        ProviderConcurrencyPool::Shared,
+        ProviderConcurrencyPool::Reserved,
+    ] {
+        let request = ProviderSchedulingLeaseRequest::new(
+            ProviderKind::new("openai").unwrap(),
+            account.clone(),
+            CredentialRevision::new(1).unwrap(),
+            NonZeroU32::new(2).unwrap(),
+            Deadline::default(),
+        )
+        .with_concurrency_pool(pool);
+        let ProviderLeaseAcquisition::Acquired(first_guard) = first_port
+            .try_acquire(ProviderLeaseRequest::Scheduling(request.clone()))
+            .await
+            .unwrap()
+        else {
+            panic!("first instance must acquire a slot")
+        };
+        let other = request.clone().with_cancellation(CancellationToken::new());
+        let ProviderLeaseAcquisition::Acquired(second_guard) = second_port
+            .try_acquire(ProviderLeaseRequest::Scheduling(other.clone()))
+            .await
+            .unwrap()
+        else {
+            panic!("second instance must acquire a slot")
+        };
+        assert!(matches!(
+            second_port
+                .try_acquire(ProviderLeaseRequest::Scheduling(other.clone()))
+                .await
+                .unwrap(),
+            ProviderLeaseAcquisition::Busy { .. }
+        ));
+        first_requests.push(request);
+        second_requests.push(other);
+        first_guards.push(first_guard);
+        second_guards.push(second_guard);
+    }
+    assert_eq!(
+        second_port
+            .account_in_flight(std::slice::from_ref(&account))
+            .await
+            .unwrap()[&account],
+        2
+    );
+
+    for (index, store) in [&mut first, &mut second].into_iter().enumerate() {
+        let cleanup = store
+            .take_worker_contributions()
+            .into_iter()
+            .find_map(|contribution| {
+                let WorkerContribution::Registration(registration) = contribution else {
+                    return None;
+                };
+                if registration.id.owner() != "redis_account_leases" {
+                    return None;
+                }
+                let WorkerRunnable::Daemon { task, .. } = registration.runnable else {
+                    panic!("cleanup is a daemon")
+                };
+                Some(task)
+            })
+            .expect("account lease shutdown worker must be registered");
+        let stopping = CancellationToken::new();
+        stopping.cancel();
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            cleanup.run(WorkerDaemonContext::new(stopping)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        if index == 0 {
+            assert_eq!(
+                second_port
+                    .account_in_flight(std::slice::from_ref(&account))
+                    .await
+                    .unwrap()[&account],
+                1
+            );
+            for (first_request, other) in first_requests.iter().zip(&second_requests) {
+                assert!(first_request.cancellation().is_cancelled());
+                assert!(!other.cancellation().is_cancelled());
+                assert!(
+                    first_port
+                        .try_acquire(ProviderLeaseRequest::Scheduling(first_request.clone()))
+                        .await
+                        .is_err()
+                );
+                let replacement = second_port
+                    .try_acquire(ProviderLeaseRequest::Scheduling(other.clone()))
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    &replacement,
+                    ProviderLeaseAcquisition::Acquired(_)
+                ));
+                assert!(matches!(
+                    second_port
+                        .try_acquire(ProviderLeaseRequest::Scheduling(other.clone()))
+                        .await
+                        .unwrap(),
+                    ProviderLeaseAcquisition::Busy { .. }
+                ));
+                drop(replacement);
+            }
+        }
+    }
+    assert!(
+        second_requests
+            .iter()
+            .all(|request| request.cancellation().is_cancelled())
+    );
+    assert_eq!(
+        second_port
+            .account_in_flight(std::slice::from_ref(&account))
+            .await
+            .unwrap()[&account],
+        0
+    );
+    drop((first_guards, second_guards));
+}
 
 #[tokio::test]
 async fn inspection_bundle_does_not_migrate_and_rejects_business_writes() {
