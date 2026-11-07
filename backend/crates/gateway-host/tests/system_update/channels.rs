@@ -49,7 +49,7 @@ async fn temporary_channel_should_filter_future_releases_without_changing_runnin
     assert_eq!(version.latest_version, "1.1.0");
     assert!(!fixture.state().exists(), "检查通道不能写入实例偏好");
     let requests = server.received_requests().await.expect("requests");
-    assert_eq!(requests.len(), 6);
+    assert_eq!(requests.len(), 5);
 }
 
 #[tokio::test]

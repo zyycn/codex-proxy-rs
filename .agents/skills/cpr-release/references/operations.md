@@ -20,7 +20,7 @@
 
 调用入口前重新核对当前脚本的副作用、目标版本和待推送提交，保留无关工作区内容，不自动清理或暂存用户文件。
 先编辑 `release/notes.md`，保留为未提交改动（已暂存或未暂存均可）；其他已跟踪文件的改动应先单独提交。
-脚本只改 `release/version.yaml` 的顶层 `version`，按[接口弃用规则](../../../../backend/crates/gateway-plugin/sdk/docs/manifest.md#接口弃用)校验并维护 `plugin-api-deprecations.json`，将这些差异与最终工作区中的发布说明一起提交为 `chore(release): vX.Y.Z`。
+脚本只改 `release/version.yaml` 的顶层 `version`，按[接口弃用规则](../../../../backend/crates/gateway-plugin/sdk/docs/manifest.md#接口弃用)校验并维护 `plugin-api-deprecations.json`，将这些差异与最终工作区中的发布说明一起提交为 `chore(release): prepare vX.Y.Z`。
 不要提前单独提交说明或把版本文件改成目标版本；脚本要求说明相对 HEAD 有改动，并自行更新版本号。
 本任务需要的提交按[项目约定](../../../../CONTRIBUTING.md#项目约定)保留英文 Conventional Commits 与相应署名。
 
@@ -51,7 +51,7 @@ release/publish "$release_version"
 ### 修复源码后同版本重发
 
 1. 确认旧工作流已停止、该版本没有公开 Release 或版本镜像，且待清理提交不在其他已发布 tag 的历史中。已有公开产物时保留原提交和 tag，代码修复另发新版本；发布状态不明时先查清
-2. 从失败版本提交的父提交重新接上后续功能和修复，跳过失败的 `chore(release): vX.Y.Z`。保留最终说明为未提交改动，版本号和插件弃用清单交给发行入口。核对差异，确保修复未丢失、失败提交已不在待发历史中
+2. 从失败版本提交的父提交重新接上后续功能和修复，跳过失败的 `chore(release): prepare vX.Y.Z`。保留最终说明为未提交改动，版本号和插件弃用清单交给发行入口。核对差异，确保修复未丢失、失败提交已不在待发历史中
 3. 只清理本次失败的 tag 和草稿。涉及远端改写时，先核对授权，以事先记录的分支头和 tag 对象 SHA 作显式租约，原子更新分支并删除未发行 tag。租约不匹配就停止，不合并旧线
 4. 修复验证通过后执行 `release/publish --check <version>`，再按[执行发版](#执行发版)重发。核对上一发行至新 tag 的历史中只有一个本版本的发行提交，且与工作流构建的提交一致
 
@@ -59,7 +59,8 @@ release/publish "$release_version"
 
 - 发布完成后核对 GitHub Release 的版本、正式版/预发行状态和中文变更正文；对照平台清单与工作流确认归档、校验和及镜像产物。
   工作流附加的安装说明和自动提交列表按其当前配置处理，不用它们替代手写的中文变更说明。
-- 回读固定预发行页 `update-index`（不是 GitHub Latest），按正文 JSON 的 `current` 下载对应 `v<current>` 的 `version.yaml`。核对快照版本及 `published`：正式版参与同一大版本四个普通通道的比较；RC 参与 RC、Beta、Alpha，Beta 参与 Beta、Alpha，Alpha 只参与自身。实验版只推进 `exp["X.Y.Z"]`。晚完成的发行不得回退较高候选或丢失其他发行线
-- 只有指针写入失败时，在既有授权内执行 `gh workflow run release.yml --ref main -f tag="v$release_version" -f index_only=true`。恢复任务与发布共用锁，只核对已公开版本的附件和待发布快照摘要，不重新打包、改版本 tag 或写 main。完成后回读指针与附件；待发布记录不能当作成功。索引附件最多 128 KiB
+- 回读 `main:release/version.yaml` 的 `published`。正式版参与同一大版本四个普通通道的比较；RC 参与 RC、Beta、Alpha，Beta 参与 Beta、Alpha，Alpha 只参与自身。实验版只推进 `exp["X.Y.Z"]`。有通道推进时应有 `chore(release): publish vX.Y.Z` 提交；重复执行或较旧版本未推进任何通道时无提交
+- 通道表写入失败时，确认该版本已公开、工作流能写入 `main`，再按已有授权执行 `gh workflow run release.yml --ref main -f tag="v$release_version" -f index_only=true`。恢复任务重新校验公开附件、读取并合并当前清单，不重新打包或改 tag
+- v3.42.0 在线升级：首个包含新更新器的 3.x 正式版公开并通过校验后，从该次通道提交取出 `release/version.yaml`，将顶层 `version` 设为该正式版，作为同名附件上传到该 Release。回读附件，确认 3.x 稳定通道指向该版本且安装包可用，再手动将已有 `update-index` 正文改为 `{"current":"<该正式版>"}`。此后保留该页与附件，无需再编辑
 - 返回版本、tag 对应提交、Release/工作流链接及实际结果。失败、仍在构建或缺失产物时明确说明，不能称为发布成功；
   Release 和镜像已生成也不表示用户的运行实例已经升级。

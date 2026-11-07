@@ -59,7 +59,7 @@ unless content.match?(/^version:/)
   exit 1
 end
 
-content = content.sub(/^version:\s*.*$/, %(version: "#{version}"))
+content = content.sub(/^version:\s*.*$/, %(version: #{version}))
 File.write(path, content)
 RUBY
 }
@@ -167,7 +167,7 @@ update_version_file "$version"
 
 git add -- "$VERSION_FILE" "$NOTES_FILE" "$PLUGIN_DEPRECATIONS_FILE"
 git commit \
-  -m "chore(release): $tag" \
+  -m "chore(release): prepare $tag" \
   -m "$SIGNATURE"
 
 git tag -a "$tag" -m "$tag"

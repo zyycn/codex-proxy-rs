@@ -865,9 +865,9 @@ docker compose -f deploy/compose.yaml build codex-proxy-rs
 切换通道不会降级，Stable 候选也必须高于当前运行版本。
 下载、安装或待重启期间不能切换通道
 
-更新候选来自公开发行附件。更新器按固定 tag 查询预发行页 `update-index`，从正文 JSON 的 `current` 读取快照版本，再读取该版本 Release 的 `version.yaml` 附件。附件的 `version` 标识快照，`published` 按大版本和通道列出可安装版本；修改源码或仅打 tag 不会触发提示
+更新器读取更新仓库 `main` 分支的 `release/version.yaml`。`version` 是源码构建版本，只有 `published` 中当前大版本和通道对应的版本才参与更新检查
 
-自定义更新仓库须提供相同入口、快照及各候选的公开 Release。使用本仓库发布工作流时自动维护索引；`update-index` 不设为 Latest，不需要额外分支
+自定义更新仓库须提供这份清单和候选版本的公开 Release。发布工作流在安装包公开并通过校验后更新 `published`，需要具有写入 `main` 的权限
 
 提示有更新前会按精确 tag 核对候选 Release、当前平台包和校验文件，无需配置 GitHub 令牌。GitHub 限流时按提示稍后重试；
 也可从[发行页](https://github.com/zyycn/codex-proxy-rs/releases)下载平台归档，按[手动安装](#手动安装)升级

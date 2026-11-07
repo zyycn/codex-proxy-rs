@@ -1,1 +1,7 @@
-version: "3.42.0"
+version: 3.42.0
+published:
+  '3':
+    stable: 3.42.0
+    rc: 3.42.0
+    beta: 3.42.0
+    alpha: 3.42.0

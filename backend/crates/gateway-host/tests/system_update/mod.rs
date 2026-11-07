@@ -515,23 +515,8 @@ async fn mount_release_json(
     }
 }
 
-const POINTER_PATH: &str = "/repos/owner/repository/releases/tags/update-index";
-const SNAPSHOT: &str = "4.0.0-beta.1";
-const INDEX_PATH: &str = "/owner/repository/releases/download/v4.0.0-beta.1/version.yaml";
-
-fn pointer_response(version: &str) -> ResponseTemplate {
-    ResponseTemplate::new(200).set_body_json(serde_json::json!({
-        "tag_name":"update-index", "draft":false, "prerelease":true,
-        "body":serde_json::json!({"current":version}).to_string()
-    }))
-}
-
-async fn mount_pointer(server: &MockServer) {
-    Mock::given(path(POINTER_PATH))
-        .respond_with(pointer_response(SNAPSHOT))
-        .mount(server)
-        .await;
-}
+const BUILD_VERSION: &str = "4.0.0-beta.1";
+const INDEX_PATH: &str = "/owner/repository/refs/heads/main/release/version.yaml";
 
 fn available_assets(version: &str) -> Vec<serde_json::Value> {
     [archive_name(version), "checksums.txt".to_owned()].into_iter()
@@ -541,12 +526,10 @@ fn available_assets(version: &str) -> Vec<serde_json::Value> {
 fn fixture_index(version: &str) -> serde_json::Value {
     let major = version.split('.').next().unwrap();
     let base = version.split('-').next().unwrap();
-    serde_json::json!({"version":SNAPSHOT, "published": {major: {"stable": version,"beta":version,"rc":version,"alpha":version,"exp":{base: version}}}})
+    serde_json::json!({"version":BUILD_VERSION, "published": {major: {"stable": version,"beta":version,"rc":version,"alpha":version,"exp":{base: version}}}})
 }
 
-async fn mount_index(server: &MockServer, mut index: serde_json::Value) {
-    mount_pointer(server).await;
-    index["version"] = SNAPSHOT.into();
+async fn mount_index(server: &MockServer, index: serde_json::Value) {
     Mock::given(method("GET"))
         .and(path(INDEX_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(index))

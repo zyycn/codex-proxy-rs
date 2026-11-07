@@ -526,11 +526,11 @@ jobs:
           File.write(output, "#{notes}\n\n#{installation}\n")
           RUBY
 
-      - name: Prepare versioned channel snapshot under the publication lock
+      - name: Check that the release is unpublished
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.release-info.outputs.version }}
-        run: ruby .github/scripts/published-channels.rb prepare "$VERSION"
+        run: ruby .github/scripts/published-channels.rb check "$VERSION"
 
       - name: Generate release asset provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -561,11 +561,11 @@ jobs:
           RELEASE_ID: ${{ steps.release.outputs.id }}
         run: ruby .github/scripts/publish-release.rb
 
-      - name: Advance update-index to the verified snapshot
+      - name: Publish verified channels to main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.release-info.outputs.version }}
-        run: ruby .github/scripts/published-channels.rb finish "$VERSION"
+        run: ruby .github/scripts/published-channels.rb publish "$VERSION"
 
   recover-index:
     if: inputs.index_only
@@ -577,8 +577,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Verify public assets and finish pending publication
+      - name: Verify public assets and publish channels to main
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
-        run: ruby .github/scripts/published-channels.rb finish "$TAG"
+        run: ruby .github/scripts/published-channels.rb publish "$TAG"
