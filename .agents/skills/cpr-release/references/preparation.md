@@ -28,7 +28,7 @@
 
 进入实际发行准备后，读取目标分支的 [release/publish](../../../../release/publish)、[工作流](../../../../.github/workflows/release.yml)与[平台清单](../../../../release/platforms.yaml)，按当前入口执行，不另写脚本或绕过检查
 
-在上一发行基线到 HEAD 的提交中检查是否已有目标版本的备版提交（`chore(release): prepare v<目标版本>`，旧标题为 `chore(release): v<目标版本>`），即使同名 tag 已不存在也要查。命中时先核对该提交对应的发行状态，按[失败恢复](operations.md#恢复与验收)处理，不在旧提交上再叠一个同名提交
+在上一发行基线到 HEAD 的提交中检查是否已有目标版本的备版提交（`chore: bump version to <version>`；查历史时也匹配 `chore(release): prepare v<version>` 和 `chore(release): v<version>`），即使同名 tag 已不存在也要查。命中时先核对该提交对应的发行状态，按[失败恢复](operations.md#恢复与验收)处理，不在旧提交上再叠一个同名提交
 
 发布说明准备好、其他代码已提交后，执行 `release/publish --check <version>`，检查版本、说明、工作区、远端分支与 tag、工具链和插件兼容窗口。
 预检不修改文件、Git 引用或远端状态；远端存在本地未知提交时先同步再检查。它不替代 CI、发行物验证或实际发布授权

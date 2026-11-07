@@ -167,7 +167,7 @@ update_version_file "$version"
 
 git add -- "$VERSION_FILE" "$NOTES_FILE" "$PLUGIN_DEPRECATIONS_FILE"
 git commit \
-  -m "chore(release): prepare $tag" \
+  -m "chore: bump version to $version" \
   -m "$SIGNATURE"
 
 git tag -a "$tag" -m "$tag"

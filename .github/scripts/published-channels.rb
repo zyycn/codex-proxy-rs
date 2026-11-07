@@ -87,7 +87,7 @@ module PublishedChannels
       # 按读取的文件 SHA 写入；并发备版改过同一文件时交给恢复任务重新合并
       api(endpoint, method: 'PUT', data: {
         branch: 'main', sha: file.fetch('sha'), content: Base64.strict_encode64(content),
-        message: "chore(release): publish v#{version}"
+        message: "chore(release): update release channels to #{version}"
       })
     end
   end
