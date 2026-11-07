@@ -480,17 +480,18 @@ impl CodexCredentialSelector {
             && request
                 .session_affinity_observation
                 .is_some_and(CodexSessionAffinity::follow_only);
-        let select = |queue_policy| {
+        let select = |queue_policy, queue_rejection| {
             self.select_inner_loop(
                 request,
                 cyber_policy_session_key,
                 model,
                 follow_only,
                 queue_policy,
+                queue_rejection,
             )
         };
         let selection = async {
-            let rejection = match select(policy.queue_policy()).await {
+            let rejection = match select(policy.queue_policy(), None).await {
                 Err(CredentialSelectionError::QueueRejected(reason))
                     if !follow_only
                         && request.attempt.required_account().is_none()
@@ -512,7 +513,7 @@ impl CodexCredentialSelector {
                             "account.queue.reselect",
                             serde_json::json!({"reason": rejection.to_string()}),
                         );
-                        select(queue)
+                        select(queue, Some(rejection))
                     },
                     |err| {
                         matches!(
@@ -555,6 +556,7 @@ impl CodexCredentialSelector {
         model: CodexSelectionModel<'_>,
         follow_only: bool,
         mut queue_policy: ConcurrencyQueuePolicy,
+        queue_rejection: Option<QueueRejection>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let adapter_model = match model {
             CodexSelectionModel::Requested(model) if request.managed_upstream => Some(
@@ -1351,7 +1353,30 @@ impl CodexCredentialSelector {
                                     tracing::warn!(%error, "OpenAI cache preference update unavailable");
                                 }
                                 Err(error) => return Err(error),
-                                Ok(true) => {}
+                                Ok(true) => {
+                                    if let Some(reason) = queue_rejection
+                                        && let Some(previous) = binding.as_ref().filter(|binding| {
+                                            binding.account_id() != binding_account
+                                        })
+                                    {
+                                        tracing::info!(
+                                            request_id = %request.attempt.request_id(),
+                                            attempt_index = request.attempt.attempt_index().get(),
+                                            reason = %reason,
+                                            from_account_id = %previous.account_id(),
+                                            to_account_id = %binding_account,
+                                            "OpenAI 账号排队失败后已迁移绑定"
+                                        );
+                                        request.attempt.trace().record_evidence(
+                                            "account.binding.migrated",
+                                            serde_json::json!({
+                                                "reason": reason.to_string(),
+                                                "fromAccountId": previous.account_id().as_str(),
+                                                "toAccountId": binding_account.as_str(),
+                                            }),
+                                        );
+                                    }
+                                }
                             }
                         }
                         let affinity_telemetry = affinity.telemetry(account.id(), cache_preference);

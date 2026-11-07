@@ -18,7 +18,10 @@ fn projection_attempt(
         RequestAttemptContext::new(
             ModelRequestId::new("req_projection").unwrap(),
             ClientApiKeyId::new(client_key).unwrap(),
-        ),
+        )
+        .with_trace(gateway_core::diagnostics::TraceContext::new(
+            "req_projection",
+        )),
         NonZeroU32::new(1).unwrap(),
         SystemTime::now() + Duration::from_secs(30),
         policy,
@@ -420,15 +423,35 @@ async fn strict_queue_failure_reselects_once_and_only_rebinds_after_admission() 
             assert!(pending.as_mut().now_or_never().is_none());
         }
         let result = pending.await;
+        let reason = if full {
+            QueueRejection::Full
+        } else {
+            QueueRejection::Timeout
+        };
+        let snapshot = ctx.trace().snapshot().unwrap();
+        let migrations = snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["stage"] == "account.binding.migrated")
+            .map(|event| &event["data"])
+            .collect::<Vec<_>>();
+        if spare && enabled {
+            assert_eq!(
+                migrations,
+                vec![&json!({
+                    "reason": reason.to_string(),
+                    "fromAccountId": first.as_str(),
+                    "toAccountId": second.as_str(),
+                })]
+            );
+        } else {
+            assert!(migrations.is_empty());
+        }
         let expected = if spare && enabled {
             assert_eq!(result.unwrap().account_id(), &second);
             &second
         } else {
-            let reason = if full {
-                QueueRejection::Full
-            } else {
-                QueueRejection::Timeout
-            };
             assert!(
                 matches!(result, Err(CredentialSelectionError::QueueRejected(actual)) if actual == reason)
             );

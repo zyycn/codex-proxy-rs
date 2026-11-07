@@ -2762,6 +2762,10 @@ WebSocket 握手不主动添加专项计时请求头，客户端显式提供的�
 `environment.scope = export_time` 明确版本、构建与部署信息是导出时状态，不能代替事发环境
 
 `request.routed.data.accountPolicy` 保存执行时冻结的账号策略与预算。
+OpenAI 账号队满或超时后的重选记录为 `account.queue.reselect`；绑定迁移成功后，
+`account.binding.migrated` 保存拒绝原因 `reason`、原账号 `fromAccountId` 和新账号 `toAccountId`。
+首次认领、临时分流和失败重选不记录为绑定迁移
+
 `attempt.failed.data.recovery` 保存 Provider 的重放安全性和恢复意图；`retry.decided` 保存当时
 实际参与决策的门槛、剩余预算和发送状态，`retry.policy` 保存宿主及插件策略的停止事实。
 已有的 `provider.precommit.released` 数据保留释放原因、预取字节数与等待时间，不等同于下游已提交
