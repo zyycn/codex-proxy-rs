@@ -195,6 +195,7 @@ impl PluginRuntime {
                 usage: self.usage_ports.clone(),
                 http: self.http.clone(),
                 accounts: self.account_ports.clone(),
+                proxies: self.proxy_ports.clone(),
                 keys: self.client_key_ports.clone(),
                 clients: self.client_identity_port.clone(),
                 models: self.model_ports.clone(),

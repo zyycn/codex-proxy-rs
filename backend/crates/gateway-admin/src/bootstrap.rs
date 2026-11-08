@@ -264,6 +264,14 @@ pub fn initialize_plugin_accounts(
     ))
 }
 
+/// 为 Runtime 创建代理目录与当前出口解析的窄端口
+#[must_use]
+pub fn initialize_plugin_proxies(
+    store: Arc<dyn ports::proxy::ProxyStore>,
+) -> Arc<dyn ports::proxy::PluginProxyAccess> {
+    Arc::new(use_case::proxies::DefaultPluginProxyAccess { store })
+}
+
 /// 为 Runtime 创建非秘密 Client Key 目录与预算重置的窄端口
 #[must_use]
 pub fn initialize_plugin_client_keys(

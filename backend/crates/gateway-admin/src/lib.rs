@@ -42,8 +42,8 @@ pub use use_case::{
 
 pub use bootstrap::{
     initialize, initialize_accounts, initialize_plugin_accounts, initialize_plugin_client_keys,
-    initialize_plugin_resources, initialize_settings, initialize_usage_data,
-    initialize_with_plugin_accounts,
+    initialize_plugin_proxies, initialize_plugin_resources, initialize_settings,
+    initialize_usage_data, initialize_with_plugin_accounts,
 };
 
 use ports::{

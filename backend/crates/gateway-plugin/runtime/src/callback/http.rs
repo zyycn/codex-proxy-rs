@@ -55,6 +55,30 @@ impl HttpCallbacks<'_> {
         .await
     }
 
+    pub(super) async fn proxy(
+        &self,
+        proxies: &super::PluginProxyPortSlot,
+        params: serde_json::Value,
+        payload: Vec<u8>,
+    ) -> Result<RpcReply, PluginFault> {
+        let request: wire::ProxyHttpRequest = decode(params)?;
+        let maximum_body_bytes = self.body_limit(&payload)?;
+        let proxy = proxies.resolve(&request.proxy_id).await?;
+        self.send(
+            HttpRequest {
+                method: request.request.method,
+                url: request.request.url,
+                headers: request.request.headers,
+                body: payload,
+                maximum_body_bytes,
+            },
+            true,
+            None,
+            Some(&proxy),
+        )
+        .await
+    }
+
     pub(super) async fn send(
         &self,
         request: HttpRequest,

@@ -87,6 +87,39 @@ pub struct HttpRequest {
 }
 
 pub const ACCOUNT_HTTP: &str = "host.http.account";
+pub const PROXY_HTTP: &str = "host.http.proxy";
+pub const PROXIES_LIST: &str = "host.proxies.list";
+
+/// 按当前代理配置发送请求，不依赖账号或注入账号认证
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ProxyHttpRequest {
+    pub proxy_id: String,
+    pub request: HttpRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyListRequest {
+    pub page: u32,
+    pub page_size: u16,
+    #[serde(default)]
+    pub search: String,
+}
+
+/// 插件可选择的代理摘要，不携带连接地址或凭据
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxySummary {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyListResult {
+    pub items: Vec<ProxySummary>,
+    pub total: u64,
+    pub page: u32,
+    pub page_size: u16,
+}
 
 /// 显式选择账号代理和凭据版本；认证头仍由插件提供，不取得推理租约
 #[derive(Clone, Serialize, Deserialize)]

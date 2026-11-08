@@ -29,6 +29,29 @@ pub struct HostHttpBody {
 }
 
 impl HostClient {
+    /// 分页查询代理摘要，不读取连接地址或凭据
+    ///
+    /// # Errors
+    /// 查询参数无效或宿主读取失败时返回错误
+    pub async fn list_proxies(
+        &self,
+        query: wire::ProxyListRequest,
+    ) -> Result<wire::ProxyListResult, PluginFault> {
+        super::payload_call(self, wire::PROXIES_LIST, query).await
+    }
+
+    /// 使用指定代理的当前配置发送请求；代理不存在、禁用或连接失败时不回退直连
+    ///
+    /// # Errors
+    /// 代理不可用、期限或网络请求失败时返回错误
+    pub async fn proxy_http(
+        &self,
+        request: wire::ProxyHttpRequest,
+        body: Vec<u8>,
+    ) -> Result<HostHttpResponse, PluginFault> {
+        self.open_http(wire::PROXY_HTTP, request, body, false).await
+    }
+
     /// 使用受管 HTTP 发送请求；账号上游使用 [`Self::upstream_http`]
     ///
     /// # Errors

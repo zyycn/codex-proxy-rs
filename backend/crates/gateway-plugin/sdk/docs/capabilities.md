@@ -263,12 +263,23 @@ HTTP 和 request 中间件中的模型回调沿用有效请求设置；attempt�
 请求 headers 与正文完全由插件提供；宿主不注入账号认证、不申请推理租约，代理不可用时直接失败，不回退直连。
 这项能力与上游适配器的账号推理 HTTP 分开，适用于插件自行构造的账号网络请求
 
+`HostClient::proxy_http(ProxyHttpRequest { proxy_id, request }, body)` 经 `host.http.proxy` 使用指定代理的当前配置，
+返回同一响应头与 `HostHttpBody`，不要求账号存在或绑定代理，也不校验账号凭据版本。
+代理不存在、禁用或连接失败时返回错误，不回退直连；未测试或历史测试失败不阻止实际请求。
+每次发送重新读取代理，已发出的请求沿该次解析的出口完成，不锁定整个插件业务流程的代理配置。
+目标请求的 headers 与正文由插件提供，宿主不注入账号认证；代理连接所需认证由宿主处理
+
+`HostClient::list_proxies(ProxyListRequest { page, page_size, search })` 经 `host.proxies.list` 查询代理目录。
+`page` 从 1 开始，`page_size` 为 1–200，`search` 可省略，默认空字符串，最多 256 字节且不能包含控制字符。
+返回 `{ items: [{ id, name, enabled }], total, page, page_size }`，包含禁用代理，不返回连接地址、凭据或账号信息。
+查询和结果使用二进制 JSON 载荷，控制参数及结果均为 `{}`；目录展示不代替发送时的状态校验
+
 请求和响应 `headers` 使用 `(String, Vec<u8>)`，保留重复头与非 UTF-8 值；响应另有 `http_version`。
 读取至 EOF 后通过 `body.trailers()` 取得完整尾部头，读取中只包含已收到的部分。
 `collect` 只返回正文，需要尾部头时使用 `read`；底层非流式回复携带 `trailers`，流式回复在 `stream_read` 中交付尾部头
 
 `host.http.do/do_stream` 和流读取／关闭方法提供受管 HTTP。正文使用独立二进制载荷，Host 统一执行代理、超时和背压，不按插件身份限制目标地址段。DNS 由宿主解析，连接保留目标 Host 与 TLS 域名校验；重定向不会自动跟随。
-受管 HTTP（包括 `host.http.account` 和 `host.upstream.http.do[_stream]`）的请求正文按有效设置
+受管 HTTP（包括 `host.http.account`、`host.http.proxy` 和 `host.upstream.http.do[_stream]`）的请求正文按有效设置
 `responses_max_decompressed_body_bytes` 检查。HTTP/request 中间件使用有效请求设置；
 attempt、outbound、路由、调度、重试和上游适配器使用执行冻结预算，其余调用读取当前发布配置。
 超限返回带 HTTP 413 的 `invalid_input` 和 `not_sent`，不向目标发送请求。

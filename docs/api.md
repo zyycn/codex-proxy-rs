@@ -3110,7 +3110,8 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 
 回调保持类型、期限、取消、实例 revision、资源归属和事务一致性检查。模型调用可显式选择 Key，按所选 Key 的准入、预算、用量与计费合同执行；省略 Key 时继承现有模型父请求身份
 
-受管 HTTP 不限制插件目标地址段。宿主解析 DNS，连接保留原始 Host 与 TLS 域名校验；代理沿用账号配置，失败不自动回退直连，重定向不自动跟随
+受管 HTTP 不限制插件目标地址段。宿主解析 DNS，连接保留原始 Host 与 TLS 域名校验；出口可继承调用范围、指定账号或按代理 ID 选择，连接失败不自动回退直连，重定向不自动跟随。
+显式代理选择与目录查询见 [SDK 网络回调](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#网络)
 
 #### 能力绑定与范围
 

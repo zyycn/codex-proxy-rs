@@ -56,8 +56,13 @@ impl ProxyStore for TestProxies {
             guard: Box::new(ImportGuard(events.clone())),
         })
     }
-    async fn list(&self, _: ProxyListQuery) -> AdminStoreResult<ProxyPage> {
-        Err(super::unavailable("proxy"))
+    async fn list(&self, query: ProxyListQuery) -> AdminStoreResult<ProxyPage> {
+        Ok(ProxyPage {
+            items: self.records.clone(),
+            total: self.records.len() as u64,
+            page: query.page,
+            page_size: query.page_size.get(),
+        })
     }
     async fn list_accounts(
         &self,
@@ -111,6 +116,79 @@ impl ProxyStore for TestProxies {
             config_revision: record.revision,
             record,
         })
+    }
+}
+
+#[tokio::test]
+async fn plugin_proxy_resolution_requires_enabled_configuration_without_account_or_probe() {
+    use gateway_admin::model::{AdminErrorKind, PageSize};
+    use std::sync::Arc;
+
+    let now = chrono::Utc::now();
+    let records: Vec<_> = [true, false]
+        .into_iter()
+        .map(|enabled| ProxyRecord {
+            id: format!("proxy_{enabled}"),
+            name: "Login".into(),
+            proxy: OutboundProxy::parse("http://user:secret@127.0.0.1:8080").unwrap(),
+            revision: Revision::new(1).unwrap(),
+            enabled,
+            auto_location: false,
+            location: None,
+            detected_location: None,
+            account_count: 0,
+            last_test_at: Some(now),
+            last_test: Some(ProxyTestResult {
+                location: Default::default(),
+                success: false,
+                latency_ms: 1,
+                exit_ip: None,
+                exit_ipv4: None,
+                exit_ipv6: None,
+                message: "fixture failure".into(),
+            }),
+            created_at: now,
+            updated_at: now,
+        })
+        .collect();
+    let access = gateway_admin::initialize_plugin_proxies(Arc::new(TestProxies {
+        records: records.clone(),
+        ..Default::default()
+    }));
+    assert_eq!(
+        access.resolve("proxy_true").await.unwrap(),
+        records[0].proxy
+    );
+    assert_eq!(
+        access.resolve("proxy_false").await.unwrap_err().kind(),
+        AdminErrorKind::Invalid
+    );
+    assert!(access.resolve("missing").await.is_err());
+    for id in ["", "bad\n", &"x".repeat(129)] {
+        assert_eq!(
+            access.resolve(id).await.unwrap_err().kind(),
+            AdminErrorKind::Invalid
+        );
+    }
+    let query = || ProxyListQuery {
+        page: 1,
+        page_size: PageSize::new(10).unwrap(),
+        search: String::new(),
+    };
+    let page = access.list(query()).await.unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert!(!page.items[1].enabled);
+    for invalid in [
+        ProxyListQuery { page: 0, ..query() },
+        ProxyListQuery {
+            search: "bad\n".into(),
+            ..query()
+        },
+    ] {
+        assert_eq!(
+            access.list(invalid).await.unwrap_err().kind(),
+            AdminErrorKind::Invalid
+        );
     }
 }
 

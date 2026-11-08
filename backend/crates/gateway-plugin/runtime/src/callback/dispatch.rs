@@ -71,6 +71,7 @@ impl CallbackHandler for PluginCallbacks {
         let log = self.log.clone();
         let private_state = self.private_state.clone();
         let accounts = self.accounts.clone();
+        let proxies = self.proxies.clone();
         let resources = self.resources.clone();
         let data = self.data.clone();
         let keys = self.keys.clone();
@@ -233,6 +234,12 @@ impl CallbackHandler for PluginCallbacks {
                 maximum_payload,
                 request_limits: &request_limits,
             };
+            if method == host::PROXIES_LIST {
+                return proxies.list(params, &payload).await;
+            }
+            if method == host::PROXY_HTTP {
+                return http.proxy(&proxies, params, payload).await;
+            }
             if method == host::ACCOUNT_HTTP {
                 return http.account(&accounts, params, payload).await;
             }
