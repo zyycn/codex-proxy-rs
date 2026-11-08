@@ -40,7 +40,8 @@
 
 以下命令适用于 Linux amd64/arm64，需要 Docker Engine、Docker Compose Plugin、curl 和 OpenSSL
 
-Windows x64 / ARM64 使用发行包部署，步骤见 [Windows 二进制部署](deploy/README.md#windows-二进制部署)
+macOS 从[发行页](https://github.com/zyycn/codex-proxy-rs/releases)下载对应的归档：Intel 机型选 `darwin_amd64`，Apple Silicon 机型选 `darwin_arm64`。
+Windows x64 / ARM64 的安装步骤见 [Windows 二进制部署](deploy/README.md#windows-二进制部署)
 
 已有部署请先看 [升级说明](deploy/README.md#镜像升级与源码构建)，不要覆盖原配置
 
