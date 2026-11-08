@@ -423,31 +423,37 @@ fn system_context() -> MutationContext {
 }
 
 fn plugin_entry(id: &str, marker: u8) -> serde_json::Value {
-    let (release_os, release_architecture, target) = release_platform();
+    // 清单列出所有平台，夹具只提供本机归档，以验证导入时不会读取其他平台的包
+    let artifacts = [
+        ("linux", "amd64", "x86_64-unknown-linux-gnu"),
+        ("linux", "arm64", "aarch64-unknown-linux-gnu"),
+        ("darwin", "amd64", "x86_64-apple-darwin"),
+        ("darwin", "arm64", "aarch64-apple-darwin"),
+        ("windows", "amd64", "x86_64-pc-windows-msvc"),
+        ("windows", "arm64", "aarch64-pc-windows-msvc"),
+    ]
+    .map(|(release_os, release_architecture, target)| {
+        let os = if release_os == "darwin" {
+            "macos"
+        } else {
+            release_os
+        };
+        let (architecture, _) = target.split_once('-').unwrap();
+        serde_json::json!({
+            "release_os": release_os,
+            "release_architecture": release_architecture,
+            "target": target,
+            "os": os,
+            "architecture": architecture,
+            "archive": format!("{id}-1.0.0-{os}-{architecture}.tar.gz"),
+            "sha256": format!("{marker:01x}").repeat(64),
+        })
+    });
     serde_json::json!({
         "id": id,
         "version": "1.0.0",
         "publisher": "test",
         "stability": "experimental",
-        "artifacts": [{
-            "release_os": release_os,
-            "release_architecture": release_architecture,
-            "target": target,
-            "os": std::env::consts::OS,
-            "architecture": std::env::consts::ARCH,
-            "archive": format!("{id}-1.0.0-{}-{}.tar.gz", std::env::consts::OS, std::env::consts::ARCH),
-            "sha256": format!("{marker:01x}").repeat(64),
-        }]
+        "artifacts": artifacts,
     })
-}
-
-fn release_platform() -> (&'static str, &'static str, &'static str) {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") => ("linux", "amd64", "x86_64-unknown-linux-gnu"),
-        ("linux", "aarch64") => ("linux", "arm64", "aarch64-unknown-linux-gnu"),
-        ("macos", "aarch64") => ("darwin", "arm64", "aarch64-apple-darwin"),
-        ("windows", "x86_64") => ("windows", "amd64", "x86_64-pc-windows-msvc"),
-        ("windows", "aarch64") => ("windows", "arm64", "aarch64-pc-windows-msvc"),
-        platform => panic!("unsupported test platform: {platform:?}"),
-    }
 }
