@@ -5,7 +5,7 @@ use gateway_plugin_sdk::client::{CallFuture, CallReply, PluginCall, PluginHandle
 use gateway_plugin_sdk::{ErrorCode, Frame, Message};
 use gateway_plugin_sdk::{
     call::{
-        host::{AccountHttpRequest, HttpRequest},
+        host::{AccountHttpRequest, HttpRequest, ProxyHttpRequest, ProxyListRequest},
         upstream_adapter::{UpstreamHttpRequest, UpstreamWebSocketRequest, WebSocketMessageKind},
     },
     client::UpstreamWebSocketUpgrade,
@@ -17,6 +17,21 @@ struct NetworkHandler;
 impl PluginHandler for NetworkHandler {
     fn call(&self, call: PluginCall) -> CallFuture<'_> {
         Box::pin(async move {
+            if call.method == "proxies" {
+                let page = call
+                    .host
+                    .list_proxies(ProxyListRequest {
+                        page: 2,
+                        page_size: 10,
+                        search: "login".into(),
+                    })
+                    .await?;
+                assert_eq!(page.page, 2);
+                assert_eq!(page.total, 11);
+                assert_eq!(page.items[0].id, "proxy_one");
+                assert!(!page.items[0].enabled);
+                return Ok(CallReply::unary(json!({}), vec![]));
+            }
             if call.method.starts_with("websocket") {
                 let upgrade = call
                     .host
@@ -106,6 +121,20 @@ impl PluginHandler for NetworkHandler {
                         call.payload,
                     )
                     .await?
+            } else if call.method == "proxy" {
+                call.host
+                    .proxy_http(
+                        ProxyHttpRequest {
+                            proxy_id: "proxy_one".into(),
+                            request: HttpRequest {
+                                method: "POST".into(),
+                                url: "https://example.test/login".into(),
+                                headers: vec![],
+                            },
+                        },
+                        call.payload,
+                    )
+                    .await?
             } else {
                 call.host
                     .upstream_http(
@@ -172,7 +201,7 @@ async fn reply_callback(
 
 #[tokio::test]
 async fn http_response_objects_share_pull_semantics_and_retire_eof_handles() {
-    for method in ["http", "account", "upstream"] {
+    for method in ["http", "account", "proxy", "upstream"] {
         let (mut host, task) = start_session(NetworkHandler).await;
         send_call(
             &mut host,
@@ -189,6 +218,8 @@ async fn http_response_objects_share_pull_semantics_and_retire_eof_handles() {
         };
         let open_method = if method == "account" {
             gateway_plugin_sdk::call::host::ACCOUNT_HTTP.to_owned()
+        } else if method == "proxy" {
+            gateway_plugin_sdk::call::host::PROXY_HTTP.to_owned()
         } else {
             format!("{prefix}.do_stream")
         };
@@ -201,8 +232,12 @@ async fn http_response_objects_share_pull_semantics_and_retire_eof_handles() {
         .await;
         assert_eq!(frame.payload, b"request");
         if method == "account" {
-            assert!(matches!(frame.message, Message::Callback { params, .. }
+            assert!(matches!(frame.message, Message::Callback { ref params, .. }
                 if params["account_id"] == "acct_one" && params["credential_revision"] == 7));
+        }
+        if method == "proxy" {
+            assert!(matches!(frame.message, Message::Callback { ref params, .. }
+                if params["proxy_id"] == "proxy_one" && params["request"]["url"] == "https://example.test/login"));
         }
         let frame = reply_callback(
             &mut host,
@@ -226,6 +261,33 @@ async fn http_response_objects_share_pull_semantics_and_retire_eof_handles() {
         assert_eq!(result.payload, b"abc");
         shutdown(&mut host, task).await;
     }
+}
+
+#[tokio::test]
+async fn proxy_directory_uses_typed_binary_payloads() {
+    let (mut host, task) = start_session(NetworkHandler).await;
+    send_call(&mut host, 1, "proxies", json!({}), vec![]).await;
+    let frame = reply_callback(
+        &mut host,
+        "host.proxies.list",
+        json!({}),
+        serde_json::to_vec(&json!({
+            "items":[{"id":"proxy_one","name":"login","enabled":false}],
+            "total":11,"page":2,"page_size":10,
+        }))
+        .unwrap(),
+    )
+    .await;
+    assert!(matches!(frame.message, Message::Callback { params, .. } if params == json!({})));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&frame.payload).unwrap(),
+        json!({"page":2,"page_size":10,"search":"login"})
+    );
+    assert!(matches!(
+        receive(&mut host).await.message,
+        Message::Result { id: 1, .. }
+    ));
+    shutdown(&mut host, task).await;
 }
 
 #[tokio::test]

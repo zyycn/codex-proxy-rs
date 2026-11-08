@@ -7,6 +7,7 @@ use gateway_admin::{
     ports::{
         plugin_accounts::PluginAccountAccess, plugin_client_keys::PluginClientKeyAccess,
         plugin_resources::PluginResourceAccess, provider::ProviderAdminRegistry,
+        proxy::PluginProxyAccess,
     },
 };
 use gateway_core::runtime::{RuntimeSnapshotHandle, SnapshotControl};
@@ -35,6 +36,7 @@ pub(super) struct ManagementPorts {
     pub(super) accounts: Arc<dyn PluginAccountAccess>,
     keys: Arc<dyn PluginClientKeyAccess>,
     resources: Arc<dyn PluginResourceAccess>,
+    proxies: Arc<dyn PluginProxyAccess>,
 }
 
 impl ManagementPorts {
@@ -46,6 +48,7 @@ impl ManagementPorts {
     ) -> Self {
         let ports = store.admin_ports();
         Self {
+            proxies: gateway_admin::initialize_plugin_proxies(ports.proxies()),
             accounts: gateway_admin::initialize_plugin_accounts(
                 providers.clone(),
                 ports.accounts(),
@@ -66,6 +69,7 @@ impl ManagementPorts {
 
     pub(super) fn bind(&self, runtime: &PluginRuntime) -> Result<(), AdminError> {
         runtime.bind_account_ports(&self.accounts)?;
+        runtime.bind_proxy_ports(&self.proxies)?;
         runtime.bind_client_key_ports(&self.keys)?;
         runtime.bind_resource_ports(&self.resources)
     }

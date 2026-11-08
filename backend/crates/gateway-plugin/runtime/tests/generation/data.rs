@@ -363,7 +363,11 @@ async fn quota_refresh_is_available_without_permission_declarations() {
     }
 }
 
-async fn management_queries(accounts: Arc<dyn PluginAccountAccess>, queries: Value) -> Value {
+async fn management_queries(
+    accounts: Option<Arc<dyn PluginAccountAccess>>,
+    proxies: Option<Arc<dyn gateway_admin::ports::proxy::PluginProxyAccess>>,
+    queries: Value,
+) -> Value {
     let (cache, store, runtime) =
         super::setup_with_contributions(Contributions::from([crate::support::contribution(
             Capability::Management,
@@ -372,7 +376,12 @@ async fn management_queries(accounts: Arc<dyn PluginAccountAccess>, queries: Val
             vec![],
         )]))
         .await;
-    runtime.bind_account_ports(&accounts).unwrap();
+    if let Some(accounts) = &accounts {
+        runtime.bind_account_ports(accounts).unwrap();
+    }
+    if let Some(proxies) = &proxies {
+        runtime.bind_proxy_ports(proxies).unwrap();
+    }
     store.snapshot.lock().unwrap().instances[0].configuration = json!({
         "management_registration":{"routes":[{"method":"GET","path":"facts","request_content_types":[],"response_content_types":["application/json"]}]},
         "data_queries":queries,
@@ -416,95 +425,260 @@ async fn request_head(stream: &mut tokio::net::TcpStream) -> String {
     String::from_utf8(bytes).unwrap()
 }
 
+struct ProxyFacts {
+    resolutions: std::sync::Mutex<
+        std::collections::VecDeque<Result<gateway_core::account::OutboundProxy, AdminError>>,
+    >,
+    page: Option<gateway_admin::model::proxies::ProxyPage>,
+}
+
+#[async_trait]
+impl gateway_admin::ports::proxy::PluginProxyAccess for ProxyFacts {
+    async fn resolve(&self, id: &str) -> Result<gateway_core::account::OutboundProxy, AdminError> {
+        assert_eq!(id, "proxy_login");
+        self.resolutions
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("每次发送读取当前配置")
+    }
+
+    async fn list(
+        &self,
+        query: gateway_admin::model::proxies::ProxyListQuery,
+    ) -> Result<gateway_admin::model::proxies::ProxyPage, AdminError> {
+        assert_eq!(query.page, 2);
+        assert_eq!(query.page_size.get(), 1);
+        assert_eq!(query.search, "Login");
+        Ok(self.page.clone().unwrap())
+    }
+}
+
 #[tokio::test]
-async fn account_http_uses_the_selected_proxy_and_rejects_unavailable_account_versions() {
+async fn selected_http_uses_account_or_proxy_without_fallback_or_redirects() {
+    use gateway_core::account::OutboundProxy;
     use tokio::io::AsyncWriteExt as _;
-    for scenario in [
-        "plain",
-        "explicit-auth",
-        "rotated",
-        "disabled",
-        "proxy-failed",
-        "missing",
+
+    for (selector, scenarios) in [
+        (
+            "account",
+            &[
+                "plain",
+                "explicit-auth",
+                "rotated",
+                "disabled",
+                "proxy-failed",
+                "missing",
+            ][..],
+        ),
+        (
+            "proxy",
+            &[
+                "plain",
+                "explicit-auth",
+                "disabled",
+                "proxy-failed",
+                "missing",
+                "redirect",
+            ][..],
+        ),
     ] {
-        let target = wiremock::MockServer::start().await;
+        for &scenario in scenarios {
+            let target = wiremock::MockServer::start().await;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let proxy = OutboundProxy::parse(&format!("http://{}", listener.local_addr().unwrap()))
+                .unwrap();
+            let successful = matches!(scenario, "plain" | "explicit-auth" | "redirect");
+            let target_url = target.uri();
+            let proxy_task = if successful {
+                Some(tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let request = request_head(&mut socket).await;
+                    let response = if scenario == "redirect" {
+                        format!(
+                            "HTTP/1.1 302 Found\r\nLocation: {target_url}/redirect\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                    } else {
+                        "HTTP/1.1 201 Created\r\nSet-Cookie: step=one\r\nSet-Cookie: session=two\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+                    };
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                    request
+                }))
+            } else {
+                drop(listener);
+                None
+            };
+            let headers = if scenario == "explicit-auth" {
+                vec![("authorization", b"Bearer plugin-fixture".to_vec())]
+            } else {
+                vec![]
+            };
+            let request =
+                json!({"method":"GET", "url":format!("{}/login", target.uri()), "headers":headers});
+            let results = if selector == "account" {
+                let mut selected = account();
+                selected.outbound_proxy = Some(proxy);
+                selected.enabled = scenario != "disabled";
+                if scenario == "rotated" {
+                    selected.credential_revision = Revision::new(2).unwrap();
+                }
+                let accounts = Arc::new(Facts {
+                    runtime_account: Some(selected),
+                    ..Default::default()
+                });
+                management_queries(Some(accounts), None, json!([{
+                    "method":"host.http.account", "params":{
+                        "account_id":if scenario == "missing" {"acct_missing"} else {"acct_facts"},
+                        "credential_revision":1, "request":request,
+                    },
+                }])).await
+            } else {
+                let resolution = match scenario {
+                    "missing" => Err(AdminError::not_found("代理不存在")),
+                    "disabled" => Err(AdminError::invalid("代理已禁用")),
+                    _ => Ok(proxy),
+                };
+                let proxies = Arc::new(ProxyFacts {
+                    resolutions: std::sync::Mutex::new([resolution].into()),
+                    page: None,
+                });
+                management_queries(None, Some(proxies), json!([{
+                    "method":"host.http.proxy", "params":{"proxy_id":"proxy_login", "request":request},
+                }])).await
+            };
+            if let Some(task) = proxy_task {
+                assert_eq!(
+                    results[0]["status"],
+                    if scenario == "redirect" { 302 } else { 201 }
+                );
+                let request = tokio::time::timeout(std::time::Duration::from_secs(3), task)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .to_ascii_lowercase();
+                assert!(
+                    request.starts_with("get http://127.0.0.1:")
+                        && request.contains("/login http/1.1")
+                );
+                assert_eq!(
+                    request
+                        .lines()
+                        .any(|line| line.starts_with("authorization:")),
+                    scenario == "explicit-auth"
+                );
+                if scenario == "explicit-auth" {
+                    assert!(request.contains("authorization: bearer plugin-fixture\r\n"));
+                }
+                if scenario != "redirect" {
+                    assert_eq!(
+                        results[0]["headers"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|header| header[0] == "set-cookie")
+                            .count(),
+                        2
+                    );
+                }
+            } else {
+                assert_eq!(
+                    results[0]["error"],
+                    match scenario {
+                        "missing" => "rejected",
+                        "rotated" => "conflict",
+                        "disabled" if selector == "account" => "permission_denied",
+                        "disabled" => "invalid_input",
+                        _ => "upstream",
+                    },
+                    "{selector}/{scenario}: {results}"
+                );
+            }
+            assert!(
+                target.received_requests().await.unwrap().is_empty(),
+                "{selector}/{scenario} must not connect directly"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn proxy_http_resolves_each_send_and_directory_only_exposes_selection_facts() {
+    use gateway_admin::model::proxies::{ProxyPage, ProxyRecord};
+    use gateway_core::account::OutboundProxy;
+    use tokio::io::AsyncWriteExt as _;
+
+    let target = wiremock::MockServer::start().await;
+    let mut resolutions = std::collections::VecDeque::new();
+    let mut tasks = Vec::new();
+    for status in [201, 202] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+        resolutions.push_back(Ok(OutboundProxy::parse(&format!(
             "http://{}",
             listener.local_addr().unwrap()
         ))
-        .unwrap();
-        let successful = matches!(scenario, "plain" | "explicit-auth");
-        let proxy_task = if successful {
-            Some(tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let request = request_head(&mut socket).await;
-                assert!(request.starts_with("GET http://127.0.0.1:"));
-                socket
-                    .write_all(
-                        b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        .unwrap()));
+        tasks.push(tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            request_head(&mut socket).await;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 {status} OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                     )
-                    .await
-                    .unwrap();
-                request
-            }))
-        } else {
-            drop(listener);
-            None
-        };
-        let mut selected = account();
-        selected.outbound_proxy = Some(proxy);
-        selected.enabled = scenario != "disabled";
-        if scenario == "rotated" {
-            selected.credential_revision = Revision::new(2).unwrap();
-        }
-        let accounts: Arc<dyn PluginAccountAccess> = Arc::new(Facts {
-            runtime_account: Some(selected),
-            ..Default::default()
-        });
-        let headers = if scenario == "explicit-auth" {
-            vec![("authorization", b"Bearer plugin-fixture".to_vec())]
-        } else {
-            vec![]
-        };
-        let results = management_queries(accounts, json!([{
-            "method":gateway_plugin_sdk::call::host::ACCOUNT_HTTP,
-            "params":{
-                "account_id":if scenario == "missing" {"acct_missing"} else {"acct_facts"},
-                "credential_revision":1,
-                "request":{"method":"GET","url":format!("{}/facts", target.uri()),"headers":headers},
-            },
-        }])).await;
-        if let Some(task) = proxy_task {
-            assert_eq!(results[0]["status"], 201, "{scenario}: {results}");
-            let request = tokio::time::timeout(std::time::Duration::from_secs(3), task)
+                    .as_bytes(),
+                )
                 .await
-                .unwrap()
-                .unwrap()
-                .to_ascii_lowercase();
-            assert!(
-                request.starts_with("get http://127.0.0.1:") && request.contains("/facts http/1.1"),
-                "{request}"
-            );
-            assert_eq!(
-                request.contains("authorization:"),
-                scenario == "explicit-auth"
-            );
-            if scenario == "explicit-auth" {
-                assert!(request.contains("authorization: bearer plugin-fixture\r\n"));
-            }
-        } else {
-            let expected = match scenario {
-                "rotated" => "conflict",
-                "disabled" => "permission_denied",
-                "missing" => "rejected",
-                _ => "upstream",
-            };
-            assert_eq!(results[0]["error"], expected, "{scenario}: {results}");
-        }
-        assert!(
-            target.received_requests().await.unwrap().is_empty(),
-            "{scenario} must not connect directly"
-        );
+                .unwrap();
+        }));
+    }
+    let now = chrono::Utc::now();
+    let proxies = Arc::new(ProxyFacts {
+        resolutions: std::sync::Mutex::new(resolutions),
+        page: Some(ProxyPage {
+            total: 2,
+            page: 2,
+            page_size: 1,
+            items: vec![ProxyRecord {
+                id: "proxy_login".into(),
+                name: "Login".into(),
+                enabled: false,
+                proxy: OutboundProxy::parse("http://user:secret@private.example:8080").unwrap(),
+                revision: Revision::new(2).unwrap(),
+                auto_location: false,
+                detected_location: None,
+                location: None,
+                account_count: 0,
+                last_test_at: None,
+                last_test: None,
+                created_at: now,
+                updated_at: now,
+            }],
+        }),
+    });
+    let request = json!({"method":"host.http.proxy", "params":{
+        "proxy_id":"proxy_login", "request":{"method":"GET", "url":target.uri(), "headers":[]},
+    }});
+    let results = management_queries(
+        None,
+        Some(proxies.clone()),
+        json!([
+            request, request,
+            {"method":"host.proxies.list", "query":{"page":2,"page_size":1,"search":"Login"}},
+        ]),
+    )
+    .await;
+    assert_eq!(results[0]["status"], 201);
+    assert_eq!(results[1]["status"], 202);
+    assert_eq!(
+        results[2],
+        json!({"items":[{"id":"proxy_login","name":"Login","enabled":false}],"total":2,"page":2,"page_size":1})
+    );
+    assert!(proxies.resolutions.lock().unwrap().is_empty());
+    assert!(target.received_requests().await.unwrap().is_empty());
+    for task in tasks {
+        tokio::time::timeout(std::time::Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

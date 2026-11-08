@@ -20,6 +20,7 @@ mod model;
 pub(crate) mod outbound;
 mod ports;
 pub(crate) mod private_state;
+mod proxies;
 mod replay;
 pub(crate) mod request_limits;
 mod resources;
@@ -40,6 +41,7 @@ pub(crate) use middleware::{
     MiddlewareInvocation,
 };
 pub(crate) use model::PluginModelPortSlot;
+pub(crate) use proxies::PluginProxyPortSlot;
 pub(crate) use resources::PluginResourcePorts;
 pub(crate) use scope::{CallbackScope, InvocationContext};
 
