@@ -374,6 +374,7 @@ pub(crate) fn usage_list_record_from_row(
         upstream_connection_exit_reason: get(row, "upstream_connection_exit_reason")?,
         recovered: get(row, "recovered")?,
         client_status_code: optional_status(row, "client_status_code")?,
+        upstream_status_code: optional_status(row, "upstream_status_code")?,
         outcome: admin_observability::RequestOutcome::new(get::<String>(row, "outcome")?)
             .map_err(|_| invalid("invalid request outcome"))?,
         client_api_key_name: get(row, "client_api_key_name")?,

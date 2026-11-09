@@ -101,6 +101,7 @@ fn usage_record() -> UsageListRecord {
         upstream_connection_exit_reason: None,
         recovered: false,
         client_status_code: None,
+        upstream_status_code: None,
         outcome: gateway_admin::model::observability::RequestOutcome::Succeeded,
         client_api_key_name: Some("Production".to_owned()),
         id: "req-visible".to_owned(),

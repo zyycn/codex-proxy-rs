@@ -2612,13 +2612,15 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 重试中间错误不改变请求最终分类；`logicalOutcome` 保留真实结果。状态筛选只影响明细列表，
 不改变顶部统计，独立运维事件仍通过 `/api/admin/operations/errors` 查询
 
-请求列表的 `errorCode` / `errorMessage` 提供最终请求的错误码与错误信息，未记录时为 `null`
+请求列表的 `errorCode` / `errorMessage` 提供最终请求的错误码与错误信息，未记录时为 `null`。
+`clientStatusCode` / `upstreamStatusCode` 分别提供已记录的客户端与上游 HTTP 状态，未记录时为 `null`；
+流式请求可能在客户端收到 HTTP 200 后失败，两个状态不互相替代，也不覆盖 `logicalOutcome`
 
 请求列表与详情的 `errorKind` 保留网关分类，`websocketCloseCode` 只提取已保存关闭帧的数字码，
 与原始上游 `errorCode` 分开。`continuationUnavailableReason` 和 `upstreamConnectionExitReason`
 保留已记录的续接及连接退出原因，缺失字段为 `null`，不根据错误文案推断。
 `recovered` 表示已关联到后续成功请求，原请求的 `logicalOutcome` 保持不变。
-这些字段用于本地化摘要，原始错误信息及受控诊断仍按各自合同保留
+这些字段用于展示来源、错误码和恢复状态，原始错误信息及受控诊断仍按各自合同保留
 
 `upstreamError` 仅在请求详情返回，从已保存的上游 JSON 投影 `code`、`errorType`、`message`、`param`，
 或 WS 关闭帧的 `closeReason`、`lastEventType`；不重新分类错误，也不包含原始请求、任意响应头或本地原因链。

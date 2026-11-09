@@ -1,4 +1,4 @@
-import type { UsageErrorFacts } from '@/api/modules/usage'
+import type { UsageErrorFacts, UsageRecord } from '@/api/modules/usage'
 import { t } from '@/i18n'
 
 export type UsageErrorRecord = UsageErrorFacts & {
@@ -20,49 +20,93 @@ export function usageErrorTitle(record: Pick<UsageErrorRecord, 'logicalOutcome' 
     : t('usage.error.requestFailed')
 }
 
-// 只解释已记录的分类和关闭码，原始上游文案由详情保留
-export function usageErrorSummary(record: UsageErrorRecord): string | null {
-  if (record.websocketCloseCode != null) {
-    if (record.websocketCloseCode === 1012)
-      return t('usage.error.summary.upstreamRestart')
-    if (record.websocketCloseCode === 1013)
-      return t('usage.error.summary.upstreamBusy')
-    if (record.websocketCloseCode === 1009)
-      return t('usage.error.summary.messageTooLarge')
-    return t('usage.error.summary.upstreamClosed')
+type ErrorOrigin = 'proxy' | 'upstream' | 'connection' | 'unknown'
+
+// 只按已记录的来源事实展示位置，客户端状态码和文案不用于反推责任方
+export function usageErrorOrigin(record: UsageErrorRecord & Partial<Pick<UsageRecord, 'upstreamError' | 'upstreamStatusCode'>>) {
+  let kind: ErrorOrigin = 'unknown'
+  if (record.errorCode || record.websocketCloseCode != null
+    || (record.upstreamStatusCode != null && record.upstreamStatusCode >= 400)
+    || record.upstreamError?.message || record.upstreamError?.code || record.upstreamError?.errorType
+    || record.continuationUnavailableReason === 'upstream_rejected'
+    || record.continuationUnavailableReason === 'quota_exhausted'
+    || record.errorKind === 'upstream_capacity_unavailable') {
+    kind = 'upstream'
+  }
+  else if ([
+    'scope_unavailable',
+    'pool_unavailable',
+    'fresh_connection_required',
+    'connection_busy',
+    'latest_response_mismatch',
+    'reused_connection_lost',
+  ].includes(record.continuationUnavailableReason ?? '') || [
+    'process_interrupted',
+    'process_terminated',
+    'no_available_provider',
+    'no_eligible_account',
+    'account_capacity_unavailable',
+    'middleware_capacity_unavailable',
+    'concurrency_queue_full',
+    'concurrency_queue_timeout',
+    'provider_infrastructure_unavailable',
+    'session_policy_restricted',
+    'request_policy_denied',
+    'policy_denied',
+    'budget_exhausted',
+  ].includes(record.errorKind ?? '')) {
+    kind = 'proxy'
+  }
+  else if (record.upstreamConnectionExitReason === 'upstream_close'
+    || record.upstreamConnectionExitReason === 'normal_close') {
+    kind = 'upstream'
+  }
+  else if (record.errorKind === 'transport' || [
+    'eof',
+    'unexpected_eof',
+    'transport_error',
+    'connection_reset',
+    'tcp_reset',
+    'reset_without_closing_handshake',
+    'pong_timeout',
+    'ping_write_timeout',
+    'pong_write_timeout',
+  ].includes(record.upstreamConnectionExitReason ?? '')) {
+    kind = 'connection'
   }
 
-  if (record.errorKind === 'process_interrupted')
-    return t('usage.error.summary.processInterrupted')
-
-  if (record.errorKind === 'continuation_recovery_required') {
-    if (record.continuationUnavailableReason === 'reused_connection_lost'
-      && record.upstreamConnectionExitReason === 'max_age_expired') {
-      return t('usage.error.summary.continuationExpired')
-    }
-    return t('usage.error.summary.continuationUnavailable')
+  const origins = {
+    proxy: {
+      label: t('usage.error.origin.proxy'),
+      className: 'bg-z-blue-container text-z-blue-on-container',
+      hint: null,
+    },
+    upstream: {
+      label: t('usage.error.origin.upstream'),
+      className: 'bg-z-error-container text-z-error-on-container',
+      hint: null,
+    },
+    connection: {
+      label: t('usage.error.origin.connection'),
+      className: 'bg-z-warning-container text-z-warning-on-container',
+      hint: t('usage.error.origin.connectionHint'),
+    },
+    unknown: {
+      label: t('usage.error.origin.unknown'),
+      className: 'bg-z-fill-tertiary text-z-text-secondary',
+      hint: t('usage.error.origin.unknownHint'),
+    },
   }
+  return { kind, ...origins[kind] }
+}
 
-  if (record.provider === 'openai') {
-    switch (record.errorCode) {
-      case 'previous_response_not_found':
-        return t('usage.error.summary.continuationUnavailable')
-      case 'websocket_connection_limit_reached':
-        return t('usage.error.summary.connectionLimit')
-      case 'context_length_exceeded':
-        return t('usage.error.summary.contextTooLong')
-      case 'insufficient_quota':
-        return t('usage.error.summary.quotaExceeded')
-      case 'rate_limit_exceeded':
-        return t('usage.error.summary.rateLimited')
-      case 'server_is_overloaded':
-        return t('usage.error.summary.serverOverloaded')
-    }
+export function usageSendStateText(state: string) {
+  switch (state) {
+    case 'not_sent': return t('usage.error.sendState.notSent')
+    case 'sent': return t('usage.error.sendState.sent')
+    case 'ambiguous': return t('usage.error.sendState.ambiguous')
+    default: return state
   }
-
-  if (record.upstreamConnectionExitReason === 'upstream_close')
-    return t('usage.error.summary.upstreamClosed')
-  return null
 }
 
 export function usageErrorCode(record: UsageErrorFacts): string | null {

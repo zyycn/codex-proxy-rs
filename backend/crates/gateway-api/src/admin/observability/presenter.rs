@@ -258,6 +258,8 @@ pub(crate) fn usage_list_record_view(
         .clone()
         .or_else(|| record.requested_model_id.clone());
     UsageListRecordView {
+        client_status_code: record.client_status_code,
+        upstream_status_code: record.upstream_status_code,
         error_code: record.error_code,
         error_message: record.error_message,
         error_kind: record.error_kind,

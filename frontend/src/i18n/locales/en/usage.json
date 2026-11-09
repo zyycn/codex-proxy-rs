@@ -284,7 +284,7 @@
       "responseIsNotComplete": "Response is not complete",
       "requestFailed": "Request failed",
       "requestContext": "Request context",
-      "errorLocation": "Error location",
+      "errorLocation": "Correlation IDs",
       "attempts": "Attempt history",
       "attemptRecordMayBeIncomplete": "Attempt record may be incomplete",
       "attempt": "Attempt {index}",
@@ -292,25 +292,38 @@
       "responseContent": "Response content",
       "metadata": "Metadata",
       "recovered": "Subsequently recovered",
-      "summary": {
-        "upstreamRestart": "Upstream closed the connection (service restart)",
-        "upstreamBusy": "Upstream closed the connection (try again later)",
-        "messageTooLarge": "Upstream closed the connection because the message was too large",
-        "upstreamClosed": "Upstream closed the connection before the response completed",
-        "processInterrupted": "Request execution was interrupted without a recorded final result",
-        "continuationExpired": "Continuation connection expired, resend the full context",
-        "continuationUnavailable": "Continuation state is unavailable, resend the full context",
-        "connectionLimit": "Upstream connection reached its time limit, reconnect to continue",
-        "contextTooLong": "Context exceeds the model limit",
-        "quotaExceeded": "Upstream quota is insufficient",
-        "rateLimited": "Upstream request rate limit reached",
-        "serverOverloaded": "Upstream service is overloaded"
-      },
       "websocketCloseCode": "WS close code",
       "lastEventType": "Last event",
       "retryAfter": "Retry after",
       "closeReason": "Close reason",
-      "gatewayMessage": "Gateway summary"
+      "gatewayMessage": "Gateway summary",
+      "upstreamHttpStatus": "Upstream {status}",
+      "clientHttpStatus": "Client {status}",
+      "origin": {
+        "proxy": "Proxy",
+        "upstream": "Upstream",
+        "connection": "Upstream connection",
+        "unknown": "Unknown source",
+        "connectionHint": "The connection failed, but the recorded evidence does not identify which side caused it",
+        "unknownHint": "The recorded evidence cannot distinguish a proxy error from an upstream error"
+      },
+      "sendState": {
+        "notSent": "Not sent",
+        "sent": "Sent",
+        "ambiguous": "Execution unconfirmed"
+      },
+      "upstreamEvidence": "Upstream original message",
+      "noUpstreamMessage": "No upstream error message was recorded",
+      "continuationReason": "Continuation failure",
+      "connectionExitReason": "Connection exit reason",
+      "clientResult": "Returned to client",
+      "noHttpStatus": "No HTTP status recorded",
+      "httpStatusHint": "An HTTP success status does not mean the response completed, streaming can still fail during transfer",
+      "recoveryExplanation": "A later successful request was linked, this record retains the original failure",
+      "noAttempts": "No execution attempts were recorded",
+      "clientResponse": "Client response",
+      "responseStarted": "Response started",
+      "responseNotStarted": "Response not started"
     },
     "insights": {
       "useStatisticalObservations": "Use statistical observations"

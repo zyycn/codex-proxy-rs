@@ -816,6 +816,7 @@ pub struct UsageListRecord {
     pub upstream_connection_exit_reason: Option<String>,
     pub recovered: bool,
     pub client_status_code: Option<u16>,
+    pub upstream_status_code: Option<u16>,
     pub client_api_key_name: Option<String>,
     pub id: String,
     pub endpoint: String,

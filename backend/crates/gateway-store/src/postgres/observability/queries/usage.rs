@@ -125,7 +125,7 @@ pub(crate) fn push_usage_filter(
 
 pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
     "select mr.id, mr.outcome, mr.provider_error_code as error_code, mr.error_message, mr.client_status_code, mr.client_api_key_name_snapshot as client_api_key_name, mr.endpoint, mr.client_transport, mr.requested_model_id,
-            mr.error_kind,
+            mr.error_kind, mr.upstream_status_code,
             case when pg_input_is_valid(mr.error_details, 'jsonb') then
               case when jsonb_typeof(mr.error_details::jsonb -> 'upstream') = 'string'
                 and pg_input_is_valid(mr.error_details::jsonb ->> 'upstream', 'jsonb') then

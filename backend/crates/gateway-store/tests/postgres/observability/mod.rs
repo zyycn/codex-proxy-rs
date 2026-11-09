@@ -182,6 +182,7 @@ async fn usage_error_facts_preserve_recovery_and_validate_saved_close_frames() {
         sqlx::query(
             "update model_requests
              set error_kind = 'continuation_recovery_required', error_details = $1,
+                 client_status_code = 503, upstream_status_code = 429,
                  recovery_request_id = 'req_observe_success', recovered_at = $2,
                  continuation_requested = true, continuation_affinity_hash = repeat('a', 64), recovery_attempt_count = 1,
                  request_observation_json = request_observation_json || jsonb_build_object(
@@ -207,6 +208,8 @@ async fn usage_error_facts_preserve_recovery_and_validate_saved_close_frames() {
             .find(|record| record.id == "req_observe_failed")
             .unwrap();
         assert_eq!(record.websocket_close_code, close_code);
+        assert_eq!(record.client_status_code, Some(503));
+        assert_eq!(record.upstream_status_code, Some(429));
         assert_eq!(
             record.error_kind.as_deref(),
             Some("continuation_recovery_required")

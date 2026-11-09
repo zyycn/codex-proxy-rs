@@ -109,6 +109,8 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageListRecord
     id: options.id,
     logicalOutcome: 'succeeded',
     errorCode: null,
+    clientStatusCode: null,
+    upstreamStatusCode: null,
     errorKind: null,
     websocketCloseCode: null,
     continuationUnavailableReason: null,

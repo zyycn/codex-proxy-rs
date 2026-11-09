@@ -91,6 +91,8 @@ export interface UsageErrorFacts {
 
 export interface UsageListRecord extends UsageErrorFacts {
   logicalOutcome: string
+  clientStatusCode: number | null
+  upstreamStatusCode: number | null
   errorMessage: string | null
   clientApiKeyName: string | null
   id: string

@@ -1527,6 +1527,7 @@ fn total_record(
         upstream_connection_exit_reason: None,
         recovered: false,
         client_status_code: None,
+        upstream_status_code: None,
         outcome: gateway_admin::model::observability::RequestOutcome::Succeeded,
         client_api_key_name: Some("Production".to_owned()),
         id: id.to_owned(),

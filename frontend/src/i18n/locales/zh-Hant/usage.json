@@ -284,7 +284,7 @@
       "responseIsNotComplete": "響應未完成",
       "requestFailed": "請求失敗",
       "requestContext": "請求上下文",
-      "errorLocation": "錯誤定位",
+      "errorLocation": "關聯標識",
       "attempts": "嘗試記錄",
       "attemptRecordMayBeIncomplete": "嘗試記錄可能不完整",
       "attempt": "嘗試 {index}",
@@ -292,25 +292,38 @@
       "responseContent": "響應內容",
       "metadata": "元數據",
       "recovered": "後續已恢復",
-      "summary": {
-        "upstreamRestart": "上游關閉連接（服務重啟）",
-        "upstreamBusy": "上游關閉連接（稍後重試）",
-        "messageTooLarge": "上游因消息過大關閉連接",
-        "upstreamClosed": "上游在響應完成前關閉連接",
-        "processInterrupted": "請求執行中斷，未記錄到最終結果",
-        "continuationExpired": "續接連接已到期，需要完整重發",
-        "continuationUnavailable": "續接狀態不可用，需要完整重發",
-        "connectionLimit": "上游連接已到時限，需要重新連接",
-        "contextTooLong": "上下文超過模型限制",
-        "quotaExceeded": "上游可用額度不足",
-        "rateLimited": "上游請求頻率受限",
-        "serverOverloaded": "上游服務負載過高"
-      },
       "websocketCloseCode": "WS 關閉碼",
       "lastEventType": "最後事件",
       "retryAfter": "重試等待",
       "closeReason": "關閉原因",
-      "gatewayMessage": "閘道摘要"
+      "gatewayMessage": "閘道摘要",
+      "upstreamHttpStatus": "上游 {status}",
+      "clientHttpStatus": "用戶端 {status}",
+      "origin": {
+        "proxy": "代理處理",
+        "upstream": "上游返回",
+        "connection": "上游連接",
+        "unknown": "來源未記錄",
+        "connectionHint": "連接發生錯誤，現有記錄無法確定由哪一方引起",
+        "unknownHint": "現有記錄不足以區分代理與上游"
+      },
+      "sendState": {
+        "notSent": "未發送",
+        "sent": "已發送",
+        "ambiguous": "執行結果未確認"
+      },
+      "upstreamEvidence": "上游返回原文",
+      "noUpstreamMessage": "未記錄上游錯誤原文",
+      "continuationReason": "續接失敗原因",
+      "connectionExitReason": "連接退出原因",
+      "clientResult": "返回客戶端",
+      "noHttpStatus": "未記錄 HTTP 狀態",
+      "httpStatusHint": "HTTP 成功狀態不代表響應完整，流式請求仍可能在傳輸中失敗",
+      "recoveryExplanation": "已關聯到後續成功請求，本條仍保留原始失敗結果",
+      "noAttempts": "未記錄執行嘗試",
+      "clientResponse": "客戶端響應",
+      "responseStarted": "已開始響應",
+      "responseNotStarted": "未開始響應"
     },
     "insights": {
       "useStatisticalObservations": "使用統計觀測"
