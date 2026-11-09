@@ -47,7 +47,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             audit_retention_days: 90,
             account_error_protection: enabled_protection(),
             account_warmup_enabled: false,
-            account_warmup_schedule_time: "08:00".to_owned(),
+            account_warmup_cron: "0 8 * * *".to_owned(),
             account_warmup_model: None,
             reset_credit_lead_minutes: 10,
             reset_credit_max_weekly_remaining_percent: None,
@@ -180,7 +180,7 @@ async fn warmup_settings_round_trip_with_database_constraint() {
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let mut update = settings_with_margin(3_600);
     update.values.account_warmup_enabled = true;
-    update.values.account_warmup_schedule_time = "08:00,13:00".to_owned();
+    update.values.account_warmup_cron = "0 8,13 * * MON-FRI".to_owned();
     update.values.account_warmup_model = Some("test-model".to_owned());
     repository
         .update_runtime_settings(update)
@@ -192,7 +192,7 @@ async fn warmup_settings_round_trip_with_database_constraint() {
         .await
         .expect("load warmup settings");
     assert!(settings.values.account_warmup_enabled);
-    assert_eq!(settings.values.account_warmup_schedule_time, "08:00,13:00");
+    assert_eq!(settings.values.account_warmup_cron, "0 8,13 * * MON-FRI");
     assert_eq!(
         settings.values.account_warmup_model.as_deref(),
         Some("test-model")

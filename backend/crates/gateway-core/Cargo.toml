@@ -17,6 +17,7 @@ base64 = "0.23.0"
 bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 chrono-tz = { version = "0.10", features = ["serde"] }
+cron = "0.17"
 event-listener = "5.4.2"
 futures = "0.3.32"
 http = "1.5.0"

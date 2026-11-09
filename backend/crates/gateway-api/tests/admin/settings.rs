@@ -70,7 +70,7 @@ fn update_body() -> Value {
         "auditRetentionDays": 91,
         "accountErrorProtection": gateway_core::account::AccountErrorProtection::default(),
         "accountWarmupEnabled": false,
-        "accountWarmupScheduleTime": "08:00",
+        "accountWarmupCron": "0 8 * * *",
         "accountWarmupModel": null,
         "resetCreditLeadMinutes": 10,
         "resetCreditMaxWeeklyRemainingPercent": null
@@ -400,6 +400,33 @@ fn settings_request_accepts_unlimited_default_account_concurrency() {
     let request: UpdateRuntimeSettingsRequest =
         serde_json::from_value(body).expect("decode settings");
     request.validate().expect("zero means unlimited");
+}
+
+#[test]
+fn settings_request_validates_cron_and_allows_disabled_empty_schedule() {
+    for (enabled, cron, valid) in [
+        (false, "", true),
+        (true, "", false),
+        (false, "08:00", false),
+        (true, "0 8 * * MON-FRI", true),
+        (true, "60 8 * * *", false),
+        (true, "0 8 * * *\n30 13 * * *", false),
+    ] {
+        let mut body = update_body();
+        body["accountWarmupEnabled"] = json!(enabled);
+        body["accountWarmupCron"] = json!(cron);
+        body["accountWarmupModel"] = json!("test-model");
+        let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+        let result = request.validate();
+        assert_eq!(result.is_ok(), valid, "{enabled}: {cron:?}");
+        if let Err(error) = result {
+            assert_eq!(error.field(), "accountWarmupCron");
+        }
+    }
+    let mut legacy = update_body();
+    legacy.as_object_mut().unwrap().remove("accountWarmupCron");
+    legacy["accountWarmupScheduleTime"] = json!("08:00");
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(legacy).is_err());
 }
 
 #[test]

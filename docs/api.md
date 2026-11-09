@@ -2016,7 +2016,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | [客户端门禁](#1-鉴权与公共约定) | `minCodexDesktopVersion`、`minCodexCliVersion` |
 | [历史保留](#历史保留) | `usageRetentionDays`、`opsEventRetentionDays`、`auditRetentionDays` |
 | [账号错误保护](#账号错误保护) | `accountErrorProtection` |
-| [账号预热](#账号预热) | `accountWarmupEnabled`、`accountWarmupScheduleTime`、`accountWarmupModel` |
+| [账号预热](#账号预热) | `accountWarmupEnabled`、`accountWarmupCron`、`accountWarmupModel` |
 | [主动额度重置卡](#主动额度重置卡) | `resetCreditLeadMinutes`、`resetCreditMaxWeeklyRemainingPercent` |
 
 ### 历史保留
@@ -2032,12 +2032,15 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 ### 账号预热
 
-定时账号预热默认关闭。`accountWarmupScheduleTime` 使用部署时区中的 `HH:MM`，
-多个时段以逗号分隔，默认 `08:00`；`accountWarmupModel` 默认 `null`，开启前必须显式选择模型。
-任务面向可用的 Codex OAuth 账号，按账号级额度桶判断，跳过额度耗尽及已确认活跃、距离重置仍超过 30 分钟的五小时窗口。
-0% 不代表窗口空闲；已用额度或开始递减的上游倒计时用于确认活跃。距重置超过 30 分钟但缺少活跃证据时，
-最多回查两次，两次实时查询间隔 2 秒；0% 完整窗口连续随查询后移才视为空闲。
-回查失败或仍无法确认时计为失败，不发送预热。
+定时账号预热默认关闭。`accountWarmupCron` 使用部署时区的五段 Cron 表达式，
+顺序为分、时、日、月、星期，总长度不超过 255 字节，默认空字符串，关闭时允许留空。
+支持列表、范围和步长，例如 `0 8,13,19 * * *` 每天执行三次，`0 8 * * MON-FRI` 在工作日 08:00 执行。
+星期可用 `SUN` 至 `SAT` 或数字 1 至 7（日到六），同时指定日与星期时两者均须满足。
+同一分钟只领取一次；`accountWarmupModel` 默认 `null`，开启前必须填写有效表达式并显式选择模型。
+
+任务面向可用的 Codex OAuth 账号，按账号级额度桶判断，跳过额度耗尽，以及已用比例大于 0 且距离重置仍超过 30 分钟的五小时窗口。
+0% 或缺少活跃证据时允许一次轻量预热，不通过倒计时差值判断活跃，也不额外回查额度。
+因此已激活但显示 0% 的账号也可能收到预热请求。
 不存在的本地时刻跳过，重复时刻只执行较早一次；执行进度跨重启保留，时钟回拨不补跑已领取时刻之前的时段。
 只有收到响应成功终态才记为预热成功；预热不计入客户端业务用量
 

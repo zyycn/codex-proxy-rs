@@ -71,7 +71,7 @@ export function useSettingsForm() {
       probeModel: '',
     } as ProtectionDraft,
     accountWarmupEnabled: false,
-    accountWarmupScheduleTime: '08:00',
+    accountWarmupCron: '',
     accountWarmupModel: '',
     resetCreditLeadMinutes: 10 as number | null,
     resetCreditMaxWeeklyRemainingPercent: null as number | null,
@@ -161,7 +161,7 @@ export function useSettingsForm() {
       probeModel: data.accountErrorProtection.probeModel ?? '',
     }
     form.accountWarmupEnabled = data.accountWarmupEnabled
-    form.accountWarmupScheduleTime = data.accountWarmupScheduleTime ?? '08:00'
+    form.accountWarmupCron = data.accountWarmupCron ?? ''
     form.accountWarmupModel = data.accountWarmupModel ?? ''
     form.resetCreditLeadMinutes = data.resetCreditLeadMinutes
     form.resetCreditMaxWeeklyRemainingPercent = data.resetCreditMaxWeeklyRemainingPercent
@@ -292,7 +292,7 @@ export function useSettingsForm() {
           probeModel: trimProtectionText(form.accountErrorProtection.probeModel) || null,
         },
         accountWarmupEnabled: form.accountWarmupEnabled,
-        accountWarmupScheduleTime: form.accountWarmupScheduleTime.trim(),
+        accountWarmupCron: form.accountWarmupCron.trim(),
         accountWarmupModel: form.accountWarmupModel.trim() || null,
         resetCreditLeadMinutes: resetCreditLeadMinutes!,
         resetCreditMaxWeeklyRemainingPercent,

@@ -198,15 +198,15 @@
     "warmup": {
       "title": "Account warmup",
       "description": "Try to start quota windows for idle Codex OAuth accounts",
-      "enableDailyWarmup": "Enable daily warmup",
-      "executionTime": "Execution time",
-      "timesPlaceholder": "HH:MM, separate times with commas",
-      "scheduleLabel": "Daily warmup times",
+      "enableWarmup": "Enable warmup",
+      "cronExpression": "Cron expression",
+      "cronHelp": "Five fields: minute hour day month weekday",
       "modelLabel": "Warmup model",
       "modelHelp": "Required when enabled, use an available model",
       "modelPlaceholder": "Enter model name",
       "helpTitle": "About account warmup",
-      "help": "Send one request to each idle Codex OAuth account at the scheduled times, starting a quota window is not guaranteed"
+      "help": "Sends a lightweight request to available Codex OAuth accounts, skipping exhausted quotas and confirmed active windows, accounts at 0% may be warmed up, activation is not guaranteed",
+      "cronExample": "Uses the deployment time zone, for example 0 8 * * MON-FRI runs at 08:00 on weekdays, at most once per minute"
     },
     "adminApiKey": {
       "adminApiKey": "Admin API key",
@@ -614,7 +614,7 @@
       "invalidRetention": "History retention must be an integer from 1 to 31 days",
       "invalidQueueSettings": "Queue capacity must be an integer from 0 to 1,000 and timeout from 1 to 120 seconds",
       "invalidProbeModel": "The probe model must be at most 128 characters without control characters",
-      "invalidWarmupTimes": "Use HH:MM for warmup times, for example 08:00 or 08:00,13:00",
+      "invalidWarmupCron": "Enter a valid Cron expression",
       "warmupModelRequired": "Select a model to enable warmup",
       "invalidWarmupModel": "Warmup model name must not exceed 128 characters",
       "settingsSaved": "Settings saved",

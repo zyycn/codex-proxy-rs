@@ -351,7 +351,7 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                     account_error_protection:
                         gateway_core::account::AccountErrorProtection::default(),
                     account_warmup_enabled: false,
-                    account_warmup_schedule_time: "08:00".to_owned(),
+                    account_warmup_cron: "0 8 * * *".to_owned(),
                     account_warmup_model: None,
                     reset_credit_lead_minutes: 10,
                     reset_credit_max_weekly_remaining_percent: None,

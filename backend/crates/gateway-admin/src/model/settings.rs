@@ -70,7 +70,7 @@ pub struct RuntimeSettingsValues {
     pub audit_retention_days: u32,
     pub account_error_protection: gateway_core::account::AccountErrorProtection,
     pub account_warmup_enabled: bool,
-    pub account_warmup_schedule_time: String,
+    pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
     pub reset_credit_lead_minutes: u32,
     pub reset_credit_max_weekly_remaining_percent: Option<u32>,
@@ -233,7 +233,7 @@ impl RuntimeSettingsValues {
         self.account_error_protection.validate()?;
         gateway_core::provider_ports::ProviderWarmupPolicy::validate_values(
             self.account_warmup_enabled,
-            &self.account_warmup_schedule_time,
+            &self.account_warmup_cron,
             self.account_warmup_model.as_deref(),
         )?;
         Ok(())

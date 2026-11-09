@@ -2,14 +2,10 @@
 
 use super::*;
 
-// 上游倒计时按整秒返回，跨过一个完整秒后再区分刚激活与空闲满窗口
-const WINDOW_CONFIRM_DELAY: Duration = Duration::from_secs(2);
-
 enum WarmupDecision<'a> {
     Ready,
     Active(&'a CodexQuotaWindow),
     Exhausted(Option<&'a CodexQuotaWindow>),
-    Verify(&'a CodexQuotaWindow),
 }
 
 fn warmup_account_is_available(account: &ProviderAccount) -> bool {
@@ -21,11 +17,10 @@ fn warmup_account_is_available(account: &ProviderAccount) -> bool {
         )
 }
 
-fn warmup_decision<'a>(
-    snapshot: &'a CodexAccountQuotaSnapshot,
-    previous: Option<&CodexAccountQuotaSnapshot>,
+fn warmup_decision(
+    snapshot: &CodexAccountQuotaSnapshot,
     now: chrono::DateTime<chrono::Utc>,
-) -> WarmupDecision<'a> {
+) -> WarmupDecision<'_> {
     if snapshot.quota().is_exhausted() {
         return WarmupDecision::Exhausted(None);
     }
@@ -37,49 +32,19 @@ fn warmup_decision<'a>(
         return WarmupDecision::Exhausted(Some(window));
     }
 
-    let mut uncertain = None;
-    for window in snapshot.windows().iter().filter(|window| {
+    // 0% 可能取整，也可能属于空闲窗口；倒计时差值不能证明活跃
+    // 对缺少明确活跃证据的账号允许一次轻量预热
+    if let Some(window) = snapshot.windows().iter().find(|window| {
         window.is_account_wide()
             && window.kind() == CodexQuotaWindowKind::ShortTerm
+            && window.used_percent().is_some_and(|used| used > 0.0)
             && window
                 .reset_at()
                 .is_some_and(|reset| reset > now + chrono::Duration::minutes(30))
     }) {
-        // 0% 可能只是取整；已经开始递减的原始倒计时仍能证明窗口已激活
-        if window.used_percent().is_some_and(|used| used > 0.0)
-            || window
-                .reset_after_seconds()
-                .zip(window.window_seconds())
-                .is_some_and(|(remaining, total)| remaining > 0 && remaining < total)
-        {
-            return WarmupDecision::Active(window);
-        }
-        // 连续两次实时查询仍返回完整窗口且 reset 向后移动，才确认空闲
-        // 不以快照级 observed_at 推算，其他额度桶的被动更新也会推进该时间
-        let confirmed_idle = idle_full_window(window)
-            && previous.is_some_and(|previous| {
-                previous.windows().iter().any(|prior| {
-                    prior.key() == window.key()
-                        && idle_full_window(prior)
-                        && prior
-                            .reset_at()
-                            .zip(window.reset_at())
-                            .is_some_and(|(before, after)| after > before)
-                })
-            });
-        if !confirmed_idle {
-            uncertain = Some(window);
-        }
+        return WarmupDecision::Active(window);
     }
-    uncertain.map_or(WarmupDecision::Ready, WarmupDecision::Verify)
-}
-
-fn idle_full_window(window: &CodexQuotaWindow) -> bool {
-    window.used_percent() == Some(0.0)
-        && window
-            .reset_after_seconds()
-            .zip(window.window_seconds())
-            .is_some_and(|(remaining, total)| remaining == total)
+    WarmupDecision::Ready
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -167,7 +132,7 @@ impl CodexCredentialQuotaService {
             .map(|account| account.id().clone())
             .collect::<Vec<_>>();
         let observed = self.store.get_quotas(&account_ids).await?;
-        let mut observed_snapshots = observed
+        let observed_snapshots = observed
             .iter()
             .filter_map(|obs| {
                 quota_snapshot_from_observation(obs)
@@ -181,7 +146,7 @@ impl CodexCredentialQuotaService {
             self.profile.clone(),
         );
 
-        'accounts: for account in accounts {
+        for account in accounts {
             if account.quota().is_exhausted() {
                 summary.skipped_exhausted += 1;
                 tracing::info!(
@@ -193,96 +158,36 @@ impl CodexCredentialQuotaService {
                 );
                 continue;
             }
-            let mut snapshot = observed_snapshots
-                .remove(account.id())
-                .filter(|snapshot| snapshot.credential_revision() == account.revision());
-            let mut previous = None;
-            let mut refreshes = 0;
-            while let Some(current) = snapshot.as_ref() {
-                let (window, reason) =
-                    match warmup_decision(current, previous.as_ref(), chrono::Utc::now()) {
-                        WarmupDecision::Ready => break,
-                        WarmupDecision::Active(window) => {
-                            summary.skipped_active += 1;
-                            (Some(window), "active_short_window")
-                        }
-                        WarmupDecision::Exhausted(window) => {
-                            summary.skipped_exhausted += 1;
-                            (window, "quota_exhausted")
-                        }
-                        WarmupDecision::Verify(window) if refreshes == 2 => {
-                            summary.failed += 1;
-                            (Some(window), "window_activity_unconfirmed")
-                        }
-                        WarmupDecision::Verify(_) => {
-                            // 持久化快照不作为两次实时查询的首份证据
-                            if refreshes == 1 {
-                                previous = snapshot.take();
-                                tokio::time::sleep(WINDOW_CONFIRM_DELAY).await;
-                            }
-                            match tokio::time::timeout(
-                                WARMUP_REQUEST_TIMEOUT,
-                                self.refresh_account(account.id()),
-                            )
-                            .await
-                            {
-                                Ok(Ok(refreshed))
-                                    if refreshed.credential_revision() == account.revision() =>
-                                {
-                                    snapshot = Some(refreshed);
-                                    refreshes += 1;
-                                    continue;
-                                }
-                                _ => {
-                                    summary.failed += 1;
-                                    tracing::warn!(
-                                        account_id = %account.id(),
-                                        reason = "quota_refresh_failed",
-                                        "OpenAI account warmup quota verification failed"
-                                    );
-                                    continue 'accounts;
-                                }
-                            }
-                        }
-                    };
-                tracing::info!(
-                    account_id = %account.id(),
-                    observed_at = ?chrono::DateTime::<chrono::Utc>::from(current.observed_at()),
-                    window = window.map(CodexQuotaWindow::key),
-                    window_seconds = window.and_then(CodexQuotaWindow::window_seconds),
-                    used_percent = window.and_then(CodexQuotaWindow::used_percent),
-                    reset_at = ?window.and_then(CodexQuotaWindow::reset_at),
-                    reset_after_seconds = window.and_then(CodexQuotaWindow::reset_after_seconds),
-                    reason,
-                    "OpenAI account warmup skipped"
-                );
-                continue 'accounts;
+            if let Some(snapshot) = observed_snapshots
+                .get(account.id())
+                .filter(|snapshot| snapshot.credential_revision() == account.revision())
+            {
+                let skipped = match warmup_decision(snapshot, chrono::Utc::now()) {
+                    WarmupDecision::Ready => None,
+                    WarmupDecision::Active(window) => {
+                        summary.skipped_active += 1;
+                        Some((Some(window), "active_short_window"))
+                    }
+                    WarmupDecision::Exhausted(window) => {
+                        summary.skipped_exhausted += 1;
+                        Some((window, "quota_exhausted"))
+                    }
+                };
+                if let Some((window, reason)) = skipped {
+                    tracing::info!(
+                        account_id = %account.id(),
+                        observed_at = ?chrono::DateTime::<chrono::Utc>::from(snapshot.observed_at()),
+                        window = window.map(CodexQuotaWindow::key),
+                        window_seconds = window.and_then(CodexQuotaWindow::window_seconds),
+                        used_percent = window.and_then(CodexQuotaWindow::used_percent),
+                        reset_at = ?window.and_then(CodexQuotaWindow::reset_at),
+                        reason,
+                        "OpenAI account warmup skipped"
+                    );
+                    continue;
+                }
             }
 
-            // 回查会更新额度与套餐；凭据加载仍核对最新账号的完整快照
-            let account = if refreshes > 0 {
-                match self.store.get_account(account.id()).await {
-                    Ok(Some(current))
-                        if current.provider() == account.provider()
-                            && current.revision() == account.revision()
-                            && warmup_account_is_available(&current)
-                            && !current.quota().is_exhausted() =>
-                    {
-                        current
-                    }
-                    _ => {
-                        summary.failed += 1;
-                        tracing::warn!(
-                            account_id = %account.id(),
-                            reason = "account_changed_after_verification",
-                            "OpenAI account warmup skipped"
-                        );
-                        continue;
-                    }
-                }
-            } else {
-                account
-            };
             let credential = match self.repository.load_runtime_credential(&account).await {
                 Ok(cred) => cred,
                 Err(_) => {

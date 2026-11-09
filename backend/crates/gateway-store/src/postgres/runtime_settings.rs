@@ -157,7 +157,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
                     account_error_protection_json, account_error_protection_revision,
-                    account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent
+                    account_warmup_enabled, account_warmup_cron, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -296,7 +296,7 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
                 .map_err(|source| crate::provider_unavailable("load warmup policy", source))?;
             ProviderWarmupPolicy::try_new(
                 settings.values.account_warmup_enabled,
-                settings.values.account_warmup_schedule_time,
+                settings.values.account_warmup_cron,
                 settings.values.account_warmup_model,
             )
         })
@@ -313,7 +313,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
                 account_error_protection_json, account_error_protection_revision,
-                account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent
+                account_warmup_enabled, account_warmup_cron, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -381,7 +381,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      responses_max_decompressed_body_bytes = $17,
 	                 provider_request_profiles_json = (provider_request_profiles_json - $18::text[]) || $19::jsonb,
                      account_warmup_enabled = $20,
-                     account_warmup_schedule_time = $21,
+                     account_warmup_cron = $21,
                      account_warmup_model = $22,
                      smart_scheduling_json = $23,
                      openai_guardian_reserved_concurrency = $24,
@@ -426,7 +426,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(request_profile_deletions)
     .bind(sqlx::types::Json(request_profile_updates))
     .bind(update.values.account_warmup_enabled)
-    .bind(&update.values.account_warmup_schedule_time)
+    .bind(&update.values.account_warmup_cron)
     .bind(update.values.account_warmup_model.as_deref())
     .bind(sqlx::types::Json(update.values.smart_scheduling))
     .bind(i64::from(update.values.openai_guardian_reserved_concurrency))
@@ -537,7 +537,7 @@ struct RuntimeSettingsRow {
     account_error_protection_revision: i64,
     account_error_protection_json: sqlx::types::Json<gateway_core::account::AccountErrorProtection>,
     account_warmup_enabled: bool,
-    account_warmup_schedule_time: String,
+    account_warmup_cron: String,
     account_warmup_model: Option<String>,
     reset_credit_lead_minutes: i32,
     reset_credit_max_weekly_remaining_percent: Option<i32>,
@@ -606,7 +606,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
             )?,
             account_error_protection: row.account_error_protection_json.0,
             account_warmup_enabled: row.account_warmup_enabled,
-            account_warmup_schedule_time: row.account_warmup_schedule_time,
+            account_warmup_cron: row.account_warmup_cron,
             account_warmup_model: row.account_warmup_model,
             reset_credit_lead_minutes: u32::try_from(row.reset_credit_lead_minutes)
                 .map_err(|_| invalid_numeric())?,

@@ -221,30 +221,72 @@ fn scheduling_state_preserves_provider_neutral_signals() {
 }
 
 #[test]
-fn warmup_schedule_time_and_policy_validation() {
-    use gateway_core::provider_ports::{ProviderWarmupPolicy, valid_warmup_schedule_time};
+fn warmup_cron_validation_and_calendar_matching() {
+    use chrono::NaiveDate;
+    use gateway_core::provider_ports::{ProviderWarmupPolicy, valid_warmup_cron};
 
-    assert!(valid_warmup_schedule_time("08:00"));
-    assert!(valid_warmup_schedule_time("08:00,13:00"));
-    assert!(valid_warmup_schedule_time("00:00,23:59"));
-    assert!(!valid_warmup_schedule_time(""));
-    assert!(!valid_warmup_schedule_time("8:00"));
-    assert!(!valid_warmup_schedule_time("24:00"));
-    assert!(!valid_warmup_schedule_time("08:60"));
-    assert!(!valid_warmup_schedule_time("08:00,"));
-    assert!(!valid_warmup_schedule_time("08:00, 13:00"));
-
+    for value in [
+        "0 8 * * *",
+        "*/15 8-18 * * MON-FRI",
+        "0 8,13 * * MON-FRI",
+        "0 0 29 FEB *",
+    ] {
+        assert!(valid_warmup_cron(value), "{value}");
+    }
+    for value in [
+        "",
+        "08:00",
+        "08:00,13:00",
+        "60 8 * * *",
+        "0 24 * * *",
+        "0 8 * *",
+        "0 0 8 * * *",
+        "0 8 * * * *",
+        "@daily",
+        "0 8 * * *\n30 13 * * *",
+        "0 8 * * *\r\n30 13 * * *",
+        "0 8 * * *\t",
+        " 0 8 * * *",
+        "0 8 * * *\n",
+    ] {
+        assert!(!valid_warmup_cron(value), "{value:?}");
+    }
     let policy = ProviderWarmupPolicy::try_new(
         true,
-        "08:00,13:00".to_owned(),
+        "0 8,13 * * MON-FRI".to_owned(),
         Some("test-model".to_owned()),
     )
-    .expect("valid warmup policy");
+    .unwrap();
     assert!(policy.enabled());
-    assert_eq!(policy.schedule_time(), "08:00,13:00");
+    assert_eq!(policy.cron(), "0 8,13 * * MON-FRI");
     assert_eq!(policy.model(), Some("test-model"));
-    assert_eq!(policy.scheduled_times(), vec![(8, 0), (13, 0)]);
-
+    for (day, hour, minute, expected) in [
+        (9, 8, 0, true),
+        (9, 13, 0, true),
+        (9, 8, 30, false),
+        (9, 13, 30, false),
+        (14, 8, 0, false),
+        (14, 13, 30, false),
+    ] {
+        let slot = NaiveDate::from_ymd_opt(2026, 11, day)
+            .unwrap()
+            .and_hms_opt(hour, minute, 0)
+            .unwrap();
+        assert_eq!(policy.matches_slot(slot), expected, "{slot}");
+    }
+    assert!(ProviderWarmupPolicy::try_new(false, String::new(), None).is_ok());
+    assert!(
+        ProviderWarmupPolicy::try_new(true, String::new(), Some("test-model".to_owned())).is_err()
+    );
+    assert!(ProviderWarmupPolicy::try_new(false, "08:00".to_owned(), None).is_err());
+    assert!(!valid_warmup_cron(&format!("0{}8 * * *", " ".repeat(256))));
+    let leap = ProviderWarmupPolicy::try_new(false, "0 0 29 FEB *".to_owned(), None).unwrap();
+    let slot = NaiveDate::from_ymd_opt(2028, 2, 29)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    assert!(leap.matches_slot(slot));
+    assert!(!leap.matches_slot(slot + chrono::Duration::days(1)));
     assert!(ProviderWarmupPolicy::try_new(true, "invalid".to_owned(), None).is_err());
-    assert!(ProviderWarmupPolicy::try_new(true, "08:00".to_owned(), None).is_err());
+    assert!(ProviderWarmupPolicy::try_new(true, "0 8 * * *".to_owned(), None).is_err());
 }

@@ -393,23 +393,17 @@ impl ScheduledTask for OpenAiWarmupTask {
             {
                 return Ok(());
             }
-            let hour = local_now.time().hour();
-            let minute = local_now.time().minute();
-            let scheduled_times = policy.scheduled_times();
-            let matched = scheduled_times
-                .iter()
-                .any(|&(h, m)| h == hour && m == minute);
-            if !matched {
-                return Ok(());
-            }
-            let Some(model) = policy.model() else {
-                return Err(WorkerTaskError::safe("OpenAI warmup model is missing"));
-            };
             let slot = local_now
                 .naive_local()
                 .with_second(0)
                 .and_then(|value| value.with_nanosecond(0))
                 .ok_or_else(|| WorkerTaskError::safe("invalid warmup slot"))?;
+            if !policy.matches_slot(slot) {
+                return Ok(());
+            }
+            let Some(model) = policy.model() else {
+                return Err(WorkerTaskError::safe("OpenAI warmup model is missing"));
+            };
             if !self
                 .quota
                 .runtime_policy()
@@ -421,7 +415,7 @@ impl ScheduledTask for OpenAiWarmupTask {
             {
                 return Ok(());
             }
-            tracing::info!(hour, minute, model, "OpenAI account warmup cycle started");
+            tracing::info!(%slot, model, "OpenAI account warmup cycle started");
             let outcome = tokio::select! {
                 () = context.cancellation().cancelled() => return Ok(()),
                 outcome = self.quota.execute_warmup(model) => outcome,

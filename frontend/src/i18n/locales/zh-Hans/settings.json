@@ -198,15 +198,15 @@
     "warmup": {
       "title": "账号预热",
       "description": "尝试启动空闲 Codex OAuth 账号的额度窗口",
-      "enableDailyWarmup": "启用每日预热",
-      "executionTime": "执行时间",
-      "timesPlaceholder": "HH:MM，多个时间用逗号分隔",
-      "scheduleLabel": "每日预热时间",
+      "enableWarmup": "启用预热",
+      "cronExpression": "Cron 表达式",
+      "cronHelp": "五段表达式：分 时 日 月 星期",
       "modelLabel": "预热模型",
       "modelHelp": "启用时必填，需为账号可用模型",
       "modelPlaceholder": "输入模型名称",
       "helpTitle": "账号预热说明",
-      "help": "在设定时间向每个空闲的 Codex OAuth 账号发送一次请求，不保证额度窗口成功启动"
+      "help": "向可用的 Codex OAuth 账号发送轻量请求，跳过额度耗尽和已确认活跃的窗口，0% 账号允许预热，不保证窗口成功启动",
+      "cronExample": "按部署时区执行，例如 0 8 * * MON-FRI 表示工作日 08:00，同一分钟只执行一次"
     },
     "adminApiKey": {
       "adminApiKey": "管理员 API密钥",
@@ -614,7 +614,7 @@
       "invalidRetention": "历史保留天数应为 1–31 的整数",
       "invalidQueueSettings": "队列容量应为 0～1000 的整数，排队超时应为 1～120 秒的整数",
       "invalidProbeModel": "探测模型最多 128 个字符，不能包含控制字符",
-      "invalidWarmupTimes": "预激活时间格式无效，请输入 HH:MM 格式（如 08:00 或 08:00,13:00）",
+      "invalidWarmupCron": "请输入有效的 Cron 表达式",
       "warmupModelRequired": "启用预激活时请选择模型",
       "invalidWarmupModel": "预激活模型名称不能超过 128 个字符",
       "settingsSaved": "设置已保存",

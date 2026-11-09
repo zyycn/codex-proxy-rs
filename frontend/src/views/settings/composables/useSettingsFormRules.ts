@@ -50,12 +50,13 @@ export function useSettingsFormRules(form: () => SettingsForm) {
     'usageRetentionDays': integer(1, 31, t('settings.form.invalidRetention')),
     'minCodexDesktopVersion': version(),
     'minCodexCliVersion': version(),
-    'accountWarmupScheduleTime': {
-      required: true,
-      pattern: /^(?:[01]\d|2[0-3]):[0-5]\d(?:,(?:[01]\d|2[0-3]):[0-5]\d)*$/,
+    'accountWarmupCron': {
+      required: form().accountWarmupEnabled,
+      pattern: /^\S+(?: +\S+){4}$/,
+      max: 255,
       transform: value => value.trim(),
       trigger: ['blur', 'change'],
-      message: t('settings.form.invalidWarmupTimes'),
+      message: t('settings.form.invalidWarmupCron'),
     },
     'accountWarmupModel': [
       {
