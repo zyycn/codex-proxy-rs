@@ -6,6 +6,20 @@ export type UsageErrorRecord = UsageErrorFacts & {
   logicalOutcome: string
 }
 
+export function usageDisplayOutcome(outcome: string, errorCode: string | null, errorKind: string | null): string {
+  // 已开始交付的请求仍可能明确失败，展示不改变原始终态
+  // 进程中断和缺少明确错误的断流保留未完成，不从 HTTP 状态或文案推断
+  if (outcome === 'incomplete' && errorKind !== 'process_interrupted' && (errorCode || errorKind === 'timeout'))
+    return 'failed'
+  return outcome
+}
+
+export function usageErrorTitle(record: Pick<UsageErrorRecord, 'logicalOutcome' | 'errorCode' | 'errorKind'>): string {
+  return usageDisplayOutcome(record.logicalOutcome, record.errorCode, record.errorKind) === 'incomplete'
+    ? t('usage.error.responseIsNotComplete')
+    : t('usage.error.requestFailed')
+}
+
 // 只解释已记录的分类和关闭码，原始上游文案由详情保留
 export function usageErrorSummary(record: UsageErrorRecord): string | null {
   if (record.websocketCloseCode != null) {

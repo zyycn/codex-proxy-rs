@@ -4,7 +4,7 @@ import type { UsageRecordDetail } from '@/api'
 import { ZButton, ZDialog } from '@codex-proxy/ui'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { usageErrorSummary } from '@/components/usage/shared/errors'
+import { usageDisplayOutcome, usageErrorSummary, usageErrorTitle } from '@/components/usage/shared/errors'
 import { usageAccountText, usageModelDisplay, usageTransportType } from '@/components/usage/shared/presenter'
 import { formatDuration } from '@/utils/format'
 import { attemptOutcomeClass, attemptOutcomeText, visibleResponseText } from '../utils/detail'
@@ -25,6 +25,9 @@ const open = defineModel<boolean>({ default: false })
 const panelClass = 'min-w-0 rounded-z-card bg-z-fill-quaternary px-4 py-3.5'
 const panelTitleClass = 'm-0 text-z-sm leading-none font-heavy text-z-text-secondary'
 
+const errorTitle = computed(() => props.record
+  ? usageErrorTitle(props.record)
+  : '')
 const errorMessage = computed(() => {
   const message = props.record?.message.trim()
   return message && message !== props.record?.logicalOutcome
@@ -155,7 +158,7 @@ const identifierItems = computed(() => [
 const attempts = computed(() => (props.record?.attempts ?? []).map(attempt => ({
   id: attempt.id,
   index: attempt.attemptIndex,
-  outcome: attempt.outcome,
+  outcome: usageDisplayOutcome(attempt.outcome, attempt.providerErrorCode, attempt.failureClass),
   statusCode: attempt.statusCode,
   items: [
     {
@@ -209,7 +212,7 @@ const attempts = computed(() => (props.record?.attempts ?? []).map(attempt => ({
       <section class="min-w-0 rounded-z-card bg-z-error-container px-4 py-3.5 text-z-error-on-container">
         <div class="flex flex-wrap items-center gap-3">
           <h3 class="m-0 text-z-sm leading-none font-heavy">
-            {{ record.logicalOutcome === 'incomplete' ? t('usage.error.responseIsNotComplete') : t('usage.error.requestFailed') }}
+            {{ errorTitle }}
           </h3>
           <span v-if="record.recovered" class="rounded-z-sm bg-z-success-container px-2 py-1 text-z-xs font-emphasis text-z-success-on-container">
             {{ t('usage.error.recovered') }}

@@ -8,6 +8,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { chartTooltipStyle } from '@/components/charts/tooltip'
+import { usageDisplayOutcome } from '@/components/usage/shared/errors'
 import {
   usageAccountText,
   usageBillingText,
@@ -298,7 +299,7 @@ const attemptRows = computed<AttemptRow[]>(() =>
   (props.record?.attempts ?? []).map(attempt => ({
     id: attempt.id,
     attemptIndex: attempt.attemptIndex,
-    outcome: attempt.outcome,
+    outcome: usageDisplayOutcome(attempt.outcome, attempt.providerErrorCode, attempt.failureClass),
     provider: attempt.provider,
     model: attempt.model,
     transport: attempt.transport,
