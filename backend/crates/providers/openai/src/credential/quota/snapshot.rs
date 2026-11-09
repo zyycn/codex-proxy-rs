@@ -52,6 +52,7 @@ pub struct CodexQuotaWindow {
     window_seconds: Option<u64>,
     used_percent: Option<f64>,
     reset_at: Option<DateTime<Utc>>,
+    reset_after_seconds: Option<u64>,
     limit_reached: bool,
 }
 
@@ -100,6 +101,11 @@ impl CodexQuotaWindow {
     #[must_use]
     pub const fn reset_at(&self) -> Option<DateTime<Utc>> {
         self.reset_at
+    }
+
+    /// 上游观察时的剩余秒数，不能用当前时间重新推算空闲窗口
+    pub(super) const fn reset_after_seconds(&self) -> Option<u64> {
+        self.reset_after_seconds
     }
 
     /// 该窗口是否已触顶（`limit_reached` 或 `used_percent >= 100`）
@@ -573,6 +579,14 @@ fn parse_rate_limit_windows(
             })
             .transpose()?;
         let limit_reached = optional_bool(window, "limit_reached")?.unwrap_or(false);
+        let reset_after_seconds = window
+            .get("reset_after_seconds")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .ok_or(CodexCredentialQuotaError::InvalidCredentialData)
+            })
+            .transpose()?;
         let kind = quota_window_kind(window_seconds);
         // primary/secondary 是协议槽位，不代表固定周期
         // 窗口身份使用上游
@@ -591,6 +605,7 @@ fn parse_rate_limit_windows(
             window_seconds,
             used_percent,
             reset_at,
+            reset_after_seconds,
             limit_reached,
         });
     }
