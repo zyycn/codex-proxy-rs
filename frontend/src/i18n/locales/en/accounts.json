@@ -69,7 +69,7 @@
       "completedAt": "Completed",
       "events": {
         "title": "Event timeline",
-        "request": "Request sent",
+        "request": "Preparing test request",
         "response": "Receiving response",
         "completed": "Response complete"
       },
@@ -86,6 +86,11 @@
         "capacityUnavailable": "This account has no available capacity",
         "infrastructureUnavailable": "The provider's local infrastructure is temporarily unavailable",
         "rateLimited": "Upstream rate limit exceeded",
+        "notSent": "The request could not be sent upstream",
+        "proxyInvalid": "Invalid account proxy configuration",
+        "proxyUnreachable": "Could not connect to the account proxy — test it in Proxies",
+        "proxyTunnelFailed": "Could not establish a tunnel through the account proxy — check its settings",
+        "checkProxy": "The request could not be sent upstream — test the account proxy in Proxies",
         "upstreamUnavailable": "Upstream service temporarily unavailable",
         "timeout": "Upstream request timed out",
         "canceled": "Test canceled",
@@ -100,7 +105,7 @@
       },
       "stages": {
         "gateway": "Gateway validation",
-        "provider": "Provider setup",
+        "provider": "Failed before sending",
         "upstream": "Upstream response"
       },
       "failed": "Test failed",
@@ -108,7 +113,6 @@
       "runningDescription": "Sending a request to the selected model and receiving its streaming response",
       "successTitle": "Connection successful",
       "completedDescription": "Request complete, view the model, response time, and event timeline below",
-      "failedDescription": "Request incomplete, view the failure source and raw diagnostics below",
       "readyTitle": "Ready to test",
       "readyDescription": "Select a model and choose Start test to send a real request",
       "starting": "Starting a connection test for {value}",

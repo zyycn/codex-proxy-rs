@@ -2,6 +2,7 @@
 
 use std::{fmt, time::Duration};
 
+use gateway_core::error::ProxyConnectionHint;
 use gateway_protocol::openai::sse::SseError;
 use thiserror::Error;
 use uuid::Uuid;
@@ -27,11 +28,16 @@ pub enum CodexWebSocketExchangeError {
     #[error("websocket transport error: {0}")]
     Transport(#[from] tungstenite::Error),
     /// DNS、TCP、TLS 或 opening handshake 在发送 payload 前失败
-    #[error("websocket connect failed before payload send: {0}")]
-    Connect(#[source] tungstenite::Error),
+    #[error("websocket connect failed before payload send: {source}")]
+    Connect {
+        #[source]
+        source: tungstenite::Error,
+        proxy_hint: Option<ProxyConnectionHint>,
+    },
     /// DNS、TCP、TLS 或 WebSocket upgrade 未在限定时间内完成
     #[error("websocket connect timed out after {timeout:?}")]
     ConnectTimeout {
+        proxy_hint: Option<ProxyConnectionHint>,
         /// 建连超时时长
         timeout: Duration,
     },
@@ -257,7 +263,7 @@ impl CodexWebSocketExchangeError {
     /// 与已有指标粗分类分开：缺少关闭握手本身不能证明收到 TCP RST
     pub(crate) fn transport_failure_reason(&self) -> Option<&'static str> {
         match self.diagnostic_cause() {
-            Self::Transport(error) | Self::Connect(error) => Some(match error {
+            Self::Transport(error) | Self::Connect { source: error, .. } => Some(match error {
                 tungstenite::Error::Protocol(
                     tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
                 ) => "reset_without_closing_handshake",

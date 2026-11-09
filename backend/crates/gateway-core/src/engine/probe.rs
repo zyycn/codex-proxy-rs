@@ -5,7 +5,9 @@ use std::fmt;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 
-use crate::error::{ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind};
+use crate::error::{
+    ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind, ProxyConnectionHint,
+};
 use crate::identity::ProviderKind;
 use crate::routing::UpstreamModelId;
 use crate::{
@@ -126,6 +128,7 @@ impl AccountProbeErrorSource {
 #[derive(Debug)]
 pub struct AccountProbeError {
     gateway: GatewayError,
+    pub(super) proxy_hint: Option<ProxyConnectionHint>,
     source: AccountProbeErrorSource,
     send_state: Option<UpstreamSendState>,
     upstream_response: Option<Box<AccountProbeUpstreamResponse>>,
@@ -141,6 +144,7 @@ impl AccountProbeError {
     ) -> Self {
         Self {
             gateway,
+            proxy_hint: None,
             source,
             send_state,
             upstream_response: upstream_response.map(Box::new),
@@ -160,6 +164,11 @@ impl AccountProbeError {
     #[must_use]
     pub const fn send_state(&self) -> Option<UpstreamSendState> {
         self.send_state
+    }
+
+    #[must_use]
+    pub const fn proxy_hint(&self) -> Option<ProxyConnectionHint> {
+        self.proxy_hint
     }
 
     #[must_use]

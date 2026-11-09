@@ -184,11 +184,15 @@ async fn inference_and_oauth_connect_through_each_accounts_authenticated_proxy()
                 .unwrap()
                 .with_outbound_proxy(Some(proxy)),
         );
-        assert!(
-            tokio::time::timeout(Duration::from_secs(5), inference.execute(request))
-                .await
-                .unwrap()
-                .is_err()
+        let error = tokio::time::timeout(Duration::from_secs(5), inference.execute(request))
+            .await
+            .unwrap()
+            .expect_err("proxy rejects CONNECT");
+        assert_eq!(
+            error
+                .diagnostic()
+                .and_then(|diagnostic| diagnostic.proxy_hint()),
+            Some(gateway_core::error::ProxyConnectionHint::CheckProxy)
         );
         let connect = tokio::time::timeout(Duration::from_secs(5), captured)
             .await
@@ -581,6 +585,7 @@ async fn inference_connect_failure_keeps_safe_diagnosis_without_endpoint_or_payl
         .await
         .expect_err("closed listener");
     let diagnostic = error.diagnostic().expect("transport cause");
+    assert_eq!(diagnostic.proxy_hint(), None);
     assert_eq!(diagnostic.stage(), Some("connect"));
     assert_eq!(diagnostic.code(), Some("connection_refused"));
     assert!(!diagnostic.as_str().contains("127.0.0.1"));

@@ -1463,7 +1463,18 @@ impl DefaultExecutionService {
             }
             _ => (AccountProbeErrorSource::Gateway, None, None),
         };
+        let mut failure = AccountProbeError::new(
+            gateway_error_from_engine(error),
+            source,
+            send_state,
+            upstream_response,
+        );
         if let EngineError::Provider(provider_error) = error {
+            if source == AccountProbeErrorSource::Provider {
+                failure.proxy_hint = provider_error
+                    .diagnostic()
+                    .and_then(|diagnostic| diagnostic.proxy_hint());
+            }
             let latency = started_at.elapsed().unwrap_or_default();
             let latency_ms = u64::try_from(latency.as_millis()).unwrap_or(u64::MAX);
             tracing::warn!(
@@ -1499,12 +1510,7 @@ impl DefaultExecutionService {
                 );
             }
         }
-        AccountProbeError::new(
-            gateway_error_from_engine(error),
-            source,
-            send_state,
-            upstream_response,
-        )
+        failure
     }
 }
 

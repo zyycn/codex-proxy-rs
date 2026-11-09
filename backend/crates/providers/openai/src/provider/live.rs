@@ -367,7 +367,7 @@ impl CodexProvider {
             client: self
                 .client_for_request(&context)?
                 .for_account(lease.account())
-                .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, false).error)?
+                .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?
                 .with_responses_api_base_url(lease.authentication().responses_api_base_url())
                 .with_middleware_headers(middleware_headers)
                 .with_outbound_middleware(outbound_middleware),
@@ -479,7 +479,7 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
                 error,
             );
         }
-        let response = match attempt.map_err(map_handshake_attempt_error) {
+        let response = match attempt.map_err(|error| map_handshake_attempt_error(error, &active_account)) {
             Ok(response) => response,
             Err(mut failure) => {
                 if let Some(observation) = failure.observation.take() {
@@ -656,7 +656,7 @@ fn map_live_http_error(error: CodexClientError) -> LiveGatewayError {
 
 fn local_live_error(error: CodexClientError, message: &'static str) -> LiveGatewayError {
     // 本地传输异常可能包含 URL 或代理上下文；客户端提示与现有安全诊断各自保留
-    if let Some(diagnostic) = super::failure::client_diagnostic(&error) {
+    if let Some(diagnostic) = super::failure::client_diagnostic(&error, false) {
         tracing::warn!(
             stage = diagnostic.stage(),
             code = diagnostic.code(),

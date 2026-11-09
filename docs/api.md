@@ -1384,6 +1384,7 @@ OAuth 等待回调期间不持有保护；提交仍拒绝已删除或连接配�
   "source": "upstream",
   "gatewayErrorCode": "rate_limited",
   "sendState": "sent",
+  "proxyHint": null,
   "error": "upstream unavailable",
   "providerErrorCode": "usage_exhausted",
   "providerErrorType": "invalid_request_error",
@@ -1399,6 +1400,9 @@ OAuth 等待回调期间不持有保护；提交仍拒绝已删除或连接配�
 - `source` 为 `gateway`、`provider` 或 `upstream`：分别表示尚未进入 Provider、Provider 本地且未发送、
   已发送/可能已发送或已经捕获到上游事实
 - `gatewayErrorCode` 是 `GatewayErrorKind` 的稳定机器值，管理端据此生成中文摘要
+- `proxyHint` 仅在 Provider 发送前失败且有代理诊断时返回：`invalid_configuration` 表示代理配置无效，
+  `unreachable` 表示无法连接代理端点，`tunnel_failed` 表示代理隧道协商失败。
+  `check_proxy` 表示本次使用代理且建连失败，不能据此判定故障在代理；无提示时为 `null`
 - `sendState` 为 `not_sent`、`sent`、`ambiguous`，非 Provider 错误为 `null`
 - `error`、`providerErrorCode`、`providerErrorType`、`upstreamStatus`、`upstreamContentType` 和
   `upstreamBody` 是实际捕获的原始诊断字段；缺失时为 `null`，不会由本地猜测或翻译

@@ -69,7 +69,7 @@
       "completedAt": "完成時間",
       "events": {
         "title": "事件軌跡",
-        "request": "發起請求",
+        "request": "準備測試請求",
         "response": "接收響應內容",
         "completed": "響應完成"
       },
@@ -86,6 +86,11 @@
         "capacityUnavailable": "指定賬號當前沒有可用容量",
         "infrastructureUnavailable": "Provider 本地基礎設施暫不可用",
         "rateLimited": "上游請求過於頻繁",
+        "notSent": "請求未能送往上游",
+        "proxyInvalid": "帳號代理設定無效",
+        "proxyUnreachable": "無法連線至帳號代理，請在「代理管理」中測試該代理",
+        "proxyTunnelFailed": "無法透過帳號代理建立通道，請檢查代理設定",
+        "checkProxy": "請求未能送往上游，可在「代理管理」中測試帳號代理",
         "upstreamUnavailable": "上游服務暫不可用",
         "timeout": "上游請求超時",
         "canceled": "測試請求已取消",
@@ -100,7 +105,7 @@
       },
       "stages": {
         "gateway": "網關校驗",
-        "provider": "Provider 本地準備",
+        "provider": "請求送出前失敗",
         "upstream": "上游響應"
       },
       "failed": "測試失敗",
@@ -108,7 +113,6 @@
       "runningDescription": "正在向所選模型發送請求並接收流式響應",
       "successTitle": "連接正常",
       "completedDescription": "請求已完成，可在下方查看模型、耗時和事件軌跡",
-      "failedDescription": "請求未完成，請在下方查看失敗來源與原始診斷",
       "readyTitle": "準備測試",
       "readyDescription": "選擇模型後，點擊“開始測試”發送真實請求",
       "starting": "開始測試 {value}",

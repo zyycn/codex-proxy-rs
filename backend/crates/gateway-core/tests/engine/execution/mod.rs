@@ -3232,6 +3232,10 @@ fn provider_local_probe_failure_should_remain_distinct_from_upstream() {
     assert_eq!(error.source(), AccountProbeErrorSource::Provider);
     assert_eq!(error.send_state(), Some(UpstreamSendState::NotSent));
     assert!(error.upstream_response().is_none());
+    assert_eq!(
+        error.proxy_hint(),
+        Some(gateway_core::error::ProxyConnectionHint::InvalidConfiguration)
+    );
 }
 
 #[test]
@@ -3673,10 +3677,17 @@ impl Provider for LocalFailingProvider {
         _: ProviderRequest,
         _: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        Err(ProviderError::new(
-            ProviderErrorKind::Unsupported,
-            UpstreamSendState::NotSent,
-        ))
+        Err(
+            ProviderError::new(ProviderErrorKind::Unsupported, UpstreamSendState::NotSent)
+                .with_diagnostic(
+                    gateway_core::error::ProviderDiagnostic::new(
+                        "Unsupported account proxy configuration",
+                    )
+                    .with_proxy_hint(
+                        gateway_core::error::ProxyConnectionHint::InvalidConfiguration,
+                    ),
+                ),
+        )
     }
 }
 

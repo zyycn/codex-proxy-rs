@@ -944,6 +944,7 @@ mod actions {
             DomainConnectionTestEvent::Failed {
                 source: AccountProbeErrorSource::Upstream,
                 gateway_error_code: GatewayErrorKind::RateLimited,
+                proxy_hint: None,
                 send_state: Some(UpstreamSendState::Sent),
                 message: "upstream unavailable".to_owned(),
                 provider_error_code: Some("usage_exhausted".to_owned()),
@@ -1005,6 +1006,7 @@ mod actions {
                     "type": "error",
                     "source": "upstream",
                     "gatewayErrorCode": "rate_limited",
+                    "proxyHint": null,
                     "sendState": "sent",
                     "error": "upstream unavailable",
                     "providerErrorCode": "usage_exhausted",

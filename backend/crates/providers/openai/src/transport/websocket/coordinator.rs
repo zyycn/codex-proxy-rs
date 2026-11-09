@@ -440,7 +440,7 @@ fn start_pooled_websocket_connect(
 fn opening_failure_reason(error: &CodexWebSocketExchangeError) -> &'static str {
     match error.classified() {
         CodexWebSocketExchangeError::InvalidRequest(_) => "request_build_failure",
-        CodexWebSocketExchangeError::Connect(error)
+        CodexWebSocketExchangeError::Connect { source: error, .. }
         | CodexWebSocketExchangeError::Transport(error) => transport_metric_reason(error),
         CodexWebSocketExchangeError::ConnectTimeout { .. } => "connect_timeout",
         CodexWebSocketExchangeError::Upstream(_) => "upgrade_rejected",

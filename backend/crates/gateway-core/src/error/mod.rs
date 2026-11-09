@@ -220,12 +220,34 @@ impl fmt::Debug for ClientVisibleUpstreamError {
     }
 }
 
+/// 本次建连的代理诊断，仅用于管理端展示，不参与错误处置
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyConnectionHint {
+    InvalidConfiguration,
+    Unreachable,
+    TunnelFailed,
+    CheckProxy,
+}
+
+impl ProxyConnectionHint {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidConfiguration => "invalid_configuration",
+            Self::Unreachable => "unreachable",
+            Self::TunnelFailed => "tunnel_failed",
+            Self::CheckProxy => "check_proxy",
+        }
+    }
+}
+
 /// Provider 已分类为可安全持久化和展示的诊断摘要
 ///
 /// Adapter 只能放入不含凭据、cookie、原始请求正文和 opaque response ID 的有界摘要；
 /// 原始上游错误返回由 [`RawUpstreamError`] 单独承载
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProviderDiagnostic {
+    proxy_hint: Option<ProxyConnectionHint>,
     message: String,
     stage: Option<&'static str>,
     code: Option<&'static str>,
@@ -236,9 +258,21 @@ impl ProviderDiagnostic {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            proxy_hint: None,
             stage: None,
             code: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_proxy_hint(mut self, hint: ProxyConnectionHint) -> Self {
+        self.proxy_hint = Some(hint);
+        self
+    }
+
+    #[must_use]
+    pub const fn proxy_hint(&self) -> Option<ProxyConnectionHint> {
+        self.proxy_hint
     }
 
     /// 附着本地定义的阶段与原因码；独立于发送状态和重试策略

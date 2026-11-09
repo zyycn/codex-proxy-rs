@@ -1170,7 +1170,7 @@ impl CodexProvider {
             installation_id,
             client: client
                 .for_account(lease.account())
-                .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, false).error)?
+                .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?
                 .with_responses_api_base_url(lease.authentication().responses_api_base_url())
                 .with_routing_affinity(guardian_parent.map(|(_, affinity)| affinity))
                 .with_connection_budget(context.connection_budget().clone())

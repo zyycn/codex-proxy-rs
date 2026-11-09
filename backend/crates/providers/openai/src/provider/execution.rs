@@ -351,7 +351,7 @@ impl CodexProvider {
             installation_id,
             client: client
                 .for_account(lease.account())
-                .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, false).error)?
+                .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?
                 .with_responses_api_base_url(lease.authentication().responses_api_base_url())
                 .with_middleware_headers(middleware_headers)
                 .with_outbound_middleware(outbound_middleware)
@@ -588,9 +588,12 @@ pub(super) async fn create_response_attempt(
 
 pub(super) fn map_handshake_attempt_error(
     error: CodexHandshakeAttemptError,
+    account: &ProviderAccount,
 ) -> MappedProviderFailure {
     match error {
-        CodexHandshakeAttemptError::Client(error) => map_handshake_error(error),
+        CodexHandshakeAttemptError::Client(error) => {
+            map_client_error(error, UpstreamSendState::Ambiguous, Some(account))
+        }
         CodexHandshakeAttemptError::Cancelled => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Cancelled,
             UpstreamSendState::Ambiguous,
@@ -683,7 +686,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 error,
             );
         }
-        let response = match response.map_err(map_handshake_attempt_error) {
+        let response = match response.map_err(|error| map_handshake_attempt_error(error, &active_account)) {
             Ok(response) => response,
             Err(mut failure) => {
                 if let Some(observation) = failure.observation.take() {
@@ -874,7 +877,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 error,
             );
         }
-        let response = response.map_err(map_handshake_attempt_error);
+        let response = response.map_err(|error| map_handshake_attempt_error(error, &active_account));
         let response = match response {
             Ok(response) => response,
             Err(mut failure) => {

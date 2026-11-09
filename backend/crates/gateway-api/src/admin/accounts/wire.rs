@@ -1129,6 +1129,7 @@ impl From<(DomainConnectionTestEvent, crate::time::TimePresenter)> for AccountCo
             DomainConnectionTestEvent::Failed {
                 source,
                 gateway_error_code,
+                proxy_hint,
                 send_state,
                 message,
                 provider_error_code,
@@ -1140,6 +1141,7 @@ impl From<(DomainConnectionTestEvent, crate::time::TimePresenter)> for AccountCo
                 "type": "error",
                 "source": source.as_str(),
                 "gatewayErrorCode": gateway_error_code.as_str(),
+                "proxyHint": proxy_hint.map(gateway_core::error::ProxyConnectionHint::as_str),
                 "sendState": send_state.map(gateway_core::upstream::UpstreamSendState::as_str),
                 "error": message,
                 "providerErrorCode": provider_error_code,

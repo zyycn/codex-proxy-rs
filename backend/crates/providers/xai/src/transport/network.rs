@@ -424,14 +424,19 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
             }
             let dns_observer = Arc::new(RequestDnsObserver::default());
             let headers_started_at = Instant::now();
-            let response = REQUEST_DNS_OBSERVER
-                .scope(Arc::clone(&dns_observer), builder.send())
-                .await
-                .map_err(|error| {
-                    classify_inference_reqwest_error(error).with_transport_metrics(
-                        inference_transport_metrics(client_cache_status, None, &dns_observer),
-                    )
-                })?;
+            let response =
+                REQUEST_DNS_OBSERVER
+                    .scope(Arc::clone(&dns_observer), builder.send())
+                    .await
+                    .map_err(|error| {
+                        classify_inference_reqwest_error(
+                            error,
+                            request.binding().outbound_proxy().is_some(),
+                        )
+                        .with_transport_metrics(
+                            inference_transport_metrics(client_cache_status, None, &dns_observer),
+                        )
+                    })?;
             let transport_metrics = inference_transport_metrics(
                 client_cache_status,
                 Some(elapsed_millis(headers_started_at.elapsed())),
@@ -1001,7 +1006,10 @@ fn inference_http_diagnostic(error: &reqwest::Error) -> ProviderDiagnostic {
         .with_io_cause(error)
 }
 
-fn classify_inference_reqwest_error(error: reqwest::Error) -> GrokInferenceTransportError {
+fn classify_inference_reqwest_error(
+    error: reqwest::Error,
+    uses_account_proxy: bool,
+) -> GrokInferenceTransportError {
     let (kind, send_state) = if error.is_builder() {
         (
             GrokInferenceTransportErrorKind::Protocol,
@@ -1023,8 +1031,12 @@ fn classify_inference_reqwest_error(error: reqwest::Error) -> GrokInferenceTrans
             UpstreamSendState::Ambiguous,
         )
     };
-    let failure = GrokInferenceTransportError::new(kind, send_state)
-        .with_diagnostic(inference_http_diagnostic(&error));
+    let mut diagnostic = inference_http_diagnostic(&error);
+    if uses_account_proxy && error.is_connect() {
+        diagnostic =
+            diagnostic.with_proxy_hint(gateway_core::error::ProxyConnectionHint::CheckProxy);
+    }
+    let failure = GrokInferenceTransportError::new(kind, send_state).with_diagnostic(diagnostic);
     with_inference_reqwest_source(failure, error)
 }
 

@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use gateway_core::error::ProxyConnectionHint;
 use gateway_protocol::openai::events;
 use tokio::{io::BufWriter, time::timeout};
 use tokio_tungstenite::{
@@ -205,10 +206,9 @@ async fn connect_websocket(
 ) -> Result<(RawWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
     let request = websocket_handshake_request(connection)?;
     let connector = tls::maybe_build_rustls_client_config_with_custom_ca()
-        .map_err(|error| {
-            CodexWebSocketExchangeError::Connect(tungstenite::Error::Io(std::io::Error::other(
-                error,
-            )))
+        .map_err(|error| CodexWebSocketExchangeError::Connect {
+            source: tungstenite::Error::Io(std::io::Error::other(error)),
+            proxy_hint: None,
         })?
         .map(Connector::Rustls);
     let remaining = connection
@@ -216,15 +216,16 @@ async fn connect_websocket(
         .as_ref()
         .map(|budget| budget.begin())
         .transpose()
-        .map_err(|error| {
-            CodexWebSocketExchangeError::Connect(tungstenite::Error::Io(std::io::Error::other(
-                error,
-            )))
+        .map_err(|error| CodexWebSocketExchangeError::Connect {
+            source: tungstenite::Error::Io(std::io::Error::other(error)),
+            proxy_hint: None,
         })?
         .flatten();
     let connect_timeout = remaining.map_or(WEBSOCKET_CONNECT_TIMEOUT, |remaining| {
         remaining.min(WEBSOCKET_CONNECT_TIMEOUT)
     });
+    // 超时会取消拨号 future，当前阶段留给外层生成准确的代理诊断
+    let mut proxy_hint = None;
     let result = timeout(connect_timeout, async {
         let _permit = if fast_path {
             crate::transport::connection::try_acquire()
@@ -248,7 +249,7 @@ async fn connect_websocket(
             .await?;
             return Ok((Box::new(websocket) as RawWsStream, response));
         }
-        let stream = dial_account(connection).await?;
+        let stream = dial_account(connection, &mut proxy_hint).await?;
         match stream {
             MaybeTlsStream::Plain(tcp) => {
                 let (websocket, response) = client_async_tls_with_config(
@@ -275,18 +276,23 @@ async fn connect_websocket(
     .await
     .map_err(|_| CodexWebSocketExchangeError::ConnectTimeout {
         timeout: connect_timeout,
+        proxy_hint,
     })?;
     match result {
         Ok((websocket, response)) => Ok((websocket, response)),
         Err(tungstenite::Error::Http(response)) => {
             Err(websocket_opening_error(response.as_ref(), connection))
         }
-        Err(error) => Err(CodexWebSocketExchangeError::Connect(error)),
+        Err(error) => Err(CodexWebSocketExchangeError::Connect {
+            source: error,
+            proxy_hint,
+        }),
     }
 }
 
 async fn dial_account(
     connection: &CodexWebSocketConnection,
+    proxy_hint: &mut Option<ProxyConnectionHint>,
 ) -> Result<MaybeTlsStream<tokio::net::TcpStream>, tungstenite::Error> {
     use tokio::net::lookup_host;
     use tungstenite::proxy::ProxyConfig;
@@ -302,6 +308,7 @@ async fn dial_account(
     let Some(proxy) = connection.outbound_proxy.as_ref() else {
         return Ok(MaybeTlsStream::Plain(connect_tcp(host, port).await?));
     };
+    *proxy_hint = Some(ProxyConnectionHint::InvalidConfiguration);
     let mut proxy_url = url::Url::parse(proxy.expose_url()).map_err(|_| invalid())?;
     let tls_proxy = proxy_url.scheme() == "https";
     let proxy_port = proxy_url.port_or_known_default().ok_or_else(invalid)?;
@@ -316,10 +323,13 @@ async fn dial_account(
         Some(url::Host::Ipv6(ip)) => ip.to_string(),
         _ => config.host.clone(),
     };
+    *proxy_hint = Some(ProxyConnectionHint::Unreachable);
     let tcp = connect_tcp(&proxy_host, config.port).await?;
     let stream = if tls_proxy {
+        *proxy_hint = None;
         let tls = tls::account_proxy_tls_config().map_err(|_| invalid())?;
         let name = rustls_pki_types::ServerName::try_from(proxy_host).map_err(|_| invalid())?;
+        *proxy_hint = Some(ProxyConnectionHint::Unreachable);
         MaybeTlsStream::Rustls(
             tokio_rustls::TlsConnector::from(tls)
                 .connect(name, tcp)
@@ -329,6 +339,7 @@ async fn dial_account(
         MaybeTlsStream::Plain(tcp)
     };
     // 固定的 tungstenite 分支对两种 SOCKS 协议均把域名交给代理解析
+    *proxy_hint = None;
     let target = if proxy_url.scheme() == "socks5" {
         lookup_host((dns_host.as_str(), port))
             .await?
@@ -344,9 +355,12 @@ async fn dial_account(
     // 依赖分两次写入 SOCKS 方法协商，再显式 flush；部分代理会提前拒绝半包
     // 仅在代理握手期间合并写入，不缓冲读取，也不改变后续 TLS/WS 的发送方式
     // 这只是兼容措施，不能保证网络层不再拆分 TCP 数据
-    tokio_tungstenite::proxy::connect_via_proxy(BufWriter::new(stream), &config, &target, port)
-        .await
-        .map(BufWriter::into_inner)
+    *proxy_hint = Some(ProxyConnectionHint::TunnelFailed);
+    let stream =
+        tokio_tungstenite::proxy::connect_via_proxy(BufWriter::new(stream), &config, &target, port)
+            .await?;
+    *proxy_hint = Some(ProxyConnectionHint::CheckProxy);
+    Ok(stream.into_inner())
 }
 
 async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tungstenite::Error> {

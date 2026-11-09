@@ -31,6 +31,7 @@ interface ConnectionTestLog {
   text: string
   tone: ConnectionTestLogTone
   detail: string
+  failureMessage?: string
 }
 
 interface ConnectionTestRequestPayload {
@@ -71,6 +72,7 @@ interface ConnectionTestFailureEvent {
   type: 'error'
   source?: ConnectionTestFailureSource
   gatewayErrorCode?: string
+  proxyHint?: string | null
   sendState?: ConnectionTestSendState | null
   error?: string
   providerErrorCode?: string | null
@@ -132,6 +134,16 @@ function parseConnectionTestEvent(raw: string): ConnectionTestEvent | null {
 }
 
 function connectionTestFailureText(event: ConnectionTestFailureEvent) {
+  if (event.source === 'provider' && event.sendState === 'not_sent') {
+    switch (event.proxyHint) {
+      case 'invalid_configuration': return t('accounts.connectionTest.errors.proxyInvalid')
+      case 'unreachable': return t('accounts.connectionTest.errors.proxyUnreachable')
+      case 'tunnel_failed': return t('accounts.connectionTest.errors.proxyTunnelFailed')
+      case 'check_proxy': return t('accounts.connectionTest.errors.checkProxy')
+    }
+    if (event.gatewayErrorCode === 'upstream_unavailable')
+      return t('accounts.connectionTest.errors.notSent')
+  }
   return event.gatewayErrorCode
     ? CONNECTION_TEST_FAILURE_TEXT.value[event.gatewayErrorCode] || t('accounts.connectionTest.errors.unknown')
     : t('accounts.connectionTest.errors.failed')
@@ -147,6 +159,7 @@ function connectionTestFailureDiagnostics(event: ConnectionTestFailureEvent) {
   return {
     error: event.error ?? null,
     gatewayErrorCode: event.gatewayErrorCode ?? null,
+    proxyHint: event.proxyHint ?? null,
     sendState: event.sendState ?? null,
     upstreamStatus: event.upstreamStatus ?? null,
     providerErrorCode: event.providerErrorCode ?? null,
@@ -215,7 +228,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     if (connectionTestStatus.value === 'error') {
       return {
         label: t('accounts.connectionTest.failed'),
-        description: t('accounts.connectionTest.failedDescription'),
+        description: connectionTestLogs.value.at(-1)?.failureMessage,
         icon: XCircle,
         badge: 'bg-z-error-container text-z-error-on-container',
         iconClass: 'text-z-error',
@@ -350,8 +363,10 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     detail?: unknown,
     event?: ConnectionTestTimestamp,
   ) {
-    connectionTestError.value = message
-    setConnectionTestLog(key, `${label}：${message}`, 'danger', detail, event)
+    connectionTestLogs.value.push({
+      ...connectionTestLogItem(key, label, 'danger', detail, event),
+      failureMessage: message,
+    })
     finishConnectionTest('error', event)
   }
 

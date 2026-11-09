@@ -69,7 +69,7 @@
       "completedAt": "完成时间",
       "events": {
         "title": "事件轨迹",
-        "request": "发起请求",
+        "request": "准备测试请求",
         "response": "接收响应内容",
         "completed": "响应完成"
       },
@@ -86,6 +86,11 @@
         "capacityUnavailable": "指定账号当前没有可用容量",
         "infrastructureUnavailable": "Provider 本地基础设施暂不可用",
         "rateLimited": "上游请求过于频繁",
+        "notSent": "请求未能发往上游",
+        "proxyInvalid": "账号代理配置无效",
+        "proxyUnreachable": "无法连接账号代理，请在「代理管理」中测试该代理",
+        "proxyTunnelFailed": "未能通过账号代理建立隧道，请检查代理设置",
+        "checkProxy": "请求未能发往上游，可在「代理管理」中测试账号代理",
         "upstreamUnavailable": "上游服务暂不可用",
         "timeout": "上游请求超时",
         "canceled": "测试请求已取消",
@@ -100,7 +105,7 @@
       },
       "stages": {
         "gateway": "网关校验",
-        "provider": "Provider 本地准备",
+        "provider": "请求发送前失败",
         "upstream": "上游响应"
       },
       "failed": "测试失败",
@@ -108,7 +113,6 @@
       "runningDescription": "正在向所选模型发送请求并接收流式响应",
       "successTitle": "连接正常",
       "completedDescription": "请求已完成，可在下方查看模型、耗时和事件轨迹",
-      "failedDescription": "请求未完成，请在下方查看失败来源与原始诊断",
       "readyTitle": "准备测试",
       "readyDescription": "选择模型后，点击“开始测试”发送真实请求",
       "starting": "开始测试 {value}",

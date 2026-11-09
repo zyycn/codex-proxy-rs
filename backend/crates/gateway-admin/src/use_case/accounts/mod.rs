@@ -1214,6 +1214,7 @@ impl AccountsService for DefaultAccountsService {
                     vec![AccountConnectionTestEvent::Failed {
                         source: error.source(),
                         gateway_error_code: error.kind(),
+                        proxy_hint: error.proxy_hint(),
                         send_state: error.send_state(),
                         message,
                         provider_error_code: error.client_error_code().map(ToOwned::to_owned),
