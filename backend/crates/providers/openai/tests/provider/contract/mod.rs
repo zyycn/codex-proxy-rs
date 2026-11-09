@@ -10191,7 +10191,7 @@ async fn successful_response_with_full_subscription_blocks_subsequent_requests()
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .insert_header("x-codex-active-limit", "codex")
+                .insert_header("x-codex-active-limit", "premium")
                 .insert_header("x-codex-primary-used-percent", "100")
                 .insert_header("x-codex-primary-window-minutes", "300")
                 .insert_header("x-codex-primary-reset-at", "1900000000")

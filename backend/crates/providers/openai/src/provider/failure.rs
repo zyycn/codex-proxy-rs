@@ -161,6 +161,7 @@ pub(super) struct OpenAiFailureContext<'a> {
     pub(super) response_origin: &'a Url,
     pub(super) cyber_policy_scope: Option<&'a CodexCyberPolicyScope>,
     pub(super) allows_account_state_mutation: bool,
+    pub(super) image_endpoint: bool,
     pub(super) upstream_model: Option<&'a UpstreamModelId>,
 }
 
@@ -310,7 +311,13 @@ pub(super) async fn apply_failure(
     if !context.allows_account_state_mutation {
         return;
     }
-    synchronize_passive_quota_headers(context.quota, account, &failure.rate_limit_headers).await;
+    synchronize_passive_quota_headers(
+        context.quota,
+        account,
+        &failure.rate_limit_headers,
+        context.image_endpoint,
+    )
+    .await;
     if failure.model_unsupported
         && let Some(model) = context.upstream_model
         && let Err(error) = context

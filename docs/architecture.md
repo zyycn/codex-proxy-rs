@@ -1031,9 +1031,10 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
   OpenAI Provider 将其中明确的套餐变更与额度原子提交，共用凭据版本和观察时间保护；
   空值及 `unknown` 不覆盖套餐，同族泛化值保留具体子类型。Token 刷新保留提交时的账号资料
 
-OpenAI 响应头的额度窗口由 `gateway-protocol` 按上游计量项归属解析；仅通过 `x-codex-active-limit`
-标明具名额度时，通用 `x-codex-*` 窗口归入该计量项。Provider 按计量项独立保存，生图等具名额度
-不覆盖默认 Codex 窗口，也不改变账号级套餐访问结论
+OpenAI 响应头的额度窗口按头名前缀归属，普通 Responses 的 `x-codex-primary-*` 和
+`x-codex-secondary-*` 更新账号通用额度。
+仅在图片生成和编辑端点，若 `x-codex-active-limit` 指向具名计量项且没有该项的独立额度头，
+通用窗口才归入该计量项。Provider 按计量项独立保存，具名额度不改变账号级套餐访问结论
 
 OpenAI Provider 统一解释点数可用性，主动查询、耗尽恢复与失败回读复用同一规则。
 Store 在账号事务内保存点数放行依据与快照；关闭自动使用时撤销该依据，迟到观测不能绕过开关。

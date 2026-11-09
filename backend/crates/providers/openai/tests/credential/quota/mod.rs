@@ -276,7 +276,8 @@ async fn passive_quota_updates_keep_core_and_model_specific_buckets_independent(
     assert_eq!(spark.used_percent(), Some(1.0));
 
     let core_headers = vec![
-        ("x-codex-active-limit".to_owned(), "codex".to_owned()),
+        // 文本响应的活动标记不是独立额度头，通用周窗口仍应更新原来的账号额度
+        ("x-codex-active-limit".to_owned(), "premium".to_owned()),
         ("x-codex-primary-used-percent".to_owned(), "82".to_owned()),
         (
             "x-codex-primary-window-minutes".to_owned(),

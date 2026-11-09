@@ -418,6 +418,7 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
         let allows_account_state_mutation = request.lease.allows_account_state_mutation();
         let failure_context = OpenAiFailureContext {
             client: &client,
+            image_endpoint: false,
             selector: &request.selector,
             quota: &request.quota,
             response_origin: &request.response_origin,

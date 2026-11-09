@@ -553,11 +553,16 @@ pub(super) async fn synchronize_passive_quota_headers(
     quota: &CodexCredentialQuotaService,
     account: &ProviderAccount,
     headers: &[(String, String)],
+    image_endpoint: bool,
 ) {
-    let Some(rate_limits) = parse_rate_limit_headers(headers) else {
-        return;
+    let parsed = if image_endpoint {
+        gateway_protocol::openai::events::parse_image_rate_limit_headers(headers)
+    } else {
+        parse_rate_limit_headers(headers)
     };
-    synchronize_passive_quota(quota, account, std::slice::from_ref(&rate_limits)).await;
+    if let Some(rate_limits) = parsed {
+        synchronize_passive_quota(quota, account, std::slice::from_ref(&rate_limits)).await;
+    }
 }
 
 pub(super) const fn actual_transport_name(transport: CodexBackendTransport) -> &'static str {

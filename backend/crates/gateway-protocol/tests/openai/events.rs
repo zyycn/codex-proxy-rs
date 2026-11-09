@@ -2,8 +2,9 @@
 
 use gateway_protocol::openai::events::{
     RateLimitKeySource, RateLimitWindow, TokenUsage, billable_usage_is_complete, extract_sse_usage,
-    extract_usage, is_codex_quota_header_name, is_rate_limit_header_name, parse_rate_limit_headers,
-    parse_rate_limits_event, rate_limits_to_header_pairs, retry_after_seconds_from_body,
+    extract_usage, is_codex_quota_header_name, is_rate_limit_header_name,
+    parse_image_rate_limit_headers, parse_rate_limit_headers, parse_rate_limits_event,
+    rate_limits_to_header_pairs, retry_after_seconds_from_body,
 };
 use serde_json::json;
 
@@ -588,7 +589,7 @@ fn parse_rate_limit_headers_should_preserve_dynamic_limit_and_account_metadata()
 }
 
 #[test]
-fn parse_rate_limit_headers_should_assign_generic_windows_to_the_active_limit() {
+fn image_headers_assign_generic_windows_to_the_active_limit_only_without_its_own_headers() {
     let headers = [
         ("x-codex-active-limit", "imagegen_premium"),
         ("x-codex-primary-used-percent", "0"),
@@ -600,7 +601,7 @@ fn parse_rate_limit_headers_should_assign_generic_windows_to_the_active_limit() 
     ]
     .map(|(name, value)| (name.to_owned(), value.to_owned()));
 
-    let parsed = parse_rate_limit_headers(&headers).expect("image rate-limit headers");
+    let parsed = parse_image_rate_limit_headers(&headers).expect("image rate-limit headers");
     let image = parsed.limits.get("imagegen_premium").expect("image limit");
     assert_eq!(image.limit_id, "imagegen_premium");
     assert_eq!(image.key_source, RateLimitKeySource::LimitId);
@@ -613,10 +614,12 @@ fn parse_rate_limit_headers_should_assign_generic_windows_to_the_active_limit() 
         })
     );
     assert!(!parsed.limits.contains_key("codex"));
-    assert_eq!(
-        parse_rate_limit_headers(&rate_limits_to_header_pairs(&parsed)),
-        Some(parsed)
-    );
+    let mut headers = rate_limits_to_header_pairs(&parsed);
+    headers.push(("x-codex-primary-used-percent".to_owned(), "89".to_owned()));
+    let separate =
+        parse_image_rate_limit_headers(&headers).expect("separate image and core limits");
+    assert_eq!(separate.limits["imagegen_premium"], *image);
+    assert_eq!(separate.limits["codex"].primary.unwrap().used_percent, 89.0);
 }
 
 #[test]

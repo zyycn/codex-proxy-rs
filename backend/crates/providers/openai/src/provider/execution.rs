@@ -641,6 +641,7 @@ pub(super) async fn create_json_attempt(
 pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStream {
     Box::pin(async_stream::try_stream! {
         let allows_account_state_mutation = request.lease.allows_account_state_mutation();
+        let image_endpoint = matches!(request.endpoint_path, CODEX_IMAGE_GENERATIONS_PATH | CODEX_IMAGE_EDITS_PATH);
         let failure_context = OpenAiFailureContext {
             client: &request.client,
             selector: &request.selector,
@@ -648,6 +649,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             response_origin: &request.response_origin,
             cyber_policy_scope: None,
             allows_account_state_mutation,
+            image_endpoint,
             upstream_model: None,
         };
         let active_account = request.lease.account().clone();
@@ -713,6 +715,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 &request.quota,
                 &active_account,
                 &response.rate_limit_headers,
+                image_endpoint,
             )
             .await;
             if !response.set_cookie_headers.is_empty()
@@ -736,7 +739,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
         let response_meta =
             ResponseMeta::for_provider_endpoint(request.context.request_id().as_str());
         yield ProviderEvent::canonical(GatewayEvent::Started(response_meta.clone()));
-        if matches!(request.endpoint_path, CODEX_IMAGE_GENERATIONS_PATH | CODEX_IMAGE_EDITS_PATH)
+        if image_endpoint
             && let Some((usage, cost)) = image_response_metering(&request.body, &response.body, request.context.pricing())
         {
             yield ProviderEvent::canonical(GatewayEvent::Usage(usage));
@@ -812,6 +815,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         let allows_account_state_mutation = lease.allows_account_state_mutation();
         let failure_context = OpenAiFailureContext {
             client: &client,
+            image_endpoint: false,
             selector: &selector,
             quota: &quota,
             response_origin: &response_origin,

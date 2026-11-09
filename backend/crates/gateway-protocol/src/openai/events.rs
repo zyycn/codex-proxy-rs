@@ -328,7 +328,7 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
         limit_ids.insert(active_limit.clone());
     }
     limit_ids.insert("codex".to_string());
-    let mut limits = limit_ids
+    let limits = limit_ids
         .into_iter()
         .filter_map(|limit_id| {
             let prefix = format!("x-{}", limit_id.replace('_', "-"));
@@ -336,16 +336,6 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
                 .map(|details| (limit_id, details))
         })
         .collect::<BTreeMap<_, _>>();
-    // 生图等响应只通过 active-limit 标明通用 x-codex 窗口的归属
-    // 有独立具名头时保留各桶原始事实，避免把真正的 Codex 窗口一起迁移
-    if let Some(active_limit) = active_limit.as_ref()
-        && active_limit != "codex"
-        && !limits.contains_key(active_limit)
-        && let Some(mut details) = limits.remove("codex")
-    {
-        details.limit_id.clone_from(active_limit);
-        limits.insert(active_limit.clone(), details);
-    }
     let credits = parse_credits_from_lookup(&normalized);
     let plan_type = lookup_non_empty(&normalized, "x-codex-plan-type");
     let promo_message = lookup_non_empty(&normalized, "x-codex-promo-message");
@@ -369,6 +359,20 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
         promo_message,
         rate_limit_reached_type,
     })
+}
+
+/// Images 端点有时仅用 active-limit 标明通用窗口属于哪个图片计量项
+pub fn parse_image_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRateLimits> {
+    let mut parsed = parse_rate_limit_headers(headers)?;
+    if let Some(active) = &parsed.active_limit
+        && active != "codex"
+        && !parsed.limits.contains_key(active)
+        && let Some(mut details) = parsed.limits.remove("codex")
+    {
+        details.limit_id.clone_from(active);
+        parsed.limits.insert(active.clone(), details);
+    }
+    Some(parsed)
 }
 
 /// 判断响应头是否属于可被动同步的限流领域
