@@ -295,8 +295,6 @@
       "websocketCloseCode": "WS 關閉碼",
       "lastEventType": "最後事件",
       "retryAfter": "重試等待",
-      "closeReason": "關閉原因",
-      "gatewayMessage": "閘道摘要",
       "upstreamHttpStatus": "上游 {status}",
       "clientHttpStatus": "用戶端 {status}",
       "origin": {
@@ -312,8 +310,6 @@
         "sent": "已發送",
         "ambiguous": "執行結果未確認"
       },
-      "upstreamEvidence": "上游返回原文",
-      "noUpstreamMessage": "未記錄上游錯誤原文",
       "continuationReason": "續接失敗原因",
       "connectionExitReason": "連接退出原因",
       "clientResult": "返回客戶端",

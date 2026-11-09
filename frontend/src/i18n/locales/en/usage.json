@@ -295,8 +295,6 @@
       "websocketCloseCode": "WS close code",
       "lastEventType": "Last event",
       "retryAfter": "Retry after",
-      "closeReason": "Close reason",
-      "gatewayMessage": "Gateway summary",
       "upstreamHttpStatus": "Upstream {status}",
       "clientHttpStatus": "Client {status}",
       "origin": {
@@ -312,8 +310,6 @@
         "sent": "Sent",
         "ambiguous": "Execution unconfirmed"
       },
-      "upstreamEvidence": "Upstream original message",
-      "noUpstreamMessage": "No upstream error message was recorded",
       "continuationReason": "Continuation failure",
       "connectionExitReason": "Connection exit reason",
       "clientResult": "Returned to client",
