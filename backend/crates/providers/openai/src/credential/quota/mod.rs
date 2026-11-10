@@ -31,8 +31,8 @@ use futures::StreamExt as _;
 use gateway_core::account::{
     AccountErrorReason, AccountQuotaSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore,
-    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaObservationTouch,
-    QuotaState, QuotaWriteOutcome,
+    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaMergeBase, QuotaObservation,
+    QuotaObservationTouch, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::provider_ports::{
     ProviderCooldown, ProviderCooldownPort, ProviderRuntimePolicyPort,
@@ -68,6 +68,8 @@ use snapshot::{
     scheduling_signals_from_snapshot,
 };
 
+// 同一份上游观测只重做本地合并，高并发时不无限争抢写入
+const QUOTA_MERGE_ATTEMPTS: usize = 3;
 const LIMIT_EVIDENCE_FIELD: &str = "_cpr_quota_limit_evidence";
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);

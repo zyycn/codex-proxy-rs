@@ -1311,6 +1311,7 @@ where
     let state = observation.state;
     let observed_at = DateTime::<Utc>::from(observation.observed_at);
     let access_observed_at = state.observed_at().map(DateTime::<Utc>::from);
+    let merge_base = observation.quota_pause.as_ref().and_then(|d| d.merge_base);
     let result = sqlx::query(
         "update provider_accounts
              set provider_quota_json = $3, quota_observed_at = $4,
@@ -1335,7 +1336,8 @@ where
                  updated_at = greatest(now(), updated_at, $4, $7)
              where id = $1 and credential_revision = $2
                and (quota_observed_at is null or quota_observed_at <= $4)
-               and ($11::jsonb is null or quota_limits = $11)",
+               and ($11::jsonb is null or (quota_limits = $11 and quota_observed_at is distinct from $4))
+               and (not $12 or quota_observed_at is not distinct from $13)",
     )
     .bind(account_id)
     .bind(to_i64(expected_revision.get())?)
@@ -1353,6 +1355,8 @@ where
             .as_ref()
             .map(|d| sqlx::types::Json(&d.limits)),
     )
+    .bind(merge_base.is_some())
+    .bind(merge_base.and_then(|base| base.observed_at).map(DateTime::<Utc>::from))
     .execute(executor)
     .await
     .map_err(|source| postgres_unavailable("compare and swap provider quota", source))?;

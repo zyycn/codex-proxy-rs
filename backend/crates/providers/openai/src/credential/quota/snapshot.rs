@@ -129,8 +129,10 @@ impl CodexAccountQuotaSnapshot {
     pub(super) fn pause_decision(
         &self,
         limits: &gateway_core::account::AccountQuotaLimits,
+        merge_base: Option<super::QuotaMergeBase>,
     ) -> gateway_core::account::QuotaPauseDecision {
         gateway_core::account::QuotaPauseDecision {
+            merge_base,
             limits: limits.clone(),
             paused: self
                 .limit_usage()

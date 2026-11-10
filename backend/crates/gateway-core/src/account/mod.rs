@@ -14,7 +14,7 @@ pub use model_access::{
     MAX_ACCOUNT_ACCESS_MODELS,
 };
 mod quota_limits;
-pub use quota_limits::{AccountQuotaLimits, QuotaPauseDecision};
+pub use quota_limits::{AccountQuotaLimits, QuotaMergeBase, QuotaPauseDecision};
 mod proxy;
 pub use proxy::{InvalidOutboundProxy, OutboundProxy};
 pub mod scope;

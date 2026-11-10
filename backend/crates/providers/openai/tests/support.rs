@@ -32,6 +32,7 @@ use provider_openai::credential::{
     ImportCodexOAuthCredential,
 };
 use secrecy::SecretString;
+use tokio::sync::oneshot;
 
 #[derive(Clone)]
 struct StoredAccount {
@@ -55,6 +56,7 @@ pub(crate) struct MemoryAccountStore {
     account_reads: AtomicUsize,
     provider_list_reads: AtomicUsize,
     quota_reads: AtomicUsize,
+    next_quota_read: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
     largest_quota_read: AtomicUsize,
     fail_provider_listing: AtomicBool,
     pending_account_reads: bool,
@@ -232,6 +234,13 @@ impl MemoryAccountStore {
 
     pub(crate) fn largest_quota_read(&self) -> usize {
         self.largest_quota_read.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn hold_next_quota_read(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (read, ready) = oneshot::channel();
+        let (release, held) = oneshot::channel();
+        *self.next_quota_read.lock().unwrap() = Some((read, held));
+        (ready, release)
     }
 
     pub(crate) fn quota_reads(&self) -> usize {
@@ -519,11 +528,19 @@ impl ProviderAccountStore for MemoryAccountStore {
         self.quota_reads.fetch_add(1, Ordering::SeqCst);
         self.largest_quota_read
             .fetch_max(accounts.len(), Ordering::SeqCst);
-        let stored = self.accounts.lock().expect("account store lock");
-        Ok(accounts
-            .iter()
-            .filter_map(|account| stored.get(account)?.quota.clone())
-            .collect())
+        let result = {
+            let stored = self.accounts.lock().expect("account store lock");
+            accounts
+                .iter()
+                .filter_map(|account| stored.get(account)?.quota.clone())
+                .collect()
+        };
+        let held = self.next_quota_read.lock().unwrap().take();
+        if let Some((read, held)) = held {
+            read.send(()).unwrap();
+            held.await.expect("release quota read");
+        }
+        Ok(result)
     }
 
     async fn get_quota_versions(
@@ -563,6 +580,16 @@ impl ProviderAccountStore for MemoryAccountStore {
                             != *connection
                 })
         {
+            return Ok(QuotaWriteOutcome::Conflict);
+        }
+        let current_version = stored.quota.as_ref().map(|quota| quota.observed_at);
+        if observation.quota_pause.as_ref().is_some_and(|decision| {
+            &decision.limits != stored.account.quota_limits()
+                || current_version == Some(observation.observed_at)
+                || decision
+                    .merge_base
+                    .is_some_and(|base| base.observed_at != current_version)
+        }) {
             return Ok(QuotaWriteOutcome::Conflict);
         }
         if stored

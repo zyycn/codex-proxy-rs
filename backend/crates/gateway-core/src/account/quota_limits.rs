@@ -52,9 +52,17 @@ impl TryFrom<BTreeMap<String, u8>> for AccountQuotaLimits {
     }
 }
 
+/// 合并时读到的快照版本，时间为空表示当时尚无快照
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuotaMergeBase {
+    pub observed_at: Option<std::time::SystemTime>,
+}
+
 /// 此次判断依据的策略，以及是否有通用窗口触发暂停
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaPauseDecision {
+    /// 独立观测无需合并，依赖旧快照的判断必须随写入校验版本
+    pub merge_base: Option<QuotaMergeBase>,
     pub limits: AccountQuotaLimits,
     pub paused: bool,
 }
