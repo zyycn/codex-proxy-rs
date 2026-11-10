@@ -334,7 +334,7 @@ Provider 可为模型提供来源账号集合；Core 在公开目录查询时结
 不解析上游字段；API 负责协议输出，不直接依赖具体 Provider。原生目录失败不会退回通用画像，只有不提供
 该协议原生目录的 Provider（如 xAI 的 Codex 适配）才走画像转换。目录读取不创建计量请求或推理 attempt。
 OpenAI 的账号/凭据 revision/客户端版本隔离、并发合并、TTL、容量与失效均归属 credential catalog
-service；客户端原生对象保存在有界进程缓存中，与套餐 Redis 模型 ID 缓存分开管理。
+service；客户端原生对象保存在有界进程缓存中，与账号级 Redis 模型 ID 缓存分开管理。
 该缓存最多保留 32 项，原生正文总预算为 32 MiB；单次结果超过预算时仍正常交付，但不驻留缓存
 
 全局请求位置及开关由运行设置持久化；快照仅在开关开启时生成全局覆盖，并随
@@ -525,7 +525,7 @@ API Key 默认使用 Responses 协议和 HTTP/SSE，Responses 可选 WS 优先�
 协议和传输资格在选号阶段验证，WS pool 与 continuation 按凭据版本隔离。
 Responses API Key 与 OAuth 共用原生请求与响应链路；Messages API Key 使用独立 HTTP transport，
 在同一 Provider 的账号租约内执行生成和输入计数，不进入 Images、Search、Live 或 Responses 原生续接路径。
-OpenAI 模型目录用于发现与原生 Responses 账号资格筛选，OAuth 按套餐、API Key 按账号与凭据版本匹配目录。
+OpenAI 模型目录用于发现与原生 Responses 账号资格筛选。
 目录与账号白名单的优先级见[路由与账号范围](#6-路由账号范围与-continuation)
 
 - Responses 同协议执行是透明边界。正文兼容、身份归一和显式请求策略之外的业务字段保留原始语义；
@@ -763,9 +763,9 @@ OpenAI Provider 的账号资格模块统一解释请求类型、认证与套餐�
 资格检查复用账号持久事实，在获取租约前与冻结的模型黑白名单共同过滤候选；亲和与重试沿用同一检查
 
 原生 Responses 在评分、亲和和租约前检查冻结的账号模型政策。OpenAI 账号白名单精确命中目标 ID 时允许上游验证，
-其余 OpenAI 账号及 xAI 账号按有效目录排除未列出的模型。OpenAI OAuth 与 xAI 按已知套餐匹配，API Key 按账号与凭据版本匹配。
+其余 OpenAI 账号及 xAI 账号按有效目录排除未列出的模型。OpenAI 目录按来源账号、凭据版本和套餐隔离；同套餐账号可以有不同的模型。
 OpenAI 使用未满 30 分钟的进程目录快照，xAI 按套餐去重读取 TTL 目录缓存，选号不请求上游目录。
-未知套餐、缺失或过期目录保留上游验证，不从其他账号或套餐借用目录资格
+没有有效目录时保留上游验证，不从其他账号借用 OpenAI 模型资格，也不从其他套餐借用 xAI 模型资格
 
 原生 OpenAI Responses 按[官方 Codex 0.166.0](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/codex-api/src/error.rs#L73)的结构化 `model_not_found` 错误码与状态合同识别模型拒绝，
 不从消息或任意正文推断模型权限；通过既有模型级冷却端口记录账号、凭据版本与上游模型，30 分钟内不再选用该组合。

@@ -704,7 +704,7 @@ Compose 使用以下绑定目录：
 
 PostgreSQL 是账号、Client Key、运行设置、请求记录与审计的权威存储；账号 credential 按
 Provider schema 以明文 JSON 保存于 PostgreSQL。Redis 只保存可重建、可过期的协调状态，例如
-会话亲和、lease、cooldown、OAuth pending flow 与套餐模型目录 cache
+会话亲和、lease、cooldown、OAuth pending flow 与模型目录缓存
 
 备份应覆盖哪些目录、如何生成一致性数据库归档，见 [备份与恢复](#备份与恢复)
 

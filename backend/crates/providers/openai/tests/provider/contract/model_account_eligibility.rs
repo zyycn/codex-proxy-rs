@@ -166,7 +166,7 @@ async fn account_allowlists_override_catalog_omissions_but_weight_affinity_and_p
                 "acct_scope_new",
                 secondary_api,
                 &api_secondary,
-                "free",
+                "pro",
                 vec!["gpt-6-luna"],
             ),
         ] {
@@ -362,7 +362,7 @@ async fn account_allowlists_override_catalog_omissions_but_weight_affinity_and_p
 }
 
 #[tokio::test]
-async fn missing_catalog_unknown_plan_and_rotated_api_credentials_preserve_upstream_validation() {
+async fn only_a_current_account_catalog_can_exclude_a_model() {
     use gateway_core::account::{CredentialCasOutcome, CredentialCasUpdate, ProviderAccountUpdate};
     use provider_openai::credential::ResponsesTransport;
 
@@ -418,7 +418,7 @@ async fn missing_catalog_unknown_plan_and_rotated_api_credentials_preserve_upstr
             .respond_with(
                 ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
             )
-            .expect(1)
+            .expect(if scenario == "unknown_plan" { 0 } else { 1 })
             .mount(upstream)
             .await;
         let provider = provider_with_base_url(&store, native.uri());
@@ -446,13 +446,21 @@ async fn missing_catalog_unknown_plan_and_rotated_api_credentials_preserve_upstr
                 CredentialCasOutcome::Updated(_)
             ));
         }
-        let mut stream = provider
+        let result = provider
             .execute(
                 planned_request_for_model("openai", operation("gpt-6-astra"), "gpt-6-astra"),
                 context("req_unknown_catalog", CancellationToken::new()),
             )
-            .await
-            .unwrap();
+            .await;
+        if scenario == "unknown_plan" {
+            // 未知套餐也有该账号亲自返回的目录，不能借套餐缺失绕过资格
+            assert_eq!(
+                result.err().unwrap().kind(),
+                ProviderErrorKind::NoEligibleAccount
+            );
+            continue;
+        }
+        let mut stream = result.unwrap();
         assert_eq!(
             stream.metadata().provider_account_id().as_str(),
             "acct_scope_new",
