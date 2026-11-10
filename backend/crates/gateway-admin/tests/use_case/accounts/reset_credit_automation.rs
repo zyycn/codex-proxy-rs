@@ -1153,3 +1153,78 @@ async fn early_use_rechecks_live_quota_and_waits_for_a_new_recovery_after_restar
     assert_eq!(commands.len(), 2);
     assert_eq!(commands[1].credit_id.as_deref(), Some("later"));
 }
+
+#[tokio::test]
+async fn weekly_recovery_is_observed_without_cards_after_a_failed_quota_readback() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    enable_capability(&provider);
+    let store = FakeAccountStore::new("openai", events.clone());
+    let expiry = Utc::now() + TimeDelta::days(3);
+    let mut record = plan(expiry);
+    record.state.pending = Some(PendingResetCredit {
+        credit: record.state.credits[0].clone(),
+        redeem_request_id: uuid::Uuid::new_v4().to_string(),
+    });
+    store
+        .automations
+        .lock()
+        .unwrap()
+        .insert("acct_test".into(), record);
+    let id = ProviderAccountId::new("acct_test").unwrap();
+    let services = threshold_services(provider.clone(), store.clone(), Some(10), true).await;
+    let accounts = services.accounts();
+    *provider.quota_failure.lock().unwrap() = Some(ProviderAdminErrorKind::Unavailable);
+    accounts
+        .reconcile_reset_credit_automation(id.clone())
+        .await
+        .unwrap();
+    let waiting = store
+        .reset_credit_automation("acct_test")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(waiting.state.credits.is_empty());
+    assert_eq!(waiting.state.last_result.as_deref(), Some("reset"));
+    assert!(waiting.next_run_at <= Utc::now() + TimeDelta::seconds(90));
+
+    provider.set_quota(ProviderQuota {
+        observed_at: Some(Utc::now()),
+        ..weekly_quota(20.0)
+    });
+    accounts
+        .reconcile_reset_credit_automation(id.clone())
+        .await
+        .unwrap();
+    let recovered = store
+        .reset_credit_automation("acct_test")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.next_run_at, recovered.state.next_discovery_at);
+    assert!(!recorded(&events).contains(&"provider.reset_credits"));
+    assert_eq!(
+        provider
+            .quota_requests()
+            .iter()
+            .map(|r| r.refresh)
+            .collect::<Vec<_>>(),
+        [true, false]
+    );
+
+    provider.set_quota(weekly_quota(95.0));
+    let mut new_card = card(expiry);
+    new_card.id = "next".into();
+    provider.reset_credits.lock().unwrap().push(new_card);
+    accounts
+        .reset_credits(&context("new-card"), id.clone())
+        .await
+        .unwrap();
+    accounts
+        .reconcile_reset_credit_automation(id)
+        .await
+        .unwrap();
+    let commands = provider.reset_credit_commands();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[1].credit_id.as_deref(), Some("next"));
+}

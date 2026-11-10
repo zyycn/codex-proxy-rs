@@ -452,18 +452,19 @@ impl DefaultAccountsService {
             .iter()
             .any(|credit| trigger.expiry_due(account_id.as_str(), credit, now));
         let early_limit = trigger.weekly_trigger();
-        // 只对有已知卡片的账号安排本地快照检查，错开扫描，不按这个频率查询上游
+        // 错峰读取本地快照，等待恢复期间不因卡片用完而漏过下一轮额度
         record.state.next_weekly_check_at = early_limit
             .map(|_| now + chrono::Duration::seconds(60 + i64::from(OsRng.next_u32() % 30)));
         let mut early_due = false;
         if let Some(limit) = early_limit
             && record.state.pending.is_none()
-            && !record.state.credits.is_empty()
+            && needs_weekly_observation(&record.state)
         {
             match self.reset_credit_quota(account_id, false).await {
                 Ok(quota) => {
                     observe_weekly_recovery(&mut record.state, &quota, limit);
-                    early_due = record.state.awaiting_weekly_recovery_since.is_none()
+                    early_due = !record.state.credits.is_empty()
+                        && record.state.awaiting_weekly_recovery_since.is_none()
                         && weekly_remaining(&quota)
                             .is_some_and(|remaining| trigger.eligible(remaining, limit));
                 }
@@ -595,6 +596,7 @@ impl DefaultAccountsService {
                     && let Some(limit) = early_limit
                     && observe_weekly_recovery(&mut record.state, &account.quota, limit)
                 {
+                    reschedule(&mut record, trigger, Utc::now());
                     self.save_automation(&mut record, None).await?;
                 }
             }
@@ -623,6 +625,10 @@ fn weekly_remaining(quota: &ProviderQuota) -> Option<f64> {
 
 fn weekly_low(remaining: f64, limit: u32) -> bool {
     remaining < 100.0 && remaining <= f64::from(limit)
+}
+
+fn needs_weekly_observation(state: &ResetCreditAutomationState) -> bool {
+    !state.credits.is_empty() || state.awaiting_weekly_recovery_since.is_some()
 }
 
 fn observe_weekly_recovery(
@@ -687,7 +693,7 @@ fn reschedule(record: &mut ResetCreditAutomation, trigger: Trigger, now: DateTim
     } else {
         let scheduled = match trigger {
             Trigger::Expiry { lead, .. } => next_consumption(record, lead),
-            Trigger::Weekly { .. } if !record.state.credits.is_empty() => {
+            Trigger::Weekly { .. } if needs_weekly_observation(&record.state) => {
                 Some(record.state.next_weekly_check_at.unwrap_or(now))
             }
             Trigger::Weekly { .. } => None,

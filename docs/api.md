@@ -1907,7 +1907,7 @@ GET 和 POST 均返回 `enabled`、`leadMinutes`、`weeklyTriggerRemainingPercen
 周额度模式下，`weeklyTriggerRemainingPercent` 返回生效的上限（留空为 0），`nextConsumeAtDisplay` 为 `null`；临期模式下该上限投影为 `null`，`nextConsumeAtDisplay` 显示计划时间。手动使用不受模式与上限限制
 
 开启后在一分钟内错峰执行首次发现，此后按部署时区每天随机发现一次，普通发现失败也等待下一日。
-临期模式在提前窗口内错峰执行；周额度模式对已知有卡的账号错峰检查本地额度快照，达线后刷新上游周额度核实。两者消费前均重新查询卡片；已在其他地方使用或已到期的卡片
+临期模式在提前窗口内错峰执行；周额度模式在有卡且本地快照达线时刷新上游周额度核实。两者消费前均重新查询卡片；已在其他地方使用或已到期的卡片
 会移出计划，查询失败不直接消费。上游返回 `already_redeemed` 后结束该次操作，不切换另一张卡重试。
 无卡片 ID 或到期时间时不自动消费；每天发现一次可能错过两次发现之间发放并到期的卡片
 
@@ -1916,7 +1916,7 @@ GET 和 POST 均返回 `enabled`、`leadMinutes`、`weeklyTriggerRemainingPercen
 `discovery_failed` 表示最近查询失败，`not_redeemed` 表示上游明确未完成消费。
 `weekly_quota_above_threshold` 表示剩余周额度高于上限，`weekly_quota_unavailable` 表示暂时无法确认周额度；
 `nothing_to_reset` 表示当前没有可重置窗口，这三种状态均保留卡片并稍后重查，其中 `nothing_to_reset` 的下一次消费使用新幂等键。
-`awaiting_weekly_recovery` 表示已确认用卡，等待消费后更新的周额度回到上限以上或满额，再允许下一次按周额度使用。
+`awaiting_weekly_recovery` 表示已确认用卡，等待消费后更新的周额度回到上限以上或满额，再允许下一次按周额度使用。即使用完最后一张卡，等待期间仍会检查本地额度快照。
 结果未知的未决操作继续使用原幂等键确认，不重新应用周额度上限；自动操作未决且对应卡片尚未到期时，手动消费返回 `409`
 
 ## 6. 账号分组
