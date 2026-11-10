@@ -1212,7 +1212,13 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
     let record = account_record(&account);
     let config = valid_config();
     let catalog_cache = Arc::new(TestCatalogCache::default());
-    catalog_cache.seed("plan:pro", ["gpt-5.4"]);
+    catalog_cache.seed(
+        provider_openai::credential::CodexCatalogScope::for_account(&account)
+            .cache_scope()
+            .unwrap()
+            .as_str(),
+        ["gpt-5.4"],
+    );
     let bundle = provider_openai::initialize(
         config.config.clone(),
         provider_ports_with_catalog(
