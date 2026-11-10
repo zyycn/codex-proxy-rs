@@ -52,8 +52,8 @@ const errorItems = computed(() => [
     value: props.record.upstreamConnectionExitReason,
   },
 ].filter(item => item.value != null && item.value !== '').map(item => ({ ...item, mono: true, wrap: true })))
-const successfulHttpStatus = computed(() => [props.record.clientStatusCode, props.record.upstreamStatusCode]
-  .some(status => status != null && status >= 200 && status < 300))
+const clientSseStarted = computed(() => props.record.clientTransport === 'http_sse'
+  && props.record.clientStatusCode != null && props.record.clientStatusCode >= 200 && props.record.clientStatusCode < 300)
 </script>
 
 <template>
@@ -87,10 +87,12 @@ const successfulHttpStatus = computed(() => [props.record.clientStatusCode, prop
       <span class="font-bold">{{ t('usage.error.clientResult') }}</span>
       <span>{{ usageTransportType(record.clientTransport) }}</span>
       <span v-if="record.clientStatusCode != null" class="inline-flex items-center gap-2" :title="t('usage.error.clientStatusCode')">
-        HTTP <UsageStatusCodeBadge :status-code="record.clientStatusCode" />
+        <span v-if="record.clientTransport === 'websocket'">{{ t('usage.error.wsStatus') }}</span>
+        <span v-else-if="record.clientTransport === 'http_sse'">HTTP</span>
+        <UsageStatusCodeBadge :status-code="record.clientStatusCode" />
       </span>
-      <span v-else>{{ t('usage.error.noHttpStatus') }}</span>
-      <span v-if="successfulHttpStatus" class="basis-full text-z-xs leading-relaxed">{{ t('usage.error.httpStatusHint') }}</span>
+      <span v-else>{{ t('usage.error.noStatus') }}</span>
+      <span v-if="clientSseStarted" class="basis-full text-z-xs leading-relaxed">{{ t('usage.error.httpStatusHint') }}</span>
     </div>
   </section>
 </template>

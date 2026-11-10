@@ -2616,8 +2616,9 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 不改变顶部统计，独立运维事件仍通过 `/api/admin/operations/errors` 查询
 
 请求列表的 `errorCode` / `errorMessage` 提供最终请求的错误码与错误信息，未记录时为 `null`。
-`clientStatusCode` / `upstreamStatusCode` 分别提供已记录的客户端与上游 HTTP 状态，未记录时为 `null`；
-流式请求可能在客户端收到 HTTP 200 后失败，两个状态不互相替代，也不覆盖 `logicalOutcome`
+`clientStatusCode` / `upstreamStatusCode` 分别提供已记录的客户端与上游状态码，未记录时为 `null`。
+HTTP SSE 请求可能在返回 HTTP 200 后流内失败；WebSocket 已升级时，客户端错误状态码不代表 HTTP 握手状态或 WebSocket 关闭码。
+两侧状态码不互相替代，也不覆盖 `logicalOutcome`
 
 请求列表与详情的 `errorKind` 保留网关分类，`websocketCloseCode` 只提取已保存关闭帧的数字码，
 与原始上游 `errorCode` 分开。`continuationUnavailableReason` 和 `upstreamConnectionExitReason`
