@@ -1,3 +1,22 @@
+-- 清空旧时间计划并关闭预热，重新启用时由管理员填写 Cron
+update runtime_settings set account_warmup_enabled = false;
+
+alter table runtime_settings
+    drop column account_warmup_schedule_time,
+    add column account_warmup_cron text not null default '' check (
+        octet_length(account_warmup_cron) <= 255
+        and account_warmup_cron = btrim(account_warmup_cron)
+        and account_warmup_cron !~ '[[:cntrl:]]'
+        and (not account_warmup_enabled or account_warmup_cron <> '')
+    ),
+    add column reset_credit_on_low_weekly_quota boolean not null default false,
+    -- 同一部署的实例共用转发标记，启动时读取，不随请求访问数据库
+    add column peer_routing_id uuid not null default gen_random_uuid();
+
+alter table provider_accounts
+    add column quota_limits jsonb not null default '{}'::jsonb,
+    add column quota_paused boolean not null default false;
+
 -- 显式窗口复用 Key 费用账本，仅保留当前版本及最近一次窗口变更
 alter table client_api_key_budget_windows
     add column daily_explicit boolean not null default false,
