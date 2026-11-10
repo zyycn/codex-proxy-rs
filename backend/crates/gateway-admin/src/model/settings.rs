@@ -72,6 +72,8 @@ pub struct RuntimeSettingsValues {
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
+    #[serde(default)]
+    pub reset_credit_on_low_weekly_quota: bool,
     pub reset_credit_lead_minutes: u32,
     pub reset_credit_max_weekly_remaining_percent: Option<u32>,
 }

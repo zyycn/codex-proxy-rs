@@ -308,7 +308,11 @@
     "quotaReset": {
       "title": "Quota reset credits",
       "enableHelp": "Enable automatic use in the account's Quota reset panel",
-      "description": "Global settings for accounts with automatic use enabled",
+      "description": "How long before expiry to use a reset credit",
+      "timing": "When to use a credit",
+      "expiryMode": "Before expiry",
+      "weeklyMode": "By weekly quota",
+      "earlyThresholdHelp": "Use at or below this percentage, leave blank or enter 0 to wait until exhausted",
       "thresholdHelp": "Skip automatic use when the remaining quota exceeds this threshold, leave blank for no limit",
       "weeklyQuotaLimit": "Reset credit remaining weekly quota threshold"
     },

@@ -1894,15 +1894,20 @@ revision 变化时丢弃结果
 消费期间账号身份或凭据版本变化时返回结果未知，不将旧结果套用到新绑定账号
 
 自动使用通过 `/api/admin/accounts/reset-credits/automation` 按账号开启，默认关闭；账号本身停用时暂停执行。
-GET 和 POST 均返回 `enabled`、`leadMinutes`、`nextDiscoveryAtDisplay`、`nextConsumeAtDisplay`、`lastResult`，
+GET 和 POST 均返回 `enabled`、`leadMinutes`、`weeklyTriggerRemainingPercent`、`nextDiscoveryAtDisplay`、`nextConsumeAtDisplay`、`lastResult`，
 时间展示沿用部署时区，无计划时为 `null`。运行设置 `resetCreditLeadMinutes` 默认 10，范围 1～1440 分钟
 
-`resetCreditMaxWeeklyRemainingPercent` 是可选的全局剩余周额度上限，范围 0～100 的整数，默认 `null` 表示不限制。
-设置后，每次新的自动消费前刷新账号周额度；剩余比例大于上限或无法确认周额度时，保留卡片并在到期前错峰重查，
-等于上限时允许使用。仅采用账号级周窗口，不回退到短期、月度或模型专属额度；手动使用不受此上限影响
+`resetCreditOnLowWeeklyQuota` 为已开启自动使用的账号选择一种用卡时机。两种模式共用可选的剩余周额度上限 `resetCreditMaxWeeklyRemainingPercent`（整数 0～100），只认账号级周窗口，不采用短期、月度或模型专属额度：
+
+| 模式 | 触发条件 | 上限留空 |
+| --- | --- | --- |
+| 临期使用（默认，`false`） | 进入卡片到期提前窗口；设置上限时还须确认剩余周额度不高于上限 | 临期使用不限制额度 |
+| 按周额度使用（`true`） | 周额度已有消耗且剩余比例不高于上限，优先使用最早到期的有效卡片；仅临期不会触发 | 周额度耗尽时使用 |
+
+周额度模式下，`weeklyTriggerRemainingPercent` 返回生效的上限（留空为 0），`nextConsumeAtDisplay` 为 `null`；临期模式下该上限投影为 `null`，`nextConsumeAtDisplay` 显示计划时间。手动使用不受模式与上限限制
 
 开启后在一分钟内错峰执行首次发现，此后按部署时区每天随机发现一次，普通发现失败也等待下一日。
-已知且有明确到期时间的可用卡片在提前窗口内错峰执行，消费前重新查询；已在其他地方使用或已到期的卡片
+临期模式在提前窗口内错峰执行；周额度模式在有卡且本地快照达线时刷新上游周额度核实。两者消费前均重新查询卡片；已在其他地方使用或已到期的卡片
 会移出计划，查询失败不直接消费。上游返回 `already_redeemed` 后结束该次操作，不切换另一张卡重试。
 无卡片 ID 或到期时间时不自动消费；每天发现一次可能错过两次发现之间发放并到期的卡片
 
@@ -1911,6 +1916,7 @@ GET 和 POST 均返回 `enabled`、`leadMinutes`、`nextDiscoveryAtDisplay`、`n
 `discovery_failed` 表示最近查询失败，`not_redeemed` 表示上游明确未完成消费。
 `weekly_quota_above_threshold` 表示剩余周额度高于上限，`weekly_quota_unavailable` 表示暂时无法确认周额度；
 `nothing_to_reset` 表示当前没有可重置窗口，这三种状态均保留卡片并稍后重查，其中 `nothing_to_reset` 的下一次消费使用新幂等键。
+`awaiting_weekly_recovery` 表示已确认用卡，等待消费后更新的周额度回到上限以上或满额，再允许下一次按周额度使用。即使用完最后一张卡，等待期间仍会检查本地额度快照。
 结果未知的未决操作继续使用原幂等键确认，不重新应用周额度上限；自动操作未决且对应卡片尚未到期时，手动消费返回 `409`
 
 ## 6. 账号分组
@@ -2132,7 +2138,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | [历史保留](#历史保留) | `usageRetentionDays`、`opsEventRetentionDays`、`auditRetentionDays` |
 | [账号错误保护](#账号错误保护) | `accountErrorProtection` |
 | [账号预热](#账号预热) | `accountWarmupEnabled`、`accountWarmupCron`、`accountWarmupModel` |
-| [主动额度重置卡](#主动额度重置卡) | `resetCreditLeadMinutes`、`resetCreditMaxWeeklyRemainingPercent` |
+| [主动额度重置卡](#主动额度重置卡) | `resetCreditOnLowWeeklyQuota`、`resetCreditLeadMinutes`、`resetCreditMaxWeeklyRemainingPercent` |
 
 ### 历史保留
 

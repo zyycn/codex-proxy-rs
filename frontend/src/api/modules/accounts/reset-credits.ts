@@ -23,6 +23,7 @@ export interface AccountResetCreditResultResponse {
 
 export interface AccountResetCreditAutomation {
   enabled: boolean
+  weeklyTriggerRemainingPercent: number | null
   leadMinutes: number
   nextDiscoveryAtDisplay: string | null
   nextConsumeAtDisplay: string | null

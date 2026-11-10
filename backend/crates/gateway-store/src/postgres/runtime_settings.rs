@@ -157,7 +157,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
                     account_error_protection_json, account_error_protection_revision,
-                    account_warmup_enabled, account_warmup_cron, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent
+                    account_warmup_enabled, account_warmup_cron, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent, reset_credit_on_low_weekly_quota
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -313,7 +313,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
                 account_error_protection_json, account_error_protection_revision,
-                account_warmup_enabled, account_warmup_cron, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent
+                account_warmup_enabled, account_warmup_cron, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent, reset_credit_on_low_weekly_quota
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -332,8 +332,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     update: &RuntimeSettingsUpdate,
 ) -> StoreResult<Revision> {
     update.validate()?;
-    let previous_reset_settings: (i32, Option<i32>) = sqlx::query_as(
-        "select reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent from runtime_settings where id = 1 for update",
+    let previous_reset_settings: (i32, Option<i32>, bool) = sqlx::query_as(
+        "select reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent, reset_credit_on_low_weekly_quota from runtime_settings where id = 1 for update",
     )
     .fetch_one(&mut **transaction)
     .await
@@ -394,6 +394,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      max_retry_after_seconds = $31,
                      account_queue_timeout_seconds = $32,
                      switch_account_on_queue_failure = $33,
+                     reset_credit_on_low_weekly_quota = $34,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -439,6 +440,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(i64::from(update.values.max_retry_after_seconds))
     .bind(i64::from(update.values.account_queue_timeout_seconds))
     .bind(update.values.switch_account_on_queue_failure)
+    .bind(update.values.reset_credit_on_low_weekly_quota)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("update runtime settings in transaction", source))?
@@ -449,6 +451,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     })?;
     // 自动使用配置变化只唤醒本地计划重算，不触发账号全量上游查询
     if i64::from(previous_reset_settings.0) != i64::from(update.values.reset_credit_lead_minutes)
+        || previous_reset_settings.2 != update.values.reset_credit_on_low_weekly_quota
         || previous_reset_settings.1.map(i64::from)
             != update
                 .values
@@ -539,6 +542,7 @@ struct RuntimeSettingsRow {
     account_warmup_enabled: bool,
     account_warmup_cron: String,
     account_warmup_model: Option<String>,
+    reset_credit_on_low_weekly_quota: bool,
     reset_credit_lead_minutes: i32,
     reset_credit_max_weekly_remaining_percent: Option<i32>,
 }
@@ -608,6 +612,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
             account_warmup_enabled: row.account_warmup_enabled,
             account_warmup_cron: row.account_warmup_cron,
             account_warmup_model: row.account_warmup_model,
+            reset_credit_on_low_weekly_quota: row.reset_credit_on_low_weekly_quota,
             reset_credit_lead_minutes: u32::try_from(row.reset_credit_lead_minutes)
                 .map_err(|_| invalid_numeric())?,
             reset_credit_max_weekly_remaining_percent: row

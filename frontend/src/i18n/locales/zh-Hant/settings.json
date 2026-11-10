@@ -308,7 +308,11 @@
     "quotaReset": {
       "title": "主動重置卡",
       "enableHelp": "在賬號的「額度重置」中開啓自動使用",
-      "description": "全局設置，對已開啓自動使用的賬號生效",
+      "description": "到期前多久使用重置卡",
+      "timing": "使用時機",
+      "expiryMode": "臨期使用",
+      "weeklyMode": "按週額度使用",
+      "earlyThresholdHelp": "剩餘比例不高於此值時使用，留空或填 0 表示耗盡時使用",
       "thresholdHelp": "高於此值時暫不自動使用，留空表示不限制",
       "weeklyQuotaLimit": "重置卡剩餘周額度上限"
     },

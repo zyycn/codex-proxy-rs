@@ -624,6 +624,8 @@ async fn reset_credit_automation_persists_pending_checks_cas_and_follows_account
         revision: 0,
         next_run_at: now + TimeDelta::hours(2),
         state: ResetCreditAutomationState {
+            next_weekly_check_at: None,
+            awaiting_weekly_recovery_since: None,
             next_discovery_at: now + TimeDelta::days(1),
             credits: vec![],
             pending: Some(PendingResetCredit {

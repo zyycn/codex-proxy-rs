@@ -73,6 +73,7 @@ export function useSettingsForm() {
     accountWarmupEnabled: false,
     accountWarmupCron: '',
     accountWarmupModel: '',
+    resetCreditOnLowWeeklyQuota: false,
     resetCreditLeadMinutes: 10 as number | null,
     resetCreditMaxWeeklyRemainingPercent: null as number | null,
   })
@@ -163,6 +164,7 @@ export function useSettingsForm() {
     form.accountWarmupEnabled = data.accountWarmupEnabled
     form.accountWarmupCron = data.accountWarmupCron ?? ''
     form.accountWarmupModel = data.accountWarmupModel ?? ''
+    form.resetCreditOnLowWeeklyQuota = data.resetCreditOnLowWeeklyQuota
     form.resetCreditLeadMinutes = data.resetCreditLeadMinutes
     form.resetCreditMaxWeeklyRemainingPercent = data.resetCreditMaxWeeklyRemainingPercent
     mappings.value = Object.entries(data.modelMappings).map(([requestedModel, upstreamModel]) => ({
@@ -294,7 +296,8 @@ export function useSettingsForm() {
         accountWarmupEnabled: form.accountWarmupEnabled,
         accountWarmupCron: form.accountWarmupCron.trim(),
         accountWarmupModel: form.accountWarmupModel.trim() || null,
-        resetCreditLeadMinutes: resetCreditLeadMinutes!,
+        resetCreditOnLowWeeklyQuota: form.resetCreditOnLowWeeklyQuota,
+        resetCreditLeadMinutes: (form.resetCreditOnLowWeeklyQuota ? savedSettings.form.resetCreditLeadMinutes : resetCreditLeadMinutes)!,
         resetCreditMaxWeeklyRemainingPercent,
       })
       applySettings(result)

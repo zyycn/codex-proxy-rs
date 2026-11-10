@@ -1442,6 +1442,7 @@ impl SettingsStore for FixtureSettingsStore {
                 account_warmup_cron: "0 8 * * *".to_owned(),
                 account_warmup_model: None,
                 reset_credit_lead_minutes: 10,
+                reset_credit_on_low_weekly_quota: false,
                 reset_credit_max_weekly_remaining_percent: None,
             },
         })

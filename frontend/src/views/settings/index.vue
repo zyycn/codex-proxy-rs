@@ -225,6 +225,7 @@ watch(section, (value) => {
           />
           <ResetCreditCard
             v-model="resetCreditLeadMinutesValue"
+            v-model:on-low-weekly-quota="form.resetCreditOnLowWeeklyQuota"
             v-model:max-weekly-remaining-percent="resetCreditMaxWeeklyRemainingPercentValue"
           />
           <RequestHistoryCard v-model="usageRetentionDaysValue" />

@@ -19,6 +19,14 @@ const switchEnabled = shallowRef(false)
 const loadAction = useAsyncAction()
 const saveAction = useAsyncAction()
 const busy = computed(() => loadAction.loading.value || saveAction.loading.value)
+const timingLabel = computed(() => {
+  if (!status.value)
+    return t('accounts.quotaReset.setTiming')
+  const { weeklyTriggerRemainingPercent, leadMinutes } = status.value
+  return weeklyTriggerRemainingPercent == null
+    ? t('accounts.quotaReset.minutesInAdvance', { leadMinutes })
+    : t('accounts.quotaReset.weeklyThreshold', { percent: weeklyTriggerRemainingPercent })
+})
 const resultText = computed(() => {
   switch (status.value?.lastResult) {
     case 'pending': return status.value?.enabled
@@ -27,6 +35,7 @@ const resultText = computed(() => {
     case 'expired_unknown': return t('accounts.quotaReset.automation.expiredUnconfirmed')
     case 'discovery_failed': return t('accounts.quotaReset.automation.queryFailed')
     case 'weekly_quota_above_threshold': return t('accounts.quotaReset.automation.aboveThreshold')
+    case 'awaiting_weekly_recovery': return t('accounts.quotaReset.automation.awaitingWeeklyRecovery')
     case 'weekly_quota_unavailable': return t('accounts.quotaReset.automation.quotaUnavailable')
     case 'nothing_to_reset': return t('accounts.quotaReset.automation.resetNotNeeded')
     case 'not_redeemed': return t('accounts.quotaReset.automation.resetIncomplete')
@@ -84,11 +93,11 @@ watch(() => props.accountId, () => {
         </ZPopover>
       </div>
       <div class="flex items-center gap-3">
-        <ZButton size="small" variant="text" :aria-label="t('accounts.quotaReset.setGlobalLeadTime')" @click="router.push('/settings#reset-credits')">
+        <ZButton size="small" variant="text" :aria-label="t('accounts.quotaReset.setTiming')" @click="router.push('/settings#reset-credits')">
           <template #icon>
             <Clock3 class="size-3.5" />
           </template>
-          {{ status ? t('accounts.quotaReset.minutesInAdvance', { leadMinutes: status.leadMinutes }) : t('accounts.quotaReset.leadTime') }}
+          {{ timingLabel }}
         </ZButton>
         <ZSwitch
           class="reset-credit-switch"

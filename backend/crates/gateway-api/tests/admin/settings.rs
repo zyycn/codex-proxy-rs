@@ -1538,11 +1538,14 @@ fn reset_credit_weekly_threshold_accepts_unset_and_zero_to_one_hundred() {
             .reset_credit_max_weekly_remaining_percent
             .is_none()
     );
+    assert!(!request.values.reset_credit_on_low_weekly_quota);
     for value in [json!(null), json!(0), json!(70), json!(100)] {
         let mut body = update_body();
+        body["resetCreditOnLowWeeklyQuota"] = json!(true);
         body["resetCreditMaxWeeklyRemainingPercent"] = value.clone();
         let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
         request.validate().unwrap();
+        assert!(request.values.reset_credit_on_low_weekly_quota);
         assert_eq!(
             serde_json::to_value(request.values.reset_credit_max_weekly_remaining_percent).unwrap(),
             value
