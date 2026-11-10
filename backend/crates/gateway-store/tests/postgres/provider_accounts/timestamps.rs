@@ -21,6 +21,7 @@ async fn cross_kind_observations_preserve_time_bounds_and_stale_observation_fenc
     let revision = CredentialRevision::new(1).expect("revision");
     let quota_at = SystemTime::from(anchor - TimeDelta::milliseconds(400));
     let observation = QuotaObservation {
+        quota_pause: None,
         expected_connection: None,
         plan_type: None,
         account_id: account_id.clone(),

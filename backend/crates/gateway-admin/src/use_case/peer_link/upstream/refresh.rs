@@ -170,6 +170,7 @@ impl PeerInfoService {
                 .and_then(|peer| quota::observe(&peer, started_at, now))
                 .unwrap_or(QuotaState::unknown());
             let observation = QuotaObservation {
+                quota_pause: None,
                 expected_connection: Some(connection.clone()),
                 account_id: id.clone(),
                 expected_revision: connection.credential_revision,

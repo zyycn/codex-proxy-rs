@@ -891,6 +891,7 @@ impl AccountGroupStore for MemoryAccountGroupStore {
                 group_id: group_id(PRIMARY_GROUP_ID),
                 account_id: "acct_group_ready".to_owned(),
                 status: AccountStatusFacts {
+                    quota_paused: false,
                     enabled: true,
                     credential_state: CredentialState::Ready,
                     access_token_expires_at: None,
@@ -906,6 +907,7 @@ impl AccountGroupStore for MemoryAccountGroupStore {
                 group_id: group_id(PRIMARY_GROUP_ID),
                 account_id: "acct_group_disabled".to_owned(),
                 status: AccountStatusFacts {
+                    quota_paused: false,
                     enabled: false,
                     credential_state: CredentialState::Ready,
                     access_token_expires_at: None,
@@ -1228,6 +1230,9 @@ impl AccountStore for UnusedStore {
                 summary: gateway_admin::model::accounts::AccountSummary {
                     total: 1,
                     normal: u64::from(status == gateway_core::account::AccountStatus::Normal),
+                    quota_paused: u64::from(
+                        status == gateway_core::account::AccountStatus::QuotaPaused,
+                    ),
                     quota_exhausted: u64::from(
                         status == gateway_core::account::AccountStatus::QuotaExhausted,
                     ),
@@ -1392,6 +1397,7 @@ impl AccountStore for UnusedStore {
     async fn batch_update_accounts(
         &self,
         _: BatchUpdateAccounts,
+        _: gateway_admin::model::accounts::PreparedQuotaPauses,
         _: &MutationContext,
     ) -> AdminStoreResult<AccountsUpdateResult> {
         Err(unavailable("account batch update"))

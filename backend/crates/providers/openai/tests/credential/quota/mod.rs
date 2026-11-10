@@ -624,6 +624,127 @@ async fn initial_quota_worker_synchronizes_account_plan() {
 }
 
 #[tokio::test]
+async fn concurrent_named_usage_preserves_newly_paused_general_window() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let id = "acct_concurrent_threshold";
+    create_account(&store, id).await;
+    store.set_quota_limits(
+        id,
+        serde_json::from_value(json!({"codex:18000s": 95})).unwrap(),
+    );
+    let account = store.account(id).unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {"primary_window": {"limit_window_seconds": 18000, "used_percent": 96}}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+    );
+    let named = [
+        (
+            "x-codex-bengalfox-primary-used-percent".to_owned(),
+            "13".to_owned(),
+        ),
+        (
+            "x-codex-bengalfox-primary-window-minutes".to_owned(),
+            "300".to_owned(),
+        ),
+    ];
+    // 刷新先发起，两次读取都看到空快照，但刷新先写入达限结论
+    let (read, commit_refresh) = store.hold_next_quota_read();
+    let mut refresh = std::pin::pin!(service.refresh_account(account.id()));
+    tokio::select! {
+        result = &mut refresh => panic!("refresh finished before merge: {result:?}"),
+        ready = read => ready.unwrap(),
+    }
+    let (read, commit_passive) = store.hold_next_quota_read();
+    let mut passive = std::pin::pin!(service.synchronize_passive_headers(&account, &named));
+    tokio::select! {
+        result = &mut passive => panic!("passive write finished before merge: {result:?}"),
+        ready = read => ready.unwrap(),
+    }
+    commit_refresh.send(()).unwrap();
+    refresh.await.unwrap();
+    assert!(store.account(id).unwrap().quota_paused());
+    commit_passive.send(()).unwrap();
+    assert!(passive.await.unwrap());
+
+    assert!(store.account(id).unwrap().quota_paused());
+    let snapshot = service.read_account(account.id()).await.unwrap().unwrap();
+    for (source, percent) in [("codex", 96.0), ("codex_bengalfox", 13.0)] {
+        assert!(
+            snapshot
+                .windows()
+                .iter()
+                .any(|w| w.source() == source && w.used_percent() == Some(percent))
+        );
+    }
+}
+
+#[tokio::test]
+async fn missing_window_keeps_its_confirmed_limit_across_refresh_and_restart() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let id = "acct_partial_threshold";
+    create_account(&store, id).await;
+    store.set_quota_limits(
+        id,
+        serde_json::from_value(json!({"codex:604800s":95})).unwrap(),
+    );
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+    );
+    for (rate, blocked) in [
+        (
+            json!({"secondary_window":{"limit_window_seconds":604800,"used_percent":95}}),
+            true,
+        ),
+        (
+            json!({"primary_window":{"limit_window_seconds":18000,"used_percent":8}}),
+            true,
+        ),
+        (
+            json!({"secondary_window":{"limit_window_seconds":604800,"used_percent":0}}),
+            false,
+        ),
+    ] {
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"rate_limit":rate})))
+            .mount(&server)
+            .await;
+        if blocked {
+            service
+                .refresh_account(store.account(id).unwrap().id())
+                .await
+                .unwrap();
+        } else {
+            let result = service.synchronize_at(SystemTime::now()).await.unwrap();
+            assert_eq!(result.updated, 1);
+        }
+        let account = store.account(id).unwrap();
+        let restarted = quota_service(&store);
+        restarted
+            .prepare_scheduling(std::slice::from_ref(&account))
+            .await;
+        assert_eq!(
+            account.status_projection(SystemTime::now(), None).status == AccountStatus::QuotaPaused,
+            blocked
+        );
+    }
+}
+
+#[tokio::test]
 async fn quota_refresh_persists_explicit_provider_denial() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_explicit_quota_denial";

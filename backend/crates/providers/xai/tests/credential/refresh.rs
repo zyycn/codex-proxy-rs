@@ -323,6 +323,7 @@ async fn seed_quota_snapshot(
 ) -> QuotaObservation {
     let account = store.account(id).unwrap();
     let quota = QuotaObservation {
+        quota_pause: None,
         account_id: id.clone(),
         expected_revision: account.revision(),
         expected_connection: None,

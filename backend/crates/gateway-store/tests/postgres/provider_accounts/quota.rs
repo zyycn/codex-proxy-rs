@@ -17,6 +17,7 @@ async fn connection_changes_reject_in_flight_quota_writes() {
         let id = ProviderAccountId::new("acct_peer").unwrap();
         let current = repository.get_account(&id).await.unwrap().unwrap();
         let observation = QuotaObservation {
+            quota_pause: None,
             expected_connection: Some(UpstreamConnection::for_account(&current)),
             account_id: id.clone(),
             expected_revision: current.revision(),
@@ -66,6 +67,7 @@ async fn large_quota_uses_shared_snapshot_and_cannot_reappear_after_revocation()
     let current = repository.get_account(&id).await.unwrap().unwrap();
     let now = SystemTime::now();
     let observation = QuotaObservation {
+        quota_pause: None,
         expected_connection: Some(UpstreamConnection::for_account(&current)),
         account_id: id.clone(),
         expected_revision: current.revision(),
@@ -134,6 +136,81 @@ async fn large_quota_uses_shared_snapshot_and_cannot_reappear_after_revocation()
 }
 
 #[tokio::test]
+async fn quota_merge_can_only_replace_the_snapshot_it_read() {
+    use gateway_core::account::{QuotaMergeBase, QuotaPauseDecision};
+    let Some(database) = TestDatabase::create("quota_merge_base").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let id = ProviderAccountId::new("acct_merge").unwrap();
+    repository
+        .insert_provider_account(account(id.as_str(), "fixture"))
+        .await
+        .unwrap();
+    let limits = json!({"codex:18000s": 95});
+    sqlx::query("update provider_accounts set quota_limits = $2 where id = $1")
+        .bind(id.as_str())
+        .bind(&limits)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let limits: gateway_core::account::AccountQuotaLimits = serde_json::from_value(limits).unwrap();
+    let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    let later = start + Duration::from_secs(1);
+    let observed = |base, observed_at, paused| QuotaObservation {
+        quota_pause: Some(QuotaPauseDecision {
+            limits: limits.clone(),
+            paused,
+            merge_base: Some(QuotaMergeBase { observed_at: base }),
+        }),
+        expected_connection: None,
+        account_id: id.clone(),
+        expected_revision: CredentialRevision::new(1).unwrap(),
+        quota: OpaqueProviderData::new(Default::default()),
+        observed_at,
+        plan_type: None,
+        state: QuotaState::unknown(),
+    };
+    let write = |base, at, paused| repository.compare_and_swap_quota(observed(base, at, paused));
+    assert_eq!(
+        write(None, start, true).await.unwrap(),
+        QuotaWriteOutcome::Updated
+    );
+    for (base, at) in [
+        (None, later),
+        (Some(start - Duration::from_secs(1)), later),
+        // PostgreSQL 时间精度为微秒，同一版本不能代表两份不同的快照
+        (Some(start), start + Duration::from_nanos(1)),
+    ] {
+        assert_eq!(
+            write(base, at, false).await.unwrap(),
+            QuotaWriteOutcome::Conflict
+        );
+    }
+    assert!(
+        repository
+            .get_account(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .quota_paused()
+    );
+    assert_eq!(
+        write(Some(start), later, false).await.unwrap(),
+        QuotaWriteOutcome::Updated
+    );
+    assert!(
+        !repository
+            .get_account(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .quota_paused()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn snapshot_commit_preserves_newer_quota_failure() {
     let Some(database) = TestDatabase::create("quota_connection_evidence").await else {
         return;
@@ -159,6 +236,7 @@ async fn snapshot_commit_preserves_newer_quota_failure() {
         .await
         .unwrap();
     let observation = QuotaObservation {
+        quota_pause: None,
         expected_connection: Some(UpstreamConnection::for_account(&current)),
         account_id: id.clone(),
         expected_revision: current.revision(),
@@ -227,6 +305,7 @@ async fn managed_proxy_changes_clear_snapshots_and_reject_old_connections() {
     for change in ["url", "disabled"] {
         let current = repository.get_account(&id).await.unwrap().unwrap();
         let observation = QuotaObservation {
+            quota_pause: None,
             expected_connection: Some(UpstreamConnection::for_account(&current)),
             account_id: id.clone(),
             expected_revision: current.revision(),
@@ -294,6 +373,7 @@ async fn managed_proxy_changes_clear_snapshots_and_reject_old_connections() {
     // 模拟代理更新持有账号锁，额度查询已经开始但必须等待提交的交错
     let current = repository.get_account(&id).await.unwrap().unwrap();
     let observation = QuotaObservation {
+        quota_pause: None,
         expected_connection: Some(UpstreamConnection::for_account(&current)),
         account_id: id.clone(),
         expected_revision: current.revision(),

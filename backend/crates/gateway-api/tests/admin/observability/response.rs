@@ -142,6 +142,7 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
         provider_accounts: AccountPoolMetrics {
             total: 1002,
             normal: 943,
+            quota_paused: 0,
             quota_exhausted: 52,
             rate_limited: 0,
             disabled: 3,

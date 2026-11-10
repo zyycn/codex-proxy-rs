@@ -8,6 +8,7 @@ import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAccountResetCredits } from '../../composables/useAccountResetCredits'
 import AccountQuotaCredits from './Credits.vue'
+import QuotaActionButton from './QuotaActionButton.vue'
 import ResetCreditAutomation from './ResetCreditAutomation.vue'
 import UsageLimits from './UsageLimits.vue'
 
@@ -124,11 +125,10 @@ function handleRequestConsume(creditId: string) {
 </script>
 
 <template>
-  <ZIconButton
-    size="small"
+  <QuotaActionButton
     class="[&>span]:inline-flex [&>span]:items-center [&>span]:gap-1"
     :class="showTriggerCount ? 'w-auto! px-2' : undefined"
-    :aria-label="triggerLabel"
+    :label="triggerLabel"
     :aria-pressed="panelOpen || undefined"
     @click="panelOpen = true"
   >
@@ -136,7 +136,7 @@ function handleRequestConsume(creditId: string) {
     <span v-if="showTriggerCount" class="translate-y-px font-mono text-[10px] leading-none font-heavy tabular-nums">
       x{{ availableCount }}
     </span>
-  </ZIconButton>
+  </QuotaActionButton>
 
   <ZDialog
     v-model="panelOpen"

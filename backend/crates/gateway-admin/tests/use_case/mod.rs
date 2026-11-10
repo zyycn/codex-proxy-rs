@@ -644,6 +644,7 @@ impl AccountStore for UnavailableStore {
     async fn batch_update_accounts(
         &self,
         _: BatchUpdateAccounts,
+        _: gateway_admin::model::accounts::PreparedQuotaPauses,
         _: &MutationContext,
     ) -> AdminStoreResult<AccountsUpdateResult> {
         Err(unavailable("account batch update"))

@@ -1214,7 +1214,7 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 
 - `provider`: `openai` 或 `xai`，省略或空值表示不过滤
 - `groupId`: 分组 ID、`ungrouped`，或省略以不过滤
-- `status`: `normal`、`quota_exhausted`、`rate_limited`、`disabled`、`error`
+- `status`: `normal`、`quota_paused`、`quota_exhausted`、`rate_limited`、`disabled`、`error`
 - `sortBy`: `email`、`status`、`planType`、`usage`、`lastUsedAt`、`expiresAt`
 - `sortDirection`: `asc`、`desc`
 
@@ -1247,6 +1247,16 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 此时 `rateLimitedUntil` 是最早探测时间，到期后仍保持 `rate_limited`，直到探测成功或手动恢复。
 未要求探测时，该字段表示冷却结束时间。`protectionRules` 返回触发时的规则快照 `[{ id, name }]`，
 没有保护原因时为空数组，修改或删除当前规则不改写此快照。错误保护与上游限流独立恢复，解除保护不保证其他限制已经解除
+
+OpenAI OAuth 账号的 `capabilities.quotaLimitsSupported` 为真。通过 `POST /api/admin/accounts/batch-update`
+提交 `{"accountIds":["acct_1"],"quotaLimits":{"codex:18000s":99,"codex:604800s":95}}`。
+键取自该账号 `quota.windows` 中 `accountWide: true` 的窗口 `key`，值是 1～100 的整数使用率。
+提交的映射替换全部窗口上限；省略字段保留原配置，空对象关闭全部上限。账号视图以 `quotaLimits` 返回配置
+
+任一已设限通用窗口的实际使用率达到或超过上限，该账号暂停接收新请求，在途请求继续。账号状态为 `quota_paused`，可按此状态筛选；停用、凭据错误、上游额度耗尽和限流优先显示。
+`quota.pausedWindows` 列出触发窗口的键，已知重置时间见对应窗口的 `resetAtDisplay`。
+重置时间到达或暂时缺少用量均不证明恢复；所有触发窗口的观测都低于上限或相应配置解除后恢复调度。
+专属额度桶不参与判断，此策略不改变账号启用状态和上游额度状态
 
 `quota.credits` 返回上游点数信息，缺失时为 `null`；包含 `hasCredits`、`unlimited` 和 `balance`。
 余额是保留上游精度的十进制字符串，未知为 `null`，零为 `"0"`，与重置卡库存独立

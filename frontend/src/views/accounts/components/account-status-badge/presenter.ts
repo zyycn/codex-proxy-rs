@@ -1,7 +1,8 @@
 import type { Component } from 'vue'
-import type { AccountErrorReason, AccountProtectionRule, AccountStatus } from '@/api'
+import type { AccountErrorReason, AccountProtectionRule, AccountQuota, AccountStatus } from '@/api'
 import { AlertTriangle, CircleCheck, Gauge, Power, Timer } from '@lucide/vue'
 import { computed } from 'vue'
+import { quotaWindowLabel } from '@/components/account/account-usage-window/presenter'
 import { t } from '@/i18n'
 
 import { errorReasonLabels, statusLabels, statusTones } from '../../constants'
@@ -36,14 +37,13 @@ interface AccountStatusPresentation {
   icon: Component
   hasDetail: boolean
   errorText: string | null
-  nextRefreshDisplay: string | null
-  rateLimitRecovery: string | null
-  recoveryTimeLabel: string
+  times: { key: string, label: string, value: string }[]
   protectionRules: AccountProtectionRule[]
   triggerLabel: string
 }
 
 interface AccountStatusPresentationInput {
+  quota?: AccountQuota
   status: AccountStatus
   errorReason: AccountErrorReason | null
   errorMessage: string | null
@@ -90,6 +90,15 @@ const statusStyles: Record<AccountStatusTone, AccountStatusStyle> = {
 }
 
 const displayDefinitions = computed<Record<AccountStatusDisplayMode, AccountStatusDisplayDefinition>>(() => ({
+  quota_paused: {
+    tone: statusTones.quota_paused,
+    label: statusLabels.value.quota_paused,
+    description: t('accounts.quotaLimits.reached', {
+      windows: t('accounts.quota.general'),
+    }),
+    recoveryHint: t('accounts.quotaLimits.recovery'),
+    icon: Gauge,
+  },
   refresh_backoff: {
     tone: 'warning',
     label: t('accounts.status.retreating'),
@@ -149,7 +158,22 @@ export function resolveAccountStatusPresentation(
   const isBackoff = input.status !== 'disabled'
     && input.nextRefreshAt !== null
     && Date.parse(input.nextRefreshAt) > input.now
-  const mode: AccountStatusDisplayMode = isBackoff ? 'refresh_backoff' : input.status
+  const mode: AccountStatusDisplayMode = isBackoff && input.status !== 'quota_paused'
+    ? 'refresh_backoff'
+    : input.status
+  const quota = input.quota
+  const pausedWindows = mode === 'quota_paused' && quota
+    ? quota.pausedWindows.map((key) => {
+        const window = quota.windows.find(w => w.key === key)
+        return {
+          key,
+          label: window
+            ? quotaWindowLabel(window)
+            : key,
+          reset: window?.resetAtDisplay,
+        }
+      })
+    : []
   const isProtected = mode === 'rate_limited' && input.rateLimitReason === 'error_protection'
   const waitsForProbe = isProtected && input.recoveryProbeRequired
   const definition = isProtected
@@ -165,35 +189,61 @@ export function resolveAccountStatusPresentation(
   const nextRefreshDisplay = isBackoff ? input.nextRefreshAtDisplay : null
   const reasonLabel = input.errorReason ? errorReasonLabels.value[input.errorReason] : null
   const title = definition.title ?? reasonLabel ?? definition.label
-  const rateLimitRecovery = mode === 'rate_limited'
-    ? input.rateLimitRecoveryDisplay
-    : null
+  const description = pausedWindows.length
+    ? t('accounts.quotaLimits.reached', {
+        windows: pausedWindows.map(w => w.label).join(' / '),
+      })
+    : definition.description
+  const times: AccountStatusPresentation['times'] = []
+  if (mode === 'rate_limited' && input.rateLimitRecoveryDisplay) {
+    times.push({
+      key: 'cooldown',
+      label: waitsForProbe
+        ? t('accounts.status.resumeDetection')
+        : t('accounts.status.expectedToRecover'),
+      value: input.rateLimitRecoveryDisplay,
+    })
+  }
+  for (const window of pausedWindows) {
+    if (window.reset && window.reset !== '—') {
+      times.push({
+        key: window.key,
+        label: pausedWindows.length === 1
+          ? t('accounts.quotaLimits.expectedReset')
+          : t('accounts.quotaLimits.windowReset', { window: window.label }),
+        value: window.reset,
+      })
+    }
+  }
+  if (nextRefreshDisplay) {
+    times.push({
+      key: 'refresh',
+      label: t('accounts.status.tryNextTime'),
+      value: nextRefreshDisplay,
+    })
+  }
   const recoveryHint = mode !== 'refresh_backoff'
     && mode !== 'rate_limited'
     && input.errorReason
     ? errorRecoveryHints.value[input.errorReason]
     : definition.recoveryHint
-  const hasDetail = input.status === 'error' || mode === 'rate_limited' || isBackoff
+  const hasDetail = input.status === 'error' || mode === 'rate_limited' || isBackoff || mode === 'quota_paused'
   const retry = nextRefreshDisplay
     ? t('accounts.status.nextAttempt', { nextRefreshDisplay })
     : ''
-  const triggerLabel = t('accounts.status.clickOrFocusToViewDetails', { title, description: definition.description, retry })
+  const triggerLabel = t('accounts.status.clickOrFocusToViewDetails', { title, description, retry })
 
   return {
     mode,
     statusStyle: statusStyles[definition.tone],
     label: definition.label,
     title,
-    description: definition.description,
+    description,
     recoveryHint,
     icon: definition.icon,
     hasDetail,
     errorText: input.errorMessage || null,
-    nextRefreshDisplay,
-    rateLimitRecovery,
-    recoveryTimeLabel: waitsForProbe
-      ? t('accounts.status.resumeDetection')
-      : t('accounts.status.expectedToRecover'),
+    times,
     protectionRules: isProtected
       ? input.protectionRules
       : [],

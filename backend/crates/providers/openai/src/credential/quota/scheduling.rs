@@ -345,6 +345,21 @@ fn quota_refresh_candidate(
     }
     // 正常账号首次进入周期候选也要等待宽限期，不能由“无刷新历史”绕过
     let snapshot = snapshot?;
+    if account.quota_paused() {
+        let reset_at = snapshot
+            .windows()
+            .iter()
+            .filter(|window| {
+                window.is_account_wide()
+                    && account
+                        .quota_limits()
+                        .reached(window.key(), window.used_percent())
+            })
+            .filter_map(CodexQuotaWindow::reset_at)
+            .map(SystemTime::from)
+            .min();
+        return Some((account, reset_at));
+    }
     let expired_window_reset = snapshot
         .windows()
         .iter()

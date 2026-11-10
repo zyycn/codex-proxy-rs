@@ -69,6 +69,7 @@ async fn allowed_refresh_recovers_full_windows_only_after_the_confirmed_resets()
             let old_usage = usage(now, &resets, Some(false));
             store
                 .compare_and_swap_quota(QuotaObservation {
+                    quota_pause: None,
                     expected_connection: None,
                     plan_type: None,
                     account_id: account.id().clone(),

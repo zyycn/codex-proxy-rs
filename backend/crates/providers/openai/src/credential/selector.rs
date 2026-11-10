@@ -1064,6 +1064,20 @@ impl CodexCredentialSelector {
                 .prepare_cyber_policy_scope(cyber_policy_session_key)
                 .await;
             let mut excluded = request.attempt.excluded_accounts().clone();
+            if !diagnostic {
+                for candidate in &candidates {
+                    if candidate.account.quota_paused() {
+                        if follow_only
+                            && binding.as_ref().is_some_and(|binding| {
+                                binding.account_id() == candidate.account.id()
+                            })
+                        {
+                            return Err(CredentialSelectionError::PolicyFiltered);
+                        }
+                        excluded.insert(candidate.account.id().clone());
+                    }
+                }
+            }
             if let Some(state) = cyber_policy_scope
                 .as_ref()
                 .and_then(|scope| scope.state.as_ref())
@@ -1320,6 +1334,10 @@ impl CodexCredentialSelector {
                     }
                     Err(error) => return Err(error.into()),
                 };
+                if !diagnostic && account.quota_paused() {
+                    refresh_candidates = true;
+                    continue 'capacity;
+                }
                 // 凭据重读和插件选号都可能挂起，取得租约前再次让位于新队首
                 if !waiting.can_try(account.id()) {
                     busy_accounts.insert(account.id().clone());
@@ -2056,7 +2074,8 @@ fn affinity_selection_for_bound_account(
         .status
     {
         AccountStatus::Normal => AffinitySelection::preferred(account_id),
-        AccountStatus::QuotaExhausted
+        AccountStatus::QuotaPaused
+        | AccountStatus::QuotaExhausted
         | AccountStatus::RateLimited
         | AccountStatus::Disabled
         | AccountStatus::Error => {
@@ -2075,7 +2094,7 @@ fn affinity_unavailable_reason(
         .status
     {
         AccountStatus::QuotaExhausted => AffinityEscapeReason::QuotaExhausted,
-        AccountStatus::RateLimited => AffinityEscapeReason::Cooldown,
+        AccountStatus::RateLimited | AccountStatus::QuotaPaused => AffinityEscapeReason::Cooldown,
         AccountStatus::Normal => AffinityEscapeReason::SelectionInvariant,
         AccountStatus::Disabled | AccountStatus::Error => AffinityEscapeReason::HardUnavailable,
     }

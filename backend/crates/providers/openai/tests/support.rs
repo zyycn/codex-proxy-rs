@@ -32,6 +32,7 @@ use provider_openai::credential::{
     ImportCodexOAuthCredential,
 };
 use secrecy::SecretString;
+use tokio::sync::oneshot;
 
 #[derive(Clone)]
 struct StoredAccount {
@@ -55,6 +56,7 @@ pub(crate) struct MemoryAccountStore {
     account_reads: AtomicUsize,
     provider_list_reads: AtomicUsize,
     quota_reads: AtomicUsize,
+    next_quota_read: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
     largest_quota_read: AtomicUsize,
     fail_provider_listing: AtomicBool,
     pending_account_reads: bool,
@@ -167,6 +169,18 @@ impl MemoryAccountStore {
             .map(|stored| stored.account.clone())
     }
 
+    pub(crate) fn set_quota_limits(
+        &self,
+        id: &str,
+        limits: gateway_core::account::AccountQuotaLimits,
+    ) {
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .unwrap();
+        stored.account = stored.account.clone().with_quota_limits(limits, false);
+    }
+
     pub(crate) fn enable_quota_credits(&self, id: &str) {
         let mut accounts = self.accounts.lock().unwrap();
         let stored = accounts
@@ -220,6 +234,13 @@ impl MemoryAccountStore {
 
     pub(crate) fn largest_quota_read(&self) -> usize {
         self.largest_quota_read.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn hold_next_quota_read(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (read, ready) = oneshot::channel();
+        let (release, held) = oneshot::channel();
+        *self.next_quota_read.lock().unwrap() = Some((read, held));
+        (ready, release)
     }
 
     pub(crate) fn quota_reads(&self) -> usize {
@@ -507,11 +528,19 @@ impl ProviderAccountStore for MemoryAccountStore {
         self.quota_reads.fetch_add(1, Ordering::SeqCst);
         self.largest_quota_read
             .fetch_max(accounts.len(), Ordering::SeqCst);
-        let stored = self.accounts.lock().expect("account store lock");
-        Ok(accounts
-            .iter()
-            .filter_map(|account| stored.get(account)?.quota.clone())
-            .collect())
+        let result = {
+            let stored = self.accounts.lock().expect("account store lock");
+            accounts
+                .iter()
+                .filter_map(|account| stored.get(account)?.quota.clone())
+                .collect()
+        };
+        let held = self.next_quota_read.lock().unwrap().take();
+        if let Some((read, held)) = held {
+            read.send(()).unwrap();
+            held.await.expect("release quota read");
+        }
+        Ok(result)
     }
 
     async fn get_quota_versions(
@@ -553,6 +582,16 @@ impl ProviderAccountStore for MemoryAccountStore {
         {
             return Ok(QuotaWriteOutcome::Conflict);
         }
+        let current_version = stored.quota.as_ref().map(|quota| quota.observed_at);
+        if observation.quota_pause.as_ref().is_some_and(|decision| {
+            &decision.limits != stored.account.quota_limits()
+                || current_version == Some(observation.observed_at)
+                || decision
+                    .merge_base
+                    .is_some_and(|base| base.observed_at != current_version)
+        }) {
+            return Ok(QuotaWriteOutcome::Conflict);
+        }
         if stored
             .quota
             .as_ref()
@@ -580,8 +619,10 @@ impl ProviderAccountStore for MemoryAccountStore {
                 Some(plan_type.clone()),
             ));
         }
+        let paused = observation.quota_pause.as_ref().is_some_and(|v| v.paused);
         stored.quota = Some(observation);
-        stored.account = rebuild_account(&stored.account, replacement);
+        stored.account = rebuild_account(&stored.account, replacement)
+            .with_quota_limits(stored.account.quota_limits().clone(), paused);
         Ok(QuotaWriteOutcome::Updated)
     }
 
@@ -789,6 +830,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         rebuild.last_error_message,
     )
     .with_scheduling(current.concurrency_limit(), current.weight())
+    .with_quota_limits(current.quota_limits().clone(), current.quota_paused())
     .with_auto_use_quota_credits(current.auto_use_quota_credits())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
     .with_outbound_proxy(current.outbound_proxy().cloned())

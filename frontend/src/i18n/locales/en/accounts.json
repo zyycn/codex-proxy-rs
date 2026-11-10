@@ -1,5 +1,17 @@
 {
   "accounts": {
+    "quotaLimits": {
+      "badge": "Quota paused",
+      "title": "General quota scheduling limits",
+      "reached": "Scheduling limit reached: {windows}",
+      "expectedReset": "Expected reset",
+      "windowReset": "{window} reset",
+      "recovery": "Wait for usage to reset or adjust the window limit.",
+      "help": "Pause at any window limit. Resume when all are below their limits.",
+      "unlimited": "No limit",
+      "empty": "No general quota windows observed",
+      "invalid": "Enter a whole number from 1 to 100 or leave blank for no limit"
+    },
     "quota": {
       "general": "General quota",
       "usageInThisWindow": "Usage in this window: {localUsageDisplay}",

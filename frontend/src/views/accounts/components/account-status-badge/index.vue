@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountErrorReason, AccountProtectionRule, AccountStatus } from '@/api'
+import type { AccountErrorReason, AccountProtectionRule, AccountQuota, AccountStatus } from '@/api'
 
 import { ZPopover, ZScrollbar } from '@codex-proxy/ui'
 import { computed } from 'vue'
@@ -10,6 +10,7 @@ import { useStatusClock } from './useStatusClock'
 
 const props = withDefaults(
   defineProps<{
+    quota?: AccountQuota
     status: AccountStatus
     errorReason?: AccountErrorReason | null
     errorMessage?: string | null
@@ -39,6 +40,7 @@ const { t } = useI18n({ useScope: 'global' })
 const now = useStatusClock()
 const presentation = computed(() =>
   resolveAccountStatusPresentation({
+    quota: props.quota,
     status: props.status,
     errorReason: props.errorReason,
     errorMessage: props.errorMessage,
@@ -123,23 +125,12 @@ const presentation = computed(() =>
         </div>
 
         <div
-          v-if="presentation.rateLimitRecovery"
+          v-for="time in presentation.times"
+          :key="time.key"
           class="flex items-center justify-between gap-3 rounded-z bg-z-fill-quaternary px-3 py-2"
         >
-          <span class="font-heavy text-z-text-tertiary">{{ presentation.recoveryTimeLabel }}</span>
-          <span class="font-mono font-emphasis tabular-nums text-z-text">
-            {{ presentation.rateLimitRecovery }}
-          </span>
-        </div>
-
-        <div
-          v-if="presentation.nextRefreshDisplay"
-          class="flex items-center justify-between gap-3 rounded-z bg-z-fill-quaternary px-3 py-2"
-        >
-          <span class="font-heavy text-z-text-tertiary">{{ t('accounts.status.tryNextTime') }}</span>
-          <span class="font-mono font-emphasis tabular-nums text-z-text">
-            {{ presentation.nextRefreshDisplay }}
-          </span>
+          <span class="font-heavy text-z-text-tertiary">{{ time.label }}</span>
+          <span class="font-mono font-emphasis tabular-nums text-z-text">{{ time.value }}</span>
         </div>
 
         <div class="rounded-z bg-z-fill-quaternary px-3 py-2.5">

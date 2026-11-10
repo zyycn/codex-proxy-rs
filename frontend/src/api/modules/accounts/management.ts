@@ -12,6 +12,7 @@ export interface AccountPageMeta {
 export interface AccountSummary {
   total: number
   normal: number
+  quotaPaused: number
   quotaExhausted: number
   rateLimited: number
   disabled: number
@@ -66,6 +67,7 @@ interface AccountUpdateParam {
 }
 
 interface AccountBatchUpdateParam {
+  quotaLimits?: Record<string, number>
   autoUseQuotaCredits?: boolean
   outboundProxyUrl?: string
   outboundProxyId?: string

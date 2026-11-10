@@ -72,6 +72,7 @@ export type {
 } from './personal-info'
 
 export {
+  getAccountQuota,
   getAccountQuotaForecast,
   refreshAccountQuota,
 } from './quota'

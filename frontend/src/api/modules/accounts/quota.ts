@@ -45,6 +45,15 @@ export function getAccountQuotaForecast(data: AccountIdParam, options: RequestOp
   })
 }
 
+export function getAccountQuota(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<AccountQuotaResponse>({
+    url: '/api/admin/accounts/quota',
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}
+
 export function refreshAccountQuota(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountQuotaResponse>({
     url: '/api/admin/accounts/quota/refresh',

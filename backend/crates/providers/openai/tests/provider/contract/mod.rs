@@ -6139,6 +6139,109 @@ async fn websocket_metadata_close_requests_bounded_retry_without_claiming_replay
 }
 
 #[tokio::test]
+async fn general_quota_limits_filter_new_requests_until_every_window_recovers() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let limited = "acct_provider_contract";
+    let backup = "acct_scope_new";
+    create_account(&store, limited).await;
+    create_account(&store, backup).await;
+    store.set_quota_limits(
+        limited,
+        serde_json::from_value(json!({"codex:18000s":99, "codex:604800s":95})).unwrap(),
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .mount(&server)
+        .await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let (provider, quota) = provider_and_quota_with_affinity_and_base_url_and_leases(
+        &store,
+        Arc::new(MemorySessionAffinity::default()),
+        server.uri(),
+        leases.clone(),
+        0,
+    );
+    for (index, (short, weekly, blocked)) in
+        [(99.0, 96.0, true), (0.0, 95.0, true), (98.99, 94.99, false)]
+            .into_iter()
+            .enumerate()
+    {
+        let account = store.account(limited).unwrap();
+        let usage = Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "rate_limit": {"primary_window":{"limit_window_seconds":18000,"used_percent":short},"secondary_window":{"limit_window_seconds":604800,"used_percent":weekly}},
+                "code_review_rate_limit":{"primary_window":{"limit_window_seconds":18000,"used_percent":100}}
+            })))
+            .mount_as_scoped(&server).await;
+        quota.refresh_account(account.id()).await.unwrap();
+        drop(usage);
+        let request = planned_request("openai", http_generate_operation());
+        let pinned = pinned_continuation_context(
+            &format!("req_pin_{index}"),
+            limited,
+            "client-previous",
+            "upstream-previous",
+            1,
+            ContinuationAttempt::Native,
+        );
+        let before = leases.requests.lock().unwrap().len();
+        let result = provider.clone().execute(request, pinned).await;
+        if blocked {
+            let Err(error) = result else {
+                panic!("a paused owner cannot serve native continuation")
+            };
+            assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+            assert_eq!(leases.requests.lock().unwrap().len(), before);
+            drop(
+                provider
+                    .clone()
+                    .execute(
+                        planned_request("openai", http_generate_operation()),
+                        context(&format!("req_fallback_{index}"), CancellationToken::new()),
+                    )
+                    .await
+                    .unwrap(),
+            );
+            assert_eq!(
+                leases
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .account_id()
+                    .as_str(),
+                backup
+            );
+        } else {
+            drop(
+                result.expect(
+                    "recovered general quota can serve the owner despite a full named bucket",
+                ),
+            );
+            assert_eq!(
+                leases
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .account_id()
+                    .as_str(),
+                limited
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn disabled_account_is_excluded_from_normal_scheduling() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account_with_enabled(&store, "acct_disabled_scheduling", false).await;
@@ -7559,6 +7662,7 @@ async fn affinity_quota_switch_should_clear_old_turn_state_without_a_provider_st
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            quota_pause: None,
             expected_connection: None,
             plan_type: None,
             account_id: first_account.id().clone(),
@@ -8567,6 +8671,7 @@ async fn official_usage_limit_failure_persists_fact_without_fabricating_usage() 
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            quota_pause: None,
             expected_connection: None,
             plan_type: None,
             account_id: account.id().clone(),
@@ -10170,6 +10275,7 @@ async fn quota_limited_account_diagnostic_uses_upstream() {
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            quota_pause: None,
             expected_connection: None,
             plan_type: None,
             account_id: account.id().clone(),

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Account } from '@/api'
 
-import { ZEmpty, ZIconButton, ZScrollbar } from '@codex-proxy/ui'
+import { ZEmpty, ZScrollbar } from '@codex-proxy/ui'
 
 import { ChartNoAxesCombined, RefreshCw, UserRound } from '@lucide/vue'
 
@@ -14,6 +14,8 @@ import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../cons
 import AccountProfileModal from '../account-profile-modal/index.vue'
 import AccountQuotaForecastModal from '../account-quota-forecast-modal/index.vue'
 import AccountQuotaPanelEntry from './Entry.vue'
+import QuotaActionButton from './QuotaActionButton.vue'
+import QuotaLimits from './QuotaLimits.vue'
 import AccountResetCredits from './ResetCredits.vue'
 import AccountUpstreamPool from './UpstreamPool.vue'
 
@@ -81,35 +83,38 @@ watch(hasPersonalInfo, (available) => {
         <span v-if="lastRefreshed" class="min-w-0 truncate" :title="refreshTitle">{{ lastRefreshed }}</span>
       </p>
       <div v-if="hasActions" class="col-start-2 row-start-1 flex items-center gap-0.5 [&_svg]:size-3.5 [&_svg]:stroke-2">
-        <ZIconButton
+        <QuotaActionButton
           v-if="hasPersonalInfo"
-          :aria-label="t('accounts.quota.viewPersonalInformation')"
-          size="small"
+          :label="t('accounts.quota.viewPersonalInformation')"
           :pressed="profileOpen"
           @click="profileOpen = true"
         >
           <UserRound class="size-3.5" />
-        </ZIconButton>
+        </QuotaActionButton>
+        <QuotaLimits
+          v-if="account.capabilities.quotaLimitsSupported"
+          :key="account.id"
+          :account="account"
+          @account-updated="emit('accountUpdated', $event)"
+        />
         <AccountResetCredits
           v-if="account.capabilities.resetCredits"
           :account="account"
           @account-updated="emit('accountUpdated', $event)"
           @consumed="emit('quotaReset', $event)"
         />
-        <ZIconButton
+        <QuotaActionButton
           v-if="hasForecast"
-          :aria-label="t('accounts.quota.forecastWeeklyMonthlyQuota')"
-          size="small"
+          :label="t('accounts.quota.forecastWeeklyMonthlyQuota')"
           aria-haspopup="dialog"
           :pressed="forecastOpen"
           @click="forecastOpen = true"
         >
           <ChartNoAxesCombined class="size-3.5" />
-        </ZIconButton>
-        <ZIconButton
+        </QuotaActionButton>
+        <QuotaActionButton
           v-if="canRefresh"
-          size="small"
-          :aria-label="t('accounts.quotaForecast.refreshQuota')"
+          :label="t('accounts.quotaForecast.refreshQuota')"
           :loading="refreshing"
           :disabled="refreshing"
           @click="emit('refreshQuota', account.id)"
@@ -118,7 +123,7 @@ watch(hasPersonalInfo, (available) => {
             <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
           </template>
           <RefreshCw class="size-3.5" />
-        </ZIconButton>
+        </QuotaActionButton>
       </div>
     </div>
 

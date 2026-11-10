@@ -1624,6 +1624,7 @@ fn native_continuation_surfaces_the_original_accounts_quota_signal_to_the_coordi
     });
     let observed_at = SystemTime::now();
     let outcome = block_on(store.compare_and_swap_quota(QuotaObservation {
+        quota_pause: None,
         expected_connection: None,
         plan_type: None,
         account_id: original.id().clone(),

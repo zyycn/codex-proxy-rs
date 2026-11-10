@@ -105,18 +105,18 @@ const accountStatusCounts = computed(() => {
   if (!p)
     return null
   const normal = p.normal ?? 0
-  const quotaExhausted = p.quotaExhausted ?? 0
+  const quotaLimited = (p.quotaExhausted ?? 0) + (p.quotaPaused ?? 0)
   const rateLimited = p.rateLimited ?? 0
   const disabled = p.disabled ?? 0
   const error = p.error ?? 0
   return {
     total: p.total,
     normal,
-    quotaExhausted,
+    quotaLimited,
     rateLimited,
     disabled,
     error,
-    unavailable: quotaExhausted + rateLimited + disabled + error,
+    unavailable: quotaLimited + rateLimited + disabled + error,
   }
 })
 
@@ -133,7 +133,7 @@ const statusRows = computed(() => {
         icon: CircleCheck,
       },
       {
-        label: t('dashboard.accountPool.quotaExhausted'),
+        label: t('dashboard.accountPool.quotaLimited'),
         description: t('dashboard.accountPool.empty'),
         value: '—',
         tone: 'warning',
@@ -165,9 +165,9 @@ const statusRows = computed(() => {
       icon: CircleCheck,
     },
     {
-      label: t('dashboard.accountPool.quotaExhausted'),
-      description: t('dashboard.accountPool.exhaustedDescription'),
-      value: String(counts.quotaExhausted),
+      label: t('dashboard.accountPool.quotaLimited'),
+      description: t('dashboard.accountPool.limitedQuotaDescription'),
+      value: String(counts.quotaLimited),
       tone: 'warning',
       icon: TriangleAlert,
     },
@@ -201,7 +201,7 @@ const statusBars = computed(() => {
     return []
   return [
     { pct: (counts.normal / counts.total) * 100, cls: 'bg-z-success' },
-    { pct: (counts.quotaExhausted / counts.total) * 100, cls: 'bg-z-warning' },
+    { pct: (counts.quotaLimited / counts.total) * 100, cls: 'bg-z-warning' },
     { pct: (counts.rateLimited / counts.total) * 100, cls: 'bg-z-warning' },
     { pct: ((counts.disabled + counts.error) / counts.total) * 100, cls: 'bg-z-error' },
   ].filter(b => b.pct > 0)

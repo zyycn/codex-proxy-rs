@@ -203,7 +203,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
              set name = case when $14 then name else $3 end,
                  email = case when $14 then email else $4 end,
                  plan_type = case when $14 then plan_type else $5 end,
-                 provider_quota_json = case when $14 then provider_quota_json else null end,
+                 provider_quota_json = case when $14 then provider_quota_json else null end, quota_paused = case when $14 then quota_paused else false end,
                  quota_observed_at = case when $14 then quota_observed_at else null end,
                  provider_credentials_json = $6,
                  credential_revision = credential_revision + 1,
@@ -338,6 +338,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 )
                 .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
                 Ok(QuotaObservation {
+                    quota_pause: None,
                     expected_connection: None,
                     plan_type: row.try_get("plan_type").map_err(|source| {
                         CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, source)

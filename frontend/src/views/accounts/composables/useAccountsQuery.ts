@@ -16,6 +16,7 @@ export function useAccountsQuery() {
   const accountSummary = shallowRef({
     total: 0,
     normal: 0,
+    quotaPaused: 0,
     quotaExhausted: 0,
     rateLimited: 0,
     disabled: 0,

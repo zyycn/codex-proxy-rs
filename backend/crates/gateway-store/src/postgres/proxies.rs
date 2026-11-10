@@ -424,7 +424,8 @@ impl ProxyStore for PgProxyRepository {
         // 在同一条更新中校验绑定，避免旧弹窗清除账号后来选择的其他代理
         let updated = sqlx::query(
             "update provider_accounts
-             set outbound_proxy_id = null, outbound_proxy_url = null, provider_quota_json = null, quota_observed_at = null,
+             set outbound_proxy_id = null, outbound_proxy_url = null,
+                 (provider_quota_json, quota_observed_at) = (select provider_quota_json, quota_observed_at where quota_paused),
                  updated_at = greatest(now(), updated_at)
              where id = $1 and outbound_proxy_id = $2",
         )
@@ -801,7 +802,11 @@ impl ProxyStore for PgProxyRepository {
                 .await
                 .map_err(store_error)?;
         }
-        sqlx::query("update provider_accounts a set outbound_proxy_url = p.proxy_url, provider_quota_json = null, quota_observed_at = null, updated_at = case when a.outbound_proxy_url is distinct from p.proxy_url or a.provider_quota_json is not null then greatest(now(), a.updated_at) else a.updated_at end from outbound_proxies p where p.id = $1 and a.outbound_proxy_id = p.id and (a.outbound_proxy_url is distinct from p.proxy_url or $2)")
+        sqlx::query("update provider_accounts a set outbound_proxy_url = p.proxy_url,
+            (provider_quota_json, quota_observed_at) = (select a.provider_quota_json, a.quota_observed_at where a.quota_paused),
+            updated_at = case when a.outbound_proxy_url is distinct from p.proxy_url or a.provider_quota_json is not null
+                then greatest(now(), a.updated_at) else a.updated_at end
+            from outbound_proxies p where p.id = $1 and a.outbound_proxy_id = p.id and (a.outbound_proxy_url is distinct from p.proxy_url or $2)")
             .bind(&command.id).bind(enabled_changed).execute(&mut *transaction).await.map_err(|source| store_error(unavailable(source)))?;
         audit(
             &mut transaction,
@@ -865,7 +870,8 @@ impl ProxyStore for PgProxyRepository {
             return Err(store_error(error));
         }
         let account_ids: Vec<String> = sqlx::query_scalar(
-            "update provider_accounts set outbound_proxy_id = null, outbound_proxy_url = null, provider_quota_json = null, quota_observed_at = null,
+            "update provider_accounts set outbound_proxy_id = null, outbound_proxy_url = null,
+             (provider_quota_json, quota_observed_at) = (select provider_quota_json, quota_observed_at where quota_paused),
              updated_at = greatest(now(), updated_at) where outbound_proxy_id = $1 returning id",
         )
         .bind(id)
