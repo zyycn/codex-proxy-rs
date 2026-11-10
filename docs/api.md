@@ -29,7 +29,7 @@ Authorization: Bearer sk_...
 自动生成的 Key 保持 `sk_` 格式；迁入的自定义 Key 使用保存时的原值，不限制前缀或固定长度。
 无论格式如何，只有已保存且启用的 Client Key 能通过鉴权
 
-`/v1/messages` 与 `/v1/messages/count_tokens` 也接受 `x-api-key: <Client Key>`。
+`/v1/messages`、`/v1/messages/count_tokens`、`/v1/models` 和 `/v1/models/{model_id}` 也接受 `x-api-key: <Client Key>`。
 同时提供两个认证头时优先使用 `Authorization`；客户端提交的是网关 Client Key，上游密钥由选中的账号提供
 
 启用[入口认证插件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#数据面入口认证)时，
@@ -226,8 +226,8 @@ WebSocket message 和 frame 不设置网关私有长度上限；请求字段与�
 | `POST` | `/v1/alpha/search` | Codex standalone web search；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/generations` | 通过 OpenAI Provider 发起图像生成；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/edits` | 通过 OpenAI Provider 发起图像编辑；JSON 原样转发，multipart 上传转为原生 Images JSON |
-| `GET` | `/v1/models` | 返回当前 Client Key 账号范围内各 Provider 的可用公开模型并集；有两种响应形态，见下 |
-| `GET` | `/v1/models/{model_id}` | 返回 OpenAI 兼容的单模型详情 |
+| `GET` | `/v1/models` | 返回当前 Client Key 可见的模型；OpenAI、Codex 和 Messages 三种响应格式见[模型目录](#模型目录) |
+| `GET` | `/v1/models/{model_id}` | 返回当前 Client Key 可见的单个模型，支持 OpenAI 和 Messages 格式 |
 | `POST` | `/v1/providers/{provider}/models/{model}/count_tokens` | 调用指定 Provider/model 声明的 Token 计数；请求和响应均为 JSON，计数方式由 Provider 决定 |
 | `GET` / `POST` | `/v1/providers/{provider}/http/{endpoint}` | 调用指定 Provider 预先声明的固定 HTTP 操作；不是任意 URL 代理 |
 | `GET` | `/v1/usage` | 查询当前 Client Key 的日与周额度，仅使用网关已结算的 USD 账本 |
@@ -653,7 +653,7 @@ OAuth 的大 connection-local WS 续接，以及 HTTP `store=false` 成功后标
 此规则适用于所有客户端。下一步请求应在新连接上发送完整输入，省略 `previous_response_id`。
 已接收的后续请求按序处理，若增量先到，仍按上述 400 合同恢复。启用 WS 帧中间件时保留连接
 
-已建立模型执行的 Responses、Images 和 Search HTTP 响应按以下规则返回关联 ID：
+已建立模型执行的 HTTP 响应（生成请求、Messages 输入计数、Images 和 Search）按以下规则返回关联 ID：
 `x-gateway-request-id` 为模型执行 ID；`x-request-id` 保留有效上游值，只有上游
 `x-oai-request-id` 时复用其值，没有上游 ID 时使用模型执行 ID。`x-oai-request-id` 不是必需字段，
 也不要求客户端识别它；OpenAI 与 xAI 路由使用相同规则。失败响应的关联 ID 不采用会话 opening ID，
@@ -1124,7 +1124,7 @@ call 与账号的绑定保存在网关进程内，未连接时一小时过期；
 依赖不可用时返回 503，不返回已认证或假装未登录。预算耗尽不妨碍登录
 
 密钥会话访问管理接口返回 403，不清除仍然有效的会话。
-浏览器会话不能替代 `/v1/*` 的 Bearer Key，数据面 Key 也不能替代浏览器会话
+浏览器会话不能替代 `/v1/*` 的 Client Key，Client Key 也不能替代浏览器会话
 
 所有 `/api/auth/*` 响应带 `Cache-Control: no-store`；未知路径和错误 method 返回 JSON，不落入 SPA。
 两种登录共享来源桶和全局桶，分别为每 60 秒 10 次 / 200 次；来源取连接 IP，不信任任意转发头。
@@ -1380,8 +1380,8 @@ OpenAI 只使用该账号当前凭据和套餐对应、最近 30 分钟内同步
 批量接口的调度、分组、模型与代理字段均可省略；省略的字段保持各账号原值。
 提供 `groupIds` 时替换完整分组集合，提供 `concurrencyLimit: null` 时恢复继承运行参数
 
-限制适用于 Responses HTTP、WebSocket 及其带压缩触发的请求，以及 Images 生图、编辑与独立 Search 选号，包括重试、亲和和换号；没有合规账号时沿用
-无可用账号错误，不会回退到被禁止的账号。已开始请求使用冻结的政策，新请求使用已发布的新配置。
+限制适用于 Responses（含 WebSocket 和上下文压缩）、Chat Completions、Messages 生成与输入计数，以及 Images 生图、编辑与独立 Search。
+重试、亲和和换号同样遵守限制；没有合规账号时返回无可用账号错误。已开始请求使用冻结的政策，新请求使用已发布的新配置。
 Images 和 Search 按原始请求正文的模型 ID 检查，不依赖模型目录或全局模型映射；可手动添加目录未列出的模型 ID。
 模型缺失、重复或无法识别时，仅使用模型政策为 `all` 的账号，不推测上游默认模型。
 Search 的选号限制不约束插件在选号后主动改写正文。
@@ -2192,7 +2192,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 ### 隐私策略
 
 `codexPrivacyPolicy` 为必填对象，默认 `{ enabled: false, onError: "skip_rule", rules: [] }`。
-只处理经网关发送的 OpenAI Responses HTTP／WebSocket 和独立 JSON 端点请求，不控制客户端直接发送的遥测。
+策略作用于 OpenAI Provider 发往上游的 Responses、Messages 和独立 JSON 端点请求，不控制客户端直接发送的遥测。
 规则按列表顺序执行，关闭策略或单条规则会保留配置。没有字段保护名单，认证、会话、工具等字段也可配置；改写后对上游行为的影响由配置者承担
 
 每条规则包含唯一 `id`、`name`、`enabled` 和非空 `steps` 数组。步骤按顺序执行，后续步骤读取前序步骤的结果，
@@ -2312,7 +2312,7 @@ Chat Completions 和 Responses 通过原生 OpenAI Provider 选号时，缺少�
 
 ### 请求解压上限
 
-`responsesMaxDecompressedBodyBytes` 限制压缩 Responses HTTP 请求的解压输出，以及插件受管 HTTP
+`responsesMaxDecompressedBodyBytes` 限制[生成与 Messages 输入计数请求的解压输出](#请求解压)，以及插件受管 HTTP
 的实际出站正文（包括账号上游请求，无论是否压缩），单位字节，默认 67108864（64 MiB）。
 必须为正整数，且可表示为进程平台的 `isize`；管理端以整数 MiB 编辑。
 插件模型调用从同一设置派生内部请求编码预算，具体边界见 [SDK 模型请求](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#key模型与模型调用)
@@ -3285,7 +3285,7 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 `http`、`websocket` 和 `service` 不使用 Key、分组、Provider 或模型范围，这些数组必须为空；插件在处理器内匹配路径、消息或服务操作。
 `request` 与 `routing` 支持 Key、分组和公开模型范围，Provider 范围必须为空；`attempt`、`outbound`、`upstream`、`scheduling`、`retry` 与 `observation` 可使用 Provider 范围
 
-`outbound` 准备原生 Provider 交给 transport 的请求，覆盖 OpenAI Responses HTTP / WS、Images、Search、Live 创建及 xAI 生成与压缩。
+`outbound` 准备原生 Provider 交给 transport 的请求，覆盖 OpenAI Provider 的 Responses HTTP / WS、Messages 生成与原生输入计数、Images、Search、Live 创建，以及 xAI 生成与压缩。
 它使用最终上游模型匹配范围，下一层返回准备后的请求，不执行发送；字节、headers、HTTP 方法和目标的合同见 [SDK 出站请求准备](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#上游出站准备)。
 该阶段不包括 OAuth、额度刷新等后台请求，也不包括由 `upstream_adapter` 自行执行的发送
 

@@ -477,9 +477,9 @@ Compose 默认只绑定 `127.0.0.1`。从其他设备访问时，在应用前配
 HTTP 传输不加密，公网部署仍建议使用 HTTPS。
 会话 Cookie 合同见 [管理接口鉴权](../docs/api.md#管理接口)
 
-反向代理需要保留 `Authorization`，支持 `/v1/responses` 的 WebSocket Upgrade，
-并关闭 SSE 响应缓冲。读取超时应覆盖长时间生成任务。
-客户端使用部署地址下的 `/v1`，协议与部署一致，不要使用前端开发服务的 `5173/dev/v1`。
+反向代理应保留客户端发送的 `Authorization`、`x-api-key`、`anthropic-version` 和 `anthropic-beta` 请求头，
+支持 `/v1/responses` 的 WebSocket Upgrade，并关闭 SSE 响应缓冲。读取超时应覆盖长时间生成任务。
+客户端连接网关的部署地址，不要使用前端开发服务的 `5173/dev/v1`。
 当前应用只支持单副本，不能通过复制容器扩容
 
 Responses 流式请求完成准入后，每 15 秒无输出会发送一次 SSE 注释保活，覆盖首个业务事件前的等待，
@@ -523,7 +523,10 @@ SSE 注释保活用于防止传输链路空闲断开，不会重置 Codex 等待
 
 ## 客户端配置
 
-在管理端创建客户端密钥，打开「使用密钥」，按操作系统复制 `config.toml`。
+在管理端创建客户端密钥。Responses、Chat Completions 和 Anthropic Messages 客户端的 Base URL 见[客户端接入](../README.md#客户端接入)；
+直接发送 HTTP 请求可参考 [Messages 示例](../docs/api.md#messages-请求)
+
+使用 Codex 时，打开「使用密钥」，按操作系统复制 `config.toml`。
 已有配置先备份，合并后完全退出并重启 Codex。代理密钥由 Provider 配置提供，
 不需要另写 `auth.json`，已有官方登录文件可以保留
 
@@ -661,9 +664,6 @@ metrics_exporter = "none"
   手机远程控制的版本识别范围见 [版本门禁规则](../docs/api.md#1-鉴权与公共约定)
 - 地址包含 `5173/dev/v1`：这是开发代理地址，依赖 Vite 服务。日常使用改成后端或 HTTPS 地址；
   验证 WebSocket 时直接连接后端，当前 Vite 代理未显式开启 WebSocket 转发
-
-其他客户端使用 Responses API、`/v1` Base URL 和代理密钥即可，不需要 Actor 标记。
-路由与请求格式见 [API 参考](../docs/api.md#3-模型数据面与模型目录)
 
 ## 停止与重启
 
