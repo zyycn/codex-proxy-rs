@@ -52,7 +52,7 @@ impl OpenAiAdminProvider {
                 let snapshot = if request.account.authentication_kind
                     == crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY
                 {
-                    return Ok(project_quota(None, false));
+                    return Ok(empty_quota());
                 } else {
                     observations
                         .as_ref()
@@ -68,6 +68,7 @@ impl OpenAiAdminProvider {
                 Ok(project_quota(
                     snapshot,
                     request.account.quota.is_exhausted(),
+                    &request.account.quota_limits,
                 ))
             })
             .collect()

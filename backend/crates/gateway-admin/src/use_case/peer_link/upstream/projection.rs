@@ -214,6 +214,7 @@ impl PeerInfoService {
             }
         }
         ProviderQuota {
+            paused_windows: Vec::new(),
             upstream: Some(info),
             plan_type: None,
             observed_at,

@@ -57,12 +57,14 @@ pub(crate) async fn load_admin_account_page(
                       or a.access_token_expires_at <= $2 then 'error'
                     when a.quota_access_state = 'exhausted' then 'quota_exhausted'
                     when a.id = any($1::text[]) then 'rate_limited'
+                    when a.quota_paused then 'quota_paused'
                     else 'normal'
                   end as admin_status
              from provider_accounts a
          ),
          global_summary as (
            select count(*)::bigint as summary_total,
+                  count(*) filter (where admin_status = 'quota_paused')::bigint as summary_quota_paused,
                   count(*) filter (where admin_status = 'normal')::bigint as summary_normal,
                   count(*) filter (where admin_status = 'quota_exhausted')::bigint
                     as summary_quota_exhausted,
@@ -106,13 +108,13 @@ pub(crate) async fn load_admin_account_page(
          select coalesce(p.enabled, true) as outbound_proxy_enabled, coalesce(p.max_websocket_connections, 0) as outbound_proxy_max_websocket_connections, p.auto_location, p.detected_location_json, p.location_country, p.location_region, p.location_city, p.location_timezone, a.outbound_proxy_id, a.outbound_proxy_url, a.id, a.provider_kind, a.name, a.notes, a.email, a.upstream_user_id,
                 a.upstream_account_id, a.plan_type, a.authentication_kind,
                 a.credential_revision, a.has_refresh_token, a.access_token_expires_at,
-                a.next_refresh_at, a.enabled, a.auto_use_quota_credits, a.concurrency_limit, a.weight, a.model_access_json,
+                a.next_refresh_at, a.enabled, a.quota_limits, a.quota_paused, a.auto_use_quota_credits, a.concurrency_limit, a.weight, a.model_access_json,
                 a.credential_state, a.quota_access_state, a.quota_evidence,
-                a.quota_access_observed_at, a.quota_reset_at, a.last_error_reason,
+                a.quota_observed_at, a.quota_access_observed_at, a.quota_reset_at, a.last_error_reason,
                 a.last_error_message, a.credential_observed_at, a.created_at, a.updated_at,
                 filtered_total.filtered_total,
                 global_summary.summary_total, global_summary.summary_normal,
-                global_summary.summary_quota_exhausted, global_summary.summary_rate_limited,
+                global_summary.summary_quota_paused, global_summary.summary_quota_exhausted, global_summary.summary_rate_limited,
                 global_summary.summary_disabled, global_summary.summary_error,
                 settings.config_revision, settings.max_concurrent_per_account
            from filtered_total
@@ -185,6 +187,7 @@ pub(crate) async fn load_admin_account_page(
     let summary = AccountSummary {
         total: unsigned_metadata(metadata, "summary_total")?,
         normal: unsigned_metadata(metadata, "summary_normal")?,
+        quota_paused: unsigned_metadata(metadata, "summary_quota_paused")?,
         quota_exhausted: unsigned_metadata(metadata, "summary_quota_exhausted")?,
         rate_limited: unsigned_metadata(metadata, "summary_rate_limited")?,
         disabled: unsigned_metadata(metadata, "summary_disabled")?,
@@ -249,7 +252,7 @@ fn admin_account_order(sort: Option<AdminAccountSort>) -> String {
     let expression = match sort.field {
         AdminAccountSortField::Email => "a.email",
         AdminAccountSortField::Status => {
-            "case filtered.admin_status when 'normal' then 0 when 'rate_limited' then 1 when 'quota_exhausted' then 2 when 'error' then 3 else 4 end"
+            "case filtered.admin_status when 'normal' then 0 when 'rate_limited' then 1 when 'quota_exhausted' then 2 when 'quota_paused' then 3 when 'error' then 4 else 5 end"
         }
         AdminAccountSortField::PlanType => "a.plan_type",
         AdminAccountSortField::Usage => "usage.total_tokens",

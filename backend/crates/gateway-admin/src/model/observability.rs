@@ -690,11 +690,12 @@ pub struct RequestMetricPoint {
     pub costs: Vec<CurrencyCost>,
 }
 
-/// 账号池的统一五态统计
+/// 账号池的状态统计
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AccountPoolMetrics {
     pub total: u64,
     pub normal: u64,
+    pub quota_paused: u64,
     pub quota_exhausted: u64,
     pub rate_limited: u64,
     pub disabled: u64,

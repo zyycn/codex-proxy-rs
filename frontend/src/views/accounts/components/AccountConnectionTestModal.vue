@@ -60,6 +60,7 @@ function connectionLogClass(tone: string) {
       >
         <AccountIdentityCell :account="account" size="lg" show-plan show-notes />
         <AccountStatusBadge
+          :quota="account.quota"
           :status="account.status"
           :error-reason="account.errorReason"
           :error-message="account.errorMessage"

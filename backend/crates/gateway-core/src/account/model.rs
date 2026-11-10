@@ -557,10 +557,11 @@ impl QuotaState {
     }
 }
 
-/// 对外唯一的五态账号状态
+/// 对外唯一的账号状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccountStatus {
     Normal,
+    QuotaPaused,
     QuotaExhausted,
     RateLimited,
     Disabled,
@@ -572,6 +573,7 @@ impl AccountStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Normal => "normal",
+            Self::QuotaPaused => "quota_paused",
             Self::QuotaExhausted => "quota_exhausted",
             Self::RateLimited => "rate_limited",
             Self::Disabled => "disabled",
@@ -583,6 +585,7 @@ impl AccountStatus {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "normal" => Some(Self::Normal),
+            "quota_paused" => Some(Self::QuotaPaused),
             "quota_exhausted" => Some(Self::QuotaExhausted),
             "rate_limited" => Some(Self::RateLimited),
             "disabled" => Some(Self::Disabled),
@@ -710,6 +713,7 @@ impl From<SystemTime> for AccountCooldown {
 /// 唯一状态解析器的完整输入事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountStatusFacts {
+    pub quota_paused: bool,
     pub enabled: bool,
     pub credential_state: CredentialState,
     pub access_token_expires_at: Option<SystemTime>,
@@ -766,6 +770,9 @@ pub fn resolve_account_status(
             cooldown: facts.cooldown,
         };
     }
+    if facts.quota_paused {
+        return status_projection(AccountStatus::QuotaPaused);
+    }
     status_projection(AccountStatus::Normal)
 }
 
@@ -821,6 +828,8 @@ pub struct ProviderAccount {
     enabled: bool,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
+    quota_limits: super::AccountQuotaLimits,
+    quota_paused: bool,
     auto_use_quota_credits: bool,
     model_access: super::AccountModelAccess,
     credential_state: CredentialState,
@@ -860,6 +869,8 @@ impl ProviderAccount {
             enabled: true,
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
+            quota_limits: super::AccountQuotaLimits::disabled(),
+            quota_paused: false,
             auto_use_quota_credits: false,
             model_access: super::AccountModelAccess::all(),
             credential_state: CredentialState::Unknown,
@@ -872,6 +883,24 @@ impl ProviderAccount {
             outbound_proxy: None,
             request_location: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_quota_limits(mut self, limits: super::AccountQuotaLimits, paused: bool) -> Self {
+        // 只有限额账号需要在取得租约前检测额度窗口的并发更新
+        self.quota_paused = paused;
+        self.quota_limits = limits;
+        self
+    }
+
+    #[must_use]
+    pub const fn quota_limits(&self) -> &super::AccountQuotaLimits {
+        &self.quota_limits
+    }
+
+    #[must_use]
+    pub const fn quota_paused(&self) -> bool {
+        self.quota_paused
     }
 
     #[must_use]
@@ -1101,6 +1130,7 @@ impl ProviderAccount {
     ) -> AccountStatusProjection {
         resolve_account_status(
             &AccountStatusFacts {
+                quota_paused: self.quota_paused,
                 enabled: self.enabled,
                 credential_state: self.credential_state,
                 access_token_expires_at: self.access_token_expires_at,
@@ -1430,6 +1460,8 @@ pub struct QuotaObservationVersion {
 /// Provider quota 的一次完整观察结果
 #[derive(Clone, PartialEq)]
 pub struct QuotaObservation {
+    /// 本地阈值决策与观测一起写入，策略已变时拒绝旧结论
+    pub quota_pause: Option<super::QuotaPauseDecision>,
     /// 网络查询可额外校验请求出口与启用状态，避免连接变化后的迟到写入
     pub expected_connection: Option<super::UpstreamConnection>,
     pub account_id: ProviderAccountId,

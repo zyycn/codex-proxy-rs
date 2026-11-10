@@ -645,6 +645,7 @@ async fn quota_read_rejects_corrupt_provider_document() {
     document.insert("config".to_owned(), serde_json::json!([]));
     store
         .compare_and_swap_quota(QuotaObservation {
+            quota_pause: None,
             expected_connection: None,
             plan_type: None,
             account_id: account_id("corrupt"),

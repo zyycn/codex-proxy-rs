@@ -166,6 +166,7 @@ export interface DashboardAccountUsage {
 export interface DashboardPoolSummary {
   total: number
   normal: number
+  quotaPaused: number
   quotaExhausted: number
   rateLimited: number
   disabled: number

@@ -460,6 +460,7 @@ pub struct DashboardAccountUsageView {
 pub struct DashboardPoolSummaryView {
     pub total: u64,
     pub normal: u64,
+    pub quota_paused: u64,
     pub quota_exhausted: u64,
     pub rate_limited: u64,
     pub disabled: u64,

@@ -242,7 +242,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                     account.upstream_user_id, account.upstream_account_id, account.plan_type,
                     account.authentication_kind, account.credential_revision, account.outbound_proxy_id, account.outbound_proxy_url,
                     account.has_refresh_token, account.access_token_expires_at,
-                    account.next_refresh_at, account.enabled, account.auto_use_quota_credits, account.concurrency_limit,
+                    account.next_refresh_at, account.enabled, account.quota_limits, account.quota_paused, account.auto_use_quota_credits, account.concurrency_limit,
                     account.quota_observed_at, account.weight, account.model_access_json, account.credential_state, account.quota_access_state,
                     account.quota_evidence, account.quota_access_observed_at,
                     account.quota_reset_at, account.last_error_reason,
@@ -284,6 +284,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                     group_id,
                     account_id: account.id,
                     status: AccountStatusFacts {
+                        quota_paused: account.quota_paused,
                         enabled: account.enabled,
                         credential_state: account.credential_state,
                         access_token_expires_at: account.access_token_expires_at.map(Into::into),

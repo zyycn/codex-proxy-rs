@@ -25,13 +25,13 @@ pub(super) async fn write(
 ) -> Result<QuotaWriteOutcome, CoreStoreError> {
     let quota = JsonObject::try_from_value(
         "provider_quota_json",
-        serde_json::Value::Object(observation.quota.into_inner()),
+        serde_json::Value::Object(observation.quota.clone().into_inner()),
         QUOTA_MAX_BYTES,
     )
     .map_err(crate::core_store_error)?;
     let revision =
         Revision::new(observation.expected_revision.get()).map_err(crate::core_store_error)?;
-    let updated = if let Some(expected) = observation.expected_connection {
+    let updated = if let Some(ref expected) = observation.expected_connection {
         if expected.account_id != observation.account_id
             || expected.credential_revision != observation.expected_revision
         {
@@ -57,34 +57,30 @@ pub(super) async fn write(
                 .map_err(crate::core_store_error)?
                 .summary,
         )?;
-        if !account.enabled() || UpstreamConnection::for_account(&account) != expected {
+        if !account.enabled() || UpstreamConnection::for_account(&account) != *expected {
             return Ok(QuotaWriteOutcome::Conflict);
         }
         let updated = super::repository::write_quota(
             &mut *transaction,
             observation.account_id.as_str(),
             revision,
+            &observation,
             quota,
-            observation.observed_at.into(),
-            observation.state,
-            observation.plan_type.as_deref(),
         )
         .await
         .map_err(crate::core_store_error)?;
         transaction.commit().await.map_err(database_error)?;
         updated
     } else {
-        repository
-            .compare_and_swap_provider_quota(
-                observation.account_id.as_str(),
-                revision,
-                quota,
-                observation.observed_at.into(),
-                observation.state,
-                observation.plan_type.as_deref(),
-            )
-            .await
-            .map_err(crate::core_store_error)?
+        super::repository::write_quota(
+            &repository.pool,
+            observation.account_id.as_str(),
+            revision,
+            &observation,
+            quota,
+        )
+        .await
+        .map_err(crate::core_store_error)?
     };
     Ok(if updated {
         QuotaWriteOutcome::Updated

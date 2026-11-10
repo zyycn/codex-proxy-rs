@@ -38,7 +38,7 @@ pub(super) fn pool_summary(
     for account in accounts {
         match status(account, runtime, now) {
             AccountStatus::Normal => summary.ready += 1,
-            AccountStatus::RateLimited => summary.cooldown += 1,
+            AccountStatus::QuotaPaused | AccountStatus::RateLimited => summary.cooldown += 1,
             AccountStatus::QuotaExhausted => summary.exhausted += 1,
             AccountStatus::Disabled => summary.disabled += 1,
             AccountStatus::Error => summary.error += 1,
@@ -248,6 +248,7 @@ fn status(
 ) -> AccountStatus {
     resolve_account_status(
         &AccountStatusFacts {
+            quota_paused: account.quota_paused,
             enabled: account.enabled,
             credential_state: account.credential_state,
             access_token_expires_at: account.access_token_expires_at.map(Into::into),

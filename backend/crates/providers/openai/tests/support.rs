@@ -167,6 +167,18 @@ impl MemoryAccountStore {
             .map(|stored| stored.account.clone())
     }
 
+    pub(crate) fn set_quota_limits(
+        &self,
+        id: &str,
+        limits: gateway_core::account::AccountQuotaLimits,
+    ) {
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .unwrap();
+        stored.account = stored.account.clone().with_quota_limits(limits, false);
+    }
+
     pub(crate) fn enable_quota_credits(&self, id: &str) {
         let mut accounts = self.accounts.lock().unwrap();
         let stored = accounts
@@ -580,8 +592,10 @@ impl ProviderAccountStore for MemoryAccountStore {
                 Some(plan_type.clone()),
             ));
         }
+        let paused = observation.quota_pause.as_ref().is_some_and(|v| v.paused);
         stored.quota = Some(observation);
-        stored.account = rebuild_account(&stored.account, replacement);
+        stored.account = rebuild_account(&stored.account, replacement)
+            .with_quota_limits(stored.account.quota_limits().clone(), paused);
         Ok(QuotaWriteOutcome::Updated)
     }
 
@@ -789,6 +803,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         rebuild.last_error_message,
     )
     .with_scheduling(current.concurrency_limit(), current.weight())
+    .with_quota_limits(current.quota_limits().clone(), current.quota_paused())
     .with_auto_use_quota_credits(current.auto_use_quota_credits())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
     .with_outbound_proxy(current.outbound_proxy().cloned())

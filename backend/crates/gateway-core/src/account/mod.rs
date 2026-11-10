@@ -13,6 +13,8 @@ pub use model_access::{
     AccountModelAccess, AccountModelAccessMode, InvalidAccountModelAccess,
     MAX_ACCOUNT_ACCESS_MODELS,
 };
+mod quota_limits;
+pub use quota_limits::{AccountQuotaLimits, QuotaPauseDecision};
 mod proxy;
 pub use proxy::{InvalidOutboundProxy, OutboundProxy};
 pub mod scope;

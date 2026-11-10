@@ -42,6 +42,11 @@ impl CodexCredentialQuotaService {
                 observation.account_id == *account.id()
                     && observation.expected_revision == account.revision()
             });
+        let previous = if account.quota_limits().is_empty() {
+            None
+        } else {
+            existing.as_ref().and_then(quota_snapshot_from_observation)
+        };
         let existing_state = existing.as_ref().map(|observation| observation.state);
         let existing = existing
             .map(|observation| observation.quota.into_inner())
@@ -61,14 +66,15 @@ impl CodexCredentialQuotaService {
             return Ok(false);
         }
         let prior = existing_state.unwrap_or_else(|| account.quota());
-        let (quota, updated_default) = merge_passive_quota(existing, rate_limits);
+        let (mut quota, updated_default) = merge_passive_quota(existing, rate_limits);
         let observed_at = SystemTime::now();
-        let snapshot = parse_account_quota_snapshot(
+        let mut snapshot = parse_account_quota_snapshot(
             account.id().clone(),
             account.revision(),
             observed_at,
             &Value::Object(quota.clone()),
         )?;
+        snapshot.retain_limit_evidence(account.quota_limits(), previous.as_ref(), &mut quota);
         let credit_access = prior.evidence() == Some(QuotaEvidence::CreditsAvailable);
         let fresh_credits = rate_limits.iter().any(|limits| limits.credits.is_some());
         // 具名桶和元数据不改变套餐结论；点数不能再用时，仍须撤销原先仅凭点数的放行
@@ -99,6 +105,7 @@ impl CodexCredentialQuotaService {
         let outcome = self
             .store
             .compare_and_swap_quota(QuotaObservation {
+                quota_pause: Some(snapshot.pause_decision(account.quota_limits())),
                 expected_connection: None,
                 plan_type,
                 account_id: account.id().clone(),

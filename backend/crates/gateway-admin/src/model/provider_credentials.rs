@@ -845,6 +845,7 @@ pub struct ProviderQuotaReadRequest<'a> {
 /// Provider 已解析的 quota 结果及其不透明差异字段
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ProviderQuota {
+    pub paused_windows: Vec<String>,
     pub upstream: Option<super::upstream_info::ProviderUpstreamInfo>,
     /// 上游额度响应明确提供的套餐，可用于补全账号展示
     pub plan_type: Option<String>,
@@ -852,7 +853,7 @@ pub struct ProviderQuota {
     pub refresh_token_expires_at: Option<DateTime<Utc>>,
     pub windows: Vec<ProviderQuotaWindow>,
     pub credits: Option<ProviderQuotaCredits>,
-    /// 展示用快照级触顶事实（顶层或任一窗口触顶）；不参与账号五态派生
+    /// 展示用快照级触顶事实（顶层或任一窗口触顶）；不参与账号状态派生
     pub limit_reached: bool,
     pub provider_data: Option<ProviderDocument>,
 }

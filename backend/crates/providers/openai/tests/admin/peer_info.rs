@@ -1259,6 +1259,7 @@ async fn cold_lists_bound_full_snapshot_batches_and_reuse_every_hydrated_summary
         document["usage"]["data"]["windows"][0]["used"] = json!(index.to_string());
         store
             .compare_and_swap_quota(QuotaObservation {
+                quota_pause: None,
                 expected_connection: Some(connection),
                 account_id: id.clone(),
                 expected_revision: account.revision(),

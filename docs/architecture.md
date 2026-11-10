@@ -1011,7 +1011,7 @@ PostgreSQL 周期对账才是正确性基础
 | Windows 安装包临时直链 | Host 进程内短缓存 | 按需解析、严格校验、到期前丢弃；不写 PostgreSQL/Redis，也不代理包字节 |
 
 账号对外状态不是独立列，而是 PostgreSQL credential/quota 事实与 Redis cooldown 的统一投影：
-`normal`、`quota_exhausted`、`rate_limited`、`disabled`、`error`。只有明确上游证据才能恢复或终态化账号，
+`normal`、`quota_paused`、`quota_exhausted`、`rate_limited`、`disabled`、`error`。只有明确上游证据才能恢复或终态化账号，
 本地时钟和不确定响应不能伪造事实
 
 错误保护与上游限流分别保存恢复事实并聚合冷却投影，探测恢复由 Admin 负责，详见[Worker 与账号冻结](#worker-与账号冻结)
@@ -1046,6 +1046,10 @@ OpenAI 响应头的额度窗口按头名前缀归属，普通 Responses 的 `x-c
 `x-codex-secondary-*` 更新账号通用额度。
 仅在图片生成和编辑端点，若 `x-codex-active-limit` 指向具名计量项且没有该项的独立额度头，
 通用窗口才归入该计量项。Provider 按计量项独立保存，具名额度不改变账号级套餐访问结论
+
+账号调度上限属于管理员策略。OpenAI Provider 只将通用桶的实际使用率用于上限判断，
+与有时效的 Smart 排序信号和上游额度耗尽事实分开。选号、等待后重选和管理端投影共用窗口身份及比较规则；
+部分观测缺少已触发窗口时保留该窗口的最后证据，后台额度任务继续复核
 
 OpenAI Provider 统一解释点数可用性，主动查询、耗尽恢复与失败回读复用同一规则。
 Store 在账号事务内保存点数放行依据与快照；关闭自动使用时撤销该依据，迟到观测不能绕过开关。

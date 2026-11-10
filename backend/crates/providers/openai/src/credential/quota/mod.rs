@@ -68,6 +68,7 @@ use snapshot::{
     scheduling_signals_from_snapshot,
 };
 
+const LIMIT_EVIDENCE_FIELD: &str = "_cpr_quota_limit_evidence";
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);

@@ -624,6 +624,62 @@ async fn initial_quota_worker_synchronizes_account_plan() {
 }
 
 #[tokio::test]
+async fn missing_window_keeps_its_confirmed_limit_across_refresh_and_restart() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let id = "acct_partial_threshold";
+    create_account(&store, id).await;
+    store.set_quota_limits(
+        id,
+        serde_json::from_value(json!({"codex:604800s":95})).unwrap(),
+    );
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+    );
+    for (rate, blocked) in [
+        (
+            json!({"secondary_window":{"limit_window_seconds":604800,"used_percent":95}}),
+            true,
+        ),
+        (
+            json!({"primary_window":{"limit_window_seconds":18000,"used_percent":8}}),
+            true,
+        ),
+        (
+            json!({"secondary_window":{"limit_window_seconds":604800,"used_percent":0}}),
+            false,
+        ),
+    ] {
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"rate_limit":rate})))
+            .mount(&server)
+            .await;
+        if blocked {
+            service
+                .refresh_account(store.account(id).unwrap().id())
+                .await
+                .unwrap();
+        } else {
+            let result = service.synchronize_at(SystemTime::now()).await.unwrap();
+            assert_eq!(result.updated, 1);
+        }
+        let account = store.account(id).unwrap();
+        let restarted = quota_service(&store);
+        restarted
+            .prepare_scheduling(std::slice::from_ref(&account))
+            .await;
+        assert_eq!(
+            account.status_projection(SystemTime::now(), None).status == AccountStatus::QuotaPaused,
+            blocked
+        );
+    }
+}
+
+#[tokio::test]
 async fn quota_refresh_persists_explicit_provider_denial() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_explicit_quota_denial";

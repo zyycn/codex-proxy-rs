@@ -32,6 +32,8 @@ struct Facts {
 fn account() -> AccountRecord {
     let at = "2026-01-01T00:00:00Z".parse().unwrap();
     AccountRecord {
+        quota_paused: false,
+        quota_limits: Default::default(),
         auto_use_quota_credits: false,
         outbound_proxy_id: None,
         outbound_proxy_enabled: true,
@@ -132,6 +134,7 @@ impl PluginAccountAccess for Facts {
         self.reads.fetch_add(1, Ordering::SeqCst);
         assert_eq!(account.as_str(), "acct_facts");
         Ok(ProviderQuota {
+            paused_windows: Vec::new(),
             upstream: None,
             credits: Some(ProviderQuotaCredits {
                 has_credits: true,

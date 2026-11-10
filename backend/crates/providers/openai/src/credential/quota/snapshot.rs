@@ -3,6 +3,7 @@
 //! Provider raw quota JSON 的唯一解析者：产出 [`CodexAccountQuotaSnapshot`]
 //! 供服务编排层消费；`limit_reached` 是快照级事实，不能只从子窗口反推
 
+use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
@@ -120,10 +121,63 @@ pub struct CodexAccountQuotaSnapshot {
     fact: CodexQuotaFact,
     quota: QuotaState,
     windows: Vec<CodexQuotaWindow>,
+    unconfirmed_limits: BTreeMap<String, f64>,
     pub(super) recovery: Option<QuotaRecovery>,
 }
 
 impl CodexAccountQuotaSnapshot {
+    pub(super) fn pause_decision(
+        &self,
+        limits: &gateway_core::account::AccountQuotaLimits,
+    ) -> gateway_core::account::QuotaPauseDecision {
+        gateway_core::account::QuotaPauseDecision {
+            limits: limits.clone(),
+            paused: self
+                .limit_usage()
+                .any(|(key, used)| limits.reached(key, Some(used))),
+        }
+    }
+
+    pub(crate) fn limit_usage(&self) -> impl Iterator<Item = (&str, f64)> {
+        self.windows
+            .iter()
+            .filter(|w| w.is_account_wide())
+            .filter_map(|w| Some((w.key(), w.used_percent()?)))
+            .chain(
+                self.unconfirmed_limits
+                    .iter()
+                    .map(|(key, &used)| (key.as_str(), used)),
+            )
+    }
+
+    /// 迟到的在途响应或不完整的刷新不能清除已确认的上限，只有对应窗口的新比例才能覆盖它
+    pub(super) fn retain_limit_evidence(
+        &mut self,
+        limits: &gateway_core::account::AccountQuotaLimits,
+        previous: Option<&Self>,
+        document: &mut Map<String, Value>,
+    ) {
+        self.unconfirmed_limits = previous
+            .into_iter()
+            .flat_map(Self::limit_usage)
+            .filter(|(key, used)| {
+                limits.reached(key, Some(*used))
+                    && !self.windows.iter().any(|w| {
+                        w.is_account_wide() && w.key() == *key && w.used_percent().is_some()
+                    })
+            })
+            .map(|(key, used)| (key.to_owned(), used))
+            .collect();
+        if self.unconfirmed_limits.is_empty() {
+            document.remove(super::LIMIT_EVIDENCE_FIELD);
+        } else {
+            document.insert(
+                super::LIMIT_EVIDENCE_FIELD.into(),
+                serde_json::json!(self.unconfirmed_limits),
+            );
+        }
+    }
+
     #[must_use]
     pub const fn account_id(&self) -> &ProviderAccountId {
         &self.account_id
@@ -381,6 +435,12 @@ pub(crate) fn parse_account_quota_snapshot(
         fact,
         quota,
         windows,
+        unconfirmed_limits: object
+            .get(super::LIMIT_EVIDENCE_FIELD)
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|_| CodexCredentialQuotaError::InvalidCredentialData)?
+            .unwrap_or_default(),
         recovery,
     })
 }

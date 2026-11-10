@@ -1,5 +1,17 @@
 {
   "accounts": {
+    "quotaLimits": {
+      "badge": "额度暂停",
+      "title": "通用额度调度上限",
+      "reached": "{windows}已达调度上限",
+      "expectedReset": "预计重置",
+      "windowReset": "{window}预计重置",
+      "recovery": "等待额度恢复，或调整窗口上限",
+      "help": "任一窗口达限即暂停调度，均低于上限后恢复",
+      "unlimited": "不限制",
+      "empty": "没有已观测的通用额度窗口",
+      "invalid": "请输入 1～100 的整数，留空表示不限制"
+    },
     "quota": {
       "general": "通用额度",
       "usageInThisWindow": "窗口消耗：{localUsageDisplay}",

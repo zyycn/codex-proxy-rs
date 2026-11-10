@@ -1,5 +1,17 @@
 {
   "accounts": {
+    "quotaLimits": {
+      "badge": "額度暫停",
+      "title": "通用額度調度上限",
+      "reached": "{windows}已達調度上限",
+      "expectedReset": "預計重置",
+      "windowReset": "{window}預計重置",
+      "recovery": "等待額度恢復，或調整視窗上限",
+      "help": "任一視窗達限即暫停調度，均低於上限後恢復",
+      "unlimited": "不限制",
+      "empty": "沒有已觀測的通用額度視窗",
+      "invalid": "請輸入 1～100 的整數，留空表示不限制"
+    },
     "quota": {
       "general": "通用額度",
       "usageInThisWindow": "窗口消耗：{localUsageDisplay}",

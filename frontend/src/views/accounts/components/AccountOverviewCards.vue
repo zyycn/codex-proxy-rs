@@ -31,7 +31,7 @@ const overviewItems = computed(() => [
   },
   {
     label: t('accounts.overview.quotaLimited'),
-    value: formatInteger((props.summary.quotaExhausted ?? 0) + (props.summary.rateLimited ?? 0)),
+    value: formatInteger(props.summary.quotaPaused + (props.summary.quotaExhausted ?? 0) + (props.summary.rateLimited ?? 0)),
     caption: t('accounts.overview.waitingForQuota'),
     tone: 'warning',
     icon: Gauge,

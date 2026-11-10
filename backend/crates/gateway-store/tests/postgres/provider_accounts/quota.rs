@@ -17,6 +17,7 @@ async fn connection_changes_reject_in_flight_quota_writes() {
         let id = ProviderAccountId::new("acct_peer").unwrap();
         let current = repository.get_account(&id).await.unwrap().unwrap();
         let observation = QuotaObservation {
+            quota_pause: None,
             expected_connection: Some(UpstreamConnection::for_account(&current)),
             account_id: id.clone(),
             expected_revision: current.revision(),
@@ -66,6 +67,7 @@ async fn large_quota_uses_shared_snapshot_and_cannot_reappear_after_revocation()
     let current = repository.get_account(&id).await.unwrap().unwrap();
     let now = SystemTime::now();
     let observation = QuotaObservation {
+        quota_pause: None,
         expected_connection: Some(UpstreamConnection::for_account(&current)),
         account_id: id.clone(),
         expected_revision: current.revision(),
@@ -159,6 +161,7 @@ async fn snapshot_commit_preserves_newer_quota_failure() {
         .await
         .unwrap();
     let observation = QuotaObservation {
+        quota_pause: None,
         expected_connection: Some(UpstreamConnection::for_account(&current)),
         account_id: id.clone(),
         expected_revision: current.revision(),
@@ -227,6 +230,7 @@ async fn managed_proxy_changes_clear_snapshots_and_reject_old_connections() {
     for change in ["url", "disabled"] {
         let current = repository.get_account(&id).await.unwrap().unwrap();
         let observation = QuotaObservation {
+            quota_pause: None,
             expected_connection: Some(UpstreamConnection::for_account(&current)),
             account_id: id.clone(),
             expected_revision: current.revision(),
@@ -294,6 +298,7 @@ async fn managed_proxy_changes_clear_snapshots_and_reject_old_connections() {
     // 模拟代理更新持有账号锁，额度查询已经开始但必须等待提交的交错
     let current = repository.get_account(&id).await.unwrap().unwrap();
     let observation = QuotaObservation {
+        quota_pause: None,
         expected_connection: Some(UpstreamConnection::for_account(&current)),
         account_id: id.clone(),
         expected_revision: current.revision(),

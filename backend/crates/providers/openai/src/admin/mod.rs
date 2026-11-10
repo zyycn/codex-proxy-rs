@@ -205,6 +205,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
     ) -> gateway_admin::model::accounts::ProviderAccountCapabilities {
         let oauth = authentication_kind == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH;
         gateway_admin::model::accounts::ProviderAccountCapabilities {
+            quota_limits_supported: oauth,
             quota_credits: oauth,
             quota: oauth,
             quota_refresh: oauth,
@@ -738,7 +739,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             if refresh {
                 return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
             }
-            return Ok(project_quota(None, false));
+            return Ok(empty_quota());
         }
         let snapshot = if refresh {
             let snapshot = Some(
@@ -755,7 +756,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 .await
                 .map_err(map_quota_error)?
         };
-        Ok(project_quota(snapshot, account.quota().is_exhausted()))
+        Ok(project_quota(
+            snapshot,
+            account.quota().is_exhausted(),
+            account.quota_limits(),
+        ))
     }
 
     async fn read_quotas(
@@ -1223,6 +1228,7 @@ fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> 
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        paused_windows: Vec::new(),
         upstream: None,
         credits: None,
         plan_type: None,
@@ -1237,15 +1243,19 @@ fn empty_quota() -> ProviderQuota {
 fn project_quota(
     snapshot: Option<CodexAccountQuotaSnapshot>,
     limit_reached: bool,
+    limits: &gateway_core::account::AccountQuotaLimits,
 ) -> ProviderQuota {
     let mut quota = snapshot
-        .map(project_quota_snapshot)
+        .map(|s| project_quota_snapshot(s, limits))
         .unwrap_or_else(empty_quota);
     quota.limit_reached = limit_reached;
     quota
 }
 
-fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota {
+fn project_quota_snapshot(
+    snapshot: CodexAccountQuotaSnapshot,
+    limits: &gateway_core::account::AccountQuotaLimits,
+) -> ProviderQuota {
     let mut provider_data = Map::new();
     provider_data.insert(
         "remaining_percent".to_owned(),
@@ -1287,6 +1297,11 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
     // 在窗口全部过期后继续维持限流
     let limit_reached = quota_windows_limit_reached(&windows);
     ProviderQuota {
+        paused_windows: snapshot
+            .limit_usage()
+            .filter(|(key, used)| limits.reached(key, Some(*used)))
+            .map(|(key, _)| key.to_owned())
+            .collect(),
         upstream: None,
         plan_type: snapshot.plan_type().map(str::to_owned),
         observed_at: Some(DateTime::<Utc>::from(snapshot.observed_at())),

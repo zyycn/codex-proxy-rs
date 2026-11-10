@@ -41,7 +41,7 @@ impl PgObservabilityRepository {
         self
     }
 
-    /// 从账号事实和当前冷却一次性派生 Dashboard 五态；不在 SQL 中复制状态机
+    /// 从账号事实和当前冷却一次性派生 Dashboard 状态；不在 SQL 中复制状态机
     async fn account_status_snapshot(
         &self,
         observed_at: DateTime<Utc>,
@@ -68,6 +68,9 @@ impl PgObservabilityRepository {
                 gateway_core::account::AccountStatus::Normal => {
                     metrics.normal = metrics.normal.saturating_add(1);
                     normal_accounts.push(account);
+                }
+                gateway_core::account::AccountStatus::QuotaPaused => {
+                    metrics.quota_paused = metrics.quota_paused.saturating_add(1);
                 }
                 gateway_core::account::AccountStatus::QuotaExhausted => {
                     metrics.quota_exhausted = metrics.quota_exhausted.saturating_add(1);
