@@ -205,6 +205,33 @@ async fn explicit_expiry_never_rolls_and_late_settlement_uses_completion_time() 
         Some("key_budget_window_inactive")
     );
     admin
+        .set_client_key_budget_window(
+            SetClientKeyBudgetWindow {
+                id: key_id("key"),
+                expected_revision: 4,
+                period: ClientKeyBudgetWindowPeriod::Weekly,
+                window: None,
+            },
+            ClientKeyBudgetMutationOrigin::Admin,
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        budgets
+            .admit(key_id("key"))
+            .await
+            .unwrap_err()
+            .client_error_code(),
+        Some("key_budget_window_inactive")
+    );
+    assert!(
+        !status(&database, "key")
+            .await
+            .access_at(Utc::now().into())
+            .allowed()
+    );
+    admin
         .reset_client_key_budget(
             ResetClientKeyBudget {
                 id: key_id("key"),

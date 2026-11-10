@@ -35,19 +35,24 @@ pub(super) async fn get(
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "select coalesce(w.revision, 0) as revision, coalesce(w.{column}_explicit, false) as explicit,
         w.{column}_start as start, w.{column}_end as finish,
-        (case when w.{column}_explicit or (w.{column}_start < w.{column}_end and w.{column}_end > now()) then w.{column}_used_usd else 0 end)::text as used
+        w.{column}_used_usd::text as used
         from client_api_keys k left join client_api_key_budget_windows w on w.client_api_key_id=k.id where k.id=$1"
     ))).bind(id.as_str()).fetch_optional(pool).await.map_err(unavailable)?
         .ok_or_else(|| AdminStoreError::new(AdminStoreErrorKind::NotFound, "client API key", "API Key 不存在"))?;
+    let window = super::client_budgets::stored_window(&row, "start", "finish", "explicit")
+        .filter(|w| w.visible_at(std::time::SystemTime::now()));
     Ok(ClientKeyBudgetWindow {
         revision: row.get::<i64, _>("revision") as u64,
-        explicit: row.get("explicit"),
-        starts_at: row.get("start"),
-        ends_at: row.get("finish"),
-        used_usd: row
-            .get::<String, _>("used")
-            .parse::<Decimal>()
-            .map_err(unavailable)?,
+        explicit: window.is_some_and(|w| w.explicit),
+        starts_at: window.map(|w| w.start.into()),
+        ends_at: window.map(|w| w.end.into()),
+        used_usd: if window.is_some() {
+            row.get::<String, _>("used")
+                .parse::<Decimal>()
+                .map_err(unavailable)?
+        } else {
+            Decimal::ZERO
+        },
     })
 }
 
@@ -126,12 +131,16 @@ pub(super) async fn set(
             // 首次接管和迟到的周期同步都从同一费用账本计入窗口内已完成请求
             sqlx::query_scalar(sqlx::AssertSqlSafe(format!("update client_api_key_budget_windows set
                 {column}_explicit=true, {column}_start=$2, {column}_end=$3,
-                {column}_used_usd=(select coalesce(sum(amount_usd),0) from client_api_key_charge_events
-                    where client_api_key_id=$1 and completed_at >= $2 and completed_at < $3),
+                {column}_used_usd=case when charge_history_since > $2 then {column}_used_usd else
+                    (select coalesce(sum(amount_usd),0) from client_api_key_charge_events
+                     where client_api_key_id=$1 and completed_at >= $2 and completed_at < $3) end,
                 revision=revision+1,last_operation_request=$4
-                where client_api_key_id=$1 returning revision")))
+                where client_api_key_id=$1 and (charge_history_since is null or charge_history_since <= $2
+                    or ({column}_start=$2 and {column}_end=$3)) returning revision")))
                 .bind(command.id.as_str()).bind(window.starts_at).bind(window.ends_at).bind(request)
-                .fetch_one(&mut *tx).await.map_err(unavailable)?
+                .fetch_optional(&mut *tx).await.map_err(unavailable)?
+                .ok_or_else(|| AdminStoreError::new(AdminStoreErrorKind::Conflict, "client API key",
+                    "费用历史不完整，无法重算该预算窗口"))?
         }
         None => {
             // 释放外部控制时保留已用金额与边界，到期后再按原生规则滚动

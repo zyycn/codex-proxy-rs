@@ -13,13 +13,13 @@ use gateway_admin::ports::store::AdminStoreResult;
 use gateway_core::{
     engine::budget::{
         ClientBudgetCharge, ClientBudgetError, ClientBudgetLimits, ClientBudgetPort,
-        ClientBudgetStatus,
+        ClientBudgetStatus, ClientBudgetWindow,
     },
     error::{GatewayError, GatewayErrorKind},
     metering::Decimal,
     policy::ClientApiKeyId,
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 
 use crate::{StoreError, StoreResult, mutation_audit, postgres_unavailable};
 
@@ -197,20 +197,16 @@ impl PgClientBudgetStore {
         let day = self.timezone.day_start(now).ok_or_else(unavailable)?;
         let window =
             |start: &str, end: &str, used: &str, explicit: &str, days| -> Result<_, GatewayError> {
-                let start = row.get::<Option<DateTime<Utc>>, _>(start);
-                let end = row.get::<Option<DateTime<Utc>>, _>(end);
-                if row.get::<bool, _>(explicit) {
-                    let start = start.ok_or_else(unavailable)?;
-                    let end = end.ok_or_else(unavailable)?;
-                    if now < start || now >= end {
-                        return Err(GatewayError::new(
-                            GatewayErrorKind::BudgetExhausted,
-                            "No active spending window.",
-                        )
-                        .with_client_code("key_budget_window_inactive"));
-                    }
-                    return Ok((start, end, parse(used)?, false));
+                let current = stored_window(&row, start, end, explicit);
+                if current.is_some_and(|w| w.inactive_at(now.into())) {
+                    return Err(GatewayError::new(
+                        GatewayErrorKind::BudgetExhausted,
+                        "No active spending window.",
+                    )
+                    .with_client_code("key_budget_window_inactive"));
                 }
+                let start = current.map(|w| DateTime::<Utc>::from(w.start));
+                let end = current.map(|w| DateTime::<Utc>::from(w.end));
                 let reopen = end.is_none_or(|end| end <= now);
                 if reopen {
                     Ok((
@@ -465,10 +461,8 @@ pub(super) async fn load_client_key_budgets(
     // 起止相等是重置后的未开启窗口，不能因应用时钟领先数据库而投影为活跃预算
     let rows = sqlx::query(
         "select k.id, k.daily_limit_usd::text, k.weekly_limit_usd::text,
-        (case when w.daily_explicit or (w.daily_end > w.daily_start and w.daily_end > now()) then w.daily_used_usd else 0 end)::text as daily_used,
-        (case when w.weekly_explicit or (w.weekly_end > w.weekly_start and w.weekly_end > now()) then w.weekly_used_usd else 0 end)::text as weekly_used,
-        case when w.daily_explicit or (w.daily_end > w.daily_start and w.daily_end > now()) then w.daily_end end as daily_end,
-        case when w.weekly_explicit or (w.weekly_end > w.weekly_start and w.weekly_end > now()) then w.weekly_end end as weekly_end
+        w.daily_start, w.daily_end, w.daily_explicit, w.weekly_start, w.weekly_end, w.weekly_explicit,
+        w.daily_used_usd::text as daily_used, w.weekly_used_usd::text as weekly_used
         from client_api_keys k left join client_api_key_budget_windows w on w.client_api_key_id = k.id
         where k.id = any($1)",
     )
@@ -477,7 +471,12 @@ pub(super) async fn load_client_key_budgets(
     .await
     .map_err(|source| postgres_unavailable("load client budgets", source))?;
     let mut budgets = BTreeMap::new();
+    let now = std::time::SystemTime::now();
     for row in rows {
+        let daily_window = stored_window(&row, "daily_start", "daily_end", "daily_explicit")
+            .filter(|w| w.explicit || now < w.end);
+        let weekly_window = stored_window(&row, "weekly_start", "weekly_end", "weekly_explicit")
+            .filter(|w| w.explicit || now < w.end);
         let parse = |field| -> StoreResult<Decimal> {
             row.get::<String, _>(field)
                 .parse()
@@ -490,14 +489,18 @@ pub(super) async fn load_client_key_budgets(
                     daily_usd: parse("daily_limit_usd")?,
                     weekly_usd: parse("weekly_limit_usd")?,
                 },
-                daily_used_usd: parse("daily_used")?,
-                weekly_used_usd: parse("weekly_used")?,
-                daily_resets_at: row
-                    .get::<Option<DateTime<Utc>>, _>("daily_end")
-                    .map(Into::into),
-                weekly_resets_at: row
-                    .get::<Option<DateTime<Utc>>, _>("weekly_end")
-                    .map(Into::into),
+                daily_used_usd: if daily_window.is_some_and(|w| w.visible_at(now)) {
+                    parse("daily_used")?
+                } else {
+                    Decimal::ZERO
+                },
+                weekly_used_usd: if weekly_window.is_some_and(|w| w.visible_at(now)) {
+                    parse("weekly_used")?
+                } else {
+                    Decimal::ZERO
+                },
+                daily_window,
+                weekly_window,
             },
         );
     }
@@ -512,6 +515,19 @@ pub(super) async fn load_client_key_budgets(
                 })?;
     }
     Ok(())
+}
+
+pub(super) fn stored_window(
+    row: &PgRow,
+    start: &str,
+    end: &str,
+    explicit: &str,
+) -> Option<ClientBudgetWindow> {
+    Some(ClientBudgetWindow {
+        start: row.get::<Option<DateTime<Utc>>, _>(start)?.into(),
+        end: row.get::<DateTime<Utc>, _>(end).into(),
+        explicit: row.get(explicit),
+    })
 }
 
 pub(super) fn unavailable() -> GatewayError {

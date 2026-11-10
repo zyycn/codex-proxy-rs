@@ -89,8 +89,8 @@ async fn usage_response(
     };
     Json(json!({
         "unit": "USD",
-        "daily": window(budget.limits.daily_usd, budget.daily_used_usd, budget.daily_resets_at),
-        "weekly": window(budget.limits.weekly_usd, budget.weekly_used_usd, budget.weekly_resets_at),
+        "daily": window(budget.limits.daily_usd, budget.daily_used_usd, budget.daily_resets_at()),
+        "weekly": window(budget.limits.weekly_usd, budget.weekly_used_usd, budget.weekly_resets_at()),
     }))
     .into_response()
 }

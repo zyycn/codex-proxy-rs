@@ -45,6 +45,7 @@ pub struct SetKeyBudgetWindowRequest {
     pub client_key_id: String,
     pub period: WindowPeriod,
     pub expected_revision: u64,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub window: Option<ExplicitBudgetWindow>,
 }
 

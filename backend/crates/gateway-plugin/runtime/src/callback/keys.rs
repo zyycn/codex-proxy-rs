@@ -118,10 +118,10 @@ impl PluginClientKeys {
                     daily_used_usd: budget.daily_used_usd.canonical(),
                     weekly_used_usd: budget.weekly_used_usd.canonical(),
                     daily_resets_at_ms: budget
-                        .daily_resets_at
+                        .daily_resets_at()
                         .map(|time| chrono::DateTime::<chrono::Utc>::from(time).timestamp_millis()),
                     weekly_resets_at_ms: budget
-                        .weekly_resets_at
+                        .weekly_resets_at()
                         .map(|time| chrono::DateTime::<chrono::Utc>::from(time).timestamp_millis()),
                 })
             }
