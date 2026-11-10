@@ -13,7 +13,7 @@ use sqlx::{
 use uuid::Uuid;
 
 #[tokio::test]
-async fn store_bundle_worker_plan_and_leader_lease_are_single_use_and_fenced() {
+async fn store_replicas_share_peer_identity_and_fence_the_worker_lease() {
     let (Some(database_url), Some(redis_url)) = (
         crate::support::test_env("CPR_TEST_DATABASE_URL"),
         crate::support::test_env("CPR_TEST_REDIS_URL"),
@@ -31,6 +31,10 @@ async fn store_bundle_worker_plan_and_leader_lease_are_single_use_and_fenced() {
         .expect("first Store bundle");
     let second = initialize(config).await.expect("second Store bundle");
 
+    assert_eq!(
+        first.peer_routing_id().await.unwrap(),
+        second.peer_routing_id().await.unwrap()
+    );
     assert!(runtime_data.path().join("backup-staging").is_dir());
 
     let kinds = first

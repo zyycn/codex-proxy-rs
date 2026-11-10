@@ -405,7 +405,8 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`
 ### CPR 互联
 
 在上游的「API 密钥」中为专用密钥选择账号分组并开启「CPR 互联」，即可共享密钥预算、并发上限和 RPM，并按需公开账号池、账号额度和套餐信息。
-共享 Key 的实际推理只使用这些分组中的直连 OAuth 账号；分组内的 API Key 转供账号不会参与
+共享 Key 按所选分组正常调度，包括 OAuth 和 API Key 账号。请求回到已经过的 CPR 部署时停止转发；正常链路没有固定跳数上限。转发链上的代理须保留 `X-CPR-Route` 请求头。
+同库副本共用部署标记。如果从整库副本搭建独立节点，在新库执行 `UPDATE runtime_settings SET peer_routing_id = gen_random_uuid() WHERE id = 1` 后启动，以免被当作原部署
 
 在下游导入或编辑 OpenAI API Key 账号，填写上游 API 地址和该 Key，后台自动发现 CPR 互联能力。
 地址包含自定义前缀时保留完整前缀，后台在该地址下请求 `cpr/link`。

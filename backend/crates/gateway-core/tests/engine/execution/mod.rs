@@ -3348,6 +3348,7 @@ impl Provider for CatalogProvider {
         scope: &FrozenAccountScope,
         protocol: &str,
         version: &str,
+        _peer_route: Option<&http::HeaderValue>,
     ) -> Result<
         Option<Vec<gateway_core::routing::ProviderModelDescriptor>>,
         gateway_core::routing::ProviderCatalogUnavailable,
@@ -3475,7 +3476,7 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
             Arc::new(crate::RecordingDiagnostics::default()),
         );
         let client = service.authenticate("sk_start_test").expect("authenticate");
-        let result = block_on(service.client_model_catalog(&client, "codex", "0.154.0"));
+        let result = block_on(service.client_model_catalog(&client, "codex", "0.154.0", None));
         if matches!(provider, CatalogProvider::Unavailable) {
             assert!(
                 result.is_err(),
@@ -3595,7 +3596,8 @@ fn client_catalog_prefers_scoped_profiles_in_provider_order() {
             Arc::new(crate::RecordingDiagnostics::default()),
         );
         let client = service.authenticate("sk_start_test").unwrap();
-        let models = block_on(service.client_model_catalog(&client, "codex", "0.154.0")).unwrap();
+        let models =
+            block_on(service.client_model_catalog(&client, "codex", "0.154.0", None)).unwrap();
         let profiles = models
             .iter()
             .map(|entry| {

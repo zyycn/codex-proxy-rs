@@ -1559,6 +1559,7 @@ impl ExecutionService for DefaultExecutionService {
         client: &'a AuthenticatedClient,
         protocol: &'a str,
         client_version: &'a str,
+        peer_route: Option<&'a http::HeaderValue>,
     ) -> BoxFuture<'a, Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable>> {
         Box::pin(async move {
             let scope = client.policy.account_scope();
@@ -1573,6 +1574,7 @@ impl ExecutionService for DefaultExecutionService {
                         scope,
                         protocol,
                         client_version,
+                        peer_route,
                     )
                     .await?
                 else {
@@ -1799,7 +1801,7 @@ impl NestedModelExecutionPort for DefaultExecutionService {
             let cancelled = cancellation.cancelled().fuse();
             let timeout = Delay::new(DIAGNOSTIC_TIMEOUT).fuse();
             let catalog = self
-                .client_model_catalog(&client, &protocol, &client_version)
+                .client_model_catalog(&client, &protocol, &client_version, None)
                 .fuse();
             pin_mut!(cancelled, timeout, catalog);
             let models = select_biased! {

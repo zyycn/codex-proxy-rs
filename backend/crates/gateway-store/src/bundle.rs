@@ -7,6 +7,7 @@ use super::*;
 
 /// 已完成连接、迁移与 hydration 的 Store 能力集合
 pub struct StoreBundle {
+    pool: sqlx::PgPool,
     diagnostics: Arc<dyn gateway_core::diagnostics::OperationalDiagnostics>,
     admin_ports: AdminStorePorts,
     core_ports: CoreStorePorts,
@@ -21,6 +22,14 @@ pub struct StoreBundle {
 }
 
 impl StoreBundle {
+    /// 只在启动 HTTP 服务时读取部署标记，命令行只读模式不依赖新迁移
+    pub async fn peer_routing_id(&self) -> StoreResult<uuid::Uuid> {
+        sqlx::query_scalar("select peer_routing_id from runtime_settings where id = 1")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|source| postgres_unavailable("load peer routing identity", source))
+    }
+
     #[must_use]
     pub fn diagnostics(&self) -> Arc<dyn gateway_core::diagnostics::OperationalDiagnostics> {
         self.diagnostics.clone()
@@ -326,8 +335,10 @@ async fn connect(
             }),
         ),
     };
-    let analytics = postgres::PgRequestAnalyticsRepository::new(pool, observability_query_budget);
+    let analytics =
+        postgres::PgRequestAnalyticsRepository::new(pool.clone(), observability_query_budget);
     Ok(StoreBundle {
+        pool,
         analytics,
         diagnostics,
         admin_ports,

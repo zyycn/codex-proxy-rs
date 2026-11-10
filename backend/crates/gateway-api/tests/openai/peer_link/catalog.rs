@@ -58,7 +58,13 @@ impl ProviderCatalogPort for CatalogFixture {
                         ModelCapabilities::new([OperationKind::Generate].into(), None),
                     )
                     .with_catalog_accounts(
-                        [ProviderAccountId::new("acct_catalog_source").unwrap()].into(),
+                        [ProviderAccountId::new(if index == 0 {
+                            "acct_catalog_source"
+                        } else {
+                            "acct_private_sentinel"
+                        })
+                        .unwrap()]
+                        .into(),
                     )
                 })
                 .collect())
@@ -101,6 +107,15 @@ async fn native_quota_coverage_uses_routing_eligibility_and_current_model_permis
 }
 
 async fn catalog_snapshot(fixture: &AdminTestFixture, models: usize) -> RuntimeSnapshot {
+    catalog_snapshot_with(fixture, models, "oauth", Default::default()).await
+}
+
+async fn catalog_snapshot_with(
+    fixture: &AdminTestFixture,
+    models: usize,
+    other_kind: &str,
+    other_access: AccountModelAccess,
+) -> RuntimeSnapshot {
     let group = fixture.client_key.lock().unwrap().as_ref().unwrap().groups[0].clone();
     let account_ids = ["acct_catalog_source", "acct_private_sentinel"]
         .map(|id| ProviderAccountId::new(id).unwrap());
@@ -132,8 +147,14 @@ async fn catalog_snapshot(fixture: &AdminTestFixture, models: usize) -> RuntimeS
             account_ids
                 .iter()
                 .map(|id| {
-                    SnapshotProviderAccountFacts::new(id.clone(), "openai")
-                        .with_authentication_kind("oauth".into())
+                    let facts = SnapshotProviderAccountFacts::new(id.clone(), "openai");
+                    if id.as_str() == "acct_catalog_source" {
+                        facts
+                            .with_authentication_kind(other_kind.into())
+                            .with_model_access(other_access.clone())
+                    } else {
+                        facts.with_authentication_kind("oauth".into())
+                    }
                 })
                 .collect(),
             account_ids
@@ -231,4 +252,37 @@ async fn model_expansion_honors_the_byte_budget_and_current_permissions() {
             .iter()
             .all(|model| model.state == gateway_admin::model::peer_link::PeerModelState::Unknown)
     );
+}
+
+#[tokio::test]
+async fn peer_relay_only_weakens_quota_coverage_for_its_allowed_models() {
+    let (fixture, _) = fixture(sharing(), RAW_KEY).await;
+    fixture
+        .account
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .account
+        .quota = QuotaState::exhausted(QuotaEvidence::ProviderDenied, Utc::now().into(), None);
+    let relay =
+        AccountModelAccess::new(AccountModelAccessMode::Allowlist, vec!["model-a".into()]).unwrap();
+    let app = router_with_snapshot(
+        &fixture,
+        catalog_snapshot_with(&fixture, 2, "api_key", relay).await,
+    );
+    let body = response_json(query(&app, PATH, Some(RAW_KEY)).await).await;
+    assert_eq!(body["pool"]["account_count"], 1);
+    assert_eq!(body["quota"]["accounts"].as_array().unwrap().len(), 1);
+    let models = body["models"].as_array().unwrap();
+    assert_eq!(models.len(), 3);
+    for model in models {
+        let (coverage, state) = if model["model"] == "model-1" {
+            ("complete", "exhausted")
+        } else {
+            ("partial", "unknown")
+        };
+        assert_eq!(model["coverage"], coverage, "{model}");
+        assert_eq!(model["state"], state, "{model}");
+    }
 }

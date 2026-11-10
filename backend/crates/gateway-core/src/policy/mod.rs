@@ -191,12 +191,9 @@ impl ClientPolicy {
 
     #[must_use]
     pub fn with_peer_sharing(mut self, sharing: ClientPeerSharing) -> Self {
-        self.account_scope = Arc::new(
-            self.account_scope
-                .as_ref()
-                .clone()
-                .with_direct_accounts_only(sharing.enabled),
-        );
+        if sharing.enabled {
+            self.account_scope = Arc::new(self.account_scope.as_ref().clone().requiring_groups());
+        }
         self.peer_sharing = sharing;
         self
     }

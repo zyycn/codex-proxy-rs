@@ -847,6 +847,7 @@ async fn start_active_response_with(
     let app = if let Some(plan) = plan {
         let admin = crate::admin::AdminTestFixture::new().await;
         gateway_api::initialize(
+            uuid::Uuid::nil(),
             gateway_api::ApiConfig {
                 asset_directory: std::env::temp_dir(),
                 cors_allowed_origins: Vec::new(),
