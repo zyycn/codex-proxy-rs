@@ -937,8 +937,10 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
     let updated = sqlx::query_scalar::<_, String>(
         "update provider_accounts
          set enabled = coalesce($2, enabled), concurrency_limit = case when $9 then $3 else concurrency_limit end, weight = coalesce($4, weight), updated_at = greatest(now(), updated_at),
-             provider_quota_json = case when $5 and outbound_proxy_url is distinct from $6 then null else provider_quota_json end, quota_paused = case when $5 and outbound_proxy_url is distinct from $6 then false else quota_paused end,
-             quota_observed_at = case when $5 and outbound_proxy_url is distinct from $6 then null else quota_observed_at end,
+             (provider_quota_json, quota_observed_at) = (
+                 select provider_quota_json, quota_observed_at
+                 where quota_paused or not $5 or outbound_proxy_url is not distinct from $6
+             ),
              outbound_proxy_url = case when $5 then $6 else outbound_proxy_url end,
              outbound_proxy_id = case when $5 then $7 else outbound_proxy_id end,
              model_access_json = coalesce($8, model_access_json)

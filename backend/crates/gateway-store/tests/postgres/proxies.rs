@@ -411,6 +411,22 @@ fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
     }
 }
 
+async fn seed_paused_quota(database: &TestDatabase, id: &str) {
+    let window = serde_json::json!({
+        "rate_limit": {"primary_window": {"limit_window_seconds": 18000, "used_percent": 99}}
+    });
+    sqlx::query(
+        "update provider_accounts set quota_limits = $2, quota_paused = true,
+        provider_quota_json = $3, quota_observed_at = now(), updated_at = now() where id = $1",
+    )
+    .bind(id)
+    .bind(serde_json::json!({"codex:18000s": 99}))
+    .bind(window)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn proxy_account_removal_preserves_settings_and_rejects_changed_bindings() {
     let Some(database) = TestDatabase::create("proxy_account_remove").await else {
@@ -457,6 +473,7 @@ async fn proxy_account_removal_preserves_settings_and_rejects_changed_bindings()
     .execute(&database.pool)
     .await
     .unwrap();
+    seed_paused_quota(&database, "acct_remove").await;
     let account_id = ProviderAccountId::new("acct_remove").unwrap();
     let snapshot = "select to_jsonb(a) - 'updated_at' - 'outbound_proxy_id' - 'outbound_proxy_url'
         from provider_accounts a where id = 'acct_remove'";
@@ -997,6 +1014,22 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
             .await
             .is_err()
     );
+    seed_paused_quota(&database, "acct_one").await;
+    let paused_evidence = || async {
+        use gateway_core::account::ProviderAccountStore;
+        let id = ProviderAccountId::new("acct_one").unwrap();
+        assert!(
+            accounts
+                .get_account(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .quota_paused()
+        );
+        let observation = accounts.get_quotas(&[id]).await.unwrap().pop().unwrap();
+        (observation.observed_at, observation.quota)
+    };
+    let original_evidence = paused_evidence().await;
     let selection = AccountProxySelection::Saved(created.id.clone());
     admin
         .update_account(update("acct_one", selection.clone()), &context)
@@ -1006,6 +1039,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
         sqlx::query_as::<_, (String, Option<String>, Option<String>, i64)>("select id, outbound_proxy_id, outbound_proxy_url, credential_revision from provider_accounts order by id")
             .fetch_all(&database.pool).await.unwrap()
     };
+    assert_eq!(paused_evidence().await, original_evidence);
     let untested = read().await;
     assert_eq!(untested[0].1.as_deref(), Some(created.id.as_str()));
     assert_eq!(untested[0].2.as_deref(), Some(old_proxy.expose_url()));
@@ -1088,6 +1122,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
         .record;
     assert!(edited.last_test.is_none());
     assert!(edited.last_test_at.is_none());
+    assert_eq!(paused_evidence().await, original_evidence);
     assert!(
         read()
             .await
@@ -1146,6 +1181,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
             .all(|row| row.1.is_none() && row.2.is_none() && row.3 == 1)
     );
     assert!(store.get(&created.id).await.is_err());
+    assert_eq!(paused_evidence().await, original_evidence);
     let audits: Vec<serde_json::Value> =
         sqlx::query_scalar("select to_jsonb(a) from admin_audit_events a")
             .fetch_all(&database.pool)
