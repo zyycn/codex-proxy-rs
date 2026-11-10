@@ -193,6 +193,13 @@ pub(super) fn error_payload(value: &Value, status: StatusCode) -> Value {
         .pointer("/response/error")
         .or_else(|| value.get("error"))
         .unwrap_or(value);
+    // 转接 Responses 的互联拒绝时保留机器码，下一节点需能识别相同的环路
+    if gateway_protocol::peer::is_routing_loop(
+        Some(status.as_u16()),
+        error.get("code").and_then(Value::as_str),
+    ) {
+        return json!({"type": "error", "error": error});
+    }
     let message = error
         .get("message")
         .and_then(Value::as_str)

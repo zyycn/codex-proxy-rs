@@ -1,6 +1,7 @@
 //! 路由外层只适配 HTTP 值和正文，不解释插件协议或业务策略
 
 pub(crate) mod headers;
+mod peer_route;
 pub(crate) mod websocket;
 
 use std::{
@@ -110,6 +111,7 @@ pub(crate) fn wrap(
     timeout: Option<Duration>,
     request_id_header: HeaderName,
     settings: SettingsSource,
+    peer_node: HeaderValue,
 ) -> Router {
     // Axum 的 route layer 在匹配后运行；外层 fallback service 才能让改写后的 URI 重新匹配内层路由
     Router::new().fallback_service(tower::service_fn(move |mut request: Request<Body>| {
@@ -136,7 +138,10 @@ pub(crate) fn wrap(
                     .and_then(|source| source(snapshot.as_deref()))
             });
         let request_id_header = request_id_header.clone();
-        async move { Ok::<_, Infallible>(handle(router, request, plan, request_id_header).await) }
+        let peer_node = peer_node.clone();
+        async move {
+            Ok::<_, Infallible>(handle(router, request, plan, request_id_header, peer_node).await)
+        }
     }))
 }
 
@@ -145,13 +150,23 @@ async fn handle(
     mut request: Request<Body>,
     plan: Option<FrozenMiddlewarePlan>,
     request_id_header: HeaderName,
+    peer_node: HeaderValue,
 ) -> Response {
     let started = Instant::now();
     let inherited = request.extensions_mut().remove::<contract::Context>();
     if let Some(plan) = plan.as_ref().filter(|plan| plan.has_websocket()) {
         request.extensions_mut().insert(plan.clone());
     }
-    let context = inherited.unwrap_or_else(|| {
+    let context = if let Some(context) = inherited {
+        request
+            .headers_mut()
+            .remove(gateway_protocol::peer::ROUTE_HEADER);
+        context
+    } else {
+        let path = match peer_route::enter(request.headers_mut(), peer_node) {
+            Ok(path) => path,
+            Err(error) => return error.response(request.uri().path()),
+        };
         let request_id = request
             .headers()
             .get(&request_id_header)
@@ -164,11 +179,12 @@ async fn handle(
             request_id,
             parent_call_id: None,
             extensions: gateway_core::engine::extensions::ExtensionCallScope::default()
-                .with_request(crate::request_context::capture(&request)),
+                .with_request(crate::request_context::capture(&request))
+                .with_peer_route(path),
             cancellation: CancellationToken::new(),
             plan: plan.clone(),
         }
-    });
+    };
     let context = contract::Context {
         plan: plan.clone(),
         ..context

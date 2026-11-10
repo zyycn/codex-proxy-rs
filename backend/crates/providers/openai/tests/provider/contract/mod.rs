@@ -1670,7 +1670,7 @@ fn context_with_pricing(
     fast_mode: FastMode,
     pricing: gateway_core::metering::PricingOverrides,
 ) -> AttemptContext {
-    AttemptContext::new(
+    context_for_request(
         RequestAttemptContext::new(
             ModelRequestId::new(request_id).expect("request id"),
             ClientApiKeyId::new("key_openai_contract").expect("client key id"),
@@ -1678,6 +1678,16 @@ fn context_with_pricing(
         .with_fast_mode(fast_mode)
         .with_pricing(Arc::new(pricing))
         .with_request_location(Some(global_request_location())),
+        cancellation,
+    )
+}
+
+fn context_for_request(
+    request: RequestAttemptContext,
+    cancellation: CancellationToken,
+) -> AttemptContext {
+    AttemptContext::new(
+        request,
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
@@ -10825,6 +10835,7 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
             &scope,
             "codex",
             "0.154.0",
+            None,
         )
         .await
         .expect("native catalog")
@@ -11492,6 +11503,10 @@ async fn api_key_native_endpoints_preserve_bodies_headers_and_own_base_url() {
             Mock::given(method("POST"))
                 .and(path(format!("{prefix}{endpoint}")))
                 .and(header("authorization", "Bearer sk-api-test-only"))
+                .and(header(
+                    gateway_protocol::peer::ROUTE_HEADER,
+                    "0123456789abcdef0123456789abcdef",
+                ))
                 .and(body_bytes(body.to_vec()))
                 .respond_with(
                     ResponseTemplate::new(200)
@@ -11516,8 +11531,18 @@ async fn api_key_native_endpoints_preserve_bodies_headers_and_own_base_url() {
             let mut stream = Arc::clone(&provider)
                 .execute(
                     planned_provider_endpoint_request("openai", operation),
-                    context(
-                        &format!("req_api_endpoint_{index}"),
+                    context_for_request(
+                        RequestAttemptContext::new(
+                            ModelRequestId::new(format!("req_api_endpoint_{index}")).unwrap(),
+                            ClientApiKeyId::new("key_openai_contract").unwrap(),
+                        )
+                        .with_request_location(Some(global_request_location()))
+                        .with_extension_scope(
+                            gateway_core::engine::extensions::ExtensionCallScope::default()
+                                .with_peer_route(
+                                    "0123456789abcdef0123456789abcdef".parse().unwrap(),
+                                ),
+                        ),
                         CancellationToken::new(),
                     ),
                 )
@@ -11726,6 +11751,7 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
                 &contract_account_scope(),
                 "codex",
                 "1.0.0",
+                None,
             )
             .await
             .unwrap()

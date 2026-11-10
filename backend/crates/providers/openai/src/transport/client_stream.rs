@@ -344,6 +344,17 @@ impl CodexBackendClient {
             connection_profile.push('\0');
             connection_profile.push_str(&profile);
         }
+        // 上游按握手继承整条路径，不能把本轮请求交给其他路径建立的连接
+        if let Some((_, route)) = websocket_create
+            .connection()
+            .headers()
+            .iter()
+            .find(|(name, _)| name == gateway_protocol::peer::ROUTE_HEADER)
+        {
+            use sha2::{Digest, Sha256};
+            connection_profile.push_str("\0peer:");
+            connection_profile.push_str(&hex::encode(Sha256::digest(route.as_bytes())));
+        }
         let pool_key =
             self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);

@@ -1,5 +1,6 @@
 //! HTTP 与 WebSocket 中间件测试入口及请求生命周期替身
 
+mod peer_route;
 mod session;
 mod websocket;
 
@@ -47,6 +48,7 @@ enum Mode {
     },
     Service,
     Echo,
+    PeerRoute,
     Slow {
         clear_timeout: bool,
     },
@@ -234,6 +236,25 @@ impl MiddlewarePlan for Plan {
                     *request.uri_mut() = "/healthz".parse().unwrap();
                     *request.method_mut() = http::Method::GET;
                     next.run(request).await
+                }
+                Mode::PeerRoute => {
+                    let header = gateway_protocol::peer::ROUTE_HEADER;
+                    assert!(!request.headers().contains_key(header));
+                    assert!(
+                        context
+                            .extensions
+                            .request()
+                            .unwrap()
+                            .headers
+                            .iter()
+                            .all(|h| h.name() != header)
+                    );
+                    let mut response = contract::Response::new(request.into_body());
+                    response.headers_mut().insert(
+                        "test-route",
+                        context.extensions.peer_route().unwrap().clone(),
+                    );
+                    Ok(response)
                 }
                 Mode::Echo => {
                     let (parts, body) = request.into_parts();

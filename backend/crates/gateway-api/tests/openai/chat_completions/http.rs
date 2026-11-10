@@ -504,6 +504,7 @@ async fn early_middleware_failure_is_recorded_at_ingress_without_a_reserved_mode
     let diagnostics = Arc::new(crate::support::RecordingDiagnostics::default());
     let admin = crate::admin::AdminTestFixture::new().await;
     let router = gateway_api::initialize(
+        uuid::Uuid::nil(),
         gateway_api::ApiConfig {
             asset_directory: env!("CARGO_MANIFEST_DIR").into(),
             cors_allowed_origins: Vec::new(),

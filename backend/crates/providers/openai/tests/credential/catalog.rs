@@ -209,7 +209,7 @@ async fn client_catalog_is_account_and_version_scoped_and_keeps_original_objects
         ),
     ] {
         let models = service
-            .client_model_catalog(&CLIENT_KEY, &client_scope(&accounts), version)
+            .client_model_catalog(&CLIENT_KEY, &client_scope(&accounts), version, None)
             .await
             .expect("catalog");
         assert_eq!(
@@ -231,7 +231,7 @@ async fn client_catalog_is_account_and_version_scoped_and_keeps_original_objects
     }
     assert!(
         service
-            .client_model_catalog(&CLIENT_KEY, &client_scope(&[]), "0.154.0")
+            .client_model_catalog(&CLIENT_KEY, &client_scope(&[]), "0.154.0", None)
             .await
             .is_err()
     );
@@ -256,20 +256,20 @@ async fn client_catalog_coalesces_reads_and_invalidates_on_etag_expiry_and_expli
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     let (first, second) = tokio::join!(
-        service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0"),
-        service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None),
+        service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
     );
     assert_eq!(first.expect("first"), second.expect("second"));
     service
         .invalidate()
         .expect("reset without a routing snapshot");
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
         .await
         .expect("after reset");
     assert!(service.observe_response_etag("catalog-new").expect("ETag"));
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
         .await
         .expect("after ETag");
     assert!(
@@ -278,14 +278,14 @@ async fn client_catalog_coalesces_reads_and_invalidates_on_etag_expiry_and_expli
             .expect("same ETag")
     );
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
         .await
         .expect("still cached");
     tokio::time::pause();
     tokio::time::advance(std::time::Duration::from_secs(301)).await;
     tokio::time::resume();
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
         .await
         .expect("after TTL");
     server.verify().await;
@@ -315,7 +315,7 @@ async fn client_catalog_cache_does_not_survive_credential_rotation() {
     }
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     let first = service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
         .await
         .expect("old");
     store
@@ -324,7 +324,7 @@ async fn client_catalog_cache_does_not_survive_credential_rotation() {
         .await
         .expect("rotate");
     let second = service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
         .await
         .expect("new");
     assert_ne!(first, second);
@@ -349,7 +349,7 @@ async fn failed_client_catalog_never_falls_back_to_an_out_of_scope_account_or_ca
     for _ in 0..2 {
         assert!(
             service
-                .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+                .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
                 .await
                 .is_err()
         );
@@ -394,16 +394,16 @@ async fn client_catalog_evicts_old_entries_after_32_distinct_versions() {
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     for patch in 0..33 {
         service
-            .client_model_catalog(&CLIENT_KEY, &scope, &format!("0.154.{patch}"))
+            .client_model_catalog(&CLIENT_KEY, &scope, &format!("0.154.{patch}"), None)
             .await
             .expect("catalog");
     }
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.32")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.32", None)
         .await
         .expect("newest is cached");
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
         .await
         .expect("oldest was evicted");
     server.verify().await;
@@ -424,7 +424,7 @@ async fn client_catalog_retries_after_short_failure_cache_expires() {
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     assert!(
         service
-            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
             .await
             .is_err()
     );
@@ -437,7 +437,7 @@ async fn client_catalog_retries_after_short_failure_cache_expires() {
         .await;
     assert!(
         service
-            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
             .await
             .is_err()
     );
@@ -445,7 +445,7 @@ async fn client_catalog_retries_after_short_failure_cache_expires() {
     tokio::time::advance(std::time::Duration::from_secs(6)).await;
     tokio::time::resume();
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0", None)
         .await
         .expect("recovered after failure TTL");
     server.verify().await;
@@ -635,6 +635,7 @@ async fn failed_oauth_catalog_does_not_hide_healthy_peers_or_borrow_their_models
             &CLIENT_KEY,
             &client_scope(&[failed.clone(), healthy]),
             "0.154.0",
+            None,
         )
         .await
         .unwrap();
@@ -907,6 +908,7 @@ async fn api_key_catalogs_are_isolated_and_join_oauth_without_claiming_native_me
             &CLIENT_KEY,
             &client_scope(&[oauth_account, a.clone()]),
             "1.0.0",
+            None,
         )
         .await
         .unwrap();
@@ -939,6 +941,42 @@ async fn api_key_catalogs_are_isolated_and_join_oauth_without_claiming_native_me
         service.cached_account_models(&b).unwrap().unwrap(),
         ["api-second"]
     );
+}
+
+#[tokio::test]
+async fn api_catalog_keeps_peer_paths_separate_even_for_the_same_key_and_version() {
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key(
+            "acct_api",
+            upstream.uri(),
+            provider_openai::credential::ResponsesTransport::Http,
+        )
+        .await;
+    let scope = client_scope(&[store.account("acct_api").unwrap()]);
+    let service = service_with_catalog_cache(&store, upstream.uri(), catalog_cache());
+    let path_a = "00000000000000000000000000000001";
+    let path_b = "00000000000000000000000000000002";
+    for (route, status) in [(path_a, 200), (path_b, 508)] {
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(header(gateway_protocol::peer::ROUTE_HEADER, route))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .set_body_json(serde_json::json!({"data":[{"id":"test-model"}]})),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+    }
+    let (a, b) = (path_a.parse().unwrap(), path_b.parse().unwrap());
+    let (ok, cycle) = tokio::join!(
+        service.client_model_catalog(&CLIENT_KEY, &scope, "1.0.0", Some(&a)),
+        service.client_model_catalog(&CLIENT_KEY, &scope, "1.0.0", Some(&b)),
+    );
+    assert_eq!(ok.unwrap().len(), 1);
+    assert!(cycle.is_err());
 }
 
 #[tokio::test]
@@ -995,8 +1033,8 @@ async fn api_key_client_catalog_negotiates_and_preserves_versioned_native_object
             .mount(&upstream)
             .await;
         let (first, concurrent) = tokio::join!(
-            service.client_model_catalog(&CLIENT_KEY, &scope, version),
-            service.client_model_catalog(&CLIENT_KEY, &scope, version)
+            service.client_model_catalog(&CLIENT_KEY, &scope, version, None),
+            service.client_model_catalog(&CLIENT_KEY, &scope, version, None)
         );
         for models in [first, concurrent] {
             let models = models.expect("native client catalog");
@@ -1012,7 +1050,7 @@ async fn api_key_client_catalog_negotiates_and_preserves_versioned_native_object
         }
     }
     let cached = service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.155.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.155.0", None)
         .await
         .expect("separate version cache");
     let ProviderModelContent::Native(payload) = &cached[0].content else {
@@ -1022,7 +1060,7 @@ async fn api_key_client_catalog_negotiates_and_preserves_versioned_native_object
     assert_eq!(document["default_reasoning_level"], "high");
     assert!(
         service
-            .client_model_catalog(&CLIENT_KEY, &client_scope(&[]), "0.155.0")
+            .client_model_catalog(&CLIENT_KEY, &client_scope(&[]), "0.155.0", None)
             .await
             .is_err()
     );
@@ -1066,7 +1104,7 @@ async fn api_key_native_catalog_preserves_unknown_reasoning_and_background_entit
         ["z-unknown-reasoning", "vendor/model"]
     );
     let models = service
-        .client_model_catalog(&CLIENT_KEY, &client_scope(&[account]), "0.155.0")
+        .client_model_catalog(&CLIENT_KEY, &client_scope(&[account]), "0.155.0", None)
         .await
         .unwrap();
     assert_eq!(
@@ -1119,6 +1157,7 @@ async fn api_key_client_catalog_distinguishes_filtered_empty_from_fetch_failure(
                 &CLIENT_KEY,
                 &client_scope(&[store.account("acct_api").unwrap()]),
                 "0.155.0",
+                None,
             )
             .await;
         if status == 200 {
@@ -1185,7 +1224,7 @@ async fn api_key_client_catalog_keeps_native_sources_stable_and_account_scoped()
         (&accounts[2..], "Second native"),
     ] {
         let models = service
-            .client_model_catalog(&CLIENT_KEY, &client_scope(scope_accounts), "0.155.0")
+            .client_model_catalog(&CLIENT_KEY, &client_scope(scope_accounts), "0.155.0", None)
             .await
             .unwrap();
         assert_eq!(models.len(), 1);
@@ -1225,7 +1264,7 @@ async fn api_key_client_catalog_cache_is_invalidated_by_credential_revision() {
             .mount(&upstream)
             .await;
         let models = service
-            .client_model_catalog(&CLIENT_KEY, &scope, "0.155.0")
+            .client_model_catalog(&CLIENT_KEY, &scope, "0.155.0", None)
             .await
             .unwrap();
         assert_eq!(models[0].model.as_str(), model);
@@ -1303,7 +1342,7 @@ async fn api_key_catalog_hides_only_known_specialized_models_in_codex_picker() {
     }
     let account = store.account("acct_api").expect("API account");
     let models = service
-        .client_model_catalog(&CLIENT_KEY, &client_scope(&[account]), "1.0.0")
+        .client_model_catalog(&CLIENT_KEY, &client_scope(&[account]), "1.0.0", None)
         .await
         .expect("client catalog");
     let actual_visibility = models.iter().map(|model| {
@@ -1401,6 +1440,7 @@ async fn api_key_catalog_does_not_replace_native_metadata_for_shared_models() {
             &CLIENT_KEY,
             &client_scope(&[oauth_account, api_account.clone()]),
             "1.0.0",
+            None,
         )
         .await
         .expect("mixed client catalog");
@@ -1414,6 +1454,7 @@ async fn api_key_catalog_does_not_replace_native_metadata_for_shared_models() {
             &CLIENT_KEY,
             &client_scope(std::slice::from_ref(&api_account)),
             "1.0.0",
+            None,
         )
         .await
         .expect("API client catalog");
@@ -1486,7 +1527,7 @@ async fn slow_api_key_catalogs_share_a_deadline_and_preserve_healthy_catalogs() 
     let execution = tokio::spawn(async move {
         tokio::time::timeout(Duration::from_secs(17), async {
             tokio::join!(
-                service.client_model_catalog(&CLIENT_KEY, &scope, "1.0.0"),
+                service.client_model_catalog(&CLIENT_KEY, &scope, "1.0.0", None),
                 service.refresh_account_catalog(&slow_id)
             )
         })
@@ -1683,7 +1724,7 @@ async fn client_catalog_byte_budget_evicts_completed_entries_without_rejecting_l
         "small",
     ] {
         let models = service
-            .client_model_catalog(&CLIENT_KEY, &scope, version)
+            .client_model_catalog(&CLIENT_KEY, &scope, version, None)
             .await
             .expect("large catalog delivered");
         assert_eq!(models.len(), 1);
@@ -1737,13 +1778,13 @@ async fn installation_seed_partitions_catalog_identity_and_cache_by_key_and_acco
         (&key_b, &first, None),
     ] {
         service
-            .client_model_catalog(key, &scoped(account, seed), "1.0.0")
+            .client_model_catalog(key, &scoped(account, seed), "1.0.0", None)
             .await
             .unwrap();
     }
     // 重建进程内服务仍产生同一身份，未配置种子的不同 Key 共用账号目录缓存
     service_with_catalog_cache(&store, server.uri(), catalog_cache())
-        .client_model_catalog(&key_a, &scoped(&first, Some(seed)), "1.0.0")
+        .client_model_catalog(&key_a, &scoped(&first, Some(seed)), "1.0.0", None)
         .await
         .unwrap();
     let requests = server.received_requests().await.unwrap();

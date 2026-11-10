@@ -267,7 +267,6 @@ impl ClientRoutingScope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrozenAccountScope {
     allow_image_generation: bool,
-    direct_accounts_only: bool,
     fast_mode: FastMode,
     request_profiles: BTreeMap<ProviderKind, super::OpaqueProviderData>,
     directory: Arc<RuntimeAccountDirectory>,
@@ -278,27 +277,16 @@ pub struct FrozenAccountScope {
 }
 
 impl FrozenAccountScope {
-    /// 枚举冻结权限实际允许的账号，保留所有既有直连和分组约束
+    /// 枚举冻结权限实际允许的账号，保留所有分组和请求局部约束
     pub fn allowed_account_ids(&self) -> impl Iterator<Item = &ProviderAccountId> {
         self.directory.accounts.keys().filter(|id| self.allows(id))
     }
 
-    /// 互联限制与原账号范围取交集，分组变更和请求局部重选均不能扩大它
+    /// 共享 Key 删除最后一个分组后保持空池，不得回退到全池
     #[must_use]
-    pub fn with_direct_accounts_only(mut self, enabled: bool) -> Self {
-        self.direct_accounts_only = enabled;
-        if enabled {
-            self.provider_kinds = Arc::new(
-                self.provider_kinds
-                    .iter()
-                    .filter(|provider| {
-                        self.directory.accounts.iter().any(|(id, account)| {
-                            account.provider_kind() == *provider && self.allows(id)
-                        })
-                    })
-                    .cloned()
-                    .collect(),
-            );
+    pub fn requiring_groups(mut self) -> Self {
+        if matches!(self.client_scope, ClientRoutingScope::AllAccounts) {
+            self.provider_kinds = Arc::default();
         }
         self
     }
@@ -355,7 +343,6 @@ impl FrozenAccountScope {
         };
         Self {
             allow_image_generation: true,
-            direct_accounts_only: false,
             fast_mode: FastMode::Default,
             request_profiles: BTreeMap::new(),
             directory,
@@ -415,10 +402,7 @@ impl FrozenAccountScope {
         let Some(account) = self.directory.account(account_id) else {
             return false;
         };
-        if (self.direct_accounts_only
-            && (!account.is_direct_account()
-                || matches!(self.client_scope, ClientRoutingScope::AllAccounts)))
-            || self.excluded_account_ids.contains(account_id)
+        if self.excluded_account_ids.contains(account_id)
             || !self.provider_kinds.contains(account.provider_kind())
             || self
                 .allowed_account_ids
@@ -445,16 +429,6 @@ impl FrozenAccountScope {
                 .directory
                 .account(account_id)
                 .is_some_and(|account| account.model_access.allows(upstream_model))
-    }
-
-    /// 当前凭据类型必须与已授权的直连事实相同，快照发布间隙不能转成代理账号
-    #[must_use]
-    pub fn allows_current_account(&self, account: &super::ProviderAccount) -> bool {
-        self.allows(account.id())
-            && (!self.direct_accounts_only
-                || self.directory.account(account.id()).is_some_and(|frozen| {
-                    frozen.direct_authentication_kind() == Some(account.authentication_kind())
-                }))
     }
 
     /// 目录按整个授权账号池过滤，不能只看用于获取元数据的账号政策

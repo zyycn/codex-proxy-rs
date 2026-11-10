@@ -1484,7 +1484,7 @@ fn facts(config_revision: u64, observed_current_revision: u64) -> SnapshotFacts 
 }
 
 #[test]
-fn peer_policy_compilation_keeps_only_explicitly_shared_direct_accounts() {
+fn peer_policy_compilation_keeps_all_accounts_in_explicit_enabled_groups() {
     use gateway_core::{
         account::ProviderAccountId, policy::ClientPeerSharing, routing::AccountGroupId,
     };
@@ -1561,7 +1561,7 @@ fn peer_policy_compilation_keeps_only_explicitly_shared_direct_accounts() {
         .unwrap();
         let scope = snapshot.client_policies().next().unwrap().account_scope();
         assert_eq!(scope.allows(&direct), expected);
-        assert!(!scope.allows(&proxy));
+        assert_eq!(scope.allows(&proxy), expected);
         assert_eq!(scope.provider_kinds().is_empty(), !expected);
     }
 }

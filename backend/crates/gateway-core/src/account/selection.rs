@@ -908,7 +908,7 @@ impl AccountSelector {
         if context
             .account_scope
             .as_ref()
-            .is_some_and(|scope| !scope.allows_current_account(&candidate.account))
+            .is_some_and(|scope| !scope.allows(candidate.account.id()))
         {
             return Some(AccountSchedulingBlocker::OutsideClientScope);
         }
