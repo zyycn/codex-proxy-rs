@@ -166,10 +166,11 @@ const attempts = computed(() => (props.record?.attempts ?? []).map(attempt => ({
     },
     {
       label: t('usage.error.clientResponse'),
-      value: attempt.downstreamCommitted
-        ? t('usage.error.responseStarted')
-        : t('usage.error.responseNotStarted'),
-      mono: true,
+      value: attempt.downstreamCommitted == null
+        ? t('usage.error.responseNotRecorded')
+        : attempt.downstreamCommitted
+          ? t('usage.error.responseStarted')
+          : t('usage.error.responseNotStarted'),
     },
   ],
 })))
@@ -200,9 +201,6 @@ const attempts = computed(() => (props.record?.attempts ?? []).map(attempt => ({
         <h3 :class="panelTitleClass">
           {{ t('usage.error.attempts') }}
         </h3>
-        <p v-if="!record.attemptsComplete" class="mt-3 mb-0 text-z-sm text-z-text-tertiary">
-          {{ t('usage.error.attemptRecordMayBeIncomplete') }}
-        </p>
         <p v-if="!attempts.length" class="mt-3 mb-0 text-z-sm text-z-text-secondary">
           {{ t('usage.error.noAttempts') }}
         </p>

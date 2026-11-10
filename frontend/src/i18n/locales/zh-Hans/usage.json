@@ -286,7 +286,6 @@
       "requestContext": "请求上下文",
       "errorLocation": "关联标识",
       "attempts": "尝试记录",
-      "attemptRecordMayBeIncomplete": "尝试记录可能不完整",
       "attempt": "尝试 {index}",
       "diagnosticData": "诊断数据",
       "responseContent": "响应内容",
@@ -299,9 +298,9 @@
       "clientHttpStatus": "客户端 {status}",
       "origin": {
         "proxy": "代理处理",
-        "upstream": "上游返回",
+        "upstream": "上游响应",
         "connection": "上游连接",
-        "unknown": "来源未记录",
+        "unknown": "来源未知",
         "connectionHint": "连接发生错误，现有记录无法确定由哪一方引起",
         "unknownHint": "现有记录不足以区分代理与上游"
       },
@@ -318,8 +317,9 @@
       "recoveryExplanation": "已关联到后续成功请求，本条仍保留原始失败结果",
       "noAttempts": "未记录执行尝试",
       "clientResponse": "客户端响应",
-      "responseStarted": "已开始响应",
-      "responseNotStarted": "未开始响应"
+      "responseStarted": "已开始",
+      "responseNotStarted": "未开始",
+      "responseNotRecorded": "未记录"
     },
     "insights": {
       "useStatisticalObservations": "使用统计观测"

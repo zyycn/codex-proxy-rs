@@ -109,6 +109,7 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageListRecord
     id: options.id,
     logicalOutcome: 'succeeded',
     errorCode: null,
+    errorOrigin: 'unknown',
     clientStatusCode: null,
     upstreamStatusCode: null,
     errorKind: null,

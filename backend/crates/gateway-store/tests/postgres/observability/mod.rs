@@ -2069,16 +2069,18 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
         Some("upstream_req_success")
     );
     assert_eq!(detail.attempts.len(), 1);
+    assert_eq!(detail.attempts[0].downstream_committed, Some(true));
     assert_eq!(
         detail.attempts[0].outcome,
         admin_observability::RequestOutcome::Succeeded
     );
-    assert!(
-        store
-            .usage_record_detail("req_observe_failed")
-            .await
-            .is_ok()
-    );
+    let failed = store
+        .usage_record_detail("req_observe_failed")
+        .await
+        .expect("failed usage detail");
+    assert_eq!(failed.attempts.len(), 2);
+    assert_eq!(failed.attempts[0].downstream_committed, None);
+    assert_eq!(failed.attempts[1].downstream_committed, Some(false));
     assert!(
         store
             .usage_record_detail("req_observe_uncommitted")

@@ -43,6 +43,7 @@ const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_MIN_SAMPLE_SIZE: u64 = 10;
 const HEALTH_TIMELINE_UNAVAILABLE_FAILURE_THRESHOLD: u64 = 3;
 const HEALTH_TIMELINE_STABLE_RELIABILITY: f64 = 95.0;
+mod errors;
 mod export;
 mod store_cache;
 pub(crate) use store_cache::CachedObservabilityStore;

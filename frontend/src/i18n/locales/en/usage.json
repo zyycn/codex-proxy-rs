@@ -286,7 +286,6 @@
       "requestContext": "Request context",
       "errorLocation": "Correlation IDs",
       "attempts": "Attempt history",
-      "attemptRecordMayBeIncomplete": "Attempt record may be incomplete",
       "attempt": "Attempt {index}",
       "diagnosticData": "Diagnostic data",
       "responseContent": "Response content",
@@ -299,7 +298,7 @@
       "clientHttpStatus": "Client {status}",
       "origin": {
         "proxy": "Proxy",
-        "upstream": "Upstream",
+        "upstream": "Upstream response",
         "connection": "Upstream connection",
         "unknown": "Unknown source",
         "connectionHint": "The connection failed, but the recorded evidence does not identify which side caused it",
@@ -318,8 +317,9 @@
       "recoveryExplanation": "A later successful request was linked, this record retains the original failure",
       "noAttempts": "No execution attempts were recorded",
       "clientResponse": "Client response",
-      "responseStarted": "Response started",
-      "responseNotStarted": "Response not started"
+      "responseStarted": "Started",
+      "responseNotStarted": "Not started",
+      "responseNotRecorded": "Not recorded"
     },
     "insights": {
       "useStatisticalObservations": "Use statistical observations"

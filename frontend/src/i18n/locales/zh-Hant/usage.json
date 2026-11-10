@@ -286,7 +286,6 @@
       "requestContext": "請求上下文",
       "errorLocation": "關聯標識",
       "attempts": "嘗試記錄",
-      "attemptRecordMayBeIncomplete": "嘗試記錄可能不完整",
       "attempt": "嘗試 {index}",
       "diagnosticData": "診斷數據",
       "responseContent": "響應內容",
@@ -299,9 +298,9 @@
       "clientHttpStatus": "用戶端 {status}",
       "origin": {
         "proxy": "代理處理",
-        "upstream": "上游返回",
+        "upstream": "上游回應",
         "connection": "上游連接",
-        "unknown": "來源未記錄",
+        "unknown": "來源未知",
         "connectionHint": "連接發生錯誤，現有記錄無法確定由哪一方引起",
         "unknownHint": "現有記錄不足以區分代理與上游"
       },
@@ -318,8 +317,9 @@
       "recoveryExplanation": "已關聯到後續成功請求，本條仍保留原始失敗結果",
       "noAttempts": "未記錄執行嘗試",
       "clientResponse": "客戶端響應",
-      "responseStarted": "已開始響應",
-      "responseNotStarted": "未開始響應"
+      "responseStarted": "已開始",
+      "responseNotStarted": "未開始",
+      "responseNotRecorded": "未記錄"
     },
     "insights": {
       "useStatisticalObservations": "使用統計觀測"

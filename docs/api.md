@@ -2620,13 +2620,18 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 与原始上游 `errorCode` 分开。`continuationUnavailableReason` 和 `upstreamConnectionExitReason`
 保留已记录的续接及连接退出原因，缺失字段为 `null`，不根据错误文案推断。
 `recovered` 表示已关联到后续成功请求，原请求的 `logicalOutcome` 保持不变。
-这些字段用于展示来源、错误码和恢复状态，原始错误信息及受控诊断仍按各自合同保留
+`errorOrigin` 由管理用例统一推导，可取 `proxy`、`upstream`、`connection`、`unknown`。
+已记录的上游错误事实优先于本地分类；客户端 HTTP 状态和错误文案不参与来源推断，事实不足时保持 `unknown`。
+该字段表示错误位置，不表示责任归属，也不改变执行分类、重试或原始错误信息
 
 `upstreamError` 仅在请求详情返回，从已保存的上游 JSON 投影 `code`、`errorType`、`message`、`param`，
 或 WS 关闭帧的 `closeReason`、`lastEventType`；不重新分类错误，也不包含原始请求、任意响应头或本地原因链。
 缺失、非 JSON 或未识别的结构返回 `null`，完整受控诊断通过诊断包获取。
 详情的 `message` 是网关摘要，不等同于上游 `upstreamError.message`；
 `retryAfterMs` 是已记录的重试等待毫秒数，未记录时为 `null`
+
+详情 `attempts[].downstreamCommitted` 为 `true` 时表示已开始客户端响应，为 `false` 时表示未开始。
+中间尝试的运维事件未保存交付边界，返回 `null`；不能据此推断客户端尚未收到响应
 
 诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。诊断按请求量降序返回最多 100 项，

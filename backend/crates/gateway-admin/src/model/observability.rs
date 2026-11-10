@@ -804,6 +804,27 @@ pub struct DashboardObservation {
     pub recent_requests: Vec<UsageListRecord>,
 }
 
+/// 根据已记录事实推导的错误位置，不表示责任归属
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageErrorOrigin {
+    Proxy,
+    Upstream,
+    Connection,
+    Unknown,
+}
+
+impl UsageErrorOrigin {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Proxy => "proxy",
+            Self::Upstream => "upstream",
+            Self::Connection => "connection",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// 使用记录表格的窄读模型
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageListRecord {
@@ -1003,7 +1024,8 @@ pub struct UsageAttempt {
     pub upstream_transport: Option<String>,
     pub upstream_send_state: Option<String>,
     pub outcome: RequestOutcome,
-    pub downstream_committed: bool,
+    /// 未记录尝试交付边界时保持未知，不以 false 代替
+    pub downstream_committed: Option<bool>,
     pub status_code: Option<u16>,
     pub provider_error_code: Option<String>,
     pub failure_kind: Option<String>,

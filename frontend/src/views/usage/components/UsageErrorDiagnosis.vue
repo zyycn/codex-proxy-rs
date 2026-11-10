@@ -57,13 +57,13 @@ const successfulHttpStatus = computed(() => [props.record.clientStatusCode, prop
 </script>
 
 <template>
-  <section class="grid min-w-0 gap-3">
-    <section class="min-w-0 rounded-z-card bg-z-error-container px-4 py-3.5 text-z-error-on-container">
-      <div class="flex flex-wrap items-center gap-2">
-        <span class="rounded-z-sm px-2 py-1 text-z-sm font-bold" :class="origin.className">{{ origin.label }}</span>
+  <section class="min-w-0 overflow-hidden rounded-z-card bg-z-fill-quaternary">
+    <section class="min-w-0 bg-z-error-container px-4 py-3.5 text-z-error-on-container">
+      <div class="flex flex-wrap items-center gap-3">
         <h3 class="m-0 text-z-sm font-heavy">
           {{ title }}
         </h3>
+        <span class="text-z-xs font-emphasis text-z-text-secondary">{{ origin.label }}</span>
         <span v-if="record.recovered" class="rounded-z-sm bg-z-success-container px-2 py-1 text-z-xs font-emphasis text-z-success-on-container">
           {{ t('usage.error.recovered') }}
         </span>
@@ -83,14 +83,14 @@ const successfulHttpStatus = computed(() => [props.record.clientStatusCode, prop
       </p>
     </section>
 
-    <div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 text-z-sm text-z-text-secondary">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3.5 text-z-sm text-z-text-secondary">
       <span class="font-bold">{{ t('usage.error.clientResult') }}</span>
       <span>{{ usageTransportType(record.clientTransport) }}</span>
       <span v-if="record.clientStatusCode != null" class="inline-flex items-center gap-2" :title="t('usage.error.clientStatusCode')">
         HTTP <UsageStatusCodeBadge :status-code="record.clientStatusCode" />
       </span>
       <span v-else>{{ t('usage.error.noHttpStatus') }}</span>
-      <span v-if="successfulHttpStatus" class="basis-full text-z-xs">{{ t('usage.error.httpStatusHint') }}</span>
+      <span v-if="successfulHttpStatus" class="basis-full text-z-xs leading-relaxed">{{ t('usage.error.httpStatusHint') }}</span>
     </div>
   </section>
 </template>

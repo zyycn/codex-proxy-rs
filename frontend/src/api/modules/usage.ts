@@ -80,7 +80,10 @@ export interface UsageRecordMetadata {
 
 export type UsageRecordStatus = 'success' | 'error' | 'all'
 
+export type UsageErrorOrigin = 'proxy' | 'upstream' | 'connection' | 'unknown'
+
 export interface UsageErrorFacts {
+  errorOrigin: UsageErrorOrigin
   errorCode: string | null
   errorKind: string | null
   websocketCloseCode: number | null
@@ -203,7 +206,7 @@ export interface UsageAttempt {
   transport: string
   sendState: string
   outcome: string
-  downstreamCommitted: boolean
+  downstreamCommitted: boolean | null
   statusCode: number | null
   providerErrorCode: string | null
   failureClass: string | null

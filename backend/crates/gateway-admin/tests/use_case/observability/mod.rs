@@ -34,6 +34,8 @@ use gateway_admin::{
     ports::store::{AdminStoreResult, ObservabilityStore, SettingsStore},
 };
 
+mod errors;
+
 #[test]
 fn external_observability_range_accepts_exactly_366_days() {
     let end = Utc::now();

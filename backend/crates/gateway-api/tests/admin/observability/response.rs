@@ -425,7 +425,7 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
                 upstream_transport: Some("http_sse".to_owned()),
                 upstream_send_state: Some("sent".to_owned()),
                 outcome: gateway_admin::model::observability::RequestOutcome::Failed,
-                downstream_committed: false,
+                downstream_committed: None,
                 status_code: Some(429),
                 provider_error_code: Some("rate_limit".to_owned()),
                 failure_kind: Some("rate_limited".to_owned()),
@@ -462,6 +462,8 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
         .await
         .expect("usage detail body");
     let value: serde_json::Value = serde_json::from_slice(&body).expect("usage detail JSON");
+    assert_eq!(value["data"]["errorOrigin"], "upstream");
+    assert!(value["data"]["attempts"][0]["downstreamCommitted"].is_null());
     assert_eq!(value["data"]["errorKind"], "continuation_recovery_required");
     assert_eq!(value["data"]["errorCode"], "previous_response_not_found");
     assert_eq!(
@@ -1116,6 +1118,9 @@ async fn usage_route_projects_request_facts_and_billing() {
     assert_eq!(value["data"]["items"][3]["errorCode"], "server_error");
     assert_eq!(value["data"]["items"][3]["clientStatusCode"], 503);
     assert_eq!(value["data"]["items"][3]["upstreamStatusCode"], 429);
+    assert_eq!(value["data"]["items"][3]["errorOrigin"], "upstream");
+    assert_eq!(value["data"]["items"][4]["errorOrigin"], "upstream");
+    assert_eq!(value["data"]["items"][0]["errorOrigin"], "unknown");
     assert_eq!(
         value["data"]["items"][4].get("upstreamStatusCode"),
         Some(&serde_json::Value::Null)
