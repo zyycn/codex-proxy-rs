@@ -47,6 +47,7 @@ async fn fixture() -> (AdminTestFixture, Router) {
         .record;
     key.id = id;
     key.label = Some("private-usage-sentinel".to_owned());
+    let now = Utc::now();
     key.budget = ClientBudgetStatus {
         limits: ClientBudgetLimits {
             daily_usd: "1".parse().unwrap(),
@@ -54,8 +55,16 @@ async fn fixture() -> (AdminTestFixture, Router) {
         },
         daily_used_usd: "0.6400000001".parse().unwrap(),
         weekly_used_usd: "2.35".parse().unwrap(),
-        daily_resets_at: Some((Utc::now() + Duration::days(1)).into()),
-        weekly_resets_at: Some((Utc::now() + Duration::days(7)).into()),
+        daily_window: Some(gateway_core::engine::budget::ClientBudgetWindow {
+            start: now.into(),
+            end: (now + Duration::days(1)).into(),
+            explicit: false,
+        }),
+        weekly_window: Some(gateway_core::engine::budget::ClientBudgetWindow {
+            start: now.into(),
+            end: (now + Duration::days(7)).into(),
+            explicit: false,
+        }),
     };
     *fixture.client_key.lock().unwrap() = Some(key);
     let app = super::api_router_with_admin_and_client(fixture.services.clone(), KEY, "key-42");
@@ -87,11 +96,11 @@ async fn usage_returns_current_key_budget_without_exposing_private_data_or_writi
             "unit": "USD",
             "daily": {
                 "total": "1", "used": "0.6400000001", "remaining": "0.3599999999",
-                "resetsAt": before.budget.daily_resets_at.map(chrono::DateTime::<Utc>::from),
+                "resetsAt": before.budget.daily_resets_at().map(chrono::DateTime::<Utc>::from),
             },
             "weekly": {
                 "total": "5", "used": "2.35", "remaining": "2.65",
-                "resetsAt": before.budget.weekly_resets_at.map(chrono::DateTime::<Utc>::from),
+                "resetsAt": before.budget.weekly_resets_at().map(chrono::DateTime::<Utc>::from),
             },
         })
     );

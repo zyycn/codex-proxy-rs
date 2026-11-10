@@ -5,6 +5,7 @@ mod admin_security_audit;
 mod admission_recovery;
 mod backup;
 mod client_budget_buffer;
+mod client_budget_windows;
 mod client_budgets;
 mod client_keys;
 mod connection;

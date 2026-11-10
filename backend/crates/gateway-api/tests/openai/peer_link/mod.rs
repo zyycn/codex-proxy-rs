@@ -271,6 +271,32 @@ async fn exports_scoped_observations_even_when_the_key_budget_is_exhausted_witho
 }
 
 #[tokio::test]
+async fn peer_budget_reports_window_availability_and_actual_duration_without_an_amount_limit() {
+    let (fixture, app) = fixture(sharing(), RAW_KEY).await;
+    let now = Utc::now();
+    for (offset, explicit, allowed) in [(-3, true, false), (1, false, false), (-1, true, true)] {
+        let start = now + TimeDelta::hours(offset);
+        {
+            let mut key = fixture.client_key.lock().unwrap();
+            let budget = &mut key.as_mut().unwrap().budget;
+            budget.limits = Default::default();
+            budget.weekly_window = Some(gateway_core::engine::budget::ClientBudgetWindow {
+                start: start.into(),
+                end: (start + TimeDelta::hours(2)).into(),
+                explicit,
+            });
+        }
+        let response = query(&app, PATH, Some(RAW_KEY)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["usage"]["data"]["allowed"], allowed);
+        let weekly = &body["usage"]["data"]["windows"][1];
+        assert_eq!(weekly["limit_reached"], false);
+        assert_eq!(weekly["window_seconds"], 7200);
+    }
+}
+
+#[tokio::test]
 async fn pool_plans_use_account_plan_fallback_independently_of_quota_sharing() {
     for share_quota in [true, false] {
         let (fixture, app) = fixture(

@@ -108,7 +108,7 @@ async fn plugin_process_manages_native_budget_through_client_key_service() {
             let mut expected = json!({
                 "client_key_id":"key_budget", "daily_limit_usd":"10", "weekly_limit_usd":"20",
                 "daily_used_usd":"3", "weekly_used_usd":"0",
-                "daily_resets_at_ms":before.budget.daily_resets_at.map(|time| chrono::DateTime::<chrono::Utc>::from(time).timestamp_millis()),
+                "daily_resets_at_ms":before.budget.daily_resets_at().map(|time| chrono::DateTime::<chrono::Utc>::from(time).timestamp_millis()),
                 "weekly_resets_at_ms":null,
             });
             assert_eq!(results[6], expected);
@@ -128,8 +128,11 @@ async fn plugin_process_manages_native_budget_through_client_key_service() {
                     .len(),
                 1
             );
-            assert_eq!(after.budget.daily_resets_at, before.budget.daily_resets_at);
-            assert_eq!(after.budget.weekly_resets_at, None);
+            assert_eq!(
+                after.budget.daily_resets_at(),
+                before.budget.daily_resets_at()
+            );
+            assert_eq!(after.budget.weekly_resets_at(), None);
             assert_eq!(audits.len(), 1);
             assert!(audits[0].starts_with(&format!("plugin:{}:scope:", view.target.instance_id)));
         }
@@ -323,6 +326,22 @@ struct HoldCommittedReply {
 
 #[async_trait::async_trait]
 impl PluginClientKeyAccess for HoldCommittedReply {
+    async fn budget_window(
+        &self,
+        id: &ClientApiKeyId,
+        period: gateway_admin::model::client_keys::ClientKeyBudgetWindowPeriod,
+    ) -> Result<gateway_admin::model::client_keys::ClientKeyBudgetWindow, AdminError> {
+        self.inner.budget_window(id, period).await
+    }
+    async fn set_budget_window(
+        &self,
+        owner: &PluginResourceOwner,
+        command: gateway_admin::model::client_keys::SetClientKeyBudgetWindow,
+        context: &MutationContext,
+    ) -> Result<u64, AdminError> {
+        self.inner.set_budget_window(owner, command, context).await
+    }
+
     async fn facts(&self, id: &ClientApiKeyId) -> Result<PluginClientKeyFacts, AdminError> {
         self.inner.facts(id).await
     }
@@ -447,4 +466,126 @@ async fn losing_callback_reply_after_commit_keeps_budget_and_audit_without_repla
     drop(runtime);
     drop(store);
     environment.close().await;
+}
+
+#[tokio::test]
+async fn plugin_window_operations_replay_once_and_validate_parameters() {
+    let Some(environment) = Environment::create().await else {
+        eprintln!("SKIP: plugin integration environment absent");
+        return;
+    };
+    let key = seed_budget(&environment).await;
+    let now = chrono::Utc::now().timestamp_micros();
+    let hour = chrono::TimeDelta::hours(1).num_microseconds().unwrap();
+    let command = json!({"client_key_id":key.as_str(),"period":"weekly","expected_revision":0,"window":{"starts_at_us":now-hour,"ends_at_us":now+hour}});
+    let mut changed = command.clone();
+    changed["window"]["ends_at_us"] = json!(now + 2 * hour);
+    let mut invalid = command.clone();
+    invalid["window"]["starts_at_us"] = json!(now + 2 * hour);
+    let mut forged = command.clone();
+    forged["instance_id"] = json!("forged");
+    let result: Vec<Value> = run_window_plugin(&environment, json!({
+        "data_queries":[
+            {"method":"host.keys.set_budget_window","query":command},
+            {"method":"host.keys.set_budget_window","query":command},
+            {"method":"host.keys.set_budget_window","query":changed},
+            {"method":"host.keys.set_budget_window","query":invalid},
+            {"method":"host.keys.set_budget_window","query":forged},
+            {"method":"host.keys.set_budget_window","query":{"client_key_id":key.as_str(),"period":"weekly","expected_revision":1}},
+            {"method":"host.keys.get_budget_window","query":{"client_key_id":key.as_str(),"period":"weekly"}}
+        ]
+    })).await;
+    assert_eq!(result[0], json!({"revision":1}));
+    assert_eq!(result[1], result[0]);
+    assert_eq!(result[2], json!({"error":"conflict"}));
+    assert_eq!(result[3], json!({"error":"invalid_input"}));
+    assert_eq!(result[4], json!({"error":"invalid_input"}));
+    assert_eq!(result[5], json!({"error":"invalid_input"}));
+    assert_eq!(result[6]["ends_at_us"], now + hour);
+    assert_eq!(result[6]["explicit"], true);
+    assert_eq!(
+        environment.audit_requests("set_budget_window").await.len(),
+        1
+    );
+    environment.close().await;
+}
+
+#[tokio::test]
+async fn sdk_adopts_restored_native_window_without_losing_precision_or_spend() {
+    use gateway_plugin_sdk::call::key_budgets::KeyBudgetWindow;
+
+    let Some(environment) = Environment::create().await else {
+        eprintln!("SKIP: plugin integration environment absent");
+        return;
+    };
+    let key = seed_budget(&environment).await;
+    environment
+        .restore_weekly_budget_without_charge_history(key.as_str())
+        .await;
+    let [before, after]: [KeyBudgetWindow; 2] = run_window_plugin(
+        &environment,
+        json!({
+            "sdk_session": true,
+            "adopt_budget_window": {"client_key_id":key.as_str(), "period":"weekly"}
+        }),
+    )
+    .await;
+    assert!(!before.explicit);
+    assert_eq!(before.starts_at_us.unwrap().rem_euclid(1_000), 456);
+    assert_eq!(before.ends_at_us.unwrap().rem_euclid(1_000), 789);
+    assert_eq!(before.used_usd, "4");
+    assert_eq!(
+        after,
+        KeyBudgetWindow {
+            explicit: true,
+            revision: before.revision + 1,
+            ..before
+        }
+    );
+    environment.close().await;
+}
+
+async fn run_window_plugin<T: serde::de::DeserializeOwned>(
+    environment: &Environment,
+    mut config: Value,
+) -> T {
+    config["management_registration"] = json!({"routes":[{"method":"POST","path":"window","request_content_types":[],"response_content_types":["application/json"]}]});
+    environment.install_plugin(config).await;
+    let (runtime, core) = environment.runtime().await;
+    let access = gateway_admin::initialize_plugin_client_keys(
+        native::admin_registry(),
+        environment.store.admin_ports().client_keys(),
+        core.snapshot_control(),
+    );
+    runtime.bind_client_key_ports(&access).unwrap();
+    let service = PluginManagementService::new(
+        runtime.clone(),
+        environment.store.admin_ports().plugins(),
+        core.snapshots(),
+    );
+    let view = service.views().await.unwrap().remove(0);
+    let reply = service
+        .handle(
+            &view.target,
+            PluginManagementRequest {
+                request_context: None,
+                headers: vec![],
+                method: "POST".into(),
+                path: "window".into(),
+                query: String::new(),
+                content_type: None,
+                body: vec![],
+                request_id: "explicit-window".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let result = serde_json::from_slice(&reply.body).unwrap();
+    environment.release_plugin_accounts(&runtime);
+    runtime.shutdown().await;
+    drop(service);
+    drop(access);
+    drop(core);
+    drop(runtime);
+    result
 }

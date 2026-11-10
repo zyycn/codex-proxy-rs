@@ -1016,6 +1016,32 @@ fn mutation(
 
 #[async_trait]
 impl ClientKeyStore for MemoryClientKeyStore {
+    async fn client_key_budget_window(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: gateway_admin::model::client_keys::ClientKeyBudgetWindowPeriod,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        gateway_admin::model::client_keys::ClientKeyBudgetWindow,
+    > {
+        Err(gateway_admin::ports::store::AdminStoreError::new(
+            gateway_admin::ports::store::AdminStoreErrorKind::Unavailable,
+            "client key",
+            "unused budget window",
+        ))
+    }
+    async fn set_client_key_budget_window(
+        &self,
+        _: gateway_admin::model::client_keys::SetClientKeyBudgetWindow,
+        _: gateway_admin::model::client_keys::ClientKeyBudgetMutationOrigin,
+        _: &MutationContext,
+    ) -> gateway_admin::ports::store::AdminStoreResult<u64> {
+        Err(gateway_admin::ports::store::AdminStoreError::new(
+            gateway_admin::ports::store::AdminStoreErrorKind::Unavailable,
+            "client key",
+            "unused budget window",
+        ))
+    }
+
     async fn update_client_key_budget_limits(
         &self,
         _: gateway_admin::model::client_keys::UpdateClientKeyBudgetLimits,

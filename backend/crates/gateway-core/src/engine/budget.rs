@@ -24,6 +24,7 @@ impl ClientBudgetLimits {
     #[must_use]
     pub fn access(self, daily_used: Decimal, weekly_used: Decimal) -> ClientBudgetAccess {
         ClientBudgetAccess {
+            window_inactive: false,
             daily_limit_reached: self.daily_usd != Decimal::ZERO && daily_used >= self.daily_usd,
             weekly_limit_reached: self.weekly_usd != Decimal::ZERO
                 && weekly_used >= self.weekly_usd,
@@ -33,6 +34,7 @@ impl ClientBudgetLimits {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientBudgetAccess {
+    pub window_inactive: bool,
     pub daily_limit_reached: bool,
     pub weekly_limit_reached: bool,
 }
@@ -40,7 +42,7 @@ pub struct ClientBudgetAccess {
 impl ClientBudgetAccess {
     #[must_use]
     pub const fn allowed(self) -> bool {
-        !self.daily_limit_reached && !self.weekly_limit_reached
+        !self.window_inactive && !self.daily_limit_reached && !self.weekly_limit_reached
     }
 }
 
@@ -49,8 +51,55 @@ pub struct ClientBudgetStatus {
     pub limits: ClientBudgetLimits,
     pub daily_used_usd: Decimal,
     pub weekly_used_usd: Decimal,
-    pub daily_resets_at: Option<SystemTime>,
-    pub weekly_resets_at: Option<SystemTime>,
+    pub daily_window: Option<ClientBudgetWindow>,
+    pub weekly_window: Option<ClientBudgetWindow>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientBudgetWindow {
+    pub start: SystemTime,
+    pub end: SystemTime,
+    pub explicit: bool,
+}
+
+impl ClientBudgetWindow {
+    /// 起点在释放控制后仍然有效，只有显式窗口在到期后停止准入
+    #[must_use]
+    pub fn inactive_at(self, now: SystemTime) -> bool {
+        now < self.start || (self.explicit && now >= self.end)
+    }
+
+    #[must_use]
+    pub fn visible_at(self, now: SystemTime) -> bool {
+        self.explicit || (self.start < self.end && now < self.end)
+    }
+}
+
+impl ClientBudgetStatus {
+    #[must_use]
+    pub fn access_at(&self, now: SystemTime) -> ClientBudgetAccess {
+        ClientBudgetAccess {
+            window_inactive: [self.daily_window, self.weekly_window]
+                .into_iter()
+                .flatten()
+                .any(|w| w.inactive_at(now)),
+            ..self
+                .limits
+                .access(self.daily_used_usd, self.weekly_used_usd)
+        }
+    }
+
+    #[must_use]
+    pub fn daily_resets_at(&self) -> Option<SystemTime> {
+        self.daily_window.filter(|w| w.start < w.end).map(|w| w.end)
+    }
+
+    #[must_use]
+    pub fn weekly_resets_at(&self) -> Option<SystemTime> {
+        self.weekly_window
+            .filter(|w| w.start < w.end)
+            .map(|w| w.end)
+    }
 }
 
 #[derive(Debug, Clone)]

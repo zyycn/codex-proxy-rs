@@ -2,12 +2,21 @@
 
 use chrono::{TimeDelta, Utc};
 use gateway_admin::ports::backup::{DatabaseDumpPort as _, DumpRequest};
+use gateway_admin::{
+    model::client_keys::{
+        ClientKeyBudgetMutationOrigin, ClientKeyBudgetWindowPeriod, ExplicitClientKeyBudgetWindow,
+        SetClientKeyBudgetWindow,
+    },
+    ports::store::{AdminStoreErrorKind, ClientKeyStore as _},
+};
+use gateway_core::engine::budget::ClientBudgetPort as _;
 use gateway_core::lifecycle::CancellationToken;
 use gateway_store::backup::{pg_dump::PgDumpAdapter, staging::StagingArea};
-use gateway_store::postgres::ObservabilityRange;
+use gateway_store::postgres::{ObservabilityRange, PgAdminClientKeyStore, PgClientBudgetStore};
 use std::{process::Stdio, sync::Arc};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+use super::client_budgets::{charge, context, key_id};
 use super::{TestDatabase, analytics::seed, drain_analytics, observability_repository};
 
 #[tokio::test]
@@ -21,7 +30,7 @@ async fn business_backup_restores_core_state_and_usage_without_request_history()
     for id in ["native_a", "native_b"] {
         seed(&database.pool, id, hour + TimeDelta::minutes(5), &[]).await;
     }
-    sqlx::raw_sql("insert into client_api_keys(id,name,key,created_at,updated_at) values('restore_key','restore key','sk_backup_test',now(),now());
+    sqlx::raw_sql("insert into client_api_keys(id,name,key,weekly_limit_usd,created_at,updated_at) values('restore_key','restore key','sk_backup_test',9.5,now(),now());
         insert into client_api_key_budget_windows values('restore_key',now(),now()+interval '1 day',now(),now()+interval '7 days',2.5,9.5);
         insert into client_api_key_charge_events(request_id,client_api_key_id,amount_usd,completed_at) values('native_a','restore_key',2.5,now());
         insert into plugin_update_sources(plugin_id,source_json) values('backup.test','{}');
@@ -133,6 +142,64 @@ async fn business_backup_restores_core_state_and_usage_without_request_history()
             budget,
             ("2.5000000000".to_owned(), "9.5000000000".to_owned())
         );
+        let keys = PgAdminClientKeyStore::new(database.pool.clone());
+        let ledger = PgClientBudgetStore::new(database.pool.clone());
+        let key = key_id("restore_key");
+        let saved = keys
+            .client_key_budget_window(&key, ClientKeyBudgetWindowPeriod::Weekly)
+            .await
+            .unwrap();
+        let mut change = SetClientKeyBudgetWindow {
+            id: key.clone(),
+            period: ClientKeyBudgetWindowPeriod::Weekly,
+            expected_revision: saved.revision,
+            window: Some(ExplicitClientKeyBudgetWindow {
+                starts_at: saved.starts_at.unwrap(),
+                ends_at: saved.ends_at.unwrap(),
+            }),
+        };
+        let actor = ClientKeyBudgetMutationOrigin::Admin;
+        change.expected_revision = keys
+            .set_client_key_budget_window(change.clone(), actor.clone(), &context())
+            .await
+            .unwrap();
+        change.window.as_mut().unwrap().ends_at += TimeDelta::microseconds(1);
+        let conflict = keys
+            .set_client_key_budget_window(change.clone(), actor.clone(), &context())
+            .await
+            .unwrap_err();
+        assert_eq!(conflict.kind(), AdminStoreErrorKind::Conflict);
+        assert_eq!(
+            ledger
+                .admit(key.clone())
+                .await
+                .unwrap_err()
+                .client_error_code(),
+            Some("key_weekly_budget_exceeded")
+        );
+        if backup_id == "second" {
+            let start = Utc::now();
+            ledger
+                .settle(charge("restore_key", "new_cycle", "3"))
+                .await
+                .unwrap();
+            change.window = Some(ExplicitClientKeyBudgetWindow {
+                starts_at: start,
+                ends_at: start + TimeDelta::hours(1),
+            });
+            keys.set_client_key_budget_window(change, actor, &context())
+                .await
+                .unwrap();
+            assert_eq!(
+                keys.client_key_budget_window(&key, ClientKeyBudgetWindowPeriod::Weekly)
+                    .await
+                    .unwrap()
+                    .used_usd
+                    .canonical(),
+                "3"
+            );
+            ledger.admit(key).await.unwrap();
+        }
         let archive: Vec<u8> = sqlx::query_scalar(
             "select archive from plugin_artifacts where plugin_id='backup.test'",
         )

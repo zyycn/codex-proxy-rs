@@ -139,16 +139,16 @@ pub(super) fn overview(value: KeyUsageOverview, time: crate::time::TimePresenter
             daily_used_usd: key.budget.daily_used_usd.canonical(),
             daily_resets_at_display: key
                 .budget
-                .daily_resets_at
+                .daily_resets_at()
                 .map(|value| time.datetime(&value.into())),
-            daily_resets_at: key.budget.daily_resets_at.map(DateTime::from),
+            daily_resets_at: key.budget.daily_resets_at().map(DateTime::from),
             weekly_limit_usd: key.budget.limits.weekly_usd.canonical(),
             weekly_used_usd: key.budget.weekly_used_usd.canonical(),
             weekly_resets_at_display: key
                 .budget
-                .weekly_resets_at
+                .weekly_resets_at()
                 .map(|value| time.datetime(&value.into())),
-            weekly_resets_at: key.budget.weekly_resets_at.map(DateTime::from),
+            weekly_resets_at: key.budget.weekly_resets_at().map(DateTime::from),
         },
         summary: metrics(
             &value.overview.requests,

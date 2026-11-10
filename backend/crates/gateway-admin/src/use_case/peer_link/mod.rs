@@ -113,10 +113,7 @@ impl PeerLinkService for DefaultPeerLinkService {
         let mut result = PeerLinkExport {
             observed_at: now,
             expires_at: now + TimeDelta::minutes(5),
-            budget_access: key
-                .budget
-                .limits
-                .access(key.budget.daily_used_usd, key.budget.weekly_used_usd),
+            budget_access: key.budget.access_at(budget_observed_at.into()),
             key_limits: key.limits,
             budget: key.budget,
             budget_observed_at,

@@ -109,7 +109,31 @@ impl PluginHandler for Handler {
                     ))
                 }
                 "management.handle" => {
-                    let results = self.queries(&call, "data_queries").await;
+                    let results = if let Some(query) = self.configuration.get("adopt_budget_window")
+                    {
+                        use gateway_plugin_sdk::call::key_budgets::{
+                            ExplicitBudgetWindow, GetKeyBudgetWindowRequest,
+                            SetKeyBudgetWindowRequest,
+                        };
+                        let query: GetKeyBudgetWindowRequest =
+                            serde_json::from_value(query.clone()).unwrap();
+                        let before = call.host.get_key_budget_window(query.clone()).await?;
+                        call.host
+                            .set_key_budget_window(SetKeyBudgetWindowRequest {
+                                client_key_id: query.client_key_id.clone(),
+                                period: query.period,
+                                expected_revision: before.revision,
+                                window: Some(ExplicitBudgetWindow {
+                                    starts_at_us: before.starts_at_us.unwrap(),
+                                    ends_at_us: before.ends_at_us.unwrap(),
+                                }),
+                            })
+                            .await?;
+                        let after = call.host.get_key_budget_window(query).await?;
+                        vec![json!(before), json!(after)]
+                    } else {
+                        self.queries(&call, "data_queries").await
+                    };
                     Ok(CallReply::unary(
                         json!({"status":200,"content_type":"application/json"}),
                         serde_json::to_vec(&results).unwrap(),

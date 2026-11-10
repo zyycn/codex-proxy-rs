@@ -233,11 +233,54 @@ pub enum ClientKeyBudgetPeriod {
     All,
 }
 
-/// 清零所选窗口已用金额，保留限额、到期时间与历史费用
+/// 清零所选窗口并恢复日历规则，保留限额与历史费用
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResetClientKeyBudget {
     pub id: ClientApiKeyId,
     pub period: ClientKeyBudgetPeriod,
+}
+
+/// 显式窗口复用已有日／周金额上限，外部周期的选择归调用方
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientKeyBudgetWindowPeriod {
+    Daily,
+    Weekly,
+}
+
+impl ClientKeyBudgetWindowPeriod {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Daily => "daily",
+            Self::Weekly => "weekly",
+        }
+    }
+}
+
+/// 按请求完成时间归属的左闭右开预算窗口
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExplicitClientKeyBudgetWindow {
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+}
+
+/// 窗口配置版本独立于费用累计与全局配置版本
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientKeyBudgetWindow {
+    pub revision: u64,
+    pub explicit: bool,
+    pub starts_at: Option<DateTime<Utc>>,
+    pub ends_at: Option<DateTime<Utc>>,
+    pub used_usd: gateway_core::metering::Decimal,
+}
+
+/// 当前窗口版本标识一次操作，同版本同参数可重试；None 释放显式控制
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetClientKeyBudgetWindow {
+    pub id: ClientApiKeyId,
+    pub period: ClientKeyBudgetWindowPeriod,
+    pub expected_revision: u64,
+    pub window: Option<ExplicitClientKeyBudgetWindow>,
 }
 
 /// 仅更新指定金额上限；省略的周期保持不变，不修改已用金额或窗口
