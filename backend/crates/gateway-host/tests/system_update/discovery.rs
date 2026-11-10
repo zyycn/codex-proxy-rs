@@ -107,6 +107,10 @@ async fn discovery_request_budget_is_constant_under_load() {
             "history={history} concurrent_detail=512 local_probes=65 index=1 release=1 lists=0 elapsed={:?}",
             started.elapsed()
         );
+        // wiremock 析构时同步等待异步校验，当前任务耗尽协作预算时会卡住
+        tokio::task::spawn_blocking(move || drop(server))
+            .await
+            .expect("verify mock expectations");
     }
 }
 
