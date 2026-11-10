@@ -201,10 +201,13 @@ const attempts = computed(() => (props.record?.attempts ?? []).map(attempt => ({
         <h3 :class="panelTitleClass">
           {{ t('usage.error.attempts') }}
         </h3>
+        <p v-if="!record.attemptsComplete" class="mt-3 mb-0 text-z-sm text-z-text-secondary">
+          {{ t('usage.error.attemptRecordMayBeIncomplete') }}
+        </p>
         <p v-if="!attempts.length" class="mt-3 mb-0 text-z-sm text-z-text-secondary">
           {{ t('usage.error.noAttempts') }}
         </p>
-        <ol v-if="attempts.length" class="mt-3 mb-0 grid list-none gap-4 p-0 lg:grid-cols-2">
+        <ol v-else class="mt-3 mb-0 grid list-none gap-4 p-0 lg:grid-cols-2">
           <li v-for="attempt in attempts" :key="attempt.id" class="min-w-0">
             <div class="flex items-center gap-3 text-z-sm font-bold">
               <span>{{ t('usage.error.attempt', { index: attempt.index }) }}</span>

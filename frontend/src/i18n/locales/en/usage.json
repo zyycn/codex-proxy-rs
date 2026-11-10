@@ -286,6 +286,7 @@
       "requestContext": "Request context",
       "errorLocation": "Correlation IDs",
       "attempts": "Attempt history",
+      "attemptRecordMayBeIncomplete": "Attempt history may be incomplete",
       "attempt": "Attempt {index}",
       "diagnosticData": "Diagnostic data",
       "responseContent": "Response content",

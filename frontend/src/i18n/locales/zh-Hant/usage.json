@@ -286,6 +286,7 @@
       "requestContext": "請求上下文",
       "errorLocation": "關聯標識",
       "attempts": "嘗試記錄",
+      "attemptRecordMayBeIncomplete": "嘗試記錄可能不完整",
       "attempt": "嘗試 {index}",
       "diagnosticData": "診斷數據",
       "responseContent": "響應內容",

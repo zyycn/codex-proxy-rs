@@ -286,6 +286,7 @@
       "requestContext": "请求上下文",
       "errorLocation": "关联标识",
       "attempts": "尝试记录",
+      "attemptRecordMayBeIncomplete": "尝试记录可能不完整",
       "attempt": "尝试 {index}",
       "diagnosticData": "诊断数据",
       "responseContent": "响应内容",
