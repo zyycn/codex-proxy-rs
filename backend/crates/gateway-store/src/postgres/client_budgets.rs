@@ -13,13 +13,13 @@ use gateway_admin::ports::store::AdminStoreResult;
 use gateway_core::{
     engine::budget::{
         ClientBudgetCharge, ClientBudgetError, ClientBudgetLimits, ClientBudgetPort,
-        ClientBudgetStatus,
+        ClientBudgetStatus, ClientBudgetWindow,
     },
     error::{GatewayError, GatewayErrorKind},
     metering::Decimal,
     policy::ClientApiKeyId,
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 
 use crate::{StoreError, StoreResult, mutation_audit, postgres_unavailable};
 
@@ -81,14 +81,19 @@ async fn reset_client_key_budget_in_transaction(
     let reset_at = Utc::now();
     // 起止时间收拢到重置边界，窗口保持未开启，同时排除重置前完成的迟到费用
     sqlx::query(
-        "update client_api_key_budget_windows set
-        daily_used_usd = case when $2 then 0 else daily_used_usd end,
-        daily_start = case when $2 then $4 else daily_start end,
-        daily_end = case when $2 then $4 else daily_end end,
-        weekly_used_usd = case when $3 then 0 else weekly_used_usd end,
-        weekly_start = case when $3 then $4 else weekly_start end,
-        weekly_end = case when $3 then $4 else weekly_end end
-        where client_api_key_id = $1",
+        "insert into client_api_key_budget_windows
+        (client_api_key_id,daily_start,daily_end,weekly_start,weekly_end,revision)
+        values ($1,$4,$4,$4,$4,1)
+        on conflict (client_api_key_id) do update set
+        daily_used_usd = case when $2 then 0 else client_api_key_budget_windows.daily_used_usd end,
+        daily_start = case when $2 then $4 else client_api_key_budget_windows.daily_start end,
+        daily_end = case when $2 then $4 else client_api_key_budget_windows.daily_end end,
+        weekly_used_usd = case when $3 then 0 else client_api_key_budget_windows.weekly_used_usd end,
+        weekly_start = case when $3 then $4 else client_api_key_budget_windows.weekly_start end,
+        weekly_end = case when $3 then $4 else client_api_key_budget_windows.weekly_end end,
+        daily_explicit=case when $2 then false else client_api_key_budget_windows.daily_explicit end,
+        weekly_explicit=case when $3 then false else client_api_key_budget_windows.weekly_explicit end,
+        revision=client_api_key_budget_windows.revision+1, last_operation_request=null",
     )
     .bind(command.id.as_str())
     .bind(daily)
@@ -160,6 +165,8 @@ impl PgClientBudgetStore {
         let row = sqlx::query(
             "select k.enabled, k.daily_limit_usd::text, k.weekly_limit_usd::text,
                 w.daily_start, w.daily_end, w.weekly_start, w.weekly_end,
+                coalesce(w.daily_explicit,false) as daily_explicit,
+                coalesce(w.weekly_explicit,false) as weekly_explicit,
                 coalesce(w.daily_used_usd, 0)::text as daily_used,
                 coalesce(w.weekly_used_usd, 0)::text as weekly_used,
                 case when k.daily_limit_usd = 0 and k.weekly_limit_usd = 0 then array[]::text[]
@@ -188,32 +195,51 @@ impl PgClientBudgetStore {
         };
         let now = Utc::now();
         let day = self.timezone.day_start(now).ok_or_else(unavailable)?;
-        let window = |start: &str, end: &str, used: &str, days| -> Result<_, GatewayError> {
-            let start = row.get::<Option<DateTime<Utc>>, _>(start);
-            let end = row.get::<Option<DateTime<Utc>>, _>(end);
-            let reopen = end.is_none_or(|end| end <= now);
-            if reopen {
-                Ok((
-                    day.max(start.unwrap_or(day)).max(end.unwrap_or(day)),
-                    self.timezone
-                        .days_after(now, days)
-                        .ok_or_else(unavailable)?,
-                    Decimal::ZERO,
-                    true,
-                ))
-            } else {
-                Ok((
-                    start.ok_or_else(unavailable)?,
-                    end.ok_or_else(unavailable)?,
-                    parse(used)?,
-                    false,
-                ))
-            }
-        };
-        let (daily_start, daily_end, mut daily, open_daily) =
-            window("daily_start", "daily_end", "daily_used", 1)?;
-        let (weekly_start, weekly_end, mut weekly, open_weekly) =
-            window("weekly_start", "weekly_end", "weekly_used", 7)?;
+        let window =
+            |start: &str, end: &str, used: &str, explicit: &str, days| -> Result<_, GatewayError> {
+                let current = stored_window(&row, start, end, explicit);
+                if current.is_some_and(|w| w.inactive_at(now.into())) {
+                    return Err(GatewayError::new(
+                        GatewayErrorKind::BudgetExhausted,
+                        "No active spending window.",
+                    )
+                    .with_client_code("key_budget_window_inactive"));
+                }
+                let start = current.map(|w| DateTime::<Utc>::from(w.start));
+                let end = current.map(|w| DateTime::<Utc>::from(w.end));
+                let reopen = end.is_none_or(|end| end <= now);
+                if reopen {
+                    Ok((
+                        day.max(start.unwrap_or(day)).max(end.unwrap_or(day)),
+                        self.timezone
+                            .days_after(now, days)
+                            .ok_or_else(unavailable)?,
+                        Decimal::ZERO,
+                        true,
+                    ))
+                } else {
+                    Ok((
+                        start.ok_or_else(unavailable)?,
+                        end.ok_or_else(unavailable)?,
+                        parse(used)?,
+                        false,
+                    ))
+                }
+            };
+        let (daily_start, daily_end, mut daily, open_daily) = window(
+            "daily_start",
+            "daily_end",
+            "daily_used",
+            "daily_explicit",
+            1,
+        )?;
+        let (weekly_start, weekly_end, mut weekly, open_weekly) = window(
+            "weekly_start",
+            "weekly_end",
+            "weekly_used",
+            "weekly_explicit",
+            7,
+        )?;
         if limits.is_limited() {
             let persisted = row
                 .get::<Vec<String>, _>("persisted")
@@ -409,14 +435,14 @@ async fn advance_windows(
         (client_api_key_id, daily_start, daily_end, weekly_start, weekly_end)
         select $1, $4, $5, $4, $6
         on conflict (client_api_key_id) do update set
-            daily_start = case when client_api_key_budget_windows.daily_end <= $2 and client_api_key_budget_windows.daily_start <= $3 then greatest(excluded.daily_start, client_api_key_budget_windows.daily_end, client_api_key_budget_windows.daily_start) else client_api_key_budget_windows.daily_start end,
-            daily_end = case when client_api_key_budget_windows.daily_end <= $2 and client_api_key_budget_windows.daily_start <= $3 then excluded.daily_end else client_api_key_budget_windows.daily_end end,
-            daily_used_usd = case when client_api_key_budget_windows.daily_end <= $2 and client_api_key_budget_windows.daily_start <= $3 then 0 else client_api_key_budget_windows.daily_used_usd end,
-            weekly_start = case when client_api_key_budget_windows.weekly_end <= $2 and client_api_key_budget_windows.weekly_start <= $3 then greatest(excluded.weekly_start, client_api_key_budget_windows.weekly_end, client_api_key_budget_windows.weekly_start) else client_api_key_budget_windows.weekly_start end,
-            weekly_end = case when client_api_key_budget_windows.weekly_end <= $2 and client_api_key_budget_windows.weekly_start <= $3 then excluded.weekly_end else client_api_key_budget_windows.weekly_end end,
-            weekly_used_usd = case when client_api_key_budget_windows.weekly_end <= $2 and client_api_key_budget_windows.weekly_start <= $3 then 0 else client_api_key_budget_windows.weekly_used_usd end
-        where (client_api_key_budget_windows.daily_end <= $2 and client_api_key_budget_windows.daily_start <= $3)
-            or (client_api_key_budget_windows.weekly_end <= $2 and client_api_key_budget_windows.weekly_start <= $3)")
+            daily_start = case when not client_api_key_budget_windows.daily_explicit and client_api_key_budget_windows.daily_end <= $2 and client_api_key_budget_windows.daily_start <= $3 then greatest(excluded.daily_start, client_api_key_budget_windows.daily_end, client_api_key_budget_windows.daily_start) else client_api_key_budget_windows.daily_start end,
+            daily_end = case when not client_api_key_budget_windows.daily_explicit and client_api_key_budget_windows.daily_end <= $2 and client_api_key_budget_windows.daily_start <= $3 then excluded.daily_end else client_api_key_budget_windows.daily_end end,
+            daily_used_usd = case when not client_api_key_budget_windows.daily_explicit and client_api_key_budget_windows.daily_end <= $2 and client_api_key_budget_windows.daily_start <= $3 then 0 else client_api_key_budget_windows.daily_used_usd end,
+            weekly_start = case when not client_api_key_budget_windows.weekly_explicit and client_api_key_budget_windows.weekly_end <= $2 and client_api_key_budget_windows.weekly_start <= $3 then greatest(excluded.weekly_start, client_api_key_budget_windows.weekly_end, client_api_key_budget_windows.weekly_start) else client_api_key_budget_windows.weekly_start end,
+            weekly_end = case when not client_api_key_budget_windows.weekly_explicit and client_api_key_budget_windows.weekly_end <= $2 and client_api_key_budget_windows.weekly_start <= $3 then excluded.weekly_end else client_api_key_budget_windows.weekly_end end,
+            weekly_used_usd = case when not client_api_key_budget_windows.weekly_explicit and client_api_key_budget_windows.weekly_end <= $2 and client_api_key_budget_windows.weekly_start <= $3 then 0 else client_api_key_budget_windows.weekly_used_usd end
+        where (not client_api_key_budget_windows.daily_explicit and client_api_key_budget_windows.daily_end <= $2 and client_api_key_budget_windows.daily_start <= $3)
+            or (not client_api_key_budget_windows.weekly_explicit and client_api_key_budget_windows.weekly_end <= $2 and client_api_key_budget_windows.weekly_start <= $3)")
         .bind(key).bind(now).bind(used_at).bind(day).bind(daily_end).bind(weekly_end).execute(&mut **tx).await?;
     Ok(())
 }
@@ -435,10 +461,8 @@ pub(super) async fn load_client_key_budgets(
     // 起止相等是重置后的未开启窗口，不能因应用时钟领先数据库而投影为活跃预算
     let rows = sqlx::query(
         "select k.id, k.daily_limit_usd::text, k.weekly_limit_usd::text,
-        (case when w.daily_end > w.daily_start and w.daily_end > now() then w.daily_used_usd else 0 end)::text as daily_used,
-        (case when w.weekly_end > w.weekly_start and w.weekly_end > now() then w.weekly_used_usd else 0 end)::text as weekly_used,
-        case when w.daily_end > w.daily_start and w.daily_end > now() then w.daily_end end as daily_end,
-        case when w.weekly_end > w.weekly_start and w.weekly_end > now() then w.weekly_end end as weekly_end
+        w.daily_start, w.daily_end, w.daily_explicit, w.weekly_start, w.weekly_end, w.weekly_explicit,
+        w.daily_used_usd::text as daily_used, w.weekly_used_usd::text as weekly_used
         from client_api_keys k left join client_api_key_budget_windows w on w.client_api_key_id = k.id
         where k.id = any($1)",
     )
@@ -447,7 +471,12 @@ pub(super) async fn load_client_key_budgets(
     .await
     .map_err(|source| postgres_unavailable("load client budgets", source))?;
     let mut budgets = BTreeMap::new();
+    let now = std::time::SystemTime::now();
     for row in rows {
+        let daily_window = stored_window(&row, "daily_start", "daily_end", "daily_explicit")
+            .filter(|w| w.explicit || now < w.end);
+        let weekly_window = stored_window(&row, "weekly_start", "weekly_end", "weekly_explicit")
+            .filter(|w| w.explicit || now < w.end);
         let parse = |field| -> StoreResult<Decimal> {
             row.get::<String, _>(field)
                 .parse()
@@ -460,14 +489,18 @@ pub(super) async fn load_client_key_budgets(
                     daily_usd: parse("daily_limit_usd")?,
                     weekly_usd: parse("weekly_limit_usd")?,
                 },
-                daily_used_usd: parse("daily_used")?,
-                weekly_used_usd: parse("weekly_used")?,
-                daily_resets_at: row
-                    .get::<Option<DateTime<Utc>>, _>("daily_end")
-                    .map(Into::into),
-                weekly_resets_at: row
-                    .get::<Option<DateTime<Utc>>, _>("weekly_end")
-                    .map(Into::into),
+                daily_used_usd: if daily_window.is_some_and(|w| w.visible_at(now)) {
+                    parse("daily_used")?
+                } else {
+                    Decimal::ZERO
+                },
+                weekly_used_usd: if weekly_window.is_some_and(|w| w.visible_at(now)) {
+                    parse("weekly_used")?
+                } else {
+                    Decimal::ZERO
+                },
+                daily_window,
+                weekly_window,
             },
         );
     }
@@ -482,6 +515,19 @@ pub(super) async fn load_client_key_budgets(
                 })?;
     }
     Ok(())
+}
+
+pub(super) fn stored_window(
+    row: &PgRow,
+    start: &str,
+    end: &str,
+    explicit: &str,
+) -> Option<ClientBudgetWindow> {
+    Some(ClientBudgetWindow {
+        start: row.get::<Option<DateTime<Utc>>, _>(start)?.into(),
+        end: row.get::<DateTime<Utc>, _>(end).into(),
+        explicit: row.get(explicit),
+    })
 }
 
 pub(super) fn unavailable() -> GatewayError {

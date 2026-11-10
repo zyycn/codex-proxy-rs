@@ -236,10 +236,19 @@ async fn unopened_future_budget_windows_do_not_report_usage_or_reset_times() {
         (
             budget.daily_used_usd.canonical(),
             budget.weekly_used_usd.canonical(),
-            budget.daily_resets_at,
-            budget.weekly_resets_at,
+            budget.daily_resets_at(),
+            budget.weekly_resets_at(),
         ),
         ("0".to_owned(), "0".to_owned(), None, None)
+    );
+    assert!(!budget.access_at(SystemTime::now()).allowed());
+    assert_eq!(
+        PgClientBudgetStore::new(database.pool.clone())
+            .admit(key_id("key"))
+            .await
+            .unwrap_err()
+            .client_error_code(),
+        Some("key_budget_window_inactive")
     );
     database.close().await;
 }
@@ -283,15 +292,15 @@ async fn manual_reset_clears_selected_windows_and_preserves_policy_and_history()
         assert_eq!(after.weekly_used_usd.canonical(), weekly);
         assert_eq!(after.limits, before.limits);
         assert_eq!(
-            after.daily_resets_at,
+            after.daily_resets_at(),
             (period == ClientKeyBudgetPeriod::Weekly)
-                .then_some(before.daily_resets_at)
+                .then_some(before.daily_resets_at())
                 .flatten()
         );
         assert_eq!(
-            after.weekly_resets_at,
+            after.weekly_resets_at(),
             (period == ClientKeyBudgetPeriod::Daily)
-                .then_some(before.weekly_resets_at)
+                .then_some(before.weekly_resets_at())
                 .flatten()
         );
         // 同一费用重试既不重复扣额，也不能重新开启已重置的窗口
@@ -346,8 +355,8 @@ async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
         // 重置前完成的迟到费用保留历史，但不能开启窗口或重新扣入所选周期
         store.settle(delayed).await.unwrap();
         let delayed = status(&database, key).await;
-        assert_eq!(delayed.daily_resets_at, reset.daily_resets_at);
-        assert_eq!(delayed.weekly_resets_at, reset.weekly_resets_at);
+        assert_eq!(delayed.daily_resets_at(), reset.daily_resets_at());
+        assert_eq!(delayed.weekly_resets_at(), reset.weekly_resets_at());
         assert_eq!(
             delayed.daily_used_usd.canonical(),
             if period == ClientKeyBudgetPeriod::Weekly {
@@ -367,21 +376,21 @@ async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
 
         store.admit(key_id(key)).await.unwrap();
         let restarted = status(&database, key).await;
-        assert_eq!(restarted.daily_resets_at, before.daily_resets_at);
+        assert_eq!(restarted.daily_resets_at(), before.daily_resets_at());
         if period == ClientKeyBudgetPeriod::Daily {
-            assert_eq!(restarted.weekly_resets_at, before.weekly_resets_at);
+            assert_eq!(restarted.weekly_resets_at(), before.weekly_resets_at());
         } else {
             assert_eq!(
-                restarted.weekly_resets_at.unwrap(),
-                restarted.daily_resets_at.unwrap() + std::time::Duration::from_secs(6 * 86400)
+                restarted.weekly_resets_at().unwrap(),
+                restarted.daily_resets_at().unwrap() + std::time::Duration::from_secs(6 * 86400)
             );
-            assert_ne!(restarted.weekly_resets_at, before.weekly_resets_at);
+            assert_ne!(restarted.weekly_resets_at(), before.weekly_resets_at());
         }
         // 开启窗口后仍保留重置边界，另一笔重置前的迟到费用也不能重新扣额
         store.settle(old).await.unwrap();
         let after_old = status(&database, key).await;
-        assert_eq!(after_old.daily_resets_at, restarted.daily_resets_at);
-        assert_eq!(after_old.weekly_resets_at, restarted.weekly_resets_at);
+        assert_eq!(after_old.daily_resets_at(), restarted.daily_resets_at());
+        assert_eq!(after_old.weekly_resets_at(), restarted.weekly_resets_at());
         assert_eq!(
             after_old.daily_used_usd.canonical(),
             if period == ClientKeyBudgetPeriod::Weekly {
@@ -492,15 +501,22 @@ async fn manual_reset_leaves_unused_and_expired_windows_inactive_and_reports_mis
             .await
             .unwrap();
         let after = status(&database, key).await;
-        assert!(after.daily_resets_at.is_none());
-        assert!(after.weekly_resets_at.is_none());
+        assert!(after.daily_resets_at().is_none());
+        assert!(after.weekly_resets_at().is_none());
         assert_eq!(after.daily_used_usd.canonical(), "0");
     }
-    let windows: i64 = sqlx::query_scalar("select count(*) from client_api_key_budget_windows")
-        .fetch_one(&database.pool)
-        .await
-        .unwrap();
-    assert_eq!(windows, 1);
+    // 未使用的 Key 也记录控制版本，重置前读到的窗口版本不能继续提交
+    for key in ["unused", "expired"] {
+        let window = admin
+            .client_key_budget_window(
+                &key_id(key),
+                gateway_admin::model::client_keys::ClientKeyBudgetWindowPeriod::Weekly,
+            )
+            .await
+            .unwrap();
+        assert_eq!(window.revision, 1);
+        assert!(!window.explicit);
+    }
     let error = admin
         .reset_client_key_budget(
             ResetClientKeyBudget {
@@ -566,7 +582,7 @@ async fn key_usage_profile_reuses_current_budget_without_revealing_or_advancing_
     seed(&database, "profile", "1", "5").await;
     let initial = keys.get_client_key(&id).await.unwrap().unwrap();
     assert_eq!(initial.budget.limits.daily_usd.canonical(), "1");
-    assert!(initial.budget.daily_resets_at.is_none());
+    assert!(initial.budget.daily_resets_at().is_none());
     let budgets = PgClientBudgetStore::new(database.pool.clone());
     budgets
         .settle(charge("profile", "profile-charge", "0.640001"))
@@ -681,7 +697,7 @@ async fn window_rollover_is_shanghai_midnight_and_seven_days_with_late_settlemen
     let reset = status(&database, "key").await;
     assert_eq!(reset.daily_used_usd.canonical(), "0");
     assert_eq!(reset.weekly_used_usd.canonical(), "0");
-    assert!(reset.weekly_resets_at.is_some());
+    assert!(reset.weekly_resets_at().is_some());
     database.close().await;
 }
 
@@ -944,8 +960,8 @@ async fn plugin_resets_share_the_native_ledger_and_each_call_resets_again() {
     assert_eq!(after.daily_used_usd.canonical(), "3");
     assert_eq!(after.weekly_used_usd.canonical(), "0");
     assert_eq!(after.limits, before.limits);
-    assert_eq!(after.daily_resets_at, before.daily_resets_at);
-    assert!(after.weekly_resets_at.is_none());
+    assert_eq!(after.daily_resets_at(), before.daily_resets_at());
+    assert!(after.weekly_resets_at().is_none());
 
     budgets.settle(charge("key", "after", "2")).await.unwrap();
     assert_eq!(
@@ -963,7 +979,7 @@ async fn plugin_resets_share_the_native_ledger_and_each_call_resets_again() {
     let after = status(&database, "key").await;
     assert_eq!(after.daily_used_usd.canonical(), "5");
     assert_eq!(after.weekly_used_usd.canonical(), "0");
-    assert!(after.weekly_resets_at.is_none());
+    assert!(after.weekly_resets_at().is_none());
     let (audits, charges, current_revision): (i64, i64, i64) = sqlx::query_as(
         "select (select count(*) from admin_audit_events where action='reset_budget' and config_revision is null),
                 (select count(*) from client_api_key_charge_events),
@@ -1164,10 +1180,13 @@ async fn plugin_budget_limits_preserve_consumption_and_unrelated_configuration_a
     let after = store.get_client_key(&key_id("key")).await.unwrap().unwrap();
     assert_eq!(after.budget.daily_used_usd, before.budget.daily_used_usd);
     assert_eq!(after.budget.weekly_used_usd, before.budget.weekly_used_usd);
-    assert_eq!(after.budget.daily_resets_at, before.budget.daily_resets_at);
     assert_eq!(
-        after.budget.weekly_resets_at,
-        before.budget.weekly_resets_at
+        after.budget.daily_resets_at(),
+        before.budget.daily_resets_at()
+    );
+    assert_eq!(
+        after.budget.weekly_resets_at(),
+        before.budget.weekly_resets_at()
     );
     assert_eq!(
         after.budget.limits.daily_usd,
@@ -1246,7 +1265,7 @@ async fn plugin_budget_limits_revalidate_authority_and_rollback_with_audit() {
     let store = PgAdminClientKeyStore::new(database.pool.clone());
     let before = status(&database, "key").await;
     // 读取和配置赋值都不能开启未使用 Key 的窗口
-    assert_eq!(before.daily_resets_at, None);
+    assert_eq!(before.daily_resets_at(), None);
     let mut stale_owner = owner.clone();
     stale_owner.revision = Revision::new(owner.revision.get() + 1).unwrap();
     assert_eq!(
@@ -1315,8 +1334,8 @@ async fn plugin_budget_limits_revalidate_authority_and_rollback_with_audit() {
         .unwrap();
     let after = status(&database, "key").await;
     assert_eq!(after.limits.daily_usd.canonical(), "2");
-    assert_eq!(after.daily_resets_at, None);
-    assert_eq!(after.weekly_resets_at, None);
+    assert_eq!(after.daily_resets_at(), None);
+    assert_eq!(after.weekly_resets_at(), None);
     database.close().await;
 }
 

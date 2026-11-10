@@ -2,13 +2,12 @@
 
 use chrono::{DateTime, Utc};
 use gateway_admin::model::peer_link::{PeerLinkExport, PeerModelState as ModelState};
-use gateway_core::metering::Decimal;
+use gateway_core::{engine::budget::ClientBudgetWindow, metering::Decimal};
 use gateway_protocol::peer::{
     OBJECT, PeerBudgetWindow, PeerComponentStatus, PeerKeyLimits, PeerKeyUsage, PeerLink,
     PeerModelAvailability, PeerModelCoverage, PeerModelState, PeerPlanCount, PeerPool,
     PeerPoolStates, PeerQuota, PeerQuotaAccount, PeerQuotaWindow, PeerUsage, SCHEMA_VERSION,
 };
-use std::time::SystemTime;
 
 pub(super) fn response(export: PeerLinkExport) -> PeerLink {
     let mut capabilities = vec!["key_usage".to_owned(), "key_limits".to_owned()];
@@ -88,19 +87,17 @@ pub(super) fn response(export: PeerLinkExport) -> PeerLink {
                     budget_window(
                         "daily",
                         "日额度",
-                        86400,
                         export.budget.limits.daily_usd,
                         export.budget.daily_used_usd,
-                        export.budget.daily_resets_at,
+                        export.budget.daily_window,
                         export.budget_access.daily_limit_reached,
                     ),
                     budget_window(
                         "weekly",
                         "周额度",
-                        604800,
                         export.budget.limits.weekly_usd,
                         export.budget.weekly_used_usd,
-                        export.budget.weekly_resets_at,
+                        export.budget.weekly_window,
                         export.budget_access.weekly_limit_reached,
                     ),
                 ],
@@ -133,21 +130,24 @@ pub(super) fn response(export: PeerLinkExport) -> PeerLink {
 fn budget_window(
     key: &str,
     label: &str,
-    window_seconds: u64,
     total: Decimal,
     used: Decimal,
-    resets_at: Option<SystemTime>,
+    window: Option<ClientBudgetWindow>,
     limit_reached: bool,
 ) -> PeerBudgetWindow {
     let limited = total != Decimal::ZERO;
+    let window = window.filter(|w| w.start < w.end);
     PeerBudgetWindow {
         key: key.to_owned(),
         label: Some(label.to_owned()),
-        window_seconds: Some(window_seconds),
+        window_seconds: window.and_then(|w| {
+            let duration = w.end.duration_since(w.start).ok()?;
+            (duration.subsec_nanos() == 0).then_some(duration.as_secs())
+        }),
         limit_reached: Some(limit_reached),
         total: limited.then(|| total.canonical()),
         used: used.canonical(),
         remaining: limited.then(|| total.saturating_sub(used).canonical()),
-        reset_at: resets_at.map(|time| DateTime::<Utc>::from(time).to_rfc3339()),
+        reset_at: window.map(|w| DateTime::<Utc>::from(w.end).to_rfc3339()),
     }
 }

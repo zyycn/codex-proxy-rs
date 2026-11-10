@@ -136,8 +136,9 @@ impl BusinessSnapshot {
         }
         drop(stream);
         let footer = format!(
-            "\\.\nINSERT INTO {}.request_analytics_build_state (singleton) VALUES (true);\n",
-            self.schema
+            "\\.\nINSERT INTO {schema}.request_analytics_build_state (singleton) VALUES (true);\n\
+             UPDATE {schema}.client_api_key_budget_windows SET charge_history_since = statement_timestamp();\n",
+            schema = self.schema
         );
         writer
             .write_all(footer.as_bytes())

@@ -415,14 +415,14 @@ impl From<(ClientKeyRecord, crate::time::TimePresenter)> for ClientKeyView {
             weekly_used_usd: record.budget.weekly_used_usd.canonical(),
             daily_resets_at_display: record
                 .budget
-                .daily_resets_at
+                .daily_resets_at()
                 .map(|value| time.datetime(&value.into())),
-            daily_resets_at: record.budget.daily_resets_at.map(DateTime::from),
+            daily_resets_at: record.budget.daily_resets_at().map(DateTime::from),
             weekly_resets_at_display: record
                 .budget
-                .weekly_resets_at
+                .weekly_resets_at()
                 .map(|value| time.datetime(&value.into())),
-            weekly_resets_at: record.budget.weekly_resets_at.map(DateTime::from),
+            weekly_resets_at: record.budget.weekly_resets_at().map(DateTime::from),
             created_at_display: time.datetime(&record.created_at),
             created_at: record.created_at,
             updated_at_display: time.datetime(&record.updated_at),
