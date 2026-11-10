@@ -143,6 +143,11 @@ pub const fn gateway_error_contract(
             "invalid_request_error",
             "invalid_request",
         ),
+        GatewayErrorKind::PeerRoutingLoop => (
+            StatusCode::LOOP_DETECTED,
+            "invalid_request_error",
+            gateway_protocol::peer::ROUTING_LOOP_CODE,
+        ),
         GatewayErrorKind::Unsupported => (
             StatusCode::BAD_REQUEST,
             "invalid_request_error",

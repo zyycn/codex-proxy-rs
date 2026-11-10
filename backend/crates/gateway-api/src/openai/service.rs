@@ -76,8 +76,14 @@ impl OpenAiService {
         client: &AuthenticatedClient,
         client_version: &str,
     ) -> Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable> {
+        let context = crate::middleware::current();
         self.execution
-            .client_model_catalog(client, "codex", client_version)
+            .client_model_catalog(
+                client,
+                "codex",
+                client_version,
+                context.as_ref().and_then(|ctx| ctx.extensions.peer_route()),
+            )
             .await
     }
 

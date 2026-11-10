@@ -206,6 +206,7 @@ struct ClientCatalogKey {
     plan: Option<String>,
     upstream_account_id: Option<String>,
     client_version: String,
+    peer_route: Option<reqwest::header::HeaderValue>,
     profile: CodexWireProfile,
 }
 
@@ -310,6 +311,7 @@ impl CodexCredentialCatalogService {
         client_key_id: &ClientApiKeyId,
         scope: &FrozenAccountScope,
         client_version: &str,
+        peer_route: Option<&reqwest::header::HeaderValue>,
     ) -> ClientCatalogResult {
         let now = SystemTime::now();
         let provider = gateway_core::routing::ProviderKind::new("openai")
@@ -328,9 +330,8 @@ impl CodexCredentialCatalogService {
             .cloned()
             .collect::<Vec<_>>();
         let mut accounts = self.repository.list_for_accounts(&account_ids).await?;
-        accounts.retain(|account| {
-            scope.allows_current_account(account) && eligible_catalog_account(account, now)
-        });
+        accounts
+            .retain(|account| scope.allows(account.id()) && eligible_catalog_account(account, now));
         accounts.sort_by(|left, right| left.id().cmp(right.id()));
         let (oauth, api): (Vec<_>, Vec<_>) = accounts
             .into_iter()
@@ -349,7 +350,13 @@ impl CodexCredentialCatalogService {
             let profile = request_profile.clone();
             async move {
                 let result = self
-                    .cached_client_account_catalog(client_key_id, &account, client_version, profile)
+                    .cached_client_account_catalog(
+                        client_key_id,
+                        &account,
+                        client_version,
+                        profile,
+                        peer_route,
+                    )
                     .await;
                 (index, account, result)
             }
@@ -421,27 +428,33 @@ impl CodexCredentialCatalogService {
         account: &ProviderAccount,
         client_version: &str,
         profile: CodexWireProfile,
+        peer_route: Option<&reqwest::header::HeaderValue>,
     ) -> ClientCatalogResult {
-        self.cached_account_catalog(account, Some((client_key_id, client_version)), profile)
-            .await
-            .map(|models| {
-                models
-                    .iter()
-                    .map(|model| ProviderModelDescriptor {
-                        model: model.request_model().clone(),
-                        content: if model.document().protocol() == "codex" {
-                            ProviderModelContent::Native(model.document().clone())
-                        } else {
-                            let model_id = model.request_model().as_str();
-                            ProviderModelContent::Adapted(
-                                ModelPresentation::new(Some(model_id.to_owned()), None)
-                                    .with_agent_tools(true, false)
-                                    .with_hidden(is_specialized_api_model(model_id)),
-                            )
-                        },
-                    })
-                    .collect()
-            })
+        self.cached_account_catalog(
+            account,
+            Some((client_key_id, client_version)),
+            profile,
+            peer_route,
+        )
+        .await
+        .map(|models| {
+            models
+                .iter()
+                .map(|model| ProviderModelDescriptor {
+                    model: model.request_model().clone(),
+                    content: if model.document().protocol() == "codex" {
+                        ProviderModelContent::Native(model.document().clone())
+                    } else {
+                        let model_id = model.request_model().as_str();
+                        ProviderModelContent::Adapted(
+                            ModelPresentation::new(Some(model_id.to_owned()), None)
+                                .with_agent_tools(true, false)
+                                .with_hidden(is_specialized_api_model(model_id)),
+                        )
+                    },
+                })
+                .collect()
+        })
     }
 
     /// 在既有账号、revision 隔离及负缓存边界内读取 Messages 转换能力
@@ -457,7 +470,7 @@ impl CodexCredentialCatalogService {
         let account = account.clone();
         let mut lookup = Box::pin(async move {
             service
-                .cached_account_catalog(&account, None, service.profile.snapshot())
+                .cached_account_catalog(&account, None, service.profile.snapshot(), None)
                 .await
         });
         let models = match tokio::time::timeout(CAPABILITY_LOOKUP_BUDGET, &mut lookup).await {
@@ -485,8 +498,13 @@ impl CodexCredentialCatalogService {
         account: &ProviderAccount,
         identity: Option<(&ClientApiKeyId, &str)>,
         profile: CodexWireProfile,
+        peer_route: Option<&reqwest::header::HeaderValue>,
     ) -> AccountModelsResult {
+        // 不同路径不能等待同一次回源，否则两个相向查询可能互等而无法进入判环入口
+        let peer_route = peer_route
+            .filter(|_| account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_API_KEY);
         let key = ClientCatalogKey {
+            peer_route: peer_route.cloned(),
             // 无种子时沿用账号级目录缓存，启用后按 Key 隔离出站身份
             client_key_id: profile
                 .installation_seed
@@ -528,11 +546,12 @@ impl CodexCredentialCatalogService {
         let result = value
             .get_or_init(|| async {
                 // 冻结画像，确保实际请求与缓存身份一致；不传递客户端 Bearer 给上游
-                let client = CodexBackendClient::new(
+                let mut client = CodexBackendClient::new(
                     self.http.clone(),
                     self.base_url.clone(),
                     CodexWireProfileState::new(profile),
                 );
+                client.peer_route = peer_route.cloned();
                 let result = self
                     .fetch_account_models(&client, account, identity)
                     .await

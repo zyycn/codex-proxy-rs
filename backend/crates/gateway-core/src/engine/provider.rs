@@ -1223,6 +1223,7 @@ pub trait Provider: Send + Sync {
         _scope: &crate::account::scope::FrozenAccountScope,
         _protocol: &str,
         _client_version: &str,
+        _peer_route: Option<&http::HeaderValue>,
     ) -> Result<
         Option<Vec<crate::routing::ProviderModelDescriptor>>,
         crate::routing::ProviderCatalogUnavailable,

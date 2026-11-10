@@ -1114,6 +1114,7 @@ async fn websocket_disconnect_during_core_settlement_finishes_charge_before_rele
     let lifecycle = Arc::new(SettlementConnectionLifecycle::default());
     let admin = crate::admin::AdminTestFixture::new().await;
     let app = gateway_api::initialize(
+        uuid::Uuid::nil(),
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
             cors_allowed_origins: Vec::new(),

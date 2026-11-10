@@ -222,6 +222,7 @@ impl ExecutionService for ModelsExecution {
         _client: &'a AuthenticatedClient,
         protocol: &'a str,
         version: &'a str,
+        _peer_route: Option<&'a axum::http::HeaderValue>,
     ) -> BoxFuture<'a, Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable>> {
         Box::pin(async move {
             assert_eq!(protocol, "codex");

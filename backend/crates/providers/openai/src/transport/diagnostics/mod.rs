@@ -446,6 +446,10 @@ fn classify_upstream_failure(
     identity_authorization_error: Option<&str>,
     identity_error_code: Option<&str>,
 ) -> CodexFailureCategory {
+    // 互联环路是确定的路由拒绝，不按通用 5xx 重试或降低账号健康度
+    if gateway_protocol::peer::is_routing_loop(status.map(|s| s.as_u16()), fields.code.as_deref()) {
+        return CodexFailureCategory::InvalidRequest;
+    }
     let code = normalized(fields.code.as_deref());
     let error_type = normalized(fields.error_type.as_deref());
     let identity_code = normalized(identity_error_code);

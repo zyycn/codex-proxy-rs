@@ -1108,6 +1108,8 @@ impl std::error::Error for ProviderError {
 pub enum GatewayErrorKind {
     /// 请求无效
     InvalidRequest,
+    /// 请求再次进入已经过的部署
+    PeerRoutingLoop,
     /// 请求能力不支持
     Unsupported,
     /// 下游认证失败
@@ -1149,6 +1151,7 @@ impl GatewayErrorKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidRequest => "invalid_request",
+            Self::PeerRoutingLoop => gateway_protocol::peer::ROUTING_LOOP_CODE,
             Self::Unsupported => "unsupported",
             Self::Unauthorized => "unauthorized",
             Self::PolicyDenied => "policy_denied",
@@ -1240,6 +1243,17 @@ impl GatewayError {
     #[must_use]
     pub fn from_provider(error: &ProviderError) -> Self {
         let gateway = match error.kind() {
+            ProviderErrorKind::InvalidRequest
+                if gateway_protocol::peer::is_routing_loop(
+                    error.upstream_status(),
+                    error.upstream_code().map(|code| code.as_str()),
+                ) =>
+            {
+                Self::new(
+                    GatewayErrorKind::PeerRoutingLoop,
+                    "Peer routing loop detected.",
+                )
+            }
             ProviderErrorKind::InvalidRequest => Self::new(
                 GatewayErrorKind::InvalidRequest,
                 "Invalid upstream request.",

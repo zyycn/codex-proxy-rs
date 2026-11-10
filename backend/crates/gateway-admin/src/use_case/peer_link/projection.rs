@@ -1,6 +1,6 @@
 //! 从已授权的本地账号事实派生公开汇总，保留原始观测时间
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use gateway_core::{
@@ -67,6 +67,7 @@ pub(super) async fn quota_and_models(
     providers: &ProviderAdminRegistry,
     runtime: &AccountRuntimeSnapshot,
     models: &[gateway_core::routing::PublicModelId],
+    authorized: &[ProviderAccountId],
     now: DateTime<Utc>,
     max_response_bytes: usize,
 ) -> Result<(Vec<PeerAccountQuota>, Vec<PeerModelSummary>), super::PeerLinkError> {
@@ -150,6 +151,28 @@ pub(super) async fn quota_and_models(
                 })
                 .collect(),
         });
+    }
+    // 转供账号及发布窗口内消失的账号没有本地观测，只影响它们获准执行的模型
+    if accounts.len() != authorized.len() {
+        let exported = accounts
+            .iter()
+            .map(|account| account.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let missing = authorized
+            .iter()
+            .filter(|id| !exported.contains(id.as_str()))
+            .collect::<Vec<_>>();
+        for (index, model) in models.iter().enumerate() {
+            if index % 16 == 0 {
+                tokio::task::yield_now().await;
+            }
+            if missing
+                .iter()
+                .any(|id| snapshot.allows_public_model_for_account(model, scope, id))
+            {
+                observations.entry(model.as_str()).or_default().incomplete = true;
+            }
+        }
     }
     let summaries = models
         .iter()

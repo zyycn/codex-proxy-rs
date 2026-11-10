@@ -97,7 +97,13 @@ impl CodexBackendClient {
         } else if let Some(client_version) = client_version {
             request = request.query(&[("client_version", client_version)]);
         }
-        let response = request.send().await?;
+        let mut request = request.build()?;
+        if let Some(route) = self.route_to(request.url()) {
+            request
+                .headers_mut()
+                .insert(gateway_protocol::peer::ROUTE_HEADER, route.clone());
+        }
+        let response = self.client.execute(request).await?;
         let status = response.status();
         let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers())
             .with_response_origin(Some(response.url().clone()));

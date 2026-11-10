@@ -1,7 +1,10 @@
-//! CPR 互联的版本化只读线协议，不包含授权、采集或调度策略
+//! CPR 互联的推理路径和版本化只读线协议，不包含授权、采集或调度策略
 
 use serde::{Deserialize, Serialize};
 
+/// 节点间推理的部署路径，使用逗号分隔的 UUID
+pub const ROUTE_HEADER: &str = "x-cpr-route";
+pub const ROUTING_LOOP_CODE: &str = "peer_routing_loop";
 pub const SHARING_DISABLED_CODE: &str = "peer_sharing_disabled";
 pub const OBJECT: &str = "cpr.peer";
 pub const SCHEMA_VERSION: u32 = 3;
@@ -9,6 +12,12 @@ pub const MAX_ACCOUNTS: usize = 3_000;
 pub const MAX_QUOTA_WINDOWS: usize = 6_000;
 pub const MAX_MODELS: usize = 2_000;
 pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
+/// 普通 5xx 和第三方错误不代表 CPR 确认了环路
+#[must_use]
+pub fn is_routing_loop(status: Option<u16>, code: Option<&str>) -> bool {
+    status == Some(508) && code == Some(ROUTING_LOOP_CODE)
+}
 
 /// 可选能力按当前认证主体公开，未知能力可以忽略
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

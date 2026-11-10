@@ -8,7 +8,9 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{TimeDelta, Utc};
-use gateway_core::{engine::execution::AuthenticatedClient, policy::ClientPeerSharing};
+use gateway_core::{
+    account::ProviderAccountId, engine::execution::AuthenticatedClient, policy::ClientPeerSharing,
+};
 use tokio::sync::Semaphore;
 
 use crate::{
@@ -151,16 +153,37 @@ impl PeerLinkService for DefaultPeerLinkService {
             .filter(|group| group.enabled)
             .map(|group| group.id.clone())
             .collect::<Vec<_>>();
+        let scope = client.policy().account_scope();
+        let direct_ids = ids
+            .iter()
+            .filter(|id| {
+                scope
+                    .directory()
+                    .account(id)
+                    .is_some_and(|account| account.is_direct_account())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         let accounts = self
             .accounts
-            .load_accounts_in_enabled_groups(&ids, &groups)
+            .load_accounts_in_enabled_groups(&direct_ids, &groups)
             .await
             .map_err(|error| map_store_error(error, "peer accounts"))?
             .into_iter()
             .filter(|account| {
-                self.providers
-                    .require(&account.provider_kind)
-                    .is_ok_and(|provider| provider.is_direct_account(&account.authentication_kind))
+                ProviderAccountId::new(account.id.clone())
+                    .ok()
+                    .and_then(|id| scope.directory().account(&id))
+                    .is_some_and(|frozen| {
+                        frozen.direct_authentication_kind()
+                            == Some(account.authentication_kind.as_str())
+                    })
+                    && self
+                        .providers
+                        .require(&account.provider_kind)
+                        .is_ok_and(|provider| {
+                            provider.is_direct_account(&account.authentication_kind)
+                        })
             })
             .collect::<Vec<_>>();
         let account_ids = accounts
@@ -229,26 +252,18 @@ impl PeerLinkService for DefaultPeerLinkService {
             ));
         }
         if sharing.share_quota {
-            let (quota, mut models) = projection::quota_and_models(
+            let (quota, models) = projection::quota_and_models(
                 client,
                 &accounts,
                 &quotas,
                 &self.providers,
                 &runtime,
                 &public_models,
+                &ids,
                 now,
                 limits.max_response_bytes,
             )
             .await?;
-            // 发布窗口内缺失或已变更的账号不能被静默剔除后推导整个模型池耗尽
-            if accounts.len() != ids.len() {
-                for model in &mut models {
-                    model.complete = false;
-                    if model.state == crate::model::peer_link::PeerModelState::Exhausted {
-                        model.state = crate::model::peer_link::PeerModelState::Unknown;
-                    }
-                }
-            }
             result.quota = Some(quota);
             result.models = models;
         }

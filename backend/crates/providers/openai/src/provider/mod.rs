@@ -302,8 +302,10 @@ impl CodexProvider {
         &self,
         context: &AttemptContext,
     ) -> Result<CodexBackendClient, ProviderError> {
+        let mut client = self.client.clone();
+        client.peer_route = context.extension_scope().peer_route().cloned();
         let Some(profile) = context.request_profile() else {
-            return Ok(self.client.clone());
+            return Ok(client);
         };
         let profile = serde_json::from_value(Value::Object(profile.expose_to_provider().clone()))
             .map_err(|error: serde_json::Error| {
@@ -317,7 +319,7 @@ impl CodexProvider {
             provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
                 .with_diagnostic(diagnostic)
         })?;
-        Ok(self.client.clone().with_request_profile(profile))
+        Ok(client.with_request_profile(profile))
     }
 
     // Provider 构造集中装配独立领域服务和透明传输依赖，拆分参数会模糊所有权
@@ -557,6 +559,7 @@ impl Provider for CodexProvider {
         scope: &gateway_core::account::scope::FrozenAccountScope,
         protocol: &str,
         client_version: &str,
+        peer_route: Option<&reqwest::header::HeaderValue>,
     ) -> Result<
         Option<Vec<gateway_core::routing::ProviderModelDescriptor>>,
         gateway_core::routing::ProviderCatalogUnavailable,
@@ -565,7 +568,7 @@ impl Provider for CodexProvider {
             return Ok(None);
         }
         self.catalog
-            .client_model_catalog(client_api_key_id, scope, client_version)
+            .client_model_catalog(client_api_key_id, scope, client_version, peer_route)
             .await
             .map(Some)
             .map_err(|_| gateway_core::routing::ProviderCatalogUnavailable)

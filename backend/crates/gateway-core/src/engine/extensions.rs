@@ -11,9 +11,22 @@ use std::{collections::BTreeSet, sync::Arc};
 pub struct ExtensionCallScope {
     instance_ids: Arc<BTreeSet<String>>,
     request: Option<Arc<RequestContext>>,
+    peer_route: Option<http::HeaderValue>,
 }
 
 impl ExtensionCallScope {
+    /// 随本次执行与其子调用保留已校验的转发路径，不进入插件协议
+    #[must_use]
+    pub fn with_peer_route(mut self, path: http::HeaderValue) -> Self {
+        self.peer_route = Some(path);
+        self
+    }
+
+    #[must_use]
+    pub fn peer_route(&self) -> Option<&http::HeaderValue> {
+        self.peer_route.as_ref()
+    }
+
     #[must_use]
     pub fn with_request(mut self, request: Arc<RequestContext>) -> Self {
         self.request = Some(request);
@@ -57,7 +70,7 @@ impl ExtensionCallScope {
         instance_ids.insert(instance_id);
         Some(Self {
             instance_ids: Arc::new(instance_ids),
-            request: self.request.clone(),
+            ..self.clone()
         })
     }
 }
