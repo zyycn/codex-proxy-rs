@@ -26,16 +26,16 @@ pub struct GetKeyBudgetWindowRequest {
 pub struct KeyBudgetWindow {
     pub revision: u64,
     pub explicit: bool,
-    pub starts_at_ms: Option<i64>,
-    pub ends_at_ms: Option<i64>,
+    pub starts_at_us: Option<i64>,
+    pub ends_at_us: Option<i64>,
     pub used_usd: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExplicitBudgetWindow {
-    pub starts_at_ms: i64,
-    pub ends_at_ms: i64,
+    pub starts_at_us: i64,
+    pub ends_at_us: i64,
 }
 
 /// 重试保留全部参数；window 为 None 时释放显式控制并保留当前消费

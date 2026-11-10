@@ -74,8 +74,8 @@ impl PluginClientKeys {
                 encode(&key_budgets::KeyBudgetWindow {
                     revision: window.revision,
                     explicit: window.explicit,
-                    starts_at_ms: window.starts_at.map(|time| time.timestamp_millis()),
-                    ends_at_ms: window.ends_at.map(|time| time.timestamp_millis()),
+                    starts_at_us: window.starts_at.map(|time| time.timestamp_micros()),
+                    ends_at_us: window.ends_at.map(|time| time.timestamp_micros()),
                     used_usd: window.used_usd.canonical(),
                 })
             }
@@ -86,9 +86,9 @@ impl PluginClientKeys {
                     .window
                     .map(|window| {
                         Ok(ExplicitClientKeyBudgetWindow {
-                            starts_at: chrono::DateTime::from_timestamp_millis(window.starts_at_ms)
+                            starts_at: chrono::DateTime::from_timestamp_micros(window.starts_at_us)
                                 .ok_or_else(invalid)?,
-                            ends_at: chrono::DateTime::from_timestamp_millis(window.ends_at_ms)
+                            ends_at: chrono::DateTime::from_timestamp_micros(window.ends_at_us)
                                 .ok_or_else(invalid)?,
                         })
                     })

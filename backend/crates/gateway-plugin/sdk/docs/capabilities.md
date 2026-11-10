@@ -193,7 +193,7 @@ Key 明文仍通过宿主管理面查看，插件模型调用使用返回的 Key
 | `get_key_budget` / `host.keys.get_budget` | `{client_key_id}`；返回 `KeyBudget`，包含 ID、日／周上限及已用金额、日／周重置时间 |
 | `update_key_budget_limits` / `host.keys.update_budget_limits` | `{client_key_id, daily_limit_usd?, weekly_limit_usd?}`；至少指定一项；返回 `{client_key_id}` |
 | `reset_key_budget` / `host.keys.reset_budget` | `{client_key_id, period}`；`period` 必填，取 `daily`、`weekly` 或 `all`；返回 `{client_key_id}` |
-| `get_key_budget_window` / `host.keys.get_budget_window` | `{client_key_id, period}`；`period` 为 `daily` 或 `weekly`；返回 `{revision, explicit, starts_at_ms, ends_at_ms, used_usd}` |
+| `get_key_budget_window` / `host.keys.get_budget_window` | `{client_key_id, period}`；`period` 为 `daily` 或 `weekly`；返回 `{revision, explicit, starts_at_us, ends_at_us, used_usd}` |
 | `set_key_budget_window` / `host.keys.set_budget_window` | `{client_key_id, period, expected_revision, window}`；返回 `{revision}` |
 
 `list_keys` / `host.keys.list` 仍可查询非秘密目录，仅返回 `{id,name,enabled}` 和游标，沿用目录的控制参数编码。
@@ -217,7 +217,8 @@ SDK 不自动重试。超时或断连不能证明写入未提交；重试上限�
 不存在的 Key 返回 `rejected`；写入事务复验发现实例停用或版本变化时返回 `conflict`，
 非法输入返回 `invalid_input`。账号关联、预算分配和重置触发由插件决定，宿主不自动串联上述接口
 
-显式窗口的 `window` 为 `{starts_at_ms, ends_at_ms}`，要求起点早于终点，采用左闭右开区间。
+显式窗口的 `window` 为 `{starts_at_us, ends_at_us}`，两端均为 UTC Unix 微秒，采用左闭右开区间，起点须早于终点。
+接管已有窗口时，直接回传 `get_key_budget_window` 返回的微秒值；截断到毫秒可能改变窗口边界。
 设置窗口保留金额上限，并从原生费用事件计入区间内已完成请求；待落盘费用由现有准入和结算路径处理。
 窗口未开始或已到期时拒绝新请求，错误码为 `key_budget_window_inactive`，即使金额上限为零也不放行；
 宿主不按日历推进显式窗口。结算按完成时间归属，迟到费用不会计入其他周期。

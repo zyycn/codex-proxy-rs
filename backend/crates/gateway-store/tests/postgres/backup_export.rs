@@ -163,7 +163,7 @@ async fn business_backup_restores_core_state_and_usage_without_request_history()
             .set_client_key_budget_window(change.clone(), actor.clone(), &context())
             .await
             .unwrap();
-        change.window.as_mut().unwrap().ends_at += TimeDelta::hours(1);
+        change.window.as_mut().unwrap().ends_at += TimeDelta::microseconds(1);
         let conflict = keys
             .set_client_key_budget_window(change.clone(), actor.clone(), &context())
             .await

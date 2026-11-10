@@ -475,16 +475,16 @@ async fn plugin_window_operations_replay_once_and_validate_parameters() {
         return;
     };
     let key = seed_budget(&environment).await;
-    let now = chrono::Utc::now().timestamp_millis();
-    let command = json!({"client_key_id":key.as_str(),"period":"weekly","expected_revision":0,"window":{"starts_at_ms":now-3600000,"ends_at_ms":now+3600000}});
+    let now = chrono::Utc::now().timestamp_micros();
+    let hour = chrono::TimeDelta::hours(1).num_microseconds().unwrap();
+    let command = json!({"client_key_id":key.as_str(),"period":"weekly","expected_revision":0,"window":{"starts_at_us":now-hour,"ends_at_us":now+hour}});
     let mut changed = command.clone();
-    changed["window"]["ends_at_ms"] = json!(now + 7200000);
+    changed["window"]["ends_at_us"] = json!(now + 2 * hour);
     let mut invalid = command.clone();
-    invalid["window"]["starts_at_ms"] = json!(now + 7200000);
+    invalid["window"]["starts_at_us"] = json!(now + 2 * hour);
     let mut forged = command.clone();
     forged["instance_id"] = json!("forged");
-    environment.install_plugin(json!({
-        "management_registration":{"routes":[{"method":"POST","path":"reset","request_content_types":[],"response_content_types":["application/json"]}]},
+    let result: Vec<Value> = run_window_plugin(&environment, json!({
         "data_queries":[
             {"method":"host.keys.set_budget_window","query":command},
             {"method":"host.keys.set_budget_window","query":command},
@@ -495,6 +495,62 @@ async fn plugin_window_operations_replay_once_and_validate_parameters() {
             {"method":"host.keys.get_budget_window","query":{"client_key_id":key.as_str(),"period":"weekly"}}
         ]
     })).await;
+    assert_eq!(result[0], json!({"revision":1}));
+    assert_eq!(result[1], result[0]);
+    assert_eq!(result[2], json!({"error":"conflict"}));
+    assert_eq!(result[3], json!({"error":"invalid_input"}));
+    assert_eq!(result[4], json!({"error":"invalid_input"}));
+    assert_eq!(result[5], json!({"error":"invalid_input"}));
+    assert_eq!(result[6]["ends_at_us"], now + hour);
+    assert_eq!(result[6]["explicit"], true);
+    assert_eq!(
+        environment.audit_requests("set_budget_window").await.len(),
+        1
+    );
+    environment.close().await;
+}
+
+#[tokio::test]
+async fn sdk_adopts_restored_native_window_without_losing_precision_or_spend() {
+    use gateway_plugin_sdk::call::key_budgets::KeyBudgetWindow;
+
+    let Some(environment) = Environment::create().await else {
+        eprintln!("SKIP: plugin integration environment absent");
+        return;
+    };
+    let key = seed_budget(&environment).await;
+    environment
+        .restore_weekly_budget_without_charge_history(key.as_str())
+        .await;
+    let [before, after]: [KeyBudgetWindow; 2] = run_window_plugin(
+        &environment,
+        json!({
+            "sdk_session": true,
+            "adopt_budget_window": {"client_key_id":key.as_str(), "period":"weekly"}
+        }),
+    )
+    .await;
+    assert!(!before.explicit);
+    assert_eq!(before.starts_at_us.unwrap().rem_euclid(1_000), 456);
+    assert_eq!(before.ends_at_us.unwrap().rem_euclid(1_000), 789);
+    assert_eq!(before.used_usd, "4");
+    assert_eq!(
+        after,
+        KeyBudgetWindow {
+            explicit: true,
+            revision: before.revision + 1,
+            ..before
+        }
+    );
+    environment.close().await;
+}
+
+async fn run_window_plugin<T: serde::de::DeserializeOwned>(
+    environment: &Environment,
+    mut config: Value,
+) -> T {
+    config["management_registration"] = json!({"routes":[{"method":"POST","path":"window","request_content_types":[],"response_content_types":["application/json"]}]});
+    environment.install_plugin(config).await;
     let (runtime, core) = environment.runtime().await;
     let access = gateway_admin::initialize_plugin_client_keys(
         native::admin_registry(),
@@ -515,7 +571,7 @@ async fn plugin_window_operations_replay_once_and_validate_parameters() {
                 request_context: None,
                 headers: vec![],
                 method: "POST".into(),
-                path: "reset".into(),
+                path: "window".into(),
                 query: String::new(),
                 content_type: None,
                 body: vec![],
@@ -524,24 +580,12 @@ async fn plugin_window_operations_replay_once_and_validate_parameters() {
         )
         .await
         .unwrap();
-    let result: Vec<Value> = serde_json::from_slice(&reply.body).unwrap();
-    assert_eq!(result[0], json!({"revision":1}));
-    assert_eq!(result[1], result[0]);
-    assert_eq!(result[2], json!({"error":"conflict"}));
-    assert_eq!(result[3], json!({"error":"invalid_input"}));
-    assert_eq!(result[4], json!({"error":"invalid_input"}));
-    assert_eq!(result[5], json!({"error":"invalid_input"}));
-    assert_eq!(result[6]["ends_at_ms"], now + 3600000);
-    assert_eq!(result[6]["explicit"], true);
-    assert_eq!(
-        environment.audit_requests("set_budget_window").await.len(),
-        1
-    );
+    let result = serde_json::from_slice(&reply.body).unwrap();
     environment.release_plugin_accounts(&runtime);
     runtime.shutdown().await;
     drop(service);
     drop(access);
     drop(core);
     drop(runtime);
-    environment.close().await;
+    result
 }
