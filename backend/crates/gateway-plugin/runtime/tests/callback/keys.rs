@@ -323,6 +323,22 @@ struct HoldCommittedReply {
 
 #[async_trait::async_trait]
 impl PluginClientKeyAccess for HoldCommittedReply {
+    async fn budget_window(
+        &self,
+        id: &ClientApiKeyId,
+        period: gateway_admin::model::client_keys::ClientKeyBudgetWindowPeriod,
+    ) -> Result<gateway_admin::model::client_keys::ClientKeyBudgetWindow, AdminError> {
+        self.inner.budget_window(id, period).await
+    }
+    async fn set_budget_window(
+        &self,
+        owner: &PluginResourceOwner,
+        command: gateway_admin::model::client_keys::SetClientKeyBudgetWindow,
+        context: &MutationContext,
+    ) -> Result<u64, AdminError> {
+        self.inner.set_budget_window(owner, command, context).await
+    }
+
     async fn facts(&self, id: &ClientApiKeyId) -> Result<PluginClientKeyFacts, AdminError> {
         self.inner.facts(id).await
     }
@@ -446,5 +462,81 @@ async fn losing_callback_reply_after_commit_keeps_budget_and_audit_without_repla
     drop(core);
     drop(runtime);
     drop(store);
+    environment.close().await;
+}
+
+#[tokio::test]
+async fn plugin_window_operations_replay_once_and_validate_parameters() {
+    let Some(environment) = Environment::create().await else {
+        eprintln!("SKIP: plugin integration environment absent");
+        return;
+    };
+    let key = seed_budget(&environment).await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let command = json!({"client_key_id":key.as_str(),"period":"weekly","expected_revision":0,"window":{"starts_at_ms":now-3600000,"ends_at_ms":now+3600000}});
+    let mut changed = command.clone();
+    changed["window"]["ends_at_ms"] = json!(now + 7200000);
+    let mut invalid = command.clone();
+    invalid["window"]["starts_at_ms"] = json!(now + 7200000);
+    let mut forged = command.clone();
+    forged["instance_id"] = json!("forged");
+    environment.install_plugin(json!({
+        "management_registration":{"routes":[{"method":"POST","path":"reset","request_content_types":[],"response_content_types":["application/json"]}]},
+        "data_queries":[
+            {"method":"host.keys.set_budget_window","query":command},
+            {"method":"host.keys.set_budget_window","query":command},
+            {"method":"host.keys.set_budget_window","query":changed},
+            {"method":"host.keys.set_budget_window","query":invalid},
+            {"method":"host.keys.set_budget_window","query":forged},
+            {"method":"host.keys.get_budget_window","query":{"client_key_id":key.as_str(),"period":"weekly"}}
+        ]
+    })).await;
+    let (runtime, core) = environment.runtime().await;
+    let access = gateway_admin::initialize_plugin_client_keys(
+        native::admin_registry(),
+        environment.store.admin_ports().client_keys(),
+        core.snapshot_control(),
+    );
+    runtime.bind_client_key_ports(&access).unwrap();
+    let service = PluginManagementService::new(
+        runtime.clone(),
+        environment.store.admin_ports().plugins(),
+        core.snapshots(),
+    );
+    let view = service.views().await.unwrap().remove(0);
+    let reply = service
+        .handle(
+            &view.target,
+            PluginManagementRequest {
+                request_context: None,
+                headers: vec![],
+                method: "POST".into(),
+                path: "reset".into(),
+                query: String::new(),
+                content_type: None,
+                body: vec![],
+                request_id: "explicit-window".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let result: Vec<Value> = serde_json::from_slice(&reply.body).unwrap();
+    assert_eq!(result[0], json!({"revision":1}));
+    assert_eq!(result[1], result[0]);
+    assert_eq!(result[2], json!({"error":"conflict"}));
+    assert_eq!(result[3], json!({"error":"invalid_input"}));
+    assert_eq!(result[4], json!({"error":"invalid_input"}));
+    assert_eq!(result[5]["ends_at_ms"], now + 3600000);
+    assert_eq!(result[5]["explicit"], true);
+    assert_eq!(
+        environment.audit_requests("set_budget_window").await.len(),
+        1
+    );
+    environment.release_plugin_accounts(&runtime);
+    runtime.shutdown().await;
+    drop(service);
+    drop(access);
+    drop(core);
+    drop(runtime);
     environment.close().await;
 }

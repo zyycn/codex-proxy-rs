@@ -496,11 +496,18 @@ async fn manual_reset_leaves_unused_and_expired_windows_inactive_and_reports_mis
         assert!(after.weekly_resets_at.is_none());
         assert_eq!(after.daily_used_usd.canonical(), "0");
     }
-    let windows: i64 = sqlx::query_scalar("select count(*) from client_api_key_budget_windows")
-        .fetch_one(&database.pool)
-        .await
-        .unwrap();
-    assert_eq!(windows, 1);
+    // 未使用的 Key 也记录控制版本，重置前读到的窗口版本不能继续提交
+    for key in ["unused", "expired"] {
+        let window = admin
+            .client_key_budget_window(
+                &key_id(key),
+                gateway_admin::model::client_keys::ClientKeyBudgetWindowPeriod::Weekly,
+            )
+            .await
+            .unwrap();
+        assert_eq!(window.revision, 1);
+        assert!(!window.explicit);
+    }
     let error = admin
         .reset_client_key_budget(
             ResetClientKeyBudget {

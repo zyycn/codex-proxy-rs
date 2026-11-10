@@ -988,7 +988,7 @@ PostgreSQL 周期对账才是正确性基础
 | 状态 | 唯一权威 | 说明 |
 | --- | --- | --- |
 | 账号、credential、分组、Client Key、设置、审计、请求与备份记录 | PostgreSQL | 业务持久化事实 |
-| Client Key 金额窗口与费用事件 | PostgreSQL | 准入与幂等结算的权威账本，独立于请求观测与日志保留策略 |
+| Client Key 金额窗口与费用事件 | PostgreSQL | 日历／显式窗口共用准入与结算账本，窗口版本及最近操作参数随窗口原子提交，独立于请求观测与日志保留策略 |
 | CPR 互联共享权限与上游观测 | PostgreSQL | 权限随 Key 保存，当前快照复用账号额度字段，刷新排程属于运行期；原始观测时间与本地查询时间分别解释 |
 | 插件包体、安装来源、制品接受事实、实例配置与私有状态 | PostgreSQL | 完整信任决定绑定已接受摘要；进程内发布集合由持久化事实构建 |
 | admission、lease、cooldown、circuit、会话亲和、continuation、失败轮次、OAuth pending、目录 cache | Redis | 可重建、可过期的协调状态 |

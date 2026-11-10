@@ -16,6 +16,7 @@ pub enum MutationAuditOperation {
     AccountGroupEnabled { enabled: bool },
     AccountGroupDelete,
     ClientApiKeyResetBudget,
+    ClientApiKeySetBudgetWindow,
     ProviderAccountUpdate,
     BackupStorageUpdate,
     BackupScheduleUpdate,
@@ -76,6 +77,7 @@ impl MutationAuditOperation {
             }
             Self::AccountGroupDelete => ("delete", "account_group"),
             Self::ClientApiKeyResetBudget => ("reset_budget", "client_api_key"),
+            Self::ClientApiKeySetBudgetWindow => ("set_budget_window", "client_api_key"),
             Self::ProviderAccountUpdate => ("update", "provider_account"),
             Self::BackupStorageUpdate => ("backup.s3_config_updated", "backup_settings"),
             Self::BackupScheduleUpdate => ("backup.schedule_updated", "backup_settings"),

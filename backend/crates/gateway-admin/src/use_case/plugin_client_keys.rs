@@ -9,9 +9,10 @@ use crate::{
     model::{
         AdminError, MutationContext,
         client_keys::{
-            ClientKeyBudgetMutationOrigin, ClientKeyCursor, ClientKeyCursorValue,
-            ClientKeyListQuery, ClientKeyPageSize, ClientKeySort, ClientKeySortField,
-            ResetClientKeyBudget, SortDirection, UpdateClientKeyBudgetLimits,
+            ClientKeyBudgetMutationOrigin, ClientKeyBudgetWindow, ClientKeyBudgetWindowPeriod,
+            ClientKeyCursor, ClientKeyCursorValue, ClientKeyListQuery, ClientKeyPageSize,
+            ClientKeySort, ClientKeySortField, ResetClientKeyBudget, SetClientKeyBudgetWindow,
+            SortDirection, UpdateClientKeyBudgetLimits,
         },
         plugin_client_keys::{
             PluginClientKey, PluginClientKeyCursor, PluginClientKeyFacts, PluginClientKeyListQuery,
@@ -35,6 +36,29 @@ impl DefaultPluginClientKeyAccess {
 
 #[async_trait]
 impl PluginClientKeyAccess for DefaultPluginClientKeyAccess {
+    async fn budget_window(
+        &self,
+        id: &ClientApiKeyId,
+        period: ClientKeyBudgetWindowPeriod,
+    ) -> Result<ClientKeyBudgetWindow, AdminError> {
+        self.service.budget_window(id, period).await
+    }
+
+    async fn set_budget_window(
+        &self,
+        owner: &PluginResourceOwner,
+        command: SetClientKeyBudgetWindow,
+        context: &MutationContext,
+    ) -> Result<u64, AdminError> {
+        self.service
+            .set_budget_window(
+                context,
+                command,
+                ClientKeyBudgetMutationOrigin::Plugin(owner.clone()),
+            )
+            .await
+    }
+
     async fn facts(&self, id: &ClientApiKeyId) -> Result<PluginClientKeyFacts, AdminError> {
         let key = self.service.get(id).await?;
         Ok(PluginClientKeyFacts {

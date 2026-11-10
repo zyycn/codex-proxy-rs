@@ -22,8 +22,9 @@ use crate::model::{
     },
     auth::{AdminAuditEvent, AuthSession},
     client_keys::{
-        ClientKeyBudgetMutationOrigin, ClientKeyListQuery, ClientKeyPage, ClientKeyRecord,
-        ClientKeySecret, DeleteClientKey, NewClientKey, ResetClientKeyBudget, SetClientKeyEnabled,
+        ClientKeyBudgetMutationOrigin, ClientKeyBudgetWindow, ClientKeyBudgetWindowPeriod,
+        ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
+        NewClientKey, ResetClientKeyBudget, SetClientKeyBudgetWindow, SetClientKeyEnabled,
         UpdateClientKey, UpdateClientKeyBudgetLimits,
     },
     observability::{
@@ -365,6 +366,19 @@ pub trait AuthStore: Send + Sync {
 /// Client API Key 资料读取与管理写入
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
+    async fn client_key_budget_window(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+        period: ClientKeyBudgetWindowPeriod,
+    ) -> AdminStoreResult<ClientKeyBudgetWindow>;
+
+    async fn set_client_key_budget_window(
+        &self,
+        command: SetClientKeyBudgetWindow,
+        origin: ClientKeyBudgetMutationOrigin,
+        context: &MutationContext,
+    ) -> AdminStoreResult<u64>;
+
     /// 按已验证的 ID 读取资料，不读取完整明文 Key
     async fn get_client_key(
         &self,

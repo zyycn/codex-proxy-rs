@@ -11,6 +11,28 @@ use crate::{
 use super::{HostClient, SessionError, payload_call};
 
 impl HostClient {
+    /// 读取当前预算窗口及配置版本，不开启窗口
+    ///
+    /// # Errors
+    /// Key 不存在或宿主读取失败时返回错误
+    pub async fn get_key_budget_window(
+        &self,
+        request: key_budgets::GetKeyBudgetWindowRequest,
+    ) -> Result<key_budgets::KeyBudgetWindow, PluginFault> {
+        payload_call(self, key_budgets::GET_WINDOW, request).await
+    }
+
+    /// 幂等设置预算窗口；已被后续变更替代的操作返回冲突
+    ///
+    /// # Errors
+    /// 参数无效、版本冲突、Key 不存在或宿主写入失败时返回错误
+    pub async fn set_key_budget_window(
+        &self,
+        request: key_budgets::SetKeyBudgetWindowRequest,
+    ) -> Result<key_budgets::SetKeyBudgetWindowResult, PluginFault> {
+        payload_call(self, key_budgets::SET_WINDOW, request).await
+    }
+
     /// 只读查询单个 Key 的预算，不开启或重置窗口
     ///
     /// # Errors

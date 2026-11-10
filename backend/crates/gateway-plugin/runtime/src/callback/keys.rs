@@ -6,7 +6,10 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use gateway_admin::{
     model::{
         AdminError, PageSize,
-        client_keys::{ClientKeyBudgetPeriod, ResetClientKeyBudget, UpdateClientKeyBudgetLimits},
+        client_keys::{
+            ClientKeyBudgetPeriod, ClientKeyBudgetWindowPeriod, ExplicitClientKeyBudgetWindow,
+            ResetClientKeyBudget, SetClientKeyBudgetWindow, UpdateClientKeyBudgetLimits,
+        },
         plugin_client_keys::{PluginClientKeyCursor, PluginClientKeyListQuery},
         plugin_resources::PluginResourceOwner,
         plugins::instances::PluginInstance,
@@ -60,6 +63,49 @@ impl PluginClientKeys {
         }
         let access = self.ports.upgrade()?;
         match method {
+            key_budgets::GET_WINDOW => {
+                let request: key_budgets::GetKeyBudgetWindowRequest =
+                    serde_json::from_slice(payload).map_err(|_| invalid())?;
+                let id = ClientApiKeyId::new(request.client_key_id).map_err(|_| invalid())?;
+                let window = access
+                    .budget_window(&id, window_period(request.period))
+                    .await
+                    .map_err(map_admin_error)?;
+                encode(&key_budgets::KeyBudgetWindow {
+                    revision: window.revision,
+                    explicit: window.explicit,
+                    starts_at_ms: window.starts_at.map(|time| time.timestamp_millis()),
+                    ends_at_ms: window.ends_at.map(|time| time.timestamp_millis()),
+                    used_usd: window.used_usd.canonical(),
+                })
+            }
+            key_budgets::SET_WINDOW => {
+                let request: key_budgets::SetKeyBudgetWindowRequest =
+                    serde_json::from_slice(payload).map_err(|_| invalid())?;
+                let window = request
+                    .window
+                    .map(|window| {
+                        Ok(ExplicitClientKeyBudgetWindow {
+                            starts_at: chrono::DateTime::from_timestamp_millis(window.starts_at_ms)
+                                .ok_or_else(invalid)?,
+                            ends_at: chrono::DateTime::from_timestamp_millis(window.ends_at_ms)
+                                .ok_or_else(invalid)?,
+                        })
+                    })
+                    .transpose()?;
+                let command = SetClientKeyBudgetWindow {
+                    id: ClientApiKeyId::new(request.client_key_id).map_err(|_| invalid())?,
+                    period: window_period(request.period),
+                    expected_revision: request.expected_revision,
+                    window,
+                };
+                let revision = access
+                    .set_budget_window(&self.owner, command, &mutation_context(context))
+                    .await
+                    .map_err(map_admin_error)?;
+                encode(&key_budgets::SetKeyBudgetWindowResult { revision })
+            }
+
             key_budgets::GET => {
                 let request: key_budgets::GetKeyBudgetRequest =
                     serde_json::from_slice(payload).map_err(|_| invalid())?;
@@ -202,5 +248,12 @@ impl PluginClientKeyPortSlot {
             .map_err(|_| invalid())?,
             payload: Vec::new(),
         })
+    }
+}
+
+fn window_period(period: key_budgets::WindowPeriod) -> ClientKeyBudgetWindowPeriod {
+    match period {
+        key_budgets::WindowPeriod::Daily => ClientKeyBudgetWindowPeriod::Daily,
+        key_budgets::WindowPeriod::Weekly => ClientKeyBudgetWindowPeriod::Weekly,
     }
 }
