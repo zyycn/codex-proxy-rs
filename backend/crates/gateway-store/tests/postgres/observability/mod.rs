@@ -199,6 +199,116 @@ async fn usage_error_origins_agree_for_saved_errors_without_failure_status() {
 }
 
 #[tokio::test]
+async fn usage_error_origins_preserve_saved_failure_and_connection_boundaries() {
+    use admin_observability::UsageErrorOrigin::{Connection, Proxy, Unknown, Upstream};
+
+    let Some(database) = TestDatabase::create("usage_failure_origins").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now).await.unwrap();
+    sqlx::query(
+        "update model_requests set client_status_code = 500, error_details = null,
+             request_observation_json = jsonb_set(request_observation_json, '{error}',
+               '{\"message\":\"Request failed\"}'::jsonb)
+         where id = 'req_observe_failed'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let repository = observability_repository(&database.pool);
+    let range =
+        ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
+    for (kind, reason, continuation, status, origin) in [
+        ("internal_error", None, None, None, Proxy),
+        ("internal_error", None, None, Some(503_i32), Upstream),
+        ("message_too_big", None, None, None, Upstream),
+        (
+            "continuation_recovery_required",
+            None,
+            Some("transport_payload_too_large"),
+            None,
+            Proxy,
+        ),
+        (
+            "upstream_unavailable",
+            Some("broken_pipe"),
+            None,
+            Some(200),
+            Connection,
+        ),
+        (
+            "upstream_unavailable",
+            Some("unexpected_binary_event"),
+            None,
+            Some(200),
+            Upstream,
+        ),
+        (
+            "upstream_unavailable",
+            Some("local_close"),
+            None,
+            Some(200),
+            Proxy,
+        ),
+        ("upstream_unavailable", None, None, Some(200), Unknown),
+    ] {
+        let transport = reason.map_or_else(
+            || serde_json::json!({}),
+            |reason| {
+                serde_json::json!({
+                    "connection":{"id":"conn-failed","exitReason":reason,"ageMs":100,"idleMs":0}
+                })
+            },
+        );
+        let continuation = continuation.map_or_else(
+            || serde_json::json!({}),
+            |reason| serde_json::json!({"unavailableReason":reason}),
+        );
+        sqlx::query(
+            "update model_requests set error_kind = $1, upstream_status_code = $2,
+                 request_observation_json = request_observation_json || jsonb_build_object(
+                   'transport', $3::jsonb, 'continuation', $4::jsonb)
+             where id = 'req_observe_failed'",
+        )
+        .bind(kind)
+        .bind(status)
+        .bind(transport)
+        .bind(&continuation)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let page = repository
+            .list_usage_records(UsageRecordQuery {
+                range,
+                filter: UsageRecordFilter::default(),
+                status: admin_observability::UsageRecordStatus::All,
+                current_page: 1,
+                page_size: ObservabilityPageSize::new(10).unwrap(),
+            })
+            .await
+            .unwrap();
+        let list = page
+            .items
+            .iter()
+            .find(|item| item.id == "req_observe_failed")
+            .unwrap();
+        let detail = repository.usage_record_detail(&list.id).await.unwrap();
+        assert_eq!(
+            list.error_origin(),
+            origin,
+            "list: {kind} / {reason:?} / {continuation} / {status:?}"
+        );
+        assert_eq!(
+            detail.request.error_origin(),
+            origin,
+            "detail: {kind} / {reason:?} / {continuation} / {status:?}"
+        );
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn usage_error_facts_preserve_recovery_and_validate_saved_close_frames() {
     let Some(database) = TestDatabase::create("usage_error_facts").await else {
         return;

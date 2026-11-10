@@ -55,7 +55,11 @@ fn error_origin(
             continuation_reason,
             Some("upstream_rejected" | "quota_exhausted")
         )
-        || error_kind == Some("upstream_capacity_unavailable")
+        || matches!(
+            error_kind,
+            // 这里匹配内部 errorKind；message_too_big 只由收到的上游 close 1009 产生
+            Some("permission_denied" | "message_too_big" | "upstream_capacity_unavailable")
+        )
     {
         return UsageErrorOrigin::Upstream;
     }
@@ -68,12 +72,15 @@ fn error_origin(
                 | "connection_busy"
                 | "latest_response_mismatch"
                 | "reused_connection_lost"
+                | "transport_payload_too_large"
         )
     ) || matches!(
         error_kind,
         Some(
             "process_interrupted"
                 | "process_terminated"
+                | "internal_error"
+                | "model_not_found"
                 | "no_available_provider"
                 | "no_eligible_account"
                 | "account_capacity_unavailable"
@@ -86,12 +93,34 @@ fn error_origin(
                 | "policy_denied"
                 | "budget_exhausted"
         )
+    ) || matches!(
+        connection_exit_reason,
+        Some(
+            "command_channel_closed"
+                | "local_close"
+                | "message_receiver_closed"
+                | "client_cancelled"
+                | "downstream_send_failed"
+                | "downstream_connection_closed"
+                | "downstream_rebound"
+                | "pool_shutdown"
+                | "max_age_expired"
+                | "idle_timeout_expired"
+                | "proxy_capacity_evicted"
+                | "search_activation_required"
+        )
     ) {
         return UsageErrorOrigin::Proxy;
     }
     if matches!(
         connection_exit_reason,
-        Some("upstream_close" | "normal_close")
+        Some(
+            "upstream_close"
+                | "normal_close"
+                | "unexpected_binary_event"
+                | "incomplete_response"
+                | "failed_response"
+        )
     ) {
         return UsageErrorOrigin::Upstream;
     }
@@ -103,8 +132,13 @@ fn error_origin(
                     | "unexpected_eof"
                     | "transport_error"
                     | "connection_reset"
+                    | "connection_aborted"
+                    | "broken_pipe"
                     | "tcp_reset"
                     | "reset_without_closing_handshake"
+                    | "transport_timeout"
+                    | "outbound_transport_error"
+                    | "receive_idle_timeout"
                     | "pong_timeout"
                     | "ping_write_timeout"
                     | "pong_write_timeout"
@@ -113,5 +147,7 @@ fn error_origin(
     {
         return UsageErrorOrigin::Connection;
     }
+    // invalid_request、protocol、rate_limited 等分类同时用于本地和上游失败
+    // 发送状态与笼统的连接退出摘要也不能替代缺失的来源事实
     UsageErrorOrigin::Unknown
 }

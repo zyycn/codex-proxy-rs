@@ -2626,6 +2626,11 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 `errorOrigin` 由管理用例统一推导，可取 `proxy`、`upstream`、`connection`、`unknown`。
 列表与详情均以已保存上游错误对象中的非空 `code`、`type` 或 `message` 字符串作为来源证据。
 已记录的上游错误事实优先于本地分类；客户端 HTTP 状态和摘要文案不参与来源推断，事实不足时保持 `unknown`。
+明确的本地内部错误、模型选路与准入拒绝归为 `proxy`；上游权限与模型容量拒绝归为 `upstream`。
+网关 `message_too_big` 专指收到上游 close 1009；本地原生续接请求在发送前超限时用
+`continuationUnavailableReason=transport_payload_too_large` 标识，归为 `proxy`，不能按“消息过大”文案合并来源。
+连接退出原因区分本地取消或回收、实际收到的上游响应、传输异常与收发超时；
+`invalid_request`、`rate_limited`、`timeout` 等可由多侧产生的分类，缺少进一步证据时仍为 `unknown`。
 该字段表示错误位置，不表示责任归属，也不改变执行分类、重试或原始错误信息
 
 `upstreamError` 仅在请求详情返回，从已保存的上游 JSON 投影 `code`、`errorType`、`message`、`param`，
