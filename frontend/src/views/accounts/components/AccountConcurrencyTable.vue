@@ -53,7 +53,7 @@ const columns = computed(() => (defineTableColumns<AccountConcurrencyEntry>([
 
 <template>
   <ZTable
-    class="h-[min(60dvh,20rem)]! min-h-0 [--z-table-row-height:3rem]"
+    class="h-auto! min-h-[min(60dvh,20rem)] [--z-table-row-height:3rem]"
     :columns="columns" :data="entries" row-key="leaseId"
     :loading="loading" :empty-text="emptyText"
   >
