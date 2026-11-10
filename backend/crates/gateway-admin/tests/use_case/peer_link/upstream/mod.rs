@@ -422,6 +422,21 @@ fn loaded(account: &ProviderAccount) -> LoadedCredential {
 
 #[async_trait]
 impl ProviderAccountStore for TestAccounts {
+    async fn load_account_catalogs(
+        &self,
+        _: &gateway_core::routing::ProviderKind,
+    ) -> Result<Vec<gateway_core::account::StoredAccountCatalog>, gateway_core::error::StoreError>
+    {
+        Ok(Vec::new())
+    }
+    async fn save_account_catalog(
+        &self,
+        _: &gateway_core::account::AccountCatalogObservation,
+        _: &[u8],
+    ) -> Result<bool, gateway_core::error::StoreError> {
+        unreachable!("fixture does not discover account catalogs")
+    }
+
     async fn create_account(&self, _account: NewProviderAccount) -> Result<(), StoreError> {
         panic!("unused account operation")
     }

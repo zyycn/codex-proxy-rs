@@ -12,9 +12,45 @@ use super::{
     QuotaObservationTouch, QuotaObservationVersion, QuotaWriteOutcome,
 };
 
+/// 一个账号最后成功的目录观测；正文由 Provider 解释，归属不能按相同正文合并
+#[derive(Clone)]
+pub struct AccountCatalogObservation {
+    pub account_id: ProviderAccountId,
+    pub revision: CredentialRevision,
+    pub plan: Option<String>,
+    pub etag: Option<String>,
+    pub observed_at: std::time::SystemTime,
+}
+
+/// 批量恢复时每份不同的正文只传输、解析一次
+pub struct StoredAccountCatalog {
+    pub accounts: Vec<AccountCatalogObservation>,
+    pub document: bytes::Bytes,
+}
+
+/// 批量选号的存储优化：只有账号自己的当前版本、有效时间和目录摘要都匹配才可跳过
+pub struct AccountCatalogOmissions {
+    pub documents: Vec<[u8; 32]>,
+    pub exceptions: Vec<ProviderAccountId>,
+    pub observed_after: std::time::SystemTime,
+    pub as_of: std::time::SystemTime,
+}
+
 /// `provider_accounts` 的数据库中立端口
 #[async_trait]
 pub trait ProviderAccountStore: Send + Sync {
+    async fn load_account_catalogs(
+        &self,
+        provider: &ProviderKind,
+    ) -> Result<Vec<StoredAccountCatalog>, StoreError>;
+
+    /// 账号删除或凭据已变化时返回 false，不发布迟到的观测
+    async fn save_account_catalog(
+        &self,
+        observation: &AccountCatalogObservation,
+        document: &[u8],
+    ) -> Result<bool, StoreError>;
+
     async fn create_account(&self, account: NewProviderAccount) -> Result<(), StoreError>;
 
     async fn get_account(
@@ -35,6 +71,16 @@ pub trait ProviderAccountStore: Send + Sync {
         provider: &ProviderKind,
         account_ids: &[ProviderAccountId],
     ) -> Result<Vec<ProviderAccount>, StoreError>;
+
+    /// 存储可以下推目录筛选，也可以返回完整候选；调用方始终复核最终账号
+    async fn list_catalog_candidates(
+        &self,
+        provider: &ProviderKind,
+        accounts: &[ProviderAccountId],
+        _omissions: &AccountCatalogOmissions,
+    ) -> Result<Vec<ProviderAccount>, StoreError> {
+        self.list_for_provider_accounts(provider, accounts).await
+    }
 
     /// 一次有界查询返回账号事实和 revision-fenced 明文 credential
     async fn list_refresh_candidates(

@@ -104,6 +104,7 @@ impl PgProviderAccountRepository {
         provider_kind: Option<&str>,
         include_disabled: bool,
         account_ids: Option<&[&str]>,
+        omissions: Option<&gateway_core::account::AccountCatalogOmissions>,
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
         let mut query = sqlx::QueryBuilder::<Postgres>::new(
             "select coalesce(proxy_enabled, true) as outbound_proxy_enabled, coalesce(max_websocket_connections, 0) as outbound_proxy_max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
@@ -128,6 +129,24 @@ impl PgProviderAccountRepository {
                 .push(" and id = any(")
                 .push_bind(account_ids)
                 .push("::text[])");
+        }
+        if let Some(omit) = omissions {
+            let hashes = omit
+                .documents
+                .iter()
+                .map(<[u8; 32]>::as_slice)
+                .collect::<Vec<_>>();
+            let exceptions = omit
+                .exceptions
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>();
+            query.push(" and not exists (select 1 from provider_account_model_catalogs c
+                where c.account_id=provider_accounts.id and c.credential_revision=provider_accounts.credential_revision
+                and c.plan_type is not distinct from provider_accounts.plan_type and c.document_hash=any(")
+                .push_bind(hashes).push("::bytea[]) and c.observed_at > ").push_bind(DateTime::<Utc>::from(omit.observed_after))
+                .push(" and c.observed_at <= ").push_bind(DateTime::<Utc>::from(omit.as_of))
+                .push(" and not (c.account_id=any(").push_bind(exceptions).push("::text[])))");
         }
         query.push(" order by provider_kind, name, id");
         let rows = query
@@ -215,7 +234,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         provider_kind: Option<&str>,
         include_disabled: bool,
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
-        self.list_provider_account_summaries(provider_kind, include_disabled, None)
+        self.list_provider_account_summaries(provider_kind, include_disabled, None, None)
             .await
     }
 

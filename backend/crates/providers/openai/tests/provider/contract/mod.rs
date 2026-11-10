@@ -4,6 +4,7 @@ mod account_eligibility;
 mod account_isolation;
 mod cache_preference;
 mod capacity;
+mod catalog_startup;
 mod cookies;
 mod correlation;
 mod error_details;
@@ -1207,7 +1208,7 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
     leases: Arc<TestLeaseCoordinator>,
     stream_max_retries: u32,
 ) -> (Arc<CodexProvider>, Arc<CodexCredentialQuotaService>) {
-    let (provider, quota, _) = provider_and_quota_with_runtime_ports(
+    let (provider, quota, _, _) = provider_and_quota_with_runtime_ports(
         store,
         session_affinity,
         base_url,
@@ -1216,6 +1217,44 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         Arc::new(MemoryCooldownPort::new()),
         crate::support::runtime_policy(),
     );
+    (provider, quota)
+}
+
+async fn provider_with_catalog_and_base_url(
+    store: &Arc<MemoryAccountStore>,
+    base_url: String,
+) -> Arc<CodexProvider> {
+    provider_and_quota_with_catalog(
+        store,
+        Arc::new(MemorySessionAffinity::default()),
+        base_url,
+        Arc::new(TestLeaseCoordinator::default()),
+        u32::try_from(DEFAULT_STREAM_MAX_RETRIES).unwrap(),
+    )
+    .await
+    .0
+}
+
+async fn provider_and_quota_with_catalog(
+    store: &Arc<MemoryAccountStore>,
+    session_affinity: Arc<MemorySessionAffinity>,
+    base_url: String,
+    leases: Arc<TestLeaseCoordinator>,
+    stream_max_retries: u32,
+) -> (Arc<CodexProvider>, Arc<CodexCredentialQuotaService>) {
+    let (provider, quota, _, catalog) = provider_and_quota_with_runtime_ports(
+        store,
+        session_affinity,
+        base_url,
+        leases,
+        stream_max_retries,
+        Arc::new(MemoryCooldownPort::new()),
+        crate::support::runtime_policy(),
+    );
+    catalog
+        .refresh_catalogs()
+        .await
+        .expect("background catalog");
     (provider, quota)
 }
 
@@ -1231,6 +1270,7 @@ fn provider_and_quota_with_runtime_ports(
     Arc<CodexProvider>,
     Arc<CodexCredentialQuotaService>,
     Arc<CodexWebSocketPool>,
+    Arc<CodexCredentialCatalogService>,
 ) {
     let profile = wire_profile();
     let http = reqwest::Client::builder()
@@ -1269,7 +1309,7 @@ fn provider_and_quota_with_runtime_ports(
 
     let provider = CodexProvider::new(
         selector,
-        catalog,
+        Arc::clone(&catalog),
         Arc::clone(&quota),
         account_feedback,
         http,
@@ -1279,7 +1319,7 @@ fn provider_and_quota_with_runtime_ports(
         stream_max_retries,
     )
     .expect("official OpenAI provider");
-    (Arc::new(provider), quota, websocket_pool)
+    (Arc::new(provider), quota, websocket_pool, catalog)
 }
 
 pub(super) async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
@@ -2832,7 +2872,7 @@ async fn image_endpoints_bypass_only_the_text_catalog_and_preserve_the_current_c
             .await;
     }
 
-    let provider = provider_with_base_url(&store, server.uri());
+    let provider = provider_with_catalog_and_base_url(&store, server.uri()).await;
     let catalog = provider
         .query_model_capabilities()
         .await
@@ -9138,7 +9178,7 @@ fn provider_with_cooldowns(
     base_url: String,
     cooldowns: Arc<MemoryCooldownPort>,
 ) -> (Arc<CodexProvider>, Arc<CodexWebSocketPool>) {
-    let (provider, _, pool) = provider_and_quota_with_runtime_ports(
+    let (provider, _, pool, _) = provider_and_quota_with_runtime_ports(
         store,
         Arc::new(MemorySessionAffinity::default()),
         base_url,
@@ -10782,7 +10822,7 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
         )
         .mount(&server)
         .await;
-    let provider = provider_with_base_url(&store, server.uri());
+    let provider = provider_with_catalog_and_base_url(&store, server.uri()).await;
 
     let capabilities = provider
         .query_model_capabilities()
@@ -10847,14 +10887,7 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
     })
     .expect("document");
     assert_eq!(document, original["models"][0]);
-    assert!(
-        server
-            .received_requests()
-            .await
-            .expect("requests")
-            .iter()
-            .any(|request| request.url.query() == Some("client_version=0.154.0"))
-    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -10881,7 +10914,7 @@ async fn provider_preserves_independent_catalog_context_windows() {
             .expect(1)
             .mount(&server)
             .await;
-        let provider = provider_with_base_url(&store, server.uri());
+        let provider = provider_with_catalog_and_base_url(&store, server.uri()).await;
 
         let capabilities = provider
             .query_model_capabilities()
@@ -10916,7 +10949,7 @@ async fn provider_routes_catalog_model_when_supported_in_api_is_false() {
         )
         .mount(&server)
         .await;
-    let provider = provider_with_base_url(&store, server.uri());
+    let provider = provider_with_catalog_and_base_url(&store, server.uri()).await;
 
     let capabilities = provider
         .query_model_capabilities()
@@ -11616,7 +11649,8 @@ async fn api_key_responses_forward_lite_memgen_and_native_compaction_with_catalo
         .expect(1)
         .mount(&upstream)
         .await;
-    let provider = provider(&store);
+    let provider =
+        provider_with_catalog_and_base_url(&store, OFFICIAL_CODEX_BASE_URL.to_owned()).await;
     provider.query_model_capabilities().await.unwrap();
     let body = json!({"model":"gpt-5.4","input":[{"type":"compaction_trigger"}],"reasoning":{"effort":"future-effort"},"tools":[{"type":"future-tool"}],"future_option":{"nested":true}});
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
@@ -11712,19 +11746,16 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
                 provider_openai::credential::ResponsesTransport::Http,
             )
             .await;
-        // 后台发现不协商客户端版本；客户端目录独立请求并按实际版本缓存
-        for query in [None, Some("client_version=1.0.0")] {
-            Mock::given(method("GET"))
-                .and(path(format!("{prefix}/models")))
-                .and(move |request: &wiremock::Request| request.url.query() == query)
-                .and(header("authorization", "Bearer sk-api-test-only"))
-                .respond_with(
-                    ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":"gpt-5.4"}]})),
-                )
-                .expect(1)
-                .mount(&upstream)
-                .await;
-        }
+        Mock::given(method("GET"))
+            .and(path(format!("{prefix}/models")))
+            .and(move |request: &wiremock::Request| request.url.query().is_none())
+            .and(header("authorization", "Bearer sk-api-test-only"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":"gpt-5.4"}]})),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
         Mock::given(method("POST"))
             .and(path(format!("{prefix}/responses")))
             .and(header("authorization", "Bearer sk-api-test-only"))
@@ -11734,13 +11765,14 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
             .expect(1)
             .mount(&upstream)
             .await;
-        let (provider, quota) = provider_and_quota_with_affinity_and_base_url_and_leases(
+        let (provider, quota) = provider_and_quota_with_catalog(
             &store,
             Arc::new(MemorySessionAffinity::default()),
             oauth.uri(),
             Arc::new(TestLeaseCoordinator::default()),
             DEFAULT_STREAM_MAX_RETRIES as u32,
-        );
+        )
+        .await;
         provider
             .query_model_capabilities()
             .await
@@ -11806,12 +11838,10 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
             .iter()
             .filter(|request| request.method == "GET")
             .collect::<Vec<_>>();
-        assert_eq!(model_requests.len(), 2);
-        for query in [None, Some("client_version=1.0.0")] {
-            let model_request = model_requests
-                .iter()
-                .find(|request| request.url.query() == query)
-                .expect("separate background and client catalog requests");
+        assert_eq!(model_requests.len(), 1);
+        {
+            let model_request = model_requests[0];
+            assert!(model_request.url.query().is_none());
             assert_eq!(
                 model_request.headers["authorization"],
                 "Bearer sk-api-test-only"
@@ -13313,7 +13343,7 @@ async fn public_catalog_filters_each_api_account_before_union_and_preserves_rout
             .mount(server)
             .await;
     }
-    let provider = provider_with_base_url(&store, first.uri());
+    let provider = provider_with_catalog_and_base_url(&store, first.uri()).await;
     let registry = Arc::new(ProviderRegistry::new([provider as Arc<dyn Provider>]).unwrap());
     let policy = |mode, models: &[&str]| {
         AccountModelAccess::new(mode, models.iter().map(|id| (*id).to_owned()).collect()).unwrap()

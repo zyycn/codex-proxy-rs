@@ -49,12 +49,10 @@ impl CodexProvider {
                 gateway_protocol::anthropic::strip_foreign_thinking_for_messages(&mut body);
                 body
             } else {
-                let capabilities = tokio::select! {
-                    biased;
-                    _ = context.cancellation().cancelled() => return Err(provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::NotSent)),
-                    _ = context.deadline().wait() => return Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent)),
-                    result = self.catalog.messages_model_capabilities(selected.lease.account(), &model) => result.ok().flatten().unwrap_or_default(),
-                };
+                let capabilities = self
+                    .catalog
+                    .messages_model_capabilities(selected.lease.account(), &model)
+                    .unwrap_or_default();
                 let mut body = responses_to_messages_request(original, &capabilities)
                     .map_err(|_| invalid_request())?;
                 // Responses 的 HTTP JSON 和 SSE 共用事件输出，跨协议上游统一请求事件流

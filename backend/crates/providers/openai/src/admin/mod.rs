@@ -297,7 +297,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             return;
         }
         self.quota.invalidate_scheduling(account_ids);
-        if let Err(error) = self.catalog.invalidate() {
+        if let Err(error) = self.catalog.invalidate_accounts(account_ids).await {
             tracing::warn!(
                 account_count = account_ids.len(),
                 error = %error,

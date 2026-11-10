@@ -536,9 +536,16 @@ impl Provider for CodexProvider {
     async fn query_model_capabilities(
         &self,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
-        let snapshot = self.catalog.synchronize().await.map_err(|_| {
-            provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-        })?;
+        // 能力发现读取已发布事实；冷启动和配置失效由 Provider 后台任务重建目录
+        let snapshot = self
+            .catalog
+            .cached()
+            .map_err(|_| {
+                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+            })?
+            .ok_or_else(|| {
+                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+            })?;
         let mut accounts = snapshot.model_catalog_accounts();
         Ok(snapshot
             .models()
@@ -555,11 +562,11 @@ impl Provider for CodexProvider {
 
     async fn query_client_model_catalog(
         &self,
-        client_api_key_id: &gateway_core::policy::ClientApiKeyId,
+        _client_api_key_id: &gateway_core::policy::ClientApiKeyId,
         scope: &gateway_core::account::scope::FrozenAccountScope,
         protocol: &str,
-        client_version: &str,
-        peer_route: Option<&reqwest::header::HeaderValue>,
+        _client_version: &str,
+        _peer_route: Option<&reqwest::header::HeaderValue>,
     ) -> Result<
         Option<Vec<gateway_core::routing::ProviderModelDescriptor>>,
         gateway_core::routing::ProviderCatalogUnavailable,
@@ -568,7 +575,7 @@ impl Provider for CodexProvider {
             return Ok(None);
         }
         self.catalog
-            .client_model_catalog(client_api_key_id, scope, client_version, peer_route)
+            .client_model_catalog(scope)
             .await
             .map(Some)
             .map_err(|_| gateway_core::routing::ProviderCatalogUnavailable)

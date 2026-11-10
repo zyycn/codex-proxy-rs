@@ -222,12 +222,14 @@ async fn account_allowlists_override_catalog_omissions_but_weight_affinity_and_p
         store.set_scheduling("acct_scope_new", None, AccountWeight::new(100).unwrap());
         let affinity = Arc::new(MemorySessionAffinity::default());
         let leases = Arc::new(TestLeaseCoordinator::default());
-        let provider = provider_with_affinity_and_base_url_and_leases(
+        let (provider, _) = provider_and_quota_with_catalog(
             &store,
             affinity.clone(),
             native.uri(),
             leases.clone(),
-        );
+            u32::try_from(DEFAULT_STREAM_MAX_RETRIES).unwrap(),
+        )
+        .await;
         provider.query_model_capabilities().await.unwrap();
         for (model, expected) in [
             ("gpt-6-luna", "acct_scope_new"),
@@ -366,7 +368,7 @@ async fn only_a_current_account_catalog_can_exclude_a_model() {
     use gateway_core::account::{CredentialCasOutcome, CredentialCasUpdate, ProviderAccountUpdate};
     use provider_openai::credential::ResponsesTransport;
 
-    for scenario in ["missing", "unknown_plan", "rotated"] {
+    for scenario in ["missing", "unknown_plan", "rotated", "expired"] {
         let native = MockServer::start().await;
         let api = MockServer::start().await;
         let store = Arc::new(MemoryAccountStore::default());
@@ -396,7 +398,7 @@ async fn only_a_current_account_catalog_can_exclude_a_model() {
             store
                 .seed_api_key("acct_scope_new", api.uri(), ResponsesTransport::Http)
                 .await;
-            let response = if scenario == "missing" {
+            let response = if matches!(scenario, "missing" | "expired") {
                 ResponseTemplate::new(503)
             } else {
                 ResponseTemplate::new(200).set_body_json(json!({"data": [{"id": "gpt-6-luna"}]}))
@@ -421,7 +423,42 @@ async fn only_a_current_account_catalog_can_exclude_a_model() {
             .expect(if scenario == "unknown_plan" { 0 } else { 1 })
             .mount(upstream)
             .await;
-        let provider = provider_with_base_url(&store, native.uri());
+        let provider = if scenario == "expired" {
+            use gateway_core::account::AccountCatalogObservation;
+            let a = store.account("acct_scope_new").unwrap();
+            store
+                .save_account_catalog(
+                    &AccountCatalogObservation {
+                        account_id: a.id().clone(),
+                        revision: a.revision(),
+                        plan: a.plan_type().map(str::to_owned),
+                        etag: None,
+                        observed_at: SystemTime::now() - Duration::from_secs(3600),
+                    },
+                    b"\x01{\"data\":[{\"id\":\"gpt-6-luna\"}]}",
+                )
+                .await
+                .unwrap();
+            let (provider, _, _, catalog) = provider_and_quota_with_runtime_ports(
+                &store,
+                Arc::new(MemorySessionAffinity::default()),
+                native.uri(),
+                Arc::new(TestLeaseCoordinator::default()),
+                u32::try_from(DEFAULT_STREAM_MAX_RETRIES).unwrap(),
+                Arc::new(MemoryCooldownPort::new()),
+                crate::support::runtime_policy(),
+            );
+            catalog.restore().await.unwrap();
+            // B 的失败不能清空上次成功结果，也不能继续以旧的缺失条目拒绝请求
+            catalog.refresh_catalogs().await.unwrap();
+            assert_eq!(
+                catalog.cached_account_models(&a).unwrap().unwrap(),
+                ["gpt-6-luna"]
+            );
+            provider
+        } else {
+            provider_with_catalog_and_base_url(&store, native.uri()).await
+        };
         provider.query_model_capabilities().await.unwrap();
         if scenario == "rotated" {
             let account = store.account("acct_scope_new").unwrap();

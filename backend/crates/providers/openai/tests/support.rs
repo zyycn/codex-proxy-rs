@@ -53,6 +53,15 @@ type CredentialLoadHook = dyn for<'a> Fn(
 #[derive(Default)]
 pub(crate) struct MemoryAccountStore {
     accounts: Mutex<BTreeMap<ProviderAccountId, StoredAccount>>,
+    catalogs: Mutex<
+        BTreeMap<
+            ProviderAccountId,
+            (
+                gateway_core::account::AccountCatalogObservation,
+                bytes::Bytes,
+            ),
+        >,
+    >,
     account_reads: AtomicUsize,
     provider_list_reads: AtomicUsize,
     quota_reads: AtomicUsize,
@@ -296,6 +305,62 @@ impl MemoryAccountStore {
 
 #[async_trait]
 impl ProviderAccountStore for MemoryAccountStore {
+    async fn load_account_catalogs(
+        &self,
+        provider: &ProviderKind,
+    ) -> Result<Vec<gateway_core::account::StoredAccountCatalog>, StoreError> {
+        let accounts = self.accounts.lock().unwrap();
+        let mut groups = BTreeMap::<bytes::Bytes, Vec<_>>::new();
+        for (id, (observation, document)) in self.catalogs.lock().unwrap().iter() {
+            if accounts.get(id).is_some_and(|row| {
+                row.account.provider() == provider
+                    && row.account.enabled()
+                    && matches!(
+                        row.account.credential_state(),
+                        CredentialState::Ready | CredentialState::Unknown
+                    )
+                    && row
+                        .account
+                        .access_token_expires_at()
+                        .is_none_or(|ts| ts > SystemTime::now())
+                    && row.account.revision() == observation.revision
+                    && row.account.plan_type() == observation.plan.as_deref()
+            }) {
+                groups
+                    .entry(document.clone())
+                    .or_default()
+                    .push(observation.clone());
+            }
+        }
+        Ok(groups
+            .into_iter()
+            .map(
+                |(document, accounts)| gateway_core::account::StoredAccountCatalog {
+                    accounts,
+                    document,
+                },
+            )
+            .collect())
+    }
+    async fn save_account_catalog(
+        &self,
+        observation: &gateway_core::account::AccountCatalogObservation,
+        document: &[u8],
+    ) -> Result<bool, StoreError> {
+        let rows = self.accounts.lock().unwrap();
+        if !rows.get(&observation.account_id).is_some_and(|a| {
+            a.account.revision() == observation.revision
+                && a.account.plan_type() == observation.plan.as_deref()
+        }) {
+            return Ok(false);
+        }
+        self.catalogs.lock().unwrap().insert(
+            observation.account_id.clone(),
+            (observation.clone(), bytes::Bytes::copy_from_slice(document)),
+        );
+        Ok(true)
+    }
+
     async fn create_account(&self, input: NewProviderAccount) -> Result<(), StoreError> {
         let mut accounts = self.accounts.lock().expect("account store lock");
         if accounts.contains_key(input.account.id()) {
@@ -383,13 +448,13 @@ impl ProviderAccountStore for MemoryAccountStore {
             ));
         }
         // 与 Postgres 实现的调度列表语义一致：停用账号不进入常规候选
-        Ok(self
-            .accounts
-            .lock()
-            .expect("account store lock")
-            .values()
+        let accounts = self.accounts.lock().unwrap();
+        Ok(account_ids
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|id| accounts.get(id))
             .filter(|stored| stored.account.provider() == provider && stored.account.enabled())
-            .filter(|stored| account_ids.contains(stored.account.id()))
             .map(|stored| stored.account.clone())
             .collect())
     }

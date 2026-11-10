@@ -752,7 +752,39 @@ impl CodexCredentialSelector {
                     .into_iter()
                     .flat_map(|scope| scope.allowed_account_ids().cloned())
                     .collect::<Vec<_>>();
-                self.repository.list_for_accounts(&account_ids).await?
+                let omissions = match (model, request.attempt.account_scope()) {
+                    (CodexSelectionModel::Requested(model), Some(scope)) => {
+                        self.catalog.omissions(model, &account_ids, |id| {
+                            scope.directory().account(id).is_some_and(|a| {
+                                a.model_access().mode() == AccountModelAccessMode::Allowlist
+                            }) || adapter_model.as_ref().is_some_and(|m| {
+                                !matches!(
+                                    request.attempt.upstream_adapter_for_account(
+                                        &self.provider_kind,
+                                        m,
+                                        id
+                                    ),
+                                    Ok(None)
+                                )
+                            })
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(filter) = omissions {
+                    let candidates = self
+                        .repository
+                        .store()
+                        .list_catalog_candidates(&self.provider_kind, &account_ids, &filter)
+                        .await
+                        .map_err(CredentialRepositoryError::from)?;
+                    if request.attempt.trace().is_enabled() {
+                        request.attempt.trace().record("account.catalog_candidates",serde_json::json!({"scopedCount":account_ids.len(),"candidateCount":candidates.len()}));
+                    }
+                    candidates
+                } else {
+                    self.repository.list_for_accounts(&account_ids).await?
+                }
             };
             let mut model_access_rejected = 0_usize;
             let accounts = accounts
@@ -778,20 +810,14 @@ impl CodexCredentialSelector {
                 })
                 .collect::<Vec<_>>();
             let mut eligible = Vec::with_capacity(accounts.len());
-            let catalog_excluded = match (model, request.attempt.account_scope()) {
-                (CodexSelectionModel::Requested(model), Some(scope)) if !diagnostic => {
-                    // 候选已通过冻结的模型政策，白名单精确命中的 ID 交给上游验证
-                    let mut excluded =
-                        self.catalog
-                            .scheduling_exclusions(&accounts, model, SystemTime::now());
-                    excluded.retain(|id| {
-                        scope.directory().account(id).is_none_or(|account| {
-                            account.model_access().mode() != AccountModelAccessMode::Allowlist
-                        })
-                    });
-                    excluded
-                }
-                _ => Default::default(),
+            let catalog = match (model, request.attempt.account_scope()) {
+                (CodexSelectionModel::Requested(model), Some(scope)) if !diagnostic => self
+                    .catalog
+                    .cached()
+                    .ok()
+                    .flatten()
+                    .map(|snapshot| (snapshot, model, scope, SystemTime::now())),
+                _ => None,
             };
             let mut catalog_rejected = 0_usize;
             let mut native_accounts = std::collections::BTreeSet::new();
@@ -816,7 +842,15 @@ impl CodexCredentialSelector {
                 }
                 // 受管适配器拥有其上游模型合同，不套用原生目录与拒绝反馈
                 if adapter.is_none() {
-                    if catalog_excluded.contains(account.id()) {
+                    if catalog
+                        .as_ref()
+                        .is_some_and(|(snapshot, model, scope, now)| {
+                            snapshot.excludes(&account, model, *now)
+                                && scope.directory().account(account.id()).is_none_or(|a| {
+                                    a.model_access().mode() != AccountModelAccessMode::Allowlist
+                                })
+                        })
+                    {
                         catalog_rejected += 1;
                         continue;
                     }

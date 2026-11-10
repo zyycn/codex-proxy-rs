@@ -943,7 +943,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             yield ProviderEvent::observation(observation);
         }
         if let Some(etag) = response.response_metadata.models_etag.as_deref()
-            && let Err(error) = catalog.observe_response_etag(etag)
+            && let Err(error) = catalog.observe_response_etag(&active_account,etag)
         {
             tracing::warn!(
                 error = %error,

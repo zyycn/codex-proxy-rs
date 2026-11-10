@@ -153,6 +153,9 @@ pub async fn initialize(
         config.base_url().to_owned(),
         ports.catalog_cache(),
     ));
+    if let Err(error) = catalog.restore().await {
+        tracing::warn!(%error,"OpenAI model catalog could not be restored");
+    }
     let quota = Arc::new(CodexCredentialQuotaService::new(
         repository.clone(),
         profile.clone(),

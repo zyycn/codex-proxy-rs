@@ -500,7 +500,7 @@ async fn translated_thinking_uses_selected_account_catalog_and_preserves_fast_be
             .mount(server)
             .await;
     }
-    let provider = provider(&store);
+    let provider = provider_with_catalog_and_base_url(&store, adaptive.uri()).await;
     for _ in 0..2 {
         for account in ["acct_provider_contract", "acct_manual"] {
             let body = json!({"model":"unrelated-client-alias","input":"hello","max_output_tokens":4096,"reasoning":{"effort":"xhigh"},"tools":[{"type":"function","name":"echo"}],"parallel_tool_calls":false,"service_tier":"priority"});
@@ -558,50 +558,20 @@ async fn translated_thinking_uses_selected_account_catalog_and_preserves_fast_be
 }
 
 #[tokio::test]
-async fn cancelled_capability_lookup_never_sends_generation() {
+async fn cancelled_messages_request_never_sends_generation_or_catalog_lookup() {
     let server = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     seed(&store, &server, ApiKeyProtocol::Messages).await;
-    Mock::given(method("GET"))
-        .and(path("/models"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_secs(10))
-                .set_body_json(json!({"data":[]})),
-        )
-        .mount(&server)
-        .await;
     let cancellation = CancellationToken::new();
-    let cancelled = cancellation.clone();
-    let task = tokio::spawn(async move {
-        provider(&store)
-            .execute(
-                planned_request("openai", generate_operation()),
-                context("req_cancel_catalog", cancelled),
-            )
-            .await
-    });
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while server.received_requests().await.unwrap().is_empty() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
     cancellation.cancel();
-    let result = tokio::time::timeout(Duration::from_secs(1), task)
-        .await
-        .unwrap()
-        .unwrap();
+    let result = provider(&store)
+        .execute(
+            planned_request("openai", generate_operation()),
+            context("req_cancel_catalog", cancellation),
+        )
+        .await;
     assert!(matches!(result,Err(error) if error.kind()==ProviderErrorKind::Cancelled));
-    assert!(
-        server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .all(|request| request.method == "GET")
-    );
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -759,7 +729,7 @@ async fn oversized_messages_json_is_rejected_before_wire_delivery() {
 }
 
 #[tokio::test]
-async fn slow_catalog_does_not_block_generation_and_populates_next_turn() {
+async fn cold_directory_never_queries_models_during_generation() {
     let server = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     seed(&store, &server, ApiKeyProtocol::Messages).await;
@@ -772,7 +742,7 @@ async fn slow_catalog_does_not_block_generation_and_populates_next_turn() {
                     json!({"data":[{"id":"gpt-5.4","max_tokens":2048}],"has_more":false}),
                 ),
         )
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -782,7 +752,7 @@ async fn slow_catalog_does_not_block_generation_and_populates_next_turn() {
         .mount(&server)
         .await;
     let provider = provider(&store);
-    for i in 0..2 {
+    for _ in 0..2 {
         let mut stream = provider
             .clone()
             .execute(
@@ -793,9 +763,6 @@ async fn slow_catalog_does_not_block_generation_and_populates_next_turn() {
             .unwrap();
         while let Some(event) = stream.next().await {
             event.unwrap();
-        }
-        if i == 0 {
-            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
     let limits = server
@@ -810,6 +777,6 @@ async fn slow_catalog_does_not_block_generation_and_populates_next_turn() {
                 .unwrap()
         })
         .collect::<Vec<_>>();
-    assert_eq!(limits, [32000, 2048]);
+    assert_eq!(limits, [32000, 32000]);
     server.verify().await;
 }

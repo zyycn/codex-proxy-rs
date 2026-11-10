@@ -58,6 +58,7 @@ mod admin_queries;
 mod authorization;
 mod core_adapter;
 mod mapping;
+mod model_catalogs;
 mod quota;
 mod quota_forecast;
 mod repository;

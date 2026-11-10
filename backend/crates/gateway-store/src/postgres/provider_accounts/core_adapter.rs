@@ -14,6 +14,21 @@ fn loaded_credential_from_record(
 
 #[async_trait]
 impl ProviderAccountStore for PgProviderAccountRepository {
+    async fn load_account_catalogs(
+        &self,
+        provider: &ProviderKind,
+    ) -> Result<Vec<gateway_core::account::StoredAccountCatalog>, CoreStoreError> {
+        self.load_model_catalogs(provider).await
+    }
+
+    async fn save_account_catalog(
+        &self,
+        observation: &gateway_core::account::AccountCatalogObservation,
+        document: &[u8],
+    ) -> Result<bool, CoreStoreError> {
+        self.save_model_catalog(observation, document).await
+    }
+
     async fn create_account(&self, account: CoreNewProviderAccount) -> Result<(), CoreStoreError> {
         if account.account.revision().get() != 1 {
             return Err(CoreStoreError::new(CoreStoreErrorKind::InvalidData));
@@ -88,6 +103,29 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .collect()
     }
 
+    async fn list_catalog_candidates(
+        &self,
+        provider: &ProviderKind,
+        accounts: &[CoreProviderAccountId],
+        omissions: &gateway_core::account::AccountCatalogOmissions,
+    ) -> Result<Vec<CoreProviderAccount>, CoreStoreError> {
+        let ids = accounts
+            .iter()
+            .map(CoreProviderAccountId::as_str)
+            .collect::<Vec<_>>();
+        self.list_provider_account_summaries(
+            Some(provider.as_str()),
+            false,
+            Some(&ids),
+            Some(omissions),
+        )
+        .await
+        .map_err(core_store_error)?
+        .into_iter()
+        .map(core_account_from_summary)
+        .collect()
+    }
+
     async fn list_for_provider_accounts(
         &self,
         provider: &ProviderKind,
@@ -100,12 +138,17 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .iter()
             .map(CoreProviderAccountId::as_str)
             .collect::<Vec<_>>();
-        self.list_provider_account_summaries(Some(provider.as_str()), false, Some(&account_ids))
-            .await
-            .map_err(core_store_error)?
-            .into_iter()
-            .map(core_account_from_summary)
-            .collect()
+        self.list_provider_account_summaries(
+            Some(provider.as_str()),
+            false,
+            Some(&account_ids),
+            None,
+        )
+        .await
+        .map_err(core_store_error)?
+        .into_iter()
+        .map(core_account_from_summary)
+        .collect()
     }
 
     async fn list_refresh_candidates(

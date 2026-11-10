@@ -237,13 +237,40 @@ impl CodexCatalogModel {
 }
 
 /// 一次完整成功的 Codex 远端模型快照
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CodexModelCatalogSnapshot {
+    document: Bytes,
     models: Vec<CodexCatalogModel>,
     etag: Option<String>,
 }
 
+impl std::fmt::Debug for CodexModelCatalogSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodexModelCatalogSnapshot")
+            .field("models", &self.models)
+            .finish_non_exhaustive()
+    }
+}
+
 impl CodexModelCatalogSnapshot {
+    pub(crate) fn into_parts(self) -> (Vec<CodexCatalogModel>, Bytes, Option<String>) {
+        (self.models, self.document, self.etag)
+    }
+
+    /// 落库的目录沿用相同的上游校验器；协议标记区分普通 API 与 Messages 能力
+    pub(crate) fn restore(document: &[u8]) -> Result<Self, CodexModelCatalogError> {
+        match document.split_first() {
+            Some((0, body)) => parse_codex_model_catalog(body, None),
+            Some((1, body)) => {
+                parse_api_model_catalog(body, None, OpenAiUpstreamProtocol::ResponsesApi)
+            }
+            Some((2, body)) => {
+                parse_api_model_catalog(body, None, OpenAiUpstreamProtocol::MessagesApi)
+            }
+            _ => Err(CodexModelCatalogError::InvalidWire),
+        }
+    }
+
     /// 返回本轮全部模型
     #[must_use]
     pub fn models(&self) -> &[CodexCatalogModel] {
@@ -289,7 +316,7 @@ pub enum CodexModelCatalogError {
     InvalidEtag,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 struct CodexModelsWire {
     models: Vec<serde_json::Value>,
 }
@@ -361,6 +388,7 @@ fn parse_native_model_catalog(
         return Err(CodexModelCatalogError::TooManyModels);
     }
 
+    let document = archive(protocol, &wire)?;
     let etag = etag.map(validate_etag).transpose()?;
     let mut seen = BTreeSet::new();
     let mut models = Vec::with_capacity(wire.models.len());
@@ -380,7 +408,11 @@ fn parse_native_model_catalog(
         }
         models.push(model);
     }
-    Ok(CodexModelCatalogSnapshot { models, etag })
+    Ok(CodexModelCatalogSnapshot {
+        document,
+        models,
+        etag,
+    })
 }
 
 pub(super) fn catalog_etag(headers: &HeaderMap) -> Result<Option<String>, CodexModelCatalogError> {
@@ -617,12 +649,30 @@ pub(super) fn parse_api_model_catalog(
         #[serde(flatten)]
         fields: serde_json::Map<String, serde_json::Value>,
     }
-    let value: serde_json::Value =
+    let mut value: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| CodexModelCatalogError::InvalidWire)?;
     // 部分 Responses 上游按客户端版本返回完整 Codex 目录；不能降格为只有 ID 的画像
     if value.get("models").is_some() {
         return parse_native_model_catalog(body, etag, OpenAiUpstreamProtocol::ResponsesApi);
     }
+    if let Some(top) = value.as_object_mut() {
+        top.retain(|key, _| key == "data");
+    }
+    if let Some(items) = value
+        .get_mut("data")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for item in items {
+            if let Some(fields) = item.as_object_mut() {
+                fields.retain(|key, _| {
+                    matches!(key.as_str(), "id" | "display_name")
+                        || protocol == OpenAiUpstreamProtocol::MessagesApi
+                            && matches!(key.as_str(), "capabilities" | "max_tokens")
+                });
+            }
+        }
+    }
+    let document = archive(protocol, &value)?;
     let wire: ApiModels =
         serde_json::from_value(value).map_err(|_| CodexModelCatalogError::InvalidWire)?;
     if wire.data.is_empty() {
@@ -668,7 +718,21 @@ pub(super) fn parse_api_model_catalog(
         });
     }
     Ok(CodexModelCatalogSnapshot {
+        document,
         models,
         etag: etag.map(validate_etag).transpose()?,
     })
+}
+
+fn archive(
+    protocol: OpenAiUpstreamProtocol,
+    value: &impl serde::Serialize,
+) -> Result<Bytes, CodexModelCatalogError> {
+    let mut bytes = vec![match protocol {
+        OpenAiUpstreamProtocol::Codex => 0,
+        OpenAiUpstreamProtocol::ResponsesApi => 1,
+        OpenAiUpstreamProtocol::MessagesApi => 2,
+    }];
+    serde_json::to_writer(&mut bytes, value).map_err(|_| CodexModelCatalogError::InvalidWire)?;
+    Ok(bytes.into())
 }

@@ -329,13 +329,14 @@ Provider 模型能力、目录代次与 `ProviderCatalogPort` 由 `routing::cata
 Provider 可为模型提供来源账号集合；Core 在公开目录查询时结合冻结账号范围与政策过滤来源，
 配置发布复用已缓存的来源事实。来源集合只约束目录展示，不直接作为推理账号白名单；Provider 独占上游资格判断
 
+OpenAI 在 PostgreSQL 保存账号最近一次成功的模型目录、凭据版本、观测时间及 ETag。启动时批量恢复，按不同正文解析一次，保留每个账号的独立归属。没有历史目录也能发布路由快照；能力读取与推理不等待上游查询。
+后台只刷新目录缺失、已满 30 分钟或收到新 ETag 的账号；凭据轮换后按新版本重新发现。每轮最多并发 32 个，新请求至少间隔 10 ms。失败保留最后成功的结果，过期资料只用于展示，不能据此排除候选账号
+
 客户端原生模型目录同样由 Provider 拥有，通过 `ExecutionService` 和现有 Registry 的只读调用传递。
 `routing::catalog` 的原生条目只包含模型 ID 与不透明协议正文，Core 负责冻结账号范围和整对象模型映射，
 不解析上游字段；API 负责协议输出，不直接依赖具体 Provider。原生目录失败不会退回通用画像，只有不提供
 该协议原生目录的 Provider（如 xAI 的 Codex 适配）才走画像转换。目录读取不创建计量请求或推理 attempt。
-OpenAI 的账号/凭据 revision/客户端版本隔离、并发合并、TTL、容量与失效均归属 credential catalog
-service；客户端原生对象保存在有界进程缓存中，与账号级 Redis 模型 ID 缓存分开管理。
-该缓存最多保留 32 项，原生正文总预算为 32 MiB；单次结果超过预算时仍正常交付，但不驻留缓存
+OpenAI 从账号目录生成原生列表；先按冻结政策选择来源，再读取本地账号状态核对凭据版本。同一份正文可以复用，但不会把一个账号的模型授予同套餐的其他账号。客户端版本和 Key 身份不触发额外发现
 
 全局请求位置及开关由运行设置持久化；快照仅在开关开启时生成全局覆盖，并随
 `RuntimeSnapshot → RoutingPlan → AttemptContext` 冻结传递，关闭时保留客户端原有字段；
@@ -517,7 +518,7 @@ OpenAI Provider 统一处理 Responses 的账号归属与 turn state 隔离，HT
 turn state 不参与选号，也不授权其他账号状态或 response ID 的复用
 
 OpenAI 的 OAuth 与 API Key 共用现有账号和事务。API Key 的 Base URL、密钥、上游协议和传输策略属于 Provider 凭据 JSON，
-随 credential revision 更新；普通详情只投影非敏感连接设置。API Key 客户端目录按账号、凭据版本和客户端版本隔离，
+随 credential revision 更新；普通详情只投影非敏感连接设置。API Key 目录按账号和凭据版本隔离，
 标准 `data` 模型列表通过通用画像输出，完整 Codex `models` 目录保留原生对象。通用账号层按 Provider 提交的
 credential state 调度，不以是否存在上游用户 ID 推断可用性；OAuth 未完成身份投影时由 Provider 保持 `unknown`。
 状态恢复和未补齐身份的凭据轮换保留 `unknown`。
@@ -532,7 +533,7 @@ OpenAI 模型目录用于发现与原生 Responses 账号资格筛选。
   同协议业务响应使用原始 wire，跨协议才调用转换器；客户端错误兼容与原生续写额度恢复按明确例外处理，见 [OpenAI 透传](api.md#openai-透传)。
   `transport/correlation` 在出站副本上按本次安装身份统一映射关联标识。
   Responses 的账号归属判断及换号头部清理由 Provider 统一执行，各传输消费同一出站请求。
-  原生安装身份由 OpenAI Provider 按 Key 种子、Key ID 与选中账号 ID 确定性派生，无需额外映射表；未配置种子时取自账号，与 UA 继承方式无关。模型目录缓存按生效身份隔离，Live 后续阶段使用引导时冻结的种子；插件的身份生成、持久化及关联字段改写通过既有中间件链路自行完成
+  原生安装身份由 OpenAI Provider 按 Key 种子、Key ID 与选中账号 ID 确定性派生，无需额外映射表；未配置种子时取自账号，与 UA 继承方式无关。Live 后续阶段使用引导时冻结的种子；插件的身份生成、持久化及关联字段改写通过既有中间件链路自行完成
   内部选号、亲和、连接池与本地诊断继续读取原始身份；具体字段边界见 [API 协议](api.md#请求头与身份)
   canonical facts 从同一数据旁路提取，用于路由、恢复判断、观测和计费。
   WebSocket transport 按完整文本消息交付，wire 同时保留原文与可选解析视图；同协议出口使用原文，
@@ -600,8 +601,7 @@ OpenAI / xAI 导入用例。并发槽位由单个 Worker 统一管理，条目�
 连接池按出口隔离。修改或启停代理推进配置 revision，使后续请求使用新出口；已执行请求可沿原连接完成。
 代理变更不推进 `credential_revision`，不会使进行中的令牌刷新因凭据版本冲突而丢失结果。
 xAI 的推理连接池继续按账号绑定隔离；OAuth、目录/计费辅助请求在各自 transport 内复用有界出口
-client，OIDC 的 JWKS 缓存与单飞归属对应出口状态。自动刷新提交凭据后的目录预热重新读取当前账号
-出口，不从 token-only 路径绕过代理；JWKS 过期或获取失败仍不使用 stale fallback
+client，OIDC 的 JWKS 缓存与单飞归属对应出口状态。凭据变更后由目录任务按账号当前出口重新发现；JWKS 过期或获取失败仍不使用 stale fallback
 
 代理独立保存和测试，通过 `outboundProxyId` 绑定账号；账号保留解析后的 URL 供 Provider 使用。
 出口测试结果属于诊断信息，不作为选择、授权或导入绑定的准入条件。
@@ -763,7 +763,7 @@ OpenAI Provider 的账号资格模块统一解释请求类型、认证与套餐�
 
 原生 Responses 在评分、亲和和租约前检查冻结的账号模型政策。OpenAI 账号白名单精确命中目标 ID 时允许上游验证，
 其余 OpenAI 账号及 xAI 账号按有效目录排除未列出的模型。OpenAI 目录按来源账号、凭据版本和套餐隔离；同套餐账号可以有不同的模型。
-OpenAI 使用未满 30 分钟的进程目录快照，xAI 按套餐去重读取 TTL 目录缓存，选号不请求上游目录。
+OpenAI 只使用未满 30 分钟且尚未收到变化通知的账号目录排除候选。大池可在读取账号时按目录摘要筛选，数据库逐账号核对版本、套餐和观测时间；白名单、待刷新通知及受管适配器不参与该筛选。xAI 按套餐去重读取 TTL 目录缓存，选号不请求上游目录。
 没有有效目录时保留上游验证，不从其他账号借用 OpenAI 模型资格，也不从其他套餐借用 xAI 模型资格
 
 原生 OpenAI Responses 按[官方 Codex 0.166.0](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/codex-api/src/error.rs#L73)的结构化 `model_not_found` 错误码与状态合同识别模型拒绝，
@@ -1006,7 +1006,7 @@ PostgreSQL 周期对账才是正确性基础
 | 日志、OAuth 恢复记录、在线更新状态、备份暂存 | `.runtime/` | 部署节点本地运行文件 |
 | 重置卡库存与消费结果 | 对应 Provider 的上游 | 本地到期计划不能证明卡片仍可用；手动查询直连上游，自动消费前重新核对 |
 | 重置卡自动使用配置、发现时间与未决幂等键 | PostgreSQL 账号记录 | Admin 拥有计划与重试编排；账号删除时一并清理，重启沿用已保存时间及幂等键 |
-| Provider 公开模型与官方发布资料 | Provider/runtime cache | 由官方目录或发布源刷新，与 PostgreSQL 中的用户身份选择分别管理 |
+| Provider 公开模型与官方发布资料 | Provider 的账号目录表或运行时缓存 | 由官方目录或发布源刷新，与 PostgreSQL 中的用户身份选择分别管理 |
 | Windows 安装包临时直链 | Host 进程内短缓存 | 按需解析、严格校验、到期前丢弃；不写 PostgreSQL/Redis，也不代理包字节 |
 
 账号对外状态不是独立列，而是 PostgreSQL credential/quota 事实与 Redis cooldown 的统一投影：

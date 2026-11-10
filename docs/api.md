@@ -386,7 +386,7 @@ Responses 的 `allowed_tools` 只向 Messages 上游声明本轮允许的工具�
 跨协议推理设置读取顶层 `thinking`、`output_config.effort` 或 `reasoning.effort`。
 转向 Messages 时按所选账号模型目录声明的能力选择 adaptive 或手动预算，并约束输出上限和 effort 等级。
 不支持关闭的 adaptive 模型将 `none` 降到最低可用 effort；手动预算至少为 1024、严格小于输出上限，不足时关闭推理。
-生成请求最多等待目录 500 ms；未及时取得目录或未声明能力时沿用 CPA 手动预算，`auto` 使用 8192，不根据模型别名猜测能力。
+生成请求只读取账号已发现的能力；目录缺失或未声明能力时沿用 CPA 手动预算，`auto` 使用 8192，不根据模型别名猜测能力。
 强制工具与手动推理冲突时显式关闭推理；紧接着只回传工具结果且未指定 effort 时，沿用无思考模式。
 adaptive 路径将普通强制选择降为 `auto`，保留串行约束。
 仅设置 `parallel_tool_calls:false` 也会生成串行工具选择，`none` 不携带并行选项。
@@ -679,7 +679,7 @@ HTML 或截断正文当作 message。
 未携带上述协议头时，`GET /v1/models` 默认返回 OpenAI 兼容列表 `{"object": "list", "data": [...]}`；请求携带非空
 `client_version` query 参数（Codex 客户端）时改为返回 Codex 专用目录合同 `{"models": [...]}`
 
-OpenAI Provider 按客户端传入的 `client_version` 请求上游目录，完整保留每个模型 JSON 对象，包括
+OpenAI Provider 使用后台按账号发现的目录，客户端版本只选择输出格式。目录完整保留每个原生模型 JSON 对象，包括
 `base_instructions`、`model_messages`、`service_tiers`、工具与能力字段，以及未知嵌套字段、显式 `null`
 和字段缺失的区别。
 API Key 上游返回完整 Codex `models` 目录时沿用该合同；仅返回普通 `data` 模型列表时使用通用画像，
@@ -699,12 +699,12 @@ OpenAI 聚合当前 Key 范围内合格 OAuth 和 API Key 账号的目录。每�
 同名模型优先采用 OAuth 原生对象，其次采用 API Key 的完整 Codex 对象，再使用普通模型 ID。
 同类来源按账号 ID 排序，保留各来源的上游条目顺序，不跨账号拼接字段
 
-部分账号失败或超时时，返回已成功读取的目录并集；没有成功读取任何目录时返回 `503 model_catalog_unavailable`。
+后台刷新失败或超时保留该账号最后成功的结果。当前范围没有任何可用的已知目录时返回 `503 model_catalog_unavailable`。
 成功读取但全部条目被账号政策过滤时返回空列表。
 目录保留完整的原生 Codex 模型对象。对于 OpenAI API Key 普通模型列表和 xAI 目录生成的通用画像，
 当前 Key 可访问的适配器若声明了同名模型，其画像在原位置替换通用画像。仅由插件提供的可见模型按声明顺序追加到所属 Provider 的条目之后
 
-原生目录可能返回缓存结果，成功缓存有效期为 5 分钟。每次查询都检查账号资格和 Client Key 范围。
+服务启动时批量恢复账号目录；目录读取只检查本地账号资格和 Client Key 范围，不等待上游查询。
 成功目录响应带 `Cache-Control: private, no-store`，不借用上游 ETag 标识经过选择/别名/聚合后的正文
 
 `service_tiers` 的 `name` 用于生成 `/fast` 等命令，`id` 是请求使用的 `service_tier` 值，二者不能互换。
@@ -2414,7 +2414,7 @@ models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI �
 
 `openaiClientProfile` 保存通用选择，首次默认 `MacOS · Desktop · 自动最新`。
 兼容字段的更新语义见上节。初始化不读取 YAML 身份字段。
-该配置作用于 Client Key 的 OpenAI 模型请求与原生模型目录，适用于 HTTP/SSE、WebSocket、Images 和 Search。
+该配置作用于 Client Key 的 OpenAI 模型请求，适用于 HTTP/SSE、WebSocket、Images 和 Search。
 不改变 xAI、入站客户端版本门禁、账号认证或后台 Desktop 专属操作
 
 自定义配置使用 `{ "mode": "custom", "userAgent": "完整 UA" }`。
