@@ -567,6 +567,7 @@ remote_compaction = "v2"
 X-OpenAI-Actor-Authorization = "proxy-managed"
 
 [features]
+api_key_model_discovery = true
 image_generation = true
 goals = true
 ```
