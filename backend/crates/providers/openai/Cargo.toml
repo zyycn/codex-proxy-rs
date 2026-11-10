@@ -72,8 +72,8 @@ zstd = "=0.14.3"
 zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-openssl = "=0.10.78"
-openssl-sys = { version = "=0.9.114", features = ["vendored"] }
+openssl = "=0.10.80"
+openssl-sys = { version = "=0.9.116", features = ["vendored"] }
 
 [dev-dependencies]
 gateway-host = { path = "../../gateway-host" }

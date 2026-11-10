@@ -2728,19 +2728,33 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 重试中间错误不改变请求最终分类；`logicalOutcome` 保留真实结果。状态筛选只影响明细列表，
 不改变顶部统计，独立运维事件仍通过 `/api/admin/operations/errors` 查询
 
-请求列表的 `errorCode` / `errorMessage` 提供最终请求的错误码与错误信息，未记录时为 `null`
+请求列表的 `errorCode` / `errorMessage` 提供最终请求的错误码与错误信息，未记录时为 `null`。
+`clientStatusCode` / `upstreamStatusCode` 分别提供已记录的客户端与上游状态码，未记录时为 `null`。
+HTTP SSE 请求可能在返回 HTTP 200 后流内失败；WebSocket 已升级时，客户端错误状态码不代表 HTTP 握手状态或 WebSocket 关闭码。
+两侧状态码不互相替代，也不覆盖 `logicalOutcome`
 
 请求列表与详情的 `errorKind` 保留网关分类，`websocketCloseCode` 只提取已保存关闭帧的数字码，
 与原始上游 `errorCode` 分开。`continuationUnavailableReason` 和 `upstreamConnectionExitReason`
 保留已记录的续接及连接退出原因，缺失字段为 `null`，不根据错误文案推断。
 `recovered` 表示已关联到后续成功请求，原请求的 `logicalOutcome` 保持不变。
-这些字段用于本地化摘要，原始错误信息及受控诊断仍按各自合同保留
+`errorOrigin` 由管理用例统一推导，可取 `proxy`、`upstream`、`connection`、`unknown`。
+列表与详情均以已保存上游错误对象中的非空 `code`、`type` 或 `message` 字符串作为来源证据。
+已记录的上游错误事实优先于本地分类；客户端 HTTP 状态和摘要文案不参与来源推断，事实不足时保持 `unknown`。
+明确的本地内部错误、模型选路与准入拒绝归为 `proxy`；上游权限与模型容量拒绝归为 `upstream`。
+网关 `message_too_big` 专指收到上游 close 1009；本地原生续接请求在发送前超限时用
+`continuationUnavailableReason=transport_payload_too_large` 标识，归为 `proxy`，不能按“消息过大”文案合并来源。
+连接退出原因区分本地取消或回收、实际收到的上游响应、传输异常与收发超时；
+`invalid_request`、`rate_limited`、`timeout` 等可由多侧产生的分类，缺少进一步证据时仍为 `unknown`。
+该字段表示错误位置，不表示责任归属，也不改变执行分类、重试或原始错误信息
 
 `upstreamError` 仅在请求详情返回，从已保存的上游 JSON 投影 `code`、`errorType`、`message`、`param`，
 或 WS 关闭帧的 `closeReason`、`lastEventType`；不重新分类错误，也不包含原始请求、任意响应头或本地原因链。
 缺失、非 JSON 或未识别的结构返回 `null`，完整受控诊断通过诊断包获取。
 详情的 `message` 是网关摘要，不等同于上游 `upstreamError.message`；
 `retryAfterMs` 是已记录的重试等待毫秒数，未记录时为 `null`
+
+详情 `attempts[].downstreamCommitted` 为 `true` 时表示已开始客户端响应，为 `false` 时表示未开始。
+中间尝试的运维事件未保存交付边界，返回 `null`；不能据此推断客户端尚未收到响应
 
 诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。诊断按请求量降序返回最多 100 项，

@@ -34,6 +34,8 @@ use gateway_admin::{
     ports::store::{AdminStoreResult, ObservabilityStore, SettingsStore},
 };
 
+mod errors;
+
 #[test]
 fn external_observability_range_accepts_exactly_366_days() {
     let end = Utc::now();
@@ -1519,6 +1521,7 @@ fn total_record(
 ) -> UsageListRecord {
     UsageListRecord {
         provider_account_upstream_peer: None,
+        has_upstream_error: false,
         error_code: None,
         error_message: None,
         error_kind: None,
@@ -1527,6 +1530,7 @@ fn total_record(
         upstream_connection_exit_reason: None,
         recovered: false,
         client_status_code: None,
+        upstream_status_code: None,
         outcome: gateway_admin::model::observability::RequestOutcome::Succeeded,
         client_api_key_name: Some("Production".to_owned()),
         id: id.to_owned(),

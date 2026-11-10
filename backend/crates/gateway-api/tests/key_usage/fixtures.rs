@@ -101,6 +101,7 @@ pub(super) async fn fixture() -> AdminTestFixture {
 fn usage_record() -> UsageListRecord {
     UsageListRecord {
         provider_account_upstream_peer: None,
+        has_upstream_error: false,
         error_code: None,
         error_message: None,
         error_kind: None,
@@ -109,6 +110,7 @@ fn usage_record() -> UsageListRecord {
         upstream_connection_exit_reason: None,
         recovered: false,
         client_status_code: None,
+        upstream_status_code: None,
         outcome: gateway_admin::model::observability::RequestOutcome::Succeeded,
         client_api_key_name: Some("Production".to_owned()),
         id: "req-visible".to_owned(),

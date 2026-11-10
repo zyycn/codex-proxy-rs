@@ -5474,6 +5474,14 @@ async fn oversized_exact_websocket_continuation_requests_client_replay_before_se
             );
             assert_eq!(error.send_state(), UpstreamSendState::NotSent);
             assert_eq!(
+                error.continuation_unavailable_reason(),
+                Some("transport_payload_too_large")
+            );
+            // 本地大小校验的客户端恢复提示不能伪装成已收到的上游拒绝
+            assert!(error.upstream_status().is_none());
+            assert!(error.upstream_code().is_none());
+            assert!(error.raw_upstream_error().is_none());
+            assert_eq!(
                 error.continuation_recovery_disposition(),
                 Some(ContinuationRecoveryDisposition::ClientReplayRequired)
             );

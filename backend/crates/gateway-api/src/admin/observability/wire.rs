@@ -86,6 +86,9 @@ pub struct ImageBillingView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageListRecordView {
+    pub error_origin: &'static str,
+    pub client_status_code: Option<u16>,
+    pub upstream_status_code: Option<u16>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
     pub error_kind: Option<String>,
@@ -143,6 +146,7 @@ pub struct UsageUpstreamErrorView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageRecordView {
+    pub error_origin: &'static str,
     pub upstream_error: Option<UsageUpstreamErrorView>,
     pub retry_after_ms: Option<u64>,
     pub error_code: Option<String>,
@@ -268,7 +272,7 @@ pub struct UsageAttemptView {
     pub transport: String,
     pub send_state: String,
     pub outcome: String,
-    pub downstream_committed: bool,
+    pub downstream_committed: Option<bool>,
     pub status_code: Option<u16>,
     pub provider_error_code: Option<String>,
     pub failure_class: Option<String>,
