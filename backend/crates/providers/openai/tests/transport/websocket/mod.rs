@@ -1451,18 +1451,16 @@ async fn websocket_execute_response_create_request_should_return_error_terminal_
     assert!(response.body.contains("No tool output found"));
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn codex_backend_client_should_timeout_when_upstream_is_silent() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        let mut websockets = Vec::new();
-        for _ in 0..2 {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut websocket = accept_codex_test_websocket(stream).await;
-            let _message = websocket.next().await.unwrap().unwrap();
-            websockets.push(websocket);
-        }
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _message = websocket.next().await.unwrap().unwrap();
+        // 握手和首条请求使用实时时钟，随后让虚拟时钟推进到客户端的空闲期限
+        tokio::time::pause();
         futures::future::pending::<()>().await;
     });
     let backend = CodexBackendClient::new(
@@ -1700,12 +1698,13 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
     );
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn codex_backend_client_stream_should_keep_socket_after_structural_activity() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
     let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let (output_tx, output_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
@@ -1726,7 +1725,7 @@ async fn codex_backend_client_stream_should_keep_socket_after_structural_activit
             .await
             .unwrap();
 
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        output_rx.await.unwrap();
         first_websocket
             .send(Message::Text(
                 json!({
@@ -1768,7 +1767,13 @@ async fn codex_backend_client_stream_should_keep_socket_after_structural_activit
         .expect("structural activity should keep the websocket stream open");
     let decision = response.websocket_pool_decision;
     let mut stream = response.body;
-    let mut body = String::new();
+    let first = stream.next().await.expect("structural frame").unwrap();
+    let mut body = std::str::from_utf8(&first).unwrap().to_owned();
+    assert!(body.contains("response.created"));
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::time::resume();
+    output_tx.send(()).unwrap();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.unwrap_or_else(|error| {
             panic!("delayed websocket stream chunk should be valid: {error}")
@@ -2015,6 +2020,12 @@ async fn codex_backend_client_stream_should_cancel_while_inbound_is_backpressure
                     | Some(Err(tungstenite::Error::Protocol(
                         tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
                     ))) => return,
+                    // 取消时若 TCP 仍有未读帧，对端可直接收到连接重置
+                    Some(Err(tungstenite::Error::Io(error)))
+                        if error.kind() == std::io::ErrorKind::ConnectionReset =>
+                    {
+                        return;
+                    }
                     Some(Ok(_)) => continue,
                     Some(Err(error)) => panic!("unexpected websocket cleanup error: {error}"),
                 }
@@ -2046,10 +2057,11 @@ async fn codex_backend_client_stream_should_cancel_while_inbound_is_backpressure
     server.await.unwrap();
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn codex_backend_client_stream_should_wait_for_terminal_after_active_websocket_gap() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
@@ -2065,7 +2077,7 @@ async fn codex_backend_client_stream_should_wait_for_terminal_after_active_webso
             ))
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        finish_rx.await.unwrap();
         websocket
             .send(Message::Text(
                 completed_websocket_response("resp_after_active_gap", 3, 1).into(),
@@ -2098,8 +2110,10 @@ async fn codex_backend_client_stream_should_wait_for_terminal_after_active_webso
         .expect("stream should yield partial frame")
         .expect("partial frame should be valid");
     assert!(std::str::from_utf8(&first).unwrap().contains("partial"));
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(30)).await;
-    tokio::task::yield_now().await;
+    tokio::time::resume();
+    finish_tx.send(()).unwrap();
     let terminal = response
         .body
         .next()

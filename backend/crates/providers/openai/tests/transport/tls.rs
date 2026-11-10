@@ -33,31 +33,23 @@ fn http_client_hellos_should_match_official_tls_transports() {
             .enable_all()
             .build()
             .unwrap();
-        let hello = runtime.block_on(async {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let url = format!(
-                "https://localhost:{}/",
-                listener.local_addr().unwrap().port()
-            );
+        runtime.block_on(async {
             let client = provider_openai::transport::build_reqwest_client().unwrap();
-            let (hello, response) = timeout(Duration::from_secs(10), async {
-                tokio::join!(read_client_hello(listener), client.get(url).send())
-            })
-            .await
-            .expect("HTTP ClientHello within timeout");
-            assert!(
-                response.is_err(),
-                "capture endpoint rejects TLS after ClientHello"
-            );
-            hello
+            let mut hello = capture_http_hello(client).await;
+            if case == "custom-ca" {
+                hello.extensions.sort_unstable();
+                assert_eq!(hello, official_http_rustls_hello());
+            } else {
+                #[cfg(target_os = "linux")]
+                let expected = official_linux_http_hello();
+                // 官方无自定义 CA 时使用 reqwest 默认的原生 TLS；系统后端的握手随操作系统而变
+                #[cfg(not(target_os = "linux"))]
+                let expected =
+                    capture_http_hello(reqwest::Client::builder().no_proxy().build().unwrap())
+                        .await;
+                assert_eq!(hello, expected);
+            }
         });
-        if case == "custom-ca" {
-            let mut normalized = hello;
-            normalized.extensions.sort_unstable();
-            assert_eq!(normalized, official_http_rustls_hello());
-        } else {
-            assert_eq!(hello, official_http_hello());
-        }
         println!("\n{CASE_COMPLETED}");
         return;
     }
@@ -99,6 +91,24 @@ fn http_client_hellos_should_match_official_tls_transports() {
     }
 }
 
+async fn capture_http_hello(client: reqwest::Client) -> ClientHello {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "https://localhost:{}/",
+        listener.local_addr().unwrap().port()
+    );
+    let (hello, response) = timeout(Duration::from_secs(10), async {
+        tokio::join!(read_client_hello(listener), client.get(url).send())
+    })
+    .await
+    .expect("HTTP ClientHello within timeout");
+    assert!(
+        response.is_err(),
+        "capture endpoint rejects TLS after ClientHello"
+    );
+    hello
+}
+
 #[tokio::test]
 async fn websocket_client_hello_should_match_official_rustls_transport() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -124,7 +134,8 @@ async fn websocket_client_hello_should_match_official_rustls_transport() {
     assert_eq!(normalized, official_websocket_hello());
 }
 
-fn official_http_hello() -> ClientHello {
+#[cfg(target_os = "linux")]
+fn official_linux_http_hello() -> ClientHello {
     ClientHello {
         legacy_version: 771,
         supported_versions: vec![772, 771],
@@ -203,16 +214,27 @@ async fn read_client_hello(listener: TcpListener) -> ClientHello {
         assert!(values.insert(kind, take_vector(&mut extensions)).is_none());
     }
 
-    let mut groups = values[&10].clone();
-    let groups = u16_values(take_vector(&mut groups));
-    let mut signatures = values[&13].clone();
-    let signature_algorithms = u16_values(take_vector(&mut signatures));
-    let mut shares = values[&51].clone();
-    let mut shares = take_vector(&mut shares);
+    // 原生后端可能只发送 TLS 1.2 扩展；扩展是否存在仍由完整的类型列表校验
+    let u16_list = |kind| {
+        values
+            .get(&kind)
+            .cloned()
+            .map(|mut data| u16_values(take_vector(&mut data)))
+            .unwrap_or_default()
+    };
+    let byte_list = |kind| {
+        values
+            .get(&kind)
+            .map(|data| data.slice(1..))
+            .unwrap_or_default()
+    };
     let mut key_shares = Vec::new();
-    while shares.has_remaining() {
-        let group = shares.get_u16();
-        key_shares.push((group, take_vector(&mut shares).len()));
+    if let Some(mut data) = values.get(&51).cloned() {
+        let mut shares = take_vector(&mut data);
+        while shares.has_remaining() {
+            let group = shares.get_u16();
+            key_shares.push((group, take_vector(&mut shares).len()));
+        }
     }
     let mut alpn = Vec::new();
     if let Some(protocols) = values.get(&16) {
@@ -225,13 +247,13 @@ async fn read_client_hello(listener: TcpListener) -> ClientHello {
     }
     ClientHello {
         legacy_version,
-        supported_versions: u16_values(values[&43].slice(1..)),
-        point_formats: values[&11].slice(1..).to_vec(),
-        psk_modes: values[&45].slice(1..).to_vec(),
+        supported_versions: u16_values(byte_list(43)),
+        point_formats: byte_list(11).to_vec(),
+        psk_modes: byte_list(45).to_vec(),
         cipher_suites,
         extensions: extension_order,
-        groups,
-        signature_algorithms,
+        groups: u16_list(10),
+        signature_algorithms: u16_list(13),
         key_shares,
         alpn,
     }
