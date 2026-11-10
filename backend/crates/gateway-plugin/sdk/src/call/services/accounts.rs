@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct ResetCreditAutomationStatus {
     pub enabled: bool,
     pub lead_minutes: u32,
+    pub weekly_trigger_remaining_percent: Option<u32>,
     pub next_discovery_at: Option<String>,
     pub next_consume_at: Option<String>,
     pub last_result: Option<String>,

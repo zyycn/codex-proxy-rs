@@ -63,6 +63,8 @@ pub struct RuntimeSettingsFields {
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
+    #[serde(default)]
+    pub reset_credit_on_low_weekly_quota: bool,
     pub reset_credit_lead_minutes: u32,
     pub reset_credit_max_weekly_remaining_percent: Option<u32>,
 }
@@ -775,6 +777,7 @@ impl RuntimeSettingsFields {
             account_warmup_enabled: self.account_warmup_enabled,
             account_warmup_cron: self.account_warmup_cron,
             account_warmup_model: self.account_warmup_model,
+            reset_credit_on_low_weekly_quota: self.reset_credit_on_low_weekly_quota,
             reset_credit_lead_minutes: self.reset_credit_lead_minutes,
             reset_credit_max_weekly_remaining_percent: self
                 .reset_credit_max_weekly_remaining_percent,
@@ -814,6 +817,7 @@ impl From<gateway_admin::model::settings::RuntimeSettingsValues> for RuntimeSett
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_cron: settings.account_warmup_cron,
             account_warmup_model: settings.account_warmup_model,
+            reset_credit_on_low_weekly_quota: settings.reset_credit_on_low_weekly_quota,
             reset_credit_lead_minutes: settings.reset_credit_lead_minutes,
             reset_credit_max_weekly_remaining_percent: settings
                 .reset_credit_max_weekly_remaining_percent,

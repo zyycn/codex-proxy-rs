@@ -1128,6 +1128,7 @@ impl AccountStore for FakeAccountStore {
 
 #[derive(Default)]
 struct StaticSettingsStore {
+    reset_credit_on_low_weekly_quota: bool,
     reset_credit_max_weekly_remaining_percent: Option<u32>,
 }
 
@@ -1186,6 +1187,7 @@ impl SettingsStore for StaticSettingsStore {
                 account_warmup_cron: "0 8 * * *".to_owned(),
                 account_warmup_model: None,
                 reset_credit_lead_minutes: 10,
+                reset_credit_on_low_weekly_quota: self.reset_credit_on_low_weekly_quota,
                 reset_credit_max_weekly_remaining_percent: self
                     .reset_credit_max_weekly_remaining_percent,
             },

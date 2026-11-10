@@ -19,6 +19,9 @@ pub struct PendingResetCredit {
 pub struct ResetCreditAutomationState {
     pub next_discovery_at: DateTime<Utc>,
     pub credits: Vec<PlannedResetCredit>,
+    pub next_weekly_check_at: Option<DateTime<Utc>>,
+    /// 同一次低额度只消费一次，等待消费后的恢复观测再允许提前用卡
+    pub awaiting_weekly_recovery_since: Option<DateTime<Utc>>,
     pub pending: Option<PendingResetCredit>,
     pub retry_at: Option<DateTime<Utc>>,
     pub failures: u32,
@@ -39,6 +42,7 @@ pub struct ResetCreditAutomation {
 pub struct ResetCreditAutomationStatus {
     pub enabled: bool,
     pub lead_minutes: u32,
+    pub weekly_trigger_remaining_percent: Option<u32>,
     pub next_discovery_at: Option<DateTime<Utc>>,
     pub next_consume_at: Option<DateTime<Utc>>,
     pub last_result: Option<String>,

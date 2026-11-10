@@ -1237,6 +1237,7 @@ pub struct AccountResetCreditAutomationRequest {
 pub struct AccountResetCreditAutomationData {
     pub enabled: bool,
     pub lead_minutes: u32,
+    pub weekly_trigger_remaining_percent: Option<u32>,
     pub next_discovery_at_display: Option<String>,
     pub next_consume_at_display: Option<String>,
     pub last_result: Option<String>,
@@ -1257,6 +1258,7 @@ impl
         Self {
             enabled: status.enabled,
             lead_minutes: status.lead_minutes,
+            weekly_trigger_remaining_percent: status.weekly_trigger_remaining_percent,
             next_discovery_at_display: status
                 .next_discovery_at
                 .as_ref()

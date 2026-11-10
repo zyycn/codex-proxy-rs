@@ -308,7 +308,11 @@
     "quotaReset": {
       "title": "主动重置卡",
       "enableHelp": "在账号的「额度重置」中开启自动使用",
-      "description": "全局设置，对已开启自动使用的账号生效",
+      "description": "到期前多久使用重置卡",
+      "timing": "使用时机",
+      "expiryMode": "临期使用",
+      "weeklyMode": "按周额度使用",
+      "earlyThresholdHelp": "剩余比例不高于此值时使用，留空或填 0 表示耗尽时使用",
       "thresholdHelp": "高于此值时暂不自动使用，留空表示不限制",
       "weeklyQuotaLimit": "重置卡剩余周额度上限"
     },

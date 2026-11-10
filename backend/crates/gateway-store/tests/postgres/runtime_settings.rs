@@ -50,6 +50,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             account_warmup_cron: "0 8 * * *".to_owned(),
             account_warmup_model: None,
             reset_credit_lead_minutes: 10,
+            reset_credit_on_low_weekly_quota: false,
             reset_credit_max_weekly_remaining_percent: None,
         },
     }
@@ -1248,19 +1249,15 @@ async fn reset_credit_weekly_threshold_defaults_unset_and_round_trips() {
         settings.values.reset_credit_max_weekly_remaining_percent,
         None
     );
+    assert!(!settings.values.reset_credit_on_low_weekly_quota);
     for threshold in [Some(70), Some(0), Some(100), None] {
         let mut update = settings_with_margin(600);
+        update.values.reset_credit_on_low_weekly_quota = true;
         update.values.reset_credit_max_weekly_remaining_percent = threshold;
         repository.update_runtime_settings(update).await.unwrap();
-        assert_eq!(
-            repository
-                .load_runtime_settings()
-                .await
-                .unwrap()
-                .values
-                .reset_credit_max_weekly_remaining_percent,
-            threshold
-        );
+        let values = repository.load_runtime_settings().await.unwrap().values;
+        assert!(values.reset_credit_on_low_weekly_quota);
+        assert_eq!(values.reset_credit_max_weekly_remaining_percent, threshold);
     }
     for threshold in [-1, 101] {
         assert!(sqlx::query("update runtime_settings set reset_credit_max_weekly_remaining_percent = $1 where id = 1")

@@ -2,11 +2,65 @@
 
 use super::*;
 
-use crate::model::{MutationActor, reset_credit_automation::*};
+use crate::model::{MutationActor, reset_credit_automation::*, settings::RuntimeSettingsValues};
 use chrono::{DateTime, Utc};
 use gateway_core::time::DeploymentTimeZone;
 use rand_core::{OsRng, RngCore as _};
 use sha2::{Digest as _, Sha256};
+
+#[derive(Clone, Copy)]
+enum Trigger {
+    Expiry {
+        lead: u32,
+        max_remaining: Option<u32>,
+    },
+    Weekly {
+        max_remaining: u32,
+    },
+}
+
+impl Trigger {
+    fn from_settings(settings: &RuntimeSettingsValues) -> Self {
+        if settings.reset_credit_on_low_weekly_quota {
+            Self::Weekly {
+                max_remaining: settings
+                    .reset_credit_max_weekly_remaining_percent
+                    .unwrap_or(0),
+            }
+        } else {
+            Self::Expiry {
+                lead: settings.reset_credit_lead_minutes,
+                max_remaining: settings.reset_credit_max_weekly_remaining_percent,
+            }
+        }
+    }
+
+    fn weekly_trigger(self) -> Option<u32> {
+        match self {
+            Self::Expiry { .. } => None,
+            Self::Weekly { max_remaining } => Some(max_remaining),
+        }
+    }
+
+    fn quota_limit(self) -> Option<u32> {
+        match self {
+            Self::Expiry { max_remaining, .. } => max_remaining,
+            Self::Weekly { max_remaining } => Some(max_remaining),
+        }
+    }
+
+    fn eligible(self, remaining: f64, limit: u32) -> bool {
+        // 周额度模式即使配置 100% 也不消耗卡片重置满额窗口
+        match self {
+            Self::Expiry { .. } => remaining <= f64::from(limit),
+            Self::Weekly { .. } => weekly_low(remaining, limit),
+        }
+    }
+
+    fn expiry_due(self, account_id: &str, credit: &PlannedResetCredit, now: DateTime<Utc>) -> bool {
+        matches!(self, Self::Expiry { lead, .. } if consume_at(account_id, credit, lead) <= now)
+    }
+}
 
 impl DefaultAccountsService {
     pub(super) async fn reset_credits_upstream(
@@ -74,7 +128,9 @@ impl DefaultAccountsService {
         account_id: &ProviderAccountId,
     ) -> Result<ResetCreditAutomationStatus, AdminError> {
         self.require_reset_credit_automation(account_id).await?;
-        let lead_minutes = self.automation_settings().await?.reset_credit_lead_minutes;
+        let settings = self.automation_settings().await?;
+        let lead_minutes = settings.reset_credit_lead_minutes;
+        let weekly_trigger_remaining_percent = Trigger::from_settings(&settings).weekly_trigger();
         let record = self
             .accounts
             .reset_credit_automation(account_id.as_str())
@@ -83,20 +139,23 @@ impl DefaultAccountsService {
         Ok(ResetCreditAutomationStatus {
             enabled: record.as_ref().is_some_and(|r| r.enabled),
             lead_minutes,
+            weekly_trigger_remaining_percent,
             next_discovery_at: record
                 .as_ref()
                 .filter(|r| r.enabled)
                 .map(|r| r.state.next_discovery_at),
-            next_consume_at: record.as_ref().filter(|r| r.enabled).and_then(|r| {
-                next_consumption(r, lead_minutes)
-                    .or_else(|| {
-                        r.state
-                            .pending
-                            .as_ref()
-                            .map(|pending| consume_at(&r.account_id, &pending.credit, lead_minutes))
-                    })
-                    .map(|due| r.state.retry_at.map_or(due, |retry| due.max(retry)))
-            }),
+            next_consume_at: record
+                .as_ref()
+                .filter(|r| r.enabled && weekly_trigger_remaining_percent.is_none())
+                .and_then(|r| {
+                    next_consumption(r, lead_minutes)
+                        .or_else(|| {
+                            r.state.pending.as_ref().map(|pending| {
+                                consume_at(&r.account_id, &pending.credit, lead_minutes)
+                            })
+                        })
+                        .map(|due| r.state.retry_at.map_or(due, |retry| due.max(retry)))
+                }),
             last_result: record.and_then(|r| {
                 if r.state
                     .pending
@@ -104,6 +163,15 @@ impl DefaultAccountsService {
                     .is_some_and(|pending| pending.credit.expires_at <= Utc::now())
                 {
                     Some("expired_unknown".to_owned())
+                } else if r.enabled
+                    && weekly_trigger_remaining_percent.is_some()
+                    && r.state.awaiting_weekly_recovery_since.is_some()
+                    && matches!(
+                        r.state.last_result.as_deref(),
+                        Some("reset" | "already_redeemed")
+                    )
+                {
+                    Some("awaiting_weekly_recovery".to_owned())
                 } else {
                     r.state.last_result
                 }
@@ -145,6 +213,8 @@ impl DefaultAccountsService {
                 revision: 0,
                 next_run_at: now,
                 state: ResetCreditAutomationState {
+                    next_weekly_check_at: None,
+                    awaiting_weekly_recovery_since: None,
                     next_discovery_at: now,
                     credits: vec![],
                     pending: None,
@@ -160,8 +230,8 @@ impl DefaultAccountsService {
                 record.state.next_discovery_at =
                     now + chrono::Duration::seconds(i64::from(OsRng.next_u32() % 60));
             }
-            let lead = self.automation_settings().await?.reset_credit_lead_minutes;
-            reschedule(&mut record, lead, now);
+            let trigger = Trigger::from_settings(&self.automation_settings().await?);
+            reschedule(&mut record, trigger, now);
             self.save_automation(&mut record, Some(context)).await?;
             let settings = self
                 .settings
@@ -246,7 +316,7 @@ impl DefaultAccountsService {
         self.observe_reset_credits(&mut record, credits, now)?;
         reschedule(
             &mut record,
-            self.automation_settings().await?.reset_credit_lead_minutes,
+            Trigger::from_settings(&self.automation_settings().await?),
             now,
         );
         self.save_automation(&mut record, None).await
@@ -255,18 +325,16 @@ impl DefaultAccountsService {
     async fn automation_failed(
         &self,
         record: &mut ResetCreditAutomation,
-        lead: u32,
+        trigger: Trigger,
         now: DateTime<Utc>,
     ) -> Result<(), AdminError> {
-        if record.state.pending.is_none()
-            && !next_consumption(record, lead).is_some_and(|due| due <= now)
-        {
+        if record.state.pending.is_none() && record.state.retry_at.is_none() {
             record.state.next_discovery_at =
                 next_discovery(now, self.timezone, OsRng.next_u64())
                     .ok_or_else(|| AdminError::internal("无法计算重置卡发现时间"))?;
             record.state.retry_at = None;
             record.state.last_result = Some("discovery_failed".to_owned());
-            reschedule(record, lead, now);
+            reschedule(record, trigger, now);
             return self.save_automation(record, None).await;
         }
         record.state.failures = record.state.failures.saturating_add(1);
@@ -281,7 +349,7 @@ impl DefaultAccountsService {
             }
             .to_owned(),
         );
-        reschedule(record, lead, now);
+        reschedule(record, trigger, now);
         self.save_automation(record, None).await
     }
 
@@ -289,7 +357,7 @@ impl DefaultAccountsService {
     async fn defer_automation(
         &self,
         record: &mut ResetCreditAutomation,
-        lead: u32,
+        trigger: Trigger,
         reason: &str,
     ) -> Result<(), AdminError> {
         let now = Utc::now();
@@ -305,38 +373,24 @@ impl DefaultAccountsService {
         );
         record.state.last_result = Some(reason.to_owned());
         record.state.failures = 0;
-        reschedule(record, lead, now);
+        reschedule(record, trigger, now);
         self.save_automation(record, None).await
     }
 
-    async fn weekly_reset_credit_gate(
+    async fn reset_credit_quota(
         &self,
         account_id: &ProviderAccountId,
-        max_remaining: u32,
-    ) -> Result<Option<&'static str>, AdminError> {
+        refresh: bool,
+    ) -> Result<ProviderQuota, AdminError> {
         let (_, provider) = self.provider_for_account(account_id).await?;
-        let quota = provider
+        provider
             .quota(ProviderQuotaRequest {
                 account_id: account_id.clone(),
-                refresh: true,
+                refresh,
                 rolling_usage: None,
             })
             .await
-            .map_err(|error| map_provider_error(error, "reset-credit weekly quota"))?;
-        // 复用账号周窗口归属，不把短期、月度或模型专属桶当作剩余周额度
-        let remaining = quota
-            .usage_windows()
-            .find(|(_, period)| *period == AccountUsagePeriod::Weekly)
-            .and_then(|(window, _)| window.used_percent)
-            .filter(|used| used.is_finite())
-            .map(|used| 100.0 - used.clamp(0.0, 100.0));
-        Ok(match remaining {
-            Some(remaining) if remaining > f64::from(max_remaining) => {
-                Some("weekly_quota_above_threshold")
-            }
-            Some(_) => None,
-            None => Some("weekly_quota_unavailable"),
-        })
+            .map_err(|error| map_provider_error(error, "reset-credit weekly quota"))
     }
 
     pub(super) async fn reconcile_automation(
@@ -368,7 +422,7 @@ impl DefaultAccountsService {
         }
         let now = Utc::now();
         let settings = self.automation_settings().await?;
-        let lead = settings.reset_credit_lead_minutes;
+        let trigger = Trigger::from_settings(&settings);
         record
             .state
             .credits
@@ -382,18 +436,50 @@ impl DefaultAccountsService {
             record.state.pending = None;
             record.state.retry_at = None;
             record.state.last_result = Some("expired_unknown".to_owned());
+            record.state.awaiting_weekly_recovery_since = Some(now);
         }
         if record.state.retry_at.is_some_and(|retry| retry > now) {
-            reschedule(&mut record, lead, now);
+            reschedule(&mut record, trigger, now);
             return self.save_automation(&mut record, None).await;
         }
         let context = MutationContext {
             actor: MutationActor::System,
             request_id: "reset-credit-automation".to_owned(),
         };
-        let due_credit = next_consumption(&record, lead).is_some_and(|due| due <= now);
+        let due_credit = record
+            .state
+            .credits
+            .iter()
+            .any(|credit| trigger.expiry_due(account_id.as_str(), credit, now));
+        let early_limit = trigger.weekly_trigger();
+        // 只对有已知卡片的账号安排本地快照检查，错开扫描，不按这个频率查询上游
+        record.state.next_weekly_check_at = early_limit
+            .map(|_| now + chrono::Duration::seconds(60 + i64::from(OsRng.next_u32() % 30)));
+        let mut early_due = false;
+        if let Some(limit) = early_limit
+            && record.state.pending.is_none()
+            && !record.state.credits.is_empty()
+        {
+            match self.reset_credit_quota(account_id, false).await {
+                Ok(quota) => {
+                    observe_weekly_recovery(&mut record.state, &quota, limit);
+                    early_due = record.state.awaiting_weekly_recovery_since.is_none()
+                        && weekly_remaining(&quota)
+                            .is_some_and(|remaining| trigger.eligible(remaining, limit));
+                }
+                Err(error) => {
+                    // 额度读取失败不能阻塞独立的卡片发现计划
+                    tracing::warn!(
+                        account_id = account_id.as_str(),
+                        error_kind = error.kind().as_str(),
+                        "重置卡周额度快照读取失败"
+                    );
+                }
+            }
+        }
         if record.state.pending.is_none()
             && (due_credit
+                || early_due
                 || record.state.next_discovery_at <= now
                 || record.state.retry_at.is_some())
         {
@@ -403,10 +489,10 @@ impl DefaultAccountsService {
                     next_discovery(now, self.timezone, OsRng.next_u64())
                         .ok_or_else(|| AdminError::internal("无法计算重置卡发现时间"))?;
             }
-            if due_credit || record.state.retry_at.is_some() {
+            if due_credit || early_due || record.state.retry_at.is_some() {
                 record.state.retry_at = Some(now + chrono::Duration::seconds(30));
             }
-            reschedule(&mut record, lead, now);
+            reschedule(&mut record, trigger, now);
             self.save_automation(&mut record, None).await?;
             // 真正消费前重新核对卡片；每日发现结果也可直接承担本次核对
             match self
@@ -415,7 +501,7 @@ impl DefaultAccountsService {
             {
                 Ok(credits) => self.observe_reset_credits(&mut record, &credits, Utc::now())?,
                 Err(error) => {
-                    self.automation_failed(&mut record, lead, Utc::now())
+                    self.automation_failed(&mut record, trigger, Utc::now())
                         .await?;
                     return Err(error);
                 }
@@ -424,24 +510,28 @@ impl DefaultAccountsService {
                 .state
                 .credits
                 .iter()
-                .find(|credit| consume_at(account_id.as_str(), credit, lead) <= Utc::now())
+                .find(|credit| {
+                    early_due || trigger.expiry_due(account_id.as_str(), credit, Utc::now())
+                })
                 .cloned()
             {
-                if let Some(max_remaining) = settings.reset_credit_max_weekly_remaining_percent {
-                    // 已发出的未决请求跳过此检查，继续沿原幂等键确认结果
-                    match self
-                        .weekly_reset_credit_gate(account_id, max_remaining)
-                        .await
-                    {
-                        Ok(Some(reason)) => {
-                            return self.defer_automation(&mut record, lead, reason).await;
-                        }
-                        Ok(None) => {}
+                if let Some(limit) = trigger.quota_limit() {
+                    // 缓存只能唤醒检查，实际选中的卡片与额度都要重新核实
+                    let quota = match self.reset_credit_quota(account_id, true).await {
+                        Ok(quota) => quota,
                         Err(error) => {
-                            self.defer_automation(&mut record, lead, "weekly_quota_unavailable")
+                            self.defer_automation(&mut record, trigger, "weekly_quota_unavailable")
                                 .await?;
                             return Err(error);
                         }
+                    };
+                    let reason = match weekly_remaining(&quota) {
+                        Some(remaining) if trigger.eligible(remaining, limit) => None,
+                        Some(_) => Some("weekly_quota_above_threshold"),
+                        None => Some("weekly_quota_unavailable"),
+                    };
+                    if let Some(reason) = reason {
+                        return self.defer_automation(&mut record, trigger, reason).await;
                     }
                 }
                 // 刷新额度期间卡片可能到期，不能把已过期卡片持久化为待消费
@@ -450,7 +540,7 @@ impl DefaultAccountsService {
                         .state
                         .credits
                         .retain(|credit| credit.expires_at > Utc::now());
-                    reschedule(&mut record, lead, Utc::now());
+                    reschedule(&mut record, trigger, Utc::now());
                     return self.save_automation(&mut record, None).await;
                 }
                 record.state.pending = Some(PendingResetCredit {
@@ -459,13 +549,13 @@ impl DefaultAccountsService {
                 });
                 record.state.last_result = Some("pending".to_owned());
                 record.state.retry_at = Some(Utc::now() + chrono::Duration::seconds(30));
-                reschedule(&mut record, lead, Utc::now());
+                reschedule(&mut record, trigger, Utc::now());
                 // 必须在发送消费请求前落盘，进程退出或响应丢失继续使用相同幂等键
                 self.save_automation(&mut record, None).await?;
             }
         }
         let Some(pending) = record.state.pending.clone() else {
-            reschedule(&mut record, lead, Utc::now());
+            reschedule(&mut record, trigger, Utc::now());
             return self.save_automation(&mut record, None).await;
         };
         let command = ConsumeProviderResetCredit {
@@ -478,9 +568,12 @@ impl DefaultAccountsService {
             Ok(result) => {
                 let confirmed = matches!(result.code.as_str(), "reset" | "already_redeemed");
                 record.state.pending = None;
+                if confirmed {
+                    record.state.awaiting_weekly_recovery_since = Some(Utc::now());
+                }
                 if result.code == "nothing_to_reset" {
                     return self
-                        .defer_automation(&mut record, lead, "nothing_to_reset")
+                        .defer_automation(&mut record, trigger, "nothing_to_reset")
                         .await;
                 }
                 record
@@ -494,21 +587,57 @@ impl DefaultAccountsService {
                 } else {
                     "not_redeemed".to_owned()
                 });
-                reschedule(&mut record, lead, Utc::now());
+                reschedule(&mut record, trigger, Utc::now());
                 // 已确认的结果先落盘，再刷新额度；观测失败不能重放已完成的消费
                 self.save_automation(&mut record, None).await?;
-                if confirmed {
-                    let _ = self.quota(account_id, true).await;
+                if confirmed
+                    && let Ok(account) = self.quota(account_id, true).await
+                    && let Some(limit) = early_limit
+                    && observe_weekly_recovery(&mut record.state, &account.quota, limit)
+                {
+                    self.save_automation(&mut record, None).await?;
                 }
             }
             Err(error) => {
-                self.automation_failed(&mut record, lead, Utc::now())
+                self.automation_failed(&mut record, trigger, Utc::now())
                     .await?;
                 return Err(error);
             }
         }
         Ok(())
     }
+}
+
+/// 复用账号周窗口归属，忽略短期、模型专属和过期窗口
+fn weekly_remaining(quota: &ProviderQuota) -> Option<f64> {
+    quota
+        .usage_windows()
+        .find(|(window, period)| {
+            *period == AccountUsagePeriod::Weekly
+                && window.reset_at.is_some_and(|end| end > Utc::now())
+        })
+        .and_then(|(window, _)| window.used_percent)
+        .filter(|used| used.is_finite())
+        .map(|used| 100.0 - used.clamp(0.0, 100.0))
+}
+
+fn weekly_low(remaining: f64, limit: u32) -> bool {
+    remaining < 100.0 && remaining <= f64::from(limit)
+}
+
+fn observe_weekly_recovery(
+    state: &mut ResetCreditAutomationState,
+    quota: &ProviderQuota,
+    limit: u32,
+) -> bool {
+    if let Some(since) = state.awaiting_weekly_recovery_since
+        && quota.observed_at.is_some_and(|at| at > since)
+        && weekly_remaining(quota).is_some_and(|remaining| !weekly_low(remaining, limit))
+    {
+        state.awaiting_weekly_recovery_since = None;
+        return true;
+    }
+    false
 }
 
 /// 当地次日随机发现时间；随机数由调用者提供，结果持久化后不会因重启重抽
@@ -550,14 +679,21 @@ fn next_consumption(record: &ResetCreditAutomation, lead_minutes: u32) -> Option
         .min()
 }
 
-fn reschedule(record: &mut ResetCreditAutomation, lead_minutes: u32, now: DateTime<Utc>) {
+fn reschedule(record: &mut ResetCreditAutomation, trigger: Trigger, now: DateTime<Utc>) {
     record.next_run_at = if let Some(retry) = record.state.retry_at {
         retry
     } else if record.state.pending.is_some() {
         now
     } else {
-        next_consumption(record, lead_minutes).map_or(record.state.next_discovery_at, |due| {
-            due.min(record.state.next_discovery_at)
+        let scheduled = match trigger {
+            Trigger::Expiry { lead, .. } => next_consumption(record, lead),
+            Trigger::Weekly { .. } if !record.state.credits.is_empty() => {
+                Some(record.state.next_weekly_check_at.unwrap_or(now))
+            }
+            Trigger::Weekly { .. } => None,
+        };
+        scheduled.map_or(record.state.next_discovery_at, |at| {
+            at.min(record.state.next_discovery_at)
         })
     };
 }

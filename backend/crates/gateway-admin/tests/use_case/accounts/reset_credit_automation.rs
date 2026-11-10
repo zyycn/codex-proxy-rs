@@ -231,6 +231,8 @@ fn plan(expires_at: chrono::DateTime<Utc>) -> ResetCreditAutomation {
         revision: 1,
         next_run_at: Utc::now(),
         state: ResetCreditAutomationState {
+            next_weekly_check_at: None,
+            awaiting_weekly_recovery_since: None,
             next_discovery_at: Utc::now() + TimeDelta::days(1),
             credits: vec![PlannedResetCredit {
                 id: "card_1".into(),
@@ -309,7 +311,7 @@ async fn automation_restores_pending_idempotency_after_service_restart() {
         .state
         .retry_at = Some(Utc::now() - TimeDelta::seconds(1));
     drop(services);
-    let restarted = threshold_services(provider.clone(), store.clone(), Some(0)).await;
+    let restarted = threshold_services(provider.clone(), store.clone(), Some(0), true).await;
     restarted
         .accounts()
         .reconcile_reset_credit_automation(account_id)
@@ -712,10 +714,12 @@ async fn threshold_services(
     provider: Arc<FakeProviderAdmin>,
     store: Arc<FakeAccountStore>,
     max_remaining: Option<u32>,
+    early: bool,
 ) -> AdminServices {
     super::super::AdminHarness::new()
         .accounts(store)
         .settings(Arc::new(StaticSettingsStore {
+            reset_credit_on_low_weekly_quota: early,
             reset_credit_max_weekly_remaining_percent: max_remaining,
         }))
         .provider(provider)
@@ -783,7 +787,7 @@ async fn automation_weekly_threshold_is_optional_inclusive_and_uses_remaining_qu
         let store = FakeAccountStore::new("openai", events());
         schedule_due_credit(&provider, &store);
         provider.set_quota(weekly_quota(used));
-        let services = threshold_services(provider.clone(), store.clone(), threshold).await;
+        let services = threshold_services(provider.clone(), store.clone(), threshold, false).await;
         services
             .accounts()
             .reconcile_reset_credit_automation(ProviderAccountId::new("acct_test").unwrap())
@@ -825,7 +829,7 @@ async fn automation_retains_skipped_credit_and_refreshes_quota_on_next_attempt()
     let store = FakeAccountStore::new("openai", events());
     schedule_due_credit(&provider, &store);
     provider.set_quota(weekly_quota(10.0));
-    let services = threshold_services(provider.clone(), store.clone(), Some(70)).await;
+    let services = threshold_services(provider.clone(), store.clone(), Some(70), false).await;
     let id = ProviderAccountId::new("acct_test").unwrap();
     services
         .accounts()
@@ -897,7 +901,7 @@ async fn automation_defers_missing_invalid_or_failed_weekly_quota() {
         schedule_due_credit(&provider, &store);
         provider.set_quota(quota);
         *provider.quota_failure.lock().unwrap() = failure;
-        let services = threshold_services(provider.clone(), store.clone(), Some(70)).await;
+        let services = threshold_services(provider.clone(), store.clone(), Some(70), false).await;
         let result = services
             .accounts()
             .reconcile_reset_credit_automation(ProviderAccountId::new("acct_test").unwrap())
@@ -970,4 +974,182 @@ async fn automation_nothing_to_reset_retains_credit_and_retries_with_a_new_key()
             .credits
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn early_use_checks_only_known_cards_and_confirms_low_quota_before_spending() {
+    for (enabled, threshold, used, expiring, expected) in [
+        (false, Some(10), 100.0, false, false),
+        (true, None, 99.9, true, false),
+        (true, None, 100.0, false, true),
+        (true, Some(10), 90.0, false, true),
+        (true, Some(100), 0.0, false, false),
+    ] {
+        let provider = FakeProviderAdmin::new("openai", events());
+        let store = FakeAccountStore::new("openai", events());
+        enable_capability(&provider);
+        let expiry = Utc::now()
+            + if expiring {
+                TimeDelta::minutes(5)
+            } else {
+                TimeDelta::days(3)
+            };
+        provider.reset_credits.lock().unwrap().push(card(expiry));
+        let mut record = plan(expiry);
+        let credits = std::mem::take(&mut record.state.credits);
+        store
+            .automations
+            .lock()
+            .unwrap()
+            .insert("acct_test".into(), record);
+        let services =
+            threshold_services(provider.clone(), store.clone(), threshold, enabled).await;
+        let id = ProviderAccountId::new("acct_test").unwrap();
+        provider.set_quota(weekly_quota(used));
+        services
+            .accounts()
+            .reconcile_reset_credit_automation(id.clone())
+            .await
+            .unwrap();
+        assert!(provider.quota_requests().is_empty());
+        let no_card = store
+            .reset_credit_automation("acct_test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(no_card.next_run_at, no_card.state.next_discovery_at);
+        store
+            .automations
+            .lock()
+            .unwrap()
+            .get_mut("acct_test")
+            .unwrap()
+            .state
+            .credits = credits;
+        services
+            .accounts()
+            .reconcile_reset_credit_automation(id)
+            .await
+            .unwrap();
+        assert_eq!(
+            provider.reset_credit_commands().len(),
+            usize::from(expected)
+        );
+        let status = services
+            .accounts()
+            .reset_credit_automation_status(ProviderAccountId::new("acct_test").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            status.weekly_trigger_remaining_percent,
+            enabled.then_some(threshold.unwrap_or(0))
+        );
+        if enabled {
+            assert!(status.next_consume_at.is_none());
+        }
+        let requests = provider.quota_requests();
+        assert_eq!(
+            requests.iter().filter(|r| !r.refresh).count(),
+            usize::from(enabled)
+        );
+        assert_eq!(requests.iter().any(|r| r.refresh), expected);
+        if enabled && !expected {
+            assert!(
+                store
+                    .reset_credit_automation("acct_test")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .next_run_at
+                    <= Utc::now() + TimeDelta::seconds(90)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn early_use_rechecks_live_quota_and_waits_for_a_new_recovery_after_restart() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    let store = FakeAccountStore::new("openai", events());
+    enable_capability(&provider);
+    let expiry = Utc::now() + TimeDelta::days(3);
+    let mut later = card(expiry + TimeDelta::days(1));
+    later.id = "later".into();
+    *provider.reset_credits.lock().unwrap() = vec![later, card(expiry)];
+    store
+        .automations
+        .lock()
+        .unwrap()
+        .insert("acct_test".into(), plan(expiry));
+    let id = ProviderAccountId::new("acct_test").unwrap();
+    let services = threshold_services(provider.clone(), store.clone(), Some(10), true).await;
+    let high = ProviderQuota {
+        observed_at: Some(Utc::now()),
+        ..weekly_quota(15.0)
+    };
+    provider.set_quota(weekly_quota(90.0));
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *provider.reset_credit_query_gate.lock().unwrap() = Some(gate);
+    let (result, ()) = tokio::join!(
+        services
+            .accounts()
+            .reconcile_reset_credit_automation(id.clone()),
+        async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                provider.reset_credit_query_started.notified(),
+            )
+            .await
+            .unwrap();
+            provider.set_quota(high.clone());
+            release.send(()).unwrap();
+        }
+    );
+    result.unwrap();
+    assert!(provider.reset_credit_commands().is_empty());
+
+    advance_retry(&store);
+    provider.set_quota(weekly_quota(95.0));
+    services
+        .accounts()
+        .reconcile_reset_credit_automation(id.clone())
+        .await
+        .unwrap();
+    let commands = provider.reset_credit_commands();
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].credit_id.as_deref(), Some("card_1"));
+    provider
+        .reset_credits
+        .lock()
+        .unwrap()
+        .retain(|credit| credit.id != "card_1");
+
+    let services = threshold_services(provider.clone(), store.clone(), Some(10), true).await;
+    for quota in [weekly_quota(95.0), high, weekly_quota(95.0)] {
+        provider.set_quota(quota);
+        services
+            .accounts()
+            .reconcile_reset_credit_automation(id.clone())
+            .await
+            .unwrap();
+    }
+    assert_eq!(provider.reset_credit_commands().len(), 1);
+    provider.set_quota(ProviderQuota {
+        observed_at: Some(Utc::now()),
+        ..weekly_quota(20.0)
+    });
+    services
+        .accounts()
+        .reconcile_reset_credit_automation(id.clone())
+        .await
+        .unwrap();
+    provider.set_quota(weekly_quota(100.0));
+    services
+        .accounts()
+        .reconcile_reset_credit_automation(id)
+        .await
+        .unwrap();
+    let commands = provider.reset_credit_commands();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[1].credit_id.as_deref(), Some("later"));
 }
