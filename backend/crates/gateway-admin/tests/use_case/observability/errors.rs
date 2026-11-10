@@ -30,6 +30,9 @@ fn usage_error_origin_prefers_upstream_facts_to_local_classification() {
     record.error_code = None;
     record.websocket_close_code = Some(1011);
     assert_eq!(record.error_origin(), UsageErrorOrigin::Upstream);
+    record.websocket_close_code = None;
+    record.has_upstream_error = true;
+    assert_eq!(record.error_origin(), UsageErrorOrigin::Upstream);
 }
 
 #[test]

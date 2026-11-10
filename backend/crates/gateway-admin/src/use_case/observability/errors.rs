@@ -6,6 +6,7 @@ impl UsageListRecord {
     #[must_use]
     pub fn error_origin(&self) -> UsageErrorOrigin {
         error_origin(
+            self.has_upstream_error,
             self.error_code.as_deref(),
             self.websocket_close_code,
             self.upstream_status_code,
@@ -19,14 +20,13 @@ impl UsageListRecord {
 impl UsageRecord {
     #[must_use]
     pub fn error_origin(&self) -> UsageErrorOrigin {
-        if self.upstream_error.as_ref().is_some_and(|error| {
+        let has_upstream_error = self.upstream_error.as_ref().is_some_and(|error| {
             [&error.message, &error.code, &error.error_type]
                 .into_iter()
                 .any(|value| value.as_ref().is_some_and(|value| !value.is_empty()))
-        }) {
-            return UsageErrorOrigin::Upstream;
-        }
+        });
         error_origin(
+            has_upstream_error,
             self.provider_error_code.as_deref(),
             self.websocket_close_code,
             self.upstream_status_code,
@@ -39,6 +39,7 @@ impl UsageRecord {
 
 // 上游原始事实优先；客户端 HTTP 状态和任意错误文案不能证明错误来源
 fn error_origin(
+    has_upstream_error: bool,
     upstream_code: Option<&str>,
     websocket_close_code: Option<u16>,
     upstream_status_code: Option<u16>,
@@ -46,7 +47,8 @@ fn error_origin(
     continuation_reason: Option<&str>,
     connection_exit_reason: Option<&str>,
 ) -> UsageErrorOrigin {
-    if upstream_code.is_some_and(|code| !code.is_empty())
+    if has_upstream_error
+        || upstream_code.is_some_and(|code| !code.is_empty())
         || websocket_close_code.is_some()
         || upstream_status_code.is_some_and(|status| status >= 400)
         || matches!(

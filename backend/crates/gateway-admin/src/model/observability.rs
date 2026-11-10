@@ -829,6 +829,8 @@ impl UsageErrorOrigin {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageListRecord {
     pub outcome: RequestOutcome,
+    /// 已保存的上游错误对象含非空字符串 code、type 或 message
+    pub has_upstream_error: bool,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
     pub error_kind: Option<String>,

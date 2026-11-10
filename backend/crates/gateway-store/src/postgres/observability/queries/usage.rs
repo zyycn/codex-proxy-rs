@@ -126,13 +126,17 @@ pub(crate) fn push_usage_filter(
 pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
     "select mr.id, mr.outcome, mr.provider_error_code as error_code, mr.error_message, mr.client_status_code, mr.client_api_key_name_snapshot as client_api_key_name, mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.error_kind, mr.upstream_status_code,
-            case when pg_input_is_valid(mr.error_details, 'jsonb') then
-              case when jsonb_typeof(mr.error_details::jsonb -> 'upstream') = 'string'
-                and pg_input_is_valid(mr.error_details::jsonb ->> 'upstream', 'jsonb') then
-                (select case when jsonb_array_length(codes) = 1 then codes ->> 0 end
-                 from jsonb_path_query_array((mr.error_details::jsonb ->> 'upstream')::jsonb,
-                   '$ ? (@.type == \"websocket.close\").code ? (@.type() == \"number\")') as codes)
-              end
+            exists (
+              select 1 from (values
+                (saved_error.body -> 'code'),
+                (saved_error.body -> 'type'),
+                (saved_error.body -> 'message')
+              ) as field(value)
+              where jsonb_typeof(field.value) = 'string' and field.value <> '\"\"'::jsonb
+            ) as has_upstream_error,
+            case when saved_upstream.body ->> 'type' = 'websocket.close'
+              and jsonb_typeof(saved_upstream.body -> 'code') = 'number'
+              then saved_upstream.body ->> 'code'
             end as websocket_close_code,
             mr.continuation_unavailable_reason, mr.upstream_connection_exit_reason,
             (mr.recovery_request_id is not null and mr.recovered_at is not null) as recovered,
@@ -155,7 +159,18 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             host(mr.client_ip) as client_ip, mr.user_agent,
             mr.reasoning_effort, mr.reasoning_preset, mr.subagent_kind, mr.compact,
             mr.started_at
-     from model_request_observations mr";
+     from model_request_observations mr
+     cross join lateral (
+       select case when pg_input_is_valid(mr.error_details, 'jsonb') then
+         case when jsonb_typeof(mr.error_details::jsonb -> 'upstream') = 'string'
+           and pg_input_is_valid(mr.error_details::jsonb ->> 'upstream', 'jsonb')
+           then (mr.error_details::jsonb ->> 'upstream')::jsonb
+         end
+       end as body
+     ) saved_upstream
+     cross join lateral (
+       select coalesce(saved_upstream.body -> 'error', saved_upstream.body #> '{response,error}') as body
+     ) saved_error";
 
 pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
     "select mr.id, mr.client_api_key_ref, mr.config_revision,

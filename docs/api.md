@@ -2624,7 +2624,8 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 保留已记录的续接及连接退出原因，缺失字段为 `null`，不根据错误文案推断。
 `recovered` 表示已关联到后续成功请求，原请求的 `logicalOutcome` 保持不变。
 `errorOrigin` 由管理用例统一推导，可取 `proxy`、`upstream`、`connection`、`unknown`。
-已记录的上游错误事实优先于本地分类；客户端 HTTP 状态和错误文案不参与来源推断，事实不足时保持 `unknown`。
+列表与详情均以已保存上游错误对象中的非空 `code`、`type` 或 `message` 字符串作为来源证据。
+已记录的上游错误事实优先于本地分类；客户端 HTTP 状态和摘要文案不参与来源推断，事实不足时保持 `unknown`。
 该字段表示错误位置，不表示责任归属，也不改变执行分类、重试或原始错误信息
 
 `upstreamError` 仅在请求详情返回，从已保存的上游 JSON 投影 `code`、`errorType`、`message`、`param`，

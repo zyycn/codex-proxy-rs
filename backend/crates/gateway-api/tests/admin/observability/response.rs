@@ -983,6 +983,7 @@ async fn usage_route_projects_request_facts_and_billing() {
         .expect("usage records")
         .push(UsageListRecord {
             provider_account_upstream_peer: None,
+            has_upstream_error: false,
             error_code: None,
             error_message: None,
             error_kind: None,

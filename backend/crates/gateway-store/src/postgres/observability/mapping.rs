@@ -365,6 +365,7 @@ pub(crate) fn usage_list_record_from_row(
         cost_currency.as_deref(),
     )?;
     Ok(UsageListRecord {
+        has_upstream_error: get(row, "has_upstream_error")?,
         error_code: get(row, "error_code")?,
         error_message: get(row, "error_message")?,
         error_kind: get(row, "error_kind")?,
