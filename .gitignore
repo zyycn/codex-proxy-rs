@@ -17,6 +17,9 @@
 /.runtime/
 *.log
 
+# Local planning documents
+/docs/plans/
+
 # Local configuration and secrets
 /deploy/config.yaml
 .env

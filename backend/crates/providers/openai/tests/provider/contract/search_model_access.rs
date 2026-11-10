@@ -369,3 +369,68 @@ async fn search_model_selection_does_not_restrict_plugin_body_rewrites() {
         "plugin-model"
     );
 }
+
+#[tokio::test]
+async fn search_reuses_protocol_projection_until_credential_revision_changes() {
+    use gateway_core::account::{CredentialCasUpdate, ProviderAccountUpdate};
+    use provider_openai::credential::{
+        ApiKeyProtocol, CodexCredentialCodec, CodexCredentialData, ResponsesTransport,
+    };
+    let store = Arc::new(MemoryAccountStore::default());
+    let server = MockServer::start().await;
+    store
+        .seed_api_key_for_protocol(
+            FIRST,
+            server.uri(),
+            ResponsesTransport::Http,
+            ApiKeyProtocol::Messages,
+        )
+        .await;
+    let provider = provider(&store);
+    let ctx = || {
+        attempt(
+            AccountAttemptContext::new(BTreeSet::new(), None, None)
+                .with_account_scope(scope(AccountModelAccess::all(), AccountModelAccess::all())),
+            AccountAffinity::Strict,
+            1,
+            None,
+        )
+    };
+    let loads = store.credential_loads();
+    for _ in 0..2 {
+        let err = provider
+            .clone()
+            .execute(search(BODY), ctx())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err.kind(), ProviderErrorKind::NoEligibleAccount);
+    }
+    assert_eq!(store.credential_loads() - loads, 1);
+    let id = ProviderAccountId::new(FIRST).unwrap();
+    let loaded = store.load_current_credential(&id).await.unwrap();
+    let mut data = CodexCredentialCodec::decode_complete(&loaded.credential).unwrap();
+    let CodexCredentialData::ApiKey(config) = &mut data else {
+        panic!("预期 API Key 账号");
+    };
+    config.protocol = ApiKeyProtocol::Responses;
+    let update = CredentialCasUpdate::new(
+        id.clone(),
+        loaded.account.revision(),
+        ProviderAccountUpdate {
+            account_id: id.clone(),
+            name: FIRST.to_owned(),
+            email: None,
+            plan_type: None,
+        },
+        CodexCredentialCodec::encode_complete(data).unwrap(),
+        false,
+        None,
+        None,
+    )
+    .unwrap()
+    .preserving_profile();
+    store.compare_and_swap_credential(update).await.unwrap();
+    let stream = provider.execute(search(BODY), ctx()).await.unwrap();
+    assert_eq!(stream.metadata().provider_account_id(), &id);
+}

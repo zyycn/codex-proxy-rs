@@ -1,13 +1,11 @@
 //! OpenAI Responses JSON 到 Core 路由事实与不透明 wire payload 的单一解码边界
 
-use std::{borrow::Cow, fmt, net::IpAddr};
+use std::borrow::Cow;
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
-use gateway_core::operation::{
-    ClientTurn, GenerateRequest, Operation, ProtocolPayload, ProviderSessionState,
-};
+use gateway_core::operation::{ClientTurn, GenerateRequest, Operation, ProtocolPayload};
 use gateway_protocol::openai::{
     X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
     is_transport_managed_request_header,
@@ -15,6 +13,9 @@ use gateway_protocol::openai::{
 use serde_json::{Map, Value};
 
 use super::error::RequestDecodeError;
+use crate::openai::generation::{
+    ContinuationIntent, DecodedGenerationRequest, GenerationRequestMetadata,
+};
 
 const OPENAI_PROTOCOL: &str = "openai";
 const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
@@ -179,162 +180,6 @@ fn insert_protocol_context(context: &mut Map<String, Value>, field: &str, value:
     }
 }
 
-/// 客户端声明的 continuation 意图
-#[derive(Clone, PartialEq, Eq)]
-pub enum ContinuationIntent {
-    /// 不使用先前响应
-    None,
-    /// 使用当前调用方可见的 OpenAI response ID
-    PreviousResponseId(String),
-}
-
-impl ContinuationIntent {
-    /// 返回待 history owner 解析的 response ID
-    #[must_use]
-    pub fn previous_response_id(&self) -> Option<&str> {
-        match self {
-            Self::None => None,
-            Self::PreviousResponseId(value) => Some(value),
-        }
-    }
-}
-
-impl fmt::Debug for ContinuationIntent {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::None => formatter.write_str("None"),
-            Self::PreviousResponseId(_) => formatter.write_str("PreviousResponseId(<redacted>)"),
-        }
-    }
-}
-
-/// Handler、Router 和 history owner 使用的请求元数据
-#[derive(Clone, PartialEq, Eq)]
-pub struct ResponsesRequestMetadata {
-    requested_model: String,
-    stream: bool,
-    store: bool,
-    continuation: ContinuationIntent,
-    client_ip: Option<IpAddr>,
-    user_agent: Option<String>,
-}
-
-impl ResponsesRequestMetadata {
-    /// 返回客户端原始模型名
-    #[must_use]
-    pub fn requested_model(&self) -> &str {
-        &self.requested_model
-    }
-
-    /// 返回客户端是否请求 SSE
-    #[must_use]
-    pub const fn stream(&self) -> bool {
-        self.stream
-    }
-
-    /// 返回客户端 storage intent
-    #[must_use]
-    pub const fn store(&self) -> bool {
-        self.store
-    }
-
-    /// 返回 continuation intent
-    #[must_use]
-    pub const fn continuation(&self) -> &ContinuationIntent {
-        &self.continuation
-    }
-
-    /// 返回从 HTTP 连接边界解析出的客户端地址
-    #[must_use]
-    pub const fn client_ip(&self) -> Option<IpAddr> {
-        self.client_ip
-    }
-
-    /// 返回经过 UTF-8 校验和空白归一化的 User-Agent
-    #[must_use]
-    pub fn user_agent(&self) -> Option<&str> {
-        self.user_agent.as_deref()
-    }
-}
-
-impl fmt::Debug for ResponsesRequestMetadata {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ResponsesRequestMetadata")
-            .field("requested_model", &self.requested_model)
-            .field("stream", &self.stream)
-            .field("store", &self.store)
-            .field("continuation", &self.continuation)
-            .field("client_ip", &self.client_ip)
-            .field("has_user_agent", &self.user_agent.is_some())
-            .finish()
-    }
-}
-
-/// 一次成功解码的 Responses 请求
-#[derive(Clone, PartialEq)]
-pub struct DecodedResponsesRequest {
-    operation: Operation,
-    metadata: ResponsesRequestMetadata,
-}
-
-impl DecodedResponsesRequest {
-    pub(crate) fn with_middleware_capabilities(
-        mut self,
-        request: &gateway_core::engine::middleware::MiddlewareRequest,
-    ) -> Result<Self, gateway_core::engine::middleware::MiddlewareError> {
-        self.operation = request.apply_capabilities(self.operation)?;
-        Ok(self)
-    }
-
-    /// 附着当前 WebSocket 连接保存的 Provider 私有上一轮状态
-    #[must_use]
-    pub fn with_provider_session_state(mut self, state: ProviderSessionState) -> Self {
-        self.operation = self.operation.with_provider_session_state(state);
-        self
-    }
-
-    /// 返回协议无关 operation
-    #[must_use]
-    pub const fn operation(&self) -> &Operation {
-        &self.operation
-    }
-
-    /// 返回 handler 元数据
-    #[must_use]
-    pub const fn metadata(&self) -> &ResponsesRequestMetadata {
-        &self.metadata
-    }
-
-    /// 拆分为 operation 与元数据
-    #[must_use]
-    pub fn into_parts(self) -> (Operation, ResponsesRequestMetadata) {
-        (self.operation, self.metadata)
-    }
-
-    /// 附着只由 HTTP/WebSocket 连接边界提供的诊断事实
-    #[must_use]
-    pub fn with_client_context(
-        mut self,
-        client_ip: Option<IpAddr>,
-        user_agent: Option<String>,
-    ) -> Self {
-        self.metadata.client_ip = client_ip;
-        self.metadata.user_agent = user_agent;
-        self
-    }
-}
-
-impl fmt::Debug for DecodedResponsesRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DecodedResponsesRequest")
-            .field("operation", &self.operation)
-            .field("metadata", &self.metadata)
-            .finish()
-    }
-}
-
 /// 使用下游 OpenAI/Codex 请求头解码 `POST /v1/responses`
 ///
 /// # Errors
@@ -344,7 +189,7 @@ pub fn decode_request_with_headers(
     body: &[u8],
     headers: &HeaderMap,
     max_decompressed_bytes: usize,
-) -> Result<DecodedResponsesRequest, RequestDecodeError> {
+) -> Result<DecodedGenerationRequest, RequestDecodeError> {
     let body = decompress_request_body(body, headers, max_decompressed_bytes)?;
     decode_request_inner(&body, &OpenAiRequestHeaders::from_headers(headers))
 }
@@ -357,7 +202,7 @@ pub(crate) fn decode_request_with_body(
     body: &[u8],
     headers: &HeaderMap,
     max_decompressed_bytes: usize,
-) -> Result<(DecodedResponsesRequest, Bytes), RequestDecodeError> {
+) -> Result<(DecodedGenerationRequest, Bytes), RequestDecodeError> {
     let body = decompress_request_body(body, headers, max_decompressed_bytes)?;
     let decoded = decode_request_inner(&body, &OpenAiRequestHeaders::from_headers(headers))?;
     Ok((decoded, Bytes::copy_from_slice(&body)))
@@ -449,7 +294,7 @@ fn read_bounded<R: std::io::Read>(
 pub(super) fn decode_request_inner(
     body: &[u8],
     request_headers: &OpenAiRequestHeaders,
-) -> Result<DecodedResponsesRequest, RequestDecodeError> {
+) -> Result<DecodedGenerationRequest, RequestDecodeError> {
     let value =
         serde_json::from_slice::<Value>(body).map_err(|_| RequestDecodeError::MalformedJson)?;
     let Value::Object(object) = value else {
@@ -463,7 +308,7 @@ pub(super) fn decode_request_object(
     mut object: Map<String, Value>,
     request_headers: &OpenAiRequestHeaders,
     source: RequestDecodeSource,
-) -> Result<DecodedResponsesRequest, RequestDecodeError> {
+) -> Result<DecodedGenerationRequest, RequestDecodeError> {
     // 仅消费已识别的本地 transport 开关；未知同名值保留给未来上游协议
     let use_websocket = object.get("use_websocket").and_then(Value::as_bool);
     if use_websocket.is_some() {
@@ -523,9 +368,9 @@ pub(super) fn decode_request_object(
     let operation = Operation::Generate(
         GenerateRequest::from_protocol_payload(payload).with_client_turn(client_turn),
     );
-    Ok(DecodedResponsesRequest {
+    Ok(DecodedGenerationRequest {
         operation,
-        metadata: ResponsesRequestMetadata {
+        metadata: GenerationRequestMetadata {
             requested_model: model,
             stream,
             store,

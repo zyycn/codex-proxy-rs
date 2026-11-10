@@ -10,6 +10,7 @@ use super::{
     chat_completions::chat_completions,
     images::{image_edits, image_generations},
     live,
+    messages::{count_tokens, messages},
     models::{model_detail, models},
     responses::{responses, responses_websocket},
     search::standalone_search,
@@ -20,6 +21,8 @@ use crate::ApiState;
 
 // 公开协议路径由 API 层统一定义；Core 使用操作类型，不根据这些路径分派业务
 pub(super) const RESPONSES_PATH: &str = "/v1/responses";
+pub(super) const MESSAGES_PATH: &str = "/v1/messages";
+pub(super) const MESSAGE_TOKENS_PATH: &str = "/v1/messages/count_tokens";
 pub(super) const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 pub(super) const IMAGE_GENERATIONS_PATH: &str = "/v1/images/generations";
 pub(super) const IMAGE_EDITS_PATH: &str = "/v1/images/edits";
@@ -37,6 +40,8 @@ pub(crate) fn router() -> Router<ApiState> {
         .route(SEARCH_PATH, post(standalone_search))
         .route(RESPONSES_PATH, get(responses_websocket).post(responses))
         .route(CHAT_COMPLETIONS_PATH, post(chat_completions))
+        .route(MESSAGES_PATH, post(messages))
+        .route(MESSAGE_TOKENS_PATH, post(count_tokens))
         .route(MODELS_PATH, get(models))
         // 官方 OpenAI 模型详情合同使用 path ID；它不属于 Admin API 约束
         .route(MODEL_DETAIL_PATH, get(model_detail))

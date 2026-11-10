@@ -1100,7 +1100,7 @@ impl From<(DomainConnectionTestEvent, crate::time::TimePresenter)> for AccountCo
             DomainConnectionTestEvent::Started { model } => serde_json::json!({
                 "type": "test_start",
                 "model": model,
-                "text": "正在连接上游 Responses"
+                "text": "正在连接上游"
             }),
             DomainConnectionTestEvent::Request {
                 model,

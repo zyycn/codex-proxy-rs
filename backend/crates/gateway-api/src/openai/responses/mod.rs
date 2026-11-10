@@ -2,25 +2,22 @@
 
 mod error;
 mod http;
-mod keepalive;
-mod request;
-mod response;
-mod validation;
+pub(in crate::openai) mod keepalive;
+pub(in crate::openai) mod request;
+pub(in crate::openai) mod response;
+pub(in crate::openai) mod validation;
 pub mod websocket;
 
 pub use crate::client_error::{ProtocolError, ProtocolErrorBody};
+pub use crate::openai::generation::http::{collect_execution_response, stream_execution_response};
+pub use crate::openai::generation::{
+    ContinuationIntent, DecodedGenerationRequest, GenerationRequestMetadata,
+};
 pub(crate) use crate::request_context::request_client_context;
 pub use error::{RequestDecodeError, ResponseEncodeError};
-pub(in crate::openai) use http::{HttpResponseAdapter, execute_prepared_response};
-pub(crate) use http::{
-    ResponseAuthorization, ResponsesHttpRequest, execute_prepared_responses, responses,
-};
-pub use http::{collect_execution_response, stream_execution_response};
+pub(crate) use http::responses;
 pub(in crate::openai) use request::decompress_request_body;
-pub use request::{
-    ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, ResponsesRequestMetadata,
-    decode_request_with_headers,
-};
+pub use request::{OpenAiRequestHeaders, decode_request_with_headers};
 pub(crate) use request::{decode_request_with_body, passthrough_request_headers};
 pub use response::OpenAiResponsesEncoder;
 pub(crate) use websocket::responses_websocket;

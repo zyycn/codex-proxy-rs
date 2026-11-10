@@ -52,7 +52,7 @@ interface AccountListParams {
 }
 
 interface AccountUpdateParam {
-  connection?: { baseUrl?: string, transport: ApiKeyConfiguration['transport'], apiKey?: string }
+  connection?: { baseUrl?: string, protocol?: ApiKeyConfiguration['protocol'], transport: ApiKeyConfiguration['transport'], apiKey?: string }
   outboundProxyUrl?: string
   outboundProxyId?: string
   accountId: string
@@ -94,6 +94,7 @@ interface AccountConcurrencyParams extends AccountIdParam {
 
 export interface ApiKeyConfiguration {
   base_url: string
+  protocol: 'responses' | 'messages'
   transport: 'http' | 'prefer_websocket'
 }
 

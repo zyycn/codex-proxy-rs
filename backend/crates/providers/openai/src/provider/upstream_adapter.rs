@@ -1,7 +1,10 @@
 //! 插件只替换业务 wire；账号租约、凭据解释与费用来源仍属于 OpenAI
 
 use super::*;
-use crate::transport::usage::{OpenAiBillingUsage, openai_billing_breakdown_with_override};
+use crate::credential::{ApiKeyProtocol, CodexRuntimeAuthentication};
+use crate::transport::usage::{
+    OpenAiBillingUsage, configured_token_billing_breakdown, openai_billing_breakdown_with_override,
+};
 use gateway_core::{
     account::{CredentialRevision, OutboundProxy, ProviderAccountId},
     engine::upstream_adapter::{
@@ -109,17 +112,28 @@ impl UpstreamAccountConnection for SelectedConnection {
     }
 
     fn authorization(&self) -> Result<Vec<MiddlewareHeader>, ProviderError> {
-        let authorization = self
-            .lease
-            .authentication()
-            .authorization_header()
-            .map_err(|_| {
-                provider_error(ProviderErrorKind::Unauthorized, UpstreamSendState::NotSent)
-            })?;
-        let mut headers = vec![MiddlewareHeader::new(
-            "authorization",
-            bytes::Bytes::copy_from_slice(authorization.expose_secret().as_bytes()),
-        )];
+        let identity = if let CodexRuntimeAuthentication::ApiKey(authentication) =
+            self.lease.authentication()
+            && authentication.configuration.protocol == ApiKeyProtocol::Messages
+        {
+            MiddlewareHeader::new(
+                "x-api-key",
+                bytes::Bytes::copy_from_slice(authentication.secret.expose_secret().as_bytes()),
+            )
+        } else {
+            let authorization =
+                self.lease
+                    .authentication()
+                    .authorization_header()
+                    .map_err(|_| {
+                        provider_error(ProviderErrorKind::Unauthorized, UpstreamSendState::NotSent)
+                    })?;
+            MiddlewareHeader::new(
+                "authorization",
+                bytes::Bytes::copy_from_slice(authorization.expose_secret().as_bytes()),
+            )
+        };
+        let mut headers = vec![identity];
         if let Some(account_id) = self.lease.account().upstream_account_id() {
             headers.push(MiddlewareHeader::new(
                 "chatgpt-account-id",
@@ -141,14 +155,20 @@ impl UpstreamAccountConnection for SelectedConnection {
             image_output_tokens: usage.image_output_tokens.unwrap_or(0),
             ..Default::default()
         };
+        let pricing = self
+            .context
+            .pricing()
+            .get(PROVIDER_NAME)
+            .and_then(|models| models.get(self.model.as_str()));
+        if self.lease.authentication().api_protocol() == ApiKeyProtocol::Messages {
+            return configured_token_billing_breakdown(OpenAiBillingUsage::from(usage), pricing?)
+                .map(|cost| cost.calculated_cost());
+        }
         openai_billing_breakdown_with_override(
             self.model.as_str(),
             OpenAiBillingUsage::from(usage),
             self.requested_service_tier.as_deref(),
-            self.context
-                .pricing()
-                .get(PROVIDER_NAME)
-                .and_then(|models| models.get(self.model.as_str())),
+            pricing,
         )
         .map(|cost| cost.calculated_cost())
     }

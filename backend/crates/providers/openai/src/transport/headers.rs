@@ -119,10 +119,22 @@ impl CodexBackendClient {
         profile: &CodexWireProfile,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
+        if self.protocol == OpenAiUpstreamProtocol::MessagesApi {
+            let mut headers = HeaderMap::new();
+            let api_key = context
+                .authorization
+                .strip_prefix("Bearer ")
+                .unwrap_or(context.authorization);
+            headers.insert("x-api-key", HeaderValue::from_str(api_key)?);
+            headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+            return Ok(headers);
+        }
         // 客户端画像与认证方式无关；API Key 不携带 OAuth 账号身份和 Cookie
         let (account_id, cookie_header) = match self.protocol {
             OpenAiUpstreamProtocol::Codex => (context.account_id, context.cookie_header),
-            OpenAiUpstreamProtocol::ResponsesApi => (None, None),
+            OpenAiUpstreamProtocol::ResponsesApi | OpenAiUpstreamProtocol::MessagesApi => {
+                (None, None)
+            }
         };
         let mut headers = build_codex_model_headers(profile, context.authorization, account_id)?;
         insert_optional_header(&mut headers, "cookie", cookie_header)?;

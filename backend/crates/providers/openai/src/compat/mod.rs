@@ -2,6 +2,7 @@
 //! 规则只处理请求事实；身份保护、会话状态和连接生命周期由对应职责模块维护
 
 mod headers;
+mod messages;
 mod request;
 mod search_history;
 mod search_tools;
@@ -10,6 +11,7 @@ use gateway_core::engine::middleware::MiddlewareHeader;
 use serde_json::{Map, Value};
 
 pub(crate) use headers::is_non_codex_request_header;
+pub(crate) use messages::add_translated_fast_beta;
 pub(crate) use request::normalize_codex_request_body;
 pub(crate) use search_tools::declares_hosted_search;
 

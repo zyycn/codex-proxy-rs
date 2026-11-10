@@ -5,5 +5,11 @@
 /// OpenAI wire contract
 pub mod openai;
 
+/// Anthropic Messages 与 Responses 的线协议转换
+pub mod anthropic;
+
+/// 协议请求中的共享能力事实
+pub mod request;
+
 /// CPR 互联只读观测协议
 pub mod peer;

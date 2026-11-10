@@ -65,6 +65,16 @@ pnpm --dir frontend dev
 
 共享 UI 的命名与目录见[组件架构](../modules/ui/playground/guide/architecture.md)
 
+Messages 与 Responses 的纯协议转换位于 `backend/crates/gateway-protocol/src/anthropic/`，
+HTTP 入口位于 `backend/crates/gateway-api/src/openai/messages.rs`，
+账号协议分派、HTTP 执行和计数位于 `backend/crates/providers/openai/src/provider/messages/`。
+模块职责见 [Provider 与协议边界](architecture.md#5-provider-与协议边界)
+
+联调协议时分别准备使用 `responses` 和 `messages` 的 API Key 账号，并通过账号分组与 Client Key 固定上游范围，
+避免混合账号池使一次请求选中其他协议。对 Responses、Chat 和 Messages 三个入口分别检查 JSON 与 SSE，
+再核对工具往返、取消、错误和输入计数；请求格式及六种组合见 [模型数据面](api.md#3-模型数据面与模型目录)。
+Messages 账号只配置 HTTP；本地计数估算不能替代上游计费核对
+
 ## 源码联调
 
 宿主、组件库和官方插件保留独立仓库，通过 Git 子模块在同一目录开发：

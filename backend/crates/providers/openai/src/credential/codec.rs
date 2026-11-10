@@ -46,6 +46,13 @@ pub enum CodexRuntimeAuthentication {
 }
 
 impl CodexRuntimeAuthentication {
+    pub(crate) const fn api_protocol(&self) -> super::ApiKeyProtocol {
+        match self {
+            Self::ApiKey(auth) => auth.configuration.protocol,
+            Self::OAuth(_) => super::ApiKeyProtocol::Responses,
+        }
+    }
+
     /// 传输只消费公开连接设置，不读取凭据枚举或秘密
     pub(crate) fn responses_api_base_url(&self) -> Option<&str> {
         match self {

@@ -7,6 +7,7 @@ mod error;
 mod image_policy;
 mod images;
 mod live;
+mod messages;
 mod middleware;
 mod models;
 mod peer_link;

@@ -984,7 +984,7 @@ mod actions {
         assert_eq!(
             events,
             [
-                json!({ "type": "test_start", "model": "grok-4.5", "text": "正在连接上游 Responses" }),
+                json!({ "type": "test_start", "model": "grok-4.5", "text": "正在连接上游" }),
                 json!({
                     "type": "request",
                     "payload": {

@@ -19,7 +19,7 @@ use crate::ApiState;
 use crate::middleware::headers::encode_headers;
 use crate::openai::middleware::RequestInput;
 use crate::openai::{
-    auth::{authenticate_client, client_access_error_response},
+    auth::{ClientKeyHeaders, authenticate_client, client_access_error_response},
     endpoint::provider_endpoint_response,
     responses::{OpenAiRequestHeaders, request_client_context},
     router::{IMAGE_EDITS_PATH, IMAGE_GENERATIONS_PATH},
@@ -73,7 +73,7 @@ async fn handle_image_request(
     endpoint: &'static str,
 ) -> Response {
     let service = state.openai();
-    let client = match authenticate_client(service, &headers).await {
+    let client = match authenticate_client(service, &headers, ClientKeyHeaders::Bearer).await {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };

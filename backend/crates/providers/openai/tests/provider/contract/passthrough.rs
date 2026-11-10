@@ -300,3 +300,15 @@ async fn websocket_messages_preserve_text_and_metadata_despite_unrecognized_json
     assert!(completed);
     assert_eq!(&delivered[1..delivered.len() - 1], messages);
 }
+
+#[tokio::test]
+async fn default_service_tiers_are_omitted_only_for_codex_oauth() {
+    for tier in ["auto", "default", "priority", "flex"] {
+        for api_key in [false, true] {
+            let body = json!({"model":"gpt-5.4","input":"hello","service_tier":tier});
+            let sent = capture_downstream_request(body, api_key, false, false).await;
+            let expected = (api_key || !matches!(tier, "auto" | "default")).then_some(tier);
+            assert_eq!(sent.get("service_tier").and_then(Value::as_str), expected);
+        }
+    }
+}

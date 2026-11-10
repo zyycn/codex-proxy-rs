@@ -38,10 +38,8 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
 
 <template>
   <div class="grid gap-4.5">
-    <div v-if="name !== undefined" class="grid min-w-0 gap-4.5" :class="{ 'sm:grid-cols-2': $slots['name-extra'] }">
-      <AccountNameField v-model="name" :disabled="disabled" :placeholder="namePlaceholder" />
-      <slot name="name-extra" />
-    </div>
+    <AccountNameField v-if="name !== undefined" v-model="name" :disabled="disabled" :placeholder="namePlaceholder" />
+    <slot name="connection" />
     <AccountModelAccessField v-model="modelAccess" form-prop="modelAccess" :account-id="modelAccountId ?? accountId" :disabled="disabled" :allow-preserve="preserveModelAccess" />
     <slot name="scheduling">
       <div v-if="showScheduling" class="flex min-h-6 items-center justify-between gap-3">

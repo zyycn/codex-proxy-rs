@@ -10,6 +10,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use gateway_protocol::request::{RequestFacts, request_facts};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -420,6 +421,7 @@ pub struct GenerateRequest {
 #[derive(Clone, PartialEq)]
 struct GeneratePayload {
     source_image_generation: bool,
+    wire_facts: RequestFacts,
     protocol_payload: ProtocolPayload,
     client_turn: Option<ClientTurn>,
     provider_session_state: Option<ProviderSessionState>,
@@ -463,6 +465,7 @@ impl GenerateRequest {
         Self {
             payload: Arc::new(GeneratePayload {
                 source_image_generation: false,
+                wire_facts: request_facts(protocol_payload.protocol(), protocol_payload.body()),
                 protocol_payload,
                 client_turn: None,
                 provider_session_state: None,
@@ -497,10 +500,7 @@ impl GenerateRequest {
     /// 返回最大输出 token 数
     #[must_use]
     pub fn max_output_tokens(&self) -> Option<u64> {
-        self.body()
-            .get("max_output_tokens")
-            .and_then(Value::as_u64)
-            .filter(|tokens| *tokens > 0)
+        self.payload.wire_facts.max_output_tokens
     }
 
     /// 返回客户端提供的 prompt cache 路由键
@@ -515,10 +515,7 @@ impl GenerateRequest {
     /// 返回原始请求是否要求 Provider 原生 continuation
     #[must_use]
     pub fn native_continuation_requested(&self) -> bool {
-        self.body()
-            .get("previous_response_id")
-            .and_then(Value::as_str)
-            .is_some()
+        self.payload.wire_facts.native_continuation
     }
 
     /// 返回客户端是否请求了图片生成工具
@@ -548,44 +545,33 @@ impl GenerateRequest {
         if let Some(requirements) = &self.payload.source_requirements {
             return requirements.clone();
         }
-        let mut requirements = CapabilityRequirements::new(OperationKind::Generate)
-            .with_requested_output_tokens(self.max_output_tokens());
+        let mut requirements = self.wire_capability_requirements();
         if let Some(inherited) = &self.payload.inherited_capability_requirements {
             for feature in inherited.features() {
                 requirements = requirements.require(*feature);
             }
         }
-        if self
-            .body()
-            .get("tools")
-            .and_then(Value::as_array)
-            .is_some_and(|tools| !tools.is_empty())
-        {
-            requirements = requirements.require(Feature::Tools);
+        requirements
+    }
+
+    /// 返回当前 wire 的能力要求，不混入转换前或中间件继承的要求
+    #[must_use]
+    pub fn wire_capability_requirements(&self) -> CapabilityRequirements {
+        let facts = self.payload.wire_facts;
+        let mut requirements = CapabilityRequirements::new(OperationKind::Generate)
+            .with_requested_output_tokens(facts.max_output_tokens);
+        for (requested, feature) in [
+            (facts.tools, Feature::Tools),
+            (facts.vision, Feature::Vision),
+            (facts.reasoning, Feature::Reasoning),
+            (facts.json_schema, Feature::JsonSchema),
+            (facts.native_continuation, Feature::NativeContinuation),
+        ] {
+            if requested {
+                requirements = requirements.require(feature);
+            }
         }
-        if contains_type(self.body().get("input"), "input_image") {
-            requirements = requirements.require(Feature::Vision);
-        }
-        if self.body().get("reasoning").is_some_and(Value::is_object) {
-            requirements = requirements.require(Feature::Reasoning);
-        }
-        if self
-            .body()
-            .get("text")
-            .and_then(Value::as_object)
-            .and_then(|text| text.get("format"))
-            .and_then(Value::as_object)
-            .and_then(|format| format.get("type"))
-            .and_then(Value::as_str)
-            == Some("json_schema")
-        {
-            requirements = requirements.require(Feature::JsonSchema);
-        }
-        if self.native_continuation_requested() {
-            requirements.require(Feature::NativeContinuation)
-        } else {
-            requirements
-        }
+        requirements
     }
 
     fn body(&self) -> &Map<String, Value> {
@@ -607,21 +593,6 @@ impl fmt::Debug for GenerateRequest {
             )
             .field("protocol_payload", self.protocol_payload())
             .finish()
-    }
-}
-
-fn contains_type(value: Option<&Value>, expected: &str) -> bool {
-    match value {
-        Some(Value::Array(values)) => values
-            .iter()
-            .any(|value| contains_type(Some(value), expected)),
-        Some(Value::Object(object)) => {
-            object.get("type").and_then(Value::as_str) == Some(expected)
-                || object
-                    .values()
-                    .any(|value| contains_type(Some(value), expected))
-        }
-        _ => false,
     }
 }
 
@@ -1056,27 +1027,24 @@ impl Operation {
         let translating = target_protocol.is_some();
         match self {
             Self::Generate(request) => {
-                let protocol_payload = request.protocol_payload();
                 let source_requirements = translating.then(|| request.requirements());
                 let source_image_generation = translating && request.image_generation_requested();
-                let body = match body {
-                    Some(body) => {
+                // 修改上下文不改变正文事实；只有新 wire 才需要重新扫描输入
+                let mut payload = Arc::unwrap_or_clone(request.payload);
+                if let Some(body) = body {
+                    let body =
                         serde_json::from_slice::<Map<String, Value>>(&body).map_err(|_| {
                             OperationError::EmptyField {
                                 field: "protocol_payload body",
                             }
-                        })?
+                        })?;
+                    if let Some(protocol) = target_protocol {
+                        payload.protocol_payload.protocol = protocol;
                     }
-                    None => protocol_payload.body().clone(),
-                };
-                let replacement = ProtocolPayload {
-                    protocol: target_protocol
-                        .unwrap_or_else(|| protocol_payload.protocol().to_owned()),
-                    body,
-                    context,
-                };
-                let mut payload = (*request.payload).clone();
-                payload.protocol_payload = replacement;
+                    payload.wire_facts = request_facts(payload.protocol_payload.protocol(), &body);
+                    payload.protocol_payload.body = body;
+                }
+                payload.protocol_payload.context = context;
                 // 跨协议转换不能抹去已识别的生图权限要求，也不解释目标私有协议
                 payload.source_image_generation |= source_image_generation;
                 if let Some(requirements) = source_requirements {

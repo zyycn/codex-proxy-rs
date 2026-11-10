@@ -39,6 +39,7 @@ const MAX_CLIENT_CATALOGS: usize = 32;
 const MAX_CLIENT_CATALOG_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const MODEL_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CONCURRENT_API_CATALOGS: usize = 4;
+const CAPABILITY_LOOKUP_BUDGET: Duration = Duration::from_millis(500);
 const CLIENT_CATALOG_ERROR_TTL: Duration = Duration::from_secs(5);
 
 /// OpenAI 以套餐划分的模型目录作用域
@@ -217,11 +218,12 @@ struct ClientCatalogKey {
 }
 
 type ClientCatalogResult = Result<Vec<ProviderModelDescriptor>, CodexCredentialCatalogError>;
+type AccountModelsResult = Result<Arc<[CodexCatalogModel]>, CodexCredentialCatalogError>;
 
 struct CachedClientCatalog {
     // 负缓存从请求结束计时，不能让一次慢失败耗尽后续请求的退避窗口
     completed_at: Instant,
-    result: ClientCatalogResult,
+    result: AccountModelsResult,
 }
 
 impl CachedClientCatalog {
@@ -229,10 +231,7 @@ impl CachedClientCatalog {
         self.result.as_ref().map_or(0, |models| {
             models
                 .iter()
-                .map(|model| match &model.content {
-                    ProviderModelContent::Native(payload) => payload.body().len(),
-                    ProviderModelContent::Adapted(_) => 0,
-                })
+                .map(|model| model.document().body().len())
                 .sum()
         })
     }
@@ -283,6 +282,7 @@ pub struct CodexCredentialCatalogService {
     plan_catalog_cache: Arc<dyn ProviderCatalogCachePort>,
     cache: Arc<RwLock<CatalogCacheState>>,
     client_catalogs: Arc<Mutex<Vec<ClientCatalogEntry>>>,
+    background_capabilities: Arc<tokio::sync::Semaphore>,
     etags: Arc<Mutex<CatalogEtagState>>,
     etag_notification: Arc<Notify>,
 }
@@ -303,6 +303,9 @@ impl CodexCredentialCatalogService {
             plan_catalog_cache,
             cache: Arc::new(RwLock::new(CatalogCacheState::default())),
             client_catalogs: Arc::new(Mutex::new(Vec::new())),
+            background_capabilities: Arc::new(tokio::sync::Semaphore::new(
+                MAX_CONCURRENT_API_CATALOGS,
+            )),
             etags: Arc::new(Mutex::new(CatalogEtagState::default())),
             etag_notification: Arc::new(Notify::new()),
         }
@@ -421,17 +424,81 @@ impl CodexCredentialCatalogService {
         client_version: &str,
         profile: CodexWireProfile,
     ) -> ClientCatalogResult {
+        self.cached_account_catalog(account, Some((client_key_id, client_version)), profile)
+            .await
+            .map(|models| {
+                models
+                    .iter()
+                    .map(|model| ProviderModelDescriptor {
+                        model: model.request_model().clone(),
+                        content: if model.document().protocol() == "codex" {
+                            ProviderModelContent::Native(model.document().clone())
+                        } else {
+                            let model_id = model.request_model().as_str();
+                            ProviderModelContent::Adapted(
+                                ModelPresentation::new(Some(model_id.to_owned()), None)
+                                    .with_agent_tools(true, false)
+                                    .with_hidden(is_specialized_api_model(model_id)),
+                            )
+                        },
+                    })
+                    .collect()
+            })
+    }
+
+    /// 在既有账号、revision 隔离及负缓存边界内读取 Messages 转换能力
+    pub(crate) async fn messages_model_capabilities(
+        &self,
+        account: &ProviderAccount,
+        model: &UpstreamModelId,
+    ) -> Result<
+        Option<gateway_protocol::anthropic::MessagesModelCapabilities>,
+        CodexCredentialCatalogError,
+    > {
+        let service = self.clone();
+        let account = account.clone();
+        let mut lookup = Box::pin(async move {
+            service
+                .cached_account_catalog(&account, None, service.profile.snapshot())
+                .await
+        });
+        let models = match tokio::time::timeout(CAPABILITY_LOOKUP_BUDGET, &mut lookup).await {
+            Ok(result) => result?,
+            Err(_) => {
+                // 目录不阻塞本轮生成；保留同一查询及负缓存，慢上游完成后供后续轮次使用
+                if let Ok(permit) = self.background_capabilities.clone().try_acquire_owned() {
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        let _ = lookup.await;
+                    });
+                }
+                return Ok(None);
+            }
+        };
+        Ok(models
+            .iter()
+            .find(|entry| entry.request_model() == model)
+            .and_then(CodexCatalogModel::messages_capabilities)
+            .cloned())
+    }
+
+    async fn cached_account_catalog(
+        &self,
+        account: &ProviderAccount,
+        identity: Option<(&ClientApiKeyId, &str)>,
+        profile: CodexWireProfile,
+    ) -> AccountModelsResult {
         let key = ClientCatalogKey {
             // 无种子时沿用账号级目录缓存，启用后按 Key 隔离出站身份
             client_key_id: profile
                 .installation_seed
                 .as_ref()
-                .map(|_| client_key_id.clone()),
+                .and(identity.map(|(key, _)| key.clone())),
             account_id: account.id().clone(),
             revision: account.revision(),
             plan: account.plan_type().map(str::to_owned),
             upstream_account_id: account.upstream_account_id().map(str::to_owned),
-            client_version: client_version.to_owned(),
+            client_version: identity.map_or("", |(_, version)| version).to_owned(),
             profile: profile.clone(),
         };
         let value = {
@@ -469,27 +536,9 @@ impl CodexCredentialCatalogService {
                     CodexWireProfileState::new(profile),
                 );
                 let result = self
-                    .fetch_account_models(&client, account, Some((client_key_id, client_version)))
+                    .fetch_account_models(&client, account, identity)
                     .await
-                    .map(|fetched| {
-                        fetched
-                            .models
-                            .into_iter()
-                            .map(|model| ProviderModelDescriptor {
-                                model: model.request_model().clone(),
-                                content: if model.document().protocol() == "codex" {
-                                    ProviderModelContent::Native(model.document().clone())
-                                } else {
-                                    let model_id = model.request_model().as_str();
-                                    ProviderModelContent::Adapted(
-                                        ModelPresentation::new(Some(model_id.to_owned()), None)
-                                            .with_agent_tools(true, false)
-                                            .with_hidden(is_specialized_api_model(model_id)),
-                                    )
-                                },
-                            })
-                            .collect()
-                    });
+                    .map(|fetched| Arc::from(fetched.models));
                 CachedClientCatalog {
                     completed_at: Instant::now(),
                     result,
@@ -844,12 +893,18 @@ impl CodexCredentialCatalogService {
                 .authentication
                 .authorization_header()
                 .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
-            let result = client
+            let mut client = client
                 .for_account(account)
                 .map_err(|error| CodexCredentialCatalogError::Upstream {
                     detail: error.to_string(),
                 })?
-                .with_responses_api_base_url(credential.authentication.responses_api_base_url())
+                .with_responses_api_base_url(credential.authentication.responses_api_base_url());
+            if let super::CodexRuntimeAuthentication::ApiKey(auth) = &credential.authentication
+                && auth.configuration.protocol == super::ApiKeyProtocol::Messages
+            {
+                client = client.with_messages_api_base_url(&auth.configuration.base_url);
+            }
+            let result = client
                 .fetch_models_with_context(
                     CodexRequestContext::auxiliary(
                         authorization.expose_secret(),

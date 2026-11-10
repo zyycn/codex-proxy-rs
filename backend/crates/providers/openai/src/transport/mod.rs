@@ -7,6 +7,7 @@ pub mod client;
 mod client_catalog;
 mod client_json;
 mod client_live;
+mod client_messages;
 mod client_stream;
 pub(crate) mod connection;
 mod correlation;

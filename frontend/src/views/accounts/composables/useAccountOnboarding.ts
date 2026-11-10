@@ -79,6 +79,7 @@ export function useAccountOnboarding(options: {
             name: form.name.trim(),
             base_url: form.apiKey.base_url.trim(),
             api_key: form.apiKey.apiKey,
+            protocol: form.apiKey.protocol,
             transport: form.apiKey.transport,
           },
         })

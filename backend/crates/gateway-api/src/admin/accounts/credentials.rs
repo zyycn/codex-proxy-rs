@@ -276,6 +276,7 @@ impl UpdateAccountRequest {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountConnectionUpdateRequest {
+    pub protocol: Option<String>,
     pub base_url: Option<String>,
     pub transport: String,
     pub api_key: Option<String>,
@@ -283,6 +284,13 @@ pub struct AccountConnectionUpdateRequest {
 
 impl AccountConnectionUpdateRequest {
     fn validate(&self) -> Result<(), WireValidationError> {
+        if self
+            .protocol
+            .as_deref()
+            .is_some_and(|protocol| !matches!(protocol, "responses" | "messages"))
+        {
+            return Err(WireValidationError::new("connection.protocol"));
+        }
         if let Some(base_url) = &self.base_url {
             require_text(base_url, 2048, "connection.baseUrl")?;
         }
@@ -302,6 +310,9 @@ impl AccountConnectionUpdateRequest {
     fn into_document(self) -> ProviderDocument {
         let mut material =
             Map::from_iter([("transport".to_owned(), Value::String(self.transport))]);
+        if let Some(protocol) = self.protocol {
+            material.insert("protocol".to_owned(), Value::String(protocol));
+        }
         if let Some(base_url) = self.base_url {
             material.insert("base_url".to_owned(), Value::String(base_url));
         }

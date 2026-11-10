@@ -27,7 +27,7 @@ use gateway_core::{
 use crate::{
     ApiState,
     openai::{
-        auth::{authenticate_client, client_access_error_response},
+        auth::{ClientKeyHeaders, authenticate_client, client_access_error_response},
         error::{engine_error_response, gateway_error_response, openai_error_response},
         middleware::PendingExecution,
         responses::request_client_context,
@@ -67,7 +67,7 @@ async fn count_tokens(
     body: Bytes,
 ) -> Response {
     let service = state.openai();
-    let client = match authenticate_client(service, &headers).await {
+    let client = match authenticate_client(service, &headers, ClientKeyHeaders::Bearer).await {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };
@@ -132,7 +132,7 @@ async fn provider_http(
         _ => return invalid_request("Provider HTTP method is unsupported."),
     };
     let service = state.openai();
-    let client = match authenticate_client(service, &headers).await {
+    let client = match authenticate_client(service, &headers, ClientKeyHeaders::Bearer).await {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };

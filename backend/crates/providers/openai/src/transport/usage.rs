@@ -535,8 +535,8 @@ pub fn openai_billing_breakdown(
     usage: OpenAiBillingUsage,
     service_tier: Option<&str>,
 ) -> Option<CalculatedCostBreakdown> {
-    openai_billing_breakdown_with_context(
-        model,
+    token_billing_breakdown_with_context(
+        model_pricing(model),
         usage,
         service_tier,
         usage.input_tokens > LONG_CONTEXT_THRESHOLD,
@@ -552,8 +552,8 @@ pub fn openai_billing_breakdown_with_override(
     service_tier: Option<&str>,
     pricing: Option<&gateway_core::metering::ModelPriceOverride>,
 ) -> Option<CalculatedCostBreakdown> {
-    openai_billing_breakdown_with_context(
-        model,
+    token_billing_breakdown_with_context(
+        model_pricing(model),
         usage,
         service_tier,
         usage.input_tokens > LONG_CONTEXT_THRESHOLD,
@@ -561,8 +561,16 @@ pub fn openai_billing_breakdown_with_override(
     )
 }
 
-fn openai_billing_breakdown_with_context(
-    model: &str,
+/// 其他 API 协议仅使用明确配置的标准 Token 单价，不继承 OpenAI 型号与档位规则
+pub(crate) fn configured_token_billing_breakdown(
+    usage: OpenAiBillingUsage,
+    pricing: &gateway_core::metering::ModelPriceOverride,
+) -> Option<CalculatedCostBreakdown> {
+    token_billing_breakdown_with_context(None, usage, None, false, Some(pricing))
+}
+
+fn token_billing_breakdown_with_context(
+    pricing: Option<ModelPricing>,
     usage: OpenAiBillingUsage,
     service_tier: Option<&str>,
     long_context: bool,
@@ -579,7 +587,6 @@ fn openai_billing_breakdown_with_context(
     }
     let tool_ticks = web_search_amount_ticks(usage)?
         .checked_add(u128::from(usage.file_search_calls).checked_mul(FILE_SEARCH_CALL_TICKS)?)?;
-    let pricing = model_pricing(model);
     let normalized_tier = normalize_service_tier(service_tier);
     let tier = pricing_tier(normalized_tier.as_deref())?;
     let (standard_rates, _) =

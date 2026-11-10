@@ -23,6 +23,7 @@ futures = "0.3.32"
 http = "1.5.0"
 http-body-util = "0.1.5"
 futures-timer = "3.0.3"
+gateway-protocol = { path = "../gateway-protocol" }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
 sha2 = "0.11.0"

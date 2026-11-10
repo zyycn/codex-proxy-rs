@@ -978,7 +978,6 @@ async fn accept_live_proxy(
         .unwrap()
 }
 
-#[cfg(target_os = "linux")]
 async fn read_live_head(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> String {
     use tokio::io::AsyncReadExt;
     let mut head = Vec::new();

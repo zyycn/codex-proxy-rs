@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use super::{
     chat_request, completed, created,
-    http::{Fixture, Session, json_body},
+    http::{Fixture, json_body},
     message, wire,
 };
 
@@ -892,3 +892,5 @@ async fn streaming_citation_offsets_follow_delivered_text_when_messages_interlea
     assert_eq!(annotations[0]["url_citation"]["start_index"], 4);
     assert_eq!(annotations[0]["url_citation"]["end_index"], 6);
 }
+
+use crate::support::generation::Session;

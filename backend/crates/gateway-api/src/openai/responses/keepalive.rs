@@ -18,17 +18,18 @@ use tokio::sync::oneshot;
 
 use crate::openai::middleware::{SSE_KEEPALIVE_FRAME, SSE_KEEPALIVE_INTERVAL};
 
-pub(super) async fn response(
+pub(in crate::openai) async fn response(
     response: impl Future<Output = Response> + Send + 'static,
     admitted: oneshot::Receiver<ResponseCommit>,
 ) -> Response {
-    response_with_encoder(response, admitted, None).await
+    response_with_encoder(response, admitted, None, true).await
 }
 
-pub(super) async fn response_with_encoder(
+pub(in crate::openai) async fn response_with_encoder(
     response: impl Future<Output = Response> + Send + 'static,
     admitted: oneshot::Receiver<ResponseCommit>,
     error_encoder: Option<fn(&Value) -> Bytes>,
+    append_done: bool,
 ) -> Response {
     let mut response = Box::pin(response);
     // 鉴权、模型门禁和准入失败仍保留原 HTTP 状态，不提前建立 SSE
@@ -48,7 +49,7 @@ pub(super) async fn response_with_encoder(
     if !commit.record(Some(StatusCode::OK.as_u16())) {
         return response.await;
     }
-    let pending = PendingResponse::Waiting(response, error_encoder);
+    let pending = PendingResponse::Waiting(response, error_encoder, append_done);
     let stream = stream::once(async { Ok::<_, axum::Error>(SSE_KEEPALIVE_FRAME) })
         .chain(stream::try_unfold(pending, PendingResponse::next));
     let mut response = Response::new(Body::from_stream(stream));
@@ -66,7 +67,11 @@ pub(super) async fn response_with_encoder(
 }
 
 enum PendingResponse {
-    Waiting(BoxFuture<'static, Response>, Option<fn(&Value) -> Bytes>),
+    Waiting(
+        BoxFuture<'static, Response>,
+        Option<fn(&Value) -> Bytes>,
+        bool,
+    ),
     Streaming(BodyDataStream),
 }
 
@@ -74,7 +79,7 @@ impl PendingResponse {
     async fn next(mut self) -> Result<Option<(Bytes, Self)>, axum::Error> {
         loop {
             match &mut self {
-                Self::Waiting(response, error_encoder) => {
+                Self::Waiting(response, error_encoder, append_done) => {
                     // 心跳只轮询同一个 future，不取消重建首帧等待或插件调用
                     let response = tokio::select! {
                         biased;
@@ -93,7 +98,7 @@ impl PendingResponse {
                     let body = if sse {
                         response.into_body()
                     } else {
-                        stream_failure(response, *error_encoder).await
+                        stream_failure(response, *error_encoder, *append_done).await
                     };
                     // 正式响应的正文已经带有交付期心跳，后续只转交，不叠加定时器
                     self = Self::Streaming(body.into_data_stream());
@@ -110,7 +115,11 @@ impl PendingResponse {
     }
 }
 
-async fn stream_failure(response: Response, error_encoder: Option<fn(&Value) -> Bytes>) -> Body {
+async fn stream_failure(
+    response: Response,
+    error_encoder: Option<fn(&Value) -> Bytes>,
+    append_done: bool,
+) -> Body {
     let status = response.status();
     let retry_after = response
         .headers()
@@ -157,6 +166,8 @@ async fn stream_failure(response: Response, error_encoder: Option<fn(&Value) -> 
         Some(encode) => encode(&data).to_vec(),
         None => encode_sse_event("response.failed", &data.to_string()).into_bytes(),
     };
-    event.extend_from_slice(DONE_SSE_FRAME.as_bytes());
+    if append_done {
+        event.extend_from_slice(DONE_SSE_FRAME.as_bytes());
+    }
     Body::from(event)
 }

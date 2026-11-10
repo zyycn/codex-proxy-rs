@@ -11,12 +11,13 @@ use axum::{
 
 use crate::ApiState;
 use crate::openai::{
-    auth::{authenticate_client, client_access_error_response},
+    auth::{ClientKeyHeaders, authenticate_client, client_access_error_response},
     error::{gateway_error_response, protocol_error_response},
-    responses::{
-        DecodedResponsesRequest, HttpResponseAdapter, RequestDecodeError, ResponsesHttpRequest,
-        decode_request_with_headers, decompress_request_body, execute_prepared_response,
+    generation::{
+        DecodedGenerationRequest, GenerationHttpRequest, HttpResponseAdapter,
+        execute_prepared_generation,
     },
+    responses::{RequestDecodeError, decode_request_with_headers, decompress_request_body},
     router::CHAT_COMPLETIONS_PATH,
 };
 
@@ -34,7 +35,7 @@ pub(in crate::openai) async fn chat_completions(
     body: Bytes,
 ) -> Response {
     let service = state.openai().clone();
-    let client = match authenticate_client(&service, &headers).await {
+    let client = match authenticate_client(&service, &headers, ClientKeyHeaders::Bearer).await {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };
@@ -68,10 +69,10 @@ pub(in crate::openai) async fn chat_completions(
         }),
         stream_error: chat_error_frame,
     };
-    execute_prepared_response(
+    execute_prepared_generation(
         service,
         prepared,
-        ResponsesHttpRequest {
+        GenerationHttpRequest {
             peer_address: connect_info.map(|Extension(ConnectInfo(address))| address),
             ingress_id,
             headers,
@@ -88,7 +89,7 @@ fn decode_request(
     body: &[u8],
     headers: &HeaderMap,
     maximum_body_bytes: usize,
-) -> Result<(DecodedResponsesRequest, Bytes, bool), RequestDecodeError> {
+) -> Result<(DecodedGenerationRequest, Bytes, bool), RequestDecodeError> {
     let body = decompress_request_body(body, headers, maximum_body_bytes)?;
     let converted = convert_request(&body)?;
     let body =

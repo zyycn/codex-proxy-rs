@@ -20,7 +20,7 @@ use crate::transport::protocol::responses::{
     CodexResponsesRequest, X_CODEX_TURN_STATE_CLIENT_METADATA_KEY,
 };
 
-const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
+pub(crate) const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
 const TURN_ID_CLIENT_METADATA_KEY: &str = "turn_id";
 const THREAD_SPAWN_SUBAGENT_KIND: &str = "thread_spawn";
 const THREAD_SPAWN_CONVERSATION_PREFIX: &str = "thread-spawn:";

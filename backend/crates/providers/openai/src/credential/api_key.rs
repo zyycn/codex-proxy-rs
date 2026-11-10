@@ -1,4 +1,4 @@
-//! API Key 账号的凭据合同；地址与传输策略随凭据 revision 一起更新
+//! API Key 账号的凭据合同；地址、协议与传输策略随凭据 revision 一起更新
 
 use std::fmt;
 
@@ -9,11 +9,22 @@ pub(super) use crate::CODEX_AUTHENTICATION_KIND_API_KEY;
 
 use super::types::ResponsesTransport;
 
+/// API Key 账号采用的上游推理协议
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiKeyProtocol {
+    #[default]
+    Responses,
+    Messages,
+}
+
 /// 可在管理端展示的上游设置，不包含密钥
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyConfiguration {
     pub base_url: String,
+    #[serde(default)]
+    pub protocol: ApiKeyProtocol,
     #[serde(default)]
     pub transport: ResponsesTransport,
 }
@@ -23,6 +34,8 @@ impl ApiKeyConfiguration {
         self.base_url.len() <= 2048
             && !self.base_url.chars().any(char::is_control)
             && crate::transport::parse_upstream_base_url(&self.base_url).is_some()
+            && (self.protocol == ApiKeyProtocol::Responses
+                || self.transport == ResponsesTransport::Http)
     }
 }
 
@@ -34,6 +47,8 @@ pub struct ApiKeyCredentialData {
     pub api_key: String,
     pub base_url: String,
     #[serde(default)]
+    pub protocol: ApiKeyProtocol,
+    #[serde(default)]
     pub transport: ResponsesTransport,
 }
 
@@ -41,6 +56,7 @@ impl ApiKeyCredentialData {
     pub fn configuration(&self) -> ApiKeyConfiguration {
         ApiKeyConfiguration {
             base_url: self.base_url.clone(),
+            protocol: self.protocol,
             transport: self.transport,
         }
     }

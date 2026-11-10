@@ -94,9 +94,10 @@ impl ExpectedBody {
 pub(crate) async fn into_http_response(
     response: MiddlewareResponse,
     expected: ExpectedBody,
+    expected_protocol: &str,
 ) -> Response {
     let (protocol, status, headers, mut body, _) = response.into_parts();
-    if protocol != "openai" {
+    if protocol != expected_protocol {
         return fail_before_commit(body, MiddlewareError::InvalidState).await;
     }
     let head = response_head(status, headers);

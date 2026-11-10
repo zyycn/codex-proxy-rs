@@ -16,6 +16,7 @@ const OPENAI_ACCOUNT_SCORE_FAILURE_REASONS: &[&str] = &[
     "rate_limit_error",
     "server_error",
     "service_unavailable_error",
+    "overloaded_error",
 ];
 
 fn is_openai_account_score_failure_reason(value: &str) -> bool {

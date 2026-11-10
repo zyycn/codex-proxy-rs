@@ -683,6 +683,7 @@ pub struct CodexBackendJsonResponse {
 pub(super) enum OpenAiUpstreamProtocol {
     Codex,
     ResponsesApi,
+    MessagesApi,
 }
 
 impl OpenAiUpstreamProtocol {
@@ -690,6 +691,7 @@ impl OpenAiUpstreamProtocol {
         match self {
             Self::Codex => super::endpoints::CODEX_RESPONSES_PATH,
             Self::ResponsesApi => "/responses",
+            Self::MessagesApi => "/messages",
         }
     }
 }
@@ -872,6 +874,12 @@ impl CodexBackendClient {
             );
         }
         self
+    }
+
+    pub(crate) fn with_messages_api_base_url(self, base_url: &str) -> Self {
+        let mut client = self.with_responses_api_base_url(Some(base_url));
+        client.protocol = OpenAiUpstreamProtocol::MessagesApi;
+        client
     }
 
     pub fn for_account(

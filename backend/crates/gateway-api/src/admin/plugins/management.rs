@@ -1,5 +1,9 @@
 //! 插件管理页面、资源、授权回调与页面模型请求的 HTTP 边界
 
+use crate::openai::generation::{
+    GenerationHttpRequest, ResponseAuthorization, execute_prepared_generation,
+};
+
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
@@ -35,10 +39,7 @@ use crate::{
     auth::SessionState,
     openai::{
         error::{gateway_error_response, protocol_error_response},
-        responses::{
-            ResponseAuthorization, ResponsesHttpRequest, decode_request_with_body,
-            execute_prepared_responses,
-        },
+        responses::decode_request_with_body,
     },
 };
 
@@ -140,10 +141,10 @@ async fn model_responses(
     };
     let authorization: Arc<dyn ResponseAuthorization> =
         Arc::new(PluginModelsAuthorization { state, target });
-    let response = execute_prepared_responses(
+    let response = execute_prepared_generation(
         service,
         prepared,
-        ResponsesHttpRequest {
+        GenerationHttpRequest {
             peer_address: parts
                 .extensions
                 .get::<ConnectInfo<SocketAddr>>()
@@ -158,6 +159,7 @@ async fn model_responses(
             middleware_body,
         },
         Some(authorization),
+        None,
     )
     .await;
     Ok(plugin_response(response))

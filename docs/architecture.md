@@ -15,14 +15,16 @@
 
 Codex Proxy RS 是单进程、单副本运行的多 Provider AI 网关，同时提供：
 
-- 面向客户端的 OpenAI Responses、Chat Completions、Images、standalone Search 和模型目录协议
+- 面向客户端的 Responses、Chat Completions、Anthropic Messages、Images、standalone Search 和模型目录协议
 - 面向管理员的 `/api/admin/*` 控制面和 Vue 管理端
 - 面向 Key 持有者的 `/api/key-usage/*` 用量与客户端配置接口、独立 `/key-usage` 页面，以及复用数据面认证的 `/v1/usage` 额度查询
 - 固定的 OpenAI 与 xAI 两个编译期 Provider，以及插件提供的认证、中间件和管理扩展
 - PostgreSQL 持久化、Redis 协调状态以及 S3/R2 数据库备份
 
-Chat Completions 通过 API 协议转换复用 Responses 执行链。系统不存在 Provider Instance 层，也不支持
-通过复制应用容器进行多副本扩容。Client Key 限定账号分组，而不是绑定某个 Provider；一次请求的
+Responses、Chat Completions 和 Messages 共用生成执行链，API Key 账号可选择 Responses 或 Messages 上游协议，
+仍由 OpenAI Provider 管理。Chat 在 API 层转为 Responses，Provider 在选定账号后处理 Messages 与 Responses 的转换。
+系统不存在 Provider Instance 层，也不支持通过复制应用容器进行多副本扩容。
+Client Key 限定账号分组，而不是绑定某个 Provider；一次请求的
 Provider 候选由账号范围、模型能力和运行时健康共同决定
 
 ## 2. 运行拓扑
@@ -59,7 +61,7 @@ flowchart TB
 | --- | --- |
 | `backend/apps/gateway` | 读取顶层配置、连接 Bundle、注册 Provider 与 Worker |
 | `backend/apps/plugin-cli`（包名 `codex-proxy-plugin-cli`） | `cpr-plugin package` 校验作者清单并生成平台元数据、资源摘要与归档；内部仅依赖 SDK，不参与网关运行时加载 |
-| `gateway-protocol` | 跨层共享的 OpenAI 与 CPR 互联线协议、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
+| `gateway-protocol` | 跨层共享的 Responses、Messages 与 CPR 互联线协议、纯协议转换、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
 | `gateway-core` | operation、canonical event、请求快照、路由、admission、attempt 协调、交付边界和计量 |
 | `gateway-admin` | 管理领域、Key 用量、互联共享查询与上游同步、Provider/Store 端口、审计语义、备份与历史保留策略 |
 | `gateway-api` | HTTP/WS/SSE 解码与交付、Admin 与 Key 用量 wire、静态 Web UI；不直接访问 Store 或具体 Provider |
@@ -67,7 +69,7 @@ flowchart TB
 | `gateway-host` | 配置加载、日志、HTTP 生命周期、Worker 监督与历史保留任务、系统更新、互联 HTTP 与外部价格源适配 |
 | `gateway-plugin/sdk`（包名 `gateway-plugin-sdk`） | 公开插件清单与线协议，独立于网关领域；异步收发通过可选 `io` feature 提供 |
 | `gateway-plugin/runtime`（包名 `gateway-plugin-runtime`） | 插件包校验、能力适配、双向 RPC 与发布集合；通过 Host 管理子进程和受管 HTTP |
-| `providers/openai` | OpenAI OAuth、账号选择、目录、额度、Responses/Images/Search transport |
+| `providers/openai` | OpenAI OAuth、API Key 凭据、账号选择、目录、额度和 Responses/Messages/Images/Search transport |
 | `providers/xai` | xAI OAuth session、账号选择、目录、额度和 Grok/Responses 转换 |
 | `frontend` | Vue 管理端与 Key 用量页，仅通过各自身份允许的控制面 API 访问状态 |
 | 独立仓库 `codex-proxy-ui` | 管理端与插件页面共用的 Vue 基础组件、纯主题算法和样式，不依赖宿主业务状态、路由或 API |
@@ -445,7 +447,7 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别客户端，Cor
   SSE 注释不构成业务输出或上游已发送的证明，也不改变重放资格
   Core 单独维护重放屏障，仅 Provider 明确标记的可替换前导保留重试资格，仍检查错误分类、续接归属、发送状态、副作用及预算
 - API 在最终错误编码出口投影客户端恢复信号；该投影不修改 Provider 上游事实，也不改变 Core 的
-  重试与提交边界。具体错误合同见 [数据面接口](api.md#3-openai-数据面与模型目录)
+  重试与提交边界。具体错误合同见 [数据面接口](api.md#3-模型数据面与模型目录)
 - Provider 为有界同账号退避显式选择耗尽动作：允许换号，或返回客户端错误；Core 在既有安全重放边界内执行，按账号维护请求内预算
   该退避消耗总路由预算，与 WS 传输恢复、OAuth 刷新及账号额度冷却分开；具体次数、退避与 `Retry-After` 规则见[容量拒绝与重试](api.md#容量拒绝与重试)
 - `RetryThenReturnError` 的终态失败按 Client Key、逻辑线程与轮次写入 Redis，后续同轮次请求命中时跳过该策略的退避重试，直接交回错误；其他恢复策略不受影响
@@ -465,15 +467,17 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别客户端，Cor
 - 跨 Provider 只在账号范围和能力都允许，且请求尚未到达上游或已被证明可安全重放时发生
 - 可恢复观测写入失败不能替换已经确定的客户端协议结果
 
-Responses 按模型目录编译候选；全局模型映射是精确映射，未命中时模型名原样交给候选 Provider。
-Chat Completions 由 API 将入站消息规范化为 Responses 正文，进入共用 Generate 执行链；
-request 中间件回程经过 Responses 协议复核后，再由 API 投影成 Chat JSON 或 SSE。
-HTTP 中间件位于转换外侧，request 与 attempt 中间件处理 Responses，实际 endpoint 始终为 `/v1/chat/completions`。
-Chat 复用既有提交、取消与终结生命周期；Core 继续独占路由、重试、交付事实与结算，
-Provider 继续独占上游身份、字段兼容、隐私策略及账号隔离，Chat 层只负责协议映射。
-转换只拥有协议结构：同语义字段交给 Provider 与上游，无对应语义的可选控制项可降级忽略；
-丢失用户输入、客户端动作或无法表达响应的转换须明确失败，不补造结果。
-字段合同见 [Chat Completions](api.md#chat-completions-请求)，插件视图见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
+生成请求按模型目录编译候选；全局模型映射是精确映射，未命中时模型名原样交给候选 Provider。
+Responses 与 Messages 保留各自的协议正文进入共用 Generate 执行链；Chat 在 API 层规范化为 Responses，
+回程再投影成 Chat JSON 或 SSE。HTTP 中间件位于入口转换外侧，request 与 attempt 中间件处理该逻辑协议正文，
+实际 endpoint 保留客户端路由。Provider 选定账号后按账号协议转换出站，`outbound` 处理实际发送的上游请求
+
+三个入口共用提交、取消与终结生命周期；Core 独占路由、重试、交付事实与结算，
+Provider 独占上游身份、字段适配、隐私策略及账号隔离。`gateway-protocol` 只拥有结构转换和单次响应的流状态，
+响应转换器只保留客户端模型名及还原工具调用所需的名称映射，不持有输入历史、账号、连接或调度状态。
+Messages 与 Responses 的映射、忽略和降级规则参考 CPA，
+同语义字段交给目标上游校验；结构解码或必要流状态失败按协议错误终结，不补造成功结果。
+字段合同见 [Chat Completions](api.md#chat-completions-请求)和 [Messages](api.md#messages-请求)，插件视图见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 
 Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
 的账号范围确实包含 Codex 账号时生成单一 OpenAI 候选。Images 的图片模型由 Provider 从正文旁路
@@ -512,18 +516,20 @@ OpenAI Provider 统一处理 Responses 的账号归属与 turn state 隔离，HT
 全量请求缺少本地归属记录时保留客户端回传的路由 token，明确换号或可信续接状态不属于同一轮时清除；
 turn state 不参与选号，也不授权其他账号状态或 response ID 的复用
 
-OpenAI 的 OAuth 与 API Key 共用现有账号和事务。API Key 的 Base URL、密钥和传输策略属于 Provider 凭据 JSON，
+OpenAI 的 OAuth 与 API Key 共用现有账号和事务。API Key 的 Base URL、密钥、上游协议和传输策略属于 Provider 凭据 JSON，
 随 credential revision 更新；普通详情只投影非敏感连接设置。API Key 客户端目录按账号、凭据版本和客户端版本隔离，
 标准 `data` 模型列表通过通用画像输出，完整 Codex `models` 目录保留原生对象。通用账号层按 Provider 提交的
 credential state 调度，不以是否存在上游用户 ID 推断可用性；OAuth 未完成身份投影时由 Provider 保持 `unknown`。
 状态恢复和未补齐身份的凭据轮换保留 `unknown`。
-API Key 默认 HTTP/SSE，可选 WS 优先；选号先验证传输资格，WS pool 与 continuation 按凭据版本隔离。
-OAuth 与 API Key 共用业务请求、响应和能力透传链路，差异限定在上游地址、认证、传输配置及明确的上游请求合同适配。
+API Key 默认使用 Responses 协议和 HTTP/SSE，Responses 可选 WS 优先，Messages 只支持 HTTP。
+协议和传输资格在选号阶段验证，WS pool 与 continuation 按凭据版本隔离。
+Responses API Key 与 OAuth 共用原生请求与响应链路；Messages API Key 使用独立 HTTP transport，
+在同一 Provider 的账号租约内执行生成和输入计数，不进入 Images、Search、Live 或 Responses 原生续接路径。
 OpenAI 模型目录用于发现与原生 Responses 账号资格筛选，OAuth 按套餐、API Key 按账号与凭据版本匹配目录。
 目录与账号白名单的优先级见[路由与账号范围](#6-路由账号范围与-continuation)
 
-- OpenAI 是透明边界。正文兼容、身份归一和显式请求策略之外的业务字段保留原始语义；
-  业务响应按原始字节转发，客户端错误兼容与原生续写额度恢复按明确例外处理，见 [OpenAI 透传](api.md#openai-透传)。
+- Responses 同协议执行是透明边界。正文兼容、身份归一和显式请求策略之外的业务字段保留原始语义；
+  同协议业务响应使用原始 wire，跨协议才调用转换器；客户端错误兼容与原生续写额度恢复按明确例外处理，见 [OpenAI 透传](api.md#openai-透传)。
   `transport/correlation` 在出站副本上按本次安装身份统一映射关联标识。
   Responses 的账号归属判断及换号头部清理由 Provider 统一执行，各传输消费同一出站请求。
   原生安装身份由 OpenAI Provider 按 Key 种子、Key ID 与选中账号 ID 确定性派生，无需额外映射表；未配置种子时取自账号，与 UA 继承方式无关。模型目录缓存按生效身份隔离，Live 后续阶段使用引导时冻结的种子；插件的身份生成、持久化及关联字段改写通过既有中间件链路自行完成
@@ -534,7 +540,11 @@ OpenAI 模型目录用于发现与原生 Responses 账号资格筛选，OAuth �
   非流式 Responses 由 API 聚合 wire：终态省略或清空 `output` 时，使用同一响应的 `output_item.done`
   按 `output_index` 还原完整输出；已有非空终态输出不改写。完成项缺失或冲突时在下游提交前拒绝，
   不凭 canonical 增量补造内容，也不让 SSE/WS 转发额外保存整份输出
-- Responses、Images 与 standalone Search 的业务扩展头保留原始多值字节。API 负责剥离鉴权、账号身份和 HTTP 传输字段，
+- Messages 上游只使用所选账号的 API Key 认证与 Anthropic 协议头，不继承 Codex OAuth 身份。
+  Messages 原生 SSE 交付原始帧，canonical facts 旁路提取用量、终态和错误；跨协议转换状态由单次响应独占。
+  输入计数通过 CountTokens operation 复用准入、账号选择、租约与终结链，由 Provider 决定调用官方原生计数或本地 tokenizer。
+  本地估算不创建生成请求、不记录上游发送或伪造上游用量；精度与多模态边界见 [Messages 输入计数](api.md#messages-输入计数)
+- Responses、Messages、Images 与 standalone Search 的业务扩展头保留原始多值字节。API 负责剥离鉴权、账号身份和 HTTP 传输字段，
   并提取会话语义；`gateway-protocol` 共享 HTTP 传输与网关链路字段分类。客户端兼容规则集中在
   `providers/openai/src/compat/`，与上游缺陷补偿统一管理：`headers.rs` 管理下游环境头和已提取语义的头部别名，
   `request.rs` 管理参数过滤、缺省值及请求形状适配；兼容基准为 Codex Core/Desktop 请求协议。
@@ -546,7 +556,7 @@ OpenAI 模型目录用于发现与原生 Responses 账号资格筛选，OAuth �
   长期协议适配与临时缺陷补偿按文件区分；临时补偿注明外部依据、适用范围和移除条件，直连验证修复后清理对应规则与合同场景。
   `transport/headers.rs` 负责上游身份保护和官方头组装。
   会话别名只规范化请求头，不清除正文身份字段；未知业务扩展与响应诊断头不受影响，字段见
-  [Responses 合同](api.md#3-openai-数据面与模型目录)
+  [Responses 合同](api.md#3-模型数据面与模型目录)
 - Live 共用 OpenAI 的头部身份、下游环境和传输边界，业务扩展不使用固定白名单。
   引导、sideband 与 hangup 由 Provider 在选定或加载钉住账号后统一处理出站关联标识；
   API 保留原始入站事实，Core 只传递头值字节和通话归属，具体合同见 [Codex Live 语音通话](api.md#codex-live-语音通话)
@@ -635,8 +645,9 @@ client，OIDC 的 JWKS 缓存与单飞归属对应出口状态。自动刷新提
 
 错误信息按用途分成三层，不能用同一个 `message` 同时承担协议、界面和诊断职责：
 
-1. **数据面协议错误**：`/v1/*` 继续遵守 OpenAI/xAI wire 合同。可交付原始上游响应时保留其状态、headers、
-   content type 和 body；原生续写额度恢复由 Provider 单独投影客户端响应，真实上游事实仍用于诊断和记账。
+1. **数据面协议错误**：`/v1/*` 遵守调用入口的 wire 合同，Messages 使用 Anthropic 错误封套与 SSE error 事件。
+   可交付原始上游响应时保留其状态、headers、content type 和 body；原生续写额度恢复由 Provider 单独投影客户端响应，
+   真实上游事实仍用于诊断和记账。
    本地 fallback 使用数据面稳定机器码与安全英文，不受管理端中文化影响
 2. **控制面展示错误**：`/api/admin/*` 由 API 统一 HTTP 状态与数值业务码，由 Admin/API owner 提供安全中文
    文案。extractor rejection、namespace 404 和 method 405 也使用同一 JSON 信封；任意 Store、Serde、
@@ -792,7 +803,7 @@ Continuation 受原请求的 Client Key、账号范围、Provider 和发送/交�
   完整历史。体积测量复用 WS 编码结构，Provider session state 仍只携带元数据，不保存 transcript
 - OpenAI 在有效输出交付前收到可安全重放的明确额度拒绝时，先隔离账号，再投影 `ClientReplayRequired`；
   丢弃未交付的原错误帧，由客户端提交完整历史开启新链，不把原增量输入交给其他账号。
-  真实错误分类、状态码、发送状态和上游诊断保持不变，客户端合同见 [Responses API](api.md#3-openai-数据面与模型目录)
+  真实错误分类、状态码、发送状态和上游诊断保持不变，客户端合同见 [Responses API](api.md#3-模型数据面与模型目录)
 - OpenAI 按 native → replay owner → replay any 推进，并保留官方 `previous_response_id` 语义；
   已知为 connection-local 的原生续接进入重放阶段时，在选号前返回 `ClientReplayRequired`，不认领或迁移会话绑定。
   正常 native 续接仍由连接池核对原连接及 response ID 是否可用
@@ -1170,7 +1181,7 @@ Store 按生命周期原子更新所属分组，保留其他阶段的事实；�
 进程退出后停止刷新，Worker 按过期租约收敛遗留的 running 记录；该观测续期失败不取消客户端执行
 
 模型执行以 `model_requests.id` 标识，上游身份由 `upstream_request_id` 保存。
-API 输出模型执行与上游请求的关联信息，具体响应头规则见 [数据面接口](api.md#3-openai-数据面与模型目录)。
+API 输出模型执行与上游请求的关联信息，具体响应头规则见 [数据面接口](api.md#3-模型数据面与模型目录)。
 入口 middleware 的 ID 用于入口日志，不作为模型请求的主键或检索映射。
 失败终态及中间失败的上游请求 ID 优先取对应 `ProviderError`，缺失时再取该 attempt 的响应
 observation、调用 metadata；最终失败的关联头不与 opening 身份混合

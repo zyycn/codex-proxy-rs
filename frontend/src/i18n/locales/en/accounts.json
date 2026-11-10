@@ -128,14 +128,17 @@
       "apiPrefix": "API prefix",
       "apiKeyPlaceholder": "Leave blank to keep the current key",
       "enterUpstreamKey": "Enter the upstream key",
+      "protocolLabel": "Upstream protocol",
       "transportLabel": "Transport",
       "webSocketHelp": "WS requires upstream support for Responses WebSocket",
+      "messagesTransportHelp": "Messages upstreams use HTTP/SSE",
       "nameRequired": "Enter an account name",
       "validation": {
         "urlLength": "Upstream API URL must not exceed 2,048 characters",
         "urlFormat": "Enter an HTTP or HTTPS URL without credentials, query parameters, or a fragment",
         "urlRequired": "Enter the full upstream API URL",
         "apiKeyFormat": "API key cannot contain spaces or control characters",
+        "protocolRequired": "Select an upstream protocol",
         "transportRequired": "Select a transport"
       },
       "apiKeyRequired": "Enter an API key"
@@ -339,7 +342,7 @@
       "jsonDescription": "Paste or upload account JSON to import accounts or update matching credentials",
       "packageDescription": "Paste or upload a CPR account package to import accounts from multiple providers",
       "oauthDescription": "Import a {label} account through browser authorization",
-      "apiKeyDescription": "Connect an upstream service compatible with the OpenAI Responses API",
+      "apiKeyDescription": "Connect an upstream service using Responses or Messages",
       "pasteAccessTokenLineByLineIf": "Paste the Access token line by line. If the Refresh token is not included, it cannot be automatically renewed",
       "refreshTokenDescription": "Paste one refresh token per line, access tokens are obtained automatically during import",
       "accountSettings": "Account settings",

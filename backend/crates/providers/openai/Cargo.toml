@@ -23,6 +23,7 @@ gateway-core = { path = "../../gateway-core" }
 gateway-protocol = { path = "../../gateway-protocol" }
 getrandom = "0.4.3"
 hex = "0.4.3"
+lru = "0.18.3"
 # TLS 依赖以官方 Core 锁文件为基线，安全补丁经握手特征核验后精确固定
 # 包含用于约束传递依赖的直接声明
 # hyper-util 固定到包含 SOCKS IPv6 修复的正式版
@@ -51,6 +52,7 @@ sha2 = "0.11.0"
 subtle = "2.6.1"
 tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.18"
+tiktoken-rs = "=0.12.1"
 tokio = { version = "=1.53.3", default-features = false, features = ["fs", "macros", "rt", "sync", "time"] }
 tokio-rustls = { version = "=0.26.4", default-features = false }
 tokio-util = { version = "0.7.18", features = ["rt"] }

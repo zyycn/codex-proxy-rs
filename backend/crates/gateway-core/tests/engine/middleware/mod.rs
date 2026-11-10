@@ -182,6 +182,52 @@ fn body_operation(body: &Value) -> Operation {
 }
 
 #[test]
+fn messages_capability_declaration_rechecks_native_body_and_keeps_input_requirements() {
+    use gateway_core::{engine::middleware::MiddlewareCapabilityDeclaration, operation::Feature};
+    let original = json!({"max_tokens":0,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}}]}],"thinking":{"type":"enabled","budget_tokens":1024},"tools":[{"name":"lookup","input_schema":{"type":"object"}}]});
+    let mut converted = original.clone();
+    converted.as_object_mut().unwrap().remove("thinking");
+    let request = MiddlewareRequest::new(
+        "anthropic",
+        vec![],
+        serde_json::to_vec(&original).unwrap().into(),
+    )
+    .replace_parts(
+        "anthropic".into(),
+        vec![],
+        serde_json::to_vec(&converted).unwrap().into(),
+        Some(MiddlewareCapabilityDeclaration {
+            handled: [Feature::Reasoning].into(),
+            required: Default::default(),
+        }),
+    )
+    .unwrap();
+    let operation = request
+        .apply_capabilities(Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("anthropic", converted.as_object().unwrap().clone())
+                .unwrap(),
+        )))
+        .unwrap();
+    assert_eq!(
+        operation.capability_requirements().features(),
+        &[Feature::Tools, Feature::Vision].into()
+    );
+    assert!(
+        request
+            .replace_parts(
+                "openai".into(),
+                vec![],
+                Bytes::from_static(b"{}"),
+                Some(MiddlewareCapabilityDeclaration {
+                    handled: [Feature::Tools].into(),
+                    required: Default::default()
+                })
+            )
+            .is_err()
+    );
+}
+
+#[test]
 fn capability_declaration_preserves_original_semantics_and_recomputes_upstream_needs() {
     use gateway_core::{engine::middleware::MiddlewareCapabilityDeclaration, operation::Feature};
     let original = json!({"model":"gpt-test","input":"answer", "tools":[{"type":"function"}],

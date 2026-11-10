@@ -1108,6 +1108,66 @@ async fn api_key_import_export_preserves_target_without_oauth_exchange() {
 }
 
 #[tokio::test]
+async fn messages_api_key_import_export_preserves_protocol_and_rejects_websocket() {
+    use gateway_core::account::LoadedCredential;
+    use provider_openai::credential::{
+        ApiKeyProtocol, CodexCredentialAdmin, CodexCredentialData, ExportManagedCodexCredential,
+    };
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+        Arc::new(crate::RecordingDiagnostics::default()),
+    );
+    let document = serde_json::json!({"provider":"openai", "authentication_kind":"api_key", "base_url":"https://api.anthropic.com/v1", "protocol":"messages", "api_key":"sk-test-only", "transport":"http"});
+    let imported = service
+        .prepare_import_document_with_proxy(document.clone(), None)
+        .await
+        .unwrap()
+        .into_accounts()
+        .pop()
+        .unwrap();
+    let now = Utc::now();
+    let exported = CodexCredentialAdmin
+        .format_cpr_export(vec![ExportManagedCodexCredential {
+            current: LoadedCredential {
+                account: imported.account,
+                credential: imported.credential,
+            },
+            added_at: now,
+            updated_at: now,
+        }])
+        .unwrap()
+        .into_json()
+        .unwrap();
+    let restored = service
+        .prepare_import_document_with_proxy(exported, None)
+        .await
+        .unwrap()
+        .into_accounts()
+        .pop()
+        .unwrap();
+    let CodexCredentialData::ApiKey(data) =
+        CodexCredentialCodec::decode_complete(&restored.credential).unwrap()
+    else {
+        panic!("API credential");
+    };
+    assert_eq!(data.protocol, ApiKeyProtocol::Messages);
+    assert_eq!(
+        serde_json::to_value(data.configuration()).unwrap()["protocol"],
+        "messages"
+    );
+    let mut invalid = document;
+    invalid["transport"] = serde_json::json!("prefer_websocket");
+    assert!(
+        service
+            .prepare_import_document_with_proxy(invalid, None)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn api_key_import_rejects_unsafe_urls_and_empty_keys() {
     let service = CodexCredentialAdminService::new(
         Arc::new(UnusedRefresher),

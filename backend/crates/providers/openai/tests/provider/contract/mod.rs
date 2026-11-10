@@ -8,6 +8,7 @@ mod cookies;
 mod correlation;
 mod error_details;
 mod image_model_access;
+mod messages;
 mod model_account_eligibility;
 mod outbound;
 pub(super) use outbound::outbound_context;
@@ -8163,7 +8164,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 false,
                 Some(json!("default")),
                 Some("priority"),
-                Some("default"),
+                None,
                 Some(3_437_500),
             ),
             (
@@ -8179,7 +8180,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 false,
                 Some(json!("priority")),
                 Some("priority"),
-                Some("default"),
+                None,
                 Some(3_437_500),
             ),
             (
@@ -8187,7 +8188,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 false,
                 Some(json!("fast")),
                 None,
-                Some("default"),
+                None,
                 Some(3_437_500),
             ),
             (
@@ -8195,7 +8196,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 false,
                 Some(json!("default")),
                 None,
-                Some("default"),
+                None,
                 Some(3_437_500),
             ),
             (FastMode::Disabled, false, None, None, None, Some(3_437_500)),
@@ -8268,8 +8269,8 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 true,
                 Some(json!("auto")),
                 None,
-                Some("auto"),
                 None,
+                Some(3_437_500),
             ),
             (FastMode::Enabled, false, None, None, None, Some(3_437_500)),
             (
@@ -8277,7 +8278,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 false,
                 Some(json!("default")),
                 None,
-                Some("default"),
+                None,
                 Some(3_437_500),
             ),
         ] {
@@ -12451,24 +12452,18 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         let mut websocket =
             crate::transport::accept_codex_test_websocket_with(socket, |request, response| {
                 // 提示头只在首次握手发送；后续档位由各自 response.create 正文指定
-                assert_eq!(
-                    request.headers()["x-codex-routing-hint"],
-                    "model=gpt-5.4;tier=default"
-                );
+                assert_eq!(request.headers()["x-codex-routing-hint"], "model=gpt-5.4");
                 response.headers_mut().insert(
                     "sec-websocket-extensions",
                     "permessage-deflate".parse().unwrap(),
                 );
             })
             .await;
-        for (index, tier) in ["default", "priority", "default", "default"]
-            .into_iter()
-            .enumerate()
-        {
+        for (index, tier) in [None, Some("priority"), None, None].into_iter().enumerate() {
             let message = websocket.next().await.unwrap().unwrap();
             let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
             assert_eq!(frame["type"], "response.create");
-            assert_eq!(frame["service_tier"], tier);
+            assert_eq!(frame.get("service_tier").and_then(Value::as_str), tier);
             assert_eq!(
                 frame.get("previous_response_id").cloned(),
                 index
@@ -12625,11 +12620,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         );
         assert_eq!(
             observed_tier.as_deref(),
-            Some(if fast_mode == FastMode::Enabled {
-                "priority"
-            } else {
-                "default"
-            })
+            (fast_mode == FastMode::Enabled).then_some("priority")
         );
         assert_eq!(
             costs,

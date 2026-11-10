@@ -661,7 +661,7 @@ metrics_exporter = "none"
   验证 WebSocket 时直接连接后端，当前 Vite 代理未显式开启 WebSocket 转发
 
 其他客户端使用 Responses API、`/v1` Base URL 和代理密钥即可，不需要 Actor 标记。
-路由与请求格式见 [API 参考](../docs/api.md#3-openai-数据面与模型目录)
+路由与请求格式见 [API 参考](../docs/api.md#3-模型数据面与模型目录)
 
 ## 停止与重启
 

@@ -174,17 +174,17 @@ impl MiddlewareRequest {
         declaration: Option<MiddlewareCapabilityDeclaration>,
     ) -> Result<Self, MiddlewareError> {
         if let Some(declaration) = declaration {
-            if self.protocol != "openai"
-                || protocol != "openai"
-                || self.original_protocol != "openai"
+            if !matches!(protocol.as_str(), "openai" | "anthropic")
+                || self.protocol != protocol
+                || self.original_protocol != protocol
                 || declaration.handled.contains(&Feature::NativeContinuation)
                 || !declaration.handled.is_disjoint(&declaration.required)
                 || (declaration.handled.is_empty() && declaration.required.is_empty())
             {
                 return Err(MiddlewareError::InvalidState);
             }
-            let before = generate_requirements(&self.body)?;
-            let after = generate_requirements(&body)?;
+            let before = generate_requirements(&self.protocol, &self.body)?;
+            let after = generate_requirements(&protocol, &body)?;
             if !declaration.handled.is_subset(before.features())
                 || !declaration.handled.is_disjoint(after.features())
             {
@@ -205,10 +205,12 @@ impl MiddlewareRequest {
         let Some(declaration) = &self.capabilities else {
             return Ok(operation);
         };
-        if operation.kind() != OperationKind::Generate || operation.protocol() != "openai" {
+        if operation.kind() != OperationKind::Generate
+            || operation.protocol() != self.original_protocol
+        {
             return Err(MiddlewareError::InvalidState);
         }
-        let original = generate_requirements(&self.original_body)?;
+        let original = generate_requirements(&self.original_protocol, &self.original_body)?;
         let mut effective = CapabilityRequirements::new(OperationKind::Generate);
         for feature in original
             .features()
@@ -228,10 +230,13 @@ impl MiddlewareRequest {
     }
 }
 
-fn generate_requirements(body: &[u8]) -> Result<CapabilityRequirements, MiddlewareError> {
+fn generate_requirements(
+    protocol: &str,
+    body: &[u8],
+) -> Result<CapabilityRequirements, MiddlewareError> {
     let body = serde_json::from_slice(body).map_err(|_| MiddlewareError::InvalidState)?;
     let payload =
-        ProtocolPayload::json_object("openai", body).map_err(|_| MiddlewareError::InvalidState)?;
+        ProtocolPayload::json_object(protocol, body).map_err(|_| MiddlewareError::InvalidState)?;
     Ok(
         Operation::Generate(GenerateRequest::from_protocol_payload(payload))
             .capability_requirements(),

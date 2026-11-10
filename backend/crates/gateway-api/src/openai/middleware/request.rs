@@ -64,6 +64,7 @@ where
         Err(error) => return gateway_error_response(&error),
     };
     let protocol = input.protocol.clone();
+    let expected_protocol = protocol.clone();
     let result = invoke_request(
         execution,
         prepared,
@@ -79,7 +80,9 @@ where
     )
     .await;
     match result {
-        Ok(response) => into_http_response(response, ExpectedBody::SingleJson).await,
+        Ok(response) => {
+            into_http_response(response, ExpectedBody::SingleJson, &expected_protocol).await
+        }
         Err(error) => error_response(error),
     }
 }

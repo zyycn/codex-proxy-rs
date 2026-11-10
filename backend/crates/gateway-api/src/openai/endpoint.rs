@@ -89,7 +89,7 @@ where
     )
     .await;
     let response = match result {
-        Ok(response) => into_http_response(response, ExpectedBody::SingleJson).await,
+        Ok(response) => into_http_response(response, ExpectedBody::SingleJson, "openai").await,
         Err(error) => error_response(error),
     };
     if !execution_entered.load(Ordering::Relaxed) {

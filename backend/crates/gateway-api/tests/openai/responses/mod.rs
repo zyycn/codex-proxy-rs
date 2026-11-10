@@ -8,7 +8,7 @@ use axum::http::{HeaderMap, HeaderValue};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
 use gateway_api::openai::responses::{
-    ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, OpenAiResponsesEncoder,
+    ContinuationIntent, DecodedGenerationRequest, OpenAiRequestHeaders, OpenAiResponsesEncoder,
     RequestDecodeError, ResponseCreateFrameError, ResponseEncodeError, decode_request_with_headers,
     decode_response_create_with_context,
 };
@@ -20,17 +20,17 @@ use gateway_core::{
 use gateway_protocol::openai::sse::parse_sse_events;
 use serde_json::{Value, json};
 
-fn decode_request(body: &[u8]) -> Result<DecodedResponsesRequest, RequestDecodeError> {
+fn decode_request(body: &[u8]) -> Result<DecodedGenerationRequest, RequestDecodeError> {
     decode_request_with_headers(body, &HeaderMap::new(), 64 * 1024 * 1024)
 }
 
 fn decode_response_create(
     payload: &str,
-) -> Result<DecodedResponsesRequest, ResponseCreateFrameError> {
+) -> Result<DecodedGenerationRequest, ResponseCreateFrameError> {
     decode_response_create_with_context(payload, &OpenAiRequestHeaders::default())
 }
 
-fn generate_request(body: Value) -> DecodedResponsesRequest {
+fn generate_request(body: Value) -> DecodedGenerationRequest {
     decode_request(body.to_string().as_bytes()).expect("test request should decode")
 }
 
@@ -78,7 +78,7 @@ fn decoder_should_attach_only_identified_codex_inference_turns() {
 }
 
 fn generate_operation(
-    decoded: &DecodedResponsesRequest,
+    decoded: &DecodedGenerationRequest,
 ) -> &gateway_core::operation::GenerateRequest {
     let Operation::Generate(request) = decoded.operation() else {
         panic!("Responses decoder must produce Generate")
@@ -86,11 +86,11 @@ fn generate_operation(
     request
 }
 
-fn openai_wire_body(decoded: &DecodedResponsesRequest) -> &serde_json::Map<String, Value> {
+fn openai_wire_body(decoded: &DecodedGenerationRequest) -> &serde_json::Map<String, Value> {
     generate_operation(decoded).protocol_payload().body()
 }
 
-fn openai_protocol_context(decoded: &DecodedResponsesRequest) -> &serde_json::Map<String, Value> {
+fn openai_protocol_context(decoded: &DecodedGenerationRequest) -> &serde_json::Map<String, Value> {
     generate_operation(decoded).protocol_payload().context()
 }
 

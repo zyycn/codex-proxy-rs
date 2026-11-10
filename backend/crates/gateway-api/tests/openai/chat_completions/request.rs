@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::{
     chat_request, completed,
-    http::{Fixture, Session, json_body},
+    http::{Fixture, json_body},
     message,
 };
 
@@ -417,3 +417,5 @@ async fn files_and_audio_are_preserved_as_inputs_instead_of_losing_the_user_turn
         );
     }
 }
+
+use crate::support::generation::Session;

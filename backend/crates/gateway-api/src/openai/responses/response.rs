@@ -187,7 +187,9 @@ impl OpenAiResponsesEncoder {
 }
 
 /// 仅在非流式出口聚合同一响应的完成项，不让流式转发常驻保存输出内容
-pub(super) fn collect_response(events: &[ProviderEvent]) -> Result<Value, ResponseEncodeError> {
+pub(in crate::openai) fn collect_response(
+    events: &[ProviderEvent],
+) -> Result<Value, ResponseEncodeError> {
     let mut encoder = OpenAiResponsesEncoder::new();
     let mut response_id = None;
     let mut items = BTreeMap::new();

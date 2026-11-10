@@ -23,7 +23,7 @@ use super::{
 use crate::{
     ApiState,
     openai::{
-        auth::{authenticate_client, client_access_error_response},
+        auth::{ClientKeyHeaders, authenticate_client, client_access_error_response},
         error::{engine_error_response, gateway_error_response},
         middleware::PendingExecution,
         responses::request_client_context,
@@ -42,7 +42,7 @@ pub(crate) async fn live_call(
     request: Request,
 ) -> Response {
     let service = state.openai();
-    let client = match authenticate_client(service, &headers).await {
+    let client = match authenticate_client(service, &headers, ClientKeyHeaders::Bearer).await {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };
@@ -116,7 +116,7 @@ pub(crate) async fn hangup(
     body: Bytes,
 ) -> Response {
     let service = state.openai();
-    let client = match authenticate_client(service, &headers).await {
+    let client = match authenticate_client(service, &headers, ClientKeyHeaders::Bearer).await {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };

@@ -22,7 +22,7 @@ use super::LiveErrorShape;
 use crate::{
     ApiState,
     openai::{
-        auth::{authenticate_client, client_access_error_response},
+        auth::{ClientKeyHeaders, authenticate_client, client_access_error_response},
         error::runtime_unavailable_response,
         live::{
             filter_protocol_headers, live_error_response, offered_subprotocols,
@@ -110,7 +110,7 @@ async fn open_sideband(
         return upgrade_required_response();
     };
     let service = state.openai();
-    let client = match authenticate_client(service, &headers).await {
+    let client = match authenticate_client(service, &headers, ClientKeyHeaders::Bearer).await {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };

@@ -24,6 +24,11 @@ export function useAccountApiKeyFormRules(editing = false) {
           ],
         }
       : {}),
+    'apiKey.protocol': {
+      required: true,
+      trigger: 'change',
+      message: t('accounts.credentials.validation.protocolRequired'),
+    },
     'apiKey.transport': {
       required: true,
       trigger: 'change',

@@ -5,6 +5,8 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use super::api_key::ApiKeyProtocol;
+use gateway_core::account::CredentialRevision;
 use gateway_core::error::ErrorSource;
 
 use gateway_core::account::{
@@ -148,6 +150,8 @@ pub struct CodexCredentialSelector {
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
     account_feedback: Arc<AccountFeedbackStats>,
     scheduling_projection: SchedulingProjectionCache,
+    endpoint_protocols:
+        Mutex<lru::LruCache<ProviderAccountId, (CredentialRevision, ApiKeyProtocol)>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,6 +313,9 @@ impl CodexCredentialSelector {
             reserved_waiting: ConcurrencyWaitQueue::default(),
             account_feedback,
             scheduling_projection: SchedulingProjectionCache::default(),
+            endpoint_protocols: Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(8192).expect("positive capacity"),
+            )),
         }
     }
 
@@ -815,10 +822,29 @@ impl CodexCredentialSelector {
                     }
                     native_accounts.insert(account.id().clone());
                 }
-                if request.requires_websocket
-                    && adapter.is_none()
-                    && pinned_account.as_ref().is_none_or(|id| id == account.id())
-                {
+                let endpoint_requires_responses =
+                    !matches!(model, CodexSelectionModel::Requested(_))
+                        && account.authentication_kind()
+                            == super::CODEX_AUTHENTICATION_KIND_API_KEY;
+                let check_ws = request.requires_websocket
+                    && pinned_account.as_ref().is_none_or(|id| id == account.id());
+                if adapter.is_none() && (endpoint_requires_responses || check_ws) {
+                    // 只复用同 revision 的协议类型；选中后仍以完整账号快照重读凭据
+                    if endpoint_requires_responses && !check_ws {
+                        let cached = self
+                            .endpoint_protocols
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .get(account.id())
+                            .copied()
+                            .filter(|(rev, _)| *rev == account.revision());
+                        if let Some((_, protocol)) = cached {
+                            if protocol == ApiKeyProtocol::Responses {
+                                eligible.push(account);
+                            }
+                            continue;
+                        }
+                    }
                     let runtime = match self.repository.reload_selected_credential(&account).await {
                         Ok((_, runtime)) => runtime,
                         Err(CredentialRepositoryError::RevisionConflict(_)) => {
@@ -841,7 +867,21 @@ impl CodexCredentialSelector {
                         }
                         Err(error) => return Err(error.into()),
                     };
-                    if runtime.transport == super::ResponsesTransport::Http {
+                    if endpoint_requires_responses {
+                        self.endpoint_protocols
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .put(
+                                account.id().clone(),
+                                (account.revision(), runtime.authentication.api_protocol()),
+                            );
+                    }
+                    if (request.requires_websocket
+                        && runtime.transport == super::ResponsesTransport::Http)
+                        || (endpoint_requires_responses
+                            && runtime.authentication.api_protocol()
+                                == super::ApiKeyProtocol::Messages)
+                    {
                         continue;
                     }
                 }

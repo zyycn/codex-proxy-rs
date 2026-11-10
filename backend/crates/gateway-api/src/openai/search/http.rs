@@ -16,7 +16,7 @@ use crate::ApiState;
 use crate::middleware::headers::encode_headers;
 use crate::openai::middleware::RequestInput;
 use crate::openai::{
-    auth::{authenticate_client, client_access_error_response},
+    auth::{ClientKeyHeaders, authenticate_client, client_access_error_response},
     endpoint::provider_endpoint_response,
     responses::{OpenAiRequestHeaders, request_client_context},
     router::SEARCH_PATH,
@@ -32,7 +32,7 @@ pub(crate) async fn standalone_search(
     body: Bytes,
 ) -> Response {
     let service = state.openai();
-    let client = match authenticate_client(service, &headers).await {
+    let client = match authenticate_client(service, &headers, ClientKeyHeaders::Bearer).await {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };

@@ -174,3 +174,5 @@ impl gateway_core::diagnostics::OperationalDiagnostics for RecordingDiagnostics 
         Ok(())
     }
 }
+
+pub(crate) mod generation;

@@ -1011,7 +1011,7 @@ impl UpstreamAdapter for ConnectionProbe {
     }
 
     fn supports_authentication(&self, kind: &str) -> bool {
-        kind == "oauth"
+        matches!(kind, "oauth" | "api_key")
     }
 
     fn execute(
@@ -1039,6 +1039,7 @@ impl UpstreamAdapter for ConnectionProbe {
 async fn selected_adapter_connection(
     provider: Arc<CodexProvider>,
     request_id: &str,
+    pricing: gateway_core::metering::PricingOverrides,
 ) -> SelectedConnection {
     let (selected, receiver) = oneshot::channel();
     let plan = gateway_core::engine::upstream_adapter::FrozenUpstreamAdapterPlan::new(
@@ -1055,7 +1056,8 @@ async fn selected_adapter_connection(
             ModelRequestId::new(request_id).unwrap(),
             ClientApiKeyId::new("key_openai_contract").unwrap(),
         )
-        .with_upstream_adapters(Some(plan)),
+        .with_upstream_adapters(Some(plan))
+        .with_pricing(Arc::new(pricing)),
         NonZeroU32::MIN,
         SystemTime::now() + Duration::from_secs(5),
         account_policy(),
@@ -1073,6 +1075,62 @@ async fn selected_adapter_connection(
         ProviderErrorKind::Cancelled
     );
     receiver.await.unwrap()
+}
+
+#[tokio::test]
+async fn messages_adapter_uses_api_key_identity_and_only_configured_prices() {
+    for priced in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let server = MockServer::start().await;
+        store
+            .seed_api_key_for_protocol(
+                "acct_provider_contract",
+                server.uri(),
+                provider_openai::credential::ResponsesTransport::Http,
+                provider_openai::credential::ApiKeyProtocol::Messages,
+            )
+            .await;
+        let pricing = if priced {
+            serde_json::from_value(json!({"openai":{"gpt-5.4":{
+                "multiplierBps":10000,"bands":{"standard":{
+                    "input":"2","output":"4","cacheRead":"0.5","cacheWrite":"3"
+                }}
+            }}}))
+            .unwrap()
+        } else {
+            Default::default()
+        };
+        let connection =
+            selected_adapter_connection(provider(&store), "req_messages_adapter", pricing).await;
+        let headers = connection.authorization().unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].name(), "x-api-key");
+        assert_eq!(headers[0].value(), b"sk-api-test-only".as_slice());
+        let cost = connection.calculate_cost(
+            None,
+            &Usage {
+                input_tokens: Some(16),
+                output_tokens: Some(2),
+                cached_input_tokens: Some(2),
+                cache_write_input_tokens: Some(3),
+                ..Usage::new()
+            },
+        );
+        if priced {
+            assert_eq!(
+                cost.unwrap()
+                    .into_estimate()
+                    .total()
+                    .unwrap()
+                    .amount()
+                    .canonical(),
+                "0.00004"
+            );
+        } else {
+            assert!(cost.is_none());
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
 }
 
 #[tokio::test]
@@ -1194,8 +1252,12 @@ async fn upstream_adapter_reloads_rotated_credentials_and_proxy_without_acceptin
     store.set_egress(account_id, Some(old_proxy.clone()), None);
     let upstream = MockServer::start().await;
     let provider = provider_with_base_url(&store, upstream.uri());
-    let old =
-        selected_adapter_connection(Arc::clone(&provider), "req_adapter_before_refresh").await;
+    let old = selected_adapter_connection(
+        Arc::clone(&provider),
+        "req_adapter_before_refresh",
+        Default::default(),
+    )
+    .await;
     let before = store.account(account_id).unwrap();
     assert_eq!(old.outbound_proxy(), Some(&old_proxy));
 
@@ -1211,7 +1273,9 @@ async fn upstream_adapter_reloads_rotated_credentials_and_proxy_without_acceptin
         .await
         .unwrap();
     store.set_egress(account_id, Some(new_proxy.clone()), None);
-    let current = selected_adapter_connection(provider, "req_adapter_after_refresh").await;
+    let current =
+        selected_adapter_connection(provider, "req_adapter_after_refresh", Default::default())
+            .await;
     assert_eq!(current.account_id(), old.account_id());
     assert_eq!(current.credential_revision(), revision);
     assert_ne!(current.credential_revision(), old.credential_revision());

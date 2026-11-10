@@ -7,7 +7,7 @@
 | 查找内容 | 入口 |
 | --- | --- |
 | 鉴权与响应 | [公共约定](#1-鉴权与公共约定) · [浏览器会话与 Key 自助页](#4-浏览器认证) |
-| 客户端协议 | [Responses、Chat、Images、模型与 Provider 操作](#3-openai-数据面与模型目录) · [额度查询](#api-key-额度查询) |
+| 客户端协议 | [Responses、Chat、Messages、Images 与模型目录](#3-模型数据面与模型目录) · [额度查询](#api-key-额度查询) |
 | 账号与授权范围 | [账号](#5-账号) · [代理](#独立代理管理--managed-proxies) · [分组](#6-账号分组) · [Client Key](#7-client-key) |
 | 系统与运维 | [健康检查](#2-健康检查) · [运行设置](#8-运行设置) · [备份](#9-备份) · [统计与诊断](#10-dashboard用量与错误) · [版本与更新](#11-版本更新与重启) |
 | 插件 | [安装包与来源](#安装包与来源) · [运行实例](#121-运行实例) · [管理扩展](#122-管理扩展页面与原始-api) |
@@ -18,7 +18,7 @@
 可改写请求、覆盖本次请求设置、直接返回响应或接管 WebSocket 升级；管理、模型、健康检查和静态资源使用同一入口。
 挂载与覆盖合同见 [SDK 洋葱中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#洋葱中间件)
 
-### OpenAI 数据面客户端接口
+### 数据面客户端接口
 
 默认情况下，`/v1/*` 使用管理端创建的 Client Key：
 
@@ -28,6 +28,9 @@ Authorization: Bearer sk_...
 
 自动生成的 Key 保持 `sk_` 格式；迁入的自定义 Key 使用保存时的原值，不限制前缀或固定长度。
 无论格式如何，只有已保存且启用的 Client Key 能通过鉴权
+
+`/v1/messages` 与 `/v1/messages/count_tokens` 也接受 `x-api-key: <Client Key>`。
+同时提供两个认证头时优先使用 `Authorization`；客户端提交的是网关 Client Key，上游密钥由选中的账号提供
 
 启用[入口认证插件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#数据面入口认证)时，
 `Authorization` 可按插件协议校验，并由宿主将外部身份映射到明确绑定的 Client Key。
@@ -59,7 +62,7 @@ ChatGPT 远程控制使用 `(codex_chatgpt_<平台>_remote; <版本>)` 形式的
 远程客户端版本不能替代 Desktop 应用版本，因此也无法保证其满足 Desktop 最低版本要求。
 携带 `version` 头或 Desktop 应用版本后缀时仍按上述规则校验，非法版本不会因远程标记而放行
 
-低版本响应使用 OpenAI 风格错误格式：
+Responses 和 Chat 入口的低版本响应使用 OpenAI 风格错误格式：
 
 ```json
 {
@@ -98,7 +101,7 @@ HTTPS 来源以及缺失、`null` 或非法来源保留 `Secure`。`HttpOnly`、
 小响应、SSE、其他流式正文及已有内容编码的响应不再压缩；模型执行接口不经过管理端压缩层
 
 配置了 CORS 白名单 origin 时，跨域请求以凭据模式放行，仅允许 `GET`/`POST` 方法和
-`authorization`、`content-type`、`x-api-key` 与 request ID 四个请求头，不使用通配符
+`authorization`、`content-type`、`x-api-key`、`anthropic-version`、`anthropic-beta` 和 request ID 请求头，不使用通配符
 
 普通成功响应使用以下信封：
 
@@ -208,9 +211,9 @@ Dashboard 的 `lastUsedRelative` 和账号额度的 `refreshedAtRelative` 由后
 
 两个接口均返回空正文。探针并行执行，共用 2 秒截止时间
 
-## 3. OpenAI 数据面与模型目录
+## 3. 模型数据面与模型目录
 
-除下述入站解压保护外，Responses、Chat Completions、Images 和 standalone Search HTTP body、
+除下述入站解压保护外，Responses、Chat Completions、Messages、Images 和 standalone Search HTTP body、
 WebSocket message 和 frame 不设置网关私有长度上限；请求字段与协议限制见各入口说明
 
 | 方法 | 路由 | 说明 |
@@ -218,15 +221,29 @@ WebSocket message 和 frame 不设置网关私有长度上限；请求字段与�
 | `POST` | `/v1/responses` | OpenAI Responses JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
 | `POST` | `/v1/chat/completions` | Chat Completions 转 Responses 执行；返回单 choice 的 Chat JSON 或 SSE |
+| `POST` | `/v1/messages` | Anthropic Messages JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
+| `POST` | `/v1/messages/count_tokens` | 返回 Messages 请求的输入 Token 数；原生计数与本地估算边界见下 |
 | `POST` | `/v1/alpha/search` | Codex standalone web search；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/generations` | 通过 OpenAI Provider 发起图像生成；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/edits` | 通过 OpenAI Provider 发起图像编辑；JSON 原样转发，multipart 上传转为原生 Images JSON |
 | `GET` | `/v1/models` | 返回当前 Client Key 账号范围内各 Provider 的可用公开模型并集；有两种响应形态，见下 |
 | `GET` | `/v1/models/{model_id}` | 返回 OpenAI 兼容的单模型详情 |
-| `POST` | `/v1/providers/{provider}/models/{model}/count_tokens` | 调用指定 Provider/model 声明的精确 Token 计数；请求和响应均为 JSON |
+| `POST` | `/v1/providers/{provider}/models/{model}/count_tokens` | 调用指定 Provider/model 声明的 Token 计数；请求和响应均为 JSON，计数方式由 Provider 决定 |
 | `GET` / `POST` | `/v1/providers/{provider}/http/{endpoint}` | 调用指定 Provider 预先声明的固定 HTTP 操作；不是任意 URL 代理 |
 | `GET` | `/v1/usage` | 查询当前 Client Key 的日与周额度，仅使用网关已结算的 USD 账本 |
 | `GET` | `/v1/cpr/link` | 返回当前 Key 获准公开的预算及直连账号池观测 |
+
+生成接口支持三种入站协议；API Key 账号通过 `protocol` 选择 Responses 或 Messages 上游，仍使用 `openai` Provider。
+OAuth 账号使用 Responses 上游。入站路由不决定上游协议，实际执行由 Client Key 的账号范围、模型和调度结果决定
+
+| 入站 | Responses 上游 | Messages 上游 |
+| --- | --- | --- |
+| Responses | 原生 Responses wire | Responses 与 Messages 双向转换 |
+| Chat Completions | Chat 与 Responses 双向转换 | Chat 经 Responses 与 Messages 双向转换 |
+| Messages | Messages 与 Responses 双向转换 | 原生 Messages wire |
+
+同协议保留原生业务 wire，观测和计量不用于重建响应正文；跨协议按目标格式转换请求、完整响应及 SSE。
+Messages 与 Responses 的转换边界见 [Messages 请求](#messages-请求)，账号配置见[账号能力、导入与 OAuth](#账号能力导入与-oauth)
 
 ### Chat Completions 请求
 
@@ -254,7 +271,8 @@ print(completion.choices[0].message.content)
 
 #### 请求字段
 
-入口负责将 Chat 结构映射为 Responses；同语义字段的模型支持范围、取值范围与业务有效性由 Provider 和上游判断。
+入口负责将 Chat 结构映射为 Responses；下表描述这一入口映射，选择 Messages 上游后还会按目标协议转换。
+同语义字段的模型支持范围、取值范围与业务有效性由 Provider 和上游判断。
 只有结构无法解码或不能正确表达的语义在本地返回 `400`，错误中的 `param` 指向字段，不回显字段值
 
 | 字段 | 支持与映射 |
@@ -321,12 +339,86 @@ OpenAI 是此入口的兼容目标，混合分组沿用账号范围内的选路�
 每项为 `type: "image_url"` 和包含 data URL 的 `image_url` 对象；流中带图片 `index`，预览与最终结果可能更新同一项。
 这是 Chat 扩展，需要客户端支持；音频输出和需要客户端执行的其他未映射动作不受支持
 
-Chat 沿用 [Client Key 鉴权](#openai-数据面客户端接口)、[请求期限](#请求期限)、[请求解压](#请求解压)、
-[请求头与身份](#请求头与身份)及[隐私策略](#隐私策略)。隐私策略的 `request_body` 面向转换后的 Responses 正文，
-例如 `$.input`，不需要另外维护一套针对 `messages` 的规则
+Chat 沿用 [Client Key 鉴权](#数据面客户端接口)、[请求期限](#请求期限)、[请求解压](#请求解压)、
+[请求头与身份](#请求头与身份)及[隐私策略](#隐私策略)。隐私策略的 `request_body` 面向目标上游正文，
+Responses 上游使用 `$.input`，Messages 上游使用 `$.messages`
 
 转换后的请求按选中的 Provider 执行。OpenAI 的字段处理见[正文兼容](#正文兼容)；
 输出上限原值交给上游校验，低于模型下限时会收到上游错误
+
+### Messages 请求
+
+`POST /v1/messages` 接受非空字符串 `model`、非空 `messages` 数组和非负整数 `max_tokens`。
+消息角色为 `user`、`assistant` 或 `system`，`content` 为字符串或内容块数组；初始系统指令放在顶层 `system`，
+会话中的 `system` 消息保留其位置，具体模型支持情况由上游校验。
+`stream` 缺省或 `false` 返回 JSON，`true` 返回 SSE。每轮由客户端携带所需的完整上下文。Claude Code 用 `--resume` 恢复本地会话后，仍通过 `messages` 发送上下文；网关不缓存对话正文用于下一轮。
+Messages 没有服务端历史续接或 WebSocket 入口
+
+```bash
+curl https://gateway.example.com/v1/messages \
+  -H "x-api-key: ${CPR_CLIENT_KEY}" \
+  -H 'anthropic-version: 2023-06-01' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"<model-id>","max_tokens":128,"messages":[{"role":"user","content":"你好"}]}'
+```
+
+Messages 上游保留 `system`、工具、thinking、缓存控制和未知扩展字段，由上游判断具体能力。
+流式结果使用 `message_start`、`content_block_start/delta/stop`、`message_delta` 和 `message_stop` 等原生事件，
+同协议 SSE 保留原始事件帧；流结束不附加 OpenAI 的 `[DONE]`。`usage` 保留输入、输出及缓存用量，缺失值不补造
+
+跨 Responses 与 Messages 转换参考 CLIProxyAPI（CPA）的字段映射与降级规则：文本、图片、文档、工具调用及结果按目标结构映射，
+无对应语义的可选字段或内容可能被忽略或降级，具体参数仍由目标上游校验。
+推理签名与加密内容按来源回传，不能作为另一协议的原生签名使用；未知内容需要完整保留时应选择同协议上游。
+Messages 细粒度工具流转向 Responses 时保留原始 function 参数字符串，完成状态取自上游停止原因；
+以 `max_tokens` 等明确中断结束时返回 `incomplete`。
+截断的 custom 包装提取已生成字符串，未完成转义按原片段保留。
+Messages 上游返回的单个非流式 JSON 正文最多 16 MiB，超限即结束请求；此上限不针对 SSE 全流。
+Messages 非流式聚合要求工具输入可解析；结构无法解码或缺少必要终态时返回错误
+
+转向 Messages 时，工具结果按紧邻调用轮次配对，并排在用户消息其他内容之前。
+缺失结果补为调用中断错误，延迟或孤立结果按普通内容承载；同一用户轮次的重复结果保留最后一条。
+Responses 流已交付工具调用时，即使终帧不再列出输出项，Messages 仍返回 `stop_reason: tool_use`；明确的截断或暂停原因优先。
+
+Responses 的 `allowed_tools` 只向 Messages 上游声明本轮允许的工具，历史调用仍保留原名；
+若没有可用工具，或上游不能执行 `required` 约束，则拒绝请求。
+跨协议搜索保留域名允许和禁止列表；缓存或索引搜索不会转为实时联网。Messages 搜索带有单工具 `max_uses` 限制时，转向 Responses 的生成请求会被拒绝
+
+跨协议推理设置读取顶层 `thinking`、`output_config.effort` 或 `reasoning.effort`。
+转向 Messages 时按所选账号模型目录声明的能力选择 adaptive 或手动预算，并约束输出上限和 effort 等级。
+不支持关闭的 adaptive 模型将 `none` 降到最低可用 effort；手动预算至少为 1024、严格小于输出上限，不足时关闭推理。
+生成请求最多等待目录 500 ms；未及时取得目录或未声明能力时沿用 CPA 手动预算，`auto` 使用 8192，不根据模型别名猜测能力。
+强制工具与手动推理冲突时显式关闭推理；紧接着只回传工具结果且未指定 effort 时，沿用无思考模式。
+adaptive 路径将普通强制选择降为 `auto`，保留串行约束。
+仅设置 `parallel_tool_calls:false` 也会生成串行工具选择，`none` 不携带并行选项。
+生成启用推理的配置时省略不相容的 `temperature/top_p`，同协议不执行这些转换
+
+服务档位按目标协议映射：Responses `default` 对应 Messages `standard_only`，`auto` 保留，无法对应的档位省略。
+按 CPA 将 Responses `priority` 与 Messages `speed:fast` 双向映射；这两个字段不代表相同的服务承诺。
+跨协议生成 fast 请求时补充 `fast-mode-2026-02-01` beta，并保留已有 beta；目标是否支持 fast 由上游校验。
+Codex OAuth 出站省略 `auto/default`，Responses API Key 保留这些公开 API 参数。
+会话内配置、工具增删和指令生效期限等扩展需要完整保留时使用同协议上游
+
+Messages 错误使用 `{"type":"error","error":{"type":"...","message":"..."}}`；SSE 开始后使用 `event: error`。
+入口沿用 Client Key 的账号范围、模型权限、并发、预算、取消和[请求解压](#请求解压)保护。
+请求中间件处理 Messages 正文，隐私策略的 `request_body` 对应目标上游实际发送的协议结构
+
+Messages 费用按管理员显式配置的模型价格计算，未配置时保留用量并将费用标为未知
+当前价格合同未分别表达 fast 加速、1 小时缓存写入和服务端工具单价；请求 fast 或出现这些费用项目时保留用量，费用标为未知
+
+#### Messages 输入计数
+
+`POST /v1/messages/count_tokens` 接受同一格式的 `model`、`messages`、可选 `system` 和 `tools`，不要求 `max_tokens`，
+返回 `{"input_tokens":123}`。该接口只计算输入，不生成助手输出；账号范围、模型映射与准入规则沿用模型请求
+
+| 选中的上游 | 计数方式 |
+| --- | --- |
+| Messages，地址为官方 `https://api.anthropic.com`，HTTPS 端口为 443 | 请求上游 API 前缀下的 `messages/count_tokens`，返回原生计数结果 |
+| 自定义 Messages 上游 | 对 Messages 内容使用本地 tokenizer 估算 |
+| Responses 上游，包括 OAuth | 先投影为 Responses 内容，再使用本地 tokenizer 估算 |
+
+本地估算按模型选择 tokenizer，计算可提取的文本、工具定义与工具内容，不包含图片、音频、视频、二进制文档及隐藏推理的模型专用成本。
+它不保证与上游账单或完整多模态上下文一致，也不发送上游生成请求或产生上游用量。
+官方原生计数失败时保留失败，不静默切换为估算
 
 ### Images 请求
 
@@ -357,8 +449,9 @@ multipart 的 `image` 和 `image[]` 上传按出现顺序组成 `images` 数组�
 
 `POST /v1/providers/{provider}/models/{model}/count_tokens` 接受最多 8 MiB 的合法 JSON，且只路由到
 为该模型明确声明 `count_tokens` 的 Provider。Core 不解释或重写请求/响应 JSON，响应必须是目标 Provider 按其
-声明的本地精确 tokenizer 或上游精确计数合同返回的原始 JSON；没有准确实现时返回不支持，不从 usage
-或字符数推算。响应固定使用 `application/json` 并重算 `Content-Length`
+声明的计数合同返回的原始 JSON，不从生成 usage 或字符数推算。OpenAI Provider 接受 Messages 的计数正文，
+模型由路径指定；官方 Messages 使用原生计数，其他账号使用与 `/v1/messages/count_tokens` 相同的本地 BPE 估算。
+响应固定使用 `application/json` 并重算 `Content-Length`
 
 `GET|POST /v1/providers/{provider}/http/{endpoint}` 只允许 Provider descriptor 中该 endpoint 声明的
 方法；`HEAD`、其他方法、未声明 endpoint 和未声明的方法在出站前拒绝。GET 不能携带正文，POST 正文
@@ -384,7 +477,8 @@ Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-open
 
 #### 请求解压
 
-`POST /v1/responses` 与 `POST /v1/chat/completions` 在鉴权后按 `Content-Encoding` 解压，再解析 JSON；支持单一 `gzip`、
+`POST /v1/responses`、`POST /v1/chat/completions`、`POST /v1/messages` 与 `/v1/messages/count_tokens`
+在鉴权后按 `Content-Encoding` 解压，再解析 JSON；支持单一 `gzip`、
 `deflate`（zlib 封装）和 `zstd`，缺省、空值或 `identity` 直接使用原始正文。gzip 多成员与 zstd
 多帧连续解码，整体展开结果受运行设置 `responsesMaxDecompressedBodyBytes` 约束（默认 64 MiB），
 超限在继续展开前返回 `400 request_too_large`，错误信息包含当前请求的上限字节数。zstd
@@ -393,7 +487,8 @@ Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-open
 见[请求解压上限](#请求解压上限)。
 不支持的编码、逗号分隔的叠加编码和重复 `Content-Encoding` 头返回
 `400 unsupported_content_encoding`；压缩正文损坏、截断或解压后不是合法 JSON 返回
-`400 invalid_json`。本地错误不包含原始正文或解压库细节。WebSocket 文本帧不经过这条解压路径
+`400 invalid_json`，Messages 入口使用对应的 `invalid_request_error` 错误封套。
+本地错误不包含原始正文或解压库细节。WebSocket 文本帧不经过这条解压路径
 
 #### 请求头与身份
 
@@ -401,7 +496,7 @@ Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwar
 `cdn-loop`）以及 `Accept-Encoding` / `Content-Encoding`。链路元数据和编解码能力
 由各段传输层独立管理；其余业务扩展头继续透传，不使用固定业务头白名单。
 此规则同时适用于上游 HTTP 和 WebSocket，不影响上游响应的 `cf-ray` 等诊断信息。
-API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`originator`、`version`）和业务头透传规则，
+Responses API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`originator`、`version`）和业务头透传规则，
 包括会话、线程、Lite 和其他业务扩展头。
 上游认证只来自选中的账号；API Key 不携带 OAuth Cookie、ChatGPT 账号身份或下游的
 `X-OpenAI-Actor-Authorization` 托管认证声明。
@@ -532,8 +627,9 @@ HTTP/SSE 与 WS 入站共用此判断；新链在发送前重新建连，依赖�
 控制帧发送成功不等于上游已确认中断；若上游仍返回 `response.completed`，按正常完成处理
 
 OAuth 账号默认 `prefer_websocket`，客户端使用 HTTP/SSE 时仍可能选择上游 WebSocket；
-可将账号上游传输方式设为 `http`，固定使用 HTTP/SSE。API Key 账号默认使用 HTTP/SSE，
-也可配置 `prefer_websocket`。必须依赖 WS 的协议预热、非持久化新链和连接内续接不使用 HTTP-only 账号。
+可将账号上游传输方式设为 `http`，固定使用 HTTP/SSE。Responses API Key 账号默认使用 HTTP/SSE，
+也可配置 `prefer_websocket`；Messages API Key 账号只支持 `http`。
+必须依赖 WS 的协议预热、非持久化新链和连接内续接不使用 HTTP-only 账号。
 客户端配置的 `supports_websockets` 只控制第一段连接，不是服务端传输策略开关。
 上游在响应终态前发送 Close 1000 仍属于失败，不能按“正常关闭”计为成功
 
@@ -573,7 +669,14 @@ HTML 或截断正文当作 message。
 
 ### 模型目录
 
-`GET /v1/models` 默认返回 OpenAI 兼容列表 `{"object": "list", "data": [...]}`；请求携带非空
+携带 `anthropic-version` 或 `x-api-key` 请求头时，`GET /v1/models` 返回 Messages 模型目录：
+`{ data, first_id, last_id, has_more }`，单条模型使用 `type: "model"`、`id`、`display_name` 和 `created_at`
+模型范围仍由 Client Key 权限、分组与别名决定，未知发布日期使用 Unix epoch，未知能力和 Token 上限为 null
+
+该格式支持 `after_id`、`before_id` 游标和 `limit`，默认每页 20 条，范围 1–1000；未知游标或无效限制返回 400
+`GET /v1/models/{model_id}` 使用同一显式协议头选择格式和错误合同，不根据 User-Agent 猜测协议
+
+未携带上述协议头时，`GET /v1/models` 默认返回 OpenAI 兼容列表 `{"object": "list", "data": [...]}`；请求携带非空
 `client_version` query 参数（Codex 客户端）时改为返回 Codex 专用目录合同 `{"models": [...]}`
 
 OpenAI Provider 按客户端传入的 `client_version` 请求上游目录，完整保留每个模型 JSON 对象，包括
@@ -621,7 +724,7 @@ Codex 专用目录中的 `context_window` 与 `max_context_window` 分别表示�
 
 #### OpenAI 透传
 
-OpenAI 路径保留客户端 Responses wire 语义：除[正文兼容](#正文兼容)、[身份归一](#请求头与身份)、模型映射及已配置的请求策略外，
+Responses 同协议路径保留客户端 wire 语义：除[正文兼容](#正文兼容)、[身份归一](#请求头与身份)、模型映射及已配置的请求策略外，
 请求 body 的未知字段和字段顺序保持不变。HTTP SSE 与 WebSocket 的上游业务事件除下述客户端错误兼容及响应头隔离外按原始字节转发，
 response ID 按 opaque 值处理而不假设 UUID 或固定长度；除客户端错误兼容与原生续写额度恢复外，
 OpenAI 上游错误 envelope 和允许下发的 opaque header 值也不由 canonical 观测结果重写。
@@ -1466,27 +1569,33 @@ API Key 账号使用以下独立凭据形态：
     "name": "团队上游",
     "base_url": "https://api.example.com/v1",
     "api_key": "<upstream-api-key>",
+    "protocol": "responses",
     "transport": "http"
   }
 }
 ```
 
-`base_url` 是 API 前缀，追加 `responses`、`models`、`images/generations`、`images/edits` 或 `alpha/search`，
-不会自动补 `/v1`；支持根路径和自定义前缀。
+`protocol` 可省略（默认 `responses`）或设为 `messages`，两者都使用 `provider: "openai"`。
+`base_url` 是 API 前缀，不会自动补 `/v1`，支持根路径和自定义前缀。
+Responses 上游追加 `responses`、`models`、`images/generations`、`images/edits` 或 `alpha/search`；
+Messages 上游追加 `messages`、`messages/count_tokens` 或 `models`。官方 Anthropic 的前缀为 `https://api.anthropic.com/v1`
+
 地址支持 HTTP 和 HTTPS，包括内网 IP 与容器名，拒绝 URL 中的认证信息、查询串和 fragment。
 HTTP 会明文传输 API Key 和请求内容，仅用于可信网络。
-`transport` 可省略（默认 `http`）或设为 `prefer_websocket`。API Key 使用 Bearer 认证与普通 JSON，
-不携带 OAuth Cookie 或 ChatGPT 身份。上游模型列表使用标准 `/models` 格式，按账号和凭据版本隔离；
+`transport` 缺省为 `http`，Responses 可设为 `prefer_websocket`，Messages 只接受 `http`。
+Responses 使用 Bearer 认证，Messages 使用 `x-api-key` 与 `anthropic-version`，都不携带 OAuth Cookie 或 ChatGPT 身份。
+上游模型列表从 API 前缀下的 `/models` 读取，按账号和凭据版本隔离；
 目录用于模型发现，不作为能力白名单，未列出的模型仍交由上游判断。
 API Key 每次导入创建独立账号；更新已有账号使用 `/api/admin/accounts/update` 的 `connection` 字段。
-导出会显式包含密钥，沿用敏感导出的确认合同
+导出保留协议和传输设置，并显式包含密钥，沿用敏感导出的确认合同
 
 sub2api 的 `platform=openai`、`type=apikey` 使用 `credentials.base_url` / `credentials.api_key`；
 导入时按其端点规则将服务根、版本前缀或完整 `/responses` 地址转换为 API 前缀，缺省地址为官方 `/v1`。
 非空模型映射、请求头覆盖、其他协议和启用的 `extra.openai_*` 设置尚未适配，返回输入错误，需先移除并在本项目重新配置
 
-API Key 账号与 OAuth 共用现有 Responses、Images 和 standalone Search 请求与响应链路，
+Responses API Key 账号与 OAuth 共用 Responses、Images 和 standalone Search 请求与响应链路，
 包括 Responses Lite 和原生压缩协议的透传，实际支持情况由上游决定；不提供独立 compact 路由。
+Messages API Key 账号支持生成与输入计数，通过协议转换承接 Responses 和 Chat 入站；不提供 Images、standalone Search、Live 或 Responses 原生续接能力。
 模型目录、连接测试和本地用量统计可用；OAuth 刷新/重新授权、ChatGPT 额度、个人资料、订阅和重置卡不适用。
 客户端的 `image_generation` 和 `X-OpenAI-Actor-Authorization` 声明不改变账号的实际能力。
 未识别为 CPR 互联的 API Key 账号，其列表和详情 `usage` 汇总账号创建后仍保留的本地请求记录，
@@ -1531,7 +1640,7 @@ OpenAI 的 CPR 导出保持 OAuth 账号的既有 token 与过期时间字段。
 导入条目未提供 `modelAccess` 且 `settings` 未指定该字段时，新账号默认 `all`，已有账号保留原值；凭据刷新、重新授权和目录刷新均保留政策。
 sub2api 的 `credentials.model_mapping` 不转换为本项目的账号模型限制
 
-编辑 Codex API Key 账号时，在 `POST /api/admin/accounts/update` 的账号设置中附带 `connection`：
+编辑 API Key 账号时，在 `POST /api/admin/accounts/update` 的账号设置中附带 `connection`：
 
 ```json
 {
@@ -1542,18 +1651,21 @@ sub2api 的 `credentials.model_mapping` 不转换为本项目的账号模型限�
   "groupIds": [],
   "connection": {
     "baseUrl": "https://api.example.com/v1",
+    "protocol": "responses",
     "transport": "http",
     "apiKey": "..."
   }
 }
 ```
 
-`connection.transport` 支持 `http`、`prefer_websocket`。省略 `connection` 时只更新账号设置；
+`connection.protocol` 支持 `responses`、`messages`，省略时保留当前协议。
+`connection.transport` 支持 `http`、`prefer_websocket`，Messages 只接受 `http`；切换协议时须同时提交合法的传输组合。
+省略 `connection` 时只更新账号设置；
 省略 `connection.apiKey` 保留当前密钥，空字符串无效。
-Codex OAuth 账号只接受 `connection: { transport }`，不接受 `baseUrl`、`apiKey` 或 OAuth token。
+Codex OAuth 账号只接受 `connection: { transport }`，不接受 `protocol`、`baseUrl`、`apiKey` 或 OAuth token。
 连接设置不能修改账号 ID、Provider 或认证类型，也不接受通用凭据文档。
 凭据与设置在同一事务中保存，任一校验或持久化失败均不落库。
-`GET /api/admin/accounts/detail` 对 API Key 账号额外返回 `credentialConfiguration: { base_url, transport }`；
+`GET /api/admin/accounts/detail` 对 API Key 账号额外返回 `credentialConfiguration: { base_url, protocol, transport }`；
 OAuth 账号返回 `credentialConfiguration: { transport }`。响应不回显密钥或 token；不适用的账号省略该字段。
 更新会推进凭据 revision 并失效目录与连接；旧版本会话不可静默续接到新上游
 
@@ -1815,6 +1927,7 @@ GET 和 POST 均返回 `enabled`、`leadMinutes`、`nextDiscoveryAtDisplay`、`n
 - 关闭：将 `priority`（含 `fast` 别名）改为显式 `default`，继续处理请求
 
 策略只作用于 OpenAI Responses 的顶层 `service_tier`，不改变 `flex`、`ultrafast` 等其他显式档位、嵌套字段或其他 Provider。
+选定 Codex OAuth 后，出站兼容层按其合同省略 `auto/default`，默认档位仍按标准价格计费；Responses API Key 保留这两个值。
 宿主策略在 request 中间件之后应用，形成 attempt 输入基线；attempt 中间件继续改写档位时，以改写后的实际发送值为准。
 HTTP 和每个 WebSocket `response.create` 均使用请求开始时的分组策略，同一请求重试保持该策略；
 HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造；复用 WS 时不重发握手头，

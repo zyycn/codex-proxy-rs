@@ -128,14 +128,17 @@
       "apiPrefix": "API 前缀",
       "apiKeyPlaceholder": "留空保留当前密钥",
       "enterUpstreamKey": "输入上游密钥",
+      "protocolLabel": "上游协议",
       "transportLabel": "传输方式",
       "webSocketHelp": "WS 需要上游支持 Responses WebSocket",
+      "messagesTransportHelp": "Messages 上游使用 HTTP/SSE",
       "nameRequired": "请输入账号名称",
       "validation": {
         "urlLength": "上游 API 地址不能超过 2048 个字符",
         "urlFormat": "请输入不含认证、查询参数或片段的 HTTP 或 HTTPS 地址",
         "urlRequired": "请输入完整的上游 API 地址",
         "apiKeyFormat": "API密钥不能包含空格或控制字符",
+        "protocolRequired": "请选择上游协议",
         "transportRequired": "请选择传输方式"
       },
       "apiKeyRequired": "请输入 API密钥"
@@ -339,7 +342,7 @@
       "jsonDescription": "粘贴或上传账号 JSON，匹配已有账号时更新凭据",
       "packageDescription": "粘贴或上传 CPR 账号包，一次导入多个平台账号",
       "oauthDescription": "通过浏览器授权导入 {label} 账号",
-      "apiKeyDescription": "接入 OpenAI Responses 兼容上游",
+      "apiKeyDescription": "接入 Responses 或 Messages 协议上游",
       "pasteAccessTokenLineByLineIf": "逐行粘贴 Access Token，未包含 Refresh Token 时无法自动续期",
       "refreshTokenDescription": "逐行粘贴 Refresh Token，导入时将自动换取 Access Token",
       "accountSettings": "账号设置",

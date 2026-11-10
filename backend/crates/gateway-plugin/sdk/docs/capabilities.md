@@ -514,6 +514,9 @@ Chat 的下游流模式及 `include_usage` 由 API 持有，request 阶段不能
 同一边界的原样保留不要求 Chat 与 Responses 字节相同；需要读写 `messages` 或 `choices` 的插件应使用 HTTP 挂载，
 字段范围见 [Chat 合同](../../../../../docs/api.md#chat-completions-请求)
 
+Messages 入站的 `protocol` 为 `anthropic`，端点为 `/v1/messages`；计数使用 `/v1/messages/count_tokens` 与 `count_tokens` 操作
+同协议请求保留原生正文，Responses 与 Messages 之间的转换发生在所选上游的执行边界
+
 中间件可读取和改写完整请求、响应 headers、正文与响应帧，也不按字段名称过滤认证、Cookie、会话或连接头。
 该能力遵循[完整信任](manifest.md#完整信任)边界；类型、HTTP 格式、大小及资源生命周期仍需符合合同
 
@@ -535,7 +538,8 @@ Header 修改采用增量 remove/append，保留合法多值。`MiddlewareBody::
 这一保证比较插件前后的同一边界，Provider 自身的协议适配、两次调用的随机值和网络分段不在比较范围内
 
 `request.declare_capabilities(CapabilityDeclaration { handled, required })` 随单次 `next` 发出，必须同时显式替换正文。
-当前仅允许 OpenAI 生成请求的 request 阶段，HTTP 与 WebSocket 共用规则；不扩展端点允许的协议或流模式。
+当前仅允许 Responses 或 Messages 生成请求的 request 阶段，HTTP 与 WebSocket 共用规则；不扩展端点允许的协议或流模式。
+Responses 与 Messages 的功能声明均按各自协议正文重新提取事实，声明不能改变请求协议
 `handled` 只允许列举改写前确实存在、改写后已从实际请求移除的 `tools`、`vision`、`reasoning`、`json_schema`，
 插件须负责对应的提示词转换及普通响应、错误、流式响应还原。`required` 为额外上游需求，不能覆盖正文推导出的要求。
 重复项、同一项同时出现在两组、空声明、attempt 阶段使用声明均会拒绝。

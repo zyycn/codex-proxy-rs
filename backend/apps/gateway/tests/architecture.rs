@@ -509,6 +509,7 @@ const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
     ("gateway-api", "gateway-admin"),
     ("gateway-api", "gateway-core"),
     ("gateway-api", "gateway-protocol"),
+    ("gateway-core", "gateway-protocol"),
     ("gateway-host", "gateway-admin"),
     ("gateway-host", "gateway-core"),
     ("gateway-host", "gateway-protocol"),

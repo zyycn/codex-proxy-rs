@@ -86,7 +86,7 @@ async fn authentication_unknown_routes_and_method_errors_are_observable() {
         ),
         (
             "POST",
-            "/v1/messages?secret=SENSITIVE_QUERY",
+            "/v1/unknown?secret=SENSITIVE_QUERY",
             StatusCode::NOT_FOUND,
             "unknown_endpoint",
         ),
