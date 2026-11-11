@@ -158,6 +158,7 @@ impl TraceContext {
             "recovery": {
                 "replaySafe": error.replay_is_safe(),
                 "retryProhibited": error.retry_is_prohibited(),
+                "sameAccountRetryBlocked": error.same_account_retry_blocked(),
                 "sameAccountCredentialRetry": error.retries_same_account(),
                 "intent": error.pre_delivery_retry().map(|intent| format!("{intent:?}")),
                 "continuationFailure": error.continuation_failure().map(|failure| format!("{failure:?}")),
@@ -346,6 +347,7 @@ impl TraceContext {
                     for key in [
                         "replaySafe",
                         "retryProhibited",
+                        "sameAccountRetryBlocked",
                         "sameAccountCredentialRetry",
                     ] {
                         kept[key] = json!(recovery.get(key).and_then(Value::as_bool));

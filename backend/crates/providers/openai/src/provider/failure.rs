@@ -488,8 +488,8 @@ pub(super) fn apply_websocket_recovery_policy(
     failure: &mut MappedProviderFailure,
     context: WebSocketRecoveryContext<'_>,
 ) {
-    // 未匹配网关恢复规则的上游拒绝直达客户端，不能转换成传输重试或污染会话回退状态
-    if failure.error.retry_is_prohibited() {
+    // 明确禁止重试，或上游拒绝继续使用当前账号时，不能改写成同账号传输恢复
+    if failure.error.retry_is_prohibited() || failure.error.same_account_retry_blocked() {
         return;
     }
     // 明确账号拒绝走已有换号路径，业务瞬态失败走请求内退避，不消耗 WS 传输预算
@@ -1503,6 +1503,10 @@ pub(super) fn map_upstream_failure(
             jitter,
             policy,
         );
+    }
+    if failure.no_more_retry {
+        // 保留耗尽策略供 Core 决定换号或返回错误，但不再对当前账号退避
+        error = error.with_same_account_retry_blocked();
     }
     if let Some(code) = failure.upstream_code() {
         error = error.with_upstream_code(OpaqueUpstreamValue::new(code.to_owned()));

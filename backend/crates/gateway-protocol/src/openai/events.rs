@@ -1,4 +1,4 @@
-//! 从 OpenAI 事件与响应头提取用量、额度和重试等待事实
+//! 从 OpenAI 事件与响应头提取用量、额度和重试事实
 
 use std::{collections::BTreeMap, time::Duration};
 
@@ -247,6 +247,37 @@ pub(super) fn retry_after_header(value: &Value) -> Option<(&Value, u64)> {
         .next_back()?;
     let seconds = super::headers::parse_retry_after_seconds(header.to_str().ok()?)?;
     Some((value, seconds))
+}
+
+/// 判断上游错误是否携带 `x-retry-metadata: NO_MORE_RETRY`
+///
+/// 读取位置与 Retry-After 相同：优先错误对象的 headers，再看事件自身的 headers
+/// 只承认这一明确信号，其他取值、数组和非字符串都不构成该事实
+pub fn upstream_no_more_retry(value: &Value) -> bool {
+    let error = value
+        .pointer("/response/error")
+        .or_else(|| value.get("error"))
+        .unwrap_or(value);
+    no_more_retry_headers(error) || no_more_retry_headers(value)
+}
+
+/// 从上游错误正文判断是否声明不再重试当前账号
+pub fn upstream_no_more_retry_from_body(body: &str) -> bool {
+    serde_json::from_str::<Value>(body).is_ok_and(|value| upstream_no_more_retry(&value))
+}
+
+fn no_more_retry_headers(value: &Value) -> bool {
+    value
+        .get("headers")
+        .and_then(Value::as_object)
+        .is_some_and(|headers| {
+            headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("x-retry-metadata")
+                    && value
+                        .as_str()
+                        .is_some_and(|value| value.trim().eq_ignore_ascii_case("NO_MORE_RETRY"))
+            })
+        })
 }
 
 /// 标准化的单个限流窗口

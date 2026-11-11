@@ -4,7 +4,8 @@ use gateway_protocol::openai::events::{
     RateLimitKeySource, RateLimitWindow, TokenUsage, billable_usage_is_complete, extract_sse_usage,
     extract_usage, is_codex_quota_header_name, is_rate_limit_header_name,
     parse_image_rate_limit_headers, parse_rate_limit_headers, parse_rate_limits_event,
-    rate_limits_to_header_pairs, retry_after_seconds_from_body,
+    rate_limits_to_header_pairs, retry_after_seconds_from_body, upstream_no_more_retry,
+    upstream_no_more_retry_from_body,
 };
 use serde_json::json;
 
@@ -427,6 +428,51 @@ fn retry_after_should_not_infer_retry_from_unrelated_error_message() {
     .to_string();
 
     assert_eq!(retry_after_seconds_from_body(&body), None);
+}
+
+#[test]
+fn no_more_retry_should_read_the_error_header_without_replacing_retry_after() {
+    for (body, expected) in [
+        (
+            json!({"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","headers":{"x-retry-metadata":"NO_MORE_RETRY","retry-after":"30","retry-after-ms":"30000"}}}),
+            true,
+        ),
+        (
+            json!({"type":"response.failed","response":{"error":{"headers":{"X-Retry-Metadata":" no_more_retry "}}}}),
+            true,
+        ),
+        (
+            json!({"type":"error","headers":{"x-retry-metadata":"NO_MORE_RETRY"},"error":{"code":"server_is_overloaded"}}),
+            true,
+        ),
+        (
+            json!({"error":{"headers":{"x-retry-metadata":"RETRY","retry-after":"30"}}}),
+            false,
+        ),
+        (
+            json!({"error":{"headers":{"x-retry-metadata":["NO_MORE_RETRY"]}}}),
+            false,
+        ),
+        (
+            json!({"error":{"code":"server_is_overloaded","headers":{"retry-after":"30"}}}),
+            false,
+        ),
+    ] {
+        assert_eq!(upstream_no_more_retry(&body), expected, "{body}");
+        assert_eq!(
+            upstream_no_more_retry_from_body(&body.to_string()),
+            expected,
+            "{body}"
+        );
+    }
+    assert!(!upstream_no_more_retry_from_body("not-json"));
+    assert_eq!(
+        retry_after_seconds_from_body(
+            &json!({"error":{"headers":{"x-retry-metadata":"NO_MORE_RETRY","retry-after":"30"}}})
+                .to_string()
+        ),
+        Some(30)
+    );
 }
 
 #[test]
