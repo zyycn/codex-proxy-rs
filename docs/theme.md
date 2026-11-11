@@ -157,7 +157,7 @@ interface ThemeCustomization {
 
 表格行高与卡片圆角通过 `customization.component` 的 `tableRowHeight`、`cardBorderRadius` 配置，属于组件尺寸覆盖
 
-切换主题预设会更新草稿中的品牌色、材质、尺寸与风格，保留明暗模式以及「功能色与中性色」的设置；保存后应用到管理端
+切换内置主题预设会更新草稿中的品牌色、材质、尺寸与风格，保留明暗模式以及「功能色与中性色」的设置；保存后应用到管理端
 
 表面材质可单独选择：`default` 使用简洁表面，`soft` 使用柔和光影。材质只影响表面高光、渐变与阴影，不改变配色、圆角、字号或组件尺寸
 
@@ -288,7 +288,7 @@ Purple Strong Container 或 Purple Solid；同一组颜色仍由运行时色板�
 | ID | 名称 | 推荐品牌色 | 表面 |
 | --- | --- | --- | --- |
 | `default` | 默认 | 星津夜航 | 简洁表面与轻量阴影 |
-| `soft` | 柔光 | 星津夜航 | 表面高光与分层阴影，配色跟随品牌 |
+| `soft` | 柔光 | 星津夜航 | 表面高光、渐变与分层阴影 |
 
 ### 主题预设
 
@@ -444,7 +444,7 @@ utility / arbitrary variant；Vue Transition、跨浏览器 Range、动态富文
 
 ### 增加预置主题
 
-在 UI 库的 `themeProfiles` 中组合配色 ID 对应的材质与 `ThemeCustomization`。设置页按[预设的应用范围](#seed-token)更新草稿；选中状态从草稿推导，无需额外持久化。材质由组件 Token 派生层实现
+在 UI 库的 `themeProfiles` 中为每个配色 ID 配置材质与 `ThemeCustomization`。内置预设不指定功能色与中性色。设置页通过 `resolveThemeProfile` 应用预设，保留预设未指定的颜色；选中状态由同一结果推导。材质由组件 Token 派生层实现
 
 单独增加品牌配色：
 

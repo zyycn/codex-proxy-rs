@@ -11,6 +11,7 @@ import type {
 import { normalizeHexColor } from '@codex-proxy/ui'
 import {
   applyTheme,
+  createTheme,
   defaultThemeColorId,
   defaultThemeMode,
   defaultThemePresetId,
@@ -25,7 +26,6 @@ import { usePreferredDark, usePreferredReducedMotion, useTimeoutFn } from '@vueu
 
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef, watch } from 'vue'
-import { createAdminTheme } from '@/utils/theme'
 
 interface ThemeTransitionOrigin {
   x: number
@@ -67,7 +67,7 @@ export const useThemeStore = defineStore(
 
     const effectiveTheme = computed(() => resolveThemeScheme(themeMode.value, preferredDark.value))
     const resolvedTheme = computed(() =>
-      createAdminTheme({
+      createTheme({
         scheme: effectiveTheme.value,
         preset: themePreset.value,
         colorId: themeColor.value,
