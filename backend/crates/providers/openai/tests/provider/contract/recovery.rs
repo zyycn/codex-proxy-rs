@@ -483,3 +483,108 @@ mod native_tls {
         server.await.unwrap();
     }
 }
+
+fn overload_event(no_more_retry: bool) -> Value {
+    let mut headers = json!({"retry-after": "30", "retry-after-ms": "30000"});
+    if no_more_retry {
+        headers["x-retry-metadata"] = json!("NO_MORE_RETRY");
+    }
+    json!({
+        "type": "error",
+        "error": {
+            "type": "service_unavailable_error",
+            "code": "server_is_overloaded",
+            "message": "Our servers are currently overloaded. Please try again later.",
+            "headers": headers
+        }
+    })
+}
+
+#[tokio::test]
+async fn upstream_no_more_retry_blocks_same_account_recovery_for_a_short_retry_after() {
+    for (name, websocket, status, body, content_type, blocked, policy, kind) in [
+        (
+            "sse-capacity",
+            false,
+            200,
+            format!("event: error\ndata: {}\n\n", overload_event(true)),
+            "text/event-stream",
+            true,
+            TransientRetryPolicy::RetryThenRotateAccount,
+            ProviderErrorKind::UpstreamCapacityUnavailable,
+        ),
+        (
+            "sse-capacity-without-signal",
+            false,
+            200,
+            format!("event: error\ndata: {}\n\n", overload_event(false)),
+            "text/event-stream",
+            false,
+            TransientRetryPolicy::RetryThenRotateAccount,
+            ProviderErrorKind::UpstreamCapacityUnavailable,
+        ),
+        (
+            "http-server-error",
+            false,
+            503,
+            json!({"error":{"code":"server_error","type":"server_error","message":"retry later","headers":{"x-retry-metadata":"NO_MORE_RETRY","retry-after":"30"}}}).to_string(),
+            "application/json",
+            true,
+            TransientRetryPolicy::RetryThenReturnError,
+            ProviderErrorKind::Unavailable,
+        ),
+        (
+            "websocket-capacity",
+            true,
+            503,
+            json!({"error":{"code":"server_is_overloaded","type":"server_error","message":"Selected model is at capacity. Please try a different model.","headers":{"x-retry-metadata":"NO_MORE_RETRY","retry-after":"30"}}}).to_string(),
+            "application/json",
+            true,
+            TransientRetryPolicy::RetryThenRotateAccount,
+            ProviderErrorKind::UpstreamCapacityUnavailable,
+        ),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        let server = MockServer::start().await;
+        let mut response = ResponseTemplate::new(status).insert_header("content-type", content_type);
+        if status != 200 {
+            response = response.insert_header("retry-after", "30");
+        }
+        Mock::given(method(if websocket { "GET" } else { "POST" }))
+            .and(path("/codex/responses"))
+            .respond_with(response.set_body_string(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let operation = if websocket {
+            capacity_websocket_operation()
+        } else {
+            http_generate_operation()
+        };
+        let mut stream = provider_with_base_url(&store, server.uri())
+            .execute(
+                planned_request("openai", operation),
+                context("req_no_more_retry", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        let (_, error) = stream_failure(&mut stream).await;
+        assert_eq!(error.kind(), kind, "{name}");
+        assert_eq!(error.same_account_retry_blocked(), blocked, "{name}");
+        assert!(!error.retry_is_prohibited(), "{name}");
+        assert_eq!(error.retry_after(), Some(Duration::from_secs(30)), "{name}");
+        assert!(
+            matches!(
+                error.pre_delivery_retry(),
+                Some(PreDeliveryRetry::SameAccountTransientRetry {
+                    policy: actual,
+                    ..
+                }) if actual == policy
+            ),
+            "{name} preserved the exhaustion policy: {:?}",
+            error.pre_delivery_retry()
+        );
+        server.verify().await;
+    }
+}

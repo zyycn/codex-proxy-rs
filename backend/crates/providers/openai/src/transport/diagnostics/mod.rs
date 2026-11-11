@@ -79,6 +79,8 @@ pub struct CodexUpstreamFailure {
     /// 官方 `usage_limit_reached` 错误体携带的窗口重置时间（Unix 秒）
     pub(crate) usage_limit_resets_at: Option<i64>,
     pub(crate) retry_after_seconds: Option<u64>,
+    /// 上游错误头声明不再重试当前账号
+    pub(crate) no_more_retry: bool,
     pub(crate) request_id: Option<String>,
     pub(crate) response_origin: Option<url::Url>,
     pub(crate) set_cookie_headers: Vec<String>,
@@ -127,6 +129,7 @@ impl CodexUpstreamFailure {
                 .then_some(fields.resets_at)
                 .flatten(),
             retry_after_seconds,
+            no_more_retry: gateway_protocol::openai::events::upstream_no_more_retry_from_body(body),
             request_id: diagnostics.request_id.clone(),
             response_origin: diagnostics.response_origin.clone(),
             set_cookie_headers: set_cookie_headers.to_vec(),
@@ -179,6 +182,7 @@ impl CodexUpstreamFailure {
             identity_error_code: diagnostics.identity_error_code.clone(),
             usage_limit_resets_at: None,
             retry_after_seconds: failure.retry_after_seconds,
+            no_more_retry: failure.no_more_retry,
             request_id: failure
                 .request_id
                 .clone()
