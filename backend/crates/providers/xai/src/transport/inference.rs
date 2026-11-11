@@ -26,6 +26,7 @@ pub struct GrokInferenceRequest {
     headers: Vec<MiddlewareHeader>,
     body: Zeroizing<Vec<u8>>,
     binding: GrokSessionBinding,
+    connect_timeout: Option<Duration>,
 }
 
 impl GrokInferenceRequest {
@@ -50,6 +51,7 @@ impl GrokInferenceRequest {
                 .collect(),
             body: Zeroizing::new(body),
             binding,
+            connect_timeout: None,
         }
     }
 
@@ -91,6 +93,18 @@ impl GrokInferenceRequest {
     #[must_use]
     pub const fn binding(&self) -> &GrokSessionBinding {
         &self.binding
+    }
+
+    /// 仅限制本次建连，响应头与正文继续使用调用方的请求期限
+    #[must_use]
+    pub fn with_connect_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    pub const fn connect_timeout(&self) -> Option<Duration> {
+        self.connect_timeout
     }
 
     pub(crate) fn with_prepared(

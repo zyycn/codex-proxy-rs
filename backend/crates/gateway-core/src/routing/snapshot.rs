@@ -1435,6 +1435,7 @@ impl RuntimeSnapshot {
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),
+            proxy_direct_fallback_enabled: self.settings.values.proxy_direct_fallback_enabled,
             privacy: self.settings.privacy.clone(),
             account_error_protection: Arc::clone(&self.settings.account_error_protection),
             account_error_protection_revision: self
@@ -1525,6 +1526,7 @@ impl RuntimeSnapshot {
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),
+            proxy_direct_fallback_enabled: self.settings.values.proxy_direct_fallback_enabled,
             privacy: self.settings.privacy.clone(),
             account_error_protection: Arc::clone(&self.settings.account_error_protection),
             account_error_protection_revision: self

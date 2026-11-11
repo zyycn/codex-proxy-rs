@@ -28,6 +28,68 @@ use provider_xai::{
 use crate::support::{loopback_endpoint_policy, rejecting_account_proxy};
 
 #[tokio::test]
+async fn direct_fallback_connect_budget_does_not_limit_slow_response_headers() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(200))
+                .set_body_raw("data: {}\n\n", "text/event-stream"),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let origin = Url::parse(&server.uri()).unwrap();
+    let transport = inference_transport(&origin);
+    for connect_timeout in [Some(Duration::from_millis(50)), None] {
+        let response = transport
+            .execute(inference_request(&origin).with_connect_timeout(connect_timeout))
+            .await
+            .expect("connection is quick; model response may take longer");
+        let chunks = response.into_body().collect::<Vec<_>>().await;
+        assert!(chunks.iter().all(Result::is_ok));
+    }
+}
+
+#[tokio::test]
+async fn direct_fallback_connect_timeout_preserves_not_sent_fact() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+        "socks5h://{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let server = tokio::spawn(async move {
+        let (_socket, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let origin = Url::parse("https://cli-chat-proxy.grok.com").unwrap();
+    let transport =
+        ReqwestGrokInferenceTransport::new(Arc::new(OfficialGrokEndpointPolicy)).unwrap();
+    let request = GrokInferenceRequest::new(
+        origin.join("v1/responses").unwrap(),
+        Vec::new(),
+        b"{}".to_vec(),
+        GrokSessionBinding::new("timeout-account")
+            .unwrap()
+            .with_outbound_proxy(Some(proxy)),
+    )
+    .with_connect_timeout(Some(Duration::from_millis(80)));
+    let error = tokio::time::timeout(Duration::from_secs(2), transport.execute(request))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    let source = std::error::Error::source(&error)
+        .unwrap()
+        .downcast_ref::<reqwest::Error>()
+        .unwrap();
+    assert!(source.is_connect() && source.is_timeout());
+    server.abort();
+}
+
+#[tokio::test]
 async fn inference_transport_preserves_verbatim_unknown_codes_without_changing_classification() {
     for code in [
         " Vendor.Future:v2-UNRECOGNIZED ",
@@ -1364,16 +1426,21 @@ impl GrokEndpointPolicy for CountingEndpointPolicy {
     fn build_inference_client(
         &self,
         timeout: Option<Duration>,
+        connect_timeout: Option<Duration>,
         proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
         self.inference_client_builds.fetch_add(1, Ordering::SeqCst);
         let Some(concurrency) = &self.concurrency else {
-            return self.inner.build_inference_client(timeout, proxy);
+            return self
+                .inner
+                .build_inference_client(timeout, connect_timeout, proxy);
         };
         let active = concurrency.active.fetch_add(1, Ordering::SeqCst) + 1;
         concurrency.max_active.fetch_max(active, Ordering::SeqCst);
         std::thread::sleep(concurrency.delay);
-        let result = self.inner.build_inference_client(timeout, proxy);
+        let result = self
+            .inner
+            .build_inference_client(timeout, connect_timeout, proxy);
         concurrency.active.fetch_sub(1, Ordering::SeqCst);
         result
     }

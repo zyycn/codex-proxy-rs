@@ -95,6 +95,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 vec![
                     "provider_request_profiles_json".to_owned(),
                     "request_location_enabled".to_owned(),
+                    "proxy_direct_fallback_enabled".to_owned(),
                     "request_location_json".to_owned(),
                     "codex_privacy_policy_json".to_owned(),
                     "model_mappings_json".to_owned(),

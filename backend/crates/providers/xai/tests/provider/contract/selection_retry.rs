@@ -58,7 +58,345 @@ impl ExecutionStore for NoopExecutionStore {
     }
 }
 
+struct ProxyBoundSelector(gateway_core::account::OutboundProxy);
+
+impl GrokSessionSelector for ProxyBoundSelector {
+    fn select(&self, request: GrokSessionSelection) -> GrokSessionSelectorFuture<'_> {
+        Box::pin(async move {
+            let id = account_id("provider");
+            if request.excluded_accounts().contains(&id)
+                || request
+                    .required_account()
+                    .is_some_and(|required| required != &id)
+            {
+                return Err(GrokSessionSelectorError::NoEligibleSession);
+            }
+            SelectedGrokSession::new(
+                id,
+                CredentialRevision::new(1).unwrap(),
+                SecretValue::new("oauth-access"),
+                SecretValue::new("verified-user"),
+                None,
+                GrokSessionBinding::new("acct_provider")
+                    .unwrap()
+                    .with_outbound_proxy(Some(self.0.clone())),
+                (),
+            )
+            .map_err(|_| GrokSessionSelectorError::InvalidSession(None))
+        })
+    }
+
+    fn record_failure<'a>(
+        &'a self,
+        _: &'a SelectedGrokSession,
+        _: GrokCredentialFailure,
+    ) -> GrokCredentialFeedbackFuture<'a> {
+        Box::pin(async {})
+    }
+}
+
+// 测试仅替换上游地址，真实 Reqwest 仍按 Provider 给出的出口绑定建连
+struct LoopbackInferenceTransport {
+    inner: provider_xai::ReqwestGrokInferenceTransport,
+    endpoint: url::Url,
+}
+
+impl GrokInferenceTransport for LoopbackInferenceTransport {
+    fn execute(&self, request: GrokInferenceRequest) -> GrokInferenceTransportFuture<'_> {
+        assert_eq!(
+            request
+                .headers()
+                .iter()
+                .find(|header| header.name() == "authorization")
+                .unwrap()
+                .value()
+                .as_ref(),
+            b"Bearer oauth-access"
+        );
+        let session = SelectedGrokSession::new(
+            account_id("provider"),
+            CredentialRevision::new(1).unwrap(),
+            SecretValue::new("oauth-access"),
+            SecretValue::new("verified-user"),
+            None,
+            request.binding().clone(),
+            (),
+        )
+        .unwrap();
+        let headers = provider_xai::build_grok_headers(
+            &crate::support::xai_wire_profile(),
+            &session,
+            &provider_xai::GrokClientIdentity::new(),
+            &ModelRequestId::new("req_local_forward").unwrap(),
+            None,
+            None,
+            &UpstreamModelId::new(MODEL).unwrap(),
+        );
+        self.inner.execute(
+            GrokInferenceRequest::new(
+                self.endpoint.clone(),
+                headers,
+                request.body().to_vec(),
+                request.binding().clone(),
+            )
+            .with_connect_timeout(request.connect_timeout()),
+        )
+    }
+}
+
+#[tokio::test]
+async fn proxy_direct_fallback_reaches_xai_through_core_without_changing_account_binding() {
+    use gateway_core::account::OutboundProxy;
+    use tokio::io::AsyncReadExt;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    for allow in [false, true] {
+        let origin = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(SUCCESS_SSE, "text/event-stream"))
+            .mount(&origin)
+            .await;
+        let origin_url = url::Url::parse(&origin.uri()).unwrap();
+        let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = OutboundProxy::parse(&format!(
+            "socks5h://{}",
+            proxy_listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let proxy_server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = proxy_listener.accept().await.unwrap();
+                observed.fetch_add(1, Ordering::SeqCst);
+                let mut greeting = [0; 2];
+                let _ = socket.read_exact(&mut greeting).await;
+            }
+        });
+        let selector = Arc::new(ProxyBoundSelector(proxy));
+        let transport = Arc::new(LoopbackInferenceTransport {
+            inner: provider_xai::ReqwestGrokInferenceTransport::new(
+                crate::support::loopback_endpoint_policy(&origin_url),
+            )
+            .unwrap(),
+            endpoint: origin_url.join("v1/responses").unwrap(),
+        });
+        let provider = provider_with_catalog_transport(
+            selector,
+            transport,
+            StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+            Arc::new(StaticCatalogTransport),
+        )
+        .await;
+        let registry = ProviderRegistry::new([provider as Arc<dyn Provider>]).unwrap();
+        let coordinator =
+            AttemptCoordinator::new(GatewayEngine::new(Arc::new(NoopExecutionStore), registry));
+        for _ in 0..if allow { 2 } else { 1 } {
+            let operation = operation();
+            let plan = routing_plan_with_proxy_fallback(&operation, false, allow);
+            let mut session = coordinator
+                .start(
+                    model_request(&operation),
+                    operation,
+                    plan,
+                    None,
+                    None,
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            let result = session.collect_uncommitted().await;
+            assert_eq!(result.is_ok(), allow, "allow={allow}, result={result:?}");
+            if allow {
+                session.commit_downstream(Some(200)).await.unwrap();
+            }
+        }
+        let requests = origin.received_requests().await.unwrap();
+        assert_eq!(requests.len(), if allow { 2 } else { 0 });
+        assert!(calls.load(Ordering::SeqCst) >= if allow { 2 } else { 1 });
+        for request in requests {
+            assert_eq!(request.headers["authorization"], "Bearer oauth-access");
+        }
+        proxy_server.abort();
+    }
+}
+
+#[tokio::test]
+async fn internal_xai_payload_retry_never_requests_direct_fallback() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let unreachable = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let cause = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(unreachable)
+        .send()
+        .await
+        .unwrap_err();
+    assert!(cause.is_connect());
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::Error(
+            GrokInferenceTransportError::new(
+                GrokInferenceTransportErrorKind::InvalidRequest,
+                UpstreamSendState::Sent,
+            )
+            .with_status(400)
+            .with_upstream_code(OpaqueUpstreamValue::new("reasoning_decode_failed")),
+        ),
+        InferenceMode::Error(
+            GrokInferenceTransportError::new(
+                GrokInferenceTransportErrorKind::Transport,
+                UpstreamSendState::NotSent,
+            )
+            .with_source(cause),
+        ),
+    ]);
+    let selector = Arc::new(ProxyBoundSelector(
+        gateway_core::account::OutboundProxy::parse("socks5h://127.0.0.1:18080").unwrap(),
+    ));
+    let provider = provider_with_catalog_transport(
+        selector,
+        transport.clone(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(StaticCatalogTransport),
+    )
+    .await;
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", json!({
+            "model":"client-model", "input":[
+                {"type":"reasoning","id":"reason_stale","summary":[],"content":null,"encrypted_content":"stale-ciphertext"},
+                {"type":"message","role":"user","content":"continue"}
+            ]
+        }).as_object().unwrap().clone()).unwrap()
+    ));
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", operation),
+            context_with_proxy_fallback(CancellationToken::new(), None, None, false, true),
+        )
+        .await
+        .unwrap();
+    let error = next_provider_error(&mut stream).await;
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(error.send_state(), UpstreamSendState::Sent);
+    assert!(!matches!(
+        error.pre_delivery_retry(),
+        Some(gateway_core::error::PreDeliveryRetry::SameAccountDirectFallback { .. })
+    ));
+}
+
+#[tokio::test]
+async fn direct_fallback_xai_respects_exhausted_opening_budget() {
+    let transport = StubInferenceTransport::success();
+    let selector = Arc::new(ProxyBoundSelector(
+        gateway_core::account::OutboundProxy::parse("socks5h://127.0.0.1:18080").unwrap(),
+    ));
+    let provider = provider_with_catalog_transport(
+        selector,
+        transport.clone(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(StaticCatalogTransport),
+    )
+    .await;
+    let context = context_with_proxy_fallback(CancellationToken::new(), None, None, false, true);
+    for _ in 0..4 {
+        context.connection_budget().begin().unwrap();
+    }
+    let mut stream = provider
+        .execute(provider_request("xai"), context)
+        .await
+        .unwrap();
+    let error = next_provider_error(&mut stream).await;
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert_eq!(error.kind(), ProviderErrorKind::Timeout);
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn xai_tls_failure_never_requests_direct_fallback() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("https://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut hello = [0; 5];
+        socket.read_exact(&mut hello).await.unwrap();
+        let mut record = vec![0; usize::from(u16::from_be_bytes([hello[3], hello[4]]))];
+        socket.read_exact(&mut record).await.unwrap();
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        socket.shutdown().await.unwrap();
+        // 读完 ClientHello 后再半关闭，避免未读数据触发 TCP RST 掩盖真实 TLS 协议错误
+        let _ = socket.read_to_end(&mut Vec::new()).await;
+    });
+    let cause = reqwest::Client::builder()
+        .use_rustls_tls()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(endpoint)
+        .send()
+        .await
+        .unwrap_err();
+    assert!(cause.is_connect());
+    let mut source = Some(&cause as &(dyn std::error::Error + 'static));
+    let mut tls_error = false;
+    while let Some(error) = source {
+        tls_error |= error.is::<rustls::Error>();
+        source = error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .map(|inner| inner as &(dyn std::error::Error + 'static))
+            .or_else(|| error.source());
+    }
+    assert!(tls_error, "fixture must fail TLS validation: {cause:?}");
+    server.await.unwrap();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::Transport,
+            UpstreamSendState::NotSent,
+        )
+        .with_source(cause),
+    );
+    let selector = Arc::new(ProxyBoundSelector(
+        gateway_core::account::OutboundProxy::parse("socks5h://127.0.0.1:18080").unwrap(),
+    ));
+    let provider = provider_with_catalog_transport(
+        selector,
+        transport.clone(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(StaticCatalogTransport),
+    )
+    .await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context_with_proxy_fallback(CancellationToken::new(), None, None, false, true),
+        )
+        .await
+        .unwrap();
+    let error = next_provider_error(&mut stream).await;
+    assert!(!matches!(
+        error.pre_delivery_retry(),
+        Some(gateway_core::error::PreDeliveryRetry::SameAccountDirectFallback { .. })
+    ));
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+}
+
 fn routing_plan(operation: &Operation, backup: bool) -> gateway_core::routing::RoutingPlan {
+    routing_plan_with_proxy_fallback(operation, backup, false)
+}
+
+fn routing_plan_with_proxy_fallback(
+    operation: &Operation,
+    backup: bool,
+    enabled: bool,
+) -> gateway_core::routing::RoutingPlan {
     let names = if backup {
         vec!["xai", "zzfallback"]
     } else {
@@ -84,7 +422,8 @@ fn routing_plan(operation: &Operation, backup: bool) -> gateway_core::routing::R
     let directory = Arc::new(RuntimeAccountDirectory::new(entries));
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
-        gateway_core::settings::SettingsValues::new(3, "smart", Default::default(), None, None),
+        gateway_core::settings::SettingsValues::new(3, "smart", Default::default(), None, None)
+            .with_proxy_direct_fallback_enabled(enabled),
         kinds.clone(),
         kinds
             .iter()

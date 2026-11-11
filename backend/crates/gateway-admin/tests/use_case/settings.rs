@@ -327,6 +327,7 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 values: gateway_admin::model::settings::RuntimeSettingsValues {
                     codex_privacy_policy: Default::default(),
                     request_location_enabled: false,
+                    proxy_direct_fallback_enabled: false,
                     request_location: Default::default(),
                     refresh_margin_seconds: 0,
                     refresh_concurrency: 1,

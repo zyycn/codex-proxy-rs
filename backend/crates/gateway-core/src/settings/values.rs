@@ -16,6 +16,8 @@ pub struct SettingsValues {
     pub(crate) request_profiles: Arc<BTreeMap<ProviderKind, crate::account::OpaqueProviderData>>,
     pub(crate) codex_privacy_policy: super::privacy::CodexPrivacyPolicy,
     pub(crate) request_location_enabled: bool,
+    #[serde(default)]
+    pub(crate) proxy_direct_fallback_enabled: bool,
     pub(crate) request_location: crate::account::RequestLocation,
     pub(crate) max_concurrent_per_account: u32,
     pub(crate) max_waiting_per_key: u32,
@@ -41,6 +43,12 @@ fn initial_protection_revision() -> u64 {
 }
 
 impl SettingsValues {
+    #[must_use]
+    pub const fn with_proxy_direct_fallback_enabled(mut self, enabled: bool) -> Self {
+        self.proxy_direct_fallback_enabled = enabled;
+        self
+    }
+
     #[must_use]
     pub const fn with_account_error_protection_revision(mut self, revision: u64) -> Self {
         self.account_error_protection_revision = revision;
@@ -187,6 +195,7 @@ impl SettingsValues {
             pricing: Arc::default(),
             codex_privacy_policy: Default::default(),
             request_location_enabled: false,
+            proxy_direct_fallback_enabled: false,
             request_location: crate::account::RequestLocation::default(),
             max_concurrent_per_account,
             max_waiting_per_key: 0,

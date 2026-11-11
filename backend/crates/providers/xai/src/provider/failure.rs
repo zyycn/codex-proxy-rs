@@ -509,10 +509,66 @@ pub(super) fn model_cooling_down_message(retry_after: Option<Duration>) -> Strin
 pub(super) fn map_transport_error_for_context(
     error: GrokInferenceTransportError,
     context: &AttemptContext,
+    session: &SelectedGrokSession,
+    payload_already_sent: bool,
 ) -> ProviderError {
+    let direct_fallback = !payload_already_sent
+        && !context.uses_direct_fallback(session.account_id())
+        && (context.proxy_direct_fallback_enabled()
+            && session.binding().outbound_proxy().is_some())
+        && error.send_state() == UpstreamSendState::NotSent
+        && transient_connect_failure(&error);
     let allow_explicit_replay = context.continuation().is_none()
         || error.kind() == GrokInferenceTransportErrorKind::Unauthorized;
-    map_transport_error_with_state(error, None, allow_explicit_replay)
+    let mapped = map_transport_error_with_state(
+        error,
+        payload_already_sent.then_some(UpstreamSendState::Sent),
+        allow_explicit_replay,
+    );
+    if direct_fallback {
+        mapped.with_direct_fallback(gateway_core::engine::AttemptTransport::Default)
+    } else {
+        mapped
+    }
+}
+
+/// 仅放行带真实 HTTP 建连来源的瞬时 I/O 故障，证书及配置错误不绕过代理
+fn transient_connect_failure(error: &GrokInferenceTransportError) -> bool {
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if let Some(http) = cause.downcast_ref::<reqwest::Error>() {
+            if !http.is_connect() || http.is_builder() {
+                return false;
+            }
+            // SOCKS 的内部错误未暴露 source，不能要求所有建连故障都有 std::io 来源
+            // TLS 仍按类型排除，避免把证书或协议校验失败当作可直连的出口故障
+            let mut source = std::error::Error::source(http);
+            while let Some(cause) = source {
+                if cause.is::<rustls::Error>() {
+                    return false;
+                }
+                if let Some(io) = cause.downcast_ref::<std::io::Error>()
+                    && matches!(
+                        io.kind(),
+                        std::io::ErrorKind::InvalidData
+                            | std::io::ErrorKind::InvalidInput
+                            | std::io::ErrorKind::PermissionDenied
+                    )
+                {
+                    return false;
+                }
+                // io::Error::source 会跳过包装层，get_ref 保留嵌套的 TLS/InvalidData 类型
+                source = cause
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::get_ref)
+                    .map(|inner| inner as &(dyn std::error::Error + 'static))
+                    .or_else(|| cause.source());
+            }
+            return true;
+        }
+        source = cause.source();
+    }
+    false
 }
 
 pub(super) fn map_stream_error(error: GrokInferenceTransportError) -> ProviderError {

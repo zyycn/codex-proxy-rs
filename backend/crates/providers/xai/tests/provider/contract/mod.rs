@@ -1794,6 +1794,22 @@ fn context_with_recovery_state(
     required_account: Option<gateway_core::account::ProviderAccountId>,
     recovery_attempted: bool,
 ) -> AttemptContext {
+    context_with_proxy_fallback(
+        cancellation,
+        continuation,
+        required_account,
+        recovery_attempted,
+        false,
+    )
+}
+
+fn context_with_proxy_fallback(
+    cancellation: CancellationToken,
+    continuation: Option<ContinuationBinding>,
+    required_account: Option<gateway_core::account::ProviderAccountId>,
+    recovery_attempted: bool,
+    enabled: bool,
+) -> AttemptContext {
     let account_state_owner = continuation
         .as_ref()
         .and_then(ContinuationBinding::pinned)
@@ -1802,7 +1818,8 @@ fn context_with_recovery_state(
         gateway_core::engine::RequestAttemptContext::new(
             ModelRequestId::new("req_xai").expect("request ID"),
             gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
-        ),
+        )
+        .with_proxy_direct_fallback_enabled(enabled),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         selection_policy(),

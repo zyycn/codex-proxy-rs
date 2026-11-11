@@ -165,6 +165,10 @@ pub enum PreDeliveryRetry {
         /// Provider 明确指定实际失败的传输，避免 HTTP 恢复重新进入 WS
         transport: crate::upstream::AttemptTransport,
     },
+    /// 指定代理明确在发送前连接失败，申请同账号的一次请求内直连
+    SameAccountDirectFallback {
+        transport: crate::upstream::AttemptTransport,
+    },
     /// 固定本次账号，并要求 Provider 使用备用传输
     SameAccountTransportFallback,
 }
@@ -738,6 +742,15 @@ impl ProviderError {
     #[must_use]
     pub fn with_connection_retry(mut self, transport: crate::upstream::AttemptTransport) -> Self {
         self.pre_delivery_retry = Some(Box::new(PreDeliveryRetry::SameAccountConnectionRetry {
+            transport,
+        }));
+        self
+    }
+
+    /// 仅由原生 Provider 在全局设置允许且连接错误安全时申请
+    #[must_use]
+    pub fn with_direct_fallback(mut self, transport: crate::upstream::AttemptTransport) -> Self {
+        self.pre_delivery_retry = Some(Box::new(PreDeliveryRetry::SameAccountDirectFallback {
             transport,
         }));
         self

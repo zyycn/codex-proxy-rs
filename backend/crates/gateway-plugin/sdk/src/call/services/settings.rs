@@ -138,6 +138,7 @@ pub struct PrivacyPreviewResult {
 pub struct RuntimeSettings {
     pub codex_privacy_policy: CodexPrivacyPolicy,
     pub request_location_enabled: bool,
+    pub proxy_direct_fallback_enabled: bool,
     pub request_location: RequestLocation,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -178,6 +179,7 @@ pub struct RuntimeSettings {
 pub struct ReplaceRuntimeSettings {
     pub codex_privacy_policy: CodexPrivacyPolicy,
     pub request_location_enabled: bool,
+    pub proxy_direct_fallback_enabled: bool,
     pub request_location: RequestLocation,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -380,6 +382,7 @@ impl From<RuntimeSettings> for ReplaceRuntimeSettings {
         Self {
             codex_privacy_policy: settings.codex_privacy_policy,
             request_location_enabled: settings.request_location_enabled,
+            proxy_direct_fallback_enabled: settings.proxy_direct_fallback_enabled,
             request_location: settings.request_location,
             refresh_margin_seconds: settings.refresh_margin_seconds,
             refresh_concurrency: settings.refresh_concurrency,

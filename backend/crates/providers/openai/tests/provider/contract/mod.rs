@@ -1711,11 +1711,22 @@ fn context_with_pricing(
     fast_mode: FastMode,
     pricing: gateway_core::metering::PricingOverrides,
 ) -> AttemptContext {
+    context_with_proxy_fallback(request_id, cancellation, fast_mode, pricing, false)
+}
+
+fn context_with_proxy_fallback(
+    request_id: &str,
+    cancellation: CancellationToken,
+    fast_mode: FastMode,
+    pricing: gateway_core::metering::PricingOverrides,
+    enabled: bool,
+) -> AttemptContext {
     context_for_request(
         RequestAttemptContext::new(
             ModelRequestId::new(request_id).expect("request id"),
             ClientApiKeyId::new("key_openai_contract").expect("client key id"),
         )
+        .with_proxy_direct_fallback_enabled(enabled)
         .with_fast_mode(fast_mode)
         .with_pricing(Arc::new(pricing))
         .with_request_location(Some(global_request_location())),
@@ -13098,6 +13109,139 @@ async fn transient_socks_openings_offer_same_account_http_retry_and_send_one_pay
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn direct_fallback_json_endpoints_respect_exhausted_opening_budget() {
+    for image in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        let proxy = MockServer::start().await;
+        store.set_egress(
+            "acct_provider_contract",
+            Some(gateway_core::account::OutboundProxy::parse(&proxy.uri()).unwrap()),
+            None,
+        );
+        let body = if image {
+            br#"{"model":"gpt-image-2","prompt":"fixture"}"#.as_slice()
+        } else {
+            br#"{"commands":{"search_query":[{"q":"fixture"}]}}"#.as_slice()
+        };
+        let payload = RawJsonPayload::new("openai", Bytes::copy_from_slice(body)).unwrap();
+        let operation = if image {
+            Operation::GenerateImage(ImageRequest::from_raw_json(
+                ImageRequestKind::Generation,
+                payload,
+            ))
+        } else {
+            Operation::Search(StandaloneSearchRequest::from_raw_json(payload))
+        };
+        let context = context_with_proxy_fallback(
+            "req_json_budget",
+            CancellationToken::new(),
+            FastMode::Default,
+            Default::default(),
+            true,
+        );
+        for _ in 0..4 {
+            context.connection_budget().begin().unwrap();
+        }
+        let mut stream = provider_with_base_url(&store, "http://upstream.invalid".to_owned())
+            .execute(
+                planned_provider_endpoint_request("openai", operation),
+                context,
+            )
+            .await
+            .unwrap();
+        let mut failure = None;
+        while let Some(event) = stream.next().await {
+            if let Err(error) = event {
+                failure = Some(error);
+                break;
+            }
+        }
+        let failure = failure.expect("exhausted opening budget");
+        assert_eq!(failure.send_state(), UpstreamSendState::NotSent);
+        assert_eq!(failure.kind(), ProviderErrorKind::Timeout);
+        assert!(proxy.received_requests().await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn proxy_tls_errors_distinguish_handshake_eof_from_invalid_protocol() {
+    for invalid_protocol in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+            "socks5h://{}",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut greeting = [0; 2];
+            socket.read_exact(&mut greeting).await.unwrap();
+            let mut methods = vec![0; usize::from(greeting[1])];
+            socket.read_exact(&mut methods).await.unwrap();
+            socket.write_all(&[5, 0]).await.unwrap();
+            let mut connect = [0; 4];
+            socket.read_exact(&mut connect).await.unwrap();
+            assert_eq!(connect, [5, 1, 0, 3]);
+            let length = socket.read_u8().await.unwrap();
+            let mut target = vec![0; usize::from(length) + 2];
+            socket.read_exact(&mut target).await.unwrap();
+            socket
+                .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 80])
+                .await
+                .unwrap();
+            // 区分 TLS 完成前断开和协议错误，两者均未发送模型正文
+            let mut hello = [0; 5];
+            socket.read_exact(&mut hello).await.unwrap();
+            let mut record = vec![0; usize::from(u16::from_be_bytes([hello[3], hello[4]]))];
+            socket.read_exact(&mut record).await.unwrap();
+            if invalid_protocol {
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+            socket.shutdown().await.unwrap();
+            let _ = socket.read_to_end(&mut Vec::new()).await;
+        });
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        store.set_egress("acct_provider_contract", Some(proxy), None);
+        let mut stream = provider_with_base_url(&store, "https://upstream.invalid".into())
+            .execute(
+                planned_request("openai", generate_operation()),
+                context_with_proxy_fallback(
+                    "req_proxy_bad_tls",
+                    CancellationToken::new(),
+                    FastMode::Default,
+                    Default::default(),
+                    true,
+                )
+                .with_transport(AttemptTransport::Fallback),
+            )
+            .await
+            .unwrap();
+        let mut failure = None;
+        while let Some(event) = stream.next().await {
+            if let Err(error) = event {
+                failure = Some(error);
+                break;
+            }
+        }
+        let failure = failure.expect("TLS opening must fail");
+        assert_eq!(failure.send_state(), UpstreamSendState::NotSent);
+        assert_eq!(
+            matches!(
+                failure.pre_delivery_retry(),
+                Some(PreDeliveryRetry::SameAccountDirectFallback { .. })
+            ),
+            !invalid_protocol
+        );
+        server.await.unwrap();
+    }
 }
 
 #[tokio::test]

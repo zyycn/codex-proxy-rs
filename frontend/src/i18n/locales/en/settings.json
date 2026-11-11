@@ -722,6 +722,11 @@
       "moreValues": "{values} OR {count} more",
       "messageHelp": "Contains checks the first 8 KiB of the error message, preserving complete characters, equals compares the full message, longer messages are not treated as missing",
       "limitsHelp": "Up to 32 rules, 8 conditions per rule, and 16 values per condition, all rule text and the probe model share a 64 KiB UTF-8 limit"
+    },
+    "proxyFallback": {
+      "title": "Proxy direct fallback",
+      "enabled": "Enable direct fallback globally",
+      "help": "Applies to OpenAI / xAI model requests through all proxies, using the server IP after a connection failure when retrying is safe — sent requests with uncertain results are not replayed"
     }
   }
 }

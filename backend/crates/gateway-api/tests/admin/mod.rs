@@ -644,6 +644,7 @@ impl SettingsStore for MemorySettingsStore {
             values: gateway_admin::model::settings::RuntimeSettingsValues {
                 codex_privacy_policy: command.values.codex_privacy_policy,
                 request_location_enabled: command.values.request_location_enabled,
+                proxy_direct_fallback_enabled: command.values.proxy_direct_fallback_enabled,
                 request_location: command.values.request_location,
                 refresh_margin_seconds: command.values.refresh_margin_seconds,
                 refresh_concurrency: command.values.refresh_concurrency,
@@ -1924,6 +1925,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         values: gateway_admin::model::settings::RuntimeSettingsValues {
             codex_privacy_policy: Default::default(),
             request_location_enabled: false,
+            proxy_direct_fallback_enabled: false,
             request_location: Default::default(),
             refresh_margin_seconds: 3_600,
             refresh_concurrency: 2,

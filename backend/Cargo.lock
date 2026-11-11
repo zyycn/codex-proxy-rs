@@ -3415,6 +3415,7 @@ dependencies = [
  "jsonwebtoken",
  "p256",
  "reqwest",
+ "rustls",
  "semver",
  "serde",
  "serde_json",

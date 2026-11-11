@@ -1164,6 +1164,7 @@ impl SettingsStore for StaticSettingsStore {
             values: gateway_admin::model::settings::RuntimeSettingsValues {
                 codex_privacy_policy: Default::default(),
                 request_location_enabled: false,
+                proxy_direct_fallback_enabled: false,
                 request_location: Default::default(),
                 refresh_margin_seconds: 300,
                 refresh_concurrency: 2,

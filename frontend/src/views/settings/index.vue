@@ -15,6 +15,7 @@ import ConcurrencyPolicyCard from './components/ConcurrencyPolicyCard.vue'
 import AccountErrorProtectionCard from './components/error-protection/AccountErrorProtectionCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import PrivacyPolicyCard from './components/privacy/PrivacyPolicyCard.vue'
+import ProxyFallbackCard from './components/ProxyFallbackCard.vue'
 import RequestHistoryCard from './components/RequestHistoryCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import ResetCreditCard from './components/ResetCreditCard.vue'
@@ -238,6 +239,7 @@ watch(section, (value) => {
             :active="section === 'upstream'"
             :disabled="disabled"
           />
+          <ProxyFallbackCard v-model="form.proxyDirectFallbackEnabled" :disabled="disabled" />
           <RequestLocationCard
             v-model="form.requestLocation"
             v-model:enabled="form.requestLocationEnabled"

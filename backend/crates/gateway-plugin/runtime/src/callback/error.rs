@@ -81,6 +81,11 @@ fn provider(error: &ProviderError) -> PluginFault {
         "pre_delivery_retry": error.pre_delivery_retry().map(|value| match value {
             PreDeliveryRetry::AccountRotation => json!({"kind":"account_rotation"}),
             PreDeliveryRetry::SameAccountTransportFallback => json!({"kind":"same_account_transport_fallback"}),
+            PreDeliveryRetry::SameAccountDirectFallback { transport } => json!({"kind":"same_account_direct_fallback","transport": match transport {
+                gateway_core::engine::AttemptTransport::Default => json!({"kind":"default"}),
+                gateway_core::engine::AttemptTransport::Retry(index) => json!({"kind":"retry","index":index.get()}),
+                gateway_core::engine::AttemptTransport::Fallback => json!({"kind":"fallback"}),
+            }}),
             PreDeliveryRetry::SameAccountConnectionRetry {transport} => json!({"kind":"same_account_connection_retry","transport": match transport {
                 gateway_core::engine::AttemptTransport::Default => json!({"kind":"default"}),
                 gateway_core::engine::AttemptTransport::Retry(index) => json!({"kind":"retry","index":index.get()}),

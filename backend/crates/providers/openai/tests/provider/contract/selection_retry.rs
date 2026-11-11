@@ -58,6 +58,192 @@ impl ExecutionStore for NoopExecutionStore {
 }
 
 #[tokio::test]
+async fn proxy_direct_fallback_runs_one_same_account_request_and_keeps_configured_proxy() {
+    use gateway_core::account::OutboundProxy;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for websocket in [false, true] {
+        for allow in [false, true] {
+            let origin = MockServer::start().await;
+            let direct_payloads = Arc::new(Mutex::new(Vec::new()));
+            let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let ws_origin = format!("http://{}", ws_listener.local_addr().unwrap());
+            let payloads = direct_payloads.clone();
+            let ws_server = tokio::spawn(async move {
+                loop {
+                    let (socket, _) = ws_listener.accept().await.unwrap();
+                    let mut ws = accept_codex_test_websocket(socket).await;
+                    while let Some(Ok(message)) = ws.next().await {
+                        if let Message::Text(text) = message {
+                            payloads
+                                .lock()
+                                .unwrap()
+                                .push(serde_json::from_str::<Value>(&text).unwrap());
+                            ws.send(Message::Text(json!({"type":"response.completed","response":{
+                                "id":"resp_direct", "model":"gpt-5.4", "status":"completed", "output":[]
+                            }}).to_string().into())).await.unwrap();
+                        }
+                    }
+                }
+            });
+            Mock::given(method("POST"))
+                .and(path("/codex/responses"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+                )
+                .mount(&origin)
+                .await;
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let proxy =
+                OutboundProxy::parse(&format!("socks5h://{}", listener.local_addr().unwrap()))
+                    .unwrap();
+            let proxy_calls = Arc::new(AtomicUsize::new(0));
+            let calls = proxy_calls.clone();
+            let proxy_server = tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    // 在 SOCKS 握手时断开，模型请求正文尚未到达出口
+                    let mut greeting = [0; 2];
+                    let _ = socket.read_exact(&mut greeting).await;
+                }
+            });
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_provider_contract").await;
+            let proxy_location = gateway_core::account::RequestLocation {
+                country: "JP".into(),
+                region: "Tokyo".into(),
+                city: "Tokyo".into(),
+                timezone: "Asia/Tokyo".parse().unwrap(),
+            };
+            store.set_egress("acct_provider_contract", Some(proxy), Some(proxy_location));
+            let provider =
+                provider_with_base_url(&store, if websocket { ws_origin } else { origin.uri() });
+            let providers = ProviderRegistry::new([
+                provider as Arc<dyn gateway_core::engine::provider::Provider>
+            ])
+            .unwrap();
+            let coordinator = AttemptCoordinator::new(GatewayEngine::new(
+                Arc::new(NoopExecutionStore),
+                providers,
+            ));
+            let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object(
+                    "openai",
+                    json!({
+                        "model":"gpt-5.4", "input":"hello", "tools":[{"type":"web_search"}]
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                )
+                .unwrap()
+                .with_context(Map::from_iter([("use_websocket".into(), json!(websocket))])),
+            ));
+            for index in 0..if allow { 2 } else { 1 } {
+                let mut session = coordinator
+                    .start(
+                        execution_request(
+                            &format!("req_proxy_fallback_{index}"),
+                            &operation,
+                            Duration::from_secs(10),
+                        ),
+                        operation.clone(),
+                        execution_plan_with_proxy_fallback(&operation, allow),
+                        None,
+                        None,
+                        CancellationToken::new(),
+                    )
+                    .await
+                    .unwrap();
+                let result = session.collect_uncommitted().await;
+                assert_eq!(
+                    result.is_ok(),
+                    allow,
+                    "websocket={websocket}, allow={allow}, result={result:?}"
+                );
+                if allow {
+                    session.commit_downstream(Some(200)).await.unwrap();
+                }
+            }
+            let requests = origin.received_requests().await.unwrap();
+            assert_eq!(requests.len(), if allow && !websocket { 2 } else { 0 });
+            let payloads = direct_payloads.lock().unwrap();
+            assert_eq!(payloads.len(), if allow && websocket { 2 } else { 0 });
+            for body in payloads.iter() {
+                assert_eq!(
+                    body.pointer("/tools/0/user_location/timezone"),
+                    Some(&json!("Pacific/Auckland"))
+                );
+            }
+            for request in &requests {
+                assert_eq!(
+                    request.headers["authorization"],
+                    "Bearer at-acct_provider_contract"
+                );
+                let body = captured_request_body(request);
+                assert_eq!(
+                    body.pointer("/tools/0/user_location/timezone"),
+                    Some(&json!("Pacific/Auckland"))
+                );
+            }
+            assert!(proxy_calls.load(Ordering::SeqCst) >= if allow { 2 } else { 1 });
+            proxy_server.abort();
+            ws_server.abort();
+        }
+    }
+}
+
+#[tokio::test]
+async fn healthy_proxy_and_business_rejection_do_not_use_direct_fallback() {
+    use gateway_core::account::OutboundProxy;
+    for status in [200, 403] {
+        let origin = MockServer::start().await;
+        let proxy = MockServer::start().await;
+        let response = if status == 200 {
+            ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream")
+        } else {
+            ResponseTemplate::new(403).set_body_json(
+                json!({"error":{"message":"fixture rejection","type":"permission_denied"}}),
+            )
+        };
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(response)
+            .mount(&proxy)
+            .await;
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        store.set_egress(
+            "acct_provider_contract",
+            Some(OutboundProxy::parse(&proxy.uri()).unwrap()),
+            None,
+        );
+        let provider = provider_with_base_url(&store, origin.uri());
+        let providers =
+            ProviderRegistry::new([provider as Arc<dyn gateway_core::engine::provider::Provider>])
+                .unwrap();
+        let coordinator =
+            AttemptCoordinator::new(GatewayEngine::new(Arc::new(NoopExecutionStore), providers));
+        let operation = turn_request("proxy-session", "proxy-turn");
+        let mut session = coordinator
+            .start(
+                execution_request("req_proxy_healthy", &operation, Duration::from_secs(10)),
+                operation.clone(),
+                execution_plan_with_proxy_fallback(&operation, true),
+                None,
+                None,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.collect_uncommitted().await.is_ok(), status == 200);
+        assert_eq!(proxy.received_requests().await.unwrap().len(), 1);
+        assert!(origin.received_requests().await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn contributed_model_scope_survives_affinity_and_account_rotation() {
     use gateway_core::routing::ContributedModel;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -536,11 +722,19 @@ async fn stalled_proxy_recovery(websocket: bool) {
 }
 
 fn execution_plan(operation: &Operation) -> gateway_core::routing::RoutingPlan {
+    execution_plan_with_proxy_fallback(operation, false)
+}
+
+fn execution_plan_with_proxy_fallback(
+    operation: &Operation,
+    enabled: bool,
+) -> gateway_core::routing::RoutingPlan {
     let kind = ProviderKind::new("openai").unwrap();
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
         SettingsValues::new(3, "smart", Default::default(), None, None)
-            .with_request_location(global_request_location(), true),
+            .with_request_location(global_request_location(), true)
+            .with_proxy_direct_fallback_enabled(enabled),
         vec![kind.clone()],
         vec![ProviderModel::new(
             kind,

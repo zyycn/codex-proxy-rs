@@ -175,6 +175,7 @@ pub trait GrokEndpointPolicy: fmt::Debug + Send + Sync {
     fn build_inference_client(
         &self,
         timeout: Option<Duration>,
+        connect_timeout: Option<Duration>,
         proxy: Option<&OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError>;
     fn validate_oauth(&self, url: &Url) -> bool;
@@ -194,17 +195,24 @@ impl GrokEndpointPolicy for OfficialGrokEndpointPolicy {
         timeout: Option<Duration>,
         proxy: Option<&OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
-        build_official_client(GrokDnsResolutionPolicy::official_oauth(), timeout, proxy)
+        build_official_client(
+            GrokDnsResolutionPolicy::official_oauth(),
+            timeout,
+            None,
+            proxy,
+        )
     }
 
     fn build_inference_client(
         &self,
         timeout: Option<Duration>,
+        connect_timeout: Option<Duration>,
         proxy: Option<&OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
         build_official_client(
             GrokDnsResolutionPolicy::official_inference(),
             timeout,
+            connect_timeout,
             proxy,
         )
     }
@@ -340,7 +348,7 @@ impl ReqwestGrokInferenceTransport {
     pub fn new(
         endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
-        let unbound_client = endpoint_policy.build_inference_client(None, None)?;
+        let unbound_client = endpoint_policy.build_inference_client(None, None, None)?;
         Ok(Self {
             clients: EgressCache::new(),
             unbound_client: Mutex::new(Some(unbound_client)),
@@ -373,7 +381,7 @@ impl ReqwestGrokInferenceTransport {
                     return Ok(client);
                 }
                 self.endpoint_policy
-                    .build_inference_client(None, binding.outbound_proxy())
+                    .build_inference_client(None, None, binding.outbound_proxy())
             })
             .await
             .map_err(|_| Box::new(inference_client_pool_unavailable_for_cache_miss()))?;
@@ -412,10 +420,21 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
                     .map(|header| (header.name(), header.value().as_ref())),
             );
             trace.capture("upstream.request.body", request.body());
-            let (client, client_cache_status) = self
-                .client_for(request.binding())
-                .await
-                .map_err(|error| *error)?;
+            let (client, client_cache_status) = if let Some(timeout) = request
+                .connect_timeout()
+                .filter(|timeout| *timeout < CONNECT_TIMEOUT)
+            {
+                // 即将耗尽的预算不污染常规账号连接池，也不建立按 Duration 无界增长的缓存
+                let client = self
+                    .endpoint_policy
+                    .build_inference_client(None, Some(timeout), request.binding().outbound_proxy())
+                    .map_err(|_| inference_client_pool_unavailable_for_cache_miss())?;
+                (client, GrokInferenceClientCacheStatus::Miss)
+            } else {
+                self.client_for(request.binding())
+                    .await
+                    .map_err(|error| *error)?
+            };
             let mut builder = client
                 .request(request.method().clone(), request.endpoint().clone())
                 .body(request.body().to_vec());
@@ -544,7 +563,8 @@ impl ReqwestGrokModelCatalogTransport {
     pub fn new(
         endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
-        let client = endpoint_policy.build_inference_client(Some(OAUTH_REQUEST_TIMEOUT), None)?;
+        let client =
+            endpoint_policy.build_inference_client(Some(OAUTH_REQUEST_TIMEOUT), None, None)?;
         Ok(Self {
             clients: EgressCache::with_entry(None, client),
             endpoint_policy,
@@ -583,6 +603,7 @@ impl GrokModelCatalogTransport for ReqwestGrokModelCatalogTransport {
                 .get_or_try_init(|| async {
                     endpoint_policy.build_inference_client(
                         Some(OAUTH_REQUEST_TIMEOUT),
+                        None,
                         request.outbound_proxy.as_ref(),
                     )
                 })
@@ -652,6 +673,7 @@ impl GrokBillingTransport for ReqwestGrokModelCatalogTransport {
                 .get_or_try_init(|| async {
                     endpoint_policy.build_inference_client(
                         Some(OAUTH_REQUEST_TIMEOUT),
+                        None,
                         request.outbound_proxy.as_ref(),
                     )
                 })
@@ -692,6 +714,7 @@ impl GrokBillingTransport for ReqwestGrokModelCatalogTransport {
 fn build_official_client(
     dns_policy: GrokDnsResolutionPolicy,
     timeout: Option<Duration>,
+    connect_timeout: Option<Duration>,
     proxy: Option<&OutboundProxy>,
 ) -> Result<Client, GrokReqwestTransportBuildError> {
     let mut builder = Client::builder()
@@ -699,7 +722,11 @@ fn build_official_client(
         .use_rustls_tls()
         .redirect(Policy::none())
         .no_proxy()
-        .connect_timeout(CONNECT_TIMEOUT)
+        .connect_timeout(
+            connect_timeout
+                .unwrap_or(CONNECT_TIMEOUT)
+                .min(CONNECT_TIMEOUT),
+        )
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
         .http2_adaptive_window(true)

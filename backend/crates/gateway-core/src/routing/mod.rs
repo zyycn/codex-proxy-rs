@@ -579,6 +579,7 @@ pub struct RoutingPlan {
     max_retry_after: std::time::Duration,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_location: Option<crate::account::RequestLocation>,
+    proxy_direct_fallback_enabled: bool,
     privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
@@ -630,6 +631,11 @@ impl RoutingPlan {
     #[must_use]
     pub const fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request_location.as_ref()
+    }
+
+    #[must_use]
+    pub const fn proxy_direct_fallback_enabled(&self) -> bool {
+        self.proxy_direct_fallback_enabled
     }
 
     #[must_use]

@@ -96,10 +96,13 @@ impl CodexBackendClient {
         );
         let headers_started_at = Instant::now();
         let response = self
-            .client
+            .http_opening_client()?
             .execute(outbound)
             .await
             .map_err(CodexClientError::HttpJson)?;
+        if let Some(budget) = &self.connection_budget {
+            budget.complete();
+        }
         let upstream_headers_ms = elapsed_duration_millis(headers_started_at.elapsed());
         let http_version = http_version_name(response.version()).to_owned();
         let status = response.status();

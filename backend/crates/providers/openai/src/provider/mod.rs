@@ -1050,8 +1050,8 @@ impl CodexProvider {
                 context.request_id().as_str(),
             );
         }
-        if let Some(location) = lease
-            .account()
+        let outbound_account = model_request_account(lease.account(), &context);
+        if let Some(location) = outbound_account
             .request_location()
             .or(context.request_location())
         {
@@ -1192,11 +1192,11 @@ impl CodexProvider {
         let events = cold_response_stream(ColdResponse {
             installation_id,
             client: client
-                .for_account(lease.account())
+                .for_account(&outbound_account)
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?
                 .with_responses_api_base_url(lease.authentication().responses_api_base_url())
                 .with_routing_affinity(guardian_parent.map(|(_, affinity)| affinity))
-                .with_connection_budget(context.connection_budget().clone())
+                .with_connection_budget(model_connection_budget(&outbound_account, &context))
                 .with_middleware_headers(middleware_headers)
                 .with_outbound_middleware(outbound_middleware)
                 .with_privacy(context.privacy(), context.cancellation().clone()),

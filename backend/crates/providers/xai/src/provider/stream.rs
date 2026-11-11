@@ -174,7 +174,7 @@ pub(super) fn cold_compaction_http_sse_stream(
                 responses_url.clone(),
                 headers.clone(),
                 body,
-                session.binding().clone(),
+                super::outbound::model_request_binding(&session, &context),
             ).with_trace(context.trace());
             let inference_request = super::outbound::prepare_request(
                 inference_request, &context, &session, &upstream_model,
@@ -191,7 +191,7 @@ pub(super) fn cold_compaction_http_sse_stream(
                 biased;
                 _ = cancellation.cancelled() => InferenceBoundary::Cancelled,
                 _ = context.deadline().wait() => InferenceBoundary::Deadline,
-                response = transport.execute(inference_request) => InferenceBoundary::Response(response),
+                response = super::outbound::execute_model_request(transport.as_ref(), inference_request, &context, &session) => InferenceBoundary::Response(response.map_err(|error| *error)),
             };
             match boundary {
                 InferenceBoundary::Cancelled => {
@@ -229,7 +229,7 @@ pub(super) fn cold_compaction_http_sse_stream(
                         transport_credential_failure(&error, &upstream_model);
                     let error = map_continuation_failure(
                         &context,
-                        map_transport_error_for_context(error, &context),
+                        map_transport_error_for_context(error, &context, &session, invalid_encrypted_content_retried),
                     );
                     let error = recover_or_record_failure(
                         selector.as_ref(),
@@ -421,14 +421,16 @@ pub(super) fn map_compaction_decode_error(error: GrokCompactionDecodeError) -> P
 }
 
 pub(super) fn mark_transient_compaction_failure(error: ProviderError) -> ProviderError {
-    if matches!(
-        error.kind(),
-        ProviderErrorKind::RateLimited
-            | ProviderErrorKind::Timeout
-            | ProviderErrorKind::Transport
-            | ProviderErrorKind::Protocol
-            | ProviderErrorKind::Unavailable
-    ) {
+    if error.pre_delivery_retry().is_none()
+        && matches!(
+            error.kind(),
+            ProviderErrorKind::RateLimited
+                | ProviderErrorKind::Timeout
+                | ProviderErrorKind::Transport
+                | ProviderErrorKind::Protocol
+                | ProviderErrorKind::Unavailable
+        )
+    {
         error.with_pre_delivery_retry()
     } else {
         error
@@ -479,7 +481,7 @@ pub(super) fn cold_http_sse_stream(
                 responses_url.clone(),
                 headers.clone(),
                 body,
-                session.binding().clone(),
+                super::outbound::model_request_binding(&session, &context),
             ).with_trace(context.trace());
             let inference_request = super::outbound::prepare_request(
                 inference_request, &context, &session, &upstream_model,
@@ -495,7 +497,7 @@ pub(super) fn cold_http_sse_stream(
                 biased;
                 _ = cancellation.cancelled() => InferenceBoundary::Cancelled,
                 _ = context.deadline().wait() => InferenceBoundary::Deadline,
-                response = transport.execute(inference_request) => InferenceBoundary::Response(response),
+                response = super::outbound::execute_model_request(transport.as_ref(), inference_request, &context, &session) => InferenceBoundary::Response(response.map_err(|error| *error)),
             };
             match boundary {
                 InferenceBoundary::Cancelled => {
@@ -522,7 +524,7 @@ pub(super) fn cold_http_sse_stream(
                     let credential_failure = transport_credential_failure(&error, &upstream_model);
                     let error = map_continuation_failure(
                         &context,
-                        map_transport_error_for_context(error, &context),
+                        map_transport_error_for_context(error, &context, &session, invalid_encrypted_content_retried),
                     );
                     let error = recover_or_record_failure(
                         selector.as_ref(),

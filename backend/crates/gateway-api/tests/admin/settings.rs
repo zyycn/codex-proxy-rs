@@ -42,6 +42,7 @@ fn update_body() -> Value {
         "configRevision": 7,
         "codexPrivacyPolicy": {"enabled":false,"onError":"skip_rule","rules":[]},
         "requestLocationEnabled": false,
+        "proxyDirectFallbackEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
         "modelMappings": {
             "gpt-5.4": "gpt-5.5",
@@ -706,6 +707,68 @@ fn concurrency_queue_fields_validate_bounds_and_accept_disabled_queues() {
         .unwrap()
         .validate()
         .unwrap();
+}
+
+#[tokio::test]
+async fn proxy_direct_fallback_round_trips_and_rejects_stale_or_invalid_updates() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let mut revision = json!(7);
+    for enabled in [true, false] {
+        let mut body = update_body();
+        body["configRevision"] = revision.clone();
+        body["proxyDirectFallbackEnabled"] = json!(enabled);
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await["data"]["proxyDirectFallbackEnabled"],
+            enabled
+        );
+        body["proxyDirectFallbackEnabled"] = json!(!enabled);
+        let stale = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        let response = app(fixture.state())
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap();
+        let data = response_json(response).await["data"].clone();
+        assert_eq!(data["proxyDirectFallbackEnabled"], enabled);
+        revision = data["configRevision"].clone();
+    }
+    for value in [None, Some(Value::Null), Some(json!("true")), Some(json!(1))] {
+        let mut body = update_body();
+        body["configRevision"] = revision.clone();
+        if let Some(value) = value {
+            body["proxyDirectFallbackEnabled"] = value;
+        } else {
+            body.as_object_mut()
+                .unwrap()
+                .remove("proxyDirectFallbackEnabled");
+        }
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
 }
 
 #[tokio::test]

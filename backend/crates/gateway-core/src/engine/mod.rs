@@ -125,6 +125,7 @@ impl AttemptTrigger {
 #[derive(Debug, Clone, Default)]
 pub struct AccountAttemptContext {
     excluded_accounts: BTreeSet<ProviderAccountId>,
+    direct_fallback_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
     state_owner: Option<ProviderAccountStateOwner>,
     credential_recovery_attempted: bool,
@@ -141,6 +142,7 @@ impl AccountAttemptContext {
     ) -> Self {
         Self {
             excluded_accounts,
+            direct_fallback_accounts: BTreeSet::new(),
             required_account,
             state_owner,
             credential_recovery_attempted: false,
@@ -161,6 +163,7 @@ impl AccountAttemptContext {
         let (required_account, eligibility) = target.into_selection();
         Self {
             excluded_accounts,
+            direct_fallback_accounts: BTreeSet::new(),
             required_account: Some(required_account),
             state_owner,
             credential_recovery_attempted: false,
@@ -189,6 +192,13 @@ impl AccountAttemptContext {
     #[must_use]
     pub const fn excluded_accounts(&self) -> &BTreeSet<ProviderAccountId> {
         &self.excluded_accounts
+    }
+
+    /// 仅当前请求已由 Core 批准切换的账号使用直连
+    #[must_use]
+    pub fn with_direct_fallback_accounts(mut self, accounts: BTreeSet<ProviderAccountId>) -> Self {
+        self.direct_fallback_accounts = accounts;
+        self
     }
 
     #[must_use]
@@ -290,6 +300,7 @@ pub struct RequestAttemptContext {
     request_profile: Option<crate::account::OpaqueProviderData>,
     fast_mode: FastMode,
     request_location: Option<crate::account::RequestLocation>,
+    proxy_direct_fallback_enabled: bool,
     privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
     request_id: ModelRequestId,
     client_api_key_ref: ClientApiKeyId,
@@ -396,6 +407,12 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
+    pub const fn with_proxy_direct_fallback_enabled(mut self, enabled: bool) -> Self {
+        self.proxy_direct_fallback_enabled = enabled;
+        self
+    }
+
+    #[must_use]
     pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
             account_error_protection: None,
@@ -408,6 +425,7 @@ impl RequestAttemptContext {
             pricing: Arc::default(),
             fast_mode: FastMode::Default,
             request_location: None,
+            proxy_direct_fallback_enabled: false,
             privacy: None,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
@@ -557,6 +575,11 @@ pub struct AttemptContext {
 
 impl AttemptContext {
     #[must_use]
+    pub fn uses_direct_fallback(&self, account: &ProviderAccountId) -> bool {
+        self.account.direct_fallback_accounts.contains(account)
+    }
+
+    #[must_use]
     pub const fn request_body_limit(&self) -> Option<usize> {
         self.request.request_body_limit
     }
@@ -670,6 +693,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request.request_location.as_ref()
+    }
+
+    #[must_use]
+    pub const fn proxy_direct_fallback_enabled(&self) -> bool {
+        self.request.proxy_direct_fallback_enabled
     }
 
     /// 当前 attempt 的诊断关联；克隆后可传给后台 transport 任务

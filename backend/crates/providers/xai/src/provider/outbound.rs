@@ -4,6 +4,64 @@ use gateway_core::engine::middleware::outbound::{Request, Target};
 
 use super::*;
 
+/// 直连使用独立的出口池键，账号租约及后台刷新保留原代理绑定
+pub(super) fn model_request_binding(
+    session: &SelectedGrokSession,
+    context: &AttemptContext,
+) -> crate::transport::GrokSessionBinding {
+    let binding = session.binding().clone();
+    if context.uses_direct_fallback(session.account_id()) {
+        context.trace().record(
+            "outbound.direct_fallback",
+            serde_json::json!({
+                "accountId": session.account_id().as_str(),
+                "proxyEndpoint": binding.outbound_proxy().map(|proxy| proxy.endpoint()),
+            }),
+        );
+        binding.with_outbound_proxy(None)
+    } else {
+        binding
+    }
+}
+
+/// 只为开启回退的模型请求使用共享 opening 预算，不限制模型响应等待
+pub(super) async fn execute_model_request(
+    transport: &dyn GrokInferenceTransport,
+    request: GrokInferenceRequest,
+    context: &AttemptContext,
+    session: &SelectedGrokSession,
+) -> Result<GrokInferenceResponse, Box<GrokInferenceTransportError>> {
+    if !context.uses_direct_fallback(session.account_id())
+        && !(context.proxy_direct_fallback_enabled()
+            && session.binding().outbound_proxy().is_some())
+    {
+        return transport.execute(request).await.map_err(Box::new);
+    }
+    let budget = context.connection_budget();
+    let opening_budget = if context.uses_direct_fallback(session.account_id()) {
+        budget.clone()
+    } else {
+        budget.clone().reserve_next_opening()
+    };
+    let remaining = opening_budget.begin().map_err(|_| {
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::Timeout,
+            UpstreamSendState::NotSent,
+        )
+    })?;
+    let result = transport
+        .execute(request.with_connect_timeout(remaining))
+        .await;
+    if result.is_ok()
+        || result
+            .as_ref()
+            .is_err_and(|error| error.send_state() != UpstreamSendState::NotSent)
+    {
+        budget.complete();
+    }
+    result.map_err(Box::new)
+}
+
 pub(super) async fn prepare_request(
     request: GrokInferenceRequest,
     context: &AttemptContext,

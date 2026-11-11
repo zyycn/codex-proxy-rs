@@ -370,10 +370,12 @@ where
             credential_recovery_attempted_accounts: BTreeSet::new(),
             recovery_account: None,
             pending_retry: None,
+            direct_fallback_accounts: BTreeSet::new(),
             transient_retry_counts: BTreeMap::new(),
             request_profiles: BTreeMap::new(),
             current: None,
             send_state_watermark: UpstreamSendState::NotSent,
+            attempt_history_replay_safe: true,
             delivery_committed: false,
             replay_barrier_reached: false,
             client_status_code: None,
@@ -532,6 +534,8 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     recovery_account: Option<crate::account::ProviderAccountId>,
     /// 提交前同账号退避/传输恢复共用的等待与钉选状态；业务重试消耗路由预算
     pending_retry: Option<PendingAttemptRetry>,
+    /// 出口覆盖只属于本请求，各账号最多批准一次代理到直连切换
+    direct_fallback_accounts: BTreeSet<crate::account::ProviderAccountId>,
     /// 请求内按账号累计的瞬时拒绝重试次数，不能跨请求污染账号健康状态
     transient_retry_counts: BTreeMap<crate::account::ProviderAccountId, u32>,
     /// 只在首次进入对应 Provider 时解析，避免后台发布更新改变同一请求的重试身份
@@ -539,6 +543,8 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     current: Option<CurrentAttempt>,
     /// 请求级发送状态水位；跨 attempt 单调不降，终态写回不得低于此档
     send_state_watermark: UpstreamSendState,
+    /// 历次失败均未发送或明确可安全重放；结果不明的传输恢复不能重新获得直连资格
+    attempt_history_replay_safe: bool,
     response_commit: super::execution::ResponseCommit,
     // 传输心跳可先于首个业务批次提交，两者不能共用重放屏障
     delivery_committed: bool,
@@ -585,6 +591,7 @@ enum StreamFailureDecision {
 
 enum StreamRetry {
     SameAccount,
+    DirectFallback(PendingAttemptRetry),
     Pending(PendingAttemptRetry),
     ConnectionRotation(PendingAttemptRetry),
     ExcludeAccount,
@@ -1107,6 +1114,7 @@ where
             )
             .with_account_scope(Arc::clone(candidate.account_scope())),
         }
+        .with_direct_fallback_accounts(self.direct_fallback_accounts.clone())
         .with_credential_recovery_attempted(pinned_account.as_ref().is_some_and(|account| {
             self.credential_recovery_attempted_accounts
                 .contains(account)
@@ -1162,6 +1170,7 @@ where
                 .with_fast_mode(self.plan.fast_mode())
                 .with_pricing(self.plan.pricing())
                 .with_request_location(self.plan.request_location().cloned())
+                .with_proxy_direct_fallback_enabled(self.plan.proxy_direct_fallback_enabled())
                 .with_privacy(self.plan.privacy())
                 .with_request_body_limit(self.plan.request_body_limit())
                 .with_concurrency_wait_budget(self.concurrency_wait_budget.clone())
@@ -1647,6 +1656,8 @@ where
         }
         let execution_effect_observed = self.execution_effect_observed();
         let send_state = self.raise_send_watermark(attempt_send_state);
+        self.attempt_history_replay_safe &= attempt_send_state == UpstreamSendState::NotSent
+            || (attempt_send_state != UpstreamSendState::Ambiguous && error.replay_is_safe());
         let provider_proved_replay_safe = provider_proved_replay_safe(&error);
         let continuation_retry = !execution_effect_observed
             && self.prepare_continuation_retry(
@@ -1672,6 +1683,28 @@ where
                 error.pre_delivery_retry(),
                 Some(crate::error::PreDeliveryRetry::SameAccountConnectionRetry { .. })
             );
+        let direct_fallback_requested = matches!(
+            error.pre_delivery_retry(),
+            Some(crate::error::PreDeliveryRetry::SameAccountDirectFallback { .. })
+        );
+        let direct_fallback = match error.pre_delivery_retry() {
+            Some(crate::error::PreDeliveryRetry::SameAccountDirectFallback { transport })
+                if self.plan.proxy_direct_fallback_enabled()
+                    && !execution_effect_observed
+                    && !self.connection_budget.exhausted()
+                    && !self.replay_barrier_reached
+                    && !self.delivery_pending
+                    && attempt_send_state == UpstreamSendState::NotSent
+                    && self.attempt_history_replay_safe
+                    && self.continuation_attempt == ContinuationAttempt::None
+                    && !self
+                        .direct_fallback_accounts
+                        .contains(current.metadata.provider_account_id()) =>
+            {
+                Some(transport)
+            }
+            _ => None,
+        };
         // 服务器建议不可截短；超出请求冻结的上限后沿用安全换号或原错误出口
         let retry_after_exceeds_limit = error
             .retry_after()
@@ -1734,6 +1767,7 @@ where
         let transport_recovery = transport_recovery.filter(|_| connection_rotation.is_none());
         let ordinary_retry = !self.connection_budget.exhausted()
             && !connection_retry_requested
+            && !direct_fallback_requested
             && !execution_effect_observed
             && self.account_selection.required_account().is_none()
             && self.continuation_attempt == ContinuationAttempt::None
@@ -1804,6 +1838,7 @@ where
                 || same_account_retry
                 || transient_retry.is_some()
                 || transport_recovery.is_some()
+                || direct_fallback.is_some()
                 || connection_rotation.is_some()
                 || rotation_retry);
 
@@ -1831,6 +1866,8 @@ where
             "sameAccountRetry": same_account_retry, "accountRotationRetry": account_rotation_retry,
             "ordinaryRetry": ordinary_retry, "transportRecovery": transport_recovery.is_some(),
             "connectionRotation": connection_rotation.is_some(),
+            "directFallback": direct_fallback.is_some(),
+            "attemptHistoryReplaySafe": self.attempt_history_replay_safe,
             "reserveConnectionRotation": reserve_connection_rotation,
             "transientRetry": transient_retry.is_some(),
             "retryAfterExceeded": retry_after_exceeds_limit,
@@ -1857,7 +1894,15 @@ where
             "hasRetryPolicy": self.request_policy.is_some(),
             "sendState": format!("{attempt_send_state:?}"),
         });
-        let retry = if same_account_retry {
+        let retry = if let Some(transport) = direct_fallback {
+            StreamRetry::DirectFallback(PendingAttemptRetry {
+                account: current.metadata.provider_account_id().clone(),
+                transport,
+                delay: Duration::ZERO,
+                transport_recovery: true,
+                reserve_connection_rotation: false,
+            })
+        } else if same_account_retry {
             StreamRetry::SameAccount
         } else if let Some(delay) = transient_retry {
             StreamRetry::Pending(PendingAttemptRetry {
@@ -1980,6 +2025,15 @@ where
         if retryable {
             let current = self.current.take().ok_or(EngineError::NoActiveAttempt)?;
             match pending.retry {
+                StreamRetry::DirectFallback(retry) => {
+                    self.direct_fallback_accounts.insert(retry.account.clone());
+                    tracing::info!(
+                        request_id = %self.request_id,
+                        account_id = %retry.account,
+                        "Proxy connection failed before send; retrying the same account directly"
+                    );
+                    self.pending_retry = Some(retry);
+                }
                 StreamRetry::SameAccount => {
                     let account = current.metadata.provider_account_id().clone();
                     self.credential_recovery_attempted_accounts

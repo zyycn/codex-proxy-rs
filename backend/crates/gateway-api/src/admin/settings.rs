@@ -38,6 +38,7 @@ pub type ProviderRequestProfileUpdates =
 pub struct RuntimeSettingsFields {
     pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
     pub request_location_enabled: bool,
+    pub proxy_direct_fallback_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
@@ -744,6 +745,7 @@ impl RuntimeSettingsFields {
         let values = gateway_admin::model::settings::RuntimeSettingsValues {
             codex_privacy_policy: self.codex_privacy_policy,
             request_location_enabled: self.request_location_enabled,
+            proxy_direct_fallback_enabled: self.proxy_direct_fallback_enabled,
             request_location: self
                 .request_location
                 .normalized()
@@ -792,6 +794,7 @@ impl From<gateway_admin::model::settings::RuntimeSettingsValues> for RuntimeSett
         crate::admin::settings::RuntimeSettingsFields {
             codex_privacy_policy: settings.codex_privacy_policy,
             request_location_enabled: settings.request_location_enabled,
+            proxy_direct_fallback_enabled: settings.proxy_direct_fallback_enabled,
             request_location: settings.request_location,
             refresh_margin_seconds: settings.refresh_margin_seconds,
             refresh_concurrency: u64::from(settings.refresh_concurrency),
@@ -850,6 +853,7 @@ fn settings_validation_error(field: &'static str) -> WireValidationError {
         "refresh_margin_seconds" => "refreshMarginSeconds",
         "request_location" => "requestLocation",
         "request_location_enabled" => "requestLocationEnabled",
+        "proxy_direct_fallback_enabled" => "proxyDirectFallbackEnabled",
         "responses_max_decompressed_body_bytes" => "responsesMaxDecompressedBodyBytes",
         "smart_scheduling" => "smartScheduling",
         "usage_retention_days" => "usageRetentionDays",

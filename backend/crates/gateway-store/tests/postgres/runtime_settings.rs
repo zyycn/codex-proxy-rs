@@ -24,6 +24,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
         values: gateway_admin::model::settings::RuntimeSettingsValues {
             codex_privacy_policy: Default::default(),
             request_location_enabled: false,
+            proxy_direct_fallback_enabled: false,
             request_location: Default::default(),
             refresh_margin_seconds,
             refresh_concurrency: 2,
@@ -631,6 +632,52 @@ async fn concurrency_queue_settings_round_trip_into_the_runtime_snapshot() {
         (7, 5, 7, 12, true, 5, 1)
     );
     assert!(snapshot.config_revision > before.config_revision);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn proxy_direct_fallback_updates_persist_and_publish_without_changing_frozen_settings() {
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create("global_proxy_fallback").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let snapshots = PgRuntimeSnapshotRepository::new(database.pool.clone());
+    let before = snapshots.load_runtime_snapshot().await.unwrap();
+    assert!(
+        !repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .values
+            .proxy_direct_fallback_enabled
+    );
+    let mut previous_revision = before.config_revision;
+    for enabled in [true, false] {
+        let mut update = settings_with_margin(3600);
+        update.values.proxy_direct_fallback_enabled = enabled;
+        repository.update_runtime_settings(update).await.unwrap();
+        assert_eq!(
+            repository
+                .load_runtime_settings()
+                .await
+                .unwrap()
+                .values
+                .proxy_direct_fallback_enabled,
+            enabled
+        );
+        let current = snapshots.load_runtime_snapshot().await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&current.settings).unwrap()["proxy_direct_fallback_enabled"],
+            enabled
+        );
+        assert!(current.config_revision > previous_revision);
+        previous_revision = current.config_revision;
+    }
+    assert_eq!(
+        serde_json::to_value(&before.settings).unwrap()["proxy_direct_fallback_enabled"],
+        false
+    );
     database.close().await;
 }
 

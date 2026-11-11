@@ -33,6 +33,7 @@ export function useSettingsForm() {
     providerRequestProfiles: {} as ProviderRequestProfiles,
     codexPrivacyPolicy: { enabled: false, onError: 'skip_rule', rules: [] } as CodexPrivacyPolicy,
     requestLocationEnabled: false,
+    proxyDirectFallbackEnabled: false,
     requestLocation: {
       country: '',
       region: '',
@@ -132,6 +133,7 @@ export function useSettingsForm() {
     form.codexPrivacyPolicy = cloneDeep(data.codexPrivacyPolicy)
     form.configRevision = data.configRevision
     form.requestLocationEnabled = data.requestLocationEnabled
+    form.proxyDirectFallbackEnabled = data.proxyDirectFallbackEnabled
     form.requestLocation = { ...data.requestLocation }
     form.refreshMarginSeconds = data.refreshMarginSeconds
     form.refreshConcurrency = data.refreshConcurrency
@@ -260,6 +262,7 @@ export function useSettingsForm() {
         ),
         codexPrivacyPolicy: cloneDeep(form.codexPrivacyPolicy),
         requestLocationEnabled: form.requestLocationEnabled,
+        proxyDirectFallbackEnabled: form.proxyDirectFallbackEnabled,
         requestLocation,
         modelMappings: Object.fromEntries(mappings.value.map(row => [
           row.requestedModel.trim(),

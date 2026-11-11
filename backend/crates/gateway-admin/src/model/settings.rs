@@ -47,6 +47,7 @@ pub use gateway_core::account::RotationStrategy;
 pub struct RuntimeSettingsValues {
     pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
     pub request_location_enabled: bool,
+    pub proxy_direct_fallback_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,

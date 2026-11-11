@@ -42,6 +42,7 @@ export interface RuntimeSettings {
 
   codexPrivacyPolicy: CodexPrivacyPolicy
   requestLocationEnabled: boolean
+  proxyDirectFallbackEnabled: boolean
   requestLocation: RequestLocation
   modelMappings: Record<string, string>
   refreshMarginSeconds: number

@@ -116,6 +116,7 @@ impl LoopbackGrokEndpointPolicy {
 
     fn build_client(
         timeout: Option<Duration>,
+        connect_timeout: Option<Duration>,
         proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
         let mut builder = Client::builder()
@@ -123,6 +124,9 @@ impl LoopbackGrokEndpointPolicy {
             .no_proxy()
             .https_only(false)
             .tcp_nodelay(true);
+        if let Some(connect_timeout) = connect_timeout {
+            builder = builder.connect_timeout(connect_timeout);
+        }
         if let Some(timeout) = timeout {
             builder = builder.timeout(timeout);
         }
@@ -144,15 +148,16 @@ impl GrokEndpointPolicy for LoopbackGrokEndpointPolicy {
         timeout: Option<Duration>,
         proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
-        Self::build_client(timeout, proxy)
+        Self::build_client(timeout, None, proxy)
     }
 
     fn build_inference_client(
         &self,
         timeout: Option<Duration>,
+        connect_timeout: Option<Duration>,
         proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
-        Self::build_client(timeout, proxy)
+        Self::build_client(timeout, connect_timeout, proxy)
     }
 
     fn validate_oauth(&self, url: &Url) -> bool {
