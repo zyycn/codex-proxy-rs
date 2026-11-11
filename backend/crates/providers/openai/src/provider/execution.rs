@@ -13,7 +13,7 @@ impl CodexProvider {
         candidate: &ProviderCandidate,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        if image.payload().protocol() != PROVIDER_NAME || candidate.upstream_model().is_some() {
+        if image.payload().protocol() != OPENAI_PROTOCOL || candidate.upstream_model().is_some() {
             return Err(provider_error(
                 ProviderErrorKind::InvalidRequest,
                 UpstreamSendState::NotSent,
@@ -112,7 +112,7 @@ impl CodexProvider {
         candidate: &ProviderCandidate,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        if search.payload().protocol() != PROVIDER_NAME || candidate.upstream_model().is_some() {
+        if search.payload().protocol() != OPENAI_PROTOCOL || candidate.upstream_model().is_some() {
             return Err(provider_error(
                 ProviderErrorKind::InvalidRequest,
                 UpstreamSendState::NotSent,
@@ -255,7 +255,8 @@ impl CodexProvider {
                         UpstreamSendState::NotSent,
                     ));
                 };
-                if image.kind() != original.kind() || image.payload().protocol() != PROVIDER_NAME {
+                if image.kind() != original.kind() || image.payload().protocol() != OPENAI_PROTOCOL
+                {
                     return Err(provider_error(
                         ProviderErrorKind::InvalidRequest,
                         UpstreamSendState::NotSent,
@@ -271,7 +272,7 @@ impl CodexProvider {
             }
             Operation::Search(search) => {
                 if !matches!(&request.operation, Operation::Search(_))
-                    || search.payload().protocol() != PROVIDER_NAME
+                    || search.payload().protocol() != OPENAI_PROTOCOL
                 {
                     return Err(provider_error(
                         ProviderErrorKind::InvalidRequest,
@@ -538,7 +539,7 @@ pub(super) fn attach_openai_session_update(
 
 pub(super) fn terminal_response_output(event: &ProviderEvent) -> Option<&[Value]> {
     let wire = event.wire_event()?;
-    if wire.protocol() != PROVIDER_NAME {
+    if wire.protocol() != OPENAI_PROTOCOL {
         return None;
     }
     let event_type = wire
@@ -750,7 +751,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 yield ProviderEvent::canonical(GatewayEvent::CalculatedCost(cost));
             }
         }
-        let wire = ProtocolWireEvent::raw_json(PROVIDER_NAME, response.body).map_err(|_| {
+        let wire = ProtocolWireEvent::raw_json(OPENAI_PROTOCOL, response.body).map_err(|_| {
             provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
         })?;
         yield ProviderEvent::wire(wire);

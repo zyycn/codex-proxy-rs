@@ -2,6 +2,7 @@
 
 use axum::body::Bytes;
 use gateway_core::{error::GatewayError, event::ProviderEvent};
+use gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
 use gateway_protocol::{
     anthropic::MessagesAccumulator,
     openai::sse::{
@@ -50,7 +51,7 @@ impl GenerationEncoder {
             } => {
                 let Some(wire) = event
                     .wire_event()
-                    .filter(|wire| wire.protocol() == "anthropic")
+                    .filter(|wire| wire.protocol() == ANTHROPIC_PROTOCOL)
                 else {
                     return Vec::new();
                 };

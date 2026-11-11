@@ -32,6 +32,7 @@ use gateway_core::engine::{
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
 use gateway_core::lifecycle::{CancellationToken, ConnectionGuard};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use gateway_protocol::openai::sse::response_failed_sse_event_with_id;
 use serde_json::Value;
 use tokio::time::Instant;
@@ -491,7 +492,9 @@ pub async fn collect_execution_response(session: Box<dyn ExecutionSession>) -> R
     )
     .await
     {
-        Ok(response) => into_http_response(response, ExpectedBody::SingleJson, "openai").await,
+        Ok(response) => {
+            into_http_response(response, ExpectedBody::SingleJson, OPENAI_PROTOCOL).await
+        }
         Err(error) => error_response(error),
     }
 }
@@ -513,7 +516,9 @@ pub async fn stream_execution_response(
             )
             .await
             {
-                Ok(response) => into_http_response(response, ExpectedBody::Sse, "openai").await,
+                Ok(response) => {
+                    into_http_response(response, ExpectedBody::Sse, OPENAI_PROTOCOL).await
+                }
                 Err(error) => error_response(error),
             }
         },

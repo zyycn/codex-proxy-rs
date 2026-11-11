@@ -21,7 +21,7 @@ impl NativeResponseTranslator for MessagesResponseTranslator {
         ANTHROPIC_PROTOCOL
     }
     fn target_protocol(&self) -> &str {
-        PROVIDER_NAME
+        OPENAI_PROTOCOL
     }
     fn translate(
         &mut self,
@@ -33,7 +33,7 @@ impl NativeResponseTranslator for MessagesResponseTranslator {
                 .stream
                 .complete_json_event(&message)
                 .map_err(|_| protocol_error())?;
-            return wire_events(PROVIDER_NAME, vec![event]);
+            return wire_events(OPENAI_PROTOCOL, vec![event]);
         }
         if !event.has_json_data() {
             return Ok(Vec::new());
@@ -45,7 +45,7 @@ impl NativeResponseTranslator for MessagesResponseTranslator {
         if event.data().get("type").and_then(Value::as_str) == Some("message_stop") {
             self.stream.finish().map_err(|_| protocol_error())?;
         }
-        wire_events(PROVIDER_NAME, events)
+        wire_events(OPENAI_PROTOCOL, events)
     }
 }
 
@@ -63,7 +63,7 @@ impl ResponsesResponseTranslator {
 
 impl NativeResponseTranslator for ResponsesResponseTranslator {
     fn source_protocol(&self) -> &str {
-        PROVIDER_NAME
+        OPENAI_PROTOCOL
     }
     fn target_protocol(&self) -> &str {
         ANTHROPIC_PROTOCOL

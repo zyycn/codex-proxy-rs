@@ -6,6 +6,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
 use gateway_core::operation::{ClientTurn, GenerateRequest, Operation, ProtocolPayload};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use gateway_protocol::openai::{
     X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
     is_transport_managed_request_header,
@@ -17,7 +18,6 @@ use crate::openai::generation::{
     ContinuationIntent, DecodedGenerationRequest, GenerationRequestMetadata,
 };
 
-const OPENAI_PROTOCOL: &str = "openai";
 const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
 const CODEX_TURN_METADATA_KEY: &str = "x-codex-turn-metadata";
 const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";

@@ -13,6 +13,7 @@ use gateway_core::engine::execution::StartedExecution;
 use gateway_core::event::ProviderEvent;
 use gateway_core::live::LiveHangupRequest;
 use gateway_core::operation::Operation;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use serde_json::Value;
 
 use super::{
@@ -30,9 +31,6 @@ use crate::{
         with_model_request_id,
     },
 };
-
-/// 引导 wire 事件使用的协议名；与 Provider 侧 `PROVIDER_NAME` 一致。
-const LIVE_PROTOCOL: &str = "openai";
 
 pub(crate) async fn live_call(
     State(state): State<ApiState>,
@@ -344,7 +342,7 @@ fn live_call_body(events: Vec<ProviderEvent>) -> Option<Bytes> {
     let mut raw_events = 0usize;
     for event in events {
         let (_, wire) = event.into_parts();
-        let Some(wire) = wire.filter(|wire| wire.protocol() == LIVE_PROTOCOL) else {
+        let Some(wire) = wire.filter(|wire| wire.protocol() == OPENAI_PROTOCOL) else {
             continue;
         };
         let raw = wire.into_raw_http_body()?;

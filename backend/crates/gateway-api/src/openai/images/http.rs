@@ -13,6 +13,7 @@ use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::operation::{
     ImageRequest, ImageRequestKind, Operation, OperationKind, RawJsonPayload,
 };
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use serde_json::Value;
 
 use crate::ApiState;
@@ -25,7 +26,6 @@ use crate::openai::{
     router::{IMAGE_EDITS_PATH, IMAGE_GENERATIONS_PATH},
 };
 
-const OPENAI_PROTOCOL: &str = "openai";
 const IMAGE_TURN_ID_CONTEXT_KEY: &str = "image_turn_id";
 
 /// `POST /v1/images/generations`

@@ -526,7 +526,7 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
 
         let response_meta = ResponseMeta::for_provider_endpoint(&request_id);
         yield ProviderEvent::canonical(GatewayEvent::Started(response_meta.clone()));
-        let wire = ProtocolWireEvent::raw_http_body(PROVIDER_NAME, response.body).map_err(|_| {
+        let wire = ProtocolWireEvent::raw_http_body(OPENAI_PROTOCOL, response.body).map_err(|_| {
             provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
         })?;
         yield ProviderEvent::wire(wire);

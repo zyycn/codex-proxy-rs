@@ -10,6 +10,7 @@ use gateway_core::{
     engine::execution::AuthenticatedClient,
     routing::{PublicModelDescriptor, PublicModelId, PublicModelProfile},
 };
+use gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -52,7 +53,7 @@ pub(crate) async fn models(
 
     let mut input = RequestInput::query(super::router::MODELS_PATH.to_owned(), None, &headers);
     if anthropic {
-        input.protocol = "anthropic".to_owned();
+        input.protocol = ANTHROPIC_PROTOCOL.to_owned();
     }
     let response = middleware::query_response(service.execution(), client, input, move |client| {
         models_response(state, client, query, anthropic)
@@ -173,7 +174,7 @@ pub(crate) async fn model_detail(
         &headers,
     );
     if anthropic {
-        input.protocol = "anthropic".to_owned();
+        input.protocol = ANTHROPIC_PROTOCOL.to_owned();
     }
     let response = middleware::query_response(
         service.execution(),

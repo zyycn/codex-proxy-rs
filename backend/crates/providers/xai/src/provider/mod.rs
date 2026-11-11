@@ -12,8 +12,8 @@ use gateway_core::account::{
 use gateway_core::engine::continuation::ContinuationBinding;
 use gateway_core::engine::middleware::MiddlewareHeader;
 use gateway_core::engine::provider::{
-    EventStream, Provider, ProviderCallMetadata, ProviderRequest, ProviderRequestObservation,
-    ProviderSelectionObservation, ProviderStream,
+    EventStream, Provider, ProviderCallMetadata, ProviderRequest, ProviderSelectionObservation,
+    ProviderStream,
 };
 use gateway_core::engine::upstream_adapter::UpstreamAdapterSelection;
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
@@ -39,7 +39,7 @@ use gateway_core::task::{
     WorkerTaskError,
 };
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
-use gateway_protocol::openai::codex_responses_request_semantics;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use url::Url;
@@ -180,30 +180,6 @@ impl Provider for GrokBuildProvider {
 
     fn catalog_generation(&self) -> ProviderCatalogGeneration {
         self.catalog.catalog_generation()
-    }
-
-    fn request_observation(
-        &self,
-        operation: &Operation,
-        _client_api_key_id: &gateway_core::policy::ClientApiKeyId,
-    ) -> ProviderRequestObservation {
-        let Operation::Generate(request) = operation else {
-            return ProviderRequestObservation::default();
-        };
-        let payload = request.protocol_payload();
-        if payload.protocol() != "openai" {
-            return ProviderRequestObservation::default();
-        }
-        let semantics = codex_responses_request_semantics(payload.body(), payload.context());
-        ProviderRequestObservation {
-            requested_model: None,
-            reasoning_effort: semantics.reasoning_effort,
-            reasoning_preset: semantics.reasoning_preset.map(str::to_owned),
-            request_kind: semantics.request_kind,
-            subagent_kind: semantics.subagent_kind,
-            compact: semantics.compact,
-            continuation: Default::default(),
-        }
     }
 
     async fn query_model_capabilities(
@@ -387,7 +363,7 @@ impl GrokBuildProvider {
         let Operation::Generate(generate) = operation else {
             return Err(protocol_not_sent());
         };
-        if generate.protocol_payload().protocol() != "openai"
+        if generate.protocol_payload().protocol() != OPENAI_PROTOCOL
             || native_request_requirements(&generate) != frozen_requirements
         {
             return Err(provider_error(
@@ -643,7 +619,7 @@ fn grok_selection_facts(
     } else {
         decode_xai_session_state(generate)?
     };
-    let native_source = !adapted && generate.protocol_payload().protocol() == "openai";
+    let native_source = !adapted && generate.protocol_payload().protocol() == OPENAI_PROTOCOL;
     let native_compaction =
         native_source && crate::transport::compaction::has_terminal_compaction_trigger(generate);
     let (selection_model, operation_account, affinity) = if native_compaction {

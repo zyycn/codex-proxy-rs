@@ -15,6 +15,7 @@ use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLif
 use gateway_core::routing::{
     ProviderCatalogUnavailable, ProviderKind, PublicModelDescriptor, PublicModelId, UpstreamModelId,
 };
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use uuid::Uuid;
 
 use super::auth::ClientApiKeyAuthError;
@@ -159,7 +160,7 @@ impl OpenAiService {
                 upstream_model,
                 operation,
                 ExecutionRequestMetadata {
-                    protocol: "openai".to_owned(),
+                    protocol: OPENAI_PROTOCOL.to_owned(),
                     endpoint,
                     transport: ClientTransport::HttpJson,
                     stream: false,

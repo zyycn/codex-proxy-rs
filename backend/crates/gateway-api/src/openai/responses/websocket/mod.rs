@@ -26,6 +26,7 @@ use gateway_core::{
     lifecycle::{ConnectionGuard, ConnectionLifecycle},
     operation::OperationKind,
 };
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 use crate::middleware::headers::encode_headers;
 use crate::{
@@ -328,7 +329,7 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         let validation = ResponseValidationFacts::default();
         let input = RequestInput {
             endpoint: crate::openai::router::RESPONSES_PATH.to_owned(),
-            protocol: "openai".to_owned(),
+            protocol: OPENAI_PROTOCOL.to_owned(),
             operation: Some(OperationKind::Generate),
             transport: ClientTransport::WebSocket,
             model_hint,
@@ -349,7 +350,7 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
             Box::new(move |prepared, request| {
                 Box::pin(async move {
                     let (protocol, headers, body) = request_parts(request.clone())?;
-                    if protocol != "openai" {
+                    if protocol != OPENAI_PROTOCOL {
                         return Err(MiddlewareError::Rejected);
                     }
                     let payload =

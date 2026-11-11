@@ -43,7 +43,7 @@ impl CodexProvider {
         }
         let requested_service_tier = match &operation {
             Operation::Generate(generate)
-                if generate.protocol_payload().protocol() == PROVIDER_NAME =>
+                if generate.protocol_payload().protocol() == OPENAI_PROTOCOL =>
             {
                 let request =
                     CodexResponsesRequest::from_body(generate.protocol_payload().body().clone());

@@ -3,7 +3,7 @@
 //! 这里只保留网关需要解释、路由或结算的稳定语义
 //! 协议 adapter 无法写入
 //! wire body 与连接级事实随 [`ProtocolPayload`] 或 [`RawJsonPayload`] 不透明传递，
-//! 由对应 Provider 自己解释
+//! 纯协议事实由协议层解析，私有字段与会话由对应 Provider 解释
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -458,8 +458,8 @@ impl ClientTurn {
 impl GenerateRequest {
     /// 创建携带协议不透明正文的生成请求
     ///
-    /// 完整请求只以原始 wire object 保存；Core 仅局部只读已知字段以推导路由能力，
-    /// Provider 负责解释与转换正文
+    /// 完整请求以原始 wire object 保存，协议层提取路由与权限所需的纯事实
+    /// Provider 在选定账号后编排协议转换与私有字段处理
     #[must_use]
     pub fn from_protocol_payload(protocol_payload: ProtocolPayload) -> Self {
         Self {
@@ -521,9 +521,7 @@ impl GenerateRequest {
     /// 返回客户端是否请求了图片生成工具
     #[must_use]
     pub fn image_generation_requested(&self) -> bool {
-        self.payload.source_image_generation
-            || (self.protocol_payload().protocol() == "openai"
-                && requests_image_generation(self.body()))
+        self.payload.source_image_generation || self.payload.wire_facts.image_generation
     }
 
     /// 返回指定 Provider 的连接内会话状态
@@ -594,35 +592,6 @@ impl fmt::Debug for GenerateRequest {
             .field("protocol_payload", self.protocol_payload())
             .finish()
     }
-}
-
-/// 原生工具声明授权上游生成图片，Codex 的被动 namespace 与图片输入不属于该权限
-fn requests_image_generation(body: &Map<String, Value>) -> bool {
-    contains_image_tool(body.get("tools"))
-        || body
-            .get("input")
-            .and_then(Value::as_array)
-            .is_some_and(|items| {
-                items.iter().any(|item| {
-                    item.get("type").and_then(Value::as_str) == Some("additional_tools")
-                        && contains_image_tool(item.get("tools"))
-                })
-            })
-        || body.get("tool_choice").is_some_and(|choice| {
-            is_image_tool(choice)
-                || (choice.get("type").and_then(Value::as_str) == Some("allowed_tools")
-                    && contains_image_tool(choice.get("tools")))
-        })
-}
-
-fn contains_image_tool(value: Option<&Value>) -> bool {
-    value
-        .and_then(Value::as_array)
-        .is_some_and(|tools| tools.iter().any(is_image_tool))
-}
-
-fn is_image_tool(value: &Value) -> bool {
-    value.get("type").and_then(Value::as_str) == Some("image_generation")
 }
 
 /// 图像 API 的稳定端点语义

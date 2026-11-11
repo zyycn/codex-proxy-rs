@@ -48,6 +48,7 @@ use gateway_core::provider_ports::{
     ProviderStoreErrorKind,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 use serde_json::{Map, Number, Value};
@@ -1728,7 +1729,7 @@ fn build_connection_test_operation(
     );
     body.insert("stream".to_owned(), Value::Bool(true));
     body.insert("store".to_owned(), Value::Bool(false));
-    let payload = ProtocolPayload::json_object("openai", body)
+    let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, body)
         .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
     Ok(Operation::Generate(GenerateRequest::from_protocol_payload(
         payload,

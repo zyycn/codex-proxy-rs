@@ -20,6 +20,7 @@ use gateway_core::{
     lifecycle::CancellationToken,
     operation::OperationKind,
 };
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::{future::Future, sync::Arc};
 
 use super::http::{ExpectedBody, buffered_response, error_response, into_http_response};
@@ -38,7 +39,7 @@ impl RequestInput {
     pub(crate) fn query(endpoint: String, model_hint: Option<String>, headers: &HeaderMap) -> Self {
         Self {
             endpoint,
-            protocol: "openai".to_owned(),
+            protocol: OPENAI_PROTOCOL.to_owned(),
             operation: None,
             transport: ClientTransport::HttpJson,
             model_hint,

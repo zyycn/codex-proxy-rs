@@ -44,6 +44,7 @@ use gateway_core::task::{
     WorkerRunnable, WorkerSchedule, WorkerTaskError,
 };
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use gateway_protocol::openai::events::{
     ParsedRateLimits, parse_rate_limit_headers, rate_limits_to_header_pairs,
 };
@@ -504,26 +505,14 @@ impl Provider for CodexProvider {
                 ..Default::default()
             };
         };
-        let payload = request.protocol_payload();
-        if payload.protocol() == gateway_protocol::anthropic::ANTHROPIC_PROTOCOL {
-            return ProviderRequestObservation {
-                reasoning_effort: gateway_protocol::anthropic::messages_request_effort(
-                    payload.body(),
-                )
-                .map(str::to_owned),
-                ..Default::default()
-            };
-        }
         let Ok(encoded) = encode_generate_request(request, "observability", None) else {
             return ProviderRequestObservation::default();
         };
-        let previous_session = decode_openai_session_state(request);
-        let semantics = encoded.semantics(
-            previous_session
-                .as_ref()
-                .and_then(|state| state.reasoning_effort_override.as_deref()),
-        );
-        let reasoning_effort = semantics.reasoning_effort.clone();
+        let previous_reasoning_effort_override = request
+            .provider_session_state(PROVIDER_NAME)
+            .filter(|state| state.extension_owner().is_none())
+            .and_then(|_| decode_openai_session_state(request))
+            .and_then(|state| state.reasoning_effort_override);
         let previous_response_id = encoded.previous_response_id();
         let continuation = ContinuationRequestObservation {
             affinity_hash: derive_codex_session_affinity(&encoded, client_api_key_id)
@@ -535,11 +524,7 @@ impl Provider for CodexProvider {
         };
         ProviderRequestObservation {
             requested_model: None,
-            reasoning_effort,
-            reasoning_preset: semantics.reasoning_preset.map(str::to_owned),
-            request_kind: semantics.request_kind,
-            subagent_kind: semantics.subagent_kind,
-            compact: semantics.compact,
+            previous_reasoning_effort_override,
             continuation,
         }
     }
@@ -650,7 +635,7 @@ impl Provider for CodexProvider {
         let mut operation = Operation::Generate(generate.clone());
         if context.fast_mode() != gateway_core::account::FastMode::Default
             && let Operation::Generate(generate) = &operation
-            && generate.protocol_payload().protocol() == PROVIDER_NAME
+            && generate.protocol_payload().protocol() == OPENAI_PROTOCOL
         {
             let mut request =
                 CodexResponsesRequest::from_body(generate.protocol_payload().body().clone());
@@ -668,7 +653,7 @@ impl Provider for CodexProvider {
                     )
                 })?;
                 operation = operation
-                    .replace_middleware_wire(PROVIDER_NAME, body.into())
+                    .replace_middleware_wire(OPENAI_PROTOCOL, body.into())
                     .map_err(|_| {
                         provider_error(
                             ProviderErrorKind::InvalidRequest,
@@ -691,7 +676,7 @@ impl Provider for CodexProvider {
         }
         // 其他协议必须先取得真实账号，再按固定 attempt 阶段调用转换器；选号前不能
         // 把未知正文当成 OpenAI wire 解释会话、亲和或传输字段
-        let upstream = (generate.protocol_payload().protocol() == PROVIDER_NAME)
+        let upstream = (generate.protocol_payload().protocol() == OPENAI_PROTOCOL)
             .then(|| encode_generate_request(generate, upstream_model.as_str(), None))
             .transpose()
             .map_err(map_request_error)?;
@@ -858,7 +843,7 @@ impl CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
-        if generate.protocol_payload().protocol() != PROVIDER_NAME
+        if generate.protocol_payload().protocol() != OPENAI_PROTOCOL
             || generate.wire_capability_requirements() != frozen_requirements
         {
             return Err(provider_error(

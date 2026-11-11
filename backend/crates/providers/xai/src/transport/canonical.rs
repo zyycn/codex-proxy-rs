@@ -15,6 +15,7 @@ use gateway_core::metering::{
     CurrencyCode, Decimal, Money, ProviderReportedCost, Usage,
 };
 use gateway_core::upstream::UpstreamSendState;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use gateway_protocol::openai::events::{TokenUsage, billable_usage_is_complete, extract_usage};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
 use serde_json::Value;
@@ -26,7 +27,6 @@ const CONTENTS_PER_OUTPUT: u32 = 1_024;
 const LONG_CONTEXT_THRESHOLD: u64 = 200_000;
 const GROK_PING_SSE_COMMENT: &[u8] = b": ping\n\n";
 const XAI_RESPONSE_PROTOCOL: &str = "xai";
-const OPENAI_RESPONSE_PROTOCOL: &str = "openai";
 
 pub(crate) struct GrokDecodedResponseBatch {
     pub(crate) source_events: Vec<ProviderEvent>,
@@ -311,7 +311,7 @@ impl NativeResponseTranslator for GrokNativeResponseTranslator {
     }
 
     fn target_protocol(&self) -> &str {
-        OPENAI_RESPONSE_PROTOCOL
+        OPENAI_PROTOCOL
     }
 
     fn translate(
@@ -344,7 +344,7 @@ impl NativeResponseTranslator for GrokNativeResponseTranslator {
             .is_some_and(|frame| frame.as_ref() == GROK_PING_SSE_COMMENT)
         {
             return ProtocolWireEvent::raw_sse(
-                OPENAI_RESPONSE_PROTOCOL,
+                OPENAI_PROTOCOL,
                 bytes::Bytes::from_static(GROK_PING_SSE_COMMENT),
             )
             .map(|wire| vec![wire])
@@ -485,7 +485,7 @@ impl GrokCanonicalDecoder {
                 )
                 .map_err(|_| protocol_error_marker())?;
                 let projected_wire = ProtocolWireEvent::raw_sse(
-                    OPENAI_RESPONSE_PROTOCOL,
+                    OPENAI_PROTOCOL,
                     bytes::Bytes::from_static(GROK_PING_SSE_COMMENT),
                 )
                 .map_err(|_| protocol_error_marker())?;
@@ -937,7 +937,7 @@ fn project_response_event(
             Some(transformed_type.clone())
         };
         let wire = ProtocolWireEvent::json_with_sse_metadata(
-            OPENAI_RESPONSE_PROTOCOL,
+            OPENAI_PROTOCOL,
             wire_event,
             value,
             (index == 0).then(|| sse_id.map(str::to_owned)).flatten(),

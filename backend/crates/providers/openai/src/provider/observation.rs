@@ -5,7 +5,7 @@ use super::*;
 pub(super) fn endpoint_requested_model(
     payload: &gateway_core::operation::RawJsonPayload,
 ) -> Option<gateway_core::routing::PublicModelId> {
-    if payload.protocol() != PROVIDER_NAME {
+    if payload.protocol() != OPENAI_PROTOCOL {
         return None;
     }
     // 选号与观测共用模型提取，跳过编辑请求中的图片且不改写原始正文

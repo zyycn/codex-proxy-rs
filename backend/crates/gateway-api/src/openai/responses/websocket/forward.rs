@@ -16,6 +16,7 @@ use gateway_core::engine::response_control::{ResponseControl, ResponseControlUna
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::event::ProviderResponseHeader;
 use gateway_core::operation::ProviderSessionState;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 use crate::openai::error::{gateway_error_contract, gateway_error_from_engine};
 use crate::openai::middleware::{PendingExecution, pending_execution_response};
@@ -118,7 +119,7 @@ pub(super) async fn execution_response(
                 .collect();
             // 失败也要保留会话到洋葱链返回，否则释放会话会取消仍在等待 next 的插件
             return Ok(pending_execution_response(
-                "openai".to_owned(),
+                OPENAI_PROTOCOL.to_owned(),
                 status,
                 response_headers,
                 MiddlewareFrame::new(
@@ -142,7 +143,7 @@ pub(super) async fn execution_response(
         .map(|header| MiddlewareHeader::new(header.name(), header.value().clone()))
         .collect();
     Ok(MiddlewareResponse::new(
-        "openai".to_owned(),
+        OPENAI_PROTOCOL.to_owned(),
         200,
         headers,
         Box::new(body),
@@ -159,7 +160,7 @@ pub(super) async fn forward_response(
     response_control: &ResponseControl,
 ) -> ForwardOutcome {
     let (protocol, status, headers, mut body, _) = response.into_parts();
-    if protocol != "openai" || StatusCode::from_u16(status).is_err() {
+    if protocol != OPENAI_PROTOCOL || StatusCode::from_u16(status).is_err() {
         return fail_body(connection, body, MiddlewareError::InvalidState, &request_id).await;
     }
     let response_headers = headers

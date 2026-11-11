@@ -15,6 +15,8 @@ use gateway_core::{
     error::{GatewayError, GatewayErrorKind},
     operation::OperationKind,
 };
+use gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GenerationProtocol {
@@ -27,7 +29,7 @@ impl GenerationProtocol {
     pub(crate) fn from_request(request: &DecodedGenerationRequest) -> Self {
         if request.operation().kind() == OperationKind::CountTokens {
             Self::MessageTokenCount
-        } else if request.operation().protocol() == "anthropic" {
+        } else if request.operation().protocol() == ANTHROPIC_PROTOCOL {
             Self::Messages
         } else {
             Self::Responses
@@ -36,8 +38,8 @@ impl GenerationProtocol {
 
     pub(crate) const fn wire(self) -> &'static str {
         match self {
-            Self::Responses => "openai",
-            Self::Messages | Self::MessageTokenCount => "anthropic",
+            Self::Responses => OPENAI_PROTOCOL,
+            Self::Messages | Self::MessageTokenCount => ANTHROPIC_PROTOCOL,
         }
     }
 

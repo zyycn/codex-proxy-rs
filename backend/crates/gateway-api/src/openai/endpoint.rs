@@ -22,6 +22,7 @@ use gateway_core::{
     error::GatewayError,
     operation::Operation,
 };
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 use crate::client_error::{ProtocolError, ProtocolErrorBody};
 use crate::middleware::headers::encode_headers;
@@ -65,7 +66,7 @@ where
         Box::new(move |prepared, request| {
             Box::pin(async move {
                 let (protocol, headers, body) = request_parts(request.clone())?;
-                if protocol != "openai" {
+                if protocol != OPENAI_PROTOCOL {
                     return Err(MiddlewareError::Rejected);
                 }
                 let operation = request.apply_capabilities(decode(body, headers).await?)?;
@@ -80,7 +81,8 @@ where
                 {
                     Ok(started) => started,
                     Err(error) => {
-                        return buffered_response("openai", gateway_error_response(&error)).await;
+                        return buffered_response(OPENAI_PROTOCOL, gateway_error_response(&error))
+                            .await;
                     }
                 };
                 collect_raw_json_response(started).await
@@ -89,7 +91,9 @@ where
     )
     .await;
     let response = match result {
-        Ok(response) => into_http_response(response, ExpectedBody::SingleJson, "openai").await,
+        Ok(response) => {
+            into_http_response(response, ExpectedBody::SingleJson, OPENAI_PROTOCOL).await
+        }
         Err(error) => error_response(error),
     };
     if !execution_entered.load(Ordering::Relaxed) {
@@ -143,7 +147,7 @@ async fn collect_raw_json_response(
         .await
         .map_err(|_| MiddlewareError::Fault)?;
     Ok(pending_execution_response(
-        "openai".to_owned(),
+        OPENAI_PROTOCOL.to_owned(),
         parts.status.as_u16(),
         encode_headers(&parts.headers),
         MiddlewareFrame::new(bytes, framing, true).with_transformed(transformed),
@@ -155,7 +159,7 @@ fn raw_json_body(events: Vec<ProviderEvent>) -> Option<Bytes> {
     let mut body = None;
     for event in events {
         let (_, wire) = event.into_parts();
-        let Some(wire) = wire.filter(|wire| wire.protocol() == "openai") else {
+        let Some(wire) = wire.filter(|wire| wire.protocol() == OPENAI_PROTOCOL) else {
             continue;
         };
         let Some(raw) = wire.into_raw_json_body() else {

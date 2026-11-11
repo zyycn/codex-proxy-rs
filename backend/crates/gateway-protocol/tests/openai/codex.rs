@@ -219,6 +219,27 @@ fn codex_semantics_should_detect_ultra_preset_from_proactive_multi_agent() {
     assert_eq!(semantics.reasoning_preset, Some("ultra"));
     assert!(!semantics.compact);
 
+    for (role, message_type, expected) in [
+        ("system", Some("message"), Some("ultra")),
+        ("system", None, None),
+        ("system", Some("function_call"), None),
+        ("user", Some("message"), None),
+        (" system ", Some("message"), None),
+    ] {
+        let mut shaped = body.clone();
+        let item = shaped["input"][0].as_object_mut().unwrap();
+        item.insert("role".to_owned(), json!(role));
+        if let Some(message_type) = message_type {
+            item.insert("type".to_owned(), json!(message_type));
+        } else {
+            item.remove("type");
+        }
+        assert_eq!(
+            codex_responses_request_semantics(&shaped, &Map::new()).reasoning_preset,
+            expected
+        );
+    }
+
     for (effort, expected_preset) in [("high", None), ("max", Some("ultra"))] {
         body["input"]
             .as_array_mut()
@@ -227,6 +248,27 @@ fn codex_semantics_should_detect_ultra_preset_from_proactive_multi_agent() {
         let semantics = codex_responses_request_semantics(&body, &Map::new());
         assert_eq!(semantics.reasoning_effort.as_deref(), Some(effort));
         assert_eq!(semantics.reasoning_preset, expected_preset);
+    }
+}
+
+#[test]
+fn empty_authoritative_turn_metadata_does_not_fall_back_to_body_aliases() {
+    for (context, body) in [
+        (
+            json!({"turn_metadata":""}),
+            json!({"turnMetadata":"{\"request_kind\":\"review\"}"}),
+        ),
+        (
+            json!({"turn_metadata":" "}),
+            json!({"turnMetadata":"{\"request_kind\":\"review\"}"}),
+        ),
+        (
+            json!({}),
+            json!({"turnMetadata":"","turn_metadata":"{\"request_kind\":\"review\"}"}),
+        ),
+    ] {
+        let semantics = codex_responses_request_semantics(&object(body), &object(context));
+        assert_eq!(semantics.request_kind, None);
     }
 }
 
@@ -265,5 +307,44 @@ fn account_identity_does_not_infer_a_session_from_turn_or_cache_keys() {
         json!({"input":"hello"}),
     ] {
         assert_eq!(codex_account_session_id(&object(body), &Map::new()), None);
+    }
+}
+
+#[test]
+fn request_observation_classifies_prewarm_from_generate() {
+    for (generate, request_kind, expected_kind) in [
+        (Some(json!(false)), None, Some("prewarm")),
+        (Some(json!(false)), Some("prewarm"), Some("prewarm")),
+        (Some(json!(false)), Some("review"), Some("prewarm")),
+        (Some(json!(true)), Some("prewarm"), None),
+        (None, Some("prewarm"), None),
+        (Some(json!(null)), Some("prewarm"), None),
+        (Some(json!("false")), Some("prewarm"), None),
+        (None, Some("review"), Some("review")),
+        (None, None, None),
+    ] {
+        let mut body = Map::from_iter([
+            ("model".to_owned(), json!("gpt-test")),
+            ("input".to_owned(), json!("hello")),
+            ("store".to_owned(), json!(false)),
+        ]);
+        if let Some(generate) = generate {
+            body.insert("generate".to_owned(), generate);
+        }
+        let context = Map::from_iter([(
+            "turn_metadata".to_owned(),
+            Value::String(
+                json!({"request_kind": request_kind, "subagent_kind": "worker"}).to_string(),
+            ),
+        )]);
+        let observation = codex_responses_request_semantics(&body, &context);
+
+        assert_eq!(
+            observation.request_kind.as_deref(),
+            expected_kind,
+            "generate={:?}, request_kind={request_kind:?}",
+            body.get("generate"),
+        );
+        assert_eq!(observation.subagent_kind.as_deref(), Some("worker"));
     }
 }

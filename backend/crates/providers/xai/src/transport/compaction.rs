@@ -7,6 +7,7 @@ use gateway_core::error::IdentifierError;
 use gateway_core::event::{GatewayEvent, ProtocolWireEvent, ProviderEvent, ResponseMeta};
 use gateway_core::operation::GenerateRequest;
 use gateway_core::policy::ClientApiKeyId;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -303,7 +304,7 @@ pub(crate) fn compaction_wire_events(
     );
     Ok(GrokCompactionWireEvents {
         created: ProtocolWireEvent::json_with_sse_metadata(
-            "openai",
+            OPENAI_PROTOCOL,
             Some("response.created".to_owned()),
             json!({
                 "type": "response.created",
@@ -313,7 +314,7 @@ pub(crate) fn compaction_wire_events(
             None,
         )?,
         output_done: ProtocolWireEvent::json_with_sse_metadata(
-            "openai",
+            OPENAI_PROTOCOL,
             Some("response.output_item.done".to_owned()),
             json!({
                 "type": "response.output_item.done",
@@ -324,7 +325,7 @@ pub(crate) fn compaction_wire_events(
             None,
         )?,
         terminal: ProtocolWireEvent::json_with_sse_metadata(
-            "openai",
+            OPENAI_PROTOCOL,
             Some("response.completed".to_owned()),
             json!({
                 "type": "response.completed",

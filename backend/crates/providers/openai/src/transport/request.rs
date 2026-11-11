@@ -5,7 +5,8 @@ use std::io;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::operation::GenerateRequest;
 use gateway_protocol::openai::{
-    WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, is_transport_managed_request_header,
+    OPENAI_PROTOCOL, WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY,
+    is_transport_managed_request_header,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use roxmltree::Document;
@@ -108,7 +109,7 @@ pub fn encode_generate_request(
     location: Option<&CodexRequestLocation>,
 ) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
     let payload = request.protocol_payload();
-    if payload.protocol() != "openai" {
+    if payload.protocol() != OPENAI_PROTOCOL {
         return Err(CodexRequestEncodeError::InvalidProtocolPayload);
     }
     let mut body = payload.body().clone();

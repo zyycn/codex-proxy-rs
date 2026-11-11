@@ -11,6 +11,7 @@ use axum::{
 use gateway_core::engine::execution::ClientTransport;
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::operation::{Operation, OperationKind, RawJsonPayload, StandaloneSearchRequest};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 use crate::ApiState;
 use crate::middleware::headers::encode_headers;
@@ -21,8 +22,6 @@ use crate::openai::{
     responses::{OpenAiRequestHeaders, request_client_context},
     router::SEARCH_PATH,
 };
-
-const OPENAI_PROTOCOL: &str = "openai";
 
 /// `POST /v1/alpha/search`
 pub(crate) async fn standalone_search(

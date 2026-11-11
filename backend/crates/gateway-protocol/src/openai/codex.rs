@@ -127,7 +127,7 @@ pub fn codex_responses_request_semantics(
 ) -> CodexResponsesRequestSemantics {
     codex_responses_request_semantics_with_turn_metadata(
         body,
-        non_empty_string(context.get("turn_metadata")),
+        context.get("turn_metadata").and_then(Value::as_str),
         None,
     )
 }
@@ -153,10 +153,12 @@ pub fn codex_responses_request_semantics_with_turn_metadata(
     let reasoning_effort = reasoning_effort_override
         .clone()
         .or_else(|| reasoning_effort(body.get("reasoning")));
+    // 权威上下文与显式 turnMetadata 即使为空也不退回其他别名
     let parsed_turn_metadata = turn_metadata
+        .or_else(|| body.get("turnMetadata").and_then(Value::as_str))
         .or_else(|| request_turn_metadata(body))
         .and_then(|value| serde_json::from_str::<Value>(value).ok());
-    let request_kind = parsed_turn_metadata
+    let mut request_kind = parsed_turn_metadata
         .as_ref()
         .and_then(|metadata| non_empty_string(metadata.get("request_kind")))
         .map(ToOwned::to_owned);
@@ -174,6 +176,12 @@ pub fn codex_responses_request_semantics_with_turn_metadata(
         && proactive_multi_agent)
         .then_some("ultra");
     let compact = request_kind.as_deref() == Some("compaction") || compact_trigger;
+    // generate=false 才是预热，客户端分类提示不能把真实推理排除在用量统计外
+    if body.get("generate").and_then(Value::as_bool) == Some(false) {
+        request_kind = Some("prewarm".to_owned());
+    } else if request_kind.as_deref() == Some("prewarm") {
+        request_kind = None;
+    }
 
     CodexResponsesRequestSemantics {
         reasoning_effort,
@@ -217,7 +225,10 @@ fn latest_multi_agent_mode<'a>(
     input: impl DoubleEndedIterator<Item = &'a Value>,
 ) -> Option<&'a str> {
     input.rev().find_map(|item| {
-        if non_empty_string(item.get("role")) != Some("developer") {
+        // 显式 system 消息会由 Codex 编码器转为 developer，观测在编码前保持等价
+        let system_message = item.get("type").and_then(Value::as_str) == Some("message")
+            && item.get("role").and_then(Value::as_str) == Some("system");
+        if non_empty_string(item.get("role")) != Some("developer") && !system_message {
             return None;
         }
         item.get("content")?

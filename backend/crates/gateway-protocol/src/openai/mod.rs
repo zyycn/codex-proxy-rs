@@ -1,5 +1,8 @@
 //! 共享的 OpenAI 线协议类型、解析与编码入口
 
+/// OpenAI 线协议载荷与事件的协议标识
+pub const OPENAI_PROTOCOL: &str = "openai";
+
 /// Codex Responses Lite 的 HTTP 请求头
 pub const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";

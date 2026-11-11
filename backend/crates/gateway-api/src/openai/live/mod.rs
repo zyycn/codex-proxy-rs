@@ -20,6 +20,7 @@ use gateway_core::event::ProviderResponseHeader;
 use gateway_core::operation::{
     ProviderHttpHeader, ProviderHttpMethod, ProviderHttpRequest, RawHttpPayload,
 };
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use serde_json::{Value, json};
 
 use crate::openai::error::openai_error_response;
@@ -172,7 +173,7 @@ pub(crate) fn live_call_operation(
             "invalid_request",
         ))
     };
-    let payload = RawHttpPayload::new("openai", body).map_err(|_| invalid())?;
+    let payload = RawHttpPayload::new(OPENAI_PROTOCOL, body).map_err(|_| invalid())?;
     ProviderHttpRequest::new(
         LIVE_CALLS_ENDPOINT,
         ProviderHttpMethod::Post,

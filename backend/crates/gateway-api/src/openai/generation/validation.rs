@@ -1,6 +1,7 @@
 //! 出口校验按协议维护边界事实，不在流式路径保存生成正文
 
 use gateway_core::event::ProviderEvent;
+use gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
 use gateway_protocol::openai::sse::parse_sse_events;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
@@ -32,7 +33,7 @@ impl GenerationValidationFacts {
             Self::Messages(id) => {
                 if let Some(value) = event
                     .wire_event()
-                    .filter(|wire| wire.protocol() == "anthropic")
+                    .filter(|wire| wire.protocol() == ANTHROPIC_PROTOCOL)
                     .map(|wire| wire.data())
                     && let Some(value) = value
                         .pointer("/message/id")

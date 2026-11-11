@@ -157,40 +157,28 @@ fn prompt_cache_and_image_generation_should_be_read_from_raw_body() {
 }
 
 #[test]
-fn image_generation_detection_distinguishes_tools_from_image_inputs_and_passive_namespaces() {
-    for body in [
-        json!({"tools":[{"type":"image_generation"}]}),
-        json!({"tool_choice":{"type":"image_generation"}}),
-        json!({"tool_choice":{"type":"allowed_tools","tools":[{"type":"image_generation"}]}}),
-        json!({"input":[{"type":"additional_tools","tools":[{"type":"image_generation"}]}]}),
-    ] {
-        assert!(
-            generate(body.clone()).image_generation_requested(),
-            "{body}"
-        );
-    }
-    for body in [
-        json!({"input":"Please generate an image"}),
-        json!({"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}]}),
-        json!({"tools":[{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]}]}),
-        json!({"tools":[{"type":"function","name":"image_generation"}]}),
-    ] {
-        assert!(
-            !generate(body.clone()).image_generation_requested(),
-            "{body}"
-        );
-    }
-    let private = GenerateRequest::from_protocol_payload(
-        ProtocolPayload::json_object(
-            "private",
-            json!({"tools":[{"type":"image_generation"}]})
-                .as_object()
-                .unwrap()
-                .clone(),
+fn image_generation_fact_tracks_body_replacement_and_ignores_context() {
+    let operation = Operation::Generate(generate(json!({"input":"hello"})));
+    let operation = operation
+        .replace_protocol_wire(
+            Some(Bytes::from_static(
+                br#"{"tools":[{"type":"image_generation"}]}"#,
+            )),
+            Map::new(),
         )
-        .unwrap(),
-    );
-    assert!(!private.image_generation_requested());
+        .unwrap();
+    assert!(operation.image_generation_requested());
+    let operation = operation
+        .replace_protocol_wire(None, Map::from_iter([("tools".to_owned(), json!([]))]))
+        .unwrap();
+    assert!(operation.image_generation_requested());
+    let operation = operation
+        .replace_protocol_wire(
+            Some(Bytes::from_static(br#"{"input":"hello"}"#)),
+            Map::new(),
+        )
+        .unwrap();
+    assert!(!operation.image_generation_requested());
 }
 
 #[test]
@@ -203,6 +191,10 @@ fn image_generation_fact_survives_cross_protocol_translation() {
         )
         .unwrap();
     assert!(translated.image_generation_requested());
+    let replaced = translated
+        .replace_protocol_wire(Some(Bytes::from_static(br#"{"messages":[]}"#)), Map::new())
+        .unwrap();
+    assert!(replaced.image_generation_requested());
 }
 
 #[test]

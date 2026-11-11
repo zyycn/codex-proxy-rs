@@ -801,16 +801,38 @@ impl DefaultExecutionService {
             active_request,
             admission_decision_ms,
         } = start_guard;
-        let observation = plan
-            .candidates()
-            .first()
-            .map_or_else(Default::default, |candidate| {
-                providers.request_observation(
-                    candidate.provider(),
-                    &operation,
-                    client.policy.key_id(),
-                )
+        let observation_provider = match &target {
+            ExecutionTarget::ProviderEndpoint { provider, .. } => Some(provider),
+            ExecutionTarget::Model(_) => plan
+                .candidates()
+                .iter()
+                .find(|candidate| {
+                    operation
+                        .provider_session_state(candidate.provider().as_str())
+                        .is_some_and(|state| state.extension_owner().is_none())
+                })
+                .or_else(|| plan.candidates().first())
+                .map(|candidate| candidate.provider()),
+        };
+        let provider_observation =
+            observation_provider.map_or_else(Default::default, |candidate| {
+                providers.request_observation(candidate, &operation, client.policy.key_id())
             });
+        // 纯协议事实不依赖候选顺序，Provider 仅补充所属会话的旧配置和恢复关联
+        let observation = match &operation {
+            Operation::Generate(request) => {
+                let payload = request.protocol_payload();
+                gateway_protocol::request::request_observation(
+                    payload.protocol(),
+                    payload.body(),
+                    payload.context(),
+                    provider_observation
+                        .previous_reasoning_effort_override
+                        .as_deref(),
+                )
+            }
+            _ => Default::default(),
+        };
         let (request_kind, subagent_kind) = if let Some(nested) = authorization.nested.as_ref() {
             (
                 Some("plugin_child_model".to_owned()),
@@ -843,7 +865,9 @@ impl DefaultExecutionService {
             operation: operation.kind(),
             endpoint: metadata.endpoint,
             client_transport: metadata.transport.as_str().to_owned(),
-            requested_model: target.into_public_model().or(observation.requested_model),
+            requested_model: target
+                .into_public_model()
+                .or(provider_observation.requested_model),
             client_ip: metadata.client_ip,
             user_agent: metadata.user_agent,
             reasoning_effort: observation.reasoning_effort,
@@ -851,7 +875,7 @@ impl DefaultExecutionService {
             request_kind,
             subagent_kind,
             compact: observation.compact,
-            continuation: observation.continuation,
+            continuation: provider_observation.continuation,
             image_generation_requested: operation.image_generation_requested(),
             admission_decision_ms,
             started_at,

@@ -6,6 +6,7 @@ use std::{
 };
 
 use gateway_core::event::{GatewayEvent, ProtocolWireEvent, ProviderEvent};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use gateway_protocol::openai::sse::{parse_sse_events, sse_frame_is_done};
 use serde_json::{Map, Value};
 
@@ -44,7 +45,7 @@ impl ResponseValidationFacts {
         if let Some(wire) = event
             .middleware_origin_wire()
             .or_else(|| event.wire_event())
-            .filter(|wire| wire.protocol() == "openai")
+            .filter(|wire| wire.protocol() == OPENAI_PROTOCOL)
         {
             facts.observe_wire(wire);
         }

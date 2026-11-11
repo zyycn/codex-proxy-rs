@@ -709,7 +709,7 @@ async fn reset_credit_explicit_http_rejection_should_preserve_the_raw_body() {
 }
 
 #[tokio::test]
-async fn openai_core_provider_projects_codex_request_observation_without_routing_side_effects() {
+async fn openai_core_provider_projects_private_request_observation_without_execution() {
     let config = valid_config();
     let bundle = provider_openai::initialize(
         config.config.clone(),
@@ -723,14 +723,11 @@ async fn openai_core_provider_projects_codex_request_observation_without_routing
         Map::from_iter([
             ("model".to_owned(), json!("gpt-5.4")),
             ("input".to_owned(), json!("summarize")),
-            ("reasoning".to_owned(), json!({"effort": "high"})),
+            ("session_id".to_owned(), json!("observation-session")),
+            ("previous_response_id".to_owned(), json!("resp_previous")),
         ]),
     )
-    .expect("OpenAI payload")
-    .with_context(Map::from_iter([(
-        "turn_metadata".to_owned(),
-        Value::String(r#"{"request_kind":"compaction","subagent_kind":"review"}"#.to_owned()),
-    )]));
+    .expect("OpenAI payload");
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
 
     let client_key_id = ClientApiKeyId::new("key_openai_admin_observation").expect("client key");
@@ -738,11 +735,9 @@ async fn openai_core_provider_projects_codex_request_observation_without_routing
         .core_provider()
         .request_observation(&operation, &client_key_id);
 
-    assert_eq!(observation.request_kind.as_deref(), Some("compaction"));
-    assert_eq!(observation.subagent_kind.as_deref(), Some("review"));
-    // Codex 当前只在特定多代理预设组合下给出 reasoning_preset；普通 high 保持空值
-    assert_eq!(observation.reasoning_preset, None);
-    assert!(observation.compact);
+    assert!(observation.continuation.requested);
+    assert!(observation.continuation.previous_response_id_hash.is_some());
+    assert!(observation.continuation.affinity_hash.is_some());
 }
 
 #[tokio::test]

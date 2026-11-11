@@ -7,6 +7,7 @@ use bytes::Bytes;
 use gateway_core::operation::RawJsonPayload;
 use gateway_core::routing::{ModelServiceTier, UpstreamModelId};
 use gateway_protocol::anthropic::MessagesModelCapabilities;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use reqwest::header::{ETAG, HeaderMap};
 use serde::Deserialize;
 
@@ -697,7 +698,7 @@ pub(super) fn parse_api_model_catalog(
             .unwrap_or_else(|| request_model.as_str().to_owned());
         validate_public_text(&display_name, MAX_DISPLAY_NAME_BYTES, false)?;
         let document = RawJsonPayload::new(
-            "openai",
+            OPENAI_PROTOCOL,
             Bytes::from(
                 serde_json::to_vec(&serde_json::json!({"id": request_model.as_str()}))
                     .map_err(|_| CodexModelCatalogError::InvalidWire)?,

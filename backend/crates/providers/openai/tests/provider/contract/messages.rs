@@ -52,51 +52,6 @@ fn messages_operation(stream: bool) -> Operation {
     ))
 }
 
-#[test]
-fn messages_request_observation_preserves_explicit_effort_without_inventing_defaults() {
-    let store = Arc::new(MemoryAccountStore::default());
-    let provider = provider(&store);
-    let client = ClientApiKeyId::new("key_messages_observation").unwrap();
-    for (options, expected) in [
-        (json!({"output_config":{"effort":"xhigh"}}), Some("xhigh")),
-        (
-            json!({"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}),
-            Some("low"),
-        ),
-        (
-            json!({"thinking":{"type":"disabled"},"output_config":{"effort":"high"}}),
-            Some("high"),
-        ),
-        (
-            json!({"output_config":{"effort":" Future-Level "}}),
-            Some("Future-Level"),
-        ),
-        (json!({"output_config":{"effort":" "}}), None),
-        (json!({"output_config":{"effort":null}}), None),
-        (json!({"output_config":{"effort":42}}), None),
-        (json!({"thinking":{"type":"adaptive"}}), None),
-        (
-            json!({"thinking":{"type":"enabled","budget_tokens":32768}}),
-            None,
-        ),
-        (json!({}), None),
-    ] {
-        let mut body = json!({"model":"gpt-5.4","max_tokens":128,"messages":[{"role":"user","content":"hello"}]});
-        body.as_object_mut()
-            .unwrap()
-            .extend(options.as_object().unwrap().clone());
-        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-            ProtocolPayload::json_object("anthropic", body.as_object().unwrap().clone()).unwrap(),
-        ));
-        let observation = provider.request_observation(&operation, &client);
-        assert_eq!(
-            observation.reasoning_effort.as_deref(),
-            expected,
-            "{options}"
-        );
-    }
-}
-
 #[tokio::test]
 async fn final_usage_before_truncation_keeps_only_explicitly_priceable_cost() {
     for (priced, long_cache, fast) in [
@@ -221,16 +176,6 @@ async fn native_messages_preserve_json_sse_headers_and_real_signatures() {
         let operation = messages_operation(streaming);
         let original = operation.middleware_body().unwrap();
         let provider = provider(&store);
-        assert_eq!(
-            provider
-                .request_observation(
-                    &operation,
-                    &ClientApiKeyId::new("key_messages_native").unwrap()
-                )
-                .reasoning_effort
-                .as_deref(),
-            Some("xhigh")
-        );
         let mut stream = provider
             .execute(
                 planned_request("openai", operation),

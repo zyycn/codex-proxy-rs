@@ -27,13 +27,13 @@ impl CodexProvider {
             return Err(invalid_request());
         };
         let source = generate.protocol_payload().protocol();
-        if !matches!(source, PROVIDER_NAME | ANTHROPIC_PROTOCOL) {
+        if !matches!(source, OPENAI_PROTOCOL | ANTHROPIC_PROTOCOL) {
             return Err(invalid_request());
         }
         if selected.lease.authentication().api_protocol() == ApiKeyProtocol::Messages {
             if context.continuation_attempt() == ContinuationAttempt::Native
                 || generate.provider_session_state(PROVIDER_NAME).is_some()
-                || (source == PROVIDER_NAME
+                || (source == OPENAI_PROTOCOL
                     && generate
                         .protocol_payload()
                         .body()
@@ -61,7 +61,7 @@ impl CodexProvider {
             };
             body.insert("model".to_owned(), Value::String(model.as_str().to_owned()));
             let mut source_context = generate.protocol_payload().context().clone();
-            if source == PROVIDER_NAME {
+            if source == OPENAI_PROTOCOL {
                 retain_target_headers(source, &mut source_context, &mut headers);
                 if body.get("speed").and_then(Value::as_str) == Some("fast") {
                     crate::compat::add_translated_fast_beta(
@@ -70,7 +70,7 @@ impl CodexProvider {
                     );
                 }
             }
-            let translator = (source == PROVIDER_NAME)
+            let translator = (source == OPENAI_PROTOCOL)
                 .then(|| translator::MessagesResponseTranslator::new(original));
             drop(operation);
             let stream = self
@@ -99,7 +99,7 @@ impl CodexProvider {
             let operation = operation
                 .replace_protocol_wire(None, source_context)
                 .map_err(|_| invalid_request())?
-                .translate_protocol_wire(PROVIDER_NAME, body.into())
+                .translate_protocol_wire(OPENAI_PROTOCOL, body.into())
                 .map_err(|_| invalid_request())?;
             // 原始能力已在上面核对；Responses 终端只校验它实际消费的 wire 事实
             if let Operation::Generate(generate) = &operation {

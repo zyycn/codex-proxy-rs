@@ -5,6 +5,7 @@ use std::fmt;
 
 use gateway_core::operation::GenerateRequest;
 use gateway_core::policy::ClientApiKeyId;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
@@ -217,7 +218,7 @@ impl GrokResponsesRequest {
         should_consume_terminal_compaction_trigger: bool,
     ) -> Result<Self, GrokRequestEncodeError> {
         let payload = request.protocol_payload();
-        if payload.protocol() != "openai" {
+        if payload.protocol() != OPENAI_PROTOCOL {
             return Err(GrokRequestEncodeError::InvalidProtocolPayload);
         }
         // Grok Build 会把 Codex 的预热请求当作真实生成；必须在发送前拒绝，
