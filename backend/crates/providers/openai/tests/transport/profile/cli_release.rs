@@ -53,7 +53,12 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
     let state = CodexWireProfileState::new(super::wire_profile());
     let cache = Arc::new(super::ArtifactProfiles::default());
     let provider = ProviderKind::new("openai").unwrap();
-    let service = CliReleaseService::new(provider.clone(), state.clone(), cache.clone()).unwrap();
+    let service = CliReleaseService::new(
+        provider.clone(),
+        state.clone(),
+        cache.clone(),
+        provider_openai::transport::profile::ReleaseNetwork::new().unwrap(),
+    );
     let automatic = ClientProfileSelection {
         client: ClientKind::Cli,
         platform: ClientPlatform::Linux,
@@ -127,10 +132,14 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
     );
 
     let restarted = CodexWireProfileState::new(super::wire_profile());
-    CliReleaseService::new(provider, restarted.clone(), cache)
-        .unwrap()
-        .restore()
-        .await;
+    CliReleaseService::new(
+        provider,
+        restarted.clone(),
+        cache,
+        provider_openai::transport::profile::ReleaseNetwork::new().unwrap(),
+    )
+    .restore()
+    .await;
     assert_eq!(
         automatic.resolve(&restarted).unwrap(),
         automatic.resolve(&state).unwrap()

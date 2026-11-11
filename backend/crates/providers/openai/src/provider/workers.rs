@@ -3,9 +3,19 @@
 use super::*;
 use crate::transport::profile::cli_release::CliReleaseService;
 use crate::transport::profile::platform_release::PlatformDesktopReleaseService;
+use gateway_core::account::OutboundProxy;
+use gateway_core::provider_ports::ProviderRuntimePolicyPort;
 use gateway_core::task::WorkerDaemonContext;
+use tokio::sync::Mutex;
+use tokio::time::Instant;
+
+use crate::transport::profile::ReleaseNetwork;
 
 pub(crate) struct ClientReleaseServices {
+    pub runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+    pub desktop_network: ReleaseNetwork,
+    pub cli_network: ReleaseNetwork,
+    pub platform_network: ReleaseNetwork,
     pub desktop: Arc<CodexDesktopReleaseService>,
     pub cli: Arc<CliReleaseService>,
     pub platforms: Arc<PlatformDesktopReleaseService>,
@@ -15,6 +25,8 @@ pub(super) const WORKER_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 pub(super) const WORKER_MAXIMUM_BACKOFF: Duration = Duration::from_secs(60);
 pub(super) const WORKER_LEASE_TTL: Duration = Duration::from_secs(15 * 60);
 pub(super) const WORKER_LEASE_RENEWAL: Duration = Duration::from_secs(5 * 60);
+const RELEASE_PROXY_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
 pub(super) const OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 pub(super) const QUOTA_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 pub(super) const DESKTOP_RELEASE_WORKER_OWNER: &str = "openai-desktop-release";
@@ -58,17 +70,25 @@ pub(crate) fn worker_contributions(
                 WorkerKind::QuotaCatalogHealth,
                 "openai-platform-desktop-release",
             )?,
-            APPCAST_POLL_INTERVAL,
-            Box::new(OpenAiPlatformDesktopReleaseTask {
-                service: releases.platforms,
-            }),
+            RELEASE_PROXY_CHECK_INTERVAL,
+            Box::new(ReleaseCheckTask::new(
+                Arc::clone(&releases.runtime_policy),
+                releases.platform_network,
+                Box::new(OpenAiPlatformDesktopReleaseTask {
+                    service: releases.platforms,
+                }),
+            )),
         )?),
         WorkerContribution::Registration(scheduled_registration(
             cli_release_id,
-            APPCAST_POLL_INTERVAL,
-            Box::new(OpenAiCliReleaseTask {
-                service: releases.cli,
-            }),
+            RELEASE_PROXY_CHECK_INTERVAL,
+            Box::new(ReleaseCheckTask::new(
+                Arc::clone(&releases.runtime_policy),
+                releases.cli_network,
+                Box::new(OpenAiCliReleaseTask {
+                    service: releases.cli,
+                }),
+            )),
         )?),
         WorkerContribution::Registration(scheduled_registration(
             quota_id,
@@ -102,10 +122,14 @@ pub(crate) fn worker_contributions(
         )?),
         WorkerContribution::Registration(scheduled_registration(
             desktop_release_id,
-            APPCAST_POLL_INTERVAL,
-            Box::new(OpenAiDesktopReleaseTask {
-                service: releases.desktop,
-            }),
+            RELEASE_PROXY_CHECK_INTERVAL,
+            Box::new(ReleaseCheckTask::new(
+                Arc::clone(&releases.runtime_policy),
+                releases.desktop_network,
+                Box::new(OpenAiDesktopReleaseTask {
+                    service: releases.desktop,
+                }),
+            )),
         )?),
     ]);
     Ok(contributions)
@@ -471,6 +495,57 @@ impl ScheduledTask for OpenAiWarmupTask {
                 Err(error) => {
                     tracing::warn!(error = %error, "OpenAI account warmup cycle failed");
                 }
+            }
+            Ok(())
+        })
+    }
+}
+
+struct ReleaseCheckTask {
+    policy: Arc<dyn ProviderRuntimePolicyPort>,
+    network: ReleaseNetwork,
+    task: Box<dyn ScheduledTask>,
+    last_check: Mutex<Option<(Option<OutboundProxy>, Instant)>>,
+}
+
+impl ReleaseCheckTask {
+    fn new(
+        policy: Arc<dyn ProviderRuntimePolicyPort>,
+        network: ReleaseNetwork,
+        task: Box<dyn ScheduledTask>,
+    ) -> Self {
+        Self {
+            policy,
+            network,
+            task,
+            last_check: Mutex::new(None),
+        }
+    }
+}
+
+impl ScheduledTask for ReleaseCheckTask {
+    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            let mut last = self.last_check.lock().await;
+            let proxy = tokio::select! {
+                () = context.cancellation().cancelled() => return Ok(()),
+                result = self.policy.load_client_release_proxy() => result,
+            }
+            .map_err(|error| {
+                WorkerTaskError::safe("官方客户端版本检测代理不可用").with_source(error)
+            })?;
+            if last.as_ref().is_some_and(|(previous, checked)| {
+                previous == &proxy && checked.elapsed() < APPCAST_POLL_INTERVAL
+            }) {
+                return Ok(());
+            }
+            // 同一任务的一轮检测固定出口，连接配置变更只影响下一轮
+            self.network.configure(proxy.as_ref()).map_err(|error| {
+                WorkerTaskError::safe("官方客户端版本检测代理配置失败").with_source(error)
+            })?;
+            self.task.run_cycle(context.clone()).await?;
+            if !context.cancellation().is_cancelled() {
+                *last = Some((proxy, Instant::now()));
             }
             Ok(())
         })

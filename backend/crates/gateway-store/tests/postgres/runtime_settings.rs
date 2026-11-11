@@ -9,6 +9,136 @@ use gateway_store::postgres::{
 
 use super::TestDatabase;
 
+#[tokio::test]
+async fn client_release_proxy_uses_managed_configuration_and_protects_selection() {
+    use gateway_admin::model::{MutationActor, MutationContext, proxies::NewProxy};
+    use gateway_admin::ports::proxy::ProxyStore;
+    use gateway_core::account::OutboundProxy;
+    use gateway_core::provider_ports::ProviderRuntimePolicyPort;
+    use gateway_store::postgres::PgProxyRepository;
+
+    let Some(database) = TestDatabase::create("release_proxy").await else {
+        return;
+    };
+    let settings = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let proxies = PgProxyRepository::new(database.pool.clone());
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "release-proxy-test".into(),
+    };
+    let saved = proxies
+        .create(
+            NewProxy {
+                name: "Release proxy".into(),
+                proxy: OutboundProxy::parse("http://fixture:secret@127.0.0.1:18080").unwrap(),
+                location: None,
+                auto_location: false,
+                test: None,
+            },
+            &context,
+        )
+        .await
+        .unwrap()
+        .record;
+    assert!(
+        settings
+            .load_client_release_proxy()
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut update = settings_with_margin(300);
+    update.values.client_release_proxy_id = Some(saved.id.clone());
+    settings
+        .update_runtime_settings(update.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        settings
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .values
+            .client_release_proxy_id
+            .as_deref(),
+        Some(saved.id.as_str())
+    );
+    assert_eq!(
+        settings
+            .load_client_release_proxy()
+            .await
+            .unwrap()
+            .unwrap()
+            .expose_url(),
+        saved.proxy.expose_url()
+    );
+    assert!(
+        proxies
+            .delete(&saved.id, saved.revision, &context)
+            .await
+            .is_err()
+    );
+    sqlx::query(
+        "update outbound_proxies set proxy_url = 'socks5h://127.0.0.1:18081' where id = $1",
+    )
+    .bind(&saved.id)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        settings
+            .load_client_release_proxy()
+            .await
+            .unwrap()
+            .unwrap()
+            .expose_url(),
+        "socks5h://127.0.0.1:18081"
+    );
+    sqlx::query("update outbound_proxies set enabled = false where id = $1")
+        .bind(&saved.id)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(settings.load_client_release_proxy().await.is_err());
+    assert!(
+        settings
+            .update_runtime_settings(update.clone())
+            .await
+            .is_err()
+    );
+    update.values.client_release_proxy_id = Some("missing-proxy".into());
+    assert!(
+        settings
+            .update_runtime_settings(update.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        settings
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .values
+            .client_release_proxy_id
+            .as_deref(),
+        Some(saved.id.as_str())
+    );
+    update.values.client_release_proxy_id = None;
+    settings.update_runtime_settings(update).await.unwrap();
+    assert!(
+        settings
+            .load_client_release_proxy()
+            .await
+            .unwrap()
+            .is_none()
+    );
+    proxies
+        .delete(&saved.id, saved.revision, &context)
+        .await
+        .unwrap();
+    database.close().await;
+}
+
 fn enabled_protection() -> gateway_core::account::AccountErrorProtection {
     serde_json::from_value(serde_json::json!({"enabled":true,"rules":[{"id":"custom","name":"自定义错误","conditions":[{"field":"code","operator":"equals","values":["custom_rejection"],"ignoreCase":false}]}],"threshold":12,"windowSeconds":600,"durationSeconds":7200,"probeEnabled":true,"probeModel":null})).unwrap()
 }
@@ -22,6 +152,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             ("grok-latest".to_owned(), "grok-4.5".to_owned()),
         ]),
         values: gateway_admin::model::settings::RuntimeSettingsValues {
+            client_release_proxy_id: None,
             codex_privacy_policy: Default::default(),
             request_location_enabled: false,
             request_location: Default::default(),

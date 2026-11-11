@@ -2136,11 +2136,24 @@ pub(crate) async fn initialized_test_bundle(
     accounts: Arc<MemoryAccountStore>,
     base_url: String,
 ) -> provider_openai::ProviderBundle {
+    initialized_test_bundle_with_policy(accounts, base_url, Arc::new(TestRuntimePolicy)).await
+}
+
+pub(crate) async fn initialized_test_bundle_with_policy(
+    accounts: Arc<MemoryAccountStore>,
+    base_url: String,
+    policy: Arc<dyn ProviderRuntimePolicyPort>,
+) -> provider_openai::ProviderBundle {
     let mut config = valid_config();
     config.config.api.base_url = base_url;
     provider_openai::initialize(
         config.config.clone(),
-        provider_ports_with(accounts, Arc::new(TestOAuthPending::default())),
+        provider_ports_with_policy(
+            accounts,
+            Arc::new(TestOAuthPending::default()),
+            Arc::new(TestCatalogCache::default()),
+            policy,
+        ),
         Arc::new(gateway_core::account::UpstreamInfoReader::default()),
     )
     .await
@@ -2166,6 +2179,20 @@ fn provider_ports_with_catalog(
     pending: Arc<TestOAuthPending>,
     catalog_cache: Arc<TestCatalogCache>,
 ) -> ProviderStorePorts {
+    provider_ports_with_policy(
+        accounts,
+        pending,
+        catalog_cache,
+        Arc::new(TestRuntimePolicy),
+    )
+}
+
+fn provider_ports_with_policy(
+    accounts: Arc<MemoryAccountStore>,
+    pending: Arc<TestOAuthPending>,
+    catalog_cache: Arc<TestCatalogCache>,
+    policy: Arc<dyn ProviderRuntimePolicyPort>,
+) -> ProviderStorePorts {
     ProviderStorePorts::new(
         accounts,
         Arc::new(TestLeaseCoordinator::default()),
@@ -2175,7 +2202,7 @@ fn provider_ports_with_catalog(
         Arc::new(TestArtifactProfiles),
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),
-        Arc::new(TestRuntimePolicy),
+        policy,
         pending,
         Arc::new(RecordingDiagnostics::default()),
     )

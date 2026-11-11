@@ -151,7 +151,7 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
 
 pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-            "select provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled, codex_privacy_policy_json,
+            "select client_release_proxy_id, provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled, codex_privacy_policy_json,
                     refresh_concurrency, max_concurrent_per_account,
                     rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
@@ -172,6 +172,31 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
 }
 
 impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
+    fn load_client_release_proxy(
+        &self,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<Option<gateway_core::account::OutboundProxy>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            let (id, url, enabled): (Option<String>, Option<String>, Option<bool>) = sqlx::query_as(
+                "select s.client_release_proxy_id, p.proxy_url, p.enabled from runtime_settings s
+                 left join outbound_proxies p on p.id = s.client_release_proxy_id where s.id = 1",
+            ).fetch_one(&self.pool).await
+                .map_err(|source| crate::provider_unavailable("load client release proxy", source))?;
+            if id.is_none() {
+                return Ok(None);
+            }
+            if enabled != Some(true) {
+                return Err(provider_invalid("client release proxy is unavailable"));
+            }
+            let url = url.ok_or_else(|| provider_invalid("client release proxy is unavailable"))?;
+            gateway_core::account::OutboundProxy::parse(&url)
+                .map(Some)
+                .map_err(|_| provider_invalid("decode client release proxy"))
+        })
+    }
+
     fn claim_warmup_slot<'a>(
         &'a self,
         timezone: gateway_core::time::DeploymentTimeZone,
@@ -307,7 +332,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-        "select provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled, codex_privacy_policy_json,
+        "select client_release_proxy_id, provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled, codex_privacy_policy_json,
                 refresh_concurrency, max_concurrent_per_account,
                 rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
@@ -338,6 +363,13 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .fetch_one(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("load reset-credit settings", source))?;
+    if let Some(id) = &update.values.client_release_proxy_id {
+        super::proxies::resolve_proxy_selection(
+            transaction,
+            &gateway_admin::model::proxies::AccountProxySelection::Saved(id.clone()),
+        )
+        .await?;
+    }
     let refresh_margin_seconds =
         i64::try_from(update.values.refresh_margin_seconds).map_err(|_| invalid_numeric())?;
     let request_profile_updates = update
@@ -395,6 +427,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      account_queue_timeout_seconds = $32,
                      switch_account_on_queue_failure = $33,
                      reset_credit_on_low_weekly_quota = $34,
+                     client_release_proxy_id = $35,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -441,6 +474,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(i64::from(update.values.account_queue_timeout_seconds))
     .bind(update.values.switch_account_on_queue_failure)
     .bind(update.values.reset_credit_on_low_weekly_quota)
+    .bind(update.values.client_release_proxy_id.as_deref())
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("update runtime settings in transaction", source))?
@@ -505,6 +539,7 @@ pub(crate) async fn update_admin_api_key_in_transaction(
 
 #[derive(sqlx::FromRow)]
 struct RuntimeSettingsRow {
+    client_release_proxy_id: Option<String>,
     provider_request_profiles_json: sqlx::types::Json<
         std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
     >,
@@ -576,6 +611,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
             refresh_concurrency: to_u32(row.refresh_concurrency)?,
             max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
             smart_scheduling: row.smart_scheduling_json.0,
+            client_release_proxy_id: row.client_release_proxy_id,
             codex_privacy_policy: row.codex_privacy_policy_json.0,
             request_location_enabled: row.request_location_enabled,
             request_location: row

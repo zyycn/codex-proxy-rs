@@ -2,13 +2,12 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
 
+use super::release_network::ReleaseNetwork;
 use chrono::Utc;
 use futures::StreamExt as _;
 use gateway_core::provider_ports::{ProviderArtifactProfile, ProviderArtifactProfileCachePort};
 use gateway_core::routing::ProviderKind;
-use reqwest::{Client, redirect::Policy};
 use serde::Deserialize;
 
 use super::selection::{ClientKind, ClientPlatform, ClientRelease, object};
@@ -68,7 +67,7 @@ fn sequence(version: &str) -> Result<u64, CliReleaseError> {
 }
 
 pub struct CliReleaseService {
-    client: Client,
+    network: ReleaseNetwork,
     provider: ProviderKind,
     state: CodexWireProfileState,
     cache: Arc<dyn ProviderArtifactProfileCachePort>,
@@ -79,21 +78,14 @@ impl CliReleaseService {
         provider: ProviderKind,
         state: CodexWireProfileState,
         cache: Arc<dyn ProviderArtifactProfileCachePort>,
-    ) -> Result<Self, CliReleaseError> {
-        let client = Client::builder()
-            .https_only(true)
-            .no_proxy()
-            .redirect(Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|_| CliReleaseError::Fetch)?;
-        Ok(Self {
-            client,
+        network: ReleaseNetwork,
+    ) -> Self {
+        Self {
+            network,
             provider,
             state,
             cache,
-        })
+        }
     }
 
     pub async fn restore(&self) {
@@ -192,7 +184,8 @@ impl CliReleaseService {
 
     async fn fetch(&self) -> Result<String, CliReleaseError> {
         let response = self
-            .client
+            .network
+            .client()
             .get(ENDPOINT)
             .send()
             .await

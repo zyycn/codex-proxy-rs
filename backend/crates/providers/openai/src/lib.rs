@@ -111,24 +111,28 @@ pub async fn initialize(
         .session_identity()
         .map_err(|_| OpenAiInitializeError::SessionIdentity)?;
     let http = build_reqwest_client().map_err(|_| OpenAiInitializeError::Transport)?;
+    let desktop_network = transport::profile::ReleaseNetwork::new()
+        .map_err(|_| OpenAiInitializeError::DesktopRelease)?;
+    let cli_network = transport::profile::ReleaseNetwork::new()
+        .map_err(|_| OpenAiInitializeError::DesktopRelease)?;
+    let platform_network = transport::profile::ReleaseNetwork::new()
+        .map_err(|_| OpenAiInitializeError::DesktopRelease)?;
     let desktop_release = Arc::new(CodexDesktopReleaseService::new(
         profile.clone(),
         Arc::new(
-            OfficialCodexDesktopReleaseTransport::new()
+            OfficialCodexDesktopReleaseTransport::new(desktop_network.clone())
                 .map_err(|_| OpenAiInitializeError::DesktopRelease)?,
         ),
         artifact_cache,
         verified_profile,
     ));
     let desktop_release_status = desktop_release.status();
-    let cli_release = Arc::new(
-        transport::profile::cli_release::CliReleaseService::new(
-            provider_kind.clone(),
-            profile.clone(),
-            ports.artifact_profiles(),
-        )
-        .map_err(|_| OpenAiInitializeError::DesktopRelease)?,
-    );
+    let cli_release = Arc::new(transport::profile::cli_release::CliReleaseService::new(
+        provider_kind.clone(),
+        profile.clone(),
+        ports.artifact_profiles(),
+        cli_network.clone(),
+    ));
     cli_release.restore().await;
     let platform_releases = Arc::new(
         transport::profile::platform_release::PlatformDesktopReleaseService::new(
@@ -136,8 +140,9 @@ pub async fn initialize(
             profile.clone(),
             ports.artifact_profiles(),
             Arc::new(
-                transport::profile::platform_release::OfficialDesktopArtifactTransport::new()
-                    .map_err(|_| OpenAiInitializeError::DesktopRelease)?,
+                transport::profile::platform_release::OfficialDesktopArtifactTransport::new(
+                    platform_network.clone(),
+                ),
             ),
         ),
     );
@@ -265,6 +270,10 @@ pub async fn initialize(
             desktop: desktop_release,
             cli: cli_release,
             platforms: platform_releases,
+            runtime_policy,
+            desktop_network,
+            cli_network,
+            platform_network,
         },
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;

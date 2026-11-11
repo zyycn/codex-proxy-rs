@@ -19,6 +19,112 @@ use crate::admin::{
 };
 use crate::support::{MemoryAccountStore, profile, secret};
 
+#[derive(Default)]
+struct ReleaseProxyPolicy(std::sync::Mutex<Option<gateway_core::account::OutboundProxy>>);
+
+impl gateway_core::provider_ports::ProviderRuntimePolicyPort for ReleaseProxyPolicy {
+    fn load_client_release_proxy(
+        &self,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<
+            Option<gateway_core::account::OutboundProxy>,
+            gateway_core::provider_ports::ProviderStoreError,
+        >,
+    > {
+        Box::pin(async { Ok(self.0.lock().unwrap().clone()) })
+    }
+
+    fn load_refresh_policy(
+        &self,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<
+            gateway_core::provider_ports::ProviderRefreshPolicy,
+            gateway_core::provider_ports::ProviderStoreError,
+        >,
+    > {
+        Box::pin(async {
+            gateway_core::provider_ports::ProviderRefreshPolicy::try_new(
+                Duration::from_secs(300),
+                std::num::NonZeroU32::new(4).unwrap(),
+            )
+        })
+    }
+}
+
+#[tokio::test]
+async fn release_worker_rechecks_after_proxy_change_without_restarting() {
+    use gateway_core::account::OutboundProxy;
+    use gateway_core::task::WorkerCycleContext;
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+    use tokio::net::TcpListener;
+
+    let policy = Arc::new(ReleaseProxyPolicy::default());
+    let mut bundle = crate::admin::initialized_test_bundle_with_policy(
+        Arc::new(MemoryAccountStore::default()),
+        "http://127.0.0.1:1".into(),
+        policy.clone(),
+    )
+    .await;
+    let registration = bundle
+        .take_worker_contributions()
+        .into_iter()
+        .find_map(|contribution| match contribution {
+            WorkerContribution::Registration(registration)
+                if registration.id.owner() == "openai-cli-release" =>
+            {
+                Some(registration)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let WorkerRunnable::Scheduled { task, .. } = registration.runnable else {
+        panic!("scheduled release task")
+    };
+    let context = WorkerCycleContext::new(registration.id, None, CancellationToken::new());
+    for _ in 0..2 {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        *policy.0.lock().unwrap() = Some(
+            OutboundProxy::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap(),
+        );
+        let proxy = async {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(socket);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "CONNECT registry.npmjs.org:443 HTTP/1.1\r\n");
+            reader
+                .get_mut()
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        };
+        let (result, ()) = timeout(Duration::from_secs(3), async {
+            tokio::join!(task.run_cycle(context.clone()), proxy)
+        })
+        .await
+        .unwrap();
+        result.unwrap();
+        // 未改出口时只读配置，不在每个调度周期重复访问官方源
+        timeout(Duration::from_millis(100), task.run_cycle(context.clone()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            timeout(Duration::from_millis(25), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+    *policy.0.lock().unwrap() = None;
+    context.cancellation().cancel();
+    timeout(Duration::from_millis(100), task.run_cycle(context))
+        .await
+        .unwrap()
+        .unwrap();
+}
+
 #[tokio::test]
 async fn catalog_etag_failure_returns_to_supervisor_and_recovers_pending_refresh() {
     let account_id = "acct_catalog_etag_worker";

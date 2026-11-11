@@ -1440,7 +1440,7 @@ Search 的选号限制不约束插件在选号后主动改写正文。
 移除关联账号只清除指定账号的代理绑定与连接地址，使其改为直连，保留凭据、调度参数与分组。
 若账号已不再绑定请求中的代理，则返回 409
 删除代理会自动解除全部关联账号的代理绑定与连接地址，账号保留其余设置并改为直连。
-代理仍被插件来源或插件包引用时返回 409，账号绑定保持不变
+代理仍被插件来源、插件包或官方客户端版本检测设置引用时返回 409，账号绑定保持不变
 
 `maxWebsocketConnections` 为此代理的 OpenAI Responses 上游 WS 连接上限，范围 0–4294967295，0 表示不限制。
 创建时省略默认为 0，更新时省略或 `null` 保留原值。关联账号共享预算，修改后新请求使用新值，已存在的连接仍计数。
@@ -2149,7 +2149,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | 用途 | 字段 |
 | --- | --- |
 | 并发控制版本 | `configRevision` |
-| [客户端身份](#provider-客户端身份) | `providerRequestProfiles`、`openaiClientProfile`、`xaiClientProfile` |
+| [客户端身份](#provider-客户端身份) | `providerRequestProfiles`、`openaiClientProfile`、`xaiClientProfile`、`clientReleaseProxyId` |
 | [请求位置](#请求位置) | `requestLocationEnabled`、`requestLocation` |
 | [隐私策略](#隐私策略) | `codexPrivacyPolicy` |
 | 模型映射 | `modelMappings` |
@@ -2410,6 +2410,12 @@ models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI �
 没有内置价目的模型变为未配置
 
 ### Provider 客户端身份
+
+`clientReleaseProxyId` 选择 OpenAI 官方 Desktop / CLI 版本检测使用的受管代理，`null` 或省略表示直连。
+非空 ID 必须存在且已启用，测试结果不影响选择；不会改变账号目录、认证、推理出口或 Key 身份覆盖。
+出口或所选代理连接地址变化后通常在 30 秒内检查，无需重启；已开始的检查沿用该轮出口。
+日常检查仍间隔 24 小时，失败保留已核验版本，不回退直连；代理被禁用时停止检测并报告任务错误。
+被此设置引用的代理不能删除，须先更改选择。此出口忽略进程代理环境变量
 
 `providerRequestProfiles` 是按 Provider ID 索引的通用配置对象，最多 256 项、每项最多 64 KiB。
 更新时省略某项保留原值，对象替换该项，`null` 删除显式选择并使用 Provider 默认值；不清除其他 Provider 的配置。

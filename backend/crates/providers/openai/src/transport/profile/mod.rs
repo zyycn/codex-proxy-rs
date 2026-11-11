@@ -11,8 +11,6 @@ use gateway_core::provider_ports::{
     ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
-use reqwest::Client;
-use reqwest::redirect::Policy;
 use roxmltree::{Document, Node};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -25,7 +23,9 @@ mod context;
 pub mod desktop_artifact;
 pub mod identity;
 pub mod platform_release;
+mod release_network;
 pub mod selection;
+pub use release_network::ReleaseNetwork;
 
 use selection::{ClientKind, ClientPlatform, ClientRelease};
 
@@ -35,7 +35,6 @@ pub const CODEX_DESKTOP_APPCAST_URL: &str =
 /// 官方发布元数据检查周期
 pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
-const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_APPCAST_BYTES: usize = 1024 * 1024;
 const ARTIFACT_PROFILE_CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const ARTIFACT_PROFILE_SCHEMA_VERSION: u64 = 1;
@@ -550,31 +549,28 @@ pub trait CodexDesktopReleaseTransport: Send + Sync {
 /// 固定访问官方 Desktop appcast 的生产 transport
 #[derive(Clone)]
 pub struct OfficialCodexDesktopReleaseTransport {
-    client: Client,
+    network: release_network::ReleaseNetwork,
     endpoint: Url,
 }
 
 impl OfficialCodexDesktopReleaseTransport {
-    /// 构造禁用环境代理和 redirect 的官方 HTTPS transport
-    pub fn new() -> Result<Self, CodexDesktopReleaseError> {
+    /// 官方 HTTPS 地址固定，出口由所属检测任务更新
+    pub fn new(network: release_network::ReleaseNetwork) -> Result<Self, CodexDesktopReleaseError> {
         let endpoint = Url::parse(CODEX_DESKTOP_APPCAST_URL)
             .map_err(|_| CodexDesktopReleaseError::InvalidEndpoint)?;
-        let client = Client::builder()
-            .https_only(true)
-            .no_proxy()
-            .redirect(Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(APPCAST_TIMEOUT)
-            .build()
-            .map_err(|_| CodexDesktopReleaseError::ClientInitialization)?;
-        Ok(Self { client, endpoint })
+        Ok(Self { network, endpoint })
     }
 }
 
 impl CodexDesktopReleaseTransport for OfficialCodexDesktopReleaseTransport {
     fn fetch(&self) -> BoxFuture<'_, Result<CodexDesktopRelease, CodexDesktopReleaseError>> {
         Box::pin(async move {
-            let response = self.client.get(self.endpoint.clone()).send().await?;
+            let response = self
+                .network
+                .client()
+                .get(self.endpoint.clone())
+                .send()
+                .await?;
             if !response.status().is_success() {
                 return Err(CodexDesktopReleaseError::HttpStatus(
                     response.status().as_u16(),
@@ -617,7 +613,7 @@ impl CodexDesktopReleaseTransport for OfficialCodexDesktopReleaseTransport {
             let artifact_size = release
                 .download_size
                 .ok_or(CodexDesktopReleaseError::MissingArtifactIdentity)?;
-            fetch_codex_core_version(&self.client, artifact_url, artifact_size)
+            fetch_codex_core_version(&self.network.client(), artifact_url, artifact_size)
                 .await
                 .map_err(Into::into)
         })
@@ -887,8 +883,6 @@ fn numeric_dotted_version(value: &str) -> bool {
 /// Desktop appcast 的稳定、无响应正文错误分类
 #[derive(Debug, thiserror::Error)]
 pub enum CodexDesktopReleaseError {
-    #[error("Codex Desktop appcast client initialization failed")]
-    ClientInitialization,
     #[error("Codex Desktop appcast endpoint is invalid")]
     InvalidEndpoint,
     #[error("Codex Desktop appcast request failed")]

@@ -37,6 +37,7 @@ export interface RuntimeSettings {
   smartScheduling: SmartSchedulingConfig
   smartSchedulingDefaults: SmartSchedulingConfig
   providerRequestProfiles: ProviderRequestProfiles
+  clientReleaseProxyId: string | null
   openaiClientProfile: ClientProfileSelection | null
   xaiClientProfile: XaiClientProfileSelection | null
 

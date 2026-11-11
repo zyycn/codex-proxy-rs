@@ -1,6 +1,10 @@
 {
   "settings": {
     "clientProfile": {
+      "releaseProxy": "版本檢測代理",
+      "directConnection": "直連",
+      "disabledProxy": "（已停用）",
+      "proxyUnavailable": "代理目錄無法使用",
       "userAgent": "用戶代理",
       "clientIdentitySource": "客戶端身份來源",
       "globalConfiguration": "全局配置",
