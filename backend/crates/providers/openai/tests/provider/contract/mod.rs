@@ -29,7 +29,7 @@ mod upstream_adapter;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::num::NonZeroU32;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::Ordering};
 use std::time::{Duration, SystemTime};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -1305,6 +1305,7 @@ fn provider_and_quota_with_runtime_ports(
         cooldowns,
         Arc::clone(&account_feedback),
         CodexCookiePolicy::official().expect("cookie policy"),
+        store.clone(),
     ));
 
     let provider = CodexProvider::new(
@@ -1749,13 +1750,21 @@ fn diagnostic_context(request_id: &str, account_id: &str) -> AttemptContext {
     )
 }
 
+fn request_with_peer_route(request_id: &str) -> RequestAttemptContext {
+    RequestAttemptContext::new(
+        ModelRequestId::new(request_id).unwrap(),
+        ClientApiKeyId::new("key_openai_contract").unwrap(),
+    )
+    .with_request_location(Some(global_request_location()))
+    .with_extension_scope(
+        gateway_core::engine::extensions::ExtensionCallScope::default()
+            .with_peer_route("0123456789abcdef0123456789abcdef".parse().unwrap()),
+    )
+}
+
 fn probe_context(request_id: &str, target: AccountProbeTarget) -> AttemptContext {
     AttemptContext::new(
-        RequestAttemptContext::new(
-            ModelRequestId::new(request_id).expect("request id"),
-            ClientApiKeyId::new("key_openai_contract").expect("client key id"),
-        )
-        .with_request_location(Some(global_request_location())),
+        request_with_peer_route(request_id),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
@@ -11515,10 +11524,14 @@ async fn connection_limit_payload_survives_exhausted_retry_budget() {
 
 #[tokio::test]
 async fn api_key_native_endpoints_preserve_bodies_headers_and_own_base_url() {
-    for prefix in ["", "/v1", "/custom/v2"] {
+    for (prefix, discovered) in ["", "/v1", "/custom/v2"]
+        .into_iter()
+        .flat_map(|prefix| [false, true].map(|discovered| (prefix, discovered)))
+    {
         let upstream = MockServer::start().await;
         let oauth = MockServer::start().await;
         let store = Arc::new(MemoryAccountStore::default());
+        store.peer_discovered.store(discovered, Ordering::SeqCst);
         store
             .seed_api_key(
                 "acct_provider_contract",
@@ -11536,10 +11549,6 @@ async fn api_key_native_endpoints_preserve_bodies_headers_and_own_base_url() {
             Mock::given(method("POST"))
                 .and(path(format!("{prefix}{endpoint}")))
                 .and(header("authorization", "Bearer sk-api-test-only"))
-                .and(header(
-                    gateway_protocol::peer::ROUTE_HEADER,
-                    "0123456789abcdef0123456789abcdef",
-                ))
                 .and(body_bytes(body.to_vec()))
                 .respond_with(
                     ResponseTemplate::new(200)
@@ -11608,6 +11617,13 @@ async fn api_key_native_endpoints_preserve_bodies_headers_and_own_base_url() {
         }
         assert!(oauth.received_requests().await.unwrap().is_empty());
         for request in upstream.received_requests().await.unwrap() {
+            assert_eq!(
+                request
+                    .headers
+                    .get(gateway_protocol::peer::ROUTE_HEADER)
+                    .map(|value| value.to_str().unwrap()),
+                discovered.then_some("0123456789abcdef0123456789abcdef")
+            );
             for name in ["cookie", "chatgpt-account-id"] {
                 assert!(!request.headers.contains_key(name));
             }
@@ -11735,10 +11751,14 @@ fn generate_with_downstream_headers() -> Operation {
 
 #[tokio::test]
 async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentication() {
-    for prefix in ["", "/v1", "/custom/v2"] {
+    for (prefix, discovered) in ["", "/v1", "/custom/v2"]
+        .into_iter()
+        .flat_map(|prefix| [false, true].map(|discovered| (prefix, discovered)))
+    {
         let upstream = MockServer::start().await;
         let oauth = MockServer::start().await;
         let store = Arc::new(MemoryAccountStore::default());
+        store.peer_discovered.store(discovered, Ordering::SeqCst);
         store
             .seed_api_key(
                 "acct_provider_contract",
@@ -11796,7 +11816,10 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
         let mut stream = provider
             .execute(
                 planned_request("openai", generate_with_downstream_headers()),
-                context("req_api_http", CancellationToken::new()),
+                context_for_request(
+                    request_with_peer_route("req_api_http"),
+                    CancellationToken::new(),
+                ),
             )
             .await
             .expect("scheduled API account");
@@ -11811,6 +11834,13 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
             .find(|request| request.method == "POST")
             .unwrap();
         assert!(!request.headers.contains_key("content-encoding"));
+        assert_eq!(
+            request
+                .headers
+                .get(gateway_protocol::peer::ROUTE_HEADER)
+                .map(|value| value.to_str().unwrap()),
+            discovered.then_some("0123456789abcdef0123456789abcdef")
+        );
         for name in API_KEY_DOWNSTREAM_HEADERS
             .iter()
             .filter(|name| **name != "authorization")
@@ -12015,72 +12045,82 @@ async fn api_key_http_account_is_rejected_before_websocket_warmup_or_old_revisio
 
 #[tokio::test]
 async fn api_key_websocket_uses_api_path_and_bearer_without_oauth_identity() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}/custom/v2", listener.local_addr().unwrap());
-    let store = Arc::new(MemoryAccountStore::default());
-    store
-        .seed_api_key(
-            "acct_provider_contract",
-            base,
-            provider_openai::credential::ResponsesTransport::PreferWebsocket,
-        )
-        .await;
-    let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket =
-            crate::transport::accept_codex_test_websocket_with(stream, |request, _| {
-                assert_eq!(request.uri().path(), "/custom/v2/responses");
-                assert_eq!(
-                    request.headers()["authorization"],
-                    "Bearer sk-api-test-only"
-                );
-                assert!(!request.headers().contains_key("chatgpt-account-id"));
-                assert!(!request.headers().contains_key("cookie"));
-                assert_eq!(request.headers()["originator"], "codex_cli_rs");
-                assert_eq!(request.headers()["version"], "0.144.0");
-                assert_eq!(
-                    request.headers()["user-agent"],
-                    wire_profile().snapshot().user_agent()
-                );
-                for name in API_KEY_DOWNSTREAM_HEADERS
-                    .iter()
-                    .filter(|name| **name != "authorization")
-                {
-                    assert!(!request.headers().contains_key(*name), "leaked {name}");
-                }
-                assert_eq!(request.headers()["x-business-extension"], "keep");
-                for name in API_KEY_BUSINESS_HEADERS {
-                    if matches!(*name, "session-id" | "thread-id") {
-                        assert_scoped_id(
-                            request.headers()[*name].to_str().unwrap(),
-                            "downstream-value",
-                        );
-                    } else {
-                        assert_eq!(request.headers()[*name], "downstream-value", "lost {name}");
-                    }
-                }
-            })
+    for discovered in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/custom/v2", listener.local_addr().unwrap());
+        let store = Arc::new(MemoryAccountStore::default());
+        store.peer_discovered.store(discovered, Ordering::SeqCst);
+        store
+            .seed_api_key(
+                "acct_provider_contract",
+                base,
+                provider_openai::credential::ResponsesTransport::PreferWebsocket,
+            )
             .await;
-        let frame = websocket.next().await.unwrap().unwrap();
-        let payload: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
-        assert_eq!(payload["type"], "response.create");
-        websocket.send(Message::Text(json!({"type":"response.completed","response":{"id":"resp_api_ws","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}).to_string().into())).await.unwrap();
-    });
-    let provider = provider(&store);
-    let mut stream = provider
-        .execute(
-            planned_request("openai", generate_with_downstream_headers()),
-            diagnostic_context("req_api_ws", "acct_provider_contract"),
-        )
-        .await
-        .unwrap();
-    while let Some(event) = stream.next().await {
-        event.expect("API WebSocket completion");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket =
+                crate::transport::accept_codex_test_websocket_with(stream, |request, _| {
+                    assert_eq!(request.uri().path(), "/custom/v2/responses");
+                    assert_eq!(
+                        request.headers()["authorization"],
+                        "Bearer sk-api-test-only"
+                    );
+                    assert!(!request.headers().contains_key("chatgpt-account-id"));
+                    assert!(!request.headers().contains_key("cookie"));
+                    assert_eq!(
+                        request
+                            .headers()
+                            .get(gateway_protocol::peer::ROUTE_HEADER)
+                            .map(|value| value.to_str().unwrap()),
+                        discovered.then_some("0123456789abcdef0123456789abcdef")
+                    );
+                    assert_eq!(request.headers()["originator"], "codex_cli_rs");
+                    assert_eq!(request.headers()["version"], "0.144.0");
+                    assert_eq!(
+                        request.headers()["user-agent"],
+                        wire_profile().snapshot().user_agent()
+                    );
+                    for name in API_KEY_DOWNSTREAM_HEADERS
+                        .iter()
+                        .filter(|name| **name != "authorization")
+                    {
+                        assert!(!request.headers().contains_key(*name), "leaked {name}");
+                    }
+                    assert_eq!(request.headers()["x-business-extension"], "keep");
+                    for name in API_KEY_BUSINESS_HEADERS {
+                        if matches!(*name, "session-id" | "thread-id") {
+                            assert_scoped_id(
+                                request.headers()[*name].to_str().unwrap(),
+                                "downstream-value",
+                            );
+                        } else {
+                            assert_eq!(request.headers()[*name], "downstream-value", "lost {name}");
+                        }
+                    }
+                })
+                .await;
+            let frame = websocket.next().await.unwrap().unwrap();
+            let payload: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+            assert_eq!(payload["type"], "response.create");
+            websocket.send(Message::Text(json!({"type":"response.completed","response":{"id":"resp_api_ws","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}).to_string().into())).await.unwrap();
+        });
+        let provider = provider(&store);
+        let mut stream = provider
+            .execute(
+                planned_request("openai", generate_with_downstream_headers()),
+                diagnostic_context("req_api_ws", "acct_provider_contract"),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.expect("API WebSocket completion");
+        }
+        timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
-    timeout(Duration::from_secs(5), server)
-        .await
-        .unwrap()
-        .unwrap();
 }
 
 #[tokio::test]

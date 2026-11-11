@@ -16,6 +16,10 @@ use serde::Deserialize as _;
 pub(super) const MAX_AGE: Duration = Duration::from_secs(30 * 60);
 pub(super) const FRESH_FOR: Duration = Duration::from_secs(5 * 60);
 
+pub(super) fn is_discovered(peer: Option<&PeerLink>, failure: Option<UpstreamInfoFailure>) -> bool {
+    peer.is_some() || failure == Some(UpstreamInfoFailure::Unauthorized)
+}
+
 // 不支持协议是连接的识别结果，复用观测存储与版本保护，不伪造上游额度快照
 pub(super) fn unsupported(connection: &UpstreamConnection) -> OpaqueProviderData {
     OpaqueProviderData::new(serde_json::Map::from_iter([

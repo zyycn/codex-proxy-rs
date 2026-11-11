@@ -84,6 +84,9 @@ pub struct UpstreamSchedulingSignal {
 }
 
 pub trait UpstreamInfoSource: Send + Sync {
+    /// 当前连接是否已识别为互联节点，不以额度快照的新鲜度代替身份
+    fn is_peer(&self, account: &ProviderAccount) -> bool;
+
     fn signal(
         &self,
         account: &ProviderAccount,
@@ -110,6 +113,13 @@ impl UpstreamInfoReader {
 }
 
 impl UpstreamInfoSource for UpstreamInfoReader {
+    fn is_peer(&self, account: &ProviderAccount) -> bool {
+        self.source
+            .get()
+            .and_then(Weak::upgrade)
+            .is_some_and(|source| source.is_peer(account))
+    }
+
     fn signal(
         &self,
         account: &ProviderAccount,

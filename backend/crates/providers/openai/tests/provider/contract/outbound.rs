@@ -83,6 +83,7 @@ async fn outbound_http_sends_final_encoded_bytes_and_target_without_restoring_de
             request.target = Target::Http { method: reqwest::Method::PATCH, uri: uri.parse().unwrap() };
             request.headers.retain(|header| !matches!(header.name(), "user-agent" | "content-encoding" | "content-type" | "authorization" | "accept"));
             request.headers.extend([
+                MiddlewareHeader::new(gateway_protocol::peer::ROUTE_HEADER, Bytes::from_static(b"plugin-owned-route")),
                 MiddlewareHeader::new("x-plugin-values", Bytes::from_static(b"first")),
                 MiddlewareHeader::new("x-plugin-values", Bytes::from_static(b"second")),
                 MiddlewareHeader::new("x-plugin-bytes", Bytes::from_static(b"\x80")),
@@ -122,6 +123,10 @@ async fn outbound_http_sends_final_encoded_bytes_and_target_without_restoring_de
     );
     assert_eq!(request.url.query(), Some("source=outbound"));
     assert_eq!(request.headers["x-plugin-bytes"].as_bytes(), b"\x80");
+    assert_eq!(
+        request.headers[gateway_protocol::peer::ROUTE_HEADER],
+        "plugin-owned-route"
+    );
 }
 
 #[tokio::test]

@@ -52,6 +52,7 @@ type CredentialLoadHook = dyn for<'a> Fn(
 
 #[derive(Default)]
 pub(crate) struct MemoryAccountStore {
+    pub(crate) peer_discovered: AtomicBool,
     accounts: Mutex<BTreeMap<ProviderAccountId, StoredAccount>>,
     catalogs: Mutex<
         BTreeMap<
@@ -71,6 +72,21 @@ pub(crate) struct MemoryAccountStore {
     pending_account_reads: bool,
     credential_load_hook: Mutex<Option<Arc<CredentialLoadHook>>>,
     credential_loads: AtomicUsize,
+}
+
+impl gateway_core::account::UpstreamInfoSource for MemoryAccountStore {
+    fn is_peer(&self, _: &ProviderAccount) -> bool {
+        self.peer_discovered.load(Ordering::SeqCst)
+    }
+
+    fn signal(
+        &self,
+        _: &ProviderAccount,
+        _: Option<&str>,
+        _: SystemTime,
+    ) -> Option<gateway_core::account::UpstreamSchedulingSignal> {
+        None
+    }
 }
 
 impl MemoryAccountStore {

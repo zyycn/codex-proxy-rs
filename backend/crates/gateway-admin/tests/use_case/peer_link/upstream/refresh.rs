@@ -216,6 +216,10 @@ async fn known_peer_identity_changes_only_on_definitive_detection() {
         );
         let account = accounts.accounts.lock().unwrap()[0].clone();
         assert_eq!(
+            bundle.scheduling_source().is_peer(&account),
+            !clears_identity
+        );
+        assert_eq!(
             bundle
                 .scheduling_source()
                 .signal(&account, Some("model"), SystemTime::now())
@@ -237,6 +241,7 @@ async fn known_peer_identity_changes_only_on_definitive_detection() {
         drop(bundle);
         let restarted = initialize(accounts, transport);
         let restored = restarted.service().read_quota(&id).await.unwrap().unwrap();
+        assert!(!restarted.scheduling_source().is_peer(&account));
         assert_eq!(
             restored.upstream.as_ref().unwrap().discovered,
             !clears_identity
@@ -257,6 +262,10 @@ async fn known_peer_identity_changes_only_on_definitive_detection() {
                 .unwrap()
                 .upstream,
             restored.upstream
+        );
+        assert_eq!(
+            restarted.scheduling_source().is_peer(&account),
+            !clears_identity
         );
     }
 }

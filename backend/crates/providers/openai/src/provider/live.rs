@@ -365,7 +365,7 @@ impl CodexProvider {
             .collect::<Vec<_>>();
         let events = cold_live_call_stream(ColdLiveCall {
             client: self
-                .client_for_request(&context)?
+                .client_for_request(&context, lease.account())?
                 .for_account(lease.account())
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?
                 .with_responses_api_base_url(lease.authentication().responses_api_base_url())

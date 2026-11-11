@@ -35,6 +35,7 @@ fn cookie_provider(store: &Arc<MemoryAccountStore>, base_url: String) -> Arc<Cod
         Arc::clone(&feedback),
         // 测试仅允许本机模拟上游，生产 Cookie 白名单不放宽
         CodexCookiePolicy::new(["cf_clearance"], ["127.0.0.1"]).unwrap(),
+        store.clone(),
     ));
     Arc::new(
         CodexProvider::new(

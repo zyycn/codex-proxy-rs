@@ -145,7 +145,7 @@ pub struct CodexCredentialSelector {
     quota: Arc<CodexCredentialQuotaService>,
     catalog: Arc<CodexCredentialCatalogService>,
     cooldowns: Arc<dyn ProviderCooldownPort>,
-    upstream_info: Option<Arc<dyn gateway_core::account::UpstreamInfoSource>>,
+    upstream_info: Arc<dyn gateway_core::account::UpstreamInfoSource>,
     cookie_policy: CodexCookiePolicy,
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
     account_feedback: Arc<AccountFeedbackStats>,
@@ -296,6 +296,7 @@ impl CodexCredentialSelector {
         cooldowns: Arc<dyn ProviderCooldownPort>,
         account_feedback: Arc<AccountFeedbackStats>,
         cookie_policy: CodexCookiePolicy,
+        upstream_info: Arc<dyn gateway_core::account::UpstreamInfoSource>,
     ) -> Self {
         Self {
             provider_kind,
@@ -306,7 +307,7 @@ impl CodexCredentialSelector {
             quota,
             catalog,
             cooldowns,
-            upstream_info: None,
+            upstream_info,
             cookie_policy,
             risk_recovery: Mutex::new(HashMap::new()),
             waiting: ConcurrencyWaitQueue::default(),
@@ -340,13 +341,8 @@ impl CodexCredentialSelector {
         .await
     }
 
-    #[must_use]
-    pub(crate) fn with_upstream_info(
-        mut self,
-        upstream_info: Arc<dyn gateway_core::account::UpstreamInfoSource>,
-    ) -> Self {
-        self.upstream_info = Some(upstream_info);
-        self
+    pub(crate) fn is_peer(&self, account: &ProviderAccount) -> bool {
+        self.upstream_info.is_peer(account)
     }
 
     fn scheduling_signals(
@@ -363,8 +359,7 @@ impl CodexCredentialSelector {
         }
         let Some(signal) = self
             .upstream_info
-            .as_ref()
-            .and_then(|source| source.signal(account, model.model(), SystemTime::now()))
+            .signal(account, model.model(), SystemTime::now())
         else {
             return (None, None);
         };

@@ -52,7 +52,7 @@ impl PeerInfoService {
         });
         let limits = peer.and_then(|peer| peer.key_limits);
         let info = ProviderUpstreamInfo {
-            discovered: peer.is_some() || stored_failure == Some(UpstreamInfoFailure::Unauthorized),
+            discovered: snapshot::is_discovered(peer, stored_failure),
             observed_at,
             stale,
             connection_revision: connection.revision.clone(),

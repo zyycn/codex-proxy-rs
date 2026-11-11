@@ -187,7 +187,7 @@ impl CodexProvider {
             lease.capacity_snapshot(),
         ));
         let client = self
-            .client_for_request(&context)?
+            .client_for_request(&context, lease.account())?
             .for_account(lease.account())
             .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?
             .with_messages_api_base_url(&authentication.configuration.base_url)

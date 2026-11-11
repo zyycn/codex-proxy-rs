@@ -26,7 +26,7 @@ impl CodexBackendClient {
         self
     }
 
-    // 官方端点不参与节点转发，按插件准备后的实际目标决定是否发送
+    // 已识别的互联账号才携带路径，官方端点不参与节点转发
     pub(super) fn route_to(&self, target: &Url) -> Option<&http::HeaderValue> {
         self.peer_route.as_ref().filter(|_| {
             self.protocol != super::client::OpenAiUpstreamProtocol::Codex
@@ -40,20 +40,15 @@ impl CodexBackendClient {
     pub(super) async fn prepare_http_request(
         &self,
         endpoint: String,
-        headers: HeaderMap,
+        mut headers: HeaderMap,
         body: Bytes,
     ) -> CodexClientResult<reqwest::Request> {
-        let mut request = self.prepare_http_outbound(endpoint, headers, body).await?;
-        let path = self.route_to(request.url());
-        request
-            .headers_mut()
-            .remove(gateway_protocol::peer::ROUTE_HEADER);
-        if let Some(path) = path {
-            request
-                .headers_mut()
-                .insert(gateway_protocol::peer::ROUTE_HEADER, path.clone());
+        let target = Url::parse(&endpoint).map_err(|_| invalid_request())?;
+        headers.remove(gateway_protocol::peer::ROUTE_HEADER);
+        if let Some(path) = self.route_to(&target) {
+            headers.insert(gateway_protocol::peer::ROUTE_HEADER, path.clone());
         }
-        Ok(request)
+        self.prepare_http_outbound(endpoint, headers, body).await
     }
 
     async fn prepare_http_outbound(
@@ -109,9 +104,8 @@ impl CodexBackendClient {
 
     pub(super) async fn prepare_websocket_request(
         &self,
-        request: CodexWebSocketRequest,
+        mut request: CodexWebSocketRequest,
     ) -> CodexClientResult<(CodexWebSocketRequest, Option<String>)> {
-        let (mut request, profile) = self.prepare_websocket_outbound(request).await?;
         let path = if self.peer_route.is_some()
             && self.protocol != super::client::OpenAiUpstreamProtocol::Codex
         {
@@ -125,7 +119,7 @@ impl CodexBackendClient {
             None
         };
         request.connection.set_peer_route(path);
-        Ok((request, profile))
+        self.prepare_websocket_outbound(request).await
     }
 
     async fn prepare_websocket_outbound(

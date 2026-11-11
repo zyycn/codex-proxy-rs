@@ -140,6 +140,10 @@ impl PendingPeer {
 }
 
 impl UpstreamInfoSource for PendingPeer {
+    fn is_peer(&self, _: &ProviderAccount) -> bool {
+        false
+    }
+
     fn signal(
         &self,
         _: &ProviderAccount,

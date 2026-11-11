@@ -263,6 +263,7 @@ fn selector_with_runtime(
         cooldowns,
         account_feedback,
         CodexCookiePolicy::official().expect("official cookie policy"),
+        store.clone(),
     )
 }
 

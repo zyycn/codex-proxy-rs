@@ -282,6 +282,21 @@ impl PeerInfoService {
 }
 
 impl UpstreamInfoSource for PeerInfoService {
+    fn is_peer(&self, account: &ProviderAccount) -> bool {
+        if !self.supported(account) {
+            return false;
+        }
+        let connection = UpstreamConnection::for_account(account);
+        self.observations
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(account.id())
+            .is_some_and(|cached| {
+                cached.connection == connection
+                    && snapshot::is_discovered(cached.summary.as_deref(), cached.stored_failure)
+            })
+    }
+
     fn signal(
         &self,
         account: &ProviderAccount,

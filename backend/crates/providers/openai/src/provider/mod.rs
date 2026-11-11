@@ -301,9 +301,14 @@ impl CodexProvider {
     fn client_for_request(
         &self,
         context: &AttemptContext,
+        account: &ProviderAccount,
     ) -> Result<CodexBackendClient, ProviderError> {
         let mut client = self.client.clone();
-        client.peer_route = context.extension_scope().peer_route().cloned();
+        client.peer_route = context
+            .extension_scope()
+            .peer_route()
+            .filter(|_| self.selector.is_peer(account))
+            .cloned();
         let Some(profile) = context.request_profile() else {
             return Ok(client);
         };
@@ -1000,7 +1005,7 @@ impl CodexProvider {
                 .get(context.client_api_key_ref(), lease.account(), response_id)
                 .map(|affinity| (response_id.to_owned(), affinity))
         });
-        let client = self.client_for_request(&context)?;
+        let client = self.client_for_request(&context, lease.account())?;
         let installation_id = client.profile_state().effective_installation_id(
             context.client_api_key_ref(),
             lease.account_id(),

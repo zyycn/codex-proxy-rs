@@ -239,6 +239,7 @@ async fn discovery_uses_provider_capabilities_and_publishes_neutral_signals() {
             initialize_peer_upstream(accounts.clone(), &registry, transport.clone()).unwrap();
         let initial_accounts = accounts.accounts.lock().unwrap().clone();
         let reader = UpstreamInfoReader::default();
+        assert!(!reader.is_peer(&initial_accounts[0]));
         assert!(
             reader
                 .signal(&initial_accounts[0], Some("model"), SystemTime::now())
@@ -246,6 +247,7 @@ async fn discovery_uses_provider_capabilities_and_publishes_neutral_signals() {
         );
         let source = bundle.scheduling_source();
         reader.bind(&source).unwrap();
+        assert!(!reader.is_peer(&initial_accounts[0]));
         assert!(reader.bind(&source).is_err());
         drop(source);
         let WorkerContribution::Registration(worker) = bundle.take_worker_contributions().remove(0)
@@ -272,6 +274,10 @@ async fn discovery_uses_provider_capabilities_and_publishes_neutral_signals() {
             }
         );
         for account in &initial_accounts[..2] {
+            assert_eq!(
+                reader.is_peer(account),
+                Some(account.provider().as_str()) != failed_provider
+            );
             if Some(account.provider().as_str()) == failed_provider {
                 assert!(
                     reader
@@ -304,6 +310,7 @@ async fn discovery_uses_provider_capabilities_and_publishes_neutral_signals() {
         );
         drop(worker);
         drop(bundle);
+        assert!(!reader.is_peer(&initial_accounts[0]));
         assert!(
             reader
                 .signal(&initial_accounts[0], Some("model"), SystemTime::now())
@@ -340,6 +347,7 @@ async fn account_edits_preserve_observation_and_refresh_budget_until_connection_
             .is_some()
     );
     let after = service.refresh_quota(edited.id()).await.unwrap();
+    assert!(bundle.scheduling_source().is_peer(&edited));
     assert_eq!(after.upstream, before.upstream);
     assert_eq!(transport.0.lock().unwrap().len(), 1);
 
@@ -347,6 +355,7 @@ async fn account_edits_preserve_observation_and_refresh_budget_until_connection_
         OutboundProxy::parse("http://proxy.invalid:8080").unwrap(),
     ));
     *accounts.accounts.lock().unwrap() = vec![reconnected.clone()];
+    assert!(!bundle.scheduling_source().is_peer(&reconnected));
     service.account_changed(reconnected.id()).await.unwrap();
     assert!(
         bundle
