@@ -5,6 +5,9 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use gateway_core::lifecycle::CancellationToken;
+use gateway_core::provider_ports::{
+    ProviderLeaseGuard, ProviderStoreError, ProviderStoreErrorKind,
+};
 use gateway_core::task::{DaemonTask, WorkerDaemonContext, WorkerTaskError};
 use tokio::sync::{RwLock, RwLockReadGuard, oneshot};
 use tokio::task::JoinSet;
@@ -22,9 +25,30 @@ struct State {
 }
 
 pub(crate) struct SchedulingLeaseGuard {
-    _release: oneshot::Sender<()>,
+    release: oneshot::Sender<oneshot::Sender<Result<(), ProviderStoreError>>>,
     // 活跃请求可能比组合根活得久，不能因端口析构提前中止其续期与租约
     _cleanup: SchedulingLeaseCleanup,
+}
+
+impl ProviderLeaseGuard for SchedulingLeaseGuard {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            let (ack, released) = oneshot::channel();
+            self.release.send(ack).map_err(|_| {
+                ProviderStoreError::new(
+                    ProviderStoreErrorKind::Unavailable,
+                    "request scheduling lease release",
+                )
+            })?;
+            released.await.map_err(|source| {
+                ProviderStoreError::caused_by(
+                    ProviderStoreErrorKind::Unavailable,
+                    "await scheduling lease release",
+                    source,
+                )
+            })?
+        })
+    }
 }
 
 impl SchedulingLeaseCleanup {
@@ -39,7 +63,8 @@ impl SchedulingLeaseCleanup {
         cancellation: CancellationToken,
         release: impl Future<Output = crate::StoreResult<bool>> + Send + 'static,
     ) -> SchedulingLeaseGuard {
-        let (guard, dropped) = oneshot::channel::<()>();
+        let (guard, dropped) =
+            oneshot::channel::<oneshot::Sender<Result<(), ProviderStoreError>>>();
         let stopping = self.0.stopping.clone();
         let mut tasks = self
             .0
@@ -50,17 +75,27 @@ impl SchedulingLeaseCleanup {
             report_join(result);
         }
         tasks.spawn(async move {
-            tokio::select! {
+            let acknowledgement = tokio::select! {
                 biased;
-                () = stopping.cancelled() => cancellation.cancel(),
-                _ = dropped => {}
-            }
-            if let Err(error) = release.await {
+                () = stopping.cancelled() => { cancellation.cancel(); None },
+                ack = dropped => ack.ok(),
+            };
+            let result = release.await;
+            if let Err(error) = &result {
                 tracing::warn!(%error, "账号租约释放失败，依赖 TTL 回收");
+            }
+            if let Some(ack) = acknowledgement {
+                let _ = ack.send(result.map(|_| ()).map_err(|source| {
+                    ProviderStoreError::caused_by(
+                        ProviderStoreErrorKind::Unavailable,
+                        "release scheduling lease",
+                        source,
+                    )
+                }));
             }
         });
         SchedulingLeaseGuard {
-            _release: guard,
+            release: guard,
             _cleanup: self.clone(),
         }
     }

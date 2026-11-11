@@ -582,64 +582,6 @@ async fn scheduling_cursor_is_shared_across_processes_and_isolated_by_client_and
 }
 
 #[tokio::test]
-async fn session_round_robin_cursor_is_independent_of_the_request_cursor() {
-    let Some((repository, mut connection, namespace)) = repository().await else {
-        return;
-    };
-    let primary = gateway_core::policy::ClientApiKeyId::new("key_primary").expect("client key");
-    let secondary = gateway_core::policy::ClientApiKeyId::new("key_secondary").expect("client key");
-    let openai = gateway_core::routing::ProviderKind::new("openai").expect("provider");
-
-    assert_eq!(
-        repository
-            .advance_scheduling_cursor(&primary, &openai)
-            .await
-            .expect("request cursor"),
-        0
-    );
-    assert_eq!(
-        repository
-            .advance_session_round_robin_cursor(&primary, &openai)
-            .await
-            .expect("session cursor"),
-        0
-    );
-    assert_eq!(
-        repository
-            .advance_scheduling_cursor(&primary, &openai)
-            .await
-            .expect("request cursor stays independent"),
-        1
-    );
-    assert_eq!(
-        repository
-            .advance_session_round_robin_cursor(&primary, &openai)
-            .await
-            .expect("session cursor stays independent"),
-        1
-    );
-    assert_eq!(
-        repository
-            .advance_session_round_robin_cursor(&secondary, &openai)
-            .await
-            .expect("client-isolated session cursor"),
-        0
-    );
-
-    let keys = redis::cmd("KEYS")
-        .arg(format!("{namespace}:*"))
-        .query_async::<Vec<String>>(&mut connection)
-        .await
-        .expect("list cursor keys");
-    assert_eq!(keys.len(), 3);
-    redis::cmd("DEL")
-        .arg(keys)
-        .query_async::<i64>(&mut connection)
-        .await
-        .expect("clean cursor keys");
-}
-
-#[tokio::test]
 async fn generic_refresh_guard_is_exclusive_and_released_on_drop() {
     let Some((repository, mut connection, namespace)) = repository().await else {
         return;

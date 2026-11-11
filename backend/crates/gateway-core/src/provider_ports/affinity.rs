@@ -1,7 +1,7 @@
 //! Provider 会话亲和、绑定和排除事实
 
 use super::{ProviderStoreError, ProviderStoreErrorKind};
-use crate::{account::ProviderAccountId, identity::ProviderKind};
+use crate::{account::ProviderAccountId, identity::ProviderKind, policy::ClientApiKeyId};
 use futures::future::BoxFuture;
 use std::{collections::BTreeSet, fmt, time::Duration};
 
@@ -81,6 +81,36 @@ pub struct ProviderSessionAlias {
     pub follow_only: bool,
 }
 
+/// 发送前需要核对版本的会话绑定；首次认领的 expected 为空
+#[derive(Clone, Copy)]
+pub struct ProviderSessionClaim<'a> {
+    pub key: &'a ProviderSessionAffinityKey,
+    pub expected: Option<&'a ProviderSessionBinding>,
+    pub account: &'a ProviderAccountId,
+    pub ttl: Duration,
+}
+
+/// 仅成功的内置轮询推进游标；有会话的分配必须同时提交绑定
+#[derive(Clone, Copy)]
+pub enum ProviderAccountAdmission<'a> {
+    Session(ProviderSessionClaim<'a>),
+    RoundRobin {
+        client_key: &'a ClientApiKeyId,
+        cursor: u64,
+        session: Option<ProviderSessionClaim<'a>>,
+    },
+}
+
+impl<'a> ProviderAccountAdmission<'a> {
+    #[must_use]
+    pub const fn session(self) -> Option<ProviderSessionClaim<'a>> {
+        match self {
+            Self::Session(session) => Some(session),
+            Self::RoundRobin { session, .. } => session,
+        }
+    }
+}
+
 /// 客户端作用域内的会话账号绑定，原始会话身份由 Provider 哈希后传入
 pub trait ProviderSessionAffinityPort: Send + Sync {
     fn load<'a>(
@@ -89,16 +119,19 @@ pub trait ProviderSessionAffinityPort: Send + Sync {
         key: &'a ProviderSessionAffinityKey,
     ) -> BoxFuture<'a, Result<Option<ProviderSessionBinding>, ProviderStoreError>>;
 
-    /// 在发送前原子认领、续期或迁移；None 表示快照已变化，调用方必须释放租约重新选择
-    /// expected 为 None 只允许首次认领，已有快照必须连同版本匹配
-    fn compare_and_bind<'a>(
+    /// 读取本 Client Key 和 Provider 的下一轮位置，不推进游标
+    fn round_robin_cursor<'a>(
         &'a self,
-        provider_kind: &'a ProviderKind,
-        key: &'a ProviderSessionAffinityKey,
-        expected: Option<&'a ProviderSessionBinding>,
-        account_id: &'a ProviderAccountId,
-        ttl: Duration,
-    ) -> BoxFuture<'a, Result<Option<ProviderSessionBinding>, ProviderStoreError>>;
+        provider: &'a ProviderKind,
+        client_key: &'a ClientApiKeyId,
+    ) -> BoxFuture<'a, Result<u64, ProviderStoreError>>;
+
+    /// 原子核对并提交会话版本和轮询位置；冲突时均不写入，调用方释放租约重选
+    fn admit_account<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        admission: ProviderAccountAdmission<'a>,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
 
     /// 显式观测到的请求关联只指向会话键，不缓存账号，迁移后仍读取当前绑定
     fn load_alias<'a>(

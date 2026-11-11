@@ -249,6 +249,20 @@ pub struct CredentialLeaseGuard {
     grant: Option<CredentialLeaseGrant>,
 }
 
+impl gateway_core::provider_ports::ProviderLeaseGuard for CredentialLeaseGuard {
+    fn release(
+        self: Box<Self>,
+    ) -> futures::future::BoxFuture<'static, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            (*self)
+                .release()
+                .await
+                .map(|_| ())
+                .map_err(|source| crate::provider_unavailable("release credential lease", source))
+        })
+    }
+}
+
 impl CredentialLeaseGuard {
     /// 自动续期仅属于返回 guard；丢失租约会取消依赖该槽位的请求
     pub fn maintain(
@@ -317,6 +331,16 @@ struct RenewingSchedulingLease {
     // 先停止续期再释放 Redis 成员，防止释放与续期交错
     _renewal: crate::lease_renewal::LeaseRenewal,
     _guard: CredentialLeaseGuard,
+}
+
+impl gateway_core::provider_ports::ProviderLeaseGuard for RenewingSchedulingLease {
+    fn release(
+        self: Box<Self>,
+    ) -> futures::future::BoxFuture<'static, Result<(), ProviderStoreError>> {
+        let Self { _renewal, _guard } = *self;
+        drop(_renewal);
+        Box::new(_guard).release()
+    }
 }
 
 impl fmt::Debug for CredentialLeaseGuard {
@@ -430,23 +454,12 @@ impl RedisCredentialLeaseRepository {
         client_api_key_id: &ClientApiKeyId,
         provider_kind: &ProviderKind,
     ) -> StoreResult<u64> {
-        let key = self.scheduling_cursor_key(client_api_key_id, provider_kind, "cursor")?;
-        self.advance_cursor(&key, "advance provider scheduling cursor")
-            .await
-    }
-
-    /// 原子推进 round_robin 新会话游标，不改动请求级调度游标
-    pub async fn advance_session_round_robin_cursor(
-        &self,
-        client_api_key_id: &ClientApiKeyId,
-        provider_kind: &ProviderKind,
-    ) -> StoreResult<u64> {
-        let key = self.scheduling_cursor_key(client_api_key_id, provider_kind, "session-cursor")?;
-        self.advance_cursor(&key, "advance session round robin cursor")
-            .await
-    }
-
-    async fn advance_cursor(&self, key: &str, operation: &'static str) -> StoreResult<u64> {
+        let key = super::scheduling_cursor_key(
+            &self.namespace,
+            client_api_key_id,
+            provider_kind,
+            "cursor",
+        )?;
         let mut connection = self.connection.clone();
         let cursor = Script::new(ADVANCE_SCHEDULING_CURSOR_SCRIPT)
             .key(key)
@@ -454,7 +467,7 @@ impl RedisCredentialLeaseRepository {
             .arg(SIGNAL_TTL_MILLIS)
             .invoke_async::<String>(&mut connection)
             .await
-            .map_err(|source| redis_unavailable(operation, source))?;
+            .map_err(|source| redis_unavailable("advance provider scheduling cursor", source))?;
         cursor.parse::<u64>().map_err(|source| {
             invalid("Redis returned an invalid scheduling cursor").with_source(source)
         })
@@ -486,22 +499,6 @@ impl RedisCredentialLeaseRepository {
             "{owner}|{}|{}",
             grant.lease_id,
             grant.fencing_token.get()
-        ))
-    }
-
-    fn scheduling_cursor_key(
-        &self,
-        client_api_key_id: &ClientApiKeyId,
-        provider_kind: &ProviderKind,
-        suffix: &str,
-    ) -> StoreResult<String> {
-        let fingerprint = resource_fingerprint(
-            "provider scheduling cursor",
-            &format!("{}\0{}", client_api_key_id.as_str(), provider_kind.as_str()),
-        )?;
-        Ok(format!(
-            "{}:scheduler:client-provider:{{{fingerprint}}}:{suffix}",
-            self.namespace
         ))
     }
 
@@ -781,21 +778,6 @@ impl ProviderLeasePort for RedisProviderLeaseCoordinator {
                 .next_scheduling_cursor(client_api_key_id, provider_kind)
                 .await?;
             Ok(ProviderSchedulingState::new(signals, round_robin_cursor))
-        })
-    }
-
-    fn advance_session_round_robin_cursor<'a>(
-        &'a self,
-        client_api_key_id: &'a ClientApiKeyId,
-        provider_kind: &'a ProviderKind,
-    ) -> futures::future::BoxFuture<'a, Result<u64, ProviderStoreError>> {
-        Box::pin(async move {
-            self.repository
-                .advance_session_round_robin_cursor(client_api_key_id, provider_kind)
-                .await
-                .map_err(|source| {
-                    crate::provider_unavailable("advance session round robin cursor", source)
-                })
         })
     }
 

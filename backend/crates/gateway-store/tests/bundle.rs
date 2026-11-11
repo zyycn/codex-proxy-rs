@@ -83,6 +83,14 @@ async fn shutdown_releases_owned_account_pools_and_preserves_other_instances() {
                 .unwrap(),
             ProviderLeaseAcquisition::Busy { .. }
         ));
+        second_guard.release().await.unwrap();
+        let ProviderLeaseAcquisition::Acquired(second_guard) = second_port
+            .try_acquire(ProviderLeaseRequest::Scheduling(other.clone()))
+            .await
+            .unwrap()
+        else {
+            panic!("released slot must be available before reselection")
+        };
         first_requests.push(request);
         second_requests.push(other);
         first_guards.push(first_guard);

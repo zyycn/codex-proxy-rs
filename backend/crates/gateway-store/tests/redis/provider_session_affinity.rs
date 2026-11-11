@@ -3,11 +3,38 @@
 use std::time::Duration;
 
 use gateway_core::account::ProviderAccountId;
-use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAffinityPort};
+use gateway_core::provider_ports::{
+    ProviderAccountAdmission, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
+    ProviderSessionBinding, ProviderSessionClaim, ProviderStoreError,
+};
 use gateway_core::routing::ProviderKind;
 use gateway_store::redis::RedisProviderSessionAffinityRepository;
 use redis::aio::ConnectionManager;
 use uuid::Uuid;
+
+async fn bind(
+    repo: &RedisProviderSessionAffinityRepository,
+    provider: &ProviderKind,
+    key: &ProviderSessionAffinityKey,
+    expected: Option<&ProviderSessionBinding>,
+    account: &ProviderAccountId,
+    ttl: Duration,
+) -> Result<Option<ProviderSessionBinding>, ProviderStoreError> {
+    let claim = ProviderSessionClaim {
+        key,
+        expected,
+        account,
+        ttl,
+    };
+    if repo
+        .admit_account(provider, ProviderAccountAdmission::Session(claim))
+        .await?
+    {
+        repo.load(provider, key).await
+    } else {
+        Ok(None)
+    }
+}
 
 #[tokio::test]
 async fn concurrent_claims_admit_exactly_one_account() {
@@ -19,8 +46,22 @@ async fn concurrent_claims_admit_exactly_one_account() {
     let first = ProviderAccountId::new("acct_first").unwrap();
     let second = ProviderAccountId::new("acct_second").unwrap();
     let (a, b) = tokio::join!(
-        repo.compare_and_bind(&provider, &key, None, &first, Duration::from_secs(60)),
-        repo.compare_and_bind(&provider, &key, None, &second, Duration::from_secs(60))
+        bind(
+            &repo,
+            &provider,
+            &key,
+            None,
+            &first,
+            Duration::from_secs(60)
+        ),
+        bind(
+            &repo,
+            &provider,
+            &key,
+            None,
+            &second,
+            Duration::from_secs(60)
+        )
     );
     let winners = [a.unwrap(), b.unwrap()]
         .into_iter()
@@ -56,24 +97,21 @@ async fn stale_revision_cannot_overwrite_an_account_that_returned_to_the_session
     let a = ProviderAccountId::new("acct_a").unwrap();
     let b = ProviderAccountId::new("acct_b").unwrap();
     let ttl = Duration::from_secs(60);
-    let first = repo
-        .compare_and_bind(&provider, &key, None, &a, ttl)
+    let first = bind(&repo, &provider, &key, None, &a, ttl)
         .await
         .unwrap()
         .unwrap();
-    let second = repo
-        .compare_and_bind(&provider, &key, Some(&first), &b, ttl)
+    let second = bind(&repo, &provider, &key, Some(&first), &b, ttl)
         .await
         .unwrap()
         .unwrap();
-    let third = repo
-        .compare_and_bind(&provider, &key, Some(&second), &a, ttl)
+    let third = bind(&repo, &provider, &key, Some(&second), &a, ttl)
         .await
         .unwrap()
         .unwrap();
     assert_ne!(first.revision(), third.revision());
     assert!(
-        repo.compare_and_bind(&provider, &key, Some(&first), &b, ttl)
+        bind(&repo, &provider, &key, Some(&first), &b, ttl)
             .await
             .unwrap()
             .is_none()
@@ -90,13 +128,11 @@ async fn renewal_preserves_revision_but_expiration_requires_fresh_claim() {
     let key = ProviderSessionAffinityKey::try_new("expired-session").unwrap();
     let a = ProviderAccountId::new("acct_a").unwrap();
     let ttl = Duration::from_secs(60);
-    let first = repo
-        .compare_and_bind(&provider, &key, None, &a, ttl)
+    let first = bind(&repo, &provider, &key, None, &a, ttl)
         .await
         .unwrap()
         .unwrap();
-    let renewed = repo
-        .compare_and_bind(&provider, &key, Some(&first), &a, ttl)
+    let renewed = bind(&repo, &provider, &key, Some(&first), &a, ttl)
         .await
         .unwrap()
         .unwrap();
@@ -113,14 +149,13 @@ async fn renewal_preserves_revision_but_expiration_requires_fresh_claim() {
         .await
         .unwrap();
     assert!(
-        repo.compare_and_bind(&provider, &key, Some(&first), &a, ttl)
+        bind(&repo, &provider, &key, Some(&first), &a, ttl)
             .await
             .unwrap()
             .is_none()
     );
     assert!(repo.load(&provider, &key).await.unwrap().is_none());
-    let fresh = repo
-        .compare_and_bind(&provider, &key, None, &a, ttl)
+    let fresh = bind(&repo, &provider, &key, None, &a, ttl)
         .await
         .unwrap()
         .unwrap();
@@ -136,7 +171,7 @@ async fn damaged_binding_is_an_error_and_cannot_be_claimed_as_absent() {
     let key = ProviderSessionAffinityKey::try_new("damaged-session").unwrap();
     let a = ProviderAccountId::new("acct_a").unwrap();
     let ttl = Duration::from_secs(60);
-    repo.compare_and_bind(&provider, &key, None, &a, ttl)
+    bind(&repo, &provider, &key, None, &a, ttl)
         .await
         .unwrap()
         .unwrap();
@@ -153,10 +188,137 @@ async fn damaged_binding_is_an_error_and_cannot_be_claimed_as_absent() {
         .unwrap();
     assert!(repo.load(&provider, &key).await.is_err());
     assert!(
-        repo.compare_and_bind(&provider, &key, None, &a, ttl)
+        bind(&repo, &provider, &key, None, &a, ttl)
             .await
             .unwrap()
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn round_robin_commits_only_with_the_current_cursor_and_session_version() {
+    use gateway_core::policy::ClientApiKeyId;
+
+    let Some((repo, mut connection, namespace)) = affinity_repository().await else {
+        return;
+    };
+    let peer = RedisProviderSessionAffinityRepository::new(connection.clone(), &namespace).unwrap();
+    let provider = ProviderKind::new("openai").unwrap();
+    let client = ClientApiKeyId::new("client").unwrap();
+    let account = ProviderAccountId::new("acct_a").unwrap();
+    let key = ProviderSessionAffinityKey::try_new("rr-session").unwrap();
+    let other = ProviderSessionAffinityKey::try_new("rr-other").unwrap();
+    let claim = ProviderSessionClaim {
+        key: &key,
+        expected: None,
+        account: &account,
+        ttl: Duration::from_secs(60),
+    };
+    let step = |cursor, session| ProviderAccountAdmission::RoundRobin {
+        client_key: &client,
+        cursor,
+        session,
+    };
+    let first = step(0, Some(claim));
+    let (a, b) = tokio::join!(
+        repo.admit_account(&provider, first),
+        peer.admit_account(&provider, first)
+    );
+    assert_ne!(a.unwrap(), b.unwrap());
+    let winner = repo.load(&provider, &key).await.unwrap().unwrap();
+    assert_eq!(winner.account_id(), &account);
+    assert!(
+        !repo
+            .admit_account(&provider, step(1, Some(claim)))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        peer.round_robin_cursor(&provider, &client).await.unwrap(),
+        1
+    );
+    let other_claim = ProviderSessionClaim {
+        key: &other,
+        ..claim
+    };
+    assert!(
+        !peer
+            .admit_account(&provider, step(0, Some(other_claim)))
+            .await
+            .unwrap()
+    );
+    assert!(repo.load(&provider, &other).await.unwrap().is_none());
+    assert!(peer.admit_account(&provider, step(1, None)).await.unwrap());
+    assert_eq!(
+        repo.round_robin_cursor(&provider, &client).await.unwrap(),
+        2
+    );
+    for (p, c) in [
+        (&provider, ClientApiKeyId::new("other").unwrap()),
+        (&ProviderKind::new("xai").unwrap(), client.clone()),
+    ] {
+        assert_eq!(repo.round_robin_cursor(p, &c).await.unwrap(), 0);
+    }
+    let leases =
+        gateway_store::redis::RedisCredentialLeaseRepository::new(connection.clone(), &namespace)
+            .unwrap();
+    assert_eq!(
+        leases
+            .advance_scheduling_cursor(&client, &provider)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        repo.round_robin_cursor(&provider, &client).await.unwrap(),
+        2
+    );
+    let cursor_keys: Vec<String> = redis::cmd("KEYS")
+        .arg(format!("{namespace}:*:session-cursor"))
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    let ttl: i64 = redis::cmd("PTTL")
+        .arg(&cursor_keys[0])
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert!((1..=86_400_000).contains(&ttl));
+    redis::cmd("DEL")
+        .arg(&cursor_keys)
+        .query_async::<i64>(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(
+        peer.round_robin_cursor(&provider, &client).await.unwrap(),
+        0
+    );
+    assert_eq!(repo.load(&provider, &key).await.unwrap(), Some(winner));
+
+    let fresh = ProviderSessionAffinityKey::try_new("rr-fresh").unwrap();
+    let claims = [
+        other_claim,
+        ProviderSessionClaim {
+            key: &fresh,
+            ..claim
+        },
+    ];
+    let (a, b) = tokio::join!(
+        repo.admit_account(&provider, step(0, Some(claims[0]))),
+        peer.admit_account(&provider, step(0, Some(claims[1])))
+    );
+    let won_first = a.unwrap();
+    assert_ne!(won_first, b.unwrap());
+    let loser = claims[usize::from(won_first)];
+    assert!(repo.load(&provider, loser.key).await.unwrap().is_none());
+    assert!(
+        repo.admit_account(&provider, step(1, Some(loser)))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        peer.round_robin_cursor(&provider, &client).await.unwrap(),
+        2
     );
 }
 
@@ -221,12 +383,11 @@ async fn turn_alias_cannot_be_reassigned_and_follows_session_migration() {
             .await
             .unwrap()
     );
-    let first = repo
-        .compare_and_bind(&provider, &session, None, &a, ttl)
+    let first = bind(&repo, &provider, &session, None, &a, ttl)
         .await
         .unwrap()
         .unwrap();
-    repo.compare_and_bind(&provider, &session, Some(&first), &b, ttl)
+    bind(&repo, &provider, &session, Some(&first), &b, ttl)
         .await
         .unwrap()
         .unwrap();
@@ -293,8 +454,7 @@ async fn binding_and_turn_alias_can_renew_beyond_one_day_and_shorten_without_sca
     let mut binding = None;
     for hours in [24, 168, 720, 1] {
         let ttl = Duration::from_secs(hours * 3600);
-        binding = repo
-            .compare_and_bind(&provider, &session, binding.as_ref(), &account, ttl)
+        binding = bind(&repo, &provider, &session, binding.as_ref(), &account, ttl)
             .await
             .unwrap();
         assert!(binding.is_some());
@@ -324,7 +484,7 @@ async fn binding_and_turn_alias_can_renew_beyond_one_day_and_shorten_without_sca
     }
     for ttl in [Duration::ZERO, Duration::from_secs(721 * 3600)] {
         assert!(
-            repo.compare_and_bind(&provider, &session, binding.as_ref(), &account, ttl)
+            bind(&repo, &provider, &session, binding.as_ref(), &account, ttl)
                 .await
                 .is_err()
         );

@@ -154,10 +154,16 @@ impl ProviderSchedulingLeaseRequest {
     }
 }
 
-/// Lease 生命周期由具体 Store guard 管理，Provider 只能持有
-pub trait ProviderLeaseGuard: Send + Sync + 'static {}
+/// Drop 回收租约；同一请求需要重选时显式等待释放，避免被自己的租约阻塞
+pub trait ProviderLeaseGuard: Send + Sync + 'static {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>>;
+}
 
-impl<T> ProviderLeaseGuard for T where T: Send + Sync + 'static {}
+impl ProviderLeaseGuard for () {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 pub enum ProviderLeaseAcquisition {
     Acquired(Box<dyn ProviderLeaseGuard>),
@@ -198,18 +204,6 @@ pub trait ProviderLeasePort: Send + Sync {
         &self,
         request: ProviderLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>>;
-
-    /// 推进 round_robin 新会话游标，并返回推进前的值
-    /// 与 `load_state` 的请求级游标分开，亲和命中不调用此方法
-    /// 未实现该游标的端口返回 0
-    fn advance_session_round_robin_cursor<'a>(
-        &'a self,
-        client_api_key_id: &'a ClientApiKeyId,
-        provider_kind: &'a ProviderKind,
-    ) -> BoxFuture<'a, Result<u64, ProviderStoreError>> {
-        let _ = (client_api_key_id, provider_kind);
-        Box::pin(async { Ok(0) })
-    }
 
     /// 读取指定账号普通池的在途请求数；只用于容量熔断的峰值证据，
     /// 支持租约信号的存储实现覆盖，否则视为不可观测（空映射）

@@ -12,20 +12,20 @@ use gateway_core::error::ErrorSource;
 use gateway_core::account::{
     AccountAffinity, AccountCandidate, AccountCapacitySnapshot, AccountErrorReason,
     AccountFeedbackStats, AccountModelAccessMode, AccountQuotaSignals, AccountRuntimeSignals,
-    AccountSchedulingBlocker, AccountSelection, AccountSelectionContext, AccountSelectionPolicy,
-    AccountSelector, AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount,
-    ProviderAccountId, QuotaEvidence, RotationStrategy,
+    AccountSchedulingBlocker, AccountSelectionContext, AccountSelectionPolicy, AccountSelector,
+    AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId,
+    QuotaEvidence, RotationStrategy,
 };
 use gateway_core::concurrency::{
     CapacityWait, ConcurrencyQueuePolicy, ConcurrencyWaitQueue, QueueRejection, WaitPriority,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, policy::AccountPolicyError};
 use gateway_core::provider_ports::{
-    ProviderConcurrencyPool, ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition,
-    ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
-    ProviderScopedCooldown, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
-    ProviderSessionBinding, ProviderSessionExclusionPort, ProviderSessionExclusions,
-    ProviderStoreError,
+    ProviderAccountAdmission, ProviderConcurrencyPool, ProviderCooldownPort, ProviderCooldownScope,
+    ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderSchedulingLeaseRequest, ProviderScopedCooldown, ProviderSessionAffinityKey,
+    ProviderSessionAffinityPort, ProviderSessionBinding, ProviderSessionClaim,
+    ProviderSessionExclusionPort, ProviderSessionExclusions, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use secrecy::ExposeSecret;
@@ -281,33 +281,6 @@ struct AffinityTelemetry {
     account_switch: bool,
 }
 
-/// 探针只判断这次选择会不会按 round_robin 改派
-/// 游标取值不影响亲和是否命中；空池、命中、后代跟随和严格排队都不消耗游标
-fn consumes_session_round_robin_cursor(
-    probe: Option<AccountSelection<'_>>,
-    follow_bound_session: bool,
-    affinity_mode: AccountAffinity,
-    pinned: bool,
-    max_waiting: u32,
-) -> bool {
-    let Some(selection) = probe else {
-        return false;
-    };
-    if selection.preferred() == PreferredAccountSelection::Hit || follow_bound_session {
-        return false;
-    }
-    // 严格亲和或固定账号只会排队等待当前账号，这次选择不会改派
-    if matches!(
-        selection.preferred(),
-        PreferredAccountSelection::Blocked(AccountSchedulingBlocker::ConcurrencyLimit)
-    ) && (affinity_mode == AccountAffinity::Strict || pinned)
-        && max_waiting > 0
-    {
-        return false;
-    }
-    true
-}
-
 impl CodexCredentialSelector {
     #[must_use]
     // 选择器显式持有各能力边界，避免把 Provider 私有服务重新包装成通用容器
@@ -448,12 +421,12 @@ impl CodexCredentialSelector {
                 .as_ref()
                 .is_some_and(|binding| binding.account_id() != &selected_account)
                 || !self
-                    .admit_session(
-                        affinity.key(),
-                        current.as_ref(),
-                        &selected_account,
-                        policy.openai_session_affinity_ttl(),
-                    )
+                    .admit_account(ProviderAccountAdmission::Session(ProviderSessionClaim {
+                        key: affinity.key(),
+                        expected: current.as_ref(),
+                        account: &selected_account,
+                        ttl: policy.openai_session_affinity_ttl(),
+                    }))
                     .await?
             {
                 return Err(CredentialSelectionError::SessionBound(Box::new(
@@ -1022,15 +995,31 @@ impl CodexCredentialSelector {
                     }
                 }
             }
-            let scheduling = self
-                .leases
-                .load_state(
-                    request.attempt.client_api_key_ref(),
+            let policy = request.attempt.account_selection_policy();
+            let client_key = request.attempt.client_api_key_ref();
+            let use_assignment_cursor = policy.strategy() == RotationStrategy::RoundRobin
+                && pinned_account.is_none()
+                && !(binding.is_some()
+                    && (follow_only || affinity_mode == AccountAffinity::Preferred))
+                && queued_account.is_none();
+            let (scheduling, assignment_cursor) = futures::try_join!(
+                self.leases.load_state(
+                    client_key,
                     &self.provider_kind,
                     &account_ids,
-                    concurrency_pool,
-                )
-                .await?;
+                    concurrency_pool
+                ),
+                async {
+                    if use_assignment_cursor {
+                        self.session_affinity
+                            .round_robin_cursor(&self.provider_kind, client_key)
+                            .await
+                            .map(Some)
+                    } else {
+                        Ok(None)
+                    }
+                },
+            )?;
             let round_robin_cursor =
                 if affinity_mode == AccountAffinity::Preferred && binding.is_some() {
                     use sha2::{Digest, Sha256};
@@ -1044,7 +1033,7 @@ impl CodexCredentialSelector {
                         },
                     )
                 } else {
-                    scheduling.round_robin_cursor()
+                    assignment_cursor.unwrap_or_else(|| scheduling.round_robin_cursor())
                 };
             let mut candidates = accounts
                 .into_iter()
@@ -1157,14 +1146,6 @@ impl CodexCredentialSelector {
             }
             let mut shortest_retry = None;
             let mut busy_accounts = std::collections::BTreeSet::new();
-            let policy = request.attempt.account_selection_policy();
-            // round_robin 的新会话使用独立游标，请求级游标留给 smart 的同分轮换
-            // 优先模式已有绑定时，后备顺序来自会话摘要，不占用新会话游标
-            let use_session_round_robin = policy.strategy() == RotationStrategy::RoundRobin
-                && request.attempt.request_policy_context().is_none()
-                && !(affinity_mode == AccountAffinity::Preferred && binding.is_some());
-            let mut assigned_session_cursor = None;
-
             loop {
                 let preferred = pinned_account
                     .clone()
@@ -1184,27 +1165,6 @@ impl CodexCredentialSelector {
                 for candidate in &candidates {
                     if !waiting.can_try(candidate.account.id()) {
                         context.busy_accounts.insert(candidate.account.id().clone());
-                    }
-                }
-                if use_session_round_robin {
-                    if let Some(cursor) = assigned_session_cursor {
-                        context.round_robin_cursor = cursor;
-                    } else if consumes_session_round_robin_cursor(
-                        AccountSelector.select(&candidates, &context),
-                        follow_only && binding.is_some(),
-                        affinity_mode,
-                        pinned_account.is_some(),
-                        queue_policy.max_waiting,
-                    ) {
-                        let cursor = self
-                            .leases
-                            .advance_session_round_robin_cursor(
-                                request.attempt.client_api_key_ref(),
-                                &self.provider_kind,
-                            )
-                            .await?;
-                        assigned_session_cursor = Some(cursor);
-                        context.round_robin_cursor = cursor;
                     }
                 }
                 let selection = match request
@@ -1473,25 +1433,53 @@ impl CodexCredentialSelector {
                         {
                             binding_account = primary.account_id();
                         }
-                        if let Some(key) = binding_key {
-                            match self
-                                .admit_session(
-                                    key,
-                                    binding.as_ref(),
-                                    binding_account,
-                                    policy.openai_session_affinity_ttl(),
-                                )
-                                .await
+                        let claim = binding_key.map(|key| ProviderSessionClaim {
+                            key,
+                            expected: binding.as_ref(),
+                            account: binding_account,
+                            ttl: policy.openai_session_affinity_ttl(),
+                        });
+                        // 插件委托与普通内置选号共享轮询，显式选择、亲和命中及等待不消耗位置
+                        let admission = match assignment_cursor {
+                            Some(cursor)
+                                if !selection.is_policy_choice()
+                                    && selection.preferred() != PreferredAccountSelection::Hit =>
                             {
-                                Ok(false) => {
-                                    drop(guard);
-                                    continue 'capacity;
-                                }
+                                Some(ProviderAccountAdmission::RoundRobin {
+                                    client_key,
+                                    cursor,
+                                    session: claim,
+                                })
+                            }
+                            _ => claim.map(ProviderAccountAdmission::Session),
+                        };
+                        if let Some(admission) = admission {
+                            let admitted = match self.admit_account(admission).await {
+                                Ok(false) => false,
                                 Err(error)
                                     if cache_preference
-                                        && affinity_mode == AccountAffinity::Preferred =>
+                                        && affinity_mode == AccountAffinity::Preferred
+                                        && admission.session().is_some() =>
                                 {
                                     tracing::warn!(%error, "OpenAI cache preference update unavailable");
+                                    // 缓存偏好允许丢失，实际的轮询分配仍须占用该位置
+                                    match admission {
+                                        ProviderAccountAdmission::RoundRobin {
+                                            client_key,
+                                            cursor,
+                                            ..
+                                        } => {
+                                            self.admit_account(
+                                                ProviderAccountAdmission::RoundRobin {
+                                                    client_key,
+                                                    cursor,
+                                                    session: None,
+                                                },
+                                            )
+                                            .await?
+                                        }
+                                        ProviderAccountAdmission::Session(_) => true,
+                                    }
                                 }
                                 Err(error) => return Err(error),
                                 Ok(true) => {
@@ -1517,7 +1505,15 @@ impl CodexCredentialSelector {
                                             }),
                                         );
                                     }
+                                    true
                                 }
+                            };
+                            if !admitted {
+                                guard.release().await?;
+                                if request.attempt.deadline().is_elapsed() {
+                                    return Err(CredentialSelectionError::AccountSnapshotChanged);
+                                }
+                                continue 'capacity;
                             }
                         }
                         let affinity_telemetry = affinity.telemetry(account.id(), cache_preference);
@@ -1664,27 +1660,28 @@ impl CodexCredentialSelector {
         .map_err(binding_store_error)
     }
 
-    async fn admit_session(
+    async fn admit_account(
         &self,
-        key: &ProviderSessionAffinityKey,
-        expected: Option<&ProviderSessionBinding>,
-        account: &ProviderAccountId,
-        session_ttl: Duration,
+        admission: ProviderAccountAdmission<'_>,
     ) -> Result<bool, CredentialSelectionError> {
-        tokio::time::timeout(
+        let result = tokio::time::timeout(
             SESSION_AFFINITY_TIMEOUT,
-            self.session_affinity.compare_and_bind(
-                &self.provider_kind,
-                key,
-                expected,
-                account,
-                session_ttl,
-            ),
+            self.session_affinity
+                .admit_account(&self.provider_kind, admission),
         )
         .await
-        .map_err(binding_store_error)?
-        .map(|binding| binding.is_some())
-        .map_err(binding_store_error)
+        .unwrap_or_else(|source| {
+            Err(ProviderStoreError::caused_by(
+                gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
+                "admit provider account",
+                source,
+            ))
+        });
+        if admission.session().is_some() {
+            result.map_err(binding_store_error)
+        } else {
+            result.map_err(Into::into)
+        }
     }
 
     /// 只按账号整体的当前事实迁移主绑定，临时容量和单模型限制仍允许恢复热缓存

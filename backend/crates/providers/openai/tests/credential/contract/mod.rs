@@ -796,8 +796,8 @@ fn selector_does_not_retry_invalid_credential_data() {
     assert!(leases.requests.lock().expect("lease requests").is_empty());
 }
 
-#[test]
-fn selector_round_robin_cursor_advances_across_requests() {
+#[tokio::test]
+async fn selector_round_robin_cursor_advances_across_requests() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first", "at-first");
     create_account(&store, "acct_second", "at-second");
@@ -808,13 +808,15 @@ fn selector_round_robin_cursor_advances_across_requests() {
 
     for _ in 0..4 {
         let attempt = round_robin_attempt();
-        let lease = block_on(selector.select(&SelectCodexCredential {
-            upstream_model: "gpt-5.4",
-            request_url: &request_url,
-            attempt: &attempt,
-            session_affinity_key: None,
-        }))
-        .expect("select round robin account");
+        let lease = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &request_url,
+                attempt: &attempt,
+                session_affinity_key: None,
+            })
+            .await
+            .expect("select round robin account");
         selected.push(lease.account_id().as_str().to_owned());
     }
 
@@ -849,7 +851,6 @@ async fn strict_round_robin_rotates_each_new_session_across_eligible_accounts() 
             "acct_fallback"
         );
     }
-    assert_eq!(leases.session_round_robin_cursor(), 1);
     assert_eq!(
         select_strict_round_robin_session(&selector, &request_url, "session-2").await,
         "acct_first"
@@ -866,7 +867,6 @@ async fn strict_round_robin_rotates_each_new_session_across_eligible_accounts() 
         select_strict_round_robin_session(&selector, &request_url, "session-4").await,
         "acct_fallback"
     );
-    assert_eq!(leases.session_round_robin_cursor(), 4);
 }
 
 async fn select_strict_round_robin_session(
