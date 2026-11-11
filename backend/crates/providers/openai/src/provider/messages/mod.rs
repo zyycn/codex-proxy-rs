@@ -87,8 +87,14 @@ impl CodexProvider {
             let mut source_context = generate.protocol_payload().context().clone();
             retain_target_headers(source, &mut source_context, &mut headers);
             let translator = translator::ResponsesResponseTranslator::new(original);
-            let translated =
+            let mut translated =
                 messages_to_responses_request(original).map_err(|_| invalid_request())?;
+            if matches!(
+                selected.lease.authentication(),
+                CodexRuntimeAuthentication::OAuth(_)
+            ) {
+                crate::compat::normalize_translated_codex_service_tier(&mut translated);
+            }
             let body = serde_json::to_vec(&translated).map_err(|_| invalid_request())?;
             let operation = operation
                 .replace_protocol_wire(None, source_context)

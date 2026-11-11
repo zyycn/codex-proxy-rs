@@ -35,13 +35,6 @@ pub(super) fn normalize_non_codex_request_body(body: &mut Map<String, Value>) {
 }
 
 fn normalize_codex_oauth_options(body: &mut Map<String, Value>) {
-    // Codex Core 省略默认档位，OAuth 不接受公开 API 的 auto/default 字面值
-    if matches!(
-        body.get("service_tier").and_then(Value::as_str),
-        Some("auto" | "default")
-    ) {
-        body.shift_remove("service_tier");
-    }
     // Codex OAuth 拒绝这些客户端选项，即使采样参数取默认值
     for field in [
         "top_p",

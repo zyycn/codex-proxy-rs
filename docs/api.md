@@ -395,7 +395,7 @@ adaptive 路径将普通强制选择降为 `auto`，保留串行约束。
 服务档位按目标协议映射：Responses `default` 对应 Messages `standard_only`，`auto` 保留，无法对应的档位省略。
 按 CPA 将 Responses `priority` 与 Messages `speed:fast` 双向映射；这两个字段不代表相同的服务承诺。
 跨协议生成 fast 请求时补充 `fast-mode-2026-02-01` beta，并保留已有 beta；目标是否支持 fast 由上游校验。
-Codex OAuth 出站省略 `auto/default`，Responses API Key 保留这些公开 API 参数。
+Messages 转向 Codex OAuth 时省略转换生成的 `auto/default`，转向 Responses API Key 时保留。
 会话内配置、工具增删和指令生效期限等扩展需要完整保留时使用同协议上游
 
 Messages 错误使用 `{"type":"error","error":{"type":"...","message":"..."}}`；SSE 开始后使用 `event: error`。
@@ -1946,7 +1946,7 @@ GET 和 POST 均返回 `enabled`、`leadMinutes`、`weeklyTriggerRemainingPercen
 - 关闭：将 `priority`（含 `fast` 别名）改为显式 `default`，继续处理请求
 
 策略只作用于 OpenAI Responses 的顶层 `service_tier`，不改变 `flex`、`ultrafast` 等其他显式档位、嵌套字段或其他 Provider。
-选定 Codex OAuth 后，出站兼容层按其合同省略 `auto/default`，默认档位仍按标准价格计费；Responses API Key 保留这两个值。
+OAuth 和 Responses API Key 共用上述档位规则，出站兼容层不额外删除原生 Responses 的 `auto/default`。
 宿主策略在 request 中间件之后应用，形成 attempt 输入基线；attempt 中间件继续改写档位时，以改写后的实际发送值为准。
 HTTP 和每个 WebSocket `response.create` 均使用请求开始时的分组策略，同一请求重试保持该策略；
 HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造；复用 WS 时不重发握手头，

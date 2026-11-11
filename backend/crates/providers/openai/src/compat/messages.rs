@@ -1,8 +1,19 @@
-//! 跨协议生成的 Messages fast 请求补充协议头，不改写原生 Messages 请求
+//! Messages 跨协议转换的目标档位与 fast 协议头适配
 
 use bytes::Bytes;
 use gateway_core::engine::middleware::MiddlewareHeader;
 use reqwest::header::HeaderMap;
+use serde_json::{Map, Value};
+
+pub(crate) fn normalize_translated_codex_service_tier(body: &mut Map<String, Value>) {
+    // 转换生成的默认档位沿用 Codex 客户端的省略表达，原生 Responses 保留调用方声明
+    if matches!(
+        body.get("service_tier").and_then(Value::as_str),
+        Some("auto" | "default")
+    ) {
+        body.shift_remove("service_tier");
+    }
+}
 
 pub(crate) fn add_translated_fast_beta(headers: &mut Vec<MiddlewareHeader>, forwarded: &HeaderMap) {
     const BETA: &[u8] = b"fast-mode-2026-02-01";

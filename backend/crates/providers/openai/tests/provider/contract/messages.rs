@@ -303,6 +303,71 @@ async fn messages_and_responses_translate_with_target_header_boundaries() {
 }
 
 #[tokio::test]
+async fn translated_messages_service_tiers_follow_the_selected_responses_upstream() {
+    for api_key in [false, true] {
+        for (options, oauth_tier, api_tier) in [
+            (json!({"service_tier":"auto"}), None, Some("auto")),
+            (
+                json!({"service_tier":"standard_only"}),
+                None,
+                Some("default"),
+            ),
+            (json!({"speed":"fast"}), Some("priority"), Some("priority")),
+        ] {
+            let server = MockServer::start().await;
+            let store = Arc::new(MemoryAccountStore::default());
+            if api_key {
+                seed(&store, &server, ApiKeyProtocol::Responses).await;
+            } else {
+                create_account(&store, "acct_provider_contract").await;
+            }
+            Mock::given(method("POST"))
+                .and(path(if api_key {
+                    "/responses"
+                } else {
+                    "/codex/responses"
+                }))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut body = json!({"model":"gpt-5.4","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hello"}]});
+            body.as_object_mut()
+                .unwrap()
+                .extend(options.as_object().unwrap().clone());
+            let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("anthropic", body.as_object().unwrap().clone())
+                    .unwrap()
+                    .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
+            ));
+            let mut stream = provider_with_base_url(&store, server.uri())
+                .execute(
+                    planned_request("openai", operation),
+                    context("req_translated_tier", CancellationToken::new()),
+                )
+                .await
+                .unwrap();
+            while let Some(event) = stream.next().await {
+                event.unwrap();
+            }
+            let requests = server.received_requests().await.unwrap();
+            let sent = captured_request_body(&requests[0]);
+            let expected = if api_key { api_tier } else { oauth_tier };
+            assert_eq!(sent.get("service_tier").and_then(Value::as_str), expected);
+            let hint = expected.map_or_else(
+                || "model=gpt-5.4".to_owned(),
+                |tier| format!("model=gpt-5.4;tier={tier}"),
+            );
+            assert_eq!(requests[0].headers["x-codex-routing-hint"], hint);
+            server.verify().await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn custom_messages_and_responses_count_locally_without_billable_usage() {
     for (target, source) in [
         (ApiKeyProtocol::Messages, "anthropic"),
