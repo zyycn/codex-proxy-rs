@@ -617,3 +617,133 @@ async fn all_filtered_is_terminal_before_queue_or_lease_even_for_native_pins() {
         assert!(leases.requests.lock().unwrap().is_empty());
     }
 }
+
+#[tokio::test]
+async fn round_robin_counts_concurrent_first_requests_as_one_session() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "test-first");
+    create_account(&store, "acct_second", "test-second");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let affinity = Arc::new(MemorySessionAffinity::with_initial_claim_barrier(2));
+    let selector = selector_with_affinity(&store, leases, affinity.clone());
+    let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+    let mut winners = Vec::new();
+    for key in ["session-1", "session-2"] {
+        let (a, b) = tokio::join!(biased;
+            select_strict_round_robin_session(&selector, &url, key),
+            select_strict_round_robin_session(&selector, &url, key),
+        );
+        assert_eq!(a, b);
+        winners.push(a);
+    }
+    assert_eq!(affinity.binding_count(), 2);
+    assert_ne!(winners[0], winners[1]);
+}
+
+#[tokio::test]
+async fn busy_leases_do_not_consume_the_next_round_robin_assignment() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "test-first");
+    create_account(&store, "acct_second", "test-second");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let selector = selector(&store, leases.clone());
+    let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+    let attempt = round_robin_attempt();
+    let key = ProviderSessionAffinityKey::try_new("busy-session").unwrap();
+    *leases.busy.lock().unwrap() = true;
+    let result = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &url,
+            attempt: &attempt,
+            session_affinity_key: Some(&key),
+        })
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(CredentialSelectionError::CapacityUnavailable { .. })
+        ),
+        "{result:?}"
+    );
+    *leases.busy.lock().unwrap() = false;
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &url, "available").await,
+        "acct_first"
+    );
+}
+
+#[tokio::test]
+async fn round_robin_counts_delegated_assignments_and_skips_explicit_picks() {
+    for decision in [
+        AccountScheduleDecision::Delegate,
+        AccountScheduleDecision::DelegateFiltered(BTreeSet::from([ProviderAccountId::new(
+            "acct_second",
+        )
+        .unwrap()])),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        for id in ["acct_first", "acct_second", "acct_fallback"] {
+            create_account(&store, id, id);
+        }
+        let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+        let attempt_for = |decision| {
+            capacity_attempt(
+                AccountSelectionPolicy::new(
+                    RotationStrategy::RoundRobin,
+                    NonZeroU32::new(2).unwrap(),
+                ),
+                Some(RequestPolicyContext::new(
+                    Arc::new(Scheduler { decision }),
+                    ExtensionSetReference::new(
+                        ExtensionSetId::new("rr-policy".into()).unwrap(),
+                        Arc::new(ExtensionLease),
+                    ),
+                    ModelRequestId::new("req_capacity_contract").unwrap(),
+                    ClientApiKeyId::new("key_codex_contract").unwrap(),
+                    vec![],
+                )),
+            )
+        };
+        let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+        let picked = attempt_for(AccountScheduleDecision::Pick(
+            ProviderAccountId::new("acct_second").unwrap(),
+        ));
+        let delegated = attempt_for(decision.clone());
+        let mut actual = Vec::new();
+        for (session, attempt) in [
+            ("pick", &picked),
+            ("one", &delegated),
+            ("one", &delegated),
+            ("two", &delegated),
+            ("three", &delegated),
+        ] {
+            let key = ProviderSessionAffinityKey::try_new(session).unwrap();
+            let selected = selector
+                .select(&SelectCodexCredential {
+                    upstream_model: "gpt-5.4",
+                    request_url: &url,
+                    attempt,
+                    session_affinity_key: Some(&key),
+                })
+                .await
+                .unwrap();
+            actual.push(selected.account_id().as_str().to_owned());
+        }
+        let third = if matches!(decision, AccountScheduleDecision::Delegate) {
+            "acct_second"
+        } else {
+            "acct_fallback"
+        };
+        assert_eq!(
+            actual,
+            [
+                "acct_second",
+                "acct_fallback",
+                "acct_fallback",
+                "acct_first",
+                third
+            ]
+        );
+    }
+}

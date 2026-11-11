@@ -249,6 +249,20 @@ pub struct CredentialLeaseGuard {
     grant: Option<CredentialLeaseGrant>,
 }
 
+impl gateway_core::provider_ports::ProviderLeaseGuard for CredentialLeaseGuard {
+    fn release(
+        self: Box<Self>,
+    ) -> futures::future::BoxFuture<'static, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            (*self)
+                .release()
+                .await
+                .map(|_| ())
+                .map_err(|source| crate::provider_unavailable("release credential lease", source))
+        })
+    }
+}
+
 impl CredentialLeaseGuard {
     /// 自动续期仅属于返回 guard；丢失租约会取消依赖该槽位的请求
     pub fn maintain(
@@ -317,6 +331,16 @@ struct RenewingSchedulingLease {
     // 先停止续期再释放 Redis 成员，防止释放与续期交错
     _renewal: crate::lease_renewal::LeaseRenewal,
     _guard: CredentialLeaseGuard,
+}
+
+impl gateway_core::provider_ports::ProviderLeaseGuard for RenewingSchedulingLease {
+    fn release(
+        self: Box<Self>,
+    ) -> futures::future::BoxFuture<'static, Result<(), ProviderStoreError>> {
+        let Self { _renewal, _guard } = *self;
+        drop(_renewal);
+        Box::new(_guard).release()
+    }
 }
 
 impl fmt::Debug for CredentialLeaseGuard {
@@ -430,7 +454,12 @@ impl RedisCredentialLeaseRepository {
         client_api_key_id: &ClientApiKeyId,
         provider_kind: &ProviderKind,
     ) -> StoreResult<u64> {
-        let key = self.scheduling_cursor_key(client_api_key_id, provider_kind)?;
+        let key = super::scheduling_cursor_key(
+            &self.namespace,
+            client_api_key_id,
+            provider_kind,
+            "cursor",
+        )?;
         let mut connection = self.connection.clone();
         let cursor = Script::new(ADVANCE_SCHEDULING_CURSOR_SCRIPT)
             .key(key)
@@ -470,21 +499,6 @@ impl RedisCredentialLeaseRepository {
             "{owner}|{}|{}",
             grant.lease_id,
             grant.fencing_token.get()
-        ))
-    }
-
-    fn scheduling_cursor_key(
-        &self,
-        client_api_key_id: &ClientApiKeyId,
-        provider_kind: &ProviderKind,
-    ) -> StoreResult<String> {
-        let fingerprint = resource_fingerprint(
-            "provider scheduling cursor",
-            &format!("{}\0{}", client_api_key_id.as_str(), provider_kind.as_str()),
-        )?;
-        Ok(format!(
-            "{}:scheduler:client-provider:{{{fingerprint}}}:cursor",
-            self.namespace
         ))
     }
 

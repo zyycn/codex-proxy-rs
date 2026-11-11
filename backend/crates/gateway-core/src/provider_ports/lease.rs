@@ -154,10 +154,16 @@ impl ProviderSchedulingLeaseRequest {
     }
 }
 
-/// Lease 生命周期由具体 Store guard 管理，Provider 只能持有
-pub trait ProviderLeaseGuard: Send + Sync + 'static {}
+/// Drop 回收租约；同一请求需要重选时显式等待释放，避免被自己的租约阻塞
+pub trait ProviderLeaseGuard: Send + Sync + 'static {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>>;
+}
 
-impl<T> ProviderLeaseGuard for T where T: Send + Sync + 'static {}
+impl ProviderLeaseGuard for () {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 pub enum ProviderLeaseAcquisition {
     Acquired(Box<dyn ProviderLeaseGuard>),

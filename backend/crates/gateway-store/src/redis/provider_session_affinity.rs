@@ -3,9 +3,10 @@
 use std::time::Duration;
 
 use gateway_core::account::ProviderAccountId;
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
-    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionBinding,
-    ProviderStoreError, ProviderStoreErrorKind,
+    ProviderAccountAdmission, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
+    ProviderSessionBinding, ProviderStoreError, ProviderStoreErrorKind,
 };
 use gateway_core::routing::ProviderKind;
 use redis::aio::ConnectionManager;
@@ -17,14 +18,15 @@ use super::{namespace, resource_fingerprint};
 const MAX_SESSION_AFFINITY_TTL: Duration =
     Duration::from_secs(gateway_core::account::MAX_SESSION_AFFINITY_TTL_HOURS as u64 * 3600);
 
-// 比较完整记录而非账号 ID；冲突时既不改绑定，也不续期
-const COMPARE_AND_BIND_SCRIPT: &str = r#"
-local current = redis.call('GET', KEYS[1])
-if (not current and ARGV[1] == '') or current == ARGV[1] then
-  redis.call('PSETEX', KEYS[1], tonumber(ARGV[3]), ARGV[2])
-  return 1
-end
-return 0
+const CURSOR_TTL_MILLIS: u64 = 24 * 60 * 60 * 1000;
+
+// 先比较全部快照再写入；失去首绑或轮询位置的请求不能续期或消耗名额
+const ADMIT_ACCOUNT_SCRIPT: &str = r#"
+if ARGV[2] ~= '' and (redis.call('GET', KEYS[1]) or '') ~= ARGV[1] then return 0 end
+if ARGV[4] ~= '' and (redis.call('GET', KEYS[#KEYS]) or '0') ~= ARGV[4] then return 0 end
+if ARGV[2] ~= '' then redis.call('PSETEX', KEYS[1], ARGV[3], ARGV[2]) end
+if ARGV[4] ~= '' then redis.call('PSETEX', KEYS[#KEYS], ARGV[6], ARGV[5]) end
+return 1
 "#;
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -75,6 +77,15 @@ impl RedisProviderSessionAffinityRepository {
         })
     }
 
+    fn cursor_key(
+        &self,
+        provider: &ProviderKind,
+        client_key: &ClientApiKeyId,
+    ) -> Result<String, ProviderStoreError> {
+        super::scheduling_cursor_key(&self.namespace, client_key, provider, "session-cursor")
+            .map_err(|_| provider_invalid("encode provider round robin cursor key"))
+    }
+
     fn key(
         &self,
         provider_kind: &ProviderKind,
@@ -113,42 +124,71 @@ impl ProviderSessionAffinityPort for RedisProviderSessionAffinityRepository {
         })
     }
 
-    fn compare_and_bind<'a>(
+    fn round_robin_cursor<'a>(
         &'a self,
-        provider_kind: &'a ProviderKind,
-        key: &'a ProviderSessionAffinityKey,
-        expected: Option<&'a ProviderSessionBinding>,
-        account_id: &'a ProviderAccountId,
-        ttl: Duration,
-    ) -> futures::future::BoxFuture<'a, Result<Option<ProviderSessionBinding>, ProviderStoreError>>
-    {
+        provider: &'a ProviderKind,
+        client_key: &'a ClientApiKeyId,
+    ) -> futures::future::BoxFuture<'a, Result<u64, ProviderStoreError>> {
         Box::pin(async move {
-            let ttl_millis = session_affinity_ttl_millis(ttl)?;
-            let expected_raw = expected
-                .map(BindingRecord::encode)
-                .transpose()?
-                .unwrap_or_default();
-            // 同账号命中仅续期；初次认领及换号生成新版本
-            let binding = match expected.filter(|binding| binding.account_id() == account_id) {
-                Some(binding) => binding.clone(),
-                None => ProviderSessionBinding::new(
-                    account_id.clone(),
-                    uuid::Uuid::new_v4().simple().to_string(),
-                )?,
-            };
-            let applied = redis::Script::new(COMPARE_AND_BIND_SCRIPT)
-                .key(self.key(provider_kind, key)?)
-                .arg(expected_raw)
-                .arg(BindingRecord::encode(&binding)?)
-                .arg(ttl_millis)
-                .invoke_async::<bool>(&mut self.connection.clone())
+            let key = self.cursor_key(provider, client_key)?;
+            redis::cmd("GET")
+                .arg(key)
+                .query_async::<Option<u64>>(&mut self.connection.clone())
                 .await
-                .map_err(|source| {
-                    crate::provider_unavailable("admit provider session binding", source)
-                })?;
-            Ok(applied.then_some(binding))
+                .map(Option::unwrap_or_default)
+                .map_err(|source| crate::provider_unavailable("read round robin cursor", source))
         })
     }
+
+    fn admit_account<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        admission: ProviderAccountAdmission<'a>,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let script = redis::Script::new(ADMIT_ACCOUNT_SCRIPT);
+            let mut invocation = script.prepare_invoke();
+            if let Some(claim) = admission.session() {
+                let binding = match claim.expected.filter(|b| b.account_id() == claim.account) {
+                    Some(existing) => existing.clone(),
+                    None => ProviderSessionBinding::new(
+                        claim.account.clone(),
+                        uuid::Uuid::new_v4().simple().to_string(),
+                    )?,
+                };
+                invocation
+                    .key(self.key(provider, claim.key)?)
+                    .arg(
+                        claim
+                            .expected
+                            .map(BindingRecord::encode)
+                            .transpose()?
+                            .unwrap_or_default(),
+                    )
+                    .arg(BindingRecord::encode(&binding)?)
+                    .arg(session_affinity_ttl_millis(claim.ttl)?);
+            } else {
+                invocation.arg("").arg("").arg(0);
+            }
+            if let ProviderAccountAdmission::RoundRobin {
+                client_key, cursor, ..
+            } = admission
+            {
+                invocation
+                    .key(self.cursor_key(provider, client_key)?)
+                    .arg(cursor)
+                    .arg(cursor.wrapping_add(1))
+                    .arg(CURSOR_TTL_MILLIS);
+            } else {
+                invocation.arg("");
+            }
+            invocation
+                .invoke_async(&mut self.connection.clone())
+                .await
+                .map_err(|source| crate::provider_unavailable("admit provider account", source))
+        })
+    }
+
     fn load_alias<'a>(
         &'a self,
         provider: &'a ProviderKind,

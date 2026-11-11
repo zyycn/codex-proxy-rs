@@ -43,6 +43,21 @@ pub(crate) fn resource_fingerprint(entity: &'static str, value: &str) -> StoreRe
     Ok(hex::encode(Sha256::digest(value.as_bytes())))
 }
 
+fn scheduling_cursor_key(
+    namespace: &str,
+    client_key: &gateway_core::policy::ClientApiKeyId,
+    provider: &gateway_core::routing::ProviderKind,
+    suffix: &str,
+) -> StoreResult<String> {
+    let fingerprint = resource_fingerprint(
+        "provider scheduling cursor",
+        &format!("{}\0{}", client_key.as_str(), provider.as_str()),
+    )?;
+    Ok(format!(
+        "{namespace}:scheduler:client-provider:{{{fingerprint}}}:{suffix}"
+    ))
+}
+
 pub(crate) fn namespace(value: &str) -> StoreResult<String> {
     require_nonempty("Redis namespace", "namespace", value)?;
     if value.len() > 128

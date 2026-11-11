@@ -19,12 +19,12 @@ use gateway_core::account::{
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
-    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
-    ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
-    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderSchedulingLeaseRequest,
-    ProviderSchedulingState, ProviderScopedCooldown, ProviderSessionAffinityKey,
-    ProviderSessionAffinityPort, ProviderSessionExclusionPort, ProviderSessionExclusions,
-    ProviderStoreError,
+    ProviderAccountAdmission, ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown,
+    ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort,
+    ProviderLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
+    ProviderSchedulingLeaseRequest, ProviderSchedulingState, ProviderScopedCooldown,
+    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionBinding,
+    ProviderSessionExclusionPort, ProviderSessionExclusions, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::{
@@ -1005,6 +1005,7 @@ impl ProviderLeasePort for TestLeaseCoordinator {
 
 #[derive(Default)]
 pub(crate) struct MemorySessionAffinity {
+    cursors: Mutex<BTreeMap<(ClientApiKeyId, ProviderKind), u64>>,
     operation_delay: Duration,
     initial_claim_barrier: Option<Arc<tokio::sync::Barrier>>,
     aliases: Mutex<BTreeMap<(String, String), gateway_core::provider_ports::ProviderSessionAlias>>,
@@ -1116,48 +1117,77 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
         })
     }
 
-    fn compare_and_bind<'a>(
+    fn round_robin_cursor<'a>(
         &'a self,
         provider: &'a ProviderKind,
-        key: &'a ProviderSessionAffinityKey,
-        expected: Option<&'a gateway_core::provider_ports::ProviderSessionBinding>,
-        account: &'a ProviderAccountId,
-        ttl: Duration,
-    ) -> BoxFuture<
-        'a,
-        Result<Option<gateway_core::provider_ports::ProviderSessionBinding>, ProviderStoreError>,
-    > {
+        client: &'a ClientApiKeyId,
+    ) -> BoxFuture<'a, Result<u64, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(self
+                .cursors
+                .lock()
+                .unwrap()
+                .get(&(client.clone(), provider.clone()))
+                .copied()
+                .unwrap_or_default())
+        })
+    }
+
+    fn admit_account<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        admission: ProviderAccountAdmission<'a>,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
         Box::pin(async move {
             self.delay_operation().await;
-            // 让并发首请求都读到空绑定，再验证发送前的原子认领冲突
-            if expected.is_none()
+            if admission
+                .session()
+                .is_some_and(|claim| claim.expected.is_none())
                 && let Some(barrier) = &self.initial_claim_barrier
             {
                 barrier.wait().await;
             }
-            let key = (
-                provider.as_str().to_owned(),
-                key.expose_to_store().to_owned(),
-            );
-            let mut bindings = self.bindings.lock().expect("bindings");
-            if bindings.get(&key) != expected {
-                return Ok(None);
-            }
-            let binding = expected
-                .filter(|binding| binding.account_id() == account)
-                .cloned()
-                .unwrap_or_else(|| {
-                    gateway_core::provider_ports::ProviderSessionBinding::new(
-                        account.clone(),
+            let mut cursors = self.cursors.lock().unwrap();
+            let step = if let ProviderAccountAdmission::RoundRobin {
+                client_key, cursor, ..
+            } = admission
+            {
+                let current = cursors
+                    .entry((client_key.clone(), provider.clone()))
+                    .or_default();
+                if *current != cursor {
+                    return Ok(false);
+                }
+                Some(current)
+            } else {
+                None
+            };
+            if let Some(claim) = admission.session() {
+                let key = (
+                    provider.as_str().to_owned(),
+                    claim.key.expose_to_store().to_owned(),
+                );
+                let mut bindings = self.bindings.lock().unwrap();
+                if bindings.get(&key) != claim.expected {
+                    return Ok(false);
+                }
+                let binding = match claim.expected.filter(|b| b.account_id() == claim.account) {
+                    Some(binding) => binding.clone(),
+                    None => ProviderSessionBinding::new(
+                        claim.account.clone(),
                         uuid::Uuid::new_v4().simple().to_string(),
-                    )
-                    .expect("binding")
-                });
-            bindings.insert(key, binding.clone());
-            self.renewal_ttls.lock().expect("TTLs").push(ttl);
-            Ok(Some(binding))
+                    )?,
+                };
+                bindings.insert(key, binding);
+                self.renewal_ttls.lock().unwrap().push(claim.ttl);
+            }
+            if let Some(cursor) = step {
+                *cursor = cursor.wrapping_add(1);
+            }
+            Ok(true)
         })
     }
+
     fn load_alias<'a>(
         &'a self,
         provider: &'a ProviderKind,

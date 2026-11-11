@@ -823,7 +823,8 @@ OpenAI Provider 解释官方逻辑 `session_id` 与 `thread_id`，按 Client Key
   已有绑定的后代只跟随当前账号，账号不可用时排队，根迁移后重读共享绑定
 
 可关联的 Search、Images、Live 创建请求共用会话绑定，宽松和优先模式不依赖线程身份分流；严格模式下后代请求保留跟随约束。
-需要选号时统一使用配置的调度策略；插件显式选号由 Core 复核账号资格并取得租约，native continuation 受独立的状态 owner 与安全重放边界约束
+内置 `round_robin` 在最高可调度权重层按账号 ID 轮换。游标按 Client Key 和 Provider 隔离，在取得租约后推进；有会话绑定时，两者原子提交。并发首绑只占一个位置，亲和命中和插件显式选号不推进游标。插件委托仍走内置轮询，优先模式已有绑定时沿用会话派生的后备顺序
+插件显式选号由 Core 复核账号资格并取得租约，native continuation 受独立的状态 owner 与安全重放边界约束
 
 OpenAI 固定归属请求直接读取目标账号，其余请求按冻结的账号 ID 范围查询 Store
 原生会话的完整候选投影由 Provider 短时持有，按 Client Key、冻结范围、模型、调度策略、传输和容量池隔离
