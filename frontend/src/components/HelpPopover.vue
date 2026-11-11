@@ -6,7 +6,7 @@ defineProps<{ label: string, content: string }>()
 </script>
 
 <template>
-  <ZPopover trigger="hover-click" placement="top-start" :hover-delay="240">
+  <ZPopover class="h-4 items-center" trigger="hover-click" placement="top-start" :hover-delay="240">
     <template #reference="{ open }">
       <ZIconButton variant="link" size="small" :aria-label="label" :aria-expanded="open" aria-haspopup="dialog">
         <CircleAlert class="size-3.5" aria-hidden="true" />

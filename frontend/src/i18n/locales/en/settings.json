@@ -82,7 +82,7 @@
       "fillInUnitPrice": "Fill in the unit price",
       "pricingInstructions": "Pricing instructions",
       "modelIdUsesNameActuallySentTo": "Model ID uses the name actually sent to upstream, not the client alias",
-      "customTierHelp": "Enter all four unit prices, up to 1,000,000 each; use 0 for free pricing and multipliers from 0 to 100, with up to four decimal places",
+      "customTierHelp": "Enter all four unit prices from 0 (free) to 1,000,000 and a multiplier from 0 to 100, with up to four decimal places",
       "estimateHelp": "Affects local estimates and spending limits, not actual subscription charges, applies to new requests after saving and leaves past costs unchanged",
       "unitPrice": "{label} unit price",
       "source": "Source",
@@ -129,7 +129,7 @@
       "unitHelp": "Prices in USD per million tokens, view pricing details",
       "unitPriceUnitUsdMTokens": "Unit prices in USD per million tokens",
       "priorityHelp": "Custom prices override source prices, then built-in prices, affecting local estimates and spending limits only",
-      "tableHelp": "Effective standard-tier prices; image models show image token prices and struck-through values show source prices; edit a model to view other tiers",
+      "tableHelp": "The table shows effective standard-tier prices (image token prices for image models), with source prices struck through and other tiers available in the editor",
       "deleteModelPriceList": "Delete model price list",
       "deleteDescription": "Delete source and custom prices for this model, leaving past costs unchanged",
       "standard": "Standard",
@@ -264,9 +264,10 @@
       "accountTimeout": "Account queue timeout",
       "accountTimeoutHelp": "Starts on first account queue entry and continues across retries",
       "queueFailure": "When the account queue is full or times out",
-      "queueFailureHelp": "Try another account with room. If switching is not possible, return the queue error.",
+      "queueFailureHelp": "Try another account with capacity or return the queue error if switching is unavailable",
       "queueFailureHelpTitle": "Account switching rules",
-      "queueFailureDetails": "Check once without queuing again. Requests pinned to an account, native continuations, and requests bound to a parent session cannot switch on their own.",
+      "queueFailureAttempt": "Try switching once without queuing again",
+      "queueFailureRestrictions": "Requests pinned to an account, native continuations and requests bound to a parent session cannot switch on their own",
       "returnError": "Return error",
       "trySwitch": "Try another account",
       "autoReview": {
@@ -278,7 +279,9 @@
         "label": "Upstream retry wait limit",
         "help": "Try another account above the limit",
         "helpTitle": "About upstream retry waits",
-        "details": "Defaults to 240 seconds. Limits each Retry-After wait, not the total request duration. Above the limit, try another account; return the error if none is available. Set to 0 to reject positive waits. Account rotation still follows the rotation limit and request replay conditions."
+        "waitLimit": "The default 240-second limit applies to each Retry-After wait rather than the total request time",
+        "zeroLimit": "Set to 0 to treat any positive wait as over the limit",
+        "switchConditions": "Above the limit, only retryable requests with account switches remaining can switch accounts, and an error is returned if none is available"
       }
     },
     "modelMapping": "Model mapping",

@@ -77,7 +77,7 @@
       "invalidKey": "Use visible HTTP header characters, without spaces or line breaks",
       "requestsPerMinute": "Requests per minute",
       "peerSharing": "CPR Link",
-      "peerSharingHelp": "Share this key’s budget, concurrency limit and RPM with other nodes. Model requests can use OAuth and API accounts in the selected groups",
+      "peerSharingHelp": "Other nodes can check this key’s budget, concurrency limit and RPM and use OAuth and API accounts in the selected groups for model requests",
       "sharePool": "Share account pool summary",
       "shareQuota": "Share account quotas",
       "sharePlans": "Share plan breakdown",

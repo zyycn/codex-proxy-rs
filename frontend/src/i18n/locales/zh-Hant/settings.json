@@ -264,9 +264,10 @@
       "accountTimeout": "賬號排隊超時",
       "accountTimeoutHelp": "從首次進入賬號隊列起計時，重試不重置",
       "queueFailure": "賬號隊滿或超時後",
-      "queueFailureHelp": "嘗試換號時，改用有空位的賬號；無法換號則返回排隊錯誤",
+      "queueFailureHelp": "嘗試換到有空位的賬號，無法換號時返回排隊錯誤",
       "queueFailureHelpTitle": "賬號換號規則",
-      "queueFailureDetails": "只重新選擇一次，不再排隊。指定賬號、需要用原賬號續寫，或必須跟隨主會話的請求不能自行換號。",
+      "queueFailureAttempt": "只嘗試換號一次，不再排隊",
+      "queueFailureRestrictions": "指定賬號、需要原賬號續寫或必須跟隨主會話的請求不能自行換號",
       "returnError": "返回錯誤",
       "trySwitch": "嘗試換號",
       "autoReview": {
@@ -278,7 +279,9 @@
         "label": "上游重試等待上限",
         "help": "超限時嘗試換號",
         "helpTitle": "上游重試等待說明",
-        "details": "預設 240 秒，限制單次 Retry-After 等待，並非請求總時長。超限時嘗試換號，無可用賬號則返回錯誤。0 表示不接受正數等待。換號仍受最大換號次數和請求可重試條件限制。"
+        "waitLimit": "預設 240 秒，僅限制單次 Retry-After 等待，不限制請求總時長",
+        "zeroLimit": "設為 0 時，任何大於 0 秒的等待都算超限",
+        "switchConditions": "超限後，僅在請求可重試且未達到最大換號次數時嘗試換號，無可用賬號則返回錯誤"
       }
     },
     "modelMapping": "模型映射",

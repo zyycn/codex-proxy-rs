@@ -106,19 +106,18 @@ function confirm() {
       </p>
       <div>
         <div class="grid gap-4 sm:grid-cols-2">
-          <ZFormItem v-for="field in fields" :key="field.key" :error="submitted ? errors[field.key] : undefined">
-            <template #label>
-              <span class="inline-flex items-center gap-1">
-                {{ field.label }}
-                <ZPopover trigger="hover-click" placement="top-start">
-                  <template #reference="{ open: helpOpen }">
-                    <ZIconButton variant="link" :aria-label="t('settings.scheduling.about', { label: field.label })" :aria-expanded="helpOpen" class="size-6!">
-                      <CircleHelp class="size-3.5" />
-                    </ZIconButton>
-                  </template>
-                  <p class="m-0 max-w-64 px-3 py-2 text-z-sm leading-relaxed">{{ field.help }}</p>
-                </ZPopover>
-              </span>
+          <ZFormItem v-for="field in fields" :key="field.key" :label="field.label" :error="submitted ? errors[field.key] : undefined">
+            <template #label-extra>
+              <ZPopover class="-my-1" trigger="hover-click" placement="top-start">
+                <template #reference="{ open: helpOpen }">
+                  <ZIconButton variant="link" :aria-label="t('settings.scheduling.about', { label: field.label })" :aria-expanded="helpOpen" class="size-6!">
+                    <CircleHelp class="size-3.5" />
+                  </ZIconButton>
+                </template>
+                <p class="m-0 max-w-64 px-3 py-2 text-z-sm leading-relaxed">
+                  {{ field.help }}
+                </p>
+              </ZPopover>
             </template>
             <ZInput v-model="draft[field.key]" type="number" min="0" max="10" step="0.1" :placeholder="t('settings.scheduling.zeroWeightHelp')" :aria-label="field.label" />
           </ZFormItem>

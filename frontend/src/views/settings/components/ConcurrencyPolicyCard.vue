@@ -83,9 +83,11 @@ const queueFailureOptions = computed(() => [
                 <CircleAlert class="size-3.5" aria-hidden="true" />
               </ZIconButton>
             </template>
-            <p class="max-w-72 px-3 py-2 text-z-sm leading-relaxed text-z-text-secondary">
-              {{ t('settings.concurrency.retryAfter.details') }}
-            </p>
+            <div class="max-w-72 space-y-2 px-3 py-2 text-z-sm leading-relaxed text-z-text-secondary">
+              <p>{{ t('settings.concurrency.retryAfter.waitLimit') }}</p>
+              <p>{{ t('settings.concurrency.retryAfter.zeroLimit') }}</p>
+              <p>{{ t('settings.concurrency.retryAfter.switchConditions') }}</p>
+            </div>
           </ZPopover>
         </template>
         <ZInput v-model="maxRetryAfterSeconds" :aria-label="t('settings.units.inSeconds', { label: t('settings.concurrency.retryAfter.label') })" type="number" min="0" max="4294967295" step="1">
@@ -109,9 +111,10 @@ const queueFailureOptions = computed(() => [
                 <CircleAlert class="size-3.5" aria-hidden="true" />
               </ZIconButton>
             </template>
-            <p class="max-w-72 px-3 py-2 text-z-sm leading-relaxed text-z-text-secondary">
-              {{ t('settings.concurrency.queueFailureDetails') }}
-            </p>
+            <div class="max-w-72 space-y-2 px-3 py-2 text-z-sm leading-relaxed text-z-text-secondary">
+              <p>{{ t('settings.concurrency.queueFailureAttempt') }}</p>
+              <p>{{ t('settings.concurrency.queueFailureRestrictions') }}</p>
+            </div>
           </ZPopover>
         </template>
         <ZSegmented

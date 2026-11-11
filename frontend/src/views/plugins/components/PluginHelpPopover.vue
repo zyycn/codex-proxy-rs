@@ -19,7 +19,7 @@ function handleKeydown(event: KeyboardEvent) {
 </script>
 
 <template>
-  <ZPopover v-model="open" trigger="hover-click" placement="top-start" :hover-delay="240" class="shrink-0">
+  <ZPopover v-model="open" trigger="hover-click" placement="top-start" :hover-delay="240" class="h-4 shrink-0 items-center">
     <template #reference>
       <ZIconButton
         variant="link"

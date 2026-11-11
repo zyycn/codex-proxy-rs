@@ -264,9 +264,10 @@
       "accountTimeout": "账号排队超时",
       "accountTimeoutHelp": "从首次进入账号队列起计时，重试不重置",
       "queueFailure": "账号队满或超时后",
-      "queueFailureHelp": "尝试换号时，改用有空位的账号；无法换号则返回排队错误",
+      "queueFailureHelp": "尝试换到有空位的账号，无法换号时返回排队错误",
       "queueFailureHelpTitle": "账号换号规则",
-      "queueFailureDetails": "只重新选择一次，不再排队。指定账号、需要用原账号续写，或必须跟随主会话的请求不能自行换号。",
+      "queueFailureAttempt": "只尝试换号一次，不再排队",
+      "queueFailureRestrictions": "指定账号、需要原账号续写或必须跟随主会话的请求不能自行换号",
       "returnError": "返回错误",
       "trySwitch": "尝试换号",
       "autoReview": {
@@ -278,7 +279,9 @@
         "label": "上游重试等待上限",
         "help": "超限时尝试换号",
         "helpTitle": "上游重试等待说明",
-        "details": "默认 240 秒，限制单次 Retry-After 等待，不是请求总时长。超限时尝试换号，无可用账号则返回错误。0 表示不接受正数等待。换号仍受最大换号次数和请求可重试条件限制。"
+        "waitLimit": "默认 240 秒，仅限制单次 Retry-After 等待，不限制请求总时长",
+        "zeroLimit": "设为 0 时，任何大于 0 秒的等待都算超限",
+        "switchConditions": "超限后，仅在请求可重试且未达到最大换号次数时尝试换号，无可用账号则返回错误"
       }
     },
     "modelMapping": "模型映射",
