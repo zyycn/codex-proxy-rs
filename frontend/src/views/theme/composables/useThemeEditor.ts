@@ -12,7 +12,6 @@ import type {
 
 import { normalizeHexColor } from '@codex-proxy/ui'
 import {
-  createTheme,
   createThemeVars,
   defaultThemeColorId,
   defaultThemeMode,
@@ -28,6 +27,7 @@ import {
 import { storeToRefs } from 'pinia'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { useThemeStore } from '@/stores/modules/theme'
+import { createAdminTheme, profileCustomization } from '@/utils/theme'
 
 type ThemeEditorScope = 'global' | 'component'
 export type ThemeEditorGlobalCategory = 'color' | 'size' | 'style'
@@ -72,7 +72,7 @@ export function useThemeEditor() {
   const component = shallowRef<ThemeEditorComponent>('action')
   const query = shallowRef('')
 
-  const resolvedPreview = computed(() => createTheme({
+  const resolvedPreview = computed(() => createAdminTheme({
     scheme: previewTheme.value,
     preset: draft.value.preset,
     colorId: draft.value.color,
@@ -125,13 +125,12 @@ export function useThemeEditor() {
   }
 
   function applyProfile(color: ThemeColorPresetId) {
-    const { preset, customization } = themeProfiles[color]
     draft.value = {
       ...draft.value,
       color,
-      preset,
+      preset: themeProfiles[color].preset,
       customColor: defaultThemePrimaryColor,
-      customization: normalizeThemeCustomization(customization),
+      customization: profileCustomization(color, draft.value.customization.seed),
     }
   }
 

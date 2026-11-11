@@ -11,6 +11,7 @@ import { isEqual } from 'es-toolkit'
 import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { uiLocale } from '@/i18n/ui'
+import { profileCustomization } from '@/utils/theme'
 
 import sceneArtwork from './theme-scenes.svg?no-inline'
 import ThemeColorTokenField from './ThemeColorTokenField.vue'
@@ -63,7 +64,7 @@ const localizedPresets = computed(() => profiles.map(p => ({
 })))
 const activeProfile = computed(() => {
   const { color, preset, customization } = props.draft
-  if (color !== 'custom' && themeProfiles[color].preset === preset && isEqual(themeProfiles[color].customization, customization))
+  if (color !== 'custom' && themeProfiles[color].preset === preset && isEqual(profileCustomization(color, customization.seed), customization))
     return color
   return undefined
 })
