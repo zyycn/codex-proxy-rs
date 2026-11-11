@@ -504,6 +504,16 @@ impl Provider for CodexProvider {
                 ..Default::default()
             };
         };
+        let payload = request.protocol_payload();
+        if payload.protocol() == gateway_protocol::anthropic::ANTHROPIC_PROTOCOL {
+            return ProviderRequestObservation {
+                reasoning_effort: gateway_protocol::anthropic::messages_request_effort(
+                    payload.body(),
+                )
+                .map(str::to_owned),
+                ..Default::default()
+            };
+        }
         let Ok(encoded) = encode_generate_request(request, "observability", None) else {
             return ProviderRequestObservation::default();
         };
