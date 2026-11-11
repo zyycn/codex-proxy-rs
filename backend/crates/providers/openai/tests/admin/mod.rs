@@ -50,7 +50,6 @@ use gateway_core::routing::{
 use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
 use provider_openai::config::OpenAiConfig;
 use provider_openai::credential::{CodexCredentialCodec, ImportCodexOAuthCredential};
-use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use secrecy::SecretString;
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
@@ -269,10 +268,11 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     let WorkerRunnable::Scheduled { schedule, .. } = &release_worker.runnable else {
         panic!("Desktop release worker must be scheduled");
     };
-    assert_eq!(schedule.interval(), APPCAST_POLL_INTERVAL);
+    // 外层定期检查代理变更，官方版本刷新间隔由发布检测任务单独控制
+    assert_eq!(schedule.interval(), Duration::from_secs(30));
     for (owner, interval) in [
-        ("openai-cli-release", APPCAST_POLL_INTERVAL),
-        ("openai-platform-desktop-release", APPCAST_POLL_INTERVAL),
+        ("openai-cli-release", Duration::from_secs(30)),
+        ("openai-platform-desktop-release", Duration::from_secs(30)),
         ("openai", Duration::from_secs(30)),
         ("openai-account-warmup", Duration::from_secs(30)),
         (

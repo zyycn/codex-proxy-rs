@@ -1,4 +1,4 @@
-//! 验证 OpenAI 目录 ETag worker 的失败交接、重启恢复与取消
+//! 验证 OpenAI 发布检测与目录 ETag worker 的刷新、失败恢复与取消
 
 use std::sync::Arc;
 use std::time::Duration;
