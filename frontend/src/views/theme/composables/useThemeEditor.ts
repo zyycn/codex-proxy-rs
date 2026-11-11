@@ -6,6 +6,8 @@ import type {
   ThemeMode,
   ThemePresetId,
   ThemeScheme,
+  ThemeSeedColors,
+  ThemeSeedDimensions,
   ThemeSeedOverrides,
   ThemeTokenName,
 } from '@codex-proxy/ui/theme'
@@ -22,7 +24,7 @@ import {
   isThemeMode,
   isThemePresetId,
   normalizeThemeCustomization,
-  themeProfiles,
+  resolveThemeProfile,
 } from '@codex-proxy/ui/theme'
 
 import { storeToRefs } from 'pinia'
@@ -48,9 +50,7 @@ export interface ThemeEditorDraft {
   customization: ThemeCustomization
 }
 
-type NumericSeedKey = 'fontSize' | 'sizeUnit' | 'sizeStep' | 'controlHeight' | 'borderRadius' | 'shadowStrength'
 type ComponentNumberKey = keyof ThemeComponentOverrides
-type ColorSeedKey = Exclude<keyof ThemeSeedOverrides, NumericSeedKey>
 
 export function useThemeEditor() {
   const themeStore = useThemeStore()
@@ -125,13 +125,11 @@ export function useThemeEditor() {
   }
 
   function applyProfile(color: ThemeColorPresetId) {
-    const { preset, customization } = themeProfiles[color]
     draft.value = {
       ...draft.value,
       color,
-      preset,
       customColor: defaultThemePrimaryColor,
-      customization: normalizeThemeCustomization(customization),
+      ...resolveThemeProfile(color, draft.value.customization.seed),
     }
   }
 
@@ -157,14 +155,14 @@ export function useThemeEditor() {
       : mode
   }
 
-  function setSeedColor(key: ColorSeedKey, color: string) {
+  function setSeedColor(key: keyof ThemeSeedColors, color: string) {
     const normalized = normalizeHexColor(color)
     if (!normalized)
       return
     updateSeed({ [key]: normalized })
   }
 
-  function setSeedNumber(key: NumericSeedKey, value: number) {
+  function setSeedNumber(key: keyof ThemeSeedDimensions, value: number) {
     if (!Number.isFinite(value))
       return
     updateSeed({ [key]: value })

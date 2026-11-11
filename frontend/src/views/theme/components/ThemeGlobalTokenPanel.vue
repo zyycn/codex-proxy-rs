@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { Theme, ThemeColorPresetId, ThemeMode, ThemePresetId, ThemeSeedOverrides } from '@codex-proxy/ui/theme'
+import type { Theme, ThemeColorPresetId, ThemeMode, ThemePresetId, ThemeSeedColors, ThemeSeedDimensions, ThemeSeedOverrides } from '@codex-proxy/ui/theme'
 
 import type { ThemeEditorDraft, ThemeEditorGlobalCategory } from '../composables/useThemeEditor'
 import { ZSegmented } from '@codex-proxy/ui'
 
-import { createThemeSeedTokens, themeColorPresets, themePresets, themeProfiles } from '@codex-proxy/ui/theme'
+import { resolveThemeProfile, themeColorPresets, themePresets } from '@codex-proxy/ui/theme'
 import { Check, ChevronDown, Laptop, Moon, PanelsTopLeft, Sparkles, Sun } from '@lucide/vue'
 
 import { isEqual } from 'es-toolkit'
@@ -28,17 +28,8 @@ const emit = defineEmits<{
   resetPrimary: []
   profile: [value: ThemeColorPresetId]
   primary: [value: string]
-  seedColor: [
-    key: Exclude<
-      keyof ThemeSeedOverrides,
-      'fontSize' | 'sizeUnit' | 'sizeStep' | 'controlHeight' | 'borderRadius' | 'shadowStrength'
-    >,
-    value: string,
-  ]
-  seedNumber: [
-    key: 'fontSize' | 'sizeUnit' | 'sizeStep' | 'controlHeight' | 'borderRadius' | 'shadowStrength',
-    value: number,
-  ]
+  seedColor: [key: keyof ThemeSeedColors, value: string]
+  seedNumber: [key: keyof ThemeSeedDimensions, value: number]
   resetSeed: [key: keyof ThemeSeedOverrides]
 }>()
 
@@ -47,25 +38,18 @@ const { t } = useI18n({ useScope: 'global' })
 const category = defineModel<ThemeEditorGlobalCategory>('category', { required: true })
 const derivedOpen = shallowRef(false)
 
-const profiles = themeColorPresets.map((preset) => {
-  const options = { ...themeProfiles[preset.id], colorId: preset.id }
-  const light = createThemeSeedTokens({ ...options, scheme: 'light' })
-  return {
-    ...preset,
-    paper: light.colorBgBase,
-    accent: light.colorWarning,
-    ink: createThemeSeedTokens({ ...options, scheme: 'dark' }).colorBgBase,
-  }
-})
-const localizedPresets = computed(() => profiles.map(p => ({
+const localizedPresets = computed(() => themeColorPresets.map(p => ({
   ...p,
   ...uiLocale.value.theme[p.id],
 })))
 const activeProfile = computed(() => {
   const { color, preset, customization } = props.draft
-  if (color !== 'custom' && themeProfiles[color].preset === preset && isEqual(themeProfiles[color].customization, customization))
-    return color
-  return undefined
+  if (color === 'custom')
+    return undefined
+  const profile = resolveThemeProfile(color, customization.seed)
+  return profile.preset === preset && isEqual(profile.customization, customization)
+    ? color
+    : undefined
 })
 const colorPresets = themeColorPresets.map(preset => preset.seed)
 const themePresetDetails = computed(() => ({
@@ -215,7 +199,7 @@ function seedOverridden(key: keyof ThemeSeedOverrides) {
         >
           <svg
             class="block h-11 w-full overflow-hidden rounded-z-sm"
-            :style="{ 'color': preset.seed, '--scene-paper': preset.paper, '--scene-ink': preset.ink, '--scene-accent': preset.accent }"
+            :style="{ color: preset.seed }"
             viewBox="0 0 160 44"
             preserveAspectRatio="xMidYMid slice"
             aria-hidden="true"

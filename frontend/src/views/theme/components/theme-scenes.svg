@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg">
-  <symbol id="relay-blue" viewBox="0 0 160 44" preserveAspectRatio="xMidYMid slice">
+  <symbol id="relay-blue" viewBox="0 0 160 44" preserveAspectRatio="xMidYMid slice" style="--scene-paper: #FFFFFF; --scene-ink: #111A29">
     <path fill="var(--scene-ink)" d="M0 0h160v44H0z"/>
     <path fill="currentColor" opacity=".3" d="M0 34q25-4 56-1t58-1q25-2 46 0v12H0z"/>
     <path fill="none" stroke="currentColor" opacity=".7" d="m14 16 12-8 13 6 15-7"/>
@@ -12,7 +12,7 @@
     <path fill="currentColor" d="m109 20 5 9h-5zm-13 11h21l-4 3h-12z"/>
     <path fill="none" stroke="currentColor" opacity=".65" stroke-linecap="round" d="m85 36 14-.5m5 3 6-.5"/>
   </symbol>
-  <symbol id="deep-teal" viewBox="0 0 160 44" preserveAspectRatio="xMidYMid slice">
+  <symbol id="deep-teal" viewBox="0 0 160 44" preserveAspectRatio="xMidYMid slice" style="--scene-paper: #F8F8F3; --scene-ink: #202727">
     <path fill="var(--scene-paper)" d="M0 0h160v44H0z"/>
     <g fill="currentColor">
       <path opacity=".18" d="m0 18 12-5 9 1 15-9 7 2 6-3 14 12 8-3 13 6 16-9 8 2 12-6 17 12 9-3 14 4v5H0z"/>
@@ -27,21 +27,21 @@
     <path fill="var(--scene-ink)" d="M100 30q5 2 16 0l-3 2h-9z"/>
     <path fill="none" stroke="var(--scene-ink)" stroke-linecap="round" d="m110 30-1-2-2 2m2-1 6 4"/>
   </symbol>
-  <symbol id="signal-violet" viewBox="0 0 160 44" preserveAspectRatio="xMidYMid slice">
+  <symbol id="signal-violet" viewBox="0 0 160 44" preserveAspectRatio="xMidYMid slice" style="--scene-paper: #FCF6F7; --scene-ink: #29242A">
     <path fill="var(--scene-paper)" d="M0 0h160v44H0z"/>
     <path fill="currentColor" d="M0 5l57 10v29H0zM74 18l26 5v21H74zM119 24l13 2v18h-13z"/>
     <path fill="var(--scene-ink)" opacity=".57" d="M57 15l10-4v33H57zM100 23l5-2v23h-5zM132 26l4-1v19h-4z"/>
     <path fill="currentColor" opacity=".28" d="M0 44l160-13v13z"/>
     <circle cx="143" cy="10" r="4" fill="currentColor"/>
   </symbol>
-  <symbol id="graphite" viewBox="0 0 160 44" preserveAspectRatio="xMidYMid slice">
+  <symbol id="graphite" viewBox="0 0 160 44" preserveAspectRatio="xMidYMid slice" fill="#BD8C3F" style="--scene-paper: #FBF5E8; --scene-ink: #302421">
     <path fill="var(--scene-paper)" d="M0 0h160v44H0z"/>
     <path fill="currentColor" d="M0 33h160v11H0zM26 21h5v16h-5zm21 0h5v16h-5zm22 0h5v16h-5zm23 0h5v16h-5zm22 0h5v16h-5zm20 0h5v16h-5z"/>
     <path fill="var(--scene-ink)" d="M22 18h120l-5 5H28z"/>
-    <path fill="var(--scene-accent)" d="M12 14q12 6 28-1 8-3 15-11h55q7 8 15 11 14 6 27 1-4 7-19 7H32q-15 0-20-7z"/>
+    <path d="M12 14q12 6 28-1 8-3 15-11h55q7 8 15 11 14 6 27 1-4 7-19 7H32q-15 0-20-7z"/>
     <path fill="none" stroke="var(--scene-ink)" stroke-width="1.4" d="M12 15q8 7 24 6h94q15 1 22-6M54 2h57"/>
     <path fill="none" stroke="var(--scene-paper)" opacity=".5" d="m56 5-10 10m20-10-5 10m15-10-2 10m13-10 1 10m10-10 4 10m6-10 8 10"/>
-    <path fill="var(--scene-accent)" d="M0 33h160v2H0z"/>
+    <path d="M0 33h160v2H0z"/>
     <path fill="var(--scene-ink)" opacity=".25" d="M0 40h160v4H0z"/>
   </symbol>
 </svg>

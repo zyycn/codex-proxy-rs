@@ -27,8 +27,7 @@
 - **Seed 与 Map 可追踪**：主色和功能色均按 Ant Design 从 Seed 派生 P1-P10；浅色 P6 等于 Seed，深色 P6
   经过暗色色板适配。全局 `colorPrimary` 保留原始 Seed；功能色 Base 保留 P6。文字和按钮组件可在派生层做对比度校正，Seed 不随之改写
 - **主色与表面分离**：品牌色负责交互和强调，页面、容器、浮层与文字由独立的背景和文本 Seed 派生
-- **语义独立**：`success`、`warning`、`error`、`info` 不随品牌色隐式改变；未显式配置 `link`
-  时跟随 `primary`，显式配置后独立派生
+- **语义独立**：成功、警告、错误、信息和链接色各自派生，不随品牌色改变
 - **无边设计**：默认依靠表面色差、间距和轻阴影表达层级；边框只用于焦点、错误和必要分隔
 - **运行时可定制**：用户输入在浏览器中实时派生，因此使用 CSS Variables，不使用构建时 SCSS 变量
 - **单一事实源**：Store 只保存最小配置，所有 Map、Alias 与未覆盖的 Component Token 均由纯函数生成
@@ -158,7 +157,7 @@ interface ThemeCustomization {
 
 表格行高与卡片圆角通过 `customization.component` 的 `tableRowHeight`、`cardBorderRadius` 配置，属于组件尺寸覆盖
 
-完整主题预设组合品牌配色、推荐材质、全局 Seed、组件尺寸和可编辑 Token。选择时替换草稿配置，保留当前明暗模式；保存后应用到管理端
+切换内置主题预设会更新草稿中的品牌色、材质、尺寸与风格，保留明暗模式以及「功能色与中性色」的设置；保存后应用到管理端
 
 表面材质可单独选择：`default` 使用简洁表面，`soft` 使用柔和光影。材质只影响表面高光、渐变与阴影，不改变配色、圆角、字号或组件尺寸
 
@@ -206,10 +205,8 @@ Preset 的实心色使用 P6，普通 Container、Strong Container 与边界按 
 - `colorText / Heading / Secondary / Tertiary / Quaternary / Disabled`
 - `colorBorder / BorderSecondary / Split / Shadow`
 
-星津夜航使用稳定的浅色 / 深色中性基线；水墨江汀、粉墙回廊与朱阙金瓦预置额外提供各自的 `colorBgBase`、`colorTextBase`
-画像，自定义主色则只向通用中性基线注入少量色温。默认浅色采用中性锚点，默认深色使用 HSL 色调派生；带色温
-主题按外观距离平滑过渡到背景和文字 Seed 的 RGB 混色结果。稳定锚点用于 Surface 与 Shadow，Component 从角色派生，
-所有预置、自定义 Seed 和用户覆盖仍进入同一条算法，不在页面或组件中追加 HEX 特判。
+所有品牌色共用当前明暗模式的背景和文字基色。手动设置 `colorBgBase` 或 `colorTextBase` 后，两个模式都使用该字段的自定义值；单项恢复后重新跟随明暗模式。
+默认浅色采用中性锚点，默认深色使用 HSL 色调派生；自定义中性色按外观距离平滑过渡到背景和文字 Seed 的 RGB 混色结果。
 Input、阴影与其他 Component Token 从 Fill、Surface、Primary 和 Semantic 派生，不在常量文件维护整套颜色表
 
 正常文字同时检查 Layout、Container、Elevated、文字交互背景、三级 Fill，以及控件透明填充在各宿主上的合成色
@@ -291,7 +288,7 @@ Purple Strong Container 或 Purple Solid；同一组颜色仍由运行时色板�
 | ID | 名称 | 推荐品牌色 | 表面 |
 | --- | --- | --- | --- |
 | `default` | 默认 | 星津夜航 | 简洁表面与轻量阴影 |
-| `soft` | 柔光 | 星津夜航 | 表面高光与分层阴影，配色跟随品牌 |
+| `soft` | 柔光 | 星津夜航 | 表面高光、渐变与分层阴影 |
 
 ### 主题预设
 
@@ -302,8 +299,7 @@ Purple Strong Container 或 Purple Solid；同一组颜色仍由运行时色板�
 | `signal-violet` | 粉墙回廊 | `#D395A8` | 默认材质，14px 正文与 68px 表格行高 |
 | `graphite` | 朱阙金瓦 | `#A34537` | 柔光，12px 卡片圆角与 54px 表格行高 |
 
-品牌配色改变品牌主色，并可提供与该品牌匹配的浅色 / 深色背景和文字 Seed；不改变字号、密度、圆角或布局。完整预设提供的 Seed 优先于品牌基线，用户覆盖优先于预设
-所有预置与自定义主题走同一条 Surface、Map、Alias 与 Component 派生链路，不存在页面级特判
+单独编辑品牌主色不改变尺寸和风格。预置与自定义主题使用相同的 Surface、Map、Alias 与 Component 派生链路
 
 ## 运行时架构
 
@@ -448,7 +444,7 @@ utility / arbitrary variant；Vue Transition、跨浏览器 Range、动态富文
 
 ### 增加预置主题
 
-在 UI 库的 `themeProfiles` 中组合配色 ID 对应的材质与 `ThemeCustomization`。设置页将其复制为可编辑草稿，保存实际配置，无需持久化额外的选中标记。材质仍由组件 Token 派生层实现
+在 UI 库的 `themeProfiles` 中为每个配色 ID 配置材质与 `ThemeCustomization`。内置预设不指定功能色与中性色。设置页通过 `resolveThemeProfile` 应用预设，保留预设未指定的颜色；选中状态由同一结果推导。材质由组件 Token 派生层实现
 
 单独增加品牌配色：
 
