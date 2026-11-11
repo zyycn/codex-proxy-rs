@@ -75,6 +75,32 @@ HTTP 入口位于 `backend/crates/gateway-api/src/openai/messages.rs`，
 再核对工具往返、取消、错误和输入计数；请求格式及六种组合见 [模型数据面](api.md#3-模型数据面与模型目录)。
 Messages 账号只配置 HTTP；本地计数估算不能替代上游计费核对
 
+TLS 指纹在发布目标对应的操作系统和架构上核验，参考程序使用同机运行的官方 Codex CLI 可执行文件。
+`CODEX_PROXY_TEST_REFERENCE_BINARY` 指向实际二进制，Windows 使用 `.exe`，npm 安装时使用平台包中的二进制。
+macOS / Linux 可设置：
+
+```bash
+export CODEX_PROXY_TEST_REFERENCE_BINARY=/absolute/path/to/codex
+export RUST_MIN_STACK=16777216
+```
+
+Windows PowerShell 可设置：
+
+```powershell
+$env:CODEX_PROXY_TEST_REFERENCE_BINARY = 'C:\path\to\codex.exe'
+$env:RUST_MIN_STACK = '16777216'
+```
+
+随后在仓库根目录执行：
+
+```text
+cargo +1.99.1 test --manifest-path backend/Cargo.toml --locked -p provider-openai --test main transport::tls:: -- --include-ignored --nocapture --test-threads=1
+```
+
+对照用例记录官方版本及运行平台，分别采样默认 HTTP、自定义 CA 的 HTTP 和 WebSocket，各重复三次。
+默认 HTTP 保留扩展顺序逐项比较；rustls 路径对随机扩展顺序排序后比较，算法列表、密钥交换组和 ALPN 仍核对原有顺序。
+采集在本机 TLS 握手阶段结束，使用测试认证值，无需真实账号。普通测试默认忽略官方二进制对照用例，须以上述命令显式执行
+
 ## 源码联调
 
 宿主、组件库和官方插件保留独立仓库，通过 Git 子模块在同一目录开发：
