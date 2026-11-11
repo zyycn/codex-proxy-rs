@@ -24,6 +24,7 @@ pub use stream::{
     MessagesAccumulator, MessagesToResponsesStream, ResponsesToMessagesStream,
     message_to_stream_events,
 };
+pub use thinking::messages_request_effort;
 pub use usage::MessageUsage;
 
 /// Messages 载荷的协议标识

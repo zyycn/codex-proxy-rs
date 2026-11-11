@@ -1,16 +1,22 @@
-//! 按目标模型能力映射推理等级与预算；未知兼容上游沿用 CPA 手动预算
+//! 提取 Messages 显式 effort，并按目标模型能力映射推理等级与预算
 
 use serde_json::{Map, Value, json};
 
 use super::MessagesModelCapabilities;
 
-pub(super) fn to_responses(request: &Map<String, Value>) -> Value {
-    let configured = request
+/// 返回客户端显式设置的 effort，预算与默认档位由转换器单独处理
+#[must_use]
+pub fn messages_request_effort(request: &Map<String, Value>) -> Option<&str> {
+    request
         .get("output_config")
         .and_then(|value| value.get("effort"))
         .and_then(Value::as_str)
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty());
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+pub(super) fn to_responses(request: &Map<String, Value>) -> Value {
+    let configured = messages_request_effort(request).map(str::to_ascii_lowercase);
     let thinking = request.get("thinking");
     let effort = match thinking
         .and_then(|value| value.get("type"))
