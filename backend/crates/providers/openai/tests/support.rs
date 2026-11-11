@@ -926,6 +926,16 @@ pub(crate) struct TestLeaseCoordinator {
     pub(crate) signals: Mutex<BTreeMap<ProviderAccountId, AccountRuntimeSignals>>,
     pub(crate) reserved_signals: Mutex<BTreeMap<ProviderAccountId, AccountRuntimeSignals>>,
     round_robin_cursor: Mutex<u64>,
+    session_round_robin_cursor: Mutex<u64>,
+}
+
+impl TestLeaseCoordinator {
+    pub(crate) fn session_round_robin_cursor(&self) -> u64 {
+        *self
+            .session_round_robin_cursor
+            .lock()
+            .expect("session round robin cursor lock")
+    }
 }
 
 impl ProviderLeasePort for TestLeaseCoordinator {
@@ -972,6 +982,22 @@ impl ProviderLeasePort for TestLeaseCoordinator {
             let current = *cursor;
             *cursor = cursor.wrapping_add(1);
             Ok(ProviderSchedulingState::new(signals, current))
+        })
+    }
+
+    fn advance_session_round_robin_cursor<'a>(
+        &'a self,
+        _client_api_key_id: &'a ClientApiKeyId,
+        _provider_kind: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<u64, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut cursor = self
+                .session_round_robin_cursor
+                .lock()
+                .expect("session round robin cursor lock");
+            let current = *cursor;
+            *cursor = cursor.wrapping_add(1);
+            Ok(current)
         })
     }
 

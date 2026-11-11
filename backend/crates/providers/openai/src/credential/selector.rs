@@ -12,9 +12,9 @@ use gateway_core::error::ErrorSource;
 use gateway_core::account::{
     AccountAffinity, AccountCandidate, AccountCapacitySnapshot, AccountErrorReason,
     AccountFeedbackStats, AccountModelAccessMode, AccountQuotaSignals, AccountRuntimeSignals,
-    AccountSchedulingBlocker, AccountSelectionContext, AccountSelectionPolicy, AccountSelector,
-    AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId,
-    QuotaEvidence, RotationStrategy,
+    AccountSchedulingBlocker, AccountSelection, AccountSelectionContext, AccountSelectionPolicy,
+    AccountSelector, AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount,
+    ProviderAccountId, QuotaEvidence, RotationStrategy,
 };
 use gateway_core::concurrency::{
     CapacityWait, ConcurrencyQueuePolicy, ConcurrencyWaitQueue, QueueRejection, WaitPriority,
@@ -279,6 +279,33 @@ struct AffinityTelemetry {
     affinity_hit: bool,
     escape_reason: Option<AffinityEscapeReason>,
     account_switch: bool,
+}
+
+/// 探针只判断这次选择会不会按 round_robin 改派
+/// 游标取值不影响亲和是否命中；空池、命中、后代跟随和严格排队都不消耗游标
+fn consumes_session_round_robin_cursor(
+    probe: Option<AccountSelection<'_>>,
+    follow_bound_session: bool,
+    affinity_mode: AccountAffinity,
+    pinned: bool,
+    max_waiting: u32,
+) -> bool {
+    let Some(selection) = probe else {
+        return false;
+    };
+    if selection.preferred() == PreferredAccountSelection::Hit || follow_bound_session {
+        return false;
+    }
+    // 严格亲和或固定账号只会排队等待当前账号，这次选择不会改派
+    if matches!(
+        selection.preferred(),
+        PreferredAccountSelection::Blocked(AccountSchedulingBlocker::ConcurrencyLimit)
+    ) && (affinity_mode == AccountAffinity::Strict || pinned)
+        && max_waiting > 0
+    {
+        return false;
+    }
+    true
 }
 
 impl CodexCredentialSelector {
@@ -1131,6 +1158,12 @@ impl CodexCredentialSelector {
             let mut shortest_retry = None;
             let mut busy_accounts = std::collections::BTreeSet::new();
             let policy = request.attempt.account_selection_policy();
+            // round_robin 的新会话使用独立游标，请求级游标留给 smart 的同分轮换
+            // 优先模式已有绑定时，后备顺序来自会话摘要，不占用新会话游标
+            let use_session_round_robin = policy.strategy() == RotationStrategy::RoundRobin
+                && request.attempt.request_policy_context().is_none()
+                && !(affinity_mode == AccountAffinity::Preferred && binding.is_some());
+            let mut assigned_session_cursor = None;
 
             loop {
                 let preferred = pinned_account
@@ -1151,6 +1184,27 @@ impl CodexCredentialSelector {
                 for candidate in &candidates {
                     if !waiting.can_try(candidate.account.id()) {
                         context.busy_accounts.insert(candidate.account.id().clone());
+                    }
+                }
+                if use_session_round_robin {
+                    if let Some(cursor) = assigned_session_cursor {
+                        context.round_robin_cursor = cursor;
+                    } else if consumes_session_round_robin_cursor(
+                        AccountSelector.select(&candidates, &context),
+                        follow_only && binding.is_some(),
+                        affinity_mode,
+                        pinned_account.is_some(),
+                        queue_policy.max_waiting,
+                    ) {
+                        let cursor = self
+                            .leases
+                            .advance_session_round_robin_cursor(
+                                request.attempt.client_api_key_ref(),
+                                &self.provider_kind,
+                            )
+                            .await?;
+                        assigned_session_cursor = Some(cursor);
+                        context.round_robin_cursor = cursor;
                     }
                 }
                 let selection = match request

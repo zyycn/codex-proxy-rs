@@ -430,7 +430,23 @@ impl RedisCredentialLeaseRepository {
         client_api_key_id: &ClientApiKeyId,
         provider_kind: &ProviderKind,
     ) -> StoreResult<u64> {
-        let key = self.scheduling_cursor_key(client_api_key_id, provider_kind)?;
+        let key = self.scheduling_cursor_key(client_api_key_id, provider_kind, "cursor")?;
+        self.advance_cursor(&key, "advance provider scheduling cursor")
+            .await
+    }
+
+    /// 原子推进 round_robin 新会话游标，不改动请求级调度游标
+    pub async fn advance_session_round_robin_cursor(
+        &self,
+        client_api_key_id: &ClientApiKeyId,
+        provider_kind: &ProviderKind,
+    ) -> StoreResult<u64> {
+        let key = self.scheduling_cursor_key(client_api_key_id, provider_kind, "session-cursor")?;
+        self.advance_cursor(&key, "advance session round robin cursor")
+            .await
+    }
+
+    async fn advance_cursor(&self, key: &str, operation: &'static str) -> StoreResult<u64> {
         let mut connection = self.connection.clone();
         let cursor = Script::new(ADVANCE_SCHEDULING_CURSOR_SCRIPT)
             .key(key)
@@ -438,7 +454,7 @@ impl RedisCredentialLeaseRepository {
             .arg(SIGNAL_TTL_MILLIS)
             .invoke_async::<String>(&mut connection)
             .await
-            .map_err(|source| redis_unavailable("advance provider scheduling cursor", source))?;
+            .map_err(|source| redis_unavailable(operation, source))?;
         cursor.parse::<u64>().map_err(|source| {
             invalid("Redis returned an invalid scheduling cursor").with_source(source)
         })
@@ -477,13 +493,14 @@ impl RedisCredentialLeaseRepository {
         &self,
         client_api_key_id: &ClientApiKeyId,
         provider_kind: &ProviderKind,
+        suffix: &str,
     ) -> StoreResult<String> {
         let fingerprint = resource_fingerprint(
             "provider scheduling cursor",
             &format!("{}\0{}", client_api_key_id.as_str(), provider_kind.as_str()),
         )?;
         Ok(format!(
-            "{}:scheduler:client-provider:{{{fingerprint}}}:cursor",
+            "{}:scheduler:client-provider:{{{fingerprint}}}:{suffix}",
             self.namespace
         ))
     }
@@ -764,6 +781,21 @@ impl ProviderLeasePort for RedisProviderLeaseCoordinator {
                 .next_scheduling_cursor(client_api_key_id, provider_kind)
                 .await?;
             Ok(ProviderSchedulingState::new(signals, round_robin_cursor))
+        })
+    }
+
+    fn advance_session_round_robin_cursor<'a>(
+        &'a self,
+        client_api_key_id: &'a ClientApiKeyId,
+        provider_kind: &'a ProviderKind,
+    ) -> futures::future::BoxFuture<'a, Result<u64, ProviderStoreError>> {
+        Box::pin(async move {
+            self.repository
+                .advance_session_round_robin_cursor(client_api_key_id, provider_kind)
+                .await
+                .map_err(|source| {
+                    crate::provider_unavailable("advance session round robin cursor", source)
+                })
         })
     }
 

@@ -199,6 +199,18 @@ pub trait ProviderLeasePort: Send + Sync {
         request: ProviderLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>>;
 
+    /// 推进 round_robin 新会话游标，并返回推进前的值
+    /// 与 `load_state` 的请求级游标分开，亲和命中不调用此方法
+    /// 未实现该游标的端口返回 0
+    fn advance_session_round_robin_cursor<'a>(
+        &'a self,
+        client_api_key_id: &'a ClientApiKeyId,
+        provider_kind: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<u64, ProviderStoreError>> {
+        let _ = (client_api_key_id, provider_kind);
+        Box::pin(async { Ok(0) })
+    }
+
     /// 读取指定账号普通池的在途请求数；只用于容量熔断的峰值证据，
     /// 支持租约信号的存储实现覆盖，否则视为不可观测（空映射）
     fn account_in_flight<'a>(

@@ -11,11 +11,11 @@ use std::time::{Duration, SystemTime};
 
 use futures::executor::block_on;
 use gateway_core::account::{
-    AccountAttemptFeedback, AccountConcurrencyLimit, AccountErrorReason, AccountFeedbackStats,
-    AccountSelectionPolicy, AccountStateChange, AccountWeight, CredentialState, OpaqueProviderData,
-    ProviderAccount, ProviderAccountId, ProviderAccountStore as _, QuotaAccessChange,
-    QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaState, QuotaWriteOutcome,
-    RotationStrategy,
+    AccountAffinity, AccountAttemptFeedback, AccountConcurrencyLimit, AccountErrorReason,
+    AccountFeedbackStats, AccountSelectionPolicy, AccountStateChange, AccountWeight,
+    CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore as _, QuotaAccessChange, QuotaAccessState, QuotaEvidence,
+    QuotaObservation, QuotaState, QuotaWriteOutcome, RotationStrategy,
 };
 use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
@@ -822,6 +822,88 @@ fn selector_round_robin_cursor_advances_across_requests() {
         selected,
         ["acct_first", "acct_second", "acct_first", "acct_second"]
     );
+}
+
+#[tokio::test]
+async fn strict_round_robin_rotates_each_new_session_across_eligible_accounts() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_fallback", "at-fallback");
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let selector = selector_with_affinity(
+        &store,
+        Arc::clone(&leases),
+        Arc::new(MemorySessionAffinity::default()),
+    );
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &request_url, "session-1").await,
+        "acct_fallback"
+    );
+    for _ in 0..5 {
+        assert_eq!(
+            select_strict_round_robin_session(&selector, &request_url, "session-1").await,
+            "acct_fallback"
+        );
+    }
+    assert_eq!(leases.session_round_robin_cursor(), 1);
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &request_url, "session-2").await,
+        "acct_first"
+    );
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &request_url, "session-1").await,
+        "acct_fallback"
+    );
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &request_url, "session-3").await,
+        "acct_second"
+    );
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &request_url, "session-4").await,
+        "acct_fallback"
+    );
+    assert_eq!(leases.session_round_robin_cursor(), 4);
+}
+
+async fn select_strict_round_robin_session(
+    selector: &CodexCredentialSelector,
+    request_url: &Url,
+    key: &str,
+) -> String {
+    let attempt = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_codex_round_robin_session").expect("request id"),
+            ClientApiKeyId::new("key_codex_contract").expect("client key id"),
+        ),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        AccountSelectionPolicy::new(
+            RotationStrategy::RoundRobin,
+            NonZeroU32::new(2).expect("concurrency"),
+        )
+        .with_openai_account_affinity(AccountAffinity::Strict),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    );
+    let affinity_key = ProviderSessionAffinityKey::try_new(key).expect("affinity key");
+    selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url,
+            attempt: &attempt,
+            session_affinity_key: Some(&affinity_key),
+        })
+        .await
+        .expect("select round robin session")
+        .account_id()
+        .as_str()
+        .to_owned()
 }
 
 #[tokio::test]
