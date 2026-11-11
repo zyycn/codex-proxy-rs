@@ -1605,7 +1605,10 @@ Messages 上游追加 `messages`、`messages/count_tokens` 或 `models`。官方
 HTTP 会明文传输 API Key 和请求内容，仅用于可信网络。
 `transport` 缺省为 `http`，Responses 可设为 `prefer_websocket`，Messages 只接受 `http`。
 Responses 使用 Bearer 认证，Messages 使用 `x-api-key` 与 `anthropic-version`，都不携带 OAuth Cookie 或 ChatGPT 身份。
-上游模型列表从 API 前缀下的 `/models` 读取，按账号和凭据版本隔离；
+上游模型列表从 API 前缀下的 `/models` 读取，按账号和凭据版本隔离。
+Responses 账号使用服务端 Codex 画像的 `client_version` 请求目录，级联 CPR 因此能保留上游声明的思考档位。
+普通 `data` 列表同样可用；上游返回 400 或 422 且明确以 `unknown_parameter` 或 `unsupported_parameter`
+拒绝 `client_version` 时，不带该参数重试一次。
 目录用于模型发现，不作为能力白名单，未列出的模型仍交由上游判断。
 API Key 每次导入创建独立账号；更新已有账号使用 `/api/admin/accounts/update` 的 `connection` 字段。
 导出保留协议和传输设置，并显式包含密钥，沿用敏感导出的确认合同

@@ -15,7 +15,7 @@ use provider_openai::credential::{
     CodexCredentialCatalogError, CodexCredentialCatalogService, ImportCodexOAuthCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 use crate::support::{MemoryAccountStore, catalog_cache, profile, secret};
@@ -778,7 +778,7 @@ async fn api_key_catalogs_are_isolated_and_join_oauth_without_claiming_native_me
 }
 
 #[tokio::test]
-async fn api_key_native_catalog_preserves_unknown_reasoning_and_background_entitlements() {
+async fn api_key_background_catalog_preserves_negotiated_reasoning_levels_and_entitlements() {
     use gateway_core::routing::ProviderModelContent;
     use provider_openai::credential::ResponsesTransport;
     use provider_openai::transport::CodexCatalogCapabilityEvidence;
@@ -790,12 +790,25 @@ async fn api_key_native_catalog_preserves_unknown_reasoning_and_background_entit
         .seed_api_key("acct_api", upstream.uri(), ResponsesTransport::Http)
         .await;
     let original = json!({"slug":"z-unknown-reasoning", "display_name":"Unknown reasoning"});
-    let second = json!({"slug":"vendor/model", "display_name":"Second upstream model"});
+    let second = json!({
+        "slug":"vendor/model", "display_name":"Second upstream model",
+        "default_reasoning_level":"high",
+        "supported_reasoning_levels":[{"effort":"high","description":"Upstream description"}]
+    });
     Mock::given(method("GET"))
         .and(path("/models"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"models":[original, second]})),
-        )
+        .respond_with({
+            let native = json!({"models":[original, second]});
+            move |request: &Request| {
+                if request.url.query() == Some("client_version=0.144.0") {
+                    ResponseTemplate::new(200).set_body_json(&native)
+                } else {
+                    ResponseTemplate::new(200).set_body_json(json!({"data":[
+                        {"id":"z-unknown-reasoning"}, {"id":"vendor/model"}
+                    ]}))
+                }
+            }
+        })
         .expect(1)
         .mount(&upstream)
         .await;
@@ -824,14 +837,67 @@ async fn api_key_native_catalog_preserves_unknown_reasoning_and_background_entit
             .collect::<Vec<_>>(),
         ["z-unknown-reasoning", "vendor/model"]
     );
-    let ProviderModelContent::Native(payload) = &models[0].content else {
-        panic!("native model expected")
-    };
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(payload.body()).unwrap(),
-        original
-    );
+    for (model, expected) in models.iter().zip([original, second]) {
+        let ProviderModelContent::Native(payload) = &model.content else {
+            panic!("native model expected")
+        };
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(payload.body()).unwrap(),
+            expected
+        );
+    }
     upstream.verify().await;
+}
+
+#[tokio::test]
+async fn api_key_catalog_retries_only_explicit_version_parameter_rejections() {
+    use provider_openai::credential::ResponsesTransport;
+    use serde_json::json;
+
+    for (status, code, param, retry) in [
+        (400, "unknown_parameter", "client_version", true),
+        (422, "unsupported_parameter", "client_version", true),
+        (400, "unknown_parameter", "other", false),
+        (400, "invalid_value", "client_version", false),
+        (429, "unsupported_parameter", "client_version", false),
+    ] {
+        let upstream = MockServer::start().await;
+        let store = Arc::new(MemoryAccountStore::default());
+        store
+            .seed_api_key("acct_api", upstream.uri(), ResponsesTransport::Http)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(query_param("client_version", "0.144.0"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .set_body_json(json!({"error":{"code":code,"param":param}})),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(|request: &Request| request.url.query().is_none())
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":"api-model"}]})),
+            )
+            .expect(u64::from(retry))
+            .mount(&upstream)
+            .await;
+        let service = service_with_catalog_cache(&store, upstream.uri(), catalog_cache());
+        let account = store.account("acct_api").unwrap();
+        let result = service.refresh_account_catalog(account.id()).await;
+        if retry {
+            assert_eq!(result.unwrap().models(), ["api-model"]);
+        } else {
+            assert!(matches!(
+                result,
+                Err(CodexCredentialCatalogError::Upstream { .. })
+            ));
+        }
+        upstream.verify().await;
+    }
 }
 
 #[tokio::test]

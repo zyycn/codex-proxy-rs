@@ -11740,7 +11740,6 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
             .await;
         Mock::given(method("GET"))
             .and(path(format!("{prefix}/models")))
-            .and(move |request: &wiremock::Request| request.url.query().is_none())
             .and(header("authorization", "Bearer sk-api-test-only"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":"gpt-5.4"}]})),
@@ -11843,7 +11842,7 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
         assert_eq!(model_requests.len(), 1);
         {
             let model_request = model_requests[0];
-            assert!(model_request.url.query().is_none());
+            assert_eq!(model_request.url.query(), Some("client_version=0.144.0"));
             assert_eq!(
                 model_request.headers["authorization"],
                 "Bearer sk-api-test-only"

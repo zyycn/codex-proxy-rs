@@ -10,6 +10,7 @@ use super::{
     },
     diagnostics::CodexUpstreamSendPhase,
     endpoints::endpoint_url,
+    profile::CodexWireProfile,
     response_meta,
 };
 
@@ -20,9 +21,24 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         client_version: Option<&str>,
     ) -> CodexClientResult<CodexModelCatalogSnapshot> {
-        let (body, etag) = self
-            .fetch_models_page(context, client_version, None)
-            .await?;
+        let profile = self.profile.snapshot();
+        let query = match self.protocol {
+            OpenAiUpstreamProtocol::Codex | OpenAiUpstreamProtocol::ResponsesApi => (
+                "client_version",
+                client_version.unwrap_or(&profile.codex_version),
+            ),
+            OpenAiUpstreamProtocol::MessagesApi => ("limit", "1000"),
+        };
+        let (body, etag) = match self.fetch_models_page(context, &profile, &[query]).await {
+            Err(CodexClientError::Upstream {
+                status, ref body, ..
+            }) if self.protocol == OpenAiUpstreamProtocol::ResponsesApi
+                && rejects_catalog_version(status, body) =>
+            {
+                self.fetch_models_page(context, &profile, &[]).await?
+            }
+            result => result?,
+        };
         match self.protocol {
             OpenAiUpstreamProtocol::Codex => Ok(parse_codex_model_catalog(&body, etag.as_deref())?),
             OpenAiUpstreamProtocol::ResponsesApi => Ok(super::catalog::parse_api_model_catalog(
@@ -56,7 +72,9 @@ impl CodexBackendClient {
                     if !cursors.insert(cursor.to_owned()) {
                         return Err(super::CodexModelCatalogError::InvalidWire.into());
                     }
-                    (page, _) = self.fetch_models_page(context, None, Some(cursor)).await?;
+                    (page, _) = self
+                        .fetch_models_page(context, &profile, &[query, ("after_id", cursor)])
+                        .await?;
                 }
                 let body = serde_json::to_vec(&serde_json::json!({"data":models}))
                     .map_err(|_| super::CodexModelCatalogError::InvalidWire)?;
@@ -72,32 +90,20 @@ impl CodexBackendClient {
     async fn fetch_models_page(
         &self,
         context: CodexRequestContext<'_>,
-        client_version: Option<&str>,
-        after_id: Option<&str>,
+        profile: &CodexWireProfile,
+        query: &[(&str, &str)],
     ) -> CodexClientResult<(bytes::Bytes, Option<String>)> {
         let path = match self.protocol {
             OpenAiUpstreamProtocol::Codex => "codex/models",
             OpenAiUpstreamProtocol::ResponsesApi | OpenAiUpstreamProtocol::MessagesApi => "models",
         };
-        let profile = self.profile.snapshot();
-        let headers = self.model_request_headers(&profile, context)?;
+        let headers = self.model_request_headers(profile, context)?;
         let mut request = self
             .client
             .get(endpoint_url(&self.base_url, path))
-            .headers(headers);
-        let client_version = client_version.or_else(|| {
-            (self.protocol == OpenAiUpstreamProtocol::Codex)
-                .then_some(profile.codex_version.as_str())
-        });
-        if self.protocol == OpenAiUpstreamProtocol::MessagesApi {
-            request = request.query(&[("limit", "1000")]);
-            if let Some(after_id) = after_id {
-                request = request.query(&[("after_id", after_id)]);
-            }
-        } else if let Some(client_version) = client_version {
-            request = request.query(&[("client_version", client_version)]);
-        }
-        let mut request = request.build()?;
+            .headers(headers)
+            .query(query)
+            .build()?;
         if let Some(route) = self.route_to(request.url()) {
             request
                 .headers_mut()
@@ -133,4 +139,20 @@ impl CodexBackendClient {
         }
         Ok((body, etag))
     }
+}
+
+/// 仅在上游明确不接受版本参数时读取普通目录，其他失败保留原错误
+fn rejects_catalog_version(status: reqwest::StatusCode, body: &str) -> bool {
+    if !matches!(status.as_u16(), 400 | 422) {
+        return false;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let error = &value["error"];
+    error["param"].as_str() == Some("client_version")
+        && matches!(
+            error["code"].as_str(),
+            Some("unknown_parameter" | "unsupported_parameter")
+        )
 }
