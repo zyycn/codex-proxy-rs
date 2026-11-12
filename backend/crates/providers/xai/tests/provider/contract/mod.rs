@@ -1855,6 +1855,7 @@ impl ProviderLeasePort for DiagnosticLeasePort {
                                 in_flight: 0,
                                 last_started_at: None,
                                 quota_reset_at: None,
+                                quota_reset_windows: None,
                                 quota_remaining_rank: None,
                                 cooldown: None,
                                 failure_rate_basis_points: None,

@@ -3,7 +3,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use futures::FutureExt;
@@ -245,6 +245,7 @@ pub struct AccountRuntimeSignals {
     pub in_flight: u32,
     pub last_started_at: Option<SystemTime>,
     pub quota_reset_at: Option<SystemTime>,
+    pub quota_reset_windows: Option<Arc<[AccountQuotaResetWindow]>>,
     /// Provider 归一化的剩余额度基点：0 耗尽，10_000 全部可用
     pub quota_remaining_rank: Option<u64>,
     pub cooldown: Option<super::AccountCooldown>,
@@ -459,6 +460,7 @@ impl AccountRuntimeSignals {
     pub fn with_provider_quota(mut self, quota: Option<AccountQuotaSignals>) -> Self {
         if let Some(quota) = quota {
             self.quota_reset_at = quota.reset_at;
+            self.quota_reset_windows = quota.reset_windows;
             self.quota_remaining_rank = quota.remaining_rank;
         }
         self
@@ -482,9 +484,17 @@ impl AccountRuntimeSignals {
     }
 }
 
+/// Provider 确认为账号通用且属于受支持周期的重置观测
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountQuotaResetWindow {
+    pub period: super::QuotaResetPeriod,
+    pub reset_at: SystemTime,
+}
+
 /// Provider 从私有 quota JSON 投影出的中立调度事实
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountQuotaSignals {
+    reset_windows: Option<Arc<[AccountQuotaResetWindow]>>,
     reset_at: Option<SystemTime>,
     remaining_rank: Option<u64>,
 }
@@ -496,16 +506,23 @@ impl AccountQuotaSignals {
         Self {
             reset_at,
             remaining_rank,
+            reset_windows: None,
         }
     }
 
     #[must_use]
-    pub const fn reset_at(self) -> Option<SystemTime> {
+    pub fn with_reset_windows(mut self, windows: Vec<AccountQuotaResetWindow>) -> Self {
+        self.reset_windows = (!windows.is_empty()).then(|| windows.into());
+        self
+    }
+
+    #[must_use]
+    pub const fn reset_at(&self) -> Option<SystemTime> {
         self.reset_at
     }
 
     #[must_use]
-    pub const fn remaining_rank(self) -> Option<u64> {
+    pub const fn remaining_rank(&self) -> Option<u64> {
         self.remaining_rank
     }
 }
@@ -940,8 +957,6 @@ impl AccountSelector {
 
 // 首输出 10 秒时延迟得分减半；固定尺度不随其他候选账号变化
 const SMART_LATENCY_HALF_SCORE_MS: f64 = 10_000.0;
-// 距重置一小时时得分减半；未知和已过期时间不提供重置奖励
-const SMART_RESET_HALF_SCORE_SECONDS: f64 = 3_600.0;
 
 fn capacity_utilization(candidate: &AccountCandidate, context: &AccountSelectionContext) -> f64 {
     context
@@ -997,15 +1012,6 @@ pub(crate) fn smart_score(candidate: &AccountCandidate, context: &AccountSelecti
             SMART_LATENCY_HALF_SCORE_MS / (SMART_LATENCY_HALF_SCORE_MS + latency as f64)
         });
 
-    let reset = candidate
-        .signals
-        .quota_reset_at
-        .and_then(|reset| reset.duration_since(now).ok())
-        .filter(|remaining| !remaining.is_zero())
-        .map_or(0.0, |remaining| {
-            SMART_RESET_HALF_SCORE_SECONDS
-                / (SMART_RESET_HALF_SCORE_SECONDS + remaining.as_secs_f64())
-        });
     let [
         load_weight,
         quota_weight,
@@ -1018,5 +1024,5 @@ pub(crate) fn smart_score(candidate: &AccountCandidate, context: &AccountSelecti
         + quota_weight * quota
         + health_weight * failure
         + latency_weight * latency
-        + reset_weight * reset
+        + reset_weight * config.reset_score(&candidate.signals, now)
 }

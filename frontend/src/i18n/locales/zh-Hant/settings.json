@@ -150,6 +150,14 @@
       "unitLabel": "USD / 百萬 Token"
     },
     "scheduling": {
+      "runtimeGroup": "執行狀態",
+      "quotaGroup": "額度",
+      "queueGroup": "排隊",
+      "windowMode": "重置視窗係數",
+      "windowHelp": "係數越大，該窗口越影響重置評分。設為 0 可忽略該窗口。",
+      "fiveHour": "5 小時",
+      "weekly": "週",
+      "monthly": "月",
       "roundRobin": "輪詢",
       "autoReviewSlotsHelp": "僅對 Codex 賬號生效，普通併發爲 10、審批名額爲 3 時，兩類請求分別最多運行 10 個和 3 個，互不佔用名額",
       "autoReviewQueueHelp": "開啓獨立額度後，審批請求單獨排隊，可超過賬號隊列容量，仍受總等待容量、排隊超時與密鑰限額約束",

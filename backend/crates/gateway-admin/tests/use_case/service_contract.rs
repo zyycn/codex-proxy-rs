@@ -100,7 +100,9 @@ fn contract_type(mut item: Item, name: &str) -> Item {
     attrs.retain(|attr| attr.path().is_ident("serde"));
     attrs.insert(
         0,
-        if name == "SmartSchedulingConfig" {
+        if name == "ResetWindowWeights" {
+            parse_quote!(#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)])
+        } else if name == "SmartSchedulingConfig" {
             parse_quote!(#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)])
         } else if comparable {
             parse_quote!(#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)])
@@ -256,7 +258,7 @@ fn sdk_settings_contract_matches_host_declarations() {
         ),
         (
             "../gateway-core/src/account/smart_scheduling.rs",
-            &["SmartSchedulingValues"][..],
+            &["SmartSchedulingValues", "ResetWindowWeights"][..],
         ),
         (
             "../gateway-core/src/metering/pricing.rs",

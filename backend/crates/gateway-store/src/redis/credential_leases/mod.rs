@@ -676,6 +676,7 @@ impl RedisProviderLeaseCoordinator {
                         in_flight: signal.in_flight,
                         last_started_at: signal.last_started_at.map(Into::into),
                         quota_reset_at: None,
+                        quota_reset_windows: None,
                         quota_remaining_rank: None,
                         cooldown: None,
                         failure_rate_basis_points: None,

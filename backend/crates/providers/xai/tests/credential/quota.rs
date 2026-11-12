@@ -302,6 +302,47 @@ async fn billing_access_and_scheduling_use_current_quota_fields() {
 }
 
 #[tokio::test]
+async fn billing_projects_only_recognized_periods_with_quota_evidence() {
+    use gateway_core::account::{AccountQuotaResetWindow, AccountQuotaSignals, QuotaResetPeriod};
+    let end = "2099-08-01T00:00:00Z";
+    let reset_at = SystemTime::from(chrono::DateTime::parse_from_rfc3339(end).unwrap());
+    for (kind, used, expected) in [
+        (
+            "USAGE_PERIOD_TYPE_WEEKLY",
+            Some(25),
+            Some(QuotaResetPeriod::Weekly),
+        ),
+        (
+            "USAGE_PERIOD_TYPE_MONTHLY",
+            Some(25),
+            Some(QuotaResetPeriod::Monthly),
+        ),
+        ("USAGE_PERIOD_TYPE_MONTHLY", None, None),
+        ("USAGE_PERIOD_TYPE_DAILY", Some(25), None),
+    ] {
+        let (store, repository) = repository_with_accounts(&[("period", "period")]).await;
+        let mut config = serde_json::json!({"currentPeriod":{"type":kind,"end":end}});
+        if let Some(percent) = used {
+            config["creditUsagePercent"] = percent.into();
+        }
+        let body = serde_json::to_vec(&serde_json::json!({"config":config})).unwrap();
+        let service =
+            crate::support::grok_quota_service(repository, QueueBillingTransport::success(&body));
+        let id = account_id("period");
+        service.refresh_account(&id).await.unwrap();
+        let mut signals = AccountQuotaSignals::new(Some(reset_at), used.map(|_| 7500));
+        if let Some(period) = expected {
+            signals =
+                signals.with_reset_windows(vec![AccountQuotaResetWindow { period, reset_at }]);
+        }
+        assert_eq!(
+            service.scheduling_signals(&store.account(&id).unwrap()),
+            Some(signals)
+        );
+    }
+}
+
+#[tokio::test]
 async fn signed_prepaid_balance_preserves_wire_and_recovers_access_when_current() {
     use gateway_core::account::QuotaAccessState::{Allowed, Exhausted};
 
