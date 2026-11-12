@@ -1,6 +1,6 @@
 //! Responses WebSocket endpoint、opening handshake 与首帧发送
 
-use std::time::Duration;
+use std::{error::Error as _, io, time::Duration};
 
 use bytes::Bytes;
 use gateway_core::error::ProxyConnectionHint;
@@ -354,7 +354,7 @@ async fn dial_account(
     Ok(stream.into_inner())
 }
 
-async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tungstenite::Error> {
+async fn connect_tcp(host: &str, port: u16) -> io::Result<tokio::net::TcpStream> {
     use hyper_util::client::legacy::connect::HttpConnector;
     use tower_service::Service;
 
@@ -365,14 +365,20 @@ async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tun
     );
     let uri = format!("http://{authority}")
         .parse::<hyper::Uri>()
-        .map_err(|_| tungstenite::Error::Io(std::io::Error::other("invalid egress endpoint")))?;
+        .map_err(|_| io::Error::other("invalid egress endpoint"))?;
     let mut connector = HttpConnector::new();
     connector
         .call(uri)
         .await
         .map(|stream| stream.into_inner())
-        .map_err(|_| {
-            tungstenite::Error::Io(std::io::Error::other("account WebSocket connection failed"))
+        .map_err(|error| {
+            // 保留系统错误码或 I/O 类型，不把 Hyper 记录的目标地址带入诊断
+            let Some(cause) = error.source().and_then(|e| e.downcast_ref::<io::Error>()) else {
+                return io::Error::other("account WebSocket connection failed");
+            };
+            cause
+                .raw_os_error()
+                .map_or_else(|| cause.kind().into(), io::Error::from_raw_os_error)
         })
 }
 
