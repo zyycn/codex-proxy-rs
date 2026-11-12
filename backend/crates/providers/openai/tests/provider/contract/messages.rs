@@ -294,6 +294,7 @@ async fn messages_and_responses_translate_with_target_header_boundaries() {
         } else {
             let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
             assert_eq!(body["reasoning"]["effort"], "xhigh");
+            assert!(body.get("max_output_tokens").is_none());
             for name in [
                 "anthropic-version",
                 "anthropic-beta",

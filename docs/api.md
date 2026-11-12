@@ -343,12 +343,12 @@ Chat 沿用 [Client Key 鉴权](#数据面客户端接口)、[请求期限](#请
 [请求头与身份](#请求头与身份)及[隐私策略](#隐私策略)。隐私策略的 `request_body` 面向目标上游正文，
 Responses 上游使用 `$.input`，Messages 上游使用 `$.messages`
 
-转换后的请求按选中的 Provider 执行。OpenAI 的字段处理见[正文兼容](#正文兼容)；
-输出上限原值交给上游校验，低于模型下限时会收到上游错误
+转换后的请求按选中的 Provider 执行。OpenAI Responses 上游忽略客户端的输出上限，见[正文兼容](#正文兼容)
 
 ### Messages 请求
 
 `POST /v1/messages` 接受非空字符串 `model`、非空 `messages` 数组和非负整数 `max_tokens`。
+转向 OpenAI Responses 上游时，`max_tokens` 仍为入站必填字段，但不限制实际输出。
 消息角色为 `user`、`assistant` 或 `system`，`content` 为字符串或内容块数组；初始系统指令放在顶层 `system`，
 会话中的 `system` 消息保留其位置，具体模型支持情况由上游校验。
 `stream` 缺省或 `false` 返回 JSON，`true` 返回 SSE。每轮由客户端携带所需的完整上下文。Claude Code 用 `--resume` 恢复本地会话后，仍通过 `messages` 发送上下文；网关不缓存对话正文用于下一轮。
@@ -538,8 +538,9 @@ Images 的 `x-codex-image-turn-id` 和 Desktop 自动 Git 上下文的 `clientUs
 
 #### 正文兼容
 
-OpenAI Provider 的 Responses 上游编码会移除 Codex 不接受的顶层 `temperature` 和 `prompt_cache_retention`，
-并保留调用方指定的 `max_output_tokens`。缺少顶层 `store` 时补齐 `false`，与官方 Codex 客户端一致；
+发往 OpenAI Responses 上游（OAuth 或 API Key）的生成请求会省略顶层 `max_output_tokens`、`max_completion_tokens`
+和 `max_tokens`，输出可能超过客户端指定的上限。编码时也会移除 Codex 不接受的顶层 `temperature`
+和 `prompt_cache_retention`。缺少顶层 `store` 时补齐 `false`，与官方 Codex 客户端一致；
 显式提供的值保持原样。顶层 `input` 为字符串时按公开 Responses API 的语义展开为一条
 `user` 文本消息条目（`{"type": "message", "role": "user", "content": [{"type": "input_text", ...}]}`），
 因为 Codex 后端只接受条目数组；数组及其他类型原样透传。`input` 数组中显式指定 `type: "message"`
@@ -556,7 +557,6 @@ OpenAI Provider 的 Responses 上游编码会移除 Codex 不接受的顶层 `te
 | `top_p`、`frequency_penalty`、`presence_penalty`、`chat_template_kwargs`、`user`、`metadata`、`safety_identifier` | 省略；采样参数取默认值时也省略 |
 | `stream_options.include_usage` | 省略该成员，保留其他流式选项 |
 | `truncation`、`stop_sequences`、`prompt_cache_options` | 分别仅在值为 `"disabled"`、`[]`、`{}` 时省略；显式策略交给上游校验 |
-| `max_completion_tokens`、`max_tokens` | 转为 `max_output_tokens`。原生字段优先，其次按左列顺序取首个非 `null` 值 |
 
 Codex/OAuth 上游的历史回填按字段形状兼容，不以 User-Agent 品牌区分：显式 `type: "reasoning"`
 的 `input` 项移除顶层 `status`；该项具有非空字符串 `encrypted_content` 时，还会移除非空数组
@@ -637,13 +637,13 @@ OAuth 账号默认 `prefer_websocket`，客户端使用 HTTP/SSE 时仍可能选
 `400 unsupported_prewarm`，不会将其当作普通生成调用。`generate=true` 或省略该字段正常执行；
 客户端可跳过预热继续正式请求，外部插件 adapter 按各自的协议能力处理
 
-Codex OAuth backend 的候选上游为 WS 时，无 `previous_response_id` 的普通新链若规范化
-`response.create` 达到 15.5 MiB，发送前选择 HTTP/SSE；HTTP 和 WS 入站均适用。能关联到客户端线程时，
-后续完整新链沿用 HTTP/SSE，直到帧长低于 13.5 MiB 再尝试 WS。预热和增量帧不改变此大小判断。
-该阈值为已观察到的上游消息大小边界预留余量，不是网关输入长度上限或 OpenAI 公布的统一限制；
-API Key 账号、小请求、显式 warmup、未知外部 previous ID 和持久化续接不因该大小策略改用 HTTP
+OpenAI Responses 上游 WS 按握手响应头 `x-codex-websocket-max-message-bytes` 声明的上限，
+检查最终 `response.create` 文本的 UTF-8 字节数。超过上限时，新链、持久化续接和未知外部 previous ID
+在上传正文前改用 HTTP/SSE；等于上限仍可发送。OAuth 和 API Key 账号、HTTP 和 WS 入站均适用。
+该上限只属于当前上游连接；响应头缺失或无效时不预判超限。显式 warmup 保持 WS 合同，超限时
+返回 `websocket_message_too_large`，不重复发送或改用 HTTP
 
-OAuth 的大 connection-local WS 续接，以及 HTTP `store=false` 成功后标记为 `ReplayRequired`
+超过当前连接上限的 connection-local WS 续接，以及 HTTP `store=false` 成功后标记为 `ReplayRequired`
 的 WS 增量，均在发送前返回 `status: 400 / previous_response_not_found`。客户端应清除旧 ID，
 携带完整历史及工具调用／输出重试。官方 Codex 支持重连 WS 后完整重发，也可能按自身重试预算
 切到 HTTP；其他客户端需要自行实现此合同。代理不缓存 transcript，不把增量输入当作独立新链，

@@ -268,7 +268,12 @@ fn move_file(from: &Path, to: &Path) -> io::Result<()> {
 fn move_dir(from: &Path, to: &Path) -> io::Result<()> {
     match fs::rename(from, to) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+        Err(error)
+            if error.kind() == io::ErrorKind::CrossesDevices
+                || (cfg!(unix) && error.kind() == io::ErrorKind::PermissionDenied) =>
+        {
+            // Unix 跨父目录移动只读目录可能被拒绝，复用保留权限的复制路径
+            // 仅清理源目录时放开写权限，备份与恢复后的目录仍保留原权限
             if let Err(copy_error) = copy_dir_all(from, to) {
                 let _ = remove_dir_all(to);
                 return Err(copy_error);
