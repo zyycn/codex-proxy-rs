@@ -1297,7 +1297,7 @@ OpenAI 主动额度刷新和正常响应携带的明确套餐会同步到账号�
 
 `outboundProxyId` 绑定已保存的代理，不要求出口测试成功；省略或 `null` 保留当前绑定，空字符串清除绑定。
 `outboundProxyUrl` 兼容 HTTP、HTTPS、SOCKS5、SOCKS5H 代理 URL，可带用户名和密码；不能与 ID 同时设置。
-编辑时省略或 `null` 表示保持原配置，空字符串表示清除代理并直连。列表和详情返回绑定的
+编辑时省略或 `null` 表示保持原配置，空字符串表示清除绑定并使用部署默认出口。列表和详情返回绑定的
 `outboundProxyId`（未绑定时为 `null`，禁用代理仍保留 ID）和不含认证信息的 `outboundProxyEndpoint`
 （未配置时为 `null`）；只有显式敏感导出包含完整 URL。
 指定代理后，推理、OAuth 服务端交换/刷新及账号辅助请求使用同一出口；代理失败不会退回直连。
@@ -1408,11 +1408,11 @@ Search 的选号限制不约束插件在选号后主动改写正文。
 | `POST` | `/api/admin/proxies/accounts/remove` | `{ proxyId, accountId }` | `{ configRevision }` |
 | `POST` | `/api/admin/proxies/create` | `[{ name, proxyUrl, location?, autoLocation?, maxWebsocketConnections? }]` | 逐项结果数组，成功项的 `data` 为 `{ record, configRevision }` |
 | `POST` | `/api/admin/proxies/update` | `{ id, revision, name, enabled?, proxyUrl?, location?, autoLocation?, maxWebsocketConnections? }` | `{ record, configRevision }` |
-| `POST` | `/api/admin/proxies/probe` | `{ proxyUrl, detectLocation? }` | 测试未保存的地址或服务器直连出口，返回连通性及可选位置结果，不创建代理 |
+| `POST` | `/api/admin/proxies/probe` | `{ proxyUrl, useDeploymentProxy?, detectLocation? }` | 测试未保存的地址、部署默认出口或服务器直连出口，返回连通性及可选位置结果，不创建代理 |
 | `POST` | `/api/admin/proxies/test` | `[{ id, revision, detectLocation? }]` | 逐项结果数组，成功项的 `data` 为最新代理记录 |
 | `POST` | `/api/admin/proxies/delete` | `{ id, revision }` | `{ configRevision }` |
 
-`probe` 的 `proxyUrl` 必填，空字符串表示服务器直连；非空值须为合法代理 URL，`null`、省略或非法地址均拒绝。
+`probe` 的 `proxyUrl` 必填，空字符串默认测试服务器直连，同时传 `useDeploymentProxy: true` 则测试部署默认出口。指定代理地址时不能同时传 `useDeploymentProxy: true`；非空值须为合法代理 URL，`null`、省略或非法地址均拒绝。
 探测不创建代理或修改账号绑定
 
 添加与测试统一接收 1–100 项数组，单条操作传一个元素，响应 `data` 按输入顺序返回等长数组。
@@ -1437,9 +1437,9 @@ Search 的选号限制不约束插件在选号后主动改写正文。
 
 `upstream` 复用账号列表的互联观测结构和发现状态语义，只读取本地观测，不触发远端刷新
 
-移除关联账号只清除指定账号的代理绑定与连接地址，使其改为直连，保留凭据、调度参数与分组。
+移除关联账号只清除指定账号的代理绑定与连接地址，使其使用部署默认出口，保留凭据、调度参数与分组。
 若账号已不再绑定请求中的代理，则返回 409
-删除代理会自动解除全部关联账号的代理绑定与连接地址，账号保留其余设置并改为直连。
+删除代理会自动解除全部关联账号的代理绑定与连接地址，账号保留其余设置并使用部署默认出口。
 代理仍被插件来源或插件包引用时返回 409，账号绑定保持不变
 
 `maxWebsocketConnections` 为此代理的 OpenAI Responses 上游 WS 连接上限，范围 0–4294967295，0 表示不限制。
@@ -1449,7 +1449,7 @@ Search 的选号限制不约束插件在选号后主动改写正文。
 更新省略 `proxyUrl` 保留认证；连接配置改变时清除测试结果并更新所有绑定账号。
 测试结果只在请求中的版本仍匹配时保存
 
-代理默认启用，更新 `enabled: false` 后保留配置、测试结果和账号绑定，关联账号的新请求改为直连，
+代理默认启用，更新 `enabled: false` 后保留配置、测试结果和账号绑定，关联账号的新请求使用部署默认出口，
 不应用该代理的位置覆盖；重新启用后恢复原出口及位置规则。省略 `enabled` 保留当前状态。
 禁用代理仍可执行连接测试，但不能以 ID 选择用于账号绑定、新的账号授权、导入或插件下载
 
@@ -3194,7 +3194,7 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 来源 URL 使用 HTTPS，不包含用户信息、查询参数或片段；回环地址允许 HTTP，供本机来源使用
 
 查询、校验和远程安装的 `outboundProxyId` 指向已保存的出站代理，与下载凭据独立，公开来源也可选择代理。
-省略或 `null` 表示直连，不继承进程环境代理；代理失败不会回退直连。查询与下载期间代理配置变化时返回 `409`，需重新操作。
+省略或 `null` 表示使用部署默认出口；代理失败不会回退直连。查询与下载期间代理配置变化时返回 `409`，需重新操作。
 查询缓存与限流按凭据及代理身份隔离。制品历史 `source.outbound_proxy` 只保存下载时的 `{ id, revision }`，不返回代理地址或认证信息。
 仍被更新来源或制品引用的代理不能删除；修改后续来源不会清除已安装制品的历史引用
 
@@ -3203,7 +3203,7 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 修改更新来源请求为 `{ "pluginId": "acme.example", "source": { "kind": "github", "repository": "owner/repo" }, "policy": { "kind": "stable" }, "outboundProxyId": null }`；
 其他可选来源为 `upload` 或带 `url` 的 `url`。`policy` 省略时为 `manual`；GitHub 还支持 `stable`（最新稳定版）和
 `{ "kind": "pinned", "tag": "v2.0.0-rc.1", "allow_prerelease": true }`。其他来源只支持 `manual`。
-来源、策略和代理选择一同持久化与审计；代理字段省略或 `null` 明确保存为直连。`upload` 和 `builtin` 不接受代理。
+来源、策略和代理选择一同持久化与审计；代理字段省略或 `null` 保存为部署默认出口。`upload` 和 `builtin` 不接受代理。
 变更不改变已安装包的历史来源，不自动下载、接受制品或切换实例版本
 
 检查更新请求为 `{ "pluginId": "acme.example", "credentialIds": [] }`，返回 `binding` 和 `release`。
@@ -3283,7 +3283,7 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 
 回调保持类型、期限、取消、实例 revision、资源归属和事务一致性检查。模型调用可显式选择 Key，按所选 Key 的准入、预算、用量与计费合同执行；省略 Key 时继承现有模型父请求身份
 
-受管 HTTP 不限制插件目标地址段。宿主解析 DNS，连接保留原始 Host 与 TLS 域名校验；出口可继承调用范围、指定账号或按代理 ID 选择，连接失败不自动回退直连，重定向不自动跟随。
+受管 HTTP 不限制插件目标地址段。宿主解析 DNS，连接保留原始 Host 与 TLS 域名校验；出口可继承调用范围、指定账号或按代理 ID 选择，无显式代理时使用部署默认出口，连接失败不自动回退直连，重定向不自动跟随。
 显式代理选择与目录查询见 [SDK 网络回调](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#网络)
 
 #### 能力绑定与范围

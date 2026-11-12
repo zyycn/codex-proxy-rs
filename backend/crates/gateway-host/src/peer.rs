@@ -37,17 +37,11 @@ impl PeerTransport for HttpPeerTransport {
         account: &ProviderAccount,
         authentication: &PeerConnection,
     ) -> Result<Vec<u8>, PeerFetchFailure> {
-        let mut builder = reqwest::Client::builder()
-            .no_proxy()
+        let builder = gateway_egress::http_client(account.outbound_proxy())
+            .map_err(|_| UpstreamInfoFailure::Unavailable)?
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(REQUEST_TIMEOUT)
             .timeout(REQUEST_TIMEOUT);
-        if let Some(proxy) = account.outbound_proxy() {
-            builder = builder.proxy(
-                reqwest::Proxy::all(proxy.expose_url())
-                    .map_err(|_| UpstreamInfoFailure::Unavailable)?,
-            );
-        }
         let client = (self.build_client)(builder).map_err(|_| UpstreamInfoFailure::Unavailable)?;
         let response = client
             .get(format!(

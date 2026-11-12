@@ -279,7 +279,7 @@ HTTP 和 request 中间件中的模型回调沿用有效请求设置；attempt�
 
 `HostClient::account_http(AccountHttpRequest { account_id, credential_revision, request }, body)` 使用指定账号的当前代理配置，
 经 `host.http.account` 返回同一 `HostHttpBody`。每次发送核对账号存在、启用和凭据版本，版本变化须由插件重新读取后决定下一步。
-请求 headers 与正文完全由插件提供；宿主不注入账号认证、不申请推理租约，代理不可用时直接失败，不回退直连。
+请求 headers 与正文完全由插件提供；宿主不注入账号认证、不申请推理租约。无显式代理时使用部署默认出口，代理不可用时直接失败，不回退直连。
 这项能力与上游适配器的账号推理 HTTP 分开，适用于插件自行构造的账号网络请求
 
 `HostClient::proxy_http(ProxyHttpRequest { proxy_id, request }, body)` 经 `host.http.proxy` 使用指定代理的当前配置，

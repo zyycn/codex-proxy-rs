@@ -126,7 +126,7 @@ impl<'a> TokenVerificationContext<'a> {
         self
     }
 
-    /// 返回本次验证的显式出口；`None` 表示直连，不得继承环境代理
+    /// 返回本次验证的显式出口；`None` 表示使用部署默认出口
     #[must_use]
     pub fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
         self.outbound_proxy

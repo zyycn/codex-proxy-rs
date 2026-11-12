@@ -17,7 +17,8 @@ pub struct ModelsDevPricing;
 #[async_trait]
 impl PricingSource for ModelsDevPricing {
     async fn fetch(&self) -> Result<PricingSyncPreview, AdminError> {
-        let client = reqwest::Client::builder()
+        let client = gateway_egress::http_client(None)
+            .map_err(|_| source_error())?
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))

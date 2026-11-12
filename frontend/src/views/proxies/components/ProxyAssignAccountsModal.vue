@@ -136,7 +136,7 @@ async function confirmAssignment() {
         <template #outboundProxy="{ row }">
           <span v-if="row.outboundProxyId === proxy?.id" class="text-z-success-text">{{ t('proxies.assignment.alreadyAssigned') }}</span>
           <span v-else class="block truncate text-z-xs text-z-text-secondary" :title="row.outboundProxyEndpoint ?? undefined">
-            {{ row.outboundProxyEndpoint || t('accounts.proxy.directConnection') }}
+            {{ row.outboundProxyEndpoint || t('accounts.proxy.deploymentDefault') }}
           </span>
         </template>
       </ZTable>

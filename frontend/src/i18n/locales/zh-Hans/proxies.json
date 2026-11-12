@@ -11,8 +11,8 @@
       "removeAction": "从当前代理移除账号",
       "removeAssociatedAccount": "移除关联账号",
       "remove": "移除",
-      "removeDescription": "将“{name}”从“{removeProxyName}”移除后，该账号将改为直连",
-      "removed": "账号已移出当前代理，改为直连"
+      "removeDescription": "将“{name}”从“{removeProxyName}”移除后，该账号将使用部署默认出口",
+      "removed": "账号已移出当前代理，使用部署默认出口"
     },
     "actions": {
       "test": "测试代理",
@@ -35,7 +35,7 @@
       "invalidConnectionLimit": "连接上限须为 0 到 4294967295 之间的整数",
       "saved": "代理已保存",
       "proxyEnabled": "代理已启用",
-      "disabled": "代理已禁用，关联账号已改为直连",
+      "disabled": "代理已禁用，关联账号已使用部署默认出口",
       "deleted": "代理已删除"
     },
     "batchCreate": {
@@ -158,9 +158,9 @@
       "notTested": "未测试",
       "viewAccountsAssociatedWith": "查看 {name} 的 {count} 个关联账号",
       "disable": "确定禁用“{name}”吗？",
-      "disableDescription": "关联账号的新请求将改为直连，代理配置和绑定会保留，重新启用后恢复使用",
+      "disableDescription": "关联账号的新请求将使用部署默认出口，代理配置和绑定会保留，重新启用后恢复使用",
       "delete": "确定删除“{name}”吗？",
-      "deleteDescription": "将自动解除关联账号，关联账号的新请求将改为直连"
+      "deleteDescription": "将自动解除关联账号，关联账号的新请求将使用部署默认出口"
     },
     "assignment": {
       "title": "分配账号",

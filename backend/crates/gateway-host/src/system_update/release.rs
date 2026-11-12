@@ -136,7 +136,8 @@ pub(crate) fn download_client(
     timeout: Duration,
 ) -> Result<reqwest::Client, OperationError> {
     let api_base = api_base.to_owned();
-    reqwest::Client::builder()
+    gateway_egress::http_client(None)
+        .map_err(|_| invalid("部署代理配置不合法"))?
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
             if attempt.previous().len() < 5 && download_url_allowed(attempt.url(), &api_base) {

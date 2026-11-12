@@ -354,3 +354,99 @@ async fn managed_http_enforces_the_callers_body_limit_before_sending() {
     assert_eq!(requests[0].body.len(), maximum);
     assert_eq!(requests[1].body.len(), maximum + 1);
 }
+
+#[tokio::test]
+async fn deployment_proxy_routes_managed_http_and_account_probes() {
+    use gateway_admin::ports::proxy::{ProbeRoute, ProxyProbe};
+    use gateway_host::proxy_probe::HttpProxyProbe;
+
+    if let Ok(origin) = std::env::var("CPR_TEST_EGRESS_ORIGIN") {
+        let selected =
+            OutboundProxy::parse(&std::env::var("CPR_TEST_EGRESS_SELECTED").unwrap()).unwrap();
+        let outside = origin.replace("127.0.0.1", "localhost");
+        let managed = HttpClient::new().unwrap();
+        let http = |url: String, proxy| {
+            let managed = &managed;
+            async move {
+                managed
+                    .open(
+                        request(url),
+                        proxy,
+                        &local_network(),
+                        Duration::from_secs(2),
+                    )
+                    .await
+                    .unwrap()
+                    .status
+            }
+        };
+        let probe = HttpProxyProbe::new(&outside);
+        let observed = |result: gateway_admin::model::proxies::ProxyTestResult| {
+            result.exit_ipv4.unwrap().octets()[3]
+        };
+        assert_eq!(observed(probe.test(ProbeRoute::Direct, false).await), 1);
+        assert_eq!(http(origin.clone(), Some(&selected)).await, 203);
+        assert_eq!(http(origin, None).await, 200);
+        let expect_env = std::env::var_os("HTTP_PROXY").is_some();
+        assert_eq!(
+            http(outside, None).await,
+            if expect_env { 202 } else { 200 }
+        );
+        assert_eq!(
+            observed(probe.test(ProbeRoute::Deployment, false).await),
+            if expect_env { 2 } else { 1 }
+        );
+        println!("checked managed egress");
+        return;
+    }
+
+    let origin = MockServer::start().await;
+    let env = MockServer::start().await;
+    let selected = MockServer::start().await;
+    for (server, code, ip) in [
+        (&origin, 200, "192.0.2.1"),
+        (&env, 202, "192.0.2.2"),
+        (&selected, 203, "192.0.2.3"),
+    ] {
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(code).set_body_json(serde_json::json!({"ip": ip})))
+            .mount(server)
+            .await;
+    }
+    for configured in [true, false] {
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        for name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "REQUEST_METHOD",
+        ] {
+            command
+                .env_remove(name)
+                .env_remove(name.to_ascii_lowercase());
+        }
+        if configured {
+            command
+                .env("HTTP_PROXY", env.uri())
+                .env("NO_PROXY", "127.0.0.0/8");
+        }
+        let output = command
+            .args([
+                "--exact",
+                "outbound::http::deployment_proxy_routes_managed_http_and_account_probes",
+                "--nocapture",
+            ])
+            .env("CPR_TEST_EGRESS_ORIGIN", origin.uri())
+            .env("CPR_TEST_EGRESS_SELECTED", selected.uri())
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("checked managed egress"));
+    }
+}

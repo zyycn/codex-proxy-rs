@@ -409,7 +409,7 @@
       "completed": "已回退至 {version}，並恢復對應設置"
     },
     "sourceProxy": {
-      "noProxyDirectConnection": "不使用代理（直連）",
+      "deploymentDefault": "部署預設出口",
       "disabledSuffix": "（已禁用）",
       "catalogUnavailable": "已選代理（目錄暫不可用）",
       "label": "下載代理"

@@ -132,16 +132,17 @@ impl Metadata {
         let client = self
             .client
             .get_or_try_init(|| async {
-                Client::builder()
+                gateway_egress::http_client(None)
+                    .map_err(|_| super::error::invalid("部署代理配置不合法"))?
                     .user_agent("codex-proxy-rs")
                     .timeout(Duration::from_secs(10))
                     .connect_timeout(Duration::from_secs(5))
                     .redirect(reqwest::redirect::Policy::none())
                     .retry(reqwest::retry::never())
                     .build()
+                    .map_err(|e| super::error::http("无法初始化发行查询连接", e))
             })
-            .await
-            .map_err(|e| super::error::http("无法初始化发行查询连接", e))?;
+            .await?;
         let request = client.get(url);
         let mut response = if api {
             request.header("Accept", "application/vnd.github+json")

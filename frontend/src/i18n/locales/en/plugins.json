@@ -409,7 +409,7 @@
       "completed": "Rolled back to {version} and restored its settings"
     },
     "sourceProxy": {
-      "noProxyDirectConnection": "No proxy (direct connection)",
+      "deploymentDefault": "Deployment default",
       "disabledSuffix": "(disabled)",
       "catalogUnavailable": "Selected proxy, directory unavailable",
       "label": "Download proxy"

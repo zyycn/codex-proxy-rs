@@ -92,9 +92,9 @@ pub struct OfficialDesktopArtifactTransport {
 }
 impl OfficialDesktopArtifactTransport {
     pub fn new() -> io::Result<Self> {
-        let client = Client::builder()
+        let client = gateway_egress::http_client(None)
+            .map_err(|_| invalid())?
             .https_only(true)
-            .no_proxy()
             .redirect(Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))

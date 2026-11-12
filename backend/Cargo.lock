@@ -1808,6 +1808,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-egress"
+version = "0.0.0"
+dependencies = [
+ "gateway-core",
+ "http",
+ "hyper-util",
+ "reqwest",
+ "url",
+]
+
+[[package]]
 name = "gateway-host"
 version = "0.0.0"
 dependencies = [
@@ -1822,6 +1833,7 @@ dependencies = [
  "futures",
  "gateway-admin",
  "gateway-core",
+ "gateway-egress",
  "gateway-protocol",
  "hex",
  "http",
@@ -3353,6 +3365,7 @@ dependencies = [
  "futures",
  "gateway-admin",
  "gateway-core",
+ "gateway-egress",
  "gateway-host",
  "gateway-protocol",
  "getrandom 0.4.3",
@@ -3410,6 +3423,7 @@ dependencies = [
  "futures",
  "gateway-admin",
  "gateway-core",
+ "gateway-egress",
  "gateway-protocol",
  "getrandom 0.4.3",
  "jsonwebtoken",

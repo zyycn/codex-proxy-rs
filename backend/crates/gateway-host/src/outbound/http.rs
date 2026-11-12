@@ -216,6 +216,8 @@ impl HttpClient {
         {
             return Err(HttpError::invalid("URL"));
         }
+        let proxy = gateway_egress::for_destination(proxy, &url)
+            .map_err(|_| HttpError::invalid("proxy"))?;
         let method = Method::from_bytes(request.method.as_bytes())
             .map_err(|_| HttpError::invalid("method"))?;
         if matches!(method, Method::CONNECT | Method::TRACE) {

@@ -524,3 +524,48 @@ fn release(version: &str, build: &str) -> CodexDesktopRelease {
         signature_present: true,
     }
 }
+
+#[tokio::test]
+async fn official_appcast_uses_the_deployment_https_proxy() {
+    use provider_openai::transport::profile::OfficialCodexDesktopReleaseTransport;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    if std::env::var_os("CPR_TEST_APPCAST_PROXY").is_some() {
+        let transport = OfficialCodexDesktopReleaseTransport::new().unwrap();
+        assert!(transport.fetch().await.is_err());
+        return;
+    }
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "transport::profile::official_appcast_uses_the_deployment_https_proxy",
+        ])
+        .env("CPR_TEST_APPCAST_PROXY", "1")
+        .env(
+            "HTTPS_PROXY",
+            format!("http://{}", server.local_addr().unwrap()),
+        )
+        .env("HTTP_PROXY", "")
+        .env("ALL_PROXY", "")
+        .env("NO_PROXY", "")
+        .env_remove("REQUEST_METHOD");
+    let observe = async {
+        let (socket, _) = server.accept().await.unwrap();
+        let mut socket = BufReader::new(socket);
+        let mut line = String::new();
+        socket.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "CONNECT persistent.oaistatic.com:443 HTTP/1.1\r\n");
+        socket
+            .get_mut()
+            .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+    };
+    let (output, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(command.output(), observe)
+    })
+    .await
+    .unwrap();
+    assert!(output.unwrap().status.success());
+}

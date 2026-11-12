@@ -78,7 +78,12 @@ async fn proxy_probe_should_use_provider_custom_ca_for_https_proxies() {
     });
     let probe = HttpProxyProbe::new("http://unresolvable.invalid/ip")
         .with_client_builder(provider_openai::build_reqwest_client_with_custom_ca);
-    let result = probe.test(Some(&proxy), false).await;
+    let result = probe
+        .test(
+            gateway_admin::ports::proxy::ProbeRoute::Proxy(&proxy),
+            false,
+        )
+        .await;
     assert!(result.success, "{}", result.message);
     assert_eq!(result.exit_ip.unwrap().to_string(), "203.0.113.8");
     tokio::time::timeout(Duration::from_secs(5), server)

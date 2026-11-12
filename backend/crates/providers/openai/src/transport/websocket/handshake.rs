@@ -6,9 +6,7 @@ use bytes::Bytes;
 use gateway_core::error::ProxyConnectionHint;
 use gateway_protocol::openai::events;
 use tokio::{io::BufWriter, time::timeout};
-use tokio_tungstenite::{
-    Connector, MaybeTlsStream, client_async_tls_with_config, connect_async_tls_with_config,
-};
+use tokio_tungstenite::{Connector, MaybeTlsStream, client_async_tls_with_config};
 use tungstenite::{
     self, Message,
     extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
@@ -238,22 +236,6 @@ async fn connect_websocket(
             crate::transport::connection::acquire().await
         }
         .map_err(tungstenite::Error::Io)?;
-        // 保留原生直连握手，显式出口不继承全局代理
-        if connection.outbound_proxy.is_none()
-            && matches!(
-                tungstenite::proxy::ProxyConfig::from_env(request.uri()),
-                Ok(None)
-            )
-        {
-            let (websocket, response) = connect_async_tls_with_config(
-                request,
-                Some(websocket_config(connection)),
-                false,
-                connector,
-            )
-            .await?;
-            return Ok((Box::new(websocket) as RawWsStream, response));
-        }
         let stream = dial_account(connection, &mut proxy_hint).await?;
         match stream {
             MaybeTlsStream::Plain(tcp) => {
@@ -310,10 +292,14 @@ async fn dial_account(
         _ => host.to_owned(),
     };
     let port = endpoint.port_or_known_default().ok_or_else(invalid)?;
-    let Some(proxy) = connection.outbound_proxy.as_ref() else {
-        return Ok(MaybeTlsStream::Plain(connect_tcp(host, port).await?));
-    };
     *proxy_hint = Some(ProxyConnectionHint::InvalidConfiguration);
+    let Some(proxy) =
+        gateway_egress::for_destination(connection.outbound_proxy.as_ref(), &endpoint)
+            .map_err(|_| invalid())?
+    else {
+        *proxy_hint = None;
+        return Ok(MaybeTlsStream::Plain(connect_tcp(&dns_host, port).await?));
+    };
     let mut proxy_url = url::Url::parse(proxy.expose_url()).map_err(|_| invalid())?;
     let tls_proxy = proxy_url.scheme() == "https";
     let proxy_port = proxy_url.port_or_known_default().ok_or_else(invalid)?;
