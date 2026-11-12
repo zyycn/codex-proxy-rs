@@ -15,7 +15,7 @@
 设置保存在浏览器本地，不会同步到服务器或其他设备。只想换配色时，选择品牌色预置即可
 
 下文说明实现和扩展方式。颜色使用 Ant Design 十阶色板与项目的明暗角色规则，
-中性表面从背景和文字 Seed 派生；Vue 组件通过 CSS Variables 与 Tailwind CSS 4 使用这些值。
+中性表面从当前底色和文字基色派生；Vue 组件通过 CSS Variables 与 Tailwind CSS 4 使用这些值。
 项目不依赖 Ant Design 组件库或 CSS-in-JS
 
 > [!IMPORTANT]
@@ -26,7 +26,7 @@
 
 - **Seed 与 Map 可追踪**：主色和功能色均按 Ant Design 从 Seed 派生 P1-P10；浅色 P6 等于 Seed，深色 P6
   经过暗色色板适配。全局 `colorPrimary` 保留原始 Seed；功能色 Base 保留 P6。文字和按钮组件可在派生层做对比度校正，Seed 不随之改写
-- **主色与表面分离**：品牌色负责交互和强调，页面、容器、浮层与文字由独立的背景和文本 Seed 派生
+- **主色与表面分离**：品牌色负责交互和强调，页面、容器与浮层使用预设底色或自定义背景，文字由文本 Seed 派生
 - **语义独立**：成功、警告、错误、信息和链接色各自派生，不随品牌色改变
 - **无边设计**：默认依靠表面色差、间距和轻阴影表达层级；边框只用于焦点、错误和必要分隔
 - **运行时可定制**：用户输入在浏览器中实时派生，因此使用 CSS Variables，不使用构建时 SCSS 变量
@@ -205,7 +205,7 @@ Preset 的实心色使用 P6，普通 Container、Strong Container 与边界按 
 - `colorText / Heading / Secondary / Tertiary / Quaternary / Disabled`
 - `colorBorder / BorderSecondary / Split / Shadow`
 
-所有品牌色共用当前明暗模式的背景和文字基色。手动设置 `colorBgBase` 或 `colorTextBase` 后，两个模式都使用该字段的自定义值；单项恢复后重新跟随明暗模式。
+编辑器中的背景和文字基色只随明暗模式或手动设置改变。未指定 `colorBgBase` 时，页面、卡片和浮层从当前预设的明暗底色派生；无预设底色时使用模式默认值。手动设置 `colorBgBase` 后，两个模式均以该值为底色，直至单项恢复
 默认浅色采用中性锚点，默认深色使用 HSL 色调派生；自定义中性色按外观距离平滑过渡到背景和文字 Seed 的 RGB 混色结果。
 Input、阴影与其他 Component Token 从 Fill、Surface、Primary 和 Semantic 派生，不在常量文件维护整套颜色表
 
@@ -449,7 +449,7 @@ utility / arbitrary variant；Vue Transition、跨浏览器 Range、动态富文
 单独增加品牌配色：
 
 1. 在 `ThemeColorPresetId` 增加稳定 ID
-2. 在 `themeColorPresets` 声明名称、描述与主色 Seed
+2. 在 `themeColorPresets` 声明名称、描述与主色 Seed；需要独立底色时在 `PRESET_SURFACE_BACKGROUNDS` 中指定浅色和深色值
 3. 不新增页面特判，确认预置可通过同一 `createTheme()` 派生
 4. 在浅色、深色和系统模式下检查文本、浮层、Input、表格与图表
 
