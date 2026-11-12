@@ -184,6 +184,11 @@ pub(super) fn websocket_connection_metadata(
     connection: &CodexWebSocketConnection,
 ) -> CodexWebSocketConnectionMetadata {
     CodexWebSocketConnectionMetadata {
+        max_message_bytes: response
+            .headers()
+            .get("x-codex-websocket-max-message-bytes")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok()),
         routing_affinity: crate::transport::routing_affinity::ChatGptRoutingAffinity::from_response(
             &connection.endpoint,
             response.headers(),
