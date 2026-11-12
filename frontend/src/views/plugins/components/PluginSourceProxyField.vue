@@ -14,7 +14,7 @@ const proxyId = defineModel<string>({ required: true })
 const { proxies, loading } = useProxyCatalog()
 const options = computed(() => [
   {
-    label: t('plugins.sourceProxy.noProxyDirectConnection'),
+    label: t('plugins.sourceProxy.deploymentDefault'),
     value: '',
   },
   ...proxies.value.map(proxy => ({
@@ -25,7 +25,7 @@ const options = computed(() => [
     description: proxy.endpoint,
     disabled: !proxy.enabled,
   })),
-  // 目录加载失败或代理已被删除时保留已选 ID，不能静默改为直连。
+  // 目录加载失败或代理已被删除时保留已选 ID，不能静默切换到部署默认出口。
   ...(proxyId.value && !proxies.value.some(proxy => proxy.id === proxyId.value)
     ? [
         {

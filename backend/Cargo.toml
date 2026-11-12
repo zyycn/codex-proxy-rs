@@ -5,6 +5,7 @@ members = [
     "crates/gateway-admin",
     "crates/gateway-api",
     "crates/gateway-core",
+    "crates/gateway-egress",
     "crates/gateway-host",
     "crates/gateway-plugin/runtime",
     "crates/gateway-plugin/sdk",

@@ -11,11 +11,11 @@ use chrono::Utc;
 use gateway_admin::{
     model::{MutationContext, Revision, proxies::*},
     ports::{
-        proxy::{ProxyProbe, ProxyStore},
+        proxy::{ProbeRoute, ProxyProbe, ProxyStore},
         store::{AdminStoreError, AdminStoreErrorKind, AdminStoreResult},
     },
 };
-use gateway_core::account::{OutboundProxy, ProviderAccountId};
+use gateway_core::account::ProviderAccountId;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -348,17 +348,17 @@ pub(super) struct SuccessfulProbe;
 
 #[async_trait]
 impl ProxyProbe for SuccessfulProbe {
-    async fn test(&self, proxy: Option<&OutboundProxy>, detect_location: bool) -> ProxyTestResult {
-        if let Some(proxy) = proxy {
+    async fn test(&self, proxy: ProbeRoute<'_>, detect_location: bool) -> ProxyTestResult {
+        if let ProbeRoute::Proxy(proxy) = proxy {
             assert_eq!(
                 proxy.expose_url(),
                 "http://test-user:private-password@proxy.example:8080/"
             );
         }
-        let exit_ip = if proxy.is_some() {
-            "203.0.113.2"
-        } else {
-            "203.0.113.3"
+        let exit_ip = match proxy {
+            ProbeRoute::Proxy(_) => "203.0.113.2",
+            ProbeRoute::Direct => "203.0.113.3",
+            ProbeRoute::Deployment => "203.0.113.4",
         };
         ProxyTestResult {
             location: if detect_location {
@@ -600,6 +600,15 @@ async fn proxy_probe_checks_direct_egress_without_changing_saved_proxies() {
             }
         );
     }
+    let (status, deployed) = request(
+        &fixture,
+        "/api/admin/proxies/probe",
+        Some(json!({"proxyUrl": "", "useDeploymentProxy": true})),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(deployed["data"]["exitIpv4"], "203.0.113.4");
     let (_, listed) = request(&fixture, "/api/admin/proxies", None, true).await;
     assert_eq!(listed["data"]["page"]["total"], 1);
     assert_eq!(
@@ -613,6 +622,10 @@ async fn proxy_probe_rejects_missing_or_invalid_addresses() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     for (body, expected) in [
+        (
+            json!({"proxyUrl": "http://proxy.example:8080", "useDeploymentProxy": true}),
+            StatusCode::BAD_REQUEST,
+        ),
         (json!({"proxyUrl": " "}), StatusCode::UNPROCESSABLE_ENTITY),
         (json!({"proxyUrl": null}), StatusCode::UNPROCESSABLE_ENTITY),
         (json!({}), StatusCode::UNPROCESSABLE_ENTITY),

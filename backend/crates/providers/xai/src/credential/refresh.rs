@@ -545,7 +545,7 @@ impl GrokCredentialRefreshService {
             {
                 return Err(GrokCredentialRefreshError::Preparation);
             }
-            // 直连发现失败不能阻止其他出口上的账号刷新
+            // 默认出口发现失败不能阻止其他出口上的账号刷新
             credentials.retain(|credential| {
                 if credential.outbound_proxy.is_some() {
                     return true;

@@ -82,17 +82,11 @@ pub(super) fn build_account_http_client_with_timeout(
     }
 
     // 连接池与 TCP、HTTP/2 保活沿用官方 Core 的 reqwest 默认值
-    let mut builder = Client::builder()
-        .no_proxy()
+    let builder = gateway_egress::http_client(proxy)
+        .map_err(|_| CustomCaError::ProxyConfiguration)?
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(timeout)
         .connector_layer(super::connection::ConnectionLayer);
-    if let Some(proxy) = proxy {
-        builder = builder.proxy(
-            reqwest::Proxy::all(proxy.expose_url())
-                .map_err(|_| CustomCaError::ProxyConfiguration)?,
-        );
-    }
     let client = build_reqwest_client_with_custom_ca(builder)?;
     let mut clients = cache
         .lock()
@@ -110,7 +104,7 @@ fn egress_key(account_id: &str, proxy: Option<&gateway_core::account::OutboundPr
     hash.update([0]);
     hash.update(
         proxy
-            .map_or("direct", |proxy| proxy.expose_url())
+            .map_or("deployment", |proxy| proxy.expose_url())
             .as_bytes(),
     );
     hex::encode(hash.finalize())
@@ -710,7 +704,7 @@ pub struct CodexBackendClient {
     pub(super) timezone: gateway_core::time::DeploymentTimeZone,
     pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(super) client: Client,
-    pub(super) direct_client: Client,
+    pub(super) default_client: Client,
     pub(super) base_url: String,
     pub(super) official_base_url: String,
     pub(super) protocol: OpenAiUpstreamProtocol,
@@ -748,7 +742,7 @@ impl CodexBackendClient {
             privacy: None,
             timezone: Default::default(),
             connection_budget: None,
-            direct_client: client.clone(),
+            default_client: client.clone(),
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
             outbound_proxy: None,
@@ -910,7 +904,7 @@ impl CodexBackendClient {
         client.client = if account.outbound_proxy().is_some() {
             build_account_http_client(account.id().as_str(), account.outbound_proxy())?
         } else {
-            self.direct_client.clone()
+            self.default_client.clone()
         };
         Ok(client)
     }

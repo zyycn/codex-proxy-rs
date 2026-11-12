@@ -80,9 +80,9 @@ impl CliReleaseService {
         state: CodexWireProfileState,
         cache: Arc<dyn ProviderArtifactProfileCachePort>,
     ) -> Result<Self, CliReleaseError> {
-        let client = Client::builder()
+        let client = gateway_egress::http_client(None)
+            .map_err(|_| CliReleaseError::Fetch)?
             .https_only(true)
-            .no_proxy()
             .redirect(Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))

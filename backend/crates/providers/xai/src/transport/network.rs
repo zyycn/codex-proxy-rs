@@ -694,6 +694,10 @@ fn build_official_client(
     timeout: Option<Duration>,
     proxy: Option<&OutboundProxy>,
 ) -> Result<Client, GrokReqwestTransportBuildError> {
+    let target = Url::parse(&format!("https://{}", dns_policy.allowed_host))
+        .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)?;
+    let proxy = gateway_egress::for_destination(proxy, &target)
+        .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)?;
     let mut builder = Client::builder()
         // 工作区可能同时启用 native-tls；与官方 Grok CLI 一样显式固定 rustls，避免握手画像漂移
         .use_rustls_tls()

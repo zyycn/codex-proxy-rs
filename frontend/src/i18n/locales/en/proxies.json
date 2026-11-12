@@ -11,8 +11,8 @@
       "removeAction": "Remove account from this proxy",
       "removeAssociatedAccount": "Remove associated account",
       "remove": "Remove",
-      "removeDescription": "Removing “{name}” from “{removeProxyName}” will switch the account to a direct connection",
-      "removed": "Account removed from this proxy, using a direct connection"
+      "removeDescription": "Removing “{name}” from “{removeProxyName}” will switch the account to the deployment default",
+      "removed": "Account removed from this proxy, using the deployment default"
     },
     "actions": {
       "test": "Test",
@@ -35,7 +35,7 @@
       "invalidConnectionLimit": "Connection limit must be an integer from 0 to 4,294,967,295",
       "saved": "Proxy saved",
       "proxyEnabled": "Proxy enabled",
-      "disabled": "Proxy disabled, linked accounts now use direct connections",
+      "disabled": "Proxy disabled, linked accounts now use the deployment default",
       "deleted": "Proxy deleted"
     },
     "batchCreate": {
@@ -158,9 +158,9 @@
       "notTested": "Not tested",
       "viewAccountsAssociatedWith": "View the {count} accounts associated with {name}",
       "disable": "Disable “{name}”?",
-      "disableDescription": "New requests from linked accounts will use direct connections, proxy settings and bindings are kept and resume when reenabled",
+      "disableDescription": "New requests from linked accounts will use the deployment default, proxy settings and bindings are kept and resume when reenabled",
       "delete": "Delete “{name}”?",
-      "deleteDescription": "Linked accounts will be unlinked and new requests will use direct connections"
+      "deleteDescription": "Linked accounts will be unlinked and new requests will use the deployment default"
     },
     "assignment": {
       "title": "Assign accounts",

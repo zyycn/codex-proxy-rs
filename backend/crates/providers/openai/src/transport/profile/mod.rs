@@ -555,13 +555,13 @@ pub struct OfficialCodexDesktopReleaseTransport {
 }
 
 impl OfficialCodexDesktopReleaseTransport {
-    /// 构造禁用环境代理和 redirect 的官方 HTTPS transport
+    /// 构造使用部署出口且禁用 redirect 的官方 HTTPS transport
     pub fn new() -> Result<Self, CodexDesktopReleaseError> {
         let endpoint = Url::parse(CODEX_DESKTOP_APPCAST_URL)
             .map_err(|_| CodexDesktopReleaseError::InvalidEndpoint)?;
-        let client = Client::builder()
+        let client = gateway_egress::http_client(None)
+            .map_err(|_| CodexDesktopReleaseError::ClientInitialization)?
             .https_only(true)
-            .no_proxy()
             .redirect(Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(APPCAST_TIMEOUT)

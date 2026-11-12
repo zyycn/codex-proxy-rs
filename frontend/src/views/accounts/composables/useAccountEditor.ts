@@ -108,7 +108,7 @@ export function useAccountEditor(options: {
         notes: notes.value,
         outboundProxyId: proxyMode.value === 'preserve'
           ? undefined
-          : proxyMode.value === 'direct'
+          : proxyMode.value === 'deployment'
             ? ''
             : proxyId.value.trim(),
         enabled: schedulingEnabled.value,

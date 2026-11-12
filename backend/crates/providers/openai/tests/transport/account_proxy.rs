@@ -454,3 +454,55 @@ async fn socks_proxy_flush_contract_coalesces_greeting_without_losing_auth_or_co
         }
     }
 }
+
+#[tokio::test]
+async fn unbound_websocket_uses_authenticated_environment_proxy() {
+    if std::env::var_os("CPR_TEST_WS_ENV_ROUTE").is_some() {
+        let base = CodexBackendClient::new(
+            provider_openai::transport::build_reqwest_client().unwrap(),
+            "http://upstream.invalid",
+            test_wire_profile(),
+        )
+        .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_mins(1))));
+        let mut request = codex_request("gpt-5.5", "", Vec::new());
+        request.set_previous_response_id(Some("resp_previous".to_owned()));
+        request.previous_response_scope = Some(PreviousResponseScope::Persisted);
+        let response = timeout(
+            Duration::from_secs(5),
+            base.create_response(&request, request_context("env-ws", None)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(response.body.contains("resp_env"));
+        return;
+    }
+    let (proxy, observation) = websocket_exit("resp_env").await;
+    let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "transport::account_proxy::unbound_websocket_uses_authenticated_environment_proxy",
+        ])
+        .env("CPR_TEST_WS_ENV_ROUTE", "1")
+        .env("ALL_PROXY", proxy)
+        .env("HTTP_PROXY", "")
+        .env("HTTPS_PROXY", "")
+        .env("NO_PROXY", "localhost")
+        .env_remove("REQUEST_METHOD")
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let head = timeout(Duration::from_secs(2), observation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        read_header_value(&head, "Proxy-Authorization"),
+        Some("Basic dXNlcjpwYXNz")
+    );
+}

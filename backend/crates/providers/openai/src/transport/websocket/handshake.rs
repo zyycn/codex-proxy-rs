@@ -1,14 +1,12 @@
 //! Responses WebSocket endpoint、opening handshake 与首帧发送
 
-use std::time::Duration;
+use std::{error::Error as _, io, time::Duration};
 
 use bytes::Bytes;
 use gateway_core::error::ProxyConnectionHint;
 use gateway_protocol::openai::events;
 use tokio::{io::BufWriter, time::timeout};
-use tokio_tungstenite::{
-    Connector, MaybeTlsStream, client_async_tls_with_config, connect_async_tls_with_config,
-};
+use tokio_tungstenite::{Connector, MaybeTlsStream, client_async_tls_with_config};
 use tungstenite::{
     self, Message,
     extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
@@ -238,22 +236,6 @@ async fn connect_websocket(
             crate::transport::connection::acquire().await
         }
         .map_err(tungstenite::Error::Io)?;
-        // 保留原生直连握手，显式出口不继承全局代理
-        if connection.outbound_proxy.is_none()
-            && matches!(
-                tungstenite::proxy::ProxyConfig::from_env(request.uri()),
-                Ok(None)
-            )
-        {
-            let (websocket, response) = connect_async_tls_with_config(
-                request,
-                Some(websocket_config(connection)),
-                false,
-                connector,
-            )
-            .await?;
-            return Ok((Box::new(websocket) as RawWsStream, response));
-        }
         let stream = dial_account(connection, &mut proxy_hint).await?;
         match stream {
             MaybeTlsStream::Plain(tcp) => {
@@ -310,10 +292,14 @@ async fn dial_account(
         _ => host.to_owned(),
     };
     let port = endpoint.port_or_known_default().ok_or_else(invalid)?;
-    let Some(proxy) = connection.outbound_proxy.as_ref() else {
-        return Ok(MaybeTlsStream::Plain(connect_tcp(host, port).await?));
-    };
     *proxy_hint = Some(ProxyConnectionHint::InvalidConfiguration);
+    let Some(proxy) =
+        gateway_egress::for_destination(connection.outbound_proxy.as_ref(), &endpoint)
+            .map_err(|_| invalid())?
+    else {
+        *proxy_hint = None;
+        return Ok(MaybeTlsStream::Plain(connect_tcp(&dns_host, port).await?));
+    };
     let mut proxy_url = url::Url::parse(proxy.expose_url()).map_err(|_| invalid())?;
     let tls_proxy = proxy_url.scheme() == "https";
     let proxy_port = proxy_url.port_or_known_default().ok_or_else(invalid)?;
@@ -368,7 +354,7 @@ async fn dial_account(
     Ok(stream.into_inner())
 }
 
-async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tungstenite::Error> {
+async fn connect_tcp(host: &str, port: u16) -> io::Result<tokio::net::TcpStream> {
     use hyper_util::client::legacy::connect::HttpConnector;
     use tower_service::Service;
 
@@ -379,14 +365,20 @@ async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tun
     );
     let uri = format!("http://{authority}")
         .parse::<hyper::Uri>()
-        .map_err(|_| tungstenite::Error::Io(std::io::Error::other("invalid egress endpoint")))?;
+        .map_err(|_| io::Error::other("invalid egress endpoint"))?;
     let mut connector = HttpConnector::new();
     connector
         .call(uri)
         .await
         .map(|stream| stream.into_inner())
-        .map_err(|_| {
-            tungstenite::Error::Io(std::io::Error::other("account WebSocket connection failed"))
+        .map_err(|error| {
+            // 保留系统错误码或 I/O 类型，不把 Hyper 记录的目标地址带入诊断
+            let Some(cause) = error.source().and_then(|e| e.downcast_ref::<io::Error>()) else {
+                return io::Error::other("account WebSocket connection failed");
+            };
+            cause
+                .raw_os_error()
+                .map_or_else(|| cause.kind().into(), io::Error::from_raw_os_error)
         })
 }
 

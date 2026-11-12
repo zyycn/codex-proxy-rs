@@ -658,7 +658,7 @@ where
     let result = state
         .admin_services()
         .proxies()
-        .probe(None, true)
+        .probe(gateway_admin::ports::proxy::ProbeRoute::Direct, true)
         .await
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(

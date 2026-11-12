@@ -102,6 +102,8 @@ struct TestRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProbeRequest {
     #[serde(default)]
+    use_deployment_proxy: bool,
+    #[serde(default)]
     detect_location: bool,
     proxy_url: AccountProxyUpdate,
 }
@@ -537,10 +539,21 @@ async fn probe<S>(
 where
     S: SessionState + Send + Sync,
 {
+    use gateway_admin::ports::proxy::ProbeRoute;
+    let route = match (request.proxy_url.0.as_ref(), request.use_deployment_proxy) {
+        (Some(_), true) => {
+            return Err(AdminError::bad_request(
+                "指定代理地址时不能同时选择部署默认出口",
+            ));
+        }
+        (Some(proxy), false) => ProbeRoute::Proxy(proxy),
+        (None, true) => ProbeRoute::Deployment,
+        (None, false) => ProbeRoute::Direct,
+    };
     let result = state
         .admin_services()
         .proxies()
-        .probe(request.proxy_url.0.as_ref(), request.detect_location)
+        .probe(route, request.detect_location)
         .await
         .map_err(map_error)?;
     Ok(AdminResponse::new(

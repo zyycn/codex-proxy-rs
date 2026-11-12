@@ -11,8 +11,8 @@
       "removeAction": "從當前代理移除賬號",
       "removeAssociatedAccount": "移除關聯賬號",
       "remove": "移除",
-      "removeDescription": "將“{name}”從“{removeProxyName}”移除後，該賬號將改爲直連",
-      "removed": "賬號已移出當前代理，改爲直連"
+      "removeDescription": "將“{name}”從“{removeProxyName}”移除後，該賬號將使用部署預設出口",
+      "removed": "賬號已移出當前代理，使用部署預設出口"
     },
     "actions": {
       "test": "測試代理",
@@ -35,7 +35,7 @@
       "invalidConnectionLimit": "連接上限須爲 0 到 4294967295 之間的整數",
       "saved": "代理已保存",
       "proxyEnabled": "代理已啓用",
-      "disabled": "代理已禁用，關聯賬號已改爲直連",
+      "disabled": "代理已禁用，關聯賬號已使用部署預設出口",
       "deleted": "代理已刪除"
     },
     "batchCreate": {
@@ -158,9 +158,9 @@
       "notTested": "未測試",
       "viewAccountsAssociatedWith": "查看 {name} 的 {count} 個關聯賬號",
       "disable": "確定禁用“{name}”嗎？",
-      "disableDescription": "關聯賬號的新請求將改爲直連，代理配置和綁定會保留，重新啓用後恢復使用",
+      "disableDescription": "關聯賬號的新請求將使用部署預設出口，代理配置和綁定會保留，重新啓用後恢復使用",
       "delete": "確定刪除“{name}”嗎？",
-      "deleteDescription": "將自動解除關聯賬號，關聯賬號的新請求將改爲直連"
+      "deleteDescription": "將自動解除關聯賬號，關聯賬號的新請求將使用部署預設出口"
     },
     "assignment": {
       "title": "分配賬號",

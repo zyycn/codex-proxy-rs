@@ -1,6 +1,6 @@
 //! 验证代理及直连探测的双栈地址、认证、证书与失败边界
 
-use gateway_admin::ports::proxy::ProxyProbe;
+use gateway_admin::ports::proxy::{ProbeRoute, ProxyProbe};
 use gateway_core::account::OutboundProxy;
 use gateway_host::proxy_probe::HttpProxyProbe;
 use serde_json::json;
@@ -28,7 +28,7 @@ async fn proxy_probe_supports_ipv4_and_ipv6_proxies_and_exit_addresses() {
             OutboundProxy::parse(&format!("http://user:password@{}", proxy_server.address()))
                 .unwrap();
         let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
-            .test(Some(&proxy), false)
+            .test(ProbeRoute::Proxy(&proxy), false)
             .await;
         assert!(
             result.success,
@@ -55,7 +55,7 @@ async fn proxy_probe_rejects_auth_errors_redirects_and_invalid_or_oversized_resp
             .await;
         let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
             .test(
-                Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+                ProbeRoute::Proxy(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
                 false,
             )
             .await;
@@ -76,7 +76,7 @@ async fn unavailable_proxy_never_falls_back_to_direct_connection() {
     let proxy = OutboundProxy::parse(&format!("http://{}", unused.local_addr().unwrap())).unwrap();
     drop(unused);
     let result = HttpProxyProbe::new(target.uri())
-        .test(Some(&proxy), false)
+        .test(ProbeRoute::Proxy(&proxy), false)
         .await;
     assert!(!result.success);
 }
@@ -91,7 +91,10 @@ async fn invalid_certificate_configuration_should_not_fall_back_or_expose_detail
         .await;
     let result = HttpProxyProbe::new(target.uri())
         .with_client_builder(|_| Err("private-certificate-path"))
-        .test(Some(&OutboundProxy::parse(&target.uri()).unwrap()), false)
+        .test(
+            ProbeRoute::Proxy(&OutboundProxy::parse(&target.uri()).unwrap()),
+            false,
+        )
         .await;
     assert!(!result.success);
     assert!(!result.message.contains("private-certificate-path"));
@@ -117,7 +120,7 @@ async fn dual_stack_proxy_probe_reports_both_addresses_when_available() {
         format!("{}/v4", proxy_server.uri()),
         format!("{}/v6", proxy_server.uri()),
     )
-    .test(Some(&proxy), false)
+    .test(ProbeRoute::Proxy(&proxy), false)
     .await;
 
     assert!(result.success);
@@ -146,7 +149,7 @@ async fn dual_stack_proxy_probe_reports_single_stack_when_only_one_succeeds() {
         format!("{}/v4", proxy_server.uri()),
         format!("{}/v6", proxy_server.uri()),
     )
-    .test(Some(&proxy), false)
+    .test(ProbeRoute::Proxy(&proxy), false)
     .await;
 
     assert!(result.success);
@@ -178,7 +181,7 @@ async fn dual_stack_latency_measures_the_selected_exit_without_the_other_family_
             format!("{}/v4", server.uri()),
             format!("{}/v6", server.uri()),
         )
-        .test(None, false)
+        .test(ProbeRoute::Direct, false)
         .await;
         assert!(result.success);
         assert_eq!(result.exit_ipv4.is_some(), working_family == "v4");
@@ -229,7 +232,7 @@ async fn direct_location_uses_verified_addresses_and_rejects_conflicting_timezon
             format!("{}/v6", server.uri()),
         )
         .with_location_endpoint(format!("{}/geo", server.uri()))
-        .test(None, true)
+        .test(ProbeRoute::Direct, true)
         .await;
         assert!(result.success);
         if v6_timezone == Some("America/New_York") {
@@ -261,7 +264,7 @@ async fn direct_location_failure_does_not_retry_the_same_path_or_return_a_locati
         .await;
     let result = HttpProxyProbe::new(format!("{}/ip", server.uri()))
         .with_location_endpoint(format!("{}/geo", server.uri()))
-        .test(None, true)
+        .test(ProbeRoute::Direct, true)
         .await;
     assert_eq!(
         result.location,
@@ -294,7 +297,7 @@ async fn location_lookup_uses_verified_exit_ip_without_requiring_proxy_access_to
     let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
         .with_location_endpoint(format!("{}/geo", location_server.uri()))
         .test(
-            Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+            ProbeRoute::Proxy(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
             true,
         )
         .await;
@@ -333,7 +336,7 @@ async fn location_lookup_uses_probed_ips_through_the_proxy_and_checks_both_timez
         )
         .with_location_endpoint("http://unresolvable.invalid/geo/")
         .test(
-            Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+            ProbeRoute::Proxy(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
             true,
         )
         .await;
@@ -379,7 +382,7 @@ async fn geolocation_failure_never_turns_connectivity_into_failure_or_uses_unver
         let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
             .with_location_endpoint("http://unresolvable.invalid/geo")
             .test(
-                Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+                ProbeRoute::Proxy(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
                 true,
             )
             .await;
@@ -407,7 +410,7 @@ async fn disabled_geolocation_never_calls_the_location_service() {
     let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
         .with_location_endpoint("http://unresolvable.invalid/geo")
         .test(
-            Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+            ProbeRoute::Proxy(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
             false,
         )
         .await;

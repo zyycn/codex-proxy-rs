@@ -38,7 +38,7 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     step: 'settings',
     mode: 'oauth',
     importTexts: { access_token: '', refresh_token: '', json: '' },
-    proxyMode: 'direct',
+    proxyMode: 'deployment',
     proxyId: '',
   }
 }

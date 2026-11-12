@@ -4389,7 +4389,7 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
         if let Some(rejection) = rejection {
             rejection.await.unwrap();
         }
-        if proxy_hint.is_none() {
+        if matches!(proxy_hint, None | Some(ProxyConnectionHint::Unreachable)) {
             assert_eq!(diagnostic.code(), Some("connection_refused"));
         }
         assert_eq!(diagnostic.stage(), Some("connect"));

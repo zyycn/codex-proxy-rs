@@ -146,7 +146,7 @@ pub struct AccountRecord {
 }
 
 impl AccountRecord {
-    /// 配置保留绑定，执行请求时禁用代理按直连处理
+    /// 配置保留绑定，执行请求时禁用代理使用部署默认出口
     #[must_use]
     pub fn effective_outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
         self.outbound_proxy

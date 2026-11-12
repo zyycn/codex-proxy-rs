@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use gateway_admin::{
     model::{MutationContext, Revision, proxies::*},
     ports::{
-        proxy::{ProxyProbe, ProxyStore},
+        proxy::{ProbeRoute, ProxyProbe, ProxyStore},
         store::AdminStoreResult,
     },
 };
@@ -194,7 +194,7 @@ async fn plugin_proxy_resolution_requires_enabled_configuration_without_account_
 
 #[async_trait]
 impl ProxyProbe for TestProxies {
-    async fn test(&self, _: Option<&OutboundProxy>, _: bool) -> ProxyTestResult {
+    async fn test(&self, _: ProbeRoute<'_>, _: bool) -> ProxyTestResult {
         panic!("unexpected proxy probe")
     }
 }
@@ -456,7 +456,7 @@ impl Drop for ActiveProbe<'_> {
 
 #[async_trait]
 impl ProxyProbe for GatedProxyProbe {
-    async fn test(&self, _: Option<&OutboundProxy>, _: bool) -> ProxyTestResult {
+    async fn test(&self, _: ProbeRoute<'_>, _: bool) -> ProxyTestResult {
         self.active
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let _active = ActiveProbe(&self.active);
@@ -526,8 +526,8 @@ async fn batch_tests_share_capacity_preserve_order_and_release_slots_on_cancella
         _ = async { receiver.recv().await.unwrap(); receiver.recv().await.unwrap(); } => {}
     }
     assert_eq!(probe.active.load(Ordering::Relaxed), 2);
-    let mut single_a = Box::pin(services.proxies().probe(None, false));
-    let mut single_b = Box::pin(services.proxies().probe(None, false));
+    let mut single_a = Box::pin(services.proxies().probe(ProbeRoute::Direct, false));
+    let mut single_b = Box::pin(services.proxies().probe(ProbeRoute::Direct, false));
     tokio::select! {
         _ = &mut batch => panic!("batch unexpectedly finished"),
         _ = &mut single_a => panic!("single probe unexpectedly finished"),
@@ -538,7 +538,7 @@ async fn batch_tests_share_capacity_preserve_order_and_release_slots_on_cancella
     assert_eq!(
         services
             .proxies()
-            .probe(None, false)
+            .probe(ProbeRoute::Direct, false)
             .await
             .unwrap_err()
             .kind(),
