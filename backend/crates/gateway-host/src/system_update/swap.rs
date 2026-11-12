@@ -270,10 +270,9 @@ fn move_dir(from: &Path, to: &Path) -> io::Result<()> {
         Ok(()) => Ok(()),
         Err(error)
             if error.kind() == io::ErrorKind::CrossesDevices
-                || (cfg!(target_os = "macos")
-                    && error.kind() == io::ErrorKind::PermissionDenied) =>
+                || (cfg!(unix) && error.kind() == io::ErrorKind::PermissionDenied) =>
         {
-            // macOS 移动只读目录可能被拒绝，复用保留权限的复制路径
+            // Unix 跨父目录移动只读目录可能被拒绝，复用保留权限的复制路径
             // 仅清理源目录时放开写权限，备份与恢复后的目录仍保留原权限
             if let Err(copy_error) = copy_dir_all(from, to) {
                 let _ = remove_dir_all(to);
