@@ -4,6 +4,7 @@ use gateway_core::metering::{CalculatedCost, Usage};
 
 use super::*;
 use crate::credential::CodexSelectionModel;
+use crate::transport::CodexTransportDecision;
 use gateway_core::operation::RawJsonPayload;
 
 impl CodexProvider {
@@ -925,6 +926,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             return;
         }
         if let Some(capture) = session_capture.as_mut() {
+            capture.oversized_http = response.transport_metrics.decision
+                == Some(CodexTransportDecision::Http2WebSocketMessageTooLarge);
             capture.continuation_scope = Some(if capture.response_store {
                 OpenAiContinuationScope::Persisted
             } else if response.transport == CodexBackendTransport::WebSocket

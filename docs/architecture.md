@@ -623,8 +623,8 @@ xAI Provider 负责 Codex custom 工具与 Grok function 工具的双向转换�
 客户端配置示例维护在 [部署文档](../deploy/README.md#客户端配置)
 
 客户端到代理与代理到上游的传输选择相互独立。客户端的 `supports_websockets = false`
-不禁止 Provider 使用上游 WebSocket。OpenAI Provider 按线程独立维护大包回退与 WS 失败预算，
-以终态会话更新提示下游重连；API 负责确认成功写出和入站队列空闲。响应终态前的 Close 1000 仍视为失败，
+不禁止 Provider 使用上游 WebSocket。OpenAI Provider 按线程维护 WS 失败预算，消息大小上限随上游
+物理连接保存。超限回退以终态会话更新提示下游重连；API 负责确认成功写出和入站队列空闲。响应终态前的 Close 1000 仍视为失败，
 后续恢复请求成功也不改写原失败请求的结果
 
 ## 6. 路由、账号范围与 continuation
@@ -692,9 +692,9 @@ Core 定义、校验并统一拥有评分规则，内置选号与诊断复用同
 Continuation 受原请求的 Client Key、账号范围、Provider 和发送/交付边界约束：
 
 - native continuation 固定创建它的 Provider 与账号
-- OpenAI Provider 的 OAuth 大包传输预检在发送前执行，新链可选择 HTTP；大 connection-local
+- OpenAI Provider 在发送前按上游握手声明的消息大小上限检查最终出站帧，新链可选择 HTTP；超限的 connection-local
   续接和 HTTP `store=false` 后不可原生续写的 WS 增量返回 `ClientReplayRequired`，由客户端重发
-  完整历史。体积测量复用 WS 编码结构，Provider session state 仍只携带元数据，不保存 transcript
+  完整历史。预检拒绝先释放连接及租约，不消耗 WS 故障预算；Provider session state 只携带元数据，不保存 transcript
 - OpenAI 在有效输出交付前收到可安全重放的明确额度拒绝时，先隔离账号，再投影 `ClientReplayRequired`；
   丢弃未交付的原错误帧，由客户端提交完整历史开启新链，不把原增量输入交给其他账号。
   真实错误分类、状态码、发送状态和上游诊断保持不变，客户端合同见 [Responses API](api.md#3-模型数据面与模型目录)

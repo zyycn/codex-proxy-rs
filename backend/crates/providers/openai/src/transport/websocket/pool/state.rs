@@ -194,6 +194,7 @@ impl WebSocketPoolState {
 
 #[derive(Clone)]
 pub(crate) struct CodexWebSocketConnectionMetadata {
+    pub(crate) max_message_bytes: Option<usize>,
     pub(crate) routing_affinity: Option<crate::transport::routing_affinity::ChatGptRoutingAffinity>,
     pub(crate) turn_state: Option<String>,
     pub(crate) set_cookie_headers: Vec<String>,
