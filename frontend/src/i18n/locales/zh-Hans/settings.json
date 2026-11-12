@@ -150,6 +150,14 @@
       "unitLabel": "USD / 百万 Token"
     },
     "scheduling": {
+      "runtimeGroup": "运行状态",
+      "quotaGroup": "额度",
+      "queueGroup": "排队",
+      "windowMode": "重置窗口系数",
+      "windowHelp": "系数越大，该窗口越影响重置评分。设为 0 可忽略该窗口。",
+      "fiveHour": "5 小时",
+      "weekly": "周",
+      "monthly": "月",
       "roundRobin": "轮询",
       "autoReviewSlotsHelp": "仅对 Codex 账号生效，普通并发为 10、审批名额为 3 时，两类请求分别最多运行 10 个和 3 个，互不占用名额",
       "autoReviewQueueHelp": "开启独立额度后，审批请求单独排队，可超过账号队列容量，仍受总等待容量、排队超时与密钥限额约束",

@@ -200,6 +200,7 @@ fn scheduling_state_preserves_provider_neutral_signals() {
             in_flight: 2,
             last_started_at: None,
             quota_reset_at: None,
+            quota_reset_windows: None,
             quota_remaining_rank: Some(7),
             cooldown: None,
             failure_rate_basis_points: Some(125),

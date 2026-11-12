@@ -256,6 +256,15 @@ pub struct SmartSchedulingConfig {
     pub latency_weight: f64,
     pub reset_weight: f64,
     pub queue_weight: f64,
+    #[serde(default)]
+    pub reset_window_weights: ResetWindowWeights,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResetWindowWeights {
+    pub five_hour: f64,
+    pub weekly: f64,
+    pub monthly: f64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

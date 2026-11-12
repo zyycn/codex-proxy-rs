@@ -268,7 +268,7 @@ async fn smart_settings_round_trip_and_invalid_updates_leave_the_saved_value_int
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let mut body = update_body();
-    let custom = json!({"loadWeight": 2.0, "quotaWeight": 0.0, "healthWeight": 1.0, "latencyWeight": 0.5, "resetWeight": 1.2, "queueWeight": 2.3});
+    let custom = json!({"loadWeight": 2.0, "quotaWeight": 0.0, "healthWeight": 1.0, "latencyWeight": 0.5, "resetWeight": 1.2, "queueWeight": 2.3, "resetWindowWeights":{"fiveHour":0.0,"weekly":1.5,"monthly":0.0}});
     body["smartScheduling"] = custom.clone();
     let response = app(fixture.state())
         .oneshot(request(
@@ -300,6 +300,19 @@ async fn smart_settings_round_trip_and_invalid_updates_leave_the_saved_value_int
         let mut missing = custom.clone();
         missing.as_object_mut().unwrap().remove(field);
         invalid_values.push(missing);
+    }
+    for windows in [
+        json!({}),
+        json!({"weekly":1}),
+        json!(null),
+        json!({"fiveHour":0,"weekly":1.23,"monthly":0}),
+        json!({"fiveHour":-1,"weekly":1,"monthly":0}),
+        json!({"fiveHour":0,"weekly":1,"monthly":10.1}),
+        json!({"fiveHour":0,"weekly":1,"monthly":0,"daily":1}),
+    ] {
+        let mut invalid = custom.clone();
+        invalid["resetWindowWeights"] = windows;
+        invalid_values.push(invalid);
     }
     for invalid in invalid_values {
         body["smartScheduling"] = invalid;

@@ -86,6 +86,7 @@ async fn old_weekly_quota_should_outweigh_one_in_flight_title_request() {
                 in_flight: u32::from(account.id().as_str() == "acct_74"),
                 last_started_at: None,
                 quota_reset_at: None,
+                quota_reset_windows: None,
                 quota_remaining_rank: None,
                 cooldown: None,
                 failure_rate_basis_points: None,
@@ -279,4 +280,89 @@ async fn reset_window_should_not_clear_confirmed_exhaustion() {
             .access(),
         QuotaAccessState::Exhausted
     );
+}
+
+#[tokio::test]
+async fn weekly_window_prefers_the_first_weekly_reset_independently_of_short_resets() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let now = UNIX_EPOCH + Duration::from_secs(timestamp(SystemTime::now()));
+    let mut accounts = Vec::new();
+    // 三个账号的短窗口与周窗口顺序相反，确保选择的是配置的窗口而非最早时间
+    for (id, hour, day) in [("acct_one", 1, 2), ("acct_two", 2, 3), ("acct_three", 3, 1)] {
+        accounts.push(persist_snapshot(&store, id, now, json!({
+            "primary_window": {"used_percent":10,"limit_window_seconds":18000,"reset_at":timestamp(now) + hour * 3600u64},
+            "secondary_window": {"used_percent":10,"limit_window_seconds":604800,"reset_at":timestamp(now) + day * 86400u64}
+        })).await);
+    }
+    let service = quota_service(&store);
+    service.prepare_scheduling(&accounts).await;
+    let candidates = accounts
+        .into_iter()
+        .map(|account| AccountCandidate {
+            inherited_concurrency: None,
+            signals: AccountRuntimeSignals {
+                in_flight: 0,
+                last_started_at: None,
+                quota_reset_at: None,
+                quota_reset_windows: None,
+                quota_remaining_rank: None,
+                cooldown: None,
+                failure_rate_basis_points: None,
+                first_output_latency_ms: None,
+            }
+            .with_provider_quota(service.scheduling_signals(&account)),
+            account,
+        })
+        .collect::<Vec<_>>();
+    let mut config = json!({"loadWeight":0,"quotaWeight":0,"healthWeight":0,"latencyWeight":0,"resetWeight":1,"queueWeight":0});
+    let policy = |strategy, config: &Value| {
+        AccountSelectionPolicy::new(strategy, NonZeroU32::new(3).unwrap())
+            .with_smart_scheduling(serde_json::from_value(config.clone()).unwrap())
+    };
+    let mut context = AccountSelectionContext {
+        policy: policy(RotationStrategy::Smart, &config),
+        now,
+        excluded_accounts: Default::default(),
+        busy_accounts: Default::default(),
+        preferred_account: None,
+        preferred_account_overrides_weight: false,
+        round_robin_cursor: 0,
+        eligibility: AccountEligibilityPolicy::Enforce,
+        account_scope: None,
+        reserved_concurrency: 0,
+    };
+    let selected = |pool: &[AccountCandidate], context: &AccountSelectionContext| {
+        AccountSelector
+            .select(pool, context)
+            .unwrap()
+            .candidate()
+            .account
+            .id()
+            .as_str()
+            .to_owned()
+    };
+    config["resetWindowWeights"] = json!({"fiveHour":1,"weekly":0,"monthly":0});
+    context.policy = policy(RotationStrategy::Smart, &config);
+    assert_eq!(selected(&candidates, &context), "acct_one");
+    config["resetWindowWeights"] = json!({"fiveHour":0,"weekly":1,"monthly":0});
+    context.policy = policy(RotationStrategy::Smart, &config);
+    assert_eq!(selected(&candidates, &context), "acct_three");
+    let trace = gateway_core::diagnostics::TraceContext::new("req_weekly");
+    trace.account_selection(&candidates, &context, None);
+    let snapshot = trace.snapshot().unwrap();
+    let data = &snapshot["events"][0]["data"];
+    for (candidate, expected) in
+        data["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip([1.0 / 3.0, 0.25, 0.5])
+    {
+        assert!((candidate["smartScore"].as_f64().unwrap() - expected).abs() < 1e-10);
+    }
+    assert!(1.0 / 3.0 - 0.25 > data["smartScoreTolerance"].as_f64().unwrap());
+    context.round_robin_cursor = 1;
+    assert_eq!(selected(&candidates[..2], &context), "acct_one");
+    context.policy = policy(RotationStrategy::QuotaResetPriority, &config);
+    assert_eq!(selected(&candidates, &context), "acct_one");
 }

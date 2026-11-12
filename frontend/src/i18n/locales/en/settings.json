@@ -150,6 +150,14 @@
       "unitLabel": "USD / 1M tokens"
     },
     "scheduling": {
+      "runtimeGroup": "Runtime signals",
+      "quotaGroup": "Quota",
+      "queueGroup": "Queue",
+      "windowMode": "Reset window weights",
+      "windowHelp": "Higher weights give a window more influence on the reset score. Set a weight to 0 to ignore that window.",
+      "fiveHour": "5 hours",
+      "weekly": "Weekly",
+      "monthly": "Monthly",
       "roundRobin": "Round robin",
       "autoReviewSlotsHelp": "Applies to Codex accounts only: with a regular concurrency limit of 10 and 3 auto review slots, up to 10 regular requests and 3 auto review requests can run independently",
       "autoReviewQueueHelp": "With dedicated slots, auto review uses a separate queue that may exceed account queue capacity, while total queue capacity, queue timeout, and API key limits still apply",

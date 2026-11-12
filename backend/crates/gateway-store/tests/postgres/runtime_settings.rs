@@ -126,21 +126,23 @@ async fn smart_settings_round_trip_publish_and_restore_database_defaults() {
         SmartSchedulingConfig::default()
     );
     let mut update = settings_with_margin(3600);
-    update.values.smart_scheduling =
-        SmartSchedulingConfig::new([0.0, 2.0, 1.0, 0.5, 1.2, 2.3]).unwrap();
-    let expected = update.values.smart_scheduling;
+    let expected = serde_json::json!({
+        "loadWeight": 0.0, "quotaWeight": 2.0, "healthWeight": 1.0, "latencyWeight": 0.5, "resetWeight": 1.2, "queueWeight": 2.3,
+        "resetWindowWeights": {"fiveHour":2.0,"weekly":8.0,"monthly":0.0}
+    });
+    update.values.smart_scheduling = serde_json::from_value(expected.clone()).unwrap();
     repository.update_runtime_settings(update).await.unwrap();
     let reloaded = repository.load_runtime_settings().await.unwrap();
-    assert_eq!(reloaded.values.smart_scheduling, expected);
+    assert_eq!(
+        serde_json::to_value(reloaded.values.smart_scheduling).unwrap(),
+        expected
+    );
     let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
         .load_runtime_snapshot()
         .await
         .unwrap();
     let snapshot_values = serde_json::to_value(&snapshot.settings).unwrap();
-    assert_eq!(
-        snapshot_values["smart_scheduling"],
-        serde_json::to_value(expected).unwrap()
-    );
+    assert_eq!(snapshot_values["smart_scheduling"], expected);
     assert!(snapshot.config_revision > before.config_revision);
     sqlx::query("update runtime_settings set smart_scheduling_json = default where id = 1")
         .execute(&database.pool)

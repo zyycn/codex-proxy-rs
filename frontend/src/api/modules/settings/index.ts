@@ -30,6 +30,7 @@ export interface SmartSchedulingConfig {
   latencyWeight: number
   resetWeight: number
   queueWeight: number
+  resetWindowWeights: { fiveHour: number, weekly: number, monthly: number }
 }
 
 export interface RuntimeSettings {

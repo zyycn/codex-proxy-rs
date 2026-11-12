@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use gateway_core::account::{
-    AccountQuotaSignals, CredentialRevision, ProviderAccountId, QuotaEvidence, QuotaObservation,
-    QuotaState,
+    AccountQuotaResetWindow, AccountQuotaSignals, CredentialRevision, ProviderAccountId,
+    QuotaEvidence, QuotaObservation, QuotaResetPeriod, QuotaState,
 };
 use gateway_protocol::openai::events::{CreditsSnapshot, parse_credits_from_object};
 use serde_json::{Map, Value};
@@ -371,6 +371,7 @@ pub(crate) fn quota_scheduling_signals(
     let now = SystemTime::now();
     let mut remaining_rank: Option<u64> = None;
     let mut reset_at: Option<SystemTime> = None;
+    let mut reset_windows = Vec::new();
     for window in &snapshot.windows {
         if quota_window_ttl(window, snapshot.observed_at(), now).is_none() {
             continue;
@@ -385,10 +386,22 @@ pub(crate) fn quota_scheduling_signals(
         }
         if let Some(reset) = window_reset_at.filter(|reset| *reset > now) {
             reset_at = Some(reset_at.map_or(reset, |current| current.min(reset)));
+            if window.is_account_wide() {
+                let period = match window.kind() {
+                    CodexQuotaWindowKind::ShortTerm => QuotaResetPeriod::FiveHour,
+                    CodexQuotaWindowKind::Weekly => QuotaResetPeriod::Weekly,
+                    CodexQuotaWindowKind::Monthly => QuotaResetPeriod::Monthly,
+                    CodexQuotaWindowKind::Other => continue,
+                };
+                reset_windows.push(AccountQuotaResetWindow {
+                    period,
+                    reset_at: reset,
+                });
+            }
         }
     }
     if remaining_rank.is_some() || reset_at.is_some() {
-        Some(AccountQuotaSignals::new(reset_at, remaining_rank))
+        Some(AccountQuotaSignals::new(reset_at, remaining_rank).with_reset_windows(reset_windows))
     } else {
         None
     }
@@ -636,9 +649,7 @@ fn parse_rate_limit_windows(
             .transpose()?;
         let limit_reached = optional_bool(window, "limit_reached")?.unwrap_or(false);
         let kind = quota_window_kind(window_seconds);
-        // primary/secondary 是协议槽位，不代表固定周期
-        // 窗口身份使用上游
-        // limit_id 和实际时长，5h/周/月分类只参与展示
+        // 槽位不代表周期，窗口键保留上游额度桶和实际时长；周期分类供展示及智能调度使用
         let key = match window_seconds {
             Some(seconds) => format!("{source}:{seconds}s"),
             None => format!("{source}:{name}"),
