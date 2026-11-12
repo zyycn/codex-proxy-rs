@@ -50,6 +50,7 @@ use gateway_core::routing::{
 use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
 use provider_openai::config::OpenAiConfig;
 use provider_openai::credential::{CodexCredentialCodec, ImportCodexOAuthCredential};
+use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use secrecy::SecretString;
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
@@ -268,11 +269,10 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     let WorkerRunnable::Scheduled { schedule, .. } = &release_worker.runnable else {
         panic!("Desktop release worker must be scheduled");
     };
-    // 外层定期检查代理变更，官方版本刷新间隔由发布检测任务单独控制
-    assert_eq!(schedule.interval(), Duration::from_secs(30));
+    assert_eq!(schedule.interval(), APPCAST_POLL_INTERVAL);
     for (owner, interval) in [
-        ("openai-cli-release", Duration::from_secs(30)),
-        ("openai-platform-desktop-release", Duration::from_secs(30)),
+        ("openai-cli-release", APPCAST_POLL_INTERVAL),
+        ("openai-platform-desktop-release", APPCAST_POLL_INTERVAL),
         ("openai", Duration::from_secs(30)),
         ("openai-account-warmup", Duration::from_secs(30)),
         (
@@ -306,6 +306,119 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
         )
     }));
     assert!(bundle.take_worker_contributions().is_empty());
+}
+
+#[tokio::test]
+async fn release_workers_use_startup_proxy_and_keep_profiles_when_it_fails() {
+    use gateway_core::task::WorkerCycleContext;
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut config = valid_config();
+    config.config = serde_json::from_value(json!({
+        "client_release_proxy": format!("http://{}", listener.local_addr().unwrap())
+    }))
+    .unwrap();
+    config
+        .config
+        .resolve_and_validate(config._runtime.path())
+        .unwrap();
+    let mut bundle = provider_openai::initialize(
+        config.config,
+        provider_ports(),
+        Arc::new(gateway_core::account::UpstreamInfoReader::default()),
+    )
+    .await
+    .unwrap();
+    let admin = bundle.admin_provider();
+    let selections = [
+        ("desktop", "macos", "arm64"),
+        ("desktop", "windows", "x86_64"),
+        ("desktop", "windows", "arm64"),
+        ("desktop", "linux", "x86_64"),
+        ("desktop", "linux", "arm64"),
+        ("cli", "linux", "x86_64"),
+    ]
+    .map(|(client, platform, arch)| {
+        OpaqueProviderData::new(
+            json!({
+                "client": client, "platform": platform, "arch": arch, "versionMode": "latest"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+    });
+    let before = selections
+        .each_ref()
+        .map(|selection| admin.configured_wire_profile(selection).unwrap().user_agent);
+    let workers = bundle
+        .take_worker_contributions()
+        .into_iter()
+        .filter_map(|item| match item {
+            WorkerContribution::Registration(registration)
+                if matches!(
+                    registration.id.owner(),
+                    "openai-desktop-release"
+                        | "openai-cli-release"
+                        | "openai-platform-desktop-release"
+                ) =>
+            {
+                Some(registration)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(workers.len(), 3);
+    // 由实际 Bundle 组装并执行任务，代理拒绝 CONNECT 时不接触外部官方制品
+    let proxy = async {
+        let mut hosts = Vec::new();
+        for _ in 0..6 {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(socket);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            hosts.push(line);
+            reader
+                .get_mut()
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        }
+        hosts.sort();
+        assert_eq!(
+            hosts,
+            [
+                vec!["CONNECT persistent.oaistatic.com:443 HTTP/1.1\r\n"; 5],
+                vec!["CONNECT registry.npmjs.org:443 HTTP/1.1\r\n"],
+            ]
+            .concat()
+        );
+    };
+    let requests = async {
+        for registration in workers {
+            let WorkerRunnable::Scheduled { task, .. } = registration.runnable else {
+                panic!("scheduled release worker")
+            };
+            task.run_cycle(WorkerCycleContext::new(
+                registration.id,
+                None,
+                CancellationToken::new(),
+            ))
+            .await
+            .unwrap();
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(requests, proxy);
+    })
+    .await
+    .unwrap();
+    let after = selections
+        .each_ref()
+        .map(|selection| admin.configured_wire_profile(selection).unwrap().user_agent);
+    assert_eq!(after, before);
 }
 
 #[tokio::test]
@@ -2136,24 +2249,11 @@ pub(crate) async fn initialized_test_bundle(
     accounts: Arc<MemoryAccountStore>,
     base_url: String,
 ) -> provider_openai::ProviderBundle {
-    initialized_test_bundle_with_policy(accounts, base_url, Arc::new(TestRuntimePolicy)).await
-}
-
-pub(crate) async fn initialized_test_bundle_with_policy(
-    accounts: Arc<MemoryAccountStore>,
-    base_url: String,
-    policy: Arc<dyn ProviderRuntimePolicyPort>,
-) -> provider_openai::ProviderBundle {
     let mut config = valid_config();
     config.config.api.base_url = base_url;
     provider_openai::initialize(
         config.config.clone(),
-        provider_ports_with_policy(
-            accounts,
-            Arc::new(TestOAuthPending::default()),
-            Arc::new(TestCatalogCache::default()),
-            policy,
-        ),
+        provider_ports_with(accounts, Arc::new(TestOAuthPending::default())),
         Arc::new(gateway_core::account::UpstreamInfoReader::default()),
     )
     .await
@@ -2179,20 +2279,6 @@ fn provider_ports_with_catalog(
     pending: Arc<TestOAuthPending>,
     catalog_cache: Arc<TestCatalogCache>,
 ) -> ProviderStorePorts {
-    provider_ports_with_policy(
-        accounts,
-        pending,
-        catalog_cache,
-        Arc::new(TestRuntimePolicy),
-    )
-}
-
-fn provider_ports_with_policy(
-    accounts: Arc<MemoryAccountStore>,
-    pending: Arc<TestOAuthPending>,
-    catalog_cache: Arc<TestCatalogCache>,
-    policy: Arc<dyn ProviderRuntimePolicyPort>,
-) -> ProviderStorePorts {
     ProviderStorePorts::new(
         accounts,
         Arc::new(TestLeaseCoordinator::default()),
@@ -2202,7 +2288,7 @@ fn provider_ports_with_policy(
         Arc::new(TestArtifactProfiles),
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),
-        policy,
+        Arc::new(TestRuntimePolicy),
         pending,
         Arc::new(RecordingDiagnostics::default()),
     )

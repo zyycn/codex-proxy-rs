@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::release_network::ReleaseNetwork;
 use chrono::Utc;
 use futures::StreamExt as _;
 use gateway_core::provider_ports::{ProviderArtifactProfile, ProviderArtifactProfileCachePort};
 use gateway_core::routing::ProviderKind;
+use reqwest::Client;
 use serde::Deserialize;
 
 use super::selection::{ClientKind, ClientPlatform, ClientRelease, object};
@@ -67,7 +67,7 @@ fn sequence(version: &str) -> Result<u64, CliReleaseError> {
 }
 
 pub struct CliReleaseService {
-    network: ReleaseNetwork,
+    client: Client,
     provider: ProviderKind,
     state: CodexWireProfileState,
     cache: Arc<dyn ProviderArtifactProfileCachePort>,
@@ -78,10 +78,10 @@ impl CliReleaseService {
         provider: ProviderKind,
         state: CodexWireProfileState,
         cache: Arc<dyn ProviderArtifactProfileCachePort>,
-        network: ReleaseNetwork,
+        client: Client,
     ) -> Self {
         Self {
-            network,
+            client,
             provider,
             state,
             cache,
@@ -184,8 +184,7 @@ impl CliReleaseService {
 
     async fn fetch(&self) -> Result<String, CliReleaseError> {
         let response = self
-            .network
-            .client()
+            .client
             .get(ENDPOINT)
             .send()
             .await

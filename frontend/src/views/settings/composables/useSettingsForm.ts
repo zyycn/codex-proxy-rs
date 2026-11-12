@@ -31,7 +31,6 @@ export function useSettingsForm() {
     configRevision: 0,
     smartScheduling: undefined as SmartSchedulingConfig | undefined,
     providerRequestProfiles: {} as ProviderRequestProfiles,
-    clientReleaseProxyId: '',
     codexPrivacyPolicy: { enabled: false, onError: 'skip_rule', rules: [] } as CodexPrivacyPolicy,
     requestLocationEnabled: false,
     requestLocation: {
@@ -154,7 +153,6 @@ export function useSettingsForm() {
     form.rotationStrategy = data.rotationStrategy
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
     form.providerRequestProfiles = cloneDeep(data.providerRequestProfiles)
-    form.clientReleaseProxyId = data.clientReleaseProxyId ?? ''
     form.minCodexCliVersion = data.minCodexCliVersion ?? ''
     form.usageRetentionDays = data.usageRetentionDays
     form.opsEventRetentionDays = data.opsEventRetentionDays
@@ -256,7 +254,6 @@ export function useSettingsForm() {
     await saveAction.run(async () => {
       const result = await updateSettings({
         configRevision: savedSettings.form.configRevision,
-        clientReleaseProxyId: form.clientReleaseProxyId || null,
         providerRequestProfiles: requestProfileUpdates(
           savedSettings.form.providerRequestProfiles,
           form.providerRequestProfiles,

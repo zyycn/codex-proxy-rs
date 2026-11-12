@@ -111,16 +111,13 @@ pub async fn initialize(
         .session_identity()
         .map_err(|_| OpenAiInitializeError::SessionIdentity)?;
     let http = build_reqwest_client().map_err(|_| OpenAiInitializeError::Transport)?;
-    let desktop_network = transport::profile::ReleaseNetwork::new()
-        .map_err(|_| OpenAiInitializeError::DesktopRelease)?;
-    let cli_network = transport::profile::ReleaseNetwork::new()
-        .map_err(|_| OpenAiInitializeError::DesktopRelease)?;
-    let platform_network = transport::profile::ReleaseNetwork::new()
-        .map_err(|_| OpenAiInitializeError::DesktopRelease)?;
+    let release_client =
+        transport::profile::build_release_client(config.client_release_proxy.as_ref())
+            .map_err(|_| OpenAiInitializeError::DesktopRelease)?;
     let desktop_release = Arc::new(CodexDesktopReleaseService::new(
         profile.clone(),
         Arc::new(
-            OfficialCodexDesktopReleaseTransport::new(desktop_network.clone())
+            OfficialCodexDesktopReleaseTransport::new(release_client.clone())
                 .map_err(|_| OpenAiInitializeError::DesktopRelease)?,
         ),
         artifact_cache,
@@ -131,7 +128,7 @@ pub async fn initialize(
         provider_kind.clone(),
         profile.clone(),
         ports.artifact_profiles(),
-        cli_network.clone(),
+        release_client.clone(),
     ));
     cli_release.restore().await;
     let platform_releases = Arc::new(
@@ -141,7 +138,7 @@ pub async fn initialize(
             ports.artifact_profiles(),
             Arc::new(
                 transport::profile::platform_release::OfficialDesktopArtifactTransport::new(
-                    platform_network.clone(),
+                    release_client,
                 ),
             ),
         ),
@@ -270,10 +267,6 @@ pub async fn initialize(
             desktop: desktop_release,
             cli: cli_release,
             platforms: platform_releases,
-            runtime_policy,
-            desktop_network,
-            cli_network,
-            platform_network,
         },
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;

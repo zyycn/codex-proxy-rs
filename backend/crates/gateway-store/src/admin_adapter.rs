@@ -94,7 +94,6 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 "1",
                 vec![
                     "provider_request_profiles_json".to_owned(),
-                    "client_release_proxy_id".to_owned(),
                     "request_location_enabled".to_owned(),
                     "request_location_json".to_owned(),
                     "codex_privacy_policy_json".to_owned(),

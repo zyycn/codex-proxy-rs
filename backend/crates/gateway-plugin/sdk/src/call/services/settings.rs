@@ -136,8 +136,6 @@ pub struct PrivacyPreviewResult {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSettings {
-    #[serde(default)]
-    pub client_release_proxy_id: Option<String>,
     pub codex_privacy_policy: CodexPrivacyPolicy,
     pub request_location_enabled: bool,
     pub request_location: RequestLocation,
@@ -178,8 +176,6 @@ pub struct RuntimeSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplaceRuntimeSettings {
-    #[serde(default)]
-    pub client_release_proxy_id: Option<String>,
     pub codex_privacy_policy: CodexPrivacyPolicy,
     pub request_location_enabled: bool,
     pub request_location: RequestLocation,
@@ -382,7 +378,6 @@ impl Operation for PreviewClientProfile {
 impl From<RuntimeSettings> for ReplaceRuntimeSettings {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
-            client_release_proxy_id: settings.client_release_proxy_id,
             codex_privacy_policy: settings.codex_privacy_policy,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,

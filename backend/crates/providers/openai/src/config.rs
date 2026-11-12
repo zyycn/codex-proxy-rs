@@ -3,7 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Deserialize;
+use gateway_core::account::OutboundProxy;
+use serde::{Deserialize, Deserializer};
 use url::Url;
 
 use crate::credential::CodexQuotaRefreshPolicy;
@@ -44,6 +45,9 @@ pub struct OpenAiConfig {
     pub residency: Option<String>,
     #[serde(default)]
     pub account_routing_override: Option<String>,
+    /// 官方客户端版本检测专用出口，启动后固定，不继承进程代理变量
+    #[serde(default, deserialize_with = "deserialize_client_release_proxy")]
+    pub client_release_proxy: Option<OutboundProxy>,
     #[serde(skip)]
     identity_secret_path: PathBuf,
 }
@@ -126,9 +130,21 @@ impl Default for OpenAiConfig {
             stream_max_retries: DEFAULT_STREAM_MAX_RETRIES,
             residency: None,
             account_routing_override: None,
+            client_release_proxy: None,
             identity_secret_path: PathBuf::new(),
         }
     }
+}
+
+fn deserialize_client_release_proxy<'de, D>(
+    deserializer: D,
+) -> Result<Option<OutboundProxy>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .map(|value| OutboundProxy::parse(&value).map_err(serde::de::Error::custom))
+        .transpose()
 }
 
 /// Codex 上游 API 的 Provider-owned 地址配置

@@ -4,6 +4,51 @@ use provider_openai::transport::profile::desktop_artifact::{
     CodexDesktopArtifactError, CoreVersionScanner, find_core_entry, parse_content_range,
 };
 
+#[tokio::test]
+async fn bundled_core_probe_uses_the_injected_proxy_client() {
+    use provider_openai::transport::profile::{
+        CodexDesktopRelease, CodexDesktopReleaseTransport, OfficialCodexDesktopReleaseTransport,
+    };
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .proxy(reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap())
+        .build()
+        .unwrap();
+    let transport = OfficialCodexDesktopReleaseTransport::new(client).unwrap();
+    let release = CodexDesktopRelease {
+        version: "26.803.81509".into(),
+        build: "6415".into(),
+        published_at: None,
+        minimum_system_version: None,
+        hardware_requirements: None,
+        download_url: Some("https://persistent.oaistatic.com/codex-app-prod/fixture.zip".into()),
+        download_size: Some(100),
+        signature_present: true,
+    };
+    let proxy = async {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(socket);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "CONNECT persistent.oaistatic.com:443 HTTP/1.1\r\n");
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(transport.fetch_bundled_core_version(&release), proxy)
+    })
+    .await
+    .unwrap();
+    assert!(result.is_err());
+}
+
 #[test]
 fn scanner_accepts_stable_and_multi_part_alpha_versions_across_chunks() {
     for expected in ["0.148.0", "0.147.0-alpha.6.6"] {

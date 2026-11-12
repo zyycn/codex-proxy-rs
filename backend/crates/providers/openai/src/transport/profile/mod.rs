@@ -11,6 +11,7 @@ use gateway_core::provider_ports::{
     ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
+use reqwest::Client;
 use roxmltree::{Document, Node};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -25,7 +26,7 @@ pub mod identity;
 pub mod platform_release;
 mod release_network;
 pub mod selection;
-pub use release_network::ReleaseNetwork;
+pub(crate) use release_network::build_release_client;
 
 use selection::{ClientKind, ClientPlatform, ClientRelease};
 
@@ -549,28 +550,23 @@ pub trait CodexDesktopReleaseTransport: Send + Sync {
 /// 固定访问官方 Desktop appcast 的生产 transport
 #[derive(Clone)]
 pub struct OfficialCodexDesktopReleaseTransport {
-    network: release_network::ReleaseNetwork,
+    client: Client,
     endpoint: Url,
 }
 
 impl OfficialCodexDesktopReleaseTransport {
-    /// 官方 HTTPS 地址固定，出口由所属检测任务更新
-    pub fn new(network: release_network::ReleaseNetwork) -> Result<Self, CodexDesktopReleaseError> {
+    /// 官方 HTTPS 地址固定，HTTP 客户端由 Provider 启动时注入
+    pub fn new(client: Client) -> Result<Self, CodexDesktopReleaseError> {
         let endpoint = Url::parse(CODEX_DESKTOP_APPCAST_URL)
             .map_err(|_| CodexDesktopReleaseError::InvalidEndpoint)?;
-        Ok(Self { network, endpoint })
+        Ok(Self { client, endpoint })
     }
 }
 
 impl CodexDesktopReleaseTransport for OfficialCodexDesktopReleaseTransport {
     fn fetch(&self) -> BoxFuture<'_, Result<CodexDesktopRelease, CodexDesktopReleaseError>> {
         Box::pin(async move {
-            let response = self
-                .network
-                .client()
-                .get(self.endpoint.clone())
-                .send()
-                .await?;
+            let response = self.client.get(self.endpoint.clone()).send().await?;
             if !response.status().is_success() {
                 return Err(CodexDesktopReleaseError::HttpStatus(
                     response.status().as_u16(),
@@ -613,7 +609,7 @@ impl CodexDesktopReleaseTransport for OfficialCodexDesktopReleaseTransport {
             let artifact_size = release
                 .download_size
                 .ok_or(CodexDesktopReleaseError::MissingArtifactIdentity)?;
-            fetch_codex_core_version(&self.network.client(), artifact_url, artifact_size)
+            fetch_codex_core_version(&self.client, artifact_url, artifact_size)
                 .await
                 .map_err(Into::into)
         })

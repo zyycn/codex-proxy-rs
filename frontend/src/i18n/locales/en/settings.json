@@ -1,10 +1,6 @@
 {
   "settings": {
     "clientProfile": {
-      "releaseProxy": "Version check proxy",
-      "directConnection": "Direct connection",
-      "disabledProxy": " (disabled)",
-      "proxyUnavailable": "Proxy catalog unavailable",
       "userAgent": "User agent",
       "clientIdentitySource": "Client identity source",
       "globalConfiguration": "Global configuration",

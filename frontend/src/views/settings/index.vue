@@ -235,7 +235,6 @@ watch(section, (value) => {
           <TokenRefreshCard v-model:refresh-margin-seconds="refreshMarginSecondsValue" v-model:refresh-concurrency="refreshConcurrencyValue" />
           <ClientProfileCard
             v-model="form.providerRequestProfiles"
-            v-model:proxy-id="form.clientReleaseProxyId"
             :active="section === 'upstream'"
             :disabled="disabled"
           />

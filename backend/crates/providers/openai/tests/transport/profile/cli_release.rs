@@ -57,7 +57,7 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
         provider.clone(),
         state.clone(),
         cache.clone(),
-        provider_openai::transport::profile::ReleaseNetwork::new().unwrap(),
+        reqwest::Client::new(),
     );
     let automatic = ClientProfileSelection {
         client: ClientKind::Cli,
@@ -132,14 +132,9 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
     );
 
     let restarted = CodexWireProfileState::new(super::wire_profile());
-    CliReleaseService::new(
-        provider,
-        restarted.clone(),
-        cache,
-        provider_openai::transport::profile::ReleaseNetwork::new().unwrap(),
-    )
-    .restore()
-    .await;
+    CliReleaseService::new(provider, restarted.clone(), cache, reqwest::Client::new())
+        .restore()
+        .await;
     assert_eq!(
         automatic.resolve(&restarted).unwrap(),
         automatic.resolve(&state).unwrap()

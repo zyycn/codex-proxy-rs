@@ -5,13 +5,6 @@ use crate::{account::OpaqueProviderData, identity::ProviderKind, routing::Config
 use futures::future::BoxFuture;
 
 pub trait ProviderRuntimePolicyPort: Send + Sync {
-    /// 官方客户端发布检测的全局出口，不包含账号代理或 Client Key 身份
-    fn load_client_release_proxy(
-        &self,
-    ) -> BoxFuture<'_, Result<Option<crate::account::OutboundProxy>, ProviderStoreError>> {
-        Box::pin(async { Ok(None) })
-    }
-
     /// 原子推进预热执行游标，重启或时钟回拨后不重复领取已消费的时刻
     fn claim_warmup_slot<'a>(
         &'a self,

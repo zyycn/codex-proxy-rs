@@ -79,6 +79,8 @@ api:
   request_id_header: 'x-request-id'
 
 openai:
+  # 官方客户端版本检测专用代理；省略或 null 时直连，修改后重启
+  # client_release_proxy: 'http://egress-proxy:3128'
   # 以下两项原样发送配置值；省略或设为 null 时删除对应请求头
   # 数据驻留参考值：us
   residency: us

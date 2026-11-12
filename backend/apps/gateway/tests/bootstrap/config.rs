@@ -181,6 +181,8 @@ fn config_loader_should_report_startup_configuration_diagnostics() {
         "timezoneInvalid",
         "timezoneNull",
         "timezoneType",
+        "releaseProxy",
+        "releaseProxyInvalid",
     ] {
         let mut document = valid_config_document();
         if case == "unused" {
@@ -198,6 +200,16 @@ fn config_loader_should_report_startup_configuration_diagnostics() {
                 "timezoneNull" => serde_json::json!(null),
                 _ => serde_json::json!(8),
             };
+        }
+        if case.starts_with("releaseProxy") {
+            let suffix = if case == "releaseProxyInvalid" {
+                "/path"
+            } else {
+                ""
+            };
+            document["openai"]["client_release_proxy"] = serde_json::json!(format!(
+                "http://fixture-user:{UNUSED_SECRET}@proxy.example:3128{suffix}"
+            ));
         }
         let directory = tempfile::tempdir().unwrap();
         fs::create_dir(directory.path().join("deploy")).unwrap();
@@ -219,7 +231,7 @@ fn config_loader_should_report_startup_configuration_diagnostics() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
             output.status.success(),
-            case != "missing" && !case.starts_with("timezone"),
+            case != "missing" && !case.starts_with("timezone") && case != "releaseProxyInvalid",
             "{case}: {stderr}"
         );
         match case {
@@ -230,6 +242,9 @@ fn config_loader_should_report_startup_configuration_diagnostics() {
             "missing" => assert!(stderr.contains("host.listen.port"), "{stderr}"),
             case if case.starts_with("timezone") => {
                 assert!(stderr.contains("host.timezone"), "{stderr}")
+            }
+            "releaseProxyInvalid" => {
+                assert!(stderr.contains("openai.client_release_proxy"), "{stderr}")
             }
             _ => assert!(!stderr.contains("警告"), "{stderr}"),
         }

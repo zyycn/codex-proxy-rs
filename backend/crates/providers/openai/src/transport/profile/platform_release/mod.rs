@@ -1,6 +1,5 @@
 //! Windows / Linux Desktop 按平台和架构独立核验、缓存配套版本
 
-use super::release_network::ReleaseNetwork;
 use super::selection::{
     ClientKind, ClientPlatform, ClientProfileSelection, ClientRelease, VersionMode, object,
 };
@@ -10,6 +9,7 @@ use futures::future::BoxFuture;
 use gateway_core::provider_ports::{ProviderArtifactProfile, ProviderArtifactProfileCachePort};
 use gateway_core::routing::ProviderKind;
 use range::{ArtifactIdentity, RemoteFile, invalid};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io;
@@ -87,11 +87,11 @@ pub trait DesktopArtifactTransport: Send + Sync {
 }
 
 pub struct OfficialDesktopArtifactTransport {
-    network: ReleaseNetwork,
+    client: Client,
 }
 impl OfficialDesktopArtifactTransport {
-    pub fn new(network: ReleaseNetwork) -> Self {
-        Self { network }
+    pub fn new(client: Client) -> Self {
+        Self { client }
     }
 }
 impl DesktopArtifactTransport for OfficialDesktopArtifactTransport {
@@ -103,7 +103,7 @@ impl DesktopArtifactTransport for OfficialDesktopArtifactTransport {
         Box::pin(async move {
             let cancel = CancellationToken::new();
             let _cancel_on_drop = cancel.clone().drop_guard();
-            let file = RemoteFile::open(self.network.client(), target.url()?, cancel).await?;
+            let file = RemoteFile::open(self.client.clone(), target.url()?, cancel).await?;
             if let Some(previous) = previous.filter(|previous| previous.identity == file.identity) {
                 return Ok(previous);
             }

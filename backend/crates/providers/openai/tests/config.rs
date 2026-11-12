@@ -38,6 +38,39 @@ fn openai_config_preserves_optional_routing_header_values() {
 }
 
 #[test]
+fn client_release_proxy_defaults_to_direct_and_redacts_credentials() {
+    for document in [r#"{}"#, r#"{"client_release_proxy":null}"#] {
+        let config: OpenAiConfig = serde_json::from_str(document).unwrap();
+        assert!(config.client_release_proxy.is_none());
+    }
+    for scheme in ["http", "https", "socks5", "socks5h"] {
+        let proxy = format!("{scheme}://fixture-user:fixture-secret@proxy.example:3128/");
+        let config: OpenAiConfig = serde_json::from_value(serde_json::json!({
+            "client_release_proxy": proxy
+        }))
+        .unwrap();
+        assert_eq!(
+            config.client_release_proxy.as_ref().unwrap().expose_url(),
+            proxy
+        );
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("fixture-user"));
+        assert!(!debug.contains("fixture-secret"));
+    }
+    for proxy in [
+        "",
+        "ftp://proxy.example",
+        "http://fixture-user:fixture-secret@proxy.example/path",
+    ] {
+        let error = serde_json::from_value::<OpenAiConfig>(serde_json::json!({
+            "client_release_proxy": proxy
+        }))
+        .unwrap_err();
+        assert!(!error.to_string().contains("fixture-secret"));
+    }
+}
+
+#[test]
 fn openai_config_derives_identity_secret_from_runtime_data_dir() {
     let mut config = valid_config();
     config

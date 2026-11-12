@@ -21,7 +21,6 @@ mod cli_release;
 mod desktop_artifact;
 mod identity;
 mod platform_release;
-mod release_network;
 mod selection;
 
 struct ReleaseTransport {
