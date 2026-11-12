@@ -437,6 +437,13 @@ async fn restart_should_conflict_while_another_system_operation_is_running() {
 async fn rollback_should_restore_binary_web_and_version_state() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(fixture.official(), fs::Permissions::from_mode(0o555)).unwrap();
+        fs::set_permissions(fixture.web(), fs::Permissions::from_mode(0o751)).unwrap();
+    }
     fixture
         .mount_release(
             &server,
@@ -470,6 +477,14 @@ async fn rollback_should_restore_binary_web_and_version_state() {
                 & 0o777,
             0o555
         );
+        assert_eq!(
+            fs::metadata(fixture.official().with_file_name("official.backup"))
+                .expect("official backup directory")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o555
+        );
         for name in ["plugin-release-manifest.json", "new-plugin.tar.gz"] {
             assert_eq!(
                 fs::metadata(fixture.official().join(name))
@@ -486,6 +501,18 @@ async fn rollback_should_restore_binary_web_and_version_state() {
         .rollback(Arc::new(AllowingUpdatePreflight))
         .await
         .expect("rollback");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        for (path, mode) in [(fixture.official(), 0o555), (fixture.web(), 0o751)] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
+    }
 
     assert_eq!(
         fs::read(fixture.executable()).expect("binary"),
@@ -598,6 +625,8 @@ async fn rollback_should_restore_current_release_when_plugin_revision_changes_du
         .expect_err("revision changed after rollback swap");
 
     assert_eq!(error.kind(), SystemOperationErrorKind::Conflict);
+    #[cfg(unix)]
+    assert_official_directory_readonly(&fixture);
     assert_eq!(
         fs::read(fixture.executable()).expect("binary"),
         b"new-binary"
@@ -661,6 +690,8 @@ async fn cancelled_rollback_should_restore_current_release_after_the_swap() {
             .expect_err("rollback task cancelled")
             .is_cancelled()
     );
+    #[cfg(unix)]
+    assert_official_directory_readonly(&fixture);
 
     assert_eq!(
         fs::read(fixture.executable()).expect("binary"),
@@ -1131,10 +1162,94 @@ async fn update_should_replace_web_assets_across_filesystems() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn update_should_preserve_readonly_staged_directory_permissions() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    struct ReadonlyStagingPreflight(PathBuf);
+
+    #[async_trait::async_trait]
+    impl SystemUpdatePreflight for ReadonlyStagingPreflight {
+        async fn validate(
+            &self,
+            candidate: SystemUpdateCandidate,
+        ) -> Result<Revision, SystemOperationError> {
+            let staging = fs::read_dir(&self.0)
+                .unwrap()
+                .next()
+                .expect("staging directory")
+                .unwrap()
+                .path();
+            let nested = staging.join("web-dist/assets");
+            fs::create_dir(&nested).unwrap();
+            fs::write(nested.join("asset.js"), "asset").unwrap();
+            for (path, mode) in [
+                (nested.join("asset.js"), 0o444),
+                (nested, 0o550),
+                (staging.join("web-dist"), 0o555),
+                (staging.join("official-plugins"), 0o555),
+            ] {
+                fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+            }
+            AllowingUpdatePreflight.validate(candidate).await
+        }
+
+        async fn confirm_revision(&self, _: Revision) -> Result<(), SystemOperationError> {
+            Ok(())
+        }
+    }
+
+    let server = MockServer::start().await;
+    let fixture = Fixture::new();
+    fixture
+        .mount_release(
+            &server,
+            TARGET_VERSION,
+            ArchiveKind::Safe,
+            ChecksumKind::Valid,
+        )
+        .await;
+    let config = fixture.config(&format!("{}/repos", server.uri()));
+    let preflight = Arc::new(ReadonlyStagingPreflight(config.update_temp_dir.clone()));
+    let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+    service
+        .perform_update(Some(TARGET_VERSION.to_owned()), None, preflight)
+        .await
+        .expect("update accepted");
+    let status = wait_for_update(&service).await;
+    assert_eq!(
+        status.operation.status,
+        SystemOperationStatus::Succeeded,
+        "{status:?}"
+    );
+    assert_eq!(
+        fs::read(fixture.web().join("assets/asset.js")).unwrap(),
+        b"asset"
+    );
+    for (path, mode) in [
+        (fixture.official(), 0o555),
+        (fixture.web(), 0o555),
+        (fixture.web().join("assets"), 0o550),
+        (fixture.web().join("assets/asset.js"), 0o444),
+    ] {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            mode
+        );
+    }
+}
+
 #[tokio::test]
 async fn update_should_restore_web_assets_when_binary_backup_fails() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(fixture.official(), fs::Permissions::from_mode(0o555)).unwrap();
+    }
     fixture
         .mount_release(
             &server,
@@ -1162,6 +1277,22 @@ async fn update_should_restore_web_assets_when_binary_backup_fails() {
     );
     assert!(fixture.official().join("old-plugin.tar.gz").is_file());
     assert!(!fixture.official().join("new-plugin.tar.gz").exists());
+    #[cfg(unix)]
+    assert_official_directory_readonly(&fixture);
+}
+
+#[cfg(unix)]
+fn assert_official_directory_readonly(fixture: &Fixture) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    assert_eq!(
+        fs::metadata(fixture.official())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o555
+    );
 }
 
 #[tokio::test]

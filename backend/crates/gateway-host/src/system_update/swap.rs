@@ -266,15 +266,15 @@ fn move_file(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 fn move_dir(from: &Path, to: &Path) -> io::Result<()> {
-    // macOS 对无写权限目录 rename 会返回 EACCES；Linux 通常只需父目录可写
-    // 安装后的官方插件目录是 0555，备份、交换和跨设备复制前的清理都依赖先放开目录写权限
-    #[cfg(unix)]
-    if from.exists() {
-        make_directories_writable(from)?;
-    }
     match fs::rename(from, to) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+        Err(error)
+            if error.kind() == io::ErrorKind::CrossesDevices
+                || (cfg!(target_os = "macos")
+                    && error.kind() == io::ErrorKind::PermissionDenied) =>
+        {
+            // macOS 移动只读目录可能被拒绝，复用保留权限的复制路径
+            // 仅清理源目录时放开写权限，备份与恢复后的目录仍保留原权限
             if let Err(copy_error) = copy_dir_all(from, to) {
                 let _ = remove_dir_all(to);
                 return Err(copy_error);
