@@ -343,12 +343,12 @@ Chat 沿用 [Client Key 鉴权](#数据面客户端接口)、[请求期限](#请
 [请求头与身份](#请求头与身份)及[隐私策略](#隐私策略)。隐私策略的 `request_body` 面向目标上游正文，
 Responses 上游使用 `$.input`，Messages 上游使用 `$.messages`
 
-转换后的请求按选中的 Provider 执行。OpenAI 的字段处理见[正文兼容](#正文兼容)；
-输出上限原值交给上游校验，低于模型下限时会收到上游错误
+转换后的请求按选中的 Provider 执行。OpenAI Responses 上游忽略客户端的输出上限，见[正文兼容](#正文兼容)
 
 ### Messages 请求
 
 `POST /v1/messages` 接受非空字符串 `model`、非空 `messages` 数组和非负整数 `max_tokens`。
+转向 OpenAI Responses 上游时，`max_tokens` 仍为入站必填字段，但不限制实际输出。
 消息角色为 `user`、`assistant` 或 `system`，`content` 为字符串或内容块数组；初始系统指令放在顶层 `system`，
 会话中的 `system` 消息保留其位置，具体模型支持情况由上游校验。
 `stream` 缺省或 `false` 返回 JSON，`true` 返回 SSE。每轮由客户端携带所需的完整上下文。Claude Code 用 `--resume` 恢复本地会话后，仍通过 `messages` 发送上下文；网关不缓存对话正文用于下一轮。
@@ -538,8 +538,9 @@ Images 的 `x-codex-image-turn-id` 和 Desktop 自动 Git 上下文的 `clientUs
 
 #### 正文兼容
 
-OpenAI Provider 的 Responses 上游编码会移除 Codex 不接受的顶层 `temperature` 和 `prompt_cache_retention`，
-并保留调用方指定的 `max_output_tokens`。缺少顶层 `store` 时补齐 `false`，与官方 Codex 客户端一致；
+发往 OpenAI Responses 上游（OAuth 或 API Key）的生成请求会省略顶层 `max_output_tokens`、`max_completion_tokens`
+和 `max_tokens`，输出可能超过客户端指定的上限。编码时也会移除 Codex 不接受的顶层 `temperature`
+和 `prompt_cache_retention`。缺少顶层 `store` 时补齐 `false`，与官方 Codex 客户端一致；
 显式提供的值保持原样。顶层 `input` 为字符串时按公开 Responses API 的语义展开为一条
 `user` 文本消息条目（`{"type": "message", "role": "user", "content": [{"type": "input_text", ...}]}`），
 因为 Codex 后端只接受条目数组；数组及其他类型原样透传。`input` 数组中显式指定 `type: "message"`
@@ -556,7 +557,6 @@ OpenAI Provider 的 Responses 上游编码会移除 Codex 不接受的顶层 `te
 | `top_p`、`frequency_penalty`、`presence_penalty`、`chat_template_kwargs`、`user`、`metadata`、`safety_identifier` | 省略；采样参数取默认值时也省略 |
 | `stream_options.include_usage` | 省略该成员，保留其他流式选项 |
 | `truncation`、`stop_sequences`、`prompt_cache_options` | 分别仅在值为 `"disabled"`、`[]`、`{}` 时省略；显式策略交给上游校验 |
-| `max_completion_tokens`、`max_tokens` | 转为 `max_output_tokens`。原生字段优先，其次按左列顺序取首个非 `null` 值 |
 
 Codex/OAuth 上游的历史回填按字段形状兼容，不以 User-Agent 品牌区分：显式 `type: "reasoning"`
 的 `input` 项移除顶层 `status`；该项具有非空字符串 `encrypted_content` 时，还会移除非空数组

@@ -72,15 +72,6 @@ fn normalize_codex_oauth_options(body: &mut Map<String, Value>) {
     {
         body.shift_remove("prompt_cache_options");
     }
-    // 原生上限优先，Chat 别名只补缺，非法值仍交给上游校验
-    for alias in ["max_completion_tokens", "max_tokens"] {
-        if let Some(limit) = body.shift_remove(alias)
-            && !limit.is_null()
-            && body.get("max_output_tokens").is_none_or(Value::is_null)
-        {
-            body.insert("max_output_tokens".to_owned(), limit);
-        }
-    }
 }
 
 /// 补齐 Codex 请求缺省字段并适配已确认不兼容的请求形状，不递归清洗业务正文
@@ -121,8 +112,15 @@ pub(crate) fn normalize_codex_request_body(body: &mut Map<String, Value>) {
         }
     }
 
-    // Codex 拒绝显式采样温度和缓存保留时长，独立的缓存键仍须保留
-    for field in ["temperature", "prompt_cache_retention"] {
-        body.remove(field);
+    // Responses 上游统一忽略客户端输出上限，避免请求因上限低于模型下限被拒
+    // Codex 也不接受显式采样温度和缓存保留时长
+    for field in [
+        "max_output_tokens",
+        "max_completion_tokens",
+        "max_tokens",
+        "temperature",
+        "prompt_cache_retention",
+    ] {
+        body.shift_remove(field);
     }
 }
