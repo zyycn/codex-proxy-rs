@@ -41,7 +41,6 @@ impl CodexCredentialCatalogService {
                         observed_at: a.observed_at,
                         content: content.clone(),
                         etag: a.etag,
-                        invalidated: Default::default(),
                     },
                 );
             }
@@ -131,11 +130,6 @@ impl CodexCredentialCatalogService {
         {
             return Ok(false);
         }
-        if let Some(entry) = state.snapshot.as_ref().and_then(|s| s.entries.get(&scope)) {
-            entry
-                .invalidated
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
         state.pending.insert(scope, etag.to_owned());
         drop(state);
         self.refresh_notification.notify_one();
@@ -210,15 +204,12 @@ impl CodexCredentialCatalogService {
                 let Some(entry) = snapshot.entries.get(scope) else {
                     return true;
                 };
-                if entry.etag.as_deref() == Some(tag)
-                    && !entry.invalidated.load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    return false;
-                }
-                entry
-                    .invalidated
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-                true
+                // 发布其他账号时保留通知，只有该账号更新的观测才能确认 ETag
+                entry.etag.as_deref() != Some(tag)
+                    || old
+                        .as_ref()
+                        .and_then(|s| s.entries.get(scope))
+                        .is_some_and(|previous| previous.observed_at >= entry.observed_at)
             });
         }
         cache.snapshot = next.clone();
@@ -289,7 +280,7 @@ impl CodexCredentialCatalogService {
                 pending.contains_key(scope)
                     || !entries.get(scope).is_some_and(|e| {
                         now.duration_since(e.observed_at)
-                            .is_ok_and(|age| age < SCHEDULING_CATALOG_MAX_AGE)
+                            .is_ok_and(|age| age < CATALOG_REFRESH_AFTER)
                     })
             })
             .collect::<Vec<_>>();

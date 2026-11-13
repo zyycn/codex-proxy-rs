@@ -32,8 +32,7 @@ use crate::transport::{CodexBackendClient, CodexCatalogModel, CodexRequestContex
 
 const MAX_RESPONSE_ETAG_BYTES: usize = 256;
 const ACCOUNT_CATALOG_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-// 调度证据覆盖默认 15 分钟刷新周期及抖动，长期未刷新时恢复上游验证
-const SCHEDULING_CATALOG_MAX_AGE: Duration = Duration::from_secs(30 * 60);
+const CATALOG_REFRESH_AFTER: Duration = Duration::from_secs(30 * 60);
 const MAX_ACCOUNT_CATALOG_MODELS: usize = 2_048;
 const MODEL_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -141,7 +140,6 @@ impl CatalogContent {
 struct AccountEntry {
     observed_at: SystemTime,
     content: Arc<CatalogContent>,
-    invalidated: Arc<std::sync::atomic::AtomicBool>,
     etag: Option<String>,
 }
 
@@ -197,13 +195,7 @@ impl CodexCredentialCatalogSnapshot {
     pub(super) fn excludes(&self, account: &ProviderAccount, model: &str, now: SystemTime) -> bool {
         self.entries
             .get(&CodexCatalogScope::for_account(account))
-            .is_some_and(|e| {
-                !e.invalidated.load(std::sync::atomic::Ordering::Relaxed)
-                    && now
-                        .duration_since(e.observed_at)
-                        .is_ok_and(|age| age < SCHEDULING_CATALOG_MAX_AGE)
-                    && !e.content.ids.iter().any(|id| id == model)
-            })
+            .is_some_and(|e| e.observed_at <= now && !e.content.ids.iter().any(|id| id == model))
     }
 
     pub fn account_models(&self, account: &ProviderAccount) -> Option<&[String]> {
@@ -466,14 +458,7 @@ impl CodexCredentialCatalogService {
         if ids.len() < MIN_CATALOG_PUSHDOWN {
             return None;
         }
-        let cache = self.cache.read().ok()?;
-        let snapshot = cache.snapshot.as_ref()?.clone();
-        let pending = cache
-            .pending
-            .keys()
-            .map(|s| s.account_id.clone())
-            .collect::<BTreeSet<_>>();
-        drop(cache);
+        let snapshot = self.cached().ok()??;
         let documents = snapshot
             .sources
             .iter()
@@ -483,16 +468,10 @@ impl CodexCredentialCatalogService {
         if documents.is_empty() {
             return None;
         }
-        let as_of = SystemTime::now();
         Some(gateway_core::account::AccountCatalogOmissions {
             documents,
-            exceptions: ids
-                .iter()
-                .filter(|id| pending.contains(*id) || exempt(id))
-                .cloned()
-                .collect(),
-            observed_after: as_of.checked_sub(SCHEDULING_CATALOG_MAX_AGE)?,
-            as_of,
+            exceptions: ids.iter().filter(|id| exempt(id)).cloned().collect(),
+            as_of: SystemTime::now(),
         })
     }
 
@@ -582,7 +561,6 @@ impl CodexCredentialCatalogService {
                 observed_at,
                 content,
                 etag: observed.etag,
-                invalidated: Default::default(),
             },
         ))
     }

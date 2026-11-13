@@ -170,7 +170,7 @@ async fn bulk_catalog_restore_keeps_ten_thousand_owners_and_fences_late_writes()
             .iter()
             .all(|a| !matches!(a.account_id.as_str(), "acct_1" | "acct_2" | "acct_3"))
     );
-    // 数据库只能排除有当前版本、未过期的账号证据；显式例外仍进入选号
+    // 刷新到期不改变目录排除结果；凭据变化与显式例外仍进入选号
     let hash: Vec<u8> = sqlx::query_scalar("select sha256($1::bytea)")
         .bind(&document)
         .fetch_one(&database.pool)
@@ -181,7 +181,6 @@ async fn bulk_catalog_restore_keeps_ten_thousand_owners_and_fences_late_writes()
     let filter = gateway_core::account::AccountCatalogOmissions {
         documents: vec![hash.try_into().unwrap()],
         exceptions: vec![ProviderAccountId::new("acct_5").unwrap()],
-        observed_after: now - std::time::Duration::from_secs(1800),
         as_of: now,
     };
     let ids = (1..=10000)
@@ -195,9 +194,6 @@ async fn bulk_catalog_restore_keeps_ten_thousand_owners_and_fences_late_writes()
         .iter()
         .map(|a| a.id().as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        ids,
-        std::collections::BTreeSet::from(["acct_1", "acct_4", "acct_5"])
-    );
+    assert_eq!(ids, std::collections::BTreeSet::from(["acct_1", "acct_5"]));
     database.close().await;
 }

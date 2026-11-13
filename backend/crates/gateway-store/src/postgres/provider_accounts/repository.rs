@@ -144,8 +144,7 @@ impl PgProviderAccountRepository {
             query.push(" and not exists (select 1 from provider_account_model_catalogs c
                 where c.account_id=provider_accounts.id and c.credential_revision=provider_accounts.credential_revision
                 and c.plan_type is not distinct from provider_accounts.plan_type and c.document_hash=any(")
-                .push_bind(hashes).push("::bytea[]) and c.observed_at > ").push_bind(DateTime::<Utc>::from(omit.observed_after))
-                .push(" and c.observed_at <= ").push_bind(DateTime::<Utc>::from(omit.as_of))
+                .push_bind(hashes).push("::bytea[]) and c.observed_at <= ").push_bind(DateTime::<Utc>::from(omit.as_of))
                 .push(" and not (c.account_id=any(").push_bind(exceptions).push("::text[])))");
         }
         query.push(" order by provider_kind, name, id");

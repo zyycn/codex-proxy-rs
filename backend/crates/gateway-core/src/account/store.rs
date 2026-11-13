@@ -28,11 +28,10 @@ pub struct StoredAccountCatalog {
     pub document: bytes::Bytes,
 }
 
-/// 批量选号的存储优化：只有账号自己的当前版本、有效时间和目录摘要都匹配才可跳过
+/// 批量选号只按账号当前凭据和套餐的目录摘要排除候选
 pub struct AccountCatalogOmissions {
     pub documents: Vec<[u8; 32]>,
     pub exceptions: Vec<ProviderAccountId>,
-    pub observed_after: std::time::SystemTime,
     pub as_of: std::time::SystemTime,
 }
 
