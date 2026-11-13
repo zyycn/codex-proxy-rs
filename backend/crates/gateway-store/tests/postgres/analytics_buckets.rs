@@ -317,6 +317,80 @@ async fn incremental_deletions_repair_extrema_last_usage_and_zero_currency_prese
 }
 
 #[tokio::test]
+async fn projection_work_mem_is_local_to_the_worker_transaction() {
+    let Some(database) = TestDatabase::create("work_mem").await else {
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(database.pool.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    // 固定同一会话，直接记录事实写入和队列确认时的值，并在复用连接时检查恢复
+    sqlx::raw_sql(
+        "set work_mem='2MB';
+        create table work_mem_audit(stage text, value text);
+        create function record_work_mem() returns trigger language plpgsql as $$
+        begin
+            insert into work_mem_audit values (tg_argv[0], current_setting('work_mem'));
+            return null;
+        end $$;
+        create trigger audit_fact after insert on request_analytics_facts
+            for each row execute function record_work_mem('projection');
+        create trigger audit_ack after delete on request_analytics_pending_requests
+            for each row execute function record_work_mem('ack')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let worker = PgRequestAnalyticsRepository::new(pool.clone(), observability_query_budget());
+    let session = || {
+        sqlx::query_as::<_, (i32, String)>("select pg_backend_pid(), current_setting('work_mem')")
+    };
+    let original = session().fetch_one(&pool).await.unwrap();
+    for (worker, expected) in [
+        (worker.clone(), "2MB"),
+        (worker.with_projection_work_mem_mb(Some(8)), "8MB"),
+    ] {
+        seed(&pool, expected, hour(), &[]).await;
+        assert_eq!(worker.maintain(10).await.unwrap().projected_requests, 1);
+        let audit: Vec<(String, String)> =
+            sqlx::query_as("select stage, value from work_mem_audit order by stage")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            audit,
+            [
+                ("ack".into(), "2MB".into()),
+                ("projection".into(), expected.into())
+            ]
+        );
+        assert_eq!(session().fetch_one(&pool).await.unwrap(), original);
+        sqlx::query("truncate work_mem_audit")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    // 事实写入失败时投影事务回滚，原会话仍可供下一轮使用
+    sqlx::query("alter table work_mem_audit add check (value <> '8MB')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    seed(&pool, "rollback", hour(), &[]).await;
+    let worker = PgRequestAnalyticsRepository::new(pool.clone(), observability_query_budget())
+        .with_projection_work_mem_mb(Some(8));
+    let error = worker.maintain(10).await.unwrap_err();
+    assert!(
+        error.to_string().contains("project analytics facts"),
+        "{error}"
+    );
+    assert_eq!(session().fetch_one(&pool).await.unwrap(), original);
+    pool.close().await;
+    database.close().await;
+}
+
+#[tokio::test]
 async fn incremental_summary_write_failure_rolls_back_facts_and_preserves_queue() {
     let Some(database) = TestDatabase::create("analytics_incremental_rollback").await else {
         return;

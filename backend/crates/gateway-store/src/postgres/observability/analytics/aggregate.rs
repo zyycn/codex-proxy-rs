@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// 输入 matching 提供 output_bucket、name 和完整事实列及 is_completed_usage
+/// 输入 matching 提供分组键、指标输入列及 is_completed_usage
 /// 精确分位数在整个结果组内计算，不把局部分位数合并成新的分位数
 pub(super) fn push_fact_aggregation(
     query: &mut QueryBuilder<Postgres>,

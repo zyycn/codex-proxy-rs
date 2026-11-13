@@ -379,8 +379,17 @@ async fn rebuild_groups(
                 rebuilt.insert((*key).clone(), MetricState::default());
             }
             // 等值桶键避免范围连接反复比较其他时间桶，范围和游标仍限定已发布前缀
+            // 计数、费用和直方图复用匹配结果，只物化这些聚合需要的列
             let mut query = QueryBuilder::<Postgres>::new(
-                "with matching as materialized (select mr.*,k.bucket_start as output_bucket,k.name,coalesce((",
+                "with matching as materialized (select k.bucket_start as output_bucket,k.name,
+                    mr.started_at,mr.outcome,mr.client_status_code,mr.upstream_status_code,mr.attempt_count,
+                    mr.image_generation_succeeded,mr.error_kind,mr.ops_failure_count,mr.ops_rate_limited_count,
+                    mr.ops_auth_failure_count,mr.ops_provider_5xx_count,mr.input_tokens,mr.output_tokens,
+                    mr.cached_input_tokens,mr.cache_write_input_tokens,mr.reasoning_output_tokens,
+                    mr.image_input_tokens,mr.image_output_tokens,mr.total_tokens,
+                    mr.cost_source,mr.cost_currency,mr.cost_amount,mr.standard_cost_amount,mr.no_cache_cost_amount,
+                    mr.first_token_ms,mr.latency_ms,mr.admission_decision_ms,mr.account_selection_wait_ms,
+                    mr.upstream_response_ms,mr.capacity_used_slots,mr.capacity_total_slots,coalesce((",
             );
             query.push(completed_usage_fact_predicate("mr"))
                 .push("),false) as is_completed_usage from jsonb_to_recordset(")
