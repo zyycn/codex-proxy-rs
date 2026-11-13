@@ -32,6 +32,7 @@ pub struct AnalyticsStatus {
 pub struct PgRequestAnalyticsRepository {
     pool: PgPool,
     query_budget: ObservabilityQueryBudget,
+    projection_work_mem_mb: Option<u32>,
     billing_projector: Option<Arc<dyn UsageBillingProjector>>,
 }
 
@@ -41,8 +42,15 @@ impl PgRequestAnalyticsRepository {
         Self {
             pool,
             query_budget,
+            projection_work_mem_mb: None,
             billing_projector: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_projection_work_mem_mb(mut self, work_mem_mb: Option<u32>) -> Self {
+        self.projection_work_mem_mb = work_mem_mb;
+        self
     }
 
     #[must_use]
@@ -81,6 +89,10 @@ impl PgRequestAnalyticsRepository {
             if reset_obsolete_batch(&mut transaction, batch_size).await? {
                 transaction.commit().await.map_err(|error| postgres_unavailable("save analytics reset progress", error))?;
                 return Ok(AnalyticsMaintenance { reset_progress: true, ..Default::default() });
+            }
+            if let Some(mb) = self.projection_work_mem_mb {
+                sqlx::query("select set_config('work_mem',$1,true)").bind(format!("{mb}MB"))
+                    .execute(&mut *transaction).await.map_err(|error| postgres_unavailable("set analytics projection work_mem", error))?;
             }
             let mut result = AnalyticsMaintenance::default();
             // 历史删除可能一次排入大量旧任务，给仍存在的请求预留半批名额，避免实时统计饥饿

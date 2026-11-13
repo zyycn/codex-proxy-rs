@@ -122,6 +122,9 @@ store:
 应用默认上限为 20，允许的最小值为 2；降低上限可以限制实际数据库连接数，但也会增加请求、后台写入与管理查询之间的等待。
 如果出现连接获取超时，应结合数据库负载调大池容量，不要仅延长等待时间
 
+统计 Worker 重算分组时，若临时文件写入较多且数据库有内存余量，可在 `store.pool` 下设置 `analytics_projection_work_mem_mb: 8`（单位 MB）。
+默认省略，沿用 PostgreSQL 的 `work_mem`；显式设置仅影响增量投影和历史回填所在的事务，队列确认、整桶重建和在线查询继续沿用原值
+
 将 `deploy/compose.yaml` 中 `services.postgres.command` 替换为以下列表，保留 UTC 参数：
 
 ```yaml

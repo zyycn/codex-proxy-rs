@@ -37,6 +37,7 @@ pub struct StorePoolConfig {
     pub max_connections: u32,
     pub acquire_timeout_seconds: u64,
     pub observability_timeout_seconds: u64,
+    pub analytics_projection_work_mem_mb: Option<u32>,
 }
 
 impl Default for StorePoolConfig {
@@ -45,12 +46,15 @@ impl Default for StorePoolConfig {
             max_connections: 20,
             acquire_timeout_seconds: 5,
             observability_timeout_seconds: 120,
+            analytics_projection_work_mem_mb: None,
         }
     }
 }
 
 impl StorePoolConfig {
     pub(crate) fn validate(&self) -> StoreResult<()> {
+        // PostgreSQL 以有符号 32 位的 kB 保存 work_mem，配置按整 MB 填写
+        const MAX_WORK_MEM_MB: u32 = i32::MAX as u32 / 1024;
         if self.max_connections < 2 || self.acquire_timeout_seconds == 0 {
             return Err(StoreError::InvalidData {
                 source: None,
@@ -67,6 +71,18 @@ impl StorePoolConfig {
                 source: None,
                 entity: "store config",
                 message: "pool.observability_timeout_seconds must be positive and fit PostgreSQL statement_timeout".to_owned(),
+            });
+        }
+        if self
+            .analytics_projection_work_mem_mb
+            .is_some_and(|mb| !(1..=MAX_WORK_MEM_MB).contains(&mb))
+        {
+            return Err(StoreError::InvalidData {
+                source: None,
+                entity: "store config",
+                message: format!(
+                    "pool.analytics_projection_work_mem_mb must be between 1 and {MAX_WORK_MEM_MB}"
+                ),
             });
         }
         Ok(())

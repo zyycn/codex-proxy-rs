@@ -7,7 +7,7 @@ const PASSWORD: &str = "111111111111111111111111111111111111111111111111";
 #[test]
 fn store_config_should_derive_backup_staging_from_runtime_data_dir() {
     let root = tempfile::tempdir().expect("runtime data root");
-    let mut config = valid_config();
+    let mut config = config_with_pool(serde_json::json!({}));
 
     config
         .resolve_and_validate(root.path())
@@ -28,6 +28,7 @@ fn store_pool_config_defaults_reserve_capacity_for_observability() {
     assert_eq!(pool.max_connections, 20);
     assert_eq!(pool.acquire_timeout_seconds, 5);
     assert_eq!(pool.observability_timeout_seconds, 120);
+    assert_eq!(pool.analytics_projection_work_mem_mb, None);
     assert_eq!(pool.observability_max_connections(), 16);
     assert_eq!(
         StorePoolConfig {
@@ -68,7 +69,7 @@ fn store_config_rejects_a_pool_that_cannot_reserve_both_traffic_classes() {
     ));
 }
 
-fn valid_config() -> StoreConfig {
+fn config_with_pool(pool: serde_json::Value) -> StoreConfig {
     serde_json::from_value(serde_json::json!({
         "database": {
             "url": "postgres://codex_proxy@127.0.0.1:5432/codex_proxy",
@@ -78,8 +79,27 @@ fn valid_config() -> StoreConfig {
             "url": "redis://127.0.0.1:6379/",
             "password": PASSWORD,
         },
+        "pool": pool,
     }))
     .expect("test Store configuration")
+}
+
+#[test]
+fn analytics_projection_work_mem_accepts_whole_mb_within_postgres_limits() {
+    let root = tempfile::tempdir().unwrap();
+    for mb in [1_u32, 8, 2_097_151] {
+        config_with_pool(serde_json::json!({"analytics_projection_work_mem_mb": mb}))
+            .resolve_and_validate(root.path())
+            .unwrap();
+    }
+    for mb in [0_u32, 2_097_152] {
+        let error = config_with_pool(serde_json::json!({"analytics_projection_work_mem_mb": mb}))
+            .resolve_and_validate(root.path())
+            .unwrap_err();
+        assert!(
+            matches!(error, StoreError::InvalidData { message, .. } if message.contains("analytics_projection_work_mem_mb"))
+        );
+    }
 }
 
 #[test]
