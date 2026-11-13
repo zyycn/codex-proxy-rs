@@ -105,6 +105,11 @@ async fn quota_windows_reconcile_moved_requests_and_pending_deletions_without_wa
     assert_eq!(new.usage.reasoning_output_tokens, None);
     assert_eq!(new.usage.models[0].model, "new-model");
     assert_eq!(new.usage.costs[0].amount.as_str(), "4.75");
+    sqlx::query("update runtime_settings set usage_retention_days=$1")
+        .bind(i64::from(u32::MAX))
+        .execute(&database.pool)
+        .await
+        .unwrap();
     for field in [AccountSortField::Usage, AccountSortField::LastUsedAt] {
         let ranked = store
             .list_accounts(

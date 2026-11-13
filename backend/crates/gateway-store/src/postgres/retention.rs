@@ -2,7 +2,7 @@
 
 use crate::{admin_store_error, postgres_unavailable};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use gateway_admin::{
     model::retention::{RetentionPolicy, RetentionTarget},
     ports::{
@@ -54,15 +54,26 @@ impl RetentionStore for PgRetentionRepository {
         policy: RetentionPolicy,
         limit: NonZeroU32,
     ) -> AdminStoreResult<u64> {
+        let oldest_sql = match target {
+            RetentionTarget::ModelRequests => {
+                "select completed_at from model_requests where outcome <> 'running' order by completed_at limit 1"
+            }
+            RetentionTarget::OpsEvents => {
+                "select created_at from ops_events where model_request_id is null order by created_at limit 1"
+            }
+            RetentionTarget::AdminAuditEvents => {
+                "select created_at from admin_audit_events order by created_at limit 1"
+            }
+        };
         let sql = match target {
             RetentionTarget::ModelRequests => {
                 "delete from model_requests
                  where ctid in (
                    select ctid from model_requests
                     where outcome <> 'running'
-                      and completed_at < $1 - ($2 * interval '1 day')
+                      and completed_at < $1
                     order by completed_at
-                    limit $3
+                    limit $2
                     for update skip locked
                  )"
             }
@@ -71,9 +82,9 @@ impl RetentionStore for PgRetentionRepository {
                  where ctid in (
                    select ctid from ops_events
                     where model_request_id is null
-                      and created_at < $1 - ($2 * interval '1 day')
+                      and created_at < $1
                     order by created_at
-                    limit $3
+                    limit $2
                     for update skip locked
                  )"
             }
@@ -81,9 +92,9 @@ impl RetentionStore for PgRetentionRepository {
                 "delete from admin_audit_events
                  where ctid in (
                    select ctid from admin_audit_events
-                    where created_at < $1 - ($2 * interval '1 day')
+                    where created_at < $1
                     order by created_at
-                    limit $3
+                    limit $2
                     for update skip locked
                  )"
             }
@@ -102,14 +113,25 @@ impl RetentionStore for PgRetentionRepository {
             .execute(&mut *transaction)
             .await
             .map_err(|source| unavailable("set retention lock timeout", source))?;
-        let deleted = sqlx::query(sql)
-            .bind(now)
-            .bind(i64::from(policy.days(target)))
-            .bind(i64::from(limit.get()))
-            .execute(&mut *transaction)
+        let oldest: Option<DateTime<Utc>> = sqlx::query_scalar(oldest_sql)
+            .fetch_optional(&mut *transaction)
             .await
-            .map(|result| result.rows_affected())
-            .map_err(|source| unavailable("delete expired records", source))?;
+            .map_err(|source| unavailable("read oldest retained record", source))?;
+        // 超长窗口覆盖全部现存记录时无需删除，也不向数据库传递越界日期
+        let cutoff = now
+            .checked_sub_signed(TimeDelta::days(i64::from(policy.days(target))))
+            .filter(|cutoff| oldest.is_some_and(|oldest| oldest < *cutoff));
+        let deleted = if let Some(cutoff) = cutoff {
+            sqlx::query(sql)
+                .bind(cutoff)
+                .bind(i64::from(limit.get()))
+                .execute(&mut *transaction)
+                .await
+                .map(|result| result.rows_affected())
+                .map_err(|source| unavailable("delete expired records", source))?
+        } else {
+            0
+        };
         transaction
             .commit()
             .await

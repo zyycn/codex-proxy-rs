@@ -2165,7 +2165,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 ### 历史保留
 
-`usageRetentionDays` 控制请求明细及其用量统计的保留天数，默认 31，支持 1～31 的整数天数。
+`usageRetentionDays` 控制请求明细及其用量统计的保留天数，默认 31，须为正整数，不设业务上限。
 `opsEventRetentionDays` 与 `auditRetentionDays` 分别控制独立运维事件和管理审计，默认 30、90，均须为正整数
 
 清理任务每轮读取已保存设置，按完成时间分批删除过期请求及关联事件，不删除运行中的请求；有界单轮结束后等待一分钟再检查。

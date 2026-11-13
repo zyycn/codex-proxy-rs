@@ -658,20 +658,41 @@ fn account_costs(state: &MetricState) -> StoreResult<Vec<AccountCost>> {
         .collect())
 }
 
+async fn retained_account_usage_range(
+    snapshot: &mut AnalyticsSnapshot<'_>,
+    now: DateTime<Utc>,
+) -> StoreResult<ObservabilityRange> {
+    // 只为实际存在的数据规划时间桶，超长保留期不展开空白历史或溢出日期
+    let (days, earliest): (i64, DateTime<Utc>) = sqlx::query_as(
+        "select usage_retention_days, least(
+            (select started_at from model_requests order by started_at, id limit 1),
+            (select started_at from request_analytics_facts order by started_at, id limit 1),
+            (select bucket_start from request_analytics_1h where collection = 'usage_contribution' order by bucket_start limit 1),
+            $1::timestamptz - interval '1 day'
+         ) from runtime_settings where id = 1",
+    )
+    .bind(now)
+    .fetch_one(&mut *snapshot.tx)
+    .await
+    .map_err(|error| postgres_unavailable("read retained account usage range", error))?;
+    let duration =
+        TimeDelta::try_days(days).ok_or_else(|| invalid("invalid account usage retention"))?;
+    let start = now
+        .checked_sub_signed(duration)
+        .unwrap_or(earliest)
+        .max(earliest);
+    ObservabilityRange::new(start, now)
+}
+
 pub(crate) async fn account_usage_sort_values(
     snapshot: &mut AnalyticsSnapshot<'_>,
     now: DateTime<Utc>,
 ) -> StoreResult<(Vec<String>, Vec<i64>, Vec<Option<DateTime<Utc>>>)> {
-    let days: i32 =
-        sqlx::query_scalar("select usage_retention_days::integer from runtime_settings where id=1")
-            .fetch_one(&mut *snapshot.tx)
-            .await
-            .map_err(|error| postgres_unavailable("read account usage retention", error))?;
+    let range = retained_account_usage_range(snapshot, now).await?;
     let ids: Vec<String> = sqlx::query_scalar("select id from provider_accounts")
         .fetch_all(&mut *snapshot.tx)
         .await
         .map_err(|error| postgres_unavailable("read account usage sort identities", error))?;
-    let range = ObservabilityRange::new(now - TimeDelta::days(i64::from(days)), now)?;
     let mut totals = BTreeMap::<String, MetricState>::new();
     for ((account, _), state) in snapshot.account_states(range, &ids, false).await? {
         totals.entry(account).or_default().merge(&state)?;
@@ -699,11 +720,7 @@ pub(crate) async fn account_group_usage(
     }
     let mut snapshot = AnalyticsSnapshot::new_for_accounts(connection).await?;
     let now = Utc::now();
-    let days: i32 =
-        sqlx::query_scalar("select usage_retention_days::integer from runtime_settings where id=1")
-            .fetch_one(&mut *snapshot.tx)
-            .await
-            .map_err(|error| postgres_unavailable("read group usage retention", error))?;
+    let retained = retained_account_usage_range(&mut snapshot, now).await?;
     let memberships:Vec<(String,String)>=sqlx::query_as("select account_group_id,provider_account_id from account_group_accounts where account_group_id=any($1::text[])").bind(group_ids).fetch_all(&mut *snapshot.tx).await.map_err(|error|postgres_unavailable("read group usage membership",error))?;
     let ids = memberships
         .iter()
@@ -711,7 +728,6 @@ pub(crate) async fn account_group_usage(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let retained = ObservabilityRange::new(now - TimeDelta::days(i64::from(days)), now)?;
     let today = ObservabilityRange::new(
         timezone
             .day_start(now)

@@ -309,7 +309,7 @@
       "retentionDaysLabel": "History retention (d)"
     },
     "retentionDays": "Retention (d)",
-    "enterDays": "Please enter 1–31 days",
+    "enterDays": "Enter retention days",
     "day": "d",
     "location": {
       "requestLocationOverride": "Request location override",
@@ -626,7 +626,7 @@
       "invalidBodyLimit": "Responses decompression limit must be a positive integer in MiB",
       "invalidQuotaThreshold": "Remaining weekly quota threshold must be an integer from 0 to 100, leave blank for no limit",
       "invalidResetLeadTime": "Reset credit lead time must be an integer from 1 to 1,440 minutes",
-      "invalidRetention": "History retention must be an integer from 1 to 31 days",
+      "invalidRetention": "History retention must be a positive integer",
       "invalidQueueSettings": "Queue capacity must be an integer from 0 to 1,000 and timeout from 1 to 120 seconds",
       "invalidProbeModel": "The probe model must be at most 128 characters without control characters",
       "invalidWarmupCron": "Enter a valid Cron expression",

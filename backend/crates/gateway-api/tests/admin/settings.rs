@@ -357,11 +357,11 @@ fn settings_request_should_reject_unknown_rotation_strategy() {
 }
 
 #[tokio::test]
-async fn short_request_retention_round_trips_and_invalid_days_do_not_replace_it() {
+async fn request_retention_round_trips_and_invalid_days_do_not_replace_it() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let mut body = update_body();
-    for days in [1, 3, 7, 15, 30, 31] {
+    for days in [1, 31, 32, 365, 3650, u32::MAX] {
         body["usageRetentionDays"] = json!(days);
         let response = app(fixture.state())
             .oneshot(request(
@@ -378,8 +378,7 @@ async fn short_request_retention_round_trips_and_invalid_days_do_not_replace_it(
     }
     for (days, expected_status) in [
         (json!(0), StatusCode::BAD_REQUEST),
-        (json!(32), StatusCode::BAD_REQUEST),
-        (json!(u32::MAX), StatusCode::BAD_REQUEST),
+        (json!(u64::from(u32::MAX) + 1), StatusCode::BAD_REQUEST),
         (json!(-1), StatusCode::UNPROCESSABLE_ENTITY),
         (json!(1.5), StatusCode::UNPROCESSABLE_ENTITY),
         (json!(null), StatusCode::UNPROCESSABLE_ENTITY),
@@ -402,7 +401,7 @@ async fn short_request_retention_round_trips_and_invalid_days_do_not_replace_it(
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response_json(response).await["data"]["usageRetentionDays"],
-        31
+        u32::MAX
     );
 }
 
