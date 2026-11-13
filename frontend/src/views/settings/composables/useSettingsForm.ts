@@ -71,7 +71,7 @@ export function useSettingsForm() {
       probeModel: '',
     } as ProtectionDraft,
     accountWarmupEnabled: false,
-    accountWarmupCron: '',
+    accountWarmupCron: [] as string[],
     accountWarmupModel: '',
     resetCreditOnLowWeeklyQuota: false,
     resetCreditLeadMinutes: 10 as number | null,
@@ -162,7 +162,9 @@ export function useSettingsForm() {
       probeModel: data.accountErrorProtection.probeModel ?? '',
     }
     form.accountWarmupEnabled = data.accountWarmupEnabled
-    form.accountWarmupCron = data.accountWarmupCron ?? ''
+    form.accountWarmupCron = data.accountWarmupCron
+      ? data.accountWarmupCron.split(';')
+      : []
     form.accountWarmupModel = data.accountWarmupModel ?? ''
     form.resetCreditOnLowWeeklyQuota = data.resetCreditOnLowWeeklyQuota
     form.resetCreditLeadMinutes = data.resetCreditLeadMinutes
@@ -294,7 +296,7 @@ export function useSettingsForm() {
           probeModel: trimProtectionText(form.accountErrorProtection.probeModel) || null,
         },
         accountWarmupEnabled: form.accountWarmupEnabled,
-        accountWarmupCron: form.accountWarmupCron.trim(),
+        accountWarmupCron: form.accountWarmupCron.join(';'),
         accountWarmupModel: form.accountWarmupModel.trim() || null,
         resetCreditOnLowWeeklyQuota: form.resetCreditOnLowWeeklyQuota,
         resetCreditLeadMinutes: (form.resetCreditOnLowWeeklyQuota ? savedSettings.form.resetCreditLeadMinutes : resetCreditLeadMinutes)!,

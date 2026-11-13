@@ -423,7 +423,12 @@ fn settings_request_validates_cron_and_allows_disabled_empty_schedule() {
         (false, "08:00", false),
         (true, "0 8 * * MON-FRI", true),
         (true, "60 8 * * *", false),
+        (true, "0 8 * * *;30 13 * * *", true),
         (true, "0 8 * * *\n30 13 * * *", false),
+        (true, "0 8 * * *;60 13 * * *", false),
+        (false, "0 8 * * *;", false),
+        (true, "0 8 * * *;;30 13 * * *", false),
+        (true, "0 8 * * *\r\n30 13 * * *", false),
     ] {
         let mut body = update_body();
         body["accountWarmupEnabled"] = json!(enabled);
@@ -436,6 +441,11 @@ fn settings_request_validates_cron_and_allows_disabled_empty_schedule() {
             assert_eq!(error.field(), "accountWarmupCron");
         }
     }
+    let mut oversized = update_body();
+    oversized["accountWarmupCron"] = json!(["* * * * *"; 26].join(";"));
+    let request: UpdateRuntimeSettingsRequest = serde_json::from_value(oversized).unwrap();
+    assert_eq!(request.validate().unwrap_err().field(), "accountWarmupCron");
+
     let mut legacy = update_body();
     legacy.as_object_mut().unwrap().remove("accountWarmupCron");
     legacy["accountWarmupScheduleTime"] = json!("08:00");

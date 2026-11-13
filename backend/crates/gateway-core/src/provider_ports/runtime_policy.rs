@@ -52,7 +52,7 @@ pub trait ProviderRuntimePolicyPort: Send + Sync {
     }
 }
 
-/// 校验五段 Cron 预热计划
+/// 校验单条五段 Cron 表达式
 #[must_use]
 pub fn valid_warmup_cron(value: &str) -> bool {
     parse_warmup_cron(value).is_some()
@@ -73,7 +73,7 @@ fn parse_warmup_cron(value: &str) -> Option<cron::Schedule> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderWarmupPolicy {
     enabled: bool,
-    cron: String,
+    schedules: Vec<cron::Schedule>,
     model: Option<String>,
 }
 
@@ -84,29 +84,47 @@ impl ProviderWarmupPolicy {
         cron: &str,
         model: Option<&str>,
     ) -> Result<(), &'static str> {
-        if (enabled || !cron.is_empty()) && !valid_warmup_cron(cron) {
+        Self::validate_and_parse(enabled, cron, model).map(|_| ())
+    }
+
+    fn validate_and_parse(
+        enabled: bool,
+        cron: &str,
+        model: Option<&str>,
+    ) -> Result<Vec<cron::Schedule>, &'static str> {
+        if cron.len() > 255 || (enabled && cron.is_empty()) {
             return Err("account_warmup_cron");
         }
+        // 分号分隔独立表达式，逗号保留给 Cron 字段内的列表
+        let schedules = if cron.is_empty() {
+            Vec::new()
+        } else {
+            cron.split(';')
+                .map(parse_warmup_cron)
+                .collect::<Option<Vec<_>>>()
+                .ok_or("account_warmup_cron")?
+        };
         if (enabled && model.is_none()) || !valid_optional_probe_model(model) {
             return Err("account_warmup_model");
         }
-        Ok(())
+        Ok(schedules)
     }
 
     pub fn try_new(
         enabled: bool,
-        cron: String,
+        cron: &str,
         model: Option<String>,
     ) -> Result<Self, ProviderStoreError> {
-        if Self::validate_values(enabled, &cron, model.as_deref()).is_err() {
-            return Err(ProviderStoreError::new(
-                ProviderStoreErrorKind::InvalidData,
-                "validate warmup policy",
-            ));
-        }
+        let schedules =
+            Self::validate_and_parse(enabled, cron, model.as_deref()).map_err(|_| {
+                ProviderStoreError::new(
+                    ProviderStoreErrorKind::InvalidData,
+                    "validate warmup policy",
+                )
+            })?;
         Ok(Self {
             enabled,
-            cron,
+            schedules,
             model,
         })
     }
@@ -115,7 +133,7 @@ impl ProviderWarmupPolicy {
     pub const fn disabled() -> Self {
         Self {
             enabled: false,
-            cron: String::new(),
+            schedules: Vec::new(),
             model: None,
         }
     }
@@ -126,11 +144,6 @@ impl ProviderWarmupPolicy {
     }
 
     #[must_use]
-    pub fn cron(&self) -> &str {
-        &self.cron
-    }
-
-    #[must_use]
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
     }
@@ -138,7 +151,10 @@ impl ProviderWarmupPolicy {
     /// 匹配部署时区中的整分钟时刻，时区重叠及执行去重由 Worker 与存储端口负责
     #[must_use]
     pub fn matches_slot(&self, slot: chrono::NaiveDateTime) -> bool {
-        parse_warmup_cron(&self.cron).is_some_and(|schedule| schedule.includes(slot.and_utc()))
+        let instant = slot.and_utc();
+        self.schedules
+            .iter()
+            .any(|schedule| schedule.includes(instant))
     }
 }
 
