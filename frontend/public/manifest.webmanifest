@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "Codex Proxy RS",
+  "short_name": "Codex Proxy",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
