@@ -1,4 +1,4 @@
-//! 验证短保留期升级、分批清理边界与统计异步收敛期间的查询可用性
+//! 验证保留期读写、分批清理边界与统计异步收敛期间的查询可用性
 
 use std::{num::NonZeroU32, time::Duration};
 
@@ -19,6 +19,66 @@ use super::{
     TestDatabase, admin_observability_store, analytics::seed, drain_analytics,
     observability_query_budget, observability_repository,
 };
+
+#[tokio::test]
+async fn long_retention_round_trips_and_cleans_only_expired_requests() {
+    use gateway_store::postgres::{PgRuntimeSettingsRepository, RuntimeSettingsRepository};
+
+    let Some(database) = TestDatabase::create("long_retention").await else {
+        return;
+    };
+    let settings = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let retention = PgRetentionRepository::new(database.pool.clone());
+    let now = Utc::now();
+    for (id, age) in [("old", 400), ("month", 40), ("recent", 1)] {
+        seed(&database.pool, id, now - ChronoDuration::days(age), &[]).await;
+    }
+    for (days, expected_deleted) in [(u32::MAX, 0), (3650, 0), (365, 1), (32, 1), (1, 0)] {
+        let mut update = super::runtime_settings::settings_with_margin(300);
+        update.values.usage_retention_days = days;
+        settings.update_runtime_settings(update).await.unwrap();
+        assert_eq!(
+            settings
+                .load_runtime_settings()
+                .await
+                .unwrap()
+                .values
+                .usage_retention_days,
+            days
+        );
+        let policy = retention.load_policy().await.unwrap();
+        assert_eq!(policy.days(RetentionTarget::ModelRequests), days);
+        assert_eq!(
+            retention
+                .purge_batch(
+                    RetentionTarget::ModelRequests,
+                    now,
+                    policy,
+                    NonZeroU32::new(10).unwrap()
+                )
+                .await
+                .unwrap(),
+            expected_deleted
+        );
+    }
+    let mut invalid = super::runtime_settings::settings_with_margin(300);
+    invalid.values.usage_retention_days = 0;
+    assert!(settings.update_runtime_settings(invalid).await.is_err());
+    assert_eq!(
+        retention
+            .load_policy()
+            .await
+            .unwrap()
+            .days(RetentionTarget::ModelRequests),
+        1
+    );
+    let remaining: Vec<String> = sqlx::query_scalar("select id from model_requests order by id")
+        .fetch_all(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining, ["recent"]);
+    database.close().await;
+}
 
 #[tokio::test]
 async fn short_retention_keeps_statistics_readable_until_each_deletion_batch_is_projected() {

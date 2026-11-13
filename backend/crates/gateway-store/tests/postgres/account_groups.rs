@@ -693,9 +693,16 @@ async fn group_costs_follow_current_members_and_pending_source_replacements() {
         }
     }
     assert!(ready, "group fixture must publish rollups");
-    let costs = load_retained_group_costs(&groups).await;
-    assert_eq!(costs[MIXED_GROUP], "3.25");
-    assert_eq!(costs[EMPTY_GROUP], "0");
+    for days in [31_i64, 365, i64::from(u32::MAX)] {
+        sqlx::query("update runtime_settings set usage_retention_days=$1")
+            .bind(days)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        let costs = load_retained_group_costs(&groups).await;
+        assert_eq!(costs[MIXED_GROUP], "3.25");
+        assert_eq!(costs[EMPTY_GROUP], "0");
+    }
 
     sqlx::query("update account_group_accounts set account_group_id=$1 where provider_account_id='acct_group_move'")
         .bind(EMPTY_GROUP).execute(&database.pool).await.unwrap();

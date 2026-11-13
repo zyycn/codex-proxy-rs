@@ -9,7 +9,7 @@ type SettingsForm = ReturnType<typeof useSettingsForm>['form']
 
 export function useSettingsFormRules(form: () => SettingsForm) {
   const { t } = useI18n({ useScope: 'global' })
-  const integer = (min: number, max: number, message: string): FormRule => ({
+  const integer = (min: number, max: number | undefined, message: string): FormRule => ({
     type: 'integer',
     required: true,
     min,
@@ -47,7 +47,7 @@ export function useSettingsFormRules(form: () => SettingsForm) {
       ...integer(0, 100, t('settings.form.invalidQuotaThreshold')),
       required: false,
     },
-    'usageRetentionDays': integer(1, 31, t('settings.form.invalidRetention')),
+    'usageRetentionDays': integer(1, undefined, t('settings.form.invalidRetention')),
     'minCodexDesktopVersion': version(),
     'minCodexCliVersion': version(),
     'accountWarmupCron': [
