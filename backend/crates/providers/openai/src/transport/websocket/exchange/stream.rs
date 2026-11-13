@@ -97,12 +97,14 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
             pool_return,
             reused_connection,
             stream_idle_timeout,
-            trace,
-            shutdown,
-            downstream_cancellation,
+            delivery: WebSocketStreamDelivery {
+                trace,
+                shutdown,
+                downstream_cancellation,
+                tx,
+            },
             rate_limit_updates: rate_limit_updates_for_task,
             response_metadata_updates: response_metadata_updates_for_task,
-            tx,
         })
         .await;
     };
@@ -133,33 +135,69 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
 }
 
 struct WebSocketStreamForwardState {
-    trace: TraceContext,
     websocket: PumpedWebSocket,
     metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketStreamPoolReturn>,
     reused_connection: bool,
     stream_idle_timeout: Option<Duration>,
-    shutdown: CancellationToken,
-    downstream_cancellation: Option<gateway_core::lifecycle::CancellationToken>,
     rate_limit_updates: CodexWebSocketRateLimitUpdates,
     response_metadata_updates: CodexWebSocketResponseMetadataUpdates,
+    delivery: WebSocketStreamDelivery,
+}
+
+struct WebSocketStreamDelivery {
+    trace: TraceContext,
+    shutdown: CancellationToken,
+    downstream_cancellation: Option<gateway_core::lifecycle::CancellationToken>,
     tx: mpsc::Sender<Result<Bytes, CodexWebSocketExchangeError>>,
+}
+
+impl WebSocketStreamDelivery {
+    async fn cancelled(&self) -> StreamWebSocketDiscardReason {
+        let (reason, discard_reason) = tokio::select! {
+            biased;
+            () = async {
+                match &self.downstream_cancellation {
+                    Some(cancellation) => cancellation.cancelled().await,
+                    None => std::future::pending().await,
+                }
+            } => ("downstream_connection_closed", StreamWebSocketDiscardReason::ClientCancelled),
+            () = self.tx.closed() => ("receiver_dropped", StreamWebSocketDiscardReason::ClientCancelled),
+            () = self.shutdown.cancelled() => ("pool_shutdown", StreamWebSocketDiscardReason::PoolShutdown),
+        };
+        self.trace
+            .record("upstream.cancelled", json!({"reason": reason}));
+        discard_reason
+    }
+
+    async fn send(
+        &self,
+        event: Result<Bytes, CodexWebSocketExchangeError>,
+    ) -> Result<(), StreamWebSocketDiscardReason> {
+        // 终态与错误也可能被满队列阻塞，所有交付等待都必须响应取消和停机
+        tokio::select! {
+            biased;
+            reason = self.cancelled() => Err(reason),
+            result = self.tx.send(event) => result.map_err(|_| {
+                self.trace.record("upstream.forward.failed", json!({"reason": "receiver_dropped"}));
+                StreamWebSocketDiscardReason::DownstreamSendFailed
+            }),
+        }
+    }
 }
 
 async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
     let WebSocketStreamForwardState {
-        trace,
         mut websocket,
         mut metadata,
         pool_return,
         reused_connection,
         stream_idle_timeout,
-        shutdown,
-        downstream_cancellation,
         rate_limit_updates,
         response_metadata_updates,
-        tx,
+        delivery,
     } = state;
+    let trace = &delivery.trace;
     let mut pool_return = pool_return;
     let mut continuation = pool_return
         .as_mut()
@@ -172,38 +210,8 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
     loop {
         let message = tokio::select! {
             biased;
-            () = async {
-                match &downstream_cancellation {
-                    Some(cancellation) => cancellation.cancelled().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                trace.record("upstream.cancelled", json!({"reason": "downstream_connection_closed"}));
-                discard_stream_websocket(
-                    websocket,
-                    pool_return,
-                    StreamWebSocketDiscardReason::ClientCancelled,
-                ).await;
-                return;
-            }
-            // 客户端断开下游 SSE 流：立即丢弃连接并释放池 slot，
-            // 不再傻等上游 idle 超时（否则同会话后续请求会一直 bypass/busy）
-            () = tx.closed() => {
-                trace.record("upstream.cancelled", json!({"reason": "receiver_dropped"}));
-                discard_stream_websocket(
-                    websocket,
-                    pool_return,
-                    StreamWebSocketDiscardReason::ClientCancelled,
-                ).await;
-                return;
-            }
-            () = shutdown.cancelled() => {
-                trace.record("upstream.cancelled", json!({"reason": "pool_shutdown"}));
-                discard_stream_websocket(
-                    websocket,
-                    pool_return,
-                    StreamWebSocketDiscardReason::PoolShutdown,
-                ).await;
+            reason = delivery.cancelled() => {
+                discard_stream_websocket(websocket, pool_return, reason).await;
                 return;
             }
             message = next_websocket_message(
@@ -239,7 +247,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 } else {
                     error
                 };
-                let _ = tx.send(Err(error)).await;
+                let _ = delivery.send(Err(error)).await;
                 return;
             }
         };
@@ -258,7 +266,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                     StreamWebSocketDiscardReason::UnexpectedBinaryEvent,
                 )
                 .await;
-                let _ = tx
+                let _ = delivery
                     .send(Err(error.with_connection_observation(observation)))
                     .await;
                 return;
@@ -293,7 +301,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 } else {
                     error
                 };
-                let _ = tx.send(Err(error)).await;
+                let _ = delivery.send(Err(error)).await;
                 return;
             }
             _ => continue,
@@ -315,7 +323,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                     Some(observation) => error.with_connection_observation(observation),
                     None => error,
                 };
-                let _ = tx.send(Err(error)).await;
+                let _ = delivery.send(Err(error)).await;
                 return;
             }
         };
@@ -336,19 +344,6 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             ExchangeAction::Forward { terminal } => terminal,
             ExchangeAction::Ignore => continue,
         };
-        if tx.send(Ok(Bytes::from(raw))).await.is_err() {
-            trace.record(
-                "upstream.forward.failed",
-                json!({"reason": "receiver_dropped"}),
-            );
-            discard_stream_websocket(
-                websocket,
-                pool_return,
-                StreamWebSocketDiscardReason::DownstreamSendFailed,
-            )
-            .await;
-            return;
-        }
         if let Some(terminal) = terminal {
             trace.record(
                 "upstream.terminal",
@@ -377,6 +372,12 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                     .await;
                 }
             }
+            // 先归还续接状态或释放 socket，终态交付不能延迟资源收尾
+            let _ = delivery.send(Ok(Bytes::from(raw))).await;
+            return;
+        }
+        if let Err(reason) = delivery.send(Ok(Bytes::from(raw))).await {
+            discard_stream_websocket(websocket, pool_return, reason).await;
             return;
         }
     }
@@ -427,7 +428,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
     } else {
         error
     };
-    let _ = tx.send(Err(error)).await;
+    let _ = delivery.send(Err(error)).await;
 }
 
 async fn finish_stream_websocket(
