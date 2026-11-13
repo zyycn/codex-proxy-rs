@@ -296,7 +296,7 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
                 .map_err(|source| crate::provider_unavailable("load warmup policy", source))?;
             ProviderWarmupPolicy::try_new(
                 settings.values.account_warmup_enabled,
-                settings.values.account_warmup_cron,
+                &settings.values.account_warmup_cron,
                 settings.values.account_warmup_model,
             )
         })

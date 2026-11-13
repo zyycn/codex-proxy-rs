@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ZCard, ZFormItem, ZIconButton, ZInput, ZPopover, ZSwitch } from '@codex-proxy/ui'
+import { ZCard, ZFormItem, ZIconButton, ZInput, ZInputTag, ZPopover, ZSwitch } from '@codex-proxy/ui'
 
 import { CircleAlert, Clock, Sparkles } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
@@ -7,7 +7,7 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n({ useScope: 'global' })
 
 const enabled = defineModel<boolean>('enabled', { required: true })
-const cron = defineModel<string>('cron', { required: true })
+const cron = defineModel<string[]>('cron', { required: true })
 const model = defineModel<string>('model', { required: true })
 </script>
 
@@ -26,7 +26,7 @@ const model = defineModel<string>('model', { required: true })
           </template>
           <div class="max-w-80 space-y-2 px-3 py-2 text-z-sm font-regular leading-relaxed text-z-text-secondary">
             <p>{{ t('settings.warmup.help') }}</p>
-            <p>{{ t('settings.warmup.cronExample') }}</p>
+            <p>{{ t('settings.warmup.scheduleHelp') }}</p>
           </div>
         </ZPopover>
       </span>
@@ -39,14 +39,16 @@ const model = defineModel<string>('model', { required: true })
       />
 
       <ZFormItem
-        :show-message="enabled"
+        :show-message="enabled || cron.length > 0"
         prop="accountWarmupCron"
         :label="t('settings.warmup.cronExpression')"
         :description="t('settings.warmup.cronHelp')"
         :required="enabled"
       >
-        <ZInput
+        <ZInputTag
           v-model="cron"
+          collapse-tags
+          collapse-tags-tooltip
           :disabled="!enabled"
           :aria-label="t('settings.warmup.cronExpression')"
           placeholder="0 8 * * *"
@@ -56,7 +58,7 @@ const model = defineModel<string>('model', { required: true })
           <template #prefix>
             <Clock class="size-4" />
           </template>
-        </ZInput>
+        </ZInputTag>
       </ZFormItem>
 
       <ZFormItem

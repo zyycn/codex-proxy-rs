@@ -208,13 +208,13 @@
       "description": "嘗試啓動空閒 Codex OAuth 賬號的額度窗口",
       "enableWarmup": "啟用預熱",
       "cronExpression": "Cron 表達式",
-      "cronHelp": "五段表達式：分 時 日 月 星期",
+      "cronHelp": "按 Enter 新增 Tag，支援多個",
       "modelLabel": "預熱模型",
       "modelHelp": "啓用時必填，需爲賬號可用模型",
       "modelPlaceholder": "輸入模型名稱",
       "helpTitle": "賬號預熱說明",
       "help": "向可用的 Codex OAuth 帳號傳送輕量請求，略過額度耗盡和已確認活躍的視窗，0% 帳號允許預熱，不保證視窗成功啟動",
-      "cronExample": "按部署時區執行，例如 0 8 * * MON-FRI 表示工作日 08:00，同一分鐘只執行一次"
+      "scheduleHelp": "依部署時區執行，同一分鐘只預熱一次"
     },
     "adminApiKey": {
       "adminApiKey": "管理員 API密鑰",
@@ -630,6 +630,7 @@
       "invalidQueueSettings": "隊列容量應爲 0～1000 的整數，排隊超時應爲 1～120 秒的整數",
       "invalidProbeModel": "探測模型最多 128 個字符，不能包含控制字符",
       "invalidWarmupCron": "請輸入有效的 Cron 表達式",
+      "warmupCronTooLong": "總長度不可超過 255 位元組",
       "warmupModelRequired": "啓用預激活時請選擇模型",
       "invalidWarmupModel": "預激活模型名稱不能超過 128 個字符",
       "settingsSaved": "設置已保存",
