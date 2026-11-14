@@ -3,7 +3,10 @@
 use super::selection::{
     ClientKind, ClientPlatform, ClientProfileSelection, ClientRelease, VersionMode, object,
 };
-use super::{ARTIFACT_PROFILE_CACHE_TTL, CodexWireProfileState, baseline};
+use super::{
+    ARTIFACT_PROFILE_CACHE_RENEW_INTERVAL, ARTIFACT_PROFILE_CACHE_TTL, CodexWireProfileState,
+    baseline,
+};
 use chrono::Utc;
 use futures::future::BoxFuture;
 use gateway_core::provider_ports::{ProviderArtifactProfile, ProviderArtifactProfileCachePort};
@@ -135,6 +138,7 @@ pub struct PlatformDesktopReleaseService {
     cache: Arc<dyn ProviderArtifactProfileCachePort>,
     transport: Arc<dyn DesktopArtifactTransport>,
     verified: Mutex<BTreeMap<DesktopTarget, VerifiedArtifact>>,
+    cache_written_at: Mutex<BTreeMap<DesktopTarget, tokio::time::Instant>>,
 }
 impl PlatformDesktopReleaseService {
     pub fn new(
@@ -149,6 +153,7 @@ impl PlatformDesktopReleaseService {
             cache,
             transport,
             verified: Mutex::new(baseline_artifacts()),
+            cache_written_at: Mutex::default(),
         }
     }
     pub async fn restore(&self) {
@@ -206,14 +211,32 @@ impl PlatformDesktopReleaseService {
             .cloned();
         let mut artifact = self
             .transport
-            .fetch(target, previous)
+            .fetch(target, previous.clone())
             .await
             .map_err(|error| error.to_string())?;
         let sequence = sequence(target, &artifact.release).map_err(|error| error.to_string())?;
         if !self.accepts(target, &artifact.release) {
             return Err("官方 Desktop 发布低于当前版本或同构建版本不一致".to_owned());
         }
-        let verified_at = Utc::now();
+        let unchanged = previous
+            .as_ref()
+            .is_some_and(|previous| previous.identity == artifact.identity);
+        if unchanged
+            && self
+                .cache_written_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&target)
+                .is_some_and(|written| written.elapsed() < ARTIFACT_PROFILE_CACHE_RENEW_INTERVAL)
+        {
+            return Ok(artifact.release);
+        }
+        // 相同制品只续期缓存，保留实际提取版本时的核验时间
+        let verified_at = if unchanged {
+            artifact.release.verified_at.unwrap_or_else(Utc::now)
+        } else {
+            Utc::now()
+        };
         // 核验时间属于缓存信封，避免同构建重复检查被判定为不同制品
         artifact.release.verified_at = None;
         let payload =
@@ -235,6 +258,10 @@ impl PlatformDesktopReleaseService {
             Ok(false) => return Err("Desktop 发布缓存已更新，等待下次同步".to_owned()),
             Err(_) => return Err("Desktop 发布缓存写入失败".to_owned()),
         }
+        self.cache_written_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(target, tokio::time::Instant::now());
         artifact.release.verified_at = Some(verified_at);
         self.verified
             .lock()

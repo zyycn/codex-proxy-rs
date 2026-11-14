@@ -2468,13 +2468,14 @@ TUI 默认标识为 `codex-tui`，Exec 为 `codex_exec`，入口后缀使用同�
 因此 Desktop 预设保持默认即可；CLI 预设建议配置真实值，多 Key 可通过各自的画像覆盖差异化
 
 `versionLag` 让 `latest` 模式跟随官方发布但滞后 N 个已观察版本采用，省略时采用最新版本。
-档位基于网关观察到的发布序列解析：启动种子与历次 24 小时检查的核验版本按时间倒序构成历史，
+档位基于网关观察到的发布序列解析：启动种子与历次检查的核验版本按时间倒序构成历史，
 取第 N 项；序列不足时回退最旧已核验版本，不会因此解析失败。历史仅保留在进程内，
 重启后从启动种子与制品缓存重新积累
 
 六套预设均支持自动更新：macOS Desktop 支持 arm64，Windows/Linux Desktop 及三套 CLI 支持 arm64、x86_64。
 预设接口的 `automaticAvailable`、`reason` 表示当前组合的可用性；自定义架构可能使自动解析不可用。
-每 24 小时后台检查官方稳定发布，失败保留同组合上次有效版本；固定值不受后台更新影响。
+启动时立即检查官方稳定发布，之后每轮检查完成等待 1 小时再检查。
+版本变化后提取并更新画像，失败保留同组合上次有效版本，下一轮重试；固定值不受后台更新影响。
 Desktop 的应用版本、Core 和构建号来自同一平台、架构的官方制品：macOS ZIP、Windows MSIX、Linux DEB。
 Windows/Linux 通过 ETag 检查更新，未变化时复用已核验版本；CLI 依据官方 npm 稳定标签和对应平台依赖
 
@@ -2485,6 +2486,7 @@ Windows/Linux 通过 ETag 检查更新，未变化时复用已核验版本；CLI
 完整自定义配置不携带官方制品核验时间。
 客户端画像配置控制应用层请求字段，不切换操作系统的 TLS 实现。默认 HTTP 使用 native TLS，
 WebSocket 使用 rustls；配置自定义 CA 时 HTTP 也使用 rustls。TLS 指纹需按实际部署平台与传输路径核验。
+版本未变化时只更新 `checkedAt`，保留 `verifiedAt`；缓存续期不改写核验时间。
 未完成本次启动检查时 `checkedAt` 为 `null`。非法或当前不可用的选择返回 `400`，保存失败不提交其他修改
 
 Responses 的自动 Desktop Git 上下文与请求头使用同一画像快照：已有 `appServerVersion` 同步为 Core 版本，

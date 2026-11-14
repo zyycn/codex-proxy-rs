@@ -14,6 +14,7 @@ use provider_openai::transport::profile::selection::{ClientKind, ClientProfileSe
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::io;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,7 +25,8 @@ mod xz;
 #[derive(Default)]
 struct Cache {
     profiles: Mutex<BTreeMap<String, ProviderArtifactProfile>>,
-    reject: bool,
+    reject: AtomicBool,
+    writes: AtomicUsize,
 }
 impl ProviderArtifactProfileCachePort for Cache {
     fn read<'a>(
@@ -40,7 +42,8 @@ impl ProviderArtifactProfileCachePort for Cache {
         _ttl: Duration,
     ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
         Box::pin(async move {
-            if self.reject {
+            self.writes.fetch_add(1, Ordering::Relaxed);
+            if self.reject.load(Ordering::Relaxed) {
                 return Ok(false);
             }
             self.profiles
@@ -68,6 +71,9 @@ impl DesktopArtifactTransport for Transport {
             let round = *self.round.lock().unwrap();
             if round == 1 && target == TARGETS[0] {
                 return Err(io::Error::other("fixture outage"));
+            }
+            if round == 3 {
+                return Ok(previous);
             }
             let build = if round == 2 {
                 1
@@ -136,22 +142,85 @@ async fn releases_are_independent_atomic_cached_and_preserved_on_failures_or_rol
         .await;
     assert_eq!(selection.resolve(&restored).unwrap(), frozen);
 }
+#[tokio::test(start_paused = true)]
+async fn unchanged_artifacts_renew_daily_and_keep_verification_time() {
+    let state = CodexWireProfileState::new(super::wire_profile());
+    let cache = Arc::new(Cache::default());
+    let transport = Arc::new(Transport::default());
+    *transport.round.lock().unwrap() = 3;
+    let service = service(state.clone(), cache.clone(), transport);
+    let target = TARGETS[0];
+    let original = state.client_release(ClientKind::Desktop, target.platform, target.arch);
+    service.refresh().await;
+    assert_eq!(cache.writes.load(Ordering::Relaxed), 4);
+    tokio::time::advance(Duration::from_secs(60 * 60)).await;
+    service.refresh().await;
+    assert_eq!(cache.writes.load(Ordering::Relaxed), 4);
+    for day in 1..=31 {
+        tokio::time::advance(Duration::from_secs(24 * 60 * 60)).await;
+        service.refresh().await;
+        assert_eq!(cache.writes.load(Ordering::Relaxed), 4 * (day + 1));
+        assert_eq!(
+            state.client_release(ClientKind::Desktop, target.platform, target.arch),
+            original
+        );
+    }
+    cache.reject.store(true, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(24 * 60 * 60)).await;
+    service.refresh().await;
+    assert!(
+        state
+            .client_release_status(ClientKind::Desktop, target.platform, target.arch)
+            .1
+            .is_some()
+    );
+    cache.reject.store(false, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(60 * 60)).await;
+    service.refresh().await;
+    assert_eq!(cache.writes.load(Ordering::Relaxed), 4 * 34);
+    assert!(
+        state
+            .client_release_status(ClientKind::Desktop, target.platform, target.arch)
+            .1
+            .is_none()
+    );
+    assert_eq!(
+        state.client_release(ClientKind::Desktop, target.platform, target.arch),
+        original
+    );
+}
+
 #[tokio::test]
-async fn cache_rejection_keeps_the_previous_release() {
+async fn cache_rejection_preserves_previous_release_and_retries_same_artifact() {
     let state = CodexWireProfileState::new(super::wire_profile());
     let before = state.client_release(ClientKind::Desktop, TARGETS[0].platform, TARGETS[0].arch);
-    service(
-        state.clone(),
-        Arc::new(Cache {
-            reject: true,
-            ..Default::default()
-        }),
-        Arc::new(Transport::default()),
-    )
-    .refresh()
-    .await;
+    let cache = Arc::new(Cache {
+        reject: AtomicBool::new(true),
+        ..Default::default()
+    });
+    let transport = Arc::new(Transport::default());
+    let service = service(state.clone(), cache.clone(), transport);
+    service.refresh().await;
     assert_eq!(
         state.client_release(ClientKind::Desktop, TARGETS[0].platform, TARGETS[0].arch),
         before
     );
+    cache.reject.store(false, Ordering::Relaxed);
+    service.refresh().await;
+    assert_eq!(cache.writes.load(Ordering::Relaxed), 8);
+    for target in TARGETS {
+        assert_eq!(
+            state
+                .client_release(ClientKind::Desktop, target.platform, target.arch)
+                .unwrap()
+                .codex_version,
+            "0.200.0"
+        );
+        assert!(
+            state
+                .client_release_status(ClientKind::Desktop, target.platform, target.arch)
+                .1
+                .is_none()
+        );
+    }
 }

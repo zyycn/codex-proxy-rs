@@ -282,7 +282,7 @@ impl ClientProfileSelection {
             verified_at: release.verified_at.unwrap_or(DateTime::UNIX_EPOCH),
         };
         if let Some(entry) = self.cli_entry {
-            // 入口后缀使用同一次解析得到的 Core 版本，避免每日更新后头部与后缀混用
+            // 入口后缀使用同一次解析得到的 Core 版本，避免版本更新后头部与后缀混用
             // originator 可单独覆盖；入口名与官方 clientInfo.name 的语义保持一致
             profile.exact_user_agent = Some(format!(
                 "{} ({}; {})",
