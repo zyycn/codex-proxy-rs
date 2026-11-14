@@ -34,11 +34,12 @@ use selection::{ClientKind, ClientPlatform, ClientRelease};
 pub const CODEX_DESKTOP_APPCAST_URL: &str =
     "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
 /// 官方发布元数据检查周期
-pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_APPCAST_BYTES: usize = 1024 * 1024;
 const ARTIFACT_PROFILE_CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const ARTIFACT_PROFILE_CACHE_RENEW_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const ARTIFACT_PROFILE_SCHEMA_VERSION: u64 = 1;
 
 /// 保留已有配置类型入口；位置规则由出口领域统一维护
@@ -634,6 +635,7 @@ pub struct CodexDesktopReleaseService {
     profile: CodexWireProfileState,
     cache: CodexArtifactProfileCache,
     verified: Arc<RwLock<Option<CodexBundledReleaseProfile>>>,
+    cache_written_at: Arc<RwLock<Option<tokio::time::Instant>>>,
 }
 
 impl CodexDesktopReleaseService {
@@ -668,6 +670,7 @@ impl CodexDesktopReleaseService {
             profile,
             cache,
             verified: Arc::new(RwLock::new(verified)),
+            cache_written_at: Arc::default(),
         }
     }
 
@@ -732,10 +735,24 @@ impl CodexDesktopReleaseService {
                 {
                     return Err(CodexDesktopReleaseError::InconsistentRelease);
                 }
-                if !self.cache.replace_if_newer(&verified).await? {
-                    return Err(CodexDesktopReleaseError::ReleaseRollback);
+                // 轻量检查只推进观察时间，缓存单独按天续期
+                let renewal_due = self
+                    .cache_written_at
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_none_or(|written| {
+                        written.elapsed() >= ARTIFACT_PROFILE_CACHE_RENEW_INTERVAL
+                    });
+                if renewal_due {
+                    if !self.cache.replace_if_newer(&verified).await? {
+                        return Err(CodexDesktopReleaseError::ReleaseRollback);
+                    }
+                    *self
+                        .cache_written_at
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some(tokio::time::Instant::now());
                 }
-                self.profile.update_bundled_release(&verified);
                 return Ok(release);
             }
         }
@@ -766,6 +783,10 @@ impl CodexDesktopReleaseService {
             .verified
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(published);
+        *self
+            .cache_written_at
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tokio::time::Instant::now());
         Ok(release)
     }
 }

@@ -1,6 +1,7 @@
 //! 客户端画像测试入口，以及 Desktop 发行解析和原子更新测试
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -75,14 +76,16 @@ impl CodexDesktopReleaseTransport for ReleaseTransport {
 #[derive(Default)]
 struct ArtifactProfiles {
     profile: Mutex<Option<ProviderArtifactProfile>>,
-    fail_writes: bool,
+    fail_writes: AtomicBool,
+    writes: AtomicUsize,
 }
 
 impl ArtifactProfiles {
     fn failing() -> Self {
         Self {
             profile: Mutex::new(None),
-            fail_writes: true,
+            fail_writes: AtomicBool::new(true),
+            writes: AtomicUsize::new(0),
         }
     }
 }
@@ -94,7 +97,8 @@ impl ProviderArtifactProfileCachePort for ArtifactProfiles {
         _ttl: Duration,
     ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
         Box::pin(async move {
-            if self.fail_writes {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            if self.fail_writes.load(Ordering::SeqCst) {
                 return Err(ProviderStoreError::new(
                     ProviderStoreErrorKind::Unavailable,
                     "replace test artifact profile",
@@ -272,19 +276,34 @@ async fn bundled_release_update_should_change_core_and_desktop_identity_atomical
     assert_eq!(transport.core_probes(), 1);
 }
 
-#[tokio::test]
-async fn unchanged_verified_release_should_refresh_cache_without_downloading_core_again() {
+#[tokio::test(start_paused = true)]
+async fn unchanged_verified_release_renews_cache_daily_without_downloading_core_again() {
     let state = CodexWireProfileState::new(wire_profile());
     let latest = release("26.810.41047", "6570");
     let transport = Arc::new(ReleaseTransport::new(
-        [Ok(latest.clone()), Ok(latest)],
+        (0..5).map(|_| Ok(latest.clone())),
         [Ok("0.148.0-alpha.9".to_owned())],
     ));
     let cache = Arc::new(ArtifactProfiles::default());
-    let service = service(state, transport.clone(), cache, None);
+    let service = service(state.clone(), transport.clone(), cache.clone(), None);
 
     service.refresh().await.expect("first release refresh");
+    let verified = state.snapshot();
+    tokio::time::advance(Duration::from_secs(60 * 60)).await;
     service.refresh().await.expect("cached release refresh");
+    assert_eq!(cache.writes.load(Ordering::SeqCst), 1);
+
+    tokio::time::advance(Duration::from_secs(23 * 60 * 60)).await;
+    cache.fail_writes.store(true, Ordering::SeqCst);
+    service.refresh().await.expect_err("renewal failure");
+    assert_eq!(state.snapshot(), verified);
+    cache.fail_writes.store(false, Ordering::SeqCst);
+    service.refresh().await.expect("retry renewal");
+    assert_eq!(cache.writes.load(Ordering::SeqCst), 3);
+    service.refresh().await.expect("renewed cache");
+    assert_eq!(cache.writes.load(Ordering::SeqCst), 3);
+    assert_eq!(state.snapshot(), verified);
+    assert!(service.status().snapshot().last_error.is_none());
 
     assert_eq!(transport.core_probes(), 1);
 }
@@ -329,15 +348,11 @@ async fn cache_failure_should_not_publish_a_partially_verified_profile() {
     let original = wire_profile();
     let state = CodexWireProfileState::new(original.clone());
     let transport = Arc::new(ReleaseTransport::new(
-        [Ok(release("26.810.41047", "6570"))],
-        [Ok("0.148.0-alpha.9".to_owned())],
+        (0..2).map(|_| Ok(release("26.810.41047", "6570"))),
+        (0..2).map(|_| Ok("0.148.0-alpha.9".to_owned())),
     ));
-    let service = service(
-        state.clone(),
-        transport,
-        Arc::new(ArtifactProfiles::failing()),
-        None,
-    );
+    let cache = Arc::new(ArtifactProfiles::failing());
+    let service = service(state.clone(), transport, cache.clone(), None);
 
     service
         .refresh()
@@ -346,6 +361,9 @@ async fn cache_failure_should_not_publish_a_partially_verified_profile() {
 
     assert_eq!(state.snapshot(), original);
     assert!(service.status().snapshot().latest.is_none());
+    cache.fail_writes.store(false, Ordering::SeqCst);
+    service.refresh().await.expect("retry same release");
+    assert_eq!(state.snapshot().desktop_build, "6570");
 }
 
 /// 滞后档位按发布观察序列解析：启动种子、历次核验发布与失败观察共同构成历史。
