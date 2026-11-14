@@ -354,6 +354,11 @@ Responses 上游使用 `$.input`，Messages 上游使用 `$.messages`
 `stream` 缺省或 `false` 返回 JSON，`true` 返回 SSE。每轮由客户端携带所需的完整上下文。Claude Code 用 `--resume` 恢复本地会话后，仍通过 `messages` 发送上下文；网关不缓存对话正文用于下一轮。
 Messages 没有服务端历史续接或 WebSocket 入口
 
+Messages 生成请求通过 OpenAI Provider 选号时，优先使用 `x-claude-code-session-id` 识别 Claude Code 会话，
+缺少有效头部时读取 `metadata.user_id` JSON 字符串中的 `session_id` 或旧格式 `_session_<id>` 后缀。
+会话标识最长 256 字节，不接受控制字符；普通用户标识和对话内容不用于绑定账号。
+同一 Client Key 下的会话沿用[账号亲和与换号](#账号亲和与换号)设置，转向 Responses 上游时也适用
+
 ```bash
 curl https://gateway.example.com/v1/messages \
   -H "x-api-key: ${CPR_CLIENT_KEY}" \
@@ -2299,7 +2304,7 @@ Guardian 以 `subagent_kind` 或 `client_metadata.x-openai-subagent` 值 `guardi
 
 ### 账号亲和与换号
 
-`openaiAccountAffinity` 控制 Codex 账号亲和，默认 `strict`（严格）：
+`openaiAccountAffinity` 控制 OpenAI Provider 的账号亲和，包括带明确 Claude Code 会话身份的 [Messages 请求](#messages-请求)，默认 `strict`（严格）：
 
 - `relaxed`（宽松）：会话内请求直接按 `rotationStrategy` 选号，不优先主账号
 - `preferred`（优先）优先使用会话主账号，短时满载、限流或模型不匹配时临时分流，后备按同一会话的稳定顺序参与既有调度

@@ -1,5 +1,7 @@
 //! Messages 原生 wire、跨协议头隔离和本地计数合同
 
+mod affinity;
+
 use super::*;
 use gateway_core::event::ProviderResponseTimings;
 use gateway_core::operation::TokenCountRequest;
