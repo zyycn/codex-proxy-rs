@@ -4,6 +4,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::Bytes;
 use futures::{StreamExt as _, future::BoxFuture};
 use gateway_core::{
@@ -122,10 +123,12 @@ async fn native_json_preserves_extensions_and_uses_client_key_authentication() {
     )]);
     let trace = session.trace.clone();
     let (router, execution) = fixture(session).await;
-    let response = router
-        .oneshot(request("/v1/messages", false))
-        .await
-        .unwrap();
+    let mut incoming = request("/v1/messages", false);
+    incoming.headers_mut().insert(
+        "x-claude-code-session-id",
+        "claude-session".parse().unwrap(),
+    );
+    let response = router.oneshot(incoming).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(bytes, raw);
@@ -136,6 +139,15 @@ async fn native_json_preserves_extensions_and_uses_client_key_authentication() {
         panic!("generate")
     };
     assert_eq!(generation.protocol_payload().protocol(), "anthropic");
+    assert!(
+        generation.protocol_payload().context()["opaque_request_headers"]
+            .as_array()
+            .unwrap()
+            .contains(&json!([
+                "x-claude-code-session-id",
+                STANDARD.encode("claude-session")
+            ]))
+    );
     assert_eq!(
         generation.protocol_payload().body()["future_extension"]["preserved"],
         true

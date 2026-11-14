@@ -22,7 +22,8 @@ pub(crate) use affinity::{
     CodexSessionAffinity, derive_cache_preference, derive_codex_cyber_policy_session_key,
     derive_codex_endpoint_session_affinity, derive_codex_session_affinity,
     derive_codex_transport_key, derive_endpoint_affinity_with_headers,
-    derive_live_session_affinity, derive_previous_response_id_hash, derive_turn_alias,
+    derive_live_session_affinity, derive_messages_session_affinity,
+    derive_previous_response_id_hash, derive_turn_alias,
 };
 pub(crate) use eligibility::CodexSelectionModel;
 pub(crate) use oauth::oauth_owner_ref;

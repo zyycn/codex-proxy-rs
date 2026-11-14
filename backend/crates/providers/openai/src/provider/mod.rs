@@ -673,8 +673,7 @@ impl Provider for CodexProvider {
         {
             return Err(continuation_replay_required_error("scope_unavailable"));
         }
-        // 其他协议必须先取得真实账号，再按固定 attempt 阶段调用转换器；选号前不能
-        // 把未知正文当成 OpenAI wire 解释会话、亲和或传输字段
+        // 跨协议转换必须在选号后执行；选号前只按各自协议读取明确会话身份
         let upstream = (generate.protocol_payload().protocol() == OPENAI_PROTOCOL)
             .then(|| encode_generate_request(generate, upstream_model.as_str(), None))
             .transpose()
@@ -726,10 +725,16 @@ impl Provider for CodexProvider {
                     requires_websocket,
                 )
             });
-        // 内容亲和只交给选号器；中间件复验、轮次关联和原生续接仍只认真实会话
+        let messages_affinity = crate::credential::derive_messages_session_affinity(
+            generate.protocol_payload(),
+            &[],
+            context.client_api_key_ref(),
+        );
+        // Messages 身份与内容亲和仅交给选号器，不建立 OpenAI 轮次或原生续接关联
         let account_affinity = selection_session_affinity
             .as_ref()
-            .or(cache_preference.as_ref());
+            .or(cache_preference.as_ref())
+            .or(messages_affinity.as_ref());
         let selection_started_at = Instant::now();
         let selection = async {
             self.selector

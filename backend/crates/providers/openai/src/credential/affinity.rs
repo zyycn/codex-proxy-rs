@@ -1,6 +1,6 @@
 //! 逻辑会话账号绑定与线程传输隔离键的单向派生
 
-use gateway_core::operation::RawJsonPayload;
+use gateway_core::operation::{ProtocolPayload, RawJsonPayload};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAlias};
 use serde_json::{Map, Value};
@@ -146,6 +146,38 @@ pub(crate) fn derive_codex_session_affinity(
         client_api_key_id,
     )
     .map(|affinity| affinity.with_follow_only(request.client_account_follow_only))
+}
+
+/// Messages 的会话只参与账号绑定，不解释为 OpenAI 轮次或原生续接身份
+pub(crate) fn derive_messages_session_affinity(
+    payload: &ProtocolPayload,
+    headers: &[gateway_core::engine::middleware::MiddlewareHeader],
+    client_api_key_id: &ClientApiKeyId,
+) -> Option<CodexSessionAffinity> {
+    if payload.protocol() != gateway_protocol::anthropic::ANTHROPIC_PROTOCOL {
+        return None;
+    }
+    let passthrough = crate::transport::request::decode_passthrough_headers(payload.context());
+    let header = headers
+        .iter()
+        .find(|header| {
+            header
+                .name()
+                .eq_ignore_ascii_case("x-claude-code-session-id")
+        })
+        .map(|header| std::str::from_utf8(header.value()).ok())
+        .unwrap_or_else(|| {
+            passthrough
+                .get("x-claude-code-session-id")
+                .and_then(|value| value.to_str().ok())
+        });
+    let session = gateway_protocol::anthropic::claude_session_id(payload.body(), header)?;
+    session_affinity(
+        "claude-session",
+        &session,
+        Some(&session),
+        client_api_key_id,
+    )
 }
 
 /// 仅供选号使用。缓存键与输入正文均不作为会话、轮次或传输身份。
