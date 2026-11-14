@@ -1,3 +1,40 @@
 @import 'tailwindcss/theme.css' layer(theme);
 @import '@codex-proxy/ui/tailwind.css';
 @import 'tailwindcss/utilities.css' layer(utilities);
+
+.pwa-window {
+  --app-height: calc(100dvh - env(titlebar-area-y, 0px) - env(titlebar-area-height, 0px));
+  --app-titlebar-inset: max(0px, 100dvh - var(--app-height));
+}
+
+.pwa-window,
+.pwa-window body {
+  background-color: var(--z-color-bg-container);
+}
+
+.pwa-window body {
+  padding-top: var(--app-titlebar-inset);
+}
+
+.pwa-window .h-dvh,
+.pwa-window .page-slot {
+  height: var(--app-height);
+}
+
+.pwa-window .min-h-dvh {
+  min-height: var(--app-height);
+}
+
+/* 满屏面板不能高于正文；矮窗仍由外层滚动到列表底部 */
+.pwa-window .page-slot > * {
+  max-height: 100%;
+}
+
+.pwa-window .page-slot > .h-full {
+  overflow: visible;
+}
+
+/* 通知挂在 body，固定定位不会避开标题栏 */
+.pwa-window article[id^='z-notification-'] {
+  translate: 0 var(--app-titlebar-inset);
+}
