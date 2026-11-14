@@ -293,10 +293,7 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         raw_header_values(&raw, "x-openai-account-routing-override"),
         vec![b"configured-route".to_vec()]
     );
-    assert_eq!(
-        raw_header_values(&raw, "x-codex-installation-id"),
-        vec![b"lease-installation".to_vec()]
-    );
+    assert!(raw_header_values(&raw, "x-codex-installation-id").is_empty());
     let session = raw_header_values(&raw, "session-id");
     assert!(uuid::Uuid::parse_str(std::str::from_utf8(&session[0]).unwrap()).is_ok());
     // 指纹头由运行时画像生成，不透传客户端值
@@ -486,10 +483,7 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
         values("x-openai-account-routing-override"),
         vec![b"configured-route".to_vec()]
     );
-    assert_eq!(
-        values("x-codex-installation-id"),
-        vec![b"lease-installation".to_vec()]
-    );
+    assert!(values("x-codex-installation-id").is_empty());
     let session = values("session-id");
     assert!(uuid::Uuid::parse_str(std::str::from_utf8(&session[0]).unwrap()).is_ok());
     assert_eq!(values("x-codex-turn-state"), vec![b"turn-ascii".to_vec()]);

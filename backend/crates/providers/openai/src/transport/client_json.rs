@@ -11,7 +11,7 @@ use super::{
         CodexRequestContext, CodexTransportMetrics, elapsed_duration_millis, http_version_name,
     },
     endpoints::endpoint_url,
-    headers::insert_optional_protocol_header,
+    headers::{insert_optional_header, insert_optional_protocol_header},
     response_meta,
 };
 
@@ -41,6 +41,11 @@ impl CodexBackendClient {
         };
         let profile = self.profile.snapshot();
         let mut headers = self.model_request_headers(&profile, context)?;
+        insert_optional_header(
+            &mut headers,
+            "x-codex-installation-id",
+            context.installation_id,
+        )?;
         super::headers::append_passthrough_headers(&mut headers, passthrough_headers);
         // 独立端点没有 Responses 原连接归属，续接状态不能跨账号继承
         // turn metadata 随后仅使用当前 lease 已处理的值

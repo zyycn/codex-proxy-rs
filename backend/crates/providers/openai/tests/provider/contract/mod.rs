@@ -6326,8 +6326,10 @@ async fn installation_seed_scopes_http_identity_and_cache_by_key_and_account() {
         .iter()
         .zip(&bodies)
         .map(|(request, body)| {
-            let id = request.headers["x-codex-installation-id"].to_str().unwrap();
-            assert_eq!(id, body["client_metadata"]["x-codex-installation-id"]);
+            let id = body["client_metadata"]["x-codex-installation-id"]
+                .as_str()
+                .unwrap();
+            assert!(!request.headers.contains_key("x-codex-installation-id"));
             assert!(uuid::Uuid::parse_str(id).is_ok());
             assert_ne!(id, KEY_INSTALLATION_SEED);
             assert_ne!(id, other_seed);
@@ -6359,7 +6361,7 @@ async fn installation_seed_scopes_http_identity_and_cache_by_key_and_account() {
 }
 
 #[tokio::test]
-async fn http_account_scoping_replaces_downstream_installation_header() {
+async fn http_account_scoping_keeps_installation_in_metadata() {
     for owner in ["acct_scope_same", "acct_scope_old"] {
         let raw = r#"{"installation_id":"client-installation","future":true}"#;
         let request = capture_scoped_http_request(
@@ -6400,10 +6402,7 @@ async fn http_account_scoping_replaces_downstream_installation_header() {
         assert_ne!(installation_id, "client-installation");
         assert!(uuid::Uuid::parse_str(installation_id).is_ok());
         assert_eq!(body["installation_id"], installation_id);
-        assert_eq!(
-            captured_header_values(&request, "x-codex-installation-id"),
-            vec![installation_id.as_bytes().to_vec()]
-        );
+        assert!(captured_header_values(&request, "x-codex-installation-id").is_empty());
         let headers = captured_header_values(&request, "x-codex-turn-metadata");
         assert_eq!(headers.len(), 1);
         for encoded in [
@@ -6421,7 +6420,7 @@ async fn http_account_scoping_replaces_downstream_installation_header() {
 }
 
 #[tokio::test]
-async fn websocket_account_scoping_replaces_downstream_installation_header() {
+async fn websocket_account_scoping_keeps_installation_in_metadata() {
     for owner in ["acct_scope_same", "acct_scope_old"] {
         let raw = r#"{"installation_id":"client-installation","future":true}"#;
         let store = Arc::new(MemoryAccountStore::default());
@@ -6510,7 +6509,7 @@ async fn websocket_account_scoping_replaces_downstream_installation_header() {
         assert_ne!(installation_id, KEY_INSTALLATION_SEED);
         assert!(uuid::Uuid::parse_str(installation_id).is_ok());
         assert_eq!(body["installation_id"], installation_id);
-        assert_eq!(header["x-codex-installation-id"], installation_id);
+        assert!(!header.contains_key("x-codex-installation-id"));
         for encoded in [
             header["x-codex-turn-metadata"]
                 .to_str()
@@ -6582,10 +6581,7 @@ async fn same_account_scope_preserves_future_protocol_shapes() {
         body.pointer("/client_metadata/x-codex-installation-id")
     );
     assert!(body.pointer("/client_metadata/installation_id").is_none());
-    assert_eq!(
-        request.headers["x-codex-installation-id"].to_str().unwrap(),
-        body["client_metadata"]["x-codex-installation-id"]
-    );
+    assert!(!request.headers.contains_key("x-codex-installation-id"));
 }
 
 #[tokio::test]

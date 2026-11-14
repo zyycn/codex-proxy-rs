@@ -500,7 +500,9 @@ Responses API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`origin
 包括会话、线程、Lite 和其他业务扩展头。
 上游认证只来自选中的账号；API Key 不携带 OAuth Cookie、ChatGPT 账号身份或下游的
 `X-OpenAI-Actor-Authorization` 托管认证声明。
-`x-codex-installation-id` 在 Key 配置种子时，由种子、Key ID 与选中账号 ID 稳定派生；未配置时使用账号已持久化的安装 ID，与正文 `client_metadata` 中的安装身份一致
+Responses 的安装身份通过正文 `client_metadata` 及 turn metadata 发送，不默认添加独立的
+`x-codex-installation-id` 请求头，也不透传下游同名头。Key 配置种子时，安装身份由种子、Key ID 与选中账号 ID
+稳定派生；未配置时使用账号已持久化的安装 ID。Images、Search 和 Live 保留各自的安装头
 `x-openai-internal-codex-residency` 和 `x-openai-account-routing-override` 分别由部署配置
 `openai.residency`、`openai.account_routing_override` 控制，配置值原样发送并覆盖客户端同名头，
 省略或 `null` 时删除对应请求头。配置说明见 [部署与运维](../deploy/README.md#启动后的运行设置)
@@ -519,9 +521,12 @@ Responses 明确换号时清理 `traceparent`、`tracestate`、`sentry-trace`、
 `x-openai-fedramp`，同时清理正文、`client_metadata`、turn metadata 中的同名字段及
 `ws_request_header_*` 副本。同账号及归属未知时保留原值，业务输入和工具结果保持原始内容
 
-会话、线程、窗口及父子线程引用在出站时按本次安装身份稳定映射为 UUID；
-默认使用账号安装身份；Key 配置种子时，每个 Key × 账号组合拥有独立的安装身份，换账号会改变映射。HTTP 请求头、正文 metadata、WS 副本及
-已识别的 Desktop 自动 Git 上下文使用一致映射。
+会话、线程及父子线程引用在出站时按本次安装身份稳定映射。UUIDv7 输入保留原始毫秒时间戳和版本，
+随机部分按安装身份改写；其他标识映射为 UUIDv4 形状，不补造创建时间。
+官方格式的窗口 ID 保留 `{映射后的 thread_id}:{原窗口序号}` 结构，`context_window_id` 作为独立标识处理；
+非官方格式的窗口 ID 按普通标识映射。
+默认使用账号安装身份；Key 配置种子时，每个 Key × 账号组合拥有独立的安装身份，换账号会改变映射。
+HTTP 请求头、正文 metadata、WS 副本及已识别的 Desktop 自动 Git 上下文使用一致映射，UUIDv7 的创建时间仍可见。
 轮次及父子轮次引用保留客户端原值，包括输入项的 `internal_chat_message_metadata_passthrough.turn_id`、
 请求 metadata 中的 `turn_id`、`parent_turn_id`、`root_turn_id`，以及 `x-client-turn-id`、
 Images 的 `x-codex-image-turn-id` 和 Desktop 自动 Git 上下文的 `clientUserMessageId`。
