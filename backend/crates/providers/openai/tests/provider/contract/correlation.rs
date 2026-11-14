@@ -2,16 +2,21 @@
 
 use super::*;
 
-fn metadata() -> Value {
-    json!({"session_id":"source-session", "thread_id":"source-thread", "turn_id":"source-turn",
-        "parent_thread_id":"source-session", "forked_from_thread_id":"source-session",
+const SESSION_ID: &str = "019b1234-5678-7abc-8def-0123456789ab";
+const THREAD_ID: &str = "019b1234-5679-7def-8abc-0123456789ab";
+const CONTEXT_WINDOW_ID: &str = "3b11bc82-c666-417d-b9ff-2a34fd040385";
+
+fn metadata(window_number: u64) -> Value {
+    json!({"session_id":SESSION_ID, "thread_id":THREAD_ID, "turn_id":"source-turn",
+        "parent_thread_id":SESSION_ID, "forked_from_thread_id":SESSION_ID,
         "parent_turn_id":"source-turn", "root_turn_id":"source-turn",
-        "window_id":"source-window", "context_window_id":"source-window", "future":{"keep":true},
+        "window_id":format!("{THREAD_ID}:{window_number}"), "window_number":window_number,
+        "context_window_id":CONTEXT_WINDOW_ID, "future":{"keep":true},
         "sentry-trace":"source-trace", "baggage":"sentry-environment=synthetic"})
 }
 
-fn payload(websocket: bool) -> ProtocolPayload {
-    let mut full = metadata();
+fn payload(websocket: bool, window_number: u64) -> ProtocolPayload {
+    let mut full = metadata(window_number);
     full["tool_namespaces_info"] = json!({"inventory":"body-only"});
     let mut input = account_isolation::isolation_history()
         .as_array()
@@ -31,17 +36,17 @@ fn payload(websocket: bool) -> ProtocolPayload {
     }
     input.insert(0, json!({"role":"user", "content":[{"type":"input_text", "text":concat!(
         "<external_codex_git_state><environment_context><git>",
-        r#"{"sessionId":"source-session","threadId":"source-thread","clientUserMessageId":"source-turn","path":"/workspace/project"}"#,
+        r#"{"sessionId":"019b1234-5678-7abc-8def-0123456789ab","threadId":"019b1234-5679-7def-8abc-0123456789ab","clientUserMessageId":"source-turn","path":"/workspace/project"}"#,
         "</git></environment_context></external_codex_git_state>"
     )}], "internal_chat_message_metadata_passthrough":{
         "turn_id":"source-turn", "content_item_kinds":["additional_content.codex_git_state"]
     }}));
     ProtocolPayload::json_object("openai", json!({
         "model":"gpt-5.4", "input":input,
-        "prompt_cache_key":"custom-cache-key", "client_metadata":{
-            "session_id":"source-session", "thread_id":"source-thread", "turn_id":"source-turn",
+        "prompt_cache_key":SESSION_ID, "client_metadata":{
+            "session_id":SESSION_ID, "thread_id":THREAD_ID, "turn_id":"source-turn",
             "x-client-turn-id":"source-turn",
-            "x-codex-window-id":"source-window", "x-codex-parent-thread-id":"source-session",
+            "x-codex-window-id":format!("{THREAD_ID}:{window_number}"), "x-codex-parent-thread-id":SESSION_ID,
             "x-codex-turn-metadata":full.to_string(),
             "ws_request_header_traceparent":"00-11111111111111111111111111111111-2222222222222222-01",
             "ws_request_header_tracestate":"vendor=source",
@@ -50,9 +55,10 @@ fn payload(websocket: bool) -> ProtocolPayload {
         }
     }).as_object().unwrap().clone()).unwrap().with_context(Map::from_iter([
         ("use_websocket".into(), json!(websocket)),
-        ("session_id".into(), json!("source-session")),
-        ("thread_id".into(), json!("source-thread")),
-        ("turn_metadata".into(), json!(metadata().to_string())),
+        ("session_id".into(), json!(SESSION_ID)),
+        ("thread_id".into(), json!(THREAD_ID)),
+        ("turn_metadata".into(), json!(metadata(window_number).to_string())),
+        ("codex_window_id".into(), json!(format!("{THREAD_ID}:{window_number}"))),
         ("opaque_request_headers".into(), json!([
             ["x-client-turn-id",STANDARD.encode("source-turn")],
             ["traceparent",STANDARD.encode("00-11111111111111111111111111111111-2222222222222222-01")],
@@ -74,7 +80,7 @@ async fn account_correlation_preserves_turns_across_transports_and_account_switc
     create_account(&stores[1], "acct_scope_new").await;
     let mut captures = Vec::new();
     for account in [0, 0, 1, 0] {
-        for websocket in [false, true] {
+        for (window_number, websocket) in [(0, false), (0, true), (1, false), (1, true)] {
             let (base_url, capture): (
                 String,
                 BoxFuture<'static, (reqwest::header::HeaderMap, Value)>,
@@ -126,6 +132,7 @@ async fn account_correlation_preserves_turns_across_transports_and_account_switc
                         "openai",
                         Operation::Generate(GenerateRequest::from_protocol_payload(payload(
                             websocket,
+                            window_number,
                         ))),
                     ),
                     context("req_correlation", CancellationToken::new()),
@@ -161,19 +168,18 @@ async fn account_correlation_preserves_turns_across_transports_and_account_switc
                 flat["ws_request_header_baggage"],
                 "sentry-environment=synthetic"
             );
-            assert_eq!(
-                headers["x-codex-installation-id"].to_str().unwrap(),
-                flat["x-codex-installation-id"]
-            );
+            assert!(!headers.contains_key("x-codex-installation-id"));
             let header: Value =
                 serde_json::from_str(headers["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
             let full: Value =
                 serde_json::from_str(flat["x-codex-turn-metadata"].as_str().unwrap()).unwrap();
-            for (field, original) in [
-                ("session_id", "source-session"),
-                ("thread_id", "source-thread"),
-            ] {
-                assert_scoped_id(flat[field].as_str().unwrap(), original);
+            for (field, original) in [("session_id", SESSION_ID), ("thread_id", THREAD_ID)] {
+                let mapped = flat[field].as_str().unwrap();
+                assert_scoped_id(mapped, original);
+                let mapped_uuid = uuid::Uuid::parse_str(mapped).unwrap();
+                let original_uuid = uuid::Uuid::parse_str(original).unwrap();
+                assert_eq!(mapped_uuid.get_version(), Some(uuid::Version::SortRand));
+                assert_eq!(mapped_uuid.get_timestamp(), original_uuid.get_timestamp());
                 assert_eq!(flat[field], header[field]);
                 assert_eq!(flat[field], full[field]);
             }
@@ -191,10 +197,26 @@ async fn account_correlation_preserves_turns_across_transports_and_account_switc
             }
             assert_eq!(full["parent_thread_id"], flat["session_id"]);
             assert_eq!(full["forked_from_thread_id"], flat["session_id"]);
-            assert_eq!(full["window_id"], full["context_window_id"]);
+            let mapped_thread = flat["thread_id"].as_str().unwrap();
+            let expected_window = format!("{mapped_thread}:{window_number}");
+            assert_eq!(headers["x-codex-window-id"], expected_window);
+            assert_eq!(flat["x-codex-window-id"], expected_window);
+            assert_eq!(
+                headers["x-client-request-id"].to_str().unwrap(),
+                mapped_thread
+            );
+            for metadata in [&header, &full] {
+                assert_eq!(metadata["window_id"], expected_window);
+                assert_eq!(metadata["window_number"], window_number);
+                assert_scoped_id(
+                    metadata["context_window_id"].as_str().unwrap(),
+                    CONTEXT_WINDOW_ID,
+                );
+                assert_ne!(metadata["context_window_id"], metadata["window_id"]);
+            }
             assert!(header.get("tool_namespaces_info").is_none());
             assert_eq!(full["tool_namespaces_info"]["inventory"], "body-only");
-            assert_eq!(full["future"], metadata()["future"]);
+            assert_eq!(full["future"], metadata(window_number)["future"]);
             let input = body["input"].as_array().unwrap();
             assert_eq!(
                 input[0]["internal_chat_message_metadata_passthrough"],
@@ -242,10 +264,8 @@ async fn account_correlation_preserves_turns_across_transports_and_account_switc
                 assert_eq!(git[desktop], flat[wire]);
             }
             assert_eq!(git["path"], "/workspace/project");
-            assert_scoped_id(
-                body["prompt_cache_key"].as_str().unwrap(),
-                "custom-cache-key",
-            );
+            assert_scoped_id(body["prompt_cache_key"].as_str().unwrap(), SESSION_ID);
+            assert_eq!(body["prompt_cache_key"], flat["session_id"]);
             captures.push((
                 [
                     flat["session_id"].clone(),
@@ -257,13 +277,69 @@ async fn account_correlation_preserves_turns_across_transports_and_account_switc
             ));
         }
     }
-    for index in [1, 2, 3, 6, 7] {
+    for index in [1, 2, 3, 4, 5, 6, 7, 12, 13, 14, 15] {
         assert_eq!(captures[0], captures[index]);
     }
-    assert_eq!(captures[4], captures[5]);
-    assert_ne!(captures[0].0, captures[4].0);
-    assert_ne!(captures[0].1, captures[4].1);
-    assert_eq!(captures[0].2, captures[4].2);
+    for index in [9, 10, 11] {
+        assert_eq!(captures[8], captures[index]);
+    }
+    assert_ne!(captures[0].0, captures[8].0);
+    assert_ne!(captures[0].1, captures[8].1);
+    assert_eq!(captures[0].2, captures[8].2);
+}
+
+#[tokio::test]
+async fn window_aliases_preserve_structure_without_reinterpreting_opaque_ids() {
+    for (original, number) in [
+        (format!("{THREAD_ID}:0"), Some(0)),
+        (format!("{THREAD_ID}:1"), Some(1)),
+        ("custom-window".to_owned(), None),
+        (format!("{THREAD_ID}:next"), None),
+    ] {
+        let metadata = json!({
+            "thread_id": THREAD_ID,
+            "window_id": original,
+            "codexWindowId": original,
+            "x-codex-window-id": original,
+            "context_window_id": original,
+        });
+        let request = capture_scoped_http_request(
+            "req_window_aliases",
+            "acct_scope_same",
+            "acct_scope_same",
+            json!({
+                "model":"gpt-5.4", "input":[],
+                "turnMetadata": metadata,
+                "turn_metadata": metadata.to_string(),
+                "client_metadata": metadata,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            Map::new(),
+        )
+        .await;
+        let body = captured_request_body(&request);
+        let encoded: Value = serde_json::from_str(body["turn_metadata"].as_str().unwrap()).unwrap();
+        for mapped in [&body["turnMetadata"], &encoded, &body["client_metadata"]] {
+            let window = mapped["window_id"].as_str().unwrap();
+            assert_eq!(mapped["codexWindowId"], window);
+            assert_eq!(mapped["x-codex-window-id"], window);
+            if let Some(number) = number {
+                assert_eq!(
+                    window,
+                    format!("{}:{number}", mapped["thread_id"].as_str().unwrap())
+                );
+                assert_ne!(mapped["context_window_id"], window);
+            } else {
+                assert_scoped_id(window, &original);
+                assert_eq!(mapped["context_window_id"], window);
+            }
+            let context =
+                uuid::Uuid::parse_str(mapped["context_window_id"].as_str().unwrap()).unwrap();
+            assert_eq!(context.get_version(), Some(uuid::Version::Random));
+        }
+    }
 }
 
 #[tokio::test]
@@ -285,7 +361,7 @@ async fn image_generation_and_edit_preserve_the_client_turn_identity() {
                 .unwrap()
                 .with_context(Map::from_iter([
                     ("image_turn_id".into(), json!("source-turn")),
-                    ("turn_metadata".into(), json!(metadata().to_string())),
+                    ("turn_metadata".into(), json!(metadata(0).to_string())),
                 ])),
         ));
         let mut stream = provider

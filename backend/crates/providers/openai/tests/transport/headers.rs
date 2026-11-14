@@ -226,7 +226,6 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         ("x-codex-parent-thread-id", "parent-456"),
         ("x-openai-subagent", "future_codex_mode"),
         ("x-openai-memgen-request", "true"),
-        ("x-codex-installation-id", "install-123"),
         ("session-id", "cp_derived"),
     ] {
         let value = &headers.iter().find(|(header, _)| header == name).unwrap().1;
@@ -241,6 +240,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         }
     }
     for forbidden in [
+        "x-codex-installation-id",
         "x-codex-turn-id",
         "x-openai-internal-codex-residency",
         "accept",
@@ -303,7 +303,7 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
                 codex_window_id: request.codex_window_id.as_deref(),
                 parent_thread_id: request.parent_thread_id.as_deref(),
                 cookie_header: Some("cf_clearance=old"),
-                installation_id: Some("install-1"),
+                installation_id: Some("3b11bc82-c666-417d-b9ff-2a34fd040385"),
                 session_id: Some("session-1"),
                 thread_id: None,
                 client_request_id: None,
@@ -345,7 +345,7 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
     let scoped_session = read_header_value(&raw_request, "session-id").unwrap();
     assert_ne!(scoped_session, "session-1");
     assert!(uuid::Uuid::parse_str(scoped_session).is_ok());
-    for required in [
+    let mut expected_names = vec![
         "authorization",
         "chatgpt-account-id",
         "originator",
@@ -362,14 +362,17 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
         "x-responsesapi-include-timing-metrics",
         "version",
         "x-codex-parent-thread-id",
-    ] {
-        assert!(header_names.iter().any(|name| name == required));
-    }
-    assert_eq!(
-        read_header_value(&raw_request, "x-codex-installation-id"),
-        Some("install-1")
-    );
+        "x-codex-routing-hint",
+        "content-encoding",
+        "content-length",
+        "host",
+    ];
+    let mut header_names = header_names;
+    expected_names.sort_unstable();
+    header_names.sort_unstable();
+    assert_eq!(header_names, expected_names);
     for forbidden in [
+        "x-codex-installation-id",
         "x-codex-turn-id",
         "x-openai-internal-codex-residency",
         "sec-ch-ua",

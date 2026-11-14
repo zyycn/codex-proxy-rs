@@ -100,6 +100,7 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
                 session_id: Some("session-fingerprint"),
                 thread_id: Some("thread-fingerprint"),
                 client_request_id: Some("request-fingerprint"),
+                installation_id: Some("3b11bc82-c666-417d-b9ff-2a34fd040385"),
                 ..request_context("req_wire_fingerprint", Some("account-fingerprint"))
             },
         )
@@ -151,7 +152,6 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
             read_header_value(&opening, "originator"),
             read_header_value(&opening, "version"),
             read_header_value(&opening, "openai-beta"),
-            read_header_value(&opening, "x-client-request-id"),
             read_header_value(&opening, "x-codex-routing-hint"),
         ),
         (
@@ -160,10 +160,12 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
             Some("codex_cli_rs"),
             Some("1.2.3"),
             Some("responses_websockets=2026-02-06"),
-            Some("request-fingerprint"),
             Some("model=gpt-5.5"),
         )
     );
+    let request_id = read_header_value(&opening, "x-client-request-id").unwrap();
+    assert_ne!(request_id, "request-fingerprint");
+    assert!(uuid::Uuid::parse_str(request_id).is_ok());
     assert_eq!(
         STANDARD
             .decode(websocket_key)
