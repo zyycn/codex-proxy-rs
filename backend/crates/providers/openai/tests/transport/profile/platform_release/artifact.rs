@@ -151,6 +151,39 @@ fn windows_reads_versions_within_budget_despite_large_unrelated_entries() {
 }
 
 #[test]
+fn windows_reads_zip64_end_records_with_sentinel_directory_fields() {
+    let mut bytes = zip(false, &core(true, false));
+    let expected = read_windows(Cursor::new(&bytes), "x86_64").unwrap();
+    let end = bytes.len() - 22;
+    let mut eocd = bytes.split_off(end);
+    assert_eq!(&eocd[..4], b"PK\x05\x06");
+    let entries = u64::from(u16::from_le_bytes(eocd[10..12].try_into().unwrap()));
+    let directory_size = u64::from(u32::from_le_bytes(eocd[12..16].try_into().unwrap()));
+    let directory_offset = u64::from(u32::from_le_bytes(eocd[16..20].try_into().unwrap()));
+    // MSIX 即使不足 4 GiB 也使用 ZIP64 尾记录，并把普通 EOCD 目录字段置为哨兵
+    bytes.extend_from_slice(b"PK\x06\x06");
+    bytes.extend_from_slice(&44_u64.to_le_bytes());
+    bytes.extend_from_slice(&45_u16.to_le_bytes());
+    bytes.extend_from_slice(&45_u16.to_le_bytes());
+    bytes.extend_from_slice(&[0; 8]);
+    for value in [entries, entries, directory_size, directory_offset] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend_from_slice(b"PK\x06\x07");
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&(end as u64).to_le_bytes());
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
+    eocd[8..20].fill(0xff);
+    bytes.extend(eocd);
+    assert_eq!(
+        read_windows(ReadBudget(Cursor::new(&bytes).take(64 * 1024)), "x86_64").unwrap(),
+        expected
+    );
+    bytes[end..end + 4].fill(0);
+    assert!(read_windows(Cursor::new(bytes), "x86_64").is_err());
+}
+
+#[test]
 fn truncated_or_corrupt_archives_do_not_publish_versions() {
     let zip = zip(false, &core(true, false));
     let deb = deb(false);

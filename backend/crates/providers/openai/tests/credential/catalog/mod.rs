@@ -23,6 +23,82 @@ use crate::support::{MemoryAccountStore, catalog_cache, profile, secret};
 const OFFICIAL_FIXTURE: &[u8] =
     include_bytes!("../../transport/fixtures/official_models_snapshot.json");
 
+#[tokio::test]
+async fn discovery_refresh_and_export_use_the_current_global_profile() {
+    use gateway_core::account::OpaqueProviderData;
+    use serde_json::json;
+
+    let document =
+        |value: serde_json::Value| OpaqueProviderData::new(value.as_object().unwrap().clone());
+    let fixed = |version| {
+        document(
+            json!({"client":"cli","platform":"macos","versionMode":"fixed","codexVersion":version}),
+        )
+    };
+    let store = Arc::new(MemoryAccountStore::default());
+    let first = seed_account(&store, "acct_profile_a").await;
+    let second = seed_account(&store, "acct_profile_b").await;
+    let server = MockServer::start().await;
+    for (version, originator, count) in [
+        ("0.169.0", "codex_cli_rs", 2),
+        ("0.170.0", "codex_cli_rs", 1),
+        ("0.171.0", "catalog-test", 1),
+    ] {
+        Mock::given(method("GET"))
+            .and(path("/codex/models"))
+            .and(query_param("client_version", version))
+            .and(header("version", version))
+            .and(header("originator", originator))
+            .and(move |request: &Request| request.headers.get("user-agent").and_then(|v| v.to_str().ok()).is_some_and(|ua| ua.starts_with(&format!("{originator}/{version}"))))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models":[{"slug":format!("model-{version}"),"display_name":"Native","future_field":true}]})))
+            .expect(count).mount(&server).await;
+    }
+    let policy = Arc::new(crate::support::RequestProfileRuntimePolicy(
+        std::sync::Mutex::new(fixed("0.169.0")),
+    ));
+    let baseline = wire_profile();
+    let service = CodexCredentialCatalogService::new(
+        store.repository(),
+        baseline.clone(),
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+        catalog_cache(),
+        policy.clone(),
+    );
+    service.refresh_catalogs().await.unwrap();
+    for account in [&first, &second] {
+        assert_eq!(
+            service.cached_account_models(account).unwrap().unwrap(),
+            ["model-0.169.0"]
+        );
+    }
+    *policy.0.lock().unwrap() = fixed("0.170.0");
+    assert_eq!(
+        service
+            .refresh_account_catalog(first.id())
+            .await
+            .unwrap()
+            .models(),
+        ["model-0.170.0"]
+    );
+    *policy.0.lock().unwrap() = document(
+        json!({"mode":"custom","userAgent":"catalog-test/0.171.0","originator":"catalog-test","codexVersion":"0.171.0"}),
+    );
+    let (models, _) = service.account_catalog_documents(&first).await.unwrap();
+    assert_eq!(models[0].request_model().as_str(), "model-0.171.0");
+    assert_eq!(baseline.snapshot().codex_version, "0.144.0");
+
+    *policy.0.lock().unwrap() = document(json!({"mode":"custom","userAgent":"invalid"}));
+    assert!(matches!(
+        service.refresh_account_catalog(first.id()).await,
+        Err(CodexCredentialCatalogError::Profile(_))
+    ));
+    assert_eq!(
+        service.cached_account_models(&first).unwrap().unwrap(),
+        ["model-0.170.0"]
+    );
+}
+
 struct ReplacingCatalogResponder {
     calls: Arc<AtomicUsize>,
 }
@@ -95,6 +171,7 @@ fn service_with_catalog_cache(
             .expect("client"),
         base_url,
         catalog_cache,
+        crate::support::runtime_policy(),
     )
 }
 

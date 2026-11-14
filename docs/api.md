@@ -1503,7 +1503,7 @@ OAuth 等待回调期间不持有保护；提交仍拒绝已删除或连接配�
 
 ### 账号连接测试 SSE
 
-`GET /api/admin/accounts/connection-test` 固定探测请求指定的账号，不参与普通账号轮换。成功流沿用
+`GET /api/admin/accounts/connection-test` 固定探测请求指定的账号，采用当前全局客户端身份，不参与普通账号轮换。成功流沿用
 `test_start`、`request`、`content`、`test_complete` 事件；失败事件为：
 
 ```json
@@ -2191,6 +2191,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 0% 或缺少活跃证据时允许一次轻量预热，不通过倒计时差值判断活跃，也不额外回查额度。
 因此已激活但显示 0% 的账号也可能收到预热请求。
 不存在的本地时刻跳过，重复时刻只执行较早一次；执行进度跨重启保留，时钟回拨不补跑已领取时刻之前的时段。
+预热每轮采用当前 OpenAI 全局客户端身份，不使用单个 Key 的覆盖。
 只有收到响应成功终态才记为预热成功；预热不计入客户端业务用量
 
 ### 请求位置
@@ -2430,7 +2431,8 @@ models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI �
 
 `openaiClientProfile` 保存通用选择，首次默认 `MacOS · Desktop · 自动最新`。
 兼容字段的更新语义见上节。初始化不读取 YAML 身份字段。
-该配置作用于 Client Key 的 OpenAI 模型请求，适用于 HTTP/SSE、WebSocket、Images 和 Search。
+该配置作用于 Client Key 的 OpenAI 模型请求，适用于 HTTP/SSE、WebSocket、Images 和 Search，
+也用于账号模型目录的后台发现、手动刷新、导出及定时预热；下次执行时采用当前全局选择，不使用单个 Key 的覆盖。
 不改变 xAI、入站客户端版本门禁、账号认证或后台 Desktop 专属操作
 
 自定义配置使用 `{ "mode": "custom", "userAgent": "完整 UA" }`。

@@ -1365,6 +1365,39 @@ pub(crate) fn profile(account_id: &str) -> CodexAccountProfile {
     }
 }
 
+pub(crate) struct RequestProfileRuntimePolicy(
+    pub(crate) std::sync::Mutex<gateway_core::account::OpaqueProviderData>,
+);
+
+impl gateway_core::provider_ports::ProviderRuntimePolicyPort for RequestProfileRuntimePolicy {
+    fn load_request_profile<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<
+            Option<gateway_core::account::OpaqueProviderData>,
+            gateway_core::provider_ports::ProviderStoreError,
+        >,
+    > {
+        assert_eq!(provider.as_str(), "openai");
+        let profile = self.0.lock().unwrap().clone();
+        Box::pin(async move { Ok(Some(profile)) })
+    }
+
+    fn load_refresh_policy(
+        &self,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<
+            gateway_core::provider_ports::ProviderRefreshPolicy,
+            gateway_core::provider_ports::ProviderStoreError,
+        >,
+    > {
+        Box::pin(async { crate::support::runtime_policy().load_refresh_policy().await })
+    }
+}
+
 pub(crate) struct StaticRuntimePolicy;
 
 impl ProviderRuntimePolicyPort for StaticRuntimePolicy {

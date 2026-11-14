@@ -152,6 +152,7 @@ pub async fn initialize(
         http.clone(),
         config.base_url().to_owned(),
         ports.catalog_cache(),
+        ports.runtime_policy(),
     ));
     if let Err(error) = catalog.restore().await {
         tracing::warn!(%error,"OpenAI model catalog could not be restored");

@@ -5,6 +5,14 @@ use crate::{account::OpaqueProviderData, identity::ProviderKind, routing::Config
 use futures::future::BoxFuture;
 
 pub trait ProviderRuntimePolicyPort: Send + Sync {
+    /// 后台模型操作读取 Provider 全局画像，不读取单个 Client Key 的覆盖
+    fn load_request_profile<'a>(
+        &'a self,
+        _provider: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// 原子推进预热执行游标，重启或时钟回拨后不重复领取已消费的时刻
     fn claim_warmup_slot<'a>(
         &'a self,

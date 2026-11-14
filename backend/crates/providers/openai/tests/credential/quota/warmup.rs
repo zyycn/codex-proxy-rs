@@ -192,7 +192,7 @@ async fn warmup_consumes_completed_sse_and_persists_rate_limit_event() {
 }
 
 #[tokio::test]
-async fn warmup_sends_the_lowest_reasoning_effort_supported_by_the_catalog() {
+async fn warmup_uses_global_profile_and_lowest_reasoning_effort() {
     let server = MockServer::start().await;
     let sse = concat!(
         "event: response.completed\n",
@@ -201,19 +201,27 @@ async fn warmup_sends_the_lowest_reasoning_effort_supported_by_the_catalog() {
     );
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
+        .and(wiremock::matchers::header("version", "0.169.0"))
+        .and(wiremock::matchers::header("originator", "codex_cli_rs"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
         .expect(1)
         .mount(&server)
         .await;
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_warmup_effort").await;
-    let service = quota_service_with_base_url(
-        &store,
+    let policy = Arc::new(crate::support::RequestProfileRuntimePolicy(std::sync::Mutex::new(
+        OpaqueProviderData::new(json!({"client":"cli","platform":"macos","versionMode":"fixed","codexVersion":"0.169.0"}).as_object().unwrap().clone()),
+    )));
+    let service = CodexCredentialQuotaService::new(
+        store.repository(),
+        wire_profile(),
         reqwest::Client::builder()
             .no_proxy()
             .build()
             .expect("client"),
         server.uri(),
+        Arc::new(crate::support::MemoryCooldownPort::new()),
+        policy.clone(),
     );
 
     let summary = service.execute_warmup("test-model").await.expect("warmup");
@@ -226,6 +234,16 @@ async fn warmup_sends_the_lowest_reasoning_effort_supported_by_the_catalog() {
         serde_json::from_slice(&decoded).expect("warmup body should be valid JSON");
     // 上游按目录拒绝目录外的档位，none 曾让全部定时预热只留下 error 终态
     assert_eq!(body["reasoning"]["effort"], "low");
+    *policy.0.lock().unwrap() = OpaqueProviderData::new(
+        json!({"mode":"custom","userAgent":"invalid"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    assert!(matches!(
+        service.execute_warmup("test-model").await,
+        Err(CodexCredentialQuotaError::Profile(_))
+    ));
 }
 
 #[tokio::test]

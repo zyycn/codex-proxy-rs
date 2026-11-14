@@ -15,7 +15,7 @@ use super::{
 };
 
 impl CodexBackendClient {
-    /// 客户端目录按调用方版本协商；后台目录仍使用经过核验的服务端画像版本
+    /// 目录优先使用显式协商版本，否则沿用调用方冻结的画像版本
     pub async fn fetch_models_with_context(
         &self,
         context: CodexRequestContext<'_>,

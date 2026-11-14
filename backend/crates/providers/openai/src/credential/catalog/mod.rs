@@ -15,6 +15,7 @@ use gateway_core::account::{
 };
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
+    ProviderRuntimePolicyPort,
 };
 use gateway_core::routing::{
     FrozenAccountScope, ModelPresentation, ProviderCatalogGeneration, ProviderKind,
@@ -243,6 +244,8 @@ pub enum CodexCredentialCatalogError {
     InvalidEtag,
     #[error("Codex model catalog changed during refresh")]
     ConcurrentUpdate,
+    #[error("Codex model catalog client profile is unavailable")]
+    Profile(#[source] gateway_core::error::ErrorSource),
 }
 
 #[derive(Default)]
@@ -273,6 +276,7 @@ pub struct CodexCredentialCatalogService {
     http: reqwest::Client,
     base_url: String,
     account_catalog_cache: Arc<dyn ProviderCatalogCachePort>,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     cache: Arc<RwLock<CatalogCacheState>>,
     refresh_notification: Arc<Notify>,
     refresh_lock: Arc<tokio::sync::Mutex<()>>,
@@ -286,6 +290,7 @@ impl CodexCredentialCatalogService {
         http: reqwest::Client,
         base_url: String,
         account_catalog_cache: Arc<dyn ProviderCatalogCachePort>,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
             repository,
@@ -293,11 +298,27 @@ impl CodexCredentialCatalogService {
             http,
             base_url,
             account_catalog_cache,
+            runtime_policy,
             cache: Arc::new(RwLock::new(CatalogCacheState::default())),
             refresh_notification: Arc::new(Notify::new()),
             refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
             publication: Default::default(),
         }
+    }
+
+    /// 每轮发现冻结一次全局画像，使目录的版本参数与请求头使用同一身份
+    async fn discovery_client(&self) -> Result<CodexBackendClient, CodexCredentialCatalogError> {
+        let profile = self
+            .profile
+            .resolve_global_request_profile(self.runtime_policy.as_ref())
+            .await
+            .map_err(CodexCredentialCatalogError::Profile)?;
+        let client = CodexBackendClient::new(
+            self.http.clone(),
+            self.base_url.clone(),
+            self.profile.clone(),
+        );
+        Ok(client.with_request_profile(profile))
     }
 
     /// 原生条目取自后台发现的账号目录；用当前账号版本和冻结的 Key 政策双重过滤
@@ -500,11 +521,7 @@ impl CodexCredentialCatalogService {
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
         let scope = CodexCatalogScope::for_account(&account);
-        let client = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        );
+        let client = self.discovery_client().await?;
         let revision = self.state_revision()?;
         let (catalog, entry) = self
             .fetch_observation(&client, &account, &scope, None)
@@ -573,11 +590,7 @@ impl CodexCredentialCatalogService {
         &self,
         account: &ProviderAccount,
     ) -> Result<(Vec<CodexCatalogModel>, SystemTime), CodexCredentialCatalogError> {
-        let client = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        );
+        let client = self.discovery_client().await?;
         let fetched = self.fetch_account_models(&client, account).await?;
         if fetched.models.is_empty() {
             return Err(CodexCredentialCatalogError::NoEligibleCredential);

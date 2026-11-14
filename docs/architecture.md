@@ -601,12 +601,16 @@ OpenAI 模型目录用于发现与原生 Responses 账号资格筛选。
   各 Provider 唯一负责默认值、校验、版本来源及 UA 生成，Admin 提供管理和生效预览。
   首次初始化只写入内置默认选择；YAML 不定义客户端身份，也不作为数据库初始化或请求解析的来源。
   官方发布资料与用户选择分开：OpenAI 在 Redis 按 Provider、客户端、平台、架构隔离可重建版本缓存，
+  离线版本、制品身份及预设环境默认值集中在
+  [`transport/profile/baseline.rs`](../backend/crates/providers/openai/src/transport/profile/baseline.rs)，由发布检查与预设解析共用。
   Desktop 完整制品元组原子更新。CLI 的 TUI/Exec 入口共用官方 CLI 版本资料，Provider 在一次身份解析中
   生成一致的 UA、入口后缀与配套请求头，后台更新不修改用户选择的运行环境。
   完整自定义 UA 经 Provider 校验后原样传递，配套头统一解析；固定和自定义配置不受后台更新影响。
   OpenAI Provider 按 Key 种子、Key ID 与账号 ID 派生出站安装身份；未配置种子时使用账号身份，不改写账号凭据。
   普通连接按生效身份匹配，精确续写固定原连接与身份；配置合同见 [Key 客户端身份](api.md#key-客户端身份)。
-  后台账号和 Desktop 专属操作使用独立官方 Desktop 画像，不接受 Key 覆盖。
+  OpenAI 账号目录发现和定时预热每轮读取并解析一次当前全局画像，查询版本和请求头使用同一快照，不接受 Key 覆盖。
+  其余后台账号和 Desktop 专属操作使用独立官方 Desktop 画像。
+  管理端连接测试从本次发布快照携带全局画像，经 Provider 解析后冻结为探测身份。
   xAI 以内置画像为版本检查基线，在进程内更新 Grok CLI 发布资料；模型与压缩请求使用已保存的用户选择，
   OAuth、后台目录和额度查询使用内置官方画像。两者均不回写 `config.yaml`
 

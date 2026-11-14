@@ -63,14 +63,23 @@ impl DesktopArtifactTransport for Transport {
         previous: Option<VerifiedArtifact>,
     ) -> BoxFuture<'_, io::Result<VerifiedArtifact>> {
         Box::pin(async move {
-            if previous.is_some() {
-                *self.seen_previous.lock().unwrap() += 1;
-            }
+            let previous = previous.expect("target has an offline artifact");
+            *self.seen_previous.lock().unwrap() += 1;
             let round = *self.round.lock().unwrap();
             if round == 1 && target == TARGETS[0] {
                 return Err(io::Error::other("fixture outage"));
             }
-            let build = if round == 2 { 1 } else { 20000 + round };
+            let build = if round == 2 {
+                1
+            } else {
+                previous
+                    .release
+                    .desktop_build
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+                    + 1
+            };
             Ok(serde_json::from_value(json!({"identity":{"etag":format!("\"{build}\""),"size":1000}, "release":{"codexVersion":format!("0.200.{round}"), "desktopVersion":format!("30.1.{round}"), "desktopBuild":build.to_string(), "verifiedAt":null}})).unwrap())
         })
     }

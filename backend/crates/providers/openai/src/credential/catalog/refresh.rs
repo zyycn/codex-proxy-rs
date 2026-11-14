@@ -289,11 +289,7 @@ impl CodexCredentialCatalogService {
                 .cached()?
                 .ok_or(CodexCredentialCatalogError::NoEligibleCredential);
         }
-        let client = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        );
+        let client = self.discovery_client().await?;
         let mut pace = tokio::time::interval(REFRESH_SPACING);
         pace.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let starts = stream::unfold(pace, |mut clock| async move {

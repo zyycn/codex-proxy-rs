@@ -1247,13 +1247,13 @@ impl RuntimeSnapshot {
         operation: &Operation,
         context: &RoutingContext,
     ) -> Result<RoutingPlan, RoutingError> {
-        self.plan_inner(
-            public_model,
-            operation,
-            self.all_account_scope(),
-            context,
-            false,
-        )
+        // 探测没有 Client Key，沿用同一发布快照的全局画像
+        let scope = self
+            .all_account_scope()
+            .as_ref()
+            .clone()
+            .with_request_profiles(self.settings().request_profiles().clone());
+        self.plan_inner(public_model, operation, Arc::new(scope), context, false)
     }
 
     fn plan_inner(
