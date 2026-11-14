@@ -12,7 +12,7 @@ use reqwest::{Client, redirect::Policy};
 use serde::Deserialize;
 
 use super::selection::{ClientKind, ClientPlatform, ClientRelease, object};
-use super::{ARTIFACT_PROFILE_CACHE_TTL, CodexWireProfileState};
+use super::{ARTIFACT_PROFILE_CACHE_TTL, CodexWireProfileState, baseline};
 
 const ENDPOINT: &str = "https://registry.npmjs.org/@openai%2Fcodex/latest";
 const MAX_BYTES: usize = 256 * 1024;
@@ -218,19 +218,16 @@ impl CliReleaseService {
 }
 
 pub(super) fn seed_releases(state: &CodexWireProfileState) {
-    // 2026-09-18 核对官方 npm latest 及六个平台依赖；这里只提供离线启动资料
     for (platform, arch, _) in TARGETS {
         state.seed_client_release(
             ClientKind::Cli,
             platform,
             arch,
             ClientRelease {
-                codex_version: "0.155.0".to_owned(),
+                codex_version: baseline::CLI_RELEASE.version.to_owned(),
                 desktop_version: None,
                 desktop_build: None,
-                verified_at: chrono::DateTime::parse_from_rfc3339("2026-09-18T00:00:00Z")
-                    .ok()
-                    .map(|time| time.with_timezone(&Utc)),
+                verified_at: Some(baseline::CLI_RELEASE.verified_at()),
             },
         );
     }

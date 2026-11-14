@@ -1015,6 +1015,13 @@ async fn request_profile_projection_is_revision_consistent_and_includes_key_over
     };
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let provider = ProviderKind::new("xai").unwrap();
+    assert!(
+        repository
+            .load_request_profile(&provider)
+            .await
+            .unwrap()
+            .is_none()
+    );
     let document = |marker: &str| {
         OpaqueProviderData::new(
             serde_json::json!({"marker":marker})
@@ -1056,6 +1063,10 @@ async fn request_profile_projection_is_revision_consistent_and_includes_key_over
     assert_eq!(profiles.len(), 2);
     assert!(profiles.contains(&document("global")));
     assert!(profiles.contains(&document("key")));
+    assert_eq!(
+        repository.load_request_profile(&provider).await.unwrap(),
+        Some(document("global"))
+    );
 
     repository
         .update_runtime_settings(settings_with_margin(7200))

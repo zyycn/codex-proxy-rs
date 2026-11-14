@@ -2,6 +2,9 @@
 
 use chrono::DateTime;
 use gateway_core::account::OpaqueProviderData;
+use gateway_core::error::ErrorSource;
+use gateway_core::provider_ports::ProviderRuntimePolicyPort;
+use gateway_core::routing::ProviderKind;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -10,6 +13,26 @@ use super::selection::{
     ClientKind, ClientProfileError, ClientProfileSelection, VersionMode, object,
 };
 use super::{CodexWireProfile, CodexWireProfileState};
+
+impl CodexWireProfileState {
+    /// 后台模型操作没有 Client Key，按当前全局选择冻结整套身份
+    pub(crate) async fn resolve_global_request_profile(
+        &self,
+        policy: &dyn ProviderRuntimePolicyPort,
+    ) -> Result<CodexWireProfile, ErrorSource> {
+        let provider = ProviderKind::new("openai").map_err(ErrorSource::new)?;
+        let Some(configuration) = policy
+            .load_request_profile(&provider)
+            .await
+            .map_err(ErrorSource::new)?
+        else {
+            return Ok(self.snapshot());
+        };
+        RequestProfileSelection::parse(&configuration)
+            .and_then(|selection| selection.resolve(self))
+            .map_err(ErrorSource::new)
+    }
+}
 
 /// 已解析的配置；没有 mode 的预设配置复用官方版本与平台合同
 #[derive(Debug, Clone)]

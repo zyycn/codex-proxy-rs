@@ -242,6 +242,7 @@ fn selector_with_runtime(
             http.clone(),
             OFFICIAL_CODEX_BASE_URL.to_owned(),
             crate::support::catalog_cache(),
+            crate::support::runtime_policy(),
         ),
     );
     let quota = Arc::new(CodexCredentialQuotaService::new(

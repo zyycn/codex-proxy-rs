@@ -5,7 +5,7 @@ use gateway_core::account::OpaqueProviderData;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{CodexWireProfile, CodexWireProfileState};
+use super::{CodexWireProfile, CodexWireProfileState, baseline};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,8 +25,8 @@ pub enum CliEntry {
 impl CliEntry {
     pub const fn originator(self) -> &'static str {
         match self {
-            Self::Tui => "codex-tui",
-            Self::Exec => "codex_exec",
+            Self::Tui => baseline::TUI_ORIGINATOR,
+            Self::Exec => baseline::EXEC_ORIGINATOR,
         }
     }
 }
@@ -41,25 +41,22 @@ pub enum ClientPlatform {
 
 impl ClientPlatform {
     pub const fn os_type(self) -> &'static str {
-        match self {
-            Self::Macos => "Mac OS",
-            Self::Linux => "Linux",
-            Self::Windows => "Windows",
-        }
+        self.default_environment().os_type
     }
 
     fn default_os_version(self) -> &'static str {
-        match self {
-            Self::Macos => "15.7.1",
-            Self::Linux => "6.8.0",
-            Self::Windows => "10.0.26100",
-        }
+        self.default_environment().os_version
     }
 
     fn default_arch(self) -> &'static str {
+        self.default_environment().arch
+    }
+
+    const fn default_environment(self) -> baseline::Environment {
         match self {
-            Self::Macos => "arm64",
-            Self::Linux | Self::Windows => "x86_64",
+            Self::Macos => baseline::MACOS_ENVIRONMENT,
+            Self::Linux => baseline::LINUX_ENVIRONMENT,
+            Self::Windows => baseline::WINDOWS_ENVIRONMENT,
         }
     }
 }
@@ -138,8 +135,10 @@ impl ClientProfileSelection {
 
     fn default_originator(&self) -> &'static str {
         match self.client {
-            ClientKind::Desktop => "Codex Desktop",
-            ClientKind::Cli => self.cli_entry.map_or("codex_cli_rs", CliEntry::originator),
+            ClientKind::Desktop => baseline::DESKTOP_ORIGINATOR,
+            ClientKind::Cli => self
+                .cli_entry
+                .map_or(baseline::CLI_ORIGINATOR, CliEntry::originator),
         }
     }
 
@@ -275,7 +274,7 @@ impl ClientProfileSelection {
             terminal: self
                 .terminal
                 .clone()
-                .unwrap_or_else(|| "unknown".to_owned()),
+                .unwrap_or_else(|| baseline::TERMINAL.to_owned()),
             exact_user_agent: None,
             installation_seed: None,
             residency: deployment.residency,
@@ -370,7 +369,7 @@ impl CodexWireProfileState {
                     "configuration": configuration,
                     "automaticAvailable": available,
                     "reason": (!available).then_some("暂不支持自动更新"),
-                    "defaults": { "originator": configuration.default_originator(), "osType": platform.os_type(), "osVersion": platform.default_os_version(), "arch": platform.default_arch(), "terminal": "unknown" },
+                    "defaults": { "originator": configuration.default_originator(), "osType": platform.os_type(), "osVersion": platform.default_os_version(), "arch": platform.default_arch(), "terminal": baseline::TERMINAL },
                 }));
             }
         }

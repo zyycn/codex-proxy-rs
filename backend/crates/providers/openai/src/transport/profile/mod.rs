@@ -20,6 +20,7 @@ use url::Url;
 
 use self::desktop_artifact::{CodexDesktopArtifactError, fetch_codex_core_version};
 
+mod baseline;
 pub mod cli_release;
 mod context;
 pub mod desktop_artifact;
@@ -82,22 +83,23 @@ pub struct CodexWireProfile {
 
 impl Default for CodexWireProfile {
     fn default() -> Self {
+        let release = baseline::MACOS_RELEASE;
+        let environment = baseline::MACOS_ENVIRONMENT;
         Self {
             client_kind: ClientKind::Desktop,
-            originator: "Codex Desktop".to_owned(),
-            codex_version: "0.153.4".to_owned(),
-            desktop_version: "26.901.51231".to_owned(),
-            desktop_build: "8109".to_owned(),
-            os_type: "Mac OS".to_owned(),
-            os_version: "15.7.1".to_owned(),
-            arch: "arm64".to_owned(),
-            terminal: "unknown".to_owned(),
+            originator: baseline::DESKTOP_ORIGINATOR.to_owned(),
+            codex_version: release.core.version.to_owned(),
+            desktop_version: release.version.to_owned(),
+            desktop_build: release.build.to_owned(),
+            os_type: environment.os_type.to_owned(),
+            os_version: environment.os_version.to_owned(),
+            arch: environment.arch.to_owned(),
+            terminal: baseline::TERMINAL.to_owned(),
             exact_user_agent: None,
             installation_seed: None,
             residency: None,
             account_routing_override: None,
-            // 制品核验于 2026-09-06T03:26:12.084Z；进程启动不构成重新核验
-            verified_at: DateTime::UNIX_EPOCH + chrono::Duration::milliseconds(1_788_665_172_084),
+            verified_at: release.core.verified_at(),
         }
     }
 }

@@ -195,6 +195,30 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
             Ok(claimed)
         })
     }
+    fn load_request_profile<'a>(
+        &'a self,
+        provider: &'a gateway_core::routing::ProviderKind,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<gateway_core::account::OpaqueProviderData>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            let document = sqlx::query_scalar::<
+                _,
+                Option<sqlx::types::Json<serde_json::Map<String, serde_json::Value>>>,
+            >(
+                "select provider_request_profiles_json -> $1 from runtime_settings where id = 1",
+            )
+            .bind(provider.as_str())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|source| {
+                crate::provider_unavailable("load Provider request profile", source)
+            })?;
+            Ok(document.map(|document| gateway_core::account::OpaqueProviderData::new(document.0)))
+        })
+    }
+
     fn initialize_request_profile<'a>(
         &'a self,
         provider: &'a gateway_core::routing::ProviderKind,
