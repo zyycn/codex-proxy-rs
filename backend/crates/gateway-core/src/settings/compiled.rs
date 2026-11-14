@@ -101,6 +101,7 @@ impl CompiledSettings {
             u64::from(settings.openai_session_affinity_ttl_hours) * 3600,
         ))
         .with_smart_scheduling(settings.smart_scheduling)
+        .with_quota_reset_window_weights(settings.quota_reset_window_weights)
         .with_queue(ConcurrencyQueuePolicy {
             max_waiting: settings.max_waiting_per_account,
             timeout: Duration::from_secs(u64::from(settings.account_queue_timeout_seconds)),

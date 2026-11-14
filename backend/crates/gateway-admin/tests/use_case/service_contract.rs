@@ -257,8 +257,8 @@ fn sdk_settings_contract_matches_host_declarations() {
             &["RequestLocation"][..],
         ),
         (
-            "../gateway-core/src/account/smart_scheduling.rs",
-            &["SmartSchedulingValues", "ResetWindowWeights"][..],
+            "../gateway-core/src/account/scheduling.rs",
+            &["SmartSchedulingValues", "ResetWindowValues"][..],
         ),
         (
             "../gateway-core/src/metering/pricing.rs",
@@ -326,10 +326,10 @@ fn sdk_settings_contract_matches_host_declarations() {
             }
             types.push(contract_type(
                 item,
-                if *name == "SmartSchedulingValues" {
-                    "SmartSchedulingConfig"
-                } else {
-                    name
+                match *name {
+                    "SmartSchedulingValues" => "SmartSchedulingConfig",
+                    "ResetWindowValues" => "ResetWindowWeights",
+                    _ => name,
                 },
             ));
         }

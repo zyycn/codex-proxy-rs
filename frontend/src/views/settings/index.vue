@@ -82,6 +82,7 @@ const {
   error,
   form,
   smartSchedulingDefaults,
+  quotaResetWindowWeightsDefaults,
   mappings,
   addMapping,
   updateMapping,
@@ -197,7 +198,9 @@ watch(section, (value) => {
           <RotationStrategyCard
             v-model="form.rotationStrategy"
             v-model:smart-scheduling="form.smartScheduling"
+            v-model:quota-reset-window-weights="form.quotaResetWindowWeights"
             :smart-defaults="smartSchedulingDefaults"
+            :quota-reset-defaults="quotaResetWindowWeightsDefaults"
             :disabled="disabled"
             :options="rotationOptions"
           />

@@ -153,7 +153,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
             "select provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled, codex_privacy_policy_json,
                     refresh_concurrency, max_concurrent_per_account,
-                    rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
+                    rotation_strategy, smart_scheduling_json, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
                     account_error_protection_json, account_error_protection_revision,
@@ -333,7 +333,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
         "select provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled, codex_privacy_policy_json,
                 refresh_concurrency, max_concurrent_per_account,
-                rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
+                rotation_strategy, smart_scheduling_json, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
                 account_error_protection_json, account_error_protection_revision,
@@ -419,6 +419,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      account_queue_timeout_seconds = $32,
                      switch_account_on_queue_failure = $33,
                      reset_credit_on_low_weekly_quota = $34,
+                     quota_reset_window_weights_json = $35,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -465,6 +466,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(i64::from(update.values.account_queue_timeout_seconds))
     .bind(update.values.switch_account_on_queue_failure)
     .bind(update.values.reset_credit_on_low_weekly_quota)
+    .bind(sqlx::types::Json(update.values.quota_reset_window_weights))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("update runtime settings in transaction", source))?
@@ -538,6 +540,7 @@ struct RuntimeSettingsRow {
     refresh_concurrency: i64,
     max_concurrent_per_account: i64,
     smart_scheduling_json: sqlx::types::Json<gateway_core::account::SmartSchedulingConfig>,
+    quota_reset_window_weights_json: sqlx::types::Json<gateway_core::account::ResetWindowWeights>,
     rotation_strategy: String,
     codex_privacy_policy_json:
         sqlx::types::Json<gateway_core::settings::privacy::CodexPrivacyPolicy>,
@@ -600,6 +603,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
             refresh_concurrency: to_u32(row.refresh_concurrency)?,
             max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
             smart_scheduling: row.smart_scheduling_json.0,
+            quota_reset_window_weights: row.quota_reset_window_weights_json.0,
             codex_privacy_policy: row.codex_privacy_policy_json.0,
             request_location_enabled: row.request_location_enabled,
             request_location: row

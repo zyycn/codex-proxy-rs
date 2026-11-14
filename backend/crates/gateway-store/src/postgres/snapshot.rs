@@ -221,6 +221,7 @@ struct SnapshotSettingsRow {
     account_error_protection_json: sqlx::types::Json<gateway_core::account::AccountErrorProtection>,
     max_concurrent_per_account: i64,
     smart_scheduling_json: sqlx::types::Json<gateway_core::account::SmartSchedulingConfig>,
+    quota_reset_window_weights_json: sqlx::types::Json<gateway_core::account::ResetWindowWeights>,
     rotation_strategy: String,
     model_mappings_json: sqlx::types::Json<BTreeMap<String, String>>,
     min_codex_desktop_version: Option<String>,
@@ -248,7 +249,7 @@ async fn load_settings(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<(Revision, SettingsValues)> {
     let row = sqlx::query_as::<_, SnapshotSettingsRow>(
-        "select config_revision, account_error_protection_revision, account_error_protection_json, max_concurrent_per_account, rotation_strategy, smart_scheduling_json, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours, request_location_json, request_location_enabled, codex_privacy_policy_json, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
+        "select config_revision, account_error_protection_revision, account_error_protection_json, max_concurrent_per_account, rotation_strategy, smart_scheduling_json, quota_reset_window_weights_json, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours, request_location_json, request_location_enabled, codex_privacy_policy_json, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
     .await
@@ -281,6 +282,7 @@ async fn load_settings(
         .with_max_retry_after_seconds(to_u32(row.max_retry_after_seconds)?)
         .with_openai_session_affinity_ttl_hours(to_u32(row.openai_session_affinity_ttl_hours)?)
         .with_smart_scheduling(row.smart_scheduling_json.0)
+        .with_quota_reset_window_weights(row.quota_reset_window_weights_json.0)
         .with_request_profiles(decode_request_profiles(
             row.provider_request_profiles_json.0,
         )?)

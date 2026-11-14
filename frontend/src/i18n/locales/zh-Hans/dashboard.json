@@ -5,7 +5,7 @@
       "totalSlots": "总槽位",
       "freeSlots": "空闲槽位",
       "smart": "智能调度",
-      "quotaReset": "额度重置优先",
+      "quotaReset": "额度调度",
       "sticky": "粘滞",
       "title": "账号调度",
       "description": "容量、并发与分配策略",

@@ -114,6 +114,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "responses_max_decompressed_body_bytes".to_owned(),
                     "rotation_strategy".to_owned(),
                     "smart_scheduling_json".to_owned(),
+                    "quota_reset_window_weights_json".to_owned(),
                     "min_codex_desktop_version".to_owned(),
                     "min_codex_cli_version".to_owned(),
                     "retention".to_owned(),

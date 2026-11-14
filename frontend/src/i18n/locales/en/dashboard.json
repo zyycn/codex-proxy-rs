@@ -5,7 +5,7 @@
       "totalSlots": "Total slots",
       "freeSlots": "Available slots",
       "smart": "Smart scheduling",
-      "quotaReset": "Quota reset priority",
+      "quotaReset": "Quota scheduling",
       "sticky": "Sticky",
       "title": "Account scheduling",
       "description": "Capacity, concurrency and allocation strategies",

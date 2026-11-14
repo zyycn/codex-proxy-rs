@@ -40,6 +40,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             openai_session_affinity_ttl_hours: 24,
             responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             smart_scheduling: gateway_core::account::SmartSchedulingConfig::default(),
+            quota_reset_window_weights: gateway_core::account::ResetWindowWeights::default(),
             min_codex_desktop_version: None,
             min_codex_cli_version: None,
             usage_retention_days: 31,
@@ -113,7 +114,7 @@ async fn privacy_policy_defaults_off_and_round_trips_in_snapshot() {
 }
 
 #[tokio::test]
-async fn smart_settings_round_trip_publish_and_restore_database_defaults() {
+async fn scheduling_settings_round_trip_publish_and_restore_database_defaults() {
     use gateway_core::account::SmartSchedulingConfig;
     use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
     let Some(database) = TestDatabase::create("smart_config").await else {
@@ -126,6 +127,8 @@ async fn smart_settings_round_trip_publish_and_restore_database_defaults() {
         SmartSchedulingConfig::default()
     );
     let mut update = settings_with_margin(3600);
+    let windows = gateway_core::account::ResetWindowWeights::new([0.0, 1.5, 0.0]).unwrap();
+    update.values.quota_reset_window_weights = windows;
     let expected = serde_json::json!({
         "loadWeight": 0.0, "quotaWeight": 2.0, "healthWeight": 1.0, "latencyWeight": 0.5, "resetWeight": 1.2, "queueWeight": 2.3,
         "resetWindowWeights": {"fiveHour":2.0,"weekly":8.0,"monthly":0.0}
@@ -137,12 +140,17 @@ async fn smart_settings_round_trip_publish_and_restore_database_defaults() {
         serde_json::to_value(reloaded.values.smart_scheduling).unwrap(),
         expected
     );
+    assert_eq!(reloaded.values.quota_reset_window_weights, windows);
     let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
         .load_runtime_snapshot()
         .await
         .unwrap();
     let snapshot_values = serde_json::to_value(&snapshot.settings).unwrap();
     assert_eq!(snapshot_values["smart_scheduling"], expected);
+    assert_eq!(
+        snapshot_values["quota_reset_window_weights"],
+        serde_json::to_value(windows).unwrap()
+    );
     assert!(snapshot.config_revision > before.config_revision);
     sqlx::query("update runtime_settings set smart_scheduling_json = default where id = 1")
         .execute(&database.pool)

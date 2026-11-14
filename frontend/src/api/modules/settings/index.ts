@@ -23,6 +23,12 @@ export type AccountAffinity = 'relaxed' | 'preferred' | 'strict'
 
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
+export interface ResetWindowWeights {
+  fiveHour: number
+  weekly: number
+  monthly: number
+}
+
 export interface SmartSchedulingConfig {
   loadWeight: number
   quotaWeight: number
@@ -30,13 +36,15 @@ export interface SmartSchedulingConfig {
   latencyWeight: number
   resetWeight: number
   queueWeight: number
-  resetWindowWeights: { fiveHour: number, weekly: number, monthly: number }
+  resetWindowWeights: ResetWindowWeights
 }
 
 export interface RuntimeSettings {
   configRevision: number
   smartScheduling: SmartSchedulingConfig
   smartSchedulingDefaults: SmartSchedulingConfig
+  quotaResetWindowWeights: ResetWindowWeights
+  quotaResetWindowWeightsDefaults: ResetWindowWeights
   providerRequestProfiles: ProviderRequestProfiles
   openaiClientProfile: ClientProfileSelection | null
   xaiClientProfile: XaiClientProfileSelection | null
@@ -118,7 +126,7 @@ export function getSettings(options: RequestOptions = {}) {
   })
 }
 
-type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'updatedAtDisplay' | 'smartSchedulingDefaults' | 'openaiClientProfile' | 'xaiClientProfile' | 'providerRequestProfiles'> & {
+type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'updatedAtDisplay' | 'smartSchedulingDefaults' | 'quotaResetWindowWeightsDefaults' | 'openaiClientProfile' | 'xaiClientProfile' | 'providerRequestProfiles'> & {
   providerRequestProfiles: ProviderRequestProfileUpdates
 }
 

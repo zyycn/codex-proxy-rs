@@ -63,6 +63,7 @@ fn update_body() -> Value {
         "responsesMaxDecompressedBodyBytes": 67108864,
         "rotationStrategy": "round_robin",
         "smartScheduling": gateway_core::account::SmartSchedulingConfig::default(),
+        "quotaResetWindowWeights": gateway_core::account::ResetWindowWeights::default(),
         "minCodexDesktopVersion": "26.825.6671",
         "minCodexCliVersion": "0.40.0",
         "usageRetentionDays": 31,
@@ -264,12 +265,14 @@ fn error_protection_requires_an_explicit_policy_in_settings_replacement() {
 }
 
 #[tokio::test]
-async fn smart_settings_round_trip_and_invalid_updates_leave_the_saved_value_intact() {
+async fn scheduling_settings_round_trip_and_invalid_updates_leave_the_saved_value_intact() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let mut body = update_body();
     let custom = json!({"loadWeight": 2.0, "quotaWeight": 0.0, "healthWeight": 1.0, "latencyWeight": 0.5, "resetWeight": 1.2, "queueWeight": 2.3, "resetWindowWeights":{"fiveHour":0.0,"weekly":1.5,"monthly":0.0}});
     body["smartScheduling"] = custom.clone();
+    let windows = json!({"fiveHour":2.5,"weekly":0.0,"monthly":1.0});
+    body["quotaResetWindowWeights"] = windows.clone();
     let response = app(fixture.state())
         .oneshot(request(
             Method::POST,
@@ -281,6 +284,7 @@ async fn smart_settings_round_trip_and_invalid_updates_leave_the_saved_value_int
     assert_eq!(response.status(), StatusCode::OK);
     let response = response_json(response).await;
     assert_eq!(response["data"]["smartScheduling"], custom);
+    assert_eq!(response["data"]["quotaResetWindowWeights"], windows);
     assert_eq!(
         response["data"]["smartSchedulingDefaults"],
         json!(gateway_core::account::SmartSchedulingConfig::default())
@@ -301,7 +305,7 @@ async fn smart_settings_round_trip_and_invalid_updates_leave_the_saved_value_int
         missing.as_object_mut().unwrap().remove(field);
         invalid_values.push(missing);
     }
-    for windows in [
+    let invalid_windows = [
         json!({}),
         json!({"weekly":1}),
         json!(null),
@@ -309,41 +313,53 @@ async fn smart_settings_round_trip_and_invalid_updates_leave_the_saved_value_int
         json!({"fiveHour":-1,"weekly":1,"monthly":0}),
         json!({"fiveHour":0,"weekly":1,"monthly":10.1}),
         json!({"fiveHour":0,"weekly":1,"monthly":0,"daily":1}),
-    ] {
+    ];
+    for windows in &invalid_windows {
         let mut invalid = custom.clone();
-        invalid["resetWindowWeights"] = windows;
+        invalid["resetWindowWeights"] = windows.clone();
         invalid_values.push(invalid);
     }
-    for invalid in invalid_values {
-        body["smartScheduling"] = invalid;
+    for (field, invalid) in invalid_values
+        .into_iter()
+        .map(|value| ("smartScheduling", value))
+        .chain(
+            invalid_windows
+                .into_iter()
+                .map(|value| ("quotaResetWindowWeights", value)),
+        )
+    {
+        let mut invalid_body = body.clone();
+        invalid_body[field] = invalid;
         let response = app(fixture.state())
             .oneshot(request(
                 Method::POST,
                 "/api/admin/settings/update",
-                Some(body.clone()),
+                Some(invalid_body),
             ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
-    body.as_object_mut().unwrap().remove("smartScheduling");
-    let response = app(fixture.state())
-        .oneshot(request(
-            Method::POST,
-            "/api/admin/settings/update",
-            Some(body),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    for field in ["smartScheduling", "quotaResetWindowWeights"] {
+        let mut missing = body.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(missing),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
     let response = app(fixture.state())
         .oneshot(request(Method::GET, "/api/admin/settings", None))
         .await
         .unwrap();
-    assert_eq!(
-        response_json(response).await["data"]["smartScheduling"],
-        custom
-    );
+    let saved = response_json(response).await;
+    assert_eq!(saved["data"]["smartScheduling"], custom);
+    assert_eq!(saved["data"]["quotaResetWindowWeights"], windows);
 }
 
 #[test]

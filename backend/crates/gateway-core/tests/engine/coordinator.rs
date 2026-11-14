@@ -1228,6 +1228,7 @@ fn plan_with_protection(
             None,
         )
         .with_smart_scheduling(account_selection_policy.smart_scheduling())
+        .with_quota_reset_window_weights(account_selection_policy.quota_reset_window_weights())
         .with_max_account_rotations(account_selection_policy.max_account_rotations())
         .with_openai_account_affinity(account_selection_policy.openai_account_affinity())
         .with_openai_session_affinity_ttl_hours(
