@@ -8,23 +8,33 @@ import { applyLocale } from '@/i18n/locale'
 import { uiLocale } from '@/i18n/ui'
 
 const { locale } = useI18n({ useScope: 'global' })
-const overlay = (navigator as Navigator & { windowControlsOverlay?: { getTitlebarAreaRect: () => DOMRect } }).windowControlsOverlay
-if (overlay && matchMedia('(display-mode: standalone), (display-mode: window-controls-overlay)').matches) {
+const overlay = (navigator as Navigator & { windowControlsOverlay?: EventTarget & { getTitlebarAreaRect: () => DOMRect } }).windowControlsOverlay
+if (overlay) {
   const root = document.documentElement
-  root.classList.add('pwa-window')
+  root.classList.add('supports-titlebar-overlay')
+  const inAppWindow = matchMedia('(display-mode: standalone), (display-mode: window-controls-overlay)')
   const { height } = useWindowSize({ type: 'outer' })
   const { pixelRatio } = useDevicePixelRatio()
-  const rememberHeight = () => {
+  const rememberHeight = useDebounceFn(() => {
+    if (!inAppWindow.matches) {
+      root.style.removeProperty('--settled-app-height')
+      return
+    }
     const viewport = window.visualViewport?.height ?? window.innerHeight
     const next = viewport - overlay.getTitlebarAreaRect().bottom
-    const previous = Number.parseFloat(root.style.getPropertyValue('--app-height'))
+    const previous = Number.parseFloat(root.style.getPropertyValue('--settled-app-height'))
     if (!Number.isFinite(previous) || Math.abs(next - previous) >= 1)
-      root.style.setProperty('--app-height', `${next}px`)
+      root.style.setProperty('--settled-app-height', `${next}px`)
+  }, 80)
+  // 调整外窗时先恢复 CSS 自动布局，待视口和标题栏都稳定后再记录正文高度
+  const resetHeight = () => {
+    root.style.removeProperty('--settled-app-height')
+    rememberHeight()
   }
-  // 调整外窗时立即交回 CSS；macOS 还原动画中，外窗和内容视口可能在不同帧才停止变化
-  watch([height, pixelRatio], () => root.style.removeProperty('--app-height'))
-  const settled = useDebounceFn(rememberHeight, 80)
-  useEventListener(window.visualViewport ?? window, 'resize', settled)
+  watch([height, pixelRatio], resetHeight)
+  useEventListener(inAppWindow, 'change', resetHeight)
+  useEventListener(overlay, 'geometrychange', rememberHeight)
+  useEventListener(window.visualViewport ?? window, 'resize', rememberHeight)
   rememberHeight()
 }
 

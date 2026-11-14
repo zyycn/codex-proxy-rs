@@ -2,39 +2,42 @@
 @import '@codex-proxy/ui/tailwind.css';
 @import 'tailwindcss/utilities.css' layer(utilities);
 
-.pwa-window {
-  --app-height: calc(100dvh - env(titlebar-area-y, 0px) - env(titlebar-area-height, 0px));
-  --app-titlebar-inset: max(0px, 100dvh - var(--app-height));
-}
+/* 浏览器移交标签页时不会重新挂载应用，标题栏留白直接跟随当前窗口模式 */
+@media (display-mode: standalone), (display-mode: window-controls-overlay) {
+  .supports-titlebar-overlay {
+    --app-height: var(--settled-app-height, calc(100dvh - env(titlebar-area-y, 0px) - env(titlebar-area-height, 0px)));
+    --app-titlebar-inset: max(0px, 100dvh - var(--app-height));
+  }
 
-.pwa-window,
-.pwa-window body {
-  background-color: var(--z-color-bg-container);
-}
+  .supports-titlebar-overlay,
+  .supports-titlebar-overlay body {
+    background-color: var(--z-color-bg-container);
+  }
 
-.pwa-window body {
-  padding-top: var(--app-titlebar-inset);
-}
+  .supports-titlebar-overlay body {
+    padding-top: var(--app-titlebar-inset);
+  }
 
-.pwa-window .h-dvh,
-.pwa-window .page-slot {
-  height: var(--app-height);
-}
+  .supports-titlebar-overlay .h-dvh,
+  .supports-titlebar-overlay .page-slot {
+    height: var(--app-height);
+  }
 
-.pwa-window .min-h-dvh {
-  min-height: var(--app-height);
-}
+  .supports-titlebar-overlay .min-h-dvh {
+    min-height: var(--app-height);
+  }
 
-/* 满屏面板不能高于正文；矮窗仍由外层滚动到列表底部 */
-.pwa-window .page-slot > * {
-  max-height: 100%;
-}
+  /* 满屏面板不能高于正文；矮窗仍由外层滚动到列表底部 */
+  .supports-titlebar-overlay .page-slot > * {
+    max-height: 100%;
+  }
 
-.pwa-window .page-slot > .h-full {
-  overflow: visible;
-}
+  .supports-titlebar-overlay .page-slot > .h-full {
+    overflow: visible;
+  }
 
-/* 通知挂在 body，固定定位不会避开标题栏 */
-.pwa-window article[id^='z-notification-'] {
-  translate: 0 var(--app-titlebar-inset);
+  /* 通知挂在 body，固定定位不会避开标题栏 */
+  .supports-titlebar-overlay article[id^='z-notification-'] {
+    translate: 0 var(--app-titlebar-inset);
+  }
 }
