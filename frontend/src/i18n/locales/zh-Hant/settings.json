@@ -154,7 +154,7 @@
       "quotaGroup": "額度",
       "queueGroup": "排隊",
       "windowMode": "重置視窗係數",
-      "windowHelp": "係數越大，該窗口越影響重置評分。設為 0 可忽略該窗口。",
+      "windowHelp": "係數越大，該窗口越影響重置評分，設為 0 可忽略該窗口",
       "fiveHour": "5 小時",
       "weekly": "週",
       "monthly": "月",
@@ -177,7 +177,6 @@
       },
       "enterValueFromToUpToOne": "請輸入 0～10 的數值，最多一位小數",
       "description": "調整賬號選擇偏好",
-      "enabledHelp": "僅在啓用智能調度後生效",
       "about": "{label}說明",
       "zeroWeightHelp": "0 表示不參與評分",
       "weightsRequired": "至少一項係數需要大於 0"
@@ -343,12 +342,13 @@
       "smartSchedulingSettings": "智能調度設置",
       "smartLabel": "智能調度",
       "smartDescription": "綜合負載、剩餘額度、健康和延遲評分，支持自定義評分偏好",
-      "quotaResetLabel": "額度重置優先",
+      "quotaResetLabel": "額度調度",
       "quotaResetDescription": "優先選擇額度窗口更快重置的賬號，適合在重置前消耗剩餘額度",
       "roundRobinLabel": "輪詢調度",
       "roundRobinDescription": "在可用候選賬號間按順序輪轉，分配結果最可預測",
       "stickyLabel": "粘性調度",
-      "stickyDescription": "優先複用最近使用的賬號，直到不可用後再切換"
+      "stickyDescription": "優先複用最近使用的賬號，直到不可用後再切換",
+      "quotaResetPrioritySettings": "額度調度設置"
     },
     "access": {
       "accessRestrictions": "訪問限制",
@@ -734,6 +734,10 @@
       "moreValues": "{values} 或其他 {count} 項",
       "messageHelp": "包含匹配檢查錯誤信息的前 8 KiB，保留完整字符，等值匹配比較完整信息，超長信息不會被視爲字段缺失",
       "limitsHelp": "最多 32 條規則，每條 8 個條件，每個條件 16 個候選值，所有規則文本與探測模型合計不超過 64 KiB UTF-8"
+    },
+    "resetPriority": {
+      "description": "按所選視窗的重置時間和係數排序",
+      "windowHelp": "係數決定各視窗的相對占比，0 表示忽略該視窗，全部為 0 時按最近的有效重置時間排序"
     }
   }
 }

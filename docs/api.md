@@ -2165,7 +2165,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | [并发与排队](#并发与排队) | `maxConcurrentPerAccount`、`maxWaitingPerKey`、`maxWaitingPerAccount`、`openaiGuardianReservedConcurrency`、`keyQueueTimeoutSeconds`、`accountQueueTimeoutSeconds`、`switchAccountOnQueueFailure` |
 | [上游重试等待](#容量拒绝与重试) | `maxRetryAfterSeconds` |
 | [亲和与换号](#账号亲和与换号) | `openaiAccountAffinity`、`openaiSessionAffinityTtlHours`、`maxAccountRotations` |
-| [调度策略](#智能调度) | `rotationStrategy`、`smartScheduling` |
+| [调度策略](#智能调度) | `rotationStrategy`、`smartScheduling`、`quotaResetWindowWeights` |
 | [请求解压](#请求解压上限) | `responsesMaxDecompressedBodyBytes` |
 | [客户端门禁](#1-鉴权与公共约定) | `minCodexDesktopVersion`、`minCodexCliVersion` |
 | [历史保留](#历史保留) | `usageRetentionDays`、`opsEventRetentionDays`、`auditRetentionDays` |
@@ -2365,13 +2365,26 @@ Chat Completions 和 Responses 通过原生 OpenAI Provider 选号时，缺少�
 缺少必填系数、系数为 `null`、未知字段及无效数值均返回 `422`，不写入配置。读取设置额外返回只读
 `smartSchedulingDefaults`，内容为上述默认对象，用于恢复默认与自定义状态比较，不可提交到更新接口
 
-`resetWeight` 控制重置分在总评分中的比重。`resetWindowWeights` 中的 `fiveHour`、`weekly`、`monthly` 分别表示 5 小时、周和月的相对系数。三项均为 0～10、最多一位小数。默认均为 0，旧配置省略整个字段时也取 0；全部为 0 时不计重置分。设为 `{"fiveHour":0,"weekly":1,"monthly":0}` 可只按周重置评分。只计算账号通用窗口，未知、缺失或已过期的周期贡献为零；独立的 `quota_reset_priority` 策略仍按最早有效重置时间排序
+`resetWeight` 控制重置分在总评分中的比重。`resetWindowWeights` 中的 `fiveHour`、`weekly`、`monthly` 分别表示 5 小时、周和月的相对系数。三项均为 0～10、最多一位小数。默认均为 0，旧配置省略整个字段时也取 0；全部为 0 时不计重置分。设为 `{"fiveHour":0,"weekly":1,"monthly":0}` 可只按周重置评分。只计算账号通用窗口，未知、缺失或已过期的周期贡献为零
 
 `queueWeight` 只在没有可立即使用的账号、需要选择等待队列时参与评分，越大越偏向等待人数少的账号。
 设为 `0` 时沿用最短队列规则；启用后结合其余五项评分选择队列。队列人数限于当前进程，只有开启账号排队才会生效，
 不影响已入队请求的位置、队内 FIFO、容量上限或等待超时。两项默认均为 `0`
 
-没有可用亲和时，在最高可用权重层内按配置评分。原生续写账号绑定仍是硬约束。
+额度调度 `quota_reset_priority` 使用独立的必填完整对象 `quotaResetWindowWeights`，与智能调度分别保存：
+
+```json
+{ "fiveHour": 0.0, "weekly": 0.0, "monthly": 0.0 }
+```
+
+三项范围均为 `0～10`、最多一位小数，全部为 `0` 时按账号最早有效重置时间排序。
+任一项大于 `0` 时，只比较所选窗口的加权重置分，严格优先最高分，不混入其他评分维度，也不轮换近似同分账号。
+设为 `{"fiveHour":0,"weekly":1,"monthly":0}` 即可优先周重置更早的账号；只有一项非零时，调大该系数不会改变排序。
+缺失或已过期的所选窗口不加分，不回退到未启用窗口。同分时依次比较并发占用、上次使用时间和账号 ID。
+读取设置额外返回只读 `quotaResetWindowWeightsDefaults`，内容为上述全零对象，更新时不可提交该只读字段
+
+两种策略均在没有可用亲和时，于最高可用权重层内选择账号，继续遵守账号资格、额度和并发限制。
+原生续写账号绑定仍是硬约束。
 配置随运行设置原子保存和发布，新请求使用新值，已开始请求及其重试沿用原快照，无需重启
 
 ### 模型定价

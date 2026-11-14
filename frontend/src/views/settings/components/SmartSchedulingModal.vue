@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import type { SmartSchedulingConfig } from '@/api'
-
 import { ZButton, ZDialog, ZFormItem, ZIconButton, ZInput, ZPopover } from '@codex-proxy/ui'
 import { CircleHelp } from '@lucide/vue'
-import { computed, reactive, shallowRef, useId, watch } from 'vue'
+
+import { computed, reactive, ref, shallowRef, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { validSchedulingWeight as validWeight } from '../utils/scheduling'
+import ResetWindowWeightsFields from './ResetWindowWeightsFields.vue'
 
 const props = defineProps<{
   config: SmartSchedulingConfig
   defaults: SmartSchedulingConfig
-  active: boolean
 }>()
 
 const emit = defineEmits<{ confirm: [config: SmartSchedulingConfig] }>()
@@ -74,25 +75,7 @@ const groups = computed<WeightGroup[]>(() => [
   },
 ])
 const fields = computed(() => groups.value.flatMap(group => group.fields))
-const periods = computed(() => [
-  {
-    key: 'fiveHour',
-    label: t('settings.scheduling.fiveHour'),
-  },
-  {
-    key: 'weekly',
-    label: t('settings.scheduling.weekly'),
-  },
-  {
-    key: 'monthly',
-    label: t('settings.scheduling.monthly'),
-  },
-] as const)
-const windows = reactive({ fiveHour: '', weekly: '', monthly: '' })
-function validWeight(input: string) {
-  const value = Number(input)
-  return input.trim() !== '' && Number.isFinite(value) && value >= 0 && value <= 10 && Math.round(value * 10) / 10 === value
-}
+const windows = ref({ fiveHour: '', weekly: '', monthly: '' })
 const draft = reactive({
   loadWeight: '',
   quotaWeight: '',
@@ -116,8 +99,8 @@ const emptyWeights = computed(() => fields.value.every(({ key }) => Number(draft
 function replaceDraft(config: SmartSchedulingConfig) {
   for (const { key } of fields.value)
     draft[key] = String(config[key])
-  for (const { key } of periods.value)
-    windows[key] = String(config.resetWindowWeights[key])
+  for (const key of Object.keys(windows.value) as (keyof typeof windows.value)[])
+    windows.value[key] = String(config.resetWindowWeights[key])
   submitted.value = false
 }
 
@@ -128,13 +111,13 @@ watch(open, (value) => {
 
 function confirm() {
   submitted.value = true
-  if (Object.values(errors.value).some(Boolean) || emptyWeights.value || !Object.values(windows).every(validWeight))
+  if (Object.values(errors.value).some(Boolean) || emptyWeights.value || !Object.values(windows.value).every(validWeight))
     return
   emit('confirm', {
     resetWindowWeights: {
-      fiveHour: Number(windows.fiveHour),
-      weekly: Number(windows.weekly),
-      monthly: Number(windows.monthly),
+      fiveHour: Number(windows.value.fiveHour),
+      weekly: Number(windows.value.weekly),
+      monthly: Number(windows.value.monthly),
     },
     loadWeight: Number(draft.loadWeight),
     quotaWeight: Number(draft.quotaWeight),
@@ -150,9 +133,6 @@ function confirm() {
 <template>
   <ZDialog v-model="open" :title="t('settings.rotation.smartSchedulingSettings')" :description="t('settings.scheduling.description')" width="36rem">
     <form :id="formId" class="grid gap-5" novalidate @submit.prevent="confirm">
-      <p v-if="!active" class="m-0 text-z text-z-text-secondary">
-        {{ t('settings.scheduling.enabledHelp') }}
-      </p>
       <section v-for="group in groups" :key="group.id" class="grid gap-3">
         <h3 class="m-0 text-z font-emphasis">
           {{ group.title }}
@@ -175,28 +155,7 @@ function confirm() {
           </ZFormItem>
         </div>
       </section>
-      <section class="grid gap-3" :aria-label="t('settings.scheduling.windowMode')">
-        <div class="flex items-center gap-1">
-          <h3 class="m-0 text-z font-emphasis">
-            {{ t('settings.scheduling.windowMode') }}
-          </h3>
-          <ZPopover trigger="hover-click" placement="top-start">
-            <template #reference="{ open: helpOpen }">
-              <ZIconButton variant="link" :aria-label="t('settings.scheduling.about', { label: t('settings.scheduling.windowMode') })" :aria-expanded="helpOpen" class="size-6!">
-                <CircleHelp class="size-3.5" />
-              </ZIconButton>
-            </template>
-            <p class="m-0 max-w-64 px-3 py-2 text-z-sm leading-relaxed">
-              {{ t('settings.scheduling.windowHelp') }}
-            </p>
-          </ZPopover>
-        </div>
-        <div class="grid grid-cols-3 gap-3">
-          <ZFormItem v-for="period in periods" :key="period.key" class="min-w-0" :label="period.label" :error="submitted && !validWeight(windows[period.key]) ? t('settings.scheduling.enterValueFromToUpToOne') : undefined">
-            <ZInput v-model="windows[period.key]" type="number" min="0" max="10" step="0.1" :aria-label="period.label" :aria-invalid="submitted && !validWeight(windows[period.key])" />
-          </ZFormItem>
-        </div>
-      </section>
+      <ResetWindowWeightsFields v-model="windows" :submitted="submitted" :help="t('settings.scheduling.windowHelp')" />
       <p v-if="submitted && emptyWeights" role="alert" class="m-0 text-z-sm text-z-danger">
         {{ t('settings.scheduling.weightsRequired') }}
       </p>

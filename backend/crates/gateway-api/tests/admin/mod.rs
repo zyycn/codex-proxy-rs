@@ -664,6 +664,7 @@ impl SettingsStore for MemorySettingsStore {
                     .values
                     .responses_max_decompressed_body_bytes,
                 smart_scheduling: command.values.smart_scheduling,
+                quota_reset_window_weights: command.values.quota_reset_window_weights,
                 min_codex_desktop_version: command.values.min_codex_desktop_version,
                 min_codex_cli_version: command.values.min_codex_cli_version,
                 usage_retention_days: command.values.usage_retention_days,
@@ -1940,6 +1941,7 @@ fn test_runtime_settings() -> RuntimeSettings {
             openai_session_affinity_ttl_hours: 24,
             responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             smart_scheduling: gateway_core::account::SmartSchedulingConfig::default(),
+            quota_reset_window_weights: gateway_core::account::ResetWindowWeights::default(),
             min_codex_desktop_version: None,
             min_codex_cli_version: None,
             usage_retention_days: 31,
