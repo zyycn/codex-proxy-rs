@@ -5,6 +5,7 @@ use provider_openai::transport::CodexUpstreamDiagnostics;
 use provider_openai::transport::diagnostics::{
     CodexFailureCategory, CodexUpstreamFailure, CodexUpstreamSendPhase,
 };
+use provider_openai::transport::protocol::responses::ResponsesSseFailure;
 use reqwest::header::{HeaderMap, HeaderValue};
 
 fn classify(status: u16, body: &str) -> CodexFailureCategory {
@@ -20,6 +21,42 @@ fn classify(status: u16, body: &str) -> CodexFailureCategory {
         CodexUpstreamSendPhase::AfterPayload,
     )
     .category()
+}
+
+fn classify_stream_event(value: &serde_json::Value) -> CodexFailureCategory {
+    CodexUpstreamFailure::from_sse_failure(
+        &ResponsesSseFailure::from_event("error", value),
+        &CodexUpstreamDiagnostics::default(),
+        &[],
+        &[],
+        CodexUpstreamSendPhase::AfterPayload,
+    )
+    .category()
+}
+
+#[test]
+fn stream_invalid_request_without_status_is_a_request_error() {
+    assert_eq!(
+        classify_stream_event(&serde_json::json!({"type":"error","error":{
+            "type":"invalid_request_error","code":null,"param":"input",
+            "message":"Response input messages must contain the word 'json' in some form to use 'text.format' of type 'json_object'."
+        }})),
+        CodexFailureCategory::InvalidRequest
+    );
+    // 没有结构化请求错误类型的流内失败仍按上游不可用处理
+    assert_eq!(
+        classify_stream_event(&serde_json::json!({"type":"error","error":{
+            "type":"server_error","message":"An internal server error occurred."
+        }})),
+        CodexFailureCategory::Unavailable
+    );
+    // 容量拒绝即使带 invalid_request_error 也保持容量分类
+    assert_eq!(
+        classify_stream_event(&serde_json::json!({"type":"error","error":{
+            "type":"invalid_request_error","code":"server_is_overloaded","message":"overloaded"
+        }})),
+        CodexFailureCategory::CapacityUnavailable
+    );
 }
 
 #[test]

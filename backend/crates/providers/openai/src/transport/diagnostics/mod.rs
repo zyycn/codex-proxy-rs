@@ -139,7 +139,8 @@ impl CodexUpstreamFailure {
         }
     }
 
-    pub(crate) fn from_sse_failure(
+    /// 由流内 `response.failed` / `error` 事件构造上游失败事实
+    pub fn from_sse_failure(
         failure: &ResponsesSseFailure,
         diagnostics: &CodexUpstreamDiagnostics,
         set_cookie_headers: &[String],
@@ -587,6 +588,14 @@ fn classify_upstream_failure(
     }
     if status == Some(StatusCode::TOO_MANY_REQUESTS) {
         return CodexFailureCategory::RateLimited;
+    }
+    // 流内 `error` 帧通常不带 HTTP 状态码；结构化 `invalid_request_error` 与
+    // HTTP 400 是同一个上游拒绝，不能因缺少状态码而归为上游不可用
+    if matches!(source, UpstreamFailureSource::SseFailure)
+        && status.is_none()
+        && error_type == "invalid_request_error"
+    {
+        return CodexFailureCategory::InvalidRequest;
     }
     match status.map(|status| status.as_u16()) {
         Some(status) => match status {
