@@ -547,25 +547,24 @@ SSE 注释保活用于防止传输链路空闲断开，不会重置 Codex 等待
 
 ### URL 子路径部署
 
-源码构建可通过 `CPR_WEB_BASE_PATH` 指定前端部署前缀，默认值为 `/`。
-管理端请求和生成的客户端地址沿用同一前缀，前缀以 `/` 开头和结尾，例如部署到 `https://example.com/proxy/`：
+官方镜像和二进制归档使用同一份前端资源，部署前缀在运行时配置，默认值为 `/`。
+例如部署到 `https://example.com/proxy/`，在现有 `deploy/config.yaml` 的 `api` 下设置：
+
+```yaml
+api:
+  web_base_path: '/proxy/'
+```
+
+重建应用容器使配置生效，无需重新构建前端或镜像：
 
 ```bash
-CPR_IMAGE=codex-proxy-rs:subpath CPR_WEB_BASE_PATH=/proxy/ \
-  docker compose -f deploy/compose.yaml build codex-proxy-rs
-CPR_IMAGE=codex-proxy-rs:subpath \
-  docker compose -f deploy/compose.yaml up -d --no-build --wait codex-proxy-rs
+docker compose -f deploy/compose.yaml up -d --no-build --force-recreate --wait codex-proxy-rs
 ```
 
-直接构建前端时，默认值来自所有模式共用的 `frontend/.env`。
-在不纳入 Git 的 `frontend/.env.local` 中配置以下内容，再执行 `pnpm --dir frontend build`：
-
-```dotenv
-CPR_WEB_BASE_PATH=/proxy/
-```
-
-进程环境中的同名变量优先于 env 文件，Docker 构建使用上方 Compose 构建参数。
-路径在构建时确定，修改运行时环境变量或只转发路径不会改变已发布镜像中的前端资源。
+也可在应用运行环境设置 `CPR_WEB_BASE_PATH=/proxy/`，其值优先于 YAML 配置；
+Compose 透传宿主环境中的该变量。前缀以 `/` 开头和结尾，各级路径仅包含英文字母、数字、
+`-`、`_`、`.` 和 `~`，不能使用空路径段、`.` 或 `..`。
+管理端请求、路由、PWA 和生成的客户端地址沿用同一前缀。
 
 后端仍按根路径提供服务，反向代理需要剥除请求前缀，并为登录和刷新 Cookie 的 `Path`、
 站内根相对 `Location` 补回前缀，保证 Realtime 客户端沿返回地址连接和挂断。
@@ -590,8 +589,11 @@ Caddy 与应用同在容器网络时，将回源地址改为 `codex-proxy-rs:808
 合并到已有站点时，将子路径处理放在兜底路由之前，保留浏览器的 `Origin` 和鉴权头。
 管理入口为 `/proxy/`，模型客户端使用 `/proxy/v1`。
 
-系统在线更新会替换前端资源。子路径部署在 `config.yaml` 的 `host` 下配置
-`system_update.update_repository: null`，通过重新构建镜像升级。
+部署前缀保存在配置中，HTML 响应在内存中应用前缀，不修改发行文件。
+官方构建沿用[管理端在线更新](#管理端在线更新)，替换前端和回滚后仍使用同一部署前缀。
+从构建时前缀部署迁移时，使用支持运行时前缀的完整发行物，并将前缀移到上述配置；
+曾显式关闭更新仓库时，将 `host.system_update.update_repository` 恢复为 `zyycn/codex-proxy-rs`。
+`frontend/.env.local` 和 Docker 构建参数不再控制部署前缀。
 验收时检查子页面刷新、登录续期、头像和插件资源、SSE 与 WebSocket，并保留默认根路径部署的验证。
 
 ## 客户端配置

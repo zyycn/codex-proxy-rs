@@ -74,7 +74,6 @@ services:
       dockerfile: deploy/Dockerfile
       target: runtime
       args:
-        CPR_WEB_BASE_PATH: ${CPR_WEB_BASE_PATH:-/}
         CPR_VERSION: ${CPR_VERSION:-}
         CPR_GIT_SHA: ${CPR_GIT_SHA:-unknown}
         CPR_BUILD_TIME: ${CPR_BUILD_TIME:-unknown}
@@ -130,6 +129,8 @@ services:
       CPR_GITHUB_API_BASE: https://api.github.com/repos
       CPR_UPDATE_EXE_PATH: /app/bin/codex-proxy-rs
       CPR_WEB_DIST_DIR: /app/web/dist
+      # 未设置环境变量时使用 config.yaml 的 api.web_base_path
+      CPR_WEB_BASE_PATH:
       CPR_ENABLE_SELF_RESTART: 'true'
     logging: *json-logging
 

@@ -267,6 +267,7 @@ async fn turns_refresh_host_settings_and_key_identity_while_preserving_handshake
         uuid::Uuid::nil(),
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
+            web_base_path: Default::default(),
             cors_allowed_origins: vec![],
             request_timeout_seconds: None,
             request_id_header: "x-request-id".into(),

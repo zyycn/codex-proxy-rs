@@ -75,6 +75,8 @@ client:
 api:
   # Docker 内由 CPR_WEB_DIST_DIR 覆盖。
   asset_directory: '../frontend/dist'
+  # 运行时部署前缀，以 / 开头和结尾；也可通过 CPR_WEB_BASE_PATH 覆盖
+  web_base_path: '/'
   cors_allowed_origins: []
   request_timeout_seconds: null
   request_id_header: 'x-request-id'

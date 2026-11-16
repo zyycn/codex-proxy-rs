@@ -507,6 +507,7 @@ async fn early_middleware_failure_is_recorded_at_ingress_without_a_reserved_mode
         uuid::Uuid::nil(),
         gateway_api::ApiConfig {
             asset_directory: env!("CARGO_MANIFEST_DIR").into(),
+            web_base_path: Default::default(),
             cors_allowed_origins: Vec::new(),
             request_timeout_seconds: None,
             request_id_header: "x-correlation-id".into(),

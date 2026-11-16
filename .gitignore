@@ -25,7 +25,6 @@
 .env
 .env.*
 !.env.example
-!/frontend/.env
 
 # Editors and operating systems
 /.idea/

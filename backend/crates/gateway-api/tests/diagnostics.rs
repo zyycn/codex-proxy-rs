@@ -18,6 +18,7 @@ async fn fixture() -> (axum::Router, Arc<RecordingDiagnostics>) {
         admin.services,
         gateway_api::ApiConfig {
             asset_directory: env!("CARGO_MANIFEST_DIR").into(),
+            web_base_path: Default::default(),
             cors_allowed_origins: Vec::new(),
             request_timeout_seconds: None,
             request_id_header: "x-correlation-id".into(),

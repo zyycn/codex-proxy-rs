@@ -33,7 +33,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
 sha2 = "0.11.0"
 thiserror = "2.0.18"
-tokio = { version = "1.52.3", default-features = false, features = ["io-util", "macros", "rt", "sync", "time"] }
+tokio = { version = "1.52.3", default-features = false, features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
 tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["handshake"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.0", features = ["compression-gzip", "cors", "fs", "request-id", "timeout", "trace"] }

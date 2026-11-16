@@ -297,6 +297,7 @@ async fn health_router(
         uuid::Uuid::nil(),
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
+            web_base_path: Default::default(),
             cors_allowed_origins: Vec::new(),
             request_timeout_seconds: None,
             request_id_header: "x-request-id".to_owned(),

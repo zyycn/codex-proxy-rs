@@ -10,6 +10,7 @@ mod middleware;
 mod openai;
 mod provider;
 mod support;
+mod web;
 
 #[tokio::test]
 async fn api_should_serve_resolved_assets_with_relative_environment_override() {
@@ -32,6 +33,7 @@ async fn api_should_serve_resolved_assets_with_relative_environment_override() {
             .current_dir(&directory)
             .env(CHILD_ENV, &directory)
             .env("CPR_WEB_DIST_DIR", "../web/dist")
+            .env("CPR_WEB_BASE_PATH", "/cprs/")
             .output()
             .expect("isolated asset directory test");
         fs::remove_dir_all(directory).expect("remove fixture");
@@ -45,6 +47,7 @@ async fn api_should_serve_resolved_assets_with_relative_environment_override() {
     };
     let mut config = gateway_api::ApiConfig {
         asset_directory: "unused".into(),
+        web_base_path: Default::default(),
         cors_allowed_origins: Vec::new(),
         request_timeout_seconds: None,
         request_id_header: "x-request-id".to_owned(),
@@ -52,6 +55,10 @@ async fn api_should_serve_resolved_assets_with_relative_environment_override() {
     config
         .resolve_and_validate(&std::path::Path::new(&directory).join("deploy"))
         .expect("resolved API config");
+    assert_eq!(
+        config.web_base_path,
+        "/cprs/".to_owned().try_into().unwrap()
+    );
     let admin = admin::AdminTestFixture::new().await;
     let router = openai::api_router_with_config(admin.services, config);
     let response = router

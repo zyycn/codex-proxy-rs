@@ -316,6 +316,7 @@ async fn router(mode: Mode, timeout: Option<u64>) -> (axum::Router, Arc<Plan>) {
         admin.services,
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
+            web_base_path: Default::default(),
             cors_allowed_origins: Vec::new(),
             request_timeout_seconds: timeout,
             request_id_header: "x-request-id".into(),
@@ -536,6 +537,7 @@ async fn internal_dispatch_uses_the_same_router_and_the_frozen_parent_context() 
         admin.services,
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
+            web_base_path: Default::default(),
             cors_allowed_origins: Vec::new(),
             request_timeout_seconds: Some(60),
             request_id_header: "x-request-id".into(),
@@ -601,6 +603,7 @@ async fn parent_cancellation_wakes_a_pending_child_response_body() {
         admin.services,
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
+            web_base_path: Default::default(),
             cors_allowed_origins: Vec::new(),
             request_timeout_seconds: None,
             request_id_header: "x-request-id".into(),
@@ -648,6 +651,7 @@ async fn plugin_http_dispatch_uses_host_identity_without_client_credentials() {
         admin.services,
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
+            web_base_path: Default::default(),
             cors_allowed_origins: Vec::new(),
             request_timeout_seconds: None,
             request_id_header: "x-request-id".into(),

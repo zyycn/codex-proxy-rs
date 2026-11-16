@@ -11,7 +11,6 @@ COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml 
 RUN npm install --global "$(node -p 'require("./package.json").packageManager')" \
     && pnpm install --frozen-lockfile
 COPY frontend ./
-ARG CPR_WEB_BASE_PATH=/
 RUN pnpm build
 
 FROM rust:1.99.1-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS backend-builder

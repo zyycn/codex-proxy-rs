@@ -16,6 +16,7 @@ async fn store_failure_is_recorded_once_with_the_incoming_request_id() {
         fixture.services,
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
+            web_base_path: Default::default(),
             request_timeout_seconds: None,
             cors_allowed_origins: Vec::new(),
             request_id_header: "x-request-id".to_owned(),

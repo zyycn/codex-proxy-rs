@@ -18,7 +18,6 @@ use gateway_core::lifecycle::ConnectionLifecycle;
 use serde::Deserialize;
 use tower_http::cors::CorsLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use url::Url;
 
@@ -39,8 +38,10 @@ mod provider;
 mod request_context;
 mod session_cookie;
 mod time;
+mod web;
 
 pub use time::{RequestBucketView, TimePresenter};
+pub use web::WebBasePath;
 
 /// HTTP wire 字段校验错误；只携带稳定字段名，不回显输入值
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +67,8 @@ impl WireValidationError {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ApiConfig {
     pub asset_directory: PathBuf,
+    #[serde(default)]
+    pub web_base_path: WebBasePath,
     pub cors_allowed_origins: Vec<String>,
     pub request_timeout_seconds: Option<u64>,
     pub request_id_header: String,
@@ -78,6 +81,13 @@ impl ApiConfig {
     ///
     /// 路径为空、origin/header 非法或 timeout 为零时返回脱敏错误
     pub fn resolve_and_validate(&mut self, source_dir: &Path) -> Result<(), ApiConfigError> {
+        match std::env::var("CPR_WEB_BASE_PATH") {
+            Ok(value) => self.web_base_path = value.try_into()?,
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(ApiConfigError::InvalidWebBasePath);
+            }
+        }
         match std::env::var(WEB_DIST_ENV) {
             Ok(value) if value.trim().is_empty() => {
                 return Err(ApiConfigError::InvalidAssetDirectory);
@@ -123,6 +133,8 @@ impl ApiConfig {
 /// API 配置非法的稳定分类
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ApiConfigError {
+    #[error("API web base path is invalid")]
+    InvalidWebBasePath,
     #[error("API asset directory is invalid")]
     InvalidAssetDirectory,
     #[error("API CORS origin is invalid")]
@@ -220,7 +232,6 @@ pub fn initialize(
         openai: OpenAiService::new(execution, lifecycle),
         health: HealthStatus::new(probes, worker_health, diagnostics.clone()),
     };
-    let index = config.asset_directory.join("index.html");
     let mut router = Router::new()
         .route("/readyz", get(health::readyz))
         .route("/healthz", get(health::healthz))
@@ -230,13 +241,7 @@ pub fn initialize(
         .merge(admin::model_router())
         .merge(auth::router::<ApiState>())
         .merge(key_usage::router::<ApiState>())
-        .fallback_service(
-            Router::new()
-                .fallback_service(
-                    ServeDir::new(config.asset_directory).fallback(ServeFile::new(index)),
-                )
-                .layer(axum::middleware::map_response(static_cache_control)),
-        );
+        .fallback_service(web::router(config.asset_directory, config.web_base_path));
     if !config.cors_allowed_origins.is_empty() {
         let origins = config
             .cors_allowed_origins
@@ -317,14 +322,6 @@ pub fn initialize(
         timeout: config.request_timeout_seconds.map(Duration::from_secs),
         request_id_header,
     })
-}
-
-async fn static_cache_control(mut response: axum::response::Response) -> axum::response::Response {
-    response.headers_mut().insert(
-        axum::http::header::CACHE_CONTROL,
-        HeaderValue::from_static("no-cache"),
-    );
-    response
 }
 
 /// API 初始化失败的脱敏分类

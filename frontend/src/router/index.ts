@@ -3,10 +3,11 @@ import { createRouter, createWebHistory, START_LOCATION } from 'vue-router'
 import { t } from '@/i18n'
 
 import { useAuthStore } from '@/stores/modules/auth'
+import { WEB_BASE_PATH } from '@/utils/deployment'
 import { routes } from './routes'
 
 export const router = createRouter({
-  history: createWebHistory(import.meta.env.BASE_URL),
+  history: createWebHistory(WEB_BASE_PATH),
   routes,
 })
 
