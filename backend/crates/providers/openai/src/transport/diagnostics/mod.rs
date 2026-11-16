@@ -588,6 +588,14 @@ fn classify_upstream_failure(
     if status == Some(StatusCode::TOO_MANY_REQUESTS) {
         return CodexFailureCategory::RateLimited;
     }
+    // 流内 `error` 帧通常不带 HTTP 状态码；结构化 `invalid_request_error` 与
+    // HTTP 400 是同一个上游拒绝，不能因缺少状态码而归为上游不可用
+    if matches!(source, UpstreamFailureSource::SseFailure)
+        && status.is_none()
+        && error_type == "invalid_request_error"
+    {
+        return CodexFailureCategory::InvalidRequest;
+    }
     match status.map(|status| status.as_u16()) {
         Some(status) => match status {
             400 | 404 | 409 | 422 => CodexFailureCategory::InvalidRequest,
