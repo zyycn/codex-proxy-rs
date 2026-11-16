@@ -1,5 +1,6 @@
 import type { RequestOptions } from '../../request'
 import type { AccountIdParam } from './types'
+import { API_BASE_URL } from '../../constants'
 import request from '../../request'
 
 export interface AccountProfileStatisticsSummary {
@@ -82,7 +83,7 @@ export function accountProfileAvatarUrl(accountId: string, sourceUrl: string) {
     accountId,
     version: stableAvatarVersion(sourceUrl),
   })
-  return `/api/admin/accounts/profile-avatar?${params.toString()}`
+  return `${API_BASE_URL}/api/admin/accounts/profile-avatar?${params.toString()}`
 }
 
 function stableAvatarVersion(value: string) {

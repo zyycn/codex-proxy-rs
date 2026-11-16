@@ -74,6 +74,7 @@ services:
       dockerfile: deploy/Dockerfile
       target: runtime
       args:
+        CPR_WEB_BASE_PATH: ${CPR_WEB_BASE_PATH:-/}
         CPR_VERSION: ${CPR_VERSION:-}
         CPR_GIT_SHA: ${CPR_GIT_SHA:-unknown}
         CPR_BUILD_TIME: ${CPR_BUILD_TIME:-unknown}

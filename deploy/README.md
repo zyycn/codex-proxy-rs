@@ -20,10 +20,11 @@
 | --- | --- | --- |
 | `deploy/config.yaml` | 监听、数据库/Redis 连接、部署凭据、时区、日志与可选内存分配策略等启动配置 | 从模板创建，已有部署合并修改，不覆盖原文件 |
 | `deploy/compose.yaml` | 镜像、容器网络、端口、挂载、PostgreSQL 启动参数与资源限制 | 调整 Compose 并重建受影响容器 |
+| `frontend/.env` | 前端部署前缀 | 通过 `.env.local` 覆盖后重新构建，详见 [URL 子路径部署](#url-子路径部署) |
 | PostgreSQL | 账号、Key、运行设置、上游身份、插件配置等业务数据 | 管理端或管理 API |
 | 浏览器本地 | 主题和界面偏好 | 当前浏览器的主题设置 |
 
-项目不使用 `.env` 配置文件。Compose 环境变量用于容器地址、镜像选择和构建发布；
+后端不使用 `.env` 配置文件。Compose 环境变量用于容器地址、镜像选择和构建发布；
 可选的内存分配策略由 `config.yaml` 的 `services.app-runtime` 桥接到应用容器。
 配置加载会忽略未知字段，并在启动控制台提示字段名；不输出对应值。缺少必填字段时会指出缺项并停止启动，
 已知字段的类型和取值仍需合法；可选字段省略时使用默认值
@@ -543,6 +544,52 @@ Ping/Pong 不延长空闲期限；默认每 5 秒扫描，通常在空闲 300～
 `downstream.body.closed` 和反向代理日志判断断开位置，不能仅凭此消息认定是 JSON 格式错误。
 SSE 注释保活用于防止传输链路空闲断开，不会重置 Codex 等待完整 SSE 事件的超时；
 若报错为 `idle timeout waiting for SSE`，再检查客户端的 `stream_idle_timeout_ms`
+
+### URL 子路径部署
+
+源码构建可通过 `CPR_WEB_BASE_PATH` 指定前端部署前缀，默认值为 `/`。
+管理端请求和生成的客户端地址沿用同一前缀，前缀以 `/` 开头和结尾，例如部署到 `https://example.com/proxy/`：
+
+```bash
+CPR_IMAGE=codex-proxy-rs:subpath CPR_WEB_BASE_PATH=/proxy/ \
+  docker compose -f deploy/compose.yaml build codex-proxy-rs
+CPR_IMAGE=codex-proxy-rs:subpath \
+  docker compose -f deploy/compose.yaml up -d --no-build --wait codex-proxy-rs
+```
+
+直接构建前端时，默认值来自所有模式共用的 `frontend/.env`。
+在不纳入 Git 的 `frontend/.env.local` 中配置以下内容，再执行 `pnpm --dir frontend build`：
+
+```dotenv
+CPR_WEB_BASE_PATH=/proxy/
+```
+
+进程环境中的同名变量优先于 env 文件，Docker 构建使用上方 Compose 构建参数。
+路径在构建时确定，修改运行时环境变量或只转发路径不会改变已发布镜像中的前端资源。
+
+后端仍按根路径提供服务，反向代理需要剥除此前缀，并重写登录和刷新 Cookie 的 `Path`。
+以下 Caddy 示例适用于 Caddy 在宿主机、应用使用默认本机端口的部署：
+
+```caddyfile
+example.com {
+    redir /proxy /proxy/ 308
+
+    handle_path /proxy/* {
+        reverse_proxy 127.0.0.1:8080 {
+            header_down Set-Cookie "(?i)(;[[:space:]]*Path=)/([^;]*)" "${1}/proxy/${2}"
+            flush_interval -1
+        }
+    }
+}
+```
+
+Caddy 与应用同在容器网络时，将回源地址改为 `codex-proxy-rs:8080`。
+合并到已有站点时，将子路径处理放在兜底路由之前，保留浏览器的 `Origin` 和鉴权头。
+管理入口为 `/proxy/`，模型客户端使用 `/proxy/v1`。
+
+系统在线更新会替换前端资源。子路径部署在 `config.yaml` 的 `host` 下配置
+`system_update.update_repository: null`，通过重新构建镜像升级。
+验收时检查子页面刷新、登录续期、头像和插件资源、SSE 与 WebSocket，并保留默认根路径部署的验证。
 
 ## 客户端配置
 
