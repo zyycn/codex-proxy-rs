@@ -567,7 +567,8 @@ CPR_WEB_BASE_PATH=/proxy/
 进程环境中的同名变量优先于 env 文件，Docker 构建使用上方 Compose 构建参数。
 路径在构建时确定，修改运行时环境变量或只转发路径不会改变已发布镜像中的前端资源。
 
-后端仍按根路径提供服务，反向代理需要剥除此前缀，并重写登录和刷新 Cookie 的 `Path`。
+后端仍按根路径提供服务，反向代理需要剥除请求前缀，并为登录和刷新 Cookie 的 `Path`、
+站内根相对 `Location` 补回前缀，保证 Realtime 客户端沿返回地址连接和挂断。
 以下 Caddy 示例适用于 Caddy 在宿主机、应用使用默认本机端口的部署：
 
 ```caddyfile
@@ -577,6 +578,8 @@ example.com {
     handle_path /proxy/* {
         reverse_proxy 127.0.0.1:8080 {
             header_down Set-Cookie "(?i)(;[[:space:]]*Path=)/([^;]*)" "${1}/proxy/${2}"
+            # 仅改写站内根相对路径，保留外部 URL
+            header_down Location "^/([^/].*)?$" "/proxy/${1}"
             flush_interval -1
         }
     }
