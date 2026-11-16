@@ -9209,6 +9209,57 @@ async fn websocket_usage_limit_rejection_preserves_quota_state_for_account_rotat
 }
 
 #[tokio::test]
+async fn bare_sse_error_without_status_preserves_request_and_capacity_classification() {
+    for (detail, expected_kind) in [
+        (
+            json!({"type":"invalid_request_error","code":null,"param":"input",
+                "message":"Response input messages must contain the word 'json' in some form to use 'text.format' of type 'json_object'."}),
+            ProviderErrorKind::InvalidRequest,
+        ),
+        (
+            json!({"type":"server_error","message":"An internal server error occurred."}),
+            ProviderErrorKind::Unavailable,
+        ),
+        (
+            json!({"type":"invalid_request_error","code":"server_is_overloaded","message":"overloaded"}),
+            ProviderErrorKind::UpstreamCapacityUnavailable,
+        ),
+    ] {
+        let frame = json!({"type":"error","error":detail});
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!("event: error\ndata: {frame}\n\n"),
+                "text/event-stream",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        let mut stream = provider_with_base_url(&store, server.uri())
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                context("req_bare_sse_error", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        let (mut events, mut error) = precommit::stream_failure(&mut stream).await;
+        assert_eq!(error.kind(), expected_kind, "{frame}");
+        assert_eq!(error.upstream_status(), None);
+        if expected_kind == ProviderErrorKind::InvalidRequest {
+            assert!(error.retry_is_prohibited());
+            let visible = error.client_visible_upstream_error().unwrap();
+            assert_eq!(visible.error_type(), Some("invalid_request_error"));
+            assert_eq!(Some(visible.message()), frame["error"]["message"].as_str());
+        }
+        events.extend(error.take_atomic_client_events());
+        assert_eq!(events.last().unwrap().wire_event().unwrap().data(), &frame);
+    }
+}
+
+#[tokio::test]
 async fn stream_failures_preserve_error_fields_independent_of_retry_classification() {
     for (use_websocket, (code, message, expected_kind, scored)) in
         [false, true].into_iter().flat_map(|websocket| {

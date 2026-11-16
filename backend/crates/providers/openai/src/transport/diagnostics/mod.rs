@@ -139,8 +139,7 @@ impl CodexUpstreamFailure {
         }
     }
 
-    /// 由流内 `response.failed` / `error` 事件构造上游失败事实
-    pub fn from_sse_failure(
+    pub(crate) fn from_sse_failure(
         failure: &ResponsesSseFailure,
         diagnostics: &CodexUpstreamDiagnostics,
         set_cookie_headers: &[String],
