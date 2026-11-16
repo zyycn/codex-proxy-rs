@@ -544,6 +544,45 @@ Ping/Pong 不延长空闲期限；默认每 5 秒扫描，通常在空闲 300～
 SSE 注释保活用于防止传输链路空闲断开，不会重置 Codex 等待完整 SSE 事件的超时；
 若报错为 `idle timeout waiting for SSE`，再检查客户端的 `stream_idle_timeout_ms`
 
+### URL 子路径部署
+
+源码构建可通过 `CPR_WEB_BASE_PATH` 指定管理端和模型 API 的访问前缀，默认值为 `/`。
+前缀以 `/` 开头和结尾，例如部署到 `https://example.com/proxy/`：
+
+```bash
+CPR_IMAGE=codex-proxy-rs:subpath CPR_WEB_BASE_PATH=/proxy/ \
+  docker compose -f deploy/compose.yaml build codex-proxy-rs
+CPR_IMAGE=codex-proxy-rs:subpath \
+  docker compose -f deploy/compose.yaml up -d --no-build --wait codex-proxy-rs
+```
+
+直接构建前端时使用 `pnpm --dir frontend build --base /proxy/`。
+路径在构建时确定，修改运行时环境变量或只转发路径不会改变已发布镜像中的前端资源。
+
+反向代理需要剥除此前缀，并重写登录和刷新 Cookie 的 `Path`。
+以下 Caddy 示例适用于 Caddy 在宿主机、应用使用默认本机端口的部署：
+
+```caddyfile
+example.com {
+    redir /proxy /proxy/ 308
+
+    handle_path /proxy/* {
+        reverse_proxy 127.0.0.1:8080 {
+            header_down Set-Cookie "(?i)(;[[:space:]]*Path=)/([^;]*)" "${1}/proxy/${2}"
+            flush_interval -1
+        }
+    }
+}
+```
+
+Caddy 与应用同在容器网络时，将回源地址改为 `codex-proxy-rs:8080`。
+合并到已有站点时，将子路径处理放在兜底路由之前，保留浏览器的 `Origin` 和鉴权头。
+管理入口为 `/proxy/`，模型客户端使用 `/proxy/v1`。
+
+系统在线更新会替换前端资源。子路径部署在 `config.yaml` 的 `host` 下配置
+`system_update.update_repository: null`，通过重新构建镜像升级。
+验收时检查子页面刷新、登录续期、头像和插件资源、SSE 与 WebSocket，并保留默认根路径部署的验证。
+
 ## 客户端配置
 
 在管理端创建客户端密钥。Responses、Chat Completions 和 Anthropic Messages 客户端的 Base URL 见[客户端接入](../README.md#客户端接入)；
