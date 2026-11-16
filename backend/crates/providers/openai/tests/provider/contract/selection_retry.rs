@@ -429,6 +429,81 @@ async fn streaming_not_found_preserves_accounts_and_stops_gateway_retries() {
 }
 
 #[tokio::test]
+async fn refused_connections_respect_the_same_rotation_limit_over_http_and_websocket() {
+    let upstream = MockServer::start().await;
+    for websocket in [false, true] {
+        for rotations in [0, 2] {
+            let store = Arc::new(MemoryAccountStore::default());
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = listener.local_addr().unwrap();
+            drop(listener);
+            let proxy =
+                gateway_core::account::OutboundProxy::parse(&format!("socks5h://{endpoint}"))
+                    .unwrap();
+            for id in ["acct_provider_contract", "acct_subagent_b"] {
+                create_account(&store, id).await;
+                store.set_egress(id, Some(proxy.clone()), None);
+            }
+            let operation = if websocket {
+                capacity_websocket_operation()
+            } else {
+                http_generate_operation()
+            };
+            let leases = Arc::new(TestLeaseCoordinator::default());
+            let provider = provider_with_affinity_and_base_url_and_leases(
+                &store,
+                Arc::new(MemorySessionAffinity::default()),
+                upstream.uri(),
+                Arc::clone(&leases),
+            );
+            let providers = ProviderRegistry::new([
+                provider as Arc<dyn gateway_core::engine::provider::Provider>
+            ])
+            .unwrap();
+            let coordinator = AttemptCoordinator::new(GatewayEngine::new(
+                Arc::new(NoopExecutionStore),
+                providers,
+            ));
+            let settings = SettingsValues::new(3, "smart", Default::default(), None, None)
+                .with_max_account_rotations(rotations);
+            let plan = execution_plan_with_settings(&operation, settings);
+            let mut session = coordinator
+                .start(
+                    execution_request("req_refused", &operation, Duration::from_secs(15)),
+                    operation,
+                    plan,
+                    None,
+                    None,
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            let result = session.collect_uncommitted().await;
+            assert!(
+                matches!(result, Err(EngineError::Provider(_))),
+                "ws={websocket}, rotations={rotations}: {result:?}"
+            );
+            let requests = leases.requests.lock().unwrap();
+            let accounts: Vec<_> = requests.iter().map(|r| r.account_id()).collect();
+            assert!(
+                (3..=4).contains(&accounts.len()),
+                "ws={websocket}, rotations={rotations}: {accounts:?}, {result:?}"
+            );
+            assert_eq!(accounts[0], accounts[1]);
+            if rotations == 0 {
+                assert!(
+                    accounts.iter().all(|a| *a == accounts[0]),
+                    "ws={websocket}: {accounts:?}"
+                );
+            } else {
+                assert_ne!(accounts[1], accounts[2], "ws={websocket}: {accounts:?}");
+            }
+        }
+    }
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn stalled_http_proxy_retries_same_account_before_using_reserved_rotation_budget() {
     stalled_proxy_recovery(false).await;
 }
@@ -536,11 +611,20 @@ async fn stalled_proxy_recovery(websocket: bool) {
 }
 
 fn execution_plan(operation: &Operation) -> gateway_core::routing::RoutingPlan {
+    execution_plan_with_settings(
+        operation,
+        SettingsValues::new(3, "smart", Default::default(), None, None),
+    )
+}
+
+fn execution_plan_with_settings(
+    operation: &Operation,
+    settings: SettingsValues,
+) -> gateway_core::routing::RoutingPlan {
     let kind = ProviderKind::new("openai").unwrap();
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
-        SettingsValues::new(3, "smart", Default::default(), None, None)
-            .with_request_location(global_request_location(), true),
+        settings.with_request_location(global_request_location(), true),
         vec![kind.clone()],
         vec![ProviderModel::new(
             kind,

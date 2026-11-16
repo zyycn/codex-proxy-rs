@@ -442,6 +442,7 @@ pub(super) fn schedule_authoritative_quota_refresh_after_failure(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WebSocketFailurePolicy {
     Budgeted,
+    TransientConnect,
     ImmediateFallback,
 }
 
@@ -470,6 +471,9 @@ pub(super) fn websocket_client_failure_policy(
         } if *status == reqwest::StatusCode::UPGRADE_REQUIRED => {
             Some(WebSocketFailurePolicy::ImmediateFallback)
         }
+        CodexClientError::WebSocket(error) if transient_websocket_connect(error) => {
+            Some(WebSocketFailurePolicy::TransientConnect)
+        }
         CodexClientError::WebSocket(error)
             if !matches!(
                 error.classified(),
@@ -482,6 +486,28 @@ pub(super) fn websocket_client_failure_policy(
             Some(WebSocketFailurePolicy::Budgeted)
         }
         _ => None,
+    }
+}
+
+fn transient_websocket_connect(error: &CodexWebSocketExchangeError) -> bool {
+    use std::io::ErrorKind;
+    match error.classified() {
+        CodexWebSocketExchangeError::ConnectTimeout { .. } => true,
+        CodexWebSocketExchangeError::Connect {
+            source: tungstenite::Error::Io(io),
+            ..
+        } => matches!(
+            io.kind(),
+            ErrorKind::ConnectionRefused
+                | ErrorKind::NetworkUnreachable
+                | ErrorKind::HostUnreachable
+                | ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::BrokenPipe
+                | ErrorKind::UnexpectedEof
+                | ErrorKind::TimedOut
+        ),
+        _ => false,
     }
 }
 
@@ -545,6 +571,15 @@ pub(super) fn apply_websocket_recovery_policy(
     let fallback_now = context.policy == WebSocketFailurePolicy::ImmediateFallback
         || context.retry_count >= context.max_retries
         || session_budget_exhausted;
+    if fallback_now && !context.requirement.allows_pre_send_http_fallback() {
+        return;
+    }
+    // 只为无续接依赖的新请求保留重选机会；是否重试 WS 或退回 HTTP 仍由协议预算决定
+    if context.policy == WebSocketFailurePolicy::TransientConnect
+        && context.requirement.allows_connection_restart()
+    {
+        failure.error.allow_connection_rotation();
+    }
     if !fallback_now {
         let Some(retry_index) = context.retry_count.checked_add(1).and_then(NonZeroU32::new) else {
             return;
@@ -574,14 +609,11 @@ pub(super) fn apply_websocket_recovery_policy(
             upstream_send_state = ?failure.error.send_state(),
             replay_proved_safe = failure.error.replay_is_safe(),
             transport_requirement = context.requirement.as_str(),
-            "OpenAI upstream WebSocket failed; retrying the same account"
+            "OpenAI upstream WebSocket failed; requesting transport retry"
         );
         return;
     }
 
-    if !context.requirement.allows_pre_send_http_fallback() {
-        return;
-    }
     failure.error.set_pre_delivery_transport_fallback();
     if let Some(key) = context.session_transport_key {
         context.session_transport_recovery.disable_websocket(key);
@@ -601,7 +633,8 @@ pub(super) fn apply_websocket_recovery_policy(
         websocket_retry_count = context.retry_count,
         websocket_max_retries = context.max_retries,
         websocket_fallback_reason = match context.policy {
-            WebSocketFailurePolicy::Budgeted => "retry_budget_exhausted",
+            WebSocketFailurePolicy::Budgeted | WebSocketFailurePolicy::TransientConnect =>
+                "retry_budget_exhausted",
             WebSocketFailurePolicy::ImmediateFallback => "upgrade_required",
         },
         session_affinity_present = context.session_transport_key.is_some(),

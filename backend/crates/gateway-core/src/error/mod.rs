@@ -135,6 +135,7 @@ pub enum TransientRetryPolicy {
 }
 
 /// Provider 在下游尚未提交事件时请求的隐藏恢复方式
+/// 传输恢复默认保持原账号；明确允许建连换号时，Core 可在同账号恢复失败后重选
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PreDeliveryRetry {
     /// 排除本次账号，按普通调度策略重新选号
@@ -152,7 +153,7 @@ pub enum PreDeliveryRetry {
         /// 同账号恢复策略，不提供额外安全重放资格
         policy: TransientRetryPolicy,
     },
-    /// 固定本次账号，并按 Provider 给出的序号重试当前传输
+    /// 按 Provider 给出的序号重试当前传输
     /// 可用于发送结果不明确时的有界尽力恢复，不等于上游未执行的证明
     SameAccountTransportRetry {
         /// Provider-owned 传输重试序号，从 1 开始
@@ -165,7 +166,7 @@ pub enum PreDeliveryRetry {
         /// Provider 明确指定实际失败的传输，避免 HTTP 恢复重新进入 WS
         transport: crate::upstream::AttemptTransport,
     },
-    /// 固定本次账号，并要求 Provider 使用备用传输
+    /// 要求 Provider 使用备用传输
     SameAccountTransportFallback,
 }
 
@@ -517,6 +518,7 @@ pub struct ProviderError {
     replay_safe: bool,
     retry_prohibited: bool,
     same_account_retry_blocked: bool,
+    connection_rotation_allowed: bool,
     pre_delivery_retry: Option<Box<PreDeliveryRetry>>,
     credential_recovery_required: bool,
     retry_same_account: bool,
@@ -561,6 +563,7 @@ impl ProviderError {
             replay_safe: false,
             retry_prohibited: false,
             same_account_retry_blocked: false,
+            connection_rotation_allowed: false,
             pre_delivery_retry: None,
             credential_recovery_required: false,
             retry_same_account: false,
@@ -758,7 +761,19 @@ impl ProviderError {
         self.pre_delivery_retry = Some(Box::new(PreDeliveryRetry::SameAccountConnectionRetry {
             transport,
         }));
+        self.allow_connection_rotation();
         self
+    }
+
+    /// 允许 Core 为瞬时建连失败预留换号机会，不授予重放资格或增加传输重试次数
+    pub fn allow_connection_rotation(&mut self) {
+        self.connection_rotation_allowed = true;
+    }
+
+    /// 供 Core 在传输仍可恢复时为换号预留建连预算
+    #[must_use]
+    pub const fn allows_connection_rotation(&self) -> bool {
+        self.connection_rotation_allowed
     }
 
     /// 要求 Core 在账号凭据已恢复后仅对原账号重放一次
@@ -1027,6 +1042,7 @@ impl ProviderError {
             replay_safe: self.replay_safe,
             retry_prohibited: self.retry_prohibited,
             same_account_retry_blocked: self.same_account_retry_blocked,
+            connection_rotation_allowed: self.connection_rotation_allowed,
             pre_delivery_retry: self.pre_delivery_retry.clone(),
             credential_recovery_required: self.credential_recovery_required,
             retry_same_account: self.retry_same_account,
@@ -1070,6 +1086,10 @@ impl fmt::Debug for ProviderError {
             )
             .field("connection_observation", &self.connection_observation())
             .field("replay_safe", &self.replay_safe)
+            .field(
+                "connection_rotation_allowed",
+                &self.connection_rotation_allowed,
+            )
             .field("pre_delivery_retry", &self.pre_delivery_retry)
             .field(
                 "credential_recovery_required",

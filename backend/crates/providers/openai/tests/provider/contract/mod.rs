@@ -4389,6 +4389,10 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
         };
         let diagnostic = error.diagnostic().expect("connection diagnosis");
         assert_eq!(diagnostic.proxy_hint(), proxy_hint);
+        assert_eq!(
+            error.allows_connection_rotation(),
+            proxy_hint != Some(ProxyConnectionHint::TunnelFailed)
+        );
         if let Some(rejection) = rejection {
             rejection.await.unwrap();
         }
@@ -4438,6 +4442,7 @@ async fn abrupt_websocket_disconnect_preserves_diagnosis_and_ambiguous_send_stat
     server.await.unwrap();
     assert_eq!(error.kind(), ProviderErrorKind::Transport);
     assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
+    assert!(!error.allows_connection_rotation());
     assert!(!error.replay_is_safe());
     assert!(
         matches!(error.pre_delivery_retry(), Some(PreDeliveryRetry::SameAccountTransportRetry { retry_index, .. }) if retry_index.get() == 1)
