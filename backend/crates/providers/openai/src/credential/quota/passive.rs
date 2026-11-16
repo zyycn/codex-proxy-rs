@@ -16,7 +16,7 @@ impl CodexCredentialQuotaService {
             .await
     }
 
-    /// 把一次推理响应中采集的结构化限流观察合并后单次落库
+    /// 把成功推理响应中采集的结构化限流观察合并后单次落库
     pub async fn synchronize_passive_rate_limits(
         &self,
         account: &ProviderAccount,
@@ -30,7 +30,7 @@ impl CodexCredentialQuotaService {
         &self,
         account: &ProviderAccount,
         rate_limits: &[ParsedRateLimits],
-        request_accepted: bool,
+        request_used_quota: bool,
     ) -> Result<bool, CodexCredentialQuotaError> {
         if account.authentication_kind() != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
             || rate_limits.is_empty()
@@ -88,7 +88,7 @@ impl CodexCredentialQuotaService {
             let (mut quota, updated_default) = merge_passive_quota(
                 existing,
                 rate_limits,
-                request_accepted.then_some(observed_at),
+                request_used_quota.then_some(observed_at),
             );
             let mut snapshot = parse_account_quota_snapshot(
                 account.id().clone(),

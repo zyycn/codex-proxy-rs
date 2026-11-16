@@ -16,6 +16,7 @@ pub(super) use outbound::outbound_context;
 mod passthrough;
 mod precommit;
 mod privacy;
+mod quota_usage;
 mod recovery;
 mod response_interrupt;
 mod search_history;
