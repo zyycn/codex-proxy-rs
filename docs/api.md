@@ -1266,10 +1266,18 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 未要求探测时，该字段表示冷却结束时间。`protectionRules` 返回触发时的规则快照 `[{ id, name }]`，
 没有保护原因时为空数组，修改或删除当前规则不改写此快照。错误保护与上游限流独立恢复，解除保护不保证其他限制已经解除
 
-OpenAI OAuth 账号的 `capabilities.quotaLimitsSupported` 为真。通过 `POST /api/admin/accounts/batch-update`
-提交 `{"accountIds":["acct_1"],"quotaLimits":{"codex:18000s":99,"codex:604800s":95}}`。
-键取自该账号 `quota.windows` 中 `accountWide: true` 的窗口 `key`，值是 1～100 的整数使用率。
-提交的映射替换全部窗口上限；省略字段保留原配置，空对象关闭全部上限。账号视图以 `quotaLimits` 返回配置
+OpenAI OAuth 账号的 `capabilities.quotaSettingsSupported` 为真。通过 `POST /api/admin/accounts/batch-update`
+提交 `{"accountIds":["acct_1"],"quotaSettings":{"codex:18000s":{"limitPercent":99,"warmup":null},"codex:604800s":{"limitPercent":95,"warmup":{"model":"gpt-5.5"}}}}`。
+键取自该账号 `quota.windows` 中 `accountWide: true` 的窗口 `key`，这里只配置通用额度桶。
+`limitPercent` 为 1～100 的整数，省略或 `null` 表示不设上限；`warmup` 省略或为 `null` 表示关闭预热，开启时 `model` 必须是非空且不超过 128 字节的模型 ID。
+映射替换该账号全部桶设置；省略 `quotaSettings` 保留原配置，空对象关闭全部上限和桶预热。账号视图以 `quotaSettings` 返回配置
+
+桶预热独立于全局 Cron 开关，默认关闭。记录已观测的窗口重置时间，满 5 分钟后复查额度；
+该轮存在对应通用桶的请求使用证据或新窗口非零用量时跳过，不把重置前的使用或具名桶用量算入本轮。
+正常请求的额度反馈即使用量取整为 0% 也保留使用证据，主动额度刷新不会清除；成功的账号预热同样计入。
+无重置时间时等待后续观测，不通过空闲窗口滚动的倒计时推迟已登记的边界。
+同批到期的通用窗口合并一次请求，领取进度跨重启保留；已领取请求发生超时或取消时不自动重放。
+账号停用、凭据不可用、额度耗尽或达到调度上限时不执行；复查失败最多每 5 分钟重查
 
 任一已设限通用窗口的实际使用率达到或超过上限，该账号暂停接收新请求，在途请求继续。账号状态为 `quota_paused`，可按此状态筛选；停用、凭据错误、上游额度耗尽和限流优先显示。
 `quota.pausedWindows` 列出触发窗口的键，已知重置时间见对应窗口的 `resetAtDisplay`。

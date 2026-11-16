@@ -122,13 +122,14 @@ pub struct CodexAccountQuotaSnapshot {
     quota: QuotaState,
     windows: Vec<CodexQuotaWindow>,
     unconfirmed_limits: BTreeMap<String, f64>,
+    pub(super) last_used_at: BTreeMap<String, i64>,
     pub(super) recovery: Option<QuotaRecovery>,
 }
 
 impl CodexAccountQuotaSnapshot {
     pub(super) fn pause_decision(
         &self,
-        limits: &gateway_core::account::AccountQuotaLimits,
+        limits: &gateway_core::account::AccountQuotaSettings,
         merge_base: Option<super::QuotaMergeBase>,
     ) -> gateway_core::account::QuotaPauseDecision {
         gateway_core::account::QuotaPauseDecision {
@@ -155,7 +156,7 @@ impl CodexAccountQuotaSnapshot {
     /// 迟到的在途响应或不完整的刷新不能清除已确认的上限，只有对应窗口的新比例才能覆盖它
     pub(super) fn retain_limit_evidence(
         &mut self,
-        limits: &gateway_core::account::AccountQuotaLimits,
+        limits: &gateway_core::account::AccountQuotaSettings,
         previous: Option<&Self>,
         document: &mut Map<String, Value>,
     ) {
@@ -441,6 +442,16 @@ pub(crate) fn parse_account_quota_snapshot(
         account_id,
         credential_revision,
         observed_at,
+        last_used_at: object
+            .get(super::BUCKET_USAGE_FIELD)
+            .and_then(Value::as_object)
+            .map(|usage| {
+                usage
+                    .iter()
+                    .filter_map(|(source, at)| Some((source.clone(), at.as_i64()?)))
+                    .collect()
+            })
+            .unwrap_or_default(),
         plan_type: object
             .get("plan_type")
             .and_then(Value::as_str)

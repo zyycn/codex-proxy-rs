@@ -68,7 +68,7 @@ impl OpenAiAdminProvider {
                 Ok(project_quota(
                     snapshot,
                     request.account.quota.is_exhausted(),
-                    &request.account.quota_limits,
+                    &request.account.quota_settings,
                 ))
             })
             .collect()

@@ -33,7 +33,7 @@ fn account() -> AccountRecord {
     let at = "2026-01-01T00:00:00Z".parse().unwrap();
     AccountRecord {
         quota_paused: false,
-        quota_limits: Default::default(),
+        quota_settings: Default::default(),
         auto_use_quota_credits: false,
         outbound_proxy_id: None,
         outbound_proxy_enabled: true,

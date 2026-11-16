@@ -1,5 +1,6 @@
 //! OpenAI 额度事实边界与展示快照回归
 
+mod bucket_warmup;
 mod credits;
 mod initial_sync;
 mod recovery;
@@ -628,9 +629,10 @@ async fn concurrent_named_usage_preserves_newly_paused_general_window() {
     let store = Arc::new(MemoryAccountStore::default());
     let id = "acct_concurrent_threshold";
     create_account(&store, id).await;
-    store.set_quota_limits(
+    store.set_quota_settings(
         id,
-        serde_json::from_value(json!({"codex:18000s": 95})).unwrap(),
+        serde_json::from_value(json!({"codex:18000s": {"limitPercent": 95, "warmup": null}}))
+            .unwrap(),
     );
     let account = store.account(id).unwrap();
     let server = MockServer::start().await;
@@ -693,9 +695,10 @@ async fn missing_window_keeps_its_confirmed_limit_across_refresh_and_restart() {
     let store = Arc::new(MemoryAccountStore::default());
     let id = "acct_partial_threshold";
     create_account(&store, id).await;
-    store.set_quota_limits(
+    store.set_quota_settings(
         id,
-        serde_json::from_value(json!({"codex:604800s":95})).unwrap(),
+        serde_json::from_value(json!({"codex:604800s": {"limitPercent": 95, "warmup": null}}))
+            .unwrap(),
     );
     let server = MockServer::start().await;
     let service = quota_service_with_base_url(

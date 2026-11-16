@@ -554,14 +554,23 @@ pub(super) async fn synchronize_passive_quota_headers(
     account: &ProviderAccount,
     headers: &[(String, String)],
     image_endpoint: bool,
+    request_accepted: bool,
 ) {
     let parsed = if image_endpoint {
         gateway_protocol::openai::events::parse_image_rate_limit_headers(headers)
     } else {
         parse_rate_limit_headers(headers)
     };
-    if let Some(rate_limits) = parsed {
-        synchronize_passive_quota(quota, account, std::slice::from_ref(&rate_limits)).await;
+    if let Some(rate_limits) = parsed
+        && let Err(error) = quota
+            .synchronize_passive_rate_limits_with_usage(
+                account,
+                std::slice::from_ref(&rate_limits),
+                request_accepted,
+            )
+            .await
+    {
+        tracing::warn!(account_id = %account.id(), error = %error, "OpenAI passive quota synchronization failed");
     }
 }
 

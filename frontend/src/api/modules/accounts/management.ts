@@ -1,5 +1,5 @@
 import type { RequestOptions } from '../../request'
-import type { Account, AccountIdParam, AccountModelAccess, AccountRefreshResponse } from './types'
+import type { Account, AccountIdParam, AccountModelAccess, AccountQuotaBucketSettings, AccountRefreshResponse } from './types'
 import request from '../../request'
 
 export interface AccountPageMeta {
@@ -67,7 +67,7 @@ interface AccountUpdateParam {
 }
 
 interface AccountBatchUpdateParam {
-  quotaLimits?: Record<string, number>
+  quotaSettings?: Record<string, AccountQuotaBucketSettings>
   autoUseQuotaCredits?: boolean
   outboundProxyUrl?: string
   outboundProxyId?: string

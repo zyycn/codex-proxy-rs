@@ -117,7 +117,7 @@ pub(super) fn account_view(
     let (mut quota, refresh_token_expires_at) = account_quota_view(quota, cooldown, now, time);
     quota.protection_rules = protection_rules;
     AccountView {
-        quota_limits: account.quota_limits,
+        quota_settings: account.quota_settings,
         auto_use_quota_credits: account.auto_use_quota_credits,
         upstream,
         capabilities: capabilities.into(),

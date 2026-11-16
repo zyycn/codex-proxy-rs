@@ -1914,7 +1914,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
-                quota_limits: None,
+                quota_settings: None,
                 auto_use_quota_credits: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -3413,7 +3413,7 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
         quota_paused: false,
-        quota_limits: Default::default(),
+        quota_settings: Default::default(),
         auto_use_quota_credits: false,
         outbound_proxy_id: None,
         outbound_proxy_enabled: true,

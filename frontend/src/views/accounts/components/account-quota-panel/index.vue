@@ -15,7 +15,7 @@ import AccountProfileModal from '../account-profile-modal/index.vue'
 import AccountQuotaForecastModal from '../account-quota-forecast-modal/index.vue'
 import AccountQuotaPanelEntry from './Entry.vue'
 import QuotaActionButton from './QuotaActionButton.vue'
-import QuotaLimits from './QuotaLimits.vue'
+import QuotaSettings from './QuotaSettings.vue'
 import AccountResetCredits from './ResetCredits.vue'
 import AccountUpstreamPool from './UpstreamPool.vue'
 
@@ -91,8 +91,8 @@ watch(hasPersonalInfo, (available) => {
         >
           <UserRound class="size-3.5" />
         </QuotaActionButton>
-        <QuotaLimits
-          v-if="account.capabilities.quotaLimitsSupported"
+        <QuotaSettings
+          v-if="account.capabilities.quotaSettingsSupported"
           :key="account.id"
           :account="account"
           @account-updated="emit('accountUpdated', $event)"

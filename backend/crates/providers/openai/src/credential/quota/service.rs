@@ -471,6 +471,7 @@ impl CodexCredentialQuotaService {
                     .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
             );
             object.remove(RECOVERY_FIELD);
+            object.remove(BUCKET_USAGE_FIELD);
             object.remove(LIMIT_EVIDENCE_FIELD);
             let mut snapshot = parse_account_quota_snapshot(
                 account.id().clone(),
@@ -478,16 +479,21 @@ impl CodexCredentialQuotaService {
                 observed_at,
                 &Value::Object(object.clone()),
             )?;
-            let (merge_base, previous) =
-                if account.quota().is_exhausted() || !account.quota_limits().is_empty() {
-                    let (base, snapshot) = self.read_snapshot_with_base(account).await?;
-                    if base.observed_at.is_some_and(|at| at >= observed_at) {
-                        return Err(CodexCredentialQuotaError::RevisionConflict);
-                    }
-                    (Some(base), snapshot)
-                } else {
-                    (None, None)
-                };
+            // 请求使用证据与上游比例分开保留，0% 取整不能让主动刷新抹掉已发生的请求
+            let (base, previous) = self.read_snapshot_with_base(account).await?;
+            if base.observed_at.is_some_and(|at| at >= observed_at) {
+                return Err(CodexCredentialQuotaError::RevisionConflict);
+            }
+            let merge_base = Some(base);
+            if let Some(previous) = &previous {
+                snapshot.last_used_at.clone_from(&previous.last_used_at);
+                if !snapshot.last_used_at.is_empty() {
+                    object.insert(
+                        BUCKET_USAGE_FIELD.into(),
+                        serde_json::json!(snapshot.last_used_at),
+                    );
+                }
+            }
             // 失败后回读只允许明确可用的点数恢复访问，套餐 allowed 仍可能滞后
             let observe_access = matches!(authority, QuotaRefreshAuthority::ObserveAccess)
                 || (account.auto_use_quota_credits() && snapshot.credits_usable());
@@ -515,7 +521,11 @@ impl CodexCredentialQuotaService {
                         .with_observed_at(observed_at),
                 });
             }
-            snapshot.retain_limit_evidence(account.quota_limits(), previous.as_ref(), &mut object);
+            snapshot.retain_limit_evidence(
+                account.quota_settings(),
+                previous.as_ref(),
+                &mut object,
+            );
             let state = if matches!(authority, QuotaRefreshAuthority::PreserveAccess) {
                 snapshot.access_with_credits(account.quota(), account.auto_use_quota_credits())
             } else {
@@ -531,7 +541,9 @@ impl CodexCredentialQuotaService {
             if self
                 .store
                 .compare_and_swap_quota(QuotaObservation {
-                    quota_pause: Some(snapshot.pause_decision(account.quota_limits(), merge_base)),
+                    quota_pause: Some(
+                        snapshot.pause_decision(account.quota_settings(), merge_base),
+                    ),
                     expected_connection: None,
                     plan_type: observed_account_plan(account.plan_type(), snapshot.plan_type()),
                     account_id: account.id().clone(),

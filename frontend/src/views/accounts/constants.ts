@@ -99,7 +99,7 @@ export const accountColumns = computed(() => (defineTableColumns<Account>([
 
 export const statusLabels = computed<Record<AccountStatus, string>>(() => ({
   normal: t('common.status.healthy'),
-  quota_paused: t('accounts.quotaLimits.badge'),
+  quota_paused: t('accounts.quotaSettings.badge'),
   quota_exhausted: t('accounts.fields.quotaExhausted'),
   rate_limited: t('accounts.fields.rateLimiting'),
   disabled: t('accounts.fields.deactivated'),

@@ -139,8 +139,13 @@ export interface AccountModelAccess {
   models: string[]
 }
 
+export interface AccountQuotaBucketSettings {
+  limitPercent: number | null
+  warmup: { model: string } | null
+}
+
 export interface Account {
-  quotaLimits: Record<string, number>
+  quotaSettings: Record<string, AccountQuotaBucketSettings>
   autoUseQuotaCredits: boolean
   upstream: AccountUpstream | null
   capabilities: AccountCapabilities
@@ -203,7 +208,7 @@ export interface AccountUpstream {
 }
 
 export interface AccountCapabilities {
-  quotaLimitsSupported: boolean
+  quotaSettingsSupported: boolean
   quotaCredits: boolean
   quota: boolean
   quotaRefresh: boolean

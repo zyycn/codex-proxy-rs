@@ -14,6 +14,24 @@ fn loaded_credential_from_record(
 
 #[async_trait]
 impl ProviderAccountStore for PgProviderAccountRepository {
+    async fn load_quota_warmup_state(
+        &self,
+        account: &CoreProviderAccount,
+    ) -> Result<Option<gateway_core::account::QuotaWarmupState>, CoreStoreError> {
+        self.load_warmup_state(account)
+            .await
+            .map_err(core_store_error)
+    }
+
+    async fn compare_and_swap_quota_warmup_state(
+        &self,
+        update: gateway_core::account::QuotaWarmupStateUpdate<'_>,
+    ) -> Result<bool, CoreStoreError> {
+        self.write_warmup_state(update)
+            .await
+            .map_err(core_store_error)
+    }
+
     async fn load_account_catalogs(
         &self,
         provider: &ProviderKind,
@@ -246,7 +264,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
              set name = case when $14 then name else $3 end,
                  email = case when $14 then email else $4 end,
                  plan_type = case when $14 then plan_type else $5 end,
-                 provider_quota_json = case when $14 then provider_quota_json else null end, quota_paused = case when $14 then quota_paused else false end,
+                 quota_warmup_state = case when $14 then quota_warmup_state else '{}'::jsonb end, quota_warmup_revision = quota_warmup_revision + 1, provider_quota_json = case when $14 then provider_quota_json else null end, quota_paused = case when $14 then quota_paused else false end,
                  quota_observed_at = case when $14 then quota_observed_at else null end,
                  provider_credentials_json = $6,
                  credential_revision = credential_revision + 1,

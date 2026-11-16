@@ -721,6 +721,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 &active_account,
                 &response.rate_limit_headers,
                 image_endpoint,
+                true,
             )
             .await;
             if !response.set_cookie_headers.is_empty()

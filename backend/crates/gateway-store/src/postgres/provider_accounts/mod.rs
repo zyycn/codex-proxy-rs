@@ -61,6 +61,7 @@ mod mapping;
 mod model_catalogs;
 mod quota;
 mod quota_forecast;
+mod quota_warmup;
 mod repository;
 mod reset_credit_automation;
 mod rows;
