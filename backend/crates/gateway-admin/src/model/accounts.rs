@@ -21,7 +21,7 @@ pub use gateway_core::account::{
 /// 账号可用的管理操作
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderAccountCapabilities {
-    pub quota_limits_supported: bool,
+    pub quota_settings_supported: bool,
     pub quota_credits: bool,
     pub quota: bool,
     pub quota_refresh: bool,
@@ -113,7 +113,7 @@ pub enum AccountGroupFilter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {
     pub quota_paused: bool,
-    pub quota_limits: gateway_core::account::AccountQuotaLimits,
+    pub quota_settings: gateway_core::account::AccountQuotaSettings,
     pub auto_use_quota_credits: bool,
     pub id: String,
     pub provider_kind: ProviderKind,
@@ -254,7 +254,7 @@ pub struct AccountUpdateResult {
 /// 仅修改显式字段的批量账号设置命令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchUpdateAccounts {
-    pub quota_limits: Option<gateway_core::account::AccountQuotaLimits>,
+    pub quota_settings: Option<gateway_core::account::AccountQuotaSettings>,
     pub auto_use_quota_credits: Option<bool>,
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
@@ -268,6 +268,8 @@ pub struct BatchUpdateAccounts {
 /// 已按拟提交策略重算的账号暂停结果，以快照版本防止旧判断覆盖新观测
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedQuotaPause {
+    pub settings: gateway_core::account::AccountQuotaSettings,
+    pub previous_settings: gateway_core::account::AccountQuotaSettings,
     pub observed_at: Option<DateTime<Utc>>,
     pub revision: Revision,
     pub paused: bool,

@@ -355,7 +355,7 @@ async fn disabled_proxy_projects_direct_while_preserving_bindings_and_credential
             let error = admin
                 .batch_update_accounts(
                     BatchUpdateAccounts {
-                        quota_limits: None,
+                        quota_settings: None,
                         auto_use_quota_credits: None,
                         account_ids: vec![
                             "acct_enabled_openai".to_owned(),
@@ -416,11 +416,11 @@ async fn seed_paused_quota(database: &TestDatabase, id: &str) {
         "rate_limit": {"primary_window": {"limit_window_seconds": 18000, "used_percent": 99}}
     });
     sqlx::query(
-        "update provider_accounts set quota_limits = $2, quota_paused = true,
+        "update provider_accounts set quota_settings = $2, quota_paused = true,
         provider_quota_json = $3, quota_observed_at = now(), updated_at = now() where id = $1",
     )
     .bind(id)
-    .bind(serde_json::json!({"codex:18000s": 99}))
+    .bind(serde_json::json!({"codex:18000s": {"limitPercent": 99, "warmup": null}}))
     .bind(window)
     .execute(&database.pool)
     .await
@@ -1219,7 +1219,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
         admin
             .batch_update_accounts(
                 BatchUpdateAccounts {
-                    quota_limits: None,
+                    quota_settings: None,
                     auto_use_quota_credits: None,
                     model_access: Default::default(),
                     account_ids: vec!["acct_one".to_owned(), "acct_missing".to_owned()],

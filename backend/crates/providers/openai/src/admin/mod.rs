@@ -206,7 +206,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
     ) -> gateway_admin::model::accounts::ProviderAccountCapabilities {
         let oauth = authentication_kind == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH;
         gateway_admin::model::accounts::ProviderAccountCapabilities {
-            quota_limits_supported: oauth,
+            quota_settings_supported: oauth,
             quota_credits: oauth,
             quota: oauth,
             quota_refresh: oauth,
@@ -760,7 +760,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
         Ok(project_quota(
             snapshot,
             account.quota().is_exhausted(),
-            account.quota_limits(),
+            account.quota_settings(),
         ))
     }
 
@@ -1244,7 +1244,7 @@ fn empty_quota() -> ProviderQuota {
 fn project_quota(
     snapshot: Option<CodexAccountQuotaSnapshot>,
     limit_reached: bool,
-    limits: &gateway_core::account::AccountQuotaLimits,
+    limits: &gateway_core::account::AccountQuotaSettings,
 ) -> ProviderQuota {
     let mut quota = snapshot
         .map(|s| project_quota_snapshot(s, limits))
@@ -1255,7 +1255,7 @@ fn project_quota(
 
 fn project_quota_snapshot(
     snapshot: CodexAccountQuotaSnapshot,
-    limits: &gateway_core::account::AccountQuotaLimits,
+    limits: &gateway_core::account::AccountQuotaSettings,
 ) -> ProviderQuota {
     let mut provider_data = Map::new();
     provider_data.insert(

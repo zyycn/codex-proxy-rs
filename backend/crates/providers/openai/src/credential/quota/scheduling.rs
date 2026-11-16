@@ -352,7 +352,7 @@ fn quota_refresh_candidate(
             .filter(|window| {
                 window.is_account_wide()
                     && account
-                        .quota_limits()
+                        .quota_settings()
                         .reached(window.key(), window.used_percent())
             })
             .filter_map(CodexQuotaWindow::reset_at)

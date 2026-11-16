@@ -109,7 +109,7 @@ impl PgProviderAccountRepository {
         let mut query = sqlx::QueryBuilder::<Postgres>::new(
             "select coalesce(proxy_enabled, true) as outbound_proxy_enabled, coalesce(max_websocket_connections, 0) as outbound_proxy_max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, quota_limits, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, quota_settings, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
@@ -207,7 +207,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let rows = sqlx::query(
             "select coalesce(proxy_enabled, true) as outbound_proxy_enabled, coalesce(max_websocket_connections, 0) as outbound_proxy_max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, quota_limits, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, quota_settings, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
@@ -327,7 +327,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         }
         let next = sqlx::query_scalar::<_, i64>(
             "update provider_accounts
-             set provider_quota_json = case when $7 then provider_quota_json else null end, quota_paused = case when $7 then quota_paused else false end,
+             set quota_warmup_state = case when $7 then quota_warmup_state else '{}'::jsonb end, quota_warmup_revision = provider_accounts.quota_warmup_revision + 1, provider_quota_json = case when $7 then provider_quota_json else null end, quota_paused = case when $7 then quota_paused else false end,
                  quota_observed_at = case when $7 then quota_observed_at else null end,
                  provider_credentials_json = $3,
                  credential_revision = credential_revision + 1,
@@ -531,17 +531,16 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         })?;
         let result = async {
             let revision = bump_config_revision_in_transaction(&mut transaction).await?;
-            if let Some(limits) = &command.quota_limits {
+            if command.quota_settings.is_some() {
                 for id in &command.account_ids {
-                    let pause = command.pauses.get(id);
-                    if !limits.is_empty() && pause.is_none() {
-                        return Err(invalid("缺少账号额度暂停结论"));
-                    }
-                    let updated = sqlx::query("update provider_accounts set quota_limits = $2, quota_paused = $3
-                        where id = $1 and ($4::bigint is null or (credential_revision = $4 and quota_observed_at is not distinct from $5))")
-                        .bind(id).bind(sqlx::types::Json(limits)).bind(pause.is_some_and(|p| p.paused))
-                        .bind(pause.map(|p| to_i64(p.revision.get())).transpose()?).bind(pause.and_then(|p| p.observed_at))
-                        .execute(&mut *transaction).await.map_err(|source| postgres_unavailable("set account quota limits", source))?;
+                    let pause = command.pauses.get(id).ok_or_else(|| invalid("缺少额度桶设置结论"))?;
+                    let updated = sqlx::query("update provider_accounts set quota_settings = $2, quota_paused = $3
+                        where id = $1 and credential_revision = $4 and quota_settings = $6
+                          and ($7 or quota_observed_at is not distinct from $5)")
+                        .bind(id).bind(sqlx::types::Json(&pause.settings)).bind(pause.paused)
+                        .bind(to_i64(pause.revision.get())?).bind(pause.observed_at)
+                        .bind(sqlx::types::Json(&pause.previous_settings)).bind(pause.settings.is_empty())
+                        .execute(&mut *transaction).await.map_err(|source| postgres_unavailable("set account quota settings", source))?;
                     if updated.rows_affected() == 0 {
                         return Err(StoreError::Conflict { source: None, entity: ENTITY, id: id.clone(), kind: ConflictKind::StaleRevision });
                     }
@@ -613,7 +612,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                          when access_token_expires_at <= now() then null
                          else access_token_expires_at
                      end,
-                     provider_quota_json = null, quota_paused = false,
+                     provider_quota_json = null, quota_paused = false, quota_warmup_state = '{}'::jsonb, quota_warmup_revision = provider_accounts.quota_warmup_revision + 1,
                      quota_observed_at = null,
                      quota_access_state = 'allowed',
                      quota_evidence = null,
@@ -790,7 +789,7 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            next_refresh_at = excluded.next_refresh_at,
            enabled = excluded.enabled,
            credential_state = excluded.credential_state,
-           provider_quota_json = null, quota_paused = false,
+           provider_quota_json = null, quota_paused = false, quota_warmup_state = '{}'::jsonb, quota_warmup_revision = provider_accounts.quota_warmup_revision + 1,
            quota_access_state = 'unknown',
            quota_evidence = null,
            quota_access_observed_at = null,
@@ -866,7 +865,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
          set name = case when $14 or $16 then name else $4 end,
              email = case when $14 then email else $5 end,
              plan_type = case when $14 then plan_type else $6 end,
-             provider_quota_json = case when $14 then provider_quota_json else null end, quota_paused = case when $14 then quota_paused else false end,
+             quota_warmup_state = case when $14 then quota_warmup_state else '{}'::jsonb end, quota_warmup_revision = provider_accounts.quota_warmup_revision + 1, provider_quota_json = case when $14 then provider_quota_json else null end, quota_paused = case when $14 then quota_paused else false end,
              quota_observed_at = case when $14 then quota_observed_at else null end,
              quota_access_state = case when $11 then 'unknown' else quota_access_state end,
              quota_evidence = case when $11 then null else quota_evidence end,
@@ -1256,7 +1255,7 @@ impl PgProviderAccountRepository {
         let rows = sqlx::query(
             "select coalesce(proxy_enabled, true) as outbound_proxy_enabled, coalesce(max_websocket_connections, 0) as outbound_proxy_max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, quota_limits, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, quota_settings, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
@@ -1354,7 +1353,7 @@ where
                  updated_at = greatest(now(), updated_at, $4, $7)
              where id = $1 and credential_revision = $2
                and (quota_observed_at is null or quota_observed_at <= $4)
-               and ($11::jsonb is null or (quota_limits = $11 and quota_observed_at is distinct from $4))
+               and ($11::jsonb is null or (quota_settings = $11 and quota_observed_at is distinct from $4))
                and (not $12 or quota_observed_at is not distinct from $13)",
     )
     .bind(account_id)

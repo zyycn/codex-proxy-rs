@@ -8,7 +8,7 @@ enum WarmupDecision<'a> {
     Exhausted(Option<&'a CodexQuotaWindow>),
 }
 
-fn warmup_account_is_available(account: &ProviderAccount) -> bool {
+pub(super) fn warmup_account_is_available(account: &ProviderAccount) -> bool {
     account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
         && account.enabled()
         && matches!(
@@ -194,126 +194,140 @@ impl CodexCredentialQuotaService {
                 }
             }
 
-            let credential = match self.repository.load_runtime_credential(&account).await {
-                Ok(cred) => cred,
-                Err(_) => {
-                    summary.failed += 1;
-                    continue;
-                }
-            };
-            let authorization = match credential.authentication.authorization_header() {
-                Ok(auth) => auth,
-                Err(_) => {
-                    summary.failed += 1;
-                    continue;
-                }
-            };
-
-            let mut body = Map::new();
-            body.insert("model".to_owned(), Value::String(model.to_owned()));
-            body.insert(
-                "input".to_owned(),
-                serde_json::json!([{
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "hello"}]
-                }]),
-            );
-            body.insert("stream".to_owned(), Value::Bool(true));
-            body.insert("store".to_owned(), Value::Bool(false));
-            body.insert(
-                "service_tier".to_owned(),
-                Value::String("default".to_owned()),
-            );
-            // 目录里各模型的最低档都是 low，none 会收到上游 error 终态并让整次预热记为失败
-            body.insert("reasoning".to_owned(), serde_json::json!({"effort": "low"}));
-            body.insert("text".to_owned(), serde_json::json!({"verbosity": "low"}));
-
-            let upstream_request = CodexResponsesRequest::from_body(body);
-            let request_id = format!("warmup_{}", Uuid::now_v7().simple());
-            let client_for_account = match client.for_account(&account) {
-                Ok(c) => c,
-                Err(error) => {
-                    tracing::warn!(account_id = %account.id(), error = %error, "warmup client for account failed");
-                    summary.failed += 1;
-                    continue;
-                }
-            };
-            let context = crate::transport::CodexRequestContext::auxiliary(
-                authorization.expose_secret(),
-                account.upstream_account_id(),
-                &request_id,
-                None,
-            );
-
-            // HTTP 200 只确认响应头；必须消费 SSE 直到终态才能确认预热结果和额度事件
-            let attempt = tokio::time::timeout(WARMUP_REQUEST_TIMEOUT, async {
-                let mut response = client_for_account
-                    .create_response_stream_http_sse(&upstream_request, context)
-                    .await
-                    .map_err(|_| "request_rejected")?;
-                let terminal = consume_warmup_sse(&mut response).await;
-                let rate_limit_updates = match response.rate_limit_updates.as_ref() {
-                    Some(updates) => std::mem::take(&mut *updates.lock().await),
-                    None => Vec::new(),
-                };
-                Ok::<_, &'static str>((terminal, response.rate_limit_headers, rate_limit_updates))
-            })
-            .await;
-            match attempt {
-                Ok(Ok((terminal, headers, rate_limit_updates))) => {
-                    match terminal {
-                        Ok(()) => {
-                            // 被动额度同步会把成功请求的窗口事实标为可用，失败流不能复用该结论
-                            if !headers.is_empty()
-                                && let Err(error) =
-                                    self.synchronize_passive_headers(&account, &headers).await
-                            {
-                                tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup rate-limit header sync failed");
-                            }
-                            if !rate_limit_updates.is_empty()
-                                && let Err(error) = self
-                                    .synchronize_passive_rate_limits(&account, &rate_limit_updates)
-                                    .await
-                            {
-                                tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup rate-limit event sync failed");
-                            }
-                            summary.warmed_up += 1;
-                            tracing::info!(
-                                account_id = %account.id(),
-                                model,
-                                "OpenAI account warmed up successfully"
-                            );
-                        }
-                        Err(reason) => {
-                            summary.failed += 1;
-                            tracing::warn!(
-                                account_id = %account.id(),
-                                reason,
-                                "OpenAI account warmup stream failed"
-                            );
-                        }
-                    }
-                }
-                Ok(Err(reason)) => {
-                    summary.failed += 1;
-                    tracing::warn!(
-                        account_id = %account.id(),
-                        reason,
-                        "OpenAI account warmup request rejected by upstream"
-                    );
-                }
-                Err(_) => {
-                    summary.failed += 1;
-                    tracing::warn!(
-                        account_id = %account.id(),
-                        "OpenAI account warmup request timed out"
-                    );
-                }
+            if self.warmup_one(&account, model, &client).await {
+                summary.warmed_up += 1;
+                self.record_scheduled_warmup_use(&account, chrono::Utc::now())
+                    .await?;
+            } else {
+                summary.failed += 1;
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
 
         Ok(summary)
+    }
+
+    pub(super) async fn warmup_one(
+        &self,
+        account: &ProviderAccount,
+        model: &str,
+        client: &CodexBackendClient,
+    ) -> bool {
+        let mut summary = CodexWarmupSummary::default();
+        let credential = match self.repository.load_runtime_credential(account).await {
+            Ok(cred) => cred,
+            Err(_) => {
+                return false;
+            }
+        };
+        let authorization = match credential.authentication.authorization_header() {
+            Ok(auth) => auth,
+            Err(_) => {
+                return false;
+            }
+        };
+
+        let mut body = Map::new();
+        body.insert("model".to_owned(), Value::String(model.to_owned()));
+        body.insert(
+            "input".to_owned(),
+            serde_json::json!([{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}]
+            }]),
+        );
+        body.insert("stream".to_owned(), Value::Bool(true));
+        body.insert("store".to_owned(), Value::Bool(false));
+        body.insert(
+            "service_tier".to_owned(),
+            Value::String("default".to_owned()),
+        );
+        // 目录里各模型的最低档都是 low，none 会收到上游 error 终态并让整次预热记为失败
+        body.insert("reasoning".to_owned(), serde_json::json!({"effort": "low"}));
+        body.insert("text".to_owned(), serde_json::json!({"verbosity": "low"}));
+
+        let upstream_request = CodexResponsesRequest::from_body(body);
+        let request_id = format!("warmup_{}", Uuid::now_v7().simple());
+        let client_for_account = match client.for_account(account) {
+            Ok(c) => c,
+            Err(error) => {
+                tracing::warn!(account_id = %account.id(), error = %error, "warmup client for account failed");
+                return false;
+            }
+        };
+        let context = crate::transport::CodexRequestContext::auxiliary(
+            authorization.expose_secret(),
+            account.upstream_account_id(),
+            &request_id,
+            None,
+        );
+
+        // HTTP 200 只确认响应头；必须消费 SSE 直到终态才能确认预热结果和额度事件
+        let attempt = tokio::time::timeout(WARMUP_REQUEST_TIMEOUT, async {
+            let mut response = client_for_account
+                .create_response_stream_http_sse(&upstream_request, context)
+                .await
+                .map_err(|_| "request_rejected")?;
+            let terminal = consume_warmup_sse(&mut response).await;
+            let rate_limit_updates = match response.rate_limit_updates.as_ref() {
+                Some(updates) => std::mem::take(&mut *updates.lock().await),
+                None => Vec::new(),
+            };
+            Ok::<_, &'static str>((terminal, response.rate_limit_headers, rate_limit_updates))
+        })
+        .await;
+        match attempt {
+            Ok(Ok((terminal, headers, rate_limit_updates))) => {
+                match terminal {
+                    Ok(()) => {
+                        // 被动额度同步会把成功请求的窗口事实标为可用，失败流不能复用该结论
+                        if !headers.is_empty()
+                            && let Err(error) =
+                                self.synchronize_passive_headers(account, &headers).await
+                        {
+                            tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup rate-limit header sync failed");
+                        }
+                        if !rate_limit_updates.is_empty()
+                            && let Err(error) = self
+                                .synchronize_passive_rate_limits(account, &rate_limit_updates)
+                                .await
+                        {
+                            tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup rate-limit event sync failed");
+                        }
+                        summary.warmed_up += 1;
+                        tracing::info!(
+                            account_id = %account.id(),
+                            model,
+                            "OpenAI account warmed up successfully"
+                        );
+                    }
+                    Err(reason) => {
+                        summary.failed += 1;
+                        tracing::warn!(
+                            account_id = %account.id(),
+                            reason,
+                            "OpenAI account warmup stream failed"
+                        );
+                    }
+                }
+            }
+            Ok(Err(reason)) => {
+                summary.failed += 1;
+                tracing::warn!(
+                    account_id = %account.id(),
+                    reason,
+                    "OpenAI account warmup request rejected by upstream"
+                );
+            }
+            Err(_) => {
+                summary.failed += 1;
+                tracing::warn!(
+                    account_id = %account.id(),
+                    "OpenAI account warmup request timed out"
+                );
+            }
+        }
+        summary.warmed_up == 1
     }
 }

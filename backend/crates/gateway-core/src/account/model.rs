@@ -828,7 +828,7 @@ pub struct ProviderAccount {
     enabled: bool,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
-    quota_limits: super::AccountQuotaLimits,
+    quota_settings: super::AccountQuotaSettings,
     quota_paused: bool,
     auto_use_quota_credits: bool,
     model_access: super::AccountModelAccess,
@@ -869,7 +869,7 @@ impl ProviderAccount {
             enabled: true,
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
-            quota_limits: super::AccountQuotaLimits::disabled(),
+            quota_settings: super::AccountQuotaSettings::disabled(),
             quota_paused: false,
             auto_use_quota_credits: false,
             model_access: super::AccountModelAccess::all(),
@@ -886,16 +886,20 @@ impl ProviderAccount {
     }
 
     #[must_use]
-    pub fn with_quota_limits(mut self, limits: super::AccountQuotaLimits, paused: bool) -> Self {
+    pub fn with_quota_settings(
+        mut self,
+        limits: super::AccountQuotaSettings,
+        paused: bool,
+    ) -> Self {
         // 只有限额账号需要在取得租约前检测额度窗口的并发更新
         self.quota_paused = paused;
-        self.quota_limits = limits;
+        self.quota_settings = limits;
         self
     }
 
     #[must_use]
-    pub const fn quota_limits(&self) -> &super::AccountQuotaLimits {
-        &self.quota_limits
+    pub const fn quota_settings(&self) -> &super::AccountQuotaSettings {
+        &self.quota_settings
     }
 
     #[must_use]

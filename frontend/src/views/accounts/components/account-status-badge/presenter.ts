@@ -93,10 +93,10 @@ const displayDefinitions = computed<Record<AccountStatusDisplayMode, AccountStat
   quota_paused: {
     tone: statusTones.quota_paused,
     label: statusLabels.value.quota_paused,
-    description: t('accounts.quotaLimits.reached', {
+    description: t('accounts.quotaSettings.reached', {
       windows: t('accounts.quota.general'),
     }),
-    recoveryHint: t('accounts.quotaLimits.recovery'),
+    recoveryHint: t('accounts.quotaSettings.recovery'),
     icon: Gauge,
   },
   refresh_backoff: {
@@ -190,7 +190,7 @@ export function resolveAccountStatusPresentation(
   const reasonLabel = input.errorReason ? errorReasonLabels.value[input.errorReason] : null
   const title = definition.title ?? reasonLabel ?? definition.label
   const description = pausedWindows.length
-    ? t('accounts.quotaLimits.reached', {
+    ? t('accounts.quotaSettings.reached', {
         windows: pausedWindows.map(w => w.label).join(' / '),
       })
     : definition.description
@@ -209,8 +209,8 @@ export function resolveAccountStatusPresentation(
       times.push({
         key: window.key,
         label: pausedWindows.length === 1
-          ? t('accounts.quotaLimits.expectedReset')
-          : t('accounts.quotaLimits.windowReset', { window: window.label }),
+          ? t('accounts.quotaSettings.expectedReset')
+          : t('accounts.quotaSettings.windowReset', { window: window.label }),
         value: window.reset,
       })
     }

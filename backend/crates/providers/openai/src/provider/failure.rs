@@ -317,6 +317,7 @@ pub(super) async fn apply_failure(
         account,
         &failure.rate_limit_headers,
         context.image_endpoint,
+        false,
     )
     .await;
     if failure.model_unsupported

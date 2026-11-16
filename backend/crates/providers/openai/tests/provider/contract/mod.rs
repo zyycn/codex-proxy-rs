@@ -16,6 +16,7 @@ pub(super) use outbound::outbound_context;
 mod passthrough;
 mod precommit;
 mod privacy;
+mod quota_usage;
 mod recovery;
 mod response_interrupt;
 mod search_history;
@@ -6056,15 +6057,18 @@ async fn websocket_metadata_close_requests_bounded_retry_without_claiming_replay
 }
 
 #[tokio::test]
-async fn general_quota_limits_filter_new_requests_until_every_window_recovers() {
+async fn general_quota_settings_filter_new_requests_until_every_window_recovers() {
     let store = Arc::new(MemoryAccountStore::default());
     let limited = "acct_provider_contract";
     let backup = "acct_scope_new";
     create_account(&store, limited).await;
     create_account(&store, backup).await;
-    store.set_quota_limits(
+    store.set_quota_settings(
         limited,
-        serde_json::from_value(json!({"codex:18000s":99, "codex:604800s":95})).unwrap(),
+        serde_json::from_value(
+            json!({"codex:18000s": {"limitPercent": 99, "warmup": null}, "codex:604800s": {"limitPercent": 95, "warmup": null}}),
+        )
+        .unwrap(),
     );
     let server = MockServer::start().await;
     Mock::given(method("POST"))

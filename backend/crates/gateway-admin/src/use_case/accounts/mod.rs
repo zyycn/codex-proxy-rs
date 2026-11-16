@@ -759,7 +759,7 @@ impl AccountsService for DefaultAccountsService {
             self.accounts
                 .batch_update_accounts(
                     BatchUpdateAccounts {
-                        quota_limits: None,
+                        quota_settings: None,
                         auto_use_quota_credits: None,
                         account_ids: vec![account_id.to_string()],
                         enabled: Some(true),
@@ -846,20 +846,19 @@ impl AccountsService for DefaultAccountsService {
         let mut pauses = BTreeMap::new();
         for account_id in &account_ids {
             let (mut item, provider) = self.provider_for_account(account_id).await?;
-            if let Some(limits) = &command.quota_limits {
+            if let Some(settings) = &command.quota_settings {
                 if !provider
                     .account_capabilities(account_id, &item.account.authentication_kind)
-                    .quota_limits_supported
+                    .quota_settings_supported
                 {
-                    return Err(AdminError::invalid("该账号不支持通用额度窗口上限"));
+                    return Err(AdminError::invalid("该账号不支持额度桶设置"));
                 }
-                let new_keys = limits
-                    .keys()
-                    .filter(|key| !item.account.quota_limits.contains(key))
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>();
-                if !limits.is_empty() {
-                    item.account.quota_limits = limits.clone();
+                let previous_settings = item.account.quota_settings.clone();
+                let settings = settings.clone();
+                let mut observed_at = None;
+                let mut paused = false;
+                if !settings.is_empty() {
+                    item.account.quota_settings = settings.clone();
                     let quota = provider
                         .read_quotas(&[ProviderQuotaReadRequest {
                             account: &item.account,
@@ -870,24 +869,31 @@ impl AccountsService for DefaultAccountsService {
                         .next()
                         .ok_or_else(|| AdminError::invalid("缺少账号额度观测结果"))?
                         .map_err(|error| map_provider_error(error, "provider quota"))?;
-                    if new_keys.iter().any(|key| {
-                        !quota.windows.iter().any(|window| {
-                            window.key == *key
-                                && window.local_usage_attribution
-                                    == QuotaLocalUsageAttribution::AccountWide
-                        })
-                    }) {
-                        return Err(AdminError::invalid("只能设置已观测的通用额度窗口"));
+                    for key in settings.keys() {
+                        let window = quota.windows.iter().find(|window| window.key == key);
+                        if window.is_none() && !previous_settings.contains(key) {
+                            return Err(AdminError::invalid("只能设置已观测的额度桶"));
+                        }
+                        if window.is_some_and(|window| {
+                            window.local_usage_attribution
+                                != QuotaLocalUsageAttribution::AccountWide
+                        }) {
+                            return Err(AdminError::invalid("只能设置通用额度桶"));
+                        }
                     }
-                    pauses.insert(
-                        item.account.id.clone(),
-                        crate::model::accounts::PreparedQuotaPause {
-                            revision: item.account.credential_revision,
-                            observed_at: quota.observed_at,
-                            paused: !quota.paused_windows.is_empty(),
-                        },
-                    );
+                    observed_at = quota.observed_at;
+                    paused = !quota.paused_windows.is_empty();
                 }
+                pauses.insert(
+                    item.account.id.clone(),
+                    crate::model::accounts::PreparedQuotaPause {
+                        settings,
+                        previous_settings,
+                        revision: item.account.credential_revision,
+                        observed_at,
+                        paused,
+                    },
+                );
             }
             if command.auto_use_quota_credits.is_some()
                 && !provider

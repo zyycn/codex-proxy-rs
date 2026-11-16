@@ -1,16 +1,21 @@
 {
   "accounts": {
-    "quotaLimits": {
+    "quotaSettings": {
       "badge": "额度暂停",
-      "title": "通用额度调度上限",
+      "title": "额度桶设置",
       "reached": "{windows}已达调度上限",
       "expectedReset": "预计重置",
       "windowReset": "{window}预计重置",
       "recovery": "等待额度恢复，或调整窗口上限",
-      "help": "任一窗口达限即暂停调度，均低于上限后恢复",
       "unlimited": "不限制",
-      "empty": "没有已观测的通用额度窗口",
-      "invalid": "请输入 1～100 的整数，留空表示不限制"
+      "empty": "没有已观测的额度桶",
+      "invalid": "请输入 1～100 的整数，留空表示不限制",
+      "limit": "调度上限",
+      "warmup": "自动预热",
+      "model": "预热模型",
+      "modelPlaceholder": "选择模型",
+      "invalidModel": "请输入有效的预热模型 ID",
+      "subtitle": "设置额度上限与重置后预热"
     },
     "quota": {
       "general": "通用额度",
