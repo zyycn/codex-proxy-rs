@@ -24,7 +24,7 @@ gateway-core = { path = "../../gateway-core" }
 gateway-protocol = { path = "../../gateway-protocol" }
 getrandom = "0.4.3"
 hex = "0.4.3"
-lru = "0.18.3"
+lru = "0.19.0"
 # TLS 依赖以官方 Core 锁文件为基线，安全补丁经握手特征核验后精确固定
 # 包含用于约束传递依赖的直接声明
 # hyper-util 固定到包含 SOCKS IPv6 修复的正式版
