@@ -60,7 +60,8 @@ async fn capacity_errors_offer_client_retry_without_changing_upstream_facts() {
             for raw_response in [false, true] {
                 let original = json!({"error": {
                     "code": code, "type": "service_unavailable_error", "message": "busy",
-                    "param": "model", "future": {"keep": true}
+                    "param": "model", "future": {"keep": true},
+                    "headers": {"Retry-After":"309", "retry-after-ms":"309000", "x-request-id":"req_capacity"}
                 }});
                 let mut provider = ProviderError::new(
                     ProviderErrorKind::UpstreamCapacityUnavailable,
@@ -88,6 +89,10 @@ async fn capacity_errors_offer_client_retry_without_changing_upstream_facts() {
                                 Bytes::from_static(b"req_capacity"),
                             ),
                             ProviderResponseHeader::new("retry-after", Bytes::from_static(b"7")),
+                            ProviderResponseHeader::new(
+                                "retry-after-ms",
+                                Bytes::from_static(b"7000"),
+                            ),
                         ]),
                     );
                 }
@@ -96,7 +101,8 @@ async fn capacity_errors_offer_client_retry_without_changing_upstream_facts() {
                 assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
                 if raw_response {
                     assert_eq!(response.headers()["x-request-id"], "req_capacity");
-                    assert_eq!(response.headers()["retry-after"], "7");
+                    assert!(!response.headers().contains_key("retry-after"));
+                    assert!(!response.headers().contains_key("retry-after-ms"));
                 }
                 let body: Value = serde_json::from_slice(
                     &to_bytes(response.into_body(), 4096)
@@ -110,6 +116,7 @@ async fn capacity_errors_offer_client_retry_without_changing_upstream_facts() {
                 if raw_response {
                     let mut expected = original.clone();
                     expected["error"]["code"] = json!("server_error");
+                    expected["error"]["headers"] = json!({"x-request-id":"req_capacity"});
                     assert_eq!(body, expected);
                 }
                 let EngineError::Provider(provider) = error else {
@@ -136,6 +143,38 @@ async fn capacity_errors_offer_client_retry_without_changing_upstream_facts() {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn capacity_client_replay_preserves_recovery_status_and_failure_correlation() {
+    use bytes::Bytes;
+    use gateway_core::error::ClientVisibleUpstreamResponse;
+    use gateway_core::upstream::OpaqueUpstreamValue;
+    use std::time::Duration;
+
+    let error = EngineError::Provider(
+        ProviderError::new(
+            ProviderErrorKind::UpstreamCapacityUnavailable,
+            UpstreamSendState::Sent,
+        )
+        .with_retry_after(Duration::from_secs(309))
+        .with_upstream_request_id(OpaqueUpstreamValue::new("req_original_capacity"))
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            "Resend full history.",
+            Some("previous_response_not_found".to_owned()),
+            Some("invalid_request_error".to_owned()),
+        ))
+        .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+            400,
+            Some(b"application/json".to_vec()),
+            Bytes::from_static(br#"{"error":{"code":"previous_response_not_found"}}"#),
+        )),
+    );
+    let response = engine_error_response(&error);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers()["x-request-id"], "req_original_capacity");
+    assert!(!response.headers().contains_key("retry-after"));
+    assert!(!response.headers().contains_key("retry-after-ms"));
 }
 
 #[tokio::test]

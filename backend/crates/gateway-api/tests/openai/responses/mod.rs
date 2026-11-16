@@ -1004,7 +1004,8 @@ fn capacity_failure_projection_preserves_wire_metadata_and_original_events() {
             ("response.failed", false),
         ] {
             for status in [None, Some(400), Some(429), Some(503)] {
-                let error = json!({"code": code, "type": "service_unavailable_error", "message": "busy", "future": 42});
+                let error = json!({"code": code, "type": "service_unavailable_error", "message": "busy", "future": 42,
+                    "headers":{"retry-after":"309", "Retry-After-Ms":"309000", "x-request-id":"req_capacity"}});
                 let mut original = if event_type == "error" {
                     json!({"type": event_type, "error": error, "sequence_number": 3})
                 } else {
@@ -1046,11 +1047,16 @@ fn capacity_failure_projection_preserves_wire_metadata_and_original_events() {
                 assert_eq!(sse_data["response"]["error"]["code"], "server_error");
                 assert_eq!(sse_data["response"]["error"]["message"], "busy");
                 assert_eq!(sse_data["response"]["error"]["future"], 42);
+                assert_eq!(
+                    sse_data["response"]["error"]["headers"],
+                    json!({"x-request-id":"req_capacity"})
+                );
                 let messages = ws.push_websocket(&event);
                 let ws_data: Value = serde_json::from_str(&messages[0]).expect("JSON");
                 if event_type == "error" && status.is_some() {
                     let mut expected = original.clone();
                     expected["error"]["code"] = json!("server_error");
+                    expected["error"]["headers"] = json!({"x-request-id":"req_capacity"});
                     expected["status_code"] = json!(503);
                     assert_eq!(ws_data, expected);
                 } else {

@@ -671,21 +671,30 @@ pub(super) fn continuation_replay_required_error(reason: &'static str) -> Provid
         "previous response is unavailable in the selected upstream scope; client replay is required",
     ))
     .with_client_visible_upstream_error(continuation_replay_error_detail())
+    .with_client_visible_upstream_response(continuation_replay_response(Vec::new()))
 }
 
-/// 额度拒绝使当前账号无法继续原生历史，由客户端携带完整输入创建新链
+/// 原生历史恢复由客户端携带完整输入创建新链；容量失败先交给 Core 决定是否迁移账号
 /// 只投影客户端响应；真实上游分类、发送状态和错误正文继续用于隔离与记账
-pub(super) fn quota_continuation_replay_error(
+pub(super) fn continuation_recovery_error(
     mut error: ProviderError,
     request: &CodexResponsesRequest,
     replay_boundary: ReplayBoundary,
 ) -> ProviderError {
     if request.previous_response_id().is_none()
-        || error.kind() != ProviderErrorKind::QuotaExhausted
         || !error.replay_is_safe()
         || error.send_state() == UpstreamSendState::Ambiguous
         || !replay_boundary.permits_provider_proof()
     {
+        return error;
+    }
+
+    if error.kind() == ProviderErrorKind::UpstreamCapacityUnavailable {
+        return error.with_continuation_recovery_disposition(
+            ContinuationRecoveryDisposition::ClientReplayRequired,
+        );
+    }
+    if error.kind() != ProviderErrorKind::QuotaExhausted {
         return error;
     }
 
@@ -696,7 +705,10 @@ pub(super) fn quota_continuation_replay_error(
                 .headers()
                 .iter()
                 // 额度窗口的等待时间不适用于客户端重建历史
-                .filter(|header| !header.name().eq_ignore_ascii_case("retry-after"))
+                .filter(|header| {
+                    !header.name().eq_ignore_ascii_case("retry-after")
+                        && !header.name().eq_ignore_ascii_case("retry-after-ms")
+                })
                 .cloned()
                 .collect()
         })
@@ -712,12 +724,6 @@ pub(super) fn quota_continuation_replay_error(
             Bytes::copy_from_slice(request_id.as_str().as_bytes()),
         ));
     }
-    let detail = continuation_replay_error_detail();
-    let body = json!({"error": {
-        "message": detail.message(),
-        "code": detail.code(),
-        "type": detail.error_type(),
-    }});
     // 丢弃仍未交付的前导与额度错误帧，避免原错误覆盖客户端恢复投影
     // 已交付的 Lite 前导不在此批次内，语义输出后的失败不进入此分支
     drop(error.take_atomic_client_events());
@@ -727,15 +733,25 @@ pub(super) fn quota_continuation_replay_error(
             ContinuationRecoveryDisposition::ClientReplayRequired,
         )
         .with_continuation_unavailable_reason("quota_exhausted")
-        .with_client_visible_upstream_error(detail)
-        .with_client_visible_upstream_response(
-            ClientVisibleUpstreamResponse::new(
-                reqwest::StatusCode::BAD_REQUEST.as_u16(),
-                Some(b"application/json".to_vec()),
-                Bytes::from(body.to_string()),
-            )
-            .with_headers(headers),
-        )
+        .with_client_visible_upstream_error(continuation_replay_error_detail())
+        .with_client_visible_upstream_response(continuation_replay_response(headers))
+}
+
+fn continuation_replay_response(
+    headers: Vec<ProviderResponseHeader>,
+) -> ClientVisibleUpstreamResponse {
+    let detail = continuation_replay_error_detail();
+    let body = json!({"error": {
+        "message": detail.message(),
+        "code": detail.code(),
+        "type": detail.error_type(),
+    }});
+    ClientVisibleUpstreamResponse::new(
+        reqwest::StatusCode::BAD_REQUEST.as_u16(),
+        Some(b"application/json".to_vec()),
+        Bytes::from(body.to_string()),
+    )
+    .with_headers(headers)
 }
 
 fn continuation_replay_error_detail() -> ClientVisibleUpstreamError {

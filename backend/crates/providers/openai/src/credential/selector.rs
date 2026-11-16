@@ -499,7 +499,9 @@ impl CodexCredentialSelector {
                         && request.attempt.required_account().is_none()
                         && matches!(
                             request.attempt.continuation_attempt(),
-                            ContinuationAttempt::None | ContinuationAttempt::ReplayAny
+                            ContinuationAttempt::None
+                                | ContinuationAttempt::ReplayAny
+                                | ContinuationAttempt::RotateForClientReplay
                         ) =>
                 {
                     reason
@@ -611,7 +613,9 @@ impl CodexCredentialSelector {
                 .account_state_owner()
                 .filter(|owner| owner.provider() == &self.provider_kind)
                 .map(|owner| owner.account().clone()),
-            ContinuationAttempt::None | ContinuationAttempt::ReplayAny => None,
+            ContinuationAttempt::None
+            | ContinuationAttempt::ReplayAny
+            | ContinuationAttempt::RotateForClientReplay => None,
         };
         let required_account = request.attempt.required_account().cloned();
         if required_account

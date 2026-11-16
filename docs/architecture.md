@@ -710,6 +710,9 @@ Continuation 受原请求的 Client Key、账号范围、Provider 和发送/交�
 - OpenAI 按 native → replay owner → replay any 推进，并保留官方 `previous_response_id` 语义；
   已知为 connection-local 的原生续接进入重放阶段时，在选号前返回 `ClientReplayRequired`，不认领或迁移会话绑定。
   正常 native 续接仍由连接池核对原连接及 response ID 是否可用
+- 原生续接的安全容量拒绝超过服务器建议等待上限时，Core 在换号预算内发起 `RotateForClientReplay`。
+  OpenAI 仅通过既有选号器迁移会话绑定并释放租约，不发送当前增量输入；客户端收到完整历史重放指令后开启新链。
+  无替代账号时保留原失败；API 移除容量错误的客户端等待提示，诊断仍保留原始错误与建议等待
 - xAI 使用客户端提交的完整历史作为重放输入
 - scope 外账号与跨 Key 复用均拒绝；发送结果不明时，仅接受 Provider 明确给出的有界传输恢复意图
 

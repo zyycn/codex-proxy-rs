@@ -285,6 +285,7 @@ async fn initial_capacity_failure_offers_client_retry_with_upstream_correlation(
                 vec![
                     header("x-request-id", b"req_capacity"),
                     header("retry-after", b"7"),
+                    header("retry-after-ms", b"7000"),
                 ],
             )
             .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
@@ -297,7 +298,8 @@ async fn initial_capacity_failure_offers_client_retry_with_upstream_correlation(
             assert_eq!(error["error"]["code"], "server_error");
             assert_eq!(error["error"]["message"], "busy");
             assert_eq!(error["headers"]["x-request-id"], "req_capacity");
-            assert_eq!(error["headers"]["retry-after"], "7");
+            assert!(error["headers"].get("retry-after").is_none());
+            assert!(error["headers"].get("retry-after-ms").is_none());
         }
     }
 }

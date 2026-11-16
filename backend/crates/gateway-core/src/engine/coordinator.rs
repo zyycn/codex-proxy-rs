@@ -1239,8 +1239,17 @@ where
             }
             ProviderBoundary::Result(result) => match *result {
                 Ok(stream) => stream,
-                Err(error) => {
+                Err(mut error) => {
                     attempt_trace.record_provider_failure(&error);
+                    if self.continuation_attempt == ContinuationAttempt::RotateForClientReplay
+                        && error.continuation_recovery_disposition()
+                            == Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+                        && let Some(original) = self.last_retryable_failure.take()
+                    {
+                        // 迁移只改变客户端恢复指令；失败分类、发送事实与运维正文仍属于原请求
+                        error = original.with_client_recovery_from(error);
+                        self.last_retryable_failure_events.clear();
+                    }
                     let connection_fallback = self.connection_rotation.is_some()
                         && self
                             .last_retryable_failure
@@ -2201,6 +2210,26 @@ where
         }
 
         match self.continuation_attempt {
+            ContinuationAttempt::Native
+                if error.continuation_recovery_disposition()
+                    == Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+                    && matches!(
+                        error.pre_delivery_retry(),
+                        Some(crate::error::PreDeliveryRetry::SameAccountTransientRetry {
+                            policy: crate::error::TransientRetryPolicy::RetryThenRotateAccount,
+                            ..
+                        })
+                    )
+                    && error
+                        .retry_after()
+                        .is_some_and(|delay| delay > self.plan.max_retry_after())
+                    && !error.retry_is_prohibited()
+                    && self.has_account_rotation_budget() =>
+            {
+                self.continuation_attempt = ContinuationAttempt::RotateForClientReplay;
+                self.excluded_accounts
+                    .insert(current.metadata.provider_account_id().clone());
+            }
             ContinuationAttempt::Native => match error.continuation_recovery_disposition() {
                 Some(ContinuationRecoveryDisposition::RetryExactConnection) => {
                     self.recovery_account = Some(current.metadata.provider_account_id().clone());
@@ -2237,7 +2266,7 @@ where
                 self.excluded_accounts
                     .insert(current.metadata.provider_account_id().clone());
             }
-            ContinuationAttempt::None => return false,
+            ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => return false,
         }
         true
     }

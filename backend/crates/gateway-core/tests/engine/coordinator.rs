@@ -2492,6 +2492,124 @@ fn native_continuation_uses_provider_defined_owner_then_cross_account_recovery()
 }
 
 #[test]
+fn native_capacity_above_wait_limit_rotates_before_requesting_client_replay() {
+    for (seconds, replacement, rotations, expected_attempts) in [
+        (309, true, 1, 2),
+        (309, false, 1, 2),
+        (240, true, 1, 1),
+        (309, true, 0, 1),
+    ] {
+        let Operation::Generate(generate) = generate_operation() else {
+            unreachable!()
+        };
+        let operation =
+            Operation::Generate(generate.with_provider_session_state(
+                ProviderSessionState::new("openai", Map::new()).unwrap(),
+            ));
+        let route_plan = plan_with_protection(
+            &operation,
+            AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::MIN)
+                .with_max_account_rotations(rotations),
+            Default::default(),
+            FastMode::Default,
+            BTreeMap::new(),
+            Default::default(),
+            240,
+        );
+        let original_body = Bytes::from_static(br#"{"error":{"code":"server_is_overloaded","headers":{"retry-after":"309","retry-after-ms":"309000"}}}"#);
+        let original = transient_rejection()
+            .with_retry_after(Duration::from_secs(seconds))
+            .with_raw_upstream_error(gateway_core::error::RawUpstreamError::new(
+                String::from_utf8(original_body.to_vec()).unwrap(),
+            ))
+            .with_continuation_recovery_disposition(
+                ContinuationRecoveryDisposition::ClientReplayRequired,
+            );
+        let recovery = if replacement {
+            ProviderError::new(
+                ProviderErrorKind::ContinuationRecoveryRequired,
+                UpstreamSendState::NotSent,
+            )
+            .with_continuation_recovery_disposition(
+                ContinuationRecoveryDisposition::ClientReplayRequired,
+            )
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                "Resend full history.",
+                Some("previous_response_not_found".to_owned()),
+                Some("invalid_request_error".to_owned()),
+            ))
+        } else {
+            ProviderError::new(
+                ProviderErrorKind::NoEligibleAccount,
+                UpstreamSendState::NotSent,
+            )
+        };
+        let (coordinator, store, provider) = coordinator(vec![
+            Script::Stream {
+                account_id: "acct_one",
+                items: vec![Err(original)],
+            },
+            Script::Error(recovery),
+        ]);
+        let continuation = NativeContinuationPin::new(
+            PreviousResponseId::new("client-previous"),
+            PreviousResponseId::new("upstream-previous"),
+            ClientApiKeyId::new("key_client_1").unwrap(),
+            ProviderKind::new("openai").unwrap(),
+            ProviderAccountId::new("acct_one").unwrap(),
+        )
+        .with_scope(gateway_core::engine::continuation::NativeContinuationScope::ConnectionLocal);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            Some(ContinuationBinding::Pinned(continuation)),
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        let mut collection = Box::pin(session.collect_uncommitted());
+        let std::task::Poll::Ready(Err(EngineError::Provider(error))) =
+            block_on(async { futures::poll!(&mut collection) })
+        else {
+            panic!("native capacity recovery must not wait on the old account");
+        };
+        drop(collection);
+        assert_eq!(error.kind(), ProviderErrorKind::UpstreamCapacityUnavailable);
+        assert_eq!(error.send_state(), UpstreamSendState::Sent);
+        assert_eq!(error.retry_after(), Some(Duration::from_secs(seconds)));
+        assert_eq!(
+            error.raw_upstream_error().unwrap().as_str().as_bytes(),
+            original_body.as_ref()
+        );
+        assert_eq!(
+            error
+                .client_visible_upstream_error()
+                .and_then(|detail| detail.code()),
+            (replacement && expected_attempts == 2).then_some("previous_response_not_found")
+        );
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), expected_attempts);
+        if contexts.len() == 2 {
+            assert_eq!(
+                contexts[1].continuation_attempt(),
+                ContinuationAttempt::RotateForClientReplay
+            );
+            assert!(
+                contexts[1]
+                    .excluded_accounts()
+                    .contains(&ProviderAccountId::new("acct_one").unwrap())
+            );
+            assert!(contexts[1].required_account().is_none());
+        }
+        assert_eq!(
+            store.state.lock().unwrap().finalizations[0].attempt_count,
+            1
+        );
+    }
+}
+
+#[test]
 fn native_continuation_client_replay_required_is_terminal() {
     for (kind, send_state) in [
         (

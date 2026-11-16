@@ -730,6 +730,17 @@ impl Provider for CodexProvider {
             &[],
             context.client_api_key_ref(),
         );
+        if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay
+            && (selection_session_affinity.is_none()
+                || context.account_selection_policy().openai_account_affinity()
+                    == AccountAffinity::Relaxed)
+        {
+            // 没有可持续的会话绑定就无法保证完整历史使用替代账号，交回原始容量错误
+            return Err(provider_error(
+                ProviderErrorKind::NoEligibleAccount,
+                UpstreamSendState::NotSent,
+            ));
+        }
         // Messages 身份与内容亲和仅交给选号器，不建立 OpenAI 轮次或原生续接关联
         let account_affinity = selection_session_affinity
             .as_ref()
@@ -765,6 +776,11 @@ impl Provider for CodexProvider {
         };
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay {
+            // Core 已确认允许换号；选号器迁移共享绑定后，完整历史仍须由客户端提供
+            // 不将旧账号的 previous_response_id 或增量输入发送给替代账号
+            return Err(continuation_replay_required_error("account_rotated"));
+        }
         let adapter = context.upstream_adapter_for_account(
             candidate.provider(),
             upstream_model,
@@ -949,7 +965,9 @@ impl CodexProvider {
                         ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny => {
                             PreviousResponseScope::ExternalUnknown
                         }
-                        ContinuationAttempt::None => PreviousResponseScope::ExternalUnknown,
+                        ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => {
+                            PreviousResponseScope::ExternalUnknown
+                        }
                     };
                     upstream_request.set_previous_response_id(Some(
                         continuation.upstream_response_id().as_str().to_owned(),

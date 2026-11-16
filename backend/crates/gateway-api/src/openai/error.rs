@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 pub use gateway_core::engine::execution::gateway_error_from_engine;
 
-use crate::client_error::{ProtocolErrorBody, capacity_error_for_client};
+use crate::client_error::{ProtocolErrorBody, capacity_error_for_client, is_retry_after_header};
 
 pub use crate::client_error::{
     gateway_error_contract, gateway_error_response, openai_error_response,
@@ -102,7 +102,9 @@ pub fn model_not_found_response() -> (StatusCode, Json<Value>) {
 /// 在下游尚未提交时交付 Provider 的 HTTP 失败响应，并应用客户端容量恢复合同
 pub fn engine_error_response(error: &EngineError) -> Response {
     let capacity_unavailable = matches!(error, EngineError::Provider(error)
-        if error.kind() == ProviderErrorKind::UpstreamCapacityUnavailable);
+        if error.kind() == ProviderErrorKind::UpstreamCapacityUnavailable
+            && error.client_visible_upstream_error().and_then(|detail| detail.code())
+                != Some("previous_response_not_found"));
     if let EngineError::Provider(error) = error
         && let Some(upstream) = error.client_visible_upstream_response()
         && let Ok(status) = StatusCode::from_u16(upstream.status())
@@ -110,6 +112,7 @@ pub fn engine_error_response(error: &EngineError) -> Response {
         let projected = serde_json::from_slice::<Value>(upstream.body())
             .ok()
             .and_then(|body| capacity_error_for_client(&body));
+        let suppress_retry_after = capacity_unavailable || projected.is_some();
         let mut response = match projected {
             Some(body) => {
                 let mut response = Response::new(Body::from(body.to_string()));
@@ -132,6 +135,9 @@ pub fn engine_error_response(error: &EngineError) -> Response {
             response.headers_mut().insert(CONTENT_TYPE, content_type);
         }
         for header in upstream.headers() {
+            if suppress_retry_after && is_retry_after_header(header.name()) {
+                continue;
+            }
             let Ok(name) = HeaderName::from_bytes(header.name().as_bytes()) else {
                 continue;
             };
@@ -139,6 +145,13 @@ pub fn engine_error_response(error: &EngineError) -> Response {
                 continue;
             };
             response.headers_mut().append(name, value);
+        }
+        if !response.headers().contains_key("x-request-id")
+            && !response.headers().contains_key("x-oai-request-id")
+            && let Some(request_id) = error.upstream_request_id()
+            && let Ok(value) = HeaderValue::from_str(request_id.as_str())
+        {
+            response.headers_mut().insert("x-request-id", value);
         }
         return response;
     }

@@ -72,6 +72,10 @@ pub(crate) fn client_error_code(code: &str) -> &str {
     }
 }
 
+pub(crate) fn is_retry_after_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("retry-after") || name.eq_ignore_ascii_case("retry-after-ms")
+}
+
 /// 为 HTTP 错误或流内失败保留原有字段，仅投影客户端需要的重试信号
 pub(crate) fn capacity_error_for_client(data: &Value) -> Option<Value> {
     const CODE_PATHS: [&str; 2] = ["/error/code", "/response/error/code"];
@@ -87,6 +91,12 @@ pub(crate) fn capacity_error_for_client(data: &Value) -> Option<Value> {
         return None;
     }
     let mut projected = data.clone();
+    // 容量等待与换号已由网关执行；旧账号的等待提示不能再次阻塞客户端的新一轮路由
+    for path in ["/headers", "/error/headers", "/response/error/headers"] {
+        if let Some(Value::Object(headers)) = projected.pointer_mut(path) {
+            headers.retain(|name, _| !is_retry_after_header(name));
+        }
+    }
     for path in CODE_PATHS {
         if let Some(code) = projected.pointer_mut(path)
             && capacity_code(code)

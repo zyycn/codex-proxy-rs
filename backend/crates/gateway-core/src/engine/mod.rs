@@ -268,6 +268,8 @@ pub enum ContinuationAttempt {
     ///
     /// 该枚举本身不证明客户端 input 完整，也不授权 Provider 清除 previous-response
     ReplayAny,
+    /// 仅迁移账号绑定，随后要求客户端携带完整历史重放；不得发送当前增量输入
+    RotateForClientReplay,
 }
 
 impl ContinuationAttempt {
@@ -278,6 +280,7 @@ impl ContinuationAttempt {
             Self::Native => "native",
             Self::ReplayOwner => "replay_owner",
             Self::ReplayAny => "replay_any",
+            Self::RotateForClientReplay => "rotate_for_client_replay",
         }
     }
 }
@@ -596,7 +599,9 @@ impl AttemptContext {
                     .account_state_owner()
                     .filter(|owner| owner.provider() == provider)
                     .map(|owner| owner.account()),
-                ContinuationAttempt::None | ContinuationAttempt::ReplayAny => None,
+                ContinuationAttempt::None
+                | ContinuationAttempt::ReplayAny
+                | ContinuationAttempt::RotateForClientReplay => None,
             });
         self.request.upstream_adapters.as_ref().map_or(
             Ok(upstream_adapter::UpstreamAdapterSelection::Native),

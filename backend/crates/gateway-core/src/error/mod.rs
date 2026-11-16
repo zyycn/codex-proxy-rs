@@ -117,7 +117,8 @@ pub enum ContinuationFailure {
 pub enum ContinuationRecoveryDisposition {
     /// 只能再次取得同账号、同一精确连接，不能改变 continuation scope
     RetryExactConnection,
-    /// 代理停止内部恢复，由客户端携带完整输入创建新链
+    /// 当前增量不能由代理重放，由客户端携带完整输入创建新链
+    /// 显式换号策略仍可迁移会话绑定，但不能发送增量输入
     ClientReplayRequired,
     /// Provider 已证明可以进入 owner 或其他合法目标的恢复流程
     ProviderReplayAllowed,
@@ -1021,6 +1022,15 @@ impl ProviderError {
     #[must_use]
     pub fn client_visible_upstream_response(&self) -> Option<&ClientVisibleUpstreamResponse> {
         self.client_visible_upstream_response.as_deref()
+    }
+
+    /// 绑定迁移完成后仅替换客户端恢复投影，保留原始失败的诊断与计费事实
+    pub(crate) fn with_client_recovery_from(mut self, recovery: Self) -> Self {
+        self.client_visible_upstream_error = recovery.client_visible_upstream_error;
+        self.client_visible_upstream_response = recovery.client_visible_upstream_response;
+        self.continuation_failure = recovery.continuation_failure;
+        self.continuation_recovery_disposition = recovery.continuation_recovery_disposition;
+        self
     }
 
     /// 取走只供本次重试/提交决策使用的原子客户端事件
