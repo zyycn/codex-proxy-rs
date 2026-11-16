@@ -27,7 +27,8 @@ export const authPlugin: Plugin = {
         return
       try {
         // 首次导航被临时故障中止时，只重试路由守卫的只读校验
-        await router.replace(`${window.location.pathname}${window.location.search}${window.location.hash}`)
+        // History location 已去除部署前缀，避免重复拼接 base
+        await router.replace(router.options.history.location)
       }
       catch {
         // 服务不可用不代表退出，恢复联网后仍可再次校验

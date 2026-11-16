@@ -22,6 +22,7 @@ local.yaml
 local.yml
 .env
 .env.*
+!frontend/.env
 config.yaml
 deploy/config.yaml
 deploy/.env
