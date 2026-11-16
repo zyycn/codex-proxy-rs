@@ -4,6 +4,32 @@ use std::{fmt, num::NonZeroU32};
 
 use crate::validation::{IdentifierError, validate_text};
 
+/// 拨号目标只按主机与端口识别；认证、协议与连接上限不改变 TCP 入口
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProxyEndpoint {
+    host: String,
+    port: u16,
+}
+
+impl ProxyEndpoint {
+    pub(crate) fn new(host: &str, port: u16) -> Self {
+        Self {
+            host: host.to_ascii_lowercase(),
+            port,
+        }
+    }
+
+    pub(crate) fn matches(&self, host: &str, port: u16) -> bool {
+        self.port == port && host.eq_ignore_ascii_case(&self.host)
+    }
+}
+
+impl fmt::Debug for ProxyEndpoint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProxyEndpoint(<redacted>)")
+    }
+}
+
 /// 上游是否可能已经收到业务 payload
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UpstreamSendState {

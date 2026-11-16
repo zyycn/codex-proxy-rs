@@ -526,7 +526,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     account_rotations: u32,
     candidate_index: usize,
     excluded_accounts: BTreeSet<crate::account::ProviderAccountId>,
-    excluded_proxy_endpoints: Vec<crate::account::ProxyEndpoint>,
+    excluded_proxy_endpoints: Vec<crate::upstream::ProxyEndpoint>,
     credential_recovery_attempted_accounts: BTreeSet<crate::account::ProviderAccountId>,
     /// 凭据恢复后的一次性同账号钉选；只约束紧随其后的 replay attempt，
     /// attempt 建立时即被消费，后续可重试错误仍可换号消耗剩余重试预算

@@ -124,7 +124,7 @@ impl AttemptTrigger {
 /// 一旦设置，Provider 在本 attempt 内不得换号或切换 target
 #[derive(Debug, Clone, Default)]
 pub struct AccountAttemptContext {
-    excluded_proxy_endpoints: Vec<crate::account::ProxyEndpoint>,
+    excluded_proxy_endpoints: Vec<crate::upstream::ProxyEndpoint>,
     excluded_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
     state_owner: Option<ProviderAccountStateOwner>,
@@ -911,7 +911,7 @@ impl AttemptContext {
                 self.account
                     .excluded_proxy_endpoints
                     .iter()
-                    .any(|endpoint| endpoint.matches(proxy))
+                    .any(|endpoint| proxy.matches_endpoint(endpoint))
             })
     }
 

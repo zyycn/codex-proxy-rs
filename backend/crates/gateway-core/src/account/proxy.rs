@@ -3,34 +3,12 @@
 use std::fmt;
 use url::Url;
 
+use crate::upstream::ProxyEndpoint;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct OutboundProxy {
     url: Url,
     max_websocket_connections: u32,
-}
-
-/// 拨号目标只按主机与端口识别；认证、协议与连接上限不改变 TCP 入口
-#[derive(Clone, PartialEq, Eq)]
-pub struct ProxyEndpoint {
-    host: String,
-    port: u16,
-}
-
-impl ProxyEndpoint {
-    #[must_use]
-    pub fn matches(&self, proxy: &OutboundProxy) -> bool {
-        proxy.url.port_or_known_default() == Some(self.port)
-            && proxy
-                .url
-                .host_str()
-                .is_some_and(|host| host.eq_ignore_ascii_case(&self.host))
-    }
-}
-
-impl fmt::Debug for ProxyEndpoint {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ProxyEndpoint(<redacted>)")
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -77,17 +55,22 @@ impl OutboundProxy {
 
     #[must_use]
     pub fn dial_endpoint(&self) -> ProxyEndpoint {
-        ProxyEndpoint {
-            host: self
-                .url
-                .host_str()
-                .expect("validated proxy host")
-                .to_ascii_lowercase(),
-            port: self
-                .url
+        ProxyEndpoint::new(
+            self.url.host_str().expect("validated proxy host"),
+            self.url
                 .port_or_known_default()
                 .expect("validated proxy port"),
-        }
+        )
+    }
+
+    #[must_use]
+    pub fn matches_endpoint(&self, endpoint: &ProxyEndpoint) -> bool {
+        endpoint.matches(
+            self.url.host_str().expect("validated proxy host"),
+            self.url
+                .port_or_known_default()
+                .expect("validated proxy port"),
+        )
     }
 
     #[must_use]

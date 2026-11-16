@@ -81,6 +81,7 @@ fn core_value_owners_do_not_depend_on_execution_or_routing() {
             "account/selection.rs" => Some(&["account", "concurrency", "identity", "validation"]),
             "concurrency.rs" => Some(&["error"]),
             "account/store.rs" => Some(&["account", "error", "identity", "validation"]),
+            "account/proxy.rs" => Some(&["upstream"]),
             path if path.starts_with("policy/") => {
                 Some(&["account", "identity", "policy", "validation"])
             }

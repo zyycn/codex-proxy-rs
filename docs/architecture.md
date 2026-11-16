@@ -320,7 +320,7 @@ HTTP 字段见 [插件 API](api.md#12-插件管理)，更新与数据恢复见 [
 | `account` | Provider 账号/credential/quota 值对象、持久化端口与请求级账号选择；`scope` 持有分组、账号目录和冻结账号范围 |
 | `policy` | Client API Key 准入、原始 Key 设置与客户端版本策略；只使用账号范围、Provider 身份和基础校验 |
 | `metering` | 标准化 Usage、金额、费用估算与费用明细；不表示账号或开票系统 |
-| `upstream` | 跨 Engine、Event、Error 与 Provider 共用的 transport 名称、尝试传输档位、发送状态和不透明上游值 |
+| `upstream` | 跨账号、Engine、Event、Error 与 Provider 共用的代理拨号端点、transport 名称、尝试传输档位、发送状态和不透明上游值 |
 | `lifecycle` | 取消信号、可选执行截止与租约生命周期、连接注册与 drain 合同 |
 | `middleware` | 与领域无关的类型化组合器及单次续体 |
 | `engine` | attempt、发送/提交屏障、执行编排、具体中间件与上游适配计划、持久化调用时序 |
