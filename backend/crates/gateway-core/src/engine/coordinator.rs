@@ -367,6 +367,7 @@ where
             account_rotations: 0,
             candidate_index,
             excluded_accounts: BTreeSet::new(),
+            excluded_proxy_endpoints: Vec::new(),
             credential_recovery_attempted_accounts: BTreeSet::new(),
             recovery_account: None,
             pending_retry: None,
@@ -525,6 +526,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     account_rotations: u32,
     candidate_index: usize,
     excluded_accounts: BTreeSet<crate::account::ProviderAccountId>,
+    excluded_proxy_endpoints: Vec<crate::account::ProxyEndpoint>,
     credential_recovery_attempted_accounts: BTreeSet<crate::account::ProviderAccountId>,
     /// 凭据恢复后的一次性同账号钉选；只约束紧随其后的 replay attempt，
     /// attempt 建立时即被消费，后续可重试错误仍可换号消耗剩余重试预算
@@ -1098,7 +1100,7 @@ where
                 ),
             }
         };
-        let account_context = match &self.account_selection {
+        let mut account_context = match &self.account_selection {
             AccountSelection::Diagnostic(target) => AccountAttemptContext::diagnostic(
                 self.excluded_accounts.clone(),
                 target.clone(),
@@ -1115,6 +1117,9 @@ where
             self.credential_recovery_attempted_accounts
                 .contains(account)
         }));
+        account_context
+            .excluded_proxy_endpoints
+            .clone_from(&self.excluded_proxy_endpoints);
         let provider = self
             .engine
             .providers()
@@ -1237,6 +1242,11 @@ where
                 Err(error) => {
                     attempt_trace.record_provider_failure(&error);
                     let connection_fallback = self.connection_rotation.is_some()
+                        && self
+                            .last_retryable_failure
+                            .as_ref()
+                            .and_then(ProviderError::unreachable_proxy)
+                            .is_none()
                         && !self.connection_budget.exhausted()
                         && !error.retry_is_prohibited()
                         && error.send_state() == UpstreamSendState::NotSent
@@ -2000,6 +2010,11 @@ where
                 }
                 StreamRetry::Pending(retry) => self.pending_retry = Some(retry),
                 StreamRetry::ConnectionRotation(retry) => {
+                    if let Some(endpoint) = pending.error.unreachable_proxy()
+                        && !self.excluded_proxy_endpoints.contains(endpoint)
+                    {
+                        self.excluded_proxy_endpoints.push(endpoint.clone());
+                    }
                     self.excluded_accounts.insert(retry.account.clone());
                     self.connection_rotation = Some(retry);
                 }

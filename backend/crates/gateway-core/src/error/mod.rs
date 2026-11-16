@@ -540,6 +540,7 @@ struct ProviderErrorUpstreamValues {
 
 #[derive(Clone, Default)]
 struct ProviderErrorFailureObservation {
+    unreachable_proxy: Option<crate::account::ProxyEndpoint>,
     continuation_unavailable_reason: Option<&'static str>,
     connection: Option<ProviderConnectionObservation>,
 }
@@ -660,6 +661,20 @@ impl ProviderError {
     ) -> Self {
         self.failure_observation_mut().connection = Some(observation);
         self
+    }
+
+    /// 仅当连接账号绑定代理的入口失败时记录；不用于持久化或输出地址
+    #[must_use]
+    pub fn with_unreachable_proxy(mut self, endpoint: crate::account::ProxyEndpoint) -> Self {
+        self.failure_observation_mut().unreachable_proxy = Some(endpoint);
+        self
+    }
+
+    #[must_use]
+    pub fn unreachable_proxy(&self) -> Option<&crate::account::ProxyEndpoint> {
+        self.failure_observation
+            .as_deref()
+            .and_then(|observation| observation.unreachable_proxy.as_ref())
     }
 
     fn failure_observation_mut(&mut self) -> &mut ProviderErrorFailureObservation {

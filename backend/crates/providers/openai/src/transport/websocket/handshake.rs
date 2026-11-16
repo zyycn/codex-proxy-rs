@@ -320,7 +320,7 @@ async fn dial_account(
         *proxy_hint = None;
         let tls = tls::account_proxy_tls_config().map_err(|_| invalid())?;
         let name = rustls_pki_types::ServerName::try_from(proxy_host).map_err(|_| invalid())?;
-        *proxy_hint = Some(ProxyConnectionHint::Unreachable);
+        *proxy_hint = Some(ProxyConnectionHint::CheckProxy);
         MaybeTlsStream::Rustls(
             tokio_rustls::TlsConnector::from(tls)
                 .connect(name, tcp)

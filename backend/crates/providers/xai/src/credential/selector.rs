@@ -176,6 +176,9 @@ impl GrokAccountSessionSelector {
                 .into_iter()
                 .filter(|account| {
                     request.upstream_context.as_ref().is_none_or(|context| {
+                        if context.excludes_proxy(account.outbound_proxy()) {
+                            return false;
+                        }
                         context
                             .upstream_adapter_for_account(
                                 &self.provider_kind,

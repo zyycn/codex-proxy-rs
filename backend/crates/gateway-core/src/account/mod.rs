@@ -19,7 +19,7 @@ pub use quota_settings::{
     QuotaPauseDecision,
 };
 mod proxy;
-pub use proxy::{InvalidOutboundProxy, OutboundProxy};
+pub use proxy::{InvalidOutboundProxy, OutboundProxy, ProxyEndpoint};
 mod scheduling;
 pub mod scope;
 mod selection;

@@ -9,6 +9,30 @@ pub struct OutboundProxy {
     max_websocket_connections: u32,
 }
 
+/// 拨号目标只按主机与端口识别；认证、协议与连接上限不改变 TCP 入口
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProxyEndpoint {
+    host: String,
+    port: u16,
+}
+
+impl ProxyEndpoint {
+    #[must_use]
+    pub fn matches(&self, proxy: &OutboundProxy) -> bool {
+        proxy.url.port_or_known_default() == Some(self.port)
+            && proxy
+                .url
+                .host_str()
+                .is_some_and(|host| host.eq_ignore_ascii_case(&self.host))
+    }
+}
+
+impl fmt::Debug for ProxyEndpoint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProxyEndpoint(<redacted>)")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("invalid outbound proxy; expected http, https, socks5 or socks5h URL with a host and port")]
 pub struct InvalidOutboundProxy;
@@ -49,6 +73,21 @@ impl OutboundProxy {
     #[must_use]
     pub fn expose_url(&self) -> &str {
         self.url.as_str()
+    }
+
+    #[must_use]
+    pub fn dial_endpoint(&self) -> ProxyEndpoint {
+        ProxyEndpoint {
+            host: self
+                .url
+                .host_str()
+                .expect("validated proxy host")
+                .to_ascii_lowercase(),
+            port: self
+                .url
+                .port_or_known_default()
+                .expect("validated proxy port"),
+        }
     }
 
     #[must_use]

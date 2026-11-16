@@ -432,7 +432,10 @@ async fn streaming_not_found_preserves_accounts_and_stops_gateway_retries() {
 async fn refused_connections_respect_the_same_rotation_limit_over_http_and_websocket() {
     let upstream = MockServer::start().await;
     for websocket in [false, true] {
-        for rotations in [0, 2] {
+        for (rotations, child) in [(0, false), (2, false), (2, true)] {
+            if child && websocket {
+                continue;
+            }
             let store = Arc::new(MemoryAccountStore::default());
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let endpoint = listener.local_addr().unwrap();
@@ -443,8 +446,20 @@ async fn refused_connections_respect_the_same_rotation_limit_over_http_and_webso
             for id in ["acct_provider_contract", "acct_subagent_b"] {
                 create_account(&store, id).await;
                 store.set_egress(id, Some(proxy.clone()), None);
+                if child {
+                    store.set_oauth_transport(
+                        id,
+                        provider_openai::credential::ResponsesTransport::Http,
+                    );
+                }
             }
-            let operation = if websocket {
+            let operation = if child {
+                Operation::Generate(generate_with_session_context(
+                    "root",
+                    Some("child"),
+                    Some(r#"{"subagent_kind":"thread_spawn"}"#),
+                ))
+            } else if websocket {
                 capacity_websocket_operation()
             } else {
                 http_generate_operation()
@@ -485,22 +500,125 @@ async fn refused_connections_respect_the_same_rotation_limit_over_http_and_webso
             );
             let requests = leases.requests.lock().unwrap();
             let accounts: Vec<_> = requests.iter().map(|r| r.account_id()).collect();
-            assert!(
-                (3..=4).contains(&accounts.len()),
-                "ws={websocket}, rotations={rotations}: {accounts:?}, {result:?}"
-            );
-            assert_eq!(accounts[0], accounts[1]);
             if rotations == 0 {
-                assert!(
-                    accounts.iter().all(|a| *a == accounts[0]),
-                    "ws={websocket}: {accounts:?}"
-                );
+                assert!((3..=4).contains(&accounts.len()), "{accounts:?}");
             } else {
-                assert_ne!(accounts[1], accounts[2], "ws={websocket}: {accounts:?}");
+                assert!(
+                    matches!(&result, Err(EngineError::Provider(error)) if error.unreachable_proxy().is_some()),
+                    "{result:?}"
+                );
+                assert_eq!(
+                    accounts.len(),
+                    2,
+                    "ws={websocket}: {accounts:?}, {result:?}"
+                );
             }
+            assert!(
+                accounts.iter().all(|a| *a == accounts[0]),
+                "ws={websocket}: {accounts:?}"
+            );
         }
     }
     assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn unreachable_proxy_is_skipped_across_rotations_and_reconsidered_on_the_next_request() {
+    use gateway_core::account::OutboundProxy;
+
+    const A: &str = "acct_provider_contract";
+    const B: &str = "acct_subagent_a";
+    const C: &str = "acct_subagent_b";
+    const D: &str = "acct_affinity";
+    let store = Arc::new(MemoryAccountStore::default());
+    let upstream = MockServer::start().await;
+    // 关闭监听以产生真实的连接拒绝，下一请求让同一入口恢复服务
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    for (id, weight) in [(A, 100), (B, 90), (C, 80), (D, 70)] {
+        create_account(&store, id).await;
+        store.set_scheduling(id, None, AccountWeight::new(weight).unwrap());
+        if matches!(id, A | B) {
+            let proxy = OutboundProxy::parse(&format!("http://{id}@{addr}")).unwrap();
+            store.set_egress(id, Some(proxy), None);
+        }
+    }
+    let rate_limit_then_success = || {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        Mock::given(method("POST"))
+            .respond_with(move |_: &wiremock::Request| {
+                if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(429).set_body_json(json!({
+                        "error":{"type":"rate_limit_error","message":"fixture rate limit"}
+                    }))
+                } else {
+                    ResponseTemplate::new(200)
+                        .set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream")
+                }
+            })
+            .expect(2)
+    };
+    rate_limit_then_success().mount(&upstream).await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let provider = provider_with_affinity_and_base_url_and_leases(
+        &store,
+        Arc::new(MemorySessionAffinity::default()),
+        upstream.uri(),
+        Arc::clone(&leases),
+    );
+    let providers =
+        ProviderRegistry::new([provider as Arc<dyn gateway_core::engine::provider::Provider>])
+            .unwrap();
+    let coordinator =
+        AttemptCoordinator::new(GatewayEngine::new(Arc::new(NoopExecutionStore), providers));
+    let run = async |id: &'static str| {
+        // 每个请求启动独立会话，避免已有的会话亲和优先于测试设置的账号权重
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "openai",
+                Map::from_iter([
+                    ("model".into(), json!("gpt-5.4")),
+                    ("input".into(), json!("hello")),
+                    ("prompt_cache_key".into(), json!(id)),
+                ]),
+            )
+            .unwrap()
+            .with_context(Map::from_iter([("use_websocket".into(), json!(false))])),
+        ));
+        let plan = execution_plan_with_settings(
+            &operation,
+            SettingsValues::new(3, "smart", Default::default(), None, None)
+                .with_max_account_rotations(2),
+        );
+        let mut session = coordinator
+            .start(
+                execution_request(id, &operation, Duration::from_secs(15)),
+                operation,
+                plan,
+                None,
+                None,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let result = session.collect_uncommitted().await;
+        let accounts = std::mem::take(&mut *leases.requests.lock().unwrap())
+            .iter()
+            .map(|r| r.account_id().as_str().to_owned())
+            .collect::<Vec<_>>();
+        assert!(result.is_ok(), "{id}: {result:?}, accounts={accounts:?}");
+        accounts
+    };
+    // C 的限流再次触发换号，B 权重更高也不能换回已失败的入口
+    assert_eq!(run("req_proxy_skip").await, [A, A, C, D]);
+    let recovered = MockServer::builder()
+        .listener(std::net::TcpListener::bind(addr).unwrap())
+        .start()
+        .await;
+    rate_limit_then_success().mount(&recovered).await;
+    // 新请求可重新使用 A；这次 A 只被限流，同一入口的 B 仍是最优账号
+    assert_eq!(run("req_proxy_recovered").await, [A, B]);
 }
 
 #[tokio::test]

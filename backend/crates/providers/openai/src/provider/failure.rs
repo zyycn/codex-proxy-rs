@@ -1005,6 +1005,11 @@ pub(super) fn map_client_error(
             );
     }
     if let Some(diagnostic) = diagnostic {
+        if diagnostic.proxy_hint() == Some(ProxyConnectionHint::Unreachable)
+            && let Some(proxy) = handshake_account.and_then(ProviderAccount::outbound_proxy)
+        {
+            failure.error = failure.error.with_unreachable_proxy(proxy.dial_endpoint());
+        }
         failure.error = failure.error.with_diagnostic(diagnostic);
     }
     if let Some(raw) = raw_upstream_error {
@@ -1095,7 +1100,11 @@ pub(super) fn client_diagnostic(
             .with_classification(stage, code)
             .with_io_cause(error);
             return Some(if uses_account_proxy && error.is_connect() {
-                diagnostic.with_proxy_hint(ProxyConnectionHint::CheckProxy)
+                diagnostic.with_proxy_hint(if http_proxy_dial_failed(error) {
+                    ProxyConnectionHint::Unreachable
+                } else {
+                    ProxyConnectionHint::CheckProxy
+                })
             } else {
                 diagnostic
             });
@@ -1772,6 +1781,43 @@ pub(super) fn provider_error(
     send_state: UpstreamSendState,
 ) -> ProviderError {
     ProviderError::new(kind, send_state)
+}
+
+/// 账号代理覆盖所有 HTTP 目的地。只有到代理的 TCP 拨号失败可排除整个入口；
+/// SOCKS 握手和 CONNECT 隧道返回的错误均不能证明入口不可达
+fn http_proxy_dial_failed(error: &reqwest::Error) -> bool {
+    use hyper_util::client::legacy::connect::{HttpConnector, proxy::SocksV5};
+    use std::error::Error;
+    use tower_service::Service;
+
+    type TcpError = <HttpConnector as Service<hyper::Uri>>::Error;
+    type SocksError = <SocksV5<HttpConnector> as Service<hyper::Uri>>::Error;
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let dial =
+            cause
+                .downcast_ref::<TcpError>()
+                .or_else(|| match cause.downcast_ref::<SocksError>() {
+                    Some(SocksError::Inner(dial)) => Some(dial),
+                    _ => None,
+                });
+        if let Some(dial) = dial {
+            return dial
+                .source()
+                .and_then(|inner| inner.downcast_ref::<std::io::Error>())
+                .is_some_and(|io| {
+                    matches!(
+                        io.kind(),
+                        std::io::ErrorKind::ConnectionRefused
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::NetworkUnreachable
+                            | std::io::ErrorKind::HostUnreachable
+                    )
+                });
+        }
+        source = cause.source();
+    }
+    false
 }
 
 /// 只恢复明确未发送的 HTTP 建连失败；TLS 协议、证书及配置错误不反复尝试同一路径

@@ -4329,6 +4329,7 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
     for (websocket, proxy_hint) in [
         (false, None),
         (true, None),
+        (false, Some(ProxyConnectionHint::Unreachable)),
         (false, Some(ProxyConnectionHint::CheckProxy)),
         (true, Some(ProxyConnectionHint::Unreachable)),
         (true, Some(ProxyConnectionHint::TunnelFailed)),
@@ -4337,7 +4338,11 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
         create_account(&store, "acct_abrupt_disconnect").await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
-        let rejection = if proxy_hint == Some(ProxyConnectionHint::TunnelFailed) {
+        let tunnel_rejected = matches!(
+            proxy_hint,
+            Some(ProxyConnectionHint::TunnelFailed | ProxyConnectionHint::CheckProxy)
+        );
+        let rejection = if tunnel_rejected {
             Some(tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 assert!(
@@ -4373,7 +4378,13 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
         } else {
             http_generate_operation()
         };
-        let mut stream = provider_with_base_url(&store, base_url)
+        // HTTP 客户端仅为 HTTPS 目标执行 CONNECT；代理可达但拒绝隧道不能归因为拨号失败
+        let upstream = if !websocket && tunnel_rejected {
+            "https://upstream.invalid".to_owned()
+        } else {
+            base_url
+        };
+        let mut stream = provider_with_base_url(&store, upstream)
             .execute(
                 planned_request("openai", operation),
                 context("req_connect_refused", CancellationToken::new()),
@@ -4389,6 +4400,10 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
         };
         let diagnostic = error.diagnostic().expect("connection diagnosis");
         assert_eq!(diagnostic.proxy_hint(), proxy_hint);
+        assert_eq!(
+            error.unreachable_proxy().is_some(),
+            proxy_hint == Some(ProxyConnectionHint::Unreachable)
+        );
         assert_eq!(
             error.allows_connection_rotation(),
             proxy_hint != Some(ProxyConnectionHint::TunnelFailed)

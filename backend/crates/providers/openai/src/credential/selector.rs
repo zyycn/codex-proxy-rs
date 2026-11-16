@@ -1112,6 +1112,12 @@ impl CodexCredentialSelector {
             let mut excluded = request.attempt.excluded_accounts().clone();
             if !diagnostic {
                 for candidate in &candidates {
+                    if request
+                        .attempt
+                        .excludes_proxy(candidate.account.outbound_proxy())
+                    {
+                        excluded.insert(candidate.account.id().clone());
+                    }
                     if candidate.account.quota_paused() {
                         if follow_only
                             && binding.as_ref().is_some_and(|binding| {
@@ -1280,6 +1286,16 @@ impl CodexCredentialSelector {
                 }
                 let Some(selection) = selection else {
                     if follow_only && let Some(binding) = binding.as_ref() {
+                        // 如果整个候选池共用本请求已排除的入口，等待根线程迁移也没有可用出口
+                        if !candidates.is_empty()
+                            && candidates.iter().all(|candidate| {
+                                request
+                                    .attempt
+                                    .excludes_proxy(candidate.account.outbound_proxy())
+                            })
+                        {
+                            return Err(CredentialSelectionError::NoEligibleCredential);
+                        }
                         // 冷却、排除、停用或当前账号不在本次范围时也只等待根线程恢复或迁移
                         waiting
                             .wait(std::slice::from_ref(binding.account_id()))

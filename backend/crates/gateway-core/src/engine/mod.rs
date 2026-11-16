@@ -124,6 +124,7 @@ impl AttemptTrigger {
 /// 一旦设置，Provider 在本 attempt 内不得换号或切换 target
 #[derive(Debug, Clone, Default)]
 pub struct AccountAttemptContext {
+    excluded_proxy_endpoints: Vec<crate::account::ProxyEndpoint>,
     excluded_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
     state_owner: Option<ProviderAccountStateOwner>,
@@ -140,6 +141,7 @@ impl AccountAttemptContext {
         state_owner: Option<ProviderAccountStateOwner>,
     ) -> Self {
         Self {
+            excluded_proxy_endpoints: Vec::new(),
             excluded_accounts,
             required_account,
             state_owner,
@@ -160,6 +162,7 @@ impl AccountAttemptContext {
     ) -> Self {
         let (required_account, eligibility) = target.into_selection();
         Self {
+            excluded_proxy_endpoints: Vec::new(),
             excluded_accounts,
             required_account: Some(required_account),
             state_owner,
@@ -894,6 +897,17 @@ impl AttemptContext {
     #[must_use]
     pub const fn excluded_accounts(&self) -> &BTreeSet<ProviderAccountId> {
         self.account.excluded_accounts()
+    }
+
+    #[must_use]
+    pub fn excludes_proxy(&self, proxy: Option<&crate::account::OutboundProxy>) -> bool {
+        !self.account.excluded_proxy_endpoints.is_empty()
+            && proxy.is_some_and(|proxy| {
+                self.account
+                    .excluded_proxy_endpoints
+                    .iter()
+                    .any(|endpoint| endpoint.matches(proxy))
+            })
     }
 
     /// 管理端诊断或请求局部恢复 attempt 强制使用的唯一账号
