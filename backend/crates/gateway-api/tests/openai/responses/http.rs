@@ -2164,13 +2164,14 @@ async fn streaming_upstream_wire_failure_should_not_be_rewritten_as_a_gateway_er
 
 #[tokio::test]
 async fn streaming_upstream_error_event_should_be_translated_to_response_failed_for_sse() {
-    for (error_type, code, client_code, kind, client_status) in [
+    for (error_type, code, client_code, kind, client_status, keeps_retry_after) in [
         (
             "service_unavailable_error",
             "server_is_overloaded",
             "server_error",
             ProviderErrorKind::UpstreamCapacityUnavailable,
             503,
+            false,
         ),
         (
             "rate_limit_error",
@@ -2178,13 +2179,14 @@ async fn streaming_upstream_error_event_should_be_translated_to_response_failed_
             "turn_rate_limit_exceeded",
             ProviderErrorKind::RateLimited,
             429,
+            true,
         ),
     ] {
         let trace = Arc::new(Trace::default());
         let error_data = json!({
             "type": "error",
             "status": 429,
-            "headers": {"Retry-After": "24"},
+            "headers": {"Retry-After": "24", "retry-after-ms": "24000", "x-request-id": "req_test"},
             "error": {
                 "type": error_type,
                 "code": code,
@@ -2254,6 +2256,31 @@ async fn streaming_upstream_error_event_should_be_translated_to_response_failed_
             .find(|event| event.event.as_deref() == Some("response.failed"))
             .expect("translated response.failed event");
         let failed: Value = serde_json::from_str(&failed.data).expect("response.failed JSON");
+        let mut expected = json!({
+            "type": "response.failed",
+            "status": client_status,
+            "headers": {"x-request-id": "req_test"},
+            "response": {
+                "id": "resp_test",
+                "model": "public-model",
+                "status": "failed",
+                "error": {
+                    "type": error_type,
+                    "code": client_code,
+                    "message": "Our servers are currently overloaded. Please try again later.",
+                    "param": null,
+                    "future_error_field": {"keep": true}
+                },
+                "future_response_field": {"keep": true}
+            },
+            "sequence_number": 2,
+            "future_event_field": {"keep": true}
+        });
+        if keeps_retry_after {
+            expected["headers"]["Retry-After"] = json!("24");
+            expected["headers"]["retry-after-ms"] = json!("24000");
+            expected["response"]["error"]["headers"] = json!({"retry-after": "24"});
+        }
 
         assert_eq!(
             (
@@ -2262,32 +2289,8 @@ async fn streaming_upstream_error_event_should_be_translated_to_response_failed_
                 body.contains("event: error\n"),
                 body.ends_with("data: [DONE]\n\n"),
             ),
-            (
-                json!({
-                    "type": "response.failed",
-                    "status": client_status,
-                    "headers": {"Retry-After": "24"},
-                    "response": {
-                        "id": "resp_test",
-                        "model": "public-model",
-                        "status": "failed",
-                        "error": {
-                            "type": error_type,
-                            "code": client_code,
-                            "message": "Our servers are currently overloaded. Please try again later.",
-                            "param": null,
-                            "future_error_field": {"keep": true},
-                            "headers": {"retry-after": "24"}
-                        },
-                        "future_response_field": {"keep": true}
-                    },
-                    "sequence_number": 2,
-                    "future_event_field": {"keep": true}
-                }),
-                1,
-                false,
-                true,
-            )
+            (expected, 1, false, true),
+            "{code}"
         );
     }
 }
