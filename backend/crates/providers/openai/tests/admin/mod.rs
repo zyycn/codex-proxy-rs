@@ -352,6 +352,33 @@ async fn quota_forecast_observation_reuses_protocol_parser_and_keeps_window_iden
         .unwrap()
         .clone(),
     ));
+    let history = provider.quota_history_parser().unwrap();
+    let short = history(&document, "codex:18000s").unwrap();
+    assert_eq!(short.used_percent, 4.0);
+    assert_eq!(short.reset_at.unwrap().timestamp(), 1_789_218_647);
+    assert!(history(&document, "other:18000s").is_none());
+    let named = ProviderDocument::new(OpaqueProviderData::new(
+        json!({
+            "rateLimitHeaders": [
+                ["x-codex-primary-used-percent","23"],["x-codex-primary-window-minutes","1"],
+                ["x-feature-primary-used-percent","23"],["x-feature-primary-window-minutes","1"],
+                ["x-feature-secondary-used-percent","56"],["x-feature-secondary-window-minutes","1"]
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ));
+    assert!(history(&named, "codex:60s").is_none());
+    assert!(history(&named, "feature:60s").is_none());
+    let primary = history(&named, "feature:60s:primary_window").unwrap();
+    assert_eq!((primary.used_percent, primary.reset_at), (23.0, None));
+    assert_eq!(
+        history(&named, "feature:60s:secondary_window")
+            .unwrap()
+            .used_percent,
+        56.0
+    );
     let observed = provider
         .quota_forecast_observation(&document, &window)
         .unwrap();

@@ -1300,6 +1300,17 @@ impl AccountStore for UnusedStore {
         Err(unavailable("account quota window usage"))
     }
 
+    async fn quota_documents(
+        &self,
+        _: &gateway_core::account::ProviderAccountId,
+        _: &gateway_core::routing::ProviderKind,
+        _: chrono::DateTime<chrono::Utc>,
+        _: gateway_admin::model::observability::TimeRange,
+        _: Option<&gateway_admin::model::quota_history::QuotaHistoryCursor>,
+    ) -> AdminStoreResult<gateway_admin::model::quota_history::QuotaDocumentPage> {
+        unreachable!("测试不读取历史额度文档")
+    }
+
     async fn load_quota_forecast_history(
         &self,
         _: &AccountUsageWindowQuery,

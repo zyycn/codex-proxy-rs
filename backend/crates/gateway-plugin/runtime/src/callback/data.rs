@@ -98,6 +98,7 @@ impl PluginData {
                     next_cursor: page.next_cursor.map(|id| id.as_str().to_owned()),
                 })
             }
+            data::QUOTA_HISTORY => return self.quota_history(payload).await,
             data::QUOTA_GET | data::QUOTA_REFRESH | data::QUOTA_DETAILS => {
                 let accounts = self.accounts.upgrade().map_err(map_admin_error)?;
                 let query: data::QuotaFactsQuery =
@@ -160,6 +161,69 @@ impl PluginData {
         Ok(RpcReply {
             result: serde_json::json!({}),
             payload,
+        })
+    }
+
+    async fn quota_history(&self, payload: &[u8]) -> Result<RpcReply, PluginFault> {
+        use gateway_admin::model::{
+            observability::TimeRange,
+            quota_history::{QuotaHistoryPoint, QuotaHistoryQuery},
+        };
+
+        let wire: data::QuotaHistoryQuery =
+            serde_json::from_slice(payload).map_err(|_| invalid())?;
+        let id = ProviderAccountId::new(wire.account_id).map_err(|_| invalid())?;
+        let time = |ms| chrono::DateTime::from_timestamp_millis(ms).ok_or_else(invalid);
+        let range =
+            TimeRange::new(time(wire.start_ms)?, time(wire.end_ms)?).map_err(|_| invalid())?;
+        if wire.start_ms < 0
+            || wire.window_key.is_empty()
+            || wire.window_key.len() > 256
+            || wire.window_key.chars().any(char::is_control)
+        {
+            return Err(invalid());
+        }
+        let query = QuotaHistoryQuery {
+            window_key: wire.window_key,
+            range,
+            cursor: wire
+                .cursor
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|_| invalid())?,
+        };
+        if query.cursor.as_ref().is_some_and(|c| {
+            c.completed_at >= range.end
+                || c.completed_at < query.scan_start()
+                || c.id.is_empty()
+                || c.id.contains('\0')
+        }) {
+            return Err(invalid());
+        }
+        let page = self
+            .accounts
+            .upgrade()
+            .map_err(map_admin_error)?
+            .quota_history(&id, query)
+            .await
+            .map_err(map_admin_error)?;
+        let sample = |p: QuotaHistoryPoint| data::QuotaHistorySample {
+            observed_at_ms: p.observed_at.timestamp_millis(),
+            used_percent: p.reading.used_percent,
+            reset_at_ms: p.reading.reset_at.map(|at| at.timestamp_millis()),
+            plan_type: p.reading.plan_type,
+        };
+        super::admin::encode(&data::QuotaHistoryPage {
+            schema_version: 1,
+            samples: page.samples.into_iter().map(sample).collect(),
+            baseline: page.baseline.map(sample),
+            next_cursor: page
+                .next_cursor
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| invalid())?,
         })
     }
 }

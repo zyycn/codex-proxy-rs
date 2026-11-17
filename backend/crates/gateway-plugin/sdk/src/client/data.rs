@@ -75,6 +75,17 @@ impl HostClient {
         payload_call(self, data::QUOTA_GET, query).await
     }
 
+    /// 按账号、额度桶和时间范围读取已保留的观测，不刷新上游
+    ///
+    /// # Errors
+    /// 账号不存在、查询无效或宿主读取失败时返回错误
+    pub async fn quota_history(
+        &self,
+        query: data::QuotaHistoryQuery,
+    ) -> Result<data::QuotaHistoryPage, PluginFault> {
+        payload_call(self, data::QUOTA_HISTORY, query).await
+    }
+
     /// 读取已有额度窗口标签、触顶与点数事实，不触发刷新或补算
     ///
     /// # Errors

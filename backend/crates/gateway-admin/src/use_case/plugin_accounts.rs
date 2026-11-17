@@ -126,6 +126,46 @@ impl PluginAccountAccess for DefaultPluginAccountAccess {
         self.quota(account_id, false).await
     }
 
+    async fn quota_history(
+        &self,
+        account_id: &ProviderAccountId,
+        query: crate::model::quota_history::QuotaHistoryQuery,
+    ) -> Result<crate::model::quota_history::QuotaHistoryPage, AdminError> {
+        use crate::model::{observability::TimeRange, quota_history::QuotaHistoryPage};
+
+        let account = self
+            .accounts
+            .load_account_record(account_id)
+            .await
+            .map_err(|error| map_store_error(error, "plugin quota history"))?
+            .ok_or_else(|| AdminError::not_found("账号不存在"))?;
+        let Some(parse) = self
+            .provider(&account.provider_kind)?
+            .quota_history_parser()
+        else {
+            return Ok(QuotaHistoryPage::default());
+        };
+        let start = query.scan_start().max(account.created_at);
+        if start >= query.range.end {
+            return Ok(QuotaHistoryPage::default());
+        }
+        let page = self
+            .accounts
+            .quota_documents(
+                account_id,
+                &account.provider_kind,
+                account.created_at,
+                TimeRange {
+                    start,
+                    end: query.range.end,
+                },
+                query.cursor.as_ref(),
+            )
+            .await
+            .map_err(|error| map_store_error(error, "plugin quota history"))?;
+        Ok(QuotaHistoryPage::from_documents(page, &query, parse))
+    }
+
     async fn refresh_quota(
         &self,
         account_id: &ProviderAccountId,

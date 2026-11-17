@@ -416,16 +416,7 @@ pub(crate) fn parse_account_quota_snapshot(
 ) -> Result<CodexAccountQuotaSnapshot, CodexCredentialQuotaError> {
     let object = canonical_quota_object(usage)?;
     let fact = parse_codex_quota_object(&object)?;
-    let mut windows = Vec::new();
-    for limit in canonical_rate_limits(&object)? {
-        parse_rate_limit_windows(
-            &limit.source,
-            limit.account_wide,
-            limit.limit_name.as_deref(),
-            limit.rate_limit,
-            &mut windows,
-        )?;
-    }
+    let mut windows = quota_windows(&object)?;
     windows.sort_by(|left, right| {
         quota_source_order(left.source())
             .cmp(&quota_source_order(right.source()))
@@ -608,6 +599,22 @@ fn canonical_rate_limits(
 
 fn is_codex_limit_id(value: &str) -> bool {
     value.trim().eq_ignore_ascii_case("codex")
+}
+
+pub(super) fn quota_windows(
+    object: &Map<String, Value>,
+) -> Result<Vec<CodexQuotaWindow>, CodexCredentialQuotaError> {
+    let mut windows = Vec::new();
+    for limit in canonical_rate_limits(object)? {
+        parse_rate_limit_windows(
+            &limit.source,
+            limit.account_wide,
+            limit.limit_name.as_deref(),
+            limit.rate_limit,
+            &mut windows,
+        )?;
+    }
+    Ok(windows)
 }
 
 fn parse_rate_limit_windows(

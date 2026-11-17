@@ -349,6 +349,11 @@ pub trait ProviderAdmin: Send + Sync {
         Ok(None)
     }
 
+    /// 历史文档由 Provider 按稳定窗口键解释，不支持的 Provider 不扫描请求记录
+    fn quota_history_parser(&self) -> Option<crate::model::quota_history::QuotaHistoryParser> {
+        None
+    }
+
     /// 历史观测的协议字段仅由具体 Provider 解释；不支持时保留累计估算
     fn quota_forecast_observation(
         &self,

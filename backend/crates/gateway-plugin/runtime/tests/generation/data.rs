@@ -75,6 +75,30 @@ fn account() -> AccountRecord {
 
 #[async_trait]
 impl PluginAccountAccess for Facts {
+    async fn quota_history(
+        &self,
+        id: &ProviderAccountId,
+        query: gateway_admin::model::quota_history::QuotaHistoryQuery,
+    ) -> Result<gateway_admin::model::quota_history::QuotaHistoryPage, AdminError> {
+        use gateway_admin::model::quota_history::{
+            QuotaHistoryPage, QuotaHistoryPoint, QuotaReading,
+        };
+        assert_eq!(id.as_str(), "acct_facts");
+        assert_eq!(query.window_key, "weekly");
+        assert!(query.cursor.is_none());
+        Ok(QuotaHistoryPage {
+            samples: vec![QuotaHistoryPoint {
+                observed_at: query.range.start,
+                reading: QuotaReading {
+                    plan_type: None,
+                    used_percent: 12.5,
+                    reset_at: None,
+                },
+            }],
+            ..Default::default()
+        })
+    }
+
     async fn refresh_quota(
         &self,
         account: &ProviderAccountId,
@@ -201,6 +225,9 @@ async fn management_facts_validate_queries_without_permission_declarations() {
                     {"method":"host.data.accounts.list","query":{"provider_id":"openai","cursor":"acct_before","limit":1}},
                     {"method":"host.data.quota.get","query":{"account_id":"acct_facts"}},
                     {"method":"host.data.quota.details","query":{"account_id":"acct_facts"}},
+                    {"method":"host.data.quota.history","query":{"account_id":"acct_facts","window_key":"weekly","start_ms":1000,"end_ms":2000}},
+                    {"method":"host.data.quota.history","query":{"account_id":"acct_facts","window_key":"weekly","start_ms":2000,"end_ms":1000}},
+                    {"method":"host.data.quota.history","query":{"account_id":"acct_facts","window_key":"weekly","start_ms":1000,"end_ms":2000,"cursor":"invalid"}},
                     {"method":"host.data.accounts.list","query":{"limit":0}},
                     {"method":"host.data.accounts.list","query":{"limit":65535}},
                     {"method":"host.data.quota.get","query":{"account_id":"acct_facts","sql":"SELECT secret"}}
@@ -269,7 +296,12 @@ async fn management_facts_validate_queries_without_permission_declarations() {
             Some("123456789.123456789")
         );
         assert!(!result[2].to_string().contains("provider-internal-fixture"));
-        for invalid in &result.as_array().unwrap()[3..] {
+        let history: gateway_plugin_sdk::call::data::QuotaHistoryPage =
+            serde_json::from_value(result[3].clone()).unwrap();
+        assert_eq!(history.samples[0].used_percent, 12.5);
+        assert_eq!(history.samples[0].observed_at_ms, 1000);
+        assert_eq!(history.samples[0].reset_at_ms, None);
+        for invalid in &result.as_array().unwrap()[4..] {
             assert_eq!(invalid["error"], "invalid_input");
         }
 

@@ -15,6 +15,17 @@ struct BudgetAccountAccess {
 
 #[async_trait::async_trait]
 impl gateway_admin::ports::plugin_accounts::PluginAccountAccess for BudgetAccountAccess {
+    async fn quota_history(
+        &self,
+        _: &gateway_core::account::ProviderAccountId,
+        _: gateway_admin::model::quota_history::QuotaHistoryQuery,
+    ) -> Result<
+        gateway_admin::model::quota_history::QuotaHistoryPage,
+        gateway_admin::model::AdminError,
+    > {
+        unreachable!("账号提交不读取额度历史")
+    }
+
     async fn list(
         &self,
         _: gateway_admin::model::provider_credentials::PluginAccountListQuery,

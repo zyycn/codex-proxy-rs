@@ -23,7 +23,7 @@ SDK 包版本为 `0.1.0`，独立于网关版本，处于实验阶段。能力�
 | `call::upstream_adapter` | 内置 OpenAI / xAI 的[受管上游适配器](docs/upstream-adapters.md)注册、执行、出站与续接合同 |
 | `call::policy` | 模型路由、账号调度与重试决策合同 |
 | `call::catalog` | 固定 Provider 的直接别名与适配模型注册合同，见[模型目录](docs/capabilities.md#模型目录) |
-| `call::data` | 最小账号事实与已有额度观测的只读合同 |
+| `call::data` | 账号事实、当前额度与历史额度观测 |
 | `call::observation` | 请求完成、用量、费用与实际上游 WebSocket 响应事件的统一观察合同 |
 | `call::host` | 账号、私有状态、受管 HTTP、模型、亲和、日志及调用内流的宿主回调合同 |
 | `call::management` | 管理 API、页面与资源声明、公开回调，以及 CLI 命令与待保存账号 |

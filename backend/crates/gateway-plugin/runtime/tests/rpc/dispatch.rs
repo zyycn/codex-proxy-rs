@@ -107,6 +107,7 @@ async fn callbacks_are_dispatched_in_every_stage_without_permission_declarations
         "host.data.accounts.list",
         "host.data.keys.get",
         "host.data.quota.get",
+        "host.data.quota.history",
         "host.groups.ensure",
         "host.groups.change_members",
         "host.keys.ensure",

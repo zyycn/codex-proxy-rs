@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub const ACCOUNTS_LIST: &str = "host.data.accounts.list";
 pub const QUOTA_REFRESH: &str = "host.quota_observations.refresh";
+pub const QUOTA_HISTORY: &str = "host.data.quota.history";
 pub const QUOTA_GET: &str = "host.data.quota.get";
 pub const KEYS_GET: &str = "host.data.keys.get";
 pub const CLIENT_VERIFY: &str = "host.client.verify";
@@ -91,6 +92,35 @@ pub struct AccountFactsPage {
 #[serde(deny_unknown_fields)]
 pub struct QuotaFactsQuery {
     pub account_id: String,
+}
+
+/// UTC 毫秒半开区间；续页沿用原查询并原样传回游标
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaHistoryQuery {
+    pub account_id: String,
+    pub window_key: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaHistorySample {
+    pub plan_type: Option<String>,
+    pub observed_at_ms: i64,
+    pub used_percent: f64,
+    pub reset_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaHistoryPage {
+    pub schema_version: u32,
+    /// 请求完成时间倒序；空页也可能需要继续
+    pub samples: Vec<QuotaHistorySample>,
+    /// 最后一页才可能包含起点前的最近同桶观测
+    pub baseline: Option<QuotaHistorySample>,
+    pub next_cursor: Option<String>,
 }
 
 /// Provider 已有快照的必要投影；空观测时间表示没有可用样本，不代表额度为零

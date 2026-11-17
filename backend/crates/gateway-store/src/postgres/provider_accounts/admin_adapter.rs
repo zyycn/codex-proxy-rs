@@ -235,10 +235,11 @@ impl AccountStore for PgAdminAccountStore {
         account_id: &CoreProviderAccountId,
     ) -> AdminStoreResult<Option<AccountRecord>> {
         self.accounts
-            .load_provider_account(account_id.as_str())
+            .list_provider_account_summaries(None, true, Some(&[account_id.as_str()]), None)
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?
-            .map(|record| admin_account_record(record.summary))
+            .pop()
+            .map(admin_account_record)
             .transpose()
     }
 
@@ -453,6 +454,26 @@ impl AccountStore for PgAdminAccountStore {
         windows: &[AccountUsageWindowQuery],
     ) -> AdminStoreResult<Vec<AccountUsageWindowResult>> {
         self.usage_by_windows(windows).await
+    }
+
+    async fn quota_documents(
+        &self,
+        account: &gateway_core::account::ProviderAccountId,
+        provider: &gateway_core::routing::ProviderKind,
+        created_at: chrono::DateTime<chrono::Utc>,
+        range: gateway_admin::model::observability::TimeRange,
+        before: Option<&gateway_admin::model::quota_history::QuotaHistoryCursor>,
+    ) -> AdminStoreResult<gateway_admin::model::quota_history::QuotaDocumentPage> {
+        super::quota_history::documents(
+            &self.pool,
+            &self.query_budget,
+            account,
+            provider,
+            created_at,
+            range,
+            before,
+        )
+        .await
     }
 
     async fn load_quota_forecast_history(

@@ -34,6 +34,12 @@ pub trait PluginAccountAccess: Send + Sync {
         Err(AdminError::unavailable("插件额度事实查询暂不可用"))
     }
 
+    async fn quota_history(
+        &self,
+        account: &ProviderAccountId,
+        query: crate::model::quota_history::QuotaHistoryQuery,
+    ) -> Result<crate::model::quota_history::QuotaHistoryPage, AdminError>;
+
     /// 通过 Provider 原生管理路径刷新额度；不向插件暴露凭据或执行额度重置
     async fn refresh_quota(
         &self,

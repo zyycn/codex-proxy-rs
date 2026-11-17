@@ -18,6 +18,7 @@ mod warmup;
 
 const BUCKET_USAGE_FIELD: &str = "_cpr_bucket_last_used_at";
 
+pub(crate) use passive::observed_quota_window;
 pub use reset_credits::CodexResetCreditsError;
 use reset_credits::ResetCreditLocks;
 use scheduling::CodexQuotaSchedulingProjection;

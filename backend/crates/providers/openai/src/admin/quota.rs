@@ -1,4 +1,4 @@
-//! 管理端批量读取原生额度，不在列表查询中访问上游
+//! 管理端额度快照与历史请求观测的只读投影
 
 use super::*;
 
@@ -73,4 +73,30 @@ impl OpenAiAdminProvider {
             })
             .collect()
     }
+}
+
+pub(super) fn history_window(
+    document: &ProviderDocument,
+    key: &str,
+) -> Option<(crate::credential::CodexQuotaWindow, Option<String>)> {
+    let headers = document
+        .expose_to_provider()
+        .expose_to_provider()
+        .get("rateLimitHeaders")?;
+    let headers: Vec<(String, String)> = serde::Deserialize::deserialize(headers).ok()?;
+    let parsed = gateway_protocol::openai::events::parse_rate_limit_headers(&headers)?;
+    let window = crate::credential::observed_quota_window(&parsed, key)?;
+    Some((window, parsed.plan_type))
+}
+
+pub(super) fn history_reading(
+    document: &ProviderDocument,
+    key: &str,
+) -> Option<gateway_admin::model::quota_history::QuotaReading> {
+    let (window, plan_type) = history_window(document, key)?;
+    Some(gateway_admin::model::quota_history::QuotaReading {
+        plan_type,
+        used_percent: window.used_percent()?,
+        reset_at: window.reset_at(),
+    })
 }

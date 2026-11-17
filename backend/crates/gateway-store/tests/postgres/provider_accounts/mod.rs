@@ -13,6 +13,7 @@ mod deletion;
 mod protection_revision;
 mod quota;
 mod quota_forecast;
+mod quota_history;
 mod timestamps;
 mod usage_projection;
 
