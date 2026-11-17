@@ -19,7 +19,10 @@ use gateway_core::account::{
 use gateway_core::concurrency::{
     CapacityWait, ConcurrencyQueuePolicy, ConcurrencyWaitQueue, QueueRejection, WaitPriority,
 };
-use gateway_core::engine::{AttemptContext, ContinuationAttempt, policy::AccountPolicyError};
+use gateway_core::engine::{
+    AttemptContext, ContinuationAttempt,
+    policy::{AccountPolicyError, AccountScheduleOwnership},
+};
 use gateway_core::provider_ports::{
     ProviderAccountAdmission, ProviderConcurrencyPool, ProviderCooldownPort, ProviderCooldownScope,
     ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest,
@@ -1185,6 +1188,14 @@ impl CodexCredentialSelector {
                         model.model(),
                         &candidates,
                         &mut context,
+                        AccountScheduleOwnership {
+                            bound_account: binding
+                                .as_ref()
+                                .filter(|_| !cache_preference)
+                                .map(ProviderSessionBinding::account_id),
+                            follow_only,
+                            pinned_account: pinned_account.as_ref(),
+                        },
                     )
                     .await
                 {

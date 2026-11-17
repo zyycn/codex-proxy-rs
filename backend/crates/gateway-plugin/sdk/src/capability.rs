@@ -33,7 +33,7 @@ impl Capability {
             | Self::RetryPolicy
             | Self::Observer
             | Self::Management => &[2],
-            Self::Scheduler => &[3],
+            Self::Scheduler => &[4],
             Self::UpstreamAdapter => &[5],
             Self::CommandLine | Self::Maintenance => &[1],
         }

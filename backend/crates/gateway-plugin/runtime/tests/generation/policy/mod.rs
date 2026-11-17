@@ -682,6 +682,7 @@ async fn scheduler_cannot_pick_outside_the_host_projected_priority_tier() {
             Some("upstream-a"),
             &candidates,
             &mut selection,
+            Default::default(),
         )
         .await
         .unwrap()

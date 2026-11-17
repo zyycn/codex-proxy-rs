@@ -1,6 +1,7 @@
 //! 验证会话主账号偏好、严格绑定、最终请求身份与轮次关联
 
 use super::*;
+use gateway_core::engine::policy::AccountScheduleRole;
 
 #[tokio::test]
 async fn session_affinity_storage_tolerates_delays_but_rejects_expired_requests_before_sending() {
@@ -859,6 +860,7 @@ async fn child_queue_timeout_does_not_rebind_or_allow_provider_fallback() {
 
 #[derive(Debug)]
 struct SessionScheduler {
+    expected_owner: (bool, AccountScheduleRole),
     decision: gateway_core::engine::policy::AccountScheduleDecision,
 }
 impl gateway_core::engine::policy::RequestPolicyPlan for SessionScheduler {
@@ -884,12 +886,17 @@ impl gateway_core::engine::policy::RequestPolicyPlan for SessionScheduler {
             gateway_core::engine::policy::RequestPolicyFault,
         >,
     > {
-        assert!(
-            input
+        for (id, (bound, role)) in [
+            ("acct_subagent_a", self.expected_owner),
+            ("acct_subagent_b", (false, AccountScheduleRole::Ordinary)),
+        ] {
+            let candidate = input
                 .candidates()
                 .iter()
-                .any(|candidate| candidate.account_id().as_str() == "acct_subagent_b")
-        );
+                .find(|candidate| candidate.account_id().as_str() == id)
+                .unwrap();
+            assert_eq!((candidate.session_bound(), candidate.role()), (bound, role));
+        }
         let decision = self.decision.clone();
         Box::pin(async move { Ok(decision) })
     }
@@ -902,15 +909,20 @@ impl gateway_core::routing::extensions::ExtensionSetLease for SessionExtensionLe
 }
 
 #[tokio::test]
-async fn child_binding_respects_filtered_delegation_and_explicit_plugin_choices() {
+async fn scheduler_distinguishes_session_bindings_from_cache_preferences_and_keeps_native_selection()
+ {
+    use AccountScheduleRole::{FollowOnly, Ordinary, Preferred};
     use gateway_core::account::AccountAffinity;
     use gateway_core::engine::policy::RequestPolicyContext;
     use gateway_core::routing::extensions::{ExtensionSetId, ExtensionSetReference};
-    for (choice, mode) in [
-        ("delegate", AccountAffinity::Strict),
-        ("pick", AccountAffinity::Strict),
-        ("filter", AccountAffinity::Strict),
-        ("filter", AccountAffinity::Preferred),
+    for (choice, mode, expected_owner) in [
+        ("delegate", AccountAffinity::Strict, (true, FollowOnly)),
+        ("pick", AccountAffinity::Strict, (true, FollowOnly)),
+        ("filter", AccountAffinity::Strict, (true, FollowOnly)),
+        ("filter", AccountAffinity::Preferred, (true, Preferred)),
+        ("filter", AccountAffinity::Relaxed, (true, Ordinary)),
+        ("cache", AccountAffinity::Preferred, (false, Preferred)),
+        ("new", AccountAffinity::Preferred, (false, Ordinary)),
     ] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_subagent_a").await;
@@ -923,11 +935,27 @@ async fn child_binding_respects_filtered_delegation_and_explicit_plugin_choices(
             server.uri(),
             leases.clone(),
         );
+        let cache_request = || {
+            let payload = ProtocolPayload::json_object(
+                "openai",
+                json!({"prompt_cache_key": "shared", "input": "hello"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap();
+            Operation::Generate(GenerateRequest::from_protocol_payload(payload))
+        };
+        let seed = if choice == "cache" {
+            cache_request()
+        } else {
+            turn_request("root", "root-turn")
+        };
         drop(
             provider
                 .clone()
                 .execute(
-                    planned_request("openai", turn_request("root", "root-turn")),
+                    planned_request("openai", seed),
                     context("req_plugin_root", CancellationToken::new()),
                 )
                 .await
@@ -943,11 +971,12 @@ async fn child_binding_respects_filtered_delegation_and_explicit_plugin_choices(
         let key = ClientApiKeyId::new("key_openai_contract").unwrap();
         let policy = RequestPolicyContext::new(
             Arc::new(SessionScheduler {
+                expected_owner,
                 decision: match choice {
                     "pick" => gateway_core::engine::policy::AccountScheduleDecision::Pick(
                         ProviderAccountId::new("acct_subagent_b").unwrap(),
                     ),
-                    "filter" => {
+                    "filter" | "cache" | "new" => {
                         gateway_core::engine::policy::AccountScheduleDecision::DelegateFiltered(
                             BTreeSet::from([ProviderAccountId::new("acct_subagent_a").unwrap()]),
                         )
@@ -976,7 +1005,15 @@ async fn child_binding_respects_filtered_delegation_and_explicit_plugin_choices(
         let mut pending = Box::pin(provider.clone().execute(
             planned_request(
                 "openai",
-                Operation::Generate(generate_with_session_context("root", Some("child"), None)),
+                match choice {
+                    "cache" => cache_request(),
+                    "new" => turn_request("separate-session", "separate-turn"),
+                    _ => Operation::Generate(generate_with_session_context(
+                        "root",
+                        Some("child"),
+                        None,
+                    )),
+                },
             ),
             attempt,
         ));
@@ -991,7 +1028,7 @@ async fn child_binding_respects_filtered_delegation_and_explicit_plugin_choices(
                 error.send_state(),
                 gateway_core::upstream::UpstreamSendState::NotSent
             );
-        } else if choice == "pick" || choice == "filter" {
+        } else if choice != "delegate" {
             let stream = timeout(Duration::from_secs(2), pending)
                 .await
                 .unwrap()

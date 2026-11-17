@@ -982,11 +982,19 @@ impl AttemptContext {
         model: Option<&str>,
         candidates: &'a [AccountCandidate],
         context: &mut AccountSelectionContext,
+        ownership: policy::AccountScheduleOwnership<'_>,
     ) -> Result<Option<AccountSelection<'a>>, policy::AccountPolicyError> {
         match self.request.request_policy() {
             Some(policy) => {
                 policy
-                    .select_account(self.attempt_index, provider, model, candidates, context)
+                    .select_account(
+                        self.attempt_index,
+                        provider,
+                        model,
+                        candidates,
+                        context,
+                        ownership,
+                    )
                     .await
             }
             None => Ok(crate::account::AccountSelector.select(candidates, context)),

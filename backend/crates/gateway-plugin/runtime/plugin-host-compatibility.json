@@ -4,7 +4,7 @@
   "protocol_versions": [7],
   "capabilities": [
     { "capability": "frontend_authentication", "versions": [2] },
-    { "capability": "scheduler", "versions": [3] },
+    { "capability": "scheduler", "versions": [4] },
     { "capability": "model_router", "versions": [2] },
     { "capability": "model_catalog", "versions": [2] },
     { "capability": "retry_policy", "versions": [2] },

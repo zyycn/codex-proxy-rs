@@ -136,7 +136,7 @@ fn capability_contract_versions_are_checked_independently_of_rpc_version() {
         (Capability::Middleware, Stage::Request, 6, true),
         (Capability::Management, Stage::Management, 2, false),
         (Capability::UpstreamAdapter, Stage::Upstream, 5, true),
-        (Capability::Scheduler, Stage::Scheduling, 3, false),
+        (Capability::Scheduler, Stage::Scheduling, 4, false),
         (Capability::ModelCatalog, Stage::Registration, 2, false),
     ] {
         for mut manifest in [source_manifest(), packaged_manifest()] {
@@ -286,7 +286,7 @@ fn contribution_ids_are_owned_unique_and_stage_bounded() {
         Capability::Scheduler,
         ContributionDeclaration {
             id: "9acme.request-tags.scheduler".into(),
-            version: 3,
+            version: 4,
             stages: vec![Stage::Scheduling],
             input_formats: Vec::new(),
             output_formats: Vec::new(),

@@ -2352,6 +2352,7 @@ impl Provider for PolicySelectingProvider {
                     .map(UpstreamModelId::as_str),
                 &candidates,
                 &mut selection,
+                Default::default(),
             )
             .await
         {

@@ -306,6 +306,7 @@ async fn data_plane_http_callbacks_keep_the_frozen_body_budget_across_publicatio
                     None,
                     &[candidate("acct_high", 100)],
                     &mut selection_context(),
+                    Default::default(),
                 )
                 .await
                 .unwrap();

@@ -334,7 +334,16 @@ async fn filtered_scheduling_covers_lease_retry_waiting_and_pinned_terminal_reje
             assert!(leases.acquired.lock().unwrap().is_empty());
             assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
             if mode == "pin" {
-                assert_eq!(seen.lock().unwrap()[0].candidates().len(), 1);
+                let seen = seen.lock().unwrap();
+                let [owner] = seen[0].candidates() else {
+                    panic!("native continuation must have one visible owner");
+                };
+                assert_eq!(owner.account_id(), &account_id("filter-a"));
+                assert_eq!(
+                    owner.role(),
+                    gateway_core::engine::policy::AccountScheduleRole::Pinned
+                );
+                assert!(!owner.session_bound());
             }
         } else {
             let stream = result.expect("allowed account");

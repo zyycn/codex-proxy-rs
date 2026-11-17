@@ -54,7 +54,7 @@ RPC v7 的帧布局、编码与会话生命周期见[通信边界](../README.md#
 | 能力 | 当前版本 |
 | --- | --- |
 | `middleware` | `6` |
-| `scheduler` | `3` |
+| `scheduler` | `4` |
 | `upstream_adapter` | `5` |
 | `frontend_authentication`、`model_router`、`retry_policy`、`observer`、`management` | `2` |
 | `model_catalog` | `2` |

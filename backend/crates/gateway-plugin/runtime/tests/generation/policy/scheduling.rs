@@ -1,7 +1,7 @@
 //! 验证真实插件进程的候选过滤、繁忙投影与非法决定边界
 
 use super::*;
-use gateway_core::engine::policy::AccountPolicyError;
+use gateway_core::engine::policy::{AccountPolicyError, AccountScheduleOwnership};
 
 #[tokio::test]
 async fn scheduler_filter_contract_covers_busy_candidates_and_rejects_out_of_scope_ids() {
@@ -44,6 +44,10 @@ async fn scheduler_filter_contract_covers_busy_candidates_and_rejects_out_of_sco
                 None,
                 &candidates,
                 &mut selection,
+                AccountScheduleOwnership {
+                    bound_account: Some(candidates[0].account.id()),
+                    ..Default::default()
+                },
             )
             .await;
         match expected {
@@ -60,8 +64,13 @@ async fn scheduler_filter_contract_covers_busy_candidates_and_rejects_out_of_sco
             request["request"]["candidates"].as_array().unwrap().len(),
             2
         );
-        assert_eq!(request["request"]["candidates"][0]["available"], false);
-        assert_eq!(request["request"]["candidates"][1]["available"], true);
+        let candidates = &request["request"]["candidates"];
+        assert_eq!(candidates[0]["available"], false);
+        assert_eq!(candidates[0]["session_bound"], true);
+        assert_eq!(candidates[0]["role"], "preferred");
+        assert_eq!(candidates[1]["available"], true);
+        assert_eq!(candidates[1]["session_bound"], false);
+        assert_eq!(candidates[1]["role"], "ordinary");
         drop(policy);
         drop(generation);
         super::super::wait_until_empty(cache.path()).await;

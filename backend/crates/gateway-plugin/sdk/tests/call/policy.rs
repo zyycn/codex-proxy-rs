@@ -1,8 +1,8 @@
 //! 验证插件路由和账号调度决策的类型合同与附加字段透传边界
 
 use gateway_plugin_sdk::call::policy::{
-    AccountScheduleCandidate, AccountScheduleDecision, AccountScheduleRequest, ModelRouteDecision,
-    ModelRouteRequest, PolicyHeader,
+    AccountScheduleCandidate, AccountScheduleDecision, AccountScheduleRequest, AccountScheduleRole,
+    ModelRouteDecision, ModelRouteRequest, PolicyHeader,
 };
 use serde_json::json;
 
@@ -49,6 +49,8 @@ fn route_and_scheduler_decisions_ignore_unused_fields() {
         model: Some("gpt-5".into()),
         candidates: vec![AccountScheduleCandidate {
             account_id: "acct_candidate".into(),
+            session_bound: true,
+            role: AccountScheduleRole::Preferred,
             available: true,
             weight: 10,
             in_flight: 1,

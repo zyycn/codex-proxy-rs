@@ -72,11 +72,23 @@ pub enum ModelRouteDecision {
     Reject,
 }
 
+/// 宿主在本轮调度中赋予候选的角色，与实时容量和已有会话绑定分开
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountScheduleRole {
+    Ordinary,
+    Preferred,
+    FollowOnly,
+    Pinned,
+}
+
 /// 候选账号的即时调度指标；凭据和账号资料通过宿主账号接口读取
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountScheduleCandidate {
     pub account_id: String,
+    pub session_bound: bool,
+    pub role: AccountScheduleRole,
     /// false 表示仅可等待，仍可被过滤，但不能作为本轮 Pick 的结果
     pub available: bool,
     pub weight: u16,

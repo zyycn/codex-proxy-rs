@@ -7,8 +7,8 @@ use futures::future::BoxFuture;
 use gateway_core::{
     account::ProviderAccountId,
     engine::policy::{
-        AccountScheduleDecision, AccountScheduleInput, ModelRouteDecision, ModelRouteInput,
-        RequestPolicyFault, RequestPolicyPlan,
+        AccountScheduleDecision, AccountScheduleInput, AccountScheduleRole, ModelRouteDecision,
+        ModelRouteInput, RequestPolicyFault, RequestPolicyPlan,
     },
     identity::ProviderKind,
     operation::{Operation, ProviderHttpHeader},
@@ -20,6 +20,7 @@ use gateway_plugin_sdk::{
         AccountScheduleCandidate as WireAccountScheduleCandidate,
         AccountScheduleDecision as WireAccountScheduleDecision,
         AccountScheduleRequest as WireAccountScheduleRequest,
+        AccountScheduleRole as WireAccountScheduleRole,
         ModelRouteDecision as WireModelRouteDecision, ModelRouteRequest, PolicyHeader,
     },
 };
@@ -183,6 +184,13 @@ async fn schedule_with_entry(
             .iter()
             .map(|candidate| WireAccountScheduleCandidate {
                 account_id: candidate.account_id().as_str().to_owned(),
+                session_bound: candidate.session_bound(),
+                role: match candidate.role() {
+                    AccountScheduleRole::Ordinary => WireAccountScheduleRole::Ordinary,
+                    AccountScheduleRole::Preferred => WireAccountScheduleRole::Preferred,
+                    AccountScheduleRole::FollowOnly => WireAccountScheduleRole::FollowOnly,
+                    AccountScheduleRole::Pinned => WireAccountScheduleRole::Pinned,
+                },
                 available: candidate.available(),
                 weight: candidate.weight(),
                 in_flight: candidate.in_flight(),

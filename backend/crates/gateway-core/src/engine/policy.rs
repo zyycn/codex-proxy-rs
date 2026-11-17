@@ -115,10 +115,29 @@ pub enum ModelRouteDecision {
     Reject,
 }
 
+/// Provider 在本轮选号中已解析的归属，仅用于向插件投影候选关系
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AccountScheduleOwnership<'a> {
+    pub bound_account: Option<&'a ProviderAccountId>,
+    pub follow_only: bool,
+    pub pinned_account: Option<&'a ProviderAccountId>,
+}
+
+/// 本轮内置选号如何对待这个候选；显式选号仍受宿主资格和固定归属约束
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountScheduleRole {
+    Ordinary,
+    Preferred,
+    FollowOnly,
+    Pinned,
+}
+
 /// 账号调度插件可见的单个候选事实，不包含凭据或账号资料
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountScheduleCandidate {
     account_id: ProviderAccountId,
+    session_bound: bool,
+    role: AccountScheduleRole,
     available: bool,
     weight: u16,
     in_flight: u32,
@@ -131,6 +150,16 @@ pub struct AccountScheduleCandidate {
 }
 
 impl AccountScheduleCandidate {
+    #[must_use]
+    pub const fn session_bound(&self) -> bool {
+        self.session_bound
+    }
+
+    #[must_use]
+    pub const fn role(&self) -> AccountScheduleRole {
+        self.role
+    }
+
     #[must_use]
     pub const fn available(&self) -> bool {
         self.available
@@ -469,6 +498,7 @@ impl RequestPolicyContext {
         model: Option<&str>,
         candidates: &'a [AccountCandidate],
         context: &mut AccountSelectionContext,
+        ownership: AccountScheduleOwnership<'_>,
     ) -> Result<Option<AccountSelection<'a>>, AccountPolicyError> {
         let eligible = AccountSelector.policy_candidates(candidates, context);
         if eligible.is_empty() {
@@ -476,19 +506,33 @@ impl RequestPolicyContext {
         }
         let projected = eligible
             .iter()
-            .map(|candidate| AccountScheduleCandidate {
-                account_id: candidate.account.id().clone(),
-                available: AccountSelector
-                    .scheduling_blocker(candidate, context)
-                    .is_none(),
-                weight: candidate.account.weight().get(),
-                in_flight: candidate.signals.in_flight,
-                maximum_concurrency: context.concurrency_limit(candidate).get(),
-                last_started_at: candidate.signals.last_started_at,
-                quota_reset_at: candidate.signals.quota_reset_at,
-                quota_remaining_rank: candidate.signals.quota_remaining_rank,
-                failure_rate_basis_points: candidate.signals.failure_rate_basis_points,
-                first_output_latency_ms: candidate.signals.first_output_latency_ms,
+            .map(|candidate| {
+                let id = Some(candidate.account.id());
+                let session_bound = ownership.bound_account == id;
+                AccountScheduleCandidate {
+                    session_bound,
+                    role: if ownership.pinned_account == id {
+                        AccountScheduleRole::Pinned
+                    } else if session_bound && ownership.follow_only {
+                        AccountScheduleRole::FollowOnly
+                    } else if context.preferred_account.as_ref() == id {
+                        AccountScheduleRole::Preferred
+                    } else {
+                        AccountScheduleRole::Ordinary
+                    },
+                    account_id: candidate.account.id().clone(),
+                    available: AccountSelector
+                        .scheduling_blocker(candidate, context)
+                        .is_none(),
+                    weight: candidate.account.weight().get(),
+                    in_flight: candidate.signals.in_flight,
+                    maximum_concurrency: context.concurrency_limit(candidate).get(),
+                    last_started_at: candidate.signals.last_started_at,
+                    quota_reset_at: candidate.signals.quota_reset_at,
+                    quota_remaining_rank: candidate.signals.quota_remaining_rank,
+                    failure_rate_basis_points: candidate.signals.failure_rate_basis_points,
+                    first_output_latency_ms: candidate.signals.first_output_latency_ms,
+                }
             })
             .collect();
         let decision = self
