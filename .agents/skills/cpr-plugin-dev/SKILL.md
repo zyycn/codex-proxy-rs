@@ -1,17 +1,13 @@
 ---
 name: cpr-plugin-dev
-description: 开发、修复、排查、审查或打包 Codex Proxy RS 独立网关插件，含处理器、清单与插件页面；仅改宿主能力时使用 cpr-dev-guide 的插件边界，不适用于 Codex 插件或 Vue 插件
+description: Codex Proxy RS 独立网关插件的开发、排障、审查与打包
 ---
 
 # 网关插件开发
 
 ## 先读职责边界
 
-插件在独立项目中通过公开 SDK 实现业务，插件业务错误在插件侧修复；宿主维护自身合同、资源与稳定性，不猜测插件意图、不补造业务数据，不在宿主、SDK 或 Runtime 中增加插件专属补偿
-
-开发、排查和审查先完整读取[插件职责边界](../cpr-dev-guide/references/plugin-boundaries.md)，再选择实现步骤；已有处理器修复和页面改动也执行，不以是否新增能力为条件。需要新增宿主能力时，先界定可独立使用的基础接口及其职责；必要的协议保护与资源回收仍由宿主负责
-
-同时执行 [cpr-dev-guide](../cpr-dev-guide/SKILL.md)的领域必读与收尾要求；已实际读取且仍适用的内容复用，不递归重读入口。仅构建、打包或分发已有插件时按对应操作读取，若需诊断或修改行为，再补齐开发分支
+开发、排查或审查独立插件时，执行 [cpr-dev-guide](../cpr-dev-guide/SKILL.md) 并先读[插件职责边界](../cpr-dev-guide/references/plugin-boundaries.md)，包括修改已有处理器或页面。仅构建、打包或分发已有插件时，按下表读取对应步骤
 
 ## 范围与合同
 

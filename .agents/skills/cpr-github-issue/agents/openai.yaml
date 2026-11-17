@@ -1,6 +1,6 @@
 interface:
   display_name: "cpr-github-issue"
-  short_description: "整理、提交或补充 Issue，核对复现、重复反馈与发布范围"
-  default_prompt: "使用 $cpr-github-issue 按当前请求整理、提交或补充 Issue，核对目标、复现证据、重复记录和脱敏，不将草拟自动变成发布。"
+  short_description: "草拟、提交或回复 GitHub Issue，处理缺陷反馈和功能建议"
+  default_prompt: "使用 $cpr-github-issue 按当前请求整理反馈或回复已有 Issue"
 policy:
   allow_implicit_invocation: true

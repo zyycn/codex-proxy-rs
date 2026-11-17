@@ -1,6 +1,6 @@
 interface:
   display_name: "cpr-github-pr"
-  short_description: "提交、更新与审查 PR，核对问题、自审、页面截图和 AI 模型披露"
-  default_prompt: "使用 $cpr-github-pr 按当前请求准备、提交、更新或审查 PR，实现自审与审查叠加开发指南的领域规范，核实问题、方案、验证、页面截图和 AI 模型披露。"
+  short_description: "准备、更新或审查 GitHub PR，回复讨论和审查意见"
+  default_prompt: "使用 $cpr-github-pr 按当前请求准备、更新、审查 PR 或回复讨论"
 policy:
   allow_implicit_invocation: true

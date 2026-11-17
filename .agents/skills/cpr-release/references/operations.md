@@ -61,6 +61,6 @@ release/publish "$release_version"
   工作流附加的安装说明和自动提交列表按其当前配置处理，不用它们替代手写的中文变更说明。
 - 回读 `main:release/version.yaml` 的 `published`。正式版参与同一大版本四个普通通道的比较；RC 参与 RC、Beta、Alpha，Beta 参与 Beta、Alpha，Alpha 只参与自身。实验版只推进 `exp["X.Y.Z"]`。有通道推进时应有 `chore(release): update release channels to <version>` 提交；重复执行或较旧版本未推进任何通道时无提交
 - 通道表写入失败时，确认该版本已公开、工作流能写入 `main`，再按已有授权执行 `gh workflow run release.yml --ref main -f tag="v$release_version" -f index_only=true`。恢复任务重新校验公开附件、读取并合并当前清单，不重新打包或改 tag
-- v3.42.0 在线升级：首个包含新更新器的 3.x 正式版公开并通过校验后，从该次通道提交取出 `release/version.yaml`，将顶层 `version` 设为该正式版，作为同名附件上传到该 Release。回读附件，确认 3.x 稳定通道指向该版本且安装包可用，再手动将已有 `update-index` 正文改为 `{"current":"<该正式版>"}`。此后保留该页与附件，无需再编辑
+- 保留 v3.42.0 在线升级使用的 `update-index` 页面和 v3.42.1 的 `version.yaml` 附件
 - 返回版本、tag 对应提交、Release/工作流链接及实际结果。失败、仍在构建或缺失产物时明确说明，不能称为发布成功；
   Release 和镜像已生成也不表示用户的运行实例已经升级。

@@ -4,7 +4,7 @@
 
 | 任务意图与常见说法 | 必用技能 |
 | --- | --- |
-| 开发、修复、排障、代码审查、改文档；包括“改弹窗／样式／文案”“修接口／调度／数据库”等省略请求 | [cpr-dev-guide](.agents/skills/cpr-dev-guide/SKILL.md)，按实际操作和文件匹配规范，跨前后端同时执行 |
+| 需求评估、排障、开发、修复、代码审查、改文档，包括“看下这个 Issue”“改弹窗／样式／文案”“修接口／调度／数据库” | [cpr-dev-guide](.agents/skills/cpr-dev-guide/SKILL.md)，按实际操作和文件匹配规范，跨前后端同时执行 |
 | 提交／提个 PR、准备或更新 PR、看下 PR、回复 PR 讨论、处理 PR 审查意见 | [cpr-github-pr](.agents/skills/cpr-github-pr/SKILL.md)；实现自审、审查或修改同时执行 cpr-dev-guide |
 | 提 Issue、反馈到仓库、把问题或建议整理成 Issue、补充或回复 Issue | [cpr-github-issue](.agents/skills/cpr-github-issue/SKILL.md) |
 | 写、修或审查独立网关插件，排查插件接入、打包插件 | [cpr-plugin-dev](.agents/skills/cpr-plugin-dev/SKILL.md)，同时执行 cpr-dev-guide；仅改宿主能力时由 cpr-dev-guide 加载插件边界 |

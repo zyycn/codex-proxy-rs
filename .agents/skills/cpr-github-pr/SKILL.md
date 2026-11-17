@@ -17,8 +17,6 @@ description: 准备、创建、更新或审查 GitHub PR，含回复讨论与处
 
 为本仓库拟写或更新 PR 标题时，完整标题使用英文，沿用提交信息的 Conventional Commits 格式，例如 `fix(store): preserve client key ledgers after deletion`
 
-涉及上游行为的判断按[问题与方案依据](../../../CONTRIBUTING.md#问题与方案依据)执行
-
 ## 按模式读取
 
 先完成上述范围判断，再按当前动作与差异涉及的领域叠加下表。命中的流程引用完整读取，长文档读取指定章节；只复用已实际读取且仍适用的内容，单纯整理正文或回复不扩展为完整实现审查
@@ -28,22 +26,17 @@ description: 准备、创建、更新或审查 GitHub PR，含回复讨论与处
 | 只整理标题或描述 | 当前 PR、最终 diff、实际模板、[AI 披露](../../../CONTRIBUTING.md#ai-使用披露)，在授权范围内改文案，不自行修改实现；不读取推送或审查流程 |
 | 创建或更新 PR | [创建流程](references/create.md)、[PR 流程](../../../CONTRIBUTING.md#pr-流程)与[规则文件保护](../../../CONTRIBUTING.md#规则文件保护) |
 | 审查 PR | [审查流程](references/review.md)、[审查标准](../../../CONTRIBUTING.md#审查标准) |
-| 回复讨论或审查意见 | 目标评论、相关上下文与实际处理结果，按下方回复口吻答复；仅回复不加载创建或完整审查流程 |
+| 回复讨论或审查意见 | 读取目标评论和相关上下文，按[GitHub 回复口吻](../../../CONTRIBUTING.md#github-回复口吻)答复实际处理结果 |
 | 实现自审、审查或修改代码与文档 | 执行 [cpr-dev-guide](../cpr-dev-guide/SKILL.md)的领域必读与对应检查，包括后端、插件、测试和 API 等命中项；只读审查同样执行，不能仅核对 PR 正文与 CI |
 | 含前端改动 | [前端流程](../cpr-dev-guide/references/frontend.md)，核对适用规范与当前实现的运行证据 |
 | 含文档改动 | [文档检查](../cpr-dev-guide/references/documentation.md) |
-
-## 回复口吻
-
-草拟和发布 PR 讨论、审查意见的回复时，执行 [GitHub 回复口吻](../../../CONTRIBUTING.md#github-回复口吻)
 
 ## 创建与审查的公共核对
 
 - 按[问题与方案依据](../../../CONTRIBUTING.md#问题与方案依据)核实触发条件、发生版本与目标分支现状，分别判断问题是否成立、是否属于目标项目职责及方案是否必要
 - 核对最新目标分支及同场景 open/closed PR、Issue，按实际行为和测试判断重复，不凭标题下结论，也不擅自关闭他人 PR
-- 自审或审查覆盖完整差异与调用链，前端与文档按模式表检查
-- 核对[AI 使用披露](../../../CONTRIBUTING.md#ai-使用披露)，填写实际工具与模型，不猜型号；必需截图或型号待补时保留 Draft
-- 验证结果对应实际 head，区分通过、失败、跳过与未执行；无文档改动时只核对现有说明是否失真
+- 自审或审查覆盖完整差异和调用链，按[验证](../../../CONTRIBUTING.md#验证)执行适用检查，确认结果对应当前 head
+- 核对[界面验证](../../../CONTRIBUTING.md#界面验证)要求的截图和 [AI 使用披露](../../../CONTRIBUTING.md#ai-使用披露)，必需材料待补时保留 Draft
 
 远程操作优先使用可用连接器，`gh` 显式指定 `--repo`，多行正文使用结构化字段或 `--body-file`
 
