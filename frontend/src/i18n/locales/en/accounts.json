@@ -11,7 +11,7 @@
       "empty": "No observed quota buckets",
       "invalid": "Enter a whole number from 1 to 100 or leave blank for no limit",
       "limit": "Scheduling limit",
-      "warmup": "Auto warmup",
+      "warmup": "Warmup",
       "model": "Warmup model",
       "modelPlaceholder": "Select model",
       "invalidModel": "Enter a valid warmup model ID",

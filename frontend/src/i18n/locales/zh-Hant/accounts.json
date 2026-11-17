@@ -11,7 +11,7 @@
       "empty": "沒有已觀測的額度桶",
       "invalid": "請輸入 1～100 的整數，留空表示不限制",
       "limit": "排程上限",
-      "warmup": "自動預熱",
+      "warmup": "預熱",
       "model": "預熱模型",
       "modelPlaceholder": "選擇模型",
       "invalidModel": "請輸入有效的預熱模型 ID",

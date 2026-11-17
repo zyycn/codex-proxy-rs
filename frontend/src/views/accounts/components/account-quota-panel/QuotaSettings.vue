@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import type { FormRule } from '@codex-proxy/ui'
 import type { Account, AccountQuotaBucketSettings } from '@/api'
-import { ZButton, ZDialog, ZFormItem, ZInput, ZSelect, ZSwitch } from '@codex-proxy/ui'
+import { ZButton, ZDialog, ZForm, ZFormItem, ZInput, ZSelect, ZSwitch } from '@codex-proxy/ui'
 import { SlidersHorizontal } from '@lucide/vue'
-import { computed, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef, useId, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { batchUpdateAccounts, getAccountModels, getAccountQuota } from '@/api'
 import { quotaWindowLabel } from '@/components/account/account-usage-window/presenter'
@@ -21,6 +22,8 @@ const props = defineProps<{ account: Account }>()
 const emit = defineEmits<{ accountUpdated: [account: Account] }>()
 const { t } = useI18n({ useScope: 'global' })
 const open = shallowRef(false)
+const formId = useId()
+const formRef = useTemplateRef<InstanceType<typeof ZForm>>('formElement')
 const draft = ref<BucketDraft[]>([])
 const { loading, run } = useAsyncAction()
 const { loading: loadingModels, run: loadModels } = useAsyncAction()
@@ -33,11 +36,18 @@ const modelOptions = computed(() => {
   }
   return Array.from(options, ([value, label]) => ({ value, label }))
 })
-const invalidLimit = computed(() => draft.value.some(row => row.limit !== '' && !/^(?:[1-9]\d?|100)$/.test(row.limit)))
-const invalidModel = computed(() => draft.value.some(row => row.warmup && (!row.model.trim() || row.model.trim().length > 128 || /\p{Cc}/u.test(row.model))))
-const invalid = computed(() => invalidLimit.value || invalidModel.value)
+const limitRule = computed<FormRule>(() => ({
+  validator: (_rule, value: string) => value === '' || /^(?:[1-9]\d?|100)$/.test(value),
+  message: t('accounts.quotaSettings.invalid'),
+}))
+const modelRule = computed<FormRule>(() => ({
+  required: true,
+  validator: (_rule, value: string) => Boolean(value.trim()) && value.trim().length <= 128 && !/\p{Cc}/u.test(value),
+  message: t('accounts.quotaSettings.invalidModel'),
+}))
 
 async function edit() {
+  formRef.value?.clearValidate()
   const windows = new Map(props.account.quota.windows.filter(window => window.accountWide).map(window => [window.key, window]))
   const keys = new Set([
     ...windows.keys(),
@@ -68,7 +78,7 @@ async function edit() {
 }
 
 async function save() {
-  if (invalid.value)
+  if (loading.value || !draft.value.length || !await formRef.value?.validate().catch(() => false))
     return
   const accountId = props.account.id
   const settings: Record<string, AccountQuotaBucketSettings> = Object.fromEntries(draft.value
@@ -105,37 +115,46 @@ async function save() {
     <SlidersHorizontal class="size-3.5" />
   </QuotaActionButton>
   <ZDialog v-model="open" :title="t('accounts.quotaSettings.title')" :description="t('accounts.quotaSettings.subtitle')" width="32rem" :close-on-click-modal="!loading" :close-on-press-escape="!loading" :show-close="!loading">
-    <div class="grid gap-4">
+    <ZForm :id="formId" ref="formElement" :model="draft" :validate-on-rule-change="false" :show-message="false" class="gap-4" scroll-to-error focus-on-error novalidate @submit="save">
       <p v-if="!draft.length" class="m-0 text-z-sm text-z-text-secondary">
         {{ t('accounts.quotaSettings.empty') }}
       </p>
-      <section v-for="row in draft" :key="row.key" class="relative grid gap-3 rounded-z bg-z-fill-quaternary p-3" :aria-label="row.label">
-        <h3 class="m-0 pr-32 text-z-sm font-heavy text-z-text">
-          {{ row.label }}
-        </h3>
-        <ZSwitch v-model="row.warmup" class="absolute! top-2 right-3" :label="t('accounts.quotaSettings.warmup')" :aria-label="`${row.label} · ${t('accounts.quotaSettings.warmup')}`" :disabled="loading" />
+      <section v-for="(row, index) in draft" :key="row.key" class="grid gap-3 rounded-z bg-z-fill-quaternary p-3" :aria-label="row.label">
+        <div class="flex items-center justify-between gap-3">
+          <h3 class="m-0 min-w-0 wrap-anywhere text-z-sm font-heavy text-z-text">
+            {{ row.label }}
+          </h3>
+          <ZSwitch
+            v-model="row.warmup"
+            size="small"
+            inline-prompt
+            class="w-12 [&:lang(en)]:w-18"
+            width="100%"
+            :active-text="t('accounts.quotaSettings.warmup')"
+            :inactive-text="t('accounts.quotaSettings.warmup')"
+            :aria-label="`${row.label} · ${t('accounts.quotaSettings.warmup')}`"
+            :disabled="loading"
+          />
+        </div>
         <div class="grid gap-3 sm:grid-cols-2">
-          <ZFormItem :label="t('accounts.quotaSettings.limit')">
-            <ZInput v-model="row.limit" type="number" min="1" max="100" step="1" :aria-label="`${row.label} · ${t('accounts.quotaSettings.limit')}`" :placeholder="t('accounts.quotaSettings.unlimited')" :disabled="loading">
+          <ZFormItem :label="t('accounts.quotaSettings.limit')" :prop="`${index}.limit`" :rules="limitRule">
+            <ZInput v-model="row.limit" :validate-event="false" type="number" min="1" max="100" step="1" :aria-label="`${row.label} · ${t('accounts.quotaSettings.limit')}`" :placeholder="t('accounts.quotaSettings.unlimited')" :disabled="loading" @update:model-value="formRef?.clearValidate(`${index}.limit`)">
               <template #suffix>
                 %
               </template>
             </ZInput>
           </ZFormItem>
-          <ZFormItem v-if="row.warmup" :label="t('accounts.quotaSettings.model')" required>
-            <ZSelect v-model="row.model" class="w-full" :options="modelOptions" :aria-label="`${row.label} · ${t('accounts.quotaSettings.model')}`" :placeholder="t('accounts.quotaSettings.modelPlaceholder')" :empty-text="t('accounts.connectionTest.noModels')" :disabled="loading || loadingModels" />
+          <ZFormItem v-if="row.warmup" :label="t('accounts.quotaSettings.model')" :prop="`${index}.model`" :rules="modelRule">
+            <ZSelect v-model="row.model" :validate-event="false" class="w-full" :options="modelOptions" :aria-label="`${row.label} · ${t('accounts.quotaSettings.model')}`" :placeholder="t('accounts.quotaSettings.modelPlaceholder')" :empty-text="t('accounts.connectionTest.noModels')" :disabled="loading || loadingModels" @update:model-value="formRef?.clearValidate(`${index}.model`)" />
           </ZFormItem>
         </div>
       </section>
-      <p v-if="invalid" class="m-0 text-z-xs text-z-error" role="alert">
-        {{ invalidLimit ? t('accounts.quotaSettings.invalid') : t('accounts.quotaSettings.invalidModel') }}
-      </p>
-    </div>
+    </ZForm>
     <template #footer>
       <ZButton :disabled="loading" @click="open = false">
         {{ t('common.actions.cancel') }}
       </ZButton>
-      <ZButton type="primary" :disabled="!draft.length || invalid" :loading="loading" @click="save">
+      <ZButton type="primary" native-type="submit" :form="formId" :disabled="!draft.length" :loading="loading">
         {{ t('common.actions.save') }}
       </ZButton>
     </template>
