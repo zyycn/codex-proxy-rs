@@ -1160,6 +1160,27 @@ impl CodexCredentialSelector {
             }
             let mut shortest_retry = None;
             let mut busy_accounts = std::collections::BTreeSet::new();
+            let binding_wait_error = |rejection| {
+                if rejection == QueueRejection::Timeout
+                    && follow_only
+                    && pinned_account.is_none()
+                    && let Some(account) = binding.as_ref().map(ProviderSessionBinding::account_id)
+                    && !account_ids.contains(account)
+                {
+                    // 仅在本次授权范围内区分明确的模型限制，其余资格缺失不推测原因
+                    let reason = match (model.model(), request.attempt.account_scope()) {
+                        (Some(model), Some(scope))
+                            if scope.allows(account) && !scope.allows_model(account, model) =>
+                        {
+                            "The parent session's account does not allow the requested model."
+                        }
+                        _ => "The parent session's account cannot serve this request.",
+                    };
+                    CredentialSelectionError::IneligibleSessionAccountTimeout(reason)
+                } else {
+                    CredentialSelectionError::QueueRejected(rejection)
+                }
+            };
             loop {
                 let preferred = pinned_account
                     .clone()
@@ -1217,7 +1238,10 @@ impl CodexCredentialSelector {
                         // 目标已有空位，恢复完整容量观测后再尝试准入
                         refresh_candidates = true;
                     } else if follow_only || wait_candidates.contains(queued) {
-                        waiting.wait(std::slice::from_ref(queued)).await?;
+                        waiting
+                            .wait(std::slice::from_ref(queued))
+                            .await
+                            .map_err(binding_wait_error)?;
                     } else {
                         refresh_candidates = true;
                     }
@@ -1314,7 +1338,8 @@ impl CodexCredentialSelector {
                         // 冷却、排除、停用或当前账号不在本次范围时也只等待根线程恢复或迁移
                         waiting
                             .wait(std::slice::from_ref(binding.account_id()))
-                            .await?;
+                            .await
+                            .map_err(binding_wait_error)?;
                         continue 'capacity;
                     }
                     if !diagnostic && queue_policy.max_waiting > 0 && !wait_candidates.is_empty() {
@@ -2370,6 +2395,8 @@ pub enum CredentialSelectionError {
     SessionBound(#[source] Box<CredentialSelectionError>),
     #[error(transparent)]
     QueueRejected(#[from] QueueRejection),
+    #[error("{0} Timed out waiting for the session to switch accounts.")]
+    IneligibleSessionAccountTimeout(&'static str),
     #[error("no eligible Codex account")]
     NoEligibleCredential,
     #[error("upstream safety policy temporarily excludes accounts for this session")]

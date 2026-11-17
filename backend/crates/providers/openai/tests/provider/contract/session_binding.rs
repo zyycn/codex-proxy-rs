@@ -853,6 +853,10 @@ async fn child_queue_timeout_does_not_rebind_or_allow_provider_fallback() {
         .err()
         .expect("queue timeout");
     assert_eq!(error.kind(), ProviderErrorKind::ConcurrencyQueueTimeout);
+    assert_eq!(
+        gateway_core::error::GatewayError::from_provider(&error).client_message(),
+        "Request queue wait timed out."
+    );
     assert!(error.retry_is_prohibited());
     assert_eq!(affinity.binding_count(), 1);
     assert!(server.received_requests().await.unwrap().is_empty());
@@ -1443,26 +1447,31 @@ async fn relaxed_and_preferred_session_requests_apply_distinct_scheduling_polici
 }
 
 #[tokio::test]
-async fn preferred_child_can_claim_without_a_root_and_model_access_can_split_accounts() {
+async fn child_model_mismatch_waits_for_the_parent_or_splits_by_affinity_mode() {
     use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
     let provider = provider_with_affinity(&store, affinity.clone());
-    let select = |thread, model: &'static str, scope| {
+    let preferred = |scope| preferred_context("req_preferred_model", scope);
+    let select = |thread, model: &'static str, attempt| {
         provider.clone().execute(
             planned_request_for_model(
                 "openai",
                 Operation::Generate(generate_with_session_context("root", Some(thread), None)),
                 model,
             ),
-            preferred_context("req_preferred_model", scope),
+            attempt,
         )
     };
     drop(
-        select("early-child", "gpt-5.4", contract_account_scope())
-            .await
-            .unwrap(),
+        select(
+            "early-child",
+            "gpt-5.4",
+            preferred(contract_account_scope()),
+        )
+        .await
+        .unwrap(),
     );
     assert_eq!(
         affinity.binding_count(),
@@ -1470,7 +1479,7 @@ async fn preferred_child_can_claim_without_a_root_and_model_access_can_split_acc
         "the first session request claims the shared primary"
     );
     drop(
-        select("root", "gpt-5.4", contract_account_scope())
+        select("root", "gpt-5.4", preferred(contract_account_scope()))
             .await
             .unwrap(),
     );
@@ -1500,7 +1509,44 @@ async fn preferred_child_can_claim_without_a_root_and_model_access_can_split_acc
         Arc::new(directory),
         ClientRoutingScope::all_accounts(),
     ));
-    let child = select("model-child", "gpt-5.5", scope.clone())
+    for (scope, reason) in [
+        (
+            scope.clone(),
+            "The parent session's account does not allow the requested model.",
+        ),
+        (
+            Arc::new(scope.excluding_account(ProviderAccountId::new("acct_subagent_a").unwrap())),
+            "The parent session's account cannot serve this request.",
+        ),
+    ] {
+        let strict = context_with_affinity_policy(
+            "req_strict_model",
+            scope,
+            account_policy().with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout: Duration::from_millis(120),
+            }),
+        );
+        let error = select("model-child", "gpt-5.5", strict)
+            .await
+            .err()
+            .expect("strict child waits for the parent to switch accounts");
+        assert_eq!(error.kind(), ProviderErrorKind::ConcurrencyQueueTimeout);
+        assert!(error.retry_is_prohibited());
+        let gateway = gateway_core::error::GatewayError::from_provider(&error);
+        assert_eq!(
+            gateway.client_message(),
+            format!("{reason} Timed out waiting for the session to switch accounts.")
+        );
+        assert!(
+            error
+                .error_details()
+                .unwrap()
+                .contains(gateway.client_message())
+        );
+    }
+
+    let child = select("model-child", "gpt-5.5", preferred(scope.clone()))
         .await
         .unwrap();
     assert_eq!(
@@ -1509,7 +1555,7 @@ async fn preferred_child_can_claim_without_a_root_and_model_access_can_split_acc
     );
     drop(child);
     assert_eq!(
-        select("root", "gpt-5.4", scope)
+        select("root", "gpt-5.4", preferred(scope))
             .await
             .unwrap()
             .metadata()

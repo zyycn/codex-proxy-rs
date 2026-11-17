@@ -818,6 +818,15 @@ fn selection_failure(error: &CredentialSelectionError) -> ProviderError {
         CredentialSelectionError::QueueRejected(error) => {
             provider_error(error.provider_kind(), UpstreamSendState::NotSent)
         }
+        CredentialSelectionError::IneligibleSessionAccountTimeout(_) => provider_error(
+            ProviderErrorKind::ConcurrencyQueueTimeout,
+            UpstreamSendState::NotSent,
+        )
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            error.to_string(),
+            None,
+            None,
+        )),
         CredentialSelectionError::CapacityUnavailable { retry_after } => {
             let error = provider_error(
                 ProviderErrorKind::AccountCapacityUnavailable,
