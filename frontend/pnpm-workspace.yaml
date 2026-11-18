@@ -1,5 +1,10 @@
 autoInstallPeers: false
 
+# picomatch 只在构建工具链中使用，未进入发布产物。上游发布修复后升级并移除此例外
+audit:
+  ignore:
+    - GHSA-fc5q-39xc-vjpf
+
 # Git 依赖通过 prepack 生成产物；信任自有 UI 仓库，实际提交仍由锁文件固定。
 allowBuilds:
   '@codex-proxy/ui@git+https://github.com/zyycn/codex-proxy-ui.git': true
