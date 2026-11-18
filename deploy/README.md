@@ -223,6 +223,8 @@ docker compose -f deploy/compose.yaml stats --no-stream
 
 ## 部署结构
 
+PostgreSQL 最低版本为 16，默认 Compose 使用 PostgreSQL 18
+
 ```mermaid
 flowchart LR
   Client[客户端 / 管理浏览器] -->|HTTPS| Proxy[反向代理]
@@ -320,7 +322,7 @@ store:
 ## Windows 二进制部署
 
 发行包提供 Windows x64（`windows_amd64`）和 ARM64（`windows_arm64`）版本，按运行机器的 CPU 架构选择。
-需先准备可访问的 PostgreSQL 和 Redis，创建数据库及用户；使用数据库备份功能时，还需将匹配服务端版本的 `pg_dump` 加入 `PATH`
+需先按[数据库版本要求](#部署结构)准备 PostgreSQL，创建数据库及用户，并确保 Redis 可访问。使用数据库备份功能时，还需将匹配服务端版本的 `pg_dump` 加入 `PATH`
 
 从 [Release 附件](https://github.com/zyycn/codex-proxy-rs/releases) 下载对应的
 `codex-proxy-rs_<version>_windows_<arch>.tar.gz`，解压后保留 `codex-proxy-rs.exe`、`web/dist`、`deploy` 和 `plugins/official` 的目录关系。
@@ -964,7 +966,7 @@ exp 不进入正式版、alpha、beta 或 rc，普通实例也不能选择 Exp�
 其他通道的版本及发布说明，手动检查显示“当前没有可用更新”。检查失败单独报告，不能当作没有更新
 
 alpha、beta、rc、exp 在 GitHub 标记为 Pre-release，不覆盖 GitHub Latest 或镜像 `latest`。
-升级前核对目标版本的数据库要求；可连续升级的发行线与约束见[迁移冻结规则](../backend/migrations/README.md#冻结规则)
+升级前确认 PostgreSQL 满足目标版本的[部署要求](#部署结构)。可连续升级的发行线与约束见[迁移冻结规则](../backend/migrations/README.md#冻结规则)
 
 ### 管理端在线更新
 
