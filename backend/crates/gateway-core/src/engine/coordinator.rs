@@ -424,7 +424,7 @@ where
 }
 
 struct CurrentAttempt {
-    stream: Option<ProviderStream>,
+    stream: ProviderStream,
     metadata: ProviderCallMetadata,
     trigger: AttemptTrigger,
     transport: AttemptTransport,
@@ -930,13 +930,9 @@ where
             }
 
             let boundary = {
-                let stream = self
-                    .current
-                    .as_mut()
-                    .and_then(|current| current.stream.as_mut())
-                    .ok_or(EngineError::NoActiveAttempt)?;
+                let current = self.current.as_mut().ok_or(EngineError::NoActiveAttempt)?;
                 poll_stream_item(
-                    stream,
+                    &mut current.stream,
                     self.cancellation.clone(),
                     self.deadline,
                     &mut self.deadline_timer,
@@ -994,8 +990,8 @@ where
                     let translated = self
                         .current
                         .as_mut()
-                        .and_then(|current| current.stream.as_mut())
                         .ok_or(EngineError::NoActiveAttempt)?
+                        .stream
                         .translate_native_response(event, terminal);
                     match translated {
                         Ok(events) if events.is_empty() => continue,
@@ -1525,7 +1521,7 @@ where
             self.routing_attempts = self.routing_attempts.saturating_add(1);
         }
         self.current = Some(CurrentAttempt {
-            stream: Some(stream),
+            stream,
             metadata,
             trigger,
             transport: attempt_transport,
@@ -1648,9 +1644,7 @@ where
                 self.observation.observe_event(fact);
             }
         }
-        let mut current = self.current.take().ok_or(EngineError::NoActiveAttempt)?;
-        // 失败流不会再被读取。先归还它的账号槽位，后续重试和结算只需要本次尝试的事实。
-        current.stream.take();
+        let current = self.current.take().ok_or(EngineError::NoActiveAttempt)?;
         if self.request_observation.is_some() {
             let websocket_attempt = websocket_observation_attempt(&current);
             for event in atomic_client_events
@@ -2446,6 +2440,9 @@ where
     }
 
     async fn finish_interruption(&mut self, error: &EngineError) -> Result<(), EngineError> {
+        if let Some(current) = self.current.as_mut() {
+            current.stream.abort();
+        }
         // 结算 I/O 可能继续等待，先冻结交付事实以保持终态与实际 HTTP 状态一致
         self.response_commit.finish();
         let (outcome, gateway_error) = match error {
