@@ -547,6 +547,40 @@ fn encoder_should_extract_websocket_context_from_client_metadata() {
 }
 
 #[test]
+fn websocket_turn_id_uses_current_frame_metadata_on_a_reused_connection() {
+    for (metadata, expected) in [
+        (
+            json!({"x-codex-turn-metadata": r#"{"turn_id":"frame-turn"}"#}),
+            Some("frame-turn"),
+        ),
+        (json!({}), None),
+    ] {
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("client-model")),
+                ("input".to_owned(), json!("prompt")),
+                ("client_metadata".to_owned(), metadata),
+            ]),
+        )
+        .unwrap()
+        .with_context(Map::from_iter([
+            (
+                "downstream_websocket_connection_id".to_owned(),
+                json!("connection"),
+            ),
+            (
+                "turn_metadata".to_owned(),
+                json!(r#"{"turn_id":"opening-turn"}"#),
+            ),
+        ]));
+        let request = GenerateRequest::from_protocol_payload(payload);
+        let encoded = encode_generate_request(&request, "gpt-test", None).unwrap();
+        assert_eq!(encoded.client_turn_id.as_deref(), expected);
+    }
+}
+
+#[test]
 fn header_context_should_win_over_body_topline_aliases() {
     let payload = ProtocolPayload::json_object(
         "openai",

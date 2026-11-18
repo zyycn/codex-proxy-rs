@@ -2083,7 +2083,10 @@ async fn capture_turn_state_request(
     }
     let mut protocol_context = Map::from_iter([("use_websocket".to_owned(), json!(false))]);
     if let Some(current_turn_id) = current_turn_id {
-        protocol_context.insert("turn_id".to_owned(), json!(current_turn_id));
+        protocol_context.insert(
+            "turn_metadata".to_owned(),
+            Value::String(json!({"turn_id": current_turn_id}).to_string()),
+        );
     }
     if let Some(client_turn_state) = client_turn_state {
         protocol_context.insert("turn_state".to_owned(), json!(client_turn_state));
@@ -2095,6 +2098,7 @@ async fn capture_turn_state_request(
     let mut body = Map::from_iter([
         ("model".to_owned(), json!("gpt-5.4")),
         ("input".to_owned(), json!("current input")),
+        ("previous_response_id".to_owned(), json!("resp_previous")),
         ("client_metadata".to_owned(), json!({"custom":"preserved"})),
     ]);
     if let Some(state) = client_turn_state {
