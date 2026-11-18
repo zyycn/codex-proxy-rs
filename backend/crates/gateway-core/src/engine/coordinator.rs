@@ -424,7 +424,7 @@ where
 }
 
 struct CurrentAttempt {
-    stream: ProviderStream,
+    stream: Option<ProviderStream>,
     metadata: ProviderCallMetadata,
     trigger: AttemptTrigger,
     transport: AttemptTransport,
@@ -930,9 +930,13 @@ where
             }
 
             let boundary = {
-                let current = self.current.as_mut().ok_or(EngineError::NoActiveAttempt)?;
+                let stream = self
+                    .current
+                    .as_mut()
+                    .and_then(|current| current.stream.as_mut())
+                    .ok_or(EngineError::NoActiveAttempt)?;
                 poll_stream_item(
-                    &mut current.stream,
+                    stream,
                     self.cancellation.clone(),
                     self.deadline,
                     &mut self.deadline_timer,
@@ -990,8 +994,8 @@ where
                     let translated = self
                         .current
                         .as_mut()
+                        .and_then(|current| current.stream.as_mut())
                         .ok_or(EngineError::NoActiveAttempt)?
-                        .stream
                         .translate_native_response(event, terminal);
                     match translated {
                         Ok(events) if events.is_empty() => continue,
@@ -1521,7 +1525,7 @@ where
             self.routing_attempts = self.routing_attempts.saturating_add(1);
         }
         self.current = Some(CurrentAttempt {
-            stream,
+            stream: Some(stream),
             metadata,
             trigger,
             transport: attempt_transport,
@@ -1644,7 +1648,9 @@ where
                 self.observation.observe_event(fact);
             }
         }
-        let current = self.current.take().ok_or(EngineError::NoActiveAttempt)?;
+        let mut current = self.current.take().ok_or(EngineError::NoActiveAttempt)?;
+        // 失败流不会再被读取。先归还它的账号槽位，后续重试和结算只需要本次尝试的事实。
+        current.stream.take();
         if self.request_observation.is_some() {
             let websocket_attempt = websocket_observation_attempt(&current);
             for event in atomic_client_events
@@ -1947,7 +1953,7 @@ where
         let store = Arc::clone(self.engine.store());
         let request_id = self.request_id.clone();
         let persisted = self.request_persisted;
-        // 错误、账号 lease 与决策 future 都跨 next_event 的取消保留
+        // 错误、尝试记录与决策 future 都跨 next_event 的取消保留
         // 在持久化及策略回调完成前，不能再次拉流或建立新的 attempt
         self.current = Some(current);
         self.pending_stream_failure = Some(PendingStreamFailure {

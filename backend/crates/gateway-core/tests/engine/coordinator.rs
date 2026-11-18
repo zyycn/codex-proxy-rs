@@ -3402,7 +3402,16 @@ fn recovered_credential_retries_the_same_account_exactly_once() {
         CancellationToken::new(),
     ))
     .expect("start execution");
-    block_on(session.collect_uncommitted()).expect("recovered account succeeds");
+    let (release, gate) = oneshot::channel();
+    *store.intermediate_gate.lock().unwrap() = Some(gate);
+    block_on(async {
+        let mut collect = Box::pin(session.collect_uncommitted());
+        assert!(futures::poll!(collect.as_mut()).is_pending());
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+        assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
+        release.send(()).unwrap();
+        collect.await.expect("recovered account succeeds");
+    });
     block_on(session.commit_downstream(Some(200))).expect("commit response");
 
     let contexts = provider.contexts.lock().expect("contexts lock");
@@ -5946,7 +5955,7 @@ fn interrupted_stream_failure_preserves_the_original_attempt_and_retry_decision(
             let mut resumed = Box::pin(session.next_event());
             assert!(futures::poll!(resumed.as_mut()).is_pending());
             assert_eq!(provider.contexts.lock().unwrap().len(), 1);
-            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 0);
+            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
             release
                 .send(())
                 .expect("the original write still owns its receiver");
@@ -6749,8 +6758,6 @@ fn connection_recovery_exhaustion_preserves_transport_failure() {
         store.state.lock().unwrap().finalizations[0].attempt_count,
         4
     );
-    assert_eq!(provider.released_leases.load(Ordering::SeqCst), 3);
-    drop(session);
     assert_eq!(provider.released_leases.load(Ordering::SeqCst), 4);
 }
 
