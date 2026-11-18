@@ -45,7 +45,7 @@
       "cacheReadCost": "Cache read cost",
       "cacheWriteCost": "Cache write cost",
       "cacheWriteUnitPrice": "Cache write unit price",
-      "fastMode": "Fast mode",
+      "speedMode": "{mode} mode",
       "longContextBillingDetails": "Long-context cost details",
       "billingDetails": "Cost details",
       "viewLongContextBillingDetails": "View long-context cost details",

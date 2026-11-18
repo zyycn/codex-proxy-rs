@@ -24,22 +24,22 @@ export function usageErrorOrigin(record: Pick<UsageErrorFacts, 'errorOrigin'>) {
   const origins = {
     proxy: {
       label: t('usage.error.origin.proxy'),
-      className: 'bg-z-blue-container text-z-blue-on-container',
+      className: 'text-z-blue-text',
       hint: null,
     },
     upstream: {
       label: t('usage.error.origin.upstream'),
-      className: 'bg-z-error-container text-z-error-on-container',
+      className: 'text-z-error-text',
       hint: null,
     },
     connection: {
       label: t('usage.error.origin.connection'),
-      className: 'bg-z-warning-container text-z-warning-on-container',
+      className: 'text-z-warning-text',
       hint: t('usage.error.origin.connectionHint'),
     },
     unknown: {
       label: t('usage.error.origin.unknown'),
-      className: 'bg-z-fill-tertiary text-z-text-secondary',
+      className: 'text-z-text-secondary',
       hint: t('usage.error.origin.unknownHint'),
     },
   }

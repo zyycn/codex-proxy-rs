@@ -523,13 +523,18 @@ async fn copying_builtin_prices_keeps_cache_read_and_write_fallback_costs() {
     for model in [
         "gpt-4",
         "gpt-4o",
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
         "gpt-6-astra",
         "gpt-6.1-sol",
         "gpt-6.1-terra",
         "gpt-6-sol",
         "gpt-6-luna",
     ] {
-        let ultrafast_supported = matches!(model, "gpt-6-astra" | "gpt-6.1-sol");
+        let ultrafast_supported = matches!(
+            model,
+            "gpt-6.2-astra" | "gpt-6.2-sol" | "gpt-6-astra" | "gpt-6.1-sol"
+        );
         for band in ["ultrafast", "long_ultrafast"] {
             assert_eq!(prices[model].bands.contains_key(band), ultrafast_supported);
         }

@@ -26,7 +26,7 @@ const outcome = computed(() => usageErrorTitle(props.record))
   <div class="min-w-0 py-0.5">
     <div class="flex min-w-0 items-center gap-2">
       <span
-        class="inline-flex size-5 shrink-0 items-center justify-center rounded-z-sm"
+        class="inline-flex size-5 shrink-0 items-center justify-center"
         :class="origin.className"
         role="img"
         :aria-label="origin.label"

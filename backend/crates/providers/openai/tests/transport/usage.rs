@@ -83,6 +83,28 @@ fn gpt_6_models_should_use_published_prices_across_tiers_and_context_boundary() 
     // 每档依次核对每百万 Token 的输入、缓存读取、缓存写入和输出价格
     for (model, cases) in [
         (
+            "gpt-6.2-astra",
+            [
+                (None, 272_000, ["8", "0.4", "10", "40"]),
+                (None, 272_001, ["16", "0.8", "20", "60"]),
+                (Some("fast"), 272_000, ["16", "0.8", "20", "80"]),
+                (Some("priority"), 272_001, ["32", "1.6", "40", "120"]),
+                (Some("ultrafast"), 272_000, ["48", "2.4", "60", "240"]),
+                (Some("ultrafast"), 272_001, ["96", "4.8", "120", "360"]),
+            ],
+        ),
+        (
+            "gpt-6.2-sol",
+            [
+                (None, 272_000, ["2", "0.1", "2.5", "10"]),
+                (None, 272_001, ["4", "0.2", "5", "15"]),
+                (Some("fast"), 272_000, ["4", "0.2", "5", "20"]),
+                (Some("priority"), 272_001, ["8", "0.4", "10", "30"]),
+                (Some("ultrafast"), 272_000, ["12", "0.6", "15", "60"]),
+                (Some("ultrafast"), 272_001, ["24", "1.2", "30", "90"]),
+            ],
+        ),
+        (
             "gpt-6.1-sol",
             [
                 (None, 272_000, ["2", "0.1", "2.5", "10"]),
@@ -457,6 +479,10 @@ fn billing_should_not_inherit_prices_for_unknown_models_or_tiers() {
         ("gpt-5.5-cyber", 272_001, None),
         ("gpt-5.6-cyber", 1, Some("fast")),
         ("gpt-5.3-codex", 1, Some("flex")),
+        ("gpt-6.2-astra", 1, Some("flex")),
+        ("gpt-6.2-astra", 272_001, Some("flex")),
+        ("gpt-6.2-sol", 1, Some("flex")),
+        ("gpt-6.2-sol", 272_001, Some("flex")),
         ("gpt-6-astra", 1, Some("auto")),
         ("gpt-6-astra", 1, Some("future")),
         ("gpt-6.1-terra", 1, Some("ultrafast")),

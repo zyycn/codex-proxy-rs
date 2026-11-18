@@ -45,7 +45,7 @@
       "cacheReadCost": "緩存讀取費用",
       "cacheWriteCost": "緩存寫入費用",
       "cacheWriteUnitPrice": "緩存寫入單價",
-      "fastMode": "Fast 模式",
+      "speedMode": "{mode} 模式",
       "longContextBillingDetails": "長上下文計費明細",
       "billingDetails": "計費明細",
       "viewLongContextBillingDetails": "查看長上下文計費明細",

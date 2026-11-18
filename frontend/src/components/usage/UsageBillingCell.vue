@@ -9,12 +9,22 @@ import UsageDetailPopover from '@/components/usage/UsageDetailPopover.vue'
 import { usageBillingText } from './shared/presenter'
 
 const props = defineProps<{
-  record: Pick<UsageListRecord, 'billing'>
+  record: Pick<UsageListRecord, 'billing'> & Partial<Pick<UsageListRecord, 'serviceTier'>>
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
 const billing = computed(() => props.record.billing)
+const speedMode = computed(() => {
+  const tier = props.record.serviceTier ?? billing.value?.serviceTierDisplay.toLowerCase()
+  if (tier === 'fast' || tier === 'priority')
+    return 'Fast'
+  if (tier === 'ultrafast')
+    return 'Ultrafast'
+  return null
+})
+const speedModeLabel = computed(() => t('usage.billing.speedMode', { mode: speedMode.value }))
+
 const billingItems = computed(() => {
   const value = billing.value
   if (!value)
@@ -137,17 +147,19 @@ function itemValueClass(tone?: string, accent?: boolean) {
       {{ usageBillingText(record) }}
     </span>
 
-    <div v-if="billing" class="flex items-center gap-1">
+    <div v-if="billing || speedMode" class="flex shrink-0 items-center gap-1">
       <span
-        v-if="billing.serviceTierDisplay === 'Fast'"
-        class="inline-flex size-4 items-center justify-center rounded-full bg-z-warning-container text-z-warning-on-container"
-        :title="t('usage.billing.fastMode')"
+        v-if="speedMode"
+        class="inline-flex h-4 items-center rounded-full bg-z-warning-container px-0.5 text-z-warning-on-container"
+        :title="speedModeLabel"
         role="img"
-        :aria-label="t('usage.billing.fastMode')"
+        :aria-label="speedModeLabel"
       >
         <Zap class="size-3" stroke-width="2.2" aria-hidden="true" />
+        <Zap v-if="speedMode === 'Ultrafast'" class="size-3" stroke-width="2.2" aria-hidden="true" />
       </span>
       <UsageDetailPopover
+        v-if="billing"
         :title="billing.longContextBillingApplied ? t('usage.billing.longContextBillingDetails') : t('usage.billing.billingDetails')"
         :trigger-label="billing.longContextBillingApplied ? t('usage.billing.viewLongContextBillingDetails') : t('usage.billing.viewCostDetails')"
         :tone="billing.longContextBillingApplied ? 'warning' : 'primary'"
