@@ -1232,10 +1232,8 @@ pub(super) fn collection_for(
         || filter.attempt_index.is_some()
         || filter.response_id.is_some()
         || filter.upstream_request_id.is_some()
-        || filter.search.is_some()
         || filter.model_contains.is_some()
-        || filter.client_api_key_name.is_some()
-        || filter.provider_account_name.is_some()
+        || filter.needs_observation_text()
     {
         return None;
     }
@@ -1286,21 +1284,15 @@ pub(crate) fn push_analytics_filter(
     alias: &str,
 ) {
     let mut typed = filter.clone();
-    typed.search = None;
-    typed.client_api_key_name = None;
-    typed.provider_account_name = None;
+    let text = UsageRecordFilter {
+        client_api_key_name: typed.client_api_key_name.take(),
+        provider_account_search: typed.provider_account_search.take(),
+        search: typed.search.take(),
+        ..Default::default()
+    };
     push_usage_filter(query, &typed, alias);
-    if filter.search.is_some()
-        || filter.client_api_key_name.is_some()
-        || filter.provider_account_name.is_some()
-    {
+    if text.needs_observation_text() {
         query.push(format!(" and exists(select 1 from model_request_observations searched where searched.id={alias}.id"));
-        let text = UsageRecordFilter {
-            client_api_key_name: filter.client_api_key_name.clone(),
-            provider_account_name: filter.provider_account_name.clone(),
-            search: filter.search.clone(),
-            ..Default::default()
-        };
         push_usage_filter(query, &text, "searched");
         query.push(")");
     }

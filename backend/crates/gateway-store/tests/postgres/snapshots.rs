@@ -1452,13 +1452,14 @@ async fn queued_history_keeps_frozen_identity_after_configuration_deletion() {
         if published {
             super::drain_analytics(&database.pool).await;
         }
-        for (key_name, account_name, expected) in [
+        for (key_name, account_search, expected) in [
             (Some("Original Key"), None, 1),
             (None, Some("Original Account"), 1),
             (Some("Original Key"), Some("Original Account"), 1),
             (Some("Original"), None, 1),
             (Some("ginal K"), None, 1),
             (None, Some("ginal Acc"), 1),
+            (None, Some("old@"), 1),
             (Some("queued_key"), None, 0),
             (None, Some("queued_account"), 0),
             (Some("Original Account"), None, 0),
@@ -1473,7 +1474,7 @@ async fn queued_history_keeps_frozen_identity_after_configuration_deletion() {
                     started_at,
                     UsageRecordFilter {
                         client_api_key_name: key_name.map(str::to_owned),
-                        provider_account_name: account_name.map(str::to_owned),
+                        provider_account_search: account_search.map(str::to_owned),
                         ..Default::default()
                     },
                 );
@@ -1481,7 +1482,7 @@ async fn queued_history_keeps_frozen_identity_after_configuration_deletion() {
                 let page = repository.list_usage_records(query).await.unwrap();
                 assert_eq!(
                     page.total, expected,
-                    "published={published}, key={key_name:?}, account={account_name:?}, status={status:?}"
+                    "published={published}, key={key_name:?}, account={account_search:?}, status={status:?}"
                 );
                 assert_eq!(page.items.len() as u64, expected);
                 if expected == 1 {

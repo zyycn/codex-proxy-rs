@@ -11,18 +11,10 @@ pub(crate) fn push_usage_filter(
     filter: &UsageRecordFilter,
     alias: &str,
 ) {
-    for (column, value) in [
-        ("client_api_key_name_snapshot", &filter.client_api_key_name),
-        (
-            "provider_account_name_snapshot",
-            &filter.provider_account_name,
-        ),
-    ] {
-        if let Some(value) = value {
-            query.push(format!(" and {alias}.{column} like "));
-            query.push_bind(literal_contains_pattern(value));
-            query.push(" escape '\\'");
-        }
+    if let Some(value) = &filter.client_api_key_name {
+        query.push(format!(" and {alias}.client_api_key_name_snapshot like "));
+        query.push_bind(literal_contains_pattern(value));
+        query.push(" escape '\\'");
     }
     if let Some(value) = &filter.client_api_key_ref {
         query.push(format!(" and {alias}.client_api_key_ref = "));
@@ -51,11 +43,23 @@ pub(crate) fn push_usage_filter(
         query.push_bind(value.clone());
         query.push(")");
     }
-    if let Some(value) = &filter.model_contains {
+    for (value, first, second) in [
+        (
+            &filter.provider_account_search,
+            "provider_account_name_snapshot",
+            "provider_account_email_snapshot",
+        ),
+        (
+            &filter.model_contains,
+            "requested_model_id",
+            "upstream_model_id",
+        ),
+    ] {
+        let Some(value) = value else { continue };
         let pattern = literal_contains_pattern(value);
-        query.push(format!(" and ({alias}.requested_model_id like "));
+        query.push(format!(" and ({alias}.{first} like "));
         query.push_bind(pattern.clone());
-        query.push(format!(" escape '\\' or {alias}.upstream_model_id like "));
+        query.push(format!(" escape '\\' or {alias}.{second} like "));
         query.push_bind(pattern);
         query.push(" escape '\\')");
     }
