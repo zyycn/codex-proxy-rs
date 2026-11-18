@@ -74,13 +74,11 @@ pub(crate) async fn responses_websocket(
         &headers,
         connect_info.map(|Extension(ConnectInfo(address))| address),
     );
-    let request_headers = OpenAiRequestHeaders::from_headers(&headers);
     ResponsesWebSocketAdapter::new(service).upgrade_with_client_context(
         websocket,
         client,
         client_ip,
         user_agent,
-        request_headers,
         headers,
         middleware.map(|Extension(plan)| plan),
         lifetime.map(|Extension(lifetime)| lifetime),
@@ -107,7 +105,6 @@ impl ResponsesWebSocketAdapter {
         client: AuthenticatedClient,
         client_ip: Option<IpAddr>,
         user_agent: Option<String>,
-        request_headers: OpenAiRequestHeaders,
         raw_headers: HeaderMap,
         middleware: Option<FrozenMiddlewarePlan>,
         lifetime: Option<Arc<crate::middleware::CallLifetime>>,
@@ -130,7 +127,6 @@ impl ResponsesWebSocketAdapter {
             connection_id,
             client_ip,
             user_agent,
-            request_headers,
             raw_headers,
             lifecycle: self.service.lifecycle(),
             connection_guard,
@@ -150,7 +146,6 @@ struct ResponsesWebSocketSession {
     connection_id: String,
     client_ip: Option<IpAddr>,
     user_agent: Option<String>,
-    request_headers: OpenAiRequestHeaders,
     raw_headers: HeaderMap,
     lifecycle: Arc<dyn ConnectionLifecycle>,
     connection_guard: Box<dyn ConnectionGuard>,
@@ -164,7 +159,6 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         connection_id,
         client_ip,
         user_agent,
-        request_headers,
         mut raw_headers,
         lifecycle,
         connection_guard,
@@ -178,8 +172,6 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
     let cancellation = lifecycle.cancellation().child_token();
     let _connection_cancellation =
         crate::middleware::websocket::CancelOnDrop(Some(cancellation.clone()));
-    let request_headers =
-        request_headers.with_downstream_websocket_connection_id(connection_id.clone());
     // 帧中间件可能改写终态，此时不能据原始响应关闭下游连接
     let reconnect_for_replay = !middleware
         .as_ref()
@@ -241,31 +233,32 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
             continue;
         }
         request_count = request_count.saturating_add(1);
-        // 初步解码只保留路由事实，避免整份正文跨越准入等待和响应交付
-        let model_hint = match decode_response_create_with_context(&payload, &request_headers) {
-            Ok(decoded) => Some(decoded.metadata().requested_model().to_owned()),
-            Err(error) => {
-                trace_rejected_request(
-                    &correlation_id,
-                    connection.id(),
-                    &payload,
-                    "decode",
-                    &error.to_string(),
-                );
-                if send_protocol_error(
-                    &mut connection,
-                    StatusCode::BAD_REQUEST,
-                    error.protocol_body(),
-                    &correlation_id,
-                )
-                .await
-                    == ForwardOutcome::Disconnect
-                {
-                    break;
+        // 初步解码只取帧中的模型，实际执行使用该帧当前生效的请求头
+        let model_hint =
+            match decode_response_create_with_context(&payload, &OpenAiRequestHeaders::default()) {
+                Ok(decoded) => Some(decoded.metadata().requested_model().to_owned()),
+                Err(error) => {
+                    trace_rejected_request(
+                        &correlation_id,
+                        connection.id(),
+                        &payload,
+                        "decode",
+                        &error.to_string(),
+                    );
+                    if send_protocol_error(
+                        &mut connection,
+                        StatusCode::BAD_REQUEST,
+                        error.protocol_body(),
+                        &correlation_id,
+                    )
+                    .await
+                        == ForwardOutcome::Disconnect
+                    {
+                        break;
+                    }
+                    continue;
                 }
-                continue;
-            }
-        };
+            };
         // deadline 与 Text 可能同时就绪；在任何上游执行开始前再次封住该竞争窗口
         if connection.is_expired() {
             trace_rejected_request(
@@ -336,8 +329,9 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
             headers: encode_headers(&raw_headers),
             body: Bytes::from(payload),
         };
-        // 握手的轮次状态仅属于首次执行，复用连接时由各 response.create 自行携带
+        // 握手的轮次头只属于首次执行，复用连接时由各 response.create 携带本轮数据
         raw_headers.remove("x-codex-turn-state");
+        raw_headers.remove("x-codex-turn-metadata");
         let service_for_terminal = service.clone();
         let replay_for_terminal = replay.clone();
         let connection_id_for_terminal = connection.id().to_owned();

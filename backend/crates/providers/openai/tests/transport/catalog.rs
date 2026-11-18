@@ -431,8 +431,6 @@ fn context() -> CodexRequestContext<'static> {
         request_id: "req_catalog",
         turn_state: None,
         turn_metadata: None,
-        beta_features: None,
-        include_timing_metrics: None,
         version: None,
         codex_window_id: None,
         parent_thread_id: None,

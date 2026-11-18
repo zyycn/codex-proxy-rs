@@ -3,6 +3,45 @@
 use super::*;
 
 #[tokio::test]
+async fn websocket_body_fields_stay_in_the_body_when_using_http_upstream() {
+    let frame = r#"{"request_kind":"turn","tool_namespaces_info":{"workspace":{}}}"#;
+    let body = json!({
+        "model": "gpt-5.4", "input": "hello",
+        "client_metadata": {"x-codex-turn-metadata": frame},
+        "betaFeatures": "only-in-body", "includeTimingMetrics": "true"
+    });
+    let sent = capture_scoped_http_request(
+        "req_frame_only",
+        "acct_scope_same",
+        "acct_scope_same",
+        body.as_object().unwrap().clone(),
+        Map::from_iter([(
+            gateway_protocol::openai::WEBSOCKET_FRAME_CONTEXT_KEY.into(),
+            json!(true),
+        )]),
+    )
+    .await;
+    for header in [
+        "x-codex-turn-metadata",
+        "x-codex-beta-features",
+        "x-responsesapi-include-timing-metrics",
+    ] {
+        assert!(!sent.headers.contains_key(header), "{header}");
+    }
+    let sent_body = captured_request_body(&sent);
+    let sent_frame = sent_body["client_metadata"]["x-codex-turn-metadata"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(sent_frame).unwrap(),
+        serde_json::from_str::<Value>(frame).unwrap()
+    );
+    for key in ["betaFeatures", "includeTimingMetrics"] {
+        assert_eq!(sent_body[key], body[key]);
+    }
+}
+
+#[tokio::test]
 async fn responses_options_follow_the_selected_upstream_on_both_transports() {
     let oauth_omissions = json!({
         "frequency_penalty": 0, "presence_penalty": 0, "top_p": 1,

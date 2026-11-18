@@ -34,8 +34,6 @@ fn request_context_debug_should_redact_all_identity_material() {
         request_id: "req_safe",
         turn_state: Some("turn-secret-marker"),
         turn_metadata: Some("metadata-secret-marker"),
-        beta_features: None,
-        include_timing_metrics: None,
         version: None,
         codex_window_id: None,
         parent_thread_id: None,

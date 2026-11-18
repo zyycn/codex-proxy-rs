@@ -48,13 +48,15 @@ fn isolation_payload() -> ProtocolPayload {
     turn_metadata.insert("parent_response_id".to_owned(), json!("client-correlation"));
     turn_metadata.insert("workspace".to_owned(), json!("/工作区"));
     turn_metadata.insert("future".to_owned(), json!({"traceparent":"business-value"}));
+    let mut frame_metadata = turn_metadata.clone();
+    frame_metadata.insert("tool_namespaces_info".into(), json!({"workspace":{}}));
     let mut body = json!({
         "model": "gpt-5.4",
         "input": isolation_history(),
         "client_metadata": {
             "parent_response_id": "resp_parent_old",
             "guardian_credits_requested": "true",
-            "x-codex-turn-metadata": Value::Object(turn_metadata.clone()).to_string(),
+            "x-codex-turn-metadata": Value::Object(frame_metadata).to_string(),
             "turnMetadata": turn_metadata,
             "mcp_attribution": r#"{"status":"complete","sources":[]}"#
         }
@@ -86,6 +88,10 @@ fn isolation_payload() -> ProtocolPayload {
     ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
         .unwrap()
         .with_context(Map::from_iter([
+            (
+                gateway_protocol::openai::WEBSOCKET_FRAME_CONTEXT_KEY.into(),
+                json!(true),
+            ),
             ("opaque_request_headers".to_owned(), json!(headers)),
             (
                 "turn_metadata".to_owned(),
@@ -155,7 +161,6 @@ fn assert_isolated_request(
         &body["turnMetadata"],
         &body["turn_metadata"],
         &body["client_metadata"]["turnMetadata"],
-        &body["client_metadata"]["x-codex-turn-metadata"],
     ] {
         let actual = match metadata {
             Value::String(raw) => serde_json::from_str(raw).unwrap(),
@@ -163,6 +168,15 @@ fn assert_isolated_request(
         };
         assert_eq!(actual, Value::Object(expected_turn_metadata.clone()));
     }
+    let mut expected_frame_metadata = expected_turn_metadata.clone();
+    expected_frame_metadata.insert("tool_namespaces_info".into(), json!({"workspace":{}}));
+    let frame = body["client_metadata"]["x-codex-turn-metadata"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(frame).unwrap(),
+        Value::Object(expected_frame_metadata)
+    );
     let header = headers["x-codex-turn-metadata"].to_str().unwrap();
     assert!(header.is_ascii());
     assert_eq!(

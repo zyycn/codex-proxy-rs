@@ -157,8 +157,6 @@ pub(crate) fn request_context<'a>(
         request_id,
         turn_state: None,
         turn_metadata: None,
-        beta_features: None,
-        include_timing_metrics: None,
         version: None,
         codex_window_id: None,
         parent_thread_id: None,
@@ -354,6 +352,33 @@ fn codex_request_with_prompt_cache_key(
         Value::String(prompt_cache_key.into()),
     );
     CodexResponsesRequest::from_body(body)
+}
+
+fn encode_request_with_headers(
+    body: Map<String, Value>,
+    headers: &[(&str, &str)],
+) -> CodexResponsesRequest {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use gateway_core::operation::{GenerateRequest, ProtocolPayload};
+    use provider_openai::transport::request::encode_generate_request;
+
+    let headers: Vec<_> = headers
+        .iter()
+        .map(|(name, value)| json!([name, STANDARD.encode(value)]))
+        .collect();
+    let model = body["model"].as_str().unwrap().to_owned();
+    let payload = ProtocolPayload::json_object("openai", body)
+        .unwrap()
+        .with_context(Map::from_iter([(
+            "opaque_request_headers".to_owned(),
+            json!(headers),
+        )]));
+    encode_generate_request(
+        &GenerateRequest::from_protocol_payload(payload),
+        &model,
+        None,
+    )
+    .unwrap()
 }
 
 fn codex_request_body(

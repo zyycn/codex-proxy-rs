@@ -68,12 +68,10 @@ pub struct CodexResponsesRequest {
     pub turn_state: Option<String>,
     /// turn metadata 透传头
     pub turn_metadata: Option<String>,
-    /// beta features 透传头
-    pub beta_features: Option<String>,
+    /// 实际入站为 WS 帧时，观测优先使用本帧的轮次元数据
+    pub(crate) websocket_frame: bool,
     /// 下游 `version` 扩展头；存在时上游值由 Desktop 版本画像统一生成
     pub version: Option<String>,
-    /// timing metrics 透传头
-    pub include_timing_metrics: Option<String>,
     /// Responses Lite 请求语义；HTTP 使用 header，WebSocket 使用 client metadata 投影
     pub responses_lite: Option<String>,
     /// Memory consolidation 请求语义；HTTP 与 WebSocket opening 均使用 header
@@ -612,9 +610,8 @@ impl CodexResponsesRequest {
             force_http_sse: false,
             turn_state: None,
             turn_metadata: None,
-            beta_features: None,
+            websocket_frame: false,
             version: None,
-            include_timing_metrics: None,
             responses_lite: None,
             memgen_request: None,
             codex_window_id: None,
@@ -771,7 +768,11 @@ impl CodexResponsesRequest {
     ) -> CodexRequestSemantics {
         codex_responses_request_semantics_with_turn_metadata(
             self.body(),
-            self.turn_metadata.as_deref(),
+            gateway_protocol::openai::observed_turn_metadata(
+                self.body(),
+                self.turn_metadata.as_deref(),
+                self.websocket_frame,
+            ),
             previous_reasoning_effort_override,
         )
     }

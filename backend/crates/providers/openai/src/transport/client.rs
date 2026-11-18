@@ -472,10 +472,6 @@ pub struct CodexRequestContext<'a> {
     pub turn_state: Option<&'a str>,
     /// 客户端 turn metadata；其中 installation ID 已按当前账号处理
     pub turn_metadata: Option<&'a str>,
-    /// x-codex-beta-features 头值
-    pub beta_features: Option<&'a str>,
-    /// x-responsesapi-include-timing-metrics 头值
-    pub include_timing_metrics: Option<&'a str>,
     /// 下游 `version` 扩展头；存在时上游值由 Desktop 版本画像统一生成
     pub version: Option<&'a str>,
     /// 客户端 window ID
@@ -512,8 +508,6 @@ impl<'a> CodexRequestContext<'a> {
             request_id,
             turn_state: None,
             turn_metadata: None,
-            beta_features: None,
-            include_timing_metrics: None,
             version: None,
             codex_window_id: None,
             parent_thread_id: None,

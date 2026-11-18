@@ -6,6 +6,38 @@ const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
 const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
 const PROACTIVE_MULTI_AGENT_MODE_PREFIX: &str = "Proactive multi-agent delegation is active.";
 
+/// 标记实际入站的 Responses WS 帧，独立于出站传输偏好
+pub const WEBSOCKET_FRAME_CONTEXT_KEY: &str = "websocket_frame";
+
+/// 当前帧携带的完整元数据仅用于解释正文，握手或 HTTP 头保留各自的出站值
+#[must_use]
+pub fn observed_turn_metadata<'a>(
+    body: &'a Map<String, Value>,
+    header: Option<&'a str>,
+    websocket_frame: bool,
+) -> Option<&'a str> {
+    if websocket_frame && let Some(frame) = client_metadata_string(body, "x-codex-turn-metadata") {
+        return Some(frame);
+    }
+    header
+}
+
+/// HTTP 请求使用本次请求头，WS 帧使用本次正文或首次握手头
+#[must_use]
+pub fn context_turn_metadata<'a>(
+    body: &'a Map<String, Value>,
+    context: &'a Map<String, Value>,
+) -> Option<&'a str> {
+    observed_turn_metadata(
+        body,
+        context.get("turn_metadata").and_then(Value::as_str),
+        context
+            .get(WEBSOCKET_FRAME_CONTEXT_KEY)
+            .and_then(Value::as_bool)
+            == Some(true),
+    )
+}
+
 /// 各 Codex 端点共用的显式根会话身份
 /// 连接边界的 session_id 优先，
 /// 正文及官方 metadata 只做回退；不从 turn、window 或请求内容猜测归属
@@ -24,9 +56,7 @@ pub fn codex_account_session_id(
     client_metadata_string(body, "session_id")
         .map(str::to_owned)
         .or_else(|| request_turn_metadata(body).and_then(turn_metadata_session_id))
-        .or_else(|| {
-            non_empty_string(context.get("turn_metadata")).and_then(turn_metadata_session_id)
-        })
+        .or_else(|| context_turn_metadata(body, context).and_then(turn_metadata_session_id))
         .or_else(|| non_empty_string(body.get("session_id")).map(str::to_owned))
         .or_else(|| codex_session_id(body, context))
 }
@@ -40,9 +70,7 @@ pub fn codex_account_thread_id(
     client_metadata_string(body, "thread_id")
         .map(str::to_owned)
         .or_else(|| request_turn_metadata(body).and_then(turn_metadata_thread_id))
-        .or_else(|| {
-            non_empty_string(context.get("turn_metadata")).and_then(turn_metadata_thread_id)
-        })
+        .or_else(|| context_turn_metadata(body, context).and_then(turn_metadata_thread_id))
         .or_else(|| codex_thread_id(body, context))
 }
 
@@ -64,7 +92,7 @@ pub fn codex_turn_id(body: &Map<String, Value>, context: &Map<String, Value>) ->
     client_metadata_string(body, "turn_id")
         .map(str::to_owned)
         .or_else(|| request_turn_metadata(body).and_then(turn_metadata_turn_id))
-        .or_else(|| non_empty_string(context.get("turn_metadata")).and_then(turn_metadata_turn_id))
+        .or_else(|| context_turn_metadata(body, context).and_then(turn_metadata_turn_id))
         .or_else(|| codex_identity_field(body, context, "turn_id"))
 }
 
@@ -90,7 +118,8 @@ fn codex_identity_field(
         .or_else(|| client_metadata_string(body, field))
         .map(str::to_owned)
         .or_else(|| {
-            let metadata = non_empty_string(context.get("turn_metadata"))
+            let metadata = context_turn_metadata(body, context)
+                .filter(|value| !value.trim().is_empty())
                 .or_else(|| request_turn_metadata(body))?;
             let metadata: Value = serde_json::from_str(metadata).ok()?;
             non_empty_string(metadata.get(field)).map(str::to_owned)
@@ -127,7 +156,7 @@ pub fn codex_responses_request_semantics(
 ) -> CodexResponsesRequestSemantics {
     codex_responses_request_semantics_with_turn_metadata(
         body,
-        context.get("turn_metadata").and_then(Value::as_str),
+        context_turn_metadata(body, context),
         None,
     )
 }

@@ -532,6 +532,10 @@ async fn errors_on_a_reused_connection_keep_their_own_upstream_ids() {
         "x-codex-turn-state",
         axum::http::HeaderValue::from_static("opening"),
     );
+    opening.insert(
+        "x-codex-turn-metadata",
+        axum::http::HeaderValue::from_static(r#"{"request_kind":"turn"}"#),
+    );
     let (mut socket, _server) = connect_with_headers(Arc::clone(&trace), Vec::new(), opening).await;
     for request_id in ["req_first", "req_second"] {
         send_request(&mut socket).await;
@@ -540,8 +544,14 @@ async fn errors_on_a_reused_connection_keep_their_own_upstream_ids() {
         assert_eq!(error["headers"]["x-gateway-request-id"], "req_ws_atomic");
     }
     assert_eq!(
-        *trace.request_turn_states.lock().unwrap(),
-        [Some("opening".to_owned()), None]
+        *trace.request_turn_headers.lock().unwrap(),
+        [
+            [
+                Some("opening".to_owned()),
+                Some(r#"{"request_kind":"turn"}"#.to_owned())
+            ],
+            [None, None]
+        ]
     );
     assert_no_duplicate_failure(&mut socket).await;
     socket.close(None).await.unwrap();

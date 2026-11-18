@@ -168,21 +168,31 @@ fn response_create_should_preserve_compaction_trigger_for_openai() {
 
 #[test]
 fn response_create_should_prefer_frame_turn_metadata_over_opening_headers() {
+    let frame = r#"{"request_kind":"turn","tool_namespaces_info":{"workspace":{}}}"#;
+    let opening = r#"{"request_kind":"compaction"}"#;
     let decoded = decode_response_create_with_turn_header(
         json!({
             "type": "response.create",
             "model": "smart-code",
             "input": "hello",
             "client_metadata": {
-                "x-codex-turn-metadata": r#"{"request_kind":"turn"}"#
+                "x-codex-turn-metadata": frame
             }
         }),
-        r#"{"request_kind":"compaction"}"#,
+        opening,
     );
     let Operation::Generate(request) = decoded.operation() else {
         panic!("Responses must map to Generate");
     };
 
+    assert_eq!(
+        request.protocol_payload().context()["turn_metadata"],
+        opening
+    );
+    assert_eq!(
+        request.protocol_payload().body()["client_metadata"]["x-codex-turn-metadata"],
+        frame
+    );
     let semantics = codex_responses_request_semantics(
         request.protocol_payload().body(),
         request.protocol_payload().context(),
@@ -308,7 +318,7 @@ struct AtomicFailureTrace {
     committed: AtomicBool,
     finalized: AtomicBool,
     downstream_websocket_connection_ids: Mutex<Vec<String>>,
-    request_turn_states: Mutex<Vec<Option<String>>>,
+    request_turn_headers: Mutex<Vec<[Option<String>; 2]>>,
     initial_errors: Mutex<std::collections::VecDeque<EngineError>>,
     first_batch: Mutex<Option<CoordinatedEvent>>,
     session_drops: Arc<AtomicUsize>,
@@ -438,13 +448,10 @@ impl ExecutionService for AtomicFailureExecution {
                 .get("downstream_websocket_connection_id")
                 .and_then(Value::as_str)
         {
-            self.trace.request_turn_states.lock().unwrap().push(
-                generate
-                    .protocol_payload()
-                    .context()
-                    .get("turn_state")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+            let context = generate.protocol_payload().context();
+            self.trace.request_turn_headers.lock().unwrap().push(
+                ["turn_state", "turn_metadata"]
+                    .map(|key| context.get(key).and_then(Value::as_str).map(str::to_owned)),
             );
             self.trace
                 .downstream_websocket_connection_ids

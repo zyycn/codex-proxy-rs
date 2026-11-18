@@ -255,9 +255,7 @@ fn extract_request_context(request: &mut CodexResponsesRequest) {
     let context = ExtractedRequestContext::from_body(request.body());
     request.turn_state = context.turn_state;
     request.turn_metadata = context.turn_metadata;
-    request.beta_features = context.beta_features;
     request.version = context.version;
-    request.include_timing_metrics = context.include_timing_metrics;
     request.codex_window_id = context.codex_window_id;
     request.parent_thread_id = context.parent_thread_id;
     request.client_conversation_id = context.conversation_id;
@@ -269,9 +267,7 @@ fn extract_request_context(request: &mut CodexResponsesRequest) {
 struct ExtractedRequestContext {
     turn_state: Option<String>,
     turn_metadata: Option<String>,
-    beta_features: Option<String>,
     version: Option<String>,
-    include_timing_metrics: Option<String>,
     codex_window_id: Option<String>,
     parent_thread_id: Option<String>,
     conversation_id: Option<String>,
@@ -291,9 +287,7 @@ impl ExtractedRequestContext {
                 })
             }),
             turn_metadata: body_string(body, "turnMetadata"),
-            beta_features: body_string(body, "betaFeatures"),
             version: body_string(body, "version"),
-            include_timing_metrics: body_string(body, "includeTimingMetrics"),
             codex_window_id: body_string(body, "codexWindowId"),
             parent_thread_id: body_string(body, "parentThreadId"),
             conversation_id: body_string(body, "conversation_id"),
@@ -736,13 +730,13 @@ fn replace_metadata_field(metadata: &mut Map<String, Value>, key: &str, value: O
 // 请求头的场景)
 fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<String, Value>) {
     request.passthrough_headers = decode_passthrough_headers(context);
+    request.websocket_frame = context
+        .get(gateway_protocol::openai::WEBSOCKET_FRAME_CONTEXT_KEY)
+        .and_then(Value::as_bool)
+        == Some(true);
     request.turn_metadata =
         context_string(context, "turn_metadata").or_else(|| request.turn_metadata.take());
-    request.beta_features =
-        context_string(context, "beta_features").or_else(|| request.beta_features.take());
     request.version = context_string(context, "version").or_else(|| request.version.take());
-    request.include_timing_metrics = context_string(context, "include_timing_metrics")
-        .or_else(|| request.include_timing_metrics.take());
     request.codex_window_id =
         context_string(context, "codex_window_id").or_else(|| request.codex_window_id.take());
     request.downstream_websocket_connection_id =

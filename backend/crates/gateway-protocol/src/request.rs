@@ -32,7 +32,7 @@ pub fn request_observation(
         OPENAI_PROTOCOL => {
             let semantics = codex_responses_request_semantics_with_turn_metadata(
                 body,
-                context.get("turn_metadata").and_then(Value::as_str),
+                crate::openai::context_turn_metadata(body, context),
                 previous_reasoning_effort_override,
             );
             RequestObservation {

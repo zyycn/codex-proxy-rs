@@ -211,11 +211,6 @@ impl CodexBackendClient {
             ("x-codex-window-id", context.codex_window_id),
             ("x-codex-turn-state", context.turn_state),
             ("x-codex-turn-metadata", context.turn_metadata),
-            ("x-codex-beta-features", context.beta_features),
-            (
-                "x-responsesapi-include-timing-metrics",
-                context.include_timing_metrics,
-            ),
             ("x-codex-parent-thread-id", context.parent_thread_id),
             (
                 X_OPENAI_MEMGEN_REQUEST_HEADER,
