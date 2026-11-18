@@ -14,6 +14,7 @@ const props = withDefaults(
     planTypeDisplay: string
     count?: number
     size?: 'xs' | 'sm' | 'md'
+    wrap?: boolean
   }>(),
   {
     planType: null,
@@ -43,13 +44,11 @@ const displayText = computed(() => props.authenticationKind === 'api_key'
   ? 'API'
   : props.planTypeDisplay)
 
-const sizeClass = computed(() => {
-  if (props.size === 'xs')
-    return 'h-4.5 rounded-full px-1.5 text-[10px] font-bold'
-  return props.size === 'sm'
-    ? 'h-5 rounded-full px-1.75 text-z-xs font-bold'
-    : 'h-5.5 rounded-full px-2 text-z-xs font-heavy'
-})
+const sizes = {
+  xs: { text: 'text-[10px] font-bold', singleLine: 'h-4.5 px-1.5' },
+  sm: { text: 'text-z-xs font-bold', singleLine: 'h-5 px-1.75' },
+  md: { text: 'text-z-xs font-heavy', singleLine: 'h-5.5 px-2' },
+}
 
 const paletteClass = computed(() => {
   const key = rawPlanType.value.toLowerCase()
@@ -65,11 +64,16 @@ const paletteClass = computed(() => {
   <AccountUpstreamBadge v-if="upstreamPeer || upstream?.discovered" :size="size" />
   <span
     v-else
-    class="inline-flex min-w-0 max-w-full items-center justify-center gap-1 whitespace-nowrap leading-none shadow-z-tertiary"
-    :class="[sizeClass, paletteClass]"
+    class="inline-flex min-w-0 max-w-full items-center justify-center gap-1 shadow-z-tertiary"
+    :class="[
+      sizes[size].text, paletteClass,
+      wrap
+        ? 'min-h-5.5 rounded-lg px-1 py-0.75 text-center leading-3.5'
+        : [sizes[size].singleLine, 'rounded-full whitespace-nowrap leading-none'],
+    ]"
     :title="displayText || undefined"
   >
-    <span class="truncate">{{ displayText }}</span>
+    <span :class="wrap ? 'line-clamp-3 text-balance wrap-anywhere whitespace-normal' : 'truncate'">{{ displayText }}</span>
     <span v-if="count !== undefined" class="shrink-0 tabular-nums">{{ count }}</span>
   </span>
 </template>

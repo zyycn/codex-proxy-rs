@@ -69,7 +69,7 @@ const COMPLETED_SESSION_SSE: &str = concat!(
 );
 
 #[tokio::test]
-async fn plan_display_should_distinguish_pro_tiers_and_preserve_other_official_names() {
+async fn plan_display_uses_pro_short_names_and_codex_status_labels_for_other_known_plans() {
     let config = valid_config();
     let bundle = provider_openai::initialize(
         config.config.clone(),
@@ -86,25 +86,25 @@ async fn plan_display_should_distinguish_pro_tiers_and_preserve_other_official_n
         ("free", "Free"),
         ("go", "Go"),
         ("plus", "Plus"),
-        ("team", "Team"),
-        ("self_serve_business_prolite", "Self Serve Business ProLite"),
-        (
-            "self_serve_business_usage_based",
-            "Self Serve Business Usage Based",
-        ),
-        ("business", "Business"),
+        ("team", "Business"),
+        ("self_serve_business_prolite", "Business Premium"),
+        ("self_serve_business_usage_based", "Business"),
+        ("business", "Enterprise"),
         ("ent26", "Enterprise"),
         ("enterprise", "Enterprise"),
         ("hc", "Enterprise"),
         ("enterprise_cbp_automation", "Enterprise (Automation)"),
-        ("enterprise_cbp_usage_based", "Enterprise CBP Usage Based"),
+        ("enterprise_cbp_usage_based", "Enterprise"),
         ("edu", "Edu"),
         ("education", "Edu"),
         ("edu_plus", "Edu Plus"),
         ("edu_pro", "Edu Pro"),
-        ("future_plan", "future_plan"),
+        ("sci", "Academic Researchers"),
+        ("sci_plus", "Academic Researchers Plus"),
+        ("SCI_PLUS", "Academic Researchers Plus"),
+        ("Future_Plan", "Future_Plan"),
     ] {
-        assert_eq!(admin.plan_type_display(raw), display);
+        assert_eq!(admin.plan_type_display(raw), display, "{raw}");
     }
 }
 
