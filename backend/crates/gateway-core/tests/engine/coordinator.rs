@@ -898,7 +898,7 @@ impl Provider for ScriptedProvider {
                         futures::stream::iter(items.into_iter().map(canonical_provider_event))
                             .chain(futures::stream::pending()),
                     ),
-                    (),
+                    TrackedLease(Arc::clone(&self.released_leases)),
                 ))
             }
             Script::ObservedStream { account_id, items } => {
@@ -3402,7 +3402,16 @@ fn recovered_credential_retries_the_same_account_exactly_once() {
         CancellationToken::new(),
     ))
     .expect("start execution");
-    block_on(session.collect_uncommitted()).expect("recovered account succeeds");
+    let (release, gate) = oneshot::channel();
+    *store.intermediate_gate.lock().unwrap() = Some(gate);
+    block_on(async {
+        let mut collect = Box::pin(session.collect_uncommitted());
+        assert!(futures::poll!(collect.as_mut()).is_pending());
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+        assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
+        release.send(()).unwrap();
+        collect.await.expect("recovered account succeeds");
+    });
     block_on(session.commit_downstream(Some(200))).expect("commit response");
 
     let contexts = provider.contexts.lock().expect("contexts lock");
@@ -5408,7 +5417,7 @@ fn delivered_prelude_allows_retry_without_control_until_non_replayable_delivery(
 fn cancellation_before_pending_delivery_commit_reaches_terminal_state() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
-    let (coordinator, store, _) = coordinator(vec![Script::Stream {
+    let (coordinator, store, provider) = coordinator(vec![Script::Stream {
         account_id: "acct_first",
         items: complete_stream(None),
     }]);
@@ -5429,7 +5438,15 @@ fn cancellation_before_pending_delivery_commit_reaches_terminal_state() {
         CommitRequirement::CommitBeforeDelivery
     );
 
-    block_on(session.cancel_and_finalize()).expect("cancel finalization");
+    let (release, gate) = oneshot::channel();
+    *store.send_gate.lock().unwrap() = Some(gate);
+    block_on(async {
+        let mut cancel = Box::pin(session.cancel_and_finalize());
+        assert!(futures::poll!(cancel.as_mut()).is_pending());
+        assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
+        release.send(()).unwrap();
+        cancel.await.expect("cancel finalization");
+    });
 
     assert!(session.is_finalized());
     let state = store.state.lock().expect("store lock");
@@ -5946,7 +5963,7 @@ fn interrupted_stream_failure_preserves_the_original_attempt_and_retry_decision(
             let mut resumed = Box::pin(session.next_event());
             assert!(futures::poll!(resumed.as_mut()).is_pending());
             assert_eq!(provider.contexts.lock().unwrap().len(), 1);
-            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 0);
+            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
             release
                 .send(())
                 .expect("the original write still owns its receiver");
@@ -6144,6 +6161,7 @@ fn charged_terminal_write_resumes_without_replacing_success_failure_or_send_fact
                     assert!(futures::poll!(collect.as_mut()).is_pending());
                 } else {
                     session.collect_uncommitted().await.unwrap();
+                    assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
                     let mut commit = Box::pin(session.commit_downstream(Some(200)));
                     assert!(futures::poll!(commit.as_mut()).is_pending());
                 }
@@ -6187,7 +6205,7 @@ fn charged_terminal_write_resumes_without_replacing_success_failure_or_send_fact
 fn deadline_after_commit_is_persisted_as_incomplete() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
-    let (coordinator, store, _) = coordinator(vec![Script::HangingStream {
+    let (coordinator, store, provider) = coordinator(vec![Script::HangingStream {
         account_id: "acct_first",
         items: vec![Ok(GatewayEvent::Started(ResponseMeta::new(
             "response-1",
@@ -6215,6 +6233,7 @@ fn deadline_after_commit_is_persisted_as_incomplete() {
     let error = block_on(session.next_event()).expect_err("deadline elapses mid-stream");
 
     assert!(matches!(error, EngineError::Deadline));
+    assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Incomplete);
     assert!(state.finalizations[0].committed);
@@ -6491,8 +6510,6 @@ fn connection_recovery_rotates_only_after_retrying_the_first_account() {
         assert_eq!(context.transport(), AttemptTransport::Fallback);
     }
     assert_eq!(store.state.lock().unwrap().intermediate_failures, 2);
-    assert_eq!(provider.released_leases.load(Ordering::SeqCst), 2);
-    drop(session);
     assert_eq!(provider.released_leases.load(Ordering::SeqCst), 3);
 }
 
@@ -6556,8 +6573,6 @@ fn connection_recovery_keeps_one_account_and_http_transport_until_success() {
             let state = store.state.lock().unwrap();
             assert_eq!(state.intermediate_failures, 3);
             assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
-            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 3);
-            drop(session);
             assert_eq!(provider.released_leases.load(Ordering::SeqCst), 4);
         },
     )));
@@ -6654,8 +6669,6 @@ fn connection_recovery_does_not_delay_existing_account_rotation() {
     let state = store.state.lock().unwrap();
     assert_eq!(state.intermediate_failures, 2);
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
-    assert_eq!(provider.released_leases.load(Ordering::SeqCst), 2);
-    drop(session);
     assert_eq!(provider.released_leases.load(Ordering::SeqCst), 3);
 }
 
@@ -6749,8 +6762,6 @@ fn connection_recovery_exhaustion_preserves_transport_failure() {
         store.state.lock().unwrap().finalizations[0].attempt_count,
         4
     );
-    assert_eq!(provider.released_leases.load(Ordering::SeqCst), 3);
-    drop(session);
     assert_eq!(provider.released_leases.load(Ordering::SeqCst), 4);
 }
 

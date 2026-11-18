@@ -1947,7 +1947,7 @@ where
         let store = Arc::clone(self.engine.store());
         let request_id = self.request_id.clone();
         let persisted = self.request_persisted;
-        // 错误、账号 lease 与决策 future 都跨 next_event 的取消保留
+        // 错误、尝试记录与决策 future 都跨 next_event 的取消保留
         // 在持久化及策略回调完成前，不能再次拉流或建立新的 attempt
         self.current = Some(current);
         self.pending_stream_failure = Some(PendingStreamFailure {
@@ -2440,6 +2440,9 @@ where
     }
 
     async fn finish_interruption(&mut self, error: &EngineError) -> Result<(), EngineError> {
+        if let Some(current) = self.current.as_mut() {
+            current.stream.abort();
+        }
         // 结算 I/O 可能继续等待，先冻结交付事实以保持终态与实际 HTTP 状态一致
         self.response_commit.finish();
         let (outcome, gateway_error) = match error {
