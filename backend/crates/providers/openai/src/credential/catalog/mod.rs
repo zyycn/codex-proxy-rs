@@ -33,7 +33,7 @@ use crate::transport::{CodexBackendClient, CodexCatalogModel, CodexRequestContex
 
 const MAX_RESPONSE_ETAG_BYTES: usize = 256;
 const ACCOUNT_CATALOG_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-const CATALOG_REFRESH_AFTER: Duration = Duration::from_secs(30 * 60);
+const CATALOG_REFRESH_AFTER: Duration = Duration::from_hours(1);
 const MAX_ACCOUNT_CATALOG_MODELS: usize = 2_048;
 const MODEL_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -137,14 +137,31 @@ impl CatalogContent {
     }
 }
 
-#[derive(Clone)]
 struct AccountEntry {
     observed_at: SystemTime,
     content: Arc<CatalogContent>,
     etag: Option<String>,
+    // 目录返回不同版本时，触发这次查询的标记只用于去重
+    trigger_etag: Option<String>,
+    // 响应只确认这份目录的刷新期限，正文观测时间仍用于并发发布和持久化
+    etag_confirmed_at: std::sync::Mutex<Option<tokio::time::Instant>>,
 }
 
-type Entries = BTreeMap<CodexCatalogScope, AccountEntry>;
+impl AccountEntry {
+    fn recognizes_etag(&self, etag: &str) -> bool {
+        self.etag.as_deref() == Some(etag) || self.trigger_etag.as_deref() == Some(etag)
+    }
+
+    fn is_fresh(&self, now: SystemTime) -> bool {
+        now.duration_since(self.observed_at)
+            .is_ok_and(|age| age < CATALOG_REFRESH_AFTER)
+            || self.etag_confirmed_at.lock().is_ok_and(|confirmed| {
+                confirmed.is_some_and(|at| at.elapsed() < CATALOG_REFRESH_AFTER)
+            })
+    }
+}
+
+type Entries = BTreeMap<CodexCatalogScope, Arc<AccountEntry>>;
 
 pub struct CodexCredentialCatalogSnapshot {
     models: Vec<CodexCatalogModel>,
@@ -551,7 +568,7 @@ impl CodexCredentialCatalogService {
             revision: account.revision(),
             plan: account.plan_type().map(str::to_owned),
             observed_at,
-            etag: etag.clone().or(fetched.etag),
+            etag: fetched.etag.or_else(|| etag.clone()),
         };
         if !self
             .repository
@@ -577,7 +594,9 @@ impl CodexCredentialCatalogService {
             AccountEntry {
                 observed_at,
                 content,
+                trigger_etag: etag.filter(|tag| Some(tag) != observed.etag.as_ref()),
                 etag: observed.etag,
+                etag_confirmed_at: Default::default(),
             },
         ))
     }

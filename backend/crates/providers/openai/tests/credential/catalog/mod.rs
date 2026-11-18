@@ -739,6 +739,108 @@ async fn invalidation_queues_background_refresh_without_an_upstream_etag() {
 }
 
 #[tokio::test]
+async fn matching_etag_renews_only_its_account_until_the_next_change_or_expiry() {
+    use gateway_core::account::AccountCatalogObservation;
+    use std::time::{Duration, SystemTime};
+
+    let store = Arc::new(MemoryAccountStore::default());
+    let active = seed_account(&store, "acct_active").await;
+    let idle = seed_account(&store, "acct_idle").await;
+    let document = [&[0_u8][..], OFFICIAL_FIXTURE].concat();
+    let old_tag = r#""v1""#;
+    let new_tag = r#""v2""#;
+    let observed_at = SystemTime::now() - Duration::from_mins(61);
+    for account in [&active, &idle] {
+        assert!(
+            store
+                .save_account_catalog(
+                    &AccountCatalogObservation {
+                        account_id: account.id().clone(),
+                        revision: account.revision(),
+                        plan: account.plan_type().map(str::to_owned),
+                        observed_at,
+                        etag: Some(old_tag.to_owned()),
+                    },
+                    &document
+                )
+                .await
+                .unwrap()
+        );
+    }
+    let server = MockServer::start().await;
+    for account in [&active, &idle] {
+        Mock::given(method("GET"))
+            .and(path("/codex/models"))
+            .and(header(
+                "chatgpt-account-id",
+                format!("chatgpt-{}", account.id()),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("etag", old_tag)
+                    .set_body_raw(OFFICIAL_FIXTURE, "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    service.restore().await.unwrap();
+    assert!(!service.observe_response_etag(&active, old_tag).unwrap());
+    service.refresh_catalogs().await.unwrap();
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].headers["chatgpt-account-id"],
+        "chatgpt-acct_idle"
+    );
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_mins(59)).await;
+    service.refresh_catalogs().await.unwrap();
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    tokio::time::advance(Duration::from_mins(1)).await;
+    tokio::time::resume();
+    service.refresh_catalogs().await.unwrap();
+    server.verify().await;
+
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .and(header("chatgpt-account-id", "chatgpt-acct_active"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("etag", new_tag)
+                .set_body_json(
+                    serde_json::json!({"models":[{"slug":"active-only","display_name":"Active"}]}),
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert!(!service.observe_response_etag(&active, old_tag).unwrap());
+    assert!(
+        service
+            .observe_response_etag(&active, "change-hint")
+            .unwrap()
+    );
+    assert!(!service.observe_response_etag(&active, old_tag).unwrap());
+    service.refresh_catalogs().await.unwrap();
+    assert!(
+        !service
+            .observe_response_etag(&active, "change-hint")
+            .unwrap()
+    );
+    assert!(!service.observe_response_etag(&active, new_tag).unwrap());
+    service.refresh_catalogs().await.unwrap();
+    assert_eq!(
+        service.cached_account_models(&active).unwrap().unwrap(),
+        ["active-only"]
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn simultaneous_periodic_refreshes_share_the_completed_scan() {
     let store = Arc::new(MemoryAccountStore::default());
     for index in 0..64 {

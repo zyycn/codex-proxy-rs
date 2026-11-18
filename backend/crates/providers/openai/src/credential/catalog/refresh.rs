@@ -37,11 +37,13 @@ impl CodexCredentialCatalogService {
                 };
                 entries.insert(
                     scope,
-                    AccountEntry {
+                    Arc::new(AccountEntry {
                         observed_at: a.observed_at,
                         content: content.clone(),
                         etag: a.etag,
-                    },
+                        trigger_etag: None,
+                        etag_confirmed_at: Default::default(),
+                    }),
                 );
             }
         }
@@ -119,15 +121,21 @@ impl CodexCredentialCatalogService {
             .cache
             .write()
             .map_err(|_| CodexCredentialCatalogError::Cache)?;
-        if state.pending.get(&scope).map(String::as_str) == Some(etag)
-            || !state.pending.contains_key(&scope)
-                && state
-                    .snapshot
-                    .as_ref()
-                    .and_then(|s| s.entries.get(&scope))
-                    .and_then(|e| e.etag.as_deref())
-                    == Some(etag)
+        let pending = state.pending.get(&scope);
+        if pending.is_some_and(|tag| tag == etag) {
+            return Ok(false);
+        }
+        if let Some(entry) = state.snapshot.as_ref().and_then(|s| s.entries.get(&scope))
+            && entry.recognizes_etag(etag)
         {
+            // 已收到变更时，迟到的旧标记不能覆盖待刷新版本
+            if pending.is_none() && entry.etag.as_deref() == Some(etag) {
+                let mut confirmed_at = entry
+                    .etag_confirmed_at
+                    .lock()
+                    .map_err(|_| CodexCredentialCatalogError::Cache)?;
+                *confirmed_at = Some(tokio::time::Instant::now());
+            }
             return Ok(false);
         }
         state.pending.insert(scope, etag.to_owned());
@@ -166,7 +174,7 @@ impl CodexCredentialCatalogService {
                 .get(&scope)
                 .is_none_or(|old| old.observed_at < entry.observed_at)
             {
-                entries.insert(scope, entry);
+                entries.insert(scope, Arc::new(entry));
             }
         }
         self.publish(revision, entries)?;
@@ -205,7 +213,7 @@ impl CodexCredentialCatalogService {
                     return true;
                 };
                 // 发布其他账号时保留通知，只有该账号更新的观测才能确认 ETag
-                entry.etag.as_deref() != Some(tag)
+                !entry.recognizes_etag(tag)
                     || old
                         .as_ref()
                         .and_then(|s| s.entries.get(scope))
@@ -278,10 +286,7 @@ impl CodexCredentialCatalogService {
             .into_iter()
             .filter(|(scope, _)| {
                 pending.contains_key(scope)
-                    || !entries.get(scope).is_some_and(|e| {
-                        now.duration_since(e.observed_at)
-                            .is_ok_and(|age| age < CATALOG_REFRESH_AFTER)
-                    })
+                    || !entries.get(scope).is_some_and(|entry| entry.is_fresh(now))
             })
             .collect::<Vec<_>>();
         if due.is_empty() {
