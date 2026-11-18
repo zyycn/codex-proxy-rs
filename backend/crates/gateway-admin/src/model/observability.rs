@@ -158,7 +158,7 @@ impl OtherRequestOutcome {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct UsageFilter {
     pub client_api_key_name: Option<String>,
-    pub provider_account_name: Option<String>,
+    pub provider_account_search: Option<String>,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_account_ref: Option<String>,

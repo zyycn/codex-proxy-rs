@@ -32,7 +32,7 @@ impl DashboardQuery {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageQuery {
     pub client_api_key_name: Option<String>,
-    pub account_name: Option<String>,
+    pub account_search: Option<String>,
     pub status: Option<String>,
     pub current_page: Option<u32>,
     pub page_size: Option<u16>,
@@ -339,7 +339,7 @@ pub(crate) fn dashboard_today_range(
 pub(crate) fn usage_filter(query: &UsageQuery) -> domain::UsageFilter {
     domain::UsageFilter {
         client_api_key_name: non_empty(query.client_api_key_name.clone()),
-        provider_account_name: non_empty(query.account_name.clone()),
+        provider_account_search: non_empty(query.account_search.clone()),
         provider_kind: non_empty(query.provider.clone()),
         model_contains: non_empty(query.model.clone()),
         ..Default::default()

@@ -917,7 +917,7 @@ pub(super) fn usage_record_with_account(
 }
 
 #[tokio::test]
-async fn usage_route_should_forward_name_and_model_contains_filters() {
+async fn usage_route_should_forward_record_text_filters() {
     use axum::{
         body::Body,
         http::{Request, StatusCode, header},
@@ -933,7 +933,7 @@ async fn usage_route_should_forward_name_and_model_contains_filters() {
         .with_state(fixture.state())
         .oneshot(
             Request::builder()
-                .uri("/api/admin/usage/records?model=%20coding%20&clientApiKeyName=%20Key%20%25%20&accountName=%20Account%20Name%20")
+                .uri("/api/admin/usage/records?model=%20coding%20&clientApiKeyName=%20Key%20%25%20&accountSearch=%20alice%40%20")
                 .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_usage_other_outcome")
                 .body(Body::empty())
@@ -947,10 +947,7 @@ async fn usage_route_should_forward_name_and_model_contains_filters() {
     let filter = &observations.records.last().expect("usage query").filter;
     assert_eq!(filter.client_api_key_name.as_deref(), Some("Key %"));
     assert_eq!(filter.model_contains.as_deref(), Some("coding"));
-    assert_eq!(
-        filter.provider_account_name.as_deref(),
-        Some("Account Name")
-    );
+    assert_eq!(filter.provider_account_search.as_deref(), Some("alice@"));
     assert!(filter.client_api_key_ref.is_none());
     assert!(filter.provider_account_ref.is_none());
 }

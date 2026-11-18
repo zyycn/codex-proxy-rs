@@ -19,7 +19,7 @@ pub(crate) fn store_usage_filter(filter: admin_observability::UsageFilter) -> Us
     UsageRecordFilter {
         model_contains: filter.model_contains,
         client_api_key_name: filter.client_api_key_name,
-        provider_account_name: filter.provider_account_name,
+        provider_account_search: filter.provider_account_search,
         client_api_key_ref: filter.client_api_key_ref,
         request_id: filter.request_id,
         provider_account_ref: filter.provider_account_ref,

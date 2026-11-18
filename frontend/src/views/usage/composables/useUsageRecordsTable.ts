@@ -30,7 +30,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       clientApiKeyName: filterField.value === 'key'
         ? value
         : undefined,
-      accountName: filterField.value === 'account'
+      accountSearch: filterField.value === 'account'
         ? value
         : undefined,
       model: filterField.value === 'model'
@@ -74,7 +74,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   function filterChanged() {
     const filter = filterParams.value
     return tableParams.clientApiKeyName !== filter.clientApiKeyName
-      || tableParams.accountName !== filter.accountName
+      || tableParams.accountSearch !== filter.accountSearch
       || tableParams.model !== filter.model
   }
 

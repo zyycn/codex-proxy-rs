@@ -2790,7 +2790,7 @@ Dashboard 的 `accountUsage[]` 返回稳定指标 `metric=requests|tokens`、可
 Dashboard 默认 `period=today`，用量、诊断和错误查询默认 `period=7d`，范围参数遵循[页面时间合同](#页面时间合同)。
 Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚点
 
-请求明细列表接受 `currentPage`、`pageSize`、时间范围、`provider`、`clientApiKeyName`、`accountName`、`model` 和 `status`。
+请求明细列表接受 `currentPage`、`pageSize`、时间范围、`provider`、`clientApiKeyName`、`accountSearch`、`model` 和 `status`。
 汇总和洞察接受时间范围与 `provider`；性能和成本另要求 `metric`，诊断另接受 `dimension`、`model` 和 `statusCode`。
 各接口拒绝未知参数，明细筛选不改变顶部统计范围
 
@@ -2860,8 +2860,8 @@ HTTP SSE 请求可能在返回 HTTP 200 后流内失败；WebSocket 已升级时
 
 管理端请求列表与详情保留 `requestedModel`（客户端请求）与 `upstreamModel`（网关发送）
 
-请求明细的 `clientApiKeyName`、`accountName` 按字面量包含匹配请求保存的历史名称快照，区分大小写，
-不解析为 ID，也不依赖当前配置是否存在。`model` 按字面量包含匹配请求模型或上游模型，`%`、`_` 和 `\` 按普通字符处理
+请求明细的 `clientApiKeyName` 匹配 Key 名称，`accountSearch` 匹配账号名称或邮箱。
+这些筛选仅使用历史快照，可与时间、状态等条件组合。`model` 匹配请求模型或上游模型。以上文本筛选均按区分大小写的字面量包含匹配，`%`、`_` 和 `\` 按普通字符处理
 
 运维错误列表的 `search` 使用字面量包含匹配，`%`、`_` 和 `\` 按普通字符处理，不支持密钥值或可见前缀搜索。
 请求详情通过 `/api/admin/usage/records/detail?id=...` 查询
