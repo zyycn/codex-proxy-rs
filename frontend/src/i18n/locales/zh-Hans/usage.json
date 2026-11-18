@@ -84,6 +84,8 @@
     "filters": {
       "modelPlaceholder": "按模型筛选",
       "error": "错误",
+      "errorSource": "错误来源",
+      "allSources": "全部来源",
       "requestDetailType": "请求明细类型",
       "label": "使用记录筛选与操作",
       "refreshUsageHistory": "刷新使用记录",

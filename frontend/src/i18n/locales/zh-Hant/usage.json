@@ -84,6 +84,8 @@
     "filters": {
       "modelPlaceholder": "按模型篩選",
       "error": "錯誤",
+      "errorSource": "錯誤來源",
+      "allSources": "全部來源",
       "requestDetailType": "請求明細類型",
       "label": "使用記錄篩選與操作",
       "refreshUsageHistory": "刷新使用記錄",

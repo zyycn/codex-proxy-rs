@@ -3,13 +3,16 @@ import type { UsageReasoningRecord } from './shared/presenter'
 
 import { Bot, SquareDashedBottomCode } from '@lucide/vue'
 
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usageReasoningEffort } from './shared/presenter'
 
-defineProps<{
+const props = defineProps<{
   record: UsageReasoningRecord
+  inline?: boolean
 }>()
 
+const effort = computed(() => usageReasoningEffort(props.record))
 const { t } = useI18n({ useScope: 'global' })
 </script>
 
@@ -17,7 +20,8 @@ const { t } = useI18n({ useScope: 'global' })
   <span
     class="inline-flex items-center gap-1 whitespace-nowrap text-z-sm font-bold text-z-text"
   >
-    <span>{{ usageReasoningEffort(record) }}</span>
+    <span v-if="inline && effort !== '—'" class="font-mono font-medium text-z-text-secondary">({{ effort }})</span>
+    <span v-else-if="!inline">{{ effort }}</span>
     <span
       v-if="record.subagentKind"
       class="inline-flex shrink-0 text-z-purple-text"

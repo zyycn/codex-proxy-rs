@@ -345,7 +345,7 @@ async fn records_keep_pagination_and_hide_admin_and_upstream_data() {
     assert_eq!(data.records.len(), 3);
     for (query, status) in data.records.iter().zip([
         UsageRecordStatus::Success,
-        UsageRecordStatus::Error,
+        UsageRecordStatus::Error(None),
         UsageRecordStatus::All,
     ]) {
         assert_eq!(query.status, status);

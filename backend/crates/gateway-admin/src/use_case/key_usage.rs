@@ -225,7 +225,7 @@ impl KeyUsageService for DefaultKeyUsageService {
             .list_usage_records(UsageQuery {
                 status: match query.kind {
                     KeyUsageRecordKind::Success => UsageRecordStatus::Success,
-                    KeyUsageRecordKind::Error => UsageRecordStatus::Error,
+                    KeyUsageRecordKind::Error => UsageRecordStatus::Error(None),
                     KeyUsageRecordKind::All => UsageRecordStatus::All,
                 },
                 range: query.usage.range,

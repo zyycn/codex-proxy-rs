@@ -28,6 +28,7 @@ withDefaults(
   defineProps<{
     columns: TableColumn<UsageListRecord>[]
     rows: UsageListRecord[]
+    requestDetails?: boolean
     loading?: boolean
     emptyText?: string
   }>(),
@@ -91,7 +92,7 @@ const { t } = useI18n({ useScope: 'global' })
     </template>
 
     <template #createdAtDisplay="{ row }">
-      <UsageTimeCell :value="row.createdAtDisplay" />
+      <UsageTimeCell :value="row.createdAtDisplay" :datetime="requestDetails ? row.createdAt : undefined" />
     </template>
 
     <template #clientIp="{ row }">
@@ -105,7 +106,9 @@ const { t } = useI18n({ useScope: 'global' })
     </template>
 
     <template #model="{ row }">
-      <UsageModelCell :record="row" />
+      <UsageModelCell :record="row">
+        <UsageReasoningEffortCell v-if="requestDetails" :record="row" inline />
+      </UsageModelCell>
     </template>
 
     <template #reasoningEffort="{ row }">

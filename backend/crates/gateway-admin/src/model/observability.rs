@@ -180,7 +180,7 @@ pub struct UsageFilter {
 pub enum UsageRecordStatus {
     #[default]
     Success,
-    Error,
+    Error(Option<UsageErrorOrigin>),
     All,
 }
 
@@ -812,6 +812,17 @@ pub enum UsageErrorOrigin {
     Upstream,
     Connection,
     Unknown,
+}
+
+/// 来源规则所依赖的已保存事实，供内存投影与持久层分页查询共同解释
+#[derive(Clone, Copy)]
+pub enum UsageErrorEvidence {
+    ProviderErrorCode,
+    UpstreamStatusAtLeast(u16),
+    SavedUpstreamErrorOrClose,
+    ErrorKind(&'static [&'static str]),
+    Continuation(&'static [&'static str]),
+    ConnectionExit(&'static [&'static str]),
 }
 
 impl UsageErrorOrigin {
