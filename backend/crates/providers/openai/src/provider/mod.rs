@@ -86,7 +86,7 @@ use crate::transport::protocol::responses::{
 };
 use crate::transport::request::{
     CodexRequestEncodeError, RequestAccountScope, align_structured_location_fields,
-    clear_request_turn_state, encode_generate_request, scope_request_to_account,
+    encode_generate_request, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
@@ -239,19 +239,6 @@ impl CodexProvider {
         }
         if let Some(identity) = &self.session_identity {
             identity.prepare_local_conversation(&mut upstream);
-        }
-        if let Some(previous_session) = previous_session.as_ref() {
-            if same_client_turn(
-                previous_session.client_turn_id.as_deref(),
-                upstream.client_turn_id.as_deref(),
-            ) {
-                upstream.turn_state = upstream
-                    .turn_state
-                    .take()
-                    .or_else(|| previous_session.turn_state.clone());
-            } else {
-                clear_request_turn_state(&mut upstream);
-            }
         }
         let session_affinity =
             derive_codex_session_affinity(&upstream, context.client_api_key_ref());
@@ -1144,8 +1131,6 @@ impl CodexProvider {
                 )
                 .then_some(lease.account().revision().get()),
                 conversation_id: upstream_request.local_conversation_id.clone(),
-                turn_state: upstream_request.turn_state.clone(),
-                client_turn_id: upstream_request.client_turn_id.clone(),
                 reasoning_effort_override: upstream_request
                     .semantics(
                         previous_session

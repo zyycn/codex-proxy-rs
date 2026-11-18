@@ -140,7 +140,6 @@ async fn codex_backend_client_should_preserve_oversized_error_response() {
                 session_id: None,
                 thread_id: None,
                 client_request_id: None,
-                turn_id: None,
                 account_selection: Default::default(),
             },
         )
@@ -241,7 +240,6 @@ async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_bod
                 session_id: None,
                 thread_id: None,
                 client_request_id: None,
-                turn_id: None,
                 account_selection: Default::default(),
             },
         )
@@ -427,7 +425,6 @@ async fn codex_backend_client_should_capture_forwardable_response_metadata() {
                 session_id: None,
                 thread_id: None,
                 client_request_id: None,
-                turn_id: None,
                 account_selection: Default::default(),
             },
         )

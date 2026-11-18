@@ -46,6 +46,14 @@ async fn connect(
     trace: Arc<AtomicFailureTrace>,
     response_headers: Vec<ProviderResponseHeader>,
 ) -> (TestSocket, TestServer) {
+    connect_with_headers(trace, response_headers, axum::http::HeaderMap::new()).await
+}
+
+async fn connect_with_headers(
+    trace: Arc<AtomicFailureTrace>,
+    response_headers: Vec<ProviderResponseHeader>,
+    opening_headers: axum::http::HeaderMap,
+) -> (TestSocket, TestServer) {
     let execution = Arc::new(AtomicFailureExecution {
         client: authenticated_client("sk_ws_atomic"),
         trace,
@@ -66,6 +74,7 @@ async fn connect(
     request
         .headers_mut()
         .insert(AUTHORIZATION, "Bearer sk_ws_atomic".parse().unwrap());
+    request.headers_mut().extend(opening_headers);
     let (socket, response) = connect_async(request).await.expect("upgrade WebSocket");
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
     (socket, server)
@@ -518,13 +527,22 @@ async fn errors_on_a_reused_connection_keep_their_own_upstream_ids() {
         initial_errors: Mutex::new(VecDeque::from(errors)),
         ..AtomicFailureTrace::default()
     });
-    let (mut socket, _server) = connect(trace, Vec::new()).await;
+    let mut opening = axum::http::HeaderMap::new();
+    opening.insert(
+        "x-codex-turn-state",
+        axum::http::HeaderValue::from_static("opening"),
+    );
+    let (mut socket, _server) = connect_with_headers(Arc::clone(&trace), Vec::new(), opening).await;
     for request_id in ["req_first", "req_second"] {
         send_request(&mut socket).await;
         let error = next_error(&mut socket).await;
         assert_eq!(error["headers"]["x-request-id"], request_id);
         assert_eq!(error["headers"]["x-gateway-request-id"], "req_ws_atomic");
     }
+    assert_eq!(
+        *trace.request_turn_states.lock().unwrap(),
+        [Some("opening".to_owned()), None]
+    );
     assert_no_duplicate_failure(&mut socket).await;
     socket.close(None).await.unwrap();
 }

@@ -165,7 +165,7 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         client_ip,
         user_agent,
         request_headers,
-        raw_headers,
+        mut raw_headers,
         lifecycle,
         connection_guard,
         middleware,
@@ -336,6 +336,8 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
             headers: encode_headers(&raw_headers),
             body: Bytes::from(payload),
         };
+        // 握手的轮次状态仅属于首次执行，复用连接时由各 response.create 自行携带
+        raw_headers.remove("x-codex-turn-state");
         let service_for_terminal = service.clone();
         let replay_for_terminal = replay.clone();
         let connection_id_for_terminal = connection.id().to_owned();

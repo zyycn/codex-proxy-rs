@@ -44,7 +44,6 @@ fn request_context_debug_should_redact_all_identity_material() {
         session_id: None,
         thread_id: None,
         client_request_id: None,
-        turn_id: None,
         account_selection: Default::default(),
     };
     let debug = format!("{context:?}");

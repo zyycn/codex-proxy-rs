@@ -552,7 +552,6 @@ async fn fetch_should_use_wham_usage_headers_only() {
             session_id: Some("session-1"),
             thread_id: Some("thread-1"),
             client_request_id: Some("client-request-1"),
-            turn_id: Some("turn-1"),
             account_selection: Default::default(),
         })
         .await
@@ -953,7 +952,6 @@ fn context() -> CodexRequestContext<'static> {
         session_id: None,
         thread_id: None,
         client_request_id: None,
-        turn_id: None,
         account_selection: Default::default(),
     }
 }

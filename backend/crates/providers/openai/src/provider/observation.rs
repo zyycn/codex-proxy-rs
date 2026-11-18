@@ -711,7 +711,6 @@ pub(super) fn codex_request_context<'a>(
         session_id: request.client_session_id.as_deref(),
         thread_id: request.client_thread_id.as_deref(),
         client_request_id: request.client_request_id.as_deref(),
-        turn_id: request.client_turn_id.as_deref(),
         account_selection,
     }
 }

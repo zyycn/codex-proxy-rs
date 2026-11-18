@@ -189,7 +189,6 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
                 session_id: Some("cp_derived"),
                 thread_id: None,
                 client_request_id: None,
-                turn_id: None,
                 account_selection: Default::default(),
             },
         )
@@ -307,7 +306,6 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
                 session_id: Some("session-1"),
                 thread_id: None,
                 client_request_id: None,
-                turn_id: None,
                 account_selection: Default::default(),
             },
         )
@@ -429,7 +427,6 @@ async fn backend_http_should_ignore_unrepresentable_protocol_headers_without_blo
                 client_request_id: Some("opaque\nclient-request-id"),
                 session_id: Some("opaque\nsession"),
                 thread_id: Some("opaque\nthread"),
-                turn_id: Some("opaque\nturn"),
                 codex_window_id: Some("opaque\nwindow"),
                 parent_thread_id: Some("opaque\nparent"),
                 beta_features: Some("opaque\nbeta"),

@@ -542,9 +542,9 @@ Images 的 `x-codex-image-turn-id` 和 Desktop 自动 Git 上下文的 `clientUs
 续接 response ID、历史 item/call ID、业务正文和未知扩展不参与映射，
 该处理减少显式追踪标识的跨账号复用，不保证会话内容或业务 metadata 无法关联
 
-`x-codex-turn-state` 是上游返回的轮次路由 token，同一轮内应原样回传，开始新轮次时清除。
-全量请求没有 `previous_response_id` 或缺少本地归属记录时，代理原样保留客户端回传值；
-明确换账号或可信续接状态表明不属于同一轮时清除。该 token 不使其他账号状态字段或未知 `previous_response_id` 成为可信续接上下文
+`x-codex-turn-state` 是上游签发的轮次路由 token。客户端在同一轮原样回传，新轮次省略。
+网关转发当前请求提供的值，明确换账号时清除。WS 握手携带的值只用于首次请求，当前帧提供的值优先。
+续接 response ID 及其他账号状态的归属独立校验
 
 #### 正文兼容
 

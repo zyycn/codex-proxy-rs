@@ -50,8 +50,6 @@ pub struct CodexResponsesRequest {
     pub client_thread_id: Option<String>,
     /// 客户端 request ID，仅保留在受控本地上下文
     pub client_request_id: Option<String>,
-    /// 客户端 turn ID，仅保留在受控本地上下文
-    pub client_turn_id: Option<String>,
     /// 连接池和 affinity 使用的本地会话身份，不发送上游
     pub local_conversation_id: Option<String>,
     /// 变体身份键
@@ -605,7 +603,6 @@ impl CodexResponsesRequest {
             client_account_follow_only: false,
             client_thread_id: None,
             client_request_id: None,
-            client_turn_id: None,
             local_conversation_id: None,
             variant_identity: None,
             client_ip: None,

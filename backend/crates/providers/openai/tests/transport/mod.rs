@@ -167,7 +167,6 @@ pub(crate) fn request_context<'a>(
         session_id: None,
         thread_id: None,
         client_request_id: None,
-        turn_id: None,
         account_selection: Default::default(),
     }
 }

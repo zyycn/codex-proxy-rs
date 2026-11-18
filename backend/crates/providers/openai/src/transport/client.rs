@@ -492,8 +492,6 @@ pub struct CodexRequestContext<'a> {
     pub thread_id: Option<&'a str>,
     /// 客户端逻辑 request ID；缺失时使用代理请求 ID
     pub client_request_id: Option<&'a str>,
-    /// 客户端 turn ID
-    pub turn_id: Option<&'a str>,
     /// 账号亲和选择结果；仅用于结构化遥测，不参与 transport 决策
     pub account_selection: CodexAccountSelectionTelemetry<'a>,
 }
@@ -524,7 +522,6 @@ impl<'a> CodexRequestContext<'a> {
             session_id: None,
             thread_id: None,
             client_request_id: None,
-            turn_id: None,
             account_selection: CodexAccountSelectionTelemetry::NONE,
         }
     }
