@@ -56,8 +56,21 @@ export function usageSendStateText(state: string) {
   }
 }
 
-export function usageErrorCode(record: UsageErrorFacts): string | null {
-  return record.websocketCloseCode != null
-    ? `WS ${record.websocketCloseCode}`
-    : record.errorCode
+export function usageErrorReason(code: string | null): string | undefined {
+  switch (code) {
+    case 'no_available_provider': return t('usage.error.noAvailableProvider')
+    case 'rate_limited':
+    case 'rate_limit_exceeded': return t('common.errors.rateLimited')
+    case 'invalid_request': return t('common.errors.invalidParameters')
+    case 'upstream_connection_closed': return t('usage.error.upstreamConnectionClosed')
+    case 'upstream_timeout': return t('common.errors.upstreamTimeout')
+    case 'timeout':
+    case 'request_timeout': return t('common.errors.timeout')
+    case 'concurrency_queue_timeout': return t('usage.error.queueTimeout')
+    case 'concurrency_queue_full': return t('usage.error.queueFull')
+    case 'message_too_big': return t('common.errors.payloadTooLarge')
+    case 'cancelled':
+    case 'request_cancelled': return t('common.errors.canceled')
+    case 'internal_error': return t('common.errors.internal')
+  }
 }

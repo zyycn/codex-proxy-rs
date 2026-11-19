@@ -8,6 +8,8 @@ import { t } from '@/i18n'
 
 export function useUsageRecordColumns(status: Ref<UsageRecordStatus>, tableWidth: Readonly<Ref<number>>) {
   const columns = computed(() => usageRecordColumns.value.map((column) => {
+    if (column.key === 'createdAtDisplay')
+      return { ...column, width: 128 }
     if (column.key === 'accountEmail')
       return { ...column, width: 280, hideable: true }
     return ['clientApiKeyName', 'model', 'reasoningEffort'].includes(column.key)
@@ -18,6 +20,7 @@ export function useUsageRecordColumns(status: Ref<UsageRecordStatus>, tableWidth
   const errors = useTableColumns(() => {
     const time = columns.value.find(column => column.key === 'createdAtDisplay')!
     const actionWidth = 72
+    const errorWidth = 370
     return [
       {
         key: 'errorMessage',
@@ -25,11 +28,11 @@ export function useUsageRecordColumns(status: Ref<UsageRecordStatus>, tableWidth
         kind: 'custom',
         fixed: 'left',
         minWidth: tableWidth.value
-          ? Math.min(310, Math.max(96, (tableWidth.value - actionWidth) / 2))
-          : 310,
+          ? Math.min(errorWidth, Math.max(96, (tableWidth.value - actionWidth) / 2))
+          : errorWidth,
         hideable: false,
       },
-      { ...time, width: 112 },
+      time,
       ...columns.value.filter(column => column.key !== time.key).map((column) => {
         if (column.key === 'transport')
           return { ...column, width: 112 }

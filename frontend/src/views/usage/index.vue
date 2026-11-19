@@ -91,7 +91,7 @@ watch(timeRange, () => {
   <div class="@container w-full">
     <ZPageHeader class="justify-end" :title="t('navigation.usage')" :description="t('usage.page.description')">
       <template #actions>
-        <div class="flex w-[100cqw] max-w-[100cqw] flex-wrap items-center justify-end gap-2 @min-[21rem]:flex-nowrap @min-[28rem]:w-auto">
+        <div class="flex w-[100cqw] max-w-[100cqw] flex-wrap items-center justify-end gap-2 @min-[21rem]:flex-nowrap @md:w-auto">
           <ZDatePicker
             v-model="timeRange"
             type="daterange"
@@ -100,7 +100,7 @@ watch(timeRange, () => {
             :disabled-date="disabledDate"
             single-panel
             :aria-label="t('usage.page.dateRangeLabel')"
-            class="min-w-0 flex-1 basis-full @min-[21rem]:basis-auto @min-[28rem]:w-60 @min-[28rem]:flex-none @max-[28rem]:[&>div]:gap-1.5 @max-[28rem]:[&>div]:px-2"
+            class="min-w-0 flex-1 basis-full @min-[21rem]:basis-auto @md:w-60 @md:flex-none @max-md:[&>div]:gap-1.5 @max-md:[&>div]:px-2"
           />
           <ProviderFilter
             v-model="providerQuery"
@@ -140,7 +140,7 @@ watch(timeRange, () => {
 
       <template #body>
         <div
-          class="flex min-h-130 min-w-0 flex-1 flex-col gap-3"
+          class="grid min-h-130 min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"
         >
           <UsageFilters
             v-model:field="filterField"
@@ -167,7 +167,7 @@ watch(timeRange, () => {
             </template>
           </UsageFilters>
 
-          <div ref="tableArea" class="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div ref="tableArea" class="flex min-h-0 min-w-0 flex-col">
             <UsageRecordsTable
               class="min-h-0 flex-1"
               :columns="columns.visibleColumns.value"
