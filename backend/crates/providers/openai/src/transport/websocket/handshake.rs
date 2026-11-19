@@ -35,7 +35,7 @@ use super::{
 use super::control::WEBSOCKET_SEND_TIMEOUT;
 
 const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
-const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl CodexWebSocketConnection {
     /// 复用传输库的握手编码检查，不能在拨号后才发现插件输出不可表示

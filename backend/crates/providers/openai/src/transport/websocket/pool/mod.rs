@@ -37,6 +37,7 @@ pub(crate) use self::{
 };
 
 const DEFAULT_MAX_CONNECTING: usize = 16;
+pub(crate) const DEFAULT_FAST_PATH_BUDGET_MS: u64 = 800;
 const DEFAULT_MAX_AGE: Duration = Duration::from_mins(55);
 const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -70,6 +71,8 @@ pub struct CodexWebSocketPoolConfig {
     pub max_age: Duration,
     /// 所有账号合计允许并发执行的 opening 数
     pub max_connecting: usize,
+    /// 允许回退 HTTP 的请求在前台等待 WebSocket 建连的时长
+    pub fast_path_budget: Duration,
     /// 后台维护间隔；`None` 表示不启动后台任务
     pub maintenance_interval: Option<Duration>,
     /// 未绑定下游 WS 的连接归池后可空闲的时间，不由 Ping/Pong 刷新
@@ -84,6 +87,7 @@ impl Default for CodexWebSocketPoolConfig {
             enabled: true,
             max_age: DEFAULT_MAX_AGE,
             max_connecting: DEFAULT_MAX_CONNECTING,
+            fast_path_budget: Duration::from_millis(DEFAULT_FAST_PATH_BUDGET_MS),
             maintenance_interval: Some(DEFAULT_MAINTENANCE_INTERVAL),
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             stream_idle_timeout: Some(DEFAULT_STREAM_IDLE_TIMEOUT),
@@ -115,6 +119,10 @@ impl CodexWebSocketPool {
         };
         pool.spawn_maintenance_task();
         pool
+    }
+
+    pub(crate) fn fast_path_budget(&self) -> Duration {
+        self.config.fast_path_budget
     }
 
     /// 等待下一条上游消息的空闲超时；`None` 或零值使用默认 300 秒

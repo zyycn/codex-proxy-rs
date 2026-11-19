@@ -341,6 +341,31 @@ async fn downstream_websocket_new_chain_should_preserve_continuation_after_slow_
 
 #[tokio::test]
 async fn external_continuation_should_wait_for_a_cold_websocket() {
+    assert_slow_opening_uses_websocket(
+        external_continuation_request("conversation-cross-account"),
+        CodexWebSocketPoolConfig::default(),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn configured_fast_path_budget_should_allow_slow_websocket_openings() {
+    let config = CodexWebSocketPoolConfig {
+        fast_path_budget: Duration::from_secs(3),
+        ..Default::default()
+    };
+    let mut persisted = new_chain_request("persisted");
+    persisted.set_previous_response_id(Some("resp_persisted".into()));
+    persisted.previous_response_scope = Some(PreviousResponseScope::Persisted);
+    for request in [new_chain_request("new-chain"), persisted] {
+        assert_slow_opening_uses_websocket(request, config).await;
+    }
+}
+
+async fn assert_slow_opening_uses_websocket(
+    request: CodexResponsesRequest,
+    config: CodexWebSocketPoolConfig,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -350,12 +375,12 @@ async fn external_continuation_should_wait_for_a_cold_websocket() {
         let _payload = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
-                completed_websocket_response("resp_cross_account", 2, 1).into(),
+                completed_websocket_response("resp_slow_opening", 2, 1).into(),
             ))
             .await
             .unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::default());
+    let pool = Arc::new(CodexWebSocketPool::with_config(config));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -363,13 +388,16 @@ async fn external_continuation_should_wait_for_a_cold_websocket() {
     )
     .with_websocket_pool(Arc::clone(&pool));
 
-    let response = backend
-        .create_response(
-            &external_continuation_request("conversation-cross-account"),
-            request_context("req_cross_account", Some("chatgpt-account-b")),
-        )
-        .await
-        .expect("external continuation should complete over WebSocket");
+    let response = timeout(
+        Duration::from_secs(5),
+        backend.create_response(
+            &request,
+            request_context("req_slow_opening", Some("chatgpt-account-b")),
+        ),
+    )
+    .await
+    .expect("slow WebSocket opening should complete")
+    .unwrap();
     server.await.unwrap();
 
     assert_eq!(response.transport, CodexBackendTransport::WebSocket);

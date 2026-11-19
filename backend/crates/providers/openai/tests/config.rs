@@ -96,26 +96,53 @@ fn openai_stream_retry_budget_uses_the_official_hard_cap() {
 }
 
 #[test]
-fn websocket_pool_idle_timeout_accepts_existing_configs_and_explicit_overrides() {
-    for (idle_timeout_ms, expected) in [(None, 300_000), (Some(600_000), 600_000)] {
-        let mut document = serde_json::json!({
-            "ws_pool": {
+fn websocket_pool_timeouts_accept_defaults_and_individual_overrides() {
+    for (settings, idle_ms, fast_ms) in [
+        (
+            serde_json::json!({
                 "enabled": true,
                 "max_age_ms": 3_300_000,
                 "max_connecting": 8,
                 "stream_idle_timeout_ms": 300_000
-            }
-        });
-        if let Some(idle_timeout_ms) = idle_timeout_ms {
-            document["ws_pool"]["idle_timeout_ms"] = serde_json::json!(idle_timeout_ms);
-        }
-        let mut config: OpenAiConfig = serde_json::from_value(document).unwrap();
+            }),
+            300_000,
+            800,
+        ),
+        (
+            serde_json::json!({"idle_timeout_ms": 600_000}),
+            600_000,
+            800,
+        ),
+        (serde_json::json!({"fast_path_budget_ms": 1}), 300_000, 1),
+        (
+            serde_json::json!({"fast_path_budget_ms": 15_000}),
+            300_000,
+            15_000,
+        ),
+    ] {
+        let mut config: OpenAiConfig =
+            serde_json::from_value(serde_json::json!({"ws_pool": settings})).unwrap();
         config
             .resolve_and_validate(Path::new("/srv/gateway"))
             .unwrap();
-        assert_eq!(
-            config.websocket_pool_config().idle_timeout,
-            Duration::from_millis(expected)
+        let pool = config.websocket_pool_config();
+        assert_eq!(pool.idle_timeout, Duration::from_millis(idle_ms));
+        assert_eq!(pool.fast_path_budget, Duration::from_millis(fast_ms));
+    }
+}
+
+#[test]
+fn websocket_fast_path_budget_must_fit_the_opening_timeout() {
+    for budget_ms in [0, 15_001] {
+        let mut config = valid_config();
+        config.ws_pool.fast_path_budget_ms = budget_ms;
+        let error = config
+            .resolve_and_validate(Path::new("/srv/gateway"))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("openai.ws_pool.fast_path_budget_ms")
         );
     }
 }
