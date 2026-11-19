@@ -982,8 +982,7 @@ async fn websocket_pool_should_release_slot_when_client_drops_stream() {
             .contains("streaming has begun")
     );
 
-    // 客户端断开：drop stream → rx 被 drop → tx.closed() 完成 →
-    // 代理丢弃上游连接并释放 slot（不再等 idle 超时）
+    // 客户端丢弃响应流会触发上游连接关闭，池槽位在空闲超时前释放
     drop(stream);
     tokio::time::sleep(Duration::from_millis(200)).await;
 

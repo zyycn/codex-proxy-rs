@@ -341,7 +341,7 @@ async fn account_quota_refresh_time_uses_server_clock_and_deployment_timezone() 
         ));
         let future = now + Duration::days(1);
         let future_display = zone.local(future).format("%Y-%m-%d %H:%M:%S").to_string();
-        for (observed_at, expected, legacy) in [
+        for (observed_at, expected, display) in [
             (None, json!(null), "—"),
             (Some(now), json!({ "kind": "just_now" }), "刚刚"),
             (
@@ -389,7 +389,7 @@ async fn account_quota_refresh_time_uses_server_clock_and_deployment_timezone() 
             let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
             let quota = &value["data"]["items"][0]["quota"];
             assert_eq!(quota["refreshedAtRelative"], expected);
-            assert_eq!(quota["refreshedAtDisplay"], legacy);
+            assert_eq!(quota["refreshedAtDisplay"], display);
             let refreshed_at = quota["refreshedAt"]
                 .as_str()
                 .map(|value| DateTime::parse_from_rfc3339(value).unwrap().to_utc());

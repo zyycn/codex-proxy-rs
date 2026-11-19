@@ -327,7 +327,6 @@ async fn managed_http_enforces_the_callers_body_limit_before_sending() {
         .mount(&server)
         .await;
     let client = HttpClient::new().unwrap();
-    // 覆盖旧固定上限之外的正文，并验证同一个客户端逐次使用调用方的预算
     let maximum = 17 * 1024 * 1024;
     for (size, limit, accepted) in [
         (maximum, maximum, true),

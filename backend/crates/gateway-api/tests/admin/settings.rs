@@ -431,7 +431,7 @@ fn settings_request_accepts_unlimited_default_account_concurrency() {
 }
 
 #[test]
-fn settings_request_validates_cron_and_allows_disabled_empty_schedule() {
+fn warmup_cron_is_required_and_may_be_empty_only_when_disabled() {
     for (enabled, cron, valid) in [
         (false, "", true),
         (true, "", false),
@@ -461,10 +461,9 @@ fn settings_request_validates_cron_and_allows_disabled_empty_schedule() {
     let request: UpdateRuntimeSettingsRequest = serde_json::from_value(oversized).unwrap();
     assert_eq!(request.validate().unwrap_err().field(), "accountWarmupCron");
 
-    let mut legacy = update_body();
-    legacy.as_object_mut().unwrap().remove("accountWarmupCron");
-    legacy["accountWarmupScheduleTime"] = json!("08:00");
-    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(legacy).is_err());
+    let mut missing = update_body();
+    missing.as_object_mut().unwrap().remove("accountWarmupCron");
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(missing).is_err());
 }
 
 #[test]
@@ -705,8 +704,6 @@ async fn admin_auth_should_accept_a_configured_request_id_header_name() {
 
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
-    // 部署把 api.request_id_header 改名后，注入的 header 不再叫 x-request-id；
-    // 管理请求仍须拿到请求上下文，而不是退化为 500
     let custom = HeaderName::from_static("x-trace-id");
     let app = app(fixture.state()).layer(SetRequestIdLayer::new(custom, MakeRequestUuid));
     let unlabelled = Request::builder()
@@ -919,7 +916,7 @@ fn global_profile_can_be_omitted_but_cannot_be_cleared() {
 }
 
 #[tokio::test]
-async fn generic_global_profiles_decode_native_providers_and_reject_legacy_conflicts() {
+async fn global_profiles_decode_native_providers_and_reject_conflicting_openai_settings() {
     let mut body = update_body();
     body["providerRequestProfiles"] = json!({
         "openai":{"preset":"desktop"},

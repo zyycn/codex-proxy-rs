@@ -432,8 +432,7 @@ async fn lagged_profiles_track_observed_release_history() {
     );
 }
 
-/// 重启后恢复缓存、首次检查即发现新版：恢复版本必须进入发布历史，
-/// 滞后一档不能跳回启动种子（PR #339 审查反馈的触发序列）。
+/// 重启后首次检查发现新版时，滞后一档应选中从缓存恢复的版本
 #[tokio::test]
 async fn restored_cache_release_should_stay_in_version_lag_history() {
     use provider_openai::transport::profile::selection::ClientProfileSelection;

@@ -232,7 +232,6 @@ async fn warmup_uses_global_profile_and_lowest_reasoning_effort() {
         zstd::stream::decode_all(requests[0].body.as_slice()).expect("zstd body should decode");
     let body: serde_json::Value =
         serde_json::from_slice(&decoded).expect("warmup body should be valid JSON");
-    // 上游按目录拒绝目录外的档位，none 曾让全部定时预热只留下 error 终态
     assert_eq!(body["reasoning"]["effort"], "low");
     *policy.0.lock().unwrap() = OpaqueProviderData::new(
         json!({"mode":"custom","userAgent":"invalid"})

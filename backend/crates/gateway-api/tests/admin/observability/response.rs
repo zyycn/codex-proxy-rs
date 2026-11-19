@@ -2082,7 +2082,7 @@ async fn dashboard_relative_time_preserves_server_anchor_boundaries_and_deployme
         ("Asia/Kathmandu", "2026-06-15 05:45:01"),
         ("America/New_York", "2026-06-14 20:00:01"),
     ] {
-        for (elapsed_ms, expected, legacy) in [
+        for (elapsed_ms, expected, display) in [
             (None, json!(null), "—"),
             (
                 Some(-1_000),
@@ -2197,7 +2197,7 @@ async fn dashboard_relative_time_preserves_server_anchor_boundaries_and_deployme
                 account["lastUsedRelative"], expected,
                 "{zone}: {elapsed_ms:?}"
             );
-            assert_eq!(account["lastUsed"], legacy, "{zone}: {elapsed_ms:?}");
+            assert_eq!(account["lastUsed"], display, "{zone}: {elapsed_ms:?}");
             assert_eq!(account["lastUsedAt"], json!(last_used_at));
         }
     }

@@ -1097,7 +1097,7 @@ fn history_sanitizer_should_only_strip_known_grok_injection_sites() {
         .expect("history normalization");
     let body = Value::Object(encoded.body().clone());
 
-    // 工具 schema 里恰好叫 phase 的属性与语义 null 不再被误删
+    // 工具 schema 内的属性名和 null 值属于用户数据
     assert_eq!(
         body.pointer("/input/0/tools/0/input_schema/properties/phase"),
         Some(&json!({"type": "string"}))
@@ -1312,7 +1312,7 @@ fn unsupported_tools_should_be_filtered_with_their_orphaned_choice() {
 }
 
 #[test]
-fn ambiguous_tool_contracts_should_fail_before_upstream_io() {
+fn invalid_responses_requests_report_the_offending_field() {
     for (body, field) in [
         (
             json!({"model": "client", "input": "x", "tools": [
@@ -1339,33 +1339,34 @@ fn ambiguous_tool_contracts_should_fail_before_upstream_io() {
             json!({"model": "client", "input": [{"type": "compaction_trigger"}]}),
             "input",
         ),
+        (
+            json!({"input": [{"type":"local_shell_call", "call_id":"call_shell",
+                "action":{"type":"exec", "command":["pwd"]}}]}),
+            "input",
+        ),
+        (
+            json!({"input": [{"type":"local_shell_call_output", "call_id":"call_shell", "output":"ok"}]}),
+            "input",
+        ),
+        (
+            json!({"input":"hello", "response_format":{"type":"json_object"}}),
+            "response_format",
+        ),
+        (
+            json!({"input":"hello", "reasoning_effort":"high"}),
+            "reasoning_effort",
+        ),
+        (
+            json!({"input":"hello", "reasoningEffort":"high"}),
+            "reasoningEffort",
+        ),
     ] {
         let request = raw_request(body);
         assert_eq!(
             GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
-                .expect_err("invalid tool contract"),
-            GrokRequestEncodeError::InvalidRequestField { field }
-        );
-    }
-}
-
-#[test]
-fn retired_wire_formats_are_rejected_without_fallback() {
-    for field in ["response_format", "reasoning_effort", "reasoningEffort"] {
-        let mut body = json!({"input":"hello"});
-        body[field] = json!("high");
-        assert!(
-            GrokResponsesRequest::encode(&raw_request(body), "grok-4.6", &client_key()).is_err()
-        );
-    }
-    for kind in ["local_shell_call", "local_shell_call_output"] {
-        assert!(
-            GrokResponsesRequest::encode(
-                &raw_request(json!({"input":[{"type":kind,"call_id":"old"}]})),
-                "grok-4.6",
-                &client_key()
-            )
-            .is_err()
+                .expect_err("invalid Responses request"),
+            GrokRequestEncodeError::InvalidRequestField { field },
+            "{field}"
         );
     }
 }

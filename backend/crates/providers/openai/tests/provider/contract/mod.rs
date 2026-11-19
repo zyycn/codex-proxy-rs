@@ -3559,7 +3559,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     }
     drop(same);
 
-    // 仍由旧租约流程报告繁忙并换号，亲和不绕过并发限制
+    // 亲和账号的并发租约已满时，请求应切换账号
     leases
         .busy_accounts
         .lock()

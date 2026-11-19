@@ -69,7 +69,7 @@ fn privacy_rule_requires_steps_and_rejects_unknown_fields() {
     missing_steps.as_object_mut().unwrap().remove("steps");
     assert!(serde_json::from_value::<PrivacyRule>(missing_steps).is_err());
     let mut unknown_rule_field = value.clone();
-    unknown_rule_field["scope"] = serde_json::json!("request_body");
+    unknown_rule_field["unexpected"] = serde_json::json!(true);
     assert!(serde_json::from_value::<PrivacyRule>(unknown_rule_field).is_err());
     let mut unknown_step_field = value;
     unknown_step_field["steps"][0]["unexpected"] = serde_json::json!(true);

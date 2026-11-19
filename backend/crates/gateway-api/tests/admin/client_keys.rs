@@ -610,7 +610,7 @@ fn xai_profile_override_distinguishes_omission_from_explicit_inheritance() {
 }
 
 #[test]
-fn generic_profile_overrides_accept_native_providers_and_reject_legacy_conflicts() {
+fn profile_overrides_accept_matching_native_values_and_reject_conflicts_and_unknown_providers() {
     let profile = json!({"preset":"desktop"});
     let xai = json!({"preset":"managed"});
     let request: CreateClientKeyRequest = serde_json::from_value(json!({
@@ -676,7 +676,7 @@ fn generic_profile_overrides_accept_native_providers_and_reject_legacy_conflicts
 }
 
 #[test]
-fn generic_profile_override_clear_rejects_conflicting_legacy_update() {
+fn clearing_an_xai_profile_override_conflicts_with_an_explicit_xai_value() {
     let request: UpdateClientKeyRequest = serde_json::from_value(json!({
         "id":"key_profile",
         "name":"profile",

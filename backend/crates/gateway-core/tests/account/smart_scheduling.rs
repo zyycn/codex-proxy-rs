@@ -143,10 +143,10 @@ fn zero_or_absent_window_weights_disable_reset_scores_and_tolerance() {
         }]
         .into(),
     );
-    let legacy = json!({"loadWeight":0,"quotaWeight":0,"healthWeight":0,"latencyWeight":0,"resetWeight":10,"queueWeight":0});
-    let mut disabled = legacy.clone();
+    let omitted = json!({"loadWeight":0,"quotaWeight":0,"healthWeight":0,"latencyWeight":0,"resetWeight":10,"queueWeight":0});
+    let mut disabled = omitted.clone();
     disabled["resetWindowWeights"] = json!({"fiveHour":0,"weekly":0,"monthly":0});
-    for wire in [legacy, disabled] {
+    for wire in [omitted, disabled] {
         let config: SmartSchedulingConfig = serde_json::from_value(wire).unwrap();
         context.policy = context.policy.with_smart_scheduling(config);
         let trace = gateway_core::diagnostics::TraceContext::new("req_zero_windows");

@@ -645,7 +645,7 @@ async fn concurrent_calls_keep_their_wire_ids_monotonic() {
     }
     ready.wait().await;
     entered.await;
-    // 旧实现会在 begin 前分配后续 ID；等其他线程进入该窗口后再释放首调用
+    // 暂停首个 begin，给其他并发调用留出竞争发送顺序的时间
     tokio::time::sleep(Duration::from_millis(20)).await;
     callbacks.release();
     for call in calls {

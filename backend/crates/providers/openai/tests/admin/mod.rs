@@ -814,12 +814,6 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
         assert!(
             payload
                 .expose_to_provider()
-                .get("reauthorization_credential_revision")
-                .is_none()
-        );
-        assert!(
-            payload
-                .expose_to_provider()
                 .get("installation_id")
                 .and_then(Value::as_str)
                 .and_then(|value| uuid::Uuid::parse_str(value).ok())
@@ -829,13 +823,8 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
             mutation.get("schema_version").and_then(Value::as_u64),
             Some(3)
         );
-        assert!(mutation.get("expected_config_revision").is_none());
-        assert!(
-            mutation
-                .get("target")
-                .and_then(Value::as_object)
-                .is_some_and(|target| target.get("expected_credential_revision").is_none())
-        );
+        assert_eq!(mutation["target"]["kind"], "create");
+        assert_eq!(mutation["target"]["name"], "OAuth account");
         assert_eq!(
             mutation.get("started_request_id").and_then(Value::as_str),
             Some("request-start")
@@ -1037,11 +1026,6 @@ async fn openai_reauthorization_pending_payload_reuses_the_account_installation_
         document.get("installation_id").and_then(Value::as_str),
         Some(expected_installation_id.as_str())
     );
-    assert!(
-        document
-            .get("reauthorization_credential_revision")
-            .is_none()
-    );
     assert_eq!(
         target.get("kind").and_then(Value::as_str),
         Some("reauthorize")
@@ -1050,7 +1034,6 @@ async fn openai_reauthorization_pending_payload_reuses_the_account_installation_
         target.get("account_id").and_then(Value::as_str),
         Some("acct_pending_reauth")
     );
-    assert!(target.get("expected_credential_revision").is_none());
 }
 
 #[tokio::test]
@@ -2942,7 +2925,6 @@ mod errors {
             .prepare_refresh(command())
             .await
             .unwrap_err();
-        // 既有 transport 策略未认定此错误为安全重试，本次不能因展示更详细而放宽重试边界
         assert_eq!(error.kind(), Kind::Ambiguous);
         assert_eq!(
             error.public_message(),

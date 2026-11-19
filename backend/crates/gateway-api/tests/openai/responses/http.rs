@@ -743,7 +743,7 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
             operation_kind: OperationKind::Generate,
             input: Some(json!("hello")),
             client_metadata: None,
-            // 客户端 User-Agent 仅用于本地展示，不再透传给上游指纹上下文
+            // 客户端 User-Agent 仅用于本地展示
             protocol_context: Some(json!({"opaque_request_headers": [
                 ["cf-connecting-ip", STANDARD.encode(b"198.51.100.1")],
                 ["x-real-ip", STANDARD.encode(b"198.51.100.2")],

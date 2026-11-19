@@ -406,7 +406,7 @@ async fn health_counters_match_for_rollups_and_facts_without_counting_recovery_o
     sqlx::query("update model_requests set recovered_at=completed_at,recovery_request_id='health_success',recovery_attempt_count=1,request_observation_json=request_observation_json||jsonb_build_object('recovery',jsonb_build_object('retryDelayMs',0,'totalLatencyMs',1)) where id='health_recovered'")
         .execute(&database.pool).await.unwrap();
     drain_analytics(&database.pool).await;
-    // 模拟旧桶曾把取消的 499 计入调用方错误，无需重建也应得到相同结果
+    // 即使已存储的桶把 499 计入调用方错误，查询也应将其归为取消
     sqlx::raw_sql("update request_analytics_15m set counts=jsonb_set(counts,'{caller_error_count}','1') where outcome='cancelled'; update request_analytics_1h set counts=jsonb_set(counts,'{caller_error_count}','1') where outcome='cancelled'")
         .execute(&database.pool).await.unwrap();
     let repo = observability_repository(&database.pool);
@@ -930,7 +930,7 @@ async fn interrupted_quarters_restart_changed_versions_and_publish_one_consisten
         .execute(&database.pool)
         .await
         .unwrap();
-    // 独立重建请求改变版本，验证旧前缀废弃后仍可恢复，普通源变更不再重启整桶
+    // 显式重建会更换版本，Worker 需要丢弃已处理的前缀并恢复构建
     sqlx::query("update request_analytics_pending_buckets set change_version=nextval('request_analytics_change_version')")
         .execute(&database.pool).await.unwrap();
     drop(worker);
@@ -1034,7 +1034,7 @@ async fn backfill_coverage_uses_contiguous_cursor_instead_of_old_corrected_facts
     ] {
         seed(&database.pool, id, now - TimeDelta::hours(age), &[]).await;
     }
-    // 模拟迁移后历史队列为空，随后最旧请求发生单点修正
+    // 清空待处理队列后只修正最早的请求，验证中间的时间段仍需回填
     sqlx::query("delete from request_analytics_pending_requests")
         .execute(&database.pool)
         .await

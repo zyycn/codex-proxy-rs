@@ -159,8 +159,7 @@ impl GrokEndpointPolicy for CatalogExitPolicy {
         timeout: Option<Duration>,
         proxy: Option<&OutboundProxy>,
     ) -> Result<reqwest::Client, GrokReqwestTransportBuildError> {
-        // “直连”也终止于本地 sink，旧实现漏代理时不会触达真实上游
-        // 显式代理分支仍使用生产构造器及官方 HTTPS/CONNECT 目标
+        // 直连请求落到本地监听器，显式代理请求通过生产构造器连接 HTTPS 目标
         OfficialGrokEndpointPolicy
             .build_inference_client(timeout, Some(proxy.unwrap_or(&self.direct_sink)))
     }

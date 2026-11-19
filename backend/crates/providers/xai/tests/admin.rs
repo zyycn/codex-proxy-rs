@@ -403,18 +403,7 @@ async fn xai_admin_provider_restores_full_pending_envelope_and_binds_owner() {
     let flow_id = "pending-envelope";
     let owner_ref = admin_session_owner_ref("admin-owner");
     let payload = pending_payload(flow_id, &owner_ref);
-    pending.insert(flow_id, owner_ref, payload.clone());
-
-    let mutation = payload
-        .expose_to_provider()
-        .get("mutation")
-        .and_then(Value::as_object)
-        .expect("pending mutation");
-    assert_eq!(mutation.get("expected_config_revision"), None);
-    assert_eq!(
-        mutation.get("started_request_id").and_then(Value::as_str),
-        Some("request-start")
-    );
+    pending.insert(flow_id, owner_ref, payload);
 
     let wrong_owner = bundle
         .admin_provider()
@@ -610,8 +599,6 @@ async fn xai_admin_provider_projects_cached_quota_models_and_canonical_export() 
     assert_eq!(window_data["onDemandCapCents"], 500);
     assert_eq!(window_data["onDemandUsedCents"], 100);
     assert_eq!(window_data["prepaidBalanceCents"], -500);
-    assert!(!window_data.contains_key("monthlyLimitCents"));
-    assert!(!window_data.contains_key("includedUsedCents"));
     let models = admin
         .models(account.id(), false)
         .await

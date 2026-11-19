@@ -60,7 +60,7 @@ async fn explicit_service_calls_freeze_empty_plan_and_cancel_before_entering_ter
             )
             .await
             .unwrap();
-        // 内部 pricing 不再单独进入插件链；显式调用只解析一次发布集合
+        // 每次显式调价只解析一次插件发布集合
         assert_eq!(resolutions.load(Ordering::SeqCst), expected);
     }
     store.updated.lock().unwrap().take();

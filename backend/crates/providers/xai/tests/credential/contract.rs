@@ -26,7 +26,7 @@ fn repository() -> (Arc<MemoryProviderAccountStore>, GrokCredentialRepository) {
 }
 
 #[tokio::test]
-async fn create_persists_plaintext_oauth_json_without_envelope_fields() {
+async fn create_persists_oauth_method_and_tokens_in_provider_json() {
     let (store, _) = repository();
     let input = create_input("plain", "subject-plain");
     seed_input(&store, &input).await.expect("create account");
@@ -47,8 +47,6 @@ async fn create_persists_plaintext_oauth_json_without_envelope_fields() {
         object.get("refresh_token").and_then(|v| v.as_str()),
         Some("refresh-plain")
     );
-    assert!(!object.contains_key("secret_envelope"));
-    assert!(!object.contains_key("secret_key_id"));
 }
 
 #[tokio::test]

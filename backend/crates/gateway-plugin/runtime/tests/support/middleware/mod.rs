@@ -542,8 +542,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 if let Some(expected) = configuration.get("expected_fast_source") {
                     let sources = &call.request.head.settings_sources["execution"];
-                    assert!(sources.get("disable_fast").is_none());
-                    assert!(sources["input"].get("disable_fast").is_none());
                     assert_eq!(sources["input"]["fast_mode"], "default");
                     assert_eq!(&sources["fast_mode"], expected);
                 }

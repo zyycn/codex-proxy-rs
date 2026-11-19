@@ -358,7 +358,7 @@ async fn rewrite_upgrade_and_control_active_response_keep_http_context_until_con
     );
     let (trace, mut socket, server) =
         start_active_response_with(Some(frozen), "/custom/websocket", "codex-tui/0.166.0").await;
-    // 升级后的默认会话仍持有入口上下文；101 正文结束不再提前取消它
+    // 101 响应完成后，WebSocket 会话继续持有入口上下文
     assert!(
         !plan
             .http_cancellation

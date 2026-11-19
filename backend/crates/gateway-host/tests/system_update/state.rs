@@ -24,9 +24,9 @@ async fn invalid_update_state_should_keep_raw_details_out_of_public_error() {
 }
 
 #[tokio::test]
-async fn update_status_should_reconcile_manual_deployment_without_reusing_legacy_success() {
+async fn manual_deployment_reports_the_running_version_and_preserves_the_last_operation() {
     let fixture = Fixture::new();
-    fs::write(fixture.state(), r#"{"previousVersion":"3.14.0","currentVersion":"3.14.1","operation":{"operationId":"legacy","kind":"update","status":"succeeded","targetVersion":"3.14.1"}}"#).expect("legacy state");
+    fs::write(fixture.state(), r#"{"previousVersion":"3.14.0","currentVersion":"3.14.1","operation":{"operationId":"completed-update","kind":"update","status":"succeeded","targetVersion":"3.14.1"}}"#).expect("completed update state");
     let mut config = fixture.config("https://api.github.com/repos");
     config.version = "3.15.0".to_owned();
     config.deployment_mode = "docker".to_owned();

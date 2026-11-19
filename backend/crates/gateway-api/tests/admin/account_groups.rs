@@ -215,7 +215,7 @@ async fn mutation_route_should_reject_unknown_json_fields() {
             "name": "Unknown field",
             "description": null,
             "color": "#2563EBFF",
-            "providerKind": "openai"
+            "unknownField": true
         })),
         true,
     )
@@ -232,7 +232,7 @@ async fn create_route_should_reject_six_digit_color_without_alpha() {
         Method::POST,
         "/api/admin/account-groups/create",
         Some(json!({
-            "name": "Opaque legacy color",
+            "name": "Color without alpha",
             "description": null,
             "color": "#2563EB"
         })),

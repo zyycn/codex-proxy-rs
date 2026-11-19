@@ -139,7 +139,7 @@ fn blocked_file_output_keeps_http_and_streaming_responsive_and_reserves_errors()
         );
         let (release, released) = std::sync::mpsc::channel();
         let reader = std::thread::spawn(move || {
-            // 超时只用于让旧的同步实现能退出测试，接口必须在解除阻塞之前完成
+            // 请求必须在读端放行前完成，超时让写入阻塞时的测试也能退出
             let _ = released.recv_timeout(Duration::from_secs(3));
             let mut body = String::new();
             fs::File::open(fifo)
