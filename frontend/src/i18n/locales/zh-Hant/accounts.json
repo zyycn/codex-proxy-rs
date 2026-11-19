@@ -116,7 +116,6 @@
         "failed": "測試連接失敗",
         "modelRequired": "未選擇模型",
         "browserUnsupported": "當前瀏覽器不支持連接測試",
-        "missingCompletion": "測試連接未返回完成事件",
         "invalidResponse": "測試響應解析失敗",
         "disconnected": "測試連接已斷開"
       },

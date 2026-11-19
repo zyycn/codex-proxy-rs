@@ -116,7 +116,6 @@
         "failed": "Connection test failed",
         "modelRequired": "Select a model to test",
         "browserUnsupported": "The current browser does not support connection testing",
-        "missingCompletion": "The connection test did not return a completion event",
         "invalidResponse": "Could not parse the test response",
         "disconnected": "Connection lost during the test"
       },

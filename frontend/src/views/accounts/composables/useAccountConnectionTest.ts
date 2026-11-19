@@ -3,19 +3,13 @@ import { CheckCircle2, Clock3, Wifi, XCircle } from '@lucide/vue'
 import { useEventSource } from '@vueuse/core'
 
 import { clamp } from 'es-toolkit'
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
 import { API_BASE_URL } from '@/api/constants'
-import { useIdSet } from '@/composables/useIdSet'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
 import { notification as ZNotification } from '@/utils/notification'
-import { errorMessage, withMinimumDuration } from '@/utils/operation'
-
-interface ConnectionTestRun {
-  accountId: string
-  resolve: () => void
-}
+import { errorMessage } from '@/utils/operation'
 
 type ConnectionTestStatus = 'idle' | 'running' | 'success' | 'error'
 type ConnectionTestLogTone = 'normal' | 'info' | 'success' | 'danger'
@@ -180,7 +174,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   const connectionTestStartedAt = shallowRef('')
   const connectionTestFinishedAt = shallowRef('')
   const connectionTestDurationMs = shallowRef<number | null>(null)
-  const testingConnections = useIdSet<string>()
   const modelsRequest = useRequestState()
   const modelsRequestMode = shallowRef<'load' | 'refresh'>('load')
   const loadingConnectionTestModels = computed(() => modelsRequest.loading.value && modelsRequestMode.value === 'load')
@@ -204,7 +197,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   })
 
   let connectionTestStartedAtMs = 0
-  let connectionTestRun: ConnectionTestRun | undefined
+  const testingAccountId = computed(() => connectionTestEventSource.value ? testingAccount.value?.id : undefined)
 
   const connectionTestStatusView = computed(() => {
     if (connectionTestStatus.value === 'running') {
@@ -244,7 +237,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   })
 
   function openConnectionTest(account: Account) {
-    abortConnectionTest()
+    closeConnectionTestEventSource()
     testingAccount.value = account
     connectionTestSelectedModel.value = ''
     connectionTestModelOptions.value = []
@@ -339,21 +332,11 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     )
   }
 
-  function clearConnectionTestRun() {
-    const run = connectionTestRun
-    connectionTestRun = undefined
-    closeConnectionTestEventSource()
-    if (run) {
-      testingConnections.remove(run.accountId)
-      run.resolve()
-    }
-  }
-
   function failConnectionTest(message = t('accounts.connectionTest.errors.failed')) {
     if (connectionTestStatus.value === 'running') {
       recordConnectionTestFailure('failure', t('accounts.connectionTest.failed'), message)
     }
-    clearConnectionTestRun()
+    closeConnectionTestEventSource()
   }
 
   function recordConnectionTestFailure(
@@ -407,7 +390,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
           event,
         )
       }
-      clearConnectionTestRun()
+      closeConnectionTestEventSource()
       void options.reload()
       return
     }
@@ -419,13 +402,9 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
         connectionTestFailureDiagnostics(event),
         event,
       )
-      clearConnectionTestRun()
+      closeConnectionTestEventSource()
       void options.reload()
     }
-  }
-
-  function abortConnectionTest() {
-    clearConnectionTestRun()
   }
 
   async function loadConnectionTestModels(account = testingAccount.value, refresh = false) {
@@ -485,60 +464,32 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     await loadConnectionTestModels(account, true)
   }
 
-  async function handleTestConnection(account = testingAccount.value) {
-    if (!account?.id)
+  function handleTestConnection() {
+    const account = testingAccount.value
+    if (!account || connectionTestEventSource.value)
       return
     if (!connectionTestSelectedModel.value) {
       connectionTestError.value = t('accounts.connectionTest.errors.modelRequired')
       return
     }
-    if (testingConnections.has(account.id))
-      return
-    abortConnectionTest()
+    resetConnectionTest()
     connectionTestStatus.value = 'running'
-    connectionTestModel.value = ''
-    connectionTestContent.value = ''
-    connectionTestLogs.value = []
-    connectionTestError.value = ''
-    connectionTestDurationMs.value = null
     connectionTestModel.value = connectionTestSelectedModel.value
     connectionTestStartedAtMs = performance.now()
-    connectionTestStartedAt.value = ''
-    connectionTestFinishedAt.value = ''
-    testingConnections.add(account.id)
+    const params = new URLSearchParams({ accountId: account.id, modelId: connectionTestModel.value })
+    connectionTestStreamUrl.value = `${API_BASE_URL}/api/admin/accounts/connection-test?${params}`
     try {
-      await withMinimumDuration(
-        () =>
-          new Promise<void>((resolve) => {
-            connectionTestRun = {
-              accountId: account.id,
-              resolve,
-            }
-            const params = new URLSearchParams({
-              accountId: account.id,
-              modelId: connectionTestSelectedModel.value,
-            })
-            connectionTestStreamUrl.value
-              = `${API_BASE_URL}/api/admin/accounts/connection-test?${params}`
-            openConnectionTestEventSource()
-            if (!connectionTestEventSource.value)
-              failConnectionTest(t('accounts.connectionTest.errors.browserUnsupported'))
-          }),
-      )
-      if (connectionTestStatus.value === 'running') {
-        recordConnectionTestFailure('failure', t('accounts.connectionTest.failed'), t('accounts.connectionTest.errors.missingCompletion'))
-      }
+      openConnectionTestEventSource()
+      if (!connectionTestEventSource.value)
+        failConnectionTest(t('accounts.connectionTest.errors.browserUnsupported'))
     }
     catch (error: unknown) {
-      recordConnectionTestFailure('failure', t('accounts.connectionTest.failed'), errorMessage(error, t('accounts.connectionTest.errors.failed')))
-    }
-    finally {
-      clearConnectionTestRun()
+      failConnectionTest(errorMessage(error, t('accounts.connectionTest.errors.failed')))
     }
   }
 
   watch(connectionTestStreamMessage, (message) => {
-    if (!message?.raw || !connectionTestRun)
+    if (!message?.raw || !connectionTestEventSource.value)
       return
     try {
       const event = parseConnectionTestEvent(message.raw)
@@ -548,12 +499,12 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     catch {
       failConnectionTest(t('accounts.connectionTest.errors.invalidResponse'))
     }
-  })
+  }, { flush: 'sync' })
 
   watch(connectionTestStreamError, (error) => {
-    if (error && connectionTestRun)
+    if (error && connectionTestEventSource.value)
       failConnectionTest(t('accounts.connectionTest.errors.disconnected'))
-  })
+  }, { flush: 'sync' })
 
   watch([
     showConnectionTestModal,
@@ -561,13 +512,9 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   ], ([open]) => {
     modelsRequest.invalidate({ resetLoading: open })
     if (!open) {
-      abortConnectionTest()
+      closeConnectionTestEventSource()
     }
   }, { flush: 'sync' })
-
-  onBeforeUnmount(() => {
-    abortConnectionTest()
-  })
 
   return {
     showConnectionTestModal,
@@ -579,7 +526,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     connectionTestStartedAt,
     connectionTestFinishedAt,
     connectionTestDurationMs,
-    testingConnectionIds: testingConnections.ids,
+    testingAccountId,
     loadingConnectionTestModels,
     refreshingConnectionTestModels,
     connectionTestSelectedModel,

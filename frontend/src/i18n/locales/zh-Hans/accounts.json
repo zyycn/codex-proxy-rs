@@ -116,7 +116,6 @@
         "failed": "测试连接失败",
         "modelRequired": "未选择模型",
         "browserUnsupported": "当前浏览器不支持连接测试",
-        "missingCompletion": "测试连接未返回完成事件",
         "invalidResponse": "测试响应解析失败",
         "disconnected": "测试连接已断开"
       },

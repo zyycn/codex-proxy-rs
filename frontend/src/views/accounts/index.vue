@@ -143,7 +143,7 @@ const {
   connectionTestStartedAt,
   connectionTestFinishedAt,
   connectionTestDurationMs,
-  testingConnectionIds,
+  testingAccountId,
   loadingConnectionTestModels,
   refreshingConnectionTestModels,
   connectionTestSelectedModel,
@@ -353,7 +353,7 @@ const {
                 :downloading-catalog="downloadingCatalogAccountIds.has(row.id)"
                 :recovering="recoveringAccountIds.has(row.id)"
                 :refreshing="refreshingAccountIds.has(row.id)"
-                :testing="testingConnectionIds.has(row.id)"
+                :testing="testingAccountId === row.id"
                 :toggling-scheduling="togglingSchedulingAccountIds.has(row.id)"
                 @edit="openAccountEdit"
                 @delete="requestDeleteAccount"
