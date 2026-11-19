@@ -11,9 +11,13 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use bytes::Bytes;
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use tokio::{sync::mpsc, task::JoinHandle, time::Instant};
-use tokio_tungstenite::tungstenite::Message;
+use tungstenite::{
+    Message,
+    protocol::frame::{Fragment, Frame, coding::Data},
+};
 use uuid::Uuid;
 
 use super::{
@@ -311,7 +315,7 @@ impl PumpedWebSocket {
         }
     }
 
-    /// 通过 pump 发送一帧，区分未开始发送与底层传输失败
+    /// 通过 pump 发送一条消息，区分未开始发送与底层传输失败
     pub(crate) async fn send(&self, message: Message) -> Result<(), CodexWebSocketExchangeError> {
         if self.is_closed() {
             return Err(CodexWebSocketExchangeError::SendNotStarted);
@@ -613,7 +617,7 @@ async fn handle_command(
         return None;
     }
     let is_close = matches!(message, Message::Close(_));
-    let result = inner.send(message).await;
+    let result = write_message(inner, message).await;
     let transport_error = result
         .as_ref()
         .err()
@@ -627,6 +631,31 @@ async fn handle_command(
         None if is_close => Some(PumpExitReason::LocalClose),
         None => None,
     }
+}
+
+/// 同一命令内逐帧写完大文本，保持一条消息的压缩上下文和发送回执
+async fn write_message(
+    inner: &mut RawWsStream,
+    message: Message,
+) -> Result<(), tungstenite::Error> {
+    const FRAGMENT_BYTES: usize = 1024 * 1024;
+    let mut remaining = match message {
+        Message::Text(text) if text.len() > FRAGMENT_BYTES => Bytes::from(text),
+        other => return inner.send(other).await,
+    };
+    let mut opcode = Data::Text;
+    while !remaining.is_empty() {
+        let payload = remaining.split_to(remaining.len().min(FRAGMENT_BYTES));
+        let fragment = if remaining.is_empty() {
+            Fragment::Final
+        } else {
+            Fragment::More
+        };
+        let frame = Frame::message_fragment(payload, opcode, fragment);
+        inner.send(Message::Frame(frame)).await?;
+        opcode = Data::Continue;
+    }
+    Ok(())
 }
 
 fn record_activity(lifecycle: &Mutex<PumpLifecycleState>, observed_at: Instant) {

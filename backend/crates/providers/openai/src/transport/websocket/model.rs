@@ -147,7 +147,7 @@ impl CodexWebSocketRequest {
         &self.connection
     }
 
-    /// 返回将要发送的首个文本帧
+    /// 返回将要发送的完整 `response.create` 文本
     pub fn payload_text(&self) -> &str {
         &self.payload_text
     }

@@ -198,7 +198,7 @@ pub fn websocket_response_create_payload(request: &CodexResponsesRequest) -> Val
     Value::Object(payload)
 }
 
-/// 借用原始 body 序列化 `response.create` 帧，不复制字段
+/// 借用原始 body 序列化 `response.create` 消息，不复制字段
 ///
 /// 输出与序列化 [`websocket_response_create_payload`] 的合并 Map 逐字节一致：
 /// body 自带 `type` 键时以 body 值置于首位，其余字段按插入顺序原样透传
@@ -224,7 +224,7 @@ impl serde::Serialize for ResponseCreateFrame<'_> {
     }
 }
 
-/// 生成 Responses WebSocket `response.create` 文本帧内容
+/// 生成 Responses WebSocket `response.create` 消息的完整文本
 pub fn websocket_response_create_payload_text(
     request: &CodexResponsesRequest,
 ) -> Result<String, serde_json::Error> {
