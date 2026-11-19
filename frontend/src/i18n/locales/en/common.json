@@ -3,16 +3,16 @@
     "errors": {
       "canceled": "Request canceled",
       "timeout": "Request timed out",
-      "network": "Connection failed, check your network",
+      "network": "Could not connect to the service",
       "invalidParameters": "Invalid request parameters",
       "signInRequired": "Sign-in required",
       "forbidden": "You do not have permission to perform this action",
       "notFound": "Endpoint not found",
-      "conflict": "Resource conflict, refresh and try again",
+      "conflict": "The resource state prevents this action",
       "payloadTooLarge": "Request payload is too large",
       "unsupportedFormat": "Unsupported request format",
       "invalidContent": "Invalid request content",
-      "rateLimited": "Too many requests, try again later",
+      "rateLimited": "Too many requests",
       "internal": "Internal server error",
       "upstreamFailure": "Upstream service request failed",
       "unavailable": "Service temporarily unavailable",
@@ -29,7 +29,7 @@
       "invalidTimeRange": "Invalid time range",
       "invalidCredentials": "Invalid sign-in credentials",
       "invalidAdminApiKey": "Invalid admin API key",
-      "tooManyLoginAttempts": "Too many sign-in attempts, try again later",
+      "tooManyLoginAttempts": "Too many sign-in attempts",
       "upstreamResultUnknown": "Upstream result unknown, refresh the status before deciding whether to retry"
     },
     "status": {

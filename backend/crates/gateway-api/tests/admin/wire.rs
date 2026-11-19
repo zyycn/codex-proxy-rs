@@ -198,7 +198,7 @@ mod response {
             response_json(generic).await,
             json!({
                 "code": 42902,
-                "message": "请求过于频繁，请稍后重试",
+                "message": "请求过于频繁",
                 "data": null
             })
         );
@@ -212,7 +212,7 @@ mod response {
             response_json(login).await,
             json!({
                 "code": 42901,
-                "message": "登录尝试过多，请稍后重试",
+                "message": "登录尝试过多",
                 "data": null
             })
         );

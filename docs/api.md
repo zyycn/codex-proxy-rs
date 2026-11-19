@@ -2796,7 +2796,7 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 省略时包含全部来源。筛选与列表、详情共用下述来源规则，并在统计总数和分页前与其他明细条件一同生效。
 其他状态携带 `errorOrigin` 或来源值无效时返回 `400`
 
-请求列表的 `errorCode` / `errorMessage` 提供最终请求的错误码与错误信息，未记录时为 `null`。
+请求列表的 `errorCode` 保留已记录的错误码，`errorMessage` 是最终失败的安全摘要，例如账号额度耗尽或模型容量不足。两者各自缺失时为 `null`。
 `clientStatusCode` / `upstreamStatusCode` 分别提供已记录的客户端与上游状态码，未记录时为 `null`。
 HTTP SSE 请求可能在返回 HTTP 200 后流内失败；WebSocket 已升级时，客户端错误状态码不代表 HTTP 握手状态或 WebSocket 关闭码。
 两侧状态码不互相替代，也不覆盖 `logicalOutcome`

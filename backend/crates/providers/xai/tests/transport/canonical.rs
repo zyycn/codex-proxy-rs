@@ -1605,6 +1605,10 @@ fn decoder_should_classify_free_quota_failed_event() {
         .expect_err("free quota failure must surface");
 
     assert_eq!(
+        error.diagnostic().unwrap().as_str(),
+        "上游账号免费额度已用完"
+    );
+    assert_eq!(
         error.kind(),
         gateway_core::error::ProviderErrorKind::QuotaExhausted
     );

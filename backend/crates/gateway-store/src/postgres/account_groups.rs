@@ -454,7 +454,10 @@ impl AccountGroupStore for PgAccountGroupRepository {
                     .await
                     .map_err(|source| unavailable("check account group delete conflict", source))?;
                     if exists {
-                        Err(conflict(command.id.as_str()))
+                        Err(conflict(
+                            command.id.as_str(),
+                            ConflictKind::InvalidTransition,
+                        ))
                     } else {
                         Err(not_found_store(command.id.as_str()))
                     }
@@ -681,11 +684,15 @@ fn require_one(rows: u64, id: &str) -> StoreResult<()> {
 }
 
 fn map_group_write_error(error: sqlx::Error, id: &str) -> StoreError {
-    if error
-        .as_database_error()
-        .is_some_and(|database| database.is_unique_violation())
+    if let Some(database) = error.as_database_error()
+        && database.is_unique_violation()
     {
-        conflict(id)
+        let kind = if database.constraint() == Some("account_groups_name_uq") {
+            ConflictKind::DuplicateName
+        } else {
+            ConflictKind::InvalidTransition
+        };
+        conflict(id, kind)
     } else {
         unavailable("write account group", error)
     }
@@ -703,12 +710,12 @@ fn not_found_store(id: &str) -> StoreError {
     }
 }
 
-fn conflict(id: &str) -> StoreError {
+fn conflict(id: &str, kind: ConflictKind) -> StoreError {
     StoreError::Conflict {
         source: None,
         entity: ENTITY,
         id: id.to_owned(),
-        kind: ConflictKind::InvalidTransition,
+        kind,
     }
 }
 

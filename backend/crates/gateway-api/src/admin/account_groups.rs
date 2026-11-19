@@ -51,7 +51,6 @@ impl From<gateway_admin::model::account_groups::AccountGroupRef> for AccountGrou
 }
 
 const DEFAULT_PAGE_SIZE: u32 = 50;
-const MAX_PAGE_SIZE: u32 = 200;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -66,7 +65,7 @@ impl ListAccountGroupsQuery {
     fn into_command(self) -> Result<AccountGroupListQuery, WireValidationError> {
         let page = self.page.unwrap_or(1);
         let page_size = self.page_size.unwrap_or(DEFAULT_PAGE_SIZE);
-        if page == 0 || page_size == 0 || page_size > MAX_PAGE_SIZE {
+        if page == 0 {
             return Err(WireValidationError::new("page"));
         }
         let search = self
@@ -507,11 +506,16 @@ fn group_color(value: &str) -> Result<AccountGroupColor, AdminError> {
 
 fn validate_group_fields(name: &str, description: Option<&str>) -> Result<(), AdminError> {
     gateway_admin::model::account_groups::validate_group_fields(name, description)
-        .map_err(|_| AdminError::bad_request("账号组请求不合法"))
+        .map_err(map_admin_service_error)
 }
 
-fn map_wire_error(_: WireValidationError) -> AdminError {
-    AdminError::bad_request("账号组查询参数不合法")
+fn map_wire_error(error: WireValidationError) -> AdminError {
+    match error.field() {
+        "page" => AdminError::bad_request("页码须大于 0"),
+        "pageSize" => AdminError::bad_request(format!("每页数量须为 1 至 {}", PageSize::MAX)),
+        "search" => AdminError::bad_request("搜索内容最多 256 字节，不能包含控制字符"),
+        field => AdminError::bad_request(format!("{field} 字段不合法")),
+    }
 }
 
 fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {

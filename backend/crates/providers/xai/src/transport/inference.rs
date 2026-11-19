@@ -9,13 +9,14 @@ use futures::Stream;
 use gateway_core::engine::middleware::MiddlewareHeader;
 use gateway_core::error::{
     ClientVisibleUpstreamError, ErrorSource, OpaqueUpstreamValue, ProviderDiagnostic,
-    RawUpstreamError,
+    ProviderErrorKind, RawUpstreamError,
 };
 use gateway_core::event::UpstreamHttpVersion;
 use gateway_core::upstream::UpstreamSendState;
 use url::Url;
 use zeroize::Zeroizing;
 
+use super::upstream_error::GrokQuotaFailureKind;
 use super::{GrokHeader, GrokSessionBinding};
 
 /// 交给注入的 HTTP SSE transport 的自持有请求
@@ -350,6 +351,58 @@ pub enum GrokInferenceTransportErrorKind {
     Unavailable,
     /// transport 观测到调用方取消
     Cancelled,
+}
+
+impl GrokInferenceTransportErrorKind {
+    pub(crate) const fn from_quota(failure: GrokQuotaFailureKind) -> Self {
+        match failure {
+            GrokQuotaFailureKind::Account => Self::QuotaExhausted,
+            GrokQuotaFailureKind::FreeAccount => Self::FreeQuotaExhausted,
+            GrokQuotaFailureKind::FreeModelUsage => Self::ModelQuotaExhausted,
+        }
+    }
+
+    pub(crate) const fn provider_kind(self) -> ProviderErrorKind {
+        match self {
+            Self::InvalidRequest => ProviderErrorKind::InvalidRequest,
+            Self::Unsupported => ProviderErrorKind::Unsupported,
+            Self::Unauthorized => ProviderErrorKind::Unauthorized,
+            Self::PermissionDenied
+            | Self::ModelAccessDenied
+            | Self::PaymentRequired
+            | Self::SafetyRejected => ProviderErrorKind::PermissionDenied,
+            Self::RateLimited => ProviderErrorKind::RateLimited,
+            Self::QuotaExhausted | Self::FreeQuotaExhausted | Self::ModelQuotaExhausted => {
+                ProviderErrorKind::QuotaExhausted
+            }
+            Self::Timeout => ProviderErrorKind::Timeout,
+            Self::Transport => ProviderErrorKind::Transport,
+            Self::Protocol => ProviderErrorKind::Protocol,
+            Self::Unavailable => ProviderErrorKind::Unavailable,
+            Self::Cancelled => ProviderErrorKind::Cancelled,
+        }
+    }
+
+    pub(crate) const fn diagnostic_message(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "上游拒绝了请求参数",
+            Self::Unsupported => "上游不支持此请求",
+            Self::Unauthorized => "上游账号凭据无效",
+            Self::PermissionDenied => "上游账号无权执行此请求",
+            Self::ModelAccessDenied => "上游账号无权使用此模型",
+            Self::PaymentRequired => "上游要求付费",
+            Self::SafetyRejected => "请求被上游安全策略拦截",
+            Self::RateLimited => "上游请求频率受限",
+            Self::QuotaExhausted => "上游账号额度已用完",
+            Self::FreeQuotaExhausted => "上游账号免费额度已用完",
+            Self::ModelQuotaExhausted => "此模型的免费额度已用完",
+            Self::Timeout => "上游响应超时",
+            Self::Transport => "上游连接失败",
+            Self::Protocol => "上游协议处理失败",
+            Self::Unavailable => "上游服务暂不可用",
+            Self::Cancelled => "请求已取消",
+        }
+    }
 }
 
 /// 推理 transport 失败，公开分类与受控上游详情分别承载

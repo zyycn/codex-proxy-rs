@@ -128,6 +128,9 @@ async fn upstream_codes_survive_http_and_websocket_opening_without_normalization
                 body,
             );
             let diagnostic = error.diagnostic().expect("safe diagnostic");
+            if expected_kind == ProviderErrorKind::ContinuationRecoveryRequired {
+                assert_eq!(diagnostic.as_str(), "上游找不到先前的响应");
+            }
             assert!(!diagnostic.as_str().contains(original_code));
             assert!(!diagnostic.as_str().contains("PRIVATE_UPSTREAM_DETAIL"));
             assert!(!format!("{error:?} {error}").contains(original_code));

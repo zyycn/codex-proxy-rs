@@ -1,6 +1,6 @@
 import type { RawResponse, RawResponseMeta, RequestContext, RequestNext } from '../types'
 import { t } from '@/i18n'
-import { ApiError, normalizeApiResponseError } from './error'
+import { ApiError, httpFallback, normalizeApiResponseError } from './error'
 
 export async function rawPlugin(context: RequestContext, next: RequestNext) {
   const options = context.raw
@@ -54,7 +54,7 @@ export async function rawPlugin(context: RequestContext, next: RequestNext) {
     throw normalized
   throw new ApiError(
     response.status >= 400
-      ? t('common.errors.http', { status: response.status })
+      ? httpFallback(response.status)
       : t('common.errors.unsupportedResponse'),
     response.status,
     undefined,

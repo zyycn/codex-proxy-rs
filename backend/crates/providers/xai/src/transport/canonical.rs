@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use gateway_core::engine::provider::NativeResponseTranslator;
 use gateway_core::error::{
-    ClientVisibleUpstreamError, OpaqueUpstreamValue, ProviderError, ProviderErrorKind,
+    ClientVisibleUpstreamError, OpaqueUpstreamValue, ProviderDiagnostic, ProviderError,
+    ProviderErrorKind,
 };
 use gateway_core::event::{
     ContentItem, ContentKind, FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent,
@@ -20,6 +21,7 @@ use gateway_protocol::openai::events::{TokenUsage, billable_usage_is_complete, e
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
 use serde_json::Value;
 
+use super::GrokInferenceTransportErrorKind;
 use super::request::{GrokResponseTransform, GrokResponsesRequest};
 use super::upstream_error::{classify_grok_quota_failure, scrub_account_fingerprints};
 
@@ -1207,19 +1209,24 @@ fn upstream_event_error(value: &Value) -> ProviderError {
         .or_else(|| value.pointer("/response/error/type"))
         .and_then(Value::as_str);
     let message = upstream_error_field(value, "message");
-    let kind = if classify_grok_quota_failure(code, error_type, message).is_some() {
-        ProviderErrorKind::QuotaExhausted
+    let kind = if let Some(quota) = classify_grok_quota_failure(code, error_type, message) {
+        GrokInferenceTransportErrorKind::from_quota(quota)
     } else {
         match code {
-            Some("invalid_request" | "invalid_prompt") => ProviderErrorKind::InvalidRequest,
-            Some("unsupported" | "unsupported_feature") => ProviderErrorKind::Unsupported,
-            Some("unauthorized" | "invalid_token") => ProviderErrorKind::Unauthorized,
-            Some("permission_denied") => ProviderErrorKind::PermissionDenied,
-            Some("rate_limit_exceeded") => ProviderErrorKind::RateLimited,
-            _ => ProviderErrorKind::Unavailable,
+            Some("invalid_request" | "invalid_prompt") => {
+                GrokInferenceTransportErrorKind::InvalidRequest
+            }
+            Some("unsupported" | "unsupported_feature") => {
+                GrokInferenceTransportErrorKind::Unsupported
+            }
+            Some("unauthorized" | "invalid_token") => GrokInferenceTransportErrorKind::Unauthorized,
+            Some("permission_denied") => GrokInferenceTransportErrorKind::PermissionDenied,
+            Some("rate_limit_exceeded") => GrokInferenceTransportErrorKind::RateLimited,
+            _ => GrokInferenceTransportErrorKind::Unavailable,
         }
     };
-    let mut error = ProviderError::new(kind, UpstreamSendState::Sent)
+    let mut error = ProviderError::new(kind.provider_kind(), UpstreamSendState::Sent)
+        .with_diagnostic(ProviderDiagnostic::new(kind.diagnostic_message()))
         .with_raw_upstream_error(gateway_core::error::RawUpstreamError::new(
             value.to_string(),
         ))

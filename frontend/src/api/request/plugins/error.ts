@@ -123,7 +123,7 @@ function responseHeader(
     : undefined
 }
 
-function httpFallback(status: number) {
+export function httpFallback(status: number) {
   switch (status) {
     case 400:
       return t('common.errors.invalidParameters')

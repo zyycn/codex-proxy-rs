@@ -1092,7 +1092,7 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
         "search" => "搜索内容过长或包含控制字符",
         "sortBy" => "排序字段不受支持",
         "sortDirection" => "排序方向必须为 asc（升序）或 desc（降序）",
-        _ => "API Key 请求参数不合法",
+        field => return AdminError::bad_request(format!("{field} 字段不合法")),
     };
     AdminError::bad_request(message)
 }

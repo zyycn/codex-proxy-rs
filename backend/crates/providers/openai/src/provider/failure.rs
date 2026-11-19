@@ -1500,15 +1500,12 @@ pub(super) fn map_upstream_failure(
         .status
         .is_some_and(|status| status.is_client_error())
         && is_cyber_policy_code(failure.code.as_deref());
-    let continuation_failure = failure
-        .upstream_code()
-        .filter(|code| is_history_failure_code(code))
-        .map(|_| ContinuationFailure::HistoryUnavailable);
+    let continuation_summary = failure.upstream_code().and_then(history_failure_summary);
     let send_state = upstream_send_state(failure.send_phase);
-    let error_kind = if continuation_failure.is_some() {
-        ProviderErrorKind::ContinuationRecoveryRequired
+    let (error_kind, summary) = if let Some(summary) = continuation_summary {
+        (ProviderErrorKind::ContinuationRecoveryRequired, summary)
     } else {
-        provider_error_kind(category)
+        upstream_failure_summary(category, failure.upstream_code())
     };
     let mut error = provider_error(error_kind, send_state)
         .with_upstream_failure_fields(failure.upstream_fields.clone());
@@ -1517,7 +1514,7 @@ pub(super) fn map_upstream_failure(
     let upgrade_required = failure.send_phase == CodexUpstreamSendPhase::BeforePayload
         && failure.status == Some(reqwest::StatusCode::UPGRADE_REQUIRED);
     if category == CodexFailureCategory::FlexUnavailable
-        || (!replay_safe && continuation_failure.is_none() && !upgrade_required)
+        || (!replay_safe && continuation_summary.is_none() && !upgrade_required)
     {
         error = error.with_retry_prohibited();
     }
@@ -1552,9 +1549,9 @@ pub(super) fn map_upstream_failure(
     if replay_boundary.permits_provider_proof() && replay_safe {
         error = error.with_replay_safe();
     }
-    if let Some(continuation_failure) = continuation_failure {
+    if continuation_summary.is_some() {
         error = error
-            .with_continuation_failure(continuation_failure)
+            .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
             .with_continuation_recovery_disposition(
                 ContinuationRecoveryDisposition::ClientReplayRequired,
             )
@@ -1595,16 +1592,13 @@ pub(super) fn map_upstream_failure(
     if let Some(request_id) = failure.request_id.as_deref() {
         error = error.with_upstream_request_id(OpaqueUpstreamValue::new(request_id.to_owned()));
     }
-    let status = error
-        .upstream_status()
-        .map_or_else(|| "none".to_owned(), |status| status.to_string());
-    let kind = error.kind().as_str();
+    let summary = if cyber_policy_failure {
+        "请求被上游安全策略拦截"
+    } else {
+        summary
+    };
     error = error.with_diagnostic(
-        ProviderDiagnostic::new(format!(
-            "OpenAI upstream failure: kind={}, status={status}",
-            kind
-        ))
-        .with_classification("upstream", "upstream_rejected"),
+        ProviderDiagnostic::new(summary).with_classification("upstream", "upstream_rejected"),
     );
     MappedProviderFailure {
         error,
@@ -1633,38 +1627,80 @@ pub(super) fn is_cyber_policy_code(code: Option<&str>) -> bool {
     code.is_some_and(|code| code.trim().eq_ignore_ascii_case("cyber_policy"))
 }
 
-pub(super) fn is_history_failure_code(code: &str) -> bool {
-    [
-        "previous_response_not_found",
-        "invalid_encrypted_content",
-        "missing_tool_output",
-        "no_tool_output",
-    ]
-    .iter()
-    .any(|known| code.trim().eq_ignore_ascii_case(known))
+fn history_failure_summary(code: &str) -> Option<&'static str> {
+    let code = code.trim();
+    if code.eq_ignore_ascii_case("previous_response_not_found") {
+        Some("上游找不到先前的响应")
+    } else if code.eq_ignore_ascii_case("invalid_encrypted_content") {
+        Some("上游拒绝了加密的历史内容")
+    } else if code.eq_ignore_ascii_case("missing_tool_output")
+        || code.eq_ignore_ascii_case("no_tool_output")
+    {
+        Some("对话历史缺少工具调用结果")
+    } else {
+        None
+    }
 }
 
-pub(super) const fn provider_error_kind(category: CodexFailureCategory) -> ProviderErrorKind {
+fn upstream_failure_summary(
+    category: CodexFailureCategory,
+    code: Option<&str>,
+) -> (ProviderErrorKind, &'static str) {
     match category {
-        CodexFailureCategory::ModelUnsupported => ProviderErrorKind::Unsupported,
-        CodexFailureCategory::CredentialExpired => ProviderErrorKind::Unauthorized,
-        CodexFailureCategory::IdentityVerificationRequired | CodexFailureCategory::Banned => {
-            ProviderErrorKind::PermissionDenied
+        CodexFailureCategory::ModelUnsupported => {
+            (ProviderErrorKind::Unsupported, "上游账号不支持此模型")
         }
-        CodexFailureCategory::UsageLimitExhausted => ProviderErrorKind::QuotaExhausted,
-        CodexFailureCategory::RateLimited | CodexFailureCategory::TurnRateLimited => {
-            ProviderErrorKind::RateLimited
+        CodexFailureCategory::CredentialExpired => {
+            (ProviderErrorKind::Unauthorized, "上游账号凭据无效")
         }
-        CodexFailureCategory::QuotaExhausted => ProviderErrorKind::QuotaExhausted,
-        CodexFailureCategory::CloudflareChallenge
-        | CodexFailureCategory::CloudflarePathBlocked
-        | CodexFailureCategory::FlexUnavailable
-        | CodexFailureCategory::Unavailable => ProviderErrorKind::Unavailable,
-        CodexFailureCategory::CapacityUnavailable => ProviderErrorKind::UpstreamCapacityUnavailable,
-        CodexFailureCategory::InvalidRequest => ProviderErrorKind::InvalidRequest,
-        CodexFailureCategory::PermissionDenied => ProviderErrorKind::PermissionDenied,
-        CodexFailureCategory::Timeout => ProviderErrorKind::Timeout,
-        CodexFailureCategory::Transport => ProviderErrorKind::Transport,
+        CodexFailureCategory::IdentityVerificationRequired => {
+            (ProviderErrorKind::PermissionDenied, "上游账号需要验证身份")
+        }
+        CodexFailureCategory::Banned => (ProviderErrorKind::PermissionDenied, "上游账号已被停用"),
+        CodexFailureCategory::UsageLimitExhausted => (
+            ProviderErrorKind::QuotaExhausted,
+            "当前用量窗口的额度已用完",
+        ),
+        CodexFailureCategory::QuotaExhausted => {
+            (ProviderErrorKind::QuotaExhausted, "上游账号额度已用完")
+        }
+        CodexFailureCategory::RateLimited => (ProviderErrorKind::RateLimited, "上游请求频率受限"),
+        CodexFailureCategory::TurnRateLimited => {
+            (ProviderErrorKind::RateLimited, "当前对话轮次受到限流")
+        }
+        CodexFailureCategory::CloudflareChallenge => {
+            (ProviderErrorKind::Unavailable, "Cloudflare 要求验证请求")
+        }
+        CodexFailureCategory::CloudflarePathBlocked => {
+            (ProviderErrorKind::Unavailable, "上游接口返回空的 404 响应")
+        }
+        CodexFailureCategory::FlexUnavailable => {
+            (ProviderErrorKind::Unavailable, "Flex 服务容量不足")
+        }
+        CodexFailureCategory::CapacityUnavailable => (
+            ProviderErrorKind::UpstreamCapacityUnavailable,
+            "上游模型容量不足",
+        ),
+        CodexFailureCategory::InvalidRequest => {
+            let summary = match code.map(str::trim) {
+                Some(code) if code.eq_ignore_ascii_case("unsupported_value") => {
+                    "上游不支持该参数值"
+                }
+                Some(code) if code.eq_ignore_ascii_case("invalid_prompt") => "上游拒绝了提示词",
+                Some(code) if code.eq_ignore_ascii_case("context_length_exceeded") => {
+                    "输入超出模型上下文长度"
+                }
+                _ => "上游拒绝了请求参数",
+            };
+            (ProviderErrorKind::InvalidRequest, summary)
+        }
+        CodexFailureCategory::PermissionDenied => (
+            ProviderErrorKind::PermissionDenied,
+            "上游账号无权执行此请求",
+        ),
+        CodexFailureCategory::Timeout => (ProviderErrorKind::Timeout, "上游响应超时"),
+        CodexFailureCategory::Unavailable => (ProviderErrorKind::Unavailable, "上游服务暂不可用"),
+        CodexFailureCategory::Transport => (ProviderErrorKind::Transport, "上游返回了非预期响应"),
     }
 }
 

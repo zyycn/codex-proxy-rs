@@ -1410,7 +1410,14 @@ pub(crate) fn map_wire_error(error: WireValidationError) -> AdminError {
         "dimension" => "诊断维度不合法",
         "id" => "用量记录 ID 不能为空",
         "cursor" => "观测数据游标不合法",
-        _ => "观测查询参数不合法",
+        "currentPage" => "页码须大于 0",
+        "pageSize" => {
+            return AdminError::bad_request(format!("每页数量须为 1 至 {}", DomainPageSize::MAX));
+        }
+        "status" => "请求状态须为 success、error 或 all",
+        "errorOrigin" => "错误来源须为 proxy、upstream、connection 或 unknown",
+        "errorOriginStatus" => "仅错误请求支持按错误来源筛选",
+        field => return AdminError::bad_request(format!("{field} 字段不合法")),
     };
     AdminError::bad_request(message)
 }

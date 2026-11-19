@@ -525,24 +525,7 @@ pub(super) fn map_transport_error_with_state(
     allow_explicit_replay: bool,
 ) -> ProviderError {
     let transport_kind = error.kind();
-    let kind = match transport_kind {
-        GrokInferenceTransportErrorKind::InvalidRequest => ProviderErrorKind::InvalidRequest,
-        GrokInferenceTransportErrorKind::Unsupported => ProviderErrorKind::Unsupported,
-        GrokInferenceTransportErrorKind::Unauthorized => ProviderErrorKind::Unauthorized,
-        GrokInferenceTransportErrorKind::PermissionDenied
-        | GrokInferenceTransportErrorKind::ModelAccessDenied
-        | GrokInferenceTransportErrorKind::PaymentRequired
-        | GrokInferenceTransportErrorKind::SafetyRejected => ProviderErrorKind::PermissionDenied,
-        GrokInferenceTransportErrorKind::RateLimited => ProviderErrorKind::RateLimited,
-        GrokInferenceTransportErrorKind::QuotaExhausted
-        | GrokInferenceTransportErrorKind::FreeQuotaExhausted
-        | GrokInferenceTransportErrorKind::ModelQuotaExhausted => ProviderErrorKind::QuotaExhausted,
-        GrokInferenceTransportErrorKind::Timeout => ProviderErrorKind::Timeout,
-        GrokInferenceTransportErrorKind::Transport => ProviderErrorKind::Transport,
-        GrokInferenceTransportErrorKind::Protocol => ProviderErrorKind::Protocol,
-        GrokInferenceTransportErrorKind::Unavailable => ProviderErrorKind::Unavailable,
-        GrokInferenceTransportErrorKind::Cancelled => ProviderErrorKind::Cancelled,
-    };
+    let kind = transport_kind.provider_kind();
     let mut mapped = provider_error(
         kind,
         forced_send_state.unwrap_or_else(|| error.send_state()),
@@ -579,14 +562,8 @@ pub(super) fn map_transport_error_with_state(
         mapped = mapped.with_client_visible_upstream_error(detail);
     }
     let diagnostic = error.diagnostic().cloned().unwrap_or_else(|| {
-        let status = error
-            .status()
-            .map_or_else(|| "none".to_owned(), |value| value.to_string());
-        ProviderDiagnostic::new(format!(
-            "xAI upstream failure: kind={}, status={status}",
-            kind.as_str()
-        ))
-        .with_classification("upstream", "upstream_failure")
+        ProviderDiagnostic::new(transport_kind.diagnostic_message())
+            .with_classification("upstream", "upstream_failure")
     });
     mapped = mapped.with_diagnostic(diagnostic);
     if error.requires_credential_recovery() {

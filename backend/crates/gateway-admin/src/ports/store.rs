@@ -480,6 +480,7 @@ pub trait AccountGroupStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<AccountGroupMutation>;
 
+    /// 仍有 API Key 引用分组时返回 Conflict
     async fn delete_account_group(
         &self,
         command: DeleteAccountGroup,

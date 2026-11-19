@@ -6,6 +6,7 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
 import { notification as ZNotification } from '@/utils/notification'
+import { errorMessage } from '@/utils/operation'
 import { accountNameUpdate } from '../utils/accountName'
 import { accountSchedulingValues, concurrencyLimitInput } from '../utils/schedulingForm'
 import { emptyApiKeyAccountForm, isOpenAiApiKeyAccount, isOpenAiOAuthAccount, parseApiKeyConfiguration } from '../utils/upstreamApiKey'
@@ -29,8 +30,8 @@ export function useAccountEditor(options: {
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
   const apiKey = ref(emptyApiKeyAccountForm())
-  const configurationRequest = useRequestState(() => ZNotification.error({
-    message: t('accounts.editor.loadError'),
+  const configurationRequest = useRequestState(cause => ZNotification.error({
+    message: errorMessage(cause, t('accounts.editor.loadError')),
   }))
   const savedConfiguration = shallowRef<ApiKeyConfiguration>()
   const oauthTransport = shallowRef<ApiKeyConfiguration['transport'] | ''>('')

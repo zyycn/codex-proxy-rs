@@ -215,12 +215,12 @@ const METHOD_NOT_ALLOWED: AdminErrorSpec = AdminErrorSpec::new(
 const TOO_MANY_LOGIN_ATTEMPTS: AdminErrorSpec = AdminErrorSpec::new(
     StatusCode::TOO_MANY_REQUESTS,
     AdminErrorCode::TOO_MANY_LOGIN_ATTEMPTS,
-    "登录尝试过多，请稍后重试",
+    "登录尝试过多",
 );
 const RATE_LIMITED: AdminErrorSpec = AdminErrorSpec::new(
     StatusCode::TOO_MANY_REQUESTS,
     AdminErrorCode::RATE_LIMITED,
-    "请求过于频繁，请稍后重试",
+    "请求过于频繁",
 );
 const INTERNAL: AdminErrorSpec = AdminErrorSpec::new(
     StatusCode::INTERNAL_SERVER_ERROR,

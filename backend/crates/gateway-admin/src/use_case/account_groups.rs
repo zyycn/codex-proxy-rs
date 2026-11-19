@@ -24,7 +24,7 @@ use crate::{
             NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
         },
     },
-    ports::store::{AccountGroupStore, AccountRuntimeStore},
+    ports::store::{AccountGroupStore, AccountRuntimeStore, AdminStoreErrorKind},
 };
 
 use super::{map_store_error, publish_committed};
@@ -159,8 +159,7 @@ impl AccountGroupService for DefaultAccountGroupService {
         crate::model::account_groups::validate_group_fields(
             &command.name,
             command.description.as_deref(),
-        )
-        .map_err(|_| AdminError::invalid("账号组请求不合法"))?;
+        )?;
         let id = AccountGroupId::new(format!("grp_{}", Uuid::now_v7().simple()))
             .map_err(|_| AdminError::internal("创建账号组 ID 失败"))?;
         self.publish(
@@ -189,8 +188,7 @@ impl AccountGroupService for DefaultAccountGroupService {
         crate::model::account_groups::validate_group_fields(
             &command.name,
             command.description.as_deref(),
-        )
-        .map_err(|_| AdminError::invalid("账号组请求不合法"))?;
+        )?;
         self.publish(self.store.update_account_group(command, context).await)
             .await
     }
@@ -209,8 +207,12 @@ impl AccountGroupService for DefaultAccountGroupService {
         context: &MutationContext,
         command: DeleteAccountGroup,
     ) -> Result<AccountGroupMutation, AdminError> {
-        self.publish(self.store.delete_account_group(command, context).await)
-            .await
+        match self.store.delete_account_group(command, context).await {
+            Err(error) if error.kind() == AdminStoreErrorKind::Conflict => {
+                Err(AdminError::conflict("分组仍绑定 API Key，请先解除绑定").with_source(error))
+            }
+            result => self.publish(result).await,
+        }
     }
 }
 

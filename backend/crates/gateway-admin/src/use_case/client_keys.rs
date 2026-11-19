@@ -314,7 +314,6 @@ impl ClientKeyService for DefaultClientKeyService {
 
 fn map_client_key_write_error(error: AdminStoreError) -> AdminError {
     match error.kind() {
-        AdminStoreErrorKind::DuplicateName => AdminError::conflict("名称已存在"),
         AdminStoreErrorKind::Conflict => AdminError::conflict("API Key 已存在，请使用其他密钥"),
         _ => map_store_error(error, "client API key"),
     }

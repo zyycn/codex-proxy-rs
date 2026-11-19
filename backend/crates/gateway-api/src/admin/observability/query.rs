@@ -367,7 +367,7 @@ pub(crate) fn usage_command(
                 Some(_) => return Err(WireValidationError::new("errorOrigin")),
             }),
             (None | Some("success" | "all"), Some(_)) => {
-                return Err(WireValidationError::new("errorOrigin"));
+                return Err(WireValidationError::new("errorOriginStatus"));
             }
             (Some(_), _) => return Err(WireValidationError::new("status")),
         },

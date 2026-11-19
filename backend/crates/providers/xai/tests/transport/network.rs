@@ -918,6 +918,10 @@ async fn inference_transport_should_classify_free_usage_429_as_account_free_quot
         error.kind(),
         GrokInferenceTransportErrorKind::FreeQuotaExhausted
     );
+    assert_eq!(
+        error.diagnostic().unwrap().as_str(),
+        "上游账号免费额度已用完"
+    );
     assert_eq!(error.status(), Some(429));
     assert_eq!(
         error.upstream_code().map(|code| code.as_str()),

@@ -514,6 +514,12 @@ mod provider {
             (Kind::BadGateway, 502, 50201, "上游服务请求失败"),
             (Kind::Unavailable, 503, 50301, "服务商暂不可用"),
             (
+                Kind::CredentialRefreshRequired,
+                503,
+                50301,
+                "账号凭据需要刷新",
+            ),
+            (
                 Kind::Ambiguous,
                 502,
                 50202,
