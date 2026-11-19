@@ -1,8 +1,6 @@
 # 开发与源码联调
 
-本文说明开发环境、服务启动与跨仓库联调，命令均从宿主仓库根目录执行
-
-协作与检查要求见 [贡献与审查](../CONTRIBUTING.md)，部署实例的配置与数据维护见 [部署与运维](../deploy/README.md)
+除克隆仓库外，命令均在宿主仓库根目录执行。协作与验收见 [贡献与审查](../CONTRIBUTING.md)，部署配置与数据维护见 [部署与运维](../deploy/README.md)
 
 | 任务 | 入口 |
 | --- | --- |
@@ -14,12 +12,8 @@
 
 ## 环境与依赖
 
-需要 Node.js 26.13.1、pnpm、[Rust 工具链](architecture.md#验证命令)、PostgreSQL 和 Redis
-
-各前端的 `packageManager` 固定 pnpm 版本，宿主 CI 和 Docker 从 `frontend/package.json` 读取
-
-Rust 工具链声明位于 `backend/rust-toolchain.toml`，从仓库根目录运行 Cargo 时显式选择该工具链；
-`--manifest-path` 只选择 manifest，不切换 rustup 按当前目录选定的工具链
+使用 Node.js 26.13.1、PostgreSQL、Redis 和各前端 `packageManager` 指定的 pnpm。宿主 CI 与 Docker 读取 `frontend/package.json`。
+在仓库根目录运行 Cargo 时，用 `+版本号` 选择 `backend/rust-toolchain.toml` 指定的[工具链](architecture.md#验证命令)
 
 ```bash
 git clone https://github.com/zyycn/codex-proxy-rs.git
@@ -27,11 +21,11 @@ cd codex-proxy-rs
 pnpm --dir frontend install --frozen-lockfile
 ```
 
-前端依赖、锁文件与 ESLint 配置由 `frontend/` 管理，根目录不维护 Node 包
+宿主前端的依赖、锁文件与 ESLint 配置位于 `frontend/`
 
 - **版本固定**：`@codex-proxy/ui` 使用固定 GitHub 标签或提交，锁文件记录实际提交、源码归档地址及完整性摘要
 - **安装与构建**：pnpm 按 UI 自身锁文件准备依赖，执行 `prepack` 生成 JS、CSS 和类型声明，普通 `dev`、`build`、发行 CI 和 Docker 使用编译产物，无需初始化子模块
-- **构建许可**：`frontend/pnpm-workspace.yaml` 的 `allowBuilds` 按仓库放行自有 UI 包脚本，升级时核对源码并更新锁文件，无需逐次修改许可，不开放全部依赖脚本
+- **构建许可**：`frontend/pnpm-workspace.yaml` 的 `allowBuilds` 按仓库放行自有 UI 包脚本。升级时核对源码并更新锁文件
 
 ## 启动宿主
 
@@ -60,10 +54,7 @@ pnpm --dir frontend dev
 
 ## 源码入口
 
-后端职责和依赖方向见 [Workspace 边界](architecture.md#3-workspace-边界)，页面与共享逻辑见 [前端模块职责](architecture.md#34-前端模块职责)。
-先按所属模块定位，再跟踪请求、状态与展示的调用关系
-
-共享 UI 的命名与目录见[组件架构](../modules/ui/playground/guide/architecture.md)
+[后端 Workspace 边界](architecture.md#3-workspace-边界) · [前端模块职责](architecture.md#34-前端模块职责) · [共享 UI 组件架构](../modules/ui/playground/guide/architecture.md)
 
 Messages 与 Responses 的纯协议转换位于 `backend/crates/gateway-protocol/src/anthropic/`，
 HTTP 入口位于 `backend/crates/gateway-api/src/openai/messages.rs`，
@@ -111,7 +102,7 @@ cargo +1.99.1 test --manifest-path backend/Cargo.toml --locked -p provider-opena
 | `modules/ui` | `codex-proxy-ui`，共用组件与主题 |
 | `modules/plugins` | `codex-proxy-plugins`，官方插件示例 |
 
-各仓库的常规 CI 验证自身代码和锁定依赖。源码模式用于按需联调，运行前确认所选版本或提交组合及其公开合同兼容
+各仓库的 CI 使用锁定依赖。联调前确认所选提交的公开接口兼容
 
 ### 检出与安装
 
@@ -122,7 +113,7 @@ git clone --recurse-submodules https://github.com/zyycn/codex-proxy-rs.git
 cd codex-proxy-rs
 ```
 
-已有仓库运行 `git submodule update --init --recursive`。子模块固定到具体提交；拉取宿主更新后，同样用此命令对齐。执行前先保存子模块中的改动，避免切换正在开发的分支
+在已有仓库中，先保存子模块改动，再用 `git submodule update --init --recursive` 检出宿主指定的提交。拉取宿主更新后也用此命令对齐
 
 在宿主根目录安装各项目依赖：
 
@@ -177,12 +168,8 @@ pnpm --dir modules/plugins/examples/workbench/frontend build:source
 
 ## 编辑与提交
 
-直接打开宿主目录即可开发，分别在对应仓库目录操作 Git
-
 1. 在要修改的子模块内先创建分支，例如 `git -C modules/ui switch -c feat/select`。初次初始化的子模块通常处于 detached HEAD
 2. 在子模块运行自身检查，并在宿主根目录运行所需联调检查
-3. 分别提交、推送并合并组件库或插件 PR。宿主只记录子模块提交号，不能替代子仓库的提交与推送
-4. 管理端与插件页面按需升级 UI 依赖，各自固定标签或提交并维护锁文件，无需与 `modules/ui` 同步版本
-5. 提交宿主改动及 `modules/ui`、`modules/plugins` 指针。指针必须指向远程可取得的提交，不能只存在于开发机
-
-更新子模块指针不会自动升级消费方依赖。正式依赖不能写成开发机路径或浮动分支；SDK 仍由插件仓库固定到包含所需合同的宿主提交
+3. 在对应仓库提交、推送并合并组件库或插件 PR
+4. 需要升级依赖时，在管理端或插件仓库固定 UI 标签或提交并更新锁文件。插件 SDK 固定到提供所需合同的宿主提交
+5. 在宿主仓库提交代码和子模块指针。指针须可从远程检出，更新指针不会升级消费方依赖

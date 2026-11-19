@@ -1,15 +1,9 @@
 # Gateway Plugin SDK
 
-用于编写 Codex Proxy 插件的 Rust 合同与可选会话辅助。插件只依赖本包，不依赖宿主 Core、Admin、Store 或 Host。
-SDK 包版本为 `0.1.0`，独立于网关版本，处于实验阶段。能力是否可用取决于宿主支持、清单声明与实际注册
+Rust 插件只需依赖 `gateway-plugin-sdk`。SDK `0.1.0` 处于实验阶段，独立于网关发版。清单、进程协议和能力分别版本化，插件可用能力取决于宿主支持、清单声明与实际注册
 
-清单、进程协议和各项能力分别版本化，当前版本与声明规则统一见[插件清单](docs/manifest.md)
-
-开发顺序：编写[清单](docs/manifest.md) → 实现[能力处理器](docs/capabilities.md) → 用 [CLI](../../../apps/plugin-cli/README.md)
-打包 → [安装、配置与启用](../../../../docs/plugins.md)。完整可运行示例位于独立仓库
-`codex-proxy-plugins` 的 `examples/workbench`
-
-使用 AI 协作开发时，可调用仓库技能 [`$cpr-plugin-dev`](../../../../.agents/skills/cpr-plugin-dev/SKILL.md)，按任务定位合同、示例和验证入口
+编写[清单](docs/manifest.md) → 实现[处理器](docs/capabilities.md) → 用 [CLI 打包](../../../apps/plugin-cli/README.md) → [安装并启用](../../../../docs/plugins.md)。
+完整示例见 `codex-proxy-plugins/examples/workbench`，AI 协作入口见 [cpr-plugin-dev](../../../../.agents/skills/cpr-plugin-dev/SKILL.md)
 
 ## 模块与依赖
 
@@ -29,11 +23,7 @@ SDK 包版本为 `0.1.0`，独立于网关版本，处于实验阶段。能力�
 | `call::management` | 管理 API、页面与资源声明、公开回调，以及 CLI 命令与待保存账号 |
 | `client` | 通过 `io` feature 开启的 `PluginBuilder`、会话、中间件与异步帧收发 |
 
-`call/` 按业务能力组织数据，`message.rs` 定义消息与帧。已有请求链的请求／响应改写、协议转换和思考参数映射使用
-`call::middleware`；需要指定业务上游并解析结果时使用 `call::upstream_adapter`，作为洋葱链终端复用宿主账号与结算。
-下游 WebSocket 改写使用 `websocket` 中间件；上游发送前的请求准备使用 `outbound` 中间件，响应观察接口保留只读合同
-
-插件使用的导入路径例如：
+`message.rs` 定义消息与帧。改写现有请求、响应或推理参数使用 `call::middleware`，其中 `websocket` 处理下游消息，`outbound` 处理上游发送前的请求。响应观察只读。需要自行选择业务上游并解析响应时使用 `call::upstream_adapter`
 
 ```rust
 use gateway_plugin_sdk::{Frame, Message, PluginFault};
@@ -42,10 +32,8 @@ use gateway_plugin_sdk::call::{host::ModelEventBatch, model::ExecutionEvent};
 use gateway_plugin_sdk::client::{read_frame, write_frame};
 ```
 
-默认 feature 不引入异步运行时。`io` 除帧编解码外，还提供 `PluginBuilder`、
-`PluginSession::accept/run` 和 `PluginHandler`。组合插件从作者清单建立类型化方法，SDK 自动生成
-`plugin.register`；作者不需要复制贡献项或手写方法名、阶段和敏感载荷编解码。
-会话管理握手、有界并发、父调用关联、回调、流信用、取消、排空与关闭，容量与计时见[并发与期限](#并发与期限)
+默认 feature 不引入异步运行时。`io` 提供帧编解码、`PluginBuilder`、`PluginSession::accept/run` 和 `PluginHandler`。
+[类型化构建器](docs/capabilities.md#类型化作者入口)按清单注册处理器。会话管理握手、并发、父调用关联、回调、流信用、取消、排空与关闭，容量与计时见[并发与期限](#并发与期限)
 
 `HostClient::scan_usage_records` 与 `query_usage_statistics` 提供用量明细扫描和完整分组统计，按批读取与关闭见[用量查询](docs/usage-data.md#完整扫描与分组统计)
 
@@ -149,9 +137,8 @@ session.run(handler).await?;
 
 ### 帧与会话
 
-`CallContext.timeout_ms` 限定初始处理期限。宿主对由流或连接 owner 管理的调用设置 `resource_stream`：
-首个流式结果成功返回后，正文、会话及关联回调由资源取消与终态回收，不再沿用初始期限。
-普通调用继续使用原期限；资源模式仍保留并发容量、Credit、父调用关联及取消约束
+普通调用受 `CallContext.timeout_ms` 限制。对标记为 `resource_stream` 的调用，初始期限只到首个流式结果成功返回。
+其后的正文、会话及回调由资源终态或取消回收，仍受并发容量、Credit 和父调用约束
 
 协议 v7 的帧头由大端 `u32` 元数据长度和大端 `u64` 载荷长度组成，随后依次传输 JSON 元数据和二进制载荷。
 元数据保留 64 KiB 上限；正文总量不由插件传输层额外限制。传输内部以 256 KiB 为单次 I/O 块，
@@ -210,6 +197,4 @@ RUST_MIN_STACK=16777216 cargo +1.99.1 test --manifest-path backend/Cargo.toml -p
 RUST_MIN_STACK=16777216 RUSTDOCFLAGS='-D warnings' cargo +1.99.1 doc --manifest-path backend/Cargo.toml -p gateway-plugin-sdk --all-features --no-deps --locked
 ```
 
-源码中的类型和字段是当前合同；宿主接入、目录边界、内置 Provider 与 Runtime 集成验证见
-[系统架构](../../../../docs/architecture.md#31-插件扩展)。
-单元测试与文档构建不代替目标平台上的安装、配置及实际能力验证
+宿主集成见[系统架构](../../../../docs/architecture.md#31-插件扩展)。插件还须在目标平台验证安装、配置和实际功能

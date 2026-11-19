@@ -1,10 +1,8 @@
 # 数据库迁移
 
-sqlx 在服务启动、监听请求之前按编号执行迁移，并把文件 checksum 记入 `_sqlx_migrations`。
-已应用迁移的字节与记录不一致时，服务会拒绝启动
+服务监听请求前，sqlx 按编号执行本目录的 SQL，并将文件校验和写入 `_sqlx_migrations`。已应用文件的校验和不匹配时，服务拒绝启动
 
-迁移按递增编号组织，完整清单以本目录 SQL 文件和 `.frozen-sha256` 为准。
-业务状态与存储职责见[状态所有权](../../docs/architecture.md#8-状态所有权)，离线恢复见[部署文档](../../deploy/README.md#人工恢复数据库)
+[状态所有权](../../docs/architecture.md#8-状态所有权) · [离线恢复](../../deploy/README.md#人工恢复数据库)
 
 ## 命名约定
 
@@ -15,7 +13,7 @@ sqlx 在服务启动、监听请求之前按编号执行迁移，并把文件 ch
 
 ## 冻结规则
 
-- 同一大版本内，已合入 main 的迁移文件**按字节永久冻结**，包括注释和空白。schema 变更及错误修正都须新增编号迁移，使用 `alter` 或回填补偿；修改原文件会导致已部署实例重启时 checksum 失配，且没有自动恢复路径
+- 同一大版本内，合入 `main` 的迁移文件**按字节永久冻结**，包括注释和空白。修改 schema 或修正错误须追加编号迁移，使用 `alter` 或数据回填
 - 跨大版本不支持在线升级，目标版本必须使用全新数据目录部署；此时可将已完成升级的 schema 折叠为新的初始化基线
 - 支持连续升级的预发行线从首次发布起同样冻结迁移。alpha、beta、rc 到对应正式版必须保留
   已发布迁移的编号与字节；同一轮 exp 的后续发行也只能追加迁移。发布前以该发行线已发布版本
@@ -30,7 +28,7 @@ cd backend/migrations
 sha256sum --check --strict .frozen-sha256
 ```
 
-遇到 checksum 不一致，先核对运行版本和文件来源；不要修改数据库中的 checksum 来绕过校验
+校验和不一致时无法自动恢复。核对运行版本与文件来源，不要改写数据库中的校验和
 
 ## 本地测试库
 
@@ -41,19 +39,13 @@ export CPR_TEST_DATABASE_URL='postgres://<user>:<password>@127.0.0.1:5432/<db>'
 export CPR_TEST_REDIS_URL='redis://:<password>@127.0.0.1:6379'
 ```
 
-插件 Runtime 的真实子进程与持久化测试优先使用 `CPR_PLUGIN_TEST_DATABASE_URL` 和
-`CPR_PLUGIN_TEST_REDIS_URL`。设置插件数据库变量时必须同时提供对应 Redis 变量；未设置插件数据库变量时，
-使用上述标准测试服务。两种配置遵守相同的密码与隔离要求；缺少服务时的跳过和 CI 失败规则也相同
+插件 Runtime 的真实子进程与持久化测试可使用专用的 `CPR_PLUGIN_TEST_DATABASE_URL`，此时须同时设置 `CPR_PLUGIN_TEST_REDIS_URL`。省略插件数据库 URL 时使用上面的测试服务
 
-测试自建随机 schema / key 前缀做隔离，但仍应使用专用开发或测试实例，不要连接生产库。
-凭据从自己的部署配置或 CI Secret 中读取，不要粘贴未脱敏的 `docker inspect` 输出。
-环境变量未设置导致的跳过不算数据库测试通过
+使用专用开发或测试实例，测试通过随机 schema 和 Redis key 前缀隔离数据。凭据取自部署配置或 CI Secret，不要分享未脱敏的 `docker inspect` 输出
 
 PostgreSQL 的临时 schema 测试连接使用异步提交，保留事务可见性、回滚和完整迁移检查
 需要验证数据库崩溃后的持久性时，使用独立数据库与生产连接配置，不复用这类 fixture
 
 运行包含 `StoreBundle` 初始化的完整集成测试时，两条测试 URL 都须包含密码，原始密码须满足
 [Store 密码要求](../../deploy/README.md#手动安装)，在测试 URL 中按 URL 规则编码。
-仅能连接数据库并不代表该初始化合同通过。专用服务使用对应测试密码，
-并在测试进程中清除 `CPR_DATABASE_URL`、`CPR_REDIS_URL`、`CPR_DATABASE_PASSWORD` 和
-`CPR_REDIS_PASSWORD`，避免启动配置被部署环境覆盖
+在测试进程中清除 `CPR_DATABASE_URL`、`CPR_REDIS_URL`、`CPR_DATABASE_PASSWORD` 和 `CPR_REDIS_PASSWORD`，避免部署环境覆盖测试配置

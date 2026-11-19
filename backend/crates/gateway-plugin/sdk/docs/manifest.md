@@ -2,8 +2,7 @@
 
 [返回 SDK](../README.md) · [能力与回调](capabilities.md)
 
-`Manifest` 对应包内 `plugin.json`。作者源清单由 `Manifest::from_author_slice` 读取，CLI 打包也调用同一入口；
-因此本地构建器、生成的安装清单和运行注册共享一份规范化结果
+`Manifest` 对应包内的 `plugin.json`。本地构建器与打包 CLI 都通过 `Manifest::from_author_slice` 校验并规范化作者清单
 
 | 字段 | 规则 |
 | --- | --- |
@@ -14,11 +13,10 @@
 | `configurationSchema` / `secretFields` | 普通设置的 schema / 单独保存的敏感字段 |
 | `main` / `resources` | 包内可执行文件 / 资源路径与 MIME 类型 |
 | `state` | [私有状态](capabilities.md#状态日志与迁移)的命名空间、schema 与配额 |
-| `package` | CLI 生成的协议版本、单一目标平台与文件摘要，不需作者手写 |
+| `package` | 作者清单须省略。CLI 填入协议版本、目标平台与文件摘要 |
 
-作者清单不能包含 `package`。使用 `Manifest::from_author_slice()` 校验并规范化；直接反序列化的 `Manifest`
-不会执行作者清单的 ID 与固定阶段推导，声明的可选字段仍使用其默认值。打包后，`main` 和所有资源都必须进入 `package.files`，
-宿主校验包结构、目标平台与文件完整性，宿主范围和能力版本另行进行兼容检查。运行模式为 `trustedProcess`，信任边界见[完整信任](#完整信任)
+直接反序列化 `Manifest` 只应用可选字段默认值。需要推导 ID 和固定阶段时使用作者清单入口。
+打包后，`package.files` 须包含 `main` 与所有资源
 
 宿主实际开放的合同由 [plugin-host-compatibility.json](../../runtime/plugin-host-compatibility.json)
 声明，SDK 的 `Capability::contract_versions()` 只表示 SDK 能描述的行为版本，不能代替宿主支持检查
@@ -32,13 +30,9 @@
 
 `capabilities` 使用扩展能力标识；Provider、模型和账号 ID 不属于这个集合
 
-清单不接受 `permissions` 字段；插件按[完整信任](#完整信任)运行
+CLI 按 SDK 合同校验声明。安装包清单拒绝未知字段，并校验必需字段、类型与版本。进程通信见 [RPC 合同](../README.md#通信边界)，已安装元数据的读取见[制品与发布](../../../../../docs/architecture.md#制品配置与发布)
 
-RPC v7 的帧布局、编码与会话生命周期见[通信边界](../README.md#通信边界)。插件使用 SDK 构建，并由 CLI 生成包含协议版本的安装包
-
-安装包清单校验与已安装元数据读取是两个边界：清单拒绝未知字段，并检查必需字段、类型和版本；
-数据库元数据的读取规则见[制品与发布](../../../../../docs/architecture.md#制品配置与发布)，不改变清单或 RPC 合同。
-`engines.codex-proxy-rs` 声明插件所需的宿主范围。范围或已声明能力版本不匹配时不自动启动，管理员确认风险后可尝试本次启动；确认不跨宿主重启保留。包结构、清单格式、平台与 RPC 封装校验失败阻止加载，不能通过风险确认绕过。CLI 严格校验作者声明是否符合 SDK 支持的合同
+宿主版本超出 `engines.codex-proxy-rs` 范围或能力版本不匹配时，管理员可确认风险并尝试启动，确认仅对本次启动有效。包结构、文件完整性、清单格式、平台或 RPC 校验失败时无法加载
 
 ## 接口弃用
 
@@ -98,15 +92,11 @@ capability 固定并由工具生成：
 
 安装并启用插件意味着信任其全部代码和行为。插件与宿主使用相同的系统身份，可以访问数据、凭据和网络；安全由安装者承担，宿主不提供插件安全沙箱
 
-清单只声明处理器、配置和资源。宿主回调不需要权限声明，也不按调用阶段授予访问域；类型校验、期限、取消、实例 revision、事务及流资源生命周期仍然生效
+运行模式为 `trustedProcess`。清单不接受 `permissions`，宿主回调无需声明权限。类型、期限、取消、实例 revision、事务与流资源约束均生效
 
 ## 插件图标
 
-`icon` 指定管理端展示的插件图标。值可以是一个包内文件路径，也可以是包含 `light`、`dark` 两个路径的对象。
-使用单个路径时，浅色和深色主题共用同一张图；使用主题对象时，管理端按当前主题选择，两项都必须填写。
-不填写 `icon` 时显示通用图标。图标路径不是远程 URL，也不接受内置图标名称
-
-在 `plugin.json` 中同时设置 `icon` 和对应的 `resources` 项。以下是单图标配置片段：
+`icon` 可填包内路径（两种主题共用），或同时含 `light`、`dark` 路径的对象。每个文件均须在 `resources` 登记。省略 `icon` 时显示通用图标
 
 ```json
 {
@@ -151,6 +141,4 @@ capability 固定并由工具生成：
 - SVG 使用 UTF-8 编码，根元素为 SVG 命名空间中的 `<svg>`，XML 节点不超过 16384 个；不使用 DTD 实体或 XML 处理指令
 - SVG 保留矢量、渐变、内联样式和 data URL 内嵌图片；图标不能依赖脚本、外部图片、外部样式或外部字体
 
-将图标文件与清单一同交给 [插件 CLI](../../../../apps/plugin-cli/README.md) 打包。工具收集 `resources` 声明的文件，
-生成 `package.files` 摘要；宿主在安装时验证图标内容。管理端通过 [图标读取接口](../../../../../docs/api.md#12-插件管理)
-以图片方式展示，不将 SVG 源码插入页面 HTML
+[插件 CLI](../../../../apps/plugin-cli/README.md) 打包图标，宿主在安装时校验内容。管理端通过[图标接口](../../../../../docs/api.md#图标读取)以图片展示 SVG

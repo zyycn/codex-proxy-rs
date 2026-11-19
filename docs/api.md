@@ -1,8 +1,6 @@
 # Codex Proxy RS 接口
 
-本文描述当前源码的公开 HTTP 合同，路由以 `backend/crates/gateway-api/src` 中的 router 为准
-
-配置客户端见[部署文档](../deploy/README.md#客户端配置)，内部职责见[系统架构](architecture.md)，部署实例的功能以实际运行版本和 revision 为准
+公开 HTTP 路由位于 `backend/crates/gateway-api/src`。客户端接入见[部署文档](../deploy/README.md#客户端配置)，模块职责见[系统架构](architecture.md)
 
 | 查找内容 | 入口 |
 | --- | --- |
@@ -26,8 +24,7 @@
 Authorization: Bearer sk_...
 ```
 
-自动生成的 Key 保持 `sk_` 格式；迁入的自定义 Key 使用保存时的原值，不限制前缀或固定长度。
-无论格式如何，只有已保存且启用的 Client Key 能通过鉴权
+自动生成的 Key 以 `sk_` 开头，自定义 Key 按原值鉴权，无固定前缀或长度。仅已保存且启用的 Key 有效
 
 `/v1/messages`、`/v1/messages/count_tokens`、`/v1/models` 和 `/v1/models/{model_id}` 也接受 `x-api-key: <Client Key>`。
 同时提供两个认证头时优先使用 `Authorization`；客户端提交的是网关 Client Key，上游密钥由选中的账号提供
@@ -172,7 +169,7 @@ Codex PAT 验证服务不可用和身份响应无效分别返回 `50301`、`5020
 `YYYY-MM-DD HH:mm:ss`，短时间、相对时间和图表标签按对应视图返回；缺失时间的展示字段为 `null` 或占位文本。
 调用者直接显示文本，使用原始时间点进行排序、比较和输入，不把展示文本转回请求时间
 
-账号、模型用量和 Key 列表的最近使用时间由前端根据原始 RFC3339 时间点，通过 VueUse `useTimeAgoIntl` 按界面语言显示短相对时间，并随时间更新；悬停的完整日期仍使用后端 `lastUsedAtFullDisplay`，不使用浏览器本地时区重算
+账号、模型用量和 Key 列表使用 RFC3339 时间点 `lastUsedAt` 显示随时间更新的本地化相对时间，悬停时显示服务端返回的 `lastUsedAtFullDisplay`
 
 Dashboard 的 `lastUsedRelative` 和账号额度的 `refreshedAtRelative` 由后端确定时间语义，
 分别以查询锚点和服务端当前时间计算，随接口刷新更新。前端只翻译分类与单位，不使用浏览器时钟或时区重算
@@ -182,7 +179,7 @@ Dashboard 的 `lastUsedRelative` 和账号额度的 `refreshedAtRelative` 由后
 - `kind=elapsed` 包含整数 `value` 和 `unit=minute|hour|day`，分钟不足 60、小时不足 24，之后始终用天；数值向下取整
 - `kind=absolute` 的 `value` 是后端按部署 `host.timezone` 生成的完整日期文本，用于按整秒判断的未来时间点
 
-原始 RFC3339 `lastUsedAt`、`quota.refreshedAt` 与兼容展示字段保持可用，不用于前端重新决定上述展示方式
+账号额度的原始刷新时间为 RFC3339 字段 `quota.refreshedAt`
 
 账号冷却返回 RFC3339 `rateLimitedUntil` 和 `rateLimitRecoveryDisplay`，后者包含剩余时长、
 到期时间或等待恢复探测的提示，随账号数据刷新；前端不解析展示文本或自行计算恢复提示
@@ -306,9 +303,8 @@ print(completion.choices[0].message.content)
 `logit_bias` 和 `prediction` 没有对应的 Responses 控制语义，接受后忽略，不保证生效。
 消息的 `reasoning_content` 和 `reasoning` 作为辅助历史忽略，不转为用户正文
 
-本地保留以下限制：`n` 只能为 `1`，`store` 和 `background` 只能为 `false`，
-`modalities` 只能为 `["text"]`，旧式 `functions` 只能为空数组；这些字段也可省略或为 `null`。
-非空旧式函数定义、`function_call`、旧式 `function` 角色、音频输出以及无法映射的内容类型会被拒绝。
+`n`、`store`、`background`、`modalities` 和 `functions` 可省略或为 `null`。非空值仅接受 `n: 1`、`store: false`、`background: false`、`modalities: ["text"]` 和 `functions: []`。
+网关拒绝 `function_call`、`function` 消息角色、音频输出和无法映射的内容类型。
 入口不接收 `input`、`previous_response_id` 或 `conversation`；需要服务端续接时使用 `/v1/responses`
 
 未知客户端附加字段在协议包装对象中忽略，不据名称自动转交 Responses；schema、metadata、工具参数和
@@ -355,11 +351,10 @@ Responses 上游使用 `$.input`，Messages 上游使用 `$.messages`
 转向 OpenAI Responses 上游时，`max_tokens` 仍为入站必填字段，但不限制实际输出。
 消息角色为 `user`、`assistant` 或 `system`，`content` 为字符串或内容块数组；初始系统指令放在顶层 `system`，
 会话中的 `system` 消息保留其位置，具体模型支持情况由上游校验。
-`stream` 缺省或 `false` 返回 JSON，`true` 返回 SSE。每轮由客户端携带所需的完整上下文。Claude Code 用 `--resume` 恢复本地会话后，仍通过 `messages` 发送上下文；网关不缓存对话正文用于下一轮。
-Messages 没有服务端历史续接或 WebSocket 入口
+`stream` 缺省或为 `false` 时返回 JSON，`true` 返回 SSE。每轮须通过 `messages` 发送完整上下文，包括 Claude Code 用 `--resume` 恢复的本地会话。此入口不支持服务端续接或 WebSocket
 
 Messages 生成请求通过 OpenAI Provider 选号时，优先使用 `x-claude-code-session-id` 识别 Claude Code 会话，
-缺少有效头部时读取 `metadata.user_id` JSON 字符串中的 `session_id` 或旧格式 `_session_<id>` 后缀。
+缺少有效头部时，从 `metadata.user_id` 的 JSON 字符串读取 `session_id`，或读取字符串的 `_session_<id>` 后缀（此处 ID 只接受十六进制字符与连字符）。
 会话标识最长 256 字节，不接受控制字符；普通用户标识和对话内容不用于绑定账号。
 同一 Client Key 下的会话沿用[账号亲和与换号](#账号亲和与换号)设置，转向 Responses 上游时也适用
 
@@ -672,19 +667,14 @@ OpenAI Responses 上游 WS 按握手响应头 `x-codex-websocket-max-message-byt
 此规则适用于所有客户端。下一步请求应在新连接上发送完整输入，省略 `previous_response_id`。
 已接收的后续请求按序处理，若增量先到，仍按上述 400 合同恢复。启用 WS 帧中间件时保留连接
 
-已建立模型执行的 HTTP 响应（生成请求、Messages 输入计数、Images 和 Search）按以下规则返回关联 ID：
-`x-gateway-request-id` 为模型执行 ID；`x-request-id` 保留有效上游值，只有上游
-`x-oai-request-id` 时复用其值，没有上游 ID 时使用模型执行 ID。`x-oai-request-id` 不是必需字段，
-也不要求客户端识别它；OpenAI 与 xAI 路由使用相同规则。失败响应的关联 ID 不采用会话 opening ID，
-错误正文读取失败时仍返回已知上游 ID；已采集的 turn state 等允许的会话头继续按原合同交付。
-尚未建立执行的入口拒绝继续使用 middleware 的入口关联
+生成请求、Messages 输入计数、Images 和 Search 的 HTTP 响应在建立模型执行后返回两个关联 ID，OpenAI 与 xAI 规则相同：
 
-WebSocket 在尚未交付上游业务事件时合成的错误，除下述容量恢复合同外，保留已确认的失败状态，
-以及 Provider 提取的结构化 message/type/code；没有结构化错误时使用稳定安全文案，不把原始
-HTML 或截断正文当作 message。
-合成错误自身的 `headers` 携带允许下发的响应头：优先保留实际失败的上游 request ID，无上游 ID 时
-提供网关关联 ID，并用 `x-gateway-request-id` 独立标识网关请求。除下述客户端错误兼容与原生续写额度恢复外，
-已经取得的原始上游错误帧不重写
+- `x-gateway-request-id` 为模型执行 ID
+- `x-request-id` 优先取有效的上游同名头，其次取上游 `x-oai-request-id`，最后取模型执行 ID
+
+错误正文读取失败时仍返回已知上游 ID 与允许下发的会话头（如 turn state）。只有在建立执行前拒绝请求时才使用中间件的入口关联
+
+WebSocket 在交付业务事件前合成的错误保留已确认的失败状态和结构化 `message/type/code`，容量恢复按[重试规则](#容量拒绝与重试)处理。缺少结构化错误时使用安全提示。错误的 `headers` 携带允许下发的响应头，优先返回失败的上游 request ID，缺失时使用网关关联 ID。`x-gateway-request-id` 单独标识网关请求
 
 ### 模型目录
 
@@ -726,11 +716,8 @@ OpenAI 聚合当前 Key 范围内合格 OAuth 和 API Key 账号的目录。每�
 服务启动时批量恢复账号目录；目录读取只检查本地账号资格和 Client Key 范围，不等待上游查询。
 成功目录响应带 `Cache-Control: private, no-store`，不借用上游 ETag 标识经过选择/别名/聚合后的正文
 
-`service_tiers` 的 `name` 用于生成 `/fast` 等命令，`id` 是请求使用的 `service_tier` 值，二者不能互换。
-上游未声明或明确返回空数组时不补档位，也不根据模型名推断 Fast。
-该合同对齐
-[官方 Codex 0.154.0 的模型元数据](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/protocol/src/openai_models.rs)
-与其动态服务档位命令；客户端需重新加载模型目录才能使用更新后的档位信息
+`service_tiers` 中的 `name` 用于生成 `/fast` 等命令，`id` 用作请求的 `service_tier` 值。
+上游未声明档位或返回空数组时，网关不补充档位。档位更新后，客户端需重新加载模型目录
 
 Codex 专用目录中的 `context_window` 与 `max_context_window` 分别表示默认上下文窗口和客户端本地
 覆盖的上限。OpenAI Provider 原样保留上游对应字段，缺失与 `null` 不互相转换；网关不通过部署配置
@@ -1148,12 +1135,12 @@ call 与账号的绑定保存在网关进程内，未连接时一小时过期；
 普通业务请求和状态轮询不会续期。管理员访问凭据到期后，仍可通过续期 Cookie 恢复登录；续期成功会轮换两种凭据，
 并重新计算不活动期限，但不能超过登录时确定的最长有效期。访问凭据仍有效时，refresh 返回同一组凭据和期限。
 轮换后 30 秒内重试上一代续期凭据返回同一组新凭据；超出窗口再次使用已识别的上一代凭据会撤销该会话。
-续期已过期或会话已撤销时不会重新创建；未认证返回 `{ authenticated: false, session: null }`，不写 Cookie；依赖故障返回 503。
+续期过期或会话已撤销时返回未认证状态，不重建会话或写入 Cookie。依赖故障返回 503。
 退出可以只携带续期 Cookie，并清除两种 Cookie。Key 登录清除续期 Cookie，密钥身份会话保持固定期限。
 期限配置见[部署配置](../deploy/README.md#手动安装)
 
 每次恢复密钥会话时重新确认 Key 存在且启用；停用或删除后会话失效，重新启用不会恢复已撤销会话。
-依赖不可用时返回 503，不返回已认证或假装未登录。预算耗尽不妨碍登录
+密钥校验依赖不可用时返回 503。预算耗尽不妨碍登录
 
 密钥会话访问管理接口返回 403，不清除仍然有效的会话。
 浏览器会话不能替代 `/v1/*` 的 Client Key，Client Key 也不能替代浏览器会话
@@ -1527,7 +1514,7 @@ API 的 `autoLocation` 默认为 `false`；开启时使用已检测位置，测�
 导入请求可以携带顶层 `outboundProxyId`，在令牌交换前解析为默认出口；文件中显式的代理配置优先。
 文件及 AT/RT 导入从凭据交换到落库期间保护所选代理；此时修改、删除或写入测试结果返回 409，
 避免已轮换的凭据因代理状态变化而丢失。完成导入或请求取消后自动释放保护。
-OAuth 等待回调期间不持有保护；提交仍拒绝已删除或连接配置改变的代理
+OAuth 等待回调期间允许修改代理。提交时若代理已删除、停用，或地址、WebSocket 连接上限与授权开始时不匹配，须使用有效代理重新发起授权
 
 ### 账号连接测试 SSE
 
@@ -1801,7 +1788,7 @@ OpenAI 授权码交换与令牌刷新请求的连接超时为 30 秒，单次上
   `quota_exhausted`。额度观测不会清除凭据过期、无效或封禁事实；这些事实统一投影为 `error`，并由
   `errorReason` 区分。额度接口的 401/403 也不足以判定 refresh token 永久失效，credential 终态只由
   OAuth refresh 的明确永久错误写入
-- xAI 额度百分比只读取 `creditUsagePercent`，缺失时保持未知，不由旧月额度与用量计算。
+- xAI 额度百分比取自 `creditUsagePercent`，缺失时为未知。
   预付余额保留上游账本符号，非零余额及剩余按量额度可独立证明可用；窗口已过期或缺少可用证据时，
   不凭旧快照恢复账号
 - 正常 Responses 请求会解析上游响应的 rate-limit headers，合并进同一 quota 快照并同步状态。Free、
@@ -2064,15 +2051,14 @@ OpenAI Key 的 `installationSeed` 接受带连字符的 UUID，保存时规范�
 - 种子不发送给上游，也不改写账号凭据；更改或清除种子使生效身份变化时，WebSocket 精确续写须重发完整上下文
 
 兼容字段 `openaiClientProfileOverride` 和 `xaiClientProfileOverride` 分别对应上述映射中的 `openai`、`xai`。
-创建时省略或 `null` 表示无覆盖；更新时省略保留、`null` 清除。与通用字段同时提交时必须一致，否则拒绝整个请求；
-响应中的兼容字段从同一映射派生，不是第二份配置
+创建时省略或为 `null` 表示无覆盖。更新时省略保留，`null` 清除。与通用字段同时提交时须一致，否则整次请求被拒绝
 
 ### 名称与密钥值
 
 密钥列表的 `search` 仅匹配名称和标签，不匹配密钥值或可见前缀；搜索不区分大小写，使用字面量包含匹配，`%`、`_` 和 `\` 按普通字符处理。
 创建和更新时去除名称首尾空白，并按忽略大小写、首尾空格的名称查重，重复返回 `409`。
 更新排除当前记录，并发写入同样执行查重；失败不会留下审计或配置版本变更。
-历史重名数据不自动改名，已有凭据继续有效；再次保存时需使用未被其他密钥占用的名称
+已有同名 Key 的凭据有效，编辑时须使用未被其他 Key 占用的名称
 
 `customKey` 仅用于创建：省略、`null` 或空字符串时继续自动生成；非空时按原值保存，不追加前缀、
 不截断、不修剪空白，也不要求固定长度。Key 须为 HTTP Bearer 可传输的非空可见 ASCII 字符，
@@ -2389,7 +2375,8 @@ Chat Completions 和 Responses 通过原生 OpenAI Provider 选号时，缺少�
 缺少必填系数、系数为 `null`、未知字段及无效数值均返回 `422`，不写入配置。读取设置额外返回只读
 `smartSchedulingDefaults`，内容为上述默认对象，用于恢复默认与自定义状态比较，不可提交到更新接口
 
-`resetWeight` 控制重置分在总评分中的比重。`resetWindowWeights` 中的 `fiveHour`、`weekly`、`monthly` 分别表示 5 小时、周和月的相对系数。三项均为 0～10、最多一位小数。默认均为 0，旧配置省略整个字段时也取 0；全部为 0 时不计重置分。设为 `{"fiveHour":0,"weekly":1,"monthly":0}` 可只按周重置评分。只计算账号通用窗口，未知、缺失或已过期的周期贡献为零
+`resetWeight` 控制重置分在总评分中的比重。`resetWindowWeights` 的 `fiveHour`、`weekly`、`monthly` 分别是 5 小时、周和月的相对系数，取值为 0～10，最多一位小数。省略整个字段时三项均为 0。
+全部为 0 时不计重置分。设为 `{"fiveHour":0,"weekly":1,"monthly":0}` 可只按周重置评分。只计算账号通用窗口，未知、缺失或已过期的周期贡献为零
 
 `queueWeight` 只在没有可立即使用的账号、需要选择等待队列时参与评分，越大越偏向等待人数少的账号。
 设为 `0` 时沿用最短队列规则；启用后结合其余五项评分选择队列。队列人数限于当前进程，只有开启账号排队才会生效，
@@ -2464,16 +2451,14 @@ models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI �
 更新时省略某项保留原值，对象替换该项，`null` 删除显式选择并使用 Provider 默认值；不清除其他 Provider 的配置。
 配置内容由对应 Provider 校验，不包含账号凭据。Key 可通过 `providerRequestProfileOverrides` 整体覆盖所属 Provider 的选择
 
-`openaiClientProfile` 与 `xaiClientProfile` 是同一映射的兼容字段：省略保留，不能显式提交 `null`；
-与通用字段同时提供时必须一致，否则整次更新拒绝。读取响应从映射派生这两个字段，不维护平行状态
+`openaiClientProfile` 与 `xaiClientProfile` 读写同一映射中的对应项。省略保留，显式提交 `null` 或与通用字段冲突时拒绝整次更新
 
 直接读取 `openai` 或 `xai` 的选项与预览。OpenAI 选项返回六个 `presets` 与 `maxVersionLag`，xAI 返回 `defaults`；
 响应均包含 `globalConfiguration`
 
 ### OpenAI 上游客户端身份
 
-`openaiClientProfile` 保存通用选择，首次默认 `MacOS · Desktop · 自动最新`。
-兼容字段的更新语义见上节。初始化不读取 YAML 身份字段。
+OpenAI 通用身份默认使用 `MacOS · Desktop · 自动最新`。
 该配置作用于 Client Key 的 OpenAI 模型请求，适用于 HTTP/SSE、WebSocket、Images 和 Search，
 也用于账号模型目录的后台发现、手动刷新、导出及定时预热；下次执行时采用当前全局选择，不使用单个 Key 的覆盖。
 不改变 xAI、入站客户端版本门禁、账号认证或后台 Desktop 专属操作
@@ -2542,9 +2527,7 @@ WebSocket 精确续写沿用所属连接；安装身份配置与变更限制见 
 
 ### xAI 上游客户端身份
 
-`xaiClientProfile` 保存 Grok CLI 的通用身份选择；首次使用内置 `grok-shell / headless / linux / x86_64`
-并采用自动更新版本。初始化不读取 YAML 身份字段，数据库已有选择时不覆盖。
-更新设置省略该字段保留现值，不能提交 `null`
+Grok CLI 通用身份默认使用 `grok-shell / headless / linux / x86_64`，版本自动更新
 
 | 字段 | 取值与语义 |
 | --- | --- |
@@ -2747,8 +2730,7 @@ Dashboard 的当前账号摘要包含 `upstream`，结构与账号列表一致�
 | `GET` | `/api/admin/operations/errors` | 运维错误分页列表 |
 | `GET` | `/api/admin/diagnostics/export` | 按 `requestId` 或 `errorId` 下载诊断 ZIP 附件 |
 
-用量汇总的 `averageLatencyMsValue` 为可空毫秒数，前端按持续时长格式化；无延迟样本时为 `null`，
-`averageLatencyMs` 保留为兼容展示字段
+用量汇总的 `averageLatencyMsValue` 为平均延迟毫秒数，无样本时为 `null`。`averageLatencyMs` 提供格式化文本
 
 ### Dashboard 趋势指标
 
@@ -2786,7 +2768,7 @@ Dashboard 的 `capacityInfo` 统计普通容量，不含独立审批池；`maxCo
 Dashboard 的 `accountUsage[]` 返回稳定指标 `metric=requests|tokens`、可空原始数值 `metricValueRaw` 和
 可空 RFC3339 `lastUsedAt`；前端负责指标名称和数字本地化，相对时间按[页面时间合同](#页面时间合同)翻译 `lastUsedRelative`。
 `requests` 使用代表性额度窗口的本地请求数，`tokens` 使用今日 Token；未知数值为 `null`，零值保留 `0`。
-`metricLabel`、`metricValue` 和 `lastUsed` 保留给兼容调用方，当前管理端不解析或显示这些字段
+`metricLabel`、`metricValue` 和 `lastUsed` 提供兼容的展示文本
 
 `accountUsage[].notes` 为账号当前备注，无备注时为 `null`
 
@@ -3076,30 +3058,25 @@ Provider metadata 分别保留 `requestedServiceTier` 与 `upstreamServiceTier` 
 | `GET` | `/api/admin/system/restart/check` | 无 | 只读检查重启目标与启用插件 |
 | `POST` | `/api/admin/system/restart` | `{ confirmation? }` | 复核兼容性风险确认并重启，保留插件启用配置 |
 
-在线更新遵循[版本命名与升级规则](../deploy/README.md#版本命名与升级规则)。版本接口的
-`updateChannel` 由当前版本推导，取值为 `stable`、`alpha`、`beta`、`rc`、`exp`，无法识别时为 `unknown`。
-详情接口的可选 `channel` 仅作用于本次查询，不保存实例偏好；省略时按当前运行版本推导。
-响应的 `policy` 包含本次 `channel` 与 `availableChannels`，普通实例可选 `stable`、`rc`、`beta`、`alpha`，
-实验实例仅允许 `exp`。不可用通道返回 `40901`，未知枚举值返回参数错误。
-执行时应同时发送页面确认的 `channel` 与 `targetVersion`，服务端冻结该通道并重新复核远端目标；
-省略通道时按运行版本推导。版本接口只读本地构建和已有运行通道摘要，缓存未就绪时 `updateCached=false`，不会发起网络请求。
-检查与执行使用同一规则，禁止的通道转换、跨实验线、跨大版本、降级或同版本重装均以 `40901` 拒绝。
-`hasUpdate=true` 仅表示当前构建支持在线更新，且存在允许的更高版本；`latestVersion`、`releaseUrl` 和
-`notes` 对应这个候选。没有可升级候选时，`hasUpdate=false`、`latestVersion` 为当前版本，
-`releaseUrl` 和 `notes` 保留当前版本的已发布 Release 信息；找不到匹配当前版本的 Release 时为空。
-当前构建不支持在线更新时不查询 Release，`hasUpdate=false`、`latestVersion` 为当前版本，
-`releaseUrl` 和 `notes` 为空，不支持原因通过 `updateSupported=false`、`unsupportedReason` 返回。
+版本接口只读本地构建和通道摘要，缓存未就绪时返回 `updateCached=false`。`updateChannel` 按运行版本推导，为 `stable`、`alpha`、`beta`、`rc`、`exp` 或 `unknown`
+
+详情与安装接口的 `channel` 只对本次操作有效，省略时取运行通道。响应的 `policy` 包含 `channel` 和 `availableChannels`。普通实例可选 `stable`、`rc`、`beta`、`alpha`，实验实例仅可选 `exp`。
+未知枚举值返回参数错误。禁用通道、跨实验线、跨大版本、降级或同版本重装返回 `40901`。安装时同时提交已确认的 `channel` 和 `targetVersion`，服务端按[升级规则](../deploy/README.md#版本命名与升级规则)复核目标
+
+| 详情查询结果 | `hasUpdate` | `latestVersion` | `releaseUrl`、`notes` |
+| --- | --- | --- | --- |
+| 有可安装的更高版本 | `true` | 候选版本 | 候选 Release 信息 |
+| 无可升级候选 | `false` | 当前版本 | 当前 Release 信息，未找到时为空 |
+| 构建不支持在线更新 | `false` | 当前版本 | 为空。跳过 Release 查询，通过 `updateSupported=false` 与 `unsupportedReason` 返回原因 |
+
 `summaryOnly=true` 优先于 `refresh`，按发布索引检查版本，仅对更高候选核对公开 Release 和当前平台附件；`notes`、`releaseUrl` 为空。详情或摘要检查失败时返回 `warning` 和 `hasUpdate=false`，此时 `latestVersion` 不代表已确认的通道版本。GitHub 限流时，`retryAt` 为最早可重试的 RFC 3339 时间，`retryAtDisplay` 按部署时区展示；其他情况两者均为 `null`。
 普通查询缓存 20 分钟，手动刷新最短间隔为 60 秒；临时错误缓存 60 秒，限流按来源退避。
-后台安装重新核对通道和目标版本，目标变化须再次检查并确认；下载与校验流程见[在线更新](../deploy/README.md#管理端在线更新)
+目标变化须重新检查并确认。下载与校验见[在线更新](../deploy/README.md#管理端在线更新)
 
-更新 POST 在本地校验目标版本并持久化任务后返回 `202`，数据包含 `operationId`、`targetVersion`、
-`deploymentMode` 和 `message`，只表示已受理。Release 查询、远端目标复核、下载、校验及文件替换在后台
-执行，结果通过 `/update/status` 的 `operation` 查询：`status` 为 `idle`、`running`、`succeeded` 或 `failed`，
-终态包含 `finishedAt`，失败原因在 `error` 中。SSE 的 `operationId` 用于关联进度；终态事件发出前状态已落盘。
-连接中断不取消已受理任务；响应丢失时先查询状态，不自动重复提交。打开更新页面时也会恢复最近一次任务。
-下载并解包后校验发行身份，插件版本不匹配不阻止更新或回滚，兼容性风险在重启前提示。
-两条路径在文件交换前后复核全局配置版本，文件替换失败或取消时成组恢复二进制、Web 资源和官方插件目录
+更新 POST 在本地校验目标版本、保存任务后返回 `202`，含 `operationId`、`targetVersion`、`deploymentMode` 和 `message`。后台负责复核 Release、下载、校验及替换文件。
+通过 SSE 的 `operationId` 跟踪进度，或查询 `/update/status` 的 `operation`。`status` 取 `idle`、`running`、`succeeded` 或 `failed`。终态含 `finishedAt`，失败原因在 `error`，状态落盘后发送终态事件。
+断开连接不取消任务。响应丢失时先查询状态，重新打开更新页面可查看最近任务。
+更新和回滚均校验发行身份，在文件交换前后复核全局配置版本。失败或取消时成组恢复二进制、Web 和官方插件目录。插件兼容风险在重启前确认
 
 客户端重启前调用 `restart/check`，返回 `targetVersion`、`releaseManifestSha256`、`configRevision` 和 `incompatiblePlugins`，
 每项包含 `instanceId`、`name`、`reason`，检查不修改插件状态。源码运行的目标版本与发行摘要为空，检查当前宿主兼容性。

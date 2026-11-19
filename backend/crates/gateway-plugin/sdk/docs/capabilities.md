@@ -27,22 +27,15 @@ let plugin = PluginBuilder::from_json(include_bytes!("../plugin.json"))?
 session.run(plugin).await?;
 ```
 
-`PluginBuilder::from_json` 与 `cpr-plugin package` 使用同一个作者清单规范化入口。构建器负责：
-
-- 自动响应 `plugin.register`，注册内容直接来自规范化后的清单
-- 按方法合同解码控制参数和二进制载荷，并在进入业务处理器前检查调用阶段
-- 保留 `TypedCall` 中的调用上下文、宿主客户端和取消信号
-- 按方法合同编码 `TypedReply`，流式结果继续复用有界 `ResponseStream`
-- 在 `build()` 时核对能力与必需处理器，避免清单与分派表漂移
+`PluginBuilder::from_json` 与打包 CLI 共用[作者清单入口](manifest.md)，按清单响应 `plugin.register`，并在 `build()` 时核对必需处理器。
+构建器在分派前检查阶段、解码控制参数与载荷。`TypedCall` 携带上下文、宿主客户端及取消信号，结果编码为 `TypedReply`，流式结果使用有界 `ResponseStream`
 
 `management`、`command_line` 和 `middleware` 是常用组合入口；其余能力使用
 `on(methods::..., handler)`。方法常量固定请求、响应、阶段与载荷位置，作者不手写 RPC 方法名。
 状态迁移不是 capability：清单任一 `state[]` 声明了 `migratesFrom` 时，注册
 `methods::STATE_MIGRATE`，构建器也会要求该处理器存在
 
-类型化合同故意区分三种数据：普通控制元数据、可能敏感的 JSON 二进制载荷、原始字节。
-例如 CLI 参数、账号凭据和状态迁移批次使用二进制 JSON，管理 HTTP 正文保持原始字节。
-错误地把敏感载荷放进控制参数会在业务处理器运行前被拒绝
+控制参数只放普通元数据。CLI 参数、账号凭据和状态迁移批次使用二进制 JSON，管理 HTTP 正文使用原始字节。敏感载荷放进控制参数会在分派前被拒绝
 
 ## 请求上下文
 
@@ -252,9 +245,7 @@ SDK 不自动重试。超时或断连不能证明写入未提交；重试上限�
 
 ### Key、模型与模型调用
 
-模型调用方法：
-
-- `host.keys.list`：只返回 `{id, name, enabled}`，不返回 Key 明文、前缀或隐藏 scope
+- `host.keys.list`：分页返回 `{id, name, enabled}`
 - `host.models.list`：以显式 `client_key_id` 查询该 Key 当前可见的模型目录
 - `host.model.execute[_stream]`：交给 Core 的路由、准入、租约、重试、账本和计费链路执行
 - `host.model.stream_read/close`：读取或关闭当前父调用创建的有界流
@@ -266,9 +257,8 @@ SDK 不自动重试。超时或断连不能证明写入未提交；重试上限�
 `invalid_input`，不启动模型执行。上游适配器的请求 `GPAQ` 也使用请求预算，响应事件仍受
 原有 8 MiB 编码上限、Runtime 缓冲预算及流控窗口限制
 
-HTTP 和 request 中间件中的模型回调沿用有效请求设置；attempt、outbound、路由、调度、重试和上游适配器
-沿用该次模型请求冻结的正文预算。显式 Key 模型调用的预检与执行使用同一身份快照，
-同一父调用内复用 Key 时不受后续配置发布影响；父调用结束后重新解析身份才读取新配置，无需重新启用插件
+HTTP 和 request 中间件使用有效请求设置。attempt、outbound、路由、调度、重试及上游适配器沿用冻结的模型请求预算。
+显式 Key 的预检与执行共用父调用内的身份快照，后续发布的配置在新的父调用解析身份时生效
 
 `ModelExecuteRequest.client_key_id` 可显式选择执行 Key，不与触发插件的父请求 Key 求交。省略时继承现有模型父请求身份；没有模型父请求的调用必须提供 Key。所选 Key 的启用状态、模型规则、账号组、并发和预算继续由 Core 执行
 嵌套调用与显式 Key 调用继承入口快照中的客户端 IP 和 User-Agent；没有 HTTP 入口的后台调用保持来源未知
@@ -276,7 +266,7 @@ HTTP 和 request 中间件中的模型回调沿用有效请求设置；attempt�
 模型事件使用 `call::model::ExecutionEvent` 的 `GPE2` 封套，将 canonical 事实、宿主事实和原始 wire 分段编码。`host` 包含费用及定价明细、完整上游观测、会话状态和改写来源；当前 wire 与原始 wire 都保留二进制字节；`WirePayload::WebSocket` 独立保留完整文本消息和可选 JSON 视图，不把未知文本改造成 SSE。读取或回传快照不触发第二次计费、续接提交或发送状态更新。
 非流式模型结果通过 `ModelEventBatch` 的 `HME1` 有界二进制批次返回；流式句柄只在创建它的父调用内有效。
 发起回调的插件实例在子调用中跳过，Core 在单次执行的子调用图内限制递归深度、总数和并发，避免插件调用自身形成环。
-显式 Key 的身份快照随父调用保留，每个模型执行独立计时并建立调用图；父调用结束会取消尚未完成的执行，连接空闲不消耗后续执行的期限
+每次模型执行独立计时并建立调用图。父调用结束会取消未完成的执行，连接空闲不消耗后续执行的期限
 
 `host.affinity.lookup` 查询 Provider 已持久化的真实亲和键。命中只是账号偏好，
 后续执行仍重新检查当前 Key 规则、账号资格和租约
@@ -288,16 +278,11 @@ HTTP 和 request 中间件中的模型回调沿用有效请求设置；attempt�
 父调用取消或结束时宿主回收未关闭的流，SDK 不后台预读。取消一次 `read()` 等待后，再次读取会继续同一次操作，不丢弃已经返回的分块。
 账号上游使用同一正文对象，使用方式见[受管上游](upstream-adapters.md)
 
-`HostClient::account_http(AccountHttpRequest { account_id, credential_revision, request }, body)` 使用指定账号的当前代理配置，
-经 `host.http.account` 返回同一 `HostHttpBody`。每次发送核对账号存在、启用和凭据版本，版本变化须由插件重新读取后决定下一步。
-请求 headers 与正文完全由插件提供；宿主不注入账号认证、不申请推理租约。无显式代理时使用部署默认出口，代理不可用时直接失败，不回退直连。
-这项能力与上游适配器的账号推理 HTTP 分开，适用于插件自行构造的账号网络请求
+`HostClient::account_http(AccountHttpRequest { account_id, credential_revision, request }, body)` 经 `host.http.account` 使用账号代理并返回 `HostHttpBody`。每次发送要求账号存在、已启用且凭据版本匹配。版本变化时须重新读取凭据。
+插件提供请求头与正文，宿主不注入账号认证或申请推理租约。无显式代理时使用部署默认出口，代理不可用时直接失败
 
-`HostClient::proxy_http(ProxyHttpRequest { proxy_id, request }, body)` 经 `host.http.proxy` 使用指定代理的当前配置，
-返回同一响应头与 `HostHttpBody`，不要求账号存在或绑定代理，也不校验账号凭据版本。
-代理不存在、禁用或连接失败时返回错误，不回退直连；未测试或历史测试失败不阻止实际请求。
-每次发送重新读取代理，已发出的请求沿该次解析的出口完成，不锁定整个插件业务流程的代理配置。
-目标请求的 headers 与正文由插件提供，宿主不注入账号认证；代理连接所需认证由宿主处理
+`HostClient::proxy_http(ProxyHttpRequest { proxy_id, request }, body)` 经 `host.http.proxy` 使用指定代理，无需绑定账号，返回响应头与 `HostHttpBody`。
+宿主每次发送读取代理配置，已发出的请求沿该出口完成。代理不存在、禁用或连接失败时直接报错，历史测试结果不限制发送。插件提供目标请求头与正文，宿主仅处理代理认证
 
 `HostClient::list_proxies(ProxyListRequest { page, page_size, search })` 经 `host.proxies.list` 查询代理目录。
 `page` 从 1 开始，`page_size` 为 1–200，`search` 可省略，默认空字符串，最多 256 字节且不能包含控制字符。
@@ -387,7 +372,7 @@ let status = host.service::<SetResetCreditAutomation>((account_id, true)).await?
 
 `HttpCall.request` 提供 method、URI（含 query）、HTTP version、完整多值 headers、`settings`、`timeout_ms` 和 `HttpBody`。
 调用发生在路由匹配之前，管理接口、模型接口和未知路径都可参与。`settings` 是同一请求快照中的宿主运行设置，
-插件改写后用于后续认证、版本检查、正文解压及执行；不新增设置业务的中间件入口。`timeout_ms` 使用宿主 HTTP 超时基线，
+插件改写后的设置用于认证、版本检查、正文解压及执行。`timeout_ms` 默认取宿主 HTTP 超时，
 插件可改写或用 `None` 清除；终端按有效值执行，不恢复宿主默认值。宿主快照不可用时 `settings` 为 `null`
 
 `POST /v1/chat/completions` 在 HTTP 挂载中保留 Chat 请求与 Chat JSON/SSE 响应视图，
@@ -756,7 +741,7 @@ keep、replace 或 delete；全部完成后宿主才原子提交新配置与状�
 需要跳转到外部页面时，在插件页面的用户点击处理器中调用 `openExternal(url): Promise<void>`。
 地址必须是绝对 HTTPS URL，不能包含用户名或密码。宿主展示目标主机名和非默认端口，管理员可打开新标签页、复制链接或取消。
 Promise 成功只表示宿主已接受确认请求，不代表链接已打开；无用户操作、地址无效或已有链接待确认时，请求会被拒绝。
-切换页面会关闭确认框。兼容较早的 v2 宿主时，先检查 `typeof window.codexProxyPlugin.openExternal === 'function'`
+切换页面会关闭确认框。插件需要适配缺少此方法的宿主时，先检查 `typeof window.codexProxyPlugin.openExternal === 'function'`
 
 普通模型请求使用标准 `Response` 接口：
 
