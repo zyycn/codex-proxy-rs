@@ -56,7 +56,6 @@ export const accountColumns = computed(() => (defineTableColumns<Account>([
     key: 'planType',
     label: t('accounts.profile.subscription.label'),
     kind: 'status',
-    size: 'sm',
     sortable: true,
   },
   {
@@ -84,6 +83,7 @@ export const accountColumns = computed(() => (defineTableColumns<Account>([
     key: 'accessTokenExpiresAtDisplay',
     label: t('accounts.fields.tokenExpires'),
     kind: 'datetime',
+    minWidth: 160,
     sortable: 'expiresAt',
     formatter: value => optionalAccountCell(value),
     emptyText: '',
