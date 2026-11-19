@@ -237,11 +237,31 @@ flowchart LR
 
 网关端口默认只绑定本机；数据库和 Redis 不对公网开放。插件以网关同一系统身份运行，不能作为不可信代码沙箱
 
+## 安装脚本选项
+
+[一键安装](../README.md#快速开始)需要当前用户能访问 Docker，并可通过 `sudo` 或 root 设置目录权限。脚本会启动网关、PostgreSQL 和 Redis，首次安装完成后输出访问地址和管理员密码
+
+运行 `bash install.sh` 时可设置以下环境变量：
+
+| 变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `INSTALL_DIR` | 安装目录，建议使用绝对路径 | 当前目录下的 `codex-proxy-rs/` |
+| `CPR_RELEASE_TAG` | 指定发布标签 | 最新正式版本 |
+| `ADMIN_PASSWORD` | 管理员初始密码，至少 12 位，不含 `$` 或控制字符，不能使用常见弱口令 | 随机生成 |
+
+例如，将服务安装到指定目录：
+
+```bash
+INSTALL_DIR="$HOME/services/codex-proxy-rs" bash install.sh
+```
+
+重复运行时使用同一安装目录。检测到 `deploy/config.yaml` 后，[脚本](install.sh)会保留现有配置与部署文件，忽略传入的管理员密码。版本升级见[镜像升级与源码构建](#镜像升级与源码构建)
+
 ## 手动安装
 
 本节适用于 Linux amd64/arm64，需准备 Docker Engine、Docker Compose Plugin、curl 和 OpenSSL，
 并确保当前用户能访问 Docker、可通过 `sudo` 或 root 设置目录权限。一键安装入口见
-[快速开始](../README.md#一键安装)，脚本会自动完成本节准备和服务启动
+[快速开始](../README.md#快速开始)，脚本会自动完成本节准备和服务启动
 
 下载同一正式 Release 的部署文件并设置目录权限：
 
@@ -598,7 +618,13 @@ Caddy 与应用同在容器网络时，将回源地址改为 `codex-proxy-rs:808
 
 ## 客户端配置
 
-在管理端创建客户端密钥。Responses、Chat Completions 和 Anthropic Messages 客户端的 Base URL 见[客户端接入](../README.md#客户端接入)；
+在管理端创建客户端密钥，将其填入 API 客户端的 API Key 字段。根据客户端自动追加的请求路径选择 Base URL，远程接入时将 `http://127.0.0.1:8080` 替换为网关的 HTTPS 地址
+
+| 客户端自动追加的路径 | Base URL（本机部署） |
+| --- | --- |
+| OpenAI Responses `/responses`、Chat Completions `/chat/completions` | `http://127.0.0.1:8080/v1` |
+| Anthropic Messages `/v1/messages` | `http://127.0.0.1:8080` |
+
 直接发送 HTTP 请求可参考 [Messages 示例](../docs/api.md#messages-请求)
 
 使用 Codex 时，打开「使用密钥」，按操作系统复制 `config.toml`。
