@@ -177,6 +177,8 @@ const SAVED_ERROR_FACTS: &str = "(select exists (
            then (mr.error_details::jsonb ->> 'upstream')::jsonb
          end
        end as body
+       -- 保留子查询边界，让错误字段和关闭码复用同一行已解码的上游正文
+       offset 0
      ) saved_upstream
      cross join lateral (
        select coalesce(saved_upstream.body -> 'error', saved_upstream.body #> '{response,error}') as body

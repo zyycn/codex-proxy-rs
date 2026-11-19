@@ -17,15 +17,12 @@ const { t } = useI18n({ useScope: 'global' })
 
 <template>
   <div class="inline-grid max-w-full gap-1">
-    <div class="flex min-w-0 items-center gap-1">
-      <code
-        class="block max-w-full truncate font-mono text-z-sm leading-none font-heavy text-z-text"
-        :title="t('usage.status.requestedModel', { model: modelDisplay.primary })"
-      >
-        {{ modelDisplay.primary }}
-      </code>
-      <slot />
-    </div>
+    <code
+      class="block max-w-full truncate font-mono text-z-sm leading-none font-heavy text-z-text"
+      :title="t('usage.status.requestedModel', { model: modelDisplay.primary })"
+    >
+      {{ modelDisplay.primary }}
+    </code>
     <div
       v-if="modelDisplay.secondary"
       class="flex min-w-0 max-w-full items-center gap-1.25 text-z-text-secondary"

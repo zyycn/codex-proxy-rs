@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { UsageErrorOrigin, UsageRecordStatus } from '@/api'
-import { ZCard, ZDatePicker, ZIconButton, ZPageHeader, ZPagination, ZSegmented, ZSelect, ZTableColumnSettings } from '@codex-proxy/ui'
+import { ZCard, ZDatePicker, ZIconButton, ZPageHeader, ZPagination, ZSelect, ZTableColumnSettings } from '@codex-proxy/ui'
 import { Eye } from '@lucide/vue'
 
 import { useElementSize } from '@vueuse/core'
@@ -150,6 +150,13 @@ watch(timeRange, () => {
             @refresh="refreshUsageRecords"
           >
             <template #actions>
+              <ZSelect
+                v-if="recordView === 'error'"
+                v-model="errorOrigin"
+                :options="sourceOptions"
+                :aria-label="t('usage.filters.errorSource')"
+                class="w-38"
+              />
               <UsageRecordStatusFilter v-model="recordView" show-labels />
               <ZTableColumnSettings
                 :options="columns.columnOptions.value"
@@ -159,12 +166,6 @@ watch(timeRange, () => {
               />
             </template>
           </UsageFilters>
-
-          <div v-if="recordView === 'error'" class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-            <span class="text-z-sm font-emphasis text-z-text-secondary">{{ t('usage.filters.errorSource') }}</span>
-            <ZSegmented v-if="width >= 768" v-model="errorOrigin" :options="sourceOptions" :aria-label="t('usage.filters.errorSource')" size="small" />
-            <ZSelect v-else v-model="errorOrigin" :options="sourceOptions" :aria-label="t('usage.filters.errorSource')" class="w-45" />
-          </div>
 
           <div ref="tableArea" class="flex min-h-0 min-w-0 flex-1 flex-col">
             <UsageRecordsTable

@@ -111,9 +111,7 @@ const { t } = useI18n({ useScope: 'global' })
     </template>
 
     <template #model="{ row }">
-      <UsageModelCell :record="row">
-        <UsageReasoningEffortCell v-if="requestDetails" :record="row" inline />
-      </UsageModelCell>
+      <UsageModelCell :record="row" />
     </template>
 
     <template #reasoningEffort="{ row }">
