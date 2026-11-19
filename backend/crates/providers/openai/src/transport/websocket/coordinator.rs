@@ -32,8 +32,6 @@ use super::{
     pump::{PumpLogContext, PumpedWebSocket, transport_metric_reason},
 };
 
-pub(crate) const WEBSOCKET_FAST_PATH_BUDGET: Duration = Duration::from_millis(800);
-
 /// WebSocket 快路径的控制流结果；预算未命中不代表连接失败
 pub(crate) enum WebSocketFastPath<T> {
     /// 在前台预算内获得结果
@@ -575,7 +573,7 @@ async fn wait_for_shared_connect(
     wait_for_fast_path(waiter.started_at(), fast_path_budget, waiter.wait()).await
 }
 
-// 同一次 opening 的所有等待者共享截止时间；后来的请求不会重置 800ms 预算
+// 同一次 opening 的所有等待者共享截止时间
 async fn wait_for_fast_path<F: Future>(
     started_at: TokioInstant,
     budget: Option<Duration>,

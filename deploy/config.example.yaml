@@ -85,11 +85,12 @@ openai:
   residency: us
   # 账号路由参考值：us、us_cr
   account_routing_override: null
-  # 可选：完整的 Responses 上游 WS 池配置；省略整段使用以下默认值。
+  # Responses 上游 WS 池配置，可单独覆盖下列默认值
   # ws_pool:
   #   enabled: true
   #   max_age_ms: 3300000
   #   max_connecting: 8
+  #   fast_path_budget_ms: 800 # 回退 HTTP 前等待 WS 建连的时长，范围 1–15000 毫秒
   #   idle_timeout_ms: 300000 # 仅回收未绑定活跃客户端 WS 的空闲连接，必须大于零。
   #   stream_idle_timeout_ms: 300000
 
