@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import type { TableColumn } from '@codex-proxy/ui'
-
-import type { UsageListRecord, UsageRecordStatus } from '@/api'
-import { useTableColumns, ZCard, ZDatePicker, ZIconButton, ZPageHeader, ZPagination, ZTableColumnSettings } from '@codex-proxy/ui'
+import type { UsageErrorOrigin, UsageRecordStatus } from '@/api'
+import { ZCard, ZDatePicker, ZIconButton, ZPageHeader, ZPagination, ZSelect, ZTableColumnSettings } from '@codex-proxy/ui'
 import { Eye } from '@lucide/vue'
 
-import { computed, shallowRef, watch } from 'vue'
+import { useElementSize } from '@vueuse/core'
+import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ProviderFilter from '@/components/ProviderFilter.vue'
-import { usageRecordColumns } from '@/components/usage/shared/columns'
 import UsageRecordsTable from '@/components/usage/UsageRecordsTable.vue'
 import UsageRecordStatusFilter from '@/components/usage/UsageRecordStatusFilter.vue'
 import UsageErrorDetailModal from './components/UsageErrorDetailModal.vue'
@@ -16,6 +14,7 @@ import UsageFilters from './components/UsageFilters.vue'
 import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
 import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
 import UsageSummaryCards from './components/UsageSummaryCards.vue'
+import { useUsageRecordColumns } from './composables/useUsageRecordColumns'
 import { useUsageRecordDetail } from './composables/useUsageRecordDetail'
 import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
 import { useUsageTimeRange } from './composables/useUsageTimeRange'
@@ -24,21 +23,29 @@ import { isErrorUsageRecord } from './utils/detail'
 const { t } = useI18n({ useScope: 'global' })
 
 const recordView = shallowRef<UsageRecordStatus>('success')
-const recordColumns = computed<TableColumn<UsageListRecord>[]>(() => recordView.value === 'error'
-  ? usageRecordColumns.value.flatMap(column => column.key === 'route'
-      ? [
-          column,
-          {
-            key: 'errorMessage',
-            label: t('usage.filters.error'),
-            kind: 'custom',
-            size: '4xl',
-            hideable: false,
-          },
-        ]
-      : [column])
-  : usageRecordColumns.value)
-const { visibleColumns, columnOptions, setColumnVisible, setColumnOrder, resetColumns } = useTableColumns(recordColumns, 'usage-records')
+const errorOrigin = shallowRef<UsageErrorOrigin | 'all'>('all')
+const sourceOptions = computed(() => [
+  {
+    value: 'all',
+    label: t('usage.filters.allSources'),
+  },
+  ...([
+    'upstream',
+    'proxy',
+    'connection',
+    'unknown',
+  ] as const)
+    .map(value => ({
+      value,
+      label: t(`usage.error.origin.${value}`),
+    })),
+])
+const { width } = useElementSize(useTemplateRef<HTMLElement>('tableArea'))
+const columns = useUsageRecordColumns(recordView, width)
+watch(recordView, () => {
+  errorOrigin.value = 'all'
+}, { flush: 'sync' })
+
 const { timeRange, timeRangeParams, disabledDate, refreshTimeRangeEnd, latestTimeRangeParams }
   = useUsageTimeRange()
 
@@ -66,6 +73,7 @@ const {
   timeRangeParams,
   latestTimeRangeParams,
   status: recordView,
+  errorOrigin,
 })
 
 const { showDetailModal, selectedUsageRecord, detailIsError, detailLoading, detailError, handleViewDetail, reloadDetail } = useUsageRecordDetail()
@@ -132,7 +140,7 @@ watch(timeRange, () => {
 
       <template #body>
         <div
-          class="grid min-h-130 min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"
+          class="flex min-h-130 min-w-0 flex-1 flex-col gap-3"
         >
           <UsageFilters
             v-model:field="filterField"
@@ -142,20 +150,28 @@ watch(timeRange, () => {
             @refresh="refreshUsageRecords"
           >
             <template #actions>
-              <UsageRecordStatusFilter v-model="recordView" />
+              <ZSelect
+                v-if="recordView === 'error'"
+                v-model="errorOrigin"
+                :options="sourceOptions"
+                :aria-label="t('usage.filters.errorSource')"
+                class="w-38"
+              />
+              <UsageRecordStatusFilter v-model="recordView" show-labels />
               <ZTableColumnSettings
-                :options="columnOptions"
-                @change="setColumnVisible"
-                @reorder="setColumnOrder"
-                @reset="resetColumns"
+                :options="columns.columnOptions.value"
+                @change="columns.setColumnVisible"
+                @reorder="columns.setColumnOrder"
+                @reset="columns.resetColumns"
               />
             </template>
           </UsageFilters>
 
-          <div class="flex min-h-0 min-w-0 flex-col">
+          <div ref="tableArea" class="flex min-h-0 min-w-0 flex-1 flex-col">
             <UsageRecordsTable
               class="min-h-0 flex-1"
-              :columns="visibleColumns"
+              :columns="columns.visibleColumns.value"
+              request-details
               :rows="records"
               :loading="loading"
               :empty-text="t('usage.page.noRequestsMatchTheseFilters')"

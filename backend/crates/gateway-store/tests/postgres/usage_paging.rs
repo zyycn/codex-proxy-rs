@@ -460,7 +460,7 @@ async fn all_status_counts_keep_filters_delivery_rules_and_time_boundaries() {
             vec![],
         ),
     ] {
-        for status in [UsageRecordStatus::All, UsageRecordStatus::Error] {
+        for status in [UsageRecordStatus::All, UsageRecordStatus::Error(None)] {
             let expected = expected
                 .iter()
                 .copied()
@@ -584,7 +584,7 @@ async fn request_status_pages_share_one_request_timeline() {
             .unwrap();
     for (status, expected) in [
         (UsageRecordStatus::Success, vec!["status_f", "status_a"]),
-        (UsageRecordStatus::Error, vec!["status_c", "status_b"]),
+        (UsageRecordStatus::Error(None), vec!["status_c", "status_b"]),
         (
             UsageRecordStatus::All,
             vec![
@@ -619,7 +619,7 @@ async fn request_status_pages_share_one_request_timeline() {
     }
     let page = repo
         .list_usage_records(UsageRecordQuery {
-            status: UsageRecordStatus::Error,
+            status: UsageRecordStatus::Error(None),
             range,
             filter: UsageRecordFilter {
                 search: Some("model_status_b".into()),
@@ -645,5 +645,125 @@ async fn request_status_pages_share_one_request_timeline() {
         .await
         .unwrap();
     assert_eq!(errors.len(), 2);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn error_origin_filters_matching_requests_before_counting_and_paging() {
+    use gateway_admin::model::observability::{UsageErrorOrigin::*, UsageRecordStatus};
+
+    let Some(database) = TestDatabase::create("usage_error_origin_pages").await else {
+        return;
+    };
+    let start = Utc::now();
+    let repository = observability_repository(&database.pool);
+    let range = ObservabilityRange::new(start, start + TimeDelta::hours(1)).unwrap();
+    let saved =
+        |body: serde_json::Value| serde_json::json!({"upstream": body.to_string()}).to_string();
+    for (minute, (id, outcome, kind, status, details, model)) in [
+        ("edge_0", "failed", "internal_error", None, None, "main"),
+        (
+            "edge_1",
+            "failed",
+            "internal_error",
+            Some(503_i32),
+            None,
+            "main",
+        ),
+        ("edge_2", "incomplete", "transport", Some(200), None, "main"),
+        (
+            "edge_3",
+            "incomplete",
+            "invalid_request",
+            None,
+            Some("old plain text".into()),
+            "main",
+        ),
+        (
+            "edge_4",
+            "failed",
+            "internal_error",
+            None,
+            Some(saved(
+                serde_json::json!({"response":{"error":{"message":"sample"}}}),
+            )),
+            "main",
+        ),
+        (
+            "edge_5",
+            "failed",
+            "internal_error",
+            None,
+            Some(saved(
+                serde_json::json!({"type":"websocket.close","code":1012}),
+            )),
+            "other",
+        ),
+        (
+            "edge_6",
+            "failed",
+            "internal_error",
+            None,
+            Some(saved(
+                serde_json::json!({"type":"websocket.close","code":65536}),
+            )),
+            "main",
+        ),
+        ("edge_7", "cancelled", "internal_error", None, None, "main"),
+        ("edge_8", "succeeded", "internal_error", None, None, "main"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        seed(
+            &database.pool,
+            id,
+            start + TimeDelta::minutes(minute as i64),
+            &[],
+        )
+        .await;
+        sqlx::query("update model_requests set outcome=$2, error_kind=$3, upstream_status_code=$4, error_details=$5, requested_model_id=$6 where id=$1")
+            .bind(id).bind(outcome).bind(kind).bind(status).bind(details).bind(model)
+            .execute(&database.pool).await.unwrap();
+    }
+    for (origin, model, ids) in [
+        (Proxy, None, vec!["edge_6", "edge_0"]),
+        (Upstream, None, vec!["edge_5", "edge_4", "edge_1"]),
+        (Connection, None, vec!["edge_2"]),
+        (Unknown, None, vec!["edge_3"]),
+        (Upstream, Some("main"), vec!["edge_4", "edge_1"]),
+        (Proxy, Some("other"), vec![]),
+    ] {
+        for current_page in 1..=ids.len() + 1 {
+            let page = repository
+                .list_usage_records(UsageRecordQuery {
+                    range,
+                    status: UsageRecordStatus::Error(Some(origin)),
+                    filter: UsageRecordFilter {
+                        model_contains: model.map(str::to_owned),
+                        ..Default::default()
+                    },
+                    current_page: current_page as u32,
+                    page_size: ObservabilityPageSize::new(1).unwrap(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(page.total, ids.len() as u64, "{origin:?} / {model:?}");
+            let items: Vec<_> = page
+                .items
+                .iter()
+                .map(|item| (item.id.as_str(), item.error_origin()))
+                .collect();
+            let expected: Vec<_> = ids
+                .get(current_page - 1)
+                .map(|id| (*id, origin))
+                .into_iter()
+                .collect();
+            assert_eq!(
+                items, expected,
+                "{origin:?} / {model:?} / page {current_page}"
+            );
+        }
+    }
     database.close().await;
 }

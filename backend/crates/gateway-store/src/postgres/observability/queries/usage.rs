@@ -130,18 +130,7 @@ pub(crate) fn push_usage_filter(
 pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
     "select mr.id, mr.outcome, mr.provider_error_code as error_code, mr.error_message, mr.client_status_code, mr.client_api_key_name_snapshot as client_api_key_name, mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.error_kind, mr.upstream_status_code,
-            exists (
-              select 1 from (values
-                (saved_error.body -> 'code'),
-                (saved_error.body -> 'type'),
-                (saved_error.body -> 'message')
-              ) as field(value)
-              where jsonb_typeof(field.value) = 'string' and field.value <> '\"\"'::jsonb
-            ) as has_upstream_error,
-            case when saved_upstream.body ->> 'type' = 'websocket.close'
-              and jsonb_typeof(saved_upstream.body -> 'code') = 'number'
-              then saved_upstream.body ->> 'code'
-            end as websocket_close_code,
+            facts.has_upstream_error, facts.websocket_close_code,
             mr.continuation_unavailable_reason, mr.upstream_connection_exit_reason,
             (mr.recovery_request_id is not null and mr.recovered_at is not null) as recovered,
             mr.provider_kind, mr.provider_account_ref,
@@ -164,17 +153,36 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             mr.reasoning_effort, mr.reasoning_preset, mr.subagent_kind, mr.compact,
             mr.started_at
      from model_request_observations mr
-     cross join lateral (
+     cross join lateral ";
+
+// 列表与筛选共用已保存上游事实的解码，兼容早期的空值和非 JSON 错误详情
+const SAVED_ERROR_FACTS: &str = "(select exists (
+              select 1 from (values
+                (saved_error.body -> 'code'),
+                (saved_error.body -> 'type'),
+                (saved_error.body -> 'message')
+              ) as field(value)
+              where jsonb_typeof(field.value) = 'string' and field.value <> '\"\"'::jsonb
+            ) as has_upstream_error,
+            case when saved_upstream.body ->> 'type' = 'websocket.close'
+              and jsonb_typeof(saved_upstream.body -> 'code') = 'number'
+              and (saved_upstream.body ->> 'code') ~ '^[0-9]{1,5}$'
+              and (saved_upstream.body -> 'code') <= '65535'::jsonb
+              then saved_upstream.body ->> 'code'
+            end as websocket_close_code
+     from lateral (
        select case when pg_input_is_valid(mr.error_details, 'jsonb') then
          case when jsonb_typeof(mr.error_details::jsonb -> 'upstream') = 'string'
            and pg_input_is_valid(mr.error_details::jsonb ->> 'upstream', 'jsonb')
            then (mr.error_details::jsonb ->> 'upstream')::jsonb
          end
        end as body
+       -- 保留子查询边界，让错误字段和关闭码复用同一行已解码的上游正文
+       offset 0
      ) saved_upstream
      cross join lateral (
        select coalesce(saved_upstream.body -> 'error', saved_upstream.body #> '{response,error}') as body
-     ) saved_error";
+     ) saved_error) facts";
 
 pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
     "select mr.id, mr.client_api_key_ref, mr.config_revision,
@@ -261,7 +269,7 @@ async fn projected_usage_counts(
     query: &UsageRecordQuery,
 ) -> StoreResult<Option<BTreeMap<DateTime<Utc>, u64>>> {
     use admin_observability::UsageRecordStatus;
-    if query.status == UsageRecordStatus::Error {
+    if matches!(query.status, UsageRecordStatus::Error(_)) {
         return Ok(None);
     }
     let Some(mut counts) = snapshot
@@ -351,7 +359,9 @@ async fn list_usage_record_items_at<'e, E: sqlx::Executor<'e, Database = Postgre
     statement.push(" offset ");
     statement.push_bind(offset);
     statement.push(") ");
-    statement.push(USAGE_LIST_RECORD_SELECT);
+    statement
+        .push(USAGE_LIST_RECORD_SELECT)
+        .push(SAVED_ERROR_FACTS);
     statement.push(
         " join candidate_page page on page.id = mr.id order by page.started_at desc, page.id desc",
     );
@@ -504,7 +514,7 @@ fn usage_counts_query(
                 },
             );
         }
-        if branch > 0 || status == UsageRecordStatus::Error {
+        if branch > 0 || matches!(status, UsageRecordStatus::Error(_)) {
             push_non_success_count_filter(&mut statement, filter);
         } else {
             push_usage_filter(&mut statement, filter, "mr");
@@ -744,8 +754,11 @@ fn push_usage_record_status(
     use admin_observability::UsageRecordStatus;
     match status {
         UsageRecordStatus::Success => push_completed_usage_fact_filter(statement, "mr"),
-        UsageRecordStatus::Error => {
+        UsageRecordStatus::Error(origin) => {
             statement.push(" and mr.outcome in ('failed', 'incomplete')");
+            if let Some(origin) = origin {
+                push_usage_error_origin(statement, origin);
+            }
         }
         UsageRecordStatus::All => {
             // 成功沿用用量边界，未成功记录保留真实生命周期，不把取消与执行中标为错误
@@ -755,4 +768,53 @@ fn push_usage_record_status(
                 .push(" or mr.outcome <> 'succeeded')");
         }
     }
+}
+
+fn push_usage_error_origin(
+    statement: &mut QueryBuilder<Postgres>,
+    origin: admin_observability::UsageErrorOrigin,
+) {
+    use admin_observability::{UsageErrorEvidence::*, UsageErrorOrigin};
+    statement.push(" and case");
+    for &(evidence, result) in UsageErrorOrigin::RULES {
+        statement.push(" when ");
+        match evidence {
+            ProviderErrorCode => {
+                statement.push("mr.provider_error_code <> ''");
+            }
+            UpstreamStatusAtLeast(min) => {
+                statement
+                    .push("mr.upstream_status_code >= ")
+                    .push_bind(i32::from(min));
+            }
+            SavedUpstreamErrorOrClose => {
+                statement.push("mr.error_details is not null and (select facts.has_upstream_error or facts.websocket_close_code is not null from lateral ")
+                    .push(SAVED_ERROR_FACTS).push(")");
+            }
+            ErrorKind(values) => {
+                statement
+                    .push("mr.error_kind = any(")
+                    .push_bind(values)
+                    .push(")");
+            }
+            Continuation(values) => {
+                statement
+                    .push("mr.continuation_unavailable_reason = any(")
+                    .push_bind(values)
+                    .push(")");
+            }
+            ConnectionExit(values) => {
+                statement
+                    .push("mr.upstream_connection_exit_reason = any(")
+                    .push_bind(values)
+                    .push(")");
+            }
+        }
+        statement.push(" then ").push_bind(result.as_str());
+    }
+    statement
+        .push(" else ")
+        .push_bind(UsageErrorOrigin::Unknown.as_str())
+        .push(" end = ")
+        .push_bind(origin.as_str());
 }

@@ -2796,7 +2796,7 @@ Dashboard 的 `accountUsage[]` 返回稳定指标 `metric=requests|tokens`、可
 Dashboard 默认 `period=today`，用量、诊断和错误查询默认 `period=7d`，范围参数遵循[页面时间合同](#页面时间合同)。
 Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚点
 
-请求明细列表接受 `currentPage`、`pageSize`、时间范围、`provider`、`clientApiKeyName`、`accountSearch`、`model` 和 `status`。
+请求明细列表接受 `currentPage`、`pageSize`、时间范围、`provider`、`clientApiKeyName`、`accountSearch`、`model`、`status` 和 `errorOrigin`。
 汇总和洞察接受时间范围与 `provider`；性能和成本另要求 `metric`，诊断另接受 `dimension`、`model` 和 `statusCode`。
 各接口拒绝未知参数，明细筛选不改变顶部统计范围
 
@@ -2805,6 +2805,10 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 `all` 合并成功用量记录及全部非成功请求，包括执行中和已取消请求。每个请求只返回一行，
 重试中间错误不改变请求最终分类；`logicalOutcome` 保留真实结果。状态筛选只影响明细列表，
 不改变顶部统计，独立运维事件仍通过 `/api/admin/operations/errors` 查询
+
+当 `status=error` 时，可传 `errorOrigin=upstream|proxy|connection|unknown` 筛选错误来源。
+省略时包含全部来源。筛选与列表、详情共用下述来源规则，并在统计总数和分页前与其他明细条件一同生效。
+其他状态携带 `errorOrigin` 或来源值无效时返回 `400`
 
 请求列表的 `errorCode` / `errorMessage` 提供最终请求的错误码与错误信息，未记录时为 `null`。
 `clientStatusCode` / `upstreamStatusCode` 分别提供已记录的客户端与上游状态码，未记录时为 `null`。

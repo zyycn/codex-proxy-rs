@@ -34,6 +34,7 @@ pub struct UsageQuery {
     pub client_api_key_name: Option<String>,
     pub account_search: Option<String>,
     pub status: Option<String>,
+    pub error_origin: Option<String>,
     pub current_page: Option<u32>,
     pub page_size: Option<u16>,
     pub provider: Option<String>,
@@ -354,11 +355,21 @@ pub(crate) fn usage_command(
     let page_size_value =
         DomainPageSize::new(page_size).map_err(|_| WireValidationError::new("pageSize"))?;
     Ok(domain::UsageQuery {
-        status: match query.status.as_deref() {
-            None | Some("success") => domain::UsageRecordStatus::Success,
-            Some("error") => domain::UsageRecordStatus::Error,
-            Some("all") => domain::UsageRecordStatus::All,
-            Some(_) => return Err(WireValidationError::new("status")),
+        status: match (query.status.as_deref(), query.error_origin.as_deref()) {
+            (None | Some("success"), None) => domain::UsageRecordStatus::Success,
+            (Some("all"), None) => domain::UsageRecordStatus::All,
+            (Some("error"), origin) => domain::UsageRecordStatus::Error(match origin {
+                None => None,
+                Some("proxy") => Some(domain::UsageErrorOrigin::Proxy),
+                Some("upstream") => Some(domain::UsageErrorOrigin::Upstream),
+                Some("connection") => Some(domain::UsageErrorOrigin::Connection),
+                Some("unknown") => Some(domain::UsageErrorOrigin::Unknown),
+                Some(_) => return Err(WireValidationError::new("errorOrigin")),
+            }),
+            (None | Some("success" | "all"), Some(_)) => {
+                return Err(WireValidationError::new("errorOrigin"));
+            }
+            (Some(_), _) => return Err(WireValidationError::new("status")),
         },
         range: usage_range(
             query.start_time.as_deref(),

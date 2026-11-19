@@ -16,21 +16,21 @@ const originIcons = {
 
 const { t } = useI18n({ useScope: 'global' })
 const message = computed(() => props.record.errorMessage?.replace(/^OpenAI upstream failure: /, ''))
-const code = computed(() => usageErrorCode(props.record))
+const code = computed(() => usageErrorCode(props.record) || props.record.errorKind)
 const origin = computed(() => usageErrorOrigin(props.record))
-const description = computed(() => [code.value, message.value || t('usage.error.noDetails')].filter(Boolean).join(' · '))
+const description = computed(() => [code.value, message.value].filter(Boolean).join(' · ') || t('usage.error.noDetails'))
 const outcome = computed(() => usageErrorTitle(props.record))
 </script>
 
 <template>
   <div class="min-w-0 py-0.5">
-    <div class="flex min-w-0 items-center gap-2">
+    <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
       <span
         class="inline-flex size-5 shrink-0 items-center justify-center"
         :class="origin.className"
         role="img"
         :aria-label="origin.label"
-        :title="origin.label"
+        :title="origin.hint ? `${origin.label} · ${origin.hint}` : origin.label"
       >
         <component :is="originIcons[origin.kind]" class="size-3.5" aria-hidden="true" />
       </span>
@@ -46,7 +46,7 @@ const outcome = computed(() => usageErrorTitle(props.record))
       </span>
     </div>
     <p class="mt-1 mb-0 truncate text-z-sm leading-[1.45] font-medium text-z-text" :title="description" translate="no">
-      {{ description }}
+      <code v-if="code" class="font-mono font-emphasis">{{ code }}</code><span v-if="code && message" class="text-z-text-quaternary"> · </span>{{ message || (code ? '' : t('usage.error.noDetails')) }}
     </p>
   </div>
 </template>

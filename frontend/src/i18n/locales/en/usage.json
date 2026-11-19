@@ -84,6 +84,8 @@
     "filters": {
       "modelPlaceholder": "Filter by model",
       "error": "Error",
+      "errorSource": "Error source",
+      "allSources": "All sources",
       "requestDetailType": "Request detail type",
       "label": "Usage record filters and actions",
       "refreshUsageHistory": "Refresh usage history",

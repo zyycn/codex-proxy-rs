@@ -175,7 +175,7 @@ async fn usage_error_origins_agree_for_saved_errors_without_failure_status() {
                 .list_usage_records(UsageRecordQuery {
                     range,
                     filter: UsageRecordFilter::default(),
-                    status: admin_observability::UsageRecordStatus::All,
+                    status: admin_observability::UsageRecordStatus::Error(Some(origin)),
                     current_page: 1,
                     page_size: ObservabilityPageSize::new(10).unwrap(),
                 })
@@ -282,7 +282,7 @@ async fn usage_error_origins_preserve_saved_failure_and_connection_boundaries() 
             .list_usage_records(UsageRecordQuery {
                 range,
                 filter: UsageRecordFilter::default(),
-                status: admin_observability::UsageRecordStatus::All,
+                status: admin_observability::UsageRecordStatus::Error(Some(origin)),
                 current_page: 1,
                 page_size: ObservabilityPageSize::new(10).unwrap(),
             })
@@ -993,10 +993,10 @@ async fn usage_account_filter_matches_only_historical_names_and_emails() {
     let repo = observability_repository(&database.pool);
     for (status, search, page, total, expected_id) in [
         (Success, r"_%\", 1, 1, Some("req_observe_success")),
-        (Error, "team", 1, 1, Some("req_observe_failed")),
+        (Error(None), "team", 1, 1, Some("req_observe_failed")),
         (All, "alice", 1, 2, Some("req_observe_failed")),
         (All, "alice", 2, 2, Some("req_observe_success")),
-        (Error, "@example", 1, 0, None),
+        (Error(None), "@example", 1, 0, None),
         (All, "ALICE", 1, 0, None),
         (All, "alice%ops", 1, 0, None),
         (All, "public-model", 1, 0, None),
