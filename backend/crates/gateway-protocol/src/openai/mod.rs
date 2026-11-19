@@ -3,6 +3,9 @@
 /// OpenAI 线协议载荷与事件的协议标识
 pub const OPENAI_PROTOCOL: &str = "openai";
 
+/// 原生 Responses 客户端入口
+pub const RESPONSES_PATH: &str = "/v1/responses";
+
 /// Codex Responses Lite 的 HTTP 请求头
 pub const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";

@@ -135,6 +135,32 @@ fn is_replaceable_prelude(event: &ProviderEvent) -> bool {
         })
 }
 
+/// WS 拒绝请求时也保留原始 error 对象，供原生 Responses 在 HTTP 首字节前交付
+pub(super) fn with_atomic_failure_events(
+    mut error: ProviderError,
+    events: Vec<ProviderEvent>,
+    context: &AttemptContext,
+) -> ProviderError {
+    if error.kind() == ProviderErrorKind::InvalidRequest
+        && error.upstream_status() == Some(400)
+        && error.retry_is_prohibited()
+        && context.client_transport() == gateway_core::engine::execution::ClientTransport::HttpSse
+        && context.endpoint() == gateway_protocol::openai::RESPONSES_PATH
+        && let [event] = events.as_slice()
+        && let Some(wire) = event.wire_event()
+        && wire.raw_websocket_message().is_some()
+        && wire.event_type() == Some("error")
+        && let Some(detail) = wire.data().get("error").and_then(Value::as_object)
+    {
+        error = error.with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+            400,
+            Some(b"application/json".to_vec()),
+            Bytes::from(json!({ "error": detail }).to_string()),
+        ));
+    }
+    error.with_atomic_client_events(events)
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum ReplayBoundary {
     BeforeSemanticOutput,

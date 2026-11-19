@@ -2057,7 +2057,11 @@ where
             .pending_terminal_failure
             .as_ref()
             .ok_or(EngineError::NoActiveAttempt)?;
-        if pending.events.is_empty() {
+        // 在保活提交前冻结 HTTP 错误，否则必须交付原流内事件
+        if pending.events.is_empty()
+            || (pending.error.client_visible_upstream_response().is_some()
+                && self.response_commit.finish())
+        {
             return Err(provider_engine_error(
                 self.finalize_pending_terminal_failure().await?,
             ));

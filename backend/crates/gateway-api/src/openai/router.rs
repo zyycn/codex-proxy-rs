@@ -19,8 +19,8 @@ use super::{
 
 use crate::ApiState;
 
-// 公开协议路径由 API 层统一定义；Core 使用操作类型，不根据这些路径分派业务
-pub(super) const RESPONSES_PATH: &str = "/v1/responses";
+// Core 使用操作类型，不根据这些协议路径分派业务
+pub(super) use gateway_protocol::openai::RESPONSES_PATH;
 pub(super) const MESSAGES_PATH: &str = "/v1/messages";
 pub(super) const MESSAGE_TOKENS_PATH: &str = "/v1/messages/count_tokens";
 pub(super) const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";

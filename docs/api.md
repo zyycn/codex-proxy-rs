@@ -780,6 +780,9 @@ HTTP 瞬时建连失败（含 TLS 握手 EOF），或 WebSocket 新请求在发�
 `turn_rate_limit_exceeded` 保留原始错误和 `Retry-After`，由客户端按自身重试预算等待。
 代理不因此写入账号冷却、换号或透明重试，其他会话仍可使用该账号
 
+`/v1/responses` 流式请求尚未发出数据或心跳时，若上游 WS `error` 明确返回 400，
+且网关判定为普通请求参数错误，客户端收到 HTTP 400 和原始 `error` 对象。
+已发出数据或心跳时，同一错误通过 SSE `response.failed` 和 `[DONE]` 结束。
 上游 WS `error` 转为 SSE `response.failed` 时，事件级的有效 `Retry-After` 同时放入
 `response.error.headers`，供客户端读取；错误对象已有有效重试头时优先保留
 
