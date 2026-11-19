@@ -9,14 +9,13 @@ const { t } = useI18n({ useScope: 'global' })
 
 <template>
   <span
-    class="peer-badge relative isolate inline-flex max-w-full shrink-0 cursor-default items-center gap-0.5 overflow-hidden rounded-md bg-z-cyan-container-strong py-0.5 pr-1.5 pl-0.5 align-middle text-z-cyan-on-container"
+    class="peer-badge relative isolate inline-flex max-w-full shrink-0 cursor-default items-center gap-0.5 overflow-hidden rounded-md bg-z-cyan-container-strong py-0.5 pr-1.25 pl-0.75 align-middle text-z-cyan-on-container"
     :class="size === 'xs' ? 'h-4.5' : 'h-5'"
     :aria-label="t('accounts.upstream.link')"
     :title="t('accounts.upstream.link')"
   >
     <AppBrandMark variant="glyph" class="relative size-4 shrink-0" aria-hidden="true" />
-    <!-- 大写字形在行盒内偏上，保留紧凑行高并对齐图标的视觉中心 -->
-    <span class="relative top-px font-mono text-[10px] leading-none font-heavy tracking-[0.05em]">CPR</span>
+    <span class="font-mono text-[10px] leading-none font-heavy tracking-[0.05em] [text-box:trim-both_cap_alphabetic]">CPR</span>
   </span>
 </template>
 

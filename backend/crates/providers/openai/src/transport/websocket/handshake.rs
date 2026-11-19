@@ -1,4 +1,4 @@
-//! Responses WebSocket endpoint、opening handshake 与首帧发送
+//! Responses WebSocket endpoint、opening handshake 与请求发送
 
 use std::{error::Error as _, io, time::Duration};
 
@@ -95,7 +95,7 @@ impl CodexWebSocketConnection {
         }
     }
 
-    /// 构造 Responses WebSocket opening 与首个 `response.create` 文本帧
+    /// 构造 Responses WebSocket opening 与首条 `response.create` 消息
     pub fn responses_create_request(
         base_url: &str,
         websocket_key: &str,

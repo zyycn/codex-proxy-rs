@@ -1,16 +1,9 @@
-# v3.52.0
+# v3.52.2
 
-## 新增功能
+## 问题修复
 
-- 请求记录可按历史账号名称或邮箱筛选
-- 内置 GPT-6.2 Astra 和 Sol 价目，Ultrafast 按常规价估算
+- OpenAI Responses WebSocket 按 Codex CLI 0.170.0 的方式分帧发送超过 1 MiB 的文本请求，启用压缩时上游也能完整还原同一条消息
 
 ## 优化改进
 
-- 请求记录用双闪电标识 Ultrafast，用单闪电标识 Fast
-- 请求错误来源图标改为无底色显示
-
-## 升级须知
-
-- 调用 `GET /api/admin/usage/records` 的客户端需将查询参数 `accountName` 改为 `accountSearch`，旧参数会返回 HTTP 400
-- 自行部署时请确认 PostgreSQL 版本为 16 或更高，默认 Compose 使用 PostgreSQL 18
+- 内置 Codex CLI 版本标识更新至 0.170.0，离线时也可使用

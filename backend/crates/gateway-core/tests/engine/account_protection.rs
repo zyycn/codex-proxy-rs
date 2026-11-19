@@ -299,14 +299,17 @@ fn complete_success_is_reported_once_but_unfinished_drop_is_not_success() {
             Ok(gateway_core::event::GatewayEvent::Started(response.clone()).into()),
             Ok(gateway_core::event::GatewayEvent::Completed(response).into()),
         ]);
-        let mut completed = ProviderStream::new(metadata(), events, ())
+        let released = Arc::new(AtomicUsize::new(0));
+        let mut completed = ProviderStream::new(metadata(), events, Lease(released.clone()))
             .with_account_error_protection(store.clone(), Arc::new(policy().compile()), 5)
             .await;
         assert!(completed.next().await.unwrap().is_ok());
         assert_eq!(store.successes.load(Ordering::SeqCst), 0);
         assert!(completed.next().await.unwrap().is_ok());
         assert_eq!(store.successes.load(Ordering::SeqCst), 1);
+        assert_eq!(released.load(Ordering::SeqCst), 0);
         assert!(completed.next().await.is_none());
+        assert_eq!(released.load(Ordering::SeqCst), 1);
         assert!(completed.next().await.is_none());
         assert_eq!(store.successes.load(Ordering::SeqCst), 1);
     });
@@ -351,27 +354,27 @@ fn stalled_begin_and_feedback_are_bounded_and_preserve_original_failure() {
 }
 
 #[test]
-fn cancelling_pending_feedback_releases_lease_and_does_not_report_success() {
+fn failed_stream_releases_lease_while_protection_feedback_is_pending() {
     futures::executor::block_on(async {
         let store = Arc::new(Feedback {
             stalled_feedback: true,
             ..Feedback::default()
         });
         let released = Arc::new(AtomicUsize::new(0));
-        let mut stream = ProviderStream::new(
-            metadata(),
-            stream::iter([Err(failure("invalid_prompt"))]),
-            Lease(released.clone()),
-        )
-        .with_account_error_protection(store.clone(), Arc::new(policy().compile()), 5)
-        .await;
+        let lease = Arc::new(Lease(released.clone()));
+        let events = stream::unfold(Arc::clone(&lease), |lease| async move {
+            Some((Err(failure("invalid_prompt")), lease))
+        });
+        let mut stream = ProviderStream::new(metadata(), events, lease)
+            .with_account_error_protection(store.clone(), Arc::new(policy().compile()), 5)
+            .await;
         assert!(
             timeout(Duration::from_millis(10), stream.next())
                 .await
                 .is_err()
         );
-        drop(stream);
         assert_eq!(released.load(Ordering::SeqCst), 1);
+        drop(stream);
         assert_eq!(store.successes.load(Ordering::SeqCst), 0);
     });
 }

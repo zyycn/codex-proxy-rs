@@ -56,10 +56,10 @@ pub(super) struct DesktopArtifact {
     pub etag: &'static str,
 }
 
-// 官方 npm 稳定标签及六个平台依赖；核验于 2026-11-14T02:09:52Z
+// 官方 npm 稳定版本及六个平台依赖，核验于 2026-11-19T00:51:11Z
 pub(super) const CLI_RELEASE: CoreRelease = CoreRelease {
-    version: "0.169.0",
-    verified_at_millis: 1_794_622_192_000,
+    version: "0.170.0",
+    verified_at_millis: 1_795_049_471_000,
 };
 
 // macOS arm64 ZIP；核验于 2026-11-14T02:09:52Z

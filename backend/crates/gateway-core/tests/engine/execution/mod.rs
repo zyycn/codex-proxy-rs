@@ -1955,6 +1955,7 @@ impl NativeResponseTranslator for FailingNativeResponseTranslator {
 
 struct FailingNativeResponseProvider {
     calls: Arc<AtomicUsize>,
+    lease: Arc<()>,
 }
 
 #[async_trait]
@@ -2010,7 +2011,7 @@ impl Provider for FailingNativeResponseProvider {
                     GatewayEvent::Completed(response),
                 )),
             ]),
-            (),
+            Arc::clone(&self.lease),
         )
         .with_native_response_translator(FailingNativeResponseTranslator::default()))
     }
@@ -2020,8 +2021,10 @@ impl Provider for FailingNativeResponseProvider {
 fn native_response_failure_after_downstream_commit_is_not_replayed() {
     block_on(async {
         let calls = Arc::new(AtomicUsize::new(0));
+        let lease = Arc::new(());
         let provider_index = ProviderRegistry::new([Arc::new(FailingNativeResponseProvider {
             calls: Arc::clone(&calls),
+            lease: Arc::clone(&lease),
         }) as Arc<dyn Provider>])
         .unwrap();
         let generation = super::extensions::reference("native-response-failure");
@@ -2054,6 +2057,7 @@ fn native_response_failure_after_downstream_commit_is_not_replayed() {
         }));
         started.session.commit_downstream(Some(200)).await.unwrap();
 
+        let active_refs = Arc::strong_count(&lease);
         let error = started.session.next_event().await.unwrap_err();
         assert!(matches!(
             error,
@@ -2061,6 +2065,7 @@ fn native_response_failure_after_downstream_commit_is_not_replayed() {
                 if error.kind() == ProviderErrorKind::Protocol
                     && error.send_state() == UpstreamSendState::Sent
         ));
+        assert_eq!(Arc::strong_count(&lease), active_refs - 1);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         started.session.detach_finalize().await;
     });

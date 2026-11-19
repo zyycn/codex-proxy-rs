@@ -652,7 +652,8 @@ OAuth 账号默认 `prefer_websocket`，客户端使用 HTTP/SSE 时仍可能选
 客户端可跳过预热继续正式请求，外部插件 adapter 按各自的协议能力处理
 
 OpenAI Responses 上游 WS 按握手响应头 `x-codex-websocket-max-message-bytes` 声明的上限，
-检查最终 `response.create` 文本的 UTF-8 字节数。超过上限时，新链、持久化续接和未知外部 previous ID
+检查最终 `response.create` 文本的 UTF-8 字节数。允许发送的文本超过 1 MiB 时，每 1 MiB 分一帧，接收方仍收到一条消息。
+超过握手声明的消息上限时，新链、持久化续接和未知外部 previous ID
 在上传正文前改用 HTTP/SSE；等于上限仍可发送。OAuth 和 API Key 账号、HTTP 和 WS 入站均适用。
 该上限只属于当前上游连接；响应头缺失或无效时不预判超限。显式 warmup 保持 WS 合同，超限时
 返回 `websocket_message_too_large`，不重复发送或改用 HTTP
@@ -1315,7 +1316,8 @@ OpenAI OAuth 账号的 `capabilities.quotaSettingsSupported` 为真。通过 `PO
 
 账号视图和 Dashboard 账号概览中的 `planType` 保留原始套餐值；`planTypeDisplay` 使用 Provider 提供的最终名称，
 前端直接展示。OpenAI 的 `prolite`、`pro`、`promax` 分别显示为 `ProLite`、`Pro`、`ProMax`；
-其余已知套餐使用官方名称，未知 OpenAI 套餐保留原值。
+其余已知 OpenAI 套餐使用 Codex `/status` 的名称，例如 `self_serve_business_prolite` 显示为 `Business Premium`，
+`self_serve_business_usage_based` 显示为 `Business`。未知 OpenAI 套餐保留原值。
 展示名称保留空格和括号，未提供专属名称规则的 Provider 使用通用大驼峰格式。
 OpenAI 主动额度刷新和正常响应携带的明确套餐会同步到账号，支持升级与降级；
 空值或 `unknown` 不覆盖已有套餐，同族泛化值（如 `team`）保留已知的具体套餐子类型。

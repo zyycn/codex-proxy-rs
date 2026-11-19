@@ -12,7 +12,7 @@
 [![GHCR](https://img.shields.io/badge/GHCR-codex--proxy--rs-2496ED?logo=docker&logoColor=white&style=flat-square)](https://github.com/zyycn/codex-proxy-rs/pkgs/container/codex-proxy-rs)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
 
-[快速预览](#快速预览) · [快速开始](#快速开始) · [客户端接入](#客户端接入) · [文档](#文档) · [社区](#社区) · [许可证](#许可证)
+[快速预览](#快速预览) · [快速开始](#快速开始) · [文档](#文档) · [社区](#社区) · [贡献者](#贡献者) · [Star History](#star-history) · [支持项目](#支持项目) · [许可证](#许可证)
 
 </div>
 
@@ -21,105 +21,28 @@
 
 ## 快速预览
 
-无需部署即可体验管理端的系统概览、账号分组、代理管理与用量统计：
-
 | 登录信息 | 默认值 |
 | --- | --- |
 | 地址 | <https://codex-proxy-rs.ainz.cc> |
-| 登录身份 | 管理员 |
 | 账号 | `admin@cpr.local` |
 | 密码 | `039c18de2aeac46d23ead7766bb07bbbe3747233c66a128e` |
 
-预览服务运行已发布版本，展示的账号、代理与使用记录均为模拟数据，每天北京时间 `00:00` 自动生成当天数据
-
-这是公开共享的功能预览环境，不提供真实模型调用；请勿导入真实账号、密钥或其他敏感信息
-
 ## 快速开始
 
-使用 Docker Compose 部署版本固定的发布镜像，同时启动 PostgreSQL 和 Redis
-
-以下命令适用于 Linux amd64/arm64，需要 Docker Engine、Docker Compose Plugin、curl 和 OpenSSL
-
-macOS 从[发行页](https://github.com/zyycn/codex-proxy-rs/releases)下载对应的归档：Intel 机型选 `darwin_amd64`，Apple Silicon 机型选 `darwin_arm64`。
-Windows x64 / ARM64 的安装步骤见 [Windows 二进制部署](deploy/README.md#windows-二进制部署)
-
-已有部署请先看 [升级说明](deploy/README.md#镜像升级与源码构建)，不要覆盖原配置
-
-### 一键安装
-
-请确保当前用户能访问 Docker，并可通过 `sudo` 或 root 设置目录权限
+在已安装 Docker Engine、Docker Compose Plugin、curl 和 OpenSSL 的 Linux amd64/arm64 主机上运行
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zyycn/codex-proxy-rs/main/deploy/install.sh -o install.sh && bash install.sh
 ```
 
-[安装脚本](deploy/install.sh) 默认安装到当前目录下的 `codex-proxy-rs/`，下载同一正式 Release 的部署文件，
-自动生成密码、设置目录权限并启动服务
-
-完成后保存显示的访问地址和管理员密码，再[登录管理端](#登录管理端)并[添加账号与客户端密钥](#添加账号与客户端密钥)
-
-可在执行 `bash install.sh` 时传入环境变量：
-
-| 变量 | 用途 | 默认值 |
-| --- | --- | --- |
-| `INSTALL_DIR` | 安装目录，建议使用绝对路径 | 当前目录下的 `codex-proxy-rs/` |
-| `CPR_RELEASE_TAG` | 指定发布标签 | 最新正式版本 |
-| `ADMIN_PASSWORD` | 管理员初始密码，至少 12 位，不能包含 `$`，不能使用常见弱口令 | 随机生成 |
-
-例如，自定义安装目录：
-
-```bash
-INSTALL_DIR="$HOME/services/codex-proxy-rs" bash install.sh
-```
-
-重复运行时请使用同一安装目录，检测到 `deploy/config.yaml` 后，脚本保留现有配置和部署文件，
-忽略传入的管理员密码，也不执行版本升级
-
-### 手动安装
-
-自行下载部署文件、配置密码和启动服务的完整步骤见 [部署文档](deploy/README.md#手动安装)
-
-### 登录管理端
-
-部署完成后，打开 `http://127.0.0.1:8080`，使用 `admin@cpr.local` 和管理员密码登录
-
-API Key 持有者可在登录页切换身份，查看自己的用量与额度，并通过「密钥配置」复制 Codex 配置或导入 CC Switch
-
-默认地址只能在服务器本机访问，从其他设备使用时，需要配置
-[HTTPS 反向代理](deploy/README.md#公网访问)
-
-### 添加账号与客户端密钥
-
-1. 在「账号」中添加账号，完成授权或导入
-2. 按需建立账号分组，再创建客户端密钥并选择可用分组，**不选分组表示可使用全部账号**
-3. [连接客户端](#客户端接入)
-
-## 客户端接入
-
-**Codex CLI / 桌面端**：在「使用密钥」中按操作系统复制配置，合并配置后重启 Codex；也可通过「导入到」把服务连接与密钥添加到 CC Switch
-
-完整步骤、生图配置与排障见[客户端配置](deploy/README.md#客户端配置)
-
-**其他 API 客户端**：API Key 填写管理端创建的客户端密钥。按客户端自动追加的请求路径填写 Base URL；远程接入时将本机地址换成服务器的 HTTPS 地址
-
-| 客户端自动追加的路径 | Base URL（本机部署） |
-| --- | --- |
-| OpenAI Responses：`/responses`；Chat Completions：`/chat/completions` | `http://127.0.0.1:8080/v1` |
-| Anthropic Messages：`/v1/messages` | `http://127.0.0.1:8080` |
-
-查询该密钥可见的模型目录：
-
-```bash
-curl http://127.0.0.1:8080/v1/models \
-  -H 'Authorization: Bearer <client-api-key>'
-```
+[安装脚本选项](deploy/README.md#安装脚本选项) · [macOS 发行包](https://github.com/zyycn/codex-proxy-rs/releases) · [Windows 安装](deploy/README.md#windows-二进制部署) · [已有部署升级](deploy/README.md#镜像升级与源码构建)
 
 ## 文档
 
-| 任务 | 文档 |
+| 主题 | 文档 |
 | --- | --- |
-| 部署与使用 | [部署、备份与恢复](deploy/README.md) · [客户端接入与生图](deploy/README.md#客户端配置) |
-| 接口集成 | [API 参考](docs/api.md) · [模型定价](docs/api.md#模型定价) |
+| 部署与使用 | [部署、备份与恢复](deploy/README.md) · [客户端接入](deploy/README.md#客户端配置) |
+| 接口集成 | [API 参考](docs/api.md) · [模型目录](docs/api.md#模型目录) · [模型定价](docs/api.md#模型定价) |
 | 使用插件 | [安装、配置与使用](docs/plugins.md) |
 | 开发插件 | [SDK 与合同](backend/crates/gateway-plugin/sdk/README.md) · [打包工具](backend/apps/plugin-cli/README.md) · [官方示例](https://github.com/zyycn/codex-proxy-plugins/blob/main/README.md) |
 | 开发共用组件 | [组件库说明](https://github.com/zyycn/codex-proxy-ui/blob/main/README.md) · [组件参考](https://github.com/zyycn/codex-proxy-ui/blob/main/playground/components/index.md) · [Playground](https://zyycn.github.io/codex-proxy-ui/) |
@@ -131,6 +54,28 @@ curl http://127.0.0.1:8080/v1/models \
 问题反馈与功能建议请使用 [GitHub Issues](https://github.com/zyycn/codex-proxy-rs/issues)，填写要求见 [贡献说明](CONTRIBUTING.md#提交-issue)
 
 感谢 [LINUX DO](https://linux.do) 社区提供开放、友善的技术交流平台
+
+## 贡献者
+
+[<img src="https://contrib.rocks/image?repo=zyycn/codex-proxy-rs&amp;columns=10" alt="查看 GitHub 贡献者列表" width="480">](https://github.com/zyycn/codex-proxy-rs/graphs/contributors)
+
+## Star History
+
+<a href="https://simrepo.dera.page/#zyycn/codex-proxy-rs&amp;Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://simrepo.dera.page/svg?repos=zyycn/codex-proxy-rs&amp;type=Date&amp;theme=dark">
+    <img src="https://simrepo.dera.page/svg?repos=zyycn/codex-proxy-rs&amp;type=Date" alt="Codex Proxy RS 的 GitHub Star 增长趋势" width="560">
+  </picture>
+</a>
+
+## 支持项目
+
+如果 Codex Proxy RS 帮助到你了，欢迎请我喝杯咖啡 ☕
+
+[![Support me on Ko-fi](docs/donations/ko-fi.svg)](https://ko-fi.com/zyycn)
+
+[<img src="docs/donations/wechat-tips.png" alt="WeChat appreciation code" width="138">](docs/donations/wechat-tips.png)&nbsp;
+[<img src="docs/donations/alipay.png" alt="Alipay QR code" width="138">](docs/donations/alipay.png)
 
 ## 许可证
 
