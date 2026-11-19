@@ -1378,27 +1378,40 @@ async fn streaming_error_after_initial_keepalive_should_be_a_terminal_sse_failur
 }
 
 #[tokio::test(start_paused = true)]
-async fn streaming_late_upstream_error_should_preserve_extended_error_fields() {
+async fn streaming_bad_request_preserves_extended_error_fields_before_and_after_keepalive() {
     let mut error = json!({
         "type": "invalid_request_error", "code": "misalignment_policy_violation",
         "message": "synthetic policy error", "misalignment": {"category": "synthetic"},
         "extension": {"opaque": true}
     });
-    let failure = ProviderError::new(ProviderErrorKind::InvalidRequest, UpstreamSendState::Sent)
-        .with_client_visible_upstream_response(
-            ClientVisibleUpstreamResponse::new(
-                400,
-                Some(b"application/json".to_vec()),
-                Bytes::from(json!({"error": error}).to_string()),
+    let failure = || {
+        ProviderError::new(ProviderErrorKind::InvalidRequest, UpstreamSendState::Sent)
+            .with_client_visible_upstream_response(
+                ClientVisibleUpstreamResponse::new(
+                    400,
+                    Some(b"application/json".to_vec()),
+                    Bytes::from(json!({"error": error}).to_string()),
+                )
+                .with_headers(headers(&[("retry-after", "7")])),
             )
-            .with_headers(headers(&[("retry-after", "7")])),
-        );
-    error["headers"] = json!({"retry-after": "7"});
+    };
+    let immediate = FakeSession::streaming(
+        Arc::new(Trace::default()),
+        vec![NextStep::Error(EngineError::Provider(failure()))],
+    );
+    let response = stream_execution_response(Box::new(immediate), None).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap(),
+        json!({"error": error})
+    );
     let session = FakeSession::streaming(
         Arc::new(Trace::default()),
         vec![NextStep::DelayedError(
             Duration::from_secs(30),
-            EngineError::Provider(failure),
+            EngineError::Provider(failure()),
         )],
     );
     let response = stream_execution_response(Box::new(session), None).await;
@@ -1410,6 +1423,7 @@ async fn streaming_late_upstream_error_should_preserve_extended_error_fields() {
         .find(|event| event.event.as_deref() == Some("response.failed"))
         .unwrap();
     let payload: Value = serde_json::from_str(&failed.data).unwrap();
+    error["headers"] = json!({"retry-after": "7"});
     assert_eq!(payload["response"]["error"], error);
     assert!(bytes.ends_with(b"data: [DONE]\n\n"));
 }

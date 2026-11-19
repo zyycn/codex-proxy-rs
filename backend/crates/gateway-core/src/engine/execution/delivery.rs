@@ -42,9 +42,12 @@ impl ResponseCommit {
         self.committed_at().is_some()
     }
 
-    pub(crate) fn finish(&self) {
-        // 执行已结束且未提交时保留原 HTTP 错误，不能因外层插件迟迟返回再改成 200
-        let _ = self.first.set(TransportState::Finished);
+    /// 冻结交付状态，返回是否仍可发送独立的 HTTP 错误响应
+    pub(crate) fn finish(&self) -> bool {
+        matches!(
+            self.first.get_or_init(|| TransportState::Finished),
+            TransportState::Finished
+        )
     }
 
     #[must_use]

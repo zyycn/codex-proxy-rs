@@ -7437,6 +7437,80 @@ fn transport_keepalive_preserves_pre_output_recovery_and_first_business_commit()
 }
 
 #[test]
+fn atomic_http_failure_uses_wire_only_after_downstream_data_or_keepalive() {
+    for (prelude, keepalive) in [(false, false), (true, false), (false, true)] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let detail = json!({"code":"invalid_value", "message":"Invalid input."});
+        let wire = json!({"type":"error","status":400,"error":detail});
+        let mut items = Vec::new();
+        if prelude {
+            items.push(Ok(ProviderEvent::canonical(GatewayEvent::Started(
+                ResponseMeta::new("response-1", "gpt-5"),
+            ))
+            .with_replayable_prelude()));
+        }
+        items.push(Err(ProviderError::new(
+            ProviderErrorKind::InvalidRequest,
+            UpstreamSendState::Sent,
+        )
+        .with_status(400)
+        .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+            400,
+            Some(b"application/json".to_vec()),
+            Bytes::from(json!({"error":detail}).to_string()),
+        ))
+        .with_atomic_client_events(vec![ProviderEvent::wire(
+            ProtocolWireEvent::json("openai", Some("error".into()), wire.clone()).unwrap(),
+        )])));
+        let (coordinator, store, _) = coordinator(vec![Script::ObservedStream {
+            account_id: "acct_first",
+            items,
+        }]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        let transport = session.response_commit();
+        if prelude {
+            block_on(session.next_event()).unwrap().unwrap();
+            block_on(session.commit_downstream(Some(200))).unwrap();
+        }
+        if keepalive {
+            assert!(transport.record(Some(200)));
+        }
+        if prelude || keepalive {
+            let batch = block_on(session.next_event()).unwrap().unwrap();
+            let events = batch.into_provider_events();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].wire_event().unwrap().data(), &wire);
+            if keepalive {
+                block_on(session.commit_downstream(Some(200))).unwrap();
+            }
+        }
+        let EngineError::Provider(error) = block_on(session.next_event()).unwrap_err() else {
+            panic!("expected the upstream bad request");
+        };
+        assert_eq!(
+            error.client_visible_upstream_response().unwrap().status(),
+            400
+        );
+        assert!(session.is_finalized());
+        assert_eq!(transport.record(Some(200)), prelude || keepalive);
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.attempts.len(), 1);
+        assert_eq!(state.finalizations.len(), 1);
+        assert_eq!(state.finalizations[0].committed, prelude || keepalive);
+        assert_eq!(state.finalizations[0].upstream_status_code, Some(400));
+    }
+}
+
+#[test]
 fn transport_keepalive_records_late_failure_as_incomplete_http_200() {
     let operation = generate_operation();
     let route_plan = plan(&operation);

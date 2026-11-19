@@ -71,6 +71,78 @@ pub(super) async fn stream_failure(
 }
 
 #[tokio::test]
+async fn bare_websocket_bad_request_offers_http_error_only_for_native_responses_sse() {
+    use ClientTransport::{HttpJson, HttpSse, WebSocket};
+    use gateway_protocol::openai::RESPONSES_PATH;
+
+    let detail = json!({
+        "type":"invalid_request_error", "code":"invalid_value", "message":"Invalid input.",
+        "param":"input[2].id", "extension":{"reason":"duplicate"}
+    });
+    let bad_request = json!({"type":"error", "status":400, "error":detail, "sequence_number":7});
+    let no_status = json!({"type":"error", "error":detail});
+    let response_failed = json!({"type":"response.failed", "status":400, "response":{"id":"resp_failed","error":detail}});
+    let capacity = json!({"status":400, "type":"error", "error":overload()["error"]});
+    for (endpoint, transport, frame, expects_http) in [
+        (RESPONSES_PATH, HttpSse, &bad_request, true),
+        (RESPONSES_PATH, WebSocket, &bad_request, false),
+        (RESPONSES_PATH, HttpJson, &bad_request, false),
+        ("/v1/chat/completions", HttpSse, &bad_request, false),
+        (RESPONSES_PATH, HttpSse, &no_status, false),
+        (RESPONSES_PATH, HttpSse, &response_failed, false),
+        (RESPONSES_PATH, HttpSse, &capacity, false),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let raw = frame.to_string();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = accept_codex_test_websocket(socket).await;
+            ws.next().await.unwrap().unwrap();
+            ws.send(Message::Text(raw.into())).await.unwrap();
+        });
+        let request = RequestAttemptContext::new(
+            ModelRequestId::new("req_ws_bad_input").unwrap(),
+            ClientApiKeyId::new("key_openai_contract").unwrap(),
+        )
+        .with_middleware(None, Arc::from([]), endpoint.to_owned(), transport)
+        .with_request_location(Some(global_request_location()));
+        let mut stream = provider_with_base_url(&store, base_url)
+            .execute(
+                planned_request("openai", generate_operation()),
+                context_for_request(request, CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        let (events, mut error) = stream_failure(&mut stream).await;
+        assert!(events.iter().all(|event| !event.has_client_event()));
+        let response = error.client_visible_upstream_response();
+        assert_eq!(
+            response.is_some(),
+            expects_http,
+            "{endpoint} {transport:?} {frame}"
+        );
+        if let Some(response) = response {
+            assert_eq!(response.status(), 400);
+            assert_eq!(
+                response.content_type(),
+                Some(b"application/json".as_slice())
+            );
+            assert_eq!(
+                serde_json::from_slice::<Value>(response.body()).unwrap(),
+                json!({"error":detail})
+            );
+        }
+        let events = error.take_atomic_client_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].wire_event().unwrap().data(), frame);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn large_preludes_are_forwarded_before_failure_on_http_and_websocket() {
     for websocket in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());

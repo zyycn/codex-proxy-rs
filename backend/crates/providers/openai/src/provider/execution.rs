@@ -1250,9 +1250,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         yield event;
                     }
                 } else if atomic_upstream_failure {
-                    failure.error = failure
-                        .error
-                        .with_atomic_client_events(events);
+                    failure.error = with_atomic_failure_events(failure.error, events, &context);
                 }
                 Err(continuation_recovery_error(
                     failure.error,

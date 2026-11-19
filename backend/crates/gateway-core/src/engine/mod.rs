@@ -643,6 +643,11 @@ impl AttemptContext {
         self.request.client_transport
     }
 
+    #[must_use]
+    pub fn endpoint(&self) -> &str {
+        self.request.endpoint()
+    }
+
     /// 原生响应可交付可替换前导事件；中间件可能改变其输出语义
     #[must_use]
     pub fn allows_replayable_prelude(&self) -> bool {
