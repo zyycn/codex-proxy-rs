@@ -1227,12 +1227,16 @@ fn upgrade_request(authorization: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn official_core_version_gate_should_run_before_websocket_upgrade() {
-    let app = api_router(ModelsExecution::with_cli_min("0.162.0")).await;
+    let app = api_router(ModelsExecution::with_cli_min("0.170.0")).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-    for version in ["0.158.0", "0.162.0"] {
+    for (product, version) in [
+        ("codex-tui", "0.158.0"),
+        ("Codex Desktop", "0.168.0"),
+        ("Codex Desktop", "0.170.0"),
+    ] {
         let mut request = format!("ws://{address}/v1/responses")
             .into_client_request()
             .unwrap();
@@ -1243,12 +1247,12 @@ async fn official_core_version_gate_should_run_before_websocket_upgrade() {
         request.headers_mut().insert(
             "user-agent",
             HeaderValue::from_str(&format!(
-                "codex-tui/{version} (Mac OS 26.6.2; arm64) Apple_Terminal (codex-tui; 0.165.0)"
+                "{product}/{version} (Ubuntu 26.4.0; aarch64) xterm-256color (codex-tui; 0.169.0)"
             ))
             .unwrap(),
         );
         let result = connect_async(request).await;
-        if version == "0.162.0" {
+        if version == "0.170.0" {
             let (mut socket, response) = result.expect("current Core upgrades successfully");
             assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
             socket.close(None).await.unwrap();
@@ -1261,8 +1265,9 @@ async fn official_core_version_gate_should_run_before_websocket_upgrade() {
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
             let value: Value = serde_json::from_slice(response.body().as_deref().unwrap()).unwrap();
             assert_eq!(value["error"]["code"], "client_version_too_old");
-            assert_eq!(value["error"]["current_version"], "0.158.0");
-            assert_eq!(value["error"]["min_version"], "0.162.0");
+            assert_eq!(value["error"]["client"], "codex_cli");
+            assert_eq!(value["error"]["current_version"], version);
+            assert_eq!(value["error"]["min_version"], "0.170.0");
         }
     }
     server.abort();

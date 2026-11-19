@@ -229,6 +229,46 @@ fn desktop_headers_should_take_precedence_over_embedded_cli_marker() {
 }
 
 #[test]
+fn desktop_hosted_tui_should_use_core_unless_a_desktop_version_is_supplied() {
+    for (core, version_header, kind, version) in [
+        ("0.170.0", None, CodexClientKind::Cli, Some("0.170.0")),
+        (
+            "0.170.0",
+            Some("0.170.0"),
+            CodexClientKind::Cli,
+            Some("0.170.0"),
+        ),
+        ("invalid", None, CodexClientKind::Cli, None),
+        (
+            "0.170.0",
+            Some("26.1023.51421"),
+            CodexClientKind::Desktop,
+            Some("26.1023.51421"),
+        ),
+        ("0.170.0", Some("invalid"), CodexClientKind::Desktop, None),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert("originator", HeaderValue::from_static("Codex Desktop"));
+        headers.insert(
+            "user-agent",
+            HeaderValue::from_str(&format!(
+                "Codex Desktop/{core} (Ubuntu 26.4.0; aarch64) xterm-256color (codex-tui; 0.169.0)"
+            ))
+            .unwrap(),
+        );
+        if let Some(value) = version_header {
+            headers.insert("version", HeaderValue::from_static(value));
+        }
+        let client = identify_codex_client(&headers).unwrap();
+        assert_eq!(client.kind(), kind);
+        assert_eq!(
+            client.version().map(ToString::to_string).as_deref(),
+            version
+        );
+    }
+}
+
+#[test]
 fn official_core_clients_should_use_the_core_version_instead_of_the_app_suffix() {
     for product in [
         "codex_cli_rs",
@@ -322,7 +362,7 @@ fn chatgpt_remote_desktop_without_app_version_should_not_use_a_version_gate() {
 }
 
 #[test]
-fn chatgpt_remote_marker_should_require_a_complete_exact_client_suffix() {
+fn desktop_should_require_a_complete_exact_client_suffix() {
     for suffix in [
         "(codex_chatgpt_android_remote_extra; dev)",
         "(unofficial_codex_chatgpt_ios_remote; dev)",
@@ -340,6 +380,9 @@ fn chatgpt_remote_marker_should_require_a_complete_exact_client_suffix() {
         "(Codex Desktop; ) (codex_chatgpt_android_remote; dev)",
         "(Codex Desktop; invalid) (codex_chatgpt_ios_remote; dev)",
         "(Codex Desktop)",
+        "(codex-tui-custom; 0.169.0)",
+        "(codex-tui; 0.169.0) trailing",
+        "(codex-tui; )",
     ] {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -395,19 +438,23 @@ fn chatgpt_remote_marker_should_not_override_an_existing_desktop_version_suffix(
 }
 
 #[test]
-fn chatgpt_remote_suffix_created_by_header_truncation_should_not_skip_the_gate() {
-    let suffix = " (codex_chatgpt_android_remote; dev)";
-    let mut user_agent = "Codex Desktop/0.154.0-alpha.6.2 ".to_owned();
-    user_agent.push_str(&"x".repeat(4096 - user_agent.len() - suffix.len()));
-    user_agent.push_str(suffix);
-    user_agent.push_str(" (another_client; dev)");
-    let mut headers = HeaderMap::new();
-    headers.insert("user-agent", HeaderValue::from_str(&user_agent).unwrap());
+fn truncated_client_suffix_should_not_change_the_desktop_gate() {
+    for suffix in [
+        " (codex_chatgpt_android_remote; dev)",
+        " (codex-tui; 0.169.0)",
+    ] {
+        let mut user_agent = "Codex Desktop/0.154.0-alpha.6.2 ".to_owned();
+        user_agent.push_str(&"x".repeat(4096 - user_agent.len() - suffix.len()));
+        user_agent.push_str(suffix);
+        user_agent.push_str(" (another_client; dev)");
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", HeaderValue::from_str(&user_agent).unwrap());
 
-    let client =
-        identify_codex_client(&headers).expect("incomplete headers still require a version");
-    assert_eq!(client.kind(), CodexClientKind::Desktop);
-    assert!(client.version().is_none());
+        let client =
+            identify_codex_client(&headers).expect("incomplete headers still require a version");
+        assert_eq!(client.kind(), CodexClientKind::Desktop);
+        assert!(client.version().is_none());
+    }
 }
 
 #[tokio::test]

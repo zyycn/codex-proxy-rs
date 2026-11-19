@@ -55,6 +55,10 @@ Client Key 通过账号分组限定路由范围：未绑定分组时可使用全
 `codex_python_sdk`、`codex-app-server`、`codex-app-server-sdk` 与 `codex_mcp_server`
 名称按完整标识匹配且不区分大小写，括号后缀中的应用或 SDK 版本不能替代 Core 版本
 
+TUI 连接共享 App Server 时，User-Agent 可以是 `Codex Desktop/<Core 版本> … (codex-tui; <TUI 版本>)`。
+这种请求按 CLI 门槛检查前缀中的 Core 版本，`version` 头可以省略或与 Core 版本相同。
+若该头提供不同的值，或 UA 另含 Desktop 应用版本后缀，则按 Desktop 规则校验
+
 Desktop 应用版本优先取 `version` 头，未提供时取 User-Agent 中的 `(Codex Desktop; <版本>)`。
 ChatGPT 远程控制使用 `(codex_chatgpt_<平台>_remote; <版本>)` 形式的 User-Agent 后缀，已知平台包括
 `android` 和 `ios`。网关按该命名格式识别非空的平台名，后缀须完整，平台名和版本均不能含空白、括号或分号。
