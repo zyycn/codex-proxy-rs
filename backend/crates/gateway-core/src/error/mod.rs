@@ -1038,6 +1038,9 @@ impl ProviderError {
 
     /// 绑定迁移完成后仅替换客户端恢复投影，保留原始失败的诊断与计费事实
     pub(crate) fn with_client_recovery_from(mut self, recovery: Self) -> Self {
+        if let Some(reason) = recovery.continuation_unavailable_reason() {
+            self = self.with_continuation_unavailable_reason(reason);
+        }
         self.client_visible_upstream_error = recovery.client_visible_upstream_error;
         self.client_visible_upstream_response = recovery.client_visible_upstream_response;
         self.continuation_failure = recovery.continuation_failure;

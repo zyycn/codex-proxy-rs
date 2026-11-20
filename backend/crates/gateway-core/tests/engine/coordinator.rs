@@ -2493,11 +2493,12 @@ fn native_continuation_uses_provider_defined_owner_then_cross_account_recovery()
 
 #[test]
 fn native_capacity_above_wait_limit_rotates_before_requesting_client_replay() {
-    for (seconds, replacement, rotations, expected_attempts) in [
-        (309, true, 1, 2),
-        (309, false, 1, 2),
-        (240, true, 1, 1),
-        (309, true, 0, 1),
+    for (seconds, replacement, rotations, committed_prelude, expected_attempts) in [
+        (309, true, 1, false, 2),
+        (317, true, 1, true, 2),
+        (309, false, 1, false, 2),
+        (240, true, 1, false, 1),
+        (309, true, 0, false, 1),
     ] {
         let Operation::Generate(generate) = generate_operation() else {
             unreachable!()
@@ -2516,11 +2517,14 @@ fn native_capacity_above_wait_limit_rotates_before_requesting_client_replay() {
             Default::default(),
             240,
         );
-        let original_body = Bytes::from_static(br#"{"error":{"code":"server_is_overloaded","headers":{"retry-after":"309","retry-after-ms":"309000"}}}"#);
+        let original_body = json!({"error": {
+            "code": "server_is_overloaded",
+            "headers": {"retry-after": seconds.to_string(), "retry-after-ms": (seconds * 1000).to_string()}
+        }}).to_string();
         let original = transient_rejection()
             .with_retry_after(Duration::from_secs(seconds))
             .with_raw_upstream_error(gateway_core::error::RawUpstreamError::new(
-                String::from_utf8(original_body.to_vec()).unwrap(),
+                original_body.clone(),
             ))
             .with_continuation_recovery_disposition(
                 ContinuationRecoveryDisposition::ClientReplayRequired,
@@ -2530,6 +2534,7 @@ fn native_capacity_above_wait_limit_rotates_before_requesting_client_replay() {
                 ProviderErrorKind::ContinuationRecoveryRequired,
                 UpstreamSendState::NotSent,
             )
+            .with_continuation_unavailable_reason("account_rotated")
             .with_continuation_recovery_disposition(
                 ContinuationRecoveryDisposition::ClientReplayRequired,
             )
@@ -2544,10 +2549,18 @@ fn native_capacity_above_wait_limit_rotates_before_requesting_client_replay() {
                 UpstreamSendState::NotSent,
             )
         };
+        let mut items = Vec::new();
+        if committed_prelude {
+            items.push(Ok(ProviderEvent::canonical(GatewayEvent::Started(
+                ResponseMeta::new("response-1", "gpt-5"),
+            ))
+            .with_replayable_prelude()));
+        }
+        items.push(Err(original));
         let (coordinator, store, provider) = coordinator(vec![
-            Script::Stream {
+            Script::ObservedStream {
                 account_id: "acct_one",
-                items: vec![Err(original)],
+                items,
             },
             Script::Error(recovery),
         ]);
@@ -2568,25 +2581,30 @@ fn native_capacity_above_wait_limit_rotates_before_requesting_client_replay() {
             CancellationToken::new(),
         ))
         .unwrap();
-        let mut collection = Box::pin(session.collect_uncommitted());
+        if committed_prelude {
+            block_on(session.next_event()).unwrap().unwrap();
+            block_on(session.commit_downstream(Some(200))).unwrap();
+        }
+        let mut next = Box::pin(session.next_event());
         let std::task::Poll::Ready(Err(EngineError::Provider(error))) =
-            block_on(async { futures::poll!(&mut collection) })
+            block_on(async { futures::poll!(&mut next) })
         else {
             panic!("native capacity recovery must not wait on the old account");
         };
-        drop(collection);
+        drop(next);
         assert_eq!(error.kind(), ProviderErrorKind::UpstreamCapacityUnavailable);
         assert_eq!(error.send_state(), UpstreamSendState::Sent);
         assert_eq!(error.retry_after(), Some(Duration::from_secs(seconds)));
-        assert_eq!(
-            error.raw_upstream_error().unwrap().as_str().as_bytes(),
-            original_body.as_ref()
-        );
+        assert_eq!(error.raw_upstream_error().unwrap().as_str(), original_body);
         assert_eq!(
             error
                 .client_visible_upstream_error()
                 .and_then(|detail| detail.code()),
             (replacement && expected_attempts == 2).then_some("previous_response_not_found")
+        );
+        assert_eq!(
+            error.continuation_unavailable_reason(),
+            (replacement && expected_attempts == 2).then_some("account_rotated")
         );
         let contexts = provider.contexts.lock().unwrap();
         assert_eq!(contexts.len(), expected_attempts);
@@ -2602,9 +2620,16 @@ fn native_capacity_above_wait_limit_rotates_before_requesting_client_replay() {
             );
             assert!(contexts[1].required_account().is_none());
         }
+        let state = store.state.lock().unwrap();
+        let finalization = &state.finalizations[0];
+        assert_eq!(finalization.attempt_count, 1);
         assert_eq!(
-            store.state.lock().unwrap().finalizations[0].attempt_count,
-            1
+            finalization.outcome,
+            if committed_prelude {
+                ExecutionOutcome::Incomplete
+            } else {
+                ExecutionOutcome::Failed
+            }
         );
     }
 }

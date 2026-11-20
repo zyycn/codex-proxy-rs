@@ -674,7 +674,7 @@ impl ModelRequestRepository for PgExecutionStore {
                and prior.client_api_key_ref = current.client_api_key_ref
                and prior.continuation_affinity_hash = current.continuation_affinity_hash
                and prior.continuation_requested
-               and prior.outcome = 'failed'
+               and prior.outcome in ('failed', 'incomplete')
                and prior.error_kind = 'continuation_recovery_required'
                and prior.recovered_at is null
                and current.started_at >= prior.completed_at

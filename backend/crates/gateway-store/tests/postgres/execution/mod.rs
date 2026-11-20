@@ -983,11 +983,12 @@ async fn successful_new_chain_should_mark_recent_continuation_failure_recovered(
         failure_completed_at,
     )
     .await;
-    seed_recovery_request(
+    seed_continuation_request(
         &database.pool,
         "req_continuation_recovery",
         &affinity_hash,
         failure_completed_at + Duration::seconds(4),
+        false,
     )
     .await;
 
@@ -1020,6 +1021,66 @@ async fn successful_new_chain_should_mark_recent_continuation_failure_recovered(
     assert_eq!(recovered.2, 1);
     assert_eq!(recovered.3, Some(4_000));
     assert!(recovered.4.is_some_and(|latency| latency >= 4_000));
+    database.close().await;
+}
+
+#[tokio::test]
+async fn successful_replay_recovers_only_the_incomplete_request_that_required_it() {
+    let Some(database) = TestDatabase::create("execution_incomplete_replay").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    let affinity_hash = "a".repeat(64);
+    let replay_at = Utc::now() - Duration::seconds(1);
+    for (id, seconds_before_replay, reason) in [
+        ("req_rotated", 11, Some("account_rotated")),
+        ("req_overloaded", 4, None),
+    ] {
+        let completed_at = replay_at - Duration::seconds(seconds_before_replay);
+        let started_at = completed_at - Duration::seconds(1);
+        seed_continuation_request(&database.pool, id, &affinity_hash, started_at, true).await;
+        let mut failed = successful_core_finalization(id);
+        failed.outcome = ExecutionOutcome::Incomplete;
+        failed.downstream_committed_at = Some(started_at.into());
+        failed.completed_at = completed_at.into();
+        failed.error = Some(GatewayError::new(
+            GatewayErrorKind::UpstreamUnavailable,
+            "capacity unavailable",
+        ));
+        failed.provider_error_code = Some("server_is_overloaded".to_owned());
+        failed.failure_observation.continuation_unavailable_reason = reason.map(str::to_owned);
+        ExecutionStore::finalize_model_request(&store, failed)
+            .await
+            .unwrap();
+    }
+    seed_continuation_request(
+        &database.pool,
+        "req_replay",
+        &affinity_hash,
+        replay_at,
+        false,
+    )
+    .await;
+    ExecutionStore::finalize_model_request(&store, successful_core_finalization("req_replay"))
+        .await
+        .unwrap();
+
+    let requests: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "select id, outcome, provider_error_code, recovery_request_id
+           from model_request_observations where continuation_requested order by id",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(requests.len(), 2);
+    for (id, outcome, upstream_code, recovered_by) in requests {
+        assert_eq!(outcome, "incomplete");
+        assert_eq!(upstream_code, "server_is_overloaded");
+        assert_eq!(
+            recovered_by.as_deref(),
+            (id == "req_rotated").then_some("req_replay")
+        );
+    }
     database.close().await;
 }
 
@@ -1220,11 +1281,12 @@ async fn failed_or_late_new_chain_should_leave_continuation_failure_unresolved()
         failure_completed_at,
     )
     .await;
-    seed_recovery_request(
+    seed_continuation_request(
         &database.pool,
         "req_continuation_retry_failed",
         &affinity_hash,
         failure_completed_at + Duration::seconds(3),
+        false,
     )
     .await;
 
@@ -1250,11 +1312,12 @@ async fn failed_or_late_new_chain_should_leave_continuation_failure_unresolved()
     .expect("load unresolved continuation failure");
     assert_eq!(after_failed, (None, None, 1));
 
-    seed_recovery_request(
+    seed_continuation_request(
         &database.pool,
         "req_continuation_retry_late",
         &affinity_hash,
         failure_completed_at + Duration::seconds(31),
+        false,
     )
     .await;
     ExecutionStore::finalize_model_request(
@@ -1310,11 +1373,12 @@ async fn seed_continuation_failure(
     .expect("finalize seeded continuation failure");
 }
 
-async fn seed_recovery_request(
+async fn seed_continuation_request(
     pool: &sqlx::PgPool,
     id: &str,
     affinity_hash: &str,
     started_at: chrono::DateTime<Utc>,
+    continuation_requested: bool,
 ) {
     seed_running_request(pool, id)
         .await
@@ -1322,13 +1386,14 @@ async fn seed_recovery_request(
     sqlx::query(
         "update model_requests
             set client_api_key_ref = 'key_continuation', client_transport = 'websocket',
-                continuation_affinity_hash = $2, continuation_requested = false,
+                continuation_affinity_hash = $2, continuation_requested = $4,
                 started_at = $3, recovery_lease_expires_at = $3 + interval '1 minute'
           where id = $1",
     )
     .bind(id)
     .bind(affinity_hash)
     .bind(started_at)
+    .bind(continuation_requested)
     .execute(pool)
     .await
     .expect("prepare seeded recovery request");
