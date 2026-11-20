@@ -1054,13 +1054,11 @@ impl CodexProvider {
                 context.request_id().as_str(),
             );
         }
-        if let Some(location) = lease
+        let location = lease
             .account()
             .request_location()
-            .or(context.request_location())
-        {
-            align_structured_location_fields(upstream_request.body_mut(), location);
-        }
+            .or(context.request_location());
+        align_structured_location_fields(upstream_request.body_mut(), location);
         let requirement = transport_requirement(&upstream_request);
         let http_only = lease.transport() == crate::credential::ResponsesTransport::Http;
         if http_only && requirement.requires_websocket() {

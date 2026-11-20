@@ -775,7 +775,7 @@ async fn selected_proxy_location_overrides_global_and_reloads_without_mutating_c
     }
     // 目标不可解析；收到请求证明使用的是账号代理，而非测试机默认出口
     let provider = provider_with_base_url(&store, "http://upstream.invalid".to_owned());
-    let original = json!({"model":"gpt-5.4", "input":[
+    let original = json!({"model":"gpt-5.4", "request_country":"CA", "input":[
         {"role":"user", "content":[{"type":"input_text", "text":"<environment_context><timezone>UTC</timezone></environment_context>"}], "internal_chat_message_metadata_passthrough":{"content_item_kinds":["environments.environment_context"], "create_time":1789293131.822}},
         {"role":"user", "content":[{"type":"input_text", "text":"<environment_context><timezone>UTC</timezone></environment_context>"}], "internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}},
         {"role":"user", "content":[{"type":"input_text", "text":"<environment_context><timezone>UTC</timezone></environment_context>"}]},
@@ -787,12 +787,12 @@ async fn selected_proxy_location_overrides_global_and_reloads_without_mutating_c
             .unwrap()
             .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
     ));
-    for (index, (proxy, location, global_enabled, expected)) in [
-        (&first_proxy, Some(json!({"country":"JP", "region":"Tokyo", "city":"Tokyo", "timezone":"Asia/Tokyo"})), true, Some("Asia/Tokyo")),
-        (&second_proxy, Some(json!({"country":"US", "region":"New York", "city":"New York", "timezone":"America/New_York"})), true, Some("America/New_York")),
-        (&second_proxy, None, true, Some("Pacific/Auckland")),
-        (&second_proxy, None, false, None),
-        (&first_proxy, Some(json!({"country":"JP", "region":"Tokyo", "city":"Tokyo", "timezone":"Asia/Tokyo"})), false, Some("Asia/Tokyo")),
+    for (index, (proxy, location, global_enabled, expected_country, expected)) in [
+        (&first_proxy, Some(json!({"country":"JP", "region":"Tokyo", "city":"Tokyo", "timezone":"Asia/Tokyo"})), true, Some("JP"), Some("Asia/Tokyo")),
+        (&second_proxy, Some(json!({"country":"US", "region":"New York", "city":"New York", "timezone":"America/New_York"})), true, Some("US"), Some("America/New_York")),
+        (&second_proxy, None, true, Some("NZ"), Some("Pacific/Auckland")),
+        (&second_proxy, None, false, None, None),
+        (&first_proxy, Some(json!({"country":"JP", "region":"Tokyo", "city":"Tokyo", "timezone":"Asia/Tokyo"})), false, Some("JP"), Some("Asia/Tokyo")),
     ].into_iter().enumerate() {
         let location = location.map(|value| serde_json::from_value::<RequestLocation>(value).unwrap());
         store.set_egress(account_id, Some(OutboundProxy::parse(&proxy.uri()).unwrap()), location);
@@ -800,6 +800,7 @@ async fn selected_proxy_location_overrides_global_and_reloads_without_mutating_c
         while let Some(event) = stream.next().await { event.expect("proxy response"); }
         let requests = proxy.received_requests().await.unwrap();
         let body = captured_request_body(requests.last().expect("request reached selected proxy"));
+        assert_eq!(body.get("request_country"), Some(&json!(expected_country)));
         assert_eq!(body.pointer("/tools/0/user_location/timezone"), expected.map(|timezone| json!(timezone)).as_ref());
         let expected = expected.unwrap_or("UTC");
         assert_eq!(body.pointer("/input/0/content/0/text"), Some(&json!(format!("<environment_context><timezone>{expected}</timezone></environment_context>"))));
@@ -2036,6 +2037,7 @@ async fn provider_should_override_unclassified_time_contexts_over_websocket() {
         body.pointer("/input/1/content/0/text"),
         Some(&json!(desktop.replace("Asia/Shanghai", "Pacific/Auckland")))
     );
+    assert_eq!(body.get("request_country"), Some(&json!("NZ")));
     assert_eq!(
         body.pointer("/input/0/content/0/text"),
         Some(&json!(
@@ -13249,7 +13251,12 @@ async fn downstream_client_markers_preserve_instruction_content() {
                 json!([["X-Grok-Model-Override", STANDARD.encode(b"test")]]),
             )]);
             let sent = capture_client_request(body.clone(), context, api_key).await;
-            assert_eq!(sent, body);
+            let mut expected = body;
+            expected.insert(
+                "request_country".to_owned(),
+                json!(global_request_location().country),
+            );
+            assert_eq!(sent, expected);
         }
     }
 }

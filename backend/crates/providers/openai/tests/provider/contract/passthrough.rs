@@ -53,7 +53,8 @@ async fn responses_options_follow_the_selected_upstream_on_both_transports() {
         "model": "gpt-5.4", "input": "hello",
         "max_output_tokens": 1, "max_completion_tokens": 32, "max_tokens": 64,
         "stream_options": {"include_usage": true, "reasoning_summary_delivery": "sequential_cutoff"},
-        "client_metadata": {"user": "keep"},
+        "request_country": "US",
+        "client_metadata": {"user": "keep", "request_country": "US"},
         "tools": [{"type": "function", "name": "sample", "parameters": {
             "type": "object", "properties": {"top_p": {"type": "number"}}
         }}]
@@ -85,6 +86,8 @@ async fn responses_options_follow_the_selected_upstream_on_both_transports() {
                 );
             }
             assert_eq!(sent["client_metadata"]["user"], "keep");
+            assert_eq!(sent.get("request_country"), Some(&Value::Null));
+            assert_eq!(sent["client_metadata"]["request_country"], "US");
             assert_eq!(sent["tools"], body["tools"]);
         }
     }

@@ -154,6 +154,7 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
             "prompt_cache_key",
             "generate",
             "client_metadata",
+            "request_country",
         ]
     );
 }

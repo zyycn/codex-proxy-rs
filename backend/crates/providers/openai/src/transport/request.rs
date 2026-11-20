@@ -128,15 +128,17 @@ fn adapt_codex_responses_body(
 ) {
     body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
     normalize_codex_request_body(body);
-    if let Some(location) = location {
-        align_structured_location_fields(body, location);
-    }
+    align_structured_location_fields(body, location);
 }
 
 pub(crate) fn align_structured_location_fields(
     body: &mut Map<String, Value>,
-    location: &CodexRequestLocation,
+    location: Option<&CodexRequestLocation>,
 ) {
+    // 请求国家由生效的位置覆盖决定，未配置时显式发送 null 表示未知
+    let country = location.map(|location| location.country.as_str());
+    body.insert("request_country".to_owned(), Value::from(country));
+    let Some(location) = location else { return };
     if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input {
             align_time_context(item, location.timezone.name());

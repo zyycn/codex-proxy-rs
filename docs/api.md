@@ -1486,10 +1486,10 @@ API 的 `autoLocation` 默认为 `false`；开启时使用已检测位置，测�
 只改位置不清空连通性测试结果，也不更改账号凭据版本
 
 关联账号的 OpenAI/Codex Responses 请求（HTTP/SSE、WebSocket）优先使用代理位置，否则使用全局
-运行设置中已开启的 `requestLocation`；两者均未开启时保留客户端原有位置和时区。全局覆盖按请求冻结，
-新请求使用保存后的设置，无需重启；代理覆盖在每次执行时读取，
-换号或换出口按该次选定账号解析。位置只影响客户端时间上下文的时区和 Web Search 的结构化位置，
-不改变 epoch 时间戳、真实出口 IP、服务或管理端时区、数据驻留约束及 xAI 请求
+运行设置中已开启的 `requestLocation`。出站正文的顶层 `request_country` 始终写入生效位置的两位国家码，无位置覆盖时写入 JSON `null`。
+位置覆盖同时更新客户端时间上下文的时区和 Web Search 的结构化位置，未启用覆盖时这两项保留客户端原值。
+全局覆盖按请求冻结，保存后对新请求生效。代理覆盖按每次执行选定的账号解析，包括换号和换出口。
+位置覆盖不改变 epoch 时间戳、真实出口 IP、服务或管理端时区、数据驻留约束及 xAI 请求
 
 时间上下文支持以下两种消息，文本块均为 `type: "input_text"`：
 
@@ -2215,8 +2215,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 ### 请求位置
 
-`requestLocationEnabled` 是必填布尔值，默认 `false`：关闭时不覆盖客户端原有位置和时区；开启时使用已保存的
-`requestLocation`。关闭不会清空自定义值，代理自定义位置仍优先。
+`requestLocationEnabled` 是必填布尔值，默认 `false`。开启时应用已保存的全局 `requestLocation`，关闭后保留配置值。
 `requestLocation` 是必填的完整对象 `{ country, region, city, timezone }`，不接受 `null`；初始保存值为
 `{ country: "US", region: "Ohio", city: "Piketon", timezone: "America/New_York" }`。
 字段约束与[代理位置](#独立代理管理--managed-proxies)一致。全局自定义开启后，OpenAI Responses 使用全局位置，
