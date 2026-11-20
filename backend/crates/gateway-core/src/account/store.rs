@@ -173,6 +173,15 @@ pub trait ProviderAccountStore: Send + Sync {
         change: QuotaAccessChange,
     ) -> Result<QuotaWriteOutcome, StoreError>;
 
+    /// 按请求使用的凭据版本缩短访问令牌有效期，保留在途续期的版本和重试计划
+    async fn expire_access_token(
+        &self,
+        _account: &ProviderAccount,
+        _observed_at: std::time::SystemTime,
+    ) -> Result<bool, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::InvalidData))
+    }
+
     async fn apply_state_change(&self, change: AccountStateChange) -> Result<(), StoreError>;
 
     async fn update_account(&self, update: ProviderAccountUpdate) -> Result<(), StoreError>;

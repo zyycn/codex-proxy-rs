@@ -849,7 +849,7 @@ async fn quota_endpoint_auth_rejections_do_not_reclassify_credentials_or_quota()
 }
 
 #[tokio::test]
-async fn quota_endpoint_rejection_preserves_details_without_changing_account_facts() {
+async fn manual_quota_revocation_expires_only_the_access_token_and_preserves_diagnostics() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_quota_rejection_detail";
     create_account(&store, account_id).await;
@@ -883,14 +883,18 @@ async fn quota_endpoint_rejection_preserves_details_without_changing_account_fac
         }
         other => panic!("expected upstream rejection, got {other:?}"),
     }
-    // 额度查询诊断不能进入凭据快照，否则会干扰在途 OAuth 刷新的终态提交
-    let current = store.account(account_id).expect("account after refresh");
-    assert_eq!(current, before);
-    store
-        .repository()
-        .load_runtime_credential(&before)
-        .await
-        .expect("unchanged credential");
+    let current = store.account(account_id).expect("account after revocation");
+    assert_eq!(current.revision(), before.revision());
+    assert_eq!(current.quota(), before.quota());
+    assert_eq!(current.credential_state(), before.credential_state());
+    assert_eq!(current.next_refresh_at(), before.next_refresh_at());
+    assert!(current.has_refresh_token());
+    let status = current.status_projection(SystemTime::now(), None);
+    assert_eq!(status.status, AccountStatus::Error);
+    assert_eq!(
+        status.error_reason,
+        Some(gateway_core::account::AccountErrorReason::AccessTokenExpired)
+    );
 }
 
 #[tokio::test]

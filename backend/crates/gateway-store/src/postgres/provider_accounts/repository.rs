@@ -332,7 +332,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                  provider_credentials_json = $3,
                  credential_revision = credential_revision + 1,
                  has_refresh_token = $4,
-                 access_token_expires_at = $5,
+                 access_token_expires_at = case when $8 then access_token_expires_at else $5 end,
                  next_refresh_at = $6,
                  updated_at = greatest(now(), updated_at)
              where id = $1 and credential_revision = $2
@@ -345,6 +345,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(update.access_token_expires_at)
         .bind(update.next_refresh_at)
         .bind(update.preserve_profile)
+        .bind(update.preserve_access_token_expiry)
         .fetch_optional(&self.pool)
         .await
         .map_err(|source| postgres_unavailable("compare and swap provider credentials", source))?
@@ -874,7 +875,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              provider_credentials_json = $7,
              credential_revision = credential_revision + 1,
              has_refresh_token = $8,
-             access_token_expires_at = $9,
+             access_token_expires_at = case when $17 then access_token_expires_at else $9 end,
              next_refresh_at = $10,
              upstream_user_id = case when $11::boolean then $12::text else upstream_user_id end,
              upstream_account_id = case when $11::boolean then $13::text else upstream_account_id end,
@@ -910,6 +911,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     .bind(update.preserve_profile)
     .bind(update.preserve_credential_state)
     .bind(preserve_name)
+    .bind(update.preserve_access_token_expiry)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {

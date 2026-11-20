@@ -1789,8 +1789,9 @@ OpenAI 授权码交换与令牌刷新请求的连接超时为 30 秒，单次上
   不验证上游账号是否已经恢复，下一次真实请求仍可重新写入失败事实
 - 成功额度观测会 revision-fenced 写入 quota；明确 `Allowed` 投影为 `normal`，明确耗尽投影为
   `quota_exhausted`。额度观测不会清除凭据过期、无效或封禁事实；这些事实统一投影为 `error`，并由
-  `errorReason` 区分。额度接口的 401/403 也不足以判定 refresh token 永久失效，credential 终态只由
-  OAuth refresh 的明确永久错误写入
+  `errorReason` 区分。OpenAI 额度查询返回 `401 token_revoked` 时，当前访问令牌立即按过期处理，
+  已启用账号投影为 `error`，已有 refresh token 仍可续期。取得新访问令牌后按已有额度事实显示状态。
+  其他额度 401/403 保留原状态，refresh token 是否永久失效由 OAuth 续期结果判断
 - xAI 额度百分比取自 `creditUsagePercent`，缺失时为未知。
   预付余额保留上游账本符号，非零余额及剩余按量额度可独立证明可用；窗口已过期或缺少可用证据时，
   不凭旧快照恢复账号

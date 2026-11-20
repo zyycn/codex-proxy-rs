@@ -197,3 +197,94 @@ async fn bulk_catalog_restore_keeps_ten_thousand_owners_and_fences_late_writes()
     assert_eq!(ids, std::collections::BTreeSet::from(["acct_1", "acct_5"]));
     database.close().await;
 }
+
+#[tokio::test]
+async fn revoked_access_token_moves_exhausted_account_into_error_list_until_rotation() {
+    let Some(database) = TestDatabase::create("revoked_access_token").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let id = ProviderAccountId::new("acct_quota_revoked").unwrap();
+    let mut seed = account(id.as_str(), "quota-revoked-user");
+    seed.access_token_expires_at = None;
+    seed.has_refresh_token = true;
+    repository.insert_provider_account(seed).await.unwrap();
+    let before = repository.load_current_credential(&id).await.unwrap();
+    let observed_at = SystemTime::now();
+    repository
+        .apply_quota_access(QuotaAccessChange {
+            account_id: id.clone(),
+            expected_revision: before.account.revision(),
+            state: QuotaState::exhausted(QuotaEvidence::UsageLimitReached, observed_at, None),
+        })
+        .await
+        .unwrap();
+    assert!(
+        repository
+            .expire_access_token(&before.account, observed_at)
+            .await
+            .unwrap()
+    );
+    let revoked = repository.get_account(&id).await.unwrap().unwrap();
+    assert_eq!(revoked.revision(), before.account.revision());
+    assert!(revoked.quota().is_exhausted());
+    assert!(revoked.access_token_expires_at().unwrap() <= SystemTime::now());
+    let page = admin_account_store(&database.pool)
+        .list_accounts(
+            AccountListQuery {
+                status: Some(AccountStatus::Error),
+                page: 1,
+                page_size: PageSize::new(10).unwrap(),
+                provider_kind: None,
+                group_filter: None,
+                search: None,
+                sort: None,
+            },
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].account.id, id.as_str());
+    let retry = CredentialCasUpdate::new(
+        id.clone(),
+        before.account.revision(),
+        ProviderAccountUpdate {
+            account_id: id.clone(),
+            name: before.account.name().to_owned(),
+            email: None,
+            plan_type: None,
+        },
+        before.credential,
+        true,
+        before.account.access_token_expires_at(),
+        Some(SystemTime::now() + Duration::from_secs(60)),
+    )
+    .unwrap()
+    .preserving_profile()
+    .preserving_access_token_expiry();
+    assert!(matches!(
+        repository.compare_and_swap_credential(retry).await.unwrap(),
+        CredentialCasOutcome::Updated(_)
+    ));
+    let deferred = repository.get_account(&id).await.unwrap().unwrap();
+    assert_eq!(
+        deferred.access_token_expires_at(),
+        revoked.access_token_expires_at()
+    );
+    let rotation = credential_update(id.as_str(), deferred.revision().get(), "rotated-test-token");
+    repository
+        .compare_and_swap_credentials(rotation)
+        .await
+        .unwrap();
+    assert!(
+        !repository
+            .expire_access_token(&before.account, SystemTime::now())
+            .await
+            .unwrap()
+    );
+    let current = repository.get_account(&id).await.unwrap().unwrap();
+    assert!(current.access_token_expires_at().unwrap() > SystemTime::now());
+    assert!(current.quota().is_exhausted());
+    database.close().await;
+}

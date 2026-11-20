@@ -3404,6 +3404,7 @@ fn credential_update(account_id: &str, revision: u64, marker: &str) -> ProviderC
     ProviderCredentialUpdate {
         preserve_profile: false,
         preserve_credential_state: false,
+        preserve_access_token_expiry: false,
         account_id: account_id.to_owned(),
         expected_revision: Revision::new(revision).expect("credential revision"),
         provider_credentials_json: credential_json(marker),
@@ -3856,6 +3857,7 @@ async fn connection_configuration_update_preserves_credential_health() {
     let mut credential = credential_update(ID, 1, "same-secret");
     credential.preserve_credential_state = true;
     credential.preserve_profile = true;
+    credential.preserve_access_token_expiry = true;
     repository
         .rotate_provider_account(RotateProviderAccount {
             scope: ProviderAccountAdminScope {
@@ -3879,6 +3881,7 @@ async fn connection_configuration_update_preserves_credential_health() {
         "name",
         "credential_state",
         "credential_observed_at",
+        "access_token_expires_at",
         "last_error_reason",
         "last_error_message",
     ] {

@@ -1076,11 +1076,12 @@ fn prepared_rotation(
         expected_revision,
         profile: credential_profile,
         preserve_profile,
+        preserve_access_token_expiry,
         credential,
         has_refresh_token,
         access_token_expires_at,
         next_refresh_at,
-        account_state: _account_state,
+        account_state: _,
     } = credential.into_parts();
     if profile != credential_profile || profile.account_id != account_id {
         return Err(provider_admin_error(ProviderAdminErrorKind::Internal));
@@ -1098,6 +1099,7 @@ fn prepared_rotation(
             plan_type: profile.plan_type,
             preserve_profile,
             preserve_credential_state: false,
+            preserve_access_token_expiry,
             provider_material: ProviderDocument::new(OpaqueProviderData::new(
                 credential.into_inner(),
             )),
@@ -1932,8 +1934,7 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
             code,
             detail,
         } => {
-            // 公开文案只解释已知状态和错误码；原始上游材料留在内部诊断，
-            // 额度查询拒绝不作为凭据失效证据，也不写入账号的凭据错误字段
+            // 公开提示只使用已知状态和错误码，原始上游材料留在内部诊断
             let (kind, public_message) = match (status, code.as_deref()) {
                 (Some(401), Some("token_revoked")) => {
                     (Kind::BadGateway, "访问令牌已撤销，请刷新令牌或重新授权")

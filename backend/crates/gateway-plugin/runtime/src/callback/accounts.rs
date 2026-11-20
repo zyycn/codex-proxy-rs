@@ -267,6 +267,7 @@ fn prepare_replace(
         plan_type: facts.plan_type,
         preserve_profile: false,
         preserve_credential_state: false,
+        preserve_access_token_expiry: false,
         provider_material: ProviderDocument::new(OpaqueProviderData::new(facts.material)),
         has_refresh_token: facts.has_refresh_token,
         access_token_expires_at: credential_timestamp(facts.access_token_expires_at_ms)
