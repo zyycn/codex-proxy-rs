@@ -17,10 +17,10 @@ use crate::settings::{SettingsValues, compiled::CompiledSettings};
 use crate::validation::RoutingError;
 
 use super::{
-    AccountGroupId, ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities,
-    ProviderCandidate, ProviderCatalogGeneration, ProviderCatalogPort, ProviderKind, ProviderModel,
-    PublicModelId, RoutingContext, RoutingGroupSnapshot, RoutingPlan, RuntimeAccount,
-    RuntimeAccountDirectory, UpstreamModelId,
+    AccountGroupId, ClientRoutingScope, ConfigRevision, DirectAccountModel, FrozenAccountScope,
+    ModelCapabilities, ProviderCandidate, ProviderCatalogGeneration, ProviderCatalogPort,
+    ProviderKind, ProviderModel, PublicModelId, RoutingContext, RoutingGroupSnapshot, RoutingPlan,
+    RuntimeAccount, RuntimeAccountDirectory, UpstreamModelId,
 };
 
 const MAXIMUM_SNAPSHOT_STABILITY_ATTEMPTS: usize = 4;
@@ -1288,19 +1288,24 @@ impl RuntimeSnapshot {
         account_scope: &FrozenAccountScope,
         context: &RoutingContext,
     ) -> BTreeSet<ProviderKind> {
-        account_scope
-            .provider_kinds()
-            .iter()
-            .filter(|provider| {
-                self.providers.contains(*provider)
-                    && context
-                        .required_provider
-                        .as_ref()
-                        .is_none_or(|required| required == *provider)
-                    && !context.blocked_providers.contains(*provider)
-            })
+        self.available_provider_kinds(account_scope, context)
             .cloned()
             .collect()
+    }
+
+    pub(crate) fn available_provider_kinds<'a>(
+        &'a self,
+        account_scope: &'a FrozenAccountScope,
+        context: &'a RoutingContext,
+    ) -> impl Iterator<Item = &'a ProviderKind> {
+        account_scope.provider_kinds().iter().filter(|provider| {
+            self.providers.contains(*provider)
+                && context
+                    .required_provider
+                    .as_ref()
+                    .is_none_or(|required| required == *provider)
+                && !context.blocked_providers.contains(*provider)
+        })
     }
 
     #[must_use]
@@ -1315,7 +1320,67 @@ impl RuntimeSnapshot {
         account_scope: Arc<FrozenAccountScope>,
         context: &RoutingContext,
     ) -> Result<RoutingPlan, RoutingError> {
-        self.plan_inner(public_model, operation, account_scope, context, true)
+        self.plan_inner(public_model, operation, account_scope, context, true, None)
+    }
+
+    /// 按实际目标分别校验目录、分组和账号。选中直连或常规路径后，重试沿用同一份计划。
+    pub fn plan_with_direct_account_model(
+        &self,
+        public_model: &PublicModelId,
+        operation: &Operation,
+        scope: Arc<FrozenAccountScope>,
+        context: &RoutingContext,
+        direct: DirectAccountModel<'_>,
+        uses_native_upstream: impl Fn(&ProviderAccountId) -> bool,
+    ) -> Result<RoutingPlan, RoutingError> {
+        let DirectAccountModel {
+            provider,
+            model: target,
+            continuation_owner,
+        } = direct;
+        if self.model_alias(public_model.as_str()).is_some()
+            || self
+                .settings
+                .values
+                .model_mappings
+                .contains_key(public_model.as_str())
+        {
+            return self.plan(public_model, operation, scope, context);
+        }
+        // 自动替换必须有原生目录依据；未替换的账号仍使用普通请求的路由合同。
+        let sources = self
+            .model_catalog_accounts
+            .get(provider)
+            .and_then(|models| models.get(target.as_str()));
+        let direct_accounts = scope
+            .allowed_account_ids()
+            .filter(|id| {
+                scope.directory().account(id).is_some_and(|account| {
+                    account.provider_kind() == provider && account.is_direct_account()
+                }) && scope.allows_model(id, target.as_str())
+                    && sources.is_none_or(|accounts| accounts.contains(*id))
+                    && uses_native_upstream(id)
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        // 原生续接先用原账号，容量恢复仍可在同模型的授权账号间换号
+        if !direct_accounts.is_empty()
+            && continuation_owner.is_none_or(|owner| direct_accounts.contains(owner))
+            && let Ok(plan) = self.plan_inner(
+                public_model,
+                operation,
+                Arc::new(
+                    scope.restricted_to(&BTreeSet::from([provider.clone()]), &direct_accounts),
+                ),
+                context,
+                true,
+                Some(target),
+            )
+        {
+            return Ok(plan);
+        }
+        // 只有尚未开始任何 attempt 的请求才可保留原模型；两个模型从不进入同一重试计划。
+        self.plan(public_model, operation, scope, context)
     }
 
     /// 管理探测已固定目标账号，不使用数据面 Key 的账号模型政策裁决探测资格
@@ -1331,7 +1396,14 @@ impl RuntimeSnapshot {
             .as_ref()
             .clone()
             .with_request_profiles(self.settings().request_profiles().clone());
-        self.plan_inner(public_model, operation, Arc::new(scope), context, false)
+        self.plan_inner(
+            public_model,
+            operation,
+            Arc::new(scope),
+            context,
+            false,
+            None,
+        )
     }
 
     fn plan_inner(
@@ -1341,6 +1413,7 @@ impl RuntimeSnapshot {
         account_scope: Arc<FrozenAccountScope>,
         context: &RoutingContext,
         enforce_account_model_policy: bool,
+        direct_model: Option<&UpstreamModelId>,
     ) -> Result<RoutingPlan, RoutingError> {
         let requirements = operation.capability_requirements();
         let mut candidates = Vec::new();
@@ -1350,19 +1423,23 @@ impl RuntimeSnapshot {
         }
 
         let requested_model = public_model.as_str();
-        let mapped_model = self.mapped_model(requested_model);
-        let upstream_model = if self
-            .settings
-            .values
-            .model_mappings
-            .contains_key(requested_model)
-            || self.model_alias(requested_model).is_some()
-        {
-            UpstreamModelId::new(mapped_model)
+        let upstream_model = if let Some(direct) = direct_model {
+            direct.clone()
         } else {
-            UpstreamModelId::from_client_wire(mapped_model)
-        }
-        .map_err(|_| RoutingError::InvalidIdentifier)?;
+            let mapped_model = self.mapped_model(requested_model);
+            if self
+                .settings
+                .values
+                .model_mappings
+                .contains_key(requested_model)
+                || self.model_alias(requested_model).is_some()
+            {
+                UpstreamModelId::new(mapped_model)
+            } else {
+                UpstreamModelId::from_client_wire(mapped_model)
+            }
+            .map_err(|_| RoutingError::InvalidIdentifier)?
+        };
         if enforce_account_model_policy
             && account_scope.groups_deny_model(Some(upstream_model.as_str()))
         {
@@ -1383,9 +1460,10 @@ impl RuntimeSnapshot {
             if !self.providers.contains(provider) {
                 continue;
             }
-            if self
-                .model_alias(public_model.as_str())
-                .is_some_and(|alias| &alias.provider != provider)
+            if direct_model.is_none()
+                && self
+                    .model_alias(public_model.as_str())
+                    .is_some_and(|alias| &alias.provider != provider)
             {
                 continue;
             }
@@ -1407,10 +1485,18 @@ impl RuntimeSnapshot {
                 .provider_models
                 .get(provider)
                 .and_then(|models| models.get(&upstream_model));
+            // 直连模型需要原生能力，不能借用插件为同名模型声明的账号与能力。
+            if direct_model.is_some() && capabilities.is_none() {
+                continue;
+            }
             let contributions: Vec<_> = self
                 .contributed_models()
                 .iter()
-                .filter(|model| &model.provider == provider && &model.id == public_model)
+                .filter(|model| {
+                    direct_model.is_none()
+                        && &model.provider == provider
+                        && &model.id == public_model
+                })
                 .collect();
             let mut candidate_scope = Arc::clone(&account_scope);
             let emulated_features = if contributions.is_empty() {
@@ -1467,6 +1553,7 @@ impl RuntimeSnapshot {
                 native.unwrap_or_default()
             };
             candidates.push(ProviderCandidate {
+                requires_direct_authentication: direct_model.is_some(),
                 provider: provider.clone(),
                 upstream_model: Some(upstream_model.clone()),
                 emulated_features,
@@ -1507,6 +1594,7 @@ impl RuntimeSnapshot {
             )),
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
+            openai_request_country: self.settings.values.openai_request_country().clone(),
             request_location: self.settings.request_location.clone(),
             privacy: self.settings.privacy.clone(),
             account_error_protection: Arc::clone(&self.settings.account_error_protection),
@@ -1584,6 +1672,7 @@ impl RuntimeSnapshot {
             });
         }
         let candidate = ProviderCandidate {
+            requires_direct_authentication: false,
             provider: provider.clone(),
             upstream_model: upstream_model.cloned(),
             emulated_features: BTreeSet::new(),
@@ -1596,6 +1685,7 @@ impl RuntimeSnapshot {
             )),
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
+            openai_request_country: self.settings.values.openai_request_country().clone(),
             request_location: self.settings.request_location.clone(),
             privacy: self.settings.privacy.clone(),
             account_error_protection: Arc::clone(&self.settings.account_error_protection),

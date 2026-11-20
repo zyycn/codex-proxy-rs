@@ -48,8 +48,14 @@ impl Eq for CodexWebSocketConnection {}
 /// 已构造完成的 Responses WebSocket 请求描述
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWebSocketRequest {
-    pub(crate) connection: CodexWebSocketConnection,
+    pub(crate) opening: ResponseCreateOpening,
     pub(super) payload_text: String,
+}
+
+/// 建连与选择连接只读取路由和续接要求，原生推理帧在连接就绪后编码
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResponseCreateOpening {
+    pub(crate) connection: CodexWebSocketConnection,
     pub(super) continuation: WebSocketContinuationRequirement,
     // 仅 Codex backend 约束首包搜索初始化，API Key 的 Responses API 不采用此规则
     pub(super) codex_search_declared: Option<bool>,
@@ -127,24 +133,9 @@ impl fmt::Display for PreviousResponseUnavailableReason {
 }
 
 impl CodexWebSocketRequest {
-    pub(crate) fn take_payload_text(&mut self) -> String {
-        std::mem::take(&mut self.payload_text)
-    }
-
-    pub(crate) fn replace_outbound(
-        &mut self,
-        endpoint: String,
-        headers: Vec<(String, String)>,
-        payload: String,
-    ) {
-        self.connection.endpoint = endpoint;
-        self.connection.headers = headers;
-        self.payload_text = payload;
-    }
-
     /// 返回连接描述
     pub fn connection(&self) -> &CodexWebSocketConnection {
-        &self.connection
+        &self.opening.connection
     }
 
     /// 返回将要发送的完整 `response.create` 文本
@@ -154,11 +145,25 @@ impl CodexWebSocketRequest {
 
     /// 返回连接续接要求
     pub fn continuation(&self) -> &WebSocketContinuationRequirement {
-        &self.continuation
+        &self.opening.continuation
+    }
+}
+
+impl ResponseCreateOpening {
+    pub(crate) fn with_payload(self, payload_text: String) -> CodexWebSocketRequest {
+        CodexWebSocketRequest {
+            opening: self,
+            payload_text,
+        }
     }
 }
 
 impl CodexWebSocketConnection {
+    pub(crate) fn replace_outbound(&mut self, endpoint: String, headers: Vec<(String, String)>) {
+        self.endpoint = endpoint;
+        self.headers = headers;
+    }
+
     pub(crate) fn set_peer_route(&mut self, path: Option<&str>) {
         self.headers
             .retain(|(name, _)| !name.eq_ignore_ascii_case(gateway_protocol::peer::ROUTE_HEADER));

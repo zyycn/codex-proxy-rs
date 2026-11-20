@@ -364,11 +364,13 @@ impl CodexProvider {
             .cloned()
             .collect::<Vec<_>>();
         let events = cold_live_call_stream(ColdLiveCall {
-            client: self
-                .client_for_request(&context, lease.account())?
-                .for_account(lease.account())
+            client: lease
+                .authentication()
+                .model_client_for_account(
+                    &self.client_for_request(&context, lease.account())?,
+                    lease.account(),
+                )
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?
-                .with_responses_api_base_url(lease.authentication().responses_api_base_url())
                 .with_middleware_headers(middleware_headers)
                 .with_outbound_middleware(outbound_middleware),
             registry: Arc::clone(&self.live_registry),

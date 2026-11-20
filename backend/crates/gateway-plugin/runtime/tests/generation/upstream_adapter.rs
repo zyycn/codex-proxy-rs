@@ -244,6 +244,56 @@ fn execute_with_context(
 }
 
 #[tokio::test]
+async fn native_model_eligibility_respects_explicit_upstream_adapter_bindings() {
+    use gateway_core::engine::ModelRouteScope;
+    for models in [json!(["gpt-5.6-luna"]), json!([])] {
+        let wildcard = models.as_array().unwrap().is_empty();
+        let mut config = configuration("https://example.invalid", false);
+        let entry = &mut config["upstream_registration"]["adapters"][0];
+        entry["models"] = models;
+        entry["account_ids"] = json!(["acct_one"]);
+        let (cache, store, runtime) = setup(config).await;
+        store.snapshot.lock().unwrap().instances[0].bindings[0].client_key_ids =
+            vec!["key-one".into()];
+        let generation =
+            ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+                .await
+                .unwrap();
+        let plan = runtime
+            .execution_registry()
+            .upstream_adapters(&generation)
+            .unwrap();
+        let provider = ProviderKind::new("openai").unwrap();
+        for (key, account, model, native) in [
+            ("key-one", "acct_one", "gpt-5.6-luna", false),
+            ("key-one", "acct_one", "codex-auto-review", !wildcard),
+            ("key-two", "acct_one", "gpt-5.6-luna", true),
+            ("key-one", "acct_two", "gpt-5.6-luna", true),
+        ] {
+            let key = ClientApiKeyId::new(key).unwrap();
+            let route = ModelRouteScope {
+                client_api_key: &key,
+                account_groups: &[],
+                extensions: &Default::default(),
+                model,
+            };
+            assert_eq!(
+                plan.uses_native_upstream(
+                    route,
+                    &provider,
+                    &ProviderAccountId::new(account).unwrap()
+                ),
+                native
+            );
+        }
+        drop(plan);
+        drop(generation);
+        runtime.shutdown().await;
+        super::wait_until_empty(cache.path()).await;
+    }
+}
+
+#[tokio::test]
 async fn account_scoped_preselection_keeps_fallback_failures_within_matching_accounts() {
     for fallback_first in [false, true] {
         let mut config = configuration("https://example.invalid", false);

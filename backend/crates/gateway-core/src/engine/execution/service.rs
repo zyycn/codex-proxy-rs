@@ -21,7 +21,7 @@ use crate::{
     concurrency::{CapacityWait, ConcurrencyWaitBudget, ConcurrencyWaitQueue},
     engine::{
         AttemptCoordinator, EngineError, ExecutionStore, GatewayEngine, ModelRequestId,
-        NewModelRequest, ProbeFailure, ProviderAccountId, UpstreamSendState,
+        ModelRouteScope, NewModelRequest, ProbeFailure, ProviderAccountId, UpstreamSendState,
         admission::{
             ClientAdmissionDecision, ClientAdmissionPort, ClientAdmissionRejection,
             ClientAdmissionRequest,
@@ -62,7 +62,7 @@ use crate::{
     policy::{ClientApiKeyId, ClientPolicy},
     provider_ports::{ProviderSessionAffinityPort, ProviderStoreErrorKind},
     routing::{
-        FrozenAccountScope, ProviderCatalogUnavailable, ProviderModelContent,
+        DirectAccountModel, FrozenAccountScope, ProviderCatalogUnavailable, ProviderModelContent,
         PublicModelDescriptor, PublicModelId, RoutingContext, RuntimeSnapshot, UpstreamModelId,
         request_settings::RequestSettings,
     },
@@ -508,6 +508,48 @@ impl DefaultExecutionService {
                 }
                 routing_context.required_provider = Some(provider);
             }
+            let continuation = match request.metadata.previous_response_id.as_ref() {
+                Some(previous) => {
+                    let resolve = self
+                        .continuation
+                        .resolve(request.client.policy.key_id(), previous)
+                        .fuse();
+                    let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
+                    pin_mut!(resolve, timeout);
+                    let pin = select_biased! {
+                        result = resolve => match result {
+                            Ok(pin) => pin,
+                            Err(error)
+                                if error.kind() == NativeContinuationStoreErrorKind::Unavailable =>
+                            {
+                                tracing::debug!(request_id = request_id.as_str(), %error, "Continuation affinity 查询失败，退化为外部续接");
+                                None
+                            }
+                            Err(error)
+                                if error.kind() == NativeContinuationStoreErrorKind::OwnershipMismatch =>
+                            {
+                                return Err(GatewayError::new(GatewayErrorKind::PolicyDenied, "Continuation does not belong to this client API key."));
+                            }
+                            Err(error) => {
+                                tracing::warn!(request_id = request_id.as_str(), %error, "Continuation affinity 记录无效，已拒绝续接");
+                                return Err(GatewayError::new(GatewayErrorKind::Internal, "Continuation state is invalid."));
+                            }
+                        },
+                        _ = timeout => None,
+                    };
+                    Some(match pin {
+                        Some(pin) if !pin.matches_client(request.client.policy.key_id()) => {
+                            return Err(GatewayError::new(GatewayErrorKind::PolicyDenied, "Continuation does not belong to this client API key."));
+                        }
+                        Some(pin) if !authorization.account_scope.allows(pin.account()) => {
+                            return Err(GatewayError::new(GatewayErrorKind::PolicyDenied, "Continuation account is outside the client account scope."));
+                        }
+                        Some(pin) => ContinuationBinding::Pinned(pin),
+                        None => ContinuationBinding::External(previous.clone()),
+                    })
+                }
+                None => None,
+            };
             let account_scope = Arc::clone(&authorization.account_scope);
             let plan = match &request.target {
                 ExecutionTarget::ProviderEndpoint {
@@ -574,65 +616,66 @@ impl DefaultExecutionService {
                             }
                         }
                     }
-                    request.client.snapshot.plan(
-                        &target_model,
-                        &request.operation,
-                        account_scope,
-                        &target_context,
-                    )
+                    let pin = continuation.as_ref().and_then(ContinuationBinding::pinned);
+                    let extension_route = ModelRouteScope {
+                        client_api_key: request.client.policy.key_id(),
+                        account_groups: &account_group_ids,
+                        extensions: &authorization.extension_scope,
+                        model: public_model.as_str(),
+                    };
+                    let direct = request.client.snapshot
+                        .available_provider_kinds(&account_scope, &target_context)
+                        .find_map(|kind| {
+                            let provider = self.providers.get(kind)?;
+                            let previous = pin.filter(|pin| pin.provider() == kind)
+                                .and_then(NativeContinuationPin::session_state);
+                            let model = provider.direct_account_model(
+                                &target_model,
+                                &request.operation,
+                                previous,
+                                request.client.snapshot.settings(),
+                            )?;
+                            middleware.as_ref()
+                                .is_none_or(|plan| plan.preserves_model_bindings(extension_route, kind, &model))
+                                .then(|| (kind.clone(), model))
+                        });
+                    if let Some((kind, model)) = direct {
+                        let account_scope = match authorization.required_account.as_ref() {
+                            Some(id) => Arc::new(account_scope.restricted_to(&Default::default(), &[id.clone()].into())),
+                            None => account_scope,
+                        };
+                        request.client.snapshot.plan_with_direct_account_model(
+                            &target_model,
+                            &request.operation,
+                            account_scope,
+                            &target_context,
+                            DirectAccountModel {
+                                provider: &kind,
+                                model: &model,
+                                continuation_owner: pin.map(NativeContinuationPin::account),
+                            },
+                            |account| upstream_adapters.as_ref().is_none_or(|plan| {
+                                plan.uses_native_upstream(extension_route, &kind, account)
+                            }),
+                        )
+                    } else {
+                        request.client.snapshot.plan(
+                            &target_model,
+                            &request.operation,
+                            account_scope,
+                            &target_context,
+                        )
+                    }
                 }
             }
             .map_err(map_routing_error)?;
-            let continuation = match request.metadata.previous_response_id.as_ref() {
-                Some(previous) => {
-                    let resolve = self
-                        .continuation
-                        .resolve(request.client.policy.key_id(), previous)
-                        .fuse();
-                    let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
-                    pin_mut!(resolve, timeout);
-                    let pin = select_biased! {
-                        result = resolve => match result {
-                            Ok(pin) => pin,
-                            Err(error)
-                                if error.kind() == NativeContinuationStoreErrorKind::Unavailable =>
-                            {
-                                tracing::debug!(request_id = request_id.as_str(), %error, "Continuation affinity 查询失败，退化为外部续接");
-                                None
-                            }
-                            Err(error)
-                                if error.kind() == NativeContinuationStoreErrorKind::OwnershipMismatch =>
-                            {
-                                return Err(GatewayError::new(GatewayErrorKind::PolicyDenied, "Continuation does not belong to this client API key."));
-                            }
-                            Err(error) => {
-                                tracing::warn!(request_id = request_id.as_str(), %error, "Continuation affinity 记录无效，已拒绝续接");
-                                return Err(GatewayError::new(GatewayErrorKind::Internal, "Continuation state is invalid."));
-                            }
-                        },
-                        _ = timeout => None,
-                    };
-                    Some(match pin {
-                        Some(pin) if !pin.matches_client(request.client.policy.key_id()) => {
-                            return Err(GatewayError::new(GatewayErrorKind::PolicyDenied, "Continuation does not belong to this client API key."));
-                        }
-                        Some(pin) if !authorization.account_scope.allows(pin.account()) => {
-                            return Err(GatewayError::new(GatewayErrorKind::PolicyDenied, "Continuation account is outside the client account scope."));
-                        }
-                        Some(pin)
-                            if !plan.candidates().iter().any(|candidate| candidate.provider() == pin.provider()) =>
-                        {
-                            return Err(GatewayError::new(GatewayErrorKind::NoAvailableProvider, "Continuation provider is not available."));
-                        }
-                        Some(pin) => {
-                            attach_continuation_session_state(&mut request.operation, &pin);
-                            ContinuationBinding::Pinned(pin)
-                        }
-                        None => ContinuationBinding::External(previous.clone()),
-                    })
+            if let Some(pin) = continuation.as_ref().and_then(ContinuationBinding::pinned) {
+                if !plan.candidates().iter().any(|candidate| candidate.provider() == pin.provider()
+                    && candidate.account_scope().allows(pin.account())) {
+                    return Err(GatewayError::new(GatewayErrorKind::NoAvailableProvider, "Continuation provider is not available."));
                 }
-                None => None,
-            };
+                attach_continuation_session_state(&mut request.operation, pin);
+            }
             if start_guard.is_none() {
                 start_guard = Some(
                     self.prepare_execution_start(&request, &request_id, &mut authorization)

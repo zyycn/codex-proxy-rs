@@ -320,6 +320,8 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 request_id: "request-settings".to_owned(),
             },
             ReplaceRuntimeSettings {
+                openai_oauth_guardian_review_model: None,
+                openai_request_country: None,
                 expected_revision: gateway_admin::model::Revision::new(1).unwrap(),
                 request_profile_updates: Default::default(),
                 model_mappings: Default::default(),

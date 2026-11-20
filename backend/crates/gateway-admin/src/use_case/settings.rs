@@ -109,6 +109,11 @@ impl DefaultSettingsService {
 }
 
 fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError> {
+    if let Some(policy) = &command.openai_request_country {
+        policy
+            .validate()
+            .map_err(|_| AdminError::invalid("请求国家必须是两位大写 ASCII 字母"))?;
+    }
     crate::model::settings::validate_model_mappings(
         command
             .model_mappings

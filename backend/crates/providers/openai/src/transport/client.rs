@@ -43,7 +43,7 @@ use super::websocket::{
 
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
+pub(super) const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
 type ReqwestClientCacheKey = (Option<String>, String, Duration);
 type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
@@ -699,6 +699,7 @@ pub struct CodexBackendClient {
     pub(super) base_url: String,
     pub(super) official_base_url: String,
     pub(super) protocol: OpenAiUpstreamProtocol,
+    pub(super) fedramp_routing: bool,
     pub(super) profile: CodexWireProfileState,
     pub(super) websocket_pool: Option<Arc<CodexWebSocketPool>>,
     pub(super) websocket_origin_breaker: WebSocketOriginBreaker,
@@ -743,6 +744,7 @@ impl CodexBackendClient {
             base_url,
             official_base_url: super::endpoints::OFFICIAL_CODEX_BASE_URL.to_owned(),
             protocol: OpenAiUpstreamProtocol::Codex,
+            fedramp_routing: false,
             profile,
             websocket_pool: None,
             websocket_origin_breaker: WebSocketOriginBreaker::default(),
@@ -852,21 +854,24 @@ impl CodexBackendClient {
         fallback.send().await.map_err(CodexClientError::HttpJson)
     }
 
-    pub(crate) fn with_responses_api_base_url(mut self, base_url: Option<&str>) -> Self {
-        if let Some(base_url) = base_url {
-            self.base_url = base_url.trim_end_matches('/').to_owned();
-            self.protocol = OpenAiUpstreamProtocol::ResponsesApi;
-            self.websocket_origin_key = format!(
-                "{}:{}",
-                websocket_origin_key(&self.base_url),
-                self.egress_key
-            );
-        }
+    pub(crate) fn with_fedramp_routing(mut self, enabled: bool) -> Self {
+        self.fedramp_routing = enabled;
+        self
+    }
+
+    pub(crate) fn with_responses_api_base_url(mut self, base_url: &str) -> Self {
+        self.base_url = base_url.trim_end_matches('/').to_owned();
+        self.protocol = OpenAiUpstreamProtocol::ResponsesApi;
+        self.websocket_origin_key = format!(
+            "{}:{}",
+            websocket_origin_key(&self.base_url),
+            self.egress_key
+        );
         self
     }
 
     pub(crate) fn with_messages_api_base_url(self, base_url: &str) -> Self {
-        let mut client = self.with_responses_api_base_url(Some(base_url));
+        let mut client = self.with_responses_api_base_url(base_url);
         client.protocol = OpenAiUpstreamProtocol::MessagesApi;
         client
     }
@@ -876,6 +881,7 @@ impl CodexBackendClient {
         account: &gateway_core::account::ProviderAccount,
     ) -> Result<Self, CodexClientError> {
         let mut client = self.clone();
+        client.fedramp_routing = false;
         client.outbound_proxy = account.outbound_proxy().cloned();
         client.egress_key = egress_key(account.id().as_str(), account.outbound_proxy());
         if account.authentication_kind() == crate::CODEX_AUTHENTICATION_KIND_API_KEY {
@@ -1085,7 +1091,10 @@ pub(super) async fn http_json_upstream_error(
 // 请求辅助函数
 // ---------------------------------------------------------------------------
 
-pub(super) fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponsesRequest {
+pub(super) fn websocket_upstream_request(
+    request: &CodexResponsesRequest,
+    start_ms: &str,
+) -> CodexResponsesRequest {
     let mut request = request.clone();
     // 上游通过流式事件执行，下游仍按客户端原来的偏好返回响应
     if !request.stream() {
@@ -1093,11 +1102,11 @@ pub(super) fn websocket_upstream_request(request: &CodexResponsesRequest) -> Cod
             .body_mut()
             .insert("stream".to_owned(), Value::Bool(true));
     }
-    project_websocket_client_metadata(&mut request);
+    project_websocket_client_metadata(&mut request, start_ms);
     request
 }
 
-fn project_websocket_client_metadata(request: &mut CodexResponsesRequest) {
+fn project_websocket_client_metadata(request: &mut CodexResponsesRequest, start_ms: &str) {
     let mut metadata = match request.client_metadata() {
         Some(Value::Object(metadata)) => metadata.clone(),
         None => Map::new(),
@@ -1122,12 +1131,12 @@ fn project_websocket_client_metadata(request: &mut CodexResponsesRequest) {
     }
     metadata.insert(
         X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
-        Value::String(now_unix_timestamp_millis().to_string()),
+        Value::String(start_ms.to_owned()),
     );
     request.set_client_metadata(Some(Value::Object(metadata)));
 }
 
-fn now_unix_timestamp_millis() -> u128 {
+pub(super) fn now_unix_timestamp_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())

@@ -486,5 +486,5 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
     assert!(values("x-codex-installation-id").is_empty());
     let session = values("session-id");
     assert!(uuid::Uuid::parse_str(std::str::from_utf8(&session[0]).unwrap()).is_ok());
-    assert_eq!(values("x-codex-turn-state"), vec![b"turn-ascii".to_vec()]);
+    assert!(values("x-codex-turn-state").is_empty());
 }

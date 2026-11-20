@@ -1,6 +1,6 @@
 import type { ProtectionDraft } from '../components/error-protection/form'
 import type { rotationOptions } from '../constants'
-import type { AccountAffinity, CodexPrivacyPolicy, ResetWindowWeights, SmartSchedulingConfig } from '@/api'
+import type { AccountAffinity, CodexPrivacyPolicy, OpenAiRequestCountry, ResetWindowWeights, SmartSchedulingConfig } from '@/api'
 import type { ProviderRequestProfiles, ProviderRequestProfileUpdates } from '@/api/modules/settings/profiles'
 import { cloneDeep, isEqual } from 'es-toolkit'
 import { computed, reactive, ref, shallowRef } from 'vue'
@@ -34,6 +34,8 @@ export function useSettingsForm() {
     quotaResetWindowWeights: undefined as ResetWindowWeights | undefined,
     providerRequestProfiles: {} as ProviderRequestProfiles,
     codexPrivacyPolicy: { enabled: false, onError: 'skip_rule', rules: [] } as CodexPrivacyPolicy,
+    openaiOauthGuardianReviewModel: true,
+    openaiRequestCountry: { mode: 'follow_location' } as OpenAiRequestCountry,
     requestLocationEnabled: false,
     requestLocation: {
       country: '',
@@ -133,6 +135,8 @@ export function useSettingsForm() {
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     form.codexPrivacyPolicy = cloneDeep(data.codexPrivacyPolicy)
     form.configRevision = data.configRevision
+    form.openaiOauthGuardianReviewModel = data.openaiOauthGuardianReviewModel ?? true
+    form.openaiRequestCountry = data.openaiRequestCountry ?? { mode: 'follow_location' }
     form.requestLocationEnabled = data.requestLocationEnabled
     form.requestLocation = { ...data.requestLocation }
     form.refreshMarginSeconds = data.refreshMarginSeconds
@@ -266,8 +270,15 @@ export function useSettingsForm() {
           form.providerRequestProfiles,
         ),
         codexPrivacyPolicy: cloneDeep(form.codexPrivacyPolicy),
+        openaiRequestCountry: form.openaiRequestCountry.mode === 'custom'
+          ? {
+              mode: 'custom',
+              country: form.openaiRequestCountry.country.trim().toUpperCase(),
+            }
+          : { mode: form.openaiRequestCountry.mode },
         requestLocationEnabled: form.requestLocationEnabled,
         requestLocation,
+        openaiOauthGuardianReviewModel: form.openaiOauthGuardianReviewModel,
         modelMappings: Object.fromEntries(mappings.value.map(row => [
           row.requestedModel.trim(),
           row.upstreamModel.trim(),

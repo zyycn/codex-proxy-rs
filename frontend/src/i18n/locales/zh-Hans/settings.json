@@ -293,6 +293,8 @@
     },
     "modelMapping": "模型映射",
     "routing": {
+      "oauthGuardianReviewModel": "专用审核模型",
+      "oauthGuardianReviewModelHelp": "OAuth 同步审核默认使用 codex-auto-review，关闭后沿用客户端模型",
       "modelMapHelp": "将客户端请求的模型名称映射为实际使用的上游模型"
     },
     "addMapping": "添加映射",
@@ -311,6 +313,21 @@
     "enterDays": "请输入保留天数",
     "day": "天",
     "location": {
+      "requestCountry": "请求国家",
+      "countryHelp": "请求国家模式说明",
+      "countryModes": {
+        "default": "空值",
+        "passthrough": "透传",
+        "follow_location": "跟随位置",
+        "custom": "自定义"
+      },
+      "countryHints": {
+        "default": "始终发送 JSON null",
+        "passthrough": "保留客户端原值，未传时省略该字段",
+        "follow_location": "优先使用代理位置，其次使用已开启的全局位置。两者都未设置时发送 null",
+        "custom": "固定使用指定的两位国家代码"
+      },
+      "customCountryCode": "自定义国家代码",
       "requestLocationOverride": "请求位置覆盖",
       "description": "覆盖 Codex 请求中的时区与位置字段，账号出站代理的自定义位置优先",
       "enableLocationOverlay": "启用位置覆盖"

@@ -643,8 +643,16 @@ pub(super) fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresen
     .with_hidden(hidden)
 }
 
-pub(super) fn selected_transport(request: &CodexResponsesRequest) -> CodexProviderTransport {
-    if request.force_http_sse {
+pub(super) fn selected_transport(
+    request: &CodexResponsesRequest,
+    guardian_role: Option<CodexGuardianRole>,
+) -> CodexProviderTransport {
+    // 专用 sampler 的 HTTP 请求可能没有传输标记。显式 WS 和物理入站连接仍沿用原合同
+    let dedicated_http = guardian_role.is_some_and(CodexGuardianRole::uses_sampler_transport)
+        && !request.use_websocket
+        && !request.websocket_frame
+        && request.downstream_websocket_connection_id.is_none();
+    if request.force_http_sse || dedicated_http {
         CodexProviderTransport::HttpOnly
     } else {
         CodexProviderTransport::PreferWebSocket

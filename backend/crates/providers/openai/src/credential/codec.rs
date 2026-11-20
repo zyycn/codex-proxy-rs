@@ -1,7 +1,8 @@
 //! Codex 明文 credential JSON 的 schema 校验与日志脱敏边界
 
 use super::api_key::ApiKeyAuthentication;
-use gateway_core::account::PlaintextCredential;
+use crate::transport::{CodexBackendClient, CodexClientResult};
+use gateway_core::account::{PlaintextCredential, ProviderAccount};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 use thiserror::Error;
@@ -53,12 +54,17 @@ impl CodexRuntimeAuthentication {
         }
     }
 
-    /// 传输只消费公开连接设置，不读取凭据枚举或秘密
-    pub(crate) fn responses_api_base_url(&self) -> Option<&str> {
-        match self {
-            Self::ApiKey(auth) => Some(&auth.configuration.base_url),
-            Self::OAuth(_) => None,
-        }
+    /// 出口、API 地址与 OAuth 路由声明必须来自同一个被选账号
+    pub(crate) fn model_client_for_account(
+        &self,
+        client: &CodexBackendClient,
+        account: &ProviderAccount,
+    ) -> CodexClientResult<CodexBackendClient> {
+        let client = client.for_account(account)?;
+        Ok(match self {
+            Self::ApiKey(auth) => client.with_responses_api_base_url(&auth.configuration.base_url),
+            Self::OAuth(secret) => client.with_fedramp_routing(secret.has_fedramp_routing_claim()),
+        })
     }
 
     pub fn authorization_header(&self) -> Result<SecretString, CodexCredentialDataError> {

@@ -83,9 +83,8 @@ struct AccountEligibilityPlan {
 impl gateway_core::engine::upstream_adapter::UpstreamAdapterPlan for AccountEligibilityPlan {
     fn select(
         &self,
-        _: &AttemptContext,
+        _: gateway_core::engine::ModelRouteScope<'_>,
         _: &ProviderKind,
-        _: &UpstreamModelId,
         account: Option<&ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, ProviderError> {
         let Some(account) = account else {

@@ -190,6 +190,171 @@ fn assert_isolated_request(
     assert_eq!(body["input"], isolation_history());
 }
 
+fn fedramp_secret(access_token: &str) -> provider_openai::credential::CodexOAuthSecret {
+    let mut credential = secret(access_token);
+    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(br#"{"https://api.openai.com/auth":{"chatgpt_account_is_fedramp":true}}"#);
+    credential.id_token = Some(format!("header.{claims}.signature").into());
+    credential
+}
+
+#[tokio::test]
+async fn rotated_fedramp_claim_opens_a_new_socket_for_the_same_account_and_session() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, SELECTED_ACCOUNT).await;
+    let server = RoutingUpstream::start(Some(Vec::new())).await;
+    let provider = provider_with_base_url(&store, server.url.clone());
+    let mut session = ProviderSessionState::new(
+        "openai",
+        Map::from_iter([
+            ("account_id".into(), json!(SELECTED_ACCOUNT)),
+            ("conversation_id".into(), json!("fedramp-session")),
+            ("continuation_scope".into(), json!("connection_local")),
+        ]),
+    )
+    .unwrap();
+    for (id, exact) in [
+        ("resp_fedramp_seed", false),
+        ("resp_fedramp_reuse", false),
+        ("resp_old_handle", true),
+        ("resp_fedramp_rotated", false),
+    ] {
+        if exact {
+            let account = store
+                .get_account(&ProviderAccountId::new(SELECTED_ACCOUNT).unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            let rotated = fedramp_secret(&format!("at-{SELECTED_ACCOUNT}"));
+            store
+                .repository()
+                .rotate_refreshed_oauth_secret(&account, rotated, None, None)
+                .await
+                .unwrap();
+        }
+        let mut body = Map::from_iter([
+            ("model".into(), json!("gpt-5.4")),
+            ("input".into(), json!([])),
+            ("store".into(), json!(false)),
+            ("client_metadata".into(), json!({"fixture_response_id": id})),
+        ]);
+        let context = if exact {
+            body.insert("previous_response_id".into(), json!("resp_fedramp_reuse"));
+            pinned_continuation_context(
+                "req_fedramp_exact",
+                SELECTED_ACCOUNT,
+                "resp_fedramp_reuse",
+                "resp_fedramp_reuse",
+                1,
+                ContinuationAttempt::Native,
+            )
+        } else {
+            isolation_context(None)
+        };
+        let payload = ProtocolPayload::json_object("openai", body)
+            .unwrap()
+            .with_context(Map::from_iter([
+                ("use_websocket".into(), json!(true)),
+                (
+                    "downstream_websocket_connection_id".into(),
+                    json!("fedramp-connection"),
+                ),
+            ]));
+        let operation = Operation::Generate(
+            GenerateRequest::from_protocol_payload(payload)
+                .with_provider_session_state(session.clone()),
+        );
+        let mut stream = Arc::clone(&provider)
+            .execute(planned_request("openai", operation), context)
+            .await
+            .unwrap();
+        if exact {
+            let error = loop {
+                match stream.next().await {
+                    Some(Ok(event)) => assert!(!event.has_client_event()),
+                    Some(Err(error)) => break error,
+                    None => panic!("old route must reject the exact continuation before sending"),
+                }
+            };
+            assert_eq!(
+                error.continuation_recovery_disposition(),
+                Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+            );
+            assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+            assert_eq!(
+                error.continuation_unavailable_reason(),
+                Some("fresh_connection_required")
+            );
+        } else {
+            while let Some(event) = stream.next().await {
+                let event = event.unwrap();
+                if let Some(update) = event.session_update() {
+                    session = update.clone();
+                }
+            }
+        }
+    }
+    let captured = server.requests.lock().unwrap();
+    let [seed, reuse, fresh] = captured.as_slice() else {
+        panic!("only the three compatible frames should be sent")
+    };
+    assert_eq!(seed.0, reuse.0);
+    assert_ne!(reuse.0, fresh.0);
+    assert!(!seed.1.contains_key("x-openai-fedramp"));
+    assert_eq!(fresh.1["x-openai-fedramp"], "true");
+}
+
+#[tokio::test]
+async fn selected_oauth_fedramp_claim_sets_a_single_header_even_after_account_switch() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: SELECTED_ACCOUNT.to_owned(),
+            name: SELECTED_ACCOUNT.to_owned(),
+            secret: fedramp_secret("at-fedramp"),
+            verified_account: profile("chatgpt-fedramp"),
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let provider = provider_with_base_url(&store, server.uri());
+    for owner in [SELECTED_ACCOUNT, "acct_scope_old"] {
+        let payload = isolation_payload();
+        let mut metadata = payload.context().clone();
+        metadata.insert("use_websocket".into(), json!(false));
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            payload.with_context(metadata),
+        ));
+        let mut stream = provider
+            .clone()
+            .execute(
+                planned_request("openai", operation),
+                isolation_context(Some(owner)),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+    for request in server.received_requests().await.unwrap() {
+        let values: Vec<_> = request.headers.get_all("x-openai-fedramp").iter().collect();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0], "true");
+    }
+}
+
 #[tokio::test]
 async fn http_scopes_client_headers_and_guardian_parent_reference_to_the_account() {
     for owner in [Some(SELECTED_ACCOUNT), Some("acct_scope_old"), None] {
@@ -515,8 +680,25 @@ async fn guardian_pins_follow_parent_connection_and_separate_reviewer_pool_reuse
         )
         .await;
     }
+    let payload = ProtocolPayload::json_object("openai", json!({
+        "model":"gpt-5.4","input":"hello","client_metadata":{
+            "fixture_response_id":"classifier","parent_response_id":"parent_a","x-openai-subagent":"guardian",
+            "x-codex-turn-metadata":r#"{"thread_source":"guardian_classifier","turn_trigger":"guardian_classifier"}"#}
+    }).as_object().unwrap().clone()).unwrap().with_context(Map::from_iter([("use_websocket".to_owned(),json!(true))]));
+    execute_routing(
+        &provider,
+        Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+        routing_context("classifier", "key_routing", SELECTED_ACCOUNT),
+    )
+    .await;
     let requests = server.requests.lock().unwrap();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 6);
+    assert_eq!(requests[5].1["x-codex-guardian"], "classifier");
+    assert_eq!(
+        requests[5].2["client_metadata"]["parent_response_id"],
+        "parent_a"
+    );
+    assert!(!requests[5].1.contains_key("cookie"));
     assert_eq!(
         requests[2].0, requests[3].0,
         "same parent keeps the reviewer socket"
@@ -534,6 +716,107 @@ async fn guardian_pins_follow_parent_connection_and_separate_reviewer_pool_reuse
         !requests[1].1.contains_key("cookie"),
         "ordinary traffic cannot inherit another connection's pins"
     );
+}
+
+#[tokio::test]
+async fn guardian_structured_roles_use_selected_model_and_observed_http_parent_without_cookies() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                format!("data: {}\n\n{}", json!({"type":"response.created","response":{"id":"resp_scope_capture","model":"gpt-5.4"}}), CAPTURE_COMPLETED_SSE),
+                "text/event-stream",
+            ),
+        )
+        .expect(5)
+        .mount(&server)
+        .await;
+    let provider = provider_with_base_url(&store, server.uri());
+    for (id, model, role, parent) in [
+        ("root", "gpt-5.4", None, None),
+        (
+            "review",
+            "codex-auto-review",
+            Some("guardian_review"),
+            Some("resp_scope_capture"),
+        ),
+        (
+            "unobserved",
+            "codex-auto-review",
+            Some("guardian_review"),
+            Some("unknown"),
+        ),
+        (
+            "classifier",
+            "gpt-5.4",
+            Some("guardian_classifier"),
+            Some("resp_scope_capture"),
+        ),
+        ("custom", "gpt-5.4", Some("guardian_review"), None),
+    ] {
+        let mut body = json!({"model":"gpt-5.6-luna","input":[]});
+        if let Some(role) = role {
+            body["client_metadata"] = json!({
+                "x-openai-subagent":"guardian",
+                "x-codex-turn-metadata": json!({"thread_source":role}).to_string(),
+                "guardian_credits_requested":"true"
+            });
+        }
+        if let Some(parent) = parent {
+            body["client_metadata"]["parent_response_id"] = json!(parent);
+        }
+        let payload = ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
+            .unwrap()
+            .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))]));
+        let op = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+        let mut stream = Arc::clone(&provider)
+            .execute(
+                planned_request_with_presentation("openai", op, model, None),
+                context(&format!("req_{id}"), CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+    let requests = server.received_requests().await.unwrap();
+    for (index, expected_role, parent) in [
+        (0, None, None),
+        (1, Some("reviewer"), Some("resp_scope_capture")),
+        (2, Some("reviewer"), None),
+        (3, Some("classifier"), Some("resp_scope_capture")),
+        (4, None, None),
+    ] {
+        let request = &requests[index];
+        let body = captured_request_body(request);
+        assert_eq!(
+            request
+                .headers
+                .get("x-codex-guardian")
+                .map(|h| h.to_str().unwrap()),
+            expected_role
+        );
+        assert_eq!(
+            request.headers.contains_key("x-codex-routing-hint"),
+            expected_role.is_none()
+        );
+        assert_eq!(
+            body.pointer("/client_metadata/parent_response_id")
+                .and_then(Value::as_str),
+            parent
+        );
+        if expected_role.is_some() {
+            assert!(
+                body.pointer("/client_metadata/guardian_credits_requested")
+                    .is_none()
+            );
+        }
+        assert!(!request.headers.contains_key("cookie"));
+    }
 }
 
 #[tokio::test]
@@ -642,11 +925,9 @@ async fn guardian_ignores_expired_ambiguous_and_wrong_path_routing_cookies() {
         }
         let requests = server.requests.lock().unwrap();
         assert!(!requests[1].1.contains_key("cookie"));
-        assert!(
-            requests[1]
-                .2
-                .pointer("/client_metadata/parent_response_id")
-                .is_none()
+        assert_eq!(
+            requests[1].2["client_metadata"]["parent_response_id"],
+            "parent"
         );
     }
 }

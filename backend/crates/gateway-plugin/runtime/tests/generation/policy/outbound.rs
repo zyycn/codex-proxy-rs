@@ -342,3 +342,64 @@ impl Drop for NotifyOnDrop {
         }
     }
 }
+
+#[tokio::test]
+async fn automatic_model_substitution_keeps_attempt_and_outbound_middleware_bindings() {
+    use gateway_core::engine::ModelRouteScope;
+    for stage in ["attempt", "outbound"] {
+        let instances = [
+            ("instance-exact", "key-exact", vec!["gpt-5.6-luna".into()]),
+            ("instance-wildcard", "key-wildcard", vec![]),
+            (
+                "instance-both",
+                "key-both",
+                vec!["gpt-5.6-luna".into(), "codex-auto-review".into()],
+            ),
+        ]
+        .map(|(id, key, models)| {
+            let mut entry = instance(id, 0, serde_json::json!({}));
+            entry.bindings[0].stage = stage.into();
+            entry.bindings[0].models = models;
+            entry.bindings[0].client_key_ids = vec![key.into()];
+            entry
+        })
+        .into();
+        let (cache, runtime) = if stage == "outbound" {
+            runtime(instances, RpcLimits::default()).await
+        } else {
+            super::setup(instances).await
+        };
+        let generation = prepare(&runtime).await;
+        let plan = runtime
+            .execution_registry()
+            .middleware(&generation)
+            .unwrap();
+        for (key, preserved) in [
+            ("key-exact", false),
+            ("key-wildcard", true),
+            ("key-both", true),
+            ("key-other", true),
+        ] {
+            let key = ClientApiKeyId::new(key).unwrap();
+            let route = ModelRouteScope {
+                client_api_key: &key,
+                account_groups: &[],
+                extensions: &Default::default(),
+                model: "gpt-5.6-luna",
+            };
+            assert_eq!(
+                plan.preserves_model_bindings(
+                    route,
+                    &ProviderKind::new("openai").unwrap(),
+                    &gateway_core::routing::UpstreamModelId::new("codex-auto-review").unwrap()
+                ),
+                preserved,
+                "{stage}"
+            );
+        }
+        drop(plan);
+        drop(generation);
+        runtime.shutdown().await;
+        super::super::wait_until_empty(cache.path()).await;
+    }
+}

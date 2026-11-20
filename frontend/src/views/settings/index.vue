@@ -244,12 +244,15 @@ watch(section, (value) => {
           <RequestLocationCard
             v-model="form.requestLocation"
             v-model:enabled="form.requestLocationEnabled"
+            v-model:request-country="form.openaiRequestCountry"
             :disabled="disabled"
             :detecting-location="detectingLocation"
             @detect-location="detectLocation"
           />
           <PrivacyPolicyCard v-model="form.codexPrivacyPolicy" :disabled="disabled" />
           <ModelAliasesCard
+            v-model:oauth-guardian-review-model="form.openaiOauthGuardianReviewModel"
+            :disabled="disabled"
             :mappings="mappings"
             :loading="loading"
             @add-mapping="addMapping"

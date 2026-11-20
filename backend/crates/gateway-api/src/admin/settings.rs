@@ -74,6 +74,8 @@ pub struct RuntimeSettingsFields {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
+    pub openai_oauth_guardian_review_model: bool,
+    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     #[serde(flatten)]
     pub values: RuntimeSettingsFields,
     pub config_revision: u64,
@@ -94,16 +96,20 @@ pub struct RuntimeSettingsView {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
+    #[serde(default, deserialize_with = "deserialize_present_update")]
+    pub openai_oauth_guardian_review_model: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_present_update")]
+    pub openai_request_country: Option<gateway_core::account::OpenAiRequestCountry>,
     #[serde(flatten)]
     pub values: RuntimeSettingsFields,
     pub config_revision: u64,
     #[serde(default)]
     pub provider_request_profiles: ProviderRequestProfileUpdates,
     /// 兼容既有 wire；与泛化字段冲突时拒绝整个请求
-    #[serde(default, deserialize_with = "deserialize_profile_update")]
+    #[serde(default, deserialize_with = "deserialize_present_update")]
     pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     /// 兼容既有 wire；与泛化字段冲突时拒绝整个请求
-    #[serde(default, deserialize_with = "deserialize_profile_update")]
+    #[serde(default, deserialize_with = "deserialize_present_update")]
     pub xai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub model_mappings: ModelMappings,
     pub rotation_strategy: String,
@@ -112,6 +118,7 @@ pub struct UpdateRuntimeSettingsRequest {
 impl UpdateRuntimeSettingsRequest {
     /// 校验公共运行参数
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        self.validate_request_country()?;
         validate_model_mappings(&self.model_mappings)?;
         if RotationStrategy::parse(&self.rotation_strategy).is_none() {
             return Err(WireValidationError::new("rotationStrategy"));
@@ -120,6 +127,7 @@ impl UpdateRuntimeSettingsRequest {
     }
 
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
+        self.validate_request_country()?;
         validate_model_mappings(&self.model_mappings)?;
         let request_profile_updates = normalize_request_profile_updates(
             self.provider_request_profiles,
@@ -127,6 +135,8 @@ impl UpdateRuntimeSettingsRequest {
             self.xai_client_profile,
         )?;
         Ok(ReplaceRuntimeSettings {
+            openai_oauth_guardian_review_model: self.openai_oauth_guardian_review_model,
+            openai_request_country: self.openai_request_country,
             expected_revision: gateway_admin::model::Revision::new(self.config_revision)
                 .map_err(|_| WireValidationError::new("configRevision"))?,
             request_profile_updates,
@@ -135,6 +145,15 @@ impl UpdateRuntimeSettingsRequest {
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
             values: self.values.into_values()?,
         })
+    }
+
+    fn validate_request_country(&self) -> Result<(), WireValidationError> {
+        if let Some(policy) = &self.openai_request_country {
+            policy
+                .validate()
+                .map_err(|_| WireValidationError::new("openaiRequestCountry"))?;
+        }
+        Ok(())
     }
 }
 
@@ -147,6 +166,8 @@ impl From<(RuntimeSettings, crate::time::TimePresenter)> for RuntimeSettingsView
             .collect::<ProviderRequestProfiles>();
         Self {
             config_revision: settings.config_revision.get(),
+            openai_oauth_guardian_review_model: settings.openai_oauth_guardian_review_model,
+            openai_request_country: settings.openai_request_country,
             openai_client_profile: provider_request_profiles.get("openai").cloned(),
             xai_client_profile: provider_request_profiles.get("xai").cloned(),
             provider_request_profiles,
@@ -595,6 +616,7 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
         "settingsUsageRetentionOverflow" => "用量记录保留天数不合法".to_owned(),
         "settingsOpsRetentionOverflow" => "运维事件保留天数不合法".to_owned(),
         "settingsAuditRetentionOverflow" => "审计记录保留天数不合法".to_owned(),
+        "openaiRequestCountry" => "自定义请求国家必须是两位大写 ASCII 字母".to_owned(),
         "requestLocation" => "请求位置的国家代码、地区或城市不合法".to_owned(),
         "providerRequestProfiles" => "服务商客户端身份配置无效或字段冲突".to_owned(),
         "minCodexDesktopVersion" => "Codex Desktop 最低版本格式不合法".to_owned(),
@@ -645,11 +667,11 @@ fn normalize_request_profile_updates(
     Ok(normalized)
 }
 
-// 字段省略时保留已有配置；显式 null 不能清空唯一的通用默认
-fn deserialize_profile_update<'de, D: serde::Deserializer<'de>>(
+// 字段省略时保留已有配置；显式 null 不能清空设置
+fn deserialize_present_update<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
-) -> Result<Option<serde_json::Map<String, serde_json::Value>>, D::Error> {
-    serde_json::Map::<String, serde_json::Value>::deserialize(deserializer).map(Some)
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
 }
 
 async fn detect_location<S>(

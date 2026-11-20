@@ -28,9 +28,8 @@ struct EmptyAdapterPlan;
 impl UpstreamAdapterPlan for EmptyAdapterPlan {
     fn select(
         &self,
-        _: &AttemptContext,
+        _: gateway_core::engine::ModelRouteScope<'_>,
         _: &ProviderKind,
-        _: &UpstreamModelId,
         _: Option<&gateway_core::account::ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, ProviderError> {
         Ok(UpstreamAdapterSelection::Native)
@@ -97,9 +96,8 @@ struct AccountSelectionProbe(std::sync::Mutex<Vec<Option<String>>>);
 impl UpstreamAdapterPlan for AccountSelectionProbe {
     fn select(
         &self,
-        _: &AttemptContext,
+        _: gateway_core::engine::ModelRouteScope<'_>,
         _: &ProviderKind,
-        _: &UpstreamModelId,
         account: Option<&gateway_core::account::ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, ProviderError> {
         self.0

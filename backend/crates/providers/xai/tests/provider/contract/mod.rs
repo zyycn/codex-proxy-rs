@@ -4368,9 +4368,8 @@ struct AdapterProbe {
 impl gateway_core::engine::upstream_adapter::UpstreamAdapterPlan for AdapterProbe {
     fn select(
         &self,
-        _: &AttemptContext,
+        _: gateway_core::engine::ModelRouteScope<'_>,
         provider: &ProviderKind,
-        _: &UpstreamModelId,
         account: Option<&ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, gateway_core::error::ProviderError> {
         assert_eq!(provider.as_str(), "xai");

@@ -532,16 +532,30 @@ pub struct RoutingContext {
     pub blocked_providers: BTreeSet<ProviderKind>,
 }
 
+/// 直连模型及首次原生续接必须使用的账号
+pub struct DirectAccountModel<'a> {
+    pub provider: &'a ProviderKind,
+    pub model: &'a UpstreamModelId,
+    pub continuation_owner: Option<&'a crate::account::ProviderAccountId>,
+}
+
 /// 已绑定 Provider 的请求候选；模型端点携带真实上游模型，原生端点不虚构模型
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCandidate {
     provider: ProviderKind,
+    requires_direct_authentication: bool,
     upstream_model: Option<UpstreamModelId>,
     emulated_features: BTreeSet<Feature>,
     account_scope: Arc<FrozenAccountScope>,
 }
 
 impl ProviderCandidate {
+    /// 模型按直连账号身份选择，Provider 必须在发送前核对实际凭据。
+    #[must_use]
+    pub const fn requires_direct_authentication(&self) -> bool {
+        self.requires_direct_authentication
+    }
+
     #[must_use]
     pub const fn provider(&self) -> &ProviderKind {
         &self.provider
@@ -571,6 +585,7 @@ pub struct RoutingPlan {
     request_body_limit: usize,
     max_retry_after: std::time::Duration,
     pricing: Arc<crate::metering::PricingOverrides>,
+    openai_request_country: crate::account::OpenAiRequestCountry,
     request_location: Option<crate::account::RequestLocation>,
     privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
     config_revision: ConfigRevision,
@@ -623,6 +638,11 @@ impl RoutingPlan {
     #[must_use]
     pub const fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request_location.as_ref()
+    }
+
+    #[must_use]
+    pub const fn openai_request_country(&self) -> &crate::account::OpenAiRequestCountry {
+        &self.openai_request_country
     }
 
     #[must_use]

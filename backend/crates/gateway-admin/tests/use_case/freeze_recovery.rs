@@ -27,6 +27,8 @@ use super::accounts::{FakeAccountStore, FakeProviderAdmin, account_record, event
 
 fn runtime_settings(enabled: bool, probe_enabled: bool) -> RuntimeSettings {
     RuntimeSettings {
+        openai_oauth_guardian_review_model: false,
+        openai_request_country: Default::default(),
         request_profiles: Default::default(),
         config_revision: revision(1),
         model_mappings: Default::default(),

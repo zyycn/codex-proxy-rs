@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import type { FormRule } from '@codex-proxy/ui'
-import { ZButton, ZCard, ZFormItem, ZIconButton, ZInput } from '@codex-proxy/ui'
+import { ZButton, ZCard, ZFormItem, ZIconButton, ZInput, ZSwitch } from '@codex-proxy/ui'
 
 import { Plus, Trash2 } from '@lucide/vue'
 
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import HelpPopover from '@/components/HelpPopover.vue'
+
 const props = withDefaults(defineProps<{
+  disabled?: boolean
   mappings: Array<{ requestedModel: string, upstreamModel: string }>
   loading?: boolean
 }>(), {
+  disabled: false,
   loading: false,
 })
 
@@ -19,6 +23,8 @@ const emit = defineEmits<{
   updateMapping: [index: number, key: 'requestedModel' | 'upstreamModel', value: string]
   removeMapping: [index: number]
 }>()
+
+const oauthGuardianReviewModel = defineModel<boolean>('oauthGuardianReviewModel', { required: true })
 
 const { t } = useI18n({ useScope: 'global' })
 const requiredRule = computed<FormRule>(() => ({
@@ -43,6 +49,18 @@ const uniqueModelRule = computed<FormRule>(() => ({
     :description="t('settings.routing.modelMapHelp')"
   >
     <div class="grid gap-4">
+      <div id="oauth-guardian-review-model-help" class="flex items-center gap-2">
+        <ZSwitch
+          v-model="oauthGuardianReviewModel"
+          :label="t('settings.routing.oauthGuardianReviewModel')"
+          :aria-description="t('settings.routing.oauthGuardianReviewModelHelp')"
+          :disabled="disabled"
+        />
+        <HelpPopover
+          :label="t('common.form.fieldHelp', { label: t('settings.routing.oauthGuardianReviewModel') })"
+          :content="t('settings.routing.oauthGuardianReviewModelHelp')"
+        />
+      </div>
       <div class="flex flex-wrap items-center gap-3">
         <ZButton :disabled="loading" @click="emit('addMapping')">
           <template #icon>

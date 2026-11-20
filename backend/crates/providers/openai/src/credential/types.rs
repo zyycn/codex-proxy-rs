@@ -32,6 +32,17 @@ pub struct CodexOAuthSecret {
     pub id_token: Option<SecretString>,
 }
 
+impl CodexOAuthSecret {
+    /// 托管 OAuth 使用所选账号的 ID token；外部 ChatGPT token 可以只有 access token
+    pub(crate) fn has_fedramp_routing_claim(&self) -> bool {
+        let token = self.id_token.as_ref().unwrap_or(&self.access_token);
+        decode_jwt_payload::<IdClaims>(token.expose_secret())
+            .ok()
+            .and_then(|claims| claims.auth)
+            .is_some_and(|auth| auth.chatgpt_account_is_fedramp)
+    }
+}
+
 impl fmt::Debug for CodexOAuthSecret {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -168,8 +179,8 @@ struct AuthClaims {
     user_id: Option<String>,
     #[serde(default)]
     chatgpt_account_id: Option<String>,
-    #[serde(rename = "chatgpt_account_is_fedramp", default)]
-    _chatgpt_account_is_fedramp: bool,
+    #[serde(default)]
+    chatgpt_account_is_fedramp: bool,
 }
 
 /// 与官方 `codex_protocol::auth::PlanType` 同构的 claims 反序列化类型

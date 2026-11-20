@@ -39,6 +39,10 @@ export interface SmartSchedulingConfig {
   resetWindowWeights: ResetWindowWeights
 }
 
+export type OpenAiRequestCountry
+  = | { mode: 'default' | 'passthrough' | 'follow_location' }
+    | { mode: 'custom', country: string }
+
 export interface RuntimeSettings {
   configRevision: number
   smartScheduling: SmartSchedulingConfig
@@ -50,8 +54,10 @@ export interface RuntimeSettings {
   xaiClientProfile: XaiClientProfileSelection | null
 
   codexPrivacyPolicy: CodexPrivacyPolicy
+  openaiRequestCountry: OpenAiRequestCountry
   requestLocationEnabled: boolean
   requestLocation: RequestLocation
+  openaiOauthGuardianReviewModel: boolean
   modelMappings: Record<string, string>
   refreshMarginSeconds: number
   refreshConcurrency: number

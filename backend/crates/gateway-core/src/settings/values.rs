@@ -25,6 +25,10 @@ pub struct SettingsValues {
     pub(crate) switch_account_on_queue_failure: bool,
     pub(crate) max_retry_after_seconds: u32,
     pub(crate) openai_guardian_reserved_concurrency: u32,
+    #[serde(default = "default_oauth_guardian_review_model")]
+    pub(crate) openai_oauth_guardian_review_model: bool,
+    #[serde(default)]
+    pub(crate) openai_request_country: crate::account::OpenAiRequestCountry,
     pub(crate) openai_account_affinity: crate::account::AccountAffinity,
     pub(crate) max_account_rotations: u32,
     pub(crate) openai_session_affinity_ttl_hours: u32,
@@ -40,6 +44,10 @@ pub struct SettingsValues {
 
 fn initial_protection_revision() -> u64 {
     1
+}
+
+pub const fn default_oauth_guardian_review_model() -> bool {
+    true
 }
 
 impl SettingsValues {
@@ -106,6 +114,31 @@ impl SettingsValues {
     pub const fn with_openai_guardian_reserved_concurrency(mut self, reserved: u32) -> Self {
         self.openai_guardian_reserved_concurrency = reserved;
         self
+    }
+
+    #[must_use]
+    pub const fn with_openai_oauth_guardian_review_model(mut self, enabled: bool) -> Self {
+        self.openai_oauth_guardian_review_model = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn openai_oauth_guardian_review_model(&self) -> bool {
+        self.openai_oauth_guardian_review_model
+    }
+
+    #[must_use]
+    pub fn with_openai_request_country(
+        mut self,
+        policy: crate::account::OpenAiRequestCountry,
+    ) -> Self {
+        self.openai_request_country = policy;
+        self
+    }
+
+    #[must_use]
+    pub fn openai_request_country(&self) -> &crate::account::OpenAiRequestCountry {
+        &self.openai_request_country
     }
 
     #[must_use]
@@ -207,6 +240,8 @@ impl SettingsValues {
             switch_account_on_queue_failure: false,
             max_retry_after_seconds: 240,
             openai_guardian_reserved_concurrency: 0,
+            openai_oauth_guardian_review_model: default_oauth_guardian_review_model(),
+            openai_request_country: Default::default(),
             openai_account_affinity: crate::account::AccountAffinity::default(),
             max_account_rotations: 3,
             openai_session_affinity_ttl_hours: 24,

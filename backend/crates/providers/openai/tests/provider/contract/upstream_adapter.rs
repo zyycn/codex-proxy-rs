@@ -16,13 +16,12 @@ struct UnmatchedAdapterPlan {
 impl UpstreamAdapterPlan for UnmatchedAdapterPlan {
     fn select(
         &self,
-        _: &AttemptContext,
+        route: gateway_core::engine::ModelRouteScope<'_>,
         provider: &ProviderKind,
-        model: &UpstreamModelId,
         _: Option<&ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, gateway_core::error::ProviderError> {
         assert_eq!(provider.as_str(), "openai");
-        assert_eq!(model.as_str(), "gpt-5.4");
+        assert_eq!(route.model, "gpt-5.4");
         self.selections
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(UpstreamAdapterSelection::Native)
@@ -185,9 +184,8 @@ struct AdapterProbe {
 impl gateway_core::engine::upstream_adapter::UpstreamAdapterPlan for AdapterProbe {
     fn select(
         &self,
-        _: &AttemptContext,
+        _: gateway_core::engine::ModelRouteScope<'_>,
         provider: &ProviderKind,
-        _: &UpstreamModelId,
         _: Option<&ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, gateway_core::error::ProviderError> {
         assert_eq!(provider.as_str(), "openai");
@@ -359,9 +357,8 @@ impl std::fmt::Debug for AffinityAdapterProbe {
 impl UpstreamAdapterPlan for AffinityAdapterProbe {
     fn select(
         &self,
-        _: &AttemptContext,
+        _: gateway_core::engine::ModelRouteScope<'_>,
         _: &ProviderKind,
-        _: &UpstreamModelId,
         account: Option<&ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, gateway_core::error::ProviderError> {
         if self.account_scoped {
@@ -756,9 +753,8 @@ struct AccountScopedProbe {
 impl UpstreamAdapterPlan for AccountScopedProbe {
     fn select(
         &self,
-        _: &AttemptContext,
+        _: gateway_core::engine::ModelRouteScope<'_>,
         _: &ProviderKind,
-        _: &UpstreamModelId,
         account: Option<&ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, gateway_core::error::ProviderError> {
         let Some(account) = account else {
@@ -994,9 +990,8 @@ impl std::fmt::Debug for ConnectionProbe {
 impl UpstreamAdapterPlan for ConnectionProbe {
     fn select(
         &self,
-        _: &AttemptContext,
+        _: gateway_core::engine::ModelRouteScope<'_>,
         _: &ProviderKind,
-        _: &UpstreamModelId,
         _: Option<&ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, gateway_core::error::ProviderError> {
         Ok(UpstreamAdapterSelection::Adapter(Arc::new(Self {

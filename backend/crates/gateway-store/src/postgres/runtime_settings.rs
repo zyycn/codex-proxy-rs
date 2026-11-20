@@ -20,6 +20,8 @@ use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
+    pub openai_oauth_guardian_review_model: bool,
+    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     pub values: RuntimeSettingsValues,
     pub request_profiles:
         BTreeMap<gateway_core::routing::ProviderKind, gateway_core::account::OpaqueProviderData>,
@@ -51,6 +53,8 @@ impl fmt::Debug for RuntimeSettings {
 
 #[derive(Clone)]
 pub struct RuntimeSettingsUpdate {
+    pub openai_oauth_guardian_review_model: Option<bool>,
+    pub openai_request_country: Option<gateway_core::account::OpenAiRequestCountry>,
     pub values: RuntimeSettingsValues,
     pub request_profile_updates: BTreeMap<
         gateway_core::routing::ProviderKind,
@@ -78,6 +82,10 @@ impl fmt::Debug for RuntimeSettingsUpdate {
 impl RuntimeSettingsUpdate {
     pub fn validate(&self) -> StoreResult<()> {
         if self.values.validate().is_err()
+            || self
+                .openai_request_country
+                .as_ref()
+                .is_some_and(|policy| policy.validate().is_err())
             || gateway_admin::model::settings::validate_model_mappings(
                 self.model_mappings
                     .iter()
@@ -155,7 +163,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     refresh_concurrency, max_concurrent_per_account,
                     rotation_strategy, smart_scheduling_json, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
-                    min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
+                    min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_oauth_guardian_review_model, openai_request_country_json, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
                     account_error_protection_json, account_error_protection_revision,
                     account_warmup_enabled, account_warmup_cron, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent, reset_credit_on_low_weekly_quota
              from runtime_settings where id = 1",
@@ -335,7 +343,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 refresh_concurrency, max_concurrent_per_account,
                 rotation_strategy, smart_scheduling_json, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
-                min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
+                min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_oauth_guardian_review_model, openai_request_country_json, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours,
                 account_error_protection_json, account_error_protection_revision,
                 account_warmup_enabled, account_warmup_cron, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent, reset_credit_on_low_weekly_quota
          from runtime_settings where id = 1",
@@ -420,6 +428,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      switch_account_on_queue_failure = $33,
                      reset_credit_on_low_weekly_quota = $34,
                      quota_reset_window_weights_json = $35,
+                     openai_oauth_guardian_review_model = coalesce($36, openai_oauth_guardian_review_model),
+                     openai_request_country_json = coalesce($37, openai_request_country_json),
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -467,6 +477,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.values.switch_account_on_queue_failure)
     .bind(update.values.reset_credit_on_low_weekly_quota)
     .bind(sqlx::types::Json(update.values.quota_reset_window_weights))
+    .bind(update.openai_oauth_guardian_review_model)
+    .bind(update.openai_request_country.as_ref().map(sqlx::types::Json))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("update runtime settings in transaction", source))?
@@ -560,6 +572,8 @@ struct RuntimeSettingsRow {
     switch_account_on_queue_failure: bool,
     max_retry_after_seconds: i64,
     openai_guardian_reserved_concurrency: i64,
+    openai_oauth_guardian_review_model: bool,
+    openai_request_country_json: sqlx::types::Json<gateway_core::account::OpenAiRequestCountry>,
     openai_account_affinity: String,
     max_account_rotations: i64,
     openai_session_affinity_ttl_hours: i64,
@@ -589,6 +603,8 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         })
         .collect::<StoreResult<BTreeMap<_, _>>>()?;
     Ok(RuntimeSettings {
+        openai_oauth_guardian_review_model: row.openai_oauth_guardian_review_model,
+        openai_request_country: row.openai_request_country_json.0,
         request_profiles,
         config_revision: Revision::new(to_u64(row.config_revision)?)?,
         account_error_protection_revision: Revision::new(to_u64(

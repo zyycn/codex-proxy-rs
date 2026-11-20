@@ -510,7 +510,9 @@ Responses 的安装身份通过正文 `client_metadata` 及 turn metadata 发送
 `x-openai-internal-codex-residency` 和 `x-openai-account-routing-override` 分别由部署配置
 `openai.residency`、`openai.account_routing_override` 控制，配置值原样发送并覆盖客户端同名头，
 省略或 `null` 时删除对应请求头。配置说明见 [部署与运维](../deploy/README.md#启动后的运行设置)
-`x-openai-fedramp` 默认按业务头透传并保留原始多值，Responses 明确换号时清理。
+`x-openai-fedramp` 默认按业务头透传并保留原始多值，Responses 明确换号时清理客户端值。
+所选 OpenAI OAuth 令牌声明 FedRAMP 时，网关为模型请求设置唯一的 `x-openai-fedramp: true`。
+同账号轮换令牌导致该声明变化时，新请求使用新的上游 WS 连接，旧连接上的精确续接需要客户端重放。
 上述过滤描述原生转发；已信任插件的显式 header 改写可以覆盖账号与画像生成的默认头，
 不按认证或会话字段名称拦截，边界见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 
@@ -536,6 +538,8 @@ HTTP 请求头、正文 metadata、WS 副本及已识别的 Desktop 自动 Git �
 Images 的 `x-codex-image-turn-id` 和 Desktop 自动 Git 上下文的 `clientUserMessageId`。
 输入项元数据保持不变。Search 的会话 `id` 按同一安装身份域映射，只替换该值的原始字节，其余正文保持不变。
 `prompt_cache_key` 同样按安装身份映射，保留同一身份内的缓存共享关系；未提供时不补造。
+官方 Guardian 缓存键中的 UUID 与本次父线程或分类来源线程匹配时，保留 `guardian:` 或
+`guardian-v2:` 前缀并映射同一线程 UUID。其他缓存键按整个值映射。
 受信任插件可读取原始请求，自行生成身份并在 `outbound` 改写完整请求与关联字段；宿主不重新派生或补回业务字段，
 实际选号与计费归属保持不变，详见 [SDK 出站请求准备](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#上游出站准备)。
 续接 response ID、历史 item/call ID、业务正文和未知扩展不参与映射，
@@ -546,7 +550,8 @@ WS 握手的轮次元数据头只随首次请求转发，后续帧在正文中�
 `x-codex-beta-features` 和 `x-responsesapi-include-timing-metrics` 按原始请求头透传
 
 `x-codex-turn-state` 是上游签发的轮次路由 token。客户端在同一轮原样回传，新轮次省略。
-网关转发当前请求提供的值，明确换账号时清除。WS 握手携带的值只用于首次请求，当前帧提供的值优先。
+网关转发当前请求提供的值，明确换账号时清除。客户端 WS 握手携带的值只用于首次请求，当前帧提供的值优先。
+连接 Codex OAuth 上游时，该值写入当前 `response.create` 帧的 `client_metadata`，新上游 WS 握手省略此头。
 续接 response ID 及其他账号状态的归属独立校验
 
 #### 正文兼容
@@ -582,13 +587,25 @@ WS 握手的轮次元数据头只随首次请求转发，后续帧在正文中�
 turn metadata 的 `workspaces` 也会保留仓库绝对路径、Git 远端地址、提交及工作区变更状态；
 安装身份和账号绑定字段的处理不提供这些信息的脱敏
 
-`client_metadata.parent_response_id` 是 Guardian 的账号内响应引用，只有归属可信且仍为同一账号时保留；
-切号或归属未知时移除。`x-codex-guardian`、`guardian_credits_requested` 和序列化
-`x-codex-turn-metadata` 内普通扩展的同名 `parent_response_id` 保持原样
+Codex 客户端按本地登录方式和模型卡选择同步 Guardian 审核模型。使用默认模型卡时，
+API Key 登录通常选择 `gpt-5.6-luna`，ChatGPT 登录选择 `codex-auto-review`。
+“系统设置 → 上游配置”中的“专用审核模型”默认开启。关闭后沿用客户端模型。开启时，网关按当前请求的
+Guardian 身份识别同步审核和审核预热，优先选择允许 `codex-auto-review` 的原生 OAuth 账号。
+入站审核模型可以是任意名称。普通请求、后台分类和会话整理沿用原模型。
+缺少合格账号时，网关按客户端模型正常选路。管理员显式模型映射、别名与已绑定的适配器和中间件优先。
+已有续接沿用绑定账号及已记录的审核模型；无法确认模型兼容性时要求客户端重放。执行开始后的重试保持已选模型
 
-同一 Client Key、同一 OAuth 账号的 Guardian 请求可利用网关记录的父响应 WS 握手信息，
-尽力复用父请求的上游路由。路由 Cookie 仅在网关与上游之间使用，不传给客户端；
-网关重启、记录淘汰或 Cookie 到期后仍可按普通路由请求，不保证上游路由亲和
+发往 Codex OAuth 的同步 `codex-auto-review` 审核带 `x-codex-guardian: reviewer`，
+后台分类带 `x-codex-guardian: classifier`。这两类请求都省略顶层 `service_tier` 和
+`x-codex-routing-hint`，分组强制加速同样适用。后台会话整理保留会话层级并省略上述两个请求头。
+后台分类和会话整理的 HTTP 请求使用未压缩 JSON。普通 OAuth 生成和同步审核的 HTTP 正文使用 zstd
+
+同步审核和后台分类的 `client_metadata.parent_response_id` 只有在网关记录能确认同一 Client Key、
+同一 OAuth 账号的父响应时才发送，HTTP 和 WS 收到的父响应都可验证。预热请求可以没有父响应。
+同步审核可复用该父响应有效的上游 WS 路由 Cookie。缺少可用 Cookie 时仍可发送已验证的父响应 ID；
+父响应记录淘汰或网关重启后，网关省略该 ID 并继续审核。
+网关保留父会话发来的 `guardian_credits_requested`，不会根据账号类型补造该字段，已识别的
+Guardian 子请求会移除它。序列化 turn metadata 内普通扩展的同名字段保持原样
 
 #### WebSocket 与上游传输
 
@@ -599,6 +616,9 @@ turn metadata 的 `workspaces` 也会保留仓库绝对路径、Git 远端地址
 Responses WebSocket 接受文本消息，`response.create` 在同一连接串行执行。当前响应期间收到的后续创建请求
 留在有界接收队列中，待当前响应完成终结和写出后再逐条校验、准入与执行，不因请求提前到达而断开。
 接收队列容量为 32 个事件，超载仍关闭连接；Ping/Pong、客户端关闭和服务关闭不等待队列中的请求执行
+
+原生上游 WS 帧里的 `x-codex-ws-stream-request-start-ms` 在连接可用后、发送前写入。
+如果出站插件接管了帧正文，网关按插件返回的字节发送，保留其签名和时间戳
 
 网关分别维护两段链路的心跳：上游 WS 定时发送 Ping 保活并回复 Pong，下游 WS 独立探活；Ping/Pong 不跨段转发，也不转换为 SSE 事件。
 下游探活包含消息接收中的字节进度，完整消息收齐后才进入中间件与请求处理。
@@ -1487,7 +1507,7 @@ API 的 `autoLocation` 默认为 `false`；开启时使用已检测位置，测�
 只改位置不清空连通性测试结果，也不更改账号凭据版本
 
 关联账号的 OpenAI/Codex Responses 请求（HTTP/SSE、WebSocket）优先使用代理位置，否则使用全局
-运行设置中已开启的 `requestLocation`。出站正文的顶层 `request_country` 始终写入生效位置的两位国家码，无位置覆盖时写入 JSON `null`。
+运行设置中已开启的 `requestLocation`。出站正文的顶层 `request_country` 默认跟随位置，也可在[请求位置](#请求位置)选择“空值”“透传”或“自定义”。
 位置覆盖同时更新客户端时间上下文的时区和 Web Search 的结构化位置，未启用覆盖时这两项保留客户端原值。
 全局覆盖按请求冻结，保存后对新请求生效。代理覆盖按每次执行选定的账号解析，包括换号和换出口。
 位置覆盖不改变 epoch 时间戳、真实出口 IP、服务或管理端时区、数据驻留约束及 xAI 请求
@@ -2203,7 +2223,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | --- | --- |
 | 并发控制版本 | `configRevision` |
 | [客户端身份](#provider-客户端身份) | `providerRequestProfiles`、`openaiClientProfile`、`xaiClientProfile` |
-| [请求位置](#请求位置) | `requestLocationEnabled`、`requestLocation` |
+| [请求位置](#请求位置) | `requestLocationEnabled`、`requestLocation`、`openaiRequestCountry` |
+| [OpenAI OAuth 同步审核模型](#正文兼容) | `openaiOauthGuardianReviewModel`，默认 `true` |
 | [隐私策略](#隐私策略) | `codexPrivacyPolicy` |
 | 模型映射 | `modelMappings` |
 | 凭据刷新 | `refreshMarginSeconds`、`refreshConcurrency` |
@@ -2252,6 +2273,17 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 字段约束与[代理位置](#独立代理管理--managed-proxies)一致。全局自定义开启后，OpenAI Responses 使用全局位置，
 关联代理配置了自定义位置时优先使用代理值。保存后通过现有配置发布机制对新请求生效，
 已开始请求及其重试保持同一份全局值；普通文本、绝对时间戳和数据驻留要求不受影响
+
+`openaiRequestCountry` 单独控制 OpenAI Responses 出站正文顶层的 `request_country`。保存后对新请求生效。
+
+| 管理端选项 | 设置值 | 发往上游的字段 |
+| --- | --- | --- |
+| 跟随位置 | `{"mode":"follow_location"}` | 默认选项。先取代理位置，再取已开启的全局位置。两者都没有时发送 `null` |
+| 空值 | `{"mode":"default"}` | 始终发送 `"request_country": null`，包括客户端传入国家、代理或全局位置已配置的情况 |
+| 透传 | `{"mode":"passthrough"}` | 保留客户端原值，包括显式 `null`；客户端省略时也省略 |
+| 自定义 | `{"mode":"custom","country":"CA"}` | 始终发送指定的两位大写 ASCII 国家码，独立于城市、时区和全局位置开关 |
+
+更新设置时省略 `openaiRequestCountry` 或 `openaiOauthGuardianReviewModel`，对应值保持上次保存的设置。
 
 ### 隐私策略
 

@@ -3,7 +3,9 @@
 use std::{fmt, time::Duration};
 
 use gateway_core::account::FastMode;
+use gateway_core::engine::middleware::MiddlewareHeader;
 use gateway_protocol::openai::{
+    CODEX_AUTO_REVIEW_MODEL, CodexGuardianRole,
     CodexResponsesRequestSemantics as CodexRequestSemantics,
     codex_responses_request_semantics_with_turn_metadata, events,
 };
@@ -59,6 +61,8 @@ pub struct CodexResponsesRequest {
     body: Map<String, Value>,
     /// API 边界保存、Provider 逐条恢复的普通客户端请求头
     pub(crate) passthrough_headers: HeaderMap,
+    /// 原始请求的 Guardian 身份，保留 HTTP 两侧冲突和 WS 帧边界的判定结果
+    pub(crate) guardian_role: Option<CodexGuardianRole>,
     /// 是否由客户端显式提供了 prompt cache key
     pub explicit_prompt_cache_key: bool,
     /// 客户端会话 ID
@@ -617,6 +621,7 @@ impl CodexResponsesRequest {
         Self {
             body,
             passthrough_headers: HeaderMap::new(),
+            guardian_role: None,
             explicit_prompt_cache_key: false,
             client_conversation_id: None,
             client_session_id: None,
@@ -799,6 +804,30 @@ impl CodexResponsesRequest {
     /// Codex 执行命令前的 Guardian 自动审批请求；客户端以 `guardian` 子代理类型声明
     pub fn is_guardian(&self) -> bool {
         self.subagent_kind().as_deref() == Some(GUARDIAN_SUBAGENT_KIND)
+    }
+
+    /// Codex 仅为实际选中的专用审核模型补 reviewer 标记，显式头及中间件仍有各自的覆盖权
+    pub(crate) fn oauth_guardian_role(
+        &self,
+        middleware_headers: &[MiddlewareHeader],
+    ) -> Option<CodexGuardianRole> {
+        const HEADER: &str = "x-codex-guardian";
+        let header = middleware_headers
+            .iter()
+            .find(|header| header.name().eq_ignore_ascii_case(HEADER))
+            .map(|header| header.value().as_ref())
+            .or_else(|| self.passthrough_headers.get(HEADER).map(|v| v.as_bytes()));
+        match header {
+            Some(b"reviewer") => Some(CodexGuardianRole::Reviewer),
+            Some(b"classifier") => Some(CodexGuardianRole::Classifier),
+            Some(_) => None,
+            None if self.guardian_role == Some(CodexGuardianRole::Reviewer)
+                && self.model() != CODEX_AUTO_REVIEW_MODEL =>
+            {
+                None
+            }
+            None => self.guardian_role,
+        }
     }
 
     /// 设置 / 合并 client metadata

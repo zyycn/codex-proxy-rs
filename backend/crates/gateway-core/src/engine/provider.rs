@@ -1174,6 +1174,17 @@ pub trait Provider: Send + Sync {
         false
     }
 
+    /// 请求身份明确时，Provider 可以为自身直连账号声明实际模型。Core 按该模型鉴权并冻结重试范围。
+    fn direct_account_model(
+        &self,
+        _model: &PublicModelId,
+        _operation: &Operation,
+        _previous: Option<&crate::operation::ProviderSessionState>,
+        _settings: &crate::settings::SettingsValues,
+    ) -> Option<UpstreamModelId> {
+        None
+    }
+
     /// Provider 解释自己的隐私规则，Core 仅冻结编译结果
     fn compile_privacy_policy(
         &self,
