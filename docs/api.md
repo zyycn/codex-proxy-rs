@@ -571,10 +571,10 @@ WS 握手的轮次元数据头只随首次请求转发，后续帧在正文中�
 | `stream_options.include_usage` | 省略该成员，保留其他流式选项 |
 | `truncation`、`stop_sequences`、`prompt_cache_options` | 分别仅在值为 `"disabled"`、`[]`、`{}` 时省略；显式策略交给上游校验 |
 
-Codex/OAuth 上游的历史回填按字段形状兼容，不以 User-Agent 品牌区分：显式 `type: "reasoning"`
-的 `input` 项移除顶层 `status`；该项具有非空字符串 `encrypted_content` 时，还会移除非空数组
-`content`。其他字段及顺序保持不变，缺少非空加密载荷的明文历史由上游判定。
-普通消息、工具项及未知类型不受此规则影响，API Key 上游不应用此规则
+选定 Codex/OAuth 上游后，HTTP 和 WebSocket 按相同规则处理 `input` 中的回放条目，适用于所有 User-Agent。API Key 上游保留这些历史字段
+
+- 显式 `message` 带有普通消息角色和完整文本正文（非空字符串或仅含 `input_text`、`output_text` 的非空数组），且未携带顶层 `encrypted_content` 时，省略未被本次请求的 `item_reference` 引用的 `item_…` ID。消息正文和顺序保持不变
+- 显式 `reasoning` 移除顶层 `status`。该项具有非空字符串 `encrypted_content` 时，还会移除非空数组 `content`。缺少非空加密载荷的明文历史由上游判定
 
 请求头过滤不提供客户端匿名化；系统提示词、工具定义、工具结果、工作目录及其他业务 metadata
 保持原有语义，可能包含客户端环境信息。

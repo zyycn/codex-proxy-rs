@@ -897,12 +897,39 @@ async fn replay_compatibility_should_leave_normal_official_history_unchanged() {
 }
 
 #[tokio::test]
+async fn replay_compatibility_should_omit_only_unreferenced_inline_message_ids() {
+    let input = json!([
+        {"type":"item_reference","id":"item_before"},
+        {"type":"message","id":"item_standalone","role":"assistant","phase":"final_answer",
+         "content":[{"type":"output_text","text":"done"}]},
+        {"type":"message","id":"item_before","role":"assistant","content":"first"},
+        {"type":"message","id":"item_after","role":"user","content":"second"},
+        {"type":"message","id":"item_implicit","role":"developer","content":"instructions"},
+        {"type":"item_reference","id":"item_after"},
+        {"id":"item_implicit"},
+        {"type":"message","id":"msg_valid","role":"assistant","content":"answer"},
+        {"type":"message","id":"item_no_content","role":"assistant","content":[]},
+        {"type":"message","id":"item_encrypted","role":"assistant","content":"summary","encrypted_content":"opaque"},
+        {"type":"message","id":"item_opaque_part","role":"assistant","content":[{"type":"encrypted_content","encrypted_content":"opaque"}]},
+        {"type":"message","id":"item_image","role":"user","content":[{"type":"input_image","file_id":"file_example"}]},
+        {"type":"agent_message","id":"item_agent","content":[{"type":"encrypted_content","encrypted_content":"opaque"}]},
+        {"type":"function_call","id":"item_call","call_id":"call_example","name":"echo","arguments":"{}"}
+    ]);
+    let mut expected = input.clone();
+    expected[1].as_object_mut().unwrap().shift_remove("id");
+    for websocket in [false, true] {
+        let actual = capture_replay_compatibility_request(input.clone(), false, websocket).await;
+        assert_eq!(actual["input"].to_string(), expected.to_string());
+    }
+}
+
+#[tokio::test]
 async fn replay_compatibility_should_not_apply_codex_rules_to_api_key_accounts() {
-    let input = json!([{
-        "type":"reasoning","id":"rs_api","status":"completed","summary":[],
-        "content":[{"type":"reasoning_text","text":"API-specific history"}],
-        "encrypted_content":"test-cipher"
-    }]);
+    let input = json!([
+        {"type":"reasoning","id":"rs_api","status":"completed","summary":[],
+         "content":[{"type":"reasoning_text","text":"API-specific history"}],"encrypted_content":"test-cipher"},
+        {"type":"message","id":"item_standalone","role":"assistant","content":"answer"}
+    ]);
     for websocket in [false, true] {
         let actual = capture_replay_compatibility_request(input.clone(), true, websocket).await;
         assert_eq!(actual["input"].to_string(), input.to_string());
