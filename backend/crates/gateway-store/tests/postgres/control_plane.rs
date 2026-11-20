@@ -39,7 +39,7 @@ async fn control_plane_replacement_commits_one_writer_per_revision_and_preserves
         },
     };
     let mut customized = replacement("first", 1800);
-    customized.settings.openai_oauth_guardian_review_model = Some(true);
+    customized.settings.openai_oauth_guardian_review_model = Some(false);
     customized.settings.openai_request_country =
         Some(gateway_core::account::OpenAiRequestCountry::Custom {
             country: "CA".into(),

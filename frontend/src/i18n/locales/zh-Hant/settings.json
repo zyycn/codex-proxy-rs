@@ -294,7 +294,7 @@
     "modelMapping": "模型映射",
     "routing": {
       "oauthGuardianReviewModel": "專用審核模型",
-      "oauthGuardianReviewModelHelp": "OAuth 同步審核預設沿用用戶端模型，開啟後使用 codex-auto-review",
+      "oauthGuardianReviewModelHelp": "OAuth 同步審核預設使用 codex-auto-review，關閉後沿用用戶端模型",
       "modelMapHelp": "將客戶端請求的模型名稱映射爲實際使用的上游模型"
     },
     "addMapping": "添加映射",
@@ -316,9 +316,9 @@
       "requestCountry": "請求國家",
       "countryHelp": "請求國家模式說明",
       "countryModes": {
-        "default": "預設",
+        "default": "空值",
         "passthrough": "透傳",
-        "follow_location": "依位置",
+        "follow_location": "跟隨位置",
         "custom": "自訂"
       },
       "countryHints": {

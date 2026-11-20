@@ -583,10 +583,10 @@ async fn openai_request_settings_round_trip_into_snapshot_across_legacy_writes()
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let snapshots = PgRuntimeSnapshotRepository::new(database.pool.clone());
     let initial = snapshots.load_runtime_snapshot().await.unwrap();
-    assert!(!initial.settings.openai_oauth_guardian_review_model());
+    assert!(initial.settings.openai_oauth_guardian_review_model());
     assert_eq!(
         initial.settings.openai_request_country(),
-        &OpenAiRequestCountry::Default {}
+        &OpenAiRequestCountry::FollowLocation {}
     );
 
     for (enabled, country) in [

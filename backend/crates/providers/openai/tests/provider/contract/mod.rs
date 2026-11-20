@@ -2087,7 +2087,7 @@ async fn provider_should_override_unclassified_time_contexts_over_websocket() {
         body.pointer("/input/1/content/0/text"),
         Some(&json!(desktop.replace("Asia/Shanghai", "Pacific/Auckland")))
     );
-    assert_eq!(body.get("request_country"), Some(&Value::Null));
+    assert_eq!(body.get("request_country"), Some(&json!("NZ")));
     assert_eq!(
         body.pointer("/input/0/content/0/text"),
         Some(&json!(
@@ -13454,7 +13454,10 @@ async fn downstream_client_markers_preserve_instruction_content() {
             )]);
             let sent = capture_client_request(body.clone(), context, api_key).await;
             let mut expected = body;
-            expected.insert("request_country".to_owned(), Value::Null);
+            expected.insert(
+                "request_country".to_owned(),
+                json!(global_request_location().country),
+            );
             assert_eq!(sent, expected);
         }
     }

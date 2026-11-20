@@ -1996,7 +1996,8 @@ fn test_runtime_settings() -> RuntimeSettings {
         ),
     ]);
     RuntimeSettings {
-        openai_oauth_guardian_review_model: false,
+        openai_oauth_guardian_review_model:
+            gateway_core::settings::default_oauth_guardian_review_model(),
         openai_request_country: Default::default(),
         request_profiles: Default::default(),
         config_revision: Revision::new(7).expect("revision"),

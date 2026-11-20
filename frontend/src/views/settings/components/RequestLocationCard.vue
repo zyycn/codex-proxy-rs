@@ -21,6 +21,11 @@ const enabled = defineModel<boolean>('enabled', { required: true })
 const requestCountry = defineModel<OpenAiRequestCountry>('requestCountry', { required: true })
 const modes = computed<Array<SelectOption<OpenAiRequestCountry['mode']> & { help: string }>>(() => [
   {
+    value: 'follow_location',
+    label: t('settings.location.countryModes.follow_location'),
+    help: t('settings.location.countryHints.follow_location'),
+  },
+  {
     value: 'default',
     label: t('settings.location.countryModes.default'),
     help: t('settings.location.countryHints.default'),
@@ -29,11 +34,6 @@ const modes = computed<Array<SelectOption<OpenAiRequestCountry['mode']> & { help
     value: 'passthrough',
     label: t('settings.location.countryModes.passthrough'),
     help: t('settings.location.countryHints.passthrough'),
-  },
-  {
-    value: 'follow_location',
-    label: t('settings.location.countryModes.follow_location'),
-    help: t('settings.location.countryHints.follow_location'),
   },
   {
     value: 'custom',

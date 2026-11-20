@@ -589,7 +589,7 @@ turn metadata 的 `workspaces` 也会保留仓库绝对路径、Git 远端地址
 
 Codex 客户端按本地登录方式和模型卡选择同步 Guardian 审核模型。使用默认模型卡时，
 API Key 登录通常选择 `gpt-5.6-luna`，ChatGPT 登录选择 `codex-auto-review`。
-网关默认沿用客户端选择。在“系统设置 → 上游配置”开启同步审核专用模型后，网关按当前请求的
+“系统设置 → 上游配置”中的“专用审核模型”默认开启。关闭后沿用客户端模型。开启时，网关按当前请求的
 Guardian 身份识别同步审核和审核预热，优先选择允许 `codex-auto-review` 的原生 OAuth 账号。
 入站审核模型可以是任意名称。普通请求、后台分类和会话整理沿用原模型。
 缺少合格账号时，网关按客户端模型正常选路。管理员显式模型映射、别名与已绑定的适配器和中间件优先。
@@ -1507,7 +1507,7 @@ API 的 `autoLocation` 默认为 `false`；开启时使用已检测位置，测�
 只改位置不清空连通性测试结果，也不更改账号凭据版本
 
 关联账号的 OpenAI/Codex Responses 请求（HTTP/SSE、WebSocket）优先使用代理位置，否则使用全局
-运行设置中已开启的 `requestLocation`。出站正文的顶层 `request_country` 默认发送 JSON `null`，可在[请求位置](#请求位置)选择“透传”“按位置”或“自定义”。
+运行设置中已开启的 `requestLocation`。出站正文的顶层 `request_country` 默认跟随位置，也可在[请求位置](#请求位置)选择“空值”“透传”或“自定义”。
 位置覆盖同时更新客户端时间上下文的时区和 Web Search 的结构化位置，未启用覆盖时这两项保留客户端原值。
 全局覆盖按请求冻结，保存后对新请求生效。代理覆盖按每次执行选定的账号解析，包括换号和换出口。
 位置覆盖不改变 epoch 时间戳、真实出口 IP、服务或管理端时区、数据驻留约束及 xAI 请求
@@ -2224,7 +2224,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | 并发控制版本 | `configRevision` |
 | [客户端身份](#provider-客户端身份) | `providerRequestProfiles`、`openaiClientProfile`、`xaiClientProfile` |
 | [请求位置](#请求位置) | `requestLocationEnabled`、`requestLocation`、`openaiRequestCountry` |
-| [OpenAI OAuth 同步审核模型](#正文兼容) | `openaiOauthGuardianReviewModel`，默认 `false` |
+| [OpenAI OAuth 同步审核模型](#正文兼容) | `openaiOauthGuardianReviewModel`，默认 `true` |
 | [隐私策略](#隐私策略) | `codexPrivacyPolicy` |
 | 模型映射 | `modelMappings` |
 | 凭据刷新 | `refreshMarginSeconds`、`refreshConcurrency` |
@@ -2278,9 +2278,9 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 | 管理端选项 | 设置值 | 发往上游的字段 |
 | --- | --- | --- |
-| 默认 | `{"mode":"default"}` | 始终发送 `"request_country": null`，包括客户端传入国家、代理或全局位置已配置的情况 |
+| 跟随位置 | `{"mode":"follow_location"}` | 默认选项。先取代理位置，再取已开启的全局位置。两者都没有时发送 `null` |
+| 空值 | `{"mode":"default"}` | 始终发送 `"request_country": null`，包括客户端传入国家、代理或全局位置已配置的情况 |
 | 透传 | `{"mode":"passthrough"}` | 保留客户端原值，包括显式 `null`；客户端省略时也省略 |
-| 按位置 | `{"mode":"follow_location"}` | 先取代理位置，再取已开启的全局位置；两者都没有时发送 `null` |
 | 自定义 | `{"mode":"custom","country":"CA"}` | 始终发送指定的两位大写 ASCII 国家码，独立于城市、时区和全局位置开关 |
 
 更新设置时省略 `openaiRequestCountry` 或 `openaiOauthGuardianReviewModel`，对应值保持上次保存的设置。

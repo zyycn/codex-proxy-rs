@@ -1,7 +1,7 @@
--- 缺少显式配置时保留客户端审核模型，并按 OpenAI 默认发送固定的空请求国家
+-- 默认启用 OAuth 同步审核专用模型，请求国家跟随位置
 alter table runtime_settings
-  add column openai_oauth_guardian_review_model boolean not null default false,
-  add column openai_request_country_json jsonb not null default '{"mode":"default"}'::jsonb,
+  add column openai_oauth_guardian_review_model boolean not null default true,
+  add column openai_request_country_json jsonb not null default '{"mode":"follow_location"}'::jsonb,
   add constraint runtime_settings_openai_request_country_ck check (
     openai_request_country_json in ('{"mode":"default"}', '{"mode":"passthrough"}', '{"mode":"follow_location"}')
     or (

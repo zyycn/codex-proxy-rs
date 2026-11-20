@@ -348,6 +348,7 @@ fn sdk_settings_contract_matches_host_declarations() {
         "request_profile_updates" => quote!(request_profile_updates: settings.request_profiles.into_iter().map(|(provider, value)| (provider, Some(value))).collect()),
         _ => quote!(#field: settings.#field),
     });
+    let default_review_model = gateway_core::settings::default_oauth_guardian_review_model();
     let generated = quote! {
         //! 宿主设置服务的操作标识与请求、响应数据合同
         //!
@@ -363,9 +364,10 @@ fn sdk_settings_contract_matches_host_declarations() {
         pub type RotationStrategy = String;
         pub type AccountAffinity = String;
         pub type PricingOverrides = BTreeMap<String, BTreeMap<String, ModelPriceOverride>>;
+        fn default_oauth_guardian_review_model() -> bool { #default_review_model }
         #(#types)*
         impl Default for OpenAiRequestCountry {
-            fn default() -> Self { Self::Default {} }
+            fn default() -> Self { Self::FollowLocation {} }
         }
         #(#operations)*
         impl From<RuntimeSettings> for ReplaceRuntimeSettings {

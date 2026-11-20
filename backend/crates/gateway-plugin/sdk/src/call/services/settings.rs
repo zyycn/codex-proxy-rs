@@ -15,6 +15,9 @@ pub type Revision = NonZeroU64;
 pub type RotationStrategy = String;
 pub type AccountAffinity = String;
 pub type PricingOverrides = BTreeMap<String, BTreeMap<String, ModelPriceOverride>>;
+fn default_oauth_guardian_review_model() -> bool {
+    true
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountErrorProtection {
@@ -136,7 +139,7 @@ pub struct PrivacyPreviewResult {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSettings {
-    #[serde(default)]
+    #[serde(default = "default_oauth_guardian_review_model")]
     pub openai_oauth_guardian_review_model: bool,
     #[serde(default)]
     pub openai_request_country: OpenAiRequestCountry,
@@ -333,7 +336,7 @@ pub struct UpdatePricing {
 }
 impl Default for OpenAiRequestCountry {
     fn default() -> Self {
-        Self::Default {}
+        Self::FollowLocation {}
     }
 }
 pub struct Load;

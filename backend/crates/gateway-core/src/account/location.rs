@@ -23,7 +23,7 @@ pub enum OpenAiRequestCountry {
 
 impl Default for OpenAiRequestCountry {
     fn default() -> Self {
-        Self::Default {}
+        Self::FollowLocation {}
     }
 }
 

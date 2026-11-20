@@ -1442,29 +1442,32 @@ async fn openai_request_settings_preserve_omitted_fields_and_reject_stale_writes
         ))
     };
     let initial = response_json(read().await.unwrap()).await["data"].clone();
-    assert_eq!(initial["openaiOauthGuardianReviewModel"], false);
-    assert_eq!(initial["openaiRequestCountry"], json!({"mode":"default"}));
+    assert_eq!(initial["openaiOauthGuardianReviewModel"], true);
+    assert_eq!(
+        initial["openaiRequestCountry"],
+        json!({"mode":"follow_location"})
+    );
     let mut body = update_body();
     body["configRevision"] = initial["configRevision"].clone();
-    body["openaiOauthGuardianReviewModel"] = json!(true);
+    body["openaiOauthGuardianReviewModel"] = json!(false);
     body["openaiRequestCountry"] = json!({"mode":"custom","country":"CA"});
     let response = save(body.clone()).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let saved = response_json(response).await["data"].clone();
-    assert_eq!(saved["openaiOauthGuardianReviewModel"], true);
+    assert_eq!(saved["openaiOauthGuardianReviewModel"], false);
     assert_eq!(saved["openaiRequestCountry"], body["openaiRequestCountry"]);
 
     let mut legacy = update_body();
     legacy["configRevision"] = saved["configRevision"].clone();
     assert_eq!(save(legacy).await.unwrap().status(), StatusCode::OK);
-    body["openaiOauthGuardianReviewModel"] = json!(false);
+    body["openaiOauthGuardianReviewModel"] = json!(true);
     body["openaiRequestCountry"] = json!({"mode":"passthrough"});
     assert_eq!(
         save(body.clone()).await.unwrap().status(),
         StatusCode::CONFLICT
     );
     let current = response_json(read().await.unwrap()).await["data"].clone();
-    assert_eq!(current["openaiOauthGuardianReviewModel"], true);
+    assert_eq!(current["openaiOauthGuardianReviewModel"], false);
     assert_eq!(
         current["openaiRequestCountry"],
         saved["openaiRequestCountry"]
@@ -1473,7 +1476,7 @@ async fn openai_request_settings_preserve_omitted_fields_and_reject_stale_writes
     let response = save(body).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let changed = response_json(response).await["data"].clone();
-    assert_eq!(changed["openaiOauthGuardianReviewModel"], false);
+    assert_eq!(changed["openaiOauthGuardianReviewModel"], true);
     assert_eq!(
         changed["openaiRequestCountry"],
         json!({"mode":"passthrough"})

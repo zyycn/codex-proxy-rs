@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, fmt};
 use chrono::{DateTime, Utc};
 
 use gateway_core::routing::{ProviderKind, PublicModelId, UpstreamModelId};
+use gateway_core::settings::default_oauth_guardian_review_model;
 
 use super::Revision;
 
@@ -83,7 +84,7 @@ pub struct RuntimeSettingsValues {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSettings {
-    #[serde(default)]
+    #[serde(default = "default_oauth_guardian_review_model")]
     pub openai_oauth_guardian_review_model: bool,
     #[serde(default)]
     pub openai_request_country: gateway_core::account::OpenAiRequestCountry,

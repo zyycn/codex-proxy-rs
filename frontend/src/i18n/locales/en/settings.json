@@ -294,7 +294,7 @@
     "modelMapping": "Model mapping",
     "routing": {
       "oauthGuardianReviewModel": "Dedicated review model",
-      "oauthGuardianReviewModelHelp": "OAuth synchronous reviews use the client model by default. Enable to use codex-auto-review.",
+      "oauthGuardianReviewModelHelp": "OAuth synchronous reviews use codex-auto-review by default. Turn off to use the client model.",
       "modelMapHelp": "Map client model names to the upstream models used"
     },
     "addMapping": "Add mapping",
@@ -316,9 +316,9 @@
       "requestCountry": "Request country",
       "countryHelp": "Request country mode help",
       "countryModes": {
-        "default": "Default",
+        "default": "Null",
         "passthrough": "Pass through",
-        "follow_location": "By location",
+        "follow_location": "Follow location",
         "custom": "Custom"
       },
       "countryHints": {

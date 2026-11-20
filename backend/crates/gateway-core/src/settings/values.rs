@@ -25,7 +25,7 @@ pub struct SettingsValues {
     pub(crate) switch_account_on_queue_failure: bool,
     pub(crate) max_retry_after_seconds: u32,
     pub(crate) openai_guardian_reserved_concurrency: u32,
-    #[serde(default)]
+    #[serde(default = "default_oauth_guardian_review_model")]
     pub(crate) openai_oauth_guardian_review_model: bool,
     #[serde(default)]
     pub(crate) openai_request_country: crate::account::OpenAiRequestCountry,
@@ -44,6 +44,10 @@ pub struct SettingsValues {
 
 fn initial_protection_revision() -> u64 {
     1
+}
+
+pub const fn default_oauth_guardian_review_model() -> bool {
+    true
 }
 
 impl SettingsValues {
@@ -236,7 +240,7 @@ impl SettingsValues {
             switch_account_on_queue_failure: false,
             max_retry_after_seconds: 240,
             openai_guardian_reserved_concurrency: 0,
-            openai_oauth_guardian_review_model: false,
+            openai_oauth_guardian_review_model: default_oauth_guardian_review_model(),
             openai_request_country: Default::default(),
             openai_account_affinity: crate::account::AccountAffinity::default(),
             max_account_rotations: 3,
