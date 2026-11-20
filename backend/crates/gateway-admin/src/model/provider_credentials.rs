@@ -700,6 +700,7 @@ pub struct PreparedCredentialRotationFacts {
     pub preserve_profile: bool,
     /// 连接配置变更保留当前凭据健康状态与错误事实
     pub preserve_credential_state: bool,
+    pub preserve_access_token_expiry: bool,
     pub provider_material: ProviderDocument,
     pub has_refresh_token: bool,
     pub access_token_expires_at: Option<DateTime<Utc>>,

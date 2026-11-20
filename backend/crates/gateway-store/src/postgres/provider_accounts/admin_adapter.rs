@@ -1065,6 +1065,7 @@ pub(super) fn prepare_rotation(
             next_refresh_at: prepared.next_refresh_at,
             preserve_profile: prepared.preserve_profile,
             preserve_credential_state: prepared.preserve_credential_state,
+            preserve_access_token_expiry: prepared.preserve_access_token_expiry,
         },
         audit: mutation_audit(context, action, account_id.as_str(), changed_fields),
     })

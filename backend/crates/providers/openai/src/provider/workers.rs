@@ -281,6 +281,7 @@ impl ScheduledTask for OpenAiQuotaTask {
                         updated = summary.updated,
                         exhausted = summary.exhausted,
                         banned = summary.banned,
+                        revoked = summary.revoked,
                         transient = summary.transient,
                         stale = summary.stale,
                         "OpenAI quota cycle contained operational failures"

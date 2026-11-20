@@ -2633,7 +2633,7 @@ mod errors {
     }
 
     #[tokio::test]
-    async fn quota_refresh_exposes_safe_failure_reasons_and_recovers_without_account_errors() {
+    async fn quota_refresh_exposes_safe_rejections_and_recovers_after_revoked_token_rotation() {
         let store = Arc::new(MemoryAccountStore::default());
         let account_id = "acct_quota_error";
         store
@@ -2646,7 +2646,7 @@ mod errors {
                 enabled: true,
             })
             .await;
-        let before = store.account(account_id).expect("account");
+        let mut before = store.account(account_id).expect("account");
         let server = MockServer::start().await;
         let mut config = valid_config();
         config.config.api.base_url = server.uri();
@@ -2710,10 +2710,28 @@ mod errors {
             assert_eq!(error.kind(), expected_kind);
             assert_eq!(error.public_message(), Some(expected_message));
             assert!(!format!("{error:?} {error}").contains("raw-secret-marker"));
-            assert_eq!(
-                store.account(account_id).expect("account after rejection"),
-                before
-            );
+            let current = store.account(account_id).expect("account after rejection");
+            if code == "token_revoked" {
+                assert_eq!(
+                    current
+                        .status_projection(SystemTime::now(), None)
+                        .error_reason,
+                    Some(gateway_core::account::AccountErrorReason::AccessTokenExpired)
+                );
+                store
+                    .repository()
+                    .rotate_refreshed_oauth_secret(
+                        &before,
+                        secret("replacement-test-token"),
+                        before.access_token_expires_at(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                before = store.account(account_id).expect("account after rotation");
+            } else {
+                assert_eq!(current, before);
+            }
         }
         server.reset().await;
         Mock::given(method("GET"))
@@ -3214,6 +3232,7 @@ async fn oauth_transport_settings_preserve_tokens_refresh_schedule_and_health() 
         );
         assert_eq!(facts.has_refresh_token, account.has_refresh_token());
         assert!(facts.preserve_profile && facts.preserve_credential_state);
+        assert!(facts.preserve_access_token_expiry);
     }
     for invalid in [
         json!({"transport":"invalid"}),
