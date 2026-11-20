@@ -294,7 +294,8 @@
     "modelMapping": "模型映射",
     "routing": {
       "oauthGuardianReviewModel": "專用審核模型",
-      "oauthGuardianReviewModelHelp": "OAuth 同步審核預設使用 codex-auto-review，關閉後沿用用戶端模型",
+      "oauthGuardianReviewModelHelp": "同步審核優先使用授權帳號的專用模型",
+      "oauthGuardianReviewModelDetails": "開啟時優先使用 codex-auto-review，關閉此項或沒有可用帳號支援該模型時，沿用用戶端請求的模型",
       "modelMapHelp": "將客戶端請求的模型名稱映射爲實際使用的上游模型"
     },
     "addMapping": "添加映射",

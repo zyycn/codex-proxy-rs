@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ZButton, ZConfirmDialog, ZForm, ZIconButton, ZPageHeader, ZSegmented } from '@codex-proxy/ui'
+import { ZButton, ZCard, ZConfirmDialog, ZForm, ZIconButton, ZPageHeader, ZSegmented, ZSwitch } from '@codex-proxy/ui'
 
 import { Save, Undo2 } from '@lucide/vue'
 
 import { computed, nextTick, reactive, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+
+import HelpPopover from '@/components/HelpPopover.vue'
 
 import AccountAffinityCard from './components/AccountAffinityCard.vue'
 import AccountWarmupCard from './components/AccountWarmupCard.vue'
@@ -251,14 +253,34 @@ watch(section, (value) => {
           />
           <PrivacyPolicyCard v-model="form.codexPrivacyPolicy" :disabled="disabled" />
           <ModelAliasesCard
-            v-model:oauth-guardian-review-model="form.openaiOauthGuardianReviewModel"
-            :disabled="disabled"
             :mappings="mappings"
             :loading="loading"
             @add-mapping="addMapping"
             @update-mapping="updateMapping"
             @remove-mapping="removeMapping"
           />
+          <ZCard
+            id="oauth-guardian-review-model-help"
+            :title="t('settings.routing.oauthGuardianReviewModel')"
+            :description="t('settings.routing.oauthGuardianReviewModelHelp')"
+          >
+            <div class="flex items-center gap-2">
+              <ZSwitch
+                v-model="form.openaiOauthGuardianReviewModel"
+                :aria-label="t('settings.routing.oauthGuardianReviewModel')"
+                :aria-description="t('settings.routing.oauthGuardianReviewModelHelp')"
+                :active-text="t('common.values.on')"
+                :inactive-text="t('common.values.off')"
+                inline-prompt
+                :width="56"
+                :disabled="disabled"
+              />
+              <HelpPopover
+                :label="t('common.form.fieldHelp', { label: t('settings.routing.oauthGuardianReviewModel') })"
+                :content="t('settings.routing.oauthGuardianReviewModelDetails')"
+              />
+            </div>
+          </ZCard>
         </div>
       </fieldset>
     </ZForm>

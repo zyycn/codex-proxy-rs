@@ -294,7 +294,8 @@
     "modelMapping": "模型映射",
     "routing": {
       "oauthGuardianReviewModel": "专用审核模型",
-      "oauthGuardianReviewModelHelp": "OAuth 同步审核默认使用 codex-auto-review，关闭后沿用客户端模型",
+      "oauthGuardianReviewModelHelp": "同步审核优先使用授权账号的专用模型",
+      "oauthGuardianReviewModelDetails": "开启时优先使用 codex-auto-review，关闭此项或没有可用账号支持该模型时，沿用客户端请求的模型",
       "modelMapHelp": "将客户端请求的模型名称映射为实际使用的上游模型"
     },
     "addMapping": "添加映射",

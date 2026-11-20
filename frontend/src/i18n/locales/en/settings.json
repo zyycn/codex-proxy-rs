@@ -294,7 +294,8 @@
     "modelMapping": "Model mapping",
     "routing": {
       "oauthGuardianReviewModel": "Dedicated review model",
-      "oauthGuardianReviewModelHelp": "OAuth synchronous reviews use codex-auto-review by default. Turn off to use the client model.",
+      "oauthGuardianReviewModelHelp": "Prefer the dedicated review model for synchronous reviews with OAuth accounts",
+      "oauthGuardianReviewModelDetails": "Prefer codex-auto-review when enabled. Use the model requested by the client when disabled or when no eligible review account is available",
       "modelMapHelp": "Map client model names to the upstream models used"
     },
     "addMapping": "Add mapping",
