@@ -211,7 +211,7 @@ async fn xai_quota_catalog_worker_preserves_store_failures() {
     let error = run_quota_catalog_cycle(&mut bundle)
         .await
         .expect_err("Provider account Store failure");
-    assert_eq!(error.as_safe_str(), "xAI Provider accounts unavailable");
+    assert_eq!(error.as_safe_str(), "账号列表读取失败");
 }
 
 #[tokio::test]
@@ -250,10 +250,7 @@ async fn xai_quota_catalog_worker_retains_both_failure_stages_and_finishes_the_b
         let error = run_quota_catalog_cycle(&mut bundle)
             .await
             .expect_err("invalid stored credentials");
-        assert_eq!(
-            error.as_safe_str(),
-            "xAI quota or catalog synchronization failed"
-        );
+        assert_eq!(error.as_safe_str(), "额度或模型目录同步失败");
         let details = error.error_details().expect("synchronization causes");
         let details: Value = serde_json::from_str(details.as_str()).unwrap();
         let cause = details["causes"]["messages"][0].as_str().unwrap();
@@ -1245,7 +1242,7 @@ mod errors {
                 Some(if expired {
                     "刷新令牌已失效，请重新授权"
                 } else {
-                    "账号凭据已被更新，请刷新账号列表后重试"
+                    "凭据已更新，请刷新账号列表"
                 })
             );
             assert_eq!(store.account(&input.account_id).unwrap(), before);
@@ -1286,10 +1283,7 @@ mod errors {
             .await
             .unwrap_err();
         assert_eq!(error.kind(), Kind::Conflict);
-        assert_eq!(
-            error.public_message(),
-            Some("令牌刷新繁忙，请等待当前刷新完成后重试")
-        );
+        assert_eq!(error.public_message(), Some("令牌刷新繁忙，请稍后重试"));
         assert_eq!(
             listener.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
@@ -1322,7 +1316,7 @@ mod errors {
         assert_eq!(error.kind(), Kind::Unavailable);
         assert_eq!(
             error.public_message(),
-            Some("xAI 令牌刷新连接失败，请检查出站连接后重试")
+            Some("无法连接令牌刷新服务，请检查出站连接")
         );
         assert!(!format!("{error:?} {error}").contains("proxy-secret-marker"));
         assert_eq!(store.account(&input.account_id).unwrap(), before);

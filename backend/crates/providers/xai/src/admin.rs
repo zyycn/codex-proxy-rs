@@ -108,9 +108,9 @@ impl AuthorizationCommitGuard for XaiAuthorizationCommitGuard {
             OAuthPendingConsumeOutcome::Consumed => Ok(()),
             OAuthPendingConsumeOutcome::NotFound
             | OAuthPendingConsumeOutcome::OwnerMismatch
-            | OAuthPendingConsumeOutcome::ClaimMismatch => Err(AdminError::conflict(
-                "xAI OAuth pending claim is no longer current",
-            )),
+            | OAuthPendingConsumeOutcome::ClaimMismatch => {
+                Err(AdminError::conflict("授权状态已变更，请核对账号状态"))
+            }
         }
     }
 
@@ -125,7 +125,7 @@ impl AuthorizationCommitGuard for XaiAuthorizationCommitGuard {
             OAuthPendingReleaseOutcome::NotFound
             | OAuthPendingReleaseOutcome::OwnerMismatch
             | OAuthPendingReleaseOutcome::ClaimMismatch => Err(AdminError::unavailable(
-                "xAI 授权处理状态暂时无法释放，请先检查授权状态",
+                "授权流程未正常结束，请核对账号状态",
             )),
         }
     }
@@ -723,7 +723,7 @@ impl ProviderAdmin for XaiAdminProvider {
             .map_err(map_store_error)?;
         if !account_matches_record(&current.account, &command.account) {
             return Err(provider_error(ProviderAdminErrorKind::Conflict)
-                .with_public_message("账号凭据已被更新，请刷新账号列表后重试"));
+                .with_public_message("凭据已更新，请刷新账号列表"));
         }
         let rotation: RotationDocument = serde_json::from_value(Value::Object(
             command.provider_material.into_provider_data().into_inner(),
@@ -777,7 +777,7 @@ impl ProviderAdmin for XaiAdminProvider {
             .map_err(map_store_error)?;
         if !account_matches_record(&current.account, &command.account) {
             return Err(provider_error(ProviderAdminErrorKind::Conflict)
-                .with_public_message("账号凭据已被更新，请刷新账号列表后重试"));
+                .with_public_message("凭据已更新，请刷新账号列表"));
         }
         let prepared = self
             .refresh
@@ -1470,24 +1470,13 @@ fn build_connection_test_operation(
 fn map_failure_class(class: FailureClass) -> ProviderAdminError {
     use ProviderAdminErrorKind as Kind;
     let (kind, message) = match class {
-        FailureClass::Transient => (
-            Kind::Unavailable,
-            "xAI 授权服务暂不可用，请检查出站连接后重试",
-        ),
-        FailureClass::Ambiguous => (
-            Kind::Ambiguous,
-            "xAI 授权结果未知，请先核对账号状态，不要立即重复提交",
-        ),
-        FailureClass::CredentialPermanent => (Kind::Invalid, "xAI 拒绝了当前凭据，请检查账号授权"),
-        FailureClass::ConfigurationPermanent => {
-            (Kind::Invalid, "xAI 授权配置无效，请检查客户端与授权配置")
-        }
-        FailureClass::UserActionRequired => (Kind::Invalid, "xAI 授权需要用户确认，请重新完成授权"),
-        FailureClass::Security => (
-            Kind::Invalid,
-            "xAI 授权安全校验失败，请检查授权来源与账号信息",
-        ),
-        FailureClass::Unsupported => (Kind::Unsupported, "xAI 不支持当前授权操作"),
+        FailureClass::Transient => (Kind::Unavailable, "授权服务暂不可用"),
+        FailureClass::Ambiguous => (Kind::Ambiguous, "授权结果未知，核对账号状态前请勿重试"),
+        FailureClass::CredentialPermanent => (Kind::Invalid, "凭据被拒绝，请检查账号授权"),
+        FailureClass::ConfigurationPermanent => (Kind::Invalid, "授权配置无效，请检查客户端配置"),
+        FailureClass::UserActionRequired => (Kind::Invalid, "请重新授权并确认"),
+        FailureClass::Security => (Kind::Invalid, "授权校验失败，请核对来源和账号"),
+        FailureClass::Unsupported => (Kind::Unsupported, "不支持此授权操作"),
     };
     provider_error(kind).with_public_message(message)
 }
@@ -1509,12 +1498,8 @@ fn map_pending_claim_settlement_error(error: ProviderStoreError) -> AdminError {
         ProviderStoreErrorKind::InvalidData => {
             AdminError::internal("xAI OAuth pending claim is invalid")
         }
-        ProviderStoreErrorKind::Conflict => {
-            AdminError::conflict("xAI OAuth pending claim conflicts with current state")
-        }
-        ProviderStoreErrorKind::Unavailable => {
-            AdminError::unavailable("xAI 授权状态存储暂不可用，请稍后重试")
-        }
+        ProviderStoreErrorKind::Conflict => AdminError::conflict("授权状态冲突，请核对账号状态"),
+        ProviderStoreErrorKind::Unavailable => AdminError::unavailable("授权状态存储暂不可用"),
     }
 }
 
@@ -1553,27 +1538,15 @@ fn map_refresh_error(error: GrokCredentialRefreshError) -> ProviderAdminError {
     let (kind, message) = match error {
         Error::Repository(error) => return map_repository_error(error),
         Error::Lease(error) => return map_provider_store_error(error),
-        Error::LeaseBusy => (Kind::Conflict, "令牌刷新繁忙，请等待当前刷新完成后重试"),
-        Error::InvalidRefreshResponse => (
-            Kind::Ambiguous,
-            "xAI 返回的刷新凭据无效，请先核对账号状态，不要立即重复刷新",
-        ),
-        Error::Preparation => (Kind::Unavailable, "xAI 令牌刷新服务尚未就绪，请稍后重试"),
+        Error::LeaseBusy => (Kind::Conflict, "令牌刷新繁忙，请稍后重试"),
+        Error::InvalidRefreshResponse => (Kind::Ambiguous, "新凭据无效，核对账号状态前请勿重试"),
+        Error::Preparation => (Kind::Unavailable, "令牌刷新服务尚未就绪"),
         Error::ManualFailure(failure) => match failure {
-            Failure::Transient => (
-                Kind::Unavailable,
-                "xAI 令牌刷新连接失败，请检查出站连接后重试",
-            ),
-            Failure::Ambiguous => (
-                Kind::Ambiguous,
-                "令牌刷新结果未知，请先核对账号状态，不要立即重复刷新",
-            ),
+            Failure::Transient => (Kind::Unavailable, "无法连接令牌刷新服务，请检查出站连接"),
+            Failure::Ambiguous => (Kind::Ambiguous, "刷新结果未知，核对账号状态前请勿重试"),
             Failure::InvalidGrant => (Kind::Invalid, "刷新令牌已失效，请重新授权"),
-            Failure::Banned => (Kind::Invalid, "xAI 账号已被停用，请检查账号状态"),
-            Failure::Rejected => (
-                Kind::BadGateway,
-                "xAI 未能完成令牌刷新，请检查授权配置与上游服务",
-            ),
+            Failure::Banned => (Kind::Invalid, "上游账号已停用"),
+            Failure::Rejected => (Kind::BadGateway, "令牌刷新失败"),
         },
     };
     provider_error(kind).with_public_message(message)
@@ -1583,16 +1556,11 @@ fn map_quota_error(error: GrokQuotaError) -> ProviderAdminError {
     use GrokQuotaError as Error;
     use ProviderAdminErrorKind as Kind;
     let (kind, message) = match error {
-        Error::AccountUnavailable => (Kind::NotFound, "没有可用于查询 xAI 额度的账号"),
-        Error::StaleCredentialSnapshot => {
-            (Kind::Conflict, "账号凭据已被更新，请刷新账号列表后重试")
-        }
-        Error::InvalidData => (Kind::Invalid, "xAI 额度数据无效，请检查账号授权"),
-        Error::Upstream => (
-            Kind::Unavailable,
-            "xAI 额度查询失败，请检查出站连接与上游服务",
-        ),
-        Error::Store => (Kind::Unavailable, "xAI 额度查询的依赖服务暂不可用"),
+        Error::AccountUnavailable => (Kind::NotFound, "当前账号无法查询额度"),
+        Error::StaleCredentialSnapshot => (Kind::Conflict, "凭据已更新，请刷新账号列表"),
+        Error::InvalidData => (Kind::Invalid, "凭据或额度数据无效"),
+        Error::Upstream => (Kind::Unavailable, "额度查询失败"),
+        Error::Store => (Kind::Unavailable, "额度查询暂不可用"),
     };
     provider_error(kind).with_public_message(message)
 }
@@ -1601,17 +1569,12 @@ fn map_catalog_error(error: GrokCredentialCatalogError) -> ProviderAdminError {
     use GrokCredentialCatalogError as Error;
     use ProviderAdminErrorKind as Kind;
     let (kind, message) = match error {
-        Error::InvalidCredentialData => (Kind::Invalid, "xAI 模型查询凭据无效，请检查账号授权"),
-        Error::ConflictingModelFacts => (Kind::Invalid, "xAI 模型目录信息不一致，请重新查询"),
-        Error::NoEligibleCredential => (Kind::NotFound, "没有可用于查询 xAI 模型的账号"),
-        Error::StaleCredentialSnapshot => {
-            (Kind::Conflict, "账号凭据已被更新，请刷新账号列表后重试")
-        }
-        Error::Upstream => (
-            Kind::Unavailable,
-            "xAI 模型查询失败，请检查出站连接与上游服务",
-        ),
-        Error::Cache | Error::Store => (Kind::Unavailable, "xAI 模型查询的依赖服务暂不可用"),
+        Error::InvalidCredentialData => (Kind::Invalid, "查询模型的凭据无效，请检查账号授权"),
+        Error::ConflictingModelFacts => (Kind::Invalid, "模型目录不一致，请重新查询"),
+        Error::NoEligibleCredential => (Kind::NotFound, "没有可查询模型的账号"),
+        Error::StaleCredentialSnapshot => (Kind::Conflict, "凭据已更新，请刷新账号列表"),
+        Error::Upstream => (Kind::Unavailable, "模型查询失败"),
+        Error::Cache | Error::Store => (Kind::Unavailable, "模型查询暂不可用"),
     };
     provider_error(kind).with_public_message(message)
 }

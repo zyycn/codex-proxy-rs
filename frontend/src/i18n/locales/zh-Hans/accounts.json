@@ -308,7 +308,7 @@
       "resetRefreshFailed": "额度已重置，但最新额度加载失败：{value}",
       "statusRestored": "账号状态已恢复",
       "staleAccount": "账号 {id} 的页面数据已失效，请重新选择",
-      "unsupportedProvider": "不支持的 Provider：{provider}"
+      "deletionResultUnknown": "删除结果未知，请核对账号列表"
     },
     "usage": {
       "call": "调用",

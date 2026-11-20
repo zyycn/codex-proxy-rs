@@ -380,9 +380,7 @@ impl AuthorizationCommitGuard for CodexOAuthAuthorizationCommitGuard {
         if consumed {
             Ok(())
         } else {
-            Err(AdminError::conflict(
-                "OpenAI OAuth pending claim is no longer current",
-            ))
+            Err(AdminError::conflict("授权状态已变更，请核对账号状态"))
         }
     }
 
@@ -396,7 +394,7 @@ impl AuthorizationCommitGuard for CodexOAuthAuthorizationCommitGuard {
             Ok(())
         } else {
             Err(AdminError::unavailable(
-                "OpenAI 授权处理状态暂时无法释放，请先检查授权状态",
+                "授权流程未正常结束，请核对账号状态",
             ))
         }
     }
@@ -876,11 +874,9 @@ fn map_authorization_settlement_error(error: CodexOAuthPendingStoreError) -> Adm
             AdminError::internal("OpenAI OAuth pending claim is invalid")
         }
         CodexOAuthPendingStoreError::Conflict => {
-            AdminError::conflict("OpenAI OAuth pending claim conflicts with current state")
+            AdminError::conflict("授权状态冲突，请核对账号状态")
         }
-        CodexOAuthPendingStoreError::Unavailable => {
-            AdminError::unavailable("OpenAI 授权状态存储暂不可用，请稍后重试")
-        }
+        CodexOAuthPendingStoreError::Unavailable => AdminError::unavailable("授权状态存储暂不可用"),
     }
 }
 

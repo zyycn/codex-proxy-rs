@@ -145,9 +145,11 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
             if context.cancellation().is_cancelled() {
                 return Ok(());
             }
-            let outcomes = self.service.refresh_due().await.map_err(|error| {
-                WorkerTaskError::safe("OpenAI OAuth refresh failed").with_source(error)
-            })?;
+            let outcomes = self
+                .service
+                .refresh_due()
+                .await
+                .map_err(|error| WorkerTaskError::safe("令牌刷新失败").with_source(error))?;
             let mut changed = Vec::new();
             let mut refreshed = 0_u64;
             let mut invalidated = 0_u64;
@@ -191,14 +193,12 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
                     .into_iter()
                     .map(|id| gateway_core::account::ProviderAccountId::new(id.as_str()))
                     .collect::<Result<Vec<_>, _>>()
-                    .map_err(|error| {
-                        WorkerTaskError::safe("OpenAI 账号 ID 无效").with_source(error)
-                    })?;
+                    .map_err(|error| WorkerTaskError::safe("账号 ID 无效").with_source(error))?;
                 self.catalog
                     .invalidate_accounts(&ids)
                     .await
                     .map_err(|error| {
-                        WorkerTaskError::safe("OpenAI 凭据变更后目录失效失败").with_source(error)
+                        WorkerTaskError::safe("凭据已更新，模型目录缓存清理失败").with_source(error)
                     })?;
             }
             if !outcomes.is_empty() {
@@ -288,8 +288,7 @@ impl ScheduledTask for OpenAiQuotaTask {
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    return Err(WorkerTaskError::safe("OpenAI quota synchronization failed")
-                        .with_source(error));
+                    return Err(WorkerTaskError::safe("额度同步失败").with_source(error));
                 }
             }
             Ok(())
@@ -305,10 +304,7 @@ impl ScheduledTask for OpenAiCatalogTask {
             }
             let result = match self.catalog.refresh_catalogs().await {
                 Ok(_) | Err(CodexCredentialCatalogError::NoEligibleCredential) => Ok(()),
-                Err(error) => Err(WorkerTaskError::safe(
-                    "OpenAI model catalog synchronization failed",
-                )
-                .with_source(error)),
+                Err(error) => Err(WorkerTaskError::safe("模型目录同步失败").with_source(error)),
             };
             // 成功周期尾部追加 [0, 20%) 单侧随机抖动，打破固定周期轮询特征；
             // 放在周期尾部避免延迟冷启动首轮刷新，失败路径交给宿主退避不叠加。
@@ -345,9 +341,7 @@ impl DaemonTask for OpenAiCatalogEtagTask {
                     Ok(_) | Err(CodexCredentialCatalogError::NoEligibleCredential) => {}
                     Err(error) => {
                         self.catalog.schedule_refresh();
-                        return Err(
-                            WorkerTaskError::safe("OpenAI 模型目录刷新失败").with_source(error)
-                        );
+                        return Err(WorkerTaskError::safe("模型目录刷新失败").with_source(error));
                     }
                 }
                 context.succeeded();
@@ -429,9 +423,7 @@ impl OpenAiWarmupTask {
             .runtime_policy()
             .load_warmup_policy()
             .await
-            .map_err(|error| {
-                WorkerTaskError::safe("OpenAI warmup policy load failed").with_source(error)
-            })?;
+            .map_err(|error| WorkerTaskError::safe("预热策略加载失败").with_source(error))?;
         if !policy.enabled() {
             return Ok(());
         }
@@ -450,21 +442,19 @@ impl OpenAiWarmupTask {
             .naive_local()
             .with_second(0)
             .and_then(|value| value.with_nanosecond(0))
-            .ok_or_else(|| WorkerTaskError::safe("invalid warmup slot"))?;
+            .ok_or_else(|| WorkerTaskError::safe("预热时间无效"))?;
         if !policy.matches_slot(slot) {
             return Ok(());
         }
         let Some(model) = policy.model() else {
-            return Err(WorkerTaskError::safe("OpenAI warmup model is missing"));
+            return Err(WorkerTaskError::safe("未设置预热模型"));
         };
         if !self
             .quota
             .runtime_policy()
             .claim_warmup_slot(self.timezone, slot)
             .await
-            .map_err(|source| {
-                WorkerTaskError::safe("warmup slot is unavailable").with_source(source)
-            })?
+            .map_err(|source| WorkerTaskError::safe("无法领取本次预热任务").with_source(source))?
         {
             return Ok(());
         }

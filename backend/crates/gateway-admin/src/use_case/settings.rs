@@ -267,7 +267,7 @@ impl SettingsService for DefaultSettingsService {
                         )
                     })
                 {
-                    return Err(AdminError::invalid("xAI 不支持此价格档位"));
+                    return Err(AdminError::invalid("当前平台不支持此价格档位"));
                 }
                 if !pricing.bands.contains_key("standard")
                     && command

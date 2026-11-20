@@ -333,7 +333,7 @@ export function useAccountMutations(options: {
     }
     const result = await deleteAccounts(payload, options)
     if (!result)
-      throw new Error(t('accounts.actions.unsupportedProvider', { provider: account.provider }))
+      throw new Error(t('accounts.actions.deletionResultUnknown'))
   }
 
   function accountDeletionGroups(accounts: Account[]) {

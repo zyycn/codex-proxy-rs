@@ -106,9 +106,11 @@ impl ScheduledTask for XaiOAuthRefreshTask {
             if context.cancellation().is_cancelled() {
                 return Ok(());
             }
-            let outcomes = self.service.refresh_due().await.map_err(|error| {
-                WorkerTaskError::safe("xAI OAuth refresh failed").with_source(error)
-            })?;
+            let outcomes = self
+                .service
+                .refresh_due()
+                .await
+                .map_err(|error| WorkerTaskError::safe("令牌刷新失败").with_source(error))?;
             let failures = outcomes
                 .iter()
                 .filter(|outcome| {
@@ -150,9 +152,7 @@ impl ScheduledTask for XaiQuotaCatalogTask {
                 .accounts
                 .list_for_provider(&self.provider_kind)
                 .await
-                .map_err(|source| {
-                    WorkerTaskError::safe("xAI Provider accounts unavailable").with_source(source)
-                })?;
+                .map_err(|source| WorkerTaskError::safe("账号列表读取失败").with_source(source))?;
             let mut failures = QuotaCatalogFailure::default();
             let now = SystemTime::now();
             let accounts = self.reserve_periodic_refreshes(accounts, now);
@@ -175,10 +175,7 @@ impl ScheduledTask for XaiQuotaCatalogTask {
             if failures.quota_failures == 0 && failures.catalog_error.is_none() {
                 Ok(())
             } else {
-                Err(
-                    WorkerTaskError::safe("xAI quota or catalog synchronization failed")
-                        .with_source(failures),
-                )
+                Err(WorkerTaskError::safe("额度或模型目录同步失败").with_source(failures))
             }
         })
     }

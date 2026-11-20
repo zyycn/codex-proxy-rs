@@ -442,29 +442,14 @@ mod provider {
             *fixture.account.lock().unwrap() = Some(account(provider));
             for (kind, status, code, message) in [
                 (Kind::Invalid, 400, 40001, "刷新令牌已被使用，请重新授权"),
-                (
-                    Kind::Conflict,
-                    409,
-                    40901,
-                    "令牌刷新繁忙，请等待当前刷新完成后重试",
-                ),
-                (
-                    Kind::BadGateway,
-                    502,
-                    50201,
-                    "OpenAI 返回的 Codex PAT 身份资料不完整或格式无效，请稍后重试",
-                ),
-                (
-                    Kind::Unavailable,
-                    503,
-                    50301,
-                    "暂时无法向 OpenAI 验证 Codex PAT，请稍后重试",
-                ),
+                (Kind::Conflict, 409, 40901, "令牌刷新繁忙，请稍后重试"),
+                (Kind::BadGateway, 502, 50201, "PAT 身份信息无效"),
+                (Kind::Unavailable, 503, 50301, "PAT 验证服务暂不可用"),
                 (
                     Kind::Ambiguous,
                     502,
                     50202,
-                    "令牌刷新结果未知，请先核对账号状态，不要立即重复刷新",
+                    "刷新结果未知，核对账号状态前请勿重试",
                 ),
             ] {
                 *fixture.provider_error.lock().unwrap() = Some(

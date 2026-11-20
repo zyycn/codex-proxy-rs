@@ -308,7 +308,7 @@
       "resetRefreshFailed": "額度已重置，但最新額度加載失敗：{value}",
       "statusRestored": "賬號狀態已恢復",
       "staleAccount": "賬號 {id} 的頁面數據已失效，請重新選擇",
-      "unsupportedProvider": "不支持的 Provider：{provider}"
+      "deletionResultUnknown": "刪除結果未知，請核對賬號列表"
     },
     "usage": {
       "call": "調用",

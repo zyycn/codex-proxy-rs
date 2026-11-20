@@ -931,9 +931,9 @@ async fn oauth_connection_failures_preserve_safe_diagnostics_and_release_the_cla
         assert_eq!(
             error.public_message(),
             Some(if timed_out {
-                "连接 OpenAI 授权服务超时，请检查出站连接"
+                "连接授权服务超时，请检查出站连接"
             } else {
-                "无法连接 OpenAI 授权服务，请检查出站连接"
+                "无法连接授权服务，请检查出站连接"
             }),
         );
         let mut source = error.source();
@@ -1976,7 +1976,7 @@ async fn initialized_provider_reports_a_safe_pat_format_error_before_network_acc
     assert_eq!(error.kind(), ProviderAdminErrorKind::Invalid);
     assert_eq!(
         error.public_message(),
-        Some("Codex PAT 格式无效：应为 at- 开头的完整令牌，不能包含空白或控制字符")
+        Some("请输入完整 PAT，以 at- 开头且不含空白或控制字符")
     );
     assert!(error.message().is_none());
     assert!(!format!("{error:?}").contains("sensitive-token"));
@@ -2598,6 +2598,41 @@ mod errors {
     use super::*;
 
     #[tokio::test]
+    async fn expired_token_prompts_refresh_before_quota_and_profile_queries() {
+        let store = Arc::new(MemoryAccountStore::default());
+        let account_id = ProviderAccountId::new("acct_expired").unwrap();
+        let mut verified_account = profile("chatgpt-expired");
+        verified_account.access_token_expires_at = Some(Utc::now() - chrono::Duration::minutes(1));
+        store
+            .seed_oauth_credential(ImportCodexOAuthCredential {
+                account_id: account_id.as_str().to_owned(),
+                name: "expired".to_owned(),
+                secret: secret("expired-test-token"),
+                verified_account,
+                next_refresh_at: None,
+                enabled: true,
+            })
+            .await;
+        let server = MockServer::start().await;
+        let provider = initialized_test_bundle(store, server.uri())
+            .await
+            .admin_provider();
+        let quota_error = provider
+            .quota(ProviderQuotaRequest {
+                account_id: account_id.clone(),
+                refresh: true,
+                rolling_usage: None,
+            })
+            .await
+            .unwrap_err();
+        let profile_error = provider.profile_statistics(&account_id).await.unwrap_err();
+        for error in [quota_error, profile_error] {
+            assert_eq!(error.public_message(), Some("请先刷新令牌"));
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn quota_refresh_exposes_safe_failure_reasons_and_recovers_without_account_errors() {
         let store = Arc::new(MemoryAccountStore::default());
         let account_id = "acct_quota_error";
@@ -2627,38 +2662,33 @@ mod errors {
                 401,
                 "token_revoked",
                 Kind::BadGateway,
-                "OpenAI 拒绝了额度查询（HTTP 401，token_revoked）：访问令牌已被撤销，请刷新令牌或重新授权",
+                "访问令牌已撤销，请刷新令牌或重新授权",
             ),
             (
                 401,
                 "unknown_code",
                 Kind::BadGateway,
-                "OpenAI 拒绝了额度查询（HTTP 401），请检查账号授权状态；若令牌已在服务端失效，请重新授权",
+                "账号认证失败，请检查授权状态",
             ),
             (
                 403,
                 "forbidden",
                 Kind::BadGateway,
-                "OpenAI 拒绝了额度查询（HTTP 403），请检查账号授权状态",
+                "额度查询被拒绝，请检查账号权限",
             ),
             (
                 429,
                 "rate_limited",
                 Kind::BadGateway,
-                "OpenAI 额度查询被限流，请稍后重试",
+                "额度查询过于频繁，请稍后重试",
             ),
             (
                 503,
                 "unavailable",
                 Kind::BadGateway,
-                "OpenAI 额度查询服务异常，请稍后重试",
+                "额度服务异常，请稍后重试",
             ),
-            (
-                400,
-                "invalid_request",
-                Kind::Unavailable,
-                "OpenAI 额度查询失败，请检查出站连接与上游服务",
-            ),
+            (400, "invalid_request", Kind::Unavailable, "额度查询失败"),
         ] {
             server.reset().await;
             Mock::given(method("GET"))
@@ -2711,12 +2741,8 @@ mod errors {
     #[tokio::test]
     async fn manual_refresh_preserves_banned_evidence_without_promoting_401_to_terminal() {
         for (status, kind, message) in [
-            (400, Kind::Invalid, "Codex 账号已被停用，请检查账号状态"),
-            (
-                401,
-                Kind::BadGateway,
-                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
-            ),
+            (400, Kind::Invalid, "上游账号已停用"),
+            (401, Kind::BadGateway, "令牌刷新被拒绝，请检查账号授权"),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -2776,7 +2802,7 @@ mod errors {
                 401,
                 "unknown",
                 Kind::BadGateway,
-                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
+                "令牌刷新被拒绝，请检查账号授权",
             ),
             (
                 400,
@@ -2800,19 +2826,19 @@ mod errors {
                 400,
                 "INVALID_GRANT",
                 Kind::BadGateway,
-                "刷新令牌无效或已失效，请重新授权",
+                "刷新令牌无效，请重新授权",
             ),
             (
                 429,
                 "unknown",
                 Kind::BadGateway,
-                "OpenAI 令牌刷新请求被限流，请稍后重试",
+                "令牌刷新过于频繁，请稍后重试",
             ),
             (
                 503,
                 "unknown",
                 Kind::BadGateway,
-                "OpenAI 令牌刷新服务异常，请稍后重试",
+                "令牌刷新服务异常，请稍后重试",
             ),
         ] {
             let server = MockServer::start().await;
@@ -2848,7 +2874,7 @@ mod errors {
                 true,
                 false,
                 Kind::Conflict,
-                "令牌刷新繁忙，请等待当前刷新完成后重试",
+                "令牌刷新繁忙，请稍后重试",
             ),
             (
                 false,
@@ -2862,7 +2888,7 @@ mod errors {
                 true,
                 true,
                 Kind::Conflict,
-                "账号凭据已被更新，请刷新账号列表后重试",
+                "凭据已更新，请刷新账号列表",
             ),
         ] {
             let server = MockServer::start().await;
@@ -2908,7 +2934,7 @@ mod errors {
         assert_eq!(error.kind(), Kind::Ambiguous);
         assert_eq!(
             error.public_message(),
-            Some("令牌刷新结果未知，请先核对账号状态，不要立即重复刷新")
+            Some("刷新结果未知，核对账号状态前请勿重试")
         );
         assert!(!format!("{error:?}").contains("invalid-success-secret-marker"));
 
@@ -2928,7 +2954,7 @@ mod errors {
         assert_eq!(error.kind(), Kind::Ambiguous);
         assert_eq!(
             error.public_message(),
-            Some("令牌刷新结果未知，请先核对账号状态，不要立即重复刷新")
+            Some("刷新结果未知，核对账号状态前请勿重试")
         );
         assert_eq!(store.account("acct_refresh_error").unwrap(), before);
     }

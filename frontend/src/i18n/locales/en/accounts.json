@@ -308,7 +308,7 @@
       "resetRefreshFailed": "Quota reset succeeded, but the latest quota could not be loaded: {value}",
       "statusRestored": "Account status restored",
       "staleAccount": "Account {id} is out of date, select it again",
-      "unsupportedProvider": "Unsupported provider: {provider}"
+      "deletionResultUnknown": "Deletion result unknown. Check the account list"
     },
     "usage": {
       "call": "Calls",
