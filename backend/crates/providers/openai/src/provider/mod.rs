@@ -1019,17 +1019,13 @@ impl CodexProvider {
         {
             return Err(continuation_replay_required_error("scope_unavailable"));
         }
-        if upstream_request
-            .downstream_websocket_connection_id
-            .is_some()
-            && upstream_request.previous_response_id().is_some()
+        if upstream_request.previous_response_id().is_some()
             && upstream_request.generate()
             && previous_session.as_ref().is_some_and(|state| {
                 state.continuation_scope == OpenAiContinuationScope::ReplayRequired
             })
         {
-            // HTTP store=false 没有原生续链，完整历史仍由客户端持有；不能把 delta
-            // 当作独立新请求发送，也不能用 previous_response_id 猜测上游存储状态
+            // 上一轮已确认需要重放，只有客户端持有完整历史
             return Err(continuation_replay_required_error("scope_unavailable"));
         }
         let trace = context.trace();
