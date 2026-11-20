@@ -158,6 +158,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         ],
     );
     request.use_websocket = true;
+    request.turn_state = Some("turn-state".to_owned());
     request.responses_lite = Some("true".to_owned());
     request.memgen_request = Some("true".to_owned());
     request.set_client_metadata(Some(json!({
@@ -217,11 +218,11 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
             .and_then(Value::as_str)
             .is_some_and(|value| value.parse::<u128>().is_ok_and(|value| value > 0))
     );
+    assert_eq!(metadata["x-codex-turn-state"], "turn-state");
     let headers = received_headers.lock().expect("headers lock");
     for (name, expected) in [
         ("x-client-request-id", "cp_derived"),
         ("openai-beta", "responses_websockets=2026-02-06"),
-        ("x-codex-turn-state", "turn-state"),
         ("x-codex-turn-metadata", "{\"thread_source\":\"subagent\"}"),
         ("x-codex-beta-features", "feature-a"),
         ("x-responsesapi-include-timing-metrics", "true"),
@@ -244,6 +245,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         }
     }
     for forbidden in [
+        "x-codex-turn-state",
         "x-codex-installation-id",
         "x-codex-turn-id",
         "x-openai-internal-codex-residency",

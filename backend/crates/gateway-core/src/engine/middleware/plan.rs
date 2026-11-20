@@ -9,6 +9,16 @@ use std::{fmt, sync::Arc};
 
 /// 一个发布代次冻结的统一数据面中间件计划
 pub trait MiddlewarePlan: Send + Sync + fmt::Debug {
+    /// 只在能证明模型变更保留所有已绑定处理器时允许原生模型替换。
+    fn preserves_model_bindings(
+        &self,
+        _route: crate::engine::ModelRouteScope<'_>,
+        _provider: &crate::routing::ProviderKind,
+        _target: &crate::routing::UpstreamModelId,
+    ) -> bool {
+        false
+    }
+
     fn has_outbound(&self, _context: &MiddlewareContext) -> bool {
         false
     }
@@ -85,6 +95,16 @@ pub struct FrozenMiddlewarePlan {
 }
 
 impl FrozenMiddlewarePlan {
+    #[must_use]
+    pub fn preserves_model_bindings(
+        &self,
+        route: crate::engine::ModelRouteScope<'_>,
+        provider: &crate::routing::ProviderKind,
+        target: &crate::routing::UpstreamModelId,
+    ) -> bool {
+        self.plan.preserves_model_bindings(route, provider, target)
+    }
+
     #[must_use]
     pub fn has_outbound(&self, context: &MiddlewareContext) -> bool {
         self.plan.has_outbound(context)

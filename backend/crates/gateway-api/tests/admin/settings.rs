@@ -523,6 +523,13 @@ fn settings_service_contract_flattens_values_and_rejects_unknown_fields() {
         serde_json::from_value::<RuntimeSettings>(record.clone()).unwrap(),
         current
     );
+    let mut legacy = record.as_object().unwrap().clone();
+    legacy.remove("openai_oauth_guardian_review_model");
+    legacy.remove("openai_request_country");
+    assert_eq!(
+        serde_json::from_value::<RuntimeSettings>(Value::Object(legacy)).unwrap(),
+        current
+    );
     record["unexpected_setting"] = json!(true);
     assert!(serde_json::from_value::<RuntimeSettings>(record).is_err());
 
@@ -536,6 +543,12 @@ fn settings_service_contract_flattens_values_and_rejects_unknown_fields() {
         serde_json::from_value::<ReplaceRuntimeSettings>(wire.clone()).unwrap(),
         command
     );
+    let mut legacy = wire.as_object().unwrap().clone();
+    legacy.remove("openai_oauth_guardian_review_model");
+    legacy.remove("openai_request_country");
+    let legacy = serde_json::from_value::<ReplaceRuntimeSettings>(Value::Object(legacy)).unwrap();
+    assert_eq!(legacy.openai_oauth_guardian_review_model, None);
+    assert_eq!(legacy.openai_request_country, None);
     wire["unexpected_setting"] = json!(true);
     assert!(serde_json::from_value::<ReplaceRuntimeSettings>(wire).is_err());
 }
@@ -1414,6 +1427,83 @@ async fn settings_update_rejects_a_stale_version_without_replacing_the_saved_val
         response_json(retry).await["data"]["refreshMarginSeconds"],
         9999
     );
+}
+
+#[tokio::test]
+async fn openai_request_settings_preserve_omitted_fields_and_reject_stale_writes() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let read = || app(fixture.state()).oneshot(request(Method::GET, "/api/admin/settings", None));
+    let save = |body| {
+        app(fixture.state()).oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(body),
+        ))
+    };
+    let initial = response_json(read().await.unwrap()).await["data"].clone();
+    assert_eq!(initial["openaiOauthGuardianReviewModel"], false);
+    assert_eq!(initial["openaiRequestCountry"], json!({"mode":"default"}));
+    let mut body = update_body();
+    body["configRevision"] = initial["configRevision"].clone();
+    body["openaiOauthGuardianReviewModel"] = json!(true);
+    body["openaiRequestCountry"] = json!({"mode":"custom","country":"CA"});
+    let response = save(body.clone()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved = response_json(response).await["data"].clone();
+    assert_eq!(saved["openaiOauthGuardianReviewModel"], true);
+    assert_eq!(saved["openaiRequestCountry"], body["openaiRequestCountry"]);
+
+    let mut legacy = update_body();
+    legacy["configRevision"] = saved["configRevision"].clone();
+    assert_eq!(save(legacy).await.unwrap().status(), StatusCode::OK);
+    body["openaiOauthGuardianReviewModel"] = json!(false);
+    body["openaiRequestCountry"] = json!({"mode":"passthrough"});
+    assert_eq!(
+        save(body.clone()).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    let current = response_json(read().await.unwrap()).await["data"].clone();
+    assert_eq!(current["openaiOauthGuardianReviewModel"], true);
+    assert_eq!(
+        current["openaiRequestCountry"],
+        saved["openaiRequestCountry"]
+    );
+    body["configRevision"] = current["configRevision"].clone();
+    let response = save(body).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let changed = response_json(response).await["data"].clone();
+    assert_eq!(changed["openaiOauthGuardianReviewModel"], false);
+    assert_eq!(
+        changed["openaiRequestCountry"],
+        json!({"mode":"passthrough"})
+    );
+}
+
+#[test]
+fn openai_request_settings_validate_modes_and_country_codes() {
+    for invalid in [
+        json!(null),
+        json!({"mode":"custom"}),
+        json!({"mode":"custom","country":"ca"}),
+        json!({"mode":"custom","country":"USA"}),
+        json!({"mode":"custom","country":"国"}),
+        json!({"mode":"follow_location","country":"CA"}),
+        json!({"mode":"passthrough","country":"CA"}),
+        json!({"mode":"default","country":"CA"}),
+        json!({"mode":"unknown"}),
+    ] {
+        let mut body = update_body();
+        body["openaiRequestCountry"] = invalid.clone();
+        if let Ok(request) = serde_json::from_value::<UpdateRuntimeSettingsRequest>(body) {
+            assert!(request.validate().is_err(), "{invalid}");
+        }
+    }
+    for invalid in [json!(null), json!("true"), json!(1)] {
+        let mut body = update_body();
+        body["openaiOauthGuardianReviewModel"] = invalid;
+        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
+    }
 }
 
 #[tokio::test]

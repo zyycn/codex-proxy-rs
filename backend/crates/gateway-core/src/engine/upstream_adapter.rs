@@ -14,12 +14,11 @@ use crate::{
     identity::ProviderKind,
     metering::{CalculatedCost, Usage},
     operation::Operation,
-    routing::UpstreamModelId,
     routing::extensions::ExtensionSetReference,
 };
 
 use super::{
-    AttemptContext,
+    AttemptContext, ModelRouteScope,
     middleware::MiddlewareHeader,
     provider::{EventStream, ProviderCallMetadata},
 };
@@ -28,9 +27,8 @@ use super::{
 pub trait UpstreamAdapterPlan: fmt::Debug + Send + Sync {
     fn select(
         &self,
-        context: &AttemptContext,
+        context: ModelRouteScope<'_>,
         provider: &ProviderKind,
-        model: &UpstreamModelId,
         account: Option<&ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, ProviderError>;
 }
@@ -62,14 +60,27 @@ impl FrozenUpstreamAdapterPlan {
         }
     }
 
-    pub(super) fn select(
+    /// 只有已确认为原生执行的账号可用于原生模型替换；命中但不可用的适配器保留其拒绝语义。
+    #[must_use]
+    pub fn uses_native_upstream(
         &self,
-        context: &AttemptContext,
+        route: ModelRouteScope<'_>,
         provider: &ProviderKind,
-        model: &UpstreamModelId,
+        account: &ProviderAccountId,
+    ) -> bool {
+        matches!(
+            self.select(route, provider, Some(account)),
+            Ok(UpstreamAdapterSelection::Native)
+        )
+    }
+
+    pub(crate) fn select(
+        &self,
+        context: ModelRouteScope<'_>,
+        provider: &ProviderKind,
         account: Option<&ProviderAccountId>,
     ) -> Result<UpstreamAdapterSelection, ProviderError> {
-        self.plan.select(context, provider, model, account)
+        self.plan.select(context, provider, account)
     }
 }
 

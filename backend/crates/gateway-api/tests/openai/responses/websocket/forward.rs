@@ -536,6 +536,14 @@ async fn errors_on_a_reused_connection_keep_their_own_upstream_ids() {
         "x-codex-turn-metadata",
         axum::http::HeaderValue::from_static(r#"{"request_kind":"turn"}"#),
     );
+    opening.insert(
+        "x-openai-subagent",
+        axum::http::HeaderValue::from_static("guardian"),
+    );
+    opening.insert(
+        "x-codex-guardian",
+        axum::http::HeaderValue::from_static("reviewer"),
+    );
     let (mut socket, _server) = connect_with_headers(Arc::clone(&trace), Vec::new(), opening).await;
     for request_id in ["req_first", "req_second"] {
         send_request(&mut socket).await;
@@ -548,9 +556,11 @@ async fn errors_on_a_reused_connection_keep_their_own_upstream_ids() {
         [
             [
                 Some("opening".to_owned()),
-                Some(r#"{"request_kind":"turn"}"#.to_owned())
+                Some(r#"{"request_kind":"turn"}"#.to_owned()),
+                Some("guardian".to_owned()),
+                Some("incomplete".to_owned()),
             ],
-            [None, None]
+            [None, None, None, None]
         ]
     );
     assert_no_duplicate_failure(&mut socket).await;

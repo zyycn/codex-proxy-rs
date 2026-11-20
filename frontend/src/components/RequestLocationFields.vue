@@ -5,6 +5,7 @@ import type { RequestLocation } from '@/api'
 import { ZFormItem, ZInput } from '@codex-proxy/ui'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import CountryCodeField from '@/components/CountryCodeField.vue'
 
 defineProps<{ disabled?: boolean, formProp?: string }>()
 
@@ -17,15 +18,6 @@ const requiredRule = computed<FormRule>(() => ({
   trigger: ['blur', 'change'],
   message: t('common.location.required'),
 }))
-const countryRules = computed<FormRule[]>(() => [
-  requiredRule.value,
-  {
-    pattern: /^[A-Z]{2}$/,
-    transform: value => value.trim().toUpperCase(),
-    trigger: ['blur', 'change'],
-    message: t('common.location.required'),
-  },
-])
 
 function update(field: keyof RequestLocation, value: string) {
   location.value = { ...location.value, [field]: value }
@@ -34,9 +26,13 @@ function update(field: keyof RequestLocation, value: string) {
 
 <template>
   <div class="grid gap-4.5 sm:grid-cols-2">
-    <ZFormItem :prop="formProp ? `${formProp}.country` : undefined" :rules="countryRules" :show-message="Boolean(location.country.trim())" :label="t('common.location.countryCode')" required>
-      <ZInput :model-value="location.country" :disabled="disabled" :aria-label="t('common.location.countryCode')" :placeholder="t('common.location.countryCodePlaceholder')" maxlength="2" @update:model-value="update('country', $event)" />
-    </ZFormItem>
+    <CountryCodeField
+      :model-value="location.country"
+      :form-prop="formProp ? `${formProp}.country` : undefined"
+      :show-message="Boolean(location.country.trim())"
+      :disabled="disabled"
+      @update:model-value="update('country', $event)"
+    />
     <ZFormItem :prop="formProp ? `${formProp}.region` : undefined" :rules="requiredRule" :show-message="false" :label="t('common.location.region')" required>
       <ZInput :model-value="location.region" :disabled="disabled" :aria-label="t('common.location.region')" :placeholder="t('common.location.regionPlaceholder')" maxlength="128" @update:model-value="update('region', $event)" />
     </ZFormItem>

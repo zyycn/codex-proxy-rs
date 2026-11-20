@@ -27,7 +27,10 @@ use crate::{
 
 use super::{
     error::CodexWebSocketExchangeError,
-    model::{CodexWebSocketConnection, CodexWebSocketRequest, WebSocketContinuationRequirement},
+    model::{
+        CodexWebSocketConnection, CodexWebSocketRequest, ResponseCreateOpening,
+        WebSocketContinuationRequirement,
+    },
     pool::CodexWebSocketConnectionMetadata,
     pump::{PumpLogContext, PumpedWebSocket, RawWsStream},
 };
@@ -102,34 +105,34 @@ impl CodexWebSocketConnection {
         business_headers: Vec<(String, String)>,
         request: &CodexResponsesRequest,
     ) -> Result<CodexWebSocketRequest, serde_json::Error> {
-        Self::responses_create_request_for_path(
+        Ok(Self::response_create_opening_for_path(
             base_url,
             CODEX_RESPONSES_PATH,
             websocket_key,
             business_headers,
             request,
         )
+        .with_payload(websocket_response_create_payload_text(request)?))
     }
 
-    pub(crate) fn responses_create_request_for_path(
+    pub(crate) fn response_create_opening_for_path(
         base_url: &str,
         path: &str,
         websocket_key: &str,
         business_headers: Vec<(String, String)>,
         request: &CodexResponsesRequest,
-    ) -> Result<CodexWebSocketRequest, serde_json::Error> {
+    ) -> ResponseCreateOpening {
         let mut connection = Self::responses(base_url, websocket_key, business_headers);
         let endpoint = crate::transport::endpoint_url(base_url, path);
         connection.endpoint = endpoint
             .replacen("https://", "wss://", 1)
             .replacen("http://", "ws://", 1);
-        Ok(CodexWebSocketRequest {
+        ResponseCreateOpening {
             connection,
-            payload_text: websocket_response_create_payload_text(request)?,
             continuation: WebSocketContinuationRequirement::from_request(request),
             codex_search_declared: (path == CODEX_RESPONSES_PATH)
                 .then(|| crate::compat::declares_hosted_search(request.body())),
-        })
+        }
     }
 }
 

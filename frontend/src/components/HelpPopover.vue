@@ -2,7 +2,7 @@
 import { ZIconButton, ZPopover } from '@codex-proxy/ui'
 import { CircleAlert } from '@lucide/vue'
 
-defineProps<{ label: string, content: string }>()
+defineProps<{ label: string, content?: string }>()
 </script>
 
 <template>
@@ -13,7 +13,7 @@ defineProps<{ label: string, content: string }>()
       </ZIconButton>
     </template>
     <section role="dialog" :aria-label="label" class="max-w-72 p-3 text-z-xs leading-relaxed text-z-text-secondary">
-      {{ content }}
+      <slot>{{ content }}</slot>
     </section>
   </ZPopover>
 </template>

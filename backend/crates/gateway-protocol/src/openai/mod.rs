@@ -19,6 +19,7 @@ pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
 pub mod codex;
 /// OpenAI/Codex 事件语义、用量与限流字段编解码
 pub mod events;
+mod guardian;
 mod headers;
 /// Server-Sent Events 帧的解析与编码
 pub mod sse;
@@ -29,6 +30,10 @@ pub use codex::{
     codex_responses_request_semantics_with_turn_metadata, codex_session_id, codex_thread_id,
     codex_turn_id, context_turn_metadata, observed_turn_metadata, turn_metadata_session_id,
     turn_metadata_thread_id, turn_metadata_turn_id,
+};
+pub use guardian::{
+    CODEX_AUTO_REVIEW_MODEL, CodexGuardianRole, capture_codex_guardian_identity,
+    codex_guardian_role,
 };
 pub use headers::{
     is_transport_managed_request_header, parse_retry_after_seconds, response_header_is_forwardable,

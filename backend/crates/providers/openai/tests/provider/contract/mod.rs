@@ -8,6 +8,7 @@ mod catalog_startup;
 mod cookies;
 mod correlation;
 mod error_details;
+mod guardian_model;
 mod image_model_access;
 mod messages;
 mod model_account_eligibility;
@@ -39,8 +40,8 @@ use chrono::Utc;
 use futures::{SinkExt, StreamExt, future::BoxFuture};
 use gateway_core::account::{
     AccountFeedbackStats, AccountWeight, CredentialState, FastMode, OpaqueProviderData,
-    ProviderAccountId, ProviderAccountStore as _, QuotaAccessChange, QuotaAccessState,
-    QuotaEvidence, QuotaObservation, QuotaState,
+    OpenAiRequestCountry, ProviderAccountId, ProviderAccountStore as _, QuotaAccessChange,
+    QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaState,
 };
 use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
@@ -796,7 +797,7 @@ async fn selected_proxy_location_overrides_global_and_reloads_without_mutating_c
     ].into_iter().enumerate() {
         let location = location.map(|value| serde_json::from_value::<RequestLocation>(value).unwrap());
         store.set_egress(account_id, Some(OutboundProxy::parse(&proxy.uri()).unwrap()), location);
-        let mut stream = Arc::clone(&provider).execute(planned_request("openai", operation.clone()), context_with_state_owner_and_location(&format!("req_proxy_location_{index}"), account_id, global_enabled.then(global_request_location))).await.expect("prepare");
+        let mut stream = Arc::clone(&provider).execute(planned_request("openai", operation.clone()), context_with_request_settings(&format!("req_proxy_location_{index}"), account_id, global_enabled.then(global_request_location), None, OpenAiRequestCountry::FollowLocation {})).await.expect("prepare");
         while let Some(event) = stream.next().await { event.expect("proxy response"); }
         let requests = proxy.received_requests().await.unwrap();
         let body = captured_request_body(requests.last().expect("request reached selected proxy"));
@@ -981,6 +982,18 @@ async fn capture_downstream_request(
     websocket: bool,
     lite: bool,
 ) -> Value {
+    capture_downstream_with_country(original, api_key, websocket, lite, None, Default::default())
+        .await
+}
+
+async fn capture_downstream_with_country(
+    original: Value,
+    api_key: bool,
+    websocket: bool,
+    lite: bool,
+    location: Option<gateway_core::account::RequestLocation>,
+    country: OpenAiRequestCountry,
+) -> Value {
     let http = MockServer::start().await;
     let (base_url, websocket_server) = if websocket {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1046,10 +1059,12 @@ async fn capture_downstream_request(
     let mut stream = provider
         .execute(
             planned_request("openai", operation),
-            context_with_state_owner_and_location(
+            context_with_request_settings(
                 "req_replay_compatibility",
                 "acct_provider_contract",
+                location,
                 None,
+                country,
             ),
         )
         .await
@@ -1817,14 +1832,21 @@ fn context_with_state_owner_and_location(
     owner_account_id: &str,
     location: Option<gateway_core::account::RequestLocation>,
 ) -> AttemptContext {
-    context_with_state_owner_and_profile(request_id, owner_account_id, location, None)
+    context_with_request_settings(
+        request_id,
+        owner_account_id,
+        location,
+        None,
+        Default::default(),
+    )
 }
 
-fn context_with_state_owner_and_profile(
+fn context_with_request_settings(
     request_id: &str,
     owner_account_id: &str,
     location: Option<gateway_core::account::RequestLocation>,
     profile: Option<OpaqueProviderData>,
+    country: OpenAiRequestCountry,
 ) -> AttemptContext {
     let owner = ProviderAccountStateOwner::new(
         ProviderKind::new("openai").expect("provider"),
@@ -1836,6 +1858,7 @@ fn context_with_state_owner_and_profile(
             ClientApiKeyId::new("key_openai_contract").expect("client key id"),
         )
         .with_request_location(location)
+        .with_openai_request_country(country)
         .with_request_profile(profile),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
@@ -2064,7 +2087,7 @@ async fn provider_should_override_unclassified_time_contexts_over_websocket() {
         body.pointer("/input/1/content/0/text"),
         Some(&json!(desktop.replace("Asia/Shanghai", "Pacific/Auckland")))
     );
-    assert_eq!(body.get("request_country"), Some(&json!("NZ")));
+    assert_eq!(body.get("request_country"), Some(&Value::Null));
     assert_eq!(
         body.pointer("/input/0/content/0/text"),
         Some(&json!(
@@ -6544,11 +6567,12 @@ async fn websocket_account_scoping_keeps_installation_in_metadata() {
                     "openai",
                     Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
                 ),
-                context_with_state_owner_and_profile(
+                context_with_request_settings(
                     "req_installation_ws",
                     owner,
                     Some(global_request_location()),
                     Some(profile),
+                    Default::default(),
                 ),
             )
             .await
@@ -8213,7 +8237,7 @@ async fn seed_service_tiers(store: &MemoryAccountStore, id: &str, model: &str, t
 #[tokio::test]
 async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_transports() {
     for use_websocket in [false, true] {
-        for (fast_mode, advertised_tier, requested, reported, expected_tier, expected_cost) in [
+        let regular_cases = [
             (
                 FastMode::Default,
                 None,
@@ -8393,7 +8417,40 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 Some(6_875_000),
             ),
             (FastMode::Ultrafast, None, None, None, None, Some(3_437_500)),
-        ] {
+        ];
+        let guardian_cases = [
+            ("reviewer", None, 3_437_500),
+            ("Reviewer", Some("priority"), 6_875_000),
+            ("classifier", None, 3_437_500),
+            ("guardian_classifier", None, 3_437_500),
+            ("guardian_housekeeper", Some("default"), 3_437_500),
+            ("guardian_housekeeper", None, 3_437_500),
+        ]
+        .map(|(role, expected_tier, cost)| {
+            (
+                Some(role),
+                (
+                    FastMode::Enabled,
+                    Some("priority"),
+                    if role == "guardian_housekeeper" {
+                        expected_tier.map(|tier| json!(tier))
+                    } else {
+                        Some(json!("flex"))
+                    },
+                    None,
+                    expected_tier,
+                    Some(cost),
+                ),
+            )
+        });
+        for (
+            guardian,
+            (fast_mode, advertised_tier, requested, reported, expected_tier, expected_cost),
+        ) in regular_cases
+            .into_iter()
+            .map(|case| (None, case))
+            .chain(guardian_cases)
+        {
             let store = Arc::new(MemoryAccountStore::default());
             create_account(&store, "acct_provider_contract").await;
             // 同名模型的聚合画像来自另一个分组，故意与本次能选的账号声明相反
@@ -8439,14 +8496,11 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 let base_url = format!("http://{}", listener.local_addr().expect("address"));
                 let server = tokio::spawn(async move {
                     let (socket, _) = listener.accept().await.expect("accept WebSocket");
+                    let mut headers = None;
                     let mut websocket = crate::transport::accept_codex_test_websocket_with(
                         socket,
                         |request, response| {
-                            let expected_hint = expected_tier.map_or_else(
-                                || "model=gpt-5.4".to_owned(),
-                                |tier| format!("model=gpt-5.4;tier={tier}"),
-                            );
-                            assert_eq!(request.headers()["x-codex-routing-hint"], expected_hint);
+                            headers = Some(request.headers().clone());
                             response.headers_mut().insert(
                                 "sec-websocket-extensions",
                                 "permessage-deflate".parse().unwrap(),
@@ -8463,7 +8517,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                             .await
                             .expect("response");
                     }
-                    request
+                    (headers.unwrap(), request)
                 });
                 (base_url, None, Some(server))
             } else {
@@ -8491,12 +8545,31 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             if let Some(requested) = &requested {
                 body.insert("service_tier".to_owned(), json!(requested));
             }
+            let mut protocol_context =
+                Map::from_iter([("use_websocket".to_owned(), json!(use_websocket))]);
+            if let Some(role) = guardian {
+                let mut headers = vec![json!([
+                    "x-codex-routing-hint",
+                    STANDARD.encode("client-hint")
+                ])];
+                if matches!(role, "guardian_classifier" | "guardian_housekeeper") {
+                    let turn = if role == "guardian_classifier" {
+                        json!({"thread_source":role, "turn_trigger":role})
+                    } else {
+                        json!({"turn_trigger":role})
+                    };
+                    body.get_mut("client_metadata").unwrap()["x-openai-subagent"] =
+                        json!("guardian");
+                    body.get_mut("client_metadata").unwrap()["x-codex-turn-metadata"] =
+                        json!(turn.to_string());
+                } else {
+                    headers.push(json!(["x-codex-guardian", STANDARD.encode(role)]));
+                }
+                protocol_context.insert("opaque_request_headers".to_owned(), json!(headers));
+            }
             let payload = ProtocolPayload::json_object("openai", body.clone())
                 .expect("payload")
-                .with_context(Map::from_iter([(
-                    "use_websocket".to_owned(),
-                    json!(use_websocket),
-                )]));
+                .with_context(protocol_context);
             let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
             let original = operation.clone();
             let provider = provider_with_catalog_and_base_url(&store, base_url).await;
@@ -8541,31 +8614,70 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                     raw_messages.push(message.to_owned());
                 }
             }
-            let outbound = if let Some(server) = http_server {
+            let (headers, outbound) = if let Some(server) = http_server {
                 server.verify().await;
                 let requests = server.received_requests().await.expect("upstream requests");
-                let expected_hint = expected_tier.map_or_else(
-                    || "model=gpt-5.4".to_owned(),
-                    |tier| format!("model=gpt-5.4;tier={tier}"),
-                );
-                assert_eq!(requests[0].headers["x-codex-routing-hint"], expected_hint);
-                captured_request_body(&requests[0])
+                (
+                    requests[0].headers.clone(),
+                    captured_request_body(&requests[0]),
+                )
             } else {
                 websocket_server
                     .expect("WebSocket server")
                     .await
                     .expect("server task")
             };
+            let expected_hint = matches!(guardian, None | Some("Reviewer")).then(|| {
+                expected_tier.map_or_else(
+                    || "model=gpt-5.4".to_owned(),
+                    |tier| format!("model=gpt-5.4;tier={tier}"),
+                )
+            });
             assert_eq!(
-                outbound.get("service_tier").and_then(Value::as_str),
-                expected_tier
+                headers
+                    .get("x-codex-guardian")
+                    .map(|value| value.to_str().unwrap()),
+                match guardian {
+                    Some("guardian_classifier") => Some("classifier"),
+                    Some("guardian_housekeeper") => None,
+                    other => other,
+                }
+            );
+            if !use_websocket
+                && matches!(
+                    guardian,
+                    Some("classifier" | "guardian_classifier" | "guardian_housekeeper")
+                )
+            {
+                assert!(headers.get("content-encoding").is_none());
+            }
+            assert_eq!(
+                headers
+                    .get("x-codex-routing-hint")
+                    .map(|value| value.to_str().unwrap()),
+                expected_hint.as_deref()
+            );
+            assert_eq!(
+                outbound.get("service_tier"),
+                expected_tier.map(|tier| json!(tier)).as_ref()
             );
             assert_eq!(operation, original);
             for (field, value) in body["client_metadata"]
                 .as_object()
                 .expect("client metadata")
             {
-                assert_eq!(&outbound["client_metadata"][field], value);
+                if field == "x-codex-turn-metadata" {
+                    let sent: Value =
+                        serde_json::from_str(outbound["client_metadata"][field].as_str().unwrap())
+                            .unwrap();
+                    let source: Map<String, Value> =
+                        serde_json::from_str(value.as_str().unwrap()).unwrap();
+                    for (key, value) in source {
+                        assert_eq!(sent[&key], value);
+                    }
+                } else {
+                    assert_eq!(&outbound["client_metadata"][field], value);
+                }
             }
             assert!(!observations.is_empty());
             for observation in &observations {
@@ -13342,10 +13454,7 @@ async fn downstream_client_markers_preserve_instruction_content() {
             )]);
             let sent = capture_client_request(body.clone(), context, api_key).await;
             let mut expected = body;
-            expected.insert(
-                "request_country".to_owned(),
-                json!(global_request_location().country),
-            );
+            expected.insert("request_country".to_owned(), Value::Null);
             assert_eq!(sent, expected);
         }
     }

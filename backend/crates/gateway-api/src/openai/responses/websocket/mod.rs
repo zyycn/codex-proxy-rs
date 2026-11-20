@@ -332,6 +332,13 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         // 握手的轮次头只属于首次执行，复用连接时由各 response.create 携带本轮数据
         raw_headers.remove("x-codex-turn-state");
         raw_headers.remove("x-codex-turn-metadata");
+        raw_headers.remove("x-codex-guardian");
+        if raw_headers
+            .get("x-openai-subagent")
+            .is_some_and(|value| value == "guardian")
+        {
+            raw_headers.remove("x-openai-subagent");
+        }
         let service_for_terminal = service.clone();
         let replay_for_terminal = replay.clone();
         let connection_id_for_terminal = connection.id().to_owned();

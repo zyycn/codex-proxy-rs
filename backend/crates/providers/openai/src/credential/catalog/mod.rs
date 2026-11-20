@@ -701,12 +701,12 @@ impl CodexCredentialCatalogService {
                 .authentication
                 .authorization_header()
                 .map_err(CredentialRepositoryError::from)?;
-            let mut client = client
-                .for_account(account)
+            let mut client = credential
+                .authentication
+                .model_client_for_account(client, account)
                 .map_err(|error| CodexCredentialCatalogError::Upstream {
                     detail: error.to_string(),
-                })?
-                .with_responses_api_base_url(credential.authentication.responses_api_base_url());
+                })?;
             if let super::CodexRuntimeAuthentication::ApiKey(auth) = &credential.authentication
                 && auth.configuration.protocol == super::ApiKeyProtocol::Messages
             {

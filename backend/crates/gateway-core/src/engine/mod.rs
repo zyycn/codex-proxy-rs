@@ -285,6 +285,31 @@ impl ContinuationAttempt {
     }
 }
 
+/// 插件模型绑定使用同一组 Key、分组、调用链与模型事实。
+#[derive(Clone, Copy)]
+pub struct ModelRouteScope<'a> {
+    pub client_api_key: &'a crate::policy::ClientApiKeyId,
+    pub account_groups: &'a [crate::routing::AccountGroupId],
+    pub extensions: &'a extensions::ExtensionCallScope,
+    pub model: &'a str,
+}
+
+impl<'a> ModelRouteScope<'a> {
+    fn for_attempt(
+        context: &'a AttemptContext,
+        upstream: &'a crate::routing::UpstreamModelId,
+    ) -> Self {
+        Self {
+            client_api_key: context.client_api_key_ref(),
+            account_groups: context.account_group_ids(),
+            extensions: context.extension_scope(),
+            model: context
+                .requested_model()
+                .map_or(upstream.as_str(), |model| model.as_str()),
+        }
+    }
+}
+
 /// Provider 每次执行可见的 request-local context
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
@@ -295,6 +320,7 @@ pub struct RequestAttemptContext {
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
     fast_mode: FastMode,
+    openai_request_country: crate::account::OpenAiRequestCountry,
     request_location: Option<crate::account::RequestLocation>,
     privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
     request_id: ModelRequestId,
@@ -393,6 +419,15 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
+    pub fn with_openai_request_country(
+        mut self,
+        country: crate::account::OpenAiRequestCountry,
+    ) -> Self {
+        self.openai_request_country = country;
+        self
+    }
+
+    #[must_use]
     pub fn with_request_location(
         mut self,
         location: Option<crate::account::RequestLocation>,
@@ -413,6 +448,7 @@ impl RequestAttemptContext {
             request_profile: None,
             pricing: Arc::default(),
             fast_mode: FastMode::Default,
+            openai_request_country: Default::default(),
             request_location: None,
             privacy: None,
             timing_started_at: Instant::now(),
@@ -605,7 +641,7 @@ impl AttemptContext {
             });
         self.request.upstream_adapters.as_ref().map_or(
             Ok(upstream_adapter::UpstreamAdapterSelection::Native),
-            |plan| plan.select(self, provider, model, account),
+            |plan| plan.select(ModelRouteScope::for_attempt(self, model), provider, account),
         )
     }
 
@@ -620,7 +656,11 @@ impl AttemptContext {
             .upstream_adapters
             .as_ref()
             .map_or(Ok(None), |plan| {
-                match plan.select(self, provider, model, Some(account))? {
+                match plan.select(
+                    ModelRouteScope::for_attempt(self, model),
+                    provider,
+                    Some(account),
+                )? {
                     upstream_adapter::UpstreamAdapterSelection::Native => Ok(None),
                     upstream_adapter::UpstreamAdapterSelection::Adapter(adapter) => {
                         Ok(Some(adapter))
@@ -683,6 +723,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request.request_location.as_ref()
+    }
+
+    #[must_use]
+    pub const fn openai_request_country(&self) -> &crate::account::OpenAiRequestCountry {
+        &self.request.openai_request_country
     }
 
     /// 当前 attempt 的诊断关联；克隆后可传给后台 transport 任务

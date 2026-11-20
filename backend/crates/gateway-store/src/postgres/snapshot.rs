@@ -237,6 +237,8 @@ struct SnapshotSettingsRow {
     switch_account_on_queue_failure: bool,
     max_retry_after_seconds: i64,
     openai_guardian_reserved_concurrency: i64,
+    openai_oauth_guardian_review_model: bool,
+    openai_request_country_json: sqlx::types::Json<gateway_core::account::OpenAiRequestCountry>,
     openai_account_affinity: String,
     max_account_rotations: i64,
     openai_session_affinity_ttl_hours: i64,
@@ -253,7 +255,7 @@ async fn load_settings(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<(Revision, SettingsValues)> {
     let row = sqlx::query_as::<_, SnapshotSettingsRow>(
-        "select config_revision, account_error_protection_revision, account_error_protection_json, max_concurrent_per_account, rotation_strategy, smart_scheduling_json, quota_reset_window_weights_json, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours, request_location_json, request_location_enabled, codex_privacy_policy_json, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
+        "select config_revision, account_error_protection_revision, account_error_protection_json, max_concurrent_per_account, rotation_strategy, smart_scheduling_json, quota_reset_window_weights_json, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_oauth_guardian_review_model, openai_request_country_json, openai_account_affinity, max_account_rotations, openai_session_affinity_ttl_hours, request_location_json, request_location_enabled, codex_privacy_policy_json, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
     .await
@@ -278,6 +280,8 @@ async fn load_settings(
         .with_openai_guardian_reserved_concurrency(to_u32(
             row.openai_guardian_reserved_concurrency,
         )?)
+        .with_openai_oauth_guardian_review_model(row.openai_oauth_guardian_review_model)
+        .with_openai_request_country(row.openai_request_country_json.0)
         .with_openai_account_affinity(
             gateway_core::account::AccountAffinity::parse(&row.openai_account_affinity)
                 .ok_or_else(|| invalid("invalid account affinity"))?,

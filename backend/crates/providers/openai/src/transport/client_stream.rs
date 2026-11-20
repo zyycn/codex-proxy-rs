@@ -9,7 +9,7 @@ use std::{
 
 use futures::{StreamExt, TryStreamExt};
 use gateway_protocol::openai::{
-    X_OPENAI_MEMGEN_REQUEST_HEADER,
+    CodexGuardianRole, X_OPENAI_MEMGEN_REQUEST_HEADER,
     events::{self, retry_after_seconds_from_body},
     sse::{SseEventDecoder, SseFrame},
 };
@@ -30,7 +30,7 @@ use crate::transport::{
         },
         websocket::{
             websocket_audit_artifact_from_attempt, websocket_connection_limit_failure,
-            websocket_payload_audit_snapshot,
+            websocket_payload_audit_snapshot, websocket_response_create_payload_text,
         },
     },
     response_meta,
@@ -68,7 +68,6 @@ impl CodexBackendClient {
         if let Some(affinity) = &self.routing_affinity {
             affinity.apply(&endpoint, &mut headers);
         }
-        // OAuth 请求遵循 Codex 压缩合同；API Key 上游使用普通 JSON
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
         // 再由 API 层收集 canonical events 并返回完整 JSON
         // 不能把下游的传输偏好
@@ -76,7 +75,12 @@ impl CodexBackendClient {
         let mut upstream_body = upstream_request.body().clone();
         upstream_body.insert("stream".to_owned(), serde_json::Value::Bool(true));
         let mut upstream_body = serde_json::Value::Object(upstream_body);
-        if self.protocol == OpenAiUpstreamProtocol::Codex {
+        // Guardian 专用 HTTP 客户端使用默认 ResponsesOptions，普通 OAuth 及主审流使用 zstd
+        let compress = self.protocol == OpenAiUpstreamProtocol::Codex
+            && !upstream_request
+                .oauth_guardian_role(&self.middleware_headers)
+                .is_some_and(CodexGuardianRole::uses_sampler_transport);
+        if compress {
             headers.insert(CONTENT_ENCODING, HeaderValue::from_static("zstd"));
         }
         profile.apply_context_versions(&mut upstream_body);
@@ -84,6 +88,9 @@ impl CodexBackendClient {
             &mut upstream_body,
             &mut headers,
             context.installation_id,
+            (self.protocol == OpenAiUpstreamProtocol::Codex)
+                .then_some(upstream_request.guardian_role)
+                .flatten(),
         );
         self.apply_privacy(&mut upstream_body, &mut headers)?;
         let body =
@@ -106,7 +113,7 @@ impl CodexBackendClient {
                 Some(&headers),
             );
         }
-        let body = if self.protocol == OpenAiUpstreamProtocol::Codex {
+        let body = if compress {
             zstd::stream::encode_all(std::io::Cursor::new(body), 3)
                 .map_err(CodexClientError::RequestCompression)?
         } else {
@@ -263,7 +270,8 @@ impl CodexBackendClient {
             });
         }
 
-        let mut websocket_request = websocket_upstream_request(request);
+        let initial_start_ms = now_unix_timestamp_millis().to_string();
+        let mut websocket_request = websocket_upstream_request(request, &initial_start_ms);
         let profile = self.profile.snapshot();
         let mut headers =
             self.request_headers_for_websocket_response(&profile, &websocket_request, context)?;
@@ -275,22 +283,16 @@ impl CodexBackendClient {
         }
         let mut body = serde_json::Value::Object(std::mem::take(websocket_request.body_mut()));
         profile.apply_context_versions(&mut body);
-        super::correlation::scope_request(&mut body, &mut headers, context.installation_id);
+        super::correlation::scope_request(
+            &mut body,
+            &mut headers,
+            context.installation_id,
+            (self.protocol == OpenAiUpstreamProtocol::Codex)
+                .then_some(request.guardian_role)
+                .flatten(),
+        );
         let original_headers = self.privacy.as_ref().map(|_| headers.clone());
         self.apply_privacy(&mut body, &mut headers)?;
-        if let Some(body) = body.as_object() {
-            super::diagnostics::evidence::record_request(
-                &context.trace.cloned().unwrap_or_default(),
-                if self.outbound_middleware.is_some() {
-                    "provider.request.native"
-                } else {
-                    "provider.request.outbound"
-                },
-                body,
-                "websocket",
-                Some(&headers),
-            );
-        }
         // 正文已归当前请求所有，移回对象避免再次复制完整对话
         let serde_json::Value::Object(body) = body else {
             return Err(CodexClientError::Privacy(
@@ -301,23 +303,36 @@ impl CodexBackendClient {
             ));
         };
         *websocket_request.body_mut() = body;
-        let mut websocket_create = CodexWebSocketConnection::responses_create_request_for_path(
+        let trace = context.trace.cloned().unwrap_or_default();
+        let record_body = |stage, request: &CodexResponsesRequest| {
+            super::diagnostics::evidence::record_request(
+                &trace,
+                stage,
+                request.body(),
+                "websocket",
+                Some(&headers),
+            );
+        };
+        if self.outbound_middleware.is_some() {
+            record_body("provider.request.native", &websocket_request);
+        }
+        let mut opening = CodexWebSocketConnection::response_create_opening_for_path(
             &self.base_url,
             self.protocol.responses_path(),
             &generate_key(),
             websocket_header_pairs(&headers),
             &websocket_request,
-        )
-        .map_err(CodexClientError::WebSocketEncode)?;
-        websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
-        websocket_create.connection.connection_budget = self.connection_budget.clone();
-        let (websocket_create, outbound_profile) =
-            self.prepare_websocket_request(websocket_create).await?;
+        );
+        opening.connection.outbound_proxy = self.outbound_proxy.clone();
+        opening.connection.connection_budget = self.connection_budget.clone();
+        let (plugin_payload, outbound_profile) = self
+            .prepare_websocket_request(&mut opening.connection, &websocket_request)
+            .await?;
         context.trace.cloned().unwrap_or_default().headers(
             "upstream.request.headers",
             serde_json::json!({"transport": "websocket", "phase": "prepared_opening"}),
-            websocket_create
-                .connection()
+            opening
+                .connection
                 .headers()
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
@@ -327,7 +342,7 @@ impl CodexBackendClient {
         if websocket_audit_dir().is_some() {
             let artifact = websocket_audit_artifact_from_attempt(
                 &websocket_request,
-                websocket_create.connection().opening_audit_snapshot(),
+                opening.connection.opening_audit_snapshot(),
                 // 插件准备后只由受控 wire capture 记录实际正文，不把原生 JSON 冒充最终帧
                 self.outbound_middleware
                     .is_none()
@@ -349,8 +364,8 @@ impl CodexBackendClient {
             connection_profile.push_str(&profile);
         }
         // 上游按握手继承整条路径，不能把本轮请求交给其他路径建立的连接
-        if let Some((_, route)) = websocket_create
-            .connection()
+        if let Some((_, route)) = opening
+            .connection
             .headers()
             .iter()
             .find(|(name, _)| name == gateway_protocol::peer::ROUTE_HEADER)
@@ -395,8 +410,8 @@ impl CodexBackendClient {
             format!(
                 "{}\0{}",
                 websocket_origin_key(
-                    &websocket_create
-                        .connection()
+                    &opening
+                        .connection
                         .endpoint()
                         .replacen("wss://", "https://", 1)
                         .replacen("ws://", "http://", 1)
@@ -405,7 +420,7 @@ impl CodexBackendClient {
             )
         });
         let prepared = prepare_response_create_request_with_pool(
-            &websocket_create,
+            &opening,
             pool,
             &self.websocket_origin_breaker,
             opening_origin_key
@@ -466,6 +481,31 @@ impl CodexBackendClient {
             }
             Err(error) => return Err(websocket_exchange_error_to_client_error(error)),
         };
+        let payload = match plugin_payload {
+            Some(payload) => payload,
+            None => {
+                // 握手或租用完成后才标记发送时间。隐私规则移除或改写过的字段保持其最终值
+                if let Some(stamp) = websocket_request
+                    .body_mut()
+                    .get_mut("client_metadata")
+                    .and_then(|metadata| {
+                        metadata.get_mut(X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY)
+                    })
+                    && stamp.as_str() == Some(initial_start_ms.as_str())
+                {
+                    *stamp = serde_json::Value::String(now_unix_timestamp_millis().to_string());
+                }
+                record_body("provider.request.outbound", &websocket_request);
+                match websocket_response_create_payload_text(&websocket_request) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        prepared.discard().await;
+                        return Err(CodexClientError::WebSocketEncode(error));
+                    }
+                }
+            }
+        };
+        let websocket_create = opening.with_payload(payload);
         // 按最终出站帧的 UTF-8 字节数判断，握手上限只属于当前物理连接
         if let Some(limit) = prepared.max_message_bytes()
             && websocket_create.payload_text().len() > limit
@@ -655,6 +695,7 @@ impl CodexBackendClient {
             .with_egress_key(&self.egress_key)
             .with_outbound_proxy(self.outbound_proxy.as_ref())
             .with_connection_profile(connection_profile)
+            .with_fedramp_routing(self.fedramp_routing)
             .with_installation_id(context.installation_id);
         key = key.with_routing_affinity(self.routing_affinity.as_ref().map(|pin| pin.id()));
         if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
@@ -687,6 +728,7 @@ fn websocket_connection_profile(
         X_OPENAI_MEMGEN_REQUEST_HEADER,
         "x-codex-guardian",
         "x-openai-internal-codex-residency",
+        "x-openai-fedramp",
         "x-openai-account-routing-override",
     ]
     .map(|name| {

@@ -35,6 +35,215 @@ fn generate_request(body: Value) -> DecodedGenerationRequest {
 }
 
 #[test]
+fn guardian_roles_should_use_complete_current_request_identity_before_header_projection() {
+    use gateway_protocol::openai::{CodexGuardianRole::*, codex_guardian_role};
+
+    let review = r#"{"thread_source":"guardian_review"}"#;
+    let classification =
+        r#"{"thread_source":"guardian_classifier","turn_trigger":"guardian_classifier"}"#;
+    let housekeeping = r#"{"turn_trigger":"guardian_housekeeper"}"#;
+    for (websocket, body_agent, body_turn, header_agent, header_turn, explicit, expected) in [
+        (
+            false,
+            Some("guardian"),
+            Some(review),
+            None,
+            None,
+            None,
+            Some(Reviewer),
+        ),
+        (
+            false,
+            None,
+            None,
+            Some("guardian"),
+            Some(review),
+            None,
+            Some(Reviewer),
+        ),
+        (
+            false,
+            None,
+            Some(review),
+            Some("guardian"),
+            None,
+            None,
+            None,
+        ),
+        (
+            false,
+            Some("other"),
+            Some(review),
+            Some("guardian"),
+            Some(review),
+            None,
+            None,
+        ),
+        (
+            false,
+            Some("guardian"),
+            Some(classification),
+            Some("guardian"),
+            Some(review),
+            None,
+            None,
+        ),
+        (
+            false,
+            Some("guardian"),
+            Some("invalid"),
+            Some("guardian"),
+            Some(review),
+            None,
+            None,
+        ),
+        (
+            false,
+            Some("guardian"),
+            Some(review),
+            None,
+            None,
+            Some("classifier"),
+            None,
+        ),
+        (false, None, None, None, None, Some("reviewer"), None),
+        (
+            false,
+            Some("guardian"),
+            Some(classification),
+            None,
+            None,
+            None,
+            Some(Classifier),
+        ),
+        (
+            false,
+            Some("guardian"),
+            Some(housekeeping),
+            None,
+            None,
+            None,
+            Some(Housekeeper),
+        ),
+        (
+            true,
+            None,
+            None,
+            Some("guardian"),
+            Some(review),
+            Some("reviewer"),
+            None,
+        ),
+        (
+            true,
+            None,
+            Some(review),
+            Some("guardian"),
+            Some(review),
+            None,
+            None,
+        ),
+        (
+            true,
+            Some("guardian"),
+            Some(classification),
+            Some("stale_agent"),
+            Some(review),
+            Some("reviewer"),
+            Some(Classifier),
+        ),
+        (
+            true,
+            Some("guardian"),
+            Some(review),
+            None,
+            None,
+            None,
+            Some(Reviewer),
+        ),
+    ] {
+        let mut body =
+            json!({"model":"gpt-5.6-luna","input":[],"generate":false,"client_metadata":{}});
+        if let Some(agent) = body_agent {
+            body["client_metadata"]["x-openai-subagent"] = json!(agent);
+        }
+        if let Some(turn) = body_turn {
+            body["client_metadata"]["x-codex-turn-metadata"] = json!(turn);
+        }
+        let mut headers = HeaderMap::new();
+        for (name, value) in [
+            ("x-openai-subagent", header_agent),
+            ("x-codex-turn-metadata", header_turn),
+            ("x-codex-guardian", explicit),
+        ] {
+            if let Some(value) = value {
+                headers.insert(name, HeaderValue::from_str(value).unwrap());
+            }
+        }
+        let decoded = if websocket {
+            body["type"] = json!("response.create");
+            decode_response_create_with_context(
+                &body.to_string(),
+                &OpenAiRequestHeaders::from_headers(&headers),
+            )
+            .unwrap()
+        } else {
+            decode_request_with_headers(body.to_string().as_bytes(), &headers, 64 * 1024).unwrap()
+        };
+        let payload = generate_operation(&decoded).protocol_payload();
+        if !websocket && matches!(expected, Some(Classifier | Housekeeper)) {
+            assert!(!payload.context().contains_key("use_websocket"));
+            assert!(
+                !payload
+                    .context()
+                    .contains_key(gateway_protocol::openai::WEBSOCKET_FRAME_CONTEXT_KEY)
+            );
+        }
+        if websocket && header_agent == Some("stale_agent") {
+            assert_eq!(
+                payload.body()["client_metadata"]["x-openai-subagent"],
+                "guardian"
+            );
+            let opaque = payload.context()["opaque_request_headers"]
+                .as_array()
+                .unwrap();
+            assert!(!opaque.iter().any(|pair| matches!(
+                pair[0].as_str(),
+                Some("x-codex-guardian" | "x-openai-subagent")
+            )));
+        }
+        assert_eq!(
+            codex_guardian_role(payload.body(), payload.context()),
+            expected,
+            "body={body}, headers={headers:?}"
+        );
+    }
+    let mut repeated = HeaderMap::new();
+    repeated.append("x-openai-subagent", HeaderValue::from_static("guardian"));
+    repeated.append("x-openai-subagent", HeaderValue::from_static("other"));
+    repeated.insert("x-codex-turn-metadata", HeaderValue::from_static(review));
+    let decoded = decode_request_with_headers(
+        br#"{"model":"gpt-5.6-luna","input":[]}"#,
+        &repeated,
+        64 * 1024,
+    )
+    .unwrap();
+    let payload = generate_operation(&decoded).protocol_payload();
+    assert_eq!(codex_guardian_role(payload.body(), payload.context()), None);
+    for malformed in [
+        r#"{"thread_source":"guardian_classifier","thread_source":"guardian_review"}"#,
+        r#"{"thread_source":null}"#,
+        r#"["guardian_review"]"#,
+    ] {
+        let mut body = json!({"model":"gpt-5.6-luna","input":[],"client_metadata":{"x-openai-subagent":"guardian"}});
+        body["client_metadata"]["x-codex-turn-metadata"] = json!(malformed);
+        let decoded = generate_request(body);
+        let payload = generate_operation(&decoded).protocol_payload();
+        assert_eq!(codex_guardian_role(payload.body(), payload.context()), None);
+    }
+}
+
+#[test]
 fn decoder_should_attach_only_identified_codex_inference_turns() {
     let body = json!({"model":"smart-code", "input":"hello", "client_metadata": {
         "thread_id":"thread", "turn_id":"turn", "x-codex-turn-metadata": r#"{"request_kind":"turn"}"#

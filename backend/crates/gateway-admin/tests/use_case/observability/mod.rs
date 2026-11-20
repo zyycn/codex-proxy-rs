@@ -1425,6 +1425,8 @@ impl SettingsStore for FixtureSettingsStore {
     }
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
+            openai_oauth_guardian_review_model: false,
+            openai_request_country: Default::default(),
             request_profiles: Default::default(),
             config_revision: Revision::new(1).expect("revision"),
             model_mappings: Default::default(),

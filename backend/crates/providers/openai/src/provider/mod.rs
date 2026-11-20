@@ -44,10 +44,10 @@ use gateway_core::task::{
     WorkerRunnable, WorkerSchedule, WorkerTaskError,
 };
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
-use gateway_protocol::openai::OPENAI_PROTOCOL;
 use gateway_protocol::openai::events::{
     ParsedRateLimits, parse_rate_limit_headers, rate_limits_to_header_pairs,
 };
+use gateway_protocol::openai::{CodexGuardianRole, OPENAI_PROTOCOL, codex_guardian_role};
 use reqwest::{Client, header::HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -87,7 +87,7 @@ use crate::transport::protocol::responses::{
 };
 use crate::transport::request::{
     CodexRequestEncodeError, RequestAccountScope, align_structured_location_fields,
-    encode_generate_request, scope_request_to_account,
+    encode_generate_payload, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
@@ -173,7 +173,19 @@ impl PreparedGenerateRequest {
     fn checked_native_continuation_scope(
         &self,
         context: &AttemptContext,
+        direct_model: bool,
     ) -> Result<PreviousResponseScope, ProviderError> {
+        if self.continuation_requested
+            && !guardian::continuation_model_matches(
+                self.previous_session
+                    .as_ref()
+                    .and_then(|state| state.reviewer_model.as_deref()),
+                self.upstream.model(),
+                direct_model,
+            )
+        {
+            return Err(continuation_replay_required_error("review_model_changed"));
+        }
         let pin = context.continuation().and_then(ContinuationBinding::pinned);
         let scope = match self
             .previous_session
@@ -221,6 +233,7 @@ struct SelectedGenerate {
     lease: CodexCredentialLease,
     account_selection_wait_ms: u64,
     frozen_requirements: CapabilityRequirements,
+    direct_model: bool,
 }
 
 impl CodexProvider {
@@ -404,6 +417,21 @@ impl Provider for CodexProvider {
         crate::credential::is_direct_account_kind(authentication_kind)
     }
 
+    fn direct_account_model(
+        &self,
+        model: &gateway_core::routing::PublicModelId,
+        operation: &Operation,
+        previous: Option<&ProviderSessionState>,
+        settings: &gateway_core::settings::SettingsValues,
+    ) -> Option<UpstreamModelId> {
+        guardian::review_model(
+            settings.openai_oauth_guardian_review_model(),
+            model,
+            operation,
+            previous,
+        )
+    }
+
     fn compile_privacy_policy(
         &self,
         policy: &gateway_core::settings::privacy::CodexPrivacyPolicy,
@@ -492,7 +520,7 @@ impl Provider for CodexProvider {
                 ..Default::default()
             };
         };
-        let Ok(encoded) = encode_generate_request(request, "observability", None) else {
+        let Ok(encoded) = encode_generate_payload(request, "observability") else {
             return ProviderRequestObservation::default();
         };
         let previous_reasoning_effort_override = request
@@ -629,7 +657,7 @@ impl Provider for CodexProvider {
         }
         // 跨协议转换必须在选号后执行；选号前只按各自协议读取明确会话身份
         let upstream = (generate.protocol_payload().protocol() == OPENAI_PROTOCOL)
-            .then(|| encode_generate_request(generate, upstream_model.as_str(), None))
+            .then(|| encode_generate_payload(generate, upstream_model.as_str()))
             .transpose()
             .map_err(map_request_error)?;
         // 固定调度约束：Guardian 分类先于选号，不能随原生/适配器发送路径改变
@@ -644,11 +672,12 @@ impl Provider for CodexProvider {
                 false,
             )
         });
+        let direct_model = candidate.requires_direct_authentication();
         let preselection = upstream
             .filter(|_| !adapted)
             .map(|upstream| self.prepare_generate_request(generate, upstream, &context));
         if let Some(prepared) = preselection.as_ref() {
-            prepared.checked_native_continuation_scope(&context)?;
+            prepared.checked_native_continuation_scope(&context, direct_model)?;
         }
         let cache_preference = preselection
             .as_ref()
@@ -730,6 +759,14 @@ impl Provider for CodexProvider {
         };
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        // 账号可能在快照编译后轮换认证方式；专用审核目标不能发给新换入的 API Key。
+        if direct_model
+            && !crate::credential::is_direct_account_kind(lease.account().authentication_kind())
+        {
+            return Err(map_selection_error(
+                CredentialSelectionError::NoEligibleCredential,
+            ));
+        }
         if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay {
             // Core 已确认允许换号；选号器迁移共享绑定后，完整历史仍须由客户端提供
             // 不将旧账号的 previous_response_id 或增量输入发送给替代账号
@@ -757,6 +794,13 @@ impl Provider for CodexProvider {
         let payload = generate.protocol_payload();
         let mut operation = Operation::Generate(generate.clone());
         if payload.protocol() == OPENAI_PROTOCOL
+            && !(adapter.is_none()
+                && matches!(
+                    lease.authentication(),
+                    crate::credential::CodexRuntimeAuthentication::OAuth(_)
+                )
+                && codex_guardian_role(payload.body(), payload.context())
+                    == Some(CodexGuardianRole::Housekeeper))
             && let Some(tier) = fast_policy_tier(
                 context.fast_mode(),
                 payload.body().get("service_tier").and_then(Value::as_str),
@@ -813,6 +857,7 @@ impl Provider for CodexProvider {
                                     lease,
                                     account_selection_wait_ms,
                                     frozen_requirements,
+                                    direct_model,
                                 },
                             )
                             .await
@@ -836,6 +881,7 @@ impl CodexProvider {
             mut lease,
             account_selection_wait_ms,
             frozen_requirements,
+            direct_model,
         } = selected;
         let Operation::Generate(generate) = operation else {
             return Err(provider_error(
@@ -858,7 +904,7 @@ impl CodexProvider {
             "provider_input",
             None,
         );
-        let mut upstream = encode_generate_request(&generate, upstream_model.as_str(), None)
+        let mut upstream = encode_generate_payload(&generate, upstream_model.as_str())
             .map_err(map_request_error)?;
         gateway_protocol::anthropic::strip_foreign_reasoning_for_responses(upstream.body_mut());
         upstream.client_account_follow_only = crate::request_identity::follows_session_with_headers(
@@ -872,11 +918,17 @@ impl CodexProvider {
             &middleware_headers,
         );
         let processed = self.prepare_generate_request(&generate, upstream, &context);
-        let native_scope = processed.checked_native_continuation_scope(&context)?;
+        let native_scope = processed.checked_native_continuation_scope(&context, direct_model)?;
         let mut upstream_request = processed.upstream;
         let session_transport_key =
             derive_codex_transport_key(&upstream_request, context.client_api_key_ref());
         let previous_session = processed.previous_session;
+        let reviewer_model = (direct_model
+            || guardian::is_reviewer(&generate)
+            || previous_session
+                .as_ref()
+                .is_some_and(|state| state.reviewer_model.is_some()))
+        .then(|| upstream_model.as_str().to_owned());
         let continuation_requested = processed.continuation_requested;
         if !context.is_diagnostic_required_account() {
             self.selector
@@ -984,11 +1036,14 @@ impl CodexProvider {
         let state_before = trace
             .is_enabled()
             .then(|| crate::transport::diagnostics::evidence::request_state(&upstream_request));
+        let codex_oauth = oauth_identity.is_some();
+        let guardian_role = codex_oauth
+            .then(|| upstream_request.oauth_guardian_role(&middleware_headers))
+            .flatten();
         let guardian_parent = (!state_owner_cross_account
-            && upstream_request.is_guardian()
             && matches!(
-                lease.authentication(),
-                crate::credential::CodexRuntimeAuthentication::OAuth(_)
+                guardian_role,
+                Some(CodexGuardianRole::Reviewer | CodexGuardianRole::Classifier)
             ))
         .then(|| {
             upstream_request
@@ -1010,14 +1065,19 @@ impl CodexProvider {
         );
         scope_request_to_account(&mut upstream_request, &installation_id, account_scope);
         // 父响应的可信关联只恢复此字段，不把首次 Guardian 请求的其他账号状态视为可信
-        if let Some((response_id, _)) = &guardian_parent
+        if guardian_role.is_some()
             && let Some(Value::Object(metadata)) =
                 upstream_request.body_mut().get_mut("client_metadata")
         {
-            metadata.insert(
-                "parent_response_id".to_owned(),
-                Value::String(response_id.clone()),
-            );
+            metadata.remove("guardian_credits_requested");
+            if let Some((response_id, _)) = &guardian_parent {
+                metadata.insert(
+                    "parent_response_id".to_owned(),
+                    Value::String(response_id.clone()),
+                );
+            } else {
+                metadata.remove("parent_response_id");
+            }
         }
         if let Some(before) = state_before {
             trace.record_evidence("provider.request.account_scope", serde_json::json!({
@@ -1034,11 +1094,13 @@ impl CodexProvider {
                 "after": crate::transport::diagnostics::evidence::request_state(&upstream_request),
             }));
         }
-        let codex_oauth = matches!(
-            lease.authentication(),
-            crate::credential::CodexRuntimeAuthentication::OAuth(_)
-        );
         if codex_oauth {
+            if matches!(
+                guardian_role,
+                Some(CodexGuardianRole::Reviewer | CodexGuardianRole::Classifier)
+            ) {
+                upstream_request.body_mut().shift_remove("service_tier");
+            }
             let responses_lite = upstream_request.responses_lite.as_deref() == Some("true");
             crate::compat::normalize_selected_codex_downstream_body(
                 upstream_request.body_mut(),
@@ -1051,7 +1113,11 @@ impl CodexProvider {
             .account()
             .request_location()
             .or(context.request_location());
-        align_structured_location_fields(upstream_request.body_mut(), location);
+        align_structured_location_fields(
+            upstream_request.body_mut(),
+            location,
+            context.openai_request_country(),
+        );
         let requirement = transport_requirement(&upstream_request);
         let http_only = lease.transport() == crate::credential::ResponsesTransport::Http;
         if http_only && requirement.requires_websocket() {
@@ -1063,7 +1129,7 @@ impl CodexProvider {
         let requested_transport = if http_only {
             CodexProviderTransport::HttpOnly
         } else {
-            selected_transport(&upstream_request)
+            selected_transport(&upstream_request, guardian_role)
         };
         let session_http_fallback = requirement.allows_pre_send_http_fallback()
             && session_transport_key
@@ -1115,6 +1181,7 @@ impl CodexProvider {
         let session_capture =
             (!continuation_requested || previous_session.is_some()).then(|| OpenAiSessionCapture {
                 account_id: lease.account_id().as_str().to_owned(),
+                reviewer_model,
                 oauth_identity,
                 credential_revision: matches!(
                     lease.authentication(),
@@ -1143,11 +1210,15 @@ impl CodexProvider {
         };
         let events = cold_response_stream(ColdResponse {
             installation_id,
-            client: client
-                .for_account(lease.account())
+            client: lease
+                .authentication()
+                .model_client_for_account(&client, lease.account())
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?
-                .with_responses_api_base_url(lease.authentication().responses_api_base_url())
-                .with_routing_affinity(guardian_parent.map(|(_, affinity)| affinity))
+                .with_routing_affinity(
+                    guardian_parent
+                        .filter(|_| guardian_role == Some(CodexGuardianRole::Reviewer))
+                        .and_then(|(_, parent)| parent.affinity),
+                )
                 .with_connection_budget(context.connection_budget().clone())
                 .with_middleware_headers(middleware_headers)
                 .with_outbound_middleware(outbound_middleware)

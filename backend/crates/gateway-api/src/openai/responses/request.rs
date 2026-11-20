@@ -33,6 +33,8 @@ pub(super) enum RequestDecodeSource {
 
 #[derive(Clone, Default)]
 pub struct OpenAiRequestHeaders {
+    guardian: Option<String>,
+    ambiguous_guardian_headers: bool,
     turn_state: Option<String>,
     turn_metadata: Option<String>,
     version: Option<String>,
@@ -57,6 +59,17 @@ impl OpenAiRequestHeaders {
     #[must_use]
     pub fn from_headers(headers: &HeaderMap) -> Self {
         Self {
+            guardian: header_string(headers, "x-codex-guardian"),
+            ambiguous_guardian_headers: [
+                "x-codex-guardian",
+                OPENAI_SUBAGENT_KEY,
+                "x-codex-turn-metadata",
+            ]
+            .into_iter()
+            .any(|name| {
+                let mut values = headers.get_all(name).iter();
+                values.next().is_some_and(|v| v.to_str().is_err()) || values.next().is_some()
+            }),
             turn_state: header_string(headers, "x-codex-turn-state"),
             turn_metadata: header_string(headers, "x-codex-turn-metadata"),
             version: header_string(headers, "version"),
@@ -87,7 +100,46 @@ impl OpenAiRequestHeaders {
         self
     }
 
-    fn apply_subagent(&self, body: &mut Map<String, Value>) {
+    fn apply_subagent(
+        &self,
+        body: &mut Map<String, Value>,
+        context: &mut Map<String, Value>,
+        source: RequestDecodeSource,
+    ) {
+        if matches!(source, RequestDecodeSource::WebSocketFrame)
+            && let Some(frame_agent) = body
+                .get("client_metadata")
+                .and_then(|m| m.get(OPENAI_SUBAGENT_KEY))
+                .and_then(Value::as_str)
+            && (frame_agent == "guardian"
+                || self.subagent.as_deref() == Some("guardian")
+                || self.guardian.is_some())
+        {
+            // 帧内声明优先；旧 opening 的不透明副本也不能在 Provider 再度覆盖
+            let stale_subagent = self
+                .subagent
+                .as_deref()
+                .is_some_and(|opening| opening != frame_agent);
+            let stale_guardian = self.guardian.as_deref().is_some_and(|opening| {
+                frame_agent != "guardian"
+                    || gateway_protocol::openai::codex_guardian_role(body, context)
+                        .is_some_and(|role| role.header() != Some(opening))
+            });
+            if stale_subagent {
+                context.insert("subagent".into(), Value::from(frame_agent));
+            }
+            if (stale_subagent || stale_guardian)
+                && let Some(Value::Array(headers)) =
+                    context.get_mut(PASSTHROUGH_HEADERS_CONTEXT_KEY)
+            {
+                headers.retain(|pair| match pair.get(0).and_then(Value::as_str) {
+                    Some(OPENAI_SUBAGENT_KEY) => !stale_subagent,
+                    Some("x-codex-guardian") => !stale_guardian,
+                    _ => true,
+                });
+            }
+            return;
+        }
         if let Some(subagent) = self.subagent.as_deref() {
             inject_subagent_metadata(body, subagent);
         }
@@ -329,8 +381,14 @@ pub(super) fn decode_request_object(
         .map(|response_id| ContinuationIntent::PreviousResponseId(response_id.to_owned()))
         .unwrap_or(ContinuationIntent::None);
 
-    request_headers.apply_subagent(&mut object);
-    let protocol_context = request_headers.protocol_context(use_websocket, source);
+    let mut protocol_context = request_headers.protocol_context(use_websocket, source);
+    gateway_protocol::openai::capture_codex_guardian_identity(
+        &object,
+        &mut protocol_context,
+        request_headers.guardian.as_deref(),
+        request_headers.ambiguous_guardian_headers,
+    );
+    request_headers.apply_subagent(&mut object, &mut protocol_context, source);
 
     let semantics =
         gateway_protocol::openai::codex_responses_request_semantics(&object, &protocol_context);

@@ -1,5 +1,6 @@
 //! 在出站副本中隔离账号的追踪标识，不改变本地亲和、续接引用或业务正文
 
+use gateway_protocol::openai::CodexGuardianRole;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -14,6 +15,7 @@ const ID_FIELDS: &[&str] = &[
     "window_id",
     "context_window_id",
     "parent_thread_id",
+    "guardian_classifier_source_thread_id",
     "forked_from_thread_id",
     "conversation_id",
     "x-codex-window-id",
@@ -177,10 +179,33 @@ pub(super) fn scope_headers(headers: &mut HeaderMap, installation_id: Option<&st
     }
 }
 
+fn guardian_cache_key(
+    metadata: &Value,
+    role: CodexGuardianRole,
+    cache: &str,
+    installation_id: &str,
+) -> Option<String> {
+    let (prefix, original) = cache.split_once(':')?;
+    uuid::Uuid::parse_str(original).ok()?;
+    let source = match (role, prefix) {
+        (CodexGuardianRole::Reviewer, "guardian") => {
+            metadata.get("x-codex-parent-thread-id")?.as_str()? == original
+        }
+        (CodexGuardianRole::Classifier, "guardian-v2") => {
+            let turn: Value =
+                serde_json::from_str(metadata.get("x-codex-turn-metadata")?.as_str()?).ok()?;
+            turn.get("guardian_classifier_source_thread_id")?.as_str()? == original
+        }
+        _ => return None,
+    };
+    source.then(|| format!("{prefix}:{}", scoped_id(installation_id, original)))
+}
+
 pub(super) fn scope_request(
     body: &mut Value,
     headers: &mut HeaderMap,
     installation_id: Option<&str>,
+    guardian: Option<CodexGuardianRole>,
 ) {
     scope_headers(headers, installation_id);
     let Some(installation_id) = installation_id else {
@@ -188,7 +213,19 @@ pub(super) fn scope_request(
     };
     if let Some(object) = body.as_object_mut() {
         map_fields(object, installation_id, ID_FIELDS);
-        map_fields(object, installation_id, &["prompt_cache_key"]);
+        // 官方 Guardian 的复合缓存键引用父线程；自定义键仍作为一个整体隔离
+        if let Some(cache) = object
+            .get("prompt_cache_key")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+        {
+            let mapped = guardian
+                .and_then(|role| {
+                    guardian_cache_key(object.get("client_metadata")?, role, cache, installation_id)
+                })
+                .unwrap_or_else(|| scoped_id(installation_id, cache));
+            object.insert("prompt_cache_key".into(), Value::from(mapped));
+        }
         for key in METADATA_FIELDS {
             if let Some(value) = object.get_mut(*key) {
                 scope_metadata(value, installation_id);

@@ -6,7 +6,7 @@ pub use error_protection::*;
 mod fast_mode;
 pub use fast_mode::FastMode;
 mod location;
-pub use location::{InvalidRequestLocation, RequestLocation};
+pub use location::{InvalidRequestLocation, OpenAiRequestCountry, RequestLocation};
 mod model;
 mod model_access;
 pub use model_access::{

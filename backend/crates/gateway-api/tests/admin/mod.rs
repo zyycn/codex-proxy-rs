@@ -636,6 +636,12 @@ impl SettingsStore for MemorySettingsStore {
             }
         }
         let updated = RuntimeSettings {
+            openai_oauth_guardian_review_model: command
+                .openai_oauth_guardian_review_model
+                .unwrap_or(settings.openai_oauth_guardian_review_model),
+            openai_request_country: command
+                .openai_request_country
+                .unwrap_or_else(|| settings.openai_request_country.clone()),
             request_profiles,
             config_revision: next_revision(settings.config_revision),
             model_mappings: command.model_mappings,
@@ -1990,6 +1996,8 @@ fn test_runtime_settings() -> RuntimeSettings {
         ),
     ]);
     RuntimeSettings {
+        openai_oauth_guardian_review_model: false,
+        openai_request_country: Default::default(),
         request_profiles: Default::default(),
         config_revision: Revision::new(7).expect("revision"),
         model_mappings: mappings,

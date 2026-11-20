@@ -293,6 +293,8 @@
     },
     "modelMapping": "Model mapping",
     "routing": {
+      "oauthGuardianReviewModel": "Use a dedicated model for OpenAI OAuth synchronous reviews",
+      "oauthGuardianReviewModelHelp": "When enabled, recognized synchronous reviews use codex-auto-review. When disabled, they use the model selected by the client.",
       "modelMapHelp": "Map client model names to the upstream models used"
     },
     "addMapping": "Add mapping",
@@ -311,6 +313,21 @@
     "enterDays": "Enter retention days",
     "day": "d",
     "location": {
+      "requestCountry": "OpenAI request country (request_country)",
+      "countryHelp": "Request country mode help",
+      "countryModes": {
+        "default": "Default",
+        "passthrough": "Pass through",
+        "follow_location": "By location",
+        "custom": "Custom"
+      },
+      "countryHints": {
+        "default": "Always send JSON null.",
+        "passthrough": "Keep the client’s value. Omit the field when the client omits it.",
+        "follow_location": "Use the proxy location first, then the enabled global location. Send null when neither applies.",
+        "custom": "Always use the specified two-letter country code."
+      },
+      "customCountryCode": "Custom country code",
       "requestLocationOverride": "Request location override",
       "description": "Override time zone and location fields in Codex requests, custom locations on account proxies take precedence",
       "enableLocationOverlay": "Enable location overlay"

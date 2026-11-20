@@ -83,6 +83,10 @@ pub struct RuntimeSettingsValues {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSettings {
+    #[serde(default)]
+    pub openai_oauth_guardian_review_model: bool,
+    #[serde(default)]
+    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     #[serde(flatten)]
     pub values: RuntimeSettingsValues,
     pub request_profiles: ProviderRequestProfiles,
@@ -96,6 +100,11 @@ pub struct RuntimeSettings {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplaceRuntimeSettings {
+    /// 旧客户端缺少此字段时保留已保存的审核模型策略
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_oauth_guardian_review_model: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_request_country: Option<gateway_core::account::OpenAiRequestCountry>,
     #[serde(flatten)]
     pub values: RuntimeSettingsValues,
     /// 读取设置时的版本；与写入在同一事务内比较，防止覆盖并发更新
@@ -176,6 +185,8 @@ impl From<RuntimeSettings> for ReplaceRuntimeSettings {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
             expected_revision: settings.config_revision,
+            openai_oauth_guardian_review_model: Some(settings.openai_oauth_guardian_review_model),
+            openai_request_country: Some(settings.openai_request_country),
             request_profile_updates: settings
                 .request_profiles
                 .into_iter()

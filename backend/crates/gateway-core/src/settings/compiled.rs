@@ -111,6 +111,10 @@ impl CompiledSettings {
             max_waiting: settings.max_waiting_per_key,
             timeout: Duration::from_secs(u64::from(settings.key_queue_timeout_seconds)),
         };
+        settings
+            .openai_request_country
+            .validate()
+            .map_err(|_| InvalidSettings)?;
         let request_location = settings
             .request_location_enabled
             .then(|| settings.request_location.clone().normalized())

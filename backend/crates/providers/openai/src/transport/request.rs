@@ -3,7 +3,7 @@
 use std::io;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use gateway_core::operation::GenerateRequest;
+use gateway_core::{account::OpenAiRequestCountry, operation::GenerateRequest};
 use gateway_protocol::openai::{
     OPENAI_PROTOCOL, WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY,
     is_transport_managed_request_header,
@@ -107,13 +107,27 @@ pub fn encode_generate_request(
     upstream_model: &str,
     location: Option<&CodexRequestLocation>,
 ) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
+    let mut encoded = encode_generate_payload(request, upstream_model)?;
+    align_structured_location_fields(
+        encoded.body_mut(),
+        location,
+        &OpenAiRequestCountry::default(),
+    );
+    Ok(encoded)
+}
+
+// 选号前保留下游国家字段的缺省、null 与显式值，位置和国家策略在原生出站时统一应用
+pub(crate) fn encode_generate_payload(
+    request: &GenerateRequest,
+    upstream_model: &str,
+) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
     let payload = request.protocol_payload();
     if payload.protocol() != OPENAI_PROTOCOL {
         return Err(CodexRequestEncodeError::InvalidProtocolPayload);
     }
     let mut body = payload.body().clone();
-    adapt_codex_responses_body(&mut body, upstream_model, location);
-
+    body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
+    normalize_codex_request_body(&mut body);
     let mut encoded = CodexResponsesRequest::from_body(body);
     encoded.explicit_prompt_cache_key = encoded.prompt_cache_key().is_some();
     extract_request_context(&mut encoded);
@@ -121,23 +135,26 @@ pub fn encode_generate_request(
     Ok(encoded)
 }
 
-fn adapt_codex_responses_body(
-    body: &mut Map<String, Value>,
-    upstream_model: &str,
-    location: Option<&CodexRequestLocation>,
-) {
-    body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
-    normalize_codex_request_body(body);
-    align_structured_location_fields(body, location);
-}
-
 pub(crate) fn align_structured_location_fields(
     body: &mut Map<String, Value>,
     location: Option<&CodexRequestLocation>,
+    country: &OpenAiRequestCountry,
 ) {
-    // 请求国家由生效的位置覆盖决定，未配置时显式发送 null 表示未知
-    let country = location.map(|location| location.country.as_str());
-    body.insert("request_country".to_owned(), Value::from(country));
+    match country {
+        OpenAiRequestCountry::Default {} => {
+            body.insert("request_country".into(), Value::Null);
+        }
+        OpenAiRequestCountry::Passthrough {} => {}
+        OpenAiRequestCountry::FollowLocation {} => {
+            body.insert(
+                "request_country".into(),
+                Value::from(location.map(|location| location.country.as_str())),
+            );
+        }
+        OpenAiRequestCountry::Custom { country } => {
+            body.insert("request_country".into(), Value::from(country.as_str()));
+        }
+    }
     let Some(location) = location else { return };
     if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input {
@@ -731,6 +748,7 @@ fn replace_metadata_field(metadata: &mut Map<String, Value>, key: &str, value: O
 // 优先;body 顶层别名只在 header 缺失时兜底(例如 WebSocket 帧无法逐轮携带
 // 请求头的场景)
 fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<String, Value>) {
+    request.guardian_role = gateway_protocol::openai::codex_guardian_role(request.body(), context);
     request.passthrough_headers = decode_passthrough_headers(context);
     request.websocket_frame = context
         .get(gateway_protocol::openai::WEBSOCKET_FRAME_CONTEXT_KEY)

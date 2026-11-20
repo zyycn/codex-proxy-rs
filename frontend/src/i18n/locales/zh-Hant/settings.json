@@ -293,6 +293,8 @@
     },
     "modelMapping": "模型映射",
     "routing": {
+      "oauthGuardianReviewModel": "OpenAI OAuth 同步審核使用專用模型",
+      "oauthGuardianReviewModelHelp": "開啟後，識別出的同步審核請求使用 codex-auto-review，關閉時沿用用戶端選擇的模型",
       "modelMapHelp": "將客戶端請求的模型名稱映射爲實際使用的上游模型"
     },
     "addMapping": "添加映射",
@@ -311,6 +313,21 @@
     "enterDays": "請輸入保留天數",
     "day": "天",
     "location": {
+      "requestCountry": "OpenAI 請求國家（request_country）",
+      "countryHelp": "請求國家模式說明",
+      "countryModes": {
+        "default": "預設",
+        "passthrough": "透傳",
+        "follow_location": "依位置",
+        "custom": "自訂"
+      },
+      "countryHints": {
+        "default": "一律傳送 JSON null",
+        "passthrough": "保留用戶端原值，未傳送時省略此欄位",
+        "follow_location": "優先使用代理位置，其次使用已啟用的全域位置。兩者皆未設定時傳送 null",
+        "custom": "固定使用指定的兩位國家代碼"
+      },
+      "customCountryCode": "自訂國家代碼",
       "requestLocationOverride": "請求位置覆蓋",
       "description": "覆蓋 Codex 請求中的時區與位置字段，賬號出站代理的自定義位置優先",
       "enableLocationOverlay": "啓用位置覆蓋"

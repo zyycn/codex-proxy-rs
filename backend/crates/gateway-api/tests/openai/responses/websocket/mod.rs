@@ -318,7 +318,7 @@ struct AtomicFailureTrace {
     committed: AtomicBool,
     finalized: AtomicBool,
     downstream_websocket_connection_ids: Mutex<Vec<String>>,
-    request_turn_headers: Mutex<Vec<[Option<String>; 2]>>,
+    request_turn_headers: Mutex<Vec<[Option<String>; 4]>>,
     initial_errors: Mutex<std::collections::VecDeque<EngineError>>,
     first_batch: Mutex<Option<CoordinatedEvent>>,
     session_drops: Arc<AtomicUsize>,
@@ -450,8 +450,13 @@ impl ExecutionService for AtomicFailureExecution {
         {
             let context = generate.protocol_payload().context();
             self.trace.request_turn_headers.lock().unwrap().push(
-                ["turn_state", "turn_metadata"]
-                    .map(|key| context.get(key).and_then(Value::as_str).map(str::to_owned)),
+                [
+                    "turn_state",
+                    "turn_metadata",
+                    "subagent",
+                    "codex_guardian_identity",
+                ]
+                .map(|key| context.get(key).and_then(Value::as_str).map(str::to_owned)),
             );
             self.trace
                 .downstream_websocket_connection_ids

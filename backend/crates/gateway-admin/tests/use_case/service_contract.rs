@@ -254,7 +254,7 @@ fn sdk_settings_contract_matches_host_declarations() {
         ),
         (
             "../gateway-core/src/account/location.rs",
-            &["RequestLocation"][..],
+            &["RequestLocation", "OpenAiRequestCountry"][..],
         ),
         (
             "../gateway-core/src/account/scheduling.rs",
@@ -344,6 +344,7 @@ fn sdk_settings_contract_matches_host_declarations() {
     assert_eq!(operations.len(), method_count, "公开服务方法必须完整声明");
     let assignments = replacement_fields.iter().map(|field| match field.to_string().as_str() {
         "expected_revision" => quote!(expected_revision: settings.config_revision),
+        "openai_oauth_guardian_review_model" | "openai_request_country" => quote!(#field: Some(settings.#field)),
         "request_profile_updates" => quote!(request_profile_updates: settings.request_profiles.into_iter().map(|(provider, value)| (provider, Some(value))).collect()),
         _ => quote!(#field: settings.#field),
     });
@@ -363,6 +364,9 @@ fn sdk_settings_contract_matches_host_declarations() {
         pub type AccountAffinity = String;
         pub type PricingOverrides = BTreeMap<String, BTreeMap<String, ModelPriceOverride>>;
         #(#types)*
+        impl Default for OpenAiRequestCountry {
+            fn default() -> Self { Self::Default {} }
+        }
         #(#operations)*
         impl From<RuntimeSettings> for ReplaceRuntimeSettings {
             fn from(settings: RuntimeSettings) -> Self {

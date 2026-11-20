@@ -9,6 +9,7 @@ const CONTEXT_WINDOW_ID: &str = "3b11bc82-c666-417d-b9ff-2a34fd040385";
 fn metadata(window_number: u64) -> Value {
     json!({"session_id":SESSION_ID, "thread_id":THREAD_ID, "turn_id":"source-turn",
         "parent_thread_id":SESSION_ID, "forked_from_thread_id":SESSION_ID,
+        "guardian_classifier_source_thread_id":SESSION_ID,
         "parent_turn_id":"source-turn", "root_turn_id":"source-turn",
         "window_id":format!("{THREAD_ID}:{window_number}"), "window_number":window_number,
         "context_window_id":CONTEXT_WINDOW_ID, "future":{"keep":true},
@@ -197,6 +198,10 @@ async fn account_correlation_preserves_turns_across_transports_and_account_switc
             }
             assert_eq!(full["parent_thread_id"], flat["session_id"]);
             assert_eq!(full["forked_from_thread_id"], flat["session_id"]);
+            assert_eq!(
+                full["guardian_classifier_source_thread_id"],
+                flat["session_id"]
+            );
             let mapped_thread = flat["thread_id"].as_str().unwrap();
             let expected_window = format!("{mapped_thread}:{window_number}");
             assert_eq!(headers["x-codex-window-id"], expected_window);
@@ -387,6 +392,42 @@ async fn image_generation_and_edit_preserve_the_client_turn_identity() {
                 .unwrap();
         assert_eq!(metadata["turn_id"], first.to_str().unwrap());
         assert_eq!(metadata["parent_turn_id"], metadata["turn_id"]);
+    }
+}
+
+#[tokio::test]
+async fn guardian_cache_keys_reference_the_scoped_source_thread_on_http_and_websocket() {
+    for websocket in [false, true] {
+        for (source, prefix, cache_id, linked) in [
+            ("guardian_review", "guardian", THREAD_ID, true),
+            ("guardian_classifier", "guardian-v2", THREAD_ID, true),
+            ("guardian_classifier", "guardian-v2", SESSION_ID, false),
+            ("guardian_classifier", "custom", THREAD_ID, false),
+            ("ordinary", "guardian", THREAD_ID, false),
+        ] {
+            let cache = format!("{prefix}:{cache_id}");
+            let body = capture_downstream_request(json!({
+                "model":"gpt-5.4","input":[],"prompt_cache_key":cache,"client_metadata":{
+                    "x-openai-subagent":"guardian", "x-codex-parent-thread-id":THREAD_ID,
+                    "x-codex-turn-metadata":json!({"thread_source":source, "guardian_classifier_source_thread_id":THREAD_ID}).to_string()
+                }
+            }), false, websocket, false).await;
+            let parent = body["client_metadata"]["x-codex-parent-thread-id"]
+                .as_str()
+                .unwrap();
+            let turn: Value = serde_json::from_str(
+                body["client_metadata"]["x-codex-turn-metadata"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(turn["guardian_classifier_source_thread_id"], parent);
+            if linked {
+                assert_eq!(body["prompt_cache_key"], format!("{prefix}:{parent}"));
+            } else {
+                assert_scoped_id(body["prompt_cache_key"].as_str().unwrap(), &cache);
+            }
+        }
     }
 }
 

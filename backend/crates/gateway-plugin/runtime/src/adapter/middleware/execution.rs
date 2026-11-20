@@ -49,6 +49,31 @@ impl PluginMiddlewarePlan {
 }
 
 impl MiddlewarePlan for PluginMiddlewarePlan {
+    fn preserves_model_bindings(
+        &self,
+        route: gateway_core::engine::ModelRouteScope<'_>,
+        provider: &gateway_core::routing::ProviderKind,
+        target: &gateway_core::routing::UpstreamModelId,
+    ) -> bool {
+        [MiddlewareMount::Attempt, MiddlewareMount::Outbound]
+            .iter()
+            .filter_map(|mount| self.middleware.get(mount))
+            .flatten()
+            .all(|entry| {
+                let matches = |model| {
+                    entry.scope.matches_processing(
+                        route.client_api_key,
+                        route.account_groups,
+                        Some(provider),
+                        Some(model),
+                    )
+                };
+                route.extensions.contains(&entry.instance_id)
+                    || !matches(route.model)
+                    || matches(target.as_str())
+            })
+    }
+
     fn has_outbound(&self, context: &MiddlewareContext) -> bool {
         self.middleware
             .get(&MiddlewareMount::Outbound)
