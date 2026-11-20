@@ -447,11 +447,8 @@ pub struct DashboardAccountUsageView {
     pub usage_window: Option<crate::admin::accounts::AccountQuotaWindowView>,
     pub metric: DashboardAccountMetric,
     pub metric_value_raw: Option<u64>,
-    pub metric_label: String,
-    pub metric_value: String,
     pub last_used_at: Option<DateTime<Utc>>,
     pub last_used_relative: Option<crate::time::RelativeTimeView>,
-    pub last_used: String,
 }
 
 /// Provider 账号池的持久事实汇总

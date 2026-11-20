@@ -1,6 +1,6 @@
 import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './groups'
-import type { ClientProfileSelection, ProviderRequestProfile, ProviderRequestProfiles, ProviderRequestProfileUpdates, XaiClientProfileSelection } from './settings/profiles'
+import type { ProviderRequestProfile, ProviderRequestProfiles, ProviderRequestProfileUpdates } from './settings/profiles'
 import request from '../request'
 
 export type ApiKeyRoutingScope = 'all' | 'groups'
@@ -16,8 +16,6 @@ export interface ApiKeyPeerSharing {
 export interface ApiKey {
   peerSharing: ApiKeyPeerSharing
   providerRequestProfileOverrides: ProviderRequestProfiles
-  openaiClientProfileOverride: ClientProfileSelection | null
-  xaiClientProfileOverride: XaiClientProfileSelection | null
 
   id: string
   name: string

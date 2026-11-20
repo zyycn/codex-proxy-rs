@@ -184,57 +184,7 @@ impl CodexCredentialCodec {
     pub fn decode(
         credential: &PlaintextCredential,
     ) -> Result<CodexRuntimeCredential, CodexCredentialDataError> {
-        let data = Self::decode_complete(credential)?;
-        let transport = match &data {
-            CodexCredentialData::OAuth(data) => data.transport,
-            CodexCredentialData::ApiKey(data) => data.transport,
-        };
-        let (authentication, principal, installation_id, cookies, oauth_client_id, oauth_scope) =
-            match data {
-                CodexCredentialData::ApiKey(data) => (
-                    CodexRuntimeAuthentication::ApiKey(ApiKeyAuthentication {
-                        configuration: data.configuration(),
-                        secret: SecretString::from(data.api_key),
-                    }),
-                    None,
-                    data.installation_id,
-                    Vec::new(),
-                    None,
-                    None,
-                ),
-                CodexCredentialData::OAuth(data) => (
-                    CodexRuntimeAuthentication::OAuth(CodexOAuthSecret {
-                        access_token: SecretString::from(data.access_token),
-                        refresh_token: data.refresh_token.map(SecretString::from),
-                        id_token: data.id_token.map(SecretString::from),
-                    }),
-                    data.principal,
-                    data.installation_id,
-                    data.cookies,
-                    data.oauth_client_id,
-                    data.oauth_scope,
-                ),
-            };
-        Ok(CodexRuntimeCredential {
-            transport,
-            authentication,
-            principal,
-            installation_id,
-            cookies: cookies
-                .into_iter()
-                .map(|cookie| RuntimeCodexCookie {
-                    name: cookie.name,
-                    value: SecretString::from(cookie.value),
-                    domain: cookie.domain,
-                    path: cookie.path,
-                    host_only: cookie.host_only,
-                    secure: cookie.secure,
-                    expires_at: cookie.expires_at,
-                })
-                .collect(),
-            oauth_client_id,
-            oauth_scope,
-        })
+        Self::decode_complete(credential).map(CodexCredentialData::into_runtime)
     }
 
     pub fn decode_complete(
@@ -276,6 +226,61 @@ impl CodexCredentialCodec {
             _ => return Err(CodexCredentialDataError::Invalid),
         }
         Self::encode_complete(incoming)
+    }
+}
+
+impl CodexCredentialData {
+    pub(super) fn into_runtime(self) -> CodexRuntimeCredential {
+        let transport = match &self {
+            CodexCredentialData::OAuth(data) => data.transport,
+            CodexCredentialData::ApiKey(data) => data.transport,
+        };
+        let (authentication, principal, installation_id, cookies, oauth_client_id, oauth_scope) =
+            match self {
+                CodexCredentialData::ApiKey(data) => (
+                    CodexRuntimeAuthentication::ApiKey(ApiKeyAuthentication {
+                        configuration: data.configuration(),
+                        secret: SecretString::from(data.api_key),
+                    }),
+                    None,
+                    data.installation_id,
+                    Vec::new(),
+                    None,
+                    None,
+                ),
+                CodexCredentialData::OAuth(data) => (
+                    CodexRuntimeAuthentication::OAuth(CodexOAuthSecret {
+                        access_token: SecretString::from(data.access_token),
+                        refresh_token: data.refresh_token.map(SecretString::from),
+                        id_token: data.id_token.map(SecretString::from),
+                    }),
+                    data.principal,
+                    data.installation_id,
+                    data.cookies,
+                    data.oauth_client_id,
+                    data.oauth_scope,
+                ),
+            };
+        CodexRuntimeCredential {
+            transport,
+            authentication,
+            principal,
+            installation_id,
+            cookies: cookies
+                .into_iter()
+                .map(|cookie| RuntimeCodexCookie {
+                    name: cookie.name,
+                    value: SecretString::from(cookie.value),
+                    domain: cookie.domain,
+                    path: cookie.path,
+                    host_only: cookie.host_only,
+                    secure: cookie.secure,
+                    expires_at: cookie.expires_at,
+                })
+                .collect(),
+            oauth_client_id,
+            oauth_scope,
+        }
     }
 }
 

@@ -321,7 +321,7 @@ async fn lock_url(
     Ok(())
 }
 
-/// 导入和旧版 URL 写入在账号事务内登记到共享代理目录
+/// 按 URL 复用代理条目，与账号导入或代理创建共用事务
 pub(crate) async fn ensure_proxy_for_url(
     transaction: &mut Transaction<'_, Postgres>,
     proxy: &OutboundProxy,
@@ -350,10 +350,6 @@ pub(crate) async fn resolve_proxy_selection(
 ) -> StoreResult<(Option<String>, Option<OutboundProxy>)> {
     match selection {
         AccountProxySelection::Direct => Ok((None, None)),
-        AccountProxySelection::Url(proxy) => {
-            let (id, _) = ensure_proxy_for_url(transaction, proxy, None).await?;
-            Ok((Some(id), Some(proxy.clone())))
-        }
         AccountProxySelection::Saved(id) => {
             let (value, enabled, limit): (String, bool, i64) = sqlx::query_as(
                 "select proxy_url, enabled, max_websocket_connections from outbound_proxies where id = $1 for share",

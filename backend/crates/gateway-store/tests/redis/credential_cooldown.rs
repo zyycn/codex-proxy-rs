@@ -531,6 +531,13 @@ async fn capacity_freeze_survives_due_time_and_runtime_restart_until_probe_succe
         .cache_credential_cooldown(&frozen)
         .await
         .expect("write due freeze");
+    let rate_limit = cooldown(&frozen.provider_account_id, 1, 600);
+    assert!(
+        repository
+            .cache_credential_cooldown(&rate_limit)
+            .await
+            .unwrap()
+    );
     let runtime = runtime_store(&repository, connection.clone(), &namespace);
     let snapshot = runtime.active_rate_limits().await.unwrap_or_else(|error| {
         // 来源默认不参与 Debug；只输出错误类别，保留诊断线索且不展开连接信息
@@ -599,12 +606,12 @@ async fn capacity_freeze_survives_due_time_and_runtime_restart_until_probe_succe
             .await
             .expect("probe completion")
     );
-    assert!(
+    assert_eq!(
         repository
             .read_credential_cooldown(&frozen.provider_account_id)
             .await
-            .expect("read")
-            .is_none()
+            .unwrap(),
+        Some(rate_limit)
     );
 }
 

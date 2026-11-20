@@ -69,7 +69,6 @@ interface CreateAccountImportTaskParam {
 }
 
 interface AccountOAuthStartParam {
-  outboundProxyUrl?: string
   outboundProxyId?: string
   provider: string
   name: string

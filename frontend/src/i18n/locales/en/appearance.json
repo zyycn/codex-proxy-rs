@@ -124,10 +124,8 @@
         "demoKey": "Demo Key",
         "requestHealthTimeline": "Request a health timeline",
         "validRequestAvailability": "Valid request availability",
-        "todaySToken": "Tokens",
         "hours": "5 h",
         "requests": "08-23 {value}:00–{value2}:00 · Requests: {count}",
-        "times": "Times",
         "dailyLimit": "Daily limit"
       },
       "homeArtboard": "Home artboard",

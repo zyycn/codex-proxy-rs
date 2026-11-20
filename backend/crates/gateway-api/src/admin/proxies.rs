@@ -20,8 +20,23 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, PageMeta,
-    accounts::{AccountGroupRefView, AccountProxyUpdate},
+    accounts::AccountGroupRefView,
 };
+
+#[derive(Debug)]
+struct ProxyUrl(Option<gateway_core::account::OutboundProxy>);
+
+impl<'de> Deserialize<'de> for ProxyUrl {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        if value.is_empty() {
+            return Ok(Self(None));
+        }
+        gateway_core::account::OutboundProxy::parse(&value)
+            .map(|proxy| Self(Some(proxy)))
+            .map_err(serde::de::Error::custom)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -56,7 +71,7 @@ struct CreateRequest {
     auto_location: bool,
     location: Option<gateway_core::account::RequestLocation>,
     name: String,
-    proxy_url: AccountProxyUpdate,
+    proxy_url: ProxyUrl,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,7 +85,7 @@ struct UpdateRequest {
     id: String,
     revision: u64,
     name: String,
-    proxy_url: Option<AccountProxyUpdate>,
+    proxy_url: Option<ProxyUrl>,
 }
 
 fn deserialize_location_update<'de, D>(
@@ -105,7 +120,7 @@ struct ProbeRequest {
     use_deployment_proxy: bool,
     #[serde(default)]
     detect_location: bool,
-    proxy_url: AccountProxyUpdate,
+    proxy_url: ProxyUrl,
 }
 
 #[derive(Serialize)]

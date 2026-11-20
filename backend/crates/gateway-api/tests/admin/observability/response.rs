@@ -2039,16 +2039,15 @@ async fn dashboard_summary_identifies_trend_metrics_and_account_usage_values() {
         assert_eq!(status, StatusCode::OK, "{kind}: {value}");
         let accounts = value["data"]["accountUsage"].as_array().unwrap();
         assert_eq!(accounts.len(), 5);
-        for (account, (metric, raw, display, last_used_at)) in accounts.iter().zip([
-            ("tokens", Some(2_000), "2K", Some(now)),
-            ("tokens", Some(0), "0", None),
-            ("tokens", None, "—", None),
-            ("requests", Some(9), "9", Some(now)),
-            ("requests", Some(0), "—", None),
+        for (account, (metric, raw, last_used_at)) in accounts.iter().zip([
+            ("tokens", Some(2_000), Some(now)),
+            ("tokens", Some(0), None),
+            ("tokens", None, None),
+            ("requests", Some(9), Some(now)),
+            ("requests", Some(0), None),
         ]) {
             assert_eq!(account["metric"], metric);
             assert_eq!(account["metricValueRaw"], json!(raw));
-            assert_eq!(account["metricValue"], display);
             assert_eq!(account["lastUsedAt"], json!(last_used_at));
         }
         let summary = value["data"]["trend"]["summary"].as_array().unwrap();
@@ -2082,50 +2081,42 @@ async fn dashboard_relative_time_preserves_server_anchor_boundaries_and_deployme
         ("Asia/Kathmandu", "2026-06-15 05:45:01"),
         ("America/New_York", "2026-06-14 20:00:01"),
     ] {
-        for (elapsed_ms, expected, display) in [
-            (None, json!(null), "—"),
+        for (elapsed_ms, expected) in [
+            (None, json!(null)),
             (
                 Some(-1_000),
                 json!({ "kind": "absolute", "value": future_display }),
-                future_display,
             ),
-            (Some(-1), json!({ "kind": "just_now" }), "刚刚"),
-            (Some(0), json!({ "kind": "just_now" }), "刚刚"),
-            (Some(59_999), json!({ "kind": "just_now" }), "刚刚"),
+            (Some(-1), json!({ "kind": "just_now" })),
+            (Some(0), json!({ "kind": "just_now" })),
+            (Some(59_999), json!({ "kind": "just_now" })),
             (
                 Some(60_000),
                 json!({ "kind": "elapsed", "value": 1, "unit": "minute" }),
-                "1 分钟前",
             ),
             (
                 Some(119_999),
                 json!({ "kind": "elapsed", "value": 1, "unit": "minute" }),
-                "1 分钟前",
             ),
             (
                 Some(3_599_999),
                 json!({ "kind": "elapsed", "value": 59, "unit": "minute" }),
-                "59 分钟前",
             ),
             (
                 Some(3_600_000),
                 json!({ "kind": "elapsed", "value": 1, "unit": "hour" }),
-                "1 小时前",
             ),
             (
                 Some(86_399_999),
                 json!({ "kind": "elapsed", "value": 23, "unit": "hour" }),
-                "23 小时前",
             ),
             (
                 Some(86_400_000),
                 json!({ "kind": "elapsed", "value": 1, "unit": "day" }),
-                "1 天前",
             ),
             (
                 Some(34_560_000_000),
                 json!({ "kind": "elapsed", "value": 400, "unit": "day" }),
-                "400 天前",
             ),
         ] {
             // 每个边界使用独立缓存，避免相同锚点复用上一轮观测数据
@@ -2197,7 +2188,6 @@ async fn dashboard_relative_time_preserves_server_anchor_boundaries_and_deployme
                 account["lastUsedRelative"], expected,
                 "{zone}: {elapsed_ms:?}"
             );
-            assert_eq!(account["lastUsed"], display, "{zone}: {elapsed_ms:?}");
             assert_eq!(account["lastUsedAt"], json!(last_used_at));
         }
     }

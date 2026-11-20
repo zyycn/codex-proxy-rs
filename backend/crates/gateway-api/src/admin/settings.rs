@@ -1,4 +1,4 @@
-//! Runtime settings、旧设置页聚合投影与明文 Admin API Key wire
+//! 管理端运行设置、模型定价与 Admin API Key 的 HTTP 接口
 
 use crate::auth::SessionState;
 
@@ -66,7 +66,6 @@ pub struct RuntimeSettingsFields {
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
-    #[serde(default)]
     pub reset_credit_on_low_weekly_quota: bool,
     pub reset_credit_lead_minutes: u32,
     pub reset_credit_max_weekly_remaining_percent: Option<u32>,
@@ -82,10 +81,6 @@ pub struct RuntimeSettingsView {
     pub smart_scheduling_defaults: gateway_core::account::SmartSchedulingConfig,
     pub quota_reset_window_weights_defaults: gateway_core::account::ResetWindowWeights,
     pub provider_request_profiles: ProviderRequestProfiles,
-    /// 固定兼容字段；值始终从 provider_request_profiles 派生
-    pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
-    /// 固定兼容字段；值始终从 provider_request_profiles 派生
-    pub xai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub model_mappings: ModelMappings,
     pub rotation_strategy: String,
     pub updated_at: DateTime<Utc>,
@@ -101,12 +96,6 @@ pub struct UpdateRuntimeSettingsRequest {
     pub config_revision: u64,
     #[serde(default)]
     pub provider_request_profiles: ProviderRequestProfileUpdates,
-    /// 兼容既有 wire；与泛化字段冲突时拒绝整个请求
-    #[serde(default, deserialize_with = "deserialize_present_update")]
-    pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
-    /// 兼容既有 wire；与泛化字段冲突时拒绝整个请求
-    #[serde(default, deserialize_with = "deserialize_present_update")]
-    pub xai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub model_mappings: ModelMappings,
     pub rotation_strategy: String,
 }
@@ -123,11 +112,8 @@ impl UpdateRuntimeSettingsRequest {
 
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
         validate_model_mappings(&self.model_mappings)?;
-        let request_profile_updates = normalize_request_profile_updates(
-            self.provider_request_profiles,
-            self.openai_client_profile,
-            self.xai_client_profile,
-        )?;
+        let request_profile_updates =
+            normalize_request_profile_updates(self.provider_request_profiles)?;
         Ok(ReplaceRuntimeSettings {
             expected_revision: gateway_admin::model::Revision::new(self.config_revision)
                 .map_err(|_| WireValidationError::new("configRevision"))?,
@@ -149,8 +135,6 @@ impl From<(RuntimeSettings, crate::time::TimePresenter)> for RuntimeSettingsView
             .collect::<ProviderRequestProfiles>();
         Self {
             config_revision: settings.config_revision.get(),
-            openai_client_profile: provider_request_profiles.get("openai").cloned(),
-            xai_client_profile: provider_request_profiles.get("xai").cloned(),
             provider_request_profiles,
             model_mappings: wire_model_mappings(settings.model_mappings),
             smart_scheduling_defaults: gateway_core::account::SmartSchedulingConfig::default(),
@@ -599,7 +583,7 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
         "settingsAuditRetentionOverflow" => "审计记录保留天数不合法".to_owned(),
         "openaiRequestCountry" => "自定义请求国家必须是两位大写 ASCII 字母".to_owned(),
         "requestLocation" => "请求位置的国家代码、地区或城市不合法".to_owned(),
-        "providerRequestProfiles" => "服务商客户端身份配置无效或字段冲突".to_owned(),
+        "providerRequestProfiles" => "服务商客户端身份配置无效".to_owned(),
         "minCodexDesktopVersion" => "Codex Desktop 最低版本格式不合法".to_owned(),
         "minCodexCliVersion" => "Codex CLI 最低版本格式不合法".to_owned(),
         field => format!("{field} 字段不合法"),
@@ -613,10 +597,8 @@ fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
 
 fn normalize_request_profile_updates(
     profiles: ProviderRequestProfileUpdates,
-    openai: Option<serde_json::Map<String, serde_json::Value>>,
-    xai: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> Result<gateway_admin::model::settings::ProviderRequestProfileUpdates, WireValidationError> {
-    let mut normalized = profiles
+    profiles
         .into_iter()
         .map(|(provider, profile)| {
             if !matches!(provider.as_str(), "openai" | "xai") {
@@ -629,30 +611,7 @@ fn normalize_request_profile_updates(
                 profile.map(gateway_core::account::OpaqueProviderData::new),
             ))
         })
-        .collect::<Result<gateway_admin::model::settings::ProviderRequestProfileUpdates, _>>()?;
-    for (provider, profile) in [("openai", openai), ("xai", xai)] {
-        let Some(profile) = profile else {
-            continue;
-        };
-        let provider = gateway_core::routing::ProviderKind::new(provider)
-            .expect("static Provider kind is valid");
-        let profile = gateway_core::account::OpaqueProviderData::new(profile);
-        if normalized
-            .get(&provider)
-            .is_some_and(|current| current.as_ref() != Some(&profile))
-        {
-            return Err(WireValidationError::new("providerRequestProfiles"));
-        }
-        normalized.insert(provider, Some(profile));
-    }
-    Ok(normalized)
-}
-
-// 字段省略时保留已有配置；显式 null 不能清空设置
-fn deserialize_present_update<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
-    deserializer: D,
-) -> Result<Option<T>, D::Error> {
-    T::deserialize(deserializer).map(Some)
+        .collect()
 }
 
 async fn detect_location<S>(

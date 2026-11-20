@@ -27,7 +27,7 @@ return 1
 "#;
 
 // 原 key 的代次和恢复时间原样搬运，不重新开始冷却
-const MIGRATE: &str = r#"
+pub(super) const MIGRATE: &str = r#"
 local function migrate_protection(legacy, protection, legacy_index, protection_index, account)
   local kind = redis.call('HGET', legacy, 'kind')
   if kind == 'capacity_freeze' or kind == 'capacity_freeze_probe' then
@@ -37,16 +37,6 @@ local function migrate_protection(legacy, protection, legacy_index, protection_i
   end
 end
 "#;
-
-static MIGRATE_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
-    Script::new(
-        &[
-            MIGRATE,
-            "migrate_protection(KEYS[1], KEYS[2], KEYS[3], KEYS[4], ARGV[1])\nreturn 1",
-        ]
-        .concat(),
-    )
-});
 
 static BEGIN: LazyLock<Script> = LazyLock::new(|| {
     Script::new(&[MIGRATE, r#"
@@ -144,7 +134,21 @@ static READ_ACCOUNT_RUNTIME: LazyLock<Script> = LazyLock::new(|| {
     )
 });
 
-const CLEAR: &str = r#"
+// 恢复与凭据换代共用同一组 key，在修改冻结前一并接管旧记录
+fn protection_mutation(script: &str) -> Script {
+    Script::new(
+        &[
+            MIGRATE,
+            "migrate_protection(KEYS[4], KEYS[1], KEYS[5], KEYS[3], ARGV[3])\n",
+            script,
+        ]
+        .concat(),
+    )
+}
+
+static CLEAR: LazyLock<Script> = LazyLock::new(|| {
+    protection_mutation(
+        r#"
 local current = math.max(tonumber(redis.call('HGET', KEYS[1], 'revision') or '0'), tonumber(redis.call('HGET', KEYS[2], 'revision') or '0'))
 if current > tonumber(ARGV[1]) then return 0 end
 local removed = redis.call('DEL', KEYS[1])
@@ -153,9 +157,13 @@ redis.call('HDEL', KEYS[2], 'count', 'count_until')
 redis.call('EXPIRE', KEYS[2], 691200)
 redis.call('ZREM', KEYS[3], ARGV[3])
 return removed
-"#;
+"#,
+    )
+});
 
-const ADVANCE_REVISION: &str = r#"
+static ADVANCE_REVISION: LazyLock<Script> = LazyLock::new(|| {
+    protection_mutation(
+        r#"
 local current = tonumber(redis.call('HGET', KEYS[2], 'revision') or '0')
 local frozen = tonumber(redis.call('HGET', KEYS[1], 'revision') or '0')
 if current >= tonumber(ARGV[1]) or frozen >= tonumber(ARGV[1]) then return 0 end
@@ -164,7 +172,9 @@ redis.call('HSET', KEYS[2], 'revision', ARGV[1], 'reset', ARGV[2], 'version', 0)
 redis.call('HDEL', KEYS[2], 'count', 'count_until')
 redis.call('EXPIRE', KEYS[2], 691200)
 return 1
-"#;
+"#,
+    )
+});
 
 const FINISH: &str = r#"
 if redis.call('HGET', KEYS[1], 'revision') ~= ARGV[1] or redis.call('HGET', KEYS[1], 'generation') ~= ARGV[2] then return 0 end
@@ -217,18 +227,6 @@ impl RedisCredentialCooldownRepository {
             .invoke_async::<i64>(&mut self.connection.clone())
             .await
             .map_err(|e| redis_unavailable("publish account protection", e))?;
-        Ok(())
-    }
-    pub(super) async fn migrate_protection(&self, account: &str) -> StoreResult<()> {
-        MIGRATE_SCRIPT
-            .key(self.key(account)?)
-            .key(self.protection_key(account)?)
-            .key(self.active_index_key())
-            .key(self.protection_index_key())
-            .arg(account)
-            .invoke_async::<i64>(&mut self.connection.clone())
-            .await
-            .map_err(|e| redis_unavailable("migrate account protection", e))?;
         Ok(())
     }
     pub(super) async fn begin_account_protection(
@@ -428,11 +426,12 @@ impl RedisCredentialCooldownRepository {
         account: &str,
         revision: Revision,
     ) -> StoreResult<bool> {
-        self.migrate_protection(account).await?;
-        let changed: i64 = Script::new(CLEAR)
+        let changed: i64 = CLEAR
             .key(self.protection_key(account)?)
             .key(self.protection_state_key(account)?)
             .key(self.protection_index_key())
+            .key(self.key(account)?)
+            .key(self.active_index_key())
             .arg(revision.get())
             .arg(uuid::Uuid::new_v4().to_string())
             .arg(account)
@@ -446,11 +445,12 @@ impl RedisCredentialCooldownRepository {
         account: &ProviderAccountId,
         revision: CredentialRevision,
     ) -> StoreResult<bool> {
-        self.migrate_protection(account.as_str()).await?;
-        let changed: i64 = Script::new(ADVANCE_REVISION)
+        let changed: i64 = ADVANCE_REVISION
             .key(self.protection_key(account.as_str())?)
             .key(self.protection_state_key(account.as_str())?)
             .key(self.protection_index_key())
+            .key(self.key(account.as_str())?)
+            .key(self.active_index_key())
             .arg(revision.get())
             .arg(uuid::Uuid::new_v4().to_string())
             .arg(account.as_str())

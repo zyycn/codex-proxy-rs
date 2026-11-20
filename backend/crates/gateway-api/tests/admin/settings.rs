@@ -75,6 +75,7 @@ fn update_body() -> Value {
         "accountWarmupEnabled": false,
         "accountWarmupCron": "0 8 * * *",
         "accountWarmupModel": null,
+        "resetCreditOnLowWeeklyQuota": false,
         "resetCreditLeadMinutes": 10,
         "resetCreditMaxWeeklyRemainingPercent": null
     })
@@ -541,6 +542,7 @@ fn settings_service_contract_flattens_values_and_rejects_unknown_fields() {
     for field in [
         "openai_oauth_guardian_review_model",
         "openai_request_country",
+        "reset_credit_on_low_weekly_quota",
     ] {
         let mut incomplete = wire.clone();
         incomplete.as_object_mut().unwrap().remove(field);
@@ -914,33 +916,19 @@ async fn settings_update_rejects_unknown_fields_without_writing() {
     assert_eq!(*fixture.settings.settings.lock().unwrap(), initial);
 }
 
-#[test]
-fn global_profile_can_be_omitted_but_cannot_be_cleared() {
-    for field in ["openaiClientProfile", "xaiClientProfile"] {
-        let mut body = update_body();
-        body.as_object_mut().unwrap().remove(field);
-        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).is_ok());
-        body[field] = json!(null);
-        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).is_err());
-        body[field] = json!({"versionMode":"latest"});
-        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_ok());
-    }
-}
-
 #[tokio::test]
-async fn global_profiles_decode_native_providers_and_reject_conflicting_openai_settings() {
-    let mut body = update_body();
-    body["providerRequestProfiles"] = json!({
-        "openai":{"preset":"desktop"},
-        "xai":{"preset":"managed"},
-    });
-    body["openaiClientProfile"] = json!({"preset":"desktop"});
-    let decoded = serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).unwrap();
-    assert!(decoded.provider_request_profiles.contains_key("xai"));
-
-    body["openaiClientProfile"] = json!({"preset":"cli"});
+async fn global_profiles_map_only_updates_submitted_providers() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
+    {
+        let mut settings = fixture.settings.settings.lock().unwrap();
+        settings.request_profiles = serde_json::from_value(json!({
+            "openai":{"preset":"desktop"}, "xai":{"versionMode":"latest"}
+        }))
+        .unwrap();
+    }
+    let mut body = update_body();
+    body["providerRequestProfiles"] = json!({"xai":null});
     let response = app(fixture.state())
         .oneshot(request(
             Method::POST,
@@ -949,7 +937,12 @@ async fn global_profiles_decode_native_providers_and_reject_conflicting_openai_s
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved = response_json(response).await;
+    assert_eq!(
+        saved["data"]["providerRequestProfiles"],
+        json!({"openai":{"preset":"desktop"}})
+    );
 }
 
 #[tokio::test]
@@ -1429,7 +1422,7 @@ async fn settings_update_rejects_a_stale_version_without_replacing_the_saved_val
 }
 
 #[tokio::test]
-async fn openai_request_settings_require_both_fields_and_reject_stale_writes() {
+async fn runtime_settings_reject_incomplete_and_stale_replacements() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let read = || app(fixture.state()).oneshot(request(Method::GET, "/api/admin/settings", None));
@@ -1450,13 +1443,19 @@ async fn openai_request_settings_require_both_fields_and_reject_stale_writes() {
     body["configRevision"] = initial["configRevision"].clone();
     body["openaiOauthGuardianReviewModel"] = json!(false);
     body["openaiRequestCountry"] = json!({"mode":"custom","country":"CA"});
+    body["resetCreditOnLowWeeklyQuota"] = json!(true);
     let response = save(body.clone()).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let saved = response_json(response).await["data"].clone();
+    assert_eq!(saved["resetCreditOnLowWeeklyQuota"], true);
     assert_eq!(saved["openaiOauthGuardianReviewModel"], false);
     assert_eq!(saved["openaiRequestCountry"], body["openaiRequestCountry"]);
 
-    for field in ["openaiOauthGuardianReviewModel", "openaiRequestCountry"] {
+    for field in [
+        "openaiOauthGuardianReviewModel",
+        "openaiRequestCountry",
+        "resetCreditOnLowWeeklyQuota",
+    ] {
         let mut incomplete = update_body();
         incomplete["configRevision"] = saved["configRevision"].clone();
         incomplete.as_object_mut().unwrap().remove(field);

@@ -1,7 +1,7 @@
 import type { RequestOptions } from '../../request'
 import type { RequestLocation, RequestLocationDetection } from '../../types/location'
 import type { CodexPrivacyPolicy } from './privacy'
-import type { ClientProfileSelection, ProviderRequestProfiles, ProviderRequestProfileUpdates, XaiClientProfileSelection } from './profiles'
+import type { ProviderRequestProfiles, ProviderRequestProfileUpdates } from './profiles'
 import type { AccountErrorProtection } from './protection'
 import request from '../../request'
 
@@ -50,8 +50,6 @@ export interface RuntimeSettings {
   quotaResetWindowWeights: ResetWindowWeights
   quotaResetWindowWeightsDefaults: ResetWindowWeights
   providerRequestProfiles: ProviderRequestProfiles
-  openaiClientProfile: ClientProfileSelection | null
-  xaiClientProfile: XaiClientProfileSelection | null
 
   codexPrivacyPolicy: CodexPrivacyPolicy
   openaiRequestCountry: OpenAiRequestCountry
@@ -132,7 +130,7 @@ export function getSettings(options: RequestOptions = {}) {
   })
 }
 
-type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'updatedAtDisplay' | 'smartSchedulingDefaults' | 'quotaResetWindowWeightsDefaults' | 'openaiClientProfile' | 'xaiClientProfile' | 'providerRequestProfiles'> & {
+type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'updatedAtDisplay' | 'smartSchedulingDefaults' | 'quotaResetWindowWeightsDefaults' | 'providerRequestProfiles'> & {
   providerRequestProfiles: ProviderRequestProfileUpdates
 }
 

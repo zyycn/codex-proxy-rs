@@ -180,7 +180,7 @@ impl CodexCredentialRepository {
         if data.authentication_kind() != loaded.account.authentication_kind() {
             return Err(CredentialRepositoryError::InvalidCredentialData(None));
         }
-        CodexCredentialCodec::decode(&loaded.credential).map_err(Into::into)
+        Ok(data.into_runtime())
     }
 
     pub async fn load_runtime_credential(

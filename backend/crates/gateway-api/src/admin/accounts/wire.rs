@@ -2,46 +2,22 @@
 
 use super::*;
 
-#[derive(Debug, Clone)]
-pub struct AccountProxyUpdate(pub Option<gateway_core::account::OutboundProxy>);
-
-impl<'de> Deserialize<'de> for AccountProxyUpdate {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = String::deserialize(deserializer)?;
-        if value.is_empty() {
-            return Ok(Self(None));
-        }
-        gateway_core::account::OutboundProxy::parse(&value)
-            .map(|proxy| Self(Some(proxy)))
-            .map_err(serde::de::Error::custom)
-    }
-}
-
 pub(super) fn proxy_selection(
     id: Option<String>,
-    url: Option<AccountProxyUpdate>,
 ) -> Result<Option<gateway_admin::model::proxies::AccountProxySelection>, WireValidationError> {
     use gateway_admin::model::proxies::AccountProxySelection;
-    match (id, url) {
-        (Some(_), Some(_)) => Err(WireValidationError::new("outboundProxyId")),
-        (Some(id), None) if id.is_empty() => Ok(Some(AccountProxySelection::Direct)),
-        (Some(id), None) => {
-            if id.len() > 128
-                || !id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-            {
-                return Err(WireValidationError::new("outboundProxyId"));
-            }
-            Ok(Some(AccountProxySelection::Saved(id)))
-        }
-        (None, Some(value)) => Ok(Some(
-            value
-                .0
-                .map_or(AccountProxySelection::Direct, AccountProxySelection::Url),
-        )),
-        (None, None) => Ok(None),
+    let Some(id) = id else { return Ok(None) };
+    if id.is_empty() {
+        return Ok(Some(AccountProxySelection::Direct));
     }
+    if id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(WireValidationError::new("outboundProxyId"));
+    }
+    Ok(Some(AccountProxySelection::Saved(id)))
 }
 
 /// 账号列表查询参数
@@ -64,7 +40,6 @@ pub struct BatchUpdateAccountsRequest {
     pub quota_settings: Option<gateway_core::account::AccountQuotaSettings>,
     pub auto_use_quota_credits: Option<bool>,
     pub outbound_proxy_id: Option<String>,
-    pub outbound_proxy_url: Option<AccountProxyUpdate>,
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable_limit")]
@@ -127,7 +102,6 @@ impl BatchUpdateAccountsRequest {
             && self.group_ids.is_none()
             && self.model_access.is_none()
             && self.outbound_proxy_id.is_none()
-            && self.outbound_proxy_url.is_none()
         {
             return Err(WireValidationError::new("accountSettings"));
         }
@@ -139,7 +113,7 @@ impl BatchUpdateAccountsRequest {
         Ok(BatchUpdateAccounts {
             quota_settings: self.quota_settings,
             auto_use_quota_credits: self.auto_use_quota_credits,
-            outbound_proxy: proxy_selection(self.outbound_proxy_id, self.outbound_proxy_url)?,
+            outbound_proxy: proxy_selection(self.outbound_proxy_id)?,
             account_ids: self.account_ids,
             enabled: self.enabled,
             concurrency_limit: self

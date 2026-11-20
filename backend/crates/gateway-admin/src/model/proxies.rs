@@ -9,7 +9,6 @@ use super::{PageSize, Revision, account_groups::AccountGroupRef};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountProxySelection {
     Direct,
-    Url(OutboundProxy),
     Saved(String),
 }
 

@@ -118,7 +118,6 @@ pub struct StartAccountAuthorizationRequest {
     pub provider: String,
     pub name: String,
     pub account_id: Option<String>,
-    pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
 }
 
 impl StartAccountAuthorizationRequest {
@@ -148,10 +147,7 @@ impl StartAccountAuthorizationRequest {
                 context,
                 name: self.name.trim().to_owned(),
                 reauthorization,
-                outbound_proxy: super::wire::proxy_selection(
-                    self.outbound_proxy_id,
-                    self.outbound_proxy_url,
-                )?,
+                outbound_proxy: super::wire::proxy_selection(self.outbound_proxy_id)?,
             },
         ))
     }
@@ -219,7 +215,6 @@ fn validate_authorization_flow(
 pub struct UpdateAccountRequest {
     pub connection: Option<AccountConnectionUpdateRequest>,
     pub outbound_proxy_id: Option<String>,
-    pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
     pub account_id: String,
     pub name: Option<String>,
     pub notes: Option<String>,
@@ -255,10 +250,7 @@ impl UpdateAccountRequest {
             .connection
             .map(AccountConnectionUpdateRequest::into_document);
         let settings = UpdateAccount {
-            outbound_proxy: super::wire::proxy_selection(
-                self.outbound_proxy_id,
-                self.outbound_proxy_url,
-            )?,
+            outbound_proxy: super::wire::proxy_selection(self.outbound_proxy_id)?,
             account_id: self.account_id,
             name: self.name.map(|name| name.trim().to_owned()),
             notes: self.notes,

@@ -1192,8 +1192,8 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
 }
 
 #[tokio::test]
-async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
-    let Some(database) = TestDatabase::create("proxy_catalog_legacy").await else {
+async fn imported_urls_share_one_proxy_and_invalid_batch_preserves_the_binding() {
+    let Some(database) = TestDatabase::create("proxy_catalog_import").await else {
         return;
     };
     let accounts = PgProviderAccountRepository::new(database.pool.clone());
@@ -1227,9 +1227,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
                     concurrency_limit: Some(None),
                     weight: Some(AccountWeight::DEFAULT),
                     group_ids: Some(vec![]),
-                    outbound_proxy: Some(AccountProxySelection::Url(
-                        OutboundProxy::parse("http://127.0.0.1:9090").unwrap()
-                    )),
+                    outbound_proxy: Some(AccountProxySelection::Direct),
                 },
                 Default::default(),
                 &context()

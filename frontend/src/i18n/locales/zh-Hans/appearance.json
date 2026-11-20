@@ -124,10 +124,8 @@
         "demoKey": "演示 API密钥",
         "requestHealthTimeline": "请求健康时间线",
         "validRequestAvailability": "有效请求可用性",
-        "todaySToken": "今日 Token",
         "hours": "5 小时",
         "requests": "08-23 {value}:00–{value2}:00 · {count} 次请求",
-        "times": "次数",
         "dailyLimit": "日限额"
       },
       "homeArtboard": "首页画板",

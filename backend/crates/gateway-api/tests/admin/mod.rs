@@ -641,47 +641,7 @@ impl SettingsStore for MemorySettingsStore {
             model_mappings: command.model_mappings,
             rotation_strategy: command.rotation_strategy,
             updated_at: Utc::now(),
-            values: gateway_admin::model::settings::RuntimeSettingsValues {
-                openai_oauth_guardian_review_model: command
-                    .values
-                    .openai_oauth_guardian_review_model,
-                openai_request_country: command.values.openai_request_country,
-                codex_privacy_policy: command.values.codex_privacy_policy,
-                request_location_enabled: command.values.request_location_enabled,
-                request_location: command.values.request_location,
-                refresh_margin_seconds: command.values.refresh_margin_seconds,
-                refresh_concurrency: command.values.refresh_concurrency,
-                max_concurrent_per_account: command.values.max_concurrent_per_account,
-                max_waiting_per_key: command.values.max_waiting_per_key,
-                max_waiting_per_account: command.values.max_waiting_per_account,
-                key_queue_timeout_seconds: command.values.key_queue_timeout_seconds,
-                account_queue_timeout_seconds: command.values.account_queue_timeout_seconds,
-                switch_account_on_queue_failure: command.values.switch_account_on_queue_failure,
-                max_retry_after_seconds: command.values.max_retry_after_seconds,
-                openai_guardian_reserved_concurrency: command
-                    .values
-                    .openai_guardian_reserved_concurrency,
-                openai_account_affinity: command.values.openai_account_affinity,
-                max_account_rotations: command.values.max_account_rotations,
-                openai_session_affinity_ttl_hours: command.values.openai_session_affinity_ttl_hours,
-                responses_max_decompressed_body_bytes: command
-                    .values
-                    .responses_max_decompressed_body_bytes,
-                smart_scheduling: command.values.smart_scheduling,
-                quota_reset_window_weights: command.values.quota_reset_window_weights,
-                min_codex_desktop_version: command.values.min_codex_desktop_version,
-                min_codex_cli_version: command.values.min_codex_cli_version,
-                usage_retention_days: command.values.usage_retention_days,
-                ops_event_retention_days: command.values.ops_event_retention_days,
-                audit_retention_days: command.values.audit_retention_days,
-                account_error_protection: command.values.account_error_protection,
-                account_warmup_enabled: false,
-                account_warmup_cron: "0 8 * * *".to_owned(),
-                account_warmup_model: None,
-                reset_credit_lead_minutes: 10,
-                reset_credit_on_low_weekly_quota: false,
-                reset_credit_max_weekly_remaining_percent: None,
-            },
+            values: command.values,
         };
         *settings = updated.clone();
         Ok(updated)

@@ -150,7 +150,6 @@ pub(super) async fn pending_authorization(
         None => {
             use crate::model::proxies::AccountProxySelection;
             proxy = match &command.outbound_proxy {
-                Some(AccountProxySelection::Url(value)) => Some(value.clone()),
                 Some(AccountProxySelection::Saved(id)) => {
                     let record = proxies
                         .get(id)

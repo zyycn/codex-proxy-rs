@@ -925,25 +925,9 @@ pub(crate) fn dashboard_view(
             .filter(|window| window.used_percent.is_none())
             .and_then(|window| window.local_usage.as_ref())
             .map(|usage| usage.request_count);
-        let (metric, metric_value_raw, metric_label, metric_value) = match local_requests {
-            Some(count) => (
-                DashboardAccountMetric::Requests,
-                Some(count),
-                "次数".to_owned(),
-                if count > 0 {
-                    format_compact_number(count)
-                } else {
-                    "—".to_owned()
-                },
-            ),
-            None => (
-                DashboardAccountMetric::Tokens,
-                credential.total_tokens,
-                "今日 Token".to_owned(),
-                credential
-                    .total_tokens
-                    .map_or_else(|| "—".to_owned(), format_compact_number),
-            ),
+        let (metric, metric_value_raw) = match local_requests {
+            Some(count) => (DashboardAccountMetric::Requests, Some(count)),
+            None => (DashboardAccountMetric::Tokens, credential.total_tokens),
         };
         account_usage_views.push(DashboardAccountUsageView {
             upstream: credential.upstream.map(|info| {
@@ -978,13 +962,10 @@ pub(crate) fn dashboard_view(
                 .map(|window| crate::admin::accounts::quota_window_view(window, time)),
             metric,
             metric_value_raw,
-            metric_label,
-            metric_value,
             last_used_at: credential.last_used_at,
             last_used_relative: credential
                 .last_used_at
                 .map(|value| time.relative_view(value, range.end)),
-            last_used: time.relative_optional(credential.last_used_at, range.end),
         });
     }
     let unavailable_accounts = provider_accounts

@@ -1232,8 +1232,8 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `POST` | `/api/admin/accounts/import-tasks/stop` | `{ taskId }` | 跳过未开始的条目，已开始的条目继续完成 |
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 停用账号只启用调度；已启用账号强制清除本地错误/额度/cooldown 事实，不访问上游 |
-| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, name?, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl?, connection? }` | 一次更新账号设置；`connection` 支持 OpenAI OAuth 传输方式及 API Key 连接配置，见下文 |
-| `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled?, concurrencyLimit?, weight?, groupIds?, modelAccess?, outboundProxyId?, outboundProxyUrl? }` | 一次事务更新所选账号；仅修改提供的字段，至少提供一项修改 |
+| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, name?, notes?, modelAccess?, outboundProxyId?, connection? }` | 一次更新账号设置；`connection` 支持 OpenAI OAuth 传输方式及 API Key 连接配置，见下文 |
+| `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled?, concurrencyLimit?, weight?, groupIds?, modelAccess?, outboundProxyId? }` | 一次事务更新所选账号；仅修改提供的字段，至少提供一项修改 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游；Provider 未提供额度能力时返回空额度投影 |
 | `GET` | `/api/admin/accounts/quota-forecast` | `accountId` | 按需读取周/月容量预测、源窗口剩余估算与采样依据，不刷新上游额度 |
@@ -1248,7 +1248,7 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `GET` | `/api/admin/accounts/models/catalog` | `accountId` | 读取指定账号的完整 Codex 原生模型目录，返回 `{ modelCount, observedAt, catalog }` |
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖缓存，响应结构与模型目录查询相同 |
 | `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
-| `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyId?, outboundProxyUrl? }` | 为支持登录的 Provider 创建 flow；`accountId` 表示重新授权 |
+| `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyId? }` | 为支持登录的 Provider 创建 flow；`accountId` 表示重新授权 |
 | `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl, settings? }` | 消费 OAuth callback；首次授权可附带账号设置，重新授权保留原设置 |
 
 ### 查询与账号字段
@@ -1339,8 +1339,7 @@ OpenAI 主动额度刷新和正常响应携带的明确套餐会同步到账号�
 账号套餐为空或 `unknown` 时，后端优先用已保存的上游额度响应
 中的明确套餐值补全 `planType` 和 `planTypeDisplay`；两处均无套餐信息时才显示“未知套餐”
 
-`outboundProxyId` 绑定已保存的代理，不要求出口测试成功；省略或 `null` 保留当前绑定，空字符串清除绑定。
-`outboundProxyUrl` 兼容 HTTP、HTTPS、SOCKS5、SOCKS5H 代理 URL，可带用户名和密码；不能与 ID 同时设置。
+`outboundProxyId` 绑定已保存的代理，无需出口测试成功。
 编辑时省略或 `null` 表示保持原配置，空字符串表示清除绑定并使用部署默认出口。列表和详情返回绑定的
 `outboundProxyId`（未绑定时为 `null`，禁用代理仍保留 ID）和不含认证信息的 `outboundProxyEndpoint`
 （未配置时为 `null`）；只有显式敏感导出包含完整 URL。
@@ -1966,7 +1965,7 @@ revision 变化时丢弃结果
 GET 和 POST 均返回 `enabled`、`leadMinutes`、`weeklyTriggerRemainingPercent`、`nextDiscoveryAtDisplay`、`nextConsumeAtDisplay`、`lastResult`，
 时间展示沿用部署时区，无计划时为 `null`。运行设置 `resetCreditLeadMinutes` 默认 10，范围 1～1440 分钟
 
-`resetCreditOnLowWeeklyQuota` 为已开启自动使用的账号选择一种用卡时机。两种模式共用可选的剩余周额度上限 `resetCreditMaxWeeklyRemainingPercent`（整数 0～100），只认账号级周窗口，不采用短期、月度或模型专属额度：
+更新运行设置时必须显式提交布尔值 `resetCreditOnLowWeeklyQuota`，为已开启自动使用的账号选择用卡时机。两种模式共用可选的剩余周额度上限 `resetCreditMaxWeeklyRemainingPercent`（整数 0～100），只认账号级周窗口，不采用短期、月度或模型专属额度：
 
 | 模式 | 触发条件 | 上限留空 |
 | --- | --- | --- |
@@ -2106,9 +2105,6 @@ OpenAI Key 的 `installationSeed` 接受带连字符的 UUID，保存时规范�
 - 填写种子：按种子、Key 记录 ID 和账号记录 ID 派生安装 UUID；重启、UA 变化或凭据更新不改变结果，换 Key、换账号或修改种子会改变身份
 - 种子不发送给上游，也不改写账号凭据；更改或清除种子使生效身份变化时，WebSocket 精确续写须重发完整上下文
 
-兼容字段 `openaiClientProfileOverride` 和 `xaiClientProfileOverride` 分别对应上述映射中的 `openai`、`xai`。
-创建时省略或为 `null` 表示无覆盖。更新时省略保留，`null` 清除。与通用字段同时提交时须一致，否则整次请求被拒绝
-
 ### 名称与密钥值
 
 密钥列表的 `search` 仅匹配名称和标签，不匹配密钥值或可见前缀；搜索不区分大小写，使用字面量包含匹配，`%`、`_` 和 `\` 按普通字符处理。
@@ -2223,7 +2219,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | 用途 | 字段 |
 | --- | --- |
 | 并发控制版本 | `configRevision` |
-| [客户端身份](#provider-客户端身份) | `providerRequestProfiles`、`openaiClientProfile`、`xaiClientProfile` |
+| [客户端身份](#provider-客户端身份) | `providerRequestProfiles` |
 | [请求位置](#请求位置) | `requestLocationEnabled`、`requestLocation`、`openaiRequestCountry` |
 | [OpenAI OAuth 同步审核模型](#正文兼容) | `openaiOauthGuardianReviewModel`，默认 `true` |
 | [隐私策略](#隐私策略) | `codexPrivacyPolicy` |
@@ -2517,8 +2513,6 @@ models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI �
 `providerRequestProfiles` 是按 Provider ID 索引的通用配置对象，最多 256 项、每项最多 64 KiB。
 更新时省略某项保留原值，对象替换该项，`null` 删除显式选择并使用 Provider 默认值；不清除其他 Provider 的配置。
 配置内容由对应 Provider 校验，不包含账号凭据。Key 可通过 `providerRequestProfileOverrides` 整体覆盖所属 Provider 的选择
-
-`openaiClientProfile` 与 `xaiClientProfile` 读写同一映射中的对应项。省略保留，显式提交 `null` 或与通用字段冲突时拒绝整次更新
 
 直接读取 `openai` 或 `xai` 的选项与预览。OpenAI 选项返回六个 `presets` 与 `maxVersionLag`，xAI 返回 `defaults`；
 响应均包含 `globalConfiguration`
@@ -2834,8 +2828,7 @@ Dashboard 的 `capacityInfo` 统计普通容量，不含独立审批池；`maxCo
 
 Dashboard 的 `accountUsage[]` 返回稳定指标 `metric=requests|tokens`、可空原始数值 `metricValueRaw` 和
 可空 RFC3339 `lastUsedAt`；前端负责指标名称和数字本地化，相对时间按[页面时间合同](#页面时间合同)翻译 `lastUsedRelative`。
-`requests` 使用代表性额度窗口的本地请求数，`tokens` 使用今日 Token；未知数值为 `null`，零值保留 `0`。
-`metricLabel`、`metricValue` 和 `lastUsed` 提供兼容的展示文本
+`requests` 使用代表性额度窗口的本地请求数，`tokens` 使用今日 Token；未知数值为 `null`，零值保留 `0`
 
 `accountUsage[].notes` 为账号当前备注，无备注时为 `null`
 
