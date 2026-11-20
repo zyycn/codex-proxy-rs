@@ -86,7 +86,11 @@ fn plan_reviewer(
             &operation,
             scope,
             &context,
-            (&openai, &target),
+            gateway_core::routing::DirectAccountModel {
+                provider: &openai,
+                model: &target,
+                continuation_owner: None,
+            },
             |_| true,
         ),
         None => snapshot.plan(&requested, &operation, scope, &context),

@@ -62,7 +62,7 @@ use crate::{
     policy::{ClientApiKeyId, ClientPolicy},
     provider_ports::{ProviderSessionAffinityPort, ProviderStoreErrorKind},
     routing::{
-        FrozenAccountScope, ProviderCatalogUnavailable, ProviderModelContent,
+        DirectAccountModel, FrozenAccountScope, ProviderCatalogUnavailable, ProviderModelContent,
         PublicModelDescriptor, PublicModelId, RoutingContext, RuntimeSnapshot, UpstreamModelId,
         request_settings::RequestSettings,
     },
@@ -640,9 +640,7 @@ impl DefaultExecutionService {
                                 .then(|| (kind.clone(), model))
                         });
                     if let Some((kind, model)) = direct {
-                        let fixed = pin.map(NativeContinuationPin::account)
-                            .or(authorization.required_account.as_ref());
-                        let account_scope = match fixed {
+                        let account_scope = match authorization.required_account.as_ref() {
                             Some(id) => Arc::new(account_scope.restricted_to(&Default::default(), &[id.clone()].into())),
                             None => account_scope,
                         };
@@ -651,7 +649,11 @@ impl DefaultExecutionService {
                             &request.operation,
                             account_scope,
                             &target_context,
-                            (&kind, &model),
+                            DirectAccountModel {
+                                provider: &kind,
+                                model: &model,
+                                continuation_owner: pin.map(NativeContinuationPin::account),
+                            },
                             |account| upstream_adapters.as_ref().is_none_or(|plan| {
                                 plan.uses_native_upstream(extension_route, &kind, account)
                             }),

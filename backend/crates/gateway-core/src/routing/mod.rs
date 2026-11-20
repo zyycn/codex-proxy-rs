@@ -532,6 +532,13 @@ pub struct RoutingContext {
     pub blocked_providers: BTreeSet<ProviderKind>,
 }
 
+/// 直连模型及首次原生续接必须使用的账号
+pub struct DirectAccountModel<'a> {
+    pub provider: &'a ProviderKind,
+    pub model: &'a UpstreamModelId,
+    pub continuation_owner: Option<&'a crate::account::ProviderAccountId>,
+}
+
 /// 已绑定 Provider 的请求候选；模型端点携带真实上游模型，原生端点不虚构模型
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCandidate {

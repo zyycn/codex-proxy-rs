@@ -17,10 +17,10 @@ use crate::settings::{SettingsValues, compiled::CompiledSettings};
 use crate::validation::RoutingError;
 
 use super::{
-    AccountGroupId, ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities,
-    ProviderCandidate, ProviderCatalogGeneration, ProviderCatalogPort, ProviderKind, ProviderModel,
-    PublicModelId, RoutingContext, RoutingGroupSnapshot, RoutingPlan, RuntimeAccount,
-    RuntimeAccountDirectory, UpstreamModelId,
+    AccountGroupId, ClientRoutingScope, ConfigRevision, DirectAccountModel, FrozenAccountScope,
+    ModelCapabilities, ProviderCandidate, ProviderCatalogGeneration, ProviderCatalogPort,
+    ProviderKind, ProviderModel, PublicModelId, RoutingContext, RoutingGroupSnapshot, RoutingPlan,
+    RuntimeAccount, RuntimeAccountDirectory, UpstreamModelId,
 };
 
 const MAXIMUM_SNAPSHOT_STABILITY_ATTEMPTS: usize = 4;
@@ -1330,10 +1330,14 @@ impl RuntimeSnapshot {
         operation: &Operation,
         scope: Arc<FrozenAccountScope>,
         context: &RoutingContext,
-        direct: (&ProviderKind, &UpstreamModelId),
+        direct: DirectAccountModel<'_>,
         uses_native_upstream: impl Fn(&ProviderAccountId) -> bool,
     ) -> Result<RoutingPlan, RoutingError> {
-        let (provider, target) = direct;
+        let DirectAccountModel {
+            provider,
+            model: target,
+            continuation_owner,
+        } = direct;
         if self.model_alias(public_model.as_str()).is_some()
             || self
                 .settings
@@ -1359,7 +1363,9 @@ impl RuntimeSnapshot {
             })
             .cloned()
             .collect::<BTreeSet<_>>();
+        // 原生续接先用原账号，容量恢复仍可在同模型的授权账号间换号
         if !direct_accounts.is_empty()
+            && continuation_owner.is_none_or(|owner| direct_accounts.contains(owner))
             && let Ok(plan) = self.plan_inner(
                 public_model,
                 operation,

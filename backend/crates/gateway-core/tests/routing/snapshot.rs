@@ -2216,9 +2216,15 @@ fn direct_reviewer_model_freezes_only_authorized_native_catalog_accounts() {
                         super::capabilities(),
                     )
                     .with_catalog_accounts(
-                        ["acct_oauth", "acct_denied", "acct_blocked", "acct_key"]
-                            .map(|id| ProviderAccountId::new(id).unwrap())
-                            .into(),
+                        [
+                            "acct_oauth",
+                            "acct_oauth_backup",
+                            "acct_denied",
+                            "acct_blocked",
+                            "acct_key",
+                        ]
+                        .map(|id| ProviderAccountId::new(id).unwrap())
+                        .into(),
                     ),
                     ProviderModelCapabilities::new(
                         UpstreamModelId::new(LUNA).unwrap(),
@@ -2236,6 +2242,7 @@ fn direct_reviewer_model_freezes_only_authorized_native_catalog_accounts() {
         vec![],
         [
             "acct_oauth",
+            "acct_oauth_backup",
             "acct_denied",
             "acct_blocked",
             "acct_unpublished",
@@ -2288,11 +2295,12 @@ fn direct_reviewer_model_freezes_only_authorized_native_catalog_accounts() {
             presentation: ModelPresentation::new(Some("Review".into()), None),
         }])),
     )));
-    let plan = |fixed: Option<&str>, adapter_account: Option<&str>| {
+    let plan = |fixed: Option<&str>, owner: Option<&str>, adapter_account: Option<&str>| {
         let scope = snapshot.all_account_scope();
         let provider = ProviderKind::new("openai").unwrap();
         let target = UpstreamModelId::new(TARGET).unwrap();
         let fixed = fixed.map(|id| ProviderAccountId::new(id).unwrap());
+        let owner = owner.map(|id| ProviderAccountId::new(id).unwrap());
         let scope = match fixed {
             Some(id) => Arc::new(scope.restricted_to(&Default::default(), &[id].into())),
             None => scope,
@@ -2302,16 +2310,34 @@ fn direct_reviewer_model_freezes_only_authorized_native_catalog_accounts() {
             &super::operation(),
             scope,
             &Default::default(),
-            (&provider, &target),
+            gateway_core::routing::DirectAccountModel {
+                provider: &provider,
+                model: &target,
+                continuation_owner: owner.as_ref(),
+            },
             |id| Some(id.as_str()) != adapter_account,
         )
     };
-    for (fixed, expected_model, expected_account) in [
-        (None, TARGET, "acct_oauth"),
-        (Some("acct_oauth"), TARGET, "acct_oauth"),
-        (Some("acct_key"), LUNA, "acct_key"),
+    let oauth_accounts = &["acct_oauth", "acct_oauth_backup"][..];
+    for (fixed, owner, expected_model, expected_accounts) in [
+        (None, None, TARGET, oauth_accounts),
+        (None, Some("acct_oauth"), TARGET, oauth_accounts),
+        (Some("acct_oauth"), None, TARGET, &["acct_oauth"][..]),
+        (Some("acct_key"), None, LUNA, &["acct_key"][..]),
+        (
+            None,
+            Some("acct_key"),
+            LUNA,
+            &[
+                "acct_oauth",
+                "acct_oauth_backup",
+                "acct_denied",
+                "acct_unpublished",
+                "acct_key",
+            ][..],
+        ),
     ] {
-        let frozen = plan(fixed, None).unwrap();
+        let frozen = plan(fixed, owner, None).unwrap();
         assert_eq!(
             frozen.candidates().len(),
             1,
@@ -2323,17 +2349,24 @@ fn direct_reviewer_model_freezes_only_authorized_native_catalog_accounts() {
             expected_model == TARGET
         );
         assert_eq!(candidate.upstream_model().unwrap().as_str(), expected_model);
-        for id in ["acct_key", "acct_oauth", "acct_denied", "acct_unpublished"] {
+        for id in [
+            "acct_key",
+            "acct_oauth",
+            "acct_oauth_backup",
+            "acct_denied",
+            "acct_unpublished",
+            "acct_blocked",
+        ] {
             assert_eq!(
                 candidate
                     .account_scope()
                     .allows_model(&ProviderAccountId::new(id).unwrap(), expected_model),
-                id == expected_account
+                expected_accounts.contains(&id)
             );
         }
     }
     for id in ["acct_denied", "acct_unpublished"] {
-        let preserved = plan(Some(id), None).unwrap();
+        let preserved = plan(Some(id), None, None).unwrap();
         let candidate = &preserved.candidates()[0];
         assert_eq!(candidate.upstream_model().unwrap().as_str(), LUNA);
         assert!(
@@ -2342,8 +2375,8 @@ fn direct_reviewer_model_freezes_only_authorized_native_catalog_accounts() {
                 .allows_model(&ProviderAccountId::new(id).unwrap(), LUNA)
         );
     }
-    assert!(plan(Some("acct_blocked"), None).is_err());
-    let adapter_plan = plan(Some("acct_oauth"), Some("acct_oauth")).unwrap();
+    assert!(plan(Some("acct_blocked"), None, None).is_err());
+    let adapter_plan = plan(None, Some("acct_oauth"), Some("acct_oauth")).unwrap();
     assert_eq!(
         adapter_plan.candidates()[0]
             .upstream_model()
@@ -2361,10 +2394,11 @@ fn direct_reviewer_model_freezes_only_authorized_native_catalog_accounts() {
         &super::operation(),
         configured.all_account_scope(),
         &Default::default(),
-        (
-            &ProviderKind::new("openai").unwrap(),
-            &UpstreamModelId::new(TARGET).unwrap(),
-        ),
+        gateway_core::routing::DirectAccountModel {
+            provider: &ProviderKind::new("openai").unwrap(),
+            model: &UpstreamModelId::new(TARGET).unwrap(),
+            continuation_owner: None,
+        },
         |_| true,
     );
     assert!(
