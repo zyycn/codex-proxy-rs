@@ -293,8 +293,8 @@
     },
     "modelMapping": "Model mapping",
     "routing": {
-      "oauthGuardianReviewModel": "Use a dedicated model for OpenAI OAuth synchronous reviews",
-      "oauthGuardianReviewModelHelp": "When enabled, recognized synchronous reviews use codex-auto-review. When disabled, they use the model selected by the client.",
+      "oauthGuardianReviewModel": "Override OAuth review model",
+      "oauthGuardianReviewModelHelp": "Synchronous reviews use the client model by default. Enable to use codex-auto-review.",
       "modelMapHelp": "Map client model names to the upstream models used"
     },
     "addMapping": "Add mapping",

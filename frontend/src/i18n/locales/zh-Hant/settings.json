@@ -293,8 +293,8 @@
     },
     "modelMapping": "模型映射",
     "routing": {
-      "oauthGuardianReviewModel": "OpenAI OAuth 同步審核使用專用模型",
-      "oauthGuardianReviewModelHelp": "開啟後，識別出的同步審核請求使用 codex-auto-review，關閉時沿用用戶端選擇的模型",
+      "oauthGuardianReviewModel": "OAuth 審核模型覆寫",
+      "oauthGuardianReviewModelHelp": "同步審核預設沿用用戶端模型，開啟後使用 codex-auto-review",
       "modelMapHelp": "將客戶端請求的模型名稱映射爲實際使用的上游模型"
     },
     "addMapping": "添加映射",
