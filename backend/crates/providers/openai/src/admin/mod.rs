@@ -2075,10 +2075,24 @@ fn bounded_upstream_body(body: &str) -> String {
 }
 
 fn map_catalog_error(error: CodexCredentialCatalogError) -> ProviderAdminError {
+    use crate::credential::CredentialRepositoryError;
     use CodexCredentialCatalogError as Error;
     use ProviderAdminErrorKind as Kind;
     let (kind, message) = match error {
-        Error::InvalidCredentialData => (Kind::Invalid, "查询模型的凭据无效，请检查账号授权"),
+        Error::Credential(source) => {
+            let (kind, message) = match &source {
+                CredentialRepositoryError::InvalidCredentialData(_) => {
+                    (Kind::Invalid, "查询模型的凭据无效，请检查账号授权")
+                }
+                CredentialRepositoryError::RevisionConflict(_) => {
+                    (Kind::Conflict, "账号已更新，请重新查询模型")
+                }
+                CredentialRepositoryError::Store(_) => (Kind::Unavailable, "账号存储暂不可用"),
+            };
+            return provider_admin_error(kind)
+                .with_public_message(message)
+                .with_source(source);
+        }
         Error::InvalidEtag => (Kind::Invalid, "模型目录版本无效，请重新查询"),
         Error::NoEligibleCredential => (Kind::NotFound, "没有可查询模型的账号"),
         Error::ConcurrentUpdate => (Kind::Conflict, "模型目录正在更新，请稍后重试"),

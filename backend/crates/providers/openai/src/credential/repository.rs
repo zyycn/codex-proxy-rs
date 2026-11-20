@@ -326,7 +326,7 @@ fn cas_revision(
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum CredentialRepositoryError {
     #[error("Codex credential data is invalid")]
     InvalidCredentialData(#[source] Option<ErrorSource>),

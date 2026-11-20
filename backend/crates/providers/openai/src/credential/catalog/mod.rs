@@ -264,8 +264,8 @@ impl fmt::Debug for CodexCredentialCatalogSnapshot {
 pub enum CodexCredentialCatalogError {
     #[error("Codex model catalog has no eligible account")]
     NoEligibleCredential,
-    #[error("Codex model catalog account data is invalid")]
-    InvalidCredentialData,
+    #[error(transparent)]
+    Credential(#[from] CredentialRepositoryError),
     #[error("Codex model catalog upstream query failed: {detail}")]
     Upstream { detail: String },
     #[error("Codex model catalog cache is unavailable")]
@@ -291,12 +291,6 @@ struct FetchedAccountModels {
     models: Vec<CodexCatalogModel>,
     document: bytes::Bytes,
     etag: Option<String>,
-}
-
-impl From<CredentialRepositoryError> for CodexCredentialCatalogError {
-    fn from(_: CredentialRepositoryError) -> Self {
-        Self::InvalidCredentialData
-    }
 }
 
 #[derive(Clone)]
@@ -559,7 +553,7 @@ impl CodexCredentialCatalogService {
             .store()
             .get_account(account_id)
             .await
-            .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?
+            .map_err(CredentialRepositoryError::from)?
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
         let scope = CodexCatalogScope::for_account(&account);
@@ -701,16 +695,12 @@ impl CodexCredentialCatalogService {
         account: &ProviderAccount,
     ) -> Result<FetchedAccountModels, CodexCredentialCatalogError> {
         tokio::time::timeout(MODEL_CATALOG_TIMEOUT, async {
-            let credential = self
-                .repository
-                .load_runtime_credential(account)
-                .await
-                .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+            let credential = self.repository.load_runtime_credential(account).await?;
             let request_id = format!("catalog_{}", Uuid::now_v7().simple());
             let authorization = credential
                 .authentication
                 .authorization_header()
-                .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+                .map_err(CredentialRepositoryError::from)?;
             let mut client = client
                 .for_account(account)
                 .map_err(|error| CodexCredentialCatalogError::Upstream {
