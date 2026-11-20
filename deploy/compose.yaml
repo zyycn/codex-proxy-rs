@@ -11,7 +11,7 @@ services:
     extends:
       file: config.yaml
       service: postgres-credentials
-    image: postgres:18-bookworm@sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc
+    image: postgres:18-bookworm@sha256:194e55feb2597b1465dbee81cc9fd8d204566cd2eb42c8d22fd6c931a38781b1
     restart: unless-stopped
     # 小内存部署可在此调整数据库预算，保留 UTC 参数，详见 README.md#小内存优化
     command:
@@ -46,7 +46,7 @@ services:
     extends:
       file: config.yaml
       service: redis-credentials
-    image: redis:8-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
+    image: redis:8-alpine@sha256:7958cfbb9d152f87dadfbc89f1b0b15938f0b81ff8982feb327476f4911935c3
     restart: unless-stopped
     volumes:
       - type: bind
