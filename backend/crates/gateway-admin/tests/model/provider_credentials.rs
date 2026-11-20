@@ -335,3 +335,42 @@ fn pending_mutation_v1_should_keep_existing_storage_fields_and_reject_invalid_do
     document["schema_version"] = json!(2);
     assert!(PendingAuthorizationMutation::from_storage_v1(document).is_err());
 }
+
+#[test]
+fn manual_key_alignment_only_accepts_the_current_account_wide_day_or_week() {
+    use chrono::{Duration, Utc};
+    use gateway_admin::model::{
+        client_keys::{ClientKeyBudgetReference, ClientKeyBudgetWindowPeriod},
+        upstream_info::UpstreamQuotaWindow,
+    };
+    let now = Utc::now();
+    for (seconds, period) in [
+        (86_400, ClientKeyBudgetWindowPeriod::Daily),
+        (604_800, ClientKeyBudgetWindowPeriod::Weekly),
+    ] {
+        let mut window = usage_window("account", "quota", seconds);
+        let end = now + Duration::hours(2);
+        window.reset_at = Some(end);
+        let reference = ClientKeyBudgetReference::from_current_window(window.clone(), now).unwrap();
+        let selected = reference.period;
+        let bounds = reference.bounds;
+        assert_eq!(selected, period);
+        assert_eq!(bounds.starts_at, end - Duration::seconds(seconds as i64));
+        assert_eq!(bounds.ends_at, end);
+        assert!(bounds.resume_calendar);
+        assert!(ClientKeyBudgetReference::from_current_window(window.clone(), end).is_none());
+        window.upstream = Some(UpstreamQuotaWindow {
+            account_id: None,
+            observed_at: Some(now),
+            stale: true,
+            amount: None,
+        });
+        assert!(ClientKeyBudgetReference::from_current_window(window.clone(), now).is_none());
+        window.upstream = None;
+        window.local_usage_attribution = QuotaLocalUsageAttribution::Unavailable;
+        assert!(ClientKeyBudgetReference::from_current_window(window.clone(), now).is_none());
+    }
+    let mut short = usage_window("primary", "short", 18_000);
+    short.reset_at = Some(now + Duration::hours(1));
+    assert!(ClientKeyBudgetReference::from_current_window(short, now).is_none());
+}

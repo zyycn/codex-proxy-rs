@@ -16,7 +16,8 @@ use gateway_admin::{
         MutationContext,
         account_groups::AccountGroupRef as AdminAccountGroupRef,
         client_keys::{
-            BatchUpdateClientKeys, ClientKeyCursor as AdminClientKeyCursor,
+            BatchUpdateClientKeys, BudgetReferenceAccountPage,
+            ClientKeyCursor as AdminClientKeyCursor,
             ClientKeyCursorValue as AdminClientKeyCursorValue,
             ClientKeyListQuery as AdminClientKeyListQuery, ClientKeyPage as AdminClientKeyPage,
             ClientKeyRecord as AdminClientKeyRecord, ClientKeySecret as AdminClientKeySecret,
@@ -731,6 +732,70 @@ impl PgAdminClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for PgAdminClientKeyStore {
+    async fn client_key_budget(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientBudgetStatus>> {
+        super::client_budgets::read_client_key_budgets(&self.keys.pool, &[id.as_str()])
+            .await
+            .map(|mut budgets| budgets.remove(id.as_str()))
+            .map_err(|error| admin_store_error(ENTITY, error))
+    }
+
+    async fn budget_reference_accounts(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+        search: &str,
+        after: &str,
+    ) -> AdminStoreResult<BudgetReferenceAccountPage> {
+        use gateway_admin::model::client_keys::BudgetReferenceAccount;
+        const PAGE_SIZE: u8 = 20;
+        let store_error =
+            |operation, source| admin_store_error(ENTITY, postgres_unavailable(operation, source));
+        // 空分组表示全部账号，只有启用分组内的成员可作为受限密钥的参考账号
+        let groups: Vec<String> = sqlx::query_scalar(
+            "select array(select account_group_id from client_api_key_groups where client_api_key_id = k.id)
+             from client_api_keys k where k.id = $1",
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.keys.pool)
+        .await
+        .map_err(|error| store_error("read key groups", error))?
+        .ok_or_else(|| admin_store_error(ENTITY, StoreError::NotFound {
+            source: None, entity: ENTITY, id: id.as_str().to_owned()
+        }))?;
+        let rows: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
+            "select a.id, a.name, a.email, a.provider_kind from provider_accounts a
+             where a.id > $1
+               and ($2 = '' or strpos(lower(a.name), lower($2)) > 0
+                         or strpos(lower(coalesce(a.email, '')), lower($2)) > 0)
+               and (cardinality($3::text[]) = 0 or exists (
+                   select 1 from account_group_accounts m join account_groups g on g.id = m.account_group_id
+                   where m.provider_account_id = a.id and m.account_group_id = any($3) and g.enabled))
+             order by a.id limit $4",
+        )
+        .bind(after)
+        .bind(search)
+        .bind(&groups)
+        .bind(i64::from(PAGE_SIZE) + 1)
+        .fetch_all(&self.keys.pool)
+        .await
+        .map_err(|error| store_error("select reference accounts", error))?;
+        let has_more = rows.len() > usize::from(PAGE_SIZE);
+        let items: Vec<_> = rows
+            .into_iter()
+            .take(usize::from(PAGE_SIZE))
+            .map(|(id, name, email, provider)| BudgetReferenceAccount {
+                id,
+                name,
+                email,
+                provider,
+            })
+            .collect();
+        let next_cursor = items.last().filter(|_| has_more).map(|row| row.id.clone());
+        Ok(BudgetReferenceAccountPage { items, next_cursor })
+    }
+
     async fn client_key_budget_window(
         &self,
         id: &ClientApiKeyId,

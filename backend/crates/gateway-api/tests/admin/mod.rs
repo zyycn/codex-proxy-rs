@@ -1032,6 +1032,17 @@ fn mutation(
 
 #[async_trait]
 impl ClientKeyStore for MemoryClientKeyStore {
+    async fn budget_reference_accounts(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: &str,
+        _: &str,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        gateway_admin::model::client_keys::BudgetReferenceAccountPage,
+    > {
+        Err(unavailable("reference accounts"))
+    }
+
     async fn batch_update_client_keys(
         &self,
         _: gateway_admin::model::client_keys::BatchUpdateClientKeys,
@@ -1111,6 +1122,15 @@ impl ClientKeyStore for MemoryClientKeyStore {
             record.budget.weekly_used_usd = gateway_core::metering::Decimal::ZERO;
         }
         Ok(())
+    }
+
+    async fn client_key_budget(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_core::engine::budget::ClientBudgetStatus>> {
+        self.get_client_key(id)
+            .await
+            .map(|key| key.map(|row| row.budget))
     }
 
     async fn get_client_key(
@@ -1566,6 +1586,23 @@ impl ObservabilityStore for UnusedStore {
         _: Granularity,
     ) -> AdminStoreResult<Vec<RequestMetricPoint>> {
         Err(unavailable("dashboard trend"))
+    }
+
+    async fn client_key_statistics(
+        &self,
+        _: TimeRange,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: gateway_admin::model::observability::KeyUsageMetric,
+    ) -> AdminStoreResult<gateway_admin::model::observability::KeyStatisticsOverview> {
+        Ok(Default::default())
+    }
+
+    async fn client_key_models(
+        &self,
+        _: TimeRange,
+        _: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Vec<gateway_admin::model::observability::KeyModelRow>> {
+        Ok(Default::default())
     }
 
     async fn usage_trend(

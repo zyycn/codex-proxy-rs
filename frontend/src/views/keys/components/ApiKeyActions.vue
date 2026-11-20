@@ -3,7 +3,7 @@ import type { ApiKey } from '@/api'
 
 import { ZIconButton, ZMenuItem } from '@codex-proxy/ui'
 
-import { Pencil, Power, RotateCcw, Terminal, Trash2, Upload } from '@lucide/vue'
+import { ChartColumn, Pencil, Power, RotateCcw, Terminal, Trash2, Upload } from '@lucide/vue'
 
 import { useI18n } from 'vue-i18n'
 import RowActionMenu from '@/components/RowActionMenu.vue'
@@ -22,6 +22,7 @@ const emit = defineEmits<{
   toggle: [apiKey: ApiKey]
   delete: [apiKey: ApiKey]
   edit: [apiKey: ApiKey]
+  statistics: [apiKey: ApiKey]
   resetBudget: [apiKey: ApiKey]
 }>()
 
@@ -48,11 +49,17 @@ const { t } = useI18n({ useScope: 'global' })
     </ZIconButton>
 
     <RowActionMenu :label="t('keys.actions.moreActions')" menu-class="w-36 p-1.5">
+      <ZMenuItem @click.stop="emit('statistics', apiKey)">
+        <template #icon>
+          <ChartColumn class="size-3.5 text-z-text-quaternary" />
+        </template>
+        {{ t('keys.statistics.title') }}
+      </ZMenuItem>
       <ZMenuItem @click.stop="emit('resetBudget', apiKey)">
         <template #icon>
           <RotateCcw class="size-3.5 text-z-text-quaternary" />
         </template>
-        {{ t('keys.actions.resetUsedCredit') }}
+        {{ t('keys.budgetReset.title') }}
       </ZMenuItem>
       <ZMenuItem :disabled="revealing" @click.stop="emit('importClient', apiKey)">
         <template #icon>

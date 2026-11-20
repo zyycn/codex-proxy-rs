@@ -226,6 +226,23 @@ impl ObservabilityStore for CachedObservabilityStore {
     ) -> AdminStoreResult<Vec<RequestMetricPoint>> {
         self.inner.dashboard_trend(range, granularity).await
     }
+    async fn client_key_statistics(
+        &self,
+        range: TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+        query: crate::model::observability::KeyUsageMetric,
+    ) -> AdminStoreResult<crate::model::observability::KeyStatisticsOverview> {
+        self.inner.client_key_statistics(range, id, query).await
+    }
+
+    async fn client_key_models(
+        &self,
+        range: TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Vec<crate::model::observability::KeyModelRow>> {
+        self.inner.client_key_models(range, id).await
+    }
+
     async fn usage_trend(
         &self,
         range: TimeRange,

@@ -154,6 +154,7 @@ async fn business_backup_restores_core_state_and_usage_without_request_history()
             period: ClientKeyBudgetWindowPeriod::Weekly,
             expected_revision: saved.revision,
             window: Some(ExplicitClientKeyBudgetWindow {
+                resume_calendar: false,
                 starts_at: saved.starts_at.unwrap(),
                 ends_at: saved.ends_at.unwrap(),
             }),
@@ -184,6 +185,7 @@ async fn business_backup_restores_core_state_and_usage_without_request_history()
                 .await
                 .unwrap();
             change.window = Some(ExplicitClientKeyBudgetWindow {
+                resume_calendar: false,
                 starts_at: start,
                 ends_at: start + TimeDelta::hours(1),
             });

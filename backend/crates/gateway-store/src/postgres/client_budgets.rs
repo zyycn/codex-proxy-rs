@@ -458,6 +458,24 @@ pub(super) async fn load_client_key_budgets(
         .iter()
         .map(|record| record.id.as_str())
         .collect::<Vec<_>>();
+    let mut budgets = read_client_key_budgets(pool, &ids).await?;
+    for record in records {
+        record.budget =
+            budgets
+                .remove(&record.id)
+                .ok_or_else(|| crate::StoreError::Unavailable {
+                    backend: crate::StoreBackend::PostgreSql,
+                    message: "load client budget policy".to_owned(),
+                    source: None,
+                })?;
+    }
+    Ok(())
+}
+
+pub(super) async fn read_client_key_budgets(
+    pool: &PgPool,
+    ids: &[&str],
+) -> StoreResult<BTreeMap<String, ClientBudgetStatus>> {
     // 起止相等是重置后的未开启窗口，不能因应用时钟领先数据库而投影为活跃预算
     let rows = sqlx::query(
         "select k.id, k.daily_limit_usd::text, k.weekly_limit_usd::text,
@@ -504,17 +522,7 @@ pub(super) async fn load_client_key_budgets(
             },
         );
     }
-    for record in records {
-        record.budget =
-            budgets
-                .remove(&record.id)
-                .ok_or_else(|| crate::StoreError::Unavailable {
-                    backend: crate::StoreBackend::PostgreSql,
-                    message: "load client budget policy".to_owned(),
-                    source: None,
-                })?;
-    }
-    Ok(())
+    Ok(budgets)
 }
 
 pub(super) fn stored_window(

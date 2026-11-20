@@ -2036,9 +2036,20 @@ HTTP 返回 `403` 和 `image_generation_disabled`，WebSocket 每个 `response.c
 | `POST` | `/api/admin/client-keys/update` | 更新字段 | 原子更新名称、分组范围和限额 |
 | `POST` | `/api/admin/client-keys/batch-update` | `ids` 和至少一个更新字段 | 原子更新 1 至 1000 个不同密钥，返回 `{ updated, configRevision }` |
 | `POST` | `/api/admin/client-keys/reset-budget` | `{ id, period }` | 管理员清零日／周已用金额；`period` 为 `daily`、`weekly` 或 `all` |
+| `GET` | `/api/admin/client-keys/statistics` | `id`、`period`、`metric`、`asOf` | 返回当前额度、周期合计、模型数和所选指标的每日趋势 |
+| `GET` | `/api/admin/client-keys/statistics/models` | `id`、`period`、`asOf` | 返回每个模型的周期汇总、活跃天数和单日最高请求数 |
+| `GET` | `/api/admin/client-keys/budget-reference-accounts` | `id`、可选 `search`、`cursor` | 按密钥账号范围搜索名称或邮箱，每批最多 20 条，仅返回账号标识和展示字段；`nextCursor` 为空表示已到末尾 |
+| `GET` | `/api/admin/client-keys/budget-alignment` | `id`、`accountId` | 预览当前可对齐的账号日／周窗口及密钥窗口版本 |
+| `POST` | `/api/admin/client-keys/budget-alignment` | `id`、`accountId`、`windowKey`、`startsAt`、`endsAt`、`revision` | 按预览对齐本期并返回新版本 |
 | `POST` | `/api/admin/client-keys/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/client-keys/disable` | `{ id }` | 禁用 |
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
+
+两个统计接口按部署时区和请求开始时间统计近 7 天（`7d`，默认）或 30 天（`30d`）。概览返回截止时间 `asOf`（Unix 毫秒），切换指标与读取明细时可用其固定统计区间。趋势按 `metric`（`costUsd`、`tokens`、`requests`）返回周期排名前五的模型，其余合为一条曲线（`model: null`）。模型优先取上游实际模型，缺失时回退到请求模型，两者都缺失时为空字符串
+
+模型和周期合计包含请求数、已知 Token、已知 USD 费用，以及费用是否含本地估算或存在缺失。无已知数值时对应金额或 Token 为 `null`，费用占比以该 Key 周期内的已知 USD 总额为分母
+
+手动对齐使用密钥可访问分组内账号的当前整账号 24 小时或七天窗口。确认时复核预览边界和密钥窗口版本，按完成时间重算本期消费。窗口到期后密钥恢复原生日历规则。已失效的预览或不足以重算的费用历史返回冲突
 
 批量更新只提交要修改的字段，各密钥保留其余配置。任一密钥或分组不存在、任一密钥的最终配置无效时，整批回滚
 

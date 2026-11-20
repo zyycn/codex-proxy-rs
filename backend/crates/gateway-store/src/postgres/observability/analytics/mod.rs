@@ -8,6 +8,7 @@ mod counts;
 mod forecast;
 mod histogram;
 mod incremental;
+mod key_usage;
 mod metrics;
 mod query;
 mod reset;

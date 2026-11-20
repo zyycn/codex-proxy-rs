@@ -478,3 +478,163 @@ async fn byte_boundaries_timeout_and_cancellation_release_readers() {
     after.close().await;
     db.close().await;
 }
+
+#[tokio::test]
+async fn admin_key_model_statistics_keep_local_days_and_missing_model_through_rollup() {
+    use gateway_admin::{model::observability::TimeRange, ports::store::ObservabilityStore as _};
+    use gateway_core::policy::ClientApiKeyId;
+    use gateway_store::postgres::PgAdminObservabilityStore;
+
+    let Some(db) = TestDatabase::create("key_model_days").await else {
+        return;
+    };
+    let writer = PgUsageDataStore::new(db.pool.clone(), observability_query_budget());
+    let reader =
+        PgAdminObservabilityStore::new(db.pool.clone(), None, None, observability_query_budget())
+            .with_timezone("America/New_York".parse().unwrap());
+    let mut unassigned = data(6);
+    unassigned.model = None;
+    unassigned.requested_model = None;
+    unassigned.started_at_ms += 5 * 3_600_000;
+    unassigned.completed_at_ms = Some(unassigned.started_at_ms + 1_000);
+    let mut priced = data(10);
+    priced.cost = UsageCost::Known {
+        source: UsageCostSource::Calculated,
+        amount: "1.25".into(),
+        currency: "USD".into(),
+    };
+    let mut other = priced.clone();
+    other.client_key_ref = "another_key".into();
+    writer
+        .write_records(records(vec![
+            UsageRecordChange::Put {
+                id: "known".into(),
+                data: Box::new(priced),
+            },
+            UsageRecordChange::Put {
+                id: "unassigned".into(),
+                data: Box::new(unassigned),
+            },
+            UsageRecordChange::Put {
+                id: "other".into(),
+                data: Box::new(other),
+            },
+        ]))
+        .await
+        .unwrap();
+    drain_analytics(&db.pool).await;
+    let range = TimeRange::new(
+        start() - TimeDelta::hours(20),
+        start() + TimeDelta::hours(28),
+    )
+    .unwrap();
+    let id = ClientApiKeyId::new("key_usage").unwrap();
+    // 非整桶的边缘强制读窄事实，再对照整日汇总
+    for range in [
+        TimeRange::new(
+            start() - TimeDelta::milliseconds(1),
+            start() + TimeDelta::hours(5) + TimeDelta::milliseconds(1),
+        )
+        .unwrap(),
+        range,
+    ] {
+        use gateway_admin::model::observability::KeyUsageMetric;
+        let overview = reader
+            .client_key_statistics(range, &id, KeyUsageMetric::CostUsd)
+            .await
+            .unwrap();
+        assert_eq!(overview.model_count, 2);
+        assert_eq!(overview.totals.requests, 2);
+        assert_eq!(overview.totals.tokens, Some(16));
+        assert!(overview.totals.has_missing_cost);
+        assert_eq!(overview.series[0].model.as_deref(), Some("model_a"));
+        assert_eq!(overview.series[0].points[0].date.to_string(), "2026-09-30");
+        assert_eq!(overview.series[1].points[0].date.to_string(), "2026-10-01");
+        assert!(overview.series[1].points[0].value.is_none());
+        let rows = reader.client_key_models(range, &id).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].model, "");
+        assert!(rows[0].totals.cost_usd.is_none());
+        assert!(rows[1].totals.has_estimated_cost);
+        assert!(!rows[1].totals.has_missing_cost);
+        assert_eq!((rows[1].active_days, rows[1].peak_requests), (1, 1));
+        assert_eq!(
+            rows[1]
+                .totals
+                .cost_usd
+                .as_deref()
+                .unwrap()
+                .parse::<gateway_core::metering::Decimal>()
+                .unwrap()
+                .canonical(),
+            "1.25"
+        );
+    }
+    use gateway_admin::model::observability::KeyUsageMetric;
+    let mut imported = Vec::new();
+    for index in 0..6 {
+        let UsageAggregateChange::Put { mut aggregate } =
+            contribution(&format!("rank-{index}"), 3 + index, 42, "0.2")
+        else {
+            unreachable!()
+        };
+        aggregate.identity.dimensions.model = Some(format!("extra-{index}"));
+        imported.push(UsageAggregateChange::Put { aggregate });
+    }
+    let UsageAggregateChange::Put { mut aggregate } = contribution("euro", 1, 8, "1") else {
+        unreachable!()
+    };
+    aggregate.costs = BTreeMap::from([("EUR".into(), "1".into())]);
+    aggregate.counts.remove(&UsageMetric::TotalTokens);
+    aggregate
+        .counts
+        .insert(UsageMetric::InputTokens, UsageDelta(3));
+    aggregate
+        .counts
+        .insert(UsageMetric::OutputTokens, UsageDelta(5));
+    imported.push(UsageAggregateChange::Put { aggregate });
+    writer.write_aggregates(aggregates(imported)).await.unwrap();
+    let result = reader
+        .client_key_statistics(range, &id, KeyUsageMetric::Requests)
+        .await
+        .unwrap();
+    assert_eq!(result.model_count, 8);
+    assert_eq!(result.series.len(), 6);
+    assert_eq!(result.series[0].model.as_deref(), Some("extra-5"));
+    assert!(result.series[5].model.is_none());
+    assert_eq!(
+        result
+            .series
+            .iter()
+            .flat_map(|s| &s.points)
+            .map(|p| p.value.as_ref().unwrap().parse::<u64>().unwrap())
+            .sum::<u64>(),
+        result.totals.requests
+    );
+    let rows = reader.client_key_models(range, &id).await.unwrap();
+    let priced = rows.iter().find(|row| row.model == "model_a").unwrap();
+    assert!(priced.totals.has_missing_cost);
+    assert_eq!(priced.totals.tokens, Some(18));
+    assert_eq!(
+        priced
+            .totals
+            .cost_usd
+            .as_deref()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap(),
+        1.25
+    );
+    writer
+        .write_aggregates(aggregates(vec![contribution("correction", 0, 0, "-2")]))
+        .await
+        .unwrap();
+    assert!(reader.client_key_models(range, &id).await.is_err());
+    assert!(
+        reader
+            .client_key_statistics(range, &id, KeyUsageMetric::CostUsd)
+            .await
+            .is_err()
+    );
+    db.close().await;
+}

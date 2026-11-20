@@ -820,6 +820,14 @@ pub struct ProviderQuotaWindow {
     pub provider_data: Option<ProviderDocument>,
 }
 
+impl ProviderQuotaWindow {
+    pub(crate) fn observed_bounds(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let ends_at = self.reset_at?;
+        let duration = chrono::Duration::try_seconds(i64::try_from(self.window_seconds?).ok()?)?;
+        Some((ends_at.checked_sub_signed(duration)?, ends_at))
+    }
+}
+
 /// 账号用量统计周期，完整周/月额度优先，随后使用 Provider 提供的本地滚动日统计
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AccountUsagePeriod {

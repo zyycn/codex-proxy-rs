@@ -20,11 +20,13 @@ use gateway_core::{
 use crate::{
     model::{
         AdminError, MutationContext,
+        account_groups::AccountGroupRef,
         accounts::{
             AccountConnectionTestEvent, AccountConnectionTestEventStream, AccountListQuery,
             AccountPageItem, AccountUpdateResult, AccountUsage, AccountUsageWindowQuery,
             AccountsUpdateResult, BatchUpdateAccounts, UpdateAccount,
         },
+        client_keys::ClientKeyBudgetReference,
         observability::TimeRange,
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountPersonalInfo,
@@ -106,6 +108,12 @@ pub trait AccountsService: Send + Sync {
         account_id: &ProviderAccountId,
         refresh: bool,
     ) -> Result<AccountDirectoryItem, AdminError>;
+
+    async fn key_budget_references(
+        &self,
+        account_id: &ProviderAccountId,
+        key_groups: &[AccountGroupRef],
+    ) -> Result<Vec<ClientKeyBudgetReference>, AdminError>;
 
     async fn quota_forecast(
         &self,
@@ -972,6 +980,48 @@ impl AccountsService for DefaultAccountsService {
         self.load_directory_item(account_id, refresh).await
     }
 
+    async fn key_budget_references(
+        &self,
+        account_id: &ProviderAccountId,
+        key_groups: &[AccountGroupRef],
+    ) -> Result<Vec<ClientKeyBudgetReference>, AdminError> {
+        let (stored, provider) = self.provider_for_account(account_id).await?;
+        if !key_groups.is_empty()
+            && !stored.account.groups.iter().any(|account_group| {
+                account_group.enabled && key_groups.iter().any(|group| group.id == account_group.id)
+            })
+        {
+            return Err(AdminError::bad_request("参考账号不在此密钥的账号范围内"));
+        }
+        // 只取已观测的额度边界，预览与确认都不触发上游刷新或账号用量聚合
+        let quota = match super::peer_link::upstream::read_quota(
+            self.upstream_info.as_deref(),
+            provider.as_ref(),
+            &stored.account,
+            ProviderQuotaRequest {
+                account_id: account_id.clone(),
+                refresh: false,
+                rolling_usage: None,
+            },
+        )
+        .await
+        {
+            Ok(quota) => quota,
+            Err(error)
+                if error.kind() == crate::ports::provider::ProviderAdminErrorKind::Unsupported =>
+            {
+                return Ok(Vec::new());
+            }
+            Err(error) => return Err(map_provider_error(error, "provider quota")),
+        };
+        let now = Utc::now();
+        Ok(quota
+            .windows
+            .into_iter()
+            .filter_map(|window| ClientKeyBudgetReference::from_current_window(window, now))
+            .collect())
+    }
+
     async fn quota_forecast(
         &self,
         account_id: &ProviderAccountId,
@@ -1304,9 +1354,7 @@ fn quota_usage_window(
     if window.local_usage_attribution != QuotaLocalUsageAttribution::AccountWide {
         return None;
     }
-    let reset_at = window.reset_at?;
-    let seconds = i64::try_from(window.window_seconds?).ok()?;
-    let start = reset_at.checked_sub_signed(Duration::try_seconds(seconds)?)?;
+    let (start, reset_at) = window.observed_bounds()?;
     let range = TimeRange::new(start, reset_at).ok()?;
     // 上游百分比以该 reset 边界定义；以当前时间回推会让本地 Token 属于另一窗口
     Some(AccountUsageWindowQuery {

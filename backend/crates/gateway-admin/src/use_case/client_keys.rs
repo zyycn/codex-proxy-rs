@@ -15,11 +15,11 @@ use crate::{
     model::{
         AdminError, MutationContext,
         client_keys::{
-            BatchUpdateClientKeys, ClientKeyBudgetMutationOrigin, ClientKeyBudgetWindow,
-            ClientKeyBudgetWindowPeriod, ClientKeyCursorValue, ClientKeyListQuery,
-            ClientKeyMutation, ClientKeyPage, ClientKeyRecord, ClientKeySecret, ClientKeySortField,
-            CreateClientKey, CreatedClientKey, DeleteClientKey, NewClientKey, ResetClientKeyBudget,
-            SetClientKeyBudgetWindow, SetClientKeyEnabled, UpdateClientKey,
+            BatchUpdateClientKeys, BudgetReferenceAccountPage, ClientKeyBudgetMutationOrigin,
+            ClientKeyBudgetWindow, ClientKeyBudgetWindowPeriod, ClientKeyCursorValue,
+            ClientKeyListQuery, ClientKeyMutation, ClientKeyPage, ClientKeyRecord, ClientKeySecret,
+            ClientKeySortField, CreateClientKey, CreatedClientKey, DeleteClientKey, NewClientKey,
+            ResetClientKeyBudget, SetClientKeyBudgetWindow, SetClientKeyEnabled, UpdateClientKey,
             UpdateClientKeyBudgetLimits,
         },
     },
@@ -33,6 +33,13 @@ use super::{map_store_error, publish_committed};
 /// API 消费的 Client Key 管理服务
 #[async_trait]
 pub trait ClientKeyService: Send + Sync {
+    async fn budget_reference_accounts(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+        search: &str,
+        after: &str,
+    ) -> Result<BudgetReferenceAccountPage, AdminError>;
+
     async fn budget_window(
         &self,
         id: &ClientApiKeyId,
@@ -212,6 +219,18 @@ impl ClientKeyService for DefaultClientKeyService {
         Ok(revision)
     }
 
+    async fn budget_reference_accounts(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+        search: &str,
+        after: &str,
+    ) -> Result<BudgetReferenceAccountPage, AdminError> {
+        self.store
+            .budget_reference_accounts(id, search.trim(), after)
+            .await
+            .map_err(|error| map_store_error(error, "client API key"))
+    }
+
     async fn budget_window(
         &self,
         id: &ClientApiKeyId,
@@ -250,7 +269,11 @@ impl ClientKeyService for DefaultClientKeyService {
     }
 
     async fn budget(&self, id: &ClientApiKeyId) -> Result<ClientBudgetStatus, AdminError> {
-        self.get(id).await.map(|key| key.budget)
+        self.store
+            .client_key_budget(id)
+            .await
+            .map_err(|error| map_store_error(error, "client API key"))?
+            .ok_or_else(|| AdminError::not_found("API Key 不存在"))
     }
 
     async fn update_budget_limits(

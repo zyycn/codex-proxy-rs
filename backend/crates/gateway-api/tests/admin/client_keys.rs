@@ -749,3 +749,81 @@ fn clearing_an_xai_profile_override_conflicts_with_an_explicit_xai_value() {
         "providerRequestProfileOverrides"
     );
 }
+
+#[tokio::test]
+async fn key_statistics_route_returns_calendar_days_and_current_budget_only_to_admin() {
+    use crate::support::{cookie_request, key_fixture, response_json};
+    use axum::http::{Method, StatusCode};
+    use gateway_core::policy::ClientApiKeyId;
+    use tower::ServiceExt as _;
+
+    let fixture = key_fixture().await;
+    fixture.auth.insert_session("stats-admin");
+    let record = fixture
+        .services
+        .client_keys()
+        .reveal(&ClientApiKeyId::new("key-42").unwrap())
+        .await
+        .unwrap()
+        .record;
+    *fixture.client_key.lock().unwrap() = Some(record);
+    let app = client_keys::router::<AdminTestState>().with_state(fixture.state());
+    for (query, cookie, status, days) in [
+        ("id=key-42", "", StatusCode::UNAUTHORIZED, 0),
+        (
+            "id=missing",
+            "cpr_session=stats-admin",
+            StatusCode::NOT_FOUND,
+            0,
+        ),
+        (
+            "id=key-42&period=today",
+            "cpr_session=stats-admin",
+            StatusCode::BAD_REQUEST,
+            0,
+        ),
+        ("id=key-42", "cpr_session=stats-admin", StatusCode::OK, 7),
+        (
+            "id=key-42&period=30d",
+            "cpr_session=stats-admin",
+            StatusCode::OK,
+            30,
+        ),
+    ] {
+        let mut request = cookie_request(
+            Method::GET,
+            &format!("/api/admin/client-keys/statistics?{query}"),
+            cookie,
+        );
+        request
+            .headers_mut()
+            .insert("x-request-id", "req_stats".parse().unwrap());
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), status);
+        if days > 0 {
+            let body = response_json(response).await;
+            assert_eq!(body["data"]["dates"].as_array().unwrap().len(), days);
+            assert!(body["data"]["budget"]["dailyUsedUsd"].is_string());
+            assert!(body["data"]["series"].as_array().unwrap().is_empty());
+            assert_eq!(body["data"]["modelCount"], 0);
+        }
+    }
+    for (cookie, status) in [
+        ("", StatusCode::UNAUTHORIZED),
+        ("cpr_session=stats-admin", StatusCode::OK),
+    ] {
+        let mut request = cookie_request(
+            Method::GET,
+            "/api/admin/client-keys/statistics/models?id=key-42",
+            cookie,
+        );
+        request
+            .headers_mut()
+            .insert("x-request-id", "req_models".parse().unwrap());
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), status);
+        if status == StatusCode::OK {
+            assert_eq!(response_json(response).await["data"], serde_json::json!([]));
+        }
+    }
+}

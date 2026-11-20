@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ZInput, ZScrollbar } from '@codex-proxy/ui'
+import { ZCard, ZInput, ZScrollbar } from '@codex-proxy/ui'
 import { Search } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import ApiKeyConfigModal from '@/components/ApiKeyConfigModal.vue'
@@ -39,7 +39,9 @@ const { showConfig, configKey, configuring, apiBaseUrl, openConfig, copyConfig }
           <KeyUsageSummary :summary="overview.summary" />
           <div class="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(400px,1fr)]">
             <KeyUsageTrend class="min-w-0" :points="overview.trend" />
-            <KeyUsageBudget :budget="overview.key" />
+            <ZCard :title="t('usage.budget.quotaOverview')">
+              <KeyUsageBudget :budget="overview.key" />
+            </ZCard>
           </div>
           <RequestHealthTimelineCard :timeline="overview.healthTimeline" />
         </template>
