@@ -3,12 +3,12 @@ import type { AccountModelAccess } from '@/api'
 
 import { ZButton, ZEmpty, ZFormItem, ZIconButton, ZInput, ZPopover, ZSegmented } from '@codex-proxy/ui'
 
-import { CircleAlert, ListChecks, ListMinus, Plus, RefreshCw, Search } from '@lucide/vue'
+import { CircleAlert, ImagePlus, ListChecks, ListMinus, Plus, RefreshCw, Search } from '@lucide/vue'
 import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getAccountGroupModels, getAccountModels, refreshAccountModels } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
-import { accountModelAccessError, accountModelIdError } from '../utils/modelAccess'
+import { accountModelAccessError, accountModelIdError, commonImageModels } from '../utils/modelAccess'
 import AccountModelCleanupPopover from './AccountModelCleanupPopover.vue'
 import AccountModelOption from './AccountModelOption.vue'
 
@@ -82,6 +82,7 @@ const mode = computed({
 })
 const restricted = computed(() => mode.value === 'allowlist' || mode.value === 'denylist')
 const selectedIds = computed(() => new Set(model.value?.models))
+const allImageModelsSelected = computed(() => commonImageModels.every(id => selectedIds.value.has(id)))
 // 候选项保留到本次编辑结束，取消勾选只修改待保存的模型限制。
 const availableIds = ref<string[]>([])
 const catalogReady = computed(() => catalog.value !== undefined && !loading.value && !error.value)
@@ -164,10 +165,8 @@ function select(modelIds: string[], selected: boolean) {
     model.value = next
 }
 
-function addModel() {
-  if (props.disabled || !restricted.value || !canAdd.value)
-    return
-  select([newModelId.value], true)
+function addModels(ids: string[]) {
+  select(ids, true)
   if (!selectionError.value) {
     search.value = ''
     searchInput.value?.focus()
@@ -178,7 +177,8 @@ function handleSearchEnter(event: KeyboardEvent) {
   if (event.isComposing)
     return
   event.preventDefault()
-  addModel()
+  if (canAdd.value)
+    addModels([newModelId.value])
 }
 
 function handleCatalogHelpKeydown(event: KeyboardEvent, open: boolean, close: () => void) {
@@ -306,10 +306,20 @@ watch(search, () => {
             <Search class="size-4" aria-hidden="true" />
           </template>
         </ZInput>
-        <ZButton v-if="!groupCatalog" class="shrink-0" :disabled="disabled || !canAdd" @click="addModel">
+        <ZButton v-if="!groupCatalog" class="shrink-0" :disabled="disabled || !canAdd" @click="addModels([newModelId])">
           <Plus class="size-4" aria-hidden="true" />
           {{ t('accounts.modelAccess.addModel') }}
         </ZButton>
+        <ZIconButton
+          v-if="!groupCatalog && mode === 'allowlist'"
+          variant="plain"
+          :aria-label="t('accounts.modelAccess.addImageModels')"
+          :title="t('accounts.modelAccess.addImageModels')"
+          :disabled="disabled || allImageModelsSelected"
+          @click="addModels(commonImageModels)"
+        >
+          <ImagePlus aria-hidden="true" />
+        </ZIconButton>
       </div>
       <p v-if="inputError" class="m-0 text-z-xs text-z-error-text" role="alert">
         {{ inputError }}

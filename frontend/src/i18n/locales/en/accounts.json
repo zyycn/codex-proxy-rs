@@ -218,6 +218,7 @@
       "searchOrAddModels": "Search or add models",
       "searchOrEnterId": "Search models or enter a full ID",
       "addModel": "Add model",
+      "addImageModels": "Add common OpenAI image models",
       "customModels": "Custom",
       "availableModels": "Available models",
       "upstreamCatalog": "Upstream catalog",

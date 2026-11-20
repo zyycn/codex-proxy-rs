@@ -1,6 +1,12 @@
 import type { AccountModelAccess } from '@/api'
 import { t } from '@/i18n'
 
+// Codex 原生生图使用 gpt-image-2，另保留 gpt-image-1.5 供客户端显式选择
+export const commonImageModels = [
+  'gpt-image-2',
+  'gpt-image-1.5',
+]
+
 export function accountModelAccessError(value: AccountModelAccess | undefined): string | undefined {
   if (!value || value.mode === 'all')
     return undefined

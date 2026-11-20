@@ -218,6 +218,7 @@
       "searchOrAddModels": "搜索或添加模型",
       "searchOrEnterId": "搜索模型或输入完整 ID",
       "addModel": "添加模型",
+      "addImageModels": "添加常用 OpenAI 生图模型",
       "customModels": "自定义",
       "availableModels": "可选模型",
       "upstreamCatalog": "上游目录",
