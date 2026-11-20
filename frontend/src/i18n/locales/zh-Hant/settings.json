@@ -313,7 +313,7 @@
     "enterDays": "請輸入保留天數",
     "day": "天",
     "location": {
-      "requestCountry": "OpenAI 請求國家（request_country）",
+      "requestCountry": "請求國家",
       "countryHelp": "請求國家模式說明",
       "countryModes": {
         "default": "預設",

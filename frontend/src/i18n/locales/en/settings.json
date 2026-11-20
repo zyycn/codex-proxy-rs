@@ -313,7 +313,7 @@
     "enterDays": "Enter retention days",
     "day": "d",
     "location": {
-      "requestCountry": "OpenAI request country (request_country)",
+      "requestCountry": "Request country",
       "countryHelp": "Request country mode help",
       "countryModes": {
         "default": "Default",
