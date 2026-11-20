@@ -499,7 +499,7 @@ async fn admin_key_model_statistics_keep_local_days_and_missing_model_through_ro
     unassigned.completed_at_ms = Some(unassigned.started_at_ms + 1_000);
     let mut priced = data(10);
     priced.cost = UsageCost::Known {
-        source: UsageCostSource::ProviderReported,
+        source: UsageCostSource::Calculated,
         amount: "1.25".into(),
         currency: "USD".into(),
     };
@@ -555,6 +555,8 @@ async fn admin_key_model_statistics_keep_local_days_and_missing_model_through_ro
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].model, "");
         assert!(rows[0].totals.cost_usd.is_none());
+        assert!(rows[1].totals.has_estimated_cost);
+        assert!(!rows[1].totals.has_missing_cost);
         assert_eq!((rows[1].active_days, rows[1].peak_requests), (1, 1));
         assert_eq!(
             rows[1]

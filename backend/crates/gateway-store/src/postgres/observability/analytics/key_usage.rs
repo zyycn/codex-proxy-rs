@@ -117,7 +117,7 @@ impl AnalyticsSnapshot<'_> {
             sum((costs->>'USD')::numeric) as cost,
             coalesce(sum((counts->>'calculated_count')::numeric),0)>0 as estimated,
             bool_or(coalesce((counts->>'unavailable_count')::numeric,0)>0
-                or (costs - 'USD') <> '{}'::jsonb
+                or (costs - array['USD','standard_usd','no_cache_usd']) <> '{}'::jsonb
                 or (coalesce((counts->>'request_count')::numeric,0)>0 and not costs ? 'USD')) as missing
             from parts group by 1,2
         ), models as (
