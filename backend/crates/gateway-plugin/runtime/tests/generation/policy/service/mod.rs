@@ -80,6 +80,25 @@ async fn explicit_service_dispatch_composes_once_and_preserves_native_transactio
 
     let mut command = ReplaceRuntimeSettings::from(original);
     command.values.refresh_margin_seconds = 999;
+    command.values.openai_oauth_guardian_review_model = false;
+    command.values.openai_request_country = gateway_core::account::OpenAiRequestCountry::Custom {
+        country: "CA".into(),
+    };
+    for field in [
+        "openai_oauth_guardian_review_model",
+        "openai_request_country",
+    ] {
+        let mut args = serde_json::to_value((mutation(), &command)).unwrap();
+        args[1].as_object_mut().unwrap().remove(field);
+        assert!(
+            services
+                .public_services()
+                .call("settings.replace", args)
+                .await
+                .is_err(),
+            "{field}"
+        );
+    }
     let saved = services
         .public_services()
         .call(
@@ -100,6 +119,11 @@ async fn explicit_service_dispatch_composes_once_and_preserves_native_transactio
         .await
         .unwrap();
     assert_eq!(current.values.refresh_margin_seconds, 1234);
+    assert!(!current.values.openai_oauth_guardian_review_model);
+    assert_eq!(
+        current.values.openai_request_country,
+        command.values.openai_request_country
+    );
     assert_eq!(
         core.snapshots()
             .snapshot_for_diagnostics()

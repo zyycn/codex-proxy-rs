@@ -1425,14 +1425,14 @@ impl SettingsStore for FixtureSettingsStore {
     }
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
-            openai_oauth_guardian_review_model: false,
-            openai_request_country: Default::default(),
             request_profiles: Default::default(),
             config_revision: Revision::new(1).expect("revision"),
             model_mappings: Default::default(),
             rotation_strategy: RotationStrategy::Smart,
             updated_at: Utc::now(),
             values: gateway_admin::model::settings::RuntimeSettingsValues {
+                openai_oauth_guardian_review_model: false,
+                openai_request_country: Default::default(),
                 codex_privacy_policy: Default::default(),
                 request_location_enabled: false,
                 request_location: Default::default(),

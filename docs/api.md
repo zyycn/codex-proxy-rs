@@ -2284,7 +2284,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | 透传 | `{"mode":"passthrough"}` | 保留客户端原值，包括显式 `null`；客户端省略时也省略 |
 | 自定义 | `{"mode":"custom","country":"CA"}` | 始终发送指定的两位大写 ASCII 国家码，独立于城市、时区和全局位置开关 |
 
-更新设置时省略 `openaiRequestCountry` 或 `openaiOauthGuardianReviewModel`，对应值保持上次保存的设置。
+更新设置时必须同时提交 `openaiRequestCountry` 和 `openaiOauthGuardianReviewModel`。仅修改其他设置时，请从当前设置读取并原样提交这两项
 
 ### 隐私策略
 

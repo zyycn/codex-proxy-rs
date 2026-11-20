@@ -636,18 +636,16 @@ impl SettingsStore for MemorySettingsStore {
             }
         }
         let updated = RuntimeSettings {
-            openai_oauth_guardian_review_model: command
-                .openai_oauth_guardian_review_model
-                .unwrap_or(settings.openai_oauth_guardian_review_model),
-            openai_request_country: command
-                .openai_request_country
-                .unwrap_or_else(|| settings.openai_request_country.clone()),
             request_profiles,
             config_revision: next_revision(settings.config_revision),
             model_mappings: command.model_mappings,
             rotation_strategy: command.rotation_strategy,
             updated_at: Utc::now(),
             values: gateway_admin::model::settings::RuntimeSettingsValues {
+                openai_oauth_guardian_review_model: command
+                    .values
+                    .openai_oauth_guardian_review_model,
+                openai_request_country: command.values.openai_request_country,
                 codex_privacy_policy: command.values.codex_privacy_policy,
                 request_location_enabled: command.values.request_location_enabled,
                 request_location: command.values.request_location,
@@ -1996,15 +1994,14 @@ fn test_runtime_settings() -> RuntimeSettings {
         ),
     ]);
     RuntimeSettings {
-        openai_oauth_guardian_review_model:
-            gateway_core::settings::default_oauth_guardian_review_model(),
-        openai_request_country: Default::default(),
         request_profiles: Default::default(),
         config_revision: Revision::new(7).expect("revision"),
         model_mappings: mappings,
         rotation_strategy: RotationStrategy::Smart,
         updated_at: Utc::now(),
         values: gateway_admin::model::settings::RuntimeSettingsValues {
+            openai_oauth_guardian_review_model: true,
+            openai_request_country: Default::default(),
             codex_privacy_policy: Default::default(),
             request_location_enabled: false,
             request_location: Default::default(),

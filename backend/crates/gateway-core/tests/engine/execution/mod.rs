@@ -5081,10 +5081,20 @@ fn request_settings_recompute_routing_and_admission_without_changing_sibling_or_
 
 #[test]
 fn invalid_request_settings_leave_the_prepared_execution_unchanged() {
+    use gateway_core::routing::request_settings::ExecutionSettings;
+
     let service = service(Arc::new(Admissions::default()), Arc::new(Budget::default()));
     let client = service.authenticate("sk_start_test").unwrap();
     let prepared = service.prepare_verified_execution(client).unwrap();
     let baseline = prepared.request_settings().execution_values().unwrap();
+    for field in [
+        "openai_oauth_guardian_review_model",
+        "openai_request_country",
+    ] {
+        let mut incomplete = serde_json::to_value(&baseline).unwrap();
+        incomplete["runtime"].as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<ExecutionSettings>(incomplete).is_err());
+    }
     let mut invalid = serde_json::to_value(&baseline).unwrap();
     invalid["runtime"]["responses_max_decompressed_body_bytes"] = json!(0);
     invalid["fast_mode"] = json!("disabled");

@@ -36,6 +36,8 @@ pub type ProviderRequestProfileUpdates =
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsFields {
+    pub openai_oauth_guardian_review_model: bool,
+    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -74,8 +76,6 @@ pub struct RuntimeSettingsFields {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
-    pub openai_oauth_guardian_review_model: bool,
-    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     #[serde(flatten)]
     pub values: RuntimeSettingsFields,
     pub config_revision: u64,
@@ -96,10 +96,6 @@ pub struct RuntimeSettingsView {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
-    #[serde(default, deserialize_with = "deserialize_present_update")]
-    pub openai_oauth_guardian_review_model: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_present_update")]
-    pub openai_request_country: Option<gateway_core::account::OpenAiRequestCountry>,
     #[serde(flatten)]
     pub values: RuntimeSettingsFields,
     pub config_revision: u64,
@@ -118,7 +114,6 @@ pub struct UpdateRuntimeSettingsRequest {
 impl UpdateRuntimeSettingsRequest {
     /// 校验公共运行参数
     pub fn validate(&self) -> Result<(), WireValidationError> {
-        self.validate_request_country()?;
         validate_model_mappings(&self.model_mappings)?;
         if RotationStrategy::parse(&self.rotation_strategy).is_none() {
             return Err(WireValidationError::new("rotationStrategy"));
@@ -127,7 +122,6 @@ impl UpdateRuntimeSettingsRequest {
     }
 
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
-        self.validate_request_country()?;
         validate_model_mappings(&self.model_mappings)?;
         let request_profile_updates = normalize_request_profile_updates(
             self.provider_request_profiles,
@@ -135,8 +129,6 @@ impl UpdateRuntimeSettingsRequest {
             self.xai_client_profile,
         )?;
         Ok(ReplaceRuntimeSettings {
-            openai_oauth_guardian_review_model: self.openai_oauth_guardian_review_model,
-            openai_request_country: self.openai_request_country,
             expected_revision: gateway_admin::model::Revision::new(self.config_revision)
                 .map_err(|_| WireValidationError::new("configRevision"))?,
             request_profile_updates,
@@ -145,15 +137,6 @@ impl UpdateRuntimeSettingsRequest {
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
             values: self.values.into_values()?,
         })
-    }
-
-    fn validate_request_country(&self) -> Result<(), WireValidationError> {
-        if let Some(policy) = &self.openai_request_country {
-            policy
-                .validate()
-                .map_err(|_| WireValidationError::new("openaiRequestCountry"))?;
-        }
-        Ok(())
     }
 }
 
@@ -166,8 +149,6 @@ impl From<(RuntimeSettings, crate::time::TimePresenter)> for RuntimeSettingsView
             .collect::<ProviderRequestProfiles>();
         Self {
             config_revision: settings.config_revision.get(),
-            openai_oauth_guardian_review_model: settings.openai_oauth_guardian_review_model,
-            openai_request_country: settings.openai_request_country,
             openai_client_profile: provider_request_profiles.get("openai").cloned(),
             xai_client_profile: provider_request_profiles.get("xai").cloned(),
             provider_request_profiles,
@@ -768,6 +749,8 @@ impl RuntimeSettingsFields {
         self,
     ) -> Result<gateway_admin::model::settings::RuntimeSettingsValues, WireValidationError> {
         let values = gateway_admin::model::settings::RuntimeSettingsValues {
+            openai_oauth_guardian_review_model: self.openai_oauth_guardian_review_model,
+            openai_request_country: self.openai_request_country,
             codex_privacy_policy: self.codex_privacy_policy,
             request_location_enabled: self.request_location_enabled,
             request_location: self
@@ -817,6 +800,8 @@ impl RuntimeSettingsFields {
 impl From<gateway_admin::model::settings::RuntimeSettingsValues> for RuntimeSettingsFields {
     fn from(settings: gateway_admin::model::settings::RuntimeSettingsValues) -> Self {
         crate::admin::settings::RuntimeSettingsFields {
+            openai_oauth_guardian_review_model: settings.openai_oauth_guardian_review_model,
+            openai_request_country: settings.openai_request_country,
             codex_privacy_policy: settings.codex_privacy_policy,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
@@ -870,6 +855,7 @@ fn settings_validation_error(field: &'static str) -> WireValidationError {
         "max_waiting_per_key" => "maxWaitingPerKey",
         "min_codex_cli_version" => "minCodexCliVersion",
         "min_codex_desktop_version" => "minCodexDesktopVersion",
+        "openai_request_country" => "openaiRequestCountry",
         "openai_account_affinity" => "openaiAccountAffinity",
         "openai_guardian_reserved_concurrency" => "openaiGuardianReservedConcurrency",
         "openai_session_affinity_ttl_hours" => "openaiSessionAffinityTtlHours",

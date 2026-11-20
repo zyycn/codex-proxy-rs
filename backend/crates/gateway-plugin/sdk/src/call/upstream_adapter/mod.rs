@@ -104,7 +104,7 @@ pub struct UpstreamAdapterRequest {
     pub credential_revision: u64,
     pub protocol: String,
     pub client_transport: String,
-    /// 宿主冻结的 Fast 策略：default、enabled 或 disabled
+    /// 宿主冻结的 Fast 策略，可取 default、enabled、ultrafast 或 disabled
     pub fast_mode: String,
     /// 宿主发送调用前相对 Core 请求计时起点已经过的毫秒数
     pub request_elapsed_ms: u64,

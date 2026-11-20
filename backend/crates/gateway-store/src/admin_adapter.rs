@@ -83,8 +83,6 @@ impl SettingsStore for AdminSettingsStoreAdapter {
         let replacement = postgres::ControlPlaneReplacement {
             expected_revision: store_revision(command.expected_revision)?,
             settings: postgres::RuntimeSettingsUpdate {
-                openai_oauth_guardian_review_model: command.openai_oauth_guardian_review_model,
-                openai_request_country: command.openai_request_country,
                 request_profile_updates: command.request_profile_updates,
                 rotation_strategy: command.rotation_strategy.as_str().to_owned(),
                 model_mappings: store_model_mappings(command.model_mappings),
@@ -211,8 +209,6 @@ pub(crate) fn admin_runtime_settings(
         })
         .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
-        openai_oauth_guardian_review_model: settings.openai_oauth_guardian_review_model,
-        openai_request_country: settings.openai_request_country,
         request_profiles: settings.request_profiles,
         config_revision: admin_revision(settings.config_revision)?,
         model_mappings,

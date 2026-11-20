@@ -20,8 +20,6 @@ use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
-    pub openai_oauth_guardian_review_model: bool,
-    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     pub values: RuntimeSettingsValues,
     pub request_profiles:
         BTreeMap<gateway_core::routing::ProviderKind, gateway_core::account::OpaqueProviderData>,
@@ -53,8 +51,6 @@ impl fmt::Debug for RuntimeSettings {
 
 #[derive(Clone)]
 pub struct RuntimeSettingsUpdate {
-    pub openai_oauth_guardian_review_model: Option<bool>,
-    pub openai_request_country: Option<gateway_core::account::OpenAiRequestCountry>,
     pub values: RuntimeSettingsValues,
     pub request_profile_updates: BTreeMap<
         gateway_core::routing::ProviderKind,
@@ -82,10 +78,6 @@ impl fmt::Debug for RuntimeSettingsUpdate {
 impl RuntimeSettingsUpdate {
     pub fn validate(&self) -> StoreResult<()> {
         if self.values.validate().is_err()
-            || self
-                .openai_request_country
-                .as_ref()
-                .is_some_and(|policy| policy.validate().is_err())
             || gateway_admin::model::settings::validate_model_mappings(
                 self.model_mappings
                     .iter()
@@ -428,8 +420,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      switch_account_on_queue_failure = $33,
                      reset_credit_on_low_weekly_quota = $34,
                      quota_reset_window_weights_json = $35,
-                     openai_oauth_guardian_review_model = coalesce($36, openai_oauth_guardian_review_model),
-                     openai_request_country_json = coalesce($37, openai_request_country_json),
+                     openai_oauth_guardian_review_model = $36,
+                     openai_request_country_json = $37,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -477,8 +469,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.values.switch_account_on_queue_failure)
     .bind(update.values.reset_credit_on_low_weekly_quota)
     .bind(sqlx::types::Json(update.values.quota_reset_window_weights))
-    .bind(update.openai_oauth_guardian_review_model)
-    .bind(update.openai_request_country.as_ref().map(sqlx::types::Json))
+    .bind(update.values.openai_oauth_guardian_review_model)
+    .bind(sqlx::types::Json(&update.values.openai_request_country))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("update runtime settings in transaction", source))?
@@ -603,8 +595,6 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         })
         .collect::<StoreResult<BTreeMap<_, _>>>()?;
     Ok(RuntimeSettings {
-        openai_oauth_guardian_review_model: row.openai_oauth_guardian_review_model,
-        openai_request_country: row.openai_request_country_json.0,
         request_profiles,
         config_revision: Revision::new(to_u64(row.config_revision)?)?,
         account_error_protection_revision: Revision::new(to_u64(
@@ -615,6 +605,8 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         model_mappings: row.model_mappings_json.0,
         updated_at: row.updated_at,
         values: gateway_admin::model::settings::RuntimeSettingsValues {
+            openai_oauth_guardian_review_model: row.openai_oauth_guardian_review_model,
+            openai_request_country: row.openai_request_country_json.0,
             refresh_margin_seconds: to_u64(row.refresh_margin_seconds)?,
             refresh_concurrency: to_u32(row.refresh_concurrency)?,
             max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,

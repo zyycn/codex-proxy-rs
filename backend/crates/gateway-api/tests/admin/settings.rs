@@ -40,6 +40,8 @@ async fn response_json(response: axum::response::Response) -> Value {
 fn update_body() -> Value {
     json!({
         "configRevision": 7,
+        "openaiOauthGuardianReviewModel": true,
+        "openaiRequestCountry": {"mode": "follow_location"},
         "codexPrivacyPolicy": {"enabled":false,"onError":"skip_rule","rules":[]},
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
@@ -523,13 +525,6 @@ fn settings_service_contract_flattens_values_and_rejects_unknown_fields() {
         serde_json::from_value::<RuntimeSettings>(record.clone()).unwrap(),
         current
     );
-    let mut legacy = record.as_object().unwrap().clone();
-    legacy.remove("openai_oauth_guardian_review_model");
-    legacy.remove("openai_request_country");
-    assert_eq!(
-        serde_json::from_value::<RuntimeSettings>(Value::Object(legacy)).unwrap(),
-        current
-    );
     record["unexpected_setting"] = json!(true);
     assert!(serde_json::from_value::<RuntimeSettings>(record).is_err());
 
@@ -543,12 +538,16 @@ fn settings_service_contract_flattens_values_and_rejects_unknown_fields() {
         serde_json::from_value::<ReplaceRuntimeSettings>(wire.clone()).unwrap(),
         command
     );
-    let mut legacy = wire.as_object().unwrap().clone();
-    legacy.remove("openai_oauth_guardian_review_model");
-    legacy.remove("openai_request_country");
-    let legacy = serde_json::from_value::<ReplaceRuntimeSettings>(Value::Object(legacy)).unwrap();
-    assert_eq!(legacy.openai_oauth_guardian_review_model, None);
-    assert_eq!(legacy.openai_request_country, None);
+    for field in [
+        "openai_oauth_guardian_review_model",
+        "openai_request_country",
+    ] {
+        let mut incomplete = wire.clone();
+        incomplete.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<ReplaceRuntimeSettings>(incomplete.clone()).is_err());
+        incomplete[field] = Value::Null;
+        assert!(serde_json::from_value::<ReplaceRuntimeSettings>(incomplete).is_err());
+    }
     wire["unexpected_setting"] = json!(true);
     assert!(serde_json::from_value::<ReplaceRuntimeSettings>(wire).is_err());
 }
@@ -1430,7 +1429,7 @@ async fn settings_update_rejects_a_stale_version_without_replacing_the_saved_val
 }
 
 #[tokio::test]
-async fn openai_request_settings_preserve_omitted_fields_and_reject_stale_writes() {
+async fn openai_request_settings_require_both_fields_and_reject_stale_writes() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let read = || app(fixture.state()).oneshot(request(Method::GET, "/api/admin/settings", None));
@@ -1457,9 +1456,20 @@ async fn openai_request_settings_preserve_omitted_fields_and_reject_stale_writes
     assert_eq!(saved["openaiOauthGuardianReviewModel"], false);
     assert_eq!(saved["openaiRequestCountry"], body["openaiRequestCountry"]);
 
-    let mut legacy = update_body();
-    legacy["configRevision"] = saved["configRevision"].clone();
-    assert_eq!(save(legacy).await.unwrap().status(), StatusCode::OK);
+    for field in ["openaiOauthGuardianReviewModel", "openaiRequestCountry"] {
+        let mut incomplete = update_body();
+        incomplete["configRevision"] = saved["configRevision"].clone();
+        incomplete.as_object_mut().unwrap().remove(field);
+        assert_eq!(
+            save(incomplete.clone()).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        incomplete[field] = Value::Null;
+        assert_eq!(
+            save(incomplete).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
     body["openaiOauthGuardianReviewModel"] = json!(true);
     body["openaiRequestCountry"] = json!({"mode":"passthrough"});
     assert_eq!(
@@ -1467,11 +1477,7 @@ async fn openai_request_settings_preserve_omitted_fields_and_reject_stale_writes
         StatusCode::CONFLICT
     );
     let current = response_json(read().await.unwrap()).await["data"].clone();
-    assert_eq!(current["openaiOauthGuardianReviewModel"], false);
-    assert_eq!(
-        current["openaiRequestCountry"],
-        saved["openaiRequestCountry"]
-    );
+    assert_eq!(current, saved);
     body["configRevision"] = current["configRevision"].clone();
     let response = save(body).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);

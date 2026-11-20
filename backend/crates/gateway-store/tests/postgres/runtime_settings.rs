@@ -15,8 +15,6 @@ fn enabled_protection() -> gateway_core::account::AccountErrorProtection {
 
 pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
-        openai_oauth_guardian_review_model: None,
-        openai_request_country: None,
         request_profile_updates: BTreeMap::new(),
         rotation_strategy: "smart".to_owned(),
         model_mappings: BTreeMap::from([
@@ -24,6 +22,8 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             ("grok-latest".to_owned(), "grok-4.5".to_owned()),
         ]),
         values: gateway_admin::model::settings::RuntimeSettingsValues {
+            openai_oauth_guardian_review_model: true,
+            openai_request_country: Default::default(),
             codex_privacy_policy: Default::default(),
             request_location_enabled: false,
             request_location: Default::default(),
@@ -574,7 +574,7 @@ async fn retry_after_limit_defaults_and_updates_reach_the_runtime_snapshot() {
 }
 
 #[tokio::test]
-async fn openai_request_settings_round_trip_into_snapshot_across_legacy_writes() {
+async fn openai_request_settings_round_trip_into_snapshot() {
     use gateway_core::account::OpenAiRequestCountry;
     use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
     let Some(database) = TestDatabase::create("openai_request_settings").await else {
@@ -600,26 +600,20 @@ async fn openai_request_settings_round_trip_into_snapshot_across_legacy_writes()
         (false, OpenAiRequestCountry::Passthrough {}),
         (false, OpenAiRequestCountry::Default {}),
     ] {
-        let update = RuntimeSettingsUpdate {
-            openai_oauth_guardian_review_model: Some(enabled),
-            openai_request_country: Some(country.clone()),
-            ..settings_with_margin(600)
-        };
+        let mut update = settings_with_margin(600);
+        update.values.openai_oauth_guardian_review_model = enabled;
+        update.values.openai_request_country = country.clone();
         repository.update_runtime_settings(update).await.unwrap();
         let saved = repository.load_runtime_settings().await.unwrap();
-        assert_eq!(saved.openai_oauth_guardian_review_model, enabled);
-        assert_eq!(saved.openai_request_country, country);
-        repository
-            .update_runtime_settings(settings_with_margin(900))
-            .await
-            .unwrap();
+        assert_eq!(saved.values.openai_oauth_guardian_review_model, enabled);
+        assert_eq!(saved.values.openai_request_country, country);
         let snapshot = snapshots.load_runtime_snapshot().await.unwrap();
         assert_eq!(
             snapshot.settings.openai_oauth_guardian_review_model(),
             enabled
         );
         assert_eq!(snapshot.settings.openai_request_country(), &country);
-        assert!(snapshot.config_revision > saved.config_revision);
+        assert_eq!(snapshot.config_revision, saved.config_revision);
     }
     for invalid in [
         serde_json::json!({"mode":"custom","country":"ca"}),

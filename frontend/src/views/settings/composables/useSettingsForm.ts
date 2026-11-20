@@ -135,8 +135,8 @@ export function useSettingsForm() {
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     form.codexPrivacyPolicy = cloneDeep(data.codexPrivacyPolicy)
     form.configRevision = data.configRevision
-    form.openaiOauthGuardianReviewModel = data.openaiOauthGuardianReviewModel ?? true
-    form.openaiRequestCountry = data.openaiRequestCountry ?? { mode: 'follow_location' }
+    form.openaiOauthGuardianReviewModel = data.openaiOauthGuardianReviewModel
+    form.openaiRequestCountry = data.openaiRequestCountry
     form.requestLocationEnabled = data.requestLocationEnabled
     form.requestLocation = { ...data.requestLocation }
     form.refreshMarginSeconds = data.refreshMarginSeconds

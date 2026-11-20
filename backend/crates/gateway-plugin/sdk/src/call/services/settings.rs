@@ -15,9 +15,6 @@ pub type Revision = NonZeroU64;
 pub type RotationStrategy = String;
 pub type AccountAffinity = String;
 pub type PricingOverrides = BTreeMap<String, BTreeMap<String, ModelPriceOverride>>;
-fn default_oauth_guardian_review_model() -> bool {
-    true
-}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountErrorProtection {
@@ -139,9 +136,7 @@ pub struct PrivacyPreviewResult {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSettings {
-    #[serde(default = "default_oauth_guardian_review_model")]
     pub openai_oauth_guardian_review_model: bool,
-    #[serde(default)]
     pub openai_request_country: OpenAiRequestCountry,
     pub codex_privacy_policy: CodexPrivacyPolicy,
     pub request_location_enabled: bool,
@@ -184,11 +179,8 @@ pub struct RuntimeSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplaceRuntimeSettings {
-    /// 旧客户端缺少此字段时保留已保存的审核模型策略
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openai_oauth_guardian_review_model: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openai_request_country: Option<OpenAiRequestCountry>,
+    pub openai_oauth_guardian_review_model: bool,
+    pub openai_request_country: OpenAiRequestCountry,
     pub codex_privacy_policy: CodexPrivacyPolicy,
     pub request_location_enabled: bool,
     pub request_location: RequestLocation,
@@ -334,11 +326,6 @@ pub struct UpdatePricing {
     pub models: Vec<String>,
     pub change: PricingChange,
 }
-impl Default for OpenAiRequestCountry {
-    fn default() -> Self {
-        Self::FollowLocation {}
-    }
-}
 pub struct Load;
 impl Operation for Load {
     const NAME: &'static str = "settings.load";
@@ -414,8 +401,8 @@ impl Operation for PreviewClientProfile {
 impl From<RuntimeSettings> for ReplaceRuntimeSettings {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
-            openai_oauth_guardian_review_model: Some(settings.openai_oauth_guardian_review_model),
-            openai_request_country: Some(settings.openai_request_country),
+            openai_oauth_guardian_review_model: settings.openai_oauth_guardian_review_model,
+            openai_request_country: settings.openai_request_country,
             codex_privacy_policy: settings.codex_privacy_policy,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
