@@ -266,11 +266,16 @@ impl CodexBackendClient {
     }
 }
 
+// OAuth 账号声明 FedRAMP 时，由选中凭据独占这个头；普通账号允许客户端多值透传
+pub(super) fn is_managed_model_header(name: &HeaderName, fedramp_routing: bool) -> bool {
+    is_managed_identity_header(name.as_str()) || (fedramp_routing && name == "x-openai-fedramp")
+}
+
 pub(super) fn append_passthrough_headers(headers: &mut HeaderMap, passthrough: &HeaderMap) {
+    let fedramp_routing = headers.contains_key("x-openai-fedramp");
     for name in passthrough.keys() {
         // 身份与传输字段只由画像/正文生成；其余协议头保留原始多值字节
-        if (name == "x-openai-fedramp" && headers.contains_key(name))
-            || is_managed_identity_header(name.as_str())
+        if is_managed_model_header(name, fedramp_routing)
             || matches!(
                 name.as_str(),
                 "openai-beta"

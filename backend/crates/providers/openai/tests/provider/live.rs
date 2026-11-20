@@ -515,12 +515,29 @@ async fn live_should_scope_correlation_to_account_and_preserve_business_headers(
         .mount(&upstream)
         .await;
     // 独立账号安装身份分别发送相同客户端标识，同账号重复请求应稳定、不同账号域应隔离
-    for _ in 0..2 {
+    for fedramp in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
-        create_account(&store, ACCOUNT).await;
+        if fedramp {
+            store
+                .seed_oauth_credential(provider_openai::credential::ImportCodexOAuthCredential {
+                    account_id: ACCOUNT.to_owned(),
+                    name: ACCOUNT.to_owned(),
+                    secret: crate::support::fedramp_secret(&format!("at-{ACCOUNT}")),
+                    verified_account: crate::support::profile(&format!("chatgpt-{ACCOUNT}")),
+                    next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+                    enabled: true,
+                })
+                .await;
+        } else {
+            create_account(&store, ACCOUNT).await;
+        }
         let provider = crate::admin::initialized_test_provider(store, upstream.uri()).await;
         for _ in 0..2 {
             let mut headers = live_protocol_headers();
+            headers.push(gateway_core::operation::ProviderHttpHeader::new(
+                "x-openai-fedramp",
+                Bytes::from_static(b"false"),
+            ));
             headers.push(gateway_core::operation::ProviderHttpHeader::new(
                 "x-test-opaque",
                 Bytes::from_static(b"\x80request"),
@@ -570,7 +587,19 @@ async fn live_should_scope_correlation_to_account_and_preserve_business_headers(
         }
     }
     let requests = upstream.received_requests().await.unwrap();
-    for request in &requests {
+    for (index, request) in requests.iter().enumerate() {
+        let values: Vec<_> = request
+            .headers
+            .get_all("x-openai-fedramp")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect();
+        let expected: &[&str] = if index < 2 {
+            &["true", "false"]
+        } else {
+            &["true"]
+        };
+        assert_eq!(values, expected);
         assert_live_correlation(&request.headers);
         assert_eq!(
             request.headers["authorization"],

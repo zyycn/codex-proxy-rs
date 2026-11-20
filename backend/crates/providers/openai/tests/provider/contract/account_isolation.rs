@@ -1,6 +1,7 @@
 //! 验证 HTTP 与 WebSocket 的账号头部隔离及中间件覆盖
 
 use super::*;
+use crate::support::fedramp_secret;
 
 const SELECTED_ACCOUNT: &str = "acct_scope_same";
 const CLIENT_ACCOUNT_HEADERS: &[(&str, &[&str])] = &[
@@ -188,14 +189,6 @@ fn assert_isolated_request(
         r#"{"status":"complete","sources":[]}"#
     );
     assert_eq!(body["input"], isolation_history());
-}
-
-fn fedramp_secret(access_token: &str) -> provider_openai::credential::CodexOAuthSecret {
-    let mut credential = secret(access_token);
-    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(br#"{"https://api.openai.com/auth":{"chatgpt_account_is_fedramp":true}}"#);
-    credential.id_token = Some(format!("header.{claims}.signature").into());
-    credential
 }
 
 #[tokio::test]

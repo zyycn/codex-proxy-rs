@@ -13,6 +13,21 @@ use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+// 同一来源的多个头照常透传，只有值一致才能用来决定本地传输策略
+fn explicit_guardian_role<'a>(
+    first: &[u8],
+    mut remaining: impl Iterator<Item = &'a [u8]>,
+) -> Option<CodexGuardianRole> {
+    if remaining.any(|value| value != first) {
+        return None;
+    }
+    match first {
+        b"reviewer" => Some(CodexGuardianRole::Reviewer),
+        b"classifier" => Some(CodexGuardianRole::Classifier),
+        _ => None,
+    }
+}
+
 /// 官方 Codex 客户端据此触发完整历史重放的稳定错误码
 pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
 /// Responses WebSocket 用于回传同一 turn 不透明状态的官方 client metadata 键
@@ -812,22 +827,24 @@ impl CodexResponsesRequest {
         middleware_headers: &[MiddlewareHeader],
     ) -> Option<CodexGuardianRole> {
         const HEADER: &str = "x-codex-guardian";
-        let header = middleware_headers
+        let mut overrides = middleware_headers
             .iter()
-            .find(|header| header.name().eq_ignore_ascii_case(HEADER))
-            .map(|header| header.value().as_ref())
-            .or_else(|| self.passthrough_headers.get(HEADER).map(|v| v.as_bytes()));
-        match header {
-            Some(b"reviewer") => Some(CodexGuardianRole::Reviewer),
-            Some(b"classifier") => Some(CodexGuardianRole::Classifier),
-            Some(_) => None,
-            None if self.guardian_role == Some(CodexGuardianRole::Reviewer)
-                && self.model() != CODEX_AUTO_REVIEW_MODEL =>
-            {
-                None
-            }
-            None => self.guardian_role,
+            .filter(|header| header.name().eq_ignore_ascii_case(HEADER))
+            .map(|header| header.value().as_ref());
+        if let Some(first) = overrides.next() {
+            return explicit_guardian_role(first, overrides);
         }
+        let mut client = self
+            .passthrough_headers
+            .get_all(HEADER)
+            .iter()
+            .map(|v| v.as_bytes());
+        if let Some(first) = client.next() {
+            return explicit_guardian_role(first, client);
+        }
+        self.guardian_role.filter(|role| {
+            *role != CodexGuardianRole::Reviewer || self.model() == CODEX_AUTO_REVIEW_MODEL
+        })
     }
 
     /// 设置 / 合并 client metadata

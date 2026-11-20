@@ -1500,6 +1500,15 @@ pub(crate) fn runtime_policy() -> Arc<dyn ProviderRuntimePolicyPort> {
     Arc::new(StaticRuntimePolicy)
 }
 
+pub(crate) fn fedramp_secret(access_token: &str) -> CodexOAuthSecret {
+    use base64::Engine as _;
+    let mut credential = secret(access_token);
+    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(br#"{"https://api.openai.com/auth":{"chatgpt_account_is_fedramp":true}}"#);
+    credential.id_token = Some(format!("header.{claims}.signature").into());
+    credential
+}
+
 pub(crate) fn secret(access_token: &str) -> CodexOAuthSecret {
     CodexOAuthSecret {
         access_token: SecretString::from(access_token.to_owned()),

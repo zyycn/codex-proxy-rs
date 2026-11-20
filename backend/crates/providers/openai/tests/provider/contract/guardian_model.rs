@@ -245,6 +245,96 @@ async fn guardian_samplers_keep_the_http_transport_chosen_by_the_client() {
 }
 
 #[tokio::test]
+async fn explicit_guardian_headers_only_select_a_unique_role() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+    let provider = provider_with_base_url(&store, server.uri());
+    let conflicting = ["reviewer", "classifier"];
+    let reversed = ["classifier", "reviewer"];
+    let cases: &[(&[&str], &[&str], bool)] = &[
+        (&conflicting, &[], true),
+        (&reversed, &[], true),
+        (&["classifier", "classifier"], &[], false),
+        (&conflicting, &["classifier"], false),
+        (&["classifier"], &reversed, true),
+    ];
+    for &(client, middleware, ambiguous) in cases {
+        let headers: Vec<_> = client
+            .iter()
+            .map(|v| json!(["x-codex-guardian", STANDARD.encode(v)]))
+            .collect();
+        let attempt = if middleware.is_empty() {
+            context("req_guardian_headers", CancellationToken::new())
+        } else {
+            context_with_middleware(
+                "req_guardian_headers",
+                Arc::new(RecordingMiddleware {
+                    observed: Default::default(),
+                    replacement: ("input".into(), json!([])),
+                    request_headers: middleware
+                        .iter()
+                        .map(|v| {
+                            MiddlewareHeader::new(
+                                "x-codex-guardian",
+                                Bytes::copy_from_slice(v.as_bytes()),
+                            )
+                        })
+                        .collect(),
+                }),
+                FastMode::Default,
+            )
+        };
+        let values = if middleware.is_empty() {
+            client
+        } else {
+            middleware
+        };
+        let body = json!({"model": LUNA, "input": [], "service_tier":"default"});
+        let payload = ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
+            .unwrap()
+            .with_context(Map::from_iter([
+                ("use_websocket".into(), json!(false)),
+                ("opaque_request_headers".into(), json!(headers)),
+            ]));
+        let op = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+        let mut stream = provider
+            .clone()
+            .execute(
+                planned_request_with_presentation("openai", op, LUNA, None),
+                attempt,
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        let sent = server.received_requests().await.unwrap().pop().unwrap();
+        assert_eq!(
+            sent.headers
+                .get_all("x-codex-guardian")
+                .iter()
+                .map(|v| v.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            values
+        );
+        assert_eq!(sent.headers.contains_key("content-encoding"), ambiguous);
+        assert_eq!(sent.headers.contains_key("x-codex-routing-hint"), ambiguous);
+        assert_eq!(
+            captured_request_body(&sent).get("service_tier").is_some(),
+            ambiguous
+        );
+    }
+}
+
+#[tokio::test]
 async fn guardian_model_freezes_the_selected_model_across_settings_changes_and_continuations() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;

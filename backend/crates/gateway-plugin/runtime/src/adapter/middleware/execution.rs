@@ -2,11 +2,14 @@
 
 use super::{MiddlewareEntry, PluginMiddlewarePlan};
 use futures::future::BoxFuture;
+use gateway_core::engine::extensions::ExtensionCallScope;
 use gateway_core::engine::middleware::{
     MiddlewareContext, MiddlewareError, MiddlewareMount, MiddlewareNext, MiddlewarePlan,
     MiddlewareRequest, MiddlewareResponse,
 };
 use gateway_core::middleware::{Middleware, Next};
+use gateway_core::policy::ClientApiKeyId;
+use gateway_core::routing::{AccountGroupId, ProviderKind};
 use std::sync::Arc;
 
 // 协议适配只提供选择条件与单层调用；顺序、上下文捕获和续体拼接共用这一个入口
@@ -61,23 +64,22 @@ impl MiddlewarePlan for PluginMiddlewarePlan {
             .flatten()
             .all(|entry| {
                 let matches = |model| {
-                    entry.scope.matches_processing(
+                    entry.matches_processing(
+                        route.extensions,
                         route.client_api_key,
                         route.account_groups,
                         Some(provider),
                         Some(model),
                     )
                 };
-                route.extensions.contains(&entry.instance_id)
-                    || !matches(route.model)
-                    || matches(target.as_str())
+                !matches(route.model) || matches(target.as_str())
             })
     }
 
     fn has_outbound(&self, context: &MiddlewareContext) -> bool {
         self.middleware
             .get(&MiddlewareMount::Outbound)
-            .is_some_and(|entries| entries.iter().any(|entry| outbound_matches(entry, context)))
+            .is_some_and(|entries| entries.iter().any(|entry| matches_context(entry, context)))
     }
 
     fn handle_outbound(
@@ -92,7 +94,7 @@ impl MiddlewarePlan for PluginMiddlewarePlan {
         self.chain(
             MiddlewareMount::Outbound,
             context,
-            outbound_matches,
+            matches_context,
             |entry, context, request, next| {
                 Box::pin(super::outbound::invoke(entry, context, request, next))
             },
@@ -183,15 +185,7 @@ impl MiddlewarePlan for PluginMiddlewarePlan {
         self.chain(
             context.mount(),
             context,
-            |entry, context| {
-                !context.extension_scope().contains(&entry.instance_id)
-                    && entry.scope.matches_processing(
-                        context.client_key_id(),
-                        context.account_group_ids(),
-                        context.provider(),
-                        context.model(),
-                    )
-            },
+            matches_context,
             |entry, context, request, next| {
                 Box::pin(super::request::invoke(entry, context, request, next))
             },
@@ -201,13 +195,26 @@ impl MiddlewarePlan for PluginMiddlewarePlan {
     }
 }
 
-// 存在性检查与实际组合使用同一选择规则，未命中时不进入原生报文准备
-fn outbound_matches(entry: &MiddlewareEntry, context: &MiddlewareContext) -> bool {
-    !context.extension_scope().contains(&entry.instance_id)
-        && entry.scope.matches_processing(
-            context.client_key_id(),
-            context.account_group_ids(),
-            context.provider(),
-            context.model(),
-        )
+impl MiddlewareEntry {
+    fn matches_processing(
+        &self,
+        extensions: &ExtensionCallScope,
+        key: &ClientApiKeyId,
+        groups: &[AccountGroupId],
+        provider: Option<&ProviderKind>,
+        model: Option<&str>,
+    ) -> bool {
+        !extensions.contains(&self.instance_id)
+            && self.scope.matches_processing(key, groups, provider, model)
+    }
+}
+
+fn matches_context(entry: &MiddlewareEntry, context: &MiddlewareContext) -> bool {
+    entry.matches_processing(
+        context.extension_scope(),
+        context.client_key_id(),
+        context.account_group_ids(),
+        context.provider(),
+        context.model(),
+    )
 }

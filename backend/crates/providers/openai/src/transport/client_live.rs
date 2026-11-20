@@ -19,7 +19,7 @@ use super::{
     },
     diagnostics::CodexUpstreamDiagnostics,
     endpoints::endpoint_url,
-    headers::{insert_optional_header, is_managed_identity_header},
+    headers::{insert_optional_header, is_managed_model_header},
     response_meta,
 };
 
@@ -40,7 +40,7 @@ impl CodexBackendClient {
         )?;
         for header in extra_protocol_headers {
             let name = HeaderName::from_bytes(header.name().as_bytes())?;
-            if is_managed_identity_header(name.as_str())
+            if is_managed_model_header(&name, self.fedramp_routing)
                 || is_transport_managed_request_header(name.as_str())
                 || is_non_codex_request_header(name.as_str())
                 // Live 不继承 Responses 的路由或连接续接状态

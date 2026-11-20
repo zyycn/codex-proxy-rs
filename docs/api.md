@@ -598,7 +598,8 @@ Guardian 身份识别同步审核和审核预热，优先选择允许 `codex-aut
 发往 Codex OAuth 的同步 `codex-auto-review` 审核带 `x-codex-guardian: reviewer`，
 后台分类带 `x-codex-guardian: classifier`。这两类请求都省略顶层 `service_tier` 和
 `x-codex-routing-hint`，分组强制加速同样适用。后台会话整理保留会话层级并省略上述两个请求头。
-后台分类和会话整理的 HTTP 请求使用未压缩 JSON。普通 OAuth 生成和同步审核的 HTTP 正文使用 zstd
+后台分类和会话整理的 HTTP 请求使用未压缩 JSON。普通 OAuth 生成和同步审核的 HTTP 正文使用 zstd。
+中间件设置的角色头优先于客户端。同一来源的角色头取值冲突时保留原始多值，网关按普通请求选择传输和压缩方式
 
 同步审核和后台分类的 `client_metadata.parent_response_id` 只有在网关记录能确认同一 Client Key、
 同一 OAuth 账号的父响应时才发送，HTTP 和 WS 收到的父响应都可验证。预热请求可以没有父响应。
