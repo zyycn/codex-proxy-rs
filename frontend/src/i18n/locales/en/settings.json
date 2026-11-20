@@ -203,15 +203,15 @@
       "switchLimitHelp": "Per request, 0 disables switching"
     },
     "warmup": {
-      "title": "Account warmup",
+      "title": "Scheduled warmup",
       "description": "Try to start quota windows for idle Codex OAuth accounts",
-      "enableWarmup": "Enable warmup",
+      "enableWarmup": "Enable scheduled warmup",
       "cronExpression": "Cron expression",
       "cronHelp": "Press Enter after each tag",
       "modelLabel": "Warmup model",
       "modelHelp": "Required when enabled, use an available model",
       "modelPlaceholder": "Enter model name",
-      "helpTitle": "About account warmup",
+      "helpTitle": "About scheduled warmup",
       "help": "Sends a lightweight request to available Codex OAuth accounts, skipping exhausted quotas and confirmed active windows, accounts at 0% may be warmed up, activation is not guaranteed",
       "scheduleHelp": "Runs in the deployment time zone, once per matching minute"
     },
@@ -631,7 +631,7 @@
       "invalidProbeModel": "The probe model must be at most 128 characters without control characters",
       "invalidWarmupCron": "Enter a valid Cron expression",
       "warmupCronTooLong": "Keep all rules within 255 bytes",
-      "warmupModelRequired": "Select a model to enable warmup",
+      "warmupModelRequired": "Select a model to enable scheduled warmup",
       "invalidWarmupModel": "Warmup model name must not exceed 128 characters",
       "settingsSaved": "Settings saved",
       "invalidProtectionSettings": "Use a failure threshold of 2–1,000, count validity of 60–3,600 seconds, and a cooldown of 300–604,800 seconds",

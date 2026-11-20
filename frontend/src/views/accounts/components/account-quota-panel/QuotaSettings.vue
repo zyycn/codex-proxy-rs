@@ -128,7 +128,7 @@ async function save() {
             v-model="row.warmup"
             size="small"
             inline-prompt
-            class="w-12 [&:lang(en)]:w-18"
+            class="w-18 shrink-0 [&:lang(en)]:w-28"
             width="100%"
             :active-text="t('accounts.quotaSettings.warmup')"
             :inactive-text="t('accounts.quotaSettings.warmup')"

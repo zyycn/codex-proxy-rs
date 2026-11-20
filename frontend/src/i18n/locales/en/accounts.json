@@ -11,11 +11,11 @@
       "empty": "No observed quota buckets",
       "invalid": "Enter a whole number from 1 to 100 or leave blank for no limit",
       "limit": "Scheduling limit",
-      "warmup": "Warmup",
+      "warmup": "Warmup on reset",
       "model": "Warmup model",
       "modelPlaceholder": "Select model",
       "invalidModel": "Enter a valid warmup model ID",
-      "subtitle": "Configure quota limits and warmup after reset"
+      "subtitle": "Configure quota limits and warmup on reset"
     },
     "quota": {
       "general": "General quota",

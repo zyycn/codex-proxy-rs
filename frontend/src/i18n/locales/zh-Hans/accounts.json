@@ -11,11 +11,11 @@
       "empty": "没有已观测的额度桶",
       "invalid": "请输入 1～100 的整数，留空表示不限制",
       "limit": "调度上限",
-      "warmup": "预热",
+      "warmup": "重置预热",
       "model": "预热模型",
       "modelPlaceholder": "选择模型",
       "invalidModel": "请输入有效的预热模型 ID",
-      "subtitle": "设置额度上限与重置后预热"
+      "subtitle": "设置额度上限与重置预热"
     },
     "quota": {
       "general": "通用额度",
