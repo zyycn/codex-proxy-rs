@@ -293,8 +293,8 @@
     },
     "modelMapping": "模型映射",
     "routing": {
-      "oauthGuardianReviewModel": "OAuth 審核模型覆寫",
-      "oauthGuardianReviewModelHelp": "同步審核預設沿用用戶端模型，開啟後使用 codex-auto-review",
+      "oauthGuardianReviewModel": "專用審核模型",
+      "oauthGuardianReviewModelHelp": "OAuth 同步審核預設沿用用戶端模型，開啟後使用 codex-auto-review",
       "modelMapHelp": "將客戶端請求的模型名稱映射爲實際使用的上游模型"
     },
     "addMapping": "添加映射",

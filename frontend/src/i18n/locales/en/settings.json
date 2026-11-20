@@ -293,8 +293,8 @@
     },
     "modelMapping": "Model mapping",
     "routing": {
-      "oauthGuardianReviewModel": "Override OAuth review model",
-      "oauthGuardianReviewModelHelp": "Synchronous reviews use the client model by default. Enable to use codex-auto-review.",
+      "oauthGuardianReviewModel": "Dedicated review model",
+      "oauthGuardianReviewModelHelp": "OAuth synchronous reviews use the client model by default. Enable to use codex-auto-review.",
       "modelMapHelp": "Map client model names to the upstream models used"
     },
     "addMapping": "Add mapping",

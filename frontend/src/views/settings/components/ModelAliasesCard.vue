@@ -7,6 +7,8 @@ import { Plus, Trash2 } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import HelpPopover from '@/components/HelpPopover.vue'
+
 const props = withDefaults(defineProps<{
   disabled?: boolean
   mappings: Array<{ requestedModel: string, upstreamModel: string }>
@@ -47,16 +49,17 @@ const uniqueModelRule = computed<FormRule>(() => ({
     :description="t('settings.routing.modelMapHelp')"
   >
     <div class="grid gap-4">
-      <div class="grid justify-items-start gap-1">
+      <div id="oauth-guardian-review-model-help" class="flex items-center gap-2">
         <ZSwitch
           v-model="oauthGuardianReviewModel"
           :label="t('settings.routing.oauthGuardianReviewModel')"
-          aria-describedby="oauth-guardian-review-model-help"
+          :aria-description="t('settings.routing.oauthGuardianReviewModelHelp')"
           :disabled="disabled"
         />
-        <p id="oauth-guardian-review-model-help" class="text-z-sm text-z-text-secondary">
-          {{ t('settings.routing.oauthGuardianReviewModelHelp') }}
-        </p>
+        <HelpPopover
+          :label="t('common.form.fieldHelp', { label: t('settings.routing.oauthGuardianReviewModel') })"
+          :content="t('settings.routing.oauthGuardianReviewModelHelp')"
+        />
       </div>
       <div class="flex flex-wrap items-center gap-3">
         <ZButton :disabled="loading" @click="emit('addMapping')">
