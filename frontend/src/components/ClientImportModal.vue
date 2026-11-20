@@ -27,7 +27,7 @@ function select() {
   >
     <div class="grid gap-2">
       <div
-        class="flex items-center gap-1 rounded-z-sm pr-1 transition-colors hover:bg-z-bg-text-hover has-[:focus-visible]:bg-z-bg-text-hover motion-reduce:transition-none"
+        class="flex items-center gap-1 rounded-z-sm pr-1 transition-colors hover:bg-z-bg-text-hover has-focus-visible:bg-z-bg-text-hover motion-reduce:transition-none"
       >
         <ZMenuItem class="min-h-18 min-w-0 py-3 hover:bg-transparent!" @click="select">
           <template #icon>

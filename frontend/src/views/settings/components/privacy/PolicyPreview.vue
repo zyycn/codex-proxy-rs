@@ -61,7 +61,7 @@ async function test() {
               <strong class="text-z-sm font-emphasis text-z-text tabular-nums">{{ outcome.matches }}</strong>
             </template>
           </I18nT>
-          <p v-if="outcome.reason" class="col-span-2 m-0 text-z-xs break-words text-z-warning-text">
+          <p v-if="outcome.reason" class="col-span-2 m-0 text-z-xs wrap-break-word text-z-warning-text">
             {{ outcome.reason }}
           </p>
         </li>

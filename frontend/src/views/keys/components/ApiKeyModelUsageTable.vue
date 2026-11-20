@@ -123,7 +123,7 @@ const columns = computed(() => defineTableColumns<KeyModelRow>([
         {{ t('common.actions.refresh') }}
       </ZButton>
     </div>
-    <ZTable class="h-auto! max-h-[calc(var(--table-header-height)_+_10_*_var(--table-row-height)_+_2px)] min-w-0 [--z-table-row-height-sm:2.25rem]" :class="{ 'min-h-40!': !rows.length }" :columns="columns" :data="rows" :loading="pending || loading" row-key="model" size="small" show-header-when-empty>
+    <ZTable class="h-auto! max-h-[calc(var(--table-header-height)+10*var(--table-row-height)+2px)] min-w-0 [--z-table-row-height-sm:2.25rem]" :class="{ 'min-h-40!': !rows.length }" :columns="columns" :data="rows" :loading="pending || loading" row-key="model" size="small" show-header-when-empty>
       <template #empty>
         <span v-if="!error && result" class="text-z-sm text-z-text-secondary">{{ t('keys.statistics.empty') }}</span>
       </template>
