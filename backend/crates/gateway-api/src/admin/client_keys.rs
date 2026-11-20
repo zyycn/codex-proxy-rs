@@ -336,6 +336,48 @@ impl ClientKeyMutationRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ClientBudgetView {
+    daily_limit_usd: String,
+    weekly_limit_usd: String,
+    daily_used_usd: String,
+    weekly_used_usd: String,
+    daily_resets_at: Option<DateTime<Utc>>,
+    daily_resets_at_display: Option<String>,
+    weekly_resets_at: Option<DateTime<Utc>>,
+    weekly_resets_at_display: Option<String>,
+}
+
+impl
+    From<(
+        gateway_core::engine::budget::ClientBudgetStatus,
+        crate::time::TimePresenter,
+    )> for ClientBudgetView
+{
+    fn from(
+        (budget, time): (
+            gateway_core::engine::budget::ClientBudgetStatus,
+            crate::time::TimePresenter,
+        ),
+    ) -> Self {
+        Self {
+            daily_limit_usd: budget.limits.daily_usd.canonical(),
+            weekly_limit_usd: budget.limits.weekly_usd.canonical(),
+            daily_used_usd: budget.daily_used_usd.canonical(),
+            weekly_used_usd: budget.weekly_used_usd.canonical(),
+            daily_resets_at_display: budget
+                .daily_resets_at()
+                .map(|value| time.datetime(&value.into())),
+            daily_resets_at: budget.daily_resets_at().map(DateTime::from),
+            weekly_resets_at_display: budget
+                .weekly_resets_at()
+                .map(|value| time.datetime(&value.into())),
+            weekly_resets_at: budget.weekly_resets_at().map(DateTime::from),
+        }
+    }
+}
+
 /// 不含完整 Key 的管理端安全视图
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -356,14 +398,8 @@ pub struct ClientKeyView {
     enabled: bool,
     max_concurrency: u64,
     requests_per_minute: u64,
-    daily_limit_usd: String,
-    weekly_limit_usd: String,
-    daily_used_usd: String,
-    weekly_used_usd: String,
-    daily_resets_at: Option<DateTime<Utc>>,
-    daily_resets_at_display: Option<String>,
-    weekly_resets_at: Option<DateTime<Utc>>,
-    weekly_resets_at_display: Option<String>,
+    #[serde(flatten)]
+    budget: ClientBudgetView,
     created_at: DateTime<Utc>,
     created_at_display: String,
     updated_at: DateTime<Utc>,
@@ -410,20 +446,7 @@ impl From<(ClientKeyRecord, crate::time::TimePresenter)> for ClientKeyView {
             enabled: record.enabled,
             max_concurrency: record.limits.max_concurrency,
             requests_per_minute: record.limits.requests_per_minute,
-            daily_limit_usd: record.budget.limits.daily_usd.canonical(),
-            weekly_limit_usd: record.budget.limits.weekly_usd.canonical(),
-            daily_used_usd: record.budget.daily_used_usd.canonical(),
-            weekly_used_usd: record.budget.weekly_used_usd.canonical(),
-            daily_resets_at_display: record
-                .budget
-                .daily_resets_at()
-                .map(|value| time.datetime(&value.into())),
-            daily_resets_at: record.budget.daily_resets_at().map(DateTime::from),
-            weekly_resets_at_display: record
-                .budget
-                .weekly_resets_at()
-                .map(|value| time.datetime(&value.into())),
-            weekly_resets_at: record.budget.weekly_resets_at().map(DateTime::from),
+            budget: ClientBudgetView::from((record.budget, time)),
             created_at_display: time.datetime(&record.created_at),
             created_at: record.created_at,
             updated_at_display: time.datetime(&record.updated_at),
@@ -867,6 +890,7 @@ where
     S: SessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
+        .merge(super::client_key_usage::router::<S>())
         .route("/api/admin/client-keys", get(list_client_keys::<S>))
         .route(
             "/api/admin/client-keys/batch-update",

@@ -185,3 +185,87 @@ export function enableApiKey(data: ApiKeyIdParam) {
     data,
   })
 }
+
+export type KeyUsageMetric = 'costUsd' | 'tokens' | 'requests'
+export type KeyStatisticsPeriod = '7d' | '30d'
+export interface KeyUsageTotals {
+  requests: number
+  tokens: number | null
+  costUsd: string | null
+  hasMissingCost: boolean
+  hasEstimatedCost: boolean
+}
+export interface KeyModelRow {
+  model: string
+  totals: KeyUsageTotals
+  activeDays: number
+  peakRequests: number
+}
+export interface KeyStatistics {
+  budget: Pick<ApiKey, 'dailyLimitUsd' | 'weeklyLimitUsd' | 'dailyUsedUsd' | 'weeklyUsedUsd' | 'dailyResetsAt' | 'weeklyResetsAt' | 'dailyResetsAtDisplay' | 'weeklyResetsAtDisplay'>
+  dates: string[]
+  asOf: number
+  totals: KeyUsageTotals
+  modelCount: number
+  series: { model: string | null, points: { date: string, value: string | null }[] }[]
+}
+export function getKeyStatistics(id: string, period: KeyStatisticsPeriod, metric: KeyUsageMetric, asOf: number | undefined, options: RequestOptions) {
+  return request<KeyStatistics>({
+    url: '/api/admin/client-keys/statistics',
+    method: 'GET',
+    params: { id, period, metric, asOf },
+    ...options,
+  })
+}
+export function getKeyModelTotals(id: string, period: KeyStatisticsPeriod, asOf: number, options: RequestOptions) {
+  return request<KeyModelRow[]>({
+    url: '/api/admin/client-keys/statistics/models',
+    method: 'GET',
+    params: { id, period, asOf },
+    ...options,
+  })
+}
+
+export interface BudgetReferenceAccount {
+  id: string
+  name: string
+  email: string | null
+  provider: string
+}
+
+export function getBudgetReferenceAccounts(id: string, search: string, cursor: string | undefined, options: RequestOptions) {
+  return request<{ items: BudgetReferenceAccount[], nextCursor: string | null }>({
+    url: '/api/admin/client-keys/budget-reference-accounts',
+    method: 'GET',
+    params: { id, search: search || undefined, cursor },
+    ...options,
+  })
+}
+
+export interface KeyReferenceWindow {
+  key: string
+  label: string
+  period: 'daily' | 'weekly'
+  startsAt: string
+  startsAtDisplay: string
+  endsAt: string
+  endsAtDisplay: string
+}
+
+export interface KeyAlignmentPreview {
+  revision: number
+  windows: KeyReferenceWindow[]
+}
+
+export function previewKeyAlignment(id: string, accountId: string, options: RequestOptions) {
+  return request<KeyAlignmentPreview>({
+    url: '/api/admin/client-keys/budget-alignment',
+    method: 'GET',
+    params: { id, accountId },
+    ...options,
+  })
+}
+
+export function alignKeyBudget(data: { id: string, accountId: string, revision: number, windowKey: string, startsAt: string, endsAt: string }) {
+  return request<number>({ url: '/api/admin/client-keys/budget-alignment', method: 'POST', data })
+}

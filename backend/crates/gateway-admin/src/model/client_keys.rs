@@ -317,9 +317,69 @@ impl ClientKeyBudgetWindowPeriod {
     }
 }
 
+/// 手动对齐只需要账号身份，列表不读取凭据、额度或用量
+#[derive(serde::Serialize, Debug)]
+pub struct BudgetReferenceAccount {
+    pub id: String,
+    pub name: String,
+    pub email: Option<String>,
+    pub provider: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetReferenceAccountPage {
+    pub items: Vec<BudgetReferenceAccount>,
+    pub next_cursor: Option<String>,
+}
+
+/// 管理员可预览的账号窗口保留 Provider 的稳定标识
+pub struct ClientKeyBudgetReference {
+    pub key: String,
+    pub label: String,
+    pub period: ClientKeyBudgetWindowPeriod,
+    pub bounds: ExplicitClientKeyBudgetWindow,
+}
+
+impl ClientKeyBudgetReference {
+    /// 只取整账号当前的日／周窗口，对齐结束后恢复密钥自身周期
+    pub fn from_current_window(
+        window: super::provider_credentials::ProviderQuotaWindow,
+        now: DateTime<Utc>,
+    ) -> Option<Self> {
+        use super::provider_credentials::QuotaLocalUsageAttribution;
+        if window.local_usage_attribution != QuotaLocalUsageAttribution::AccountWide
+            || window
+                .upstream
+                .as_ref()
+                .is_some_and(|upstream| upstream.stale)
+        {
+            return None;
+        }
+        let period = match window.window_seconds? {
+            86_400 => ClientKeyBudgetWindowPeriod::Daily,
+            604_800 => ClientKeyBudgetWindowPeriod::Weekly,
+            _ => return None,
+        };
+        let (starts_at, ends_at) = window.observed_bounds()?;
+        (starts_at..ends_at).contains(&now).then_some(Self {
+            key: window.key,
+            label: window.label,
+            period,
+            bounds: ExplicitClientKeyBudgetWindow {
+                starts_at,
+                ends_at,
+                resume_calendar: true,
+            },
+        })
+    }
+}
+
 /// 按请求完成时间归属的左闭右开预算窗口
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExplicitClientKeyBudgetWindow {
+    /// 一次性对齐的窗口到期后恢复原生滚动
+    pub resume_calendar: bool,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
 }

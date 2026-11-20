@@ -35,6 +35,17 @@ struct TestClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for TestClientKeyStore {
+    async fn budget_reference_accounts(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: &str,
+        _: &str,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        gateway_admin::model::client_keys::BudgetReferenceAccountPage,
+    > {
+        Err(unused())
+    }
+
     async fn batch_update_client_keys(
         &self,
         _: gateway_admin::model::client_keys::BatchUpdateClientKeys,
@@ -87,6 +98,15 @@ impl ClientKeyStore for TestClientKeyStore {
     ) -> AdminStoreResult<()> {
         self.resets.lock().unwrap().push(command);
         Ok(())
+    }
+
+    async fn client_key_budget(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_core::engine::budget::ClientBudgetStatus>> {
+        self.get_client_key(id)
+            .await
+            .map(|key| key.map(|row| row.budget))
     }
 
     async fn get_client_key(

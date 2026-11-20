@@ -88,6 +88,7 @@ pub(super) async fn set(
         "period": command.period.as_str(),
         "starts_at": command.window.map(|window| window.starts_at),
         "ends_at": command.window.map(|window| window.ends_at), "owner": owner,
+        "resume_calendar": command.window.is_some_and(|window| window.resume_calendar),
     });
     // 只创建未开启的账本，不因窗口管理顺带开启另一个原生周期
     sqlx::query(
@@ -128,16 +129,25 @@ pub(super) async fn set(
     let column = command.period.as_str();
     let next: i64 = match command.window {
         Some(window) => {
+            if window.resume_calendar
+                && !(window.starts_at..window.ends_at).contains(&chrono::Utc::now())
+            {
+                return Err(AdminStoreError::new(
+                    AdminStoreErrorKind::Conflict,
+                    "client API key",
+                    "参考窗口已失效，请重新选择",
+                ));
+            }
             // 首次接管和迟到的周期同步都从同一费用账本计入窗口内已完成请求
             sqlx::query_scalar(sqlx::AssertSqlSafe(format!("update client_api_key_budget_windows set
-                {column}_explicit=true, {column}_start=$2, {column}_end=$3,
+                {column}_explicit=$5, {column}_start=$2, {column}_end=$3,
                 {column}_used_usd=case when charge_history_since > $2 then {column}_used_usd else
                     (select coalesce(sum(amount_usd),0) from client_api_key_charge_events
                      where client_api_key_id=$1 and completed_at >= $2 and completed_at < $3) end,
                 revision=revision+1,last_operation_request=$4
                 where client_api_key_id=$1 and (charge_history_since is null or charge_history_since <= $2
                     or ({column}_start=$2 and {column}_end=$3)) returning revision")))
-                .bind(command.id.as_str()).bind(window.starts_at).bind(window.ends_at).bind(request)
+                .bind(command.id.as_str()).bind(window.starts_at).bind(window.ends_at).bind(request).bind(!window.resume_calendar)
                 .fetch_optional(&mut *tx).await.map_err(unavailable)?
                 .ok_or_else(|| AdminStoreError::new(AdminStoreErrorKind::Conflict, "client API key",
                     "费用历史不完整，无法重算该预算窗口"))?

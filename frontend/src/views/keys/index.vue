@@ -20,6 +20,7 @@ import ApiKeyFormModal from './components/ApiKeyFormModal.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
 import ApiKeyScopeCell from './components/ApiKeyScopeCell.vue'
+import ApiKeyStatisticsModal from './components/ApiKeyStatisticsModal.vue'
 import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
 import { useApiKeyEditor } from './composables/useApiKeyEditor'
 import { useApiKeyMutations } from './composables/useApiKeyMutations'
@@ -33,6 +34,7 @@ const selectedIds = ref<Set<string>>(new Set())
 const showBatchEdit = shallowRef(false)
 const batchKeys = shallowRef<ApiKey[]>([])
 const showBudgetResetModal = shallowRef(false)
+const statisticsKey = shallowRef<ApiKey | null>(null)
 const resettingKey = shallowRef<ApiKey | null>(null)
 
 function openBudgetReset(key: ApiKey) {
@@ -244,6 +246,7 @@ watch([showFormModal, showBatchEdit], ([editor, batch]) => {
                 :configuring="revealingKeys.get(row.id) === 'use'"
                 :updating-status="updatingStatusKeyIds.has(row.id)"
                 @edit="openEdit"
+                @statistics="statisticsKey = $event"
                 @reset-budget="openBudgetReset"
                 @delete="requestDeleteKey"
                 @import-client="openImportKeyModal"
@@ -283,6 +286,8 @@ watch([showFormModal, showBatchEdit], ([editor, batch]) => {
       @import-client="importCreatedKey"
       @after-leave="clearCreatedKey"
     />
+
+    <ApiKeyStatisticsModal v-if="statisticsKey" :api-key="statisticsKey" @close="statisticsKey = null" />
 
     <ApiKeyBudgetResetModal
       v-model="showBudgetResetModal"

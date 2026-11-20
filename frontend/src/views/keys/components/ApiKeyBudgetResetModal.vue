@@ -3,11 +3,13 @@ import type { ApiKey } from '@/api'
 
 import { ZButton, ZDialog, ZSegmented } from '@codex-proxy/ui'
 import { ArrowRight } from '@lucide/vue'
-import { computed, shallowRef, watch } from 'vue'
+import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { resetApiKeyBudget } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { notification as ZNotification } from '@/utils/notification'
+
+import ApiKeyBudgetAlignment from './ApiKeyBudgetAlignment.vue'
 
 const props = defineProps<{ apiKey: ApiKey | null }>()
 
@@ -17,7 +19,25 @@ const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ default: false })
 const period = shallowRef('all')
-const { loading, run } = useAsyncAction()
+const mode = shallowRef('reset')
+const alignment = useTemplateRef<InstanceType<typeof ApiKeyBudgetAlignment>>('alignment')
+const aligning = shallowRef(false)
+const { loading: resetting, run } = useAsyncAction()
+const loading = computed(() => resetting.value || aligning.value)
+const modes = computed(() => [
+  {
+    value: 'reset',
+    label: t('keys.actions.resetUsedCredit'),
+  },
+  {
+    value: 'align',
+    label: t('keys.alignment.title'),
+  },
+])
+function finishAlignment() {
+  open.value = false
+  emit('reset')
+}
 const periods = computed(() => ([
   {
     label: t('common.values.all'),
@@ -48,8 +68,11 @@ const windows = computed(() => props.apiKey
   : [])
 
 watch(open, (value) => {
-  if (value)
+  if (value) {
+    mode.value = 'reset'
     period.value = 'all'
+    aligning.value = false
+  }
 })
 
 async function resetBudget() {
@@ -71,8 +94,8 @@ async function resetBudget() {
 <template>
   <ZDialog
     v-model="open"
-    :title="t('keys.actions.resetUsedCredit')"
-    :description="t('keys.budgetReset.description')"
+    :title="t('keys.budgetReset.title')"
+    :description="mode === 'reset' ? t('keys.budgetReset.description') : t('keys.alignment.description')"
     width="28rem"
     :show-close="!loading" :close-on-click-modal="!loading" :close-on-press-escape="!loading"
   >
@@ -84,14 +107,17 @@ async function resetBudget() {
         </p>
       </div>
 
-      <fieldset class="m-0 min-w-0 border-0 p-0" :disabled="loading">
+      <ZSegmented v-model="mode" class="w-full" :options="modes" :aria-label="t('keys.budgetReset.title')" :disabled="loading" />
+      <ApiKeyBudgetAlignment v-if="mode === 'align' && apiKey && open" ref="alignment" :api-key="apiKey" @busy="aligning = $event" @saved="finishAlignment" />
+
+      <fieldset v-if="mode === 'reset'" class="m-0 min-w-0 border-0 p-0" :disabled="loading">
         <legend class="mb-2.5 p-0 text-z-sm text-z-text-secondary">
           {{ t('keys.budgetReset.resetScope') }}
         </legend>
         <ZSegmented v-model="period" class="w-full" :aria-label="t('keys.budgetReset.resetScope')" :options="periods" :disabled="loading" />
       </fieldset>
 
-      <div v-if="apiKey" class="rounded-z bg-z-fill-quaternary p-3.5" aria-live="polite" aria-atomic="true">
+      <div v-if="apiKey && mode === 'reset'" class="rounded-z bg-z-fill-quaternary p-3.5" aria-live="polite" aria-atomic="true">
         <div class="mb-3 grid grid-cols-[3.5rem_minmax(0,1fr)_1rem_4.5rem] items-center gap-2 text-z-xs text-z-text-quaternary">
           <span class="col-span-2 text-right">{{ t('keys.budgetReset.currentlyUsed') }}</span>
           <span class="col-start-4 text-right">{{ t('keys.budgetReset.afterReset') }}</span>
@@ -116,7 +142,10 @@ async function resetBudget() {
       <ZButton :disabled="loading" @click="open = false">
         {{ t('common.actions.cancel') }}
       </ZButton>
-      <ZButton type="primary" :loading="loading" :disabled="!apiKey" @click="resetBudget">
+      <ZButton v-if="mode === 'align'" type="primary" :loading="aligning" :disabled="!alignment?.canSubmit" @click="alignment?.submit()">
+        {{ t('keys.alignment.confirm') }}
+      </ZButton>
+      <ZButton v-else type="primary" :loading="resetting" :disabled="!apiKey" @click="resetBudget">
         {{ t('keys.budgetReset.confirmReset') }}
       </ZButton>
     </template>

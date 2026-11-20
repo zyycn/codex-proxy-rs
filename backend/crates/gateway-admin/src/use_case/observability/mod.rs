@@ -60,6 +60,19 @@ pub trait ObservabilityService: Send + Sync {
     -> Result<Trend, AdminError>;
     async fn usage_records(&self, query: UsageQuery) -> Result<UsagePage, AdminError>;
     async fn usage_record_detail(&self, request_id: &str) -> Result<UsageDetail, AdminError>;
+    async fn client_key_statistics(
+        &self,
+        range: TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+        query: crate::model::observability::KeyUsageMetric,
+    ) -> Result<crate::model::observability::KeyStatisticsOverview, AdminError>;
+
+    async fn client_key_models(
+        &self,
+        range: TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> Result<Vec<crate::model::observability::KeyModelRow>, AdminError>;
+
     async fn usage_summary(
         &self,
         range: TimeRange,
@@ -285,6 +298,29 @@ impl ObservabilityService for DefaultObservabilityService {
             .map_err(|error| map_store_error(error, "usage record"))?;
         self.enrich_detail_billing(std::slice::from_mut(&mut detail.request));
         Ok(detail)
+    }
+
+    async fn client_key_statistics(
+        &self,
+        range: TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+        query: crate::model::observability::KeyUsageMetric,
+    ) -> Result<crate::model::observability::KeyStatisticsOverview, AdminError> {
+        self.store
+            .client_key_statistics(range, id, query)
+            .await
+            .map_err(|error| map_store_error(error, "client key statistics"))
+    }
+
+    async fn client_key_models(
+        &self,
+        range: TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> Result<Vec<crate::model::observability::KeyModelRow>, AdminError> {
+        self.store
+            .client_key_models(range, id)
+            .await
+            .map_err(|error| map_store_error(error, "client key statistics"))
     }
 
     async fn usage_summary(

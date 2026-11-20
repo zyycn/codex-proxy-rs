@@ -648,6 +648,56 @@ pub struct AttemptMetrics {
     pub costs: Vec<CurrencyCost>,
 }
 
+/// 管理员按当前指标排列模型与趋势，值只来自固定的聚合列
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyUsageMetric {
+    #[default]
+    CostUsd,
+    Tokens,
+    Requests,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyUsageTotals {
+    pub requests: u64,
+    pub tokens: Option<u64>,
+    pub cost_usd: Option<String>,
+    pub has_missing_cost: bool,
+    pub has_estimated_cost: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyModelRow {
+    pub model: String,
+    pub totals: KeyUsageTotals,
+    pub peak_requests: u64,
+    pub active_days: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyTrendPoint {
+    pub date: chrono::NaiveDate,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyTrendSeries {
+    /// 空字符串表示未记录模型，None 表示合并的其他模型
+    pub model: Option<String>,
+    pub points: Vec<KeyTrendPoint>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct KeyStatisticsOverview {
+    pub totals: KeyUsageTotals,
+    pub series: Vec<KeyTrendSeries>,
+    #[serde(rename = "modelCount")]
+    pub model_count: u64,
+}
+
 /// 时间序列粒度
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Granularity {

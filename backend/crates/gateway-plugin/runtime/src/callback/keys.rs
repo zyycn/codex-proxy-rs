@@ -86,6 +86,7 @@ impl PluginClientKeys {
                     .window
                     .map(|window| {
                         Ok(ExplicitClientKeyBudgetWindow {
+                            resume_calendar: false,
                             starts_at: chrono::DateTime::from_timestamp_micros(window.starts_at_us)
                                 .ok_or_else(invalid)?,
                             ends_at: chrono::DateTime::from_timestamp_micros(window.ends_at_us)

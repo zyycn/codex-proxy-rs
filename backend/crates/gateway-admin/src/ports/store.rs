@@ -22,9 +22,9 @@ use crate::model::{
     },
     auth::{AdminAuditEvent, AuthSession},
     client_keys::{
-        BatchUpdateClientKeys, ClientKeyBudgetMutationOrigin, ClientKeyBudgetWindow,
-        ClientKeyBudgetWindowPeriod, ClientKeyListQuery, ClientKeyPage, ClientKeyRecord,
-        ClientKeySecret, DeleteClientKey, NewClientKey, ResetClientKeyBudget,
+        BatchUpdateClientKeys, BudgetReferenceAccountPage, ClientKeyBudgetMutationOrigin,
+        ClientKeyBudgetWindow, ClientKeyBudgetWindowPeriod, ClientKeyListQuery, ClientKeyPage,
+        ClientKeyRecord, ClientKeySecret, DeleteClientKey, NewClientKey, ResetClientKeyBudget,
         SetClientKeyBudgetWindow, SetClientKeyEnabled, UpdateClientKey,
         UpdateClientKeyBudgetLimits,
     },
@@ -385,6 +385,18 @@ pub trait AuthStore: Send + Sync {
 /// Client API Key 资料读取与管理写入
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
+    async fn client_key_budget(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_core::engine::budget::ClientBudgetStatus>>;
+
+    async fn budget_reference_accounts(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+        search: &str,
+        after: &str,
+    ) -> AdminStoreResult<BudgetReferenceAccountPage>;
+
     async fn client_key_budget_window(
         &self,
         id: &gateway_core::policy::ClientApiKeyId,
@@ -532,6 +544,19 @@ pub trait ObservabilityStore: Send + Sync {
         range: TimeRange,
         granularity: Granularity,
     ) -> AdminStoreResult<Vec<RequestMetricPoint>>;
+
+    async fn client_key_statistics(
+        &self,
+        range: TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+        query: crate::model::observability::KeyUsageMetric,
+    ) -> AdminStoreResult<crate::model::observability::KeyStatisticsOverview>;
+
+    async fn client_key_models(
+        &self,
+        range: TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Vec<crate::model::observability::KeyModelRow>>;
 
     async fn usage_trend(
         &self,
