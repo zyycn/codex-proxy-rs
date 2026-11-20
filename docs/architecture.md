@@ -698,7 +698,7 @@ Continuation 受原请求的 Client Key、账号范围、Provider 和发送/交�
 
 - native continuation 固定创建它的 Provider 与账号
 - OpenAI Provider 在发送前按上游握手声明的消息大小上限检查最终出站帧，新链可选择 HTTP；超限的 connection-local
-  续接和 HTTP `store=false` 后不可原生续写的 WS 增量返回 `ClientReplayRequired`，由客户端重发
+  续接和已标记为需要重放的 HTTP／WS 增量返回 `ClientReplayRequired`，由客户端重发
   完整历史。预检拒绝先释放连接及租约，不消耗 WS 故障预算；Provider session state 只携带元数据，不保存 transcript
 - OpenAI 在有效输出交付前收到可安全重放的明确额度拒绝时，先隔离账号，再投影 `ClientReplayRequired`；
   丢弃未交付的原错误帧，由客户端提交完整历史开启新链，不把原增量输入交给其他账号。

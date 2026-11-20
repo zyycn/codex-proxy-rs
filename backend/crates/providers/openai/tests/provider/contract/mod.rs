@@ -5687,30 +5687,39 @@ async fn oversized_websocket_http_response_continues_with_client_tool_history_re
         ),
         ("store".to_owned(), json!(false)),
     ]);
-    let error = Arc::clone(&provider)
-        .execute(
-            planned_request("openai", ws_operation(delta, "ws_first", Some(state))),
-            pinned_continuation_context(
-                "req_large_ws_delta",
-                "acct_provider_contract",
-                "resp_large_ws_http",
-                "resp_large_ws_http",
-                1,
-                ContinuationAttempt::Native,
-            ),
-        )
-        .await
-        .err()
-        .expect("HTTP store=false delta requires client replay");
-    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
-    assert_eq!(
-        error.client_visible_upstream_error().unwrap().code(),
-        Some("previous_response_not_found")
-    );
-    assert_eq!(
-        error.continuation_recovery_disposition(),
-        Some(ContinuationRecoveryDisposition::ClientReplayRequired)
-    );
+    let http_delta = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", delta.clone()).unwrap(),
+    )
+    .with_provider_session_state(state.clone());
+    for operation in [
+        ws_operation(delta, "ws_first", Some(state)),
+        Operation::Generate(http_delta),
+    ] {
+        let error = Arc::clone(&provider)
+            .execute(
+                planned_request("openai", operation),
+                pinned_continuation_context(
+                    "req_large_ws_delta",
+                    "acct_provider_contract",
+                    "resp_large_ws_http",
+                    "resp_large_ws_http",
+                    1,
+                    ContinuationAttempt::Native,
+                ),
+            )
+            .await
+            .err()
+            .expect("HTTP store=false delta requires client replay");
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert_eq!(
+            error.client_visible_upstream_error().unwrap().code(),
+            Some("previous_response_not_found")
+        );
+        assert_eq!(
+            error.continuation_recovery_disposition(),
+            Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+        );
+    }
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 
     let input = body.get_mut("input").unwrap().as_array_mut().unwrap();
