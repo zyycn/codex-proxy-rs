@@ -14,15 +14,16 @@ import { errorMessage } from '@/utils/operation'
 import ClientProfilePresetFields from './ClientProfilePresetFields.vue'
 import ClientProfilePreviewPanel from './ClientProfilePreviewPanel.vue'
 
-const props = withDefaults(defineProps<{ active?: boolean, disabled?: boolean, allowInherit?: boolean }>(), {
+const props = withDefaults(defineProps<{ active?: boolean, disabled?: boolean, allowInherit?: boolean, allowPreserve?: boolean }>(), {
   active: true,
   disabled: false,
   allowInherit: false,
+  allowPreserve: false,
 })
 
 const { t } = useI18n({ useScope: 'global' })
 
-const model = defineModel<ClientProfileSelection | null>({ required: true })
+const model = defineModel<ClientProfileSelection | null | undefined>({ required: true })
 const options = shallowRef<ClientProfileOptions>()
 const preview = shallowRef<ClientProfilePreview>()
 const loading = shallowRef(true)
@@ -40,10 +41,16 @@ const needsInput = computed(() => effective.value?.mode === 'custom'
   : preset.value?.versionMode === 'fixed'
     && (!preset.value.codexVersion || (preset.value.client === 'desktop' && (!preset.value.desktopVersion || !preset.value.desktopBuild))))
 const profileSource = computed({
-  get: () => model.value === null
-    ? 'global'
-    : 'independent',
+  get: () => model.value === undefined
+    ? 'keep'
+    : model.value === null
+      ? 'global'
+      : 'independent',
   set: (value: string) => {
+    if (value === 'keep') {
+      model.value = undefined
+      return
+    }
     if (value === 'global') {
       if (model.value)
         independentDraft.value = { ...model.value }
@@ -74,7 +81,7 @@ watch([
   model,
   () => props.active,
 ], ([configuration, active], _, onCleanup) => {
-  if (!active)
+  if (!active || configuration === undefined)
     return
   let cancelled = false
   preview.value = undefined
@@ -117,6 +124,7 @@ onMounted(() => load())
         :aria-label="t('settings.clientProfile.clientIdentitySource')"
         class="shrink-0"
         :options="[
+          ...(allowPreserve ? [{ label: t('accounts.modelAccess.reserve'), value: 'keep' }] : []),
           { label: t('settings.clientProfile.globalConfiguration'), value: 'global' },
           { label: t('settings.clientProfile.customConfiguration'), value: 'independent' },
         ]"
@@ -125,7 +133,7 @@ onMounted(() => load())
       <slot name="source-extra" />
     </div>
     <ClientProfilePresetFields
-      v-if="!loadError && !inherited"
+      v-if="model !== undefined && !loadError && !inherited"
       :model-value="effective ?? null"
       :presets="options?.presets ?? []"
       :preview="preview"
@@ -136,7 +144,7 @@ onMounted(() => load())
       @update:model-value="model = $event"
     />
     <ClientProfilePreviewPanel
-      v-if="!loadError && (inherited || !custom)"
+      v-if="model !== undefined && !loadError && (inherited || !custom)"
       :preview="preview"
       :previewing="previewing"
       :needs-version-input="!!needsInput"

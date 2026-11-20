@@ -8,9 +8,9 @@ defineProps<{
 
 <template>
   <div class="grid min-w-0 gap-1">
-    <span class="truncate text-z text-z-text" :title="apiKey.name">
+    <strong class="truncate text-z text-z-text" :title="apiKey.name">
       {{ apiKey.name }}
-    </span>
+    </strong>
     <span v-if="apiKey.label" class="truncate text-z-xs font-emphasis text-z-text-quaternary" :title="apiKey.label">
       {{ apiKey.label }}
     </span>

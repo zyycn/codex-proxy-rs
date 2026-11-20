@@ -53,13 +53,7 @@ pub(super) fn account_models_data(
         models: result
             .models
             .into_iter()
-            .map(|model| {
-                let id = model.id.to_string();
-                AccountModelView {
-                    label: id.clone(),
-                    id,
-                }
-            })
+            .map(|model| AccountModelView::from(model.id))
             .collect(),
         observed_at: observed_at.map(|value| time.rfc3339(&value)),
         observed_at_display: observed_at

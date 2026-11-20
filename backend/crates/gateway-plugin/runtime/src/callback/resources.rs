@@ -74,6 +74,8 @@ impl PluginResources {
                         request.resource_key,
                         CreateAccountGroup {
                             allow_image_generation: true,
+                            allow_subagents: true,
+                            model_access: Default::default(),
                             fast_mode: gateway_core::account::FastMode::Default,
                             name: request.name,
                             description: request.description,

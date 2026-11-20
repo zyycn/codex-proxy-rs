@@ -348,3 +348,38 @@ fn request_observation_classifies_prewarm_from_generate() {
         assert_eq!(observation.subagent_kind.as_deref(), Some("worker"));
     }
 }
+
+#[test]
+fn only_collaboration_children_match_subagent_policy() {
+    use gateway_protocol::openai::codex::collaboration_subagent_requested;
+
+    let context = object(json!({}));
+    for (kind, expected) in [
+        ("thread_spawn", true),
+        ("collab_spawn", true),
+        ("review", false),
+        ("compact", false),
+        ("guardian", false),
+        ("future", false),
+    ] {
+        let body = object(json!({"input": [{"type":"function_call", "name":"spawn_agent"}]}));
+        assert!(!collaboration_subagent_requested(&body, &context, |_| None));
+        let metadata = json!({"subagent_kind": kind}).to_string();
+        assert_eq!(
+            collaboration_subagent_requested(&body, &context, |name| (name
+                == "x-codex-turn-metadata")
+                .then_some(metadata.as_str())),
+            expected
+        );
+        assert_eq!(
+            collaboration_subagent_requested(&body, &context, |name| (name == "x-openai-subagent")
+                .then_some(kind)),
+            expected
+        );
+        let body = object(json!({"client_metadata": {"x-openai-subagent": kind}}));
+        assert_eq!(
+            collaboration_subagent_requested(&body, &context, |_| None),
+            expected
+        );
+    }
+}

@@ -64,6 +64,8 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
         .create_account_group(
             NewAccountGroup {
                 allow_image_generation: true,
+                allow_subagents: true,
+                model_access: Default::default(),
                 fast_mode: FastMode::Default,
                 id: mixed_group.clone(),
                 name: "Mixed Production".to_owned(),
@@ -78,6 +80,8 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
         .create_account_group(
             NewAccountGroup {
                 allow_image_generation: true,
+                allow_subagents: true,
+                model_access: Default::default(),
                 fast_mode: FastMode::Default,
                 id: empty_group.clone(),
                 name: "Empty Pool".to_owned(),
@@ -381,6 +385,8 @@ async fn group_costs_should_include_statusless_websocket_but_reject_statusless_h
         .create_account_group(
             NewAccountGroup {
                 allow_image_generation: true,
+                allow_subagents: true,
+                model_access: Default::default(),
                 fast_mode: FastMode::Default,
                 id: group_id(EMPTY_GROUP),
                 name: "Statusless Costs".to_owned(),
@@ -581,6 +587,8 @@ async fn fast_mode_group_updates_preserve_omitted_values_and_publish_snapshot_fa
         .create_account_group(
             NewAccountGroup {
                 allow_image_generation: true,
+                allow_subagents: true,
+                model_access: Default::default(),
                 id: id.clone(),
                 name: "Fast policy".to_owned(),
                 description: None,
@@ -593,6 +601,8 @@ async fn fast_mode_group_updates_preserve_omitted_values_and_publish_snapshot_fa
         .unwrap();
     for (value, expected) in [
         (None, FastMode::Disabled),
+        (Some(FastMode::Ultrafast), FastMode::Ultrafast),
+        (None, FastMode::Ultrafast),
         (Some(FastMode::Enabled), FastMode::Enabled),
         (None, FastMode::Enabled),
         (Some(FastMode::Default), FastMode::Default),
@@ -602,6 +612,8 @@ async fn fast_mode_group_updates_preserve_omitted_values_and_publish_snapshot_fa
             .update_account_group(
                 UpdateAccountGroup {
                     allow_image_generation: None,
+                    allow_subagents: None,
+                    model_access: None,
                     id: id.clone(),
                     name: "Renamed policy".to_owned(),
                     description: None,
@@ -655,6 +667,8 @@ async fn group_costs_follow_current_members_and_pending_source_replacements() {
             .create_account_group(
                 NewAccountGroup {
                     allow_image_generation: true,
+                    allow_subagents: true,
+                    model_access: Default::default(),
                     fast_mode: FastMode::Default,
                     id: group_id(id),
                     name: id.to_owned(),
@@ -751,7 +765,7 @@ async fn load_retained_group_costs(groups: &PgAccountGroupRepository) -> BTreeMa
         .collect()
 }
 #[tokio::test]
-async fn image_generation_group_updates_preserve_omitted_values_and_publish_snapshot_facts() {
+async fn group_policies_preserve_omitted_values_and_publish_snapshot_facts() {
     use gateway_admin::model::account_groups::UpdateAccountGroup;
     use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
     let Some(database) = TestDatabase::create("image_generation_group").await else {
@@ -763,10 +777,17 @@ async fn image_generation_group_updates_preserve_omitted_values_and_publish_snap
             .unwrap(),
     );
     let id = group_id(MIXED_GROUP);
+    let denylist = gateway_core::account::AccountModelAccess::new(
+        gateway_core::account::AccountModelAccessMode::Denylist,
+        vec!["model-a".to_owned()],
+    )
+    .unwrap();
     repository
         .create_account_group(
             NewAccountGroup {
                 allow_image_generation: false,
+                allow_subagents: false,
+                model_access: denylist.clone(),
                 id: id.clone(),
                 name: "Fast policy".to_owned(),
                 description: None,
@@ -787,6 +808,14 @@ async fn image_generation_group_updates_preserve_omitted_values_and_publish_snap
             .update_account_group(
                 UpdateAccountGroup {
                     allow_image_generation: value,
+                    allow_subagents: value,
+                    model_access: value.map(|allowed| {
+                        if allowed {
+                            Default::default()
+                        } else {
+                            denylist.clone()
+                        }
+                    }),
                     id: id.clone(),
                     name: "Renamed policy".to_owned(),
                     description: None,
@@ -797,7 +826,15 @@ async fn image_generation_group_updates_preserve_omitted_values_and_publish_snap
             )
             .await
             .unwrap();
-        assert_eq!(mutation.record.unwrap().allow_image_generation, expected);
+        let record = mutation.record.unwrap();
+        assert_eq!(record.allow_image_generation, expected);
+        assert_eq!(record.allow_subagents, expected);
+        let expected_models = if expected {
+            Default::default()
+        } else {
+            denylist.clone()
+        };
+        assert_eq!(record.model_access, expected_models);
         let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
             .load_runtime_snapshot()
             .await
@@ -806,34 +843,35 @@ async fn image_generation_group_updates_preserve_omitted_values_and_publish_snap
             snapshot.config_revision.get(),
             mutation.config_revision.get()
         );
-        assert_eq!(
-            snapshot
-                .account_groups
-                .iter()
-                .find(|group| group.id == id)
-                .unwrap()
-                .allow_image_generation,
-            expected
-        );
+        let group = snapshot
+            .account_groups
+            .iter()
+            .find(|group| group.id == id)
+            .unwrap();
+        assert_eq!(group.allow_image_generation, expected);
+        assert_eq!(group.allow_subagents, expected);
+        assert_eq!(group.model_access, expected_models);
     }
     database.close().await;
 }
 
 #[tokio::test]
-async fn image_generation_defaults_to_allowed_for_new_groups() {
+async fn group_policy_defaults_apply_to_groups_created_without_explicit_policies() {
     let Some(database) = TestDatabase::create("group_image_default").await else {
         return;
     };
     sqlx::query("insert into account_groups (id, name, color, created_at, updated_at) values ($1, $1, '#2563EBFF', now(), now())")
         .bind(EMPTY_GROUP).execute(&database.pool).await.unwrap();
-    let allowed = sqlx::query_scalar::<_, bool>(
-        "select allow_image_generation from account_groups where id = $1",
+    let (images, subagents, models) = sqlx::query_as::<_, (bool, bool, sqlx::types::Json<gateway_core::account::AccountModelAccess>)>(
+        "select allow_image_generation, allow_subagents, model_access_json from account_groups where id = $1",
     )
     .bind(EMPTY_GROUP)
     .fetch_one(&database.pool)
     .await
     .unwrap();
-    assert!(allowed);
+    assert!(images);
+    assert!(subagents);
+    assert_eq!(models.0, gateway_core::account::AccountModelAccess::all());
     database.close().await;
 }
 
@@ -876,6 +914,8 @@ async fn committed_group_mutations_succeed_when_the_usage_query_budget_is_exhaus
                 color: AccountGroupColor::parse("#2563EBFF").unwrap(),
                 fast_mode: FastMode::Default,
                 allow_image_generation: true,
+                allow_subagents: true,
+                model_access: Default::default(),
             },
             &context("projection-create"),
         )
@@ -891,6 +931,8 @@ async fn committed_group_mutations_succeed_when_the_usage_query_budget_is_exhaus
                 color: AccountGroupColor::parse("#2563EBFF").unwrap(),
                 fast_mode: None,
                 allow_image_generation: None,
+                allow_subagents: None,
+                model_access: None,
             },
             &context("projection-update"),
         )

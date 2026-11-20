@@ -9,8 +9,8 @@ use std::{
 use async_trait::async_trait;
 use gateway_core::{
     account::{AccountStatus, resolve_account_status},
-    routing::AccountGroupId,
-    runtime::SnapshotControl,
+    routing::{AccountGroupId, UpstreamModelId},
+    runtime::{RuntimeSnapshotHandle, SnapshotControl},
 };
 use uuid::Uuid;
 
@@ -32,6 +32,7 @@ use super::{map_store_error, publish_committed};
 /// 面向 API 的账号分组管理服务
 #[async_trait]
 pub trait AccountGroupService: Send + Sync {
+    fn models(&self, group: &AccountGroupId) -> Result<Vec<UpstreamModelId>, AdminError>;
     async fn list(&self, query: AccountGroupListQuery) -> Result<AccountGroupPage, AdminError>;
     async fn list_options(
         &self,
@@ -64,6 +65,7 @@ pub(crate) struct DefaultAccountGroupService {
     store: Arc<dyn AccountGroupStore>,
     runtime: Arc<dyn AccountRuntimeStore>,
     snapshot: Arc<dyn SnapshotControl>,
+    published_snapshot: RuntimeSnapshotHandle,
 }
 
 impl DefaultAccountGroupService {
@@ -73,12 +75,14 @@ impl DefaultAccountGroupService {
         store: Arc<dyn AccountGroupStore>,
         runtime: Arc<dyn AccountRuntimeStore>,
         snapshot: Arc<dyn SnapshotControl>,
+        published_snapshot: RuntimeSnapshotHandle,
     ) -> Self {
         Self {
             upstream_info,
             store,
             runtime,
             snapshot,
+            published_snapshot,
         }
     }
 
@@ -131,6 +135,14 @@ impl DefaultAccountGroupService {
 
 #[async_trait]
 impl AccountGroupService for DefaultAccountGroupService {
+    fn models(&self, group: &AccountGroupId) -> Result<Vec<UpstreamModelId>, AdminError> {
+        let snapshot = self
+            .published_snapshot
+            .acquire()
+            .map_err(|_| AdminError::unavailable("模型目录尚未就绪"))?;
+        Ok(snapshot.upstream_models_for_group(group))
+    }
+
     async fn list(&self, query: AccountGroupListQuery) -> Result<AccountGroupPage, AdminError> {
         let mut page = self
             .store
@@ -167,6 +179,8 @@ impl AccountGroupService for DefaultAccountGroupService {
                 .create_account_group(
                     NewAccountGroup {
                         allow_image_generation: command.allow_image_generation,
+                        allow_subagents: command.allow_subagents,
+                        model_access: command.model_access,
                         id,
                         name: command.name,
                         description: command.description,

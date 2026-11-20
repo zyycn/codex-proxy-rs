@@ -110,6 +110,14 @@
         "confirm": "Allow access",
         "description": "After saving, this includes ungrouped and future accounts"
       }
+    },
+    "batch": {
+      "edit": "Bulk edit",
+      "updated": "Updated {count} API keys",
+      "description": "{count} key selected | {count} keys selected",
+      "partiallyEnabled": "Some keys are enabled",
+      "mixed": "Multiple values",
+      "clearLimit": "Set unlimited"
     }
   }
 }

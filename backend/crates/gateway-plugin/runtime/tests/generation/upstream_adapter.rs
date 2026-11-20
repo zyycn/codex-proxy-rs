@@ -382,9 +382,14 @@ async fn account_scoped_adapters_share_a_model_without_sharing_their_targets() {
 }
 
 #[tokio::test]
-async fn adapter_preserves_three_state_fast_in_request_metadata() {
+async fn adapter_preserves_group_fast_mode_in_request_metadata() {
     use gateway_core::account::FastMode;
-    for mode in [FastMode::Default, FastMode::Enabled, FastMode::Disabled] {
+    for mode in [
+        FastMode::Default,
+        FastMode::Enabled,
+        FastMode::Ultrafast,
+        FastMode::Disabled,
+    ] {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/adapter/responses"))

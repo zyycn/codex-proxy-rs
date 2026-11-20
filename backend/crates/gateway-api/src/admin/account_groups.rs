@@ -21,12 +21,15 @@ use gateway_admin::model::{
         UpdateAccountGroup,
     },
 };
-use gateway_core::{account::FastMode, routing::AccountGroupId};
+use gateway_core::{
+    account::{AccountModelAccess, FastMode},
+    routing::AccountGroupId,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, PageMeta,
-    WireValidationError, wire::map_admin_service_error,
+    WireValidationError, accounts::AccountModelView, wire::map_admin_service_error,
 };
 
 /// 账号、代理与 Client Key 共用的分组引用
@@ -90,15 +93,19 @@ impl ListAccountGroupsQuery {
     }
 }
 
-const fn default_allow_image_generation() -> bool {
+const fn default_allowed() -> bool {
     true
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateAccountGroupRequest {
-    #[serde(default = "default_allow_image_generation")]
+    #[serde(default = "default_allowed")]
     allow_image_generation: bool,
+    #[serde(default = "default_allowed")]
+    allow_subagents: bool,
+    #[serde(default)]
+    model_access: AccountModelAccess,
     #[serde(default)]
     fast_mode: FastMode,
     name: String,
@@ -110,6 +117,8 @@ struct CreateAccountGroupRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateAccountGroupRequest {
     allow_image_generation: Option<bool>,
+    allow_subagents: Option<bool>,
+    model_access: Option<AccountModelAccess>,
     fast_mode: Option<FastMode>,
     id: String,
     name: String,
@@ -127,6 +136,8 @@ struct AccountGroupIdRequest {
 #[serde(rename_all = "camelCase")]
 struct AccountGroupView {
     allow_image_generation: bool,
+    allow_subagents: bool,
+    model_access: AccountModelAccess,
     fast_mode: FastMode,
     id: String,
     name: String,
@@ -175,6 +186,8 @@ impl From<(AccountGroupRecord, crate::time::TimePresenter)> for AccountGroupView
             description: record.description,
             fast_mode: record.fast_mode,
             allow_image_generation: record.allow_image_generation,
+            allow_subagents: record.allow_subagents,
+            model_access: record.model_access,
             color: record.color.as_str().to_owned(),
             enabled: record.enabled,
             member_count: record.member_count,
@@ -304,6 +317,7 @@ where
 {
     Router::new()
         .route("/api/admin/account-groups", get(list::<S>))
+        .route("/api/admin/account-groups/models", get(models::<S>))
         .route("/api/admin/account-groups/options", get(list_options::<S>))
         .route("/api/admin/account-groups/create", post(create::<S>))
         .route("/api/admin/account-groups/update", post(update::<S>))
@@ -329,6 +343,32 @@ where
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(AccountGroupOptionsPageData::from(result)),
+    ))
+}
+
+#[derive(Serialize)]
+struct AccountGroupModelsData {
+    models: Vec<AccountModelView>,
+}
+
+async fn models<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<AccountGroupIdRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let models = state
+        .admin_services()
+        .account_groups()
+        .models(&group_id(query.id)?)
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountGroupModelsData {
+            models: models.into_iter().map(AccountModelView::from).collect(),
+        }),
     ))
 }
 
@@ -371,6 +411,8 @@ where
                 &auth.context().mutation_context(),
                 CreateAccountGroup {
                     allow_image_generation: request.allow_image_generation,
+                    allow_subagents: request.allow_subagents,
+                    model_access: request.model_access,
                     name: request.name,
                     description: request.description,
                     fast_mode: request.fast_mode,
@@ -400,6 +442,8 @@ where
                 &auth.context().mutation_context(),
                 UpdateAccountGroup {
                     allow_image_generation: request.allow_image_generation,
+                    allow_subagents: request.allow_subagents,
+                    model_access: request.model_access,
                     id: group_id(request.id)?,
                     name: request.name,
                     description: request.description,

@@ -1,4 +1,4 @@
-//! 真实 HTTP / WebSocket 路由与 Core 执行入口共同拒绝生图，不触发准入或上游
+//! 真实 HTTP / WebSocket 路由与 Core 执行入口共同执行分组功能授权，不触发准入或上游
 
 use super::*;
 use axum::{
@@ -11,13 +11,14 @@ use std::{sync::Arc, time::Duration};
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 use tower::ServiceExt;
 
-fn execution() -> Arc<DefaultExecutionService> {
+pub(super) fn execution() -> Arc<DefaultExecutionService> {
     Arc::new(DefaultExecutionService::new(
-        RuntimeSnapshotHandle::new(snapshot_with_image_policy(
-            "sk_image_policy",
+        RuntimeSnapshotHandle::new(snapshot_with_group_permissions(
+            "sk_group_permissions",
             "openai",
-            "key_image_policy",
+            "key_group_permissions",
             &["acct_api_test"],
+            false,
             false,
         )),
         Arc::new(UnusedExecutionStore),
@@ -54,7 +55,7 @@ async fn denied_image_requests_return_403_before_admission_or_upstream() {
             .clone()
             .oneshot(
                 Request::post(path)
-                    .header(AUTHORIZATION, "Bearer sk_image_policy")
+                    .header(AUTHORIZATION, "Bearer sk_group_permissions")
                     .header("content-type", "application/json")
                     .body(Body::from(body.to_string()))
                     .unwrap(),
@@ -71,7 +72,7 @@ async fn denied_image_requests_return_403_before_admission_or_upstream() {
 }
 
 #[tokio::test]
-async fn each_websocket_create_enforces_image_policy() {
+async fn each_websocket_create_enforces_group_permissions() {
     let app = api_router(execution()).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -81,18 +82,33 @@ async fn each_websocket_create_enforces_image_policy() {
     let mut request = format!("ws://{address}/v1/responses")
         .into_client_request()
         .unwrap();
-    request
-        .headers_mut()
-        .insert(AUTHORIZATION, "Bearer sk_image_policy".parse().unwrap());
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        "Bearer sk_group_permissions".parse().unwrap(),
+    );
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
-    for image_fields in [
-        json!({"tools":[{"type":"image_generation"}]}),
-        json!({"tool_choice":{"type":"image_generation"}}),
+    for (fields, code) in [
+        (
+            json!({"tools":[{"type":"image_generation"}]}),
+            "image_generation_disabled",
+        ),
+        (
+            json!({"client_metadata":{"x-codex-turn-metadata":r#"{"subagent_kind":"thread_spawn"}"#}}),
+            "subagents_disabled",
+        ),
+        (
+            json!({"tool_choice":{"type":"image_generation"}}),
+            "image_generation_disabled",
+        ),
+        (
+            json!({"client_metadata":{"x-openai-subagent":"collab_spawn"}}),
+            "subagents_disabled",
+        ),
     ] {
         let mut body = json!({"type":"response.create","model":"model-a","input":"test"});
         body.as_object_mut()
             .unwrap()
-            .extend(image_fields.as_object().unwrap().clone());
+            .extend(fields.as_object().unwrap().clone());
         socket
             .send(Message::Text(body.to_string().into()))
             .await
@@ -105,8 +121,38 @@ async fn each_websocket_create_enforces_image_policy() {
         let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
         assert_eq!(body["type"], "error", "{body}");
         assert_eq!(body["status"], 403);
-        assert_eq!(body["error"]["code"], "image_generation_disabled");
+        assert_eq!(body["error"]["code"], code);
     }
     socket.close(None).await.unwrap();
     server.abort();
+}
+
+#[tokio::test]
+async fn collaboration_requests_are_denied_before_admission_or_upstream() {
+    let app = api_router(execution()).await;
+    for (header, value) in [
+        ("x-openai-subagent", "collab_spawn"),
+        (
+            "x-codex-turn-metadata",
+            r#"{"subagent_kind":"thread_spawn"}"#,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/responses")
+                    .header(AUTHORIZATION, "Bearer sk_group_permissions")
+                    .header("content-type", "application/json")
+                    .header(header, value)
+                    .body(Body::from(r#"{"model":"model-a","input":"test"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["error"]["code"], "subagents_disabled");
+    }
 }

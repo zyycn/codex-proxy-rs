@@ -10,7 +10,7 @@ pub mod continuation;
 pub mod coordinator;
 pub mod execution;
 pub mod extensions;
-mod image_generation;
+mod group_permissions;
 pub mod middleware;
 pub mod nested;
 pub mod observation;
@@ -777,19 +777,15 @@ impl AttemptContext {
         terminal: provider::ProviderMiddlewareTerminal,
     ) -> Result<provider::ProviderStream, ProviderError> {
         // 入口已校验原请求，此处复查中间件最终提交的 operation，每次重试均生效
-        let terminal: provider::ProviderMiddlewareTerminal = if self
+        let terminal: provider::ProviderMiddlewareTerminal = if let Some(scope) = self
             .account_scope()
-            .is_some_and(|scope| !scope.allows_image_generation())
+            .filter(|scope| !scope.allows_image_generation() || !scope.allows_subagents())
         {
+            let scope = Arc::clone(scope);
             Box::new(move |operation, headers| {
                 Box::pin(async move {
-                    image_generation::check_image_generation(false, &operation).map_err(|_| {
-                        ProviderError::new(
-                            ProviderErrorKind::RequestPolicyDenied,
-                            UpstreamSendState::NotSent,
-                        )
-                        .with_retry_prohibited()
-                    })?;
+                    group_permissions::check_group_permissions(&scope, &operation, &headers)
+                        .map_err(ProviderError::group_feature_denied)?;
                     terminal(operation, headers).await
                 })
             })

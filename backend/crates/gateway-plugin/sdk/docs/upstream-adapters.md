@@ -41,7 +41,7 @@ Provider、业务协议和传输名称不能写入宿主兼容清单的 capabili
 `TypedCall<UpstreamAdapterRequest>` 包含只读的 Key、账号、凭据版本、模型、协议、Header 和宿主续接投影；
 原始请求正文位于 `call.payload`，原始账号凭据不进入插件输入。宿主首次消费冷流才调用插件
 
-`fast_mode` 是本次模型执行的有效设置，取值为 `default`、`enabled` 或 `disabled`。OpenAI 在 attempt 中间件之前将 Fast 设置应用到正文基线，
+`fast_mode` 是本次模型执行的有效设置，取值为 `default`、`enabled`、`ultrafast` 或 `disabled`。OpenAI 在 attempt 中间件之前将 Fast 设置应用到正文基线，
 适配器收到经过 attempt 中间件处理的正文；attempt 中间件显式改写档位后，宿主不会在发送前再次应用 Fast 策略。
 其他请求设置与 Key 作用域的覆盖规则见[模型请求与 attempt](capabilities.md#模型请求与-attempt)
 

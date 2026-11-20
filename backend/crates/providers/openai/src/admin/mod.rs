@@ -260,6 +260,20 @@ impl ProviderAdmin for OpenAiAdminProvider {
             .map_err(map_client_profile_error)
     }
 
+    fn merge_batch_key_profile(
+        &self,
+        current: Option<&gateway_core::account::OpaqueProviderData>,
+        update: Option<&Option<gateway_core::account::OpaqueProviderData>>,
+        installation_seed: Option<uuid::Uuid>,
+    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderAdminError> {
+        crate::transport::profile::identity::merge_batch_key_profile(
+            current,
+            update,
+            installation_seed,
+        )
+        .map_err(map_client_profile_error)
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.provider_kind
     }

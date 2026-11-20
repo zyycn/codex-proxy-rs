@@ -66,6 +66,8 @@ async fn peer_sharing_persists_across_reads_and_cannot_lose_its_group_scope() {
                 color: AccountGroupColor::parse("#2563EBFF").unwrap(),
                 fast_mode: FastMode::Default,
                 allow_image_generation: true,
+                allow_subagents: true,
+                model_access: Default::default(),
             },
             &context,
         )
@@ -136,6 +138,21 @@ async fn peer_sharing_persists_across_reads_and_cannot_lose_its_group_scope() {
             .len(),
         1
     );
+    let error = store
+        .batch_update_client_keys(
+            gateway_admin::model::client_keys::BatchUpdateClientKeys {
+                ids: vec![id.clone()],
+                group_ids: Some(vec![]),
+                enabled: Some(false),
+                ..Default::default()
+            },
+            Box::new(|_| Ok(())),
+            &context,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), AdminStoreErrorKind::Invalid);
+    assert!(store.get_client_key(&id).await.unwrap().unwrap().enabled);
     update.group_ids = vec![group];
     let (_, updated) = store
         .update_client_key(update.clone(), &context)
@@ -147,6 +164,209 @@ async fn peer_sharing_persists_across_reads_and_cannot_lose_its_group_scope() {
     let (_, updated) = store.update_client_key(update, &context).await.unwrap();
     assert!(!updated.peer_sharing.enabled);
     assert!(updated.groups.is_empty());
+    database.close().await;
+}
+
+#[tokio::test]
+async fn batch_key_changes_preserve_unselected_fields_and_roll_back_the_whole_selection() {
+    use gateway_admin::model::{
+        MutationActor, MutationContext,
+        client_keys::{BatchUpdateClientKeys, ClientPeerSharingPatch},
+    };
+    use gateway_admin::ports::store::AdminStoreErrorKind;
+    use gateway_core::routing::AccountGroupId;
+
+    let Some(database) = TestDatabase::create("batch_keys").await else {
+        return;
+    };
+    let store = PgAdminClientKeyStore::new(database.pool.clone());
+    let ids = ["key_batch_a", "key_batch_b"].map(|id| ClientApiKeyId::new(id).unwrap());
+    sqlx::query(
+        "insert into client_api_keys (id, name, key, max_concurrency, peer_sharing_json, created_at, updated_at)
+        select id, id, id, 7, jsonb_build_object('sharePool', id = $2), now(), now() from unnest($1::text[]) id",
+    )
+    .bind(ids.iter().map(|id| id.as_str()).collect::<Vec<_>>())
+    .bind(ids[0].as_str())
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let group = AccountGroupId::new(format!("grp_{}", "a".repeat(32))).unwrap();
+    sqlx::query("insert into account_groups (id, name, color, created_at, updated_at) values ($1,'Batch','#000000FF',now(),now())")
+        .bind(group.as_str()).execute(&database.pool).await.unwrap();
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "batch-keys".into(),
+    };
+    let mut command = BatchUpdateClientKeys {
+        ids: ids.to_vec(),
+        enabled: Some(false),
+        group_ids: Some(vec![group.clone()]),
+        peer_sharing: ClientPeerSharingPatch {
+            enabled: Some(true),
+            share_quota: Some(true),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let first_revision = store
+        .batch_update_client_keys(command.clone(), Box::new(|_| Ok(())), &context)
+        .await
+        .unwrap();
+    for id in &ids {
+        let record = store.get_client_key(id).await.unwrap().unwrap();
+        assert!(!record.enabled);
+        assert_eq!(record.groups[0].id, group);
+        assert_eq!(record.limits.max_concurrency, 7);
+        assert!(record.peer_sharing.enabled && record.peer_sharing.share_quota);
+        assert_eq!(record.peer_sharing.share_pool, *id == ids[0]);
+    }
+    command.enabled = Some(true);
+    command.group_ids = None;
+    command
+        .ids
+        .push(ClientApiKeyId::new("key_missing").unwrap());
+    assert_eq!(
+        store
+            .batch_update_client_keys(command.clone(), Box::new(|_| Ok(())), &context)
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminStoreErrorKind::NotFound
+    );
+    command.ids = ids.to_vec();
+    command.group_ids = Some(vec![
+        AccountGroupId::new(format!("grp_{}", "b".repeat(32))).unwrap(),
+    ]);
+    assert_eq!(
+        store
+            .batch_update_client_keys(command.clone(), Box::new(|_| Ok(())), &context)
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminStoreErrorKind::NotFound
+    );
+    for id in &ids {
+        let record = store.get_client_key(id).await.unwrap().unwrap();
+        assert!(!record.enabled);
+        assert_eq!(record.groups[0].id, group);
+    }
+    command.group_ids = None;
+    command.peer_sharing.share_plans = Some(true);
+    assert_eq!(
+        store
+            .batch_update_client_keys(command.clone(), Box::new(|_| Ok(())), &context)
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminStoreErrorKind::Invalid,
+    );
+    assert!(
+        !store
+            .get_client_key(&ids[0])
+            .await
+            .unwrap()
+            .unwrap()
+            .peer_sharing
+            .share_plans
+    );
+    command.peer_sharing.share_plans = None;
+    let second_revision = store
+        .batch_update_client_keys(command.clone(), Box::new(|_| Ok(())), &context)
+        .await
+        .unwrap();
+    assert_eq!(second_revision.get(), first_revision.get() + 1);
+    assert_eq!(
+        store
+            .get_client_key(&ids[0])
+            .await
+            .unwrap()
+            .unwrap()
+            .groups
+            .len(),
+        1
+    );
+    command.group_ids = Some(vec![]);
+    command.enabled = None;
+    command.peer_sharing.enabled = Some(false);
+    store
+        .batch_update_client_keys(command, Box::new(|_| Ok(())), &context)
+        .await
+        .unwrap();
+    for id in &ids {
+        let record = store.get_client_key(id).await.unwrap().unwrap();
+        assert!(record.enabled && record.groups.is_empty());
+        assert!(!record.peer_sharing.enabled);
+        assert!(record.peer_sharing.share_quota);
+    }
+    let audits: i64 = sqlx::query_scalar("select count(*) from admin_audit_events where action='batch_update' and entity_kind='client_api_key'")
+        .fetch_one(&database.pool).await.unwrap();
+    assert_eq!(audits, 3);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn batch_limits_and_profiles_keep_each_keys_budget_ledger_and_unselected_providers() {
+    use super::client_budgets::{charge, context, key_id, seed, status};
+    use gateway_admin::model::client_keys::BatchUpdateClientKeys;
+    use gateway_core::{
+        engine::budget::ClientBudgetPort as _, metering::Decimal, routing::ProviderKind,
+    };
+    use gateway_store::postgres::PgClientBudgetStore;
+
+    let Some(database) = TestDatabase::create("batch_key_limits_profiles").await else {
+        return;
+    };
+    let keys = ["key_bulk_a", "key_bulk_b"];
+    let budgets = PgClientBudgetStore::new(database.pool.clone());
+    let mut previous = Vec::new();
+    for (key, amount) in keys.into_iter().zip(["1", "2.5"]) {
+        seed(&database, key, "5", "20").await;
+        sqlx::query(
+            "update client_api_keys set requests_per_minute = 11,
+               provider_request_profiles_json = jsonb_build_object(
+                 'other', jsonb_build_object('version', $1::text), 'removed', '{}'::jsonb)
+             where id = $1",
+        )
+        .bind(key)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        budgets.settle(charge(key, key, amount)).await.unwrap();
+        previous.push(status(&database, key).await);
+    }
+    let store = PgAdminClientKeyStore::new(database.pool.clone());
+    let removed = ProviderKind::new("removed").unwrap();
+    let command = BatchUpdateClientKeys {
+        ids: keys.map(key_id).to_vec(),
+        daily_limit_usd: Some(Decimal::ZERO),
+        max_concurrency: Some(9),
+        requests_per_minute: Some(0),
+        request_profile_override_updates: BTreeMap::from([(removed.clone(), None)]),
+        ..Default::default()
+    };
+    let merge_profiles = Box::new(
+        move |profiles: &mut gateway_admin::model::client_keys::ProviderRequestProfileOverrides| {
+            assert!(profiles.remove(&removed).is_some());
+            Ok(())
+        },
+    );
+    store
+        .batch_update_client_keys(command, merge_profiles, &context())
+        .await
+        .unwrap();
+
+    for (key, mut expected) in keys.into_iter().zip(previous) {
+        let record = store.get_client_key(&key_id(key)).await.unwrap().unwrap();
+        expected.limits.daily_usd = Decimal::ZERO;
+        assert_eq!(record.budget, expected);
+        assert_eq!(record.name, key);
+        assert!(record.label.is_none());
+        assert_eq!(record.limits.max_concurrency, 9);
+        assert_eq!(record.limits.requests_per_minute, 0);
+        assert_eq!(record.request_profile_overrides.len(), 1);
+        let other = &record.request_profile_overrides[&ProviderKind::new("other").unwrap()];
+        assert_eq!(other.expose_to_provider()["version"], key);
+    }
     database.close().await;
 }
 

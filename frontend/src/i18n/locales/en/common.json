@@ -62,7 +62,8 @@
       "next": "Next",
       "confirm": "Confirm",
       "refresh": "Refresh",
-      "save": "Save"
+      "save": "Save",
+      "disable": "Disable"
     },
     "providers": {
       "all": "All platforms",

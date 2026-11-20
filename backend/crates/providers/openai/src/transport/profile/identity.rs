@@ -98,6 +98,50 @@ pub(crate) fn inherited_identity_fields(
     Ok(inherited)
 }
 
+/// 切换画像仅修改客户端选择，未指定的种子仍取自这一把 Key
+pub fn merge_batch_key_profile(
+    current: Option<&OpaqueProviderData>,
+    update: Option<&Option<OpaqueProviderData>>,
+    installation_seed: Option<uuid::Uuid>,
+) -> Result<Option<OpaqueProviderData>, ClientProfileError> {
+    if let Some(Some(profile)) = update {
+        let fields =
+            inherited_identity_fields(profile)?.unwrap_or_else(|| profile.expose_to_provider());
+        if fields.contains_key("installationSeed") {
+            return Err(ClientProfileError::Invalid);
+        }
+    }
+    let selection = update.map_or(current, Option::as_ref);
+    let seed = match installation_seed {
+        Some(seed) => Some(seed.to_string()),
+        None => current
+            .and_then(|profile| {
+                gateway_core::settings::request_profiles::inherited_fields(profile)
+                    .unwrap_or_else(|| profile.expose_to_provider())
+                    .get("installationSeed")
+            })
+            .and_then(Value::as_str)
+            .filter(|seed| !seed.is_empty())
+            .map(str::to_owned),
+    };
+    let Some(seed) = seed else {
+        return Ok(selection.cloned());
+    };
+    if let Some(selection) = selection
+        && inherited_identity_fields(selection)?.is_none()
+    {
+        let mut fields = selection.expose_to_provider().clone();
+        fields.insert("installationSeed".into(), Value::String(seed));
+        return Ok(Some(OpaqueProviderData::new(fields)));
+    }
+    let mut document = serde_json::Map::new();
+    document.insert(
+        "inherit".into(),
+        serde_json::json!({ "installationSeed": seed }),
+    );
+    Ok(Some(OpaqueProviderData::new(document)))
+}
+
 impl RequestProfileSelection {
     pub fn preset(&self) -> Option<&ClientProfileSelection> {
         match &self.selection {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { FastMode } from '@/api'
 import { ZCard, ZCheckbox, ZConfirmDialog, ZPageHeader, ZPagination, ZTable } from '@codex-proxy/ui'
 
 import { ImageOff, Zap, ZapOff } from '@lucide/vue'
@@ -12,6 +13,14 @@ import { useAccountGroups } from './composables/useAccountGroups'
 import { accountGroupColumns } from './constants'
 
 const { t } = useI18n({ useScope: 'global' })
+
+function fastModeLabel(mode: FastMode) {
+  if (mode === 'disabled')
+    return t('groups.page.fastModeIsOff')
+  return mode === 'ultrafast'
+    ? t('groups.editor.forceUltrafast')
+    : t('groups.editor.forceFast')
+}
 
 const {
   groups,
@@ -103,16 +112,17 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
                   </strong>
                   <span
                     v-if="row.fastMode !== 'default'"
-                    class="inline-flex size-4 shrink-0 items-center justify-center rounded-full"
-                    :class="row.fastMode === 'enabled'
+                    class="inline-flex h-4 shrink-0 items-center rounded-full px-0.5"
+                    :class="row.fastMode !== 'disabled'
                       ? 'bg-z-warning-container text-z-warning-on-container'
                       : 'bg-z-fill-tertiary text-z-text-tertiary'"
-                    :title="row.fastMode === 'enabled' ? t('groups.page.fastModeIsOn') : t('groups.page.fastModeIsOff')"
+                    :title="fastModeLabel(row.fastMode)"
                     role="img"
-                    :aria-label="row.fastMode === 'enabled' ? t('groups.page.fastModeIsOn') : t('groups.page.fastModeIsOff')"
+                    :aria-label="fastModeLabel(row.fastMode)"
                   >
-                    <Zap v-if="row.fastMode === 'enabled'" class="size-3" stroke-width="2.2" aria-hidden="true" />
+                    <Zap v-if="row.fastMode !== 'disabled'" class="size-3" stroke-width="2.2" aria-hidden="true" />
                     <ZapOff v-else class="size-3" stroke-width="2.2" aria-hidden="true" />
+                    <Zap v-if="row.fastMode === 'ultrafast'" class="size-3" stroke-width="2.2" aria-hidden="true" />
                   </span>
                   <span
                     v-if="!row.allowImageGeneration"

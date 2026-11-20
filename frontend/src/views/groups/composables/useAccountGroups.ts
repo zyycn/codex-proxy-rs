@@ -1,4 +1,4 @@
-import type { AccountGroup, ApiKey, FastMode } from '@/api'
+import type { AccountGroup, AccountModelAccess, ApiKey, FastMode } from '@/api'
 import { normalizeRgbaHexColor } from '@codex-proxy/ui'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import {
@@ -23,6 +23,8 @@ import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../constants'
 export interface AccountGroupFormValue {
   fastMode: FastMode
   allowImageGeneration: boolean
+  allowSubagents: boolean
+  modelAccess: AccountModelAccess
   name: string
   description: string
   color: string
@@ -124,6 +126,11 @@ export function useAccountGroups() {
       color: group.color,
       fastMode: group.fastMode,
       allowImageGeneration: group.allowImageGeneration,
+      allowSubagents: group.allowSubagents,
+      modelAccess: {
+        ...group.modelAccess,
+        models: [...group.modelAccess.models],
+      },
     }
     showFormModal.value = true
   }
@@ -138,28 +145,16 @@ export function useAccountGroups() {
 
     await savingAction.run(async () => {
       const updating = Boolean(editingGroup.value)
-      const description = form.value.description.trim() || null
-      const fastMode = form.value.fastMode
-      const allowImageGeneration = form.value.allowImageGeneration
-      if (editingGroup.value) {
-        await updateAccountGroup({
-          id: editingGroup.value.id,
-          name,
-          description,
-          color,
-          fastMode,
-          allowImageGeneration,
-        })
+      const payload = {
+        ...form.value,
+        name,
+        color,
+        description: form.value.description.trim() || null,
       }
-      else {
-        await createAccountGroup({
-          name,
-          description,
-          color,
-          fastMode,
-          allowImageGeneration,
-        })
-      }
+      if (editingGroup.value)
+        await updateAccountGroup({ ...payload, id: editingGroup.value.id })
+      else
+        await createAccountGroup(payload)
       showFormModal.value = false
       await Promise.all([
         query.execute(),
@@ -342,5 +337,7 @@ function emptyForm(): AccountGroupFormValue {
     color: DEFAULT_ACCOUNT_GROUP_COLOR,
     fastMode: 'default',
     allowImageGeneration: true,
+    allowSubagents: true,
+    modelAccess: { mode: 'all', models: [] },
   }
 }

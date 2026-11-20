@@ -1,6 +1,6 @@
 //! 下游 Client API Key 的准入策略
 //!
-//! Client API Key 冻结账号分组权限；模型名称不参与权限判断
+//! Client API Key 在请求开始时冻结分组成员范围及其模型策略
 
 mod client_version;
 mod peer_sharing;

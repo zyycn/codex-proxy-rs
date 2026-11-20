@@ -4153,6 +4153,10 @@ async fn provider_compiles_realtime_catalog_capabilities() {
         .expect("capabilities");
     assert_eq!(capabilities.len(), 1);
     assert_eq!(capabilities[0].upstream_model().as_str(), MODEL);
+    assert_eq!(
+        capabilities[0].catalog_accounts(),
+        Some(&BTreeSet::from([account_id("catalog-provider")]))
+    );
     assert!(
         capabilities[0]
             .capabilities()

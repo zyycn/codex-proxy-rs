@@ -3,7 +3,15 @@ import type { ApiKeyFormValue } from './useApiKeyEditor'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-export function useApiKeyFormRules(form: () => ApiKeyFormValue) {
+export const apiKeyLimitFields = [
+  'dailyLimitUsd',
+  'weeklyLimitUsd',
+  'maxConcurrency',
+  'requestsPerMinute',
+] as const
+export type ApiKeyLimitField = typeof apiKeyLimitFields[number]
+
+export function useApiKeyLimitRules() {
   const { t } = useI18n({ useScope: 'global' })
 
   function amountRule(label: string): FormRule {
@@ -28,6 +36,17 @@ export function useApiKeyFormRules(form: () => ApiKeyFormValue) {
     }
   }
 
+  return computed(() => ({
+    dailyLimitUsd: amountRule(t('keys.editor.dailyLimit')),
+    weeklyLimitUsd: amountRule(t('keys.editor.weeklyLimit')),
+    maxConcurrency: integerRule(t('keys.editor.maximumConcurrency')),
+    requestsPerMinute: integerRule(t('keys.editor.requestsPerMinute')),
+  }))
+}
+
+export function useApiKeyFormRules(form: () => ApiKeyFormValue) {
+  const { t } = useI18n({ useScope: 'global' })
+  const limitRules = useApiKeyLimitRules()
   return computed<FormRules<ApiKeyFormValue>>(() => ({
     groupIds: {
       type: 'array',
@@ -46,9 +65,6 @@ export function useApiKeyFormRules(form: () => ApiKeyFormValue) {
       pattern: /^[\x21-\x7E]+$/,
       message: t('keys.editor.invalidKey'),
     },
-    dailyLimitUsd: amountRule(t('keys.editor.dailyLimit')),
-    weeklyLimitUsd: amountRule(t('keys.editor.weeklyLimit')),
-    maxConcurrency: integerRule(t('keys.editor.maximumConcurrency')),
-    requestsPerMinute: integerRule(t('keys.editor.requestsPerMinute')),
+    ...limitRules.value,
   }))
 }

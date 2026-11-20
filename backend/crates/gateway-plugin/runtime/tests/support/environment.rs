@@ -188,6 +188,8 @@ impl Environment {
             .create_account_group(
                 NewAccountGroup {
                     allow_image_generation: true,
+                    allow_subagents: true,
+                    model_access: Default::default(),
                     fast_mode: FastMode::Default,
                     id: id.clone(),
                     name: format!("fixture {}", id.as_str()),

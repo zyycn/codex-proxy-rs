@@ -12,6 +12,74 @@ fn document(value: Value) -> OpaqueProviderData {
 }
 
 #[test]
+fn batch_identity_changes_keep_each_keys_seed_and_independent_selection() {
+    use provider_openai::transport::profile::identity::merge_batch_key_profile;
+
+    let preset = json!({"client": "cli", "platform":"linux", "versionMode":"latest"});
+    let custom = json!({"mode":"custom","userAgent":"codex-tui/0.156.1"});
+    let replacement = "d3228d4e-7c6f-4d77-a245-89baf5f3959c";
+    for seed in [
+        "5d774376-8481-43d1-8b0c-b739ef937b05",
+        "6da3531b-628d-4e9b-b8a8-5c582c7721bd",
+    ] {
+        let inherited = json!({"inherit":{"installationSeed":seed}});
+        let mut previous = custom.clone();
+        previous["installationSeed"] = json!(seed);
+        let mut expected = preset.clone();
+        expected["installationSeed"] = json!(seed);
+        for current in [&previous, &inherited] {
+            let current = document(current.clone());
+            assert_eq!(
+                merge_batch_key_profile(
+                    Some(&current),
+                    Some(&Some(document(preset.clone()))),
+                    None
+                )
+                .unwrap(),
+                Some(document(expected.clone()))
+            );
+            assert_eq!(
+                merge_batch_key_profile(Some(&current), Some(&None), None).unwrap(),
+                Some(document(inherited.clone()))
+            );
+        }
+        let next = merge_batch_key_profile(
+            Some(&document(previous)),
+            None,
+            Some(replacement.parse().unwrap()),
+        )
+        .unwrap()
+        .unwrap();
+        let mut expected = custom.clone();
+        expected["installationSeed"] = json!(replacement);
+        assert_eq!(next, document(expected));
+    }
+    assert_eq!(
+        merge_batch_key_profile(None, None, Some(replacement.parse().unwrap())).unwrap(),
+        Some(document(
+            json!({"inherit":{"installationSeed":replacement}})
+        ))
+    );
+    assert_eq!(
+        merge_batch_key_profile(Some(&document(preset)), Some(&None), None).unwrap(),
+        None
+    );
+    for embedded in [
+        json!({"installationSeed":replacement}),
+        json!({"inherit":{"installationSeed":replacement}}),
+    ] {
+        assert!(
+            merge_batch_key_profile(
+                None,
+                Some(&Some(document(embedded))),
+                Some(replacement.parse().unwrap())
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn complete_custom_identities_send_exact_user_agent_and_matching_companion_headers() {
     let state = CodexWireProfileState::new(CodexWireProfile {
         residency: Some("us".to_owned()),

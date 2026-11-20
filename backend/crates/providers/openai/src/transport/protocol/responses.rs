@@ -20,6 +20,29 @@ pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
     "Previous response was not found. Retrying the full request.";
 /// Codex 自动审批（Guardian）请求声明的子代理类型
 const GUARDIAN_SUBAGENT_KIND: &str = "guardian";
+/// 分组显式覆盖后的档位；强制加速仅使用所选账号对该模型的目录声明
+pub(crate) fn fast_policy_tier(
+    mode: FastMode,
+    current: Option<&str>,
+    advertises: impl Fn(&str) -> bool,
+) -> Option<&'static str> {
+    let target = match mode {
+        FastMode::Enabled if advertises("priority") => "priority",
+        FastMode::Ultrafast if advertises("ultrafast") => "ultrafast",
+        FastMode::Disabled
+            if current.is_some_and(|tier| {
+                ["priority", "fast", "ultrafast"]
+                    .iter()
+                    .any(|name| tier.trim().eq_ignore_ascii_case(name))
+            }) =>
+        {
+            "default"
+        }
+        _ => return None,
+    };
+    (current != Some(target)).then_some(target)
+}
+
 /// Codex Responses 上游请求体
 ///
 /// 发往上游的 Responses 请求
@@ -703,31 +726,6 @@ impl CodexResponsesRequest {
     /// service tier（透传原值）
     pub fn service_tier(&self) -> Option<&str> {
         self.body.get("service_tier").and_then(Value::as_str)
-    }
-
-    /// 只改写顶层档位；开启需要目录证据，其他显式档位保留客户端选择
-    pub(crate) fn apply_fast_policy(&mut self, mode: FastMode, supports_priority: bool) -> bool {
-        let tier = self.service_tier().map(str::trim);
-        let target = match mode {
-            FastMode::Disabled
-                if tier.is_some_and(|tier| {
-                    tier.eq_ignore_ascii_case("priority") || tier.eq_ignore_ascii_case("fast")
-                }) =>
-            {
-                "default"
-            }
-            FastMode::Enabled
-                if supports_priority
-                    && (matches!(self.body.get("service_tier"), None | Some(Value::Null))
-                        || tier.is_some_and(|tier| tier.eq_ignore_ascii_case("default"))) =>
-            {
-                "priority"
-            }
-            _ => return false,
-        };
-        self.body
-            .insert("service_tier".to_owned(), Value::String(target.to_owned()));
-        true
     }
 
     /// 前一个 response ID

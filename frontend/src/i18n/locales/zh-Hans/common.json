@@ -62,7 +62,8 @@
       "next": "下一步",
       "confirm": "确定",
       "refresh": "刷新",
-      "save": "保存"
+      "save": "保存",
+      "disable": "禁用"
     },
     "providers": {
       "all": "全部平台",

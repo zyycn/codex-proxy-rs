@@ -120,6 +120,7 @@ impl OpenAiRequestHeaders {
         let mut context = Map::new();
         insert_protocol_context(&mut context, "turn_state", self.turn_state.as_ref());
         insert_protocol_context(&mut context, "turn_metadata", self.turn_metadata.as_ref());
+        insert_protocol_context(&mut context, "subagent", self.subagent.as_ref());
         if matches!(source, RequestDecodeSource::WebSocketFrame) {
             context.insert(
                 gateway_protocol::openai::WEBSOCKET_FRAME_CONTEXT_KEY.to_owned(),
