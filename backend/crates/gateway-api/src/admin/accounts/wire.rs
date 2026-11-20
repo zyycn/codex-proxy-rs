@@ -743,6 +743,16 @@ pub struct AccountModelView {
     pub label: String,
 }
 
+impl From<UpstreamModelId> for AccountModelView {
+    fn from(model: UpstreamModelId) -> Self {
+        let id = model.to_string();
+        Self {
+            label: id.clone(),
+            id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountModelsData {

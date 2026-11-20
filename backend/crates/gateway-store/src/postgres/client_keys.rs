@@ -16,16 +16,17 @@ use gateway_admin::{
         MutationContext,
         account_groups::AccountGroupRef as AdminAccountGroupRef,
         client_keys::{
-            ClientKeyCursor as AdminClientKeyCursor,
+            BatchUpdateClientKeys, ClientKeyCursor as AdminClientKeyCursor,
             ClientKeyCursorValue as AdminClientKeyCursorValue,
             ClientKeyListQuery as AdminClientKeyListQuery, ClientKeyPage as AdminClientKeyPage,
             ClientKeyRecord as AdminClientKeyRecord, ClientKeySecret as AdminClientKeySecret,
             ClientKeySort as AdminClientKeySort, ClientKeySortField as AdminClientKeySortField,
-            DeleteClientKey, NewClientKey, ResetClientKeyBudget, SetClientKeyEnabled,
-            SortDirection as AdminSortDirection, UpdateClientKey as AdminUpdateClientKey,
+            DeleteClientKey, NewClientKey, ProviderRequestProfileOverrides, ResetClientKeyBudget,
+            SetClientKeyEnabled, SortDirection as AdminSortDirection,
+            UpdateClientKey as AdminUpdateClientKey,
         },
     },
-    ports::store::{AdminStoreResult, ClientKeyStore},
+    ports::store::{AdminStoreResult, BatchClientKeyProfileMerger, ClientKeyStore},
 };
 use gateway_core::{
     account::OpaqueProviderData,
@@ -1006,6 +1007,55 @@ impl ClientKeyStore for PgAdminClientKeyStore {
         Ok((admin_revision(revision)?, self.required_record(&id).await?))
     }
 
+    async fn batch_update_client_keys(
+        &self,
+        command: BatchUpdateClientKeys,
+        merge_profiles: BatchClientKeyProfileMerger,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        let mut fields = Vec::new();
+        if let Some(groups) = &command.group_ids {
+            fields.push("group_ids".to_owned());
+            fields.push(
+                if groups.is_empty() {
+                    "routing_scope:all"
+                } else {
+                    "routing_scope:groups"
+                }
+                .to_owned(),
+            );
+        }
+        fields.extend(
+            [
+                (command.enabled.is_some(), "enabled"),
+                (command.max_concurrency.is_some(), "max_concurrency"),
+                (command.requests_per_minute.is_some(), "requests_per_minute"),
+                (command.daily_limit_usd.is_some(), "daily_limit_usd"),
+                (command.weekly_limit_usd.is_some(), "weekly_limit_usd"),
+                (!command.peer_sharing.is_empty(), "peer_sharing_json"),
+                (
+                    !command.request_profile_override_updates.is_empty()
+                        || command.installation_seed.is_some(),
+                    "provider_request_profiles_json",
+                ),
+            ]
+            .into_iter()
+            .filter(|(changed, _)| *changed)
+            .map(|(_, field)| field.to_owned()),
+        );
+        let audit = mutation_audit(
+            context,
+            MutationAuditOperation::ClientApiKeyBatchUpdate,
+            "client_api_keys",
+            fields,
+        );
+        self.control_plane
+            .batch_update_client_keys(command, merge_profiles, audit)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+            .and_then(admin_revision)
+    }
+
     async fn set_client_key_enabled(
         &self,
         command: SetClientKeyEnabled,
@@ -1208,7 +1258,12 @@ pub(crate) async fn insert_client_api_key_in_transaction(
             postgres_unavailable("insert client API key in transaction", error)
         }
     })?;
-    replace_client_api_key_groups_in_transaction(transaction, &key.id, &key.group_ids).await?;
+    replace_client_api_key_groups_in_transaction(
+        transaction,
+        std::slice::from_ref(&key.id),
+        &key.group_ids,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1282,7 +1337,12 @@ pub(crate) async fn update_client_api_key_in_transaction(
     .await
     .map_err(|source| postgres_unavailable("update client API key in transaction", source))?;
     require_changed(result.rows_affected(), &key.id)?;
-    replace_client_api_key_groups_in_transaction(transaction, &key.id, &key.group_ids).await
+    replace_client_api_key_groups_in_transaction(
+        transaction,
+        std::slice::from_ref(&key.id),
+        &key.group_ids,
+    )
+    .await
 }
 
 async fn ensure_client_key_name_available(
@@ -1355,9 +1415,118 @@ fn require_changed(rows_affected: u64, id: &str) -> StoreResult<()> {
     }
 }
 
+pub(super) async fn batch_update_client_keys_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    command: &BatchUpdateClientKeys,
+    merge_profiles: &BatchClientKeyProfileMerger,
+) -> StoreResult<()> {
+    let ids: Vec<_> = command
+        .ids
+        .iter()
+        .map(|id| id.as_str().to_owned())
+        .collect();
+    // 单个画像可包含多个 64 KiB 的 Provider 配置，分段合并以限制同一事务的内存占用
+    let update_profiles =
+        !command.request_profile_override_updates.is_empty() || command.installation_seed.is_some();
+    let chunk_size = if update_profiles {
+        16
+    } else {
+        ids.len().max(1)
+    };
+    for chunk in ids.chunks(chunk_size) {
+        update_client_key_chunk(transaction, chunk, command, update_profiles, merge_profiles)
+            .await?;
+    }
+    if let Some(groups) = &command.group_ids {
+        let groups = groups
+            .iter()
+            .map(|id| id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        replace_client_api_key_groups_in_transaction(transaction, &ids, &groups).await?;
+    }
+    Ok(())
+}
+
+async fn update_client_key_chunk(
+    transaction: &mut Transaction<'_, Postgres>,
+    ids: &[String],
+    command: &BatchUpdateClientKeys,
+    update_profiles: bool,
+    merge_profiles: &BatchClientKeyProfileMerger,
+) -> StoreResult<()> {
+    use sqlx::types::Json;
+
+    let mut profiles_by_id = BTreeMap::new();
+    let mut sharing_by_id = BTreeMap::new();
+    let update_sharing = !command.peer_sharing.is_empty();
+    let scope = command.group_ids.as_ref().map(|groups| !groups.is_empty());
+    if update_sharing || scope == Some(false) || update_profiles {
+        // 控制面版本锁串行化配置写入；用每把密钥的最终授权验证跨字段约束
+        let rows = sqlx::query_as::<_, (String, Json<ClientPeerSharing>, bool, Option<Json<ProviderRequestProfileOverrides>>)>(
+            "select k.id, k.peer_sharing_json,
+               coalesce($2, exists(select 1 from client_api_key_groups g where g.client_api_key_id = k.id)),
+               case when $3 then k.provider_request_profiles_json end
+             from client_api_keys k where k.id = any($1) order by k.id for update of k",
+        )
+        .bind(ids)
+        .bind(scope)
+        .bind(update_profiles)
+        .fetch_all(&mut **transaction)
+        .await
+        .map_err(|source| postgres_unavailable("read selected client key policies", source))?;
+        for (id, Json(sharing), has_groups, profiles) in rows {
+            if update_sharing || scope == Some(false) {
+                let sharing = command.peer_sharing.apply(sharing);
+                sharing
+                    .validate(has_groups)
+                    .map_err(|_| invalid("invalid peer sharing scope"))?;
+                if update_sharing {
+                    sharing_by_id.insert(id.clone(), sharing);
+                }
+            }
+            if let Some(Json(mut profiles)) = profiles {
+                merge_profiles(&mut profiles).map_err(|source| {
+                    invalid("invalid client key request profile").with_source(source)
+                })?;
+                validate_request_profiles(profiles.values())?;
+                profiles_by_id.insert(id, profiles);
+            }
+        }
+    }
+    let updated = sqlx::query(
+        "update client_api_keys set enabled = coalesce($2, enabled),
+            max_concurrency = coalesce($3, max_concurrency), requests_per_minute = coalesce($4, requests_per_minute),
+            daily_limit_usd = coalesce($5::text::numeric, daily_limit_usd),
+            weekly_limit_usd = coalesce($6::text::numeric, weekly_limit_usd),
+            peer_sharing_json = coalesce($7::jsonb -> id, peer_sharing_json),
+            provider_request_profiles_json = coalesce($8::jsonb -> id, provider_request_profiles_json),
+            updated_at = now()
+         where id = any($1)",
+    )
+    .bind(ids)
+    .bind(command.enabled)
+    .bind(command.max_concurrency.map(to_i64).transpose()?)
+    .bind(command.requests_per_minute.map(to_i64).transpose()?)
+    .bind(command.daily_limit_usd.map(Decimal::canonical))
+    .bind(command.weekly_limit_usd.map(Decimal::canonical))
+    .bind(Json(sharing_by_id))
+    .bind(Json(profiles_by_id))
+    .execute(&mut **transaction)
+    .await
+    .map_err(|source| postgres_unavailable("batch update client API keys", source))?;
+    if usize::try_from(updated.rows_affected()).ok() != Some(ids.len()) {
+        return Err(StoreError::NotFound {
+            source: None,
+            entity: ENTITY,
+            id: "selected client API keys".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 async fn replace_client_api_key_groups_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
-    key_id: &str,
+    key_ids: &[String],
     group_ids: &[String],
 ) -> StoreResult<()> {
     validate_group_ids(group_ids)?;
@@ -1377,8 +1546,8 @@ async fn replace_client_api_key_groups_in_transaction(
             });
         }
     }
-    sqlx::query("delete from client_api_key_groups where client_api_key_id = $1")
-        .bind(key_id)
+    sqlx::query("delete from client_api_key_groups where client_api_key_id = any($1::text[])")
+        .bind(key_ids)
         .execute(&mut **transaction)
         .await
         .map_err(|source| postgres_unavailable("delete client API key groups", source))?;
@@ -1386,9 +1555,9 @@ async fn replace_client_api_key_groups_in_transaction(
         sqlx::query(
             "insert into client_api_key_groups
              (client_api_key_id, account_group_id, created_at)
-             select $1, group_id, now() from unnest($2::text[]) group_id",
+             select key_id, group_id, now() from unnest($1::text[]) key_id cross join unnest($2::text[]) group_id",
         )
-        .bind(key_id)
+        .bind(key_ids)
         .bind(group_ids)
         .execute(&mut **transaction)
         .await

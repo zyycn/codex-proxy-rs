@@ -745,6 +745,8 @@ impl MemoryAccountGroupStore {
                 primary_id.clone(),
                 AccountGroupRecord {
                     allow_image_generation: true,
+                    allow_subagents: true,
+                    model_access: Default::default(),
                     fast_mode: FastMode::Default,
                     id: primary_id,
                     name: "Alpha routing".to_owned(),
@@ -768,6 +770,8 @@ impl MemoryAccountGroupStore {
                 secondary_id.clone(),
                 AccountGroupRecord {
                     allow_image_generation: true,
+                    allow_subagents: true,
+                    model_access: Default::default(),
                     fast_mode: FastMode::Default,
                     id: secondary_id,
                     name: "Beta routing".to_owned(),
@@ -931,6 +935,8 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         let now = Utc::now();
         let record = AccountGroupRecord {
             allow_image_generation: command.allow_image_generation,
+            allow_subagents: command.allow_subagents,
+            model_access: command.model_access,
             fast_mode: command.fast_mode,
             id: command.id.clone(),
             name: command.name,
@@ -965,6 +971,12 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         record.color = command.color;
         if let Some(fast_mode) = command.fast_mode {
             record.fast_mode = fast_mode;
+        }
+        if let Some(allowed) = command.allow_subagents {
+            record.allow_subagents = allowed;
+        }
+        if let Some(model_access) = command.model_access {
+            record.model_access = model_access;
         }
         if let Some(allowed) = command.allow_image_generation {
             record.allow_image_generation = allowed;
@@ -1020,6 +1032,19 @@ fn mutation(
 
 #[async_trait]
 impl ClientKeyStore for MemoryClientKeyStore {
+    async fn batch_update_client_keys(
+        &self,
+        _: gateway_admin::model::client_keys::BatchUpdateClientKeys,
+        _: gateway_admin::ports::store::BatchClientKeyProfileMerger,
+        _: &MutationContext,
+    ) -> AdminStoreResult<Revision> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "client key",
+            "unused batch update",
+        ))
+    }
+
     async fn client_key_budget_window(
         &self,
         _: &gateway_core::policy::ClientApiKeyId,

@@ -154,6 +154,22 @@ impl CodexProvider {
         } else {
             CodexSelectionModel::Search(requested_model.as_ref().map(|model| model.as_str()))
         };
+        if !context.is_diagnostic_required_account()
+            && context
+                .account_scope()
+                .is_some_and(|scope| scope.groups_deny_model(model.model()))
+        {
+            return Err(provider_error(
+                ProviderErrorKind::RequestPolicyDenied,
+                UpstreamSendState::NotSent,
+            )
+            .with_retry_prohibited()
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                gateway_core::validation::GROUP_MODEL_DENIED_MESSAGE,
+                Some(gateway_core::validation::GROUP_MODEL_DENIED_CODE.to_owned()),
+                None,
+            )));
+        }
         let selection_started_at = Instant::now();
         let lease = self
             .selector

@@ -4,7 +4,7 @@ mod auth;
 mod chat_completions;
 mod endpoint;
 mod error;
-mod image_policy;
+mod group_permissions;
 mod images;
 mod live;
 mod messages;
@@ -300,15 +300,23 @@ fn snapshot_with_accounts(
     client_key_id: &str,
     accounts: &[&str],
 ) -> RuntimeSnapshot {
-    snapshot_with_image_policy(plaintext, provider_name, client_key_id, accounts, true)
+    snapshot_with_group_permissions(
+        plaintext,
+        provider_name,
+        client_key_id,
+        accounts,
+        true,
+        true,
+    )
 }
 
-fn snapshot_with_image_policy(
+fn snapshot_with_group_permissions(
     plaintext: &str,
     provider_name: &str,
     client_key_id: &str,
     accounts: &[&str],
     allow_image_generation: bool,
+    allow_subagents: bool,
 ) -> RuntimeSnapshot {
     let provider = ProviderKind::new(provider_name).expect("provider");
     let account_directory = Arc::new(RuntimeAccountDirectory::new(BTreeMap::from_iter(
@@ -345,7 +353,8 @@ fn snapshot_with_image_policy(
                     Arc::clone(&account_directory),
                     ClientRoutingScope::all_accounts(),
                 )
-                .with_image_generation(allow_image_generation),
+                .with_image_generation(allow_image_generation)
+                .with_subagents(allow_subagents),
             ),
             true,
             RateLimits::unlimited(),

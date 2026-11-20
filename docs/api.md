@@ -38,7 +38,7 @@ Codex 原生生图配置还会携带 `X-OpenAI-Actor-Authorization: proxy-manage
 上游账号身份只由服务端选中的账号提供；不要把真实账号 token 放进该标记
 
 Client Key 通过账号分组限定路由范围：未绑定分组时可使用全部账号，绑定一个或多个分组时只能使用
-已启用分组成员的并集。分组可以混合 `openai` 与 `xai` 账号；同一请求只会在模型能力明确匹配且满足
+至少一个已启用绑定分组中允许该模型的成员账号。分组可以混合 `openai` 与 `xai` 账号；同一请求只会在模型能力明确匹配且满足
 重放安全边界时跨 Provider fallback
 
 运行设置可以分别配置 `minCodexDesktopVersion` 与 `minCodexCliVersion`。两者只接受 SemVer，`null`
@@ -1412,10 +1412,10 @@ Pro 使用 `all` 时也能参与 luna 调度。套餐名称不自动生成或修
 限制适用于 Responses（含 WebSocket 和上下文压缩）、Chat Completions、Messages 生成与输入计数，以及 Images 生图、编辑与独立 Search。
 重试、亲和和换号同样遵守限制；没有合规账号时返回无可用账号错误。已开始请求使用冻结的政策，新请求使用已发布的新配置。
 Images 和 Search 按原始请求正文的模型 ID 检查，不依赖模型目录或全局模型映射；可手动添加目录未列出的模型 ID。
-模型缺失、重复或无法识别时，仅使用模型政策为 `all` 的账号，不推测上游默认模型。
+模型缺失、重复或无法识别时，账号模型政策须为 `all`。对于绑定分组的 Key，还须有至少一个包含该账号的启用分组允许全部模型。
 Search 的选号限制不约束插件在选号后主动改写正文。
 管理员连接测试的选项包含上游目录和账号白名单中的 ID。连接测试跳过普通选号的模型政策、目录资格筛选与模型拒绝冷却，成功表示指定账号可调用测试使用的端点与模型。
-普通 `/v1/models` 和单模型查询将已发现的 OpenAI 模型关联到来源账号，至少一个来源账号在当前 Key 范围内且政策允许时才展示；
+普通 `/v1/models` 和单模型查询将已发现的 OpenAI 和 xAI 模型关联到来源账号，至少一个来源账号在当前 Key 范围内且政策允许时才展示；
 同 Provider 中未发现该模型的 `all` 账号不会使它进入列表。原生目录保留已有来源选择和完整模型对象
 
 ### 独立代理管理 / Managed Proxies
@@ -1969,35 +1969,46 @@ GET 和 POST 均返回 `enabled`、`leadMinutes`、`weeklyTriggerRemainingPercen
 ## 6. 账号分组
 
 分组是 Provider-neutral 的账号集合；一个组可包含任意 Provider 账号，一个账号也可属于多个组。
-分组详情和列表返回 `fastMode`，取值为 `default`（默认）、`enabled`（开启）、`disabled`（关闭）。
-创建时省略默认为 `default`，更新时省略或 `null` 保留现值。
-策略取自 Client Key 绑定的分组，包括已禁用分组；多分组冲突时关闭优先，其次开启，最后默认。
-未绑定分组的 Key 跟随客户端，不按最终所选账号的分组判断
+分组详情和完整列表返回 `modelAccess`、`fastMode`、`allowImageGeneration` 和 `allowSubagents`。创建时省略这些字段使用默认值，更新时省略或传 `null` 保留现值。
 
-- 默认：保留客户端的 `service_tier`
-- 开启：所选上游模型的目录声明 `priority` 时，将缺失、`null` 或显式 `default` 改为 `priority`；目录未声明则保留原值
-- 关闭：将 `priority`（含 `fast` 别名）改为显式 `default`，继续处理请求
+`modelAccess` 复用账号的模型规则。默认 `{"mode":"all","models":[]}` 允许成员账号原本可以使用的模型。
+`allowlist` 和 `denylist` 使用区分大小写的完整模型 ID。编辑器候选取自该组成员账号，账号自身的限制继续生效。
+Key 绑定多个组时，按模型分别合并启用组中的合格账号。例如两个组分别允许 X 和 Y，X 请求只能使用允许 X 的组内账号。
 
-策略只作用于 OpenAI Responses 的顶层 `service_tier`，不改变 `flex`、`ultrafast` 等其他显式档位、嵌套字段或其他 Provider。
+`fastMode` 默认跟随客户端。策略合并包括 Key 绑定的禁用分组，优先级依次为 `disabled`、`enabled`、`ultrafast`、`default`。未绑定分组的 Key 跟随客户端
+
+| 值 | OpenAI Responses 顶层 `service_tier` |
+| --- | --- |
+| `default` | 保留客户端档位 |
+| `disabled` | 将 `priority`、`fast`、`ultrafast` 降至 `default`，保留其他档位 |
+| `enabled` | 强制 Fast，所选上游模型的目录声明支持时覆盖为 `priority` |
+| `ultrafast` | 强制 Ultrafast，所选上游模型的目录声明支持时覆盖为 `ultrafast` |
+
+目标档位缺少目录支持时保留原请求。
 OAuth 和 Responses API Key 共用上述档位规则，出站兼容层不额外删除原生 Responses 的 `auto/default`。
 宿主策略在 request 中间件之后应用，形成 attempt 输入基线；attempt 中间件继续改写档位时，以改写后的实际发送值为准。
 HTTP 和每个 WebSocket `response.create` 均使用请求开始时的分组策略，同一请求重试保持该策略；
 HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造；复用 WS 时不重发握手头，
 每个 `response.create` 仍独立应用档位策略，请求档位统计与本地费用估算使用各帧的最终出站档位
 
-分组详情和完整列表还返回 `allowImageGeneration`。创建时省略默认为 `true`，更新时省略或 `null` 保留现值。
+`allowImageGeneration` 默认为 `true`。
 Client Key 任一绑定分组（包括已禁用分组）为 `false` 时，禁止生图；未绑定分组的 Key 允许生图。
 限制覆盖 Images 生成与编辑，以及 Responses 中的原生 `image_generation` 工具声明或显式工具选择，
 HTTP 返回 `403` 和 `image_generation_disabled`，WebSocket 每个 `response.create` 独立校验并返回对应错误事件。
 普通图片输入和 Codex 被动声明的 `image_gen` namespace 不触发拒绝；实际 Images 调用仍受限制。
 请求采用开始时冻结的权限，重试期间保持不变；attempt 中间件添加生图工具也会在发送前被策略拒绝
 
+`allowSubagents` 默认为 `true`，客户端可以按自身配置启动协作子代理。任一绑定分组设为 `false` 时，Codex 模型目录呈现 `multi_agent_version: "disabled"`。
+网关按协作子代理元数据识别独立请求，HTTP 或 WebSocket 的 `response.create` 在转发前返回 `403` 和 `subagents_disabled`。
+主会话、审查和上下文压缩请求仍可使用
+
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |
 | `GET` | `/api/admin/account-groups` | `page`、`pageSize`、`search`、`enabled` | 分页查询分组；返回账号可用性、并发槽位（Redis 不可用时 `usedSlots=null`）及成功请求 USD 用量 |
 | `GET` | `/api/admin/account-groups/options` | `page`、`pageSize`、`search`、`enabled` | 分页查询分组选择项；item 仅返回 `id`、`name`、`color`、`enabled` |
-| `POST` | `/api/admin/account-groups/create` | `{ name, description, color, fastMode?, allowImageGeneration? }` | 创建空分组；`color` 严格为 `#RRGGBBAA`，返回时统一大写 |
-| `POST` | `/api/admin/account-groups/update` | `{ id, name, description, color, fastMode?, allowImageGeneration? }` | 更新分组信息、Fast 模式和生图权限 |
+| `GET` | `/api/admin/account-groups/models` | `id` | 返回成员账号候选模型 `{ models: [{ id, label }] }`，按模型 ID 去重 |
+| `POST` | `/api/admin/account-groups/create` | `{ name, description, color, modelAccess?, fastMode?, allowImageGeneration?, allowSubagents? }` | 创建空分组；`color` 严格为 `#RRGGBBAA`，返回时统一大写 |
+| `POST` | `/api/admin/account-groups/update` | `{ id, name, description, color, modelAccess?, fastMode?, allowImageGeneration?, allowSubagents? }` | 更新分组信息和请求权限 |
 | `POST` | `/api/admin/account-groups/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/account-groups/disable` | `{ id }` | 禁用；已绑定 Key 保持受限，不回退到全部账号 |
 | `POST` | `/api/admin/account-groups/delete` | `{ id }` | 删除未被 Client Key 引用的组 |
@@ -2022,10 +2033,18 @@ HTTP 返回 `403` 和 `image_generation_disabled`，WebSocket 每个 `response.c
 | `POST` | `/api/admin/client-keys/create` | 创建字段 | 创建带账号范围的 Client Key |
 | `GET` | `/api/admin/client-keys/reveal` | `id` | 显式读取完整明文 Key |
 | `POST` | `/api/admin/client-keys/update` | 更新字段 | 原子更新名称、分组范围和限额 |
+| `POST` | `/api/admin/client-keys/batch-update` | `ids` 和至少一个更新字段 | 原子更新 1 至 1000 个不同密钥，返回 `{ updated, configRevision }` |
 | `POST` | `/api/admin/client-keys/reset-budget` | `{ id, period }` | 管理员清零日／周已用金额；`period` 为 `daily`、`weekly` 或 `all` |
 | `POST` | `/api/admin/client-keys/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/client-keys/disable` | `{ id }` | 禁用 |
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
+
+批量更新只提交要修改的字段，各密钥保留其余配置。任一密钥或分组不存在、任一密钥的最终配置无效时，整批回滚
+
+- `enabled` 设置启用状态。`groupIds` 替换全部分组，显式传空数组授权全部当前及未来账号
+- `dailyLimitUsd`、`weeklyLimitUsd`、`maxConcurrency`、`requestsPerMinute` 可独立修改，零表示不限。修改限额保留已用金额及重置时间
+- `peerSharing` 可单独修改 `enabled`、`sharePool`、`shareQuota`、`sharePlans`。开启互联需要绑定分组，共享套餐构成需要开启账号池概览
+- `providerRequestProfileOverrides` 按 Provider 更新，显式传入某个 Provider 为 `null` 时恢复其全局配置。`installationSeed` 单独接受 UUID；仅修改身份配置时保留各密钥原有种子，仅修改种子时保留各自的身份配置
 
 创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
 `dailyLimitUsd`、`weeklyLimitUsd`、`customKey`、`providerRequestProfileOverrides` 和 `peerSharing`。更新请求携带 `id`，不接受 `customKey`。

@@ -182,11 +182,7 @@ pub fn codex_responses_request_semantics_with_turn_metadata(
     let reasoning_effort = reasoning_effort_override
         .clone()
         .or_else(|| reasoning_effort(body.get("reasoning")));
-    // 权威上下文与显式 turnMetadata 即使为空也不退回其他别名
-    let parsed_turn_metadata = turn_metadata
-        .or_else(|| body.get("turnMetadata").and_then(Value::as_str))
-        .or_else(|| request_turn_metadata(body))
-        .and_then(|value| serde_json::from_str::<Value>(value).ok());
+    let parsed_turn_metadata = parsed_turn_metadata(body, turn_metadata);
     let mut request_kind = parsed_turn_metadata
         .as_ref()
         .and_then(|metadata| non_empty_string(metadata.get("request_kind")))
@@ -227,6 +223,34 @@ fn reasoning_effort(reasoning: Option<&Value>) -> Option<String> {
     non_empty_string(Some(effort))
         .map(ToOwned::to_owned)
         .or_else(|| effort.as_u64().map(|value| value.to_string()))
+}
+
+/// 只识别协作线程自己的生成请求，review、compact、guardian 和父线程的工具历史均不受限
+#[must_use]
+pub fn collaboration_subagent_requested<'a>(
+    body: &Map<String, Value>,
+    context: &Map<String, Value>,
+    header: impl Fn(&str) -> Option<&'a str>,
+) -> bool {
+    let is_spawn = |kind: &str| matches!(kind.trim(), "thread_spawn" | "collab_spawn");
+    let subagent =
+        header("x-openai-subagent").or_else(|| non_empty_string(context.get("subagent")));
+    let turn_metadata =
+        header("x-codex-turn-metadata").or_else(|| context_turn_metadata(body, context));
+    subagent.is_some_and(is_spawn)
+        || client_metadata_string(body, "x-openai-subagent").is_some_and(is_spawn)
+        || parsed_turn_metadata(body, turn_metadata)
+            .as_ref()
+            .and_then(|metadata| non_empty_string(metadata.get("subagent_kind")))
+            .is_some_and(is_spawn)
+}
+
+fn parsed_turn_metadata(body: &Map<String, Value>, turn_metadata: Option<&str>) -> Option<Value> {
+    // 权威上下文与显式 turnMetadata 即使为空也不退回其他别名
+    turn_metadata
+        .or_else(|| body.get("turnMetadata").and_then(Value::as_str))
+        .or_else(|| request_turn_metadata(body))
+        .and_then(|value| serde_json::from_str(value).ok())
 }
 
 fn request_turn_metadata(body: &Map<String, Value>) -> Option<&str> {

@@ -1,16 +1,18 @@
-//! 验证中间件 Fast 三态设置与运行时故障隔离
+//! 验证中间件 快速模式设置与运行时故障隔离
 
 use super::*;
 use gateway_core::{policy::ClientPolicy, routing::request_settings::RequestSettings};
 use serde_json::{Value, json};
 
 #[tokio::test]
-async fn middleware_preserves_three_state_fast_and_sources() {
+async fn middleware_preserves_fast_modes_and_sources() {
     for (mode, expected) in [
         (FastMode::Default, FastMode::Default),
         (FastMode::Enabled, FastMode::Enabled),
         (FastMode::Disabled, FastMode::Disabled),
         (FastMode::Enabled, FastMode::Disabled),
+        (FastMode::Ultrafast, FastMode::Ultrafast),
+        (FastMode::Enabled, FastMode::Ultrafast),
         (FastMode::Disabled, FastMode::Default),
     ] {
         let snapshot = gateway_core::routing::RuntimeSnapshot::new(

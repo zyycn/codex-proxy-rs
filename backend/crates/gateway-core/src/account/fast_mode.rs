@@ -1,4 +1,4 @@
-//! 账号分组的 Fast 三态策略与多分组优先级
+//! 账号分组的快速模式策略与多分组优先级
 
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +10,7 @@ pub enum FastMode {
     Default,
     Enabled,
     Disabled,
+    Ultrafast,
 }
 
 impl FastMode {
@@ -18,6 +19,7 @@ impl FastMode {
         match self {
             Self::Default => "default",
             Self::Enabled => "enabled",
+            Self::Ultrafast => "ultrafast",
             Self::Disabled => "disabled",
         }
     }
@@ -27,17 +29,19 @@ impl FastMode {
         match value {
             "default" => Some(Self::Default),
             "enabled" => Some(Self::Enabled),
+            "ultrafast" => Some(Self::Ultrafast),
             "disabled" => Some(Self::Disabled),
             _ => None,
         }
     }
 
-    /// 多分组冲突时关闭优先于开启，默认不覆盖其他分组
+    /// 多分组冲突时禁用优先；同时强制两种加速档位时选用较低的 Fast
     #[must_use]
     pub const fn merge(self, other: Self) -> Self {
         match (self, other) {
             (Self::Disabled, _) | (_, Self::Disabled) => Self::Disabled,
             (Self::Enabled, _) | (_, Self::Enabled) => Self::Enabled,
+            (Self::Ultrafast, _) | (_, Self::Ultrafast) => Self::Ultrafast,
             _ => Self::Default,
         }
     }

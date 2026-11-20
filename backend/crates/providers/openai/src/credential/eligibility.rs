@@ -1,7 +1,7 @@
 //! OpenAI 请求的账号认证、套餐与模型权限资格
 
 use gateway_core::account::scope::FrozenAccountScope;
-use gateway_core::account::{AccountModelAccessMode, ProviderAccount, ProviderAccountId};
+use gateway_core::account::{ProviderAccount, ProviderAccountId};
 
 use super::types::CODEX_AUTHENTICATION_KIND_OAUTH;
 
@@ -54,12 +54,7 @@ impl<'a> CodexSelectionModel<'a> {
             | Self::Image(Some(model))
             | Self::Search(Some(model)) => scope.allows_model(account, model),
             // 缺失、重复或不可解析的模型不能绕过黑白名单；不猜上游默认值
-            Self::Image(None) | Self::Search(None) => {
-                scope.allows(account)
-                    && scope.directory().account(account).is_some_and(|account| {
-                        account.model_access().mode() == AccountModelAccessMode::All
-                    })
-            }
+            Self::Image(None) | Self::Search(None) => scope.allows_unidentified_model(account),
         }
     }
 }

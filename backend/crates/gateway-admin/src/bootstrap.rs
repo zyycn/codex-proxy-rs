@@ -183,7 +183,7 @@ async fn initialize_inner(
             PluginDistributionPorts::new(plugin_distribution, store.proxies()),
             snapshot.clone(),
             plugin_preparation,
-            published_snapshot,
+            published_snapshot.clone(),
             store.plugin_state(),
         )),
         key_usage,
@@ -201,6 +201,7 @@ async fn initialize_inner(
             store.account_groups(),
             store.account_runtime(),
             snapshot.clone(),
+            published_snapshot,
         )),
         client_keys: Arc::new(DefaultClientKeyService::new(
             store.client_keys(),

@@ -537,18 +537,11 @@ pub struct RoutingContext {
 pub struct ProviderCandidate {
     provider: ProviderKind,
     upstream_model: Option<UpstreamModelId>,
-    model_presentation: Option<ModelPresentation>,
     emulated_features: BTreeSet<Feature>,
     account_scope: Arc<FrozenAccountScope>,
 }
 
 impl ProviderCandidate {
-    /// 与路由计划冻结的上游模型目录，重试时不读取新的目录代次
-    #[must_use]
-    pub const fn model_presentation(&self) -> Option<&ModelPresentation> {
-        self.model_presentation.as_ref()
-    }
-
     #[must_use]
     pub const fn provider(&self) -> &ProviderKind {
         &self.provider

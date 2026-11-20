@@ -7,6 +7,9 @@ import { normalizeRgbaHexColor, ZButton, ZColorPicker, ZDialog, ZForm, ZFormItem
 import { computed, useTemplateRef, watch } from 'vue'
 
 import { useI18n } from 'vue-i18n'
+import HelpPopover from '@/components/HelpPopover.vue'
+import AccountModelAccessField from '@/views/accounts/components/AccountModelAccessField.vue'
+import { accountModelAccessError } from '@/views/accounts/utils/modelAccess'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 
 const props = defineProps<{
@@ -30,6 +33,15 @@ const rules = computed<FormRules<AccountGroupFormValue>>(() => ({
     trigger: ['blur', 'change'],
     message: t('groups.actions.enterGroupName'),
   },
+  modelAccess: {
+    trigger: [],
+    validator: () => {
+      const error = accountModelAccessError(form.value.modelAccess)
+      return error
+        ? new Error(error)
+        : true
+    },
+  },
   color: {
     validator: (_rule, value) => !!normalizeRgbaHexColor(value),
     trigger: 'change',
@@ -43,6 +55,16 @@ async function requestSave() {
     return
   emit('save')
 }
+const toggleOptions = computed(() => [
+  {
+    value: 'enabled',
+    label: t('common.actions.enable'),
+  },
+  {
+    value: 'disabled',
+    label: t('common.actions.disable'),
+  },
+])
 const title = computed(() => props.group
   ? t('groups.actions.editGroup')
   : t('groups.filters.createGroup'))
@@ -56,10 +78,10 @@ const description = computed(() => props.group
     v-model="open"
     :title="title"
     :description="description"
-    width="36rem"
+    width="42rem"
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
   >
-    <ZForm ref="formElement" :model="form" :rules="rules" scroll-to-error focus-on-error novalidate @submit="requestSave">
+    <ZForm ref="formElement" :model="form" :rules="rules" class="sm:grid-cols-[minmax(0,1fr)_fit-content(10rem)] sm:gap-x-6" scroll-to-error focus-on-error novalidate @submit="requestSave">
       <ZFormItem prop="name" :show-message="false" :label="t('groups.editor.groupName')" required>
         <ZInput
           v-model="form.name"
@@ -71,44 +93,62 @@ const description = computed(() => props.group
       <ZFormItem prop="color" :show-message="Boolean(form.color.trim())" :label="t('groups.editor.groupColor')" required>
         <ZColorPicker
           v-model="form.color"
+          class="sm:pl-0"
           :aria-label="t('groups.editor.selectGroupColor')"
           :presets="ACCOUNT_GROUP_COLOR_PRESETS"
           :disabled="saving"
         />
       </ZFormItem>
-      <div class="flex flex-wrap items-start gap-x-6 gap-y-3">
-        <ZFormItem :label="t('groups.editor.fastMode')" class="min-w-0">
+      <div class="col-span-full grid grid-cols-2 items-start gap-x-6 gap-y-4.5 sm:grid-cols-subgrid **:[[role=radio]]:px-3.5">
+        <div class="contents sm:flex sm:min-w-0 sm:flex-wrap sm:items-start sm:gap-x-6 sm:gap-y-4.5">
+          <ZFormItem :label="t('groups.editor.fastMode')" class="col-span-full sm:flex-auto">
+            <template #label-extra>
+              <HelpPopover :label="t('groups.editor.fastMode')" :content="t('groups.editor.fastModeHelp')" />
+            </template>
+            <ZSegmented
+              v-model="form.fastMode"
+              :aria-label="t('groups.editor.fastMode')"
+              :options="[
+                { label: t('common.values.default'), value: 'default' },
+                { label: t('common.actions.disable'), value: 'disabled' },
+                { label: t('groups.editor.forceFast'), value: 'enabled' },
+                { label: t('groups.editor.forceUltrafast'), value: 'ultrafast' },
+              ]"
+              :disabled="saving"
+            />
+          </ZFormItem>
+          <ZFormItem :label="t('groups.editor.imageGeneration')" class="sm:flex-auto">
+            <ZSegmented
+              :model-value="form.allowImageGeneration ? 'enabled' : 'disabled'"
+              :aria-label="t('groups.editor.imageGeneration')"
+              :options="toggleOptions"
+              :disabled="saving"
+              @update:model-value="form.allowImageGeneration = $event === 'enabled'"
+            />
+          </ZFormItem>
+        </div>
+        <ZFormItem :label="t('groups.editor.subagents')">
+          <template #label-extra>
+            <HelpPopover :label="t('groups.editor.subagents')" :content="t('groups.editor.subagentsHelp')" />
+          </template>
           <ZSegmented
-            v-model="form.fastMode"
-            class="w-64 max-w-full"
-            :aria-label="t('groups.editor.fastMode')"
-            :options="[
-              { label: t('common.values.default'), value: 'default' },
-              { label: t('common.status.enabled'), value: 'enabled' },
-              { label: t('common.status.disabled'), value: 'disabled' },
-            ]"
+            :model-value="form.allowSubagents ? 'enabled' : 'disabled'"
+            :aria-label="t('groups.editor.subagents')"
+            :options="toggleOptions"
             :disabled="saving"
-          />
-        </ZFormItem>
-        <ZFormItem :label="t('groups.editor.imageGeneration')" class="min-w-0">
-          <ZSegmented
-            :model-value="form.allowImageGeneration ? 'enabled' : 'disabled'"
-            class="w-40 max-w-full"
-            :aria-label="t('groups.editor.imageGeneration')"
-            :options="[
-              { label: t('common.status.enabled'), value: 'enabled' },
-              { label: t('common.status.disabled'), value: 'disabled' },
-            ]"
-            :disabled="saving"
-            @update:model-value="form.allowImageGeneration = $event === 'enabled'"
+            @update:model-value="form.allowSubagents = $event === 'enabled'"
           />
         </ZFormItem>
       </div>
-      <ZFormItem :label="t('groups.editor.descriptionOptional')">
+      <AccountModelAccessField
+        class="col-span-full" :group-id="group?.id ?? null" :model-value="form.modelAccess" form-prop="modelAccess" :disabled="saving"
+        @update:model-value="value => { if (value) form.modelAccess = value }"
+      />
+      <ZFormItem :label="t('groups.editor.description')" class="col-span-full">
         <ZTextarea
           v-model="form.description"
           :aria-label="t('groups.editor.groupDescription')"
-          :rows="4"
+          :rows="2"
           :placeholder="t('groups.editor.describePurposeOfThisGroup')"
           :disabled="saving"
         />

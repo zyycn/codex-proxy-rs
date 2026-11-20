@@ -82,7 +82,8 @@ use crate::transport::profile::{
 };
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
-    PreviousResponseScope, ResponseEventSignals, TransportRequirement, transport_requirement,
+    PreviousResponseScope, ResponseEventSignals, TransportRequirement, fast_policy_tier,
+    transport_requirement,
 };
 use crate::transport::request::{
     CodexRequestEncodeError, RequestAccountScope, align_structured_location_fields,
@@ -617,40 +618,6 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
-        // 请求设置先形成原生正文基线；attempt 的显式改写进入终端后不再次被覆盖
-        let mut operation = Operation::Generate(generate.clone());
-        if context.fast_mode() != gateway_core::account::FastMode::Default
-            && let Operation::Generate(generate) = &operation
-            && generate.protocol_payload().protocol() == OPENAI_PROTOCOL
-        {
-            let mut request =
-                CodexResponsesRequest::from_body(generate.protocol_payload().body().clone());
-            let supports_priority = candidate.model_presentation().is_some_and(|model| {
-                model
-                    .service_tiers()
-                    .iter()
-                    .any(|tier| tier.id() == "priority")
-            });
-            if request.apply_fast_policy(context.fast_mode(), supports_priority) {
-                let body = serde_json::to_vec(request.body()).map_err(|_| {
-                    provider_error(
-                        ProviderErrorKind::InvalidRequest,
-                        UpstreamSendState::NotSent,
-                    )
-                })?;
-                operation = operation
-                    .replace_middleware_wire(OPENAI_PROTOCOL, body.into())
-                    .map_err(|_| {
-                        provider_error(
-                            ProviderErrorKind::InvalidRequest,
-                            UpstreamSendState::NotSent,
-                        )
-                    })?;
-            }
-        }
-        let Operation::Generate(generate) = &operation else {
-            unreachable!("generate settings keep the operation kind")
-        };
         let adapter = context.upstream_adapter(candidate.provider(), upstream_model)?;
         let adapted = matches!(adapter, UpstreamAdapterSelection::Adapter(_));
         if !adapted
@@ -786,13 +753,39 @@ impl Provider for CodexProvider {
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
         let account_id = lease.account_id().clone();
-        let frozen_requirements = Operation::Generate(generate.clone()).capability_requirements();
+        // 账号确定后再判断强制档位，避免借用其他账号的同名模型；attempt 可以继续改写正文
+        let payload = generate.protocol_payload();
+        let mut operation = Operation::Generate(generate.clone());
+        if payload.protocol() == OPENAI_PROTOCOL
+            && let Some(tier) = fast_policy_tier(
+                context.fast_mode(),
+                payload.body().get("service_tier").and_then(Value::as_str),
+                |tier| {
+                    self.catalog
+                        .account_advertises_tier(lease.account(), upstream_model, tier)
+                },
+            )
+        {
+            let invalid = || {
+                provider_error(
+                    ProviderErrorKind::InvalidRequest,
+                    UpstreamSendState::NotSent,
+                )
+            };
+            let mut body = payload.body().clone();
+            body.insert("service_tier".into(), Value::String(tier.into()));
+            let wire = serde_json::to_vec(&body).map_err(|_| invalid())?;
+            operation = operation
+                .replace_middleware_wire(OPENAI_PROTOCOL, wire.into())
+                .map_err(|_| invalid())?;
+        }
+        let frozen_requirements = operation.capability_requirements();
         let provider = Arc::clone(&self);
         let terminal_context = context.clone();
         let terminal_model = upstream_model.clone();
         context
             .execute_middleware(
-                Operation::Generate(generate.clone()),
+                operation,
                 provider_kind,
                 Some(upstream_model.as_str().to_owned()),
                 account_id,

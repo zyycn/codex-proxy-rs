@@ -88,6 +88,12 @@ impl AccountModelAccess {
             AccountModelAccessMode::Denylist => !self.models.contains(upstream_model),
         }
     }
+
+    pub(crate) fn allows_optional_model(&self, upstream_model: Option<&str>) -> bool {
+        upstream_model.map_or(self.mode == AccountModelAccessMode::All, |model| {
+            self.allows(model)
+        })
+    }
 }
 
 #[derive(Deserialize)]

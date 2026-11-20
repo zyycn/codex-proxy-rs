@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import type { ClientProfileSelection, ProviderRequestProfile, ProviderRequestProfiles, XaiClientProfileSelection } from '@/api/modules/settings/profiles'
+import type { ClientProfileSelection, ProviderRequestProfile, ProviderRequestProfiles, ProviderRequestProfileUpdates, XaiClientProfileSelection } from '@/api/modules/settings/profiles'
 
 import { ZSegmented } from '@codex-proxy/ui'
+import { isEqual } from 'es-toolkit'
 import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatProviderLabel, PROVIDER_IDS, providerIcon } from '@/utils/providers'
 import ClientProfileEditor from './ClientProfileEditor.vue'
 import XaiClientProfileEditor from './XaiClientProfileEditor.vue'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   active?: boolean
   disabled?: boolean
+  initialProfiles?: ProviderRequestProfileUpdates
   allowInherit?: boolean
 }>(), {
   active: true,
@@ -20,7 +22,10 @@ withDefaults(defineProps<{
 
 const { t } = useI18n({ useScope: 'global' })
 
-const model = defineModel<ProviderRequestProfiles>({ required: true })
+const model = defineModel<ProviderRequestProfiles>({
+  default: () => ({}),
+})
+const updates = defineModel<ProviderRequestProfileUpdates>('updates')
 const provider = shallowRef<(typeof PROVIDER_IDS)[number]>('openai')
 const providerOptions = PROVIDER_IDS.map(value => ({
   value,
@@ -32,19 +37,34 @@ const openai = profileModel<ClientProfileSelection>('openai')
 const xai = profileModel<XaiClientProfileSelection>('xai')
 
 function profileModel<T extends object>(providerId: string) {
-  return computed<T | null>({
-    get: () => (model.value[providerId] as T | undefined) ?? null,
-    set: value => updateProfile(providerId, value as ProviderRequestProfile | null),
+  return computed<T | null | undefined>({
+    get: () => {
+      if (updates.value === undefined)
+        return (model.value[providerId] as T | undefined) ?? null
+      const source = Object.hasOwn(updates.value, providerId)
+        ? updates.value
+        : props.initialProfiles
+      return source?.[providerId] as T | null | undefined
+    },
+    set: (value) => {
+      if (updates.value !== undefined) {
+        const next = { ...updates.value }
+        if (value === undefined || isEqual(value, props.initialProfiles?.[providerId]))
+          delete next[providerId]
+        else
+          next[providerId] = value as ProviderRequestProfile | null
+        updates.value = next
+      }
+      else {
+        const next = { ...model.value }
+        if (value == null)
+          delete next[providerId]
+        else
+          next[providerId] = value as ProviderRequestProfile
+        model.value = next
+      }
+    },
   })
-}
-
-function updateProfile(providerId: string, value: ProviderRequestProfile | null) {
-  const profiles = { ...model.value }
-  if (value === null)
-    delete profiles[providerId]
-  else
-    profiles[providerId] = value
-  model.value = profiles
 }
 </script>
 
@@ -66,6 +86,7 @@ function updateProfile(providerId: string, value: ProviderRequestProfile | null)
       v-if="provider === 'openai'"
       v-model="openai"
       :allow-inherit="allowInherit"
+      :allow-preserve="updates !== undefined && initialProfiles?.[provider] === undefined"
       :active="active"
       :disabled="disabled"
     >
@@ -85,6 +106,7 @@ function updateProfile(providerId: string, value: ProviderRequestProfile | null)
       v-else
       v-model="xai"
       :allow-inherit="allowInherit"
+      :allow-preserve="updates !== undefined && initialProfiles?.[provider] === undefined"
       :active="active"
       :disabled="disabled"
     >

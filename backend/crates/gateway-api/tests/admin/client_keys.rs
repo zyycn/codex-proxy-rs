@@ -13,6 +13,63 @@ use serde_json::json;
 use super::{AdminTestFixture, AdminTestState};
 
 #[test]
+fn batch_key_form_preserves_omissions_and_accepts_explicit_zero_false_and_inheritance() {
+    use gateway_api::admin::client_keys::BatchUpdateClientKeysRequest;
+    use gateway_core::routing::ProviderKind;
+    let parse = |value| {
+        serde_json::from_value::<BatchUpdateClientKeysRequest>(value)
+            .unwrap()
+            .into_command()
+    };
+    let patch = parse(json!({
+        "ids":["key_a","key_b"], "enabled":false,
+        "maxConcurrency":0, "dailyLimitUsd":"0", "weeklyLimitUsd":"1.75",
+        "peerSharing":{"shareQuota":false}, "providerRequestProfileOverrides":{"xai":null}
+    }))
+    .unwrap();
+    assert_eq!(patch.enabled, Some(false));
+    assert_eq!(patch.max_concurrency, Some(0));
+    assert_eq!(patch.daily_limit_usd.unwrap().canonical(), "0");
+    assert_eq!(patch.weekly_limit_usd.unwrap().canonical(), "1.75");
+    assert_eq!(patch.peer_sharing.share_quota, Some(false));
+    assert_eq!(patch.peer_sharing.enabled, None);
+    assert_eq!(patch.requests_per_minute, None);
+    assert_eq!(patch.group_ids, None);
+    assert_eq!(patch.installation_seed, None);
+    assert_eq!(
+        patch
+            .request_profile_override_updates
+            .get(&ProviderKind::new("xai").unwrap()),
+        Some(&None)
+    );
+
+    for (field, value) in [
+        ("dailyLimitUsd", json!("-0.01")),
+        ("weeklyLimitUsd", json!("1.00000000001")),
+        ("maxConcurrency", json!(u64::MAX)),
+        ("requestsPerMinute", json!(u64::MAX)),
+        (
+            "installationSeed",
+            json!("A3A4E0BDF84447068DF8BFF10DE95B3B"),
+        ),
+        ("providerRequestProfileOverrides", json!({"unknown": null})),
+    ] {
+        let mut payload = json!({ "ids":["key_a"] });
+        payload[field] = value;
+        assert_eq!(parse(payload).unwrap_err().field(), field);
+    }
+    let seed = "A3A4E0BD-F844-4706-8DF8-BFF10DE95B3B";
+    assert_eq!(
+        parse(json!({"ids":["key_a"], "installationSeed":seed}))
+            .unwrap()
+            .installation_seed
+            .unwrap()
+            .to_string(),
+        seed.to_lowercase()
+    );
+}
+
+#[test]
 fn reset_budget_requires_an_explicit_supported_period_and_valid_key() {
     use gateway_api::admin::client_keys::ResetClientKeyBudgetRequest;
     for period in ["daily", "weekly", "all"] {

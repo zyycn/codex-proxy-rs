@@ -719,6 +719,15 @@ impl AccountRuntimeStore for UnavailableStore {
 
 #[async_trait]
 impl ClientKeyStore for UnavailableStore {
+    async fn batch_update_client_keys(
+        &self,
+        _: gateway_admin::model::client_keys::BatchUpdateClientKeys,
+        _: gateway_admin::ports::store::BatchClientKeyProfileMerger,
+        _: &MutationContext,
+    ) -> AdminStoreResult<Revision> {
+        Err(unavailable("client key batch update"))
+    }
+
     async fn client_key_budget_window(
         &self,
         _: &gateway_core::policy::ClientApiKeyId,

@@ -110,6 +110,14 @@
         "confirm": "允许访问",
         "description": "保存后也可访问未分组和以后新增的账号"
       }
+    },
+    "batch": {
+      "edit": "批量编辑",
+      "updated": "已更新 {count} 个密钥",
+      "description": "已选 {count} 个密钥",
+      "partiallyEnabled": "部分密钥已启用",
+      "mixed": "多个值",
+      "clearLimit": "设为不限"
     }
   }
 }

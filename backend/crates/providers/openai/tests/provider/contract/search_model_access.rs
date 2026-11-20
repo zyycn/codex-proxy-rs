@@ -75,6 +75,81 @@ fn attempt(
 }
 
 #[tokio::test]
+async fn search_respects_group_models_during_selection_and_retry() {
+    use gateway_core::routing::{AccountGroupId, RoutingGroupSnapshot};
+    let group = |n| AccountGroupId::new(format!("grp_{n:032x}")).unwrap();
+    let first = group(1);
+    let second = group(2);
+    let provider_kind = ProviderKind::new("openai").unwrap();
+    let accounts = [(FIRST, first.clone()), (SECOND, second.clone())].map(|(id, group)| {
+        (
+            ProviderAccountId::new(id).unwrap(),
+            RuntimeAccount::new(provider_kind.clone(), [group].into()),
+        )
+    });
+    let directory = RuntimeAccountDirectory::new(accounts.into()).with_group_model_access(
+        [
+            (
+                first.clone(),
+                policy(AccountModelAccessMode::Denylist, MODEL),
+            ),
+            (
+                second.clone(),
+                policy(AccountModelAccessMode::Allowlist, MODEL),
+            ),
+        ]
+        .into(),
+    );
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(directory),
+        ClientRoutingScope::restricted(
+            vec![
+                RoutingGroupSnapshot::new(first.clone(), "First".into()),
+                RoutingGroupSnapshot::new(second.clone(), "Second".into()),
+            ],
+            [first, second].into(),
+            [provider_kind].into(),
+        )
+        .unwrap(),
+    ));
+    let server = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, FIRST).await;
+    create_account(&store, SECOND).await;
+    let provider = provider_with_base_url(&store, server.uri());
+    let execute = |body: &[u8], excluded: BTreeSet<ProviderAccountId>, index| {
+        provider.clone().execute(
+            search(body),
+            attempt(
+                AccountAttemptContext::new(excluded, None, None)
+                    .with_account_scope(Arc::clone(&scope)),
+                AccountAffinity::Strict,
+                index,
+                None,
+            ),
+        )
+    };
+    let stream = execute(BODY, BTreeSet::new(), 1).await.unwrap();
+    assert_eq!(stream.metadata().provider_account_id().as_str(), SECOND);
+    drop(stream);
+    let retry = execute(BODY, [ProviderAccountId::new(SECOND).unwrap()].into(), 2)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(retry.kind(), ProviderErrorKind::NoEligibleAccount);
+    let unknown = execute(br#"{"commands":{}}"#, BTreeSet::new(), 1)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(unknown.kind(), ProviderErrorKind::RequestPolicyDenied);
+    assert_eq!(
+        unknown.client_visible_upstream_error().unwrap().code(),
+        Some("group_model_denied")
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn search_filters_oauth_and_api_key_accounts_before_weight_and_preserves_wire() {
     let api = MockServer::start().await;
     let oauth = MockServer::start().await;

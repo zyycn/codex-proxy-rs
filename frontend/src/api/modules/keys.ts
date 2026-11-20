@@ -1,6 +1,6 @@
 import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './groups'
-import type { ClientProfileSelection, ProviderRequestProfile, ProviderRequestProfiles, XaiClientProfileSelection } from './settings/profiles'
+import type { ClientProfileSelection, ProviderRequestProfile, ProviderRequestProfiles, ProviderRequestProfileUpdates, XaiClientProfileSelection } from './settings/profiles'
 import request from '../request'
 
 export type ApiKeyRoutingScope = 'all' | 'groups'
@@ -117,6 +117,21 @@ export function getApiKeys(data: ApiKeyListParams, options: RequestOptions = {})
 export function createApiKey(data: ApiKeyCreateParam) {
   return request<ApiKeyCreateResponse>({
     url: '/api/admin/client-keys/create',
+    method: 'POST',
+    data,
+  })
+}
+
+export interface ApiKeyBatchChanges extends Partial<Omit<ApiKeyWriteParam, 'name' | 'label' | 'peerSharing'>> {
+  enabled?: boolean
+  peerSharing?: Partial<ApiKeyPeerSharing>
+  providerRequestProfileOverrides?: ProviderRequestProfileUpdates
+  installationSeed?: string
+}
+
+export function batchUpdateApiKeys(data: ApiKeyBatchChanges & { ids: string[] }) {
+  return request<{ updated: number, configRevision: number }>({
+    url: '/api/admin/client-keys/batch-update',
     method: 'POST',
     data,
   })

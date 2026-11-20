@@ -508,6 +508,7 @@ impl fmt::Debug for ClientVisibleUpstreamResponse {
 /// Core 会在任何持久化或日志记录前取走
 /// 这些事件，不能把它们当作诊断上下文使用
 pub struct ProviderError {
+    denied_group_feature: Option<DeniedGroupFeature>,
     kind: ProviderErrorKind,
     send_state: UpstreamSendState,
     upstream_status: Option<u16>,
@@ -556,6 +557,7 @@ impl ProviderError {
         Self {
             kind,
             send_state,
+            denied_group_feature: None,
             upstream_status: None,
             upstream_values: None,
             retry_after: None,
@@ -577,6 +579,16 @@ impl ProviderError {
             client_visible_upstream_response: None,
             atomic_client_events: None,
         }
+    }
+
+    pub(crate) fn group_feature_denied(feature: DeniedGroupFeature) -> Self {
+        let mut error = Self::new(
+            ProviderErrorKind::RequestPolicyDenied,
+            UpstreamSendState::NotSent,
+        )
+        .with_retry_prohibited();
+        error.denied_group_feature = Some(feature);
+        error
     }
 
     /// 附加合法上游状态码
@@ -1057,6 +1069,7 @@ impl ProviderError {
     pub fn stable_snapshot(&self) -> Self {
         Self {
             kind: self.kind,
+            denied_group_feature: self.denied_group_feature,
             send_state: self.send_state,
             upstream_status: self.upstream_status,
             upstream_values: self.upstream_values.clone(),
@@ -1241,6 +1254,28 @@ impl GatewayErrorKind {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum DeniedGroupFeature {
+    ImageGeneration,
+    CollaborativeSubagents,
+}
+
+impl From<DeniedGroupFeature> for GatewayError {
+    fn from(feature: DeniedGroupFeature) -> Self {
+        let (code, message) = match feature {
+            DeniedGroupFeature::ImageGeneration => (
+                "image_generation_disabled",
+                "Image generation is not allowed by the API key's account groups.",
+            ),
+            DeniedGroupFeature::CollaborativeSubagents => (
+                "subagents_disabled",
+                "Collaborative subagents are not allowed by the API key's account groups.",
+            ),
+        };
+        Self::new(GatewayErrorKind::PolicyDenied, message).with_client_code(code)
+    }
+}
+
 /// 协议无关、可安全暴露的网关错误
 #[derive(Clone, Error)]
 #[error("{message}")]
@@ -1342,9 +1377,10 @@ impl GatewayError {
                 GatewayErrorKind::UpstreamUnavailable,
                 "The upstream account cannot access the service.",
             ),
-            ProviderErrorKind::RequestPolicyDenied => {
-                Self::new(GatewayErrorKind::PolicyDenied, "Request blocked by policy.")
-            }
+            ProviderErrorKind::RequestPolicyDenied => error.denied_group_feature.map_or_else(
+                || Self::new(GatewayErrorKind::PolicyDenied, "Request blocked by policy."),
+                Self::from,
+            ),
             ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted => Self::new(
                 GatewayErrorKind::RateLimited,
                 "Upstream capacity is temporarily unavailable.",

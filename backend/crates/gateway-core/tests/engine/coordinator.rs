@@ -6268,7 +6268,12 @@ fn deadline_before_first_event_is_persisted_as_failed_attempt() {
 
 #[test]
 fn global_location_and_group_fast_policy_reach_every_account_retry() {
-    for mode in [FastMode::Default, FastMode::Enabled, FastMode::Disabled] {
+    for mode in [
+        FastMode::Default,
+        FastMode::Enabled,
+        FastMode::Ultrafast,
+        FastMode::Disabled,
+    ] {
         let operation = generate_operation();
         let location = gateway_core::account::RequestLocation {
             timezone: "Asia/Tokyo".parse().unwrap(),

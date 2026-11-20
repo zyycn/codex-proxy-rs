@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ZButton, ZInput } from '@codex-proxy/ui'
 
-import { Plus, Search, Trash2 } from '@lucide/vue'
+import { Pencil, Plus, Search, Trash2 } from '@lucide/vue'
 
 import { useI18n } from 'vue-i18n'
 
@@ -13,6 +13,7 @@ defineProps<{
 const emit = defineEmits<{
   create: []
   deleteSelected: []
+  editSelected: []
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
@@ -35,6 +36,12 @@ const search = defineModel<string>('search', { required: true })
     </div>
 
     <div class="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 md:ml-auto">
+      <ZButton v-if="selectedCount > 0" :disabled="batchDeleting" @click="emit('editSelected')">
+        <template #icon>
+          <Pencil class="size-4" />
+        </template>
+        {{ t('accounts.filters.editSelected', { count: selectedCount }) }}
+      </ZButton>
       <ZButton
         v-if="selectedCount > 0"
         type="danger" variant="plain"

@@ -190,7 +190,9 @@ impl Provider for GrokBuildProvider {
         })?;
         Ok(models
             .into_iter()
-            .map(compile_grok_model_capabilities)
+            .map(|(model, accounts)| {
+                compile_grok_model_capabilities(model).with_catalog_accounts(accounts)
+            })
             .collect())
     }
 

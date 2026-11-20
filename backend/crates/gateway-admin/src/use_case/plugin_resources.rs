@@ -53,6 +53,8 @@ impl PluginResourceAccess for DefaultPluginResourceAccess {
                     resource_key,
                     NewAccountGroup {
                         allow_image_generation: command.allow_image_generation,
+                        allow_subagents: command.allow_subagents,
+                        model_access: command.model_access,
                         id,
                         name: command.name,
                         description: command.description,

@@ -110,6 +110,14 @@
         "confirm": "允許訪問",
         "description": "保存後也可訪問未分組和以後新增的賬號"
       }
+    },
+    "batch": {
+      "edit": "批次編輯",
+      "updated": "已更新 {count} 個金鑰",
+      "description": "已選 {count} 個密鑰",
+      "partiallyEnabled": "部分密鑰已啟用",
+      "mixed": "多個值",
+      "clearLimit": "設為不限"
     }
   }
 }

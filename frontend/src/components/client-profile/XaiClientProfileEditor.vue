@@ -9,15 +9,16 @@ import { notification as ZNotification } from '@/utils/notification'
 import { errorMessage } from '@/utils/operation'
 import ClientProfilePreviewPanel from './ClientProfilePreviewPanel.vue'
 
-const props = withDefaults(defineProps<{ active?: boolean, disabled?: boolean, allowInherit?: boolean }>(), {
+const props = withDefaults(defineProps<{ active?: boolean, disabled?: boolean, allowInherit?: boolean, allowPreserve?: boolean }>(), {
   active: true,
   disabled: false,
   allowInherit: false,
+  allowPreserve: false,
 })
 
 const { t } = useI18n({ useScope: 'global' })
 
-const model = defineModel<XaiClientProfileSelection | null>({ required: true })
+const model = defineModel<XaiClientProfileSelection | null | undefined>({ required: true })
 const globalConfiguration = shallowRef<XaiClientProfileSelection>()
 const preview = shallowRef<XaiClientProfilePreview>()
 const loadError = shallowRef('')
@@ -43,10 +44,16 @@ const fields = computed(() => ([
 ] as const))
 
 const source = computed({
-  get: () => model.value === null
-    ? 'global'
-    : 'independent',
+  get: () => model.value === undefined
+    ? 'keep'
+    : model.value === null
+      ? 'global'
+      : 'independent',
   set: (value: string) => {
+    if (value === 'keep') {
+      model.value = undefined
+      return
+    }
     if (value === 'global')
       model.value = null
     else if (globalConfiguration.value)
@@ -95,7 +102,7 @@ watch([
   model,
   () => props.active,
 ], ([configuration, active], _, onCleanup) => {
-  if (!active)
+  if (!active || configuration === undefined)
     return
   let cancelled = false
   preview.value = undefined
@@ -137,7 +144,11 @@ onMounted(() => props.allowInherit && void load())
         v-model="source"
         :aria-label="t('settings.clientProfile.xaiClientIdentitySource')"
         class="shrink-0"
-        :options="[{ label: t('settings.clientProfile.globalConfiguration'), value: 'global' }, { label: t('settings.clientProfile.customConfiguration'), value: 'independent' }]"
+        :options="[
+          ...(allowPreserve ? [{ label: t('accounts.modelAccess.reserve'), value: 'keep' }] : []),
+          { label: t('settings.clientProfile.globalConfiguration'), value: 'global' },
+          { label: t('settings.clientProfile.customConfiguration'), value: 'independent' },
+        ]"
         :disabled="disabled || !globalConfiguration"
       />
       <slot name="source-extra" />
@@ -160,6 +171,6 @@ onMounted(() => props.allowInherit && void load())
         </ZFormItem>
       </div>
     </template>
-    <ClientProfilePreviewPanel v-if="!loadError" :preview="preview" :previewing="previewing" :needs-version-input="needsVersionInput" />
+    <ClientProfilePreviewPanel v-if="model !== undefined && !loadError" :preview="preview" :previewing="previewing" :needs-version-input="needsVersionInput" />
   </div>
 </template>

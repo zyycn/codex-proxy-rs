@@ -736,31 +736,43 @@ impl MiddlewarePlan for AddingImageTool {
 }
 
 #[test]
-fn attempt_middleware_cannot_add_image_generation_to_a_denied_scope() {
+fn attempt_middleware_cannot_add_a_group_denied_feature() {
     use gateway_core::account::{AccountSelectionPolicy, RotationStrategy};
     use gateway_core::engine::{AccountAttemptContext, AttemptContext, RequestAttemptContext};
     use gateway_core::error::ProviderErrorKind;
     use gateway_core::routing::{ClientRoutingScope, FrozenAccountScope, RuntimeAccountDirectory};
     use gateway_core::upstream::UpstreamSendState;
 
-    for allowed in [false, true] {
+    for (allowed, image) in [(true, true), (false, true), (true, false), (false, false)] {
         let scope = FrozenAccountScope::new(
             Arc::new(RuntimeAccountDirectory::new(Default::default())),
             ClientRoutingScope::all_accounts(),
         )
-        .with_image_generation(allowed);
-        let request = RequestAttemptContext::new(
-            ModelRequestId::new("req_image_policy").unwrap(),
-            ClientApiKeyId::new("key_image_policy").unwrap(),
-        )
-        .with_middleware(
-            Some(FrozenMiddlewarePlan::new(
+        .with_image_generation(!image || allowed)
+        .with_subagents(image || allowed);
+        let plan = if image {
+            FrozenMiddlewarePlan::new(
                 Arc::new(AddingImageTool),
                 ExtensionSetReference::new(
                     ExtensionSetId::new("image-policy-test".to_owned()).unwrap(),
                     Arc::new(ReadyGeneration),
                 ),
-            )),
+            )
+        } else {
+            header_plan(
+                "subagent-policy-test",
+                vec![MiddlewareHeader::new(
+                    "x-openai-subagent",
+                    Bytes::from_static(b"collab_spawn"),
+                )],
+            )
+        };
+        let request = RequestAttemptContext::new(
+            ModelRequestId::new("req_group_permissions").unwrap(),
+            ClientApiKeyId::new("key_group_permissions").unwrap(),
+        )
+        .with_middleware(
+            Some(plan),
             Arc::from([]),
             "/v1/responses".into(),
             ClientTransport::HttpJson,
@@ -782,9 +794,17 @@ fn attempt_middleware_cannot_add_image_generation_to_a_denied_scope() {
             ProviderKind::new("openai").unwrap(),
             Some("gpt-test".into()),
             ProviderAccountId::new("acct_middleware").unwrap(),
-            Box::new(move |operation, _| {
+            Box::new(move |operation, headers| {
                 Box::pin(async move {
-                    assert!(operation.image_generation_requested());
+                    if image {
+                        assert!(operation.image_generation_requested());
+                    } else {
+                        assert!(
+                            headers
+                                .iter()
+                                .any(|header| header.name() == "x-openai-subagent")
+                        );
+                    }
                     count.fetch_add(1, Ordering::SeqCst);
                     Ok(empty_provider_stream())
                 })
@@ -796,10 +816,19 @@ fn attempt_middleware_cannot_add_image_generation_to_a_denied_scope() {
         } else {
             let error = match result {
                 Err(error) => error,
-                Ok(_) => panic!("image tool must be denied"),
+                Ok(_) => panic!("group feature must be denied"),
             };
             assert_eq!(error.kind(), ProviderErrorKind::RequestPolicyDenied);
             assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+            let gateway = gateway_core::error::GatewayError::from_provider(&error);
+            assert_eq!(
+                gateway.client_error_code(),
+                Some(if image {
+                    "image_generation_disabled"
+                } else {
+                    "subagents_disabled"
+                })
+            );
             assert!(error.retry_is_prohibited());
         }
     }

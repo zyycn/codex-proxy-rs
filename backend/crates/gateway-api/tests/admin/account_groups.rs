@@ -79,6 +79,58 @@ async fn options_route_should_return_only_lightweight_group_fields() {
 }
 
 #[tokio::test]
+async fn models_route_reads_the_published_group_catalog() {
+    use gateway_core::{
+        account::ProviderAccountId,
+        routing::{
+            ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, RuntimeAccount,
+            RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
+        },
+    };
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
+
+    let fixture = authenticated_fixture().await;
+    let uri = format!("/api/admin/account-groups/models?id={PRIMARY_GROUP_ID}");
+    let unavailable = request(router(&fixture), Method::GET, &uri, None, true).await;
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let provider = ProviderKind::new("openai").unwrap();
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(7).unwrap(),
+        gateway_core::settings::SettingsValues::new(1, "smart", Default::default(), None, None),
+        vec![provider.clone()],
+        vec![ProviderModel::new(
+            provider.clone(),
+            UpstreamModelId::new("model-a").unwrap(),
+            ModelCapabilities::new(
+                BTreeSet::from([gateway_core::operation::OperationKind::Generate]),
+                None,
+            ),
+        )],
+        vec![],
+    )
+    .unwrap()
+    .with_account_directory(Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+        ProviderAccountId::new("acct_member").unwrap(),
+        RuntimeAccount::new(
+            provider,
+            BTreeSet::from([super::group_id(PRIMARY_GROUP_ID)]),
+        ),
+    )]))));
+    fixture.published_snapshot.publish(snapshot);
+    let response = request(router(&fixture), Method::GET, &uri, None, true).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["data"],
+        json!({"models":[{"id":"model-a", "label":"model-a"}]})
+    );
+    let unauthorized = request(router(&fixture), Method::GET, &uri, None, false).await;
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn create_route_should_create_an_empty_group() {
     let fixture = authenticated_fixture().await;
     let response = request(
@@ -106,6 +158,11 @@ async fn create_route_should_create_an_empty_group() {
     assert_eq!(value["data"]["record"]["color"], "#A855F780");
     assert_eq!(value["data"]["record"]["fastMode"], "default");
     assert_eq!(value["data"]["record"]["allowImageGeneration"], true);
+    assert_eq!(value["data"]["record"]["allowSubagents"], true);
+    assert_eq!(
+        value["data"]["record"]["modelAccess"],
+        json!({"mode":"all","models":[]})
+    );
     assert_eq!(value["data"]["configRevision"], 8);
 }
 
@@ -189,6 +246,8 @@ async fn delete_route_should_return_deleted_id_without_a_live_record() {
 async fn list_route_should_reject_unknown_and_invalid_pagination_fields() {
     let fixture = authenticated_fixture().await;
     for uri in [
+        "/api/admin/account-groups/models",
+        "/api/admin/account-groups/models?id=bad",
         "/api/admin/account-groups?other=true",
         "/api/admin/account-groups?page=0",
         "/api/admin/account-groups?pageSize=0",
@@ -345,6 +404,8 @@ async fn fast_mode_group_updates_preserve_omitted_and_null_values() {
     for (value, expected) in [
         (Some(json!("disabled")), "disabled"),
         (None, "disabled"),
+        (Some(json!("ultrafast")), "ultrafast"),
+        (None, "ultrafast"),
         (Some(json!("enabled")), "enabled"),
         (None, "enabled"),
         (Some(Value::Null), "enabled"),
@@ -376,6 +437,7 @@ async fn fast_mode_rejects_invalid_values_and_creates_groups_in_each_mode() {
     for (mode, expected) in [
         (json!("enabled"), StatusCode::CREATED),
         (json!("disabled"), StatusCode::CREATED),
+        (json!("ultrafast"), StatusCode::CREATED),
         (json!("default"), StatusCode::CREATED),
         (json!("force"), StatusCode::UNPROCESSABLE_ENTITY),
         (json!(true), StatusCode::BAD_REQUEST),
@@ -429,4 +491,54 @@ async fn image_generation_flag_round_trips_and_omitted_updates_preserve_it() {
             expected
         );
     }
+}
+
+#[tokio::test]
+async fn subagent_and_model_policies_round_trip_independently() {
+    let fixture = authenticated_fixture().await;
+    let policy = json!({"mode":"allowlist", "models":["model-a"]});
+    let created = request(
+        router(&fixture),
+        Method::POST,
+        "/api/admin/account-groups/create",
+        Some(json!({
+            "name":"Model policy", "color":"#2563EBFF", "modelAccess":policy, "allowSubagents":false
+        })),
+        true,
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = response_json(created).await;
+    assert_eq!(created["data"]["record"]["modelAccess"], policy);
+    assert_eq!(created["data"]["record"]["allowSubagents"], false);
+    let mut update = json!({"id":created["data"]["id"], "name":"Model policy", "color":"#2563EBFF", "allowSubagents":true});
+    let send = |body| {
+        request(
+            router(&fixture),
+            Method::POST,
+            "/api/admin/account-groups/update",
+            Some(body),
+            true,
+        )
+    };
+    let changed = send(update.clone()).await;
+    assert_eq!(changed.status(), StatusCode::OK);
+    let changed = response_json(changed).await;
+    assert_eq!(changed["data"]["record"]["modelAccess"], policy);
+    assert_eq!(changed["data"]["record"]["allowSubagents"], true);
+    update.as_object_mut().unwrap().remove("allowSubagents");
+    update["modelAccess"] = json!({"mode":"denylist","models":["model-b"]});
+    let changed = send(update.clone()).await;
+    assert_eq!(changed.status(), StatusCode::OK);
+    let changed = response_json(changed).await;
+    assert_eq!(
+        changed["data"]["record"]["modelAccess"],
+        update["modelAccess"]
+    );
+    assert_eq!(changed["data"]["record"]["allowSubagents"], true);
+    update["modelAccess"] = json!({"mode":"allowlist","models":[]});
+    assert_eq!(
+        send(update).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
 }

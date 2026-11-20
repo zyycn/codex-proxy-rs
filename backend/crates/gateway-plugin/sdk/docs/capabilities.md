@@ -493,7 +493,7 @@ OpenAI 与 xAI 的上游 headers 先由账号和画像生成，插件同名字�
 实际账号租约、凭据版本与计费归属仍记录真实选中事实，不随插件修改 header 名称而伪造
 
 request 阶段 `request.head.settings` 是本次调用的有效设置对象，包含 `runtime`、`fast_mode`、`client_limits` 和 `timeout_ms`。
-`fast_mode` 使用 `default`、`enabled`、`disabled` 三态，具体档位语义见[账号分组](../../../../../docs/api.md#6-账号分组)。
+`fast_mode` 使用 `default`、`enabled`、`ultrafast`、`disabled` 四个值，具体档位语义见[账号分组](../../../../../docs/api.md#6-账号分组)。
 `runtime` 使用宿主快照的设置字段，画像已合并 Client Key 设置；可以修改映射、画像、调度、位置及计价等执行参数。
 SDK 仅在对象改变时提交完整替换，`false`、`0`、空映射和合同允许的 `null` 不表示跳过；不做隐式深合并。
 线协议省略 `next.settings` 才表示保留；显式 `null` 仍按完整替换校验，因不符合设置对象合同而拒绝。

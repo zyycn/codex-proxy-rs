@@ -103,7 +103,7 @@ watch(search, () => {
               <ZCheckbox :model-value="selectedIds.has(row.id)" :disabled="batchTesting" :aria-label="t('proxies.page.selectProxy', { name: row.name })" @update:model-value="toggleSelection(row.id)" />
             </template>
             <template #name="{ row }">
-              <span class="block truncate text-z text-z-text" :title="row.name">{{ row.name }}</span>
+              <strong class="block truncate text-z text-z-text" :title="row.name">{{ row.name }}</strong>
             </template>
             <template #address="{ row }">
               <span class="flex min-w-0 items-center gap-1 text-z-xs font-emphasis text-z-text-quaternary">

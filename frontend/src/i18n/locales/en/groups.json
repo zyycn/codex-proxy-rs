@@ -35,10 +35,18 @@
       "selectGroupColor": "Select group color",
       "fastMode": "Fast mode",
       "imageGeneration": "Image generation",
-      "descriptionOptional": "Description (optional)",
+      "description": "Description",
       "groupDescription": "Group description",
       "describePurposeOfThisGroup": "Describe the purpose of this group",
-      "saveGroup": "Save"
+      "saveGroup": "Save",
+      "forceFast": "Force Fast",
+      "forceUltrafast": "Force Ultrafast",
+      "subagents": "Collaborative subagents",
+      "memberModels": "Member account models",
+      "searchModels": "Search member models",
+      "emptyCatalog": "Add an account with available models to this group first",
+      "fastModeHelp": "Default follows the client. Disable downgrades both accelerated tiers to standard. A forced tier overrides the client selection when the model supports it.",
+      "subagentsHelp": "Enable lets the client decide when to start a collaborative subagent. Disable rejects requests identified as coming from a collaborative subagent."
     },
     "metrics": {
       "restricted": "Restricted",
@@ -56,7 +64,6 @@
       "empty": "No groups yet",
       "selectCurrentPageGroup": "Select current page group",
       "selectGroup": "Select group",
-      "fastModeIsOn": "Fast mode is on",
       "fastModeIsOff": "Fast mode is off",
       "imageGenerationDisabled": "Image generation disabled",
       "colorLabel": "Group color: {color}",

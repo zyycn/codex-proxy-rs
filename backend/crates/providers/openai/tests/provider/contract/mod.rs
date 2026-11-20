@@ -8151,13 +8151,45 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
     assert_eq!(upstream_service_tier.as_deref(), Some("default"));
 }
 
+async fn seed_service_tiers(store: &MemoryAccountStore, id: &str, model: &str, tiers: &[&str]) {
+    use gateway_core::account::AccountCatalogObservation;
+    let account = store.account(id).unwrap();
+    let tiers: Vec<_> = tiers
+        .iter()
+        .map(|id| json!({"id":id,"name":id,"description":""}))
+        .collect();
+    let mut document = vec![0];
+    serde_json::to_writer(
+        &mut document,
+        &json!({"models":[{
+            "slug":model, "display_name":model, "service_tiers":tiers,
+        }]}),
+    )
+    .unwrap();
+    assert!(
+        store
+            .save_account_catalog(
+                &AccountCatalogObservation {
+                    account_id: account.id().clone(),
+                    revision: account.revision(),
+                    plan: account.plan_type().map(str::to_owned),
+                    etag: None,
+                    observed_at: SystemTime::now(),
+                },
+                &document
+            )
+            .await
+            .unwrap()
+    );
+}
+
 #[tokio::test]
 async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_transports() {
     for use_websocket in [false, true] {
-        for (fast_mode, supports_priority, requested, reported, expected_tier, expected_cost) in [
+        for (fast_mode, advertised_tier, requested, reported, expected_tier, expected_cost) in [
             (
                 FastMode::Default,
-                false,
+                None,
                 Some(json!("priority")),
                 Some("default"),
                 Some("priority"),
@@ -8165,7 +8197,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Default,
-                false,
+                None,
                 Some(json!("priority")),
                 None,
                 Some("priority"),
@@ -8173,7 +8205,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Default,
-                false,
+                None,
                 Some(json!("default")),
                 Some("priority"),
                 Some("default"),
@@ -8181,7 +8213,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Default,
-                false,
+                None,
                 None,
                 Some("priority"),
                 None,
@@ -8189,7 +8221,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Disabled,
-                false,
+                None,
                 Some(json!("priority")),
                 Some("priority"),
                 Some("default"),
@@ -8197,7 +8229,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Disabled,
-                false,
+                None,
                 Some(json!("fast")),
                 None,
                 Some("default"),
@@ -8205,16 +8237,16 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Disabled,
-                false,
+                None,
                 Some(json!("default")),
                 None,
                 Some("default"),
                 Some(3_437_500),
             ),
-            (FastMode::Disabled, false, None, None, None, Some(3_437_500)),
+            (FastMode::Disabled, None, None, None, None, Some(3_437_500)),
             (
                 FastMode::Disabled,
-                false,
+                None,
                 Some(json!("flex")),
                 None,
                 Some("flex"),
@@ -8222,15 +8254,15 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Disabled,
-                false,
+                None,
                 Some(json!("ultrafast")),
                 None,
-                Some("ultrafast"),
-                None,
+                Some("default"),
+                Some(3_437_500),
             ),
             (
                 FastMode::Enabled,
-                true,
+                Some("priority"),
                 None,
                 Some("default"),
                 Some("priority"),
@@ -8238,7 +8270,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Enabled,
-                true,
+                Some("priority"),
                 Some(Value::Null),
                 Some("default"),
                 Some("priority"),
@@ -8246,7 +8278,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Enabled,
-                true,
+                Some("priority"),
                 Some(json!("default")),
                 Some("default"),
                 Some("priority"),
@@ -8254,7 +8286,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Enabled,
-                true,
+                Some("priority"),
                 Some(json!("priority")),
                 None,
                 Some("priority"),
@@ -8262,40 +8294,102 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             ),
             (
                 FastMode::Enabled,
-                true,
+                Some("priority"),
                 Some(json!("flex")),
                 None,
-                Some("flex"),
-                Some(1_720_000),
+                Some("priority"),
+                Some(6_875_000),
             ),
             (
                 FastMode::Enabled,
-                true,
+                Some("priority"),
+                Some(json!("ultrafast")),
+                None,
+                Some("priority"),
+                Some(6_875_000),
+            ),
+            (
+                FastMode::Enabled,
+                Some("priority"),
+                Some(json!("auto")),
+                None,
+                Some("priority"),
+                Some(6_875_000),
+            ),
+            (FastMode::Enabled, None, None, None, None, Some(3_437_500)),
+            (
+                FastMode::Enabled,
+                None,
+                Some(json!("default")),
+                None,
+                Some("default"),
+                Some(3_437_500),
+            ),
+            (
+                FastMode::Default,
+                None,
                 Some(json!("ultrafast")),
                 None,
                 Some("ultrafast"),
                 None,
             ),
             (
-                FastMode::Enabled,
-                true,
-                Some(json!("auto")),
-                None,
-                Some("auto"),
-                None,
-            ),
-            (FastMode::Enabled, false, None, None, None, Some(3_437_500)),
-            (
-                FastMode::Enabled,
-                false,
-                Some(json!("default")),
+                FastMode::Ultrafast,
+                Some("ultrafast"),
                 None,
                 Some("default"),
-                Some(3_437_500),
+                Some("ultrafast"),
+                None,
             ),
+            (
+                FastMode::Ultrafast,
+                Some("ultrafast"),
+                Some(json!("priority")),
+                None,
+                Some("ultrafast"),
+                None,
+            ),
+            (
+                FastMode::Ultrafast,
+                Some("ultrafast"),
+                Some(json!("flex")),
+                None,
+                Some("ultrafast"),
+                None,
+            ),
+            (
+                FastMode::Ultrafast,
+                Some("priority"),
+                Some(json!("priority")),
+                None,
+                Some("priority"),
+                Some(6_875_000),
+            ),
+            (FastMode::Ultrafast, None, None, None, None, Some(3_437_500)),
         ] {
             let store = Arc::new(MemoryAccountStore::default());
             create_account(&store, "acct_provider_contract").await;
+            // 同名模型的聚合画像来自另一个分组，故意与本次能选的账号声明相反
+            let other = "acct_other_tier_catalog";
+            create_account(&store, other).await;
+            seed_service_tiers(
+                &store,
+                "acct_provider_contract",
+                "gpt-5.4",
+                advertised_tier.as_slice(),
+            )
+            .await;
+            seed_service_tiers(
+                &store,
+                other,
+                "gpt-5.4",
+                if advertised_tier.is_some() {
+                    &[]
+                } else {
+                    &["priority", "ultrafast"]
+                },
+            )
+            .await;
             let mut created =
                 json!({"type":"response.created","response":{"id":"resp_tier","model":"gpt-5.4"}});
             let mut completed = json!({
@@ -8378,20 +8472,15 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 )]));
             let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
             let original = operation.clone();
-            let mut stream = provider_with_base_url(&store, base_url)
+            let provider = provider_with_catalog_and_base_url(&store, base_url).await;
+            let catalog = provider.query_model_capabilities().await.unwrap();
+            let mut stream = provider
                 .execute(
                     planned_request_with_presentation(
                         "openai",
                         operation.clone(),
                         "gpt-5.4",
-                        supports_priority.then(|| {
-                            gateway_core::routing::ModelPresentation::new(None, None)
-                                .with_service_tiers(vec![
-                                    gateway_core::routing::ModelServiceTier::new(
-                                        "priority", "fast", "Fast",
-                                    ),
-                                ])
-                        }),
+                        catalog[0].presentation().cloned(),
                     ),
                     context_with_fast_policy(
                         "req_service_tier",
@@ -12623,6 +12712,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
     const ACCOUNT: &str = "acct_provider_contract";
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, ACCOUNT).await;
+    seed_service_tiers(&store, ACCOUNT, "gpt-6.1-sol", &["priority", "ultrafast"]).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
@@ -12632,7 +12722,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
                 // 提示头只在首次握手发送；后续档位由各自 response.create 正文指定
                 assert_eq!(
                     request.headers()["x-codex-routing-hint"],
-                    "model=gpt-5.4;tier=default"
+                    "model=gpt-6.1-sol;tier=default"
                 );
                 response.headers_mut().insert(
                     "sec-websocket-extensions",
@@ -12640,7 +12730,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
                 );
             })
             .await;
-        for (index, tier) in ["default", "priority", "default", "default"]
+        for (index, tier) in ["default", "priority", "ultrafast", "default"]
             .into_iter()
             .enumerate()
         {
@@ -12658,11 +12748,11 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
                     .map(|previous| json!(format!("resp_fast_turn_{previous}")))
             );
             websocket.send(Message::Text(json!({
-                "type":"response.created", "response":{"id":format!("resp_fast_turn_{index}"),"model":"gpt-5.4"}
+                "type":"response.created", "response":{"id":format!("resp_fast_turn_{index}"),"model":"gpt-6.1-sol"}
             }).to_string().into())).await.unwrap();
             websocket.send(Message::Text(json!({
                 "type":"response.completed", "response":{
-                    "id":format!("resp_fast_turn_{index}"), "model":"gpt-5.4", "status":"completed", "output":[],
+                    "id":format!("resp_fast_turn_{index}"), "model":"gpt-6.1-sol", "status":"completed", "output":[],
                     "service_tier":"priority", "usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":25,"cache_write_tokens":0},"total_tokens":110}
                 }
             }).to_string().into())).await.unwrap();
@@ -12674,7 +12764,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
             "all four turns must use the same upstream connection"
         );
     });
-    let provider = provider_with_base_url(&store, base_url);
+    let provider = provider_with_catalog_and_base_url(&store, base_url).await;
     let mut session_state = ProviderSessionState::new(
         "openai",
         Map::from_iter([
@@ -12687,11 +12777,11 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         ]),
     )
     .unwrap();
-    for (index, fast_mode) in [
-        FastMode::Default,
-        FastMode::Enabled,
-        FastMode::Disabled,
-        FastMode::Default,
+    for (index, (fast_mode, tier, cost)) in [
+        (FastMode::Default, "default", 2_525_000),
+        (FastMode::Enabled, "priority", 5_050_000),
+        (FastMode::Ultrafast, "ultrafast", 15_150_000),
+        (FastMode::Disabled, "default", 2_525_000),
     ]
     .into_iter()
     .enumerate()
@@ -12699,8 +12789,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         let previous = index
             .checked_sub(1)
             .map(|index| format!("resp_fast_turn_{index}"));
-        let mut body =
-            json!({"model":"gpt-5.4","input":"next turn","service_tier":"default","store":false});
+        let mut body = json!({"model":"gpt-6.1-sol","input":"next turn","service_tier":"default","store":false});
         if let Some(previous) = &previous {
             body["previous_response_id"] = json!(previous);
         }
@@ -12756,19 +12845,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         });
         let mut stream = Arc::clone(&provider)
             .execute(
-                planned_request_with_presentation(
-                    "openai",
-                    operation,
-                    "gpt-5.4",
-                    Some(
-                        gateway_core::routing::ModelPresentation::new(None, None)
-                            .with_service_tiers(vec![
-                                gateway_core::routing::ModelServiceTier::new(
-                                    "priority", "fast", "Fast",
-                                ),
-                            ]),
-                    ),
-                ),
+                planned_request_for_model("openai", operation, "gpt-6.1-sol"),
                 context,
             )
             .await
@@ -12805,22 +12882,8 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
                 WebSocketPoolKind::Reuse
             })
         );
-        assert_eq!(
-            observed_tier.as_deref(),
-            Some(if fast_mode == FastMode::Enabled {
-                "priority"
-            } else {
-                "default"
-            })
-        );
-        assert_eq!(
-            costs,
-            vec![if fast_mode == FastMode::Enabled {
-                6_875_000
-            } else {
-                3_437_500
-            }]
-        );
+        assert_eq!(observed_tier.as_deref(), Some(tier));
+        assert_eq!(costs, vec![cost]);
     }
     server.await.unwrap();
 }

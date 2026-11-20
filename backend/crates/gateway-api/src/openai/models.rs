@@ -115,9 +115,14 @@ async fn models_response(
                 }
             })
             .collect::<Result<Vec<_>, ()>>();
-        let Ok(models) = models else {
+        let Ok(mut models) = models else {
             return catalog_unavailable_response();
         };
+        if !client.policy().account_scope().allows_subagents() {
+            for model in &mut models {
+                model["multi_agent_version"] = json!("disabled");
+            }
+        }
         return (
             StatusCode::OK,
             // 目录经过账号选择/别名/多 Provider 聚合，不能借用上游 ETag 表示改写后的正文

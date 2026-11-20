@@ -406,13 +406,13 @@ async fn model_query_middleware_short_circuit_sets_json_content_type_without_cal
 }
 
 #[tokio::test]
-async fn native_catalog_preserves_complete_objects_and_only_rewrites_alias_slug() {
+async fn native_catalog_preserves_upstream_fields_except_alias_and_group_subagent_policy() {
     let original = serde_json::json!({
         "slug": "gpt-native", "display_name": "Official name", "priority": 47,
         "base_instructions": "Official instructions\nDo not replace.",
         "model_messages": {"token_budget": "upstream template", "future_section": [null, {"a": true}]},
         "service_tiers": [{"id": "priority", "name": "Fast", "description": "Official speed tier"}],
-        "tool_mode": "code_mode_only", "use_responses_lite": true,
+        "tool_mode": "code_mode_only", "use_responses_lite": true, "multi_agent_version": "v2",
         "supports_reasoning_summary_parameter": true, "default_reasoning_summary": "detailed",
         "future_field": {"nested": [1, null, "value"]}, "explicit_null": null
     });
@@ -424,35 +424,49 @@ async fn native_catalog_preserves_complete_objects_and_only_rewrites_alias_slug(
         )
         .expect("payload"),
     };
-    let execution = Arc::new(ModelsExecution {
-        client: authenticated_client("sk_models_test"),
-        presentation: None,
-        native: Some(Ok(vec![entry("gpt-native"), entry("my-alias")])),
-        requested_versions: Mutex::default(),
-        middleware: None,
-    });
-    let response = api_router(execution.clone())
-        .await
-        .oneshot(authorized_request(
-            "/v1/models?client_version=0.154.0-alpha.3",
-        ))
-        .await
-        .expect("response");
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["cache-control"], "private, no-store");
-    assert!(response.headers().get("etag").is_none());
-    let body = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let value: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
-    assert_eq!(value["models"][0], original);
-    let mut alias = original;
-    alias["slug"] = serde_json::json!("my-alias");
-    assert_eq!(value["models"][1], alias);
-    assert_eq!(
-        *execution.requested_versions.lock().expect("versions"),
-        ["0.154.0-alpha.3"]
-    );
+    for (allowed, client) in [
+        (true, authenticated_client("sk_models_test")),
+        (
+            false,
+            super::group_permissions::execution()
+                .authenticate("sk_group_permissions")
+                .unwrap(),
+        ),
+    ] {
+        let execution = Arc::new(ModelsExecution {
+            client,
+            presentation: None,
+            native: Some(Ok(vec![entry("gpt-native"), entry("my-alias")])),
+            requested_versions: Mutex::default(),
+            middleware: None,
+        });
+        let response = api_router(execution.clone())
+            .await
+            .oneshot(authorized_request(
+                "/v1/models?client_version=0.154.0-alpha.3",
+            ))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["cache-control"], "private, no-store");
+        assert!(response.headers().get("etag").is_none());
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
+        let mut expected = original.clone();
+        if !allowed {
+            expected["multi_agent_version"] = serde_json::json!("disabled");
+        }
+        assert_eq!(value["models"][0], expected);
+        let mut alias = expected;
+        alias["slug"] = serde_json::json!("my-alias");
+        assert_eq!(value["models"][1], alias);
+        assert_eq!(
+            *execution.requested_versions.lock().expect("versions"),
+            ["0.154.0-alpha.3"]
+        );
+    }
 }
 
 #[tokio::test]

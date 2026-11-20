@@ -1,6 +1,9 @@
 //! 控制面设置与 Key 修改的 revision 锁、条件写入和同事务审计
 
 use async_trait::async_trait;
+use gateway_admin::{
+    model::client_keys::BatchUpdateClientKeys, ports::store::BatchClientKeyProfileMerger,
+};
 use sqlx::PgPool;
 
 use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
@@ -195,6 +198,7 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
 }
 
 enum ControlPlaneMutation {
+    BatchUpdateClientKeys(BatchUpdateClientKeys, BatchClientKeyProfileMerger),
     CreateClientApiKey(NewClientApiKey),
     UpdateClientApiKey(UpdateClientApiKeyDetails),
     SetClientApiKeyEnabled { id: String, enabled: bool },
@@ -203,6 +207,19 @@ enum ControlPlaneMutation {
 }
 
 impl PgControlPlaneRepository {
+    pub(super) async fn batch_update_client_keys(
+        &self,
+        command: BatchUpdateClientKeys,
+        merge_profiles: BatchClientKeyProfileMerger,
+        audit: AdminAuditEvent,
+    ) -> StoreResult<Revision> {
+        self.apply_targeted_mutation(
+            ControlPlaneMutation::BatchUpdateClientKeys(command, merge_profiles),
+            audit,
+        )
+        .await
+    }
+
     async fn apply_targeted_mutation(
         &self,
         mutation: ControlPlaneMutation,
@@ -214,6 +231,14 @@ impl PgControlPlaneRepository {
         let result: StoreResult<_> = async {
             let revision = bump_config_revision_in_transaction(&mut transaction).await?;
             match mutation {
+                ControlPlaneMutation::BatchUpdateClientKeys(command, merge_profiles) => {
+                    super::client_keys::batch_update_client_keys_in_transaction(
+                        &mut transaction,
+                        &command,
+                        &merge_profiles,
+                    )
+                    .await?;
+                }
                 ControlPlaneMutation::CreateClientApiKey(key) => {
                     audit.changed_fields.push(if key.group_ids.is_empty() {
                         "routing_scope:all".to_owned()

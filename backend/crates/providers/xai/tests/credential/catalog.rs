@@ -140,9 +140,23 @@ async fn catalog_query_caches_each_plan_and_returns_strict_union() {
     assert_eq!(service.catalog_generation().get(), 1);
     service.query_models().await.expect("same catalog sync");
     assert_eq!(service.catalog_generation().get(), 1);
+    store
+        .set_enabled(&account_id("catalog-b"), false)
+        .await
+        .unwrap();
+    let remaining = service
+        .query_models()
+        .await
+        .expect("same model, one remaining source");
+    assert_eq!(service.catalog_generation().get(), 2);
+    assert_eq!(remaining[0].1, [account_id("catalog-a")].into());
+    assert_eq!(
+        models[0].1,
+        [account_id("catalog-a"), account_id("catalog-b")].into()
+    );
 
     assert_eq!(models.len(), 1);
-    assert_eq!(models[0].request_model().as_str(), "grok-4.5");
+    assert_eq!(models[0].0.request_model().as_str(), "grok-4.5");
     let account = store
         .account(&account_id("catalog-a"))
         .expect("created account");
@@ -467,7 +481,7 @@ async fn failed_plan_scope_is_skipped_and_surviving_plans_still_cache() {
         .expect("surviving plan still refreshes the catalog");
 
     assert_eq!(models.len(), 1);
-    assert_eq!(models[0].request_model().as_str(), "grok-4.5");
+    assert_eq!(models[0].0.request_model().as_str(), "grok-4.5");
     assert_eq!(transport.calls(), 2);
     let standard = store
         .account(&account_id("plan-standard"))

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use gateway_core::{
-    account::{AccountStatusFacts, FastMode},
+    account::{AccountModelAccess, AccountStatusFacts, FastMode},
     routing::AccountGroupId,
 };
 
@@ -112,6 +112,8 @@ pub struct AccountGroupListQuery {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupRecord {
     pub allow_image_generation: bool,
+    pub allow_subagents: bool,
+    pub model_access: AccountModelAccess,
     pub fast_mode: FastMode,
     pub id: AccountGroupId,
     pub name: String,
@@ -152,6 +154,8 @@ pub struct AccountGroupOptionsPage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateAccountGroup {
     pub allow_image_generation: bool,
+    pub allow_subagents: bool,
+    pub model_access: AccountModelAccess,
     pub fast_mode: FastMode,
     pub name: String,
     pub description: Option<String>,
@@ -162,6 +166,8 @@ pub struct CreateAccountGroup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAccountGroup {
     pub allow_image_generation: bool,
+    pub allow_subagents: bool,
+    pub model_access: AccountModelAccess,
     pub fast_mode: FastMode,
     pub id: AccountGroupId,
     pub name: String,
@@ -173,6 +179,8 @@ pub struct NewAccountGroup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccountGroup {
     pub allow_image_generation: Option<bool>,
+    pub allow_subagents: Option<bool>,
+    pub model_access: Option<AccountModelAccess>,
     pub fast_mode: Option<FastMode>,
     pub id: AccountGroupId,
     pub name: String,

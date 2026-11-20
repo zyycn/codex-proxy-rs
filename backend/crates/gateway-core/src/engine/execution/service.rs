@@ -478,9 +478,10 @@ impl DefaultExecutionService {
         let budget_key_id = request.client.policy.key_id().clone();
         let mut entered_execution = false;
         let result = async {
-            crate::engine::image_generation::check_image_generation(
-                authorization.account_scope.allows_image_generation(),
+            crate::engine::group_permissions::check_group_permissions(
+                &authorization.account_scope,
                 &request.operation,
+                &[],
             )?;
             if authorization.cancellation.is_cancelled() {
                 return Err(GatewayError::new(

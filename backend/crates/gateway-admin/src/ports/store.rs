@@ -22,10 +22,11 @@ use crate::model::{
     },
     auth::{AdminAuditEvent, AuthSession},
     client_keys::{
-        ClientKeyBudgetMutationOrigin, ClientKeyBudgetWindow, ClientKeyBudgetWindowPeriod,
-        ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
-        NewClientKey, ResetClientKeyBudget, SetClientKeyBudgetWindow, SetClientKeyEnabled,
-        UpdateClientKey, UpdateClientKeyBudgetLimits,
+        BatchUpdateClientKeys, ClientKeyBudgetMutationOrigin, ClientKeyBudgetWindow,
+        ClientKeyBudgetWindowPeriod, ClientKeyListQuery, ClientKeyPage, ClientKeyRecord,
+        ClientKeySecret, DeleteClientKey, NewClientKey, ResetClientKeyBudget,
+        SetClientKeyBudgetWindow, SetClientKeyEnabled, UpdateClientKey,
+        UpdateClientKeyBudgetLimits,
     },
     observability::{
         DashboardObservation, DashboardQuery, DiagnosticDimension, DiagnosticsObservation,
@@ -108,6 +109,13 @@ impl AdminStoreError {
 }
 
 pub type AdminStoreResult<T> = Result<T, AdminStoreError>;
+
+/// 在持有密钥行锁时用 Provider 准备好的纯合并操作更新原有画像
+pub type BatchClientKeyProfileMerger = Box<
+    dyn Fn(&mut crate::model::client_keys::ProviderRequestProfileOverrides) -> AdminStoreResult<()>
+        + Send
+        + Sync,
+>;
 
 /// 账号目录与公共账号写操作
 #[async_trait]
@@ -414,6 +422,13 @@ pub trait ClientKeyStore: Send + Sync {
         command: UpdateClientKey,
         context: &MutationContext,
     ) -> AdminStoreResult<(Revision, ClientKeyRecord)>;
+
+    async fn batch_update_client_keys(
+        &self,
+        command: BatchUpdateClientKeys,
+        merge_profiles: BatchClientKeyProfileMerger,
+        context: &MutationContext,
+    ) -> AdminStoreResult<Revision>;
 
     async fn set_client_key_enabled(
         &self,

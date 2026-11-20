@@ -7,11 +7,12 @@ use std::{collections::BTreeMap, fmt};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use gateway_admin::model::client_keys::{
-    ClientKeyBudgetPeriod, ClientKeyCursor, ClientKeyCursorValue as DomainCursorValue,
-    ClientKeyListQuery, ClientKeyMutation, ClientKeyPage, ClientKeyPageSize, ClientKeyRecord,
-    ClientKeySecret, ClientKeySort as DomainSort, ClientKeySortField as DomainSortField,
-    CreateClientKey, CreatedClientKey, DeleteClientKey, ResetClientKeyBudget, SetClientKeyEnabled,
-    SortDirection, UpdateClientKey,
+    BatchUpdateClientKeys, ClientKeyBudgetPeriod, ClientKeyCursor,
+    ClientKeyCursorValue as DomainCursorValue, ClientKeyListQuery, ClientKeyMutation,
+    ClientKeyPage, ClientKeyPageSize, ClientKeyRecord, ClientKeySecret,
+    ClientKeySort as DomainSort, ClientKeySortField as DomainSortField, CreateClientKey,
+    CreatedClientKey, DeleteClientKey, ResetClientKeyBudget, SetClientKeyEnabled, SortDirection,
+    UpdateClientKey,
 };
 use gateway_core::{
     engine::budget::ClientBudgetLimits,
@@ -868,6 +869,10 @@ where
     Router::new()
         .route("/api/admin/client-keys", get(list_client_keys::<S>))
         .route(
+            "/api/admin/client-keys/batch-update",
+            post(batch_update_client_keys::<S>),
+        )
+        .route(
             "/api/admin/client-keys/create",
             post(create_client_key::<S>),
         )
@@ -911,6 +916,96 @@ where
         .map_err(map_service_error)?;
     let data = ClientKeyListData::try_from((result, time)).map_err(|_| AdminError::internal())?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BatchUpdateClientKeysRequest {
+    ids: Vec<String>,
+    group_ids: Option<Vec<String>>,
+    enabled: Option<bool>,
+    max_concurrency: Option<u64>,
+    requests_per_minute: Option<u64>,
+    daily_limit_usd: Option<String>,
+    weekly_limit_usd: Option<String>,
+    peer_sharing: Option<gateway_admin::model::client_keys::ClientPeerSharingPatch>,
+    #[serde(default)]
+    provider_request_profile_overrides: ProviderRequestProfileOverrideUpdates,
+    installation_seed: Option<String>,
+}
+
+impl BatchUpdateClientKeysRequest {
+    /// 复用单把密钥的字段校验，缺省和显式零值分别保留
+    pub fn into_command(self) -> Result<BatchUpdateClientKeys, WireValidationError> {
+        if let Some(limit) = self.max_concurrency {
+            validate_limit(limit, "maxConcurrency")?;
+        }
+        if let Some(limit) = self.requests_per_minute {
+            validate_limit(limit, "requestsPerMinute")?;
+        }
+        let installation_seed = self
+            .installation_seed
+            .map(|value| {
+                if value.len() != uuid::fmt::Hyphenated::LENGTH {
+                    return Err(WireValidationError::new("installationSeed"));
+                }
+                uuid::Uuid::try_parse(&value)
+                    .map_err(|_| WireValidationError::new("installationSeed"))
+            })
+            .transpose()?;
+        Ok(BatchUpdateClientKeys {
+            ids: self
+                .ids
+                .into_iter()
+                .map(|id| client_key_id(id, "id"))
+                .collect::<Result<_, _>>()?,
+            group_ids: self.group_ids.map(validate_group_ids).transpose()?,
+            enabled: self.enabled,
+            max_concurrency: self.max_concurrency,
+            requests_per_minute: self.requests_per_minute,
+            daily_limit_usd: parse_budget(self.daily_limit_usd, "dailyLimitUsd")?,
+            weekly_limit_usd: parse_budget(self.weekly_limit_usd, "weeklyLimitUsd")?,
+            peer_sharing: self.peer_sharing.unwrap_or_default(),
+            request_profile_override_updates: normalize_request_profile_override_updates(
+                self.provider_request_profile_overrides,
+                None,
+                None,
+            )?,
+            installation_seed,
+        })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchUpdatedClientKeysData {
+    config_revision: gateway_admin::model::Revision,
+    updated: usize,
+}
+
+async fn batch_update_client_keys<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<BatchUpdateClientKeysRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let command = request.into_command().map_err(map_wire_error)?;
+    let updated = command.ids.len();
+    let config_revision = state
+        .admin_services()
+        .client_keys()
+        .batch_update(&auth.context().mutation_context(), command)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(BatchUpdatedClientKeysData {
+            config_revision,
+            updated,
+        }),
+    ))
 }
 
 async fn create_client_key<S>(
@@ -1088,6 +1183,7 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
         "dailyLimitUsd" => "每日美元限额须非负，整数和小数各最多 10 位",
         "weeklyLimitUsd" => "每周美元限额须非负，整数和小数各最多 10 位",
         "providerRequestProfileOverrides" => "API Key 客户端身份配置无效或字段冲突",
+        "installationSeed" => "安装身份种子必须是带连字符的 UUID",
         "limit" => "每页数量须为 1 至 65535",
         "search" => "搜索内容过长或包含控制字符",
         "sortBy" => "排序字段不受支持",

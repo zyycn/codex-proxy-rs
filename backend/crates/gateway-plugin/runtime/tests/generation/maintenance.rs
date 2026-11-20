@@ -25,6 +25,8 @@ use std::{path::Path, sync::Arc, time::Duration};
 fn group(name: &str) -> CreateAccountGroup {
     CreateAccountGroup {
         allow_image_generation: true,
+        allow_subagents: true,
+        model_access: Default::default(),
         name: name.into(),
         description: None,
         fast_mode: FastMode::Default,
