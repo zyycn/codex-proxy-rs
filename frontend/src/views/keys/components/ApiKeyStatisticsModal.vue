@@ -3,7 +3,7 @@ import type { EChartsOption } from 'echarts'
 import type { ApiKey, KeyStatistics, KeyStatisticsPeriod, KeyUsageMetric } from '@/api'
 import { vLoading, ZButton, ZDialog, ZEmpty, ZSegmented } from '@codex-proxy/ui'
 import { color as chartColor } from 'echarts/core'
-import { computed, shallowRef, watch } from 'vue'
+import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getKeyStatistics } from '@/api'
 import BaseChart from '@/components/charts/BaseChart.vue'
@@ -18,6 +18,7 @@ const props = defineProps<{ apiKey: ApiKey }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n({ useScope: 'global' })
 const open = shallowRef(true)
+const trend = useTemplateRef<HTMLElement>('trend')
 const period = shallowRef<KeyStatisticsPeriod>('7d')
 const metric = shallowRef<KeyUsageMetric>('costUsd')
 const data = shallowRef<(KeyStatistics & { keyId: string, period: KeyStatisticsPeriod, metric: KeyUsageMetric }) | null>(null)
@@ -197,12 +198,12 @@ watch([
         <div v-if="error" class="flex flex-wrap items-center gap-2 text-z-sm text-z-error-text" role="alert">
           <span>{{ error }}</span>
           <span v-if="data">{{ t('keys.statistics.showingPrevious', { days: data.dates.length }) }}</span>
-          <ZButton size="small" @click="load">
+          <ZButton size="small" @click="trend?.focus(); load()">
             {{ t('common.actions.refresh') }}
           </ZButton>
         </div>
         <div class="grid min-w-0 items-stretch gap-y-3 lg:gap-x-8 lg:grid-cols-[minmax(0,1.55fr)_minmax(22rem,1fr)]">
-          <section class="flex min-w-0 flex-col" :aria-label="t('keys.statistics.trend')">
+          <section ref="trend" tabindex="-1" class="flex min-w-0 flex-col" :aria-label="t('keys.statistics.trend')">
             <div v-loading="{ loading, text: t('common.status.loading'), preserveContent: !!data }" class="relative flex min-h-46 min-w-0 flex-1 flex-col">
               <ZEmpty v-if="data && (empty || metricTotal === null)" class="flex-1 content-center" surface="none" :title="empty ? t('keys.statistics.empty') : t('keys.statistics.missing')" />
               <BaseChart v-else-if="data" class="grow" :option="chart" :height="184" />

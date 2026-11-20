@@ -117,9 +117,9 @@ const columns = computed(() => defineTableColumns<KeyModelRow>([
 </script>
 
 <template>
-  <div ref="container" class="grid min-w-0 gap-3">
+  <div ref="container" tabindex="-1" class="grid min-w-0 gap-3">
     <div v-if="error" class="flex items-center gap-2 text-z-sm text-z-error-text" role="alert">
-      {{ error }} <ZButton size="small" @click="load">
+      {{ error }} <ZButton size="small" @click="container?.focus(); load()">
         {{ t('common.actions.refresh') }}
       </ZButton>
     </div>
