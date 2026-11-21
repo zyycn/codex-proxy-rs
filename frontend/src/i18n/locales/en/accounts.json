@@ -283,6 +283,7 @@
     "actions": {
       "deleteAccount": "Delete account",
       "moreActions": "More actions",
+      "discoverPeer": "Detect CPR Link",
       "disableScheduling": "Disable",
       "enableScheduling": "Enable",
       "refreshToken": "Refresh token",

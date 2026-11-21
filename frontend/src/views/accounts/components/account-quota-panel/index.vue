@@ -47,7 +47,7 @@ const forecastOpen = shallowRef(false)
 const hasPlanBadge = computed(() => Boolean(props.account.planType) || props.account.authenticationKind === 'api_key')
 const hasForecast = computed(() => props.account.authenticationKind !== 'api_key')
 const hasPersonalInfo = computed(() => props.account.capabilities.profile || props.account.capabilities.subscription)
-const canRefresh = computed(() => props.account.capabilities.quotaRefresh || props.account.upstream != null)
+const canRefresh = computed(() => props.account.capabilities.quotaRefresh || props.account.upstream?.discovered)
 const hasActions = computed(() => hasPersonalInfo.value || hasForecast.value || canRefresh.value || props.account.capabilities.resetCredits)
 const lastRefreshed = computed(() => {
   const { upstream, quota } = props.account

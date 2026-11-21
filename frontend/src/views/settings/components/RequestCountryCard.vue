@@ -49,6 +49,9 @@ function setMode(mode: OpenAiRequestCountry['mode'] | undefined) {
       <span class="inline-flex items-center gap-1.5">
         {{ t('settings.location.requestCountry') }}
         <HelpPopover :label="t('settings.location.countryHelp')">
+          <p class="mb-2 font-emphasis text-z-text">
+            {{ t('settings.location.requestCountryScope') }}
+          </p>
           <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2">
             <template v-for="mode in modes" :key="mode.value">
               <dt class="font-emphasis text-z-text">

@@ -13463,10 +13463,12 @@ async fn downstream_client_markers_preserve_instruction_content() {
             )]);
             let sent = capture_client_request(body.clone(), context, api_key).await;
             let mut expected = body;
-            expected.insert(
-                "request_country".to_owned(),
-                json!(global_request_location().country),
-            );
+            if !api_key {
+                expected.insert(
+                    "request_country".to_owned(),
+                    json!(global_request_location().country),
+                );
+            }
             assert_eq!(sent, expected);
         }
     }

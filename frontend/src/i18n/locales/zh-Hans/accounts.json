@@ -283,6 +283,7 @@
     "actions": {
       "deleteAccount": "删除账号",
       "moreActions": "更多操作",
+      "discoverPeer": "检测 CPR 互联",
       "disableScheduling": "停用",
       "enableScheduling": "启用",
       "refreshToken": "刷新令牌",

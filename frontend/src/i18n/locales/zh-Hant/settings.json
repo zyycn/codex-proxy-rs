@@ -316,6 +316,7 @@
     "location": {
       "requestCountry": "請求國家",
       "requestCountryDescription": "設定 Codex 請求如何傳送國家代碼",
+      "requestCountryScope": "僅用於 Codex OAuth 帳號",
       "countryHelp": "請求國家模式說明",
       "countryMode": "策略",
       "countryModes": {

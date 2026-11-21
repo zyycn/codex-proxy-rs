@@ -53,8 +53,7 @@ async fn responses_options_follow_the_selected_upstream_on_both_transports() {
         "model": "gpt-5.4", "input": "hello",
         "max_output_tokens": 1, "max_completion_tokens": 32, "max_tokens": 64,
         "stream_options": {"include_usage": true, "reasoning_summary_delivery": "sequential_cutoff"},
-        "request_country": "US",
-        "client_metadata": {"user": "keep", "request_country": "US"},
+        "client_metadata": {"user": "keep"},
         "tools": [{"type": "function", "name": "sample", "parameters": {
             "type": "object", "properties": {"top_p": {"type": "number"}}
         }}]
@@ -86,102 +85,86 @@ async fn responses_options_follow_the_selected_upstream_on_both_transports() {
                 );
             }
             assert_eq!(sent["client_metadata"]["user"], "keep");
-            assert_eq!(sent.get("request_country"), Some(&Value::Null));
-            assert_eq!(sent["client_metadata"]["request_country"], "US");
             assert_eq!(sent["tools"], body["tools"]);
         }
     }
 }
 
 #[tokio::test]
-async fn request_country_modes_only_change_the_top_level_across_transports() {
+async fn request_country_follows_the_selected_account_across_transports() {
     use OpenAiRequestCountry::{Custom, Default, FollowLocation, Passthrough};
-    for (api_key, websocket, policy, input, expected) in [
+    let location = global_request_location();
+    for (policy, location, input, oauth_country) in [
+        (FollowLocation {}, None, None, Some(Value::Null)),
+        (FollowLocation {}, Some(&location), None, Some(json!("NZ"))),
         (
-            false,
-            false,
             Default {},
+            Some(&location),
             Some(json!("CA")),
             Some(Value::Null),
         ),
-        (true, true, Default {}, None, Some(Value::Null)),
-        (false, true, Passthrough {}, None, None),
+        (Passthrough {}, Some(&location), None, None),
         (
-            true,
-            false,
             Passthrough {},
-            Some(Value::Null),
-            Some(Value::Null),
-        ),
-        (
-            false,
-            false,
-            Passthrough {},
+            Some(&location),
             Some(json!("CA")),
             Some(json!("CA")),
         ),
         (
-            true,
-            true,
-            FollowLocation {},
-            Some(json!("CA")),
-            Some(json!("NZ")),
-        ),
-        (
-            true,
-            false,
             Custom {
                 country: "JP".into(),
             },
-            None,
-            Some(json!("JP")),
-        ),
-        (
-            false,
-            true,
-            Custom {
-                country: "JP".into(),
-            },
+            Some(&location),
             Some(Value::Null),
             Some(json!("JP")),
         ),
     ] {
-        let location = global_request_location();
         let mut body = json!({
-            "model": "gpt-5.4",
-            "input": "hello",
-            "client_metadata": {"request_country":"business"},
-            "tools": [{"type":"web_search"}],
+            "model": "gpt-5.4", "input": "hello",
+            "client_metadata": {"request_country": "business"},
+            "tools": [{"type": "web_search"}],
         });
-        if let Some(input) = input {
-            body["request_country"] = input;
+        if let Some(country) = &input {
+            body["request_country"] = country.clone();
         }
-        let sent = capture_downstream_with_country(
-            body,
-            api_key,
-            websocket,
-            false,
-            Some(location.clone()),
-            policy,
-        )
-        .await;
-        assert_eq!(sent.get("request_country"), expected.as_ref());
-        assert_eq!(
-            sent.pointer("/client_metadata/request_country"),
-            Some(&json!("business"))
-        );
-        assert_eq!(
-            sent.pointer("/tools/0/user_location/country"),
-            Some(&json!(location.country))
-        );
-        assert_eq!(
-            sent.pointer("/tools/0/user_location/city"),
-            Some(&json!(location.city))
-        );
-        assert_eq!(
-            sent.pointer("/tools/0/user_location/timezone"),
-            Some(&json!(location.timezone.name()))
-        );
+        for api_key in [false, true] {
+            let expected = if api_key { &input } else { &oauth_country };
+            for websocket in [false, true] {
+                let sent = capture_downstream_with_country(
+                    body.clone(),
+                    api_key,
+                    websocket,
+                    false,
+                    location.cloned(),
+                    policy.clone(),
+                )
+                .await;
+                assert_eq!(
+                    sent.get("request_country"),
+                    expected.as_ref(),
+                    "{policy:?}, api_key={api_key}, websocket={websocket}",
+                );
+                assert_eq!(
+                    sent.pointer("/client_metadata/request_country"),
+                    body.pointer("/client_metadata/request_country"),
+                );
+                assert_eq!(
+                    sent.pointer("/tools/0/user_location/country")
+                        .and_then(Value::as_str),
+                    location.map(|location| location.country.as_str()),
+                );
+                assert_eq!(
+                    sent.pointer("/tools/0/user_location/city")
+                        .and_then(Value::as_str),
+                    location.map(|location| location.city.as_str()),
+                );
+                assert_eq!(
+                    sent.pointer("/tools/0/user_location/timezone")
+                        .and_then(Value::as_str),
+                    location.map(|location| location.timezone.name()),
+                );
+            }
+        }
     }
 }
 

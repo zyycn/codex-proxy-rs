@@ -108,11 +108,12 @@ pub fn encode_generate_request(
     location: Option<&CodexRequestLocation>,
 ) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
     let mut encoded = encode_generate_payload(request, upstream_model)?;
-    align_structured_location_fields(
+    apply_codex_request_country(
         encoded.body_mut(),
         location,
         &OpenAiRequestCountry::default(),
     );
+    align_structured_location_fields(encoded.body_mut(), location);
     Ok(encoded)
 }
 
@@ -135,7 +136,7 @@ pub(crate) fn encode_generate_payload(
     Ok(encoded)
 }
 
-pub(crate) fn align_structured_location_fields(
+pub(crate) fn apply_codex_request_country(
     body: &mut Map<String, Value>,
     location: Option<&CodexRequestLocation>,
     country: &OpenAiRequestCountry,
@@ -155,6 +156,12 @@ pub(crate) fn align_structured_location_fields(
             body.insert("request_country".into(), Value::from(country.as_str()));
         }
     }
+}
+
+pub(crate) fn align_structured_location_fields(
+    body: &mut Map<String, Value>,
+    location: Option<&CodexRequestLocation>,
+) {
     let Some(location) = location else { return };
     if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input {

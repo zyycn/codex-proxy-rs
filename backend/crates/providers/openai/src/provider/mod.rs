@@ -87,7 +87,7 @@ use crate::transport::protocol::responses::{
 };
 use crate::transport::request::{
     CodexRequestEncodeError, RequestAccountScope, align_structured_location_fields,
-    encode_generate_payload, scope_request_to_account,
+    apply_codex_request_country, encode_generate_payload, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
@@ -1090,6 +1090,10 @@ impl CodexProvider {
                 "after": crate::transport::diagnostics::evidence::request_state(&upstream_request),
             }));
         }
+        let location = lease
+            .account()
+            .request_location()
+            .or(context.request_location());
         if codex_oauth {
             if matches!(
                 guardian_role,
@@ -1104,16 +1108,13 @@ impl CodexProvider {
                 &middleware_headers,
                 context.request_id().as_str(),
             );
+            apply_codex_request_country(
+                upstream_request.body_mut(),
+                location,
+                context.openai_request_country(),
+            );
         }
-        let location = lease
-            .account()
-            .request_location()
-            .or(context.request_location());
-        align_structured_location_fields(
-            upstream_request.body_mut(),
-            location,
-            context.openai_request_country(),
-        );
+        align_structured_location_fields(upstream_request.body_mut(), location);
         let requirement = transport_requirement(&upstream_request);
         let http_only = lease.transport() == crate::credential::ResponsesTransport::Http;
         if http_only && requirement.requires_websocket() {
