@@ -4,6 +4,7 @@ import VueI18n from '@intlify/unplugin-vue-i18n/vite'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig, loadEnv } from 'vite'
+import { consoleBanner } from './build/console-banner.ts'
 import { pluginBridge } from './build/plugin-bridge.ts'
 
 export default defineConfig(({ mode }) => {
@@ -23,6 +24,7 @@ export default defineConfig(({ mode }) => {
         source: sourceUi ? uiRoot : undefined,
       }),
       pluginBridge(),
+      consoleBanner(),
     ],
     resolve: {
       alias: {
