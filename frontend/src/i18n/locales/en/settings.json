@@ -315,7 +315,9 @@
     "day": "d",
     "location": {
       "requestCountry": "Request country",
+      "requestCountryDescription": "Choose how Codex requests send the country code",
       "countryHelp": "Request country mode help",
+      "countryMode": "Policy",
       "countryModes": {
         "default": "Null",
         "passthrough": "Pass through",

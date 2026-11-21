@@ -43,8 +43,6 @@
       "forceUltrafast": "超快速",
       "subagents": "协作子代理",
       "memberModels": "成员账号模型",
-      "searchModels": "搜索成员账号模型",
-      "emptyCatalog": "暂无成员模型，请先将有模型的账号加入分组",
       "fastModeHelp": "默认跟随客户端。禁用会将加速请求降为标准档。选择快速或超快速时，若模型支持该档位，分组设置会覆盖客户端选择",
       "subagentsHelp": "启用后由客户端决定是否启动协作子代理。禁用会拒绝可识别的协作子代理请求"
     },

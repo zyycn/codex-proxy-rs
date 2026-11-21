@@ -224,7 +224,7 @@
       "upstreamCatalog": "Upstream catalog",
       "selectAll": "Select all",
       "deselectAll": "Deselect all",
-      "addToDenylistHint": "Saving blocks this ID on the account",
+      "addToDenylistHint": "Add and save to block this model",
       "loadingModel": "Loading model",
       "noModels": "No models",
       "selectOrAddAtLeastOneModel": "Please select or add at least one model",

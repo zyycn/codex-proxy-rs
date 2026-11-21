@@ -315,7 +315,9 @@
     "day": "天",
     "location": {
       "requestCountry": "请求国家",
+      "requestCountryDescription": "设置 Codex 请求如何发送国家代码",
       "countryHelp": "请求国家模式说明",
+      "countryMode": "策略",
       "countryModes": {
         "default": "空值",
         "passthrough": "透传",

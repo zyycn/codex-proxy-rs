@@ -2,8 +2,8 @@ import type { FormRules } from '@codex-proxy/ui'
 import type { AccountModelAccess } from '@/api'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { accountModelAccessError } from '@/components/account/model-access/modelAccess'
 import { accountNameValid } from '../utils/accountName'
-import { accountModelAccessError } from '../utils/modelAccess'
 
 interface AccountSettingsFormValue {
   name?: string

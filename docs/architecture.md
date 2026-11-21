@@ -361,7 +361,7 @@ Provider 可为模型提供来源账号集合；Core 在公开目录查询时结
 | `views/<页面>/index.vue`、`views/<页面>/components/` | 页面组合与局部交互；复杂组件按职责拆成目录入口和相邻模块 |
 | `views/<页面>/composables/` | 页面查询、轮询、表单及操作生命周期 |
 | `presenter.ts`、页面 `utils/` | 纯展示投影或该页面拥有的业务转换，不启动请求 |
-| `components/usage/`、`components/account/` | 跨页面复用的用量、健康时间线、套餐和额度窗口展示 |
+| `components/usage/`、`components/account/` | 跨页面复用的用量、健康时间线、套餐和额度窗口展示，以及账号与分组共用的模型限制编辑器 |
 | `composables/` | 请求取消与过期结果隔离、分页、选择、异步动作、目录加载等共享机制 |
 | `i18n/` | Vue I18n 实例、三语资源和应用语言策略；从全局 Composer 派生 UI 库语言，不翻译用户数据或远端自由文本 |
 | `utils/` | 按用途分开的数据解析、数字与时长格式化、位置校验、客户端配置、插件导航及颜色工具 |

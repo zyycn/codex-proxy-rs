@@ -7,9 +7,9 @@ import { normalizeRgbaHexColor, ZButton, ZColorPicker, ZDialog, ZForm, ZFormItem
 import { computed, useTemplateRef, watch } from 'vue'
 
 import { useI18n } from 'vue-i18n'
+import AccountModelAccessField from '@/components/account/model-access/index.vue'
+import { accountModelAccessError } from '@/components/account/model-access/modelAccess'
 import HelpPopover from '@/components/HelpPopover.vue'
-import AccountModelAccessField from '@/views/accounts/components/AccountModelAccessField.vue'
-import { accountModelAccessError } from '@/views/accounts/utils/modelAccess'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 
 const props = defineProps<{
@@ -81,7 +81,7 @@ const description = computed(() => props.group
     width="42rem"
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
   >
-    <ZForm ref="formElement" :model="form" :rules="rules" class="sm:grid-cols-[minmax(0,1fr)_fit-content(10rem)] sm:gap-x-6" scroll-to-error focus-on-error novalidate @submit="requestSave">
+    <ZForm ref="formElement" :model="form" :rules="rules" class="sm:grid-cols-[minmax(0,1fr)_fit-content(10rem)] sm:gap-x-6 md:grid-cols-[minmax(0,1fr)_fit-content(11rem)]" scroll-to-error focus-on-error novalidate @submit="requestSave">
       <ZFormItem prop="name" :show-message="false" :label="t('groups.editor.groupName')" required>
         <ZInput
           v-model="form.name"
@@ -99,7 +99,7 @@ const description = computed(() => props.group
           :disabled="saving"
         />
       </ZFormItem>
-      <div class="col-span-full grid grid-cols-2 items-start gap-x-6 gap-y-4.5 sm:grid-cols-subgrid **:[[role=radio]]:px-3.5">
+      <div class="col-span-full grid grid-cols-2 items-start gap-x-6 gap-y-4.5 sm:grid-cols-subgrid **:[[role=radio]]:px-3.5 md:**:[[role=radio]]:px-4.5">
         <div class="contents sm:flex sm:min-w-0 sm:flex-wrap sm:items-start sm:gap-x-6 sm:gap-y-4.5">
           <ZFormItem :label="t('groups.editor.fastMode')" class="col-span-full sm:flex-auto">
             <template #label-extra>

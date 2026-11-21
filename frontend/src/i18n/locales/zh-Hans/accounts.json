@@ -224,7 +224,7 @@
       "upstreamCatalog": "上游目录",
       "selectAll": "全选",
       "deselectAll": "取消全选",
-      "addToDenylistHint": "保存后，此账号将拒绝该模型",
+      "addToDenylistHint": "添加并保存后将拒绝该模型",
       "loadingModel": "加载模型中",
       "noModels": "暂无模型",
       "selectOrAddAtLeastOneModel": "请至少选择或添加一个模型",

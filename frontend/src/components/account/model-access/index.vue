@@ -8,9 +8,9 @@ import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getAccountGroupModels, getAccountModels, refreshAccountModels } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
-import { accountModelAccessError, accountModelIdError, commonImageModels } from '../utils/modelAccess'
 import AccountModelCleanupPopover from './AccountModelCleanupPopover.vue'
 import AccountModelOption from './AccountModelOption.vue'
+import { accountModelAccessError, accountModelIdError, commonImageModels } from './modelAccess'
 
 const props = withDefaults(defineProps<{
   accountId?: string
@@ -53,12 +53,10 @@ const modes = computed(() => [
   },
   {
     value: 'allowlist',
-    disabled: props.groupId === null,
     label: t('accounts.modelAccess.allowlist'),
   },
   {
     value: 'denylist',
-    disabled: props.groupId === null,
     label: t('accounts.modelAccess.blocklist'),
   },
 ])
@@ -115,7 +113,7 @@ const groups = computed(() => [
     ids: catalogResults.value,
   },
 ].filter(group => group.ids.length))
-const newModelId = computed(() => groupCatalog.value || groups.value.length
+const newModelId = computed(() => groups.value.length
   ? ''
   : search.value.trim())
 const inputError = computed(() => selectionError.value || (newModelId.value && accountModelIdError(newModelId.value)))
@@ -301,17 +299,17 @@ watch(search, () => {
     </ZFormItem>
     <template v-if="restricted">
       <div class="flex min-w-0 items-center gap-2">
-        <ZInput ref="searchInput" v-model="search" class="min-w-0 flex-1" :aria-label="groupCatalog ? t('groups.editor.searchModels') : t('accounts.modelAccess.searchOrAddModels')" :placeholder="groupCatalog ? t('groups.editor.searchModels') : t('accounts.modelAccess.searchOrEnterId')" :disabled="disabled" :aria-invalid="Boolean(inputError)" @keydown.enter="handleSearchEnter">
+        <ZInput ref="searchInput" v-model="search" class="min-w-0 flex-1" :aria-label="t('accounts.modelAccess.searchOrAddModels')" :placeholder="t('accounts.modelAccess.searchOrEnterId')" :disabled="disabled" :aria-invalid="Boolean(inputError)" @keydown.enter="handleSearchEnter">
           <template #prefix>
             <Search class="size-4" aria-hidden="true" />
           </template>
         </ZInput>
-        <ZButton v-if="!groupCatalog" class="shrink-0" :disabled="disabled || !canAdd" @click="addModels([newModelId])">
+        <ZButton class="shrink-0" :disabled="disabled || !canAdd" @click="addModels([newModelId])">
           <Plus class="size-4" aria-hidden="true" />
           {{ t('accounts.modelAccess.addModel') }}
         </ZButton>
         <ZIconButton
-          v-if="!groupCatalog && mode === 'allowlist'"
+          v-if="mode === 'allowlist'"
           variant="plain"
           :aria-label="t('accounts.modelAccess.addImageModels')"
           :title="t('accounts.modelAccess.addImageModels')"
@@ -360,7 +358,7 @@ watch(search, () => {
       <p v-else-if="mode === 'denylist' && canAdd" class="m-0 text-z-xs text-z-text-secondary">
         {{ t('accounts.modelAccess.addToDenylistHint') }}
       </p>
-      <ZEmpty v-else-if="!error && !search" :title="groupCatalog ? t('groups.editor.emptyCatalog') : t('accounts.modelAccess.noModels')" size="small" surface="none" />
+      <ZEmpty v-else-if="!error && !search" :title="t('accounts.modelAccess.noModels')" size="small" surface="none" />
     </template>
   </div>
 </template>

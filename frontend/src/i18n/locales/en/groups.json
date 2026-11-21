@@ -43,8 +43,6 @@
       "forceUltrafast": "Force Ultrafast",
       "subagents": "Collaborative subagents",
       "memberModels": "Member account models",
-      "searchModels": "Search member models",
-      "emptyCatalog": "Add an account with available models to this group first",
       "fastModeHelp": "Default follows the client. Disable downgrades both accelerated tiers to standard. A forced tier overrides the client selection when the model supports it.",
       "subagentsHelp": "Enable lets the client decide when to start a collaborative subagent. Disable rejects requests identified as coming from a collaborative subagent."
     },

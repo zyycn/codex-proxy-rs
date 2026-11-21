@@ -224,7 +224,7 @@
       "upstreamCatalog": "上游目錄",
       "selectAll": "全選",
       "deselectAll": "取消全選",
-      "addToDenylistHint": "保存後，此賬號將拒絕該模型",
+      "addToDenylistHint": "加入並儲存後將拒絕此模型",
       "loadingModel": "加載模型中",
       "noModels": "暫無模型",
       "selectOrAddAtLeastOneModel": "請至少選擇或添加一個模型",

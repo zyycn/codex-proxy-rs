@@ -17,6 +17,7 @@ import ConcurrencyPolicyCard from './components/ConcurrencyPolicyCard.vue'
 import AccountErrorProtectionCard from './components/error-protection/AccountErrorProtectionCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import PrivacyPolicyCard from './components/privacy/PrivacyPolicyCard.vue'
+import RequestCountryCard from './components/RequestCountryCard.vue'
 import RequestHistoryCard from './components/RequestHistoryCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import ResetCreditCard from './components/ResetCreditCard.vue'
@@ -246,11 +247,11 @@ watch(section, (value) => {
           <RequestLocationCard
             v-model="form.requestLocation"
             v-model:enabled="form.requestLocationEnabled"
-            v-model:request-country="form.openaiRequestCountry"
             :disabled="disabled"
             :detecting-location="detectingLocation"
             @detect-location="detectLocation"
           />
+          <RequestCountryCard v-model="form.openaiRequestCountry" :disabled="disabled" />
           <PrivacyPolicyCard v-model="form.codexPrivacyPolicy" :disabled="disabled" />
           <ModelAliasesCard
             :mappings="mappings"
