@@ -23,27 +23,12 @@ const providerIconComponent = computed(() => normalizedProvider.value
   : undefined)
 const authenticationIconComponent = computed(() => authenticationIcon(props.authenticationKind))
 const showAuthenticationKind = computed(() => props.authenticationKind !== undefined)
-const groupGapClass = computed(() => {
-  if (props.size === 'xs')
-    return 'gap-0.75'
-  return props.size === 'sm'
-    ? 'gap-1'
-    : 'gap-2'
-})
-const iconContainerClass = computed(() => {
-  if (props.size === 'xs')
-    return 'size-4.5 rounded-md'
-  return props.size === 'sm'
-    ? 'size-5 rounded-md'
-    : 'size-7 rounded-lg'
-})
-const iconClass = computed(() => {
-  if (props.size === 'xs')
-    return 'size-2.5'
-  return props.size === 'sm'
-    ? 'size-3'
-    : 'size-4'
-})
+const sizeClasses = {
+  xs: { gap: 'gap-0.75', container: 'size-4.5 rounded-md', icon: 'size-2.5' },
+  sm: { gap: 'gap-1', container: 'size-5 rounded-md', icon: 'size-3' },
+  md: { gap: 'gap-2', container: 'size-7 rounded-lg', icon: 'size-4' },
+}
+const classes = computed(() => sizeClasses[props.size])
 
 const providerLabel = computed(() => formatProviderLabel(props.provider, t('common.providers.unknown')))
 
@@ -51,23 +36,23 @@ const authenticationLabel = computed(() => formatAuthenticationLabel(props.authe
 </script>
 
 <template>
-  <span class="inline-flex items-center whitespace-nowrap" :class="groupGapClass">
+  <span class="inline-flex items-center whitespace-nowrap" :class="classes.gap">
     <span
       class="inline-flex shrink-0 items-center justify-center bg-z-fill-secondary/80 text-z-text"
-      :class="iconContainerClass"
+      :class="classes.container"
       :title="providerLabel"
     >
-      <component :is="providerIconComponent" v-if="providerIconComponent" :class="iconClass" />
+      <component :is="providerIconComponent" v-if="providerIconComponent" :class="classes.icon" />
       <span v-else class="text-[10px] font-heavy text-z-text-quaternary">?</span>
     </span>
 
     <span
       v-if="showAuthenticationKind"
       class="inline-flex shrink-0 items-center justify-center bg-z-fill-secondary/80 text-z-text"
-      :class="iconContainerClass"
+      :class="classes.container"
       :title="authenticationLabel"
     >
-      <component :is="authenticationIconComponent" v-if="authenticationIconComponent" :class="iconClass" />
+      <component :is="authenticationIconComponent" v-if="authenticationIconComponent" :class="classes.icon" />
       <span v-else class="text-[10px] font-heavy text-z-text-quaternary">?</span>
     </span>
 

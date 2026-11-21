@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { EChartsOption, LineSeriesOption } from 'echarts'
+import type { EChartsOption } from 'echarts'
 
 import type { UsageCostMetric, UsageMetricResponse } from '@/api'
 import { ZCard, ZEmpty, ZSegmented } from '@codex-proxy/ui'
@@ -7,12 +7,10 @@ import { ZCard, ZEmpty, ZSegmented } from '@codex-proxy/ui'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import {
-  zeroInactiveValues,
-} from '@/components/charts/timeSeriesGap'
+import { zeroInactiveValues } from '@/components/charts/timeSeriesGap'
 import { chartTooltipContent, tooltipIndex, tooltipRows } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
-import { decimalDisplayNumber, formatLocalizedCompactNumber as formatCompactNumber, formatPercent, formatUsd } from '@/utils/format'
+import { decimalDisplayNumber, formatPercent, formatUsd } from '@/utils/format'
 
 import {
   formatUsdAxis,
@@ -37,23 +35,19 @@ const props = withDefaults(
 
 const { t } = useI18n({ useScope: 'global' })
 
-type UsageChartPalette = ReturnType<typeof useChartPalette>['palette']['value']
+interface CostSeries {
+  label: string
+  color: string
+  values: (number | null)[]
+  area?: 'strong'
+  tooltipValue: (index: number) => string | null
+}
 
 const activeView = defineModel<UsageCostMetric>({ required: true })
 const { palette } = useChartPalette()
 const cost = computed(() => props.result?.data.summary ?? null)
 const points = computed(() => props.result?.data.points ?? [])
-const costPoints = computed(() => props.result?.metric === 'cost'
-  ? props.result.data.points
-  : [])
-const savingsPoints = computed(() => props.result?.metric === 'savings'
-  ? props.result.data.points
-  : [])
-const cachePoints = computed(() => props.result?.metric === 'cache'
-  ? props.result.data.points
-  : [])
 const requestActivity = computed(() => points.value.map(point => point.requestCount > 0))
-const hasNoCacheCost = computed(() => costPoints.value.some(point => point.value.noCacheCost != null))
 const coverageRate = computed(() => {
   if (!cost.value)
     return null
@@ -79,21 +73,79 @@ const viewOptions = computed(() => ([
   },
 ]))
 
-const hasData = computed(() => {
-  if (props.loading || props.result?.metric !== activeView.value)
-    return false
-  if (activeView.value === 'cost')
-    return costPoints.value.some(point => point.value.estimatedCost != null || point.value.noCacheCost != null)
-  if (activeView.value === 'savings')
-    return savingsPoints.value.some(point => point.value != null)
-  return cachePoints.value.some(({ value }) => value.inputTokens > 0 || value.cachedTokenRate > 0 || (value.cacheHitRequestRate ?? 0) > 0)
+function amountValues(amounts: (string | null)[]) {
+  return zeroInactiveValues(amounts.map(amount => decimalDisplayNumber(amount)), requestActivity.value)
+}
+
+function primaryAmountSeries(label: string, amounts: (string | null)[]): CostSeries {
+  return {
+    label,
+    color: palette.value.success,
+    area: 'strong',
+    values: amountValues(amounts),
+    tooltipValue: index => formatUsd(amounts[index] ?? (requestActivity.value[index] === false
+      ? '0'
+      : null)),
+  }
+}
+
+function rateSeries(label: string, color: string, values: (number | null)[]): CostSeries {
+  return {
+    label,
+    color,
+    values,
+    tooltipValue: index => formatPercent(values[index] ?? null),
+  }
+}
+
+const chart = computed<{ hasData: boolean, series: CostSeries[] }>(() => {
+  const response = props.result
+  if (props.loading || !response || response.metric !== activeView.value)
+    return { hasData: false, series: [] }
+
+  if (response.metric === 'cost') {
+    const actual = response.data.points.map(({ value }) => value.estimatedCost)
+    const comparison = response.data.points.map(({ value }) => value.noCacheCost)
+    const hasComparison = comparison.some(amount => amount != null)
+    const series = [
+      primaryAmountSeries(t('usage.cost.actualCost'), actual),
+    ]
+    if (hasComparison) {
+      series.push({
+        label: t('usage.cost.withoutCacheEstimate'),
+        color: palette.value.textMuted,
+        values: amountValues(comparison),
+        // 对比曲线允许补零，提示只展示该时间桶实际提供的估算
+        tooltipValue: index => comparison[index] == null
+          ? null
+          : formatUsd(comparison[index]),
+      })
+    }
+    return { hasData: hasComparison || actual.some(amount => amount != null), series }
+  }
+  if (response.metric === 'savings') {
+    const savings = response.data.points.map(point => point.value)
+    return {
+      hasData: savings.some(amount => amount != null),
+      series: [
+        primaryAmountSeries(t('usage.cost.cacheSavings'), savings),
+      ],
+    }
+  }
+
+  const { points } = response.data
+  return {
+    hasData: points.some(({ value }) => value.inputTokens > 0 || value.cachedTokenRate > 0 || (value.cacheHitRequestRate ?? 0) > 0),
+    series: [
+      rateSeries(t('usage.cost.cacheTokenProportion'), palette.value.normal, points.map(({ value }) => value.cachedTokenRate)),
+      rateSeries(t('usage.cost.hitRequestRate'), palette.value.success, points.map(({ value }) => value.cacheHitRequestRate)),
+    ],
+  }
 })
 
 const chartOption = computed<EChartsOption>(() => {
   const theme = palette.value
-  const legend = legendNames()
-  const series = chartSeries(theme)
-
+  const series = chart.value.series
   return {
     animationDuration: 240,
     grid: {
@@ -104,156 +156,33 @@ const chartOption = computed<EChartsOption>(() => {
       outerBoundsMode: 'same',
       outerBoundsContain: 'axisLabel',
     },
-    legend: usageLegend(theme, legend),
+    legend: usageLegend(theme, series.map(item => item.label)),
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
       points.value.map(point => point.label),
       theme,
     ),
-    yAxis: usageValueAxis(theme, axisFormatter(), {
-      min: activeView.value === 'cache'
-        ? 0
-        : undefined,
-      max: activeView.value === 'cache'
-        ? 1
-        : undefined,
-    }),
-    series,
+    yAxis: activeView.value === 'cache'
+      ? usageValueAxis(theme, formatPercent, { min: 0, max: 1 })
+      : usageValueAxis(theme, formatUsdAxis),
+    series: series.flatMap(item => usageGapAwareLineSeries(item.label, item.values, item.color, { area: item.area })),
   }
 })
 
-function legendNames() {
-  if (activeView.value === 'savings') {
-    return [
-      t('usage.cost.cacheSavings'),
-    ]
-  }
-  if (activeView.value === 'cache') {
-    return [
-      t('usage.cost.cacheTokenProportion'),
-      t('usage.cost.hitRequestRate'),
-    ]
-  }
-  return hasNoCacheCost.value
-    ? [
-        t('usage.cost.actualCost'),
-        t('usage.cost.withoutCacheEstimate'),
-      ]
-    : [
-        t('usage.cost.actualCost'),
-      ]
-}
-
-function axisFormatter() {
-  if (activeView.value === 'cost' || activeView.value === 'savings')
-    return formatUsdAxis
-  if (activeView.value === 'cache')
-    return (value: number) => formatPercent(value)
-  return (value: number) => formatCompactNumber(value)
-}
-
-function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
-  if (activeView.value === 'savings') {
-    return [
-      ...usageGapAwareLineSeries(
-        t('usage.cost.cacheSavings'),
-        zeroInactiveValues(
-          savingsPoints.value.map(point => decimalDisplayNumber(point.value)),
-          requestActivity.value,
-        ),
-        theme.success,
-        { area: 'strong' },
-      ),
-    ]
-  }
-
-  if (activeView.value === 'cache') {
-    return [
-      ...usageGapAwareLineSeries(
-        t('usage.cost.cacheTokenProportion'),
-        cachePoints.value.map(point => point.value.cachedTokenRate),
-        theme.normal,
-      ),
-      ...usageGapAwareLineSeries(
-        t('usage.cost.hitRequestRate'),
-        cachePoints.value.map(point => point.value.cacheHitRequestRate),
-        theme.success,
-      ),
-    ]
-  }
-
-  const series = [
-    ...usageGapAwareLineSeries(
-      t('usage.cost.actualCost'),
-      zeroInactiveValues(
-        costPoints.value.map(point => decimalDisplayNumber(point.value.estimatedCost)),
-        requestActivity.value,
-      ),
-      theme.success,
-      { area: 'strong' },
-    ),
-  ]
-  if (hasNoCacheCost.value) {
-    series.push(
-      ...usageGapAwareLineSeries(
-        t('usage.cost.withoutCacheEstimate'),
-        zeroInactiveValues(
-          costPoints.value.map(point => decimalDisplayNumber(point.value.noCacheCost)),
-          requestActivity.value,
-        ),
-        theme.textMuted,
-      ),
-    )
-  }
-  return series
-}
-
 function formatTooltip(params: unknown) {
-  const rows = tooltipRows(params)
-  const pointIndex = tooltipIndex(rows[0])
-  const point = points.value[pointIndex]
+  const index = tooltipIndex(tooltipRows(params)[0])
+  const point = points.value[index]
   if (!point)
     return ''
-  const theme = palette.value
-
-  if (activeView.value === 'savings') {
-    return chartTooltipContent(point.label, [
-      usageTooltipItem(
-        t('usage.cost.cacheSavings'),
-        formatUsd(costAmount(savingsPoints.value[pointIndex]?.value ?? null, pointIndex)),
-        theme.success,
-      ),
-    ])
-  }
-
-  if (activeView.value === 'cache') {
-    return chartTooltipContent(point.label, [
-      usageTooltipItem(t('usage.cost.cacheTokenProportion'), formatPercent(cachePoints.value[pointIndex]?.value.cachedTokenRate ?? null), theme.normal),
-      usageTooltipItem(t('usage.cost.hitRequestRate'), formatPercent(cachePoints.value[pointIndex]?.value.cacheHitRequestRate ?? null), theme.success),
-    ])
-  }
-
-  const lines = [
-    usageTooltipItem(
-      t('usage.cost.actualCost'),
-      formatUsd(costAmount(costPoints.value[pointIndex]?.value.estimatedCost ?? null, pointIndex)),
-      theme.success,
-    ),
-  ]
-  if (costPoints.value[pointIndex]?.value.noCacheCost != null) {
-    lines.push(usageTooltipItem(
-      t('usage.cost.withoutCacheEstimate'),
-      formatUsd(costAmount(costPoints.value[pointIndex]?.value.noCacheCost ?? null, pointIndex)),
-      theme.textMuted,
-    ))
-  }
+  const lines = chart.value.series.flatMap((series) => {
+    const value = series.tooltipValue(index)
+    return value == null
+      ? []
+      : [
+          usageTooltipItem(series.label, value, series.color),
+        ]
+  })
   return chartTooltipContent(point.label, lines)
-}
-
-function costAmount(value: string | null, pointIndex: number) {
-  return value ?? (requestActivity.value[pointIndex] === false
-    ? '0'
-    : null)
 }
 </script>
 
@@ -271,8 +200,8 @@ function costAmount(value: string | null, pointIndex: number) {
     </template>
 
     <template #body>
-      <div class="grid min-h-66" :class="hasData ? 'gap-3' : 'flex-1'">
-        <div v-if="hasData && cost" class="grid grid-cols-2 gap-x-1 gap-y-3 rounded-xl bg-z-fill-quaternary/45 p-2 @min-[24rem]/cost:grid-cols-3 @min-[40rem]/cost:grid-cols-5">
+      <div class="grid min-h-66" :class="chart.hasData ? 'gap-3' : 'flex-1'">
+        <div v-if="chart.hasData && cost" class="grid grid-cols-2 gap-x-1 gap-y-3 rounded-xl bg-z-fill-quaternary/45 p-2 @min-[24rem]/cost:grid-cols-3 @min-[40rem]/cost:grid-cols-5">
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="text-[10px] font-bold text-z-text-quaternary" :title="t('usage.billing.totalCost')">{{ t('usage.cost.actualCost') }}</span>
             <strong class="wrap-anywhere font-mono text-z-sm font-heavy tabular-nums text-z-text">
@@ -304,7 +233,7 @@ function costAmount(value: string | null, pointIndex: number) {
             </strong>
           </div>
         </div>
-        <BaseChart v-if="hasData" :option="chartOption" :height="210" />
+        <BaseChart v-if="chart.hasData" :option="chartOption" :height="210" />
         <ZEmpty
           v-else
           size="small"

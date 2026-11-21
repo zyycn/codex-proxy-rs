@@ -1,4 +1,5 @@
 import type { OutboundProxyRecord, ProxyBatchResult } from '@/api'
+import { countBy } from 'es-toolkit'
 import { computed } from 'vue'
 import { ApiError } from '@/api/request'
 import { t } from '@/i18n'
@@ -21,6 +22,25 @@ export interface ProxyBatchItem {
   status: ProxyBatchStatus
   message: string
   record?: OutboundProxyRecord
+}
+
+export function summarizeProxyBatch(items: ProxyBatchItem[]) {
+  const counts = countBy(items, item => item.status)
+  const skipped = counts.skipped ?? 0
+  return {
+    completed: items.length - (counts.pending ?? 0) - (counts.running ?? 0) - skipped,
+    succeeded: counts.succeeded ?? 0,
+    failed: counts.failed ?? 0,
+    attention: (counts.error ?? 0) + (counts.conflict ?? 0) + (counts.busy ?? 0) + (counts.unknown ?? 0),
+    skipped,
+  }
+}
+
+export function summarizeProxyTests(items: ProxyBatchItem[]) {
+  return {
+    ...summarizeProxyBatch(items),
+    locationPending: items.filter(item => item.status === 'succeeded' && item.record?.lastTest?.location.status !== 'detected').length,
+  }
 }
 
 export interface ProxyBatchInput {

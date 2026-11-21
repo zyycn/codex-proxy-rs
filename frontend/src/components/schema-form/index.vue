@@ -24,20 +24,24 @@ const parsed = computed(() => parseJsonObject(text.value, props.maximumBytes))
 const error = computed(() => parsed.value.error)
 const value = computed(() => parsed.value.value)
 const fields = computed(() => inputFields(props.schema))
-const hasExtra = computed(() => Object.keys(value.value ?? {}).some(key => !fields.value?.some(field => field.key === key)))
-const incompatibleValue = computed(() => fields.value?.some((field) => {
-  const item = inputValue(field.key)
-  if (item === undefined)
+const fieldsByKey = computed(() => new Map(fields.value?.map(field => [field.key, field])))
+const canUseForm = computed(() => {
+  if (fields.value === null || error.value)
     return false
-  if (field.values)
-    return !field.values.some(option => option === item)
-  if (field.type === 'number' || field.type === 'integer')
-    return typeof item !== 'number' && typeof item !== 'string'
-  return field.type === 'boolean'
-    ? typeof item !== 'boolean'
-    : typeof item !== 'string'
-}) ?? false)
-const showJson = computed(() => jsonMode.value || fields.value === null || hasExtra.value || incompatibleValue.value || Boolean(error.value))
+  return Object.entries(value.value ?? {}).every(([key, item]) => {
+    const field = fieldsByKey.value.get(key)
+    if (!field)
+      return false
+    if (field.values)
+      return field.values.some(option => option === item)
+    if (field.type === 'number' || field.type === 'integer')
+      return typeof item === 'number' || typeof item === 'string'
+    return field.type === 'boolean'
+      ? typeof item === 'boolean'
+      : typeof item === 'string'
+  })
+})
+const showJson = computed(() => jsonMode.value || !canUseForm.value)
 const empty = computed(() => fields.value?.length === 0 && props.schema.additionalProperties === false && !showJson.value)
 
 function fieldValue(field: InputField) {
@@ -105,8 +109,8 @@ function update(field: InputField, input: string) {
 }
 
 async function focusField(key?: string) {
-  const editableField = key && fields.value?.some(field => field.key === key)
-  if (editableField && jsonMode.value && !error.value && !hasExtra.value && !incompatibleValue.value)
+  const editableField = key && fieldsByKey.value.has(key)
+  if (editableField && canUseForm.value)
     jsonMode.value = false
   await nextTick()
 
@@ -128,7 +132,7 @@ defineExpose({ focusField })
     <ZForm v-if="showJson">
       <ZFormItem :label="t('common.form.inputPlaceholder')" :error="error">
         <template #extra>
-          <ZIconButton v-if="fields !== null" :aria-label="t('common.form.useForm')" class="size-4!" variant="link" :disabled="disabled || Boolean(error) || hasExtra || incompatibleValue" @click="jsonMode = false">
+          <ZIconButton v-if="fields !== null" :aria-label="t('common.form.useForm')" class="size-4!" variant="link" :disabled="disabled || !canUseForm" @click="jsonMode = false">
             <List class="size-3.5" />
           </ZIconButton>
         </template>

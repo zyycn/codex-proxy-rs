@@ -4,6 +4,7 @@ import { getProxies } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
 import { notification as ZNotification } from '@/utils/notification'
+import { summarizeProxyTests } from '../utils/batch'
 import { useProxyBatchTest } from './useProxyBatchTest'
 
 export function useProxyBatchTesting(options: { test: ProxyTestExecutor, reload: () => Promise<unknown> }) {
@@ -48,23 +49,22 @@ export function useProxyBatchTesting(options: { test: ProxyTestExecutor, reload:
       await options.reload()
       if (!request.isCurrent(requestId))
         return
-      const succeeded = tests.items.value.filter(item => item.status === 'succeeded').length
-      const incomplete = tests.items.value.filter(item => item.status !== 'succeeded')
-      const locationPending = tests.items.value.filter(item => item.status === 'succeeded' && item.record?.lastTest?.location.status !== 'detected').length
+      const { succeeded, locationPending } = summarizeProxyTests(tests.items.value)
+      const incomplete = tests.items.value.length - succeeded
       const missing = wanted.size - collected.size
       const summary = [
         t('proxies.batchTest.batchTestCompletedConnected', { succeeded }),
       ]
-      if (incomplete.length)
-        summary.push(t('proxies.batchTest.unsuccessful', { count: incomplete.length }))
+      if (incomplete)
+        summary.push(t('proxies.batchTest.unsuccessful', { count: incomplete }))
       if (locationPending)
         summary.push(t('proxies.batchTest.locationsPending', { locationPending }))
       if (missing)
         summary.push(t('proxies.batchTest.proxiesNoLongerAvailable', { missing }))
-      const firstFailure = incomplete.find(item => item.status !== 'skipped')
+      const firstFailure = tests.items.value.find(item => item.status !== 'succeeded' && item.status !== 'skipped')
       if (firstFailure)
         summary.push(`${firstFailure.name}：${firstFailure.message}`)
-      const notify = incomplete.length || locationPending || missing
+      const notify = incomplete || locationPending || missing
         ? ZNotification.warning
         : ZNotification.success
       notify({
