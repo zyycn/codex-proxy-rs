@@ -2576,7 +2576,9 @@ async fn quota_forecast_same_window_reversal_keeps_recorded_usage_in_the_report(
                         usage: usage(index as u64 + 1, tokens),
                         provider_observation: ProviderDocument::new(OpaqueProviderData::new(
                             serde_json::json!({
-                                "percent": percent, "reset": reset.to_rfc3339(), "plan": "pro",
+                                "percent": percent,
+                                "reset": (reset + TimeDelta::seconds(17 * index as i64)).to_rfc3339(),
+                                "plan": "pro",
                             })
                             .as_object()
                             .unwrap()
@@ -2605,14 +2607,14 @@ async fn quota_forecast_same_window_reversal_keeps_recorded_usage_in_the_report(
 }
 
 #[tokio::test]
-async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_changed_bucket() {
+async fn quota_forecast_keeps_cycle_totals_through_reset_jitter_and_restarts_after_a_reset() {
     use gateway_admin::model::quota_forecast_sampling::QuotaForecastHistoryPoint;
     let now = Utc::now();
     let observed = now - TimeDelta::minutes(1);
     let reset = now + TimeDelta::days(1);
     let added = now - TimeDelta::hours(5);
     let provider = FakeProviderAdmin::new("openai", events());
-    provider.set_quota(ProviderQuota {
+    let mut quota = ProviderQuota {
         upstream: None,
         credits: None,
         plan_type: Some("pro".to_owned()),
@@ -2627,67 +2629,102 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
             role: None,
             local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
             window_seconds: Some(604_800),
-            used_percent: Some(40.0),
+            used_percent: Some(65.0),
             reset_at: Some(reset),
             limit_reached: false,
             local_usage: None,
             provider_data: None,
         }],
         ..empty_quota()
-    });
+    };
     let mut account = account_record("openai");
     account.created_at = added;
     let store = FakeAccountStore::with_account(account, events());
-    let make_point = |hours, percent, tokens, delta| {
-        QuotaForecastHistoryPoint {
-        started_at: now - TimeDelta::hours(hours) - TimeDelta::seconds(10),
-        completed_at: now - TimeDelta::hours(hours),
-        usage: QuotaForecastUsage { request_count: tokens / 100, tokens, ..Default::default() },
-        provider_observation: ProviderDocument::new(OpaqueProviderData::new(serde_json::json!({
-            "percent": percent, "reset": (reset + TimeDelta::seconds(delta)).to_rfc3339(), "plan": "pro",
-        }).as_object().unwrap().clone())),
-    }
+    let usage = |tokens| QuotaForecastUsage {
+        request_count: tokens / 100,
+        tokens,
+        known_cost_count: tokens / 100,
+        usd: tokens as f64 / 100.0,
+        ..Default::default()
     };
+    let point_with_plan = |hours, percent, tokens, delta, plan: Option<&str>| {
+        let observation = serde_json::json!({
+            "percent": percent,
+            "reset": (reset + TimeDelta::seconds(delta)).to_rfc3339(),
+            "plan": plan,
+        });
+        QuotaForecastHistoryPoint {
+            started_at: now - TimeDelta::hours(hours) - TimeDelta::seconds(10),
+            completed_at: now - TimeDelta::hours(hours),
+            usage: usage(tokens),
+            provider_observation: ProviderDocument::new(OpaqueProviderData::new(
+                observation.as_object().unwrap().clone(),
+            )),
+        }
+    };
+    let make_point =
+        |hours, percent, tokens, delta| point_with_plan(hours, percent, tokens, delta, Some("pro"));
     *store.quota_forecast_history.lock().unwrap() = QuotaForecastHistory {
         points: vec![
-            make_point(3, 20.0, 1_000, 1),
-            make_point(2, 30.0, 1_500, -1),
+            make_point(4, 20.0, 20_000, 0),
+            make_point(3, 58.0, 62_000, 17),
+            make_point(2, 58.0, 62_500, 0),
         ],
-        usage: QuotaForecastUsage {
-            request_count: 20,
-            tokens: 2_000,
-            ..Default::default()
-        },
+        usage: usage(70_600),
         pending_request_count: 1,
     };
-    let services = accounts_service(provider, store.clone()).await;
-    let result = services
-        .accounts()
-        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
-        .await
-        .unwrap();
-    assert!(result.forecasts[0].unavailable_reason.is_none());
-    assert_eq!(result.forecasts[0].estimated_tokens, Some(5_000));
+    let services = accounts_service(provider.clone(), store.clone()).await;
+    let account_id = ProviderAccountId::new("acct_test").unwrap();
+    let read_report = async || {
+        services
+            .accounts()
+            .quota_forecast(&account_id)
+            .await
+            .unwrap()
+    };
+    // 回放 #759 的金额和百分比，历史与快照各自报告的到期时间偏移时仍应保留整段累计
+    for offset in [0, 3, 6, 7, 17, -23] {
+        quota.windows[0].reset_at = Some(reset + TimeDelta::seconds(offset));
+        provider.set_quota(quota.clone());
+        let report = read_report().await;
+        let week = &report.forecasts[0];
+        let source = week.source.as_ref().unwrap();
+        assert_eq!(source.tokens, Some(70_600));
+        assert_eq!(source.usd, Some(706.0));
+        assert_eq!(week.estimated_tokens, Some(109_956));
+        assert!((week.estimated_usd.unwrap() - (706.0 + 506.0 * 35.0 / 45.0)).abs() < 1e-9);
+        assert!(week.unavailable_reason.is_none());
+    }
     assert_eq!(store.quota_window_queries()[0].range.start, added);
     store
         .quota_forecast_history
         .lock()
         .unwrap()
         .points
-        .push(make_point(1, 35.0, 1_700, 3_600));
-    let result = services
-        .accounts()
-        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
-        .await
-        .unwrap();
-    assert!(result.forecasts[0].estimated_tokens.is_none());
-    assert!(
-        result.forecasts[0]
-            .unavailable_reason
-            .unwrap()
-            .contains("不连续")
+        .push(make_point(1, 62.0, 66_000, 3_600));
+    let result = read_report().await;
+    assert_eq!(
+        result.forecasts[0].source.as_ref().unwrap().tokens,
+        Some(70_600)
     );
-    // 新额度段已有足够观测后恢复预测，但总量不能带回重置前的累计用量
+    assert!(result.forecasts[0].estimated_tokens.is_some());
+    // 两份旧读数的截止时刻均已过去，新请求开始于旧窗口结束后
+    quota.windows[0].used_percent = Some(40.0);
+    provider.set_quota(quota.clone());
+    *store.quota_forecast_history.lock().unwrap() = QuotaForecastHistory {
+        points: vec![
+            make_point(4, 75.0, 1_000, -90_000),
+            make_point(2, 85.0, 1_500, -90_021),
+        ],
+        usage: usage(2_000),
+        ..Default::default()
+    };
+    let waiting = read_report().await;
+    assert_eq!(
+        waiting.forecasts[0].source.as_ref().unwrap().tokens,
+        Some(2_000)
+    );
+    assert!(waiting.forecasts[0].estimated_tokens.is_none());
     let mut first = make_point(1, 5.0, 1_750, 0);
     first.completed_at = now - TimeDelta::minutes(45);
     first.started_at = first.completed_at - TimeDelta::seconds(10);
@@ -2700,15 +2737,42 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
         .unwrap()
         .points
         .extend([first, next]);
-    let result = services
-        .accounts()
-        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
-        .await
-        .unwrap();
+    let result = read_report().await;
     let cycle = &result.forecasts[0];
     assert!(cycle.unavailable_reason.is_none());
     assert_eq!(cycle.source.as_ref().unwrap().tokens, Some(250));
     assert_eq!(cycle.estimated_tokens, Some(679));
+
+    for (plan, expected_tokens) in [(None, 2_000), (Some("plus"), 500)] {
+        store.quota_forecast_history.lock().unwrap().points = vec![
+            make_point(4, 20.0, 1_000, 0),
+            point_with_plan(3, 25.0, 1_200, 0, plan),
+            make_point(2, 30.0, 1_500, 0),
+        ];
+        let report = read_report().await;
+        assert_eq!(
+            report.forecasts[0].source.as_ref().unwrap().tokens,
+            Some(expected_tokens)
+        );
+    }
+
+    // 上游提前给出新的七天窗口时，直接从新起点查询，首条配对样本前的用量也留在累计中
+    let new_start = now - TimeDelta::hours(1);
+    quota.windows[0].reset_at = Some(new_start + TimeDelta::days(7));
+    provider.set_quota(quota);
+    *store.quota_forecast_history.lock().unwrap() = QuotaForecastHistory {
+        usage: usage(400),
+        ..Default::default()
+    };
+    let report = read_report().await;
+    assert_eq!(
+        store.quota_window_queries().last().unwrap().range.start,
+        new_start
+    );
+    assert_eq!(
+        report.forecasts[0].source.as_ref().unwrap().tokens,
+        Some(400)
+    );
 }
 
 #[tokio::test]

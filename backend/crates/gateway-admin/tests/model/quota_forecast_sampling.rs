@@ -12,7 +12,9 @@ fn time(minutes: i64) -> DateTime<Utc> {
 
 fn point(minute: i64, percent: f64, tokens: u64) -> QuotaForecastPoint {
     QuotaForecastPoint {
+        started_at: time(minute) - Duration::seconds(1),
         observed_at: time(minute),
+        reset_at: time(7 * 24 * 60),
         used_percent: percent,
         usage: QuotaForecastUsage {
             request_count: minute as u64,
@@ -188,7 +190,41 @@ fn repeated_same_window_recoveries_preserve_recorded_cycle_usage() {
 }
 
 #[test]
-fn changed_window_restarts_cycle_totals_at_first_matching_observation() {
+fn an_expired_deadline_alone_cannot_cut_totals_or_anchor_remaining_usage() {
+    let mut older = point(1, 15.0, 100);
+    older.reset_at = time(3);
+    let mut previous = point(2, 20.0, 200);
+    previous.reset_at = time(3) + Duration::seconds(4);
+    let first = point(4, 25.0, 700);
+    let sample = select(vec![older, previous, first], point(6, 35.0, 900));
+    assert_eq!(sample.cycle_usage.tokens, 900);
+    assert_eq!(sample.baseline_percent, 25.0);
+    assert_eq!(sample.usage.tokens, 200);
+}
+
+#[test]
+fn copied_concurrent_or_contradictory_readings_cannot_confirm_a_recovery() {
+    let mut older = point(1, 75.0, 100);
+    older.reset_at = time(3);
+    let mut previous = point(2, 85.0, 200);
+    previous.reset_at = time(3);
+    let first = point(4, 5.0, 300);
+    let current = point(6, 40.0, 900);
+    let mut overlapping = point(5, 20.0, 400);
+    overlapping.started_at = first.started_at;
+    for extra in [None, Some(overlapping), Some(current.clone())] {
+        let mut points = vec![older.clone(), previous.clone(), first.clone()];
+        points.extend(extra);
+        let sample = select(points, current.clone());
+        assert_eq!(sample.cycle_usage.tokens, 900);
+        assert!(sample.discontinuous);
+    }
+    let sample = select(vec![older, previous, first, point(5, 86.0, 400)], current);
+    assert_eq!(sample.cycle_usage.tokens, 900);
+}
+
+#[test]
+fn changed_plan_restarts_cycle_totals_at_first_matching_observation() {
     let sample = select_forecast_sample(
         "week".to_owned(),
         time(0),
