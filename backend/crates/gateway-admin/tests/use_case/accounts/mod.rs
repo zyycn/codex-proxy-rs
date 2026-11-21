@@ -2605,14 +2605,14 @@ async fn quota_forecast_same_window_reversal_keeps_recorded_usage_in_the_report(
 }
 
 #[tokio::test]
-async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_changed_bucket() {
+async fn quota_forecast_keeps_cycle_totals_through_reset_jitter_and_restarts_after_a_reset() {
     use gateway_admin::model::quota_forecast_sampling::QuotaForecastHistoryPoint;
     let now = Utc::now();
     let observed = now - TimeDelta::minutes(1);
     let reset = now + TimeDelta::days(1);
     let added = now - TimeDelta::hours(5);
     let provider = FakeProviderAdmin::new("openai", events());
-    provider.set_quota(ProviderQuota {
+    let mut quota = ProviderQuota {
         upstream: None,
         credits: None,
         plan_type: Some("pro".to_owned()),
@@ -2634,40 +2634,60 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
             provider_data: None,
         }],
         ..empty_quota()
-    });
+    };
     let mut account = account_record("openai");
     account.created_at = added;
     let store = FakeAccountStore::with_account(account, events());
+    let usage = |tokens| QuotaForecastUsage {
+        request_count: tokens / 100,
+        tokens,
+        known_cost_count: tokens / 100,
+        usd: tokens as f64 / 100.0,
+        ..Default::default()
+    };
     let make_point = |hours, percent, tokens, delta| {
+        let observation = serde_json::json!({
+            "percent": percent,
+            "reset": (reset + TimeDelta::seconds(delta)).to_rfc3339(),
+            "plan": "pro",
+        });
         QuotaForecastHistoryPoint {
-        started_at: now - TimeDelta::hours(hours) - TimeDelta::seconds(10),
-        completed_at: now - TimeDelta::hours(hours),
-        usage: QuotaForecastUsage { request_count: tokens / 100, tokens, ..Default::default() },
-        provider_observation: ProviderDocument::new(OpaqueProviderData::new(serde_json::json!({
-            "percent": percent, "reset": (reset + TimeDelta::seconds(delta)).to_rfc3339(), "plan": "pro",
-        }).as_object().unwrap().clone())),
-    }
+            started_at: now - TimeDelta::hours(hours) - TimeDelta::seconds(10),
+            completed_at: now - TimeDelta::hours(hours),
+            usage: usage(tokens),
+            provider_observation: ProviderDocument::new(OpaqueProviderData::new(
+                observation.as_object().unwrap().clone(),
+            )),
+        }
     };
     *store.quota_forecast_history.lock().unwrap() = QuotaForecastHistory {
         points: vec![
-            make_point(3, 20.0, 1_000, 1),
-            make_point(2, 30.0, 1_500, -1),
+            make_point(4, 20.0, 1_000, 0),
+            make_point(3, 25.0, 1_200, 6),
+            make_point(2, 30.0, 1_500, 0),
         ],
-        usage: QuotaForecastUsage {
-            request_count: 20,
-            tokens: 2_000,
-            ..Default::default()
-        },
+        usage: usage(2_000),
         pending_request_count: 1,
     };
-    let services = accounts_service(provider, store.clone()).await;
-    let result = services
-        .accounts()
-        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
-        .await
-        .unwrap();
-    assert!(result.forecasts[0].unavailable_reason.is_none());
-    assert_eq!(result.forecasts[0].estimated_tokens, Some(5_000));
+    let services = accounts_service(provider.clone(), store.clone()).await;
+    let account_id = ProviderAccountId::new("acct_test").unwrap();
+    // 同一组历史观测，快照在抖动范围内取值时都应保留整段累计
+    for offset in 0..=6 {
+        quota.windows[0].reset_at = Some(reset + TimeDelta::seconds(offset));
+        provider.set_quota(quota.clone());
+        let report = services
+            .accounts()
+            .quota_forecast(&account_id)
+            .await
+            .unwrap();
+        let week = &report.forecasts[0];
+        let source = week.source.as_ref().unwrap();
+        assert_eq!(source.tokens, Some(2_000));
+        assert_eq!(source.usd, Some(20.0));
+        assert_eq!(week.estimated_tokens, Some(5_000));
+        assert_eq!(week.estimated_usd, Some(50.0));
+        assert!(week.unavailable_reason.is_none());
+    }
     assert_eq!(store.quota_window_queries()[0].range.start, added);
     store
         .quota_forecast_history
@@ -2677,7 +2697,7 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
         .push(make_point(1, 35.0, 1_700, 3_600));
     let result = services
         .accounts()
-        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
+        .quota_forecast(&account_id)
         .await
         .unwrap();
     assert!(result.forecasts[0].estimated_tokens.is_none());
@@ -2702,7 +2722,7 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
         .extend([first, next]);
     let result = services
         .accounts()
-        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
+        .quota_forecast(&account_id)
         .await
         .unwrap();
     let cycle = &result.forecasts[0];

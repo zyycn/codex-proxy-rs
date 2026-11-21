@@ -53,6 +53,8 @@ use super::{
 };
 
 const CONNECTION_TEST_INPUT: &str = "Reply with exactly OK.";
+// 历史响应和当前快照各自携带上游读数，同一周期的重置时间也可能相差数秒
+const FORECAST_RESET_TOLERANCE: Duration = Duration::seconds(6);
 
 /// 统一账号页消费的服务
 #[async_trait]
@@ -1086,9 +1088,7 @@ impl AccountsService for DefaultAccountsService {
                     .as_deref()
                     .zip(fact.plan_type.as_deref())
                     .is_some_and(|(current, previous)| current.eq_ignore_ascii_case(previous));
-                // 仅容纳已观测到的秒级量化抖动，不用宽时间容差合并实际重置
-                // 不匹配的段截断基线；之后的有效观测可以重新积累
-                if !same_plan || (fact.reset_at - reset_at).abs() > Duration::seconds(2) {
+                if !same_plan || (fact.reset_at - reset_at).abs() > FORECAST_RESET_TOLERANCE {
                     points.clear();
                     interrupted = true;
                     continue;
