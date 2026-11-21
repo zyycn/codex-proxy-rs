@@ -3,7 +3,7 @@ import type { Account } from '@/api'
 
 import { ZEmpty, ZScrollbar } from '@codex-proxy/ui'
 
-import { ChartNoAxesCombined, RefreshCw, UserRound } from '@lucide/vue'
+import { ChartNoAxesCombined, Link2, RefreshCw, UserRound } from '@lucide/vue'
 
 import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -45,7 +45,8 @@ const forecastOpen = shallowRef(false)
 const hasPlanBadge = computed(() => Boolean(props.account.planType) || props.account.authenticationKind === 'api_key')
 const hasForecast = computed(() => props.account.authenticationKind !== 'api_key')
 const hasPersonalInfo = computed(() => props.account.capabilities.profile || props.account.capabilities.subscription)
-const canRefresh = computed(() => props.account.capabilities.quotaRefresh || props.account.upstream?.discovered)
+const needsPeerDiscovery = computed(() => props.account.upstream?.discovered === false)
+const canRefresh = computed(() => props.account.capabilities.quotaRefresh || props.account.upstream != null)
 const hasActions = computed(() => hasPersonalInfo.value || hasForecast.value || canRefresh.value || props.account.capabilities.resetCredits)
 const lastRefreshed = computed(() => {
   const { upstream, quota } = props.account
@@ -112,7 +113,7 @@ watch(hasPersonalInfo, (available) => {
         </QuotaActionButton>
         <QuotaActionButton
           v-if="canRefresh"
-          :label="t('accounts.quotaForecast.refreshQuota')"
+          :label="needsPeerDiscovery ? t('accounts.actions.discoverPeer') : t('accounts.quotaForecast.refreshQuota')"
           :loading="refreshing"
           :disabled="refreshing"
           @click="emit('refreshQuota', account.id)"
@@ -120,7 +121,8 @@ watch(hasPersonalInfo, (available) => {
           <template #loading>
             <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
           </template>
-          <RefreshCw class="size-3.5" />
+          <Link2 v-if="needsPeerDiscovery" class="size-3.5" />
+          <RefreshCw v-else class="size-3.5" />
         </QuotaActionButton>
       </div>
     </div>

@@ -3,7 +3,7 @@ import type { Account } from '@/api'
 
 import { ZIconButton, ZMenuItem } from '@codex-proxy/ui'
 
-import { Download, KeyRound, Link2, Pencil, Power, RefreshCw, RotateCcw, Trash2, Wifi } from '@lucide/vue'
+import { Download, KeyRound, Pencil, Power, RefreshCw, RotateCcw, Trash2, Wifi } from '@lucide/vue'
 
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -15,7 +15,6 @@ const props = defineProps<{
   downloadingCatalog: boolean
   recovering: boolean
   refreshing: boolean
-  refreshingQuota: boolean
   testing: boolean
   togglingScheduling: boolean
 }>()
@@ -26,7 +25,6 @@ const emit = defineEmits<{
   recover: [accountId: string]
   test: [account: Account]
   refresh: [accountId: string]
-  discoverPeer: [accountId: string]
   reauthorize: [account: Account]
   downloadModelCatalog: [account: Account]
   toggleScheduling: [account: Account]
@@ -66,17 +64,6 @@ const credentialEligible = computed(() => props.account.authenticationKind === '
           <Wifi class="size-3.5 text-z-text-quaternary" />
         </template>
         {{ t('accounts.connectionTest.title') }}
-      </ZMenuItem>
-      <ZMenuItem
-        v-if="account.upstream && !account.upstream.discovered"
-        :loading="refreshingQuota"
-        :disabled="refreshingQuota"
-        @click.stop="emit('discoverPeer', account.id)"
-      >
-        <template #icon>
-          <Link2 class="size-3.5 text-z-text-quaternary" />
-        </template>
-        {{ t('accounts.actions.discoverPeer') }}
       </ZMenuItem>
       <ZMenuItem
         :loading="togglingScheduling"
