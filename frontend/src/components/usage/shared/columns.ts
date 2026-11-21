@@ -58,6 +58,7 @@ export const usageDataColumns = computed(() => ([
     key: 'createdAtDisplay',
     label: t('usage.fields.time'),
     kind: 'datetime',
+    width: 128,
   },
   {
     key: 'clientIp',

@@ -171,7 +171,6 @@ watch(timeRange, () => {
             <UsageRecordsTable
               class="min-h-0 flex-1"
               :columns="columns.visibleColumns.value"
-              request-details
               :rows="records"
               :loading="loading"
               :empty-text="t('usage.page.noRequestsMatchTheseFilters')"

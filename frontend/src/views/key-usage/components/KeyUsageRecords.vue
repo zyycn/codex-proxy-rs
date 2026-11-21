@@ -65,7 +65,7 @@ const { visibleColumns, columnOptions, setColumnVisible, setColumnOrder, resetCo
           <UsagePerformanceCell :record="row" />
         </template>
         <template #createdAtDisplay="{ row }">
-          <UsageTimeCell :value="row.createdAtDisplay" />
+          <UsageTimeCell :value="row.createdAtDisplay" :datetime="row.createdAt" />
         </template>
         <template #clientIp="{ row }">
           <UsageClientIpCell :record="row" />

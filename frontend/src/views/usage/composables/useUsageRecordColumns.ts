@@ -2,25 +2,39 @@ import type { TableColumn } from '@codex-proxy/ui'
 import type { Ref } from 'vue'
 import type { UsageListRecord, UsageRecordStatus } from '@/api'
 import { useTableColumns } from '@codex-proxy/ui'
+import { clamp, partition } from 'es-toolkit'
 import { computed } from 'vue'
 import { usageRecordColumns } from '@/components/usage/shared/columns'
 import { t } from '@/i18n'
 
-export function useUsageRecordColumns(status: Ref<UsageRecordStatus>, tableWidth: Readonly<Ref<number>>) {
-  const columns = computed(() => usageRecordColumns.value.map((column) => {
-    if (column.key === 'createdAtDisplay')
-      return { ...column, width: 128 }
-    if (column.key === 'accountEmail')
-      return { ...column, width: 280, hideable: true }
-    return ['clientApiKeyName', 'model', 'reasoningEffort'].includes(column.key)
-      ? { ...column, fixedWidth: true }
-      : column
+type ColumnLayout = Record<string, Pick<TableColumn, 'width' | 'fixedWidth' | 'hideable'>>
+
+const requestLayout: ColumnLayout = {
+  clientApiKeyName: { fixedWidth: true },
+  accountEmail: { width: 280, hideable: true },
+  model: { fixedWidth: true },
+  reasoningEffort: { fixedWidth: true },
+}
+
+const errorActionWidth = 72
+const maxErrorWidth = 370
+const errorLayout: ColumnLayout = {
+  ...requestLayout,
+  transport: { width: 112 },
+  actions: { width: errorActionWidth },
+}
+
+function columnsWithLayout(layout: ColumnLayout) {
+  return usageRecordColumns.value.map(column => ({
+    ...column,
+    ...layout[column.key],
   }))
-  const usage = useTableColumns(columns, 'usage-records')
+}
+
+export function useUsageRecordColumns(status: Ref<UsageRecordStatus>, tableWidth: Readonly<Ref<number>>) {
+  const usage = useTableColumns(() => columnsWithLayout(requestLayout), 'usage-records')
   const errors = useTableColumns(() => {
-    const time = columns.value.find(column => column.key === 'createdAtDisplay')!
-    const actionWidth = 72
-    const errorWidth = 370
+    const [time, details] = partition(columnsWithLayout(errorLayout), column => column.key === 'createdAtDisplay')
     return [
       {
         key: 'errorMessage',
@@ -28,18 +42,12 @@ export function useUsageRecordColumns(status: Ref<UsageRecordStatus>, tableWidth
         kind: 'custom',
         fixed: 'left',
         minWidth: tableWidth.value
-          ? Math.min(errorWidth, Math.max(96, (tableWidth.value - actionWidth) / 2))
-          : errorWidth,
+          ? clamp((tableWidth.value - errorActionWidth) / 2, 96, maxErrorWidth)
+          : maxErrorWidth,
         hideable: false,
       },
-      time,
-      ...columns.value.filter(column => column.key !== time.key).map((column) => {
-        if (column.key === 'transport')
-          return { ...column, width: 112 }
-        if (column.key === 'actions')
-          return { ...column, width: actionWidth }
-        return column
-      }),
+      ...time,
+      ...details,
     ] satisfies TableColumn<UsageListRecord>[]
   }, 'usage-error-records')
   return computed(() => status.value === 'error'
