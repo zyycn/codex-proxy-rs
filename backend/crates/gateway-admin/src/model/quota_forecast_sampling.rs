@@ -8,6 +8,7 @@ use super::provider_credentials::ProviderDocument;
 pub const MAX_FORECAST_HISTORY_POINTS: usize = 128;
 const MIN_BLOCK_PERCENT: f64 = 5.0;
 const RECENT_BLOCKS: usize = 3;
+const MAX_PERCENT_REVERSAL: f64 = 1.0;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QuotaForecastUsage {
@@ -80,9 +81,53 @@ pub struct QuotaForecastObservation {
 
 #[derive(Debug, Clone)]
 pub struct QuotaForecastPoint {
+    pub started_at: DateTime<Utc>,
     pub observed_at: DateTime<Utc>,
+    pub reset_at: DateTime<Utc>,
     pub used_percent: f64,
     pub usage: QuotaForecastUsage,
+}
+
+impl QuotaForecastPoint {
+    fn follows(&self, previous: &Self) -> bool {
+        previous.observed_at <= self.started_at && previous.observed_at < self.observed_at
+    }
+}
+
+/// 当前窗口内仍有旧周期记录时，只在旧读数已到期、用量回落且新读数得到印证后重设累计
+fn cycle_boundary(
+    history: &[QuotaForecastPoint],
+    current: &QuotaForecastPoint,
+) -> (Option<usize>, bool) {
+    let mut boundary = None;
+    let mut awaiting_confirmation = false;
+    for (index, pair) in history.windows(2).enumerate() {
+        let (older, previous) = (&pair[0], &pair[1]);
+        let first_index = index + 2;
+        let first = history.get(first_index).unwrap_or(current);
+        let before_reset = older.used_percent.min(previous.used_percent);
+        if !previous.follows(older)
+            || !first.follows(previous)
+            || older.reset_at <= previous.observed_at
+            || older.reset_at > first.started_at
+            || previous.reset_at > first.started_at
+            || before_reset - first.used_percent <= MAX_PERCENT_REVERSAL
+        {
+            continue;
+        }
+        // 快照可能复用请求读数；只有另一条在新窗口内独立完成的请求能确认换段
+        let confirmation = history
+            .get(first_index + 1..)
+            .and_then(|later| later.iter().find(|next| next.follows(first)));
+        awaiting_confirmation = confirmation.is_none();
+        if confirmation.is_some_and(|next| {
+            next.observed_at < first.reset_at
+                && before_reset - next.used_percent > MAX_PERCENT_REVERSAL
+        }) {
+            boundary = Some(first_index);
+        }
+    }
+    (boundary, awaiting_confirmation)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,7 +162,7 @@ pub fn select_forecast_sample(
     current: QuotaForecastPoint,
     mut history: Vec<QuotaForecastPoint>,
     pending_request_count: u64,
-    interrupted: bool,
+    plan_changed: bool,
 ) -> QuotaForecastSample {
     history.retain(|point| {
         start_at <= point.observed_at
@@ -126,6 +171,9 @@ pub fn select_forecast_sample(
             && (0.0..=100.0).contains(&point.used_percent)
     });
     history.sort_by_key(|point| point.observed_at);
+    let (boundary, awaiting_confirmation) = cycle_boundary(&history, &current);
+    let history = &history[boundary.unwrap_or(0)..];
+    let interrupted = plan_changed || boundary.is_some();
     let mut sample = QuotaForecastSample {
         key,
         method: QuotaForecastMethod::Cumulative,
@@ -136,23 +184,35 @@ pub fn select_forecast_sample(
         block_count: 0,
         observation_count: history.len(),
         pending_request_count,
-        discontinuous: interrupted,
+        discontinuous: interrupted || awaiting_confirmation,
         cycle_usage: current.usage.clone(),
         usage: current.usage.clone(),
     };
-    history.push(current);
-    // 重置边界不在查询起点时，从首个新观测重新计数，避免把旧周期累计带入总量
-    let cycle_baseline = interrupted.then(|| &history[0]);
+    if interrupted {
+        let baseline = history.first().unwrap_or(&current);
+        let Some(usage) = current.usage.difference(&baseline.usage) else {
+            return sample;
+        };
+        sample.cycle_usage = usage;
+    }
+    if awaiting_confirmation {
+        return sample;
+    }
     let mut anchors: Vec<&QuotaForecastPoint> = Vec::new();
     let mut high_water: Option<&QuotaForecastPoint> = None;
-    for point in &history {
+    for point in history.iter().chain(std::iter::once(&current)) {
+        // 截至快照已过期的读数不能用于预测剩余量，窗口累计仍由上面的周期证据决定
+        if point.reset_at <= current.observed_at {
+            sample.discontinuous = true;
+            continue;
+        }
         if let Some(previous) = high_water {
             if point.observed_at <= previous.observed_at {
                 continue;
             }
             if point.used_percent < previous.used_percent {
                 // 一个百分点内的回落可能是量化/并发乱序；更大的回落不能跨越
-                if previous.used_percent - point.used_percent <= 1.0 {
+                if previous.used_percent - point.used_percent <= MAX_PERCENT_REVERSAL {
                     continue;
                 }
                 // 同窗口回落不能证明周期重置，只重建采样并保留已记录累计
@@ -167,16 +227,6 @@ pub fn select_forecast_sample(
         {
             anchors.push(point);
         }
-    }
-    let Some(current) = history.last() else {
-        return sample;
-    };
-    if let Some(baseline) = cycle_baseline {
-        let Some(usage) = current.usage.difference(&baseline.usage) else {
-            sample.discontinuous = true;
-            return sample;
-        };
-        sample.cycle_usage = usage;
     }
     if anchors.len() < 2 {
         return sample;
