@@ -38,9 +38,7 @@ const hasUpstreamPool = computed(() => props.account.upstream?.discovered && (
 ))
 
 const quotaEntries = computed(() => groupedAccountQuotaWindows(
-  orderedPanelQuotaWindows(props.account.upstream?.discovered
-    ? props.account.quota.windows.filter(window => window.amount)
-    : props.account.quota.windows),
+  orderedPanelQuotaWindows(props.account.quota.windows.filter(window => window.accountWide)),
 ))
 const profileOpen = shallowRef(false)
 const forecastOpen = shallowRef(false)
