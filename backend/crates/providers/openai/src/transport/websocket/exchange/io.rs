@@ -13,7 +13,7 @@ pub(super) async fn next_websocket_message(
     receive_timeout: Duration,
 ) -> Result<Option<Message>, CodexWebSocketExchangeError> {
     match timeout(receive_timeout, websocket.next()).await {
-        Ok(message) => message.transpose().map_err(Into::into),
+        Ok(message) => message.transpose(),
         Err(_) => Err(CodexWebSocketExchangeError::ReceiveIdleTimeout {
             timeout: receive_timeout,
         }),

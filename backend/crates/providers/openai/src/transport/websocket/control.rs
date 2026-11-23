@@ -15,13 +15,25 @@ use super::CodexWebSocketExchangeError;
 pub(super) const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 pub(super) enum PumpCommand {
+    Upload {
+        text: tungstenite::Utf8Bytes,
+        deadline: tokio::time::Instant,
+        accepted:
+            oneshot::Sender<oneshot::Receiver<Result<UploadOutcome, CodexWebSocketExchangeError>>>,
+    },
     Send {
         message: Message,
         ack: oneshot::Sender<Result<(), CodexWebSocketExchangeError>>,
     },
 }
 
-pub(super) type SharedMessages = Arc<Mutex<mpsc::Receiver<Result<Message, tungstenite::Error>>>>;
+pub(super) enum UploadOutcome {
+    Flushed,
+    InterruptedWithReply,
+}
+
+pub(super) type SharedMessages =
+    Arc<Mutex<mpsc::Receiver<Result<Message, CodexWebSocketExchangeError>>>>;
 
 pub(super) struct PumpControl {
     pub(super) tx_command: mpsc::Sender<PumpCommand>,

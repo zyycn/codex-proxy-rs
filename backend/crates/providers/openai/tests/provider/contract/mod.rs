@@ -4023,7 +4023,7 @@ async fn repeated_message_too_big_closes_keep_session_on_websocket() {
         listener.local_addr().expect("listener address")
     );
     let server = tokio::spawn(async move {
-        for _ in 0..3 {
+        for index in 0..3 {
             let (stream, _) = listener
                 .accept()
                 .await
@@ -4034,31 +4034,28 @@ async fn repeated_message_too_big_closes_keep_session_on_websocket() {
                 .await
                 .expect("WebSocket request")
                 .expect("valid WebSocket request");
+            let prelude = if index == 0 {
+                json!({"type": "codex.rate_limits"})
+            } else {
+                json!({"type": "response.created", "response": {
+                    "id": "resp_before_committed_close", "model": "gpt-5.4"
+                }})
+            };
             websocket
-                .send(Message::Text(
-                    json!({
-                        "type": "response.created",
-                        "response": {
-                            "id": "resp_before_committed_close",
-                            "model": "gpt-5.4"
-                        }
-                    })
-                    .to_string()
-                    .into(),
-                ))
+                .send(Message::text(prelude.to_string()))
                 .await
-                .expect("start WebSocket response");
-            websocket
-                .send(Message::Text(
-                    json!({
-                        "type": "response.output_text.delta",
-                        "delta": "partial output"
-                    })
-                    .to_string()
-                    .into(),
-                ))
-                .await
-                .expect("send semantic WebSocket event");
+                .unwrap();
+            if index == 2 {
+                websocket
+                    .send(Message::text(
+                        json!({
+                            "type": "response.output_text.delta", "delta": "partial output"
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
             websocket
                 .close(Some(CloseFrame {
                     code: CloseCode::Size,
@@ -5312,6 +5309,15 @@ async fn websocket_upgrade_required_immediately_enables_session_http_fallback() 
 
 #[tokio::test]
 async fn advertised_size_fallback_preserves_next_request_websocket_for_all_credentials() {
+    check_request_size_fallback(true).await;
+}
+
+#[tokio::test]
+async fn early_size_close_preserves_next_request_websocket_for_all_credentials() {
+    check_request_size_fallback(false).await;
+}
+
+async fn check_request_size_fallback(advertised: bool) {
     for api_key in [false, true] {
         for downstream_websocket in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5320,13 +5326,31 @@ async fn advertised_size_fallback_preserves_next_request_websocket_for_all_crede
                 let (socket, _) = listener.accept().await.unwrap();
                 let mut websocket =
                     crate::transport::accept_codex_test_websocket_with(socket, |_, response| {
-                        response
-                            .headers_mut()
-                            .insert("x-codex-websocket-max-message-bytes", "1".parse().unwrap());
+                        if advertised {
+                            response.headers_mut().insert(
+                                "x-codex-websocket-max-message-bytes",
+                                "1".parse().unwrap(),
+                            );
+                        }
                     })
                     .await;
-                while let Some(Ok(message)) = websocket.next().await {
-                    assert!(!message.is_text(), "size fallback must precede upload");
+                if advertised {
+                    while let Some(Ok(message)) = websocket.next().await {
+                        assert!(!message.is_text(), "advertised limit must precede upload");
+                    }
+                } else {
+                    assert!(websocket.next().await.unwrap().unwrap().is_text());
+                    // 慢上传可以超过发送前建连预算，上游明确拒绝后仍应完成本次 HTTP 恢复
+                    tokio::time::pause();
+                    tokio::time::advance(Duration::from_secs(31)).await;
+                    tokio::time::resume();
+                    websocket
+                        .close(Some(CloseFrame {
+                            code: CloseCode::Size,
+                            reason: "too large".into(),
+                        }))
+                        .await
+                        .unwrap();
                 }
                 let (mut http, _) = listener.accept().await.unwrap();
                 let request = crate::transport::read_http_request_with_body(&mut http).await;
@@ -5383,6 +5407,26 @@ async fn advertised_size_fallback_preserves_next_request_websocket_for_all_crede
                         json!(format!("ws_size_{index}")),
                     )]));
                 }
+                let request_context = RequestAttemptContext::new(
+                    ModelRequestId::new(format!("req_size_{index}")).unwrap(),
+                    ClientApiKeyId::new("key_openai_contract").unwrap(),
+                )
+                .with_request_location(Some(global_request_location()))
+                .with_connection_budget(
+                    gateway_core::engine::connection::ConnectionBudget::with_clock(|| {
+                        tokio::time::Instant::now().into_std()
+                    }),
+                );
+                let context = AttemptContext::new(
+                    request_context,
+                    NonZeroU32::MIN,
+                    SystemTime::now() + Duration::from_secs(120),
+                    account_policy(),
+                    AccountAttemptContext::new(BTreeSet::new(), None, None)
+                        .with_account_scope(contract_account_scope()),
+                    None,
+                    CancellationToken::new(),
+                );
                 let mut stream = Arc::clone(&provider)
                     .execute(
                         planned_request(
@@ -5411,7 +5455,7 @@ async fn advertised_size_fallback_preserves_next_request_websocket_for_all_crede
                                     ),
                             ),
                         ),
-                        context(&format!("req_size_{index}"), CancellationToken::new()),
+                        context,
                     )
                     .await
                     .unwrap();
@@ -5433,17 +5477,25 @@ async fn advertised_size_fallback_preserves_next_request_websocket_for_all_crede
 }
 
 #[tokio::test]
-async fn advertised_size_limit_on_reused_connection_requests_client_replay_before_send() {
+async fn size_rejection_on_reused_connection_requests_client_replay() {
+    for advertised in [true, false] {
+        check_oversized_continuation(advertised).await;
+    }
+}
+
+async fn check_oversized_continuation(advertised: bool) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
         let mut websocket =
             crate::transport::accept_codex_test_websocket_with(socket, |_, response| {
-                response.headers_mut().insert(
-                    "x-codex-websocket-max-message-bytes",
-                    "2048".parse().unwrap(),
-                );
+                if advertised {
+                    response.headers_mut().insert(
+                        "x-codex-websocket-max-message-bytes",
+                        "2048".parse().unwrap(),
+                    );
+                }
             })
             .await;
         assert!(websocket.next().await.unwrap().unwrap().is_text());
@@ -5453,11 +5505,19 @@ async fn advertised_size_limit_on_reused_connection_requests_client_replay_befor
             ))
             .await
             .unwrap();
-        while let Some(Ok(message)) = websocket.next().await {
-            assert!(
-                !message.is_text(),
-                "oversized continuation must not be uploaded"
-            );
+        if advertised {
+            while let Some(Ok(message)) = websocket.next().await {
+                assert!(!message.is_text(), "advertised limit must precede upload");
+            }
+        } else {
+            assert!(websocket.next().await.unwrap().unwrap().is_text());
+            websocket
+                .close(Some(CloseFrame {
+                    code: CloseCode::Size,
+                    reason: "too large".into(),
+                }))
+                .await
+                .unwrap();
         }
         assert!(
             tokio::time::timeout(Duration::from_millis(100), listener.accept())
@@ -5542,7 +5602,14 @@ async fn advertised_size_limit_on_reused_connection_requests_client_replay_befor
         error.kind(),
         ProviderErrorKind::ContinuationRecoveryRequired
     );
-    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert_eq!(
+        error.send_state(),
+        if advertised {
+            UpstreamSendState::NotSent
+        } else {
+            UpstreamSendState::Ambiguous
+        }
+    );
     assert_eq!(
         error.continuation_unavailable_reason(),
         Some("transport_payload_too_large")
@@ -5556,7 +5623,13 @@ async fn advertised_size_limit_on_reused_connection_requests_client_replay_befor
         Some("previous_response_not_found")
     );
     assert!(error.upstream_status().is_none());
-    assert!(error.raw_upstream_error().is_none());
+    if advertised {
+        assert!(error.raw_upstream_error().is_none());
+    } else {
+        let close: Value =
+            serde_json::from_str(error.raw_upstream_error().unwrap().as_str()).unwrap();
+        assert_eq!(close["code"], 1009);
+    }
     assert!(!error.allows_pre_delivery_retry());
     drop(continuation);
     server.await.unwrap();

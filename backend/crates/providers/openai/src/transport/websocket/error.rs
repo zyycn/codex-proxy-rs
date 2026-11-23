@@ -84,6 +84,8 @@ pub enum CodexWebSocketExchangeError {
     #[error("websocket continuation unavailable: {reason}")]
     ContinuationUnavailable {
         reason: PreviousResponseUnavailableReason,
+        #[source]
+        source: Option<Box<Self>>,
     },
     /// 上游在 terminal 事件前关闭
     #[error("{0}")]
@@ -257,6 +259,10 @@ impl CodexWebSocketExchangeError {
                 source: Some(source),
                 ..
             }
+            | Self::ContinuationUnavailable {
+                source: Some(source),
+                ..
+            }
             | Self::ConnectionObserved { source, .. } => source.diagnostic_cause(),
             _ => self,
         }
@@ -316,9 +322,19 @@ impl CodexWebSocketExchangeError {
                 source: Some(source),
                 ..
             }
+            | Self::ContinuationUnavailable {
+                source: Some(source),
+                ..
+            }
             | Self::ConnectionObserved { source, .. } => source.close_before_terminal(),
             _ => None,
         }
+    }
+
+    pub(crate) fn message_too_big_close(&self) -> bool {
+        self.close_before_terminal()
+            .and_then(CodexWebSocketCloseError::code)
+            == Some(WEBSOCKET_CLOSE_MESSAGE_TOO_BIG)
     }
 
     pub(crate) fn with_connection_observation(
@@ -346,6 +362,10 @@ impl CodexWebSocketExchangeError {
             | Self::ReusedConnectionDiedBeforeFirstEvent {
                 source: Some(source),
                 ..
+            }
+            | Self::ContinuationUnavailable {
+                source: Some(source),
+                ..
             } => source.connection_observation(),
             _ => None,
         }
@@ -362,7 +382,7 @@ impl CodexWebSocketExchangeError {
     #[must_use]
     pub fn continuation_unavailable_reason(&self) -> Option<PreviousResponseUnavailableReason> {
         match self.classified() {
-            Self::ContinuationUnavailable { reason } => Some(*reason),
+            Self::ContinuationUnavailable { reason, .. } => Some(*reason),
             _ => None,
         }
     }
