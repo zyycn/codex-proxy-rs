@@ -584,7 +584,7 @@ impl TestKey {
                 .expect("encode deterministic EC key");
             EncodingKey::from_ec_der(der.as_bytes())
         } else {
-            EncodingKey::from_secret(b"symmetric-test-key")
+            EncodingKey::from_secret(b"symmetric-test-key").expect("create symmetric test key")
         };
         encode(&header, claims, &encoding_key).expect("encode test token")
     }
