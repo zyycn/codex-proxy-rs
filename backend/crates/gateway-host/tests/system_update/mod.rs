@@ -18,7 +18,6 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use filetime::FileTime;
 use flate2::{Compression, write::GzEncoder};
 use futures::StreamExt as _;
 use gateway_admin::model::{

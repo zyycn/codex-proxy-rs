@@ -1058,7 +1058,8 @@ async fn update_should_remove_stale_file_lock_and_continue() {
         )
         .await;
     fs::write(fixture.lock(), "stale").expect("lock");
-    filetime::set_file_mtime(fixture.lock(), FileTime::from_unix_time(1, 0)).expect("old mtime");
+    let old_mtime = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+    fs::set_times(fixture.lock(), fs::FileTimes::new().set_modified(old_mtime)).expect("old mtime");
 
     assert_eq!(
         complete_update(&fixture.service(&server), TARGET_VERSION)
