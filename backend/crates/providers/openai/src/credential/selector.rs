@@ -875,6 +875,15 @@ impl CodexCredentialSelector {
                     only_account,
                 )
                 .await?;
+            let image_primary = binding
+                .as_ref()
+                .filter(|_| {
+                    matches!(model, CodexSelectionModel::Image(_))
+                        && affinity_mode == AccountAffinity::Strict
+                        && pinned_account.is_none()
+                })
+                .map(ProviderSessionBinding::account_id)
+                .filter(|id| accounts.iter().any(|account| account.id() == *id));
             let mut model_access_rejected = 0_usize;
             let accounts = accounts
                 .into_iter()
@@ -1030,6 +1039,14 @@ impl CodexCredentialSelector {
                 .iter()
                 .map(|account| account.id().clone())
                 .collect::<Vec<_>>();
+            // 主账号在授权池内，但未通过 Images 的模型、套餐或协议筛选时，只为本次图片借号
+            let image_primary_to_keep = image_primary.filter(|id| !account_ids.contains(id));
+            if image_primary_to_keep.is_some() && queued_account.is_some() {
+                // 排队期间主账号的资格可能变化，先恢复完整候选再找可用的生图账号
+                refresh_candidates = true;
+                continue 'capacity;
+            }
+            let follow_only = follow_only && image_primary_to_keep.is_none();
             let rate_limits = if diagnostic {
                 HashMap::new()
             } else {
@@ -1508,7 +1525,7 @@ impl CodexCredentialSelector {
                     }
                     ProviderLeaseAcquisition::Acquired(guard) => guard,
                 };
-                let mut binding_account = account.id();
+                let mut binding_account = image_primary_to_keep.unwrap_or(account.id());
                 if affinity_mode == AccountAffinity::Preferred
                     && let Some(primary) = binding.as_ref()
                     && (primary.account_id() == account.id()

@@ -274,6 +274,104 @@ async fn image_model_access_overrides_existing_session_affinity() {
 }
 
 #[tokio::test]
+async fn strict_session_images_borrow_within_group_and_account_model_access() {
+    use gateway_core::routing::{AccountGroupId, RoutingGroupSnapshot};
+
+    const TEXT_ONLY: &str = "acct_text_only";
+    let chat = AccountGroupId::new("grp_00000000000000000000000000000001").unwrap();
+    let mixed = AccountGroupId::new("grp_00000000000000000000000000000002").unwrap();
+    let openai = ProviderKind::new("openai").unwrap();
+    let deny_image = policy(AccountModelAccessMode::Denylist, "gpt-image-2");
+    let accounts = [
+        (CPA_ACCOUNT, &chat, AccountModelAccess::all()),
+        (TEXT_ONLY, &mixed, deny_image.clone()),
+        (IMAGE_ACCOUNT, &mixed, AccountModelAccess::all()),
+    ]
+    .map(|(id, group, access)| {
+        (
+            ProviderAccountId::new(id).unwrap(),
+            RuntimeAccount::new(openai.clone(), [group.clone()].into()).with_model_access(access),
+        )
+    });
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(
+            RuntimeAccountDirectory::new(accounts.into())
+                .with_group_model_access([(chat.clone(), deny_image)].into()),
+        ),
+        ClientRoutingScope::restricted(
+            vec![
+                RoutingGroupSnapshot::new(chat.clone(), "Chat".into()),
+                RoutingGroupSnapshot::new(mixed.clone(), "Mixed".into()),
+            ],
+            [chat, mixed].into(),
+            [openai].into(),
+        )
+        .unwrap(),
+    ));
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header(
+            "chatgpt-account-id",
+            format!("chatgpt-{CPA_ACCOUNT}"),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    for endpoint in ["/codex/images/generations", "/codex/images/edits"] {
+        Mock::given(method("POST"))
+            .and(path(endpoint))
+            .and(header(
+                "chatgpt-account-id",
+                format!("chatgpt-{IMAGE_ACCOUNT}"),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[]})))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, CPA_ACCOUNT).await;
+    let provider = provider_with_base_url(&store, server.uri());
+    let send = async |request| {
+        let mut stream = provider
+            .clone()
+            .execute(
+                request,
+                attempt(
+                    AccountAttemptContext::new(BTreeSet::new(), None, None)
+                        .with_account_scope(scope.clone()),
+                ),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    };
+    let text = |turn| planned_request("openai", super::session_binding::turn_request("root", turn));
+    send(text("first")).await;
+    create_account(&store, TEXT_ONLY).await;
+    create_account(&store, IMAGE_ACCOUNT).await;
+    store.set_scheduling(TEXT_ONLY, None, AccountWeight::new(100).unwrap());
+    let generation = image_operation(
+        ImageRequestKind::Generation,
+        br#"{"session_id":"root","model":"gpt-image-2","prompt":"draw"}"#,
+    );
+    let edit = image_operation(
+        ImageRequestKind::Edit,
+        br#"{"session_id":"root","thread_id":"child","model":"gpt-image-2","prompt":"edit"}"#,
+    );
+    for (image, next_turn) in [(generation, "after-generation"), (edit, "after-edit")] {
+        send(planned_provider_endpoint_request("openai", image)).await;
+        send(text(next_turn)).await;
+    }
+}
+
+#[tokio::test]
 async fn final_image_model_after_middleware_must_be_allowed_by_the_selected_account() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

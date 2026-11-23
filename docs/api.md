@@ -429,6 +429,9 @@ Messages 费用按管理员显式配置的模型价格计算，未配置时保�
 Images 使用原生非流式 JSON 端点，JSON 请求与响应正文原样转发。
 `/v1/images/edits` 还接受 `multipart/form-data`，将上传转换为原生 Images JSON 请求
 
+Key 允许生图时，已绑定分组的 Key 只使用允许该图片模型的启用分组成员。账号自身的模型黑白名单进一步收窄可选范围。
+采用严格或优先亲和时优先使用会话主账号。主账号在授权池内但模型权限、套餐或上游协议不支持本次生图时，可以临时借用合格账号，后续聊天仍沿用原绑定
+
 multipart 的 `image` 和 `image[]` 上传按出现顺序组成 `images` 数组，每项为
 `{"image_url":"data:image/...;base64,..."}`；`mask` 上传转换为同结构的单个对象。
 图片支持 PNG、JPEG、WebP，根据内容识别格式，原始文件字节直接编码，不缩放或重新编码
@@ -2169,7 +2172,7 @@ OpenAI Key 的 `installationSeed` 接受带连字符的 UUID，保存时规范�
 
 严格亲和下的后代线程始终启用账号排队，沿用 `accountQueueTimeoutSeconds` 和请求截止时间；
 `maxWaitingPerAccount` 为 0 时使用每队列 1,000 人上限，否则沿用配置的上限。
-可识别来源的 Search、Images、Live 创建请求采用同样规则，身份与轮次关联见[会话绑定](architecture.md#6-路由账号范围与-continuation)。
+可识别来源的 Search、Images、Live 创建请求共用会话绑定。主账号缺少本次生图资格时，后代可按 [Images 请求](#images-请求)规则借号。身份与轮次关联见[会话绑定](architecture.md#6-路由账号范围与-continuation)。
 插件显式选号须通过账号资格与租约检查，见[调度合同](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#路由调度与观察)。普通请求关闭账号排队且没有可用容量时返回 `503` / `account_capacity_unavailable`，
 与无候选账号的 `no_available_provider` 区分；排队不绕过账号范围、模型权限、RPM 或金额限额
 
@@ -2392,7 +2395,7 @@ Guardian 以 `subagent_kind` 或 `client_metadata.x-openai-subagent` 值 `guardi
   主账号被删除、停用或凭据过期、失效、封禁时，在后备账号成功准入时原子迁移绑定
   额度耗尽且重置时间未知或距离当前时刻超过账号排队时限时迁移，接近重置时保留主绑定，并给刚过重置时间的额度复核同长度宽限
   原生续接仍固定其状态归属账号
-- `strict`（严格）：同一会话共用账号，后代请求等待当前账号并跟随根请求换号
+- `strict`（严格）：同一会话共用账号，后代请求等待当前账号并跟随根请求换号；[原生 Images](#images-请求) 可按生图资格临时借号
 
 插件显式选号及原生续写的状态归属约束在三种模式下仍然生效
 
