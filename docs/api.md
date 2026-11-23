@@ -678,7 +678,11 @@ OpenAI Responses 上游 WS 按握手响应头 `x-codex-websocket-max-message-byt
 该上限只属于当前上游连接；响应头缺失或无效时不预判超限。显式 warmup 保持 WS 合同，超限时
 返回 `websocket_message_too_large`，不重复发送或改用 HTTP
 
-超过当前连接上限的 connection-local WS 续接会在发送前返回 `400 previous_response_not_found`。
+上传期间网关持续读取上游帧并回复 Ping。上游在本次请求开始发送后、首条响应文本前返回关闭码
+1009 时，采用与握手超限相同的传输选择。显式 warmup 保留上游关闭错误。收到响应文本（含元数据）后
+再收到 1009，网关保留原错误，避免重复执行。单独的断管或 TCP 重置按传输失败处理
+
+超过当前连接上限的 connection-local WS 续接会返回 `400 previous_response_not_found`。
 上游 HTTP/SSE 在 `store=false` 下成功后，若网关已记录该响应需要完整重放，HTTP 和 WS 客户端携带其
 `previous_response_id` 继续生成时也会收到同一错误。客户端应清除旧 ID，
 携带完整历史及工具调用／输出重试。官方 Codex 支持重连 WS 后完整重发，也可能按自身重试预算

@@ -11,6 +11,7 @@ mod live;
 mod model;
 mod pool;
 mod pump;
+mod upload;
 
 pub use self::{
     audit::{

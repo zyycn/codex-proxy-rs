@@ -10,7 +10,13 @@ async fn closed_connection_handoff_rejects_payload_as_not_sent() {
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
         let mut ws = accept_codex_test_websocket(socket).await;
-        ws.close(None).await.unwrap();
+        // 空闲连接的 1009 早于本次请求首帧，不能触发大小回退
+        ws.close(Some(tungstenite::protocol::CloseFrame {
+            code: tungstenite::protocol::frame::coding::CloseCode::Size,
+            reason: "idle".into(),
+        }))
+        .await
+        .unwrap();
         // pump 的关闭确认是 best-effort；无业务帧的 EOF 同样能证明连接已退出
         assert!(
             matches!(

@@ -8,7 +8,7 @@ use gateway_protocol::openai::events;
 use tokio::{io::BufWriter, time::timeout};
 use tokio_tungstenite::{Connector, MaybeTlsStream, client_async_tls_with_config};
 use tungstenite::{
-    self, Message,
+    self,
     extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
     handshake::client::Request as WsRequest,
     http::Response as WsResponse,
@@ -34,8 +34,6 @@ use super::{
     pool::CodexWebSocketConnectionMetadata,
     pump::{PumpLogContext, PumpedWebSocket, RawWsStream},
 };
-
-use super::control::WEBSOCKET_SEND_TIMEOUT;
 
 const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -163,21 +161,6 @@ pub(super) async fn connect_pumped_websocket(
 ) -> Result<(PumpedWebSocket, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
     let (raw, response) = connect_websocket(connection, fast_path).await?;
     Ok((PumpedWebSocket::new(raw, context, proxy_permit), response))
-}
-
-pub(super) async fn send_websocket_request(
-    websocket: &PumpedWebSocket,
-    payload_text: &str,
-) -> Result<(), CodexWebSocketExchangeError> {
-    timeout(
-        WEBSOCKET_SEND_TIMEOUT,
-        websocket.send(Message::Text(payload_text.to_string().into())),
-    )
-    .await
-    .map_err(|_| CodexWebSocketExchangeError::SendTimeout {
-        timeout: WEBSOCKET_SEND_TIMEOUT,
-    })??;
-    Ok(())
 }
 
 pub(super) fn websocket_connection_metadata(

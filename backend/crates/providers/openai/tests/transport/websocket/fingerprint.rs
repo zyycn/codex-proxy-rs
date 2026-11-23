@@ -219,31 +219,7 @@ async fn capture_response_create(
     let address = listener.local_addr().expect("fingerprint server address");
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.expect("accept fingerprint client");
-        let opening = read_http_request(&mut stream).await;
-        let websocket_key =
-            read_header_value(&opening, "sec-websocket-key").expect("WebSocket key");
-        let extension = if deflate {
-            "Sec-WebSocket-Extensions: permessage-deflate\r\n"
-        } else {
-            ""
-        };
-        let response = format!(
-            concat!(
-                "HTTP/1.1 101 Switching Protocols\r\n",
-                "Connection: Upgrade\r\n",
-                "Upgrade: websocket\r\n",
-                "Sec-WebSocket-Accept: {}\r\n",
-                "{}",
-                "\r\n"
-            ),
-            derive_accept_key(websocket_key.as_bytes()),
-            extension
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write upgrade response");
-
+        let opening = upgrade_raw_socket(&mut stream, deflate).await;
         let mut frames = Vec::new();
         loop {
             let frame = read_client_frame(&mut stream).await;
@@ -272,6 +248,34 @@ async fn capture_response_create(
         .await
         .expect("fingerprint WebSocket response");
     server.await.expect("fingerprint server task")
+}
+
+async fn upgrade_raw_socket(stream: &mut TcpStream, deflate: bool) -> String {
+    let opening = read_http_request(stream).await;
+    let websocket_key = read_header_value(&opening, "sec-websocket-key").expect("WebSocket key");
+    let extension = if deflate {
+        "Sec-WebSocket-Extensions: permessage-deflate\r\n"
+    } else {
+        ""
+    };
+    let response = format!(
+        concat!(
+            "HTTP/1.1 101 Switching Protocols\r\n",
+            "Connection: Upgrade\r\n",
+            "Upgrade: websocket\r\n",
+            "Sec-WebSocket-Accept: {}\r\n",
+            "{}",
+            "\r\n"
+        ),
+        derive_accept_key(websocket_key.as_bytes()),
+        extension
+    );
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .expect("write upgrade response");
+
+    opening
 }
 
 async fn read_client_frame(stream: &mut TcpStream) -> ClientFrame {
@@ -345,4 +349,191 @@ async fn write_server_text_frame(stream: &mut TcpStream, payload: &str) {
         .write_all(&frame)
         .await
         .expect("write completed frame");
+}
+
+fn large_upload_client(addr: std::net::SocketAddr) -> (CodexBackendClient, CodexResponsesRequest) {
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::new(CodexWebSocketPool::default()));
+    let mut request = codex_request("gpt-test", "x".repeat(16 * 1024 * 1024), vec![]);
+    request.use_websocket = true;
+    request.local_conversation_id = Some("fragmented-create".into());
+    (client, request)
+}
+
+#[tokio::test]
+async fn fragmented_upload_sends_pong_before_final_continuation() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (client, request) = large_upload_client(listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        upgrade_raw_socket(&mut stream, false).await;
+        assert_eq!(read_client_frame(&mut stream).await.first_byte, 0x01);
+        stream.write_all(&[0x89, 1, b'p']).await.unwrap();
+        let mut pong = false;
+        loop {
+            let frame = read_client_frame(&mut stream).await;
+            match frame.first_byte {
+                0x8a => {
+                    assert_eq!(frame.payload, b"p");
+                    pong = true;
+                }
+                0x00 => {}
+                0x80 => {
+                    assert!(pong, "Pong must precede the final data frame");
+                    break;
+                }
+                byte => panic!("unexpected frame {byte:x}"),
+            }
+        }
+        write_server_text_frame(
+            &mut stream,
+            &completed_websocket_response("resp_ping_upload", 1, 1),
+        )
+        .await;
+    });
+    timeout(
+        Duration::from_secs(15),
+        client.create_response(&request, request_context("upload-ping", None)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn partial_upload_honors_peer_reply_and_keeps_bare_disconnect_ambiguous() {
+    for case in ["size_close", "error_then_close", "disconnect"] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, request) = large_upload_client(listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            upgrade_raw_socket(&mut stream, false).await;
+            // 只读首帧的第一个字节，让客户端余下的写入遇到背压
+            assert_eq!(stream.read_u8().await.unwrap(), 0x01);
+            if case == "disconnect" {
+                return;
+            }
+            if case == "error_then_close" {
+                write_server_text_frame(
+                    &mut stream,
+                    r#"{"type":"error","error":{"code":"rate_limit_exceeded","message":"quota"}}"#,
+                )
+                .await;
+            }
+            stream.write_all(&[0x88, 2, 0x03, 0xf1]).await.unwrap();
+            if case == "size_close" {
+                let (mut http, _) = listener.accept().await.unwrap();
+                let body = read_http_request_with_body(&mut http).await;
+                assert!(body.starts_with(b"POST /codex/responses "));
+                write_completed_sse_response(&mut http).await;
+            } else {
+                tokio::io::copy(&mut stream, &mut tokio::io::sink())
+                    .await
+                    .ok();
+            }
+        });
+        let result = timeout(
+            Duration::from_secs(15),
+            client.create_response_stream(&request, request_context(case, None)),
+        )
+        .await
+        .expect("upload must not wait for its write timeout");
+        match case {
+            "size_close" => {
+                let mut response = result.unwrap();
+                assert_eq!(
+                    response.transport_metrics.decision,
+                    Some(CodexTransportDecision::Http2WebSocketMessageTooLarge)
+                );
+                assert_eq!(response.transport, CodexBackendTransport::HttpSse);
+                while let Some(chunk) = response.body.next().await {
+                    chunk.unwrap();
+                }
+            }
+            "error_then_close" => {
+                let mut response = result.unwrap();
+                let chunk = response.body.next().await.unwrap().unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&chunk).unwrap()["error"]["code"],
+                    "rate_limit_exceeded"
+                );
+                assert!(response.body.next().await.is_none());
+            }
+            _ => {
+                let err = match result {
+                    Err(error) => error,
+                    Ok(mut response) => response.body.next().await.unwrap().unwrap_err(),
+                };
+                let CodexClientError::WebSocket(error) = err else {
+                    panic!("expected WebSocket failure")
+                };
+                assert!(error.close_before_terminal().is_none());
+                let source = match &error {
+                    CodexWebSocketExchangeError::ConnectionObserved { source, .. } => {
+                        source.as_ref()
+                    }
+                    other => other,
+                };
+                assert!(matches!(
+                    source,
+                    CodexWebSocketExchangeError::PostSendAmbiguous { .. }
+                ));
+            }
+        }
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn upload_timeout_delivers_buffered_upstream_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (client, request) = large_upload_client(listener.local_addr().unwrap());
+    let (release, released) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        upgrade_raw_socket(&mut socket, false).await;
+        assert_eq!(read_client_frame(&mut socket).await.first_byte, 0x01);
+        write_server_text_frame(
+            &mut socket,
+            r#"{"type":"error","error":{"code":"rate_limit_exceeded","message":"quota"}}"#,
+        )
+        .await;
+        socket.write_all(&[0x89, 1, b'p']).await.unwrap();
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let frame = read_client_frame(&mut socket).await;
+                if frame.first_byte == 0x8a {
+                    break;
+                }
+                assert_eq!(frame.first_byte, 0x00);
+            }
+        })
+        .await
+        .expect("peer error and following Ping should be read during upload");
+        // Pong 证明此前的业务错误已经入队，保留连接直到写超时和错误交付均已完成
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(301)).await;
+        tokio::time::resume();
+        timeout(Duration::from_secs(5), released)
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    let mut response = client
+        .create_response_stream(&request, request_context("upload_timeout_reply", None))
+        .await
+        .unwrap();
+    let frame = response.body.next().await.unwrap().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&frame).unwrap()["error"]["code"],
+        "rate_limit_exceeded"
+    );
+    assert!(response.body.next().await.is_none());
+    release.send(()).unwrap();
+    server.await.unwrap();
 }
