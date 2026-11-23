@@ -637,17 +637,17 @@ impl DefaultExecutionService {
                             )?;
                             middleware.as_ref()
                                 .is_none_or(|plan| plan.preserves_model_bindings(extension_route, kind, &model))
-                                .then(|| (kind.clone(), model))
+                                .then(|| (kind.clone(), provider, model))
                         });
-                    if let Some((kind, model)) = direct {
+                    if let Some((kind, provider, model)) = direct {
                         let account_scope = match authorization.required_account.as_ref() {
                             Some(id) => Arc::new(account_scope.restricted_to(&Default::default(), &[id.clone()].into())),
                             None => account_scope,
                         };
-                        request.client.snapshot.plan_with_direct_account_model(
+                        let plan = request.client.snapshot.plan_with_direct_account_model(
                             &target_model,
                             &request.operation,
-                            account_scope,
+                            Arc::clone(&account_scope),
                             &target_context,
                             DirectAccountModel {
                                 provider: &kind,
@@ -658,6 +658,30 @@ impl DefaultExecutionService {
                                 plan.uses_native_upstream(extension_route, &kind, account)
                             }),
                         )
+                        .map_err(map_routing_error)?;
+                        // 原生续接已校验固定账号，新请求只在实际选择专用模型时复核父会话
+                        if pin.is_none()
+                            && let Some(candidate) = plan.candidates().first()
+                            && candidate.requires_direct_authentication()
+                            && !provider
+                                .allows_direct_model_scope(
+                                    &request.operation,
+                                    request.client.policy.key_id(),
+                                    candidate.account_scope(),
+                                    plan.account_selection_policy(),
+                                )
+                                .await
+                                .map_err(|error| GatewayError::from_provider(&error))?
+                        {
+                            request.client.snapshot.plan(
+                                &target_model,
+                                &request.operation,
+                                account_scope,
+                                &target_context,
+                            )
+                        } else {
+                            Ok(plan)
+                        }
                     } else {
                         request.client.snapshot.plan(
                             &target_model,

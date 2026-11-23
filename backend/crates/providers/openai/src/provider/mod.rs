@@ -432,6 +432,40 @@ impl Provider for CodexProvider {
         )
     }
 
+    async fn allows_direct_model_scope(
+        &self,
+        operation: &Operation,
+        client_key: &gateway_core::policy::ClientApiKeyId,
+        scope: &gateway_core::routing::FrozenAccountScope,
+        policy: gateway_core::account::AccountSelectionPolicy,
+    ) -> Result<bool, ProviderError> {
+        let Operation::Generate(generate) = operation else {
+            return Ok(true);
+        };
+        let payload = generate.protocol_payload();
+        if policy.openai_account_affinity() != AccountAffinity::Strict
+            || !crate::request_identity::follows_session_with_headers(
+                payload.body(),
+                payload.context(),
+                &[],
+            )
+        {
+            return Ok(true);
+        }
+        let session = account_session_with_headers(payload.body(), payload.context(), &[]);
+        let Some(affinity) =
+            crate::credential::root_session_affinity(session.as_deref(), client_key)
+        else {
+            return Ok(true);
+        };
+        let binding = self
+            .selector
+            .lookup_session_affinity(affinity.key())
+            .await
+            .map_err(map_selection_error)?;
+        Ok(binding.is_none_or(|binding| scope.allows(binding.account_id())))
+    }
+
     fn compile_privacy_policy(
         &self,
         policy: &gateway_core::settings::privacy::CodexPrivacyPolicy,

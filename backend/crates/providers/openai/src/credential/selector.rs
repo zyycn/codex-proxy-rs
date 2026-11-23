@@ -1701,7 +1701,7 @@ impl CodexCredentialSelector {
         .map(|alias| alias.map(|alias| CodexSessionAffinity::from_turn_alias(turn.clone(), alias)))
     }
 
-    async fn lookup_session_affinity(
+    pub(crate) async fn lookup_session_affinity(
         &self,
         key: &ProviderSessionAffinityKey,
     ) -> Result<Option<ProviderSessionBinding>, CredentialSelectionError> {
