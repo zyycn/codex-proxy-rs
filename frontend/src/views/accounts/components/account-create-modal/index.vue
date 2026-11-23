@@ -17,7 +17,6 @@ import { useAccountSettingsFormRules } from '../../composables/useAccountSetting
 import { accountCreateProvider } from '../../utils/accountCreate'
 import AccountApiKeyFields from '../AccountApiKeyFields.vue'
 import AccountIdentityCell from '../AccountIdentityCell.vue'
-import AccountNameField from '../AccountNameField.vue'
 import AccountImportFields from './AccountImportFields.vue'
 import AccountOAuthFields from './AccountOAuthFields.vue'
 import AccountSetupFields from './AccountSetupFields.vue'
@@ -186,7 +185,6 @@ async function requestCreate() {
           @regenerate="emit('generateOauth')"
         />
         <ZForm v-else-if="mode === 'api_key'" ref="formElement" :model="form" :rules="apiKeyRules" scroll-to-error focus-on-error novalidate @submit="requestCreate">
-          <AccountNameField v-model="form.name" required :disabled="busy" :placeholder="t('accounts.credentials.enterUpstreamName')" />
           <AccountApiKeyFields v-model="form.apiKey" :disabled="busy" />
         </ZForm>
         <AccountImportFields

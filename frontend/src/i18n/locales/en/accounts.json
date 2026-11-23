@@ -139,7 +139,6 @@
     },
     "credentials": {
       "accountName": "Account name",
-      "enterUpstreamName": "Enter the upstream name",
       "baseUrlHelp": "Enter the API base URL, endpoint paths are appended automatically",
       "apiPrefix": "API prefix",
       "apiKeyPlaceholder": "Leave blank to keep the current key",
@@ -148,7 +147,6 @@
       "transportLabel": "Transport",
       "webSocketHelp": "WS requires upstream support for Responses WebSocket",
       "messagesTransportHelp": "Messages upstreams use HTTP/SSE",
-      "nameRequired": "Enter an account name",
       "validation": {
         "urlLength": "Upstream API URL must not exceed 2,048 characters",
         "urlFormat": "Enter an HTTP or HTTPS URL without credentials, query parameters, or a fragment",
