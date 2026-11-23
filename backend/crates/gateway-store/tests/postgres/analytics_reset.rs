@@ -4,8 +4,35 @@ use super::{
     TestDatabase, analytics::seed, drain_analytics, observability_query_budget,
     observability_repository,
 };
+use std::time::Duration;
+
 use chrono::{TimeDelta, Utc};
 use gateway_store::postgres::{ObservabilityRange, PgRequestAnalyticsRepository};
+
+async fn next_reset_batch(worker: &PgRequestAnalyticsRepository) -> gateway_store::StoreResult<()> {
+    // 维护锁被占用时 Worker 会返回空轮，测试按已提交批次核对游标
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let batch = worker.maintain(2).await?;
+            if batch.reset_progress {
+                return Ok(());
+            }
+            assert_eq!(
+                (
+                    batch.projected_requests,
+                    batch.rebuilt_buckets,
+                    batch.advanced_buckets,
+                    batch.backfilled_requests
+                ),
+                (0, 0, 0, 0),
+                "ordinary maintenance ran during a version reset"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("analytics reset batch did not acquire the maintenance lock")
+}
 
 #[tokio::test]
 async fn version_reset_persists_primary_keys_atomically_and_resumes_after_table_rewrite() {
@@ -34,13 +61,26 @@ async fn version_reset_persists_primary_keys_atomically_and_resumes_after_table_
         .execute(&database.pool).await.unwrap();
     let worker =
         PgRequestAnalyticsRepository::new(database.pool.clone(), observability_query_budget());
-    assert!(worker.maintain(2).await.is_err());
+    let error = next_reset_batch(&worker).await.unwrap_err();
+    let gateway_store::StoreError::Unavailable {
+        source: Some(source),
+        ..
+    } = error
+    else {
+        panic!("expected the reset cursor trigger to reject the update");
+    };
+    let database_error = source
+        .downcast_ref::<sqlx::Error>()
+        .unwrap()
+        .as_database_error()
+        .unwrap();
+    assert_eq!(database_error.message(), "test reset progress failure");
     let unchanged: (i64, i16, bool) = sqlx::query_as("select (select count(*) from request_analytics_facts),reset_phase,reset_cursor is null from request_analytics_build_state")
         .fetch_one(&database.pool).await.unwrap();
     assert_eq!(unchanged, (5, 0, true));
     sqlx::raw_sql("drop trigger reject_reset_cursor on request_analytics_build_state; drop function reject_reset_cursor();")
         .execute(&database.pool).await.unwrap();
-    assert!(worker.maintain(2).await.unwrap().reset_progress);
+    next_reset_batch(&worker).await.unwrap();
     let cursor: serde_json::Value =
         sqlx::query_scalar("select reset_cursor from request_analytics_build_state")
             .fetch_one(&database.pool)
@@ -84,7 +124,7 @@ async fn version_reset_persists_primary_keys_atomically_and_resumes_after_table_
         // 每轮创建新实例，所有推进事实必须来自数据库而非 Worker 内存
         let worker =
             PgRequestAnalyticsRepository::new(database.pool.clone(), observability_query_budget());
-        assert!(worker.maintain(2).await.unwrap().reset_progress);
+        next_reset_batch(&worker).await.unwrap();
         let after: (i16, Option<serde_json::Value>) =
             sqlx::query_as("select reset_phase,reset_cursor from request_analytics_build_state")
                 .fetch_one(&database.pool)
