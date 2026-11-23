@@ -278,10 +278,10 @@ async fn exhausted_reset_refreshes_quickly_then_backs_off_and_recovers_from_usag
 }
 
 #[tokio::test]
-async fn allowed_account_with_expired_window_synchronizes_at_reset_grace() {
+async fn disabled_account_with_expired_window_synchronizes_at_reset_grace() {
     let mut now = SystemTime::now();
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_allowed_expired_window").await;
+    create_account_with_enabled(&store, "acct_allowed_expired_window", false).await;
     let account = store
         .account("acct_allowed_expired_window")
         .expect("account");

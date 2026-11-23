@@ -999,8 +999,9 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
   团队身份不推断为 Free，订阅查询失败不影响额度观测
   普通 Token 续期与刷新退避保留提交时的账号资料及额度快照，显式凭据轮换仍按原子提交合同失效旧观测。
   xAI Provider 在缺少可展示上游额度时投影本地 24 小时滚动统计，Admin 按该窗口展示日用量，额度预测使用完整周/月窗口
-- 账号导入和 OAuth complete（包括重新授权）在 credential 提交、Provider 事实失效及快照发布后，
+- 账号导入和 OAuth complete（包括重新授权）在凭据提交、Provider 缓存失效与运行快照发布后，
   由 Admin 共用流程后台读取一次额度；不等待观测完成才返回管理请求，失败记录告警但不回滚账号事务。
+  同身份重新授权在事务内保留额度观测和按桶预热进度，旧凭据版本的在途观测无法覆盖新版本。
   手工和后台 credential refresh 仍不隐式刷新 quota
 - quota refresh、正常推理返回的 rate-limit headers 和后台健康任务汇入同一额度事实；Provider 使用套餐
   事实进行展示、目录 cache 隔离和请求资格检查，不创建套餐专属状态机。

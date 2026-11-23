@@ -413,11 +413,10 @@ impl GrokCredentialQuotaService {
             .load_current(account_id)
             .await
             .map_err(map_quota_repository_error)?;
-        if !loaded.account.enabled()
-            || loaded
-                .account
-                .access_token_expires_at()
-                .is_none_or(|expires_at| expires_at <= SystemTime::now())
+        if loaded
+            .account
+            .access_token_expires_at()
+            .is_none_or(|expires_at| expires_at <= SystemTime::now())
         {
             return Err(GrokQuotaError::AccountUnavailable);
         }

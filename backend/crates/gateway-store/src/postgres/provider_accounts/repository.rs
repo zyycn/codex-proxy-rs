@@ -854,9 +854,11 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     profile: &UpdateProviderAccount,
     replacement_identity: Option<&ProviderAccountIdentity>,
     update: &ProviderCredentialUpdate,
-    preserve_name: bool,
+    reauthorization: bool,
 ) -> StoreResult<Revision> {
     let replace_identity = replacement_identity.is_some();
+    // 同身份重新授权会更新账号资料，额度及本周期的预热进度仍属于该身份
+    let preserve_quota = !replace_identity && (reauthorization || update.preserve_profile);
     let upstream_user_id = replacement_identity.map(ProviderAccountIdentity::upstream_user_id);
     let upstream_account_id =
         replacement_identity.and_then(ProviderAccountIdentity::upstream_account_id);
@@ -866,8 +868,11 @@ pub(crate) async fn rotate_provider_account_in_transaction(
          set name = case when $14 or $16 then name else $4 end,
              email = case when $14 then email else $5 end,
              plan_type = case when $14 then plan_type else $6 end,
-             quota_warmup_state = case when $14 then quota_warmup_state else '{}'::jsonb end, quota_warmup_revision = provider_accounts.quota_warmup_revision + 1, provider_quota_json = case when $14 then provider_quota_json else null end, quota_paused = case when $14 then quota_paused else false end,
-             quota_observed_at = case when $14 then quota_observed_at else null end,
+             quota_warmup_state = case when $18 then quota_warmup_state else '{}'::jsonb end,
+             quota_warmup_revision = provider_accounts.quota_warmup_revision + 1,
+             provider_quota_json = case when $18 then provider_quota_json else null end,
+             quota_paused = case when $18 then quota_paused else false end,
+             quota_observed_at = case when $18 then quota_observed_at else null end,
              quota_access_state = case when $11 then 'unknown' else quota_access_state end,
              quota_evidence = case when $11 then null else quota_evidence end,
              quota_access_observed_at = case when $11 then null else quota_access_observed_at end,
@@ -910,8 +915,9 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     .bind(upstream_account_id)
     .bind(update.preserve_profile)
     .bind(update.preserve_credential_state)
-    .bind(preserve_name)
+    .bind(reauthorization)
     .bind(update.preserve_access_token_expiry)
+    .bind(preserve_quota)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {
@@ -1180,7 +1186,7 @@ pub(super) async fn import_provider_accounts_in_transaction(
 pub(super) async fn rotate_provider_account_admin_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     command: RotateProviderAccount,
-    preserve_name: bool,
+    reauthorization: bool,
 ) -> StoreResult<ProviderAccountAdminRotation> {
     command.scope.validate()?;
     require_nonempty(ENTITY, "account_id", &command.profile.id)?;
@@ -1209,7 +1215,7 @@ pub(super) async fn rotate_provider_account_admin_in_transaction(
         &command.profile,
         command.replacement_identity.as_ref(),
         &command.credential,
-        preserve_name,
+        reauthorization,
     )
     .await?;
     // 凭据 CAS、普通设置和审计共享事务，任何设置失败都回滚凭据更新

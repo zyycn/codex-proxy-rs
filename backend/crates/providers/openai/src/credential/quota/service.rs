@@ -131,7 +131,7 @@ impl CodexCredentialQuotaService {
         &self,
         now: SystemTime,
     ) -> Result<CodexQuotaSyncSummary, CodexCredentialQuotaError> {
-        let mut accounts = self.repository.list_for_provider().await?;
+        let mut accounts = self.repository.list_for_provider(true).await?;
         accounts.retain(|account| {
             account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
         });

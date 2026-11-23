@@ -72,9 +72,9 @@ fn local_service(
 }
 
 #[tokio::test]
-async fn zero_initial_delay_keeps_immediate_first_observation() {
+async fn disabled_account_without_quota_is_observed_when_initial_delay_expires() {
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_initial_zero").await;
+    create_account_with_enabled(&store, "acct_initial_zero", false).await;
     let server = MockServer::start().await;
     mount_usage(&server, 200).await;
     let service = local_service(&store, &server, zero_delays());

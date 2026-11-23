@@ -272,7 +272,7 @@ async fn disabled_proxy_projects_direct_while_preserving_bindings_and_credential
             projected.push(accounts.get_account(&id).await.unwrap().unwrap());
             projected.push(accounts.load_current_credential(&id).await.unwrap().account);
             let kind = ProviderKind::new(provider).unwrap();
-            projected.extend(accounts.list_for_provider(&kind).await.unwrap());
+            projected.extend(accounts.list_for_provider(&kind, false).await.unwrap());
             let now = SystemTime::now();
             projected.extend(
                 accounts

@@ -467,6 +467,7 @@ impl ProviderAccountStore for TestAccounts {
     async fn list_for_provider(
         &self,
         provider: &ProviderKind,
+        include_disabled: bool,
     ) -> Result<Vec<ProviderAccount>, StoreError> {
         if Some(provider.as_str()) == self.failed_provider {
             return Err(StoreError::new(StoreErrorKind::Unavailable));
@@ -476,7 +477,9 @@ impl ProviderAccountStore for TestAccounts {
             .lock()
             .unwrap()
             .iter()
-            .filter(|account| account.provider() == provider)
+            .filter(|account| {
+                account.provider() == provider && (include_disabled || account.enabled())
+            })
             .cloned()
             .collect())
     }

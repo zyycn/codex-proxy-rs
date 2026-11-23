@@ -62,7 +62,7 @@ async fn scoped_account_list_filters_ids_provider_and_live_enabled_state() {
         ["acct_scope_a", "acct_scope_z"]
     );
     let full_pool = repository
-        .list_for_provider(&provider)
+        .list_for_provider(&provider, false)
         .await
         .expect("load full provider pool");
     assert_eq!(
@@ -71,6 +71,22 @@ async fn scoped_account_list_filters_ids_provider_and_live_enabled_state() {
             .map(|account| account.id().as_str())
             .collect::<Vec<_>>(),
         ["acct_scope_a", "acct_scope_outside", "acct_scope_z"]
+    );
+    let maintenance = repository
+        .list_for_provider(&provider, true)
+        .await
+        .expect("load provider accounts for maintenance");
+    assert_eq!(
+        maintenance
+            .iter()
+            .map(|account| account.id().as_str())
+            .collect::<Vec<_>>(),
+        [
+            "acct_scope_a",
+            "acct_scope_disabled",
+            "acct_scope_outside",
+            "acct_scope_z"
+        ]
     );
     let all = repository
         .list_provider_accounts(None, true)

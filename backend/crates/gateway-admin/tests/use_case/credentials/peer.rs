@@ -26,14 +26,17 @@ use super::super::{
 async fn imported_peer_accounts_should_start_observation_without_waiting_for_network() {
     let events = events();
     let provider = FakeProviderAdmin::new("openai", events.clone());
-    provider.set_import_account_ids(&["acct_first", "acct_second"]);
+    provider.set_import_account_ids(&["acct_disabled", "acct_first", "acct_second"]);
     let mut first = account_record("openai");
     first.id = "acct_first".into();
     first.authentication_kind = "api_key".into();
     let mut second = first.clone();
     second.id = "acct_second".into();
     let store = FakeAccountStore::with_account(first.clone(), events);
-    store.set_accounts(vec![first, second]);
+    let mut disabled = first.clone();
+    disabled.id = "acct_disabled".into();
+    disabled.enabled = false;
+    store.set_accounts(vec![disabled, first, second]);
     let peer = Arc::new(PendingPeer::default());
     let services = AdminHarness::new()
         .provider(provider.clone())
@@ -59,8 +62,8 @@ async fn imported_peer_accounts_should_start_observation_without_waiting_for_net
     .expect("import must not wait for peer response")
     .expect("import committed");
     peer.wait_for_requests(1).await;
-    assert_eq!(peer.changed.lock().unwrap().len(), 2);
-    assert_eq!(result.credential_ids.len(), 2);
+    assert_eq!(peer.changed.lock().unwrap().len(), 3);
+    assert_eq!(result.credential_ids.len(), 3);
     assert!(provider.quota_requests().is_empty());
     peer.gate.add_permits(2);
     peer.wait_for_requests(2).await;
@@ -72,11 +75,13 @@ async fn imported_peer_accounts_should_start_observation_without_waiting_for_net
 }
 
 #[tokio::test]
-async fn native_import_should_use_provider_quota_when_peer_service_is_available() {
+async fn disabled_native_account_should_observe_quota_when_peer_service_is_available() {
     let events = events();
     let provider = FakeProviderAdmin::new("openai", events.clone());
     provider.set_import_account_ids(&["acct_test"]);
-    let store = FakeAccountStore::new("openai", events);
+    let mut account = account_record("openai");
+    account.enabled = false;
+    let store = FakeAccountStore::with_account(account, events);
     let peer = Arc::new(PendingPeer::default());
     let services = AdminHarness::new()
         .provider(provider.clone())

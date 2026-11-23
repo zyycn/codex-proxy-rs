@@ -112,8 +112,9 @@ impl ProviderAccountStore for PgProviderAccountRepository {
     async fn list_for_provider(
         &self,
         provider: &ProviderKind,
+        include_disabled: bool,
     ) -> Result<Vec<CoreProviderAccount>, CoreStoreError> {
-        self.list_provider_accounts(Some(provider.as_str()), false)
+        self.list_provider_accounts(Some(provider.as_str()), include_disabled)
             .await
             .map_err(core_store_error)?
             .into_iter()

@@ -121,7 +121,7 @@ impl CodexCredentialQuotaService {
         &self,
         model: &str,
     ) -> Result<CodexWarmupSummary, CodexCredentialQuotaError> {
-        let mut accounts = self.repository.list_for_provider().await?;
+        let mut accounts = self.repository.list_for_provider(false).await?;
         accounts.retain(warmup_account_is_available);
         let mut summary = CodexWarmupSummary::default();
         if accounts.is_empty() {

@@ -336,7 +336,7 @@ fn quota_refresh_candidate(
     snapshot: Option<&CodexAccountQuotaSnapshot>,
     now: SystemTime,
 ) -> Option<(ProviderAccount, Option<SystemTime>)> {
-    if !eligible_periodic_quota_refresh(&account, now) {
+    if !access_token_is_current(&account, now) {
         return None;
     }
     if account.quota().is_exhausted() {
@@ -428,14 +428,9 @@ fn insert_projection_entry(
     );
 }
 
-fn eligible_periodic_quota_refresh(account: &ProviderAccount, now: SystemTime) -> bool {
-    account.enabled() && access_token_is_current(account, now)
-}
-
 fn eligible_initial_quota_sync(account: &ProviderAccount, now: SystemTime) -> bool {
     // 首次观察只兜底刚入库、尚无 quota 快照的账号
     // 已耗尽等运行时状态必须由
     // periodic 路径处理，才能保留同一账号的最小复核间隔
-    account.credential_state() == CredentialState::Ready
-        && eligible_periodic_quota_refresh(account, now)
+    account.credential_state() == CredentialState::Ready && access_token_is_current(account, now)
 }

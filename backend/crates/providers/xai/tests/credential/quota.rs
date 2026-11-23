@@ -709,21 +709,20 @@ async fn quota_read_rejects_corrupt_provider_document() {
 }
 
 #[tokio::test]
-async fn disabled_account_quota_refresh_never_calls_upstream() {
+async fn disabled_account_refreshes_quota_without_enabling_scheduling() {
     let (store, repository) =
         repository_with_accounts(&[("disabled-quota", "subject-disabled")]).await;
+    let id = account_id("disabled-quota");
     store
-        .set_enabled(&account_id("disabled-quota"), false)
+        .set_enabled(&id, false)
         .await
         .expect("disable account");
-    let transport = QueueBillingTransport::success(br#"{"config":null}"#);
-    let service = crate::support::grok_quota_service(repository, transport.clone());
+    let transport = QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":37.5}}"#);
+    let service = crate::support::grok_quota_service(repository, transport);
 
-    assert!(matches!(
-        service.refresh_account(&account_id("disabled-quota")).await,
-        Err(GrokQuotaError::AccountUnavailable)
-    ));
-    assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+    let snapshot = service.refresh_account(&id).await.expect("refresh quota");
+    assert_eq!(snapshot.billing().used_percent(), Some(37.5));
+    assert!(!store.account(&id).expect("account").enabled());
 }
 
 #[tokio::test]

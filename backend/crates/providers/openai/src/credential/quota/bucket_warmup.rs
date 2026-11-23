@@ -137,7 +137,7 @@ impl CodexCredentialQuotaService {
         now: DateTime<Utc>,
     ) -> Result<CodexWarmupSummary, CodexCredentialQuotaError> {
         let mut summary = CodexWarmupSummary::default();
-        for account in self.repository.list_for_provider().await? {
+        for account in self.repository.list_for_provider(false).await? {
             if !warmup::warmup_account_is_available(&account)
                 || !account.quota_settings().has_warmup()
             {

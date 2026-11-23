@@ -594,7 +594,7 @@ impl CodexCredentialSelector {
                 .collect());
         }
         if diagnostic {
-            return Ok(self.repository.list_for_provider().await?);
+            return Ok(self.repository.list_for_provider(false).await?);
         }
         let account_ids: Vec<_> = attempt
             .account_scope()

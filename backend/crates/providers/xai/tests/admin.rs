@@ -219,7 +219,8 @@ async fn xai_quota_catalog_worker_retains_both_failure_stages_and_finishes_the_b
     for refresh_due in [true, false] {
         let store = MemoryProviderAccountStore::shared();
         for suffix in ["broken_one", "broken_two"] {
-            let input = create_input(suffix, "synthetic-subject");
+            let mut input = create_input(suffix, "synthetic-subject");
+            input.enabled = suffix == "broken_one";
             let mut account = crate::support::prepare_input(&input).unwrap();
             // 模拟历史持久化凭据损坏，额度与目录读取均应保留各自的失败分类
             account.credential = gateway_core::account::PlaintextCredential::new(Map::new());

@@ -243,7 +243,7 @@ impl CodexCredentialCatalogService {
         }
         let revision = self.state_revision()?;
         let now = SystemTime::now();
-        let accounts = self.repository.list_for_provider().await?;
+        let accounts = self.repository.list_for_provider(false).await?;
         let current: BTreeMap<_, _> = accounts
             .into_iter()
             .filter(|a| eligible_catalog_account(a, now))

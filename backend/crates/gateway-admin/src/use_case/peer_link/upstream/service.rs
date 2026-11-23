@@ -209,7 +209,7 @@ impl PeerInfoService {
             if context.cancellation().is_cancelled() {
                 break;
             }
-            let accounts = match self.accounts.list_for_provider(provider).await {
+            let accounts = match self.accounts.list_for_provider(provider, false).await {
                 Ok(accounts) => accounts,
                 Err(error) => {
                     failure.get_or_insert(error);

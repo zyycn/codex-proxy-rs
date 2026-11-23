@@ -88,9 +88,11 @@ pub trait ProviderAccountStore: Send + Sync {
 
     async fn list_accounts(&self) -> Result<Vec<ProviderAccount>, StoreError>;
 
+    /// 额度维护可包含停用账号，请求调度只读取已启用账号
     async fn list_for_provider(
         &self,
         provider: &ProviderKind,
+        include_disabled: bool,
     ) -> Result<Vec<ProviderAccount>, StoreError>;
 
     /// 只读取指定 Provider 冻结范围内的已启用账号，空范围直接返回空池

@@ -150,7 +150,7 @@ impl ScheduledTask for XaiQuotaCatalogTask {
         Box::pin(async move {
             let accounts = self
                 .accounts
-                .list_for_provider(&self.provider_kind)
+                .list_for_provider(&self.provider_kind, true)
                 .await
                 .map_err(|source| WorkerTaskError::safe("账号列表读取失败").with_source(source))?;
             let mut failures = QuotaCatalogFailure::default();
@@ -243,10 +243,9 @@ impl XaiQuotaCatalogTask {
 }
 
 pub(super) fn eligible_quota_worker_account(account: &ProviderAccount, now: SystemTime) -> bool {
-    account.enabled()
-        && account
-            .access_token_expires_at()
-            .is_some_and(|expires_at| expires_at > now)
+    account
+        .access_token_expires_at()
+        .is_some_and(|expires_at| expires_at > now)
         && account
             .quota()
             .exhaustion_refresh_due(now, EXHAUSTED_QUOTA_FALLBACK_RECHECK_INTERVAL)

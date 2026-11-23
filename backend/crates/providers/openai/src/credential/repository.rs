@@ -136,12 +136,13 @@ impl CodexCredentialRepository {
 
     pub async fn list_for_provider(
         &self,
+        include_disabled: bool,
     ) -> Result<Vec<ProviderAccount>, CredentialRepositoryError> {
         let provider = ProviderKind::new(PROVIDER_NAME).map_err(|source| {
             CredentialRepositoryError::InvalidCredentialData(Some(ErrorSource::new(source)))
         })?;
         self.store
-            .list_for_provider(&provider)
+            .list_for_provider(&provider, include_disabled)
             .await
             .map_err(Into::into)
     }
