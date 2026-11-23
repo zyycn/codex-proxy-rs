@@ -2,28 +2,10 @@ import type { FormRules } from '@codex-proxy/ui'
 import type { ApiKeyAccountForm } from '../utils/upstreamApiKey'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { accountNameValid } from '../utils/accountName'
 
 export function useAccountApiKeyFormRules(editing = false) {
   const { t } = useI18n({ useScope: 'global' })
-  return computed<FormRules<{ apiKey: ApiKeyAccountForm, name: string }>>(() => ({
-    ...(!editing
-      ? {
-          name: [
-            {
-              required: true,
-              whitespace: true,
-              trigger: ['blur', 'change'],
-              message: t('accounts.credentials.nameRequired'),
-            },
-            {
-              validator: (_rule: unknown, value: string) => accountNameValid(value),
-              trigger: ['blur', 'change'],
-              message: t('accounts.editor.nameInvalid'),
-            },
-          ],
-        }
-      : {}),
+  return computed<FormRules<{ apiKey: ApiKeyAccountForm }>>(() => ({
     'apiKey.protocol': {
       required: true,
       trigger: 'change',

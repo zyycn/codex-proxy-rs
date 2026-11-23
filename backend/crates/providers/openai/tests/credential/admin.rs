@@ -1093,6 +1093,7 @@ async fn api_key_import_export_preserves_target_without_oauth_exchange() {
             .into_accounts()
             .pop()
             .unwrap();
+        assert_eq!(restored.account.name(), "relay");
         let CodexCredentialData::ApiKey(data) =
             CodexCredentialCodec::decode_complete(&restored.credential).unwrap()
         else {
@@ -1127,6 +1128,7 @@ async fn messages_api_key_import_export_preserves_protocol_and_rejects_websocket
         .into_accounts()
         .pop()
         .unwrap();
+    assert_eq!(imported.account.name(), "密钥账号");
     let now = Utc::now();
     let exported = CodexCredentialAdmin
         .format_cpr_export(vec![ExportManagedCodexCredential {

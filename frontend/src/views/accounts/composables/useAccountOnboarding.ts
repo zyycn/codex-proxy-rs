@@ -76,7 +76,6 @@ export function useAccountOnboarding(options: {
           data: {
             provider: 'openai',
             authentication_kind: 'api_key',
-            name: form.name.trim(),
             base_url: form.apiKey.base_url.trim(),
             api_key: form.apiKey.apiKey,
             protocol: form.apiKey.protocol,

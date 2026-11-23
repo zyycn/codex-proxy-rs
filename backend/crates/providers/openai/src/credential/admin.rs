@@ -985,9 +985,7 @@ impl CodexCredentialAdminService {
                 ParsedCodexAuthentication::ApiKey(data) => {
                     let mut prepared = CodexCredentialAdmin.prepare_api_key(
                         account_id,
-                        candidate
-                            .name
-                            .unwrap_or_else(|| "OpenAI API Key".to_owned()),
+                        candidate.name.unwrap_or_else(|| "密钥账号".to_owned()),
                         data,
                     )?;
                     prepared.model_access = candidate.model_access;

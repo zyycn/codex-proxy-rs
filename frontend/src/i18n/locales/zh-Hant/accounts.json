@@ -139,7 +139,6 @@
     },
     "credentials": {
       "accountName": "賬號名稱",
-      "enterUpstreamName": "輸入上游名稱",
       "baseUrlHelp": "填寫 API 前綴，接口路徑會自動追加",
       "apiPrefix": "API 前綴",
       "apiKeyPlaceholder": "留空保留當前密鑰",
@@ -148,7 +147,6 @@
       "transportLabel": "傳輸方式",
       "webSocketHelp": "WS 需要上游支持 Responses WebSocket",
       "messagesTransportHelp": "Messages 上游使用 HTTP/SSE",
-      "nameRequired": "請輸入賬號名稱",
       "validation": {
         "urlLength": "上游 API 地址不能超過 2048 個字符",
         "urlFormat": "請輸入不含認證、查詢參數或片段的 HTTP 或 HTTPS 地址",
