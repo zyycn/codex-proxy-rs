@@ -24,6 +24,7 @@ pub struct CodexWebSocketPoolKey {
     account_id: String,
     conversation_id: String,
     connection_profile: String,
+    response_exclusions: Vec<String>,
     installation_id: Option<String>,
     routing_affinity_id: Option<Uuid>,
     fedramp_routing: bool,
@@ -44,6 +45,7 @@ impl CodexWebSocketPoolKey {
             account_id: account_id.into(),
             conversation_id: conversation_id.into(),
             connection_profile: String::new(),
+            response_exclusions: Vec::new(),
             installation_id: None,
             routing_affinity_id: None,
             fedramp_routing: false,
@@ -62,6 +64,16 @@ impl CodexWebSocketPoolKey {
     /// 区分实际 WebSocket opening 画像，防止复用旧 UA 或不同握手语义的连接
     pub(crate) fn with_connection_profile(mut self, connection_profile: impl Into<String>) -> Self {
         self.connection_profile = connection_profile.into();
+        self
+    }
+
+    /// 上游只在握手时读取响应排除项，精确续接也必须匹配最终发出的头值
+    pub(crate) fn with_response_exclusions(mut self, opening_headers: &[(String, String)]) -> Self {
+        self.response_exclusions = opening_headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-codex-exclude"))
+            .map(|(_, value)| value.clone())
+            .collect();
         self
     }
 
@@ -111,7 +123,7 @@ impl CodexWebSocketPoolKey {
             .routing_affinity_id
             .map(|id| id.to_string())
             .unwrap_or_default();
-        short_sha256([
+        let parts = [
             self.base_url.as_str(),
             self.account_id.as_str(),
             self.conversation_id.as_str(),
@@ -121,7 +133,12 @@ impl CodexWebSocketPoolKey {
             self.downstream_connection_id.as_str(),
             self.egress_key.as_str(),
             routing_affinity.as_str(),
-        ])
+        ];
+        short_sha256(
+            parts
+                .into_iter()
+                .chain(self.response_exclusions.iter().map(String::as_str)),
+        )
     }
 
     pub(super) fn same_logical_connection(&self, other: &Self) -> bool {
@@ -132,6 +149,7 @@ impl CodexWebSocketPoolKey {
             && self.egress_key == other.egress_key
             && self.routing_affinity_id == other.routing_affinity_id
             && self.fedramp_routing == other.fedramp_routing
+            && self.response_exclusions == other.response_exclusions
     }
 }
 

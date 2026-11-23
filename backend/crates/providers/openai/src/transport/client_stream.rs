@@ -374,8 +374,13 @@ impl CodexBackendClient {
             connection_profile.push_str("\0peer:");
             connection_profile.push_str(&hex::encode(Sha256::digest(route.as_bytes())));
         }
-        let pool_key =
-            self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
+        let pool_key = self.websocket_pool_key(
+            request,
+            context,
+            pool_account_id,
+            &connection_profile,
+            opening.connection.headers(),
+        );
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
         let downstream_cancellation = context.response_control.and_then(
             gateway_core::engine::response_control::ResponseControl::connection_cancellation,
@@ -702,6 +707,7 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
         connection_profile: &str,
+        opening_headers: &[(String, String)],
     ) -> Option<CodexWebSocketPoolKey> {
         let account_id = pool_account_id.or(context.account_id)?;
         let conversation_id = request
@@ -712,6 +718,7 @@ impl CodexBackendClient {
             .with_egress_key(&self.egress_key)
             .with_outbound_proxy(self.outbound_proxy.as_ref())
             .with_connection_profile(connection_profile)
+            .with_response_exclusions(opening_headers)
             .with_fedramp_routing(self.fedramp_routing)
             .with_installation_id(context.installation_id);
         key = key.with_routing_affinity(self.routing_affinity.as_ref().map(|pin| pin.id()));
