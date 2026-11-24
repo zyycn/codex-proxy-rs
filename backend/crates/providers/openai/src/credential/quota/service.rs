@@ -74,16 +74,14 @@ impl CodexCredentialQuotaService {
     pub(crate) async fn record_confirmed_exhaustion(
         &self,
         account: &ProviderAccount,
-        evidence: QuotaEvidence,
-        reset_at: Option<SystemTime>,
-        observed_at: SystemTime,
+        state: QuotaState,
     ) -> Result<(), CodexCredentialQuotaError> {
         let outcome = self
             .store
             .apply_quota_access(QuotaAccessChange {
                 account_id: account.id().clone(),
                 expected_revision: account.revision(),
-                state: QuotaState::exhausted(evidence, observed_at, reset_at),
+                state,
             })
             .await?;
         if outcome == QuotaWriteOutcome::Conflict {
@@ -225,7 +223,10 @@ impl CodexCredentialQuotaService {
                         Some(QuotaEndpointFailure::Exhausted(evidence)) => {
                             summary.exhausted += 1;
                             if let Err(write_error) = self
-                                .record_confirmed_exhaustion(&account, evidence, None, observed_at)
+                                .record_confirmed_exhaustion(
+                                    &account,
+                                    QuotaState::exhausted(evidence, observed_at, None),
+                                )
                                 .await
                             {
                                 summary.transient += 1;
@@ -422,8 +423,11 @@ impl CodexCredentialQuotaService {
             Err(CodexQuotaFetchError::Upstream { account, error }) => {
                 match classify_quota_endpoint_failure(&error) {
                     Some(QuotaEndpointFailure::Exhausted(evidence)) => {
-                        self.record_confirmed_exhaustion(&account, evidence, None, observed_at)
-                            .await?;
+                        self.record_confirmed_exhaustion(
+                            &account,
+                            QuotaState::exhausted(evidence, observed_at, None),
+                        )
+                        .await?;
                     }
                     Some(QuotaEndpointFailure::AccessTokenRevoked) => {
                         self.store

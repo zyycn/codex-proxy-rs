@@ -26,7 +26,7 @@ use crate::{
 };
 
 use super::{
-    error::CodexWebSocketExchangeError,
+    error::{CodexWebSocketExchangeError, CodexWebSocketUpstreamError},
     model::{
         CodexWebSocketConnection, CodexWebSocketRequest, ResponseCreateOpening,
         WebSocketContinuationRequirement,
@@ -417,11 +417,11 @@ fn websocket_opening_error(
         .and_then(|value| value.to_str().ok())
         .and_then(gateway_protocol::openai::parse_retry_after_seconds)
         .or_else(|| events::retry_after_seconds_from_body(&body));
-    CodexWebSocketExchangeError::upstream(
+    CodexWebSocketExchangeError::Upstream(Box::new(CodexWebSocketUpstreamError {
         status_code,
         retry_after_seconds,
         body,
-        reqwest::StatusCode::from_u16(status_code)
+        client_response: reqwest::StatusCode::from_u16(status_code)
             .ok()
             .map(|status| {
                 Box::new(CodexClientVisibleUpstreamResponse::new(
@@ -431,11 +431,12 @@ fn websocket_opening_error(
                     raw_body,
                 ))
             }),
-        response_meta::set_cookie_headers(response.headers()),
-        response_meta::diagnostics(Some(status_code), response.headers())
+        set_cookie_headers: response_meta::set_cookie_headers(response.headers()),
+        rate_limit_headers: response_meta::rate_limit_headers(response.headers()),
+        diagnostics: response_meta::diagnostics(Some(status_code), response.headers())
             .with_response_origin(websocket_response_origin(connection)),
-        CodexUpstreamSendPhase::BeforePayload,
-    )
+        send_phase: CodexUpstreamSendPhase::BeforePayload,
+    }))
 }
 
 fn websocket_response_origin(connection: &CodexWebSocketConnection) -> Option<reqwest::Url> {

@@ -1638,11 +1638,7 @@ pub(super) fn map_upstream_failure(
     MappedProviderFailure {
         error,
         websocket_transport_retryable: false,
-        account_failure: account_failure(
-            category,
-            failure.retry_after_seconds,
-            failure.usage_limit_resets_at,
-        ),
+        account_failure: account_failure(&failure),
         error_message: failure.client_message,
         cyber_policy_failure,
         model_unsupported: category == CodexFailureCategory::ModelUnsupported,
@@ -1750,24 +1746,19 @@ pub(super) const fn upstream_send_state(phase: CodexUpstreamSendPhase) -> Upstre
     }
 }
 
-pub(super) fn account_failure(
-    category: CodexFailureCategory,
-    retry_after_seconds: Option<u64>,
-    usage_limit_resets_at: Option<i64>,
-) -> Option<CodexAccountFailure> {
-    match category {
+fn account_failure(failure: &CodexUpstreamFailure) -> Option<CodexAccountFailure> {
+    let retry_after_seconds = failure.retry_after_seconds;
+    match failure.category() {
         CodexFailureCategory::CredentialExpired => Some(CodexAccountFailure::CredentialExpired),
         CodexFailureCategory::IdentityVerificationRequired => {
             Some(CodexAccountFailure::IdentityVerificationRequired)
         }
         CodexFailureCategory::Banned => Some(CodexAccountFailure::Banned),
         CodexFailureCategory::UsageLimitExhausted => {
+            let window = failure.account_usage_limit();
             Some(CodexAccountFailure::UsageLimitExhausted {
-                reset_at: usage_limit_resets_at
-                    .and_then(|seconds| u64::try_from(seconds).ok())
-                    .and_then(|seconds| {
-                        SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
-                    }),
+                reset_at: window.reset_at,
+                window_minutes: window.minutes,
             })
         }
         CodexFailureCategory::RateLimited => Some(CodexAccountFailure::RateLimited {

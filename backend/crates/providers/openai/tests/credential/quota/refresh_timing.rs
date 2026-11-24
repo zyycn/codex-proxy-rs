@@ -123,6 +123,59 @@ async fn exhausted_reset_bypasses_periodic_throttle_and_rechecks_each_pending_wi
 }
 
 #[tokio::test]
+async fn duration_only_denial_schedules_the_weekly_reset_despite_recent_refresh() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_duration_timing").await;
+    let account = store.account("acct_duration_timing").unwrap();
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+    let now = SystemTime::now();
+    let reset = Utc::now().timestamp() + 120;
+    let usage = |allowed, used, week_reset| {
+        json!({"rate_limit": {
+            "allowed": allowed,
+            "primary_window": {"used_percent": 45, "limit_window_seconds": 18000, "reset_at": reset + 3600},
+            "secondary_window": {"used_percent": used, "limit_window_seconds": 604800, "reset_at": week_reset}
+        }})
+    };
+    mount_usage(&server, usage(false, 99, reset)).await;
+    service.refresh_account(account.id()).await.unwrap();
+    service.synchronize_at(now).await.unwrap();
+
+    let denied = QuotaState::exhausted(QuotaEvidence::UsageLimitReached, SystemTime::now(), None)
+        .with_limit_window_minutes(Some(10080));
+    store
+        .apply_quota_access(QuotaAccessChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            state: denied,
+        })
+        .await
+        .unwrap();
+    mount_usage(&server, usage(true, 0, reset + 604800)).await;
+    let at_reset = SystemTime::from(chrono::DateTime::from_timestamp(reset, 0).unwrap());
+    service
+        .synchronize_at(at_reset + Duration::from_secs(9))
+        .await
+        .unwrap();
+    assert!(server.received_requests().await.unwrap().is_empty());
+    let summary = service
+        .synchronize_at(at_reset + Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(summary.updated, 1);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(
+        store
+            .account("acct_duration_timing")
+            .unwrap()
+            .quota()
+            .access(),
+        QuotaAccessState::Allowed
+    );
+}
+
+#[tokio::test]
 async fn periodic_checks_continue_when_reset_is_unknown_or_far_in_the_future() {
     for reset in [None, Some(Utc::now().timestamp() + 604_800)] {
         let store = Arc::new(MemoryAccountStore::default());

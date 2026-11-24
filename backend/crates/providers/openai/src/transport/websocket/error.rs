@@ -217,6 +217,8 @@ pub struct CodexWebSocketUpstreamError {
     pub client_response: Option<Box<CodexClientVisibleUpstreamResponse>>,
     /// 上游透传的 `set-cookie` 列表
     pub set_cookie_headers: Vec<String>,
+    /// opening 拒绝携带的额度头
+    pub(crate) rate_limit_headers: Vec<(String, String)>,
     /// 上游诊断元数据
     pub diagnostics: CodexUpstreamDiagnostics,
     /// 上游拒绝相对业务 payload 的发送阶段
@@ -385,25 +387,5 @@ impl CodexWebSocketExchangeError {
             Self::ContinuationUnavailable { reason, .. } => Some(*reason),
             _ => None,
         }
-    }
-
-    pub(super) fn upstream(
-        status_code: u16,
-        retry_after_seconds: Option<u64>,
-        body: String,
-        client_response: Option<Box<CodexClientVisibleUpstreamResponse>>,
-        set_cookie_headers: Vec<String>,
-        diagnostics: CodexUpstreamDiagnostics,
-        send_phase: CodexUpstreamSendPhase,
-    ) -> Self {
-        Self::Upstream(Box::new(CodexWebSocketUpstreamError {
-            status_code,
-            retry_after_seconds,
-            body,
-            client_response,
-            set_cookie_headers,
-            diagnostics,
-            send_phase,
-        }))
     }
 }

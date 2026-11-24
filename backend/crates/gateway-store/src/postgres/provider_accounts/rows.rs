@@ -330,7 +330,7 @@ impl ProviderAccountStateUpdate {
 pub(crate) const ACCOUNT_SELECT: &str = "select coalesce(proxy_enabled, true) as outbound_proxy_enabled, coalesce(max_websocket_connections, 0) as outbound_proxy_max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, quota_settings, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
-            quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts
@@ -341,7 +341,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select coalesce(proxy_enabled, true) as
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select coalesce(proxy_enabled, true) as outbound_proxy_enabled, coalesce(max_websocket_connections, 0) as outbound_proxy_max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, quota_settings, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
-            quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts
@@ -353,7 +353,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select coalesce(proxy_enabled, t
 pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select coalesce(proxy_enabled, true) as outbound_proxy_enabled, coalesce(max_websocket_connections, 0) as outbound_proxy_max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, quota_settings, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
-            quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts
@@ -581,17 +581,7 @@ pub(crate) fn account_status_facts_from_row(
     let credential_state = row
         .try_get::<String, _>("credential_state")
         .map_err(|source| invalid("invalid credential_state").with_source(source))?;
-    let quota_access_state = parse_quota_access_state(&get::<String>(row, "quota_access_state")?)?;
-    let quota_evidence = parse_quota_evidence(get(row, "quota_evidence")?)?;
-    let quota_access_observed_at = get::<Option<DateTime<Utc>>>(row, "quota_access_observed_at")?;
-    let quota_reset_at = get::<Option<DateTime<Utc>>>(row, "quota_reset_at")?;
-    let quota = QuotaState::from_persisted(
-        quota_access_state,
-        quota_evidence,
-        quota_access_observed_at.map(Into::into),
-        quota_reset_at.map(Into::into),
-    )
-    .ok_or_else(|| invalid("invalid persisted quota fact"))?;
+    let quota = quota_state_from_row(row)?;
     Ok(gateway_core::account::AccountStatusFacts {
         quota_paused: get(row, "quota_paused")?,
         enabled: get(row, "enabled")?,
@@ -603,4 +593,23 @@ pub(crate) fn account_status_facts_from_row(
         last_error_reason: parse_error_reason(get(row, "last_error_reason")?)?,
         last_error_message: get(row, "last_error_message")?,
     })
+}
+
+pub(super) fn quota_state_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<QuotaState> {
+    let quota_access_state = parse_quota_access_state(&get::<String>(row, "quota_access_state")?)?;
+    let quota_evidence = parse_quota_evidence(get(row, "quota_evidence")?)?;
+    let quota_access_observed_at = get::<Option<DateTime<Utc>>>(row, "quota_access_observed_at")?;
+    let quota_reset_at = get::<Option<DateTime<Utc>>>(row, "quota_reset_at")?;
+    let minutes = get::<Option<i32>>(row, "quota_limit_window_minutes")?
+        .map(u16::try_from)
+        .transpose()
+        .map_err(|_| invalid("invalid quota limit window"))?;
+    QuotaState::from_persisted(
+        quota_access_state,
+        quota_evidence,
+        quota_access_observed_at.map(Into::into),
+        quota_reset_at.map(Into::into),
+    )
+    .map(|state| state.with_limit_window_minutes(minutes))
+    .ok_or_else(|| invalid("invalid persisted quota fact"))
 }

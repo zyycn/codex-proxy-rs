@@ -336,7 +336,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .collect::<Vec<_>>();
         let rows = sqlx::query(
             "select id, credential_revision, plan_type, provider_quota_json, quota_observed_at, \
-                    quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at \
+                    quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at, quota_limit_window_minutes \
              from provider_accounts \
              where id = any($1) and quota_observed_at is not null",
         )
@@ -368,40 +368,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                     .map_err(|source| {
                         CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, source)
                     })?;
-                let access = row
-                    .try_get::<String, _>("quota_access_state")
-                    .ok()
-                    .and_then(|value| QuotaAccessState::parse(&value))
-                    .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
-                let evidence =
-                    row.try_get::<Option<String>, _>("quota_evidence")
-                        .map_err(|source| {
-                            CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, source)
-                        })?;
-                let evidence = match evidence {
-                    Some(value) => Some(
-                        QuotaEvidence::parse(&value)
-                            .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
-                    ),
-                    None => None,
-                };
-                let reset_at = row
-                    .try_get::<Option<DateTime<Utc>>, _>("quota_reset_at")
-                    .map_err(|source| {
-                        CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, source)
-                    })?;
-                let access_observed_at = row
-                    .try_get::<Option<DateTime<Utc>>, _>("quota_access_observed_at")
-                    .map_err(|source| {
-                        CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, source)
-                    })?;
-                let state = QuotaState::from_persisted(
-                    access,
-                    evidence,
-                    access_observed_at.map(Into::into),
-                    reset_at.map(Into::into),
-                )
-                .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
+                let state = rows::quota_state_from_row(&row).map_err(core_store_error)?;
                 Ok(QuotaObservation {
                     quota_pause: None,
                     expected_connection: None,

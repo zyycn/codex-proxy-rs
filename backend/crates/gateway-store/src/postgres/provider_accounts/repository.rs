@@ -111,7 +111,7 @@ impl PgProviderAccountRepository {
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, quota_settings, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
-                    quota_access_observed_at, quota_reset_at,
+                    quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
              from provider_accounts
              left join (select id as location_proxy_id, enabled as proxy_enabled, max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone from outbound_proxies) proxy_location
@@ -209,7 +209,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, quota_settings, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
-                    quota_access_observed_at, quota_reset_at,
+                    quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
                from provider_accounts
                left join (select id as location_proxy_id, enabled as proxy_enabled, max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone from outbound_proxies) proxy_location
@@ -619,6 +619,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                      quota_evidence = null,
                      quota_access_observed_at = now(),
                      quota_reset_at = null,
+                     quota_limit_window_minutes = null,
                      last_error_reason = null,
                      last_error_message = null,
                      updated_at = greatest(now(), updated_at)
@@ -795,6 +796,7 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            quota_evidence = null,
            quota_access_observed_at = null,
            quota_reset_at = null,
+           quota_limit_window_minutes = null,
            credential_observed_at = excluded.credential_observed_at,
            quota_observed_at = null,
            last_error_reason = null,
@@ -877,6 +879,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              quota_evidence = case when $11 then null else quota_evidence end,
              quota_access_observed_at = case when $11 then null else quota_access_observed_at end,
              quota_reset_at = case when $11 then null else quota_reset_at end,
+             quota_limit_window_minutes = case when $11 then null else quota_limit_window_minutes end,
              provider_credentials_json = $7,
              credential_revision = credential_revision + 1,
              has_refresh_token = $8,
@@ -1265,7 +1268,7 @@ impl PgProviderAccountRepository {
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, quota_settings, quota_paused, auto_use_quota_credits, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
-                    quota_access_observed_at, quota_reset_at,
+                    quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
                from provider_accounts
                left join (select id as location_proxy_id, enabled as proxy_enabled, max_websocket_connections, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone from outbound_proxies) proxy_location
@@ -1304,7 +1307,7 @@ where
     let result = sqlx::query(
         "update provider_accounts
              set quota_access_observed_at = $3, quota_access_state = $4,
-                 quota_evidence = $5, quota_reset_at = $6,
+                 quota_evidence = $5, quota_reset_at = $6, quota_limit_window_minutes = $7,
                  updated_at = greatest(now(), updated_at, $3)
              where id = $1 and credential_revision = $2
                and (quota_access_observed_at is null or quota_access_observed_at <= $3)",
@@ -1315,6 +1318,7 @@ where
     .bind(state.access().as_str())
     .bind(state.evidence().map(QuotaEvidence::as_str))
     .bind(state.reset_at().map(DateTime::<Utc>::from))
+    .bind(state.limit_window_minutes().map(i32::from))
     .execute(executor)
     .await
     .map_err(|source| postgres_unavailable("apply provider quota access", source))?;
@@ -1358,6 +1362,10 @@ where
                    when $7::timestamptz is not null
                      and (quota_access_observed_at is null or quota_access_observed_at <= $7)
                    then $8 else quota_reset_at end,
+                 quota_limit_window_minutes = case
+                   when $7::timestamptz is not null
+                     and (quota_access_observed_at is null or quota_access_observed_at <= $7)
+                   then $14 else quota_limit_window_minutes end,
                  updated_at = greatest(now(), updated_at, $4, $7)
              where id = $1 and credential_revision = $2
                and (quota_observed_at is null or quota_observed_at <= $4)
@@ -1382,6 +1390,7 @@ where
     )
     .bind(merge_base.is_some())
     .bind(merge_base.and_then(|base| base.observed_at).map(DateTime::<Utc>::from))
+    .bind(state.limit_window_minutes().map(i32::from))
     .execute(executor)
     .await
     .map_err(|source| postgres_unavailable("compare and swap provider quota", source))?;

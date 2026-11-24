@@ -1,4 +1,4 @@
-//! 失败流的额度观测不能冒充使用，真实输出仍应阻止本轮预热
+//! 验证推理失败与真实使用在额度恢复和预热中的不同作用
 
 use super::*;
 
@@ -203,4 +203,107 @@ async fn disconnected_stream_preserves_quota_facts_without_marking_usage() {
         Some(&json!(0.0))
     );
     assert!(saved.get("_cpr_bucket_last_used_at").is_none());
+}
+
+#[tokio::test]
+async fn duration_only_usage_limit_tracks_the_window_named_by_the_denial() {
+    for (minutes, other_minutes, other_used, active_limit, recovers) in [
+        (300, 10080, 45, "codex", true),
+        (10080, 300, 45, "", true),
+        (43200, 10080, 45, "", true),
+        (10080, 300, 100, "", false),
+        (10080, 10080, 45, "", false),
+        (10080, 300, 45, "spark", false),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let id = "acct_provider_contract";
+        create_account(&store, id).await;
+        let account = store.account(id).unwrap();
+        let now = Utc::now().timestamp();
+        let usage = |used, reset| {
+            json!({"rate_limit": {
+                "allowed": true,
+                "primary_window": {"used_percent": other_used, "limit_window_seconds": i64::from(other_minutes) * 60, "reset_at": now + 7200},
+                "secondary_window": {"used_percent": used, "limit_window_seconds": i64::from(minutes) * 60, "reset_at": reset}
+            }})
+        };
+        let observed_at = SystemTime::now() - Duration::from_secs(120);
+        store
+            .compare_and_swap_quota(QuotaObservation {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                quota: OpaqueProviderData::new(usage(99, now - 60).as_object().unwrap().clone()),
+                observed_at,
+                state: QuotaState::allowed(observed_at),
+                quota_pause: None,
+                expected_connection: None,
+                plan_type: None,
+            })
+            .await
+            .unwrap();
+
+        let server = MockServer::start().await;
+        let (provider, quota) = provider_and_quota_with_affinity_and_base_url_and_leases(
+            &store,
+            Arc::new(MemorySessionAffinity::default()),
+            server.uri(),
+            Arc::new(TestLeaseCoordinator::default()),
+            0,
+        );
+        let error = json!({"type": "usage_limit_reached", "code": "usage_limit_reached",
+            "limit_window_minutes": minutes});
+        let mut refusal = if minutes == 43200 {
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_event(json!({"type": "response.failed",
+                    "response": {"id": "resp_limit", "status": "failed", "error": error}})))
+        } else {
+            ResponseTemplate::new(429).set_body_json(json!({"error": error}))
+        };
+        if !active_limit.is_empty() {
+            refusal = refusal.insert_header("x-codex-active-limit", active_limit);
+        }
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(refusal)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(usage(0, now + i64::from(minutes) * 60)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut stream = provider
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                context("req_usage_window", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        let failure = loop {
+            if let Err(error) = stream.next().await.expect("quota refusal") {
+                break error;
+            }
+        };
+        assert_eq!(failure.kind(), ProviderErrorKind::QuotaExhausted);
+        let denied = store.account(id).unwrap().quota();
+        assert_eq!(denied.evidence(), Some(QuotaEvidence::UsageLimitReached));
+        assert_eq!(denied.reset_at(), None);
+        assert_eq!(
+            denied.limit_window_minutes(),
+            (active_limit != "spark").then_some(minutes)
+        );
+
+        let summary = quota.synchronize().await.unwrap();
+        assert_eq!(
+            summary.updated,
+            u64::from(recovers),
+            "{minutes}/{other_minutes} {other_used} {active_limit}"
+        );
+        assert_eq!(store.account(id).unwrap().quota().is_exhausted(), !recovers);
+    }
 }

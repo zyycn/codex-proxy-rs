@@ -3086,7 +3086,8 @@ async fn quota_exhaustion_survives_rotation_only_for_the_same_upstream_identity(
         .apply_quota_access(QuotaAccessChange {
             account_id: ProviderAccountId::new("acct_rotation_quota").expect("account ID"),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
-            state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, observed_at, None),
+            state: QuotaState::exhausted(QuotaEvidence::UsageLimitReached, observed_at, None)
+                .with_limit_window_minutes(Some(10080)),
         })
         .await
         .expect("persist quota exhaustion");
@@ -3107,13 +3108,13 @@ async fn quota_exhaustion_survives_rotation_only_for_the_same_upstream_identity(
         .await
         .expect("rotate exhausted account credential");
 
-    let quota_access_state: String =
-        sqlx::query_scalar("select quota_access_state from provider_accounts where id = $1")
-            .bind("acct_rotation_quota")
-            .fetch_one(&database.pool)
-            .await
-            .expect("load exhausted account after credential rotation");
-    assert_eq!(quota_access_state, "exhausted".to_owned());
+    let current = repository
+        .get_account(&ProviderAccountId::new("acct_rotation_quota").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(current.quota().is_exhausted());
+    assert_eq!(current.quota().limit_window_minutes(), Some(10080));
 
     repository
         .rotate_provider_account(RotateProviderAccount {

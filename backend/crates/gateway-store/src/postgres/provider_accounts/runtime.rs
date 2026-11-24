@@ -75,7 +75,7 @@ pub(crate) async fn load_account_statuses<'e, E: sqlx::Executor<'e, Database = s
     use super::rows::{account_status_facts_from_row, get};
     let rows = sqlx::query(
         "select id, enabled, quota_paused, concurrency_limit, credential_revision, quota_observed_at, credential_state, access_token_expires_at,
-                quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+                quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
                 last_error_reason, last_error_message
          from provider_accounts",
     )

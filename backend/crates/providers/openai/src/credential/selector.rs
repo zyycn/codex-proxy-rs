@@ -14,7 +14,8 @@ use gateway_core::account::{
     AccountCooldownKind, AccountErrorReason, AccountFeedbackStats, AccountModelAccessMode,
     AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker, AccountSelectionContext,
     AccountSelectionPolicy, AccountSelector, AccountStatus, CredentialState,
-    PreferredAccountSelection, ProviderAccount, ProviderAccountId, QuotaEvidence, RotationStrategy,
+    PreferredAccountSelection, ProviderAccount, ProviderAccountId, QuotaEvidence, QuotaState,
+    RotationStrategy,
 };
 use gateway_core::concurrency::{
     CapacityWait, ConcurrencyQueuePolicy, ConcurrencyWaitQueue, QueueRejection, WaitPriority,
@@ -80,6 +81,8 @@ pub enum CodexAccountFailure {
     UsageLimitExhausted {
         /// 上游返回的窗口绝对重置时刻
         reset_at: Option<SystemTime>,
+        /// 上游明确指出的通用窗口时长
+        window_minutes: Option<u16>,
     },
     /// 账号触发临时用量限制
     RateLimited {
@@ -1987,21 +1990,29 @@ impl CodexCredentialSelector {
             }
             CodexAccountFailure::QuotaExhausted => self
                 .quota
-                .record_confirmed_exhaustion(account, QuotaEvidence::PaymentRequired, None, now)
+                .record_confirmed_exhaustion(
+                    account,
+                    QuotaState::exhausted(QuotaEvidence::PaymentRequired, now, None),
+                )
                 .await
                 .map_err(|source| CredentialSelectionError::Store(ErrorSource::new(source))),
             CodexAccountFailure::SpendLimitExceeded => self
                 .quota
-                .record_confirmed_exhaustion(account, QuotaEvidence::ProviderDenied, None, now)
+                .record_confirmed_exhaustion(
+                    account,
+                    QuotaState::exhausted(QuotaEvidence::ProviderDenied, now, None),
+                )
                 .await
                 .map_err(|source| CredentialSelectionError::Store(ErrorSource::new(source))),
-            CodexAccountFailure::UsageLimitExhausted { reset_at } => self
+            CodexAccountFailure::UsageLimitExhausted {
+                reset_at,
+                window_minutes,
+            } => self
                 .quota
                 .record_confirmed_exhaustion(
                     account,
-                    QuotaEvidence::UsageLimitReached,
-                    reset_at,
-                    now,
+                    QuotaState::exhausted(QuotaEvidence::UsageLimitReached, now, reset_at)
+                        .with_limit_window_minutes(window_minutes),
                 )
                 .await
                 .map_err(|source| CredentialSelectionError::Store(ErrorSource::new(source))),

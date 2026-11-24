@@ -110,7 +110,7 @@ pub(crate) async fn load_admin_account_page(
                 a.credential_revision, a.has_refresh_token, a.access_token_expires_at,
                 a.next_refresh_at, a.enabled, a.quota_settings, a.quota_paused, a.auto_use_quota_credits, a.concurrency_limit, a.weight, a.model_access_json,
                 a.credential_state, a.quota_access_state, a.quota_evidence,
-                a.quota_observed_at, a.quota_access_observed_at, a.quota_reset_at, a.last_error_reason,
+                a.quota_observed_at, a.quota_access_observed_at, a.quota_reset_at, a.quota_limit_window_minutes, a.last_error_reason,
                 a.last_error_message, a.credential_observed_at, a.created_at, a.updated_at,
                 filtered_total.filtered_total,
                 global_summary.summary_total, global_summary.summary_normal,

@@ -391,7 +391,7 @@ impl CodexClientError {
                     &upstream.diagnostics,
                     upstream.client_response.as_deref(),
                     &upstream.set_cookie_headers,
-                    &[],
+                    &upstream.rate_limit_headers,
                     upstream.send_phase,
                 ))
             }

@@ -184,6 +184,8 @@ async fn unmatched_usage_limit_reset_requires_a_complete_allowed_observation() {
     let missing_percent = json!({"limit_window_seconds": 604_800, "reset_at": now + 86_400});
     for (case, error_offset, allowed, weekly_window, recovers) in [
         ("due", -60, Some(true), weekly(45), true),
+        ("hint_conflict_due", -60, Some(true), weekly(45), true),
+        ("hint_conflict_future", 3600, Some(true), weekly(45), false),
         ("before_reset", 3600, Some(true), weekly(45), false),
         ("week_full", -60, Some(true), weekly(100), false),
         ("week_missing", -60, Some(true), json!(null), false),
@@ -200,6 +202,19 @@ async fn unmatched_usage_limit_reset_requires_a_complete_allowed_observation() {
         old["rate_limit"]["secondary_window"]["used_percent"] = json!(45);
         let observed_at = at(now - 120);
         let account = seed_exhaustion(&store, &id, old, observed_at, Some(error_reset)).await;
+        if case.starts_with("hint_conflict") {
+            persist_quota_state(
+                &store,
+                &account,
+                QuotaState::exhausted(
+                    QuotaEvidence::UsageLimitReached,
+                    observed_at,
+                    Some(error_reset),
+                )
+                .with_limit_window_minutes(Some(300)),
+            )
+            .await;
+        }
         let mut fresh = usage(now, &[Some(18_000), week], allowed);
         fresh["rate_limit"]["primary_window"]["used_percent"] = json!(0);
         fresh["rate_limit"]["secondary_window"] = weekly_window;
@@ -233,6 +248,47 @@ async fn unmatched_usage_limit_reset_requires_a_complete_allowed_observation() {
                 assert!(!recovered.quota().is_exhausted());
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn duration_hint_keeps_each_confirmed_window_until_it_is_observed_recovered() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let id = "acct_partial_hinted_reset";
+    create_account(&store, id).await;
+    let now = Utc::now().timestamp();
+    let denied_at = SystemTime::now() - Duration::from_secs(120);
+    let baseline = usage(now, &[Some(-60), Some(-60)], Some(false));
+    let account = seed_exhaustion(&store, id, baseline, denied_at, None).await;
+    persist_quota_state(
+        &store,
+        &account,
+        QuotaState::exhausted(QuotaEvidence::UsageLimitReached, denied_at, None)
+            .with_limit_window_minutes(Some(10080)),
+    )
+    .await;
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+    for (allowed, role, seconds, recovered) in [
+        (false, "secondary_window", 604800, false),
+        (true, "primary_window", 18000, false),
+        (true, "secondary_window", 604800, true),
+    ] {
+        server.reset().await;
+        let fresh = json!({"rate_limit": {"allowed": allowed, (role): {
+            "limit_window_seconds": seconds, "used_percent": 0, "reset_at": now + seconds
+        }}});
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(fresh))
+            .mount(&server)
+            .await;
+        let snapshot = service.refresh_account(account.id()).await.unwrap();
+        assert_eq!(
+            snapshot.quota().is_exhausted(),
+            !recovered,
+            "{role} allowed={allowed}"
+        );
     }
 }
 

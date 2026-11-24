@@ -232,7 +232,8 @@ async fn snapshot_commit_preserves_newer_quota_failure() {
                 QuotaEvidence::UsageLimitReached,
                 now + Duration::from_secs(1),
                 None,
-            ),
+            )
+            .with_limit_window_minutes(Some(10080)),
         })
         .await
         .unwrap();
@@ -253,15 +254,16 @@ async fn snapshot_commit_preserves_newer_quota_failure() {
             .unwrap(),
         QuotaWriteOutcome::Updated
     );
-    assert!(
-        repository
-            .get_account(&id)
-            .await
-            .unwrap()
-            .unwrap()
-            .quota()
-            .is_exhausted()
-    );
+    let account = repository.get_account(&id).await.unwrap().unwrap();
+    assert!(account.quota().is_exhausted());
+    assert_eq!(account.quota().limit_window_minutes(), Some(10080));
+    let persisted = repository
+        .get_quotas(std::slice::from_ref(&id))
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(persisted.state, account.quota());
     database.close().await;
 }
 
