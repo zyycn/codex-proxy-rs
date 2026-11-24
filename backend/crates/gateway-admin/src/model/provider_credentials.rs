@@ -1090,9 +1090,6 @@ impl ProviderQuota {
     /// 语义，绝不读取 Provider 私有 JSON
     #[must_use]
     pub fn representative_used_percent(&self) -> Option<f64> {
-        if self.limit_reached {
-            return Some(100.0);
-        }
         self.representative_used_window()
             .map(|(_, used_percent)| used_percent)
     }
@@ -1111,39 +1108,16 @@ impl ProviderQuota {
             })
     }
 
-    /// 将已确认的账号级额度耗尽事实投影到展示窗口
-    ///
-    /// Provider 已指出具体触顶窗口时只归一化这些窗口；否则归一化 Dashboard
-    /// 同样会选择的代表窗口，避免把多个独立额度窗口全部伪造成已用尽
+    /// 只对 Provider 已明确触顶的窗口展示满额，账号耗尽本身不能定位窗口
     pub fn apply_limit_reached_display(&mut self) {
-        if !self.limit_reached {
-            return;
-        }
-        let reached_windows = self
-            .windows
-            .iter()
-            .enumerate()
-            .filter_map(|(index, window)| window.limit_reached.then_some(index))
-            .collect::<Vec<_>>();
-        if !reached_windows.is_empty() {
-            for index in reached_windows {
-                self.windows[index].used_percent = Some(100.0);
+        if self.limit_reached {
+            for window in self
+                .windows
+                .iter_mut()
+                .filter(|window| window.limit_reached)
+            {
+                window.used_percent = Some(100.0);
             }
-            return;
-        }
-        let representative = self
-            .representative_used_window()
-            .map(|(index, _)| index)
-            .or_else(|| {
-                self.windows
-                    .iter()
-                    .enumerate()
-                    .min_by_key(|(index, window)| (quota_usage_priority(window), *index))
-                    .map(|(index, _)| index)
-            });
-        if let Some(index) = representative {
-            self.windows[index].used_percent = Some(100.0);
-            self.windows[index].limit_reached = true;
         }
     }
 

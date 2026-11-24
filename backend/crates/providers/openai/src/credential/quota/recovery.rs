@@ -20,9 +20,7 @@ pub(super) struct QuotaRecovery {
     pending: BTreeMap<String, Option<DateTime<Utc>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     unmatched: Option<UnmatchedQuotaReset>,
-    // 已连续观测到"未触顶"的待解除窗口；第二次确认后解除
-    // 旧文档没有该
-    // 字段时反序列化为空集，从当前耗尽事实重新积累证据
+    // 上次刷新已观察到未触顶的窗口，下一次仍有证据时解除
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     candidates: BTreeMap<String, ()>,
 }
@@ -117,8 +115,9 @@ impl QuotaRecovery {
 
     fn observe(&mut self, refreshed: &CodexAccountQuotaSnapshot, has_window_hint: bool) -> bool {
         let windows = || refreshed.windows().iter().filter(|w| w.is_account_wide());
+        let access = refreshed.quota().access();
         // 拒绝仍有效时，即便被点名的窗口已滚动，也要等待账号放行
-        if has_window_hint && refreshed.quota().access() != QuotaAccessState::Allowed {
+        if has_window_hint && access != QuotaAccessState::Allowed {
             self.candidates.clear();
             for window in windows().filter(|w| w.limit_reached()) {
                 self.pending
@@ -131,7 +130,7 @@ impl QuotaRecovery {
         self.unmatched.take_if(|reset| reset.recovered(refreshed));
         // 已确认窗口全部到期后，明确放行可以覆盖滞后的百分比
         if !self.pending.is_empty()
-            && refreshed.quota().access() == QuotaAccessState::Allowed
+            && access == QuotaAccessState::Allowed
             && self.pending.iter().all(|(key, reset)| {
                 let reported = !has_window_hint
                     || windows().any(|w| w.key() == key && w.used_percent().is_some());
@@ -150,27 +149,29 @@ impl QuotaRecovery {
         for window in windows() {
             let key = window.key();
             if let Some(previous_reset) = self.pending.get(key).copied() {
-                if has_window_hint && window.used_percent().is_none() {
+                let Some(previous_reset) = previous_reset else {
+                    // 首次观测到该窗口只锚定 reset 基线，不构成解除证据
+                    if !has_window_hint || window.used_percent().is_some() {
+                        self.pending.insert(key.to_owned(), window.reset_at());
+                    }
+                    continue;
+                };
+                let Some(used) = window.used_percent() else {
+                    continue;
+                };
+                if window.limit_reached() {
                     continue;
                 }
-                if window_reset_recovered(window, previous_reset) {
+                let advanced = window.reset_at().is_some_and(|at| at > previous_reset);
+                if advanced && used < RESET_RECOVERY_MAX_USED_PERCENT {
                     self.pending.remove(key);
                     continue;
                 }
-                if previous_reset.is_none() {
-                    // 首次观测到该窗口只锚定 reset 基线，不构成解除证据
-                    self.pending.insert(key.to_owned(), window.reset_at());
-                    continue;
-                }
-                // 同一窗口内用量回落（reset 不滚动）时"reset 前进"永远不会
-                // 成立，滑动窗口的正常用量也长期高于低用量阈值；以上游连续
-                // 两次观测都报告未触顶为解除证据
-                // 单次观测无法排除耗尽后
-                // 立刻拉到的旧快照（reset 未滚动、用量尚未触顶）
-                let rolled_forward = window
-                    .reset_at()
-                    .is_some_and(|current| Some(current) > previous_reset);
-                if !rolled_forward && !window.limit_reached() {
+                // 明确放行时，reset 的位移不影响连续两次未触顶的证据
+                // 上游未给出放行状态时，只沿用同一窗口内用量回落的确认规则
+                if access == QuotaAccessState::Allowed
+                    || (access == QuotaAccessState::Unknown && !advanced)
+                {
                     if self.candidates.contains_key(key) {
                         self.pending.remove(key);
                     } else {
@@ -190,23 +191,7 @@ fn exhaustion_time(state: QuotaState) -> i64 {
     DateTime::<Utc>::from(state.observed_at().unwrap_or(SystemTime::UNIX_EPOCH)).timestamp_micros()
 }
 
-fn window_reset_recovered(window: &CodexQuotaWindow, previous: Option<DateTime<Utc>>) -> bool {
-    // reset 必须前进：防止耗尽后立刻拉到的旧快照（reset 未滚动）误解锁
-    if !previous
-        .zip(window.reset_at())
-        .is_some_and(|(previous, current)| current > previous)
-    {
-        return false;
-    }
-    // reset 前进说明已进入新窗口，新窗口用量应接近零；高用量说明 reset 基线
-    // 不可信（例如滑动窗口），保持锁定，等待"同窗口用量回落"的连续观测解除
-    window
-        .used_percent()
-        .is_some_and(|used| used < RESET_RECOVERY_MAX_USED_PERCENT)
-}
-
 /// 统一手动刷新和 worker 的恢复规则
-/// 到期前仍要求窗口滚动且低用量，或同窗口连续两次未触顶
 /// 已记录的耗尽窗口全部到期后，允许新的明确放行观察解除，兼容用量百分比滞后
 pub(super) fn reconcile_refresh(
     current: QuotaState,

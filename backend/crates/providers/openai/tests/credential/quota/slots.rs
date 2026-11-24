@@ -565,6 +565,86 @@ async fn an_unknown_slot_establishes_a_baseline_before_it_can_recover() {
 }
 
 #[tokio::test]
+async fn legacy_exhaustion_recovers_after_two_nonfull_observations_despite_reset_drift() {
+    for (first, second) in [(0, 1), (1, 1), (2, 2), (2, 60), (3600, 7200)] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let id = "acct_drifting_reset";
+        create_account(&store, id).await;
+        let account = store.account(id).unwrap();
+        let now = Utc::now().timestamp();
+        let week = now + 604_800;
+        let server = MockServer::start().await;
+        let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+        let mut old = usage((99, now - 60), (15, week));
+        old["rate_limit"]["allowed"] = json!(true);
+        mount_usage(&server, old).await;
+        service.refresh_account(account.id()).await.unwrap();
+        // 旧版流内拒绝保留最近的用量，但未记录错误 reset，两个窗口都需复核
+        persist_quota_state(&store, &account, exhausted_quota(None)).await;
+        for (offset, exhausted) in [(first, true), (second, false)] {
+            let mut fresh = usage((0, now + 18_000), (16, week + offset));
+            fresh["rate_limit"]["allowed"] = json!(true);
+            mount_usage(&server, fresh).await;
+            let result = service.refresh_account(account.id()).await.unwrap();
+            assert_eq!(
+                result.quota().is_exhausted(),
+                exhausted,
+                "{first}, {second}, offset={offset}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn reset_drift_requires_consecutive_nonfull_evidence_for_the_pending_window() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let id = "acct_drift_interrupted";
+    create_account(&store, id).await;
+    let account = store.account(id).unwrap();
+    let week = Utc::now().timestamp() + 604_800;
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+    let mut old = usage((0, SHORT_RESET), (100, week));
+    old["rate_limit"]["allowed"] = json!(false);
+    mount_usage(&server, old).await;
+    service.refresh_account(account.id()).await.unwrap();
+
+    for (allowed, percent, reached, exhausted) in [
+        (Some(true), Some(16), false, true),
+        (Some(true), None, false, true),
+        (Some(true), Some(16), false, true),
+        (Some(false), Some(16), false, true),
+        (Some(true), Some(16), false, true),
+        (None, Some(16), false, true),
+        (Some(true), Some(16), false, true),
+        (Some(true), Some(0), true, true),
+        (Some(true), Some(16), false, true),
+        (Some(true), Some(16), false, false),
+    ] {
+        let mut fresh = usage((0, SHORT_RESET), (16, week + 2));
+        if let Some(allowed) = allowed {
+            fresh["rate_limit"]["allowed"] = json!(allowed);
+        }
+        let window = fresh["rate_limit"]["secondary_window"]
+            .as_object_mut()
+            .unwrap();
+        window.insert("limit_reached".into(), json!(reached));
+        if let Some(percent) = percent {
+            window.insert("used_percent".into(), json!(percent));
+        } else {
+            window.remove("used_percent");
+        }
+        mount_usage(&server, fresh).await;
+        let snapshot = service.refresh_account(account.id()).await.unwrap();
+        assert_eq!(
+            snapshot.quota().is_exhausted(),
+            exhausted,
+            "allowed={allowed:?}, used={percent:?}, reached={reached}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn weekly_usage_falling_back_within_the_same_window_recovers_after_two_observations() {
     // 滑动周窗口的用量可以在同一窗口内回落：reset 不滚动、用量从 100% 降到
     // 正常水平
