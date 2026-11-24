@@ -470,6 +470,16 @@ fn openai_account_failure_matrix_is_preserved() {
             CodexFailureCategory::UsageLimitExhausted,
         ),
         (
+            429,
+            r#"{"error":{"type":"project_spend_limit_exceeded"}}"#,
+            CodexFailureCategory::RateLimited,
+        ),
+        (
+            401,
+            r#"{"error":{"code":"project_spend_limit_exceeded"}}"#,
+            CodexFailureCategory::CredentialExpired,
+        ),
+        (
             529,
             r#"{"error":{"type":"server_error","message":"overloaded"}}"#,
             CodexFailureCategory::Unavailable,

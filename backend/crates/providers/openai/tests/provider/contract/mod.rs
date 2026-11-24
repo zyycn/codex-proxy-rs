@@ -9228,27 +9228,62 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
 #[tokio::test]
 async fn request_rejections_should_not_retry_or_cool_down_accounts() {
     use gateway_core::provider_ports::ProviderCooldownPort as _;
-    for (use_websocket, (code, expected_kind)) in [false, true].into_iter().flat_map(|websocket| {
-        [
-            ("flex_unavailable", ProviderErrorKind::Unavailable),
-            ("turn_rate_limit_exceeded", ProviderErrorKind::RateLimited),
-        ]
-        .map(|case| (websocket, case))
-    }) {
+    use provider_openai::credential::ResponsesTransport;
+    for (use_websocket, (code, error_type, expected_kind)) in
+        [false, true].into_iter().flat_map(|websocket| {
+            [
+                (
+                    "flex_unavailable",
+                    "resource_unavailable",
+                    ProviderErrorKind::Unavailable,
+                ),
+                (
+                    "turn_rate_limit_exceeded",
+                    "rate_limit_error",
+                    ProviderErrorKind::RateLimited,
+                ),
+                (
+                    "api_key_spend_limit_exceeded",
+                    "insufficient_quota",
+                    ProviderErrorKind::QuotaExhausted,
+                ),
+                (
+                    "project_spend_limit_exceeded",
+                    "insufficient_quota",
+                    ProviderErrorKind::QuotaExhausted,
+                ),
+                (
+                    "organization_spend_limit_exceeded",
+                    "insufficient_quota",
+                    ProviderErrorKind::QuotaExhausted,
+                ),
+            ]
+            .map(|case| (websocket, case))
+        })
+    {
         let store = Arc::new(MemoryAccountStore::default());
         let account_id = "acct_provider_contract";
-        create_account(&store, account_id).await;
         let cooldowns = Arc::new(MemoryCooldownPort::new());
         let server = MockServer::start().await;
-        let error_type = if code == "turn_rate_limit_exceeded" {
-            "rate_limit_error"
+        let spend_limit = expected_kind == ProviderErrorKind::QuotaExhausted;
+        let endpoint = if spend_limit {
+            let transport = if use_websocket {
+                ResponsesTransport::PreferWebsocket
+            } else {
+                ResponsesTransport::Http
+            };
+            store
+                .seed_api_key(account_id, server.uri(), transport)
+                .await;
+            "/responses"
         } else {
-            "resource_unavailable"
+            create_account(&store, account_id).await;
+            "/codex/responses"
         };
         let body =
             json!({"error":{"type":error_type,"code":code,"message":"Retry this request later."}});
         Mock::given(method(if use_websocket { "GET" } else { "POST" }))
-            .and(path("/codex/responses"))
+            .and(path(endpoint))
             .respond_with(
                 ResponseTemplate::new(429)
                     .insert_header("retry-after", "300")
@@ -9296,7 +9331,14 @@ async fn request_rejections_should_not_retry_or_cool_down_accounts() {
         );
         let account = store.account(account_id).unwrap();
         assert_eq!(account.credential_state(), CredentialState::Ready);
-        assert_eq!(account.quota().access(), QuotaAccessState::Unknown);
+        assert_eq!(
+            account.quota().access(),
+            if spend_limit {
+                QuotaAccessState::Exhausted
+            } else {
+                QuotaAccessState::Unknown
+            }
+        );
         assert!(cooldowns.read(account.id()).await.unwrap().is_none());
     }
 }
@@ -9577,6 +9619,18 @@ async fn stream_failures_preserve_error_fields_independent_of_retry_classificati
                     false,
                 ),
                 (
+                    "project_spend_limit_exceeded",
+                    "Project spending limit reached.",
+                    ProviderErrorKind::QuotaExhausted,
+                    false,
+                ),
+                (
+                    "organization_spend_limit_exceeded",
+                    "Organization spending limit reached.",
+                    ProviderErrorKind::QuotaExhausted,
+                    false,
+                ),
+                (
                     "unsupported_parameter",
                     "Hosted tool 'web_search' requires authorization and metering that are not supported by rustponsesapi.",
                     ProviderErrorKind::InvalidRequest,
@@ -9620,7 +9674,9 @@ async fn stream_failures_preserve_error_fields_independent_of_retry_classificati
                     "type":"invalid_request_error","code":code,"message":message,"param":"tools"
                 }});
             }
-            if code == "turn_rate_limit_exceeded" {
+            if code == "organization_spend_limit_exceeded" {
+                original = json!({"type":"error","error":{"code":code,"message":message,"headers":{"retry-after":"7"}}});
+            } else if code == "turn_rate_limit_exceeded" || expected_kind == ProviderErrorKind::QuotaExhausted {
                 original["response"]["error"]["headers"] = json!({"retry-after": "7"});
             }
             let expected_status = original["status"]
@@ -9702,9 +9758,12 @@ async fn stream_failures_preserve_error_fields_independent_of_retry_classificati
             );
             assert_eq!(error.replay_is_safe(), capacity && !semantic_output);
             assert_eq!(error.upstream_status(), expected_status);
-            if code == "turn_rate_limit_exceeded" {
+            if code == "turn_rate_limit_exceeded" || expected_kind == ProviderErrorKind::QuotaExhausted {
                 assert!(error.retry_is_prohibited());
                 assert_eq!(error.retry_after(), Some(Duration::from_secs(7)));
+            }
+            if expected_kind == ProviderErrorKind::QuotaExhausted {
+                assert_eq!(store.account("acct_provider_contract").unwrap().quota().access(), QuotaAccessState::Exhausted);
             }
             assert_eq!(
                 error.pre_delivery_retry().is_some(),
@@ -12418,6 +12477,7 @@ async fn quota_continuation_opening_rejection_projects_replay_without_losing_ups
     for use_websocket in [false, true] {
         for (status, code, projects_replay) in [
             (429, "usage_limit_reached", true),
+            (429, "project_spend_limit_exceeded", false),
             (402, "insufficient_quota", true),
             (429, "quota_exceeded", false),
             (429, "rate_limit_exceeded", false),

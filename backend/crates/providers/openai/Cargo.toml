@@ -60,9 +60,9 @@ tokio-util = { version = "0.7.18", features = ["rt"] }
 tower-service = "0.3.3"
 tower-layer = "0.3.3"
 # 官方 fork 支持代理连接和分帧消息的 permessage-deflate，两个提交须配套
-tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "7447c427513cfe685f236e1ac0513c4ea3dd9c0b", features = ["proxy", "rustls-tls-native-roots"] }
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "7a920470d62138955446b64220c7609e46ad770e", features = ["proxy", "rustls-tls-native-roots"] }
 tracing = "0.1.44"
-tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "bc589d684755a8c02da0fc7e58d0861cbfc306f1", features = ["deflate", "proxy"] }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "e19950ef7828cb311e6d51a6bedcebf0192e055c", features = ["deflate", "proxy"] }
 url = "2.5.8"
 uuid = { version = "1.23.3", features = ["v4", "v7"] }
 # 静态链接 XZ 解码器，不要求部署环境安装 liblzma。

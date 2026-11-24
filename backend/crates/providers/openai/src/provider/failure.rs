@@ -358,7 +358,11 @@ pub(super) async fn apply_failure(
     }
     let needs_authoritative_quota_refresh = matches!(
         failure.account_failure,
-        Some(CodexAccountFailure::QuotaExhausted | CodexAccountFailure::UsageLimitExhausted { .. })
+        Some(
+            CodexAccountFailure::QuotaExhausted
+                | CodexAccountFailure::SpendLimitExceeded
+                | CodexAccountFailure::UsageLimitExhausted { .. }
+        )
     );
     if failure.cyber_policy_failure {
         context
@@ -1695,6 +1699,9 @@ fn upstream_failure_summary(
         CodexFailureCategory::QuotaExhausted => {
             (ProviderErrorKind::QuotaExhausted, "上游账号额度已用完")
         }
+        CodexFailureCategory::SpendLimitExceeded => {
+            (ProviderErrorKind::QuotaExhausted, "已达到上游 API 支出上限")
+        }
         CodexFailureCategory::RateLimited => (ProviderErrorKind::RateLimited, "上游请求频率受限"),
         CodexFailureCategory::TurnRateLimited => {
             (ProviderErrorKind::RateLimited, "当前对话轮次受到限流")
@@ -1767,6 +1774,7 @@ pub(super) fn account_failure(
             retry_after: retry_after_seconds.map(Duration::from_secs),
         }),
         CodexFailureCategory::QuotaExhausted => Some(CodexAccountFailure::QuotaExhausted),
+        CodexFailureCategory::SpendLimitExceeded => Some(CodexAccountFailure::SpendLimitExceeded),
         CodexFailureCategory::CloudflareChallenge => {
             Some(CodexAccountFailure::CloudflareChallenge {
                 retry_after: retry_after_seconds.map(Duration::from_secs),

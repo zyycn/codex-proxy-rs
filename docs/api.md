@@ -878,7 +878,12 @@ headers 中移除，避免客户端再次等待旧账号；关联 ID 等其他�
 
 #### 额度耗尽与续写
 
-明确额度耗尽触发账号隔离与安全换号，包括 WebSocket 握手返回的 429；不会因其长 `Retry-After` 而转入同账号传输恢复等待
+OpenAI Responses 在 HTTP 429、WebSocket 握手 429 或流内错误（无状态码或 429）中返回
+`api_key_spend_limit_exceeded`、`project_spend_limit_exceeded` 或 `organization_spend_limit_exceeded` 时，
+网关保留原码并终止本次请求，包括原生续写。仅本次选中的上游账号记为额度耗尽，`Retry-After` 不触发重试或临时冷却。
+调整上游预算后，可在管理端对已启用的 API Key 账号执行强制恢复
+
+其他明确额度耗尽触发账号隔离与安全换号，包括 WebSocket 握手返回的 429；不会因其长 `Retry-After` 而转入同账号传输恢复等待
 
 Client Key 日周预算超限返回 `429`，`error.type` 为官方额度耗尽类型 `usage_limit_reached`，
 `error.code` 分别保留 `key_daily_budget_exceeded` 与 `key_weekly_budget_exceeded`，`Retry-After` 指向预算重置边界。
