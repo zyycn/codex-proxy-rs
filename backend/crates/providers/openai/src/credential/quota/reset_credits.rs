@@ -126,11 +126,10 @@ impl CodexCredentialQuotaService {
         account_id: &ProviderAccountId,
     ) -> Result<CodexRateLimitResetCredits, CodexResetCreditsError> {
         let account = self.reset_credit_account(account_id).await?;
-        let client = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        );
+        let client = self
+            .global_profile_client()
+            .await
+            .map_err(|_| CodexResetCreditsError::TransportUnavailable)?;
         let credential = self
             .repository
             .load_runtime_credential(&account)
@@ -157,11 +156,10 @@ impl CodexCredentialQuotaService {
         let entry = self.reset_consume_locks.entry(account_id);
         let _guard = entry.lock().await;
         let account = self.reset_credit_account(account_id).await?;
-        let client = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        );
+        let client = self
+            .global_profile_client()
+            .await
+            .map_err(|_| CodexResetCreditsError::TransportUnavailable)?;
         let credential = self
             .repository
             .load_runtime_credential(&account)

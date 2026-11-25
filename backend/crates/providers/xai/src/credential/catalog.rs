@@ -12,6 +12,7 @@ use gateway_core::account::{
 };
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
+    ProviderRuntimePolicyPort,
 };
 use gateway_core::routing::{ProviderCatalogGeneration, ProviderKind};
 
@@ -348,6 +349,8 @@ pub enum GrokCredentialCatalogError {
     ConflictingModelFacts,
     #[error("Grok model catalog cache update failed")]
     Cache,
+    #[error("Grok client profile is unavailable")]
+    Profile(#[source] gateway_core::error::ErrorSource),
     #[error("Grok provider account store is unavailable")]
     Store,
 }
@@ -359,6 +362,7 @@ pub struct GrokCredentialCatalogService {
     cache: Arc<dyn GrokCredentialCatalogCache>,
     published: Arc<RwLock<PublishedCatalogState>>,
     wire_profile: XaiWireProfileState,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
 
 /// 同一目录模型可由多个套餐的成员账号发现
@@ -377,6 +381,7 @@ impl GrokCredentialCatalogService {
         transport: Arc<dyn GrokModelCatalogTransport>,
         cache: Arc<dyn GrokCredentialCatalogCache>,
         wire_profile: XaiWireProfileState,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
             repository,
@@ -384,6 +389,7 @@ impl GrokCredentialCatalogService {
             cache,
             published: Arc::new(RwLock::new(PublishedCatalogState::default())),
             wire_profile,
+            runtime_policy,
         }
     }
 
@@ -578,12 +584,18 @@ impl GrokCredentialCatalogService {
         candidates: Vec<LoadedGrokCredential>,
     ) -> Result<FetchedCredentialCatalog, GrokCredentialCatalogError> {
         let mut last_error = None;
+        let profile = XaiWireProfileState::new(
+            self.wire_profile
+                .resolve_global_request_profile(self.runtime_policy.as_ref())
+                .await
+                .map_err(GrokCredentialCatalogError::Profile)?,
+        );
         for candidate in candidates.into_iter().take(MAX_CATALOG_FETCH_ATTEMPTS) {
             match fetch_candidate_catalog(
                 Arc::clone(&self.client),
                 scope.clone(),
                 candidate,
-                self.wire_profile.clone(),
+                profile.clone(),
             )
             .await
             {

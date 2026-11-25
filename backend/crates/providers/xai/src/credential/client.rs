@@ -2,12 +2,14 @@
 
 use std::sync::Arc;
 
+use gateway_core::provider_ports::ProviderRuntimePolicyPort;
+
 use crate::credential::token::{parse_oauth_error, parse_refresh_success, parse_token_success};
 use crate::{
     AllowedRedirectUri, AuthorizationCodeGrant, DiscoveryDocument, FormField, GrokOAuthConfig,
-    HttpHeader, OAuthError, OAuthHttpRequest, OAuthHttpResponse, OAuthHttpTransport,
-    OAuthOperation, OAuthPrincipal, PendingAuthorization, RefreshTokenGrant, RefreshedTokenSet,
-    TokenCandidate, TokenVerificationContext, TokenVerifier, VerificationFailure, VerificationFlow,
+    OAuthError, OAuthHttpRequest, OAuthHttpResponse, OAuthHttpTransport, OAuthOperation,
+    OAuthPrincipal, PendingAuthorization, RefreshTokenGrant, RefreshedTokenSet, TokenCandidate,
+    TokenVerificationContext, TokenVerifier, VerificationFailure, VerificationFlow,
     VerificationMethod, VerifiedTokenSet,
 };
 
@@ -16,6 +18,7 @@ use crate::{
 pub struct GrokOAuthClient {
     config: GrokOAuthConfig,
     wire_profile: crate::XaiWireProfileState,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     transport: Arc<dyn OAuthHttpTransport>,
     verifier: Arc<dyn TokenVerifier>,
     outbound_proxy: Option<gateway_core::account::OutboundProxy>,
@@ -29,12 +32,14 @@ impl GrokOAuthClient {
         wire_profile: crate::XaiWireProfileState,
         transport: Arc<dyn OAuthHttpTransport>,
         verifier: Arc<dyn TokenVerifier>,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
             config,
             wire_profile,
             transport,
             verifier,
+            runtime_policy,
             outbound_proxy: None,
         }
     }
@@ -59,10 +64,11 @@ impl GrokOAuthClient {
     /// transport 失败、非成功状态、JSON 非法、issuer 不匹配、端点跨 origin、
     /// 缺少 JWKS 或算法不安全时返回错误
     pub async fn discover(&self) -> Result<DiscoveryDocument, OAuthError> {
+        let profile = self.request_profile(OAuthOperation::Discovery).await?;
         let response = self
             .execute(
                 OAuthOperation::Discovery,
-                OAuthHttpRequest::get(self.config.discovery_url()),
+                OAuthHttpRequest::get(self.config.discovery_url()).with_profile(&profile),
             )
             .await?;
         if !is_success(&response) {
@@ -101,10 +107,13 @@ impl GrokOAuthClient {
         discovery: &DiscoveryDocument,
         grant: AuthorizationCodeGrant,
     ) -> Result<VerifiedTokenSet, OAuthError> {
+        let profile = self
+            .request_profile(OAuthOperation::AuthorizationCodeToken)
+            .await?;
         let (code, redirect_uri, code_verifier, nonce) = grant.into_parts();
         let request = OAuthHttpRequest::post(
             discovery.token_endpoint().clone(),
-            vec![self.version_header()],
+            vec![],
             vec![
                 FormField::public("grant_type", "authorization_code"),
                 FormField::secret("code", code),
@@ -114,7 +123,10 @@ impl GrokOAuthClient {
             ],
         );
         let response = self
-            .execute(OAuthOperation::AuthorizationCodeToken, request)
+            .execute(
+                OAuthOperation::AuthorizationCodeToken,
+                request.with_profile(&profile),
+            )
             .await?;
         if !is_success(&response) {
             return Err(parse_oauth_error(
@@ -144,7 +156,9 @@ impl GrokOAuthClient {
         let evidence = self
             .verifier
             .verify(
-                context.with_outbound_proxy(self.outbound_proxy.as_ref()),
+                context
+                    .with_outbound_proxy(self.outbound_proxy.as_ref())
+                    .with_wire_profile(&profile),
                 candidate,
             )
             .await?;
@@ -172,6 +186,9 @@ impl GrokOAuthClient {
         candidate: crate::GrokOAuthImportCandidate,
     ) -> Result<VerifiedTokenSet, crate::GrokOAuthImportError> {
         let validated = candidate.validate(&self.config, chrono::Utc::now())?;
+        let profile = self
+            .request_profile(OAuthOperation::CredentialImport)
+            .await?;
         let scope = validated.scope;
         let mut tokens = validated.tokens;
         let flow = if validated.requires_refresh {
@@ -180,7 +197,11 @@ impl GrokOAuthClient {
                 .take()
                 .ok_or(crate::GrokOAuthImportError::InvalidField("refresh_token"))?;
             let refreshed = self
-                .refresh(discovery, &RefreshTokenGrant::new(refresh_token.clone()))
+                .refresh_with_profile(
+                    discovery,
+                    &RefreshTokenGrant::new(refresh_token.clone()),
+                    &profile,
+                )
                 .await?;
             tokens = crate::credential::token::UnverifiedTokenSet {
                 access_token: refreshed.access_token().clone(),
@@ -214,7 +235,9 @@ impl GrokOAuthClient {
         let evidence = self
             .verifier
             .verify(
-                context.with_outbound_proxy(self.outbound_proxy.as_ref()),
+                context
+                    .with_outbound_proxy(self.outbound_proxy.as_ref())
+                    .with_wire_profile(&profile),
                 verification_candidate,
             )
             .await
@@ -251,6 +274,16 @@ impl GrokOAuthClient {
         discovery: &DiscoveryDocument,
         grant: &RefreshTokenGrant,
     ) -> Result<RefreshedTokenSet, OAuthError> {
+        let profile = self.request_profile(OAuthOperation::RefreshToken).await?;
+        self.refresh_with_profile(discovery, grant, &profile).await
+    }
+
+    async fn refresh_with_profile(
+        &self,
+        discovery: &DiscoveryDocument,
+        grant: &RefreshTokenGrant,
+        profile: &crate::XaiWireProfile,
+    ) -> Result<RefreshedTokenSet, OAuthError> {
         let form = vec![
             FormField::public("grant_type", "refresh_token"),
             FormField::secret("refresh_token", grant.refresh_token().clone()),
@@ -259,11 +292,8 @@ impl GrokOAuthClient {
         let response = self
             .execute(
                 OAuthOperation::RefreshToken,
-                OAuthHttpRequest::post(
-                    discovery.token_endpoint().clone(),
-                    vec![self.version_header()],
-                    form,
-                ),
+                OAuthHttpRequest::post(discovery.token_endpoint().clone(), vec![], form)
+                    .with_profile(profile),
             )
             .await?;
         if !is_success(&response) {
@@ -284,8 +314,19 @@ impl GrokOAuthClient {
             .map_err(|failure| OAuthError::transport(operation, failure))
     }
 
-    fn version_header(&self) -> HttpHeader {
-        HttpHeader::new("x-grok-client-version", self.wire_profile.client_version())
+    async fn request_profile(
+        &self,
+        operation: OAuthOperation,
+    ) -> Result<crate::XaiWireProfile, OAuthError> {
+        self.wire_profile
+            .resolve_global_request_profile(self.runtime_policy.as_ref())
+            .await
+            .map_err(|_| {
+                OAuthError::transport(
+                    operation,
+                    crate::TransportFailure::new(crate::TransportFailureKind::NotSent),
+                )
+            })
     }
 }
 

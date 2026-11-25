@@ -162,6 +162,7 @@ pub async fn initialize(
         profile.clone(),
         http.clone(),
         config.base_url().to_owned(),
+        Arc::clone(&runtime_policy),
     ));
     let selector = Arc::new(CodexCredentialSelector::new(
         provider_kind.clone(),
@@ -197,6 +198,7 @@ pub async fn initialize(
         credential::token_client::openai_token_client(
             config.token_client_config(),
             profile.clone(),
+            Arc::clone(&runtime_policy),
         )
         .map_err(|_| OpenAiInitializeError::TokenClient)?,
     );
@@ -230,6 +232,7 @@ pub async fn initialize(
             Arc::clone(&accounts),
             CodexCredentialAdmin,
             profile.clone(),
+            Arc::clone(&runtime_policy),
         )
         .with_oauth_client_id(config.oauth_client_id()),
     );

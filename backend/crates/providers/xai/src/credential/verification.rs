@@ -91,6 +91,7 @@ pub struct TokenVerificationContext<'a> {
     signing_algorithms: &'a [String],
     expected_nonce: Option<&'a SecretValue>,
     outbound_proxy: Option<&'a gateway_core::account::OutboundProxy>,
+    wire_profile: Option<&'a crate::XaiWireProfile>,
 }
 
 impl<'a> TokenVerificationContext<'a> {
@@ -112,7 +113,20 @@ impl<'a> TokenVerificationContext<'a> {
             signing_algorithms,
             expected_nonce,
             outbound_proxy: None,
+            wire_profile: None,
         }
+    }
+
+    /// 认证验证沿用当前 OAuth 操作已冻结的全局客户端身份
+    #[must_use]
+    pub fn with_wire_profile(mut self, profile: &'a crate::XaiWireProfile) -> Self {
+        self.wire_profile = Some(profile);
+        self
+    }
+
+    #[must_use]
+    pub fn wire_profile(&self) -> Option<&crate::XaiWireProfile> {
+        self.wire_profile
     }
 
     /// 绑定 OAuth owner 选择的账号出口，供公开的 [`TokenVerifier`] 实现遵守同一代理合同

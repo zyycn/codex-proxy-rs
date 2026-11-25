@@ -21,6 +21,80 @@ const DISCOVERY: &[u8] = include_bytes!("fixtures/discovery.json");
 const TOKEN_SUCCESS: &[u8] = include_bytes!("fixtures/token_success.json");
 const REFRESH_SUCCESS: &[u8] = include_bytes!("fixtures/refresh_success.json");
 
+#[tokio::test]
+async fn oauth_discovery_exchange_and_refresh_use_current_global_identity() {
+    use provider_xai::profile::selection::{GrokClientProfileSelection, VersionMode};
+    let selected = |version: &str| {
+        GrokClientProfileSelection {
+            version_mode: VersionMode::Fixed,
+            client_version: Some(version.to_owned()),
+            target_os: "windows".into(),
+            target_arch: "arm64".into(),
+            ..Default::default()
+        }
+        .document()
+        .unwrap()
+    };
+    let policy = Arc::new(crate::support::RequestProfileRuntimePolicy(Mutex::new(
+        selected("9.8.7"),
+    )));
+    let transport = Arc::new(FixtureTransport::new(vec![
+        response(200, DISCOVERY),
+        response(200, TOKEN_SUCCESS),
+        response(200, REFRESH_SUCCESS),
+    ]));
+    let client = GrokOAuthClient::new(
+        config(),
+        crate::support::xai_wire_profile(),
+        transport.clone(),
+        Arc::new(FixtureVerifier),
+        policy.clone(),
+    );
+    let discovery = client.discover().await.unwrap();
+    let allowlist =
+        RedirectUriAllowlist::new(["https://gateway.example/oauth/grok/callback"]).unwrap();
+    let pending = client
+        .start_authorization_code(
+            &discovery,
+            allowlist
+                .authorize("https://gateway.example/oauth/grok/callback")
+                .unwrap(),
+            None,
+        )
+        .unwrap();
+    let state = state_from_authorization_url(&pending);
+    let grant = pending
+        .accept_callback(
+            AuthorizationCallback::parse(&format!("code=fixture-code&state={state}")).unwrap(),
+        )
+        .unwrap();
+    client
+        .exchange_authorization_code(&discovery, grant)
+        .await
+        .unwrap();
+    *policy.0.lock().unwrap() = selected("9.8.8");
+    let grant = RefreshTokenGrant::new(SecretValue::new("refresh-test"));
+    client.refresh(&discovery, &grant).await.unwrap();
+    for (request, version) in transport.requests().iter().zip(["9.8.7", "9.8.7", "9.8.8"]) {
+        let header = |name| {
+            request
+                .headers()
+                .iter()
+                .find(|h| h.name() == name)
+                .unwrap()
+                .value()
+        };
+        assert_eq!(
+            header("user-agent"),
+            format!("grok-shell/{version} (windows; aarch64)")
+        );
+        assert_eq!(header("x-grok-client-version"), version);
+    }
+    *policy.0.lock().unwrap() = gateway_core::account::OpaqueProviderData::new(Default::default());
+    assert!(client.refresh(&discovery, &grant).await.is_err());
+    assert_eq!(transport.requests().len(), 3);
+}
+
 struct FixtureTransport {
     responses: Mutex<VecDeque<Result<OAuthHttpResponse, TransportFailure>>>,
     requests: Mutex<Vec<OAuthHttpRequest>>,
@@ -92,6 +166,7 @@ async fn credential_import_should_require_exact_metadata_and_official_userinfo()
         crate::support::xai_wire_profile(),
         transport,
         Arc::new(FixtureVerifier),
+        crate::support::runtime_policy(),
     );
     let discovery = client.discover().await.expect("discovery succeeds");
     let now = chrono::Utc::now();
@@ -157,6 +232,7 @@ async fn expired_import_should_refresh_then_require_authoritative_userinfo() {
         crate::support::xai_wire_profile(),
         transport.clone(),
         Arc::new(FixtureVerifier),
+        crate::support::runtime_policy(),
     );
     let discovery = client.discover().await.expect("discovery succeeds");
     let now = chrono::Utc::now();
@@ -203,6 +279,7 @@ async fn credential_import_should_reject_non_official_client_before_verification
         crate::support::xai_wire_profile(),
         transport,
         Arc::new(FixtureVerifier),
+        crate::support::runtime_policy(),
     );
     let discovery = client.discover().await.expect("discovery succeeds");
     let now = chrono::Utc::now();
@@ -260,6 +337,7 @@ async fn authorization_code_flow_should_verify_before_returning_tokens() {
         crate::support::xai_wire_profile(),
         transport.clone(),
         Arc::new(FixtureVerifier),
+        crate::support::runtime_policy(),
     );
     let discovery = client.discover().await.expect("discovery succeeds");
     let allowlist = RedirectUriAllowlist::new(["https://gateway.example/oauth/grok/callback"])
@@ -305,6 +383,7 @@ async fn authorization_code_flow_should_fail_closed_without_verifier() {
         crate::support::xai_wire_profile(),
         transport,
         Arc::new(FailClosedTokenVerifier),
+        crate::support::runtime_policy(),
     );
     let discovery = client.discover().await.expect("discovery succeeds");
     let allowlist = RedirectUriAllowlist::new(["https://gateway.example/oauth/grok/callback"])
@@ -344,6 +423,7 @@ async fn refresh_should_preserve_ambiguous_send_classification() {
         crate::support::xai_wire_profile(),
         transport,
         Arc::new(FailClosedTokenVerifier),
+        crate::support::runtime_policy(),
     );
     let discovery = client.discover().await.expect("discovery succeeds");
     let grant = RefreshTokenGrant::new(SecretValue::new(
@@ -369,6 +449,7 @@ async fn refresh_should_return_rotated_token_without_id_token() {
         crate::support::xai_wire_profile(),
         transport,
         Arc::new(FailClosedTokenVerifier),
+        crate::support::runtime_policy(),
     );
     let discovery = client.discover().await.expect("discovery succeeds");
     let grant = RefreshTokenGrant::new(SecretValue::new(

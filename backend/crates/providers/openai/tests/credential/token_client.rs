@@ -49,7 +49,7 @@ async fn refresh_and_code_exchange_use_the_selected_account_proxy() {
 }
 
 #[tokio::test]
-async fn refresh_tracks_the_online_profile_without_contaminating_code_exchange() {
+async fn authentication_requests_track_global_identity_and_releases() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -60,18 +60,33 @@ async fn refresh_tracks_the_online_profile_without_contaminating_code_exchange()
         .mount(&server)
         .await;
     let profile = provider_openai::profile::CodexWireProfileState::new(Default::default());
+    let policy = std::sync::Arc::new(crate::support::RequestProfileRuntimePolicy(
+        std::sync::Mutex::new(gateway_core::account::OpaqueProviderData::new(
+            Default::default(),
+        )),
+    ));
     let client = provider_openai::credential::token_client::openai_token_client(
         TokenClientConfig {
             client_id: "audit-client".to_owned(),
             token_endpoint: format!("{}/oauth/token", server.uri()),
         },
         profile.clone(),
+        policy.clone(),
     )
     .expect("production auth transport");
-    for (core, desktop, build) in [
-        ("1.2.3", "26.800.10000", "8000"),
-        ("1.2.4", "26.901.10000", "8109"),
+    for (core, desktop, build, os_version) in [
+        ("1.2.3", "26.800.10000", "8000", "27.0.1"),
+        ("1.2.4", "26.901.10000", "8109", "27.0.2"),
     ] {
+        *policy.0.lock().unwrap() = gateway_core::account::OpaqueProviderData::new(
+            serde_json::json!({
+                "client": "desktop", "platform": "macos", "versionMode": "latest",
+                "osVersion": os_version
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
         profile.update_bundled_release(&provider_openai::profile::CodexBundledReleaseProfile {
             codex_version: core.to_owned(),
             desktop_version: desktop.to_owned(),
@@ -91,7 +106,9 @@ async fn refresh_tracks_the_online_profile_without_contaminating_code_exchange()
         let exchange = &requests[requests.len() - 1];
         assert_eq!(
             refresh.headers["user-agent"],
-            profile.snapshot().user_agent()
+            format!(
+                "Codex Desktop/{core} (Mac OS {os_version}; arm64) unknown (Codex Desktop; {desktop})"
+            )
         );
         assert_eq!(refresh.headers["originator"], "Codex Desktop");
         assert_eq!(refresh.headers["content-type"], "application/json");
@@ -99,18 +116,32 @@ async fn refresh_tracks_the_online_profile_without_contaminating_code_exchange()
             exchange.headers["content-type"],
             "application/x-www-form-urlencoded"
         );
-        for name in [
-            "originator",
-            "user-agent",
-            "version",
-            "x-openai-internal-codex-residency",
-        ] {
-            assert!(!exchange.headers.contains_key(name), "raw exchange: {name}");
-        }
-        for name in ["authorization", "chatgpt-account-id", "version"] {
-            assert!(!refresh.headers.contains_key(name), "refresh: {name}");
+        assert_eq!(
+            exchange.headers["user-agent"],
+            refresh.headers["user-agent"]
+        );
+        assert_eq!(exchange.headers["originator"], "Codex Desktop");
+        for request in [refresh, exchange] {
+            for name in ["authorization", "chatgpt-account-id", "version"] {
+                assert!(!request.headers.contains_key(name), "auth request: {name}");
+            }
         }
     }
+    *policy.0.lock().unwrap() = gateway_core::account::OpaqueProviderData::new(Default::default());
+    assert!(matches!(
+        client.refresh("audit-refresh").await,
+        Err(RefreshFailure::RetryableTransport { .. })
+    ));
+    assert!(matches!(
+        client
+            .exchange_authorization_code(AuthorizationCodeGrant {
+                code: SecretString::from("audit-code"),
+                code_verifier: SecretString::from("audit-verifier")
+            })
+            .await,
+        Err(AuthorizationCodeExchangeError::Unavailable)
+    ));
+    assert_eq!(server.received_requests().await.unwrap().len(), 4);
 }
 
 fn client(server: &MockServer) -> OpenAiTokenClient {
@@ -124,6 +155,7 @@ fn client(server: &MockServer) -> OpenAiTokenClient {
             token_endpoint: format!("{}/oauth/token", server.uri()),
         },
         provider_openai::profile::CodexWireProfileState::new(Default::default()),
+        crate::support::runtime_policy(),
     )
 }
 
@@ -392,6 +424,7 @@ async fn authorization_code_response_timeouts_remain_ambiguous_without_exposing_
                 token_endpoint: format!("http://{address}/oauth/token?PRIVATE_URL_MARKER"),
             },
             provider_openai::profile::CodexWireProfileState::new(Default::default()),
+            crate::support::runtime_policy(),
         );
         let error = client
             .exchange_authorization_code(AuthorizationCodeGrant {

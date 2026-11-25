@@ -226,14 +226,12 @@ impl Fixture {
             credentials.clone(),
             oauth.registration(),
             origin.clone(),
-            release.clone(),
         ));
         let quota = Arc::new(crate::credential::quota::QuotaService::new(
             kind.clone(),
             store.clone(),
             credentials.clone(),
             catalog.clone(),
-            release.clone(),
             origin.clone(),
         ));
         let provider = Arc::new(AntigravityProvider::new(

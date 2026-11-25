@@ -389,6 +389,7 @@ fn pat_service(server: &MockServer) -> CodexCredentialAdminService {
             token_endpoint: format!("{}/oauth/token", server.uri()),
         },
         provider_openai::profile::CodexWireProfileState::new(Default::default()),
+        runtime_policy(),
     )
     .expect("auth client");
     CodexCredentialAdminService::new(
@@ -505,6 +506,7 @@ async fn pat_import_times_out_without_falling_back_to_document_identity() {
             token_endpoint: format!("{}/oauth/token", server.uri()),
         },
         provider_openai::profile::CodexWireProfileState::new(Default::default()),
+        runtime_policy(),
     );
     let service = CodexCredentialAdminService::new(
         Arc::new(UnusedRefresher),

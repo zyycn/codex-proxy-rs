@@ -10,6 +10,7 @@ use gateway_core::account::{
     AccountQuotaResetWindow, AccountQuotaSignals, CredentialRevision, ProviderAccount,
     ProviderAccountId, QuotaObservation, QuotaResetPeriod, QuotaState,
 };
+use gateway_core::provider_ports::ProviderRuntimePolicyPort;
 use tokio::sync::Mutex;
 
 use super::repository::{GrokCredentialRepository, LoadedGrokCredential};
@@ -145,7 +146,7 @@ impl GrokQuotaSnapshot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum GrokQuotaError {
     #[error("xAI quota account is unavailable")]
     AccountUnavailable,
@@ -155,6 +156,8 @@ pub enum GrokQuotaError {
     InvalidData,
     #[error("xAI quota upstream request failed")]
     Upstream,
+    #[error("xAI quota client profile is unavailable")]
+    Profile(#[source] gateway_core::error::ErrorSource),
     #[error("xAI quota store is unavailable")]
     Store,
 }
@@ -166,6 +169,7 @@ pub struct GrokCredentialQuotaService {
     client: Arc<GrokBillingClient>,
     scheduling: GrokQuotaSchedulingProjection,
     wire_profile: XaiWireProfileState,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
 
 #[derive(Clone, Default)]
@@ -346,12 +350,14 @@ impl GrokCredentialQuotaService {
         repository: GrokCredentialRepository,
         transport: Arc<dyn GrokBillingTransport>,
         wire_profile: XaiWireProfileState,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
             repository,
             client: Arc::new(GrokBillingClient::new(transport)),
             scheduling: GrokQuotaSchedulingProjection::default(),
             wire_profile,
+            runtime_policy,
         }
     }
 
@@ -420,7 +426,13 @@ impl GrokCredentialQuotaService {
         {
             return Err(GrokQuotaError::AccountUnavailable);
         }
-        let session = billing_session(&loaded, &self.wire_profile)?;
+        let profile = XaiWireProfileState::new(
+            self.wire_profile
+                .resolve_global_request_profile(self.runtime_policy.as_ref())
+                .await
+                .map_err(GrokQuotaError::Profile)?,
+        );
+        let session = billing_session(&loaded, &profile)?;
         let billing = self
             .client
             .fetch(&session)

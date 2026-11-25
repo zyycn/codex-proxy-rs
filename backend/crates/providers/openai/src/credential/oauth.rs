@@ -15,6 +15,7 @@ use gateway_admin::model::{
 use gateway_core::account::{
     LoadedCredential, NewProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
+use gateway_core::provider_ports::ProviderRuntimePolicyPort;
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq as _;
@@ -32,13 +33,12 @@ use super::token_client::{
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
 };
 use super::types::{parse_access_token_expiration, parse_chatgpt_jwt_claims};
-use crate::profile::CodexWireProfileState;
+use crate::profile::{CodexWireProfile, CodexWireProfileState};
 
 const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 const DESKTOP_AUTH_ENDPOINT: &str = "https://chatgpt.com/codex/desktop-auth";
 const AUTHORIZATION_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
-const AUTHORIZATION_ORIGINATOR: &str = "Codex Desktop";
 const STREAMLINED_LOGIN_QUERY: &str = "codex_streamlined_login";
 const NO_UNIVERSAL_LINKS_QUERY: &str = "no_universal_links";
 const SURFACE_STABLE_ID_DOMAIN: &[u8] = b"openai/codex-desktop/surface-stable-id/v1\0";
@@ -336,6 +336,8 @@ pub enum CodexOAuthAdminError {
     Exchange(#[source] AuthorizationCodeExchangeError),
     #[error("Codex OAuth pending storage is unavailable")]
     StorageUnavailable,
+    #[error("Codex OAuth client profile is unavailable")]
+    Profile(#[source] gateway_core::error::ErrorSource),
     #[error("Codex OAuth account mutation failed")]
     Credential,
 }
@@ -360,6 +362,7 @@ pub struct CodexOAuthAdminService {
     credentials: CodexCredentialAdmin,
     oauth_client_id: String,
     profile: CodexWireProfileState,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
 
 struct CodexOAuthAuthorizationCommitGuard {
@@ -408,6 +411,7 @@ impl CodexOAuthAdminService {
         store: Arc<dyn ProviderAccountStore>,
         credentials: CodexCredentialAdmin,
         profile: CodexWireProfileState,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
             pending,
@@ -416,6 +420,7 @@ impl CodexOAuthAdminService {
             credentials,
             oauth_client_id: OFFICIAL_CODEX_OAUTH_CLIENT_ID.to_owned(),
             profile,
+            runtime_policy,
         }
     }
 
@@ -603,9 +608,12 @@ impl CodexOAuthAdminService {
             mutation,
         })
         .map_err(map_pending_error)?;
-        let profile = self.profile.snapshot();
-        let authorization_url =
-            authorization_url(&pending, &self.oauth_client_id, &profile.desktop_version)?;
+        let profile = self
+            .profile
+            .resolve_global_request_profile(self.runtime_policy.as_ref())
+            .await
+            .map_err(CodexOAuthAdminError::Profile)?;
+        let authorization_url = authorization_url(&pending, &self.oauth_client_id, &profile)?;
         self.pending
             .create(&pending)
             .await
@@ -736,11 +744,8 @@ fn derive_surface_stable_id(installation_id: &str) -> Result<String, CodexOAuthA
 fn authorization_url(
     pending: &CodexPendingAuthorization,
     oauth_client_id: &str,
-    desktop_version: &str,
+    profile: &CodexWireProfile,
 ) -> Result<String, CodexOAuthAdminError> {
-    if !valid_text(desktop_version) {
-        return Err(CodexOAuthAdminError::InvalidInput);
-    }
     let mut inner =
         Url::parse(AUTHORIZATION_ENDPOINT).map_err(|_| CodexOAuthAdminError::InvalidInput)?;
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(
@@ -759,8 +764,11 @@ fn authorization_url(
             .append_pair("scope", AUTHORIZATION_SCOPE)
             .append_pair("id_token_add_organizations", "true")
             .append_pair("codex_cli_simplified_flow", "true")
-            .append_pair("originator", AUTHORIZATION_ORIGINATOR)
-            .append_pair("codex_app_version", desktop_version)
+            .append_pair("originator", &profile.originator);
+        if !profile.desktop_version.is_empty() {
+            query.append_pair("codex_app_version", &profile.desktop_version);
+        }
+        query
             .append_pair("source_surface_stable_id", &stable_id)
             .append_pair("codex_origin_stable_id", &stable_id)
             .append_pair(STREAMLINED_LOGIN_QUERY, "true");

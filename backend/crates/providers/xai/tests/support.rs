@@ -55,14 +55,25 @@ pub fn grok_catalog_service(
     transport: Arc<dyn GrokModelCatalogTransport>,
     cache: Arc<dyn GrokCredentialCatalogCache>,
 ) -> GrokCredentialCatalogService {
-    GrokCredentialCatalogService::new(repository, transport, cache, xai_wire_profile())
+    GrokCredentialCatalogService::new(
+        repository,
+        transport,
+        cache,
+        xai_wire_profile(),
+        crate::support::runtime_policy(),
+    )
 }
 
 pub fn grok_quota_service(
     repository: GrokCredentialRepository,
     transport: Arc<dyn GrokBillingTransport>,
 ) -> GrokCredentialQuotaService {
-    GrokCredentialQuotaService::new(repository, transport, xai_wire_profile())
+    GrokCredentialQuotaService::new(
+        repository,
+        transport,
+        xai_wire_profile(),
+        crate::support::runtime_policy(),
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -806,6 +817,28 @@ pub fn create_input(suffix: &str, subject: &str) -> CreateGrokCredential {
 }
 
 pub struct StaticRuntimePolicy;
+
+pub struct RequestProfileRuntimePolicy(pub Mutex<gateway_core::account::OpaqueProviderData>);
+
+impl ProviderRuntimePolicyPort for RequestProfileRuntimePolicy {
+    fn load_request_profile<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<gateway_core::account::OpaqueProviderData>, ProviderStoreError>,
+    > {
+        assert_eq!(provider.as_str(), "xai");
+        let profile = self.0.lock().unwrap().clone();
+        Box::pin(async move { Ok(Some(profile)) })
+    }
+
+    fn load_refresh_policy(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
+        Box::pin(async { Ok(refresh_policy()) })
+    }
+}
 
 #[derive(Default)]
 pub struct TestSessionAffinity {

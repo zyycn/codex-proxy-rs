@@ -145,7 +145,7 @@ pub struct CodexWarmupSummary {
 
 #[derive(Debug, Error)]
 pub enum CodexCredentialQuotaError {
-    #[error("Codex warmup client profile is unavailable")]
+    #[error("Codex quota client profile is unavailable")]
     Profile(#[source] gateway_core::error::ErrorSource),
     #[error("Codex quota response is invalid")]
     InvalidCredentialData,

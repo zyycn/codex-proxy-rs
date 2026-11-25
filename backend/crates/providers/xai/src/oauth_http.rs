@@ -129,6 +129,14 @@ pub struct OAuthHttpRequest {
 }
 
 impl OAuthHttpRequest {
+    pub(crate) fn with_profile(mut self, profile: &crate::XaiWireProfile) -> Self {
+        self.headers.extend([
+            HttpHeader::new("x-grok-client-version", &profile.client_version),
+            HttpHeader::new("user-agent", profile.user_agent()),
+        ]);
+        self
+    }
+
     pub fn get(url: Url) -> Self {
         Self {
             method: HttpMethod::Get,

@@ -4,7 +4,6 @@ use super::document::Document;
 use crate::{
     credential::catalog::CatalogService,
     credential::{CredentialService, oauth::error},
-    profile::ReleaseService,
     transport::CloudCodeClient,
 };
 use futures::{StreamExt, stream};
@@ -35,7 +34,6 @@ pub(crate) struct QuotaService {
     accounts: Arc<dyn ProviderAccountStore>,
     credentials: Arc<CredentialService>,
     catalog: Arc<CatalogService>,
-    release: Arc<ReleaseService>,
     origin: url::Url,
     cursor: AtomicUsize,
 }
@@ -107,7 +105,6 @@ impl QuotaService {
         accounts: Arc<dyn ProviderAccountStore>,
         credentials: Arc<CredentialService>,
         catalog: Arc<CatalogService>,
-        release: Arc<ReleaseService>,
         origin: url::Url,
     ) -> Self {
         Self {
@@ -115,7 +112,6 @@ impl QuotaService {
             accounts,
             credentials,
             catalog,
-            release,
             origin,
             cursor: AtomicUsize::new(0),
         }
@@ -153,12 +149,9 @@ impl QuotaService {
             .credentials
             .material(&current)
             .map_err(|e| error(Kind::CredentialRefreshRequired).with_source(e))?;
-        let client = CloudCodeClient::new(
-            &self.origin,
-            current.account.outbound_proxy(),
-            &crate::profile::default_profile(&self.release),
-        )
-        .map_err(upstream)?;
+        let profile = self.credentials.request_profile().await?;
+        let client = CloudCodeClient::new(&self.origin, current.account.outbound_proxy(), &profile)
+            .map_err(upstream)?;
         // 用查询开始时间隔离交错返回的旧结果，失败不覆盖已有快照
         let observed_at = SystemTime::now();
         let info = client

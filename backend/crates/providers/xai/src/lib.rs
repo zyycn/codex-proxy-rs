@@ -129,11 +129,13 @@ pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, Xai
         catalog_transport,
         catalog_cache_port,
         profile.clone(),
+        Arc::clone(&runtime_policy),
     ));
     let quota = Arc::new(GrokCredentialQuotaService::new(
         repository.clone(),
         billing_transport,
         profile.clone(),
+        Arc::clone(&runtime_policy),
     ));
     let selector: Arc<dyn GrokSessionSelector> = Arc::new(GrokAccountSessionSelector::new(
         provider_kind.clone(),
@@ -162,6 +164,7 @@ pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, Xai
         profile.clone(),
         oauth_transport,
         token_verifier,
+        Arc::clone(&runtime_policy),
     ));
     let refresher: Arc<dyn GrokCredentialRefresher> =
         Arc::new(GrokOAuthRefreshClient::new(Arc::clone(&oauth)));

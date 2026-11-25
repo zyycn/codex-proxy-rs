@@ -24,6 +24,53 @@ use crate::support::loopback_endpoint_policy;
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[tokio::test]
+async fn jwks_and_userinfo_use_the_frozen_oauth_identity() {
+    let server = MockServer::start().await;
+    let endpoint = endpoints(&server);
+    let key = TestKey::new(37, "global-profile-key");
+    mount_jwks(&server, key.jwks(), 1).await;
+    Mock::given(path("/oauth2/userinfo"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"sub":"test-user"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let verifier = verifier(&endpoint.origin, CACHE_TTL);
+    let nonce = SecretValue::new("global-profile-nonce");
+    let algorithms = vec!["ES256".into()];
+    let access = SecretValue::new("test-access");
+    let token = SecretValue::new(key.sign(&valid_claims(&nonce), Algorithm::ES256));
+    let profile = provider_xai::XaiWireProfile {
+        client_version: "9.8.7".into(),
+        target_os: "windows".into(),
+        target_arch: "arm64".into(),
+        ..Default::default()
+    };
+    verifier
+        .verify(
+            auth_context(&endpoint, &algorithms, &nonce).with_wire_profile(&profile),
+            TokenCandidate::new(&access, Some(&token), None),
+        )
+        .await
+        .unwrap();
+    verifier
+        .verify(
+            import_context(&endpoint, &algorithms).with_wire_profile(&profile),
+            TokenCandidate::new(&access, None, Some(Duration::from_secs(60))),
+        )
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        assert_eq!(
+            request.headers["user-agent"],
+            "grok-shell/9.8.7 (windows; aarch64)"
+        );
+        assert_eq!(request.headers["x-grok-client-version"], "9.8.7");
+    }
+}
+
+#[tokio::test]
 async fn proxy_jwks_cache_evicts_idle_exits_at_the_fixed_bound() {
     let origin = MockServer::start().await;
     let exit = MockServer::start().await;

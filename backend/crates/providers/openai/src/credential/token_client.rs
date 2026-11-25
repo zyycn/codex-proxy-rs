@@ -8,10 +8,12 @@ use crate::transport::{
     tls::{build_reqwest_client_with_custom_ca, ensure_rustls_provider},
 };
 use async_trait::async_trait;
+use gateway_core::provider_ports::ProviderRuntimePolicyPort;
 use reqwest::{Client, StatusCode, redirect::Policy};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 const MAX_OAUTH_RESPONSE_BYTES: usize = 64 * 1024;
@@ -386,6 +388,7 @@ pub struct OpenAiTokenClient {
     client: Client,
     config: TokenClientConfig,
     profile: CodexWireProfileState,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
 
 /// 官方 Codex token client 无法安全构建
@@ -408,14 +411,23 @@ impl OpenAiTokenClient {
             .timeout(TOKEN_REQUEST_TIMEOUT);
         let client =
             build_reqwest_client_with_custom_ca(builder).map_err(|_| TokenClientBuildError)?;
-        Ok(Self::new(client, self.config.clone(), self.profile.clone()))
+        Ok(Self {
+            client,
+            ..self.clone()
+        })
     }
-    /// 共享运行时画像；刷新时取快照，授权码交换仍使用 raw auth 请求
-    pub fn new(client: Client, config: TokenClientConfig, profile: CodexWireProfileState) -> Self {
+    /// 认证请求按执行时的全局配置解析身份
+    pub fn new(
+        client: Client,
+        config: TokenClientConfig,
+        profile: CodexWireProfileState,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+    ) -> Self {
         Self {
             client,
             config,
             profile,
+            runtime_policy,
         }
     }
 
@@ -439,7 +451,12 @@ impl OpenAiTokenClient {
         endpoint.set_path(PERSONAL_ACCESS_TOKEN_WHOAMI_PATH);
         endpoint.set_query(None);
         endpoint.set_fragment(None);
-        let headers = build_codex_profile_headers(&self.profile.snapshot())
+        let profile = self
+            .profile
+            .resolve_global_request_profile(self.runtime_policy.as_ref())
+            .await
+            .map_err(|_| PersonalAccessTokenError::Unavailable)?;
+        let headers = build_codex_profile_headers(&profile)
             .map_err(|_| PersonalAccessTokenError::Unavailable)?;
         let client = self
             .with_proxy(proxy)
@@ -495,6 +512,7 @@ impl OpenAiTokenClient {
 pub fn openai_token_client(
     config: TokenClientConfig,
     profile: CodexWireProfileState,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 ) -> Result<OpenAiTokenClient, TokenClientBuildError> {
     ensure_rustls_provider();
     let builder = gateway_egress::http_client(None)
@@ -503,7 +521,12 @@ pub fn openai_token_client(
         .connect_timeout(TOKEN_CONNECT_TIMEOUT)
         .timeout(TOKEN_REQUEST_TIMEOUT);
     let client = build_reqwest_client_with_custom_ca(builder).map_err(|_| TokenClientBuildError)?;
-    Ok(OpenAiTokenClient::new(client, config, profile))
+    Ok(OpenAiTokenClient::new(
+        client,
+        config,
+        profile,
+        runtime_policy,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -591,14 +614,22 @@ impl TokenRefresher for OpenAiTokenClient {
             .await
     }
     async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
-        let headers = build_codex_profile_headers(&self.profile.snapshot()).map_err(|source| {
-            RefreshFailure::Transport {
+        let profile = self
+            .profile
+            .resolve_global_request_profile(self.runtime_policy.as_ref())
+            .await
+            .map_err(|source| RefreshFailure::RetryableTransport {
+                redacted: false,
+                source: Some(source),
+                message: "OpenAI OAuth refresh profile is unavailable".to_owned(),
+            })?;
+        let headers =
+            build_codex_profile_headers(&profile).map_err(|source| RefreshFailure::Transport {
                 redacted: false,
                 source: Some(source.into()),
                 message: Some("OpenAI OAuth refresh profile is invalid".to_owned()),
                 upstream: None,
-            }
-        })?;
+            })?;
         let response = self
             .client
             .post(&self.config.token_endpoint)
@@ -642,9 +673,17 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
         &self,
         grant: AuthorizationCodeGrant,
     ) -> Result<AuthorizationTokenSet, AuthorizationCodeExchangeError> {
+        let profile = self
+            .profile
+            .resolve_global_request_profile(self.runtime_policy.as_ref())
+            .await
+            .map_err(|_| AuthorizationCodeExchangeError::Unavailable)?;
+        let headers = build_codex_profile_headers(&profile)
+            .map_err(|_| AuthorizationCodeExchangeError::Unavailable)?;
         let response = self
             .client
             .post(&self.config.token_endpoint)
+            .headers(headers)
             .form(&[
                 ("grant_type", "authorization_code"),
                 ("client_id", self.config.client_id.as_str()),

@@ -208,6 +208,7 @@ async fn inference_and_oauth_connect_through_each_accounts_authenticated_proxy()
         crate::support::xai_wire_profile(),
         Arc::new(ReqwestOAuthTransport::new(Arc::new(OfficialGrokEndpointPolicy)).unwrap()),
         Arc::new(FailClosedTokenVerifier),
+        crate::support::runtime_policy(),
     )
     .with_outbound_proxy(Some(proxy));
     assert!(
@@ -1277,6 +1278,7 @@ async fn official_oauth_transport_should_resolve_through_the_production_policy_w
                 .expect("production OAuth transport"),
         ),
         Arc::new(FailClosedTokenVerifier),
+        crate::support::runtime_policy(),
     );
 
     let discovery = client

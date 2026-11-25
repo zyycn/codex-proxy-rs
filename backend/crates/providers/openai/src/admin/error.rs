@@ -144,6 +144,7 @@ pub(super) fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError
         }) => (Kind::Unavailable, "无法连接授权服务，请检查出站连接"),
         Error::Exchange(Exchange::Unavailable) => (Kind::Unavailable, "授权服务暂不可用"),
         Error::StorageUnavailable => (Kind::Unavailable, "授权状态存储暂不可用"),
+        Error::Profile(_) => (Kind::Unavailable, "授权客户端身份暂不可用"),
     };
     provider_admin_error(kind)
         .with_public_message(message)
@@ -169,6 +170,7 @@ pub(super) const fn oauth_error_code(error: &CodexOAuthAdminError) -> &'static s
         }) => "connect_failed",
         CodexOAuthAdminError::Exchange(Exchange::Ambiguous { .. }) => "ambiguous",
         CodexOAuthAdminError::StorageUnavailable => "storage_unavailable",
+        CodexOAuthAdminError::Profile(_) => "profile_unavailable",
         CodexOAuthAdminError::Credential => "credential",
     }
 }
@@ -179,7 +181,7 @@ pub(super) fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdmin
     let (kind, public_message, upstream_message) = match error {
         Error::Profile(source) => {
             return provider_admin_error(Kind::Unavailable)
-                .with_public_message("预热客户端身份不可用")
+                .with_public_message("客户端身份不可用")
                 .with_source(source);
         }
         Error::InvalidCredentialData => (Kind::Invalid, "凭据或额度数据无效", None),

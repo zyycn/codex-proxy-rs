@@ -2,11 +2,12 @@
 
 use std::{
     collections::HashMap,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime},
 };
 
 use gateway_core::account::ProviderAccountId;
+use gateway_core::provider_ports::ProviderRuntimePolicyPort;
 use reqwest::Client;
 use secrecy::{ExposeSecret as _, SecretString};
 use thiserror::Error;
@@ -108,6 +109,7 @@ struct CachedProfileAvatarSource {
 pub struct CodexCredentialProfileService {
     repository: CodexCredentialRepository,
     profile: CodexWireProfileState,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     http: Client,
     base_url: String,
     avatar_sources: Mutex<HashMap<String, CachedProfileAvatarSource>>,
@@ -120,14 +122,32 @@ impl CodexCredentialProfileService {
         profile: CodexWireProfileState,
         http: Client,
         base_url: String,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
             repository,
             profile,
             http,
             base_url,
+            runtime_policy,
             avatar_sources: Mutex::new(HashMap::new()),
         }
+    }
+
+    async fn global_profile_client(
+        &self,
+    ) -> Result<CodexBackendClient, CodexProfileStatisticsError> {
+        let profile = self
+            .profile
+            .resolve_global_request_profile(self.runtime_policy.as_ref())
+            .await
+            .map_err(|_| CodexProfileStatisticsError::TransportUnavailable)?;
+        Ok(CodexBackendClient::new(
+            self.http.clone(),
+            self.base_url.clone(),
+            self.profile.clone(),
+        )
+        .with_request_profile(profile))
     }
 
     /// 订阅只按需读取；不缓存、不刷新凭据，也不更新额度状态
@@ -141,23 +161,21 @@ impl CodexCredentialProfileService {
             return Ok(None);
         };
         let request_id = format!("subscription_{}", Uuid::now_v7().simple());
-        let subscription = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        )
-        .for_account(&account)
-        .map_err(map_client_error)?
-        .fetch_subscription(
-            CodexRequestContext::auxiliary(
-                authorization.expose_secret(),
-                Some(&upstream_account_id),
-                &request_id,
-                None,
-            ),
-            &upstream_account_id,
-        )
-        .await;
+        let subscription = self
+            .global_profile_client()
+            .await?
+            .for_account(&account)
+            .map_err(map_client_error)?
+            .fetch_subscription(
+                CodexRequestContext::auxiliary(
+                    authorization.expose_secret(),
+                    Some(&upstream_account_id),
+                    &request_id,
+                    None,
+                ),
+                &upstream_account_id,
+            )
+            .await;
         // 请求期间重新授权、换绑或删除账号时，丢弃旧身份的结果
         let current = self
             .repository
@@ -183,32 +201,35 @@ impl CodexCredentialProfileService {
     ) -> Result<CodexProfileStatistics, CodexProfileStatisticsError> {
         let (authorization, upstream_account_id, account) =
             self.account_authentication(account_id).await?;
-        self.fetch_profile_statistics(&authorization, upstream_account_id.as_deref(), &account)
-            .await
+        let client = self.global_profile_client().await?;
+        self.fetch_profile_statistics(
+            &client,
+            &authorization,
+            upstream_account_id.as_deref(),
+            &account,
+        )
+        .await
     }
 
     async fn fetch_profile_statistics(
         &self,
+        client: &CodexBackendClient,
         authorization: &SecretString,
         upstream_account_id: Option<&str>,
         account: &gateway_core::account::ProviderAccount,
     ) -> Result<CodexProfileStatistics, CodexProfileStatisticsError> {
         let request_id = format!("profile_statistics_{}", Uuid::now_v7().simple());
-        let statistics = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        )
-        .for_account(account)
-        .map_err(map_client_error)?
-        .fetch_profile_statistics(CodexRequestContext::auxiliary(
-            authorization.expose_secret(),
-            upstream_account_id,
-            &request_id,
-            None,
-        ))
-        .await
-        .map_err(map_client_error)?;
+        let statistics = client
+            .for_account(account)
+            .map_err(map_client_error)?
+            .fetch_profile_statistics(CodexRequestContext::auxiliary(
+                authorization.expose_secret(),
+                upstream_account_id,
+                &request_id,
+                None,
+            ))
+            .await
+            .map_err(map_client_error)?;
         self.remember_avatar_source(
             crate::request_identity::oauth_identity_key(account),
             statistics.image_url.as_deref(),
@@ -268,12 +289,18 @@ impl CodexCredentialProfileService {
     ) -> Result<CodexProfileAvatar, CodexProfileAvatarError> {
         let (authorization, upstream_account_id, account) =
             self.account_authentication(account_id).await?;
+        let client = self.global_profile_client().await?;
         let source = match self
             .cached_avatar_source(&crate::request_identity::oauth_identity_key(&account))
         {
             Some(source) => source,
             None => self
-                .fetch_profile_statistics(&authorization, upstream_account_id.as_deref(), &account)
+                .fetch_profile_statistics(
+                    &client,
+                    &authorization,
+                    upstream_account_id.as_deref(),
+                    &account,
+                )
                 .await?
                 .image_url
                 .ok_or(CodexProfileAvatarError::Missing)?,
@@ -290,7 +317,7 @@ impl CodexCredentialProfileService {
         fetch_profile_avatar(
             &http,
             &self.base_url,
-            &self.profile.snapshot(),
+            &client.profile_state().snapshot(),
             &source,
             CodexRequestContext::auxiliary(
                 authorization.expose_secret(),

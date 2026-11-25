@@ -32,14 +32,12 @@ pub fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, ConfigErr
         credentials.clone(),
         oauth.registration(),
         origin.clone(),
-        release.clone(),
     ));
     let quota = Arc::new(credential::quota::QuotaService::new(
         kind.clone(),
         ports.accounts(),
         credentials.clone(),
         catalog.clone(),
-        release.clone(),
         origin.clone(),
     ));
     let core = Arc::new(provider::AntigravityProvider::new(

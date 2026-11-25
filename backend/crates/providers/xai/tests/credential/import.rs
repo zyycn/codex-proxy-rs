@@ -66,6 +66,7 @@ async fn expired_access_token_requires_official_refresh_before_identity_verifica
         crate::support::xai_wire_profile(),
         transport.clone(),
         Arc::new(FailClosedTokenVerifier),
+        crate::support::runtime_policy(),
     );
     let discovery = client.discover().await.expect("official discovery fixture");
     let error = client
@@ -125,6 +126,7 @@ async fn verified_import_inside_refresh_margin_should_not_persist_a_refresh_sche
         crate::support::xai_wire_profile(),
         Arc::new(DiscoveryTransport),
         Arc::new(AcceptingUserInfoVerifier),
+        crate::support::runtime_policy(),
     );
     let discovery = client.discover().await.expect("official discovery fixture");
     let tokens = client
@@ -351,6 +353,7 @@ async fn verify(candidate: GrokOAuthImportCandidate) -> GrokOAuthImportError {
         crate::support::xai_wire_profile(),
         Arc::new(DiscoveryTransport),
         Arc::new(FailClosedTokenVerifier),
+        crate::support::runtime_policy(),
     );
     let discovery = client.discover().await.expect("official discovery fixture");
     client

@@ -18,7 +18,7 @@ pub(super) const USER_AGENT_PRODUCTS: [&str; 4] =
     ["Codex Desktop", "codex-tui", "codex_exec", "codex_cli_rs"];
 
 impl CodexWireProfileState {
-    /// 后台模型操作没有 Client Key，按当前全局选择冻结整套身份
+    /// 账号后台操作没有 Client Key，按当前全局选择冻结整套身份
     pub(crate) async fn resolve_global_request_profile(
         &self,
         policy: &dyn ProviderRuntimePolicyPort,

@@ -161,7 +161,9 @@ impl ReqwestOidcTokenVerifier {
             return Err(VerificationFailure::Rejected);
         }
         let kid = header.kid.as_deref().ok_or(VerificationFailure::Rejected)?;
-        let key = self.decoding_key(context.jwks_uri(), kid, egress).await?;
+        let key = self
+            .decoding_key(context.jwks_uri(), kid, egress, context.wire_profile())
+            .await?;
 
         let mut validation = Validation::new(Algorithm::ES256);
         validation.leeway = 0;
@@ -221,11 +223,12 @@ impl ReqwestOidcTokenVerifier {
         if !valid_bearer_token(access_token) {
             return Err(VerificationFailure::Rejected);
         }
-        let response = egress
+        let request = egress
             .client
             .get(context.userinfo_endpoint().clone())
             .header(ACCEPT, "application/json")
-            .bearer_auth(access_token)
+            .bearer_auth(access_token);
+        let response = with_profile(request, context.wire_profile())
             .send()
             .await
             .map_err(|_| VerificationFailure::Unavailable)?;
@@ -253,6 +256,7 @@ impl ReqwestOidcTokenVerifier {
         jwks_uri: &Url,
         kid: &str,
         egress: &OidcEgress,
+        profile: Option<&crate::XaiWireProfile>,
     ) -> Result<DecodingKey, VerificationFailure> {
         if !valid_key_id(kid) {
             return Err(VerificationFailure::Rejected);
@@ -270,7 +274,7 @@ impl ReqwestOidcTokenVerifier {
             }
 
             // fresh cache 未命中 kid 时只强制刷新一次，以支持官方密钥轮换
-            let keys = self.fetch_jwks(jwks_uri, &egress.client).await?;
+            let keys = self.fetch_jwks(jwks_uri, &egress.client, profile).await?;
             cache.replace(jwks_uri.clone(), keys);
             return cache
                 .keys
@@ -280,7 +284,7 @@ impl ReqwestOidcTokenVerifier {
         }
 
         // 过期缓存不会在网络或协议失败时作为 stale fallback 使用
-        let keys = self.fetch_jwks(jwks_uri, &egress.client).await?;
+        let keys = self.fetch_jwks(jwks_uri, &egress.client, profile).await?;
         cache.replace(jwks_uri.clone(), keys);
         cache
             .keys
@@ -293,13 +297,15 @@ impl ReqwestOidcTokenVerifier {
         &self,
         jwks_uri: &Url,
         client: &Client,
+        profile: Option<&crate::XaiWireProfile>,
     ) -> Result<HashMap<String, CachedJwk>, VerificationFailure> {
         if !self.endpoint_policy.validate_jwks(jwks_uri) {
             return Err(VerificationFailure::Rejected);
         }
-        let response = client
+        let request = client
             .get(jwks_uri.clone())
-            .header(ACCEPT, "application/json")
+            .header(ACCEPT, "application/json");
+        let response = with_profile(request, profile)
             .send()
             .await
             .map_err(|_| VerificationFailure::Unavailable)?;
@@ -315,6 +321,18 @@ impl ReqwestOidcTokenVerifier {
             BoundedBody::TooLarge => return Err(VerificationFailure::Rejected),
         };
         parse_jwks(&body)
+    }
+}
+
+fn with_profile(
+    request: reqwest::RequestBuilder,
+    profile: Option<&crate::XaiWireProfile>,
+) -> reqwest::RequestBuilder {
+    match profile {
+        Some(profile) => request
+            .header("user-agent", profile.user_agent())
+            .header("x-grok-client-version", &profile.client_version),
+        None => request,
     }
 }
 

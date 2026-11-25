@@ -47,6 +47,20 @@ impl XaiWireProfile {
 pub struct XaiWireProfileState(Arc<RwLock<XaiWireProfile>>);
 
 impl XaiWireProfileState {
+    /// 账号后台操作按当前全局配置冻结身份，不读取 Client Key 覆盖
+    pub(crate) async fn resolve_global_request_profile(
+        &self,
+        policy: &dyn gateway_core::provider_ports::ProviderRuntimePolicyPort,
+    ) -> Result<XaiWireProfile, gateway_core::error::ErrorSource> {
+        let kind = gateway_core::routing::ProviderKind::new("xai")?;
+        let Some(configuration) = policy.load_request_profile(&kind).await? else {
+            return Ok(self.snapshot());
+        };
+        super::selection::GrokClientProfileSelection::parse(&configuration)
+            .and_then(|selection| selection.resolve(self))
+            .map_err(Into::into)
+    }
+
     #[must_use]
     pub fn new(profile: XaiWireProfile) -> Self {
         Self(Arc::new(RwLock::new(profile)))

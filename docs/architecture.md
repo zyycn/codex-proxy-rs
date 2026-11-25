@@ -1069,6 +1069,9 @@ OpenAI 从账号目录生成原生列表；先按冻结政策选择来源，再�
 credential 与 quota 是两组独立事实：credential refresh 不等于 quota refresh，额度接口的 401/403
 也不能单独证明 refresh token 永久失效
 
+OpenAI、xAI、Antigravity 的认证及账号后台操作由各 Provider 通过自身 profile 解析器读取当前全局身份，
+冻结到对应上游请求，不读取 Key 覆盖；模型请求由请求上下文按 Key 覆盖优先、其次全局解析身份
+
 - OpenAI 支持 OAuth、AT/RT、PAT 和上游 API Key。OAuth 身份来自官方 JWT claims，PAT 经官方身份接口验证，
   不信任导入文档顶层身份字段。RT-only 导入先换取 AT；AT-only、PAT 与 API Key 不参加 OAuth 自动续期。
   输入形态和适用操作见 [账号能力与导入](api.md#账号能力导入与-oauth)

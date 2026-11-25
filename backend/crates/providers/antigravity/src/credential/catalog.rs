@@ -2,7 +2,6 @@
 
 use crate::{
     credential::{CredentialService, oauth::error},
-    profile::ReleaseService,
     transport::{Catalog, CloudCodeClient, unsent},
 };
 use gateway_admin::{
@@ -29,7 +28,6 @@ pub(crate) struct CatalogService {
     kind: gateway_core::routing::ProviderKind,
     accounts: Arc<dyn gateway_core::account::ProviderAccountStore>,
     registration: String,
-    pub(crate) release: Arc<ReleaseService>,
     pub(crate) origin: url::Url,
     pub(crate) generation: AtomicU64,
     observed:
@@ -109,7 +107,6 @@ impl CatalogService {
         credentials: Arc<CredentialService>,
         registration: String,
         origin: url::Url,
-        release: Arc<ReleaseService>,
     ) -> Self {
         Self {
             kind,
@@ -117,7 +114,6 @@ impl CatalogService {
             credentials,
             registration,
             origin,
-            release,
             generation: AtomicU64::new(0),
             observed: Mutex::default(),
             refresh_cursor: AtomicUsize::new(0),
@@ -222,12 +218,9 @@ impl CatalogService {
             .credentials
             .material(&current)
             .map_err(|e| error(AdminKind::CredentialRefreshRequired).with_source(e))?;
-        let client = CloudCodeClient::new(
-            &self.origin,
-            current.account.outbound_proxy(),
-            &crate::profile::default_profile(&self.release),
-        )
-        .map_err(|e| error(AdminKind::Unavailable).with_source(e))?;
+        let profile = self.credentials.request_profile().await?;
+        let client = CloudCodeClient::new(&self.origin, current.account.outbound_proxy(), &profile)
+            .map_err(|e| error(AdminKind::Unavailable).with_source(e))?;
         let observed_at = SystemTime::now();
         let catalog = client
             .catalog(&material.access_token)

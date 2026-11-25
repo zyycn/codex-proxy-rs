@@ -140,17 +140,7 @@ impl CodexCredentialQuotaService {
             })
             .collect::<BTreeMap<_, _>>();
 
-        let profile = self
-            .profile
-            .resolve_global_request_profile(self.runtime_policy.as_ref())
-            .await
-            .map_err(CodexCredentialQuotaError::Profile)?;
-        let client = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        )
-        .with_request_profile(profile);
+        let client = self.global_profile_client().await?;
 
         for account in accounts {
             if account.quota().is_exhausted() {

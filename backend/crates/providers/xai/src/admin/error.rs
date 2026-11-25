@@ -94,6 +94,11 @@ pub(super) fn map_quota_error(error: GrokQuotaError) -> ProviderAdminError {
         Error::InvalidData => (Kind::Invalid, "凭据或额度数据无效"),
         Error::Upstream => (Kind::Unavailable, "额度查询失败"),
         Error::Store => (Kind::Unavailable, "额度查询暂不可用"),
+        Error::Profile(source) => {
+            return provider_error(Kind::Unavailable)
+                .with_public_message("客户端身份不可用")
+                .with_source(source);
+        }
     };
     provider_error(kind).with_public_message(message)
 }
@@ -108,6 +113,11 @@ pub(super) fn map_catalog_error(error: GrokCredentialCatalogError) -> ProviderAd
         Error::StaleCredentialSnapshot => (Kind::Conflict, "凭据已更新，请刷新账号列表"),
         Error::Upstream => (Kind::Unavailable, "模型查询失败"),
         Error::Cache | Error::Store => (Kind::Unavailable, "模型查询暂不可用"),
+        Error::Profile(source) => {
+            return provider_error(Kind::Unavailable)
+                .with_public_message("客户端身份不可用")
+                .with_source(source);
+        }
     };
     provider_error(kind).with_public_message(message)
 }

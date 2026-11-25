@@ -2669,6 +2669,10 @@ models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI �
 更新时省略某项保留原值，对象替换该项，`null` 删除显式选择并使用 Provider 默认值；不清除其他 Provider 的配置。
 配置内容由对应 Provider 校验，不包含账号凭据。Key 可通过 `providerRequestProfileOverrides` 整体覆盖所属 Provider 的选择
 
+OpenAI、xAI、Antigravity 的模型请求均按 Key 覆盖优先、其次全局的顺序选择身份。
+OAuth、令牌续期、额度刷新、订阅和模型目录查询等账号后台操作使用所属平台的全局身份，
+不读取单个 Key 的覆盖；修改全局配置后，下次执行采用新选择
+
 各 Provider 的选项响应均包含 `globalConfiguration`。OpenAI 返回六个 `presets`、`maxVersionLag` 和
 `recognizedUserAgentPrefixes`。匹配前缀时，OpenAI 从 UA 派生 originator 与 Core 版本，其他自定义 UA 需要提供这两个字段。
 xAI 返回 `defaults`，Antigravity 返回 `defaults` 与 `presets`
@@ -2676,9 +2680,9 @@ xAI 返回 `defaults`，Antigravity 返回 `defaults` 与 `presets`
 ### OpenAI 上游客户端身份
 
 OpenAI 通用身份默认使用 `MacOS · Desktop · 自动最新`。
-该配置作用于 Client Key 的 OpenAI 模型请求，适用于 HTTP/SSE、WebSocket、Images 和 Search，
-也用于账号模型目录的后台发现、手动刷新、导出及定时预热；下次执行时采用当前全局选择，不使用单个 Key 的覆盖。
-不改变 xAI、入站客户端版本门禁、账号认证或后台 Desktop 专属操作
+模型请求覆盖 HTTP/SSE、WebSocket、Images 和 Search。后台全局身份还作用于授权链接的客户端参数、
+PAT 验证、额度重置卡、资料、头像和定时预热；各端点保留各自的请求头格式。
+该配置不覆盖浏览器授权页的 UA，不保证上游登录通知中的设备标签与之相同，也不改变入站客户端版本门禁
 
 自定义配置使用 `{ "mode": "custom", "userAgent": "完整 UA" }`。
 已识别的 `Codex Desktop`、`codex-tui`、`codex_exec`、`codex_cli_rs` 前缀由后端解析 `originator` 和 Core `version`，

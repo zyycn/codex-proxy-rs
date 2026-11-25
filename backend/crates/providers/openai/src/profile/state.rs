@@ -105,6 +105,10 @@ impl CodexWireProfile {
     /// 复合 User-Agent 是两个独立 surface
     #[must_use]
     pub fn desktop_user_agent(&self) -> String {
+        // 非 Desktop 预设及完整自定义 UA 没有独立桌面格式，保持所选身份
+        if self.client_kind != ClientKind::Desktop || self.exact_user_agent.is_some() {
+            return self.user_agent();
+        }
         format!(
             "{}/{} ({}; {})",
             self.originator, self.desktop_version, self.os_type, self.arch

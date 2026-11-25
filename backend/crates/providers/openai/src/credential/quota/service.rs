@@ -35,6 +35,22 @@ fn upstream_error_status(error: &CodexClientError) -> Option<u16> {
 }
 
 impl CodexCredentialQuotaService {
+    pub(super) async fn global_profile_client(
+        &self,
+    ) -> Result<CodexBackendClient, CodexCredentialQuotaError> {
+        let profile = self
+            .profile
+            .resolve_global_request_profile(self.runtime_policy.as_ref())
+            .await
+            .map_err(CodexCredentialQuotaError::Profile)?;
+        Ok(CodexBackendClient::new(
+            self.http.clone(),
+            self.base_url.clone(),
+            self.profile.clone(),
+        )
+        .with_request_profile(profile))
+    }
+
     pub fn new(
         repository: CodexCredentialRepository,
         profile: CodexWireProfileState,
@@ -174,11 +190,17 @@ impl CodexCredentialQuotaService {
         if accounts.is_empty() {
             return Ok(summary);
         }
-        let client = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        );
+        let client = match self.global_profile_client().await {
+            Ok(client) => client,
+            Err(error) => {
+                // 身份配置失败尚未发出请求，也需要释放已预留的首查任务
+                self.scheduling.defer_failed_initial_refreshes(
+                    &pending_initial,
+                    self.initial_sync_delays.as_ref(),
+                );
+                return Err(error);
+            }
+        };
         for account in accounts {
             let observed_at = SystemTime::now();
             match self.fetch_usage(&client, &account).await {
@@ -410,11 +432,7 @@ impl CodexCredentialQuotaService {
         if !access_token_is_current(&account, observed_at) {
             return Err(CodexCredentialQuotaError::CredentialRefreshRequired);
         }
-        let client = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        );
+        let client = self.global_profile_client().await?;
         let FetchedCodexQuota { account, value } = match self.fetch_usage(&client, &account).await {
             Ok(fetched) => fetched,
             Err(CodexQuotaFetchError::InvalidCredential) => {

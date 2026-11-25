@@ -16,6 +16,37 @@ async fn upstream(server: &MockServer, remaining: serde_json::Value, delay: Dura
 }
 
 #[tokio::test]
+async fn quota_and_catalog_refresh_use_current_global_identity() {
+    let server = MockServer::start().await;
+    upstream(&server, json!(0.5), Duration::ZERO).await;
+    let f = Fixture::new(&server.uri());
+    let account = f.store.primary().loaded.lock().unwrap().account.clone();
+    for (version, changelist) in [("1.5.14", ""), ("1.5.15", "; cl=1027820220")] {
+        *f.store.request_profile.lock().unwrap() = Some(crate::profile::object(
+            json!({"client":"cli","platform":"linux","versionMode":"fixed","clientVersion":version,"arch":null}),
+        ));
+        let before = server.received_requests().await.unwrap().len();
+        f.quota.refresh(account.id()).await.unwrap();
+        f.catalog.account_models(account.id(), true).await.unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len() - before, 5);
+        for request in &requests[before..] {
+            assert_eq!(
+                request.headers["user-agent"],
+                format!(
+                    "antigravity/cli/{version} (aidev_client; os_type=linux; arch=amd64{changelist}; auth_method=consumer)"
+                )
+            );
+        }
+    }
+    *f.store.request_profile.lock().unwrap() =
+        Some(crate::profile::object(json!({"client":"unsupported"})));
+    assert!(f.quota.refresh(account.id()).await.is_err());
+    assert!(f.catalog.account_models(account.id(), true).await.is_err());
+    assert_eq!(server.received_requests().await.unwrap().len(), 10);
+}
+
+#[tokio::test]
 async fn quota_refresh_projects_paid_plan_without_exhausting_other_models() {
     let server = MockServer::start().await;
     upstream(&server, json!(0.0), Duration::ZERO).await;
