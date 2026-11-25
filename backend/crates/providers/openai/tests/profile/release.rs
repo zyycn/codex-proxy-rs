@@ -247,7 +247,7 @@ async fn restored_cache_release_should_stay_in_version_lag_history() {
     assert_eq!(lagged.desktop_version, "26.810.41047");
     assert_eq!(
         lagged.user_agent(),
-        "Codex Desktop/0.148.0-alpha.9 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.810.41047)"
+        "Codex Desktop/0.148.0-alpha.9 (Mac OS 27.2.1; arm64) unknown (Codex Desktop; 26.810.41047)"
     );
     // 滞后两档落到启动种子，恢复观察与启动种子共同构成启动历史。
     assert_eq!(

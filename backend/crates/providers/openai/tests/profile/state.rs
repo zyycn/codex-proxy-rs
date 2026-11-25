@@ -73,7 +73,7 @@ async fn lagged_profiles_track_observed_release_history() {
     assert_eq!(lagged.desktop_version, "26.810.41047");
     assert_eq!(
         lagged.user_agent(),
-        "Codex Desktop/0.148.0-alpha.9 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.810.41047)"
+        "Codex Desktop/0.148.0-alpha.9 (Mac OS 27.2.1; arm64) unknown (Codex Desktop; 26.810.41047)"
     );
     assert_eq!(
         selection(Some(2)).resolve(&state).unwrap().codex_version,

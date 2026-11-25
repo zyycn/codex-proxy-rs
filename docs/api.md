@@ -2711,6 +2711,9 @@ TUI 默认标识为 `codex-tui`，Exec 为 `codex_exec`，入口后缀使用同�
 `originator` 覆盖只更改产品名前缀和配套头，后缀仍表示所选入口。省略 `osType` 使用平台名称；
 自定义运行环境在自动更新时保持不变。未指定 `cliEntry` 时使用 `codex_cli_rs` 默认值且不添加入口后缀
 
+macOS 的默认系统版本为 `27.2.1`。选择 macOS CLI 预设时，配置包含 `cliEntry: "tui"` 和
+`terminal: "Apple_Terminal/488.9"`；已保存的入口和终端配置不随预设变化而改写
+
 `terminal` 填写官方客户端的真实终端标记，如 `iTerm.app/3.5.0`、`vscode/1.99.0`、`Apple_Terminal`、
 `Ghostty`、`WindowsTerminal`、`tmux-256color`、`xterm-256color`。省略时使用 `unknown`：
 官方 Desktop 由 GUI 启动、无终端环境变量，其 UA 中的终端标记本就是 `unknown`，

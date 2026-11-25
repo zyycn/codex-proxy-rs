@@ -10,6 +10,7 @@ pub(super) const CLI_ORIGINATOR: &str = "codex_cli_rs";
 pub(super) const TUI_ORIGINATOR: &str = "codex-tui";
 pub(super) const EXEC_ORIGINATOR: &str = "codex_exec";
 pub(super) const TERMINAL: &str = "unknown";
+pub(super) const MACOS_CLI_TERMINAL: &str = "Apple_Terminal/488.9";
 
 pub(super) struct Environment {
     pub os_type: &'static str,
@@ -19,7 +20,7 @@ pub(super) struct Environment {
 
 pub(super) const MACOS_ENVIRONMENT: Environment = Environment {
     os_type: "Mac OS",
-    os_version: "15.7.1",
+    os_version: "27.2.1",
     arch: "arm64",
 };
 pub(super) const LINUX_ENVIRONMENT: Environment = Environment {
