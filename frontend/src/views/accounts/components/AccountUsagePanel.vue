@@ -26,7 +26,7 @@ const modelUsageColumns = computed(() => (defineTableColumns<AccountModelUsage>(
     key: 'model',
     label: t('accounts.concurrency.model'),
     kind: 'text',
-    size: 'md',
+    size: 'xl',
   },
   {
     key: 'requestCountDisplay',
@@ -74,7 +74,8 @@ const modelUsageColumns = computed(() => (defineTableColumns<AccountModelUsage>(
     key: 'lastUsedAt',
     label: t('accounts.fields.lastUsed'),
     kind: 'datetime',
-    size: 'md',
+    size: 'sm',
+    fixedWidth: true,
     align: 'right',
   },
 ])))

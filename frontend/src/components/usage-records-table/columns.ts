@@ -10,7 +10,7 @@ export const usageDataColumns = computed(() => ([
     key: 'model',
     label: t('usage.fields.model'),
     kind: 'custom',
-    size: 'xl',
+    size: '2xl',
   },
   {
     key: 'reasoningEffort',
@@ -22,7 +22,7 @@ export const usageDataColumns = computed(() => ([
     key: 'route',
     label: t('usage.fields.endpoint'),
     kind: 'mono',
-    minWidth: 224,
+    width: 208,
   },
   {
     key: 'transport',
