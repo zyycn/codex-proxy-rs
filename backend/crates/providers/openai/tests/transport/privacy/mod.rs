@@ -31,6 +31,33 @@ fn step(scope: PrivacyScope, selector: &str, action: PrivacyAction) -> PrivacySt
     }
 }
 
+pub(crate) fn workspace_rule(username: &str) -> PrivacyRule {
+    let mut configured = rule(
+        PrivacyScope::TurnMetadata,
+        "$.workspaces",
+        PrivacyAction::AnonymizeProject,
+    );
+    let mut rename = step(
+        PrivacyScope::TurnMetadata,
+        "$.workspaces",
+        PrivacyAction::RenameKey,
+    );
+    rename.pattern = Some(r"(?i)^((?:[a-z]:)?[/\\](?:home|users)[/\\])[^/\\]+([/\\])".into());
+    rename.replacement = format!("${{1}}{username}${{2}}");
+    configured.steps.push(rename);
+    for selector in [
+        "$.workspaces.*.associated_remote_urls",
+        "$.workspaces.*.latest_git_commit_hash",
+    ] {
+        configured.steps.push(step(
+            PrivacyScope::TurnMetadata,
+            selector,
+            PrivacyAction::RemoveField,
+        ));
+    }
+    configured
+}
+
 pub(crate) fn policy(rules: Vec<PrivacyRule>) -> CodexPrivacyPolicy {
     CodexPrivacyPolicy {
         enabled: true,

@@ -109,7 +109,7 @@ const columns = computed(() => (defineTableColumns<PrivacyRule>([
     key: 'action',
     label: t('settings.privacy.rules.processingMethod'),
     kind: 'meta',
-    size: 'md',
+    size: '2xl',
   },
   {
     key: 'actions',
@@ -145,7 +145,7 @@ const columns = computed(() => (defineTableColumns<PrivacyRule>([
         {{ [...new Set(row.steps.map(step => scopes.find(item => item.value === step.scope)?.label))].join('、') }}
       </template>
       <template #action="{ row }">
-        {{ [...new Set(row.steps.map(step => step.action === 'anonymize_workspace' ? t('settings.privacy.presets.anonymizeWorkspace') : actions.find(item => item.value === step.action)?.label))].join('、') }}
+        {{ [...new Set(row.steps.map(step => actions.find(item => item.value === step.action)?.label))].join('、') }}
       </template>
       <template #actions="{ row }">
         <div class="flex items-center justify-end gap-1">

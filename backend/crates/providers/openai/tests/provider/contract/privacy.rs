@@ -1,7 +1,7 @@
 //! 隐私规则在真实 HTTP、WebSocket 和发送前拒绝边界的合同
 
 use super::*;
-use crate::transport::privacy::{policy, rule};
+use crate::transport::privacy::{policy, rule, workspace_rule};
 use gateway_core::settings::privacy::{CodexPrivacyPolicy, PrivacyAction, PrivacyScope};
 
 fn privacy_context(policy: &CodexPrivacyPolicy, fallback: bool) -> AttemptContext {
@@ -96,11 +96,7 @@ fn workspace_operation(session: &str, owner: &str) -> Operation {
 }
 
 fn workspace_policy() -> CodexPrivacyPolicy {
-    policy(vec![rule(
-        PrivacyScope::TurnMetadata,
-        "$.workspaces",
-        PrivacyAction::AnonymizeWorkspace,
-    )])
+    policy(vec![workspace_rule("user")])
 }
 
 fn assert_workspace_alias(header: &str, body: &Value) -> String {

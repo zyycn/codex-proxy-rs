@@ -1,4 +1,4 @@
-//! 工作区路径的账号会话化名、Git 元数据裁剪与预览会话识别
+//! 工作区项目名的账号会话化名与预览会话识别
 
 use gateway_core::account::ProviderAccount;
 use reqwest::header::HeaderMap;
@@ -17,39 +17,6 @@ pub(super) fn account_session_scope(session: &str, account: &ProviderAccount) ->
         hash.update(part.as_bytes());
     }
     hex::encode(hash.finalize())
-}
-
-pub(super) fn anonymize(value: &mut Value, budget: &mut Budget<'_>) -> Result<usize, &'static str> {
-    let count = anonymize_project(value, budget)?;
-    let workspaces = value.as_object_mut().ok_or("工作区映射必须是对象")?;
-    let mut renamed = Map::new();
-    // 保留已保存组合动作的用户名替换与 Git 裁剪，独立项目动作不包含这些副作用
-    for (path, mut metadata) in std::mem::take(workspaces) {
-        let object = metadata.as_object_mut().ok_or("工作区信息必须是对象")?;
-        object.remove("associated_remote_urls");
-        object.remove("latest_git_commit_hash");
-        let split = path.rfind(['/', '\\']).ok_or("工作区路径缺少工程目录")?;
-        let mut alias = String::new();
-        let mut username = false;
-        for part in path[..=split].split_inclusive(['/', '\\']) {
-            let component = part.trim_end_matches(['/', '\\']);
-            if username && !component.is_empty() {
-                alias.push_str("user");
-                alias.push_str(&part[component.len()..]);
-                username = false;
-            } else {
-                alias.push_str(part);
-                username = component.eq_ignore_ascii_case("users")
-                    || component.eq_ignore_ascii_case("home");
-            }
-        }
-        alias.push_str(&path[split + 1..]);
-        if renamed.insert(alias, metadata).is_some() {
-            return Err("工作区匿名化产生重名");
-        }
-    }
-    *workspaces = renamed;
-    Ok(count)
 }
 
 pub(super) fn anonymize_project(

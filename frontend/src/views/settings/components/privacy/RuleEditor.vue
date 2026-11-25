@@ -6,7 +6,7 @@ import { Play } from '@lucide/vue'
 import { cloneDeep } from 'es-toolkit'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { exampleRequest, expandWorkspaceSteps, newRule, newStep } from './presets'
+import { exampleRequest, newRule, newStep } from './presets'
 import StepFields from './StepFields.vue'
 import StepList from './StepList.vue'
 import { usePrivacyPreview } from './usePrivacyPreview'
@@ -46,7 +46,6 @@ watch(open, (value) => {
   if (value) {
     selectedIndex.value = 0
     draft.value = cloneDeep(props.rule ?? newRule())
-    draft.value.steps = expandWorkspaceSteps(draft.value.steps)
     fixedValues.value = draft.value.steps.map(step => JSON.stringify(step.value))
     sample.value = JSON.stringify(exampleRequest(), null, 2)
   }

@@ -182,22 +182,11 @@ export function createPreset(key: string): PrivacyRule {
   return {
     ...newRule(),
     name: preset.name,
-    steps: createSteps(preset.steps),
+    steps: preset.steps.map(step => ({
+      ...newStep(),
+      ...cloneDeep(step),
+    })),
   }
-}
-
-function createSteps(steps: Partial<PrivacyStep>[]): PrivacyStep[] {
-  return steps.map(step => ({
-    ...newStep(),
-    ...cloneDeep(step),
-  }))
-}
-
-export function expandWorkspaceSteps(steps: PrivacyStep[]): PrivacyStep[] {
-  // 只展开编辑草稿，已保存的组合动作由后端保持原行为
-  return steps.flatMap(step => step.action === 'anonymize_workspace'
-    ? createSteps(workspaceSteps)
-    : [step])
 }
 
 // 样本使用虚构仓库、路径与标识，字段形状对应官方 Core 和 Desktop Git 上下文
