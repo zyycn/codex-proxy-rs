@@ -100,7 +100,7 @@ export interface AccountModelUsage {
 }
 
 export interface AccountUsage {
-  windowKind: 'general' | 'daily' | 'weekly' | 'monthly' | 'quota'
+  windowKind: 'general' | 'daily' | 'recent_week' | 'weekly' | 'monthly' | 'quota'
   requestCount: number | null
   requestCountDisplay: string
   inputTokens: number | null

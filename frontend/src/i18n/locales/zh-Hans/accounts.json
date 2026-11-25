@@ -332,6 +332,7 @@
       "noModelUsageYet": "暂无模型用量",
       "windows": {
         "daily": "日用量",
+        "recentWeek": "近一周",
         "general": "累计用量",
         "weekly": "周用量",
         "monthly": "月用量",

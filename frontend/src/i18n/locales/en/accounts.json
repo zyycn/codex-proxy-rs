@@ -332,6 +332,7 @@
       "noModelUsageYet": "No model usage yet",
       "windows": {
         "daily": "Daily usage",
+        "recentWeek": "Last 7 days",
         "general": "Total usage",
         "weekly": "Weekly usage",
         "monthly": "Monthly usage",

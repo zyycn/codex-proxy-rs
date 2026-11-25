@@ -14,6 +14,7 @@ export interface AccountQuotaWindowEntry {
 export const usageWindowLabels = computed<Record<AccountUsage['windowKind'], string>>(() => ({
   general: t('accounts.usage.windows.general'),
   daily: t('accounts.usage.windows.daily'),
+  recent_week: t('accounts.usage.windows.recentWeek'),
   weekly: t('accounts.usage.windows.weekly'),
   monthly: t('accounts.usage.windows.monthly'),
   quota: t('accounts.usage.windows.quota'),

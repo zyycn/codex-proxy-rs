@@ -828,12 +828,46 @@ impl ProviderQuotaWindow {
     }
 }
 
-/// 账号用量统计周期，完整周/月额度优先，缺少可归属窗口时使用本地滚动日统计
+/// 账号用量统计周期，区分上游额度周期与独立的本地统计范围
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AccountUsagePeriod {
     Weekly,
     Monthly,
     Daily,
+    RecentWeek,
+}
+
+/// 缺少可归属整号的额度窗口时，Provider 选择的本地用量范围
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AccountUsageLookback {
+    #[default]
+    RollingDay,
+    RecentWeek,
+}
+
+impl AccountUsageLookback {
+    pub(crate) fn range(
+        self,
+        now: DateTime<Utc>,
+        timezone: gateway_core::time::DeploymentTimeZone,
+    ) -> Result<super::observability::TimeRange, super::AdminModelError> {
+        use super::observability::{CalendarPeriod, TimeRange};
+
+        match self {
+            Self::RollingDay => Ok(TimeRange {
+                start: now - chrono::Duration::hours(24),
+                end: now,
+            }),
+            Self::RecentWeek => TimeRange::calendar_at(CalendarPeriod::SevenDays, now, timezone),
+        }
+    }
+
+    pub(crate) fn period(self) -> AccountUsagePeriod {
+        match self {
+            Self::RollingDay => AccountUsagePeriod::Daily,
+            Self::RecentWeek => AccountUsagePeriod::RecentWeek,
+        }
+    }
 }
 
 /// Provider 解释 quota 所需的公共请求事实

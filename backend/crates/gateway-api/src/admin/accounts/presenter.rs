@@ -191,6 +191,7 @@ fn quota_forecast_view(
             AccountUsagePeriod::Weekly => "weekly",
             AccountUsagePeriod::Monthly => "monthly",
             AccountUsagePeriod::Daily => "daily",
+            AccountUsagePeriod::RecentWeek => "recent_week",
         },
         target_days: forecast.target_seconds as f64 / 86_400.0,
         extrapolated: forecast.extrapolated,
@@ -374,8 +375,18 @@ pub(super) fn account_usage_view(
     now: DateTime<Utc>,
     time: crate::time::TimePresenter,
 ) -> AccountUsageView {
+    let window_kind = match period {
+        Some(AccountUsagePeriod::Daily) => AccountUsageWindowKind::Daily,
+        Some(AccountUsagePeriod::RecentWeek) => AccountUsageWindowKind::RecentWeek,
+        Some(AccountUsagePeriod::Weekly) => AccountUsageWindowKind::Weekly,
+        Some(AccountUsagePeriod::Monthly) => AccountUsageWindowKind::Monthly,
+        None => AccountUsageWindowKind::Quota,
+    };
     let Some(usage) = usage else {
-        return empty_account_usage();
+        return AccountUsageView {
+            window_kind,
+            ..empty_account_usage()
+        };
     };
     let known_count = usage
         .cost_coverage
@@ -389,12 +400,7 @@ pub(super) fn account_usage_view(
         "known"
     };
     AccountUsageView {
-        window_kind: match period {
-            Some(AccountUsagePeriod::Daily) => AccountUsageWindowKind::Daily,
-            Some(AccountUsagePeriod::Weekly) => AccountUsageWindowKind::Weekly,
-            Some(AccountUsagePeriod::Monthly) => AccountUsageWindowKind::Monthly,
-            None => AccountUsageWindowKind::Quota,
-        },
+        window_kind,
         request_count: Some(usage.request_count),
         request_count_display: format_number(usage.request_count),
         input_tokens: usage.input_tokens,

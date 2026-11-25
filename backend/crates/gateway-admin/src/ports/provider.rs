@@ -152,6 +152,11 @@ struct ProviderAdminDiagnostic {
 /// 运行时资源通知只在事务成功后发生
 #[async_trait]
 pub trait ProviderAdmin: Send + Sync {
+    /// 独立本地统计不借用模型分组额度的重置时间
+    fn account_usage_lookback(&self) -> crate::model::provider_credentials::AccountUsageLookback {
+        Default::default()
+    }
+
     fn compile_privacy_policy(
         &self,
         _policy: &gateway_core::settings::privacy::CodexPrivacyPolicy,

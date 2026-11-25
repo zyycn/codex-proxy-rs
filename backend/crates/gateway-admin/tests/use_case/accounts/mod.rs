@@ -74,6 +74,7 @@ pub(super) type EventLog = Arc<Mutex<Vec<&'static str>>>;
 
 pub(super) struct FakeProviderAdmin {
     kind: ProviderKind,
+    usage_lookback: Mutex<gateway_admin::model::provider_credentials::AccountUsageLookback>,
     capabilities: Mutex<gateway_admin::model::accounts::ProviderAccountCapabilities>,
     events: EventLog,
     failure: Mutex<Option<ProviderAdminError>>,
@@ -104,6 +105,7 @@ impl FakeProviderAdmin {
     pub(super) fn new(kind: &str, events: EventLog) -> Arc<Self> {
         Arc::new(Self {
             kind: ProviderKind::new(kind).expect("provider kind"),
+            usage_lookback: Mutex::default(),
             capabilities: Mutex::default(),
             events,
             failure: Mutex::new(None),
@@ -281,6 +283,12 @@ impl FakeProviderAdmin {
 
 #[async_trait]
 impl ProviderAdmin for FakeProviderAdmin {
+    fn account_usage_lookback(
+        &self,
+    ) -> gateway_admin::model::provider_credentials::AccountUsageLookback {
+        *self.usage_lookback.lock().unwrap()
+    }
+
     fn peer_authentication_kinds(&self) -> &[&str] {
         &["api_key"]
     }
@@ -618,6 +626,7 @@ pub(super) struct FakeAccountStore {
     import_settings: Mutex<Vec<Option<gateway_admin::model::accounts::AccountImportSettings>>>,
     quota_window_usage: Mutex<Vec<AccountUsageWindowResult>>,
     rolling_usage: Mutex<Vec<AccountUsage>>,
+    usage_queries: Mutex<Vec<(TimeRange, Vec<String>)>>,
     quota_window_queries: Mutex<Vec<AccountUsageWindowQuery>>,
     quota_forecast_history: Mutex<QuotaForecastHistory>,
     update_commands: Mutex<Vec<UpdateAccount>>,
@@ -642,6 +651,7 @@ impl FakeAccountStore {
             import_settings: Mutex::new(Vec::new()),
             quota_window_usage: Mutex::new(Vec::new()),
             rolling_usage: Mutex::new(Vec::new()),
+            usage_queries: Mutex::default(),
             quota_window_queries: Mutex::new(Vec::new()),
             quota_forecast_history: Mutex::new(QuotaForecastHistory::default()),
             update_commands: Mutex::new(Vec::new()),
@@ -827,10 +837,21 @@ impl AccountStore for FakeAccountStore {
 
     async fn load_account_usage(
         &self,
-        _: TimeRange,
-        _: &[String],
+        range: TimeRange,
+        ids: &[String],
     ) -> AdminStoreResult<Vec<AccountUsage>> {
-        Ok(self.rolling_usage.lock().unwrap().clone())
+        self.usage_queries
+            .lock()
+            .unwrap()
+            .push((range, ids.to_vec()));
+        Ok(self
+            .rolling_usage
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|usage| ids.contains(&usage.account_id))
+            .cloned()
+            .collect())
     }
 
     async fn load_account_usage_by_windows(
@@ -3001,14 +3022,25 @@ async fn api_key_list_and_detail_should_accumulate_local_usage_without_subscript
 }
 
 #[tokio::test]
-async fn accounts_list_and_detail_keep_rolling_usage_separate_from_group_quotas() {
-    use gateway_admin::model::provider_credentials::AccountUsagePeriod;
+async fn accounts_list_and_detail_keep_recent_week_usage_separate_from_group_quotas() {
+    use gateway_admin::model::provider_credentials::{AccountUsageLookback, AccountUsagePeriod};
 
     let provider = FakeProviderAdmin::new("antigravity", events());
+    *provider.usage_lookback.lock().unwrap() = AccountUsageLookback::RecentWeek;
     let store = FakeAccountStore::new("antigravity", events());
     let expected_usage = quota_local_usage("acct_test", 139);
-    *store.rolling_usage.lock().unwrap() = vec![expected_usage.clone()];
-    let services = accounts_service(provider.clone(), store.clone()).await;
+    let mut daily_account = account_record("xai");
+    daily_account.id = "acct_daily".to_owned();
+    store.accounts.lock().unwrap().push(daily_account);
+    let daily_usage = quota_local_usage("acct_daily", 23);
+    *store.rolling_usage.lock().unwrap() = vec![expected_usage.clone(), daily_usage.clone()];
+    let services = super::AdminHarness::new()
+        .accounts(store.clone())
+        .settings(Arc::new(StaticSettingsStore::default()))
+        .provider(provider.clone())
+        .provider(FakeProviderAdmin::new("xai", events()))
+        .build()
+        .await;
     let grouped_window = ProviderQuotaWindow {
         upstream: None,
         key: "gemini-weekly".to_owned(),
@@ -3048,12 +3080,38 @@ async fn accounts_list_and_detail_keep_rolling_usage_separate_from_group_quotas(
             .quota(&ProviderAccountId::new("acct_test").unwrap(), false)
             .await
             .unwrap();
-        for item in [&page.items[0], &detail] {
+        let refreshed = services
+            .accounts()
+            .quota(&ProviderAccountId::new("acct_test").unwrap(), true)
+            .await
+            .unwrap();
+        for item in [&page.items[0], &detail, &refreshed] {
             assert_eq!(item.quota.windows, windows);
             assert_eq!(item.usage.as_ref(), Some(&expected_usage));
-            assert_eq!(item.usage_period, Some(AccountUsagePeriod::Daily));
+            assert_eq!(item.usage_period, Some(AccountUsagePeriod::RecentWeek));
         }
         assert!(store.quota_window_queries().is_empty());
+        let daily = page
+            .items
+            .iter()
+            .find(|item| item.account.id == "acct_daily")
+            .unwrap();
+        assert_eq!(daily.usage.as_ref(), Some(&daily_usage));
+        assert_eq!(daily.usage_period, Some(AccountUsagePeriod::Daily));
+        let queries = std::mem::take(&mut *store.usage_queries.lock().unwrap());
+        assert_eq!(queries.len(), 4);
+        assert_eq!(queries[0].0.end, queries[1].0.end);
+        for (range, ids) in queries {
+            if ids == ["acct_daily"] {
+                assert_eq!(range.end - range.start, TimeDelta::hours(24));
+                continue;
+            }
+            assert_eq!(ids, ["acct_test"]);
+            let timezone = gateway_core::time::DeploymentTimeZone::default();
+            assert_eq!(range.start, timezone.days_before(range.end, 6).unwrap());
+            assert!(range.end - range.start >= TimeDelta::days(6));
+            assert!(range.end - range.start < TimeDelta::days(7));
+        }
     }
 }
 

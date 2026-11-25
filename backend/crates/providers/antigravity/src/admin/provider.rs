@@ -37,6 +37,12 @@ pub(crate) struct AntigravityAdmin {
 
 #[async_trait]
 impl ProviderAdmin for AntigravityAdmin {
+    fn account_usage_lookback(
+        &self,
+    ) -> gateway_admin::model::provider_credentials::AccountUsageLookback {
+        gateway_admin::model::provider_credentials::AccountUsageLookback::RecentWeek
+    }
+
     fn is_direct_account(&self, authentication_kind: &str) -> bool {
         authentication_kind == "oauth"
     }

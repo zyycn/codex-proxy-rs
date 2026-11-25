@@ -475,17 +475,17 @@ async fn account_usage_preserves_periods_cache_counts_and_missing_values() {
         last_error_reason: None,
         last_error_message: None,
     };
-    for (authentication_kind, read, write) in [
-        ("api_key", Some(13), Some(7)),
-        ("api_key", None, None),
-        ("oauth", Some(13), Some(7)),
-        ("oauth", None, None),
+    for (provider_kind, authentication_kind, window_kind, read, write) in [
+        ("openai", "api_key", "general", Some(13), Some(7)),
+        ("openai", "api_key", "general", None, None),
+        ("xai", "oauth", "daily", Some(13), Some(7)),
+        ("xai", "oauth", "daily", None, None),
+        ("antigravity", "oauth", "recent_week", Some(13), Some(7)),
+        ("antigravity", "oauth", "recent_week", None, None),
     ] {
         let mut account = account_page_item(facts.clone(), now, authentication_kind);
-        if authentication_kind == "oauth" {
-            account.account.provider_kind =
-                gateway_core::routing::ProviderKind::new("xai").unwrap();
-        }
+        account.account.provider_kind =
+            gateway_core::routing::ProviderKind::new(provider_kind).unwrap();
         *fixture.account.lock().unwrap() = Some(account);
         let local_usage = AccountUsage {
             account_id: "acct_cooldown".to_owned(),
@@ -576,14 +576,7 @@ async fn account_usage_preserves_periods_cache_counts_and_missing_values() {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(status, StatusCode::OK, "{value}");
         let usage = &value["data"]["items"][0]["usage"];
-        assert_eq!(
-            usage["windowKind"],
-            if authentication_kind == "oauth" {
-                "daily"
-            } else {
-                "general"
-            }
-        );
+        assert_eq!(usage["windowKind"], window_kind);
         assert_eq!(usage["models"][0]["successRateDisplay"], "33.3%");
         assert!((usage["models"][0]["successRate"].as_f64().unwrap() - 100.0 / 3.0).abs() < 0.001);
         assert_eq!(usage["models"][1]["successRate"], 0.0);
@@ -608,6 +601,26 @@ async fn account_usage_preserves_periods_cache_counts_and_missing_values() {
             usage["cacheWriteInputTokensDisplay"],
             if write.is_some() { "7" } else { "—" }
         );
+        fixture.account_usage.lock().unwrap().clear();
+        let response = admin::accounts::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/accounts")
+                    .header("x-request-id", "req_empty_account_usage_contract")
+                    .header(header::COOKIE, "cpr_session=valid-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 32768).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let usage = &value["data"]["items"][0]["usage"];
+        assert_eq!(usage["windowKind"], window_kind);
+        assert!(usage["totalTokens"].is_null());
+        assert_eq!(usage["models"], serde_json::json!([]));
     }
 }
 

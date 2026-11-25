@@ -437,6 +437,7 @@ pub struct AccountQuotaWindowView {
 pub enum AccountUsageWindowKind {
     General,
     Daily,
+    RecentWeek,
     Weekly,
     Monthly,
     Quota,

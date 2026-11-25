@@ -8,7 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use futures::StreamExt as _;
 use gateway_core::{
     account::ProviderAccountId,
@@ -30,11 +30,11 @@ use crate::{
         observability::TimeRange,
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountPersonalInfo,
-            AccountRefreshResult, AccountUsagePeriod, ConsumeProviderResetCredit,
-            PrepareCredentialRefresh, ProviderModelCatalogDocument, ProviderModels,
-            ProviderProfileAvatar, ProviderQuota, ProviderQuotaReadRequest, ProviderQuotaRequest,
-            ProviderQuotaWindow, ProviderResetCreditResult, ProviderResetCredits,
-            QuotaLocalUsageAttribution,
+            AccountRefreshResult, AccountUsageLookback, AccountUsagePeriod,
+            ConsumeProviderResetCredit, PrepareCredentialRefresh, ProviderModelCatalogDocument,
+            ProviderModels, ProviderProfileAvatar, ProviderQuota, ProviderQuotaReadRequest,
+            ProviderQuotaRequest, ProviderQuotaWindow, ProviderResetCreditResult,
+            ProviderResetCredits, QuotaLocalUsageAttribution,
         },
         quota_forecast::{
             AccountQuotaForecastReport, account_quota_forecasts, quota_forecast_source_window,
@@ -457,10 +457,10 @@ impl DefaultAccountsService {
         let (stored, provider) = self.provider_for_account(account_id).await?;
         let account = &stored.account;
         let now = Utc::now();
-        let rolling_range = TimeRange {
-            start: now - Duration::hours(24),
-            end: now,
-        };
+        let lookback = provider.account_usage_lookback();
+        let rolling_range = lookback
+            .range(now, self.timezone)
+            .map_err(|_| AdminError::internal("时间超出支持范围"))?;
         let ids = vec![account.id.clone()];
         let rolling_usage = self
             .accounts
@@ -510,6 +510,7 @@ impl DefaultAccountsService {
             &quota,
             rolling_usage,
             api_key_usage,
+            lookback,
         );
         Ok(AccountDirectoryItem {
             protection_rules: stored.protection_rules,
@@ -574,10 +575,6 @@ impl AccountsService for DefaultAccountsService {
             .await
             .map_err(|error| map_store_error(error, "account directory"))?;
         let now = Utc::now();
-        let rolling_range = TimeRange {
-            start: now - Duration::hours(24),
-            end: now,
-        };
         let ids = page
             .items
             .iter()
@@ -595,15 +592,33 @@ impl AccountsService for DefaultAccountsService {
                 }
             }
         };
-        let rolling_usage = self
-            .accounts
-            .load_account_usage(rolling_range, &ids)
-            .await
-            .map_err(|error| map_store_error(error, "rolling account usage"))?;
-        let mut rolling_usage = rolling_usage
-            .into_iter()
-            .map(|usage| (usage.account_id.clone(), usage))
-            .collect::<BTreeMap<_, _>>();
+        let mut usage_groups = BTreeMap::<AccountUsageLookback, Vec<String>>::new();
+        for item in &page.items {
+            let lookback = providers
+                .require(&item.account.provider_kind)
+                .map(|provider| provider.account_usage_lookback())
+                .unwrap_or_default();
+            usage_groups
+                .entry(lookback)
+                .or_default()
+                .push(item.account.id.clone());
+        }
+        let mut rolling_usage = BTreeMap::new();
+        for (lookback, ids) in usage_groups {
+            let range = lookback
+                .range(now, self.timezone)
+                .map_err(|_| AdminError::internal("时间超出支持范围"))?;
+            let usages = self
+                .accounts
+                .load_account_usage(range, &ids)
+                .await
+                .map_err(|error| map_store_error(error, "local account usage"))?;
+            rolling_usage.extend(
+                usages
+                    .into_iter()
+                    .map(|usage| (usage.account_id.clone(), usage)),
+            );
+        }
         let mut quotas = self.read_quotas(&page.items, &rolling_usage).await;
         self.attach_quota_local_usage(&page.items, &mut quotas)
             .await?;
@@ -615,10 +630,13 @@ impl AccountsService for DefaultAccountsService {
             .map(|(mut item, quota)| {
                 let id = ProviderAccountId::new(item.account.id.clone())
                     .map_err(|_| AdminError::invalid("服务商账号 ID 不合法"))?;
-                let capabilities = providers
+                let (capabilities, lookback) = providers
                     .require(&item.account.provider_kind)
                     .map(|provider| {
-                        provider.account_capabilities(&id, &item.account.authentication_kind)
+                        (
+                            provider.account_capabilities(&id, &item.account.authentication_kind),
+                            provider.account_usage_lookback(),
+                        )
                     })
                     .unwrap_or_default();
                 let (usage, usage_period) = resolve_account_usage(
@@ -626,6 +644,7 @@ impl AccountsService for DefaultAccountsService {
                     &quota,
                     rolling_usage.remove(&item.account.id),
                     api_key_usage.remove(&item.account.id),
+                    lookback,
                 );
                 Ok(AccountDirectoryItem {
                     protection_rules: item.protection_rules,
@@ -1348,6 +1367,7 @@ fn resolve_account_usage(
     quota: &ProviderQuota,
     rolling_usage: Option<AccountUsage>,
     api_key_usage: Option<AccountUsage>,
+    lookback: AccountUsageLookback,
 ) -> (Option<AccountUsage>, Option<AccountUsagePeriod>) {
     if authentication_kind == "api_key" {
         return (api_key_usage, None);
@@ -1356,7 +1376,7 @@ fn resolve_account_usage(
         return (window.local_usage.clone(), Some(period));
     }
     // 模型分组额度无法归属整号用量，本地统计独立回退，不能为此合成上游额度桶
-    (rolling_usage, Some(AccountUsagePeriod::Daily))
+    (rolling_usage, Some(lookback.period()))
 }
 
 fn map_reset_credits_error_after_refresh(

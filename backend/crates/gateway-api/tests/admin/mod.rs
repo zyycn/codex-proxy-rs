@@ -201,6 +201,13 @@ impl AdminTestFixture {
         let provider_models = Arc::new(Mutex::new(None));
         let providers: Vec<Arc<dyn ProviderAdmin>> = vec![
             Arc::new(UnusedProvider::new(
+                "antigravity",
+                Arc::clone(&provider_error),
+                Arc::clone(&provider_quota),
+                Arc::clone(&provider_quota_gate),
+                Arc::clone(&provider_models),
+            )),
+            Arc::new(UnusedProvider::new(
                 "openai",
                 Arc::clone(&provider_error),
                 Arc::clone(&provider_quota),
@@ -1735,6 +1742,16 @@ impl UnusedProvider {
 
 #[async_trait]
 impl ProviderAdmin for UnusedProvider {
+    fn account_usage_lookback(
+        &self,
+    ) -> gateway_admin::model::provider_credentials::AccountUsageLookback {
+        use gateway_admin::model::provider_credentials::AccountUsageLookback;
+        match self.kind.as_str() {
+            "antigravity" => AccountUsageLookback::RecentWeek,
+            _ => AccountUsageLookback::RollingDay,
+        }
+    }
+
     fn account_capabilities(
         &self,
         _: &ProviderAccountId,
