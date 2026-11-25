@@ -592,8 +592,7 @@
         "fieldPath": "字段路径",
         "fieldPathSyntax": "字段路径语法",
         "jsonPathHelp": "支持对象成员、双引号键名、数组索引和 * 通配，例如 $[\"workspaces\"][\"/home/alex/demo\"]",
-        "sessionAliasEffect": "同账号同会话化名固定，移除 Git 信息",
-        "anonymizeWorkspaceHelp": "打乱工程名并加数字，换账号或新会话时更换化名；移除 Git 信息，保留真实执行路径",
+        "sessionAliasEffect": "同账号同会话项目化名固定",
         "targetHelp": "环境文本使用 $，请求头直接填写名称",
         "commonFields": "常用字段",
         "deleteMatchHelp": "仅删除值匹配正则的字段或数组项",
@@ -647,6 +646,7 @@
         "gitCommitId": "Git 提交 ID",
         "gitRemoteCollection": "Git 远端集合",
         "workspaceFingerprint": "工作区指纹",
+        "anonymizeProject": "按账号与会话匿名化项目名",
         "anonymizeWorkspace": "按账号与会话匿名化工作区",
         "unifyWorkspaceInformation": "统一工作区信息"
       },

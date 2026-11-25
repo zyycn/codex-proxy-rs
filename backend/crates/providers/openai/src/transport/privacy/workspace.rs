@@ -20,6 +20,42 @@ pub(super) fn account_session_scope(session: &str, account: &ProviderAccount) ->
 }
 
 pub(super) fn anonymize(value: &mut Value, budget: &mut Budget<'_>) -> Result<usize, &'static str> {
+    let count = anonymize_project(value, budget)?;
+    let workspaces = value.as_object_mut().ok_or("工作区映射必须是对象")?;
+    let mut renamed = Map::new();
+    // 保留已保存组合动作的用户名替换与 Git 裁剪，独立项目动作不包含这些副作用
+    for (path, mut metadata) in std::mem::take(workspaces) {
+        let object = metadata.as_object_mut().ok_or("工作区信息必须是对象")?;
+        object.remove("associated_remote_urls");
+        object.remove("latest_git_commit_hash");
+        let split = path.rfind(['/', '\\']).ok_or("工作区路径缺少工程目录")?;
+        let mut alias = String::new();
+        let mut username = false;
+        for part in path[..=split].split_inclusive(['/', '\\']) {
+            let component = part.trim_end_matches(['/', '\\']);
+            if username && !component.is_empty() {
+                alias.push_str("user");
+                alias.push_str(&part[component.len()..]);
+                username = false;
+            } else {
+                alias.push_str(part);
+                username = component.eq_ignore_ascii_case("users")
+                    || component.eq_ignore_ascii_case("home");
+            }
+        }
+        alias.push_str(&path[split + 1..]);
+        if renamed.insert(alias, metadata).is_some() {
+            return Err("工作区匿名化产生重名");
+        }
+    }
+    *workspaces = renamed;
+    Ok(count)
+}
+
+pub(super) fn anonymize_project(
+    value: &mut Value,
+    budget: &mut Budget<'_>,
+) -> Result<usize, &'static str> {
     let workspaces = value.as_object().ok_or("工作区映射必须是对象")?;
     if workspaces.is_empty() {
         return Ok(0);
@@ -32,9 +68,7 @@ pub(super) fn anonymize(value: &mut Value, budget: &mut Budget<'_>) -> Result<us
     let mut renamed = Map::new();
     for (path, metadata) in workspaces {
         budget.text(path)?;
-        let mut metadata = metadata.as_object().ok_or("工作区信息必须是对象")?.clone();
-        metadata.remove("associated_remote_urls");
-        metadata.remove("latest_git_commit_hash");
+        let metadata = metadata.as_object().ok_or("工作区信息必须是对象")?.clone();
         let alias = alias_path(path, session)?;
         if renamed.insert(alias, Value::Object(metadata)).is_some() {
             return Err("工作区匿名化产生重名");
@@ -63,21 +97,8 @@ fn alias_path(path: &str, session: &str) -> Result<String, &'static str> {
     hash.update(session.as_bytes());
     hash.update(path.as_bytes());
     let digest = hash.finalize();
-    // 保留客户端的分隔符和父目录层级，用户名与工程名改用化名
-    let mut alias = String::new();
-    let mut username = false;
-    for part in path[..=split].split_inclusive(['/', '\\']) {
-        let component = part.trim_end_matches(['/', '\\']);
-        if username && !component.is_empty() {
-            alias.push_str("user");
-            alias.push_str(&part[component.len()..]);
-            username = false;
-        } else {
-            alias.push_str(part);
-            username =
-                component.eq_ignore_ascii_case("users") || component.eq_ignore_ascii_case("home");
-        }
-    }
+    // 只改工程名，父目录与用户名交给独立的字段名替换步骤
+    let mut alias = path[..=split].to_owned();
     alias.push_str(&shuffled_project_name(&path[split + 1..], &digest));
     alias.push_str(&format!(
         "-{}-{}",

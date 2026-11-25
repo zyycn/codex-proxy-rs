@@ -27,7 +27,7 @@ const items = computed(() => props.steps.map((step, index) => {
       : step.selector.trim() || t('settings.privacy.steps.noFieldsSelected'))
   const scope = scopes.value.find(scope => scope.value === step.scope)?.label
   const action = actions.value.find(action => action.value === step.action)?.label
-  const effect = step.action === 'anonymize_workspace'
+  const effect = step.action === 'anonymize_project'
     ? t('settings.privacy.steps.sessionAliasEffect')
     : step.action === 'set_value'
       ? `→ ${props.fixedValues[index] ?? '""'}`

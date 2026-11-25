@@ -2424,7 +2424,7 @@ Antigravity 不应用这组国家、区域、城市和时区覆盖，原生请�
 JSON 路径支持 `$`、`.成员`、`["带特殊字符的键"]`、`[索引]`、`.*` 和 `[*]`，不支持递归和过滤表达式。
 缺少字段视为未命中；类型不符属于执行失败。`regex_replace` 替换字符串，`set_value` 保持原字段类型设置 JSON 值，
 `rename_key` 替换所选对象的直接键名，重名时失败；`remove_field` 删除所选字段或数组项，不能删除作用范围根节点。
-`anonymize_workspace` 仅用于 `turn_metadata` 的 `$.workspaces`，`pattern` 必须为 `null`，按逻辑会话改写工程路径并删除 Git 远端与提交 metadata
+`anonymize_project` 仅用于 `turn_metadata` 的 `$.workspaces`，`pattern` 必须为 `null`，按账号与逻辑会话改写项目名，保留父目录、用户名及映射内的 metadata
 删除动作的 `pattern: null` 表示无条件删除，字符串模式表示只删除字符串值匹配的字段或数组项。
 请求头规则生成的值必须是 ASCII 文本，以保持 HTTP 与 WebSocket opening 的一致性；metadata 范围会自动转义 Unicode
 
@@ -2446,11 +2446,20 @@ WebSocket 请求头在握手时发送。隐私规则改变握手头时，普通�
 UA、平台参数及自动 Git 上下文版本由 [OpenAI 上游客户端身份](#openai-上游客户端身份)管理。
 保存后的规则按其 `steps` 执行，不随预设定义变化
 
-「按账号与会话匿名化工作区」预设使用 `anonymize_workspace`，保留路径分隔符与父目录层级，将用户目录中的用户名改为 `user`。
+「按账号与会话匿名化工作区」预设按顺序生成四个可编辑步骤：
+
+1. `anonymize_project` 根据原始路径生成项目化名，保留分隔符与父目录
+2. `rename_key` 将 Linux、macOS 和 Windows 用户目录中的用户名改为 `user`，替换内容可自定义
+3. `remove_field` 删除 `$.workspaces.*.associated_remote_urls`
+4. `remove_field` 删除 `$.workspaces.*.latest_git_commit_hash`
+
+各步骤可以修改、删除或调整顺序；用户名替换与 Git 信息处理不由项目匿名化动作隐式执行。
 工程名取原名的前 48 个字母或数字打乱顺序，再加两组 1～1000 的数字和短后缀；没有字母或数字时使用 `project`。
 例如 `codex-proxy-rs` 可变为 `xrpceodxroys-427-83-a1b2c3d4`。同一 Client Key、账号、逻辑会话和工作区的化名在重试与重启后保持一致；
 换账号、新会话或更换工作区重新派生化名，切回原账号和原会话恢复对应化名，不保存路径映射表。正常令牌续期与代理出口变化不重置化名。
-映射内的 `associated_remote_urls`、`latest_git_commit_hash` 被移除，其余字段保留。真实执行目录、正文和工具参数保持原值，仍可能暴露真实路径
+默认组合移除 Git 远端与提交信息，其余字段保留。真实执行目录、正文和工具参数保持原值，仍可能暴露真实路径
+
+已保存的 `anonymize_workspace` 组合动作继续替换用户名、生成项目化名并删除 Git 信息。管理端编辑时将其展开为四个独立步骤，应用草稿并保存后生效；展开后的步骤仍计入总上限
 
 工作区必须是绝对路径，映射值必须是对象。缺少稳定会话身份、路径无效或化名冲突时按策略失败模式处理，不随机补造会话。
 预览从样本请求头或正文识别会话，可在样本的 `headers` 中填写 `"session-id": ["example-session"]`；预览只使用样本身份，实际出站另外按 Client Key 和选定账号隔离

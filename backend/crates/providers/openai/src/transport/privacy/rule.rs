@@ -16,10 +16,12 @@ pub(super) struct CompiledStep {
 
 impl CompiledStep {
     pub(super) fn compile(rule: &PrivacyStep) -> Result<Self, &'static str> {
-        if rule.action == PrivacyAction::AnonymizeWorkspace
-            && (rule.scope != PrivacyScope::TurnMetadata
-                || rule.selector != "$.workspaces"
-                || rule.pattern.is_some())
+        if matches!(
+            rule.action,
+            PrivacyAction::AnonymizeProject | PrivacyAction::AnonymizeWorkspace
+        ) && (rule.scope != PrivacyScope::TurnMetadata
+            || rule.selector != "$.workspaces"
+            || rule.pattern.is_some())
         {
             return Err("工作区匿名化仅支持 turn_metadata 的 $.workspaces，且不使用匹配表达式");
         }
@@ -99,6 +101,9 @@ impl CompiledStep {
     ) -> Result<bool, &'static str> {
         budget.step()?;
         match self.rule.action {
+            PrivacyAction::AnonymizeProject => {
+                *count += super::workspace::anonymize_project(value, budget)?;
+            }
             PrivacyAction::AnonymizeWorkspace => {
                 *count += super::workspace::anonymize(value, budget)?;
             }

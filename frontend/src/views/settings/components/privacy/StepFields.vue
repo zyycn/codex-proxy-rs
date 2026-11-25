@@ -12,7 +12,7 @@ const { t } = useI18n({ useScope: 'global' })
 const step = defineModel<PrivacyStep>({ required: true })
 const fixedValue = defineModel<string>('fixedValue', { required: true })
 const fieldPresetId = useId()
-const anonymizesWorkspace = computed(() => step.value.action === 'anonymize_workspace')
+const anonymizesProject = computed(() => step.value.action === 'anonymize_project')
 const usesPattern = computed(() => ['regex_replace', 'rename_key'].includes(step.value.action) || (step.value.action === 'remove_field' && step.value.pattern !== null))
 const pattern = computed({
   get: () => step.value.pattern ?? '',
@@ -44,7 +44,7 @@ const selectorPlaceholder = computed(() => ({
 })[step.value.scope])
 
 watch(() => step.value.action, (action) => {
-  if (action === 'anonymize_workspace') {
+  if (action === 'anonymize_project') {
     step.value.scope = 'turn_metadata'
     step.value.selector = '$.workspaces'
     step.value.pattern = null
@@ -61,7 +61,7 @@ watch(() => step.value.action, (action) => {
 <template>
   <ZForm class="sm:grid-cols-2">
     <ZFormItem class="md:[&>div:first-child]:min-h-8" :label="t('settings.privacy.rules.scope')">
-      <ZSelect v-model="step.scope" class="w-full" :options="scopes" :disabled="anonymizesWorkspace" :aria-label="t('settings.privacy.rules.scope')" />
+      <ZSelect v-model="step.scope" class="w-full" :options="scopes" :disabled="anonymizesProject" :aria-label="t('settings.privacy.rules.scope')" />
     </ZFormItem>
     <ZFormItem class="md:[&>div:first-child]:min-h-8" :label="t('settings.privacy.rules.processingMethod')">
       <ZSelect v-model="step.action" class="w-full" :options="actions" :aria-label="t('settings.privacy.rules.processingMethod')" />
@@ -80,13 +80,10 @@ watch(() => step.value.action, (action) => {
         </ZPopover>
       </template>
       <div class="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-        <ZInput v-model="step.selector" :disabled="anonymizesWorkspace" :placeholder="selectorPlaceholder" :aria-label="t('settings.privacy.steps.fieldPath')" maxlength="1024" class="min-w-0 flex-1 font-mono" :class="fields.length ? 'basis-full sm:basis-auto' : undefined" spellcheck="false" />
-        <ZSelect v-if="fields.length" :id="fieldPresetId" v-model="fieldChoice" :disabled="anonymizesWorkspace" class="min-w-0 flex-1 sm:w-40 sm:flex-none" :options="fields" :aria-label="t('settings.privacy.steps.commonFields')" />
+        <ZInput v-model="step.selector" :disabled="anonymizesProject" :placeholder="selectorPlaceholder" :aria-label="t('settings.privacy.steps.fieldPath')" maxlength="1024" class="min-w-0 flex-1 font-mono" :class="fields.length ? 'basis-full sm:basis-auto' : undefined" spellcheck="false" />
+        <ZSelect v-if="fields.length" :id="fieldPresetId" v-model="fieldChoice" :disabled="anonymizesProject" class="min-w-0 flex-1 sm:w-40 sm:flex-none" :options="fields" :aria-label="t('settings.privacy.steps.commonFields')" />
       </div>
     </ZFormItem>
-    <p v-if="anonymizesWorkspace" class="m-0 text-z-sm text-z-text-secondary sm:col-span-2">
-      {{ t('settings.privacy.steps.anonymizeWorkspaceHelp') }}
-    </p>
     <ZCheckbox v-if="step.action === 'remove_field'" v-model="conditional" class="sm:col-span-2" :label="t('settings.privacy.steps.deleteMatchHelp')" />
     <ZFormItem v-if="usesPattern" :class="step.action === 'remove_field' ? 'sm:col-span-2' : undefined" :label="t('settings.privacy.steps.matchExpression')">
       <ZInput v-model="pattern" :placeholder="step.action === 'rename_key' ? t('settings.privacy.steps.forExampleHome') : t('settings.privacy.steps.forExamplePrivateOrg')" :aria-label="t('settings.privacy.steps.matchExpression')" maxlength="4096" spellcheck="false" class="font-mono" />
