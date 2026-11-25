@@ -23,6 +23,23 @@ pub struct RequestObservation {
     pub compact: bool,
 }
 
+/// 计数入口的生成封套优先于顶层内容，沿用生成请求的协议观测
+#[must_use]
+pub fn token_count_observation(
+    protocol: &str,
+    body: &Map<String, Value>,
+    context: &Map<String, Value>,
+) -> RequestObservation {
+    let body = if protocol == GENAI_PROTOCOL {
+        body.get("generateContentRequest")
+            .and_then(Value::as_object)
+            .unwrap_or(body)
+    } else {
+        body
+    };
+    request_observation(protocol, body, context, None)
+}
+
 /// 旧配置只由状态所属 Provider 提供，是否继承仍由当前协议的续接语义决定
 #[must_use]
 pub fn request_observation(

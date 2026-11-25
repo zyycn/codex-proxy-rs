@@ -3,6 +3,7 @@
 mod authorization;
 pub(crate) mod catalog;
 mod documents;
+mod model_groups;
 pub(crate) mod oauth;
 pub(crate) mod quota;
 mod refresh;

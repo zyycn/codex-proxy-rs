@@ -20,6 +20,8 @@ const MAX_CONTROL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) struct Catalog {
     pub(crate) project: String,
     pub(crate) models: BTreeMap<String, Model>,
+    #[serde(rename = "groupedModels", default)]
+    pub(crate) grouped_models: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -101,6 +103,8 @@ impl CloudCodeClient {
         #[derive(Deserialize)]
         struct Models {
             models: BTreeMap<String, Model>,
+            #[serde(rename = "groupedModels", default)]
+            grouped_models: serde_json::Value,
         }
         let models: Models = control(
             self.post("fetchAvailableModels", token)
@@ -118,6 +122,7 @@ impl CloudCodeClient {
         Ok(Catalog {
             project,
             models: models.models,
+            grouped_models: models.grouped_models,
         })
     }
 

@@ -24,6 +24,10 @@ pub(super) fn authentication_gateway_error(error: ClientAuthenticationError) -> 
 
 pub(super) fn map_routing_error(error: crate::validation::RoutingError) -> GatewayError {
     match error {
+        crate::validation::RoutingError::InvalidReasoningVariant => GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "A supported reasoning effort is required for this model group.",
+        ),
         crate::validation::RoutingError::GroupModelDenied => GatewayError::new(
             GatewayErrorKind::PolicyDenied,
             crate::validation::GROUP_MODEL_DENIED_MESSAGE,

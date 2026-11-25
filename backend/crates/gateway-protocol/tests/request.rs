@@ -1,6 +1,35 @@
 //! 验证不同协议的共享请求事实
 
 use gateway_protocol::request::{request_facts, request_observation};
+
+#[test]
+fn token_count_observation_uses_the_nested_generation_request() {
+    for (body, expected) in [
+        (
+            serde_json::json!({"generationConfig":{"thinkingConfig":{"thinkingLevel":"MEDIUM"}}}),
+            Some("medium"),
+        ),
+        (
+            serde_json::json!({"generation_config":{"thinking_config":{"thinking_level":"HIGH"}}}),
+            Some("high"),
+        ),
+        (
+            serde_json::json!({"generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}},"generateContentRequest":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"MEDIUM"}}}}),
+            Some("medium"),
+        ),
+        (
+            serde_json::json!({"generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}},"generateContentRequest":{"contents":[]}}),
+            None,
+        ),
+    ] {
+        let observation = gateway_protocol::request::token_count_observation(
+            "genai",
+            body.as_object().unwrap(),
+            &Default::default(),
+        );
+        assert_eq!(observation.reasoning_effort.as_deref(), expected);
+    }
+}
 use serde_json::{Map, json};
 
 #[test]

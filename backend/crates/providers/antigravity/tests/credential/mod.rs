@@ -4,6 +4,8 @@
 mod authorization;
 #[path = "../../src/credential/documents.rs"]
 mod documents;
+#[path = "../../src/credential/model_groups.rs"]
+mod model_groups;
 #[path = "../../src/credential/oauth.rs"]
 pub(crate) mod oauth;
 #[path = "../../src/credential/refresh.rs"]

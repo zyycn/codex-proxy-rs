@@ -26,6 +26,270 @@ use gateway_core::routing::{
 };
 use gateway_core::settings::SettingsValues;
 
+#[test]
+fn reasoning_groups_resolve_before_account_and_group_model_policies() {
+    use gateway_core::{
+        account::{AccountModelAccess, AccountModelAccessMode, ProviderAccountId},
+        operation::{
+            GenerateRequest, Operation, ProtocolPayload, RawJsonPayload, TokenCountRequest,
+        },
+        routing::{
+            ClientRoutingScope, FrozenAccountScope, ProviderModel, ReasoningModelVariant,
+            RoutingContext, RoutingGroupSnapshot, RuntimeAccount, RuntimeAccountDirectory,
+            RuntimeSnapshot,
+        },
+        validation::RoutingError,
+    };
+    use std::collections::BTreeSet;
+    let provider = ProviderKind::new("alpha").unwrap();
+    let declared = ProviderAccountId::new("acct_declared").unwrap();
+    let other = ProviderAccountId::new("acct_other").unwrap();
+    let group = gateway_core::routing::AccountGroupId::new(format!("grp_{:032x}", 1)).unwrap();
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(
+            RuntimeAccountDirectory::new(BTreeMap::from_iter(
+                [declared.clone(), other.clone()].into_iter().map(|id| {
+                    (
+                        id,
+                        RuntimeAccount::new(provider.clone(), BTreeSet::from([group.clone()])),
+                    )
+                }),
+            ))
+            .with_group_model_access(BTreeMap::from([(
+                group.clone(),
+                AccountModelAccess::new(
+                    AccountModelAccessMode::Allowlist,
+                    vec!["family-medium".into()],
+                )
+                .unwrap(),
+            )])),
+        ),
+        ClientRoutingScope::restricted(
+            vec![RoutingGroupSnapshot::new(group.clone(), "Group".into())],
+            BTreeSet::from([group]),
+            BTreeSet::from([provider.clone()]),
+        )
+        .unwrap(),
+    ));
+    let caps = || {
+        ModelCapabilities::new(
+            BTreeSet::from([OperationKind::Generate, OperationKind::CountTokens]),
+            None,
+        )
+        .with_generation_protocol("genai")
+        .with_upstream_feature_validation()
+    };
+    let variants = BTreeMap::from_iter(["medium", "high"].map(|level| {
+        (
+            level.into(),
+            ReasoningModelVariant {
+                model: UpstreamModelId::new(format!("family-{level}")).unwrap(),
+                accounts: BTreeSet::from([declared.clone()]),
+            },
+        )
+    }));
+    let snapshot = RuntimeSnapshot::new(
+        revision(1),
+        SettingsValues::new(
+            2,
+            "smart",
+            BTreeMap::from([("alias".into(), "family".into())]),
+            None,
+            None,
+        ),
+        vec![provider.clone()],
+        vec![
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("family").unwrap(),
+                caps().with_reasoning_variants(variants),
+            ),
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("family-medium").unwrap(),
+                caps(),
+            ),
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("family-high").unwrap(),
+                caps(),
+            ),
+        ],
+        vec![],
+    )
+    .unwrap();
+    let operation = |level: &str, count: bool| {
+        let body = serde_json::json!({"contents":[], "generationConfig":{"thinkingConfig":{"thinkingLevel":level}}});
+        if count {
+            let body = serde_json::json!({"generateContentRequest": body});
+            Operation::CountTokens(
+                TokenCountRequest::from_raw_json(
+                    RawJsonPayload::new(
+                        "genai",
+                        bytes::Bytes::from(serde_json::to_vec(&body).unwrap()),
+                    )
+                    .unwrap(),
+                )
+                .requiring_native_protocol(),
+            )
+        } else {
+            Operation::Generate(
+                GenerateRequest::from_protocol_payload(
+                    ProtocolPayload::json_object("genai", body.as_object().unwrap().clone())
+                        .unwrap(),
+                )
+                .requiring_native_protocol(),
+            )
+        }
+    };
+    let base = PublicModelId::new("family").unwrap();
+    for count in [false, true] {
+        for name in ["family", "alias"] {
+            for level in ["MEDIUM", "medium"] {
+                let request = operation(level, count);
+                let plan = snapshot
+                    .plan(
+                        &PublicModelId::new(name).unwrap(),
+                        &request,
+                        scope.clone(),
+                        &RoutingContext::default(),
+                    )
+                    .unwrap();
+                let candidate = &plan.candidates()[0];
+                assert_eq!(
+                    candidate.upstream_model().unwrap().as_str(),
+                    "family-medium"
+                );
+                assert!(candidate.account_scope().allows(&declared));
+                assert!(!candidate.account_scope().allows(&other));
+            }
+        }
+        assert!(matches!(
+            snapshot.plan(
+                &base,
+                &operation("HIGH", count),
+                scope.clone(),
+                &RoutingContext::default()
+            ),
+            Err(RoutingError::GroupModelDenied)
+        ));
+        for level in ["", "unsupported"] {
+            assert!(matches!(
+                snapshot.plan(
+                    &base,
+                    &operation(level, count),
+                    scope.clone(),
+                    &RoutingContext::default()
+                ),
+                Err(RoutingError::InvalidReasoningVariant)
+            ));
+        }
+        let listed = snapshot.public_models_for_operation(&scope, &operation("", count));
+        assert!(listed.contains(&base));
+        let other_only =
+            Arc::new(scope.restricted_to(&BTreeSet::new(), &BTreeSet::from([other.clone()])));
+        assert!(
+            !snapshot
+                .public_models_for_operation(&other_only, &operation("", count))
+                .contains(&base)
+        );
+        assert!(
+            snapshot
+                .plan(
+                    &base,
+                    &operation("MEDIUM", count),
+                    other_only,
+                    &RoutingContext::default()
+                )
+                .is_err()
+        );
+    }
+    // 完整型号不受正文中的其他档位重定向
+    let direct = PublicModelId::new("family-medium").unwrap();
+    assert_eq!(
+        snapshot
+            .plan(
+                &direct,
+                &operation("HIGH", false),
+                scope.clone(),
+                &RoutingContext::default()
+            )
+            .unwrap()
+            .candidates()[0]
+            .upstream_model()
+            .unwrap()
+            .as_str(),
+        "family-medium"
+    );
+    let incompatible = Operation::Generate(
+        GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("other-wire", Default::default()).unwrap(),
+        )
+        .requiring_native_protocol(),
+    );
+    assert!(
+        !snapshot
+            .public_models_for_operation(&scope, &incompatible)
+            .contains(&base)
+    );
+    let blocked = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([
+            (
+                declared.clone(),
+                RuntimeAccount::new(provider.clone(), BTreeSet::new()).with_model_access(
+                    AccountModelAccess::new(
+                        AccountModelAccessMode::Allowlist,
+                        vec!["unrelated".into()],
+                    )
+                    .unwrap(),
+                ),
+            ),
+            (
+                other.clone(),
+                RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+            ),
+        ]))),
+        ClientRoutingScope::all_accounts(),
+    ));
+    assert!(
+        !snapshot
+            .public_models_for_operation(&blocked, &operation("", false))
+            .contains(&base)
+    );
+    assert!(
+        snapshot
+            .plan(
+                &base,
+                &operation("MEDIUM", false),
+                blocked,
+                &RoutingContext::default()
+            )
+            .is_err()
+    );
+    // 同名插件模型也不能把分组候选重新扩大到未声明成员关系的账号
+    let snapshot = snapshot.with_extensions(Some(ExtensionSetReference::new(
+        ExtensionSetId::new("group-collision".into()).unwrap(),
+        Arc::new(ModelLease(vec![gateway_core::routing::ContributedModel {
+            owner: "fixture".into(),
+            id: base.clone(),
+            provider,
+            accounts: BTreeSet::from([other.clone()]),
+            capabilities: caps(),
+            presentation: ModelPresentation::new(None, None),
+        }])),
+    )));
+    let plan = snapshot
+        .plan(
+            &base,
+            &operation("MEDIUM", false),
+            scope,
+            &RoutingContext::default(),
+        )
+        .unwrap();
+    assert!(plan.candidates()[0].account_scope().allows(&declared));
+    assert!(!plan.candidates()[0].account_scope().allows(&other));
+}
+
 #[derive(Clone)]
 struct TestSnapshotStore {
     facts: Arc<Mutex<Result<SnapshotFacts, SnapshotStoreError>>>,

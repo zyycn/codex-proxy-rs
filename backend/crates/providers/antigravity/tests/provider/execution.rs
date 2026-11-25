@@ -196,6 +196,122 @@ async fn mock_project(upstream: &MockServer) {
 }
 
 #[tokio::test]
+async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
+    use gateway_core::{
+        engine::provider::ProviderRequest,
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+        routing::{ConfigRevision, ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot},
+        settings::SettingsValues,
+    };
+    let upstream = MockServer::start().await;
+    let fixture = Fixture::new(&upstream.uri());
+    *fixture.store.primary().catalog.lock().unwrap() = None;
+    mock_project(&upstream).await;
+    Mock::given(path("/v1internal:fetchAvailableModels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": {
+                "gemini-4-hydrogen-medium": {"displayName":"Hydrogen Medium"},
+                "gemini-4-hydrogen-high": {"displayName":"Hydrogen High"},
+                "gemini-4-hydrogen-sonar": {"displayName":"Hydrogen Sonar"}
+            },
+            "groupedModels": {
+                "gemini-4-hydrogen": {"supportedThinkingLevels":[
+                    {"thinkingSuffix":"MEDIUM"}, {"thinkingSuffix":"high"},
+                    {"thinkingSuffix":"low"}, {"thinkingSuffix":"../sonar"}
+                ]},
+                "unknown-family": {"supportedThinkingLevels":[{"thinkingSuffix":"medium"}]}
+            }
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    fixture
+        .catalog
+        .reconcile(&CancellationToken::new())
+        .await
+        .unwrap();
+    let kind = ProviderKind::new("antigravity").unwrap();
+    let models = fixture.provider.query_model_capabilities().await.unwrap();
+    assert_eq!(models.len(), 4);
+    let group = models
+        .iter()
+        .find(|model| model.upstream_model().as_str() == "gemini-4-hydrogen")
+        .unwrap();
+    assert_eq!(
+        group
+            .capabilities()
+            .reasoning_variants()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["high", "medium"]
+    );
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).unwrap(),
+        SettingsValues::new(2, "smart", Default::default(), None, None),
+        vec![kind.clone()],
+        models
+            .iter()
+            .map(|model| {
+                ProviderModel::new(
+                    kind.clone(),
+                    model.upstream_model().clone(),
+                    model.capabilities().clone(),
+                )
+            })
+            .collect(),
+        vec![],
+    )
+    .unwrap();
+    for stream in [false, true] {
+        let response = json!({"response":{"candidates":[{"content":{"parts":[{"text":"OK"}]},"finishReason":"STOP"}]}});
+        let path_name = if stream {
+            "/v1internal:streamGenerateContent"
+        } else {
+            "/v1internal:generateContent"
+        };
+        let template = if stream {
+            ResponseTemplate::new(200)
+                .set_body_raw(format!("data: {response}\n\n"), "text/event-stream")
+        } else {
+            ResponseTemplate::new(200).set_body_json(response)
+        };
+        Mock::given(path(path_name))
+            .and(body_partial_json(json!({"model":"gemini-4-hydrogen-medium", "project":"probe-project", "request":{"generationConfig":{"maxOutputTokens":65536,"thinkingConfig":{"thinkingLevel":"MEDIUM","includeThoughts":true}}}})))
+            .respond_with(template).expect(1).mount(&upstream).await;
+        let body = json!({"contents":[{"role":"user","parts":[{"text":"Reply only OK."}]}],"generationConfig":{"maxOutputTokens":65536,"thinkingConfig":{"thinkingLevel":"MEDIUM","includeThoughts":true}}});
+        let operation = Operation::Generate(
+            GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("genai", body.as_object().unwrap().clone())
+                    .unwrap()
+                    .with_context(json!({"stream":stream}).as_object().unwrap().clone()),
+            )
+            .requiring_native_protocol(),
+        );
+        let plan = snapshot
+            .plan(
+                &PublicModelId::new("gemini-4-hydrogen").unwrap(),
+                &operation,
+                fixture.store.account_scope(),
+                &RoutingContext::default(),
+            )
+            .unwrap();
+        let request = ProviderRequest::new(operation, plan.candidates()[0].clone());
+        let events = fixture
+            .provider
+            .clone()
+            .execute(request, context(frozen_profile(), CancellationToken::new()))
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert!(events.iter().any(|event| event.has_client_event()));
+        released(&fixture).await;
+    }
+}
+
+#[tokio::test]
 async fn disabled_account_probe_discovers_its_own_project_on_first_poll() {
     let upstream = MockServer::start().await;
     mock_project(&upstream).await;

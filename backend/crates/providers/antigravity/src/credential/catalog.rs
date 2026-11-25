@@ -12,7 +12,9 @@ use gateway_core::{
     account::{AccountCatalogObservation, ProviderAccountId, StoredAccountCatalog},
     error::{ProviderError, ProviderErrorKind as Kind},
     operation::OperationKind,
-    routing::{ModelCapabilities, ProviderModelCapabilities, UpstreamModelId},
+    routing::{
+        ModelCapabilities, ProviderModelCapabilities, ReasoningModelVariant, UpstreamModelId,
+    },
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -164,7 +166,21 @@ impl CatalogService {
         &self,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
         let mut models: BTreeMap<UpstreamModelId, BTreeSet<ProviderAccountId>> = BTreeMap::new();
+        let mut groups: BTreeMap<UpstreamModelId, BTreeMap<String, ReasoningModelVariant>> =
+            BTreeMap::new();
         for (accounts, catalog) in self.catalogs().await? {
+            for (group, level, target) in super::model_groups::variants(&catalog) {
+                groups
+                    .entry(group)
+                    .or_default()
+                    .entry(level)
+                    .or_insert_with(|| ReasoningModelVariant {
+                        model: target,
+                        accounts: BTreeSet::new(),
+                    })
+                    .accounts
+                    .extend(accounts.iter().map(|a| a.account_id.clone()));
+            }
             for key in catalog.models.into_keys() {
                 let id = UpstreamModelId::new(key).map_err(|_| unsent(Kind::Protocol))?;
                 models
@@ -173,9 +189,21 @@ impl CatalogService {
                     .extend(accounts.iter().map(|a| a.account_id.clone()));
             }
         }
+        // 上游已有同名实体时保留原生型号，不让其他账号的分组覆盖它
+        groups.retain(|group, _| !models.contains_key(group));
+        for (group, variants) in &groups {
+            models.insert(
+                group.clone(),
+                variants
+                    .values()
+                    .flat_map(|v| v.accounts.iter().cloned())
+                    .collect(),
+            );
+        }
         Ok(models
             .into_iter()
             .map(|(model, accounts)| {
+                let variants = groups.remove(&model).unwrap_or_default();
                 ProviderModelCapabilities::new(
                     model,
                     ModelCapabilities::new(
@@ -187,7 +215,8 @@ impl CatalogService {
                         gateway_protocol::openai::OPENAI_PROTOCOL,
                         gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
                     ])
-                    .with_upstream_feature_validation(),
+                    .with_upstream_feature_validation()
+                    .with_reasoning_variants(variants),
                 )
                 .with_catalog_accounts(accounts)
             })

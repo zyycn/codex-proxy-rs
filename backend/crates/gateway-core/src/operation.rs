@@ -920,6 +920,40 @@ pub enum Operation {
 }
 
 impl Operation {
+    pub(crate) fn requires_native_protocol(&self) -> bool {
+        match self {
+            Self::Generate(request) => request.requires_native_protocol(),
+            Self::CountTokens(request) => request.requires_native_protocol(),
+            _ => false,
+        }
+    }
+
+    /// 仅提取本次正文明确声明的推理档位，路由不继承 Provider 会话默认值
+    pub(crate) fn requested_reasoning_effort(&self) -> Option<String> {
+        let observation = match self {
+            Self::Generate(request) => {
+                let payload = request.protocol_payload();
+                gateway_protocol::request::request_observation(
+                    payload.protocol(),
+                    payload.body(),
+                    payload.context(),
+                    None,
+                )
+            }
+            Self::CountTokens(request) => {
+                let payload = request.payload();
+                let body = serde_json::from_slice::<Map<String, Value>>(payload.body()).ok()?;
+                gateway_protocol::request::token_count_observation(
+                    payload.protocol(),
+                    &body,
+                    payload.context(),
+                )
+            }
+            _ => return None,
+        };
+        observation.reasoning_effort
+    }
+
     pub(crate) fn with_inherited_capability_requirements(
         self,
         inherited: CapabilityRequirements,

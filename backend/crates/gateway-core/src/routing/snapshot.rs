@@ -1078,6 +1078,35 @@ impl RuntimeSnapshot {
                     &RoutingContext::default(),
                 )
                 .is_ok()
+                    || scope.provider_kinds().iter().any(|provider| {
+                        self.contains_public_model_for_provider(model, provider)
+                            && self
+                                .model_group(provider, &self.mapped_model(model.as_str()))
+                                .is_some_and(|group| {
+                                    group
+                                        .match_operation(
+                                            operation,
+                                            &operation.capability_requirements(),
+                                        )
+                                        .is_some()
+                                        && group.reasoning_variants.values().any(|variant| {
+                                            self.variant_allowed(provider, variant, scope)
+                                                && self
+                                                    .provider_models
+                                                    .get(provider)
+                                                    .and_then(|models| models.get(&variant.model))
+                                                    .is_some_and(|target| {
+                                                        target
+                                                            .match_operation(
+                                                                operation,
+                                                                &operation
+                                                                    .capability_requirements(),
+                                                            )
+                                                            .is_some()
+                                                    })
+                                        })
+                                })
+                    })
             })
             .collect()
     }
@@ -1172,6 +1201,13 @@ impl RuntimeSnapshot {
             return false;
         };
         let upstream = self.mapped_model(public_model.as_str());
+        if let Some(group) = self.model_group(provider, &upstream) {
+            return self.contains_public_model_for_provider(public_model, provider)
+                && group.reasoning_variants.values().any(|variant| {
+                    variant.accounts.contains(account)
+                        && scope.allows_model(account, variant.model.as_str())
+                });
+        }
         if !scope.allows_model(account, &upstream)
             || !self.contains_public_model_for_provider(public_model, provider)
         {
@@ -1237,6 +1273,25 @@ impl RuntimeSnapshot {
             })
     }
 
+    fn model_group(&self, provider: &ProviderKind, model: &str) -> Option<&ModelCapabilities> {
+        self.provider_models
+            .get(provider)?
+            .get(model)
+            .filter(|capabilities| !capabilities.reasoning_variants.is_empty())
+    }
+
+    fn variant_allowed(
+        &self,
+        provider: &ProviderKind,
+        variant: &super::ReasoningModelVariant,
+        scope: &FrozenAccountScope,
+    ) -> bool {
+        variant.accounts.iter().any(|account| {
+            scope.account_provider(account) == Some(provider)
+                && scope.allows_model(account, variant.model.as_str())
+        })
+    }
+
     fn native_catalog_model_allowed_for_scope(
         &self,
         provider: &ProviderKind,
@@ -1244,6 +1299,12 @@ impl RuntimeSnapshot {
         scope: &FrozenAccountScope,
     ) -> bool {
         let upstream_model = self.mapped_model(public_model.as_str());
+        if let Some(group) = self.model_group(provider, &upstream_model) {
+            return group
+                .reasoning_variants
+                .values()
+                .any(|variant| self.variant_allowed(provider, variant, scope));
+        }
         match self
             .model_catalog_accounts
             .get(provider)
@@ -1461,7 +1522,13 @@ impl RuntimeSnapshot {
             }
             .map_err(|_| RoutingError::InvalidIdentifier)?
         };
-        if enforce_routing_policy && account_scope.groups_deny_model(Some(upstream_model.as_str()))
+        let grouped = self.providers.iter().any(|provider| {
+            self.model_group(provider, upstream_model.as_str())
+                .is_some()
+        });
+        if !grouped
+            && enforce_routing_policy
+            && account_scope.groups_deny_model(Some(upstream_model.as_str()))
         {
             return Err(RoutingError::GroupModelDenied);
         }
@@ -1476,6 +1543,8 @@ impl RuntimeSnapshot {
             || account_scope.provider_kinds().clone(),
             |provider| BTreeSet::from([provider.clone()]),
         );
+        let mut invalid_variant = false;
+        let mut group_model_denied = false;
         for provider in &providers {
             if !self.providers.contains(provider) {
                 continue;
@@ -1495,23 +1564,50 @@ impl RuntimeSnapshot {
             {
                 continue;
             }
+            let mut candidate_scope = Arc::clone(&account_scope);
+            let upstream_model =
+                if let Some(group) = self.model_group(provider, upstream_model.as_str()) {
+                    if group.match_operation(operation, &requirements).is_none() {
+                        continue;
+                    }
+                    let effort = operation.requested_reasoning_effort();
+                    let Some(variant) = effort
+                        .as_ref()
+                        .and_then(|effort| group.reasoning_variants.get(effort))
+                    else {
+                        invalid_variant = true;
+                        continue;
+                    };
+                    // 空集合在 restricted_to 中表示不收窄，必须先拒绝没有来源的档位
+                    if variant.accounts.is_empty() {
+                        continue;
+                    }
+                    candidate_scope = Arc::new(
+                        account_scope
+                            .restricted_to(&BTreeSet::from([provider.clone()]), &variant.accounts),
+                    );
+                    &variant.model
+                } else {
+                    &upstream_model
+                };
+            if enforce_routing_policy
+                && candidate_scope.groups_deny_model(Some(upstream_model.as_str()))
+            {
+                group_model_denied = true;
+                continue;
+            }
             // 强制 Provider 路由也不能扩大 Key 授权；管理诊断的目标账号由探测入口固定
             if enforce_routing_policy
-                && !account_scope.allows_provider_model(provider, upstream_model.as_str())
+                && !candidate_scope.allows_provider_model(provider, upstream_model.as_str())
             {
                 continue;
             }
             let capabilities = self
                 .provider_models
                 .get(provider)
-                .and_then(|models| models.get(&upstream_model));
+                .and_then(|models| models.get(upstream_model));
             // 原生入口不能借同名模型、发现型目录的匿名透传或插件声明跨协议分派
-            let native_protocol = match operation {
-                Operation::Generate(request) => request.requires_native_protocol(),
-                Operation::CountTokens(request) => request.requires_native_protocol(),
-                _ => false,
-            };
-            if native_protocol
+            if operation.requires_native_protocol()
                 && capabilities.and_then(|model| model.generation_protocol)
                     != Some(operation.protocol())
             {
@@ -1530,7 +1626,6 @@ impl RuntimeSnapshot {
                         && &model.id == public_model
                 })
                 .collect();
-            let mut candidate_scope = Arc::clone(&account_scope);
             let emulated_features = if contributions.is_empty() {
                 match capabilities {
                     Some(capabilities) => {
@@ -1562,14 +1657,14 @@ impl RuntimeSnapshot {
                     })
                     .flat_map(|model| model.accounts.iter())
                     .filter(|account| {
-                        account_scope.account_provider(account) == Some(provider)
-                            && account_scope.allows_model(account, upstream_model.as_str())
+                        candidate_scope.account_provider(account) == Some(provider)
+                            && candidate_scope.allows_model(account, upstream_model.as_str())
                     })
                     .cloned()
                     .collect();
                 if native.is_some() {
                     // 这些账号实际由适配器执行，不能借用同名原生模型的能力
-                    let mut restricted = account_scope.as_ref().clone();
+                    let mut restricted = candidate_scope.as_ref().clone();
                     for account in contributions.iter().flat_map(|model| &model.accounts) {
                         if !capable_accounts.contains(account) {
                             restricted = restricted.excluding_account(account.clone());
@@ -1582,7 +1677,7 @@ impl RuntimeSnapshot {
                         continue;
                     }
                     candidate_scope = Arc::new(
-                        account_scope.restricted_to(&Default::default(), &capable_accounts),
+                        candidate_scope.restricted_to(&Default::default(), &capable_accounts),
                     );
                 }
                 if !candidate_scope.allows_provider_model(provider, upstream_model.as_str()) {
@@ -1607,6 +1702,12 @@ impl RuntimeSnapshot {
         }
 
         if candidates.is_empty() {
+            if group_model_denied {
+                return Err(RoutingError::GroupModelDenied);
+            }
+            if invalid_variant {
+                return Err(RoutingError::InvalidReasoningVariant);
+            }
             // 模型存在性必须包含被请求路由限制排除的 Provider；目录未知时不能断言模型不存在
             let mut scoped_providers = providers.intersection(&self.providers).peekable();
             if scoped_providers.peek().is_some()

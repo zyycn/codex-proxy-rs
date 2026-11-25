@@ -13,7 +13,7 @@ pub use crate::identity::ProviderKind;
 pub use catalog::{
     ContributedModel, ContributedModelAlias, ProviderCatalogGeneration, ProviderCatalogPort,
     ProviderCatalogUnavailable, ProviderModelCapabilities, ProviderModelContent,
-    ProviderModelDescriptor, PublicModelDescriptor,
+    ProviderModelDescriptor, PublicModelDescriptor, ReasoningModelVariant,
 };
 pub use snapshot::RuntimeSnapshot;
 
@@ -118,6 +118,12 @@ impl fmt::Display for UpstreamModelId {
     }
 }
 
+impl std::borrow::Borrow<str> for UpstreamModelId {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
 /// `runtime_settings.config_revision`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConfigRevision(NonZeroU64);
@@ -153,6 +159,7 @@ pub struct ModelCapabilities {
     upstream_validates_features: bool,
     generation_protocol: Option<&'static str>,
     translated_generation_protocols: BTreeSet<&'static str>,
+    reasoning_variants: BTreeMap<String, ReasoningModelVariant>,
 }
 
 /// Provider 为客户端模型目录提供的展示与交互能力
@@ -427,6 +434,7 @@ impl ModelCapabilities {
             upstream_validates_features: false,
             generation_protocol: None,
             translated_generation_protocols: BTreeSet::new(),
+            reasoning_variants: BTreeMap::new(),
         }
     }
 
@@ -434,6 +442,21 @@ impl ModelCapabilities {
     pub fn with_feature(mut self, feature: Feature, support: SupportLevel) -> Self {
         self.features.insert(feature, support);
         self
+    }
+
+    /// 分组名只按请求明确声明的档位解析，不推测默认型号
+    #[must_use]
+    pub fn with_reasoning_variants(
+        mut self,
+        variants: BTreeMap<String, ReasoningModelVariant>,
+    ) -> Self {
+        self.reasoning_variants = variants;
+        self
+    }
+
+    #[must_use]
+    pub fn reasoning_variants(&self) -> &BTreeMap<String, ReasoningModelVariant> {
+        &self.reasoning_variants
     }
 
     /// 将请求形态 feature 的最终合法性判断交给上游 wire API
@@ -465,6 +488,11 @@ impl ModelCapabilities {
         operation: &crate::operation::Operation,
         requirements: &CapabilityRequirements,
     ) -> Option<BTreeSet<Feature>> {
+        if operation.requires_native_protocol()
+            && self.generation_protocol != Some(operation.protocol())
+        {
+            return None;
+        }
         if matches!(operation, crate::operation::Operation::Generate(_))
             && self.generation_protocol.is_some_and(|protocol| {
                 protocol != operation.protocol()

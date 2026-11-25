@@ -12,6 +12,13 @@ use super::{
     ModelCapabilities, ModelPresentation, PublicModelId, PublicModelProfile, UpstreamModelId,
 };
 
+/// Provider 声明的推理档位目标及确认该分组成员关系的账号
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReasoningModelVariant {
+    pub model: UpstreamModelId,
+    pub accounts: BTreeSet<ProviderAccountId>,
+}
+
 /// 扩展集合持有的直接模型别名；执行与元数据仍归属内置 Provider
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContributedModelAlias {
