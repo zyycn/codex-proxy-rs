@@ -1,8 +1,10 @@
 //! 验证上下游背压、取消与终态下的连接和任务回收
 
 use super::*;
+use futures::FutureExt;
 use gateway_core::{
-    diagnostics::TraceContext, engine::response_control::ResponseControl,
+    diagnostics::TraceContext,
+    engine::response_control::{ResponseControl, ResponseControlUnavailable},
     lifecycle::CancellationToken,
 };
 use std::assert_matches;
@@ -130,6 +132,84 @@ async fn backpressured_delivery_should_stop_on_downstream_cancel_or_pool_shutdow
             );
         }
     }
+}
+
+#[tokio::test]
+async fn expired_active_connection_finishes_before_control_becomes_unavailable() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (complete, wait_for_complete) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(socket).await;
+        assert_matches!(websocket.next().await.unwrap().unwrap(), Message::Text(_));
+        websocket
+            .send(Message::Text(
+                json!({"type":"response.created", "response":{"id":"resp_expiring"}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        wait_for_complete.await.unwrap();
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_expiring", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+        expect_upstream_socket_closed(&mut websocket).await;
+    });
+    let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        max_age: Duration::from_secs(1),
+        maintenance_interval: None,
+        ..CodexWebSocketPoolConfig::default()
+    }));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let control = ResponseControl::default();
+    let context = request_context("expiry_during_generation", Some("chatgpt-account"))
+        .with_response_control(Some(&control));
+    let request = pooled_websocket_request("expiry_during_generation");
+    let mut response = backend
+        .create_response_stream(&request, context)
+        .await
+        .unwrap();
+    let created = timeout(Duration::from_secs(5), response.body.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&created).unwrap()["type"],
+        "response.created"
+    );
+
+    // 在生成中跨过连接寿命，归还连接时才回收，终态仍须成功交付
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(2)).await;
+    tokio::time::resume();
+    complete.send(()).unwrap();
+    let terminal = timeout(Duration::from_secs(5), response.body.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&terminal).unwrap()["type"],
+        "response.completed"
+    );
+    assert!(response.body.next().await.is_none());
+    server.await.unwrap();
+    assert_eq!(
+        control.receive().now_or_never(),
+        Some(Err(ResponseControlUnavailable))
+    );
+    pool.shutdown().await;
 }
 
 #[tokio::test]

@@ -42,6 +42,12 @@ fn control_requires_a_live_connection_owner_and_preserves_unknown_payloads() {
         drop(owner);
         drop(transport);
         assert_eq!(control.send(payload).await, Err(ResponseControlUnavailable));
+        assert_eq!(
+            control.receive().now_or_never(),
+            Some(Err(ResponseControlUnavailable))
+        );
+        control.clear();
+        assert!(control.receive().now_or_never().is_none());
     });
 }
 
@@ -57,13 +63,19 @@ fn replacing_or_clearing_a_binding_does_not_share_control_between_executions() {
         second.bind(&owner);
         drop(old);
         assert_eq!(first.send("old").await, Err(ResponseControlUnavailable));
+        assert_eq!(
+            first.receive().now_or_never(),
+            Some(Err(ResponseControlUnavailable))
+        );
         second.send("current").await.unwrap();
+        assert_eq!(second.receive().await.unwrap(), "upstream reply");
         assert_eq!(*current.0.lock().unwrap(), ["current"]);
         second.clear();
         assert_eq!(
             second.send("cleared").await,
             Err(ResponseControlUnavailable)
         );
+        assert!(second.receive().now_or_never().is_none());
     });
 }
 

@@ -106,10 +106,16 @@ impl ResponseControl {
     }
 
     /// 未绑定时保持等待，供连接空闲循环与客户端输入共同 select
+    /// 已绑定的 owner 销毁时必须报告失效，不能漏掉终态交付前的连接回收
     pub async fn receive(&self) -> Result<String, ResponseControlUnavailable> {
-        match self.transport() {
-            Some(transport) => transport.receive().await,
-            None => std::future::pending().await,
-        }
+        let Some(binding) = self.binding() else {
+            return std::future::pending().await;
+        };
+        binding
+            .0
+            .upgrade()
+            .ok_or(ResponseControlUnavailable)?
+            .receive()
+            .await
     }
 }
