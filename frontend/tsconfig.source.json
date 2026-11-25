@@ -10,6 +10,9 @@
       "vue": [
         "./node_modules/vue"
       ],
+      "vue/*": [
+        "./node_modules/vue/*"
+      ],
       "@codex-proxy/ui": [
         "../modules/ui/src/index.ts"
       ],

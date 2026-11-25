@@ -174,7 +174,7 @@ impl fmt::Debug for ParsedCodexImportAccount {
 /// 时间必须由 App 从 `provider_accounts` 原行机械传入；Provider 不伪造时间
 pub struct ExportManagedCodexCredential {
     pub current: LoadedCredential,
-    pub added_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -184,7 +184,7 @@ impl fmt::Debug for ExportManagedCodexCredential {
             .debug_struct("ExportManagedCodexCredential")
             .field("account_id", &self.current.account.id())
             .field("credential", &"<redacted>")
-            .field("added_at", &self.added_at)
+            .field("created_at", &self.created_at)
             .field("updated_at", &self.updated_at)
             .finish()
     }
@@ -233,10 +233,11 @@ struct CodexCprExportCommon {
     email: Option<String>,
     account_id: Option<String>,
     user_id: Option<String>,
-    label: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    label: String,
     plan_type: Option<String>,
     status: &'static str,
-    added_at: String,
+    created_at: String,
     updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     outbound_proxy_url: Option<String>,
@@ -647,7 +648,7 @@ impl CodexCredentialAdmin {
         for item in items {
             let account = item.current.account;
             if account.provider().as_str() != PROVIDER_NAME
-                || item.added_at > item.updated_at
+                || item.created_at > item.updated_at
                 || !ids.insert(account.id().clone())
             {
                 return Err(CodexCredentialAdminError::InvalidInput);
@@ -660,10 +661,10 @@ impl CodexCredentialAdmin {
                 email: account.email().map(str::to_owned),
                 account_id: account.upstream_account_id().map(str::to_owned),
                 user_id: account.upstream_user_id().map(str::to_owned),
-                label: Some(account.name().to_owned()),
+                label: account.name().to_owned(),
                 plan_type: account.plan_type().map(str::to_owned),
                 status: cpr_status(&account),
-                added_at: item.added_at.to_rfc3339(),
+                created_at: item.created_at.to_rfc3339(),
                 updated_at: item.updated_at.to_rfc3339(),
                 outbound_proxy_url: account
                     .outbound_proxy()

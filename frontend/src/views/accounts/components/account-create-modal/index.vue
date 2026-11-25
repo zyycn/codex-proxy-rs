@@ -1,21 +1,21 @@
 <script setup lang="ts">
 import type { AccountAuthorizationView } from '../../composables/useAccountAuthorization'
 
-import type { AccountCreateForm, AccountImportMode } from '../../utils/accountCreate'
+import type { AccountCreateForm } from '../../utils/accountCreate'
 import type { Account, AccountGroupRef } from '@/api'
+import type { AccountImportMode } from '@/providers/accounts'
 
-import { Openai, Xai } from '@boxicons/vue'
 import { ZButton, ZDialog, ZForm, ZIconButton, ZSegmented } from '@codex-proxy/ui'
 import { Copy, LayoutGrid, Settings2 } from '@lucide/vue'
-import { computed, useTemplateRef, watch } from 'vue'
+import { computed, useId, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import AccountPlanBadge from '@/components/account-plan-badge/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useCopyText } from '@/composables/useCopyText'
-import { useAccountApiKeyFormRules } from '../../composables/useAccountApiKeyFormRules'
+import { providerAccounts } from '@/providers/accounts'
+import { providerIcon } from '@/providers/catalog'
 import { useAccountSettingsFormRules } from '../../composables/useAccountSettingsFormRules'
 import { accountCreateProvider } from '../../utils/accountCreate'
-import AccountApiKeyFields from '../AccountApiKeyFields.vue'
 import AccountIdentityCell from '../AccountIdentityCell.vue'
 import AccountImportFields from './AccountImportFields.vue'
 import AccountOAuthFields from './AccountOAuthFields.vue'
@@ -35,7 +35,7 @@ const props = withDefaults(defineProps<{
   account: null,
 })
 
-const emit = defineEmits<{ create: [], generateOauth: [], afterLeave: [] }>()
+const emit = defineEmits<{ create: [document?: Record<string, unknown>], generateOauth: [], afterLeave: [] }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -60,10 +60,10 @@ const settingsRules = useAccountSettingsFormRules(() => ({
     ? form.value.name
     : undefined,
 }))
-const apiKeyRules = useAccountApiKeyFormRules()
+const importFormId = useId()
+const apiKeyForm = computed(() => providerAccounts(accountCreateProvider(form.value))?.apiKeyImportForm)
 const view = computed(() => resolveAccountCreatePresentation({
   form: form.value,
-  provider: accountCreateProvider(form.value),
   authorization: props.authorization,
   callback: callback.value,
   busy: busy.value,
@@ -97,14 +97,6 @@ async function continueToImport() {
     return
   form.value.step = 'import'
 }
-
-async function requestCreate() {
-  if (!view.value.canSubmit)
-    return
-  if (mode.value === 'api_key' && !await formRef.value?.validate().catch(() => false))
-    return
-  emit('create')
-}
 </script>
 
 <template>
@@ -120,8 +112,7 @@ async function requestCreate() {
     <template #icon>
       <Settings2 v-if="view.configuring" class="text-z-text" :size="20" aria-hidden="true" />
       <LayoutGrid v-else-if="view.isBatch" class="text-z-text" :size="20" aria-hidden="true" />
-      <Xai v-else-if="view.provider === 'xai'" class="text-z-text" :width="20" :height="20" aria-hidden="true" />
-      <Openai v-else-if="view.provider === 'openai'" class="text-z-text" :width="20" :height="20" aria-hidden="true" />
+      <component :is="providerIcon(view.provider)" v-else-if="view.provider" class="text-z-text" :width="20" :height="20" aria-hidden="true" />
     </template>
 
     <div class="grid gap-4">
@@ -175,20 +166,16 @@ async function requestCreate() {
           v-model="callback"
           :auth-url="authorization.flow?.authorizationUrl ?? ''"
           :authorization="authorization"
-          :can-start="true"
           :panel-title="`${view.label} ${reauthorizing ? t('accounts.actions.reauthorize') : t('accounts.onboarding.authorize')}`"
           :panel-description="view.oauth.description"
           :loading="authorization.status === 'starting'"
           :callback-label="view.oauth.callbackLabel"
           :callback-placeholder="view.oauth.callbackPlaceholder"
-          :disabled="busy"
+          :disabled="busy || !view.provider"
           @regenerate="emit('generateOauth')"
         />
-        <ZForm v-else-if="mode === 'api_key'" ref="formElement" :model="form" :rules="apiKeyRules" scroll-to-error focus-on-error novalidate @submit="requestCreate">
-          <AccountApiKeyFields v-model="form.apiKey" :disabled="busy" />
-        </ZForm>
         <AccountImportFields
-          v-else
+          v-else-if="mode !== 'api_key'"
           :key="mode"
           v-model="importText"
           :label="view.importInput.label"
@@ -197,6 +184,16 @@ async function requestCreate() {
           :disabled="busy"
         />
       </template>
+      <!-- 草稿只在本次弹窗的同一 Provider 内跨步骤保留 -->
+      <KeepAlive v-if="apiKeyForm" :key="view.provider" :max="1">
+        <component
+          :is="apiKeyForm"
+          v-if="!view.configuring && mode === 'api_key'"
+          :id="importFormId"
+          :disabled="busy"
+          @create="emit('create', $event)"
+        />
+      </KeepAlive>
     </div>
 
     <template #footer>
@@ -209,7 +206,10 @@ async function requestCreate() {
       <ZButton v-if="view.configuring" type="primary" :disabled="!canSelect || groupsLoading || busy" @click="continueToImport">
         {{ t('accounts.onboarding.continueImporting') }}
       </ZButton>
-      <ZButton v-else type="primary" :loading="saving || authorization.status === 'completing'" :disabled="!view.canSubmit" @click="requestCreate">
+      <ZButton v-else-if="mode === 'api_key'" type="primary" native-type="submit" :form="importFormId" :loading="saving" :disabled="!view.canSubmit">
+        {{ view.submitLabel }}
+      </ZButton>
+      <ZButton v-else type="primary" :loading="saving || authorization.status === 'completing'" :disabled="!view.canSubmit" @click="emit('create')">
         {{ view.submitLabel }}
       </ZButton>
     </template>

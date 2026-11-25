@@ -613,7 +613,7 @@ async fn scheduled_refresh_persists_retryable_message_inside_the_two_hour_window
                 client_id: "test-public-client".to_owned(),
                 token_endpoint: format!("{}/oauth/token", server.uri()),
             },
-            provider_openai::transport::profile::CodexWireProfileState::new(Default::default()),
+            provider_openai::profile::CodexWireProfileState::new(Default::default()),
         )),
         Arc::new(RefreshLeases),
         Arc::new(RefreshCredentialState),

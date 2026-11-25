@@ -16,6 +16,27 @@ fn generate(body: Value) -> GenerateRequest {
     )
 }
 
+#[test]
+fn raw_generate_body_tracks_the_document_used_for_permissions_after_middleware() {
+    let original = Bytes::from_static(br#"{ "tools": [], "contents": [] }"#);
+    let payload = ProtocolPayload::from_json_bytes("genai", original.clone()).unwrap();
+    let request = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+    let request = request.replace_protocol_wire(None, Map::new()).unwrap();
+    assert_eq!(request.middleware_body().unwrap(), original);
+
+    let replaced = Bytes::from_static(br#"{ "tools": [{"functionDeclarations":[{"name":"f"}]}] }"#);
+    let request = request
+        .replace_protocol_wire(Some(replaced.clone()), Map::new())
+        .unwrap();
+    assert!(
+        request
+            .capability_requirements()
+            .features()
+            .contains(&Feature::Tools)
+    );
+    assert_eq!(request.middleware_body().unwrap(), replaced);
+}
+
 fn image(kind: ImageRequestKind, body: Value) -> ImageRequest {
     ImageRequest::from_raw_json(
         kind,

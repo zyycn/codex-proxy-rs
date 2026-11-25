@@ -40,7 +40,7 @@ use crate::model::{
         CredentialMutationResult, CredentialRotationCommit, PluginAccountListQuery,
         PluginAccountPage, ProviderExportCredentialInput,
     },
-    quota_forecast_sampling::QuotaForecastHistory,
+    quota_forecast::QuotaForecastHistory,
     settings::{AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RuntimeSettings},
 };
 

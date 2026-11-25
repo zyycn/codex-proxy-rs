@@ -491,6 +491,7 @@ let plugin = PluginBuilder::from_json(manifest_json)?
 attempt 中间件在此基线上继续改写，终端不再应用 Fast 策略。
 request 与 attempt 阶段通过 `append_header` 添加的请求头会进入上游请求，不适合存放插件内部标记或仅供下游读取的信息。
 OpenAI 与 xAI 的上游 headers 先由账号和画像生成，插件同名字段覆盖基线，同名多值按插件顺序保留；不存在按认证、Cookie 或会话名称划分的保护列表。
+CPR 中间件添加的 HTTP 扩展头在发往 Antigravity 时经过该 Provider 的过滤：账号身份、客户端画像和 HTTP 传输字段由网关生成，明确换号时清理已识别的追踪头，其余头保留多值字节，具体范围见 [AGY 请求合同](../../../../../docs/api.md#antigravity-客户端原生生成)。
 实际账号租约、凭据版本与计费归属仍记录真实选中事实，不随插件修改 header 名称而伪造
 
 request 阶段 `request.head.settings` 是本次调用的有效设置对象，包含 `runtime`、`fast_mode`、`client_limits` 和 `timeout_ms`。

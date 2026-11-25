@@ -1,7 +1,7 @@
 //! 账号普通池并发明细的有界实时查询
 
 use super::*;
-use crate::auth::SessionState;
+use crate::SessionState;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

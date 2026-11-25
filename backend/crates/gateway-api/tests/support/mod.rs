@@ -28,7 +28,7 @@ pub(crate) const RAW_KEY: &str = "cpr_live_candidate_must_not_leak";
 pub(crate) async fn auth_app() -> (axum::Router, Arc<crate::admin::MemoryAuthStore>) {
     let fixture = key_fixture().await;
     (
-        crate::openai::api_router_with_admin(fixture.services),
+        crate::data_plane::api_router_with_admin(fixture.services),
         fixture.auth,
     )
 }

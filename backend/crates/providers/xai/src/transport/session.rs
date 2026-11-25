@@ -14,7 +14,6 @@ use gateway_core::account::{
 use gateway_core::engine::policy::RequestPolicyContext;
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{FrozenAccountScope, UpstreamModelId};
-use sha2::{Digest as _, Sha256};
 
 use crate::SecretValue;
 
@@ -75,14 +74,18 @@ impl GrokSessionAffinityKey {
         Self(digest)
     }
 
-    /// 为候选账号计算稳定 rendezvous 分值，原始会话值不会离开 Provider
-    pub(crate) fn score(&self, account_id: &ProviderAccountId) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(b"xai-account-affinity-v1\0");
-        hasher.update(self.0);
-        hasher.update(b"\0");
-        hasher.update(account_id.as_str().as_bytes());
-        hasher.finalize().into()
+    pub(crate) fn store_key(
+        &self,
+    ) -> Result<
+        gateway_core::provider_ports::ProviderSessionAffinityKey,
+        gateway_core::provider_ports::ProviderStoreError,
+    > {
+        gateway_core::provider_ports::ProviderSessionAffinityKey::try_new(
+            self.0
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        )
     }
 }
 
@@ -146,6 +149,12 @@ impl SelectedGrokSession {
             capacity: None,
             _guard: Box::new(guard),
         })
+    }
+
+    /// 凭据验证与会话认领完成后才转交租约，冲突时选择器仍可显式释放
+    pub(crate) fn with_lease_guard(mut self, guard: impl GrokSessionLeaseGuard) -> Self {
+        self._guard = Box::new(guard);
+        self
     }
 
     /// 标记禁用账号的管理端诊断只读取真实上游结果，不回写账号状态

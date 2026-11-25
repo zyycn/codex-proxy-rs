@@ -1,19 +1,15 @@
 <script setup lang="ts">
-import type { FormRules } from '@codex-proxy/ui'
-import type { ApiKeyAccountForm } from '../utils/upstreamApiKey'
+import type { Account, AccountConnectionUpdate, AccountGroupRef, AccountModelAccess } from '@/api'
 
-import type { Account, AccountGroupRef, AccountModelAccess } from '@/api'
+import type { AccountConnectionForm } from '@/providers/accounts'
 
-import { ZButton, ZDialog, ZForm, ZFormItem, ZSegmented } from '@codex-proxy/ui'
-
+import { ZButton, ZDialog, ZForm } from '@codex-proxy/ui'
 import { computed, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import AccountPlanBadge from '@/components/account-plan-badge/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
-import { useAccountApiKeyFormRules } from '../composables/useAccountApiKeyFormRules'
+import { providerAccounts } from '@/providers/accounts'
 import { useAccountSettingsFormRules } from '../composables/useAccountSettingsFormRules'
-import { isOpenAiApiKeyAccount, isOpenAiOAuthAccount } from '../utils/upstreamApiKey'
-import AccountApiKeyFields from './AccountApiKeyFields.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
@@ -22,23 +18,17 @@ const props = defineProps<{
   groups: AccountGroupRef[]
   groupsLoading: boolean
   saving: boolean
-  configurationReady: boolean
 }>()
 
 const emit = defineEmits<{
-  save: []
-  afterLeave: []
+  save: [connection?: AccountConnectionUpdate]
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ required: true })
-const apiKey = defineModel<ApiKeyAccountForm>('apiKey', { required: true })
-const oauthTransport = defineModel<ApiKeyAccountForm['transport']>('oauthTransport', { required: true })
-const transportOptions = [
-  { label: 'WS', value: 'prefer_websocket' },
-  { label: 'SSE', value: 'http' },
-]
+const connectionComponent = computed(() => providerAccounts(props.account?.provider)?.connectionEditor)
+const connection = useTemplateRef<AccountConnectionForm>('connectionEditor')
 const notes = defineModel<string>('notes', { required: true })
 const name = defineModel<string>('name', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
@@ -51,30 +41,24 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
 const formRef = useTemplateRef<InstanceType<typeof ZForm>>('formElement')
 const form = computed(() => ({
   name: name.value,
-  apiKey: apiKey.value,
+  connection: connection.value?.formModel,
   concurrencyLimit: concurrencyLimit.value,
   weight: weight.value,
   modelAccess: modelAccess.value,
   proxyMode: proxyMode.value,
   proxyId: proxyId.value,
 }))
-const settingsRules = useAccountSettingsFormRules(() => form.value, {
+const rules = useAccountSettingsFormRules(() => form.value, {
   savedName: () => props.account?.name ?? '',
 })
-const apiKeyRules = useAccountApiKeyFormRules(true)
-const rules = computed<FormRules>(() => ({
-  ...settingsRules.value,
-  ...apiKeyRules.value,
-}))
-const saveDisabled = computed(() => !props.account || props.groupsLoading
-  || (isOpenAiApiKeyAccount(props.account) && !props.configurationReady))
+const saveDisabled = computed(() => !props.account || props.groupsLoading || (!!connectionComponent.value && !connection.value?.canSave))
 
 watch(open, () => formRef.value?.clearValidate())
 
 async function requestSave() {
   if (props.saving || saveDisabled.value || !await formRef.value?.validate().catch(() => false))
     return
-  emit('save')
+  emit('save', connection.value?.change)
 }
 </script>
 
@@ -84,7 +68,6 @@ async function requestSave() {
     :title="t('accounts.editor.title')"
     width="52rem"
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
-    @closed="emit('afterLeave')"
   >
     <ZForm v-if="account" ref="formElement" :model="form" :rules="rules" :validate-on-rule-change="false" scroll-to-error focus-on-error novalidate @submit="requestSave">
       <div
@@ -122,12 +105,18 @@ async function requestSave() {
         :current-proxy-id="account.outboundProxyId"
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
+        :provider="account.provider"
       >
         <template #connection>
-          <AccountApiKeyFields v-if="isOpenAiApiKeyAccount(account)" v-model="apiKey" editing :disabled="saving || !configurationReady" />
-          <ZFormItem v-else-if="isOpenAiOAuthAccount(account)" :label="t('accounts.editor.transportLabel')">
-            <ZSegmented v-model="oauthTransport" class="w-40" :aria-label="t('accounts.editor.transportLabel')" :options="transportOptions" :disabled="saving || !configurationReady" />
-          </ZFormItem>
+          <component
+            :is="connectionComponent"
+            v-if="connectionComponent"
+            :key="account.id"
+            ref="connectionEditor"
+            :account="account"
+            :open="open"
+            :disabled="saving"
+          />
         </template>
       </AccountSettingsFields>
     </ZForm>

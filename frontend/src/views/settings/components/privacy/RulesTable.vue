@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { PrivacyRule } from '@/api/modules/settings/privacy'
+import type { PrivacyRule } from '@/api'
 
 import { defineTableColumns, ZIconButton, ZSwitch, ZTable } from '@codex-proxy/ui'
 import { GripVertical, Pencil, Trash2 } from '@lucide/vue'

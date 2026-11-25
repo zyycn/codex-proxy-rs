@@ -899,3 +899,143 @@ fn account_model_access_filters_catalog_and_aliases_using_the_whole_frozen_pool(
         "a new policy must not alter an existing request scope"
     );
 }
+
+#[test]
+fn generation_routes_only_to_models_that_accept_the_wire_and_the_key() {
+    for translated in [false, true] {
+        let provider = |name| ProviderKind::new(name).unwrap();
+        let snapshot = RuntimeSnapshot::new(
+            ConfigRevision::new(1).unwrap(),
+            settings(),
+            vec![provider("openai"), provider("xai")],
+            vec![
+                model("openai", "shared", capabilities()),
+                model(
+                    "xai",
+                    "shared",
+                    capabilities()
+                        .with_generation_protocol("native-test")
+                        .with_translated_generation_protocols(if translated {
+                            vec!["openai"]
+                        } else {
+                            Vec::new()
+                        }),
+                ),
+            ],
+            vec![],
+        )
+        .unwrap()
+        .with_account_directory(account_directory());
+        let public = PublicModelId::new("shared").unwrap();
+        let native = Operation::Generate(
+            GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("native-test", Default::default()).unwrap(),
+            )
+            .requiring_native_protocol(),
+        );
+        for (request, expected) in [
+            (
+                operation(),
+                if translated {
+                    vec!["openai", "xai"]
+                } else {
+                    vec!["openai"]
+                },
+            ),
+            (native.clone(), vec!["xai"]),
+        ] {
+            let plan = snapshot
+                .plan(
+                    &public,
+                    &request,
+                    account_scope(),
+                    &RoutingContext::default(),
+                )
+                .unwrap();
+            let actual: Vec<_> = plan
+                .candidates()
+                .iter()
+                .map(|c| c.provider().as_str())
+                .collect();
+            assert_eq!(actual, expected);
+        }
+        let restricted = Arc::new(
+            account_scope().restricted_to(&[provider("openai")].into(), &Default::default()),
+        );
+        assert!(
+            snapshot
+                .plan(&public, &native, restricted, &RoutingContext::default())
+                .is_err()
+        );
+        assert!(
+            snapshot
+                .plan(
+                    &PublicModelId::new("unknown").unwrap(),
+                    &native,
+                    account_scope(),
+                    &RoutingContext::default()
+                )
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn native_count_catalog_and_execution_do_not_fall_back_to_another_protocol() {
+    let caps = ModelCapabilities::new(
+        BTreeSet::from([OperationKind::Generate, OperationKind::CountTokens]),
+        None,
+    );
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).unwrap(),
+        settings(),
+        vec![
+            ProviderKind::new("openai").unwrap(),
+            ProviderKind::new("xai").unwrap(),
+        ],
+        vec![
+            model("openai", "shared", caps.clone()),
+            model("xai", "shared", caps.with_generation_protocol("genai")),
+        ],
+        vec![],
+    )
+    .unwrap()
+    .with_account_directory(account_directory());
+    let original = Operation::CountTokens(
+        TokenCountRequest::from_raw_json(
+            RawJsonPayload::new("genai", Bytes::from_static(b"{}")).unwrap(),
+        )
+        .requiring_native_protocol(),
+    );
+    let operation = original
+        .replace_protocol_wire(
+            Some(Bytes::from_static(b"{\"contents\":[]}")),
+            Default::default(),
+        )
+        .unwrap();
+    assert!(matches!(&operation,Operation::CountTokens(count) if count.requires_native_protocol()));
+    let public = PublicModelId::new("shared").unwrap();
+    let plan = snapshot
+        .plan(
+            &public,
+            &operation,
+            account_scope(),
+            &RoutingContext::default(),
+        )
+        .unwrap();
+    assert_eq!(plan.candidates().len(), 1);
+    assert_eq!(plan.candidates()[0].provider().as_str(), "xai");
+    assert_eq!(
+        snapshot.public_models_for_operation(&account_scope(), &operation),
+        vec![public]
+    );
+    let restricted = Arc::new(account_scope().restricted_to(
+        &[ProviderKind::new("openai").unwrap()].into(),
+        &Default::default(),
+    ));
+    assert!(
+        snapshot
+            .public_models_for_operation(&restricted, &operation)
+            .is_empty()
+    );
+}

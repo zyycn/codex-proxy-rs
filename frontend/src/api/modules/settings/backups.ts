@@ -7,7 +7,7 @@ export interface BackupSettingsView {
   region: string | null
   bucket: string | null
   accessKeyId: string | null
-  secretAccessKey: string | null
+  secretConfigured: boolean
   prefix: string | null
   forcePathStyle: boolean
   verified: boolean
@@ -24,6 +24,7 @@ export interface BackupSettingsView {
 }
 
 export interface UpdateBackupStoragePayload {
+  storageRevision: number
   endpoint: string
   region: string
   bucket: string
@@ -34,6 +35,7 @@ export interface UpdateBackupStoragePayload {
 }
 
 export interface UpdateBackupSchedulePayload {
+  storageRevision: number
   scheduleEnabled: boolean
   cronExpression: string
   retentionDays: number
@@ -41,6 +43,7 @@ export interface UpdateBackupSchedulePayload {
 }
 
 export interface ConnectionTestResult {
+  storageRevision: number
   ok: boolean
   stage: string
   code: string | null
@@ -122,9 +125,10 @@ export function updateBackupStorage(data: UpdateBackupStoragePayload) {
   })
 }
 
-export function testBackupStorage() {
+export function testBackupStorage(storageRevision: number) {
   return request<ConnectionTestResult>({
     url: '/api/admin/settings/backups/storage/test',
+    data: { storageRevision },
     method: 'POST',
   })
 }

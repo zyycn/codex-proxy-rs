@@ -5,7 +5,7 @@ import { LoaderCircle } from '@lucide/vue'
 import { computed, onScopeDispose, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getAccountGroups, getApiKeys } from '@/api'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { errorMessage } from '@/utils/operation'
 
 const props = withDefaults(defineProps<{ kind: 'keys' | 'groups', disabled?: boolean, active?: boolean, maxCollapseTags?: number }>(), { active: true, maxCollapseTags: 1 })

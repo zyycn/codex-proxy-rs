@@ -11,6 +11,7 @@ import AccountSettingsFields from './AccountSettingsFields.vue'
 const props = defineProps<{
   selectedCount: number
   catalogAccountId?: string
+  provider?: string
   groups: AccountGroupRef[]
   groupsLoading: boolean
   saving: boolean
@@ -96,6 +97,7 @@ const schedulingMode = computed({
         preserve-model-access
 
         :model-account-id="catalogAccountId"
+        :provider="provider"
         :groups="groups"
         :groups-loading="groupsLoading"
         :disabled="saving"

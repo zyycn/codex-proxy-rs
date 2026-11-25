@@ -381,7 +381,7 @@ async fn quota(
         Some(quota) => quota,
         None => bundle
             .provider
-            .admin_provider()
+            .admin
             .quota(ProviderQuotaRequest {
                 account_id: id.clone(),
                 refresh: false,
@@ -1389,7 +1389,7 @@ async fn execute_peer_request(
 
 struct PeerFixture {
     leases: Arc<TestLeaseCoordinator>,
-    provider: provider_openai::ProviderBundle,
+    provider: gateway_admin::ports::provider::ProviderBundle,
     peer: gateway_admin::PeerUpstreamBundle,
     cooldowns: Arc<MemoryCooldownPort>,
 }
@@ -1400,7 +1400,7 @@ impl PeerFixture {
     }
 
     fn core_provider(&self) -> Arc<dyn gateway_core::engine::provider::Provider> {
-        self.provider.core_provider()
+        self.provider.core.clone()
     }
 
     fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
@@ -1435,7 +1435,7 @@ async fn peer_fixture(
     .await
     .unwrap();
     let registry =
-        gateway_admin::ports::provider::ProviderAdminRegistry::new([provider.admin_provider()])
+        gateway_admin::ports::provider::ProviderAdminRegistry::new([provider.admin.clone()])
             .unwrap();
     let peer = gateway_admin::initialize_peer_upstream(
         accounts.clone(),

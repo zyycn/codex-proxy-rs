@@ -1,6 +1,6 @@
 //! 账号分组管理的 HTTP 数据合同与固定路由
 
-use crate::auth::SessionState;
+use crate::SessionState;
 
 use std::collections::BTreeMap;
 

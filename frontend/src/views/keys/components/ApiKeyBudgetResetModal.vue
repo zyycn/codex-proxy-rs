@@ -7,7 +7,7 @@ import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { resetApiKeyBudget } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 
 import ApiKeyBudgetAlignment from './ApiKeyBudgetAlignment.vue'
 

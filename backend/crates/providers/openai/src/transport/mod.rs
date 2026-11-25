@@ -1,21 +1,14 @@
 //! Codex HTTP/SSE/WebSocket 上游 transport
 
-mod automatic_context;
 pub mod canonical;
 pub mod catalog;
 pub mod client;
-mod client_catalog;
-mod client_json;
-mod client_live;
-mod client_messages;
-mod client_stream;
 pub(crate) mod connection;
 mod correlation;
 pub mod diagnostics;
 pub mod endpoints;
 pub mod headers;
 mod outbound;
-pub mod profile;
 pub mod profile_avatar;
 pub mod profile_statistics;
 pub mod protocol;
@@ -37,6 +30,7 @@ pub use self::{
         CodexCatalogMetadata, CodexCatalogModel, CodexCatalogVisibility, CodexModelCatalogError,
         CodexModelCatalogSnapshot, parse_codex_model_catalog,
     },
+    client::CodexLiveCallResponse,
     client::{
         CodexAccountSelectionTelemetry, CodexBackendClient, CodexBackendJsonResponse,
         CodexBackendSseStream, CodexBackendStreamingResponse, CodexBackendTransport,
@@ -44,7 +38,6 @@ pub use self::{
         CodexResponseMetadataUpdates, CodexTransportDecision, CodexTransportMetrics,
         build_reqwest_client,
     },
-    client_live::CodexLiveCallResponse,
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{
         CODEX_ALPHA_SEARCH_PATH, CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH,
@@ -68,10 +61,7 @@ pub use self::{
         CodexRateLimitResetCreditsConsumeResult, MAX_CODEX_RESET_CREDITS_BODY_BYTES,
     },
     response_meta::CodexResponseMetadata,
-    usage::{
-        MAX_CODEX_USAGE_BODY_BYTES, OpenAiBillingUsage, openai_billing_breakdown,
-        openai_billing_breakdown_with_override,
-    },
+    usage::MAX_CODEX_USAGE_BODY_BYTES,
     websocket::{
         CodexWebSocketPool, CodexWebSocketPoolConfig, CodexWebSocketPoolKey, WebSocketPoolDecision,
     },

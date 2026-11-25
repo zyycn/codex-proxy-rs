@@ -7,6 +7,7 @@ mod deprecation;
 mod generation;
 mod package;
 mod rpc;
+mod upstream_target;
 
 pub use adapter::command_line::{PluginCommandError, PluginCommandOutput, PluginCommandSession};
 pub use generation::{PluginRestartCircuitConfig, PluginRuntime, PluginRuntimeConfig};

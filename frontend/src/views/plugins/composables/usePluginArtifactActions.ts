@@ -3,7 +3,7 @@ import type { PluginArtifact } from '@/api'
 import { shallowRef } from 'vue'
 import { deletePluginArtifact } from '@/api'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { notifyPluginError } from '../utils/actions'
 
 export function usePluginArtifactActions({ refresh }: PluginRefreshContext) {

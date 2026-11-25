@@ -85,6 +85,7 @@
       "active": "当前生效",
       "activeDescription": "跟随通用设置的新请求使用此身份",
       "upToDate": "制品一致",
+      "versionUpToDate": "版本一致",
       "upToDateDescription": "当前生效版本与官方最新发布一致",
       "updateAvailable": "发现新版",
       "latestRelease": "官方最新版本 {releaseLabel}",

@@ -15,7 +15,6 @@ defineProps<{
   loading: boolean
   disabled: boolean
   authorization: AccountAuthorizationView
-  canStart: boolean
 }>()
 
 const emit = defineEmits<{ regenerate: [] }>()
@@ -49,7 +48,7 @@ const copyWithToast = useCopyText()
     <div class="flex flex-wrap items-center gap-2">
       <ZButton
         :loading="loading"
-        :disabled="disabled || (!authorization.flow && !canStart)"
+        :disabled="disabled"
         @click="emit('regenerate')"
       >
         {{ authUrl ? t('accounts.onboarding.regenerateAuthorizationLink') : t('accounts.onboarding.generateAuthorizationLink') }}

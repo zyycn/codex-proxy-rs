@@ -7,12 +7,12 @@ import { KeyRound } from '@lucide/vue'
 
 import { computed, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { isValidInstallationSeed } from '@/api/modules/settings/profiles'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
-import ProviderRequestProfilesEditor from '@/components/client-profile/ProviderRequestProfilesEditor.vue'
-import { useApiKeyFormRules } from '../composables/useApiKeyFormRules'
+import ProviderRequestProfilesEditor from '@/components/request-profile/index.vue'
+import { isValidInstallationSeed } from '@/providers/openai/request-profile/installationSeed'
+import InstallationSeedField from '@/providers/openai/request-profile/InstallationSeedField.vue'
 
-import ApiKeyInstallationSeedField from './ApiKeyInstallationSeedField.vue'
+import { useApiKeyFormRules } from '../composables/useApiKeyFormRules'
 import ApiKeyLimitFields from './ApiKeyLimitFields.vue'
 import ApiKeyPeerSharingField from './ApiKeyPeerSharingField.vue'
 
@@ -133,7 +133,7 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
           />
         </ZFormItem>
 
-        <ApiKeyInstallationSeedField
+        <InstallationSeedField
           v-model="form.installationSeed" :error="installationSeedError" :disabled="saving"
           :placeholder="t('settings.clientProfile.installationSeedPlaceholder')"
         />

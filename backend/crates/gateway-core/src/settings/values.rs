@@ -27,9 +27,9 @@ pub struct SettingsValues {
     pub(crate) openai_guardian_reserved_concurrency: u32,
     pub(crate) openai_oauth_guardian_review_model: bool,
     pub(crate) openai_request_country: crate::account::OpenAiRequestCountry,
-    pub(crate) openai_account_affinity: crate::account::AccountAffinity,
+    pub(crate) account_affinity: crate::account::AccountAffinity,
     pub(crate) max_account_rotations: u32,
-    pub(crate) openai_session_affinity_ttl_hours: u32,
+    pub(crate) session_affinity_ttl_hours: u32,
     pub(crate) responses_max_decompressed_body_bytes: u64,
     pub(crate) smart_scheduling: crate::account::SmartSchedulingConfig,
     #[serde(default)]
@@ -77,17 +77,17 @@ impl SettingsValues {
     }
 
     #[must_use]
-    pub const fn with_openai_session_affinity_ttl_hours(mut self, hours: u32) -> Self {
-        self.openai_session_affinity_ttl_hours = hours;
+    pub const fn with_session_affinity_ttl_hours(mut self, hours: u32) -> Self {
+        self.session_affinity_ttl_hours = hours;
         self
     }
 
     #[must_use]
-    pub const fn with_openai_account_affinity(
+    pub const fn with_account_affinity(
         mut self,
         affinity: crate::account::AccountAffinity,
     ) -> Self {
-        self.openai_account_affinity = affinity;
+        self.account_affinity = affinity;
         self
     }
 
@@ -236,9 +236,9 @@ impl SettingsValues {
             openai_guardian_reserved_concurrency: 0,
             openai_oauth_guardian_review_model: true,
             openai_request_country: Default::default(),
-            openai_account_affinity: crate::account::AccountAffinity::default(),
+            account_affinity: crate::account::AccountAffinity::default(),
             max_account_rotations: 3,
-            openai_session_affinity_ttl_hours: 24,
+            session_affinity_ttl_hours: 24,
             responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             smart_scheduling: crate::account::SmartSchedulingConfig::default(),
             quota_reset_window_weights: crate::account::ResetWindowWeights::default(),
@@ -292,7 +292,7 @@ pub fn validate_request_limits(
         ),
         (
             (1..=crate::account::MAX_SESSION_AFFINITY_TTL_HOURS).contains(&affinity_ttl_hours),
-            "openai_session_affinity_ttl_hours",
+            "session_affinity_ttl_hours",
         ),
     ] {
         if !valid {

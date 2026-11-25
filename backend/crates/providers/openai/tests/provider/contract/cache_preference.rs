@@ -128,7 +128,7 @@ async fn cache_preference_storage_timeouts_follow_the_affinity_mode() {
                     session_binding::context_with_affinity_policy(
                         "req_cache_store_timeout",
                         contract_account_scope(),
-                        account_policy().with_openai_account_affinity(mode),
+                        account_policy().with_account_affinity(mode),
                     ),
                 )
                 .await;
@@ -163,7 +163,7 @@ async fn round_robin_retains_the_assignment_when_a_cache_preference_cannot_be_sa
         "req_cache_rr",
         contract_account_scope(),
         AccountSelectionPolicy::new(RotationStrategy::RoundRobin, NonZeroU32::MIN)
-            .with_openai_account_affinity(AccountAffinity::Preferred),
+            .with_account_affinity(AccountAffinity::Preferred),
     );
     let key = attempt.client_api_key_ref().clone();
     let result = provider

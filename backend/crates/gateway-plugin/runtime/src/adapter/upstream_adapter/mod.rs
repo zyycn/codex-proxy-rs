@@ -5,7 +5,6 @@ mod execution;
 mod failure;
 mod observation;
 mod registration;
-pub(crate) mod target;
 
 use std::{fmt, sync::Arc};
 
@@ -22,7 +21,7 @@ use gateway_core::{
 use gateway_plugin_sdk::call::upstream_adapter::UpstreamAdapterDeclaration;
 
 use super::scope::BindingScope;
-use crate::{RpcSession, callback::PluginCallbacks};
+use crate::{RpcSession, callback::PluginCallbacks, upstream_target::UpstreamTarget};
 
 pub(crate) use registration::{prepare, unavailable_entries, validate_bindings};
 
@@ -55,7 +54,7 @@ pub(crate) struct PluginUpstreamAdapter {
     instance_id: String,
     contribution_id: String,
     declaration: UpstreamAdapterDeclaration,
-    target: Arc<target::UpstreamTarget>,
+    target: Arc<UpstreamTarget>,
     session: Arc<RpcSession>,
     callbacks: Arc<PluginCallbacks>,
     connections: Arc<crate::callback::upstream::ConnectionPool>,

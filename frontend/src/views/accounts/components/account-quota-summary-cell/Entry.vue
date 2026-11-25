@@ -6,9 +6,9 @@ import { ZPopover } from '@codex-proxy/ui'
 import { computed } from 'vue'
 
 import { useI18n } from 'vue-i18n'
-import AccountUsageWindow from '@/components/account/account-usage-window/index.vue'
-import { quotaWindowLabel } from '@/components/account/account-usage-window/presenter'
-import AccountQuotaWindowDetails from '@/components/account/AccountQuotaWindowDetails.vue'
+import AccountUsageWindow from '@/components/account-usage-window/index.vue'
+import { quotaWindowLabel } from '@/components/account-usage-window/presenter'
+import AccountQuotaWindowDetails from '@/views/accounts/components/AccountQuotaWindowDetails.vue'
 import AccountQuotaWindowGroup from './WindowGroup.vue'
 
 const props = withDefaults(defineProps<{

@@ -216,7 +216,7 @@ async fn full_http_replay_preserves_turn_state_without_local_proof() {
                 ),
                 NonZeroU32::new(1).unwrap(),
                 SystemTime::now() + Duration::from_secs(30),
-                account_policy().with_openai_session_affinity_ttl(Duration::ZERO),
+                account_policy().with_session_affinity_ttl(Duration::ZERO),
                 AccountAttemptContext::new(BTreeSet::new(), None, None)
                     .with_account_scope(contract_account_scope()),
                 None,

@@ -8,7 +8,7 @@ import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import SchemaForm from '@/components/schema-form/index.vue'
-import { parseJsonObject } from '@/utils/data'
+import { parseJsonObject } from '@/components/schema-form/schema'
 import { PLUGIN_CONFIGURATION_MAX_BYTES } from '../constants'
 import PluginHelpPopover from './PluginHelpPopover.vue'
 

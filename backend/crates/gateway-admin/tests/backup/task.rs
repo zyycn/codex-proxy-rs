@@ -213,6 +213,7 @@ async fn retention_cleans_expired_scheduled_backups() {
     repository
         .update_schedule_settings(
             UpdateBackupScheduleCommand {
+                storage_revision: 1,
                 schedule_enabled: false,
                 cron_expression: "0 2 * * *".to_owned(),
 

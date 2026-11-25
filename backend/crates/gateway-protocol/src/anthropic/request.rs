@@ -9,7 +9,7 @@ use super::{
     tools::{ToolSet, messages_tools},
 };
 
-/// 原生 Messages 上游不能消费本网关封装的 OpenAI 思考，仅删除已知外来源载荷
+/// 原生 Messages 上游不能消费本网关封装的外来源思考，仅删除已知载荷
 pub fn strip_foreign_thinking_for_messages(request: &mut Map<String, Value>) {
     let Some(messages) = request.get_mut("messages").and_then(Value::as_array_mut) else {
         return;
@@ -19,7 +19,16 @@ pub fn strip_foreign_thinking_for_messages(request: &mut Map<String, Value>) {
             return true;
         };
         let previous_len = blocks.len();
-        blocks.retain(|block| !content::is_openai_carrier(block));
+        blocks.retain(|block| {
+            !content::is_openai_carrier(block)
+                && !(block["type"] == "thinking"
+                    && block
+                        .get("signature")
+                        .and_then(Value::as_str)
+                        .is_some_and(|signature| {
+                            signature.starts_with(super::content::GENAI_CARRIER)
+                        }))
+        });
         blocks.len() == previous_len || !blocks.is_empty()
     });
 }

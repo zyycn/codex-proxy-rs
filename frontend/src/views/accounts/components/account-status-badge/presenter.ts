@@ -2,7 +2,7 @@ import type { Component } from 'vue'
 import type { AccountErrorReason, AccountProtectionRule, AccountQuota, AccountStatus } from '@/api'
 import { AlertTriangle, CircleCheck, Gauge, Power, Timer } from '@lucide/vue'
 import { computed } from 'vue'
-import { quotaWindowLabel } from '@/components/account/account-usage-window/presenter'
+import { quotaWindowLabel } from '@/components/account-usage-window/presenter'
 import { t } from '@/i18n'
 
 import { errorReasonLabels, statusLabels, statusTones } from '../../constants'

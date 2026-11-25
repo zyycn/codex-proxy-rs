@@ -19,6 +19,10 @@
     },
     "quota": {
       "general": "通用额度",
+      "groups": {
+        "geminiModels": "Gemini 模型",
+        "claudeGptModels": "Claude 和 GPT 模型"
+      },
       "usageInThisWindow": "窗口消耗：{localUsageDisplay}",
       "quotaUsed": "额度已使用：{rate}",
       "resets": "重置时间: {resetAtDisplay}",
@@ -289,7 +293,7 @@
       "downloadModelCatalog": "下载模型目录",
       "restoreState": "重置状态",
       "staleSelection": "所选账号数据已失效，请重新选择",
-      "exportUnsupported": "所选账号包含不支持导出的平台",
+      "exportUnsupported": "所选账号中有账号不支持导出凭据",
       "deleted": "账号已删除",
       "deletedAccountDeletedAccounts": "已删除 {count} 个账号",
       "partialDeletion": "已删除 {count} 个账号，其余未删除：{value}",
@@ -321,7 +325,6 @@
       "tokensStructure": "Token 用量",
       "cacheRead": "缓存读取",
       "reasoning": "推理",
-      "cacheWrites": "缓存写入",
       "modelUsageRanking": "模型用量",
       "totalTokens": "总 Token",
       "totalCharge": "总计费",
@@ -368,6 +371,8 @@
       "callbackLabel": "回调地址或授权码",
       "callbackAddress": "回调地址",
       "callbackPlaceholder": "回调地址、?code=...&state=... 或授权码",
+      "fullCallbackHelp": "完成浏览器授权后，将地址栏中的完整回调地址粘贴到这里",
+      "fullCallbackPlaceholder": "粘贴包含 code 和 state 的完整回调地址",
       "callbackHelp": "打开授权链接，完成浏览器授权后粘贴回调地址或授权码",
       "pasteOneAccessTokenPerLine": "每行粘贴一个 Access Token",
       "pasteOneRefreshTokenPerLine": "每行粘贴一个 Refresh Token",

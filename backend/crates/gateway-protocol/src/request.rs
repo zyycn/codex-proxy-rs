@@ -2,7 +2,10 @@
 
 use serde_json::{Map, Value};
 
+pub use crate::capabilities::RequestFacts;
+
 use crate::anthropic::{ANTHROPIC_PROTOCOL, messages_request_effort};
+use crate::genai::{self, GENAI_PROTOCOL};
 use crate::openai::{OPENAI_PROTOCOL, codex_responses_request_semantics_with_turn_metadata};
 
 /// 与执行 Provider 无关的逻辑请求观测
@@ -47,27 +50,12 @@ pub fn request_observation(
             reasoning_effort: messages_request_effort(body).map(str::to_owned),
             ..RequestObservation::default()
         },
+        GENAI_PROTOCOL => RequestObservation {
+            reasoning_effort: genai::thinking_level(body).map(str::to_ascii_lowercase),
+            ..RequestObservation::default()
+        },
         _ => RequestObservation::default(),
     }
-}
-
-/// 请求正文表达的能力要求
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RequestFacts {
-    /// 显式输出预算
-    pub max_output_tokens: Option<u64>,
-    /// 工具声明
-    pub tools: bool,
-    /// 图片输入
-    pub vision: bool,
-    /// 图片生成工具声明
-    pub image_generation: bool,
-    /// 推理配置
-    pub reasoning: bool,
-    /// JSON Schema 输出
-    pub json_schema: bool,
-    /// 原生服务端续接
-    pub native_continuation: bool,
 }
 
 /// 按协议提取能力事实，未知协议保留空事实供其 owner 补齐
@@ -115,6 +103,7 @@ pub fn request_facts(protocol: &str, body: &Map<String, Value>) -> RequestFacts 
                 .and_then(Value::as_str)
                 == Some("json_schema");
         }
+        GENAI_PROTOCOL => genai::request_facts(body, &mut facts),
         _ => {}
     }
     facts

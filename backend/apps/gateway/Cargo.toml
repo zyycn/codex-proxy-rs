@@ -18,6 +18,7 @@ gateway-core = { path = "../../crates/gateway-core" }
 gateway-host = { path = "../../crates/gateway-host" }
 gateway-plugin-runtime = { path = "../../crates/gateway-plugin/runtime" }
 gateway-store = { path = "../../crates/gateway-store" }
+provider-antigravity = { path = "../../crates/providers/antigravity" }
 provider-openai = { path = "../../crates/providers/openai" }
 provider-xai = { path = "../../crates/providers/xai" }
 serde = { version = "1.0.228", features = ["derive"] }

@@ -1,10 +1,16 @@
 //! OpenAI Provider、凭据与上游传输的测试入口
 
 mod admin;
+#[path = "../src/billing/mod.rs"]
+#[allow(dead_code, unused_imports)]
+mod billing;
+#[path = "billing/mod.rs"]
+mod billing_tests;
 mod compat;
 mod config;
 mod credential;
 mod jitter;
+mod profile;
 mod provider;
 mod support;
 mod transport;

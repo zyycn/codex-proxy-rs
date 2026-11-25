@@ -1,8 +1,9 @@
 import type { Account, AccountErrorReason, AccountQuotaWindow, AccountStatus, AccountUsage } from '@/api'
 import { defineTableColumns } from '@codex-proxy/ui'
 import { computed } from 'vue'
+import { quotaLimitLabel } from '@/components/account-usage-window/presenter'
 import { t } from '@/i18n'
-import { formatProviderLabel } from '@/utils/providers'
+import { formatProviderLabel } from '@/providers/catalog'
 
 export interface AccountQuotaWindowEntry {
   key: string
@@ -32,7 +33,7 @@ export const accountColumns = computed(() => (defineTableColumns<Account>([
     hideable: false,
     label: t('accounts.account'),
     kind: 'identity',
-    size: '3xl',
+    size: '2xl',
     sortable: 'email',
   },
   {
@@ -234,12 +235,6 @@ function windowRoleOrder(role: AccountQuotaWindow['role']) {
     default:
       return 3
   }
-}
-
-function quotaLimitLabel(window: AccountQuotaWindow) {
-  if (window.limitId === 'codex')
-    return t('accounts.quota.general')
-  return window.limitName
 }
 
 function optionalAccountCell(value: unknown) {

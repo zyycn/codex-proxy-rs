@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import type { PrivacyRule, PrivacySample, PrivacyStep } from '@/api/modules/settings/privacy'
+import type { PrivacyRule, PrivacySample, PrivacyStep } from '@/api'
 
 import { ZButton, ZDialog, ZFormItem, ZInput, ZTextarea } from '@codex-proxy/ui'
 import { Play } from '@lucide/vue'
 import { cloneDeep } from 'es-toolkit'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { usePrivacyPreview } from '../../composables/usePrivacyPreview'
 import { exampleRequest, newRule, newStep } from './presets'
 import StepFields from './StepFields.vue'
 import StepList from './StepList.vue'
+import { usePrivacyPreview } from './usePrivacyPreview'
 
 const props = defineProps<{ rule: PrivacyRule | null, maxSteps: number, isNew: boolean, disabled: boolean }>()
 

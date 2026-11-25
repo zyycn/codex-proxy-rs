@@ -15,11 +15,11 @@ use gateway_admin::model::plugins::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    SessionState,
     admin::{
         AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse,
         wire::map_admin_service_error,
     },
-    auth::SessionState,
 };
 
 #[derive(Serialize)]

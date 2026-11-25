@@ -312,7 +312,7 @@ async fn router(mode: Mode, timeout: Option<u64>) -> (axum::Router, Arc<Plan>) {
             Arc::new(Lease),
         ),
     );
-    let router = crate::openai::api_bundle(
+    let router = crate::data_plane::api_bundle(
         admin.services,
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
@@ -532,7 +532,7 @@ async fn internal_dispatch_uses_the_same_router_and_the_frozen_parent_context() 
             Arc::new(Lease),
         ),
     );
-    let bundle = crate::openai::api_bundle(
+    let bundle = crate::data_plane::api_bundle(
         admin.services,
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
@@ -597,7 +597,7 @@ async fn parent_cancellation_wakes_a_pending_child_response_body() {
             Arc::new(Lease),
         ),
     );
-    let bundle = crate::openai::api_bundle(
+    let bundle = crate::data_plane::api_bundle(
         admin.services,
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),
@@ -644,7 +644,7 @@ async fn parent_cancellation_wakes_a_pending_child_response_body() {
 #[tokio::test]
 async fn plugin_http_dispatch_uses_host_identity_without_client_credentials() {
     let admin = crate::admin::AdminTestFixture::new().await;
-    let bundle = crate::openai::api_bundle(
+    let bundle = crate::data_plane::api_bundle(
         admin.services,
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),

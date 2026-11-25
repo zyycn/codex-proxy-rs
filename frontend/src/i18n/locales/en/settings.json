@@ -1,12 +1,16 @@
 {
   "settings": {
     "clientProfile": {
+      "systemPrompt": "System prompt",
+      "systemPromptHint": "Replaces client system instructions · Default from {source}",
+      "restoreSystemPrompt": "Restore default",
       "userAgent": "User agent",
       "clientIdentitySource": "Client identity source",
       "globalConfiguration": "Global configuration",
       "customConfiguration": "Custom configuration",
       "enterIntegerFromTo": "Enter an integer from 1 to {version}",
-      "installationSeed": "Installation seed",
+      "coreVersion": "Core version",
+      "installationSeed": "Codex installation seed",
       "generateInstallationSeed": "Generate installation seed",
       "installationSeedHelp": "Derives a stable installation identity for each key and upstream account without sending the seed upstream, changing the seed changes the identity",
       "installationSeedPlaceholder": "Leave blank to use the upstream account’s installation ID",
@@ -17,6 +21,7 @@
       "coreDefaultIdentity": "Core · Default identity",
       "tuiInteractiveTerminal": "TUI · Interactive terminal",
       "execNonInteractiveExecution": "Exec · Non-interactive execution",
+      "clientVersion": "Client version",
       "versionStrategy": "Version strategy",
       "followLatestVersion": "Follow the latest version",
       "customVersion": "Custom version",
@@ -45,7 +50,7 @@
       "grokCliVersion": "Grok CLI version",
       "forExample": "For example: 1.0.13",
       "clientIdentity": "Client identity",
-      "description": "Set the client type, version, and request headers the gateway sends upstream"
+      "identityDescription": "Configure the client identity sent upstream"
     },
     "pricing": {
       "multiplier": "Multiplier",
@@ -88,7 +93,8 @@
       "source": "Source",
       "takeEffect": "Take effect",
       "sync": {
-        "title": "Sync source prices",
+        "title": "Sync {provider} source prices",
+        "unavailable": "No source prices available for this provider. Set prices manually.",
         "description": "Sync source prices for selected models, keeping custom prices and multipliers",
         "skipped": "Skipped {count} models with incomplete prices or incompatible billing methods",
         "action": "Sync"
@@ -159,7 +165,7 @@
       "weekly": "Weekly",
       "monthly": "Monthly",
       "roundRobin": "Round robin",
-      "autoReviewSlotsHelp": "Applies to Codex accounts only: with a regular concurrency limit of 10 and 3 auto review slots, up to 10 regular requests and 3 auto review requests can run independently",
+      "autoReviewSlotsHelp": "With a regular concurrency limit of 10 and 3 auto review slots, up to 10 regular requests and 3 auto review requests can run independently",
       "autoReviewQueueHelp": "With dedicated slots, auto review uses a separate queue that may exceed account queue capacity, while total queue capacity, queue timeout, and API key limits still apply",
       "weights": {
         "load": "Load weight",
@@ -187,8 +193,8 @@
         "preferred": "Preferred",
         "strict": "Strict",
         "relaxedHelp": "Relaxed: use the scheduling policy without preferring the session's primary account",
-        "preferredHelp": "Preferred: reuse the primary account, spill over during brief congestion, and migrate the session binding if disabled or persistently unavailable",
-        "strictHelp": "Strict: use one account per session, child threads wait and follow the parent thread's account switches"
+        "preferredHelp": "Preferred: reuse the primary account, allow temporary spillover when busy, and reselect when the binding is no longer usable",
+        "strictHelp": "Strict: reuse the same account and wait when queuing is enabled; rebind when the account is unavailable or switching is allowed"
       },
       "title": "Session affinity",
       "mode": "Mode",
@@ -204,7 +210,7 @@
     },
     "warmup": {
       "title": "Scheduled warmup",
-      "description": "Try to start quota windows for idle Codex OAuth accounts",
+      "description": "Try to start quota windows for idle OAuth accounts",
       "enableWarmup": "Enable scheduled warmup",
       "cronExpression": "Cron expression",
       "cronHelp": "Press Enter after each tag",
@@ -212,8 +218,9 @@
       "modelHelp": "Required when enabled, use an available model",
       "modelPlaceholder": "Enter model name",
       "helpTitle": "About scheduled warmup",
-      "help": "Sends a lightweight request to available Codex OAuth accounts, skipping exhausted quotas and confirmed active windows, accounts at 0% may be warmed up, activation is not guaranteed",
-      "scheduleHelp": "Runs in the deployment time zone, once per matching minute"
+      "help": "Sends a lightweight request to available OAuth accounts, skipping exhausted quotas and confirmed active windows, accounts at 0% may be warmed up, activation is not guaranteed",
+      "scheduleDescription": "Runs in the deployment time zone",
+      "scheduleHelp": "Warms up once per matching minute"
     },
     "adminApiKey": {
       "adminApiKey": "Admin API key",
@@ -257,7 +264,8 @@
       "inSeconds": "{label} (seconds)"
     },
     "concurrency": {
-      "title": "Concurrency and retries",
+      "title": "Concurrency and queues",
+      "description": "Limit account concurrency and request queues",
       "accountLimit": {
         "label": "Default account concurrency",
         "help": "Used unless overridden, 0 means unlimited"
@@ -267,10 +275,11 @@
       "accountQueueCapacity": "Account queue capacity",
       "accountQueueHelp": "Per account, 0 disables queuing",
       "keyTimeout": "API key queue timeout",
-      "keyTimeoutHelp": "Maximum wait for a key slot before returning an error",
+      "keyTimeoutHelp": "Returns an error on timeout",
       "accountTimeout": "Account queue timeout",
-      "accountTimeoutHelp": "Starts on first account queue entry and continues across retries",
+      "accountTimeoutHelp": "Starts on first queue entry, no reset on retry",
       "queueFailure": "When the account queue is full or times out",
+      "queueFailureDescription": "Choose how to handle queue failures",
       "queueFailureHelp": "Try another account with capacity or return the queue error if switching is unavailable",
       "queueFailureHelpTitle": "Account switching rules",
       "queueFailureAttempt": "Try switching once without queuing again",
@@ -279,7 +288,7 @@
       "trySwitch": "Try another account",
       "autoReview": {
         "label": "Reserved auto review slots",
-        "description": "Extra slots per Codex account, 0 shares regular concurrency",
+        "description": "Extra slots per account, 0 shares regular concurrency",
         "helpTitle": "About auto review concurrency"
       },
       "retryAfter": {
@@ -289,10 +298,14 @@
         "waitLimit": "The default 240-second limit applies to each Retry-After wait rather than the total request time",
         "zeroLimit": "Set to 0 to treat any positive wait as over the limit",
         "switchConditions": "Above the limit, only retryable requests with account switches remaining can switch accounts, and an error is returned if none is available"
-      }
+      },
+      "retryTitle": "Retries and account switching",
+      "retryDescription": "Limit retry waits and account switches"
     },
     "modelMapping": "Model mapping",
     "routing": {
+      "guardianReviewTitle": "Auto review",
+      "guardianReviewDescription": "Review requests can use separate concurrency slots",
       "oauthGuardianReviewModel": "Dedicated review model",
       "oauthGuardianReviewModelHelp": "Prefer the dedicated review model for synchronous reviews with OAuth accounts",
       "oauthGuardianReviewModelDetails": "Prefer codex-auto-review when enabled. Use the model requested by the client when disabled or when no eligible review account is available",
@@ -300,13 +313,14 @@
     },
     "addMapping": "Add mapping",
     "loadingModelMapping": "Loading model mapping",
+    "emptyModelMapping": "No model mappings",
     "requestModel": "Request model",
     "upstreamModel": "Upstream model",
     "upstreamModelName": "Upstream model name",
     "deleteMapping": "Delete mapping",
     "history": {
       "title": "History retention",
-      "retentionHelp": "Auto-delete expired request records and statistics",
+      "description": "Set how long request records and statistics are kept",
       "retentionConstraints": "Minimum 1 day, deletion is permanent",
       "retentionDaysLabel": "History retention (d)"
     },
@@ -315,8 +329,8 @@
     "day": "d",
     "location": {
       "requestCountry": "Request country",
-      "requestCountryDescription": "Choose how Codex requests send the country code",
-      "requestCountryScope": "Applies only to Codex OAuth accounts",
+      "requestCountryDescription": "Choose how requests send the country code",
+      "requestCountryScope": "Applies only to OAuth accounts",
       "countryHelp": "Request country mode help",
       "countryMode": "Policy",
       "countryModes": {
@@ -333,7 +347,7 @@
       },
       "customCountryCode": "Custom country code",
       "requestLocationOverride": "Request location override",
-      "description": "Override time zone and location fields in Codex requests, custom locations on account proxies take precedence",
+      "description": "Override time zone and location fields in requests, custom locations on account proxies take precedence",
       "enableLocationOverlay": "Enable location overlay"
     },
     "quotaReset": {
@@ -352,13 +366,14 @@
     "remainingWeeklyQuotaLimit": "Remaining weekly quota limit (%)",
     "responseLimit": {
       "requestBodyLimit": "Request body limit",
-      "description": "Limit decompressed request bodies for the Responses API",
-      "maximumSizeAfterDecompression": "Maximum size after decompression",
+      "description": "Shared by model request decompression and outbound plugin requests",
+      "maximumSize": "Maximum size",
       "sizeHelp": "Higher limits allow larger images and conversation history, increasing memory use",
-      "maxSizeLabel": "Maximum decompressed request body size"
+      "maxSizeLabel": "Maximum request body size"
     },
     "rotation": {
       "title": "Scheduling",
+      "description": "Choose how to pick available accounts",
       "customized": "Custom",
       "smartSchedulingSettings": "Smart scheduling settings",
       "smartLabel": "Smart",
@@ -379,6 +394,7 @@
     },
     "tokenRefresh": {
       "title": "Credential refresh",
+      "description": "Manage access token refresh across providers",
       "leadTimeLabel": "Refresh lead time",
       "leadTimeHelp": "Refresh access tokens before they expire",
       "concurrencyLabel": "Refresh concurrency limit",
@@ -440,6 +456,7 @@
         "objectStorageSpecificSecret": "Object storage-specific Secret",
         "forcePathStyle": "Force path-style access",
         "accessKeyId": "Access key ID",
+        "keepSecret": "Leave blank to keep the saved secret",
         "secretAccessKey": "Secret access key",
         "description": "Configure S3-compatible storage, including {service}",
         "test": "Test"
@@ -500,6 +517,7 @@
       "codexClientUpgrade": "Codex client upgrade",
       "guideDescription": "Select a client to view its installation and upgrade instructions",
       "clientVersionRestrictions": "Client version restrictions",
+      "restrictionsDescription": "Clients below the minimum version must upgrade",
       "openGuide": "View installation and upgrade instructions",
       "codexDesktopMinimumVersion": "Codex Desktop minimum version",
       "onlyCheckDesktopVersionEG": "Only check the desktop version, e.g. 26.825.51511",
@@ -521,7 +539,7 @@
       "skipCurrentRule": "Skip rule",
       "blockRequestFromBeingSent": "Reject request",
       "privacyPolicy": "Privacy policy",
-      "description": "Normalize or remove private information in Codex requests using rules",
+      "description": "Normalize or remove private information in requests using rules",
       "enableRequestRules": "Enable request rules",
       "addRule": "Add rule",
       "addFromPreset": "Add from preset",
@@ -644,7 +662,7 @@
       "invalidSwitchLimit": "Maximum account switches must be an integer from 0 to 31, set to 0 to disable switching",
       "invalidConcurrency": "Default account concurrency must be an integer from 0 to 4,294,967,295, set to 0 for unlimited",
       "invalidReviewConcurrency": "Auto review concurrency must be an integer from 0 to 4,294,967,295, set to 0 to share regular concurrency",
-      "invalidBodyLimit": "Responses decompression limit must be a positive integer in MiB",
+      "invalidBodyLimit": "Request body limit must be a positive integer in MiB",
       "invalidQuotaThreshold": "Remaining weekly quota threshold must be an integer from 0 to 100, leave blank for no limit",
       "invalidResetLeadTime": "Reset credit lead time must be an integer from 1 to 1,440 minutes",
       "invalidRetention": "History retention must be a positive integer",
@@ -660,10 +678,9 @@
     },
     "page": {
       "tabs": {
-        "runtime": "Runtime",
-        "upstream": "Upstream",
+        "runtime": "General",
+        "upstream": "Providers",
         "pricing": "Pricing",
-        "access": "Security",
         "backups": "Backups"
       },
       "description": "Manage scheduling, upstreams, pricing, security, retention and backups",
@@ -675,8 +692,9 @@
         "leave": "Discard and leave",
         "stay": "Keep editing"
       },
-      "saveChanges": "Save",
-      "basicSettings": "Basic settings"
+      "saveChanges": "Save all changes",
+      "basicSettings": "Basic settings",
+      "providerLabel": "Select provider"
     },
     "errorProtection": {
       "title": "Error protection",

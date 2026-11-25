@@ -1,11 +1,12 @@
-import type { ApiKey, ApiKeyPeerSharing } from '@/api'
-import type { ProviderRequestProfiles, ProviderRequestProfileUpdates } from '@/api/modules/settings/profiles'
+import type { ApiKey, ApiKeyPeerSharing, ProviderRequestProfiles } from '@/api'
 import { cloneDeep } from 'es-toolkit'
 import { ref, shallowRef } from 'vue'
 import { createApiKey, updateApiKey } from '@/api'
+import { requestProfileChanges } from '@/components/request-profile/changes'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
+import { decodeKeyProfiles, encodeKeyProfiles } from '@/providers/openai/request-profile/installationSeed'
 
 export interface ApiKeyFormValue {
   peerSharing: ApiKeyPeerSharing
@@ -77,24 +78,16 @@ export function useApiKeyEditor(options: {
           dailyLimitUsd: form.value.dailyLimitUsd.trim() || '0',
           weeklyLimitUsd: form.value.weeklyLimitUsd.trim() || '0',
         }
-        const profiles = cloneDeep(form.value.providerRequestProfileOverrides)
-        const installationSeed = form.value.installationSeed
-        if (installationSeed) {
-          // 仅设置种子时仍继承全局 UA，不在 Key 中复制当前全局值
-          profiles.openai = profiles.openai
-            ? { ...profiles.openai, installationSeed }
-            : {
-                inherit: { installationSeed },
-              }
-        }
+        const profiles = encodeKeyProfiles(form.value.providerRequestProfileOverrides, form.value.installationSeed)
         const current = editingKey.value
         let created: { key: string, name: string } | undefined
         if (current) {
+          const original = decodeKeyProfiles(current.providerRequestProfileOverrides)
           await updateApiKey({
             id: current.id,
             ...payload,
-            providerRequestProfileOverrides: profileOverrideUpdates(
-              current.providerRequestProfileOverrides,
+            providerRequestProfileOverrides: requestProfileChanges(
+              encodeKeyProfiles(original.profiles, original.installationSeed),
               profiles,
             ),
           })
@@ -164,18 +157,6 @@ function emptyForm(): ApiKeyFormValue {
   }
 }
 
-function profileOverrideUpdates(
-  previous: ProviderRequestProfiles,
-  current: ProviderRequestProfiles,
-): ProviderRequestProfileUpdates {
-  const updates: ProviderRequestProfileUpdates = cloneDeep(current)
-  for (const provider of Object.keys(previous)) {
-    if (!Object.hasOwn(current, provider))
-      updates[provider] = null
-  }
-  return updates
-}
-
 function limitInputValue(limit: string | number) {
   return Number(limit) === 0
     ? ''
@@ -183,16 +164,7 @@ function limitInputValue(limit: string | number) {
 }
 
 export function apiKeyFormValue(key: ApiKey): ApiKeyFormValue {
-  const profiles = cloneDeep(key.providerRequestProfileOverrides)
-  const openai = profiles.openai
-  const identity = (openai?.inherit as Record<string, unknown> | undefined) ?? openai
-  const installationSeed = typeof identity?.installationSeed === 'string'
-    ? identity.installationSeed
-    : ''
-  if (openai?.inherit)
-    delete profiles.openai
-  else if (openai)
-    delete openai.installationSeed
+  const { profiles, installationSeed } = decodeKeyProfiles(cloneDeep(key.providerRequestProfileOverrides))
   return {
     peerSharing: { ...key.peerSharing },
     providerRequestProfileOverrides: profiles,

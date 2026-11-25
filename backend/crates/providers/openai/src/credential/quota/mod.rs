@@ -52,7 +52,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::transport::profile::CodexWireProfileState;
+use crate::profile::CodexWireProfileState;
 use crate::transport::protocol::responses::CodexResponsesRequest;
 use crate::transport::{
     CodexBackendClient, CodexBackendStreamingResponse, CodexClientError,

@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import type { KeyUsageMetrics } from '@/api/modules/key-usage'
+import type { KeyUsageMetrics } from '@/api'
 
 import { ZCard, ZMotionIcon } from '@codex-proxy/ui'
 import { Gauge, Zap } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AnimatedMetricValue from '@/components/AnimatedMetricValue.vue'
-import { formatCompactNumber, formatInteger } from '@/utils/format'
-import { money } from '../utils/format'
+import { formatCompactNumber, formatInteger, formatUsageCost } from '@/utils/format'
 import { keyUsageTokenMetrics, keyUsageTokenValue } from '../utils/metrics'
 
 const props = defineProps<{ summary: KeyUsageMetrics }>()
@@ -74,7 +73,7 @@ const metrics = computed(() => [
             {{ t('usage.summary.totalCost') }}
           </dt>
           <dd class="m-0 min-w-0 font-mono text-z-lg leading-none font-bold wrap-anywhere tabular-nums text-z-success-text">
-            {{ money(summary.costUsd) }}
+            {{ formatUsageCost(summary.costUsd) }}
           </dd>
         </div>
       </dl>

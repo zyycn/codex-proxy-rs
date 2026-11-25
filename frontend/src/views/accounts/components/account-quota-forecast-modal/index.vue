@@ -8,10 +8,10 @@ import { useIntervalFn, useNow } from '@vueuse/core'
 import { computed, ref, toRef, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
-import { useAccountQuotaForecast } from '../../composables/useAccountQuotaForecast'
 import AccountIdentityCell from '../AccountIdentityCell.vue'
 import ForecastCapacity from './ForecastCapacity.vue'
 import ForecastSkeleton from './Skeleton.vue'
+import { useAccountQuotaForecast } from './useAccountQuotaForecast'
 
 const props = defineProps<{ account: Account }>()
 

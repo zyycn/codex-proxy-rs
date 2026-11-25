@@ -7,8 +7,8 @@ import { normalizeRgbaHexColor, ZButton, ZColorPicker, ZDialog, ZForm, ZFormItem
 import { computed, useTemplateRef, watch } from 'vue'
 
 import { useI18n } from 'vue-i18n'
-import AccountModelAccessField from '@/components/account/model-access/index.vue'
-import { accountModelAccessError } from '@/components/account/model-access/modelAccess'
+import AccountModelAccessField from '@/components/account-model-access-field/index.vue'
+import { accountModelAccessError } from '@/components/account-model-access-field/validation'
 import HelpPopover from '@/components/HelpPopover.vue'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 

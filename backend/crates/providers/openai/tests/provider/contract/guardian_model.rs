@@ -208,8 +208,7 @@ async fn guardian_direct_model_respects_the_strict_parent_account() {
             .await
             .unwrap()
     );
-    let preferred =
-        strict.with_openai_account_affinity(gateway_core::account::AccountAffinity::Preferred);
+    let preferred = strict.with_account_affinity(gateway_core::account::AccountAffinity::Preferred);
     assert!(
         provider
             .allows_direct_model_scope(&reviewer, &key, &scope, preferred)

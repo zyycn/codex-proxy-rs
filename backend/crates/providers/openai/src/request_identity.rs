@@ -1,8 +1,24 @@
-//! 请求正文与最终头部的会话身份解释，供账号亲和与传输编码共用
+//! 请求会话与账号身份解释，供账号亲和、连接隔离和资料缓存共用
 
 use std::borrow::Cow;
 
 use serde_json::{Map, Value};
+
+/// 复用上游会话与账号资料时绑定本地记录和真实 OAuth 身份，正常续期不改变归属
+pub(crate) fn oauth_identity_key(account: &gateway_core::account::ProviderAccount) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hash = Sha256::new();
+    for part in [
+        account.id().as_str(),
+        account.upstream_user_id().unwrap_or_default(),
+        account.upstream_account_id().unwrap_or_default(),
+    ] {
+        hash.update((part.len() as u64).to_le_bytes());
+        hash.update(part.as_bytes());
+    }
+    hex::encode(hash.finalize())
+}
 
 /// 只有能识别出的后代线程禁止迁移会话；没有身份的普通客户端沿用现有调度
 pub(crate) fn follows_session_with_headers(

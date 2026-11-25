@@ -1,7 +1,7 @@
 import { useClipboard } from '@vueuse/core'
 import { t } from '@/i18n'
 
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 
 interface CopyTextOptions {
   successText?: string

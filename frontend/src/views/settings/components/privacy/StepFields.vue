@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { PrivacyStep } from '@/api/modules/settings/privacy'
+import type { PrivacyStep } from '@/api'
 
 import { ZCheckbox, ZForm, ZFormItem, ZIconButton, ZInput, ZPopover, ZSelect, ZTextarea } from '@codex-proxy/ui'
 import { CircleHelp } from '@lucide/vue'

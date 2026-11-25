@@ -7,7 +7,7 @@ import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { accountProfileAvatarUrl } from '@/api'
-import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import AccountPlanBadge from '@/components/account-plan-badge/index.vue'
 import { stablePresetVisualToneClass } from '@/utils/color'
 
 const props = defineProps<{

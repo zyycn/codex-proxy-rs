@@ -10,9 +10,9 @@ use axum::{
 };
 
 use crate::{
+    SessionState,
     admin::{AdminEnvelope, AdminError, AdminQuery, AdminResponse, wire::map_admin_service_error},
-    auth::SessionState,
-    session_cookie,
+    session,
 };
 
 mod presenter;
@@ -44,7 +44,7 @@ where
     let version = state
         .admin_services()
         .key_usage()
-        .version(session_cookie::value(&headers).as_deref())
+        .version(session::value(&headers).as_deref())
         .await
         .map_err(map_admin_service_error)?
         .ok_or_else(AdminError::session_required)?;
@@ -65,7 +65,7 @@ where
     let secret = state
         .admin_services()
         .key_usage()
-        .config(session_cookie::value(&headers).as_deref())
+        .config(session::value(&headers).as_deref())
         .await
         .map_err(map_admin_service_error)?
         .ok_or_else(AdminError::session_required)?;
@@ -88,7 +88,7 @@ where
         .admin_services()
         .key_usage()
         .overview(
-            session_cookie::value(&headers).as_deref(),
+            session::value(&headers).as_deref(),
             query.into_domain(state.admin_services().timezone())?,
         )
         .await
@@ -113,7 +113,7 @@ where
         .admin_services()
         .key_usage()
         .records(
-            session_cookie::value(&headers).as_deref(),
+            session::value(&headers).as_deref(),
             query.into_domain(state.admin_services().timezone())?,
         )
         .await

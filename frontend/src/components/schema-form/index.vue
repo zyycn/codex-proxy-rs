@@ -5,8 +5,7 @@ import { ZForm, ZFormItem, ZIconButton, ZInput, ZPopover, ZSelect, ZTextarea } f
 import { Braces, Info, List } from '@lucide/vue'
 import { computed, nextTick, shallowRef, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { parseJsonObject } from '@/utils/data'
-import { inputFields } from './schema'
+import { inputFields, parseJsonObject } from './schema'
 
 const props = defineProps<{
   schema: Record<string, unknown>

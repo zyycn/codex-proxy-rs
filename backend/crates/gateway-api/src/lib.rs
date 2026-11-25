@@ -24,20 +24,20 @@ use url::Url;
 
 const WEB_DIST_ENV: &str = "CPR_WEB_DIST_DIR";
 
+use crate::data_plane::service::DataPlaneService;
 use crate::health::HealthStatus;
-use crate::openai::service::OpenAiService;
 
 pub mod admin;
 pub mod auth;
 mod client_error;
+pub mod data_plane;
 mod diagnostics;
 mod health;
 mod key_usage;
 mod middleware;
-pub mod openai;
-mod provider;
 mod request_context;
-mod session_cookie;
+mod session;
+pub use session::SessionState;
 mod time;
 
 pub use time::{RequestBucketView, TimePresenter};
@@ -217,15 +217,14 @@ pub fn initialize(
     };
     let state = ApiState {
         admin,
-        openai: OpenAiService::new(execution, lifecycle),
+        data_plane: DataPlaneService::new(execution, lifecycle),
         health: HealthStatus::new(probes, worker_health, diagnostics.clone()),
     };
     let index = config.asset_directory.join("index.html");
     let mut router = Router::new()
         .route("/readyz", get(health::readyz))
         .route("/healthz", get(health::healthz))
-        .merge(openai::router::router())
-        .merge(provider::router())
+        .merge(data_plane::router::router())
         .merge(admin::router::<ApiState>())
         .merge(admin::model_router())
         .merge(auth::router::<ApiState>())
@@ -235,7 +234,8 @@ pub fn initialize(
                 .fallback_service(
                     ServeDir::new(config.asset_directory).fallback(ServeFile::new(index)),
                 )
-                .layer(axum::middleware::map_response(static_cache_control)),
+                .layer(axum::middleware::map_response(static_cache_control))
+                .layer(axum::middleware::from_fn(data_plane::router::fallback)),
         );
     if !config.cors_allowed_origins.is_empty() {
         let origins = config
@@ -337,14 +337,14 @@ pub enum ApiError {
 #[derive(Clone)]
 pub(crate) struct ApiState {
     admin: AdminServices,
-    openai: OpenAiService,
+    data_plane: DataPlaneService,
     health: HealthStatus,
 }
 
 impl ApiState {
     #[must_use]
-    pub(crate) const fn openai(&self) -> &OpenAiService {
-        &self.openai
+    pub(crate) const fn data_plane(&self) -> &DataPlaneService {
+        &self.data_plane
     }
 
     #[must_use]
@@ -353,7 +353,7 @@ impl ApiState {
     }
 }
 
-impl auth::SessionState for ApiState {
+impl SessionState for ApiState {
     fn admin_services(&self) -> &AdminServices {
         &self.admin
     }

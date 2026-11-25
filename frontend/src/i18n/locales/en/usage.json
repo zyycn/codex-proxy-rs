@@ -61,6 +61,8 @@
     },
     "performance": {
       "ttftHelp": "TTFT: time to first token",
+      "upstreamRateHelp": "Output tokens ÷ upstream response time, including reasoning tokens",
+      "localRateHelp": "≈ indicates the local average rate: output tokens ÷ total request time, including waits, retries, and network time",
       "concurrency": "Concurrency",
       "averageConcurrency": "Average concurrency",
       "peakConcurrency": "Peak concurrency",
@@ -102,7 +104,6 @@
       "enterToken": "Uncached input tokens",
       "outputToken": "Output tokens",
       "cacheReadTokens": "Cache read tokens",
-      "cacheWriteTokens": "Cache write tokens",
       "reasoningToken": "Reasoning tokens",
       "tokenDetails": "Token details",
       "viewTokenDetails": "View token details",

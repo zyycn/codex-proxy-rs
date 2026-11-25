@@ -18,6 +18,7 @@ export interface ModelPricing {
 export type PricingMap = Record<string, Record<string, ModelPricing>>
 
 export interface PricingCatalog {
+  supportedBands: Record<string, PriceBand[]>
   defaults: PricingMap
   synced: PricingMap
   overrides: PricingMap

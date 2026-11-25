@@ -14,7 +14,7 @@ use crate::support::RecordingDiagnostics;
 async fn fixture() -> (axum::Router, Arc<RecordingDiagnostics>) {
     let admin = crate::admin::AdminTestFixture::new().await;
     let diagnostics = Arc::new(RecordingDiagnostics::default());
-    let router = crate::openai::api_bundle_with_diagnostics(
+    let router = crate::data_plane::api_bundle_with_diagnostics(
         admin.services,
         gateway_api::ApiConfig {
             asset_directory: env!("CARGO_MANIFEST_DIR").into(),

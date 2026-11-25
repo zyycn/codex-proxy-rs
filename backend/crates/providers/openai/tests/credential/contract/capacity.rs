@@ -50,7 +50,7 @@ fn capacity_attempt(
         .with_request_policy(request_policy),
         NonZeroU32::new(1).unwrap(),
         SystemTime::now() + Duration::from_secs(5),
-        policy.with_openai_account_affinity(gateway_core::account::AccountAffinity::Strict),
+        policy.with_account_affinity(gateway_core::account::AccountAffinity::Strict),
         AccountAttemptContext::new(BTreeSet::new(), None, None)
             .with_account_scope(contract_account_scope()),
         None,

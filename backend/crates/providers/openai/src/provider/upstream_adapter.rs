@@ -1,10 +1,10 @@
 //! 插件只替换业务 wire；账号租约、凭据解释与费用来源仍属于 OpenAI
 
 use super::*;
-use crate::credential::{ApiKeyProtocol, CodexRuntimeAuthentication};
-use crate::transport::usage::{
+use crate::billing::{
     OpenAiBillingUsage, configured_token_billing_breakdown, openai_billing_breakdown_with_override,
 };
+use crate::credential::{ApiKeyProtocol, CodexRuntimeAuthentication};
 use gateway_core::{
     account::{CredentialRevision, OutboundProxy, ProviderAccountId},
     engine::upstream_adapter::{

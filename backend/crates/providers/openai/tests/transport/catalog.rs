@@ -2,7 +2,7 @@
 
 use chrono::{TimeZone, Utc};
 use gateway_core::routing::ModelServiceTier;
-use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
+use provider_openai::profile::{CodexWireProfile, CodexWireProfileState};
 use provider_openai::transport::{
     CodexBackendClient, CodexCatalogCapabilityEvidence, CodexCatalogVisibility,
     CodexModelCatalogError, CodexRequestContext, build_reqwest_client, parse_codex_model_catalog,
@@ -402,7 +402,7 @@ async fn fetch_preserves_large_model_instructions() {
 
 fn profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        client_kind: provider_openai::transport::profile::selection::ClientKind::Desktop,
+        client_kind: provider_openai::profile::selection::ClientKind::Desktop,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
         desktop_version: "1.0.0".to_owned(),

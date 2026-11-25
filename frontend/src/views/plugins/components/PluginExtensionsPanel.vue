@@ -7,7 +7,7 @@ import { Blocks, ExternalLink } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { pluginPageLocation, shortPluginInstanceId } from '@/utils/plugin'
+import { pluginPageLocation, shortPluginInstanceId } from '@/router/plugin'
 
 const props = defineProps<{
   views: PluginManagementView[]

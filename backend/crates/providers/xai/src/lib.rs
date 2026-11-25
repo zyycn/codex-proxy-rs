@@ -1,8 +1,10 @@
 //! 官方 Grok Build OAuth Provider 边界
 
 mod admin;
+mod billing;
 mod credential;
 mod oauth_http;
+pub mod profile;
 mod provider;
 mod reasoning_replay;
 mod secret;
@@ -11,17 +13,15 @@ pub mod transport;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gateway_admin::ports::provider::ProviderAdmin;
+use gateway_admin::ports::provider::ProviderBundle;
 use gateway_core::account::ProviderAccountStore;
-use gateway_core::engine::provider::Provider;
 use gateway_core::provider_ports::ProviderStorePorts;
 use gateway_core::routing::ProviderKind;
-use gateway_core::task::WorkerContribution;
 
 use crate::admin::{XaiAdminProvider, XaiAdminServices};
-use crate::transport::profile::OfficialGrokCliReleaseTransport;
+use crate::profile::OfficialGrokCliReleaseTransport;
 
-pub use transport::{XaiWireProfile, XaiWireProfileState};
+pub use profile::{XaiWireProfile, XaiWireProfileState};
 
 pub use credential::{
     AllowedRedirectUri, AuthorizationCallback, AuthorizationCodeGrant, CallbackRejection,
@@ -51,12 +51,12 @@ pub use oauth_http::{
     FormField, FormValue, HttpHeader, HttpMethod, OAuthHttpRequest, OAuthHttpResponse,
     OAuthHttpTransport, TransportFailure, TransportFailureKind, TransportFuture,
 };
-pub use provider::GrokBuildProvider;
-pub use secret::SecretValue;
-pub use transport::profile::{
+pub use profile::{
     GROK_CLI_RELEASE_URL, GrokCliReleaseError, GrokCliReleaseService, GrokCliReleaseSnapshot,
     GrokCliReleaseStatus, GrokCliReleaseTransport,
 };
+pub use provider::GrokBuildProvider;
+pub use secret::SecretValue;
 pub use transport::{
     GROK_BILLING_URL, GROK_CLI_BASE_URL, GROK_MODEL_CATALOG_URL, GROK_SUBSCRIPTION_URL,
     GrokBillingClient, GrokBillingError, GrokBillingRequest, GrokBillingSnapshot,
@@ -81,16 +81,8 @@ pub use transport::{
     GrokSessionSelectorFuture, MAX_GROK_BILLING_BYTES, MAX_GROK_MODEL_CATALOG_BYTES,
     OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport, ReqwestGrokModelCatalogTransport,
     ReqwestOAuthTransport, SelectedGrokSession, XAI_PROVIDER_NAME, build_grok_headers,
-    grok_billing_breakdown, grok_billing_breakdown_with_tier, parse_grok_billing,
-    parse_grok_model_catalog,
+    parse_grok_billing, parse_grok_model_catalog,
 };
-
-/// xAI 初始化后交给组装根的最小能力集
-pub struct ProviderBundle {
-    core_provider: Arc<dyn Provider>,
-    admin_provider: Arc<dyn ProviderAdmin>,
-    worker_contributions: Vec<WorkerContribution>,
-}
 
 /// 构造 xAI 数据面、管理面准备器与 Provider-owned 后台任务
 pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, XaiInitializeError> {
@@ -110,14 +102,14 @@ pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, Xai
     let cooldowns = ports.cooldowns();
     let account_feedback = ports.account_feedback();
     let runtime_policy = ports.runtime_policy();
-    let initial_profile = transport::client_profile::GrokClientProfileSelection::default()
+    let initial_profile = profile::selection::GrokClientProfileSelection::default()
         .document()
         .map_err(|_| XaiInitializeError::RuntimePolicy)?;
     let configured_profile = runtime_policy
         .initialize_request_profile(&provider_kind, initial_profile)
         .await
         .map_err(|_| XaiInitializeError::RuntimePolicy)?;
-    transport::client_profile::GrokClientProfileSelection::parse(&configured_profile)
+    profile::selection::GrokClientProfileSelection::parse(&configured_profile)
         .map_err(|_| XaiInitializeError::RuntimePolicy)?;
     let repository = GrokCredentialRepository::new(Arc::clone(&accounts));
     let endpoint_policy: Arc<dyn GrokEndpointPolicy> = Arc::new(OfficialGrokEndpointPolicy);
@@ -151,6 +143,7 @@ pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, Xai
         Arc::clone(&leases),
         Arc::clone(&cooldowns),
         Arc::clone(&account_feedback),
+        ports.session_affinity(),
     ));
     let inference: Arc<dyn GrokInferenceTransport> = Arc::new(
         ReqwestGrokInferenceTransport::new(Arc::clone(&endpoint_policy))
@@ -181,7 +174,7 @@ pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, Xai
         Arc::clone(&runtime_policy),
     ));
     let credential_recovery: Arc<dyn GrokCredentialRecovery> = refresh.clone();
-    let core_provider: Arc<dyn Provider> = Arc::new(
+    let core = Arc::new(
         GrokBuildProvider::new(
             selector,
             inference,
@@ -192,7 +185,7 @@ pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, Xai
         )
         .map_err(|_| XaiInitializeError::Transport)?,
     );
-    let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(XaiAdminProvider::new(
+    let admin = Arc::new(XaiAdminProvider::new(
         provider_kind.clone(),
         profile,
         Arc::clone(&accounts),
@@ -208,7 +201,7 @@ pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, Xai
         },
         cli_release_status,
     ));
-    let worker_contributions = provider::worker_contributions(
+    let workers = provider::workers::contributions(
         refresh,
         quota,
         catalog,
@@ -219,27 +212,10 @@ pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, Xai
     .map_err(|_| XaiInitializeError::Worker)?;
 
     Ok(ProviderBundle {
-        core_provider,
-        admin_provider,
-        worker_contributions,
+        core,
+        admin,
+        workers,
     })
-}
-
-impl ProviderBundle {
-    #[must_use]
-    pub fn core_provider(&self) -> Arc<dyn Provider> {
-        Arc::clone(&self.core_provider)
-    }
-
-    #[must_use]
-    pub fn admin_provider(&self) -> Arc<dyn ProviderAdmin> {
-        Arc::clone(&self.admin_provider)
-    }
-
-    /// 一次性移交 Host 任务计划，防止同一 owner 被重复注册
-    pub fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
-        std::mem::take(&mut self.worker_contributions)
-    }
 }
 
 /// xAI 初始化失败的脱敏分类

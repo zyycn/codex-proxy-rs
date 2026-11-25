@@ -1,0 +1,1273 @@
+//! Codex 上游客户端的共享状态、连接配置、请求头与传输合同
+
+use std::{
+    collections::HashMap,
+    fmt,
+    pin::Pin,
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use crate::profile::CodexWireProfileState;
+use bytes::Bytes;
+use futures::{Stream, StreamExt};
+use gateway_core::engine::middleware::MiddlewareHeader;
+use gateway_protocol::openai::{
+    WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, events::retry_after_seconds_from_body,
+    sse::SseError,
+};
+use reqwest::{
+    Client, Response as ReqwestResponse, StatusCode,
+    header::{HeaderMap, RETRY_AFTER},
+};
+use serde_json::{Value, map::Map};
+use thiserror::Error;
+use uuid::Uuid;
+
+use crate::transport::protocol::responses::{
+    CodexResponsesRequest, TransportRequirement, X_CODEX_TURN_STATE_CLIENT_METADATA_KEY,
+};
+
+use super::super::diagnostics::{
+    CodexUpstreamDiagnostics, CodexUpstreamFailure, CodexUpstreamSendPhase,
+};
+use super::super::response_meta::CodexResponseMetadata;
+use super::super::tls::{
+    CustomCaError, build_reqwest_client_with_custom_ca, custom_ca_env_cache_key,
+};
+use super::super::websocket::{
+    CodexWebSocketExchangeError, CodexWebSocketPool, CodexWebSocketPoolKey,
+    CodexWebSocketRateLimitUpdates, CodexWebSocketRequest, CodexWebSocketResponseMetadataUpdates,
+    PreparedWebSocket, WebSocketOriginBreaker, WebSocketPoolDecision,
+};
+
+// ---------------------------------------------------------------------------
+// 常量
+// ---------------------------------------------------------------------------
+
+const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(in crate::transport) const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+pub(in crate::transport) const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
+    "x-codex-ws-stream-request-start-ms";
+type ReqwestClientCacheKey = (Option<String>, String, Duration);
+type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
+
+/// 构建复用连接池的 Codex HTTP 客户端
+pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
+    build_account_http_client("", None)
+}
+
+pub fn build_account_http_client(
+    account_id: &str,
+    proxy: Option<&gateway_core::account::OutboundProxy>,
+) -> Result<Client, CustomCaError> {
+    build_account_http_client_with_timeout(account_id, proxy, UPSTREAM_CONNECT_TIMEOUT)
+}
+
+pub(in crate::transport) fn build_account_http_client_with_timeout(
+    account_id: &str,
+    proxy: Option<&gateway_core::account::OutboundProxy>,
+    timeout: Duration,
+) -> Result<Client, CustomCaError> {
+    super::super::tls::ensure_rustls_provider();
+    let cache_key = (
+        custom_ca_env_cache_key(),
+        egress_key(account_id, proxy),
+        timeout,
+    );
+    static CLIENTS: OnceLock<ReqwestClientCache> = OnceLock::new();
+    let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(client) = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&cache_key)
+    {
+        return Ok(client.clone());
+    }
+
+    // 连接池与 TCP、HTTP/2 保活沿用官方 Core 的 reqwest 默认值
+    let builder = gateway_egress::http_client(proxy)
+        .map_err(|_| CustomCaError::ProxyConfiguration)?
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(timeout)
+        .connector_layer(super::super::connection::ConnectionLayer);
+    let client = build_reqwest_client_with_custom_ca(builder)?;
+    let mut clients = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if clients.len() >= 256 {
+        clients.clear();
+    }
+    Ok(clients.entry(cache_key).or_insert(client).clone())
+}
+
+fn egress_key(account_id: &str, proxy: Option<&gateway_core::account::OutboundProxy>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(account_id.as_bytes());
+    hash.update([0]);
+    hash.update(
+        proxy
+            .map_or("deployment", |proxy| proxy.expose_url())
+            .as_bytes(),
+    );
+    hex::encode(hash.finalize())
+}
+
+// ---------------------------------------------------------------------------
+// 错误类型
+// ---------------------------------------------------------------------------
+
+/// 当前 Responses 请求最终失败时可原样返回给客户端的上游 HTTP 响应
+#[derive(Clone, PartialEq, Eq)]
+pub struct CodexClientVisibleUpstreamResponse {
+    status: u16,
+    content_type: Option<Vec<u8>>,
+    client_headers: Vec<(String, Bytes)>,
+    body: Bytes,
+}
+
+pub(crate) struct CodexClientVisibleUpstreamResponseParts {
+    pub(crate) status: u16,
+    pub(crate) content_type: Option<Vec<u8>>,
+    pub(crate) client_headers: Vec<(String, Bytes)>,
+    pub(crate) body: Bytes,
+}
+
+impl CodexClientVisibleUpstreamResponse {
+    pub(in crate::transport) fn new(
+        status: StatusCode,
+        content_type: Option<Vec<u8>>,
+        client_headers: Vec<(String, Bytes)>,
+        body: Bytes,
+    ) -> Self {
+        Self {
+            status: status.as_u16(),
+            content_type,
+            client_headers,
+            body,
+        }
+    }
+
+    pub const fn status(&self) -> u16 {
+        self.status
+    }
+
+    pub fn content_type(&self) -> Option<&[u8]> {
+        self.content_type.as_deref()
+    }
+
+    pub fn client_headers(&self) -> &[(String, Bytes)] {
+        &self.client_headers
+    }
+
+    pub const fn body(&self) -> &Bytes {
+        &self.body
+    }
+
+    pub(crate) fn into_parts(self) -> CodexClientVisibleUpstreamResponseParts {
+        CodexClientVisibleUpstreamResponseParts {
+            status: self.status,
+            content_type: self.content_type,
+            client_headers: self.client_headers,
+            body: self.body,
+        }
+    }
+}
+
+impl fmt::Debug for CodexClientVisibleUpstreamResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CodexClientVisibleUpstreamResponse")
+            .field("status", &self.status)
+            .field(
+                "content_type",
+                &self.content_type.as_ref().map(|_| "<present>"),
+            )
+            .field("client_header_count", &self.client_headers.len())
+            .field("body", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Codex 上游 HTTP 客户端错误
+#[derive(Error)]
+pub enum CodexClientError {
+    #[error("outbound request preparation failed")]
+    Outbound(Box<gateway_core::error::ProviderError>),
+    #[error("privacy policy rejected the request: {0}")]
+    Privacy(#[from] gateway_core::settings::privacy::PrivacyError),
+    #[error("connection recovery budget exhausted")]
+    ConnectionBudgetExhausted,
+    /// Reqwest 传输失败
+    #[error("http transport error: {0}")]
+    Http(#[from] reqwest::Error),
+    /// 非流式 JSON 请求的 Reqwest 传输失败
+    #[error("HTTP JSON transport error: {0}")]
+    HttpJson(#[source] reqwest::Error),
+    /// 已收到错误响应头，但未能读取完整正文；不能作为可透传的 HTTP 原响应
+    #[error("upstream error response body read failed for status {status}")]
+    ErrorBodyRead {
+        #[source]
+        source: reqwest::Error,
+        status: StatusCode,
+        diagnostics: Box<CodexUpstreamDiagnostics>,
+        transport: CodexBackendTransport,
+        transport_metrics: Box<CodexTransportMetrics>,
+    },
+    /// 自定义 CA 构建失败
+    #[error("custom CA transport error: {0}")]
+    CustomCa(#[from] CustomCaError),
+    /// 请求头名字无效
+    #[error("invalid request header name: {0}")]
+    InvalidHeaderName(#[from] reqwest::header::InvalidHeaderName),
+    /// 请求头值无效
+    #[error("invalid request header value: {0}")]
+    InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
+    /// SSE 响应解析失败
+    #[error("invalid upstream SSE response: {0}")]
+    InvalidSse(#[from] SseError),
+    /// 模型目录不是一个完整、安全的官方快照
+    #[error("invalid Codex model catalog: {0}")]
+    ModelCatalog(#[from] super::super::catalog::CodexModelCatalogError),
+    /// HTTP/SSE 上游在空闲窗口内没有发送任何数据
+    #[error("upstream HTTP/SSE stream idle for {timeout:?}")]
+    StreamIdleTimeout {
+        /// 相邻数据块允许的最大空闲时间
+        timeout: Duration,
+    },
+    /// WebSocket 请求编码失败
+    #[error("failed to encode websocket request: {0}")]
+    WebSocketEncode(#[source] serde_json::Error),
+    /// 上游请求体 JSON 序列化失败
+    #[error("failed to encode upstream request body: {0}")]
+    RequestBodyEncode(#[source] serde_json::Error),
+    /// 上游请求体 zstd 压缩失败
+    #[error("failed to compress upstream request body: {0}")]
+    RequestCompression(#[source] std::io::Error),
+    /// WebSocket 请求失败
+    #[error("websocket request failed: {0}")]
+    WebSocket(#[from] CodexWebSocketExchangeError),
+    /// 上游返回非成功响应
+    #[error("upstream returned status {status}")]
+    Upstream {
+        /// 上游状态码
+        status: StatusCode,
+        /// 上游错误体
+        body: String,
+        /// 仅供当前 Responses 请求最终失败时原样返回的响应
+        client_response: Option<Box<CodexClientVisibleUpstreamResponse>>,
+        /// 推导出的重试秒数
+        retry_after_seconds: Option<u64>,
+        /// 上游诊断元数据
+        diagnostics: Box<CodexUpstreamDiagnostics>,
+        /// 上游透传的 `set-cookie` 列表
+        set_cookie_headers: Vec<String>,
+        /// 上游错误响应携带的限流头
+        rate_limit_headers: Vec<(String, String)>,
+        /// 实际收到该上游响应的 transport
+        transport: CodexBackendTransport,
+        /// 错误响应前已经确认的 transport 与 HTTP 阶段事实
+        transport_metrics: Box<CodexTransportMetrics>,
+        /// 上游拒绝发生时业务 payload 的发送阶段
+        send_phase: CodexUpstreamSendPhase,
+    },
+}
+
+impl fmt::Debug for CodexClientError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Outbound(_) => formatter.write_str("CodexClientError::Outbound([REDACTED])"),
+            Self::ConnectionBudgetExhausted => {
+                formatter.write_str("CodexClientError::ConnectionBudgetExhausted")
+            }
+            Self::Privacy(error) => std::fmt::Debug::fmt(error, formatter),
+            Self::Http(_) => formatter.write_str("CodexClientError::Http([REDACTED])"),
+            Self::HttpJson(_) => formatter.write_str("CodexClientError::HttpJson([REDACTED])"),
+            Self::ErrorBodyRead {
+                status, transport, ..
+            } => formatter
+                .debug_struct("CodexClientError::ErrorBodyRead")
+                .field("status", status)
+                .field("transport", transport)
+                .finish_non_exhaustive(),
+            Self::CustomCa(_) => formatter.write_str("CodexClientError::CustomCa([REDACTED])"),
+            Self::InvalidHeaderName(_) => {
+                formatter.write_str("CodexClientError::InvalidHeaderName([REDACTED])")
+            }
+            Self::InvalidHeaderValue(_) => {
+                formatter.write_str("CodexClientError::InvalidHeaderValue([REDACTED])")
+            }
+            Self::InvalidSse(_) => formatter.write_str("CodexClientError::InvalidSse([REDACTED])"),
+            Self::ModelCatalog(error) => formatter
+                .debug_tuple("CodexClientError::ModelCatalog")
+                .field(error)
+                .finish(),
+            Self::StreamIdleTimeout { timeout } => formatter
+                .debug_struct("CodexClientError::StreamIdleTimeout")
+                .field("timeout", timeout)
+                .finish(),
+            Self::WebSocketEncode(_) => {
+                formatter.write_str("CodexClientError::WebSocketEncode([REDACTED])")
+            }
+            Self::RequestBodyEncode(_) => {
+                formatter.write_str("CodexClientError::RequestBodyEncode([REDACTED])")
+            }
+            Self::RequestCompression(_) => {
+                formatter.write_str("CodexClientError::RequestCompression([REDACTED])")
+            }
+            Self::WebSocket(_) => formatter.write_str("CodexClientError::WebSocket([REDACTED])"),
+            Self::Upstream {
+                status,
+                retry_after_seconds,
+                transport,
+                send_phase,
+                ..
+            } => formatter
+                .debug_struct("CodexClientError::Upstream")
+                .field("status", status)
+                .field("retry_after_seconds", retry_after_seconds)
+                .field("transport", transport)
+                .field("send_phase", send_phase)
+                .field("body", &"[REDACTED]")
+                .finish(),
+        }
+    }
+}
+
+impl CodexClientError {
+    /// 返回错误实际发生的 transport；请求编码等本地错误没有 transport
+    pub fn transport(&self) -> Option<CodexBackendTransport> {
+        match self {
+            Self::Http(_)
+            | Self::StreamIdleTimeout { .. }
+            | Self::InvalidSse(_)
+            | Self::ModelCatalog(_) => Some(CodexBackendTransport::HttpSse),
+            Self::HttpJson(_) => Some(CodexBackendTransport::HttpJson),
+            Self::WebSocket(_) => Some(CodexBackendTransport::WebSocket),
+            Self::Upstream { transport, .. } | Self::ErrorBodyRead { transport, .. } => {
+                Some(*transport)
+            }
+            Self::Outbound(_)
+            | Self::Privacy(_)
+            | Self::ConnectionBudgetExhausted
+            | Self::CustomCa(_)
+            | Self::InvalidHeaderName(_)
+            | Self::InvalidHeaderValue(_)
+            | Self::WebSocketEncode(_)
+            | Self::RequestBodyEncode(_)
+            | Self::RequestCompression(_) => None,
+        }
+    }
+
+    pub(crate) fn upstream_failure(&self) -> Option<CodexUpstreamFailure> {
+        match self {
+            Self::Upstream {
+                status,
+                body,
+                retry_after_seconds,
+                diagnostics,
+                client_response,
+                set_cookie_headers,
+                rate_limit_headers,
+                send_phase,
+                ..
+            } => Some(CodexUpstreamFailure::from_response(
+                *status,
+                body,
+                *retry_after_seconds,
+                diagnostics,
+                client_response.as_deref(),
+                set_cookie_headers,
+                rate_limit_headers,
+                *send_phase,
+            )),
+            Self::WebSocket(error)
+                if matches!(error.classified(), CodexWebSocketExchangeError::Upstream(_)) =>
+            {
+                let CodexWebSocketExchangeError::Upstream(upstream) = error.classified() else {
+                    unreachable!("websocket error was checked above")
+                };
+                Some(CodexUpstreamFailure::from_response(
+                    StatusCode::from_u16(upstream.status_code).unwrap_or(StatusCode::BAD_GATEWAY),
+                    &upstream.body,
+                    upstream.retry_after_seconds,
+                    &upstream.diagnostics,
+                    upstream.client_response.as_deref(),
+                    &upstream.set_cookie_headers,
+                    &upstream.rate_limit_headers,
+                    upstream.send_phase,
+                ))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Codex 客户端结果类型
+pub type CodexClientResult<T> = Result<T, CodexClientError>;
+
+/// Codex SSE 字节流
+pub type CodexBackendSseStream =
+    Pin<Box<dyn Stream<Item = CodexClientResult<Bytes>> + Send + 'static>>;
+
+// ---------------------------------------------------------------------------
+// 请求上下文与响应类型
+// ---------------------------------------------------------------------------
+
+/// 账号亲和决策传给 transport 的不可变遥测快照
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CodexAccountSelectionTelemetry<'a> {
+    affinity_hit: bool,
+    escape_reason: Option<&'a str>,
+    account_switch: bool,
+}
+
+impl<'a> CodexAccountSelectionTelemetry<'a> {
+    pub const NONE: Self = Self {
+        affinity_hit: false,
+        escape_reason: None,
+        account_switch: false,
+    };
+
+    #[must_use]
+    pub const fn new(
+        affinity_hit: bool,
+        escape_reason: Option<&'a str>,
+        account_switch: bool,
+    ) -> Self {
+        Self {
+            affinity_hit,
+            escape_reason,
+            account_switch,
+        }
+    }
+
+    #[must_use]
+    pub const fn affinity_hit(self) -> bool {
+        self.affinity_hit
+    }
+
+    #[must_use]
+    pub const fn escape_reason(self) -> Option<&'a str> {
+        self.escape_reason
+    }
+
+    #[must_use]
+    pub const fn account_switch(self) -> bool {
+        self.account_switch
+    }
+}
+
+/// 单次 Codex 上游请求的上下文
+#[derive(Clone, Copy)]
+pub struct CodexRequestContext<'a> {
+    /// 本次根执行的控制与下游连接生命周期，不由共享 HTTP client 持有
+    pub response_control: Option<&'a gateway_core::engine::response_control::ResponseControl>,
+    /// 显式传递的请求诊断上下文，跨连接任务共享
+    pub trace: Option<&'a gateway_core::diagnostics::TraceContext>,
+    /// Provider 已构造并脱敏持有的完整 Authorization 值
+    pub authorization: &'a str,
+    /// ChatGPT 账号 ID
+    pub account_id: Option<&'a str>,
+    /// 代理请求 ID
+    pub request_id: &'a str,
+    /// 当前账号同一 turn 内的 opaque sticky-routing 状态
+    pub turn_state: Option<&'a str>,
+    /// 客户端 turn metadata；其中 installation ID 已按当前账号处理
+    pub turn_metadata: Option<&'a str>,
+    /// 下游 `version` 扩展头；存在时上游值由 Desktop 版本画像统一生成
+    pub version: Option<&'a str>,
+    /// 客户端 window ID
+    pub codex_window_id: Option<&'a str>,
+    /// 客户端 parent thread ID
+    pub parent_thread_id: Option<&'a str>,
+    /// cookie 头
+    pub cookie_header: Option<&'a str>,
+    /// 本次请求生效的安装 ID
+    pub installation_id: Option<&'a str>,
+    /// 客户端 session ID
+    pub session_id: Option<&'a str>,
+    /// 客户端 thread ID
+    pub thread_id: Option<&'a str>,
+    /// 客户端逻辑 request ID；缺失时使用代理请求 ID
+    pub client_request_id: Option<&'a str>,
+    /// 账号亲和选择结果；仅用于结构化遥测，不参与 transport 决策
+    pub account_selection: CodexAccountSelectionTelemetry<'a>,
+}
+
+impl<'a> CodexRequestContext<'a> {
+    #[must_use]
+    pub const fn auxiliary(
+        authorization: &'a str,
+        account_id: Option<&'a str>,
+        request_id: &'a str,
+        installation_id: Option<&'a str>,
+    ) -> Self {
+        Self {
+            trace: None,
+            response_control: None,
+            authorization,
+            account_id,
+            request_id,
+            turn_state: None,
+            turn_metadata: None,
+            version: None,
+            codex_window_id: None,
+            parent_thread_id: None,
+            cookie_header: None,
+            installation_id,
+            session_id: None,
+            thread_id: None,
+            client_request_id: None,
+            account_selection: CodexAccountSelectionTelemetry::NONE,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_trace(mut self, trace: &'a gateway_core::diagnostics::TraceContext) -> Self {
+        self.trace = Some(trace);
+        self
+    }
+
+    #[must_use]
+    pub fn with_response_control(
+        mut self,
+        control: Option<&'a gateway_core::engine::response_control::ResponseControl>,
+    ) -> Self {
+        self.response_control = control;
+        self
+    }
+}
+
+impl fmt::Debug for CodexRequestContext<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CodexRequestContext")
+            .field("authorization", &"[REDACTED]")
+            .field("account_id", &self.account_id.map(|_| "[REDACTED]"))
+            .field("request_id", &self.request_id)
+            .field("turn_state", &self.turn_state.map(|_| "[REDACTED]"))
+            .field("turn_metadata", &self.turn_metadata.map(|_| "[REDACTED]"))
+            .field("cookie_header", &self.cookie_header.map(|_| "[REDACTED]"))
+            .field(
+                "installation_id",
+                &self.installation_id.map(|_| "[PSEUDONYM]"),
+            )
+            .field("account_selection", &self.account_selection)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Codex Responses 实际使用的上游传输
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexBackendTransport {
+    /// HTTP SSE 传输
+    HttpSse,
+    /// 非流式 HTTP JSON 传输
+    HttpJson,
+    /// WebSocket 传输
+    WebSocket,
+}
+
+/// transport owner 最终做出的稳定决策
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexTransportDecision {
+    HttpRequired,
+    ReusedWebSocket,
+    ConnectedWebSocket,
+    ExactWebSocket,
+    RequiredWebSocket,
+    Http2WebSocketBudgetExhausted,
+    Http2WebSocketMessageTooLarge,
+    Http2LocalConnectionCapacity,
+    Http2BreakerOpen,
+    Http2PoolUnavailable,
+}
+
+impl CodexTransportDecision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HttpRequired => "http_required",
+            Self::ReusedWebSocket => "ws_reused",
+            Self::ConnectedWebSocket => "ws_connected_fast",
+            Self::ExactWebSocket => "ws_exact_required",
+            Self::RequiredWebSocket => "ws_required",
+            Self::Http2WebSocketBudgetExhausted => "http2_ws_budget_exhausted",
+            Self::Http2WebSocketMessageTooLarge => "http2_ws_message_too_large",
+            Self::Http2LocalConnectionCapacity => "http2_local_connection_capacity",
+            Self::Http2BreakerOpen => "http2_breaker_open",
+            Self::Http2PoolUnavailable => "http2_pool_unavailable",
+        }
+    }
+}
+
+/// transport 决策与握手阶段观测值
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexTransportMetrics {
+    pub decision: Option<CodexTransportDecision>,
+    pub ws_connect_ms: Option<i64>,
+    pub transport_decision_wait_ms: Option<i64>,
+    pub upstream_headers_ms: Option<i64>,
+    pub first_event_ms: Option<i64>,
+    pub http_version: Option<String>,
+}
+
+/// 响应头之后在 live 流中采集的结构化限流更新
+pub type CodexRateLimitUpdates = CodexWebSocketRateLimitUpdates;
+
+/// 响应头之后在 live 流中采集的请求级 metadata 更新
+pub type CodexResponseMetadataUpdates = CodexWebSocketResponseMetadataUpdates;
+
+/// Codex Responses 上游流式响应
+pub struct CodexBackendStreamingResponse {
+    pub(crate) routing_affinity: Option<super::super::routing_affinity::ChatGptRoutingAffinity>,
+    /// HTTP 为 SSE 字节块，WebSocket 为完整 UTF-8 文本消息
+    pub body: CodexBackendSseStream,
+    /// 实际使用的上游传输
+    pub transport: CodexBackendTransport,
+    /// WebSocket 响应所绑定的连接；HTTP transport 为 `None`
+    pub websocket_connection_id: Option<Uuid>,
+    /// 响应头或 metadata 事件里最先确认的 turn state
+    pub turn_state: Option<String>,
+    /// 上游透传的 `set-cookie` 列表
+    pub set_cookie_headers: Vec<String>,
+    /// 上游透传的限流头
+    pub rate_limit_headers: Vec<(String, String)>,
+    /// live stream 期间捕获的结构化限流更新
+    pub rate_limit_updates: Option<CodexRateLimitUpdates>,
+    /// live stream 期间捕获的请求级 metadata 更新
+    pub response_metadata_updates: Option<CodexResponseMetadataUpdates>,
+    /// WebSocket 连接池决策
+    pub websocket_pool_decision: Option<WebSocketPoolDecision>,
+    /// 上游诊断元数据
+    pub diagnostics: CodexUpstreamDiagnostics,
+    /// 安全响应元数据
+    pub response_metadata: CodexResponseMetadata,
+    /// 传输选择与低延迟阶段耗时
+    pub transport_metrics: CodexTransportMetrics,
+    /// terminal completed 后是否由池中 WebSocket 保留 connection-local continuation
+    pub connection_local_continuation: bool,
+}
+
+/// Codex 上游非流式 JSON 响应
+pub struct CodexBackendJsonResponse {
+    /// 未经解析或重编码的完整响应正文
+    pub body: Bytes,
+    /// 上游透传的 `set-cookie` 列表
+    pub set_cookie_headers: Vec<String>,
+    /// 上游透传的限流头
+    pub rate_limit_headers: Vec<(String, String)>,
+    /// 上游诊断元数据
+    pub diagnostics: CodexUpstreamDiagnostics,
+    /// 已筛选、可交给客户端的响应头
+    pub response_metadata: CodexResponseMetadata,
+    /// HTTP 阶段耗时与版本
+    pub transport_metrics: CodexTransportMetrics,
+}
+
+// ---------------------------------------------------------------------------
+// CodexBackendClient
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::transport) enum OpenAiUpstreamProtocol {
+    Codex,
+    ResponsesApi,
+    MessagesApi,
+}
+
+impl OpenAiUpstreamProtocol {
+    pub(in crate::transport) const fn responses_path(self) -> &'static str {
+        match self {
+            Self::Codex => super::super::endpoints::CODEX_RESPONSES_PATH,
+            Self::ResponsesApi => "/responses",
+            Self::MessagesApi => "/messages",
+        }
+    }
+}
+
+/// Codex HTTP/SSE 上游客户端
+#[derive(Clone)]
+pub struct CodexBackendClient {
+    pub(crate) peer_route: Option<reqwest::header::HeaderValue>,
+    pub(in crate::transport) routing_affinity:
+        Option<super::super::routing_affinity::ChatGptRoutingAffinity>,
+    pub(in crate::transport) privacy: Option<(
+        Arc<dyn gateway_core::settings::privacy::CompiledPrivacyPolicy>,
+        gateway_core::lifecycle::CancellationToken,
+    )>,
+    pub(in crate::transport) timezone: gateway_core::time::DeploymentTimeZone,
+    pub(in crate::transport) connection_budget:
+        Option<gateway_core::engine::connection::ConnectionBudget>,
+    pub(in crate::transport) client: Client,
+    pub(in crate::transport) default_client: Client,
+    pub(in crate::transport) base_url: String,
+    pub(in crate::transport) official_base_url: String,
+    pub(in crate::transport) protocol: OpenAiUpstreamProtocol,
+    pub(in crate::transport) fedramp_routing: bool,
+    pub(in crate::transport) profile: CodexWireProfileState,
+    pub(in crate::transport) websocket_pool: Option<Arc<CodexWebSocketPool>>,
+    pub(in crate::transport) websocket_origin_breaker: WebSocketOriginBreaker,
+    pub(in crate::transport) websocket_origin_key: String,
+    pub(in crate::transport) outbound_proxy: Option<gateway_core::account::OutboundProxy>,
+    pub(in crate::transport) egress_key: String,
+    pub(in crate::transport) middleware_headers: Vec<MiddlewareHeader>,
+    pub(in crate::transport) outbound_middleware:
+        Option<gateway_core::engine::middleware::outbound::Pipeline>,
+}
+
+impl CodexBackendClient {
+    pub(crate) const fn profile_state(&self) -> &CodexWireProfileState {
+        &self.profile
+    }
+
+    /// 请求只持有自己的画像副本；连接池和 HTTP client 继续共享既有资源
+    pub fn with_request_profile(mut self, profile: crate::profile::CodexWireProfile) -> Self {
+        self.profile = CodexWireProfileState::new(profile);
+        self
+    }
+
+    /// 构造客户端
+    pub fn new(
+        client: Client,
+        base_url: impl Into<String>,
+        profile: CodexWireProfileState,
+    ) -> Self {
+        let base_url = base_url.into().trim_end_matches('/').to_string();
+        Self {
+            peer_route: None,
+            routing_affinity: None,
+            privacy: None,
+            timezone: Default::default(),
+            connection_budget: None,
+            default_client: client.clone(),
+            client,
+            websocket_origin_key: websocket_origin_key(&base_url),
+            outbound_proxy: None,
+            egress_key: String::new(),
+            middleware_headers: Vec::new(),
+            outbound_middleware: None,
+            base_url,
+            official_base_url: super::super::endpoints::OFFICIAL_CODEX_BASE_URL.to_owned(),
+            protocol: OpenAiUpstreamProtocol::Codex,
+            fedramp_routing: false,
+            profile,
+            websocket_pool: None,
+            websocket_origin_breaker: WebSocketOriginBreaker::default(),
+        }
+    }
+
+    /// 为 Responses WebSocket 请求启用连接池
+    pub fn with_websocket_pool(mut self, pool: Arc<CodexWebSocketPool>) -> Self {
+        self.websocket_pool = Some(pool);
+        self
+    }
+
+    /// 附加当前 attempt 经 Core 复核的业务请求头
+    #[must_use]
+    pub(crate) fn with_middleware_headers(
+        mut self,
+        middleware_headers: Vec<gateway_core::engine::middleware::MiddlewareHeader>,
+    ) -> Self {
+        self.middleware_headers = middleware_headers;
+        self
+    }
+
+    /// 驱逐指定账号的 Responses WebSocket 池连接
+    pub async fn evict_websocket_account(&self, account_id: &str) {
+        if let Some(pool) = &self.websocket_pool {
+            pool.evict_account(account_id).await;
+        }
+    }
+
+    pub(crate) fn with_routing_affinity(
+        mut self,
+        affinity: Option<super::super::routing_affinity::ChatGptRoutingAffinity>,
+    ) -> Self {
+        self.routing_affinity = affinity;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_timezone(
+        mut self,
+        timezone: gateway_core::time::DeploymentTimeZone,
+    ) -> Self {
+        self.timezone = timezone;
+        self
+    }
+
+    pub(crate) fn with_connection_budget(
+        mut self,
+        budget: gateway_core::engine::connection::ConnectionBudget,
+    ) -> Self {
+        self.connection_budget = Some(budget);
+        self
+    }
+
+    pub(in crate::transport) fn connection_opening(
+        &self,
+    ) -> Result<Option<Duration>, CodexClientError> {
+        self.connection_budget.as_ref().map_or(Ok(None), |budget| {
+            budget
+                .begin()
+                .map_err(|_| CodexClientError::ConnectionBudgetExhausted)
+        })
+    }
+
+    pub(in crate::transport) fn http_opening_client(&self) -> Result<Client, CodexClientError> {
+        let Some(remaining) = self.connection_opening()? else {
+            return Ok(self.client.clone());
+        };
+        if remaining >= UPSTREAM_CONNECT_TIMEOUT {
+            return Ok(self.client.clone());
+        }
+        // 按整秒向下取整限制缓存种类；不足一秒不缓存新的 client 配置
+        let timeout = Duration::from_secs(remaining.as_secs());
+        if timeout.is_zero() {
+            return Err(CodexClientError::ConnectionBudgetExhausted);
+        }
+        Ok(build_account_http_client_with_timeout(
+            &self.egress_key,
+            self.outbound_proxy.as_ref(),
+            timeout,
+        )?)
+    }
+
+    /// 覆盖官方账号接口基址，用于隔离上游联调与协议测试
+    #[must_use]
+    pub fn with_official_base_url(mut self, official_base_url: impl Into<String>) -> Self {
+        self.official_base_url = official_base_url.into().trim_end_matches('/').to_string();
+        self
+    }
+
+    /// 自定义账号路由明确不存在时才回退一次；调用方继续解释最后一次响应
+    pub(in crate::transport) async fn send_account_request(
+        &self,
+        request: reqwest::RequestBuilder,
+        fallback: reqwest::RequestBuilder,
+    ) -> CodexClientResult<ReqwestResponse> {
+        let response = request.send().await.map_err(CodexClientError::HttpJson)?;
+        if response.status() != StatusCode::NOT_FOUND
+            || self.base_url.trim_end_matches('/') == self.official_base_url.trim_end_matches('/')
+        {
+            return Ok(response);
+        }
+        tracing::debug!(
+            endpoint = response.url().path(),
+            "custom account endpoint returned 404; falling back to official endpoint"
+        );
+        drop(response);
+        // 消费可能已在回退端完成，传输失败不能被先前的 404 覆盖
+        fallback.send().await.map_err(CodexClientError::HttpJson)
+    }
+
+    pub(crate) fn with_fedramp_routing(mut self, enabled: bool) -> Self {
+        self.fedramp_routing = enabled;
+        self
+    }
+
+    pub(crate) fn with_responses_api_base_url(mut self, base_url: &str) -> Self {
+        self.base_url = base_url.trim_end_matches('/').to_owned();
+        self.protocol = OpenAiUpstreamProtocol::ResponsesApi;
+        self.websocket_origin_key = format!(
+            "{}:{}",
+            websocket_origin_key(&self.base_url),
+            self.egress_key
+        );
+        self
+    }
+
+    pub(crate) fn with_messages_api_base_url(self, base_url: &str) -> Self {
+        let mut client = self.with_responses_api_base_url(base_url);
+        client.protocol = OpenAiUpstreamProtocol::MessagesApi;
+        client
+    }
+
+    pub fn for_account(
+        &self,
+        account: &gateway_core::account::ProviderAccount,
+    ) -> Result<Self, CodexClientError> {
+        let mut client = self.clone();
+        client.fedramp_routing = false;
+        client.outbound_proxy = account.outbound_proxy().cloned();
+        client.egress_key = egress_key(account.id().as_str(), account.outbound_proxy());
+        if account.authentication_kind() == crate::CODEX_AUTHENTICATION_KIND_API_KEY {
+            client
+                .egress_key
+                .push_str(&format!(":revision:{}", account.revision().get()));
+        } else {
+            client
+                .egress_key
+                .push_str(&crate::request_identity::oauth_identity_key(account));
+        }
+        client.websocket_origin_key = format!(
+            "{}:{}",
+            websocket_origin_key(&self.base_url),
+            client.egress_key
+        );
+        client.client = if account.outbound_proxy().is_some() {
+            build_account_http_client(account.id().as_str(), account.outbound_proxy())?
+        } else {
+            self.default_client.clone()
+        };
+        Ok(client)
+    }
+}
+
+/// 已完成账号级 opening 准备、但尚未发送 payload 的 transport
+pub(crate) struct PreparedResponseTransport {
+    pub(in crate::transport) requirement: TransportRequirement,
+    pub(in crate::transport) route: PreparedResponseRoute,
+    pub(in crate::transport) metrics: CodexTransportMetrics,
+}
+
+pub(in crate::transport) enum PreparedResponseRoute {
+    Http,
+    WebSocket(Box<PreparedWebSocketRoute>),
+}
+
+pub(in crate::transport) struct PreparedWebSocketRoute {
+    pub(in crate::transport) request: CodexWebSocketRequest,
+    pub(in crate::transport) prepared: PreparedWebSocket,
+}
+
+// ---------------------------------------------------------------------------
+// 响应辅助函数
+// ---------------------------------------------------------------------------
+
+pub(in crate::transport) fn log_websocket_pool_decision(
+    context: CodexRequestContext<'_>,
+    pool_account_id: Option<&str>,
+    pool_context: Option<&WebSocketPoolLogContext>,
+    decision: Option<WebSocketPoolDecision>,
+) {
+    let Some(decision) = decision else {
+        return;
+    };
+    let rid_short = context.request_id.chars().take(8).collect::<String>();
+    tracing::info!(
+        request_id = %context.request_id,
+        rid = %rid_short,
+        account_id = pool_account_id.or(context.account_id).unwrap_or_default(),
+        ws_pool = decision.kind(),
+        affinity_hit = context.account_selection.affinity_hit(),
+        escape_reason = context.account_selection.escape_reason().unwrap_or_default(),
+        account_switch = context.account_selection.account_switch(),
+        conversation_id_hash = pool_context.map_or("", |context| context.conversation_id_hash.as_str()),
+        ws_pool_key_hash = pool_context.map_or("", |context| context.pool_key_hash.as_str()),
+        "WebSocket pool decision"
+    );
+}
+
+#[derive(Debug, Clone)]
+pub(in crate::transport) struct WebSocketPoolLogContext {
+    conversation_id_hash: String,
+    pool_key_hash: String,
+}
+
+impl WebSocketPoolLogContext {
+    pub(in crate::transport) fn from_key(key: &CodexWebSocketPoolKey) -> Self {
+        Self {
+            conversation_id_hash: key.conversation_id_hash(),
+            pool_key_hash: key.stable_hash(),
+        }
+    }
+}
+
+pub(in crate::transport) fn retry_after_seconds(
+    headers: &HeaderMap,
+    body: Option<&str>,
+) -> Option<u64> {
+    headers
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(gateway_protocol::openai::parse_retry_after_seconds)
+        .or_else(|| body.and_then(retry_after_seconds_from_body))
+}
+
+pub(in crate::transport) fn truncate_for_error(body: &str) -> String {
+    body.chars().take(200).collect()
+}
+
+pub(in crate::transport) struct CappedResponseBody {
+    bytes: Vec<u8>,
+    limit_exceeded: bool,
+}
+
+impl CappedResponseBody {
+    pub(in crate::transport) const fn limit_exceeded(&self) -> bool {
+        self.limit_exceeded
+    }
+
+    pub(in crate::transport) fn into_string(self) -> String {
+        String::from_utf8_lossy_owned(self.bytes)
+    }
+}
+
+pub(in crate::transport) async fn read_capped_response_body(
+    response: ReqwestResponse,
+    max_bytes: usize,
+) -> Result<CappedResponseBody, reqwest::Error> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Ok(CappedResponseBody {
+            bytes: Vec::new(),
+            limit_exceeded: true,
+        });
+    }
+
+    let mut bytes = Vec::with_capacity(
+        response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .map_or(0, |length| length.min(max_bytes)),
+    );
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await.transpose()? {
+        let remaining = max_bytes.saturating_sub(bytes.len());
+        if chunk.len() > remaining {
+            bytes.extend_from_slice(&chunk[..remaining]);
+            return Ok(CappedResponseBody {
+                bytes,
+                limit_exceeded: true,
+            });
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(CappedResponseBody {
+        bytes,
+        limit_exceeded: false,
+    })
+}
+
+pub(in crate::transport) async fn read_error_response_body(
+    response: ReqwestResponse,
+) -> Result<Bytes, reqwest::Error> {
+    response.bytes().await
+}
+
+/// JSON 与 Live 的非成功响应保留同一份原始正文、诊断和账号侧观测
+pub(in crate::transport) async fn http_json_upstream_error(
+    response: ReqwestResponse,
+    trace: &gateway_core::diagnostics::TraceContext,
+    transport_metrics: CodexTransportMetrics,
+) -> CodexClientError {
+    let status = response.status();
+    let headers = response.headers();
+    let diagnostics = super::super::response_meta::diagnostics(Some(status.as_u16()), headers)
+        .with_response_origin(Some(response.url().clone()));
+    let set_cookie_headers = super::super::response_meta::set_cookie_headers(headers);
+    let rate_limit_headers = super::super::response_meta::rate_limit_headers(headers);
+    let retry_after_seconds = retry_after_seconds(headers, None);
+    let content_type = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .map(|value| value.as_bytes().to_vec());
+    let client_headers = super::super::response_meta::client_headers(headers);
+    let raw_body = match read_error_response_body(response).await {
+        Ok(body) => body,
+        Err(source) => {
+            return CodexClientError::ErrorBodyRead {
+                source,
+                status,
+                diagnostics: Box::new(diagnostics),
+                transport: CodexBackendTransport::HttpJson,
+                transport_metrics: Box::new(transport_metrics),
+            };
+        }
+    };
+    trace.capture("upstream.error.body", &raw_body);
+    CodexClientError::Upstream {
+        status,
+        body: String::from_utf8_lossy(&raw_body).into_owned(),
+        client_response: Some(Box::new(CodexClientVisibleUpstreamResponse::new(
+            status,
+            content_type,
+            client_headers,
+            raw_body,
+        ))),
+        retry_after_seconds,
+        diagnostics: Box::new(diagnostics),
+        set_cookie_headers,
+        rate_limit_headers,
+        transport: CodexBackendTransport::HttpJson,
+        transport_metrics: Box::new(transport_metrics),
+        send_phase: CodexUpstreamSendPhase::AfterPayload,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 请求辅助函数
+// ---------------------------------------------------------------------------
+
+pub(in crate::transport) fn websocket_upstream_request(
+    request: &CodexResponsesRequest,
+    start_ms: &str,
+) -> CodexResponsesRequest {
+    let mut request = request.clone();
+    // 上游通过流式事件执行，下游仍按客户端原来的偏好返回响应
+    if !request.stream() {
+        request
+            .body_mut()
+            .insert("stream".to_owned(), Value::Bool(true));
+    }
+    project_websocket_client_metadata(&mut request, start_ms);
+    request
+}
+
+fn project_websocket_client_metadata(request: &mut CodexResponsesRequest, start_ms: &str) {
+    let mut metadata = match request.client_metadata() {
+        Some(Value::Object(metadata)) => metadata.clone(),
+        None => Map::new(),
+        Some(_) => return,
+    };
+    if let Some(responses_lite) = request.responses_lite.clone() {
+        metadata
+            .entry(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_owned())
+            .or_insert(Value::String(responses_lite));
+    }
+    let turn_state = request.turn_state.clone();
+    match turn_state {
+        Some(turn_state) => {
+            metadata.insert(
+                X_CODEX_TURN_STATE_CLIENT_METADATA_KEY.to_owned(),
+                Value::String(turn_state),
+            );
+        }
+        None => {
+            metadata.remove(X_CODEX_TURN_STATE_CLIENT_METADATA_KEY);
+        }
+    }
+    metadata.insert(
+        X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
+        Value::String(start_ms.to_owned()),
+    );
+    request.set_client_metadata(Some(Value::Object(metadata)));
+}
+
+pub(in crate::transport) fn now_unix_timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+pub(in crate::transport) fn openai_subagent_from_metadata(
+    client_metadata: Option<&Value>,
+) -> Option<String> {
+    Some(
+        client_metadata?
+            .as_object()?
+            .get("x-openai-subagent")?
+            .as_str()?
+            .to_owned(),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// 错误转换辅助函数
+// ---------------------------------------------------------------------------
+
+pub(in crate::transport) fn websocket_exchange_error_to_client_error(
+    error: CodexWebSocketExchangeError,
+) -> CodexClientError {
+    match error {
+        CodexWebSocketExchangeError::Upstream(upstream) => {
+            let upstream = *upstream;
+            CodexClientError::Upstream {
+                status: StatusCode::from_u16(upstream.status_code)
+                    .unwrap_or(StatusCode::BAD_GATEWAY),
+                body: upstream.body,
+                client_response: upstream.client_response,
+                retry_after_seconds: upstream.retry_after_seconds,
+                diagnostics: Box::new(upstream.diagnostics),
+                set_cookie_headers: upstream.set_cookie_headers,
+                rate_limit_headers: Vec::new(),
+                transport: CodexBackendTransport::WebSocket,
+                transport_metrics: Box::default(),
+                send_phase: upstream.send_phase,
+            }
+        }
+        error => CodexClientError::WebSocket(error),
+    }
+}
+
+pub(in crate::transport) fn websocket_success_decision(
+    requirement: TransportRequirement,
+    prepared: &PreparedWebSocket,
+) -> CodexTransportDecision {
+    match requirement {
+        TransportRequirement::ExactWebSocketContinuation => CodexTransportDecision::ExactWebSocket,
+        TransportRequirement::ExplicitWebSocketWarmup | TransportRequirement::WebSocketNewChain => {
+            CodexTransportDecision::RequiredWebSocket
+        }
+        _ if prepared.reused() => CodexTransportDecision::ReusedWebSocket,
+        _ => CodexTransportDecision::ConnectedWebSocket,
+    }
+}
+
+pub(in crate::transport) fn local_http_fallback_decision(
+    error: &CodexWebSocketExchangeError,
+) -> Option<CodexTransportDecision> {
+    if crate::transport::connection::is_admission_failure(error) {
+        return Some(CodexTransportDecision::Http2LocalConnectionCapacity);
+    }
+    match error.classified() {
+        CodexWebSocketExchangeError::OriginCircuitOpen
+        | CodexWebSocketExchangeError::OriginHalfOpenBusy => {
+            Some(CodexTransportDecision::Http2BreakerOpen)
+        }
+        CodexWebSocketExchangeError::ContinuationUnavailable { .. } => {
+            Some(CodexTransportDecision::Http2PoolUnavailable)
+        }
+        _ => None,
+    }
+}
+
+pub(in crate::transport) fn merge_preparation_metrics(
+    response: &mut CodexTransportMetrics,
+    preparation: CodexTransportMetrics,
+) {
+    response.decision = preparation.decision;
+    response.ws_connect_ms = preparation.ws_connect_ms;
+    response.transport_decision_wait_ms = preparation.transport_decision_wait_ms;
+}
+
+pub(in crate::transport) fn elapsed_duration_millis(duration: Duration) -> i64 {
+    i64::try_from(duration.as_millis())
+        .unwrap_or(i64::MAX)
+        .max(1)
+}
+
+pub(in crate::transport) fn http_version_name(version: reqwest::Version) -> &'static str {
+    match version {
+        reqwest::Version::HTTP_09 => "HTTP/0.9",
+        reqwest::Version::HTTP_10 => "HTTP/1.0",
+        reqwest::Version::HTTP_11 => "HTTP/1.1",
+        reqwest::Version::HTTP_2 => "HTTP/2",
+        reqwest::Version::HTTP_3 => "HTTP/3",
+        _ => "unknown",
+    }
+}
+
+pub(in crate::transport) fn websocket_origin_key(base_url: &str) -> String {
+    let origin = reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str()?;
+            Some(format!(
+                "{}://{}:{}",
+                url.scheme(),
+                host,
+                url.port_or_known_default().unwrap_or_default()
+            ))
+        })
+        .unwrap_or_else(|| base_url.trim_end_matches('/').to_string());
+    match custom_ca_env_cache_key() {
+        Some(tls_profile) => format!("{origin}\0{tls_profile}"),
+        None => origin,
+    }
+}

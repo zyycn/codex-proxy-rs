@@ -41,6 +41,7 @@ async fn concurrent_price_edits_preserve_other_models_and_sync_preserves_manual_
         actor: MutationActor::System,
         request_id: "pricing-test".to_owned(),
     };
+    let draft = settings.load_runtime_settings().await.unwrap();
     let pricing: ModelPriceOverride = serde_json::from_value(json!({
         "multiplierBps":12500,
         "bands":{"standard":{"input":"2","output":"10","cacheRead":"0","cacheWrite":"1"}}
@@ -62,6 +63,10 @@ async fn concurrent_price_edits_preserve_other_models_and_sync_preserves_manual_
         ),
     );
     assert_ne!(first.unwrap(), second.unwrap());
+    settings
+        .replace_runtime_settings(draft.into(), &context)
+        .await
+        .expect("pricing edits preserve the runtime settings draft");
     let stored = settings.load_pricing().await.unwrap();
     assert_eq!(stored.overrides["openai"].len(), 2);
 

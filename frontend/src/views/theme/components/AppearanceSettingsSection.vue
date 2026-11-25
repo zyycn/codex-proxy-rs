@@ -6,7 +6,7 @@ import { computed, shallowRef } from 'vue'
 
 import { useI18n } from 'vue-i18n'
 
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 
 import { useThemeEditor } from '../composables/useThemeEditor'
 import ThemeComponentTokenPanel from './ThemeComponentTokenPanel.vue'

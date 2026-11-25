@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { FormRule } from '@codex-proxy/ui'
-import { ZButton, ZCard, ZFormItem, ZIconButton, ZInput } from '@codex-proxy/ui'
+import { ZButton, ZCard, ZEmpty, ZFormItem, ZIconButton, ZInput } from '@codex-proxy/ui'
 
 import { Plus, Trash2 } from '@lucide/vue'
 
@@ -39,28 +39,32 @@ const uniqueModelRule = computed<FormRule>(() => ({
 
 <template>
   <ZCard
+    class="@container"
     :title="t('settings.modelMapping')"
     :description="t('settings.routing.modelMapHelp')"
   >
-    <div class="grid gap-4">
-      <ZButton class="justify-self-start" :disabled="loading" @click="emit('addMapping')">
+    <template #actions>
+      <ZButton :disabled="loading" @click="emit('addMapping')">
         <template #icon>
           <Plus class="size-4" />
         </template>
         {{ t('settings.addMapping') }}
       </ZButton>
-
-      <div
+    </template>
+    <template #body>
+      <p
         v-if="loading"
-        class="rounded-z bg-z-fill-quaternary px-4 py-4 text-z font-emphasis text-z-text-quaternary"
+        role="status"
+        class="m-0 px-4 py-4 text-center text-z-sm text-z-text-tertiary"
       >
         {{ t('settings.loadingModelMapping') }}
-      </div>
-      <div v-else-if="mappings.length" class="grid max-w-6xl gap-3">
+      </p>
+      <ZEmpty v-else-if="!mappings.length" :title="t('settings.emptyModelMapping')" size="small" surface="none" role="status" class="flex-1 content-center py-3!" />
+      <div v-else class="grid gap-3">
         <div
           v-for="(row, index) in mappings"
           :key="index"
-          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-4.5 rounded-z-card bg-z-fill-quaternary p-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]"
+          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-4.5 rounded-z-card bg-z-fill-quaternary p-3 @lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]"
         >
           <ZFormItem :prop="`modelMappings.${index}.requestedModel`" :rules="[requiredRule, uniqueModelRule]" :show-message="Boolean(row.requestedModel.trim())">
             <ZInput
@@ -70,8 +74,8 @@ const uniqueModelRule = computed<FormRule>(() => ({
               @update:model-value="emit('updateMapping', index, 'requestedModel', $event)"
             />
           </ZFormItem>
-          <span class="hidden text-z-text-quaternary sm:block" aria-hidden="true">→</span>
-          <ZFormItem :prop="`modelMappings.${index}.upstreamModel`" :rules="requiredRule" :show-message="false" class="col-start-1 row-start-2 sm:col-start-auto sm:row-start-auto">
+          <span class="hidden text-z-text-quaternary @lg:block" aria-hidden="true">→</span>
+          <ZFormItem :prop="`modelMappings.${index}.upstreamModel`" :rules="requiredRule" :show-message="false" class="col-start-1 row-start-2 @lg:col-start-auto @lg:row-start-auto">
             <ZInput
               :model-value="row.upstreamModel"
               :placeholder="t('settings.upstreamModel')"
@@ -80,7 +84,7 @@ const uniqueModelRule = computed<FormRule>(() => ({
             />
           </ZFormItem>
           <ZIconButton
-            class="col-start-2 row-span-2 row-start-1 sm:col-start-auto sm:row-span-1 sm:row-start-auto"
+            class="col-start-2 row-span-2 row-start-1 @lg:col-start-auto @lg:row-span-1 @lg:row-start-auto"
             :aria-label="t('settings.deleteMapping')"
             @click="emit('removeMapping', index)"
           >
@@ -88,6 +92,6 @@ const uniqueModelRule = computed<FormRule>(() => ({
           </ZIconButton>
         </div>
       </div>
-    </div>
+    </template>
   </ZCard>
 </template>

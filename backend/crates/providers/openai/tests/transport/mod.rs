@@ -14,7 +14,7 @@ use futures::{SinkExt, StreamExt};
 use gateway_protocol::openai::events::{
     TokenUsage, extract_sse_usage, rate_limits_to_header_pairs,
 };
-use provider_openai::transport::profile::{
+use provider_openai::profile::{
     CodexBundledReleaseProfile, CodexWireProfile, CodexWireProfileState,
 };
 use provider_openai::transport::protocol::responses::{
@@ -58,7 +58,6 @@ mod headers;
 mod http_client;
 mod latency;
 pub(crate) mod privacy;
-mod profile;
 mod profile_avatar;
 mod profile_contract;
 mod protocol;
@@ -128,7 +127,7 @@ where
 
 pub(crate) fn test_wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        client_kind: provider_openai::transport::profile::selection::ClientKind::Desktop,
+        client_kind: provider_openai::profile::selection::ClientKind::Desktop,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "1.2.3".to_owned(),
         desktop_version: "1.2.3".to_owned(),

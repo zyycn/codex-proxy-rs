@@ -1,0 +1,454 @@
+//! OpenAI Responses JSON 到 Core 路由事实与不透明 wire payload 的单一解码边界
+
+use crate::data_plane::body::decompress_request_body;
+
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use bytes::Bytes;
+use gateway_core::operation::{ClientTurn, GenerateRequest, Operation, ProtocolPayload};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
+use gateway_protocol::openai::{
+    X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
+    is_transport_managed_request_header,
+};
+use serde_json::{Map, Value};
+
+use crate::data_plane::body::RequestDecodeError;
+use crate::data_plane::generation::{
+    ContinuationIntent, DecodedGenerationRequest, GenerationRequestMetadata,
+};
+
+const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
+const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
+const DOWNSTREAM_WEBSOCKET_CONNECTION_ID_CONTEXT_KEY: &str = "downstream_websocket_connection_id";
+
+/// Responses 请求进入共享解码内核时的下游传输来源
+#[derive(Clone, Copy)]
+pub(super) enum RequestDecodeSource {
+    /// 单次 HTTP 请求，请求头与正文属于同一请求
+    Http,
+    /// 复用连接上的 WebSocket `response.create` 帧
+    WebSocketFrame,
+}
+
+#[derive(Clone, Default)]
+pub struct OpenAiRequestHeaders {
+    guardian: Option<String>,
+    ambiguous_guardian_headers: bool,
+    turn_state: Option<String>,
+    turn_metadata: Option<String>,
+    version: Option<String>,
+    codex_window_id: Option<String>,
+    parent_thread_id: Option<String>,
+    downstream_websocket_connection_id: Option<String>,
+
+    conversation_id: Option<String>,
+    session_id: Option<String>,
+    thread_id: Option<String>,
+    client_request_id: Option<String>,
+    turn_id: Option<String>,
+
+    responses_lite: Option<String>,
+    memgen_request: Option<String>,
+    subagent: Option<String>,
+    passthrough_headers: Vec<Value>,
+}
+
+impl OpenAiRequestHeaders {
+    /// 提取 OpenAI/Codex 连接级请求头上下文
+    #[must_use]
+    pub fn from_headers(headers: &HeaderMap) -> Self {
+        Self {
+            guardian: header_string(headers, "x-codex-guardian"),
+            ambiguous_guardian_headers: [
+                "x-codex-guardian",
+                OPENAI_SUBAGENT_KEY,
+                "x-codex-turn-metadata",
+            ]
+            .into_iter()
+            .any(|name| {
+                let mut values = headers.get_all(name).iter();
+                values.next().is_some_and(|v| v.to_str().is_err()) || values.next().is_some()
+            }),
+            turn_state: header_string(headers, "x-codex-turn-state"),
+            turn_metadata: header_string(headers, "x-codex-turn-metadata"),
+            version: header_string(headers, "version"),
+            codex_window_id: header_string(headers, "x-codex-window-id"),
+            parent_thread_id: header_string(headers, "x-codex-parent-thread-id"),
+            downstream_websocket_connection_id: None,
+            conversation_id: header_string(headers, "conversation-id")
+                .or_else(|| header_string(headers, "conversation_id")),
+            session_id: header_string(headers, "session-id")
+                .or_else(|| header_string(headers, "session_id")),
+            thread_id: header_string(headers, "thread-id"),
+            client_request_id: header_string(headers, "x-client-request-id"),
+            turn_id: header_string(headers, "x-codex-turn-id"),
+            responses_lite: header_string(headers, X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER),
+            memgen_request: header_string(headers, X_OPENAI_MEMGEN_REQUEST_HEADER),
+            subagent: header_string(headers, OPENAI_SUBAGENT_KEY),
+            passthrough_headers: passthrough_headers(headers),
+        }
+    }
+
+    /// 绑定代理为当前下游 WebSocket 分配的连接身份
+    #[must_use]
+    pub(super) fn with_downstream_websocket_connection_id(
+        mut self,
+        connection_id: impl Into<String>,
+    ) -> Self {
+        self.downstream_websocket_connection_id = Some(connection_id.into());
+        self
+    }
+
+    fn apply_subagent(
+        &self,
+        body: &mut Map<String, Value>,
+        context: &mut Map<String, Value>,
+        source: RequestDecodeSource,
+    ) {
+        if matches!(source, RequestDecodeSource::WebSocketFrame)
+            && let Some(frame_agent) = body
+                .get("client_metadata")
+                .and_then(|m| m.get(OPENAI_SUBAGENT_KEY))
+                .and_then(Value::as_str)
+            && (frame_agent == "guardian"
+                || self.subagent.as_deref() == Some("guardian")
+                || self.guardian.is_some())
+        {
+            // 帧内声明优先；旧 opening 的不透明副本也不能在 Provider 再度覆盖
+            let stale_subagent = self
+                .subagent
+                .as_deref()
+                .is_some_and(|opening| opening != frame_agent);
+            let stale_guardian = self.guardian.as_deref().is_some_and(|opening| {
+                frame_agent != "guardian"
+                    || gateway_protocol::openai::codex_guardian_role(body, context)
+                        .is_some_and(|role| role.header() != Some(opening))
+            });
+            if stale_subagent {
+                context.insert("subagent".into(), Value::from(frame_agent));
+            }
+            if (stale_subagent || stale_guardian)
+                && let Some(Value::Array(headers)) =
+                    context.get_mut(PASSTHROUGH_HEADERS_CONTEXT_KEY)
+            {
+                headers.retain(|pair| match pair.get(0).and_then(Value::as_str) {
+                    Some(OPENAI_SUBAGENT_KEY) => !stale_subagent,
+                    Some("x-codex-guardian") => !stale_guardian,
+                    _ => true,
+                });
+            }
+            return;
+        }
+        if let Some(subagent) = self.subagent.as_deref() {
+            inject_subagent_metadata(body, subagent);
+        }
+    }
+
+    /// 独立端点保留业务扩展头与会话身份，不携带 Responses 的连接状态
+    pub(crate) fn session_context(&self) -> Map<String, Value> {
+        let mut context = Map::new();
+        insert_protocol_context(&mut context, "session_id", self.session_id.as_ref());
+        insert_protocol_context(&mut context, "thread_id", self.thread_id.as_ref());
+        insert_protocol_context(&mut context, "turn_metadata", self.turn_metadata.as_ref());
+        self.insert_passthrough_headers(&mut context);
+        context
+    }
+
+    fn insert_passthrough_headers(&self, context: &mut Map<String, Value>) {
+        if !self.passthrough_headers.is_empty() {
+            context.insert(
+                PASSTHROUGH_HEADERS_CONTEXT_KEY.to_owned(),
+                Value::Array(self.passthrough_headers.clone()),
+            );
+        }
+    }
+
+    fn protocol_context(
+        &self,
+        use_websocket: Option<bool>,
+        source: RequestDecodeSource,
+    ) -> Map<String, Value> {
+        let mut context = Map::new();
+        insert_protocol_context(&mut context, "turn_state", self.turn_state.as_ref());
+        insert_protocol_context(&mut context, "turn_metadata", self.turn_metadata.as_ref());
+        insert_protocol_context(&mut context, "subagent", self.subagent.as_ref());
+        if matches!(source, RequestDecodeSource::WebSocketFrame) {
+            context.insert(
+                gateway_protocol::openai::WEBSOCKET_FRAME_CONTEXT_KEY.to_owned(),
+                Value::Bool(true),
+            );
+        }
+        insert_protocol_context(&mut context, "version", self.version.as_ref());
+        insert_protocol_context(
+            &mut context,
+            "codex_window_id",
+            self.codex_window_id.as_ref(),
+        );
+        insert_protocol_context(
+            &mut context,
+            "parent_thread_id",
+            self.parent_thread_id.as_ref(),
+        );
+        insert_protocol_context(
+            &mut context,
+            DOWNSTREAM_WEBSOCKET_CONNECTION_ID_CONTEXT_KEY,
+            self.downstream_websocket_connection_id.as_ref(),
+        );
+        insert_protocol_context(
+            &mut context,
+            "conversation_id",
+            self.conversation_id.as_ref(),
+        );
+        insert_protocol_context(&mut context, "session_id", self.session_id.as_ref());
+        insert_protocol_context(&mut context, "thread_id", self.thread_id.as_ref());
+        insert_protocol_context(
+            &mut context,
+            "client_request_id",
+            self.client_request_id.as_ref(),
+        );
+        insert_protocol_context(&mut context, "turn_id", self.turn_id.as_ref());
+        insert_protocol_context(&mut context, "responses_lite", self.responses_lite.as_ref());
+        insert_protocol_context(&mut context, "memgen_request", self.memgen_request.as_ref());
+        self.insert_passthrough_headers(&mut context);
+        if let Some(use_websocket) = use_websocket {
+            context.insert("use_websocket".to_owned(), Value::Bool(use_websocket));
+        }
+        context
+    }
+}
+
+fn insert_protocol_context(context: &mut Map<String, Value>, field: &str, value: Option<&String>) {
+    if let Some(value) = value {
+        context.insert(field.to_owned(), Value::String(value.clone()));
+    }
+}
+
+/// 使用下游 OpenAI/Codex 请求头解码 `POST /v1/responses`
+///
+/// # Errors
+///
+/// 编码不支持、压缩正文损坏或超限、JSON 非法，或路由字段无效时返回安全错误
+pub fn decode_request_with_headers(
+    body: &[u8],
+    headers: &HeaderMap,
+    max_decompressed_bytes: usize,
+) -> Result<DecodedGenerationRequest, RequestDecodeError> {
+    let body = decompress_request_body(body, headers, max_decompressed_bytes)?;
+    decode_request_inner(&body, &OpenAiRequestHeaders::from_headers(headers))
+}
+
+/// 解码请求并返回已经解除 HTTP content encoding 的中间件正文
+///
+/// 外层中间件只接收有界的协议正文；terminal 会用中间件返回的正文重新解码，
+/// 因而不能把压缩字节与已经移除的传输编码语义混用
+pub(crate) fn decode_request_with_body(
+    body: &[u8],
+    headers: &HeaderMap,
+    max_decompressed_bytes: usize,
+) -> Result<(DecodedGenerationRequest, Bytes), RequestDecodeError> {
+    let body = decompress_request_body(body, headers, max_decompressed_bytes)?;
+    let decoded = decode_request_inner(&body, &OpenAiRequestHeaders::from_headers(headers))?;
+    Ok((decoded, Bytes::copy_from_slice(&body)))
+}
+
+pub(super) fn decode_request_inner(
+    body: &[u8],
+    request_headers: &OpenAiRequestHeaders,
+) -> Result<DecodedGenerationRequest, RequestDecodeError> {
+    let value =
+        serde_json::from_slice::<Value>(body).map_err(|_| RequestDecodeError::MalformedJson)?;
+    let Value::Object(object) = value else {
+        return Err(RequestDecodeError::ExpectedObject);
+    };
+    decode_request_object(object, request_headers, RequestDecodeSource::Http)
+}
+
+/// 解码已解析的顶层 object；按下游传输来源恢复连接级协议上下文
+pub(super) fn decode_request_object(
+    mut object: Map<String, Value>,
+    request_headers: &OpenAiRequestHeaders,
+    source: RequestDecodeSource,
+) -> Result<DecodedGenerationRequest, RequestDecodeError> {
+    // 仅消费已识别的本地 transport 开关；未知同名值保留给未来上游协议
+    let use_websocket = object.get("use_websocket").and_then(Value::as_bool);
+    if use_websocket.is_some() {
+        object.remove("use_websocket");
+    }
+
+    let model = required_non_empty_string(&object, "model", "model")?;
+    if model.trim().is_empty() {
+        return Err(RequestDecodeError::EmptyField {
+            field: "model".to_owned(),
+        });
+    }
+    let model = model.to_owned();
+    // 缺省值只决定下游交付方式，不补写正文或改变 Provider 的上游流式执行
+    let stream = match object.get("stream") {
+        Some(value) => value.as_bool().unwrap_or(true),
+        None => matches!(source, RequestDecodeSource::WebSocketFrame),
+    };
+    let store = object
+        .get("store")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let continuation = object
+        .get("previous_response_id")
+        .and_then(Value::as_str)
+        .map(|response_id| ContinuationIntent::PreviousResponseId(response_id.to_owned()))
+        .unwrap_or(ContinuationIntent::None);
+
+    let mut protocol_context = request_headers.protocol_context(use_websocket, source);
+    gateway_protocol::openai::capture_codex_guardian_identity(
+        &object,
+        &mut protocol_context,
+        request_headers.guardian.as_deref(),
+        request_headers.ambiguous_guardian_headers,
+    );
+    request_headers.apply_subagent(&mut object, &mut protocol_context, source);
+
+    let semantics =
+        gateway_protocol::openai::codex_responses_request_semantics(&object, &protocol_context);
+    let client_turn = if object.get("generate").and_then(Value::as_bool) != Some(false)
+        && semantics.request_kind.as_deref() == Some("turn")
+        && !semantics.compact
+    {
+        gateway_protocol::openai::codex_account_thread_id(&object, &protocol_context)
+            .zip(gateway_protocol::openai::codex_turn_id(
+                &object,
+                &protocol_context,
+            ))
+            .and_then(|(thread, turn)| ClientTurn::new(thread, turn))
+    } else {
+        None
+    };
+
+    let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, object)
+        .map_err(|_| RequestDecodeError::CanonicalContract {
+            field: "request".to_owned(),
+        })?
+        .with_context(protocol_context);
+    let operation = Operation::Generate(
+        GenerateRequest::from_protocol_payload(payload).with_client_turn(client_turn),
+    );
+    Ok(DecodedGenerationRequest {
+        operation,
+        metadata: GenerationRequestMetadata {
+            requested_model: model,
+            stream,
+            store,
+            continuation,
+            client_ip: None,
+            user_agent: None,
+        },
+    })
+}
+
+fn inject_subagent_metadata(body: &mut Map<String, Value>, subagent: &str) {
+    let metadata = body
+        .entry("client_metadata".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(metadata) = metadata.as_object_mut() else {
+        return;
+    };
+    metadata.insert(
+        OPENAI_SUBAGENT_KEY.to_owned(),
+        Value::String(subagent.to_owned()),
+    );
+}
+
+fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned)
+}
+
+pub(crate) fn passthrough_headers(headers: &HeaderMap) -> Vec<Value> {
+    passthrough_request_headers(headers)
+        .map(|(name, value)| {
+            Value::Array(vec![
+                Value::String(name.as_str().to_owned()),
+                Value::String(STANDARD.encode(value.as_bytes())),
+            ])
+        })
+        .collect()
+}
+
+/// HTTP 与 Live 入站共用的身份、传输边界；保留业务头原始多值字节
+pub(crate) fn passthrough_request_headers(
+    headers: &HeaderMap,
+) -> impl Iterator<Item = (&HeaderName, &HeaderValue)> {
+    let connection_headers = headers
+        .get_all("connection")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+
+    headers
+        .iter()
+        .filter(move |(name, _)| passthrough_header_name(name.as_str(), &connection_headers))
+}
+
+fn passthrough_header_name(name: &str, connection_headers: &[String]) -> bool {
+    if connection_headers
+        .iter()
+        .any(|connection_header| connection_header.eq_ignore_ascii_case(name))
+        || is_transport_managed_request_header(name)
+    {
+        return false;
+    }
+
+    !matches!(
+        name,
+        // 下游鉴权和账号 cookie 绝不能成为上游账号身份
+        "authorization"
+            | "x-api-key"
+            | "x-goog-api-key"
+            // Codex 的服务端托管认证标记只用于客户端能力判断，不代表上游身份
+            | "x-openai-actor-authorization"
+            | "cookie"
+            | "cookie2"
+            | "chatgpt-account-id"
+            | "chatgpt-project-id"
+            | "openai-organization"
+            | "openai-project"
+            // 上游指纹必须由运行时画像统一生成，客户端 originator/User-Agent/version
+            // 不能作为不透明头透传覆盖，避免不同下游客户端暴露不一致的设备指纹
+            | "originator"
+            | "user-agent"
+            | "version"
+            // 设备 attestation/integrity 头只能由官方客户端或网关自身生成，
+            // 客户端注入的 x-oai-attestation / X-OAI-IS 不得透传上游
+            | "x-oai-attestation"
+            | "x-oai-is"
+            | "x-oai-is-update"
+    )
+}
+
+fn required_non_empty_string<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+    field: &str,
+) -> Result<&'a str, RequestDecodeError> {
+    let value = object
+        .get(key)
+        .ok_or_else(|| RequestDecodeError::MissingField {
+            field: field.to_owned(),
+        })?
+        .as_str()
+        .ok_or_else(|| RequestDecodeError::InvalidType {
+            field: field.to_owned(),
+            expected: "a string",
+        })?;
+    if value.is_empty() {
+        return Err(RequestDecodeError::EmptyField {
+            field: field.to_owned(),
+        });
+    }
+    Ok(value)
+}

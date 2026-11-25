@@ -3,7 +3,7 @@ import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import { getAccountImportTask, getAccountImportTasks, stopAccountImportTask } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { errorMessage } from '@/utils/operation'
 
 export function useAccountImportTasks(options: { reload: () => Promise<unknown> }) {

@@ -2,21 +2,17 @@
 
 pub(crate) mod canonical;
 pub(crate) mod catalog;
-pub mod client_profile;
 pub(crate) mod compaction;
 pub(crate) mod config;
 pub(crate) mod egress;
 pub(crate) mod headers;
 mod inference;
 pub(crate) mod network;
-pub(crate) mod profile;
 mod request;
 mod session;
 mod upstream_error;
 
-pub use canonical::{
-    GrokCanonicalDecoder, grok_billing_breakdown, grok_billing_breakdown_with_tier,
-};
+pub use canonical::GrokCanonicalDecoder;
 pub use catalog::{
     GROK_BILLING_URL, GROK_MODEL_CATALOG_URL, GROK_SUBSCRIPTION_URL, GrokBillingClient,
     GrokBillingError, GrokBillingRequest, GrokBillingSnapshot, GrokBillingTransport,
@@ -49,7 +45,6 @@ pub use network::{
     GrokReqwestTransportBuildError, OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport,
     ReqwestGrokModelCatalogTransport, ReqwestOAuthTransport,
 };
-pub use profile::{XaiWireProfile, XaiWireProfileState};
 pub(crate) use request::GrokReplayItem;
 pub use request::{GrokRequestEncodeError, GrokResponsesRequest};
 pub use session::{

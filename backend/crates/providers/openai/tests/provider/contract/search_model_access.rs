@@ -67,7 +67,7 @@ fn attempt(
         ),
         NonZeroU32::new(index).unwrap(),
         SystemTime::now() + Duration::from_secs(30),
-        account_policy().with_openai_account_affinity(affinity),
+        account_policy().with_account_affinity(affinity),
         accounts,
         None,
         CancellationToken::new(),

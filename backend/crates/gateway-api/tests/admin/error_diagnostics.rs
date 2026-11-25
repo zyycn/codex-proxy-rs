@@ -12,7 +12,7 @@ async fn store_failure_is_recorded_once_with_the_incoming_request_id() {
     let fixture = super::AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let diagnostics = Arc::new(crate::support::RecordingDiagnostics::default());
-    let bundle = crate::openai::api_bundle_with_diagnostics(
+    let bundle = crate::data_plane::api_bundle_with_diagnostics(
         fixture.services,
         gateway_api::ApiConfig {
             asset_directory: std::env::temp_dir(),

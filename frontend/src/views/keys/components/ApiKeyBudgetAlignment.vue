@@ -6,7 +6,7 @@ import { useI18n } from 'vue-i18n'
 import { alignKeyBudget, previewKeyAlignment } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useRequestState } from '@/composables/useRequestState'
-import { notification } from '@/utils/notification'
+import { notification } from '@/plugins/notification'
 
 import KeyReferenceAccountPicker from './KeyReferenceAccountPicker.vue'
 

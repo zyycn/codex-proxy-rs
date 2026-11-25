@@ -1,11 +1,11 @@
 import type { ApiKey } from '@/api'
 import { onScopeDispose, shallowRef } from 'vue'
 import { revealApiKey } from '@/api'
+import { buildCodexCcSwitchImportDeeplink, resolveServiceRootUrl } from '@/components/api-key-config-modal/client'
 import { useCopyText } from '@/composables/useCopyText'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
-import { buildCodexCcSwitchImportDeeplink, resolveServiceRootUrl } from '@/utils/client'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 
 type KeyRevealAction = 'copy' | 'use' | 'import'
 

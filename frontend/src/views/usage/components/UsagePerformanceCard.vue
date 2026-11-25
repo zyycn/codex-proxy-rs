@@ -6,9 +6,9 @@ import { ZCard, ZEmpty, ZSegmented } from '@codex-proxy/ui'
 
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import BaseChart from '@/components/charts/BaseChart.vue'
-import { zeroInactiveValues } from '@/components/charts/timeSeriesGap'
-import { chartTooltipContent, tooltipIndex, tooltipRows } from '@/components/charts/tooltip'
+import BaseChart from '@/components/base-chart/index.vue'
+import { zeroInactiveValues } from '@/components/base-chart/timeSeriesGap'
+import { chartTooltipContent, tooltipIndex, tooltipRows } from '@/components/base-chart/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 import { formatLocalizedCompactNumber as formatCompactNumber, formatDuration } from '@/utils/format'
 

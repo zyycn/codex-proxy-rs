@@ -2,7 +2,7 @@ import { shallowRef } from 'vue'
 import { ApiError } from '@/api/request'
 
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { errorMessage, withMinimumDuration } from '@/utils/operation'
 
 type MaybePromise<T> = T | Promise<T>

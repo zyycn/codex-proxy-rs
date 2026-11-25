@@ -19,6 +19,10 @@
     },
     "quota": {
       "general": "通用額度",
+      "groups": {
+        "geminiModels": "Gemini 模型",
+        "claudeGptModels": "Claude 和 GPT 模型"
+      },
       "usageInThisWindow": "窗口消耗：{localUsageDisplay}",
       "quotaUsed": "額度已使用：{rate}",
       "resets": "重置時間: {resetAtDisplay}",
@@ -289,7 +293,7 @@
       "downloadModelCatalog": "下載模型目錄",
       "restoreState": "重置狀態",
       "staleSelection": "所選賬號數據已失效，請重新選擇",
-      "exportUnsupported": "所選賬號包含不支持導出的平臺",
+      "exportUnsupported": "所選帳號中有帳號不支援匯出憑據",
       "deleted": "賬號已刪除",
       "deletedAccountDeletedAccounts": "已刪除 {count} 個賬號",
       "partialDeletion": "已刪除 {count} 個賬號，其餘未刪除：{value}",
@@ -321,7 +325,6 @@
       "tokensStructure": "Token 用量",
       "cacheRead": "緩存讀取",
       "reasoning": "推理",
-      "cacheWrites": "緩存寫入",
       "modelUsageRanking": "模型用量",
       "totalTokens": "總 Token",
       "totalCharge": "總計費",
@@ -368,6 +371,8 @@
       "callbackLabel": "回調地址或授權碼",
       "callbackAddress": "回調地址",
       "callbackPlaceholder": "回調地址、?code=...&state=... 或授權碼",
+      "fullCallbackHelp": "完成瀏覽器授權後，將網址列中的完整回調網址貼到這裡",
+      "fullCallbackPlaceholder": "貼上含有 code 和 state 的完整回調網址",
       "callbackHelp": "打開授權鏈接，完成瀏覽器授權後粘貼回調地址或授權碼",
       "pasteOneAccessTokenPerLine": "每行粘貼一個 Access Token",
       "pasteOneRefreshTokenPerLine": "每行粘貼一個 Refresh Token",

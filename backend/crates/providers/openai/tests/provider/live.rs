@@ -711,7 +711,7 @@ async fn verify_live_call_identity() {
     };
     use gateway_core::live::LiveHangupRequest;
     use provider_openai::credential::{CodexCredentialAdmin, ImportCodexOAuthCredential};
-    use provider_openai::transport::profile::CodexWireProfile;
+    use provider_openai::profile::CodexWireProfile;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
     let profile = CodexWireProfile {
@@ -952,7 +952,7 @@ async fn verify_live_call_identity() {
 #[cfg(target_os = "linux")]
 fn assert_live_profile(
     headers: &reqwest::header::HeaderMap,
-    profile: &provider_openai::transport::profile::CodexWireProfile,
+    profile: &provider_openai::profile::CodexWireProfile,
     authorization: &str,
 ) {
     assert_eq!(headers["user-agent"], profile.user_agent());

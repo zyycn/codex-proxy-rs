@@ -1,22 +1,21 @@
 <script setup lang="ts">
 import type { IconButtonProps } from '@codex-proxy/ui'
-import type { Locale } from '@/i18n/locale'
+import type { Locale } from '@/i18n'
 import { ZIconButton, ZMenuItem, ZPopover } from '@codex-proxy/ui'
 import { Check, Languages, LoaderCircle } from '@lucide/vue'
 import chineseFlag from 'circle-flags/flags/cn.svg?url&no-inline'
 import englishFlag from 'circle-flags/flags/us.svg?url&no-inline'
 import { computed, shallowRef, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useLocale } from '@/composables/useLocale'
-import { notification } from '@/utils/notification'
+import { localeOptions, setLocale } from '@/i18n'
+import { notification } from '@/plugins/notification'
 
 withDefaults(defineProps<{ size?: IconButtonProps['size'], variant?: IconButtonProps['variant'] }>(), {
   size: 'small',
   variant: 'text',
 })
 
-const { t } = useI18n({ useScope: 'global' })
-const { locale, localeOptions, setLocale } = useLocale()
+const { locale, t } = useI18n({ useScope: 'global' })
 const pendingLocale = shallowRef<Locale>()
 const localeFlags: Record<Locale, string> = {
   'zh-Hans': chineseFlag,

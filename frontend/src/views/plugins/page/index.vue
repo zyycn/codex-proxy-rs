@@ -1,0 +1,124 @@
+<script setup lang="ts">
+import { ZButton, ZEmpty, ZIconButton, ZPageHeader, ZSegmented } from '@codex-proxy/ui'
+
+import { Blocks, RefreshCw } from '@lucide/vue'
+import { storeToRefs } from 'pinia'
+import { computed, onMounted, shallowRef } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
+import { pluginPageLocation } from '@/router/plugin'
+import { usePluginViewsStore } from '@/stores/modules/plugin-views'
+import PluginManagementFrame from '../components/plugin-management-frame/index.vue'
+import PluginPageLoading from '../components/PluginPageLoading.vue'
+
+const { t } = useI18n({ useScope: 'global' })
+
+const route = useRoute()
+const router = useRouter()
+const directory = usePluginViewsStore()
+const { pageViews, loading, loaded, loadError } = storeToRefs(directory)
+const frameReload = shallowRef(0)
+
+const instanceId = computed(() => routeParam(route.params.instanceId))
+const pageId = computed(() => routeParam(route.params.pageId))
+const view = computed(() => pageViews.value.find(item => item.target.instanceId === instanceId.value) ?? null)
+const page = computed(() => view.value?.pages.find(item => item.id === pageId.value) ?? null)
+const pageOptions = computed(() => view.value?.pages.map(item => ({
+  label: item.title,
+  value: item.id,
+})) ?? [])
+const selectedPageId = computed({
+  get: () => pageId.value,
+  set: (nextPageId: string) => {
+    const currentView = view.value
+    const nextPage = currentView?.pages.find(item => item.id === nextPageId)
+    if (currentView && nextPage)
+      void router.push(pluginPageLocation(currentView, nextPage))
+  },
+})
+const frameKey = computed(() => {
+  const currentView = view.value
+  const currentPage = page.value
+  if (!currentView || !currentPage)
+    return ''
+  const target = currentView.target
+  return [
+    target.instanceId,
+    target.artifactSha256,
+    target.revision,
+    currentPage.id,
+    frameReload.value,
+  ].join(':')
+})
+
+function routeParam(value: string | string[] | undefined) {
+  return Array.isArray(value)
+    ? (value[0] ?? '')
+    : (value ?? '')
+}
+
+async function refreshDirectory() {
+  try {
+    await directory.refresh()
+    frameReload.value += 1
+  }
+  catch {
+    // 请求层统一提示失败，保留旧目录，避免把暂时失败误判为撤销
+  }
+}
+
+onMounted(() => {
+  void directory.ensureLoaded().catch(() => undefined)
+})
+</script>
+
+<template>
+  <div class="flex min-w-0 w-full flex-col gap-5">
+    <ZPageHeader
+      :title="page?.title ?? t('plugins.pluginPage')"
+      :description="page?.description || (view ? t('plugins.page.configurationDescription', { name: view.name }) : t('plugins.page.description'))"
+    >
+      <template #actions>
+        <ZIconButton :aria-label="t('plugins.refreshPage')" variant="solid" :loading="loading" @click="refreshDirectory">
+          <template #loading>
+            <RefreshCw class="size-4 animate-spin motion-reduce:animate-none" />
+          </template>
+          <RefreshCw class="size-4" />
+        </ZIconButton>
+      </template>
+    </ZPageHeader>
+
+    <PluginPageLoading v-if="loading && !loaded" />
+
+    <ZEmpty
+      v-else-if="!loadError && (!view || !page)"
+      class="min-h-0 flex-1 content-center"
+      :icon="Blocks"
+      :title="t('plugins.pluginPageIsUnavailable')"
+      :description="t('plugins.page.unpublished')"
+    >
+      <template #action>
+        <ZButton @click="router.push('/plugins')">
+          {{ t('plugins.returnToPluginManagement') }}
+        </ZButton>
+      </template>
+    </ZEmpty>
+
+    <section v-if="view && page" class="flex min-w-0 flex-col gap-4">
+      <ZSegmented
+        v-if="view.pages.length > 1"
+        v-model="selectedPageId"
+        class="w-max max-w-full shrink-0 overflow-x-auto"
+        :options="pageOptions"
+        :aria-label="t('plugins.pluginPage')"
+        size="small"
+      />
+      <PluginManagementFrame
+        :key="frameKey"
+        :view="view"
+        :page="page"
+        @stale="refreshDirectory"
+      />
+    </section>
+  </div>
+</template>

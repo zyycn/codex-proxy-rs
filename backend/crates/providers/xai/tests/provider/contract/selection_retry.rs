@@ -171,6 +171,7 @@ async fn cooldown_after_rotation_preserves_upstream_rejection() {
         Arc::new(DiagnosticLeasePort),
         Arc::new(MemoryCooldownPort::default()),
         Arc::new(AccountFeedbackStats::default()),
+        Arc::new(crate::support::TestSessionAffinity::default()),
     );
     let transport = StubInferenceTransport::error(
         GrokInferenceTransportError::new(

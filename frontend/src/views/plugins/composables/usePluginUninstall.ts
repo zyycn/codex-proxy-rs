@@ -2,7 +2,7 @@ import type { InstalledPlugin } from '../utils/catalog'
 import { shallowRef } from 'vue'
 import { deletePluginArtifact, deletePluginInstance, disablePluginInstance, getPluginArtifacts, getPluginInstances } from '@/api'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { notifyPluginError } from '../utils/actions'
 
 export function usePluginUninstall(refresh: () => Promise<void>) {

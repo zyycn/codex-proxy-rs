@@ -95,6 +95,7 @@ pub(crate) struct FakeBackupRepository {
     audits: Mutex<Vec<AdminAuditEvent>>,
     settings: Mutex<BackupSettings>,
     settings_unavailable: AtomicBool,
+    rotate_before_verification: bool,
     records: Mutex<Vec<BackupRecord>>,
 }
 
@@ -104,8 +105,14 @@ impl FakeBackupRepository {
             settings: Mutex::new(settings),
             audits: Mutex::new(Vec::new()),
             settings_unavailable: AtomicBool::new(false),
+            rotate_before_verification: false,
             records: Mutex::new(Vec::new()),
         }
+    }
+
+    pub(crate) fn rotating_before_verification(mut self) -> Self {
+        self.rotate_before_verification = true;
+        self
     }
 
     pub(crate) fn audit_events(&self) -> Vec<AdminAuditEvent> {
@@ -206,6 +213,10 @@ impl BackupRepository for FakeBackupRepository {
         at: DateTime<Utc>,
     ) -> AdminStoreResult<bool> {
         let mut settings = self.settings.lock().expect("settings");
+        if self.rotate_before_verification {
+            settings.storage_revision += 1;
+            settings.last_verified_at = None;
+        }
         if settings.storage_revision != storage_revision {
             return Ok(false);
         }

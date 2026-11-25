@@ -1,7 +1,7 @@
 //! 插件管理页面、资源、授权回调与页面模型请求的 HTTP 边界
 
-use crate::openai::generation::{
-    GenerationHttpRequest, ResponseAuthorization, execute_prepared_generation,
+use crate::data_plane::generation::{
+    GenerationEndpoint, GenerationHttpRequest, ResponseAuthorization, execute_prepared_generation,
 };
 
 use std::{net::SocketAddr, sync::Arc};
@@ -32,12 +32,12 @@ use sha2::{Digest as _, Sha256};
 
 use crate::middleware::headers::{decode_headers, encode_headers};
 use crate::{
+    SessionState,
     admin::{
         AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse,
         wire::map_admin_service_error,
     },
-    auth::SessionState,
-    openai::{
+    data_plane::{
         error::{gateway_error_response, protocol_error_response},
         responses::decode_request_with_body,
     },
@@ -133,7 +133,7 @@ async fn model_responses(
                 )));
             }
         };
-    let service = state.openai().clone();
+    let service = state.data_plane().clone();
     let execution = service.execution();
     let prepared = match execution.prepare_plugin_execution(&client_key_id).await {
         Ok(prepared) => prepared,
@@ -155,7 +155,7 @@ async fn model_responses(
                 .cloned()
                 .map(Extension),
             headers,
-            decoded,
+            input: GenerationEndpoint::Responses.input(decoded),
             middleware_body,
         },
         Some(authorization),

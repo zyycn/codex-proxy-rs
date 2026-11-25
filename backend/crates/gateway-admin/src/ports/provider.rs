@@ -24,7 +24,7 @@ use crate::model::provider_credentials::{
 };
 use crate::model::{
     provider_credentials::{ProviderDocument, ProviderQuotaWindow},
-    quota_forecast_sampling::QuotaForecastObservation,
+    quota_forecast::QuotaForecastObservation,
 };
 
 /// 按原生 Token 口径计算的报价输入，额外费用由调用方处理
@@ -33,6 +33,19 @@ pub struct ProviderUsagePricingInput {
     pub upstream_model_id: String,
     pub service_tier: Option<String>,
     pub usage: gateway_core::metering::Usage,
+}
+
+/// 账号目录中的模型与独立额度观测，缺少观测不能解释为可用
+#[derive(Debug, Clone)]
+pub struct ProviderPeerAccountModels {
+    pub credential_revision: gateway_core::account::CredentialRevision,
+    pub models: BTreeMap<String, Option<ProviderPeerModelQuota>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderPeerModelQuota {
+    pub state: gateway_core::account::QuotaState,
+    pub valid_until: std::time::SystemTime,
 }
 
 /// Provider 管理失败的稳定分类
@@ -165,9 +178,19 @@ pub trait ProviderAdmin: Send + Sync {
         })
     }
 
-    /// 只读内置价目；没有本地计价能力的 Provider 返回空目录
+    /// 管理端允许为当前 Provider 覆盖的计费档位
+    fn supported_pricing_bands(&self) -> &'static [&'static str] {
+        &["standard"]
+    }
+
+    /// 只读内置价目，没有本地计价能力时返回空目录
     fn pricing_catalog(&self) -> crate::model::pricing::ProviderPricingCatalog {
         Default::default()
+    }
+
+    /// 外部参考价到本 Provider 上游模型的对应关系，与内置价共用登记
+    fn pricing_source(&self) -> crate::ports::pricing::PricingCatalogSource {
+        crate::ports::pricing::PricingCatalogSource::Direct
     }
 
     fn evaluate_usage_pricing(
@@ -191,6 +214,14 @@ pub trait ProviderAdmin: Send + Sync {
         _model: &str,
     ) -> Option<bool> {
         None
+    }
+
+    /// 批量读取已授权账号的原生模型事实，不访问上游；None 沿用整号额度合同
+    async fn peer_model_facts(
+        &self,
+        _accounts: &[crate::model::accounts::AccountRecord],
+    ) -> Result<Option<BTreeMap<String, ProviderPeerAccountModels>>, ProviderAdminError> {
+        Ok(None)
     }
 
     /// 只读取原生 Provider 能力及账号类型，不执行网络或数据库查询
@@ -436,6 +467,13 @@ pub trait ProviderAdmin: Send + Sync {
     ) -> Result<ProviderExport, ProviderAdminError>;
 }
 
+/// 内置 Provider 在启动时一次交付数据面、管理面与后台任务
+pub struct ProviderBundle {
+    pub core: Arc<dyn gateway_core::engine::provider::Provider>,
+    pub admin: Arc<dyn ProviderAdmin>,
+    pub workers: Vec<gateway_core::task::WorkerContribution>,
+}
+
 /// 启动时注册原生 Provider，按 ProviderKind 查找管理能力
 #[derive(Clone)]
 pub struct ProviderAdminRegistry {
@@ -443,8 +481,32 @@ pub struct ProviderAdminRegistry {
 }
 
 impl ProviderAdminRegistry {
+    pub(crate) fn pricing_source_scope(&self) -> crate::ports::pricing::PricingSourceScope {
+        crate::ports::pricing::PricingSourceScope {
+            catalogs: self
+                .providers
+                .iter()
+                .map(|(kind, provider)| (kind.to_string(), provider.pricing_source()))
+                .collect(),
+        }
+    }
+
     pub(crate) fn registered(&self) -> BTreeMap<ProviderKind, Arc<dyn ProviderAdmin>> {
         self.providers.as_ref().clone()
+    }
+
+    pub(crate) fn supported_pricing_bands(&self) -> BTreeMap<String, Vec<String>> {
+        self.providers
+            .iter()
+            .map(|(kind, provider)| {
+                let bands = provider
+                    .supported_pricing_bands()
+                    .iter()
+                    .map(|&band| band.to_owned())
+                    .collect();
+                (kind.to_string(), bands)
+            })
+            .collect()
     }
 
     pub fn pricing_catalog(&self) -> gateway_core::metering::PricingOverrides {

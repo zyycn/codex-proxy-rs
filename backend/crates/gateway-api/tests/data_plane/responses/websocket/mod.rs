@@ -1,0 +1,1342 @@
+//! Responses WebSocket 测试入口，以及请求帧与轮次元数据解析测试
+
+mod connection;
+mod forward;
+mod interrupt;
+mod protocol;
+
+use gateway_api::data_plane::generation::DecodedGenerationRequest;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+use std::time::{Duration, SystemTime};
+
+use async_trait::async_trait;
+use axum::{
+    body::Body,
+    http::{HeaderMap, HeaderValue, Request, StatusCode, header::AUTHORIZATION},
+};
+use bytes::Bytes;
+use futures::{SinkExt, StreamExt, future::BoxFuture};
+use gateway_api::data_plane::responses::{
+    OpenAiRequestHeaders, ResponseCreateFrameError, decode_response_create_with_context,
+};
+use gateway_core::account::ProviderAccountId;
+use gateway_core::engine::admission::{
+    ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
+    ClientAdmissionRequest, ClientAdmissionRestoreResult,
+};
+use gateway_core::engine::budget::{ClientBudgetCharge, ClientBudgetError, ClientBudgetPort};
+use gateway_core::engine::execution::{
+    AuthenticatedClient, ClientAuthenticationError, DefaultExecutionService, ExecutionService,
+    ExecutionSession, StartExecution, StartProviderExecution, StartedExecution,
+};
+use gateway_core::engine::provider::{
+    Provider, ProviderCallMetadata, ProviderRegistry, ProviderRequest, ProviderStream,
+};
+use gateway_core::engine::{
+    AttemptContext, AttemptRecord, CommitRequirement, CoordinatedEvent, EngineError,
+    ExecutionStore, IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
+    RecoveryReport,
+};
+use gateway_core::error::{GatewayError, ProviderError, ProviderErrorKind, StoreError};
+use gateway_core::event::{
+    GatewayEvent, ProtocolWireEvent, ProviderEvent, ProviderResponseHeader, ResponseMeta,
+};
+use gateway_core::lifecycle::{
+    CancellationToken, ConnectionDraining, ConnectionGuard, ConnectionLifecycle,
+};
+use gateway_core::metering::{Decimal, ProviderReportedCost};
+use gateway_core::operation::Operation;
+use gateway_core::policy::ClientApiKeyId;
+use gateway_core::routing::{ProviderCatalogGeneration, ProviderModelCapabilities, PublicModelId};
+use gateway_core::runtime::RuntimeSnapshotHandle;
+use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
+use gateway_protocol::openai::codex_responses_request_semantics;
+use serde_json::{Value, json};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message as ClientMessage;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tower::ServiceExt;
+
+use super::decode_response_create;
+use crate::data_plane::{
+    EmptyWorkerHealth, IgnoredClientApiKeyUsage, UnusedContinuation, api_router,
+    authenticated_client, models::ModelsExecution, snapshot,
+};
+
+fn decode_response_create_with_turn_header(
+    payload: Value,
+    opening_turn_metadata: &'static str,
+) -> DecodedGenerationRequest {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-codex-turn-metadata",
+        HeaderValue::from_static(opening_turn_metadata),
+    );
+    decode_response_create_with_context(
+        &payload.to_string(),
+        &OpenAiRequestHeaders::from_headers(&headers),
+    )
+    .expect("response.create should decode")
+}
+
+#[test]
+fn response_create_should_default_to_the_websocket_streaming_contract() {
+    let decoded = decode_response_create(
+        &json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": "hello",
+            "store": false
+        })
+        .to_string(),
+    )
+    .expect("decode response.create");
+
+    assert!(decoded.metadata().stream());
+    assert!(!decoded.metadata().store());
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("Responses must map to Generate");
+    };
+    assert!(request.protocol_payload().body().get("stream").is_none());
+}
+
+#[test]
+fn response_create_should_preserve_provider_options_as_opaque_wire_body() {
+    let decoded = decode_response_create(
+        &json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": "hello",
+            "stream": true,
+            "provider_options": {
+                "version": "v1",
+                "providers": {
+                    "openai": {"schema_version": 1, "transport": "websocket"}
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("decode opaque provider options");
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("Responses must map to Generate");
+    };
+    let payload = request.protocol_payload();
+
+    assert_eq!(
+        payload.body().get("provider_options"),
+        Some(&json!({
+            "version": "v1",
+            "providers": {
+                "openai": {"schema_version": 1, "transport": "websocket"}
+            }
+        }))
+    );
+    assert!(payload.context().get("provider_options").is_none());
+}
+
+#[test]
+fn response_create_should_preserve_compaction_trigger_for_openai() {
+    let decoded = decode_response_create(
+        &json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": [
+                {"type": "message", "role": "user", "content": "history"},
+                {"type": "compaction_trigger"}
+            ]
+        })
+        .to_string(),
+    )
+    .expect("decode OpenAI response.create");
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("OpenAI response.create must remain Generate");
+    };
+
+    assert_eq!(
+        request
+            .protocol_payload()
+            .body()
+            .get("input")
+            .and_then(|input| input.pointer("/1/type")),
+        Some(&json!("compaction_trigger"))
+    );
+}
+
+#[test]
+fn response_create_should_prefer_frame_turn_metadata_over_opening_headers() {
+    let frame = r#"{"request_kind":"turn","tool_namespaces_info":{"workspace":{}}}"#;
+    let opening = r#"{"request_kind":"compaction"}"#;
+    let decoded = decode_response_create_with_turn_header(
+        json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": "hello",
+            "client_metadata": {
+                "x-codex-turn-metadata": frame
+            }
+        }),
+        opening,
+    );
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("Responses must map to Generate");
+    };
+
+    assert_eq!(
+        request.protocol_payload().context()["turn_metadata"],
+        opening
+    );
+    assert_eq!(
+        request.protocol_payload().body()["client_metadata"]["x-codex-turn-metadata"],
+        frame
+    );
+    let semantics = codex_responses_request_semantics(
+        request.protocol_payload().body(),
+        request.protocol_payload().context(),
+    );
+
+    assert_eq!(
+        (semantics.request_kind.as_deref(), semantics.compact),
+        (Some("turn"), false)
+    );
+}
+
+#[test]
+fn response_create_should_accept_frame_compaction_after_a_turn_opening_header() {
+    let decoded = decode_response_create_with_turn_header(
+        json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": "hello",
+            "client_metadata": {
+                "x-codex-turn-metadata": r#"{"request_kind":"compaction"}"#
+            }
+        }),
+        r#"{"request_kind":"turn"}"#,
+    );
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("Responses must map to Generate");
+    };
+
+    let semantics = codex_responses_request_semantics(
+        request.protocol_payload().body(),
+        request.protocol_payload().context(),
+    );
+
+    assert_eq!(
+        (semantics.request_kind.as_deref(), semantics.compact),
+        (Some("compaction"), true)
+    );
+}
+
+#[test]
+fn response_create_should_fall_back_to_opening_turn_metadata_when_the_frame_omits_it() {
+    let decoded = decode_response_create_with_turn_header(
+        json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": "hello"
+        }),
+        r#"{"request_kind":"compaction"}"#,
+    );
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("Responses must map to Generate");
+    };
+
+    let semantics = codex_responses_request_semantics(
+        request.protocol_payload().body(),
+        request.protocol_payload().context(),
+    );
+
+    assert_eq!(
+        (semantics.request_kind.as_deref(), semantics.compact),
+        (Some("compaction"), true)
+    );
+}
+
+#[test]
+fn response_create_should_reject_explicit_non_streaming_requests() {
+    let error = decode_response_create(
+        &json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": "hello",
+            "stream": false
+        })
+        .to_string(),
+    )
+    .expect_err("WebSocket requests must stream");
+
+    assert_eq!(error, ResponseCreateFrameError::StreamingRequired);
+}
+
+#[test]
+fn response_create_should_reject_invalid_frame_shapes() {
+    for (payload, expected) in [
+        ("not-json", ResponseCreateFrameError::InvalidJson),
+        ("[]", ResponseCreateFrameError::ExpectedObject),
+        (
+            r#"{"type":"future.message","model":"smart-code","input":"hello"}"#,
+            ResponseCreateFrameError::UnsupportedType,
+        ),
+    ] {
+        assert_eq!(
+            decode_response_create(payload).expect_err("invalid frame"),
+            expected
+        );
+    }
+}
+
+#[test]
+fn response_create_should_reject_non_boolean_stream_without_disclosing_body_values() {
+    let prompt = "private-websocket-prompt-marker";
+    let opaque_stream_value = "private-websocket-option-marker";
+    let error = decode_response_create(
+        &json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": prompt,
+            "stream": opaque_stream_value
+        })
+        .to_string(),
+    )
+    .expect_err("WebSocket response.create must explicitly enable streaming");
+    let rendered = format!("{error:?}\n{error}");
+
+    assert_eq!(error, ResponseCreateFrameError::StreamingRequired);
+    assert!(!rendered.contains(prompt));
+    assert!(!rendered.contains(opaque_stream_value));
+}
+
+#[derive(Default)]
+struct AtomicFailureTrace {
+    starts: AtomicUsize,
+    next_calls: AtomicUsize,
+    committed: AtomicBool,
+    finalized: AtomicBool,
+    downstream_websocket_connection_ids: Mutex<Vec<String>>,
+    request_turn_headers: Mutex<Vec<[Option<String>; 4]>>,
+    initial_errors: Mutex<std::collections::VecDeque<EngineError>>,
+    first_batch: Mutex<Option<CoordinatedEvent>>,
+    session_drops: Arc<AtomicUsize>,
+    middleware: Option<gateway_core::engine::middleware::FrozenMiddlewarePlan>,
+}
+
+struct AtomicFailureSession {
+    trace: Arc<AtomicFailureTrace>,
+    response_headers: Vec<ProviderResponseHeader>,
+    fail_before_first_event: bool,
+}
+
+impl Drop for AtomicFailureSession {
+    fn drop(&mut self) {
+        self.trace.session_drops.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+impl ExecutionSession for AtomicFailureSession {
+    fn next_event(&mut self) -> BoxFuture<'_, Result<Option<CoordinatedEvent>, EngineError>> {
+        Box::pin(async move {
+            let next_call = self.trace.next_calls.fetch_add(1, Ordering::AcqRel);
+            if let Some(error) = self.trace.initial_errors.lock().unwrap().pop_front() {
+                self.trace.finalized.store(true, Ordering::Release);
+                return Err(error);
+            }
+            if self.fail_before_first_event && next_call == 0 {
+                return Err(EngineError::Provider(ProviderError::new(
+                    ProviderErrorKind::Unavailable,
+                    UpstreamSendState::Ambiguous,
+                )));
+            }
+            match next_call {
+                0 => Ok(Some(
+                    self.trace
+                        .first_batch
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .unwrap_or_else(atomic_failure_batch),
+                )),
+                1 => {
+                    self.trace.finalized.store(true, Ordering::Release);
+                    Err(EngineError::Provider(ProviderError::new(
+                        ProviderErrorKind::RateLimited,
+                        UpstreamSendState::Sent,
+                    )))
+                }
+                _ => Ok(None),
+            }
+        })
+    }
+
+    fn collect_uncommitted(&mut self) -> BoxFuture<'_, Result<Vec<ProviderEvent>, EngineError>> {
+        Box::pin(async { Err(EngineError::InvalidDeliveryState) })
+    }
+
+    fn response_headers(&self) -> &[ProviderResponseHeader] {
+        &self.response_headers
+    }
+
+    fn commit_downstream(&mut self, _: Option<u16>) -> BoxFuture<'_, Result<(), EngineError>> {
+        Box::pin(async move {
+            self.trace.committed.store(true, Ordering::Release);
+            Ok(())
+        })
+    }
+
+    fn record_client_status(&mut self, _: u16) -> BoxFuture<'_, Result<(), EngineError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn is_finalized(&self) -> bool {
+        self.trace.finalized.load(Ordering::Acquire)
+    }
+
+    fn cancel(&self) {}
+
+    fn detach_finalize(self: Box<Self>) -> BoxFuture<'static, ()> {
+        Box::pin(async move {
+            self.trace.finalized.store(true, Ordering::Release);
+        })
+    }
+}
+
+struct AtomicFailureExecution {
+    client: AuthenticatedClient,
+    trace: Arc<AtomicFailureTrace>,
+    response_headers: Vec<ProviderResponseHeader>,
+    fail_before_first_event: bool,
+}
+
+impl ExecutionService for AtomicFailureExecution {
+    fn middleware_plan(
+        &self,
+        _: &gateway_core::engine::execution::PreparedRootExecution,
+    ) -> Option<gateway_core::engine::middleware::FrozenMiddlewarePlan> {
+        self.trace.middleware.clone()
+    }
+
+    fn authenticate(
+        &self,
+        plaintext: &str,
+    ) -> Result<AuthenticatedClient, ClientAuthenticationError> {
+        (plaintext == "sk_ws_atomic")
+            .then(|| self.client.clone())
+            .ok_or(ClientAuthenticationError::InvalidKey)
+    }
+
+    fn public_models(&self, _: &AuthenticatedClient) -> Vec<PublicModelId> {
+        vec![PublicModelId::new("model-a").expect("public model")]
+    }
+
+    fn contains_public_model(&self, _: &AuthenticatedClient, model: &PublicModelId) -> bool {
+        model.as_str() == "model-a"
+    }
+
+    fn start(
+        &self,
+        request: StartExecution,
+    ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        self.trace.starts.fetch_add(1, Ordering::AcqRel);
+        if let Operation::Generate(generate) = &request.operation
+            && let Some(connection_id) = generate
+                .protocol_payload()
+                .context()
+                .get("downstream_websocket_connection_id")
+                .and_then(Value::as_str)
+        {
+            let context = generate.protocol_payload().context();
+            self.trace.request_turn_headers.lock().unwrap().push(
+                [
+                    "turn_state",
+                    "turn_metadata",
+                    "subagent",
+                    "codex_guardian_identity",
+                ]
+                .map(|key| context.get(key).and_then(Value::as_str).map(str::to_owned)),
+            );
+            self.trace
+                .downstream_websocket_connection_ids
+                .lock()
+                .expect("downstream connection trace lock")
+                .push(connection_id.to_owned());
+        }
+        Box::pin(async move {
+            Ok(StartedExecution {
+                request_id: gateway_core::engine::ModelRequestId::new("req_ws_atomic")
+                    .expect("request id"),
+                created_at: SystemTime::now(),
+                stream: request.metadata.stream,
+                session: Box::new(AtomicFailureSession {
+                    trace: Arc::clone(&self.trace),
+                    response_headers: self.response_headers.clone(),
+                    fail_before_first_event: self.fail_before_first_event,
+                }),
+            })
+        })
+    }
+
+    fn start_provider_endpoint(
+        &self,
+        _: StartProviderExecution,
+    ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        Box::pin(async { unreachable!("WebSocket test does not execute provider endpoints") })
+    }
+}
+
+fn atomic_failure_batch() -> CoordinatedEvent {
+    let started = ProviderEvent::canonical_with_wire(
+        vec![GatewayEvent::Started(ResponseMeta::new(
+            "resp_ws_atomic",
+            "model-a",
+        ))],
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.created".to_owned()),
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": "resp_ws_atomic",
+                    "model": "model-a",
+                    "status": "in_progress"
+                }
+            }),
+        )
+        .expect("created wire"),
+    );
+    let failed = ProviderEvent::wire(
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.failed".to_owned()),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_ws_atomic",
+                    "status": "failed",
+                    "error": {
+                        "code": "rate_limit_exceeded",
+                        "message": "websocket atomic upstream marker"
+                    }
+                }
+            }),
+        )
+        .expect("failed wire"),
+    );
+    CoordinatedEvent::try_batch(
+        vec![started, failed],
+        CommitRequirement::CommitBeforeDelivery,
+    )
+    .expect("atomic WebSocket batch")
+}
+
+#[tokio::test]
+async fn websocket_atomic_upstream_failure_batch_should_be_forwarded_once() {
+    let trace = Arc::new(AtomicFailureTrace::default());
+    let execution = Arc::new(AtomicFailureExecution {
+        client: authenticated_client("sk_ws_atomic"),
+        trace: Arc::clone(&trace),
+        response_headers: Vec::new(),
+        fail_before_first_event: false,
+    });
+    let app = api_router(execution).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket test server");
+    let address = listener.local_addr().expect("test server address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve WebSocket test router");
+    });
+    let mut request = format!("ws://{address}/v1/responses")
+        .into_client_request()
+        .expect("WebSocket request");
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        "Bearer sk_ws_atomic".parse().expect("authorization"),
+    );
+    let (mut socket, response) = connect_async(request).await.expect("upgrade WebSocket");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    socket
+        .send(ClientMessage::Text(
+            json!({
+                "type": "response.create",
+                "model": "model-a",
+                "input": "hello"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send response.create");
+
+    let mut messages = Vec::<Value>::new();
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("WebSocket response timeout")
+            .expect("WebSocket remains open")
+            .expect("valid WebSocket frame");
+        let ClientMessage::Text(text) = message else {
+            continue;
+        };
+        let value: Value = serde_json::from_str(&text).expect("JSON WebSocket event");
+        let failed = value.get("type").and_then(Value::as_str) == Some("response.failed");
+        messages.push(value);
+        if failed {
+            break;
+        }
+    }
+
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message.get("type").and_then(Value::as_str) == Some("response.failed"))
+            .count(),
+        1
+    );
+    let failed = messages
+        .iter()
+        .find(|message| message.get("type").and_then(Value::as_str) == Some("response.failed"))
+        .expect("upstream failed event");
+    assert_eq!(
+        failed
+            .pointer("/response/error/message")
+            .and_then(Value::as_str),
+        Some("websocket atomic upstream marker")
+    );
+    assert!(trace.committed.load(Ordering::Acquire));
+    assert_eq!(trace.next_calls.load(Ordering::Acquire), 2);
+    assert!(trace.finalized.load(Ordering::Acquire));
+    {
+        let downstream_connection_ids = trace
+            .downstream_websocket_connection_ids
+            .lock()
+            .expect("downstream connection trace lock");
+        assert_eq!(downstream_connection_ids.len(), 1);
+        assert!(downstream_connection_ids[0].starts_with("ws_"));
+    }
+
+    socket.close(None).await.expect("close WebSocket");
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_response_metadata_should_preserve_ordinary_headers_without_blocking_events() {
+    let trace = Arc::new(AtomicFailureTrace::default());
+    let execution = Arc::new(AtomicFailureExecution {
+        client: authenticated_client("sk_ws_atomic"),
+        trace,
+        response_headers: vec![
+            ProviderResponseHeader::new("x-future-header", Bytes::from_static(b"future-value")),
+            ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"first")),
+            ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"second")),
+            ProviderResponseHeader::new(
+                "x-codex-turn-state",
+                Bytes::from_static(b"turn-state-from-upstream"),
+            ),
+            ProviderResponseHeader::new("x-future-bytes", Bytes::from_static(b"\xffopaque")),
+            ProviderResponseHeader::new("bad\0name", Bytes::from_static(b"unrepresentable")),
+            ProviderResponseHeader::new(
+                "authorization",
+                Bytes::from_static(b"should-not-cross-boundary"),
+            ),
+            ProviderResponseHeader::new("connection", Bytes::from_static(b"x-private-hop")),
+            ProviderResponseHeader::new("x-private-hop", Bytes::from_static(b"private-hop")),
+            ProviderResponseHeader::new("content-type", Bytes::from_static(b"application/private")),
+            ProviderResponseHeader::new("x-request-id", Bytes::from_static(b"req_upstream")),
+        ],
+        fail_before_first_event: false,
+    });
+    let app = api_router(execution).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket test server");
+    let address = listener.local_addr().expect("test server address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve WebSocket test router");
+    });
+    let mut request = format!("ws://{address}/v1/responses")
+        .into_client_request()
+        .expect("WebSocket request");
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        "Bearer sk_ws_atomic".parse().expect("authorization"),
+    );
+    let (mut socket, response) = connect_async(request).await.expect("upgrade WebSocket");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    socket
+        .send(ClientMessage::Text(
+            json!({
+                "type": "response.create",
+                "model": "model-a",
+                "input": "hello"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send response.create");
+
+    let mut metadata = None;
+    let mut saw_failed = false;
+    while metadata.is_none() || !saw_failed {
+        let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("WebSocket response timeout")
+            .expect("WebSocket remains open")
+            .expect("valid WebSocket frame");
+        let ClientMessage::Text(text) = message else {
+            continue;
+        };
+        let value: Value = serde_json::from_str(&text).expect("JSON WebSocket event");
+        match value.get("type").and_then(Value::as_str) {
+            Some("response.metadata") => metadata = Some(value),
+            Some("response.failed") => saw_failed = true,
+            _ => {}
+        }
+    }
+
+    let headers = metadata
+        .as_ref()
+        .and_then(|value| value.get("headers"))
+        .and_then(Value::as_object)
+        .expect("response metadata headers");
+    assert_eq!(headers.get("x-future-header"), Some(&json!("future-value")));
+    // 官方 metadata 是 string map，同名多值只能保持既有的后值覆盖语义
+    assert_eq!(headers.get("x-future-multi"), Some(&json!("second")));
+    assert_eq!(headers.get("x-request-id"), Some(&json!("req_upstream")));
+    assert_eq!(
+        headers.get("x-codex-turn-state"),
+        Some(&json!("turn-state-from-upstream"))
+    );
+    for omitted in [
+        "x-future-bytes",
+        "bad\0name",
+        "authorization",
+        "connection",
+        "x-private-hop",
+        "content-type",
+    ] {
+        assert!(
+            !headers.contains_key(omitted),
+            "unexpected metadata header: {omitted:?}"
+        );
+    }
+    assert!(saw_failed);
+
+    socket.close(None).await.expect("close WebSocket");
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_failure_before_first_event_should_return_observed_metadata_then_error() {
+    let trace = Arc::new(AtomicFailureTrace::default());
+    let execution = Arc::new(AtomicFailureExecution {
+        client: authenticated_client("sk_ws_atomic"),
+        trace: Arc::clone(&trace),
+        response_headers: vec![
+            ProviderResponseHeader::new(
+                "x-codex-turn-state",
+                Bytes::from_static(b"turn-state-before-close"),
+            ),
+            ProviderResponseHeader::new(
+                "authorization",
+                Bytes::from_static(b"must-not-cross-boundary"),
+            ),
+        ],
+        fail_before_first_event: true,
+    });
+    let app = api_router(execution).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket test server");
+    let address = listener.local_addr().expect("test server address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve WebSocket test router");
+    });
+    let mut request = format!("ws://{address}/v1/responses")
+        .into_client_request()
+        .expect("WebSocket request");
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        "Bearer sk_ws_atomic".parse().expect("authorization"),
+    );
+    let (mut socket, response) = connect_async(request).await.expect("upgrade WebSocket");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    socket
+        .send(ClientMessage::Text(
+            json!({
+                "type": "response.create",
+                "model": "model-a",
+                "input": "hello"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send response.create");
+
+    let mut messages = Vec::<Value>::new();
+    while messages.len() < 2 {
+        let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("WebSocket response timeout")
+            .expect("WebSocket remains open")
+            .expect("valid WebSocket frame");
+        let ClientMessage::Text(text) = message else {
+            continue;
+        };
+        messages.push(serde_json::from_str(&text).expect("JSON WebSocket event"));
+    }
+
+    assert_eq!(
+        messages
+            .iter()
+            .filter_map(|message| message.get("type").and_then(Value::as_str))
+            .collect::<Vec<_>>(),
+        vec!["response.metadata", "error"]
+    );
+    let headers = messages[0]
+        .get("headers")
+        .and_then(Value::as_object)
+        .expect("response metadata headers");
+    assert_eq!(
+        headers.get("x-codex-turn-state"),
+        Some(&json!("turn-state-before-close"))
+    );
+    assert!(!headers.contains_key("authorization"));
+    assert!(!trace.committed.load(Ordering::Acquire));
+
+    socket.close(None).await.expect("close WebSocket");
+    server.abort();
+}
+
+#[tokio::test]
+async fn large_websocket_response_create_frames_should_reach_execution() {
+    let trace = Arc::new(AtomicFailureTrace::default());
+    let execution = Arc::new(AtomicFailureExecution {
+        client: authenticated_client("sk_ws_atomic"),
+        trace,
+        response_headers: Vec::new(),
+        fail_before_first_event: false,
+    });
+    let app = api_router(execution).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket test server");
+    let address = listener.local_addr().expect("test server address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve WebSocket test router");
+    });
+    let mut request = format!("ws://{address}/v1/responses")
+        .into_client_request()
+        .expect("WebSocket request");
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        "Bearer sk_ws_atomic".parse().expect("authorization"),
+    );
+    let (mut socket, response) = connect_async(request).await.expect("upgrade WebSocket");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let payload = json!({
+        "type": "response.create",
+        "model": "model-a",
+        "input": "x".repeat(17 * 1024 * 1024),
+    })
+    .to_string();
+
+    socket
+        .send(ClientMessage::Text(payload.into()))
+        .await
+        .expect("send large response.create frame");
+
+    let mut saw_upstream_event = false;
+    for _ in 0..3 {
+        let message = tokio::time::timeout(Duration::from_secs(10), socket.next())
+            .await
+            .expect("WebSocket response timeout")
+            .expect("WebSocket remains open")
+            .expect("valid WebSocket frame");
+        let ClientMessage::Text(text) = message else {
+            continue;
+        };
+        let value: Value = serde_json::from_str(&text).expect("JSON WebSocket event");
+        if matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("response.created" | "response.failed")
+        ) {
+            saw_upstream_event = true;
+            break;
+        }
+    }
+    assert!(saw_upstream_event);
+
+    socket.close(None).await.expect("close WebSocket");
+    server.abort();
+}
+
+const TEST_WEBSOCKET_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAA==";
+
+#[derive(Default)]
+struct SettlementPorts {
+    request_id: Mutex<Option<ModelRequestId>>,
+    finalizations: Mutex<Vec<ModelRequestFinalization>>,
+    active: AtomicBool,
+    settlement_calls: AtomicUsize,
+    settlement_started: tokio::sync::Notify,
+    settlement_gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    charges: Mutex<Vec<ClientBudgetCharge>>,
+    releases: AtomicUsize,
+    released: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl ExecutionStore for SettlementPorts {
+    async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError> {
+        *self.request_id.lock().unwrap() = Some(request.id);
+        Ok(())
+    }
+
+    async fn record_attempt(&self, _: AttemptRecord) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn mark_send_state(
+        &self,
+        _: &ModelRequestId,
+        _: UpstreamSendState,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn mark_downstream_committed(
+        &self,
+        _: &ModelRequestId,
+        _: SystemTime,
+        _: Option<u16>,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn record_client_status(&self, _: &ModelRequestId, _: u16) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn record_intermediate_failure(&self, _: IntermediateFailure) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn finalize_model_request(
+        &self,
+        finalization: ModelRequestFinalization,
+    ) -> Result<(), StoreError> {
+        self.finalizations.lock().unwrap().push(finalization);
+        Ok(())
+    }
+
+    async fn recover_expired(&self, _: SystemTime) -> Result<RecoveryReport, StoreError> {
+        unreachable!("the WebSocket test does not recover requests")
+    }
+}
+
+impl ClientAdmissionPort for SettlementPorts {
+    fn abandon(
+        &self,
+        key: &gateway_core::policy::ClientApiKeyId,
+        request: &gateway_core::engine::ModelRequestId,
+    ) {
+        let _ = futures::FutureExt::now_or_never(self.release(key, request));
+    }
+
+    fn admit(
+        &self,
+        _: ClientAdmissionRequest,
+    ) -> BoxFuture<'_, Result<ClientAdmissionDecision, ClientAdmissionError>> {
+        Box::pin(async {
+            assert!(!self.active.swap(true, Ordering::SeqCst));
+            Ok(ClientAdmissionDecision::Granted)
+        })
+    }
+
+    fn release<'a>(
+        &'a self,
+        _: &'a ClientApiKeyId,
+        request_id: &'a ModelRequestId,
+    ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
+        Box::pin(async move {
+            assert_eq!(
+                self.charges.lock().unwrap().len(),
+                1,
+                "settlement must finish first"
+            );
+            assert_eq!(self.request_id.lock().unwrap().as_ref(), Some(request_id));
+            self.releases.fetch_add(1, Ordering::SeqCst);
+            let active = self.active.swap(false, Ordering::SeqCst);
+            self.released.notify_one();
+            Ok(active)
+        })
+    }
+
+    fn restore(
+        &self,
+        _: ClientAdmissionRecovery,
+    ) -> BoxFuture<'_, Result<ClientAdmissionRestoreResult, ClientAdmissionError>> {
+        Box::pin(async { unreachable!("the WebSocket test does not restore admission") })
+    }
+}
+
+impl ClientBudgetPort for SettlementPorts {
+    fn admit(&self, _: ClientApiKeyId) -> BoxFuture<'_, Result<(), GatewayError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn settle(&self, charge: ClientBudgetCharge) -> BoxFuture<'_, Result<(), ClientBudgetError>> {
+        Box::pin(async move {
+            self.settlement_calls.fetch_add(1, Ordering::SeqCst);
+            assert!(self.active.load(Ordering::SeqCst));
+            let gate = self
+                .settlement_gate
+                .lock()
+                .unwrap()
+                .take()
+                .expect("one settlement");
+            self.settlement_started.notify_one();
+            gate.await
+                .expect("release settlement after client disconnect");
+            assert!(self.active.load(Ordering::SeqCst));
+            self.charges.lock().unwrap().push(charge);
+            Ok(())
+        })
+    }
+}
+
+struct ChargedWebSocketProvider;
+
+fn websocket_charge() -> Decimal {
+    "1.25".parse().unwrap()
+}
+
+#[async_trait]
+impl Provider for ChargedWebSocketProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn execute(
+        self: Arc<Self>,
+        request: ProviderRequest,
+        _: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        let candidate = request.candidate();
+        let metadata = ProviderCallMetadata::new(
+            candidate.provider().clone(),
+            candidate.upstream_model().unwrap().clone(),
+            ProviderAccountId::new("acct_api_test").unwrap(),
+            UpstreamTransport::new("websocket").unwrap(),
+        );
+        let response = ResponseMeta::new("resp_ws_settlement", "model-a");
+        let events = [
+            ProviderEvent::canonical_with_wire(
+                vec![GatewayEvent::Started(response.clone())],
+                ProtocolWireEvent::json("openai", Some("response.created".to_owned()), json!({
+                    "type": "response.created",
+                    "response": {"id": "resp_ws_settlement", "model": "model-a", "status": "in_progress"}
+                })).unwrap(),
+            ),
+            ProviderEvent::canonical_with_wire(
+                vec![
+                    GatewayEvent::ProviderCost(
+                        ProviderReportedCost::from_usd_ticks(websocket_charge().scaled()).unwrap(),
+                    ),
+                    GatewayEvent::Completed(response),
+                ],
+                ProtocolWireEvent::json("openai", Some("response.completed".to_owned()), json!({
+                    "type": "response.completed",
+                    "response": {"id": "resp_ws_settlement", "model": "model-a", "status": "completed"}
+                })).unwrap(),
+            ),
+        ];
+        Ok(ProviderStream::new(
+            metadata,
+            futures::stream::iter(events.map(Ok)),
+            (),
+        ))
+    }
+}
+
+#[derive(Default)]
+struct SettlementConnectionLifecycle {
+    closed: Arc<tokio::sync::Notify>,
+}
+
+struct SettlementConnectionGuard(Arc<tokio::sync::Notify>);
+
+impl ConnectionGuard for SettlementConnectionGuard {}
+
+impl Drop for SettlementConnectionGuard {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
+}
+
+impl ConnectionLifecycle for SettlementConnectionLifecycle {
+    fn try_register(&self) -> Result<Box<dyn ConnectionGuard>, ConnectionDraining> {
+        Ok(Box::new(SettlementConnectionGuard(self.closed.clone())))
+    }
+
+    fn cancellation(&self) -> CancellationToken {
+        CancellationToken::new()
+    }
+
+    fn is_draining(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn websocket_disconnect_during_core_settlement_finishes_charge_before_releasing_admission() {
+    let (release_settlement, gate) = tokio::sync::oneshot::channel();
+    let ports = Arc::new(SettlementPorts {
+        settlement_gate: Mutex::new(Some(gate)),
+        ..Default::default()
+    });
+    let execution = Arc::new(
+        DefaultExecutionService::new(
+            RuntimeSnapshotHandle::new(snapshot("sk_ws_settlement", "openai")),
+            ports.clone(),
+            ProviderRegistry::new([Arc::new(ChargedWebSocketProvider) as Arc<dyn Provider>])
+                .unwrap(),
+            ports.clone(),
+            Arc::new(UnusedContinuation),
+            Arc::new(IgnoredClientApiKeyUsage),
+            Arc::new(crate::support::RecordingDiagnostics::default()),
+        )
+        .with_budget(ports.clone()),
+    );
+    let lifecycle = Arc::new(SettlementConnectionLifecycle::default());
+    let admin = crate::admin::AdminTestFixture::new().await;
+    let app = gateway_api::initialize(
+        uuid::Uuid::nil(),
+        gateway_api::ApiConfig {
+            asset_directory: std::env::temp_dir(),
+            cors_allowed_origins: Vec::new(),
+            request_timeout_seconds: None,
+            request_id_header: "x-request-id".to_owned(),
+        },
+        execution,
+        admin.services,
+        Vec::new(),
+        Arc::new(EmptyWorkerHealth),
+        lifecycle.clone(),
+        Arc::new(crate::support::RecordingDiagnostics::default()),
+    )
+    .unwrap()
+    .router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut request = format!("ws://{address}/v1/responses")
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer sk_ws_settlement"),
+    );
+    let (mut socket, response) = connect_async(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    socket
+        .send(ClientMessage::Text(
+            json!({
+                "type": "response.create", "model": "model-a", "input": "hello"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), ports.settlement_started.notified())
+        .await
+        .expect("production Core reached settlement");
+    {
+        let finalizations = ports.finalizations.lock().unwrap();
+        assert_eq!(finalizations.len(), 1);
+        assert_eq!(
+            finalizations[0].outcome,
+            gateway_core::engine::ExecutionOutcome::Succeeded,
+            "unexpected execution error: {:?}",
+            finalizations[0].error,
+        );
+    }
+    assert!(ports.charges.lock().unwrap().is_empty());
+    assert_eq!(ports.releases.load(Ordering::SeqCst), 0);
+
+    // 等到生产连接 guard 释放，保证 forward 的 select 已因断连取消 next_event；
+    // 在此之前不能打开结算屏障，否则只会验证正常完成而错过取消窗口
+    socket.close(None).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), lifecycle.closed.notified())
+        .await
+        .expect("production WebSocket handler exited");
+    assert!(ports.active.load(Ordering::SeqCst));
+    release_settlement
+        .send(())
+        .expect("the original settlement future survived disconnect");
+    tokio::time::timeout(Duration::from_secs(5), ports.released.notified())
+        .await
+        .expect("detached Core cleanup released admission");
+    assert!(!ports.active.load(Ordering::SeqCst));
+    assert_eq!(ports.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(ports.settlement_calls.load(Ordering::SeqCst), 1);
+    {
+        let charges = ports.charges.lock().unwrap();
+        assert_eq!(charges.len(), 1);
+        assert_eq!(charges[0].amount_usd, websocket_charge());
+        assert_eq!(charges[0].key_id.as_str(), "key_api_test");
+        assert_eq!(
+            Some(&charges[0].request_id),
+            ports.request_id.lock().unwrap().as_ref()
+        );
+    }
+    server.abort();
+    let _ = server.await;
+}
+
+fn upgrade_request(authorization: &str) -> Request<Body> {
+    Request::get("/v1/responses")
+        .header(AUTHORIZATION, authorization)
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", TEST_WEBSOCKET_KEY)
+        .body(Body::empty())
+        .expect("build WebSocket upgrade request")
+}
+
+#[tokio::test]
+async fn official_core_version_gate_should_run_before_websocket_upgrade() {
+    let app = api_router(ModelsExecution::with_cli_min("0.170.0")).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    for (product, version) in [
+        ("codex-tui", "0.158.0"),
+        ("Codex Desktop", "0.168.0"),
+        ("Codex Desktop", "0.170.0"),
+    ] {
+        let mut request = format!("ws://{address}/v1/responses")
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk_models_test"),
+        );
+        request.headers_mut().insert(
+            "user-agent",
+            HeaderValue::from_str(&format!(
+                "{product}/{version} (Ubuntu 26.4.0; aarch64) xterm-256color (codex-tui; 0.169.0)"
+            ))
+            .unwrap(),
+        );
+        let result = connect_async(request).await;
+        if version == "0.170.0" {
+            let (mut socket, response) = result.expect("current Core upgrades successfully");
+            assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+            socket.close(None).await.unwrap();
+        } else {
+            let tokio_tungstenite::tungstenite::Error::Http(response) =
+                result.expect_err("old Core must not upgrade")
+            else {
+                panic!("expected an HTTP version rejection");
+            };
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let value: Value = serde_json::from_slice(response.body().as_deref().unwrap()).unwrap();
+            assert_eq!(value["error"]["code"], "client_version_too_old");
+            assert_eq!(value["error"]["client"], "codex_cli");
+            assert_eq!(value["error"]["current_version"], version);
+            assert_eq!(value["error"]["min_version"], "0.170.0");
+        }
+    }
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn get_responses_should_route_to_the_websocket_upgrade_boundary() {
+    let response = api_router(ModelsExecution::new())
+        .await
+        .oneshot(upgrade_request("Bearer sk_models_test"))
+        .await
+        .expect("route WebSocket upgrade request");
+
+    // oneshot 请求不携带升级状态;426 证明 GET /v1/responses 进入的是
+    // WebSocketUpgrade 边界而不是普通 HTTP handler
+    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+}
+
+#[tokio::test]
+async fn websocket_upgradability_should_be_checked_before_authentication() {
+    let response = api_router(ModelsExecution::new())
+        .await
+        .oneshot(upgrade_request("Bearer sk_invalid"))
+        .await
+        .expect("route unauthenticated upgrade request");
+
+    // 升级能力在 extractor 阶段先于 handler 内的 API Key 认证被校验,
+    // 无效凭据得到的仍是升级失败而不是 401
+    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+}
+
+#[tokio::test]
+async fn websocket_upgrade_should_reject_malformed_handshakes() {
+    let missing_connection = Request::get("/v1/responses")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", TEST_WEBSOCKET_KEY)
+        .body(Body::empty())
+        .expect("build request without connection header");
+    let unsupported_version = Request::get("/v1/responses")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "12")
+        .header("sec-websocket-key", TEST_WEBSOCKET_KEY)
+        .body(Body::empty())
+        .expect("build request with unsupported version");
+    let missing_key = Request::get("/v1/responses")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .body(Body::empty())
+        .expect("build request without websocket key");
+
+    for request in [missing_connection, unsupported_version, missing_key] {
+        let response = api_router(ModelsExecution::new())
+            .await
+            .oneshot(request)
+            .await
+            .expect("route malformed WebSocket handshake");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}

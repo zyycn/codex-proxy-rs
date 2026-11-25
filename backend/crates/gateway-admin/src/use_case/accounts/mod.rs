@@ -39,7 +39,7 @@ use crate::{
         quota_forecast::{
             AccountQuotaForecastReport, account_quota_forecasts, quota_forecast_source_window,
         },
-        quota_forecast_sampling::{QuotaForecastPoint, select_forecast_sample},
+        quota_forecast::{QuotaForecastPoint, select_forecast_sample},
     },
     ports::{
         provider::ProviderAdminRegistry,
@@ -501,15 +501,16 @@ impl DefaultAccountsService {
             std::slice::from_mut(&mut quota),
         )
         .await?;
-        let usage = self
+        let api_key_usage = self
             .load_api_key_usage(std::slice::from_ref(&stored), std::slice::from_ref(&quota))
             .await?
-            .remove(&stored.account.id)
-            .or_else(|| {
-                quota
-                    .usage_window()
-                    .and_then(|(window, _)| window.local_usage.clone())
-            });
+            .remove(&stored.account.id);
+        let (usage, usage_period) = resolve_account_usage(
+            &stored.account.authentication_kind,
+            &quota,
+            rolling_usage,
+            api_key_usage,
+        );
         Ok(AccountDirectoryItem {
             protection_rules: stored.protection_rules,
             capacity: super::peer_link::upstream::account_capacity(
@@ -526,6 +527,7 @@ impl DefaultAccountsService {
             ),
             projection: stored.projection,
             usage,
+            usage_period,
             account: stored.account,
             quota,
         })
@@ -598,7 +600,7 @@ impl AccountsService for DefaultAccountsService {
             .load_account_usage(rolling_range, &ids)
             .await
             .map_err(|error| map_store_error(error, "rolling account usage"))?;
-        let rolling_usage = rolling_usage
+        let mut rolling_usage = rolling_usage
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
             .collect::<BTreeMap<_, _>>();
@@ -619,11 +621,12 @@ impl AccountsService for DefaultAccountsService {
                         provider.account_capabilities(&id, &item.account.authentication_kind)
                     })
                     .unwrap_or_default();
-                let usage = api_key_usage.remove(&item.account.id).or_else(|| {
-                    quota
-                        .usage_window()
-                        .and_then(|(window, _)| window.local_usage.clone())
-                });
+                let (usage, usage_period) = resolve_account_usage(
+                    &item.account.authentication_kind,
+                    &quota,
+                    rolling_usage.remove(&item.account.id),
+                    api_key_usage.remove(&item.account.id),
+                );
                 Ok(AccountDirectoryItem {
                     protection_rules: item.protection_rules,
                     capacity: crate::model::accounts::AccountCapacity {
@@ -643,6 +646,7 @@ impl AccountsService for DefaultAccountsService {
                         Some(&quota),
                     ),
                     usage,
+                    usage_period,
                     account: item.account,
                     projection: item.projection,
                     quota,
@@ -662,37 +666,30 @@ impl AccountsService for DefaultAccountsService {
         context: &MutationContext,
         account_ids: Vec<ProviderAccountId>,
     ) -> Result<AccountExportBundle, AdminError> {
-        let providers = &self.providers;
         if account_ids.is_empty() || account_ids.len() > 200 {
             return Err(AdminError::invalid("账号导出数量必须在 1 到 200 之间"));
         }
         let exported_ids = account_ids.clone();
-        let mut grouped = BTreeMap::<ProviderKind, Vec<ProviderAccountId>>::new();
-        for account_id in account_ids {
-            let account = self.load_account(&account_id).await?;
-            grouped
-                .entry(account.account.provider_kind)
-                .or_default()
-                .push(account_id);
+        let mut grouped = BTreeMap::new();
+        // 混选时先检查每个账号的导出能力，再读取任何一组明文凭据
+        for id in account_ids {
+            let (item, provider) = self.provider_for_account(&id).await?;
+            if !provider
+                .account_capabilities(&id, &item.account.authentication_kind)
+                .credential_export
+            {
+                return Err(AdminError::invalid("所选账号不支持导出"));
+            }
+            let (_, ids) = grouped
+                .entry(item.account.provider_kind)
+                .or_insert_with(|| (provider, Vec::new()));
+            if ids.contains(&id) {
+                return Err(AdminError::invalid("账号导出列表包含重复 ID"));
+            }
+            ids.push(id);
         }
-        if grouped.values().any(|ids| {
-            let unique = ids.iter().collect::<std::collections::BTreeSet<_>>();
-            unique.len() != ids.len()
-        }) {
-            return Err(AdminError::invalid("账号导出列表包含重复 ID"));
-        }
-        // 混选时先确认全部 Provider 已注册，拒绝路径不读取任何一组明文凭据
-        let export_groups = grouped
-            .into_iter()
-            .map(|(provider_kind, ids)| {
-                let provider = providers
-                    .require(&provider_kind)
-                    .map_err(|error| map_provider_error(error, "provider account export"))?;
-                Ok((provider_kind, provider, ids))
-            })
-            .collect::<Result<Vec<_>, AdminError>>()?;
-        let mut documents = Vec::with_capacity(export_groups.len());
-        for (provider_kind, provider, ids) in export_groups {
+        let mut documents = Vec::with_capacity(grouped.len());
+        for (provider_kind, (provider, ids)) in grouped {
             let credentials = self
                 .accounts
                 .load_credentials_for_export(&provider_kind, &ids)
@@ -1344,6 +1341,22 @@ impl AccountsService for DefaultAccountsService {
         .flat_map(futures::stream::iter);
         Ok(Box::pin(futures::stream::iter(initial).chain(terminal)))
     }
+}
+
+fn resolve_account_usage(
+    authentication_kind: &str,
+    quota: &ProviderQuota,
+    rolling_usage: Option<AccountUsage>,
+    api_key_usage: Option<AccountUsage>,
+) -> (Option<AccountUsage>, Option<AccountUsagePeriod>) {
+    if authentication_kind == "api_key" {
+        return (api_key_usage, None);
+    }
+    if let Some((window, period)) = quota.usage_window() {
+        return (window.local_usage.clone(), Some(period));
+    }
+    // 模型分组额度无法归属整号用量，本地统计独立回退，不能为此合成上游额度桶
+    (rolling_usage, Some(AccountUsagePeriod::Daily))
 }
 
 fn map_reset_credits_error_after_refresh(

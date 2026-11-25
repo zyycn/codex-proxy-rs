@@ -4,7 +4,7 @@ use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use serde_json::{Map, Value, json};
 
 use provider_openai::encode_generate_request;
-use provider_openai::transport::profile::CodexRequestLocation;
+use provider_openai::profile::CodexRequestLocation;
 
 #[test]
 fn encoder_should_override_location_while_preserving_environment_dates() {

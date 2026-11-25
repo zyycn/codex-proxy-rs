@@ -1,6 +1,6 @@
 //! 单次宿主回调的资源状态、流式预算与统一终结
 
-use super::{CallbackScope, MiddlewareCallback, denied, http_middleware, model};
+use super::{CallbackScope, MiddlewareCallback, denied, http::middleware, model};
 use gateway_core::lifecycle::CancellationToken;
 use gateway_host::outbound::HttpBody;
 use gateway_plugin_sdk::{CallContext, ErrorCode, PluginFault, client::CallDeadline};
@@ -15,7 +15,7 @@ pub(super) struct CallResources {
     operation_timeout: Duration,
     pub(super) cancellation: CancellationToken,
     pub(super) scope: Arc<CallbackScope>,
-    pub(super) http_resources: Arc<http_middleware::resources::Resources>,
+    pub(super) http_resources: Arc<middleware::resources::Resources>,
     pub(super) client_identities:
         tokio::sync::Mutex<BTreeMap<String, gateway_core::engine::execution::AuthenticatedClient>>,
     pub(super) state: Mutex<CallState>,

@@ -17,7 +17,7 @@ use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse,
     client_keys::ClientBudgetView, wire::map_admin_service_error,
 };
-use crate::{auth::SessionState, time::TimePresenter};
+use crate::{SessionState, time::TimePresenter};
 
 pub(super) fn router<S: SessionState + Clone + Send + Sync + 'static>() -> Router<S> {
     Router::new()

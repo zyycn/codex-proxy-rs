@@ -101,7 +101,7 @@ impl UpstreamAccountConnection for SelectedConnection {
     }
 
     fn calculate_cost(&self, tier: Option<&str>, usage: &Usage) -> Option<CalculatedCost> {
-        crate::transport::canonical::grok_billing_breakdown_with_override(
+        crate::billing::grok_billing_breakdown_with_override(
             self.model.as_str(),
             usage.input_tokens?,
             usage.output_tokens?,

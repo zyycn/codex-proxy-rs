@@ -4,13 +4,13 @@ import type { AccountQuotaWindow } from '@/api'
 import { computed } from 'vue'
 
 import { useI18n } from 'vue-i18n'
-import AccountRequestTimeline from '@/components/account/account-usage-window/AccountRequestTimeline.vue'
 import {
   quotaWindowDetails,
   quotaWindowLabel,
   quotaWindowPresentation,
   resolveAccountUsageWindowPresentation,
-} from '@/components/account/account-usage-window/presenter'
+} from '@/components/account-usage-window/presenter'
+import AccountRequestTimeline from '@/components/AccountRequestTimeline.vue'
 
 const props = defineProps<{
   label: string | null

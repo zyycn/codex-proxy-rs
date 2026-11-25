@@ -7,7 +7,7 @@ use gateway_admin::model::import_tasks::{
 use sha2::{Digest as _, Sha256};
 
 use super::*;
-use crate::auth::SessionState;
+use crate::SessionState;
 
 pub(super) fn router<S>() -> Router<S>
 where

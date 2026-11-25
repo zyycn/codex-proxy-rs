@@ -4,7 +4,7 @@ import { ZPopover, ZScrollbar } from '@codex-proxy/ui'
 import { Gauge, Network, Users } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import AccountPlanBadge from '@/components/account-plan-badge/index.vue'
 import { poolNodes } from './pool'
 import PoolChart from './PoolChart.vue'
 

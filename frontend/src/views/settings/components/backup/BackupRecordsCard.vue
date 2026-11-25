@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { BackupRecord } from '@/api'
 
-import { defineTableColumns, ZButton, ZCard, ZConfirmDialog, ZIconButton, ZPagination, ZPopover, ZTable } from '@codex-proxy/ui'
+import { defineTableColumns, ZButton, ZCard, ZConfirmDialog, ZEmpty, ZIconButton, ZPagination, ZPopover, ZTable } from '@codex-proxy/ui'
 
 import { CircleHelp, Download, Play, RefreshCw, Trash2 } from '@lucide/vue'
 
@@ -185,8 +185,11 @@ function canDelete(record: BackupRecord): boolean {
         :data="records"
         row-key="id"
         :loading="loading"
-        :empty-text="t('settings.backup.noBackupRecordYet')"
       >
+        <template #empty>
+          <ZEmpty :title="t('settings.backup.noBackupRecordYet')" size="small" surface="none" />
+        </template>
+
         <template #id="{ row }">
           <span class="text-z-text-secondary" :title="row.id">{{ shortId(row.id) }}</span>
         </template>
@@ -242,6 +245,7 @@ function canDelete(record: BackupRecord): boolean {
         </template>
       </ZTable>
       <ZPagination
+        v-if="total > 0"
         v-bind="{ currentPage: page, pageSize, total }"
         :disabled="loading"
         @current-change="emit('pageChange', $event)"

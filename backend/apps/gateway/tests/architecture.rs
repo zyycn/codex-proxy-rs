@@ -22,6 +22,7 @@ pub(super) const WORKSPACE_MEMBERS: &[&str] = &[
     "crates/gateway-plugin/sdk",
     "crates/gateway-protocol",
     "crates/gateway-store",
+    "crates/providers/antigravity",
     "crates/providers/openai",
     "crates/providers/xai",
 ];
@@ -62,6 +63,7 @@ fn gateway_core_depends_on_no_http_db_redis_or_provider_crate() {
             "redis",
             "gateway-host",
             "gateway-store",
+            "provider-antigravity",
             "provider-openai",
             "provider-xai",
         ],
@@ -115,17 +117,50 @@ fn core_value_owners_do_not_depend_on_execution_or_routing() {
 
 #[test]
 fn domain_owner_paths_form_a_dag() {
-    for member in ["crates/gateway-core", "crates/gateway-admin"] {
-        assert_owner_paths_form_a_dag(member);
+    let cycles = WORKSPACE_MEMBERS
+        .iter()
+        .flat_map(|member| owner_dependency_cycles(member))
+        .collect::<Vec<_>>();
+    assert!(
+        cycles.is_empty(),
+        "owner dependency cycles:\n{}",
+        cycles.join("\n")
+    );
+}
+
+#[test]
+fn provider_shared_owners_use_consistent_directories() {
+    for member in provider_members() {
+        let root = backend_root().join(member).join("src");
+        for owner in [
+            "admin",
+            "billing",
+            "credential",
+            "profile",
+            "provider",
+            "transport",
+        ] {
+            assert!(
+                root.join(owner).join("mod.rs").is_file(),
+                "{member} must place its {owner} owner in {owner}/mod.rs",
+            );
+        }
     }
 }
 
-fn assert_owner_paths_form_a_dag(member: &str) {
+fn provider_members() -> impl Iterator<Item = &'static str> {
+    WORKSPACE_MEMBERS
+        .iter()
+        .copied()
+        .filter(|member| member.starts_with("crates/providers/"))
+}
+
+fn owner_dependency_cycles(member: &str) -> Vec<String> {
     let root = backend_root().join(member).join("src");
     let reexports = read_root_reexport_owners(&root);
     let mut graph = BTreeMap::<String, BTreeSet<String>>::new();
     for relative in super::rust_files(&root) {
-        if relative == Path::new("lib.rs") {
+        if relative == Path::new("lib.rs") || relative == Path::new("main.rs") {
             continue;
         }
         let mut references = CrateReferences::in_module(&relative).with_root_reexports(&reexports);
@@ -135,35 +170,52 @@ fn assert_owner_paths_form_a_dag(member: &str) {
         references.owners.remove(&owner);
         graph.entry(owner).or_default().extend(references.owners);
     }
+    let mut cycles = Vec::new();
     for owner in graph.keys() {
-        let mut pending = graph[owner].iter().cloned().collect::<Vec<_>>();
+        let mut pending = graph[owner]
+            .iter()
+            .map(|dependency| (dependency.clone(), vec![owner.clone()]))
+            .collect::<Vec<_>>();
         let mut visited = BTreeSet::new();
-        while let Some(dependency) = pending.pop() {
-            assert_ne!(
-                &dependency, owner,
-                "{member} owner dependency cycle reaches {owner}"
-            );
+        while let Some((dependency, mut path)) = pending.pop() {
+            path.push(dependency.clone());
+            if &dependency == owner {
+                cycles.push(format!("{member}: {}", path.join(" -> ")));
+                break;
+            }
             if visited.insert(dependency.clone())
                 && let Some(next) = graph.get(&dependency)
             {
-                pending.extend(next.iter().cloned());
+                pending.extend(
+                    next.iter()
+                        .map(|dependency| (dependency.clone(), path.clone())),
+                );
             }
         }
     }
+    cycles
 }
 
 #[test]
 fn shared_owners_do_not_depend_on_their_callers() {
     let boundaries: &[(&str, &str, &[&str])] = &[
-        ("crates/providers/xai", "transport", &["credential"]),
-        ("crates/providers/openai", "transport", &["provider"]),
+        (
+            "crates/providers/xai",
+            "transport",
+            &["credential", "provider"],
+        ),
+        (
+            "crates/providers/openai",
+            "transport",
+            &["credential", "provider"],
+        ),
         ("crates/gateway-api", "time", &["admin"]),
         (
             "crates/gateway-api",
             "client_error",
-            &["admin", "openai", "middleware"],
+            &["admin", "data_plane", "middleware"],
         ),
-        ("crates/gateway-api", "middleware", &["openai"]),
+        ("crates/gateway-api", "middleware", &["data_plane"]),
         ("crates/gateway-host", "system_update", &["config"]),
         ("crates/gateway-plugin/runtime", "package", &["callback"]),
     ];
@@ -185,6 +237,39 @@ fn shared_owners_do_not_depend_on_their_callers() {
                     relative.display()
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn provider_billing_is_private_and_independent_of_other_provider_owners() {
+    for member in provider_members() {
+        let root = backend_root().join(member).join("src");
+        let source = fs::read_to_string(root.join("lib.rs")).expect("read provider root");
+        let syntax = syn::parse_file(&source).expect("parse provider root");
+        assert!(
+            syntax.items.iter().any(|item| matches!(item,
+                Item::Mod(module) if module.ident == "billing"
+                    && matches!(module.vis, syn::Visibility::Inherited)
+            )),
+            "{member} must keep billing behind a private owner",
+        );
+        let reexports = read_root_reexport_owners(&root);
+        for relative in super::rust_files(&root) {
+            let mut references =
+                CrateReferences::in_module(&relative).with_root_reexports(&reexports);
+            if references.module_path.first().map(String::as_str) != Some("billing") {
+                continue;
+            }
+            let source = fs::read_to_string(root.join(&relative)).expect("read billing source");
+            references.visit_file(&syn::parse_file(&source).expect("parse billing source"));
+            references.owners.remove("billing");
+            assert!(
+                references.owners.is_empty(),
+                "{member}/src/{} billing must consume explicit facts, not depend on {:?}",
+                relative.display(),
+                references.owners,
+            );
         }
     }
 }
@@ -252,7 +337,12 @@ fn owner_reference_scan_resolves_crate_root_reexports() {
 }
 
 fn read_root_reexport_owners(root: &Path) -> BTreeMap<String, String> {
-    let source = fs::read_to_string(root.join("lib.rs")).expect("read crate root");
+    let root_file = if root.join("lib.rs").is_file() {
+        root.join("lib.rs")
+    } else {
+        root.join("main.rs")
+    };
+    let source = fs::read_to_string(root_file).expect("read crate root");
     root_reexport_owners(&syn::parse_file(&source).expect("parse crate root"))
 }
 
@@ -430,8 +520,18 @@ fn plugin_sdk_has_no_workspace_dependencies() {
 
 #[test]
 fn provider_crates_do_not_depend_on_each_other() {
-    assert_no_dependency("crates/providers/openai", &["provider-xai"]);
-    assert_no_dependency("crates/providers/xai", &["provider-openai"]);
+    let providers = PACKAGE_TO_MEMBER
+        .iter()
+        .filter(|(_, member)| member.starts_with("crates/providers/"))
+        .collect::<Vec<_>>();
+    for (package, member) in &providers {
+        let forbidden = providers
+            .iter()
+            .filter(|(other, _)| other != package)
+            .map(|(other, _)| *other)
+            .collect::<Vec<_>>();
+        assert_no_dependency(member, &forbidden);
+    }
 }
 
 #[test]
@@ -455,6 +555,7 @@ const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
     ("gateway-plugin-sdk", "crates/gateway-plugin/sdk"),
     ("gateway-protocol", "crates/gateway-protocol"),
     ("gateway-store", "crates/gateway-store"),
+    ("provider-antigravity", "crates/providers/antigravity"),
     ("provider-openai", "crates/providers/openai"),
     ("provider-xai", "crates/providers/xai"),
 ];
@@ -463,7 +564,7 @@ const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
 const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
     ("crates/gateway-plugin/sdk", &["call", "client"]),
     ("crates/gateway-plugin/runtime", &[]),
-    ("crates/gateway-api", &["admin", "auth", "openai"]),
+    ("crates/gateway-api", &["admin", "auth", "data_plane"]),
     (
         "crates/gateway-host",
         &[
@@ -485,9 +586,10 @@ const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
     ("crates/gateway-store", &["backup", "postgres", "redis"]),
     (
         "crates/providers/openai",
-        &["config", "credential", "transport"],
+        &["config", "credential", "profile", "transport"],
     ),
-    ("crates/providers/xai", &["transport"]),
+    ("crates/providers/antigravity", &[]),
+    ("crates/providers/xai", &["profile", "transport"]),
 ];
 
 /// 不对应单一生产模块、而是校验 crate/workspace 整体契约的根级测试场景
@@ -505,6 +607,7 @@ const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
     ("codex-proxy-rs", "gateway-host"),
     ("codex-proxy-rs", "gateway-plugin-runtime"),
     ("codex-proxy-rs", "gateway-store"),
+    ("codex-proxy-rs", "provider-antigravity"),
     ("codex-proxy-rs", "provider-openai"),
     ("codex-proxy-rs", "provider-xai"),
     ("gateway-admin", "gateway-core"),
@@ -525,6 +628,10 @@ const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
     ("gateway-plugin-runtime", "gateway-protocol"),
     ("gateway-store", "gateway-admin"),
     ("gateway-store", "gateway-core"),
+    ("provider-antigravity", "gateway-admin"),
+    ("provider-antigravity", "gateway-core"),
+    ("provider-antigravity", "gateway-egress"),
+    ("provider-antigravity", "gateway-protocol"),
     ("provider-openai", "gateway-admin"),
     ("provider-openai", "gateway-core"),
     ("provider-openai", "gateway-egress"),
@@ -646,10 +753,9 @@ fn workspace_modules_follow_conventional_file_layout() {
         let tests = member_root.join("tests");
         if tests.is_dir() {
             let roots = targets.get(&tests).expect("Cargo test source roots");
-            assert_module_tree(
-                &tests,
-                &roots.iter().map(String::as_str).collect::<Vec<_>>(),
-            );
+            let roots = roots.iter().map(String::as_str).collect::<Vec<_>>();
+            assert_module_tree(&tests, &roots);
+            assert_directory_modules_have_children(&tests, &roots);
         }
     }
 }

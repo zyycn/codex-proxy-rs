@@ -6,7 +6,7 @@ import { SlidersHorizontal } from '@lucide/vue'
 import { computed, ref, shallowRef, useId, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { batchUpdateAccounts, getAccountModels, getAccountQuota } from '@/api'
-import { quotaWindowLabel } from '@/components/account/account-usage-window/presenter'
+import { quotaWindowLabel } from '@/components/account-usage-window/presenter'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import QuotaActionButton from './QuotaActionButton.vue'
 

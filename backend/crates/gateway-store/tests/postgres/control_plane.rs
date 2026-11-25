@@ -72,30 +72,30 @@ async fn control_plane_replacement_commits_one_writer_per_revision_and_preserves
     .await
     .unwrap();
     assert_eq!(audit_count, 1);
-    // API Key 更新也推进相同版本，旧设置快照不能复活已经替换的 Key
+    // 轮换密钥后仍可提交原设置草稿，同时保留新密钥。
     let mut key_audit = replacement("key", 3600).audit;
     key_audit.action = "settings.admin_key".into();
     repository
         .replace_admin_api_key(Some("new-test-key".into()), key_audit)
         .await
         .unwrap();
-    let mut stale = replacement("stale", 3600);
-    stale.expected_revision = saved.config_revision;
+    let mut draft = replacement("after-key", 3600);
+    draft.expected_revision = saved.config_revision;
+    let committed = repository
+        .replace_control_plane(draft.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        committed.settings.config_revision.get(),
+        saved.config_revision.get() + 2
+    );
     assert!(matches!(
-        repository.replace_control_plane(stale).await,
+        repository.replace_control_plane(draft).await,
         Err(StoreError::Conflict {
             kind: ConflictKind::StaleRevision,
             ..
         })
     ));
-    let mut fresh = replacement("fresh", 3600);
-    fresh.expected_revision = repository
-        .load_control_plane()
-        .await
-        .unwrap()
-        .settings
-        .config_revision;
-    repository.replace_control_plane(fresh).await.unwrap();
     assert_eq!(
         repository
             .load_control_plane()

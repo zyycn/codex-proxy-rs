@@ -83,7 +83,9 @@ impl ExecutionService for ModelExecution {
         assert_eq!(key.as_str(), "client-key");
         Box::pin(async move {
             let prepared = self
-                .prepare_execution(crate::openai::authenticated_client("fixture-client-key"))
+                .prepare_execution(crate::data_plane::authenticated_client(
+                    "fixture-client-key",
+                ))
                 .await?;
             *self.cancellation.lock().unwrap() = Some(prepared.cancellation());
             Ok(prepared)
@@ -277,7 +279,7 @@ async fn management_calls_and_callbacks_preserve_headers_and_override_defaults()
         format!("/api/admin/plugins/extensions/{target}/api/echo"),
         format!("/plugins/callbacks/{target}/oauth?state=nonce"),
     ] {
-        let response = crate::openai::api_router_with_admin_and_execution(
+        let response = crate::data_plane::api_router_with_admin_and_execution(
             fixture.services.clone(),
             ModelExecution::new(ModelReply::Complete),
         )
@@ -337,10 +339,11 @@ async fn management_calls_and_callbacks_preserve_headers_and_override_defaults()
 async fn model_bridge_preserves_complete_request_and_response_headers() {
     let fixture = published_fixture().await;
     let execution = ModelExecution::new(ModelReply::Complete);
-    let response = crate::openai::api_router_with_admin_and_execution(fixture.services, execution)
-        .oneshot(model_request(false))
-        .await
-        .unwrap();
+    let response =
+        crate::data_plane::api_router_with_admin_and_execution(fixture.services, execution)
+            .oneshot(model_request(false))
+            .await
+            .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["set-cookie"], "fixture=value");
     assert_eq!(response.headers()["www-authenticate"], "Bearer");
@@ -359,7 +362,7 @@ async fn model_bridge_preserves_complete_request_and_response_headers() {
 #[tokio::test]
 async fn model_bridge_distinguishes_host_authentication_from_plugin_session_errors() {
     let fixture = published_fixture().await;
-    let router = crate::openai::api_router_with_admin_and_execution(
+    let router = crate::data_plane::api_router_with_admin_and_execution(
         fixture.services,
         ModelExecution::new(ModelReply::SessionError),
     );
@@ -395,7 +398,7 @@ async fn model_bridge_revokes_while_waiting_for_the_first_response() {
     let fixture = published_fixture().await;
     let execution = ModelExecution::new(ModelReply::PendingResponse);
     let router =
-        crate::openai::api_router_with_admin_and_execution(fixture.services, execution.clone());
+        crate::data_plane::api_router_with_admin_and_execution(fixture.services, execution.clone());
     let request = tokio::spawn(router.oneshot(model_request(false)));
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -425,7 +428,7 @@ async fn model_bridge_revokes_and_closes_a_pending_stream() {
     let fixture = published_fixture().await;
     let execution = ModelExecution::new(ModelReply::PendingBody);
     let response =
-        crate::openai::api_router_with_admin_and_execution(fixture.services, execution.clone())
+        crate::data_plane::api_router_with_admin_and_execution(fixture.services, execution.clone())
             .oneshot(model_request(true))
             .await
             .unwrap();
@@ -459,7 +462,7 @@ async fn model_bridge_authorization_rechecks_preserve_the_pending_frame_read() {
         .delayed_frame
         .store(true, Ordering::SeqCst);
     let response =
-        crate::openai::api_router_with_admin_and_execution(fixture.services, execution.clone())
+        crate::data_plane::api_router_with_admin_and_execution(fixture.services, execution.clone())
             .oneshot(model_request(true))
             .await
             .unwrap();
@@ -564,7 +567,7 @@ async fn resource_request(
     for validator in validators {
         request = request.header("if-none-match", *validator);
     }
-    crate::openai::api_router_with_admin_and_execution(
+    crate::data_plane::api_router_with_admin_and_execution(
         fixture.services.clone(),
         ModelExecution::new(ModelReply::Complete),
     )
@@ -577,7 +580,7 @@ async fn resource_request(
 async fn large_html_resource_should_remain_uncompressed() {
     let fixture = published_fixture().await;
     let path = format!("ui/{}.html", "a".repeat(2048));
-    let response = crate::openai::api_router_with_admin(fixture.services)
+    let response = crate::data_plane::api_router_with_admin(fixture.services)
         .oneshot(
             Request::builder()
                 .uri(format!(
@@ -756,7 +759,7 @@ async fn model_responses_requires_the_exact_authorized_target_before_execution()
             .unwrap()
     };
 
-    let response = crate::openai::api_router_with_admin_and_execution(
+    let response = crate::data_plane::api_router_with_admin_and_execution(
         fixture.services.clone(),
         ModelExecution::new(ModelReply::Complete),
     )
@@ -773,7 +776,7 @@ async fn model_responses_requires_the_exact_authorized_target_before_execution()
         format!("plugin-instance-diagnostic/{}/8", "a".repeat(64)),
         format!("plugin-instance-diagnostic/{}/7", "b".repeat(64)),
     ] {
-        let response = crate::openai::api_router_with_admin_and_execution(
+        let response = crate::data_plane::api_router_with_admin_and_execution(
             fixture.services.clone(),
             ModelExecution::new(ModelReply::Complete),
         )
@@ -783,7 +786,7 @@ async fn model_responses_requires_the_exact_authorized_target_before_execution()
         assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
-    let response = crate::openai::api_router_with_admin_and_execution(
+    let response = crate::data_plane::api_router_with_admin_and_execution(
         fixture.services.clone(),
         ModelExecution::new(ModelReply::Complete),
     )
@@ -811,7 +814,7 @@ async fn protected_plugin_routes_require_admin_before_reading_bodies_but_public_
             format!("{prefix}/models/responses?clientKeyId=client-key"),
         ),
     ] {
-        let response = crate::openai::api_router_with_admin_and_execution(
+        let response = crate::data_plane::api_router_with_admin_and_execution(
             fixture.services.clone(),
             ModelExecution::new(ModelReply::Complete),
         )
@@ -832,7 +835,7 @@ async fn protected_plugin_routes_require_admin_before_reading_bodies_but_public_
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(response.headers()["cache-control"], "no-store");
     }
-    let response = crate::openai::api_router_with_admin_and_execution(
+    let response = crate::data_plane::api_router_with_admin_and_execution(
         fixture.services.clone(),
         ModelExecution::new(ModelReply::Complete),
     )
@@ -849,7 +852,7 @@ async fn protected_plugin_routes_require_admin_before_reading_bodies_but_public_
         StatusCode::SERVICE_UNAVAILABLE,
         "公开资源仍要求可用的发布视图，不能绕过实例授权"
     );
-    let response = crate::openai::api_router_with_admin_and_execution(
+    let response = crate::data_plane::api_router_with_admin_and_execution(
         fixture.services.clone(),
         ModelExecution::new(ModelReply::Complete),
     )
@@ -867,7 +870,7 @@ async fn protected_plugin_routes_require_admin_before_reading_bodies_but_public_
     .unwrap();
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
-    let response = crate::openai::api_router_with_admin_and_execution(
+    let response = crate::data_plane::api_router_with_admin_and_execution(
         fixture.services.clone(),
         ModelExecution::new(ModelReply::Complete),
     )
@@ -900,7 +903,7 @@ async fn public_callback_rejects_head_missing_duplicate_state_and_body_before_di
         // 合法 GET 没有管理 Cookie 仍进入服务；当前测试未发布视图，返回 503 而不是 401
         ("GET", "state=one", "", StatusCode::SERVICE_UNAVAILABLE),
     ] {
-        let response = crate::openai::api_router_with_admin_and_execution(
+        let response = crate::data_plane::api_router_with_admin_and_execution(
             fixture.services.clone(),
             ModelExecution::new(ModelReply::Complete),
         )

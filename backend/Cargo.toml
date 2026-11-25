@@ -11,6 +11,7 @@ members = [
     "crates/gateway-plugin/sdk",
     "crates/gateway-protocol",
     "crates/gateway-store",
+    "crates/providers/antigravity",
     "crates/providers/openai",
     "crates/providers/xai",
 ]

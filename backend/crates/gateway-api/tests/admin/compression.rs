@@ -17,7 +17,7 @@ use super::AdminTestFixture;
 async fn app() -> Router {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
-    crate::openai::api_router_with_admin(fixture.services)
+    crate::data_plane::api_router_with_admin(fixture.services)
 }
 
 async fn get(router: Router, uri: &str, encoding: Option<&str>) -> Response {

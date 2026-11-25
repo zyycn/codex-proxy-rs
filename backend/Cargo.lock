@@ -921,6 +921,7 @@ dependencies = [
  "gateway-host",
  "gateway-plugin-runtime",
  "gateway-store",
+ "provider-antigravity",
  "provider-openai",
  "provider-xai",
  "serde",
@@ -3377,6 +3378,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "provider-antigravity"
+version = "0.0.0"
+dependencies = [
+ "async-compression",
+ "async-stream",
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "flate2",
+ "futures",
+ "gateway-admin",
+ "gateway-core",
+ "gateway-egress",
+ "gateway-protocol",
+ "getrandom 0.4.3",
+ "hex",
+ "http",
+ "http-body-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "wiremock",
+ "zip",
+]
+
+[[package]]
 name = "provider-openai"
 version = "0.0.0"
 dependencies = [
@@ -5108,6 +5145,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]

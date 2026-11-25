@@ -1,5 +1,5 @@
 import { ApiError } from '@/api/request'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { errorMessage } from '@/utils/operation'
 
 export interface PluginRefreshContext {

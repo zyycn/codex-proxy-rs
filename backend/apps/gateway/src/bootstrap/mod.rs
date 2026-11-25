@@ -32,6 +32,8 @@ pub enum BootstrapError {
     #[error(transparent)]
     Xai(#[from] provider_xai::XaiInitializeError),
     #[error(transparent)]
+    Antigravity(#[from] provider_antigravity::ConfigError),
+    #[error(transparent)]
     Registry(#[from] gateway_core::engine::provider::RegistryError),
     #[error(transparent)]
     Core(#[from] gateway_core::CoreError),

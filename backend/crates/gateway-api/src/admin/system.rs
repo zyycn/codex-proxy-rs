@@ -3,7 +3,7 @@
 //!
 //! 这里不依赖更新服务或进程控制；应用层通过窄端口提供系统操作事实
 
-use crate::auth::SessionState;
+use crate::SessionState;
 
 use std::convert::Infallible;
 

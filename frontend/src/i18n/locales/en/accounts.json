@@ -19,6 +19,10 @@
     },
     "quota": {
       "general": "General quota",
+      "groups": {
+        "geminiModels": "Gemini models",
+        "claudeGptModels": "Claude and GPT models"
+      },
       "usageInThisWindow": "Usage in this window: {localUsageDisplay}",
       "quotaUsed": "Quota used: {rate}",
       "resets": "Resets: {resetAtDisplay}",
@@ -289,7 +293,7 @@
       "downloadModelCatalog": "Download model catalog",
       "restoreState": "Reset status",
       "staleSelection": "Selected account data is out of date, select the accounts again",
-      "exportUnsupported": "Some selected accounts belong to providers that do not support export",
+      "exportUnsupported": "Some selected accounts do not support credential export",
       "deleted": "Account deleted",
       "deletedAccountDeletedAccounts": "Deleted {count} account | Deleted {count} accounts",
       "partialDeletion": "Deleted {count} accounts, the remaining accounts were not deleted: {value}",
@@ -321,7 +325,6 @@
       "tokensStructure": "Token usage",
       "cacheRead": "Cache read",
       "reasoning": "Reasoning",
-      "cacheWrites": "Cache writes",
       "modelUsageRanking": "Model usage",
       "totalTokens": "Total tokens",
       "totalCharge": "Total cost",
@@ -368,6 +371,8 @@
       "callbackLabel": "Callback URL or authorization code",
       "callbackAddress": "Callback address",
       "callbackPlaceholder": "Callback URL, ?code=...&state=..., or authorization code",
+      "fullCallbackHelp": "After authorizing, paste the full callback URL from your browser’s address bar.",
+      "fullCallbackPlaceholder": "Paste the full callback URL containing code and state",
       "callbackHelp": "Open the authorization link, authorize in your browser, then paste the callback URL or authorization code",
       "pasteOneAccessTokenPerLine": "Paste one Access token per line",
       "pasteOneRefreshTokenPerLine": "Paste one Refresh token per line",

@@ -37,6 +37,41 @@ async fn response_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).expect("parse response JSON")
 }
 
+#[test]
+fn backup_settings_report_secret_presence_without_serializing_the_secret() {
+    use gateway_admin::model::backup::BackupSettings;
+    use gateway_api::admin::backups::BackupSettingsView;
+
+    for configured in [false, true] {
+        let settings = BackupSettings {
+            storage_revision: 1,
+            endpoint: None,
+            region: None,
+            bucket: None,
+            access_key_id: None,
+            secret_access_key: configured.then(|| secrecy::SecretString::from("fixture-secret")),
+            prefix: None,
+            force_path_style: false,
+            schedule_enabled: false,
+            cron_expression: None,
+            schedule_timezone: None,
+            retention_days: 0,
+            retention_count: 0,
+            next_run_at: None,
+            last_verified_at: None,
+            updated_at: chrono::Utc::now(),
+        };
+        let response = serde_json::to_value(BackupSettingsView::from((
+            settings,
+            gateway_api::TimePresenter::new(Default::default()),
+        )))
+        .unwrap();
+        assert_eq!(response["secretConfigured"], configured);
+        assert!(response.get("secretAccessKey").is_none());
+        assert!(!response.to_string().contains("fixture-secret"));
+    }
+}
+
 fn update_body() -> Value {
     json!({
         "configRevision": 7,
@@ -55,9 +90,9 @@ fn update_body() -> Value {
         "maxWaitingPerKey": 0,
         "maxWaitingPerAccount": 0,
         "openaiGuardianReservedConcurrency": 0,
-        "openaiAccountAffinity": "relaxed",
+        "accountAffinity": "relaxed",
         "maxAccountRotations": 3,
-        "openaiSessionAffinityTtlHours": 24,
+        "sessionAffinityTtlHours": 24,
         "keyQueueTimeoutSeconds": 30,
         "accountQueueTimeoutSeconds": 30,
         "switchAccountOnQueueFailure": false,
@@ -1027,6 +1062,10 @@ async fn pricing_routes_keep_manual_overrides_during_sync_and_reset_to_source() 
         result["data"]["synced"]["openai"]["gpt-5.4"]["bands"]["standard"]["input"],
         "2.5"
     );
+    assert_eq!(
+        result["data"]["supportedBands"]["openai"],
+        json!(["standard"])
+    );
     assert!(result["data"]["syncedAt"].is_string());
     for _ in 0..2 {
         let response = app.clone().oneshot(request(Method::POST, "/api/admin/settings/pricing/update", Some(json!({
@@ -1567,9 +1606,9 @@ async fn account_affinity_and_rotation_budget_round_trip_and_reject_invalid_valu
     fixture.auth.insert_session("valid-session");
     let mut body = update_body();
     for (mode, rotations, ttl) in [("relaxed", 0, 1), ("preferred", 3, 24), ("strict", 31, 720)] {
-        body["openaiAccountAffinity"] = json!(mode);
+        body["accountAffinity"] = json!(mode);
         body["maxAccountRotations"] = json!(rotations);
-        body["openaiSessionAffinityTtlHours"] = json!(ttl);
+        body["sessionAffinityTtlHours"] = json!(ttl);
         let response = app(fixture.state())
             .oneshot(request(
                 Method::POST,
@@ -1580,16 +1619,16 @@ async fn account_affinity_and_rotation_budget_round_trip_and_reject_invalid_valu
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let response = response_json(response).await;
-        assert_eq!(response["data"]["openaiAccountAffinity"], mode);
+        assert_eq!(response["data"]["accountAffinity"], mode);
         assert_eq!(response["data"]["maxAccountRotations"], rotations);
-        assert_eq!(response["data"]["openaiSessionAffinityTtlHours"], ttl);
+        assert_eq!(response["data"]["sessionAffinityTtlHours"], ttl);
         body["configRevision"] = response["data"]["configRevision"].clone();
     }
     let saved = fixture.settings.settings.lock().unwrap().clone();
     // 类型错误沿用 AdminJson 的 422，合法类型越界由字段校验返回 400
     for (field, value, expected_status) in [
         (
-            "openaiAccountAffinity",
+            "accountAffinity",
             json!("unknown"),
             StatusCode::UNPROCESSABLE_ENTITY,
         ),
@@ -1604,18 +1643,14 @@ async fn account_affinity_and_rotation_budget_round_trip_and_reject_invalid_valu
             json!(1.5),
             StatusCode::UNPROCESSABLE_ENTITY,
         ),
+        ("sessionAffinityTtlHours", json!(0), StatusCode::BAD_REQUEST),
         (
-            "openaiSessionAffinityTtlHours",
-            json!(0),
-            StatusCode::BAD_REQUEST,
-        ),
-        (
-            "openaiSessionAffinityTtlHours",
+            "sessionAffinityTtlHours",
             json!(721),
             StatusCode::BAD_REQUEST,
         ),
         (
-            "openaiSessionAffinityTtlHours",
+            "sessionAffinityTtlHours",
             json!(1.5),
             StatusCode::UNPROCESSABLE_ENTITY,
         ),

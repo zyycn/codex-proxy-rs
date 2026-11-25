@@ -11,6 +11,8 @@ mod thinking;
 mod tools;
 mod usage;
 
+pub(crate) use content::GENAI_CARRIER;
+
 pub use capabilities::MessagesModelCapabilities;
 pub use error::TranslationError;
 pub use request::{

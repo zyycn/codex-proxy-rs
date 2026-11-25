@@ -25,7 +25,7 @@ use provider_openai::credential::{
     CompletedCodexOAuthCredential, ImportCodexOAuthCredential, StartCodexOAuthAuthorization,
     StoredCodexPendingAuthorization,
 };
-use provider_openai::transport::profile::CodexWireProfileState;
+use provider_openai::profile::CodexWireProfileState;
 use secrecy::SecretString;
 use url::Url;
 use uuid::Uuid;
@@ -380,7 +380,7 @@ async fn authorize_url_matches_the_official_desktop_parameter_contract() {
 }
 
 fn profile() -> CodexWireProfileState {
-    provider_openai::transport::profile::CodexWireProfileState::new(Default::default())
+    provider_openai::profile::CodexWireProfileState::new(Default::default())
 }
 
 #[tokio::test]

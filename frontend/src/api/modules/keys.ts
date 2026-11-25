@@ -1,6 +1,6 @@
 import type { RequestOptions } from '../request'
+import type { ProviderRequestProfile, ProviderRequestProfiles, ProviderRequestProfileUpdates } from '../types/request-profile'
 import type { AccountGroupRef } from './groups'
-import type { ProviderRequestProfile, ProviderRequestProfiles, ProviderRequestProfileUpdates } from './settings/profiles'
 import request from '../request'
 
 export type ApiKeyRoutingScope = 'all' | 'groups'

@@ -940,7 +940,10 @@ impl PluginDistribution for UnusedAdminRuntime {
 
 #[async_trait]
 impl PricingSource for UnusedAdminRuntime {
-    async fn fetch(&self) -> Result<PricingSyncPreview, AdminError> {
+    async fn fetch(
+        &self,
+        _: &gateway_admin::ports::pricing::PricingSourceScope,
+    ) -> Result<PricingSyncPreview, AdminError> {
         Err(AdminError::unavailable("unused pricing source"))
     }
 }

@@ -1208,9 +1208,9 @@ pub(super) fn client_diagnostic(
 }
 
 pub(super) fn profile_diagnostic(
-    error: &crate::transport::profile::selection::ClientProfileError,
+    error: &crate::profile::selection::ClientProfileError,
 ) -> ProviderDiagnostic {
-    use crate::transport::profile::selection::ClientProfileError;
+    use crate::profile::selection::ClientProfileError;
     let code = match error {
         ClientProfileError::Invalid => "request_profile_invalid",
         ClientProfileError::InvalidInstallationSeed => "request_profile_installation_seed_invalid",

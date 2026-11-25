@@ -15,8 +15,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::compat::{is_non_codex_request_header, normalize_codex_request_body};
+use crate::profile::CodexRequestLocation;
 use crate::transport::headers::is_managed_identity_header;
-use crate::transport::profile::CodexRequestLocation;
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, X_CODEX_TURN_STATE_CLIENT_METADATA_KEY,
 };

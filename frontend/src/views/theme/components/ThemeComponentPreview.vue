@@ -20,7 +20,7 @@ import {
 import { computed, shallowRef } from 'vue'
 
 import { useI18n } from 'vue-i18n'
-import { formatProviderLabel } from '@/utils/providers'
+import { formatProviderLabel } from '@/providers/catalog'
 
 const { t } = useI18n({ useScope: 'global' })
 

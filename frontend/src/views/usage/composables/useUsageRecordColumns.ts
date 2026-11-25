@@ -4,14 +4,14 @@ import type { UsageListRecord, UsageRecordStatus } from '@/api'
 import { useTableColumns } from '@codex-proxy/ui'
 import { clamp, partition } from 'es-toolkit'
 import { computed } from 'vue'
-import { usageRecordColumns } from '@/components/usage/shared/columns'
+import { usageRecordColumns } from '@/components/usage-records-table/columns'
 import { t } from '@/i18n'
 
 type ColumnLayout = Record<string, Pick<TableColumn, 'width' | 'fixedWidth' | 'hideable'>>
 
 const requestLayout: ColumnLayout = {
   clientApiKeyName: { fixedWidth: true },
-  accountEmail: { width: 280, hideable: true },
+  accountEmail: { hideable: true },
   model: { fixedWidth: true },
   reasoningEffort: { fixedWidth: true },
 }

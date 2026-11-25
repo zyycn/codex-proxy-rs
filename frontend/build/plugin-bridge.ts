@@ -6,7 +6,7 @@ import { build } from 'vite'
 export function pluginBridge(): Plugin {
   const id = 'virtual:plugin-bridge-source'
   const resolvedId = `\0${id}`
-  const entry = fileURLToPath(new URL('../src/views/plugins/management/bridge-runtime.ts', import.meta.url))
+  const entry = fileURLToPath(new URL('../src/views/plugins/components/plugin-management-frame/bridge-runtime.ts', import.meta.url))
   const dependencies = new Set<string>()
   return {
     name: 'plugin-management-bridge',

@@ -2,7 +2,7 @@
 
 use super::*;
 use gateway_admin::model::provider_credentials::ProviderDocument;
-use gateway_admin::model::quota_forecast_sampling::{
+use gateway_admin::model::quota_forecast::{
     MAX_FORECAST_HISTORY_POINTS, QuotaForecastHistory, QuotaForecastHistoryPoint,
     QuotaForecastUsage,
 };

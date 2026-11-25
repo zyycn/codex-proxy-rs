@@ -5,8 +5,8 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::automatic_context::{locate_contexts, rewrite_git_context};
 use super::request::serialize_ascii_turn_metadata;
+use crate::automatic_context::{locate_contexts, rewrite_git_context};
 
 // 轮次及父子轮次引用保留客户端原值，避免改变官方轮次身份与 UUIDv7 语义
 const ID_FIELDS: &[&str] = &[

@@ -154,7 +154,7 @@ async fn update_detail_should_compress_json_starting_at_one_kib() {
         let fixture =
             AdminTestFixture::with_system(Arc::new(ProgressSystem { notes: Some(notes) })).await;
         fixture.auth.insert_session("valid-session");
-        crate::openai::api_router_with_admin(fixture.services)
+        crate::data_plane::api_router_with_admin(fixture.services)
             .oneshot(
                 Request::builder()
                     .uri("/api/admin/system/update/detail")

@@ -1,22 +1,23 @@
 <script setup lang="ts">
 import type { PaginationState as Pagination } from '@codex-proxy/ui'
 
-import type { KeyUsageRecord, KeyUsageRecordKind } from '@/api/modules/key-usage'
+import type { KeyUsageRecord, KeyUsageRecordKind } from '@/api'
 import { defineTableColumns, useTableColumns, ZCard, ZPagination, ZTable, ZTableColumnSettings } from '@codex-proxy/ui'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { usageDataColumns } from '@/components/usage/shared/columns'
-import UsageBillingCell from '@/components/usage/UsageBillingCell.vue'
-import UsageClientIpCell from '@/components/usage/UsageClientIpCell.vue'
-import UsageLatencyCell from '@/components/usage/UsageLatencyCell.vue'
-import UsageModelCell from '@/components/usage/UsageModelCell.vue'
-import UsagePerformanceCell from '@/components/usage/UsagePerformanceCell.vue'
-import UsageReasoningEffortCell from '@/components/usage/UsageReasoningEffortCell.vue'
-import UsageRecordStatusFilter from '@/components/usage/UsageRecordStatusFilter.vue'
-import UsageRouteCell from '@/components/usage/UsageRouteCell.vue'
-import UsageTimeCell from '@/components/usage/UsageTimeCell.vue'
-import UsageTokenCell from '@/components/usage/UsageTokenCell.vue'
-import UsageTransportCell from '@/components/usage/UsageTransportCell.vue'
+import { usageDataColumns } from '@/components/usage-records-table/columns'
+import UsageBillingCell from '@/components/usage-records-table/UsageBillingCell.vue'
+import UsageClientIpCell from '@/components/usage-records-table/UsageClientIpCell.vue'
+import UsageLatencyCell from '@/components/usage-records-table/UsageLatencyCell.vue'
+import UsageModelCell from '@/components/usage-records-table/UsageModelCell.vue'
+import UsagePerformanceCell from '@/components/usage-records-table/UsagePerformanceCell.vue'
+import UsagePerformanceHeader from '@/components/usage-records-table/UsagePerformanceHeader.vue'
+import UsageReasoningEffortCell from '@/components/usage-records-table/UsageReasoningEffortCell.vue'
+import UsageRouteCell from '@/components/usage-records-table/UsageRouteCell.vue'
+import UsageTimeCell from '@/components/usage-records-table/UsageTimeCell.vue'
+import UsageTokenCell from '@/components/usage-records-table/UsageTokenCell.vue'
+import UsageTransportCell from '@/components/usage-records-table/UsageTransportCell.vue'
+import UsageRecordStatusFilter from '@/components/UsageRecordStatusFilter.vue'
 
 defineProps<{ rows: KeyUsageRecord[], pagination: Pagination, loading: boolean }>()
 
@@ -60,6 +61,9 @@ const { visibleColumns, columnOptions, setColumnVisible, setColumnOrder, resetCo
         </template>
         <template #latency="{ row }">
           <UsageLatencyCell :record="row" />
+        </template>
+        <template #header-performance>
+          <UsagePerformanceHeader />
         </template>
         <template #performance="{ row }">
           <UsagePerformanceCell :record="row" />

@@ -449,7 +449,7 @@ impl CodexCredentialSelector {
                         key: affinity.key(),
                         expected: current.as_ref(),
                         account: &selected_account,
-                        ttl: policy.openai_session_affinity_ttl(),
+                        ttl: policy.session_affinity_ttl(),
                     }))
                     .await?
             {
@@ -502,7 +502,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let policy = request.attempt.account_selection_policy();
         let follow_only = !request.attempt.is_diagnostic_required_account()
-            && policy.openai_account_affinity() == AccountAffinity::Strict
+            && policy.account_affinity() == AccountAffinity::Strict
             && request
                 .session_affinity_observation
                 .is_some_and(CodexSessionAffinity::follow_only);
@@ -719,7 +719,7 @@ impl CodexCredentialSelector {
         let affinity_mode = request
             .attempt
             .account_selection_policy()
-            .openai_account_affinity();
+            .account_affinity();
         if follow_only {
             // 关闭普通账号排队不能放开后代线程换号，沿用队列时间设置并保留有界人数
             queue_policy.max_waiting = if queue_policy.max_waiting == 0 {
@@ -1545,7 +1545,7 @@ impl CodexCredentialSelector {
                     key,
                     expected: binding.as_ref(),
                     account: binding_account,
-                    ttl: policy.openai_session_affinity_ttl(),
+                    ttl: policy.session_affinity_ttl(),
                 });
                 // 插件委托与普通内置选号共享轮询，显式选择、亲和命中及等待不消耗位置
                 let admission = match assignment_cursor {

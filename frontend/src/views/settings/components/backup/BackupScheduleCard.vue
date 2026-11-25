@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ZButton, ZCard, ZCheckbox, ZForm, ZFormItem, ZInput } from '@codex-proxy/ui'
+import { ZButton, ZCard, ZForm, ZFormItem, ZInput, ZSwitch } from '@codex-proxy/ui'
 
 import { CalendarClock, Save } from '@lucide/vue'
 
@@ -37,25 +37,30 @@ function updateSchedule<Key extends keyof ScheduleForm>(key: Key, value: Schedul
     :description="t('settings.backup.schedule.description')"
   >
     <template #actions>
-      <ZButton type="primary" :loading="saving" :disabled="disabled" @click="emit('save')">
-        <template #icon>
-          <Save class="size-4" />
-        </template>
-        {{ saving ? t('settings.backup.schedule.saving') : t('common.actions.save') }}
-      </ZButton>
+      <div class="flex flex-wrap items-center gap-3">
+        <ZSwitch
+          :model-value="schedule.scheduleEnabled"
+          :disabled="disabled || (!schedule.scheduleEnabled && !storageReady)"
+          :aria-label="t('settings.backup.schedule.enableScheduledBackup')"
+          :active-text="t('common.values.on')"
+          :inactive-text="t('common.values.off')"
+          inline-prompt
+          :width="56"
+          @update:model-value="updateSchedule('scheduleEnabled', $event)"
+        />
+        <ZButton type="primary" :loading="saving" :disabled="disabled || (schedule.scheduleEnabled && !storageReady)" @click="emit('save')">
+          <template #icon>
+            <Save class="size-4" />
+          </template>
+          {{ saving ? t('settings.backup.schedule.saving') : t('common.actions.save') }}
+        </ZButton>
+      </div>
     </template>
 
     <div class="@container">
-      <ZForm class="max-w-6xl @min-[640px]:grid-cols-2 @min-[640px]:items-end">
-        <div class="col-span-2 flex items-center gap-4 @max-[640px]:col-span-1">
-          <ZCheckbox
-            :model-value="schedule.scheduleEnabled" :disabled="disabled || !storageReady"
-            :label="t('settings.backup.schedule.enableScheduledBackup')"
-            @update:model-value="updateSchedule('scheduleEnabled', $event)"
-          />
-        </div>
-
+      <ZForm class="@md:grid-cols-2 @md:items-end @5xl:grid-cols-3">
         <ZFormItem
+          class="@md:col-span-full @5xl:col-span-1"
           :label="t('settings.backup.schedule.cronExpression')"
           :description="t('settings.backup.schedule.cronHelp')"
         >

@@ -52,8 +52,15 @@ interface AccountListParams {
   sortDirection?: string
 }
 
+export interface AccountConnectionUpdate {
+  baseUrl?: string
+  protocol?: 'responses' | 'messages'
+  transport: 'http' | 'prefer_websocket'
+  apiKey?: string
+}
+
 interface AccountUpdateParam {
-  connection?: { baseUrl?: string, protocol?: ApiKeyConfiguration['protocol'], transport: ApiKeyConfiguration['transport'], apiKey?: string }
+  connection?: AccountConnectionUpdate
   outboundProxyId?: string
   accountId: string
   name?: string
@@ -90,12 +97,6 @@ interface AccountDetailResponse {
 interface AccountConcurrencyParams extends AccountIdParam {
   page: number
   pageSize: number
-}
-
-export interface ApiKeyConfiguration {
-  base_url: string
-  protocol: 'responses' | 'messages'
-  transport: 'http' | 'prefer_websocket'
 }
 
 export interface AccountConcurrencyEntry {

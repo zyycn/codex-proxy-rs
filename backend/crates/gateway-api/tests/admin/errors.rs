@@ -5,7 +5,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Method, Request, StatusCode, header},
 };
-use gateway_api::auth::SessionState;
+use gateway_api::SessionState;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -14,7 +14,7 @@ use super::{AdminTestFixture, AdminTestState};
 const SESSION_COOKIE: &str = "cpr_session=valid-session";
 
 fn app(state: AdminTestState) -> Router {
-    crate::openai::api_router_with_admin(state.admin_services().clone()).layer(axum::Extension(
+    crate::data_plane::api_router_with_admin(state.admin_services().clone()).layer(axum::Extension(
         axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 41000))),
     ))
 }

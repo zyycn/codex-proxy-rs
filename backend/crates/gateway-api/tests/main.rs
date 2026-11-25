@@ -3,12 +3,11 @@
 mod admin;
 mod architecture;
 mod auth;
+mod data_plane;
 mod diagnostics;
 mod health;
 mod key_usage;
 mod middleware;
-mod openai;
-mod provider;
 mod support;
 
 #[tokio::test]
@@ -53,7 +52,7 @@ async fn api_should_serve_resolved_assets_with_relative_environment_override() {
         .resolve_and_validate(&std::path::Path::new(&directory).join("deploy"))
         .expect("resolved API config");
     let admin = admin::AdminTestFixture::new().await;
-    let router = openai::api_router_with_config(admin.services, config);
+    let router = data_plane::api_router_with_config(admin.services, config);
     let response = router
         .clone()
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())

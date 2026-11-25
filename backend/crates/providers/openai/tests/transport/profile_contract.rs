@@ -119,10 +119,9 @@ fn deployment_routing_survives_artifact_updates_and_profile_selection() {
         desktop_build: "9999".to_owned(),
         verified_at: Utc::now(),
     });
-    let snapshot =
-        provider_openai::transport::profile::selection::ClientProfileSelection::default()
-            .resolve(&profile)
-            .expect("selected profile");
+    let snapshot = provider_openai::profile::selection::ClientProfileSelection::default()
+        .resolve(&profile)
+        .expect("selected profile");
     let model = provider_openai::transport::headers::build_codex_model_headers(
         &snapshot,
         "Bearer audit",

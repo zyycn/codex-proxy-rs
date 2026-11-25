@@ -1,7 +1,7 @@
 import type { LineSeriesOption } from 'echarts'
 import type { useChartPalette } from '@/composables/useChartPalette'
-import { sampleGapBridgeSeries } from '@/components/charts/timeSeriesGap'
-import { chartTooltipStyle } from '@/components/charts/tooltip'
+import { sampleGapBridgeSeries } from '@/components/base-chart/timeSeriesGap'
+import { chartTooltipStyle } from '@/components/base-chart/tooltip'
 
 import { formatLocalizedCompactNumber } from '@/utils/format'
 

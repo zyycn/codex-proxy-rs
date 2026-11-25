@@ -1,0 +1,102 @@
+import { computed, shallowRef, watch } from 'vue'
+import { getProxyAccounts, removeProxyAccount } from '@/api'
+import { useAsyncAction } from '@/composables/useAsyncAction'
+import { usePagedQuery } from '@/composables/usePagedQuery'
+import { t } from '@/i18n'
+import { notification as ZNotification } from '@/plugins/notification'
+
+export function useProxyAccounts(options: {
+  isOpen: () => boolean
+  proxyId: () => string | undefined
+  onRemoved: () => void
+}) {
+  const search = shallowRef('')
+  const removeAction = useAsyncAction()
+  const query = usePagedQuery({
+    initialPageSize: 20,
+    load: (pagination, requestOptions) => getProxyAccounts({
+      ...pagination,
+      proxyId: options.proxyId() ?? '',
+      search: search.value.trim() || undefined,
+    }, requestOptions),
+  })
+  const pagination = computed(() => ({
+    currentPage: query.page.value,
+    pageSize: query.pageSize.value,
+    total: query.total.value,
+  }))
+
+  function setPage(page: number) {
+    if (!options.isOpen() || !options.proxyId())
+      return
+    void query.execute({ page })
+  }
+
+  function setPageSize(size: number) {
+    if (options.isOpen() && options.proxyId())
+      void query.execute({ page: 1, pageSize: size })
+  }
+
+  function reloadAccounts() {
+    if (options.isOpen() && options.proxyId())
+      return query.execute()
+  }
+
+  async function removeAccount(accountId: string) {
+    const proxyId = options.proxyId()
+    if (!proxyId)
+      return false
+    return await removeAction.run(async () => {
+      await removeProxyAccount({ proxyId, accountId })
+      options.onRemoved()
+      ZNotification.success({
+        message: t('proxies.accounts.removed'),
+      })
+      if (options.isOpen() && options.proxyId() === proxyId) {
+        query.invalidate()
+        query.items.value = query.items.value.filter(account => account.id !== accountId)
+        query.total.value = Math.max(0, query.total.value - 1)
+        // 复用分页查询，删除末页最后一项时自动回到有效页。
+        await query.execute()
+      }
+      return true
+    }) ?? false
+  }
+
+  watch([options.isOpen, options.proxyId], () => {
+    // 关闭或切换代理后丢弃旧请求，避免上一条代理的账号覆盖新列表。
+    query.invalidate({
+      resetLoading: options.isOpen(),
+    })
+    if (!options.isOpen())
+      return
+    search.value = ''
+    if (options.proxyId()) {
+      void query.reloadFromStart()
+    }
+    else {
+      query.items.value = []
+      query.total.value = 0
+    }
+  }, { immediate: true, flush: 'sync' })
+  watch(search, (_value, _previous, onCleanup) => {
+    const timer = setTimeout(() => {
+      if (options.isOpen() && options.proxyId())
+        void query.reloadFromStart()
+    }, 300)
+    onCleanup(() => clearTimeout(timer))
+  })
+
+  return {
+    accounts: query.items,
+    loading: query.loading,
+    error: query.error,
+    pagination,
+    search,
+    setPage,
+    setPageSize,
+    removing: removeAction.loading,
+    removeAccount,
+    reloadAccounts,
+  }
+}

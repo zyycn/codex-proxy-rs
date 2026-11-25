@@ -7,7 +7,7 @@ import { CornerDownRight } from '@lucide/vue'
 
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import AccountPlanBadge from '@/components/account-plan-badge/index.vue'
 import { formatLocalizedCompactNumber as formatCompactNumber, formatDuration, formatPercent, formatUsd } from '@/utils/format'
 
 const props = withDefaults(
@@ -81,8 +81,6 @@ const diagnosticColumns = computed(() => defineTableColumns<DiagnosticDisplayIte
           key: 'accountPlanType',
           label: t('usage.fields.subscription'),
           kind: 'status',
-          size: 'sm',
-          fixedWidth: true,
         },
       ])
     : []),

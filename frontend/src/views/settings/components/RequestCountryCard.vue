@@ -44,7 +44,7 @@ function setMode(mode: OpenAiRequestCountry['mode'] | undefined) {
 </script>
 
 <template>
-  <ZCard :description="t('settings.location.requestCountryDescription')">
+  <ZCard class="@container" :description="t('settings.location.requestCountryDescription')">
     <template #title>
       <span class="inline-flex items-center gap-1.5">
         {{ t('settings.location.requestCountry') }}
@@ -63,7 +63,7 @@ function setMode(mode: OpenAiRequestCountry['mode'] | undefined) {
         </HelpPopover>
       </span>
     </template>
-    <div class="grid min-w-0 max-w-6xl items-start gap-4.5 sm:grid-cols-2">
+    <div class="grid min-w-0 items-start gap-4.5" :class="requestCountry.mode === 'custom' ? '@md:grid-cols-2' : undefined">
       <ZFormItem :label="t('settings.location.countryMode')">
         <ZSelect :model-value="requestCountry.mode" :options="modes" :aria-label="t('settings.location.countryMode')" :disabled="disabled" @update:model-value="setMode" />
       </ZFormItem>

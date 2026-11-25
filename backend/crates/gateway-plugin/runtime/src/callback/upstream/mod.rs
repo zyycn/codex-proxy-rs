@@ -24,7 +24,7 @@ use gateway_plugin_sdk::{
 };
 
 use super::{denied, http::HttpCallbacks, invalid};
-use crate::{RpcReply, adapter::upstream_adapter::target::UpstreamTarget};
+use crate::{RpcReply, upstream_target::UpstreamTarget};
 
 pub(crate) use sessions::{ConnectionOwner, ConnectionPool};
 

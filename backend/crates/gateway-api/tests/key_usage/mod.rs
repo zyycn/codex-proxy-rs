@@ -57,7 +57,7 @@ async fn get(app: &Router, resource: &str, suffix: &str, cookie: &str) -> Respon
 #[tokio::test]
 async fn version_exposes_only_build_identifiers_for_key_sessions() {
     let fixture = fixtures::fixture().await;
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     let response = get(&app, "version", "", &cookie).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -84,7 +84,7 @@ async fn version_exposes_only_build_identifiers_for_key_sessions() {
 #[tokio::test]
 async fn config_reveals_only_the_session_keys_name_and_plaintext() {
     let fixture = fixtures::fixture().await;
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     let response = get(&app, "config", "", &cookie).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -108,7 +108,7 @@ async fn config_reveals_only_the_session_keys_name_and_plaintext() {
 #[tokio::test]
 async fn config_rejects_caller_selected_scope() {
     let fixture = fixtures::fixture().await;
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     for query in [
         "?keyId=other",
@@ -125,7 +125,7 @@ async fn config_rejects_caller_selected_scope() {
 #[tokio::test]
 async fn config_does_not_reveal_disabled_or_other_keys() {
     let fixture = fixtures::fixture().await;
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     {
         let mut key = fixture.client_key.lock().unwrap();
@@ -165,7 +165,7 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
     let fixture = fixtures::fixture().await;
     fixture.observations.lock().unwrap().trend.as_mut().unwrap()[0].bucket_start =
         "2026-09-01T04:30:00Z".parse().unwrap();
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     let response = get(&app, "overview", "&model=%20coding%20", &cookie).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -257,7 +257,7 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
 #[tokio::test]
 async fn records_keep_pagination_and_hide_admin_and_upstream_data() {
     let fixture = fixtures::fixture().await;
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     for (kind, outcome) in [
         ("success", RequestOutcome::Succeeded),
@@ -374,7 +374,7 @@ async fn failed_records_without_usage_keep_token_and_billing_details_unknown() {
         record.total_tokens = None;
         record.billing = None;
     }
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     let response = get(&app, "records", "&kind=error", &cookie).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -389,7 +389,7 @@ async fn failed_records_without_usage_keep_token_and_billing_details_unknown() {
 #[tokio::test]
 async fn missing_admin_and_revoked_sessions_cannot_read_key_usage() {
     let fixture = fixtures::fixture().await;
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let admin = login(&app, "admin").await;
     let key = login(&app, "key").await;
     for resource in ["overview", "records", "config", "version"] {
@@ -414,7 +414,7 @@ async fn missing_admin_and_revoked_sessions_cannot_read_key_usage() {
 #[tokio::test]
 async fn unknown_scope_fields_and_unbounded_queries_are_rejected() {
     let fixture = fixtures::fixture().await;
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     for resource in ["overview", "records"] {
         for extra in [
@@ -470,7 +470,7 @@ async fn unknown_scope_fields_and_unbounded_queries_are_rejected() {
 #[tokio::test]
 async fn empty_usage_has_zero_cost_but_unknown_pricing_stays_unknown() {
     let fixture = fixtures::fixture().await;
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     for requests in [0, 2] {
         {
@@ -502,7 +502,7 @@ async fn empty_usage_has_zero_cost_but_unknown_pricing_stays_unknown() {
 #[tokio::test]
 async fn overview_does_not_mask_missing_keys_or_unavailable_observations() {
     let fixture = fixtures::fixture().await;
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     fixture.observations.lock().unwrap().summary = None;
     assert_eq!(
@@ -519,7 +519,7 @@ async fn overview_does_not_mask_missing_keys_or_unavailable_observations() {
 #[tokio::test]
 async fn namespace_errors_remain_json_and_uncacheable() {
     let fixture = fixtures::fixture().await;
-    let app = crate::openai::api_router_with_admin(fixture.services);
+    let app = crate::data_plane::api_router_with_admin(fixture.services);
     for (method, path, status) in [
         (Method::GET, "/api/key-usage/missing", StatusCode::NOT_FOUND),
         (

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 
 import { useI18n } from 'vue-i18n'
-import { authenticationIcon, formatAuthenticationLabel, formatProviderLabel, providerIcon } from '@/utils/providers'
+import { authenticationIcon, formatAuthenticationLabel, formatProviderLabel, providerIcon } from '@/providers/catalog'
 
 const props = withDefaults(
   defineProps<{

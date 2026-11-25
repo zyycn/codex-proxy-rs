@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { ProtectionCondition, ProtectionField, ProtectionOperator } from '@/api/modules/settings/protection'
+import type { ProtectionCondition, ProtectionField, ProtectionOperator } from '@/api'
 import { ZButton, ZCheckbox, ZIconButton, ZInput, ZPopover, ZSelect } from '@codex-proxy/ui'
 import { ChevronDown, Plus, Trash2, X } from '@lucide/vue'
 import { computed, shallowRef, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { protectionConditionError, protectionFieldLabels, protectionLimits, protectionOperatorLabels } from './form'
+import { protectionConditionError, protectionFieldLabels, protectionLimits, protectionOperatorLabels } from './policy'
 
 const props = defineProps<{ disabled: boolean, showErrors: boolean }>()
 const emit = defineEmits<{ remove: [] }>()

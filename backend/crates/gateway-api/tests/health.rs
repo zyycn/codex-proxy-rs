@@ -26,7 +26,7 @@ use crate::support::RecordingDiagnostics;
 
 #[tokio::test]
 async fn healthz_should_return_no_content_when_all_inputs_are_healthy() {
-    let response = crate::openai::api_router(Arc::new(UnusedExecution))
+    let response = crate::data_plane::api_router(Arc::new(UnusedExecution))
         .await
         .oneshot(
             Request::builder()
@@ -46,7 +46,7 @@ async fn healthz_should_ignore_provider_maintenance_worker_failure() {
         WorkerKind::QuotaCatalogHealth,
         WorkerRuntimeState::BackingOff,
     )]);
-    let response = crate::openai::api_router_with_worker_health(
+    let response = crate::data_plane::api_router_with_worker_health(
         Arc::new(UnusedExecution),
         Arc::new(worker_health),
     )
@@ -69,7 +69,7 @@ async fn healthz_should_reject_critical_worker_failure() {
         WorkerKind::RuntimeSnapshotReconciliation,
         WorkerRuntimeState::BackingOff,
     )]);
-    let response = crate::openai::api_router_with_worker_health(
+    let response = crate::data_plane::api_router_with_worker_health(
         Arc::new(UnusedExecution),
         Arc::new(worker_health),
     )
@@ -305,7 +305,7 @@ async fn health_router(
         admin.services,
         probes,
         Arc::new(StaticWorkerHealth(workers)),
-        Arc::new(crate::openai::TestLifecycle::default()),
+        Arc::new(crate::data_plane::TestLifecycle::default()),
         diagnostics,
     )
     .unwrap()

@@ -50,6 +50,7 @@ use crate::credential::{
     GrokCredentialRecovery, GrokCredentialRecoveryOutcome, GrokCredentialRefreshOutcome,
     GrokCredentialRefreshService, GrokQuotaError,
 };
+use crate::profile::{GROK_CLI_RELEASE_POLL_INTERVAL, GrokCliReleaseService};
 use crate::reasoning_replay::{
     GrokReasoningReplay, GrokReasoningReplayCapture, GrokReasoningReplayKey,
     valid_reasoning_ciphertext,
@@ -57,7 +58,6 @@ use crate::reasoning_replay::{
 use crate::transport::canonical::{GrokCanonicalDecoder, GrokNativeResponseTranslator};
 use crate::transport::config::XAI_PROVIDER_NAME;
 use crate::transport::headers::{GrokClientIdentity, build_grok_headers};
-use crate::transport::profile::{GROK_CLI_RELEASE_POLL_INTERVAL, GrokCliReleaseService};
 use crate::transport::{
     GROK_RESPONSES_URL, GrokCompactionDecodeError, GrokCompactionRequest,
     GrokCompactionSummaryDecoder, GrokCredentialFailure, GrokInferenceChunkStream,
@@ -74,12 +74,11 @@ mod failure;
 mod outbound;
 mod stream;
 mod upstream_adapter;
-mod workers;
+pub(crate) mod workers;
 
 use continuation::*;
 use failure::*;
 use stream::*;
-pub(crate) use workers::worker_contributions;
 
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
 const XAI_SESSION_STATE_MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -161,7 +160,7 @@ impl Provider for GrokBuildProvider {
         &self,
         configuration: &gateway_core::account::OpaqueProviderData,
     ) -> Result<gateway_core::account::OpaqueProviderData, ProviderError> {
-        use crate::transport::client_profile::{GrokClientProfileSelection, object};
+        use crate::profile::selection::{GrokClientProfileSelection, object};
         let profile = GrokClientProfileSelection::parse(configuration)
             .and_then(|selection| selection.resolve(&self.wire_profile))
             .and_then(|profile| object(&profile))

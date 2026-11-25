@@ -2,8 +2,8 @@ import type {
   DashboardHealthStatus,
   DashboardSummaryResponse,
   DashboardTrendPoint,
-} from '@/api/modules/dashboard'
-import type { UsageListRecord } from '@/api/modules/usage'
+  UsageListRecord,
+} from '@/api'
 import { computed } from 'vue'
 import { t } from '@/i18n'
 

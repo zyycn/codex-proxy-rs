@@ -109,7 +109,7 @@ async fn changed_owner_and_lease_contention_refresh_the_complete_pool() {
         let attempt = projection_attempt(
             "key_codex_contract",
             contract_account_scope(),
-            account_policy().with_openai_account_affinity(AccountAffinity::Preferred),
+            account_policy().with_account_affinity(AccountAffinity::Preferred),
         );
         let key = ProviderSessionAffinityKey::try_new("projection-refresh").unwrap();
         let selected = select(&selector, &attempt, &key, "gpt-5.4").await.unwrap();
@@ -481,7 +481,7 @@ async fn account_queue_timeout_can_reselect_for_preferred_and_sessionless_reques
         let leases = Arc::new(TestLeaseCoordinator::default());
         let selector = selector(&store, leases.clone());
         let policy = account_policy()
-            .with_openai_account_affinity(mode)
+            .with_account_affinity(mode)
             .with_switch_account_on_queue_failure(true)
             .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
                 max_waiting: 1,
@@ -573,7 +573,7 @@ async fn movable_waiters_use_other_accounts_even_before_queue_promotion() {
             let attempt = projection_attempt(
                 "key_codex_contract",
                 contract_account_scope(),
-                policy.with_openai_account_affinity(mode),
+                policy.with_account_affinity(mode),
             );
             let key = ProviderSessionAffinityKey::try_new("movable-waiter").unwrap();
             if bind_session {

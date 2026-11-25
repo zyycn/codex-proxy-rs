@@ -32,7 +32,7 @@ use super::token_client::{
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
 };
 use super::types::{parse_access_token_expiration, parse_chatgpt_jwt_claims};
-use crate::transport::profile::CodexWireProfileState;
+use crate::profile::CodexWireProfileState;
 
 const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 const DESKTOP_AUTH_ENDPOINT: &str = "https://chatgpt.com/codex/desktop-auth";

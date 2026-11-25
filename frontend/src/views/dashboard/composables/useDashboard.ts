@@ -1,44 +1,28 @@
-import type { DashboardSummaryResponse, DashboardTrendResponse } from '@/api'
+import type { DashboardSummaryResponse, DashboardTrendKind, DashboardTrendResponse } from '@/api'
 import { useIntervalFn } from '@vueuse/core'
 import { computed, onMounted, onScopeDispose, shallowRef } from 'vue'
 
 import { getDashboardSummary, getDashboardTrend } from '@/api'
 import { errorMessage, withMinimumDuration } from '@/utils/operation'
-import { dashboardSnapshotView, dashboardTrendView, normalizeDashboardTrendKind } from '../presenter'
 
 export function useDashboard() {
-  const activeTrendKind = shallowRef(normalizeDashboardTrendKind('usage'))
+  const activeTrendKind = shallowRef<DashboardTrendKind>('usage')
   const summary = shallowRef<DashboardSummaryResponse | null>(null)
-  const snapshot = computed(() => dashboardSnapshotView(summary.value))
   const trend = shallowRef<DashboardTrendResponse | null>(null)
   const trendLoading = shallowRef(false)
   const trendError = shallowRef('')
-  const analyticsError = shallowRef('')
+  const summaryError = shallowRef('')
   const loading = shallowRef(false)
   const refreshing = shallowRef(false)
-  const lastRefreshedAt = shallowRef('')
   let rangeAsOf = Date.now()
   let trendRequestId = 0
   let disposed = false
   let summaryController: AbortController | undefined
   let trendController: AbortController | undefined
 
-  const analytics = computed(() => snapshot.value.analytics)
-  const metrics = computed(() => snapshot.value.metrics)
-  const healthTimeline = computed(() => snapshot.value.healthTimeline)
-  const accountUsage = computed(() => snapshot.value.accountUsage)
-  const wireProfiles = computed(() => snapshot.value.wireProfiles)
-  const usageRecords = computed(() => snapshot.value.usageRecords)
-  const poolSummary = computed(() => snapshot.value.poolSummary)
-  const capacityInfo = computed(() => snapshot.value.capacityInfo)
-  const rotationStrategy = computed(() => snapshot.value.rotationStrategy)
-  const trendView = computed(() => dashboardTrendView(
-    trend.value?.kind === activeTrendKind.value
-      ? trend.value
-      : null,
-  ))
-  const trendPoints = computed(() => trendView.value.points)
-  const trendSummary = computed(() => trendView.value.summary)
+  const activeTrend = computed(() => trend.value?.kind === activeTrendKind.value
+    ? trend.value
+    : null)
 
   const { resume: startAutoRefresh } = useIntervalFn(
     () => {
@@ -78,8 +62,7 @@ export function useDashboard() {
     }
   }
 
-  async function loadTrend(kind: string) {
-    const trendKind = normalizeDashboardTrendKind(kind)
+  async function loadTrend(trendKind: DashboardTrendKind) {
     activeTrendKind.value = trendKind
     const requestId = ++trendRequestId
     trendController?.abort()
@@ -118,8 +101,7 @@ export function useDashboard() {
         return
       rangeAsOf = asOf
       summary.value = response
-      analyticsError.value = ''
-      lastRefreshedAt.value = response.asOfDisplay
+      summaryError.value = ''
       if (isCurrentTrendRequest(requestId, trendKind)) {
         trend.value = response.trend
         trendError.value = ''
@@ -131,7 +113,7 @@ export function useDashboard() {
     }
     catch (error: unknown) {
       if (!disposed)
-        analyticsError.value = errorMessage(error)
+        summaryError.value = errorMessage(error)
       if (!silent && isCurrentTrendRequest(requestId, trendKind))
         trendError.value = errorMessage(error)
       throw error
@@ -145,7 +127,7 @@ export function useDashboard() {
 
   function isCurrentTrendRequest(
     requestId: number,
-    kind: ReturnType<typeof normalizeDashboardTrendKind>,
+    kind: DashboardTrendKind,
   ) {
     return !disposed && requestId === trendRequestId && activeTrendKind.value === kind
   }
@@ -163,24 +145,14 @@ export function useDashboard() {
   })
 
   return {
+    summary,
+    trend: activeTrend,
+    activeTrendKind,
     loading,
     refreshing,
-    activeTrendKind,
-    lastRefreshedAt,
-    metrics,
-    analytics,
-    analyticsError,
-    trendPoints,
-    trendSummary,
+    summaryError,
     trendLoading,
     trendError,
-    healthTimeline,
-    accountUsage,
-    wireProfiles,
-    usageRecords,
-    poolSummary,
-    capacityInfo,
-    rotationStrategy,
     refresh: refreshDashboardData,
     loadTrend,
   }

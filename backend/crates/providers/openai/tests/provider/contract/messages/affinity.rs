@@ -31,7 +31,7 @@ fn attempt(client: &str) -> AttemptContext {
         NonZeroU32::MIN,
         SystemTime::now() + Duration::from_secs(5),
         account_policy()
-            .with_openai_account_affinity(AccountAffinity::Strict)
+            .with_account_affinity(AccountAffinity::Strict)
             .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
                 max_waiting: 1,
                 timeout: Duration::from_secs(2),

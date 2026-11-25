@@ -73,6 +73,7 @@ pub(super) fn account_view(
         plan_type_display,
         projection,
         usage,
+        usage_period,
         quota,
         protection_rules,
     } = item;
@@ -84,7 +85,6 @@ pub(super) fn account_view(
         .map(|value| time.rfc3339(value));
     let added_at = time.rfc3339(&account.created_at);
     let updated_at = time.rfc3339(&account.updated_at);
-    let usage_period = quota.usage_window().map(|(_, period)| period);
     let mut usage = account_usage_view(usage, usage_period, now, time);
     if account.authentication_kind == "api_key" {
         usage.window_kind = if quota

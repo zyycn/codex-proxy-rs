@@ -1,0 +1,261 @@
+//! 跨模块行为合同测试
+
+use super::*;
+
+#[test]
+fn provider_error_debug_should_not_expose_sensitive_context() {
+    let secret = "sk-do-not-log-this";
+    let error = ProviderError::new(ProviderErrorKind::Unauthorized, UpstreamSendState::Sent)
+        .redact_sensitive_context(secret);
+
+    assert!(!format!("{error:?}").contains(secret));
+}
+
+#[test]
+fn provider_error_debug_should_not_print_classified_upstream_values() {
+    let diagnostic = "request-visible-only-through-explicit-accessor";
+    let value = OpaqueUpstreamValue::new(diagnostic);
+    let error = ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+        .with_upstream_request_id(value);
+
+    assert!(!format!("{error:?}").contains(diagnostic));
+}
+
+#[test]
+fn classified_provider_diagnostic_survives_stable_snapshot_without_entering_debug() {
+    let message = "OpenAI WebSocket closed before terminal response (close code 1000)";
+    let error = ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+        .with_diagnostic(
+            ProviderDiagnostic::new(message)
+                .with_classification("receive", "closed_before_terminal"),
+        );
+    let snapshot = error.stable_snapshot();
+    let gateway = GatewayError::from_provider(&snapshot);
+
+    assert_eq!(
+        gateway.diagnostic().map(ProviderDiagnostic::as_str),
+        Some(message)
+    );
+    assert_eq!(
+        gateway.diagnostic().and_then(ProviderDiagnostic::stage),
+        Some("receive")
+    );
+    assert_eq!(
+        gateway.diagnostic().and_then(ProviderDiagnostic::code),
+        Some("closed_before_terminal")
+    );
+    assert!(!format!("{error:?}").contains(message));
+    assert!(!format!("{gateway:?}").contains(message));
+}
+
+#[test]
+fn io_diagnostic_keeps_os_cause_without_copying_custom_error_text() {
+    let os_error = std::fs::File::open(
+        std::env::temp_dir().join(format!("cpr-missing-ca-{}/missing.pem", std::process::id())),
+    )
+    .unwrap_err();
+    let diagnostic = ProviderDiagnostic::new("CA read failed")
+        .with_classification("prepare", "custom_ca_read_failed")
+        .with_io_cause(&os_error);
+    assert!(diagnostic.as_str().contains(&os_error.to_string()));
+    assert_eq!(diagnostic.stage(), Some("prepare"));
+    assert_eq!(diagnostic.code(), Some("io_not_found"));
+
+    let private = std::io::Error::new(
+        std::io::ErrorKind::ConnectionRefused,
+        "PRIVATE_URL_AND_CREDENTIAL",
+    );
+    let diagnostic = ProviderDiagnostic::new("Connect failed").with_io_cause(&private);
+    assert_eq!(diagnostic.code(), Some("connection_refused"));
+    assert!(!diagnostic.as_str().contains("PRIVATE_"));
+}
+
+#[test]
+fn raw_upstream_error_survives_stable_snapshot_without_entering_debug() {
+    let raw = r#"{"error":{"message":"verbatim upstream marker"}}"#;
+    let error = ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+        .with_raw_upstream_error(RawUpstreamError::new(raw));
+    let snapshot = error.stable_snapshot();
+
+    assert_eq!(
+        snapshot.raw_upstream_error().map(RawUpstreamError::as_str),
+        Some(raw)
+    );
+    assert!(!format!("{error:?}").contains("verbatim upstream marker"));
+}
+
+#[test]
+fn opaque_upstream_value_should_preserve_arbitrary_text_without_logging_it() {
+    let original = format!("\0{}\n", "x".repeat(9_000));
+    let value = OpaqueUpstreamValue::new(original.clone());
+
+    assert_eq!(value.as_str(), original);
+    assert!(!format!("{value:?}").contains(&original));
+}
+
+#[test]
+fn provider_error_replay_proof_should_default_to_false() {
+    let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent);
+
+    assert!(!error.replay_is_safe());
+}
+
+#[test]
+fn provider_error_replay_proof_should_be_explicit() {
+    let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_replay_safe();
+
+    assert!(error.replay_is_safe());
+}
+
+#[test]
+fn provider_error_atomic_client_events_should_be_take_only_and_debug_redacted() {
+    let marker = "atomic-wire-must-not-enter-debug";
+    let event = ProviderEvent::wire(
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.failed".to_owned()),
+            json!({"type": "response.failed", "message": marker}),
+        )
+        .expect("atomic wire"),
+    );
+    let mut error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_atomic_client_events(vec![event]);
+
+    assert!(error.has_atomic_client_events());
+    assert!(!format!("{error:?}").contains(marker));
+    assert_eq!(error.take_atomic_client_events().len(), 1);
+    assert!(!error.has_atomic_client_events());
+}
+
+#[test]
+fn provider_error_stable_snapshot_should_drop_request_local_upstream_response() {
+    let marker = Bytes::from_static(b"raw-client-response-only");
+    let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_client_visible_upstream_response(
+            ClientVisibleUpstreamResponse::new(
+                429,
+                Some(b"application/problem+json".to_vec()),
+                marker.clone(),
+            )
+            .with_headers(vec![ProviderResponseHeader::new(
+                "x-future-error",
+                Bytes::from_static(b"opaque-header-value"),
+            )]),
+        );
+
+    let snapshot = error.stable_snapshot();
+
+    assert_eq!(
+        error
+            .client_visible_upstream_response()
+            .map(ClientVisibleUpstreamResponse::body),
+        Some(&marker)
+    );
+    assert!(snapshot.client_visible_upstream_response().is_none());
+    assert!(!format!("{error:?}").contains("raw-client-response-only"));
+    assert!(!format!("{error:?}").contains("opaque-header-value"));
+}
+
+#[test]
+fn provider_error_stable_snapshot_should_drop_atomic_client_events() {
+    let event = ProviderEvent::wire(
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.failed".to_owned()),
+            json!({"type": "response.failed"}),
+        )
+        .expect("atomic wire"),
+    );
+    let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+        .with_atomic_client_events(vec![event]);
+    let snapshot = error.stable_snapshot();
+
+    assert!(error.has_atomic_client_events());
+    assert!(!snapshot.has_atomic_client_events());
+}
+
+#[test]
+fn gateway_error_should_keep_client_visible_upstream_fields_out_of_safe_diagnostics() {
+    let message = "Your Codex quota is exhausted";
+    let error = ProviderError::new(ProviderErrorKind::QuotaExhausted, UpstreamSendState::Sent)
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            message,
+            Some("quota_exhausted".to_owned()),
+            Some("rate_limit_error".to_owned()),
+        ));
+    let gateway = GatewayError::from_provider(&error);
+
+    assert_eq!(
+        gateway.safe_message(),
+        "Upstream capacity is temporarily unavailable."
+    );
+    assert_eq!(gateway.client_message(), message);
+    assert_eq!(gateway.client_error_code(), Some("quota_exhausted"));
+    assert_eq!(gateway.client_error_type(), Some("rate_limit_error"));
+    assert!(!format!("{gateway:?}").contains(message));
+}
+
+#[test]
+fn continuation_recovery_should_keep_its_internal_classification_and_client_contract() {
+    let error = ProviderError::new(
+        ProviderErrorKind::ContinuationRecoveryRequired,
+        UpstreamSendState::NotSent,
+    )
+    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+        "Previous response was not found. Retrying the full request.",
+        Some("previous_response_not_found".to_owned()),
+        Some("invalid_request_error".to_owned()),
+    ));
+    let gateway = GatewayError::from_provider(&error);
+
+    assert_eq!(error.kind().as_str(), "continuation_recovery_required");
+    assert_eq!(
+        gateway.safe_message(),
+        "Previous response unavailable. Resend the full conversation history."
+    );
+    assert_eq!(
+        gateway.client_error_code(),
+        Some("previous_response_not_found")
+    );
+}
+
+#[test]
+fn message_too_big_should_map_to_a_request_scoped_client_contract() {
+    let error = ProviderError::new(
+        ProviderErrorKind::MessageTooBig,
+        UpstreamSendState::Ambiguous,
+    )
+    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+        "upstream websocket message too big",
+        Some("message_too_big".to_owned()),
+        Some("invalid_request_error".to_owned()),
+    ));
+    let gateway = GatewayError::from_provider(&error);
+
+    assert_eq!(error.kind().as_str(), "message_too_big");
+    assert_eq!(gateway.kind().as_str(), "message_too_big");
+    assert_eq!(
+        gateway.safe_message(),
+        "Request too large. Reduce the input size."
+    );
+    assert_eq!(gateway.client_error_code(), Some("message_too_big"));
+    assert_eq!(gateway.client_error_type(), Some("invalid_request_error"));
+}
+
+#[test]
+fn client_visible_upstream_error_should_preserve_opaque_structured_fields() {
+    let message = format!("\0{}\n", "m".repeat(9_000));
+    let code = format!("\0{}", "c".repeat(300));
+    let error_type = String::new();
+    let detail = ClientVisibleUpstreamError::new(
+        message.clone(),
+        Some(code.clone()),
+        Some(error_type.clone()),
+    );
+
+    assert_eq!(detail.message(), message);
+    assert_eq!(detail.code(), Some(code.as_str()));
+    assert_eq!(detail.error_type(), Some(error_type.as_str()));
+    assert!(!format!("{detail:?}").contains(&message));
+}

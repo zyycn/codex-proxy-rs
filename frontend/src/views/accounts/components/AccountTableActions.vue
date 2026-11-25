@@ -5,11 +5,10 @@ import { ZIconButton, ZMenuItem } from '@codex-proxy/ui'
 
 import { Download, KeyRound, Pencil, Power, RefreshCw, RotateCcw, Trash2, Wifi } from '@lucide/vue'
 
-import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RowActionMenu from '@/components/RowActionMenu.vue'
 
-const props = defineProps<{
+defineProps<{
   account: Account
   deleting: boolean
   downloadingCatalog: boolean
@@ -31,8 +30,6 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
-
-const credentialEligible = computed(() => props.account.authenticationKind === 'oauth')
 </script>
 
 <template>
@@ -76,7 +73,7 @@ const credentialEligible = computed(() => props.account.authenticationKind === '
         {{ account.enabled ? t('accounts.actions.disableScheduling') : t('accounts.actions.enableScheduling') }}
       </ZMenuItem>
       <ZMenuItem
-        v-if="credentialEligible"
+        v-if="account.capabilities.credentialRefresh"
         :loading="refreshing"
         :disabled="refreshing"
         @click.stop="emit('refresh', account.id)"
@@ -89,14 +86,14 @@ const credentialEligible = computed(() => props.account.authenticationKind === '
         </template>
         {{ t('accounts.actions.refreshToken') }}
       </ZMenuItem>
-      <ZMenuItem v-if="credentialEligible" @click.stop="emit('reauthorize', account)">
+      <ZMenuItem v-if="account.capabilities.reauthorize" @click.stop="emit('reauthorize', account)">
         <template #icon>
           <KeyRound class="size-3.5 text-z-text-quaternary" />
         </template>
         {{ t('accounts.actions.reauthorize') }}
       </ZMenuItem>
       <ZMenuItem
-        v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'"
+        v-if="account.capabilities.modelCatalogDownload"
         :loading="downloadingCatalog"
         :disabled="downloadingCatalog"
         @click.stop="emit('downloadModelCatalog', account)"

@@ -7,9 +7,8 @@ import { ChartNoAxesCombined, Link2, RefreshCw, UserRound } from '@lucide/vue'
 
 import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import AccountPlanBadge from '@/components/account-plan-badge/index.vue'
 import { formatRelativeTime } from '@/utils/relative-time'
-import { usePoolQuotaWindows } from '../../composables/usePoolQuotaWindows'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountProfileModal from '../account-profile-modal/index.vue'
 import AccountQuotaForecastModal from '../account-quota-forecast-modal/index.vue'
@@ -18,6 +17,7 @@ import QuotaActionButton from './QuotaActionButton.vue'
 import QuotaSettings from './QuotaSettings.vue'
 import AccountResetCredits from './ResetCredits.vue'
 import AccountUpstreamPool from './UpstreamPool.vue'
+import { usePoolQuotaWindows } from './usePoolQuotaWindows'
 
 const props = defineProps<{
   account: Account
@@ -37,9 +37,16 @@ const hasUpstreamPool = computed(() => props.account.upstream?.discovered && (
   || poolWindows.value.some(window => window.sourceAccountId && !window.amount)
 ))
 
-const quotaEntries = computed(() => groupedAccountQuotaWindows(
-  orderedPanelQuotaWindows(props.account.quota.windows.filter(window => window.accountWide)),
-))
+const quotaEntries = computed(() => {
+  const windows = props.account.quota.windows
+  const accountWindows = windows.filter(window => window.accountWide)
+  const hasAccountLimit = accountWindows.some(window => typeof window.usedPercent === 'number' || window.amount)
+  // 本地滚动统计不是通用额度，不能因此隐藏仅按模型分组的上游额度。
+  const visibleWindows = hasAccountLimit || props.account.upstream?.discovered
+    ? accountWindows
+    : windows.filter(window => !window.sourceAccountId)
+  return groupedAccountQuotaWindows(orderedPanelQuotaWindows(visibleWindows))
+})
 const profileOpen = shallowRef(false)
 const forecastOpen = shallowRef(false)
 const hasPlanBadge = computed(() => Boolean(props.account.planType) || props.account.authenticationKind === 'api_key')

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { PrivacyStep } from '@/api/modules/settings/privacy'
+import type { PrivacyStep } from '@/api'
 
 import { ZIconButton, ZPopover, ZScrollbar } from '@codex-proxy/ui'
 import { CircleHelp, GripVertical, Plus, Trash2 } from '@lucide/vue'

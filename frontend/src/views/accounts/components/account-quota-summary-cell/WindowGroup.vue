@@ -3,7 +3,7 @@ import type { AccountQuotaWindow } from '@/api'
 
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { quotaWindowLabel, quotaWindowPresentation } from '@/components/account/account-usage-window/presenter'
+import { quotaWindowLabel, quotaWindowPresentation } from '@/components/account-usage-window/presenter'
 
 const props = withDefaults(defineProps<{
   label: string

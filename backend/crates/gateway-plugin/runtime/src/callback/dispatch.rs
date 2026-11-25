@@ -9,7 +9,7 @@ use gateway_plugin_sdk::{
     client::CallDeadline,
 };
 
-use super::{CallResources, CallbackScope, PluginCallbacks, denied, http, http_dispatch, upstream};
+use super::{CallResources, CallbackScope, PluginCallbacks, denied, http, upstream};
 use crate::{CallbackHandler, RpcReply};
 
 impl CallbackHandler for PluginCallbacks {
@@ -139,7 +139,7 @@ impl CallbackHandler for PluginCallbacks {
                 return tokio::select! {
                     biased;
                     () = call.cancellation.cancelled() => Err(PluginFault::new(ErrorCode::Cancelled, "HTTP callback cancelled")),
-                    result = http_dispatch::call(&services, &context, &call, &method, params, payload, maximum_payload) => result,
+                    result = http::call(&services, &context, &call, &method, params, payload, maximum_payload) => result,
                 };
             }
             if let Some(middleware) = middleware {

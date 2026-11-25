@@ -1,0 +1,947 @@
+//! 管理端口的唯一实现与 Provider 服务协调
+
+use super::credentials::{
+    RotationDocument, account_from_record, account_matches_record, prepared_create,
+    prepared_rotation, validate_account_record, verified_rotation,
+};
+use super::error::{
+    map_catalog_error, map_failure_class, map_oauth_error, map_provider_store_error,
+    map_quota_error, map_refresh_error, map_repository_error, map_store_error, provider_error,
+};
+use super::pending::{
+    ClaimedXaiAuthorization, PENDING_CLAIM_TTL, PENDING_TTL, StoredXaiAuthorization,
+    XaiAuthorizationCommitGuard, binding, decode_pending, encode_pending, owner_ref,
+    random_flow_id,
+};
+use super::profile::dashboard_cli_release;
+use super::quota::project_quota;
+use crate::billing::grok_billing_breakdown_with_tier;
+use crate::credential::{
+    GrokCredentialAdmin, GrokCredentialCatalogService, GrokCredentialQuotaService,
+    GrokCredentialRefreshService, GrokCredentialRepository, GrokOAuthClient, GrokOAuthConfig,
+    GrokOAuthImportCandidate, GrokOAuthImportDocument, GrokOAuthImportMetadata,
+    GrokOAuthImportTokens, PendingAuthorization, RedirectUriAllowlist, VerifiedGrokAccount,
+};
+use crate::profile::GrokCliReleaseStatus;
+use crate::transport::GROK_CLI_BASE_URL;
+use crate::{SecretValue, XaiWireProfileState};
+use async_trait::async_trait;
+use chrono::Utc;
+use gateway_admin::model::MutationContext;
+use gateway_admin::model::accounts::AccountRecord;
+use gateway_admin::model::observability::{
+    CalculatedBillingBreakdown, CurrencyCost, DashboardWireAttribute, DashboardWireProfile,
+    DashboardWireTarget, DecimalAmount, ProviderBillingInput,
+};
+use gateway_admin::model::provider_credentials::{
+    AuthorizationMutationTarget, AuthorizationOwnerBinding, AuthorizationStarted,
+    CompleteAuthorization, PendingAuthorizationMutation, PrepareCredentialImport,
+    PrepareCredentialRefresh, PrepareCredentialRotation, PreparedAuthorizationCommit,
+    PreparedAuthorizationCredential, PreparedCredentialImport, PreparedCredentialRotation,
+    ProviderDocument, ProviderExport, ProviderExportCredentialInput, ProviderModel, ProviderModels,
+    ProviderQuota, ProviderQuotaRequest,
+};
+use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
+use gateway_core::account::{
+    LoadedCredential, NewProviderAccount, OpaqueProviderData, PlaintextCredential, ProviderAccount,
+    ProviderAccountId, ProviderAccountStore,
+};
+use gateway_core::metering::Money;
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
+use gateway_core::provider_ports::{
+    NewOAuthPendingFlow, OAuthPendingClaimOutcome, OAuthPendingFlowPort, OAuthPendingPutOutcome,
+    OAuthPendingReleaseOutcome, ProviderCooldownPort,
+};
+use gateway_core::routing::{ProviderKind, UpstreamModelId};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
+use serde_json::{Map, Value};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use uuid::Uuid;
+
+pub(crate) struct XaiAdminProvider {
+    provider_kind: ProviderKind,
+    wire_profile: XaiWireProfileState,
+    cli_release: GrokCliReleaseStatus,
+    accounts: Arc<dyn ProviderAccountStore>,
+    repository: GrokCredentialRepository,
+    oauth_config: GrokOAuthConfig,
+    oauth: Arc<GrokOAuthClient>,
+    pending: Arc<dyn OAuthPendingFlowPort>,
+    refresh: Arc<GrokCredentialRefreshService>,
+    quota: Arc<GrokCredentialQuotaService>,
+    catalog: Arc<GrokCredentialCatalogService>,
+    cooldowns: Arc<dyn ProviderCooldownPort>,
+}
+
+pub(crate) struct XaiAdminServices {
+    pub(crate) repository: GrokCredentialRepository,
+    pub(crate) oauth_config: GrokOAuthConfig,
+    pub(crate) oauth: Arc<GrokOAuthClient>,
+    pub(crate) pending: Arc<dyn OAuthPendingFlowPort>,
+    pub(crate) refresh: Arc<GrokCredentialRefreshService>,
+    pub(crate) quota: Arc<GrokCredentialQuotaService>,
+    pub(crate) catalog: Arc<GrokCredentialCatalogService>,
+    pub(crate) cooldowns: Arc<dyn ProviderCooldownPort>,
+}
+
+impl XaiAdminProvider {
+    #[must_use]
+    pub(crate) fn new(
+        provider_kind: ProviderKind,
+        wire_profile: XaiWireProfileState,
+        accounts: Arc<dyn ProviderAccountStore>,
+        services: XaiAdminServices,
+        cli_release: GrokCliReleaseStatus,
+    ) -> Self {
+        Self {
+            provider_kind,
+            wire_profile,
+            cli_release,
+            accounts,
+            repository: services.repository,
+            oauth_config: services.oauth_config,
+            oauth: services.oauth,
+            pending: services.pending,
+            refresh: services.refresh,
+            quota: services.quota,
+            catalog: services.catalog,
+            cooldowns: services.cooldowns,
+        }
+    }
+
+    async fn account(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderAccount, ProviderAdminError> {
+        self.accounts
+            .get_account(account_id)
+            .await
+            .map_err(map_store_error)?
+            .filter(|account| account.provider() == &self.provider_kind)
+            .ok_or_else(|| provider_error(ProviderAdminErrorKind::NotFound))
+    }
+
+    async fn store_pending(
+        &self,
+        mutation: PendingAuthorizationMutation,
+        pending: PendingAuthorization,
+    ) -> Result<AuthorizationStarted, ProviderAdminError> {
+        let authorization_url = pending.authorization_url().to_string();
+        let server_state = pending.into_server_state().map_err(map_oauth_error)?;
+        let flow_id = random_flow_id()?;
+        let expires_at = Utc::now()
+            .checked_add_signed(PENDING_TTL)
+            .ok_or_else(|| provider_error(ProviderAdminErrorKind::Internal))?;
+        let owner_ref = owner_ref(mutation.owner_binding().owner());
+        let ttl = (expires_at - Utc::now())
+            .to_std()
+            .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?;
+        let payload = encode_pending(&StoredXaiAuthorization {
+            flow_id: flow_id.clone(),
+            owner_ref: owner_ref.clone(),
+            expires_at,
+            server_state: server_state.expose().to_owned(),
+            mutation,
+        });
+        let flow = NewOAuthPendingFlow::try_new(
+            self.provider_kind.clone(),
+            binding(&flow_id)?,
+            binding(&owner_ref)?,
+            ttl,
+            OpaqueProviderData::new(payload),
+        )
+        .map_err(map_provider_store_error)?;
+        match self
+            .pending
+            .put_if_absent(flow)
+            .await
+            .map_err(map_provider_store_error)?
+        {
+            OAuthPendingPutOutcome::Stored => Ok(AuthorizationStarted {
+                flow_id,
+                authorization_url,
+                expires_at,
+            }),
+            OAuthPendingPutOutcome::AlreadyExists => {
+                Err(provider_error(ProviderAdminErrorKind::Conflict))
+            }
+        }
+    }
+
+    async fn claim_pending(
+        &self,
+        context: &MutationContext,
+        flow_id: &str,
+    ) -> Result<ClaimedXaiAuthorization, ProviderAdminError> {
+        let flow = binding(flow_id)?;
+        let owner_binding = AuthorizationOwnerBinding::from_context(context);
+        let owner_ref = owner_ref(owner_binding.owner());
+        let owner = binding(&owner_ref)?;
+        let claim_ref = random_flow_id()?;
+        let claim = binding(&claim_ref)?;
+        match self
+            .pending
+            .claim_if_owner(
+                &self.provider_kind,
+                &flow,
+                &owner,
+                &claim,
+                PENDING_CLAIM_TTL,
+            )
+            .await
+            .map_err(map_provider_store_error)?
+        {
+            OAuthPendingClaimOutcome::Claimed(payload) => {
+                let stored = match decode_pending(payload, &self.oauth_config) {
+                    Ok(stored) if stored.flow_id == flow_id && stored.owner_ref == owner_ref => {
+                        stored
+                    }
+                    Ok(_) => {
+                        self.release_pending_claim(flow_id, &owner_ref, &claim_ref)
+                            .await?;
+                        return Err(provider_error(ProviderAdminErrorKind::Invalid));
+                    }
+                    Err(error) => {
+                        self.release_pending_claim(flow_id, &owner_ref, &claim_ref)
+                            .await?;
+                        return Err(error);
+                    }
+                };
+                Ok(ClaimedXaiAuthorization {
+                    authorization: stored,
+                    owner_ref,
+                    claim_ref,
+                })
+            }
+            OAuthPendingClaimOutcome::NotFound | OAuthPendingClaimOutcome::OwnerMismatch => {
+                Err(provider_error(ProviderAdminErrorKind::NotFound))
+            }
+            OAuthPendingClaimOutcome::InProgress => {
+                Err(provider_error(ProviderAdminErrorKind::Conflict))
+            }
+        }
+    }
+
+    async fn release_pending_claim(
+        &self,
+        flow_id: &str,
+        owner_ref: &str,
+        claim_ref: &str,
+    ) -> Result<(), ProviderAdminError> {
+        let flow = binding(flow_id)?;
+        let owner = binding(owner_ref)?;
+        let claim = binding(claim_ref)?;
+        match self
+            .pending
+            .release_claim(&self.provider_kind, &flow, &owner, &claim)
+            .await
+            .map_err(map_provider_store_error)?
+        {
+            OAuthPendingReleaseOutcome::Released => Ok(()),
+            OAuthPendingReleaseOutcome::NotFound
+            | OAuthPendingReleaseOutcome::OwnerMismatch
+            | OAuthPendingReleaseOutcome::ClaimMismatch => {
+                Err(provider_error(ProviderAdminErrorKind::Unavailable))
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ProviderAdmin for XaiAdminProvider {
+    fn peer_model_eligible(&self, account: &AccountRecord, _model: &str) -> Option<bool> {
+        Some(crate::credential::is_direct_account_kind(
+            &account.authentication_kind,
+        ))
+    }
+
+    fn is_direct_account(&self, authentication_kind: &str) -> bool {
+        crate::credential::is_direct_account_kind(authentication_kind)
+    }
+
+    fn account_capabilities(
+        &self,
+        _account_id: &ProviderAccountId,
+        authentication_kind: &str,
+    ) -> gateway_admin::model::accounts::ProviderAccountCapabilities {
+        let oauth = authentication_kind == crate::credential::XAI_AUTHENTICATION_KIND_OAUTH;
+        gateway_admin::model::accounts::ProviderAccountCapabilities {
+            credential_refresh: oauth,
+            reauthorize: oauth,
+            credential_export: oauth,
+            quota: oauth,
+            quota_refresh: oauth,
+            ..Default::default()
+        }
+    }
+
+    fn client_profile_options(
+        &self,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        crate::profile::selection::object(&serde_json::json!({
+            "defaults": crate::profile::selection::GrokClientProfileSelection::default(),
+        }))
+        .map_err(|_| ProviderAdminError::new(ProviderAdminErrorKind::Invalid))
+    }
+
+    fn preview_client_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        crate::profile::selection::GrokClientProfileSelection::parse(configuration)
+            .and_then(|selection| {
+                selection.preview(&self.wire_profile, &self.cli_release.snapshot())
+            })
+            .map_err(|_| ProviderAdminError::new(ProviderAdminErrorKind::Invalid))
+    }
+
+    fn configured_wire_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Option<DashboardWireProfile> {
+        use crate::profile::selection::{GrokClientProfileSelection, VersionMode};
+        let selection = GrokClientProfileSelection::parse(configuration).ok()?;
+        let profile = selection.resolve(&self.wire_profile).ok()?;
+        let mut view = self.dashboard_wire_profile()?;
+        view.user_agent = profile.user_agent();
+        view.version = profile.client_version;
+        view.target.os_type = profile.target_os;
+        view.target.arch = profile.target_arch;
+        view.target.terminal = profile.client_mode.clone();
+        view.attributes = vec![
+            DashboardWireAttribute {
+                key: "client_identifier".to_owned(),
+                value: profile.client_identifier,
+            },
+            DashboardWireAttribute {
+                key: "client_mode".to_owned(),
+                value: profile.client_mode,
+            },
+            DashboardWireAttribute {
+                key: "token_auth".to_owned(),
+                value: "xai-grok-cli".to_owned(),
+            },
+        ];
+        if selection.version_mode == VersionMode::Fixed {
+            view.release = None;
+            view.verified_at = None;
+        }
+        Some(view)
+    }
+
+    fn supported_pricing_bands(&self) -> &'static [&'static str] {
+        crate::billing::SUPPORTED_PRICING_BANDS
+    }
+
+    fn pricing_catalog(&self) -> gateway_admin::model::pricing::ProviderPricingCatalog {
+        crate::billing::pricing_catalog()
+    }
+    fn provider_kind(&self) -> &ProviderKind {
+        &self.provider_kind
+    }
+
+    async fn account_unavailable(&self, account_id: &ProviderAccountId) {
+        // 删除/禁用账号：清除该账号全部 account/model scoped cooldown key
+        let _ = self.cooldowns.clear_all(account_id).await;
+    }
+
+    async fn account_facts_changed(&self, account_ids: &[ProviderAccountId]) {
+        self.quota.invalidate_scheduling(account_ids);
+    }
+
+    async fn connection_test_operation(
+        &self,
+        upstream_model: &UpstreamModelId,
+        input_text: &str,
+    ) -> Result<Operation, ProviderAdminError> {
+        build_connection_test_operation(upstream_model, input_text)
+    }
+
+    fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile> {
+        let profile = self.wire_profile.snapshot();
+        let release = dashboard_cli_release(&profile.client_version, self.cli_release.snapshot());
+        Some(DashboardWireProfile {
+            provider: self.provider_kind.as_str().to_owned(),
+            product: "Grok Build".to_owned(),
+            version: profile.client_version.clone(),
+            build: None,
+            target: DashboardWireTarget {
+                os_type: profile.target_os.clone(),
+                os_version: "—".to_owned(),
+                arch: profile.target_arch.clone(),
+                terminal: profile.client_mode.clone(),
+            },
+            user_agent: profile.user_agent(),
+            attributes: vec![
+                DashboardWireAttribute {
+                    key: "client_identifier".to_owned(),
+                    value: profile.client_identifier,
+                },
+                DashboardWireAttribute {
+                    key: "client_mode".to_owned(),
+                    value: profile.client_mode,
+                },
+                DashboardWireAttribute {
+                    key: "token_auth".to_owned(),
+                    value: "xai-grok-cli".to_owned(),
+                },
+            ],
+            verified_at: Some(profile.verified_at),
+            release: Some(release),
+        })
+    }
+
+    fn calculated_billing(
+        &self,
+        input: &ProviderBillingInput,
+    ) -> Result<Option<CalculatedBillingBreakdown>, ProviderAdminError> {
+        let (Some(input_tokens), Some(output_tokens)) = (input.input_tokens, input.output_tokens)
+        else {
+            return Ok(None);
+        };
+        let Some(breakdown) = grok_billing_breakdown_with_tier(
+            &input.upstream_model_id,
+            input_tokens,
+            output_tokens,
+            input.cached_input_tokens.unwrap_or_default(),
+            input.service_tier.as_deref(),
+        ) else {
+            return Ok(None);
+        };
+        let total_amount = currency_cost(breakdown.total_amount())?;
+        if total_amount != input.total {
+            return Ok(None);
+        }
+        Ok(Some(CalculatedBillingBreakdown {
+            // 历史总额只能核对费用拆分，不能证明当时保存过长上下文标记
+            long_context_billing_applied: false,
+            image: None,
+            custom_multiplier_bps: breakdown.custom_multiplier_bps(),
+            input_amount: currency_cost(breakdown.input_amount())?,
+            output_amount: currency_cost(breakdown.output_amount())?,
+            cache_read_amount: currency_cost(breakdown.cache_read_amount())?,
+            cache_write_amount: currency_cost(breakdown.cache_write_amount())?,
+            standard_amount: currency_cost(breakdown.standard_amount())?,
+            total_amount,
+            input_price_per_million: currency_cost(breakdown.input_price_per_million())?,
+            output_price_per_million: currency_cost(breakdown.output_price_per_million())?,
+            cache_read_price_per_million: currency_cost(breakdown.cache_read_price_per_million())?,
+            cache_write_price_per_million: currency_cost(
+                breakdown.cache_write_price_per_million(),
+            )?,
+            service_tier: breakdown.service_tier().map(str::to_owned),
+            multiplier_percent: breakdown.multiplier_percent(),
+        }))
+    }
+
+    fn evaluate_usage_pricing(
+        &self,
+        input: &gateway_admin::ports::provider::ProviderUsagePricingInput,
+        pricing: Option<&gateway_core::metering::ModelPriceOverride>,
+    ) -> Result<Option<gateway_core::metering::CalculatedCostBreakdown>, ProviderAdminError> {
+        let (Some(input_tokens), Some(output_tokens), Some(cached), Some(written)) = (
+            input.usage.input_tokens,
+            input.usage.output_tokens,
+            input.usage.cached_input_tokens,
+            input.usage.cache_write_input_tokens,
+        ) else {
+            return Ok(None);
+        };
+        if input.usage.image_input_tokens != Some(0) || input.usage.image_output_tokens != Some(0) {
+            return Ok(None);
+        }
+        Ok(crate::billing::grok_billing_breakdown_with_override(
+            &input.upstream_model_id,
+            input_tokens,
+            output_tokens,
+            cached,
+            written,
+            input.service_tier.as_deref(),
+            pricing,
+        ))
+    }
+
+    async fn prepare_import(
+        &self,
+        command: PrepareCredentialImport,
+    ) -> Result<PreparedCredentialImport, ProviderAdminError> {
+        let document = serde_json::to_vec(&Value::Object(
+            command.document.into_provider_data().into_inner(),
+        ))
+        .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
+        let document = GrokOAuthImportDocument::parse_json_with_proxy(
+            &document,
+            command.default_outbound_proxy.as_ref(),
+        )
+        .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
+        let mut subjects = BTreeSet::new();
+        let mut credentials = Vec::new();
+        // 逐条目独立成败：verify 会真实轮换 RT，后续条目的任何失败都不得
+        // 丢弃已轮换成功的凭据（旧 RT 已被上游作废，丢弃即不可逆报废）
+        // 失败条目跳过；仅当没有任何条目成功时返回首个失败
+        // 响应只携带
+        // 成功计数，每个被跳过的条目在此逐条留日志——尤其 verify 成功后
+        // 才失败/被去重的条目，其源文件里的 RT 已被轮换作废，运维只能从
+        // 日志得知需要重新授权
+        let mut first_failure: Option<ProviderAdminError> = None;
+        for entry in document.into_entries() {
+            let model_access = entry.model_access().cloned();
+            let name = entry.name().to_owned();
+            let email = entry.email().map(str::to_owned);
+            let outbound_proxy = entry.outbound_proxy().cloned();
+            let oauth = self.oauth.with_outbound_proxy(outbound_proxy.clone());
+            let verified = async {
+                let discovery = oauth.discover().await?;
+                oauth
+                    .verify_imported_credential(&discovery, entry.into_candidate())
+                    .await
+            }
+            .await;
+            let tokens = match verified {
+                Ok(tokens) => tokens,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "xai_admin",
+                        account = name.as_str(),
+                        class = ?error.class(),
+                        "导入条目验证失败，已跳过"
+                    );
+                    first_failure.get_or_insert_with(|| map_failure_class(error.class()));
+                    continue;
+                }
+            };
+            // 同一账号的另一份 grant：账号已由更早条目入册，本条目跳过；
+            // 本条目若经历了 refresh，其源文件 RT 已作废
+            if !subjects.insert(tokens.evidence().subject().to_owned()) {
+                tracing::warn!(
+                    target: "xai_admin",
+                    account = name.as_str(),
+                    "导入条目与更早条目属同一账号，已跳过；该条目的 refresh token 可能已被轮换作废"
+                );
+                continue;
+            }
+            let account = VerifiedGrokAccount {
+                account_id: ProviderAccountId::new(format!("acct_{}", Uuid::now_v7().simple()))
+                    .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
+                name,
+                email,
+                upstream_account_id: None,
+                plan_type: None,
+                tokens,
+                enabled: true,
+            };
+            let prepared = match GrokCredentialAdmin.prepare_verified_account(&account) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "xai_admin",
+                        account = account.name.as_str(),
+                        "已验证条目本地入册失败，已跳过；其 refresh token 已被轮换，需重新授权该账号"
+                    );
+                    first_failure.get_or_insert_with(|| map_repository_error(error));
+                    continue;
+                }
+            };
+            let prepared = NewProviderAccount {
+                model_access,
+                account: prepared.account.with_outbound_proxy(outbound_proxy),
+                credential: prepared.credential,
+            };
+            match prepared_create(prepared, Utc::now()) {
+                Ok(credential) => credentials.push(credential),
+                Err(error) => {
+                    tracing::warn!(
+                        target: "xai_admin",
+                        account = account.name.as_str(),
+                        "已验证条目序列化失败，已跳过；其 refresh token 已被轮换，需重新授权该账号"
+                    );
+                    first_failure.get_or_insert(error);
+                }
+            }
+        }
+        if credentials.is_empty() {
+            return Err(
+                first_failure.unwrap_or_else(|| provider_error(ProviderAdminErrorKind::Invalid))
+            );
+        }
+        Ok(PreparedCredentialImport {
+            provider_kind: self.provider_kind.clone(),
+            credentials,
+        })
+    }
+
+    async fn start_authorization(
+        &self,
+        pending: gateway_admin::model::provider_credentials::PendingAuthorizationMutation,
+    ) -> Result<AuthorizationStarted, ProviderAdminError> {
+        if pending.provider_kind() != &self.provider_kind {
+            return Err(provider_error(ProviderAdminErrorKind::Invalid));
+        }
+        if let AuthorizationMutationTarget::Reauthorize { account_id } = pending.target() {
+            let current = self
+                .accounts
+                .load_current_credential(account_id)
+                .await
+                .map_err(map_store_error)?;
+            if current.account.provider() != &self.provider_kind {
+                return Err(provider_error(ProviderAdminErrorKind::NotFound));
+            }
+        }
+        let discovery = self
+            .oauth
+            .with_outbound_proxy(pending.outbound_proxy().cloned())
+            .discover()
+            .await
+            .map_err(map_oauth_error)?;
+        let redirect = RedirectUriAllowlist::new([crate::OFFICIAL_REDIRECT_URI])
+            .and_then(|allowlist| allowlist.authorize(crate::OFFICIAL_REDIRECT_URI))
+            .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?;
+        let authorization = self
+            .oauth
+            .start_authorization_code(&discovery, redirect, None)
+            .map_err(map_oauth_error)?;
+        self.store_pending(pending, authorization).await
+    }
+
+    async fn complete_authorization(
+        &self,
+        command: CompleteAuthorization,
+    ) -> Result<PreparedAuthorizationCommit, ProviderAdminError> {
+        let ClaimedXaiAuthorization {
+            authorization: stored,
+            owner_ref,
+            claim_ref,
+        } = self
+            .claim_pending(&command.context, &command.flow_id)
+            .await?;
+        let authorization_guard = match XaiAuthorizationCommitGuard::new(
+            Arc::clone(&self.pending),
+            self.provider_kind.clone(),
+            &command.flow_id,
+            &owner_ref,
+            &claim_ref,
+        ) {
+            Ok(guard) => guard,
+            Err(error) => {
+                self.release_pending_claim(&command.flow_id, &owner_ref, &claim_ref)
+                    .await?;
+                return Err(error);
+            }
+        };
+        let completed = self
+            .complete_claimed_authorization(stored, &command.callback_url)
+            .await;
+        match completed {
+            Ok(completed) => Ok(completed.with_authorization_guard(Box::new(authorization_guard))),
+            Err(error) => {
+                self.release_pending_claim(&command.flow_id, &owner_ref, &claim_ref)
+                    .await?;
+                Err(error)
+            }
+        }
+    }
+
+    async fn prepare_rotation(
+        &self,
+        command: PrepareCredentialRotation,
+    ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        validate_account_record(&command.account, &self.provider_kind)?;
+        let account_id = ProviderAccountId::new(command.account.id.clone())
+            .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
+        let current = self
+            .accounts
+            .load_current_credential(&account_id)
+            .await
+            .map_err(map_store_error)?;
+        if !account_matches_record(&current.account, &command.account) {
+            return Err(provider_error(ProviderAdminErrorKind::Conflict)
+                .with_public_message("凭据已更新，请刷新账号列表"));
+        }
+        let rotation: RotationDocument = serde_json::from_value(Value::Object(
+            command.provider_material.into_provider_data().into_inner(),
+        ))
+        .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
+        let tokens = match rotation.id_token {
+            Some(id_token) => GrokOAuthImportTokens::new(
+                SecretValue::new(rotation.access_token),
+                SecretValue::new(rotation.refresh_token),
+                SecretValue::new(id_token),
+            ),
+            None => GrokOAuthImportTokens::without_id_token(
+                SecretValue::new(rotation.access_token),
+                SecretValue::new(rotation.refresh_token),
+            ),
+        };
+        let candidate = GrokOAuthImportCandidate::new(
+            tokens,
+            GrokOAuthImportMetadata::new(
+                "Bearer".to_owned(),
+                crate::OFFICIAL_CLIENT_ID.to_owned(),
+                rotation.scope,
+                GROK_CLI_BASE_URL.to_owned(),
+                Utc::now(),
+                rotation.expires_at,
+            ),
+        );
+        let oauth = self
+            .oauth
+            .with_outbound_proxy(current.account.outbound_proxy().cloned());
+        let discovery = oauth.discover().await.map_err(map_oauth_error)?;
+        let tokens = oauth
+            .verify_imported_credential(&discovery, candidate)
+            .await
+            .map_err(|error| map_failure_class(error.class()))?;
+        let prepared = verified_rotation(current, tokens)?;
+        prepared_rotation(prepared, command.account.provider_kind)
+    }
+
+    async fn prepare_refresh(
+        &self,
+        command: PrepareCredentialRefresh,
+    ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        validate_account_record(&command.account, &self.provider_kind)?;
+        let account_id = ProviderAccountId::new(command.account.id.clone())
+            .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
+        let current = self
+            .accounts
+            .load_current_credential(&account_id)
+            .await
+            .map_err(map_store_error)?;
+        if !account_matches_record(&current.account, &command.account) {
+            return Err(provider_error(ProviderAdminErrorKind::Conflict)
+                .with_public_message("凭据已更新，请刷新账号列表"));
+        }
+        let prepared = self
+            .refresh
+            .prepare_manual_refresh(current)
+            .await
+            .map_err(map_refresh_error)?;
+        prepared_rotation(prepared, command.account.provider_kind)
+    }
+
+    async fn quota(
+        &self,
+        request: ProviderQuotaRequest,
+    ) -> Result<ProviderQuota, ProviderAdminError> {
+        let ProviderQuotaRequest {
+            account_id,
+            refresh,
+            rolling_usage,
+        } = request;
+        let mut account = self.account(&account_id).await?;
+        let lifecycle = self
+            .repository
+            .read_lifecycle(&account_id)
+            .await
+            .map_err(map_repository_error)?;
+        let snapshot = if refresh {
+            let snapshot = Some(
+                self.quota
+                    .refresh_account(&account_id)
+                    .await
+                    .map_err(map_quota_error)?,
+            );
+            account = self.account(&account_id).await?;
+            snapshot
+        } else {
+            self.quota
+                .read_account(&account_id)
+                .await
+                .map_err(map_quota_error)?
+        };
+        Ok(project_quota(
+            snapshot,
+            account.quota().is_exhausted(),
+            lifecycle.refresh_token_expires_at().copied(),
+            rolling_usage,
+        ))
+    }
+
+    async fn models(
+        &self,
+        account_id: &ProviderAccountId,
+        refresh: bool,
+    ) -> Result<ProviderModels, ProviderAdminError> {
+        let account = self.account(account_id).await?;
+        let catalog = if refresh {
+            self.catalog
+                .refresh_account_catalog(account_id)
+                .await
+                .map_err(map_catalog_error)?
+        } else {
+            self.catalog
+                .cached_or_refresh_account_catalog(&account)
+                .await
+                .map_err(map_catalog_error)?
+        };
+        let models = catalog
+            .seed()
+            .models()
+            .iter()
+            .map(|model| {
+                Ok(ProviderModel {
+                    id: UpstreamModelId::new(model.clone())
+                        .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
+                    name: model.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, ProviderAdminError>>()?;
+        Ok(ProviderModels {
+            models,
+            observed_at: Some(catalog.observed_at()),
+        })
+    }
+
+    async fn export_credentials(
+        &self,
+        credentials: Vec<ProviderExportCredentialInput>,
+    ) -> Result<ProviderExport, ProviderAdminError> {
+        let mut account_ids = Vec::with_capacity(credentials.len());
+        let mut loaded = Vec::with_capacity(credentials.len());
+        for input in credentials {
+            validate_account_record(&input.account, &self.provider_kind)?;
+            let current = LoadedCredential {
+                account: account_from_record(&input.account)?,
+                credential: PlaintextCredential::new(
+                    input.provider_material.into_provider_data().into_inner(),
+                ),
+            };
+            account_ids.push(current.account.id().clone());
+            loaded.push(current);
+        }
+        let document = GrokCredentialAdmin
+            .export_oauth_bundle(&loaded, Utc::now())
+            .map_err(map_repository_error)?
+            .into_value();
+        let Value::Object(document) = document else {
+            return Err(provider_error(ProviderAdminErrorKind::Internal));
+        };
+        Ok(ProviderExport {
+            provider_kind: self.provider_kind.clone(),
+            account_ids,
+            document: ProviderDocument::new(OpaqueProviderData::new(document)),
+        })
+    }
+}
+
+impl XaiAdminProvider {
+    async fn complete_claimed_authorization(
+        &self,
+        stored: StoredXaiAuthorization,
+        callback_url: &str,
+    ) -> Result<PreparedAuthorizationCommit, ProviderAdminError> {
+        let authorization = PendingAuthorization::from_server_state(
+            &self.oauth_config,
+            &SecretValue::new(stored.server_state),
+        )
+        .map_err(map_oauth_error)?;
+        let grant = authorization
+            .accept_authorization_input(callback_url)
+            .map_err(map_oauth_error)?;
+        let current = match stored.mutation.target() {
+            AuthorizationMutationTarget::Create { .. } => None,
+            AuthorizationMutationTarget::Reauthorize { account_id } => {
+                let current = self
+                    .accounts
+                    .load_current_credential(account_id)
+                    .await
+                    .map_err(map_store_error)?;
+                if current.account.provider() != &self.provider_kind {
+                    return Err(provider_error(ProviderAdminErrorKind::NotFound));
+                }
+                Some(current)
+            }
+        };
+        let proxy = current
+            .as_ref()
+            .map_or(stored.mutation.outbound_proxy(), |current| {
+                current.account.outbound_proxy()
+            });
+        let oauth = self.oauth.with_outbound_proxy(proxy.cloned());
+        let discovery = oauth.discover().await.map_err(map_oauth_error)?;
+        let tokens = oauth
+            .exchange_authorization_code(&discovery, grant)
+            .await
+            .map_err(map_oauth_error)?;
+        let credential = match stored.mutation.target() {
+            AuthorizationMutationTarget::Create { name } => {
+                let prepared = GrokCredentialAdmin
+                    .prepare_verified_account(&VerifiedGrokAccount {
+                        account_id: ProviderAccountId::new(format!(
+                            "acct_{}",
+                            Uuid::now_v7().simple()
+                        ))
+                        .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
+                        name: name.clone(),
+                        email: None,
+                        upstream_account_id: None,
+                        plan_type: None,
+                        tokens,
+                        enabled: true,
+                    })
+                    .map_err(map_repository_error)?;
+                let prepared = NewProviderAccount {
+                    model_access: Default::default(),
+                    account: prepared
+                        .account
+                        .with_outbound_proxy(stored.mutation.outbound_proxy().cloned()),
+                    credential: prepared.credential,
+                };
+                PreparedAuthorizationCredential::Create(Box::new(prepared_create(
+                    prepared,
+                    Utc::now(),
+                )?))
+            }
+            AuthorizationMutationTarget::Reauthorize { .. } => {
+                let current =
+                    current.ok_or_else(|| provider_error(ProviderAdminErrorKind::Internal))?;
+                let prepared = verified_rotation(current, tokens)?;
+                PreparedAuthorizationCredential::Reauthorize(Box::new(prepared_rotation(
+                    prepared,
+                    self.provider_kind.clone(),
+                )?))
+            }
+        };
+        Ok(PreparedAuthorizationCommit::new(
+            stored.mutation,
+            credential,
+        ))
+    }
+}
+
+fn currency_cost(money: Money) -> Result<CurrencyCost, ProviderAdminError> {
+    Ok(CurrencyCost {
+        currency: money.currency().as_str().to_owned(),
+        amount: money
+            .amount()
+            .to_string()
+            .parse::<DecimalAmount>()
+            .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?,
+    })
+}
+fn build_connection_test_operation(
+    upstream_model: &UpstreamModelId,
+    input_text: &str,
+) -> Result<Operation, ProviderAdminError> {
+    let mut body = Map::new();
+    body.insert(
+        "model".to_owned(),
+        Value::String(upstream_model.as_str().to_owned()),
+    );
+    body.insert(
+        "input".to_owned(),
+        serde_json::json!([{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": input_text}]
+        }]),
+    );
+    body.insert("stream".to_owned(), Value::Bool(true));
+    body.insert("store".to_owned(), Value::Bool(false));
+    let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, body)
+        .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
+    Ok(Operation::Generate(GenerateRequest::from_protocol_payload(
+        payload,
+    )))
+}

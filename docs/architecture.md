@@ -16,10 +16,10 @@ HTTP 字段见[接口文档](api.md)，部署参数见[部署文档](../deploy/R
 
 Codex Proxy RS 是单进程、单副本运行的多 Provider AI 网关，同时提供：
 
-- 面向客户端的 Responses、Chat Completions、Anthropic Messages、Images、standalone Search 和模型目录协议
+- 面向客户端的 Responses、Chat Completions、Anthropic Messages、Gemini GenerateContent、Images、standalone Search 和模型目录协议
 - 面向管理员的 `/api/admin/*` 控制面和 Vue 管理端
 - 面向 Key 持有者的 `/api/key-usage/*` 用量与客户端配置接口、独立 `/key-usage` 页面，以及复用数据面认证的 `/v1/usage` 额度查询
-- 固定的 OpenAI 与 xAI 两个编译期 Provider，以及插件提供的认证、中间件和管理扩展
+- 固定的 OpenAI、xAI 与 Antigravity 三个编译期 Provider，以及插件提供的认证、中间件和管理扩展
 - PostgreSQL 持久化、Redis 协调状态以及 S3/R2 数据库备份
 
 Responses、Chat Completions 和 Messages 共用生成执行链，API Key 账号可选择 Responses 或 Messages 上游协议，
@@ -80,6 +80,7 @@ flowchart TB
 | `gateway-plugin/runtime`（包名 `gateway-plugin-runtime`） | 插件包校验、能力适配、双向 RPC 与发布集合；通过 Host 管理子进程和受管 HTTP |
 | `providers/openai` | OpenAI OAuth、API Key 凭据、账号选择、目录、额度和 Responses/Messages/Images/Search transport |
 | `providers/xai` | xAI OAuth session、账号选择、目录、额度和 Grok/Responses 转换 |
+| `providers/antigravity` | 个人账号 OAuth 与凭据文件、项目与模型目录、套餐和模型分组额度、原生生成与人工计费，以及 Desktop／CLI 发布资料和请求身份 |
 | `frontend` | Vue 管理端与 Key 用量页，仅通过各自身份允许的控制面 API 访问状态 |
 | 独立仓库 `codex-proxy-ui` | 管理端与插件页面共用的 Vue 基础组件、纯主题算法和样式，不依赖宿主业务状态、路由或 API |
 | 独立仓库 `codex-proxy-plugins` | 官方维护综合示例，依赖公开 SDK，Rust 处理器和已构建页面合成一个可安装包，不随宿主构建发版 |
@@ -177,7 +178,7 @@ flowchart LR
   能力响应无法解码或消费时只结束所属调用，不连带停止共享进程；帧封装、调用关联或传输损坏才终止 RPC 会话。
   故障绑定保留原有作用范围和拒绝／委托策略，入口认证故障不降级为其他认证方式；宿主配置存储与 revision 无法确认时仍停止新请求
 - **宿主持有业务事实**：插件返回能力结果，Core 继续决定账号资格、发送状态、标准用量与费用；账号变更由 Admin / Store
-  执行版本校验、事务和审计。Provider 由组合根静态注册为 OpenAI 与 xAI；插件停用不删除账号或历史记录，失败的观察回调不改变响应和账单
+  执行版本校验、事务和审计。Provider 由组合根静态注册为 OpenAI、xAI 与 Antigravity；插件停用不删除账号或历史记录，失败的观察回调不改变响应和账单
 - **能力开放不承接插件业务**：宿主向插件提供独立、可组合的原生能力，负责类型校验、资源生命周期、事务与审计。
   插件自身的触发条件、跨资源业务关联、策略和流程编排归插件所有；宿主不能因某个插件的使用场景代为实现这些流程
 
@@ -288,7 +289,7 @@ HTTP 字段见 [插件 API](api.md#12-插件管理)，更新与数据恢复见 [
 测试模块树：
 
 1. crate root 作为顶层门面，声明模块并暴露该 crate 的配置、Bundle、端口或稳定领域合同；目录节点使用
-   `目录/mod.rs`，叶子模块使用 `名称.rs`，不混用 `名称.rs` 与 `名称/` 两套入口
+   `目录/mod.rs`，叶子模块使用 `名称.rs`，不混用 `名称.rs` 与 `名称/` 两套入口；源码和测试都不保留只有 `mod.rs` 的目录
 2. 生产源码不使用内联 `mod name { ... }`、`#[path]` 或 `include!` 隐藏文件归属。`lib.rs` 和各级
    `mod.rs` 是模块门面，负责声明子模块、选择性 re-export 与少量同层协调
 3. 子模块默认私有；只有真实的跨 crate 生产合同才能使用 `pub`。adapter/provider 的公开根模块由
@@ -300,9 +301,12 @@ HTTP 字段见 [插件 API](api.md#12-插件管理)，更新与数据恢复见 [
    测试；额外场景测试必须放在最近的生产 owner 目录下。根级 `support` 及其辅助模块和冻结的 crate/workspace 架构场景
    是明确例外
 
+同一职责的实现分片聚合到所属目录，例如 `transport/client/{backend,catalog,json,live,messages,stream}.rs`、
+`postgres/client_budgets/{store,buffer,windows}.rs` 和 `system_update/swap/{release,paths}.rs`。相同前缀本身不代表同一职责，独立授权能力和业务合同仍保留各自 owner
+
 较大的模块门面只负责组合和 re-export：账号 Admin HTTP 边界按 `wire`、`credentials`、`handlers`、
-`presenter` 划分；Provider 执行按 continuation、stream、failure、observation 和 worker 等职责拆分；xAI
-请求转换按 response、tools 与 history 拆分。各子模块之间只使用 owner 内最小可见性
+`presenter` 划分；观测用例按 `service`、`insights`、`billing` 和 `dashboard` 分离协调与纯投影。
+Provider 执行按 continuation、stream、failure、observation 和 worker 等职责拆分；xAI 请求转换按 response、tools 与 history 拆分。各子模块之间只使用 owner 内最小可见性
 
 ### 3.3 `gateway-core` 内部 owner
 
@@ -357,23 +361,54 @@ Provider 可为模型提供来源账号集合；Core 在公开目录查询时结
 | `api/modules/` | 页面 HTTP 合同，模块名对应 `views/` 一级目录；复杂模块在同名目录内按功能拆分，业务类型由所属模块定义 |
 | `api/types/` | 跨业务模块共享的接口类型，如时间展示与请求位置；不依赖请求实现或业务模块 |
 | `api/request/` | 请求入口与插件链；负责会话恢复、重试、错误提示、错误归一化和原始／流式响应处理，页面不重复解释响应信封 |
+| `providers/` | 内置 Provider 的标识与图标，以及 `providers/<id>/` 内各 Provider 专属的账号导入格式与身份编辑器；跨 Provider 的编辑协调归共享组件 |
 | `stores/modules/`、`router/`、`plugins/` | 应用级登录与界面状态、路由和初始化；服务端数据的权威仍在后端 |
-| `views/<页面>/index.vue`、`views/<页面>/components/` | 页面组合与局部交互；复杂组件按职责拆成目录入口和相邻模块 |
-| `views/<页面>/composables/` | 页面查询、轮询、表单及操作生命周期 |
-| `presenter.ts`、页面 `utils/` | 纯展示投影或该页面拥有的业务转换，不启动请求 |
-| `components/usage/`、`components/account/` | 跨页面复用的用量、健康时间线、套餐和额度窗口展示，以及账号与分组共用的模型限制编辑器 |
+| `views/<页面>/index.vue`、`views/<页面>/components/` | 页面入口与页面内组件；多文件组件通过自己的 `index.vue` 提供界面，私有实现放在组件目录内 |
+| `views/<页面>/composables/`、`views/<页面>/utils/` | 页面查询、协调及多个组件共享的流程；页面内共享的纯函数 |
+| `components/*.vue`、`components/<组件>/index.vue` | 跨页面共享的单文件或多文件组件，如用量表格、健康时间线、额度窗口和模型限制编辑器；辅助计算及局部交互随组件放置 |
 | `composables/` | 请求取消与过期结果隔离、分页、选择、异步动作、目录加载等共享机制 |
 | `i18n/` | Vue I18n 实例、三语资源和应用语言策略；从全局 Composer 派生 UI 库语言，不翻译用户数据或远端自由文本 |
-| `utils/` | 按用途分开的数据解析、数字与时长格式化、位置校验、客户端配置、插件导航及颜色工具 |
+| `utils/` | 跨页面使用的数据判断、数字／金额／时长格式化、位置校验、颜色和通用操作辅助；业务专用逻辑放回所属页面或组件 |
+
+页面采用统一骨架，目录按实际需要创建：
+
+```text
+views/<页面>/
+├── index.vue
+├── components/
+│   ├── SimpleCard.vue
+│   └── complex-editor/
+│       ├── index.vue
+│       ├── EditorFields.vue
+│       ├── useEditor.ts
+│       └── model.ts
+├── composables/
+├── utils/
+└── constants.ts
+```
+
+- 页面根目录放入口、页面级逻辑与常量，卡片、弹窗和页面分区统一放在 `components/`，不在根目录另按功能或厂商平行分组。实际子路由可保留子页面目录，如 `views/plugins/page/`
+- 普通组件使用按职责命名的 PascalCase `.vue` 文件；需要封装一组共同维护的私有实现时，使用小写连字符目录和 `index.vue` 入口。文件长度或只有一个调用方不单独构成拆分或合并理由
+- 不为整页内容再套一个目录；页面布局与独立卡片直接放在页面 `components/`。多文件组件内部优先平铺，私有子组件、composable、类型和纯函数就近放置，不机械重复 `components/composables/utils` 层级。进一步分目录应当封装独立的界面职责或生命周期
+- `composables/` 保留页面查询、操作协调和跨组件共享的流程，组件自己的请求、计时器、DOM 交互及清理随组件放置；`utils/` 只放页面内共享的纯函数，组件私有计算留在组件内
+- 复用范围扩大时再将代码上移到对应共享层。其他页面复用完整布局时引用布局组件，单文件组件直接引用 `.vue`，多文件组件引用 `index.vue`，不直接依赖其私有文件；独立复用的业务组件归应用级 `components/`，Provider 专属且跨页面共用的实现归 `providers/<id>/`
+
+共享 `components/` 沿用同一规则，不增加 `account/usage/charts` 等纯分类层或组件内部的 `shared/` 层。独立复用的单文件组件直接放在共享目录，组合组件按明确职责命名；供其他组件使用的单元格、展示投影和校验函数可作为组件模块的公开能力。通知实例接线归 `plugins/notification.ts`，插件页面地址归 `router/plugin.ts`
+
+账号页管理分组、模型限制、并发、代理与导入任务。行操作与批量导出读取服务端返回的账号能力。OpenAI 的 API Key、OAuth 传输与逐条 token 导入归 `providers/openai/accounts`，Provider 表单持有凭据草稿与校验规则。新增时向页面提交导入文档，编辑时仅提供变更的连接配置
+
+运行设置由同一份草稿和配置版本原子保存。通用和平台设置分区组合 `views/settings/components/` 中的控件，备份、定价、客户端版本及隐私规则等多文件组件各自封装私有实现。平台分区按 Provider 展示专属配置，通用分区承载调度、并发与排队、重试、错误保护、凭据刷新、历史保留、全局模型映射及安全与访问设置
+
+全局配置和 Key 覆盖共用 `components/request-profile/index.vue` 的身份编辑流程，各 Provider 在 `providers/<id>/request-profile/` 解释自己的配置字段。定价页按查询接口返回的档位编辑
 
 JSON、原始字节与流式请求共用会话恢复和身份代际校验，身份变化后的迟到结果按取消处理。
 流式成功正文由消费方持有读取、期限与取消；交付前失败时，请求层终止底层传输
 
-概览的数据请求和刷新由 `useDashboard` 持有，`views/dashboard/presenter.ts` 生成展示模型。
+概览页由 `useDashboard` 查询并刷新数据。主题预览通过 `views/dashboard/components/DashboardOverview.vue` 复用整页布局，两处分别传入接口响应与预览样本。指标、趋势和客户端身份卡片各自解释所需字段。
 Key 创建与编辑共用 `useApiKeyEditor` 和 `ApiKeyFormModal`，`useApiKeyUse` 持有创建结果与使用操作的明文，
 关闭对应弹窗或页面销毁时清除。
-用量表格的列、展示投影及健康时间线规则集中在 `components/usage/shared/`，管理页面与 Key 用量页共用展示，
-各自的查询仍使用对应身份允许的 API
+用量表格的列、单元格和展示投影放在 `components/usage-records-table/`，健康时间线及规则放在
+`components/request-health-timeline-card/`。管理页面与 Key 用量页共用展示，各自的查询仍使用对应身份允许的 API
 
 `useRequestState` 管理取消、请求序号与失效结果；分页按接口合同分别复用 `usePagedQuery` 或 `useStablePagedQuery`。
 `useAsyncAction` 的 `loading` 是动作进行状态，调用方直接使用；接口错误由请求层提示，本地操作错误按动作配置处理。
@@ -524,6 +559,33 @@ WS 路由提示属于握手，连接复用时不重发；档位变化不重建�
 Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 canonical event，不读取 Provider SDK
 类型。Provider 独占 credential schema、OAuth、账号选择、模型目录、额度投影和上游 transport
 
+三个内置 Provider 在各自的 `lib.rs` 返回同一个 `ProviderBundle`。组合根从这一组 Bundle 注册执行器、管理端口和后台任务。共同职责使用一致目录：
+
+| 目录 | 职责 |
+| --- | --- |
+| `admin/` | 适配管理端口，投影展示合同 |
+| `billing/` | 内置价目、支持档位与费用计算，管理端口和执行路径共用 |
+| `credential/` | 凭据与账号级 `catalog`、`quota` 服务 |
+| `profile/` | 请求身份、版本选择与官方发行资料 |
+| `provider/` | 推理执行和 worker 装配 |
+| `transport/` | 出站协议与上游响应采集 |
+
+Antigravity 的 `credential/catalog` 持有与凭据版本绑定的项目与模型观测，`credential/quota` 管理额度快照。凭据续期后的目录修复由 `provider/workers` 编排。管理端连接测试固定账号并用其凭据查询项目，停用账号仍可接受探测
+
+数据面协议入口位于 `gateway-api/src/data_plane`。Responses、Chat Completions、Messages 与 GenAI 共用 `generation` 的执行和交付流程。GenAI 从 URL 解码模型和生成方法，要求候选模型在原生目录中声明对应协议。Core 在 Key 的账号范围内匹配能力，Antigravity 将选中的 GenAI 请求封装为 Cloud Code 上游请求
+
+GenAI 模型目录通过 Core 的原生操作路由判断过滤冻结账号范围；列表、详情和执行使用同一份能力事实。Antigravity 声明生成与输入计数能力，原生 GenAI 和 Messages 计数复用选号、画像、中间件及资源释放流程，出站调用独立的 Cloud Code `countTokens`。计数响应不产生生成用量或费用事实，失败不切换为本地估算
+
+Antigravity 目录分别声明原生 GenAI 协议和接受转换的 Responses／Messages 协议；原生能力约束仍只匹配原生协议。`gateway-protocol::genai` 持有纯内容与增量事件映射，Responses 复用已有 Messages 转换能力，Chat 复用 API 层的 Responses 入口。Provider 的 `provider/translation` 负责选择和装配转换器，`transport` 负责 Cloud Code 封装、原生 wire 与调用事实，并按冻结画像统一替换 AGY 系统指令。默认提示和可编辑配置归 Provider 的 `profile`，纯协议转换层不持有 AGY 身份规则
+
+Antigravity 的业务头使用 API 保留的不透明多值字节，transport 统一执行账号身份、HTTP 传输及切号追踪头过滤。选号阶段从原会话绑定和 Core 的账号归属冻结切号事实，认领冲突后重新读取，不从重试排除集合推测归属
+
+推理 HTTP 客户端按账号、凭据版本、代理和 UA 隔离，最多缓存 64 项并按最近使用淘汰；在途请求持有独立客户端引用，令牌、项目和系统指令不随连接池缓存
+
+Antigravity 的 Cloud Code 传输固定使用 rustls 与 HTTP/1.1，gzip 协商和流式解压由本 Provider 持有，不启用会影响其他 Provider 的 reqwest 全局压缩特性。解压后的流继续遵循控制面和推理消费方的大小限制、取消及截止时间
+
+跨协议响应在 Core 的响应中间件阶段之间转换。转换器在正常 EOF 时刷新最后内容块并发出终态，尾部用量先于完成事件交付；错误和取消不合成成功终态。转换状态随单次流释放，不增加账号级签名缓存或对话副本
+
 ### 连接与上游身份
 
 Responses 下游连接的心跳和退出由 API 拥有，每条 WS 使用独立取消信号，沿 Core 的 `ResponseControl` 传到 Provider 请求上下文。
@@ -602,7 +664,7 @@ OpenAI 模型目录用于发现与原生 Responses 账号资格筛选。
   首次初始化使用 Provider 内置默认值。
   官方发布资料与用户选择分开：OpenAI 在 Redis 按 Provider、客户端、平台、架构隔离可重建版本缓存，
   离线版本、制品身份及预设环境默认值集中在
-  [`transport/profile/baseline.rs`](../backend/crates/providers/openai/src/transport/profile/baseline.rs)，由发布检查与预设解析共用。
+  [`profile/baseline.rs`](../backend/crates/providers/openai/src/profile/baseline.rs)，由发布检查与预设解析共用。
   Desktop 完整制品元组原子更新。CLI 的 TUI/Exec 入口共用官方 CLI 版本资料，Provider 在一次身份解析中
   生成一致的 UA、入口后缀与配套请求头，后台更新不修改用户选择的运行环境。
   完整自定义 UA 经 Provider 校验后原样传递，配套头统一解析；固定和自定义配置不受后台更新影响。
@@ -712,8 +774,21 @@ Continuation 受原请求的 Client Key、账号范围、Provider 和发送/交�
 - xAI 使用客户端提交的完整历史作为重放输入
 - scope 外账号与跨 Key 复用均拒绝；发送结果不明时，仅接受 Provider 明确给出的有界传输恢复意图
 
-OpenAI Provider 解释官方逻辑 `session_id` 与 `thread_id`，按 Client Key 隔离账号绑定，
-账号亲和模式随请求策略冻结：
+账号亲和模式和保留时长由 Core 的 `AccountSelectionPolicy` 随请求冻结，设置页在通用区域编辑
+`ProviderSessionAffinityState` 提供通用的偏好投影、严格等待和认领目标规则；Store 以 Provider 和不透明会话键隔离版本绑定，发送前 CAS 提交，冲突先释放租约再重读
+协议身份、资格判断及原生续接约束由各 Provider 拥有，不进入共享策略
+
+OpenAI 与 Antigravity 的内置 `round_robin` 在最高可调度权重层按账号 ID 轮换，使用按 Client Key 和 Provider 隔离的分配游标
+分配游标只读，取得租约后通过共享准入接口推进；有会话认领时，游标和绑定原子提交，冲突先释放租约再重选
+亲和命中、保留主绑定的临时分流、固定账号和插件显式选号不消耗轮询位置；插件委托仍参与内置轮询
+
+Antigravity 在转换前识别 GenAI 会话头及正文 `sessionId`／`session_id`（头优先）、Codex 逻辑会话和 Claude Code 会话，绑定按 Client Key、模型和入站协议隔离
+xAI 继续从自身请求身份派生模型级亲和键，共用版本绑定及 TTL；上游 session ID 和推理重放身份仍由传输模块持有
+两者的优先模式在容量分流时保留合格的主绑定，绑定不再满足当前资格时迁移；严格模式等待繁忙主账号，关闭排队或资格失效时允许重选
+原生固定账号请求不改写已有主绑定，诊断请求和没有亲和键的请求不访问绑定存储
+
+OpenAI Provider 解释官方逻辑 `session_id` 与 `thread_id`，按 Client Key 隔离账号绑定
+会话和轮次关系包括根线程、后代和生图借号，具体模式行为由 OpenAI Provider 解释：
 
 - 宽松：会话内请求直接按调度策略选号，不使用主账号偏好，成功准入后更新当前账号
 - 优先模式在首次成功准入时认领主账号，短时容量或单模型限制触发临时分流
@@ -725,7 +800,6 @@ OpenAI Provider 解释官方逻辑 `session_id` 与 `thread_id`，按 Client Key
   已有绑定的后代只跟随当前账号，账号不可用时排队，根迁移后重读共享绑定
 
 可关联的 Search、Images、Live 创建请求共用会话绑定。严格模式下，授权池内的主账号未通过原生 Images 的模型、套餐或协议筛选时，根线程和后代均可从合格账号中借号。取得生图账号租约后，按选号时读到的主绑定原子续期；绑定已变化则重新选号。主账号具备生图资格但繁忙时，后代仍跟随主账号排队
-内置 `round_robin` 在最高可调度权重层按账号 ID 轮换。游标按 Client Key 和 Provider 隔离，在取得租约后推进；有会话绑定时，两者原子提交。并发首绑只占一个位置，亲和命中和插件显式选号不推进游标。插件委托仍走内置轮询，优先模式已有绑定时沿用会话派生的后备顺序
 插件显式选号由 Core 复核账号资格并取得租约，native continuation 受独立的状态 owner 与安全重放边界约束
 
 OpenAI 固定归属请求直接读取目标账号，其余请求按冻结的账号 ID 范围查询 Store
@@ -736,7 +810,7 @@ OpenAI 固定归属请求直接读取目标账号，其余请求按冻结的账�
 
 Store 只保存带版本的绑定事实，Provider 在取得租约后、发送前原子认领、续期或按模式迁移；快照冲突释放租约并重新选择。
 首次认领不依赖根线程先发请求，独立后台任务也使用自身会话绑定。
-Messages 的 Claude Code 明确会话身份由 `gateway-protocol::anthropic` 解析，OpenAI Provider 在选号前按 Client Key 派生独立命名空间的亲和键，
+Messages 的 Claude Code 明确会话身份由 `gateway-protocol::anthropic` 解析；OpenAI Provider 在选号前按 Client Key 派生独立命名空间的亲和键，
 沿用现有绑定与调度策略；原生执行在 attempt 改写后、协议转换前复验身份，不建立 OpenAI 轮次关联或原生续接归属。
 OpenAI Provider 对无显式会话的 Responses 和 Chat Completions 入站请求，可按客户端缓存键或对话开头形成账号亲和。Messages 入站请求不按对话内容绑定账号。
 亲和键按 Client Key 隔离，与会话键使用不同命名空间，不建立轮次关联或原生续接归属。
@@ -852,8 +926,13 @@ Runtime 在父调用资源表中持有读取句柄并传播取消，SDK 保留�
 
 Provider 是内置价目、服务档位、模态和工具费规则的唯一 owner；Core metering 定义中立价格覆盖与
 精确金额运算。Admin 管理人工覆盖与手动同步，Host `pricing` 适配固定的 models.dev HTTPS 来源，
-由组合根注入 Admin 的 `PricingSource` 端口；Store 负责来源层、人工层与审计的事务持久化。
+由组合根注入 Admin 的 `PricingSource` 端口。跨产品参考模型由 Provider 明确登记，Admin 将外部价目
+投影为已注册 Provider 的上游模型 ID；Store 负责来源层、人工层与审计的事务持久化。
 同步不能覆盖人工项，更新仅修改选中的模型。HTTP 合同与价格边界见 [模型定价 API](api.md#模型定价)
+
+各 Provider 的私有 `billing` 模块按 `catalog` 与 `calculate` 分离价目和计算，模态专属逻辑按需拆分。
+计价只消费显式传入的模型、用量、档位和冻结价格，不依赖 Provider 内的执行、传输或凭据服务。
+账号额度查询与上游用量采集仍由原有服务负责，不能因同名 usage 或 billing 接口混入本地费用计算
 
 编译 RuntimeSnapshot 时合并同步与人工配置，Provider 缺省项仍由其内置表解释。不可变价格集合经
 Arc 随 RoutingPlan 冻结并进入所有 attempt，不在推理请求中读取数据库、Redis 或外部价目，也不复制
@@ -879,8 +958,8 @@ HTTP validation
 
 会改变路由快照或安全配置的 mutation 在同一 PostgreSQL 事务中提交业务事实、推进内部
 `config_revision` 并写入脱敏审计。账号、分组等响应中的 `configRevision` 表示已提交配置，
-不构成所有写入的统一前置条件。运行设置整体替换必须携带读取版本，Store 在同一事务比较后才提交，
-防止覆盖并发修改；插件、代理等资源使用各自的 `revision` / `expectedRevision`，不能与全局版本混用
+不构成所有写入的统一前置条件。Store 记录最近一次运行设置写入的发布版本，整体替换时在事务内检查草稿读取后是否发生设置写入。
+插件、代理等资源使用各自的 `revision` / `expectedRevision`，不能与全局版本混用
 
 账号组的展示投影与配置提交结果分离；提交后的展示查询失败不阻止已提交版本发布，响应可不附带展示记录
 
@@ -999,6 +1078,11 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
   团队身份不推断为 Free，订阅查询失败不影响额度观测
   普通 Token 续期与刷新退避保留提交时的账号资料及额度快照，显式凭据轮换仍按原子提交合同失效旧观测。
   xAI Provider 在缺少可展示上游额度时投影本地 24 小时滚动统计，Admin 按该窗口展示日用量，额度预测使用完整周/月窗口
+- Antigravity 使用 Google OAuth 离线授权，账号文件导出凭据、身份、有效期及已有观测，导入通过 refresh token 重新验证权限与主体，不采信文件中的历史观测。
+  OAuth 每轮操作从运行策略读取全局 AGY 选择，由 `profile` 统一解析并冻结出站身份，换码、刷新和身份查询使用同一画像，不读取 Key 覆盖。
+  `loadCodeAssist` 的付费套餐优先于基础套餐；分组额度和模型额度保存到同一带凭据版本的快照，独立模型耗尽不升级为整个账号耗尽。
+  原生额度窗口只投影上游模型分组，不归属整号 Token；Admin 独立读取过去 24 小时的本地用量及统计周期，不向额度列表补入本地窗口。选号及互联分别读取同一份模型额度事实，失效观测保持未知。
+  正常续期后续接同一身份的目录，保留原观测时间并校验新凭据版本与套餐；目录缺失立即尝试重新发现，失败由后台重试
 - 账号导入和 OAuth complete（包括重新授权）在凭据提交、Provider 缓存失效与运行快照发布后，
   由 Admin 共用流程后台读取一次额度；不等待观测完成才返回管理请求，失败记录告警但不回滚账号事务。
   同身份重新授权在事务内保留额度观测和按桶预热进度，旧凭据版本的在途观测无法覆盖新版本。
@@ -1317,6 +1401,12 @@ OpenAI 客户端画像由 Provider 每小时检查发布元数据，发布标识
 同版本的有效制品缓存每 24 小时续期，保留 30 天；续期保留原核验时间，失败不推进成功写入游标。
 版本及缓存更新失败保留当前画像，下轮继续尝试；Host 只监督调度与取消。
 
+Antigravity 每天检查官方发布资料，后台按已使用的客户端、平台和架构核对发布包版本，
+CLI 同时校验官方清单的 SHA-512；核验不执行下载程序，也不发送模型请求。
+核验事实绑定完整制品标识，使用同一缓存端口保留 30 天，每 24 小时续期并保留原核验时间。
+版本或制品变化后重新核验，失败不将旧证据套用到新制品；发布包核验不代表 TLS 或完整请求指纹一致，
+未知版本的请求构建号仍省略。
+
 互联同步使用账号出口的受管 HTTP 客户端，不跟随跳转；网络等待不持有数据库事务。
 运行期排程、并发预算、连接失效和观测提交见 [CPR 互联观测](#cpr-互联观测)，失败遵守退避及上游 `Retry-After`
 
@@ -1392,8 +1482,7 @@ Compose 的 `stop_grace_period` 必须覆盖后台关闭预算并留出进程清
   协议字段提取集中在所属 Provider 的诊断模块，调用点不重复解释字段或重试规则。
   管理用例集中归纳缺口，API 对同一份脱敏文档生成 ZIP、结构化 JSON 与文本摘要，前端只负责下载。
   关键事实复用请求现有 trace JSON 持久化，ZIP 不另行存储；预算和字段合同见诊断接口章节
-- 真实 secret 不进入普通日志、Debug、fixture 或 audit details；明文只能通过账号导出、Key reveal、
-  备份设置等明确的敏感 Admin 合同返回
+- 真实 secret 不进入普通日志、Debug、fixture 或 audit details；明文只能通过账号导出、Key reveal 等明确的敏感 Admin 合同返回
 - OAuth pending flow 使用有期限、带 owner 的一次性 claim；事务成功后才消费，失败释放 claim
 
 ### 在线更新与回滚
@@ -1460,6 +1549,7 @@ Store 在同一可重复读快照下导出业务表和已发布小时汇总，�
 ### 验证命令
 
 组合根的 workspace architecture tests 检查成员清单、依赖 DAG、公开模块面、源码纪律以及生产/测试模块镜像关系；
+全部 workspace 成员同时参与同级 owner 的依赖环检查；内置 Provider 的共同 owner 使用一致目录，计价模块禁止反向依赖所在 Provider 的其他内部 owner；
 具体行为边界由各 crate 集成测试维护
 
 后端验证从 `backend/Cargo.toml` 执行，仓库根目录没有 Cargo manifest：

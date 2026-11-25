@@ -48,6 +48,7 @@ pub trait BackupService: Send + Sync {
     async fn test_connection(
         &self,
         context: &MutationContext,
+        storage_revision: u64,
     ) -> Result<ConnectionTestResult, AdminError>;
 
     async fn create_backup(
@@ -151,12 +152,17 @@ impl BackupService for DefaultBackupService {
     async fn test_connection(
         &self,
         context: &MutationContext,
+        storage_revision: u64,
     ) -> Result<ConnectionTestResult, AdminError> {
         let settings = self
             .repository
             .load_settings()
             .await
             .map_err(|error| map_store_error(error, "backup settings"))?;
+        let stale = || AdminError::conflict("备份存储配置已更改，请刷新后重新测试");
+        if settings.storage_revision != storage_revision {
+            return Err(stale());
+        }
         let Some(config) = BackupStorageConfig::from_settings(&settings) else {
             return Ok(ConnectionTestResult {
                 ok: false,
@@ -170,12 +176,14 @@ impl BackupService for DefaultBackupService {
             .test_connection(&config)
             .await
             .map_err(map_backup_error)?;
-        if result.ok {
-            let _ = self
+        if result.ok
+            && !self
                 .repository
                 .record_verification(config.storage_revision, Utc::now())
                 .await
-                .map_err(|error| map_store_error(error, "backup settings"))?;
+                .map_err(|error| map_store_error(error, "backup settings"))?
+        {
+            return Err(stale());
         }
         self.append_audit(
             context,

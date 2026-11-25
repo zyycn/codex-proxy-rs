@@ -11,7 +11,7 @@ pub(crate) trait MiddlewareCallback: Send + Sync {
         None
     }
 
-    fn http_resources(&self) -> Option<Arc<super::http_middleware::resources::Resources>> {
+    fn http_resources(&self) -> Option<Arc<super::http::middleware::resources::Resources>> {
         None
     }
 

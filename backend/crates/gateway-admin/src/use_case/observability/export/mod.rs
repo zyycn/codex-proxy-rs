@@ -9,12 +9,13 @@ use tokio::time::{Instant, timeout_at};
 
 mod availability;
 
-use super::{DefaultObservabilityService, map_store_error};
+use super::DefaultObservabilityService;
 use crate::model::{
     AdminError, AdminErrorKind,
     diagnostics::{DiagnosticBundle, DiagnosticGap, DiagnosticRequest, DiagnosticTarget},
     observability::OpsError,
 };
+use crate::use_case::map_store_error;
 
 const MAX_REQUESTS: usize = 8;
 const MAX_ERRORS: u16 = 128;

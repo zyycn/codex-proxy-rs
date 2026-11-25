@@ -1000,7 +1000,7 @@ async fn scheduler_distinguishes_session_bindings_from_cache_preferences_and_kee
             RequestAttemptContext::new(id, key).with_request_policy(Some(policy)),
             NonZeroU32::new(1).unwrap(),
             SystemTime::now() + Duration::from_secs(5),
-            account_policy().with_openai_account_affinity(mode),
+            account_policy().with_account_affinity(mode),
             AccountAttemptContext::new(BTreeSet::new(), None, None)
                 .with_account_scope(contract_account_scope()),
             None,
@@ -1288,8 +1288,8 @@ fn preferred_context_with_ttl(
         request_id,
         scope,
         account_policy()
-            .with_openai_account_affinity(gateway_core::account::AccountAffinity::Preferred)
-            .with_openai_session_affinity_ttl(ttl),
+            .with_account_affinity(gateway_core::account::AccountAffinity::Preferred)
+            .with_session_affinity_ttl(ttl),
     )
 }
 
@@ -1338,7 +1338,7 @@ async fn relaxed_and_preferred_session_requests_apply_distinct_scheduling_polici
             leases.clone(),
         );
         let policy = account_policy()
-            .with_openai_account_affinity(mode)
+            .with_account_affinity(mode)
             .with_smart_scheduling(SmartSchedulingConfig::new([1.0; 6]).unwrap())
             .with_queue(ConcurrencyQueuePolicy {
                 max_waiting,
@@ -1782,8 +1782,7 @@ async fn preferred_final_thread_rewrite_within_the_session_preserves_the_primary
         ),
         NonZeroU32::MIN,
         SystemTime::now() + Duration::from_secs(5),
-        account_policy()
-            .with_openai_account_affinity(gateway_core::account::AccountAffinity::Preferred),
+        account_policy().with_account_affinity(gateway_core::account::AccountAffinity::Preferred),
         AccountAttemptContext::new(BTreeSet::new(), None, None)
             .with_account_scope(contract_account_scope()),
         None,
@@ -1944,7 +1943,7 @@ async fn preferred_primary_migration_distinguishes_temporary_and_persistent_unav
         );
         let policy =
             AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::new(2).unwrap())
-                .with_openai_account_affinity(AccountAffinity::Preferred)
+                .with_account_affinity(AccountAffinity::Preferred)
                 .with_queue(ConcurrencyQueuePolicy {
                     max_waiting: 10,
                     timeout: Duration::from_secs(30),
@@ -2198,7 +2197,7 @@ async fn preferred_native_continuation_keeps_its_actual_owner_without_rebinding_
             NonZeroU32::MIN,
             SystemTime::now() + Duration::from_secs(5),
             account_policy()
-                .with_openai_account_affinity(gateway_core::account::AccountAffinity::Preferred),
+                .with_account_affinity(gateway_core::account::AccountAffinity::Preferred),
             AccountAttemptContext::new(BTreeSet::new(), None, Some(owner))
                 .with_account_scope(contract_account_scope()),
             Some(ContinuationBinding::Pinned(pin)),

@@ -15,7 +15,6 @@ mod plugins;
 mod proxies;
 mod settings;
 mod system;
-mod system_preflight;
 mod usage_data;
 
 use std::{
@@ -560,7 +559,7 @@ impl AccountStore for UnavailableStore {
     async fn load_quota_forecast_history(
         &self,
         _: &AccountUsageWindowQuery,
-    ) -> AdminStoreResult<gateway_admin::model::quota_forecast_sampling::QuotaForecastHistory> {
+    ) -> AdminStoreResult<gateway_admin::model::quota_forecast::QuotaForecastHistory> {
         Err(unavailable("quota forecast history"))
     }
 
@@ -1012,6 +1011,8 @@ impl SettingsStore for UnavailableStore {
 }
 
 struct UnavailableProvider {
+    pricing_bands: &'static [&'static str],
+    pricing_references: std::collections::BTreeMap<String, (String, String)>,
     peer_enabled: bool,
     kind: ProviderKind,
     dashboard_profile: Option<DashboardWireProfile>,
@@ -1023,6 +1024,7 @@ struct UnavailablePricingSource;
 impl gateway_admin::ports::pricing::PricingSource for UnavailablePricingSource {
     async fn fetch(
         &self,
+        _: &gateway_admin::ports::pricing::PricingSourceScope,
     ) -> Result<gateway_admin::model::pricing::PricingSyncPreview, gateway_admin::model::AdminError>
     {
         Err(gateway_admin::model::AdminError::internal(
@@ -1036,6 +1038,8 @@ impl UnavailableProvider {
         Self {
             kind: ProviderKind::new(kind).expect("provider kind"),
             peer_enabled: false,
+            pricing_references: Default::default(),
+            pricing_bands: &["standard"],
             dashboard_profile: None,
             calculated_billing: None,
         }
@@ -1048,6 +1052,31 @@ pub(super) fn test_provider(kind: &str) -> Arc<dyn ProviderAdmin> {
 
 #[async_trait]
 impl ProviderAdmin for UnavailableProvider {
+    fn supported_pricing_bands(&self) -> &'static [&'static str] {
+        self.pricing_bands
+    }
+
+    fn pricing_source(&self) -> gateway_admin::ports::pricing::PricingCatalogSource {
+        use gateway_admin::ports::pricing::PricingCatalogSource;
+        if self.pricing_references.is_empty() {
+            return PricingCatalogSource::Direct;
+        }
+        PricingCatalogSource::References(
+            self.pricing_references
+                .iter()
+                .map(|(model, (provider, source))| {
+                    (
+                        model.clone(),
+                        gateway_admin::ports::pricing::PricingSourceModel {
+                            provider: provider.clone(),
+                            model: source.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
     fn peer_authentication_kinds(&self) -> &[&str] {
         if self.peer_enabled {
             &["peer_test"]
@@ -1158,6 +1187,8 @@ impl ProviderAdmin for UnavailableProvider {
 
 pub(super) fn dashboard_profile_provider() -> Arc<dyn ProviderAdmin> {
     Arc::new(UnavailableProvider {
+        pricing_bands: &["standard"],
+        pricing_references: Default::default(),
         peer_enabled: false,
         kind: ProviderKind::new("openai").expect("provider kind"),
         dashboard_profile: Some(DashboardWireProfile {
@@ -1202,6 +1233,8 @@ pub(super) fn calculated_billing_provider() -> Arc<dyn ProviderAdmin> {
             .expect("test billing amount"),
     };
     Arc::new(UnavailableProvider {
+        pricing_bands: &["standard"],
+        pricing_references: Default::default(),
         peer_enabled: false,
         kind: ProviderKind::new("openai").expect("provider kind"),
         dashboard_profile: None,

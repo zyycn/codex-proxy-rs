@@ -59,17 +59,16 @@ export const routes: RouteRecordRaw[] = [
       },
       {
         path: 'plugins',
-        component: () => import('@/views/plugins/index.vue'),
         children: [
           {
             path: '',
             name: 'plugins',
-            component: () => import('@/views/plugins/components/PluginManagement.vue'),
+            component: () => import('@/views/plugins/index.vue'),
           },
           {
             path: ':instanceId/:pageId',
             name: 'plugin-page',
-            component: () => import('@/views/plugins/components/PluginPage.vue'),
+            component: () => import('@/views/plugins/page/index.vue'),
           },
         ],
       },
@@ -89,11 +88,6 @@ export const routes: RouteRecordRaw[] = [
           {
             path: 'upstream',
             name: 'settings-upstream',
-            component: () => import('@/views/settings/index.vue'),
-          },
-          {
-            path: 'access',
-            name: 'settings-access',
             component: () => import('@/views/settings/index.vue'),
           },
           {

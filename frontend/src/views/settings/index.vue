@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ZButton, ZCard, ZConfirmDialog, ZForm, ZIconButton, ZPageHeader, ZSegmented, ZSwitch } from '@codex-proxy/ui'
+import type { BuiltinProvider } from '@/providers/catalog'
+import { ZButton, ZConfirmDialog, ZForm, ZIconButton, ZPageHeader, ZSegmented } from '@codex-proxy/ui'
 
 import { Save, Undo2 } from '@lucide/vue'
 
@@ -7,28 +8,31 @@ import { computed, nextTick, reactive, shallowRef, useTemplateRef, watch } from 
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
-import HelpPopover from '@/components/HelpPopover.vue'
+import { isBuiltinProvider, PROVIDER_IDS } from '@/providers/catalog'
 
 import AccountAffinityCard from './components/AccountAffinityCard.vue'
 import AccountWarmupCard from './components/AccountWarmupCard.vue'
-import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
-import ClientProfileCard from './components/ClientProfileCard.vue'
+import SettingsBackupSection from './components/backup/index.vue'
 import ConcurrencyPolicyCard from './components/ConcurrencyPolicyCard.vue'
-import AccountErrorProtectionCard from './components/error-protection/AccountErrorProtectionCard.vue'
+import AccountErrorProtectionCard from './components/error-protection/index.vue'
+import GuardianReviewCard from './components/GuardianReviewCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
-import PrivacyPolicyCard from './components/privacy/PrivacyPolicyCard.vue'
+import PricingSection from './components/pricing/index.vue'
+import PrivacyPolicyCard from './components/privacy/index.vue'
+import ProviderSettingsNav from './components/ProviderSettingsNav.vue'
 import RequestCountryCard from './components/RequestCountryCard.vue'
 import RequestHistoryCard from './components/RequestHistoryCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
+import RequestProfileCard from './components/RequestProfileCard.vue'
 import ResetCreditCard from './components/ResetCreditCard.vue'
+import RetryPolicyCard from './components/RetryPolicyCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
-import SettingsAccessSection from './components/SettingsAccessSection.vue'
+import SettingsAccessSection from './components/settings-access/index.vue'
 import TokenRefreshCard from './components/TokenRefreshCard.vue'
 import { useSettingsForm } from './composables/useSettingsForm'
 import { useSettingsFormRules } from './composables/useSettingsFormRules'
 import { useSettingsLeaveGuard } from './composables/useSettingsLeaveGuard'
 import { rotationOptions } from './constants'
-import PricingSection from './pricing/index.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -48,10 +52,6 @@ const sectionOptions = computed(() => ([
     value: 'pricing',
   },
   {
-    label: t('settings.page.tabs.access'),
-    value: 'access',
-  },
-  {
     label: t('settings.page.tabs.backups'),
     value: 'backup',
   },
@@ -59,7 +59,6 @@ const sectionOptions = computed(() => ([
 const section = computed(() => {
   switch (route.name) {
     case 'settings-upstream': return 'upstream'
-    case 'settings-access': return 'access'
     case 'settings-pricing': return 'pricing'
     case 'settings-backup': return 'backup'
     default: return 'runtime'
@@ -68,45 +67,60 @@ const section = computed(() => {
 const isBasicSection = computed(() => section.value !== 'pricing' && section.value !== 'backup')
 const visited = reactive(new Set<string>())
 const settingsVisited = shallowRef(false)
+const provider = shallowRef<BuiltinProvider>(PROVIDER_IDS[0]!)
 
-function switchSection(value = 'runtime') {
-  return router.push(value === 'runtime'
-    ? '/settings'
-    : `/settings/${value}`)
+function switchSection(value = 'runtime', selectedProvider = provider.value) {
+  return router.push({
+    path: value === 'runtime'
+      ? '/settings'
+      : `/settings/${value}`,
+    query: value === 'upstream'
+      ? { provider: selectedProvider }
+      : undefined,
+  })
 }
+
+function switchProvider(value: BuiltinProvider) {
+  return switchSection('upstream', value)
+}
+
+watch(() => route.query.provider, (value) => {
+  if (typeof value === 'string' && isBuiltinProvider(value))
+    provider.value = value
+}, { immediate: true })
 
 const {
   loading,
   saving,
   detectingLocation,
-  detectLocation,
   hasChanges,
   resetSettings,
   error,
   form,
+  mappings,
+  responsesMaxDecompressedBodyMiBValue,
+  saveSettings,
+  loadSettings,
   smartSchedulingDefaults,
   quotaResetWindowWeightsDefaults,
-  mappings,
-  addMapping,
-  updateMapping,
-  removeMapping,
-  refreshMarginSecondsValue,
-  refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
-  openaiGuardianReservedConcurrencyValue,
   maxAccountRotationsValue,
-  openaiSessionAffinityTtlHoursValue,
+  sessionAffinityTtlHoursValue,
   maxWaitingPerKeyValue,
   maxWaitingPerAccountValue,
   keyQueueTimeoutSecondsValue,
   accountQueueTimeoutSecondsValue,
   maxRetryAfterSecondsValue,
-  responsesMaxDecompressedBodyMiBValue,
   usageRetentionDaysValue,
   resetCreditLeadMinutesValue,
   resetCreditMaxWeeklyRemainingPercentValue,
-  saveSettings,
-  loadSettings,
+  detectLocation,
+  addMapping,
+  updateMapping,
+  removeMapping,
+  refreshMarginSecondsValue,
+  refreshConcurrencyValue,
+  openaiGuardianReservedConcurrencyValue,
 } = useSettingsForm()
 const disabled = computed(() => saving.value || loading.value || detectingLocation.value || !!error.value)
 const formRef = useTemplateRef<InstanceType<typeof ZForm>>('formElement')
@@ -126,8 +140,12 @@ async function requestSave() {
       return
     const field = formRef.value?.getField(path)
     const target = field?.$el?.closest('[data-settings-section]')?.getAttribute('data-settings-section')
-    if (target)
-      await switchSection(target)
+    const targetProvider = field?.$el?.closest('[data-settings-provider]')?.getAttribute('data-settings-provider')
+    if (target) {
+      await switchSection(target, targetProvider && isBuiltinProvider(targetProvider)
+        ? targetProvider
+        : provider.value)
+    }
     await nextTick()
     field?.scrollIntoView({ block: 'center' })
     field?.focus()
@@ -142,13 +160,6 @@ const backupSection = useTemplateRef<InstanceType<typeof SettingsBackupSection>>
 const hasUnsavedChanges = computed(() => hasChanges.value || !!backupSection.value?.hasChanges)
 const { showLeaveConfirm, confirmLeave } = useSettingsLeaveGuard(hasUnsavedChanges)
 
-watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => {
-  if (ready) {
-    await nextTick()
-    document.getElementById('reset-credits')?.scrollIntoView({ block: 'start' })
-  }
-}, { immediate: true })
-
 watch(section, (value) => {
   visited.add(value)
   if (isBasicSection.value && !settingsVisited.value) {
@@ -156,20 +167,35 @@ watch(section, (value) => {
     void loadSettings()
   }
 }, { immediate: true })
+
+watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => {
+  if (!ready)
+    return
+  if (section.value !== 'upstream' || provider.value !== 'openai') {
+    await router.replace({
+      path: '/settings/upstream',
+      query: { provider: 'openai' },
+      hash: '#reset-credits',
+    })
+  }
+  await nextTick()
+  document.getElementById('reset-credits')?.scrollIntoView({ block: 'start' })
+}, { immediate: true })
 </script>
 
 <template>
-  <div class="w-full" :class="section === 'pricing' ? 'flex h-[calc(100dvh-2rem)] flex-none! flex-col min-[961px]:h-[calc(100dvh-3rem)]' : undefined">
+  <div class="@container/settings w-full" :class="section === 'pricing' ? 'flex h-[calc(100dvh-2rem)] flex-none! flex-col min-[961px]:h-[calc(100dvh-3rem)]' : undefined">
     <ZPageHeader :title="t('navigation.settings')" :description="t('settings.page.description')" />
 
     <div class="mt-4 flex min-h-z-control shrink-0 flex-wrap items-center justify-between gap-3">
       <ZSegmented
         :model-value="section"
         :aria-label="t('settings.page.sectionsLabel')"
-        class="w-full sm:w-auto"
+        class="w-full @lg/settings:w-auto @max-sm/settings:h-auto! @max-sm/settings:grid-cols-4! @max-sm/settings:[&>button]:px-1 @max-sm/settings:[&>button]:py-1 @max-sm/settings:[&>button>span]:leading-tight @max-sm/settings:[&>button>span]:whitespace-normal"
         :options="sectionOptions"
         @update:model-value="switchSection"
       />
+      <ProviderSettingsNav v-if="section === 'upstream'" :model-value="provider" :disabled="disabled" @update:model-value="switchProvider" />
       <div v-if="isBasicSection || hasChanges" class="ml-auto flex items-center justify-end gap-2">
         <span v-if="hasChanges" class="mr-1 size-1.5 shrink-0 rounded-full bg-z-warning" aria-hidden="true" />
         <ZIconButton v-if="hasChanges" :aria-label="t('settings.page.undoAllBasicSettingsChanges')" variant="solid" :disabled="saving || loading || detectingLocation" @click="resetForm">
@@ -184,20 +210,14 @@ watch(section, (value) => {
       </div>
     </div>
 
-    <ZForm v-if="settingsVisited" v-show="isBasicSection" ref="formElement" :model="formModel" :rules="rules" :validate-on-rule-change="false" novalidate class="mt-5 w-full" @submit="requestSave">
-      <SettingsAccessSection
-        v-if="visited.has('access')"
-        v-show="section === 'access'"
-        v-model:min-codex-desktop-version="form.minCodexDesktopVersion"
-        v-model:min-codex-cli-version="form.minCodexCliVersion"
-        v-model:responses-max-decompressed-body-mi-b="responsesMaxDecompressedBodyMiBValue"
-        data-settings-section="access"
-        :disabled="disabled"
-        :loading="loading"
-      />
-
-      <fieldset v-show="section !== 'access'" :disabled="disabled" class="m-0 grid min-w-0 gap-5 border-0 p-0" :aria-label="t('settings.page.basicSettings')">
-        <div v-if="visited.has('runtime')" v-show="section === 'runtime'" data-settings-section="runtime" class="grid min-w-0 gap-5">
+    <ZForm v-if="settingsVisited" v-show="isBasicSection" ref="formElement" :model="formModel" :rules="rules" :validate-on-rule-change="false" novalidate class="mt-5 w-full gap-5" @submit="requestSave">
+      <fieldset :disabled="disabled" class="m-0 grid min-w-0 gap-5 border-0 p-0" :aria-label="t('settings.page.basicSettings')">
+        <div
+          v-if="visited.has('runtime')"
+          v-show="section === 'runtime'"
+          data-settings-section="runtime"
+          class="grid min-w-0 gap-5"
+        >
           <RotationStrategyCard
             v-model="form.rotationStrategy"
             v-model:smart-scheduling="form.smartScheduling"
@@ -207,83 +227,101 @@ watch(section, (value) => {
             :disabled="disabled"
             :options="rotationOptions"
           />
-          <AccountAffinityCard
-            v-model="form.openaiAccountAffinity"
-            v-model:ttl-hours="openaiSessionAffinityTtlHoursValue"
-            v-model:max-account-rotations="maxAccountRotationsValue"
-            :disabled="disabled"
-          />
-          <ConcurrencyPolicyCard
-            v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
-            v-model:max-waiting-per-key="maxWaitingPerKeyValue"
-            v-model:max-waiting-per-account="maxWaitingPerAccountValue"
-            v-model:key-queue-timeout-seconds="keyQueueTimeoutSecondsValue"
-            v-model:account-queue-timeout-seconds="accountQueueTimeoutSecondsValue"
-            v-model:switch-account-on-queue-failure="form.switchAccountOnQueueFailure"
-            v-model:max-retry-after-seconds="maxRetryAfterSecondsValue"
-            v-model:openai-guardian-reserved-concurrency="openaiGuardianReservedConcurrencyValue"
-          />
-          <AccountErrorProtectionCard v-model="form.accountErrorProtection" :disabled="disabled" />
-          <AccountWarmupCard
-            v-model:enabled="form.accountWarmupEnabled"
-            v-model:cron="form.accountWarmupCron"
-            v-model:model="form.accountWarmupModel"
-          />
-          <ResetCreditCard
-            v-model="resetCreditLeadMinutesValue"
-            v-model:on-low-weekly-quota="form.resetCreditOnLowWeeklyQuota"
-            v-model:max-weekly-remaining-percent="resetCreditMaxWeeklyRemainingPercentValue"
-          />
-          <RequestHistoryCard v-model="usageRetentionDaysValue" />
+          <div class="grid min-w-0 gap-5 @6xl/settings:grid-cols-2">
+            <ConcurrencyPolicyCard
+              v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
+              v-model:max-waiting-per-key="maxWaitingPerKeyValue"
+              v-model:max-waiting-per-account="maxWaitingPerAccountValue"
+              v-model:key-queue-timeout-seconds="keyQueueTimeoutSecondsValue"
+              v-model:account-queue-timeout-seconds="accountQueueTimeoutSecondsValue"
+              class="col-span-full"
+            />
+            <RetryPolicyCard
+              v-model:switch-account-on-queue-failure="form.switchAccountOnQueueFailure"
+              v-model:max-retry-after-seconds="maxRetryAfterSecondsValue"
+              v-model:max-account-rotations="maxAccountRotationsValue"
+              class="col-span-full"
+            />
+            <AccountAffinityCard
+              v-model="form.accountAffinity"
+              v-model:ttl-hours="sessionAffinityTtlHoursValue"
+              :disabled="disabled"
+            />
+            <TokenRefreshCard v-model:refresh-margin-seconds="refreshMarginSecondsValue" v-model:refresh-concurrency="refreshConcurrencyValue" />
+            <AccountErrorProtectionCard v-model="form.accountErrorProtection" class="col-span-full" :disabled="disabled" />
+            <ModelAliasesCard
+              :mappings="mappings"
+              :loading="loading"
+              @add-mapping="addMapping"
+              @update-mapping="updateMapping"
+              @remove-mapping="removeMapping"
+            />
+            <RequestHistoryCard v-model="usageRetentionDaysValue" />
+          </div>
         </div>
 
-        <div v-if="visited.has('upstream')" v-show="section === 'upstream'" data-settings-section="upstream" class="grid min-w-0 gap-5">
-          <TokenRefreshCard v-model:refresh-margin-seconds="refreshMarginSecondsValue" v-model:refresh-concurrency="refreshConcurrencyValue" />
-          <ClientProfileCard
-            v-model="form.providerRequestProfiles"
-            :active="section === 'upstream'"
-            :disabled="disabled"
-          />
-          <RequestLocationCard
-            v-model="form.requestLocation"
-            v-model:enabled="form.requestLocationEnabled"
-            :disabled="disabled"
-            :detecting-location="detectingLocation"
-            @detect-location="detectLocation"
-          />
-          <RequestCountryCard v-model="form.openaiRequestCountry" :disabled="disabled" />
-          <PrivacyPolicyCard v-model="form.codexPrivacyPolicy" :disabled="disabled" />
-          <ModelAliasesCard
-            :mappings="mappings"
-            :loading="loading"
-            @add-mapping="addMapping"
-            @update-mapping="updateMapping"
-            @remove-mapping="removeMapping"
-          />
-          <ZCard
-            id="oauth-guardian-review-model-help"
-            :title="t('settings.routing.oauthGuardianReviewModel')"
-            :description="t('settings.routing.oauthGuardianReviewModelHelp')"
-          >
-            <div class="flex items-center gap-2">
-              <ZSwitch
-                v-model="form.openaiOauthGuardianReviewModel"
-                :aria-label="t('settings.routing.oauthGuardianReviewModel')"
-                :aria-description="t('settings.routing.oauthGuardianReviewModelHelp')"
-                :active-text="t('common.values.on')"
-                :inactive-text="t('common.values.off')"
-                inline-prompt
-                :width="56"
+        <div
+          v-if="visited.has('upstream')"
+          v-show="section === 'upstream'"
+          data-settings-section="upstream"
+          class="grid min-w-0 gap-5"
+        >
+          <template v-for="providerId in PROVIDER_IDS" :key="providerId">
+            <div
+              v-show="provider === providerId"
+              :data-settings-provider="providerId"
+              class="grid min-w-0 gap-5 @6xl/settings:grid-cols-2"
+            >
+              <RequestProfileCard
+                v-model="form.providerRequestProfiles"
+                :provider="providerId"
+                :active="section === 'upstream' && provider === providerId"
                 :disabled="disabled"
+                class="col-span-full"
               />
-              <HelpPopover
-                :label="t('common.form.fieldHelp', { label: t('settings.routing.oauthGuardianReviewModel') })"
-                :content="t('settings.routing.oauthGuardianReviewModelDetails')"
-              />
+              <template v-if="providerId === 'openai'">
+                <RequestLocationCard
+                  v-model="form.requestLocation"
+                  v-model:enabled="form.requestLocationEnabled"
+                  :disabled="disabled"
+                  :detecting-location="detectingLocation"
+                  @detect-location="detectLocation"
+                />
+                <RequestCountryCard v-model="form.openaiRequestCountry" :disabled="disabled" />
+                <GuardianReviewCard
+                  v-model="form.openaiOauthGuardianReviewModel"
+                  v-model:reserved-concurrency="openaiGuardianReservedConcurrencyValue"
+                  :disabled="disabled"
+                />
+                <ResetCreditCard
+                  v-model="resetCreditLeadMinutesValue"
+                  v-model:on-low-weekly-quota="form.resetCreditOnLowWeeklyQuota"
+                  v-model:max-weekly-remaining-percent="resetCreditMaxWeeklyRemainingPercentValue"
+                />
+                <AccountWarmupCard
+                  v-model:enabled="form.accountWarmupEnabled"
+                  v-model:cron="form.accountWarmupCron"
+                  v-model:model="form.accountWarmupModel"
+                  class="col-span-full"
+                />
+                <div class="col-span-full min-w-0">
+                  <PrivacyPolicyCard v-model="form.codexPrivacyPolicy" :disabled="disabled" />
+                </div>
+              </template>
             </div>
-          </ZCard>
+          </template>
         </div>
       </fieldset>
+      <SettingsAccessSection
+        v-if="visited.has('runtime')"
+        v-show="section === 'runtime'"
+        v-model:min-codex-desktop-version="form.minCodexDesktopVersion"
+        v-model:min-codex-cli-version="form.minCodexCliVersion"
+        v-model:responses-max-decompressed-body-mi-b="responsesMaxDecompressedBodyMiBValue"
+        data-settings-section="runtime"
+        :disabled="disabled"
+        :loading="loading"
+      />
     </ZForm>
 
     <SettingsBackupSection v-if="visited.has('backup')" v-show="section === 'backup'" ref="backupSection" class="mt-5" :active="section === 'backup'" />

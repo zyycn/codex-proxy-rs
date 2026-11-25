@@ -118,13 +118,18 @@ impl DefaultClientKeyService {
     fn validate_profile(
         &self,
         kind: &ProviderKind,
-        profile: &OpaqueProviderData,
+        profile: Option<&OpaqueProviderData>,
     ) -> Result<(), AdminError> {
-        self.providers
+        let provider = self
+            .providers
             .require(kind)
-            .and_then(|provider| provider.preview_key_client_profile(profile, None))
-            .map(|_| ())
-            .map_err(|error| super::map_provider_error(error, "client profile"))
+            .map_err(|error| super::map_provider_error(error, "client profile"))?;
+        if let Some(profile) = profile {
+            provider
+                .preview_key_client_profile(profile, None)
+                .map_err(|error| super::map_provider_error(error, "client profile"))?;
+        }
+        Ok(())
     }
 
     fn batch_profile_merger(
@@ -335,7 +340,7 @@ impl ClientKeyService for DefaultClientKeyService {
         crate::model::client_keys::validate_group_ids(&command.group_ids)
             .map_err(|_| AdminError::invalid("API Key 分组不合法"))?;
         for (provider, profile) in &command.request_profile_overrides {
-            self.validate_profile(provider, profile)?;
+            self.validate_profile(provider, Some(profile))?;
         }
         validate_peer_sharing(command.peer_sharing, &command.group_ids)?;
         let id = ClientApiKeyId::new(format!("key_{}", Uuid::now_v7().simple()))
@@ -378,9 +383,7 @@ impl ClientKeyService for DefaultClientKeyService {
         crate::model::client_keys::validate_group_ids(&command.group_ids)
             .map_err(|_| AdminError::invalid("API Key 分组不合法"))?;
         for (provider, profile) in &command.request_profile_override_updates {
-            if let Some(profile) = profile {
-                self.validate_profile(provider, profile)?;
-            }
+            self.validate_profile(provider, profile.as_ref())?;
         }
         if let Some(sharing) = command.peer_sharing {
             validate_peer_sharing(sharing, &command.group_ids)?;

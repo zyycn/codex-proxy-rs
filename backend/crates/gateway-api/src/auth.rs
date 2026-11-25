@@ -1,5 +1,6 @@
 //! 控制面统一登录、会话恢复与退出；身份由认证用例返回
 
+use crate::SessionState;
 use std::{fmt, net::SocketAddr};
 
 use axum::{
@@ -10,21 +11,15 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, get, post},
 };
-use gateway_admin::{
-    AdminServices,
-    model::auth::{AuthSession, ChangePassword, LoginCommand, LoginError, SessionSubject},
+use gateway_admin::model::auth::{
+    AuthSession, ChangePassword, LoginCommand, LoginError, SessionSubject,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
     admin::{AdminEnvelope, AdminError, AdminJson, AdminResponse, wire::map_admin_service_error},
-    session_cookie,
+    session,
 };
-
-/// 控制面 HTTP adapter 消费同一组用例；权限由各入口服务端校验
-pub trait SessionState {
-    fn admin_services(&self) -> &AdminServices;
-}
 
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
@@ -138,8 +133,8 @@ where
         .login(
             payload.into(),
             peer.ip(),
-            session_cookie::refresh_value(&headers)
-                .or_else(|| session_cookie::value(&headers))
+            session::refresh_value(&headers)
+                .or_else(|| session::value(&headers))
                 .as_deref(),
         )
         .await
@@ -165,7 +160,7 @@ where
     let session = state
         .admin_services()
         .auth()
-        .session(session_cookie::value(&headers).as_deref())
+        .session(session::value(&headers).as_deref())
         .await
         .map_err(map_admin_service_error)?;
     Ok(session_response(session.as_ref()))
@@ -182,8 +177,8 @@ where
         .admin_services()
         .auth()
         .renew_session(
-            session_cookie::refresh_value(&headers).as_deref(),
-            session_cookie::value(&headers).as_deref(),
+            session::refresh_value(&headers).as_deref(),
+            session::value(&headers).as_deref(),
         )
         .await
         .map_err(map_admin_service_error)?;
@@ -214,14 +209,14 @@ fn set_session_cookie(
     append_cookie(
         &mut response,
         headers,
-        session_cookie::NAME,
+        session::NAME,
         &grant.session_id,
         Some(grant.session.expires_at),
     )?;
     append_cookie(
         &mut response,
         headers,
-        session_cookie::REFRESH_NAME,
+        session::REFRESH_NAME,
         grant.refresh_token.as_deref().unwrap_or_default(),
         grant
             .session
@@ -239,8 +234,8 @@ fn append_cookie(
     value: &str,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<(), AdminError> {
-    let attributes = session_cookie::attributes(headers);
-    let path = if name == session_cookie::REFRESH_NAME {
+    let attributes = session::attributes(headers);
+    let path = if name == session::REFRESH_NAME {
         "/api/auth"
     } else {
         "/"
@@ -272,8 +267,7 @@ async fn logout<S>(State(state): State<S>, headers: HeaderMap) -> Result<Respons
 where
     S: SessionState + Send + Sync,
 {
-    if let Some(session_id) =
-        session_cookie::refresh_value(&headers).or_else(|| session_cookie::value(&headers))
+    if let Some(session_id) = session::refresh_value(&headers).or_else(|| session::value(&headers))
     {
         state
             .admin_services()
@@ -305,7 +299,7 @@ where
         .admin_services()
         .auth()
         .change_password(
-            session_cookie::value(&headers).as_deref(),
+            session::value(&headers).as_deref(),
             ChangePassword {
                 current_password: payload.current_password,
                 new_password: payload.new_password,
@@ -328,7 +322,7 @@ fn clear_session_cookie(
     mut response: Response,
     headers: &HeaderMap,
 ) -> Result<Response, AdminError> {
-    for name in [session_cookie::NAME, session_cookie::REFRESH_NAME] {
+    for name in [session::NAME, session::REFRESH_NAME] {
         append_cookie(&mut response, headers, name, "", None)?;
     }
     Ok(response)

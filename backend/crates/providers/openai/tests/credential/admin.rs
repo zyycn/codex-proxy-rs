@@ -388,7 +388,7 @@ fn pat_service(server: &MockServer) -> CodexCredentialAdminService {
             client_id: "test-public-client".to_owned(),
             token_endpoint: format!("{}/oauth/token", server.uri()),
         },
-        provider_openai::transport::profile::CodexWireProfileState::new(Default::default()),
+        provider_openai::profile::CodexWireProfileState::new(Default::default()),
     )
     .expect("auth client");
     CodexCredentialAdminService::new(
@@ -504,7 +504,7 @@ async fn pat_import_times_out_without_falling_back_to_document_identity() {
             client_id: "test-public-client".to_owned(),
             token_endpoint: format!("{}/oauth/token", server.uri()),
         },
-        provider_openai::transport::profile::CodexWireProfileState::new(Default::default()),
+        provider_openai::profile::CodexWireProfileState::new(Default::default()),
     );
     let service = CodexCredentialAdminService::new(
         Arc::new(UnusedRefresher),
@@ -557,7 +557,7 @@ async fn pat_import_requires_a_validation_client() {
 
 #[tokio::test]
 async fn pat_auth_json_import_and_cpr_round_trip_preserve_a_token_without_email() {
-    use gateway_core::account::LoadedCredential;
+    use gateway_core::account::{LoadedCredential, ProviderAccount};
     use provider_openai::credential::{CodexCredentialAdmin, ExportManagedCodexCredential};
 
     let server = MockServer::start().await;
@@ -586,21 +586,37 @@ async fn pat_auth_json_import_and_cpr_round_trip_preserve_a_token_without_email(
     .expect("policy");
     let prepared = imported.into_accounts().remove(0);
     assert!(prepared.account.email().is_none());
+    let account = ProviderAccount::new(
+        prepared.account.id().clone(),
+        prepared.account.provider().clone(),
+        String::new(),
+        prepared.account.upstream_user_id().map(str::to_owned),
+        prepared.account.authentication_kind().to_owned(),
+        prepared.account.revision(),
+        prepared.account.access_token_expires_at(),
+    )
+    .with_profile(
+        None,
+        prepared.account.upstream_account_id().map(str::to_owned),
+        prepared.account.plan_type().map(str::to_owned),
+    )
+    .with_model_access(policy.clone());
+    let now = Utc::now();
     let exported = CodexCredentialAdmin
         .format_cpr_export(vec![ExportManagedCodexCredential {
             current: LoadedCredential {
-                account: prepared.account.with_model_access(policy.clone()),
+                account,
                 credential: prepared.credential,
             },
-            added_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: now,
+            updated_at: now,
         }])
         .expect("export PAT using the existing credential schema");
+    let document = serde_json::to_value(exported).expect("export JSON");
+    assert!(document["accounts"][0].get("label").is_none());
+    assert_eq!(document["accounts"][0]["createdAt"], now.to_rfc3339());
     let imported = service
-        .prepare_import_document_with_proxy(
-            serde_json::to_value(exported).expect("export JSON"),
-            None,
-        )
+        .prepare_import_document_with_proxy(document, None)
         .await
         .expect("re-import verifies PAT again");
     assert_eq!(
@@ -1080,7 +1096,7 @@ async fn api_key_import_export_preserves_target_without_oauth_exchange() {
                     account: imported.account,
                     credential: imported.credential,
                 },
-                added_at: now,
+                created_at: now,
                 updated_at: now,
             }])
             .expect("export")
@@ -1136,7 +1152,7 @@ async fn messages_api_key_import_export_preserves_protocol_and_rejects_websocket
                 account: imported.account,
                 credential: imported.credential,
             },
-            added_at: now,
+            created_at: now,
             updated_at: now,
         }])
         .unwrap()

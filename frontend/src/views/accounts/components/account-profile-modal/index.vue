@@ -7,13 +7,13 @@ import { RefreshCw } from '@lucide/vue'
 
 import { toRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useAccountPersonalInfo } from '../../composables/useAccountPersonalInfo'
 import AccountProfileActivityInsights from './ActivityInsights.vue'
 import AccountProfileMetrics from './Metrics.vue'
 import AccountProfileHero from './ProfileHero.vue'
 import AccountProfileSkeleton from './Skeleton.vue'
 import AccountSubscription from './Subscription.vue'
 import AccountProfileTokenActivity from './TokenActivity.vue'
+import { useAccountPersonalInfo } from './useAccountPersonalInfo'
 
 const props = defineProps<{ account: Account }>()
 

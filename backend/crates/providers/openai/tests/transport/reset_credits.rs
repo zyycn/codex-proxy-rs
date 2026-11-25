@@ -2,7 +2,7 @@
 
 use chrono::{TimeZone as _, Utc};
 use provider_openai::credential::CodexResetCreditsError;
-use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
+use provider_openai::profile::{CodexWireProfile, CodexWireProfileState};
 use provider_openai::transport::{
     CodexBackendClient, CodexClientError, CodexRequestContext, MAX_CODEX_RESET_CREDITS_BODY_BYTES,
 };
@@ -21,7 +21,7 @@ fn client(base_url: &str) -> CodexBackendClient {
             .expect("reset-credit client"),
         base_url,
         CodexWireProfileState::new(CodexWireProfile {
-            client_kind: provider_openai::transport::profile::selection::ClientKind::Desktop,
+            client_kind: provider_openai::profile::selection::ClientKind::Desktop,
             originator: "Codex Desktop".to_owned(),
             codex_version: "0.115.0-alpha.11".to_owned(),
             desktop_version: "26.818.21641".to_owned(),

@@ -2,7 +2,7 @@ import type { FormRule, FormRules } from '@codex-proxy/ui'
 import type { useSettingsForm } from './useSettingsForm'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { protectionPolicyError, trimProtectionText } from '../components/error-protection/form'
+import { protectionPolicyError, trimProtectionText } from '../components/error-protection/policy'
 import { isSemver } from '../utils/version'
 
 type SettingsForm = ReturnType<typeof useSettingsForm>['form']
@@ -29,13 +29,13 @@ export function useSettingsFormRules(form: () => SettingsForm) {
     'refreshConcurrency': integer(0, 4_294_967_295, t('settings.form.invalidRefreshSettings')),
     'maxConcurrentPerAccount': integer(0, 4_294_967_295, t('settings.form.invalidConcurrency')),
     'openaiGuardianReservedConcurrency': integer(0, 4_294_967_295, t('settings.form.invalidReviewConcurrency')),
-    'openaiAccountAffinity': {
+    'accountAffinity': {
       required: true,
       trigger: 'change',
       message: t('settings.form.requiredSettings'),
     },
     'maxAccountRotations': integer(0, 31, t('settings.form.invalidSwitchLimit')),
-    'openaiSessionAffinityTtlHours': integer(1, 720, t('settings.form.invalidAffinityDuration')),
+    'sessionAffinityTtlHours': integer(1, 720, t('settings.form.invalidAffinityDuration')),
     'maxWaitingPerKey': integer(0, 1000, t('settings.form.invalidQueueSettings')),
     'maxWaitingPerAccount': integer(0, 1000, t('settings.form.invalidQueueSettings')),
     'keyQueueTimeoutSeconds': integer(1, 120, t('settings.form.invalidQueueSettings')),

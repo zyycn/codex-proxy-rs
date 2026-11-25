@@ -3,7 +3,7 @@ import type { OutboundProxyRecord } from '@/api'
 import { getProxies } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { summarizeProxyTests } from '../utils/batch'
 import { useProxyBatchTest } from './useProxyBatchTest'
 

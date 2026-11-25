@@ -1,10 +1,10 @@
 //! OpenAI OAuth token exchange 与 Codex PAT 验证的 Reqwest 适配器
 
 use super::types::CodexOAuthMetadata;
+use crate::profile::CodexWireProfileState;
 
 use crate::transport::{
     headers::build_codex_profile_headers,
-    profile::CodexWireProfileState,
     tls::{build_reqwest_client_with_custom_ca, ensure_rustls_provider},
 };
 use async_trait::async_trait;

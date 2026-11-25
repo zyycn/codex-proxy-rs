@@ -8,7 +8,7 @@ import { ArrowUpRight, History, Layers, Play, Power, RefreshCw, Settings2 } from
 import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
-import { pluginPageLocation } from '@/utils/plugin'
+import { pluginPageLocation } from '@/router/plugin'
 import { PLUGIN_STATUS_LABELS } from '../constants'
 import { configurationStatus, currentPluginInstance, hasPluginSettings, pluginStatusType } from '../utils/catalog'
 import { artifactForInstance } from '../utils/model'

@@ -16,10 +16,9 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
 import { useIdSet } from '@/composables/useIdSet'
 import { t } from '@/i18n'
-import { accountUpstreamErrorMessage } from '@/utils/account-upstream'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { errorMessage, withMinimumDuration } from '@/utils/operation'
-import { isSupportedProvider } from '@/utils/providers'
+import { accountUpstreamErrorMessage } from '@/views/accounts/utils/account-upstream'
 
 import { useAccountOnboarding } from './useAccountOnboarding'
 
@@ -68,7 +67,7 @@ export function useAccountMutations(options: {
       const account = selectedAccountsById.get(id)
       if (!account)
         return t('accounts.actions.staleSelection')
-      if (!isSupportedProvider(account.provider))
+      if (!account.capabilities.credentialExport)
         return t('accounts.actions.exportUnsupported')
     }
     return ''

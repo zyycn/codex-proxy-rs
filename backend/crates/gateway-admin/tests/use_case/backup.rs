@@ -115,6 +115,7 @@ async fn failed_delete_probe_does_not_refresh_verification() {
     for succeeds in [false, true] {
         let mut settings = configured_settings();
         settings.last_verified_at = None;
+        let revision = settings.storage_revision;
         let repository = Arc::new(FakeBackupRepository::new(settings));
         let auth = Arc::new(FakeAuthStore::new());
         let store = FakeObjectStore::new();
@@ -132,9 +133,15 @@ async fn failed_delete_probe_does_not_refresh_verification() {
             ))
             .build()
             .await;
+        let stale = services
+            .backups()
+            .test_connection(&system_context(), revision + 1)
+            .await
+            .unwrap_err();
+        assert_eq!(stale.kind(), gateway_admin::model::AdminErrorKind::Conflict);
         let result = services
             .backups()
-            .test_connection(&system_context())
+            .test_connection(&system_context(), revision)
             .await
             .unwrap();
         assert_eq!(result.ok, succeeds);
@@ -155,4 +162,28 @@ async fn failed_delete_probe_does_not_refresh_verification() {
             1
         );
     }
+}
+
+#[tokio::test]
+async fn successful_probe_of_replaced_storage_reports_a_conflict() {
+    use gateway_admin::ports::backup::BackupRepository as _;
+
+    let settings = configured_settings();
+    let revision = settings.storage_revision;
+    let repository = Arc::new(FakeBackupRepository::new(settings).rotating_before_verification());
+    let services = AdminHarness::new()
+        .backup(BackupStorePorts::new(
+            repository.clone(),
+            Arc::new(FakeDumpPort::new()),
+            Arc::new(FakeObjectStore::new()),
+        ))
+        .build()
+        .await;
+    let error = services
+        .backups()
+        .test_connection(&system_context(), revision)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), gateway_admin::model::AdminErrorKind::Conflict);
+    assert!(!repository.load_settings().await.unwrap().storage_verified());
 }

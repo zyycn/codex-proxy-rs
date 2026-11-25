@@ -1,6 +1,6 @@
 //! 固定 `/api/admin` 观测路由与 handler
 
-use crate::auth::SessionState;
+use crate::SessionState;
 
 use super::*;
 

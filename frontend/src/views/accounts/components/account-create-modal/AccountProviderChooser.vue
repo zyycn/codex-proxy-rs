@@ -5,7 +5,7 @@ import { ZSegmented } from '@codex-proxy/ui'
 import { LayoutGrid } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { formatProviderLabel, PROVIDER_IDS, providerIcon } from '@/utils/providers'
+import { formatProviderLabel, PROVIDER_IDS, providerIcon } from '@/providers/catalog'
 
 defineProps<{ disabled: boolean }>()
 

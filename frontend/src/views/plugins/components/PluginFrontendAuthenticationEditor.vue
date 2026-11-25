@@ -14,7 +14,7 @@ import { computed, shallowRef, watch } from 'vue'
 
 import { useI18n } from 'vue-i18n'
 import { getApiKeys } from '@/api'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { errorMessage } from '@/utils/operation'
 import PluginHelpPopover from './PluginHelpPopover.vue'
 

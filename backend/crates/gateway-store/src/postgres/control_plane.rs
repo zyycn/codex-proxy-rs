@@ -101,14 +101,16 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
                 postgres_unavailable("begin control plane replacement", source)
             })?;
         let result: StoreResult<_> = async {
-            // 锁住所有配置写入共同使用的行，版本检查与修改不能被其他事务穿插
-            let current = sqlx::query_scalar::<_, i64>(
-                "select config_revision from runtime_settings where id = 1 for update",
+            // 草稿可以跨过其他资源的发布，但不能覆盖读取之后的运行设置写入。
+            let (last_settings_write, current) = sqlx::query_as::<_, (i64, i64)>(
+                "select settings_revision, config_revision from runtime_settings where id = 1 for update",
             )
             .fetch_one(&mut *transaction)
             .await
             .map_err(|source| postgres_unavailable("lock control plane revision", source))?;
-            if u64::try_from(current).ok() != Some(replacement.expected_revision.get()) {
+            if !i64::try_from(replacement.expected_revision.get())
+                .is_ok_and(|read| (last_settings_write..=current).contains(&read))
+            {
                 return Err(StoreError::Conflict {
                     source: None,
                     entity: "runtime settings",

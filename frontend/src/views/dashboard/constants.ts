@@ -1,4 +1,4 @@
-import type { MetricTone } from './presenter'
+export type MetricTone = 'normal' | 'info' | 'success' | 'warning' | 'danger'
 
 // tone 到 Tailwind 类的唯一映射；仪表盘各卡片共用。
 export const metricToneIconClasses: Record<MetricTone, string> = {

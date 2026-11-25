@@ -5,7 +5,7 @@ import { deleteApiKey, disableApiKey, enableApiKey } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useIdSet } from '@/composables/useIdSet'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 
 export function useApiKeyMutations(options: {
   selectedIds: Ref<Set<string>>

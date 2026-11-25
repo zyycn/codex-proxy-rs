@@ -543,18 +543,18 @@ async fn account_usage_preserves_periods_cache_counts_and_missing_values() {
             (authentication_kind == "oauth").then(|| ProviderQuota {
                 windows: vec![ProviderQuotaWindow {
                     upstream: None,
-                    key: "rolling-day".to_owned(),
+                    key: "model-weekly".to_owned(),
                     group: "shortTerm".to_owned(),
-                    label: "日限额".to_owned(),
-                    limit_id: None,
+                    label: "周额度".to_owned(),
+                    limit_id: Some("model-group".to_owned()),
                     limit_name: None,
                     role: None,
-                    local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
-                    window_seconds: Some(86_400),
-                    used_percent: None,
-                    reset_at: None,
+                    local_usage_attribution: QuotaLocalUsageAttribution::Unavailable,
+                    window_seconds: Some(604_800),
+                    used_percent: Some(25.0),
+                    reset_at: Some(now + chrono::TimeDelta::days(6)),
                     limit_reached: false,
-                    local_usage: Some(local_usage),
+                    local_usage: None,
                     provider_data: None,
                 }],
                 ..Default::default()
@@ -595,14 +595,8 @@ async fn account_usage_preserves_periods_cache_counts_and_missing_values() {
         assert_eq!(usage["totalTokens"], 120);
         if authentication_kind == "oauth" {
             let window = &value["data"]["items"][0]["quota"]["windows"][0];
-            assert_eq!(window["localUsage"]["requestCount"], 1);
-            assert_eq!(
-                window["localUsage"]["requestBuckets"]
-                    .as_array()
-                    .unwrap()
-                    .len(),
-                1
-            );
+            assert!(window["localUsage"].is_null());
+            assert_eq!(window["usedPercent"], 25.0);
         }
         assert_eq!(usage["cachedInputTokens"], serde_json::json!(read));
         assert_eq!(usage["cacheWriteInputTokens"], serde_json::json!(write));

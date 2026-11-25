@@ -1,0 +1,192 @@
+//! xAI CLI 官方发行查询与刷新服务
+
+use std::{
+    sync::{Arc, RwLock},
+    time::Duration,
+};
+
+use chrono::{DateTime, Utc};
+use futures::{StreamExt as _, future::BoxFuture};
+use reqwest::{Client, redirect::Policy};
+use serde::Deserialize;
+use url::Url;
+
+use super::XaiWireProfileState;
+
+pub const GROK_CLI_RELEASE_URL: &str = "https://registry.npmjs.org/@xai-official%2Fgrok/latest";
+pub const GROK_CLI_RELEASE_POLL_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_RELEASE_BYTES: usize = 64 * 1024;
+
+pub trait GrokCliReleaseTransport: Send + Sync {
+    fn fetch(&self) -> BoxFuture<'_, Result<String, GrokCliReleaseError>>;
+}
+
+#[derive(Clone)]
+pub struct OfficialGrokCliReleaseTransport {
+    client: Client,
+    endpoint: Url,
+}
+
+impl OfficialGrokCliReleaseTransport {
+    pub fn new() -> Result<Self, GrokCliReleaseError> {
+        let endpoint =
+            Url::parse(GROK_CLI_RELEASE_URL).map_err(|_| GrokCliReleaseError::InvalidEndpoint)?;
+        let client = gateway_egress::http_client(None)
+            .map_err(|_| GrokCliReleaseError::ClientInitialization)?
+            .https_only(true)
+            .redirect(Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(RELEASE_TIMEOUT)
+            .build()
+            .map_err(|_| GrokCliReleaseError::ClientInitialization)?;
+        Ok(Self { client, endpoint })
+    }
+}
+
+impl GrokCliReleaseTransport for OfficialGrokCliReleaseTransport {
+    fn fetch(&self) -> BoxFuture<'_, Result<String, GrokCliReleaseError>> {
+        Box::pin(async move {
+            let response = self.client.get(self.endpoint.clone()).send().await?;
+            if !response.status().is_success() {
+                return Err(GrokCliReleaseError::HttpStatus(response.status().as_u16()));
+            }
+            if response
+                .content_length()
+                .is_some_and(|size| size > MAX_RELEASE_BYTES as u64)
+            {
+                return Err(GrokCliReleaseError::ResponseTooLarge);
+            }
+            let mut body = Vec::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                if body
+                    .len()
+                    .checked_add(chunk.len())
+                    .is_none_or(|size| size > MAX_RELEASE_BYTES)
+                {
+                    return Err(GrokCliReleaseError::ResponseTooLarge);
+                }
+                body.extend_from_slice(&chunk);
+            }
+            parse_release(&body)
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct GrokCliReleaseService {
+    profile: XaiWireProfileState,
+    transport: Arc<dyn GrokCliReleaseTransport>,
+    status: GrokCliReleaseStatus,
+}
+
+impl GrokCliReleaseService {
+    #[must_use]
+    pub fn new(profile: XaiWireProfileState, transport: Arc<dyn GrokCliReleaseTransport>) -> Self {
+        Self {
+            profile,
+            transport,
+            status: GrokCliReleaseStatus::default(),
+        }
+    }
+
+    #[must_use]
+    pub fn status(&self) -> GrokCliReleaseStatus {
+        self.status.clone()
+    }
+
+    pub async fn refresh(&self) -> Result<String, GrokCliReleaseError> {
+        let checked_at = Utc::now();
+        let result = self.transport.fetch().await;
+        match result {
+            Ok(version) => {
+                self.profile.update_client_version(&version);
+                self.status.record_success(checked_at, version.clone());
+                Ok(version)
+            }
+            Err(error) => {
+                self.status.record_failure(checked_at, &error);
+                Err(error)
+            }
+        }
+    }
+}
+
+/// 最近一次官方 Grok CLI 发布检查结果
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GrokCliReleaseSnapshot {
+    pub checked_at: Option<DateTime<Utc>>,
+    pub latest_version: Option<String>,
+    pub last_error: Option<String>,
+}
+
+/// Provider 内共享的 Grok CLI 发布检查观察状态
+#[derive(Debug, Clone, Default)]
+pub struct GrokCliReleaseStatus {
+    snapshot: Arc<RwLock<GrokCliReleaseSnapshot>>,
+}
+
+impl GrokCliReleaseStatus {
+    #[must_use]
+    pub fn snapshot(&self) -> GrokCliReleaseSnapshot {
+        self.snapshot
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn record_success(&self, checked_at: DateTime<Utc>, latest_version: String) {
+        *self
+            .snapshot
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = GrokCliReleaseSnapshot {
+            checked_at: Some(checked_at),
+            latest_version: Some(latest_version),
+            last_error: None,
+        };
+    }
+
+    fn record_failure(&self, checked_at: DateTime<Utc>, error: &GrokCliReleaseError) {
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        snapshot.checked_at = Some(checked_at);
+        snapshot.last_error = Some(error.to_string());
+    }
+}
+
+#[derive(Deserialize)]
+struct NpmRelease {
+    version: String,
+}
+
+fn parse_release(body: &[u8]) -> Result<String, GrokCliReleaseError> {
+    let release: NpmRelease =
+        serde_json::from_slice(body).map_err(|_| GrokCliReleaseError::InvalidDocument)?;
+    if semver::Version::parse(&release.version).is_err() {
+        return Err(GrokCliReleaseError::InvalidVersion);
+    }
+    Ok(release.version)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum GrokCliReleaseError {
+    #[error("Grok CLI release client initialization failed")]
+    ClientInitialization,
+    #[error("Grok CLI release endpoint is invalid")]
+    InvalidEndpoint,
+    #[error("Grok CLI release request failed")]
+    Request(#[from] reqwest::Error),
+    #[error("Grok CLI release endpoint returned HTTP {0}")]
+    HttpStatus(u16),
+    #[error("Grok CLI release response exceeded the size limit")]
+    ResponseTooLarge,
+    #[error("Grok CLI release document is invalid")]
+    InvalidDocument,
+    #[error("Grok CLI release version is invalid")]
+    InvalidVersion,
+}

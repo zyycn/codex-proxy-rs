@@ -1230,15 +1230,10 @@ fn plan_with_protection(
         .with_smart_scheduling(account_selection_policy.smart_scheduling())
         .with_quota_reset_window_weights(account_selection_policy.quota_reset_window_weights())
         .with_max_account_rotations(account_selection_policy.max_account_rotations())
-        .with_openai_account_affinity(account_selection_policy.openai_account_affinity())
-        .with_openai_session_affinity_ttl_hours(
-            u32::try_from(
-                account_selection_policy
-                    .openai_session_affinity_ttl()
-                    .as_secs()
-                    / 3600,
-            )
-            .unwrap(),
+        .with_account_affinity(account_selection_policy.account_affinity())
+        .with_session_affinity_ttl_hours(
+            u32::try_from(account_selection_policy.session_affinity_ttl().as_secs() / 3600)
+                .unwrap(),
         )
         .with_request_location(request_location, true)
         .with_account_error_protection(protection)
@@ -7281,7 +7276,7 @@ fn configured_rotation_budget_limits_actual_account_changes() {
             &operation,
             AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::new(2).unwrap())
                 .with_max_account_rotations(budget)
-                .with_openai_session_affinity_ttl(Duration::from_secs(168 * 3600)),
+                .with_session_affinity_ttl(Duration::from_secs(168 * 3600)),
         );
         let (coordinator, store, provider) = coordinator(
             ROTATION_TEST_ACCOUNTS
@@ -7311,9 +7306,7 @@ fn configured_rotation_budget_limits_actual_account_changes() {
         assert_eq!(contexts.len(), (budget + 1) as usize);
         assert!(contexts.iter().all(|context| {
             context.account_selection_policy().max_account_rotations() == budget
-                && context
-                    .account_selection_policy()
-                    .openai_session_affinity_ttl()
+                && context.account_selection_policy().session_affinity_ttl()
                     == Duration::from_secs(168 * 3600)
         }));
         let state = store.state.lock().unwrap();

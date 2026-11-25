@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import ClientVersionGuideModal from './components/ClientVersionGuideModal.vue'
-import ClientVersionPolicyCard from './components/ClientVersionPolicyCard.vue'
-import { useClientDownloads } from './composables/useClientDownloads'
+import ClientVersionGuideModal from './ClientVersionGuideModal.vue'
+import ClientVersionPolicyCard from './ClientVersionPolicyCard.vue'
+import { useClientDownloads } from './useClientDownloads'
 
 defineOptions({ name: 'ClientVersionSettings' })
 

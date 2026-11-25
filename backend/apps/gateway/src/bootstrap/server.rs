@@ -174,8 +174,7 @@ pub async fn run() -> Result<(), BootstrapError> {
         gateway_host::retention::worker(store.retention())
     ));
     plan.extend(core.take_worker_contributions());
-    plan.extend(providers.openai.take_worker_contributions());
-    plan.extend(providers.xai.take_worker_contributions());
+    plan.extend(providers.workers);
     plan.extend(admin.take_worker_contributions());
     plan.extend(providers.peer.take_worker_contributions());
     plan.push(or_shutdown!(

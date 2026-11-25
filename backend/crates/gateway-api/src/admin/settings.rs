@@ -1,6 +1,6 @@
 //! 管理端运行设置、模型定价与 Admin API Key 的 HTTP 接口
 
-use crate::auth::SessionState;
+use crate::SessionState;
 
 use std::{collections::BTreeMap, fmt};
 
@@ -51,9 +51,9 @@ pub struct RuntimeSettingsFields {
     pub switch_account_on_queue_failure: bool,
     pub max_retry_after_seconds: u32,
     pub openai_guardian_reserved_concurrency: u32,
-    pub openai_account_affinity: gateway_core::account::AccountAffinity,
+    pub account_affinity: gateway_core::account::AccountAffinity,
     pub max_account_rotations: u32,
-    pub openai_session_affinity_ttl_hours: u32,
+    pub session_affinity_ttl_hours: u32,
     pub responses_max_decompressed_body_bytes: u64,
     pub smart_scheduling: gateway_core::account::SmartSchedulingConfig,
     pub quota_reset_window_weights: gateway_core::account::ResetWindowWeights,
@@ -359,7 +359,7 @@ where
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(serde_json::json!({
-            "defaults": pricing.defaults, "overrides": pricing.overrides,
+            "supportedBands": pricing.supported_bands, "defaults": pricing.defaults, "overrides": pricing.overrides,
             "synced": pricing.synced, "syncedAt": pricing.synced_at,
             "syncedAtDisplay": pricing.synced_at.as_ref().map(|value| crate::time::TimePresenter::new(state.admin_services().timezone()).datetime(value)),
         })),
@@ -601,9 +601,6 @@ fn normalize_request_profile_updates(
     profiles
         .into_iter()
         .map(|(provider, profile)| {
-            if !matches!(provider.as_str(), "openai" | "xai") {
-                return Err(WireValidationError::new("providerRequestProfiles"));
-            }
             let provider = gateway_core::routing::ProviderKind::new(provider)
                 .map_err(|_| WireValidationError::new("providerRequestProfiles"))?;
             Ok((
@@ -728,9 +725,9 @@ impl RuntimeSettingsFields {
             switch_account_on_queue_failure: self.switch_account_on_queue_failure,
             max_retry_after_seconds: self.max_retry_after_seconds,
             openai_guardian_reserved_concurrency: self.openai_guardian_reserved_concurrency,
-            openai_account_affinity: self.openai_account_affinity,
+            account_affinity: self.account_affinity,
             max_account_rotations: self.max_account_rotations,
-            openai_session_affinity_ttl_hours: self.openai_session_affinity_ttl_hours,
+            session_affinity_ttl_hours: self.session_affinity_ttl_hours,
             responses_max_decompressed_body_bytes: self.responses_max_decompressed_body_bytes,
             smart_scheduling: self.smart_scheduling,
             quota_reset_window_weights: self.quota_reset_window_weights,
@@ -774,9 +771,9 @@ impl From<gateway_admin::model::settings::RuntimeSettingsValues> for RuntimeSett
             switch_account_on_queue_failure: settings.switch_account_on_queue_failure,
             max_retry_after_seconds: settings.max_retry_after_seconds,
             openai_guardian_reserved_concurrency: settings.openai_guardian_reserved_concurrency,
-            openai_account_affinity: settings.openai_account_affinity,
+            account_affinity: settings.account_affinity,
             max_account_rotations: settings.max_account_rotations,
-            openai_session_affinity_ttl_hours: settings.openai_session_affinity_ttl_hours,
+            session_affinity_ttl_hours: settings.session_affinity_ttl_hours,
             responses_max_decompressed_body_bytes: settings.responses_max_decompressed_body_bytes,
             smart_scheduling: settings.smart_scheduling,
             quota_reset_window_weights: settings.quota_reset_window_weights,
@@ -815,9 +812,9 @@ fn settings_validation_error(field: &'static str) -> WireValidationError {
         "min_codex_cli_version" => "minCodexCliVersion",
         "min_codex_desktop_version" => "minCodexDesktopVersion",
         "openai_request_country" => "openaiRequestCountry",
-        "openai_account_affinity" => "openaiAccountAffinity",
+        "account_affinity" => "accountAffinity",
         "openai_guardian_reserved_concurrency" => "openaiGuardianReservedConcurrency",
-        "openai_session_affinity_ttl_hours" => "openaiSessionAffinityTtlHours",
+        "session_affinity_ttl_hours" => "sessionAffinityTtlHours",
         "ops_event_retention_days" => "opsEventRetentionDays",
         "refresh_concurrency" => "refreshConcurrency",
         "refresh_margin_seconds" => "refreshMarginSeconds",

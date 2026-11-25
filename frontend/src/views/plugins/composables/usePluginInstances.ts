@@ -5,7 +5,7 @@ import { shallowRef } from 'vue'
 import { deletePluginInstance, disablePluginInstance, getPluginArtifacts, getPluginInstances, getPluginVersionPlan, updatePluginInstance } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { notifyPluginError } from '../utils/actions'
 import { configurationStatus } from '../utils/catalog'
 

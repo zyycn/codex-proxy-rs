@@ -7,7 +7,7 @@ use axum::{
 use gateway_admin::model::auth::{AdminPrincipal, AdminRequestContext};
 use tower_http::request_id::RequestId;
 
-use crate::{auth::SessionState, session_cookie};
+use crate::{SessionState, session};
 
 use super::{AdminError, wire::map_admin_service_error};
 
@@ -71,7 +71,7 @@ where
     match state
         .admin_services()
         .auth()
-        .resolve_admin_user_id(session_cookie::value(headers).as_deref())
+        .resolve_admin_user_id(session::value(headers).as_deref())
         .await
     {
         Ok(Some(admin_user_id)) => Ok(admin_user_id),

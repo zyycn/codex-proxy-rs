@@ -2,7 +2,7 @@
 
 use gateway_core::engine::probe::AccountProbeTarget;
 
-use crate::auth::SessionState;
+use crate::SessionState;
 
 use super::*;
 

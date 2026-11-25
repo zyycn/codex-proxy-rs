@@ -5,9 +5,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;
 
 use super::{Budget, changes::BodyChanges, rule::CompiledStep};
-use crate::transport::automatic_context::{
-    ContextTarget, locate_contexts, parse_xml, rewrite_git_context,
-};
+use crate::automatic_context::{ContextTarget, locate_contexts, parse_xml, rewrite_git_context};
 
 const METADATA_KEYS: &[&str] = &["turnMetadata", "turn_metadata", "x-codex-turn-metadata"];
 

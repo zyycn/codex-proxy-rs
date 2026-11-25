@@ -1,6 +1,6 @@
 import type { AccountQuotaWindow } from '@/api'
 import { clamp } from 'es-toolkit'
-import { quotaWindowTone } from '@/components/account/account-usage-window/presenter'
+import { quotaWindowTone } from '@/components/account-usage-window/presenter'
 
 // 与互联协议的账号上限一致，汇总数字不能触发无界节点分配
 const MAX_POOL_NODES = 3_000

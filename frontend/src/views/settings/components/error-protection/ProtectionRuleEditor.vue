@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { ProtectionCondition, ProtectionRule } from '@/api/modules/settings/protection'
+import type { ProtectionCondition, ProtectionRule } from '@/api'
 import { ZButton } from '@codex-proxy/ui'
 import { Plus } from '@lucide/vue'
 import { computed, toRaw } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { createProtectionCondition, protectionLimits, protectionRuleConditionsError } from './form'
+import { createProtectionCondition, protectionLimits, protectionRuleConditionsError } from './policy'
 import ProtectionConditionEditor from './ProtectionConditionEditor.vue'
 
 const props = defineProps<{ disabled: boolean, showErrors: boolean }>()

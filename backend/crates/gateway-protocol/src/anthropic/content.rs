@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 
 const ANTHROPIC_CARRIER: &str = "cpr:anthropic:v1:";
 const OPENAI_CARRIER: &str = "cpr:openai:v1:";
+pub(crate) const GENAI_CARRIER: &str = "cpr:genai:v1:";
 const REDACTED_CARRIER: &str = "claude-redacted-thinking:";
 
 pub(super) fn text(value: &Value) -> String {

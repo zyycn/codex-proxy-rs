@@ -1,6 +1,6 @@
 //! 管理端 HTTP adapter、wire contract 与固定路由
 
-use crate::auth::SessionState;
+use crate::SessionState;
 
 use axum::{
     Router,

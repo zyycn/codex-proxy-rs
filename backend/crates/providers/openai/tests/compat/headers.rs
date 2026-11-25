@@ -209,8 +209,7 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
     let request = request_with_opaque_headers(false);
     let mut configured_profile = test_wire_profile().snapshot();
     configured_profile.account_routing_override = Some("configured-route".into());
-    let profile =
-        provider_openai::transport::profile::CodexWireProfileState::new(configured_profile);
+    let profile = provider_openai::profile::CodexWireProfileState::new(configured_profile);
     let profile_snapshot = profile.snapshot();
     let expected_user_agent = profile_snapshot.user_agent();
     let expected_core_version = profile_snapshot.codex_version;
@@ -381,7 +380,7 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
             .build()
             .expect("HTTP client"),
         format!("http://{address}"),
-        provider_openai::transport::profile::CodexWireProfileState::new(profile),
+        provider_openai::profile::CodexWireProfileState::new(profile),
     )
     .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_mins(1))));
 

@@ -6,11 +6,11 @@ import { AlertTriangle, RefreshCw, TicketCheck } from '@lucide/vue'
 
 import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useAccountResetCredits } from '../../composables/useAccountResetCredits'
 import AccountQuotaCredits from './Credits.vue'
 import QuotaActionButton from './QuotaActionButton.vue'
 import ResetCreditAutomation from './ResetCreditAutomation.vue'
 import UsageLimits from './UsageLimits.vue'
+import { useAccountResetCredits } from './useAccountResetCredits'
 
 const props = defineProps<{
   account: Account

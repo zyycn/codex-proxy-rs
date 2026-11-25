@@ -117,12 +117,10 @@ async fn initialize_inner(
         backup_ports.object_store(),
     )
     .with_timezone(timezone);
-    let system_preflight = Arc::new(
-        use_case::system_preflight::PluginSystemUpdatePreflight::new(
-            store.plugins(),
-            plugin_inspector.clone(),
-        ),
-    );
+    let system_preflight = Arc::new(use_case::system::PluginSystemUpdatePreflight::new(
+        store.plugins(),
+        plugin_inspector.clone(),
+    ));
     let system = Arc::new(DefaultSystemService::new(system, system_preflight));
     let observations: Arc<dyn ports::store::ObservabilityStore> = Arc::new(
         use_case::observability::CachedObservabilityStore::new(store.observability()),

@@ -12,9 +12,7 @@ const model = defineModel<string>('model', { required: true })
 </script>
 
 <template>
-  <ZCard
-    :description="t('settings.warmup.description')"
-  >
+  <ZCard class="@container" :description="t('settings.warmup.scheduleDescription')">
     <template #title>
       <span class="inline-flex items-center gap-1">
         {{ t('settings.warmup.title') }}
@@ -25,19 +23,25 @@ const model = defineModel<string>('model', { required: true })
             </ZIconButton>
           </template>
           <div class="max-w-80 space-y-2 px-3 py-2 text-z-sm font-regular leading-relaxed text-z-text-secondary">
+            <p>{{ t('settings.warmup.description') }}</p>
             <p>{{ t('settings.warmup.help') }}</p>
             <p>{{ t('settings.warmup.scheduleHelp') }}</p>
           </div>
         </ZPopover>
       </span>
     </template>
-    <div class="grid min-w-0 gap-4.5 max-w-6xl sm:grid-cols-2 sm:items-end">
+    <template #actions>
       <ZSwitch
         v-model="enabled"
-        class="col-span-full justify-self-start"
-        :label="t('settings.warmup.enableWarmup')"
+        class="min-h-z-control-sm"
+        :aria-label="t('settings.warmup.enableWarmup')"
+        :active-text="t('common.values.on')"
+        :inactive-text="t('common.values.off')"
+        inline-prompt
+        :width="56"
       />
-
+    </template>
+    <div class="grid min-w-0 gap-4.5 @md:grid-cols-2 @md:items-end">
       <ZFormItem
         :show-message="enabled || cron.length > 0"
         prop="accountWarmupCron"

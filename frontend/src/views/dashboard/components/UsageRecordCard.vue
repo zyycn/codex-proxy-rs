@@ -1,19 +1,17 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView } from '../presenter'
+import type { UsageListRecord } from '@/api'
 
 import { ZCard } from '@codex-proxy/ui'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { usageRecordColumns } from '@/components/usage/shared/columns'
-import UsageRecordsTable from '@/components/usage/UsageRecordsTable.vue'
+import { usageRecordColumns } from '@/components/usage-records-table/columns'
+import UsageRecordsTable from '@/components/usage-records-table/index.vue'
 
 defineProps<{
-  rows: DashboardSnapshot['usageRecords']
+  rows: UsageListRecord[]
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
-
-type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
 
 const dashboardUsageRecordColumns = computed(() => usageRecordColumns.value.filter(
   column => column.key !== 'actions' && column.key !== 'clientApiKeyName',

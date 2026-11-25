@@ -3,12 +3,12 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { createAccountImportTask, importAccounts } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
+import { providerAccounts } from '@/providers/accounts'
+import { isBuiltinProvider } from '@/providers/catalog'
 import { errorMessage, generateRequestId } from '@/utils/operation'
-import { isSupportedProvider } from '@/utils/providers'
-import { accountCreateProvider, accountCreateSourceKey, accountImportModes, accountImportSettings, emptyAccountCreateForm } from '../utils/accountCreate'
+import { accountCreateProvider, accountCreateSourceKey, accountImportSettings, emptyAccountCreateForm } from '../utils/accountCreate'
 import { accountImportBatches, accountImportDocuments, mixedImportDocuments } from '../utils/accountImport'
-import { emptyApiKeyAccountForm } from '../utils/upstreamApiKey'
 import { useAccountAuthorization } from './useAccountAuthorization'
 
 export function useAccountOnboarding(options: {
@@ -45,12 +45,12 @@ export function useAccountOnboarding(options: {
   function requireImportProvider(provider: string | undefined) {
     if (!provider)
       throw new Error(t('accounts.onboarding.providerRequired'))
-    if (!isSupportedProvider(provider))
+    if (!isBuiltinProvider(provider))
       throw new Error(t('accounts.onboarding.accountPlatformIsNotSupported'))
     return provider
   }
 
-  async function handleCreate() {
+  async function handleCreate(document?: Record<string, unknown>) {
     if (createForm.value.mode === 'oauth') {
       await authorization.complete()
       return
@@ -67,20 +67,14 @@ export function useAccountOnboarding(options: {
         return
       const provider = accountCreateProvider(form)
       if (mode === 'api_key') {
-        if (requireImportProvider(provider) !== 'openai')
+        const id = requireImportProvider(provider)
+        if (!document || !providerAccounts(id)?.modes.includes(mode))
           throw new Error(t('accounts.onboarding.apiKeyUnsupported'))
         await importAccounts({
-          provider: 'openai',
+          provider: id,
           settings,
           outboundProxyId,
-          data: {
-            provider: 'openai',
-            authentication_kind: 'api_key',
-            base_url: form.apiKey.base_url.trim(),
-            api_key: form.apiKey.apiKey,
-            protocol: form.apiKey.protocol,
-            transport: form.apiKey.transport,
-          },
+          data: document,
         })
         await finishCreate(t('accounts.onboarding.apiKeyAccountAdded'))
         return
@@ -130,9 +124,12 @@ export function useAccountOnboarding(options: {
     try {
       const form = createForm.value
       const provider = accountCreateProvider(form)
-      if (!isSupportedProvider(provider))
-        throw new Error(t('accounts.onboarding.accountPlatformIsNotSupported'))
       const account = reauthorizingAccount.value
+      const canAuthorize = account
+        ? account.capabilities.reauthorize
+        : providerAccounts(provider)?.modes.includes('oauth')
+      if (!provider || !canAuthorize)
+        throw new Error(t('accounts.onboarding.accountPlatformIsNotSupported'))
       await authorization.start({
         start: {
           provider,
@@ -164,7 +161,7 @@ export function useAccountOnboarding(options: {
   }
 
   function openReauthorizeAccount(account: Account) {
-    if (isSupportedProvider(account.provider) && account.authenticationKind !== 'oauth')
+    if (!account.capabilities.reauthorize)
       return
     authorization.reset()
     reauthorizingAccount.value = account
@@ -190,8 +187,7 @@ export function useAccountOnboarding(options: {
         ? 'oauth'
         : createForm.value.source?.kind === 'bundle'
           ? 'json'
-          : accountImportModes(accountCreateProvider(createForm.value))[0]?.value ?? 'json',
-      apiKey: emptyApiKeyAccountForm(),
+          : providerAccounts(accountCreateProvider(createForm.value))?.modes[0] ?? 'json',
       importTexts: { access_token: '', refresh_token: '', json: '' },
     }
   }, { flush: 'sync' })

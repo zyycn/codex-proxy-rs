@@ -1,23 +1,23 @@
 import type { AccountAuthorizationView } from '../../composables/useAccountAuthorization'
 import type { AccountCreateForm } from '../../utils/accountCreate'
 import { t } from '@/i18n'
-import { formatProviderLabel } from '@/utils/providers'
-import { accountCreateProvider, accountImportModes } from '../../utils/accountCreate'
+import { importModeOptions, oauthCallback } from '@/providers/accounts'
+import { formatProviderLabel } from '@/providers/catalog'
+import { accountCreateProvider } from '../../utils/accountCreate'
 
 export function resolveAccountCreatePresentation(input: {
   form: AccountCreateForm
-  provider: string | undefined
   authorization: AccountAuthorizationView
   callback: string
   busy: boolean
   reauthorizing: boolean
 }) {
-  const { form, provider, authorization } = input
+  const { form, authorization } = input
   const id = accountCreateProvider(form)
   const label = formatProviderLabel(id)
   const isBatch = form.source?.kind === 'bundle'
   const configuring = !input.reauthorizing && form.step === 'settings'
-  const modes = accountImportModes(provider)
+  const modes = importModeOptions(id)
   const available = isBatch || (form.mode === 'oauth' && Boolean(authorization.flow)) || modes.some(mode => mode.value === form.mode)
   let description = t('accounts.onboarding.jsonDescription')
   if (isBatch)
@@ -58,15 +58,7 @@ export function resolveAccountCreatePresentation(input: {
       type: configuring ? 'default' as const : 'info' as const,
       width: configuring ? '42rem' : '36rem',
     },
-    oauth: {
-      callbackLabel: id === 'xai'
-        ? t('accounts.onboarding.callbackLabel')
-        : t('accounts.onboarding.callbackAddress'),
-      callbackPlaceholder: id === 'openai'
-        ? 'http://localhost:1455/auth/callback?code=...&state=...'
-        : t('accounts.onboarding.callbackPlaceholder'),
-      description: t('accounts.onboarding.callbackHelp'),
-    },
+    oauth: oauthCallback(id),
     importInput: form.mode === 'access_token'
       ? {
           label: 'Access Token',

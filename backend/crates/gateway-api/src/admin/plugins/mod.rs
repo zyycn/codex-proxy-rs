@@ -13,8 +13,7 @@ struct IdRequest {
     id: String,
 }
 
-pub(super) fn router<S: crate::auth::SessionState + Clone + Send + Sync + 'static>()
--> axum::Router<S> {
+pub(super) fn router<S: crate::SessionState + Clone + Send + Sync + 'static>() -> axum::Router<S> {
     artifacts::router()
         .merge(distribution::router())
         .merge(instances::router())

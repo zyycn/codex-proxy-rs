@@ -1,0 +1,393 @@
+<script setup lang="ts">
+import type { MetricTone } from '../../constants'
+import type { DashboardAccountUsage, DashboardCapacityInfo, DashboardPoolSummary } from '@/api'
+
+import { ZCard, ZEmpty } from '@codex-proxy/ui'
+import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
+
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+import AccountUsageWindow from '@/components/account-usage-window/index.vue'
+import { formatCompactNumber } from '@/utils/format'
+import { formatRelativeTime } from '@/utils/relative-time'
+import { metricToneIconClasses, metricToneValueClasses } from '../../constants'
+import DashboardAccountIdentity from './DashboardAccountIdentity.vue'
+
+const props = defineProps<{
+  accounts: DashboardAccountUsage[]
+  pool?: DashboardPoolSummary
+  capacity?: DashboardCapacityInfo
+  rotationStrategy?: string | null
+}>()
+
+const { t } = useI18n({ useScope: 'global' })
+
+const unlimitedCapacity = computed(() => props.capacity?.maxConcurrentPerAccount === 0 && props.capacity.totalSlots === null)
+
+const scheduleStats = computed(() => {
+  const cap = props.capacity
+  const display = (value: number | null | undefined) => value === null || value === undefined
+    ? '—'
+    : formatCompactNumber(value)
+  return [
+    {
+      label: t('dashboard.scheduling.defaultConcurrency'),
+      value: cap?.maxConcurrentPerAccount === 0
+        ? t('common.values.unlimited')
+        : display(cap?.maxConcurrentPerAccount),
+    },
+    {
+      label: t('dashboard.scheduling.totalSlots'),
+      value: unlimitedCapacity.value
+        ? t('common.values.unlimited')
+        : display(cap?.totalSlots),
+    },
+    {
+      label: t('dashboard.scheduling.freeSlots'),
+      value: unlimitedCapacity.value
+        ? t('common.values.unlimited')
+        : display(cap?.availableSlots),
+    },
+  ]
+})
+
+const usedProgressStyle = computed(() => {
+  const capacity = props.capacity
+  if (!capacity?.totalSlots || capacity.usedSlots === null)
+    return { width: '0' }
+
+  return {
+    width: `${(capacity.usedSlots / capacity.totalSlots) * 100}%`,
+    minWidth: capacity.usedSlots > 0
+      ? '3px'
+      : undefined,
+  }
+})
+
+const usedRatio = computed(() => {
+  const cap = props.capacity
+  if (unlimitedCapacity.value) {
+    return `${cap?.usedSlots === null || cap?.usedSlots === undefined
+      ? '—'
+      : formatCompactNumber(cap.usedSlots)} / ∞`
+  }
+  if (!cap || cap.totalSlots === null || cap.totalSlots === undefined)
+    return '— / —'
+  if (cap.usedSlots === null || cap.usedSlots === undefined)
+    return `— / ${formatCompactNumber(cap.totalSlots)}`
+  return `${formatCompactNumber(cap.usedSlots)} / ${formatCompactNumber(cap.totalSlots)}`
+})
+
+const strategyLabel = computed(() => {
+  const s = props.rotationStrategy
+  if (!s)
+    return '—'
+  const map: Record<string, string> = {
+    smart: t('dashboard.scheduling.smart'),
+    quota_reset_priority: t('dashboard.scheduling.quotaReset'),
+    round_robin: t('settings.scheduling.roundRobin'),
+    sticky: t('dashboard.scheduling.sticky'),
+  }
+  return map[s] || s
+})
+
+function toneIconClass(tone: string) {
+  return metricToneIconClasses[tone as MetricTone]
+}
+
+function toneValueClass(tone: string) {
+  return metricToneValueClasses[tone as MetricTone]
+}
+
+const accountStatusCounts = computed(() => {
+  const p = props.pool
+  if (!p)
+    return null
+  const normal = p.normal ?? 0
+  const quotaLimited = (p.quotaExhausted ?? 0) + (p.quotaPaused ?? 0)
+  const rateLimited = p.rateLimited ?? 0
+  const disabled = p.disabled ?? 0
+  const error = p.error ?? 0
+  return {
+    total: p.total,
+    normal,
+    quotaLimited,
+    rateLimited,
+    disabled,
+    error,
+    unavailable: quotaLimited + rateLimited + disabled + error,
+  }
+})
+
+const statusRows = computed(() => {
+  const p = props.pool
+  const counts = accountStatusCounts.value
+  if (!p || !counts) {
+    return [
+      {
+        label: t('common.status.healthy'),
+        description: t('dashboard.accountPool.empty'),
+        value: '—',
+        tone: 'success',
+        icon: CircleCheck,
+      },
+      {
+        label: t('dashboard.accountPool.quotaLimited'),
+        description: t('dashboard.accountPool.empty'),
+        value: '—',
+        tone: 'warning',
+        icon: TriangleAlert,
+      },
+      {
+        label: t('dashboard.accountPool.rateLimited'),
+        description: t('dashboard.accountPool.empty'),
+        value: '—',
+        tone: 'normal',
+        icon: RefreshCw,
+      },
+      {
+        label: t('dashboard.accountPool.pending'),
+        description: t('dashboard.accountPool.issueCountsEmpty'),
+        value: '—',
+        tone: 'danger',
+        icon: ShieldAlert,
+      },
+    ]
+  }
+
+  return [
+    {
+      label: t('common.status.healthy'),
+      description: t('dashboard.accountPool.availableDescription'),
+      value: String(counts.normal),
+      tone: 'success',
+      icon: CircleCheck,
+    },
+    {
+      label: t('dashboard.accountPool.quotaLimited'),
+      description: t('dashboard.accountPool.limitedQuotaDescription'),
+      value: String(counts.quotaLimited),
+      tone: 'warning',
+      icon: TriangleAlert,
+    },
+    {
+      label: t('dashboard.accountPool.rateLimited'),
+      description: t('dashboard.accountPool.limitedDescription'),
+      value: String(counts.rateLimited),
+      tone: 'normal',
+      icon: RefreshCw,
+    },
+    {
+      label: t('dashboard.accountPool.pending'),
+      description: t('dashboard.accountPool.issueCounts', { disabled: counts.disabled, error: counts.error }),
+      value: String(counts.disabled + counts.error),
+      tone: 'danger',
+      icon: ShieldAlert,
+    },
+  ]
+})
+
+const normalRate = computed(() => {
+  const p = props.pool
+  if (!p || p.total === 0)
+    return '—'
+  return `${((p.normal / p.total) * 100).toFixed(1)}%`
+})
+
+const statusBars = computed(() => {
+  const counts = accountStatusCounts.value
+  if (!counts || counts.total === 0)
+    return []
+  return [
+    { pct: (counts.normal / counts.total) * 100, cls: 'bg-z-success' },
+    { pct: (counts.quotaLimited / counts.total) * 100, cls: 'bg-z-warning' },
+    { pct: (counts.rateLimited / counts.total) * 100, cls: 'bg-z-warning' },
+    { pct: ((counts.disabled + counts.error) / counts.total) * 100, cls: 'bg-z-error' },
+  ].filter(b => b.pct > 0)
+})
+</script>
+
+<template>
+  <ZCard as="article" class="w-full xl:h-112.5">
+    <div
+      class="grid xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.28fr)_minmax(280px,0.9fr)] xl:gap-7"
+    >
+      <section class="min-w-0 w-full pb-6 xl:h-100.5 xl:pb-0">
+        <h2 class="m-0 text-xl leading-[1.15] font-heavy text-z-text">
+          {{ t('dashboard.scheduling.title') }}
+        </h2>
+        <p class="mt-1.75 mb-0 text-z leading-[1.15] font-semibold text-z-text-secondary">
+          {{ t('dashboard.scheduling.description') }}
+        </p>
+
+        <div class="mt-6.75 grid gap-4 xl:h-82.5 xl:grid-rows-[122px_90px_minmax(0,1fr)]">
+          <div class="grid h-30.5 content-between rounded-z-lg bg-z-fill-alter/70 p-4 xl:h-auto">
+            <span class="block h-3.5 text-xs leading-[1.15] font-emphasis text-z-text-secondary">{{ t('dashboard.scheduling.occupiedSlots') }}</span>
+            <div>
+              <div class="h-8.5">
+                <strong
+                  class="font-mono text-[32px] leading-[1.05] font-heavy tabular-nums text-z-text"
+                >
+                  {{ usedRatio }}
+                </strong>
+              </div>
+              <div v-if="!unlimitedCapacity" class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-z-progress-remaining">
+                <i
+                  class="block h-2.5 rounded-full bg-z-success"
+                  :style="usedProgressStyle"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="grid h-22.5 grid-cols-3 gap-4 rounded-z-lg bg-z-fill-alter/70 p-4 xl:h-auto"
+          >
+            <div v-for="stat in scheduleStats" :key="stat.label" class="grid content-between">
+              <span class="text-xs leading-[1.15] font-emphasis text-z-text-secondary">{{ stat.label }}</span>
+              <strong
+                class="block font-mono text-[21px] leading-[1.1] font-heavy tabular-nums text-z-text"
+              >
+                {{ stat.value }}
+              </strong>
+            </div>
+          </div>
+
+          <div class="grid h-20.5 content-between rounded-z-lg bg-z-fill-alter/70 p-4 xl:h-auto">
+            <span class="text-xs leading-[1.15] font-emphasis text-z-text-secondary">{{ t('dashboard.scheduling.strategy') }}</span>
+            <strong class="block text-[17px] leading-[1.15] font-emphasis text-z-text">
+              {{ strategyLabel }}
+            </strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="min-w-0 w-full">
+        <h2 class="m-0 text-xl leading-[1.15] font-heavy text-z-text">
+          {{ t('dashboard.activeAccounts.title') }}
+        </h2>
+        <p class="mt-1.75 mb-0 text-z leading-[1.15] font-semibold text-z-text-secondary">
+          {{ t('dashboard.activeAccounts.sortByRecent') }}
+        </p>
+
+        <div
+          class="mt-5 flex w-full flex-col gap-2 overflow-hidden xl:mt-6.75 xl:h-82.5 xl:gap-2.5"
+        >
+          <ZEmpty
+            v-if="accounts.length === 0"
+            :title="t('dashboard.activeAccounts.empty')"
+            surface="inset"
+            class="min-h-40 place-content-center xl:h-full"
+          />
+          <template v-else>
+            <article
+              v-for="account in accounts"
+              :key="account.id"
+              class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-z-fill-alter/70 px-3.5 py-3.5 transition-colors xl:h-18.75 xl:grid-cols-[minmax(0,1.32fr)_minmax(64px,0.4fr)_minmax(66px,0.42fr)_minmax(96px,0.7fr)] xl:items-center xl:gap-3 xl:px-4 xl:py-0"
+            >
+              <DashboardAccountIdentity
+                :account="account"
+                class="min-w-0 xl:pr-4"
+              />
+
+              <span
+                class="grid min-w-0 grid-cols-[minmax(0,0.82fr)_minmax(0,0.64fr)_minmax(104px,1fr)] items-start gap-3 xl:contents"
+              >
+                <span class="grid min-w-0 gap-1">
+                  <span class="text-z-xs leading-none font-bold text-z-text-quaternary">
+                    {{ account.metric === 'requests' ? t('dashboard.activeAccounts.requestCount') : t('dashboard.activeAccounts.todayTokens') }}
+                  </span>
+                  <strong
+                    class="font-mono text-sm leading-[1.15] font-heavy tabular-nums text-z-text"
+                  >
+                    {{ account.metricValueRaw == null || (account.metric === 'requests' && account.metricValueRaw === 0) ? '—' : formatCompactNumber(account.metricValueRaw) }}
+                  </strong>
+                </span>
+
+                <span class="grid min-w-0 gap-1">
+                  <span class="text-z-xs leading-none font-bold text-z-text-quaternary">{{ t('dashboard.activeAccounts.recent') }}</span>
+                  <span
+                    class="min-w-0 truncate text-xs leading-[1.15] font-bold text-z-text-secondary xl:whitespace-nowrap"
+                  >
+                    {{ formatRelativeTime(account.lastUsedRelative) }}
+                  </span>
+                </span>
+
+                <AccountUsageWindow
+                  v-if="account.usageWindow"
+                  :window="account.usageWindow"
+                  :show-local-value="false"
+                  variant="metric"
+                />
+              </span>
+            </article>
+          </template>
+        </div>
+      </section>
+
+      <section class="min-w-0 w-full pt-6 xl:h-100.5 xl:pt-0">
+        <header class="flex h-12.5 items-start justify-between">
+          <div>
+            <h2 class="m-0 text-xl leading-[1.15] font-heavy text-z-text">
+              {{ t('dashboard.accountPool.title') }}
+            </h2>
+            <p class="mt-1 mb-0 text-z leading-[1.15] font-emphasis text-z-text-secondary">
+              {{ t('dashboard.accountPool.description') }}
+            </p>
+          </div>
+          <div class="grid justify-items-end">
+            <strong
+              class="font-mono text-2xl leading-[1.05] font-heavy tabular-nums text-z-success-text"
+            >
+              {{ normalRate }}
+            </strong>
+            <span class="mt-0.5 text-xs leading-[1.15] font-bold text-z-text-secondary">{{ t('dashboard.accountPool.healthyRate') }}</span>
+          </div>
+        </header>
+
+        <div class="mt-5.5 h-10.5 w-full">
+          <div class="flex h-4 items-center justify-between">
+            <span class="text-xs leading-[1.15] font-emphasis text-z-text-secondary">{{ t('dashboard.accountPool.distribution') }}</span>
+            <span class="text-xs leading-[1.15] font-emphasis text-z-error-text">{{ t('dashboard.accountPool.unavailableCount', { value: accountStatusCounts?.unavailable ?? '—' }) }}</span>
+          </div>
+          <div class="mt-2.5 flex h-3 w-full overflow-hidden rounded-full bg-z-fill-tertiary">
+            <i
+              v-for="(bar, bi) in statusBars"
+              :key="bi"
+              class="h-3"
+              :class="bar.cls"
+              :style="{ flexBasis: `${bar.pct}%` }"
+            />
+          </div>
+        </div>
+
+        <div class="mt-6.5 grid h-65.5 w-full gap-2.5">
+          <div
+            v-for="row in statusRows"
+            :key="row.label"
+            class="grid h-14.5 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-z-lg bg-z-fill-alter/70 px-3.5"
+          >
+            <span
+              class="inline-flex size-7 items-center justify-center rounded-z"
+              :class="toneIconClass(row.tone)"
+            >
+              <component :is="row.icon" :size="16" />
+            </span>
+            <span class="col-start-3 grid gap-1">
+              <strong class="text-sm leading-[1.15] font-emphasis text-z-text">
+                {{ row.label }}
+              </strong>
+              <span class="text-xs leading-[1.15] font-emphasis text-z-text-secondary">{{ row.description }}</span>
+            </span>
+            <strong
+              class="col-start-4 text-right font-mono text-[17px] leading-[1.15] font-heavy tabular-nums"
+              :class="toneValueClass(row.tone)"
+            >
+              {{ row.value }}
+            </strong>
+          </div>
+        </div>
+      </section>
+    </div>
+  </ZCard>
+</template>

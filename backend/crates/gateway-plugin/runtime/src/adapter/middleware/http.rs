@@ -13,7 +13,7 @@ use http_body::Frame;
 use http_body_util::{BodyExt as _, StreamBody};
 
 use super::MiddlewareEntry;
-use crate::callback::http_middleware::{Invocation, headers};
+use crate::callback::http::middleware::{Invocation, headers};
 
 pub(super) async fn invoke(
     entry: Arc<MiddlewareEntry>,

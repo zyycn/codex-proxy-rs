@@ -35,8 +35,8 @@ use crate::credential::{
     CODEX_AUTHENTICATION_KIND_OAUTH, CodexCredentialRepository, CodexSelectionModel,
     SelectCodexProviderEndpointCredential,
 };
+use crate::profile::CodexWireProfile;
 use crate::transport::headers::websocket_header_pairs;
-use crate::transport::profile::CodexWireProfile;
 use crate::transport::websocket::{connect_live_sideband, into_live_relay};
 use crate::transport::{CODEX_REALTIME_CALLS_PATH, CodexRequestContext};
 

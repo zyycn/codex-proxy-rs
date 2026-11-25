@@ -81,7 +81,7 @@ pub(crate) struct DefaultSettingsService {
 }
 
 impl DefaultSettingsService {
-    fn profile_provider(
+    fn registered_provider(
         &self,
         provider: &str,
     ) -> Result<std::sync::Arc<dyn crate::ports::provider::ProviderAdmin>, AdminError> {
@@ -89,7 +89,7 @@ impl DefaultSettingsService {
             .map_err(|_| AdminError::invalid("服务商无效"))?;
         self.providers
             .require(&kind)
-            .map_err(|error| super::map_provider_error(error, "client profile"))
+            .map_err(|error| super::map_provider_error(error, "provider registry"))
     }
 
     #[must_use]
@@ -128,7 +128,7 @@ impl SettingsService for DefaultSettingsService {
         &self,
         request: gateway_core::settings::privacy::PrivacyPreviewRequest,
     ) -> Result<gateway_core::settings::privacy::PrivacyPreviewResult, AdminError> {
-        self.profile_provider("openai")?
+        self.registered_provider("openai")?
             .preview_privacy_policy(request)
             .map_err(|error| {
                 AdminError::invalid(format!(
@@ -142,7 +142,9 @@ impl SettingsService for DefaultSettingsService {
     async fn preview_pricing_sync(
         &self,
     ) -> Result<crate::model::pricing::PricingSyncPreview, AdminError> {
-        self.pricing_source.fetch().await
+        let scope = self.providers.pricing_source_scope();
+        let prices = self.pricing_source.fetch(&scope).await?;
+        Ok(scope.project(prices))
     }
 
     async fn sync_pricing(
@@ -172,7 +174,7 @@ impl SettingsService for DefaultSettingsService {
         {
             return Err(AdminError::invalid("该服务商不支持价目管理"));
         }
-        let mut current = self.pricing_source.fetch().await?;
+        let mut current = self.preview_pricing_sync().await?;
         if current != command.preview {
             return Err(AdminError::invalid(
                 "models.dev 价目已变化，请重新预览后确认",
@@ -217,6 +219,7 @@ impl SettingsService for DefaultSettingsService {
             .await
             .map_err(|error| map_store_error(error, "model pricing"))?;
         Ok(crate::model::pricing::PricingCatalog {
+            supported_bands: self.providers.supported_pricing_bands(),
             defaults: self.providers.pricing_catalog(),
             overrides: stored.overrides,
             synced: stored.synced,
@@ -231,8 +234,10 @@ impl SettingsService for DefaultSettingsService {
     ) -> Result<(), AdminError> {
         use crate::model::pricing::PricingChange;
         let catalog = self.pricing().await?;
-        if !catalog.defaults.contains_key(&command.provider)
-            || command.models.is_empty()
+        let Some(supported) = catalog.supported_bands.get(&command.provider) else {
+            return Err(AdminError::invalid("服务商、模型 ID 或批量数量不合法"));
+        };
+        if command.models.is_empty()
             || command.models.len() > 500
             || command.models.iter().any(|model| {
                 model.is_empty()
@@ -259,14 +264,7 @@ impl SettingsService for DefaultSettingsService {
         match &command.change {
             PricingChange::Replace(pricing) => {
                 pricing.validate().map_err(AdminError::invalid)?;
-                if command.provider == "xai"
-                    && pricing.bands.keys().any(|band| {
-                        matches!(
-                            band.as_str(),
-                            "image" | "flex" | "long_flex" | "ultrafast" | "long_ultrafast"
-                        )
-                    })
-                {
+                if pricing.bands.keys().any(|band| !supported.contains(band)) {
                     return Err(AdminError::invalid("当前平台不支持此价格档位"));
                 }
                 if !pricing.bands.contains_key("standard")
@@ -307,7 +305,7 @@ impl SettingsService for DefaultSettingsService {
         &self,
         provider: &str,
     ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
-        let profile_provider = self.profile_provider(provider)?;
+        let profile_provider = self.registered_provider(provider)?;
         let mut options = profile_provider
             .client_profile_options()
             .map_err(|error| super::map_provider_error(error, "client profile"))?
@@ -331,7 +329,7 @@ impl SettingsService for DefaultSettingsService {
         provider: &str,
         configuration: Option<&gateway_core::account::OpaqueProviderData>,
     ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
-        let profile_provider = self.profile_provider(provider)?;
+        let profile_provider = self.registered_provider(provider)?;
         let independent = configuration.filter(|key| {
             gateway_core::settings::request_profiles::inherited_fields(key).is_none()
         });
@@ -378,7 +376,7 @@ impl SettingsService for DefaultSettingsService {
     ) -> Result<RuntimeSettings, AdminError> {
         validate_settings(&command)?;
         if command.values.codex_privacy_policy != Default::default() {
-            self.profile_provider("openai")?
+            self.registered_provider("openai")?
                 .compile_privacy_policy(&command.values.codex_privacy_policy)
                 .map_err(|error| {
                     AdminError::invalid(format!(
@@ -388,37 +386,30 @@ impl SettingsService for DefaultSettingsService {
                     ))
                 })?;
         }
-        if command
-            .request_profile_updates
-            .values()
-            .any(Option::is_some)
-        {
+        if !command.request_profile_updates.is_empty() {
             let current = self
                 .store
                 .load_runtime_settings()
                 .await
                 .map_err(|error| map_store_error(error, "runtime settings"))?;
-            command.request_profile_updates.retain(|provider, update| {
-                !update
-                    .as_ref()
-                    .is_some_and(|profile| current.request_profiles.get(provider) == Some(profile))
-            });
-        }
-        if command
-            .request_profile_updates
-            .values()
-            .any(Option::is_some)
-        {
-            let providers = &self.providers;
-            for (provider, profile) in &command.request_profile_updates {
-                let Some(profile) = profile else {
-                    continue;
-                };
-                providers
-                    .require(provider)
-                    .and_then(|provider| provider.preview_client_profile(profile))
+            for (kind, update) in &command.request_profile_updates {
+                let provider = self
+                    .providers
+                    .require(kind)
                     .map_err(|error| super::map_provider_error(error, "client profile"))?;
+                if let Some(profile) = update
+                    && current.request_profiles.get(kind) != Some(profile)
+                {
+                    provider
+                        .preview_client_profile(profile)
+                        .map_err(|error| super::map_provider_error(error, "client profile"))?;
+                }
             }
+            command.request_profile_updates.retain(|kind, update| {
+                update
+                    .as_ref()
+                    .is_none_or(|profile| current.request_profiles.get(kind) != Some(profile))
+            });
         }
         let settings = self
             .store

@@ -133,7 +133,7 @@ fn parent_key(
     response_id: &str,
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
-    let identity = crate::credential::oauth_identity_key(account);
+    let identity = crate::request_identity::oauth_identity_key(account);
     for part in [client_key.as_str(), &identity, response_id] {
         hash.update(part.len().to_le_bytes());
         hash.update(part.as_bytes());

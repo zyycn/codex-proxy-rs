@@ -59,8 +59,7 @@ impl Environment {
 }
 
 pub(super) struct Providers {
-    pub(super) openai: provider_openai::ProviderBundle,
-    pub(super) xai: provider_xai::ProviderBundle,
+    pub(super) workers: Vec<gateway_core::task::WorkerContribution>,
     pub(super) core: ProviderRegistry,
     pub(super) admin: ProviderAdminRegistry,
     pub(super) peer: gateway_admin::PeerUpstreamBundle,
@@ -80,11 +79,21 @@ impl Providers {
         )
         .await?;
         environment.host.report_startup_ready("OpenAI Provider");
+        let antigravity = provider_antigravity::initialize(ports.clone())?;
+        environment
+            .host
+            .report_startup_ready("Antigravity Provider");
         let xai = provider_xai::initialize(ports).await?;
         environment.host.report_startup_ready("xAI Provider");
-        let core = ProviderRegistry::new([openai.core_provider(), xai.core_provider()])?;
-        let admin = ProviderAdminRegistry::new([openai.admin_provider(), xai.admin_provider()])
-            .map_err(|_| gateway_admin::model::AdminError::invalid("Provider 管理身份冲突"))?;
+        let bundles = [openai, xai, antigravity];
+        let core = ProviderRegistry::new(bundles.iter().map(|bundle| bundle.core.clone()))?;
+        let admin =
+            ProviderAdminRegistry::new(bundles.iter().map(|bundle| bundle.admin.clone()))
+                .map_err(|_| gateway_admin::model::AdminError::invalid("Provider 管理身份冲突"))?;
+        let workers = bundles
+            .into_iter()
+            .flat_map(|bundle| bundle.workers)
+            .collect();
         let peer = gateway_admin::initialize_peer_upstream(
             environment.store.provider_ports().accounts(),
             &admin,
@@ -98,8 +107,7 @@ impl Providers {
             .map_err(|_| gateway_admin::model::AdminError::invalid("互联观测端口重复绑定"))?;
         Ok(Self {
             peer,
-            openai,
-            xai,
+            workers,
             core,
             admin,
         })

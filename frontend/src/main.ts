@@ -1,7 +1,6 @@
 import { createApp } from 'vue'
 import App from './App.vue'
-import { i18n, setLocale } from './i18n'
-import { readInitialLocale } from './i18n/locale'
+import { i18n, readInitialLocale, setLocale } from './i18n'
 
 import { authPlugin } from './plugins/auth'
 import { router } from './router'

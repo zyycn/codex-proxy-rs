@@ -1,52 +1,32 @@
 <script setup lang="ts">
-import DashboardContent from './components/DashboardContent.vue'
+import DashboardOverview from './components/DashboardOverview.vue'
 import { useDashboard } from './composables/useDashboard'
 
 const {
+  summary,
+  trend,
+  activeTrendKind,
   loading,
   refreshing,
-  activeTrendKind,
-  metrics,
-  analytics,
-  analyticsError,
-  trendPoints,
-  trendSummary,
+  summaryError,
   trendLoading,
   trendError,
-  healthTimeline,
-  accountUsage,
-  wireProfiles,
-  usageRecords,
-  poolSummary,
-  capacityInfo,
-  rotationStrategy,
-  lastRefreshedAt,
   refresh,
   loadTrend,
 } = useDashboard()
 </script>
 
 <template>
-  <DashboardContent
-    v-model:trend-kind="activeTrendKind"
+  <DashboardOverview
+    :summary="summary"
+    :trend="trend"
+    :trend-kind="activeTrendKind"
     :loading="loading"
     :refreshing="refreshing"
-    :last-refreshed-at="lastRefreshedAt"
-    :metrics="metrics"
-    :analytics="analytics"
-    :analytics-error="analyticsError"
-    :trend-points="trendPoints"
-    :trend-summary="trendSummary"
+    :error="summaryError"
     :trend-loading="trendLoading"
     :trend-error="trendError"
-    :health-timeline="healthTimeline"
-    :account-usage="accountUsage"
-    :wire-profiles="wireProfiles"
-    :usage-records="usageRecords"
-    :pool-summary="poolSummary"
-    :capacity-info="capacityInfo"
-    :rotation-strategy="rotationStrategy"
     @refresh="refresh"
-    @trend-change="loadTrend"
+    @update:trend-kind="loadTrend"
   />
 </template>

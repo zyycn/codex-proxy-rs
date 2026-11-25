@@ -1,0 +1,931 @@
+//! Codex Responses 流式传输编排、HTTP SSE 解码与 WebSocket 连接复用
+
+use gateway_core::diagnostics::{StreamCapture, StreamFormat, TraceContext, diagnostic_json};
+
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use futures::{StreamExt, TryStreamExt};
+use gateway_protocol::openai::{
+    CodexGuardianRole, X_OPENAI_MEMGEN_REQUEST_HEADER,
+    events::{self, retry_after_seconds_from_body},
+    sse::{SseEventDecoder, SseFrame},
+};
+use reqwest::{
+    Response as ReqwestResponse,
+    header::{CONTENT_ENCODING, CONTENT_TYPE, HeaderMap, HeaderValue},
+};
+use tokio_tungstenite::tungstenite::handshake::client::generate_key;
+
+use crate::transport::{
+    diagnostics::CodexUpstreamSendPhase,
+    endpoints::endpoint_url,
+    headers::websocket_header_pairs,
+    protocol::{
+        responses::{
+            CodexResponsesRequest, TransportRequirement, is_replaceable_response_prelude,
+            transport_requirement,
+        },
+        websocket::{
+            websocket_audit_artifact_from_attempt, websocket_connection_limit_failure,
+            websocket_payload_audit_snapshot, websocket_response_create_payload_text,
+        },
+    },
+    response_meta,
+    websocket::{
+        CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketPool,
+        CodexWebSocketPoolKey, DEFAULT_FAST_PATH_BUDGET_MS, DEFAULT_STREAM_IDLE_TIMEOUT,
+        PreviousResponseUnavailableReason, WebSocketFastPath,
+        execute_prepared_response_create_request_stream, post_send_ambiguous,
+        prepare_response_create_request_with_pool, websocket_audit_dir,
+        write_websocket_audit_artifact_from_env,
+    },
+};
+
+use super::backend::{
+    CodexBackendClient, CodexBackendSseStream, CodexBackendStreamingResponse,
+    CodexBackendTransport, CodexClientError, CodexClientResult, CodexClientVisibleUpstreamResponse,
+    CodexRateLimitUpdates, CodexRequestContext, CodexTransportDecision, CodexTransportMetrics,
+    OpenAiUpstreamProtocol, PreparedResponseRoute, PreparedResponseTransport,
+    PreparedWebSocketRoute, UPSTREAM_STREAM_IDLE_TIMEOUT, WebSocketPoolLogContext,
+    X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY, elapsed_duration_millis,
+    http_version_name, local_http_fallback_decision, log_websocket_pool_decision,
+    merge_preparation_metrics, now_unix_timestamp_millis, read_error_response_body,
+    retry_after_seconds, websocket_exchange_error_to_client_error, websocket_origin_key,
+    websocket_success_decision, websocket_upstream_request,
+};
+
+impl CodexBackendClient {
+    /// 发送 Responses SSE 请求并返回 live SSE 流（HTTP SSE fallback）
+    pub(crate) async fn create_response_stream_http_sse(
+        &self,
+        upstream_request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        if let (Some(pool), Some(connection_id)) = (
+            &self.websocket_pool,
+            upstream_request
+                .downstream_websocket_connection_id
+                .as_deref(),
+        ) {
+            pool.release_downstream_connections(connection_id).await;
+        }
+        let profile = self.profile.snapshot();
+        let mut headers =
+            self.request_headers_for_http_response(&profile, upstream_request, context)?;
+        let endpoint = endpoint_url(&self.base_url, self.protocol.responses_path());
+        if let Some(affinity) = &self.routing_affinity {
+            affinity.apply(&endpoint, &mut headers);
+        }
+        // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
+        // 再由 API 层收集 canonical events 并返回完整 JSON
+        // 不能把下游的传输偏好
+        // 直接透传给 Codex，否则上游会以 400 拒绝非流式请求
+        let mut upstream_body = upstream_request.body().clone();
+        upstream_body.insert("stream".to_owned(), serde_json::Value::Bool(true));
+        let mut upstream_body = serde_json::Value::Object(upstream_body);
+        // Guardian 专用 HTTP 客户端使用默认 ResponsesOptions，普通 OAuth 及主审流使用 zstd
+        let compress = self.protocol == OpenAiUpstreamProtocol::Codex
+            && !upstream_request
+                .oauth_guardian_role(&self.middleware_headers)
+                .is_some_and(CodexGuardianRole::uses_sampler_transport);
+        if compress {
+            headers.insert(CONTENT_ENCODING, HeaderValue::from_static("zstd"));
+        }
+        profile.apply_context_versions(&mut upstream_body);
+        super::super::correlation::scope_request(
+            &mut upstream_body,
+            &mut headers,
+            context.installation_id,
+            (self.protocol == OpenAiUpstreamProtocol::Codex)
+                .then_some(upstream_request.guardian_role)
+                .flatten(),
+        );
+        self.apply_privacy(&mut upstream_body, &mut headers)?;
+        let body =
+            serde_json::to_vec(&upstream_body).map_err(CodexClientError::RequestBodyEncode)?;
+        let trace = context
+            .trace
+            .cloned()
+            .unwrap_or_default()
+            .exchange("http_sse");
+        if let Some(body) = upstream_body.as_object() {
+            super::super::diagnostics::evidence::record_request(
+                &trace,
+                if self.outbound_middleware.is_some() {
+                    "provider.request.native"
+                } else {
+                    "provider.request.outbound"
+                },
+                body,
+                "http_sse",
+                Some(&headers),
+            );
+        }
+        let body = if compress {
+            zstd::stream::encode_all(std::io::Cursor::new(body), 3)
+                .map_err(CodexClientError::RequestCompression)?
+        } else {
+            body
+        };
+        let outbound = self
+            .prepare_http_request(endpoint, headers, body.into())
+            .await?;
+        trace.headers(
+            "upstream.request.headers",
+            serde_json::json!({"method": outbound.method().as_str(), "transport": "http_sse"}),
+            outbound
+                .headers()
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
+        );
+        trace.capture(
+            "upstream.request.body",
+            outbound
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .unwrap_or_default(),
+        );
+        let client = self.http_opening_client()?;
+        let headers_started_at = Instant::now();
+        let response = client.execute(outbound).await?;
+        let upstream_headers_ms = elapsed_duration_millis(headers_started_at.elapsed());
+        let http_version = http_version_name(response.version()).to_string();
+        let status = response.status();
+        trace.headers(
+            "upstream.response.headers",
+            serde_json::json!({
+                "status": status.as_u16(), "httpVersion": http_version,
+                "headersMs": upstream_headers_ms,
+            }),
+            response
+                .headers()
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
+        );
+        let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers())
+            .with_response_origin(Some(response.url().clone()));
+        let turn_state = response_meta::turn_state(response.headers());
+        let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
+        let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
+        let response_metadata = response_meta::response_metadata(response.headers());
+        let retry_after_seconds = retry_after_seconds(response.headers(), None);
+
+        if !status.is_success() {
+            let content_type = response
+                .headers()
+                .get(CONTENT_TYPE)
+                .map(|value| value.as_bytes().to_vec());
+            let client_headers = response_meta::client_headers(response.headers());
+            let raw_body = read_error_response_body(response).await.map_err(|source| {
+                CodexClientError::ErrorBodyRead {
+                    source,
+                    status,
+                    diagnostics: Box::new(diagnostics.clone()),
+                    transport: CodexBackendTransport::HttpSse,
+                    transport_metrics: Box::new(CodexTransportMetrics {
+                        upstream_headers_ms: Some(upstream_headers_ms),
+                        http_version: Some(http_version.clone()),
+                        ..CodexTransportMetrics::default()
+                    }),
+                }
+            })?;
+            trace.capture("upstream.error.body", &raw_body);
+            let body = String::from_utf8_lossy(&raw_body).into_owned();
+            let retry_after_seconds =
+                retry_after_seconds.or_else(|| retry_after_seconds_from_body(&body));
+            return Err(CodexClientError::Upstream {
+                status,
+                body,
+                client_response: Some(Box::new(CodexClientVisibleUpstreamResponse::new(
+                    status,
+                    content_type,
+                    client_headers,
+                    raw_body,
+                ))),
+                retry_after_seconds,
+                diagnostics: Box::new(diagnostics),
+                set_cookie_headers,
+                rate_limit_headers,
+                transport: CodexBackendTransport::HttpSse,
+                transport_metrics: Box::new(CodexTransportMetrics {
+                    upstream_headers_ms: Some(upstream_headers_ms),
+                    http_version: Some(http_version),
+                    ..CodexTransportMetrics::default()
+                }),
+                send_phase: CodexUpstreamSendPhase::AfterPayload,
+            });
+        }
+
+        let rate_limit_updates = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        Ok(CodexBackendStreamingResponse {
+            routing_affinity: None,
+            body: http_sse_stream(response, Arc::clone(&rate_limit_updates), trace),
+            transport: CodexBackendTransport::HttpSse,
+            websocket_connection_id: None,
+            turn_state,
+            set_cookie_headers,
+            rate_limit_headers,
+            rate_limit_updates: Some(rate_limit_updates),
+            response_metadata_updates: None,
+            websocket_pool_decision: None,
+            diagnostics,
+            response_metadata,
+            transport_metrics: CodexTransportMetrics {
+                upstream_headers_ms: Some(upstream_headers_ms),
+                http_version: Some(http_version),
+                ..CodexTransportMetrics::default()
+            },
+            connection_local_continuation: false,
+        })
+    }
+
+    pub async fn create_response_stream_with_pool_account(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        let prepared = self
+            .prepare_response_transport_with_pool_account(request, context, pool_account_id)
+            .await?;
+        self.create_response_stream_with_prepared(request, context, prepared)
+            .await
+    }
+
+    /// 在发送 payload 前完成 transport 选择和可取消的 WebSocket opening
+    #[doc(hidden)]
+    pub(crate) async fn prepare_response_transport_with_pool_account(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
+    ) -> CodexClientResult<PreparedResponseTransport> {
+        let requirement = transport_requirement(request);
+        context.trace.cloned().unwrap_or_default().record(
+            "transport.preparing",
+            serde_json::json!({
+                "requirement": requirement.as_str(),
+            }),
+        );
+        if requirement == TransportRequirement::HttpRequired {
+            return Ok(PreparedResponseTransport {
+                requirement,
+                route: PreparedResponseRoute::Http,
+                metrics: CodexTransportMetrics {
+                    decision: Some(CodexTransportDecision::HttpRequired),
+                    ..CodexTransportMetrics::default()
+                },
+            });
+        }
+
+        let initial_start_ms = now_unix_timestamp_millis().to_string();
+        let mut websocket_request = websocket_upstream_request(request, &initial_start_ms);
+        let profile = self.profile.snapshot();
+        let mut headers =
+            self.request_headers_for_websocket_response(&profile, &websocket_request, context)?;
+        if let Some(affinity) = &self.routing_affinity {
+            affinity.apply(
+                &endpoint_url(&self.base_url, self.protocol.responses_path()),
+                &mut headers,
+            );
+        }
+        let mut body = serde_json::Value::Object(std::mem::take(websocket_request.body_mut()));
+        profile.apply_context_versions(&mut body);
+        super::super::correlation::scope_request(
+            &mut body,
+            &mut headers,
+            context.installation_id,
+            (self.protocol == OpenAiUpstreamProtocol::Codex)
+                .then_some(request.guardian_role)
+                .flatten(),
+        );
+        let original_headers = self.privacy.as_ref().map(|_| headers.clone());
+        self.apply_privacy(&mut body, &mut headers)?;
+        // 正文已归当前请求所有，移回对象避免再次复制完整对话
+        let serde_json::Value::Object(body) = body else {
+            return Err(CodexClientError::Privacy(
+                gateway_core::settings::privacy::PrivacyError {
+                    rule_index: 0,
+                    reason: "WS 请求正文必须是对象",
+                },
+            ));
+        };
+        *websocket_request.body_mut() = body;
+        let trace = context.trace.cloned().unwrap_or_default();
+        let record_body = |stage, request: &CodexResponsesRequest| {
+            super::super::diagnostics::evidence::record_request(
+                &trace,
+                stage,
+                request.body(),
+                "websocket",
+                Some(&headers),
+            );
+        };
+        if self.outbound_middleware.is_some() {
+            record_body("provider.request.native", &websocket_request);
+        }
+        let mut opening = CodexWebSocketConnection::response_create_opening_for_path(
+            &self.base_url,
+            self.protocol.responses_path(),
+            &generate_key(),
+            websocket_header_pairs(&headers),
+            &websocket_request,
+        );
+        opening.connection.outbound_proxy = self.outbound_proxy.clone();
+        opening.connection.connection_budget = self.connection_budget.clone();
+        let (plugin_payload, outbound_profile) = self
+            .prepare_websocket_request(&mut opening.connection, &websocket_request)
+            .await?;
+        context.trace.cloned().unwrap_or_default().headers(
+            "upstream.request.headers",
+            serde_json::json!({"transport": "websocket", "phase": "prepared_opening"}),
+            opening
+                .connection
+                .headers()
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
+        );
+        // 审计未启用时跳过 artifact 构造：payload 快照会深拷贝整个请求 body，
+        // 且位于首字节前的关键路径上
+        if websocket_audit_dir().is_some() {
+            let artifact = websocket_audit_artifact_from_attempt(
+                &websocket_request,
+                opening.connection.opening_audit_snapshot(),
+                // 插件准备后只由受控 wire capture 记录实际正文，不把原生 JSON 冒充最终帧
+                self.outbound_middleware
+                    .is_none()
+                    .then(|| websocket_payload_audit_snapshot(&websocket_request)),
+            );
+            if let Err(error) =
+                write_websocket_audit_artifact_from_env(&artifact, self.timezone).await
+            {
+                tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
+            }
+        }
+        let mut connection_profile = websocket_connection_profile(
+            &headers,
+            &self.middleware_headers,
+            original_headers.as_ref(),
+        );
+        if let Some(profile) = outbound_profile {
+            connection_profile.push('\0');
+            connection_profile.push_str(&profile);
+        }
+        // 上游按握手继承整条路径，不能把本轮请求交给其他路径建立的连接
+        if let Some((_, route)) = opening
+            .connection
+            .headers()
+            .iter()
+            .find(|(name, _)| name == gateway_protocol::peer::ROUTE_HEADER)
+        {
+            use sha2::{Digest, Sha256};
+            connection_profile.push_str("\0peer:");
+            connection_profile.push_str(&hex::encode(Sha256::digest(route.as_bytes())));
+        }
+        let pool_key = self.websocket_pool_key(
+            request,
+            context,
+            pool_account_id,
+            &connection_profile,
+            opening.connection.headers(),
+        );
+        let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
+        let downstream_cancellation = context.response_control.and_then(
+            gateway_core::engine::response_control::ResponseControl::connection_cancellation,
+        );
+        if pool_key.is_none()
+            && let (Some(pool), Some(connection_id)) = (
+                &self.websocket_pool,
+                request.downstream_websocket_connection_id.as_deref(),
+            )
+        {
+            pool.release_downstream_connections(connection_id).await;
+        }
+        let pool = self
+            .websocket_pool
+            .as_deref()
+            .map(|pool| (pool, pool_key, downstream_cancellation));
+        let fast_path_budget = match requirement {
+            TransportRequirement::PersistedContinuation | TransportRequirement::NewChain => {
+                Some(self.websocket_pool.as_deref().map_or(
+                    Duration::from_millis(DEFAULT_FAST_PATH_BUDGET_MS),
+                    CodexWebSocketPool::fast_path_budget,
+                ))
+            }
+            TransportRequirement::ExplicitWebSocketWarmup
+            | TransportRequirement::WebSocketNewChain
+            | TransportRequirement::ExactWebSocketContinuation
+            | TransportRequirement::ExternalUnknown => None,
+            TransportRequirement::HttpRequired => None,
+        };
+        let prepare_started_at = Instant::now();
+        let opening_origin_key = self.outbound_middleware.as_ref().map(|_| {
+            format!(
+                "{}\0{}",
+                websocket_origin_key(
+                    &opening
+                        .connection
+                        .endpoint()
+                        .replacen("wss://", "https://", 1)
+                        .replacen("ws://", "http://", 1)
+                ),
+                self.egress_key
+            )
+        });
+        let prepared = prepare_response_create_request_with_pool(
+            &opening,
+            pool,
+            &self.websocket_origin_breaker,
+            opening_origin_key
+                .as_deref()
+                .unwrap_or(&self.websocket_origin_key),
+            fast_path_budget,
+            requirement.requires_websocket(),
+            Some(DEFAULT_STREAM_IDLE_TIMEOUT),
+        )
+        .await;
+        let prepared = match prepared {
+            Ok(WebSocketFastPath::Ready(prepared)) => prepared,
+            Ok(WebSocketFastPath::Missed) => {
+                let decision = CodexTransportDecision::Http2WebSocketBudgetExhausted;
+                let wait_ms = elapsed_duration_millis(prepare_started_at.elapsed());
+                context.trace.cloned().unwrap_or_default().record(
+                    "transport.fallback",
+                    serde_json::json!({
+                        "to": "http_sse", "reason": "websocket_fast_path_budget",
+                        "requirement": requirement.as_str(), "decision": decision.as_str(),
+                        "waitMs": wait_ms, "preconnectContinues": pool_log_context.is_some(),
+                    }),
+                );
+                return Ok(PreparedResponseTransport {
+                    requirement,
+                    route: PreparedResponseRoute::Http,
+                    metrics: CodexTransportMetrics {
+                        decision: Some(decision),
+                        ws_connect_ms: None,
+                        transport_decision_wait_ms: Some(wait_ms),
+                        ..CodexTransportMetrics::default()
+                    },
+                });
+            }
+            Err(error)
+                if requirement.allows_pre_send_http_fallback()
+                    && let Some(decision) = local_http_fallback_decision(&error) =>
+            {
+                let wait_ms = elapsed_duration_millis(prepare_started_at.elapsed());
+                context.trace.cloned().unwrap_or_default().record(
+                    "transport.fallback", serde_json::json!({
+                        "to": "http_sse", "reason": "websocket_pre_send_failure",
+                        "requirement": requirement.as_str(), "decision": decision.as_str(),
+                        "waitMs": wait_ms,
+                        "detail": diagnostic_json(&serde_json::json!({"message": error.to_string()})),
+                    }),
+                );
+                return Ok(PreparedResponseTransport {
+                    requirement,
+                    route: PreparedResponseRoute::Http,
+                    metrics: CodexTransportMetrics {
+                        decision: Some(decision),
+                        ws_connect_ms: None,
+                        transport_decision_wait_ms: Some(wait_ms),
+                        ..CodexTransportMetrics::default()
+                    },
+                });
+            }
+            Err(error) => return Err(websocket_exchange_error_to_client_error(error)),
+        };
+        let payload = match plugin_payload {
+            Some(payload) => payload,
+            None => {
+                // 握手或租用完成后才标记发送时间。隐私规则移除或改写过的字段保持其最终值
+                if let Some(stamp) = websocket_request
+                    .body_mut()
+                    .get_mut("client_metadata")
+                    .and_then(|metadata| {
+                        metadata.get_mut(X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY)
+                    })
+                    && stamp.as_str() == Some(initial_start_ms.as_str())
+                {
+                    *stamp = serde_json::Value::String(now_unix_timestamp_millis().to_string());
+                }
+                record_body("provider.request.outbound", &websocket_request);
+                match websocket_response_create_payload_text(&websocket_request) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        prepared.discard().await;
+                        return Err(CodexClientError::WebSocketEncode(error));
+                    }
+                }
+            }
+        };
+        let websocket_create = opening.with_payload(payload);
+        // 按最终出站帧的 UTF-8 字节数判断，握手上限只属于当前物理连接
+        if let Some(limit) = prepared.max_message_bytes()
+            && websocket_create.payload_text().len() > limit
+        {
+            let metrics = CodexTransportMetrics {
+                decision: Some(CodexTransportDecision::Http2WebSocketMessageTooLarge),
+                ws_connect_ms: prepared.connect_elapsed().map(elapsed_duration_millis),
+                transport_decision_wait_ms: Some(elapsed_duration_millis(
+                    prepared.decision_wait_elapsed(),
+                )),
+                ..CodexTransportMetrics::default()
+            };
+            prepared.discard().await;
+            check_oversized_websocket_fallback(
+                requirement,
+                CodexWebSocketExchangeError::MessageTooLarge,
+            )?;
+            context.trace.cloned().unwrap_or_default().record(
+                "transport.fallback",
+                serde_json::json!({
+                    "to": "http_sse", "reason": "websocket_message_too_large",
+                    "requirement": requirement.as_str(), "limitBytes": limit,
+                    "payloadBytes": websocket_create.payload_text().len(),
+                }),
+            );
+            return Ok(PreparedResponseTransport {
+                requirement,
+                route: PreparedResponseRoute::Http,
+                metrics,
+            });
+        }
+        let decision = websocket_success_decision(requirement, &prepared);
+        context.trace.cloned().unwrap_or_default().record(
+            "transport.prepared",
+            serde_json::json!({
+                "decision": decision.as_str(),
+                "requirement": requirement.as_str(),
+                "connectMs": prepared.connect_elapsed().map(elapsed_duration_millis),
+                "waitMs": elapsed_duration_millis(prepared.decision_wait_elapsed()),
+            }),
+        );
+        let metrics = CodexTransportMetrics {
+            decision: Some(decision),
+            ws_connect_ms: prepared.connect_elapsed().map(elapsed_duration_millis),
+            transport_decision_wait_ms: Some(elapsed_duration_millis(
+                prepared.decision_wait_elapsed(),
+            )),
+            upstream_headers_ms: prepared.connect_elapsed().map(elapsed_duration_millis),
+            first_event_ms: None,
+            http_version: Some("HTTP/1.1".to_string()),
+        };
+        log_websocket_pool_decision(
+            context,
+            pool_account_id,
+            pool_log_context.as_ref(),
+            prepared.pool_decision(),
+        );
+        Ok(PreparedResponseTransport {
+            requirement,
+            route: PreparedResponseRoute::WebSocket(Box::new(PreparedWebSocketRoute {
+                request: websocket_create,
+                prepared,
+            })),
+            metrics,
+        })
+    }
+
+    async fn http_stream_with_metrics(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        metrics: CodexTransportMetrics,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        let mut response = self
+            .create_response_stream_http_sse(request, context)
+            .await?;
+        merge_preparation_metrics(&mut response.transport_metrics, metrics);
+        Ok(response)
+    }
+
+    #[doc(hidden)]
+    pub(crate) async fn create_response_stream_with_prepared(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        prepared: PreparedResponseTransport,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        let PreparedResponseTransport {
+            requirement,
+            route,
+            metrics,
+        } = prepared;
+        context.trace.cloned().unwrap_or_default().record(
+            "transport.selected",
+            serde_json::json!({
+                "decision": metrics.decision.map(|decision| decision.as_str()),
+                "requirement": requirement.as_str(), "waitMs": metrics.transport_decision_wait_ms,
+            }),
+        );
+        match route {
+            PreparedResponseRoute::Http => {
+                self.http_stream_with_metrics(request, context, metrics)
+                    .await
+            }
+            PreparedResponseRoute::WebSocket(route) => {
+                let PreparedWebSocketRoute {
+                    request: websocket_request,
+                    prepared,
+                } = *route;
+                let exchange = execute_prepared_response_create_request_stream(
+                    &websocket_request,
+                    prepared,
+                    context.response_control.cloned(),
+                    context
+                        .trace
+                        .cloned()
+                        .unwrap_or_default()
+                        .exchange("websocket"),
+                )
+                .await;
+                let mut exchange = match exchange {
+                    Err(error) if error.message_too_big_close() => {
+                        // 上游已回复本次上传，HTTP 恢复不再占用发送前的建连窗口
+                        if let Some(budget) = &self.connection_budget {
+                            budget.complete();
+                        }
+                        check_oversized_websocket_fallback(requirement, error)?;
+                        context.trace.cloned().unwrap_or_default().record(
+                            "transport.fallback", serde_json::json!({
+                                "to": "http_sse", "reason": "websocket_message_too_large", "closeCode": 1009,
+                                "requirement": requirement.as_str(), "payloadBytes": websocket_request.payload_text().len(),
+                            }),
+                        );
+                        let mut metrics = metrics;
+                        metrics.decision =
+                            Some(CodexTransportDecision::Http2WebSocketMessageTooLarge);
+                        return self
+                            .http_stream_with_metrics(request, context, metrics)
+                            .await;
+                    }
+                    result => result.map_err(websocket_exchange_error_to_client_error)?,
+                };
+                if requirement.allows_connection_restart() {
+                    // 前导帧即时交付；连接寿命拒绝仍沿用原有分类与恢复预算
+                    let mut boundary_reached = false;
+                    exchange.body = Box::pin(exchange.body.map(move |frame| {
+                        let frame = frame?;
+                        if !boundary_reached && !is_websocket_replayable_prelude(&frame) {
+                            boundary_reached = true;
+                            if let Some(failure) = websocket_connection_limit_failure(&frame) {
+                                return Err(CodexWebSocketExchangeError::ConnectionLimitReached(
+                                    Box::new(failure),
+                                ));
+                            }
+                        }
+                        Ok(frame)
+                    }));
+                }
+                Ok(CodexBackendStreamingResponse {
+                    routing_affinity: (self.protocol == OpenAiUpstreamProtocol::Codex)
+                        .then_some(exchange.routing_affinity)
+                        .flatten(),
+                    body: Box::pin(
+                        exchange
+                            .body
+                            .map_err(|error| match error {
+                                error @ CodexWebSocketExchangeError::ConnectionLimitReached(_) => {
+                                    error
+                                }
+                                error => post_send_ambiguous(error),
+                            })
+                            .map_err(websocket_exchange_error_to_client_error),
+                    ),
+                    transport: CodexBackendTransport::WebSocket,
+                    websocket_connection_id: Some(exchange.websocket_connection_id),
+                    turn_state: exchange.turn_state,
+                    set_cookie_headers: exchange.set_cookie_headers,
+                    rate_limit_headers: exchange.rate_limit_headers,
+                    rate_limit_updates: Some(exchange.rate_limit_updates),
+                    response_metadata_updates: Some(exchange.response_metadata_updates),
+                    websocket_pool_decision: exchange.pool_decision,
+                    diagnostics: exchange.diagnostics,
+                    response_metadata: exchange.response_metadata,
+                    transport_metrics: metrics,
+                    connection_local_continuation: exchange.connection_local_continuation,
+                })
+            }
+        }
+    }
+
+    fn websocket_pool_key(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
+        connection_profile: &str,
+        opening_headers: &[(String, String)],
+    ) -> Option<CodexWebSocketPoolKey> {
+        let account_id = pool_account_id.or(context.account_id)?;
+        let conversation_id = request
+            .local_conversation_id
+            .as_deref()
+            .or(request.previous_response_id())?;
+        let mut key = CodexWebSocketPoolKey::new(&self.base_url, account_id, conversation_id)
+            .with_egress_key(&self.egress_key)
+            .with_outbound_proxy(self.outbound_proxy.as_ref())
+            .with_connection_profile(connection_profile)
+            .with_response_exclusions(opening_headers)
+            .with_fedramp_routing(self.fedramp_routing)
+            .with_installation_id(context.installation_id);
+        key = key.with_routing_affinity(self.routing_affinity.as_ref().map(|pin| pin.id()));
+        if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
+            key = key.with_downstream_connection_id(connection_id);
+        }
+        Some(key)
+    }
+}
+
+fn check_oversized_websocket_fallback(
+    requirement: TransportRequirement,
+    cause: CodexWebSocketExchangeError,
+) -> CodexClientResult<()> {
+    let error = match requirement {
+        TransportRequirement::ExactWebSocketContinuation => {
+            CodexWebSocketExchangeError::ContinuationUnavailable {
+                reason: PreviousResponseUnavailableReason::PayloadTooLarge,
+                source: cause.message_too_big_close().then(|| Box::new(cause)),
+            }
+        }
+        TransportRequirement::ExplicitWebSocketWarmup => cause,
+        TransportRequirement::HttpRequired
+        | TransportRequirement::WebSocketNewChain
+        | TransportRequirement::PersistedContinuation
+        | TransportRequirement::ExternalUnknown
+        | TransportRequirement::NewChain => return Ok(()),
+    };
+    Err(websocket_exchange_error_to_client_error(error))
+}
+
+fn is_websocket_replayable_prelude(frame: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(frame)
+        .ok()
+        .is_some_and(|value| {
+            value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|event_type| is_replaceable_response_prelude(event_type, &value))
+        })
+}
+
+fn websocket_connection_profile(
+    headers: &HeaderMap,
+    middleware_headers: &[gateway_core::engine::middleware::MiddlewareHeader],
+    original_headers: Option<&HeaderMap>,
+) -> String {
+    let mut profile = [
+        "originator",
+        "user-agent",
+        "version",
+        X_OPENAI_MEMGEN_REQUEST_HEADER,
+        "x-codex-guardian",
+        "x-openai-internal-codex-residency",
+        "x-openai-fedramp",
+        "x-openai-account-routing-override",
+    ]
+    .map(|name| {
+        // 空字符串也是显式配置，必须与未发送的请求头区分
+        headers
+            .get(name)
+            .map(|value| format!("{name}:{}", hex::encode(value.as_bytes())))
+            .unwrap_or_default()
+    })
+    .join("\0");
+    if !middleware_headers.is_empty() {
+        use sha2::{Digest, Sha256};
+
+        let mut digest = Sha256::new();
+        for header in middleware_headers {
+            digest.update(header.name().len().to_le_bytes());
+            digest.update(header.name().as_bytes());
+            digest.update(header.value().len().to_le_bytes());
+            digest.update(header.value());
+        }
+        profile.push('\0');
+        profile.push_str(&hex::encode(digest.finalize()));
+    }
+    if let Some(original) = original_headers {
+        use sha2::{Digest, Sha256};
+        let names: std::collections::BTreeSet<_> = original
+            .keys()
+            .chain(headers.keys())
+            .map(|name| name.as_str())
+            .collect();
+        let mut digest = Sha256::new();
+        let mut changed = false;
+        for name in names {
+            if original
+                .get_all(name)
+                .iter()
+                .eq(headers.get_all(name).iter())
+            {
+                continue;
+            }
+            changed = true;
+            digest.update(name.len().to_le_bytes());
+            digest.update(name.as_bytes());
+            digest.update(headers.get_all(name).iter().count().to_le_bytes());
+            for value in headers.get_all(name) {
+                digest.update(value.len().to_le_bytes());
+                digest.update(value.as_bytes());
+            }
+        }
+        // 改写后的握手头必须参与池身份，避免复用仍携带旧隐私值的连接
+        if changed {
+            profile.push('\0');
+            profile.push_str(&hex::encode(digest.finalize()));
+        }
+    }
+    profile
+}
+
+fn http_sse_stream(
+    response: ReqwestResponse,
+    rate_limit_updates: CodexRateLimitUpdates,
+    trace: TraceContext,
+) -> CodexBackendSseStream {
+    let stream: CodexBackendSseStream =
+        Box::pin(response.bytes_stream().map_err(CodexClientError::Http));
+    let stream: CodexBackendSseStream =
+        Box::pin(futures::stream::unfold(Some(stream), |stream| async move {
+            let mut stream = stream?;
+            match tokio::time::timeout(UPSTREAM_STREAM_IDLE_TIMEOUT, stream.next()).await {
+                Ok(Some(chunk)) => Some((chunk, Some(stream))),
+                Ok(None) => None,
+                Err(_) => Some((
+                    Err(CodexClientError::StreamIdleTimeout {
+                        timeout: UPSTREAM_STREAM_IDLE_TIMEOUT,
+                    }),
+                    None,
+                )),
+            }
+        }));
+    let stream = Box::pin(async_stream::stream! {
+        let mut stream = stream;
+        let mut capture = StreamCapture::new(trace.clone(), StreamFormat::Sse);
+        while let Some(chunk) = stream.next().await {
+            match &chunk {
+                Ok(bytes) => capture.push(bytes),
+                Err(error) => trace.record("upstream.read.failed", diagnostic_json(&serde_json::json!({"error": error.to_string()}))),
+            }
+            let failed = chunk.is_err();
+            yield chunk;
+            if failed { return; }
+        }
+        capture.finish();
+    });
+    observe_http_sse_rate_limits(stream, rate_limit_updates)
+}
+
+fn observe_http_sse_rate_limits(
+    stream: CodexBackendSseStream,
+    updates: CodexRateLimitUpdates,
+) -> CodexBackendSseStream {
+    Box::pin(futures::stream::unfold(
+        (stream, SseEventDecoder::default(), updates),
+        |(mut stream, mut decoder, updates)| async move {
+            match stream.next().await {
+                Some(chunk) => {
+                    if let Ok(bytes) = &chunk {
+                        append_http_sse_rate_limit_updates(decoder.push_frames(bytes), &updates)
+                            .await;
+                    }
+                    Some((chunk, (stream, decoder, updates)))
+                }
+                None => {
+                    append_http_sse_rate_limit_updates(decoder.finish_frames(), &updates).await;
+                    None
+                }
+            }
+        },
+    ))
+}
+
+async fn append_http_sse_rate_limit_updates(
+    frames: Vec<SseFrame>,
+    updates: &CodexRateLimitUpdates,
+) {
+    let mut observations = Vec::new();
+    for frame in frames {
+        for event in frame.events() {
+            if event
+                .event
+                .as_deref()
+                .is_some_and(|event| event != "codex.rate_limits")
+            {
+                continue;
+            }
+            let Some(rate_limits) = events::parse_rate_limits_event_raw(&event.data) else {
+                continue;
+            };
+            observations.push(rate_limits);
+        }
+    }
+    if !observations.is_empty() {
+        updates.lock().await.extend(observations);
+    }
+}

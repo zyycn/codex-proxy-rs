@@ -9,10 +9,10 @@ import { DataZoomInsideComponent } from 'echarts/components'
 import { use } from 'echarts/core'
 import { computed, nextTick, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import AccountQuotaWindowDetails from '@/components/account/AccountQuotaWindowDetails.vue'
-import BaseChart from '@/components/charts/BaseChart.vue'
+import BaseChart from '@/components/base-chart/index.vue'
 import { useThemeColor } from '@/composables/useThemeColor'
 import { isRecord } from '@/utils/data'
+import AccountQuotaWindowDetails from '@/views/accounts/components/AccountQuotaWindowDetails.vue'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 
 const props = defineProps<{ nodes: PoolNode[] }>()

@@ -1,4 +1,4 @@
-import type { PrivacyAction, PrivacyRule, PrivacySample, PrivacyScope, PrivacyStep } from '@/api/modules/settings/privacy'
+import type { PrivacyAction, PrivacyRule, PrivacySample, PrivacyScope, PrivacyStep } from '@/api'
 import { cloneDeep } from 'es-toolkit'
 import { computed } from 'vue'
 import { t } from '@/i18n'

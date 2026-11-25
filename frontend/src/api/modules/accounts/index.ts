@@ -36,12 +36,12 @@ export type {
   AccountBatchUpdateResponse,
   AccountConcurrencyEntry,
   AccountConcurrencyPage,
+  AccountConnectionUpdate,
   AccountDeletionResponse,
   AccountListResponse,
   AccountPageMeta,
   AccountSummary,
   AccountUpdateResponse,
-  ApiKeyConfiguration,
 } from './management'
 
 export {

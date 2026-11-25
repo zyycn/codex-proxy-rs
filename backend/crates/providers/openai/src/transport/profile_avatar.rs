@@ -1,5 +1,6 @@
 //! Codex 官方个人资料头像的固定来源流式 transport
 
+use crate::profile::CodexWireProfile;
 use std::{pin::Pin, time::Duration};
 
 use async_stream::try_stream;
@@ -12,9 +13,7 @@ use reqwest::{
 use tokio::time::timeout;
 
 use super::endpoints::endpoint_url;
-use super::{
-    CodexRequestContext, headers::build_codex_download_headers, profile::CodexWireProfile,
-};
+use super::{CodexRequestContext, headers::build_codex_download_headers};
 
 const OFFICIAL_AVATAR_ORIGIN: &str = "https://chatgpt.com";
 const OFFICIAL_AVATAR_PATH_PREFIX: &str = "/backend-api/estuary/public_content/enc/";

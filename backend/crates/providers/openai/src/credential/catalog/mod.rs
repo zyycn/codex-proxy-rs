@@ -28,7 +28,7 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
-use crate::transport::profile::CodexWireProfileState;
+use crate::profile::CodexWireProfileState;
 use crate::transport::{CodexBackendClient, CodexCatalogModel, CodexRequestContext};
 
 const MAX_RESPONSE_ETAG_BYTES: usize = 256;

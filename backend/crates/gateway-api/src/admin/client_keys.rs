@@ -1,6 +1,6 @@
 //! Client API Key 管理 wire contract
 
-use crate::auth::SessionState;
+use crate::SessionState;
 
 use std::{collections::BTreeMap, fmt};
 
@@ -748,9 +748,6 @@ fn normalize_request_profile_overrides(
     profiles
         .into_iter()
         .map(|(provider, profile)| {
-            if !matches!(provider.as_str(), "openai" | "xai") {
-                return Err(WireValidationError::new("providerRequestProfileOverrides"));
-            }
             validate_request_profile_size(&profile)?;
             Ok((
                 ProviderKind::new(provider)
@@ -770,9 +767,6 @@ fn normalize_request_profile_override_updates(
     profiles
         .into_iter()
         .map(|(provider, profile)| {
-            if !matches!(provider.as_str(), "openai" | "xai") {
-                return Err(WireValidationError::new("providerRequestProfileOverrides"));
-            }
             if let Some(profile) = profile.as_ref() {
                 validate_request_profile_size(profile)?;
             }

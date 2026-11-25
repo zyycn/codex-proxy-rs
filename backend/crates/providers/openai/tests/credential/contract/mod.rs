@@ -35,7 +35,7 @@ use provider_openai::credential::{
     CodexCredentialSelector, CredentialSelectionError, ImportCodexOAuthCredential,
     SelectCodexCredential,
 };
-use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
+use provider_openai::profile::{CodexWireProfile, CodexWireProfileState};
 use secrecy::ExposeSecret;
 use serde_json::json;
 use url::Url;
@@ -219,7 +219,7 @@ fn selector_with_runtime(
     cooldowns: Arc<dyn ProviderCooldownPort>,
 ) -> CodexCredentialSelector {
     let profile = CodexWireProfileState::new(CodexWireProfile {
-        client_kind: provider_openai::transport::profile::selection::ClientKind::Desktop,
+        client_kind: provider_openai::profile::selection::ClientKind::Desktop,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
         desktop_version: "1.0.0".to_owned(),
@@ -886,7 +886,7 @@ async fn select_strict_round_robin_session(
             RotationStrategy::RoundRobin,
             NonZeroU32::new(2).expect("concurrency"),
         )
-        .with_openai_account_affinity(AccountAffinity::Strict),
+        .with_account_affinity(AccountAffinity::Strict),
         AccountAttemptContext::new(BTreeSet::new(), None, None)
             .with_account_scope(contract_account_scope()),
         None,

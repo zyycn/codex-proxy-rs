@@ -1,22 +1,21 @@
 <script setup lang="ts">
 import type { ApiKeyLimitField } from '../composables/useApiKeyFormRules'
-import type { AccountGroupRef, ApiKey, ApiKeyBatchChanges, ApiKeyPeerSharing } from '@/api'
-import type { ProviderRequestProfileUpdates } from '@/api/modules/settings/profiles'
+import type { AccountGroupRef, ApiKey, ApiKeyBatchChanges, ApiKeyPeerSharing, ProviderRequestProfileUpdates } from '@/api'
 import { ZButton, ZConfirmDialog, ZDialog, ZForm, ZFormItem } from '@codex-proxy/ui'
 import { KeyRound } from '@lucide/vue'
 import { isEqual } from 'es-toolkit'
 import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { batchUpdateApiKeys } from '@/api'
-import { isValidInstallationSeed } from '@/api/modules/settings/profiles'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
-import ProviderRequestProfilesEditor from '@/components/client-profile/ProviderRequestProfilesEditor.vue'
+import ProviderRequestProfilesEditor from '@/components/request-profile/index.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
-import { notification as ZNotification } from '@/utils/notification'
-import { PROVIDER_IDS } from '@/utils/providers'
+import { notification as ZNotification } from '@/plugins/notification'
+import { PROVIDER_IDS } from '@/providers/catalog'
+import { isValidInstallationSeed } from '@/providers/openai/request-profile/installationSeed'
+import InstallationSeedField from '@/providers/openai/request-profile/InstallationSeedField.vue'
 import { apiKeyFormValue } from '../composables/useApiKeyEditor'
 import { apiKeyLimitFields, useApiKeyLimitRules } from '../composables/useApiKeyFormRules'
-import ApiKeyInstallationSeedField from './ApiKeyInstallationSeedField.vue'
 import ApiKeyLimitFields from './ApiKeyLimitFields.vue'
 import ApiKeyPeerSharingField from './ApiKeyPeerSharingField.vue'
 
@@ -206,7 +205,7 @@ async function applyChanges() {
         <ZFormItem :label="t('keys.editor.upstreamIdentity')">
           <ProviderRequestProfilesEditor v-model:updates="form.profiles" :initial-profiles="initialProfiles" allow-inherit :active="open" :disabled="loading" />
         </ZFormItem>
-        <ApiKeyInstallationSeedField v-model="form.installationSeed" :disabled="loading" :error="seedError" :placeholder="hasExistingSeed ? t('accounts.modelAccess.reserve') : t('settings.clientProfile.installationSeedPlaceholder')" />
+        <InstallationSeedField v-model="form.installationSeed" :disabled="loading" :error="seedError" :placeholder="hasExistingSeed ? t('accounts.modelAccess.reserve') : t('settings.clientProfile.installationSeedPlaceholder')" />
       </div>
       <ApiKeyLimitFields
         v-model:daily-limit-usd="form.dailyLimitUsd" v-model:weekly-limit-usd="form.weeklyLimitUsd"

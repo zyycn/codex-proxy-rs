@@ -23,6 +23,7 @@ struct UnusedSettingsStore;
 
 #[derive(Default)]
 struct PricingSettingsStore {
+    synced: Mutex<Option<gateway_admin::model::pricing::PricingSyncChanges>>,
     updated: Mutex<Option<UpdatePricing>>,
 }
 
@@ -101,19 +102,39 @@ async fn client_profile_preview_rejects_unknown_provider_before_loading_settings
 }
 
 #[tokio::test]
-async fn pricing_accepts_ultrafast_for_openai_but_rejects_it_for_xai() {
-    for provider in ["openai", "xai"] {
+async fn pricing_validates_the_bands_declared_by_the_registered_provider() {
+    for (provider, supported) in [
+        ("text-provider", &["standard", "fast"][..]),
+        ("image-provider", &["standard", "image"][..]),
+    ] {
         let store = Arc::new(PricingSettingsStore::default());
         let services = super::AdminHarness::new()
             .settings(store.clone())
-            .provider(super::test_provider(provider))
+            .provider(Arc::new(super::UnavailableProvider {
+                pricing_bands: supported,
+                ..super::UnavailableProvider::new(provider)
+            }))
             .build()
             .await;
+        assert_eq!(
+            services.settings().pricing().await.unwrap().supported_bands[provider],
+            supported
+        );
         let context = MutationContext {
             actor: gateway_admin::model::MutationActor::System,
-            request_id: "request-ultrafast-pricing".to_owned(),
+            request_id: "request-band-pricing".to_owned(),
         };
-        for band in ["ultrafast", "long_ultrafast"] {
+        for band in [
+            "standard",
+            "fast",
+            "ultrafast",
+            "flex",
+            "long_standard",
+            "long_fast",
+            "long_ultrafast",
+            "long_flex",
+            "image",
+        ] {
             let pricing = serde_json::from_value(serde_json::json!({
                 "multiplierBps": 10000,
                 "bands": {
@@ -121,7 +142,7 @@ async fn pricing_accepts_ultrafast_for_openai_but_rejects_it_for_xai() {
                     (band): {"input":"12", "output":"60", "cacheRead":"0.6", "cacheWrite":"15"}
                 }
             }))
-            .expect("Ultrafast override");
+            .expect("valid token price override");
             let update = UpdatePricing {
                 provider: provider.to_owned(),
                 models: vec!["example-model".to_owned()],
@@ -131,12 +152,14 @@ async fn pricing_accepts_ultrafast_for_openai_but_rejects_it_for_xai() {
                 .settings()
                 .update_pricing(&context, update.clone())
                 .await;
-            if provider == "openai" {
-                result.expect("OpenAI accepts Ultrafast overrides");
-                assert_eq!(store.updated.lock().unwrap().as_ref(), Some(&update));
+            if supported.contains(&band) {
+                result.expect("provider accepts its supported band");
+                assert_eq!(store.updated.lock().unwrap().take(), Some(update));
             } else {
                 assert_eq!(
-                    result.expect_err("xAI rejects Ultrafast").kind(),
+                    result
+                        .expect_err("provider rejects unsupported band")
+                        .kind(),
                     AdminErrorKind::Invalid
                 );
                 assert!(store.updated.lock().unwrap().is_none());
@@ -259,10 +282,11 @@ impl SettingsStore for PricingSettingsStore {
 
     async fn sync_pricing(
         &self,
-        _: gateway_admin::model::pricing::PricingSyncChanges,
+        command: gateway_admin::model::pricing::PricingSyncChanges,
         _: &MutationContext,
     ) -> AdminStoreResult<Revision> {
-        panic!("unexpected pricing sync")
+        *self.synced.lock().unwrap() = Some(command);
+        Ok(Revision::new(2).unwrap())
     }
 
     async fn update_pricing(
@@ -340,9 +364,9 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                     switch_account_on_queue_failure: false,
                     max_retry_after_seconds: 240,
                     openai_guardian_reserved_concurrency: 0,
-                    openai_account_affinity: gateway_core::account::AccountAffinity::Relaxed,
+                    account_affinity: gateway_core::account::AccountAffinity::Relaxed,
                     max_account_rotations: 3,
-                    openai_session_affinity_ttl_hours: 24,
+                    session_affinity_ttl_hours: 24,
                     responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
                     smart_scheduling: gateway_core::account::SmartSchedulingConfig::default(),
                     quota_reset_window_weights: gateway_core::account::ResetWindowWeights::default(
@@ -375,4 +399,90 @@ fn unused() -> AdminStoreError {
         "settings",
         "unused in this test",
     )
+}
+
+struct ReferencePrices(Mutex<PricingSyncPreview>);
+#[async_trait]
+impl gateway_admin::ports::pricing::PricingSource for ReferencePrices {
+    async fn fetch(
+        &self,
+        _: &gateway_admin::ports::pricing::PricingSourceScope,
+    ) -> Result<PricingSyncPreview, gateway_admin::model::AdminError> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+}
+
+#[tokio::test]
+async fn external_reference_prices_project_to_exact_provider_ids_in_preview_and_sync() {
+    let price: gateway_core::metering::ModelPriceOverride = serde_json::from_value(serde_json::json!({"multiplierBps":10000,"bands":{"standard":{"input":"1","output":"2","cacheRead":"0.1","cacheWrite":"1"}}})).unwrap();
+    let source = Arc::new(ReferencePrices(Mutex::new(PricingSyncPreview {
+        prices: BTreeMap::from([(
+            "google".into(),
+            BTreeMap::from([
+                ("base-model".into(), price.clone()),
+                ("unmapped".into(), price),
+            ]),
+        )]),
+        skipped: vec!["google/missing".into(), "google/unrelated-image".into()],
+    })));
+    let mut provider = super::UnavailableProvider::new("antigravity");
+    provider.pricing_references = BTreeMap::from([
+        ("ag-high".into(), ("google".into(), "base-model".into())),
+        ("ag-low".into(), ("google".into(), "base-model".into())),
+        ("ag-image".into(), ("google".into(), "missing".into())),
+    ]);
+    let store = Arc::new(PricingSettingsStore::default());
+    let service = gateway_admin::initialize_settings(
+        store.clone(),
+        Arc::new(super::NoopSnapshot),
+        gateway_admin::ports::provider::ProviderAdminRegistry::new(vec![
+            Arc::new(provider) as Arc<dyn gateway_admin::ports::provider::ProviderAdmin>
+        ])
+        .unwrap(),
+        source.clone(),
+    );
+    let preview = service.preview_pricing_sync().await.unwrap();
+    assert_eq!(
+        preview.prices.keys().cloned().collect::<Vec<_>>(),
+        ["antigravity"]
+    );
+    assert_eq!(
+        preview.prices["antigravity"]
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        ["ag-high", "ag-low"]
+    );
+    assert_eq!(preview.skipped, ["antigravity/ag-image"]);
+    // 未登记外部型号的变化不会污染同步确认，但实际保存仍重新读取并校验投影价目
+    source
+        .0
+        .lock()
+        .unwrap()
+        .prices
+        .get_mut("google")
+        .unwrap()
+        .remove("unmapped");
+    service
+        .sync_pricing(
+            &MutationContext {
+                actor: gateway_admin::model::MutationActor::System,
+                request_id: "reference-sync".into(),
+            },
+            SyncPricing {
+                preview,
+                models: BTreeMap::from([(
+                    "antigravity".into(),
+                    BTreeSet::from(["ag-high".into()]),
+                )]),
+            },
+        )
+        .await
+        .unwrap();
+    let saved = store.synced.lock().unwrap();
+    let saved = saved.as_ref().unwrap();
+    assert_eq!(
+        saved["antigravity"].keys().cloned().collect::<Vec<_>>(),
+        ["ag-high"]
+    );
 }

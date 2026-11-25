@@ -85,6 +85,7 @@
       "active": "Active",
       "activeDescription": "New requests using the global settings use this identity",
       "upToDate": "Up to date",
+      "versionUpToDate": "Version matches",
       "upToDateDescription": "The active version matches the latest official release",
       "updateAvailable": "Update available",
       "latestRelease": "Latest official version: {releaseLabel}",

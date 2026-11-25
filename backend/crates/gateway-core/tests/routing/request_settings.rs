@@ -236,7 +236,7 @@ fn affinity_and_rotation_settings_are_validated_without_mutating_the_snapshot() 
     use gateway_core::account::AccountAffinity;
     let original = snapshot(1, "host");
     let facts = serde_json::to_value(original.settings()).unwrap();
-    assert_eq!(facts["openai_account_affinity"], "strict");
+    assert_eq!(facts["account_affinity"], "strict");
     assert_eq!(facts["max_account_rotations"], 3);
     for (mode, rotations) in [
         (AccountAffinity::Relaxed, 0),
@@ -248,13 +248,13 @@ fn affinity_and_rotation_settings_are_validated_without_mutating_the_snapshot() 
                 &original
                     .settings()
                     .clone()
-                    .with_openai_account_affinity(mode)
+                    .with_account_affinity(mode)
                     .with_max_account_rotations(rotations),
             )
             .unwrap();
         let changed = serde_json::to_value(changed.settings()).unwrap();
         assert_eq!(changed["max_account_rotations"], rotations);
-        assert_eq!(changed["openai_account_affinity"], mode.as_str());
+        assert_eq!(changed["account_affinity"], mode.as_str());
     }
     assert!(
         original
@@ -268,7 +268,7 @@ fn affinity_and_rotation_settings_are_validated_without_mutating_the_snapshot() 
 fn session_affinity_ttl_rejects_unbounded_or_empty_retention() {
     let original = snapshot(1, "host");
     assert_eq!(
-        serde_json::to_value(original.settings()).unwrap()["openai_session_affinity_ttl_hours"],
+        serde_json::to_value(original.settings()).unwrap()["session_affinity_ttl_hours"],
         24
     );
     for hours in [1, 168, 720] {
@@ -278,7 +278,7 @@ fn session_affinity_ttl_rejects_unbounded_or_empty_retention() {
                     &original
                         .settings()
                         .clone()
-                        .with_openai_session_affinity_ttl_hours(hours)
+                        .with_session_affinity_ttl_hours(hours)
                 )
                 .is_ok()
         );
@@ -290,7 +290,7 @@ fn session_affinity_ttl_rejects_unbounded_or_empty_retention() {
                     &original
                         .settings()
                         .clone()
-                        .with_openai_session_affinity_ttl_hours(hours)
+                        .with_session_affinity_ttl_hours(hours)
                 )
                 .is_err()
         );

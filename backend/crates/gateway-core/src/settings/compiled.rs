@@ -77,7 +77,7 @@ impl CompiledSettings {
             settings.key_queue_timeout_seconds,
             settings.account_queue_timeout_seconds,
             settings.max_account_rotations,
-            settings.openai_session_affinity_ttl_hours,
+            settings.session_affinity_ttl_hours,
         )
         .map_err(|_| InvalidSettings)?;
         let responses_max_decompressed_body_bytes =
@@ -95,10 +95,10 @@ impl CompiledSettings {
             AccountConcurrency::new(settings.max_concurrent_per_account),
         )
         .with_openai_guardian_reserved_concurrency(settings.openai_guardian_reserved_concurrency)
-        .with_openai_account_affinity(settings.openai_account_affinity)
+        .with_account_affinity(settings.account_affinity)
         .with_max_account_rotations(settings.max_account_rotations)
-        .with_openai_session_affinity_ttl(Duration::from_secs(
-            u64::from(settings.openai_session_affinity_ttl_hours) * 3600,
+        .with_session_affinity_ttl(Duration::from_secs(
+            u64::from(settings.session_affinity_ttl_hours) * 3600,
         ))
         .with_smart_scheduling(settings.smart_scheduling)
         .with_quota_reset_window_weights(settings.quota_reset_window_weights)

@@ -1,12 +1,16 @@
 {
   "settings": {
     "clientProfile": {
+      "systemPrompt": "系統提示詞",
+      "systemPromptHint": "取代客戶端系統提示，預設來自 {source}",
+      "restoreSystemPrompt": "恢復預設",
       "userAgent": "用戶代理",
       "clientIdentitySource": "客戶端身份來源",
       "globalConfiguration": "全局配置",
       "customConfiguration": "獨立配置",
       "enterIntegerFromTo": "請輸入 1～{version} 的正整數",
-      "installationSeed": "安裝身分種子",
+      "coreVersion": "Core 版本",
+      "installationSeed": "Codex 安裝身分種子",
       "generateInstallationSeed": "產生安裝身分種子",
       "installationSeedHelp": "依金鑰與上游帳號產生獨立、穩定的安裝身分，種子不會傳送給上游，修改種子會切換身分",
       "installationSeedPlaceholder": "留空使用上游帳號的安裝 ID",
@@ -17,6 +21,7 @@
       "coreDefaultIdentity": "Core · 默認身份",
       "tuiInteractiveTerminal": "TUI · 交互式終端",
       "execNonInteractiveExecution": "Exec · 非交互執行",
+      "clientVersion": "客戶端版本",
       "versionStrategy": "版本策略",
       "followLatestVersion": "跟隨最新版本",
       "customVersion": "自定義版本",
@@ -45,7 +50,7 @@
       "grokCliVersion": "Grok CLI 版本",
       "forExample": "例如：1.0.13",
       "clientIdentity": "客戶端身份",
-      "description": "配置網關向上遊聲明的客戶端類型、版本與請求頭"
+      "identityDescription": "設定傳送給上游的客戶端識別資訊"
     },
     "pricing": {
       "multiplier": "倍率",
@@ -88,7 +93,8 @@
       "source": "來源",
       "takeEffect": "生效",
       "sync": {
-        "title": "確認同步來源價目",
+        "title": "確認同步 {provider} 來源價目",
+        "unavailable": "目前平台暫無可同步價目，可手動設定價格",
         "description": "僅同步所選模型的來源價格，保留自定義單價和倍率",
         "skipped": "跳過 {count} 個缺少完整價格或計價方式不匹配的模型",
         "action": "同步"
@@ -159,7 +165,7 @@
       "weekly": "週",
       "monthly": "月",
       "roundRobin": "輪詢",
-      "autoReviewSlotsHelp": "僅對 Codex 賬號生效，普通併發爲 10、審批名額爲 3 時，兩類請求分別最多運行 10 個和 3 個，互不佔用名額",
+      "autoReviewSlotsHelp": "普通併發爲 10、審批名額爲 3 時，兩類請求分別最多運行 10 個和 3 個，互不佔用名額",
       "autoReviewQueueHelp": "開啓獨立額度後，審批請求單獨排隊，可超過賬號隊列容量，仍受總等待容量、排隊超時與密鑰限額約束",
       "weights": {
         "load": "負載係數",
@@ -187,10 +193,10 @@
         "preferred": "優先",
         "strict": "嚴格",
         "relaxedHelp": "寬鬆：會話內請求直接按調度策略選號，不優先主賬號",
-        "preferredHelp": "優先：會話內請求優先沿用主賬號，短時繁忙可臨時分流，停用或長期不可用時遷移會話綁定",
-        "strictHelp": "嚴格：同一會話共用賬號，子線程等待當前賬號，並跟隨主線程換號"
+        "preferredHelp": "優先：優先沿用會話主賬號，繁忙時可臨時分流，綁定失效時重新選號",
+        "strictHelp": "嚴格：優先沿用同一賬號，啓用排隊時等待繁忙賬號，綁定失效或允許換號時重新綁定"
       },
-      "title": "親和策略",
+      "title": "工作階段親和",
       "mode": "賬號親和",
       "description": "控制同一會話內的賬號綁定方式",
       "accountAffinityInstructions": "賬號親和說明",
@@ -204,7 +210,7 @@
     },
     "warmup": {
       "title": "定時預熱",
-      "description": "嘗試啓動空閒 Codex OAuth 賬號的額度窗口",
+      "description": "嘗試啟動閒置 OAuth 帳號的額度視窗",
       "enableWarmup": "啟用定時預熱",
       "cronExpression": "Cron 表達式",
       "cronHelp": "按 Enter 新增 Tag，支援多個",
@@ -212,8 +218,9 @@
       "modelHelp": "啓用時必填，需爲賬號可用模型",
       "modelPlaceholder": "輸入模型名稱",
       "helpTitle": "定時預熱說明",
-      "help": "向可用的 Codex OAuth 帳號傳送輕量請求，略過額度耗盡和已確認活躍的視窗，0% 帳號允許預熱，不保證視窗成功啟動",
-      "scheduleHelp": "依部署時區執行，同一分鐘只預熱一次"
+      "help": "向可用的 OAuth 帳號傳送輕量請求，略過額度耗盡和已確認活躍的視窗，0% 帳號允許預熱，不保證視窗成功啟動",
+      "scheduleDescription": "依部署時區執行預熱排程",
+      "scheduleHelp": "同一分鐘只預熱一次"
     },
     "adminApiKey": {
       "adminApiKey": "管理員 API密鑰",
@@ -257,7 +264,8 @@
       "inSeconds": "{label}（秒）"
     },
     "concurrency": {
-      "title": "並發與重試",
+      "title": "並發與排隊",
+      "description": "限制帳號並行和請求排隊",
       "accountLimit": {
         "label": "默認賬號併發",
         "help": "未單獨設置時使用，0 不限"
@@ -267,10 +275,11 @@
       "accountQueueCapacity": "賬號隊列容量",
       "accountQueueHelp": "每個賬號的等待上限，0 不排隊",
       "keyTimeout": "密鑰排隊超時",
-      "keyTimeoutHelp": "等待密鑰併發名額的時限，超時返回錯誤",
+      "keyTimeoutHelp": "超時返回錯誤",
       "accountTimeout": "賬號排隊超時",
-      "accountTimeoutHelp": "從首次進入賬號隊列起計時，重試不重置",
+      "accountTimeoutHelp": "首次入隊計時，重試不重置",
       "queueFailure": "賬號隊滿或超時後",
+      "queueFailureDescription": "設置排隊失敗後的處理方式",
       "queueFailureHelp": "嘗試換到有空位的賬號，無法換號時返回排隊錯誤",
       "queueFailureHelpTitle": "賬號換號規則",
       "queueFailureAttempt": "只嘗試換號一次，不再排隊",
@@ -279,7 +288,7 @@
       "trySwitch": "嘗試換號",
       "autoReview": {
         "label": "自動審批獨立併發",
-        "description": "每個 Codex 賬號的額外名額，0 共用普通併發",
+        "description": "每個帳號的額外名額，0 共用普通併發",
         "helpTitle": "自動審批獨立併發說明"
       },
       "retryAfter": {
@@ -289,10 +298,14 @@
         "waitLimit": "預設 240 秒，僅限制單次 Retry-After 等待，不限制請求總時長",
         "zeroLimit": "設為 0 時，任何大於 0 秒的等待都算超限",
         "switchConditions": "超限後，僅在請求可重試且未達到最大換號次數時嘗試換號，無可用賬號則返回錯誤"
-      }
+      },
+      "retryTitle": "重試與換號",
+      "retryDescription": "限制失敗請求的等待和換號次數"
     },
     "modelMapping": "模型映射",
     "routing": {
+      "guardianReviewTitle": "自動審批",
+      "guardianReviewDescription": "審核請求可使用獨立並行額度",
       "oauthGuardianReviewModel": "專用審核模型",
       "oauthGuardianReviewModelHelp": "同步審核優先使用授權帳號的專用模型",
       "oauthGuardianReviewModelDetails": "開啟時優先使用 codex-auto-review，關閉此項或沒有可用帳號支援該模型時，沿用用戶端請求的模型",
@@ -300,13 +313,14 @@
     },
     "addMapping": "添加映射",
     "loadingModelMapping": "正在加載模型映射",
+    "emptyModelMapping": "暫無模型映射",
     "requestModel": "請求模型",
     "upstreamModel": "上游模型",
     "upstreamModelName": "上游模型名稱",
     "deleteMapping": "刪除映射",
     "history": {
       "title": "歷史保留",
-      "retentionHelp": "自動刪除過期請求記錄及統計數據",
+      "description": "設定請求記錄與統計資料的保留週期",
       "retentionConstraints": "至少 1 天，刪除後不可恢復",
       "retentionDaysLabel": "歷史保留天數"
     },
@@ -315,8 +329,8 @@
     "day": "天",
     "location": {
       "requestCountry": "請求國家",
-      "requestCountryDescription": "設定 Codex 請求如何傳送國家代碼",
-      "requestCountryScope": "僅用於 Codex OAuth 帳號",
+      "requestCountryDescription": "設定請求如何傳送國家代碼",
+      "requestCountryScope": "僅用於 OAuth 帳號",
       "countryHelp": "請求國家模式說明",
       "countryMode": "策略",
       "countryModes": {
@@ -333,7 +347,7 @@
       },
       "customCountryCode": "自訂國家代碼",
       "requestLocationOverride": "請求位置覆蓋",
-      "description": "覆蓋 Codex 請求中的時區與位置字段，賬號出站代理的自定義位置優先",
+      "description": "覆蓋請求中的時區與位置字段，賬號出站代理的自定義位置優先",
       "enableLocationOverlay": "啓用位置覆蓋"
     },
     "quotaReset": {
@@ -352,13 +366,14 @@
     "remainingWeeklyQuotaLimit": "剩餘周額度上限（%）",
     "responseLimit": {
       "requestBodyLimit": "請求體限制",
-      "description": "限制 Responses 請求解壓後的請求體大小",
-      "maximumSizeAfterDecompression": "解壓後大小上限",
+      "description": "模型請求解壓和插件出站共用此上限",
+      "maximumSize": "大小上限",
       "sizeHelp": "調高可接收更大的圖片和歷史上下文，也會增加內存佔用",
-      "maxSizeLabel": "解壓後請求體大小上限"
+      "maxSizeLabel": "請求體大小上限"
     },
     "rotation": {
       "title": "調度策略",
+      "description": "決定如何選擇可用帳號",
       "customized": "自定義",
       "smartSchedulingSettings": "智能調度設置",
       "smartLabel": "智能調度",
@@ -379,6 +394,7 @@
     },
     "tokenRefresh": {
       "title": "憑據刷新",
+      "description": "統一管理各平台存取權杖的更新",
       "leadTimeLabel": "提前刷新",
       "leadTimeHelp": "在訪問令牌到期前觸發刷新",
       "concurrencyLabel": "刷新併發上限",
@@ -440,6 +456,7 @@
         "objectStorageSpecificSecret": "對象存儲專用 Secret",
         "forcePathStyle": "強制路徑式訪問",
         "accessKeyId": "訪問密鑰 ID",
+        "keepSecret": "留空保留已儲存的密鑰",
         "secretAccessKey": "私有訪問密鑰",
         "description": "配置 S3 兼容存儲（支持 {service}）",
         "test": "測試"
@@ -500,6 +517,7 @@
       "codexClientUpgrade": "Codex 客戶端升級",
       "guideDescription": "先選擇客戶端，再查看對應的安裝與升級方式",
       "clientVersionRestrictions": "客戶端版本限制",
+      "restrictionsDescription": "低於最低版本的客戶端須先升級",
       "openGuide": "查看安裝與升級說明",
       "codexDesktopMinimumVersion": "Codex Desktop 最低版本",
       "onlyCheckDesktopVersionEG": "只檢查桌面端應用版本，例如 26.825.51511",
@@ -521,7 +539,7 @@
       "skipCurrentRule": "跳過當前規則",
       "blockRequestFromBeingSent": "阻止請求發送",
       "privacyPolicy": "隱私策略",
-      "description": "按規則統一或移除 Codex 請求中的隱私信息",
+      "description": "按規則統一或移除請求中的隱私資訊",
       "enableRequestRules": "啓用請求規則",
       "addRule": "添加規則",
       "addFromPreset": "從預設添加",
@@ -644,7 +662,7 @@
       "invalidSwitchLimit": "最大換號次數應爲 0～31 的整數，0 表示不換號",
       "invalidConcurrency": "默認賬號併發上限應爲 0～4294967295 的整數，0 表示不限制",
       "invalidReviewConcurrency": "自動審批獨立併發應爲 0～4294967295 的整數，0 表示共用普通併發",
-      "invalidBodyLimit": "Responses 解壓上限應爲有效的正整數（MiB）",
+      "invalidBodyLimit": "請求體大小上限應為正整數（MiB）",
       "invalidQuotaThreshold": "剩餘周額度上限應爲 0～100 的整數，留空表示不限制",
       "invalidResetLeadTime": "重置卡提前使用時間應爲 1～1440 分鐘的整數",
       "invalidRetention": "歷史保留天數應爲正整數",
@@ -660,10 +678,9 @@
     },
     "page": {
       "tabs": {
-        "runtime": "運行設置",
-        "upstream": "上游配置",
+        "runtime": "通用設置",
+        "upstream": "平台設置",
         "pricing": "模型定價",
-        "access": "安全與訪問",
         "backups": "數據備份"
       },
       "description": "管理調度、上游、定價、安全、資料留存與備份",
@@ -675,8 +692,9 @@
         "leave": "放棄並離開",
         "stay": "繼續編輯"
       },
-      "saveChanges": "保存基礎設置",
-      "basicSettings": "基礎設置"
+      "saveChanges": "保存全部更改",
+      "basicSettings": "基礎設置",
+      "providerLabel": "選擇平台"
     },
     "errorProtection": {
       "title": "錯誤保護",

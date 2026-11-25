@@ -1,9 +1,12 @@
 //! OpenAI Provider 专属能力
 
 mod admin;
+mod automatic_context;
+mod billing;
 mod compat;
 pub mod config;
 mod jitter;
+pub mod profile;
 mod provider;
 mod request_identity;
 mod session_transport;
@@ -13,12 +16,10 @@ pub(crate) const CODEX_AUTHENTICATION_KIND_API_KEY: &str = "api_key";
 
 use std::sync::Arc;
 
-use gateway_admin::ports::provider::ProviderAdmin;
+use gateway_admin::ports::provider::ProviderBundle;
 use gateway_core::account::ProviderAccountStore;
-use gateway_core::engine::provider::Provider;
 use gateway_core::provider_ports::ProviderStorePorts;
 use gateway_core::routing::ProviderKind;
-use gateway_core::task::WorkerContribution;
 
 use crate::admin::{OpenAiAdminProvider, OpenAiAdminServices, OpenAiOAuthPendingStore};
 use crate::credential::token_client::{AuthorizationCodeExchanger, TokenRefresher};
@@ -28,7 +29,7 @@ use crate::credential::{
     CodexCredentialRefreshService, CodexCredentialRepository, CodexCredentialSelector,
     CodexOAuthAdmin, CodexOAuthAdminService,
 };
-use crate::transport::profile::{
+use crate::profile::{
     CodexArtifactProfileCache, CodexDesktopReleaseService, OfficialCodexDesktopReleaseTransport,
 };
 use crate::transport::{CodexWebSocketPool, build_reqwest_client};
@@ -49,16 +50,8 @@ pub mod transport;
 pub use transport::endpoints::{OFFICIAL_CODEX_BASE_PATH, OFFICIAL_CODEX_BASE_URL};
 pub use transport::tls::{build_reqwest_client_with_custom_ca, ensure_rustls_provider};
 pub use transport::{
-    CodexCanonicalDecoder, CodexCanonicalError, CodexRequestEncodeError, OpenAiBillingUsage,
-    encode_generate_request, openai_billing_breakdown,
+    CodexCanonicalDecoder, CodexCanonicalError, CodexRequestEncodeError, encode_generate_request,
 };
-
-/// OpenAI 初始化后交给组装根的最小能力集
-pub struct ProviderBundle {
-    core_provider: Arc<dyn Provider>,
-    admin_provider: Arc<dyn ProviderAdmin>,
-    worker_contributions: Vec<WorkerContribution>,
-}
 
 /// 构造 OpenAI 数据面、Provider-owned 后台任务与 Redis OAuth pending owner
 pub async fn initialize(
@@ -74,22 +67,21 @@ pub async fn initialize(
     let session_exclusions = ports.session_exclusions();
     let account_feedback = ports.account_feedback();
     let runtime_policy = ports.runtime_policy();
-    let initial_profile = transport::profile::selection::ClientProfileSelection::default()
+    let initial_profile = profile::selection::ClientProfileSelection::default()
         .document()
         .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
     let configured_profile = runtime_policy
         .initialize_request_profile(&provider_kind, initial_profile)
         .await
         .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
-    transport::profile::identity::RequestProfileSelection::parse(&configured_profile)
+    profile::identity::RequestProfileSelection::parse(&configured_profile)
         .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
     let credential_state = ports.credential_state();
-    let profile =
-        transport::profile::CodexWireProfileState::new(transport::profile::CodexWireProfile {
-            residency: config.residency.clone(),
-            account_routing_override: config.account_routing_override.clone(),
-            ..Default::default()
-        });
+    let profile = profile::CodexWireProfileState::new(profile::CodexWireProfile {
+        residency: config.residency.clone(),
+        account_routing_override: config.account_routing_override.clone(),
+        ..Default::default()
+    });
     let artifact_cache =
         CodexArtifactProfileCache::new(provider_kind.clone(), ports.artifact_profiles());
     let configured_build = profile.snapshot().desktop_build.parse::<u64>().ok();
@@ -122,7 +114,7 @@ pub async fn initialize(
     ));
     let desktop_release_status = desktop_release.status();
     let cli_release = Arc::new(
-        transport::profile::cli_release::CliReleaseService::new(
+        profile::cli_release::CliReleaseService::new(
             provider_kind.clone(),
             profile.clone(),
             ports.artifact_profiles(),
@@ -131,12 +123,12 @@ pub async fn initialize(
     );
     cli_release.restore().await;
     let platform_releases = Arc::new(
-        transport::profile::platform_release::PlatformDesktopReleaseService::new(
+        profile::platform_release::PlatformDesktopReleaseService::new(
             provider_kind.clone(),
             profile.clone(),
             ports.artifact_profiles(),
             Arc::new(
-                transport::profile::platform_release::OfficialDesktopArtifactTransport::new()
+                profile::platform_release::OfficialDesktopArtifactTransport::new()
                     .map_err(|_| OpenAiInitializeError::DesktopRelease)?,
             ),
         ),
@@ -184,7 +176,7 @@ pub async fn initialize(
         CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
         upstream_info,
     ));
-    let core_provider: Arc<dyn Provider> = Arc::new(
+    let core = Arc::new(
         CodexProvider::new(
             selector,
             Arc::clone(&catalog),
@@ -241,7 +233,7 @@ pub async fn initialize(
         )
         .with_oauth_client_id(config.oauth_client_id()),
     );
-    let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(OpenAiAdminProvider::new(
+    let admin = Arc::new(OpenAiAdminProvider::new(
         provider_kind,
         profile,
         accounts,
@@ -255,14 +247,14 @@ pub async fn initialize(
         websocket_pool,
         desktop_release_status,
     ));
-    let worker_contributions = provider::worker_contributions(
+    let workers = provider::workers::contributions(
         config.timezone,
         refresh,
         quota,
         catalog,
         config.quota_refresh_policy(),
         config.oauth_refresh_enabled(),
-        provider::ClientReleaseServices {
+        provider::workers::ClientReleaseServices {
             desktop: desktop_release,
             cli: cli_release,
             platforms: platform_releases,
@@ -271,27 +263,10 @@ pub async fn initialize(
     .map_err(|_| OpenAiInitializeError::Worker)?;
 
     Ok(ProviderBundle {
-        core_provider,
-        admin_provider,
-        worker_contributions,
+        core,
+        admin,
+        workers,
     })
-}
-
-impl ProviderBundle {
-    #[must_use]
-    pub fn core_provider(&self) -> Arc<dyn Provider> {
-        Arc::clone(&self.core_provider)
-    }
-
-    #[must_use]
-    pub fn admin_provider(&self) -> Arc<dyn ProviderAdmin> {
-        Arc::clone(&self.admin_provider)
-    }
-
-    /// 一次性移交 Host 任务计划，防止同一 owner 被重复注册
-    pub fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
-        std::mem::take(&mut self.worker_contributions)
-    }
 }
 
 /// OpenAI 初始化失败的脱敏分类

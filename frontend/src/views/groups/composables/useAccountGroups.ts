@@ -16,7 +16,7 @@ import { useIdSet } from '@/composables/useIdSet'
 import { usePagedQuery } from '@/composables/usePagedQuery'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { errorMessage } from '@/utils/operation'
 import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../constants'
 

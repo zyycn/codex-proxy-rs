@@ -742,7 +742,7 @@ async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_la
 #[tokio::test]
 async fn custom_core_version_change_reconnects_new_chains_and_keeps_exact_continuations() {
     use gateway_core::account::OpaqueProviderData;
-    use provider_openai::transport::profile::identity::RequestProfileSelection;
+    use provider_openai::profile::identity::RequestProfileSelection;
 
     const USER_AGENT: &str = "Custom Agent/test";
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -831,9 +831,7 @@ async fn custom_core_version_change_reconnects_new_chains_and_keeps_exact_contin
 
 #[tokio::test]
 async fn concurrent_request_profiles_emit_independent_http_identities() {
-    use provider_openai::transport::profile::selection::{
-        ClientKind, ClientPlatform, ClientProfileSelection,
-    };
+    use provider_openai::profile::selection::{ClientKind, ClientPlatform, ClientProfileSelection};
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -852,7 +850,7 @@ async fn concurrent_request_profiles_emit_independent_http_identities() {
         }
         requests
     });
-    let state = provider_openai::transport::profile::CodexWireProfileState::new(Default::default());
+    let state = provider_openai::profile::CodexWireProfileState::new(Default::default());
     let desktop = ClientProfileSelection::default().resolve(&state).unwrap();
     let cli = ClientProfileSelection {
         client: ClientKind::Cli,
@@ -906,7 +904,7 @@ async fn concurrent_request_profiles_emit_independent_http_identities() {
 
 #[tokio::test]
 async fn tui_and_exec_send_the_same_complete_identity_over_http_and_websocket() {
-    use provider_openai::transport::profile::selection::{
+    use provider_openai::profile::selection::{
         CliEntry, ClientKind, ClientPlatform, ClientProfileSelection, VersionMode,
     };
     for (entry, name) in [(CliEntry::Tui, "codex-tui"), (CliEntry::Exec, "codex_exec")] {
@@ -938,8 +936,7 @@ async fn tui_and_exec_send_the_same_complete_identity_over_http_and_websocket() 
             .await
             .unwrap();
         });
-        let state =
-            provider_openai::transport::profile::CodexWireProfileState::new(Default::default());
+        let state = provider_openai::profile::CodexWireProfileState::new(Default::default());
         let profile = ClientProfileSelection {
             client: ClientKind::Cli,
             platform: ClientPlatform::Linux,

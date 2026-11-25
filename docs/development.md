@@ -57,7 +57,7 @@ pnpm --dir frontend dev
 [后端 Workspace 边界](architecture.md#3-workspace-边界) · [前端模块职责](architecture.md#34-前端模块职责) · [共享 UI 组件架构](../modules/ui/playground/guide/architecture.md)
 
 Messages 与 Responses 的纯协议转换位于 `backend/crates/gateway-protocol/src/anthropic/`，
-HTTP 入口位于 `backend/crates/gateway-api/src/openai/messages.rs`，
+HTTP 入口位于 `backend/crates/gateway-api/src/data_plane/messages.rs`，
 账号协议分派、HTTP 执行和计数位于 `backend/crates/providers/openai/src/provider/messages/`。
 模块职责见 [Provider 与协议边界](architecture.md#5-provider-与协议边界)
 

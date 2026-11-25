@@ -1,6 +1,6 @@
 import type { RequestConfig, RequestContext, RequestNext } from '../types'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { ApiError, isSessionRequired } from './error'
 
 // 会话失效是后端业务事实，登录凭据错误和 403 不清除已有会话

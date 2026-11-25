@@ -2,8 +2,13 @@
 //!
 //! 本 crate 只处理 wire contract，不包含 Provider 认证、路由、重试或传输策略
 
+mod capabilities;
+
 /// OpenAI wire contract
 pub mod openai;
+
+/// Google GenAI 原生生成协议
+pub mod genai;
 
 /// Anthropic Messages 与 Responses 的线协议转换
 pub mod anthropic;

@@ -74,6 +74,23 @@ pub(super) async fn quota_and_models(
     let snapshot = client.snapshot();
     let scope = client.policy().account_scope();
     let mut observations = BTreeMap::<&str, ModelObservations>::new();
+    let mut provider_facts = BTreeMap::new();
+    for account in accounts {
+        let kind = &account.provider_kind;
+        if provider_facts.contains_key(kind) {
+            continue;
+        }
+        if let Ok(provider) = providers.require(kind) {
+            // 原生事实读取失败时保留未知，不能退回整号 Allowed 冒充各模型可用
+            provider_facts.insert(
+                kind.clone(),
+                provider
+                    .peer_model_facts(accounts)
+                    .await
+                    .unwrap_or_else(|_| Some(BTreeMap::new())),
+            );
+        }
+    }
     let mut model_bytes = 0usize;
     let mut result = Vec::with_capacity(accounts.len());
     for (index, account) in accounts.iter().enumerate() {
@@ -94,9 +111,32 @@ pub(super) async fn quota_and_models(
             {
                 continue;
             }
-            let eligible = provider
-                .as_ref()
-                .and_then(|provider| provider.peer_model_eligible(account, &upstream));
+            let (eligible, observation) = match provider_facts
+                .get(&account.provider_kind)
+                .and_then(Option::as_ref)
+            {
+                Some(facts) => match facts
+                    .get(&account.id)
+                    .filter(|f| f.credential_revision.get() == account.credential_revision.get())
+                {
+                    Some(facts) => match facts.models.get(&upstream) {
+                        Some(quota) => (
+                            Some(true),
+                            quota.and_then(|quota| {
+                                model_quota_observation(account, runtime, quota, now)
+                            }),
+                        ),
+                        None => (Some(false), None),
+                    },
+                    None => (None, None),
+                },
+                None => (
+                    provider
+                        .as_ref()
+                        .and_then(|provider| provider.peer_model_eligible(account, &upstream)),
+                    observation,
+                ),
+            };
             if eligible == Some(false) {
                 continue;
             }
@@ -203,6 +243,32 @@ struct ModelObservation {
     state: PeerModelState,
     observed_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
+}
+
+fn model_quota_observation(
+    account: &AccountRecord,
+    runtime: &AccountRuntimeSnapshot,
+    quota: crate::ports::provider::ProviderPeerModelQuota,
+    now: DateTime<Utc>,
+) -> Option<ModelObservation> {
+    if !matches!(
+        status(account, runtime, now),
+        AccountStatus::Normal | AccountStatus::QuotaExhausted
+    ) {
+        return None;
+    }
+    let state = match quota.state.access() {
+        QuotaAccessState::Allowed => PeerModelState::Available,
+        QuotaAccessState::Exhausted => PeerModelState::Exhausted,
+        QuotaAccessState::Unknown => return None,
+    };
+    let observed_at = DateTime::<Utc>::from(quota.state.observed_at()?);
+    let expires_at = DateTime::<Utc>::from(quota.valid_until).min(now + TimeDelta::minutes(5));
+    (observed_at <= now && expires_at > now).then_some(ModelObservation {
+        state,
+        observed_at,
+        expires_at,
+    })
 }
 
 #[derive(Default)]

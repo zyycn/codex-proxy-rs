@@ -1,7 +1,7 @@
-import type { KeyUsageMetrics } from '@/api/modules/key-usage'
+import type { KeyUsageMetrics } from '@/api'
 import { ArrowDown, ArrowUp, Brain, Database, Sparkles } from '@lucide/vue'
 import { computed } from 'vue'
-import { usageFreshInputTokens } from '@/components/usage/shared/presenter'
+import { usageFreshInputTokens } from '@/components/usage-records-table/presenter'
 import { t } from '@/i18n'
 
 // 卡片、曲线和图例共用语义与主题色，避免同一指标出现不同颜色。

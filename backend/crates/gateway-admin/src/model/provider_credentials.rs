@@ -828,7 +828,7 @@ impl ProviderQuotaWindow {
     }
 }
 
-/// 账号用量统计周期，完整周/月额度优先，随后使用 Provider 提供的本地滚动日统计
+/// 账号用量统计周期，完整周/月额度优先，缺少可归属窗口时使用本地滚动日统计
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AccountUsagePeriod {
     Weekly,
@@ -1280,6 +1280,8 @@ pub struct AccountDirectoryItem {
     pub plan_type_display: Option<String>,
     pub projection: gateway_core::account::AccountStatusProjection,
     pub usage: Option<super::accounts::AccountUsage>,
+    /// Admin 选择的本地统计周期，不要求存在对应的上游额度窗口
+    pub usage_period: Option<AccountUsagePeriod>,
     pub quota: ProviderQuota,
 }
 

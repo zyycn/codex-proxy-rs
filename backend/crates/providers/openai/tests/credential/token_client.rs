@@ -59,8 +59,7 @@ async fn refresh_tracks_the_online_profile_without_contaminating_code_exchange()
         .expect(4)
         .mount(&server)
         .await;
-    let profile =
-        provider_openai::transport::profile::CodexWireProfileState::new(Default::default());
+    let profile = provider_openai::profile::CodexWireProfileState::new(Default::default());
     let client = provider_openai::credential::token_client::openai_token_client(
         TokenClientConfig {
             client_id: "audit-client".to_owned(),
@@ -73,14 +72,12 @@ async fn refresh_tracks_the_online_profile_without_contaminating_code_exchange()
         ("1.2.3", "26.800.10000", "8000"),
         ("1.2.4", "26.901.10000", "8109"),
     ] {
-        profile.update_bundled_release(
-            &provider_openai::transport::profile::CodexBundledReleaseProfile {
-                codex_version: core.to_owned(),
-                desktop_version: desktop.to_owned(),
-                desktop_build: build.to_owned(),
-                verified_at: chrono::Utc::now(),
-            },
-        );
+        profile.update_bundled_release(&provider_openai::profile::CodexBundledReleaseProfile {
+            codex_version: core.to_owned(),
+            desktop_version: desktop.to_owned(),
+            desktop_build: build.to_owned(),
+            verified_at: chrono::Utc::now(),
+        });
         client.refresh("audit-refresh").await.expect("refresh");
         client
             .exchange_authorization_code(AuthorizationCodeGrant {
@@ -126,7 +123,7 @@ fn client(server: &MockServer) -> OpenAiTokenClient {
             client_id: "test-public-client".to_owned(),
             token_endpoint: format!("{}/oauth/token", server.uri()),
         },
-        provider_openai::transport::profile::CodexWireProfileState::new(Default::default()),
+        provider_openai::profile::CodexWireProfileState::new(Default::default()),
     )
 }
 
@@ -394,7 +391,7 @@ async fn authorization_code_response_timeouts_remain_ambiguous_without_exposing_
                 client_id: "test-public-client".to_owned(),
                 token_endpoint: format!("http://{address}/oauth/token?PRIVATE_URL_MARKER"),
             },
-            provider_openai::transport::profile::CodexWireProfileState::new(Default::default()),
+            provider_openai::profile::CodexWireProfileState::new(Default::default()),
         );
         let error = client
             .exchange_authorization_code(AuthorizationCodeGrant {

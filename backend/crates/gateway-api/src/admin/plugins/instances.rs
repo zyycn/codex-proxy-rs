@@ -15,11 +15,11 @@ use gateway_admin::model::plugins::instances::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    SessionState,
     admin::{
         AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminResponse,
         wire::map_admin_service_error,
     },
-    auth::SessionState,
 };
 
 pub(super) fn router<S: SessionState + Clone + Send + Sync + 'static>() -> Router<S> {

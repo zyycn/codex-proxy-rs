@@ -232,6 +232,7 @@ async fn filtered_scheduling_covers_lease_retry_waiting_and_pinned_terminal_reje
             leases.clone(),
             Arc::new(MemoryCooldownPort::default()),
             Arc::new(AccountFeedbackStats::default()),
+            Arc::new(crate::support::TestSessionAffinity::default()),
         );
         let transport = StubInferenceTransport::success();
         let provider = Arc::new(
@@ -425,6 +426,7 @@ async fn account_scoped_adapter_filters_candidates_by_adapter_and_native_request
             leases.clone(),
             Arc::new(MemoryCooldownPort::default()),
             Arc::new(AccountFeedbackStats::default()),
+            Arc::new(crate::support::TestSessionAffinity::default()),
         );
         let provider = Arc::new(
             GrokBuildProvider::new(

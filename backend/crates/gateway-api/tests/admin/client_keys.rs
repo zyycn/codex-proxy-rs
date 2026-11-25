@@ -52,7 +52,7 @@ fn batch_key_form_preserves_omissions_and_accepts_explicit_zero_false_and_inheri
             "installationSeed",
             json!("A3A4E0BDF84447068DF8BFF10DE95B3B"),
         ),
-        ("providerRequestProfileOverrides", json!({"unknown": null})),
+        ("providerRequestProfileOverrides", json!({"": null})),
     ] {
         let mut payload = json!({ "ids":["key_a"] });
         payload[field] = value;
@@ -146,7 +146,7 @@ async fn budget_reset_allows_admin_but_rejects_key_sessions_without_changing_usa
     record.budget.daily_used_usd = "1.25".parse().unwrap();
     record.budget.weekly_used_usd = "4.5".parse().unwrap();
     *fixture.client_key.lock().unwrap() = Some(record);
-    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let app = crate::data_plane::api_router_with_admin(fixture.services.clone());
     let login = app
         .clone()
         .oneshot(json_request(
@@ -629,7 +629,7 @@ async fn list_route_should_accept_the_full_nonzero_u16_page_size() {
 
 #[test]
 fn profile_override_distinguishes_omission_from_explicit_inheritance() {
-    for provider in ["openai", "xai"] {
+    for provider in ["openai", "xai", "antigravity"] {
         let decode = |body| {
             serde_json::from_value::<UpdateClientKeyRequest>(body)
                 .unwrap()
@@ -648,7 +648,8 @@ fn profile_override_distinguishes_omission_from_explicit_inheritance() {
 }
 
 #[test]
-fn profile_overrides_accept_native_providers_and_reject_unknown_providers() {
+fn profile_override_commands_preserve_valid_provider_identifiers() {
+    use gateway_core::routing::ProviderKind;
     let profile = json!({"preset":"desktop"});
     let xai = json!({"preset":"managed"});
     let request: CreateClientKeyRequest = serde_json::from_value(json!({
@@ -659,11 +660,12 @@ fn profile_overrides_accept_native_providers_and_reject_unknown_providers() {
         "providerRequestProfileOverrides": {
             "openai": profile,
             "xai": xai,
+            "antigravity": {"versionMode":"fixed","desktopVersion":"2.34.0"},
         },
     }))
     .unwrap();
     let command = request.into_command().unwrap();
-    assert_eq!(command.request_profile_overrides.len(), 2);
+    assert_eq!(command.request_profile_overrides.len(), 3);
     assert!(
         command
             .request_profile_overrides
@@ -678,9 +680,12 @@ fn profile_overrides_accept_native_providers_and_reject_unknown_providers() {
         "providerRequestProfileOverrides": {"provider.example":{"preset":"managed"}},
     }))
     .unwrap();
-    assert_eq!(
-        unknown.into_command().unwrap_err().field(),
-        "providerRequestProfileOverrides"
+    assert!(
+        unknown
+            .into_command()
+            .unwrap()
+            .request_profile_overrides
+            .contains_key(&ProviderKind::new("provider.example").unwrap())
     );
 
     let unknown_clear: UpdateClientKeyRequest = serde_json::from_value(json!({
@@ -692,9 +697,12 @@ fn profile_overrides_accept_native_providers_and_reject_unknown_providers() {
         "providerRequestProfileOverrides": {"provider.example":null},
     }))
     .unwrap();
-    assert_eq!(
-        unknown_clear.into_command().unwrap_err().field(),
-        "providerRequestProfileOverrides"
+    assert!(
+        unknown_clear
+            .into_command()
+            .unwrap()
+            .request_profile_override_updates
+            .contains_key(&ProviderKind::new("provider.example").unwrap())
     );
 }
 

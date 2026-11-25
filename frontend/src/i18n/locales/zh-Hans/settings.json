@@ -1,12 +1,16 @@
 {
   "settings": {
     "clientProfile": {
+      "systemPrompt": "系统提示词",
+      "systemPromptHint": "替换客户端系统提示，默认来自 {source}",
+      "restoreSystemPrompt": "恢复默认",
       "userAgent": "用户代理",
       "clientIdentitySource": "客户端身份来源",
       "globalConfiguration": "全局配置",
       "customConfiguration": "独立配置",
       "enterIntegerFromTo": "请输入 1～{version} 的正整数",
-      "installationSeed": "安装身份种子",
+      "coreVersion": "Core 版本",
+      "installationSeed": "Codex 安装身份种子",
       "generateInstallationSeed": "生成安装身份种子",
       "installationSeedHelp": "按密钥和上游账号生成独立、稳定的安装身份，种子不会发送给上游，修改种子会切换身份",
       "installationSeedPlaceholder": "留空使用上游账号的安装 ID",
@@ -17,6 +21,7 @@
       "coreDefaultIdentity": "Core · 默认身份",
       "tuiInteractiveTerminal": "TUI · 交互式终端",
       "execNonInteractiveExecution": "Exec · 非交互执行",
+      "clientVersion": "客户端版本",
       "versionStrategy": "版本策略",
       "followLatestVersion": "跟随最新版本",
       "customVersion": "自定义版本",
@@ -45,7 +50,7 @@
       "grokCliVersion": "Grok CLI 版本",
       "forExample": "例如：1.0.13",
       "clientIdentity": "客户端身份",
-      "description": "配置网关向上游声明的客户端类型、版本与请求头"
+      "identityDescription": "配置发送给上游的客户端标识"
     },
     "pricing": {
       "multiplier": "倍率",
@@ -88,7 +93,8 @@
       "source": "来源",
       "takeEffect": "生效",
       "sync": {
-        "title": "确认同步来源价目",
+        "title": "确认同步 {provider} 来源价目",
+        "unavailable": "当前平台暂无可同步价目，可手动设置价格",
         "description": "仅同步所选模型的来源价格，保留自定义单价和倍率",
         "skipped": "跳过 {count} 个缺少完整价格或计价方式不匹配的模型",
         "action": "同步"
@@ -159,7 +165,7 @@
       "weekly": "周",
       "monthly": "月",
       "roundRobin": "轮询",
-      "autoReviewSlotsHelp": "仅对 Codex 账号生效，普通并发为 10、审批名额为 3 时，两类请求分别最多运行 10 个和 3 个，互不占用名额",
+      "autoReviewSlotsHelp": "普通并发为 10、审批名额为 3 时，两类请求分别最多运行 10 个和 3 个，互不占用名额",
       "autoReviewQueueHelp": "开启独立额度后，审批请求单独排队，可超过账号队列容量，仍受总等待容量、排队超时与密钥限额约束",
       "weights": {
         "load": "负载系数",
@@ -187,10 +193,10 @@
         "preferred": "优先",
         "strict": "严格",
         "relaxedHelp": "宽松：会话内请求直接按调度策略选号，不优先主账号",
-        "preferredHelp": "优先：会话内请求优先沿用主账号，短时繁忙可临时分流，停用或长期不可用时迁移会话绑定",
-        "strictHelp": "严格：同一会话共用账号，子线程等待当前账号，并跟随主线程换号"
+        "preferredHelp": "优先：优先沿用会话主账号，繁忙时可临时分流，绑定失效时重新选号",
+        "strictHelp": "严格：优先沿用同一账号，启用排队时等待繁忙账号，绑定失效或允许换号时重新绑定"
       },
-      "title": "亲和策略",
+      "title": "会话亲和",
       "mode": "账号亲和",
       "description": "控制同一会话内的账号绑定方式",
       "accountAffinityInstructions": "账号亲和说明",
@@ -204,7 +210,7 @@
     },
     "warmup": {
       "title": "定时预热",
-      "description": "尝试启动空闲 Codex OAuth 账号的额度窗口",
+      "description": "尝试启动空闲 OAuth 账号的额度窗口",
       "enableWarmup": "启用定时预热",
       "cronExpression": "Cron 表达式",
       "cronHelp": "回车添加 Tag，支持多个",
@@ -212,8 +218,9 @@
       "modelHelp": "启用时必填，需为账号可用模型",
       "modelPlaceholder": "输入模型名称",
       "helpTitle": "定时预热说明",
-      "help": "向可用的 Codex OAuth 账号发送轻量请求，跳过额度耗尽和已确认活跃的窗口，0% 账号允许预热，不保证窗口成功启动",
-      "scheduleHelp": "按部署时区执行，同一分钟只预热一次"
+      "help": "向可用的 OAuth 账号发送轻量请求，跳过额度耗尽和已确认活跃的窗口，0% 账号允许预热，不保证窗口成功启动",
+      "scheduleDescription": "按部署时区执行预热计划",
+      "scheduleHelp": "同一分钟只预热一次"
     },
     "adminApiKey": {
       "adminApiKey": "管理员 API密钥",
@@ -257,7 +264,8 @@
       "inSeconds": "{label}（秒）"
     },
     "concurrency": {
-      "title": "并发与重试",
+      "title": "并发与排队",
+      "description": "限制账号并发和请求排队",
       "accountLimit": {
         "label": "默认账号并发",
         "help": "未单独设置时使用，0 不限"
@@ -267,10 +275,11 @@
       "accountQueueCapacity": "账号队列容量",
       "accountQueueHelp": "每个账号的等待上限，0 不排队",
       "keyTimeout": "密钥排队超时",
-      "keyTimeoutHelp": "等待密钥并发名额的时限，超时返回错误",
+      "keyTimeoutHelp": "超时返回错误",
       "accountTimeout": "账号排队超时",
-      "accountTimeoutHelp": "从首次进入账号队列起计时，重试不重置",
+      "accountTimeoutHelp": "首次入队计时，重试不重置",
       "queueFailure": "账号队满或超时后",
+      "queueFailureDescription": "设置排队失败后的处理方式",
       "queueFailureHelp": "尝试换到有空位的账号，无法换号时返回排队错误",
       "queueFailureHelpTitle": "账号换号规则",
       "queueFailureAttempt": "只尝试换号一次，不再排队",
@@ -279,7 +288,7 @@
       "trySwitch": "尝试换号",
       "autoReview": {
         "label": "自动审批独立并发",
-        "description": "每个 Codex 账号的额外名额，0 共用普通并发",
+        "description": "每个账号的额外名额，0 共用普通并发",
         "helpTitle": "自动审批独立并发说明"
       },
       "retryAfter": {
@@ -289,10 +298,14 @@
         "waitLimit": "默认 240 秒，仅限制单次 Retry-After 等待，不限制请求总时长",
         "zeroLimit": "设为 0 时，任何大于 0 秒的等待都算超限",
         "switchConditions": "超限后，仅在请求可重试且未达到最大换号次数时尝试换号，无可用账号则返回错误"
-      }
+      },
+      "retryTitle": "重试与换号",
+      "retryDescription": "限制失败请求的等待和换号次数"
     },
     "modelMapping": "模型映射",
     "routing": {
+      "guardianReviewTitle": "自动审批",
+      "guardianReviewDescription": "审核请求可使用独立并发",
       "oauthGuardianReviewModel": "专用审核模型",
       "oauthGuardianReviewModelHelp": "同步审核优先使用授权账号的专用模型",
       "oauthGuardianReviewModelDetails": "开启时优先使用 codex-auto-review，关闭此项或没有可用账号支持该模型时，沿用客户端请求的模型",
@@ -300,13 +313,14 @@
     },
     "addMapping": "添加映射",
     "loadingModelMapping": "正在加载模型映射",
+    "emptyModelMapping": "暂无模型映射",
     "requestModel": "请求模型",
     "upstreamModel": "上游模型",
     "upstreamModelName": "上游模型名称",
     "deleteMapping": "删除映射",
     "history": {
       "title": "历史保留",
-      "retentionHelp": "自动删除过期请求记录及统计数据",
+      "description": "设置请求记录与统计数据的保留周期",
       "retentionConstraints": "至少 1 天，删除后不可恢复",
       "retentionDaysLabel": "历史保留天数"
     },
@@ -315,8 +329,8 @@
     "day": "天",
     "location": {
       "requestCountry": "请求国家",
-      "requestCountryDescription": "设置 Codex 请求如何发送国家代码",
-      "requestCountryScope": "仅用于 Codex OAuth 账号",
+      "requestCountryDescription": "设置请求如何发送国家代码",
+      "requestCountryScope": "仅用于 OAuth 账号",
       "countryHelp": "请求国家模式说明",
       "countryMode": "策略",
       "countryModes": {
@@ -333,7 +347,7 @@
       },
       "customCountryCode": "自定义国家代码",
       "requestLocationOverride": "请求位置覆盖",
-      "description": "覆盖 Codex 请求中的时区与位置字段，账号出站代理的自定义位置优先",
+      "description": "覆盖请求中的时区与位置字段，账号出站代理的自定义位置优先",
       "enableLocationOverlay": "启用位置覆盖"
     },
     "quotaReset": {
@@ -352,13 +366,14 @@
     "remainingWeeklyQuotaLimit": "剩余周额度上限（%）",
     "responseLimit": {
       "requestBodyLimit": "请求体限制",
-      "description": "限制 Responses 请求解压后的请求体大小",
-      "maximumSizeAfterDecompression": "解压后大小上限",
+      "description": "模型请求解压和插件出站共用此上限",
+      "maximumSize": "大小上限",
       "sizeHelp": "调高可接收更大的图片和历史上下文，也会增加内存占用",
-      "maxSizeLabel": "解压后请求体大小上限"
+      "maxSizeLabel": "请求体大小上限"
     },
     "rotation": {
       "title": "调度策略",
+      "description": "决定如何选择可用账号",
       "customized": "自定义",
       "smartSchedulingSettings": "智能调度设置",
       "smartLabel": "智能调度",
@@ -379,6 +394,7 @@
     },
     "tokenRefresh": {
       "title": "凭据刷新",
+      "description": "统一管理各平台访问令牌的刷新",
       "leadTimeLabel": "提前刷新",
       "leadTimeHelp": "在访问令牌到期前触发刷新",
       "concurrencyLabel": "刷新并发上限",
@@ -440,6 +456,7 @@
         "objectStorageSpecificSecret": "对象存储专用 Secret",
         "forcePathStyle": "强制路径式访问",
         "accessKeyId": "访问密钥 ID",
+        "keepSecret": "留空保留已保存的密钥",
         "secretAccessKey": "私有访问密钥",
         "description": "配置 S3 兼容存储（支持 {service}）",
         "test": "测试"
@@ -500,6 +517,7 @@
       "codexClientUpgrade": "Codex 客户端升级",
       "guideDescription": "先选择客户端，再查看对应的安装与升级方式",
       "clientVersionRestrictions": "客户端版本限制",
+      "restrictionsDescription": "低于最低版本的客户端需先升级",
       "openGuide": "查看安装与升级说明",
       "codexDesktopMinimumVersion": "Codex Desktop 最低版本",
       "onlyCheckDesktopVersionEG": "只检查桌面端应用版本，例如 26.825.51511",
@@ -521,7 +539,7 @@
       "skipCurrentRule": "跳过当前规则",
       "blockRequestFromBeingSent": "阻止请求发送",
       "privacyPolicy": "隐私策略",
-      "description": "按规则统一或移除 Codex 请求中的隐私信息",
+      "description": "按规则统一或移除请求中的隐私信息",
       "enableRequestRules": "启用请求规则",
       "addRule": "添加规则",
       "addFromPreset": "从预设添加",
@@ -644,7 +662,7 @@
       "invalidSwitchLimit": "最大换号次数应为 0～31 的整数，0 表示不换号",
       "invalidConcurrency": "默认账号并发上限应为 0～4294967295 的整数，0 表示不限制",
       "invalidReviewConcurrency": "自动审批独立并发应为 0～4294967295 的整数，0 表示共用普通并发",
-      "invalidBodyLimit": "Responses 解压上限应为有效的正整数（MiB）",
+      "invalidBodyLimit": "请求体大小上限应为正整数（MiB）",
       "invalidQuotaThreshold": "剩余周额度上限应为 0～100 的整数，留空表示不限制",
       "invalidResetLeadTime": "重置卡提前使用时间应为 1～1440 分钟的整数",
       "invalidRetention": "历史保留天数应为正整数",
@@ -660,10 +678,9 @@
     },
     "page": {
       "tabs": {
-        "runtime": "运行设置",
-        "upstream": "上游配置",
+        "runtime": "通用设置",
+        "upstream": "平台设置",
         "pricing": "模型定价",
-        "access": "安全与访问",
         "backups": "数据备份"
       },
       "description": "管理调度、上游、定价、安全、数据留存与备份",
@@ -675,8 +692,9 @@
         "leave": "放弃并离开",
         "stay": "继续编辑"
       },
-      "saveChanges": "保存基础设置",
-      "basicSettings": "基础设置"
+      "saveChanges": "保存全部更改",
+      "basicSettings": "基础设置",
+      "providerLabel": "选择平台"
     },
     "errorProtection": {
       "title": "错误保护",

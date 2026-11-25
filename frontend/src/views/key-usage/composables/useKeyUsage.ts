@@ -1,7 +1,7 @@
-import type { KeyUsageOverview, KeyUsageRecordKind } from '@/api/modules/key-usage'
+import type { KeyUsageOverview, KeyUsageRecordKind } from '@/api'
 import { refDebounced, useDocumentVisibility, useTimeoutPoll } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
-import { getKeyUsageOverview, getKeyUsageRecords } from '@/api/modules/key-usage'
+import { getKeyUsageOverview, getKeyUsageRecords } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
 import { useStablePagedQuery } from '@/composables/useStablePagedQuery'
 

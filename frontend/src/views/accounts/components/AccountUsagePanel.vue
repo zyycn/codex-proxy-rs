@@ -115,9 +115,9 @@ const modelUsageColumns = computed(() => (defineTableColumns<AccountModelUsage>(
           </strong>
         </div>
         <div class="flex items-center justify-between rounded-lg bg-z-blue-container px-3 py-2">
-          <span class="text-z-sm font-bold text-z-blue-on-container">{{ t('accounts.usage.cacheWrites') }}</span>
+          <span class="text-z-sm font-bold text-z-blue-on-container">{{ t('accounts.usage.total') }}</span>
           <strong class="font-mono text-z text-z-text">
-            {{ account.usage.cacheWriteInputTokensDisplay }}
+            {{ account.usage.totalTokensDisplay }}
           </strong>
         </div>
       </div>

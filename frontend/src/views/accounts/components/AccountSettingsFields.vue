@@ -3,9 +3,10 @@ import type { AccountGroupRef, AccountModelAccess } from '@/api'
 
 import { ZFormItem, ZInput, ZSwitch, ZTextarea } from '@codex-proxy/ui'
 import { useI18n } from 'vue-i18n'
-import AccountModelAccessField from '@/components/account/model-access/index.vue'
+import AccountModelAccessField from '@/components/account-model-access-field/index.vue'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
-import AccountProxyField from './AccountProxyField.vue'
+import { providerAccounts } from '@/providers/accounts'
+import AccountProxyField from './account-proxy-field/index.vue'
 
 withDefaults(defineProps<{
   groups: AccountGroupRef[]
@@ -14,6 +15,7 @@ withDefaults(defineProps<{
   currentProxyId?: string | null
   endpoint?: string | null
   accountId?: string
+  provider?: string
   modelAccountId?: string
   preserveProxy?: boolean
   preserveModelAccess?: boolean
@@ -46,7 +48,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
       />
     </ZFormItem>
     <slot name="connection" />
-    <AccountModelAccessField v-model="modelAccess" form-prop="modelAccess" :account-id="modelAccountId ?? accountId" :disabled="disabled" :allow-preserve="preserveModelAccess" />
+    <AccountModelAccessField v-model="modelAccess" form-prop="modelAccess" :account-id="modelAccountId ?? accountId" :image-model-presets="providerAccounts(provider)?.imageModelPresets" :disabled="disabled" :allow-preserve="preserveModelAccess" />
     <slot name="scheduling">
       <div v-if="showScheduling" class="flex min-h-6 items-center justify-between gap-3">
         <span class="text-z leading-none font-medium text-z-text-secondary">{{ t('accounts.scheduling.scheduling') }}</span>

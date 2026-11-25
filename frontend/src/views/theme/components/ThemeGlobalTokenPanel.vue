@@ -10,7 +10,7 @@ import { Check, ChevronDown, Laptop, Moon, PanelsTopLeft, Sparkles, Sun } from '
 import { isEqual } from 'es-toolkit'
 import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { uiLocale } from '@/i18n/ui'
+import { uiLocale } from '@/i18n'
 
 import sceneArtwork from './theme-scenes.svg?no-inline'
 import ThemeColorTokenField from './ThemeColorTokenField.vue'

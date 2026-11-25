@@ -9,11 +9,13 @@ pub use lease::{
     ProviderRefreshLeaseRequest, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
 };
 mod affinity;
+mod session_affinity;
 pub use affinity::{
     ProviderAccountAdmission, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
     ProviderSessionAlias, ProviderSessionBinding, ProviderSessionClaim,
     ProviderSessionExclusionPort, ProviderSessionExclusions,
 };
+pub use session_affinity::ProviderSessionAffinityState;
 mod catalog;
 pub use catalog::{
     ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderCatalogCacheKey,

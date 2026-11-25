@@ -61,6 +61,8 @@
     },
     "performance": {
       "ttftHelp": "TTFT：首個 Token 耗時",
+      "upstreamRateHelp": "輸出 Token ÷ 上游響應耗時，輸出包含推理 Token",
+      "localRateHelp": "≈ 為本地平均速率：輸出 Token ÷ 請求總耗時，包含等待、重試和網絡耗時",
       "concurrency": "並發",
       "averageConcurrency": "平均並發",
       "peakConcurrency": "峰值並發",
@@ -102,7 +104,6 @@
       "enterToken": "普通輸入 Token",
       "outputToken": "輸出 Token",
       "cacheReadTokens": "緩存讀取 Token",
-      "cacheWriteTokens": "緩存寫入 Token",
       "reasoningToken": "推理 Token",
       "tokenDetails": "Token 明細",
       "viewTokenDetails": "查看 Token 明細",

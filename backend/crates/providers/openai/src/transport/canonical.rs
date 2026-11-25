@@ -24,7 +24,7 @@ use super::protocol::responses::{
     ResponseEventSignals, ResponseTimingMetrics, ResponsesSseFailure, response_duration_ms,
     response_event_signals,
 };
-use super::usage::{
+use crate::billing::{
     OpenAiBillingUsage, WebSearchPricing, normalize_service_tier, web_search_pricing,
 };
 
@@ -996,7 +996,7 @@ impl CodexCanonicalDecoder {
             .filter(|usage| billable_usage_is_complete(response, *usage))
             .and_then(|usage| {
                 let (web_search_calls, file_search_calls) = tool_calls?;
-                super::usage::openai_billing_breakdown_with_override(
+                crate::billing::openai_billing_breakdown_with_override(
                     &self.upstream_model,
                     OpenAiBillingUsage::from(usage)
                         .with_web_search_calls(web_search_calls, self.web_search_pricing)

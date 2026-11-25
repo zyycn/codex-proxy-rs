@@ -801,7 +801,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
         id: &ClientApiKeyId,
         period: gateway_admin::model::client_keys::ClientKeyBudgetWindowPeriod,
     ) -> AdminStoreResult<gateway_admin::model::client_keys::ClientKeyBudgetWindow> {
-        super::client_budget_windows::get(&self.keys.pool, id, period).await
+        super::client_budgets::windows::get(&self.keys.pool, id, period).await
     }
 
     async fn set_client_key_budget_window(
@@ -810,7 +810,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
         origin: gateway_admin::model::client_keys::ClientKeyBudgetMutationOrigin,
         context: &MutationContext,
     ) -> AdminStoreResult<u64> {
-        super::client_budget_windows::set(&self.keys.pool, command, origin, context).await
+        super::client_budgets::windows::set(&self.keys.pool, command, origin, context).await
     }
 
     async fn update_client_key_budget_limits(

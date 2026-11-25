@@ -13,9 +13,10 @@ use gateway_core::account::{
 use gateway_core::concurrency::{CapacityWait, ConcurrencyQueuePolicy, ConcurrencyWaitQueue};
 use gateway_core::engine::policy::{AccountPolicyError, AccountScheduleOwnership};
 use gateway_core::provider_ports::{
-    ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition,
-    ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
-    ProviderScopedCooldown,
+    ProviderAccountAdmission, ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope,
+    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderSchedulingLeaseRequest, ProviderScopedCooldown, ProviderSessionAffinityPort,
+    ProviderSessionAffinityState,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
 
@@ -64,10 +65,13 @@ pub struct GrokAccountSessionSelector {
     scheduling: Arc<dyn ProviderLeasePort>,
     cooldowns: Arc<dyn ProviderCooldownPort>,
     account_feedback: Arc<AccountFeedbackStats>,
+    session_affinity: Arc<dyn ProviderSessionAffinityPort>,
 }
 
 impl GrokAccountSessionSelector {
     #[must_use]
+    // 各端口对应独立运行能力，避免为构造器另设一套端口集合
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         provider_kind: ProviderKind,
         repository: GrokCredentialRepository,
@@ -76,6 +80,7 @@ impl GrokAccountSessionSelector {
         scheduling: Arc<dyn ProviderLeasePort>,
         cooldowns: Arc<dyn ProviderCooldownPort>,
         account_feedback: Arc<AccountFeedbackStats>,
+        session_affinity: Arc<dyn ProviderSessionAffinityPort>,
     ) -> Self {
         Self {
             provider_kind,
@@ -85,6 +90,7 @@ impl GrokAccountSessionSelector {
             scheduling,
             cooldowns,
             account_feedback,
+            session_affinity,
             waiting: ConcurrencyWaitQueue::default(),
         }
     }
@@ -286,32 +292,46 @@ impl GrokAccountSessionSelector {
                 candidates.retain(|candidate| candidate.account.id() == required);
             }
 
-            let affinity_account = request.affinity().and_then(|affinity| {
-                candidates
-                    .iter()
-                    .filter(|candidate| {
-                        !request.excluded_accounts().contains(candidate.account.id())
-                    })
-                    .max_by_key(|candidate| affinity.score(candidate.account.id()))
-                    .map(|candidate| candidate.account.id().clone())
-            });
+            let affinity_key = request
+                .affinity()
+                .filter(|_| !diagnostic)
+                .map(crate::GrokSessionAffinityKey::store_key)
+                .transpose()
+                .map_err(affinity_unavailable)?;
+            let affinity = match affinity_key.as_ref() {
+                Some(key) => Some(ProviderSessionAffinityState::new(
+                    key,
+                    self.session_affinity
+                        .load(&self.provider_kind, key)
+                        .await
+                        .map_err(affinity_unavailable)?,
+                    request.account_selection_policy(),
+                )),
+                None => None,
+            };
             let mut context = AccountSelectionContext {
                 policy: request.account_selection_policy(),
                 now: SystemTime::now(),
                 excluded_accounts: request.excluded_accounts().clone(),
                 busy_accounts: Default::default(),
-                preferred_account: request.required_account().cloned().or(affinity_account),
+                preferred_account: request.required_account().cloned(),
                 preferred_account_overrides_weight: false,
                 round_robin_cursor: scheduling.round_robin_cursor(),
                 eligibility: request.eligibility(),
                 account_scope: (!diagnostic).then(|| Arc::clone(request.account_scope())),
                 reserved_concurrency: 0,
             };
+            if let Some(affinity) = &affinity {
+                affinity.apply_preference(&mut context);
+            }
             for candidate in &candidates {
                 if !waiting.can_try(candidate.account.id()) {
                     context.busy_accounts.insert(candidate.account.id().clone());
                 }
             }
+            let binding_eligible = affinity
+                .as_ref()
+                .is_some_and(|affinity| affinity.binding_eligible(&candidates, &context));
             let mut capacity_denied = false;
             let mut retry_after = None;
             loop {
@@ -326,6 +346,9 @@ impl GrokAccountSessionSelector {
                                 &candidates,
                                 &mut context,
                                 AccountScheduleOwnership {
+                                    bound_account: affinity
+                                        .as_ref()
+                                        .and_then(ProviderSessionAffinityState::bound_account),
                                     pinned_account: request.required_account(),
                                     ..Default::default()
                                 },
@@ -349,6 +372,22 @@ impl GrokAccountSessionSelector {
                 }) else {
                     break;
                 };
+                if !selection.is_policy_choice()
+                    && request.required_account().is_none()
+                    && affinity
+                        .as_ref()
+                        .and_then(|affinity| {
+                            affinity.wait_account(
+                                &candidates,
+                                &context,
+                                queue_policy.max_waiting > 0,
+                            )
+                        })
+                        .is_some_and(|bound| bound != selection.candidate().account.id())
+                {
+                    capacity_denied = true;
+                    break;
+                }
                 let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
                 let selected = selection.candidate();
                 let selected_id = selected.account.id().clone();
@@ -424,7 +463,7 @@ impl GrokAccountSessionSelector {
                         .email()
                         .map(|value| SecretValue::new(value.to_owned())),
                     binding,
-                    guard,
+                    (),
                 )
                 .map_err(|source| {
                     GrokSessionSelectorError::InvalidSession(Some(
@@ -437,6 +476,28 @@ impl GrokAccountSessionSelector {
                 .with_capacity_snapshot(
                     capacity.map(AccountCapacitySnapshot::with_acquired_request),
                 );
+                if let Some(affinity) = &affinity {
+                    let claim = affinity.claim(
+                        session.account_id(),
+                        binding_eligible,
+                        request.required_account().is_some(),
+                    );
+                    if !self
+                        .session_affinity
+                        .admit_account(
+                            &self.provider_kind,
+                            ProviderAccountAdmission::Session(claim),
+                        )
+                        .await
+                        .map_err(affinity_unavailable)?
+                    {
+                        guard.release().await.map_err(affinity_unavailable)?;
+                        // 让取消和总期限在连续认领冲突间获得轮询机会
+                        tokio::task::yield_now().await;
+                        continue 'refresh;
+                    }
+                }
+                let session = session.with_lease_guard(guard);
                 if !waiting.elapsed().is_zero() {
                     tracing::info!(
                         queue_layer = "account",
@@ -451,7 +512,14 @@ impl GrokAccountSessionSelector {
                 });
             }
 
-            let wait_candidates = AccountSelector.wait_candidates(&candidates, &context);
+            let mut wait_candidates = AccountSelector.wait_candidates(&candidates, &context);
+            if request.required_account().is_none()
+                && let Some(bound) = affinity.as_ref().and_then(|affinity| {
+                    affinity.wait_account(&candidates, &context, queue_policy.max_waiting > 0)
+                })
+            {
+                wait_candidates.retain(|account| account == bound);
+            }
             if !diagnostic && queue_policy.max_waiting > 0 && !wait_candidates.is_empty() {
                 AccountSelector
                     .wait_for_capacity(&mut waiting, &wait_candidates, &candidates, &context)
@@ -835,4 +903,10 @@ fn insert_runtime_cooldown(
     {
         cooldowns.insert(account_id.clone(), replacement);
     }
+}
+
+fn affinity_unavailable(
+    error: gateway_core::provider_ports::ProviderStoreError,
+) -> GrokSessionSelectorError {
+    GrokSessionSelectorError::Unavailable(Some(gateway_core::error::ErrorSource::new(error)))
 }

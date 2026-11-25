@@ -12,7 +12,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::transport::profile::CodexWireProfileState;
+use crate::profile::CodexWireProfileState;
 use crate::transport::subscription::CodexSubscription;
 use crate::transport::{
     CodexBackendClient, CodexClientError, CodexProfileAvatar, CodexProfileAvatarFetchError,
@@ -210,7 +210,7 @@ impl CodexCredentialProfileService {
         .await
         .map_err(map_client_error)?;
         self.remember_avatar_source(
-            super::oauth_identity_key(account),
+            crate::request_identity::oauth_identity_key(account),
             statistics.image_url.as_deref(),
         );
         Ok(statistics)
@@ -268,7 +268,9 @@ impl CodexCredentialProfileService {
     ) -> Result<CodexProfileAvatar, CodexProfileAvatarError> {
         let (authorization, upstream_account_id, account) =
             self.account_authentication(account_id).await?;
-        let source = match self.cached_avatar_source(&super::oauth_identity_key(&account)) {
+        let source = match self
+            .cached_avatar_source(&crate::request_identity::oauth_identity_key(&account))
+        {
             Some(source) => source,
             None => self
                 .fetch_profile_statistics(&authorization, upstream_account_id.as_deref(), &account)

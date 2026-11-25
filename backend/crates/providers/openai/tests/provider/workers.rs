@@ -67,7 +67,7 @@ async fn catalog_etag_failure_returns_to_supervisor_and_recovers_pending_refresh
         .mount(&server)
         .await;
     let mut bundle = initialized_test_bundle(store, server.uri()).await;
-    let provider = bundle.core_provider();
+    let provider = bundle.core.clone();
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object(
             "openai",
@@ -89,8 +89,7 @@ async fn catalog_etag_failure_returns_to_supervisor_and_recovers_pending_refresh
     while let Some(event) = stream.next().await {
         event.expect("response carrying catalog ETag");
     }
-    let worker = bundle
-        .take_worker_contributions()
+    let worker = std::mem::take(&mut bundle.workers)
         .into_iter()
         .find_map(|contribution| match contribution {
             WorkerContribution::Registration(registration)

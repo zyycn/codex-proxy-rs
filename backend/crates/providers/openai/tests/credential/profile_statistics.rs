@@ -6,7 +6,7 @@ use chrono::{TimeZone as _, Utc};
 use futures::TryStreamExt as _;
 use gateway_core::account::ProviderAccountId;
 use provider_openai::credential::{CodexCredentialProfileService, ImportCodexOAuthCredential};
-use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
+use provider_openai::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::json;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -15,7 +15,7 @@ use crate::support::{MemoryAccountStore, profile, secret};
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        client_kind: provider_openai::transport::profile::selection::ClientKind::Desktop,
+        client_kind: provider_openai::profile::selection::ClientKind::Desktop,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
         desktop_version: "1.0.0".to_owned(),

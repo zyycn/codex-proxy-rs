@@ -20,8 +20,8 @@ import { storeToRefs } from 'pinia'
 import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { checkSystemRestart } from '@/api'
+import { notification as ZNotification } from '@/plugins/notification'
 import { useSystemUpdateStore } from '@/stores/modules/system-update'
-import { notification as ZNotification } from '@/utils/notification'
 import { errorMessage } from '@/utils/operation'
 import {
   resolveSystemUpdateLogClasses,

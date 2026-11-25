@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { CodexPrivacyPolicy, PrivacySample } from '@/api/modules/settings/privacy'
+import type { CodexPrivacyPolicy, PrivacySample } from '@/api'
 
 import { ZButton, ZDialog, ZFormItem, ZTextarea } from '@codex-proxy/ui'
 import { computed, shallowRef, watch } from 'vue'
 import { I18nT, useI18n } from 'vue-i18n'
-import { usePrivacyPreview } from '../../composables/usePrivacyPreview'
 import { exampleRequest } from './presets'
+import { usePrivacyPreview } from './usePrivacyPreview'
 
 const props = defineProps<{ policy: CodexPrivacyPolicy }>()
 

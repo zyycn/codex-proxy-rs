@@ -1,0 +1,201 @@
+import type { BackupSettingsView, UpdateBackupStoragePayload } from '@/api'
+import { isEqual } from 'es-toolkit'
+import { computed, ref, shallowRef } from 'vue'
+
+import {
+  getBackupSettings,
+  testBackupStorage,
+  updateBackupSchedule,
+  updateBackupStorage,
+} from '@/api'
+import { t } from '@/i18n'
+import { notification as ZNotification } from '@/plugins/notification'
+
+/** 存储与计划配置共用的加载/保存/测试 composable。 */
+export function useBackupSettings() {
+  const loading = shallowRef(false)
+  const savingStorage = shallowRef(false)
+  const testing = shallowRef(false)
+  const savingSchedule = shallowRef(false)
+  const busy = computed(() => loading.value || savingStorage.value || testing.value || savingSchedule.value)
+  const loaded = shallowRef(false)
+
+  let storageRevision = 0
+  const savedVerified = shallowRef(false)
+  const secretConfigured = shallowRef(false)
+
+  const storage = ref({
+    endpoint: '',
+    region: 'auto',
+    bucket: '',
+    accessKeyId: '',
+    secretAccessKey: '',
+    prefix: 'backups/',
+    forcePathStyle: false,
+  })
+
+  const schedule = ref({
+    scheduleEnabled: false,
+    cronExpression: '0 2 * * *',
+    retentionDays: '7',
+    retentionCount: '7',
+  })
+  const savedStorage = shallowRef({ ...storage.value })
+  const savedSchedule = shallowRef({ ...schedule.value })
+  const storageDirty = computed(() => !isEqual(storage.value, savedStorage.value))
+  const verified = computed(() => !storageDirty.value && savedVerified.value)
+  const hasChanges = computed(() => loaded.value && (storageDirty.value || !isEqual(schedule.value, savedSchedule.value)))
+
+  async function load(): Promise<void> {
+    if (loaded.value || busy.value)
+      return
+    loading.value = true
+    try {
+      const data = await getBackupSettings()
+      applyStorage(data)
+      applySchedule(data)
+      loaded.value = true
+    }
+    catch {}
+    finally {
+      loading.value = false
+    }
+  }
+
+  function applyStorage(data: BackupSettingsView): void {
+    storageRevision = data.storageRevision
+    savedVerified.value = data.verified
+    secretConfigured.value = data.secretConfigured
+    storage.value = {
+      endpoint: data.endpoint ?? '',
+      region: data.region ?? 'auto',
+      bucket: data.bucket ?? '',
+      accessKeyId: data.accessKeyId ?? '',
+      secretAccessKey: '',
+      prefix: data.prefix ?? 'backups/',
+      forcePathStyle: data.forcePathStyle,
+    }
+    savedStorage.value = { ...storage.value }
+  }
+
+  function applySchedule(data: BackupSettingsView): void {
+    schedule.value = {
+      scheduleEnabled: data.scheduleEnabled,
+      cronExpression: data.cronExpression ?? '0 2 * * *',
+      retentionDays: String(data.retentionDays),
+      retentionCount: String(data.retentionCount),
+    }
+    savedSchedule.value = { ...schedule.value }
+  }
+
+  function storagePayload(): UpdateBackupStoragePayload {
+    return {
+      storageRevision,
+      endpoint: storage.value.endpoint.trim(),
+      region: storage.value.region.trim(),
+      bucket: storage.value.bucket.trim(),
+      accessKeyId: storage.value.accessKeyId.trim(),
+      secretAccessKey: storage.value.secretAccessKey || undefined,
+      prefix: storage.value.prefix.trim(),
+      forcePathStyle: storage.value.forcePathStyle,
+    }
+  }
+
+  async function saveStorage(): Promise<boolean> {
+    if (busy.value || !loaded.value)
+      return false
+    savingStorage.value = true
+    try {
+      const data = await updateBackupStorage(storagePayload())
+      const storageChanged = data.storageRevision !== storageRevision
+      const schedulePaused = storageChanged && schedule.value.scheduleEnabled && !data.scheduleEnabled
+      applyStorage(data)
+      // 仅存储版本变化时同步服务端暂停状态，普通保存不覆盖计划草稿。
+      if (storageChanged) {
+        schedule.value.scheduleEnabled = data.scheduleEnabled
+        savedSchedule.value = { ...savedSchedule.value, scheduleEnabled: data.scheduleEnabled }
+      }
+      ZNotification.success({
+        message: schedulePaused
+          ? t('settings.backup.storageSaved')
+          : t('settings.backup.storageConfigurationSaved'),
+      })
+      return true
+    }
+    catch {
+      return false
+    }
+    finally {
+      savingStorage.value = false
+    }
+  }
+
+  async function runTest(): Promise<void> {
+    if (busy.value || !loaded.value || storageDirty.value)
+      return
+    testing.value = true
+    try {
+      const result = await testBackupStorage(storageRevision)
+      savedVerified.value = result.ok && result.storageRevision === storageRevision
+      if (savedVerified.value) {
+        ZNotification.success({
+          message: t('settings.backup.connectionVerified'),
+        })
+      }
+      else {
+        ZNotification.error({ message: `${result.stage}: ${result.message}` })
+      }
+    }
+    catch {
+      savedVerified.value = false
+    }
+    finally {
+      testing.value = false
+    }
+  }
+
+  async function saveSchedule(): Promise<boolean> {
+    if (busy.value || !loaded.value)
+      return false
+    savingSchedule.value = true
+    try {
+      const data = await updateBackupSchedule({
+        storageRevision,
+        scheduleEnabled: schedule.value.scheduleEnabled,
+        cronExpression: schedule.value.cronExpression.trim(),
+        retentionDays: Number(schedule.value.retentionDays) || 0,
+        retentionCount: Number(schedule.value.retentionCount) || 0,
+      })
+      applySchedule(data)
+      ZNotification.success({
+        message: t('settings.backup.backupPlanSaved'),
+      })
+      return true
+    }
+    catch {
+      return false
+    }
+    finally {
+      savingSchedule.value = false
+    }
+  }
+
+  return {
+    loading,
+    busy,
+    savingStorage,
+    testing,
+    savingSchedule,
+    loaded,
+    hasChanges,
+    verified,
+    storageDirty,
+    secretConfigured,
+    storage,
+    schedule,
+    load,
+    saveStorage,
+    runTest,
+    saveSchedule,
+  }
+}

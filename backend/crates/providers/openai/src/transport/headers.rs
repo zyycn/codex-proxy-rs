@@ -11,8 +11,8 @@ use super::client::{
     CodexBackendClient, CodexClientResult, CodexRequestContext, OpenAiUpstreamProtocol,
     openai_subagent_from_metadata,
 };
-use super::profile::CodexWireProfile;
 use super::protocol::responses::CodexResponsesRequest;
+use crate::profile::CodexWireProfile;
 
 /// 不透传下游携带的认证、账号及相关身份字段，避免影响网关选定的上游身份
 /// 上游需要的官方身份头由网关构造；这里也包含通用认证和 Cookie 字段

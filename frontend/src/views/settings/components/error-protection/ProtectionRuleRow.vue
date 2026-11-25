@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { ProtectionRule } from '@/api/modules/settings/protection'
+import type { ProtectionRule } from '@/api'
 import { ZIconButton, ZInput } from '@codex-proxy/ui'
 import { ChevronDown, Trash2 } from '@lucide/vue'
 import { computed, shallowRef, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { protectionRuleError, protectionRuleNameError, protectionRuleSummary } from './form'
+import { protectionRuleError, protectionRuleNameError, protectionRuleSummary } from './policy'
 import ProtectionRuleEditor from './ProtectionRuleEditor.vue'
 
 const props = defineProps<{ rule: ProtectionRule, expanded: boolean, disabled: boolean, showErrors: boolean }>()

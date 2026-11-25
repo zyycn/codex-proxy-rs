@@ -3,7 +3,7 @@ import type { Account } from '@/api'
 
 import { computed } from 'vue'
 
-import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import AccountPlanBadge from '@/components/account-plan-badge/index.vue'
 import { stablePresetVisualToneClass } from '@/utils/color'
 import { accountIdentityLabel } from '../utils/accountIdentity'
 import AccountNotesPopover from './AccountNotesPopover.vue'

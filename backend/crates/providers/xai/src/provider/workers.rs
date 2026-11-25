@@ -14,7 +14,7 @@ pub(super) const EXHAUSTED_QUOTA_FALLBACK_RECHECK_INTERVAL: Duration = Duration:
 pub(super) const EXHAUSTED_QUOTA_REFRESH_RETRY_INTERVAL: Duration = QUOTA_CATALOG_INTERVAL;
 pub(super) const CLI_RELEASE_WORKER_OWNER: &str = "xai-cli-release";
 
-pub(crate) fn worker_contributions(
+pub(crate) fn contributions(
     refresh: Arc<GrokCredentialRefreshService>,
     quota: Arc<GrokCredentialQuotaService>,
     catalog: Arc<GrokCredentialCatalogService>,

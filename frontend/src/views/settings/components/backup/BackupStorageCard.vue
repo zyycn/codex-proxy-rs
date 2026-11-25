@@ -9,6 +9,8 @@ defineProps<{
   disabled: boolean
   saving: boolean
   testing: boolean
+  storageDirty: boolean
+  secretConfigured: boolean
   verified: boolean
 }>()
 
@@ -57,7 +59,7 @@ function updateStorage<Key extends keyof StorageForm>(key: Key, value: StorageFo
       <div class="flex flex-wrap items-center gap-2">
         <ZButton
           :loading="testing"
-          :disabled="disabled"
+          :disabled="disabled || storageDirty"
           :title="verified ? t('settings.backup.storage.connectionTestPassed') : t('settings.backup.storage.connectionTestHasNotPassed')"
           @click="emit('test')"
         >
@@ -77,7 +79,7 @@ function updateStorage<Key extends keyof StorageForm>(key: Key, value: StorageFo
     </template>
 
     <div class="@container">
-      <ZForm class="max-w-6xl @min-[640px]:grid-cols-2">
+      <ZForm class="@md:grid-cols-2 @md:items-end @5xl:grid-cols-3">
         <ZFormItem :label="t('settings.backup.storage.endpointAddress')" :description="t('settings.backup.storage.endpointHelp')">
           <ZInput
             :model-value="storage.endpoint" :disabled="disabled"
@@ -116,6 +118,7 @@ function updateStorage<Key extends keyof StorageForm>(key: Key, value: StorageFo
         <ZFormItem :label="t('settings.backup.storage.secretAccessKey')" :description="t('settings.backup.storage.objectStorageSpecificSecret')">
           <ZInput
             :model-value="storage.secretAccessKey" :disabled="disabled"
+            :placeholder="secretConfigured ? t('settings.backup.storage.keepSecret') : undefined"
             :aria-label="t('settings.backup.storage.secretAccessKey')"
             show-password
             autocomplete="new-password"
@@ -123,7 +126,7 @@ function updateStorage<Key extends keyof StorageForm>(key: Key, value: StorageFo
           />
         </ZFormItem>
 
-        <div class="col-span-2 flex items-center gap-4 @max-[640px]:col-span-1">
+        <div class="col-span-full flex items-center gap-4">
           <ZCheckbox :model-value="storage.forcePathStyle" :disabled="disabled" :label="t('settings.backup.storage.forcePathStyle')" @update:model-value="updateStorage('forcePathStyle', $event)" />
         </div>
       </ZForm>

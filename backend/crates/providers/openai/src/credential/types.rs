@@ -8,22 +8,6 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
 
-/// 复用上游会话与账号资料时绑定本地记录和真实 OAuth 身份，正常续期不改变归属
-pub(crate) fn oauth_identity_key(account: &gateway_core::account::ProviderAccount) -> String {
-    use sha2::{Digest, Sha256};
-
-    let mut hash = Sha256::new();
-    for part in [
-        account.id().as_str(),
-        account.upstream_user_id().unwrap_or_default(),
-        account.upstream_account_id().unwrap_or_default(),
-    ] {
-        hash.update((part.len() as u64).to_le_bytes());
-        hash.update(part.as_bytes());
-    }
-    hex::encode(hash.finalize())
-}
-
 /// OAuth AT/RT/ID Token；`Debug` 永不输出明文
 #[derive(Clone)]
 pub struct CodexOAuthSecret {

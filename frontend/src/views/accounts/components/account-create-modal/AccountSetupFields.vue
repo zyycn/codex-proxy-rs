@@ -4,6 +4,7 @@ import type { AccountCreateForm } from '../../utils/accountCreate'
 import type { AccountGroupRef } from '@/api'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { accountCreateProvider } from '../../utils/accountCreate'
 import AccountSettingsFields from '../AccountSettingsFields.vue'
 import AccountProviderChooser from './AccountProviderChooser.vue'
 
@@ -48,6 +49,7 @@ const name = computed({
       preserve-model-access
 
       :groups="groups"
+      :provider="accountCreateProvider(form)"
       :groups-loading="groupsLoading"
       :preserve-proxy="false"
       :disabled="disabled"

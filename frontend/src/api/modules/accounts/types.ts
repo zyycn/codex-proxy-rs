@@ -208,6 +208,10 @@ export interface AccountUpstream {
 }
 
 export interface AccountCapabilities {
+  credentialRefresh: boolean
+  reauthorize: boolean
+  credentialExport: boolean
+  modelCatalogDownload: boolean
   quotaSettingsSupported: boolean
   quotaCredits: boolean
   quota: boolean

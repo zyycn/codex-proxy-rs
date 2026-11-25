@@ -9,7 +9,7 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, shallowRef 
 
 import { useI18n } from 'vue-i18n'
 
-import ThemePreviewCanvas from './ThemePreviewCanvas.vue'
+import ThemePreviewCanvas from './theme-preview-canvas/index.vue'
 import ThemePreviewError from './ThemePreviewError.vue'
 
 defineProps<{

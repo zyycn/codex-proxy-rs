@@ -5,7 +5,7 @@ import { ref, shallowRef, watch } from 'vue'
 import { batchUpdateAccounts } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { accountSchedulingValues, concurrencyLimitInput } from '../utils/schedulingForm'
 
 export function useAccountBatchEditor(options: {
@@ -23,6 +23,7 @@ export function useAccountBatchEditor(options: {
   const modelAccess = ref<AccountModelAccess | undefined>()
   const editedFields = ref(new Set<'concurrencyLimit' | 'weight' | 'groupIds'>())
   const catalogAccountId = shallowRef<string>()
+  const provider = shallowRef<string>()
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
@@ -49,6 +50,9 @@ export function useAccountBatchEditor(options: {
     modelAccess.value = undefined
     editedFields.value.clear()
     catalogAccountId.value = accounts[0]?.id
+    provider.value = accounts.every(account => account.provider === accounts[0]?.provider)
+      ? accounts[0]?.provider
+      : undefined
     schedulingEnabled.value = undefined
     proxyMode.value = 'preserve'
     proxyId.value = ''
@@ -142,6 +146,7 @@ export function useAccountBatchEditor(options: {
     modelAccess,
     editedFields,
     catalogAccountId,
+    provider,
     proxyMode,
     proxyId,
     selectedGroupIds,

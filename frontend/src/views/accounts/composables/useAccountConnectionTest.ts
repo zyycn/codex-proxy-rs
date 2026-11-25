@@ -8,7 +8,7 @@ import { getAccountModels, refreshAccountModels } from '@/api'
 import { API_BASE_URL } from '@/api/constants'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { errorMessage } from '@/utils/operation'
 
 type ConnectionTestStatus = 'idle' | 'running' | 'success' | 'error'

@@ -7,7 +7,7 @@ import { onScopeDispose, shallowRef, watch } from 'vue'
 import { acceptPluginArtifact, getPluginUpdateSources, installRemotePlugin, queryPluginRelease, updatePluginSource, uploadPluginArtifact, verifyRemotePlugin, verifyUploadedPlugin } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
-import { notification as ZNotification } from '@/utils/notification'
+import { notification as ZNotification } from '@/plugins/notification'
 import { notifyPluginError } from '../utils/actions'
 import { pluginInstallSelectionKey } from '../utils/model'
 

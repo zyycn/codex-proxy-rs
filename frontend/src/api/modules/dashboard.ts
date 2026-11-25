@@ -195,7 +195,7 @@ export interface DashboardSummaryResponse {
 interface DashboardQuery {
   period: 'today'
   asOf: number
-  kind: string
+  kind: DashboardTrendKind
 }
 
 export function getDashboardSummary(data: DashboardQuery, options: RequestOptions = {}) {

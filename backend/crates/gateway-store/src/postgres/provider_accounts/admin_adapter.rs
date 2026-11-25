@@ -464,7 +464,7 @@ impl AccountStore for PgAdminAccountStore {
         range: gateway_admin::model::observability::TimeRange,
         before: Option<&gateway_admin::model::quota_history::QuotaHistoryCursor>,
     ) -> AdminStoreResult<gateway_admin::model::quota_history::QuotaDocumentPage> {
-        super::quota_history::documents(
+        super::quota::documents(
             &self.pool,
             &self.query_budget,
             account,
@@ -479,8 +479,8 @@ impl AccountStore for PgAdminAccountStore {
     async fn load_quota_forecast_history(
         &self,
         window: &AccountUsageWindowQuery,
-    ) -> AdminStoreResult<gateway_admin::model::quota_forecast_sampling::QuotaForecastHistory> {
-        super::quota_forecast::load_history(&self.pool, &self.query_budget, window).await
+    ) -> AdminStoreResult<gateway_admin::model::quota_forecast::QuotaForecastHistory> {
+        super::quota::load_history(&self.pool, &self.query_budget, window).await
     }
 
     async fn credential_details(

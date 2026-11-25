@@ -42,11 +42,11 @@ Vue 组件通过 CSS Variables 和 Tailwind CSS 4 使用主题，无需 Ant Desi
 
 | 场景 | 参考入口 | 关注点 |
 | --- | --- | --- |
-| 页面头部 | `@codex-proxy/ui` 的 `ZPageHeader`、[系统概览](../frontend/src/views/dashboard/components/DashboardContent.vue) | 简短标题、必要的统计范围或状态、就近操作 |
+| 页面头部 | `@codex-proxy/ui` 的 `ZPageHeader`、[系统概览](../frontend/src/views/dashboard/components/DashboardOverview.vue) | 简短标题、必要的统计范围或状态、就近操作 |
 | 内容与指标 | `@codex-proxy/ui` 的 `ZCard`、[用量概览卡片](../frontend/src/views/usage/components/UsageSummaryCards.vue) | 可选说明、紧凑摘要、数值与辅助信息的主次 |
-| 表单帮助 | [API Key 账号字段](../frontend/src/views/accounts/components/AccountApiKeyFields.vue) | 直接命名字段，在对应位置提供短提示和示例 |
+| 表单帮助 | [API Key 账号字段](../frontend/src/providers/openai/accounts/ApiKeyFields.vue) | 直接命名字段，在对应位置提供短提示和示例 |
 | 详细规则 | [自动审批并发帮助](../frontend/src/views/settings/components/ConcurrencyPolicyCard.vue) | 标签旁帮助图标打开 Popover，页面保留短提示，浮层补充规则和示例 |
-| 账号与用量展示 | [账号额度窗口](../frontend/src/components/account/account-usage-window/index.vue)、[共用用量表格](../frontend/src/components/usage/UsageRecordsTable.vue) | 复用后端展示字段和共享 presenter，管理端与 Key 页保持同一展示口径 |
+| 账号与用量展示 | [账号额度窗口](../frontend/src/components/account-usage-window/index.vue)、[共用用量表格](../frontend/src/components/usage-records-table/index.vue) | 复用后端展示字段和共享 presenter，管理端与 Key 页保持同一展示口径 |
 
 页面查询、表单状态与纯展示逻辑的归属见 [前端模块职责](architecture.md#34-前端模块职责)
 
@@ -65,7 +65,7 @@ Vue 组件通过 CSS Variables 和 Tailwind CSS 4 使用主题，无需 Ant Desi
 - 繁体中文只转换简体原文的字形，保持措辞与语序，不替换地区用词，例如 `数据 → 數據`、`设置 → 設置`
 - 只翻译应用拥有的文本，具体后端错误、上游诊断、日志和独立插件内容保留原文；固定错误码在请求层映射，业务分类码优先保留后端公开的具体原因，无原因时使用本地兜底文案
 - 侧边栏语言图标展开就地选项，选择后切换并收起；品牌区固定显示 `Codex Proxy`、`Rust build` 和版本号
-- UI 库默认文案由 `ZConfigProvider` 提供，命令式通知通过 `utils/notification.ts` 绑定同一个语言来源，组件约定见 [UI 国际化](../modules/ui/playground/guide/i18n.md)
+- UI 库默认文案由 `ZConfigProvider` 提供，命令式通知通过 `plugins/notification.ts` 绑定同一个语言来源，组件约定见 [UI 国际化](../modules/ui/playground/guide/i18n.md)
 
 正文默认使用 Inter Variable，中文及缺失字形按系统无衬线字体栈回退。代码使用 JetBrains Mono Variable，中文由系统字体补齐，不随语言切换额外修改字重。默认值由 UI 库持有，应用负责加载字体包，图表读取同一字体 Token
 
@@ -371,7 +371,7 @@ Store 在其他入口发生变化时更新保存基线；没有未保存修改�
 样式，并把预览内容 Teleport 到影子根中。预览可独立切换浅色和深色，不受外层主题影响。
 画布和操作控件先显示，选中的预览内容异步加载，就绪前画布留空，资源加载完成后同步影子根样式
 
-- **首页画板**复用真实 `DashboardContent` 和固定 fixture，不请求接口，也不启动自动刷新
+- **首页画板**通过 `views/dashboard/components/DashboardOverview.vue` 展示固定样本，请求和刷新由真实概览页管理
 - **组件概览**展示基础组件、表格、空状态、骨架、浮层和菜单等关键状态
 - 画板固定为 `1600 × 1808`，使用 CSS `zoom` 重排，不使用 `transform: scale()` 长期缩放文字
 - 空白区域可拖拽，滚轮以指针为锚点缩放，并提供缩小、100%、放大和适应画板操作

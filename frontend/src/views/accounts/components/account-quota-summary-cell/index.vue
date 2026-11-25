@@ -4,7 +4,7 @@ import type { Account } from '@/api'
 import { computed } from 'vue'
 
 import { useI18n } from 'vue-i18n'
-import { quotaWindowPresentation } from '@/components/account/account-usage-window/presenter'
+import { quotaWindowPresentation } from '@/components/account-usage-window/presenter'
 import { groupedAccountQuotaWindows, usageWindowLabels, visibleSummaryQuotaWindows } from '../../constants'
 import AccountCapacityIndicator from '../AccountCapacityIndicator.vue'
 import AccountQuotaSummaryEntry from './Entry.vue'

@@ -41,8 +41,8 @@ const strategySettings = computed<Partial<Record<RotationStrategy, { label: stri
 </script>
 
 <template>
-  <ZCard :title="t('settings.rotation.title')" class="@container">
-    <div class="grid max-w-6xl gap-3 @md:grid-cols-2 @5xl:grid-cols-4">
+  <ZCard :title="t('settings.rotation.title')" :description="t('settings.rotation.description')" class="@container">
+    <div class="grid gap-3 @md:grid-cols-2 @4xl:grid-cols-4">
       <div
         v-for="option in options"
         :key="option.value"
@@ -50,7 +50,7 @@ const strategySettings = computed<Partial<Record<RotationStrategy, { label: stri
       >
         <button
           type="button"
-          class="flex min-h-25 w-full cursor-pointer flex-col rounded-z border-0 px-4 py-3.5 text-left shadow-z-input outline-none transition-[background-color,box-shadow,color] duration-160 focus-visible:ring-2 focus-visible:ring-z-control-outline"
+          class="flex w-full cursor-pointer flex-col rounded-z border-0 px-4 py-3.5 text-left shadow-z-input outline-none transition-[background-color,box-shadow,color] duration-160 focus-visible:ring-2 focus-visible:ring-z-control-outline"
           :class="
             model === option.value
               ? 'bg-z-control-item-bg-active text-z-primary-text shadow-z-tertiary'

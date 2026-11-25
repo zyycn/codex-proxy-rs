@@ -239,6 +239,10 @@ pub trait NativeResponseTranslator: Send + 'static {
         &mut self,
         event: &crate::event::ProtocolWireEvent,
     ) -> Result<Vec<crate::event::ProtocolWireEvent>, ProviderError>;
+    /// 上游以 EOF 而非原生终态帧结束时，在终结事实交付前刷新协议终态
+    fn finish(&mut self) -> Result<Vec<crate::event::ProtocolWireEvent>, ProviderError> {
+        Ok(Vec::new())
+    }
 }
 
 const MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT: usize = 64;
@@ -453,15 +457,19 @@ impl ProviderStream {
             return Ok(vec![event]);
         };
         let middleware_transformed = event.middleware_transformed();
-        let Some(wire) = event.wire_event() else {
+        let had_wire = event.wire_event().is_some();
+        let mut translated = if let Some(wire) = event.wire_event() {
+            if wire.protocol() != translator.source_protocol() {
+                return Err(native_response_protocol_error());
+            }
+            translator.translate(wire)?
+        } else if terminal {
+            translator.finish()?
+        } else {
             return Ok(vec![event]);
         };
-        if wire.protocol() != translator.source_protocol() {
-            return Err(native_response_protocol_error());
-        }
-        let mut translated = translator.translate(wire)?;
         if translated.len() > MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT
-            || (terminal && translated.is_empty())
+            || (terminal && had_wire && translated.is_empty())
             || translated
                 .iter()
                 .any(|wire| wire.protocol() != translator.target_protocol())

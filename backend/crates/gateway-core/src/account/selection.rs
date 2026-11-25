@@ -55,7 +55,7 @@ pub const MAX_ACCOUNT_ROTATIONS: u32 = 31;
 /// 会话绑定与轮次关联共用的保留时长上限，单位小时
 pub const MAX_SESSION_AFFINITY_TTL_HOURS: u32 = 720;
 
-/// OpenAI 会话账号亲和；请求身份和模式行为由 Provider 解释
+/// 通用会话账号亲和；请求身份和账号迁移资格由 Provider 解释
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountAffinity {
@@ -95,10 +95,10 @@ pub struct AccountSelectionPolicy {
     max_concurrent_per_account: AccountConcurrency,
     queue_policy: ConcurrencyQueuePolicy,
     openai_guardian_reserved_concurrency: u32,
-    openai_account_affinity: AccountAffinity,
+    account_affinity: AccountAffinity,
     switch_account_on_queue_failure: bool,
     max_account_rotations: u32,
-    openai_session_affinity_ttl: Duration,
+    session_affinity_ttl: Duration,
 }
 
 impl AccountSelectionPolicy {
@@ -113,10 +113,10 @@ impl AccountSelectionPolicy {
             quota_reset_window_weights: ResetWindowWeights::default(),
             max_concurrent_per_account: max_concurrent_per_account.into(),
             openai_guardian_reserved_concurrency: 0,
-            openai_account_affinity: AccountAffinity::default(),
+            account_affinity: AccountAffinity::default(),
             switch_account_on_queue_failure: false,
             max_account_rotations: 3,
-            openai_session_affinity_ttl: Duration::from_secs(24 * 3600),
+            session_affinity_ttl: Duration::from_secs(24 * 3600),
             queue_policy: ConcurrencyQueuePolicy {
                 max_waiting: 0,
                 timeout: Duration::ZERO,
@@ -136,14 +136,14 @@ impl AccountSelectionPolicy {
     }
 
     #[must_use]
-    pub const fn with_openai_account_affinity(mut self, affinity: AccountAffinity) -> Self {
-        self.openai_account_affinity = affinity;
+    pub const fn with_account_affinity(mut self, affinity: AccountAffinity) -> Self {
+        self.account_affinity = affinity;
         self
     }
 
     #[must_use]
-    pub const fn openai_account_affinity(self) -> AccountAffinity {
-        self.openai_account_affinity
+    pub const fn account_affinity(self) -> AccountAffinity {
+        self.account_affinity
     }
 
     #[must_use]
@@ -197,14 +197,14 @@ impl AccountSelectionPolicy {
     }
 
     #[must_use]
-    pub const fn with_openai_session_affinity_ttl(mut self, ttl: Duration) -> Self {
-        self.openai_session_affinity_ttl = ttl;
+    pub const fn with_session_affinity_ttl(mut self, ttl: Duration) -> Self {
+        self.session_affinity_ttl = ttl;
         self
     }
 
     #[must_use]
-    pub const fn openai_session_affinity_ttl(self) -> Duration {
-        self.openai_session_affinity_ttl
+    pub const fn session_affinity_ttl(self) -> Duration {
+        self.session_affinity_ttl
     }
 
     /// 只传递冻结的运行设置，Guardian 分类与预留策略由 OpenAI Provider 解释

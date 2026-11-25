@@ -6,9 +6,9 @@ import { defineTableColumns, ZButton, ZDialog, ZTable } from '@codex-proxy/ui'
 
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import BaseChart from '@/components/charts/BaseChart.vue'
-import { chartTooltipStyle } from '@/components/charts/tooltip'
-import { usageDisplayOutcome } from '@/components/usage/shared/errors'
+import BaseChart from '@/components/base-chart/index.vue'
+import { chartTooltipStyle } from '@/components/base-chart/tooltip'
+import { usageDisplayOutcome } from '@/components/usage-records-table/errors'
 import {
   usageAccountText,
   usageBillingText,
@@ -18,7 +18,7 @@ import {
   usageReasoningEffort,
   usageTransportType,
   usageUserAgent,
-} from '@/components/usage/shared/presenter'
+} from '@/components/usage-records-table/presenter'
 import { useChartPalette } from '@/composables/useChartPalette'
 
 import { formatDuration, formatInteger } from '@/utils/format'

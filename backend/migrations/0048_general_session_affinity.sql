@@ -1,0 +1,5 @@
+-- 亲和配置由所有 Provider 共用，重命名保留已保存的模式与时长
+alter table runtime_settings rename column openai_account_affinity to account_affinity;
+alter table runtime_settings rename column openai_session_affinity_ttl_hours to session_affinity_ttl_hours;
+alter table runtime_settings rename constraint runtime_settings_openai_account_affinity_check to runtime_settings_account_affinity_check;
+alter table runtime_settings rename constraint runtime_settings_openai_session_affinity_ttl_hours_check to runtime_settings_session_affinity_ttl_hours_check;

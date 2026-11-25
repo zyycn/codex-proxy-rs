@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import type { EChartsOption, LineSeriesOption } from 'echarts'
 
-import type { KeyUsageTrendPoint } from '@/api/modules/key-usage'
+import type { KeyUsageTrendPoint } from '@/api'
 import { ZCard, ZEmpty } from '@codex-proxy/ui'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import BaseChart from '@/components/charts/BaseChart.vue'
-import { chartTooltipStyle } from '@/components/charts/tooltip'
+import BaseChart from '@/components/base-chart/index.vue'
+import { chartTooltipStyle } from '@/components/base-chart/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 
-import { formatCompactNumber, formatInteger } from '@/utils/format'
-import { money } from '../utils/format'
+import { formatCompactNumber, formatInteger, formatUsageCost } from '@/utils/format'
 import { keyUsageTokenMetrics, keyUsageTokenValue } from '../utils/metrics'
 
 const props = defineProps<{ points: KeyUsageTrendPoint[] }>()
@@ -104,7 +103,7 @@ const option = computed<EChartsOption>(() => {
         axisLabel: {
           color: colors.textMuted,
           fontSize: 10,
-          formatter: (value: number) => money(value),
+          formatter: (value: number) => formatUsageCost(value),
         },
         splitLine: { show: false },
       },
@@ -131,7 +130,7 @@ const option = computed<EChartsOption>(() => {
       tooltip: {
         valueFormatter: value => typeof value === 'number'
           ? (line.cost
-              ? money(value)
+              ? formatUsageCost(value)
               : formatInteger(value))
           : '—',
       },

@@ -55,6 +55,7 @@ use serde_json::{Map, Value, json};
 use url::Url;
 use uuid::Uuid;
 
+use crate::billing::normalize_service_tier;
 use crate::credential::{
     CodexAccountFailure, CodexCredentialCatalogError, CodexCredentialCatalogService,
     CodexCredentialLease, CodexCredentialQuotaService, CodexCredentialRefreshOutcome,
@@ -66,6 +67,7 @@ use crate::credential::{
     derive_codex_transport_key, derive_endpoint_affinity_with_headers,
     derive_live_session_affinity, derive_previous_response_id_hash, derive_turn_alias,
 };
+use crate::profile::{APPCAST_POLL_INTERVAL, CodexDesktopReleaseService, CodexWireProfileState};
 use crate::request_identity::{account_session_with_headers, turn_id_with_headers};
 use crate::session_transport::CodexSessionTransportRecovery;
 use crate::transport::canonical::{
@@ -77,9 +79,6 @@ use crate::transport::catalog::{
 use crate::transport::diagnostics::{
     CodexFailureCategory, CodexUpstreamFailure, CodexUpstreamSendPhase,
 };
-use crate::transport::profile::{
-    APPCAST_POLL_INTERVAL, CodexDesktopReleaseService, CodexWireProfileState,
-};
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
     PreviousResponseScope, ResponseEventSignals, TransportRequirement, fast_policy_tier,
@@ -90,7 +89,6 @@ use crate::transport::request::{
     apply_codex_request_country, encode_generate_payload, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
-use crate::transport::usage::normalize_service_tier;
 use crate::transport::websocket::{
     CodexWebSocketExchangeError, PreviousResponseUnavailableReason, WEBSOCKET_CLOSE_MESSAGE_TOO_BIG,
 };
@@ -110,16 +108,14 @@ mod live;
 mod messages;
 mod observation;
 mod upstream_adapter;
-mod workers;
+pub(crate) mod workers;
 pub(crate) use live::{CodexLiveGateway, CodexLiveRegistry};
-pub(crate) use workers::ClientReleaseServices;
 
 use execution::*;
 #[doc(hidden)]
 pub use failure::openai_failure_affects_account_score;
 use failure::*;
 use observation::*;
-pub(crate) use workers::worker_contributions;
 
 const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
@@ -289,9 +285,7 @@ impl CodexProvider {
                 .remember_turn(
                     &turn,
                     affinity,
-                    context
-                        .account_selection_policy()
-                        .openai_session_affinity_ttl(),
+                    context.account_selection_policy().session_affinity_ttl(),
                 )
                 .await
                 .map_err(map_selection_error)?;
@@ -443,7 +437,7 @@ impl Provider for CodexProvider {
             return Ok(true);
         };
         let payload = generate.protocol_payload();
-        if policy.openai_account_affinity() != AccountAffinity::Strict
+        if policy.account_affinity() != AccountAffinity::Strict
             || !crate::request_identity::follows_session_with_headers(
                 payload.body(),
                 payload.context(),
@@ -480,22 +474,21 @@ impl Provider for CodexProvider {
         &self,
         configuration: &gateway_core::account::OpaqueProviderData,
     ) -> Result<gateway_core::account::OpaqueProviderData, ProviderError> {
-        let selection =
-            crate::transport::profile::identity::RequestProfileSelection::parse(configuration)
-                .map_err(|error| {
-                    provider_error(
-                        ProviderErrorKind::InvalidRequest,
-                        UpstreamSendState::NotSent,
-                    )
-                    .with_diagnostic(profile_diagnostic(&error))
-                })?;
+        let selection = crate::profile::identity::RequestProfileSelection::parse(configuration)
+            .map_err(|error| {
+                provider_error(
+                    ProviderErrorKind::InvalidRequest,
+                    UpstreamSendState::NotSent,
+                )
+                .with_diagnostic(profile_diagnostic(&error))
+            })?;
         let profile = selection
             .resolve(self.client.profile_state())
             .map_err(|error| {
                 provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
                     .with_diagnostic(profile_diagnostic(&error))
             })?;
-        crate::transport::profile::selection::object(&profile).map_err(|error| {
+        crate::profile::selection::object(&profile).map_err(|error| {
             provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
                 .with_diagnostic(profile_diagnostic(&error))
         })
@@ -718,7 +711,7 @@ impl Provider for CodexProvider {
             .filter(|prepared| {
                 prepared.session_affinity.is_none()
                     && prepared.previous_session.is_none()
-                    && context.account_selection_policy().openai_account_affinity()
+                    && context.account_selection_policy().account_affinity()
                         != AccountAffinity::Relaxed
                     && context.continuation_attempt() == ContinuationAttempt::None
                     && !guardian
@@ -749,7 +742,7 @@ impl Provider for CodexProvider {
         );
         if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay
             && (selection_session_affinity.is_none()
-                || context.account_selection_policy().openai_account_affinity()
+                || context.account_selection_policy().account_affinity()
                     == AccountAffinity::Relaxed)
         {
             // 没有可持续的会话绑定就无法保证完整历史使用替代账号，交回原始容量错误
@@ -996,7 +989,7 @@ impl CodexProvider {
             lease.authentication(),
             crate::credential::CodexRuntimeAuthentication::OAuth(_)
         )
-        .then(|| crate::credential::oauth_identity_key(lease.account()));
+        .then(|| crate::request_identity::oauth_identity_key(lease.account()));
         let native_owner = context.continuation().and_then(ContinuationBinding::pinned);
         let state_owner_cross_account = native_owner
             .is_some_and(|owner| !owner.matches(&provider_kind, lease.account_id()))

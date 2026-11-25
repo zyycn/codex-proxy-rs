@@ -12,8 +12,8 @@ use gateway_protocol::{
 };
 
 use super::*;
+use crate::billing::{OpenAiBillingUsage, configured_token_billing_breakdown};
 use crate::provider::observation::insert_first_timing;
-use crate::transport::usage::{OpenAiBillingUsage, configured_token_billing_breakdown};
 
 // 非流式上游需要完整解码后才能交付；流式交付不受此总长限制
 const MAX_MESSAGES_JSON_BYTES: usize = 16 * 1024 * 1024;

@@ -1930,6 +1930,7 @@ async fn disabled_account_diagnostic_selects_the_pinned_account_without_state_wr
         Arc::new(DiagnosticLeasePort),
         Arc::new(MemoryCooldownPort::default()),
         Arc::new(AccountFeedbackStats::default()),
+        Arc::new(crate::support::TestSessionAffinity::default()),
     );
     let provider = Arc::new(
         GrokBuildProvider::new(
@@ -4307,7 +4308,7 @@ async fn missing_catalog_feature_metadata_keeps_build_responses_routable() {
 
 #[tokio::test]
 async fn configured_request_profile_reaches_inference_headers() {
-    use provider_xai::transport::client_profile::{GrokClientProfileSelection, VersionMode};
+    use provider_xai::profile::selection::{GrokClientProfileSelection, VersionMode};
     let transport = StubInferenceTransport::success();
     let provider = provider(StubSelector::success(), transport.clone()).await;
     let selection = GrokClientProfileSelection {

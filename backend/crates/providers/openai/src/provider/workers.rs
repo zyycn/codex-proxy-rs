@@ -1,8 +1,8 @@
 //! OpenAI Provider 向 Host 贡献的后台 worker
 
 use super::*;
-use crate::transport::profile::cli_release::CliReleaseService;
-use crate::transport::profile::platform_release::PlatformDesktopReleaseService;
+use crate::profile::cli_release::CliReleaseService;
+use crate::profile::platform_release::PlatformDesktopReleaseService;
 use gateway_core::task::WorkerDaemonContext;
 
 pub(crate) struct ClientReleaseServices {
@@ -23,7 +23,7 @@ pub(super) const MODEL_CATALOG_WORKER_OWNER: &str = "openai-model-catalog";
 pub(super) const WARMUP_WORKER_OWNER: &str = "openai-account-warmup";
 pub(super) const WARMUP_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
-pub(crate) fn worker_contributions(
+pub(crate) fn contributions(
     timezone: gateway_core::time::DeploymentTimeZone,
     refresh: Arc<CodexCredentialRefreshService>,
     quota: Arc<CodexCredentialQuotaService>,

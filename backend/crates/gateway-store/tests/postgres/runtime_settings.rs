@@ -37,9 +37,9 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             switch_account_on_queue_failure: false,
             max_retry_after_seconds: 240,
             openai_guardian_reserved_concurrency: 0,
-            openai_account_affinity: gateway_core::account::AccountAffinity::Relaxed,
+            account_affinity: gateway_core::account::AccountAffinity::Relaxed,
             max_account_rotations: 3,
-            openai_session_affinity_ttl_hours: 24,
+            session_affinity_ttl_hours: 24,
             responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             smart_scheduling: gateway_core::account::SmartSchedulingConfig::default(),
             quota_reset_window_weights: gateway_core::account::ResetWindowWeights::default(),
@@ -1258,26 +1258,23 @@ async fn account_affinity_defaults_and_updates_reach_the_snapshot() {
     };
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let before = repository.load_runtime_settings().await.unwrap();
-    assert_eq!(
-        before.values.openai_account_affinity,
-        AccountAffinity::Strict
-    );
+    assert_eq!(before.values.account_affinity, AccountAffinity::Strict);
     assert_eq!(before.values.max_account_rotations, 3);
-    assert_eq!(before.values.openai_session_affinity_ttl_hours, 24);
+    assert_eq!(before.values.session_affinity_ttl_hours, 24);
     for (mode, budget, ttl) in [
         (AccountAffinity::Preferred, 3, 24),
         (AccountAffinity::Strict, 31, 168),
         (AccountAffinity::Relaxed, 0, 720),
     ] {
         let mut update = settings_with_margin(3600);
-        update.values.openai_account_affinity = mode;
+        update.values.account_affinity = mode;
         update.values.max_account_rotations = budget;
-        update.values.openai_session_affinity_ttl_hours = ttl;
+        update.values.session_affinity_ttl_hours = ttl;
         repository.update_runtime_settings(update).await.unwrap();
         let loaded = repository.load_runtime_settings().await.unwrap();
         assert_eq!(
             (
-                loaded.values.openai_account_affinity,
+                loaded.values.account_affinity,
                 loaded.values.max_account_rotations
             ),
             (mode, budget)
@@ -1290,7 +1287,7 @@ async fn account_affinity_defaults_and_updates_reach_the_snapshot() {
         assert_eq!(
             (
                 serde_json::from_value::<AccountAffinity>(
-                    snapshot_values["openai_account_affinity"].clone()
+                    snapshot_values["account_affinity"].clone()
                 )
                 .unwrap(),
                 snapshot_values["max_account_rotations"].as_u64().unwrap()
@@ -1298,18 +1295,18 @@ async fn account_affinity_defaults_and_updates_reach_the_snapshot() {
             (mode, u64::from(budget))
         );
         assert!(snapshot.config_revision > before.config_revision);
-        assert_eq!(loaded.values.openai_session_affinity_ttl_hours, ttl);
-        assert_eq!(snapshot_values["openai_session_affinity_ttl_hours"], ttl);
+        assert_eq!(loaded.values.session_affinity_ttl_hours, ttl);
+        assert_eq!(snapshot_values["session_affinity_ttl_hours"], ttl);
     }
     let mut invalid = settings_with_margin(3600);
     invalid.values.max_account_rotations = 32;
     assert!(repository.update_runtime_settings(invalid).await.is_err());
     for sql in [
-        "update runtime_settings set openai_session_affinity_ttl_hours = 0 where id = 1",
-        "update runtime_settings set openai_session_affinity_ttl_hours = 721 where id = 1",
+        "update runtime_settings set session_affinity_ttl_hours = 0 where id = 1",
+        "update runtime_settings set session_affinity_ttl_hours = 721 where id = 1",
         "update runtime_settings set max_account_rotations = 32 where id = 1",
         "update runtime_settings set max_account_rotations = -1 where id = 1",
-        "update runtime_settings set openai_account_affinity = 'unknown' where id = 1",
+        "update runtime_settings set account_affinity = 'unknown' where id = 1",
     ] {
         assert!(sqlx::query(sql).execute(&database.pool).await.is_err());
     }

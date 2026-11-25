@@ -101,6 +101,7 @@ struct SelectorFixture {
     coordinator: Arc<SchedulingCoordinator>,
     cooldowns: Arc<MemoryCooldownPort>,
     feedback: Arc<AccountFeedbackStats>,
+    affinity: Arc<crate::support::TestSessionAffinity>,
 }
 
 impl SelectorFixture {
@@ -161,6 +162,7 @@ impl SelectorFixture {
             Arc::new(UnavailableBillingTransport),
         ));
         let feedback = Arc::new(AccountFeedbackStats::default());
+        let affinity = Arc::new(crate::support::TestSessionAffinity::default());
         let selector = GrokAccountSessionSelector::new(
             gateway_core::routing::ProviderKind::new("xai").expect("provider"),
             repository.clone(),
@@ -169,6 +171,7 @@ impl SelectorFixture {
             lease_port,
             cooldowns.clone(),
             Arc::clone(&feedback),
+            affinity.clone(),
         );
         Self {
             store,
@@ -177,6 +180,7 @@ impl SelectorFixture {
             coordinator,
             cooldowns,
             feedback,
+            affinity,
         }
     }
 
@@ -1504,5 +1508,219 @@ async fn model_access_excludes_a_required_xai_account_before_acquiring_a_lease()
             .expect("leases")
             .iter()
             .all(|lease| lease.account_id() == &allowed)
+    );
+}
+
+fn affinity_request(
+    fixture: &SelectorFixture,
+    mode: gateway_core::account::AccountAffinity,
+    queue: bool,
+) -> GrokSessionSelection {
+    use gateway_core::operation::{GenerateRequest, ProtocolPayload};
+    let request = fixture.request(BTreeSet::new());
+    let body =
+        serde_json::json!({"model":"grok-4.5", "input":"hello", "prompt_cache_key":"same-session"});
+    let generate = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            gateway_protocol::openai::OPENAI_PROTOCOL,
+            body.as_object().unwrap().clone(),
+        )
+        .unwrap(),
+    );
+    let encoded = provider_xai::GrokResponsesRequest::encode(
+        &generate,
+        "grok-4.5",
+        request.client_api_key_id(),
+    )
+    .unwrap();
+    GrokSessionSelection::new(
+        request.upstream_model().clone(),
+        BTreeSet::new(),
+        None,
+        request
+            .account_selection_policy()
+            .with_account_affinity(mode)
+            .with_session_affinity_ttl(Duration::from_secs(7200))
+            .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                max_waiting: u32::from(queue),
+                timeout: Duration::from_millis(20),
+            }),
+        SystemTime::now() + Duration::from_secs(2),
+        request.account_scope().clone(),
+        request.client_api_key_id().clone(),
+    )
+    .with_affinity(encoded.affinity().cloned())
+}
+
+#[tokio::test]
+async fn preferred_affinity_keeps_primary_binding_during_temporary_capacity_spillover() {
+    use gateway_core::account::AccountAffinity;
+    let fixture = SelectorFixture::new(&["affinity-a", "affinity-b"]).await;
+    let primary = fixture
+        .selector
+        .select(affinity_request(
+            &fixture,
+            AccountAffinity::Preferred,
+            false,
+        ))
+        .await
+        .unwrap();
+    let primary_id = primary.account_id().clone();
+    fixture
+        .coordinator
+        .denied
+        .lock()
+        .unwrap()
+        .insert(primary_id.clone());
+    let overflow = fixture
+        .selector
+        .select(affinity_request(
+            &fixture,
+            AccountAffinity::Preferred,
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_ne!(overflow.account_id(), &primary_id);
+    {
+        let bindings = fixture.affinity.bindings.lock().unwrap();
+        let (binding, ttl) = bindings.values().next().unwrap();
+        assert_eq!(binding.account_id(), &primary_id);
+        assert_eq!(*ttl, Duration::from_secs(7200));
+    }
+    fixture.coordinator.denied.lock().unwrap().clear();
+    let recovered = fixture
+        .selector
+        .select(affinity_request(
+            &fixture,
+            AccountAffinity::Preferred,
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(recovered.account_id(), &primary_id);
+}
+
+#[tokio::test]
+async fn strict_affinity_waits_for_busy_primary_instead_of_using_a_free_account() {
+    use gateway_core::account::AccountAffinity;
+    let fixture = SelectorFixture::new(&["affinity-a", "affinity-b"]).await;
+    let primary = fixture
+        .selector
+        .select(affinity_request(&fixture, AccountAffinity::Strict, true))
+        .await
+        .unwrap();
+    fixture
+        .coordinator
+        .denied
+        .lock()
+        .unwrap()
+        .insert(primary.account_id().clone());
+    let error = fixture
+        .selector
+        .select(affinity_request(&fixture, AccountAffinity::Strict, true))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        error,
+        GrokSessionSelectorError::QueueRejected(gateway_core::concurrency::QueueRejection::Timeout)
+    ));
+    assert_eq!(
+        fixture
+            .affinity
+            .claims
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[tokio::test]
+async fn relaxed_affinity_follows_scheduling_and_updates_binding() {
+    use gateway_core::account::AccountAffinity;
+    let fixture = SelectorFixture::new(&["affinity-a", "affinity-b"]).await;
+    let first = fixture
+        .selector
+        .select(affinity_request(&fixture, AccountAffinity::Relaxed, false))
+        .await
+        .unwrap();
+    fixture
+        .coordinator
+        .denied
+        .lock()
+        .unwrap()
+        .insert(first.account_id().clone());
+    let next = fixture
+        .selector
+        .select(affinity_request(&fixture, AccountAffinity::Relaxed, false))
+        .await
+        .unwrap();
+    assert_ne!(first.account_id(), next.account_id());
+    assert_eq!(
+        fixture
+            .affinity
+            .bindings
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .0
+            .account_id(),
+        next.account_id()
+    );
+}
+
+#[tokio::test]
+async fn unavailable_primary_migrates_binding_and_conflicted_claim_retries() {
+    use gateway_core::account::AccountAffinity;
+    let fixture = SelectorFixture::new(&["affinity-a", "affinity-b"]).await;
+    let first = fixture
+        .selector
+        .select(affinity_request(
+            &fixture,
+            AccountAffinity::Preferred,
+            false,
+        ))
+        .await
+        .unwrap();
+    fixture
+        .store
+        .set_enabled(first.account_id(), false)
+        .await
+        .unwrap();
+    fixture
+        .affinity
+        .reject_next_claim
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let next = fixture
+        .selector
+        .select(affinity_request(
+            &fixture,
+            AccountAffinity::Preferred,
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_ne!(first.account_id(), next.account_id());
+    assert_eq!(
+        fixture
+            .affinity
+            .bindings
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .0
+            .account_id(),
+        next.account_id()
+    );
+    assert_eq!(
+        fixture
+            .affinity
+            .claims
+            .load(std::sync::atomic::Ordering::SeqCst),
+        3
     );
 }

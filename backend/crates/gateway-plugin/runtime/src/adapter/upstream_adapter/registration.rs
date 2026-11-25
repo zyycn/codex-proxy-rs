@@ -11,8 +11,11 @@ use gateway_plugin_sdk::{
     call::upstream_adapter::{REGISTER_METHOD, UpstreamAdapterRegistration},
 };
 
-use super::{AdapterEntry, PluginUpstreamAdapter, target::UpstreamTarget};
-use crate::{RpcSession, adapter::scope::BindingScope, callback::PluginCallbacks};
+use super::{AdapterEntry, PluginUpstreamAdapter};
+use crate::{
+    RpcSession, adapter::scope::BindingScope, callback::PluginCallbacks,
+    upstream_target::UpstreamTarget,
+};
 
 pub(crate) fn validate_bindings(
     manifest: &Manifest,

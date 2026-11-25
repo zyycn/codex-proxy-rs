@@ -60,9 +60,9 @@ pub struct RuntimeSettingsValues {
     pub switch_account_on_queue_failure: bool,
     pub max_retry_after_seconds: u32,
     pub openai_guardian_reserved_concurrency: u32,
-    pub openai_account_affinity: gateway_core::account::AccountAffinity,
+    pub account_affinity: gateway_core::account::AccountAffinity,
     pub max_account_rotations: u32,
-    pub openai_session_affinity_ttl_hours: u32,
+    pub session_affinity_ttl_hours: u32,
     pub responses_max_decompressed_body_bytes: u64,
     pub smart_scheduling: gateway_core::account::SmartSchedulingConfig,
     pub quota_reset_window_weights: gateway_core::account::ResetWindowWeights,
@@ -213,7 +213,7 @@ impl RuntimeSettingsValues {
             self.key_queue_timeout_seconds,
             self.account_queue_timeout_seconds,
             self.max_account_rotations,
-            self.openai_session_affinity_ttl_hours,
+            self.session_affinity_ttl_hours,
         )?;
         gateway_core::settings::response_body_limit(self.responses_max_decompressed_body_bytes)?;
         gateway_core::settings::client_min_versions(

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PricingCatalog {
+    pub supported_bands: BTreeMap<String, Vec<String>>,
     pub defaults: PricingOverrides,
     pub overrides: PricingOverrides,
     pub synced: PricingOverrides,

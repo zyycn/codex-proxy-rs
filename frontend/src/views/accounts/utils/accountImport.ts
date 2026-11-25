@@ -1,7 +1,8 @@
 import type { AccountImportParam } from '@/api'
 import { t } from '@/i18n'
+import { providerAccounts } from '@/providers/accounts'
+import { formatProviderLabel, isBuiltinProvider } from '@/providers/catalog'
 import { isRecord } from '@/utils/data'
-import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
 
 const MAX_ACCOUNT_IMPORT_COUNT = 200
 const MAX_ACCOUNT_IMPORT_BYTES = 4 * 1024 * 1024
@@ -20,34 +21,10 @@ function parseJson(value: string): unknown {
 }
 
 function splitAccountDocuments(entry: AccountImportDocument): AccountImportDocument[] {
-  // xAI 的整份文档承担 RT 去重，必须保留在 Provider 的刷新边界内
-  if (entry.provider !== 'openai')
-    return [entry]
-  const document = entry.document
-  const data = isRecord(document.data) && Array.isArray(document.data.accounts)
-    ? document.data
-    : document
-  if (!Array.isArray(data.accounts) || !data.accounts.length)
-    return [entry]
-  return data.accounts.map((account) => {
-    const item: Record<string, unknown> = {
-      ...data,
-      accounts: [account],
-    }
-    if (Array.isArray(data.proxies)) {
-      // 保留同键的全部记录，让 Provider 继续拒绝重复引用，不复制其他账号的代理
-      const key = isRecord(account)
-        ? account.proxy_key
-        : undefined
-      item.proxies = data.proxies.filter(proxy => typeof key === 'string' && isRecord(proxy) && proxy.proxy_key === key)
-    }
-    return {
-      provider: entry.provider,
-      document: data === document
-        ? item
-        : { ...document, data: item },
-    }
-  })
+  const split = providerAccounts(entry.provider)?.splitDocument
+  return split
+    ? split(entry.document).map(document => ({ provider: entry.provider, document }))
+    : [entry]
 }
 
 export function accountImportBatches(items: AccountImportParam[]): AccountImportParam[][] {
@@ -89,28 +66,15 @@ export function mixedImportDocuments(text: string): AccountImportDocument[] {
 }
 
 export function accountImportDocuments(provider: string, mode: string, text: string): AccountImportDocument[] {
-  if (provider === 'openai' && (mode === 'access_token' || mode === 'refresh_token')) {
-    const tokens = text.split(/\r?\n/).map(token => token.trim()).filter(Boolean)
-    const label = mode === 'access_token'
-      ? 'Access Token'
-      : 'Refresh Token'
-    if (!tokens.length)
-      throw new Error(t('accounts.import.pasteAtLeastOne', { label }))
-    const key = mode === 'access_token'
-      ? 'accessToken'
-      : 'refreshToken'
-    return tokens.map(token => ({
-      provider,
-      document: {
-        accounts: [
-          { [key]: token },
-        ],
-      },
-    }))
+  if (mode === 'access_token' || mode === 'refresh_token') {
+    const convert = providerAccounts(provider)?.tokenDocuments
+    if (!convert)
+      throw new Error(t('accounts.onboarding.accountPlatformIsNotSupported'))
+    return convert(mode, text).map(document => ({ provider, document }))
   }
   const value = parseJson(text)
   // 原生快捷入口保留 CPR 文件展开，插件文档的字段含义由插件自己解释。
-  if (isSupportedProvider(provider) && isRecord(value) && Array.isArray(value.documents)) {
+  if (isBuiltinProvider(provider) && isRecord(value) && Array.isArray(value.documents)) {
     const documents = mixedImportDocuments(text).filter(entry => entry.provider === provider)
     if (!documents.length) {
       throw new Error(t('accounts.import.missingProvider', {

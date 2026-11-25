@@ -1,0 +1,50 @@
+[package]
+name = "provider-antigravity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+autotests = false
+
+[dependencies]
+async-compression = { version = "0.4.52", features = ["tokio", "gzip"] }
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+base64 = "0.23.0"
+bytes = "1.11.1"
+chrono = { version = "0.4.45", features = ["clock", "serde"] }
+gateway-admin = { path = "../../gateway-admin" }
+gateway-core = { path = "../../gateway-core" }
+gateway-egress = { path = "../../gateway-egress" }
+gateway-protocol = { path = "../../gateway-protocol" }
+futures = "0.3.32"
+flate2 = "1.1.9"
+getrandom = "0.4.3"
+hex = "0.4.3"
+http = "1.5.0"
+http-body-util = "0.1.5"
+reqwest = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls-native-roots", "socks", "stream"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.150", features = ["raw_value"] }
+sha2 = "0.11.0"
+tar = { version = "0.4.46", default-features = false }
+tempfile = "3.27.0"
+thiserror = "2.0.18"
+tracing = "0.1.44"
+tokio = { version = "=1.53.3", features = ["fs", "io-util", "macros", "time"] }
+tokio-util = { version = "0.7.20", features = ["io"] }
+url = { version = "2.5.8", features = ["serde"] }
+uuid = { version = "1.23.3", features = ["v7"] }
+zip = { version = "9.8.0", default-features = false, features = ["deflate-flate2"] }
+
+[dev-dependencies]
+wiremock = "0.6.5"
+tokio = { version = "=1.53.3", features = ["rt-multi-thread"] }
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
+
+[lints]
+workspace = true
