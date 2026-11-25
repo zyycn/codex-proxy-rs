@@ -70,7 +70,9 @@
       "filter": "按平臺篩選",
       "unknown": "未知平臺",
       "customAuth": "自定義認證 · {normalized}",
-      "unknownAuth": "未知認證類型"
+      "unknownAuth": "未知認證類型",
+      "settings": "平台設定",
+      "select": "選擇平台"
     },
     "location": {
       "resolving": "正在解析出口位置",

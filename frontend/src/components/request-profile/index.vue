@@ -2,12 +2,12 @@
 import type { Component } from 'vue'
 import type { ProviderRequestProfile, ProviderRequestProfiles, ProviderRequestProfileUpdates } from '@/api'
 import type { BuiltinProvider } from '@/providers/catalog'
-import { ZSegmented } from '@codex-proxy/ui'
 import { isEqual } from 'es-toolkit'
 import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import ProviderSelect from '@/components/ProviderSelect.vue'
 import AntigravityRequestProfileEditor from '@/providers/antigravity/request-profile/AntigravityRequestProfileEditor.vue'
-import { formatProviderLabel, PROVIDER_IDS, providerIcon } from '@/providers/catalog'
+import { PROVIDER_IDS } from '@/providers/catalog'
 import OpenAiRequestProfileEditor from '@/providers/openai/request-profile/OpenAiRequestProfileEditor.vue'
 import XaiRequestProfileEditor from '@/providers/xai/request-profile/XaiRequestProfileEditor.vue'
 
@@ -37,12 +37,6 @@ const model = defineModel<ProviderRequestProfiles>({
 const updates = defineModel<ProviderRequestProfileUpdates>('updates')
 const selectedProvider = shallowRef<BuiltinProvider>(PROVIDER_IDS[0]!)
 const provider = computed(() => props.provider ?? selectedProvider.value)
-const providerOptions = PROVIDER_IDS.map(value => ({
-  value,
-  label: formatProviderLabel(value),
-  icon: providerIcon(value),
-}))
-const providerSelectorStyle = { width: `${providerOptions.length * 40}px` }
 const drafts = shallowRef<ProviderRequestProfiles>({})
 const profile = computed<ProviderRequestProfile | null | undefined>({
   get: () => {
@@ -84,15 +78,12 @@ watch(() => props.active, (active) => {
 
 <template>
   <div class="grid min-w-0 gap-4">
-    <ZSegmented
+    <ProviderSelect
       v-if="!allowInherit && !props.provider"
       v-model="selectedProvider"
       class="max-w-full justify-self-end"
       :aria-label="t('settings.clientProfile.clientIdentityProvider')"
-      :options="providerOptions"
       :disabled="disabled"
-      :style="providerSelectorStyle"
-      display="icon"
     />
     <component
       :is="editors[provider]"
@@ -104,15 +95,12 @@ watch(() => props.active, (active) => {
       :disabled="disabled"
     >
       <template #source-extra>
-        <ZSegmented
+        <ProviderSelect
           v-if="!props.provider"
           v-model="selectedProvider"
           class="max-w-full shrink-0"
           :aria-label="t('settings.clientProfile.upstreamIdentityPlatform')"
-          :options="providerOptions"
           :disabled="disabled"
-          :style="providerSelectorStyle"
-          display="icon"
         />
       </template>
     </component>

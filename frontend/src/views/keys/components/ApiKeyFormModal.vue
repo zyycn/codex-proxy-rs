@@ -2,12 +2,14 @@
 import type { ApiKeyFormValue } from '../composables/useApiKeyEditor'
 
 import type { AccountGroupRef, ApiKeyPeerSharing } from '@/api'
+import type { BuiltinProvider } from '@/providers/catalog'
 import { ZButton, ZDialog, ZForm, ZFormItem, ZInput } from '@codex-proxy/ui'
 import { KeyRound } from '@lucide/vue'
 
-import { computed, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
+import ProviderSettingsSection from '@/components/ProviderSettingsSection.vue'
 import ProviderRequestProfilesEditor from '@/components/request-profile/index.vue'
 import { isValidInstallationSeed } from '@/providers/openai/request-profile/installationSeed'
 import InstallationSeedField from '@/providers/openai/request-profile/InstallationSeedField.vue'
@@ -32,6 +34,8 @@ const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ default: false })
 const form = defineModel<ApiKeyFormValue>('form', { required: true })
+const provider = shallowRef<BuiltinProvider>('openai')
+const seedField = useTemplateRef<InstanceType<typeof InstallationSeedField>>('seedField')
 const title = computed(() => props.editing
   ? t('keys.actions.editKey')
   : t('keys.filters.createApiKey'))
@@ -42,10 +46,22 @@ const installationSeedError = computed(() => isValidInstallationSeed(form.value.
   ? ''
   : t('settings.clientProfile.invalidInstallationSeed'))
 
-watch(open, () => formRef.value?.clearValidate())
+watch(open, (visible) => {
+  formRef.value?.clearValidate()
+  if (visible)
+    provider.value = 'openai'
+})
 
 async function requestSave() {
-  if (props.saving || installationSeedError.value || !await formRef.value?.validate().catch(() => false))
+  if (props.saving)
+    return
+  if (installationSeedError.value) {
+    provider.value = 'openai'
+    await nextTick()
+    seedField.value?.focus()
+    return
+  }
+  if (!await formRef.value?.validate().catch(() => false))
     return
   emit('save')
 }
@@ -123,27 +139,30 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
 
       <ApiKeyPeerSharingField :sharing="form.peerSharing" :disabled="saving" @change="updatePeerSharing" />
 
-      <div class="grid gap-4">
+      <ApiKeyLimitFields
+        v-model:daily-limit-usd="form.dailyLimitUsd" v-model:weekly-limit-usd="form.weeklyLimitUsd"
+        v-model:max-concurrency="form.maxConcurrency" v-model:requests-per-minute="form.requestsPerMinute"
+        :disabled="saving"
+      />
+
+      <ProviderSettingsSection v-model="provider" :disabled="saving">
         <ZFormItem :label="t('keys.editor.upstreamIdentity')">
           <ProviderRequestProfilesEditor
             :model-value="form.providerRequestProfileOverrides" allow-inherit
             :active="open"
+            :provider="provider"
             :disabled="saving"
             @update:model-value="updateForm('providerRequestProfileOverrides', $event)"
           />
         </ZFormItem>
 
         <InstallationSeedField
+          v-if="provider === 'openai'"
+          ref="seedField"
           v-model="form.installationSeed" :error="installationSeedError" :disabled="saving"
           :placeholder="t('settings.clientProfile.installationSeedPlaceholder')"
         />
-      </div>
-
-      <ApiKeyLimitFields
-        v-model:daily-limit-usd="form.dailyLimitUsd" v-model:weekly-limit-usd="form.weeklyLimitUsd"
-        v-model:max-concurrency="form.maxConcurrency" v-model:requests-per-minute="form.requestsPerMinute"
-        :disabled="saving"
-      />
+      </ProviderSettingsSection>
     </ZForm>
 
     <template #footer>
@@ -153,7 +172,6 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
       <ZButton
         type="primary"
         :loading="saving"
-        :disabled="!!installationSeedError"
         @click="requestSave"
       >
         {{ editing ? t('common.actions.save') : t('common.actions.create') }}

@@ -70,7 +70,9 @@
       "filter": "按平台筛选",
       "unknown": "未知平台",
       "customAuth": "自定义认证 · {normalized}",
-      "unknownAuth": "未知认证类型"
+      "unknownAuth": "未知认证类型",
+      "settings": "平台设置",
+      "select": "选择平台"
     },
     "location": {
       "resolving": "正在解析出口位置",

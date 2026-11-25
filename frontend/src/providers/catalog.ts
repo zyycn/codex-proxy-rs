@@ -4,7 +4,7 @@ import { Fingerprint, Plug } from '@lucide/vue'
 import { t } from '@/i18n'
 
 const providers = {
-  openai: { label: 'Codex', icon: Openai },
+  openai: { label: 'OpenAI', icon: Openai },
   xai: { label: 'xAI', icon: Xai },
   antigravity: { label: 'Antigravity', icon: GoogleAntigravity },
 } as const

@@ -70,7 +70,9 @@
       "filter": "Filter by platform",
       "unknown": "Unknown platform",
       "customAuth": "Custom authentication · {normalized}",
-      "unknownAuth": "Unknown authentication type"
+      "unknownAuth": "Unknown authentication type",
+      "settings": "Platform settings",
+      "select": "Select platform"
     },
     "location": {
       "resolving": "Resolving exit location",

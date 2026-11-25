@@ -44,7 +44,8 @@
       "subagents": "Collaborative subagents",
       "memberModels": "Member account models",
       "fastModeHelp": "Default follows the client. Disable downgrades both accelerated tiers to standard. A forced tier overrides the client selection when the model supports it.",
-      "subagentsHelp": "Enable lets the client decide when to start a collaborative subagent. Disable rejects requests identified as coming from a collaborative subagent."
+      "subagentsHelp": "Enable lets the client decide when to start a collaborative subagent. Disable rejects requests identified as coming from a collaborative subagent.",
+      "noProviderSettings": "No group-specific settings for this platform"
     },
     "metrics": {
       "restricted": "Restricted",

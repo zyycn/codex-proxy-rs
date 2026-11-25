@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import type { ApiKeyLimitField } from '../composables/useApiKeyFormRules'
 import type { AccountGroupRef, ApiKey, ApiKeyBatchChanges, ApiKeyPeerSharing, ProviderRequestProfileUpdates } from '@/api'
+import type { BuiltinProvider } from '@/providers/catalog'
 import { ZButton, ZConfirmDialog, ZDialog, ZForm, ZFormItem } from '@codex-proxy/ui'
 import { KeyRound } from '@lucide/vue'
 import { isEqual } from 'es-toolkit'
-import { computed, ref, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { batchUpdateApiKeys } from '@/api'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
+import ProviderSettingsSection from '@/components/ProviderSettingsSection.vue'
 import ProviderRequestProfilesEditor from '@/components/request-profile/index.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { notification as ZNotification } from '@/plugins/notification'
@@ -29,6 +31,8 @@ const open = defineModel<boolean>({ required: true })
 const { t } = useI18n({ useScope: 'global' })
 const { loading, run } = useAsyncAction()
 const formRef = useTemplateRef<InstanceType<typeof ZForm>>('formElement')
+const seedField = useTemplateRef<InstanceType<typeof InstallationSeedField>>('seedField')
+const provider = shallowRef<BuiltinProvider>('openai')
 const rules = useApiKeyLimitRules()
 const confirmAll = ref(false)
 function emptyForm() {
@@ -146,10 +150,11 @@ const changes = computed<ApiKeyBatchChanges>(() => {
   }
   return patch
 })
-const canSave = computed(() => props.keys.length > 0 && Object.keys(changes.value).length > 0 && !invalidScope.value && !seedError.value)
+const canSave = computed(() => props.keys.length > 0 && Object.keys(changes.value).length > 0 && !invalidScope.value)
 
 watch(open, (visible) => {
   if (visible) {
+    provider.value = 'openai'
     form.value = emptyForm()
     touchedLimits.value.clear()
     for (const field of apiKeyLimitFields)
@@ -158,7 +163,15 @@ watch(open, (visible) => {
 })
 
 async function save() {
-  if (!canSave.value || loading.value || !await formRef.value?.validate().catch(() => false))
+  if (!canSave.value || loading.value)
+    return
+  if (seedError.value) {
+    provider.value = 'openai'
+    await nextTick()
+    seedField.value?.focus()
+    return
+  }
+  if (!await formRef.value?.validate().catch(() => false))
     return
   if (form.value.groupIds?.length === 0) {
     confirmAll.value = true
@@ -201,17 +214,17 @@ async function applyChanges() {
 
       <ApiKeyPeerSharingField :sharing="sharing" :disabled="loading" @change="updateSharing" />
 
-      <div class="grid gap-4">
-        <ZFormItem :label="t('keys.editor.upstreamIdentity')">
-          <ProviderRequestProfilesEditor v-model:updates="form.profiles" :initial-profiles="initialProfiles" allow-inherit :active="open" :disabled="loading" />
-        </ZFormItem>
-        <InstallationSeedField v-model="form.installationSeed" :disabled="loading" :error="seedError" :placeholder="hasExistingSeed ? t('accounts.modelAccess.reserve') : t('settings.clientProfile.installationSeedPlaceholder')" />
-      </div>
       <ApiKeyLimitFields
         v-model:daily-limit-usd="form.dailyLimitUsd" v-model:weekly-limit-usd="form.weeklyLimitUsd"
         v-model:max-concurrency="form.maxConcurrency" v-model:requests-per-minute="form.requestsPerMinute"
         :mixed="mixedLimits" :disabled="loading" @edit="touchedLimits.add($event)"
       />
+      <ProviderSettingsSection v-model="provider" :disabled="loading">
+        <ZFormItem :label="t('keys.editor.upstreamIdentity')">
+          <ProviderRequestProfilesEditor v-model:updates="form.profiles" :initial-profiles="initialProfiles" allow-inherit :active="open" :provider="provider" :disabled="loading" />
+        </ZFormItem>
+        <InstallationSeedField v-if="provider === 'openai'" ref="seedField" v-model="form.installationSeed" :disabled="loading" :error="seedError" :placeholder="hasExistingSeed ? t('accounts.modelAccess.reserve') : t('settings.clientProfile.installationSeedPlaceholder')" />
+      </ProviderSettingsSection>
     </ZForm>
 
     <template #footer>

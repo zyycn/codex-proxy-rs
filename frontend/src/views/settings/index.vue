@@ -7,6 +7,7 @@ import { Save, Undo2 } from '@lucide/vue'
 import { computed, nextTick, reactive, shallowRef, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import ProviderSelect from '@/components/ProviderSelect.vue'
 
 import { isBuiltinProvider, PROVIDER_IDS } from '@/providers/catalog'
 
@@ -19,7 +20,6 @@ import GuardianReviewCard from './components/GuardianReviewCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import PricingSection from './components/pricing/index.vue'
 import PrivacyPolicyCard from './components/privacy/index.vue'
-import ProviderSettingsNav from './components/ProviderSettingsNav.vue'
 import RequestCountryCard from './components/RequestCountryCard.vue'
 import RequestHistoryCard from './components/RequestHistoryCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
@@ -195,7 +195,7 @@ watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => 
         :options="sectionOptions"
         @update:model-value="switchSection"
       />
-      <ProviderSettingsNav v-if="section === 'upstream'" :model-value="provider" :disabled="disabled" @update:model-value="switchProvider" />
+      <ProviderSelect v-if="section === 'upstream'" :model-value="provider" display="label" class="w-full @sm/settings:w-auto @max-sm/settings:[&>button]:px-2" :aria-label="t('settings.page.providerLabel')" :disabled="disabled" @update:model-value="switchProvider" />
       <div v-if="isBasicSection || hasChanges" class="ml-auto flex items-center justify-end gap-2">
         <span v-if="hasChanges" class="mr-1 size-1.5 shrink-0 rounded-full bg-z-warning" aria-hidden="true" />
         <ZIconButton v-if="hasChanges" :aria-label="t('settings.page.undoAllBasicSettingsChanges')" variant="solid" :disabled="saving || loading || detectingLocation" @click="resetForm">

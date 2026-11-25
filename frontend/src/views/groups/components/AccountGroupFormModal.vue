@@ -3,13 +3,15 @@ import type { FormRules } from '@codex-proxy/ui'
 import type { AccountGroupFormValue } from '../composables/useAccountGroups'
 
 import type { AccountGroup } from '@/api'
-import { normalizeRgbaHexColor, ZButton, ZColorPicker, ZDialog, ZForm, ZFormItem, ZInput, ZSegmented, ZTextarea } from '@codex-proxy/ui'
-import { computed, useTemplateRef, watch } from 'vue'
+import type { BuiltinProvider } from '@/providers/catalog'
+import { normalizeRgbaHexColor, ZButton, ZColorPicker, ZDialog, ZEmpty, ZForm, ZFormItem, ZInput, ZSegmented, ZTextarea } from '@codex-proxy/ui'
+import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 
 import { useI18n } from 'vue-i18n'
 import AccountModelAccessField from '@/components/account-model-access-field/index.vue'
 import { accountModelAccessError } from '@/components/account-model-access-field/validation'
 import HelpPopover from '@/components/HelpPopover.vue'
+import ProviderSettingsSection from '@/components/ProviderSettingsSection.vue'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 
 const props = defineProps<{
@@ -25,6 +27,7 @@ const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ required: true })
 const form = defineModel<AccountGroupFormValue>('form', { required: true })
+const provider = shallowRef<BuiltinProvider>('openai')
 const formRef = useTemplateRef<InstanceType<typeof ZForm>>('formElement')
 const rules = computed<FormRules<AccountGroupFormValue>>(() => ({
   name: {
@@ -48,7 +51,11 @@ const rules = computed<FormRules<AccountGroupFormValue>>(() => ({
     message: t('groups.actions.selectValidGroupingColor'),
   },
 }))
-watch(open, () => formRef.value?.clearValidate())
+watch(open, (visible) => {
+  formRef.value?.clearValidate()
+  if (visible)
+    provider.value = 'openai'
+})
 
 async function requestSave() {
   if (props.saving || !await formRef.value?.validate().catch(() => false))
@@ -99,9 +106,31 @@ const description = computed(() => props.group
           :disabled="saving"
         />
       </ZFormItem>
-      <div class="col-span-full grid grid-cols-2 items-start gap-x-6 gap-y-4.5 sm:grid-cols-subgrid **:[[role=radio]]:px-3.5 md:**:[[role=radio]]:px-4.5">
-        <div class="contents sm:flex sm:min-w-0 sm:flex-wrap sm:items-start sm:gap-x-6 sm:gap-y-4.5">
-          <ZFormItem :label="t('groups.editor.fastMode')" class="col-span-full sm:flex-auto">
+      <ZFormItem :label="t('groups.editor.imageGeneration')" class="col-span-full">
+        <ZSegmented
+          :model-value="form.allowImageGeneration ? 'enabled' : 'disabled'"
+          :aria-label="t('groups.editor.imageGeneration')"
+          :options="toggleOptions"
+          :disabled="saving"
+          @update:model-value="form.allowImageGeneration = $event === 'enabled'"
+        />
+      </ZFormItem>
+      <AccountModelAccessField
+        class="col-span-full" :group-id="group?.id ?? null" :model-value="form.modelAccess" form-prop="modelAccess" :disabled="saving"
+        @update:model-value="value => { if (value) form.modelAccess = value }"
+      />
+      <ZFormItem :label="t('groups.editor.description')" class="col-span-full">
+        <ZTextarea
+          v-model="form.description"
+          :aria-label="t('groups.editor.groupDescription')"
+          :rows="2"
+          :placeholder="t('groups.editor.describePurposeOfThisGroup')"
+          :disabled="saving"
+        />
+      </ZFormItem>
+      <ProviderSettingsSection v-model="provider" class="col-span-full" :disabled="saving">
+        <div v-if="provider === 'openai'" class="flex flex-wrap items-start gap-x-6 gap-y-4.5">
+          <ZFormItem :label="t('groups.editor.fastMode')">
             <template #label-extra>
               <HelpPopover :label="t('groups.editor.fastMode')" :content="t('groups.editor.fastModeHelp')" />
             </template>
@@ -117,42 +146,21 @@ const description = computed(() => props.group
               :disabled="saving"
             />
           </ZFormItem>
-          <ZFormItem :label="t('groups.editor.imageGeneration')" class="sm:flex-auto">
+          <ZFormItem :label="t('groups.editor.subagents')">
+            <template #label-extra>
+              <HelpPopover :label="t('groups.editor.subagents')" :content="t('groups.editor.subagentsHelp')" />
+            </template>
             <ZSegmented
-              :model-value="form.allowImageGeneration ? 'enabled' : 'disabled'"
-              :aria-label="t('groups.editor.imageGeneration')"
+              :model-value="form.allowSubagents ? 'enabled' : 'disabled'"
+              :aria-label="t('groups.editor.subagents')"
               :options="toggleOptions"
               :disabled="saving"
-              @update:model-value="form.allowImageGeneration = $event === 'enabled'"
+              @update:model-value="form.allowSubagents = $event === 'enabled'"
             />
           </ZFormItem>
         </div>
-        <ZFormItem :label="t('groups.editor.subagents')">
-          <template #label-extra>
-            <HelpPopover :label="t('groups.editor.subagents')" :content="t('groups.editor.subagentsHelp')" />
-          </template>
-          <ZSegmented
-            :model-value="form.allowSubagents ? 'enabled' : 'disabled'"
-            :aria-label="t('groups.editor.subagents')"
-            :options="toggleOptions"
-            :disabled="saving"
-            @update:model-value="form.allowSubagents = $event === 'enabled'"
-          />
-        </ZFormItem>
-      </div>
-      <AccountModelAccessField
-        class="col-span-full" :group-id="group?.id ?? null" :model-value="form.modelAccess" form-prop="modelAccess" :disabled="saving"
-        @update:model-value="value => { if (value) form.modelAccess = value }"
-      />
-      <ZFormItem :label="t('groups.editor.description')" class="col-span-full">
-        <ZTextarea
-          v-model="form.description"
-          :aria-label="t('groups.editor.groupDescription')"
-          :rows="2"
-          :placeholder="t('groups.editor.describePurposeOfThisGroup')"
-          :disabled="saving"
-        />
-      </ZFormItem>
+        <ZEmpty v-else :title="t('groups.editor.noProviderSettings')" size="small" surface="none" />
+      </ProviderSettingsSection>
     </ZForm>
 
     <template #footer>

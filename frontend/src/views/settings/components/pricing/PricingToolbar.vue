@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ZButton, ZIconButton, ZInput, ZPopover, ZSegmented, ZSelect } from '@codex-proxy/ui'
+import { ZButton, ZIconButton, ZInput, ZPopover, ZSelect } from '@codex-proxy/ui'
 
 import { CircleAlert, Download, Percent, Plus, RotateCcw, Search, X } from '@lucide/vue'
 import { computed, shallowRef, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { formatProviderLabel, providerIcon } from '@/providers/catalog'
+import ProviderSelect from '@/components/ProviderSelect.vue'
 import { sourceLabels } from './model'
 
 const props = defineProps<{
@@ -26,11 +26,6 @@ const source = defineModel<string>('source', { required: true })
 const syncInfoOpen = shallowRef(false)
 const syncInfoId = useId()
 const syncTime = computed(() => props.syncedAtDisplay ?? t('settings.pricing.notSyncedYet'))
-const providerOptions = computed(() => props.providers.map(value => ({
-  label: formatProviderLabel(value),
-  value,
-  icon: providerIcon(value),
-})))
 </script>
 
 <template>
@@ -41,13 +36,11 @@ const providerOptions = computed(() => props.providers.map(value => ({
           <Search class="size-4" />
         </template>
       </ZInput>
-      <div v-if="providerOptions.length" class="min-w-0 max-w-full overflow-x-auto">
-        <ZSegmented
+      <div v-if="providers.length" class="min-w-0 max-w-full overflow-x-auto">
+        <ProviderSelect
           v-model="provider"
           :aria-label="t('settings.pricing.modelProvider')"
-          display="icon"
-          :style="{ width: `${providerOptions.length * 40 + 4}px` }"
-          :options="providerOptions"
+          :providers="providers"
           :disabled="saving"
         />
       </div>

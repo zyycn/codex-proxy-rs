@@ -44,7 +44,8 @@
       "subagents": "協作子代理",
       "memberModels": "成員帳號模型",
       "fastModeHelp": "預設跟隨用戶端。禁用會將加速請求降為標準檔。選擇快速或超快速時，若模型支援該檔位，分組設定會覆寫用戶端選擇",
-      "subagentsHelp": "啟用後由用戶端決定是否啟動協作子代理。禁用會拒絕可識別的協作子代理請求"
+      "subagentsHelp": "啟用後由用戶端決定是否啟動協作子代理。禁用會拒絕可識別的協作子代理請求",
+      "noProviderSettings": "此平台暫無分組專屬設定"
     },
     "metrics": {
       "restricted": "受限",

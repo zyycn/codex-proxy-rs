@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ZFormItem, ZIconButton, ZInput } from '@codex-proxy/ui'
 import { Dices } from '@lucide/vue'
+import { useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HelpPopover from '@/components/HelpPopover.vue'
 import { generateRequestId as generateUuid } from '@/utils/operation'
@@ -8,6 +9,10 @@ import { generateRequestId as generateUuid } from '@/utils/operation'
 defineProps<{ disabled: boolean, placeholder: string, error: string }>()
 const seed = defineModel<string>({ required: true })
 const { t } = useI18n({ useScope: 'global' })
+const input = useTemplateRef<InstanceType<typeof ZInput>>('input')
+defineExpose({
+  focus: () => input.value?.focus(),
+})
 </script>
 
 <template>
@@ -26,6 +31,7 @@ const { t } = useI18n({ useScope: 'global' })
       </ZIconButton>
     </template>
     <ZInput
+      ref="input"
       v-model="seed"
       :aria-label="t('settings.clientProfile.installationSeed')"
       :aria-invalid="!!error"

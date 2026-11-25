@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import type { DashboardWireProfile } from '@/api'
-import { ZCard, ZEmpty, ZSegmented } from '@codex-proxy/ui'
+import { ZCard, ZEmpty } from '@codex-proxy/ui'
 
 import { Box, CheckCircle2, Monitor, RefreshCw, ShieldCheck, Terminal, TriangleAlert } from '@lucide/vue'
 
 import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { formatProviderLabel, PROVIDER_IDS, providerIcon } from '@/providers/catalog'
+import ProviderSelect from '@/components/ProviderSelect.vue'
+import { PROVIDER_IDS } from '@/providers/catalog'
 import { describeWireProfile } from './identity'
 
 const props = defineProps<{
@@ -17,22 +18,17 @@ const { t } = useI18n({ useScope: 'global' })
 
 const selectedProvider = shallowRef('')
 
-const providerOptions = computed(() => {
-  const providers = new Set([
+const providers = computed(() => [
+  ...new Set([
     ...PROVIDER_IDS,
     ...props.profiles.map(profile => profile.provider),
-  ])
-  return Array.from(providers, value => ({
-    label: formatProviderLabel(value),
-    value,
-    icon: providerIcon(value),
-  }))
-})
+  ]),
+])
 
 const activeProvider = computed({
-  get: () => providerOptions.value.some(option => option.value === selectedProvider.value)
+  get: () => providers.value.includes(selectedProvider.value)
     ? selectedProvider.value
-    : providerOptions.value[0]?.value ?? '',
+    : providers.value[0] ?? '',
   set: (value: string) => { selectedProvider.value = value },
 })
 
@@ -148,13 +144,11 @@ const runtimeEnvironment = computed(() => {
         <h2 class="m-0 pt-0.5 text-xl leading-[1.15] font-heavy text-z-text text-balance">
           {{ t('dashboard.clientIdentity.title') }}
         </h2>
-        <div v-if="providerOptions.length > 1" class="min-w-0 max-w-full overflow-x-auto">
-          <ZSegmented
+        <div v-if="providers.length > 1" class="min-w-0 max-w-full overflow-x-auto">
+          <ProviderSelect
             v-model="activeProvider"
             :aria-label="t('dashboard.clientIdentity.provider')"
-            :options="providerOptions"
-            :style="{ width: `${providerOptions.length * 40 + 4}px` }"
-            display="icon"
+            :providers="providers"
           />
         </div>
       </div>
