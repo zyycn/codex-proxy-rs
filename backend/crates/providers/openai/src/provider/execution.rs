@@ -371,13 +371,13 @@ impl CodexProvider {
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?
                 .with_middleware_headers(middleware_headers)
                 .with_outbound_middleware(outbound_middleware)
-                .with_privacy(
+                .with_account_privacy(
                     context.privacy(),
                     context.cancellation().clone(),
-                    request
-                        .session_affinity
+                    lease.account(),
+                    affinity
                         .as_ref()
-                        .map(|affinity| affinity.persistence_hash().to_owned()),
+                        .map(|affinity| affinity.persistence_hash()),
                 ),
             response_origin: request.response_origin,
             endpoint_path: request.endpoint_path,

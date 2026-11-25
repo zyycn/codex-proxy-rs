@@ -306,13 +306,20 @@ fn encoded_size(value: &Value, limit: usize) -> Result<usize, &'static str> {
 }
 
 impl super::client::CodexBackendClient {
-    pub(crate) fn with_privacy(
+    /// 使用账号隔离流程选定的同一 lease 冻结隐私作用域，不从可改写的出站字段识别换号
+    pub(crate) fn with_account_privacy(
         mut self,
         policy: Option<Arc<dyn CompiledPrivacyPolicy>>,
         cancellation: gateway_core::lifecycle::CancellationToken,
-        session_scope: Option<String>,
+        account: &gateway_core::account::ProviderAccount,
+        session_scope: Option<&str>,
     ) -> Self {
-        self.privacy = policy.map(|policy| (policy, cancellation, session_scope));
+        self.privacy = policy.map(|policy| {
+            let scope = session_scope
+                .filter(|session| !session.trim().is_empty())
+                .map(|session| workspace::account_session_scope(session, account));
+            (policy, cancellation, scope)
+        });
         self
     }
 

@@ -68,8 +68,8 @@ fn metadata_operation() -> Operation {
     ))
 }
 
-fn workspace_operation(session: &str) -> Operation {
-    let metadata = json!({"session_id":session,"workspaces":{
+fn workspace_operation(session: &str, owner: &str) -> Operation {
+    let metadata = json!({"session_id":session,"turn_state":"source-turn-state","baggage":"source-baggage","workspaces":{
         "/Users/alex/projects/private":{"associated_remote_urls":{"origin":"https://example.invalid/private"},"latest_git_commit_hash":"abc","has_changes":true}
     }});
     let body = json!({"model":"gpt-5.4","input":"read /Users/alex/projects/private/note.txt",
@@ -84,7 +84,7 @@ fn workspace_operation(session: &str) -> Operation {
         );
     let state = ProviderSessionState::new(
         "openai",
-        json!({"account_id":"acct_provider_contract", "conversation_id":session, "continuation_scope":"persisted"})
+        json!({"account_id":owner, "conversation_id":session, "continuation_scope":"persisted"})
             .as_object()
             .unwrap()
             .clone(),
@@ -126,9 +126,15 @@ fn assert_workspace_alias(header: &str, body: &Value) -> String {
 }
 
 #[tokio::test]
-async fn privacy_workspace_alias_is_stable_for_http_session_and_changes_for_new_session() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_provider_contract").await;
+async fn privacy_workspace_rotation_and_account_isolation_share_the_selected_account() {
+    let stores = [
+        Arc::new(MemoryAccountStore::default()),
+        Arc::new(MemoryAccountStore::default()),
+    ];
+    let accounts = ["acct_provider_contract", "acct_scope_new"];
+    for (store, account) in stores.iter().zip(accounts) {
+        create_account(store, account).await;
+    }
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -139,16 +145,19 @@ async fn privacy_workspace_alias_is_stable_for_http_session_and_changes_for_new_
         )
         .mount(&server)
         .await;
-    let provider = provider_with_base_url(&store, server.uri());
-    for session in [
-        "workspace-session-a",
-        "workspace-session-a",
-        "workspace-session-b",
+    let providers = stores.map(|store| provider_with_base_url(&store, server.uri()));
+    for (account, session, owner) in [
+        (0, "workspace-session-a", 0),
+        (0, "workspace-session-a", 0),
+        (1, "workspace-session-a", 0),
+        (1, "workspace-session-a", 1),
+        (1, "workspace-session-b", 1),
+        (0, "workspace-session-a", 1),
     ] {
-        let mut stream = provider
+        let mut stream = providers[account]
             .clone()
             .execute(
-                planned_request("openai", workspace_operation(session)),
+                planned_request("openai", workspace_operation(session, accounts[owner])),
                 privacy_context(&workspace_policy(), true),
             )
             .await
@@ -167,9 +176,21 @@ async fn privacy_workspace_alias_is_stable_for_http_session_and_changes_for_new_
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(aliases.len(), 3);
+    assert_eq!(aliases.len(), 6);
     assert_eq!(aliases[0], aliases[1]);
     assert_ne!(aliases[0], aliases[2]);
+    assert_eq!(aliases[2], aliases[3]);
+    assert_ne!(aliases[3], aliases[4]);
+    assert_eq!(aliases[0], aliases[5]);
+    for (index, request) in requests.iter().enumerate() {
+        let metadata: Value =
+            serde_json::from_str(request.headers["x-codex-turn-metadata"].to_str().unwrap())
+                .unwrap();
+        let switched = matches!(index, 2 | 5);
+        for field in ["turn_state", "baggage"] {
+            assert_eq!(metadata.get(field).is_none(), switched);
+        }
+    }
 }
 
 #[tokio::test]
@@ -219,7 +240,10 @@ async fn privacy_workspace_alias_matches_websocket_opening_and_reused_frames() {
         let mut stream = provider
             .clone()
             .execute(
-                planned_request("openai", workspace_operation("workspace-session")),
+                planned_request(
+                    "openai",
+                    workspace_operation("workspace-session", "acct_provider_contract"),
+                ),
                 privacy_context(&workspace_policy(), false),
             )
             .await

@@ -16,6 +16,11 @@ fn aliases_preserve_path_style_and_execution_context_across_all_carriers() {
         "/Users/alex/Desktop/Codes/private",
         "/home/alex/projects/private",
         r"C:\Users\alex\projects\private",
+        "/Users/alex/projects/codex-proxy-rs",
+        "/home/alex/projects/工具_项目",
+        "/home/alex/projects/a",
+        "/home/alex/projects/123",
+        "/home/alex/projects/---",
     ] {
         let metadata = json!({"workspaces":{path:{"associated_remote_urls":{"origin":"https://example.invalid/team/private"},"latest_git_commit_hash":"abc","has_changes":true}},"request_kind":"turn"});
         let original_input = json!([{"role":"user","content":format!("<cwd>{path}</cwd>")}]);
@@ -55,10 +60,24 @@ fn aliases_preserve_path_style_and_execution_context_across_all_carriers() {
         assert!(!alias.contains("private") && !alias.contains("alex"));
         let name = alias.rsplit(['/', '\\']).next().unwrap();
         let parts = name.split('-').collect::<Vec<_>>();
-        assert_eq!(parts.len(), 5);
-        for index in [1, 3] {
+        assert_eq!(parts.len(), 4);
+        for index in [1, 2] {
             assert!((1..=1000).contains(&parts[index].parse::<u16>().unwrap()));
         }
+        let mut original = path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap()
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .collect::<Vec<_>>();
+        if original.is_empty() {
+            original.extend("project".chars());
+        }
+        let mut shuffled = parts[0].chars().collect::<Vec<_>>();
+        original.sort_unstable();
+        shuffled.sort_unstable();
+        assert_eq!(shuffled, original);
         assert_eq!(expected["workspaces"][alias], json!({"has_changes":true}));
         assert_eq!(result.body["input"], original_input);
         assert_eq!(result.body["turnMetadata"], expected);
@@ -85,6 +104,28 @@ fn aliases_preserve_path_style_and_execution_context_across_all_carriers() {
             expected["workspaces"]
         );
     }
+}
+
+#[test]
+fn long_workspace_names_produce_valid_directory_components() {
+    let path = format!("/workspace/{}", "工程".repeat(40));
+    let mut request = sample(
+        vec![anonymous_rule()],
+        json!({"turn_metadata":{"workspaces":{path:{}}}}),
+    );
+    request
+        .headers
+        .insert("session-id".into(), vec!["long-name".into()]);
+    let result = preview(request).unwrap();
+    let alias = result.body["turn_metadata"]["workspaces"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap();
+    let name = alias.rsplit('/').next().unwrap();
+    assert!(name.len() <= 255);
+    assert_eq!(name.split('-').next().unwrap().chars().count(), 48);
 }
 
 #[test]

@@ -1,20 +1,23 @@
-//! 工作区路径的会话化名、Git 元数据裁剪与预览会话识别
+//! 工作区路径的账号会话化名、Git 元数据裁剪与预览会话识别
 
+use gateway_core::account::ProviderAccount;
 use reqwest::header::HeaderMap;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::Budget;
 
-const NAMES: &[&str] = &[
-    "cedar", "maple", "willow", "pine", "birch", "elm", "oak", "ash", "harbor", "river", "meadow",
-    "forest", "garden", "valley", "summit", "brook", "atlas", "orbit", "lunar", "solar", "amber",
-    "coral", "jade", "pearl", "north", "south", "east", "west", "spring", "summer", "autumn",
-    "winter",
-];
-const KINDS: &[&str] = &[
-    "api", "web", "app", "tools", "core", "service", "client", "portal",
-];
+pub(super) fn account_session_scope(session: &str, account: &ProviderAccount) -> String {
+    // 与连接和续接隔离复用同一账号身份，正常令牌续期和出口变化不重置化名
+    let identity = crate::request_identity::oauth_identity_key(account);
+    let mut hash = Sha256::new();
+    hash.update(b"codex-workspace-account-session-v1\0");
+    for part in [session, identity.as_str()] {
+        hash.update((part.len() as u64).to_le_bytes());
+        hash.update(part.as_bytes());
+    }
+    hex::encode(hash.finalize())
+}
 
 pub(super) fn anonymize(value: &mut Value, budget: &mut Budget<'_>) -> Result<usize, &'static str> {
     let workspaces = value.as_object().ok_or("工作区映射必须是对象")?;
@@ -55,7 +58,7 @@ fn alias_path(path: &str, session: &str) -> Result<String, &'static str> {
     }
     let split = path.rfind(['/', '\\']).ok_or("工作区路径缺少工程目录")?;
     let mut hash = Sha256::new();
-    hash.update(b"codex-workspace-alias-v1\0");
+    hash.update(b"codex-workspace-alias-v2\0");
     hash.update((session.len() as u64).to_le_bytes());
     hash.update(session.as_bytes());
     hash.update(path.as_bytes());
@@ -75,20 +78,39 @@ fn alias_path(path: &str, session: &str) -> Result<String, &'static str> {
                 component.eq_ignore_ascii_case("users") || component.eq_ignore_ascii_case("home");
         }
     }
-    alias.push_str(NAMES[usize::from(digest[0]) % NAMES.len()]);
+    alias.push_str(&shuffled_project_name(&path[split + 1..], &digest));
     alias.push_str(&format!(
-        "-{}-",
-        u16::from_le_bytes([digest[6], digest[7]]) % 1000 + 1
-    ));
-    alias.push_str(KINDS[usize::from(digest[1]) % KINDS.len()]);
-    alias.push_str(&format!(
-        "-{}",
+        "-{}-{}",
+        u16::from_le_bytes([digest[6], digest[7]]) % 1000 + 1,
         u16::from_le_bytes([digest[8], digest[9]]) % 1000 + 1
     ));
     // 短后缀扩大命名空间，多个工程仍逐一校验冲突，禁止覆盖合并
     alias.push('-');
     alias.push_str(&hex::encode(&digest[2..6]));
     Ok(alias)
+}
+
+fn shuffled_project_name(name: &str, seed: &[u8]) -> String {
+    // 按 Unicode 字符打乱，限制长度使多字节名称加后缀后仍适合作为目录名
+    let original = name.chars().filter(|c| c.is_alphanumeric()).take(48);
+    let mut characters = original.clone().collect::<Vec<_>>();
+    if characters.is_empty() {
+        return "project".to_owned();
+    }
+    for index in (1..characters.len()).rev() {
+        let mut hash = Sha256::new();
+        hash.update(seed);
+        hash.update((index as u64).to_le_bytes());
+        let digest = hash.finalize();
+        let mut bytes = [0; 8];
+        bytes.copy_from_slice(&digest[..8]);
+        let target = (u64::from_le_bytes(bytes) % (index as u64 + 1)) as usize;
+        characters.swap(index, target);
+    }
+    if characters.iter().copied().eq(original) {
+        characters.rotate_left(1);
+    }
+    characters.into_iter().collect()
 }
 
 pub(super) fn preview_session(

@@ -86,6 +86,7 @@ pub enum PrivacyAction {
     SetValue,
     RenameKey,
     RemoveField,
+    AnonymizeWorkspace,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -1246,13 +1246,14 @@ impl CodexProvider {
                 .with_connection_budget(context.connection_budget().clone())
                 .with_middleware_headers(middleware_headers)
                 .with_outbound_middleware(outbound_middleware)
-                .with_privacy(
+                .with_account_privacy(
                     context.privacy(),
                     context.cancellation().clone(),
+                    lease.account(),
                     processed
                         .session_affinity
                         .as_ref()
-                        .map(|affinity| affinity.persistence_hash().to_owned()),
+                        .map(|affinity| affinity.persistence_hash()),
                 ),
             response_origin: self.responses_url.clone(),
             request: upstream_request,
