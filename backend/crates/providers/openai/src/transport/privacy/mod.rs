@@ -4,6 +4,7 @@ mod carrier;
 mod changes;
 mod rule;
 mod selector;
+mod workspace;
 
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -41,6 +42,7 @@ impl std::fmt::Debug for Policy {
 struct Budget<'a> {
     steps: usize,
     text_bytes: usize,
+    session_scope: Option<&'a str>,
     cancelled: &'a dyn Fn() -> bool,
 }
 
@@ -131,12 +133,14 @@ impl CompiledPrivacyPolicy for Policy {
         body: &mut Value,
         headers: &mut HeaderMap,
         turn_metadata: &mut Option<String>,
+        session_scope: Option<&str>,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<PrivacyRuleOutcome>, PrivacyError> {
         let mut outcomes = Vec::new();
         let mut budget = Budget {
             steps: 0,
             text_bytes: 0,
+            session_scope,
             cancelled,
         };
         let mut body_size = None;
@@ -245,8 +249,14 @@ pub fn preview(request: PrivacyPreviewRequest) -> Result<PrivacyPreviewResult, P
     }
     let mut body = request.body;
     let mut turn_metadata = request.turn_metadata;
-    let outcomes =
-        compile(&request.policy)?.apply(&mut body, &mut headers, &mut turn_metadata, &|| false)?;
+    let session = workspace::preview_session(&body, &headers, turn_metadata.as_deref());
+    let outcomes = compile(&request.policy)?.apply(
+        &mut body,
+        &mut headers,
+        &mut turn_metadata,
+        session.as_deref(),
+        &|| false,
+    )?;
     let headers = headers
         .keys()
         .map(|key| {
@@ -300,8 +310,9 @@ impl super::client::CodexBackendClient {
         mut self,
         policy: Option<Arc<dyn CompiledPrivacyPolicy>>,
         cancellation: gateway_core::lifecycle::CancellationToken,
+        session_scope: Option<String>,
     ) -> Self {
-        self.privacy = policy.map(|policy| (policy, cancellation));
+        self.privacy = policy.map(|policy| (policy, cancellation, session_scope));
         self
     }
 
@@ -311,9 +322,11 @@ impl super::client::CodexBackendClient {
         body: &mut Value,
         headers: &mut HeaderMap,
     ) -> Result<(), super::client::CodexClientError> {
-        if let Some((policy, cancellation)) = &self.privacy {
+        if let Some((policy, cancellation, session_scope)) = &self.privacy {
             let outcomes =
-                policy.apply(body, headers, &mut None, &|| cancellation.is_cancelled())?;
+                policy.apply(body, headers, &mut None, session_scope.as_deref(), &|| {
+                    cancellation.is_cancelled()
+                })?;
             for (index, outcome) in outcomes
                 .iter()
                 .enumerate()

@@ -592,6 +592,8 @@
         "fieldPath": "Field path",
         "fieldPathSyntax": "Field path syntax",
         "jsonPathHelp": "Supports object members, quoted keys, array indexes, and * wildcards, for example $[\"workspaces\"][\"/home/alex/demo\"]",
+        "sessionAliasEffect": "Stable session alias, Git metadata removed",
+        "anonymizeWorkspaceHelp": "Use a stable project alias per session and remove Git remotes and commit metadata while preserving execution paths",
         "targetHelp": "Use $ for environment text and a header name for request headers",
         "commonFields": "Common fields",
         "deleteMatchHelp": "Remove only fields or array items whose values match the regular expression",
@@ -645,6 +647,7 @@
         "gitCommitId": "Git commit ID",
         "gitRemoteCollection": "Git remote collection",
         "workspaceFingerprint": "Workspace fingerprint",
+        "anonymizeWorkspace": "Anonymize workspace per session",
         "unifyWorkspaceInformation": "Unify workspace information"
       },
       "testPlaceholder": "Run a test to see results"

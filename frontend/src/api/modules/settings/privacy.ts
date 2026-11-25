@@ -2,7 +2,7 @@ import type { RequestOptions } from '../../request'
 import request from '../../request'
 
 export type PrivacyScope = 'turn_metadata' | 'desktop_git_context' | 'environment_text' | 'request_body' | 'request_header'
-export type PrivacyAction = 'regex_replace' | 'set_value' | 'rename_key' | 'remove_field'
+export type PrivacyAction = 'regex_replace' | 'set_value' | 'rename_key' | 'remove_field' | 'anonymize_workspace'
 export type JsonValue = unknown
 
 export interface PrivacyRule {

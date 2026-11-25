@@ -27,13 +27,15 @@ const items = computed(() => props.steps.map((step, index) => {
       : step.selector.trim() || t('settings.privacy.steps.noFieldsSelected'))
   const scope = scopes.value.find(scope => scope.value === step.scope)?.label
   const action = actions.value.find(action => action.value === step.action)?.label
-  const effect = step.action === 'set_value'
-    ? `→ ${props.fixedValues[index] ?? '""'}`
-    : step.action === 'remove_field'
-      ? (step.pattern === null
-          ? t('settings.privacy.steps.deleteHelp')
-          : t('settings.privacy.steps.deleteAfterMatching', { value: step.pattern || t('settings.privacy.steps.noExpressionEntered') }))
-      : `→ ${step.replacement || t('settings.privacy.steps.clearMatchingContent')}`
+  const effect = step.action === 'anonymize_workspace'
+    ? t('settings.privacy.steps.sessionAliasEffect')
+    : step.action === 'set_value'
+      ? `→ ${props.fixedValues[index] ?? '""'}`
+      : step.action === 'remove_field'
+        ? (step.pattern === null
+            ? t('settings.privacy.steps.deleteHelp')
+            : t('settings.privacy.steps.deleteAfterMatching', { value: step.pattern || t('settings.privacy.steps.noExpressionEntered') }))
+        : `→ ${step.replacement || t('settings.privacy.steps.clearMatchingContent')}`
   return { step, field, scope, action, effect }
 }))
 

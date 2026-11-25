@@ -16,6 +16,13 @@ pub(super) struct CompiledStep {
 
 impl CompiledStep {
     pub(super) fn compile(rule: &PrivacyStep) -> Result<Self, &'static str> {
+        if rule.action == PrivacyAction::AnonymizeWorkspace
+            && (rule.scope != PrivacyScope::TurnMetadata
+                || rule.selector != "$.workspaces"
+                || rule.pattern.is_some())
+        {
+            return Err("工作区匿名化仅支持 turn_metadata 的 $.workspaces，且不使用匹配表达式");
+        }
         if rule.replacement.len() > 4096
             || serde_json::to_vec(&rule.value).map_or(true, |v| v.len() > 4096)
         {
@@ -92,6 +99,9 @@ impl CompiledStep {
     ) -> Result<bool, &'static str> {
         budget.step()?;
         match self.rule.action {
+            PrivacyAction::AnonymizeWorkspace => {
+                *count += super::workspace::anonymize(value, budget)?;
+            }
             PrivacyAction::RemoveField => {
                 if let Some(regex) = &self.regex {
                     let text = value.as_str().ok_or("条件删除只能匹配字符串值")?;

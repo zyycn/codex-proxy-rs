@@ -26,6 +26,7 @@ impl CompiledPrivacyPolicy for Compiled {
         body: &mut serde_json::Value,
         _: &mut http::HeaderMap,
         _: &mut Option<String>,
+        _: Option<&str>,
         _: &dyn Fn() -> bool,
     ) -> Result<Vec<PrivacyRuleOutcome>, PrivacyError> {
         *body = self.0.clone();
@@ -118,12 +119,24 @@ fn privacy_is_frozen_and_unrelated_request_settings_reuse_compiled_rules() {
         .unwrap();
     let mut body = serde_json::Value::Null;
     original
-        .apply(&mut body, &mut http::HeaderMap::new(), &mut None, &|| false)
+        .apply(
+            &mut body,
+            &mut http::HeaderMap::new(),
+            &mut None,
+            None,
+            &|| false,
+        )
         .unwrap();
     assert_eq!(body, "first");
     compiled(&changed)
         .unwrap()
-        .apply(&mut body, &mut http::HeaderMap::new(), &mut None, &|| false)
+        .apply(
+            &mut body,
+            &mut http::HeaderMap::new(),
+            &mut None,
+            None,
+            &|| false,
+        )
         .unwrap();
     assert_eq!(body, "second");
     assert_eq!(compiler.0.load(Ordering::SeqCst), 2);

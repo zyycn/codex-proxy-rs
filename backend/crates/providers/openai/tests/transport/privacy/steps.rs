@@ -122,7 +122,7 @@ fn later_step_failure_rolls_back_overlapping_body_changes_and_all_carriers() {
         }
         let original_headers = headers.clone();
         let mut metadata = request.turn_metadata.clone();
-        let result = compiled.apply(&mut body, &mut headers, &mut metadata, &|| false);
+        let result = compiled.apply(&mut body, &mut headers, &mut metadata, None, &|| false);
         assert_eq!(body, request.body);
         assert_eq!(headers, original_headers);
         assert_eq!(metadata, request.turn_metadata);
@@ -145,7 +145,7 @@ fn cancellation_between_steps_rolls_back_the_whole_rule() {
         headers.insert("x-private", "private".parse().unwrap());
         let original_headers = headers.clone();
         let calls = std::cell::Cell::new(0);
-        let result = compiled.apply(&mut body, &mut headers, &mut metadata, &|| {
+        let result = compiled.apply(&mut body, &mut headers, &mut metadata, None, &|| {
             calls.set(calls.get() + 1);
             calls.get() >= cancel_at
         });

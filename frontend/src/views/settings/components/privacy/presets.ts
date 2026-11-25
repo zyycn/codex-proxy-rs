@@ -27,6 +27,10 @@ export const scopes = computed<{ value: PrivacyScope, label: string }[]>(() => (
 ]))
 export const actions = computed<{ value: PrivacyAction, label: string }[]>(() => ([
   {
+    value: 'anonymize_workspace',
+    label: t('settings.privacy.presets.anonymizeWorkspace'),
+  },
+  {
     value: 'regex_replace',
     label: t('settings.privacy.presets.regularReplacement'),
   },
@@ -112,6 +116,18 @@ export function newRule(): PrivacyRule {
 }
 
 export const presets = computed<{ key: string, name: string, steps: Partial<PrivacyStep>[] }[]>(() => ([
+  {
+    key: 'session-workspace',
+    name: t('settings.privacy.presets.anonymizeWorkspace'),
+    steps: [
+      {
+        scope: 'turn_metadata',
+        selector: '$.workspaces',
+        action: 'anonymize_workspace',
+        pattern: null,
+      },
+    ],
+  },
   {
     key: 'workspace',
     name: t('settings.privacy.presets.unifyWorkspaceInformation'),
@@ -209,6 +225,7 @@ export function exampleRequest(): PrivacySample {
       },
     },
     headers: {
+      'session-id': ['example-session'],
       'x-codex-turn-metadata': [
         JSON.stringify(metadata),
       ],

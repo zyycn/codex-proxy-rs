@@ -696,6 +696,7 @@ pub struct CodexBackendClient {
     pub(in crate::transport) privacy: Option<(
         Arc<dyn gateway_core::settings::privacy::CompiledPrivacyPolicy>,
         gateway_core::lifecycle::CancellationToken,
+        Option<String>,
     )>,
     pub(in crate::transport) timezone: gateway_core::time::DeploymentTimeZone,
     pub(in crate::transport) connection_budget:

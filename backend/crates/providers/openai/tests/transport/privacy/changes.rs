@@ -230,7 +230,7 @@ fn unicode_reencoding_growth_rejects_and_rolls_back_only_current_rule() {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("x-remove", "test".parse().unwrap());
     let outcomes = compiled
-        .apply(&mut body, &mut headers, &mut None, &|| false)
+        .apply(&mut body, &mut headers, &mut None, None, &|| false)
         .unwrap();
     assert_eq!(body, original);
     assert_eq!(
@@ -264,7 +264,7 @@ fn cancellation_after_staging_leaves_every_carrier_unchanged() {
         let mut metadata = Some(r#"{"secret":true}"#.to_owned());
         let original_metadata = metadata.clone();
         let calls = std::cell::Cell::new(0);
-        let result = compiled.apply(&mut body, &mut headers, &mut metadata, &|| {
+        let result = compiled.apply(&mut body, &mut headers, &mut metadata, None, &|| {
             calls.set(calls.get() + 1);
             calls.get() >= cancel_at
         });

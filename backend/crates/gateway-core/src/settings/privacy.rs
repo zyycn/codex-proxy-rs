@@ -48,6 +48,7 @@ pub enum PrivacyAction {
     SetValue,
     RenameKey,
     RemoveField,
+    AnonymizeWorkspace,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,11 +113,13 @@ pub struct PrivacyRuleOutcome {
 
 /// 已编译策略随快照冻结，调用方提供独立的本次出站副本
 pub trait CompiledPrivacyPolicy: fmt::Debug + Send + Sync {
+    /// 会话作用域由调用方冻结，不能从已改写的出站身份重新派生
     fn apply(
         &self,
         body: &mut Value,
         headers: &mut http::HeaderMap,
         turn_metadata: &mut Option<String>,
+        session_scope: Option<&str>,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<PrivacyRuleOutcome>, PrivacyError>;
 }

@@ -207,7 +207,7 @@ impl CodexProvider {
                 Some(model.as_str().to_owned()),
                 lease.account_id().clone(),
             ))
-            .with_privacy(context.privacy(), context.cancellation().clone());
+            .with_privacy(context.privacy(), context.cancellation().clone(), None);
         let response_origin = Url::parse(&crate::transport::endpoint_url(
             &authentication.configuration.base_url,
             "/messages",
