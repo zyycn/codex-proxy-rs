@@ -86,6 +86,8 @@ pub enum PrivacyAction {
     SetValue,
     RenameKey,
     RemoveField,
+    AnonymizeProject,
+    /// 已保存的组合动作继续执行，编辑器将其展开为独立步骤
     AnonymizeWorkspace,
 }
 #[derive(Clone, Serialize, Deserialize)]
