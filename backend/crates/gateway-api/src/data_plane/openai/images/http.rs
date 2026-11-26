@@ -21,9 +21,9 @@ use crate::ApiState;
 use crate::data_plane::middleware::RequestInput;
 use crate::data_plane::{
     auth::{ClientKeyHeaders, authenticate_client, client_access_error_response},
-    openai_endpoints::provider_endpoint_response,
-    responses::OpenAiRequestHeaders,
-    router::{IMAGE_EDITS_PATH, IMAGE_GENERATIONS_PATH},
+    headers::session_context,
+    openai::endpoints::provider_endpoint_response,
+    openai::{IMAGE_EDITS_PATH, IMAGE_GENERATIONS_PATH},
 };
 use crate::middleware::headers::encode_headers;
 
@@ -111,7 +111,7 @@ async fn image_operation(
     } else {
         body
     };
-    let mut context = OpenAiRequestHeaders::from_headers(&headers).session_context();
+    let mut context = session_context(&headers);
     if let Some(turn_id) = headers
         .get("x-codex-image-turn-id")
         .and_then(|value| value.to_str().ok())

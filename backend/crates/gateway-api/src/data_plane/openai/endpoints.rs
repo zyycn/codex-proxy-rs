@@ -36,7 +36,7 @@ use crate::data_plane::middleware::{
 use crate::middleware::headers::encode_headers;
 use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
 
-use super::{
+use crate::data_plane::{
     error::{engine_error_response, gateway_error_response, protocol_error_response},
     service::DataPlaneService,
 };
@@ -142,7 +142,7 @@ where
     let mut response = if response.headers().contains_key("x-gateway-request-id") {
         response
     } else {
-        super::with_model_request_id(response, &request_id)
+        crate::data_plane::with_model_request_id(response, &request_id)
     };
     response
         .extensions_mut()
@@ -176,7 +176,7 @@ async fn collect_raw_json_response(
         },
         Err(error) => engine_error_response(&error),
     };
-    let response = super::with_model_request_id(response, &started.request_id);
+    let response = crate::data_plane::with_model_request_id(response, &started.request_id);
     let (parts, body) = response.into_parts();
     let framing = if parts.status.is_success() {
         MiddlewareFraming::JsonDocument
@@ -229,9 +229,13 @@ fn apply_response_headers(
     mut response: Response,
     response_headers: &[ProviderResponseHeader],
 ) -> Response {
-    let connection_options = super::responses::response_connection_options(response_headers);
+    let connection_options =
+        crate::data_plane::headers::response_connection_options(response_headers);
     for header in response_headers {
-        if !super::responses::response_header_is_forwardable(header.name(), &connection_options) {
+        if !crate::data_plane::headers::response_header_is_forwardable(
+            header.name(),
+            &connection_options,
+        ) {
             continue;
         }
         let Ok(name) = HeaderName::from_bytes(header.name().as_bytes()) else {

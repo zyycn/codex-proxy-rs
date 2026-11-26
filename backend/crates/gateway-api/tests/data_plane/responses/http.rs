@@ -41,13 +41,36 @@ use gateway_core::upstream::{OpaqueUpstreamValue, UpstreamSendState};
 use gateway_protocol::openai::sse::{encode_sse_event, parse_sse_events};
 use serde_json::{Value, json};
 
-use gateway_api::data_plane::responses::{collect_execution_response, stream_execution_response};
 use tower::ServiceExt;
 
 use crate::data_plane::middleware::{RequestMiddleware, ResponseFrameAction};
 use crate::data_plane::{
     api_router, authenticated_client_for_provider, authenticated_client_with_min_versions,
 };
+
+async fn execute_session(
+    session: Box<dyn ExecutionSession>,
+    streaming: bool,
+) -> axum::response::Response {
+    let execution = Arc::new(SessionExecution {
+        client: authenticated_client_for_provider("sk_delivery_test", "openai"),
+        session: Mutex::new(Some(session)),
+        middleware: None,
+    });
+    api_router(execution)
+        .await
+        .oneshot(
+            Request::post("/v1/responses")
+                .header(AUTHORIZATION, "Bearer sk_delivery_test")
+                .body(Body::from(
+                    json!({"model": "model-a", "input": "synthetic", "stream": streaming})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
 
 fn responses_middleware() -> RequestMiddleware {
     RequestMiddleware {
@@ -930,7 +953,7 @@ async fn streaming_encodes_first_frame_before_commit_and_http_delivery() {
         ))],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
 
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     assert_eq!(trace.client_statuses(), vec![200]);
@@ -1225,7 +1248,7 @@ async fn streaming_should_keep_alive_during_silent_compaction_without_restarting
             NextStep::FinalizeSuccess,
         ],
     );
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let mut body = response.into_body().into_data_stream();
     let first = body.next().await.expect("first frame").expect("body bytes");
     assert!(String::from_utf8_lossy(&first).contains("response.created"));
@@ -1280,7 +1303,7 @@ async fn dropping_stream_during_keepalive_should_cancel_and_finalize_execution()
             NextStep::FinalizeCancelled,
         ],
     );
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let mut body = response.into_body().into_data_stream();
     let _ = body.next().await.expect("first frame").expect("body bytes");
     let heartbeat = tokio::time::timeout(Duration::from_secs(20), body.next())
@@ -1317,7 +1340,7 @@ async fn streaming_keepalive_should_cover_four_minutes_before_first_event() {
     let start = tokio::time::Instant::now();
     let response = tokio::time::timeout(
         Duration::from_secs(20),
-        stream_execution_response(Box::new(session), None),
+        execute_session(Box::new(session), true),
     )
     .await
     .expect("headers and heartbeat must precede the first upstream event");
@@ -1361,7 +1384,7 @@ async fn streaming_error_after_initial_keepalive_should_be_a_terminal_sse_failur
         )],
     )
     .with_response_headers(headers(&[("x-codex-turn-state", "private-attempt-state")]));
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!response.headers().contains_key("x-codex-turn-state"));
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -1400,7 +1423,7 @@ async fn streaming_bad_request_preserves_extended_error_fields_before_and_after_
         Arc::new(Trace::default()),
         vec![NextStep::Error(EngineError::Provider(failure()))],
     );
-    let response = stream_execution_response(Box::new(immediate), None).await;
+    let response = execute_session(Box::new(immediate), true).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -1415,7 +1438,7 @@ async fn streaming_bad_request_preserves_extended_error_fields_before_and_after_
             EngineError::Provider(failure()),
         )],
     );
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let events = parse_sse_events(std::str::from_utf8(&bytes).unwrap()).unwrap();
@@ -1502,7 +1525,7 @@ async fn dropping_stream_before_first_event_should_cancel_the_original_wait() {
             NextStep::FinalizeCancelled,
         ],
     );
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let mut body = response.into_body().into_data_stream();
     assert_eq!(
         body.next().await.unwrap().unwrap(),
@@ -1529,7 +1552,7 @@ async fn streaming_response_should_disable_proxy_buffering_and_cache_transformat
         ProviderResponseHeader::new("cache-control", Bytes::from_static(b"public, max-age=60")),
     ]);
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
 
     assert_eq!(response.headers()["x-accel-buffering"], "no");
     assert_eq!(
@@ -1581,7 +1604,7 @@ async fn streaming_response_should_append_ordinary_headers_and_skip_unrepresenta
     )
     .with_response_headers(headers);
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
 
     assert_eq!(
         response
@@ -1674,7 +1697,7 @@ async fn streaming_commit_batch_preserves_pre_identity_wire_before_committing() 
         vec![NextStep::Event(batch), NextStep::FinalizeSuccess],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read SSE body");
@@ -1706,7 +1729,7 @@ async fn streaming_first_frame_encode_failure_cancels_before_commit() {
         ],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
 
     assert_eq!(
         response.status(),
@@ -1728,7 +1751,7 @@ async fn streaming_rate_limit_before_first_frame_should_persist_the_returned_429
         ))],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(trace.client_statuses(), vec![429]);
@@ -1755,7 +1778,7 @@ async fn streaming_failure_before_first_frame_should_return_safe_observed_header
         ),
     ]);
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
 
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(
@@ -1795,7 +1818,7 @@ async fn streaming_upstream_http_failure_before_first_frame_should_preserve_raw_
         vec![NextStep::Error(EngineError::Provider(error))],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
@@ -1867,7 +1890,7 @@ async fn buffered_upstream_http_failure_should_preserve_raw_response() {
             ),
         ]);
 
-    let response = collect_execution_response(Box::new(session)).await;
+    let response = execute_session(Box::new(session), false).await;
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
@@ -1902,7 +1925,7 @@ async fn streaming_canonical_identity_change_does_not_interrupt_wire_delivery() 
         ],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read SSE body");
@@ -1943,7 +1966,7 @@ async fn streaming_success_should_emit_terminal_event_and_done_marker() {
         ],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read complete SSE body");
@@ -1997,7 +2020,7 @@ async fn streaming_finalized_native_wire_should_end_cleanly() {
             ],
         );
 
-        let response = stream_execution_response(Box::new(session), None).await;
+        let response = execute_session(Box::new(session), true).await;
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("read transparent SSE body");
@@ -2023,7 +2046,7 @@ async fn streaming_completed_event_without_finalized_execution_should_fail_close
         ],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read failed SSE body");
@@ -2059,7 +2082,7 @@ async fn streaming_empty_terminal_should_emit_failure_done_and_cancel_execution(
         ],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read failed SSE body");
@@ -2092,7 +2115,7 @@ async fn streaming_error_should_emit_client_visible_upstream_details() {
         ],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read SSE body");
@@ -2166,7 +2189,7 @@ async fn streaming_upstream_wire_failure_should_not_be_rewritten_as_a_gateway_er
         ],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read SSE body");
@@ -2271,7 +2294,7 @@ async fn streaming_upstream_error_event_should_be_translated_to_response_failed_
             ],
         );
 
-        let response = stream_execution_response(Box::new(session), None).await;
+        let response = execute_session(Box::new(session), true).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
@@ -2342,7 +2365,7 @@ async fn streaming_capacity_error_after_commit_offers_client_retry() {
                 NextStep::Error(EngineError::Provider(error)),
             ],
         );
-        let response = stream_execution_response(Box::new(session), None).await;
+        let response = execute_session(Box::new(session), true).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 16 * 1024)
             .await
@@ -2426,7 +2449,7 @@ async fn atomic_uncommitted_upstream_failure_batch_should_be_forwarded_once() {
         ],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read SSE body");
@@ -2456,7 +2479,7 @@ async fn streaming_second_commit_request_should_fail_and_finalize_once() {
         ],
     );
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read failed SSE body");
@@ -2483,7 +2506,7 @@ async fn streaming_commit_failure_should_not_deliver_the_prepared_first_frame() 
     )
     .with_commit_failure();
 
-    let response = stream_execution_response(Box::new(session), None).await;
+    let response = execute_session(Box::new(session), true).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read error response");
@@ -2505,7 +2528,7 @@ async fn buffered_response_commits_only_after_complete_json_is_encoded() {
     let trace = Arc::new(Trace::default());
     let session = FakeSession::buffered(Arc::clone(&trace), vec![started(), completed()]);
 
-    let response = collect_execution_response(Box::new(session)).await;
+    let response = execute_session(Box::new(session), false).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read JSON body");
@@ -2570,7 +2593,7 @@ async fn buffered_response_collects_completed_output_items_without_rewriting_str
 
     let trace = Arc::new(Trace::default());
     let session = FakeSession::buffered_provider(Arc::clone(&trace), events);
-    let response = collect_execution_response(Box::new(session)).await;
+    let response = execute_session(Box::new(session), false).await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let mut expected = terminal;
@@ -2715,7 +2738,7 @@ async fn buffered_response_keeps_authoritative_terminal_and_supports_omitted_out
                 super::openai_wire_event(vec![], event_type, json!({"response": terminal})),
             ],
         );
-        let response = collect_execution_response(Box::new(session)).await;
+        let response = execute_session(Box::new(session), false).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let mut expected = terminal;
@@ -2752,10 +2775,10 @@ async fn buffered_response_rejects_incomplete_or_conflicting_output_items_before
             "response.completed",
             json!({"response": {"id": "resp_test", "output": []}}),
         ));
-        let response = collect_execution_response(Box::new(FakeSession::buffered_provider(
-            Arc::clone(&trace),
-            events,
-        )))
+        let response = execute_session(
+            Box::new(FakeSession::buffered_provider(Arc::clone(&trace), events)),
+            false,
+        )
         .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -2785,10 +2808,10 @@ async fn buffered_response_never_merges_items_from_a_different_wire_response() {
             super::openai_wire_event(vec![], "response.output_item.done", conflicting_event),
             super::openai_wire_event(vec![], "response.completed", json!({"response": terminal})),
         ];
-        let response = collect_execution_response(Box::new(FakeSession::buffered_provider(
-            Arc::clone(&trace),
-            events,
-        )))
+        let response = execute_session(
+            Box::new(FakeSession::buffered_provider(Arc::clone(&trace), events)),
+            false,
+        )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -2886,7 +2909,7 @@ async fn buffered_response_forwards_long_ordinary_provider_header_values() {
     let session = FakeSession::buffered(Arc::clone(&trace), vec![started(), completed()])
         .with_response_headers(vec![header]);
 
-    let response = collect_execution_response(Box::new(session)).await;
+    let response = execute_session(Box::new(session), false).await;
 
     assert_eq!(
         response
@@ -2905,7 +2928,7 @@ async fn buffered_encode_failure_cancels_without_commit() {
         vec![ProviderEvent::canonical(completed())],
     );
 
-    let response = collect_execution_response(Box::new(session)).await;
+    let response = execute_session(Box::new(session), false).await;
 
     assert_eq!(
         response.status(),
@@ -2922,7 +2945,7 @@ async fn buffered_commit_failure_should_cancel_after_encoding_without_returning_
     let session = FakeSession::buffered(Arc::clone(&trace), vec![started(), completed()])
         .with_commit_failure();
 
-    let response = collect_execution_response(Box::new(session)).await;
+    let response = execute_session(Box::new(session), false).await;
     let status = response.status();
 
     assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
@@ -2938,7 +2961,7 @@ async fn buffered_commit_failure_should_cancel_after_encoding_without_returning_
 async fn dropping_buffered_handler_before_commit_cancels_execution() {
     let trace = Arc::new(Trace::default());
     let session = FakeSession::pending_buffered(Arc::clone(&trace));
-    let task = tokio::spawn(async move { collect_execution_response(Box::new(session)).await });
+    let task = tokio::spawn(async move { execute_session(Box::new(session), false).await });
     tokio::task::yield_now().await;
 
     task.abort();
@@ -2959,7 +2982,7 @@ async fn buffered_rate_limit_should_persist_the_returned_429_status() {
         ),
     );
 
-    let response = collect_execution_response(Box::new(session)).await;
+    let response = execute_session(Box::new(session), false).await;
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(trace.client_statuses(), vec![429]);

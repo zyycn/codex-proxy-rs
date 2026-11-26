@@ -22,9 +22,9 @@ use gateway_core::operation::Operation;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::api_router;
-use super::authenticated_client;
-use super::models::ModelsExecution;
+use crate::data_plane::api_router;
+use crate::data_plane::authenticated_client;
+use crate::data_plane::models::ModelsExecution;
 
 const LIVE_KEY: &str = "sk_live_test";
 

@@ -3,20 +3,19 @@
 pub mod auth;
 pub mod body;
 mod chat_completions;
+mod codex;
 pub mod error;
 pub(crate) mod genai;
 pub mod generation;
-pub mod images;
-pub(crate) mod live;
+mod headers;
 mod messages;
 pub(crate) mod middleware;
-pub mod models;
-mod openai_endpoints;
+mod models;
+mod openai;
 mod peer_link;
 mod provider_endpoints;
 pub mod responses;
-pub mod router;
-pub mod search;
+pub(crate) mod router;
 pub(crate) mod service;
 mod usage;
 

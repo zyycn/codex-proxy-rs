@@ -371,7 +371,6 @@ fn decoder_should_preserve_the_openai_body_and_only_derive_stable_routing_facts(
             ]))
     );
     assert!(!decoded.metadata().stream());
-    assert!(decoded.metadata().store());
 }
 
 #[test]

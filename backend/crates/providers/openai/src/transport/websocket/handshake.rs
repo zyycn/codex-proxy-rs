@@ -415,7 +415,7 @@ fn websocket_opening_error(
         .headers()
         .get("retry-after")
         .and_then(|value| value.to_str().ok())
-        .and_then(gateway_protocol::openai::parse_retry_after_seconds)
+        .and_then(gateway_protocol::http::parse_retry_after_seconds)
         .or_else(|| events::retry_after_seconds_from_body(&body));
     CodexWebSocketExchangeError::Upstream(Box::new(CodexWebSocketUpstreamError {
         status_code,

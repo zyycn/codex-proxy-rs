@@ -36,6 +36,5 @@ pub use guardian::{
     CODEX_AUTO_REVIEW_MODEL, CodexGuardianRole, capture_codex_guardian_identity,
     codex_guardian_role,
 };
-pub use headers::{
-    is_transport_managed_request_header, parse_retry_after_seconds, response_header_is_forwardable,
-};
+
+pub use headers::is_private_response_header;

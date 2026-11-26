@@ -30,7 +30,7 @@ use gateway_core::upstream::UpstreamSendState;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::{api_router, authenticated_client};
+use crate::data_plane::{api_router, authenticated_client};
 
 const IMAGE_RESPONSE: &[u8] =
     br#"{ "created": 1787212800, "data": [{"b64_json":"AAEC"}], "future": 9007199254740993 }"#;

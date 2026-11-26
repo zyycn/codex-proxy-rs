@@ -2,6 +2,7 @@
 
 mod anthropic;
 mod genai;
+mod http;
 mod openai;
 mod request;
 

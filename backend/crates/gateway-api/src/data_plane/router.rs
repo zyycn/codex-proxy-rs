@@ -8,12 +8,9 @@ use axum::{
 
 use super::{
     chat_completions::chat_completions,
-    images::{image_edits, image_generations},
-    live,
     messages::{count_tokens, messages},
     models::{model_detail, models},
     responses::{responses, responses_websocket},
-    search::standalone_search,
     usage,
 };
 
@@ -24,9 +21,6 @@ pub(super) use gateway_protocol::openai::RESPONSES_PATH;
 pub(super) const MESSAGES_PATH: &str = "/v1/messages";
 pub(super) const MESSAGE_TOKENS_PATH: &str = "/v1/messages/count_tokens";
 pub(super) const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
-pub(super) const IMAGE_GENERATIONS_PATH: &str = "/v1/images/generations";
-pub(super) const IMAGE_EDITS_PATH: &str = "/v1/images/edits";
-pub(super) const SEARCH_PATH: &str = "/v1/alpha/search";
 pub(super) const MODELS_PATH: &str = "/v1/models";
 pub(super) const MODEL_DETAIL_PATH: &str = "/v1/models/{model_id}";
 pub(super) const USAGE_PATH: &str = "/v1/usage";
@@ -35,9 +29,6 @@ pub(super) const PEER_LINK_PATH: &str = "/v1/cpr/link";
 /// 构造模型数据面路由
 pub(crate) fn router() -> Router<ApiState> {
     Router::new()
-        .route(IMAGE_GENERATIONS_PATH, post(image_generations))
-        .route(IMAGE_EDITS_PATH, post(image_edits))
-        .route(SEARCH_PATH, post(standalone_search))
         .route(RESPONSES_PATH, get(responses_websocket).post(responses))
         .route(CHAT_COMPLETIONS_PATH, post(chat_completions))
         .route(MESSAGES_PATH, post(messages))
@@ -48,7 +39,7 @@ pub(crate) fn router() -> Router<ApiState> {
         .merge(super::genai::router())
         .merge(usage::router())
         .merge(super::peer_link::router())
-        .merge(live::router())
+        .merge(super::openai::router())
         // 生成请求正文属于客户端/上游协议；代理不能用私有大小上限提前拒绝
         // 上游本可接受的未来 payload
         .layer(DefaultBodyLimit::disable())

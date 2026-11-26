@@ -24,7 +24,7 @@ use crate::{
     data_plane::{
         auth::{ClientKeyHeaders, authenticate_client, client_access_error_response},
         error::runtime_unavailable_response,
-        live::{
+        openai::live::{
             filter_protocol_headers, live_error_response, offered_subprotocols,
             realtime_unsupported_response,
         },

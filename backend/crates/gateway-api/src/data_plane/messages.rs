@@ -23,7 +23,7 @@ use super::{
         ContinuationIntent, DecodedGenerationRequest, GenerationEndpoint, GenerationHttpRequest,
         GenerationRequestMetadata, execute_prepared_generation,
     },
-    responses::OpenAiRequestHeaders,
+    headers::session_context,
 };
 use crate::ApiState;
 
@@ -147,7 +147,7 @@ pub(super) fn decode_request(
             .get("stream")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-    let context = OpenAiRequestHeaders::from_headers(headers).session_context();
+    let context = session_context(headers);
     let operation = if counted {
         let payload = RawJsonPayload::new(protocol.wire(), Bytes::copy_from_slice(&body))
             .map_err(|_| invalid("Request protocol is invalid."))?
@@ -164,7 +164,6 @@ pub(super) fn decode_request(
         metadata: GenerationRequestMetadata {
             requested_model: model,
             stream,
-            store: false,
             continuation: ContinuationIntent::None,
             client_ip: None,
             user_agent: None,

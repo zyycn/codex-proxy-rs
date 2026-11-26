@@ -32,12 +32,11 @@ impl fmt::Debug for ContinuationIntent {
     }
 }
 
-/// Handler、Router 和 history owner 使用的请求元数据
+/// 生成入口的路由、续接与客户端观测事实
 #[derive(Clone, PartialEq, Eq)]
 pub struct GenerationRequestMetadata {
     pub(in crate::data_plane) requested_model: String,
     pub(in crate::data_plane) stream: bool,
-    pub(in crate::data_plane) store: bool,
     pub(in crate::data_plane) continuation: ContinuationIntent,
     pub(in crate::data_plane) client_ip: Option<IpAddr>,
     pub(in crate::data_plane) user_agent: Option<String>,
@@ -54,12 +53,6 @@ impl GenerationRequestMetadata {
     #[must_use]
     pub const fn stream(&self) -> bool {
         self.stream
-    }
-
-    /// 返回客户端 storage intent
-    #[must_use]
-    pub const fn store(&self) -> bool {
-        self.store
     }
 
     /// 返回 continuation intent
@@ -87,7 +80,6 @@ impl fmt::Debug for GenerationRequestMetadata {
             .debug_struct("GenerationRequestMetadata")
             .field("requested_model", &self.requested_model)
             .field("stream", &self.stream)
-            .field("store", &self.store)
             .field("continuation", &self.continuation)
             .field("client_ip", &self.client_ip)
             .field("has_user_agent", &self.user_agent.is_some())

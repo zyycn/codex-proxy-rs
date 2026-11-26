@@ -143,6 +143,7 @@ fn filter_client_headers(
 }
 
 fn client_response_header_is_forwardable(name: &str, connection_options: &[String]) -> bool {
-    gateway_protocol::openai::response_header_is_forwardable(name, connection_options)
+    gateway_protocol::http::response_header_is_forwardable(name, connection_options)
+        && !gateway_protocol::openai::is_private_response_header(name)
         && !is_codex_quota_header_name(name.trim())
 }

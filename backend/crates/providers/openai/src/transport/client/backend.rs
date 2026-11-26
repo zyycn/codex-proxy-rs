@@ -984,7 +984,7 @@ pub(in crate::transport) fn retry_after_seconds(
     headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
-        .and_then(gateway_protocol::openai::parse_retry_after_seconds)
+        .and_then(gateway_protocol::http::parse_retry_after_seconds)
         .or_else(|| body.and_then(retry_after_seconds_from_body))
 }
 

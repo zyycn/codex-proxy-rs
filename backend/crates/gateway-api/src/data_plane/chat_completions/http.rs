@@ -23,7 +23,7 @@ use crate::data_plane::{
         ContinuationIntent, DecodedGenerationRequest, GenerationEndpoint, GenerationHttpRequest,
         GenerationRequestMetadata, execute_prepared_generation,
     },
-    responses::OpenAiRequestHeaders,
+    headers::session_context,
 };
 
 pub(in crate::data_plane) async fn chat_completions(
@@ -92,13 +92,12 @@ pub(in crate::data_plane) fn decode_request(
         .map_err(|_| RequestDecodeError::CanonicalContract {
             field: "chat request".to_owned(),
         })?
-        .with_context(OpenAiRequestHeaders::from_headers(headers).session_context());
+        .with_context(session_context(headers));
     Ok(DecodedGenerationRequest {
         operation: Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
         metadata: GenerationRequestMetadata {
             requested_model: model,
             stream,
-            store: false,
             continuation: ContinuationIntent::None,
             client_ip: None,
             user_agent: None,

@@ -2,7 +2,7 @@
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::{engine::middleware::MiddlewareHeader, operation::Operation};
-use gateway_protocol::openai::is_transport_managed_request_header;
+use gateway_protocol::http::is_transport_managed_request_header;
 use serde_json::Value;
 
 pub(crate) fn request_headers(

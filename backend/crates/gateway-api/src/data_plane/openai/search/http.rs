@@ -18,9 +18,9 @@ use crate::ApiState;
 use crate::data_plane::middleware::RequestInput;
 use crate::data_plane::{
     auth::{ClientKeyHeaders, authenticate_client, client_access_error_response},
-    openai_endpoints::provider_endpoint_response,
-    responses::OpenAiRequestHeaders,
-    router::SEARCH_PATH,
+    headers::session_context,
+    openai::SEARCH_PATH,
+    openai::endpoints::provider_endpoint_response,
 };
 use crate::middleware::headers::encode_headers;
 
@@ -60,7 +60,7 @@ pub(crate) async fn standalone_search(
 }
 
 fn search_operation(body: Bytes, headers: &HeaderMap) -> Result<Operation, GatewayError> {
-    let context = OpenAiRequestHeaders::from_headers(headers).session_context();
+    let context = session_context(headers);
     let payload = RawJsonPayload::new(OPENAI_PROTOCOL, body)
         .map_err(|_| {
             GatewayError::new(

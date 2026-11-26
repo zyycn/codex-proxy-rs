@@ -288,10 +288,9 @@ fn client_payload(wire: &ProtocolWireEvent) -> Option<Value> {
         .flat_map(|value| value.split(','))
         .map(|name| name.trim().to_ascii_lowercase())
         .collect();
-    if headers
-        .keys()
-        .all(|name| super::response_header_is_forwardable(name, &connection_options))
-    {
+    if headers.keys().all(|name| {
+        crate::data_plane::headers::response_header_is_forwardable(name, &connection_options)
+    }) {
         return None;
     }
     // 只剥离既有响应头隔离策略禁止的字段，metadata 业务扩展保持不透明
@@ -299,7 +298,9 @@ fn client_payload(wire: &ProtocolWireEvent) -> Option<Value> {
     projected
         .get_mut("headers")?
         .as_object_mut()?
-        .retain(|name, _| super::response_header_is_forwardable(name, &connection_options));
+        .retain(|name, _| {
+            crate::data_plane::headers::response_header_is_forwardable(name, &connection_options)
+        });
     Some(projected)
 }
 

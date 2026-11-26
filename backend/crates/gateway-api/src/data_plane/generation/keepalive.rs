@@ -21,13 +21,6 @@ use crate::data_plane::middleware::{SSE_KEEPALIVE_FRAME, SSE_KEEPALIVE_INTERVAL}
 pub(in crate::data_plane) async fn response(
     response: impl Future<Output = Response> + Send + 'static,
     admitted: oneshot::Receiver<ResponseCommit>,
-) -> Response {
-    response_with_encoder(response, admitted, None, true).await
-}
-
-pub(in crate::data_plane) async fn response_with_encoder(
-    response: impl Future<Output = Response> + Send + 'static,
-    admitted: oneshot::Receiver<ResponseCommit>,
     error_encoder: Option<fn(&Value) -> Bytes>,
     append_done: bool,
 ) -> Response {

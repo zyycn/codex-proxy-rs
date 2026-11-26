@@ -113,7 +113,7 @@ pub(super) fn decode(
         }
     }
     context.insert("headers".into(), Value::Object(attribution));
-    let passthrough = crate::data_plane::responses::request::passthrough_headers(headers);
+    let passthrough = crate::data_plane::headers::passthrough_headers(headers);
     if !passthrough.is_empty() {
         context.insert("opaque_request_headers".into(), Value::Array(passthrough));
     }
@@ -149,7 +149,6 @@ pub(super) fn decode(
         metadata: GenerationRequestMetadata {
             requested_model: model.to_owned(),
             stream,
-            store: false,
             continuation: ContinuationIntent::None,
             client_ip: None,
             user_agent: None,

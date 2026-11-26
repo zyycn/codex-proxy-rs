@@ -130,10 +130,14 @@ pub(super) fn response_metadata_event(
 }
 
 fn response_event_headers(response_headers: &[ProviderResponseHeader]) -> Map<String, Value> {
-    let connection_options = super::super::response_connection_options(response_headers);
+    let connection_options =
+        crate::data_plane::headers::response_connection_options(response_headers);
     let mut headers = Map::new();
     for header in response_headers {
-        if !super::super::response_header_is_forwardable(header.name(), &connection_options) {
+        if !crate::data_plane::headers::response_header_is_forwardable(
+            header.name(),
+            &connection_options,
+        ) {
             continue;
         }
         let Ok(name) = HeaderName::from_bytes(header.name().as_bytes()) else {

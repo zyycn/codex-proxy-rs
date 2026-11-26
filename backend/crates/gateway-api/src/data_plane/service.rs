@@ -11,7 +11,7 @@ use gateway_core::engine::execution::{
 };
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLifecycle};
-use gateway_core::routing::{ProviderCatalogUnavailable, PublicModelDescriptor, PublicModelId};
+use gateway_core::routing::PublicModelId;
 use uuid::Uuid;
 
 use super::auth::ClientApiKeyAuthError;
@@ -66,22 +66,6 @@ impl DataPlaneService {
             .into_iter()
             .map(|model| model.as_str().to_owned())
             .collect()
-    }
-
-    pub(crate) async fn client_model_catalog(
-        &self,
-        client: &AuthenticatedClient,
-        client_version: &str,
-    ) -> Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable> {
-        let context = crate::middleware::current();
-        self.execution
-            .client_model_catalog(
-                client,
-                "codex",
-                client_version,
-                context.as_ref().and_then(|ctx| ctx.extensions.peer_route()),
-            )
-            .await
     }
 
     pub(crate) fn contains_public_model(

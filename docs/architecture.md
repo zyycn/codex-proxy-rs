@@ -581,7 +581,14 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 
 Antigravity 的 `credential/catalog` 持有与凭据版本绑定的项目与模型观测，`credential/quota` 管理额度快照。凭据续期后的目录修复由 `provider/workers` 编排。管理端连接测试固定账号并用其凭据查询项目，停用账号仍可接受探测
 
-数据面协议入口位于 `gateway-api/src/data_plane`。Responses、Chat Completions、Messages 与 GenAI 共用 `generation` 的执行和交付流程。GenAI 从 URL 解码模型和生成方法，要求候选模型在原生目录中声明对应协议。Core 在 Key 的账号范围内匹配能力，Antigravity 将选中的 GenAI 请求封装为 Cloud Code 上游请求
+数据面入口位于 `gateway-api/src/data_plane`，按协议、客户端扩展和平台专属端点划分职责：
+
+- `responses`、`chat_completions`、`messages`、`genai` 拥有各自协议入口，生成与计数共用 `generation` 的执行交付、取消传播和连接生命周期
+- `codex` 拥有客户端模型目录投影、Guardian、子代理与轮次身份解析，Responses 入口组合这些扩展；Responses 同时服务 OpenAI 与 xAI，不绑定某个 Provider
+- `openai` 聚合当前绑定 OpenAI Provider 的 Images、独立 Search 与 Live 入口，通过 Core 端口调用上游能力；账号认证和上游传输仍由 Provider 拥有
+- `headers` 拥有数据面入站业务头与响应头边界，各协议直接使用公共头处理；跨协议 HTTP 规则和重试时间解析归 `gateway-protocol/http`，OpenAI/Codex 私有响应头分类归 `gateway-protocol/openai/headers`，API 出口组合两者
+
+GenAI 从 URL 解码模型和生成方法，要求候选模型在原生目录中声明对应协议。Core 在 Key 的账号范围内匹配能力，Antigravity 将选中的 GenAI 请求封装为 Cloud Code 上游请求
 
 Chat 的角色、公共字段结构与交付选项由 `gateway-protocol/chat_completions/request` 统一校验，目标转换器只补充可表达性与映射规则。选路事实只读取协议声明位置，不递归解释 schema、工具参数或扩展字段。
 

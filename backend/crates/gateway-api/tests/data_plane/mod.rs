@@ -5,17 +5,14 @@ mod chat_completions;
 mod error;
 mod genai;
 mod group_permissions;
-mod images;
-mod live;
 mod messages;
 mod middleware;
 mod models;
-mod openai_endpoints;
+mod openai;
 mod peer_link;
 mod provider_endpoints;
 mod responses;
 mod router;
-mod search;
 mod usage;
 
 use std::collections::{BTreeMap, BTreeSet};

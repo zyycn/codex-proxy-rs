@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use gateway_core::operation::ProviderHttpHeader;
-use gateway_protocol::openai::is_transport_managed_request_header;
+use gateway_protocol::http::is_transport_managed_request_header;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::compat::is_non_codex_request_header;

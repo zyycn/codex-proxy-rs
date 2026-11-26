@@ -96,10 +96,10 @@ fn response_create_should_default_to_the_websocket_streaming_contract() {
     .expect("decode response.create");
 
     assert!(decoded.metadata().stream());
-    assert!(!decoded.metadata().store());
     let Operation::Generate(request) = decoded.operation() else {
         panic!("Responses must map to Generate");
     };
+    assert_eq!(request.protocol_payload().body()["store"], false);
     assert!(request.protocol_payload().body().get("stream").is_none());
 }
 

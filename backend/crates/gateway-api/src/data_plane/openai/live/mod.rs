@@ -131,7 +131,7 @@ pub(crate) fn realtime_unsupported_response(capability: &str) -> Response {
 
 /// 共用 OpenAI 入站头边界；Content-Type 由正文适配结果单独提供
 pub(crate) fn filter_protocol_headers(headers: &HeaderMap) -> Vec<ProviderHttpHeader> {
-    super::responses::passthrough_request_headers(headers)
+    crate::data_plane::headers::passthrough_request_headers(headers)
         .filter(|(name, _)| *name != header::CONTENT_TYPE)
         .map(|(name, value)| {
             ProviderHttpHeader::new(name.as_str(), Bytes::copy_from_slice(value.as_bytes()))
@@ -268,12 +268,12 @@ pub(crate) fn encode_call_request(
 pub(crate) fn live_forwarded_response_headers(
     headers: &[ProviderResponseHeader],
 ) -> Vec<(HeaderName, HeaderValue)> {
-    let connection_options = super::responses::response_connection_options(headers);
+    let connection_options = crate::data_plane::headers::response_connection_options(headers);
     headers
         .iter()
         .filter(|header| {
             header.name().eq_ignore_ascii_case("content-type")
-                || super::responses::response_header_is_forwardable(
+                || crate::data_plane::headers::response_header_is_forwardable(
                     header.name(),
                     &connection_options,
                 )

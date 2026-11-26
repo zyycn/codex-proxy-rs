@@ -4,6 +4,9 @@
 
 mod capabilities;
 
+/// 跨协议 HTTP 传输头与重试时间
+pub mod http;
+
 /// OpenAI wire contract
 pub mod openai;
 

@@ -32,7 +32,6 @@ use gateway_core::engine::{
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
 use gateway_core::lifecycle::{CancellationToken, ConnectionGuard};
-use gateway_protocol::openai::OPENAI_PROTOCOL;
 use gateway_protocol::openai::sse::response_failed_sse_event_with_id;
 use tokio::time::Instant;
 
@@ -223,7 +222,7 @@ pub(crate) async fn execute_prepared_generation(
         }
     };
     let response = if let Some(keepalive) = keepalive {
-        super::keepalive::response_with_encoder(
+        super::keepalive::response(
             response,
             keepalive,
             stream_error,
@@ -472,55 +471,6 @@ async fn streaming_execution_middleware_response(
     ))
 }
 
-/// 直接驱动测试 session 的非流式交付；生产入口通过同一 MiddlewareResponse 路径
-pub async fn collect_execution_response(session: Box<dyn ExecutionSession>) -> Response {
-    match buffered_execution_middleware_response(
-        session,
-        GenerationValidationFacts::new(GenerationEndpoint::Responses),
-        GenerationEndpoint::Responses,
-    )
-    .await
-    {
-        Ok(response) => {
-            into_http_response(response, ExpectedBody::SingleJson, OPENAI_PROTOCOL).await
-        }
-        Err(error) => error_response(error),
-    }
-}
-
-/// 直接驱动测试 session 的 SSE 交付；生产入口通过同一 MiddlewareResponse 路径
-pub async fn stream_execution_response(
-    session: Box<dyn ExecutionSession>,
-    connection_guard: Option<Box<dyn ConnectionGuard>>,
-) -> Response {
-    let (admitted, keepalive) = tokio::sync::oneshot::channel();
-    let _ = admitted.send(session.response_commit());
-    super::keepalive::response(
-        async move {
-            match streaming_execution_middleware_response(
-                session,
-                connection_guard,
-                GenerationValidationFacts::new(GenerationEndpoint::Responses),
-                GenerationEndpoint::Responses,
-            )
-            .await
-            {
-                Ok(response) => {
-                    into_http_response(
-                        response,
-                        GenerationEndpoint::Responses.expected_http_body(true),
-                        OPENAI_PROTOCOL,
-                    )
-                    .await
-                }
-                Err(error) => error_response(error),
-            }
-        },
-        keepalive,
-    )
-    .await
-}
-
 fn validated_middleware_response(
     response: MiddlewareResponse,
     facts: GenerationValidationFacts,
@@ -733,9 +683,9 @@ fn apply_provider_response_headers(
     response_headers: &[ProviderResponseHeader],
 ) -> Response {
     let connection_options =
-        crate::data_plane::responses::response_connection_options(response_headers);
+        crate::data_plane::headers::response_connection_options(response_headers);
     for header in response_headers {
-        if !crate::data_plane::responses::response_header_is_forwardable(
+        if !crate::data_plane::headers::response_header_is_forwardable(
             header.name(),
             &connection_options,
         ) {
@@ -757,7 +707,7 @@ fn response_headers(
     streaming: bool,
 ) -> Vec<MiddlewareHeader> {
     let connection_options =
-        crate::data_plane::responses::response_connection_options(provider_headers);
+        crate::data_plane::headers::response_connection_options(provider_headers);
     let mut headers = Vec::new();
     headers.push(MiddlewareHeader::new(
         CONTENT_TYPE.as_str(),
@@ -768,7 +718,7 @@ fn response_headers(
         }),
     ));
     for header in provider_headers {
-        if !crate::data_plane::responses::response_header_is_forwardable(
+        if !crate::data_plane::headers::response_header_is_forwardable(
             header.name(),
             &connection_options,
         ) || header.name().eq_ignore_ascii_case(CONTENT_TYPE.as_str())

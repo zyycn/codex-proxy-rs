@@ -245,7 +245,7 @@ pub(super) fn retry_after_header(value: &Value) -> Option<(&Value, u64)> {
             Some((value, header))
         })
         .next_back()?;
-    let seconds = super::headers::parse_retry_after_seconds(header.to_str().ok()?)?;
+    let seconds = crate::http::parse_retry_after_seconds(header.to_str().ok()?)?;
     Some((value, seconds))
 }
 
