@@ -1564,6 +1564,10 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
         .collect::<Vec<_>>();
 
     assert_eq!(monthly.len(), 1);
+    assert_eq!(
+        monthly[0].local_usage_attribution,
+        QuotaLocalUsageAttribution::AccountWide
+    );
     assert!(monthly.iter().any(|window| {
         window.label == "月额度"
             && window.limit_id.as_deref() == Some("codex")
@@ -1594,22 +1598,18 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
     assert_eq!(review.label, "周额度");
     assert_eq!(review.limit_name.as_deref(), Some("code_review"));
     assert_eq!(review.role, Some(ProviderQuotaWindowRole::Primary));
+    assert_eq!(
+        review.local_usage_attribution,
+        QuotaLocalUsageAttribution::Unavailable
+    );
     let spark = quota
         .windows
         .iter()
         .find(|window| window.limit_id.as_deref() == Some("codex_bengalfox"))
         .expect("Spark quota");
     assert_eq!(
-        (
-            monthly[0].local_usage_attribution,
-            review.local_usage_attribution,
-            spark.local_usage_attribution,
-        ),
-        (
-            QuotaLocalUsageAttribution::AccountWide,
-            QuotaLocalUsageAttribution::Unavailable,
-            QuotaLocalUsageAttribution::Unavailable,
-        ),
+        spark.local_usage_attribution,
+        QuotaLocalUsageAttribution::Unavailable
     );
 }
 
