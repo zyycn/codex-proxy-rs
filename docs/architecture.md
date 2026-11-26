@@ -697,7 +697,8 @@ xAI Provider 负责 Codex custom 工具与 Grok function 工具的双向转换�
 客户端到代理与代理到上游的传输选择相互独立。客户端的 `supports_websockets = false`
 不禁止 Provider 使用上游 WebSocket。OpenAI Provider 按线程维护 WS 失败预算，消息大小上限随上游
 物理连接保存。OpenAI 的超限回退与 Antigravity 的 Responses 桥接按各自的续接能力，在终态事件上提示下游重连。
-该提示只属于当前交付，与 Provider 的私有会话状态独立。API 确认成功写出、完成结算且入站队列空闲后关闭连接。响应终态前的 Close 1000 仍视为失败，
+该提示只属于当前交付，与 Provider 的私有会话状态独立。Antigravity 可在路由和客户端准入后本地应答新链 WS 预热，Core 按零次上游尝试结算。
+API 确认成功写出、完成结算且入站队列空闲后关闭连接。响应终态前的 Close 1000 仍视为失败，
 后续恢复请求成功也不改写原失败请求的结果
 
 ## 6. 路由、账号范围与 continuation
@@ -1336,7 +1337,7 @@ Core 负责路由、权限、取消、期限与准入拒绝。是否进入 Core 
 
 只有完整交付客户端的成功推理响应进入 Token、延迟和成本聚合。Responses 协议解析根据请求的
 `generate: false` 将连接与上下文准备归类为 `prewarm`，不信任客户端单独声明的同名 metadata。
-Store 的共享用量口径排除这些预热记录，账号用量与额度预测复用同一规则；原始请求审计、响应额度
+Store 的共享用量口径排除 OpenAI 原生预热和零次上游尝试的本地预热，账号用量与额度预测复用同一规则；原始请求审计、响应额度
 观测和费用事实仍保留，不将未知费用改写为零，也不影响 Client Key 结算账本。
 OpenAI Responses 的统计档位与本地费用估算统一使用 Provider 最终发给上游的请求 `service_tier`，
 不由响应回显覆盖；未发送档位时保留缺失值，展示与估算按标准档处理。上游响应档位独立保留在

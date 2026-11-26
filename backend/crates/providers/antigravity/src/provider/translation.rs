@@ -2,10 +2,13 @@
 
 use crate::transport::{sent, unsent};
 use gateway_core::{
-    engine::provider::NativeResponseTranslator,
+    engine::{
+        ModelRequestId,
+        provider::{LocalWebSocketPrewarm, NativeResponseTranslator},
+    },
     error::{ClientVisibleUpstreamError, ProviderError, ProviderErrorKind},
     event::ProtocolWireEvent,
-    operation::Operation,
+    operation::{Operation, ProtocolPayload},
     upstream::UpstreamSendState,
 };
 use gateway_protocol::{
@@ -19,6 +22,48 @@ use gateway_protocol::{
 use serde_json::{Value, json};
 use std::borrow::Cow;
 
+fn is_root_prewarm(payload: &ProtocolPayload) -> bool {
+    let body = payload.body();
+    payload.protocol() == OPENAI_PROTOCOL
+        && body.get("generate").and_then(Value::as_bool) == Some(false)
+        && body.get("previous_response_id").is_none_or(Value::is_null)
+}
+
+pub(super) fn websocket_prewarm(
+    operation: &Operation,
+    request_id: &ModelRequestId,
+) -> Option<LocalWebSocketPrewarm> {
+    let Operation::Generate(generate) = operation else {
+        return None;
+    };
+    let payload = generate.protocol_payload();
+    if !is_root_prewarm(payload) {
+        return None;
+    }
+    let model = payload.body().get("model")?.as_str()?;
+    let response_id = format!("resp_prewarm_{}", request_id.as_str());
+    let timestamp = chrono::Utc::now().timestamp();
+    let frame = |kind: &str, sequence: u8, status: &str, usage: Value| {
+        let data = json!({
+            "type": kind,
+            "sequence_number": sequence,
+            "response": {
+                "id": response_id, "object": "response", "created_at": timestamp, "model": model,
+                "status": status, "error": null, "output": [], "usage": usage
+            }
+        });
+        ProtocolWireEvent::json(OPENAI_PROTOCOL, Some(kind.to_owned()), data).ok()
+    };
+    let created = frame("response.created", 0, "in_progress", Value::Null)?;
+    let usage = json!({"input_tokens": 0, "output_tokens": 0, "total_tokens": 0});
+    let completed = frame("response.completed", 1, "completed", usage)?;
+    Some(LocalWebSocketPrewarm {
+        response_id,
+        created,
+        completed,
+    })
+}
+
 pub(super) fn validate_request_mode(operation: &Operation) -> Result<(), ProviderError> {
     let Operation::Generate(generate) = operation else {
         return Ok(());
@@ -27,14 +72,12 @@ pub(super) fn validate_request_mode(operation: &Operation) -> Result<(), Provide
     if !matches!(payload.protocol(), OPENAI_PROTOCOL | ANTHROPIC_PROTOCOL) {
         return Ok(());
     }
-    // GenAI 只有生成操作，预热即使携带完整输入也不能触发推理
-    if payload.protocol() == OPENAI_PROTOCOL
-        && payload.body().get("generate").and_then(Value::as_bool) == Some(false)
-    {
+    // 带父响应的预热也需要重放；其余未在 WS 入口完成的预热不能触发推理
+    if is_root_prewarm(payload) {
         return Err(
             unsent(ProviderErrorKind::InvalidRequest).with_client_visible_upstream_error(
                 ClientVisibleUpstreamError::new(
-                    "Antigravity does not support prewarm requests (generate=false).",
+                    "Antigravity supports prewarm only on a new Responses WebSocket chain.",
                     Some("unsupported_prewarm".to_owned()),
                     Some("invalid_request_error".to_owned()),
                 ),

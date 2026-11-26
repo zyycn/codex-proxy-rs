@@ -59,6 +59,7 @@ struct CrossingLimitTrace {
 }
 
 struct CrossingLimitSession {
+    response_id: String,
     trace: Arc<CrossingLimitTrace>,
     started_emitted: bool,
     terminal_emitted: bool,
@@ -70,12 +71,13 @@ impl ExecutionSession for CrossingLimitSession {
         Box::pin(async move {
             if !self.started_emitted {
                 self.started_emitted = true;
-                return Ok(Some(crossing_limit_started_batch()));
+                return Ok(Some(crossing_limit_started_batch(&self.response_id)));
             }
             if !self.terminal_emitted {
                 self.trace.release_terminal.notified().await;
                 self.terminal_emitted = true;
                 return Ok(Some(crossing_limit_terminal_batch(
+                    &self.response_id,
                     self.trace.reconnect_for_replay.load(Ordering::Acquire),
                 )));
             }
@@ -145,7 +147,7 @@ impl ExecutionService for CrossingLimitExecution {
         request: StartExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async move {
-            self.trace.starts.fetch_add(1, Ordering::AcqRel);
+            let sequence = self.trace.starts.fetch_add(1, Ordering::AcqRel) + 1;
             if let Operation::Generate(generate) = &request.operation {
                 self.trace
                     .inputs
@@ -154,11 +156,14 @@ impl ExecutionService for CrossingLimitExecution {
                     .push(generate.protocol_payload().body()["input"].clone());
             }
             Ok(StartedExecution {
-                request_id: gateway_core::engine::ModelRequestId::new("req_ws_crossing_limit")
-                    .expect("request id"),
+                request_id: gateway_core::engine::ModelRequestId::new(format!(
+                    "req_ws_crossing_limit_{sequence}"
+                ))
+                .expect("request id"),
                 created_at: SystemTime::now(),
                 stream: request.metadata.stream,
                 session: Box::new(CrossingLimitSession {
+                    response_id: format!("resp_ws_crossing_limit_{sequence}"),
                     trace: Arc::clone(&self.trace),
                     started_emitted: false,
                     terminal_emitted: false,
@@ -176,10 +181,10 @@ impl ExecutionService for CrossingLimitExecution {
     }
 }
 
-fn crossing_limit_started_batch() -> CoordinatedEvent {
+fn crossing_limit_started_batch(response_id: &str) -> CoordinatedEvent {
     let started = ProviderEvent::canonical_with_wire(
         vec![GatewayEvent::Started(ResponseMeta::new(
-            "resp_ws_crossing_limit",
+            response_id,
             "model-a",
         ))],
         ProtocolWireEvent::json(
@@ -188,7 +193,7 @@ fn crossing_limit_started_batch() -> CoordinatedEvent {
             json!({
                 "type": "response.created",
                 "response": {
-                    "id": "resp_ws_crossing_limit",
+                    "id": response_id,
                     "model": "model-a",
                     "status": "in_progress"
                 }
@@ -200,7 +205,7 @@ fn crossing_limit_started_batch() -> CoordinatedEvent {
         .expect("started WebSocket batch")
 }
 
-fn crossing_limit_terminal_batch(reconnect: bool) -> CoordinatedEvent {
+fn crossing_limit_terminal_batch(response_id: &str, reconnect: bool) -> CoordinatedEvent {
     let mut completed = ProviderEvent::wire(
         ProtocolWireEvent::json(
             "openai",
@@ -208,7 +213,7 @@ fn crossing_limit_terminal_batch(reconnect: bool) -> CoordinatedEvent {
             json!({
                 "type": "response.completed",
                 "response": {
-                    "id": "resp_ws_crossing_limit",
+                    "id": response_id,
                     "model": "model-a",
                     "output": [],
                     "status": "completed"
@@ -928,7 +933,12 @@ async fn replay_reconnect_waits_for_queued_requests_and_writes_the_last_terminal
 
 async fn check_queued_reconnect(reconnect_last: bool) {
     let (trace, mut socket, server) = start_active_response().await;
-    for input in ["second", "third"] {
+    let with_tool_result = json!([
+        {"role":"user","content":"check the color"},
+        {"type":"function_call","call_id":"c","name":"lookup","arguments":"{}"},
+        {"type":"function_call_output","call_id":"c","output":"amber"}
+    ]);
+    for input in [with_tool_result.clone(), json!("third")] {
         socket
             .send(ClientMessage::Text(
                 json!({"type": "response.create", "model": "model-a", "input": input})
@@ -975,6 +985,17 @@ async fn check_queued_reconnect(reconnect_last: bool) {
                 panic!("unexpected frame during serial execution: {message:?}");
             };
             let event: Value = serde_json::from_str(&text).expect("response event JSON");
+            match event["type"].as_str() {
+                Some("response.completed") => assert_eq!(
+                    event["response"]["id"],
+                    format!("resp_ws_crossing_limit_{completed_count}")
+                ),
+                Some("response.created") => assert_eq!(
+                    event["response"]["id"],
+                    format!("resp_ws_crossing_limit_{}", completed_count + 1)
+                ),
+                _ => {}
+            }
             event_types.push(event["type"].as_str().expect("event type").to_owned());
         }
         assert_eq!(event_types, expected_types);
@@ -985,7 +1006,7 @@ async fn check_queued_reconnect(reconnect_last: bool) {
     }
     assert_eq!(
         *trace.inputs.lock().expect("input trace lock"),
-        vec![json!("hello"), json!("second"), json!("third")]
+        vec![json!("hello"), with_tool_result, json!("third")]
     );
     assert!(!trace.cancelled.load(Ordering::Acquire));
     if !reconnect_last {

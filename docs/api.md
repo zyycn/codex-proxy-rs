@@ -707,13 +707,15 @@ HTTP/SSE 与 WS 入站共用此判断；新链在发送前重新建连，依赖�
 OAuth 账号默认 `prefer_websocket`，客户端使用 HTTP/SSE 时仍可能选择上游 WebSocket；
 可将账号上游传输方式设为 `http`，固定使用 HTTP/SSE。Responses API Key 账号默认使用 HTTP/SSE，
 也可配置 `prefer_websocket`；Messages API Key 账号只支持 `http`。
-必须依赖 WS 的协议预热、非持久化新链和连接内续接不使用 HTTP-only 账号。
+OpenAI 的协议预热、依赖 WS 的非持久化新链和连接内续接要求账号支持上游 WS。
 客户端配置的 `supports_websockets` 只控制第一段连接，不是服务端传输策略开关。
 上游在响应终态前发送 Close 1000 仍属于失败，不能按“正常关闭”计为成功
 
-内建 xAI 和 Antigravity 适配器不支持 `generate=false` 的非生成预热请求，在发送推理请求前返回
-`400 unsupported_prewarm`，不会将其当作普通生成调用。`generate=true` 或省略该字段正常执行；
-客户端可跳过预热继续正式请求，外部插件 adapter 按各自的协议能力处理
+Antigravity 在 Responses WS 上收到新链的 `generate=false` 后，本地依次返回
+`response.created` 和 `response.completed`，输出为空，Token 为零。即使带有历史和工具定义，也不选号或调用 Google。
+预热 ID 仅标识这次应答。后续生成按下文的完整输入重放规则处理。
+Antigravity 的 HTTP 新链预热和内建 xAI 的预热返回 `400 unsupported_prewarm`。
+`generate=true` 或省略该字段时正常生成，外部插件按各自的协议能力处理
 
 OpenAI Responses 上游 WS 按握手响应头 `x-codex-websocket-max-message-bytes` 声明的上限，
 检查最终 `response.create` 文本的 UTF-8 字节数。允许发送的文本超过 1 MiB 时，每 1 MiB 分一帧，接收方仍收到一条消息。

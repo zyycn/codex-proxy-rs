@@ -62,6 +62,40 @@ async fn statistics(
 }
 
 #[tokio::test]
+async fn local_prewarm_is_auditable_without_counting_as_model_usage() {
+    let Some(db) = TestDatabase::create("usage_local_prewarm").await else {
+        return;
+    };
+    let store = PgUsageDataStore::new(db.pool.clone(), observability_query_budget());
+    store
+        .write_records(records(vec![put("local_warm", 0)]))
+        .await
+        .unwrap();
+    sqlx::query(
+        "update model_requests set client_transport='websocket', client_status_code=null,
+        request_kind='prewarm',attempt_count=0,upstream_send_state='not_sent',
+        provider_kind=null,provider_account_ref=null,upstream_transport=null where id='local_warm'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let mut reader = store
+        .open_read(scan(8), CancellationToken::new())
+        .await
+        .unwrap();
+    let batch = reader.next_batch().await.unwrap();
+    assert_eq!(batch.items.len(), 1);
+    let UsageReadItem::Record(record) = &batch.items[0] else {
+        panic!("audit record expected")
+    };
+    assert_eq!(record.request_kind.as_deref(), Some("prewarm"));
+    assert!(record.request_counted);
+    assert!(!record.usage_counted);
+    reader.close().await;
+    db.close().await;
+}
+
+#[tokio::test]
 async fn scan_delivers_ten_thousand_records_from_one_snapshot() {
     let Some(db) = TestDatabase::create("usage_scan").await else {
         return;

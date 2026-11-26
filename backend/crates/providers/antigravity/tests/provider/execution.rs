@@ -609,14 +609,17 @@ async fn responses_continuation_requests_full_replay_and_preserves_the_conversat
     };
     let upstream = MockServer::start().await;
     let fixture = Fixture::new(&upstream.uri());
-    let execute = |body: serde_json::Value| {
+    let provider_request = |body: serde_json::Value| {
         let payload =
             ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap();
+        ProviderRequest::new(
+            Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+            request(false).candidate().clone(),
+        )
+    };
+    let execute = |body| {
         fixture.provider.clone().execute(
-            ProviderRequest::new(
-                Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
-                request(false).candidate().clone(),
-            ),
+            provider_request(body),
             context(frozen_profile(), CancellationToken::new()),
         )
     };
@@ -625,6 +628,25 @@ async fn responses_continuation_requests_full_replay_and_preserves_the_conversat
         {"type":"function_call","call_id":"c","name":"lookup","arguments":"{}"},
         {"type":"function_call_output","call_id":"c","output":"amber"}
     ]);
+    let id = ModelRequestId::new("req_warm").unwrap();
+    for input in [json!([]), history.clone()] {
+        let body = json!({"generate":false,"model":"fixture-model","input":input,"tools":[{"type":"function","name":"lookup"}]});
+        let warm = fixture
+            .provider
+            .local_websocket_prewarm(provider_request(body).operation(), &id)
+            .unwrap();
+        assert_eq!(warm.created.data()["type"], "response.created");
+        assert_eq!(warm.created.data()["response"]["status"], "in_progress");
+        assert_eq!(warm.completed.data()["type"], "response.completed");
+        assert_eq!(warm.completed.data()["response"]["status"], "completed");
+        assert_eq!(warm.created.data()["response"]["id"], warm.response_id);
+        assert_eq!(warm.completed.data()["response"]["id"], warm.response_id);
+        assert_eq!(warm.completed.data()["response"]["output"], json!([]));
+        assert_eq!(
+            warm.completed.data()["response"]["usage"]["total_tokens"],
+            0
+        );
+    }
     for (mut body, code, recovery) in [
         (
             json!({"generate":false,"input":[]}),
@@ -642,12 +664,25 @@ async fn responses_continuation_requests_full_replay_and_preserves_the_conversat
             Some(ContinuationRecoveryDisposition::ClientReplayRequired),
         ),
         (
+            json!({"generate":false,"previous_response_id":"resp_prewarm_req_warm","input":[history[2]]}),
+            Some("previous_response_not_found"),
+            Some(ContinuationRecoveryDisposition::ClientReplayRequired),
+        ),
+        (
             json!({"previous_response_id":42,"input":[history[2]]}),
             None,
             None,
         ),
     ] {
         body["model"] = json!("fixture-model");
+        if body.get("previous_response_id").is_some() {
+            assert!(
+                fixture
+                    .provider
+                    .local_websocket_prewarm(provider_request(body.clone()).operation(), &id)
+                    .is_none()
+            );
+        }
         let error = execute(body)
             .await
             .err()

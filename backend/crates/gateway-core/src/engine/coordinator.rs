@@ -380,6 +380,7 @@ where
             client_status_code: None,
             delivery_pending: false,
             upstream_complete: false,
+            local_prewarm: false,
             finalization: None,
             finalized_at: None,
             image_generation_requested,
@@ -549,6 +550,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     client_status_code: Option<u16>,
     delivery_pending: bool,
     upstream_complete: bool,
+    local_prewarm: bool,
     finalization: Option<RequestFinalization>,
     finalized_at: Option<SystemTime>,
     image_generation_requested: bool,
@@ -912,6 +914,10 @@ where
     }
 
     async fn pull(&mut self) -> Result<PullOutcome, EngineError> {
+        if self.local_prewarm {
+            self.upstream_complete = true;
+            return Ok(PullOutcome::End);
+        }
         loop {
             if self.pending_stream_failure.is_some() {
                 return self.resume_stream_failure().await;
@@ -1076,6 +1082,43 @@ where
             .await?;
             return Err(EngineError::EmptyRoutingPlan);
         };
+        let provider = self
+            .engine
+            .providers()
+            .get(candidate.provider())
+            .cloned()
+            .ok_or_else(|| EngineError::ProviderNotRegistered {
+                provider: candidate.provider().as_str().to_owned(),
+            })?;
+        if self.attempts == 0
+            && self.client_transport == super::execution::ClientTransport::WebSocket
+            && self
+                .pending_request
+                .as_ref()
+                .is_some_and(|request| request.request_kind.as_deref() == Some("prewarm"))
+            && let Some(prewarm) =
+                provider.local_websocket_prewarm(&self.operation, &self.request_id)
+        {
+            if self.cancellation.is_cancelled() {
+                return Err(EngineError::Cancelled);
+            }
+            if self.deadline.is_elapsed() {
+                return Err(EngineError::Deadline);
+            }
+            self.trace.record(
+                "request.local_prewarm",
+                json!({"provider": candidate.provider().as_str()}),
+            );
+            self.last_observed_provider = Some(candidate.provider().clone());
+            self.observation.client_response_id = Some(prewarm.response_id);
+            self.local_prewarm = true;
+            let mut completed = ProviderEvent::wire(prewarm.completed);
+            completed.request_websocket_reconnect();
+            return Ok(Some(PullOutcome::Events(vec![
+                ProviderEvent::wire(prewarm.created),
+                completed,
+            ])));
+        }
         let next_attempt = self
             .attempts
             .checked_add(1)
@@ -1120,14 +1163,6 @@ where
         account_context
             .excluded_proxy_endpoints
             .clone_from(&self.excluded_proxy_endpoints);
-        let provider = self
-            .engine
-            .providers()
-            .get(candidate.provider())
-            .cloned()
-            .ok_or_else(|| EngineError::ProviderNotRegistered {
-                provider: candidate.provider().as_str().to_owned(),
-            })?;
         if !self.request_profiles.contains_key(candidate.provider()) {
             let profile = match self
                 .plan
@@ -2355,7 +2390,11 @@ where
         self.persist_finalization(ModelRequestFinalization {
             request_id: self.request_id.clone(),
             outcome: ExecutionOutcome::Succeeded,
-            send_state: UpstreamSendState::Sent,
+            send_state: if self.local_prewarm {
+                self.current_send_state()
+            } else {
+                UpstreamSendState::Sent
+            },
             attempt_count: self.attempts,
             downstream_committed_at: self.response_commit.committed_at(),
             client_status_code: self

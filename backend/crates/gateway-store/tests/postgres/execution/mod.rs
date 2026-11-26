@@ -993,6 +993,32 @@ async fn successful_new_chain_should_mark_recent_continuation_failure_recovered(
     .await;
 
     let store = PgExecutionStore::new(database.pool.clone());
+    let warm = "req_local_warm";
+    seed_continuation_request(
+        &database.pool,
+        warm,
+        &affinity_hash,
+        failure_completed_at + Duration::seconds(1),
+        false,
+    )
+    .await;
+    sqlx::query("update model_requests set provider_kind=null, provider_account_ref=null, request_kind='prewarm' where id=$1")
+        .bind(warm).execute(&database.pool).await.unwrap();
+    ExecutionStore::finalize_model_request(
+        &store,
+        CoreModelRequestFinalization {
+            attempt_count: 0,
+            send_state: UpstreamSendState::NotSent,
+            client_status_code: None,
+            upstream_transport: None,
+            upstream_status_code: None,
+            http_version: None,
+            downstream_committed_at: Some(std::time::SystemTime::now()),
+            ..successful_core_finalization(warm)
+        },
+    )
+    .await
+    .unwrap();
     ExecutionStore::finalize_model_request(
         &store,
         successful_core_finalization("req_continuation_recovery"),

@@ -662,7 +662,7 @@ impl ModelRequestRepository for PgExecutionStore {
                    'continuation', coalesce(request_observation_json -> 'continuation', '{}'::jsonb)
                      || ($31::jsonb -> 'continuation'))
              where id = $1 and outcome = 'running'
-             returning id, client_api_key_ref, continuation_affinity_hash,
+             returning id, client_api_key_ref, continuation_affinity_hash, request_kind,
                        continuation_requested, provider_kind, upstream_transport,
                        outcome, started_at, completed_at
            ), recovery_target as (
@@ -670,6 +670,7 @@ impl ModelRequestRepository for PgExecutionStore {
              from model_requests prior
              cross join finalized current
              where not current.continuation_requested
+               and current.request_kind is distinct from 'prewarm'
                and current.continuation_affinity_hash is not null
                and prior.client_api_key_ref = current.client_api_key_ref
                and prior.continuation_affinity_hash = current.continuation_affinity_hash

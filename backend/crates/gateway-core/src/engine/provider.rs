@@ -40,6 +40,13 @@ use crate::upstream::{UpstreamSendState, UpstreamTransport};
 pub type EventStream =
     Pin<Box<dyn Stream<Item = Result<ProviderEvent, ProviderError>> + Send + 'static>>;
 
+/// 本地预热的客户端响应，不持有账号、上游响应 ID 或可续接的私有状态
+pub struct LocalWebSocketPrewarm {
+    pub response_id: String,
+    pub created: ProtocolWireEvent,
+    pub completed: ProtocolWireEvent,
+}
+
 /// Provider 选定单个 credential 后返回的调用事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCallMetadata {
@@ -1178,6 +1185,15 @@ impl fmt::Debug for ProviderRequest {
 /// 新的 attempt 再次调用
 #[async_trait]
 pub trait Provider: Send + Sync {
+    /// 为没有原生预热能力的上游在本地应答；正常完成后由客户端在新连接上提交完整输入
+    fn local_websocket_prewarm(
+        &self,
+        _operation: &Operation,
+        _request_id: &crate::engine::ModelRequestId,
+    ) -> Option<LocalWebSocketPrewarm> {
+        None
+    }
+
     /// 声明可用于互联共享的直连认证方式，不执行网络查询
     fn is_direct_account(&self, _authentication_kind: &str) -> bool {
         false

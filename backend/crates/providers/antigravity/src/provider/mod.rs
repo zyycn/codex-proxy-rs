@@ -17,8 +17,8 @@ use gateway_core::{
     account::{AccountFeedbackStats, ProviderAccountId, ProviderAccountStore},
     concurrency::ConcurrencyWaitQueue,
     engine::{
-        AttemptContext,
-        provider::{Provider, ProviderRequest, ProviderStream},
+        AttemptContext, ModelRequestId,
+        provider::{LocalWebSocketPrewarm, Provider, ProviderRequest, ProviderStream},
     },
     error::{ErrorSource, ProviderError, ProviderErrorKind},
     provider_ports::{
@@ -74,6 +74,14 @@ impl AntigravityProvider {
 
 #[async_trait]
 impl Provider for AntigravityProvider {
+    fn local_websocket_prewarm(
+        &self,
+        operation: &gateway_core::operation::Operation,
+        request_id: &ModelRequestId,
+    ) -> Option<LocalWebSocketPrewarm> {
+        translation::websocket_prewarm(operation, request_id)
+    }
+
     fn is_direct_account(&self, authentication_kind: &str) -> bool {
         authentication_kind == "oauth"
     }

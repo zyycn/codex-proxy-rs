@@ -263,6 +263,26 @@ struct InterruptProvider {
 
 #[async_trait]
 impl Provider for InterruptProvider {
+    fn local_websocket_prewarm(
+        &self,
+        _: &Operation,
+        id: &ModelRequestId,
+    ) -> Option<gateway_core::engine::provider::LocalWebSocketPrewarm> {
+        self.http_only.then(|| {
+            let response_id = format!("resp_{}", id.as_str());
+            let frame = |kind: &str, status: &str| {
+                ProtocolWireEvent::json("openai", Some(kind.to_owned()), json!({
+                    "type":kind,"response":{"id":response_id,"model":"model-a","status":status,"output":[]}
+                })).unwrap()
+            };
+            gateway_core::engine::provider::LocalWebSocketPrewarm {
+                created: frame("response.created", "in_progress"),
+                completed: frame("response.completed", "completed"),
+                response_id,
+            }
+        })
+    }
+
     fn name(&self) -> &'static str {
         "openai"
     }
@@ -514,6 +534,106 @@ fn upstream_control_error() -> Value {
 
 fn interrupt(id: &str, mode: &str) -> Value {
     json!({"type":"response.interrupt","response_id":id,"mode":mode,"future_extension":true})
+}
+
+#[tokio::test]
+async fn streaming_turn_finishes_before_queued_generation_and_local_prewarm() {
+    let provider = Arc::new(InterruptProvider {
+        http_only: true,
+        ..Default::default()
+    });
+    let admissions = Arc::new(InterruptAdmissions::default());
+    let (mut socket, _server) = connect(provider.clone(), admissions.clone()).await;
+    send(
+        &mut socket,
+        json!({"type":"response.create","model":"model-a","input":"first"}),
+    )
+    .await;
+    let active = next(&mut socket).await;
+    assert_eq!(active["type"], "response.created");
+    let upstream = provider
+        .transport
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .sender
+        .clone();
+    let chunk = |text: &str| {
+        json!({"type":"response.output_text.delta","response_id":active["response"]["id"],
+        "item_id":"msg_first","output_index":0,"content_index":0,"delta":text})
+    };
+    upstream.send(chunk("one")).await.unwrap();
+    assert_eq!(next(&mut socket).await, chunk("one"));
+    send(
+        &mut socket,
+        json!({"type":"response.create","model":"model-a","input":"second"}),
+    )
+    .await;
+    send(
+        &mut socket,
+        json!({"type":"response.create","model":"model-a","generate":false,"input":[]}),
+    )
+    .await;
+    socket
+        .send(ClientMessage::Ping(vec![17].into()))
+        .await
+        .unwrap();
+    let pong = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(pong, ClientMessage::Pong(vec![17].into()));
+    assert_eq!(admissions.active.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    upstream.send(chunk(" two")).await.unwrap();
+    assert_eq!(next(&mut socket).await, chunk(" two"));
+    upstream.send(json!({"type":"response.completed","response":{"id":active["response"]["id"],
+        "model":"model-a","status":"completed","output":[{"type":"message","id":"msg_first",
+        "role":"assistant","content":[{"type":"output_text","text":"one two","annotations":[]}]}]}})).await.unwrap();
+    let first_terminal = next(&mut socket).await;
+    assert_eq!(first_terminal["type"], "response.completed");
+    assert_eq!(first_terminal["response"]["id"], active["response"]["id"]);
+    let second = next(&mut socket).await;
+    assert_eq!(second["type"], "response.created");
+    assert_ne!(second["response"]["id"], active["response"]["id"]);
+    provider.complete.notify_one();
+    let second_terminal = next(&mut socket).await;
+    assert_eq!(second_terminal["type"], "response.completed");
+    assert_eq!(second_terminal["response"]["id"], second["response"]["id"]);
+    let warm = next(&mut socket).await;
+    assert_eq!(warm["type"], "response.created");
+    assert_ne!(warm["response"]["id"], active["response"]["id"]);
+    let completed = next(&mut socket).await;
+    assert_eq!(completed["type"], "response.completed");
+    assert_eq!(completed["response"]["id"], warm["response"]["id"]);
+    let close = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(close, ClientMessage::Close(Some(frame)) if u16::from(frame.code) == 1000));
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(admissions.active.load(Ordering::SeqCst), 0);
+    let audits = provider.store.finalizations.lock().unwrap();
+    assert_eq!(audits.len(), 3);
+    assert_eq!(audits[0].attempt_count, 1);
+    assert_eq!(audits[1].attempt_count, 1);
+    let local = &audits[2];
+    assert_eq!(
+        local.outcome,
+        gateway_core::engine::ExecutionOutcome::Succeeded
+    );
+    assert_eq!(local.attempt_count, 0);
+    assert_eq!(local.send_state, UpstreamSendState::NotSent);
+    assert_eq!(
+        local.client_response_id.as_deref(),
+        warm["response"]["id"].as_str()
+    );
+    assert!(local.downstream_committed_at.is_some());
+    assert!(local.upstream_response_id.is_none());
+    assert!(local.upstream_transport.is_none());
 }
 
 #[tokio::test]
