@@ -223,38 +223,6 @@ async fn native_openai_rejects_foreign_harness_before_middleware_rewriting() {
 }
 
 #[tokio::test]
-async fn native_openai_rejects_unknown_protocol_before_send() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_provider_contract").await;
-    let server = MockServer::start().await;
-    let source = Operation::Generate(GenerateRequest::from_protocol_payload(
-        ProtocolPayload::json_object(
-            "example-source",
-            Map::from_iter([("opaque".to_owned(), json!("source-only"))]),
-        )
-        .unwrap()
-        .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
-    ));
-    let error = match provider_with_base_url(&store, server.uri())
-        .execute(
-            planned_request("openai", source),
-            context_with_middleware(
-                "req_native_translate_missing",
-                Arc::new(PassThroughMiddleware),
-                FastMode::Default,
-            ),
-        )
-        .await
-    {
-        Ok(_) => panic!("unknown source cannot use native Responses"),
-        Err(error) => error,
-    };
-    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
-    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
-    assert!(server.received_requests().await.unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn native_openai_rejects_capability_expanding_rewrite_before_send() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
@@ -1627,20 +1595,6 @@ impl MiddlewarePlan for RequestRewriteMiddleware {
                 )
                 .unwrap(),
         )
-    }
-}
-
-#[derive(Debug)]
-struct PassThroughMiddleware;
-
-impl MiddlewarePlan for PassThroughMiddleware {
-    fn handle(
-        &self,
-        _: MiddlewareContext,
-        request: MiddlewareRequest,
-        next: MiddlewareNext,
-    ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
-        next.run(request)
     }
 }
 

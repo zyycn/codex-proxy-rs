@@ -1967,35 +1967,47 @@ async fn streaming_success_should_emit_terminal_event_and_done_marker() {
 }
 
 #[tokio::test]
-async fn streaming_finalized_unknown_wire_should_end_cleanly_without_synthetic_failure() {
-    let trace = Arc::new(Trace::default());
-    let raw = Bytes::from_static(
-        b"event: response.future_terminal\ndata: {\"type\":\"response.future_terminal\",\"opaque\":true}\n\n",
-    );
-    let event = ProviderEvent::wire(
-        ProtocolWireEvent::raw_sse("openai", raw.clone()).expect("raw future event"),
-    );
-    let session = FakeSession::streaming(
-        Arc::clone(&trace),
-        vec![
-            NextStep::Event(delivery_provider(
-                event,
-                CommitRequirement::CommitBeforeDelivery,
-            )),
-            NextStep::FinalizeSuccess,
-        ],
-    );
+async fn streaming_finalized_native_wire_should_end_cleanly() {
+    let completed = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_test", "object": "response", "model": "public-model", "status": "completed",
+            "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "native baseline"}]}]
+        }
+    });
+    let frames = [
+        Bytes::from_static(
+            b"event: response.future_terminal\ndata: {\"type\":\"response.future_terminal\",\"opaque\":true}\n\n",
+        ),
+        Bytes::from(format!("event: response.completed\ndata: {completed}\n\n")),
+    ];
+    for raw in frames {
+        let trace = Arc::new(Trace::default());
+        let event = ProviderEvent::wire(
+            ProtocolWireEvent::raw_sse("openai", raw.clone()).expect("native wire event"),
+        );
+        let session = FakeSession::streaming(
+            Arc::clone(&trace),
+            vec![
+                NextStep::Event(delivery_provider(
+                    event,
+                    CommitRequirement::CommitBeforeDelivery,
+                )),
+                NextStep::FinalizeSuccess,
+            ],
+        );
 
-    let response = stream_execution_response(Box::new(session), None).await;
-    let body = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("read transparent SSE body");
+        let response = stream_execution_response(Box::new(session), None).await;
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read transparent SSE body");
 
-    assert!(body.as_ref().starts_with(raw.as_ref()));
-    assert!(body.as_ref().ends_with(b"data: [DONE]\n\n"));
-    assert!(!String::from_utf8_lossy(&body).contains("response.failed"));
-    assert!(!trace.is_cancelled());
-    assert_eq!(trace.snapshot(), vec!["next_event", "commit", "next_end"]);
+        let expected = [raw.as_ref(), b"data: [DONE]\n\n"].concat();
+        assert_eq!(body.as_ref(), expected.as_slice());
+        assert!(!trace.is_cancelled());
+        assert_eq!(trace.snapshot(), vec!["next_event", "commit", "next_end"]);
+        assert_eq!(trace.detached_finalizations(), 0);
+    }
 }
 
 #[tokio::test]
@@ -2656,7 +2668,7 @@ async fn native_responses_route_preserves_images_and_encrypted_reasoning_in_json
         } else {
             FakeSession::buffered_provider(Arc::clone(&trace), events)
         };
-        // 使用真实 /v1/responses 入口，覆盖共享执行函数的可选适配器为空分支
+        // 使用真实 /v1/responses 入口验证原生字段与 SSE 字节交付
         let response = response(&admin, "openai", session, streaming).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();

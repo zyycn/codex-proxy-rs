@@ -1,4 +1,4 @@
-//! 原生完整请求优先级和 Messages 计数投影合同
+//! 原生完整计数请求的优先级与字段保留
 
 use gateway_protocol::genai::count_tokens_request;
 use serde_json::json;

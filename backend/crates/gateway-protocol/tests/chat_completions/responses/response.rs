@@ -28,11 +28,7 @@ impl Fixture {
         Self(events)
     }
     fn post(&self, request: Value) -> Projection {
-        let identity = ChatIdentity {
-            id: "chatcmpl-test".to_owned(),
-            created: 100,
-            model: "model-a".to_owned(),
-        };
+        let identity = chat_identity();
         let mut result = Projection {
             json: None,
             chunks: Vec::new(),
@@ -97,6 +93,13 @@ fn sse_body(response: Projection) -> (String, Vec<Value>) {
         response.chunks,
     )
 }
+fn chat_identity() -> ChatIdentity {
+    ChatIdentity {
+        id: "chatcmpl-test".to_owned(),
+        created: 100,
+        model: "model-a".to_owned(),
+    }
+}
 fn chat_request(stream: bool) -> Value {
     json!({"model":"model-a","messages":[{"role":"user","content":"hello"}],"stream":stream})
 }
@@ -134,7 +137,6 @@ fn tool(id: &str, call_id: &str, name: &str, arguments: &str) -> Value {
 fn json_projects_public_identity_text_and_actual_usage() {
     let fixture = Fixture::new(Session::new(vec![completed(json!([message("你好 🌍")]))]));
     let response = fixture.post(chat_request(false));
-    assert!(response.error.is_none(), "{:?}", response.error);
     let body = json_body(response);
     assert_eq!(body["object"], "chat.completion");
     assert!(body["id"].as_str().unwrap().starts_with("chatcmpl-"));
@@ -191,7 +193,6 @@ fn web_search_projects_citations_in_json_and_streams_the_original_links() {
         let mut request = chat_request(stream);
         request["web_search_options"] = json!({});
         let response = fixture.post(request);
-        assert!(response.error.is_none(), "{:?}", response.error);
         let expected = format!("🌍 {text}");
         if stream {
             let (_, chunks) = sse_body(response);
@@ -224,7 +225,6 @@ fn json_tool_arguments_and_refusal_do_not_become_assistant_text() {
     ] {
         let fixture = Fixture::new(Session::new(vec![completed(output.clone())]));
         let response = fixture.post(chat_request(false));
-        assert!(response.error.is_none(), "{:?}", response.error);
         let body = json_body(response);
         let choice = &body["choices"][0];
         assert_eq!(choice["message"]["content"], Value::Null);
@@ -247,7 +247,8 @@ fn json_tool_arguments_and_refusal_do_not_become_assistant_text() {
 #[test]
 fn sse_deduplicates_text_snapshots_and_emits_usage_only_when_requested() {
     for include_usage in [false, true] {
-        let fixture = Fixture::new(Session::new(vec![
+        let terminal = completed(json!([message("你好 🌍")]));
+        let events = [
             created(),
             wire(
                 "response.output_text.delta",
@@ -265,11 +266,16 @@ fn sse_deduplicates_text_snapshots_and_emits_usage_only_when_requested() {
                 "response.output_item.done",
                 json!({"output_index":0,"item":message("你好 🌍")}),
             ),
-            completed(json!([message("你好 🌍")])),
-        ]));
-        let mut body = chat_request(true);
-        body["stream_options"] = json!({"include_usage":include_usage});
-        let (_, chunks) = sse_body(fixture.post(body));
+            terminal.clone(),
+        ];
+        let identity = chat_identity();
+        let mut encoder = ChatStreamEncoder::new(identity.clone(), include_usage);
+        let mut chunks = Vec::new();
+        for event in events {
+            chunks.extend(encoder.push_event(None, &event).unwrap());
+        }
+        assert!(encoder.is_completed());
+        assert!(encoder.finish().unwrap().is_empty());
         assert_eq!(combined(&chunks, "content"), "你好 🌍");
         assert_eq!(
             chunks
@@ -287,9 +293,9 @@ fn sse_deduplicates_text_snapshots_and_emits_usage_only_when_requested() {
         );
         for chunk in &chunks {
             assert_eq!(chunk["object"], "chat.completion.chunk");
-            assert_eq!(chunk["id"], chunks[0]["id"]);
-            assert_eq!(chunk["created"], chunks[0]["created"]);
-            assert_eq!(chunk["model"], "model-a");
+            assert_eq!(chunk["id"], identity.id);
+            assert_eq!(chunk["created"], identity.created);
+            assert_eq!(chunk["model"], identity.model);
         }
         let usage: Vec<_> = chunks
             .iter()
@@ -298,6 +304,14 @@ fn sse_deduplicates_text_snapshots_and_emits_usage_only_when_requested() {
         assert_eq!(usage.len(), usize::from(include_usage));
         if include_usage {
             assert_eq!(usage[0]["usage"]["total_tokens"], 18);
+            let mut accumulator = ChatAccumulator::default();
+            for chunk in &chunks {
+                accumulator.push(chunk).unwrap();
+            }
+            assert_eq!(
+                accumulator.finish().unwrap(),
+                project_response(&terminal["response"], &identity).unwrap()
+            );
         }
     }
 }
@@ -439,7 +453,6 @@ fn compaction_state_preserves_chat_answer_without_exposing_ciphertext() {
                     "stop"
                 );
             } else {
-                assert!(response.error.is_none(), "{:?}", response.error);
                 let body = json_body(response);
                 assert_eq!(body["choices"][0]["message"]["content"], "preserved");
                 assert_eq!(body["choices"][0]["finish_reason"], "stop");
@@ -471,7 +484,6 @@ fn incomplete_projects_only_supported_finish_reasons() {
                     expected
                 );
             } else {
-                assert!(response.error.is_none(), "{:?}", response.error);
                 assert_eq!(json_body(response)["choices"][0]["finish_reason"], expected);
             }
         }
@@ -529,7 +541,6 @@ fn encrypted_reasoning_stays_private_while_public_text_and_usage_are_projected()
                 .clone();
             (body, combined(&chunks, "content"), usage)
         } else {
-            assert!(response.error.is_none(), "{:?}", response.error);
             let body = json_body(response);
             (
                 body.to_string(),
@@ -762,6 +773,24 @@ fn conflicting_text_snapshot_fails_instead_of_appending_replacement_content() {
 fn custom_and_function_calls_keep_distinct_shapes_in_json_and_interleaved_streams() {
     let custom = json!({"id":"ct_1","type":"custom_tool_call","call_id":"call_custom","name":"patch","input":"first\nsecond"});
     let function = json!({"id":"fc_1","type":"function_call","call_id":"call_function","name":"lookup","arguments":"{}"});
+    let output = json!([
+        custom, function,
+        {"type":"reasoning","id":"reason","summary":[{"type":"summary_text","text":"thought"}],"encrypted_content":"PRIVATE_REASONING"},
+        {"type":"message","id":"refusal","role":"assistant","status":"completed","content":[{"type":"refusal","refusal":"no"}]}
+    ]);
+    let direct =
+        project_response(&completed(output.clone())["response"], &chat_identity()).unwrap();
+    let projected = &direct["choices"][0]["message"];
+    assert_eq!(projected["refusal"], "no");
+    assert_eq!(projected["reasoning_content"], "thought");
+    assert_eq!(
+        projected["tool_calls"],
+        json!([
+            {"id":"call_custom","type":"custom","custom":{"name":"patch","input":"first\nsecond"}},
+            {"id":"call_function","type":"function","function":{"name":"lookup","arguments":"{}"}}
+        ])
+    );
+    assert!(!direct.to_string().contains("PRIVATE_REASONING"));
     for streaming in [false, true] {
         let mut initial_custom = custom.clone();
         initial_custom["input"] = json!("");
@@ -789,12 +818,14 @@ fn custom_and_function_calls_keep_distinct_shapes_in_json_and_interleaved_stream
                 "response.custom_tool_call_input.done",
                 json!({"output_index":0,"item_id":"ct_1","input":"first\nsecond"}),
             ),
-            completed(json!([custom, function])),
+            completed(output.clone()),
         ]));
         let response = fixture.post(chat_request(streaming));
-        assert!(response.error.is_none(), "{:?}", response.error);
         if streaming {
-            let (_, chunks) = sse_body(response);
+            let (body, chunks) = sse_body(response);
+            assert_eq!(combined(&chunks, "refusal"), "no");
+            assert_eq!(combined(&chunks, "reasoning_content"), "thought");
+            assert!(!body.contains("PRIVATE_REASONING"));
             let calls = chunks
                 .iter()
                 .filter_map(|chunk| chunk["choices"][0]["delta"]["tool_calls"].as_array())
@@ -831,13 +862,7 @@ fn custom_and_function_calls_keep_distinct_shapes_in_json_and_interleaved_stream
             );
         } else {
             let body = json_body(response);
-            assert_eq!(
-                body["choices"][0]["message"]["tool_calls"],
-                json!([
-                    {"id":"call_custom","type":"custom","custom":{"name":"patch","input":"first\nsecond"}},
-                    {"id":"call_function","type":"function","function":{"name":"lookup","arguments":"{}"}}
-                ])
-            );
+            assert_eq!(body, direct);
         }
     }
 }
@@ -859,7 +884,6 @@ fn image_previews_and_final_images_are_projected_once_per_distinct_snapshot() {
             completed(json!([image, message("created")])),
         ]));
         let response = fixture.post(chat_request(streaming));
-        assert!(response.error.is_none(), "{:?}", response.error);
         if streaming {
             let (_, chunks) = sse_body(response);
             let images = chunks
@@ -903,7 +927,6 @@ fn output_logprobs_survive_json_projection_and_stream_snapshot_deduplication() {
             completed(json!([output])),
         ]));
         let response = fixture.post(chat_request(streaming));
-        assert!(response.error.is_none(), "{:?}", response.error);
         if streaming {
             let (_, chunks) = sse_body(response);
             let values = chunks
@@ -959,65 +982,4 @@ fn streaming_citation_offsets_follow_delivered_text_when_messages_interleave() {
     assert_eq!(annotations.len(), 1);
     assert_eq!(annotations[0]["url_citation"]["start_index"], 4);
     assert_eq!(annotations[0]["url_citation"]["end_index"], 6);
-}
-
-fn codec_message(text: &str) -> Value {
-    json!({"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":text,"annotations":[]}]})
-}
-fn codec_completed(output: Value) -> Value {
-    json!({"type":"response.completed","response":{"id":"native","status":"completed","output":output,"usage":{"input_tokens":3,"output_tokens":5,"total_tokens":8}}})
-}
-
-#[test]
-fn deduplicates_snapshots_and_preserves_usage_and_identity() {
-    let mut encoder = ChatStreamEncoder::new(super::super::identity(), true);
-    let mut accumulator = ChatAccumulator::default();
-    let terminal = codec_completed(json!([codec_message("你好 🌍")]));
-    for event in [
-        json!({"type":"response.created","response":{"id":"native"}}),
-        json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg","delta":"你好 "}),
-        json!({"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg","text":"你好 🌍"}),
-        terminal.clone(),
-    ] {
-        for chunk in encoder.push_event(None, &event).unwrap() {
-            accumulator.push(&chunk).unwrap();
-        }
-    }
-    assert!(encoder.is_completed());
-    assert!(encoder.finish().unwrap().is_empty());
-    let result = accumulator.finish().unwrap();
-    assert_eq!(result["choices"][0]["message"]["content"], "你好 🌍");
-    assert_eq!(result["usage"]["total_tokens"], 8);
-    assert_eq!(result["id"], "chatcmpl-test");
-    assert_eq!(
-        result,
-        project_response(&terminal["response"], &super::super::identity()).unwrap()
-    );
-}
-
-#[test]
-fn custom_function_reasoning_and_refusal_keep_separate_shapes() {
-    let response = codec_completed(
-        json!([{"type":"custom_tool_call","id":"custom","call_id":"a","name":"shell","input":"pwd","status":"completed"},{"type":"function_call","id":"function","call_id":"b","name":"read","arguments":"{}","status":"completed"},{"type":"reasoning","id":"reason","summary":[{"type":"summary_text","text":"thought"}],"encrypted_content":"secret"},{"type":"message","id":"refusal","role":"assistant","status":"completed","content":[{"type":"refusal","refusal":"no"}]}]),
-    );
-    let result = project_response(&response["response"], &super::super::identity()).unwrap();
-    let message = &result["choices"][0]["message"];
-    assert_eq!(message["refusal"], "no");
-    assert_eq!(message["reasoning_content"], "thought");
-    assert_eq!(message["tool_calls"][0]["custom"]["input"], "pwd");
-    assert_eq!(message["tool_calls"][1]["function"]["arguments"], "{}");
-    assert!(!result.to_string().contains("secret"));
-}
-
-#[test]
-fn conflicting_snapshots_and_eof_fail_without_synthesizing_success() {
-    let mut encoder = ChatStreamEncoder::new(super::super::identity(), false);
-    encoder.push_event(None,&json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg","delta":"sent"})).unwrap();
-    assert_eq!(encoder.finish().unwrap_err(), ChatError::IncompleteStream);
-    assert_eq!(
-        encoder
-            .push_event(None, &codec_completed(json!([codec_message("different")])))
-            .unwrap_err(),
-        ChatError::InvalidResponse
-    );
 }

@@ -36,11 +36,13 @@ fn facts_are_extracted_from_chat_fields_directly() {
 }
 
 #[test]
-fn invalid_envelopes_and_stream_options_keep_safe_field_errors() {
+fn invalid_envelopes_and_chat_controls_keep_safe_field_errors() {
     assert_eq!(parse_request(b"[").err(), Some(ChatError::MalformedJson));
     assert_eq!(parse_request(b"[]").err(), Some(ChatError::ExpectedObject));
     for (field, value) in [
         ("n", json!(2)),
+        ("store", json!(true)),
+        ("previous_response_id", json!("resp_previous")),
         ("stream_options", json!({"include_usage":true})),
     ] {
         let mut request = super::request();

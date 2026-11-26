@@ -73,20 +73,6 @@ fn web_search_options_require_a_hosted_search_and_flatten_location() {
 }
 
 #[test]
-fn maps_inline_user_pdf_without_reencoding_its_data() {
-    let data = "data:application/pdf;base64,JVBERi0xLjQ=";
-    let converted = convert(json!({"model":"model-a","messages":[
-        {"role":"user","content":[{"type":"text","text":"Read the attachment"},
-            {"type":"file","file":{"filename":"document.pdf","file_data":data}}]}
-    ]}));
-    assert_eq!(
-        converted["input"][0]["content"],
-        json!([{"type":"input_text","text":"Read the attachment"},
-            {"type":"input_file","filename":"document.pdf","file_data":data}])
-    );
-}
-
-#[test]
 fn assistant_history_uses_output_content_for_text_and_refusals() {
     for content in [
         json!("previous answer"),
@@ -312,19 +298,23 @@ fn files_and_audio_are_preserved_as_inputs_instead_of_losing_the_user_turn() {
     for file in [
         json!({"file_id":"file_test"}),
         json!({"file_url":"https://example.com/report.txt"}),
-        json!({"file_data":"data:text/plain;base64,aGk=", "filename":"report.txt", "detail":"high"}),
+        json!({"file_data":"data:application/pdf;base64,JVBERi0xLjQ=", "filename":"document.pdf", "detail":"high"}),
     ] {
         let converted = convert(
             json!({"model":"model-a", "messages":[{"role":"user", "content":[
+                {"type":"text","text":"Read the attachment"},
                 {"type":"file", "file":file}, {"type":"input_audio", "input_audio":{"data":"aGk=", "format":"mp3"}}
             ]}]}),
         );
         let mut expected = file;
         expected["type"] = json!("input_file");
-        assert_eq!(converted["input"][0]["content"][0], expected);
         assert_eq!(
-            converted["input"][0]["content"][1],
-            json!({"type":"input_audio","audio_url":"data:audio/mpeg;base64,aGk="})
+            converted["input"][0]["content"],
+            json!([
+                {"type":"input_text","text":"Read the attachment"},
+                expected,
+                {"type":"input_audio","audio_url":"data:audio/mpeg;base64,aGk="}
+            ])
         );
     }
 }

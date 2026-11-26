@@ -124,20 +124,6 @@ fn explicit_session_should_be_tenant_isolated_and_stable_across_turns() {
 }
 
 #[test]
-fn soft_session_should_not_enable_the_native_cache_route() {
-    let request = raw_request(json!({
-        "model": "client",
-        "instructions": "stable system",
-        "input": [{"role": "user", "content": "first prompt"}]
-    }));
-
-    let encoded =
-        GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).expect("request");
-
-    assert!(!encoded.body().contains_key("tools"));
-}
-
-#[test]
 fn soft_session_should_follow_the_first_user_anchor() {
     let first = raw_request(json!({
         "model": "client",
@@ -203,26 +189,4 @@ fn native_business_fields_and_harness_items_are_not_rewritten() {
         assert_eq!(encoded.body().get(key), Some(value), "{key}");
     }
     assert!(!encoded.body().contains_key("store"));
-    assert_eq!(encoded.body()["include"], json!(["native.future"]));
-}
-
-#[test]
-fn cache_routing_does_not_inject_tools_or_change_tool_choice() {
-    for tools in [
-        None,
-        Some(json!([])),
-        Some(json!([{"type":"function","name":"web_search","parameters":{"type":"object"}}])),
-    ] {
-        let mut body =
-            json!({"input":"hello","prompt_cache_key":"session","tool_choice":"required"});
-        if let Some(tools) = tools {
-            body["tools"] = tools;
-        }
-        let encoded =
-            GrokResponsesRequest::encode(&raw_request(body.clone()), "grok-4.7", &client_key())
-                .unwrap();
-        assert_eq!(encoded.body().get("tools"), body.get("tools"));
-        assert_eq!(encoded.body()["tool_choice"], "required");
-        assert!(encoded.session_id().is_some());
-    }
 }

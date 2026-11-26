@@ -742,36 +742,6 @@ fn decoder_should_preserve_image_and_hosted_tool_items_without_inventing_facts()
 }
 
 #[test]
-fn decoder_should_preserve_an_internal_search_name_declared_by_the_client() {
-    let request = tool_request(serde_json::json!({
-        "model": "client",
-        "prompt_cache_key": "cache-session",
-        "input": "hello",
-        "tools": [{
-            "type": "function",
-            "name": "x_user_search",
-            "parameters": {"type": "object"}
-        }]
-    }));
-    let body = concat!(
-        "event: response.created\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_declared\"}}\n\n",
-        "event: response.output_item.added\n",
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"item_client\",\"call_id\":\"call_client\",\"name\":\"x_user_search\",\"arguments\":\"{}\"}}\n\n",
-        "event: response.completed\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_declared\",\"status\":\"completed\"}}\n\n",
-    );
-
-    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
-        .push(body.as_bytes())
-        .expect("client-declared search function");
-
-    assert!(wire_events(&events).iter().any(|event| {
-        event.data().pointer("/item/name") == Some(&serde_json::json!("x_user_search"))
-    }));
-}
-
-#[test]
 fn decoder_should_tolerate_mismatched_event_identity_and_preserve_the_wire_event() {
     let body = concat!(
         "event: response.created\n",

@@ -261,8 +261,7 @@ async fn request_middleware_sees_original_chat_and_preserves_the_endpoint() {
     let downstream = json_body(response).await;
     assert_eq!(downstream["object"], "chat.completion");
     let observed = middleware.requests.lock().unwrap();
-    assert!(observed[0].get("input").is_none());
-    assert_eq!(observed[0]["messages"][0]["role"], "user");
+    assert_eq!(observed.as_slice(), [chat_request(false)]);
     assert_eq!(
         middleware.inner.endpoints.lock().unwrap().as_slice(),
         [PATH]
@@ -427,39 +426,6 @@ async fn commit_failure_does_not_deliver_buffered_or_first_terminal_chat_success
         assert!(body.get("error").is_some());
         assert!(body.get("choices").is_none());
         assert!(fixture.trace.cancelled.load(Ordering::SeqCst));
-    }
-}
-
-#[tokio::test]
-async fn the_same_execution_fixture_finishes_native_responses_with_one_commit() {
-    for already_started in [false, true] {
-        let native = |kind: &str, status: &str| {
-            gateway_core::event::ProviderEvent::wire(
-            gateway_core::event::ProtocolWireEvent::json("openai", Some(kind.to_owned()), json!({
-                "type":kind,"response":{"id":"resp_native","object":"response","model":"model-a","status":status,
-                "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"native baseline"}]}]}
-            })).unwrap())
-        };
-        let mut events = Vec::new();
-        if already_started {
-            events.push(native("response.created", "in_progress"));
-        }
-        events.push(native("response.completed", "completed"));
-        let fixture = Fixture::new(Session::new(events)).await;
-        let mut request = request(json!({"model":"model-a","input":"hello","stream":true}));
-        *request.uri_mut() = "/v1/responses".parse().unwrap();
-        let response = fixture.router.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let text = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(text.contains("event: response.completed"), "{text}");
-        assert!(text.contains("native baseline"), "{text}");
-        assert!(!text.contains("response.failed"), "{text}");
-        assert_eq!(text.matches("data: [DONE]").count(), 1, "{text}");
-        assert!(text.ends_with("data: [DONE]\n\n"), "{text}");
-        assert!(fixture.trace.finalized.load(Ordering::SeqCst));
-        assert_eq!(fixture.trace.commits.load(Ordering::SeqCst), 1);
-        assert_eq!(fixture.trace.response_commit.status_code(), Some(200));
     }
 }
 

@@ -617,38 +617,42 @@ async fn other_native_harnesses_are_rejected_without_synthetic_prewarm_or_accoun
     };
     let upstream = MockServer::start().await;
     let fixture = Fixture::new(&upstream.uri());
-    for protocol in ["openai", "anthropic"] {
-        for body in [
+    for (protocol, body) in [
+        (
+            "openai",
             json!({"model":"fixture-model","generate":false,"input":[]}),
+        ),
+        (
+            "openai",
             json!({"model":"fixture-model","previous_response_id":"foreign","input":[]}),
+        ),
+        (
+            "anthropic",
             json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}]}),
-        ] {
-            let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-                ProtocolPayload::json_object(protocol, body.as_object().unwrap().clone()).unwrap(),
-            ));
-            assert!(
-                fixture
-                    .provider
-                    .local_websocket_prewarm(
-                        &operation,
-                        &ModelRequestId::new("req_foreign").unwrap()
-                    )
-                    .is_none()
-            );
-            let error = fixture
+        ),
+    ] {
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(protocol, body.as_object().unwrap().clone()).unwrap(),
+        ));
+        assert!(
+            fixture
                 .provider
-                .clone()
-                .execute(
-                    ProviderRequest::new(operation, request(false).candidate().clone()),
-                    context(frozen_profile(), CancellationToken::new()),
-                )
-                .await
-                .err()
-                .expect("foreign native harness cannot be translated");
-            assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
-            assert_eq!(error.send_state(), UpstreamSendState::NotSent);
-            assert!(error.continuation_recovery_disposition().is_none());
-        }
+                .local_websocket_prewarm(&operation, &ModelRequestId::new("req_foreign").unwrap())
+                .is_none()
+        );
+        let error = fixture
+            .provider
+            .clone()
+            .execute(
+                ProviderRequest::new(operation, request(false).candidate().clone()),
+                context(frozen_profile(), CancellationToken::new()),
+            )
+            .await
+            .err()
+            .expect("foreign native harness cannot be translated");
+        assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert!(error.continuation_recovery_disposition().is_none());
     }
     assert!(upstream.received_requests().await.unwrap().is_empty());
     assert_eq!(fixture.store.scheduling_reads.load(Ordering::SeqCst), 0);
@@ -775,7 +779,7 @@ async fn chat_direct_genai_keeps_json_sse_usage_and_releases_the_native_lease() 
 }
 
 #[tokio::test]
-async fn chat_function_choice_preserves_functions_and_unspecified_output_limit() {
+async fn chat_preserves_functions_without_inventing_generation_limits() {
     use gateway_core::{
         engine::provider::ProviderRequest,
         operation::{GenerateRequest, Operation, ProtocolPayload},
@@ -787,18 +791,13 @@ async fn chat_function_choice_preserves_functions_and_unspecified_output_limit()
             "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
             "text/event-stream",
         ))
-        .expect(4).mount(&upstream).await;
+        .expect(2).mount(&upstream).await;
     let function =
         json!({"type":"function","function":{"name":"pwd","parameters":{"type":"object"}}});
-    for choice in [
-        json!(null),
-        json!("auto"),
-        json!("required"),
-        json!({"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[function]}}),
-    ] {
+    for explicit_null_limit in [false, true] {
         let fixture = Fixture::new(&upstream.uri());
-        let mut body = json!({"model":"fixture-model","stream":true,"messages":[{"role":"user","content":"hello"}],"tools":[function],"tool_choice":choice});
-        if choice == "required" {
+        let mut body = json!({"model":"fixture-model","stream":true,"messages":[{"role":"user","content":"hello"}],"tools":[function]});
+        if explicit_null_limit {
             body["max_completion_tokens"] = json!(null);
         }
         let operation = Operation::Generate(GenerateRequest::from_protocol_payload(

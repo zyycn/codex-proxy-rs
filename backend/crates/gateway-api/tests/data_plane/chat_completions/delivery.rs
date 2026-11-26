@@ -25,7 +25,7 @@ pub(super) async fn sse_body(response: Response) -> (String, Vec<Value>) {
 }
 
 #[tokio::test]
-async fn returns_chat_json_from_chat_chunks_without_responses_projection() {
+async fn buffers_chat_chunks_as_json() {
     let fixture = Fixture::new(Session::new(vec![
         created(),
         chunk(json!({"content":"你好 "}), Value::Null),
@@ -38,15 +38,17 @@ async fn returns_chat_json_from_chat_chunks_without_responses_projection() {
     assert_eq!(body["object"], "chat.completion");
     assert_eq!(body["choices"][0]["message"]["content"], "你好 🌍");
     assert_eq!(body["choices"][0]["finish_reason"], "stop");
-    assert_eq!(fixture.captured().protocol, "chat_completions");
-    assert!(fixture.captured().body.get("input").is_none());
 }
 
 #[tokio::test]
 async fn returns_chat_sse_with_one_terminal_and_one_done() {
     let fixture = Fixture::new(Session::new(vec![created(), completed("answer")])).await;
-    let (text, chunks) = sse_body(fixture.post(chat_request(true)).await).await;
-    assert!(!text.contains("response.completed"));
+    let (_, chunks) = sse_body(fixture.post(chat_request(true)).await).await;
+    assert!(
+        chunks
+            .iter()
+            .all(|value| value["object"] == "chat.completion.chunk")
+    );
     assert_eq!(
         chunks
             .iter()
@@ -75,19 +77,13 @@ async fn truncation_produces_error_without_success_finish() {
 
 #[tokio::test]
 async fn rejects_invalid_chat_input_before_starting_execution() {
-    for (field, value) in [
-        ("n", json!(2)),
-        ("store", json!(true)),
-        ("previous_response_id", json!("opaque")),
-    ] {
-        let fixture = Fixture::new(Session::new(Vec::new())).await;
-        let mut body = chat_request(false);
-        body[field] = value;
-        let response = fixture.post(body).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(json_body(response).await["error"]["param"], field);
-        assert!(fixture.execution.captured.lock().unwrap().is_none());
-    }
+    let fixture = Fixture::new(Session::new(Vec::new())).await;
+    let mut body = chat_request(false);
+    body["n"] = json!(2);
+    let response = fixture.post(body).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response).await["error"]["param"], "n");
+    assert!(fixture.execution.captured.lock().unwrap().is_none());
 }
 
 #[tokio::test]
