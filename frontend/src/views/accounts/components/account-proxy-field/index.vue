@@ -113,23 +113,18 @@ const testHint = computed(() => selectedProxy.value?.enabled === false
 <template>
   <ZFormItem :prop="formProp" :show-message="false" :label="t('accounts.proxy.outboundTunnel')">
     <div class="grid w-full min-w-0 gap-1.5">
-      <div class="flex min-w-0 gap-2">
-        <div class="relative min-w-0 flex-1">
-          <!-- 为框内测试结果预留空间，避免遮挡代理文本和下拉箭头 -->
-          <ZSelect v-model="selection" class="w-full" :class="{ '**:[[role=combobox]]:pr-28': selectedTest?.success }" :options="options" :disabled="disabled || loading" :aria-label="t('accounts.proxy.outboundTunnel')">
-            <template #option="{ option, selected }">
-              <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
-              <span v-if="option.description" class="min-w-0 flex-1 truncate font-normal" :class="option.disabled ? 'text-z-text-disabled' : 'text-z-text-tertiary'" :title="option.description">
-                {{ option.description }}
-              </span>
-              <AccountProxyTestBadge class="ml-auto" :result="optionTests[option.value]" in-option />
-              <span v-if="!selected" class="size-3.75 shrink-0" aria-hidden="true" />
-            </template>
-          </ZSelect>
-          <div v-if="selectedTest?.success" class="absolute inset-y-0 right-9 flex items-center">
-            <AccountProxyTestBadge :result="selectedTest" />
-          </div>
-        </div>
+      <div class="flex min-w-0 items-center gap-2">
+        <ZSelect v-model="selection" class="min-w-0 flex-1" :options="options" :disabled="disabled || loading" :aria-label="t('accounts.proxy.outboundTunnel')">
+          <template #option="{ option, selected }">
+            <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
+            <span v-if="option.description" class="min-w-0 flex-1 truncate font-normal" :class="option.disabled ? 'text-z-text-disabled' : 'text-z-text-tertiary'" :title="option.description">
+              {{ option.description }}
+            </span>
+            <AccountProxyTestBadge class="ml-auto" :result="optionTests[option.value]" in-option />
+            <span v-if="!selected" class="size-3.75 shrink-0" aria-hidden="true" />
+          </template>
+        </ZSelect>
+        <AccountProxyTestBadge :result="selectedTest" />
         <ZIconButton class="shrink-0" variant="solid" :disabled="testing || loading || !testTarget" :aria-label="t('accounts.proxy.testExit')" @click="test">
           <Wifi class="size-4" />
         </ZIconButton>
