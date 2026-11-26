@@ -387,12 +387,11 @@ impl DefaultAccountsService {
         for (item, quota) in accounts.iter().zip(quotas) {
             for window in &mut quota.windows {
                 if window.local_usage.is_none()
-                    && window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide
+                    && window.local_usage_attribution != QuotaLocalUsageAttribution::Unavailable
                 {
-                    let key = (item.account.id.clone(), window.key.clone());
-                    if let Some(usage) = usage_by_window.get(&key) {
-                        window.local_usage = Some(usage.clone());
-                    }
+                    window.local_usage = usage_by_window
+                        .get(&(item.account.id.clone(), window.key.clone()))
+                        .cloned();
                 }
             }
         }
@@ -426,6 +425,7 @@ impl DefaultAccountsService {
                     return None;
                 }
                 Some(AccountUsageWindowQuery {
+                    models: None,
                     account_id: item.account.id.clone(),
                     key: "account-lifetime".to_owned(),
                     range: TimeRange {
@@ -1397,13 +1397,16 @@ fn quota_usage_window(
     account_id: &str,
     window: &ProviderQuotaWindow,
 ) -> Option<AccountUsageWindowQuery> {
-    if window.local_usage_attribution != QuotaLocalUsageAttribution::AccountWide {
-        return None;
-    }
+    let models = match &window.local_usage_attribution {
+        QuotaLocalUsageAttribution::AccountWide => None,
+        QuotaLocalUsageAttribution::Models(ids) => Some(ids.clone()),
+        QuotaLocalUsageAttribution::Unavailable => return None,
+    };
     let (start, reset_at) = window.observed_bounds()?;
     let range = TimeRange::new(start, reset_at).ok()?;
     // 上游百分比以该 reset 边界定义；以当前时间回推会让本地 Token 属于另一窗口
     Some(AccountUsageWindowQuery {
+        models,
         account_id: account_id.to_owned(),
         key: window.key.clone(),
         range,

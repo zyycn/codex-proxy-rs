@@ -165,6 +165,7 @@ impl QuotaService {
         .map_err(upstream)?;
         let doc = Document {
             tier: info.paid_tier.or(info.current_tier),
+            bucket_models: super::document::bucket_models(&summary, &catalog),
             summary,
             models: catalog
                 .models

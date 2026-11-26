@@ -1,6 +1,9 @@
 //! 多 Provider 账号目录与连接测试的公共事实
 
-use std::{collections::BTreeMap, pin::Pin};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    pin::Pin,
+};
 
 use chrono::{DateTime, Utc};
 use futures::Stream;
@@ -192,6 +195,8 @@ pub struct AccountUsage {
 /// `key` 只用于把聚合结果关联回调用方的窗口，不承载 Provider 私有语义
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountUsageWindowQuery {
+    /// 指定时只汇总这些上游模型的请求
+    pub models: Option<BTreeSet<String>>,
     pub account_id: String,
     pub key: String,
     pub range: TimeRange,

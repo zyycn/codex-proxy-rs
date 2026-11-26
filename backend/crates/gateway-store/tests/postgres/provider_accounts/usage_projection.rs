@@ -40,6 +40,7 @@ async fn quota_windows_reconcile_moved_requests_and_pending_deletions_without_wa
     drain_analytics(&database.pool).await;
     let windows = [
         AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_usage_before".to_owned(),
             key: "old".to_owned(),
             range: TimeRange {
@@ -48,6 +49,7 @@ async fn quota_windows_reconcile_moved_requests_and_pending_deletions_without_wa
             },
         },
         AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_usage_after".to_owned(),
             key: "new".to_owned(),
             range: TimeRange {
@@ -202,6 +204,7 @@ async fn model_success_rates_preserve_usage_across_source_summary_and_pending_re
         .execute(&database.pool).await.unwrap();
     let windows = [
         AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_health".to_owned(),
             key: "whole".to_owned(),
             range: TimeRange {
@@ -210,6 +213,7 @@ async fn model_success_rates_preserve_usage_across_source_summary_and_pending_re
             },
         },
         AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_health".to_owned(),
             key: "boundary".to_owned(),
             range: TimeRange {

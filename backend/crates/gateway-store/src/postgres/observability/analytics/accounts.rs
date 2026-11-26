@@ -586,7 +586,12 @@ pub(crate) async fn account_usage_windows(
             let mut total = MetricState::default();
             let mut models = Vec::new();
             for ((account, model), state) in &states {
-                if account != &window.account_id {
+                if account != &window.account_id
+                    || window
+                        .models
+                        .as_ref()
+                        .is_some_and(|ids| !ids.contains(model))
+                {
                     continue;
                 }
                 total.merge(state)?;

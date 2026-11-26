@@ -36,6 +36,8 @@ pub(crate) struct QuotaSummary {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct QuotaGroup {
+    #[serde(skip_serializing)]
+    pub(crate) description: Option<String>,
     pub(crate) display_name: String,
     pub(crate) buckets: Vec<QuotaBucket>,
 }

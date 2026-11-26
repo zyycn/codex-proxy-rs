@@ -1,6 +1,9 @@
 //! 套餐、独立额度桶及模型额度的持久事实与公共投影
 
-use crate::transport::account::{ModelQuota, QuotaSummary, Tier};
+use crate::transport::{
+    Catalog,
+    account::{ModelQuota, QuotaGroup, QuotaSummary, Tier},
+};
 use chrono::{DateTime, Utc};
 use gateway_admin::model::provider_credentials::{
     ProviderQuota, ProviderQuotaWindow, QuotaLocalUsageAttribution,
@@ -8,7 +11,7 @@ use gateway_admin::model::provider_credentials::{
 use gateway_core::account::{AccountQuotaSignals, QuotaEvidence, QuotaState};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, SystemTime},
 };
 
@@ -17,6 +20,64 @@ pub(super) struct Document {
     pub(super) tier: Option<Tier>,
     pub(super) summary: QuotaSummary,
     pub(super) models: BTreeMap<String, ModelQuota>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) bucket_models: BTreeMap<String, BTreeSet<String>>,
+}
+
+// 只剥离与模型 ID 一致的推理档位，Orchestrator (Carbon) 等名称中的括号属于成员名
+fn model_member_name<'a>(id: &str, name: &'a str) -> &'a str {
+    if let Some((member, level)) = name
+        .strip_suffix(')')
+        .and_then(|name| name.rsplit_once(" ("))
+        && matches!(level, "Low" | "Medium" | "High" | "XHigh")
+        && id
+            .rsplit_once('-')
+            .is_some_and(|(_, suffix)| suffix.eq_ignore_ascii_case(level))
+    {
+        return member;
+    }
+    name
+}
+
+impl QuotaGroup {
+    // 上游在描述里逐项列出额度成员，名单不完整时无法给出可信的本地总量
+    fn usage_models(&self, catalog: &Catalog) -> Option<BTreeSet<String>> {
+        let members = self
+            .description
+            .as_deref()?
+            .strip_prefix("Models within this group: ")?;
+        let mut ids = BTreeSet::new();
+        for member in members.split(',').map(str::trim) {
+            if member.is_empty() {
+                return None;
+            }
+            let mut matches = catalog
+                .models
+                .iter()
+                .filter(|(id, model)| {
+                    model.name == member || model_member_name(id, &model.name) == member
+                })
+                .peekable();
+            matches.peek()?;
+            ids.extend(matches.map(|(id, _)| id.clone()));
+        }
+        Some(ids)
+    }
+}
+
+pub(super) fn bucket_models(
+    summary: &QuotaSummary,
+    catalog: &Catalog,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut buckets = BTreeMap::new();
+    for group in &summary.groups {
+        if let Some(ids) = group.usage_models(catalog) {
+            for bucket in &group.buckets {
+                buckets.insert(bucket.bucket_id.clone(), ids.clone());
+            }
+        }
+    }
+    buckets
 }
 
 impl ModelQuota {
@@ -143,7 +204,12 @@ impl Document {
                     limit_id: group_id.clone(),
                     limit_name: Some(group.display_name.clone()),
                     role: None,
-                    local_usage_attribution: QuotaLocalUsageAttribution::Unavailable,
+                    local_usage_attribution: self
+                        .bucket_models
+                        .get(&bucket.bucket_id)
+                        .map_or(QuotaLocalUsageAttribution::Unavailable, |ids| {
+                            QuotaLocalUsageAttribution::Models(ids.clone())
+                        }),
                     window_seconds: seconds,
                     used_percent: used,
                     reset_at: bucket.quota.reset_time,

@@ -13,6 +13,13 @@ pub(in crate::postgres::provider_accounts) async fn load_history(
         .map_err(|error| admin_store_error(ENTITY, error))?;
     let range = ObservabilityRange::new(window.range.start, window.range.end)
         .map_err(|error| admin_store_error(ENTITY, error))?;
+    if window.models.is_some() {
+        return Err(AdminStoreError::new(
+            AdminStoreErrorKind::Invalid,
+            ENTITY,
+            "quota forecast requires an account-wide window",
+        ));
+    }
     if range.end - range.start > TimeDelta::days(32) {
         return Err(AdminStoreError::new(
             AdminStoreErrorKind::Invalid,

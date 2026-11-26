@@ -16,6 +16,74 @@ async fn upstream(server: &MockServer, remaining: serde_json::Value, delay: Dura
 }
 
 #[tokio::test]
+async fn window_usage_requires_every_named_member_to_resolve_in_the_observed_catalog() {
+    use gateway_admin::model::provider_credentials::QuotaLocalUsageAttribution::{
+        Models, Unavailable,
+    };
+    let server = MockServer::start().await;
+    Mock::given(path("/v1internal:loadCodeAssist"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"cloudaicompanionProject":"p"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/v1internal:fetchAvailableModels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models":{
+            "gemini-4-neon-high":{"displayName":"Gemini 4 Neon (High)"},
+            "gemini-4-neon-low":{"displayName":"Gemini 4 Neon (Low)"},
+            "orchestrator-alias":{"displayName":"Orchestrator (Neon)"},
+            "gemini-lite":{"displayName":"Gemini Lite"},
+            "gpt-oss-medium":{"displayName":"GPT-OSS (Medium)"}
+        }})))
+        .mount(&server)
+        .await;
+    let group = |description: Option<&str>, name: &str| {
+        json!({
+            "displayName":name, "description":description,
+            "buckets":(["5h", "weekly"].map(|window| json!({
+                "bucketId":format!("{name}-{window}"), "displayName":window, "window":window
+            })))
+        })
+    };
+    Mock::given(path("/v1internal:retrieveUserQuotaSummary"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"groups":[
+            group(Some("Models within this group: Gemini 4 Neon, Orchestrator (Neon)"), "gemini"),
+            group(Some("Models within this group: GPT-OSS"), "3p"),
+            group(Some("Models within this group: Gemini Lite, Missing Model"), "partial"),
+            group(None, "unknown")
+        ]})))
+        .mount(&server)
+        .await;
+    let f = Fixture::new(&server.uri());
+    let account = f.store.primary().loaded.lock().unwrap().account.clone();
+    f.quota.refresh(account.id()).await.unwrap();
+    let view = f.quota.read(account.id()).await.unwrap();
+    for (group, attribution) in [
+        (
+            "gemini",
+            Models(
+                [
+                    "gemini-4-neon-high",
+                    "gemini-4-neon-low",
+                    "orchestrator-alias",
+                ]
+                .map(str::to_owned)
+                .into(),
+            ),
+        ),
+        ("3p", Models(["gpt-oss-medium".to_owned()].into())),
+        ("partial", Unavailable),
+        ("unknown", Unavailable),
+    ] {
+        for window in ["5h", "weekly"] {
+            let key = format!("{group}-{window}");
+            let observed = view.windows.iter().find(|w| w.key == key).unwrap();
+            assert_eq!(observed.local_usage_attribution, attribution);
+        }
+    }
+}
+
+#[tokio::test]
 async fn background_refresh_requires_new_generation_and_an_aged_snapshot() {
     let server = MockServer::start().await;
     upstream(&server, json!(0.5), Duration::ZERO).await;

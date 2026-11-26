@@ -3281,10 +3281,10 @@ async fn accounts_list_and_quota_refresh_should_select_the_same_weekly_or_monthl
 }
 
 #[tokio::test]
-async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_windows() {
+async fn account_windows_attach_only_the_usage_allowed_by_the_provider() {
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::days(7);
-    provider.set_quota(ProviderQuota {
+    let mut quota = ProviderQuota {
         paused_windows: Vec::new(),
         upstream: None,
         credits: None,
@@ -3327,7 +3327,13 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
         ],
         limit_reached: false,
         provider_data: None,
-    });
+    };
+    let ids = std::collections::BTreeSet::from(["model-in-group".to_owned()]);
+    let mut grouped = quota.windows[1].clone();
+    grouped.key = "known-group".to_owned();
+    grouped.local_usage_attribution = QuotaLocalUsageAttribution::Models(ids.clone());
+    quota.windows.push(grouped);
+    provider.set_quota(quota);
     let store = FakeAccountStore::new("openai", events());
     store.set_quota_window_usage(vec![
         AccountUsageWindowResult {
@@ -3340,9 +3346,14 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
             key: "codex-bengalfox-primary".to_owned(),
             usage: quota_local_usage("acct_test", 127_926),
         },
+        AccountUsageWindowResult {
+            account_id: "acct_test".to_owned(),
+            key: "known-group".to_owned(),
+            usage: quota_local_usage("acct_test", 85),
+        },
     ]);
 
-    let page = accounts_service(provider, store)
+    let page = accounts_service(provider, store.clone())
         .await
         .accounts()
         .list(AccountListQuery {
@@ -3376,6 +3387,7 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
         [
             ("core-primary", Some(12_818_806)),
             ("codex-bengalfox-primary", None),
+            ("known-group", Some(85)),
         ],
     );
     assert_eq!(
@@ -3385,6 +3397,10 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
             .and_then(|usage| usage.total_tokens),
         Some(12_818_806),
     );
+    let queries = store.quota_window_queries();
+    assert_eq!(queries.len(), 2);
+    assert_eq!(queries[0].models, None);
+    assert_eq!(queries[1].models.as_ref(), Some(&ids));
 }
 
 #[tokio::test]

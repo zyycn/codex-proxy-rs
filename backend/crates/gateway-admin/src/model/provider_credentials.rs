@@ -1,6 +1,6 @@
 //! Provider 管理能力交换的中立 Command 与 Result
 
-use std::{fmt, pin::Pin};
+use std::{collections::BTreeSet, fmt, pin::Pin};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -774,11 +774,13 @@ impl fmt::Debug for RotateCredential {
 }
 
 /// 通用账号用量能否可靠归属到一个 Provider quota 窗口
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuotaLocalUsageAttribution {
     /// 窗口覆盖账号的全部请求，可按账号与时间范围聚合
     AccountWide,
-    /// 窗口需要 Provider / 模型级归属，通用账号聚合不可用
+    /// Provider 已确认该窗口覆盖的上游模型 ID
+    Models(BTreeSet<String>),
+    /// 缺少可用于归属本地用量的事实
     Unavailable,
 }
 
@@ -1186,7 +1188,7 @@ impl ProviderQuota {
 fn quota_usage_priority(window: &ProviderQuotaWindow) -> (u8, u8) {
     let attribution = match window.local_usage_attribution {
         QuotaLocalUsageAttribution::AccountWide => 0,
-        QuotaLocalUsageAttribution::Unavailable => 1,
+        QuotaLocalUsageAttribution::Models(_) | QuotaLocalUsageAttribution::Unavailable => 1,
     };
     let duration = match window.group.as_str() {
         "shortTerm" if window.window_seconds.is_some_and(is_week_window) => 1,

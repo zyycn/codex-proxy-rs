@@ -288,6 +288,7 @@ async fn aggregate_import_and_signed_correction_survive_native_rebuild_without_s
             ports::store::AccountStore,
         };
         let windows = [AccountUsageWindowQuery {
+            models: None,
             account_id: "account_usage".into(),
             key: "window".into(),
             range: TimeRange {
