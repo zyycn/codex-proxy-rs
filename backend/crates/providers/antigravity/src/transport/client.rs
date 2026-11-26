@@ -30,6 +30,16 @@ pub(crate) struct Model {
     pub(crate) name: String,
     #[serde(rename = "quotaInfo", default)]
     pub(crate) quota: Option<super::account::ModelQuota>,
+    #[serde(default)]
+    pub(crate) description: Option<String>,
+    #[serde(rename = "tagDescription", default)]
+    pub(crate) tag_description: Option<String>,
+    #[serde(rename = "maxTokens", default)]
+    pub(crate) context_window: Option<u64>,
+    #[serde(rename = "maxOutputTokens", default)]
+    pub(crate) max_output_tokens: Option<u64>,
+    #[serde(rename = "supportsImages", default)]
+    pub(crate) supports_images: Option<bool>,
 }
 
 pub(crate) struct CloudCodeClient {

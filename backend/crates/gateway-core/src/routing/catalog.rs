@@ -19,6 +19,48 @@ pub struct ReasoningModelVariant {
     pub accounts: BTreeSet<ProviderAccountId>,
 }
 
+/// 具体型号在单个账号目录中声明的能力与说明
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccountModelMetadata {
+    pub description: Option<String>,
+    pub context_window_tokens: Option<u64>,
+    pub max_context_window_tokens: Option<u64>,
+    pub image_input: bool,
+    pub max_output_tokens: Option<u64>,
+}
+
+impl ModelPresentation {
+    /// 分组向客户端承诺的能力必须覆盖每个可选档位和账号
+    pub(super) fn apply_member_metadata<'a>(
+        &mut self,
+        mut members: impl Iterator<Item = Option<&'a AccountModelMetadata>>,
+    ) {
+        let Some(first) = members.next() else {
+            return;
+        };
+        let mut has_metadata = first.is_some();
+        let mut description = first.and_then(|m| m.description.as_deref());
+        let mut window = first.and_then(|m| m.context_window_tokens);
+        let mut max_window = first.and_then(|m| m.max_context_window_tokens);
+        let mut images = first.is_some_and(|m| m.image_input);
+        for member in members {
+            has_metadata |= member.is_some();
+            if description != member.and_then(|m| m.description.as_deref()) {
+                description = None;
+            }
+            window = window.min(member.and_then(|m| m.context_window_tokens));
+            max_window = max_window.min(member.and_then(|m| m.max_context_window_tokens));
+            images &= member.is_some_and(|m| m.image_input);
+        }
+        if has_metadata {
+            self.description = description.map(str::to_owned);
+            self.context_window_tokens = window;
+            self.max_context_window_tokens = max_window;
+            self.image_input = images;
+        }
+    }
+}
+
 /// 扩展集合持有的直接模型别名；执行与元数据仍归属内置 Provider
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContributedModelAlias {

@@ -958,32 +958,35 @@ impl RuntimeSnapshot {
         let mut profiles = BTreeMap::new();
         for (model, presentation) in presentations {
             if let Ok(public_model) = PublicModelId::new(model.as_str().to_owned()) {
-                profiles.insert(public_model, presentation.clone());
+                profiles.insert(public_model, presentation);
             }
         }
+        // 映射覆盖同名模型时，只展示目标画像，包括目标没有画像的情况
         for alias in self.settings.values.model_mappings.keys() {
-            let target = self.mapped_model(alias);
-            let Some(presentation) = presentations.iter().find_map(|(model, presentation)| {
-                (model.as_str() == target).then_some(presentation)
-            }) else {
+            let Ok(public_model) = PublicModelId::new(alias.clone()) else {
                 continue;
             };
-            if let Ok(public_model) = PublicModelId::new(alias.clone()) {
-                profiles.insert(public_model, presentation.clone());
+            let target = self.mapped_model(alias);
+            if let Some(presentation) = presentations.get(target.as_str()) {
+                profiles.insert(public_model, presentation);
+            } else {
+                profiles.remove(&public_model);
             }
         }
-        for alias in self
-            .model_aliases()
-            .iter()
-            .filter(|alias| &alias.provider == provider)
-        {
-            if let Some(presentation) = presentations.get(&alias.target) {
-                profiles.insert(alias.id.clone(), presentation.clone());
+        for alias in self.model_aliases() {
+            if &alias.provider == provider
+                && let Some(presentation) = presentations.get(&alias.target)
+            {
+                profiles.insert(alias.id.clone(), presentation);
+            } else {
+                profiles.remove(&alias.id);
             }
         }
         profiles
             .into_iter()
-            .map(|(model, presentation)| super::PublicModelProfile::new(model, presentation))
+            .map(|(model, presentation)| {
+                super::PublicModelProfile::new(model, presentation.clone())
+            })
             .collect()
     }
 
@@ -1137,8 +1140,30 @@ impl RuntimeSnapshot {
         scope: &FrozenAccountScope,
     ) -> Vec<super::PublicModelProfile> {
         let mut profiles = self.public_model_profiles_for_provider(provider);
-        profiles.retain(|profile| {
-            self.native_catalog_model_allowed_for_scope(provider, profile.model(), scope)
+        profiles.retain_mut(|profile| {
+            let target = self.mapped_model(profile.model.as_str());
+            let Some(group) = self.model_group(provider, &target) else {
+                return self.native_catalog_model_allowed_for_scope(
+                    provider,
+                    profile.model(),
+                    scope,
+                );
+            };
+            let models = &self.provider_models[provider];
+            let mut members = group
+                .reasoning_variants
+                .values()
+                .flat_map(|variant| {
+                    let model = models.get(&variant.model);
+                    Self::variant_accounts(provider, variant, scope)
+                        .map(move |id| model.and_then(|m| m.account_metadata.get(id)))
+                })
+                .peekable();
+            if members.peek().is_none() {
+                return false;
+            }
+            profile.presentation.apply_member_metadata(members);
+            true
         });
         // Provider 画像按公开 ID 排序，追加的插件画像保留注册顺序，不参与二分查找
         let provider_count = profiles.len();
@@ -1150,6 +1175,30 @@ impl RuntimeSnapshot {
                 Err(_) => profiles.push(model.public_profile()),
             }
         }
+        // 别名及适配器画像也按路由选中的分组成员裁剪，默认档位必须能在当前范围执行
+        profiles.retain_mut(|profile| {
+            let Some(group) =
+                self.model_group(provider, &self.mapped_model(profile.model.as_str()))
+            else {
+                return true;
+            };
+            let presentation = &mut profile.presentation;
+            presentation.supported_reasoning_efforts.retain(|effort| {
+                group
+                    .reasoning_variants
+                    .get(effort)
+                    .is_some_and(|variant| self.variant_allowed(provider, variant, scope))
+            });
+            let efforts = &presentation.supported_reasoning_efforts;
+            if !presentation
+                .default_reasoning_effort
+                .as_ref()
+                .is_some_and(|default| efforts.contains(default))
+            {
+                presentation.default_reasoning_effort = efforts.first().cloned();
+            }
+            !efforts.is_empty()
+        });
         profiles
     }
 
@@ -1286,7 +1335,17 @@ impl RuntimeSnapshot {
         variant: &super::ReasoningModelVariant,
         scope: &FrozenAccountScope,
     ) -> bool {
-        variant.accounts.iter().any(|account| {
+        Self::variant_accounts(provider, variant, scope)
+            .next()
+            .is_some()
+    }
+
+    fn variant_accounts<'a>(
+        provider: &'a ProviderKind,
+        variant: &'a super::ReasoningModelVariant,
+        scope: &'a FrozenAccountScope,
+    ) -> impl Iterator<Item = &'a ProviderAccountId> {
+        variant.accounts.iter().filter(move |account| {
             scope.account_provider(account) == Some(provider)
                 && scope.allows_model(account, variant.model.as_str())
         })
@@ -1685,6 +1744,33 @@ impl RuntimeSnapshot {
                 }
                 native.unwrap_or_default()
             };
+            // 原生输出上限属于具体型号与账号，适配器账号沿用自己的能力合同
+            if let (Some(requested), Some(model)) =
+                (requirements.requested_output_tokens(), capabilities)
+            {
+                let mut excluded = model
+                    .account_metadata
+                    .iter()
+                    .filter_map(|(id, metadata)| {
+                        (metadata
+                            .max_output_tokens
+                            .is_some_and(|limit| requested > limit)
+                            && !contributions
+                                .iter()
+                                .any(|adapter| adapter.accounts.contains(id))
+                            && candidate_scope.allows(id))
+                        .then_some(id)
+                    })
+                    .peekable();
+                if excluded.peek().is_some() {
+                    let mut narrowed = candidate_scope.as_ref().clone();
+                    narrowed.exclude_accounts(excluded.cloned());
+                    if !narrowed.allows_provider_model(provider, upstream_model.as_str()) {
+                        continue;
+                    }
+                    candidate_scope = Arc::new(narrowed);
+                }
+            }
             candidates.push(ProviderCandidate {
                 requires_direct_authentication: direct_model.is_some(),
                 provider: provider.clone(),

@@ -6,7 +6,7 @@ mod failure;
 mod headers;
 mod pool;
 mod response;
-pub(crate) use client::{Catalog, CloudCodeClient, unwrap_frame};
+pub(crate) use client::{Catalog, CloudCodeClient, Model, unwrap_frame};
 pub(crate) use count::count_events;
 pub(crate) use failure::{sent, unsent};
 pub(crate) use headers::request_headers;

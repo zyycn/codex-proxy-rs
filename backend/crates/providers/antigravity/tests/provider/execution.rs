@@ -196,7 +196,7 @@ async fn mock_project(upstream: &MockServer) {
 }
 
 #[tokio::test]
-async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
+async fn model_group_menu_routes_responses_and_native_generation_to_declared_members() {
     use gateway_core::{
         engine::provider::ProviderRequest,
         operation::{GenerateRequest, Operation, ProtocolPayload},
@@ -210,12 +210,12 @@ async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
     Mock::given(path("/v1internal:fetchAvailableModels"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "models": {
-                "gemini-4-hydrogen-medium": {"displayName":"Hydrogen Medium"},
-                "gemini-4-hydrogen-high": {"displayName":"Hydrogen High"},
+                "gemini-4-hydrogen-medium": {"displayName":"Hydrogen Medium","maxTokens":1048576,"maxOutputTokens":65536,"supportsImages":true,"tagDescription":"Leaving on Nov 30."},
+                "gemini-4-hydrogen-high": {"displayName":"Hydrogen High","maxTokens":900000,"maxOutputTokens":262144,"supportsImages":true,"tagDescription":"Leaving on Nov 30."},
                 "gemini-4-hydrogen-sonar": {"displayName":"Hydrogen Sonar"}
             },
             "groupedModels": {
-                "gemini-4-hydrogen": {"supportedThinkingLevels":[
+                "gemini-4-hydrogen": {"displayName":"Gemini 4 Hydrogen","supportedThinkingLevels":[
                     {"thinkingSuffix":"MEDIUM"}, {"thinkingSuffix":"high"},
                     {"thinkingSuffix":"low"}, {"thinkingSuffix":"../sonar"}
                 ]},
@@ -237,14 +237,16 @@ async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
         .iter()
         .find(|model| model.upstream_model().as_str() == "gemini-4-hydrogen")
         .unwrap();
+    let menu = group.presentation().unwrap();
+    assert_eq!(menu.display_name(), Some("Gemini 4 Hydrogen"));
+    assert_eq!(menu.supported_reasoning_efforts(), ["medium", "high"]);
+    assert_eq!(menu.default_reasoning_effort(), Some("medium"));
     assert_eq!(
-        group
-            .capabilities()
-            .reasoning_variants()
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        vec!["high", "medium"]
+        models
+            .iter()
+            .filter(|entry| entry.presentation().is_some())
+            .count(),
+        1
     );
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
@@ -253,16 +255,29 @@ async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
         models
             .iter()
             .map(|model| {
-                ProviderModel::new(
+                let entry = ProviderModel::new(
                     kind.clone(),
                     model.upstream_model().clone(),
                     model.capabilities().clone(),
-                )
+                );
+                match model.presentation() {
+                    Some(presentation) => entry.with_presentation(presentation.clone()),
+                    None => entry,
+                }
             })
             .collect(),
         vec![],
     )
     .unwrap();
+    let profiles = snapshot.public_model_profiles_for_scope(&fixture.store.account_scope());
+    let menu = profiles[0].presentation();
+    assert!(menu.image_input());
+    assert_eq!(menu.context_window_tokens(), Some(900000));
+    assert_eq!(
+        menu.max_context_window_tokens(),
+        menu.context_window_tokens()
+    );
+    assert_eq!(menu.description(), Some("Leaving on Nov 30."));
     for stream in [false, true] {
         let response = json!({"response":{"candidates":[{"content":{"parts":[{"text":"OK"}]},"finishReason":"STOP"}]}});
         let path_name = if stream {
@@ -309,6 +324,43 @@ async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
         assert!(events.iter().any(|event| event.has_client_event()));
         released(&fixture).await;
     }
+    Mock::given(path("/v1internal:streamGenerateContent"))
+        .and(body_partial_json(json!({"model":"gemini-4-hydrogen-high","request":{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}]}})))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"OK\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
+            "text/event-stream",
+        )).expect(1).mount(&upstream).await;
+    let body = json!({"model":group.upstream_model().as_str(),"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}],"reasoning":{"effort":"high"}});
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+    ));
+    let plan = snapshot
+        .plan(
+            &PublicModelId::new(group.upstream_model().as_str()).unwrap(),
+            &operation,
+            fixture.store.account_scope(),
+            &RoutingContext::default(),
+        )
+        .unwrap();
+    let events = fixture
+        .provider
+        .clone()
+        .execute(
+            ProviderRequest::new(operation, plan.candidates()[0].clone()),
+            context(frozen_profile(), CancellationToken::new()),
+        )
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .flat_map(|event| event.canonical_facts())
+            .any(|fact| matches!(fact, gateway_core::event::GatewayEvent::Completed(_)))
+    );
+    released(&fixture).await;
 }
 
 #[tokio::test]

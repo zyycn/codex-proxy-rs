@@ -424,10 +424,15 @@ impl FrozenAccountScope {
     #[must_use]
     pub fn excluding_account(&self, account: ProviderAccountId) -> Self {
         let mut restricted = self.clone();
-        let mut excluded = self.excluded_account_ids.as_ref().clone();
-        excluded.insert(account);
-        restricted.excluded_account_ids = Arc::new(excluded);
+        restricted.exclude_accounts([account]);
         restricted
+    }
+
+    pub(crate) fn exclude_accounts(
+        &mut self,
+        accounts: impl IntoIterator<Item = ProviderAccountId>,
+    ) {
+        Arc::make_mut(&mut self.excluded_account_ids).extend(accounts);
     }
 
     #[must_use]

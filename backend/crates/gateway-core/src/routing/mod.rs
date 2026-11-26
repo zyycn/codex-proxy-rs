@@ -11,9 +11,9 @@ pub use crate::account::scope::{
 };
 pub use crate::identity::ProviderKind;
 pub use catalog::{
-    ContributedModel, ContributedModelAlias, ProviderCatalogGeneration, ProviderCatalogPort,
-    ProviderCatalogUnavailable, ProviderModelCapabilities, ProviderModelContent,
-    ProviderModelDescriptor, PublicModelDescriptor, ReasoningModelVariant,
+    AccountModelMetadata, ContributedModel, ContributedModelAlias, ProviderCatalogGeneration,
+    ProviderCatalogPort, ProviderCatalogUnavailable, ProviderModelCapabilities,
+    ProviderModelContent, ProviderModelDescriptor, PublicModelDescriptor, ReasoningModelVariant,
 };
 pub use snapshot::RuntimeSnapshot;
 
@@ -160,6 +160,7 @@ pub struct ModelCapabilities {
     generation_protocol: Option<&'static str>,
     translated_generation_protocols: BTreeSet<&'static str>,
     reasoning_variants: BTreeMap<String, ReasoningModelVariant>,
+    account_metadata: BTreeMap<crate::account::ProviderAccountId, AccountModelMetadata>,
 }
 
 /// Provider 为客户端模型目录提供的展示与交互能力
@@ -435,6 +436,7 @@ impl ModelCapabilities {
             generation_protocol: None,
             translated_generation_protocols: BTreeSet::new(),
             reasoning_variants: BTreeMap::new(),
+            account_metadata: BTreeMap::new(),
         }
     }
 
@@ -457,6 +459,15 @@ impl ModelCapabilities {
     #[must_use]
     pub fn reasoning_variants(&self) -> &BTreeMap<String, ReasoningModelVariant> {
         &self.reasoning_variants
+    }
+
+    #[must_use]
+    pub fn with_account_metadata(
+        mut self,
+        metadata: BTreeMap<crate::account::ProviderAccountId, AccountModelMetadata>,
+    ) -> Self {
+        self.account_metadata = metadata;
+        self
     }
 
     /// 将请求形态 feature 的最终合法性判断交给上游 wire API

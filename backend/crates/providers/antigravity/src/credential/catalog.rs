@@ -2,7 +2,7 @@
 
 use crate::{
     credential::{CredentialService, oauth::error},
-    transport::{Catalog, CloudCodeClient, unsent},
+    transport::{Catalog, CloudCodeClient, Model, unsent},
 };
 use gateway_admin::{
     model::provider_credentials::{ProviderModel, ProviderModels},
@@ -13,11 +13,11 @@ use gateway_core::{
     error::{ProviderError, ProviderErrorKind as Kind},
     operation::OperationKind,
     routing::{
-        ModelCapabilities, ProviderModelCapabilities, ReasoningModelVariant, UpstreamModelId,
+        AccountModelMetadata, ModelCapabilities, ProviderModelCapabilities, UpstreamModelId,
     },
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -165,62 +165,61 @@ impl CatalogService {
     pub(crate) async fn capabilities(
         &self,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
-        let mut models: BTreeMap<UpstreamModelId, BTreeSet<ProviderAccountId>> = BTreeMap::new();
-        let mut groups: BTreeMap<UpstreamModelId, BTreeMap<String, ReasoningModelVariant>> =
-            BTreeMap::new();
-        for (accounts, catalog) in self.catalogs().await? {
-            for (group, level, target) in super::model_groups::variants(&catalog) {
-                groups
-                    .entry(group)
-                    .or_default()
-                    .entry(level)
-                    .or_insert_with(|| ReasoningModelVariant {
-                        model: target,
-                        accounts: BTreeSet::new(),
-                    })
-                    .accounts
-                    .extend(accounts.iter().map(|a| a.account_id.clone()));
-            }
-            for key in catalog.models.into_keys() {
+        let mut members =
+            BTreeMap::<UpstreamModelId, BTreeMap<ProviderAccountId, AccountModelMetadata>>::new();
+        let mut groups = BTreeMap::new();
+        let mut catalogs = self.catalogs().await?;
+        // 多个账号的目录有交集时，按稳定来源顺序合并展示名和档位顺序
+        catalogs.sort_by(|(left, _), (right, _)| {
+            left.first()
+                .map(|a| &a.account_id)
+                .cmp(&right.first().map(|a| &a.account_id))
+        });
+        for (accounts, catalog) in catalogs {
+            super::model_groups::collect(&mut groups, &catalog, &accounts);
+            for (key, model) in catalog.models {
                 let id = UpstreamModelId::new(key).map_err(|_| unsent(Kind::Protocol))?;
-                models
-                    .entry(id)
-                    .or_default()
-                    .extend(accounts.iter().map(|a| a.account_id.clone()));
+                let metadata = account_metadata(model);
+                members.entry(id).or_default().extend(
+                    accounts
+                        .iter()
+                        .map(|a| (a.account_id.clone(), metadata.clone())),
+                );
             }
+        }
+        let capabilities = ModelCapabilities::new(
+            [OperationKind::Generate, OperationKind::CountTokens].into(),
+            None,
+        )
+        .with_generation_protocol(gateway_protocol::genai::GENAI_PROTOCOL)
+        .with_translated_generation_protocols([
+            gateway_protocol::openai::OPENAI_PROTOCOL,
+            gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
+        ])
+        .with_upstream_feature_validation();
+        let mut models = BTreeMap::new();
+        for (id, metadata) in members {
+            let accounts = metadata.keys().cloned().collect();
+            let model = ProviderModelCapabilities::new(
+                id.clone(),
+                capabilities.clone().with_account_metadata(metadata),
+            );
+            models.insert(id, model.with_catalog_accounts(accounts));
         }
         // 上游已有同名实体时保留原生型号，不让其他账号的分组覆盖它
-        groups.retain(|group, _| !models.contains_key(group));
-        for (group, variants) in &groups {
-            models.insert(
-                group.clone(),
-                variants
+        for (id, group) in groups {
+            models.entry(id.clone()).or_insert_with(|| {
+                let accounts = group
+                    .variants
                     .values()
                     .flat_map(|v| v.accounts.iter().cloned())
-                    .collect(),
-            );
+                    .collect();
+                group
+                    .into_model(id, capabilities.clone())
+                    .with_catalog_accounts(accounts)
+            });
         }
-        Ok(models
-            .into_iter()
-            .map(|(model, accounts)| {
-                let variants = groups.remove(&model).unwrap_or_default();
-                ProviderModelCapabilities::new(
-                    model,
-                    ModelCapabilities::new(
-                        [OperationKind::Generate, OperationKind::CountTokens].into(),
-                        None,
-                    )
-                    .with_generation_protocol(gateway_protocol::genai::GENAI_PROTOCOL)
-                    .with_translated_generation_protocols([
-                        gateway_protocol::openai::OPENAI_PROTOCOL,
-                        gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
-                    ])
-                    .with_upstream_feature_validation()
-                    .with_reasoning_variants(variants),
-                )
-                .with_catalog_accounts(accounts)
-            })
-            .collect())
+        Ok(models.into_values().collect())
     }
 
     pub(crate) async fn account_models(
@@ -298,6 +297,32 @@ impl CatalogService {
         }
         self.generation.fetch_add(1, Ordering::Relaxed);
         admin_models(catalog, observed_at)
+    }
+}
+
+fn account_metadata(model: Model) -> AccountModelMetadata {
+    let description = model
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let tag = model
+        .tag_description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let description = match (description, tag) {
+        (Some(text), Some(tag)) if text != tag => Some(format!("{text} {tag}")),
+        _ => description.or(tag).map(str::to_owned),
+    };
+    // AGY 只声明一个上下文窗口，默认值与可覆盖上限都取 maxTokens
+    let context_window = model.context_window.filter(|n| *n > 0);
+    AccountModelMetadata {
+        description,
+        context_window_tokens: context_window,
+        max_context_window_tokens: context_window,
+        max_output_tokens: model.max_output_tokens.filter(|n| *n > 0),
+        image_input: model.supports_images == Some(true),
     }
 }
 

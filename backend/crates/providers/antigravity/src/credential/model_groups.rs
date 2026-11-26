@@ -1,14 +1,50 @@
-//! 从上游分组声明提取实际存在的推理档位，不按型号前缀猜测成员
+//! 从上游分组声明提取展示名、档位顺序及实际存在的成员
 
 use crate::transport::Catalog;
-use gateway_core::routing::UpstreamModelId;
+use gateway_core::{
+    account::AccountCatalogObservation,
+    routing::{
+        ModelCapabilities, ModelPresentation, ProviderModelCapabilities, ReasoningModelVariant,
+        UpstreamModelId,
+    },
+};
+use std::collections::BTreeMap;
 
-pub(super) fn variants(catalog: &Catalog) -> Vec<(UpstreamModelId, String, UpstreamModelId)> {
-    let mut variants = Vec::new();
-    let Some(groups) = catalog.grouped_models.as_object() else {
-        return variants;
+#[derive(Default)]
+pub(super) struct ModelGroup {
+    display_name: Option<String>,
+    efforts: Vec<String>,
+    pub(super) variants: BTreeMap<String, ReasoningModelVariant>,
+}
+
+impl ModelGroup {
+    pub(super) fn into_model(
+        self,
+        model: UpstreamModelId,
+        capabilities: ModelCapabilities,
+    ) -> ProviderModelCapabilities {
+        let default = self
+            .efforts
+            .iter()
+            .find(|level| *level == "medium")
+            .or_else(|| self.efforts.first())
+            .cloned();
+        let presentation =
+            ModelPresentation::new(self.display_name, None).with_reasoning(default, self.efforts);
+        ProviderModelCapabilities::new(model, capabilities.with_reasoning_variants(self.variants))
+            .with_presentation(presentation)
+    }
+}
+
+pub(super) fn collect(
+    groups: &mut BTreeMap<UpstreamModelId, ModelGroup>,
+    catalog: &Catalog,
+    accounts: &[AccountCatalogObservation],
+) {
+    let Some(declarations) = catalog.grouped_models.as_object() else {
+        return;
     };
-    for (group, description) in groups {
+    for (group, description) in declarations {
         let Ok(group_id) = UpstreamModelId::new(group) else {
             continue;
         };
@@ -19,10 +55,9 @@ pub(super) fn variants(catalog: &Catalog) -> Vec<(UpstreamModelId, String, Upstr
             let Some(suffix) = level["thinkingSuffix"].as_str() else {
                 continue;
             };
-            if suffix.is_empty()
-                || !suffix
-                    .split('-')
-                    .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric()))
+            if !suffix
+                .split('-')
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric()))
             {
                 continue;
             }
@@ -31,9 +66,27 @@ pub(super) fn variants(catalog: &Catalog) -> Vec<(UpstreamModelId, String, Upstr
             if catalog.models.contains_key(&target)
                 && let Ok(target) = UpstreamModelId::new(target)
             {
-                variants.push((group_id.clone(), level, target));
+                let entry = groups.entry(group_id.clone()).or_default();
+                if entry.display_name.is_none() {
+                    entry.display_name = description["displayName"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_owned);
+                }
+                entry
+                    .variants
+                    .entry(level.clone())
+                    .or_insert_with(|| {
+                        entry.efforts.push(level);
+                        ReasoningModelVariant {
+                            model: target,
+                            accounts: Default::default(),
+                        }
+                    })
+                    .accounts
+                    .extend(accounts.iter().map(|account| account.account_id.clone()));
             }
         }
     }
-    variants
 }
