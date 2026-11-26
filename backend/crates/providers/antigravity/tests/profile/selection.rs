@@ -32,7 +32,8 @@ fn client_presets_resolve_platform_and_frozen_version() {
             assert!(original.user_agent().contains("; cl="));
             assert_eq!(
                 original.verified_at().is_some(),
-                client == "desktop" && platform == "macos"
+                (client == "desktop" && platform == "macos")
+                    || (client == "cli" && platform == "linux")
             );
             assert_ne!(original.user_agent(), profile.user_agent());
         }
@@ -48,10 +49,10 @@ fn fixed_version_rejects_header_injection_and_incomplete_selection() {
     ] {
         assert!(Selection::parse(&object(value)).is_err());
     }
-    let selected = Selection::parse(&object(json!({"client":"cli","platform":"linux","versionMode":"fixed","clientVersion":"1.5.15","arch":"arm64"}))).unwrap();
+    let selected = Selection::parse(&object(json!({"client":"cli","platform":"linux","versionMode":"fixed","clientVersion":"1.5.17","arch":"arm64"}))).unwrap();
     assert_eq!(
         selected.resolve("9.9.9").user_agent(),
-        "antigravity/cli/1.5.15 (aidev_client; os_type=linux; arch=arm64; cl=1027820220; auth_method=consumer)"
+        "antigravity/cli/1.5.17 (aidev_client; os_type=linux; arch=arm64; cl=1029496841; auth_method=consumer)"
     );
 }
 

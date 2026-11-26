@@ -60,7 +60,7 @@ pub(super) fn managed_header(name: &str) -> bool {
             name.as_str(),
             "authorization" | "cookie" | "cookie2" | "content-type" | "accept"
             | "user-agent" | "x-api-key" | "x-goog-api-key" | "x-goog-user-project"
-            | "x-goog-api-client"
+            | "x-goog-api-client" | "x-goog-ext-525006001-bin"
             // 跨协议入口的账号身份不能成为 AGY 账号或客户端身份
             | "chatgpt-account-id" | "chatgpt-project-id" | "openai-organization"
             | "openai-project" | "x-openai-actor-authorization" | "x-codex-installation-id"

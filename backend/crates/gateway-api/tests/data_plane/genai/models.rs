@@ -123,3 +123,24 @@ async fn directory_errors_follow_google_rpc_and_require_authentication() {
         assert_eq!(body["error"]["code"], status.as_u16(), "{path}");
     }
 }
+
+#[tokio::test]
+async fn google_api_key_reads_the_same_authorized_catalog() {
+    let router = api_router(Arc::new(Execution {
+        client: Some(client()),
+        ..Default::default()
+    }))
+    .await;
+    for path in ["/v1beta/models", "/v1beta/models/model-a"] {
+        let (expected_status, expected) = query(&router, path, true).await;
+        let request = Request::get(path)
+            .header("x-goog-api-key", KEY)
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), expected_status);
+        let actual: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
+        assert_eq!(actual, expected);
+    }
+}

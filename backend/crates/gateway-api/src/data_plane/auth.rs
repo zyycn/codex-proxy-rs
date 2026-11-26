@@ -104,8 +104,9 @@ pub(crate) async fn authenticate_client(
 pub(crate) async fn verify_client(
     service: &DataPlaneService,
     headers: &HeaderMap,
+    accepted: ClientKeyHeaders,
 ) -> Result<AuthenticatedClient, ClientApiKeyAuthError> {
-    let request = client_authentication_request(headers, ClientKeyHeaders::Bearer)?;
+    let request = client_authentication_request(headers, accepted)?;
     service.verify(request).await
 }
 
@@ -114,6 +115,7 @@ pub(crate) async fn verify_client(
 pub(crate) enum ClientKeyHeaders {
     Bearer,
     Anthropic,
+    GenAi,
 }
 
 fn client_authentication_request(
@@ -125,16 +127,20 @@ fn client_authentication_request(
             .to_str()
             .map_err(|_| ClientApiKeyAuthError::MalformedAuthorization)?
             .to_owned()
-    } else if matches!(accepted, ClientKeyHeaders::Anthropic)
-        && let Some(key) = headers.get("x-api-key")
-    {
+    } else {
+        let header = match accepted {
+            ClientKeyHeaders::Bearer => None,
+            ClientKeyHeaders::Anthropic => Some("x-api-key"),
+            ClientKeyHeaders::GenAi => Some("x-goog-api-key"),
+        };
+        let key = header
+            .and_then(|name| headers.get(name))
+            .ok_or(ClientApiKeyAuthError::MissingAuthorization)?;
         format!(
             "Bearer {}",
             key.to_str()
                 .map_err(|_| ClientApiKeyAuthError::MalformedAuthorization)?
         )
-    } else {
-        return Err(ClientApiKeyAuthError::MissingAuthorization);
     };
     let request = ClientAuthenticationRequest::new(raw)
         .map_err(|_| ClientApiKeyAuthError::MalformedAuthorization)?;

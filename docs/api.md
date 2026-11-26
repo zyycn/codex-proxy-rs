@@ -27,6 +27,7 @@ Authorization: Bearer sk_...
 自动生成的 Key 以 `sk_` 开头，自定义 Key 按原值鉴权，无固定前缀或长度。仅已保存且启用的 Key 有效
 
 `/v1/messages`、`/v1/messages/count_tokens`、`/v1/models` 和 `/v1/models/{model_id}` 也接受 `x-api-key: <Client Key>`。
+GenAI 的 `/v1beta/models*` 和 `/v1beta:{method}` 入口也接受 `x-goog-api-key: <Client Key>`。
 同时提供两个认证头时优先使用 `Authorization`；客户端提交的是网关 Client Key，上游密钥由选中的账号提供
 
 启用[入口认证插件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#数据面入口认证)时，
@@ -249,7 +250,7 @@ WebSocket message 和 frame 不设置网关私有长度上限；请求字段与�
 
 ### Antigravity 客户端原生生成
 
-客户端用 `Authorization: Bearer <Client Key>` 访问以下 GenAI 短路径。模型名取自 URL，入口只在当前 Key 的账号范围内选择声明 GenAI 协议的原生模型。目前由 Antigravity 使用 OAuth 账号查询上游项目和可用模型。目录与凭据版本绑定，调度选定账号后，网关把原生正文、项目和模型发送到该注册对应的资源服务。个人账号的登录可用性见下文的 Antigravity OAuth。
+客户端用 `Authorization: Bearer <Client Key>` 或 `x-goog-api-key: <Client Key>` 访问以下 GenAI 短路径。模型名取自 URL，入口只在当前 Key 的账号范围内选择声明 GenAI 协议的原生模型。目前由 Antigravity 使用 OAuth 账号查询上游项目和可用模型。目录与凭据版本绑定，调度选定账号后，网关把原生正文、项目和模型发送到该注册对应的资源服务。个人账号的登录可用性见下文的 Antigravity OAuth。
 
 上游目录声明的模型分组支持使用基础模型名，并通过 `generationConfig.thinkingConfig.thinkingLevel` 指定档位，例如 `gemini-4-hydrogen` 配合 `MEDIUM`。网关只选择该账号目录明确列出的分组成员，账号和分组模型限制按最终型号校验；目录中至少有一个可访问档位时才显示基础模型名。缺少或不支持的档位返回 400，显式完整型号及指向完整型号的模型映射保持原目标。分组能力随上游目录刷新，旧缓存未包含分组时仍只提供完整型号
 
@@ -263,7 +264,9 @@ WebSocket message 和 frame 不设置网关私有长度上限；请求字段与�
 
 普通生成从上游 JSON 的 `response` 中取出原生正文，流式生成逐个解开 SSE 数据帧。等待首帧和后续帧时，网关保持静默。首帧前的失败保留 HTTP 错误状态。原生正文保留工具参数、结果、思考签名和未知字段。客户端归属读取 `User-Agent`、`X-Goog-Api-Client`。网关错误使用 Google RPC 风格的 `error.code`、`error.status` 和 `error.message`。[Google 原生生成协议](https://ai.google.dev/api/generate-content)
 
-CPR 在 AGY 的原生与转换入口透传未被过滤的 HTTP 扩展头，保留同名多值的原始字节。下游鉴权、Cookie、账号身份、客户端画像和 HTTP 传输头不透传；认证、项目和 UA 由所选账号与冻结画像生成。`X-Goog-User-Project` 属于调用方指定的计费项目，不能覆盖所选账号的项目，见 [Google 系统参数](https://docs.cloud.google.com/apis/docs/system-parameters)
+CPR 在 AGY 的原生与转换入口透传未被过滤的 HTTP 扩展头，保留同名多值的原始字节。下游鉴权、Cookie、账号身份、客户端画像和 HTTP 传输头不透传；认证、项目和 UA 由所选 OAuth 账号与冻结画像生成。`X-Goog-Api-Client` 与 Gateway 的 `X-Goog-Ext-525006001-Bin` 不进入 Cloud Code 请求。`X-Goog-User-Project` 属于调用方指定的计费项目，不能覆盖所选账号的项目，见 [Google 系统参数](https://docs.cloud.google.com/apis/docs/system-parameters)
+
+Cloud Code 生成封套使用 `userAgent: "antigravity"` 与 `requestType: "agent"`，独立搜索使用 `web_search`。原生正文只局部替换配置的 `systemInstruction`、移除其蛇形别名，以及 `labels` 中 Gateway 添加的 `client`、`goog-originating-logical-product-id`、`goog-originating-service-id`。其余字段保留原始 JSON 表达与顺序，不经 Chat 或 canonical 请求重建
 
 同账号及归属未知时保留追踪头；会话绑定或本次执行的已有账号归属明确发生切换时，CPR 清理入站或中间件带入的 `traceparent`、`tracestate`、`sentry-trace`、`baggage`。该清理作用于本次出站请求，不修改工具结果、思考签名或业务正文
 
@@ -1825,7 +1828,7 @@ Antigravity 的全局客户端设置保存在 `providerRequestProfiles.antigravi
 
 固定版本使用 `"versionMode":"fixed"`，并将 `clientVersion` 设为三段数字版本。Desktop 与 CLI 分别跟随各自的官方发布资料，各实例启动后检查，之后每 24 小时更新一次；检查失败保留上次成功结果，尚无结果时使用已核实的内置版本。请求开始时冻结客户端、平台、架构、版本及对应的 CL 构建号，重试沿用同一画像。发布资料不提供 CL，未知版本省略该字段，不套用旧版本的构建号。[Google 官方下载](https://antigravity.google/download)
 
-预览与实际出站请求共用 `User-Agent` 生成规则。本机 macOS arm64 的 Desktop 2.34.0 已认证请求为 `antigravity/hub/2.34.0 (aidev_client; os_type=darwin; arch=arm64; cl=1026637980)`；CLI 1.5.15 经 ACP 入口及打印模式的控制面请求核实使用 `cli` 子客户端标识、CL `1027820220` 及 `auth_method=consumer`。默认身份不添加关闭遥测才出现的 `datacollection_opt_in` 或 ACP 宿主传入的 `host_path`
+预览与实际出站请求共用 `User-Agent` 生成规则。本机 macOS arm64 的 Desktop 2.34.0 已认证请求为 `antigravity/hub/2.34.0 (aidev_client; os_type=darwin; arch=arm64; cl=1026637980)`；Linux amd64 的 CLI 1.5.17 经个人 OAuth 打印模式的控制面与生成请求核实使用 `cli` 子客户端标识、CL `1029496841` 及 `auth_method=consumer`。默认身份不添加关闭遥测才出现的 `datacollection_opt_in` 或 ACP 宿主传入的 `host_path`
 
 Cloud Code 请求固定使用 HTTP/1.1 和 `Accept-Encoding: gzip`，响应按流解压，大小限制作用于解压后的内容。
 传输显式使用 rustls，TLS 握手与官方 Go 客户端不同；reqwest 的默认 `Accept: */*` 和请求头顺序也不完全一致。画像预览不代表 TLS 或完整网络指纹一致

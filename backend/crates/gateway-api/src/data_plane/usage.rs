@@ -21,7 +21,7 @@ use crate::{
 };
 
 use super::{
-    auth::{client_access_error_response, verify_client},
+    auth::{ClientKeyHeaders, client_access_error_response, verify_client},
     error::{missing_client_api_key_response, openai_error_response},
 };
 
@@ -40,7 +40,7 @@ async fn usage(
     headers: HeaderMap,
     uri: axum::http::Uri,
 ) -> Response {
-    let client = match verify_client(state.data_plane(), &headers).await {
+    let client = match verify_client(state.data_plane(), &headers, ClientKeyHeaders::Bearer).await {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error.into()),
     };

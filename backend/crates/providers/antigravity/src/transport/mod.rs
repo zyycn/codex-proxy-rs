@@ -5,6 +5,7 @@ mod count;
 mod failure;
 mod headers;
 mod pool;
+mod request;
 mod response;
 pub(crate) use client::{Catalog, CloudCodeClient, GenerateMode, Model, unwrap_frame};
 pub(crate) use count::count_events;

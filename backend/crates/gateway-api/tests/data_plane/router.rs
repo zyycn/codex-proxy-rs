@@ -180,6 +180,7 @@ async fn configured_cors_origin_assembles_router_and_answers_preflight() {
         .expect("allow-headers present");
     assert!(allow_headers.contains("authorization"));
     assert!(allow_headers.contains("x-api-key"));
+    assert!(allow_headers.contains("x-goog-api-key"));
     assert!(allow_headers.contains("anthropic-version"));
     assert!(allow_headers.contains("anthropic-beta"));
     assert!(allow_headers.contains("x-request-id"));

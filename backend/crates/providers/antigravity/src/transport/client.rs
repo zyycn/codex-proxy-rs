@@ -179,18 +179,20 @@ impl CloudCodeClient {
         struct Envelope<'a> {
             project: &'a str,
             model: &'a str,
-            #[serde(rename = "requestType", skip_serializing_if = "Option::is_none")]
-            request_type: Option<&'static str>,
+            #[serde(rename = "userAgent")]
+            user_agent: &'static str,
+            #[serde(rename = "requestType")]
+            request_type: &'static str,
             #[serde(rename = "enabledCreditTypes", skip_serializing_if = "Option::is_none")]
             enabled_credit_types: Option<[&'static str; 1]>,
-            request: BTreeMap<String, &'a RawValue>,
+            request: &'a RawValue,
         }
         let instruction = if mode == GenerateMode::WebSearch {
             *SEARCH_INSTRUCTION
         } else {
             &self.system_instruction
         };
-        let request = Self::request_body(body, instruction)?;
+        let request = super::request::request_body(body, instruction, false)?;
         let (send, media) = if mode == GenerateMode::Stream {
             (
                 self.post("streamGenerateContent", token)
@@ -208,11 +210,16 @@ impl CloudCodeClient {
             send.json(&Envelope {
                 project,
                 model,
-                request_type: (mode == GenerateMode::WebSearch).then_some("web_search"),
+                user_agent: "antigravity",
+                request_type: if mode == GenerateMode::WebSearch {
+                    "web_search"
+                } else {
+                    "agent"
+                },
                 enabled_credit_types: self
                     .use_quota_credits
                     .then_some([super::account::GOOGLE_ONE_AI]),
-                request,
+                request: &request,
             }),
             token,
             headers,
@@ -227,41 +234,21 @@ impl CloudCodeClient {
         body: &[u8],
         headers: &[MiddlewareHeader],
     ) -> Result<Response, ProviderError> {
-        let mut request = Self::request_body(body, &self.system_instruction)?;
         // Desktop 的计数封套只接受 Vertex CountTokensRequest，没有项目和生成控制字段
-        for field in [
-            "model",
-            "safetySettings",
-            "safety_settings",
-            "toolConfig",
-            "tool_config",
-            "labels",
-            "sessionId",
-            "session_id",
-        ] {
-            request.remove(field);
+        let request = super::request::request_body(body, &self.system_instruction, true)?;
+        #[derive(Serialize)]
+        struct Envelope<'a> {
+            request: &'a RawValue,
         }
         self.send(
             self.post("countTokens", token)
                 .timeout(GENERATION_TIMEOUT)
-                .json(&json!({"request":request})),
+                .json(&Envelope { request: &request }),
             token,
             headers,
             "application/json",
         )
         .await
-    }
-
-    fn request_body<'a>(
-        body: &'a [u8],
-        instruction: &'a RawValue,
-    ) -> Result<BTreeMap<String, &'a RawValue>, ProviderError> {
-        let mut request: BTreeMap<String, &RawValue> = serde_json::from_slice(body)
-            .map_err(|e| unsent(Kind::InvalidRequest).with_source(e))?;
-        // 生成和计数共享同一身份策略，其他字段保留原始 JSON 表达
-        request.remove("system_instruction");
-        request.insert("systemInstruction".to_owned(), instruction);
-        Ok(request)
     }
 
     async fn send(

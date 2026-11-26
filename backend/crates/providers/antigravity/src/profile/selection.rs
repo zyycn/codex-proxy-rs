@@ -31,8 +31,8 @@ impl ClientKind {
                 changelist: 1_026_637_980,
             },
             Self::Cli => ClientBuild {
-                version: "1.5.15",
-                changelist: 1_027_820_220,
+                version: "1.5.17",
+                changelist: 1_029_496_841,
             },
         }
     }
@@ -151,7 +151,10 @@ impl Selection {
             arch: self.target().arch,
             client_version: version.into(),
             // 发布资料只有版本号；未知版本不沿用另一个版本的构建号
-            changelist: (version == baseline.version).then_some(baseline.changelist),
+            changelist: match (self.client, version) {
+                (ClientKind::Cli, "1.5.15") => Some(1_027_820_220),
+                _ => (version == baseline.version).then_some(baseline.changelist),
+            },
             system_prompt: self
                 .system_prompt
                 .as_deref()
@@ -194,17 +197,19 @@ impl ClientProfile {
     }
     pub(crate) fn verified_at(&self) -> Option<DateTime<Utc>> {
         let baseline = self.client.baseline();
-        if self.client != ClientKind::Desktop
-            || self.platform != Platform::Macos
-            || self.arch != Architecture::Arm64
-            || self.client_version != baseline.version
-            || self.changelist != Some(baseline.changelist)
-        {
+        if self.client_version != baseline.version || self.changelist != Some(baseline.changelist) {
             return None;
         }
-        // Desktop 完整 UA 已实测；CLI 的 ACP 采样不足以核验普通交互入口的完整画像
-        // 核验时间独立于官方发布资料的轮询时间
-        Utc.with_ymd_and_hms(2026, 11, 23, 11, 11, 15).single()
+        // 对应平台的 OAuth HTTP 请求已实测；此时间不代表 TLS 指纹或发布资料轮询时间
+        match (self.client, self.platform, self.arch) {
+            (ClientKind::Desktop, Platform::Macos, Architecture::Arm64) => {
+                Utc.with_ymd_and_hms(2026, 11, 23, 11, 11, 15).single()
+            }
+            (ClientKind::Cli, Platform::Linux, Architecture::Amd64) => {
+                Utc.with_ymd_and_hms(2026, 11, 26, 16, 1, 16).single()
+            }
+            _ => None,
+        }
     }
     pub(crate) fn client_identifier(&self) -> String {
         format!(

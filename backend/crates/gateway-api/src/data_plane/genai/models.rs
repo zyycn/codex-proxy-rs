@@ -73,7 +73,7 @@ async fn query_response(
     query: ModelsQuery,
 ) -> Response {
     let service = state.data_plane();
-    let client = match authenticate_client(service, &headers, ClientKeyHeaders::Bearer).await {
+    let client = match authenticate_client(service, &headers, ClientKeyHeaders::GenAi).await {
         Ok(client) => client,
         Err(err) => return client_access_error_response(err),
     };

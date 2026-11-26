@@ -17,7 +17,7 @@ use gateway_protocol::peer::{MAX_ACCOUNTS, MAX_MODELS, MAX_QUOTA_WINDOWS, MAX_RE
 use serde::Deserialize;
 
 use super::{
-    auth::{client_access_error_response, verify_client},
+    auth::{ClientKeyHeaders, client_access_error_response, verify_client},
     error::{missing_client_api_key_response, openai_error_response},
 };
 use crate::{
@@ -36,7 +36,7 @@ pub(super) fn router() -> Router<ApiState> {
 struct PeerQuery {}
 
 async fn peer_link(State(state): State<ApiState>, headers: HeaderMap, uri: Uri) -> Response {
-    let client = match verify_client(state.data_plane(), &headers).await {
+    let client = match verify_client(state.data_plane(), &headers, ClientKeyHeaders::Bearer).await {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error.into()),
     };
