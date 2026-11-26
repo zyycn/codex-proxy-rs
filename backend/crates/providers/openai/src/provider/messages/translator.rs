@@ -28,11 +28,12 @@ impl NativeResponseTranslator for MessagesResponseTranslator {
         event: &ProtocolWireEvent,
     ) -> Result<Vec<ProtocolWireEvent>, ProviderError> {
         if let Some(raw) = event.raw_json_body() {
-            let message: Value = serde_json::from_slice(raw).map_err(|_| protocol_error())?;
+            let message: Value =
+                serde_json::from_slice(raw).map_err(|error| protocol_error().with_source(error))?;
             let event = self
                 .stream
                 .complete_json_event(&message)
-                .map_err(|_| protocol_error())?;
+                .map_err(|error| protocol_error().with_source(error))?;
             return wire_events(OPENAI_PROTOCOL, vec![event]);
         }
         if !event.has_json_data() {
@@ -41,9 +42,11 @@ impl NativeResponseTranslator for MessagesResponseTranslator {
         let events = self
             .stream
             .push(event.data())
-            .map_err(|_| protocol_error())?;
+            .map_err(|error| protocol_error().with_source(error))?;
         if event.data().get("type").and_then(Value::as_str) == Some("message_stop") {
-            self.stream.finish().map_err(|_| protocol_error())?;
+            self.stream
+                .finish()
+                .map_err(|error| protocol_error().with_source(error))?;
         }
         wire_events(OPENAI_PROTOCOL, events)
     }
@@ -73,15 +76,17 @@ impl NativeResponseTranslator for ResponsesResponseTranslator {
         event: &ProtocolWireEvent,
     ) -> Result<Vec<ProtocolWireEvent>, ProviderError> {
         if let Some(raw) = event.raw_json_body() {
-            let response = serde_json::from_slice(raw).map_err(|_| protocol_error())?;
+            let response =
+                serde_json::from_slice(raw).map_err(|error| protocol_error().with_source(error))?;
             let message = self
                 .stream
                 .complete_json(&response)
-                .map_err(|_| protocol_error())?;
-            let raw = serde_json::to_vec(&message).map_err(|_| protocol_error())?;
+                .map_err(|error| protocol_error().with_source(error))?;
+            let raw = serde_json::to_vec(&message)
+                .map_err(|error| protocol_error().with_source(error))?;
             return Ok(vec![
                 ProtocolWireEvent::raw_json(ANTHROPIC_PROTOCOL, raw.into())
-                    .map_err(|_| protocol_error())?,
+                    .map_err(|error| protocol_error().with_source(error))?,
             ]);
         }
         if !event.has_json_data() {
@@ -90,12 +95,14 @@ impl NativeResponseTranslator for ResponsesResponseTranslator {
         let events = self
             .stream
             .push(event.data())
-            .map_err(|_| protocol_error())?;
+            .map_err(|error| protocol_error().with_source(error))?;
         if matches!(
             event.data().get("type").and_then(Value::as_str),
             Some("response.completed" | "response.incomplete")
         ) {
-            self.stream.finish().map_err(|_| protocol_error())?;
+            self.stream
+                .finish()
+                .map_err(|error| protocol_error().with_source(error))?;
         }
         wire_events(ANTHROPIC_PROTOCOL, events)
     }
@@ -113,7 +120,7 @@ fn wire_events(
                 value.get("type").and_then(Value::as_str).map(str::to_owned),
                 value,
             )
-            .map_err(|_| protocol_error())
+            .map_err(|error| protocol_error().with_source(error))
         })
         .collect()
 }

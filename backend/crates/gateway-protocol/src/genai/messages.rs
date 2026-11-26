@@ -14,6 +14,53 @@ fn invalid() -> TranslationError {
 pub fn messages_to_genai_request(
     request: &Map<String, Value>,
 ) -> Result<Map<String, Value>, TranslationError> {
+    let mut result = content_to_genai(request)?;
+    let mut generation = Map::new();
+    for (from, to) in [
+        ("max_tokens", "maxOutputTokens"),
+        ("temperature", "temperature"),
+        ("top_p", "topP"),
+        ("top_k", "topK"),
+        ("stop_sequences", "stopSequences"),
+    ] {
+        if let Some(value) = request.get(from) {
+            generation.insert(to.into(), value.clone());
+        }
+    }
+    if let Some(thinking) = request.get("thinking") {
+        match thinking["type"].as_str() {
+            Some("disabled") => {
+                generation.insert("thinkingConfig".into(), json!({"thinkingBudget":0}));
+            }
+            Some("enabled") => {
+                generation.insert(
+                    "thinkingConfig".into(),
+                    json!({"thinkingBudget":thinking["budget_tokens"],"includeThoughts":true}),
+                );
+            }
+            Some("adaptive" | "auto") => {
+                generation.insert(
+                    "thinkingConfig".into(),
+                    json!({"thinkingBudget":-1,"includeThoughts":true}),
+                );
+            }
+            _ => return Err(invalid()),
+        }
+    }
+    if let Some(format) = request.get("output_config").and_then(|c| c.get("format")) {
+        if format["type"] != "json_schema" {
+            return Err(invalid());
+        }
+        generation.insert("responseMimeType".into(), json!("application/json"));
+        generation.insert("responseSchema".into(), format["schema"].clone());
+    }
+    result.insert("generationConfig".into(), Value::Object(generation));
+    Ok(result)
+}
+
+pub(super) fn content_to_genai(
+    request: &Map<String, Value>,
+) -> Result<Map<String, Value>, TranslationError> {
     let mut result = Map::new();
     if let Some(system) = request.get("system") {
         result.insert(
@@ -125,46 +172,6 @@ pub fn messages_to_genai_request(
         }
     }
     result.insert("contents".into(), json!(contents));
-    let mut generation = Map::new();
-    for (from, to) in [
-        ("max_tokens", "maxOutputTokens"),
-        ("temperature", "temperature"),
-        ("top_p", "topP"),
-        ("top_k", "topK"),
-        ("stop_sequences", "stopSequences"),
-    ] {
-        if let Some(value) = request.get(from) {
-            generation.insert(to.into(), value.clone());
-        }
-    }
-    if let Some(thinking) = request.get("thinking") {
-        match thinking["type"].as_str() {
-            Some("disabled") => {
-                generation.insert("thinkingConfig".into(), json!({"thinkingBudget":0}));
-            }
-            Some("enabled") => {
-                generation.insert(
-                    "thinkingConfig".into(),
-                    json!({"thinkingBudget":thinking["budget_tokens"],"includeThoughts":true}),
-                );
-            }
-            Some("adaptive" | "auto") => {
-                generation.insert(
-                    "thinkingConfig".into(),
-                    json!({"thinkingBudget":-1,"includeThoughts":true}),
-                );
-            }
-            _ => return Err(invalid()),
-        }
-    }
-    if let Some(format) = request.get("output_config").and_then(|c| c.get("format")) {
-        if format["type"] != "json_schema" {
-            return Err(invalid());
-        }
-        generation.insert("responseMimeType".into(), json!("application/json"));
-        generation.insert("responseSchema".into(), format["schema"].clone());
-    }
-    result.insert("generationConfig".into(), Value::Object(generation));
     if let Some(tools) = request.get("tools").and_then(Value::as_array) {
         let declarations = tools
             .iter()

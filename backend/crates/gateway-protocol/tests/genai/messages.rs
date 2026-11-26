@@ -1,11 +1,8 @@
 //! 验证转换路径的工具往返、多模态输入和签名来源
 
 use gateway_protocol::{
-    anthropic::{
-        MessagesAccumulator, MessagesModelCapabilities, MessagesToResponsesStream,
-        responses_to_messages_request,
-    },
-    genai::{GenAiToMessagesStream, messages_to_genai_request},
+    anthropic::{MessagesAccumulator, MessagesToResponsesStream},
+    genai::{GenAiToMessagesStream, messages_to_genai_request, responses_to_genai_request},
 };
 use serde_json::{Value, json};
 
@@ -36,12 +33,7 @@ fn signed_tool_roundtrip_preserves_custom_identity_and_final_usage() {
     let call_id = call["call_id"].clone();
     input.push(json!({"type":"custom_tool_call_output","call_id":call_id,"output":"done"}));
     let next = json!({"model":"fixture","input":input,"tools":original["tools"]});
-    let messages = responses_to_messages_request(
-        next.as_object().unwrap(),
-        &MessagesModelCapabilities::default(),
-    )
-    .unwrap();
-    let request = messages_to_genai_request(&messages).unwrap();
+    let request = responses_to_genai_request(next.as_object().unwrap()).unwrap();
     let call = &request["contents"][0]["parts"][0];
     assert_eq!(call["thoughtSignature"], "opaque-signature");
     assert_eq!(call["functionCall"]["name"], "patch");

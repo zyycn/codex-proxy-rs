@@ -74,7 +74,7 @@ impl CodexProvider {
                     .messages_model_capabilities(selected.lease.account(), &model)
                     .unwrap_or_default();
                 let mut body = responses_to_messages_request(original, &capabilities)
-                    .map_err(|_| invalid_request())?;
+                    .map_err(|error| invalid_request().with_source(error))?;
                 // Responses 的 HTTP JSON 和 SSE 共用事件输出，跨协议上游统一请求事件流
                 body.insert("stream".to_owned(), Value::Bool(true));
                 body
@@ -107,8 +107,8 @@ impl CodexProvider {
             let mut source_context = generate.protocol_payload().context().clone();
             retain_target_headers(source, &mut source_context, &mut headers);
             let translator = translator::ResponsesResponseTranslator::new(original);
-            let mut translated =
-                messages_to_responses_request(original).map_err(|_| invalid_request())?;
+            let mut translated = messages_to_responses_request(original)
+                .map_err(|error| invalid_request().with_source(error))?;
             if matches!(
                 selected.lease.authentication(),
                 CodexRuntimeAuthentication::OAuth(_)

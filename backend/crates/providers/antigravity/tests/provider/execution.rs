@@ -618,7 +618,7 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
     for (protocol, body) in [
         (
             "openai",
-            json!({"model":"fixture-model","input":"hello","max_output_tokens":100,"reasoning":{"effort":"none"},"text":{"format":{"type":"json_schema","schema":{"type":"object"}}}}),
+            json!({"model":"fixture-model","input":"hello","max_output_tokens":100,"reasoning":{"effort":"high"},"temperature":0.3,"top_p":0.8,"tools":[{"type":"function","name":"pwd","parameters":{"type":"object"}}],"tool_choice":"required","text":{"format":{"type":"json_schema","schema":{"type":"object"}}}}),
         ),
         (
             "anthropic",
@@ -669,7 +669,13 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
         if protocol == "openai" {
             assert_eq!(
                 body["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-                0
+                24576
+            );
+            assert_eq!(body["request"]["generationConfig"]["temperature"], 0.3);
+            assert_eq!(body["request"]["generationConfig"]["topP"], 0.8);
+            assert_eq!(
+                body["request"]["toolConfig"]["functionCallingConfig"]["mode"],
+                "ANY"
             );
             assert_eq!(
                 body["request"]["generationConfig"]["responseSchema"],
@@ -698,6 +704,124 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
         drop(stream);
         released(&fixture).await;
     }
+}
+
+#[tokio::test]
+async fn optional_search_preserves_functions_and_unspecified_output_limit() {
+    use gateway_core::{
+        engine::provider::ProviderRequest,
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+    };
+    let upstream = MockServer::start().await;
+    Mock::given(path("/v1internal:streamGenerateContent"))
+        .and(body_partial_json(json!({"request":{"tools":[{"functionDeclarations":[{"name":"pwd"}]}]}})))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
+            "text/event-stream",
+        ))
+        .expect(4).mount(&upstream).await;
+    let search = json!({"type":"web_search"});
+    let function = json!({"type":"function","name":"pwd","parameters":{"type":"object"}});
+    for choice in [
+        json!(null),
+        json!("auto"),
+        json!("required"),
+        json!({"type":"allowed_tools","mode":"required","tools":[search,function]}),
+    ] {
+        let fixture = Fixture::new(&upstream.uri());
+        let mut body = json!({"model":"fixture-model","input":"hello","tools":[search,function],"tool_choice":choice});
+        if choice == "required" {
+            body["max_output_tokens"] = json!(null);
+        }
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+        ));
+        let stream = fixture
+            .provider
+            .clone()
+            .execute(
+                ProviderRequest::new(operation, request(false).candidate().clone()),
+                context(frozen_profile(), CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        stream.try_collect::<Vec<_>>().await.unwrap();
+        released(&fixture).await;
+    }
+    for request in upstream.received_requests().await.unwrap() {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        assert!(
+            body["request"]["generationConfig"]
+                .get("maxOutputTokens")
+                .is_none()
+        );
+        assert!(
+            body["request"]["generationConfig"]
+                .get("thinkingConfig")
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn invalid_required_search_is_rejected_before_sending_and_releases_lease() {
+    use gateway_core::{
+        engine::provider::ProviderRequest,
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+    };
+    let upstream = MockServer::start().await;
+    let fixture = Fixture::new(&upstream.uri());
+    {
+        let mut catalog = fixture.store.primary().catalog.lock().unwrap();
+        let (_, bytes) = catalog.as_mut().unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        value["webSearchModelIds"] = json!(["fixture-model"]);
+        *bytes = value.to_string().into();
+    }
+    let search = json!({"type":"web_search"});
+    for (tools, message) in [
+        (json!([]), "The selected web search tool must be declared."),
+        (
+            json!([search, search]),
+            "Select one web search declaration.",
+        ),
+        (
+            json!([{"type":"web_search","external_web_access":false}]),
+            "Antigravity web search requires live external web access.",
+        ),
+        (
+            json!([{"type":"web_search","external_web_access":"cached"}]),
+            "Antigravity web search requires live external web access.",
+        ),
+        (
+            json!([{"type":"web_search","user_location":{"type":"approximate","country":"US"}}]),
+            "Antigravity cannot honor the specified web search options.",
+        ),
+    ] {
+        let body =
+            json!({"model":"fixture-model","input":"hello","tools":tools,"tool_choice":search});
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+        ));
+        let error = fixture
+            .provider
+            .clone()
+            .execute(
+                ProviderRequest::new(operation, request(false).candidate().clone()),
+                context(frozen_profile(), CancellationToken::new()),
+            )
+            .await
+            .err()
+            .expect("invalid search request");
+        assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert_eq!(
+            gateway_core::error::GatewayError::from_provider(&error).client_message(),
+            message
+        );
+        released(&fixture).await;
+    }
+    assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]

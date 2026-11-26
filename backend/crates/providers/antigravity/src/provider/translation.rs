@@ -8,12 +8,12 @@ use gateway_core::{
     operation::Operation,
 };
 use gateway_protocol::{
-    anthropic::{
-        ANTHROPIC_PROTOCOL, MessagesModelCapabilities, MessagesToResponsesStream,
-        responses_to_messages_request,
+    anthropic::{ANTHROPIC_PROTOCOL, MessagesToResponsesStream},
+    genai::{
+        GENAI_PROTOCOL, GenAiToMessagesStream, messages_to_genai_request,
+        responses_to_genai_request,
     },
-    genai::{GENAI_PROTOCOL, GenAiToMessagesStream, messages_to_genai_request},
-    openai::OPENAI_PROTOCOL,
+    openai::{OPENAI_PROTOCOL, web_search},
 };
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -42,37 +42,28 @@ pub(super) fn prepare(
     {
         return Err(unsent(ProviderErrorKind::InvalidRequest));
     }
-    let search = operation.requires_web_search();
-    let body = if search {
-        super::web_search::request(original)?
+    let search = if source == OPENAI_PROTOCOL {
+        web_search::required_tool(original)
+            .map_err(|error| ProviderError::invalid_request(error.message()).with_source(error))?
     } else {
-        let mut messages = if source == OPENAI_PROTOCOL {
-            Cow::Owned(
-                responses_to_messages_request(
-                    original,
-                    &MessagesModelCapabilities {
-                        hosted_web_search: Some(false),
-                        ..Default::default()
-                    },
-                )
-                .map_err(|e| unsent(ProviderErrorKind::InvalidRequest).with_source(e))?,
-            )
+        None
+    };
+    let body = if let Some(tool) = search {
+        super::web_search::request(original, tool)?
+    } else {
+        if source == OPENAI_PROTOCOL {
+            responses_to_genai_request(original)
         } else {
-            Cow::Borrowed(original)
-        };
-        // Messages 的必填输出上限不能成为 GenAI 的隐式默认值
-        if source == OPENAI_PROTOCOL && !original.contains_key("max_output_tokens") {
-            messages.to_mut().remove("max_tokens");
+            messages_to_genai_request(original)
         }
-        messages_to_genai_request(&messages)
-            .map_err(|e| unsent(ProviderErrorKind::InvalidRequest).with_source(e))?
+        .map_err(|e| unsent(ProviderErrorKind::InvalidRequest).with_source(e))?
     };
     let model = original
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    let translator = if search {
+    let translator = if search.is_some() {
         Translator::Search(Box::new(super::web_search::SearchResponse::new(original)))
     } else {
         Translator::Generate(Box::new(GenerationTranslator {
@@ -83,7 +74,7 @@ pub(super) fn prepare(
     };
     let mut context = payload.context().clone();
     // Desktop 搜索使用完整 JSON，编码路径保留增量交付
-    context.insert("stream".into(), json!(!search));
+    context.insert("stream".into(), json!(search.is_none()));
     let bytes = serde_json::to_vec(&body).map_err(|_| unsent(ProviderErrorKind::InvalidRequest))?;
     let operation = operation
         .replace_protocol_wire(None, context)

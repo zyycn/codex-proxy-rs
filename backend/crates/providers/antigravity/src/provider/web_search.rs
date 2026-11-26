@@ -9,38 +9,16 @@ use gateway_core::{
 use gateway_protocol::{
     anthropic::MessagesToResponsesStream,
     genai::{GenAiToMessagesStream, grounded_search_events},
-    openai::{OPENAI_PROTOCOL, web_search::is_search},
+    openai::{OPENAI_PROTOCOL, web_search},
 };
 use serde_json::{Map, Value, json};
 use std::borrow::Cow;
 
-pub(super) fn request(original: &Map<String, Value>) -> Result<Map<String, Value>, ProviderError> {
-    let choice = original.get("tool_choice").unwrap_or(&Value::Null);
-    let mut tools = original
-        .get("tools")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|tool| {
-            is_search(tool)
-                && (!is_search(choice) || choice["type"] == tool["type"])
-                && (choice["type"] != "allowed_tools"
-                    || choice["tools"]
-                        .as_array()
-                        .is_some_and(|allowed| allowed.iter().any(|t| t["type"] == tool["type"])))
-        });
-    let tool = tools.next().ok_or_else(|| {
-        ProviderError::invalid_request("The selected web search tool must be declared.")
-    })?;
-    if tools.next().is_some() {
-        return Err(ProviderError::invalid_request(
-            "Select one web search declaration.",
-        ));
-    }
-    if tool
-        .get("external_web_access")
-        .is_some_and(|v| !v.is_null() && v != true && v != "live")
-    {
+pub(super) fn request(
+    original: &Map<String, Value>,
+    tool: &Value,
+) -> Result<Map<String, Value>, ProviderError> {
+    if !web_search::allows_live_access(tool) {
         return Err(ProviderError::invalid_request(
             "Antigravity web search requires live external web access.",
         ));

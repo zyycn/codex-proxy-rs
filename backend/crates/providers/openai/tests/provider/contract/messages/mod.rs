@@ -1,6 +1,7 @@
 //! Messages 原生 wire、跨协议头隔离和本地计数合同
 
 mod affinity;
+mod translator;
 
 use super::*;
 use gateway_core::event::ProviderResponseTimings;

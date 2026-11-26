@@ -4,3 +4,4 @@ mod codex;
 mod events;
 mod headers;
 mod sse;
+mod web_search;

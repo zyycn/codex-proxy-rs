@@ -512,6 +512,8 @@ Messages 与 Responses 的映射、忽略和降级规则参考 CPA，
 同语义字段交给目标上游校验；结构解码或必要流状态失败按协议错误终结，不补造成功结果。
 字段合同见 [Chat Completions](api.md#chat-completions-请求)和 [Messages](api.md#messages-请求)，插件视图见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 
+Responses 搜索的强制执行判定、声明选择与联网模式解析由 `gateway-protocol::openai::web_search` 统一提供。Core 用其判定路由，协议转换复用声明解析，Provider 负责账号可用的搜索模型和目标上游支持的选项。需要独立搜索转换时必须对应唯一声明，缺失或歧义按请求错误处理，不退回普通生成
+
 Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
 的账号范围确实包含 Codex 账号时生成单一 OpenAI 候选。Images 的图片模型由 Provider 从正文旁路
 提取，用于账号模型政策检查，并在中间件改写后复验当前租约账号；不要求图片模型进入文本目录。
@@ -578,7 +580,7 @@ Antigravity 的 `credential/catalog` 持有与凭据版本绑定的项目与模�
 
 GenAI 模型目录通过 Core 的原生操作路由判断过滤冻结账号范围；列表、详情和执行使用同一份能力事实。Antigravity 声明生成与输入计数能力，原生 GenAI 和 Messages 计数复用选号、画像、中间件及资源释放流程，出站调用独立的 Cloud Code `countTokens`。计数响应不产生生成用量或费用事实，失败不切换为本地估算
 
-Antigravity 目录分别声明原生 GenAI 协议和接受转换的 Responses／Messages 协议；原生能力约束仍只匹配原生协议。`gateway-protocol::genai` 持有纯内容与增量事件映射，Responses 复用已有 Messages 转换能力，Chat 复用 API 层的 Responses 入口。Provider 的 `provider/translation` 负责选择和装配转换器，`transport` 负责 Cloud Code 封装、原生 wire 与调用事实，并按冻结画像统一替换 AGY 系统指令。默认提示和可编辑配置归 Provider 的 `profile`，纯协议转换层不持有 AGY 身份规则
+Antigravity 目录分别声明原生 GenAI 协议和接受转换的 Responses／Messages 协议；原生能力约束仍只匹配原生协议。`gateway-protocol::genai` 持有纯内容与增量事件映射，Responses 复用 Messages 的内容与工具映射，生成参数直接映射到 GenAI，不继承 Messages 的默认值与模型限制；Chat 复用 API 层的 Responses 入口。Provider 的 `provider/translation` 负责选择和装配转换器，`transport` 负责 Cloud Code 封装、原生 wire 与调用事实，并按冻结画像统一替换 AGY 系统指令。默认提示和可编辑配置归 Provider 的 `profile`，纯协议转换层不持有 AGY 身份规则
 
 Antigravity 的业务头使用 API 保留的不透明多值字节，transport 统一执行账号身份、HTTP 传输及切号追踪头过滤。选号阶段从原会话绑定和 Core 的账号归属冻结切号事实，认领冲突后重新读取，不从重试排除集合推测归属
 
