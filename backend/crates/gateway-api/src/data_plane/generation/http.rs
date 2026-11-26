@@ -76,6 +76,19 @@ pub(crate) struct HttpResponseAdapter {
     pub stream_error: fn(&Value) -> Bytes,
 }
 
+impl GenerationEndpoint {
+    fn expected_http_body(self, stream: bool) -> ExpectedBody {
+        if stream {
+            // 原生 GenAI 客户端会将网关插入的 SSE 注释解析为无效帧
+            ExpectedBody::Sse {
+                keep_alive: matches!(self, Self::Responses | Self::Messages),
+            }
+        } else {
+            ExpectedBody::SingleJson
+        }
+    }
+}
+
 pub(crate) async fn execute_prepared_generation(
     service: DataPlaneService,
     prepared: PreparedRootExecution,
@@ -106,7 +119,11 @@ pub(crate) async fn execute_prepared_generation(
     let terminal_entered = Arc::clone(&execution_entered);
     let started_request_id = Arc::new(OnceLock::new());
     let terminal_request_id = Arc::clone(&started_request_id);
-    let (admitted, keepalive) = tokio::sync::oneshot::channel();
+    let expected = protocol.expected_http_body(stream);
+    let (admitted, keepalive) = expected
+        .sends_keepalive()
+        .then(tokio::sync::oneshot::channel)
+        .unzip();
     let mut middleware_headers = headers.clone();
     // 中间件正文已经由入口按上限解压；传输编码和旧长度不能与改写后的正文混用
     middleware_headers.remove(CONTENT_ENCODING);
@@ -183,7 +200,9 @@ pub(crate) async fn execute_prepared_generation(
                     .session
                     .trace()
                     .capture("client.request.body", &request_body);
-                let _ = admitted.send(started.session.response_commit());
+                if let Some(admitted) = admitted {
+                    let _ = admitted.send(started.session.response_commit());
+                }
                 execution_middleware_response(
                     started,
                     connection_guard,
@@ -203,11 +222,6 @@ pub(crate) async fn execute_prepared_generation(
         } else {
             middleware.await
         };
-        let expected = if stream {
-            ExpectedBody::Sse
-        } else {
-            ExpectedBody::SingleJson
-        };
         match middleware {
             Ok(response) => {
                 let response = if let Some(authorization) = authorization {
@@ -226,7 +240,7 @@ pub(crate) async fn execute_prepared_generation(
             Err(error) => error_response(error),
         }
     };
-    let response = if stream {
+    let response = if let Some(keepalive) = keepalive {
         super::keepalive::response_with_encoder(
             response,
             keepalive,
@@ -507,7 +521,12 @@ pub async fn stream_execution_response(
             .await
             {
                 Ok(response) => {
-                    into_http_response(response, ExpectedBody::Sse, OPENAI_PROTOCOL).await
+                    into_http_response(
+                        response,
+                        GenerationEndpoint::Responses.expected_http_body(true),
+                        OPENAI_PROTOCOL,
+                    )
+                    .await
                 }
                 Err(error) => error_response(error),
             }

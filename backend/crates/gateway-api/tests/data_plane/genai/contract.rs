@@ -2,6 +2,7 @@
 
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use std::time::Duration;
 
 #[tokio::test]
 async fn session_headers_reach_provider_context_except_when_declared_hop_by_hop() {
@@ -183,15 +184,16 @@ async fn committed_stream_delivers_raw_error_once() {
     );
 }
 
-#[tokio::test]
-async fn stream_preserves_finish_and_later_usage_bytes_before_eof() {
+#[tokio::test(start_paused = true)]
+async fn silent_stream_delivers_only_native_finish_and_late_usage_frames() {
     let first = "data: { \"candidates\":[{\"finishReason\":\"STOP\"}], \"error\":null }\r\n\r\n";
     let last = "data: {\"usageMetadata\":{\"totalTokenCount\":7}}\r\n\r\n";
     let mut events = vec![wire_frame(first), wire_frame(last)];
     events.push(ProviderEvent::canonical(GatewayEvent::Completed(
         ResponseMeta::new("id", "model-a"),
     )));
-    let session = Session::new(events);
+    let mut session = Session::new(events);
+    session.read_delay = Some(Duration::from_secs(45));
     let trace = session.trace.clone();
     let execution = Arc::new(Execution {
         session: Mutex::new(Some(session)),
@@ -209,6 +211,27 @@ async fn stream_preserves_finish_and_later_usage_bytes_before_eof() {
     );
     assert_eq!(trace.commits.load(Ordering::SeqCst), 1);
     assert!(trace.finalized.load(Ordering::SeqCst));
+}
+
+#[tokio::test(start_paused = true)]
+async fn error_after_waiting_for_first_frame_preserves_http_status() {
+    let mut session = Session::new(Vec::new());
+    session.read_delay = Some(Duration::from_secs(45));
+    session.finish = Finish::Error;
+    let execution = Arc::new(Execution {
+        session: Mutex::new(Some(session)),
+        ..Default::default()
+    });
+    let response = api_router(execution)
+        .await
+        .oneshot(request(&format!("{SHORT}:streamGenerateContent?alt=sse")))
+        .await
+        .unwrap();
+    let status = response.status();
+    assert!(status.is_server_error());
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 2048).await.unwrap()).unwrap();
+    assert_eq!(body["error"]["code"], status.as_u16());
 }
 
 #[tokio::test]

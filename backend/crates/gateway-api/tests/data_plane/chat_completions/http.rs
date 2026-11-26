@@ -477,7 +477,7 @@ async fn finalization_failure_never_leaks_success_finish_or_usage() {
 #[tokio::test(start_paused = true)]
 async fn error_after_admission_keepalive_uses_chat_error_encoding() {
     let mut session = Session::new(Vec::new());
-    session.delay = Some(Duration::from_secs(31));
+    session.read_delay = Some(Duration::from_secs(31));
     session.finish = Finish::Error;
     let fixture = Fixture::new(session).await;
     let response = fixture.post(chat_request(true)).await;

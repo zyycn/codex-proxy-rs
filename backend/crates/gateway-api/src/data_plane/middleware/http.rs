@@ -62,10 +62,14 @@ impl MiddlewareBody for BufferedBody {
 pub(crate) enum ExpectedBody {
     SingleJson,
     SinglePayload,
-    Sse,
+    Sse { keep_alive: bool },
 }
 
 impl ExpectedBody {
+    pub(crate) fn sends_keepalive(self) -> bool {
+        matches!(self, Self::Sse { keep_alive: true })
+    }
+
     fn validate(self, frame: &MiddlewareFrame) -> Result<(), MiddlewareError> {
         let valid = match self {
             Self::SingleJson => {
@@ -80,7 +84,7 @@ impl ExpectedBody {
                         || Self::SingleJson.validate(frame).is_ok())
             }
             // 原生超大 SSE 帧允许按原字节片段交付；插件写入边界由 Runtime 校验
-            Self::Sse => frame.framing() == MiddlewareFraming::SseEvent,
+            Self::Sse { .. } => frame.framing() == MiddlewareFraming::SseEvent,
         };
         if valid {
             Ok(())
@@ -133,14 +137,15 @@ pub(crate) async fn into_http_response(
             })
         });
     }
-    if matches!(expected, ExpectedBody::Sse) {
+    let streaming = matches!(expected, ExpectedBody::Sse { .. });
+    if streaming {
         headers.insert(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-cache, no-transform"),
         );
         headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
     }
-    let exhausted = empty || !matches!(expected, ExpectedBody::Sse);
+    let exhausted = empty || !streaming;
     if !empty && exhausted {
         match body.next_frame().await {
             Ok(None) => {}
@@ -158,20 +163,24 @@ pub(crate) async fn into_http_response(
         exhausted,
         terminal_seen: empty,
     };
-    let keep_alive = matches!(expected, ExpectedBody::Sse);
-    let stream = Box::pin(futures::stream::try_unfold(delivery, HttpDelivery::next));
-    // 固定同一条输出流；心跳不能取消并重建正在等待的 next_frame 或结算 future
-    let stream = futures::stream::unfold(stream, move |mut stream| async move {
-        let chunk = tokio::select! {
-            biased;
-            chunk = stream.next() => chunk?,
-            () = tokio::time::sleep(SSE_KEEPALIVE_INTERVAL), if keep_alive => {
-                Ok(SSE_KEEPALIVE_FRAME)
-            }
-        };
-        Some((chunk, stream))
-    });
-    let mut response = Response::new(Body::from_stream(stream));
+    let stream = futures::stream::try_unfold(delivery, HttpDelivery::next);
+    let body = if expected.sends_keepalive() {
+        // 固定同一条输出流，发送心跳时继续等待原有的读帧或结算操作
+        Body::from_stream(futures::stream::unfold(
+            Box::pin(stream),
+            |mut stream| async move {
+                let chunk = tokio::select! {
+                    biased;
+                    chunk = stream.next() => chunk?,
+                    () = tokio::time::sleep(SSE_KEEPALIVE_INTERVAL) => Ok(SSE_KEEPALIVE_FRAME),
+                };
+                Some((chunk, stream))
+            },
+        ))
+    } else {
+        Body::from_stream(stream)
+    };
+    let mut response = Response::new(body);
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     response

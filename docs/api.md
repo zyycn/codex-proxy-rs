@@ -260,7 +260,7 @@ Messages 与 Responses 的转换边界见 [Messages 请求](#messages-请求)，
 | GET | `/v1beta/models`、`/v1beta/models/{model}` | Gemini 格式的模型列表与详情，见[模型目录](#模型目录) |
 | POST | `/v1beta:{method}`（客户端后台指标） | 验证 Key 后返回 `{}`，不启动模型请求 |
 
-普通生成从上游 JSON 的 `response` 中取出原生正文，流式生成逐个解开 SSE 数据帧。原生正文保留工具参数、结果、思考签名和未知字段。客户端归属读取 `User-Agent`、`X-Goog-Api-Client`。网关错误使用 Google RPC 风格的 `error.code`、`error.status` 和 `error.message`。[Google 原生生成协议](https://ai.google.dev/api/generate-content)
+普通生成从上游 JSON 的 `response` 中取出原生正文，流式生成逐个解开 SSE 数据帧。等待首帧和后续帧时，网关保持静默。首帧前的失败保留 HTTP 错误状态。原生正文保留工具参数、结果、思考签名和未知字段。客户端归属读取 `User-Agent`、`X-Goog-Api-Client`。网关错误使用 Google RPC 风格的 `error.code`、`error.status` 和 `error.message`。[Google 原生生成协议](https://ai.google.dev/api/generate-content)
 
 CPR 在 AGY 的原生与转换入口透传未被过滤的 HTTP 扩展头，保留同名多值的原始字节。下游鉴权、Cookie、账号身份、客户端画像和 HTTP 传输头不透传；认证、项目和 UA 由所选账号与冻结画像生成。`X-Goog-User-Project` 属于调用方指定的计费项目，不能覆盖所选账号的项目，见 [Google 系统参数](https://docs.cloud.google.com/apis/docs/system-parameters)
 
@@ -2296,7 +2296,7 @@ xAI 由本地账号/模型冷却、无可选账号、并发容量不足及选号
 默认队列满返回 `429` / `concurrency_queue_full`，排队超时返回 `429` / `concurrency_queue_timeout`；
 WebSocket 使用对应错误事件。等待期间不发送上游请求，取消后释放等待位置，排队重查不重复计入 RPM。
 SSE 在 Key 准入完成并取得执行会话前不发送保活帧，此阶段保留 HTTP 错误状态；
-取得会话后的账号等待受 SSE 保活覆盖，已开始交付的失败沿用流内错误合同
+Responses、Chat Completions 和 Messages 在取得会话后为账号等待发送心跳，已开始交付的失败沿用各入口的流内错误合同
 
 任一周期的已落库金额与当前进程已接管的待结算费用合计达到限额后拒绝新请求，已准入请求可完成并使金额超过阈值。
 HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly_budget_exceeded`，
