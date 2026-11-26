@@ -13,6 +13,7 @@ pub use response::{
 pub const GENAI_PROTOCOL: &str = "genai";
 
 mod messages;
+mod parts;
 mod responses;
 mod stream;
 mod tokens;

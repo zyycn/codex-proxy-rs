@@ -4,11 +4,13 @@ use crate::transport::{sent, unsent};
 use gateway_core::{
     engine::{
         ModelRequestId,
+        execution::ClientTransport,
         provider::{LocalWebSocketPrewarm, NativeResponseTranslator},
     },
     error::{ClientVisibleUpstreamError, ProviderError, ProviderErrorKind},
     event::ProtocolWireEvent,
     operation::{Operation, ProtocolPayload},
+    provider_ports::ProviderSessionAffinityKey,
     upstream::UpstreamSendState,
 };
 use gateway_protocol::{
@@ -100,6 +102,8 @@ pub(super) fn validate_request_mode(operation: &Operation) -> Result<(), Provide
 
 pub(super) fn prepare(
     operation: Operation,
+    transport: ClientTransport,
+    affinity: Option<&ProviderSessionAffinityKey>,
 ) -> Result<(Operation, Option<Translator>), ProviderError> {
     if matches!(operation, Operation::CountTokens(_)) {
         return prepare_count(operation);
@@ -124,7 +128,7 @@ pub(super) fn prepare(
     } else {
         None
     };
-    let body = if let Some(tool) = search {
+    let mut body = if let Some(tool) = search {
         super::web_search::request(original, tool)?
     } else {
         if source == OPENAI_PROTOCOL {
@@ -134,6 +138,12 @@ pub(super) fn prepare(
         }
         .map_err(|e| unsent(ProviderErrorKind::InvalidRequest).with_source(e))?
     };
+    if let Some(session) = affinity {
+        body.insert(
+            "sessionId".into(),
+            json!(super::affinity::upstream_session_id(session)),
+        );
+    }
     let model = original
         .get("model")
         .and_then(Value::as_str)
@@ -149,8 +159,16 @@ pub(super) fn prepare(
         }))
     };
     let mut context = payload.context().clone();
-    // Desktop 搜索使用完整 JSON，编码路径保留增量交付
-    context.insert("stream".into(), json!(search.is_none()));
+    // HTTP 和 WS 的交付模式在入口已确定，内部探测默认保留首输出观测
+    let stream = match transport {
+        ClientTransport::HttpJson => false,
+        ClientTransport::HttpSse | ClientTransport::WebSocket => true,
+        ClientTransport::InternalProbe | ClientTransport::InternalPlugin => original
+            .get("stream")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    };
+    context.insert("stream".into(), json!(search.is_none() && stream));
     let bytes = serde_json::to_vec(&body).map_err(|_| unsent(ProviderErrorKind::InvalidRequest))?;
     let operation = operation
         .replace_protocol_wire(None, context)
@@ -222,13 +240,13 @@ impl NativeResponseTranslator for Translator {
         if let Self::Search(search) = self {
             return search.translate(event);
         }
+        let value = match event.raw_json_body() {
+            Some(raw) => Cow::Owned(
+                serde_json::from_slice(raw).map_err(|_| sent(ProviderErrorKind::Protocol))?,
+            ),
+            None => Cow::Borrowed(event.data()),
+        };
         let Self::Generate(translator) = self else {
-            let value = match event.raw_json_body() {
-                Some(raw) => Cow::Owned(
-                    serde_json::from_slice(raw).map_err(|_| sent(ProviderErrorKind::Protocol))?,
-                ),
-                None => Cow::Borrowed(event.data()),
-            };
             let body = if self.target_protocol() == ANTHROPIC_PROTOCOL {
                 gateway_protocol::genai::count_tokens_to_messages(&value)
                     .map_err(|e| sent(ProviderErrorKind::Protocol).with_source(e))?
@@ -242,7 +260,7 @@ impl NativeResponseTranslator for Translator {
         };
         let events = translator
             .genai
-            .push(event.data())
+            .push(&value)
             .map_err(|e| sent(ProviderErrorKind::Protocol).with_source(e))?;
         translator.events(events)
     }

@@ -325,12 +325,20 @@ async fn model_group_menu_routes_responses_and_native_generation_to_declared_mem
         released(&fixture).await;
     }
     Mock::given(path("/v1internal:streamGenerateContent"))
-        .and(body_partial_json(json!({"model":"gemini-4-hydrogen-high","request":{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}]}})))
+        .and(body_partial_json(json!({"model":"gemini-4-hydrogen-high","request":{"contents":[
+            {"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]},
+            {"role":"model","parts":[{"functionCall":{"name":"capture","id":"c","args":{}}}]},
+            {"role":"user","parts":[{"functionResponse":{"name":"capture","id":"c","response":{"output":"ok"},"parts":[{"inlineData":{"mimeType":"image/png","data":"AQ=="}}]}}]}
+        ]}})))
         .respond_with(ResponseTemplate::new(200).set_body_raw(
             "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"OK\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
             "text/event-stream",
         )).expect(1).mount(&upstream).await;
-    let body = json!({"model":group.upstream_model().as_str(),"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}],"reasoning":{"effort":"high"}});
+    let body = json!({"model":group.upstream_model().as_str(),"input":[
+        {"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]},
+        {"type":"function_call","name":"capture","call_id":"c","arguments":"{}"},
+        {"type":"function_call_output","call_id":"c","output":[{"type":"input_text","text":"ok"},{"type":"input_image","image_url":"data:image/png;base64,AQ=="}]}
+    ],"reasoning":{"effort":"high"}});
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
     ));
@@ -735,10 +743,21 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
             "data: {\"response\":{\"responseId\":\"r\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
             "data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":2}}}\n\n"
         ),"text/event-stream")).expect(3).mount(&upstream).await;
-    let responses = json!({"model":"fixture-model","input":"hello","max_output_tokens":100,"reasoning":{"effort":"high"},"temperature":0.3,"top_p":0.8,"tools":[{"type":"function","name":"pwd","parameters":{"type":"object"}}],"tool_choice":"required","text":{"format":{"type":"json_schema","schema":{"type":"object"}}}});
+    Mock::given(method("POST")).and(path("/v1internal:generateContent"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"response":{
+            "responseId":"r", "candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],
+            "usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":2}
+        }}))).expect(2).mount(&upstream).await;
+    let responses = json!({"model":"fixture-model","client_metadata":{"session_id":"same-conversation"},"input":"hello","max_output_tokens":100,"reasoning":{"effort":"high"},"temperature":0.3,"top_p":0.8,"tools":[{"type":"function","name":"pwd","parameters":{"type":"object"}}],"tool_choice":"required","text":{"format":{"type":"json_schema","schema":{"type":"object"}}}});
     for (protocol, transport, body) in [
         ("openai", ClientTransport::WebSocket, responses.clone()),
+        ("openai", ClientTransport::HttpJson, responses.clone()),
         ("openai", ClientTransport::HttpSse, responses),
+        (
+            "anthropic",
+            ClientTransport::HttpJson,
+            json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}],"max_tokens":100}),
+        ),
         (
             "anthropic",
             ClientTransport::HttpSse,
@@ -794,6 +813,21 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
         );
         let sent = upstream.received_requests().await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&sent.last().unwrap().body).unwrap();
+        let http_json = transport == ClientTransport::HttpJson;
+        assert_eq!(
+            sent.last().unwrap().url.path(),
+            if http_json {
+                "/v1internal:generateContent"
+            } else {
+                "/v1internal:streamGenerateContent"
+            }
+        );
+        if protocol == "openai" {
+            assert_eq!(body["request"]["sessionId"], "-6977519665959570574");
+        } else {
+            assert!(body["request"].get("sessionId").is_none());
+        }
+        assert!(body.get("enabledCreditTypes").is_none());
         assert_eq!(body["request"]["generationConfig"]["maxOutputTokens"], 100);
         assert_eq!(
             body["request"]["systemInstruction"]["parts"][0]["text"],

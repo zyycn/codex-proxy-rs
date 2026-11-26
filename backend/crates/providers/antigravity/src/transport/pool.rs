@@ -59,6 +59,6 @@ impl ClientPool {
         }
         drop(clients);
         // 系统提示不缓存，画像只修改提示词时也立即使用本次冻结值
-        CloudCodeClient::with_client(origin, client, profile)
+        CloudCodeClient::with_client(origin, client, profile, account.auto_use_quota_credits())
     }
 }

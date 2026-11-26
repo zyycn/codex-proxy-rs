@@ -11,8 +11,8 @@ mod thinking;
 mod tools;
 mod usage;
 
-pub(crate) use content::GENAI_CARRIER;
-pub(crate) use request::responses_to_messages_content;
+pub(crate) use content::{GENAI_CARRIER, restore_anthropic, split_data_url};
+pub(crate) use tools::{ToolSet, allowed_tools};
 
 pub use capabilities::MessagesModelCapabilities;
 pub use error::TranslationError;

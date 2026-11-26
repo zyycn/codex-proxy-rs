@@ -76,7 +76,7 @@ pub(crate) fn events(
         let observation = ProviderResponseObservation::new(
             UpstreamTransport::new("http").map_err(|_| sent(Kind::ProviderInfrastructureUnavailable))?,
         ).with_status_code(response.status().as_u16());
-        let mut decoder = SseEventDecoder::default();
+        let mut decoder = SseEventDecoder::with_max_event_bytes(256 * 1024 * 1024);
         let mut json_body = Vec::new();
         let mut observed = GenerateContentObservation::default();
         let mut started = None;

@@ -102,10 +102,12 @@ pub(super) fn source_url(source: &Value) -> Option<String> {
     }
 }
 
+pub(crate) fn split_data_url(url: &str) -> Option<(&str, &str)> {
+    url.strip_prefix("data:")?.split_once(";base64,")
+}
+
 fn url_source(url: &str) -> Value {
-    if let Some(data) = url.strip_prefix("data:")
-        && let Some((media_type, data)) = data.split_once(";base64,")
-    {
+    if let Some((media_type, data)) = split_data_url(url) {
         return json!({"type":"base64","media_type":media_type,"data":data});
     }
     json!({"type":"url","url":url})
@@ -144,7 +146,7 @@ pub(super) fn is_anthropic_carrier(item: &Value) -> bool {
             .is_some_and(|carrier| carrier.starts_with(ANTHROPIC_CARRIER))
 }
 
-pub(super) fn restore_anthropic(item: &Value) -> Option<Value> {
+pub(crate) fn restore_anthropic(item: &Value) -> Option<Value> {
     let carrier = item.get("encrypted_content")?.as_str()?;
     if let Some(raw) = carrier.strip_prefix(ANTHROPIC_CARRIER) {
         return serde_json::from_str(raw).ok();

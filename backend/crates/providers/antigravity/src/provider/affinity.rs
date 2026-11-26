@@ -52,6 +52,17 @@ pub(super) fn session_key(
     ProviderSessionAffinityKey::try_new(hex::encode(hash.finalize())).ok()
 }
 
+// AGY 使用 FNV-1a 64 位有符号十进制串，网关从隔离后的会话键派生
+pub(super) fn upstream_session_id(key: &ProviderSessionAffinityKey) -> String {
+    let hash = key
+        .expose_to_store()
+        .bytes()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    (hash as i64).to_string()
+}
+
 fn header(context: &Map<String, Value>, name: &str) -> Option<String> {
     context
         .get("headers")

@@ -228,3 +228,22 @@ fn empty_client_placeholders_do_not_change_message_roles_or_system_content() {
     let invalid = json!({"messages":[{"role":"system","content":"instructions"}]});
     assert!(messages_to_genai_request(invalid.as_object().unwrap()).is_err());
 }
+
+#[test]
+fn messages_tool_result_documents_use_native_response_parts() {
+    let request = json!({"messages":[
+        {"role":"assistant","content":[{"type":"tool_use","name":"read","id":"c","input":{}}]},
+        {"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[
+            {"type":"document","source":{"type":"text","data":"caption"}},
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}
+        ]}]}
+    ]});
+    let body = messages_to_genai_request(request.as_object().unwrap()).unwrap();
+    assert_eq!(
+        body["contents"][1]["parts"][0],
+        json!({"functionResponse":{
+            "name":"read","id":"c","response":{"output":"caption"},
+            "parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]
+        }})
+    );
+}

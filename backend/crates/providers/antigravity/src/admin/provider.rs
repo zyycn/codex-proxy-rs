@@ -72,6 +72,7 @@ impl ProviderAdmin for AntigravityAdmin {
             credential_export: oauth,
             quota: oauth,
             quota_refresh: oauth,
+            quota_credits: oauth,
             ..Default::default()
         }
     }

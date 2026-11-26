@@ -324,8 +324,7 @@ pub fn responses_to_messages_request(
     Ok(result)
 }
 
-/// 共享对话、签名与工具映射，生成参数由最终目标协议独立处理
-pub(crate) fn responses_to_messages_content(
+fn responses_to_messages_content(
     request: &Map<String, Value>,
     hosted_search: bool,
 ) -> Result<Map<String, Value>, TranslationError> {

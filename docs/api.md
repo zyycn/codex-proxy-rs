@@ -1388,6 +1388,8 @@ OpenAI OAuth 账号的 `capabilities.quotaSettingsSupported` 为真。通过 `PO
 - 开启后，上游确认 `hasCredits=true` 或 `unlimited=true` 且没有支出限制时，允许靠点数继续请求；余额数字本身不能证明可用
 - 对已耗尽账号开启时复查额度；关闭时立即撤销仅靠点数的放行
 
+Antigravity OAuth 账号开启后，生成请求携带 `enabledCreditTypes: ["GOOGLE_ONE_AI"]`。套餐额度耗尽时，调度同时检查 Google 返回的点数余额和最低使用门槛。计数调用不使用点数
+
 点数不解除凭据错误、停用或冷却，也不触发对已被上游拒绝请求的重发
 
 账号名称是本地显示信息，与账号 ID、上游邮箱和凭据独立。编辑接口的可选 `name` 省略或为 `null` 时保留原值；
@@ -2540,7 +2542,7 @@ Guardian 以 `subagent_kind` 或 `client_metadata.x-openai-subagent` 值 `guardi
 - `strict` 优先同一账号，启用账号排队时等待繁忙的绑定账号，关闭排队、绑定失效或允许换号时重新绑定
 
 Antigravity 原生 GenAI 请求使用 `X-Http-Session-Id`，缺失时使用 `X-Session-Id`；这些头只作为会话标识
-Responses 和 Messages 转入 Antigravity 时分别复用 Codex 逻辑会话和 Claude Code 会话解析，在转换前按 Client Key、模型及入站协议隔离绑定
+Responses 和 Messages 转入 Antigravity 时分别复用 Codex 逻辑会话和 Claude Code 会话解析，在转换前按 Client Key、模型及入站协议隔离绑定，发给 Google 的 `sessionId` 从该绑定键派生
 无显式会话及计数请求不建立绑定。账号资格失效后按调度策略重选，凭据、额度、模型目录和权限仍由 Antigravity 检查
 
 xAI 沿用自身显式会话及对话开头的识别规则，按 Client Key 和模型隔离绑定

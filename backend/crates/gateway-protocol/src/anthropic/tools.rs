@@ -8,7 +8,7 @@ use crate::openai::web_search;
 use serde_json::{Map, Value, json};
 
 #[derive(Debug, Clone)]
-pub(super) struct Tool<D> {
+pub(crate) struct Tool<D> {
     pub name: String,
     pub namespace: Option<String>,
     pub custom: bool,
@@ -16,7 +16,7 @@ pub(super) struct Tool<D> {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct ToolSet<D = ()> {
+pub(crate) struct ToolSet<D = ()> {
     pub tools: BTreeMap<String, Tool<D>>,
 }
 
@@ -115,31 +115,71 @@ impl ToolSet {
     }
 }
 
+pub(crate) fn allowed_tools(choice: &Value) -> Result<Option<&[Value]>, TranslationError> {
+    if choice["type"] != "allowed_tools" {
+        return Ok(None);
+    }
+    choice["tools"]
+        .as_array()
+        .filter(|tools| !tools.is_empty())
+        .map(|tools| Some(tools.as_slice()))
+        .ok_or(TranslationError::InvalidRequest(
+            "Allowed tools must contain at least one tool.",
+        ))
+}
+
+impl Tool<&Value> {
+    pub(crate) fn schema(&self) -> Value {
+        if self.custom {
+            json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"]})
+        } else {
+            self.definition
+                .get("parameters")
+                .cloned()
+                .unwrap_or_else(|| json!({"type":"object","properties":{}}))
+        }
+    }
+}
+
 impl<'a> ToolSet<&'a Value> {
     pub fn from_responses(request: &'a Map<String, Value>) -> Self {
         Self::collect(request, |tool| tool)
     }
 
+    pub(crate) fn declarations<'b>(
+        &'b self,
+        allowed: Option<&'b [Value]>,
+    ) -> impl Iterator<Item = (&'b str, &'b Tool<&'a Value>)> {
+        self.tools
+            .iter()
+            .filter(move |(_, tool)| {
+                allowed.is_none_or(|choices| {
+                    choices.iter().any(|choice| {
+                        matches!(choice["type"].as_str(), Some("function" | "custom"))
+                            && choice["type"] == tool.definition["type"]
+                            && choice.get("name").and_then(Value::as_str)
+                                == Some(tool.name.as_str())
+                            && choice.get("namespace").and_then(Value::as_str)
+                                == tool.namespace.as_deref()
+                    })
+                })
+            })
+            .map(|(name, tool)| (name.as_str(), tool))
+    }
+
     fn definitions(&self, allowed: Option<&[Value]>) -> Vec<Value> {
-        self.tools.iter().filter(|(_, tool)| {
-            allowed.is_none_or(|choices| choices.iter().any(|choice|
-                matches!(choice["type"].as_str(), Some("function" | "custom"))
-                && choice["type"] == tool.definition["type"]
-                && choice.get("name").and_then(Value::as_str) == Some(tool.name.as_str())
-                && choice.get("namespace").and_then(Value::as_str) == tool.namespace.as_deref()
-            ))
-        }).map(|(name, tool)| {
-            let schema = if tool.custom {
-                json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"]})
-            } else {
-                tool.definition.get("parameters").cloned().unwrap_or_else(|| json!({"type":"object","properties":{}}))
-            };
-            let mut definition = json!({"name":name,"input_schema":schema});
-            for field in ["description", "strict", "cache_control", "defer_loading"] {
-                if let Some(value) = tool.definition.get(field) { definition[field] = value.clone(); }
-            }
-            definition
-        }).collect()
+        self.declarations(allowed)
+            .map(|(name, tool)| {
+                let schema = tool.schema();
+                let mut definition = json!({"name":name,"input_schema":schema});
+                for field in ["description", "strict", "cache_control", "defer_loading"] {
+                    if let Some(value) = tool.definition.get(field) {
+                        definition[field] = value.clone();
+                    }
+                }
+                definition
+            })
+            .collect()
     }
 
     pub fn write_messages_tools(
@@ -149,20 +189,8 @@ impl<'a> ToolSet<&'a Value> {
         hosted_search: bool,
     ) -> Result<(), TranslationError> {
         let choice = request.get("tool_choice").unwrap_or(&Value::Null);
-        let restricted = choice["type"] == "allowed_tools";
-        let allowed = if restricted {
-            Some(
-                choice["tools"]
-                    .as_array()
-                    .filter(|v| !v.is_empty())
-                    .ok_or(TranslationError::InvalidRequest(
-                        "Allowed tools must contain at least one tool.",
-                    ))?
-                    .as_slice(),
-            )
-        } else {
-            None
-        };
+        let allowed = allowed_tools(choice)?;
+        let restricted = allowed.is_some();
         let mut definitions = self.definitions(allowed);
         for tool in web_search::allowed_declarations(request)
             .filter(|tool| hosted_search && web_search::allows_live_access(tool))

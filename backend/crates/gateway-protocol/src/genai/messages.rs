@@ -1,14 +1,9 @@
 //! Messages 内容到 GenAI 的纯协议映射，签名载荷只按明确来源恢复
 
-use crate::anthropic::{GENAI_CARRIER as SIGNATURE_PREFIX, TranslationError};
+use super::parts::{TurnParts, content, function_response, invalid};
+use crate::anthropic::TranslationError;
 use serde_json::{Map, Value, json};
 use std::{borrow::Cow, collections::BTreeMap};
-
-fn invalid() -> TranslationError {
-    TranslationError::InvalidRequest(
-        "The request contains content unsupported by the GenAI adapter.",
-    )
-}
 
 /// 转换 Messages 请求；不支持的内容返回错误，避免静默丢失客户端输入
 pub fn messages_to_genai_request(
@@ -58,9 +53,7 @@ pub fn messages_to_genai_request(
     Ok(result)
 }
 
-pub(super) fn content_to_genai(
-    request: &Map<String, Value>,
-) -> Result<Map<String, Value>, TranslationError> {
+fn content_to_genai(request: &Map<String, Value>) -> Result<Map<String, Value>, TranslationError> {
     let mut result = Map::new();
     if let Some(system) = request.get("system") {
         result.insert(
@@ -89,37 +82,14 @@ pub(super) fn content_to_genai(
             Some("user") => "user",
             _ => return Err(invalid()),
         };
-        let mut parts: Vec<Value> = Vec::new();
-        let mut pending_signature = None;
+        let mut parts = TurnParts::default();
         for block in blocks.iter() {
-            let mut part = match block["type"].as_str() {
+            let part = match block["type"].as_str() {
                 Some("text") => json!({"text":block["text"]}),
                 Some("image" | "document") => media(&block["source"])?,
                 Some("thinking") => {
-                    if let Some(raw) = block["signature"]
-                        .as_str()
-                        .and_then(|s| s.strip_prefix(SIGNATURE_PREFIX))
-                    {
-                        let carrier: Value = serde_json::from_str(raw).map_err(|_| invalid())?;
-                        match carrier["target"].as_str() {
-                            Some("previous") => {
-                                let last = parts.last_mut().ok_or_else(invalid)?;
-                                last["thoughtSignature"] = carrier["signature"].clone();
-                                continue;
-                            }
-                            Some("next") => {
-                                pending_signature = Some(carrier["signature"].clone());
-                                continue;
-                            }
-                            Some("thinking") => {
-                                json!({"text":block["thinking"],"thought":true,"thoughtSignature":carrier["signature"]})
-                            }
-                            _ => return Err(invalid()),
-                        }
-                    } else {
-                        // 没有本协议签名的思考不作为可验证历史回放
-                        continue;
-                    }
+                    parts.thinking(block)?;
+                    continue;
                 }
                 Some("redacted_thinking") => continue,
                 Some("tool_use") => {
@@ -134,44 +104,28 @@ pub(super) fn content_to_genai(
                 Some("tool_result") => {
                     let id = block["tool_use_id"].as_str().ok_or_else(invalid)?;
                     let name = calls.get(id).ok_or_else(invalid)?;
-                    let output = &block["content"];
-                    let mut response =
-                        json!({"functionResponse":{"id":id,"name":name,"response":{}}});
-                    let key = if block["is_error"] == true {
-                        "error"
-                    } else {
-                        "output"
-                    };
-                    response["functionResponse"]["response"][key] = output.clone();
-                    response
+                    function_response(
+                        id,
+                        name,
+                        block["is_error"] == true,
+                        &block["content"],
+                        |block| match block["type"].as_str() {
+                            Some("text") => Ok(json!({"text":block["text"]})),
+                            Some("image" | "document") => media(&block["source"]),
+                            _ => Err(invalid()),
+                        },
+                    )?
                 }
                 _ => return Err(invalid()),
             };
-            if part.get("thoughtSignature").is_some_and(Value::is_null) {
-                part.as_object_mut()
-                    .ok_or_else(invalid)?
-                    .remove("thoughtSignature");
-            }
-            if let Some(signature) = pending_signature.take() {
-                part["thoughtSignature"] = signature;
-            }
-            // Google 为外部历史提供的兜底值；真实签名优先，Chat 等无签名合同无需服务端缓存
-            // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures
-            if part.get("functionCall").is_some() && part.get("thoughtSignature").is_none() {
-                part["thoughtSignature"] = json!("skip_thought_signature_validator");
-            }
             parts.push(part);
         }
-        if pending_signature.is_some() {
-            return Err(invalid());
-        }
-        // Chat 工具轮次可带空 content；签名已附着后再删除无内容且无签名的占位
-        parts.retain(|part| part["text"] != "" || part.get("thoughtSignature").is_some());
+        let parts = parts.finish()?;
         if !parts.is_empty() {
-            contents.push(json!({"role":role,"parts":parts}));
+            contents.push(content(role, parts));
         }
     }
-    result.insert("contents".into(), json!(contents));
+    result.insert("contents".into(), Value::Array(contents));
     if let Some(tools) = request.get("tools").and_then(Value::as_array) {
         let declarations = tools
             .iter()

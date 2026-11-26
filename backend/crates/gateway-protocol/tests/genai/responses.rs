@@ -110,3 +110,64 @@ fn content_and_json_schema_preserve_their_target_representation() {
         json!({"responseMimeType":"application/json","responseSchema":request["text"]["format"]["schema"]})
     );
 }
+
+#[test]
+fn parallel_tool_results_keep_call_order_and_native_media() {
+    let request = json!({"input":[
+        {"type":"custom_tool_call","call_id":"a","name":"display","namespace":"screen","input":"shot"},
+        {"type":"function_call","call_id":"b","name":"lookup","arguments":"{}"},
+        {"type":"function_call_output","call_id":"b","output":{"value":2}},
+        {"type":"custom_tool_call_output","call_id":"a","output":"stale"},
+        {"type":"custom_tool_call_output","call_id":"a","status":"incomplete","output":[
+            {"type":"input_text","text":"captured"},
+            {"type":"input_image","image_url":"data:image/png;base64,AA=="},
+            {"type":"input_file","file_data":"data:application/pdf;base64,AQ=="}
+        ]}
+    ], "tools":[{"type":"namespace","name":"screen","tools":[{"type":"custom","name":"display"}]}],
+        "tool_choice":{"type":"custom","name":"display","namespace":"screen"}});
+    let body = responses_to_genai_request(request.as_object().unwrap()).unwrap();
+    assert_eq!(
+        body["toolConfig"]["functionCallingConfig"]["allowedFunctionNames"],
+        json!(["screen__display"])
+    );
+    assert_eq!(
+        body["contents"][1]["parts"],
+        json!([
+            {"functionResponse":{"id":"a","name":"screen__display","response":{"error":"captured"},"parts":[
+                {"inlineData":{"mimeType":"image/png","data":"AA=="}},{"inlineData":{"mimeType":"application/pdf","data":"AQ=="}}
+            ]}},
+            {"functionResponse":{"id":"b","name":"lookup","response":{"output":{"value":2}}}}
+        ])
+    );
+}
+
+#[test]
+fn late_tool_results_remain_in_user_order_and_do_not_close_earlier_turns() {
+    let request = json!({"input":[
+        {"type":"function_call","name":"tool","call_id":"a","arguments":"{}"},
+        {"role":"user","content":"continue"},
+        {"role":"assistant","content":"ok"},
+        {"role":"user","content":"before"},
+        {"type":"reasoning","summary":[],"encrypted_content":"opaque-other-model"},
+        {"type":"function_call_output","call_id":"a","output":[{"type":"input_text","text":"late"}]},
+        {"role":"user","content":"after"}
+    ]});
+    let body = responses_to_genai_request(request.as_object().unwrap()).unwrap();
+    assert!(body["contents"][1]["parts"][0]["functionResponse"]["response"]["error"].is_string());
+    assert_eq!(
+        body["contents"][3]["parts"],
+        json!([{"text":"before"},{"text":"late"},{"text":"after"}])
+    );
+}
+
+#[test]
+fn named_tool_selection_requires_the_declared_type_and_namespace() {
+    let function = json!({"type":"function","name":"read"});
+    for choice in [
+        json!({"type":"function","name":"read","namespace":"missing"}),
+        json!({"type":"custom","name":"read"}),
+    ] {
+        let request = json!({"input":"read","tools":[function],"tool_choice":choice});
+        assert!(responses_to_genai_request(request.as_object().unwrap()).is_err());
+    }
+}

@@ -19,6 +19,7 @@ static SEARCH_INSTRUCTION: std::sync::LazyLock<&RawValue> = std::sync::LazyLock:
     serde_json::from_str(r#"{"parts":[{"text":"Search the web for the query and return a concise answer grounded in the sources."}]}"#).expect("valid static search instruction")
 });
 
+const GENERATION_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_CONTROL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -66,6 +67,7 @@ pub(crate) struct CloudCodeClient {
     client: Client,
     origin: Url,
     system_instruction: Box<RawValue>,
+    use_quota_credits: bool,
 }
 
 impl CloudCodeClient {
@@ -74,7 +76,7 @@ impl CloudCodeClient {
         proxy: Option<&OutboundProxy>,
         profile: &ClientProfile,
     ) -> Result<Self, ProviderError> {
-        Self::with_client(origin, Self::build_client(proxy, profile)?, profile)
+        Self::with_client(origin, Self::build_client(proxy, profile)?, profile, false)
     }
 
     pub(super) fn build_client(
@@ -87,6 +89,8 @@ impl CloudCodeClient {
             .use_rustls_tls()
             .http1_only()
             .http1_title_case_headers()
+            .pool_max_idle_per_host(100)
+            .read_timeout(GENERATION_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .user_agent(profile.user_agent())
@@ -100,10 +104,12 @@ impl CloudCodeClient {
         origin: &Url,
         client: Client,
         profile: &ClientProfile,
+        use_quota_credits: bool,
     ) -> Result<Self, ProviderError> {
         Ok(Self {
             client,
             origin: origin.clone(),
+            use_quota_credits,
             system_instruction: RawValue::from_string(
                 json!({"parts":[{"text":profile.system_prompt}]}).to_string(),
             )
@@ -140,6 +146,7 @@ impl CloudCodeClient {
         }
         let models: Models = control(
             self.post("fetchAvailableModels", token)
+                .timeout(Duration::from_secs(20))
                 .json(&json!({"project":project})),
             token,
         )
@@ -174,6 +181,8 @@ impl CloudCodeClient {
             model: &'a str,
             #[serde(rename = "requestType", skip_serializing_if = "Option::is_none")]
             request_type: Option<&'static str>,
+            #[serde(rename = "enabledCreditTypes", skip_serializing_if = "Option::is_none")]
+            enabled_credit_types: Option<[&'static str; 1]>,
             request: BTreeMap<String, &'a RawValue>,
         }
         let instruction = if mode == GenerateMode::WebSearch {
@@ -189,13 +198,20 @@ impl CloudCodeClient {
                 "text/event-stream",
             )
         } else {
-            (self.post("generateContent", token), "application/json")
+            (
+                self.post("generateContent", token)
+                    .timeout(GENERATION_TIMEOUT),
+                "application/json",
+            )
         };
         self.send(
             send.json(&Envelope {
                 project,
                 model,
                 request_type: (mode == GenerateMode::WebSearch).then_some("web_search"),
+                enabled_credit_types: self
+                    .use_quota_credits
+                    .then_some([super::account::GOOGLE_ONE_AI]),
                 request,
             }),
             token,
@@ -227,6 +243,7 @@ impl CloudCodeClient {
         }
         self.send(
             self.post("countTokens", token)
+                .timeout(GENERATION_TIMEOUT)
                 .json(&json!({"request":request})),
             token,
             headers,
@@ -284,13 +301,7 @@ pub(super) async fn control<T: DeserializeOwned>(
     token: &str,
 ) -> Result<T, ProviderError> {
     let mut response = successful(
-        super::response::decode(
-            request
-                .timeout(Duration::from_secs(15))
-                .send()
-                .await
-                .map_err(network)?,
-        ),
+        super::response::decode(request.send().await.map_err(network)?),
         token,
     )
     .await?;

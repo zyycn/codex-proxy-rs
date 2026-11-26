@@ -553,3 +553,25 @@ fn frame_end_should_support_lf_and_crlf_boundaries() {
         [Some(11), Some(13), None, Some(11), Some(13)]
     );
 }
+
+#[test]
+fn upstream_event_limit_applies_to_complete_and_fragmented_data() {
+    for chunks in [
+        vec![&b"data: abc\n\n"[..]],
+        vec![&b"data: "[..], &b"abc\n\n"[..]],
+    ] {
+        let mut small = SseEventDecoder::with_max_event_bytes(8);
+        let mut exact = SseEventDecoder::with_max_event_bytes(9);
+        for chunk in &chunks[..chunks.len() - 1] {
+            assert!(small.push(chunk).unwrap().is_empty());
+            assert!(exact.push(chunk).unwrap().is_empty());
+        }
+        let last = chunks.last().unwrap();
+        assert!(matches!(
+            small.push(last),
+            Err(SseError::BufferExceeded { max_bytes: 8 })
+        ));
+        assert_eq!(exact.push(last).unwrap()[0].data, "abc");
+        assert_eq!(exact.push(b"data: def\n\n").unwrap()[0].data, "def");
+    }
+}

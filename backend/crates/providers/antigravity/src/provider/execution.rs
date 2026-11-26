@@ -89,7 +89,8 @@ impl AntigravityProvider {
                 .and_then(|models| models.get(model.as_str())),
         );
         // AGY 没有可跨轮引用的响应，Responses WS 客户端可在新连接上直接发送完整输入
-        let reconnect_websocket = ctx.client_transport() == ClientTransport::WebSocket
+        let transport = ctx.client_transport();
+        let reconnect_websocket = transport == ClientTransport::WebSocket
             && request.operation().protocol() == gateway_protocol::openai::OPENAI_PROTOCOL;
         ctx.execute_middleware(
             request.operation().clone(),
@@ -100,7 +101,7 @@ impl AntigravityProvider {
                 if operation.requires_web_search() != search {
                     return Err(ProviderError::invalid_request("Middleware changed the required web search after model selection."));
                 }
-                let (operation, translator) = super::translation::prepare(operation)?;
+                let (operation, translator) = super::translation::prepare(operation, transport, affinity.as_ref())?;
                 let headers = crate::transport::request_headers(&operation, headers, selected.account_switch);
                 if operation.protocol() != GENAI_PROTOCOL {
                     return Err(unsent(Kind::Unsupported));

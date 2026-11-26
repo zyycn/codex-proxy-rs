@@ -2,11 +2,11 @@
 
 use crate::transport::{
     Catalog,
-    account::{ModelQuota, QuotaGroup, QuotaSummary, Tier},
+    account::{Credit, ModelQuota, QuotaGroup, QuotaSummary, Tier},
 };
 use chrono::{DateTime, Utc};
 use gateway_admin::model::provider_credentials::{
-    ProviderQuota, ProviderQuotaWindow, QuotaLocalUsageAttribution,
+    ProviderQuota, ProviderQuotaCredits, ProviderQuotaWindow, QuotaLocalUsageAttribution,
 };
 use gateway_core::account::{AccountQuotaSignals, QuotaEvidence, QuotaState};
 use serde::{Deserialize, Serialize};
@@ -95,9 +95,30 @@ impl ModelQuota {
 }
 
 impl Document {
+    fn credit(&self) -> Option<&Credit> {
+        self.tier
+            .as_ref()?
+            .available_credits
+            .iter()
+            .find(|c| c.is_google_one())
+    }
+
+    pub(super) fn access_with_credits(
+        &self,
+        state: QuotaState,
+        enabled: bool,
+        observed: SystemTime,
+    ) -> QuotaState {
+        if enabled && state.is_exhausted() && self.credit().is_some_and(Credit::usable) {
+            QuotaState::credits_only(observed, state.reset_at())
+        } else {
+            state
+        }
+    }
     pub(super) fn model_observation(
         &self,
         model: &str,
+        use_credits: bool,
         observed_at: SystemTime,
         now: SystemTime,
     ) -> Option<gateway_admin::ports::provider::ProviderPeerModelQuota> {
@@ -119,7 +140,10 @@ impl Document {
         } else {
             QuotaState::allowed(observed_at)
         };
-        Some(gateway_admin::ports::provider::ProviderPeerModelQuota { state, valid_until })
+        Some(gateway_admin::ports::provider::ProviderPeerModelQuota {
+            state: self.access_with_credits(state, use_credits, observed_at),
+            valid_until,
+        })
     }
     pub(super) fn plan_type(&self) -> Option<String> {
         self.tier
@@ -159,6 +183,7 @@ impl Document {
     pub(super) fn model_signals(
         &self,
         model: &str,
+        use_credits: bool,
         observed: SystemTime,
         now: SystemTime,
     ) -> (bool, Option<AccountQuotaSignals>) {
@@ -172,7 +197,7 @@ impl Document {
         let remaining = quota.remaining();
         let reset = quota.reset_time.map(SystemTime::from);
         (
-            remaining == Some(0.0),
+            remaining == Some(0.0) && !(use_credits && self.credit().is_some_and(Credit::usable)),
             Some(AccountQuotaSignals::new(
                 reset,
                 remaining.map(|v| (v * 10_000.0).round() as u64),
@@ -220,6 +245,11 @@ impl Document {
             }
         }
         ProviderQuota {
+            credits: self.credit().map(|credit| ProviderQuotaCredits {
+                has_credits: credit.usable(),
+                unlimited: false,
+                balance: credit.balance().map(|v| v.to_string()),
+            }),
             limit_reached: self.access(observed).is_exhausted(),
             plan_type: self.plan_type(),
             observed_at: Some(DateTime::<Utc>::from(observed)),

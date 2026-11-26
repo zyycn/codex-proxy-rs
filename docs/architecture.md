@@ -580,13 +580,15 @@ Antigravity 的 `credential/catalog` 持有与凭据版本绑定的项目与模�
 
 GenAI 模型目录通过 Core 的原生操作路由判断过滤冻结账号范围；列表、详情和执行使用同一份能力事实。Antigravity 声明生成与输入计数能力，原生 GenAI 和 Messages 计数复用选号、画像、中间件及资源释放流程，出站调用独立的 Cloud Code `countTokens`。计数响应不产生生成用量或费用事实，失败不切换为本地估算
 
-Antigravity 目录分别声明原生 GenAI 协议和接受转换的 Responses／Messages 协议；原生能力约束仍只匹配原生协议。`gateway-protocol::genai` 持有纯内容与增量事件映射，Responses 复用 Messages 的内容与工具映射，生成参数直接映射到 GenAI，不继承 Messages 的默认值与模型限制；Chat 复用 API 层的 Responses 入口。Provider 的 `provider/translation` 负责选择和装配转换器，`transport` 负责 Cloud Code 封装、原生 wire 与调用事实，并按冻结画像统一替换 AGY 系统指令。默认提示和可编辑配置归 Provider 的 `profile`，纯协议转换层不持有 AGY 身份规则
+Antigravity 目录分别声明原生 GenAI 协议和接受转换的 Responses／Messages 协议；原生能力约束仍只匹配原生协议。`gateway-protocol::genai` 持有纯内容与增量事件映射，Responses 与 Messages 各自构造 GenAI 请求，共用签名回放和多模态工具结果编码。Chat 复用 API 层的 Responses 入口。Provider 的 `provider/translation` 负责选择和装配转换器，`transport` 负责 Cloud Code 封装、原生 wire 与调用事实，并按冻结画像统一替换 AGY 系统指令。默认提示和可编辑配置归 Provider 的 `profile`，纯协议转换层不持有 AGY 身份规则
 
 Antigravity 的业务头使用 API 保留的不透明多值字节，transport 统一执行账号身份、HTTP 传输及切号追踪头过滤。选号阶段从原会话绑定和 Core 的账号归属冻结切号事实，认领冲突后重新读取，不从重试排除集合推测归属
 
 推理 HTTP 客户端按账号、凭据版本、代理和 UA 隔离，最多缓存 64 项并按最近使用淘汰；在途请求持有独立客户端引用，令牌、项目和系统指令不随连接池缓存
 
-Antigravity 的 Cloud Code 传输固定使用 rustls 与 HTTP/1.1，gzip 协商和流式解压由本 Provider 持有，不启用会影响其他 Provider 的 reqwest 全局压缩特性。解压后的流继续遵循控制面和推理消费方的大小限制、取消及截止时间
+Antigravity 的 Cloud Code 传输按下游生成模式选择普通 JSON 或 SSE。HTTP 非流式调用使用 `generateContent`，SSE 和 WebSocket 使用 `streamGenerateContent`，独立搜索使用普通 JSON
+
+Cloud Code 连接使用 rustls 与 HTTP/1.1，gzip 协商和流式解压由本 Provider 持有，不启用会影响其他 Provider 的 reqwest 全局压缩特性。解压后的流继续遵循控制面和推理消费方的大小限制、取消及截止时间
 
 跨协议响应在 Core 的响应中间件阶段之间转换。转换器在正常 EOF 时刷新最后内容块并发出终态，尾部用量先于完成事件交付；错误和取消不合成成功终态。转换状态随单次流释放，不增加账号级签名缓存或对话副本
 
@@ -790,7 +792,7 @@ OpenAI 与 Antigravity 的内置 `round_robin` 在最高可调度权重层按账
 分配游标只读，取得租约后通过共享准入接口推进；有会话认领时，游标和绑定原子提交，冲突先释放租约再重选
 亲和命中、保留主绑定的临时分流、固定账号和插件显式选号不消耗轮询位置；插件委托仍参与内置轮询
 
-Antigravity 在转换前识别 GenAI 会话头及正文 `sessionId`／`session_id`（头优先）、Codex 逻辑会话和 Claude Code 会话，绑定按 Client Key、模型和入站协议隔离
+Antigravity 在转换前识别 GenAI 会话头及正文 `sessionId`／`session_id`（头优先）、Codex 逻辑会话和 Claude Code 会话，绑定按 Client Key、模型和入站协议隔离。转换请求从绑定键派生 Cloud Code 的 `sessionId`
 xAI 继续从自身请求身份派生模型级亲和键，共用版本绑定及 TTL；上游 session ID 和推理重放身份仍由传输模块持有
 两者的优先模式在容量分流时保留合格的主绑定，绑定不再满足当前资格时迁移；严格模式等待繁忙主账号，关闭排队或资格失效时允许重选
 原生固定账号请求不改写已有主绑定，诊断请求和没有亲和键的请求不访问绑定存储
