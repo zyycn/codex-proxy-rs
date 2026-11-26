@@ -45,8 +45,12 @@ impl CodexProvider {
                     .catalog
                     .messages_model_capabilities(selected.lease.account(), &model)
                     .unwrap_or_default();
-                let mut body = messages::convert_request(original, &capabilities)
-                    .map_err(|error| request_error().with_source(error))?;
+                let mut body =
+                    messages::convert_request(original, &capabilities).map_err(|error| {
+                        ProviderError::invalid_request(error.safe_message())
+                            .with_request_details(error.code(), error.parameter())
+                            .with_source(error)
+                    })?;
                 body.insert("model".to_owned(), Value::String(model.as_str().to_owned()));
                 headers::retain_messages_headers(&mut source_context, &mut headers);
                 if body.get("speed").and_then(Value::as_str) == Some("fast") {
@@ -68,8 +72,11 @@ impl CodexProvider {
                 Ok(stream.with_native_response_translator(translator))
             }
             ApiKeyProtocol::Responses => {
-                let mut body = responses::convert_request(original)
-                    .map_err(|error| request_error().with_source(error))?;
+                let mut body = responses::convert_request(original).map_err(|error| {
+                    ProviderError::invalid_request(error.safe_message())
+                        .with_request_details(error.code(), error.parameter())
+                        .with_source(error)
+                })?;
                 if matches!(
                     selected.lease.authentication(),
                     CodexRuntimeAuthentication::OAuth(_)

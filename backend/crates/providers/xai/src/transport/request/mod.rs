@@ -119,7 +119,7 @@ impl fmt::Debug for GrokResponsesRequest {
 }
 
 /// 编码错误仅包含字段名，不包含请求或账号数据
-#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum GrokRequestEncodeError {
     #[error("The request protocol is not supported by this Grok path.")]
     InvalidProtocolPayload,
@@ -127,8 +127,6 @@ pub enum GrokRequestEncodeError {
     UnsupportedPrewarm,
     #[error("Grok request serialization failed.")]
     Serialization,
-    #[error("The Chat request cannot be represented by Grok Responses.")]
-    InvalidRequestNormalization,
-    #[error("The Chat request field `{field}` cannot be represented by Grok Responses.")]
-    InvalidRequestField { field: &'static str },
+    #[error(transparent)]
+    Chat(#[from] gateway_protocol::chat_completions::ChatError),
 }

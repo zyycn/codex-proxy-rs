@@ -118,13 +118,16 @@ pub(crate) fn capacity_error_for_client(data: &Value) -> Option<Value> {
 /// Gateway 错误的 OpenAI HTTP 表达
 pub fn gateway_error_response(error: &GatewayError) -> Response {
     let (status, default_type, default_code) = gateway_error_contract(error.kind());
-    let mut response = openai_error_response(
+    let (status, Json(mut body)) = openai_error_response(
         status,
         error.client_message(),
         error.client_error_type().unwrap_or(default_type),
         error.client_error_code().unwrap_or(default_code),
-    )
-    .into_response();
+    );
+    if let Some(parameter) = error.client_error_parameter() {
+        body["error"]["param"] = parameter.into();
+    }
+    let mut response = (status, Json(body)).into_response();
     response.extensions_mut().insert(error.clone());
     if let Some(delay) = error.retry_after()
         && let Ok(value) = HeaderValue::from_str(

@@ -78,15 +78,13 @@ pub(in crate::data_plane) fn decode_request(
     maximum: usize,
 ) -> Result<DecodedGenerationRequest, RequestDecodeError> {
     let body = decompress_request_body(body, headers, maximum)?;
-    let parsed = chat_completions::parse_request(&body).map_err(decode_error)?;
+    let parsed = chat_completions::parse_request(&body)?;
     let model = parsed
-        .body
         .get("model")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_owned();
     let stream = parsed
-        .body
         .get("stream")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
@@ -106,28 +104,4 @@ pub(in crate::data_plane) fn decode_request(
             user_agent: None,
         },
     })
-}
-
-fn decode_error(error: chat_completions::ChatError) -> RequestDecodeError {
-    use chat_completions::ChatError;
-    match error {
-        ChatError::MalformedJson => RequestDecodeError::MalformedJson,
-        ChatError::ExpectedObject => RequestDecodeError::ExpectedObject,
-        ChatError::MissingField { field } => RequestDecodeError::MissingField { field },
-        ChatError::InvalidType { field, expected } => {
-            RequestDecodeError::InvalidType { field, expected }
-        }
-        ChatError::EmptyField { field } => RequestDecodeError::EmptyField { field },
-        ChatError::InvalidValue { field } => RequestDecodeError::InvalidValue { field },
-        ChatError::UnknownField { field } => RequestDecodeError::UnknownField { field },
-        ChatError::UnsupportedField { field } => RequestDecodeError::UnsupportedField { field },
-        ChatError::UnsupportedCombination { field, other } => {
-            RequestDecodeError::UnsupportedCombination { field, other }
-        }
-        ChatError::InvalidResponse | ChatError::IncompleteStream => {
-            RequestDecodeError::CanonicalContract {
-                field: "chat request".to_owned(),
-            }
-        }
-    }
 }

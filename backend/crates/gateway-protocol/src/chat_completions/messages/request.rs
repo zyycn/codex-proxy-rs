@@ -2,7 +2,7 @@
 
 use crate::anthropic::MessagesModelCapabilities;
 use crate::chat_completions::{
-    ChatError,
+    ChatError, custom_tool_schema,
     error::{invalid, unsupported},
     request::string,
     validate_request,
@@ -236,14 +236,6 @@ fn content(value: &Value, path: &str, system: bool) -> Result<Vec<Value>, ChatEr
                 }
                 block
             }
-            "prompt_cache_breakpoint" => {
-                let last = output.last_mut().ok_or_else(|| invalid(&path))?;
-                last["cache_control"] = part
-                    .get("cache_control")
-                    .cloned()
-                    .unwrap_or_else(|| json!({"type":"ephemeral"}));
-                continue;
-            }
             _ => return Err(unsupported(&format!("{path}.type"))),
         };
         output.push(block);
@@ -301,7 +293,7 @@ fn tools(
                 false,
             )?;
             let schema = if kind == "custom" {
-                json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"]})
+                custom_tool_schema(declaration.get("format"), &format!("{path}.custom.format"))?
             } else {
                 declaration
                     .get("parameters")

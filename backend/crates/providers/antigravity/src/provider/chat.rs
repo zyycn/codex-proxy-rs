@@ -53,8 +53,11 @@ pub(super) fn prepare(
             .unwrap_or_default()
             .to_owned(),
     };
-    let mut body = genai::convert_request(original)
-        .map_err(|error| unsent(ProviderErrorKind::InvalidRequest).with_source(error))?;
+    let mut body = genai::convert_request(original).map_err(|error| {
+        ProviderError::invalid_request(error.safe_message())
+            .with_request_details(error.code(), error.parameter())
+            .with_source(error)
+    })?;
     if let Some(session) = affinity {
         body.insert(
             "sessionId".to_owned(),

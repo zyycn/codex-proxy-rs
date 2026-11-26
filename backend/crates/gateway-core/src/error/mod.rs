@@ -553,9 +553,17 @@ struct ProviderErrorUpstreamValues {
 #[derive(Clone, Default)]
 struct ProviderErrorFailureObservation {
     invalid_request_message: Option<&'static str>,
+    invalid_request_details: Option<RequestErrorDetails>,
     unreachable_proxy: Option<crate::upstream::ProxyEndpoint>,
     continuation_unavailable_reason: Option<&'static str>,
     connection: Option<ProviderConnectionObservation>,
+}
+
+/// 本地校验显式提供的协议字段，不从任意错误来源或请求值反推
+#[derive(Clone)]
+struct RequestErrorDetails {
+    code: &'static str,
+    parameter: Option<String>,
 }
 
 #[derive(Clone)]
@@ -601,6 +609,16 @@ impl ProviderError {
         );
         error.failure_observation_mut().invalid_request_message = Some(message);
         error
+    }
+
+    /// 附加本地请求校验的安全机器码与协议字段路径，禁止传入字段值
+    #[must_use]
+    pub fn with_request_details(mut self, code: &'static str, parameter: Option<&str>) -> Self {
+        self.failure_observation_mut().invalid_request_details = Some(RequestErrorDetails {
+            code,
+            parameter: parameter.map(str::to_owned),
+        });
+        self
     }
 
     /// 当前上游无法解析 Responses 历史，仅客户端持有完整输入可重放
@@ -1330,6 +1348,7 @@ pub struct GatewayError {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct GatewayClientErrorDetails {
     code: Option<&'static str>,
+    parameter: Option<String>,
     retry_after: Option<Duration>,
 }
 
@@ -1467,6 +1486,17 @@ impl GatewayError {
                 "Upstream service is unavailable.",
             ),
         };
+        let mut gateway = gateway;
+        if gateway.kind() == GatewayErrorKind::InvalidRequest
+            && let Some(details) = error
+                .failure_observation
+                .as_ref()
+                .and_then(|observation| observation.invalid_request_details.as_ref())
+        {
+            let client = gateway.client_details.get_or_insert_with(Default::default);
+            client.code = Some(details.code);
+            client.parameter.clone_from(&details.parameter);
+        }
         let gateway = match error.diagnostic() {
             Some(diagnostic) => gateway.with_diagnostic(diagnostic.clone()),
             None => gateway,
@@ -1537,6 +1567,14 @@ impl GatewayError {
                     .as_ref()
                     .and_then(|details| details.code)
             })
+    }
+
+    /// 返回本地校验明确标注的协议字段路径，不包含请求值
+    #[must_use]
+    pub fn client_error_parameter(&self) -> Option<&str> {
+        self.client_details
+            .as_ref()
+            .and_then(|details| details.parameter.as_deref())
     }
 }
 

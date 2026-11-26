@@ -368,9 +368,12 @@ pub(super) fn ensure_sent_context(context: &AttemptContext) -> Result<(), Provid
 
 pub(super) fn map_request_error(error: GrokRequestEncodeError) -> ProviderError {
     let kind = match error {
-        GrokRequestEncodeError::InvalidProtocolPayload
-        | GrokRequestEncodeError::InvalidRequestNormalization
-        | GrokRequestEncodeError::InvalidRequestField { .. } => ProviderErrorKind::InvalidRequest,
+        GrokRequestEncodeError::Chat(error) => {
+            return ProviderError::invalid_request(error.safe_message())
+                .with_request_details(error.code(), error.parameter())
+                .with_source(error);
+        }
+        GrokRequestEncodeError::InvalidProtocolPayload => ProviderErrorKind::InvalidRequest,
         GrokRequestEncodeError::UnsupportedPrewarm => ProviderErrorKind::Unsupported,
         GrokRequestEncodeError::Serialization => ProviderErrorKind::Protocol,
     };

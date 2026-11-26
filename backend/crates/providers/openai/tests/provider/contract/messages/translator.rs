@@ -1,4 +1,4 @@
-//! 转换失败保留受限诊断原因，不改变发送状态或公共错误
+//! 转换错误保留安全字段与受限诊断，响应交付保持所选协议
 
 use super::*;
 use gateway_core::event::{ProtocolWireEvent, ProviderEvent};
@@ -75,6 +75,12 @@ async fn request_translation_preserves_the_unsent_validation_cause() {
         error.source().unwrap().downcast_ref::<ChatError>(),
         Some(ChatError::InvalidValue { .. })
     ));
+    let public = gateway_core::error::GatewayError::from_provider(&error);
+    assert_eq!(public.client_error_code(), Some("invalid_value"));
+    assert_eq!(
+        public.client_error_parameter(),
+        Some("tool_choice.allowed_tools.tools")
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 

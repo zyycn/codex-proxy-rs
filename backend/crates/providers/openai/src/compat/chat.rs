@@ -1,4 +1,4 @@
-//! Messages 跨协议转换的目标档位与 fast 协议头适配
+//! Chat 转换的目标档位与 fast 协议头适配
 
 use bytes::Bytes;
 use gateway_core::engine::middleware::MiddlewareHeader;

@@ -868,6 +868,13 @@ async fn unsupported_chat_search_options_fail_before_sending_and_release_the_lea
         assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
         assert_eq!(error.send_state(), UpstreamSendState::NotSent);
         assert!(error.error_details().is_some());
+        let public = gateway_core::error::GatewayError::from_provider(&error);
+        assert_eq!(public.client_error_code(), Some("unsupported_parameter"));
+        let field = options.as_object().unwrap().keys().next().unwrap();
+        assert_eq!(
+            public.client_error_parameter(),
+            Some(format!("web_search_options.{field}").as_str())
+        );
         released(&fixture).await;
     }
     assert!(upstream.received_requests().await.unwrap().is_empty());

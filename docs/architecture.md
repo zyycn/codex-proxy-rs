@@ -583,6 +583,8 @@ Antigravity 的 `credential/catalog` 持有与凭据版本绑定的项目与模�
 
 数据面协议入口位于 `gateway-api/src/data_plane`。Responses、Chat Completions、Messages 与 GenAI 共用 `generation` 的执行和交付流程。GenAI 从 URL 解码模型和生成方法，要求候选模型在原生目录中声明对应协议。Core 在 Key 的账号范围内匹配能力，Antigravity 将选中的 GenAI 请求封装为 Cloud Code 上游请求
 
+Chat 的角色、公共字段结构与交付选项由 `gateway-protocol/chat_completions/request` 统一校验，目标转换器只补充可表达性与映射规则。选路事实只读取协议声明位置，不递归解释 schema、工具参数或扩展字段。
+
 GenAI 模型目录通过 Core 的原生操作路由判断过滤冻结账号范围；列表、详情和执行使用同一份能力事实。Antigravity 声明生成与输入计数能力，原生 GenAI 计数复用选号、画像、中间件及资源释放流程，出站调用独立的 Cloud Code `countTokens`。计数响应不产生生成用量或费用事实，失败不切换为本地估算
 
 Antigravity 目录声明原生 GenAI 和 Chat 转换能力，Responses、Messages 不借用 Chat 能力进入该平台。
@@ -1368,6 +1370,7 @@ Provider metadata 的 `upstreamServiceTier`，不改写客户端收到的响应�
    不进入普通 Admin 错误信封、Debug、普通日志或持久化错误摘要。连接测试只展示该接口允许的诊断投影
 
 错误分类负责公共响应、重试和账号处置，原始上游 code 独立保存，不受已知分类白名单限制。
+本地请求校验的安全消息、机器码与字段路径由校验方显式提供，Provider 和 Core 保留这些事实供 API 交付，不从错误来源或字段值推导。
 本地异常通过标准 `Error::source` 跨层传播；Core 的不透明来源载体保持底层类型，不依赖数据库或 HTTP 库，
 普通格式化不展开来源。Store 统一基础设施不可用的转换，Provider 拥有业务分类，
 插件 Runtime 集中投影 RPC、fault 与上游适配事件，调用点只附加原始来源与执行上下文

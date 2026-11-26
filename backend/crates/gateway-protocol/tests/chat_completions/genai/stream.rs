@@ -22,11 +22,9 @@ fn usage_after_finish_reason_is_included_once_at_eof() {
             accumulator.push(&chunk).unwrap();
         }
     }
-    assert!(!encoder.is_completed());
     for chunk in encoder.finish().unwrap() {
         accumulator.push(&chunk).unwrap();
     }
-    assert!(encoder.is_completed());
     assert!(encoder.finish().unwrap().is_empty());
     let result = accumulator.finish().unwrap();
     assert_eq!(result["choices"][0]["message"]["content"], "hello world");

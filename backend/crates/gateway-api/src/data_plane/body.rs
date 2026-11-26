@@ -8,6 +8,9 @@ use thiserror::Error;
 /// 请求解码错误
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RequestDecodeError {
+    /// Chat 的入口校验与目标转换复用同一错误合同
+    #[error(transparent)]
+    Chat(#[from] gateway_protocol::chat_completions::ChatError),
     /// 请求不是合法 JSON
     #[error("request body must be valid JSON")]
     MalformedJson,
@@ -52,12 +55,6 @@ pub enum RequestDecodeError {
         /// 字段路径；不保存原始值
         field: String,
     },
-    /// 未知字段
-    #[error("unknown field `{field}`")]
-    UnknownField {
-        /// 字段路径；不保存字段值
-        field: String,
-    },
     /// 已知但尚未实现的语义
     #[error("field `{field}` is not supported by this gateway")]
     UnsupportedField {
@@ -85,6 +82,11 @@ impl RequestDecodeError {
     #[must_use]
     pub fn protocol_body(&self) -> ProtocolErrorBody {
         let (code, message, param) = match self {
+            Self::Chat(error) => (
+                error.code(),
+                error.to_string(),
+                error.parameter().map(str::to_owned),
+            ),
             Self::MalformedJson => (
                 "invalid_json",
                 "Request body must be valid JSON.".to_owned(),
@@ -125,11 +127,6 @@ impl RequestDecodeError {
             Self::InvalidValue { field } | Self::CanonicalContract { field } => (
                 "invalid_value",
                 format!("Parameter `{field}` has an invalid value."),
-                Some(field.clone()),
-            ),
-            Self::UnknownField { field } => (
-                "unknown_parameter",
-                format!("Unknown parameter `{field}`."),
                 Some(field.clone()),
             ),
             Self::UnsupportedField { field } => (

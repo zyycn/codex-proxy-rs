@@ -20,8 +20,6 @@ pub enum ChatError {
     EmptyField { field: String },
     #[error("Parameter `{field}` has an invalid value.")]
     InvalidValue { field: String },
-    #[error("Unknown parameter `{field}`.")]
-    UnknownField { field: String },
     #[error("Parameter `{field}` is not supported by this upstream.")]
     UnsupportedField { field: String },
     #[error("The requested `{field}` is not supported with `{other}`.")]
@@ -36,6 +34,26 @@ pub enum ChatError {
 }
 
 impl ChatError {
+    /// Provider 保留静态分类提示，字段路径通过独立合同交付，不展开内部错误来源
+    pub const fn safe_message(&self) -> &'static str {
+        match self {
+            Self::MalformedJson => "Request body must be valid JSON.",
+            Self::ExpectedObject => "Request body must be a JSON object.",
+            Self::MissingField { .. } => "A required parameter is missing.",
+            Self::InvalidType { .. } => "The parameter has an invalid type.",
+            Self::EmptyField { .. } => "The parameter must not be empty.",
+            Self::InvalidValue { .. } => "The parameter has an invalid value.",
+            Self::UnsupportedField { .. } => "The parameter is not supported by this upstream.",
+            Self::UnsupportedCombination { .. } => {
+                "The requested parameter combination is not supported."
+            }
+            Self::InvalidResponse => {
+                "The upstream response cannot be represented as a Chat completion."
+            }
+            Self::IncompleteStream => "The upstream stream ended before its terminal event.",
+        }
+    }
+
     /// 供 API 出口构造稳定的机器码
     pub const fn code(&self) -> &'static str {
         match self {
@@ -44,7 +62,6 @@ impl ChatError {
             Self::MissingField { .. } => "missing_required_parameter",
             Self::InvalidType { .. } => "invalid_type",
             Self::EmptyField { .. } | Self::InvalidValue { .. } => "invalid_value",
-            Self::UnknownField { .. } => "unknown_parameter",
             Self::UnsupportedField { .. } | Self::UnsupportedCombination { .. } => {
                 "unsupported_parameter"
             }
@@ -60,7 +77,6 @@ impl ChatError {
             | Self::InvalidType { field, .. }
             | Self::EmptyField { field }
             | Self::InvalidValue { field }
-            | Self::UnknownField { field }
             | Self::UnsupportedField { field } => Some(field),
             Self::UnsupportedCombination { field, .. } => Some(field),
             _ => None,

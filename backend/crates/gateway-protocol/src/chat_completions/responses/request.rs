@@ -4,17 +4,16 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value, json};
 
-use crate::chat_completions::ChatError as RequestDecodeError;
+use crate::chat_completions::{ChatError as RequestDecodeError, validate_request};
 
 /// 将已验证的 Chat 正文直接转换为 Responses 请求
 pub fn convert_request(
     request: &Map<String, Value>,
 ) -> Result<Map<String, Value>, RequestDecodeError> {
+    validate_request(request)?;
     let mut chat = request.clone();
-    validate_options(&chat)?;
     let model = required_string(&mut chat, "model", "model", false)?;
     let stream = optional_bool(&mut chat, "stream", "stream")?.unwrap_or(false);
-    stream_options(optional(&mut chat, "stream_options"), stream)?;
     let input = messages(required(&mut chat, "messages", "messages")?)?;
     let mut body = Map::from_iter([
         ("model".into(), model.into()),
@@ -127,23 +126,6 @@ pub fn convert_request(
     Ok(body)
 }
 
-fn validate_options(chat: &Map<String, Value>) -> Result<(), RequestDecodeError> {
-    for (field, value) in chat.iter().filter(|(_, value)| !value.is_null()) {
-        let supported = match field.as_str() {
-            "n" => value.as_u64() == Some(1),
-            "store" | "background" => value == false,
-            "functions" => value.as_array().is_some_and(Vec::is_empty),
-            "modalities" => value == &json!(["text"]),
-            "audio" | "function_call" | "input" | "previous_response_id" | "conversation" => false,
-            _ => true,
-        };
-        if !supported {
-            return Err(unsupported(field));
-        }
-    }
-    Ok(())
-}
-
 fn web_search_tool(value: Value) -> Result<Value, RequestDecodeError> {
     let mut options = object(value, "web_search_options")?;
     let mut tool = json!({"type": "web_search"});
@@ -171,71 +153,15 @@ fn web_search_tool(value: Value) -> Result<Value, RequestDecodeError> {
     Ok(tool)
 }
 
-fn stream_options(value: Option<Value>, stream: bool) -> Result<bool, RequestDecodeError> {
-    let Some(value) = value else {
-        return Ok(false);
-    };
-    if !stream {
-        return Err(invalid("stream_options"));
-    }
-    let mut options = object(value, "stream_options")?;
-    let include_usage = optional_bool(
-        &mut options,
-        "include_usage",
-        "stream_options.include_usage",
-    )?
-    .unwrap_or(false);
-    if optional_bool(
-        &mut options,
-        "include_obfuscation",
-        "stream_options.include_obfuscation",
-    )? == Some(true)
-    {
-        // Chat 重编码会改变帧长度，不能声称继承上游流的长度混淆保证
-        return Err(unsupported("stream_options.include_obfuscation"));
-    }
-    Ok(include_usage)
-}
-
 fn messages(value: Value) -> Result<Vec<Value>, RequestDecodeError> {
     let messages = array(value, "messages")?;
-    if messages.is_empty() {
-        return Err(RequestDecodeError::EmptyField {
-            field: "messages".into(),
-        });
-    }
     let mut input = Vec::with_capacity(messages.len());
     let mut custom_calls = HashSet::new();
     for (index, value) in messages.into_iter().enumerate() {
         let path = format!("messages[{index}]");
         let mut message = object(value, &path)?;
         let role = required_string(&mut message, "role", &format!("{path}.role"), false)?;
-        if !matches!(
-            role.as_str(),
-            "system" | "developer" | "user" | "assistant" | "tool"
-        ) {
-            return Err(unsupported(&format!("{path}.role")));
-        }
         let name = optional(&mut message, "name").filter(|name| name != "");
-        if let Some(name) = &name {
-            let name_path = format!("{path}.name");
-            string(name, &name_path, true)?;
-        }
-        // Chat 的显示名称和明文推理历史没有对应的 Responses 输入语义
-        for field in ["function_call", "audio"] {
-            if optional(&mut message, field).is_some() {
-                return Err(unsupported(&format!("{path}.{field}")));
-            }
-        }
-        for (field, allowed_role) in [
-            ("tool_calls", "assistant"),
-            ("refusal", "assistant"),
-            ("tool_call_id", "tool"),
-        ] {
-            if role != allowed_role && message.get(field).is_some_and(|value| !value.is_null()) {
-                return Err(invalid(&format!("{path}.{field}")));
-            }
-        }
         if role == "tool" {
             let call_id = required_string(
                 &mut message,
@@ -268,13 +194,7 @@ fn messages(value: Value) -> Result<Vec<Value>, RequestDecodeError> {
             .transpose()?
             .unwrap_or_default();
         let refusal = optional(&mut message, "refusal");
-        if let Some(value) = &refusal {
-            string(value, &format!("{path}.refusal"), true)?;
-        }
         let content = optional(&mut message, "content");
-        if content.is_none() && refusal.is_none() && calls.is_empty() {
-            return Err(invalid(&format!("{path}.content")));
-        }
         let is_assistant = role == "assistant";
         let mut parts = content
             .map(|value| content_parts(value, &role, &format!("{path}.content"), is_assistant))

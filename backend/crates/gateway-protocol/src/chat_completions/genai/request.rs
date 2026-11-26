@@ -1,7 +1,7 @@
 //! Chat 内容、工具与生成设置直接构造 GenAI 正文
 
 use crate::chat_completions::{
-    ChatError,
+    ChatError, custom_tool_schema,
     error::{invalid, unsupported},
     request::string,
     validate_request,
@@ -312,7 +312,7 @@ fn tools(chat: &Map<String, Value>, result: &mut Map<String, Value>) -> Result<(
                 false,
             )?;
             let parameters = if kind == "custom" {
-                json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"]})
+                custom_tool_schema(definition.get("format"), &format!("{path}.custom.format"))?
             } else {
                 definition
                     .get("parameters")

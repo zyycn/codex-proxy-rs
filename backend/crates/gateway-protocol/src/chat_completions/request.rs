@@ -1,4 +1,4 @@
-//! Chat 入站解析和能力提取，选路前保持 Chat 正文
+//! Chat 公共请求校验、声明事实与字符串工具合同，选路前保持原文
 
 use super::{
     ChatError,
@@ -7,28 +7,14 @@ use super::{
 use crate::capabilities::RequestFacts;
 use serde_json::{Map, Value, json};
 
-/// 已解码的 Chat 正文与交付选项
-pub struct ChatRequest {
-    pub body: Map<String, Value>,
-    pub include_usage: bool,
-}
-
 /// 仅解析当前协议，不构造目标平台报文
-pub fn parse_request(bytes: &[u8]) -> Result<ChatRequest, ChatError> {
+pub fn parse_request(bytes: &[u8]) -> Result<Map<String, Value>, ChatError> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| ChatError::MalformedJson)?;
     let Value::Object(body) = value else {
         return Err(ChatError::ExpectedObject);
     };
     validate_request(&body)?;
-    let include_usage = body
-        .get("stream_options")
-        .and_then(|v| v.get("include_usage"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Ok(ChatRequest {
-        body,
-        include_usage,
-    })
+    Ok(body)
 }
 
 /// 校验各目标共同遵守的 Chat 请求合同
@@ -68,6 +54,11 @@ pub fn validate_request(body: &Map<String, Value>) -> Result<(), ChatError> {
         for field in ["function_call", "audio"] {
             if message.get(field).is_some_and(|v| !v.is_null()) {
                 return Err(unsupported(&format!("{path}.{field}")));
+            }
+        }
+        for field in ["name", "refusal"] {
+            if let Some(value) = message.get(field).filter(|v| !v.is_null()) {
+                string(Some(value), &format!("{path}.{field}"), true)?;
             }
         }
         if role == "tool" {
@@ -124,15 +115,14 @@ pub fn validate_request(body: &Map<String, Value>) -> Result<(), ChatError> {
                     &format!("{call_path}.{kind}.name"),
                     false,
                 )?;
+                let data_field = if kind == "function" {
+                    "arguments"
+                } else {
+                    "input"
+                };
                 string(
-                    call.get(kind).and_then(|v| {
-                        v.get(if kind == "function" {
-                            "arguments"
-                        } else {
-                            "input"
-                        })
-                    }),
-                    &format!("{call_path}.{kind}"),
+                    call.get(kind).and_then(|v| v.get(data_field)),
+                    &format!("{call_path}.{kind}.{data_field}"),
                     true,
                 )?;
             }
@@ -209,9 +199,27 @@ pub(crate) fn request_facts(body: &Map<String, Value>) -> RequestFacts {
             .get("tools")
             .and_then(Value::as_array)
             .is_some_and(|v| !v.is_empty())
-            || body.contains_key("web_search_options"),
-        vision: has_type(body.get("messages"), &["image_url", "input_image"]),
-        image_generation: has_type(body.get("tools"), &["image_generation"]),
+            || body.get("web_search_options").is_some_and(|v| !v.is_null()),
+        // 只读取协议内容块，不将工具参数、扩展字段或 schema 示例解释为请求能力
+        vision: body
+            .get("messages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|message| message.get("content").and_then(Value::as_array))
+            .flatten()
+            .any(|part| {
+                matches!(
+                    part.get("type").and_then(Value::as_str),
+                    Some("image_url" | "input_image")
+                )
+            }),
+        image_generation: body
+            .get("tools")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|tool| tool.get("type").and_then(Value::as_str) == Some("image_generation")),
         reasoning: body.get("reasoning_effort").is_some_and(|v| !v.is_null())
             || body.get("reasoning").is_some_and(Value::is_object),
         json_schema: body
@@ -238,15 +246,17 @@ pub(crate) fn request_effort(body: &Map<String, Value>) -> Option<&str> {
         })
 }
 
-fn has_type(value: Option<&Value>, kinds: &[&str]) -> bool {
-    match value {
-        Some(Value::Object(v)) => {
-            v.get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|v| kinds.contains(&v))
-                || v.values().any(|v| has_type(Some(v), kinds))
+/// 将无格式约束的 custom 工具表达为字符串参数，受约束格式必须由目标原生支持
+pub fn custom_tool_schema(format: Option<&Value>, path: &str) -> Result<Value, ChatError> {
+    if let Some(format) = format.filter(|value| !value.is_null()) {
+        if !format.is_object() {
+            return Err(invalid(path));
         }
-        Some(Value::Array(v)) => v.iter().any(|v| has_type(Some(v), kinds)),
-        _ => false,
+        if string(format.get("type"), &format!("{path}.type"), false)? != "text" {
+            return Err(unsupported(path));
+        }
     }
+    Ok(
+        json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}),
+    )
 }

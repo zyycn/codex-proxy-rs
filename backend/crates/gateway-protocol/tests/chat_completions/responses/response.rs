@@ -274,7 +274,6 @@ fn sse_deduplicates_text_snapshots_and_emits_usage_only_when_requested() {
         for event in events {
             chunks.extend(encoder.push_event(None, &event).unwrap());
         }
-        assert!(encoder.is_completed());
         assert!(encoder.finish().unwrap().is_empty());
         assert_eq!(combined(&chunks, "content"), "你好 🌍");
         assert_eq!(

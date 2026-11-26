@@ -223,11 +223,7 @@ impl ChatStreamEncoder {
         }
     }
 
-    pub fn is_completed(&self) -> bool {
-        self.terminal == Some(Terminal::Completed)
-    }
-
-    pub fn has_wire_failure(&self) -> bool {
+    fn has_wire_failure(&self) -> bool {
         self.terminal == Some(Terminal::Failed)
     }
 

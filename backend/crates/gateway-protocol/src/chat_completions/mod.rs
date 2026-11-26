@@ -9,7 +9,7 @@ pub mod messages;
 pub mod responses;
 
 pub use error::ChatError;
-pub use request::{ChatRequest, parse_request, validate_request};
+pub use request::{custom_tool_schema, parse_request, validate_request};
 pub(crate) use request::{request_effort, request_facts};
 pub use response::{ChatAccumulator, ChatIdentity, completion_chunks};
 

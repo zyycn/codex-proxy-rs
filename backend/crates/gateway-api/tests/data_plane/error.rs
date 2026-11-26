@@ -887,3 +887,30 @@ fn final_connection_failures_and_local_capacity_have_distinct_http_statuses() {
         );
     }
 }
+
+#[tokio::test]
+async fn local_request_details_survive_execution_without_exposing_the_diagnostic_source() {
+    for with_details in [false, true] {
+        let mut provider =
+            ProviderError::invalid_request("The parameter is not supported by this upstream.")
+                .with_source(std::io::Error::other("PRIVATE_REQUEST_CONTENT"));
+        if with_details {
+            provider = provider
+                .with_request_details("unsupported_parameter", Some("tools[0].custom.format"));
+        }
+        let error = EngineError::Provider(provider.stable_snapshot());
+        let response = engine_error_response(&error);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        if with_details {
+            assert_eq!(body["error"]["code"], "unsupported_parameter");
+            assert_eq!(body["error"]["param"], "tools[0].custom.format");
+        } else {
+            assert_eq!(body["error"]["code"], "invalid_request");
+            assert!(body["error"].get("param").is_none());
+        }
+        assert!(!String::from_utf8_lossy(&bytes).contains("PRIVATE_REQUEST_CONTENT"));
+    }
+}

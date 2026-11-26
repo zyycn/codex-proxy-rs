@@ -1,7 +1,7 @@
 //! Chat 直接生成 Grok 实际使用的 Responses wire，不经过 Harness 归一化
 
 use super::*;
-use gateway_protocol::chat_completions::{CHAT_PROTOCOL, responses};
+use gateway_protocol::chat_completions::{CHAT_PROTOCOL, custom_tool_schema, responses};
 
 impl GrokResponsesRequest {
     pub(crate) fn from_chat(
@@ -14,29 +14,24 @@ impl GrokResponsesRequest {
         {
             return Err(GrokRequestEncodeError::InvalidProtocolPayload);
         }
-        let mut body = responses::convert_request(request.protocol_payload().body())
-            .map_err(|_| GrokRequestEncodeError::InvalidRequestNormalization)?;
+        let mut body = responses::convert_request(request.protocol_payload().body())?;
         // 上游只接受函数工具，custom 的字符串输入直接编码到此目标的参数合同
         if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
-            for tool in tools {
+            for (index, tool) in tools.iter_mut().enumerate() {
                 if tool.get("type").and_then(Value::as_str) != Some("custom") {
                     continue;
                 }
-                if tool
-                    .get("format")
-                    .and_then(|format| format.get("type"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|kind| kind != "text")
-                {
-                    return Err(GrokRequestEncodeError::InvalidRequestField { field: "tools" });
-                }
+                let source = &request.protocol_payload().body()["tools"][index];
+                let path = if source.get("custom").is_some_and(|value| !value.is_null()) {
+                    format!("tools[{index}].custom.format")
+                } else {
+                    format!("tools[{index}].format")
+                };
+                let schema = custom_tool_schema(tool.get("format"), &path)?;
                 let mut function = Map::from_iter([
                     ("type".to_owned(), json!("function")),
                     ("name".to_owned(), tool["name"].clone()),
-                    (
-                        "parameters".to_owned(),
-                        json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}),
-                    ),
+                    ("parameters".to_owned(), schema),
                 ]);
                 if let Some(description) = tool.get("description") {
                     function.insert("description".to_owned(), description.clone());
@@ -56,7 +51,7 @@ impl GrokResponsesRequest {
                     Some("custom_tool_call") => {
                         let input = item
                             .remove("input")
-                            .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
+                            .ok_or(GrokRequestEncodeError::InvalidProtocolPayload)?;
                         item.insert("type".to_owned(), json!("function_call"));
                         item.insert(
                             "arguments".to_owned(),

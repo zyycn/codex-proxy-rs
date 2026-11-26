@@ -350,6 +350,7 @@ Messages 目标直接生成 `system`、`messages`、`tool_use`／`tool_result` �
 
 GenAI 目标直接生成 `systemInstruction`、`contents`、`functionCall`／`functionResponse` 和 `generationConfig`。
 两个目标都校验工具调用与结果的配对；custom 工具以单个字符串输入包装成函数，并在 Chat 回程还原。
+Messages、GenAI 和 xAI 的 custom 工具只接受未指定格式或 `format.type: text`；grammar 等受约束格式返回 `400`，`param` 指向原始格式字段。
 多模态字段按目标能力映射，不支持的内容或声明返回字段错误，不转成另一平台协议重试
 
 #### 响应与共用规则

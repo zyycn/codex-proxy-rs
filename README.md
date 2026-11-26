@@ -17,7 +17,7 @@
 </div>
 
 > [!NOTE]
-> 原生生成支持 [OpenAI Responses](docs/api.md#responses-请求与传输)、[Anthropic Messages](docs/api.md#messages-请求) 和 [GenAI](docs/api.md#antigravity-客户端原生生成)；[Chat Completions](docs/api.md#chat-completions-请求) 直接转换到所选账号协议，其他跨协议转换不内置
+> 支持 OpenAI（Codex）、xAI（Grok）和 Google Antigravity 账号，以及兼容 OpenAI Responses 或 Anthropic Messages 的 API Key 服务，详见[账号接入](docs/api.md#账号能力导入与-oauth)
 
 ## 快速预览
 

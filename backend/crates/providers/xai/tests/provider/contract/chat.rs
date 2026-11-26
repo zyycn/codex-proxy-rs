@@ -110,3 +110,43 @@ async fn chat_allowed_custom_choice_matches_the_actual_function_declaration() {
     );
     assert_eq!(body["tools"][0]["name"], "run");
 }
+
+#[tokio::test]
+async fn unsupported_custom_formats_keep_safe_fields_without_sending() {
+    for tool in [
+        json!({"type":"custom","custom":{"name":"run","format":{"type":"grammar","grammar":{"definition":"PRIVATE_GRAMMAR"}}}}),
+        json!({"type":"custom","name":"run","format":{"type":"grammar","grammar":{"definition":"PRIVATE_GRAMMAR"}}}),
+    ] {
+        let transport = StubInferenceTransport::success();
+        let provider = provider(StubSelector::success(), transport.clone()).await;
+        let field = if tool.get("custom").is_some() {
+            "tools[0].custom.format"
+        } else {
+            "tools[0].format"
+        };
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                CHAT_PROTOCOL,
+                object(json!({
+                    "model":MODEL,"messages":[{"role":"user","content":"hello"}],"tools":[tool]
+                })),
+            )
+            .unwrap(),
+        ));
+        let error = provider
+            .execute(
+                provider_request_with_operation("xai", operation),
+                context(CancellationToken::new(), None),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        let public = gateway_core::error::GatewayError::from_provider(&error);
+        assert_eq!(public.client_error_code(), Some("unsupported_parameter"));
+        assert_eq!(public.client_error_parameter(), Some(field));
+        assert!(!public.client_message().contains("PRIVATE_GRAMMAR"));
+        assert!(transport.requests.lock().unwrap().is_empty());
+    }
+}

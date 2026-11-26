@@ -24,7 +24,6 @@ fn native_json_and_stream_produce_the_same_chat_result() {
             accumulator.push(&chunk).unwrap();
         }
     }
-    assert!(encoder.is_completed());
     assert!(encoder.finish().unwrap().is_empty());
     assert_eq!(accumulator.finish().unwrap(), expected);
 }
@@ -91,7 +90,5 @@ fn upstream_error_preserves_error_type_without_finish_chunk() {
         encoder.push_event(None, &error).unwrap(),
         vec![json!({"error":error["error"]})]
     );
-    assert!(encoder.has_wire_failure());
-    assert!(!encoder.is_completed());
     assert!(encoder.finish().unwrap().is_empty());
 }

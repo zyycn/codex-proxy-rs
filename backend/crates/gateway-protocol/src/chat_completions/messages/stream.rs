@@ -62,13 +62,6 @@ impl ChatStreamEncoder {
         }
     }
 
-    pub fn is_completed(&self) -> bool {
-        self.completed
-    }
-    pub fn has_wire_failure(&self) -> bool {
-        self.failed
-    }
-
     pub fn push_event(
         &mut self,
         event: Option<&str>,
