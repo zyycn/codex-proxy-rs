@@ -485,6 +485,18 @@ impl FrozenAccountScope {
         self.allows_with_policy(account_id, |access| access.allows_optional_model(None))
     }
 
+    /// 同一个账号和授权该账号的同一个分组须同时允许请求型号和实际执行型号
+    pub(crate) fn allows_model_pair(
+        &self,
+        account: &ProviderAccountId,
+        requested: &str,
+        actual: &str,
+    ) -> bool {
+        self.allows_with_policy(account, |access| {
+            access.allows(requested) && access.allows(actual)
+        })
+    }
+
     /// 只报告所有已启用绑定分组均明确拒绝模型的情况，空池沿用原路由错误
     #[must_use]
     pub fn groups_deny_model(&self, upstream_model: Option<&str>) -> bool {

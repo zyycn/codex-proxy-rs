@@ -114,7 +114,7 @@ async fn oauth_refresh_and_native_generate_preserve_grant_profile_and_wire_paylo
                 "fixture-model",
                 &access_token,
                 body,
-                stream,
+                stream.into(),
                 &[],
             )
             .await
@@ -192,7 +192,7 @@ async fn streamed_text_is_projected_once_across_native_frames() {
         .mount(&server)
         .await;
     let response = client
-        .generate("p", "m", "fixture", b"{}", true, &[])
+        .generate("p", "m", "fixture", b"{}", true.into(), &[])
         .await
         .unwrap();
     let events = transport::events(
@@ -255,7 +255,7 @@ async fn incomplete_native_stream_and_redirect_are_rejected() {
     let client = CloudCodeClient::new(&server.uri().parse().unwrap(), None, &profile).unwrap();
     Mock::given(path("/v1internal:streamGenerateContent")).respond_with(ResponseTemplate::new(200).set_body_raw("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"}]}}]}}\n\n","text/event-stream")).mount(&server).await;
     let res = client
-        .generate("p", "m", "fixture", b"{}", true, &[])
+        .generate("p", "m", "fixture", b"{}", true.into(), &[])
         .await
         .unwrap();
     let result = transport::events(
@@ -283,7 +283,7 @@ async fn incomplete_native_stream_and_redirect_are_rejected() {
         .await;
     assert!(
         client
-            .generate("p", "m", "fixture", b"{}", false, &[])
+            .generate("p", "m", "fixture", b"{}", false.into(), &[])
             .await
             .is_err()
     );

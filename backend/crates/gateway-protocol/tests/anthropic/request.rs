@@ -588,3 +588,37 @@ fn tool_result_continuation_without_thinking_keeps_the_current_mode() {
         .push(json!({"role":"user","content":"new question"}));
     assert!(!convert(&req).contains_key("thinking"));
 }
+
+#[test]
+fn function_only_target_preserves_tool_choice_when_search_is_optional() {
+    use gateway_protocol::anthropic::{MessagesModelCapabilities, responses_to_messages_request};
+    let caps = MessagesModelCapabilities {
+        hosted_web_search: Some(false),
+        ..Default::default()
+    };
+    let search = serde_json::json!({"type":"web_search","external_web_access":true});
+    let function = serde_json::json!({"type":"function","name":"pwd"});
+    for (choice, mode) in [
+        (serde_json::json!("auto"), "auto"),
+        (serde_json::json!("required"), "any"),
+        (function.clone(), "tool"),
+        (
+            serde_json::json!({"type":"allowed_tools","mode":"required","tools":[function,search]}),
+            "any",
+        ),
+    ] {
+        let original =
+            serde_json::json!({"input":"hello","tools":[search,function],"tool_choice":choice});
+        let mapped = responses_to_messages_request(original.as_object().unwrap(), &caps).unwrap();
+        assert_eq!(mapped["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(mapped["tools"][0]["name"], "pwd");
+        assert_eq!(mapped["tool_choice"]["type"], mode);
+        if mode == "tool" {
+            assert_eq!(mapped["tool_choice"]["name"], "pwd")
+        }
+    }
+    let original = serde_json::json!({"input":"hello","tools":[{"type":"web_search","external_web_access":false},function],"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"web_search"}]}});
+    let mapped = responses_to_messages_request(original.as_object().unwrap(), &caps).unwrap();
+    assert!(!mapped.contains_key("tools"));
+    assert!(!mapped.contains_key("tool_choice"));
+}

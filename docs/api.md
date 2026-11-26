@@ -272,7 +272,11 @@ CPR 在 AGY 的原生与转换入口透传未被过滤的 HTTP 扩展头，保�
 
 AGY 上游计数与生成响应的 `usageMetadata.promptTokenCount` 口径不完全一致：系统提示、工具定义及工具结果未完整计入计数返回值。原生与 Messages 计数均保留这一上游口径，不能作为完整上下文占用或计费用量的精确值
 
-Antigravity 模型也可通过 `/v1/responses`、`/v1/chat/completions` 和 `/v1/messages` 调用，均支持 JSON 与 SSE。转换入口支持文本、内嵌图片／文档、函数工具及结果、生成参数和 JSON Schema；未知内容块返回请求错误，模型自身不支持的参数由上游校验。原生入口不经过转换器；所有 AGY 入口在出站时使用同一份系统提示词配置，替换客户端系统指令，其余原生字段保持原始表达
+Antigravity 模型也可通过 `/v1/responses`、`/v1/chat/completions` 和 `/v1/messages` 调用，均支持 JSON 与 SSE。转换入口支持文本、内嵌图片／文档、函数工具及结果、生成参数和 JSON Schema；未知内容块返回请求错误，模型自身不支持的参数由上游校验。原生入口不经过转换器；常规生成与计数在出站时使用同一份 AGY 系统提示词配置，替换客户端系统指令，其余原生字段保持原始表达
+
+Responses 编码请求可以同时声明函数和可选的 `web_search`。AGY 向编码模型发送可用函数，保留 `tool_choice` 和 `allowed_tools` 的约束。显式选择搜索，或要求必须调用工具且只允许搜索时，网关取最后一条用户文本作为查询，向该账号目录的首个 `webSearchModelIds` 型号发送独立的实时搜索请求。账号及其授权分组须同时允许原型号与搜索型号
+
+搜索支持 `filters.allowed_domains` 和 `filters.blocked_domains`。强制搜索遇到缓存模式、无法满足的搜索选项或缺少可用搜索型号时返回请求错误。JSON 与 SSE 均按上游实际查询与来源返回 `web_search_call` 和正文引用；传入 `include: ["web_search_call.action.sources"]` 可读取搜索来源列表
 
 工具多轮调用须带回完整助手输出。Responses 的 `reasoning.encrypted_content` 和 Messages 的 `thinking.signature` 携带 GenAI 工具与思考签名及其所属内容，客户端应原样回传。Chat 沿用现有合同，只返回可读思考内容；转换器对缺少签名的工具调用使用 Google 官方的 `skip_thought_signature_validator` 兜底值，不增加服务端签名缓存。工具与思考的真实签名优先于兜底；普通可见文本的可选签名不附加到转换输出，以保持 CLI 最终文本完整。省略签名或使用兜底可能影响后续模型表现，见 [Google 签名规则](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures)。Antigravity 转换入口不支持 `previous_response_id` 续接
 

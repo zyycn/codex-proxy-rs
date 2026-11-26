@@ -60,6 +60,10 @@ pub const GROUP_MODEL_DENIED_CODE: &str = "group_model_denied";
 pub const GROUP_MODEL_DENIED_MESSAGE: &str =
     "Model is not allowed by the API key's account groups.";
 
+/// 搜索请求在当前授权范围没有对应的账号目录目标
+pub const WEB_SEARCH_UNAVAILABLE_MESSAGE: &str =
+    "No authorized web search model is available for this account scope.";
+
 /// 路由快照或 Route Plan 不满足不变量
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RoutingError {
@@ -84,6 +88,9 @@ pub enum RoutingError {
     /// 已知模型分组没有与本次请求匹配的推理档位
     #[error("model group requires a supported reasoning effort")]
     InvalidReasoningVariant,
+    /// 当前授权账号的目录没有专用搜索型号
+    #[error("{WEB_SEARCH_UNAVAILABLE_MESSAGE}")]
+    WebSearchUnavailable,
     /// 快照中存在重复实体
     #[error("duplicate {entity} `{id}`")]
     DuplicateEntity {

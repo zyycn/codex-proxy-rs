@@ -30,10 +30,16 @@ impl AntigravityProvider {
         &self,
         model: &UpstreamModelId,
         ctx: &AttemptContext,
+        search: bool,
     ) -> Result<CandidatePool, ProviderError> {
         let required = ctx.required_account();
         let diagnostic = ctx.is_diagnostic_required_account();
         let (accounts, projects) = if diagnostic {
+            if search {
+                return Err(ProviderError::invalid_request(
+                    "Web search requires an account model catalog.",
+                ));
+            }
             let id = required.ok_or_else(|| unsent(Kind::NoEligibleAccount))?;
             let account = self
                 .accounts
@@ -45,8 +51,13 @@ impl AntigravityProvider {
             let projects = BTreeMap::from([(id.clone(), (account.revision(), Project::Discover))]);
             (vec![account], projects)
         } else {
-            let projects = self.catalog_projects(model, ctx).await?;
+            let projects = self.catalog_projects(model, ctx, search).await?;
             let ids: Vec<_> = projects.keys().cloned().collect();
+            if ids.is_empty() && search {
+                return Err(ProviderError::invalid_request(
+                    gateway_core::validation::WEB_SEARCH_UNAVAILABLE_MESSAGE,
+                ));
+            }
             if ids.is_empty() {
                 return Err(unsent(Kind::NoEligibleAccount));
             }
@@ -165,11 +176,20 @@ impl AntigravityProvider {
         &self,
         model: &UpstreamModelId,
         ctx: &AttemptContext,
+        search: bool,
     ) -> Result<BTreeMap<ProviderAccountId, (CredentialRevision, Project)>, ProviderError> {
         let required = ctx.required_account();
         let mut projects = BTreeMap::new();
         for (observations, catalog) in self.catalog.catalogs().await? {
-            if !catalog.models.contains_key(model.as_str()) {
+            let supports = if search {
+                catalog
+                    .web_search_models
+                    .first()
+                    .is_some_and(|id| id == model.as_str())
+            } else {
+                catalog.models.contains_key(model.as_str())
+            };
+            if !supports {
                 continue;
             }
             for observation in observations {

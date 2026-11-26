@@ -928,6 +928,16 @@ impl Operation {
         }
     }
 
+    /// Responses 要求本轮执行托管搜索时，按账号快照选择搜索目标
+    #[must_use]
+    pub fn requires_web_search(&self) -> bool {
+        matches!(self, Self::Generate(request) if {
+            let payload = request.protocol_payload();
+            payload.protocol() == gateway_protocol::openai::OPENAI_PROTOCOL &&
+                gateway_protocol::openai::web_search::is_required(payload.body())
+        })
+    }
+
     /// 仅提取本次正文明确声明的推理档位，路由不继承 Provider 会话默认值
     pub(crate) fn requested_reasoning_effort(&self) -> Option<String> {
         let observation = match self {

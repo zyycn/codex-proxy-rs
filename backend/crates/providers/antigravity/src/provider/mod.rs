@@ -128,3 +128,5 @@ fn unavailable(error: impl Into<ErrorSource>) -> ProviderError {
     crate::transport::unsent(ProviderErrorKind::ProviderInfrastructureUnavailable)
         .with_source(error)
 }
+
+mod web_search;

@@ -386,7 +386,11 @@ pub fn responses_to_messages_request(
         "messages".into(),
         Value::Array(normalize_tool_pairing(messages)),
     );
-    tools.write_messages_tools(request, &mut result)?;
+    tools.write_messages_tools(
+        request,
+        &mut result,
+        capabilities.hosted_web_search != Some(false),
+    )?;
     thinking::apply_to_messages(request, &mut result, capabilities, maximum);
     if request
         .get("tool_choice")

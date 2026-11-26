@@ -1604,6 +1604,7 @@ impl RuntimeSnapshot {
         );
         let mut invalid_variant = false;
         let mut group_model_denied = false;
+        let mut search_unavailable = false;
         for provider in &providers {
             if !self.providers.contains(provider) {
                 continue;
@@ -1771,6 +1772,57 @@ impl RuntimeSnapshot {
                     candidate_scope = Arc::new(narrowed);
                 }
             }
+            if operation.requires_web_search()
+                && let Some(model) = capabilities
+                && let Some(search_models) = &model.dedicated_web_search
+            {
+                // 仅目录中同时拥有请求型号和搜索目标的账号可执行本次搜索
+                let mut targets = BTreeMap::<_, BTreeSet<_>>::new();
+                for account in model.account_metadata.keys() {
+                    if !candidate_scope.allows_model(account, upstream_model.as_str()) {
+                        continue;
+                    }
+                    let Some(target) = search_models.get(account) else {
+                        search_unavailable = true;
+                        continue;
+                    };
+                    if !candidate_scope.allows_model_pair(
+                        account,
+                        upstream_model.as_str(),
+                        target.as_str(),
+                    ) {
+                        group_model_denied |=
+                            candidate_scope.groups_deny_model(Some(target.as_str()));
+                        continue;
+                    }
+                    let limit = self
+                        .provider_models
+                        .get(provider)
+                        .and_then(|models| models.get(target))
+                        .and_then(|model| model.account_metadata.get(account))
+                        .and_then(|meta| meta.max_output_tokens);
+                    if requirements
+                        .requested_output_tokens()
+                        .zip(limit)
+                        .is_some_and(|(requested, limit)| requested > limit)
+                    {
+                        continue;
+                    }
+                    targets.entry(target).or_default().insert(account.clone());
+                }
+                for (target, accounts) in targets {
+                    candidates.push(ProviderCandidate {
+                        requires_direct_authentication: direct_model.is_some(),
+                        provider: provider.clone(),
+                        upstream_model: Some(target.clone()),
+                        emulated_features: emulated_features.clone(),
+                        account_scope: Arc::new(
+                            candidate_scope.restricted_to(&Default::default(), &accounts),
+                        ),
+                    });
+                }
+                continue;
+            }
             candidates.push(ProviderCandidate {
                 requires_direct_authentication: direct_model.is_some(),
                 provider: provider.clone(),
@@ -1790,6 +1842,9 @@ impl RuntimeSnapshot {
         if candidates.is_empty() {
             if group_model_denied {
                 return Err(RoutingError::GroupModelDenied);
+            }
+            if search_unavailable {
+                return Err(RoutingError::WebSearchUnavailable);
             }
             if invalid_variant {
                 return Err(RoutingError::InvalidReasoningVariant);

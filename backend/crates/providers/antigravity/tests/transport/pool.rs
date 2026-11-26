@@ -147,7 +147,7 @@ async fn generate(
                 "fixture-model",
                 token,
                 br#"{"contents":[{"parts":[{"text":"ping","thoughtSignature":"fixture-signature"}]}]}"#,
-                false,
+                false.into(),
                 &[],
             )
             .await

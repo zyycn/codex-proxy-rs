@@ -168,6 +168,7 @@ impl CatalogService {
         let mut members =
             BTreeMap::<UpstreamModelId, BTreeMap<ProviderAccountId, AccountModelMetadata>>::new();
         let mut groups = BTreeMap::new();
+        let mut search_models = BTreeMap::new();
         let mut catalogs = self.catalogs().await?;
         // 多个账号的目录有交集时，按稳定来源顺序合并展示名和档位顺序
         catalogs.sort_by(|(left, _), (right, _)| {
@@ -177,6 +178,17 @@ impl CatalogService {
         });
         for (accounts, catalog) in catalogs {
             super::model_groups::collect(&mut groups, &catalog, &accounts);
+            if let Some(search_model) = catalog
+                .web_search_models
+                .first()
+                .and_then(|id| UpstreamModelId::new(id).ok())
+            {
+                search_models.extend(
+                    accounts
+                        .iter()
+                        .map(|a| (a.account_id.clone(), search_model.clone())),
+                );
+            }
             for (key, model) in catalog.models {
                 let id = UpstreamModelId::new(key).map_err(|_| unsent(Kind::Protocol))?;
                 let metadata = account_metadata(model);
@@ -191,6 +203,7 @@ impl CatalogService {
             [OperationKind::Generate, OperationKind::CountTokens].into(),
             None,
         )
+        .with_dedicated_web_search(search_models)
         .with_generation_protocol(gateway_protocol::genai::GENAI_PROTOCOL)
         .with_translated_generation_protocols([
             gateway_protocol::openai::OPENAI_PROTOCOL,

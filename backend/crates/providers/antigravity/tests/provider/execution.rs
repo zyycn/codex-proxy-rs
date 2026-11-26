@@ -699,3 +699,112 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
         released(&fixture).await;
     }
 }
+
+#[tokio::test]
+async fn required_search_uses_catalog_target_and_delivers_grounded_terminal() {
+    use gateway_core::{
+        engine::provider::ProviderRequest,
+        event::GatewayEvent,
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+        routing::{ConfigRevision, ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot},
+        settings::SettingsValues,
+    };
+    let server = MockServer::start().await;
+    let fixture = Fixture::new(&server.uri());
+    {
+        let mut catalog = fixture.store.primary().catalog.lock().unwrap();
+        let (_, bytes) = catalog.as_mut().unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        value["webSearchModelIds"] = json!(["search-only", "not-selected"]);
+        *bytes = value.to_string().into();
+    }
+    let kind = ProviderKind::new("antigravity").unwrap();
+    let models = fixture.provider.query_model_capabilities().await.unwrap();
+    assert!(
+        !models
+            .iter()
+            .any(|m| m.upstream_model().as_str() == "search-only")
+    );
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).unwrap(),
+        SettingsValues::new(1, "smart", Default::default(), None, None),
+        vec![kind.clone()],
+        models
+            .iter()
+            .map(|m| {
+                ProviderModel::new(
+                    kind.clone(),
+                    m.upstream_model().clone(),
+                    m.capabilities().clone(),
+                )
+            })
+            .collect(),
+        vec![],
+    )
+    .unwrap();
+    let search = json!({"type":"web_search","filters":{"allowed_domains":["example.org"]}});
+    let choice = json!({"type":"allowed_tools","mode":"required","tools":[{"type":"web_search"}]});
+    let body = json!({"model":"fixture-model","input":"你好","tool_choice":choice,"tools":[search,{"type":"function","name":"pwd"}],"include":["web_search_call.action.sources"]});
+    let op = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+    ));
+    let plan = snapshot
+        .plan(
+            &PublicModelId::new("fixture-model").unwrap(),
+            &op,
+            fixture.store.account_scope(),
+            &RoutingContext::default(),
+        )
+        .unwrap();
+    let candidate = &plan.candidates()[0];
+    assert_eq!(candidate.upstream_model().unwrap().as_str(), "search-only");
+    Mock::given(path("/v1internal:generateContent")).and(body_partial_json(json!({
+        "model":"search-only","requestType":"web_search","request":{"tools":[{"googleSearch":{"includedDomains":["example.org"]}}],"contents":[{"role":"user","parts":[{"text":"你好"}]}]}
+    }))).respond_with(ResponseTemplate::new(200).set_body_json(json!({"response":{
+        "responseId":"r","candidates":[{"content":{"parts":[{"text":"前 "},{"text":"答案"}]},"finishReason":"STOP",
+        "groundingMetadata":{"webSearchQueries":["你好"],"groundingChunks":[{"web":{"uri":"https://example.org","title":"来源"}}],
+        "groundingSupports":[{"segment":{"partIndex":1,"endIndex":6},"groundingChunkIndices":[0]}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}}))).expect(1).mount(&server).await;
+    let mut stream = fixture
+        .provider
+        .clone()
+        .execute(
+            ProviderRequest::new(op, candidate.clone()),
+            context(frozen_profile(), CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    let mut wire = Vec::new();
+    while let Some(event) = stream.next().await {
+        let event = event.unwrap();
+        let terminal = event
+            .canonical_facts()
+            .iter()
+            .any(|f| matches!(f, GatewayEvent::Completed(_)));
+        for translated in stream.translate_native_response(event, terminal).unwrap() {
+            if let Some(frame) = translated.wire_event() {
+                assert_eq!(frame.data()["type"] == "response.completed", terminal);
+                wire.push(frame.data().clone());
+            }
+        }
+    }
+    for (i, event) in wire.iter().enumerate() {
+        assert_eq!(event["sequence_number"], i)
+    }
+    let response = &wire.last().unwrap()["response"];
+    assert_eq!(response["model"], "fixture-model");
+    assert_eq!(response["usage"]["total_tokens"], 7);
+    let output = &response["output"];
+    assert_eq!(
+        output[0]["action"]["sources"][0]["url"],
+        "https://example.org"
+    );
+    let citation = &output[1]["content"][0]["annotations"][0];
+    assert_eq!(citation["start_index"], 2);
+    assert_eq!(citation["end_index"], 4);
+    assert_eq!(citation["url"], "https://example.org");
+    assert!(
+        wire.iter()
+            .any(|v| v["type"] == "response.output_text.annotation.added"
+                && &v["annotation"] == citation)
+    );
+}

@@ -161,6 +161,7 @@ pub struct ModelCapabilities {
     translated_generation_protocols: BTreeSet<&'static str>,
     reasoning_variants: BTreeMap<String, ReasoningModelVariant>,
     account_metadata: BTreeMap<crate::account::ProviderAccountId, AccountModelMetadata>,
+    dedicated_web_search: Option<Arc<BTreeMap<crate::account::ProviderAccountId, UpstreamModelId>>>,
 }
 
 /// Provider 为客户端模型目录提供的展示与交互能力
@@ -437,6 +438,7 @@ impl ModelCapabilities {
             translated_generation_protocols: BTreeSet::new(),
             reasoning_variants: BTreeMap::new(),
             account_metadata: BTreeMap::new(),
+            dedicated_web_search: None,
         }
     }
 
@@ -467,6 +469,16 @@ impl ModelCapabilities {
         metadata: BTreeMap<crate::account::ProviderAccountId, AccountModelMetadata>,
     ) -> Self {
         self.account_metadata = metadata;
+        self
+    }
+
+    /// 声明托管搜索必须独立选型，空目录表示目前没有搜索目标
+    #[must_use]
+    pub fn with_dedicated_web_search(
+        mut self,
+        targets: BTreeMap<crate::account::ProviderAccountId, UpstreamModelId>,
+    ) -> Self {
+        self.dedicated_web_search = Some(Arc::new(targets));
         self
     }
 

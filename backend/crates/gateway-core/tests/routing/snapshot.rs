@@ -80,6 +80,7 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
             None,
         )
         .with_generation_protocol("genai")
+        .with_translated_generation_protocols(["openai"])
         .with_upstream_feature_validation()
     };
     let variants = BTreeMap::from_iter(["medium", "high"].map(|level| {
@@ -121,19 +122,24 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
             ProviderModel::new(
                 provider.clone(),
                 UpstreamModelId::new("family-medium").unwrap(),
-                caps().with_account_metadata(BTreeMap::from([
-                    (
+                caps()
+                    .with_dedicated_web_search(BTreeMap::from([(
                         declared.clone(),
-                        AccountModelMetadata {
-                            context_window_tokens: Some(1000),
-                            max_context_window_tokens: Some(1500),
-                            image_input: true,
-                            description: Some("Medium".into()),
-                            max_output_tokens: Some(25),
-                        },
-                    ),
-                    (other.clone(), AccountModelMetadata::default()),
-                ])),
+                        UpstreamModelId::new("search").unwrap(),
+                    )]))
+                    .with_account_metadata(BTreeMap::from([
+                        (
+                            declared.clone(),
+                            AccountModelMetadata {
+                                context_window_tokens: Some(1000),
+                                max_context_window_tokens: Some(1500),
+                                image_input: true,
+                                description: Some("Medium".into()),
+                                max_output_tokens: Some(25),
+                            },
+                        ),
+                        (other.clone(), AccountModelMetadata::default()),
+                    ])),
             ),
             ProviderModel::new(
                 provider.clone(),
@@ -168,6 +174,30 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
         vec![],
     )
     .unwrap();
+    let search_body = serde_json::json!({"input":"query","tools":[{"type":"web_search"}],"tool_choice":"required"});
+    let search = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", search_body.as_object().unwrap().clone()).unwrap(),
+    ));
+    assert!(matches!(
+        snapshot.plan(
+            &PublicModelId::new("family-medium").unwrap(),
+            &search,
+            scope.clone(),
+            &RoutingContext::default()
+        ),
+        Err(RoutingError::GroupModelDenied)
+    ));
+    let old_account =
+        Arc::new(scope.restricted_to(&BTreeSet::new(), &BTreeSet::from([other.clone()])));
+    assert!(matches!(
+        snapshot.plan(
+            &PublicModelId::new("family-medium").unwrap(),
+            &search,
+            old_account,
+            &RoutingContext::default()
+        ),
+        Err(RoutingError::WebSearchUnavailable)
+    ));
     let operation = |level: &str, count: bool| {
         let body = serde_json::json!({"contents":[], "generationConfig":{"thinkingConfig":{"thinkingLevel":level}}});
         if count {

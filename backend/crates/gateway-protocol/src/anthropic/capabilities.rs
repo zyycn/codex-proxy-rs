@@ -5,6 +5,7 @@ use serde_json::Value;
 /// 转换器消费的模型目录事实；None 表示上游未声明
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MessagesModelCapabilities {
+    pub hosted_web_search: Option<bool>,
     pub thinking: Option<bool>,
     pub adaptive_thinking: Option<bool>,
     pub manual_thinking: Option<bool>,
@@ -17,6 +18,7 @@ impl MessagesModelCapabilities {
     /// 从 Anthropic Models 条目提取转换所需事实，未知扩展不影响解析
     pub fn from_model(model: &Value) -> Self {
         Self {
+            hosted_web_search: None,
             thinking: model
                 .pointer("/capabilities/thinking/supported")
                 .and_then(Value::as_bool),

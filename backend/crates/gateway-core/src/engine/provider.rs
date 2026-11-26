@@ -245,7 +245,8 @@ pub trait NativeResponseTranslator: Send + 'static {
     }
 }
 
-const MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT: usize = 64;
+/// 单个原生输入帧允许展开的 wire 事件数
+pub const MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT: usize = 64;
 
 /// Metadata、canonical event stream 与 owned lease 的统一返回值
 ///
