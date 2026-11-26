@@ -16,6 +16,7 @@ export const usageDataColumns = computed(() => ([
     key: 'reasoningEffort',
     label: t('usage.fields.reasoningEffort'),
     kind: 'status',
+    align: 'left',
     size: 'md',
   },
   {
